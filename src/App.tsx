@@ -1,15 +1,15 @@
-import { useState } from 'react';
 import { Routes, Route } from "react-router-dom";
-import Home from "./pages/Home";
-import Transaction from './pages/Transaction';
+import LandingPage from "./pages/LandingPage";
+import CreateWallet from "./pages/CreateWallet";
+import ImportWallet from "./pages/ImportWallet";
 
 function App() {
-  const [count, setCount] = useState(0)
-
   return (
   <>
     <Routes>
-      <Route path = "/" element = {<Home/>}/>
+      <Route path = "/" element = {<LandingPage/>}/>
+      <Route path = "/createwallet" element = {<CreateWallet/>}/>
+      <Route path = "/importwallet" element = {<ImportWallet/>}/>
     </Routes>
   </>
   )

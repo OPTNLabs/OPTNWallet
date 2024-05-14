@@ -19,10 +19,8 @@ const generateKeys = async (mnemonic, passphrase, coin, changeIndex = 1) => {
     const baseDerivationPath = "m/44'/145'/0'/0";
     const baseDerivationPathChange = "m/44'/145'/0'/1"; // Changed the path to use '1' for change addresses
 
-    // Derive the change address at the specified index
     const changeNode = deriveHdPath(rootNode, `${baseDerivationPathChange}/${changeIndex}`);
 
-    // Derive Alice's private key, public key, public key hash and address
     const aliceNode = deriveHdPath(rootNode, `${baseDerivationPath}/0`);
 
     if (typeof aliceNode === 'string') throw new Error();

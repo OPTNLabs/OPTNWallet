@@ -10,20 +10,17 @@ let electrum: ElectrumClient | null = null;
 const testServer = chipnetServers[0];
 
 export default function ElectrumService() {
-    //CONENCNNTING THE SERVER
     async function electrumConnect (server : string = testServer): Promise<void>{
         electrum = new ElectrumClient('OPTNWallet', '1.4.1', server, ElectrumTransport.WSS.Port, ElectrumTransport.WSS.Scheme);
         return electrum.connect();
     }
-    //DISOCNET SERVER
-    async function electrumDisconnect(status: boolean): Promise<boolean> {
+    async function electrumDisconnect(status: boolean) : Promise<boolean> {
         if (electrum !== null) {
             return electrum.disconnect(status);
         }
         return true;
     };
 
-    //GTHE BALANCE
     async function getBalance(address : string) : Promise<any> {
         if (electrum !== null) {
             const params = [address, "include_tokens"]

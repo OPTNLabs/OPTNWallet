@@ -1,14 +1,16 @@
 import React, { useState, useEffect } from 'react'
-import { generateMnemonic, generateKeys } from '../apis/WalletInformation/KeyGeneration'
+import { generateMnemonic, generateKeys } from '../apis/WalletService/KeyGeneration'
 import ElectrumService from '../apis/ElectrumServer/ElectrumServer';
-import Transactions from '../apis/Transaction';
+import Transactions from '../apis/TransactionService/TransactionBuilder';
 
-const Home = () => {
+const LandingPage = () => {
     const [mnemonicPhrase, setMnemonicPhrase] = useState("");
     const [passphrase, setPassphrase] = useState("");
     const [publicKey, setPublicKey] = useState("");
     const [address, setAddress] = useState("");
     const [privateKey, setPrivateKey] = useState<Uint8Array | null>(null)
+    const [inputAddress, setInputAddress] = useState("");
+    const [inputAmount, setInputAmount] = useState("");
     const [bchBalance, setBchBalance] = useState("");
     const [coin, setCoin] = useState("");
     const [utxos, setUtxos] = useState([]);
@@ -49,15 +51,13 @@ const Home = () => {
     }
 
     const handleRequestBalance = async() => {
-      const address1 = "bchtest:qznwqlqtzgqkxpt6gp92da2peprj3202s53trwdn7t";
+      const address1 = inputAddress;
       const balance = await Electrum.getBalance(address1);
-      console.log(typeof(balance));
-      console.log(balance);
       setBchBalance(balance);
     }
-    
+
     const handleGetUtxos = async() => {
-      const address1 = "bchtest:qznwqlqtzgqkxpt6gp92da2peprj3202s53trwdn7t";
+      const address1 = inputAddress;
       const utxoValues = await Electrum.getUTXOS(address1)
       console.log(utxoValues);
       setUtxos(utxoValues);
@@ -66,16 +66,13 @@ const Home = () => {
 
     const handleBuildTransaction = async() => {
       console.log(utxos[0])
-      const transaction = await Transaction.buildTransaction(utxos[0])
-      console.log('transaction', transaction)
+      const recipients = [{ address: "bchtest:qpeu8h6p5r8kvlplaaz79jcq562qxyv8v5v0s4ajp6", amount: 2000 }, { address : "bchtest:qz82a87a7gef965jcq3pm49wkrrvfyafj57ugjd8fz", amount: 2000 } ]
+      const transaction = await Transaction.buildTransaction(utxos[0], recipients)
       const Electrum = ElectrumService();
-      console.log('har har har',transaction.hex)
       const result = await Electrum.broadcastTransaction(transaction.hex);
-      console.log("result", result)
-      console.log("txhash", transaction.txid)
+      console.log(result)
       const isSuccess = result === transaction.txid;
       console.log(isSuccess)
-      
     };
 
     return (
@@ -103,7 +100,14 @@ const Home = () => {
 
         <button onClick = {handleRequestBalance}> request balance</button>
 
-        <div>utxos: {} </div>
+        <div>input address to send to: </div>
+        <input onChange = {(e) => {
+          setInputAddress(e.target.value);
+        }}></input>
+        <div>input amount to send: </div>
+        <input onChange = {(e) => {
+          setInputAmount(e.target.value);
+        }}></input>
         <button onClick = { handleGetUtxos }> get utxos</button>
 
         <button onClick = { handleBuildTransaction }>build transaction</button>
@@ -111,4 +115,4 @@ const Home = () => {
   )
 }
 
-export default Home
+export default LandingPage
