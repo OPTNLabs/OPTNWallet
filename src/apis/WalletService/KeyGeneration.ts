@@ -38,6 +38,6 @@ export default function KeyGeneration() {
         // const changePriv = changeNode.privateKey;
         // const changePkh = hash160(changePub);
         // const changeAddress = encodeCashAddress('bchtest', 'p2pkh', changePkh);
-        return { aliceAddress, alicePriv }
+        return { alicePub, alicePriv, aliceAddress }
     };
 }

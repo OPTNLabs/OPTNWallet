@@ -2,28 +2,36 @@ import React, { useState, useEffect } from 'react'
 import KeyGeneration from '../apis/WalletService/KeyGeneration'
 import { useParams } from 'react-router-dom';
 import KeyManager from '../apis/WalletService/KeyManager';
+import DatabaseService from '../apis/DatabaseManager/DatabaseService';
 
 const Home = () => {
-    const [keyPairs, setKeyPairs] = useState<{ publicKey: string; privateKey: string; }[]>([]);
+    const [keyPairs, setKeyPairs] = useState<{ publicKey: string; privateKey: string; addresses: string[] }[]>([]);
     const [mnemonic, setMnemonicPhrase] = useState("");
     const KeyGen = KeyGeneration();
     const KeyManage = KeyManager();
+    const dbService = DatabaseService();
 
     const { wallet_id } = useParams<{ wallet_id: string }>();
 
     useEffect(() => {
-        if (wallet_id) {
-            const walletKeys = KeyManage.retrieveKeys(wallet_id);
-            setKeyPairs(walletKeys)
+        const retrieveWalletInformation = async () => {
+            if (wallet_id) {
+                const walletKeys = await KeyManage.retrieveKeys(wallet_id);
+                console.log("wallet keys", walletKeys)
+                setKeyPairs(walletKeys)
+            }
+            console.log(wallet_id)
         }
-        console.log(wallet_id)
-    }, [wallet_id]);
-    const handleGenerateKeys = () => {
+        retrieveWalletInformation();
+    }, []);
+    const handleGenerateKeys = async() => {
+        KeyManage.createKeys(wallet_id)
+        await dbService.saveDatabaseToFile();
 
     }
     return (
         <>
-            <section className = 'flex flex-col min-h-screen bg-black'>
+            <section className = 'flex flex-col min-h-screen'>
                 <div>Hello {wallet_id} </div>
                 <div>Generate Public/Private Key here:</div>
                 <button onClick = {handleGenerateKeys }>Generate</button>

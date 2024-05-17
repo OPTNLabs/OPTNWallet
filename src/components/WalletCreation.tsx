@@ -40,7 +40,6 @@ const WalletCreation = () => {
         await dbService.saveDatabaseToFile();
 
         if (queryResult) {
-            dbService.createKeys
             dispatch(setWalletId(setId));
             navigate(`/home/${setId}`);
         }
