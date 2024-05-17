@@ -14,6 +14,7 @@
     "@cashscript/utils": "^0.9.3",
     "@electrum-cash/network": "^3.3.0",
     "@psf/bch-js": "^6.7.4",
+    "@types/sql.js": "^1.4.9",
     "bip39": "^3.1.0",
     "bitcoinjs-lib": "^6.1.5",
     "cashscript": "^0.9.3",
@@ -26,6 +27,7 @@
     "react": "^18.2.0",
     "react-dom": "^18.2.0",
     "react-router-dom": "^6.23.0",
+    "sql.js": "^1.10.3",
     "tiny-secp256k1": "^2.2.3",
     "vite-plugin-node-polyfills": "^0.21.0",
     "vite-plugin-top-level-await": "^1.4.1"
