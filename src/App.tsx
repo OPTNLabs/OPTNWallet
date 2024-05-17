@@ -9,7 +9,7 @@ function App() {
   <>
     <Routes>
       <Route path = "/" element = {<LandingPage/>}/>
-      <Route path = "/home" element = {<Home/>}/>
+      <Route path = "/home/:wallet_id" element = {<Home/>}/>
       <Route path = "/createwallet" element = {<CreateWallet/>}/>
       <Route path = "/importwallet" element = {<ImportWallet/>}/>
     </Routes>
