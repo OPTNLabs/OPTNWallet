@@ -53,20 +53,15 @@ export default function KeyManager() {
             const dbResult = db.exec("SELECT * FROM wallets;");
             console.log("Table testing:", dbResult);
 
-            const walletsQuery = "SELECT wallet_name FROM wallets WHERE wallet_name = :walletname";
-            const walletsStmt = db.prepare(walletsQuery);
-            walletsStmt.bind({ ':walletname': wallet_name });
-            const walletExists = walletsStmt.getAsObject();
-            walletsStmt.free();
+            const getIdQuery = db.prepare(
+                "SELECT mnemonic, passphrase FROM wallets WHERE wallet_name = ?;"
+              );
+            const result1 = getIdQuery.get([wallet_name]);
+            getIdQuery.free();
     
-            console.log("Wallet exists check:", walletExists);
+            console.log("Wallet exists check:", result1)
     
-            if (!walletExists.wallet_name) {
-                console.error("Wallet not found with the given name");
-                return;
-            }
-    
-            const query = "SELECT mnemonic, passphrase FROM wallets WHERE wallet_name = :walletname";
+            const query = "SELECT mnemonic, passphrase FROM wallets WHERE wallet_name=:walletname";
             const statement = db.prepare(query);
             console.log("Statement before binding:", statement);
             statement.bind({ ':walletname': wallet_name });

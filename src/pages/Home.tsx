@@ -6,7 +6,6 @@ import DatabaseService from '../apis/DatabaseManager/DatabaseService';
 
 const Home = () => {
     const [keyPairs, setKeyPairs] = useState<{ publicKey: string; privateKey: string; addresses: string[] }[]>([]);
-    const [mnemonic, setMnemonicPhrase] = useState("");
     const KeyGen = KeyGeneration();
     const KeyManage = KeyManager();
     const dbService = DatabaseService();
@@ -20,14 +19,15 @@ const Home = () => {
                 console.log("wallet keys", walletKeys)
                 setKeyPairs(walletKeys)
             }
-            console.log(wallet_id)
+            console.log('wallet id', wallet_id)
         }
         retrieveWalletInformation();
     }, []);
     const handleGenerateKeys = async() => {
-        KeyManage.createKeys(wallet_id)
-        await dbService.saveDatabaseToFile();
-
+        if (wallet_id != null) {
+            KeyManage.createKeys(wallet_id)
+            await dbService.saveDatabaseToFile();
+        }
     }
     return (
         <>
