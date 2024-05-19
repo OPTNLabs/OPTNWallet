@@ -19,10 +19,10 @@ export default function KeyGeneration() {
         return mnemonic;
     };
 
-    async function generateKeys(mnemonic : string, passphrase : string, changeIndex = 1) {
+    async function generateKeys(mnemonic : string, passphrase : string, keyNumber : string, changeIndex = 1) {
         const seed = await bip39.mnemonicToSeed(mnemonic, passphrase);
         const rootNode = deriveHdPrivateNodeFromSeed(seed, true);
-        const baseDerivationPath = "m/44'/145'/0'/0";
+        const baseDerivationPath = `m/44'/145'/${keyNumber}'/0`;
         const baseDerivationPathChange = "m/44'/145'/0'/1";
 
         const changeNode = deriveHdPath(rootNode, `${baseDerivationPathChange}/${changeIndex}`);
@@ -33,7 +33,9 @@ export default function KeyGeneration() {
         const alicePub  = secp256k1.derivePublicKeyCompressed(aliceNode.privateKey);
         const alicePriv = aliceNode.privateKey;
         const alicePkh = hash160(alicePub);
-        const aliceAddress = encodeCashAddress('bchtest', 'p2pkh', alicePkh);
+        console.log(alicePub)
+        console.log(alicePriv)
+        const aliceAddress = encodeCashAddress('bchtest', 'p2pkh', alicePkh)
         // const changePub = secp256k1.derivePublicKeyCompressed(changeNode.privateKey);
         // const changePriv = changeNode.privateKey;
         // const changePkh = hash160(changePub);

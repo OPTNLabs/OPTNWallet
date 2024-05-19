@@ -1,39 +1,43 @@
 import DatabaseService from "../DatabaseManager/DatabaseService";
 import KeyGeneration from "./KeyGeneration";
+import { encodeCashAddress } from '@bitauth/libauth';
+import { hash160 } from '@cashscript/utils';
 
 export default function KeyManager() {
     const dbService = DatabaseService();
     const KeyGen = KeyGeneration();
+
     return {
         retrieveKeys,
-        createKeys,
+        createKeys
     };
 
-    async function retrieveKeys(wallet_name: string): Promise<{ publicKey: string; privateKey: string; addresses: string[] }[]> {
+    async function retrieveKeys(wallet_name: string): Promise<{ id: number, publicKey: Uint8Array; privateKey: Uint8Array; address: string }[]> {
         try {
             await dbService.ensureDatabaseStarted();
             const db = dbService.getDatabase();
             if (db == null) {
                 return [];
-            }   
+            }
 
-            const query = "SELECT public_key, private_key, addresses FROM keys WHERE wallet_name = :walletname";
+            const query = "SELECT id, public_key, private_key, address FROM keys WHERE wallet_name = :walletname";
             const statement = db.prepare(query);
             statement.bind({ ':walletname': wallet_name });
 
-            const result: { publicKey: string; privateKey: string; addresses: string[] }[] = [];
+            const result: { id: number, publicKey: Uint8Array, privateKey: Uint8Array, address: string }[] = [];
 
             while (statement.step()) {
                 const row = statement.getAsObject();
+                console.log('row', row)
                 result.push({
-                    publicKey: row.public_key as string,
-                    privateKey: row.private_key as string,
-                    addresses: JSON.parse(row.addresses as string)
+                    id: row.id as number,
+                    publicKey: new Uint8Array(row.public_key),
+                    privateKey: new Uint8Array(row.private_key),
+                    address: row.address as string
                 });
             }
 
             statement.free();
-
             return result;
 
         } catch (error) {
@@ -42,61 +46,43 @@ export default function KeyManager() {
         }
     }
 
-    async function createKeys(wallet_name: string): Promise<void> {
+    async function createKeys(wallet_name: string, keyNumber: number): Promise<void> {
         try {
-            console.log('Testing wallet_name:', wallet_name);
             await dbService.ensureDatabaseStarted();
             const db = dbService.getDatabase();
             if (db == null) {
                 return;
             }
-            const dbResult = db.exec("SELECT * FROM wallets;");
-            console.log("Table testing:", dbResult);
 
             const getIdQuery = db.prepare(
                 "SELECT mnemonic, passphrase FROM wallets WHERE wallet_name = ?;"
-              );
-            const result1 = getIdQuery.get([wallet_name]);
+            );
+            const result = getIdQuery.get([wallet_name]);
             getIdQuery.free();
-    
-            console.log("Wallet exists check:", result1)
-    
-            const query = "SELECT mnemonic, passphrase FROM wallets WHERE wallet_name=:walletname";
-            const statement = db.prepare(query);
-            console.log("Statement before binding:", statement);
-            statement.bind({ ':walletname': wallet_name });
-            console.log("Statement after binding:", statement);
-            const result = statement.getAsObject();
-            statement.free();
-    
-            console.log("Query result:", result);
-    
-            if (!result.mnemonic || !result.passphrase) {
+
+            if (!result) {
                 console.error("Mnemonic or passphrase not found for the given wallet name");
                 return;
             }
-    
-            // Cast the mnemonic and passphrase to string
-            const mnemonic = result.mnemonic as string;
-            const passphrase = result.passphrase as string;
-    
-            // Generate keys using the retrieved mnemonic and passphrase
-            const keys = await KeyGen.generateKeys(mnemonic, passphrase);
-    
-            // Insert the generated keys into the keys table
+            const mnemonic = JSON.stringify(result[0])
+            const passphrase = JSON.stringify(result[1])
+
+            const keys = await KeyGen.generateKeys(mnemonic, passphrase, keyNumber);
+            const publicKey = keys.alicePub;
+            const privateKey = keys.alicePriv;
+            const address = keys.aliceAddress;
+
             const insertQuery = db.prepare(
-                "INSERT INTO keys (wallet_name, public_key, private_key, addresses) VALUES (?, ?, ?, ?);"
+                "INSERT INTO keys (wallet_name, public_key, private_key, address) VALUES (?, ?, ?, ?);"
             );
-    
-            // Assuming keys is an object with properties alicePub, alicePriv, and aliceAddress
-            insertQuery.run([wallet_name, keys.alicePub, keys.alicePriv, JSON.stringify([keys.aliceAddress])]);
+            insertQuery.run([wallet_name, publicKey, privateKey, address]);
             insertQuery.free();
-    
+
             console.log("Keys successfully created and stored in the database.");
+
         } catch (error) {
             console.error("Error creating keys:", error);
             throw error;
         }
     }
-    
 }

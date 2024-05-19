@@ -1,12 +1,11 @@
-import React, { useState, useEffect } from 'react'
-import KeyGeneration from '../apis/WalletService/KeyGeneration'
+import React, { useState, useEffect } from 'react';
 import { useParams } from 'react-router-dom';
 import KeyManager from '../apis/WalletService/KeyManager';
 import DatabaseService from '../apis/DatabaseManager/DatabaseService';
 
 const Home = () => {
-    const [keyPairs, setKeyPairs] = useState<{ publicKey: string; privateKey: string; addresses: string[] }[]>([]);
-    const KeyGen = KeyGeneration();
+    const [keyPairs, setKeyPairs] = useState<{ id: number, publicKey: Uint8Array; privateKey: Uint8Array; address: string }[]>([]);
+    const [retrieve, setRetrieve] = useState(false);
     const KeyManage = KeyManager();
     const dbService = DatabaseService();
 
@@ -16,36 +15,49 @@ const Home = () => {
         const retrieveWalletInformation = async () => {
             if (wallet_id) {
                 const walletKeys = await KeyManage.retrieveKeys(wallet_id);
-                console.log("wallet keys", walletKeys)
-                setKeyPairs(walletKeys)
+                console.log("wallet keys", walletKeys);
+                setKeyPairs(walletKeys);
             }
-            console.log('wallet id', wallet_id)
-        }
+            console.log('wallet id', wallet_id);
+        };
         retrieveWalletInformation();
-    }, []);
-    const handleGenerateKeys = async() => {
+    }, [retrieve]);
+
+    const fetchData = () => {
+        setRetrieve(prev => !prev);
+    };
+
+    const handleGenerateKeys = async () => {
         if (wallet_id != null) {
-            KeyManage.createKeys(wallet_id)
+            await KeyManage.createKeys(wallet_id, keyPairs.length);
             await dbService.saveDatabaseToFile();
+            fetchData();
         }
-    }
+    };
+
+    // Utility function to convert Uint8Array to hex string for display
+    const uint8ArrayToHexString = (array: Uint8Array) => {
+        return Array.from(array).map(byte => byte.toString(16).padStart(2, '0')).join('');
+    };
+
     return (
         <>
-            <section className = 'flex flex-col min-h-screen'>
+            <section className='flex flex-col min-h-screen'>
                 <div>Hello {wallet_id} </div>
                 <div>Generate Public/Private Key here:</div>
-                <button onClick = {handleGenerateKeys }>Generate</button>
+                <button onClick={handleGenerateKeys}>Generate</button>
                 <div>
-                {keyPairs.map((keyPair, index) => (
-                    <div key={index}>
-                        <p>Public Key: {keyPair.publicKey}</p>
-                        <p>Private Key: {keyPair.privateKey}</p>
-                    </div>
-                ))}
-            </div>
+                    {keyPairs.map((keyPair, index) => (
+                        <div key={index}>
+                            <p>Public Key: {uint8ArrayToHexString(keyPair.publicKey)}</p>
+                            <p>Private Key: {uint8ArrayToHexString(keyPair.privateKey)}</p>
+                            <p>Address: {keyPair.address}</p>
+                        </div>
+                    ))}
+                </div>
             </section>
         </>
-    )
-}
+    );
+};
 
-export default Home
+export default Home;

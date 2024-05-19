@@ -35,21 +35,29 @@ export default function DatabaseService() {
     if (!db) {
       console.log("Database not started.");
       return;
+
     }
+    db.run(`
+    DROP TABLE IF EXISTS keys;
+`);
+db.run(`
+    DROP TABLE IF EXISTS addresses;
+`);
     db.run(
         "CREATE TABLE IF NOT EXISTS wallets (id INTEGER PRIMARY KEY, wallet_name VARCHAR(255), mnemonic VARCHAR(255), passphrase VARCHAR(255));"
     );
 
     db.run(`
-        CREATE TABLE IF NOT EXISTS keys (
-            id INTEGER PRIMARY KEY,
-            wallet_name VARCHAR(255),
-            public_key VARCHAR(255),
-            private_key VARCHAR(255),
-            addresses TEXT,
-            FOREIGN KEY(wallet_name) REFERENCES wallets(wallet_name)
-        );
+      CREATE TABLE IF NOT EXISTS keys (
+          id INTEGER PRIMARY KEY,
+          wallet_name VARCHAR(255),
+          public_key BLOB,
+          private_key BLOB,
+          address VARCHAR(255),
+          FOREIGN KEY(wallet_name) REFERENCES wallets(wallet_name)
+      );
     `);
+
     // const insertKeyQuery = db.prepare("INSERT INTO keys_and_addresses (wallet_id, public_key, private_key, addresses) VALUES (?, ?, ?, ?);");
 //     insertKeyQuery.run([walletId, publicKey, privateKey, JSON.stringify(addresses)]);
 //     insertKeyQuery.free();
