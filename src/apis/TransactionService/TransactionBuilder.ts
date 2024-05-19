@@ -33,8 +33,9 @@ export default function Transactions() {
   }
 
   async function buildTransaction(
-    input,
+    inputs,
     recipients: Array<{ address: string; amount: number }>,
+    privateKey : Uint8Array,
     fee: number = DUST_LIMIT / 3,
     depth: number = 0
   ) {
@@ -75,11 +76,7 @@ export default function Transactions() {
           data: {
             keys: {
               privateKeys: {
-                key: [
-                  218, 197, 243, 44, 117, 92, 8, 79, 203, 195, 39, 238, 97, 52,
-                  29, 37, 16, 112, 41, 236, 4, 71, 129, 113, 221, 24, 23, 180,
-                  12, 74, 5, 96,
-                ],
+                key: privateKey,
               },
             },
           },

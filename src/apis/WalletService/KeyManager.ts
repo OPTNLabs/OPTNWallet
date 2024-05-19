@@ -1,7 +1,5 @@
 import DatabaseService from "../DatabaseManager/DatabaseService";
 import KeyGeneration from "./KeyGeneration";
-import { encodeCashAddress } from '@bitauth/libauth';
-import { hash160 } from '@cashscript/utils';
 
 export default function KeyManager() {
     const dbService = DatabaseService();

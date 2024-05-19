@@ -3,6 +3,7 @@ import LandingPage from "./pages/LandingPage";
 import CreateWallet from "./pages/CreateWallet";
 import ImportWallet from "./pages/ImportWallet";
 import Home from "./pages/Home";
+import CreateTransactions from "./pages/CreateTransactions";
 
 function App() {
   return (
@@ -12,6 +13,7 @@ function App() {
       <Route path = "/home/:wallet_id" element = {<Home/>}/>
       <Route path = "/createwallet" element = {<CreateWallet/>}/>
       <Route path = "/importwallet" element = {<ImportWallet/>}/>
+      <Route path = "/createtransaction/:sendAddress" element = {<CreateTransactions/>}/>
     </Routes>
   </>
   )

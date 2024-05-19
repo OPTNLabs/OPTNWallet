@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { useParams } from 'react-router-dom';
+import { useNavigate, useParams } from 'react-router-dom';
 import KeyManager from '../apis/WalletService/KeyManager';
 import DatabaseService from '../apis/DatabaseManager/DatabaseService';
 
@@ -8,7 +8,7 @@ const Home = () => {
     const [retrieve, setRetrieve] = useState(false);
     const KeyManage = KeyManager();
     const dbService = DatabaseService();
-
+    const navigate = useNavigate();
     const { wallet_id } = useParams<{ wallet_id: string }>();
 
     useEffect(() => {
@@ -35,7 +35,10 @@ const Home = () => {
         }
     };
 
-    // Utility function to convert Uint8Array to hex string for display
+    const handleUseForTransaction = async(address : string) => {
+        navigate(`/createtransaction/${address}`)
+    }
+
     const uint8ArrayToHexString = (array: Uint8Array) => {
         return Array.from(array).map(byte => byte.toString(16).padStart(2, '0')).join('');
     };
@@ -52,6 +55,7 @@ const Home = () => {
                             <p>Public Key: {uint8ArrayToHexString(keyPair.publicKey)}</p>
                             <p>Private Key: {uint8ArrayToHexString(keyPair.privateKey)}</p>
                             <p>Address: {keyPair.address}</p>
+                            <button onClick = {() => {handleUseForTransaction(keyPair.address)} }>Use For Transaction</button>
                         </div>
                     ))}
                 </div>

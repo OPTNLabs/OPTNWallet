@@ -111,6 +111,8 @@ const LandingPage = () => {
         <button onClick = { handleGetUtxos }> get utxos</button>
 
         <button onClick = { handleBuildTransaction }>build transaction</button>
+
+        
       </>
   )
 }
