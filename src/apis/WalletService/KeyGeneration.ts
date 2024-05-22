@@ -36,10 +36,10 @@ export default function KeyGeneration() {
         console.log(alicePub)
         console.log(alicePriv)
         const aliceAddress = encodeCashAddress('bchtest', 'p2pkh', alicePkh)
-        // const changePub = secp256k1.derivePublicKeyCompressed(changeNode.privateKey);
-        // const changePriv = changeNode.privateKey;
-        // const changePkh = hash160(changePub);
-        // const changeAddress = encodeCashAddress('bchtest', 'p2pkh', changePkh);
+        const changePub = secp256k1.derivePublicKeyCompressed(changeNode.privateKey);
+        const changePriv = changeNode.privateKey;
+        const changePkh = hash160(changePub);
+        const changeAddress = encodeCashAddress('bchtest', 'p2pkh', changePkh);
         return { alicePub, alicePriv, aliceAddress }
     };
 }
