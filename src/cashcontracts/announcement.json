@@ -1,0 +1,17 @@
+{
+  "contractName": "Announcement",
+  "constructorInputs": [],
+  "abi": [
+    {
+      "name": "announce",
+      "inputs": []
+    }
+  ],
+  "bytecode": "6a 6d02 OP_SIZE OP_SWAP OP_CAT OP_CAT 4120636f6e7472616374206d6179206e6f7420696e6a75726520612068756d616e206265696e67206f722c207468726f75676820696e616374696f6e2c20616c6c6f7720612068756d616e206265696e6720746f20636f6d6520746f206861726d2e OP_SIZE OP_DUP 4b OP_GREATERTHAN OP_IF 4c OP_SWAP OP_CAT OP_ENDIF OP_SWAP OP_CAT OP_CAT OP_0 OP_OUTPUTVALUE OP_0 OP_NUMEQUALVERIFY OP_0 OP_OUTPUTBYTECODE OP_EQUALVERIFY e803 OP_INPUTINDEX OP_UTXOVALUE OP_OVER OP_SUB OP_DUP OP_ROT OP_GREATERTHANOREQUAL OP_IF OP_1 OP_OUTPUTBYTECODE OP_INPUTINDEX OP_UTXOBYTECODE OP_EQUALVERIFY OP_1 OP_OUTPUTVALUE OP_OVER OP_NUMEQUALVERIFY OP_ENDIF OP_DROP OP_1",
+  "source": "pragma cashscript ^0.9.0;\r\n\r\ncontract Announcement() {\r\n    function announce() {\r\n        // Create the memo.cash announcement output\r\n        bytes announcement = new LockingBytecodeNullData([\r\n            0x6d02,\r\n            bytes('A contract may not injure a human being or, through inaction, allow a human being to come to harm.')\r\n        ]);\r\n\r\n        // Check that the first tx output matches the announcement\r\n        require(tx.outputs[0].value == 0);\r\n        require(tx.outputs[0].lockingBytecode == announcement);\r\n\r\n        // Calculate leftover money after fee (1000 sats)\r\n        // Check that the second tx output sends the change back if there's enough leftover for another announcement\r\n        int minerFee = 1000;\r\n        int changeAmount = tx.inputs[this.activeInputIndex].value - minerFee;\r\n        if (changeAmount >= minerFee) {\r\n            require(tx.outputs[1].lockingBytecode == tx.inputs[this.activeInputIndex].lockingBytecode);\r\n            require(tx.outputs[1].value == changeAmount);\r\n        }\r\n    }\r\n}\r\n",
+  "compiler": {
+    "name": "cashc",
+    "version": "0.9.3"
+  },
+  "updatedAt": "2024-05-23T17:44:51.688Z"
+}

@@ -14,6 +14,7 @@ export default function ElectrumService() {
         electrum = new ElectrumClient('OPTNWallet', '1.4.1', server, ElectrumTransport.WSS.Port, ElectrumTransport.WSS.Scheme);
         return electrum.connect();
     }
+
     async function electrumDisconnect(status: boolean) : Promise<boolean> {
         if (electrum !== null) {
             return electrum.disconnect(status);
