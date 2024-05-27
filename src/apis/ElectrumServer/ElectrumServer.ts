@@ -15,6 +15,12 @@ export default function ElectrumService() {
         return electrum.connect();
     }
 
+    async function electrumInstance (server: string = testServer) : Promise<ElectrumClient> {
+        electrum = new ElectrumClient('OPTNWallet', '1.4.1', server, ElectrumTransport.WSS.Port, ElectrumTransport.WSS.Scheme);
+        return electrum
+    }
+
+
     async function electrumDisconnect(status: boolean) : Promise<boolean> {
         if (electrum !== null) {
             return electrum.disconnect(status);
@@ -33,15 +39,17 @@ export default function ElectrumService() {
         }
     }
     async function getUTXOS(address : string) : Promise<any> {
+        console.log("getting utxos")
         if (electrum !== null) {
             const UTXOs = await electrum.request(
                 "blockchain.address.listunspent",
                 address
             );
+            console.log(UTXOs)
             return UTXOs;
-    
         }
     }
+
     async function broadcastTransaction(tx_hex : string) {
         if (electrum !== null) {
             const tx_hash = await electrum.request(
@@ -52,6 +60,6 @@ export default function ElectrumService() {
             return tx_hash;
         }
       }
-    return { electrumConnect, electrumDisconnect, getBalance, getUTXOS, broadcastTransaction }
+    return { electrumConnect, electrumDisconnect, getBalance, getUTXOS, broadcastTransaction, electrumInstance }
 
 }

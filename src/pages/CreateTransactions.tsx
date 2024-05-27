@@ -31,6 +31,7 @@ const CreateTransactions = () => {
 
   const handleGenerateUTXOs = async () => {
     const address = transactionSendAddress;
+    console.log('address', address)
     if (address) {
       const utxoValues = await Electrum.getUTXOS(address);
       console.log(utxoValues);
@@ -65,12 +66,13 @@ const CreateTransactions = () => {
         recipients,
         privateKeyUint8Array
       );
-      if (transaction != null) {
-        const result = await Electrum.broadcastTransaction(transaction.hex);
-        console.log(result)
-        const isSuccess = result === transaction.txid;
-        console.log("transaction akldj;flkfs", isSuccess)
-      }
+      console.log(transaction)
+      // if (transaction != null) {
+      //   const result = await Electrum.broadcastTransaction(transaction.hex);
+      //   console.log(result)
+      //   const isSuccess = result === transaction.txid;
+      //   console.log("transaction akldj;flkfs", isSuccess)
+      // }
     } catch (error) {
       console.error("Error building transaction:", error);
     }
