@@ -1,4 +1,3 @@
-import React from "react";
 import { Link } from 'react-router-dom';
 
 const NavBar = () => {
@@ -34,12 +33,12 @@ const NavBar = () => {
               </Link>
             </li>
             <li>
-              <a
+              <Link
                 to="/filler"
                 className="text-white px-3 py-2 rounded-md text-lg"
               >
                 Filler
-              </a>
+              </Link>
             </li>
           </ul>
         </div>

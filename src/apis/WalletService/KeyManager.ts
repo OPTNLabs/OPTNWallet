@@ -66,18 +66,20 @@ export default function KeyManager() {
             const passphrase = JSON.stringify(result[1])
 
             const keys = await KeyGen.generateKeys(mnemonic, passphrase, keyNumber);
-            const publicKey = keys.alicePub;
-            const privateKey = keys.alicePriv;
-            const address = keys.aliceAddress;
 
-            const insertQuery = db.prepare(
-                "INSERT INTO keys (wallet_name, public_key, private_key, address) VALUES (?, ?, ?, ?);"
-            );
-            insertQuery.run([wallet_name, publicKey, privateKey, address]);
-            insertQuery.free();
+            if (keys) {
+                const publicKey = keys.alicePub;
+                const privateKey = keys.alicePriv;
+                const address = keys.aliceAddress;
 
-            console.log("Keys successfully created and stored in the database.");
+                const insertQuery = db.prepare(
+                    "INSERT INTO keys (wallet_name, public_key, private_key, address) VALUES (?, ?, ?, ?);"
+                );
+                insertQuery.run([wallet_name, publicKey, privateKey, address]);
+                insertQuery.free();
 
+                console.log("Keys successfully created and stored in the database.");
+            }
         } catch (error) {
             console.error("Error creating keys:", error);
             throw error;

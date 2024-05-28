@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import { useState, useEffect } from 'react';
 import { useParams } from 'react-router-dom';
 import ElectrumService from '../apis/ElectrumServer/ElectrumServer';
 import Transactions from '../apis/TransactionService/TransactionBuilder';
@@ -67,12 +67,12 @@ const CreateTransactions = () => {
         privateKeyUint8Array
       );
       console.log(transaction)
-      // if (transaction != null) {
-      //   const result = await Electrum.broadcastTransaction(transaction.hex);
-      //   console.log(result)
-      //   const isSuccess = result === transaction.txid;
-      //   console.log("transaction akldj;flkfs", isSuccess)
-      // }
+      if (transaction != null) {
+        const result = await Electrum.broadcastTransaction(transaction.hex);
+        console.log(result)
+        const isSuccess = result === transaction.txid;
+        console.log("Transaction Success??", isSuccess)
+      }
     } catch (error) {
       console.error("Error building transaction:", error);
     }

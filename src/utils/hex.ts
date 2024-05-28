@@ -1,4 +1,4 @@
-export function binToHex(buffer) {
+export function binToHex(buffer : Buffer) {
     let out = "";
     for (let idx = 0, edx = buffer.length; idx < edx; idx++) {
       out += LUT_HEX_8b[buffer[idx]];

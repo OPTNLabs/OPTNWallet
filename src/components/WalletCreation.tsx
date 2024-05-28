@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import DatabaseService from '../apis/DatabaseManager/DatabaseService';
 import KeyGeneration from '../apis/WalletService/KeyGeneration';
@@ -17,6 +17,7 @@ const WalletCreation = () => {
     const dispatch = useDispatch();
 
     useEffect(() => {
+        console.log(wallet_id);
         const initDb = async () => {
             const dbStarted = await dbService.startDatabase();
             if (dbStarted) {

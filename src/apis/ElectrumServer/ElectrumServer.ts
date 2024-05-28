@@ -1,5 +1,6 @@
-import { ElectrumCluster, ElectrumClient, ElectrumTransport } from 'electrum-cash';
+import { ElectrumClient, ElectrumTransport } from 'electrum-cash';
 import { chipnetServers } from '../../utils/servers/ElectrumServers';
+import { BalanceResponse } from '../interfaces';
 
 export enum Network {
     CHIPNET
@@ -8,6 +9,8 @@ export enum Network {
 let electrum: ElectrumClient | null = null;
 
 const testServer = chipnetServers[0];
+
+
 
 export default function ElectrumService() {
     async function electrumConnect (server : string = testServer): Promise<void>{
@@ -20,7 +23,6 @@ export default function ElectrumService() {
         return electrum
     }
 
-
     async function electrumDisconnect(status: boolean) : Promise<boolean> {
         if (electrum !== null) {
             return electrum.disconnect(status);
@@ -28,16 +30,22 @@ export default function ElectrumService() {
         return true;
     };
 
-    async function getBalance(address : string) : Promise<any> {
+    async function getBalance(address: string): Promise<number> {
         if (electrum !== null) {
-            const params = [address, "include_tokens"]
-            const { confirmed, unconfirmed } = await electrum.request(
-                "blockchain.address.get_balance",
-                ...params
-            );
-            return confirmed + unconfirmed
+            const params = [address, "include_tokens"];
+            const response: any = await electrum.request("blockchain.address.get_balance", ...params);
+
+            if (response && typeof response.confirmed === 'number' && typeof response.unconfirmed === 'number') {
+                const { confirmed, unconfirmed } = response as BalanceResponse;
+                return confirmed + unconfirmed;
+            } else {
+                throw new Error("Unexpected response format");
+            }
+        } else {
+            throw new Error("Electrum client is not initialized");
         }
     }
+
     async function getUTXOS(address : string) : Promise<any> {
         console.log("getting utxos")
         if (electrum !== null) {
@@ -59,7 +67,7 @@ export default function ElectrumService() {
             console.log('hallo')
             return tx_hash;
         }
-      }
+    }
     return { electrumConnect, electrumDisconnect, getBalance, getUTXOS, broadcastTransaction, electrumInstance }
 
 }
