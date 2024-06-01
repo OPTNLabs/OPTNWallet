@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import DatabaseService from '../apis/DatabaseManager/DatabaseService';
-import KeyGeneration from '../apis/WalletService/KeyGeneration';
+import KeyGeneration from '../apis/WalletManager/KeyGeneration';
 import { useDispatch, useSelector } from 'react-redux';
 import { RootState } from '../redux/store';
 import { setWalletId } from '../redux/walletSlice';

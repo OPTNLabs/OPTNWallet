@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { useParams } from 'react-router-dom';
 import ElectrumService from '../apis/ElectrumServer/ElectrumServer';
-import Transactions from '../apis/TransactionService/TransactionBuilder';
+import Transactions from '../apis/TranasactionManager/TransactionBuilder';
 
 const CreateTransactions = () => {
   const { sendAddress } = useParams<{ sendAddress: string }>();
@@ -121,7 +121,7 @@ const CreateTransactions = () => {
             </div>
           ))}
         </div>
-        <button onClick={handleMakeTransaction}>Make the transaction</button>
+        <button onClick = { handleMakeTransaction }>Make the transaction</button>
       </section>
     </>
   );

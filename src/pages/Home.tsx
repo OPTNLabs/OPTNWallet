@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
-import KeyManager from '../apis/WalletService/KeyManager';
+import KeyManager from '../apis/WalletManager/KeyManager';
 import DatabaseService from '../apis/DatabaseManager/DatabaseService';
 
 const Home = () => {

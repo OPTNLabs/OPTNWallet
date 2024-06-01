@@ -7,7 +7,8 @@ export default function KeyManager() {
 
     return {
         retrieveKeys,
-        createKeys
+        createKeys,
+        fetchAddressPrivateKey,
     };
 
     async function retrieveKeys(wallet_name: string): Promise<{ id: number, publicKey: Uint8Array; privateKey: Uint8Array; address: string }[]> {
@@ -84,5 +85,19 @@ export default function KeyManager() {
             console.error("Error creating keys:", error);
             throw error;
         }
+    }
+
+    function fetchAddressPrivateKey(address : string) {
+        dbService.ensureDatabaseStarted();
+        const db = dbService.getDatabase();
+        if (db == null) {
+            return null;
+        }
+        const fetchAddressQuery = db.prepare(
+            "SELECT private_key FROM keys WHERE address = ?;"
+        );
+        const result = fetchAddressQuery.get([address]);
+        fetchAddressQuery.free();
+        return result;
     }
 }

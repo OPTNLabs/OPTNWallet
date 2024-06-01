@@ -12,8 +12,10 @@ import { Decimal } from "decimal.js";
 import { binToHex } from "../../utils/hex";
 import { Buffer } from "buffer";
 import { addressToLockingByteCode } from "../../utils/functions/conversions";
+import WalletManager from "../WalletManager/WalletManager";
 
 const DUST_LIMIT = 546;
+const Wallet = WalletManager();
 
 export default function Transactions() {
   return {
@@ -61,32 +63,18 @@ export default function Transactions() {
     if (changeTotal >= DUST_LIMIT) {
       const changeAddress =
         "bchtest:qr6el0mxumpkwpxx8s6ymegzxns43d4kh5vjyvkg6r";
+
       vout.push({
         lockingBytecode: addressToLockingByteCode(changeAddress),
         valueSatoshis: BigInt(changeTotal),
       });
+
     } else {
       fee += changeTotal;
       changeTotal = 0;
     }
-    console.log("testing the input", inputs);
-    const transactionInputs = inputs.map((input) => ({
-      outpointTransactionHash: hexToBin(input.tx_hash),
-      outpointIndex: input.tx_pos,
-      sequenceNumber: 0,
-      unlockingBytecode: {
-        compiler,
-        script: "unlock",
-        valueSatoshis: BigInt(input.value),
-        data: {
-          keys: {
-            privateKeys: {
-              key: privateKey,
-            },
-          },
-        },
-      },
-    }));
+    console.log("Testing the input", inputs);
+    const transactionInputs = Wallet.createInputs(inputs, compiler);
 
     const generatedTx = generateTransaction({
       inputs: transactionInputs,
@@ -122,7 +110,6 @@ export default function Transactions() {
         return null;
       }
     }
-
     console.log(`Final Transaction Hash: ${tx_hash}`);
     console.log(`Final Transaction Hex: ${tx_hex}`);
 

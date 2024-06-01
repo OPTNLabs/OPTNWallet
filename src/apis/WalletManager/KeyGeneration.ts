@@ -23,7 +23,6 @@ export default function KeyGeneration() {
         const rootNode = deriveHdPrivateNodeFromSeed(seed, true);
         const baseDerivationPath = `m/44'/145'/${keyNumber}'/0`;
         // const baseDerivationPathChange = "m/44'/145'/0'/1";
-
         // const changeNode = deriveHdPath(rootNode, `${baseDerivationPathChange}/${changeIndex}`);
 
         const aliceNode = deriveHdPath(rootNode, `${baseDerivationPath}/0`);
