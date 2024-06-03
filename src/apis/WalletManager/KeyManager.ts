@@ -1,9 +1,12 @@
 import DatabaseService from "../DatabaseManager/DatabaseService";
 import KeyGeneration from "./KeyGeneration";
+import AddressManager from "../AddressManager/AddressManager";
+import { Address } from "../types";
 
 export default function KeyManager() {
     const dbService = DatabaseService();
     const KeyGen = KeyGeneration();
+    const ManageAddress = AddressManager();
 
     return {
         retrieveKeys,
@@ -78,8 +81,18 @@ export default function KeyManager() {
                 );
                 insertQuery.run([wallet_name, publicKey, privateKey, address]);
                 insertQuery.free();
-
-                console.log("Keys successfully created and stored in the database.");
+                const newAddress : Address = {
+                    wallet_name : wallet_name,
+                    address : keys.aliceAddress,
+                    balance : 0,
+                    hd_index: keyNumber,
+                    change_index: 0
+                }
+                await ManageAddress.registerAddress(newAddress);
+                await dbService.saveDatabaseToFile();
+                const query = "SELECT * FROM addresses";
+                const statement = db.prepare(query);
+                statement.free();
             }
         } catch (error) {
             console.error("Error creating keys:", error);
