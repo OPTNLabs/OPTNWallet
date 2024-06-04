@@ -13,6 +13,7 @@ export default function DatabaseService() {
     saveDatabaseToFile,
     ensureDatabaseStarted,
     getDatabase,
+    resultToJSON
   };
 
   async function startDatabase(): Promise<any> {
@@ -50,12 +51,6 @@ export default function DatabaseService() {
     query.run([walletName, mnemonic, passphrase]);
     query.free();
 
-    const getIdQuery = db.prepare(
-      "SELECT wallet_name FROM wallets WHERE wallet_name = ?;"
-    );
-    const result = getIdQuery.get([walletName]);
-    getIdQuery.free();
-
     const dbResult = db.exec("SELECT * FROM wallets;");
     await saveDatabaseToFile();
 
@@ -82,5 +77,20 @@ export default function DatabaseService() {
 
   function getDatabase(): Database | null {
     return db;
+  }
+
+  function resultToJSON(result : any) {
+    if (result.length === 0) {
+      return result;
+    }
+
+    const mapped = result[0].values.map((val) =>
+      result[0].columns.map((col, j) => ({ [result[0].columns[j]]: val[j] }))
+    );
+
+    const reduced = mapped.map((m) =>
+      m.reduce((acc, cur) => ({ ...acc, ...cur }), {})
+    );
+    return reduced
   }
 }

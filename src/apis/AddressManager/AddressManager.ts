@@ -10,7 +10,7 @@ export default function AddressManager() {
       const db = dbService.getDatabase();
       if (db != null) {
         const registerAddressQuery = db.prepare(`
-          INSERT INTO addresses (wallet_name, address, balance, hd_index, change_index) VALUES (?, ?, ?, ?, ?)
+          INSERT INTO addresses (wallet_name, address, balance, hd_index, change_index, prefix) VALUES (?, ?, ?, ?, ?, ?)
         `);
 
         registerAddressQuery.run([
@@ -18,7 +18,8 @@ export default function AddressManager() {
           address.address,
           address.balance,
           address.hd_index,
-          address.change_index
+          address.change_index,
+          address.prefix
         ]);
 
         registerAddressQuery.free();
@@ -29,6 +30,7 @@ export default function AddressManager() {
       console.error("Failed to register address:", error);
     }
   };
+  
 
   return {
     registerAddress

@@ -5,12 +5,14 @@ import KeyGeneration from '../apis/WalletManager/KeyGeneration';
 import { useDispatch, useSelector } from 'react-redux';
 import { RootState } from '../redux/store';
 import { setWalletId } from '../redux/walletSlice';
+import WalletManager from '../apis/WalletManager/WalletManager';
 
 const WalletCreation = () => {
     const [mnemonicPhrase, setMnemonicPhrase] = useState('');
     const [walletName, setWalletName] = useState('');
     const [passphrase, setPassphrase] = useState('');
     const dbService = DatabaseService();
+    const WalletManage = WalletManager();
     const navigate = useNavigate();
     const KeyGen = KeyGeneration();
     const wallet_id = useSelector((state: RootState) => state.wallet_id.currentWalletId);
@@ -34,15 +36,11 @@ const WalletCreation = () => {
     };
 
     const handleCreateAccount = async () => {
-        const queryResult = await dbService.createWallet(walletName, mnemonicPhrase, passphrase);
-        console.log('Query result:', JSON.stringify(queryResult.result, null, 2));
-        console.log('Query id:', queryResult.id[0]);
-        const setId : string = queryResult.id[0]
-        await dbService.saveDatabaseToFile();
+        const queryResult = await WalletManage.createWallet(walletName, mnemonicPhrase, passphrase);
 
         if (queryResult) {
-            dispatch(setWalletId(setId));
-            navigate(`/home/${setId}`);
+            dispatch(setWalletId(walletName));
+            navigate(`/home/${walletName}`);
         }
     };
 

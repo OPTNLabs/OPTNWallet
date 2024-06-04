@@ -1,10 +1,17 @@
 export const createTables = (db: any) => {
     db.run(
+        `DROP TABLE IF EXISTS addresses;`
+    )
+    db.run(
+        `DROP TABLE IF EXISTS wallets;`
+    )
+    db.run(
         `CREATE TABLE IF NOT EXISTS wallets (
-            id INTEGER PRIMARY KEY,
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
             wallet_name VARCHAR(255),
             mnemonic VARCHAR(255),
-            passphrase VARCHAR(255)
+            passphrase VARCHAR(255),
+            balance INT,
         );`
     );
 
@@ -27,6 +34,7 @@ export const createTables = (db: any) => {
             balance INT,
             hd_index INT,
             change_index BOOLEAN,
+            prefix VARCHAR(255),
             FOREIGN KEY (address) REFERENCES keys(address)
         );
     `);
