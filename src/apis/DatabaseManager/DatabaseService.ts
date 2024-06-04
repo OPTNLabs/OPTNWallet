@@ -9,7 +9,6 @@ let db: Database | null = null;
 export default function DatabaseService() {
   return {
     startDatabase,
-    createWallet,
     saveDatabaseToFile,
     ensureDatabaseStarted,
     getDatabase,
@@ -26,35 +25,6 @@ export default function DatabaseService() {
       db = new SQLModule.Database();
     }
     return db;
-  }
-
-  async function createWallet(
-    walletName: string,
-    mnemonic: string,
-    passphrase: string
-  ): Promise<any> {
-    await ensureDatabaseStarted();
-    if (!db) {
-      console.log("Database not started.");
-      return;
-
-    }
-
-    createTables(db);
-
-    // const insertKeyQuery = db.prepare("INSERT INTO keys_and_addresses (wallet_id, public_key, private_key, addresses) VALUES (?, ?, ?, ?);");
-    // insertKeyQuery.run([walletId, publicKey, privateKey, JSON.stringify(addresses)]);
-    // insertKeyQuery.free();
-    const query = db.prepare(
-      "INSERT INTO wallets (wallet_name, mnemonic, passphrase) VALUES (?, ?, ?);"
-    );
-    query.run([walletName, mnemonic, passphrase]);
-    query.free();
-
-    const dbResult = db.exec("SELECT * FROM wallets;");
-    await saveDatabaseToFile();
-
-    return { id: result, result: dbResult };
   }
 
   async function ensureDatabaseStarted(): Promise<void> {

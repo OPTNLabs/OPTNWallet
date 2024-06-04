@@ -26,7 +26,7 @@ export default function WalletManager() {
         query.run([wallet_name, mnemonic, passphrase, 0]);
         query.free();
         await dbService.saveDatabaseToFile();
-        return
+        return 1;
     }
 
     function createInputs(inputs: any, compiler) {

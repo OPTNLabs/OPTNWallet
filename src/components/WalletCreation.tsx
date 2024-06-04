@@ -37,7 +37,6 @@ const WalletCreation = () => {
 
     const handleCreateAccount = async () => {
         const queryResult = await WalletManage.createWallet(walletName, mnemonicPhrase, passphrase);
-
         if (queryResult) {
             dispatch(setWalletId(walletName));
             navigate(`/home/${walletName}`);

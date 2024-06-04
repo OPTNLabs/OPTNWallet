@@ -8,9 +8,11 @@ export type Address = {
 };
 
 export type UTXOs = {
+    wallet_name: string;
+    address: string;
     height: number;
     tx_hash: string;
     tx_pos: number;
-    value: number;
-    
+    amount: number;
+    prefix: string;
 }
