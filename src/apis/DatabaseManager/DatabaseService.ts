@@ -1,10 +1,10 @@
 import initSqlJs, { Database } from "sql.js";
-import { createTables } from "../../utils/schema/schema";
 
 const SQL = initSqlJs({
   locateFile: (file) => `https://sql.js.org/dist/${file}`,
 });
 let db: Database | null = null;
+
 
 export default function DatabaseService() {
   return {
@@ -14,7 +14,7 @@ export default function DatabaseService() {
     getDatabase,
     resultToJSON
   };
-
+  
   async function startDatabase(): Promise<any> {
     const SQLModule = await SQL;
     const savedDb = localStorage.getItem("OPTNDatabase");

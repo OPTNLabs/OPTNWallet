@@ -8,6 +8,9 @@ export const createTables = (db: any) => {
     db.run(
         `DROP TABLE IF EXISTS UTXOs;`
     );
+    db.run(
+        `DROP TABLE IF EXISTS keys;`
+    )
 
     db.run(
         `CREATE TABLE IF NOT EXISTS wallets (

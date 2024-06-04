@@ -15,10 +15,14 @@ export default function WalletManager() {
         wallet_name: string,
         mnemonic: string,
         passphrase: string
-    ) : Promise<any> {
+    ) : Promise<any | null> {
         
         const dbService = DatabaseService();
         const db = dbService.getDatabase();
+        if (!db) {
+            return null;
+        }
+
         createTables(db);
         const query = db.prepare(
             "INSERT INTO wallets (wallet_name, mnemonic, passphrase, balance) VALUES (?, ?, ?, ?);"

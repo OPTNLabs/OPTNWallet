@@ -1,21 +1,34 @@
 import { UTXOs } from "../types";
-import DatabaseService from "../DatabaseManager/DatabaseService";
+import DatabaseService, { dbStart } from "../DatabaseManager/DatabaseService";
 
-export default function UTXOManager(wallet) {
+
+export default async function UTXOManager() {
+    const dbService = DatabaseService();
+    await dbService.ensureDatabaseStarted();
+
     return {
         storeUTXOs,
-        fetchUTXOs,
-        getWalletUTXOs
+        fetchUTXOs
     }
 
-    function getWalletUTXOs() {
-
+    // store utxos
+    async function storeUTXOs(UTXOs : UTXOs) {
+        const db = dbService.getDatabase()
+        if (!db && db == null) {
+            console.log("Database not started.");
+            return null;
+        }
+        const query = db.prepare(`
+            INSERT INTO UTXOs(wallet_name, address, height, tx_hash, tx_pos, amount, prefix) VALUES (?, ?, ?, ?, ?, ?, ?);
+        `)
+        query.run([UTXOs.wallet_name, UTXOs.address, UTXOs.height, UTXOs.tx_hash, UTXOs.tx_pos, UTXOs.amount, UTXOs.prefix]);
+        query.free();
+        await dbService.saveDatabaseToFile;
     }
 
     async function fetchUTXOs(amount: number, fee: number, prefix: string, wallet_name: string): Promise<UTXOs[] | null> {
-        const dbService = DatabaseService();
-        const db = dbService.getDatabase();
-        if (!db) {
+        const db = dbService.getDatabase()
+        if (!db && db == null) {
             console.log("Database not started.");
             return null;
         }
@@ -53,10 +66,5 @@ export default function UTXOManager(wallet) {
     
         console.log("Insufficient UTXOs to cover the transaction amount.");
         return null;
-    }
-    
-
-    function storeUTXOs(amount: number, fee: number, prefix: string) {
-
     }
 }
