@@ -29,6 +29,11 @@ export default function ElectrumService() {
         }
         return true;
     };
+    async function ensureElectrumConnected() {
+        if (!electrum) {
+            await electrumConnect();
+        }
+    }
 
     async function getBalance(address: string): Promise<number> {
         if (electrum !== null) {
@@ -47,14 +52,18 @@ export default function ElectrumService() {
     }
 
     async function getUTXOS(address : string) : Promise<any> {
-        console.log("getting utxos")
+        await ensureElectrumConnected();
         if (electrum !== null) {
             const UTXOs = await electrum.request(
                 "blockchain.address.listunspent",
                 address
             );
-            console.log(UTXOs)
-            return UTXOs;
+            console.log(UTXOs);
+            if (UTXOs) {
+                return UTXOs;
+            }
+
+            return [];
         }
     }
 

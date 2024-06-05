@@ -21,7 +21,6 @@
     "@reduxjs/toolkit": "^2.2.5",
     "@types/sql.js": "^1.4.9",
     "bip39": "^3.1.0",
-    "bitcoinjs-lib": "^6.1.5",
     "cashc": "^0.9.3",
     "cashscript": "^0.9.3",
     "decimal.js": "^10.4.3",

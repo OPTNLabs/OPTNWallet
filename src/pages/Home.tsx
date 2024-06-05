@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import KeyManager from '../apis/WalletManager/KeyManager';
 import DatabaseService from '../apis/DatabaseManager/DatabaseService';
+import UTXOManager from '../apis/UTXOManager/UTXOManager';
 
 const Home = () => {
     const [keyPairs, setKeyPairs] = useState<{ id: number, publicKey: Uint8Array; privateKey: Uint8Array; address: string }[]>([]);
@@ -10,6 +11,8 @@ const Home = () => {
     const dbService = DatabaseService();
     const navigate = useNavigate();
     const { wallet_id } = useParams<{ wallet_id: string }>();
+    const ManageUTXOs = UTXOManager();
+
 
     useEffect(() => {
         const retrieveWalletInformation = async () => {
@@ -26,6 +29,11 @@ const Home = () => {
     const fetchData = () => {
         setRetrieve(prev => !prev);
     };
+    const storeUTXOs = async() => {
+        if (wallet_id) {
+            (await ManageUTXOs).checkNewUTXOs(wallet_id);
+        }
+    }
 
     const handleGenerateKeys = async () => {
         if (wallet_id != null) {
@@ -59,6 +67,7 @@ const Home = () => {
                         </div>
                     ))}
                 </div>
+                <button onClick = { storeUTXOs }>sdhflsdkfs</button>
             </section>
         </>
     );

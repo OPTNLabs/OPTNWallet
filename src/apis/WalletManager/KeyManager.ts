@@ -1,13 +1,13 @@
 import DatabaseService from "../DatabaseManager/DatabaseService";
 import KeyGeneration from "./KeyGeneration";
 import AddressManager from "../AddressManager/AddressManager";
-import { Address } from "../types";
+import { Address, UTXOs } from "../types";
 
 export default function KeyManager() {
     const dbService = DatabaseService();
     const KeyGen = KeyGeneration();
     const ManageAddress = AddressManager();
-
+    
     return {
         retrieveKeys,
         createKeys,
@@ -48,7 +48,7 @@ export default function KeyManager() {
         }
     }
 
-    async function createKeys(wallet_name: string, keyNumber: number): Promise<void> {
+    async function createKeys(wallet_name : string, keyNumber: number): Promise<void> {
         try {
             await dbService.ensureDatabaseStarted();
             const db = dbService.getDatabase();
@@ -86,13 +86,17 @@ export default function KeyManager() {
                     address : keys.aliceAddress,
                     balance : 0,
                     hd_index: keyNumber,
-                    change_index: 0
+                    change_index: 0,
+                    prefix: "BCH"
                 }
+
                 await ManageAddress.registerAddress(newAddress);
                 await dbService.saveDatabaseToFile();
                 const query = "SELECT * FROM addresses";
                 const statement = db.prepare(query);
+                const wow = statement.run()
                 statement.free();
+                console.log("all addresses in the database", wow)
             }
         } catch (error) {
             console.error("Error creating keys:", error);

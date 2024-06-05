@@ -1,18 +1,5 @@
 export const createTables = (db: any) => {
     db.run(
-        `DROP TABLE IF EXISTS addresses;`
-    );
-    db.run(
-        `DROP TABLE IF EXISTS wallets;`
-    );
-    db.run(
-        `DROP TABLE IF EXISTS UTXOs;`
-    );
-    db.run(
-        `DROP TABLE IF EXISTS keys;`
-    )
-
-    db.run(
         `CREATE TABLE IF NOT EXISTS wallets (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             wallet_name VARCHAR(255),
