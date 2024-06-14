@@ -1,7 +1,9 @@
 import { useState, useEffect } from 'react';
 import { useParams } from 'react-router-dom';
 import ElectrumService from '../apis/ElectrumServer/ElectrumServer';
-import Transactions from '../apis/TranasactionManager/TransactionBuilder';
+import TransactionBuilders from '../apis/TranasactionManager/TransactionBuilder2';
+import { useSelector } from 'react-redux';
+import { RootState } from '../redux/store';
 
 const CreateTransactions = () => {
   const { sendAddress } = useParams<{ sendAddress: string }>();
@@ -12,7 +14,8 @@ const CreateTransactions = () => {
   const [recipientAmount, setRecipientAmount] = useState<number>(1000);
   const [signPrivateKey, setSignPrivateKey] = useState<string>("");
   const Electrum = ElectrumService();
-  const TransactionBuilder = Transactions();
+  const wallet_id = useSelector((state: RootState) => state.wallet_id.currentWalletId);
+
 
   useEffect(() => {
     if (sendAddress != null) {
@@ -60,18 +63,18 @@ const CreateTransactions = () => {
 
   const handleMakeTransaction = async () => {
     try {
-      const privateKeyUint8Array = hexStringToUint8Array(signPrivateKey);
-      const transaction = await TransactionBuilder.buildTransaction(
-        utxos,
-        recipients,
-        privateKeyUint8Array
+      if (!wallet_id) {
+        console.log("invalid id");
+        return null;
+      }
+      const TransactionBuilder = TransactionBuilders();
+      const transaction = await TransactionBuilder.createTransaction(
+        wallet_id,
+        recipients
       );
-      console.log(transaction)
+      console.log('got here!!!');
       if (transaction != null) {
-        const result = await Electrum.broadcastTransaction(transaction.hex);
-        console.log(result)
-        const isSuccess = result === transaction.txid;
-        console.log("Transaction Success??", isSuccess)
+        console.log(transaction);
       }
     } catch (error) {
       console.error("Error building transaction:", error);

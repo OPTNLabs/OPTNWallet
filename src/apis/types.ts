@@ -15,4 +15,5 @@ export type UTXOs = {
     tx_pos: number;
     amount: number;
     prefix: string;
+    private_key : Uint8Array;
 }

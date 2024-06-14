@@ -14,8 +14,7 @@ export default async function UTXOManager() {
         checkNewUTXOs
     }
 
-    // store utxos
-    async function storeUTXOs(wallet_name: string, UTXOs : UTXOs) {
+    async function storeUTXOs(UTXOs : UTXOs) {
         console.log("storing", UTXOs)
         const db = dbService.getDatabase()
         if (!db) {
@@ -24,9 +23,9 @@ export default async function UTXOManager() {
         }
         try {
         const query = db.prepare(`
-            INSERT INTO UTXOs(wallet_name, address, height, tx_hash, tx_pos, amount, prefix) VALUES (?, ?, ?, ?, ?, ?, ?);
+            INSERT INTO UTXOs(wallet_name, address, height, tx_hash, tx_pos, amount, prefix, private_key) VALUES (?, ?, ?, ?, ?, ?, ?, ?);
         `)
-        query.run([UTXOs.wallet_name, UTXOs.address, UTXOs.height, UTXOs.tx_hash, UTXOs.tx_pos, UTXOs.amount, UTXOs.prefix]);
+        query.run([UTXOs.wallet_name, UTXOs.address, UTXOs.height, UTXOs.tx_hash, UTXOs.tx_pos, UTXOs.amount, UTXOs.prefix, UTXOs.private_key]);
         query.free();
         } catch(error) {
             console.log(error)
@@ -41,19 +40,41 @@ export default async function UTXOManager() {
             return null;
         }
         const transactionAmount = amount + fee;
-    
+        console.log('trnasacitonamount', transactionAmount);
+        const query = "SELECT id, wallet_name, address, height, tx_hash, tx_pos, amount, prefix, private_key FROM UTXOs WHERE wallet_name = :walletname";
+        const statement = db.prepare(query);
+        statement.bind({ ':walletname': wallet_name });
+
+        const result: { id: number, wallet_name: string, address: string, height: number, tx_hash: string, tx_pos: number, amount: number, prefix: string, privateKey: Uint8Array }[] = [];
+
+        while (statement.step()) {
+            const row = statement.getAsObject();
+            console.log('row', row);
+            result.push({
+                id: row.id as number,
+                wallet_name: row.wallet_name as string,
+                address: row.address as string,
+                height: row.height as number,
+                tx_hash: row.tx_hash as string,
+                tx_pos: row.tx_pos as number,
+                amount: row.amount as number,
+                prefix: row.prefix as string,
+                privateKey: new Uint8Array(row.private_key)
+            });
+        }
+
+        // Use the result array as needed
+        console.log('UTXOs:', result);
+
         const possibleUTXOs = dbService.resultToJSON(
             db.exec(
                 `SELECT * FROM UTXOs 
-                  WHERE 
-                    amount <= "${transactionAmount}" 
-                    AND wallet_name="${wallet_name}" 
-                    AND prefix="${prefix}"
-                  ORDER BY amount DESC`
+                  WHERE wallet_name="${wallet_name}"
+                  ORDER BY amount DESC;`
             )
         );
     
-        // condition 1: exact same amount as utxos
+        // exact same amount as utxos
         const exactUTXOs = possibleUTXOs.filter(
             (utxo: UTXOs) => utxo.amount === transactionAmount
         );
@@ -63,8 +84,11 @@ export default async function UTXOManager() {
     
         let possibleUTXOSum = 0;
         let returnUTXOs: UTXOs[] = [];
+        
+        console.log('harharhar', possibleUTXOs.length);
     
         for (let i = 0; i < possibleUTXOs.length; ++i) {
+            console.log(possibleUTXOs[i].amount);
             possibleUTXOSum += possibleUTXOs[i].amount;
             returnUTXOs.push(possibleUTXOs[i]);
             if (possibleUTXOSum >= transactionAmount) {
@@ -101,6 +125,11 @@ export default async function UTXOManager() {
 
                 const fetchedUTXOs = await Electrum.getUTXOS(address.address);
                 for (const utxo of fetchedUTXOs) {
+                    const pk_query = db.prepare("SELECT private_key FROM keys WHERE address = ?;");
+                    const result = pk_query.get([address.address]);
+                    pk_query.free();
+                    console.log('hawwo')
+                    console.log("private key", result[0]);
                     const newUTXO: UTXOs = {
                         wallet_name: wallet_name,
                         address: address.address,
@@ -108,9 +137,10 @@ export default async function UTXOManager() {
                         tx_hash: utxo.tx_hash,
                         tx_pos: utxo.tx_pos,
                         amount: utxo.value,
-                        prefix: "BCH"
+                        prefix: "BCH",
+                        private_key : result[0]
                     };
-                    await storeUTXOs(wallet_name, newUTXO);
+                    await storeUTXOs(newUTXO);
 
                 }
             } catch (error) {

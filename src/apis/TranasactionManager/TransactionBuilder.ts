@@ -13,6 +13,7 @@ import { binToHex } from "../../utils/hex";
 import { Buffer } from "buffer";
 import { addressToLockingByteCode } from "../../utils/functions/conversions";
 import WalletManager from "../WalletManager/WalletManager";
+import UTXOManager from "../UTXOManager/UTXOManager";
 
 const DUST_LIMIT = 546;
 const Wallet = WalletManager();
@@ -21,7 +22,6 @@ export default function Transactions() {
   return {
     buildTransaction,
   };
-
   async function buildTransaction(
     inputs: Array<{
       height: number;
@@ -30,10 +30,13 @@ export default function Transactions() {
       value: number;
     }>,
     recipients: Array<{ address: string; amount: number }>,
+    wallet_name : string,
     privateKey: Uint8Array,
     fee: number = DUST_LIMIT / 3,
     depth: number = 0
   ) {
+    const ManageUTXOs = UTXOManager();
+    (await ManageUTXOs).fetchUTXOs(sendTotal, fee, "BCH", wallet_name);
     console.log(privateKey);
     const sendTotal = recipients
       .reduce((sum, cur) => sum.plus(cur.amount), new Decimal(0))
@@ -44,7 +47,7 @@ export default function Transactions() {
       .toNumber();
 
     let changeTotal = inputTotal - sendTotal - fee;
-
+    
     const template = importAuthenticationTemplate(
       authenticationTemplateP2pkhNonHd
     );
@@ -101,6 +104,7 @@ export default function Transactions() {
         return buildTransaction(
           inputs,
           recipients,
+          wallet_name,
           privateKey,
           newFee,
           depth + 1
