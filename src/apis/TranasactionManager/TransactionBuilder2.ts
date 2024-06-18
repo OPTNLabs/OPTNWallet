@@ -3,6 +3,7 @@ import { UTXOs } from '../types';
 import { Utxo } from 'cashscript';
 import UTXOManager from '../UTXOManager/UTXOManager';
 import { Decimal } from 'decimal.js';
+import { Contract } from 'cashscript';
 
 const DUST_LIMIT = 546;
 

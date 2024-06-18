@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { useParams } from 'react-router-dom';
 import ElectrumService from '../apis/ElectrumServer/ElectrumServer';
-import TransactionBuilders from '../apis/TranasactionManager/TransactionBuilder2';
+import TransactionBuilders2 from '../apis/TranasactionManager/ContractTesting';
 import { useSelector } from 'react-redux';
 import { RootState } from '../redux/store';
 
@@ -67,7 +67,9 @@ const CreateTransactions = () => {
         console.log("invalid id");
         return null;
       }
-      const TransactionBuilder = TransactionBuilders();
+      console.log("got here");
+
+      const TransactionBuilder = TransactionBuilders2();
       const transaction = await TransactionBuilder.createTransaction(
         wallet_id,
         recipients
