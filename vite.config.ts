@@ -14,6 +14,6 @@ export default defineConfig({
     }),
   ],
   build: {
-    target: ["es2020", "chrome87", "safari14", "firefox78", "edge88", "node"],
+    target: ["es2020", "chrome87", "safari14", "firefox78", "edge88", "node20"],
   }
 });
