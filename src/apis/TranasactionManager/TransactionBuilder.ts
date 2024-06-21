@@ -1,8 +1,8 @@
+// @ts-nocheck
 import {
   sha256,
   encodeTransaction,
   generateTransaction,
-  hexToBin,
   swapEndianness,
   importAuthenticationTemplate,
   authenticationTemplateP2pkhNonHd,

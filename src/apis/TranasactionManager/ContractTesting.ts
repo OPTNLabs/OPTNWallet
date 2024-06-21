@@ -4,8 +4,6 @@ import { Utxo, Contract } from 'cashscript';
 import { hash160 } from '@cashscript/utils';
 import UTXOManager from '../UTXOManager/UTXOManager';
 import { Decimal } from 'decimal.js';
-import { URL } from 'url';
-import { compileFile } from 'cashc';
 import DatabaseService from '../DatabaseManager/DatabaseService';
 const DUST_LIMIT = 546;
 import P2PKH from './p2pkh.json';
@@ -40,7 +38,7 @@ export default function TransactionBuilders2() {
         const privateKeys: Uint8Array[] = UTXO_inputs.map(utxo => utxo.private_key);
         const transactionBuilder = new TransactionBuilder({ provider });
 
-        const addressType = 'p2sh20';
+        // const addressType = 'p2sh20';
         await dbService.ensureDatabaseStarted();
         const db = dbService.getDatabase();
         if (db == null) {

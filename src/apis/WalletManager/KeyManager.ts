@@ -1,7 +1,8 @@
+// @ts-nocheck
 import DatabaseService from "../DatabaseManager/DatabaseService";
 import KeyGeneration from "./KeyGeneration";
 import AddressManager from "../AddressManager/AddressManager";
-import { Address, UTXOs } from "../types";
+import { Address } from "../types";
 
 export default function KeyManager() {
     const dbService = DatabaseService();

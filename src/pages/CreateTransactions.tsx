@@ -50,16 +50,16 @@ const CreateTransactions = () => {
     }
   };
 
-  const hexStringToUint8Array = (hexString: string): Uint8Array => {
-    if (hexString.length % 2 !== 0) {
-      throw new Error("Invalid hex string");
-    }
-    const array = new Uint8Array(hexString.length / 2);
-    for (let i = 0; i < hexString.length; i += 2) {
-      array[i / 2] = parseInt(hexString.substring(i, i + 2), 16);
-    }
-    return array;
-  };
+  // const hexStringToUint8Array = (hexString: string): Uint8Array => {
+  //   if (hexString.length % 2 !== 0) {
+  //     throw new Error("Invalid hex string");
+  //   }
+  //   const array = new Uint8Array(hexString.length / 2);
+  //   for (let i = 0; i < hexString.length; i += 2) {
+  //     array[i / 2] = parseInt(hexString.substring(i, i + 2), 16);
+  //   }
+  //   return array;
+  // };
 
   const handleMakeTransaction = async () => {
     try {

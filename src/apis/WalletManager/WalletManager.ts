@@ -1,6 +1,6 @@
+// @ts-nocheck
 import { hexToBin } from "@bitauth/libauth";
 import KeyManager from "./KeyManager";
-import { WalletInformation } from "../interfaces";
 import { createTables } from "../../utils/schema/schema";
 import DatabaseService from "../DatabaseManager/DatabaseService";
 

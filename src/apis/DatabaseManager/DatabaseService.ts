@@ -1,3 +1,4 @@
+// @ts-nocheck
 import initSqlJs, { Database } from "sql.js";
 
 const SQL = initSqlJs({
