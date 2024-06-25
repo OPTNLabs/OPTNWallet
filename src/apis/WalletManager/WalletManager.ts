@@ -7,50 +7,101 @@ import DatabaseService from "../DatabaseManager/DatabaseService";
 const KeyManage = KeyManager();
 
 export default function WalletManager() {
-    return {
-        createInputs,
-        createWallet
-    };
-    async function createWallet (
-        wallet_name: string,
-        mnemonic: string,
-        passphrase: string
-    ) : Promise<any | null> {
-        
-        const dbService = DatabaseService();
-        const db = dbService.getDatabase();
-        if (!db) {
-            return null;
-        }
+  return {
+    createInputs,
+    createWallet,
+    checkAccount
+  };
 
-        createTables(db);
-        const query = db.prepare(
-            "INSERT INTO wallets (wallet_name, mnemonic, passphrase, balance) VALUES (?, ?, ?, ?);"
-        );
-        query.run([wallet_name, mnemonic, passphrase, 0]);
-        query.free();
-        await dbService.saveDatabaseToFile();
-        return 1;
+  async function checkAccount(
+    mnemonic: string,
+    passphrase: string
+  ): Promise<boolean> {
+    const dbService = DatabaseService();
+    const db = dbService.getDatabase();
+    if (!db) {
+      return null;
+    }
+    try {
+      const query = db.prepare(
+        `SELECT COUNT(*) as count FROM wallets WHERE mnemonic = ? AND passphrase = ?`
+      );
+      query.bind([mnemonic, passphrase]);
+      
+      let accountExists = false;
+  
+      while (query.step()) {
+        const row = query.getAsObject();
+        if (row.count > 0) {
+          accountExists = true;
+        }
+      }
+  
+      query.free(); // Free the query to avoid memory leaks
+  
+      return accountExists;
+    } catch (error) {
+      console.error('Error checking account:', error);
+      return false;
+    }
+  }
+
+  async function createWallet(
+    wallet_name: string,
+    mnemonic: string,
+    passphrase: string
+  ): Promise<bool> {
+    const dbService = DatabaseService();
+    const db = dbService.getDatabase();
+    if (!db) {
+      return null;
     }
 
-    function createInputs(inputs: any, compiler) {
-        const transactionInputs = inputs.map((input) => ({
-            outpointTransactionHash: hexToBin(input.tx_hash),
-            outpointIndex: input.tx_pos,
-            sequenceNumber: 0,
-            unlockingBytecode: {
-                compiler,
-                script: "unlock",
-                valueSatoshis: BigInt(input.value),
-                data: {
-                    keys: {
-                    privateKeys: {
-                        key: KeyManage.fetchAddressPrivateKey(input.address),
-                },
+    const query = db.prepare(
+        `SELECT COUNT(*) as count FROM wallets WHERE mnemonic = ? AND passphrase = ?`
+    );
+    query.bind([mnemonic, passphrase]);
+    
+    let accountExists = false;
+
+    while (query.step()) {
+        const row = query.getAsObject();
+        if (row.count > 0) {
+            accountExists = true;
+        }
+    }
+
+    if (!accountExists) {
+        return false;
+    }
+    createTables(db);
+    const query = db.prepare(
+      "INSERT INTO wallets (wallet_name, mnemonic, passphrase, balance) VALUES (?, ?, ?, ?);"
+    );
+    query.run([wallet_name, mnemonic, passphrase, 0]);
+    query.free();
+    await dbService.saveDatabaseToFile();
+    return true;
+  }
+
+  function createInputs(inputs: any, compiler) {
+    const transactionInputs = inputs.map((input) => ({
+      outpointTransactionHash: hexToBin(input.tx_hash),
+      outpointIndex: input.tx_pos,
+      sequenceNumber: 0,
+      unlockingBytecode: {
+        compiler,
+        script: "unlock",
+        valueSatoshis: BigInt(input.value),
+        data: {
+          keys: {
+            privateKeys: {
+              key: KeyManage.fetchAddressPrivateKey(input.address),
             },
-            },
+          },
         },
+      },
     }));
     return transactionInputs;
-    }
+  }
 }

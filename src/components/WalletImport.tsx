@@ -29,12 +29,26 @@ const WalletImport = () => {
     }, []);
 
     const handleImportAccount = async () => {
-        const queryResult = await WalletManage.createWallet(walletName, recoveryPhrase, passphrase);
-        if (queryResult) {
-            dispatch(setWalletId(walletName));
-            navigate(`/home/${walletName}`);
+      const check = checkAccount();
+      if (!check) {
+        try {
+          const createAccountSuccess = await WalletManage.createWallet(walletName, recoveryPhrase, passphrase);
+          if (createAccountSuccess) {
+            console.log("Account created succcessfully.")
+          }
+        } catch(e) {
+          console.log(e);
         }
+      }
+  
+      dispatch(setWalletId(walletName));
+      navigate(`/home/${walletName}`);
+      
     };
+
+    const checkAccount = async () => {
+
+    }
 
     return (
         <div className="wallet-create-box">
