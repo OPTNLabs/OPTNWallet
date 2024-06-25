@@ -1,7 +1,6 @@
 import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import DatabaseService from '../apis/DatabaseManager/DatabaseService';
-import KeyGeneration from '../apis/WalletManager/KeyGeneration';
 import { useDispatch, useSelector } from 'react-redux';
 import { RootState } from '../redux/store';
 import { setWalletId } from '../redux/walletSlice';
@@ -29,26 +28,26 @@ const WalletImport = () => {
     }, []);
 
     const handleImportAccount = async () => {
-      const check = checkAccount();
+      const check = WalletManage.checkAccount(recoveryPhrase, passphrase);
       if (!check) {
         try {
           const createAccountSuccess = await WalletManage.createWallet(walletName, recoveryPhrase, passphrase);
           if (createAccountSuccess) {
-            console.log("Account created succcessfully.")
+            console.log("Account imported succcessfully.")
           }
         } catch(e) {
           console.log(e);
         }
       }
+
+      const walletID = WalletManage.setWalletId(recoveryPhrase, passphrase);
+      if (walletID != null) {
+        dispatch(setWalletId(walletID));
+        navigate(`/home/${walletID}`);
+      }
   
-      dispatch(setWalletId(walletName));
-      navigate(`/home/${walletName}`);
-      
     };
 
-    const checkAccount = async () => {
-
-    }
 
     return (
         <div className="wallet-create-box">

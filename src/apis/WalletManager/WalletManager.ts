@@ -10,18 +10,56 @@ export default function WalletManager() {
   return {
     createInputs,
     createWallet,
-    checkAccount
+    checkAccount,
+    setWalletId
   };
 
-  async function checkAccount(
+  async function setWalletId(
     mnemonic: string,
     passphrase: string
-  ): Promise<boolean> {
+  ): number {
     const dbService = DatabaseService();
     const db = dbService.getDatabase();
     if (!db) {
       return null;
     }
+    try {
+      const query = db.prepare(
+        `SELECT id FROM wallets WHERE mnemonic = ? AND passphrase = ?`
+      );
+      query.bind([mnemonic, passphrase]);
+  
+      let walletId: number | null = null;
+  
+      while (query.step()) {
+        const row = query.getAsObject();
+        if (row.id) {
+          walletId = row.id;
+          break; 
+        }
+      }
+  
+      query.free(); 
+  
+      return walletId;
+    } catch (error) {
+      console.error('Error setting wallet ID:', error);
+      return null;
+    }
+  }
+
+  async function checkAccount(
+    mnemonic: string,
+    passphrase: string
+  ): Promise<boolean> {
+
+    const dbService = DatabaseService();
+    const db = dbService.getDatabase();
+    if (!db) {
+      return null;
+    }
+
+    createTables(db);
     try {
       const query = db.prepare(
         `SELECT COUNT(*) as count FROM wallets WHERE mnemonic = ? AND passphrase = ?`
@@ -56,7 +94,9 @@ export default function WalletManager() {
     if (!db) {
       return null;
     }
+    createTables(db);
 
+    console.log('???');
     const query = db.prepare(
         `SELECT COUNT(*) as count FROM wallets WHERE mnemonic = ? AND passphrase = ?`
     );
@@ -71,15 +111,14 @@ export default function WalletManager() {
         }
     }
 
-    if (!accountExists) {
+    if (accountExists) {
         return false;
     }
-    createTables(db);
-    const query = db.prepare(
+    const createAccountQuery = db.prepare(
       "INSERT INTO wallets (wallet_name, mnemonic, passphrase, balance) VALUES (?, ?, ?, ?);"
     );
-    query.run([wallet_name, mnemonic, passphrase, 0]);
-    query.free();
+    createAccountQuery.run([wallet_name, mnemonic, passphrase, 0]);
+    createAccountQuery.free();
     await dbService.saveDatabaseToFile();
     return true;
   }

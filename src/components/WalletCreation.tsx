@@ -36,10 +36,21 @@ const WalletCreation = () => {
     };
 
     const handleCreateAccount = async () => {
-        const queryResult = await WalletManage.createWallet(walletName, mnemonicPhrase, passphrase);
-        if (queryResult) {
-            dispatch(setWalletId(walletName));
-            navigate(`/home/${walletName}`);
+        const check = WalletManage.checkAccount(mnemonicPhrase, passphrase);
+        if (!check) {
+            try {
+            const createAccountSuccess = await WalletManage.createWallet(walletName, mnemonicPhrase, passphrase);
+            if (createAccountSuccess) {
+                console.log("Account created succcessfully.")
+            }
+            } catch(e) {
+                console.log(e);
+            }
+        }
+        const walletID = WalletManage.setWalletId(mnemonicPhrase, passphrase);
+        if (walletID != null) {
+            dispatch(setWalletId(walletID));
+            navigate(`/home/${walletID}`);
         }
     };
 
