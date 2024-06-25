@@ -1,0 +1,14 @@
+pragma cashscript ^0.9.3;
+
+contract IntrospectionCovenant(bytes20 funder) {
+  function spend(int sendAmount) {
+    require(sendAmount >= 546);
+    require(tx.outputs[0].lockingBytecode == tx.inputs[this.activeInputIndex].lockingBytecode);
+    require(tx.outputs[0].value == sendAmount);
+  }
+
+  function reclaim(pubkey pk, sig s) {
+    require(hash160(pk) == funder);
+    require(checkSig(s, pk));
+  }
+}

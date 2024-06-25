@@ -5,12 +5,12 @@ import { hash160 } from '@cashscript/utils';
 import UTXOManager from '../UTXOManager/UTXOManager';
 import { Decimal } from 'decimal.js';
 import DatabaseService from '../DatabaseManager/DatabaseService';
+import { compileFile } from 'cashc';
 const DUST_LIMIT = 546;
-import P2PKH from './p2pkh.json';
 
 export default function TransactionBuilders2() {
 
-    const provider = new ElectrumNetworkProvider(Network.CHIPNET);
+    const provider = new ElectrumNetworkProvider('chipnet');
     const ManageUTXOs = UTXOManager();
     const dbService = DatabaseService();
 
@@ -28,6 +28,8 @@ export default function TransactionBuilders2() {
             console.log('no utxo inputs fetched from wallet');
             return null;
         }
+        
+        const artifact = compileFile(new URL('IntrospectionCovenant.cash', import.meta.url));
 
         const convertedUTXOs: Utxo[] = UTXO_inputs.map(utxo => ({
             txid: utxo.tx_hash,
@@ -38,7 +40,7 @@ export default function TransactionBuilders2() {
         const privateKeys: Uint8Array[] = UTXO_inputs.map(utxo => utxo.private_key);
         const transactionBuilder = new TransactionBuilder({ provider });
 
-        // const addressType = 'p2sh20';
+        const addressType = 'p2sh32';
         await dbService.ensureDatabaseStarted();
         const db = dbService.getDatabase();
         if (db == null) {
@@ -48,6 +50,7 @@ export default function TransactionBuilders2() {
         convertedUTXOs.forEach((utxo, index) => {
             const privateKey = privateKeys[index];
             console.log('private key:', privateKey);
+            
 
             const getAllKeysQuery = db.prepare("SELECT * FROM keys;");
             console.log('All keys in the keys table:');
@@ -79,14 +82,16 @@ export default function TransactionBuilders2() {
                 console.error(`No public key found for private key at index ${index}`);
                 return;
             }
+            console.log('Checking private key, public inputs:', UTXO_inputs[index].private_key);
 
             const hash_public_key = hash160(publicKeyArray);
-            const contract = new Contract(P2PKH, [hash_public_key], { provider });
+            const contract = new Contract(artifact, [hash_public_key], { provider : provider, addressType : addressType });
+            console.log("utxo being inputted", utxo);
+            console.log("contract", contract);
             transactionBuilder.addInput(utxo, contract.unlock.spend(publicKeyArray, new SignatureTemplate(privateKey)));
         });
 
         recipients.forEach(recipient => {
-            console.log(recipient.address);
             transactionBuilder.addOutput({ to: recipient.address, amount: BigInt(recipient.amount) });
         });
 

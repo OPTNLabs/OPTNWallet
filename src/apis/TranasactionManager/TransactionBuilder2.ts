@@ -1,9 +1,13 @@
 // @ts-nocheck
+
+import { URL } from 'url';
+import { compileFile } from 'cashc';
 import { ElectrumNetworkProvider, TransactionBuilder, Network, SignatureTemplate } from 'cashscript';
 import { UTXOs } from '../types';
 import { Utxo } from 'cashscript';
 import UTXOManager from '../UTXOManager/UTXOManager';
 import { Decimal } from 'decimal.js';
+import { Contract } from 'cashscript';
 const DUST_LIMIT = 546;
 
 export default function TransactionBuilders() {
@@ -15,6 +19,7 @@ export default function TransactionBuilders() {
         recipients: Array<{ address: string; amount: number }>,
         fee: number = DUST_LIMIT / 3,
     ): Promise<any> {
+        const artifact = compileFile(new URL('p2pkh.cash', import.meta.url));
         const sendTotal = recipients
             .reduce((sum, cur) => sum.plus(cur.amount), new Decimal(0))
             .toNumber();
@@ -34,6 +39,7 @@ export default function TransactionBuilders() {
         const transactionBuilder = new TransactionBuilder({ provider });
 
         convertedUTXOs.forEach((utxo, index) => {
+            const contract = new Contract(artifact, [alicePkh], { provider });
             const newTemplate = new SignatureTemplate(privateKeys[index]);
             transactionBuilder.addInput(utxo, newTemplate.unlockP2PKH());
         });
