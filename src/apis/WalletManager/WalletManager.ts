@@ -91,10 +91,15 @@ export default function WalletManager() {
     const dbService = DatabaseService();
     const db = dbService.getDatabase();
     if (!db) {
-      return null;
+      return false;
     }
-    createTables(db);
+    const check_mnemonic = KeyManage.validateMnemonic(mnemonic);
+    if (!check_mnemonic) {
+      return false;
+    }
     
+
+    createTables(db);
     const query = db.prepare(
         `SELECT COUNT(*) as count FROM wallets WHERE mnemonic = ? AND passphrase = ?`
     );

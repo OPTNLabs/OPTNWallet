@@ -3,6 +3,7 @@ import DatabaseService from "../DatabaseManager/DatabaseService";
 import KeyGeneration from "./KeyGeneration";
 import AddressManager from "../AddressManager/AddressManager";
 import { Address } from "../types";
+import bip39 from 'bip39';
 
 export default function KeyManager() {
     const dbService = DatabaseService();
@@ -13,9 +14,15 @@ export default function KeyManager() {
         retrieveKeys,
         createKeys,
         fetchAddressPrivateKey,
+        validateMnemonic
     };
 
-    async function retrieveKeys(wallet_id: number): Promise<{ id: number, publicKey: Uint8Array; privateKey: Uint8Array; address: string }[]> {
+    
+    async function validateMnemonic(mnemonic) : Promise<bool> {
+        return bip39.validateMnemonic(mnemonic);
+    }
+
+    async function retrieveKeys(wallet_name: string): Promise<{ id: number, publicKey: Uint8Array; privateKey: Uint8Array; address: string }[]> {
         try {
             await dbService.ensureDatabaseStarted();
             const db = dbService.getDatabase();
