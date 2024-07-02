@@ -17,7 +17,8 @@ const Home = () => {
     useEffect(() => {
         const retrieveWalletInformation = async () => {
             if (wallet_id) {
-                const walletKeys = await KeyManage.retrieveKeys(wallet_id);
+                const wallet_id_number = parseInt(wallet_id, 10);
+                const walletKeys = await KeyManage.retrieveKeys(wallet_id_number);
                 console.log("wallet keys", walletKeys);
                 setKeyPairs(walletKeys);
             }
@@ -31,13 +32,15 @@ const Home = () => {
     };
     const storeUTXOs = async() => {
         if (wallet_id) {
-            (await ManageUTXOs).checkNewUTXOs(wallet_id);
+            const wallet_id_number = parseInt(wallet_id, 10);
+            (await ManageUTXOs).checkNewUTXOs(wallet_id_number);
         }
     }
 
     const handleGenerateKeys = async () => {
         if (wallet_id != null) {
-            await KeyManage.createKeys(wallet_id, keyPairs.length);
+            const wallet_id_number = parseInt(wallet_id, 10);
+            await KeyManage.createKeys(wallet_id_number, keyPairs.length);
             await dbService.saveDatabaseToFile();
             fetchData();
         }

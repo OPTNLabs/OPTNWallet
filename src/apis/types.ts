@@ -1,5 +1,5 @@
 export type Address = {
-    wallet_name: string;
+    wallet_id: number;
     address: string;
     balance: number;
     hd_index: number;
@@ -8,7 +8,7 @@ export type Address = {
 };
 
 export type UTXOs = {
-    wallet_name: string;
+    wallet_id: number;
     address: string;
     height: number;
     tx_hash: string;

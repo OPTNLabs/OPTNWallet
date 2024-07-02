@@ -23,14 +23,12 @@ export default function WalletManager() {
     if (!db) {
       return null;
     }
+    createTables(db);
     try {
-      console.log("mnemonic", mnemonic);
-      console.log("passphrase", passphrase);
       const query = db.prepare(
         `SELECT id FROM wallets WHERE mnemonic = :mnemonic AND passphrase = :passphrase`
       );
       query.bind({ ':mnemonic' : mnemonic, ':passphrase' : passphrase });
-      console.log("query: ", query);
       let walletId: number | null = null;
       
 
@@ -42,9 +40,6 @@ export default function WalletManager() {
         }
       }
       query.free(); 
-      if (walletId != null) {
-        return null;
-      }
       return walletId;
     } catch (error) {
       console.error('Error setting wallet ID:', error);
@@ -99,8 +94,7 @@ export default function WalletManager() {
       return null;
     }
     createTables(db);
-
-    console.log('???');
+    
     const query = db.prepare(
         `SELECT COUNT(*) as count FROM wallets WHERE mnemonic = ? AND passphrase = ?`
     );
@@ -122,6 +116,7 @@ export default function WalletManager() {
       "INSERT INTO wallets (wallet_name, mnemonic, passphrase, balance) VALUES (?, ?, ?, ?);"
     );
     createAccountQuery.run([wallet_name, mnemonic, passphrase, 0]);
+    
     createAccountQuery.free();
     await dbService.saveDatabaseToFile();
     return true;

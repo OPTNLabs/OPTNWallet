@@ -10,11 +10,11 @@ export default function AddressManager() {
       const db = dbService.getDatabase();
       if (db != null) {
         const registerAddressQuery = db.prepare(`
-          INSERT INTO addresses (wallet_name, address, balance, hd_index, change_index, prefix) VALUES (?, ?, ?, ?, ?, ?);
+          INSERT INTO addresses (wallet_id, address, balance, hd_index, change_index, prefix) VALUES (?, ?, ?, ?, ?, ?);
         `);
 
         registerAddressQuery.run([
-          address.wallet_name,
+          address.wallet_id,
           address.address,
           address.balance,
           address.hd_index,
