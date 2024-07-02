@@ -15,7 +15,7 @@ export default function KeyManager() {
         fetchAddressPrivateKey,
     };
 
-    async function retrieveKeys(wallet_name: string): Promise<{ id: number, publicKey: Uint8Array; privateKey: Uint8Array; address: string }[]> {
+    async function retrieveKeys(wallet_id: number): Promise<{ id: number, publicKey: Uint8Array; privateKey: Uint8Array; address: string }[]> {
         try {
             await dbService.ensureDatabaseStarted();
             const db = dbService.getDatabase();
@@ -23,9 +23,9 @@ export default function KeyManager() {
                 return [];
             }
 
-            const query = "SELECT id, public_key, private_key, address FROM keys WHERE wallet_name = :walletname";
+            const query = "SELECT id, public_key, private_key, address FROM keys WHERE wallet_id = :walletid";
             const statement = db.prepare(query);
-            statement.bind({ ':walletname': wallet_name });
+            statement.bind({ ':walletid': wallet_id });
 
             const result: { id: number, publicKey: Uint8Array, privateKey: Uint8Array, address: string }[] = [];
 
@@ -49,7 +49,7 @@ export default function KeyManager() {
         }
     }
 
-    async function createKeys(wallet_name : string, keyNumber: number): Promise<void> {
+    async function createKeys(wallet_id : number, keyNumber: number): Promise<void> {
         try {
             await dbService.ensureDatabaseStarted();
             const db = dbService.getDatabase();
@@ -58,9 +58,9 @@ export default function KeyManager() {
             }
 
             const getIdQuery = db.prepare(
-                "SELECT mnemonic, passphrase FROM wallets WHERE wallet_name = ?;"
+                "SELECT mnemonic, passphrase FROM wallets WHERE id = ?;"
             );
-            const result = getIdQuery.get([wallet_name]);
+            const result = getIdQuery.get([wallet_id]);
             getIdQuery.free();
 
             if (!result) {
@@ -78,12 +78,12 @@ export default function KeyManager() {
                 const address = keys.aliceAddress;
 
                 const insertQuery = db.prepare(
-                    "INSERT INTO keys (wallet_name, public_key, private_key, address) VALUES (?, ?, ?, ?);"
+                    "INSERT INTO keys (wallet_id, public_key, private_key, address) VALUES (?, ?, ?, ?);"
                 );
-                insertQuery.run([wallet_name, publicKey, privateKey, address]);
+                insertQuery.run([wallet_id, publicKey, privateKey, address]);
                 insertQuery.free();
                 const newAddress : Address = {
-                    wallet_name : wallet_name,
+                    wallet_id : wallet_id,
                     address : keys.aliceAddress,
                     balance : 0,
                     hd_index: keyNumber,

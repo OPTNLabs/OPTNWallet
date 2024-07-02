@@ -34,7 +34,6 @@ const CreateTransactions = () => {
 
   const handleGenerateUTXOs = async () => {
     const address = transactionSendAddress;
-    console.log('address', address)
     if (address) {
       const utxoValues = await Electrum.getUTXOS(address);
       console.log(utxoValues);

@@ -6,6 +6,7 @@ import UTXOManager from '../UTXOManager/UTXOManager';
 import { Decimal } from 'decimal.js';
 import DatabaseService from '../DatabaseManager/DatabaseService';
 import { compileFile } from 'cashc';
+import P2PKH from './p2pkh.json';
 const DUST_LIMIT = 546;
 
 export default function TransactionBuilders2() {
@@ -16,21 +17,19 @@ export default function TransactionBuilders2() {
 
 
     async function createTransaction(
-        wallet_name: string,
+        wallet_id: number,
         recipients: Array<{ address: string; amount: number }>,
         fee: number = DUST_LIMIT / 3,
     ): Promise<any> {
         const sendTotal = recipients
             .reduce((sum, cur) => sum.plus(cur.amount), new Decimal(0))
             .toNumber();
-        const UTXO_inputs: UTXOs[] | null = await (await ManageUTXOs).fetchUTXOs(sendTotal, fee, "BCH", wallet_name);
+        const UTXO_inputs: UTXOs[] | null = await (await ManageUTXOs).fetchUTXOs(sendTotal, fee, "BCH", wallet_id);
         if (UTXO_inputs == null) {
             console.log('no utxo inputs fetched from wallet');
             return null;
         }
         
-        const artifact = compileFile(new URL('IntrospectionCovenant.cash', import.meta.url));
-
         const convertedUTXOs: Utxo[] = UTXO_inputs.map(utxo => ({
             txid: utxo.tx_hash,
             vout: utxo.tx_pos,
@@ -85,7 +84,7 @@ export default function TransactionBuilders2() {
             console.log('Checking private key, public inputs:', UTXO_inputs[index].private_key);
 
             const hash_public_key = hash160(publicKeyArray);
-            const contract = new Contract(artifact, [hash_public_key], { provider : provider, addressType : addressType });
+            const contract = new Contract(P2PKH, [hash_public_key], { provider : provider, addressType : addressType });
             console.log("utxo being inputted", utxo);
             console.log("contract", contract);
             transactionBuilder.addInput(utxo, contract.unlock.spend(publicKeyArray, new SignatureTemplate(privateKey)));

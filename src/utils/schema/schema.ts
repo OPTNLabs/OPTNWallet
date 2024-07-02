@@ -13,11 +13,11 @@ export const createTables = (db: any) => {
     db.run(`
         CREATE TABLE IF NOT EXISTS keys (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-            wallet_name VARCHAR(255),
+            wallet_id VARCHAR(255),
             public_key BLOB,
             private_key BLOB,
             address VARCHAR(255),
-            FOREIGN KEY(wallet_name) REFERENCES wallets(wallet_name)
+            FOREIGN KEY(wallet_id) REFERENCES wallets(id)
         );
     `);
     const getAllKeysQuery = db.prepare("SELECT * FROM wallets;");
@@ -30,13 +30,13 @@ export const createTables = (db: any) => {
     db.run(`
         CREATE TABLE IF NOT EXISTS addresses (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-            wallet_name VARCHAR(255),
+            wallet_id INT,
             address VARCHAR(255) NOT NULL,
             balance INT,
             hd_index INT,
             change_index BOOLEAN,
             prefix VARCHAR(255),
-            FOREIGN KEY (wallet_name) REFERENCES wallets(wallet_name),
+            FOREIGN KEY (wallet_id) REFERENCES wallets(id),
             FOREIGN KEY (address) REFERENCES keys(address)
         );
     `);
@@ -44,7 +44,7 @@ export const createTables = (db: any) => {
     db.run(`
         CREATE TABLE IF NOT EXISTS UTXOs (
           id INTEGER PRIMARY KEY AUTOINCREMENT,
-          wallet_name VARCHAR(255),
+          wallet_id INT,
           address VARCHAR(255) NOT NULL,
           height INT NOT NULL,
           tx_hash TEXT NOT NULL,
@@ -52,7 +52,7 @@ export const createTables = (db: any) => {
           amount INT NOT NULL,
           prefix VARCHAR(255) NOT NULL,
           private_key BLOB,
-          FOREIGN KEY(wallet_name) REFERENCES wallets(wallet_name),
+          FOREIGN KEY(wallet_id) REFERENCES wallets(id),
           FOREIGN KEY(address) REFERENCES addresses(address)
         );
     `);
