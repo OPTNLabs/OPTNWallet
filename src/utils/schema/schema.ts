@@ -1,5 +1,4 @@
 export const createTables = (db: any) => {
-    db.run(`DROP TABLE IF EXISTS UTXOs;`);
     db.run(
         `CREATE TABLE IF NOT EXISTS wallets (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -54,6 +53,15 @@ export const createTables = (db: any) => {
           private_key BLOB,
           FOREIGN KEY(wallet_id) REFERENCES wallets(id),
           FOREIGN KEY(address) REFERENCES addresses(address)
+        );
+    `);
+    db.run(`
+        CREATE TABLE IF NOT EXISTS transactions (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          wallet_id INT,
+          txn TEXT NOT NULL,
+          timestamp TEXT NOT NULL,
+          amount INT NOT NULL
         );
     `);
 };

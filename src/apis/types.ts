@@ -17,3 +17,10 @@ export type UTXOs = {
     prefix: string;
     private_key : Uint8Array;
 }
+
+export type Transaction = {
+    wallet_id: number;
+    txn: string;
+    timestamp: string;
+    amount: number;
+}

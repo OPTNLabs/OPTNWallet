@@ -11,8 +11,41 @@ export default function WalletManager() {
     createInputs,
     createWallet,
     checkAccount,
-    setWalletId
+    setWalletId,
+    deleteWallet
   };
+  
+  async function deleteWallet(wallet_id : number) : null {
+    const dbService = DatabaseService();
+    const db = dbService.getDatabase();
+    if (!db) {
+      return null;
+    }
+    createTables(db);
+    
+    try {
+      let query = db.prepare(`DELETE FROM wallets WHERE id = :walletid`);
+      query.bind({ ':walletid': wallet_id });
+      query.run();
+
+      query = db.prepare(`DELETE FROM keys WHERE wallet_id = :walletid`);
+      query.bind({ ':walletid' : wallet_id});
+      query.run()
+
+      query = db.prepare(`DELETE FROM addresses WHERE wallet_id = :walletid`);
+      query.bind({ ':walletid': wallet_id });
+      query.run();
+
+      query = db.prepare(`DELETE FROM UTXOs WHERE wallet_id = :walletid`);
+      query.bind({ ':walletid': wallet_id });
+      query.run();
+
+      return true;
+
+    } catch(e) {
+      console.log(e);
+    }
+  }
 
   async function setWalletId(
     mnemonic: string,
@@ -55,7 +88,7 @@ export default function WalletManager() {
     const dbService = DatabaseService();
     const db = dbService.getDatabase();
     if (!db) {
-      return null;
+      return false;
     }
 
     createTables(db);
@@ -73,9 +106,20 @@ export default function WalletManager() {
           accountExists = true;
         }
       }
+    
+      const queryMnemonic = db.prepare(
+        `SELECT COUNT(*) as count FROM wallets WHERE mnemonic = ?`
+      );
+      queryMnemonic.bind([mnemonic, passphrase]);
   
-      query.free(); // Free the query to avoid memory leaks
+      while (queryMnemonic.step()) {
+        const rowMnemonic = queryMnemonic.getAsObject();
+        if (rowMnemonic.count > 0) {
+          accountExists = true;
+        }
+      }
   
+      query.free();
       return accountExists;
     } catch (error) {
       console.error('Error checking account:', error);
@@ -91,10 +135,6 @@ export default function WalletManager() {
     const dbService = DatabaseService();
     const db = dbService.getDatabase();
     if (!db) {
-      return false;
-    }
-    const check_mnemonic = KeyManage.validateMnemonic(mnemonic);
-    if (!check_mnemonic) {
       return false;
     }
     
@@ -121,7 +161,6 @@ export default function WalletManager() {
       "INSERT INTO wallets (wallet_name, mnemonic, passphrase, balance) VALUES (?, ?, ?, ?);"
     );
     createAccountQuery.run([wallet_name, mnemonic, passphrase, 0]);
-    
     createAccountQuery.free();
     await dbService.saveDatabaseToFile();
     return true;
