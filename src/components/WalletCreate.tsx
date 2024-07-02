@@ -19,7 +19,7 @@ const WalletCreation = () => {
     const dispatch = useDispatch();
 
     useEffect(() => {
-        console.log(wallet_id);
+        console.log("Wallet ID: ", wallet_id);
         const initDb = async () => {
             const dbStarted = await dbService.startDatabase();
             if (dbStarted) {
@@ -36,18 +36,18 @@ const WalletCreation = () => {
     };
 
     const handleCreateAccount = async () => {
-        const check = WalletManage.checkAccount(mnemonicPhrase, passphrase);
+        const check = await WalletManage.checkAccount(mnemonicPhrase, passphrase);
         if (!check) {
             try {
-            const createAccountSuccess = await WalletManage.createWallet(walletName, mnemonicPhrase, passphrase);
-            if (createAccountSuccess) {
-                console.log("Account created succcessfully.")
-            }
+                const createAccountSuccess = await WalletManage.createWallet(walletName, mnemonicPhrase, passphrase);
+                if (createAccountSuccess) {
+                    console.log("Account created succcessfully.");
+                }   
             } catch(e) {
                 console.log(e);
             }
         }
-        const walletID = WalletManage.setWalletId(mnemonicPhrase, passphrase);
+        const walletID = await WalletManage.setWalletId(mnemonicPhrase, passphrase);
         if (walletID != null) {
             dispatch(setWalletId(walletID));
             navigate(`/home/${walletID}`);

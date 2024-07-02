@@ -26,7 +26,7 @@ export default function TransactionBuilders2() {
             .toNumber();
         const UTXO_inputs: UTXOs[] | null = await (await ManageUTXOs).fetchUTXOs(sendTotal, fee, "BCH", wallet_id);
         if (UTXO_inputs == null) {
-            console.log('no utxo inputs fetched from wallet');
+            console.log('No utxo inputs fetched from wallet');
             return null;
         }
         
@@ -76,7 +76,7 @@ export default function TransactionBuilders2() {
             }
 
             getIdQuery.free();
-            console.log('public key:', publicKeyArray);
+            console.log('Public key:', publicKeyArray);
             if (!publicKeyArray) {
                 console.error(`No public key found for private key at index ${index}`);
                 return;

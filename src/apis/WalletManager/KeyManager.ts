@@ -13,16 +13,10 @@ export default function KeyManager() {
     return {
         retrieveKeys,
         createKeys,
-        fetchAddressPrivateKey,
-        validateMnemonic
+        fetchAddressPrivateKey
     };
 
-    
-    async function validateMnemonic(mnemonic) : Promise<bool> {
-        return bip39.validateMnemonic(mnemonic);
-    }
-
-    async function retrieveKeys(wallet_name: string): Promise<{ id: number, publicKey: Uint8Array; privateKey: Uint8Array; address: string }[]> {
+    async function retrieveKeys(wallet_id : number): Promise<{ id: number, publicKey: Uint8Array; privateKey: Uint8Array; address: string }[]> {
         try {
             await dbService.ensureDatabaseStarted();
             const db = dbService.getDatabase();

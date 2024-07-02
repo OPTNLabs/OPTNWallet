@@ -3,6 +3,7 @@ import { useNavigate, useParams } from 'react-router-dom';
 import KeyManager from '../apis/WalletManager/KeyManager';
 import DatabaseService from '../apis/DatabaseManager/DatabaseService';
 import UTXOManager from '../apis/UTXOManager/UTXOManager';
+import WalletManager from '../apis/WalletManager/WalletManager';
 
 const Home = () => {
     const [keyPairs, setKeyPairs] = useState<{ id: number, publicKey: Uint8Array; privateKey: Uint8Array; address: string }[]>([]);
@@ -12,6 +13,7 @@ const Home = () => {
     const navigate = useNavigate();
     const { wallet_id } = useParams<{ wallet_id: string }>();
     const ManageUTXOs = UTXOManager();
+    const WalletManage = WalletManager();
 
 
     useEffect(() => {
@@ -54,6 +56,17 @@ const Home = () => {
         return Array.from(array).map(byte => byte.toString(16).padStart(2, '0')).join('');
     };
 
+    const deleteWallet = async() => {
+        if (!wallet_id) {
+            return;
+        }
+        const wallet_id_number = parseInt(wallet_id, 10);
+        const checkDelete = await WalletManage.deleteWallet(wallet_id_number);
+        if (checkDelete) {
+            console.log("Deleted Successfully");
+        }
+    }
+
     return (
         <>
             <section className='flex flex-col min-h-screen'>
@@ -71,6 +84,7 @@ const Home = () => {
                     ))}
                 </div>
                 <button onClick = { storeUTXOs }>sdhflsdkfs</button>
+                <button onClick = { deleteWallet }>delete wallet</button>
             </section>
         </>
     );

@@ -1,4 +1,4 @@
-import WalletCreation from '../components/WalletCreation'
+import WalletCreation from '../components/WalletCreate'
 const CreateWallet = () => {
   return (
     <>
