@@ -28,6 +28,10 @@ const WalletImport = () => {
     }, []);
 
     const handleImportAccount = async () => {
+      if (walletName == "") {
+        console.log("Wallet name cannot be empty.");
+        return;
+      }
       const check = WalletManage.checkAccount(recoveryPhrase, passphrase);
       if (!check) {
         try {
@@ -39,17 +43,18 @@ const WalletImport = () => {
           console.log(e);
         }
       }
-
+      
       const walletID = await WalletManage.setWalletId(recoveryPhrase, passphrase);
-      if (wallet_id == null) {
-        
+      if (walletID == null) {
+        const created = await WalletManage.createWallet(walletName, recoveryPhrase, passphrase);
+        if (created) {
+          console.log("New imported wallet created successfully");
+        }
       }
-      console.log("frontend wallet_id :", walletID)
       if (walletID != null) {
         dispatch(setWalletId(walletID));
         navigate(`/home/${ walletID }`);
       }
-  
     };
 
 
