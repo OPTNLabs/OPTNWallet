@@ -40,10 +40,14 @@ const WalletImport = () => {
         }
       }
 
-      const walletID = WalletManage.setWalletId(recoveryPhrase, passphrase);
+      const walletID = await WalletManage.setWalletId(recoveryPhrase, passphrase);
+      if (wallet_id == null) {
+        
+      }
+      console.log("frontend wallet_id :", walletID)
       if (walletID != null) {
         dispatch(setWalletId(walletID));
-        navigate(`/home/${walletID}`);
+        navigate(`/home/${ walletID }`);
       }
   
     };

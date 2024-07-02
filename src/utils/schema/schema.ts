@@ -20,6 +20,12 @@ export const createTables = (db: any) => {
             FOREIGN KEY(wallet_name) REFERENCES wallets(wallet_name)
         );
     `);
+    const getAllKeysQuery = db.prepare("SELECT * FROM wallets;");
+    console.log('All keys in the keys table:');
+    while (getAllKeysQuery.step()) {
+        const row = getAllKeysQuery.getAsObject();
+        console.log('row', row);
+    }
 
     db.run(`
         CREATE TABLE IF NOT EXISTS addresses (

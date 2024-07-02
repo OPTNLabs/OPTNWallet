@@ -24,13 +24,16 @@ export default function WalletManager() {
       return null;
     }
     try {
+      console.log("mnemonic", mnemonic);
+      console.log("passphrase", passphrase);
       const query = db.prepare(
-        `SELECT id FROM wallets WHERE mnemonic = ? AND passphrase = ?`
+        `SELECT id FROM wallets WHERE mnemonic = :mnemonic AND passphrase = :passphrase`
       );
-      query.bind([mnemonic, passphrase]);
-  
+      query.bind({ ':mnemonic' : mnemonic, ':passphrase' : passphrase });
+      console.log("query: ", query);
       let walletId: number | null = null;
-  
+      
+
       while (query.step()) {
         const row = query.getAsObject();
         if (row.id) {
@@ -38,9 +41,10 @@ export default function WalletManager() {
           break; 
         }
       }
-  
       query.free(); 
-  
+      if (walletId != null) {
+        return null;
+      }
       return walletId;
     } catch (error) {
       console.error('Error setting wallet ID:', error);
