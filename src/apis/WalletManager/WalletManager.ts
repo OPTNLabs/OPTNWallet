@@ -39,7 +39,8 @@ export default function WalletManager() {
       query = db.prepare(`DELETE FROM UTXOs WHERE wallet_id = :walletid`);
       query.bind({ ':walletid': wallet_id });
       query.run();
-
+    
+      await dbService.saveDatabaseToFile();
       return true;
 
     } catch(e) {
