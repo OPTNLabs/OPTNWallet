@@ -64,6 +64,7 @@ const Home = () => {
         const checkDelete = await WalletManage.deleteWallet(wallet_id_number);
         if (checkDelete) {
             console.log("Deleted Successfully");
+            navigate(`/`);
         }
     }
 

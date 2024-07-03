@@ -41,7 +41,7 @@ export default async function UTXOManager() {
         }
         const transactionAmount = amount + fee;
         console.log('Transaction Amount: ', transactionAmount);
-        const query = "SELECT id, wallet_id, address, height, tx_hash, tx_pos, amount, prefix, private_key FROM UTXOs WHERE id = :walletid";
+        const query = "SELECT id, wallet_id, address, height, tx_hash, tx_pos, amount, prefix, private_key FROM UTXOs WHERE wallet_id = :walletid";
         const statement = db.prepare(query);
         statement.bind({ ':walletid': wallet_id });
 
@@ -69,7 +69,7 @@ export default async function UTXOManager() {
         const possibleUTXOs = dbService.resultToJSON(
             db.exec(
                 `SELECT * FROM UTXOs 
-                  WHERE id="${wallet_id}"
+                  WHERE wallet_id="${wallet_id}"
                   ORDER BY amount DESC;`
             )
         );
