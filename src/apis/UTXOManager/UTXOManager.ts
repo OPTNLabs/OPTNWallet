@@ -85,8 +85,6 @@ export default async function UTXOManager() {
         let possibleUTXOSum = 0;
         let returnUTXOs: UTXOs[] = [];
         
-        console.log('harharhar', possibleUTXOs.length);
-    
         for (let i = 0; i < possibleUTXOs.length; ++i) {
             console.log(possibleUTXOs[i].amount);
             possibleUTXOSum += possibleUTXOs[i].amount;
@@ -96,7 +94,6 @@ export default async function UTXOManager() {
             }
         }
     
-        console.log("Insufficient UTXOs to cover the transaction amount.");
         return null;
     }
 
@@ -123,6 +120,7 @@ export default async function UTXOManager() {
         for (const address of queriedAddresses) {
             try {
                 const fetchedUTXOs = await Electrum.getUTXOS(address.address);
+                console.log("UTXOS: ", fetchedUTXOs)
                 for (const utxo of fetchedUTXOs) {
                     const pk_query = db.prepare("SELECT private_key FROM keys WHERE address = ?;");
                     const result = pk_query.get([address.address]);

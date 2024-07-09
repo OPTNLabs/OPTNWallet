@@ -111,7 +111,7 @@ export default function WalletManager() {
       const queryMnemonic = db.prepare(
         `SELECT COUNT(*) as count FROM wallets WHERE mnemonic = ?`
       );
-      queryMnemonic.bind([mnemonic, passphrase]);
+      queryMnemonic.bind([mnemonic]);
   
       while (queryMnemonic.step()) {
         const rowMnemonic = queryMnemonic.getAsObject();
@@ -121,6 +121,7 @@ export default function WalletManager() {
       }
   
       query.free();
+      queryMnemonic.free();
       return accountExists;
     } catch (error) {
       console.error('Error checking account:', error);

@@ -36,6 +36,7 @@ export default function ElectrumService() {
     }
 
     async function getBalance(address: string): Promise<number> {
+        await ensureElectrumConnected();
         if (electrum !== null) {
             const params = [address, "include_tokens"];
             const response: any = await electrum.request("blockchain.address.get_balance", ...params);
@@ -58,16 +59,18 @@ export default function ElectrumService() {
                 "blockchain.address.listunspent",
                 address
             );
-            console.log(UTXOs);
             if (UTXOs) {
                 return UTXOs;
             }
 
             return [];
+        } else {
+            throw new Error("Electrum client is not initialized");
         }
     }
 
     async function broadcastTransaction(tx_hex : string) {
+        await ensureElectrumConnected();
         if (electrum !== null) {
             const tx_hash = await electrum.request(
                 "blockchain.transaction.broadcast",
@@ -75,6 +78,8 @@ export default function ElectrumService() {
             );
             console.log('hallo')
             return tx_hash;
+        } else {
+            throw new Error("Electrum client is not initialized");
         }
     }
     return { electrumConnect, electrumDisconnect, getBalance, getUTXOS, broadcastTransaction, electrumInstance }
