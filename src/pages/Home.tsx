@@ -97,7 +97,7 @@ const Home = () => {
                         </div>
                     ))}
                 </div>
-                <button onClick={storeUTXOs}>sdhflsdkfs</button>
+                <button onClick={storeUTXOs}>Store UTXO</button>
                 <button onClick={deleteWallet}>delete wallet</button>
             </section>
         </>
