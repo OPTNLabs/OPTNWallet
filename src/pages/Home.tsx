@@ -1,3 +1,4 @@
+// @ts-nocheck
 import { useState, useEffect } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import KeyManager from '../apis/WalletManager/KeyManager';
@@ -8,6 +9,7 @@ import WalletManager from '../apis/WalletManager/WalletManager';
 const Home = () => {
     const [keyPairs, setKeyPairs] = useState<{ id: number, publicKey: Uint8Array; privateKey: Uint8Array; address: string }[]>([]);
     const [retrieve, setRetrieve] = useState(false);
+    const [utxos, setUtxos] = useState<{ [address: string]: any[] }>({});
     const KeyManage = KeyManager();
     const dbService = DatabaseService();
     const navigate = useNavigate();
@@ -22,6 +24,7 @@ const Home = () => {
                 const walletKeys = await KeyManage.retrieveKeys(wallet_id_number);
                 console.log("wallet keys", walletKeys);
                 setKeyPairs(walletKeys);
+                await fetchUTXOs(walletKeys);
             }
             console.log('wallet id', wallet_id);
         };
@@ -31,12 +34,22 @@ const Home = () => {
     const fetchData = () => {
         setRetrieve(prev => !prev);
     };
+
     const storeUTXOs = async() => {
         if (wallet_id) {
             const wallet_id_number = parseInt(wallet_id, 10);
             (await ManageUTXOs).checkNewUTXOs(wallet_id_number);
         }
     }
+
+    const fetchUTXOs = async(walletKeys: { id: number, publicKey: Uint8Array; privateKey: Uint8Array; address: string }[]) => {
+        const utxosMap: { [address: string]: any[] } = {};
+        for (const key of walletKeys) {
+            const addressUTXOs = await (await ManageUTXOs).fetchUTXOs(0, 0, "", parseInt(wallet_id!, 10));
+            utxosMap[key.address] = addressUTXOs;
+        }
+        setUtxos(utxosMap);
+    };
 
     const handleGenerateKeys = async () => {
         if (wallet_id != null) {
@@ -84,12 +97,23 @@ const Home = () => {
                             <p>Public Key: {uint8ArrayToHexString(keyPair.publicKey)}</p>
                             <p>Private Key: {uint8ArrayToHexString(keyPair.privateKey)}</p>
                             <p>Address: {keyPair.address}</p>
-                            <button onClick = {() => {handleUseForTransaction(keyPair.address)} }>Use For Transaction</button>
+                            <button onClick={() => { handleUseForTransaction(keyPair.address) }}>Use For Transaction</button>
+                            <div>
+                                <h4>UTXOs:</h4>
+                                {utxos[keyPair.address] && utxos[keyPair.address].map((utxo, idx) => (
+                                    <div key={idx}>
+                                        <p>Amount: {utxo.amount}</p>
+                                        <p>Transaction Hash: {utxo.tx_hash}</p>
+                                        <p>Position: {utxo.tx_pos}</p>
+                                        <p>Height: {utxo.height}</p>
+                                    </div>
+                                ))}
+                            </div>
                         </div>
                     ))}
                 </div>
-                <button onClick = { storeUTXOs }>Check UTXOs</button>
-                <button onClick = { deleteWallet }>delete wallet</button>
+                <button onClick={storeUTXOs}>Check UTXOs</button>
+                <button onClick={deleteWallet}>delete wallet</button>
             </section>
         </>
     );

@@ -28,35 +28,43 @@ const WalletImport = () => {
     }, []);
 
     const handleImportAccount = async () => {
-      if (walletName == "") {
-        console.log("Wallet name cannot be empty.");
-        return;
-      }
-      const check = WalletManage.checkAccount(recoveryPhrase, passphrase);
-      if (!check) {
-        try {
-          const createAccountSuccess = await WalletManage.createWallet(walletName, recoveryPhrase, passphrase);
-          if (createAccountSuccess) {
-            console.log("Account imported succcessfully.");
-          }
-        } catch(e) {
-          console.log(e);
+        if (walletName === "") {
+            console.log("Wallet name cannot be empty.");
+            return;
         }
-      }
-      
-      const walletID = await WalletManage.setWalletId(recoveryPhrase, passphrase);
-      if (walletID == null) {
-        const created = await WalletManage.createWallet(walletName, recoveryPhrase, passphrase);
-        if (created) {
-          console.log("New imported wallet created successfully");
-        }
-      }
-      if (walletID != null) {
-        dispatch(setWalletId(walletID));
-        navigate(`/home/${ walletID }`);
-      }
-    };
 
+        try {
+            const check = WalletManage.checkAccount(recoveryPhrase, passphrase);
+            if (!check) {
+                const createAccountSuccess = await WalletManage.createWallet(walletName, recoveryPhrase, passphrase);
+                if (createAccountSuccess) {
+                    console.log("Account imported successfully.");
+                } else {
+                    console.log("Failed to import account.");
+                    return;
+                }
+            }
+
+            let walletID = await WalletManage.setWalletId(recoveryPhrase, passphrase);
+            if (walletID == null) {
+                const created = await WalletManage.createWallet(walletName, recoveryPhrase, passphrase);
+                if (created) {
+                    console.log("New imported wallet created successfully");
+                    walletID = await WalletManage.setWalletId(recoveryPhrase, passphrase);
+                } else {
+                    console.log("Failed to create a new wallet.");
+                    return;
+                }
+            }
+
+            if (walletID != null) {
+                dispatch(setWalletId(walletID));
+                navigate(`/home/${walletID}`);
+            }
+        } catch (e) {
+            console.log(e);
+        }
+    };
 
     return (
         <div className="wallet-create-box">
@@ -74,7 +82,7 @@ const WalletImport = () => {
             <input
                 onChange={(e) => setWalletName(e.target.value)}
             />
-            <button onClick={ handleImportAccount }>Import</button>
+            <button onClick={handleImportAccount}>Import</button>
         </div>
     );
 };
