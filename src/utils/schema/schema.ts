@@ -1,7 +1,19 @@
 export const createTables = (db: any) => {
     db.run(`
         DROP TABLE IF EXISTS UTXOs;
-    `)
+    `);
+    // db.run(`
+    //     DROP TABLE IF EXISTS wallets;
+    // `);
+    // db.run(`
+    //     DROP TABLE IF EXISTS keys;
+    // `);
+    // db.run(`
+    //     DROP TABLE IF EXISTS addresses;
+    // `);
+    // db.run(`
+    //     DROP TABLE IF EXISTS transactions;
+    // `);
     db.run(
         `CREATE TABLE IF NOT EXISTS wallets (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -15,15 +27,18 @@ export const createTables = (db: any) => {
     db.run(`
         CREATE TABLE IF NOT EXISTS keys (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-            wallet_id VARCHAR(255),
+            wallet_id INTEGER,
             public_key BLOB,
             private_key BLOB,
             address VARCHAR(255),
+            account_index INT,
+            change_index INT,
+            address_index INT,
             FOREIGN KEY(wallet_id) REFERENCES wallets(id)
         );
     `);
+
     const getAllKeysQuery = db.prepare("SELECT * FROM wallets;");
-    console.log('All keys in the keys table:');
     while (getAllKeysQuery.step()) {
         const row = getAllKeysQuery.getAsObject();
         console.log('row', row);
@@ -38,8 +53,8 @@ export const createTables = (db: any) => {
             hd_index INT,
             change_index BOOLEAN,
             prefix VARCHAR(255),
-            FOREIGN KEY (wallet_id) REFERENCES wallets(id),
-            FOREIGN KEY (address) REFERENCES keys(address)
+            FOREIGN KEY(wallet_id) REFERENCES wallets(id),
+            FOREIGN KEY(address) REFERENCES keys(address)
         );
     `);
 
@@ -58,6 +73,7 @@ export const createTables = (db: any) => {
           FOREIGN KEY(address) REFERENCES addresses(address)
         );
     `);
+
     db.run(`
         CREATE TABLE IF NOT EXISTS transactions (
           id INTEGER PRIMARY KEY AUTOINCREMENT,

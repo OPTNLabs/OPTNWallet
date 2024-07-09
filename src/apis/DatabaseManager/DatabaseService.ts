@@ -1,11 +1,11 @@
 // @ts-nocheck
 import initSqlJs, { Database } from "sql.js";
+import { createTables } from "../../utils/schema/schema";
 
 const SQL = initSqlJs({
   locateFile: (file) => `https://sql.js.org/dist/${file}`,
 });
 let db: Database | null = null;
-
 
 export default function DatabaseService() {
   return {
@@ -24,6 +24,7 @@ export default function DatabaseService() {
       db = new SQLModule.Database(fileBuffer);
     } else {
       db = new SQLModule.Database();
+      createTables(db);  // Ensure the schema is created if no saved DB exists
     }
     return db;
   }

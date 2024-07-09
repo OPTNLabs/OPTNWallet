@@ -134,7 +134,7 @@ export default async function UTXOManager() {
                         tx_hash: utxo.tx_hash,
                         tx_pos: utxo.tx_pos,
                         amount: utxo.value,
-                        prefix: "BCH",
+                        prefix: "bchtest",
                         private_key : result[0]
                     };
                     await storeUTXOs(newUTXO);
