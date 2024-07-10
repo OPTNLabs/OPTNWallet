@@ -68,7 +68,6 @@ export const createTables = (db: any) => {
           tx_pos INT NOT NULL,
           amount INT NOT NULL,
           prefix VARCHAR(255) NOT NULL,
-          private_key BLOB,
           FOREIGN KEY(wallet_id) REFERENCES wallets(id),
           FOREIGN KEY(address) REFERENCES addresses(address)
         );

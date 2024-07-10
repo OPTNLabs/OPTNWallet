@@ -54,6 +54,8 @@ export default function KeyManager() {
                 });
             }
 
+            console.log("Statement:", statement)
+
             statement.free();
             return result;
 
@@ -72,7 +74,11 @@ export default function KeyManager() {
             }
 
             const getIdQuery = db.prepare(
-                "SELECT mnemonic, passphrase FROM wallets WHERE id = ?;"
+                `SELECT 
+                    mnemonic, 
+                    passphrase 
+                FROM wallets 
+                WHERE id = ?;`
             );
             const result = getIdQuery.get([wallet_id]);
             getIdQuery.free();
@@ -99,9 +105,10 @@ export default function KeyManager() {
                 const privateKey = keys.alicePriv;
                 const address = keys.aliceAddress;
 
-                const insertQuery = db.prepare(
-                    "INSERT INTO keys (wallet_id, public_key, private_key, address, account_index, change_index, address_index) VALUES (?, ?, ?, ?, ?, ?, ?);"
-                );
+                const insertQuery = db.prepare(`
+                    INSERT INTO keys (wallet_id, public_key, private_key, address, account_index, change_index, address_index) 
+                    VALUES (?, ?, ?, ?, ?, ?, ?);
+                `);
                 insertQuery.run([wallet_id, publicKey, privateKey, address, accountNumber, changeNumber, addressNumber]);
                 insertQuery.free();
                 const newAddress: Address = {
@@ -133,9 +140,11 @@ export default function KeyManager() {
         if (db == null) {
             return null;
         }
-        const fetchAddressQuery = db.prepare(
-            "SELECT private_key FROM keys WHERE address = ?;"
-        );
+        const fetchAddressQuery = db.prepare(`
+            SELECT private_key 
+            FROM keys 
+            WHERE address = ?;
+        `);
         const result = fetchAddressQuery.get([address]);
         fetchAddressQuery.free();
         return result;

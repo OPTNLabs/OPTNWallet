@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { useParams } from 'react-router-dom';
 import ElectrumService from '../apis/ElectrumServer/ElectrumServer';
-import TransactionBuilders2 from '../apis/TranasactionManager/ContractTesting';
+import TransactionBuilders2 from '../apis/TransactionManager/ContractTesting';
 import { useSelector } from 'react-redux';
 import { RootState } from '../redux/store';
 
