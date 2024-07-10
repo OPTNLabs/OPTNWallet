@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import TransactionManager from '../apis/TranasactionManager/TransactionManager';
+import TransactionManager from '../apis/TransactionManager/TransactionManager';
 import { useParams } from 'react-router-dom';
 
 const TransactionHistory = () => {

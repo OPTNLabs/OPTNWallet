@@ -4,6 +4,7 @@ import CreateWallet from "./pages/CreateWallet";
 import ImportWallet from "./pages/ImportWallet";
 import Home from "./pages/Home";
 import CreateTransactions from "./pages/CreateTransactions";
+import Transaction from "./pages/Transaction";
 
 function App() {
   return (
@@ -14,6 +15,7 @@ function App() {
       <Route path = "/createwallet" element = {<CreateWallet/>}/>
       <Route path = "/importwallet" element = {<ImportWallet/>}/>
       <Route path = "/createtransaction/:sendAddress" element = {<CreateTransactions/>}/>
+      <Route path = "/transaction/" element = {<Transaction/>}/>
     </Routes>
   </>
   )

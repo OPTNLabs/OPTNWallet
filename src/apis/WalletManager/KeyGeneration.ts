@@ -72,6 +72,12 @@ export default function KeyGeneration() {
             type: 'p2pkhWithTokens',
         }).address;
 
-        return { alicePub, alicePriv, aliceAddress, aliceTokenAddress };
+        return { 
+            alicePub, 
+            alicePriv, 
+            alicePkh, 
+            aliceAddress, 
+            aliceTokenAddress 
+        };
     };
 }
