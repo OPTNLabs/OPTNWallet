@@ -14,6 +14,7 @@
     "@bitauth/libauth": "^2.0.0-alpha.8",
     "@bitauth/libauth-v3": "npm:@bitauth/libauth@^3.0.0",
     "@capacitor/android": "^6.1.0",
+    "@capacitor/camera": "^6.0.1",
     "@capacitor/cli": "^6.1.0",
     "@capacitor/core": "^6.1.0",
     "@capacitor/ios": "^6.1.0",
