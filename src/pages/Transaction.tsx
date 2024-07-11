@@ -20,6 +20,10 @@ interface UTXO {
 interface TransactionOutput {
   recipientAddress: string;
   amount: number;
+  token?: {
+    amount: number;
+    category: string;
+  };
 }
 
 const Transaction = () => {
@@ -31,6 +35,8 @@ const Transaction = () => {
   const [outputs, setOutputs] = useState<TransactionOutput[]>([]);
   const [recipientAddress, setRecipientAddress] = useState('');
   const [transferAmount, setTransferAmount] = useState<number | string>('');
+  const [tokenAmount, setTokenAmount] = useState<number | string>('');
+  const [selectedTokenCategory, setSelectedTokenCategory] = useState('');
   const [changeAddress, setChangeAddress] = useState('');
   const [bytecodeSize, setBytecodeSize] = useState<number | null>(null);
   const [rawTX, setRawTX] = useState('');
@@ -135,13 +141,32 @@ const Transaction = () => {
   };
 
   const addOutput = () => {
-    if (recipientAddress && transferAmount) {
-      setOutputs([
-        ...outputs,
-        { recipientAddress, amount: Number(transferAmount) },
-      ]);
+    if (recipientAddress && (transferAmount || tokenAmount)) {
+      const newOutput: TransactionOutput = {
+        recipientAddress,
+        amount: Number(transferAmount) || 0,
+      };
+
+      if (selectedTokenCategory) {
+        const tokenUTXO = selectedUtxos.find(
+          (utxo) =>
+            utxo.token_data &&
+            utxo.token_data.category === selectedTokenCategory
+        );
+
+        if (tokenUTXO) {
+          newOutput.token = {
+            amount: Number(tokenAmount),
+            category: tokenUTXO.token_data.category,
+          };
+        }
+      }
+
+      setOutputs([...outputs, newOutput]);
       setRecipientAddress('');
       setTransferAmount('');
+      setTokenAmount('');
+      setSelectedTokenCategory('');
     }
   };
 
@@ -151,6 +176,7 @@ const Transaction = () => {
 
   const buildTransaction = async () => {
     const txBuilder = TransactionBuilders();
+    console.log('Inputs', selectedUtxos);
     try {
       // Add the change address with a placeholder value of 546 satoshis
       const placeholderOutput = {
@@ -198,6 +224,7 @@ const Transaction = () => {
         selectedUtxos,
         txOutputs
       );
+      console.log('Final Transaction:', txBuilder);
       console.log('Built Final Transaction:', finalTransaction);
       setRawTX(finalTransaction);
       setFinalOutputs(txOutputs); // Set final outputs to render
@@ -226,6 +253,14 @@ const Transaction = () => {
     (sum, utxo) => sum + utxo.amount,
     0
   );
+
+  const availableTokenCategories = [
+    ...new Set(
+      utxos
+        .filter((utxo) => utxo.token_data)
+        .map((utxo) => utxo.token_data.category)
+    ),
+  ];
 
   return (
     <div className="container mx-auto p-4">
@@ -292,6 +327,9 @@ const Transaction = () => {
         {outputs.map((output, index) => (
           <div key={index} className="flex items-center mb-2">
             <span>{`Recipient: ${output.recipientAddress}, Amount: ${output.amount}`}</span>
+            {output.token && (
+              <span>{`, Token: ${output.token.amount}, Category: ${output.token.category}`}</span>
+            )}
             <button
               onClick={() => removeOutput(index)}
               className="ml-2 text-red-500"
@@ -307,6 +345,9 @@ const Transaction = () => {
           {finalOutputs.map((output, index) => (
             <div key={index} className="flex items-center mb-2">
               <span>{`Recipient: ${output.recipientAddress}, Amount: ${output.amount}`}</span>
+              {output.token && (
+                <span>{`, Token: ${output.token.amount}, Category: ${output.token.category}`}</span>
+              )}
             </div>
           ))}
         </div>
@@ -323,10 +364,31 @@ const Transaction = () => {
         <input
           type="number"
           value={transferAmount}
-          placeholder="Amount"
+          placeholder="Regular Amount"
           onChange={(e) => setTransferAmount(e.target.value)}
           className="border p-2 mb-2 w-full"
         />
+        <input
+          type="number"
+          value={tokenAmount}
+          placeholder="Token Amount"
+          onChange={(e) => setTokenAmount(e.target.value)}
+          className="border p-2 mb-2 w-full"
+        />
+        {availableTokenCategories.length > 0 && (
+          <select
+            value={selectedTokenCategory}
+            onChange={(e) => setSelectedTokenCategory(e.target.value)}
+            className="border p-2 mb-2 w-full"
+          >
+            <option value="">Select Token Category</option>
+            {availableTokenCategories.map((category, index) => (
+              <option key={index} value={category}>
+                {category}
+              </option>
+            ))}
+          </select>
+        )}
         <button
           onClick={addOutput}
           className="bg-blue-500 text-white py-2 px-4 rounded"
