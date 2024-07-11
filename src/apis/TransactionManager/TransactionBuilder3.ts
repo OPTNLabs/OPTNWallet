@@ -1,45 +1,67 @@
-import { ElectrumNetworkProvider, TransactionBuilder, Network, SignatureTemplate } from 'cashscript';
+// @ts-nocheck
+import {
+  ElectrumNetworkProvider,
+  TransactionBuilder,
+  Network,
+  SignatureTemplate,
+} from 'cashscript';
 
 export interface UTXO {
-    tx_hash: string;
-    tx_pos: number;
-    amount: number;
-    address: string;
-    privateKey: Uint8Array; // Assuming you have the private key for signing
+  tx_hash: string;
+  tx_pos: number;
+  amount: number;
+  address: string;
+  privateKey: Uint8Array; // Assuming you have the private key for signing
 }
 
 export interface TransactionOutput {
-    recipientAddress: string;
-    amount: number;
+  recipientAddress: string;
+  amount: number;
 }
 
 export default function TransactionBuilder3() {
-    const provider = new ElectrumNetworkProvider(Network.CHIPNET);
+  const provider = new ElectrumNetworkProvider(Network.CHIPNET);
 
-    async function buildTransaction(utxos: UTXO[], outputs: TransactionOutput[]) {
-        const txBuilder = new TransactionBuilder({ provider });
+  async function buildTransaction(utxos: UTXO[], outputs: TransactionOutput[]) {
+    const txBuilder = new TransactionBuilder({ provider });
 
-        // Adding inputs with unlockers
-        utxos.forEach(utxo => {
-            const signatureTemplate = new SignatureTemplate(utxo.privateKey);
-            const unlockableUtxo = {
-                ...utxo,
-                unlocker: signatureTemplate.unlockP2PKH()
-            };
-            txBuilder.addInput(unlockableUtxo);
-        });
+    // Prepare UTXOs with unlockers
+    const unlockableUtxos = utxos.map((utxo) => {
+      if (!utxo.privateKey || utxo.privateKey.length === 0) {
+        throw new Error(
+          `Invalid private key for UTXO at ${utxo.tx_hash}:${utxo.tx_pos}`
+        );
+      }
 
-        // Adding outputs
-        outputs.forEach(output => {
-            txBuilder.addOutput(output.recipientAddress, BigInt(output.amount));
-        });
+      console.log('private key', utxo.privateKey);
+      const signatureTemplate = new SignatureTemplate(utxo.privateKey);
+      console.log('Sig Template', signatureTemplate);
+      return {
+        ...utxo,
+        unlocker: signatureTemplate.unlockP2PKH(),
+      };
+    });
 
-        const builtTransaction = txBuilder.build();
-        console.log('Built Transaction:', builtTransaction);
-        return builtTransaction;
-    }
+    // Adding inputs
+    txBuilder.addInputs(unlockableUtxos);
 
-    return {
-        buildTransaction
-    };
+    // Prepare transaction outputs
+    const txOutputs = outputs.map((output) => ({
+      to: output.recipientAddress,
+      amount: BigInt(output.amount),
+    }));
+
+    // Adding outputs
+    txBuilder.addOutputs(txOutputs);
+
+    console.log('tx builder:', txBuilder);
+
+    const builtTransaction = txBuilder.build();
+    console.log('Built Transaction:', builtTransaction);
+    return builtTransaction;
+  }
+
+  return {
+    buildTransaction,
+  };
 }

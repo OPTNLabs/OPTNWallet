@@ -1,3 +1,1 @@
-export const chipnetServers = [
-    "chipnet.imaginary.cash"
-]
+export const chipnetServers = ['chipnet.imaginary.cash'];

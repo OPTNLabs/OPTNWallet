@@ -1,3 +1,4 @@
+// @ts-ignore
 import { useState, useEffect } from 'react';
 import { useParams } from 'react-router-dom';
 import ElectrumService from '../apis/ElectrumServer/ElectrumServer';
@@ -7,15 +8,19 @@ import { RootState } from '../redux/store';
 
 const CreateTransactions = () => {
   const { sendAddress } = useParams<{ sendAddress: string }>();
-  const [transactionSendAddress, setTransactionSendAddress] = useState<string>("");
-  const [recipients, setRecipients] = useState<{ address: string, amount: number }[]>([]);
+  const [transactionSendAddress, setTransactionSendAddress] =
+    useState<string>('');
+  const [recipients, setRecipients] = useState<
+    { address: string; amount: number }[]
+  >([]);
   const [utxos, setUtxos] = useState<any[]>([]);
-  const [recipientAddress, setRecipientAddress] = useState("");
+  const [recipientAddress, setRecipientAddress] = useState('');
   const [recipientAmount, setRecipientAmount] = useState<number>(1000);
-  const [signPrivateKey, setSignPrivateKey] = useState<string>("");
+  const [signPrivateKey, setSignPrivateKey] = useState<string>('');
   const Electrum = ElectrumService();
-  const wallet_id = useSelector((state: RootState) => state.wallet_id.currentWalletId);
-
+  const wallet_id = useSelector(
+    (state: RootState) => state.wallet_id.currentWalletId
+  );
 
   useEffect(() => {
     if (sendAddress != null) {
@@ -43,8 +48,11 @@ const CreateTransactions = () => {
 
   const handleAddRecipient = () => {
     if (recipientAddress && recipientAmount > 0) {
-      setRecipients(prevRecipients => [...prevRecipients, { address: recipientAddress, amount: recipientAmount }]);
-      setRecipientAddress("");
+      setRecipients((prevRecipients) => [
+        ...prevRecipients,
+        { address: recipientAddress, amount: recipientAmount },
+      ]);
+      setRecipientAddress('');
       setRecipientAmount(0);
     }
   };
@@ -63,10 +71,10 @@ const CreateTransactions = () => {
   const handleMakeTransaction = async () => {
     try {
       if (!wallet_id) {
-        console.log("invalid id");
+        console.log('invalid id');
         return null;
       }
-      console.log("got here");
+      console.log('got here');
 
       const TransactionBuilder = TransactionBuilders2();
       const transaction = await TransactionBuilder.createTransaction(
@@ -78,7 +86,7 @@ const CreateTransactions = () => {
         console.log(transaction);
       }
     } catch (error) {
-      console.error("Error building transaction:", error);
+      console.error('Error building transaction:', error);
     }
   };
 
@@ -125,7 +133,7 @@ const CreateTransactions = () => {
             </div>
           ))}
         </div>
-        <button onClick = { handleMakeTransaction }>Make the transaction</button>
+        <button onClick={handleMakeTransaction}>Make the transaction</button>
       </section>
     </>
   );

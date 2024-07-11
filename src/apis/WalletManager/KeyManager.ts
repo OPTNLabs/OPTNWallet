@@ -1,30 +1,40 @@
 // @ts-nocheck
-import DatabaseService from "../DatabaseManager/DatabaseService";
-import KeyGeneration from "./KeyGeneration";
-import AddressManager from "../AddressManager/AddressManager";
-import { Address } from "../types";
+import DatabaseService from '../DatabaseManager/DatabaseService';
+import KeyGeneration from './KeyGeneration';
+import AddressManager from '../AddressManager/AddressManager';
+import { Address } from '../types';
 import bip39 from 'bip39';
 
 export default function KeyManager() {
-    const dbService = DatabaseService();
-    const KeyGen = KeyGeneration();
-    const ManageAddress = AddressManager();
+  const dbService = DatabaseService();
+  const KeyGen = KeyGeneration();
+  const ManageAddress = AddressManager();
 
-    return {
-        retrieveKeys,
-        createKeys,
-        fetchAddressPrivateKey
-    };
+  return {
+    retrieveKeys,
+    createKeys,
+    fetchAddressPrivateKey,
+  };
 
-    async function retrieveKeys(wallet_id: number): Promise<{ id: number, publicKey: Uint8Array; privateKey: Uint8Array; address: string, accountIndex: number, changeIndex: number, addressIndex: number }[]> {
-        try {
-            await dbService.ensureDatabaseStarted();
-            const db = dbService.getDatabase();
-            if (db == null) {
-                return [];
-            }
+  async function retrieveKeys(wallet_id: number): Promise<
+    {
+      id: number;
+      publicKey: Uint8Array;
+      privateKey: Uint8Array;
+      address: string;
+      accountIndex: number;
+      changeIndex: number;
+      addressIndex: number;
+    }[]
+  > {
+    try {
+      await dbService.ensureDatabaseStarted();
+      const db = dbService.getDatabase();
+      if (db == null) {
+        return [];
+      }
 
-            const query = `
+      const query = `
                 SELECT 
                     id, 
                     public_key, 
@@ -36,117 +46,138 @@ export default function KeyManager() {
                 FROM keys 
                 WHERE wallet_id = :walletid
             `;
-            const statement = db.prepare(query);
-            statement.bind({ ':walletid': wallet_id });
+      const statement = db.prepare(query);
+      statement.bind({ ':walletid': wallet_id });
 
-            const result: { id: number, publicKey: Uint8Array, privateKey: Uint8Array, address: string, accountIndex: number, changeIndex: number, addressIndex: number }[] = [];
+      const result: {
+        id: number;
+        publicKey: Uint8Array;
+        privateKey: Uint8Array;
+        address: string;
+        accountIndex: number;
+        changeIndex: number;
+        addressIndex: number;
+      }[] = [];
 
-            while (statement.step()) {
-                const row = statement.getAsObject();
-                result.push({
-                    id: row.id as number,
-                    publicKey: new Uint8Array(row.public_key),
-                    privateKey: new Uint8Array(row.private_key),
-                    address: row.address as string,
-                    accountIndex: row.account_index as number,
-                    changeIndex: row.change_index as number,
-                    addressIndex: row.address_index as number
-                });
-            }
+      while (statement.step()) {
+        const row = statement.getAsObject();
+        result.push({
+          id: row.id as number,
+          publicKey: new Uint8Array(row.public_key),
+          privateKey: new Uint8Array(row.private_key),
+          address: row.address as string,
+          accountIndex: row.account_index as number,
+          changeIndex: row.change_index as number,
+          addressIndex: row.address_index as number,
+        });
+      }
 
-            console.log("Statement:", statement)
+      // console.log("Statement:", statement)
 
-            statement.free();
-            return result;
-
-        } catch (error) {
-            console.error("Error retrieving keys:", error);
-            throw error;
-        }
+      statement.free();
+      return result;
+    } catch (error) {
+      console.error('Error retrieving keys:', error);
+      throw error;
     }
+  }
 
-    async function createKeys(wallet_id: number, accountNumber: number, changeNumber: number, addressNumber: number): Promise<void> {
-        try {
-            await dbService.ensureDatabaseStarted();
-            const db = dbService.getDatabase();
-            if (db == null) {
-                return;
-            }
+  async function createKeys(
+    wallet_id: number,
+    accountNumber: number,
+    changeNumber: number,
+    addressNumber: number
+  ): Promise<void> {
+    try {
+      await dbService.ensureDatabaseStarted();
+      const db = dbService.getDatabase();
+      if (db == null) {
+        return;
+      }
 
-            const getIdQuery = db.prepare(
-                `SELECT 
+      const getIdQuery = db.prepare(
+        `SELECT 
                     mnemonic, 
                     passphrase 
                 FROM wallets 
                 WHERE id = ?;`
-            );
-            const result = getIdQuery.get([wallet_id]);
-            getIdQuery.free();
+      );
+      const result = getIdQuery.get([wallet_id]);
+      getIdQuery.free();
 
-            if (!result) {
-                console.error("Mnemonic or passphrase not found for the given wallet name");
-                return;
-            }
-            const mnemonic = JSON.stringify(result[0]).replace(/^"|"$/g, '');
-            const passphrase = JSON.stringify(result[1]).replace(/^"|"$/g, '');
-            console.log("PASSPHRASE: ", passphrase)
+      if (!result) {
+        console.error(
+          'Mnemonic or passphrase not found for the given wallet name'
+        );
+        return;
+      }
+      const mnemonic = JSON.stringify(result[0]).replace(/^"|"$/g, '');
+      const passphrase = JSON.stringify(result[1]).replace(/^"|"$/g, '');
+      // console.log("PASSPHRASE: ", passphrase)
 
-            const keys = await KeyGen.generateKeys(
-                mnemonic,
-                passphrase,
-                accountNumber,
-                changeNumber,
-                addressNumber
-            );
+      const keys = await KeyGen.generateKeys(
+        mnemonic,
+        passphrase,
+        accountNumber,
+        changeNumber,
+        addressNumber
+      );
 
-            if (keys) {
-                console.log("Keys: ", keys)
-                const publicKey = keys.alicePub;
-                const privateKey = keys.alicePriv;
-                const address = keys.aliceAddress;
+      if (keys) {
+        const publicKey = keys.alicePub;
+        const privateKey = keys.alicePriv;
+        const address = keys.aliceAddress;
 
-                const insertQuery = db.prepare(`
+        const insertQuery = db.prepare(`
                     INSERT INTO keys (wallet_id, public_key, private_key, address, account_index, change_index, address_index) 
                     VALUES (?, ?, ?, ?, ?, ?, ?);
                 `);
-                insertQuery.run([wallet_id, publicKey, privateKey, address, accountNumber, changeNumber, addressNumber]);
-                insertQuery.free();
-                const newAddress: Address = {
-                    wallet_id: wallet_id,
-                    address: keys.aliceAddress,
-                    balance: 0,
-                    hd_index: addressNumber,
-                    change_index: changeNumber,
-                    prefix: "bchtest"
-                }
+        insertQuery.run([
+          wallet_id,
+          publicKey,
+          privateKey,
+          address,
+          accountNumber,
+          changeNumber,
+          addressNumber,
+        ]);
+        insertQuery.free();
+        const newAddress: Address = {
+          wallet_id: wallet_id,
+          address: keys.aliceAddress,
+          balance: 0,
+          hd_index: addressNumber,
+          change_index: changeNumber,
+          prefix: 'bchtest',
+        };
 
-                await ManageAddress.registerAddress(newAddress);
-                await dbService.saveDatabaseToFile();
-                const query = "SELECT * FROM addresses";
-                const statement = db.prepare(query);
-                const wow = statement.run()
-                statement.free();
-                console.log("all addresses in the database", wow)
-            }
-        } catch (error) {
-            console.error("Error creating keys:", error);
-            throw error;
-        }
+        await ManageAddress.registerAddress(newAddress);
+        await dbService.saveDatabaseToFile();
+        const query = 'SELECT * FROM addresses';
+        const statement = db.prepare(query);
+        const wow = statement.run();
+        statement.free();
+        // console.log("all addresses in the database", wow)
+      }
+    } catch (error) {
+      console.error('Error creating keys:', error);
+      throw error;
     }
+  }
 
-    function fetchAddressPrivateKey(address: string) {
-        dbService.ensureDatabaseStarted();
-        const db = dbService.getDatabase();
-        if (db == null) {
-            return null;
-        }
-        const fetchAddressQuery = db.prepare(`
+  function fetchAddressPrivateKey(address: string) {
+    dbService.ensureDatabaseStarted();
+    const db = dbService.getDatabase();
+    if (db == null) {
+      return null;
+    }
+    const fetchAddressQuery = db.prepare(`
             SELECT private_key 
             FROM keys 
             WHERE address = ?;
         `);
-        const result = fetchAddressQuery.get([address]);
-        fetchAddressQuery.free();
-        return result;
-    }
+    const result = fetchAddressQuery.get([address]);
+    fetchAddressQuery.free();
+    return result;
+  }
 }
