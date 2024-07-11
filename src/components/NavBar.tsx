@@ -7,10 +7,7 @@ const NavBar = () => {
         <div className="container mx-auto flex items-center justify-between">
           <div className="flex items-center">
             <li>
-              <Link
-                to="/"
-                className="text-white px-3 py-2 rounded-md text-lg"
-              >
+              <Link to="/" className="text-white px-3 py-2 rounded-md text-lg">
                 Home
               </Link>
             </li>
