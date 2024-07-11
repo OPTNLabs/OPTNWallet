@@ -176,7 +176,8 @@ const Transaction = () => {
 
   const buildTransaction = async () => {
     const txBuilder = TransactionBuilders();
-    console.log('Inputs', selectedUtxos);
+    console.log(`Selected UTXOs: ${selectedUtxos}`);
+    console.log(`txOutputs: ${outputs}`);
     try {
       // Add the change address with a placeholder value of 546 satoshis
       const placeholderOutput = {
@@ -224,6 +225,8 @@ const Transaction = () => {
         selectedUtxos,
         txOutputs
       );
+      console.log(`Selected UTXOs: ${selectedUtxos}`);
+      console.log(`txOutputs: ${txOutputs}`);
       console.log('Final Transaction:', txBuilder);
       console.log('Built Final Transaction:', finalTransaction);
       setRawTX(finalTransaction);
