@@ -121,7 +121,7 @@ const Transaction = () => {
   };
 
   const toggleUtxoSelection = (utxo: UTXO) => {
-    if (selectedUtxos.includes(utxo)) {
+    if (selectedUtxos.some((selectedUtxo) => selectedUtxo.id === utxo.id)) {
       setSelectedUtxos(
         selectedUtxos.filter((selectedUtxo) => selectedUtxo.id !== utxo.id)
       );
@@ -147,6 +147,8 @@ const Transaction = () => {
 
   const buildTransaction = async () => {
     const txBuilder = TransactionBuilders();
+    console.log(`Selected UTXOS - ${typeof selectedUtxos}:`, selectedUtxos);
+    console.log(`Outputs - ${typeof outputs}:`, outputs);
     try {
       const transaction = await txBuilder.buildTransaction(
         selectedUtxos,
@@ -181,7 +183,9 @@ const Transaction = () => {
             <div key={index}>
               <input
                 type="checkbox"
-                checked={selectedUtxos.includes(utxo)}
+                checked={selectedUtxos.some(
+                  (selectedUtxo) => selectedUtxo.id === utxo.id
+                )}
                 onChange={() => toggleUtxoSelection(utxo)}
               />
               <span>{`Address: ${utxo.address}, Amount: ${utxo.amount}`}</span>

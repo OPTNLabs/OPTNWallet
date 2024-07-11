@@ -33,9 +33,9 @@ export default function TransactionBuilder3() {
         );
       }
 
-      console.log('private key', utxo.privateKey);
+      // console.log('private key', utxo.privateKey);
       const signatureTemplate = new SignatureTemplate(utxo.privateKey);
-      console.log('Sig Template', signatureTemplate);
+      // console.log('Sig Template', signatureTemplate);
       return {
         ...utxo,
         unlocker: signatureTemplate.unlockP2PKH(),
