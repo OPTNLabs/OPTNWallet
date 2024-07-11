@@ -21,6 +21,10 @@ export interface UTXO {
 export interface TransactionOutput {
   recipientAddress: string;
   amount: number;
+  token?: {
+    amount: number;
+    category: string;
+  };
 }
 
 export default function TransactionBuilder3() {
@@ -52,10 +56,24 @@ export default function TransactionBuilder3() {
     txBuilder.addInputs(unlockableUtxos);
 
     // Prepare transaction outputs
-    const txOutputs = outputs.map((output) => ({
-      to: output.recipientAddress,
-      amount: BigInt(output.amount),
-    }));
+    const txOutputs = outputs.map((output) => {
+      const baseOutput = {
+        to: output.recipientAddress,
+        amount: BigInt(output.amount),
+      };
+
+      if (output.token) {
+        return {
+          ...baseOutput,
+          token: {
+            amount: BigInt(output.token.amount),
+            category: output.token.category,
+          },
+        };
+      }
+
+      return baseOutput;
+    });
 
     // Adding outputs
     txBuilder.addOutputs(txOutputs);

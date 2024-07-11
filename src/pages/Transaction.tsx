@@ -7,6 +7,7 @@ import DatabaseService from '../apis/DatabaseManager/DatabaseService';
 interface UTXO {
   id: number;
   address: string;
+  tokenAddress: string;
   amount: number;
   tx_hash: string;
   tx_pos: number;
@@ -28,7 +29,9 @@ interface TransactionOutput {
 
 const Transaction = () => {
   const [walletId, setWalletId] = useState<number | null>(null);
-  const [addresses, setAddresses] = useState<string[]>([]);
+  const [addresses, setAddresses] = useState<
+    { address: string; tokenAddress: string }[]
+  >([]);
   const [selectedAddresses, setSelectedAddresses] = useState<string[]>([]);
   const [utxos, setUtxos] = useState<UTXO[]>([]);
   const [selectedUtxos, setSelectedUtxos] = useState<UTXO[]>([]);
@@ -58,13 +61,16 @@ const Transaction = () => {
       await dbService.ensureDatabaseStarted();
       const db = dbService.getDatabase();
 
-      const addressesQuery = `SELECT address FROM addresses WHERE wallet_id = ?`;
+      const addressesQuery = `SELECT address, token_address FROM keys WHERE wallet_id = ?`;
       const addressesStatement = db.prepare(addressesQuery);
       addressesStatement.bind([walletId]);
-      const fetchedAddresses: string[] = [];
+      const fetchedAddresses: { address: string; tokenAddress: string }[] = [];
       while (addressesStatement.step()) {
         const row = addressesStatement.getAsObject();
-        fetchedAddresses.push(row.address as string);
+        fetchedAddresses.push({
+          address: row.address as string,
+          tokenAddress: row.token_address as string,
+        });
       }
       addressesStatement.free();
       setAddresses(fetchedAddresses);
@@ -79,14 +85,18 @@ const Transaction = () => {
         const utxoKey = `${row.tx_hash}-${row.tx_pos}`;
         if (!utxoSet.has(utxoKey)) {
           utxoSet.add(utxoKey);
+          const addressInfo = fetchedAddresses.find(
+            (addr) => addr.address === row.address
+          );
           fetchedUTXOs.push({
             id: row.id as number,
             address: row.address as string,
+            tokenAddress: addressInfo ? addressInfo.tokenAddress : '',
             amount: row.amount as number,
             tx_hash: row.tx_hash as string,
             tx_pos: row.tx_pos as number,
-            privateKey: await fetchPrivateKey(walletId, row.address),
-            token_data: row.token_data ? JSON.parse(row.token_data) : undefined,
+            privateKey: await fetchPrivateKey(walletId, row.address), // @ts-ignore
+            token_data: row.token_data ? JSON.parse(row.token_data) : undefined, // @ts-ignore
           });
         }
       }
@@ -107,7 +117,7 @@ const Transaction = () => {
       let privateKey = new Uint8Array();
       while (privateKeyStatement.step()) {
         const row = privateKeyStatement.getAsObject();
-        privateKey = new Uint8Array(row.private_key);
+        privateKey = new Uint8Array(row.private_key); // @ts-ignore
       }
       privateKeyStatement.free();
       return privateKey;
@@ -159,6 +169,13 @@ const Transaction = () => {
             amount: Number(tokenAmount),
             category: tokenUTXO.token_data.category,
           };
+          // Use the CashToken address format if token is included
+          const tokenAddress = addresses.find(
+            (addr) => addr.address === recipientAddress
+          )?.tokenAddress;
+          if (tokenAddress) {
+            newOutput.recipientAddress = tokenAddress;
+          }
         }
       }
 
@@ -176,8 +193,8 @@ const Transaction = () => {
 
   const buildTransaction = async () => {
     const txBuilder = TransactionBuilders();
-    console.log(`Selected UTXOs: ${selectedUtxos}`);
-    console.log(`txOutputs: ${outputs}`);
+    console.log(`Selected UTXOs: ${JSON.stringify(selectedUtxos, null, 2)}`);
+    console.log(`txOutputs: ${JSON.stringify(outputs, null, 2)}`);
     try {
       // Add the change address with a placeholder value of 546 satoshis
       const placeholderOutput = {
@@ -225,8 +242,8 @@ const Transaction = () => {
         selectedUtxos,
         txOutputs
       );
-      console.log(`Selected UTXOs: ${selectedUtxos}`);
-      console.log(`txOutputs: ${txOutputs}`);
+      console.log(`Selected UTXOs: ${JSON.stringify(selectedUtxos, null, 2)}`);
+      console.log(`txOutputs: ${JSON.stringify(txOutputs, null, 2)}`);
       console.log('Final Transaction:', txBuilder);
       console.log('Built Final Transaction:', finalTransaction);
       setRawTX(finalTransaction);
@@ -271,15 +288,15 @@ const Transaction = () => {
         <h3 className="text-lg font-semibold mb-2">
           Select Addresses to Spend From
         </h3>
-        {addresses.map((address, index) => (
+        {addresses.map((addressObj, index) => (
           <div key={index} className="flex items-center mb-2">
             <input
               type="checkbox"
-              checked={selectedAddresses.includes(address)}
-              onChange={() => toggleAddressSelection(address)}
+              checked={selectedAddresses.includes(addressObj.address)}
+              onChange={() => toggleAddressSelection(addressObj.address)}
               className="mr-2"
             />
-            <span>{`Address: ${address}`}</span>
+            <span>{`Address: ${addressObj.address}, Token Address: ${addressObj.tokenAddress}`}</span>
           </div>
         ))}
       </div>
@@ -321,7 +338,7 @@ const Transaction = () => {
                 onChange={() => toggleUtxoSelection(utxo)}
                 className="mr-2"
               />
-              <span>{`Address: ${utxo.address}, Amount: ${utxo.amount}, Token: ${utxo.token_data.amount}, Category: ${utxo.token_data.category}`}</span>
+              <span>{`Address: ${utxo.tokenAddress}, Amount: ${utxo.amount}, Token: ${utxo.token_data.amount}, Category: ${utxo.token_data.category}`}</span>
             </div>
           ))}
       </div>

@@ -1,5 +1,4 @@
 import {
-  // deriveHdPrivateNodeFromSeed,
   deriveHdPath,
   secp256k1,
   encodeCashAddress,
@@ -26,15 +25,8 @@ export default function KeyGeneration() {
     change_index: number,
     address_index: number
   ) {
-    // console.log("Mnemonic Phrase: ", mnemonic);
-    // console.log("Passphrase Temporarily Disabled: ", passphrase)
-    // console.log("Account Index:", account_index)
-    // console.log("Change Index:", change_index)
-    // console.log("Address Index:", address_index)
     const seed = await bip39.mnemonicToSeed(mnemonic, passphrase);
-    // console.log("Seed: ", seed)
     const rootNode = deriveHdPrivateNodeFromSeed(seed, true);
-    // console.log("Root Node:", rootNode)
     const baseDerivationPath = `m/44'/1'/${account_index}'`;
 
     const aliceNode = deriveHdPath(

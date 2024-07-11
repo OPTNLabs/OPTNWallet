@@ -13,6 +13,7 @@ const Home = () => {
       publicKey: Uint8Array;
       privateKey: Uint8Array;
       address: string;
+      tokenAddress: string;
     }[]
   >([]);
   const [retrieve, setRetrieve] = useState(false);
@@ -61,6 +62,7 @@ const Home = () => {
       publicKey: Uint8Array;
       privateKey: Uint8Array;
       address: string;
+      tokenAddress: string;
     }[]
   ) => {
     const utxosMap: { [address: string]: any[] } = {};
@@ -158,6 +160,9 @@ const Home = () => {
               <p>
                 <strong>Address:</strong> {keyPair.address}
               </p>
+              <p>
+                <strong>CashToken Address:</strong> {keyPair.tokenAddress}
+              </p>
               <div>
                 <h4 className="font-semibold">Regular UTXOs:</h4>
                 {loading[keyPair.address] ? (
@@ -189,19 +194,6 @@ const Home = () => {
                       <p>
                         <strong>Amount:</strong> {utxo.amount}
                       </p>
-                      {console.log('UTXO: ', utxo)}
-                      {utxo.token_data && (
-                        <>
-                          <p>
-                            <strong>Token Amount:</strong>{' '}
-                            {utxo.token_data.amount}
-                          </p>
-                          <p>
-                            <strong>Token Category:</strong>{' '}
-                            {utxo.token_data.category}
-                          </p>
-                        </>
-                      )}
                       <p>
                         <strong>Transaction Hash:</strong> {utxo.tx_hash}
                       </p>
