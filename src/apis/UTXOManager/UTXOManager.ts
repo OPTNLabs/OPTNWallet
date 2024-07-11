@@ -23,12 +23,13 @@ export default async function UTXOManager() {
     }
     try {
       const query = db.prepare(`
-                INSERT INTO UTXOs(wallet_id, address, height, tx_hash, tx_pos, amount, prefix) VALUES (?, ?, ?, ?, ?, ?, ?);
-            `);
+        INSERT INTO UTXOs(wallet_id, address, height, tx_hash, tx_pos, amount, prefix, token_data) 
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?);
+      `);
       for (const utxo of utxos) {
         const existsQuery = db.prepare(`
-                    SELECT COUNT(*) AS count FROM UTXOs WHERE wallet_id = ? AND tx_hash = ? AND tx_pos = ?;
-                `);
+          SELECT COUNT(*) AS count FROM UTXOs WHERE wallet_id = ? AND tx_hash = ? AND tx_pos = ?;
+        `);
         existsQuery.bind([utxo.wallet_id, utxo.tx_hash, utxo.tx_pos]);
         if (existsQuery.step() && existsQuery.getAsObject().count === 0) {
           query.run([
@@ -39,6 +40,7 @@ export default async function UTXOManager() {
             utxo.tx_pos,
             utxo.amount,
             utxo.prefix,
+            JSON.stringify(utxo.token_data || null),
           ]);
         }
         existsQuery.free();
@@ -58,7 +60,7 @@ export default async function UTXOManager() {
     }
 
     const query =
-      'SELECT id, wallet_id, address, height, tx_hash, tx_pos, amount, prefix FROM UTXOs WHERE wallet_id = :walletid';
+      'SELECT id, wallet_id, address, height, tx_hash, tx_pos, amount, prefix, token_data FROM UTXOs WHERE wallet_id = :walletid';
     const statement = db.prepare(query);
     statement.bind({ ':walletid': wallet_id });
 
@@ -66,7 +68,6 @@ export default async function UTXOManager() {
 
     while (statement.step()) {
       const row = statement.getAsObject();
-      // console.log('row', row);
       result.push({
         id: row.id as number,
         wallet_id: row.wallet_id as number,
@@ -76,11 +77,10 @@ export default async function UTXOManager() {
         tx_pos: row.tx_pos as number,
         amount: row.amount as number,
         prefix: row.prefix as string,
+        token_data: row.token_data ? JSON.parse(row.token_data) : null,
       });
     }
     statement.free();
-
-    // console.log('UTXOs:', result);
 
     return result;
   }
@@ -93,8 +93,8 @@ export default async function UTXOManager() {
     }
     try {
       const query = db.prepare(`
-                DELETE FROM UTXOs WHERE wallet_id = ? AND tx_hash = ? AND tx_pos = ? AND address = ?;
-            `);
+        DELETE FROM UTXOs WHERE wallet_id = ? AND tx_hash = ? AND tx_pos = ? AND address = ?;
+      `);
       for (const utxo of utxos) {
         query.run([wallet_id, utxo.tx_hash, utxo.tx_pos, utxo.address]);
       }
@@ -128,7 +128,6 @@ export default async function UTXOManager() {
     for (const address of queriedAddresses) {
       try {
         const fetchedUTXOs = await Electrum.getUTXOS(address.address);
-        // console.log(`${address.address} UTXOS: `, fetchedUTXOs);
 
         // Fetch existing UTXOs for the address from the database
         const existingUTXOs = (await fetchUTXOs(wallet_id)).filter(
@@ -155,6 +154,7 @@ export default async function UTXOManager() {
           tx_pos: utxo.tx_pos,
           amount: utxo.value,
           prefix: 'bchtest',
+          token_data: utxo.token_data || null,
         }));
 
         // Store new UTXOs

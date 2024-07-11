@@ -12,6 +12,10 @@ export interface UTXO {
   amount: number;
   address: string;
   privateKey: Uint8Array; // Assuming you have the private key for signing
+  token_data?: {
+    amount: string;
+    category: string;
+  };
 }
 
 export interface TransactionOutput {
@@ -40,13 +44,12 @@ export default function TransactionBuilder3() {
         satoshis: BigInt(utxo.amount),
         scriptPubKey: signatureTemplate.lockingBytecode,
         unlocker: signatureTemplate.unlockP2PKH(),
+        token_data: utxo.token_data,
       };
     });
 
     // Adding inputs
     txBuilder.addInputs(unlockableUtxos);
-
-    // console.log('TX Builder - Inputs:', txBuilder.inputs);
 
     // Prepare transaction outputs
     const txOutputs = outputs.map((output) => ({
@@ -57,11 +60,8 @@ export default function TransactionBuilder3() {
     // Adding outputs
     txBuilder.addOutputs(txOutputs);
 
-    // console.log('TX Builder - Outputs:', txBuilder.outputs);
-
     try {
       const builtTransaction = txBuilder.build();
-      // console.log('Built Transaction:', builtTransaction);
       return builtTransaction;
     } catch (error) {
       console.error('Error building transaction:', error);

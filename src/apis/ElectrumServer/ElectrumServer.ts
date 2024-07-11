@@ -14,7 +14,7 @@ export default function ElectrumService() {
   ): Promise<ElectrumClient> {
     const electrum = new ElectrumClient(
       'OPTNWallet',
-      '1.4.1',
+      '1.5.3',
       server,
       ElectrumTransport.WSS.Port,
       ElectrumTransport.WSS.Scheme
@@ -37,6 +37,7 @@ export default function ElectrumService() {
         'blockchain.address.get_balance',
         ...params
       );
+      console.log('Get Balance response:', response);
       if (
         response &&
         typeof response.confirmed === 'number' &&
@@ -59,7 +60,7 @@ export default function ElectrumService() {
         'blockchain.address.listunspent',
         address
       );
-      // console.log(`${address} UTXOS: `, UTXOs)
+      console.log(`${address} UTXOS: `, UTXOs);
       if (UTXOs) {
         return UTXOs;
       }

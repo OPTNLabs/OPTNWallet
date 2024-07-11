@@ -1,3 +1,4 @@
+// @ts-nocheck
 import { useState, useEffect } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import KeyManager from '../apis/WalletManager/KeyManager';
@@ -19,6 +20,9 @@ const Home = () => {
   const [loading, setLoading] = useState<{ [address: string]: boolean }>({});
   const [addressIndex, setAddressIndex] = useState(0);
   const [totalBalance, setTotalBalance] = useState(0);
+  const [cashTokenUtxos, setCashTokenUtxos] = useState<{
+    [address: string]: any[];
+  }>({});
   const KeyManage = KeyManager();
   const dbService = DatabaseService();
   const navigate = useNavigate();
@@ -60,6 +64,7 @@ const Home = () => {
     }[]
   ) => {
     const utxosMap: { [address: string]: any[] } = {};
+    const cashTokenUtxosMap: { [address: string]: any[] } = {};
     const uniqueUTXOs = new Set(); // To ensure uniqueness of UTXOs
     const loadingState: { [address: string]: boolean } = {};
     let total = 0;
@@ -78,17 +83,32 @@ const Home = () => {
         if (uniqueUTXOs.has(utxoKey)) {
           return false;
         }
-        if (utxo.address === key.address) {
+        if (utxo.address === key.address && !utxo.token_data) {
           uniqueUTXOs.add(utxoKey);
           total += utxo.amount;
           return true;
         }
         return false;
       });
+
+      cashTokenUtxosMap[key.address] = addressUTXOs.filter((utxo) => {
+        const utxoKey = `${utxo.tx_hash}-${utxo.tx_pos}-${utxo.address}`;
+        if (uniqueUTXOs.has(utxoKey)) {
+          return false;
+        }
+        if (utxo.address === key.address && utxo.token_data) {
+          uniqueUTXOs.add(utxoKey);
+          total += utxo.amount;
+          return true;
+        }
+        return false;
+      });
+
       loadingState[key.address] = false;
       setLoading({ ...loadingState });
     }
     setUtxos(utxosMap);
+    setCashTokenUtxos(cashTokenUtxosMap);
     setTotalBalance(total);
   };
 
@@ -141,19 +161,11 @@ const Home = () => {
         <div>
           {keyPairs.map((keyPair, index) => (
             <div key={index} className="p-4 mb-4 border rounded-lg shadow-md">
-              {/* <p>
-                <strong>Public Key:</strong>{' '}
-                {uint8ArrayToHexString(keyPair.publicKey)}
-              </p>
-              <p>
-                <strong>Private Key:</strong>{' '}
-                {uint8ArrayToHexString(keyPair.privateKey)}
-              </p> */}
               <p>
                 <strong>Address:</strong> {keyPair.address}
               </p>
               <div>
-                <h4 className="font-semibold">UTXOs:</h4>
+                <h4 className="font-semibold">Regular UTXOs:</h4>
                 {loading[keyPair.address] ? (
                   <div className="flex items-center">
                     <svg
@@ -182,6 +194,70 @@ const Home = () => {
                     <div key={idx} className="p-2 mb-2 border rounded-lg">
                       <p>
                         <strong>Amount:</strong> {utxo.amount}
+                      </p>
+                      {console.log('UTXO: ', utxo)}
+                      {utxo.token_data && (
+                        <>
+                          <p>
+                            <strong>Token Amount:</strong>{' '}
+                            {utxo.token_data.amount}
+                          </p>
+                          <p>
+                            <strong>Token Category:</strong>{' '}
+                            {utxo.token_data.category}
+                          </p>
+                        </>
+                      )}
+                      <p>
+                        <strong>Transaction Hash:</strong> {utxo.tx_hash}
+                      </p>
+                      <p>
+                        <strong>Position:</strong> {utxo.tx_pos}
+                      </p>
+                      <p>
+                        <strong>Height:</strong> {utxo.height}
+                      </p>
+                    </div>
+                  ))
+                )}
+              </div>
+              <div>
+                <h4 className="font-semibold">CashToken UTXOs:</h4>
+                {loading[keyPair.address] ? (
+                  <div className="flex items-center">
+                    <svg
+                      className="animate-spin h-5 w-5 mr-3 text-gray-500"
+                      viewBox="0 0 24 24"
+                    >
+                      <circle
+                        className="opacity-25"
+                        cx="12"
+                        cy="12"
+                        r="10"
+                        stroke="currentColor"
+                        strokeWidth="4"
+                      ></circle>
+                      <path
+                        className="opacity-75"
+                        fill="currentColor"
+                        d="M4 12a8 8 0 018-8v8H4z"
+                      ></path>
+                    </svg>
+                    <span>Loading UTXOs...</span>
+                  </div>
+                ) : (
+                  cashTokenUtxos[keyPair.address] &&
+                  cashTokenUtxos[keyPair.address].map((utxo, idx) => (
+                    <div key={idx} className="p-2 mb-2 border rounded-lg">
+                      <p>
+                        <strong>Amount:</strong> {utxo.amount}
+                      </p>
+                      <p>
+                        <strong>Token Amount:</strong> {utxo.token_data.amount}
+                      </p>
+                      <p>
+                        <strong>Token Category:</strong>{' '}
+                        {utxo.token_data.category}
                       </p>
                       <p>
                         <strong>Transaction Hash:</strong> {utxo.tx_hash}
