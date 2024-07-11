@@ -1,8 +1,8 @@
 import type { CapacitorConfig } from '@capacitor/cli';
 
 const config: CapacitorConfig = {
-  appId: 'com.optnwallet',
-  appName: 'optn-wallet',
+  appId: 'com.optn.wallet',
+  appName: 'OPTNWallet',
   webDir: 'dist'
 };
 

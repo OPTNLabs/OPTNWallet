@@ -1,21 +1,24 @@
-import DatabaseService from '../DatabaseManager/DatabaseService';
-import { Transaction } from '../types';
+import DatabaseService from "../DatabaseManager/DatabaseService";
+// import { Transaction } from "../types";
 
 export default function TransactionManager() {
-  const dbService = DatabaseService();
-  return {
-    fetchTransactionHistory,
-    saveCompletedTransaction,
-  };
-  async function fetchTransactionHistory(wallet_id: number) {
-    await dbService.ensureDatabaseStarted();
-    const db = dbService.getDatabase();
-    if (db == null) {
-      return null;
+    const dbService = DatabaseService();
+    return {
+        fetchTransactionHistory,
+        saveCompletedTransaction
     }
-    const query = 'SELECT * from transactions';
-    db.prepare(query);
-  }
+    async function fetchTransactionHistory(){
+        await dbService.ensureDatabaseStarted();
+        const db = dbService.getDatabase();
+        if (db == null) {
+            return null;
+        }
+        const query = "SELECT * from transactions";
+        db.prepare(query);
 
-  async function saveCompletedTransaction() {}
+    }
+
+    async function saveCompletedTransaction() {
+
+    }
 }
