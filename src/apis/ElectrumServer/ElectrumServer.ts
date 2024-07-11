@@ -3,80 +3,84 @@ import { chipnetServers } from '../../utils/servers/ElectrumServers';
 import { BalanceResponse } from '../interfaces';
 
 export enum Network {
-    CHIPNET
+  CHIPNET,
 }
-//this is to declare the type of the electrum
-let electrum: ElectrumClient | null = null;
 
 const testServer = chipnetServers[0];
 
-
-
 export default function ElectrumService() {
-    async function electrumConnect (server : string = testServer): Promise<void>{
-        electrum = new ElectrumClient('OPTNWallet', '1.4.1', server, ElectrumTransport.WSS.Port, ElectrumTransport.WSS.Scheme);
-        return electrum.connect();
+  async function electrumConnect(
+    server: string = testServer
+  ): Promise<ElectrumClient> {
+    const electrum = new ElectrumClient(
+      'OPTNWallet',
+      '1.4.1',
+      server,
+      ElectrumTransport.WSS.Port,
+      ElectrumTransport.WSS.Scheme
+    );
+    await electrum.connect();
+    return electrum;
+  }
+
+  async function electrumDisconnect(
+    electrum: ElectrumClient
+  ): Promise<boolean> {
+    return electrum.disconnect(true);
+  }
+
+  async function getBalance(address: string): Promise<number> {
+    const electrum = await electrumConnect();
+    try {
+      const params = [address, 'include_tokens'];
+      const response: any = await electrum.request(
+        'blockchain.address.get_balance',
+        ...params
+      );
+      if (
+        response &&
+        typeof response.confirmed === 'number' &&
+        typeof response.unconfirmed === 'number'
+      ) {
+        const { confirmed, unconfirmed } = response as BalanceResponse;
+        return confirmed + unconfirmed;
+      } else {
+        throw new Error('Unexpected response format');
+      }
+    } finally {
+      await electrumDisconnect(electrum);
     }
+  }
 
-    async function electrumInstance (server: string = testServer) : Promise<ElectrumClient> {
-        electrum = new ElectrumClient('OPTNWallet', '1.4.1', server, ElectrumTransport.WSS.Port, ElectrumTransport.WSS.Scheme);
-        return electrum
+  async function getUTXOS(address: string): Promise<any> {
+    const electrum = await electrumConnect();
+    try {
+      const UTXOs = await electrum.request(
+        'blockchain.address.listunspent',
+        address
+      );
+      // console.log(`${address} UTXOS: `, UTXOs)
+      if (UTXOs) {
+        return UTXOs;
+      }
+      return [];
+    } finally {
+      await electrumDisconnect(electrum);
     }
+  }
 
-    async function electrumDisconnect(status: boolean) : Promise<boolean> {
-        if (electrum !== null) {
-            return electrum.disconnect(status);
-        }
-        return true;
-    };
-    async function ensureElectrumConnected() {
-        if (!electrum) {
-            await electrumConnect();
-        }
+  async function broadcastTransaction(tx_hex: string) {
+    const electrum = await electrumConnect();
+    try {
+      const tx_hash = await electrum.request(
+        'blockchain.transaction.broadcast',
+        tx_hex
+      );
+      return tx_hash;
+    } finally {
+      await electrumDisconnect(electrum);
     }
+  }
 
-    async function getBalance(address: string): Promise<number> {
-        if (electrum !== null) {
-            const params = [address, "include_tokens"];
-            const response: any = await electrum.request("blockchain.address.get_balance", ...params);
-
-            if (response && typeof response.confirmed === 'number' && typeof response.unconfirmed === 'number') {
-                const { confirmed, unconfirmed } = response as BalanceResponse;
-                return confirmed + unconfirmed;
-            } else {
-                throw new Error("Unexpected response format");
-            }
-        } else {
-            throw new Error("Electrum client is not initialized");
-        }
-    }
-
-    async function getUTXOS(address : string) : Promise<any> {
-        await ensureElectrumConnected();
-        if (electrum !== null) {
-            const UTXOs = await electrum.request(
-                "blockchain.address.listunspent",
-                address
-            );
-            console.log(UTXOs);
-            if (UTXOs) {
-                return UTXOs;
-            }
-
-            return [];
-        }
-    }
-
-    async function broadcastTransaction(tx_hex : string) {
-        if (electrum !== null) {
-            const tx_hash = await electrum.request(
-                "blockchain.transaction.broadcast",
-                tx_hex
-            );
-            console.log('hallo')
-            return tx_hash;
-        }
-    }
-    return { electrumConnect, electrumDisconnect, getBalance, getUTXOS, broadcastTransaction, electrumInstance }
-
+  return { getBalance, getUTXOS, broadcastTransaction };
 }

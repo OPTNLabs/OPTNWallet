@@ -1,11 +1,11 @@
 // @ts-nocheck
-import initSqlJs, { Database } from "sql.js";
+import initSqlJs, { Database } from 'sql.js';
+import { createTables } from '../../utils/schema/schema';
 
 const SQL = initSqlJs({
   locateFile: (file) => `https://sql.js.org/dist/${file}`,
 });
 let db: Database | null = null;
-
 
 export default function DatabaseService() {
   return {
@@ -13,17 +13,18 @@ export default function DatabaseService() {
     saveDatabaseToFile,
     ensureDatabaseStarted,
     getDatabase,
-    resultToJSON
+    resultToJSON,
   };
-  
+
   async function startDatabase(): Promise<any> {
     const SQLModule = await SQL;
-    const savedDb = localStorage.getItem("OPTNDatabase");
+    const savedDb = localStorage.getItem('OPTNDatabase');
     if (savedDb) {
       const fileBuffer = new Uint8Array(JSON.parse(savedDb));
       db = new SQLModule.Database(fileBuffer);
     } else {
       db = new SQLModule.Database();
+      createTables(db); // Ensure the schema is created if no saved DB exists
     }
     return db;
   }
@@ -37,20 +38,20 @@ export default function DatabaseService() {
   async function saveDatabaseToFile(): Promise<void> {
     await ensureDatabaseStarted();
     if (!db) {
-      console.log("Database not started.");
+      console.log('Database not started.');
       return;
     }
 
     const data = db.export();
-    localStorage.setItem("OPTNDatabase", JSON.stringify(Array.from(data)));
-    console.log(`Database saved to local storage`);
+    localStorage.setItem('OPTNDatabase', JSON.stringify(Array.from(data)));
+    // console.log(`Database saved to local storage`);
   }
 
   function getDatabase(): Database | null {
     return db;
   }
 
-  function resultToJSON(result : any) {
+  function resultToJSON(result: any) {
     if (result.length === 0) {
       return result;
     }
@@ -62,6 +63,6 @@ export default function DatabaseService() {
     const reduced = mapped.map((m) =>
       m.reduce((acc, cur) => ({ ...acc, ...cur }), {})
     );
-    return reduced
+    return reduced;
   }
 }
