@@ -1,5 +1,4 @@
 // @ts-nocheck
-
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import TransactionBuilders from '../apis/TransactionManager/TransactionBuilder3';
@@ -54,7 +53,7 @@ const Transaction = () => {
         fetchedAddresses.push(row.address as string);
       }
       addressesStatement.free();
-      // console.log("fetched addresses:", fetchedAddresses)
+      console.log('fetched addresses:', fetchedAddresses);
       setAddresses(fetchedAddresses);
 
       // Fetch UTXOs

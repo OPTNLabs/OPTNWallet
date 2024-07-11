@@ -33,17 +33,20 @@ export default function TransactionBuilder3() {
         );
       }
 
-      // console.log('private key', utxo.privateKey);
       const signatureTemplate = new SignatureTemplate(utxo.privateKey);
-      // console.log('Sig Template', signatureTemplate);
       return {
-        ...utxo,
+        txid: utxo.tx_hash,
+        vout: utxo.tx_pos,
+        satoshis: BigInt(utxo.amount),
+        scriptPubKey: signatureTemplate.lockingBytecode,
         unlocker: signatureTemplate.unlockP2PKH(),
       };
     });
 
     // Adding inputs
     txBuilder.addInputs(unlockableUtxos);
+
+    console.log('TX Builder - Inputs:', txBuilder.inputs);
 
     // Prepare transaction outputs
     const txOutputs = outputs.map((output) => ({
@@ -54,11 +57,16 @@ export default function TransactionBuilder3() {
     // Adding outputs
     txBuilder.addOutputs(txOutputs);
 
-    console.log('tx builder:', txBuilder);
+    console.log('TX Builder - Outputs:', txBuilder.outputs);
 
-    const builtTransaction = txBuilder.build();
-    console.log('Built Transaction:', builtTransaction);
-    return builtTransaction;
+    try {
+      const builtTransaction = txBuilder.build();
+      console.log('Built Transaction:', builtTransaction);
+      return builtTransaction;
+    } catch (error) {
+      console.error('Error building transaction:', error);
+      return null;
+    }
   }
 
   return {
