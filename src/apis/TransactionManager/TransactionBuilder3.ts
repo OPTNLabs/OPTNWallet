@@ -46,7 +46,7 @@ export default function TransactionBuilder3() {
     // Adding inputs
     txBuilder.addInputs(unlockableUtxos);
 
-    console.log('TX Builder - Inputs:', txBuilder.inputs);
+    // console.log('TX Builder - Inputs:', txBuilder.inputs);
 
     // Prepare transaction outputs
     const txOutputs = outputs.map((output) => ({
@@ -57,11 +57,11 @@ export default function TransactionBuilder3() {
     // Adding outputs
     txBuilder.addOutputs(txOutputs);
 
-    console.log('TX Builder - Outputs:', txBuilder.outputs);
+    // console.log('TX Builder - Outputs:', txBuilder.outputs);
 
     try {
       const builtTransaction = txBuilder.build();
-      console.log('Built Transaction:', builtTransaction);
+      // console.log('Built Transaction:', builtTransaction);
       return builtTransaction;
     } catch (error) {
       console.error('Error building transaction:', error);
@@ -69,7 +69,18 @@ export default function TransactionBuilder3() {
     }
   }
 
+  const sendTransaction = async (tx: string) => {
+    try {
+      const txid = provider.sendRawTransaction(tx);
+      return txid;
+    } catch (error) {
+      console.log(error);
+      return null;
+    }
+  };
+
   return {
     buildTransaction,
+    sendTransaction,
   };
 }

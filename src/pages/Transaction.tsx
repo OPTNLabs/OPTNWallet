@@ -27,10 +27,11 @@ const Transaction = () => {
   const [outputs, setOutputs] = useState<TransactionOutput[]>([]);
   const [recipientAddress, setRecipientAddress] = useState('');
   const [transferAmount, setTransferAmount] = useState<number | string>('');
+  const [rawTX, setRawTX] = useState('');
+  const [transactionId, setTransactionId] = useState('');
 
   useEffect(() => {
     const fetchWalletId = async () => {
-      // Simulate fetching the current active wallet ID
       const activeWalletId = 1; // Replace this with the actual logic to fetch the active wallet ID
       setWalletId(activeWalletId);
     };
@@ -43,7 +44,6 @@ const Transaction = () => {
       await dbService.ensureDatabaseStarted();
       const db = dbService.getDatabase();
 
-      // Fetch addresses
       const addressesQuery = `SELECT address FROM addresses WHERE wallet_id = ?`;
       const addressesStatement = db.prepare(addressesQuery);
       addressesStatement.bind([walletId]);
@@ -53,10 +53,8 @@ const Transaction = () => {
         fetchedAddresses.push(row.address as string);
       }
       addressesStatement.free();
-      console.log('fetched addresses:', fetchedAddresses);
       setAddresses(fetchedAddresses);
 
-      // Fetch UTXOs
       const utxosQuery = `SELECT * FROM UTXOs WHERE wallet_id = ?`;
       const utxosStatement = db.prepare(utxosQuery);
       utxosStatement.bind([walletId]);
@@ -73,7 +71,7 @@ const Transaction = () => {
             amount: row.amount as number,
             tx_hash: row.tx_hash as string,
             tx_pos: row.tx_pos as number,
-            privateKey: await fetchPrivateKey(walletId, row.address), // Fetch the private key
+            privateKey: await fetchPrivateKey(walletId, row.address),
           });
         }
       }
@@ -85,8 +83,6 @@ const Transaction = () => {
       walletId: number,
       address: string
     ): Promise<Uint8Array> => {
-      // Fetch the private key for the given address from the database or other secure storage
-      // This is a placeholder implementation
       const dbService = DatabaseService();
       await dbService.ensureDatabaseStarted();
       const db = dbService.getDatabase();
@@ -146,77 +142,120 @@ const Transaction = () => {
 
   const buildTransaction = async () => {
     const txBuilder = TransactionBuilders();
-    console.log(`Selected UTXOS - ${typeof selectedUtxos}:`, selectedUtxos);
-    console.log(`Outputs - ${typeof outputs}:`, outputs);
     try {
       const transaction = await txBuilder.buildTransaction(
         selectedUtxos,
         outputs
       );
       console.log('Built Transaction:', transaction);
+      setRawTX(transaction);
     } catch (error) {
       console.error('Error building transaction:', error);
+      setRawTX('');
+    }
+  };
+
+  const sendTransaction = async () => {
+    const txBuilder = TransactionBuilders();
+    try {
+      const txid = await txBuilder.sendTransaction(rawTX);
+      console.log('Sent Transaction:', txid);
+      setTransactionId(txid);
+    } catch (error) {
+      console.error('Error sending transaction:', error);
     }
   };
 
   return (
-    <div>
-      <div>
-        <h3>Select Addresses to Spend From</h3>
+    <div className="container mx-auto p-4">
+      <div className="mb-6">
+        <h3 className="text-lg font-semibold mb-2">
+          Select Addresses to Spend From
+        </h3>
         {addresses.map((address, index) => (
-          <div key={index}>
+          <div key={index} className="flex items-center mb-2">
             <input
               type="checkbox"
               checked={selectedAddresses.includes(address)}
               onChange={() => toggleAddressSelection(address)}
+              className="mr-2"
             />
             <span>{`Address: ${address}`}</span>
           </div>
         ))}
       </div>
-      <div>
-        <h3>Available UTXOs</h3>
+      <div className="mb-6">
+        <h3 className="text-lg font-semibold mb-2">Available UTXOs</h3>
         {utxos
           .filter((utxo) => selectedAddresses.includes(utxo.address))
           .map((utxo, index) => (
-            <div key={index}>
+            <div key={index} className="flex items-center mb-2">
               <input
                 type="checkbox"
                 checked={selectedUtxos.some(
                   (selectedUtxo) => selectedUtxo.id === utxo.id
                 )}
                 onChange={() => toggleUtxoSelection(utxo)}
+                className="mr-2"
               />
               <span>{`Address: ${utxo.address}, Amount: ${utxo.amount}`}</span>
             </div>
           ))}
       </div>
-      <div>
-        <h3>Transaction Outputs</h3>
+      <div className="mb-6">
+        <h3 className="text-lg font-semibold mb-2">Transaction Outputs</h3>
         {outputs.map((output, index) => (
-          <div key={index}>
+          <div key={index} className="flex items-center mb-2">
             <span>{`Recipient: ${output.recipientAddress}, Amount: ${output.amount}`}</span>
-            <button onClick={() => removeOutput(index)}>Remove</button>
+            <button
+              onClick={() => removeOutput(index)}
+              className="ml-2 text-red-500"
+            >
+              Remove
+            </button>
           </div>
         ))}
       </div>
-      <div>
-        <h3>Add Output</h3>
+      <div className="mb-6">
+        <h3 className="text-lg font-semibold mb-2">Add Output</h3>
         <input
           type="text"
           value={recipientAddress}
           placeholder="Recipient Address"
           onChange={(e) => setRecipientAddress(e.target.value)}
+          className="border p-2 mb-2 w-full"
         />
         <input
           type="number"
           value={transferAmount}
           placeholder="Amount"
           onChange={(e) => setTransferAmount(e.target.value)}
+          className="border p-2 mb-2 w-full"
         />
-        <button onClick={addOutput}>Add Output</button>
+        <button
+          onClick={addOutput}
+          className="bg-blue-500 text-white py-2 px-4 rounded"
+        >
+          Add Output
+        </button>
       </div>
-      <button onClick={buildTransaction}>Build Transaction</button>
+      <div className="mb-6">
+        <button
+          onClick={buildTransaction}
+          className="bg-green-500 text-white py-2 px-4 rounded mr-2"
+        >
+          Build Transaction
+        </button>
+        <button
+          onClick={sendTransaction}
+          className="bg-red-500 text-white py-2 px-4 rounded"
+        >
+          Send Transaction
+        </button>
+      </div>
+      {rawTX !== '' && (
+        <div className="text-lg font-semibold">{transactionId}</div>
+      )}
     </div>
   );
 };
