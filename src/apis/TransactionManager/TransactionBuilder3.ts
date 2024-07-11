@@ -61,6 +61,7 @@ export default function TransactionBuilder3() {
     txBuilder.addOutputs(txOutputs);
 
     try {
+      console.log('tx builder:', txBuilder);
       const builtTransaction = txBuilder.build();
       return builtTransaction;
     } catch (error) {
