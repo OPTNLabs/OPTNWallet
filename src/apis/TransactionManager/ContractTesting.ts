@@ -6,12 +6,12 @@ import {
 } from "cashscript";
 import { UTXOs } from "../types";
 import { Utxo, Contract } from "cashscript";
-import { hash160 } from "@cashscript/utils";
+// import { hash160 } from "@cashscript/utils";
 import UTXOManager from "../UTXOManager/UTXOManager";
-import { Decimal } from "decimal.js";
+// import { Decimal } from "decimal.js";
 import DatabaseService from "../DatabaseManager/DatabaseService";
 import TransferWithTimeout from "./transfer_with_timeout.json";
-const DUST_LIMIT = 546;
+// const DUST_LIMIT = 546;
 
 export default function TransactionBuilders2() {
   const provider = new ElectrumNetworkProvider("chipnet");
@@ -21,18 +21,19 @@ export default function TransactionBuilders2() {
   async function createTransaction(
     wallet_id: number,
     recipients: Array<{ address: string; amount: number }>,
-    fee: number = DUST_LIMIT / 3
+    // fee: number = DUST_LIMIT / 3
   ): Promise<any> {
-    const sendTotal = recipients
-      .reduce((sum, cur) => sum.plus(cur.amount), new Decimal(0))
-      .toNumber();
+    // const sendTotal = recipients
+    //   .reduce((sum, cur) => sum.plus(cur.amount), new Decimal(0))
+    //   .toNumber();
     const UTXO_inputs: UTXOs[] | null = await (
       await ManageUTXOs
-    ).fetchUTXOs(sendTotal, fee, "BCH", wallet_id);
+    ).fetchUTXOs(wallet_id);
     if (UTXO_inputs == null) {
       console.log("No utxo inputs fetched from wallet");
       return null;
     }
+    console.log(recipients);
 
     const convertedUTXOs: Utxo[] = UTXO_inputs.map((utxo) => ({
       txid: utxo.tx_hash,
@@ -90,13 +91,12 @@ export default function TransactionBuilders2() {
         "Checking private key, public inputs:",
         UTXO_inputs[index].private_key
       );
-
-      const hash_public_key = hash160(publicKeyArray);
+      
       const recipient_public_key = hexStringToUint8Array("038b8af9abba08a7c7b0046b4d75fa5f4219664d1a187582c3db6300394deee6bf");
       console.log('recipient_public_key', recipient_public_key);
       const contract = new Contract(TransferWithTimeout, [publicKeyArray, recipient_public_key, BigInt(1)], {
         provider: provider,
-        addressType: "p2sh32",
+        addressType: addressType,
       });
       console.log("CONTRACT ADDRESS: ", contract.address);
 
@@ -104,13 +104,13 @@ export default function TransactionBuilders2() {
       console.log('contract utxos',contractUtxos);
       const { withToken: tokenUTXO, withoutToken: regularUTXO } =
         separateUtxos(contractUtxos);
-      
+      console.log(tokenUTXO);
       const {
         collectedObjects: contractSpendUTXOs,
         totalSatoshis: satoshiAmount,
       } = collectUTXOs(regularUTXO, 50000);
 
-      const recipientSig = hexStringToUint8Array("5a0aff42d8bda4e3c217dc50d7cabcd0ea614489e282458e023ddfdb95c1dfdc");
+      // const recipientSig = hexStringToUint8Array("5a0aff42d8bda4e3c217dc50d7cabcd0ea614489e282458e023ddfdb95c1dfdc");
       
       const unlockableContractUtxos = contractSpendUTXOs.map((item) => ({
         ...item,

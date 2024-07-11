@@ -106,12 +106,6 @@ const Home = () => {
     }
   };
 
-  const uint8ArrayToHexString = (array: Uint8Array) => {
-    return Array.from(array)
-      .map((byte) => byte.toString(16).padStart(2, '0'))
-      .join('');
-  };
-
   const deleteWallet = async () => {
     if (!wallet_id) {
       return;

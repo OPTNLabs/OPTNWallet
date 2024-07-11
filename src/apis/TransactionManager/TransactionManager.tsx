@@ -1,5 +1,5 @@
 import DatabaseService from "../DatabaseManager/DatabaseService";
-import { Transaction } from "../types";
+// import { Transaction } from "../types";
 
 export default function TransactionManager() {
     const dbService = DatabaseService();
@@ -7,7 +7,7 @@ export default function TransactionManager() {
         fetchTransactionHistory,
         saveCompletedTransaction
     }
-    async function fetchTransactionHistory(wallet_id : number){
+    async function fetchTransactionHistory(){
         await dbService.ensureDatabaseStarted();
         const db = dbService.getDatabase();
         if (db == null) {
