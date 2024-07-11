@@ -81,6 +81,7 @@ const CreateTransactions = () => {
         wallet_id,
         recipients
       );
+      console.log(transaction);
     } catch (error) {
       console.error('Error building transaction:', error);
     }

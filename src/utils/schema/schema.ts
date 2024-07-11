@@ -41,7 +41,7 @@ export const createTables = (db: any) => {
   const getAllKeysQuery = db.prepare('SELECT * FROM wallets;');
   while (getAllKeysQuery.step()) {
     const row = getAllKeysQuery.getAsObject();
-    // console.log('row', row);
+    console.log('row', row);
   }
 
   db.run(`

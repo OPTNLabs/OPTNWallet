@@ -82,5 +82,5 @@ export default function ElectrumService() {
     }
   }
 
-  return { getBalance, getUTXOS, broadcastTransaction };
+  return { electrumConnect, getBalance, getUTXOS, broadcastTransaction };
 }
