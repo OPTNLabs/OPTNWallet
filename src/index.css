@@ -3,21 +3,21 @@
 @tailwind utilities;
 
 .title-width {
-    width: 36vw
+  width: 36vw;
 }
 
 .side-margins {
-    margin-right: 12vw;
-    margin-left: 12vw;
+  margin-right: 12vw;
+  margin-left: 12vw;
 }
 
 .wallet-create-box {
-    width: 24vw;
-    height: 64vh;
-    background-color: #f2f2f2;
-    border-radius: 12px;
-    margin-top: 16vh;
-    padding-top: 8vh;
-    padding-left: 2vw;
-    padding-right: 2vw;
+  width: 24vw;
+  height: 64vh;
+  background-color: #f2f2f2;
+  border-radius: 12px;
+  margin-top: 16vh;
+  padding-top: 8vh;
+  padding-left: 2vw;
+  padding-right: 2vw;
 }

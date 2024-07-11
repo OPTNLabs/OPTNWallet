@@ -1,30 +1,30 @@
 export const createTables = (db: any) => {
-    db.run(`
+  db.run(`
         DROP TABLE IF EXISTS UTXOs;
     `);
-    // db.run(`
-    //     DROP TABLE IF EXISTS wallets;
-    // `);
-    // db.run(`
-    //     DROP TABLE IF EXISTS keys;
-    // `);
-    // db.run(`
-    //     DROP TABLE IF EXISTS addresses;
-    // `);
-    // db.run(`
-    //     DROP TABLE IF EXISTS transactions;
-    // `);
-    db.run(
-        `CREATE TABLE IF NOT EXISTS wallets (
+  // db.run(`
+  //     DROP TABLE IF EXISTS wallets;
+  // `);
+  // db.run(`
+  //     DROP TABLE IF EXISTS keys;
+  // `);
+  // db.run(`
+  //     DROP TABLE IF EXISTS addresses;
+  // `);
+  // db.run(`
+  //     DROP TABLE IF EXISTS transactions;
+  // `);
+  db.run(
+    `CREATE TABLE IF NOT EXISTS wallets (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             wallet_name VARCHAR(255),
             mnemonic VARCHAR(255),
             passphrase VARCHAR(255),
             balance INT
         );`
-    );
+  );
 
-    db.run(`
+  db.run(`
         CREATE TABLE IF NOT EXISTS keys (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             wallet_id INTEGER,
@@ -38,13 +38,13 @@ export const createTables = (db: any) => {
         );
     `);
 
-    const getAllKeysQuery = db.prepare("SELECT * FROM wallets;");
-    while (getAllKeysQuery.step()) {
-        const row = getAllKeysQuery.getAsObject();
-        console.log('row', row);
-    }
+  const getAllKeysQuery = db.prepare('SELECT * FROM wallets;');
+  while (getAllKeysQuery.step()) {
+    const row = getAllKeysQuery.getAsObject();
+    // console.log('row', row);
+  }
 
-    db.run(`
+  db.run(`
         CREATE TABLE IF NOT EXISTS addresses (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             wallet_id INT,
@@ -58,7 +58,7 @@ export const createTables = (db: any) => {
         );
     `);
 
-    db.run(`
+  db.run(`
         CREATE TABLE IF NOT EXISTS UTXOs (
           id INTEGER PRIMARY KEY AUTOINCREMENT,
           wallet_id INT,
@@ -73,7 +73,7 @@ export const createTables = (db: any) => {
         );
     `);
 
-    db.run(`
+  db.run(`
         CREATE TABLE IF NOT EXISTS transactions (
           id INTEGER PRIMARY KEY AUTOINCREMENT,
           wallet_id INT,
@@ -82,4 +82,13 @@ export const createTables = (db: any) => {
           amount INT NOT NULL
         );
     `);
+
+  // Add a trigger to reset the autoincrement value for the wallets table
+  db.run(`
+    CREATE TRIGGER IF NOT EXISTS reset_wallet_id
+    AFTER DELETE ON wallets
+    BEGIN
+      UPDATE sqlite_sequence SET seq = (SELECT MAX(id) FROM wallets) WHERE name = 'wallets';
+    END;
+  `);
 };

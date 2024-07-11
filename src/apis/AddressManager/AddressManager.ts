@@ -1,10 +1,10 @@
-import DatabaseService from "../DatabaseManager/DatabaseService";
-import { Address } from "../types";
+import DatabaseService from '../DatabaseManager/DatabaseService';
+import { Address } from '../types';
 
 export default function AddressManager() {
   const dbService = DatabaseService();
 
-  async function registerAddress (address: Address): Promise<void>  {
+  async function registerAddress(address: Address): Promise<void> {
     try {
       await dbService.ensureDatabaseStarted();
       const db = dbService.getDatabase();
@@ -19,20 +19,19 @@ export default function AddressManager() {
           address.balance,
           address.hd_index,
           address.change_index,
-          address.prefix
+          address.prefix,
         ]);
 
         registerAddressQuery.free();
       } else {
-        console.error("Database instance is null.");
+        console.error('Database instance is null.');
       }
     } catch (error) {
-      console.error("Failed to register address:", error);
+      console.error('Failed to register address:', error);
     }
-  };
-  
+  }
 
   return {
-    registerAddress
-  }
+    registerAddress,
+  };
 }

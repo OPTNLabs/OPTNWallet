@@ -1,8 +1,8 @@
 // @ts-nocheck
-import { hexToBin } from "@bitauth/libauth";
-import KeyManager from "./KeyManager";
-import { createTables } from "../../utils/schema/schema";
-import DatabaseService from "../DatabaseManager/DatabaseService";
+import { hexToBin } from '@bitauth/libauth';
+import KeyManager from './KeyManager';
+import { createTables } from '../../utils/schema/schema';
+import DatabaseService from '../DatabaseManager/DatabaseService';
 
 const KeyManage = KeyManager();
 
@@ -12,25 +12,25 @@ export default function WalletManager() {
     createWallet,
     checkAccount,
     setWalletId,
-    deleteWallet
+    deleteWallet,
   };
-  
-  async function deleteWallet(wallet_id : number) : null {
+
+  async function deleteWallet(wallet_id: number): Promise<boolean | null> {
     const dbService = DatabaseService();
     const db = dbService.getDatabase();
     if (!db) {
       return null;
     }
     createTables(db);
-    
+
     try {
       let query = db.prepare(`DELETE FROM wallets WHERE id = :walletid`);
       query.bind({ ':walletid': wallet_id });
       query.run();
 
       query = db.prepare(`DELETE FROM keys WHERE wallet_id = :walletid`);
-      query.bind({ ':walletid' : wallet_id});
-      query.run()
+      query.bind({ ':walletid': wallet_id });
+      query.run();
 
       query = db.prepare(`DELETE FROM addresses WHERE wallet_id = :walletid`);
       query.bind({ ':walletid': wallet_id });
@@ -39,19 +39,17 @@ export default function WalletManager() {
       query = db.prepare(`DELETE FROM UTXOs WHERE wallet_id = :walletid`);
       query.bind({ ':walletid': wallet_id });
       query.run();
-    
+
+      // Trigger should automatically reset the wallet_id
       await dbService.saveDatabaseToFile();
       return true;
-
-    } catch(e) {
+    } catch (e) {
       console.log(e);
+      return false;
     }
   }
 
-  async function setWalletId(
-    mnemonic: string,
-    passphrase: string
-  ): number {
+  async function setWalletId(mnemonic: string, passphrase: string): number {
     const dbService = DatabaseService();
     const db = dbService.getDatabase();
     if (!db) {
@@ -62,18 +60,17 @@ export default function WalletManager() {
       const query = db.prepare(
         `SELECT id FROM wallets WHERE mnemonic = :mnemonic AND passphrase = :passphrase`
       );
-      query.bind({ ':mnemonic' : mnemonic, ':passphrase' : passphrase });
+      query.bind({ ':mnemonic': mnemonic, ':passphrase': passphrase });
       let walletId: number | null = null;
-      
 
       while (query.step()) {
         const row = query.getAsObject();
         if (row.id) {
           walletId = row.id;
-          break; 
+          break;
         }
       }
-      query.free(); 
+      query.free();
       return walletId;
     } catch (error) {
       console.error('Error setting wallet ID:', error);
@@ -85,7 +82,6 @@ export default function WalletManager() {
     mnemonic: string,
     passphrase: string
   ): Promise<boolean> {
-
     const dbService = DatabaseService();
     const db = dbService.getDatabase();
     if (!db) {
@@ -98,28 +94,28 @@ export default function WalletManager() {
         `SELECT COUNT(*) as count FROM wallets WHERE mnemonic = ? AND passphrase = ?`
       );
       query.bind([mnemonic, passphrase]);
-      
+
       let accountExists = false;
-  
+
       while (query.step()) {
         const row = query.getAsObject();
         if (row.count > 0) {
           accountExists = true;
         }
       }
-    
+
       const queryMnemonic = db.prepare(
         `SELECT COUNT(*) as count FROM wallets WHERE mnemonic = ?`
       );
       queryMnemonic.bind([mnemonic]);
-  
+
       while (queryMnemonic.step()) {
         const rowMnemonic = queryMnemonic.getAsObject();
         if (rowMnemonic.count > 0) {
           accountExists = true;
         }
       }
-  
+
       query.free();
       queryMnemonic.free();
       return accountExists;
@@ -139,28 +135,27 @@ export default function WalletManager() {
     if (!db) {
       return false;
     }
-    
 
     createTables(db);
     const query = db.prepare(
-        `SELECT COUNT(*) as count FROM wallets WHERE mnemonic = ? AND passphrase = ?`
+      `SELECT COUNT(*) as count FROM wallets WHERE mnemonic = ? AND passphrase = ?`
     );
     query.bind([mnemonic, passphrase]);
-    
+
     let accountExists = false;
 
     while (query.step()) {
-        const row = query.getAsObject();
-        if (row.count > 0) {
-            accountExists = true;
-        }
+      const row = query.getAsObject();
+      if (row.count > 0) {
+        accountExists = true;
+      }
     }
 
     if (accountExists) {
-        return false;
+      return false;
     }
     const createAccountQuery = db.prepare(
-      "INSERT INTO wallets (wallet_name, mnemonic, passphrase, balance) VALUES (?, ?, ?, ?);"
+      'INSERT INTO wallets (wallet_name, mnemonic, passphrase, balance) VALUES (?, ?, ?, ?);'
     );
     createAccountQuery.run([wallet_name, mnemonic, passphrase, 0]);
     createAccountQuery.free();
@@ -175,7 +170,7 @@ export default function WalletManager() {
       sequenceNumber: 0,
       unlockingBytecode: {
         compiler,
-        script: "unlock",
+        script: 'unlock',
         valueSatoshis: BigInt(input.value),
         data: {
           keys: {
