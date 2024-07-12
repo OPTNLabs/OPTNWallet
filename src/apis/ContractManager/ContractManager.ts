@@ -1,8 +1,8 @@
 // @ts-nocheck
 import { Contract, Network, ElectrumNetworkProvider } from 'cashscript';
 import DatabaseService from '../DatabaseManager/DatabaseService';
-import path from 'path';
-import fs from 'fs';
+import p2pkhArtifact from './artifacts/p2pkh.json';
+import transferWithTimeoutArtifact from './artifacts/transfer_with_timeout.json';
 
 export default function ContractManager() {
   const dbService = DatabaseService();
@@ -11,33 +11,68 @@ export default function ContractManager() {
     createContract,
     saveContractArtifact,
     getContractArtifact,
+    listAvailableArtifacts,
+    deleteContractInstance,
+    fetchContractInstances,
     loadArtifact,
   };
 
-  async function createContract(artifact, constructorArgs) {
-    const provider = new ElectrumNetworkProvider(Network.CHIPNET);
-    const addressType = 'p2sh32';
-    const contract = new Contract(artifact, constructorArgs, {
-      provider,
-      addressType,
-    });
+  async function createContract(artifactName, constructorArgs) {
+    try {
+      const artifact = loadArtifact(artifactName);
+      if (!artifact) {
+        throw new Error(`Artifact ${artifactName} could not be loaded`);
+      }
 
-    // Fetch contract details
-    const balance = await contract.getBalance();
-    const utxos = await contract.getUtxos();
+      const provider = new ElectrumNetworkProvider(Network.CHIPNET);
+      const addressType = 'p2sh32';
 
-    // Save the contract artifact to the database
-    await saveContractArtifact(artifact);
+      if (!constructorArgs || constructorArgs.length === 0) {
+        throw new Error('Constructor arguments are required');
+      }
 
-    return {
-      address: contract.address,
-      tokenAddress: contract.tokenAddress,
-      opcount: contract.opcount,
-      bytesize: contract.bytesize,
-      bytecode: contract.bytecode,
-      balance: await contract.getBalance(),
-      utxos: await contract.getUtxos(),
-    };
+      console.log('Creating contract with:', artifact, constructorArgs);
+
+      const contract = new Contract(artifact, constructorArgs, {
+        provider,
+        addressType,
+      });
+
+      console.log('Contract:', contract);
+
+      // Fetch contract details
+      const balance = await contract.getBalance();
+      const utxos = await contract.getUtxos();
+
+      // Save the contract artifact to the database
+      await saveContractArtifact(artifact);
+
+      // Save the contract instance to the database if not exists
+      const existingContract = await getContractInstanceByAddress(
+        contract.address
+      );
+      if (!existingContract) {
+        await saveContractInstance(
+          artifact.contractName,
+          contract,
+          balance,
+          utxos
+        );
+      }
+
+      return {
+        address: contract.address,
+        tokenAddress: contract.tokenAddress,
+        opcount: contract.opcount,
+        bytesize: contract.bytesize,
+        bytecode: contract.bytecode,
+        balance,
+        utxos,
+      };
+    } catch (error) {
+      console.error('Error creating contract:', error);
+      throw error;
+    }
   }
 
   async function saveContractArtifact(artifact) {
@@ -95,15 +130,127 @@ export default function ContractManager() {
   }
 
   function loadArtifact(artifactName) {
-    const artifactPath = path.resolve(
-      __dirname,
-      'artifacts',
-      `${artifactName}.json`
-    );
-    if (!fs.existsSync(artifactPath)) {
-      throw new Error(`Artifact file ${artifactName}.json not found`);
+    try {
+      const artifacts = {
+        p2pkh: p2pkhArtifact,
+        transfer_with_timeout: transferWithTimeoutArtifact,
+      };
+
+      const artifact = artifacts[artifactName];
+      if (!artifact) {
+        throw new Error(`Artifact ${artifactName} not found`);
+      }
+      return artifact;
+    } catch (error) {
+      console.error('Error loading artifact:', error);
+      return null;
     }
-    const artifactData = fs.readFileSync(artifactPath, 'utf8');
-    return JSON.parse(artifactData);
+  }
+
+  function listAvailableArtifacts() {
+    try {
+      return [
+        { fileName: 'p2pkh', contractName: p2pkhArtifact.contractName },
+        {
+          fileName: 'transfer_with_timeout',
+          contractName: transferWithTimeoutArtifact.contractName,
+        },
+      ];
+    } catch (error) {
+      console.error('Error listing artifacts:', error);
+      return [];
+    }
+  }
+
+  async function saveContractInstance(contractName, contract, balance, utxos) {
+    await dbService.ensureDatabaseStarted();
+    const db = dbService.getDatabase();
+
+    const insertQuery = `
+      INSERT INTO instantiated_contracts 
+      (contract_name, address, token_address, opcount, bytesize, bytecode, balance, utxos, created_at) 
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `;
+    const params = [
+      contractName,
+      contract.address,
+      contract.tokenAddress,
+      contract.opcount,
+      contract.bytesize,
+      contract.bytecode,
+      balance.toString(), // Convert balance to string
+      JSON.stringify(
+        utxos.map((utxo) => ({
+          ...utxo,
+          satoshis: utxo.satoshis.toString(), // Convert satoshis to string
+        }))
+      ),
+      new Date().toISOString(),
+    ];
+
+    console.log('Inserting contract instance with params:', params);
+
+    const statement = db.prepare(insertQuery);
+    statement.run(params);
+    statement.free();
+    await dbService.saveDatabaseToFile();
+  }
+
+  async function deleteContractInstance(contractId) {
+    await dbService.ensureDatabaseStarted();
+    const db = dbService.getDatabase();
+
+    const deleteQuery = 'DELETE FROM instantiated_contracts WHERE id = ?';
+    const statement = db.prepare(deleteQuery);
+    statement.run([contractId]);
+    statement.free();
+    await dbService.saveDatabaseToFile();
+  }
+
+  async function fetchContractInstances() {
+    await dbService.ensureDatabaseStarted();
+    const db = dbService.getDatabase();
+
+    const query = 'SELECT * FROM instantiated_contracts';
+    const statement = db.prepare(query);
+
+    const instances = [];
+    while (statement.step()) {
+      const row = statement.getAsObject();
+      instances.push({
+        ...row,
+        balance: BigInt(row.balance), // Convert balance back to BigInt
+        utxos: JSON.parse(row.utxos).map((utxo) => ({
+          ...utxo,
+          satoshis: BigInt(utxo.satoshis), // Convert satoshis back to BigInt
+        })),
+      });
+    }
+    statement.free();
+    return instances;
+  }
+
+  async function getContractInstanceByAddress(address) {
+    await dbService.ensureDatabaseStarted();
+    const db = dbService.getDatabase();
+
+    const query = 'SELECT * FROM instantiated_contracts WHERE address = ?';
+    const statement = db.prepare(query);
+    statement.bind([address]);
+
+    let contractInstance = null;
+    if (statement.step()) {
+      const row = statement.getAsObject();
+      contractInstance = {
+        ...row,
+        balance: BigInt(row.balance), // Convert balance back to BigInt
+        utxos: JSON.parse(row.utxos).map((utxo) => ({
+          ...utxo,
+          satoshis: BigInt(utxo.satoshis), // Convert satoshis back to BigInt
+        })),
+      };
+    }
+    statement.free();
+    return contractInstance;
   }
 }

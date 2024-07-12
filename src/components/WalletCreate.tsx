@@ -60,15 +60,52 @@ const WalletCreation = () => {
     }
   };
 
+  const returnHome = async () => {
+    navigate(`/`);
+  };
+
   return (
-    <div className="wallet-create-box">
-      <div className="text-black font-bold text-xl">Generated Mnemonic:</div>
-      <div className="text-center">{mnemonicPhrase}</div>
-      <div>Set your wallet Name</div>
-      <input onChange={(e) => setWalletName(e.target.value)} />
-      <div>Set passphrase</div>
-      <input type="password" onChange={(e) => setPassphrase(e.target.value)} />
-      <button onClick={handleCreateAccount}>Create account</button>
+    <div className="min-h-screen bg-black flex flex-col items-center justify-center p-4">
+      <div className="bg-black shadow-md rounded-lg p-6 w-full max-w-md">
+        <div className="text-white font-bold text-xl mb-4 text-center">
+          Generated Mnemonic:
+        </div>
+        <div className="text-center mb-4 p-2 bg-gray-200 rounded-md">
+          {mnemonicPhrase}
+        </div>
+        <div className="mb-4">
+          <label className="block text-white mb-2">Set Wallet Name</label>
+          <input
+            placeholder={wallet_id.toString()}
+            onChange={(e) =>
+              setWalletName(
+                e.target.value ? e.target.value : wallet_id.toString()
+              )
+            }
+            className="w-full p-2 border border-gray-300 rounded-md"
+          />
+        </div>
+        <div className="mb-4">
+          <label className="block text-white mb-2">Set Passphrase</label>
+          <input
+            type="password"
+            onChange={(e) => setPassphrase(e.target.value)}
+            className="w-full p-2 border border-gray-300 rounded-md"
+          />
+        </div>
+        <button
+          onClick={handleCreateAccount}
+          className="w-full bg-blue-500 text-white py-2 px-4 rounded-md hover:bg-blue-600 transition duration-300 my-2"
+        >
+          Create Wallet
+        </button>
+        <button
+          onClick={returnHome}
+          className="w-full bg-red-500 text-white py-2 px-4 rounded-md hover:bg-red-600 transition duration-300 my-2"
+        >
+          Go Back
+        </button>
+      </div>
     </div>
   );
 };

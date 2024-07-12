@@ -1,35 +1,38 @@
 import { Link } from 'react-router-dom';
-import NavBar from '../components/NavBar';
+// import NavBar from '../components/NavBar';
 
 const LandingPage = () => {
   return (
     <>
       <section className="min-h-screen bg-black flex flex-col">
-        <NavBar />
-        <div className="flex flex-row mt-64 side-margins">
-          <div className="flex flex-col w-24 title-width">
-            <div className="text-white font-bold text-7xl ">OPTN Wallet</div>
-            <div className="text-white text-xl mt-4">
-              filler text, filler text, filler text, filler text, filler text,
-              filler text, filler text, filler text, filler text, filler text,
-              filler text
+        {/* <NavBar /> */}
+        <div className="flex flex-col lg:flex-row mt-16 lg:mt-64 mx-4 lg:mx-20">
+          <div className="flex flex-col w-full lg:w-1/2 lg:pr-4">
+            <div className="text-white font-bold text-4xl lg:text-7xl text-center lg:text-left">
+              OPTN Wallet
             </div>
-            <div className="flex flex-row mt-4">
+            <div className="text-white text-base lg:text-xl mt-4 text-center lg:text-left">
+              <h3>In-Development</h3>
+              <p>Wallet for Transaction Covenants</p>
+            </div>
+            <div className="flex flex-row mt-4 justify-center lg:justify-start">
               <Link
                 to="/createwallet"
-                className="bg-white mr-4 text-gray-800 font-semibold py-2 px-4 border-gray-400 rounded-xl "
+                className="bg-white mr-4 text-gray-800 font-semibold py-2 px-4 border-gray-400 rounded-xl text-center"
               >
                 Create Wallet
               </Link>
               <Link
                 to="/importwallet"
-                className="bg-white text-gray-800 font-semibold py-2 px-4 border-gray-400 rounded-xl"
+                className="bg-white text-gray-800 font-semibold py-2 px-4 border-gray-400 rounded-xl text-center"
               >
                 Import Wallet
               </Link>
             </div>
           </div>
-          <div className="title-width">har</div>
+          <div className="w-full lg:w-1/2 lg:pl-4 text-center lg:text-left">
+            har
+          </div>
         </div>
       </section>
     </>
