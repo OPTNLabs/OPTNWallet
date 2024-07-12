@@ -21,6 +21,9 @@ export const createTables = (db: any) => {
   // db.run(`
   //   DROP TABLE IF EXISTS cashscript_addresses;
   // `);
+  // db.run(`
+  //   DROP TABLE IF NOT EXISTS instantiated_contracts;
+  // `);
 
   db.run(`
     CREATE TABLE IF NOT EXISTS wallets (
@@ -40,6 +43,7 @@ export const createTables = (db: any) => {
       private_key BLOB,
       address VARCHAR(255),
       token_address VARCHAR(255),
+      pubkey_hash BLOB,
       account_index INT,
       change_index INT,
       address_index INT,
@@ -123,6 +127,21 @@ export const createTables = (db: any) => {
       prefix VARCHAR(255),
       FOREIGN KEY(wallet_id) REFERENCES wallets(id),
       FOREIGN KEY(artifact_id) REFERENCES cashscript_artifacts(id)
+    );
+  `);
+
+  db.run(`
+    CREATE TABLE IF NOT EXISTS instantiated_contracts (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      contract_name VARCHAR(255),
+      address VARCHAR(255) UNIQUE,
+      token_address VARCHAR(255),
+      opcount INT,
+      bytesize INT,
+      bytecode TEXT,
+      balance INT,
+      utxos TEXT,
+      created_at TEXT
     );
   `);
 };

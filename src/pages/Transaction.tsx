@@ -3,6 +3,8 @@ import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import TransactionBuilders from '../apis/TransactionManager/TransactionBuilder3';
 import DatabaseService from '../apis/DatabaseManager/DatabaseService';
+import RegularUTXOs from '../components/RegularUTXOs';
+import CashTokenUTXOs from '../components/CashTokenUTXOs';
 
 interface UTXO {
   id: number;
@@ -11,6 +13,7 @@ interface UTXO {
   amount: number;
   tx_hash: string;
   tx_pos: number;
+  height: number;
   privateKey: Uint8Array;
   token_data?: {
     amount: string;
@@ -95,6 +98,7 @@ const Transaction = () => {
             amount: row.amount as number,
             tx_hash: row.tx_hash as string,
             tx_pos: row.tx_pos as number,
+            height: row.height as number,
             privateKey: await fetchPrivateKey(walletId, row.address), // @ts-ignore
             token_data: row.token_data ? JSON.parse(row.token_data) : undefined, // @ts-ignore
           });
@@ -140,14 +144,18 @@ const Transaction = () => {
     }
   };
 
-  const toggleUtxoSelection = (utxo: UTXO) => {
-    if (selectedUtxos.some((selectedUtxo) => selectedUtxo.id === utxo.id)) {
-      setSelectedUtxos(
-        selectedUtxos.filter((selectedUtxo) => selectedUtxo.id !== utxo.id)
-      );
-    } else {
-      setSelectedUtxos([...selectedUtxos, utxo]);
-    }
+  const handleUtxoClick = (utxo: UTXO) => {
+    setSelectedUtxos((prevSelectedUtxos) => {
+      if (
+        prevSelectedUtxos.some((selectedUtxo) => selectedUtxo.id === utxo.id)
+      ) {
+        return prevSelectedUtxos.filter(
+          (selectedUtxo) => selectedUtxo.id !== utxo.id
+        );
+      } else {
+        return [...prevSelectedUtxos, utxo];
+      }
+    });
   };
 
   const addOutput = () => {
@@ -302,45 +310,83 @@ const Transaction = () => {
       </div>
       <div className="mb-6">
         <h3 className="text-lg font-semibold mb-2">Regular UTXOs</h3>
-        {utxos
-          .filter(
-            (utxo) =>
-              selectedAddresses.includes(utxo.address) && !utxo.token_data
+        {addresses
+          .filter((addressObj) =>
+            selectedAddresses.includes(addressObj.address)
           )
-          .map((utxo, index) => (
-            <div key={index} className="flex items-center mb-2">
-              <input
-                type="checkbox"
-                checked={selectedUtxos.some(
-                  (selectedUtxo) => selectedUtxo.id === utxo.id
-                )}
-                onChange={() => toggleUtxoSelection(utxo)}
-                className="mr-2"
-              />
-              <span>{`Address: ${utxo.address}, Amount: ${utxo.amount}`}</span>
+          .map((addressObj, index) => (
+            <div key={index} className="p-2 border rounded-lg mb-2">
+              {utxos
+                .filter(
+                  (utxo) =>
+                    utxo.address === addressObj.address && !utxo.token_data
+                )
+                .map((utxo) => (
+                  <button
+                    key={utxo.id}
+                    onClick={() => handleUtxoClick(utxo)}
+                    className={`block w-full text-left p-2 mb-2 border rounded-lg ${
+                      selectedUtxos.some(
+                        (selectedUtxo) => selectedUtxo.id === utxo.id
+                      )
+                        ? 'bg-blue-100'
+                        : 'bg-white'
+                    }`}
+                  >
+                    <RegularUTXOs
+                      address={addressObj.address}
+                      utxos={[utxo]}
+                      loading={false}
+                    />
+                  </button>
+                ))}
             </div>
           ))}
       </div>
       <div className="mb-6">
         <h3 className="text-lg font-semibold mb-2">CashToken UTXOs</h3>
-        {utxos
-          .filter(
-            (utxo) =>
-              selectedAddresses.includes(utxo.address) && utxo.token_data
+        {addresses
+          .filter((addressObj) =>
+            selectedAddresses.includes(addressObj.address)
           )
-          .map((utxo, index) => (
-            <div key={index} className="flex items-center mb-2">
-              <input
-                type="checkbox"
-                checked={selectedUtxos.some(
-                  (selectedUtxo) => selectedUtxo.id === utxo.id
-                )}
-                onChange={() => toggleUtxoSelection(utxo)}
-                className="mr-2"
-              />
-              <span>{`Address: ${utxo.tokenAddress}, Amount: ${utxo.amount}, Token: ${utxo.token_data.amount}, Category: ${utxo.token_data.category}`}</span>
+          .map((addressObj, index) => (
+            <div key={index} className="p-2 border rounded-lg mb-2">
+              {utxos
+                .filter(
+                  (utxo) =>
+                    utxo.address === addressObj.address && utxo.token_data
+                )
+                .map((utxo) => (
+                  <button
+                    key={utxo.id}
+                    onClick={() => handleUtxoClick(utxo)}
+                    className={`block w-full text-left p-2 mb-2 border rounded-lg ${
+                      selectedUtxos.some(
+                        (selectedUtxo) => selectedUtxo.id === utxo.id
+                      )
+                        ? 'bg-blue-100'
+                        : 'bg-white'
+                    }`}
+                  >
+                    <CashTokenUTXOs
+                      address={addressObj.address}
+                      utxos={[utxo]}
+                      loading={false}
+                    />
+                  </button>
+                ))}
             </div>
           ))}
+      </div>
+      <div className="mb-6">
+        <h3 className="text-lg font-semibold mb-2">
+          Selected Transaction Inputs
+        </h3>
+        {selectedUtxos.map((utxo, index) => (
+          <div key={index} className="flex items-center mb-2">
+            <span>{`Address: ${utxo.address}, Amount: ${utxo.amount}, Tx Hash: ${utxo.tx_hash}, Position: ${utxo.tx_pos}, Height: ${utxo.height}`}</span>
+          </div>
+        ))}
       </div>
       <div className="mb-6">
         <h3 className="text-lg font-semibold mb-2">Transaction Outputs</h3>

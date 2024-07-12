@@ -5,6 +5,8 @@ import KeyManager from '../apis/WalletManager/KeyManager';
 import DatabaseService from '../apis/DatabaseManager/DatabaseService';
 import UTXOManager from '../apis/UTXOManager/UTXOManager';
 import WalletManager from '../apis/WalletManager/WalletManager';
+import RegularUTXOs from '../components/RegularUTXOs';
+import CashTokenUTXOs from '../components/CashTokenUTXOs';
 
 const Home = () => {
   const [keyPairs, setKeyPairs] = useState<
@@ -143,139 +145,73 @@ const Home = () => {
     navigate(`/transaction/`);
   };
 
+  const viewContracts = async () => {
+    navigate(`/contract/`);
+  };
+
   return (
     <>
-      <section className="flex flex-col min-h-screen">
-        <div>Hello {wallet_id} </div>
-        <div>Generate Public/Private Key here:</div>
+      <section className="flex flex-col min-h-screen bg-gray-100 p-4">
+        <div className="text-xl font-bold text-center mb-4">
+          Hello {wallet_id}
+        </div>
         <button
-          className="mb-4 p-2 bg-blue-500 text-white rounded"
+          className="mt-4 p-2 bg-blue-500 text-white rounded hover:bg-blue-600 transition duration-300 w-full max-w-md mx-auto"
+          onClick={viewContracts}
+        >
+          View Contracts
+        </button>
+        <div className="text-lg font-semibold text-center mt-4 mb-2">
+          Generate Public/Private Key here:
+        </div>
+        <button
+          className="mb-4 p-2 bg-blue-500 text-white rounded hover:bg-blue-600 transition duration-300 w-full max-w-md mx-auto"
           onClick={handleGenerateKeys}
         >
           Generate
         </button>
-        <div>
+        <div className="w-full max-w-md mx-auto">
           {keyPairs.map((keyPair, index) => (
-            <div key={index} className="p-4 mb-4 border rounded-lg shadow-md">
-              <p>
+            <div
+              key={index}
+              className="p-4 mb-4 border rounded-lg shadow-md bg-white overflow-x-auto"
+            >
+              <p className="text-sm break-words">
                 <strong>Address:</strong> {keyPair.address}
               </p>
-              <p>
+              <p className="text-sm break-words">
                 <strong>CashToken Address:</strong> {keyPair.tokenAddress}
               </p>
-              <div>
-                <h4 className="font-semibold">Regular UTXOs:</h4>
-                {loading[keyPair.address] ? (
-                  <div className="flex items-center">
-                    <svg
-                      className="animate-spin h-5 w-5 mr-3 text-gray-500"
-                      viewBox="0 0 24 24"
-                    >
-                      <circle
-                        className="opacity-25"
-                        cx="12"
-                        cy="12"
-                        r="10"
-                        stroke="currentColor"
-                        strokeWidth="4"
-                      ></circle>
-                      <path
-                        className="opacity-75"
-                        fill="currentColor"
-                        d="M4 12a8 8 0 018-8v8H4z"
-                      ></path>
-                    </svg>
-                    <span>Loading UTXOs...</span>
-                  </div>
-                ) : (
-                  utxos[keyPair.address] &&
-                  utxos[keyPair.address].map((utxo, idx) => (
-                    <div key={idx} className="p-2 mb-2 border rounded-lg">
-                      <p>
-                        <strong>Amount:</strong> {utxo.amount}
-                      </p>
-                      <p>
-                        <strong>Transaction Hash:</strong> {utxo.tx_hash}
-                      </p>
-                      <p>
-                        <strong>Position:</strong> {utxo.tx_pos}
-                      </p>
-                      <p>
-                        <strong>Height:</strong> {utxo.height}
-                      </p>
-                    </div>
-                  ))
-                )}
-              </div>
-              <div>
-                <h4 className="font-semibold">CashToken UTXOs:</h4>
-                {loading[keyPair.address] ? (
-                  <div className="flex items-center">
-                    <svg
-                      className="animate-spin h-5 w-5 mr-3 text-gray-500"
-                      viewBox="0 0 24 24"
-                    >
-                      <circle
-                        className="opacity-25"
-                        cx="12"
-                        cy="12"
-                        r="10"
-                        stroke="currentColor"
-                        strokeWidth="4"
-                      ></circle>
-                      <path
-                        className="opacity-75"
-                        fill="currentColor"
-                        d="M4 12a8 8 0 018-8v8H4z"
-                      ></path>
-                    </svg>
-                    <span>Loading UTXOs...</span>
-                  </div>
-                ) : (
-                  cashTokenUtxos[keyPair.address] &&
-                  cashTokenUtxos[keyPair.address].map((utxo, idx) => (
-                    <div key={idx} className="p-2 mb-2 border rounded-lg">
-                      <p>
-                        <strong>Amount:</strong> {utxo.amount}
-                      </p>
-                      <p>
-                        <strong>Token Amount:</strong> {utxo.token_data.amount}
-                      </p>
-                      <p>
-                        <strong>Token Category:</strong>{' '}
-                        {utxo.token_data.category}
-                      </p>
-                      <p>
-                        <strong>Transaction Hash:</strong> {utxo.tx_hash}
-                      </p>
-                      <p>
-                        <strong>Position:</strong> {utxo.tx_pos}
-                      </p>
-                      <p>
-                        <strong>Height:</strong> {utxo.height}
-                      </p>
-                    </div>
-                  ))
-                )}
-              </div>
+              <RegularUTXOs
+                address={keyPair.address}
+                utxos={utxos[keyPair.address]}
+                loading={loading[keyPair.address]}
+              />
+              <CashTokenUTXOs
+                address={keyPair.address}
+                utxos={cashTokenUtxos[keyPair.address]}
+                loading={loading[keyPair.address]}
+              />
             </div>
           ))}
         </div>
-        <div className="font-bold text-xl">Total Balance: {totalBalance}</div>
+        <div className="font-bold text-xl text-center mt-4">
+          Total Balance: {totalBalance}
+        </div>
         <button
-          className="mt-4 p-2 bg-blue-500 text-white rounded"
+          className="mt-4 p-2 bg-blue-500 text-white rounded hover:bg-blue-600 transition duration-300 w-full max-w-md mx-auto"
           onClick={storeUTXOs}
         >
           Check UTXOs
         </button>
         <button
-          className="mt-4 p-2 bg-blue-500 text-white rounded"
+          className="mt-4 p-2 bg-blue-500 text-white rounded hover:bg-blue-600 transition duration-300 w-full max-w-md mx-auto"
           onClick={buildTransaction}
         >
           Build Transaction
         </button>
         <button
-          className="mt-4 p-2 bg-red-500 text-white rounded"
+          className="mt-4 p-2 bg-red-500 text-white rounded hover:bg-red-600 transition duration-300 w-full max-w-md mx-auto"
           onClick={deleteWallet}
         >
           Log Out

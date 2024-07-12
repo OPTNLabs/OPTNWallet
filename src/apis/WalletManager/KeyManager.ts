@@ -23,6 +23,7 @@ export default function KeyManager() {
       privateKey: Uint8Array;
       address: string;
       tokenAddress: string;
+      pubkeyHash: Uint8Array;
       accountIndex: number;
       changeIndex: number;
       addressIndex: number;
@@ -42,6 +43,7 @@ export default function KeyManager() {
                     private_key, 
                     address,
                     token_address,
+                    pubkey_hash,
                     account_index,
                     change_index,
                     address_index
@@ -57,6 +59,7 @@ export default function KeyManager() {
         privateKey: Uint8Array;
         address: string;
         tokenAddress: string;
+        pubkeyHash: Uint8Array;
         accountIndex: number;
         changeIndex: number;
         addressIndex: number;
@@ -70,6 +73,7 @@ export default function KeyManager() {
           privateKey: new Uint8Array(row.private_key),
           address: row.address as string,
           tokenAddress: row.token_address as string,
+          pubkeyHash: new Uint8Array(row.pubkey_hash),
           accountIndex: row.account_index as number,
           changeIndex: row.change_index as number,
           addressIndex: row.address_index as number,
@@ -109,7 +113,7 @@ export default function KeyManager() {
 
       if (!result) {
         console.error(
-          'Mnemonic or passphrase not found for the given wallet name'
+          'Mnemonic or passphrase not found for the given wallet id'
         );
         return;
       }
@@ -129,10 +133,11 @@ export default function KeyManager() {
         const privateKey = keys.alicePriv;
         const address = keys.aliceAddress;
         const tokenAddress = keys.aliceTokenAddress;
+        const pubkeyHash = keys.alicePkh;
 
         const insertQuery = db.prepare(`
-                    INSERT INTO keys (wallet_id, public_key, private_key, address, token_address, account_index, change_index, address_index) 
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?);
+                    INSERT INTO keys (wallet_id, public_key, private_key, address, token_address, pubkey_hash, account_index, change_index, address_index) 
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?);
                 `);
         insertQuery.run([
           wallet_id,
@@ -140,6 +145,7 @@ export default function KeyManager() {
           privateKey,
           address,
           tokenAddress,
+          pubkeyHash,
           accountNumber,
           changeNumber,
           addressNumber,

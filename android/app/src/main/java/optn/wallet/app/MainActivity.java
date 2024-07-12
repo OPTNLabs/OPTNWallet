@@ -1,4 +1,4 @@
-package com.optnwallet;
+package optn.wallet.app;
 
 import com.getcapacitor.BridgeActivity;
 
