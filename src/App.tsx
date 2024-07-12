@@ -5,6 +5,7 @@ import ImportWallet from './pages/ImportWallet';
 import Home from './pages/Home';
 import CreateTransactions from './pages/CreateTransactions';
 import Transaction from './pages/Transaction';
+import ContractView from './pages/ContractView';
 
 function App() {
   return (
@@ -14,6 +15,7 @@ function App() {
         <Route path="/home/:wallet_id" element={<Home />} />
         <Route path="/createwallet" element={<CreateWallet />} />
         <Route path="/importwallet" element={<ImportWallet />} />
+        <Route path="/contract" element={<ContractView />} />
         <Route
           path="/createtransaction/:sendAddress"
           element={<CreateTransactions />}
