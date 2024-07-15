@@ -5,7 +5,7 @@ interface WalletState {
 }
 
 const initialState: WalletState = {
-  currentWalletId: 0, // Initialize with a default integer value
+  currentWalletId: 0,
 };
 
 const walletSlice = createSlice({

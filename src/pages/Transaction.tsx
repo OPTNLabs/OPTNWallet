@@ -1,4 +1,5 @@
 // @ts-nocheck
+
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import TransactionBuilders from '../apis/TransactionManager/TransactionBuilder3';
@@ -291,20 +292,23 @@ const Transaction = () => {
   ];
 
   return (
-    <div className="container mx-auto p-4">
+    <div className="container mx-auto p-4 overflow-x-hidden">
       <div className="mb-6">
         <h3 className="text-lg font-semibold mb-2">
           Select Addresses to Spend From
         </h3>
         {addresses.map((addressObj, index) => (
-          <div key={index} className="flex items-center mb-2">
+          <div
+            key={index}
+            className="flex items-center mb-2 break-words whitespace-normal"
+          >
             <input
               type="checkbox"
               checked={selectedAddresses.includes(addressObj.address)}
               onChange={() => toggleAddressSelection(addressObj.address)}
               className="mr-2"
             />
-            <span>{`Address: ${addressObj.address}, Token Address: ${addressObj.tokenAddress}`}</span>
+            <span className="break-words">{`Address: ${addressObj.address}, Token Address: ${addressObj.tokenAddress}`}</span>
           </div>
         ))}
       </div>
@@ -325,7 +329,7 @@ const Transaction = () => {
                   <button
                     key={utxo.id}
                     onClick={() => handleUtxoClick(utxo)}
-                    className={`block w-full text-left p-2 mb-2 border rounded-lg ${
+                    className={`block w-full text-left p-2 mb-2 border rounded-lg break-words whitespace-normal ${
                       selectedUtxos.some(
                         (selectedUtxo) => selectedUtxo.id === utxo.id
                       )
@@ -360,7 +364,7 @@ const Transaction = () => {
                   <button
                     key={utxo.id}
                     onClick={() => handleUtxoClick(utxo)}
-                    className={`block w-full text-left p-2 mb-2 border rounded-lg ${
+                    className={`block w-full text-left p-2 mb-2 border rounded-lg break-words whitespace-normal ${
                       selectedUtxos.some(
                         (selectedUtxo) => selectedUtxo.id === utxo.id
                       )
@@ -383,18 +387,24 @@ const Transaction = () => {
           Selected Transaction Inputs
         </h3>
         {selectedUtxos.map((utxo, index) => (
-          <div key={index} className="flex items-center mb-2">
-            <span>{`Address: ${utxo.address}, Amount: ${utxo.amount}, Tx Hash: ${utxo.tx_hash}, Position: ${utxo.tx_pos}, Height: ${utxo.height}`}</span>
+          <div
+            key={index}
+            className="flex items-center mb-2 break-words whitespace-normal"
+          >
+            <span className="break-words">{`Address: ${utxo.address}, Amount: ${utxo.amount}, Tx Hash: ${utxo.tx_hash}, Position: ${utxo.tx_pos}, Height: ${utxo.height}`}</span>
           </div>
         ))}
       </div>
       <div className="mb-6">
         <h3 className="text-lg font-semibold mb-2">Transaction Outputs</h3>
         {outputs.map((output, index) => (
-          <div key={index} className="flex items-center mb-2">
-            <span>{`Recipient: ${output.recipientAddress}, Amount: ${output.amount}`}</span>
+          <div
+            key={index}
+            className="flex items-center mb-2 break-words whitespace-normal"
+          >
+            <span className="break-words">{`Recipient: ${output.recipientAddress}, Amount: ${output.amount}`}</span>
             {output.token && (
-              <span>{`, Token: ${output.token.amount}, Category: ${output.token.category}`}</span>
+              <span className="break-words">{`, Token: ${output.token.amount}, Category: ${output.token.category}`}</span>
             )}
             <button
               onClick={() => removeOutput(index)}
@@ -409,10 +419,13 @@ const Transaction = () => {
         <div className="mb-6">
           <h3 className="text-lg font-semibold mb-2">Final Outputs</h3>
           {finalOutputs.map((output, index) => (
-            <div key={index} className="flex items-center mb-2">
-              <span>{`Recipient: ${output.recipientAddress}, Amount: ${output.amount}`}</span>
+            <div
+              key={index}
+              className="flex items-center mb-2 break-words whitespace-normal"
+            >
+              <span className="break-words">{`Recipient: ${output.recipientAddress}, Amount: ${output.amount}`}</span>
               {output.token && (
-                <span>{`, Token: ${output.token.amount}, Category: ${output.token.category}`}</span>
+                <span className="break-words">{`, Token: ${output.token.amount}, Category: ${output.token.category}`}</span>
               )}
             </div>
           ))}
@@ -425,27 +438,27 @@ const Transaction = () => {
           value={recipientAddress}
           placeholder="Recipient Address"
           onChange={(e) => setRecipientAddress(e.target.value)}
-          className="border p-2 mb-2 w-full"
+          className="border p-2 mb-2 w-full break-words whitespace-normal"
         />
         <input
           type="number"
           value={transferAmount}
           placeholder="Regular Amount"
           onChange={(e) => setTransferAmount(e.target.value)}
-          className="border p-2 mb-2 w-full"
+          className="border p-2 mb-2 w-full break-words whitespace-normal"
         />
         <input
           type="number"
           value={tokenAmount}
           placeholder="Token Amount"
           onChange={(e) => setTokenAmount(e.target.value)}
-          className="border p-2 mb-2 w-full"
+          className="border p-2 mb-2 w-full break-words whitespace-normal"
         />
         {availableTokenCategories.length > 0 && (
           <select
             value={selectedTokenCategory}
             onChange={(e) => setSelectedTokenCategory(e.target.value)}
-            className="border p-2 mb-2 w-full"
+            className="border p-2 mb-2 w-full break-words whitespace-normal"
           >
             <option value="">Select Token Category</option>
             {availableTokenCategories.map((category, index) => (
@@ -469,7 +482,7 @@ const Transaction = () => {
           value={changeAddress}
           placeholder="Change Address"
           onChange={(e) => setChangeAddress(e.target.value)}
-          className="border p-2 mb-2 w-full"
+          className="border p-2 mb-2 w-full break-words whitespace-normal"
         />
       </div>
       <div className="mb-6">
@@ -498,14 +511,26 @@ const Transaction = () => {
         Go Back
       </button>
       {bytecodeSize !== null && (
-        <div className="mb-6">
+        <div className="mb-6 break-words whitespace-normal">
           <h3 className="text-lg font-semibold mb-2">
             Bytecode Size: {bytecodeSize} bytes
           </h3>
         </div>
       )}
       {rawTX !== '' && (
-        <div className="text-lg font-semibold">{transactionId}</div>
+        <div className="text-lg font-semibold break-words whitespace-normal">
+          {rawTX}
+        </div>
+      )}
+      {transactionId !== '' && (
+        <div className="text-lg font-semibold break-words whitespace-normal">
+          <a
+            rel="stylesheet"
+            href={`https://chipnet.imaginary.cash/tx/${transactionId}`}
+          >
+            {transactionId}
+          </a>
+        </div>
       )}
     </div>
   );

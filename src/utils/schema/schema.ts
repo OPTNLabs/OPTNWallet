@@ -92,16 +92,6 @@ export const createTables = (db: any) => {
     );
   `);
 
-  // Add a trigger to reset the autoincrement value for the wallets table
-  db.run(`
-    CREATE TRIGGER IF NOT EXISTS reset_wallet_id
-    AFTER DELETE ON wallets
-    BEGIN
-      UPDATE sqlite_sequence SET seq = (SELECT MAX(id) FROM wallets) WHERE name = 'wallets';
-    END;
-  `);
-
-  // Create new tables for CashScript artifacts and addresses
   db.run(`
     CREATE TABLE IF NOT EXISTS cashscript_artifacts (
       id INTEGER PRIMARY KEY AUTOINCREMENT,

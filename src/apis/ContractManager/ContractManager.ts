@@ -3,6 +3,7 @@ import { Contract, Network, ElectrumNetworkProvider } from 'cashscript';
 import DatabaseService from '../DatabaseManager/DatabaseService';
 import p2pkhArtifact from './artifacts/p2pkh.json';
 import transferWithTimeoutArtifact from './artifacts/transfer_with_timeout.json';
+import announcementArtifact from './artifacts/announcement.json';
 
 export default function ContractManager() {
   const dbService = DatabaseService();
@@ -27,7 +28,10 @@ export default function ContractManager() {
       const provider = new ElectrumNetworkProvider(Network.CHIPNET);
       const addressType = 'p2sh32';
 
-      if (!constructorArgs || constructorArgs.length === 0) {
+      if (
+        artifact.constructorInputs.length > 0 &&
+        (!args || args.length !== artifact.constructorInputs.length)
+      ) {
         throw new Error('Constructor arguments are required');
       }
 
@@ -134,6 +138,7 @@ export default function ContractManager() {
       const artifacts = {
         p2pkh: p2pkhArtifact,
         transfer_with_timeout: transferWithTimeoutArtifact,
+        announcement: announcementArtifact,
       };
 
       const artifact = artifacts[artifactName];
@@ -154,6 +159,10 @@ export default function ContractManager() {
         {
           fileName: 'transfer_with_timeout',
           contractName: transferWithTimeoutArtifact.contractName,
+        },
+        {
+          fileName: 'announcement',
+          contractName: announcementArtifact.contractName,
         },
       ];
     } catch (error) {
