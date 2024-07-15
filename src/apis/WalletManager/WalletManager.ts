@@ -1,4 +1,5 @@
 // @ts-nocheck
+
 import { hexToBin } from '@bitauth/libauth';
 import KeyManager from './KeyManager';
 import { createTables } from '../../utils/schema/schema';
@@ -8,11 +9,13 @@ const KeyManage = KeyManager();
 
 export default function WalletManager() {
   return {
-    // createInputs,
     createWallet,
     checkAccount,
+    checkAnyWallet,
     setWalletId,
     deleteWallet,
+    walletExists,
+    getWalletInfo,
   };
 
   async function deleteWallet(wallet_id: number): Promise<boolean | null> {
@@ -40,12 +43,60 @@ export default function WalletManager() {
       query.bind({ ':walletid': wallet_id });
       query.run();
 
-      // Trigger should automatically reset the wallet_id
+      // Also delete from other tables as needed
+      query = db.prepare(
+        `DELETE FROM cashscript_artifacts WHERE id IN (SELECT artifact_id FROM cashscript_addresses WHERE wallet_id = :walletid)`
+      );
+      query.bind({ ':walletid': wallet_id });
+      query.run();
+
+      query = db.prepare(
+        `DELETE FROM cashscript_addresses WHERE wallet_id = :walletid`
+      );
+      query.bind({ ':walletid': wallet_id });
+      query.run();
+
+      query = db.prepare(
+        `DELETE FROM instantiated_contracts WHERE address IN (SELECT address FROM cashscript_addresses WHERE wallet_id = :walletid)`
+      );
+      query.bind({ ':walletid': wallet_id });
+      query.run();
+
       await dbService.saveDatabaseToFile();
       return true;
     } catch (e) {
       console.log(e);
       return false;
+    }
+  }
+
+  async function walletExists(): Promise<number | null> {
+    const dbService = DatabaseService();
+    const db = dbService.getDatabase();
+    if (!db) {
+      console.log('Database not started.');
+      return null;
+    }
+
+    createTables(db);
+    try {
+      const query = db.prepare(`SELECT id FROM wallets LIMIT 1`);
+
+      let walletId: number | null = null;
+
+      if (query.step()) {
+        const row = query.getAsObject();
+        walletId = row.id;
+        console.log(`Found wallet ID: ${walletId}`);
+      } else {
+        console.log('No wallet found in the database.');
+      }
+
+      query.free();
+      return walletId;
+    } catch (error) {
+      console.error('Error checking wallet existence:', error);
+      return null;
     }
   }
 
@@ -129,7 +180,7 @@ export default function WalletManager() {
     wallet_name: string,
     mnemonic: string,
     passphrase: string
-  ): Promise<bool> {
+  ): Promise<boolean> {
     const dbService = DatabaseService();
     const db = dbService.getDatabase();
     if (!db) {
@@ -163,24 +214,57 @@ export default function WalletManager() {
     return true;
   }
 
-  // function createInputs(inputs: any, compiler) {
-  //   const transactionInputs = inputs.map((input) => ({
-  //     outpointTransactionHash: hexToBin(input.tx_hash),
-  //     outpointIndex: input.tx_pos,
-  //     sequenceNumber: 0,
-  //     unlockingBytecode: {
-  //       compiler,
-  //       script: 'unlock',
-  //       valueSatoshis: BigInt(input.value),
-  //       data: {
-  //         keys: {
-  //           privateKeys: {
-  //             key: KeyManage.fetchAddressPrivateKey(input.address),
-  //           },
-  //         },
-  //       },
-  //     },
-  //   }));
-  //   return transactionInputs;
-  // }
+  async function checkAnyWallet(): Promise<boolean> {
+    const dbService = DatabaseService();
+    const db = dbService.getDatabase();
+    if (!db) {
+      return false;
+    }
+
+    createTables(db);
+    try {
+      const query = db.prepare('SELECT COUNT(*) as count FROM wallets');
+      let walletExists = false;
+
+      if (query.step()) {
+        const row = query.getAsObject();
+        if (row.count > 0) {
+          walletExists = true;
+        }
+      }
+
+      query.free();
+      return walletExists;
+    } catch (error) {
+      console.error('Error checking for any wallet:', error);
+      return false;
+    }
+  }
+
+  async function getWalletInfo(walletId: number) {
+    const dbService = DatabaseService();
+    const db = dbService.getDatabase();
+    if (!db) {
+      console.log('Database not started.');
+      return null;
+    }
+
+    createTables(db);
+    try {
+      const query = db.prepare(`SELECT * FROM wallets WHERE id = ?`);
+      query.bind([walletId]);
+
+      let walletInfo = null;
+
+      if (query.step()) {
+        walletInfo = query.getAsObject();
+      }
+
+      query.free();
+      return walletInfo;
+    } catch (error) {
+      console.error('Error getting wallet info:', error);
+      return null;
+    }
+  }
 }

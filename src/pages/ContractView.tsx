@@ -4,6 +4,8 @@ import { useSelector } from 'react-redux';
 import { useNavigate } from 'react-router-dom';
 import ContractManager from '../apis/ContractManager/ContractManager';
 import { RootState } from '../redux/store';
+import RegularUTXOs from '../components/RegularUTXOs';
+import CashTokenUTXOs from '../components/CashTokenUTXOs';
 
 const ContractView = () => {
   const [contractDetails, setContractDetails] = useState(null);
@@ -57,7 +59,7 @@ const ContractView = () => {
               `Artifact ${selectedContractFile} could not be loaded`
             );
           }
-          setConstructorArgs(artifact.constructorInputs);
+          setConstructorArgs(artifact.constructorInputs || []);
         } catch (err) {
           setError(err.message);
         }
@@ -76,8 +78,15 @@ const ContractView = () => {
     try {
       const contractManager = ContractManager();
 
-      const args = constructorArgs.map((arg) => inputValues[arg.name]);
-      if (!args || args.length !== constructorArgs.length) {
+      const args = constructorArgs.map((arg) => inputValues[arg.name]) || [];
+      console.log('Constructor Args:', constructorArgs);
+      console.log('Input Values:', inputValues);
+      console.log('Args:', args);
+
+      if (
+        constructorArgs.length > 0 &&
+        args.length !== constructorArgs.length
+      ) {
         throw new Error('All constructor arguments must be provided');
       }
 
@@ -91,6 +100,7 @@ const ContractView = () => {
       const instances = await contractManager.fetchContractInstances();
       setContractInstances(instances);
     } catch (err) {
+      console.error('Error creating contract:', err);
       setError(err.message);
     }
   };
@@ -149,13 +159,16 @@ const ContractView = () => {
               />
             </div>
           ))}
-          <button
-            onClick={createContract}
-            className="bg-blue-500 text-white py-2 px-4 rounded"
-          >
-            Create Contract
-          </button>
         </div>
+      )}
+
+      {selectedContractFile && (
+        <button
+          onClick={createContract}
+          className="bg-blue-500 text-white py-2 px-4 rounded mb-4"
+        >
+          Create Contract
+        </button>
       )}
 
       {contractInstances.length > 0 && (
@@ -191,20 +204,34 @@ const ContractView = () => {
                 </div>
                 <div className="mb-2">
                   <strong>UTXOs:</strong>
-                  <ul>
-                    {instance.utxos.map((utxo, idx) => (
-                      <li key={idx}>
-                        {utxo.txid}:{utxo.vout} - {utxo.satoshis.toString()}{' '}
-                        satoshis
-                        {utxo.token && (
-                          <span>
-                            , Token Amount: {utxo.token.amount}, Token Category:{' '}
-                            {utxo.token.category}
-                          </span>
-                        )}
-                      </li>
-                    ))}
-                  </ul>
+                  <RegularUTXOs
+                    address={instance.address}
+                    utxos={instance.utxos
+                      .filter((utxo) => !utxo.token)
+                      .map((utxo) => ({
+                        ...utxo,
+                        amount: utxo.satoshis.toString(),
+                        tx_hash: utxo.txid,
+                        tx_pos: utxo.vout,
+                      }))}
+                    loading={false}
+                  />
+                  <CashTokenUTXOs
+                    address={instance.address}
+                    utxos={instance.utxos
+                      .filter((utxo) => utxo.token)
+                      .map((utxo) => ({
+                        ...utxo,
+                        amount: utxo.satoshis.toString(),
+                        tx_hash: utxo.txid,
+                        tx_pos: utxo.vout,
+                        token_data: {
+                          amount: utxo.token.amount,
+                          category: utxo.token.category,
+                        },
+                      }))}
+                    loading={false}
+                  />
                 </div>
                 <button
                   onClick={() => deleteContract(instance.id)}
@@ -215,14 +242,14 @@ const ContractView = () => {
               </li>
             ))}
           </ul>
-          <button
-            onClick={returnHome}
-            className="w-full bg-red-500 text-white py-2 px-4 rounded-md hover:bg-red-600 transition duration-300 my-2"
-          >
-            Go Back
-          </button>
         </div>
       )}
+      <button
+        onClick={returnHome}
+        className="w-full bg-red-500 text-white py-2 px-4 rounded-md hover:bg-red-600 transition duration-300 my-2"
+      >
+        Go Back
+      </button>
     </div>
   );
 };
