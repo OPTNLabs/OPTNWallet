@@ -10,7 +10,7 @@ export default async function UTXOManager() {
 
   return {
     storeUTXOs,
-    fetchUTXOs,
+    fetchUTXOsByAddress,
     checkNewUTXOs,
     deleteUTXOs,
   };
@@ -47,42 +47,32 @@ export default async function UTXOManager() {
       }
       query.free();
     } catch (error) {
-      console.log(error);
+      console.log('Error storing UTXOs:', error);
     }
     await dbService.saveDatabaseToFile();
   }
 
-  async function fetchUTXOs(wallet_id: number): Promise<UTXOs[] | null> {
-    const db = dbService.getDatabase();
-    if (!db) {
-      console.log('Database not started.');
-      return null;
+  async function fetchUTXOsByAddress(walletId, address) {
+    try {
+      console.log(`Fetching UTXOs for address: ${address}`);
+
+      const utxos = await Electrum.getUTXOS(address);
+      console.log(`Raw UTXOs response for address ${address}:`, utxos);
+
+      const formattedUTXOs = utxos.map((utxo) => ({
+        tx_hash: utxo.tx_hash,
+        tx_pos: utxo.tx_pos,
+        amount: utxo.value,
+        address: address,
+        token_data: utxo.token_data || null,
+      }));
+
+      console.log(`Formatted UTXOs for address ${address}:`, formattedUTXOs);
+      return formattedUTXOs;
+    } catch (error) {
+      console.error(`Error fetching UTXOs for address ${address}:`, error);
+      return [];
     }
-
-    const query =
-      'SELECT id, wallet_id, address, height, tx_hash, tx_pos, amount, prefix, token_data FROM UTXOs WHERE wallet_id = :walletid';
-    const statement = db.prepare(query);
-    statement.bind({ ':walletid': wallet_id });
-
-    const result: UTXOs[] = [];
-
-    while (statement.step()) {
-      const row = statement.getAsObject();
-      result.push({
-        id: row.id as number,
-        wallet_id: row.wallet_id as number,
-        address: row.address as string,
-        height: row.height as number,
-        tx_hash: row.tx_hash as string,
-        tx_pos: row.tx_pos as number,
-        amount: row.amount as number,
-        prefix: row.prefix as string,
-        token_data: row.token_data ? JSON.parse(row.token_data) : null,
-      });
-    }
-    statement.free();
-
-    return result;
   }
 
   async function deleteUTXOs(wallet_id: number, utxos: UTXOs[]) {
@@ -130,8 +120,9 @@ export default async function UTXOManager() {
         const fetchedUTXOs = await Electrum.getUTXOS(address.address);
 
         // Fetch existing UTXOs for the address from the database
-        const existingUTXOs = (await fetchUTXOs(wallet_id)).filter(
-          (utxo) => utxo.address === address.address
+        const existingUTXOs = await fetchUTXOsByAddress(
+          wallet_id,
+          address.address
         );
 
         // Determine UTXOs to be deleted (existing ones not in fetchedUTXOs)

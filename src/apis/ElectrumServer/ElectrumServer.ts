@@ -1,3 +1,4 @@
+// src/apis/ElectrumServer/ElectrumServer.ts
 import { ElectrumClient, ElectrumTransport } from 'electrum-cash';
 import { chipnetServers } from '../../utils/servers/ElectrumServers';
 import { BalanceResponse } from '../interfaces';
@@ -8,25 +9,56 @@ export enum Network {
 
 const testServer = chipnetServers[0];
 
+let electrum: ElectrumClient | null = null;
+
 export default function ElectrumService() {
   async function electrumConnect(
     server: string = testServer
   ): Promise<ElectrumClient> {
-    const electrum = new ElectrumClient(
+    if (electrum) {
+      console.log('Reusing existing Electrum connection');
+      return electrum;
+    }
+
+    electrum = new ElectrumClient(
       'OPTNWallet',
       '1.5.3',
       server,
       ElectrumTransport.WSS.Port,
       ElectrumTransport.WSS.Scheme
     );
+
     await electrum.connect();
+    console.log('Connected to Electrum server');
     return electrum;
   }
 
-  async function electrumDisconnect(
-    electrum: ElectrumClient
-  ): Promise<boolean> {
-    return electrum.disconnect(true);
+  async function electrumDisconnect(): Promise<boolean> {
+    if (electrum) {
+      await electrum.disconnect(true);
+      console.log('Disconnected from Electrum server');
+      electrum = null;
+      return true;
+    }
+    return false;
+  }
+
+  async function getUTXOS(address: string): Promise<any> {
+    const electrum = await electrumConnect();
+    try {
+      console.log(`Fetching UTXOs for address: ${address}`);
+      const UTXOs = await electrum.request(
+        'blockchain.address.listunspent',
+        address
+      );
+      console.log(`Fetched UTXOs for address ${address}:`, UTXOs);
+      if (UTXOs) {
+        return UTXOs;
+      }
+      return [];
+    } finally {
+      // Keep the connection open for subsequent requests
+    }
   }
 
   async function getBalance(address: string): Promise<number> {
@@ -49,24 +81,7 @@ export default function ElectrumService() {
         throw new Error('Unexpected response format');
       }
     } finally {
-      await electrumDisconnect(electrum);
-    }
-  }
-
-  async function getUTXOS(address: string): Promise<any> {
-    const electrum = await electrumConnect();
-    try {
-      const UTXOs = await electrum.request(
-        'blockchain.address.listunspent',
-        address
-      );
-      console.log(`${address} UTXOS: `, UTXOs);
-      if (UTXOs) {
-        return UTXOs;
-      }
-      return [];
-    } finally {
-      await electrumDisconnect(electrum);
+      // Keep the connection open for subsequent requests
     }
   }
 
@@ -79,9 +94,15 @@ export default function ElectrumService() {
       );
       return tx_hash;
     } finally {
-      await electrumDisconnect(electrum);
+      // Keep the connection open for subsequent requests
     }
   }
 
-  return { electrumConnect, getBalance, getUTXOS, broadcastTransaction };
+  return {
+    electrumConnect,
+    electrumDisconnect,
+    getBalance,
+    getUTXOS,
+    broadcastTransaction,
+  };
 }

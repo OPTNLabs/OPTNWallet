@@ -16,7 +16,13 @@ export default function WalletManager() {
     deleteWallet,
     walletExists,
     getWalletInfo,
+    clearAllData, // Add this
   };
+
+  async function clearAllData(): Promise<void> {
+    const dbService = DatabaseService();
+    await dbService.clearDatabase(); // Call clearDatabase function
+  }
 
   async function deleteWallet(wallet_id: number): Promise<boolean | null> {
     const dbService = DatabaseService();

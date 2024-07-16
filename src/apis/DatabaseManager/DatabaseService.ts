@@ -1,4 +1,4 @@
-// @ts-nocheck
+// src/apis/DatabaseManager/DatabaseService.ts
 import initSqlJs, { Database } from 'sql.js';
 import { createTables } from '../../utils/schema/schema';
 
@@ -13,6 +13,7 @@ export default function DatabaseService() {
     saveDatabaseToFile,
     ensureDatabaseStarted,
     getDatabase,
+    clearDatabase,
     resultToJSON,
   };
 
@@ -49,6 +50,24 @@ export default function DatabaseService() {
 
   function getDatabase(): Database | null {
     return db;
+  }
+
+  async function clearDatabase(): Promise<void> {
+    await ensureDatabaseStarted();
+    if (db) {
+      db.exec(`
+        DROP TABLE IF EXISTS wallets;
+        DROP TABLE IF EXISTS keys;
+        DROP TABLE IF EXISTS addresses;
+        DROP TABLE IF EXISTS UTXOs;
+        DROP TABLE IF EXISTS transactions;
+        DROP TABLE IF EXISTS cashscript_artifacts;
+        DROP TABLE IF EXISTS cashscript_addresses;
+        DROP TABLE IF EXISTS instantiated_contracts;
+      `);
+      createTables(db); // Recreate empty tables after dropping
+      await saveDatabaseToFile(); // Save changes to local storage
+    }
   }
 
   function resultToJSON(result: any) {

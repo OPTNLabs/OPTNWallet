@@ -30,9 +30,6 @@ const LandingPage = () => {
               </Link>
             </div>
           </div>
-          <div className="w-full lg:w-1/2 lg:pl-4 text-center lg:text-left">
-            har
-          </div>
         </div>
       </section>
     </>

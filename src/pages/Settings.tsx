@@ -29,14 +29,9 @@ const Settings = () => {
 
   const handleLogout = async () => {
     const walletManager = WalletManager();
-    const walletId = await walletManager.walletExists();
-    if (walletId) {
-      const success = await walletManager.deleteWallet(walletId);
-      if (success) {
-        dispatch(setWalletId(0)); // Reset wallet ID in Redux store
-        navigate('/');
-      }
-    }
+    await walletManager.clearAllData(); // Clear the entire database
+    dispatch(setWalletId(0)); // Reset wallet ID in Redux store
+    navigate('/');
   };
 
   const renderContent = () => {
