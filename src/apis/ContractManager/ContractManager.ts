@@ -30,7 +30,8 @@ export default function ContractManager() {
 
       if (
         artifact.constructorInputs.length > 0 &&
-        (!args || args.length !== artifact.constructorInputs.length)
+        (!constructorArgs ||
+          constructorArgs.length !== artifact.constructorInputs.length)
       ) {
         throw new Error('Constructor arguments are required');
       }

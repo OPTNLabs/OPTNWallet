@@ -1,4 +1,5 @@
 // @ts-nocheck
+
 import DatabaseService from '../DatabaseManager/DatabaseService';
 import KeyGeneration from './KeyGeneration';
 import AddressManager from '../AddressManager/AddressManager';
@@ -117,8 +118,8 @@ export default function KeyManager() {
         );
         return;
       }
-      const mnemonic = JSON.stringify(result[0]).replace(/^"|"$/g, '');
-      const passphrase = JSON.stringify(result[1]).replace(/^"|"$/g, '');
+      const mnemonic = result.mnemonic;
+      const passphrase = result.passphrase;
 
       const keys = await KeyGen.generateKeys(
         mnemonic,
@@ -129,6 +130,22 @@ export default function KeyManager() {
       );
 
       if (keys) {
+        const existingKeyQuery = db.prepare(`
+          SELECT COUNT(*) as count FROM keys WHERE address = ?;
+        `);
+        existingKeyQuery.bind([keys.aliceAddress]);
+        if (
+          existingKeyQuery.step() &&
+          existingKeyQuery.getAsObject().count > 0
+        ) {
+          console.log(
+            `Key for address ${keys.aliceAddress} already exists. Skipping...`
+          );
+          existingKeyQuery.free();
+          return;
+        }
+        existingKeyQuery.free();
+
         const publicKey = keys.alicePub;
         const privateKey = keys.alicePriv;
         const address = keys.aliceAddress;

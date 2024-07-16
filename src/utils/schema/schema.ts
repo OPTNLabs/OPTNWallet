@@ -1,8 +1,8 @@
 export const createTables = (db: any) => {
-  // Drop and create existing tables
-  db.run(`
-    DROP TABLE IF EXISTS UTXOs;
-  `);
+  // // Drop and create existing tables
+  // db.run(`
+  //   DROP TABLE IF EXISTS UTXOs;
+  // `);
   // db.run(`
   //     DROP TABLE IF EXISTS wallets;
   // `);
@@ -41,8 +41,8 @@ export const createTables = (db: any) => {
       wallet_id INTEGER,
       public_key BLOB,
       private_key BLOB,
-      address VARCHAR(255),
-      token_address VARCHAR(255),
+      address VARCHAR(255) UNIQUE,
+      token_address VARCHAR(255) UNIQUE,
       pubkey_hash BLOB,
       account_index INT,
       change_index INT,
@@ -55,7 +55,7 @@ export const createTables = (db: any) => {
     CREATE TABLE IF NOT EXISTS addresses (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       wallet_id INT,
-      address VARCHAR(255) NOT NULL,
+      address VARCHAR(255) NOT NULL UNIQUE,
       token_address VARCHAR(255),
       balance INT,
       hd_index INT,
@@ -78,7 +78,8 @@ export const createTables = (db: any) => {
       prefix VARCHAR(255) NOT NULL,
       token_data TEXT,
       FOREIGN KEY(wallet_id) REFERENCES wallets(id),
-      FOREIGN KEY(address) REFERENCES addresses(address)
+      FOREIGN KEY(address) REFERENCES addresses(address),
+      UNIQUE(wallet_id, address, tx_hash, tx_pos)
     );
   `);
 
