@@ -1,4 +1,4 @@
-// @ts-nocheck
+// src/components/RegularUTXOs.tsx
 import React from 'react';
 
 const RegularUTXOs = ({ address, utxos, loading }) => {

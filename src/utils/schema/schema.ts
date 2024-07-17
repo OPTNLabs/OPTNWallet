@@ -1,5 +1,5 @@
 export const createTables = (db: any) => {
-  // Drop and create existing tables
+  // // Drop and create existing tables
   // db.run(`
   //   DROP TABLE IF EXISTS UTXOs;
   // `);
