@@ -55,6 +55,7 @@ export default function DatabaseService() {
   async function clearDatabase(): Promise<void> {
     await ensureDatabaseStarted();
     if (db) {
+      db.exec('VACUUM;'); // Ensure all changes are committed
       db.exec(`
         DROP TABLE IF EXISTS wallets;
         DROP TABLE IF EXISTS keys;
@@ -71,17 +72,16 @@ export default function DatabaseService() {
   }
 
   function resultToJSON(result: any) {
-    if (result.length === 0) {
-      return result;
+    if (!result || result.length === 0) {
+      return {};
     }
 
-    const mapped = result[0].values.map((val) =>
-      result[0].columns.map((col, j) => ({ [result[0].columns[j]]: val[j] }))
-    );
+    // Assuming the result is an array with two elements: mnemonic and passphrase
+    const obj = {
+      mnemonic: result[0],
+      passphrase: result[1] || '',
+    };
 
-    const reduced = mapped.map((m) =>
-      m.reduce((acc, cur) => ({ ...acc, ...cur }), {})
-    );
-    return reduced;
+    return obj;
   }
 }

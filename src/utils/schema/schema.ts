@@ -1,5 +1,5 @@
 export const createTables = (db: any) => {
-  // // Drop and create existing tables
+  // Drop and create existing tables
   // db.run(`
   //   DROP TABLE IF EXISTS UTXOs;
   // `);
@@ -22,15 +22,15 @@ export const createTables = (db: any) => {
   //   DROP TABLE IF EXISTS cashscript_addresses;
   // `);
   // db.run(`
-  //   DROP TABLE IF NOT EXISTS instantiated_contracts;
+  //   DROP TABLE IF EXISTS instantiated_contracts;
   // `);
 
   db.run(`
     CREATE TABLE IF NOT EXISTS wallets (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       wallet_name VARCHAR(255),
-      mnemonic VARCHAR(255),
-      passphrase VARCHAR(255),
+      mnemonic TEXT,
+      passphrase TEXT,
       balance INT
     );
   `);

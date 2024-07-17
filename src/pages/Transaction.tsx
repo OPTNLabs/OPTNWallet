@@ -1,5 +1,3 @@
-// @ts-nocheck
-
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import TransactionBuilders from '../apis/TransactionManager/TransactionBuilder3';
@@ -77,21 +75,20 @@ const Transaction = () => {
         });
       }
       addressesStatement.free();
+      console.log('Fetched addresses:', fetchedAddresses); // Debug log
       setAddresses(fetchedAddresses);
 
       const utxosQuery = `SELECT * FROM UTXOs WHERE wallet_id = ?`;
       const utxosStatement = db.prepare(utxosQuery);
       utxosStatement.bind([walletId]);
       const fetchedUTXOs: UTXO[] = [];
-      const utxoSet = new Set();
       while (utxosStatement.step()) {
         const row = utxosStatement.getAsObject();
-        const utxoKey = `${row.tx_hash}-${row.tx_pos}`;
-        if (!utxoSet.has(utxoKey)) {
-          utxoSet.add(utxoKey);
-          const addressInfo = fetchedAddresses.find(
-            (addr) => addr.address === row.address
-          );
+        const addressInfo = fetchedAddresses.find(
+          (addr) => addr.address === row.address
+        );
+        const privateKey = await fetchPrivateKey(walletId, row.address);
+        if (privateKey) {
           fetchedUTXOs.push({
             id: row.id as number,
             address: row.address as string,
@@ -100,19 +97,22 @@ const Transaction = () => {
             tx_hash: row.tx_hash as string,
             tx_pos: row.tx_pos as number,
             height: row.height as number,
-            privateKey: await fetchPrivateKey(walletId, row.address), // @ts-ignore
+            privateKey: privateKey, // @ts-ignore
             token_data: row.token_data ? JSON.parse(row.token_data) : undefined, // @ts-ignore
           });
+        } else {
+          console.error('Private key not found for address:', row.address);
         }
       }
       utxosStatement.free();
+      console.log('Fetched UTXOs:', fetchedUTXOs); // Debug log
       setUtxos(fetchedUTXOs);
     };
 
     const fetchPrivateKey = async (
       walletId: number,
       address: string
-    ): Promise<Uint8Array> => {
+    ): Promise<Uint8Array | null> => {
       const dbService = DatabaseService();
       await dbService.ensureDatabaseStarted();
       const db = dbService.getDatabase();
@@ -125,7 +125,7 @@ const Transaction = () => {
         privateKey = new Uint8Array(row.private_key); // @ts-ignore
       }
       privateKeyStatement.free();
-      return privateKey;
+      return privateKey.length > 0 ? privateKey : null;
     };
 
     if (walletId !== null) {

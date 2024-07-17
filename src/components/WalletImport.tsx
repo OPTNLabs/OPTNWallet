@@ -1,3 +1,5 @@
+// src/components/WalletImport.tsx
+
 import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import DatabaseService from '../apis/DatabaseManager/DatabaseService';
@@ -8,7 +10,7 @@ import WalletManager from '../apis/WalletManager/WalletManager';
 
 const WalletImport = () => {
   const [recoveryPhrase, setRecoveryPhrase] = useState('');
-  const [walletName, setWalletName] = useState('');
+  const [walletName, setWalletName] = useState('OPTN');
   const [passphrase, setPassphrase] = useState('');
   const dbService = DatabaseService();
   const WalletManage = WalletManager();
@@ -29,13 +31,13 @@ const WalletImport = () => {
   }, []);
 
   const handleImportAccount = async () => {
-    if (walletName === '') {
-      console.log('Wallet name cannot be empty.');
+    if (recoveryPhrase === '') {
+      console.log('Recovery Phrase cannot be empty.');
       return;
     }
 
     try {
-      const check = WalletManage.checkAccount(recoveryPhrase, passphrase);
+      const check = await WalletManage.checkAccount(recoveryPhrase, passphrase);
       if (!check) {
         const createAccountSuccess = await WalletManage.createWallet(
           walletName,

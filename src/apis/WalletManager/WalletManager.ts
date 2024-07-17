@@ -1,4 +1,4 @@
-// @ts-nocheck
+// src/apis/WalletManager/WalletManager.ts
 
 import { hexToBin } from '@bitauth/libauth';
 import KeyManager from './KeyManager';

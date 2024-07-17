@@ -12,7 +12,7 @@ import RegularUTXOs from '../components/RegularUTXOs';
 import CashTokenUTXOs from '../components/CashTokenUTXOs';
 import ElectrumService from '../apis/ElectrumServer/ElectrumServer';
 
-const batchAmount = 10;
+const batchAmount = 1;
 
 const Home = () => {
   const [keyPairs, setKeyPairs] = useState([]);
