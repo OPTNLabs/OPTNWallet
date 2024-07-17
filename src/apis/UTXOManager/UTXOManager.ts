@@ -69,7 +69,7 @@ export default async function UTXOManager() {
         amount: utxo.value,
         address: address,
         height: utxo.height,
-        prefix: 'bchtest', // Assuming the prefix is 'bchtest'
+        prefix: 'bchtest',
         token_data: utxo.token_data ? JSON.stringify(utxo.token_data) : null,
       }));
 
@@ -90,13 +90,17 @@ export default async function UTXOManager() {
       storedUTXOsQuery.bind([walletId, address]);
       const storedUTXOs = [];
       while (storedUTXOsQuery.step()) {
-        storedUTXOs.push(storedUTXOsQuery.getAsObject());
+        const result = storedUTXOsQuery.getAsObject();
+        result.token_data = result.token_data
+          ? JSON.parse(result.token_data)
+          : null;
+        storedUTXOs.push(result);
       }
       storedUTXOsQuery.free();
 
       console.log(`Stored UTXOs for address ${address}:`, storedUTXOs);
 
-      return storedUTXOs; // Return stored UTXOs instead of formattedUTXOs
+      return storedUTXOs;
     } catch (error) {
       console.error(`Error fetching UTXOs for address ${address}:`, error);
       return [];
