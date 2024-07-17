@@ -1,3 +1,5 @@
+// src/apis/WalletManager/KeyGeneration.ts
+
 import {
   deriveHdPath,
   secp256k1,
@@ -15,6 +17,7 @@ export default function KeyGeneration() {
 
   async function generateMnemonic(): Promise<string> {
     const mnemonic = bip39.generateMnemonic();
+    console.log('Generated mnemonic:', mnemonic);
     return mnemonic;
   }
 
@@ -25,31 +28,38 @@ export default function KeyGeneration() {
     change_index: number,
     address_index: number
   ) {
+    console.log('Generating seed...');
     const seed = await bip39.mnemonicToSeed(mnemonic, passphrase);
     const rootNode = deriveHdPrivateNodeFromSeed(seed, true);
     const baseDerivationPath = `m/44'/1'/${account_index}'`;
 
+    console.log('Deriving HD path...');
     const aliceNode = deriveHdPath(
       rootNode,
       `${baseDerivationPath}/${change_index}/${address_index}`
     );
 
-    if (typeof aliceNode === 'string') throw new Error();
+    if (typeof aliceNode === 'string') {
+      console.error('Error deriving HD path:', aliceNode);
+      throw new Error();
+    }
 
     const alicePub = secp256k1.derivePublicKeyCompressed(aliceNode.privateKey);
     const alicePriv = aliceNode.privateKey;
 
     if (typeof alicePub === 'string') {
-      console.log('alicePub should not be a string.');
+      console.error('Error deriving public key:', alicePub);
       return null;
     }
 
+    console.log('Hashing public key...');
     const alicePkh = hash160(alicePub);
     if (!alicePkh) {
       console.error('Failed to generate public key hash.');
       return null;
     }
 
+    console.log('Encoding address...');
     const aliceAddress = encodeCashAddress({
       payload: alicePkh,
       prefix: 'bchtest',
@@ -61,6 +71,14 @@ export default function KeyGeneration() {
       prefix: 'bchtest',
       type: 'p2pkhWithTokens',
     }).address;
+
+    console.log('Generated keys:', {
+      alicePub,
+      alicePriv,
+      alicePkh,
+      aliceAddress,
+      aliceTokenAddress,
+    });
 
     return {
       alicePub,

@@ -1,10 +1,9 @@
-// @ts-nocheck
+// src/apis/WalletManager/KeyManager.ts
 
 import DatabaseService from '../DatabaseManager/DatabaseService';
 import KeyGeneration from './KeyGeneration';
 import AddressManager from '../AddressManager/AddressManager';
 import { Address } from '../types';
-import bip39 from 'bip39';
 
 export default function KeyManager() {
   const dbService = DatabaseService();
@@ -17,23 +16,12 @@ export default function KeyManager() {
     fetchAddressPrivateKey,
   };
 
-  async function retrieveKeys(wallet_id: number): Promise<
-    {
-      id: number;
-      publicKey: Uint8Array;
-      privateKey: Uint8Array;
-      address: string;
-      tokenAddress: string;
-      pubkeyHash: Uint8Array;
-      accountIndex: number;
-      changeIndex: number;
-      addressIndex: number;
-    }[]
-  > {
+  async function retrieveKeys(wallet_id: number) {
     try {
       await dbService.ensureDatabaseStarted();
       const db = dbService.getDatabase();
       if (db == null) {
+        console.error('Database is null');
         return [];
       }
 
@@ -54,17 +42,7 @@ export default function KeyManager() {
       const statement = db.prepare(query);
       statement.bind({ ':walletid': wallet_id });
 
-      const result: {
-        id: number;
-        publicKey: Uint8Array;
-        privateKey: Uint8Array;
-        address: string;
-        tokenAddress: string;
-        pubkeyHash: Uint8Array;
-        accountIndex: number;
-        changeIndex: number;
-        addressIndex: number;
-      }[] = [];
+      const result = [];
 
       while (statement.step()) {
         const row = statement.getAsObject();
@@ -82,6 +60,7 @@ export default function KeyManager() {
       }
 
       statement.free();
+      console.log('Keys retrieved:', result);
       return result;
     } catch (error) {
       console.error('Error retrieving keys:', error);
@@ -94,32 +73,38 @@ export default function KeyManager() {
     accountNumber: number,
     changeNumber: number,
     addressNumber: number
-  ): Promise<void> {
+  ) {
     try {
       await dbService.ensureDatabaseStarted();
       const db = dbService.getDatabase();
       if (db == null) {
+        console.error('Database is null');
         return;
       }
 
       const getIdQuery = db.prepare(
-        `SELECT 
-                    mnemonic, 
-                    passphrase 
-                FROM wallets 
-                WHERE id = ?;`
+        `SELECT mnemonic, passphrase FROM wallets WHERE id = ?;`
       );
-      const result = getIdQuery.get([wallet_id]);
+      const result = dbService.resultToJSON(getIdQuery.get([wallet_id]));
       getIdQuery.free();
+      console.log('Result from DB:', result);
 
-      if (!result) {
+      if (!result.mnemonic) {
         console.error(
           'Mnemonic or passphrase not found for the given wallet id'
         );
         return;
       }
       const mnemonic = result.mnemonic;
-      const passphrase = result.passphrase;
+      const passphrase = result.passphrase || '';
+
+      console.log('Generating keys with:', {
+        mnemonic,
+        passphrase,
+        accountNumber,
+        changeNumber,
+        addressNumber,
+      });
 
       const keys = await KeyGen.generateKeys(
         mnemonic,
@@ -130,6 +115,7 @@ export default function KeyManager() {
       );
 
       if (keys) {
+        console.log('Generated keys:', keys);
         const existingKeyQuery = db.prepare(`
           SELECT COUNT(*) as count FROM keys WHERE address = ?;
         `);
@@ -177,8 +163,12 @@ export default function KeyManager() {
           prefix: 'bchtest',
         };
 
+        console.log('Registering new address:', newAddress);
         await ManageAddress.registerAddress(newAddress);
         await dbService.saveDatabaseToFile();
+        console.log('Keys created and saved successfully.');
+      } else {
+        console.error('Failed to generate keys.');
       }
     } catch (error) {
       console.error('Error creating keys:', error);
