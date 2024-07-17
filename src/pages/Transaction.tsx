@@ -1,4 +1,4 @@
-// @ts-nocheck
+// src/pages/Transaction.tsx
 
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
@@ -6,30 +6,6 @@ import TransactionBuilders from '../apis/TransactionManager/TransactionBuilder3'
 import DatabaseService from '../apis/DatabaseManager/DatabaseService';
 import RegularUTXOs from '../components/RegularUTXOs';
 import CashTokenUTXOs from '../components/CashTokenUTXOs';
-
-interface UTXO {
-  id: number;
-  address: string;
-  tokenAddress: string;
-  amount: number;
-  tx_hash: string;
-  tx_pos: number;
-  height: number;
-  privateKey: Uint8Array;
-  token_data?: {
-    amount: string;
-    category: string;
-  };
-}
-
-interface TransactionOutput {
-  recipientAddress: string;
-  amount: number;
-  token?: {
-    amount: number;
-    category: string;
-  };
-}
 
 const Transaction = () => {
   const [walletId, setWalletId] = useState<number | null>(null);
@@ -376,7 +352,7 @@ const Transaction = () => {
                   >
                     <CashTokenUTXOs
                       address={addressObj.address}
-                      utxos={[utxo]}
+                      utxos={[utxo].filter((utxo) => utxo.token_data)}
                       loading={false}
                     />
                   </button>
