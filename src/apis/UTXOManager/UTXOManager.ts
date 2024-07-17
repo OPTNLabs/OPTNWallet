@@ -1,4 +1,5 @@
-// @ts-nocheck
+// src/apis/UTXOManager/UTXOManager.ts
+
 import { UTXOs } from '../types';
 import DatabaseService from '../DatabaseManager/DatabaseService';
 import ElectrumService from '../ElectrumServer/ElectrumServer';
@@ -15,7 +16,7 @@ export default async function UTXOManager() {
     deleteUTXOs,
   };
 
-  async function storeUTXOs(utxos: UTXOs[]) {
+  async function storeUTXOs(utxos) {
     const db = dbService.getDatabase();
     if (!db) {
       console.log('Database not started.');
@@ -35,13 +36,14 @@ export default async function UTXOManager() {
           query.run([
             utxo.wallet_id,
             utxo.address,
-            utxo.height,
+            utxo.height || 0, // Default height to 0 if undefined
             utxo.tx_hash,
             utxo.tx_pos,
             utxo.amount,
-            utxo.prefix,
-            JSON.stringify(utxo.token_data || null),
+            utxo.prefix || 'unknown', // Default prefix to 'unknown' if undefined
+            utxo.token_data ? JSON.stringify(utxo.token_data) : null,
           ]);
+          console.log(`Stored UTXO: ${JSON.stringify(utxo)}`);
         }
         existsQuery.free();
       }
@@ -53,9 +55,11 @@ export default async function UTXOManager() {
   }
 
   async function fetchUTXOsByAddress(walletId, address) {
+    const db = dbService.getDatabase();
     try {
       console.log(`Fetching UTXOs for address: ${address}`);
 
+      // Fetch from Electrum
       const utxos = await Electrum.getUTXOS(address);
       console.log(`Raw UTXOs response for address ${address}:`, utxos);
 
@@ -64,11 +68,35 @@ export default async function UTXOManager() {
         tx_pos: utxo.tx_pos,
         amount: utxo.value,
         address: address,
-        token_data: utxo.token_data || null,
+        height: utxo.height,
+        prefix: 'bchtest', // Assuming the prefix is 'bchtest'
+        token_data: utxo.token_data ? JSON.stringify(utxo.token_data) : null,
       }));
 
       console.log(`Formatted UTXOs for address ${address}:`, formattedUTXOs);
-      return formattedUTXOs;
+
+      // Store in database
+      await storeUTXOs(
+        formattedUTXOs.map((utxo) => ({
+          ...utxo,
+          wallet_id: walletId,
+        }))
+      );
+
+      // Fetch from database
+      const storedUTXOsQuery = db.prepare(`
+        SELECT * FROM UTXOs WHERE wallet_id = ? AND address = ?;
+      `);
+      storedUTXOsQuery.bind([walletId, address]);
+      const storedUTXOs = [];
+      while (storedUTXOsQuery.step()) {
+        storedUTXOs.push(storedUTXOsQuery.getAsObject());
+      }
+      storedUTXOsQuery.free();
+
+      console.log(`Stored UTXOs for address ${address}:`, storedUTXOs);
+
+      return storedUTXOs; // Return stored UTXOs instead of formattedUTXOs
     } catch (error) {
       console.error(`Error fetching UTXOs for address ${address}:`, error);
       return [];
@@ -145,7 +173,7 @@ export default async function UTXOManager() {
           tx_pos: utxo.tx_pos,
           amount: utxo.value,
           prefix: 'bchtest',
-          token_data: utxo.token_data || null,
+          token_data: utxo.token_data ? JSON.stringify(utxo.token_data) : null,
         }));
 
         // Store new UTXOs

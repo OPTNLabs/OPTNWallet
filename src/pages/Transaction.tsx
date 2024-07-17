@@ -1,3 +1,5 @@
+// @ts-nocheck
+
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import TransactionBuilders from '../apis/TransactionManager/TransactionBuilder3';
