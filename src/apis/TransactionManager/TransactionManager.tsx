@@ -11,6 +11,9 @@ export default function TransactionManager() {
     address: string
   ) {
     const db = dbService.getDatabase();
+    if (!db) {
+      throw new Error('Could not get database');
+    }
     try {
       const history = await electrumService.getTransactionHistory(address);
 

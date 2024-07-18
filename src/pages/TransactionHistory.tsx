@@ -8,13 +8,20 @@ import DatabaseService from '../apis/DatabaseManager/DatabaseService';
 import { createSelector } from 'reselect';
 import BottomNavBar from '../components/BottomNavBar';
 
+interface Transaction {
+  tx_hash: string;
+  height: number;
+  timestamp: string;
+  amount: number; // Updated to number
+}
+
 const selectTransactions = createSelector(
   (state: RootState) => state.transactions.transactions,
   (_: RootState, wallet_id: string) => wallet_id,
   (transactions, wallet_id) => transactions[wallet_id] || []
 );
 
-const TransactionHistory = () => {
+const TransactionHistory: React.FC = () => {
   const dispatch = useDispatch();
   const { wallet_id } = useParams<{ wallet_id: string }>();
   const transactions = useSelector((state: RootState) =>
@@ -75,15 +82,21 @@ const TransactionHistory = () => {
       `);
       storedTransactionsQuery.bind([wallet_id]);
 
-      const newTransactions = [];
+      const newTransactions: Transaction[] = [];
       while (storedTransactionsQuery.step()) {
-        const transaction = storedTransactionsQuery.getAsObject();
-        if (!uniqueTransactions.has(String(transaction.tx_hash))) {
+        const transaction =
+          storedTransactionsQuery.getAsObject() as unknown as {
+            tx_hash: string;
+            height: number;
+            timestamp: string;
+            amount: string; // Initially a string
+          };
+        if (!uniqueTransactions.has(transaction.tx_hash)) {
           newTransactions.push({
             ...transaction,
-            tx_hash: String(transaction.tx_hash),
+            amount: parseFloat(transaction.amount), // Convert amount to number
           });
-          uniqueTransactions.add(String(transaction.tx_hash));
+          uniqueTransactions.add(transaction.tx_hash);
         }
       }
       storedTransactionsQuery.free();
@@ -104,7 +117,9 @@ const TransactionHistory = () => {
     setLoading(false);
   };
 
-  const getAddressesForWallet = async (wallet_id: string) => {
+  const getAddressesForWallet = async (
+    wallet_id: string
+  ): Promise<string[]> => {
     await dbService.ensureDatabaseStarted();
     const db = dbService.getDatabase();
     if (!db) {
@@ -117,9 +132,12 @@ const TransactionHistory = () => {
     `);
     addressesQuery.bind([wallet_id]);
 
-    const addresses = [];
+    const addresses: string[] = [];
     while (addressesQuery.step()) {
-      addresses.push(addressesQuery.getAsObject().address);
+      const result = addressesQuery.getAsObject();
+      if (typeof result.address === 'string') {
+        addresses.push(result.address);
+      }
     }
     addressesQuery.free();
     return addresses;

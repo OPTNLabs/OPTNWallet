@@ -5,12 +5,16 @@ import { useSelector } from 'react-redux';
 import { RootState } from '../redux/store';
 import { useEffect, useRef } from 'react';
 
-const BottomNavBar = ({ setNavBarHeight }) => {
+interface BottomNavBarProps {
+  setNavBarHeight: (height: number) => void;
+}
+
+const BottomNavBar: React.FC<BottomNavBarProps> = ({ setNavBarHeight }) => {
   const walletId = useSelector(
     (state: RootState) => state.wallet_id.currentWalletId
   );
 
-  const navBarRef = useRef(null);
+  const navBarRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
     if (navBarRef.current) {
