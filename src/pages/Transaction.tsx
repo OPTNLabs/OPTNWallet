@@ -2,7 +2,10 @@
 
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import TransactionBuilders from '../apis/TransactionManager/TransactionBuilder3';
+import TransactionBuilders, {
+  TransactionOutput,
+  UTXO,
+} from '../apis/TransactionManager/TransactionBuilder3';
 import DatabaseService from '../apis/DatabaseManager/DatabaseService';
 import RegularUTXOs from '../components/RegularUTXOs';
 import CashTokenUTXOs from '../components/CashTokenUTXOs';
@@ -352,7 +355,7 @@ const Transaction = () => {
                   >
                     <CashTokenUTXOs
                       address={addressObj.address}
-                      utxos={[utxo].filter((utxo) => utxo.token_data)}
+                      utxos={[utxo]}
                       loading={false}
                     />
                   </button>

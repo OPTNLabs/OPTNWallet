@@ -6,7 +6,8 @@ import AboutView from '../components/AboutView';
 import TermsOfUse from '../components/TermsOfUse';
 import ContactUs from '../components/ContactUs';
 import { useDispatch } from 'react-redux';
-import { setWalletId } from '../redux/walletSlice';
+import { setWalletId, resetWallet } from '../redux/walletSlice';
+import { resetUTXOs } from '../redux/utxoSlice';
 import WalletManager from '../apis/WalletManager/WalletManager';
 import { useNavigate } from 'react-router-dom';
 
@@ -30,7 +31,8 @@ const Settings = () => {
   const handleLogout = async () => {
     const walletManager = WalletManager();
     await walletManager.clearAllData(); // Clear the entire database
-    dispatch(setWalletId(0)); // Reset wallet ID in Redux store
+    dispatch(resetWallet()); // Reset wallet state in Redux store
+    dispatch(resetUTXOs()); // Reset UTXO state in Redux store
     navigate('/');
   };
 
