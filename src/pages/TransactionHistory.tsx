@@ -1,4 +1,4 @@
-import { useEffect } from 'react'
+import { useEffect } from 'react';
 // import TransactionManager from "../apis/TransactionManager/TransactionManager"
 import { useParams } from 'react-router-dom';
 
