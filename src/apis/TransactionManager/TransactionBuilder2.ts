@@ -1,5 +1,3 @@
-// @ts-nocheck
-
 import { URL } from 'url';
 import { compileFile } from 'cashc';
 import {

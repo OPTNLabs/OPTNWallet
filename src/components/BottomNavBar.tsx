@@ -50,7 +50,10 @@ const BottomNavBar = ({ setNavBarHeight }) => {
 
         <span>Home</span>
       </Link>
-      <Link to="/contract" className="flex flex-col items-center">
+      <Link
+        to={`/transactions/${walletId}`}
+        className="flex flex-col items-center"
+      >
         <svg
           width="24"
           height="24"
@@ -74,7 +77,7 @@ const BottomNavBar = ({ setNavBarHeight }) => {
           />
         </svg>
 
-        <span>Contract</span>
+        <span>History</span>
       </Link>
       <Link to="/transaction" className="flex flex-col items-center">
         <svg

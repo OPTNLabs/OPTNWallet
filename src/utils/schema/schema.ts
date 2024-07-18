@@ -87,9 +87,11 @@ export const createTables = (db: any) => {
     CREATE TABLE IF NOT EXISTS transactions (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       wallet_id INT,
-      txn TEXT NOT NULL,
+      tx_hash TEXT NOT NULL,
+      height INT NOT NULL,
       timestamp TEXT NOT NULL,
-      amount INT NOT NULL
+      amount INT NOT NULL,
+      FOREIGN KEY(wallet_id) REFERENCES wallets(id)
     );
   `);
 

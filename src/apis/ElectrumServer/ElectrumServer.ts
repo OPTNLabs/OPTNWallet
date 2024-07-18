@@ -1,7 +1,6 @@
 // src/apis/ElectrumServer/ElectrumServer.ts
 import { ElectrumClient, ElectrumTransport } from 'electrum-cash';
 import { chipnetServers } from '../../utils/servers/ElectrumServers';
-import { BalanceResponse } from '../interfaces';
 
 export enum Network {
   CHIPNET,
@@ -75,7 +74,7 @@ export default function ElectrumService() {
         typeof response.confirmed === 'number' &&
         typeof response.unconfirmed === 'number'
       ) {
-        const { confirmed, unconfirmed } = response as BalanceResponse;
+        const { confirmed, unconfirmed } = response;
         return confirmed + unconfirmed;
       } else {
         throw new Error('Unexpected response format');
@@ -98,11 +97,33 @@ export default function ElectrumService() {
     }
   }
 
+  async function getTransactionHistory(address: string) {
+    const electrum = await electrumConnect();
+    try {
+      if (!address) {
+        throw new Error('Invalid address: Address cannot be undefined');
+      }
+      console.log(`Fetching transaction history for address: ${address}`);
+      const history = await electrum.request(
+        'blockchain.address.get_history',
+        address
+      );
+      console.log(
+        `Fetched transaction history for address ${address}:`,
+        history
+      );
+      return history;
+    } finally {
+      // Keep the connection open for subsequent requests
+    }
+  }
+
   return {
     electrumConnect,
     electrumDisconnect,
     getBalance,
     getUTXOS,
     broadcastTransaction,
+    getTransactionHistory,
   };
 }

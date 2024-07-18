@@ -1,23 +1,275 @@
-import { useEffect } from 'react';
-// import TransactionManager from "../apis/TransactionManager/TransactionManager"
+import React, { useState, useCallback, useEffect } from 'react';
+import { useDispatch, useSelector } from 'react-redux';
+import { RootState } from '../redux/store';
+import TransactionManager from '../apis/TransactionManager/TransactionManager';
+import { addTransactions } from '../redux/transactionSlice';
 import { useParams } from 'react-router-dom';
+import DatabaseService from '../apis/DatabaseManager/DatabaseService';
+import { createSelector } from 'reselect';
+import BottomNavBar from '../components/BottomNavBar';
+
+const selectTransactions = createSelector(
+  (state: RootState) => state.transactions.transactions,
+  (_: RootState, wallet_id: string) => wallet_id,
+  (transactions, wallet_id) => transactions[wallet_id] || []
+);
 
 const TransactionHistory = () => {
-  // const TransactionManage = TransactionManager();
+  const dispatch = useDispatch();
   const { wallet_id } = useParams<{ wallet_id: string }>();
-  // const [transactionHistoryArray, setTransactionHistoryArray] = useState([]);
+  const transactions = useSelector((state: RootState) =>
+    selectTransactions(state, wallet_id || '')
+  );
+  const [progress, setProgress] = useState(0); // Track progress of loading
+  const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('asc'); // Track sort order
+  const [loading, setLoading] = useState(false);
+  const [fetchedAddresses, setFetchedAddresses] = useState<Set<string>>(
+    new Set()
+  );
+  const [currentPage, setCurrentPage] = useState(1);
+  const [transactionsPerPage, setTransactionsPerPage] = useState(10);
+  const [navBarHeight, setNavBarHeight] = useState(0);
+  const dbService = DatabaseService();
 
   useEffect(() => {
-    if (!wallet_id) {
-      return;
-    }
-    // const wallet_id_number = parseInt(wallet_id, 10);
-    // TransactionManage.fetchTransactionHistory(wallet_id_number);
+    // Adjust the height of the container based on the navbar height
+    const adjustHeight = () => {
+      const bottomNavBar = document.getElementById('bottomNavBar');
+      if (bottomNavBar) {
+        setNavBarHeight(bottomNavBar.offsetHeight);
+      }
+    };
+    adjustHeight();
+    window.addEventListener('resize', adjustHeight);
+    return () => {
+      window.removeEventListener('resize', adjustHeight);
+    };
   }, []);
+
+  const fetchTransactionHistory = async () => {
+    if (!wallet_id || loading) return;
+
+    setLoading(true);
+    await dbService.ensureDatabaseStarted();
+    const transactionManager = TransactionManager();
+    const addresses = await getAddressesForWallet(wallet_id);
+
+    const totalAddresses = addresses.length;
+    const uniqueTransactions = new Set(transactions.map((tx) => tx.tx_hash));
+
+    for (const [index, address] of addresses.entries()) {
+      if (fetchedAddresses.has(address)) continue;
+
+      await transactionManager.fetchAndStoreTransactionHistory(
+        wallet_id,
+        address
+      );
+      const db = dbService.getDatabase();
+      if (!db) {
+        console.error('Database not started.');
+        return;
+      }
+
+      const storedTransactionsQuery = db.prepare(`
+        SELECT * FROM transactions WHERE wallet_id = ?;
+      `);
+      storedTransactionsQuery.bind([wallet_id]);
+
+      const newTransactions = [];
+      while (storedTransactionsQuery.step()) {
+        const transaction = storedTransactionsQuery.getAsObject();
+        if (!uniqueTransactions.has(String(transaction.tx_hash))) {
+          newTransactions.push({
+            ...transaction,
+            tx_hash: String(transaction.tx_hash),
+          });
+          uniqueTransactions.add(String(transaction.tx_hash));
+        }
+      }
+      storedTransactionsQuery.free();
+
+      if (newTransactions.length > 0) {
+        dispatch(
+          addTransactions({
+            wallet_id: parseInt(wallet_id, 10),
+            transactions: newTransactions,
+          })
+        );
+      }
+
+      setFetchedAddresses(new Set(fetchedAddresses).add(address));
+      setProgress(((index + 1) / totalAddresses) * 100); // Update progress
+    }
+
+    setLoading(false);
+  };
+
+  const getAddressesForWallet = async (wallet_id: string) => {
+    await dbService.ensureDatabaseStarted();
+    const db = dbService.getDatabase();
+    if (!db) {
+      console.error('Database not started.');
+      return [];
+    }
+
+    const addressesQuery = db.prepare(`
+      SELECT address FROM addresses WHERE wallet_id = ?;
+    `);
+    addressesQuery.bind([wallet_id]);
+
+    const addresses = [];
+    while (addressesQuery.step()) {
+      addresses.push(addressesQuery.getAsObject().address);
+    }
+    addressesQuery.free();
+    return addresses;
+  };
+
+  const sortedTransactions = useCallback(() => {
+    return [...transactions].sort((a, b) => {
+      if (sortOrder === 'asc') {
+        return a.height - b.height;
+      } else {
+        return b.height - a.height;
+      }
+    });
+  }, [transactions, sortOrder]);
+
+  const toggleSortOrder = () => {
+    setSortOrder((prevOrder) => (prevOrder === 'asc' ? 'desc' : 'asc'));
+  };
+
+  const handleTransactionsPerPageChange = (
+    e: React.ChangeEvent<HTMLSelectElement>
+  ) => {
+    setTransactionsPerPage(parseInt(e.target.value, 10));
+    setCurrentPage(1); // Reset to first page
+  };
+
+  const handleNextPage = () => {
+    setCurrentPage((prevPage) => prevPage + 1);
+  };
+
+  const handlePreviousPage = () => {
+    setCurrentPage((prevPage) => Math.max(prevPage - 1, 1));
+  };
+
+  const paginatedTransactions = sortedTransactions().slice(
+    (currentPage - 1) * transactionsPerPage,
+    currentPage * transactionsPerPage
+  );
+
+  const totalPages = Math.ceil(transactions.length / transactionsPerPage);
+
   return (
-    <>
-      <section></section>
-    </>
+    <div className="flex flex-col h-full">
+      <div className="container mx-auto p-4 flex-shrink-0">
+        <h1 className="text-2xl font-bold mb-4">Transaction History</h1>
+        <div className="mb-4 flex-wrap space-x-2 space-y-2 md:space-y-0 md:flex md:justify-between">
+          <button
+            onClick={toggleSortOrder}
+            className="py-1 px-2 bg-gray-200 rounded md:py-2 md:px-4"
+          >
+            Toggle Sort Order:{' '}
+            {sortOrder === 'asc' ? 'Ascending' : 'Descending'}
+          </button>
+          <button
+            onClick={fetchTransactionHistory}
+            className="py-1 px-2 bg-blue-500 text-white rounded md:py-2 md:px-4"
+            disabled={loading}
+          >
+            Fetch Transaction History
+          </button>
+          <select
+            value={transactionsPerPage}
+            onChange={handleTransactionsPerPageChange}
+            className="py-1 px-2 bg-white border rounded md:py-2 md:px-4"
+          >
+            <option value={10}>10 per page</option>
+            <option value={20}>20 per page</option>
+            <option value={30}>30 per page</option>
+          </select>
+        </div>
+        {loading && progress < 100 && (
+          <div className="w-full max-w-md mx-auto">
+            <div className="relative pt-1">
+              <div className="flex mb-2 items-center justify-between">
+                <div>
+                  <span className="text-xs font-semibold inline-block py-1 px-2 uppercase rounded-full text-blue-600 bg-blue-200">
+                    Loading Transaction History...
+                  </span>
+                </div>
+                <div className="text-right">
+                  <span className="text-xs font-semibold inline-block text-blue-600">
+                    {Math.round(progress)}%
+                  </span>
+                </div>
+              </div>
+              <div className="overflow-hidden h-2 mb-4 text-xs flex rounded bg-blue-200">
+                <div
+                  style={{ width: `${progress}%` }}
+                  className="shadow-none flex flex-col text-center whitespace-nowrap text-white justify-center bg-blue-500"
+                ></div>
+              </div>
+            </div>
+          </div>
+        )}
+      </div>
+      <div className="flex-grow overflow-y-auto mb-16">
+        {transactions.length === 0 ? (
+          <p className="text-center">No transactions available.</p>
+        ) : (
+          <ul className="space-y-4 px-4">
+            {paginatedTransactions.map((tx) => (
+              <li
+                key={tx.tx_hash}
+                className="p-4 border rounded-lg shadow-md bg-white break-words"
+              >
+                <p>
+                  <strong>Transaction Hash:</strong> {tx.tx_hash}
+                </p>
+                <p>
+                  <strong>Height:</strong> {tx.height}
+                </p>
+                <p>
+                  <strong>Timestamp:</strong> {tx.timestamp}
+                </p>
+                <p>
+                  <strong>Amount:</strong> {tx.amount}
+                </p>
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
+      <div
+        className="fixed bottom-0 left-0 right-0 p-4 bg-white z-10 flex justify-between items-center"
+        style={{ marginBottom: navBarHeight }}
+      >
+        <button
+          onClick={handlePreviousPage}
+          className={`py-2 px-4 rounded ${
+            currentPage === 1 ? 'bg-gray-400' : 'bg-gray-200'
+          }`}
+          disabled={currentPage === 1}
+        >
+          Previous
+        </button>
+        <div className="py-2 px-4">
+          Page {currentPage} of {totalPages}
+        </div>
+        <button
+          onClick={handleNextPage}
+          className={`py-2 px-4 rounded ${
+            currentPage === totalPages ? 'bg-gray-400' : 'bg-gray-200'
+          }`}
+          disabled={currentPage === totalPages}
+        >
+          Next
+        </button>
+      </div>
+      <BottomNavBar setNavBarHeight={setNavBarHeight} />
+    </div>
   );
 };
 
