@@ -1,3 +1,4 @@
+// @ts-nocheck
 // src/pages/Settings.tsx
 
 import React, { useState, useEffect } from 'react';

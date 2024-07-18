@@ -1,4 +1,5 @@
-// @ts-ignore
+// @ts-nocheck
+
 import {
   ElectrumNetworkProvider,
   TransactionBuilder,

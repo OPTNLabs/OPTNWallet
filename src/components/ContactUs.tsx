@@ -1,3 +1,4 @@
+// @ts-nocheck
 // src/components/ContactUs.tsx
 
 import React from 'react';

@@ -1,5 +1,4 @@
 // src/components/AboutView.tsx
-import React from 'react';
 
 const AboutView = () => {
   return (
