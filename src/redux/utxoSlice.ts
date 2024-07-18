@@ -27,13 +27,13 @@ const calculateTotalBalance = (utxos: Record<string, UTXO[]>) => {
     .reduce((sum, utxo) => sum + utxo.amount, 0);
 };
 
-const removeUTXOsWithHeightZero = (utxos: Record<string, UTXO[]>) => {
-  const cleanedUTXOs = {};
-  for (const address in utxos) {
-    cleanedUTXOs[address] = utxos[address].filter((utxo) => utxo.height !== 0);
-  }
-  return cleanedUTXOs;
-};
+// const removeUTXOsWithHeightZero = (utxos: Record<string, UTXO[]>) => {
+//   const cleanedUTXOs = {};
+//   for (const address in utxos) {
+//     cleanedUTXOs[address] = utxos[address].filter((utxo) => utxo.height !== 0);
+//   }
+//   return cleanedUTXOs;
+// };
 
 const utxoSlice = createSlice({
   name: 'utxos',

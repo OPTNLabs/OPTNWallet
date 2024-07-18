@@ -10,23 +10,29 @@ import DatabaseService from '../apis/DatabaseManager/DatabaseService';
 import RegularUTXOs from '../components/RegularUTXOs';
 import CashTokenUTXOs from '../components/CashTokenUTXOs';
 
-const Transaction = () => {
+interface ExtendedUTXO extends UTXO {
+  id: number;
+  height: number;
+}
+
+const Transaction: React.FC = () => {
   const [walletId, setWalletId] = useState<number | null>(null);
   const [addresses, setAddresses] = useState<
     { address: string; tokenAddress: string }[]
   >([]);
   const [selectedAddresses, setSelectedAddresses] = useState<string[]>([]);
-  const [utxos, setUtxos] = useState<UTXO[]>([]);
-  const [selectedUtxos, setSelectedUtxos] = useState<UTXO[]>([]);
+  const [utxos, setUtxos] = useState<ExtendedUTXO[]>([]);
+  const [selectedUtxos, setSelectedUtxos] = useState<ExtendedUTXO[]>([]);
   const [outputs, setOutputs] = useState<TransactionOutput[]>([]);
-  const [recipientAddress, setRecipientAddress] = useState('');
+  const [recipientAddress, setRecipientAddress] = useState<string>('');
   const [transferAmount, setTransferAmount] = useState<number | string>('');
   const [tokenAmount, setTokenAmount] = useState<number | string>('');
-  const [selectedTokenCategory, setSelectedTokenCategory] = useState('');
-  const [changeAddress, setChangeAddress] = useState('');
+  const [selectedTokenCategory, setSelectedTokenCategory] =
+    useState<string>('');
+  const [changeAddress, setChangeAddress] = useState<string>('');
   const [bytecodeSize, setBytecodeSize] = useState<number | null>(null);
-  const [rawTX, setRawTX] = useState('');
-  const [transactionId, setTransactionId] = useState('');
+  const [rawTX, setRawTX] = useState<string>('');
+  const [transactionId, setTransactionId] = useState<string>('');
   const [finalOutputs, setFinalOutputs] = useState<TransactionOutput[]>([]);
   const navigate = useNavigate();
 
@@ -44,16 +50,25 @@ const Transaction = () => {
       await dbService.ensureDatabaseStarted();
       const db = dbService.getDatabase();
 
+      if (!db) {
+        throw new Error('Unable to get DB');
+      }
+
       const addressesQuery = `SELECT address, token_address FROM keys WHERE wallet_id = ?`;
       const addressesStatement = db.prepare(addressesQuery);
       addressesStatement.bind([walletId]);
       const fetchedAddresses: { address: string; tokenAddress: string }[] = [];
       while (addressesStatement.step()) {
         const row = addressesStatement.getAsObject();
-        fetchedAddresses.push({
-          address: row.address as string,
-          tokenAddress: row.token_address as string,
-        });
+        if (
+          typeof row.address === 'string' &&
+          typeof row.token_address === 'string'
+        ) {
+          fetchedAddresses.push({
+            address: row.address,
+            tokenAddress: row.token_address,
+          });
+        }
       }
       addressesStatement.free();
       console.log('Fetched addresses:', fetchedAddresses); // Debug log
@@ -62,24 +77,31 @@ const Transaction = () => {
       const utxosQuery = `SELECT * FROM UTXOs WHERE wallet_id = ?`;
       const utxosStatement = db.prepare(utxosQuery);
       utxosStatement.bind([walletId]);
-      const fetchedUTXOs: UTXO[] = [];
+      const fetchedUTXOs: ExtendedUTXO[] = [];
       while (utxosStatement.step()) {
         const row = utxosStatement.getAsObject();
         const addressInfo = fetchedAddresses.find(
           (addr) => addr.address === row.address
         );
         const privateKey = await fetchPrivateKey(walletId, row.address);
-        if (privateKey) {
+        if (
+          privateKey &&
+          typeof row.address === 'string' &&
+          typeof row.amount === 'number' &&
+          typeof row.tx_hash === 'string' &&
+          typeof row.tx_pos === 'number' &&
+          typeof row.height === 'number'
+        ) {
           fetchedUTXOs.push({
             id: row.id as number,
-            address: row.address as string,
+            address: row.address,
             tokenAddress: addressInfo ? addressInfo.tokenAddress : '',
-            amount: row.amount as number,
-            tx_hash: row.tx_hash as string,
-            tx_pos: row.tx_pos as number,
-            height: row.height as number,
-            privateKey: privateKey, // @ts-ignore
-            token_data: row.token_data ? JSON.parse(row.token_data) : undefined, // @ts-ignore
+            amount: row.amount,
+            tx_hash: row.tx_hash,
+            tx_pos: row.tx_pos,
+            height: row.height,
+            privateKey: privateKey,
+            token_data: row.token_data ? JSON.parse(row.token_data) : undefined,
           });
         } else {
           console.error('Private key not found for address:', row.address);
@@ -103,7 +125,9 @@ const Transaction = () => {
       let privateKey = new Uint8Array();
       while (privateKeyStatement.step()) {
         const row = privateKeyStatement.getAsObject();
-        privateKey = new Uint8Array(row.private_key); // @ts-ignore
+        if (row.private_key) {
+          privateKey = new Uint8Array(row.private_key);
+        }
       }
       privateKeyStatement.free();
       return privateKey.length > 0 ? privateKey : null;
@@ -126,7 +150,7 @@ const Transaction = () => {
     }
   };
 
-  const handleUtxoClick = (utxo: UTXO) => {
+  const handleUtxoClick = (utxo: ExtendedUTXO) => {
     setSelectedUtxos((prevSelectedUtxos) => {
       if (
         prevSelectedUtxos.some((selectedUtxo) => selectedUtxo.id === utxo.id)
@@ -154,7 +178,7 @@ const Transaction = () => {
             utxo.token_data.category === selectedTokenCategory
         );
 
-        if (tokenUTXO) {
+        if (tokenUTXO && tokenUTXO.token_data) {
           newOutput.token = {
             amount: Number(tokenAmount),
             category: tokenUTXO.token_data.category,
@@ -200,44 +224,53 @@ const Transaction = () => {
       );
       console.log('Built Transaction with Placeholder:', transaction);
 
-      // Calculate bytecode size
-      const bytecodeSize = transaction.length / 2;
-      setBytecodeSize(bytecodeSize);
+      if (transaction) {
+        // Calculate bytecode size
+        const bytecodeSize = transaction.length / 2;
+        setBytecodeSize(bytecodeSize);
 
-      // Calculate total selected UTXO amount
-      const totalUtxoAmount = selectedUtxos.reduce(
-        (sum, utxo) => sum + utxo.amount,
-        0
-      );
+        // Calculate total selected UTXO amount
+        const totalUtxoAmount = selectedUtxos.reduce(
+          (sum, utxo) => sum + utxo.amount,
+          0
+        );
 
-      // Calculate total output amount
-      const totalOutputAmount = outputs.reduce(
-        (sum, output) => sum + output.amount,
-        0
-      );
+        // Calculate total output amount
+        const totalOutputAmount = outputs.reduce(
+          (sum, output) => sum + output.amount,
+          0
+        );
 
-      // Calculate remainder
-      const remainder = totalUtxoAmount - totalOutputAmount - bytecodeSize;
+        // Calculate remainder
+        const remainder = totalUtxoAmount - totalOutputAmount - bytecodeSize;
 
-      // Remove the placeholder output
-      txOutputs.pop();
+        // Remove the placeholder output
+        txOutputs.pop();
 
-      // Add the change address with the actual remainder
-      if (changeAddress && remainder > 0) {
-        txOutputs.push({ recipientAddress: changeAddress, amount: remainder });
+        // Add the change address with the actual remainder
+        if (changeAddress && remainder > 0) {
+          txOutputs.push({
+            recipientAddress: changeAddress,
+            amount: remainder,
+          });
+        }
+
+        // Build the final transaction
+        const finalTransaction = await txBuilder.buildTransaction(
+          selectedUtxos,
+          txOutputs
+        );
+        console.log(
+          `Selected UTXOs: ${JSON.stringify(selectedUtxos, null, 2)}`
+        );
+        console.log(`txOutputs: ${JSON.stringify(txOutputs, null, 2)}`);
+        console.log('Final Transaction:', txBuilder);
+        console.log('Built Final Transaction:', finalTransaction);
+        setRawTX(finalTransaction);
+        setFinalOutputs(txOutputs); // Set final outputs to render
+      } else {
+        setRawTX('');
       }
-
-      // Build the final transaction
-      const finalTransaction = await txBuilder.buildTransaction(
-        selectedUtxos,
-        txOutputs
-      );
-      console.log(`Selected UTXOs: ${JSON.stringify(selectedUtxos, null, 2)}`);
-      console.log(`txOutputs: ${JSON.stringify(txOutputs, null, 2)}`);
-      console.log('Final Transaction:', txBuilder);
-      console.log('Built Final Transaction:', finalTransaction);
-      setRawTX(finalTransaction);
-      setFinalOutputs(txOutputs); // Set final outputs to render
     } catch (error) {
       console.error('Error building transaction:', error);
       setRawTX('');
@@ -268,7 +301,7 @@ const Transaction = () => {
     ...new Set(
       utxos
         .filter((utxo) => utxo.token_data)
-        .map((utxo) => utxo.token_data.category)
+        .map((utxo) => utxo.token_data!.category)
     ),
   ];
 
