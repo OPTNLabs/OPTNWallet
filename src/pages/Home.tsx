@@ -1,6 +1,5 @@
 // src/pages/Home.tsx
-
-import { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { useDispatch, useSelector } from 'react-redux';
 import { RootState } from '../redux/store';
@@ -11,14 +10,15 @@ import WalletManager from '../apis/WalletManager/WalletManager';
 import RegularUTXOs from '../components/RegularUTXOs';
 import CashTokenUTXOs from '../components/CashTokenUTXOs';
 import ElectrumService from '../apis/ElectrumServer/ElectrumServer';
-import { setUTXOs } from '../redux/utxoSlice';
+import { setUTXOs, clearUTXOs } from '../redux/utxoSlice';
 
 const batchAmount = 10;
 
 const Home = () => {
   const [keyPairs, setKeyPairs] = useState([]);
+  const [utxos, setUtxos] = useState({});
   const [loading, setLoading] = useState({});
-  const [totalBalance, setTotalBalance] = useState(0);
+  const [cashTokenUtxos, setCashTokenUtxos] = useState({});
   const [keyProgress, setKeyProgress] = useState(0);
   const [utxoProgress, setUtxoProgress] = useState(0);
   const [generatingKeys, setGeneratingKeys] = useState(false);
@@ -35,20 +35,42 @@ const Home = () => {
   const currentWalletId = useSelector(
     (state: RootState) => state.wallet_id.currentWalletId
   );
-
-  const utxos = useSelector((state: RootState) => state.utxos.utxos);
+  const totalBalance = useSelector(
+    (state: RootState) => state.utxos.totalBalance
+  );
+  const reduxUTXOs = useSelector((state: RootState) => state.utxos.utxos);
 
   useEffect(() => {
     const initializeUTXOManager = async () => {
       ManageUTXOsRef.current = await UTXOManager();
       if (currentWalletId) {
         await generateKeys();
-        await fetchUTXOsFromDatabase(currentWalletId);
+        if (Object.keys(reduxUTXOs).length > 0) {
+          setUtxosFromRedux(reduxUTXOs);
+        } else {
+          await fetchUTXOsFromDatabase(currentWalletId);
+        }
       }
     };
 
     initializeUTXOManager();
   }, [currentWalletId]);
+
+  const setUtxosFromRedux = (reduxUTXOs) => {
+    const utxosMap = {};
+    const cashTokenUtxosMap = {};
+
+    Object.keys(reduxUTXOs).forEach((address) => {
+      const addressUTXOs = reduxUTXOs[address];
+      utxosMap[address] = addressUTXOs.filter((utxo) => !utxo.token_data);
+      cashTokenUtxosMap[address] = addressUTXOs.filter(
+        (utxo) => utxo.token_data
+      );
+    });
+
+    setUtxos(utxosMap);
+    setCashTokenUtxos(cashTokenUtxosMap);
+  };
 
   const generateKeys = async () => {
     if (currentWalletId) {
@@ -76,6 +98,8 @@ const Home = () => {
   const fetchUTXOs = async (walletKeys) => {
     setFetchingUTXOs(true);
     const utxosMap = {};
+    const cashTokenUtxosMap = {};
+    const uniqueUTXOs = new Set();
     const loadingState = {};
     let total = 0;
 
@@ -96,31 +120,58 @@ const Home = () => {
       );
       console.log(`Fetched UTXOs for address ${key.address}:`, addressUTXOs);
 
-      utxosMap[key.address] = addressUTXOs.map((utxo) => {
-        if (utxo.token_data) {
-          utxo.token_data = JSON.parse(utxo.token_data);
+      utxosMap[key.address] = addressUTXOs.filter((utxo) => {
+        const utxoKey = `${utxo.tx_hash}-${utxo.tx_pos}-${utxo.address}`;
+        if (uniqueUTXOs.has(utxoKey)) {
+          return false;
         }
-        total += utxo.amount;
-        return utxo;
+        if (utxo.address === key.address && !utxo.token_data) {
+          uniqueUTXOs.add(utxoKey);
+          total += utxo.amount;
+          return true;
+        }
+        return false;
+      });
+
+      cashTokenUtxosMap[key.address] = addressUTXOs.filter((utxo) => {
+        const utxoKey = `${utxo.tx_hash}-${utxo.tx_pos}-${utxo.address}`;
+        if (uniqueUTXOs.has(utxoKey)) {
+          return false;
+        }
+        if (utxo.address === key.address && utxo.token_data) {
+          uniqueUTXOs.add(utxoKey);
+          total += utxo.amount;
+          return true;
+        }
+        return false;
       });
 
       loadingState[key.address] = false;
       setLoading({ ...loadingState });
-      setTotalBalance(total);
       setUtxoProgress(((i + 1) / walletKeys.length) * 100);
-
-      dispatch(
-        setUTXOs({ address: key.address, utxos: utxosMap[key.address] })
-      );
     }
 
     await electrumService.electrumDisconnect();
 
+    setUtxos(utxosMap);
+    setCashTokenUtxos(cashTokenUtxosMap);
     setFetchingUTXOs(false);
+
+    // Update Redux with the new UTXOs
+    walletKeys.forEach((key) => {
+      dispatch(
+        setUTXOs({
+          address: key.address,
+          utxos: [...utxosMap[key.address], ...cashTokenUtxosMap[key.address]],
+        })
+      );
+    });
   };
 
   const fetchUTXOsFromDatabase = async (walletId) => {
     const utxosMap = {};
+    const cashTokenUtxosMap = {};
+
     for (const key of keyPairs) {
       const addressUTXOs = await ManageUTXOsRef.current.fetchUTXOsByAddress(
         walletId,
@@ -128,17 +179,24 @@ const Home = () => {
       );
       console.log(`Stored UTXOs for address ${key.address}:`, addressUTXOs);
 
-      utxosMap[key.address] = addressUTXOs.map((utxo) => {
-        if (utxo.token_data) {
-          utxo.token_data = JSON.parse(utxo.token_data);
-        }
-        return utxo;
-      });
-
-      dispatch(
-        setUTXOs({ address: key.address, utxos: utxosMap[key.address] })
+      utxosMap[key.address] = addressUTXOs.filter((utxo) => !utxo.token_data);
+      cashTokenUtxosMap[key.address] = addressUTXOs.filter(
+        (utxo) => utxo.token_data
       );
     }
+
+    setUtxos(utxosMap);
+    setCashTokenUtxos(cashTokenUtxosMap);
+
+    // Update Redux with the stored UTXOs
+    keyPairs.forEach((key) => {
+      dispatch(
+        setUTXOs({
+          address: key.address,
+          utxos: [...utxosMap[key.address], ...cashTokenUtxosMap[key.address]],
+        })
+      );
+    });
   };
 
   const handleGenerateKeys = async (index) => {
@@ -271,16 +329,12 @@ const Home = () => {
                       </p>
                       <RegularUTXOs
                         address={keyPair.address}
-                        utxos={utxos[keyPair.address]?.filter(
-                          (utxo) => !utxo.token_data
-                        )}
+                        utxos={utxos[keyPair.address]}
                         loading={loading[keyPair.address]}
                       />
                       <CashTokenUTXOs
                         address={keyPair.address}
-                        utxos={utxos[keyPair.address]?.filter(
-                          (utxo) => utxo.token_data
-                        )}
+                        utxos={cashTokenUtxos[keyPair.address]}
                         loading={loading[keyPair.address]}
                       />
                     </div>

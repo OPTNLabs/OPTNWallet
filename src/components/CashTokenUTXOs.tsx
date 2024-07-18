@@ -1,5 +1,3 @@
-// src/components/CashTokenUTXOs.tsx
-
 import React from 'react';
 
 const CashTokenUTXOs = ({ address, utxos, loading }) => {
@@ -30,29 +28,43 @@ const CashTokenUTXOs = ({ address, utxos, loading }) => {
         </div>
       ) : (
         utxos &&
-        utxos.map((utxo, idx) => (
-          <div key={idx} className="p-2 mb-2 border rounded-lg overflow-x-auto">
-            <p className="break-words">
-              <strong>Amount:</strong> {utxo.amount}
-            </p>
-            <p className="break-words">
-              <strong>Token Amount:</strong> {utxo.token_data?.amount || 'N/A'}
-            </p>
-            <p className="break-words">
-              <strong>Token Category:</strong>{' '}
-              {utxo.token_data?.category || 'N/A'}
-            </p>
-            <p className="break-words">
-              <strong>Transaction Hash:</strong> {utxo.tx_hash}
-            </p>
-            <p className="break-words">
-              <strong>Position:</strong> {utxo.tx_pos}
-            </p>
-            <p className="break-words">
-              <strong>Height:</strong> {utxo.height}
-            </p>
-          </div>
-        ))
+        utxos.map((utxo, idx) => {
+          let tokenData = utxo.token_data;
+          if (typeof tokenData === 'string') {
+            try {
+              tokenData = JSON.parse(tokenData);
+            } catch (error) {
+              console.error('Error parsing token_data:', error);
+              tokenData = {};
+            }
+          }
+
+          return (
+            <div
+              key={idx}
+              className="p-2 mb-2 border rounded-lg overflow-x-auto"
+            >
+              <p className="break-words">
+                <strong>Amount:</strong> {utxo.amount}
+              </p>
+              <p className="break-words">
+                <strong>Token Amount:</strong> {tokenData.amount || 'N/A'}
+              </p>
+              <p className="break-words">
+                <strong>Token Category:</strong> {tokenData.category || 'N/A'}
+              </p>
+              <p className="break-words">
+                <strong>Transaction Hash:</strong> {utxo.tx_hash}
+              </p>
+              <p className="break-words">
+                <strong>Position:</strong> {utxo.tx_pos}
+              </p>
+              <p className="break-words">
+                <strong>Height:</strong> {utxo.height}
+              </p>
+            </div>
+          );
+        })
       )}
     </div>
   );

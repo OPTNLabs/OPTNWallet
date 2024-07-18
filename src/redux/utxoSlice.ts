@@ -8,14 +8,23 @@ interface UTXO {
   address: string;
   height: number;
   token_data: { amount: string; category: string } | null;
+  privateKeyBase64: string; // Store the privateKey as a Base64 string
 }
 
 interface UTXOState {
   utxos: Record<string, UTXO[]>;
+  totalBalance: number;
 }
 
 const initialState: UTXOState = {
   utxos: {},
+  totalBalance: 0,
+};
+
+const calculateTotalBalance = (utxos: Record<string, UTXO[]>) => {
+  return Object.values(utxos)
+    .flat()
+    .reduce((sum, utxo) => sum + utxo.amount, 0);
 };
 
 const utxoSlice = createSlice({
@@ -27,13 +36,18 @@ const utxoSlice = createSlice({
       action: PayloadAction<{ address: string; utxos: UTXO[] }>
     ) => {
       state.utxos[action.payload.address] = action.payload.utxos;
+      state.totalBalance = calculateTotalBalance(state.utxos);
     },
     clearUTXOs: (state) => {
       state.utxos = {};
+      state.totalBalance = 0;
+    },
+    resetUTXOs: (state) => {
+      Object.assign(state, initialState);
     },
   },
 });
 
-export const { setUTXOs, clearUTXOs } = utxoSlice.actions;
+export const { setUTXOs, clearUTXOs, resetUTXOs } = utxoSlice.actions;
 
 export default utxoSlice.reducer;
