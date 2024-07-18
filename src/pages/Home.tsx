@@ -54,7 +54,7 @@ const Home = () => {
     };
 
     initializeUTXOManager();
-  }, [currentWalletId]);
+  }, [currentWalletId, reduxUTXOs]);
 
   const setUtxosFromRedux = (reduxUTXOs) => {
     const utxosMap = {};
@@ -230,6 +230,10 @@ const Home = () => {
     }
   };
 
+  const toContractView = async () => {
+    navigate(`/contract`);
+  };
+
   return (
     <>
       <section className="flex flex-col min-h-screen bg-gray-100 p-4">
@@ -287,6 +291,12 @@ const Home = () => {
             </div>
           </div>
         )}
+        <button
+          className="mt-4 p-2 bg-red-500 text-white rounded hover:bg-red-600 transition duration-300 w-full max-w-md mx-auto"
+          onClick={toContractView}
+        >
+          Contracts
+        </button>
         <button
           className="mt-4 p-2 bg-blue-500 text-white rounded hover:bg-blue-600 transition duration-300 w-full max-w-md mx-auto"
           onClick={togglePopup}

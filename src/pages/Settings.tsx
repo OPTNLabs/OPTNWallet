@@ -6,10 +6,11 @@ import AboutView from '../components/AboutView';
 import TermsOfUse from '../components/TermsOfUse';
 import ContactUs from '../components/ContactUs';
 import { useDispatch } from 'react-redux';
-import { setWalletId, resetWallet } from '../redux/walletSlice';
+import { setWalletId } from '../redux/walletSlice';
 import { resetUTXOs } from '../redux/utxoSlice';
 import WalletManager from '../apis/WalletManager/WalletManager';
 import { useNavigate } from 'react-router-dom';
+import { resetTransactions } from '../redux/transactionSlice';
 
 const Settings = () => {
   const [selectedOption, setSelectedOption] = useState('');
@@ -31,8 +32,9 @@ const Settings = () => {
   const handleLogout = async () => {
     const walletManager = WalletManager();
     await walletManager.clearAllData(); // Clear the entire database
-    dispatch(resetWallet()); // Reset wallet state in Redux store
-    dispatch(resetUTXOs()); // Reset UTXO state in Redux store
+    dispatch(setWalletId(0)); // Reset wallet ID in Redux store
+    dispatch(resetUTXOs()); // Reset UTXOs in Redux store
+    dispatch(resetTransactions()); // Reset transactions in Redux store
     navigate('/');
   };
 

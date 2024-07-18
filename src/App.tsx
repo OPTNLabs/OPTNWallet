@@ -5,6 +5,7 @@ import ImportWallet from './pages/ImportWallet';
 import Home from './pages/Home';
 // import CreateTransactions from './pages/CreateTransactions';
 import Transaction from './pages/Transaction';
+import TransactionHistory from './pages/TransactionHistory';
 import ContractView from './pages/ContractView';
 import RootHandler from './pages/RootHandler';
 import Layout from './components/Layout';
@@ -19,6 +20,10 @@ function App() {
         <Route path="/contract" element={<ContractView />} />
         {/* <Route path="/createtransaction/:sendAddress" element={<CreateTransactions />} /> */}
         <Route path="/transaction" element={<Transaction />} />
+        <Route
+          path="/transactions/:wallet_id"
+          element={<TransactionHistory />}
+        />{' '}
         <Route path="/settings" element={<Settings />} />
       </Route>
       <Route path="/createwallet" element={<CreateWallet />} />

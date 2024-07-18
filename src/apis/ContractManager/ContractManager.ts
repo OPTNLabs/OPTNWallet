@@ -1,4 +1,3 @@
-// @ts-nocheck
 import { Contract, Network, ElectrumNetworkProvider } from 'cashscript';
 import DatabaseService from '../DatabaseManager/DatabaseService';
 import p2pkhArtifact from './artifacts/p2pkh.json';

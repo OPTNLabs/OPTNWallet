@@ -13,10 +13,12 @@ import {
 import storage from 'redux-persist/lib/storage'; // defaults to localStorage for web
 import walletReducer from './walletSlice';
 import utxoReducer from './utxoSlice';
+import transactionReducer from './transactionSlice';
 
 const rootReducer = combineReducers({
   wallet_id: walletReducer,
   utxos: utxoReducer,
+  transactions: transactionReducer,
 });
 
 const persistConfig = {
