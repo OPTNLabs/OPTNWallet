@@ -1,4 +1,4 @@
-// @ts-nocheck
+// @ts-ignore
 // src/apis/UTXOManager/UTXOManager.ts
 
 import { UTXOs } from '../types';
@@ -92,9 +92,14 @@ export default async function UTXOManager() {
       const storedUTXOs = [];
       while (storedUTXOsQuery.step()) {
         const result = storedUTXOsQuery.getAsObject();
-        result.token_data = result.token_data
-          ? JSON.parse(result.token_data)
-          : null;
+
+        // Type guard to ensure result.token_data is a string before parsing
+        if (typeof result.token_data === 'string') {
+          result.token_data = JSON.parse(result.token_data);
+        } else {
+          result.token_data = null;
+        }
+
         storedUTXOs.push(result);
       }
       storedUTXOsQuery.free();

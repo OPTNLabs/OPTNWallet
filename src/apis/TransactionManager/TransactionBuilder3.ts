@@ -1,4 +1,4 @@
-// @ts-nocheck
+// @ts-ignore
 
 import {
   ElectrumNetworkProvider,
@@ -12,7 +12,7 @@ export interface UTXO {
   tx_pos: number;
   amount: number;
   address: string;
-  privateKey: Uint8Array; // Assuming you have the private key for signing
+  privateKey?: Uint8Array; // Optional for contract UTXOs
   token_data?: {
     amount: string;
     category: string;
@@ -36,21 +36,29 @@ export default function TransactionBuilder3() {
 
     // Prepare UTXOs with unlockers
     const unlockableUtxos = utxos.map((utxo) => {
-      if (!utxo.privateKey || utxo.privateKey.length === 0) {
-        throw new Error(
-          `Invalid private key for UTXO at ${utxo.tx_hash}:${utxo.tx_pos}`
-        );
+      if (utxo.privateKey) {
+        // Regular UTXO
+        const signatureTemplate = new SignatureTemplate(utxo.privateKey);
+        return {
+          txid: utxo.tx_hash,
+          vout: utxo.tx_pos,
+          satoshis: BigInt(utxo.amount),
+          scriptPubKey: signatureTemplate.lockingBytecode,
+          unlocker: signatureTemplate.unlockP2PKH(),
+          token_data: utxo.token_data,
+        };
+      } else {
+        // Contract UTXO
+        const contractUnlockFunction = getContractUnlockFunction(utxo);
+        return {
+          txid: utxo.tx_hash,
+          vout: utxo.tx_pos,
+          satoshis: BigInt(utxo.amount),
+          scriptPubKey: contractUnlockFunction.lockingBytecode,
+          unlocker: contractUnlockFunction.unlocker,
+          token_data: utxo.token_data,
+        };
       }
-
-      const signatureTemplate = new SignatureTemplate(utxo.privateKey);
-      return {
-        txid: utxo.tx_hash,
-        vout: utxo.tx_pos,
-        satoshis: BigInt(utxo.amount),
-        scriptPubKey: signatureTemplate.lockingBytecode,
-        unlocker: signatureTemplate.unlockP2PKH(),
-        token_data: utxo.token_data,
-      };
     });
 
     // Adding inputs
@@ -87,6 +95,27 @@ export default function TransactionBuilder3() {
       console.error('Error building transaction:', error);
       return null;
     }
+  }
+
+  function getContractUnlockFunction(utxo) {
+    const { contractName, abi, args } = utxo;
+    const contract = new ContractManager().loadArtifact(contractName);
+
+    // Find the matching function in the ABI
+    const abiFunction = abi.find((func) => func.name === 'spend');
+    if (!abiFunction) {
+      throw new Error(
+        `ABI function 'spend' not found in contract ${contractName}`
+      );
+    }
+
+    // Construct the unlocker
+    const unlocker = contract.functions.spend(...args);
+
+    return {
+      lockingBytecode: contract.lockingBytecode,
+      unlocker,
+    };
   }
 
   const sendTransaction = async (tx: string) => {

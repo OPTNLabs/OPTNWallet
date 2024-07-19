@@ -1,4 +1,4 @@
-// @ts-nocheck
+// @ts-ignore
 // src/pages/Settings.tsx
 
 import React, { useState, useEffect } from 'react';

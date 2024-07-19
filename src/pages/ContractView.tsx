@@ -1,4 +1,3 @@
-// @ts-nocheck
 import React, { useState, useEffect } from 'react';
 import { useSelector } from 'react-redux';
 import { useNavigate } from 'react-router-dom';
@@ -74,14 +73,38 @@ const ContractView = () => {
     setInputValues({ ...inputValues, [name]: value });
   };
 
+  const parseInputValue = (value, type) => {
+    switch (type) {
+      case 'int':
+        return BigInt(value);
+      case 'bool':
+        return value === 'true';
+      case 'string':
+        return value;
+      case 'bytes':
+        return value; // Assuming input is provided in hex format
+      case 'pubkey':
+        return value; // Assuming input is provided in hex format
+      case 'sig':
+        return value; // Assuming input is provided in hex format
+      case 'datasig':
+        return value; // Assuming input is provided in hex format
+      default:
+        return value; // Default to string
+    }
+  };
+
   const createContract = async () => {
     try {
       const contractManager = ContractManager();
 
-      const args = constructorArgs.map((arg) => inputValues[arg.name]) || [];
+      const args =
+        constructorArgs.map((arg) =>
+          parseInputValue(inputValues[arg.name], arg.type)
+        ) || [];
       console.log('Constructor Args:', constructorArgs);
       console.log('Input Values:', inputValues);
-      console.log('Args:', args);
+      console.log('Parsed Args:', args);
 
       if (
         constructorArgs.length > 0 &&
@@ -210,9 +233,9 @@ const ContractView = () => {
                       .filter((utxo) => !utxo.token)
                       .map((utxo) => ({
                         ...utxo,
-                        amount: utxo.satoshis.toString(),
-                        tx_hash: utxo.txid,
-                        tx_pos: utxo.vout,
+                        amount: utxo.amount.toString(),
+                        tx_hash: utxo.tx_hash,
+                        tx_pos: utxo.tx_pos,
                       }))}
                     loading={false}
                   />
@@ -222,7 +245,7 @@ const ContractView = () => {
                       .filter((utxo) => utxo.token)
                       .map((utxo) => ({
                         ...utxo,
-                        amount: utxo.satoshis.toString(),
+                        amount: utxo.amount.toString(),
                         tx_hash: utxo.txid,
                         tx_pos: utxo.vout,
                         token_data: {

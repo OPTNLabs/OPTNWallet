@@ -134,7 +134,8 @@ export const createTables = (db: any) => {
       bytecode TEXT,
       balance INT,
       utxos TEXT,
-      created_at TEXT
+      created_at TEXT,
+      abi TEXT
     );
   `);
 };

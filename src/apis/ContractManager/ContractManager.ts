@@ -1,13 +1,13 @@
-// @ts-nocheck
-
 import { Contract, Network, ElectrumNetworkProvider } from 'cashscript';
 import DatabaseService from '../DatabaseManager/DatabaseService';
 import p2pkhArtifact from './artifacts/p2pkh.json';
 import transferWithTimeoutArtifact from './artifacts/transfer_with_timeout.json';
 import announcementArtifact from './artifacts/announcement.json';
+import ElectrumService from '../ElectrumServer/ElectrumServer';
 
 export default function ContractManager() {
   const dbService = DatabaseService();
+  const electrum = ElectrumService();
 
   return {
     createContract,
@@ -16,6 +16,7 @@ export default function ContractManager() {
     listAvailableArtifacts,
     deleteContractInstance,
     fetchContractInstances,
+    getContractInstanceByAddress,
     loadArtifact,
   };
 
@@ -48,7 +49,18 @@ export default function ContractManager() {
 
       // Fetch contract details
       const balance = await contract.getBalance();
-      const utxos = await contract.getUtxos();
+      const utxos = await electrum.getUTXOS(contract.address);
+      console.log('UTXOS:', utxos);
+
+      // Convert Electrum UTXO format to match the expected UTXOs format
+      const formattedUTXOs = utxos.map((utxo) => ({
+        tx_hash: utxo.tx_hash,
+        tx_pos: utxo.tx_pos,
+        amount: BigInt(utxo.value),
+        height: utxo.height,
+        token: utxo.token_data ? utxo.token_data : undefined,
+      }));
+      console.log('Formatted UTXOs:', formattedUTXOs);
 
       // Save the contract artifact to the database
       await saveContractArtifact(artifact);
@@ -62,7 +74,8 @@ export default function ContractManager() {
           artifact.contractName,
           contract,
           balance,
-          utxos
+          formattedUTXOs,
+          artifact.abi // Ensure ABI is passed here
         );
       }
 
@@ -73,11 +86,159 @@ export default function ContractManager() {
         bytesize: contract.bytesize,
         bytecode: contract.bytecode,
         balance,
-        utxos,
+        utxos: formattedUTXOs,
+        abi: artifact.abi, // Ensure ABI is returned here
       };
     } catch (error) {
       console.error('Error creating contract:', error);
       throw error;
+    }
+  }
+
+  async function saveContractInstance(
+    contractName,
+    contract,
+    balance,
+    utxos,
+    abi
+  ) {
+    await dbService.ensureDatabaseStarted();
+    const db = dbService.getDatabase();
+
+    const insertQuery = `
+      INSERT INTO instantiated_contracts 
+      (contract_name, address, token_address, opcount, bytesize, bytecode, balance, utxos, created_at, abi) 
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `;
+    const params = [
+      contractName,
+      contract.address,
+      contract.tokenAddress,
+      contract.opcount,
+      contract.bytesize,
+      contract.bytecode,
+      balance.toString(),
+      JSON.stringify(
+        utxos.map((utxo) => ({
+          ...utxo,
+          amount: utxo.amount.toString(),
+        }))
+      ),
+      new Date().toISOString(),
+      JSON.stringify(abi), // Ensure ABI is included here
+    ];
+
+    console.log('Inserting contract instance with params:', params);
+
+    const statement = db.prepare(insertQuery);
+    statement.run(params);
+    statement.free();
+    await dbService.saveDatabaseToFile();
+  }
+
+  async function deleteContractInstance(contractId) {
+    await dbService.ensureDatabaseStarted();
+    const db = dbService.getDatabase();
+
+    const deleteQuery = 'DELETE FROM instantiated_contracts WHERE id = ?';
+    const statement = db.prepare(deleteQuery);
+    statement.run([contractId]);
+    statement.free();
+    await dbService.saveDatabaseToFile();
+  }
+
+  async function fetchContractInstances() {
+    await dbService.ensureDatabaseStarted();
+    const db = dbService.getDatabase();
+
+    const query = 'SELECT * FROM instantiated_contracts';
+    const statement = db.prepare(query);
+
+    const instances = [];
+    while (statement.step()) {
+      const row = statement.getAsObject();
+      instances.push({
+        ...row,
+        balance:
+          typeof row.balance === 'string' ? BigInt(row.balance) : BigInt(0),
+        utxos:
+          typeof row.utxos === 'string'
+            ? JSON.parse(row.utxos).map((utxo) => ({
+                ...utxo,
+                amount: BigInt(utxo.amount), // Convert back to BigInt
+              }))
+            : [],
+        abi: JSON.parse(row.abi),
+      });
+    }
+    statement.free();
+    return instances;
+  }
+
+  async function getContractInstanceByAddress(address) {
+    await dbService.ensureDatabaseStarted();
+    const db = dbService.getDatabase();
+
+    const query = 'SELECT * FROM instantiated_contracts WHERE address = ?';
+    const statement = db.prepare(query);
+    statement.bind([address]);
+
+    let contractInstance = null;
+    if (statement.step()) {
+      const row = statement.getAsObject();
+      contractInstance = {
+        ...row,
+        balance:
+          typeof row.balance === 'string' ? BigInt(row.balance) : BigInt(0),
+        utxos:
+          typeof row.utxos === 'string'
+            ? JSON.parse(row.utxos).map((utxo) => ({
+                ...utxo,
+                amount: BigInt(utxo.amount), // Convert back to BigInt
+              }))
+            : [],
+        abi: JSON.parse(row.abi),
+      };
+    }
+    statement.free();
+    return contractInstance;
+  }
+
+  function loadArtifact(artifactName) {
+    try {
+      const artifacts = {
+        p2pkh: p2pkhArtifact,
+        transfer_with_timeout: transferWithTimeoutArtifact,
+        announcement: announcementArtifact,
+      };
+
+      const artifact = artifacts[artifactName];
+      if (!artifact) {
+        throw new Error(`Artifact ${artifactName} not found`);
+      }
+      return artifact;
+    } catch (error) {
+      console.error('Error loading artifact:', error);
+      return null;
+    }
+  }
+
+  function listAvailableArtifacts() {
+    try {
+      return [
+        { fileName: 'p2pkh', contractName: p2pkhArtifact.contractName },
+        {
+          fileName: 'transfer_with_timeout',
+          contractName: transferWithTimeoutArtifact.contractName,
+        },
+        {
+          fileName: 'announcement',
+          contractName: announcementArtifact.contractName,
+        },
+      ];
+    } catch (error) {
+      console.error('Error listing artifacts:', error);
+      return [];
     }
   }
 
@@ -136,143 +297,5 @@ export default function ContractManager() {
     }
     statement.free();
     return artifact;
-  }
-
-  function loadArtifact(artifactName) {
-    try {
-      const artifacts = {
-        p2pkh: p2pkhArtifact,
-        transfer_with_timeout: transferWithTimeoutArtifact,
-        announcement: announcementArtifact,
-      };
-
-      const artifact = artifacts[artifactName];
-      if (!artifact) {
-        throw new Error(`Artifact ${artifactName} not found`);
-      }
-      return artifact;
-    } catch (error) {
-      console.error('Error loading artifact:', error);
-      return null;
-    }
-  }
-
-  function listAvailableArtifacts() {
-    try {
-      return [
-        { fileName: 'p2pkh', contractName: p2pkhArtifact.contractName },
-        {
-          fileName: 'transfer_with_timeout',
-          contractName: transferWithTimeoutArtifact.contractName,
-        },
-        {
-          fileName: 'announcement',
-          contractName: announcementArtifact.contractName,
-        },
-      ];
-    } catch (error) {
-      console.error('Error listing artifacts:', error);
-      return [];
-    }
-  }
-
-  async function saveContractInstance(contractName, contract, balance, utxos) {
-    await dbService.ensureDatabaseStarted();
-    const db = dbService.getDatabase();
-
-    const insertQuery = `
-      INSERT INTO instantiated_contracts 
-      (contract_name, address, token_address, opcount, bytesize, bytecode, balance, utxos, created_at) 
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `;
-    const params = [
-      contractName,
-      contract.address,
-      contract.tokenAddress,
-      contract.opcount,
-      contract.bytesize,
-      contract.bytecode,
-      balance.toString(), // Convert balance to string
-      JSON.stringify(
-        utxos.map((utxo) => ({
-          ...utxo,
-          satoshis: utxo.satoshis.toString(), // Convert satoshis to string
-        }))
-      ),
-      new Date().toISOString(),
-    ];
-
-    console.log('Inserting contract instance with params:', params);
-
-    const statement = db.prepare(insertQuery);
-    statement.run(params);
-    statement.free();
-    await dbService.saveDatabaseToFile();
-  }
-
-  async function deleteContractInstance(contractId) {
-    await dbService.ensureDatabaseStarted();
-    const db = dbService.getDatabase();
-
-    const deleteQuery = 'DELETE FROM instantiated_contracts WHERE id = ?';
-    const statement = db.prepare(deleteQuery);
-    statement.run([contractId]);
-    statement.free();
-    await dbService.saveDatabaseToFile();
-  }
-
-  async function fetchContractInstances() {
-    await dbService.ensureDatabaseStarted();
-    const db = dbService.getDatabase();
-
-    const query = 'SELECT * FROM instantiated_contracts';
-    const statement = db.prepare(query);
-
-    const instances = [];
-    while (statement.step()) {
-      const row = statement.getAsObject();
-      instances.push({
-        ...row,
-        balance:
-          typeof row.balance === 'string' ? BigInt(row.balance) : BigInt(0), // Convert balance back to BigInt
-        utxos:
-          typeof row.utxos === 'string'
-            ? JSON.parse(row.utxos).map((utxo) => ({
-                ...utxo,
-                satoshis: BigInt(utxo.satoshis), // Convert satoshis back to BigInt
-              }))
-            : [],
-      });
-    }
-    statement.free();
-    return instances;
-  }
-
-  async function getContractInstanceByAddress(address) {
-    await dbService.ensureDatabaseStarted();
-    const db = dbService.getDatabase();
-
-    const query = 'SELECT * FROM instantiated_contracts WHERE address = ?';
-    const statement = db.prepare(query);
-    statement.bind([address]);
-
-    let contractInstance = null;
-    if (statement.step()) {
-      const row = statement.getAsObject();
-      contractInstance = {
-        ...row,
-        balance:
-          typeof row.balance === 'string' ? BigInt(row.balance) : BigInt(0), // Convert balance back to BigInt
-        utxos:
-          typeof row.utxos === 'string'
-            ? JSON.parse(row.utxos).map((utxo) => ({
-                ...utxo,
-                satoshis: BigInt(utxo.satoshis), // Convert satoshis back to BigInt
-              }))
-            : [],
-      };
-    }
-    statement.free();
-    return contractInstance;
   }
 }

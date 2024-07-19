@@ -1,4 +1,4 @@
-// @ts-nocheck
+// @ts-ignore
 // src/components/Layout.tsx
 
 import React, { useState, useEffect } from 'react';
