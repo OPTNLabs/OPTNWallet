@@ -43,16 +43,15 @@ const Transaction: React.FC = () => {
   const [transactionId, setTransactionId] = useState<string>('');
   const [finalOutputs, setFinalOutputs] = useState<TransactionOutput[]>([]);
   const [showPopup, setShowPopup] = useState(false);
-  const [selectedContractAddress, setSelectedContractAddress] = useState<
-    string | null
-  >(null);
-  const [selectedContractABI, setSelectedContractABI] = useState<any[] | null>(
-    null
-  );
+  const [selectedContractAddresses, setSelectedContractAddresses] = useState<
+    string[]
+  >([]);
+  const [selectedContractABIs, setSelectedContractABIs] = useState<any[]>([]);
   const [contractFunction, setContractFunction] = useState<string | null>(null);
-  const [contractFunctionInputs, setContractFunctionInputs] = useState<any[]>(
-    []
-  );
+  const [contractFunctionInputs, setContractFunctionInputs] = useState<
+    any[] | null
+  >(null);
+  const [contractUTXOs, setContractUTXOs] = useState<ExtendedUTXO[]>([]);
   const navigate = useNavigate();
 
   useEffect(() => {
@@ -168,6 +167,7 @@ const Transaction: React.FC = () => {
       setContractAddresses(contractAddressList);
 
       setUtxos(allUTXOs);
+      setContractUTXOs(contractUTXOs); // Set contract UTXOs
     };
 
     const fetchPrivateKey = async (
@@ -205,6 +205,27 @@ const Transaction: React.FC = () => {
       );
     } else {
       setSelectedAddresses([...selectedAddresses, address]);
+    }
+  };
+
+  const toggleContractSelection = (address: string, abi: {}) => {
+    if (
+      selectedContractAddresses.includes(address) &&
+      selectedContractABIs.includes(abi)
+    ) {
+      setSelectedContractAddresses(
+        selectedContractAddresses.filter(
+          (selectedContractAddress) => selectedContractAddress !== address
+        )
+      );
+      setSelectedContractABIs(
+        selectedContractABIs.filter(
+          (selectedContractABI) => selectedContractABI !== abi
+        )
+      );
+    } else {
+      setSelectedContractAddresses([...selectedContractAddresses, address]);
+      setSelectedContractABIs([...selectedContractABIs, abi]);
     }
   };
 
@@ -278,9 +299,9 @@ const Transaction: React.FC = () => {
       // Build the transaction with the placeholder
       const transaction = await txBuilder.buildTransaction(
         selectedUtxos,
-        txOutputs,
-        contractFunction,
-        contractFunctionInputs
+        txOutputs
+        // contractFunction,
+        // contractFunctionInputs
       );
       console.log('Built Transaction with Placeholder:', transaction);
 
@@ -318,9 +339,9 @@ const Transaction: React.FC = () => {
         // Build the final transaction
         const finalTransaction = await txBuilder.buildTransaction(
           selectedUtxos,
-          txOutputs,
-          contractFunction,
-          contractFunctionInputs
+          txOutputs
+          // contractFunction,
+          // contractFunctionInputs
         );
         console.log(
           `Selected UTXOs: ${JSON.stringify(selectedUtxos, null, 2)}`
@@ -375,6 +396,10 @@ const Transaction: React.FC = () => {
     setContractFunctionInputs(inputs);
   };
 
+  const filteredContractUTXOs = contractUTXOs.filter((utxo) =>
+    selectedContractAddresses.includes(utxo.address)
+  );
+
   return (
     <div className="container mx-auto p-4 overflow-x-hidden">
       <h1 className="text-2xl font-bold mb-4">Transaction Builder</h1>
@@ -383,48 +408,56 @@ const Transaction: React.FC = () => {
           Select Addresses to Spend From
         </h3>
         <h4 className="text-md font-semibold mb-2">Wallet Addresses</h4>
-        {addresses.map((addressObj, index) => (
-          <div
-            key={index}
-            className="flex items-center mb-2 break-words whitespace-normal"
-          >
-            <input
-              type="checkbox"
-              checked={selectedAddresses.includes(addressObj.address)}
-              onChange={() => toggleAddressSelection(addressObj.address)}
-              className="mr-2"
-            />
-            <span className="break-words">{`Address: ${addressObj.address}, Token Address: ${addressObj.tokenAddress}`}</span>
-          </div>
-        ))}
-        <h4 className="text-md font-semibold mb-2">Contract Addresses</h4>
-        {contractAddresses.map((contractObj, index) => (
-          <div
-            key={index}
-            className="flex items-center mb-2 break-words whitespace-normal"
-          >
-            <input
-              type="checkbox"
-              checked={selectedAddresses.includes(contractObj.address)}
-              onChange={() => {
-                toggleAddressSelection(contractObj.address);
-                setSelectedContractAddress(contractObj.address);
-              }}
-              className="mr-2"
-            />
-            <span className="break-words">{`Contract Address: ${contractObj.address}, Token Address: ${contractObj.tokenAddress}`}</span>
-            <button
-              className="bg-blue-500 text-white py-2 px-4 rounded ml-4"
-              onClick={() => {
-                setSelectedContractAddress(contractObj.address);
-                setSelectedContractABI(contractObj.abi);
-                setShowPopup(true);
-              }}
+        <div className="overflow-y-auto max-h-96">
+          {addresses.map((addressObj, index) => (
+            <div
+              key={index}
+              className="flex items-center mb-2 break-words whitespace-normal"
             >
-              {contractObj.contractName}
-            </button>
-          </div>
-        ))}
+              <input
+                type="checkbox"
+                checked={selectedAddresses.includes(addressObj.address)}
+                onChange={() => toggleAddressSelection(addressObj.address)}
+                className="mr-2"
+              />
+              <span className="break-words overflow-x-auto">
+                {`Address: ${addressObj.address}`}
+                <br />
+                {`Token Address: ${addressObj.tokenAddress}`}
+              </span>
+            </div>
+          ))}
+        </div>
+        <h4 className="text-md font-semibold mb-2">Contract Addresses</h4>
+        <div className="overflow-y-auto max-h-96">
+          {contractAddresses.map((contractObj, index) => (
+            <div
+              key={index}
+              className="flex items-center mb-2 break-words whitespace-normal"
+            >
+              <input
+                type="checkbox"
+                checked={selectedContractAddresses.includes(
+                  contractObj.address
+                )}
+                onChange={() => {
+                  toggleAddressSelection(contractObj.address);
+                  toggleContractSelection(contractObj.address, contractObj.abi);
+                }}
+                className="mr-2"
+              />
+              <span className="break-words overflow-x-auto">{`Contract Address: ${contractObj.address}, Token Address: ${contractObj.tokenAddress}`}</span>
+              <button
+                className="bg-blue-500 text-white py-2 px-4 rounded ml-4"
+                onClick={() => {
+                  setShowPopup(true);
+                }}
+              >
+                {contractObj.contractName}
+              </button>
+            </div>
+          ))}
+        </div>
       </div>
       <div className="mb-6">
         <h3 className="text-lg font-semibold mb-2">Regular UTXOs</h3>
@@ -496,6 +529,31 @@ const Transaction: React.FC = () => {
             </div>
           ))}
       </div>
+      {selectedContractAddresses.length > 0 && (
+        <div className="mb-6">
+          <h3 className="text-lg font-semibold mb-2">Contract UTXOs</h3>
+          <div className="p-2 border rounded-lg mb-2">
+            {filteredContractUTXOs.length > 0 && (
+              <>
+                <RegularUTXOs
+                  address={selectedContractAddresses.join(', ')}
+                  utxos={filteredContractUTXOs.filter(
+                    (utxo) => !utxo.token_data
+                  )}
+                  loading={false}
+                />
+                <CashTokenUTXOs
+                  address={selectedContractAddresses.join(', ')}
+                  utxos={filteredContractUTXOs.filter(
+                    (utxo) => utxo.token_data
+                  )}
+                  loading={false}
+                />
+              </>
+            )}
+          </div>
+        </div>
+      )}
       <div className="mb-6">
         <h3 className="text-lg font-semibold mb-2">
           Selected Transaction Inputs
@@ -646,14 +704,16 @@ const Transaction: React.FC = () => {
           </a>
         </div>
       )}
-      {showPopup && selectedContractABI && selectedContractAddress && (
-        <SelectContractFunctionPopup
-          contractAddress={selectedContractAddress}
-          contractABI={selectedContractABI}
-          onClose={() => setShowPopup(false)}
-          onFunctionSelect={handleContractFunctionSelect}
-        />
-      )}
+      {showPopup &&
+        selectedContractABIs.length > 0 &&
+        selectedContractAddresses.length > 0 && (
+          <SelectContractFunctionPopup
+            contractAddress={selectedContractAddresses}
+            contractABI={selectedContractABIs}
+            onClose={() => setShowPopup(false)}
+            onFunctionSelect={handleContractFunctionSelect}
+          />
+        )}
     </div>
   );
 };

@@ -197,74 +197,78 @@ const ContractView = () => {
       {contractInstances.length > 0 && (
         <div className="mt-8">
           <h2 className="text-lg font-semibold mb-2">Instantiated Contracts</h2>
-          <ul>
-            {contractInstances.map((instance) => (
-              <li
-                key={instance.id}
-                className="mb-4 p-4 border rounded bg-gray-100 overflow-x-auto"
-              >
-                <div className="mb-2">
-                  <strong>Contract Name:</strong> {instance.contract_name}
-                </div>
-                <div className="mb-2">
-                  <strong>Address:</strong> {instance.address}
-                </div>
-                <div className="mb-2">
-                  <strong>Token Address:</strong> {instance.token_address}
-                </div>
-                <div className="mb-2">
-                  <strong>Opcount:</strong> {instance.opcount}
-                </div>
-                <div className="mb-2">
-                  <strong>Bytesize:</strong> {instance.bytesize}
-                </div>
-                <div className="mb-2">
-                  <strong>Bytecode:</strong> {instance.bytecode}
-                </div>
-                <div className="mb-2">
-                  <strong>Balance:</strong> {instance.balance.toString()}{' '}
-                  satoshis
-                </div>
-                <div className="mb-2">
-                  <strong>UTXOs:</strong>
-                  <RegularUTXOs
-                    address={instance.address}
-                    utxos={instance.utxos
-                      .filter((utxo) => !utxo.token)
-                      .map((utxo) => ({
-                        ...utxo,
-                        amount: utxo.amount.toString(),
-                        tx_hash: utxo.tx_hash,
-                        tx_pos: utxo.tx_pos,
-                      }))}
-                    loading={false}
-                  />
-                  <CashTokenUTXOs
-                    address={instance.address}
-                    utxos={instance.utxos
-                      .filter((utxo) => utxo.token)
-                      .map((utxo) => ({
-                        ...utxo,
-                        amount: utxo.amount.toString(),
-                        tx_hash: utxo.txid,
-                        tx_pos: utxo.vout,
-                        token_data: {
-                          amount: utxo.token.amount,
-                          category: utxo.token.category,
-                        },
-                      }))}
-                    loading={false}
-                  />
-                </div>
-                <button
-                  onClick={() => deleteContract(instance.id)}
-                  className="bg-red-500 text-white py-2 px-4 my-2 rounded"
+          <div className="overflow-y-auto max-h-96">
+            <ul>
+              {contractInstances.map((instance) => (
+                <li
+                  key={instance.id}
+                  className="mb-4 p-4 border rounded bg-gray-100"
                 >
-                  Delete
-                </button>
-              </li>
-            ))}
-          </ul>
+                  <div>
+                    <div className="mb-2 overflow-x-auto">
+                      <strong>Contract Name:</strong> {instance.contract_name}
+                    </div>
+                    <div className="mb-2">
+                      <strong>Address:</strong> {instance.address}
+                    </div>
+                    <div className="mb-2">
+                      <strong>Token Address:</strong> {instance.token_address}
+                    </div>
+                    <div className="mb-2">
+                      <strong>Opcount:</strong> {instance.opcount}
+                    </div>
+                    <div className="mb-2">
+                      <strong>Bytesize:</strong> {instance.bytesize}
+                    </div>
+                    <div className="mb-2">
+                      <strong>Bytecode:</strong> {instance.bytecode}
+                    </div>
+                    <div className="mb-2">
+                      <strong>Balance:</strong> {instance.balance.toString()}{' '}
+                      satoshis
+                    </div>
+                  </div>
+                  <div className="mb-2">
+                    <strong>UTXOs:</strong>
+                    <RegularUTXOs
+                      address={instance.address}
+                      utxos={instance.utxos
+                        .filter((utxo) => !utxo.token)
+                        .map((utxo) => ({
+                          ...utxo,
+                          amount: utxo.amount.toString(),
+                          tx_hash: utxo.tx_hash,
+                          tx_pos: utxo.tx_pos,
+                        }))}
+                      loading={false}
+                    />
+                    <CashTokenUTXOs
+                      address={instance.address}
+                      utxos={instance.utxos
+                        .filter((utxo) => utxo.token)
+                        .map((utxo) => ({
+                          ...utxo,
+                          amount: utxo.amount.toString(),
+                          tx_hash: utxo.txid,
+                          tx_pos: utxo.vout,
+                          token_data: {
+                            amount: utxo.token.amount,
+                            category: utxo.token.category,
+                          },
+                        }))}
+                      loading={false}
+                    />
+                  </div>
+                  <button
+                    onClick={() => deleteContract(instance.id)}
+                    className="bg-red-500 text-white py-2 px-4 my-2 rounded"
+                  >
+                    Delete
+                  </button>
+                </li>
+              ))}
+            </ul>
+          </div>
         </div>
       )}
       <button

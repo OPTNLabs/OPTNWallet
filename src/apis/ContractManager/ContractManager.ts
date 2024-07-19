@@ -49,8 +49,9 @@ export default function ContractManager() {
 
       // Fetch contract details
       const balance = await contract.getBalance();
+      // console.log('balance:', balance);
       const utxos = await electrum.getUTXOS(contract.address);
-      console.log('UTXOS:', utxos);
+      // console.log('UTXOS:', utxos);
 
       // Convert Electrum UTXO format to match the expected UTXOs format
       const formattedUTXOs = utxos.map((utxo) => ({
@@ -104,6 +105,8 @@ export default function ContractManager() {
   ) {
     await dbService.ensureDatabaseStarted();
     const db = dbService.getDatabase();
+
+    console.log('balance:', balance);
 
     const insertQuery = `
       INSERT INTO instantiated_contracts 
