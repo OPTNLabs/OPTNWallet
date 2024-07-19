@@ -188,7 +188,6 @@ const TransactionHistory: React.FC = () => {
             onClick={toggleSortOrder}
             className="py-1 px-2 bg-gray-200 rounded md:py-2 md:px-4"
           >
-            Toggle Sort Order:{' '}
             {sortOrder === 'asc' ? 'Ascending' : 'Descending'}
           </button>
           <button

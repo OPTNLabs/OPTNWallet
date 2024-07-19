@@ -27,6 +27,7 @@ export default function DatabaseService() {
       db = new SQLModule.Database();
       createTables(db); // Ensure the schema is created if no saved DB exists
     }
+    await updateSchema(db); // Ensure schema is updated
     return db;
   }
 
@@ -68,6 +69,18 @@ export default function DatabaseService() {
       `);
       createTables(db); // Recreate empty tables after dropping
       await saveDatabaseToFile(); // Save changes to local storage
+    }
+  }
+
+  async function updateSchema(db: Database): Promise<void> {
+    const result = db.exec(`
+      PRAGMA table_info(instantiated_contracts);
+    `);
+    const columns = result[0].values.map((row) => row[1]);
+    if (!columns.includes('abi')) {
+      db.run(`
+        ALTER TABLE instantiated_contracts ADD COLUMN abi TEXT;
+      `);
     }
   }
 

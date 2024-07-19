@@ -1,4 +1,4 @@
-// @ts-nocheck
+// @ts-ignore
 // src/components/RegularUTXOs.tsx
 import React from 'react';
 

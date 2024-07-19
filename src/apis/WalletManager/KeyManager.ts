@@ -1,4 +1,4 @@
-// @ts-nocheck
+// @ts-ignore
 import DatabaseService from '../DatabaseManager/DatabaseService';
 import KeyGeneration from './KeyGeneration';
 import AddressManager from '../AddressManager/AddressManager';

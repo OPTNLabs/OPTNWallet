@@ -1,4 +1,4 @@
-// @ts-nocheck
+// @ts-ignore
 
 import {
   ElectrumNetworkProvider,
