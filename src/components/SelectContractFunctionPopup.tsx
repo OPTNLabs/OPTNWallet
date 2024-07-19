@@ -1,8 +1,8 @@
 import React, { useState, useEffect } from 'react';
 
 interface SelectContractFunctionPopupProps {
-  contractAddress: string;
-  contractABI: any[];
+  contractAddress: string[];
+  contractABI: any[][];
   onClose: () => void;
   onFunctionSelect: (contractFunction: string, inputs: any[]) => void;
 }
@@ -16,11 +16,23 @@ const SelectContractFunctionPopup: React.FC<
   const [inputValues, setInputValues] = useState<{ [key: string]: string }>({});
 
   useEffect(() => {
-    const functionNames = contractABI
-      .filter((item) => item.type === 'function')
+    console.log('Contract ABI:', contractABI); // Debug log
+
+    const allFunctionNames = contractABI
+      .flat()
+      .filter((item) => {
+        console.log('ABI Item:', item); // Log each ABI item to debug
+        return item.type === 'function' || item.type === undefined;
+      })
       .map((item) => ({ name: item.name, inputs: item.inputs }));
-    setFunctions(functionNames);
+
+    console.log('Function Names:', allFunctionNames); // Debug log
+    setFunctions(allFunctionNames);
   }, [contractABI]);
+
+  useEffect(() => {
+    console.log('Functions State:', functions); // Debug log
+  }, [functions]);
 
   const handleFunctionSelect = (e: React.ChangeEvent<HTMLSelectElement>) => {
     const selectedFunctionName = e.target.value;
@@ -29,7 +41,7 @@ const SelectContractFunctionPopup: React.FC<
     const functionAbi = functions.find(
       (item) => item.name === selectedFunctionName
     );
-    setInputs(functionAbi.inputs || []);
+    setInputs(functionAbi?.inputs || []);
     setInputValues({});
   };
 
@@ -43,7 +55,7 @@ const SelectContractFunctionPopup: React.FC<
 
   const handleSelect = () => {
     const inputValuesArray = inputs.map(
-      (input, index) => inputValues[input.name] || ''
+      (input) => inputValues[input.name] || ''
     );
     onFunctionSelect(selectedFunction, inputValuesArray);
     onClose();
