@@ -49,9 +49,7 @@ export default function ContractManager() {
 
       // Fetch contract details
       const balance = await contract.getBalance();
-      // console.log('balance:', balance);
       const utxos = await electrum.getUTXOS(contract.address);
-      // console.log('UTXOS:', utxos);
 
       // Convert Electrum UTXO format to match the expected UTXOs format
       const formattedUTXOs = utxos.map((utxo) => ({
@@ -76,7 +74,7 @@ export default function ContractManager() {
           contract,
           balance,
           formattedUTXOs,
-          artifact.abi // Ensure ABI is passed here
+          artifact
         );
       }
 
@@ -88,7 +86,7 @@ export default function ContractManager() {
         bytecode: contract.bytecode,
         balance,
         utxos: formattedUTXOs,
-        abi: artifact.abi, // Ensure ABI is returned here
+        abi: artifact.abi,
       };
     } catch (error) {
       console.error('Error creating contract:', error);
@@ -101,7 +99,7 @@ export default function ContractManager() {
     contract,
     balance,
     utxos,
-    abi
+    artifact
   ) {
     await dbService.ensureDatabaseStarted();
     const db = dbService.getDatabase();
@@ -110,7 +108,7 @@ export default function ContractManager() {
 
     const insertQuery = `
       INSERT INTO instantiated_contracts 
-      (contract_name, address, token_address, opcount, bytesize, bytecode, balance, utxos, created_at, abi) 
+      (contract_name, address, token_address, opcount, bytesize, bytecode, balance, utxos, created_at, artifact) 
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `;
     const params = [
@@ -128,7 +126,7 @@ export default function ContractManager() {
         }))
       ),
       new Date().toISOString(),
-      JSON.stringify(abi), // Ensure ABI is included here
+      JSON.stringify(artifact),
     ];
 
     console.log('Inserting contract instance with params:', params);
@@ -171,7 +169,7 @@ export default function ContractManager() {
                 amount: BigInt(utxo.amount), // Convert back to BigInt
               }))
             : [],
-        abi: JSON.parse(row.abi),
+        artifact: JSON.parse(row.artifact),
       });
     }
     statement.free();
@@ -200,7 +198,7 @@ export default function ContractManager() {
                 amount: BigInt(utxo.amount), // Convert back to BigInt
               }))
             : [],
-        abi: JSON.parse(row.abi),
+        artifact: JSON.parse(row.artifact),
       };
     }
     statement.free();
