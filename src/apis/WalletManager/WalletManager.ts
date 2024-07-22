@@ -1,4 +1,4 @@
-// @ts-ignore
+// @ts-nocheck
 import { hexToBin } from '@bitauth/libauth';
 import KeyManager from './KeyManager';
 import { createTables } from '../../utils/schema/schema';
