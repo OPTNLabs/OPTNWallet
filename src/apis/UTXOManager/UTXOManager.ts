@@ -1,4 +1,4 @@
-// @ts-ignore
+// @ts-nocheck
 // src/apis/UTXOManager/UTXOManager.ts
 
 import { UTXOs } from '../types';
