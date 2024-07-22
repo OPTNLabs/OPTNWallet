@@ -135,7 +135,9 @@ export const createTables = (db: any) => {
       balance INT,
       utxos TEXT,
       created_at TEXT,
-      artifact TEXT
+      artifact TEXT,
+      redeemScript TEXT,
+      unlock TEXT
     );
   `);
 };
