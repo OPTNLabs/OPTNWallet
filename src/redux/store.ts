@@ -1,4 +1,3 @@
-// src/redux/store.ts
 import { configureStore, combineReducers } from '@reduxjs/toolkit';
 import {
   persistStore,
@@ -14,11 +13,13 @@ import storage from 'redux-persist/lib/storage'; // defaults to localStorage for
 import walletReducer from './walletSlice';
 import utxoReducer from './utxoSlice';
 import transactionReducer from './transactionSlice';
+import contractReducer from './contractSlice';
 
 const rootReducer = combineReducers({
   wallet_id: walletReducer,
   utxos: utxoReducer,
   transactions: transactionReducer,
+  contract: contractReducer,
 });
 
 const persistConfig = {
@@ -43,7 +44,6 @@ const persistor = persistStore(store);
 store.subscribe(() => console.log('Redux state updated:', store.getState()));
 
 export type RootState = ReturnType<typeof store.getState>;
-
 export type AppDispatch = typeof store.dispatch;
 
 export { store, persistor };

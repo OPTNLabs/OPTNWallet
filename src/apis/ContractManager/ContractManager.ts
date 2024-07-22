@@ -49,6 +49,7 @@ export default function ContractManager() {
 
       // Fetch contract details
       const balance = await contract.getBalance();
+      console.log('Balance', balance);
       const utxos = await electrum.getUTXOS(contract.address);
 
       // Convert Electrum UTXO format to match the expected UTXOs format
@@ -87,6 +88,11 @@ export default function ContractManager() {
         balance,
         utxos: formattedUTXOs,
         abi: artifact.abi,
+        redeemScript: contract.redeemScript,
+        unlock: Object.keys(contract.unlock).reduce((acc, key) => {
+          acc[key] = contract.unlock[key].toString();
+          return acc;
+        }, {}),
       };
     } catch (error) {
       console.error('Error creating contract:', error);
@@ -108,8 +114,8 @@ export default function ContractManager() {
 
     const insertQuery = `
       INSERT INTO instantiated_contracts 
-      (contract_name, address, token_address, opcount, bytesize, bytecode, balance, utxos, created_at, artifact) 
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      (contract_name, address, token_address, opcount, bytesize, bytecode, balance, utxos, created_at, artifact, redeemScript, unlock) 
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `;
     const params = [
       contractName,
@@ -127,6 +133,13 @@ export default function ContractManager() {
       ),
       new Date().toISOString(),
       JSON.stringify(artifact),
+      JSON.stringify(contract.redeemScript),
+      JSON.stringify(
+        Object.keys(contract.unlock).reduce((acc, key) => {
+          acc[key] = contract.unlock[key].toString();
+          return acc;
+        }, {})
+      ),
     ];
 
     console.log('Inserting contract instance with params:', params);
@@ -158,10 +171,11 @@ export default function ContractManager() {
     const instances = [];
     while (statement.step()) {
       const row = statement.getAsObject();
+      console.log(row);
       instances.push({
         ...row,
         balance:
-          typeof row.balance === 'string' ? BigInt(row.balance) : BigInt(0),
+          typeof row.balance === 'number' ? BigInt(row.balance) : BigInt(0),
         utxos:
           typeof row.utxos === 'string'
             ? JSON.parse(row.utxos).map((utxo) => ({
@@ -170,6 +184,8 @@ export default function ContractManager() {
               }))
             : [],
         artifact: JSON.parse(row.artifact),
+        redeemScript: JSON.parse(row.redeemScript),
+        unlock: JSON.parse(row.unlock),
       });
     }
     statement.free();
@@ -190,7 +206,7 @@ export default function ContractManager() {
       contractInstance = {
         ...row,
         balance:
-          typeof row.balance === 'string' ? BigInt(row.balance) : BigInt(0),
+          typeof row.balance === 'number' ? BigInt(row.balance) : BigInt(0),
         utxos:
           typeof row.utxos === 'string'
             ? JSON.parse(row.utxos).map((utxo) => ({
@@ -199,6 +215,8 @@ export default function ContractManager() {
               }))
             : [],
         artifact: JSON.parse(row.artifact),
+        redeemScript: JSON.parse(row.redeemScript),
+        unlock: JSON.parse(row.unlock),
       };
     }
     statement.free();

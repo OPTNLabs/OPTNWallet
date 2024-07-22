@@ -1,6 +1,4 @@
 import React, { useState, useEffect } from 'react';
-import { useSelector } from 'react-redux';
-import { RootState } from '../redux/store';
 import ContractManager from '../apis/ContractManager/ContractManager';
 import ContractList from '../components/ContractList';
 import InteractWithContractPopup from '../components/InteractWithContractPopup';
@@ -13,25 +11,15 @@ import {
   Contract,
 } from 'cashscript';
 
-const hexString = (pkh) => {
-  return Array.from(pkh, (byte) => byte.toString(16).padStart(2, '0')).join('');
-};
-
 const ContractTransactionPage: React.FC = () => {
   const [contracts, setContracts] = useState<any[]>([]);
   const [selectedContract, setSelectedContract] = useState<any>(null);
   const [showPopup, setShowPopup] = useState(false);
+  const [contractFunction, setContractFunction] = useState<string | null>(null);
+  const [contractFunctionInputs, setContractFunctionInputs] = useState<
+    any[] | null
+  >(null);
   const [walletId, setWalletId] = useState<number>(1); // Assume wallet ID is 1 for this example
-
-  const contractFunction = useSelector(
-    (state: RootState) => state.contract.selectedFunction
-  );
-  const contractFunctionInputs = useSelector(
-    (state: RootState) => state.contract.inputs
-  );
-  const contractFunctionInputValues = useSelector(
-    (state: RootState) => state.contract.inputValues
-  );
 
   useEffect(() => {
     const fetchContracts = async () => {
@@ -49,9 +37,11 @@ const ContractTransactionPage: React.FC = () => {
   };
 
   const handleContractFunctionSelect = async (
-    contractFunction: string,
-    inputs: any[]
+    contractFunction: string
+    // inputs: any[]
   ) => {
+    setContractFunction(contractFunction);
+    // setContractFunctionInputs(inputs);
     setShowPopup(false);
 
     if (selectedContract) {
@@ -61,62 +51,38 @@ const ContractTransactionPage: React.FC = () => {
 
       if (userKey) {
         const provider = new ElectrumNetworkProvider(Network.CHIPNET);
-        console.log(userKey);
+        console.log(provider);
 
-        const contractManager = ContractManager();
-        const contractInstance =
-          await contractManager.getContractInstanceByAddress(
-            selectedContract.address
-          );
-
-        const manualContract = new Contract(
-          contractInstance.artifact,
-          [hexString(userKey.pubkeyHash)],
+        const contract = new Contract(
+          selectedContract.artifact,
+          [userKey.pubkeyHash],
           {
-            provider: provider,
+            provider,
             addressType: 'p2sh32',
           }
         );
+        console.log(contract);
+        const contractUtxos = await contract.getUtxos();
 
-        if (contractInstance) {
-          console.log('contractInstance', contractInstance);
-          console.log('ManualInstance', manualContract);
-          const contractUtxos = contractInstance.utxos;
-          const manualContractUtxos = await manualContract.getUtxos();
-          const manualContractBalance = await manualContract.getBalance();
-          console.log('contract UTXO', contractUtxos);
-          console.log('Manual Contract UTXO', manualContractUtxos);
+        const unlockableContractUtxos = contractUtxos.map((utxo: any) => ({
+          ...utxo,
+          unlocker: contract.unlock[contractFunction](
+            userKey.publicKey,
+            new SignatureTemplate(userKey.privateKey)
+          ),
+        }));
 
-          const unlockableContractUtxos = contractUtxos.map((utxo: any) => ({
-            ...utxo,
-            unlocker: contractInstance.unlock[contractFunction](
-              userKey.publicKey,
-              new SignatureTemplate(userKey.privateKey)
-            ),
-          }));
+        const transactionBuilder = new TransactionBuilder({ provider });
 
-          console.log(unlockableContractUtxos);
+        transactionBuilder.addInputs(unlockableContractUtxos).addOutputs([
+          { to: contract.address, amount: 1000000n }, // example amount
+          { to: userKey.address, amount: 947000n }, // example amount
+        ]); // Example output
 
-          const transactionBuilder = new TransactionBuilder({ provider });
+        console.log(transactionBuilder.build());
 
-          transactionBuilder.addInputs(unlockableContractUtxos).addOutputs([
-            {
-              to: contractInstance.address,
-              amount: manualContractBalance / 2n - 432n,
-            }, // example amount
-            {
-              to: contractInstance.address,
-              amount: manualContractBalance / 2n,
-            }, // example amount
-          ]); // Example output
-
-          console.log(transactionBuilder.build().length / 2);
-
-          // const sendTx = await transactionBuilder.send();
-          // console.log(`Transaction detail: `, sendTx.txid);
-        } else {
-          console.error('Contract instance not found');
-        }
+        const sendTx = await transactionBuilder.send();
+        console.log(`Transaction detail: `, sendTx.txid);
       }
     }
   };

@@ -1,4 +1,10 @@
 import React, { useState, useEffect } from 'react';
+import { useDispatch } from 'react-redux';
+import {
+  setSelectedFunction,
+  setInputs,
+  setInputValues,
+} from '../redux/contractSlice';
 
 interface InteractWithContractPopupProps {
   contract: any;
@@ -11,11 +17,14 @@ const InteractWithContractPopup: React.FC<InteractWithContractPopupProps> = ({
   onClose,
   onFunctionSelect,
 }) => {
-  console.log(contract);
   const [functions, setFunctions] = useState<any[]>([]);
-  const [selectedFunction, setSelectedFunction] = useState<string>('');
-  const [inputs, setInputs] = useState<any[]>([]);
-  const [inputValues, setInputValues] = useState<{ [key: string]: string }>({});
+  const [selectedFunction, setSelectedFunctionState] = useState<string>('');
+  const [inputs, setInputsState] = useState<any[]>([]);
+  const [inputValuesState, setInputValuesState] = useState<{
+    [key: string]: string;
+  }>({});
+
+  const dispatch = useDispatch();
 
   useEffect(() => {
     const functionNames = contract.artifact.abi
@@ -28,24 +37,27 @@ const InteractWithContractPopup: React.FC<InteractWithContractPopupProps> = ({
 
   const handleFunctionSelect = (e: React.ChangeEvent<HTMLSelectElement>) => {
     const selectedFunctionName = e.target.value;
-    setSelectedFunction(selectedFunctionName);
+    setSelectedFunctionState(selectedFunctionName);
 
     const functionAbi = functions.find(
       (item) => item.name === selectedFunctionName
     );
-    setInputs(functionAbi?.inputs || []);
-    setInputValues({});
+    setInputsState(functionAbi?.inputs || []);
+    setInputValuesState({});
   };
 
   const handleInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const { name, value } = e.target;
-    setInputValues({ ...inputValues, [name]: value });
+    setInputValuesState({ ...inputValuesState, [name]: value });
   };
 
   const handleSelect = () => {
     const inputValuesArray = inputs.map(
-      (input) => inputValues[input.name] || ''
+      (input) => inputValuesState[input.name] || ''
     );
+    dispatch(setSelectedFunction(selectedFunction));
+    dispatch(setInputs(inputs));
+    dispatch(setInputValues(inputValuesState));
     onFunctionSelect(selectedFunction, inputValuesArray);
     onClose();
   };
@@ -75,7 +87,7 @@ const InteractWithContractPopup: React.FC<InteractWithContractPopupProps> = ({
               <input
                 type="text"
                 name={input.name}
-                value={inputValues[input.name] || ''}
+                value={inputValuesState[input.name] || ''}
                 onChange={(e) => handleInputChange(e)}
                 className="border p-2 w-full"
                 placeholder={`Enter ${input.name}`}
