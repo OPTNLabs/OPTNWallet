@@ -10,6 +10,7 @@ import ContractView from './pages/ContractView';
 import RootHandler from './pages/RootHandler';
 import Layout from './components/Layout';
 import Settings from './pages/Settings';
+import ContractTransactionPage from './pages/ContractTransactionPage';
 
 function App() {
   return (
@@ -18,7 +19,7 @@ function App() {
       <Route element={<Layout />}>
         <Route path="/home/:wallet_id" element={<Home />} />
         <Route path="/contract" element={<ContractView />} />
-        {/* <Route path="/createtransaction/:sendAddress" element={<CreateTransactions />} /> */}
+        <Route path="/contractsetup" element={<ContractTransactionPage />} />
         <Route path="/transaction" element={<Transaction />} />
         <Route
           path="/transactions/:wallet_id"
