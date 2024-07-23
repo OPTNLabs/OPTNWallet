@@ -45,7 +45,6 @@ export default function ElectrumService() {
   async function getUTXOS(address: string): Promise<any> {
     const electrum = await electrumConnect();
     try {
-      console.log(`Fetching UTXOs for address: ${address}`);
       const UTXOs = await electrum.request(
         'blockchain.address.listunspent',
         address

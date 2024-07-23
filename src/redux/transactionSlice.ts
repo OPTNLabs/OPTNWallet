@@ -1,7 +1,7 @@
 // src/redux/transactionSlice.ts
 import { createSlice, PayloadAction } from '@reduxjs/toolkit';
 
-interface Transaction {
+export interface Transaction {
   tx_hash: string;
   height: number;
   timestamp: string;
