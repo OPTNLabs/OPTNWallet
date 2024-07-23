@@ -248,12 +248,12 @@ const TransactionHistory: React.FC = () => {
                 <p>
                   <strong>Height:</strong> {tx.height}
                 </p>
-                <p>
+                {/* <p>
                   <strong>Timestamp:</strong> {tx.timestamp}
                 </p>
                 <p>
                   <strong>Amount:</strong> {tx.amount}
-                </p>
+                </p> */}
               </li>
             ))}
           </ul>

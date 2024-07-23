@@ -24,6 +24,7 @@ export default function TransactionManager() {
       const timestamp = new Date().toISOString();
       db.exec('BEGIN TRANSACTION');
       for (const tx of history) {
+        console.log('TX:', tx);
         db.exec(`
           INSERT OR IGNORE INTO transactions (wallet_id, tx_hash, height, timestamp, amount)
           VALUES (${walletId}, '${tx.tx_hash}', ${tx.height}, '${timestamp}', 0)

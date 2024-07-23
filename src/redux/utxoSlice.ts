@@ -8,7 +8,6 @@ interface UTXO {
   address: string;
   height: number;
   token_data: { amount: string; category: string } | null;
-  privateKeyBase64: string; // Store the privateKey as a Base64 string
 }
 
 interface UTXOState {
@@ -27,32 +26,32 @@ const calculateTotalBalance = (utxos: Record<string, UTXO[]>) => {
     .reduce((sum, utxo) => sum + utxo.amount, 0);
 };
 
-// const removeUTXOsWithHeightZero = (utxos: Record<string, UTXO[]>) => {
-//   const cleanedUTXOs = {};
-//   for (const address in utxos) {
-//     cleanedUTXOs[address] = utxos[address].filter((utxo) => utxo.height !== 0);
-//   }
-//   return cleanedUTXOs;
-// };
-
 const utxoSlice = createSlice({
   name: 'utxos',
   initialState,
   reducers: {
     setUTXOs: (
       state,
-      action: PayloadAction<{ address: string; utxos: UTXO[] }>
+      action: PayloadAction<{ newUTXOs: Record<string, UTXO[]> }>
     ) => {
-      const filteredUTXOs = action.payload.utxos.filter(
-        (utxo) => utxo.height !== 0
-      );
-      state.utxos[action.payload.address] = filteredUTXOs;
-      // state.utxos = removeUTXOsWithHeightZero(state.utxos); // Remove any existing UTXOs with height 0
+      const newUTXOs = action.payload.newUTXOs;
+
+      // Update state with new UTXOs
+      Object.keys(newUTXOs).forEach((address) => {
+        state.utxos[address] = newUTXOs[address];
+        // .filter(
+        //   (utxo) => utxo.height !== 0
+        // );
+      });
+
+      // Remove UTXOs that do not match any of the "tx_hash" from the new UTXOs
+      Object.keys(state.utxos).forEach((address) => {
+        state.utxos[address] = state.utxos[address].filter((utxo) =>
+          newUTXOs[address]?.some((newUtxo) => newUtxo.tx_hash === utxo.tx_hash)
+        );
+      });
+
       state.totalBalance = calculateTotalBalance(state.utxos);
-    },
-    clearUTXOs: (state) => {
-      state.utxos = {};
-      state.totalBalance = 0;
     },
     resetUTXOs: (state) => {
       Object.assign(state, initialState);
@@ -60,6 +59,6 @@ const utxoSlice = createSlice({
   },
 });
 
-export const { setUTXOs, clearUTXOs, resetUTXOs } = utxoSlice.actions;
+export const { setUTXOs, resetUTXOs } = utxoSlice.actions;
 
 export default utxoSlice.reducer;

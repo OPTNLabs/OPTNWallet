@@ -84,7 +84,7 @@ export default async function UTXOManager() {
         }))
       );
 
-      // Fetch from database
+      // Fetch existing UTXOs from database
       const storedUTXOsQuery = db.prepare(`
         SELECT * FROM UTXOs WHERE wallet_id = ? AND address = ?;
       `);
@@ -105,6 +105,17 @@ export default async function UTXOManager() {
       storedUTXOsQuery.free();
 
       console.log(`Stored UTXOs for address ${address}:`, storedUTXOs);
+
+      // Determine UTXOs to be deleted (existing ones not in fetchedUTXOs)
+      const fetchedUTXOKeys = new Set(
+        formattedUTXOs.map((utxo) => `${utxo.tx_hash}-${utxo.tx_pos}`)
+      );
+      const utxosToDelete = storedUTXOs.filter(
+        (utxo) => !fetchedUTXOKeys.has(`${utxo.tx_hash}-${utxo.tx_pos}`)
+      );
+
+      // Delete outdated UTXOs
+      await deleteUTXOs(walletId, utxosToDelete);
 
       return storedUTXOs;
     } catch (error) {

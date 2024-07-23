@@ -11,7 +11,7 @@ import WalletManager from '../apis/WalletManager/WalletManager';
 import RegularUTXOs from '../components/RegularUTXOs';
 import CashTokenUTXOs from '../components/CashTokenUTXOs';
 import ElectrumService from '../apis/ElectrumServer/ElectrumServer';
-import { setUTXOs, clearUTXOs } from '../redux/utxoSlice';
+import { setUTXOs, resetUTXOs } from '../redux/utxoSlice';
 
 const batchAmount = 10;
 
@@ -159,14 +159,14 @@ const Home = () => {
     setFetchingUTXOs(false);
 
     // Update Redux with the new UTXOs
-    walletKeys.forEach((key) => {
-      dispatch(
-        setUTXOs({
-          address: key.address,
-          utxos: [...utxosMap[key.address], ...cashTokenUtxosMap[key.address]],
-        })
-      );
-    });
+    const newUTXOs = walletKeys.reduce((acc, key) => {
+      acc[key.address] = [
+        ...utxosMap[key.address],
+        ...cashTokenUtxosMap[key.address],
+      ];
+      return acc;
+    }, {});
+    dispatch(setUTXOs({ newUTXOs }));
   };
 
   const fetchUTXOsFromDatabase = async (walletId) => {
@@ -190,14 +190,14 @@ const Home = () => {
     setCashTokenUtxos(cashTokenUtxosMap);
 
     // Update Redux with the stored UTXOs
-    keyPairs.forEach((key) => {
-      dispatch(
-        setUTXOs({
-          address: key.address,
-          utxos: [...utxosMap[key.address], ...cashTokenUtxosMap[key.address]],
-        })
-      );
-    });
+    const newUTXOs = keyPairs.reduce((acc, key) => {
+      acc[key.address] = [
+        ...utxosMap[key.address],
+        ...cashTokenUtxosMap[key.address],
+      ];
+      return acc;
+    }, {});
+    dispatch(setUTXOs({ newUTXOs }));
   };
 
   const handleGenerateKeys = async (index) => {
