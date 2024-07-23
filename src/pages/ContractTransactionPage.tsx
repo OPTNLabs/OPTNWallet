@@ -44,7 +44,7 @@ const ContractTransactionPage: React.FC = () => {
   }, []);
 
   const handleSelectContract = (contract: any) => {
-    console.log(contract);
+    console.log('select', contract);
     setSelectedContract(contract);
     setShowPopup(true);
   };
@@ -53,6 +53,7 @@ const ContractTransactionPage: React.FC = () => {
     contractFunction: string,
     inputs: any[]
   ) => {
+    console.log('contract function', contractFunction);
     setShowPopup(false);
 
     if (selectedContract) {
@@ -88,13 +89,15 @@ const ContractTransactionPage: React.FC = () => {
           console.log('contract UTXO', contractUtxos);
           console.log('Manual Contract UTXO', manualContractUtxos);
 
-          const unlockableContractUtxos = contractUtxos.map((utxo: any) => ({
-            ...utxo,
-            unlocker: contractInstance.unlock[contractFunction](
-              userKey.publicKey,
-              new SignatureTemplate(userKey.privateKey)
-            ),
-          }));
+          const unlockableContractUtxos = manualContractUtxos.map(
+            (utxo: any) => ({
+              ...utxo,
+              unlocker: manualContract.unlock[contractFunction](
+                userKey.publicKey,
+                new SignatureTemplate(userKey.privateKey)
+              ),
+            })
+          );
 
           console.log(unlockableContractUtxos);
 
@@ -113,8 +116,8 @@ const ContractTransactionPage: React.FC = () => {
 
           console.log(transactionBuilder.build().length / 2);
 
-          // const sendTx = await transactionBuilder.send();
-          // console.log(`Transaction detail: `, sendTx.txid);
+          const sendTx = await transactionBuilder.send();
+          console.log(`Transaction detail: `, sendTx.txid);
         } else {
           console.error('Contract instance not found');
         }
