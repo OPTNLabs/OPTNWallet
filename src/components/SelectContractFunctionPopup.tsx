@@ -1,4 +1,4 @@
-// @ts-nocheck
+// @ts-expect-error
 import React, { useState, useEffect } from 'react';
 
 interface SelectContractFunctionPopupProps {
@@ -19,13 +19,29 @@ const SelectContractFunctionPopup: React.FC<
   useEffect(() => {
     console.log('Contract ABI:', contractABI); // Debug log
 
+    if (!contractABI || !Array.isArray(contractABI)) {
+      console.error('Contract ABI is null, undefined, or not an array');
+      return;
+    }
+
     const allFunctionNames = contractABI
       .flat()
       .filter((item) => {
+        if (!item) {
+          console.error('ABI item is null or undefined');
+          return false;
+        }
         console.log('ABI Item:', item); // Log each ABI item to debug
         return item.type === 'function' || item.type === undefined;
       })
-      .map((item) => ({ name: item.name, inputs: item.inputs }));
+      .map((item) => {
+        if (!item) {
+          console.error('ABI item is null or undefined during mapping');
+          return null;
+        }
+        return { name: item.name, inputs: item.inputs };
+      })
+      .filter((item) => item !== null);
 
     console.log('Function Names:', allFunctionNames); // Debug log
     setFunctions(allFunctionNames);

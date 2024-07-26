@@ -1,4 +1,3 @@
-// src/apis/DatabaseManager/DatabaseService.ts
 import initSqlJs, { Database } from 'sql.js';
 import { createTables } from '../../utils/schema/schema';
 
@@ -17,7 +16,7 @@ export default function DatabaseService() {
     resultToJSON,
   };
 
-  async function startDatabase(): Promise<any> {
+  async function startDatabase(): Promise<Database> {
     const SQLModule = await SQL;
     const savedDb = localStorage.getItem('OPTNDatabase');
     if (savedDb) {
@@ -76,7 +75,7 @@ export default function DatabaseService() {
     const result = db.exec(`
       PRAGMA table_info(instantiated_contracts);
     `);
-    const columns = result[0].values.map((row) => row[1]);
+    const columns = result[0].values.map((row) => row[1] as string);
     if (!columns.includes('abi')) {
       db.run(`
         ALTER TABLE instantiated_contracts ADD COLUMN abi TEXT;
@@ -84,15 +83,18 @@ export default function DatabaseService() {
     }
   }
 
-  function resultToJSON(result: any) {
+  function resultToJSON(result: any[]): {
+    mnemonic: string;
+    passphrase: string;
+  } {
     if (!result || result.length === 0) {
-      return {};
+      return { mnemonic: '', passphrase: '' };
     }
 
     // Assuming the result is an array with two elements: mnemonic and passphrase
     const obj = {
-      mnemonic: result[0],
-      passphrase: result[1] || '',
+      mnemonic: result[0] as string,
+      passphrase: result[1] ? (result[1] as string) : '',
     };
 
     return obj;

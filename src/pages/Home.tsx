@@ -1,4 +1,4 @@
-// @ts-nocheck
+// @ts-expect-error
 // src/pages/Home.tsx
 import React, { useState, useEffect, useRef } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
