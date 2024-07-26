@@ -1,16 +1,14 @@
-// @ts-expect-error
 import React, { useState, useEffect } from 'react';
 
 interface SelectContractFunctionPopupProps {
-  contractAddress: string[];
-  contractABI: any[][];
+  contractABI: any[];
   onClose: () => void;
   onFunctionSelect: (contractFunction: string, inputs: any[]) => void;
 }
 
 const SelectContractFunctionPopup: React.FC<
   SelectContractFunctionPopupProps
-> = ({ contractAddress, contractABI, onClose, onFunctionSelect }) => {
+> = ({ contractABI, onClose, onFunctionSelect }) => {
   const [functions, setFunctions] = useState<any[]>([]);
   const [selectedFunction, setSelectedFunction] = useState<string>('');
   const [inputs, setInputs] = useState<any[]>([]);
@@ -25,23 +23,12 @@ const SelectContractFunctionPopup: React.FC<
     }
 
     const allFunctionNames = contractABI
-      .flat()
-      .filter((item) => {
-        if (!item) {
-          console.error('ABI item is null or undefined');
-          return false;
-        }
-        console.log('ABI Item:', item); // Log each ABI item to debug
-        return item.type === 'function' || item.type === undefined;
-      })
-      .map((item) => {
-        if (!item) {
-          console.error('ABI item is null or undefined during mapping');
-          return null;
-        }
-        return { name: item.name, inputs: item.inputs };
-      })
-      .filter((item) => item !== null);
+      .filter((item) => item.type === 'function' || item.type === undefined)
+      .map((item) => ({ name: item.name, inputs: item.inputs }))
+      .filter(
+        (item, index, self) =>
+          self.findIndex((f) => f.name === item.name) === index
+      ); // Ensure unique function names
 
     console.log('Function Names:', allFunctionNames); // Debug log
     setFunctions(allFunctionNames);

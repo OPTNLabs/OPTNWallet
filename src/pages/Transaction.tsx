@@ -52,6 +52,7 @@ const Transaction: React.FC = () => {
     any[] | null
   >(null);
   const [contractUTXOs, setContractUTXOs] = useState<ExtendedUTXO[]>([]);
+  const [currentContractABI, setCurrentContractABI] = useState<any[]>([]);
   const navigate = useNavigate();
 
   useEffect(() => {
@@ -140,7 +141,7 @@ const Transaction: React.FC = () => {
             ...utxo,
             id: `${utxo.tx_hash}:${utxo.tx_pos}`, // Use tx_hash and tx_pos to create a unique id
             address: contract.address,
-            tokenAddress: contract.tokenAddress,
+            tokenAddress: contract.token_address,
             contractName: contract.contract_name, // Add contract name
             abi: contract.abi, // Add contract ABI
           }));
@@ -240,6 +241,9 @@ const Transaction: React.FC = () => {
           (selectedUtxo) => selectedUtxo.id !== utxo.id
         );
       } else {
+        if (utxo.abi) {
+          setCurrentContractABI(utxo.abi);
+        }
         return [...prevSelected, utxo];
       }
     });
@@ -302,8 +306,6 @@ const Transaction: React.FC = () => {
       const transaction = await txBuilder.buildTransaction(
         selectedUtxos,
         txOutputs
-        // contractFunction,
-        // contractFunctionInputs
       );
       console.log('Built Transaction with Placeholder:', transaction);
 
@@ -343,8 +345,6 @@ const Transaction: React.FC = () => {
         const finalTransaction = await txBuilder.buildTransaction(
           selectedUtxos,
           txOutputs
-          // contractFunction,
-          // contractFunctionInputs
         );
         console.log(
           `Selected UTXOs: ${JSON.stringify(selectedUtxos, null, 2)}`
@@ -414,7 +414,7 @@ const Transaction: React.FC = () => {
         <div className="overflow-y-auto max-h-96">
           {addresses.map((addressObj, index) => (
             <div
-              key={addressObj.address} // Use address as the key
+              key={addressObj.address}
               className="flex items-center mb-2 break-words whitespace-normal"
             >
               <input
@@ -435,7 +435,7 @@ const Transaction: React.FC = () => {
         <div className="overflow-y-auto max-h-96">
           {contractAddresses.map((contractObj) => (
             <div
-              key={contractObj.address} // Use address as the key
+              key={contractObj.address}
               className="flex items-center mb-2 break-words whitespace-normal"
             >
               <input
@@ -450,14 +450,6 @@ const Transaction: React.FC = () => {
                 className="mr-2"
               />
               <span className="break-words overflow-x-auto">{`Contract Address: ${contractObj.address}, Token Address: ${contractObj.tokenAddress}`}</span>
-              <button
-                className="bg-blue-500 text-white py-2 px-4 rounded ml-4"
-                onClick={() => {
-                  setShowPopup(true);
-                }}
-              >
-                {contractObj.contractName}
-              </button>
             </div>
           ))}
         </div>
@@ -482,15 +474,7 @@ const Transaction: React.FC = () => {
                   <button
                     key={utxo.id}
                     onClick={() => handleUtxoClick(utxo)}
-                    className={`block w-full text-left p-2 mb-2 border rounded-lg break-words whitespace-normal ${
-                      selectedUtxos.some(
-                        (selectedUtxo) =>
-                          selectedUtxo.tx_hash === utxo.tx_hash &&
-                          selectedUtxo.tx_pos === utxo.tx_pos
-                      )
-                        ? 'bg-blue-100'
-                        : 'bg-white'
-                    }`}
+                    className={`block w-full text-left p-2 mb-2 border rounded-lg break-words whitespace-normal ${selectedUtxos.some((selectedUtxo) => selectedUtxo.tx_hash === utxo.tx_hash && selectedUtxo.tx_pos === utxo.tx_pos) ? 'bg-blue-100' : 'bg-white'}`}
                   >
                     <RegularUTXOs
                       address={addressObj.address}
@@ -522,15 +506,7 @@ const Transaction: React.FC = () => {
                   <button
                     key={utxo.id}
                     onClick={() => handleUtxoClick(utxo)}
-                    className={`block w-full text-left p-2 mb-2 border rounded-lg break-words whitespace-normal ${
-                      selectedUtxos.some(
-                        (selectedUtxo) =>
-                          selectedUtxo.tx_hash === utxo.tx_hash &&
-                          selectedUtxo.tx_pos === utxo.tx_pos
-                      )
-                        ? 'bg-blue-100'
-                        : 'bg-white'
-                    }`}
+                    className={`block w-full text-left p-2 mb-2 border rounded-lg break-words whitespace-normal ${selectedUtxos.some((selectedUtxo) => selectedUtxo.tx_hash === utxo.tx_hash && selectedUtxo.tx_pos === utxo.tx_pos) ? 'bg-blue-100' : 'bg-white'}`}
                   >
                     <CashTokenUTXOs
                       address={addressObj.address}
@@ -551,48 +527,46 @@ const Transaction: React.FC = () => {
                 {filteredContractUTXOs
                   .filter((utxo) => !utxo.token_data)
                   .map((utxo) => (
-                    <button
-                      key={utxo.id}
-                      onClick={() => handleUtxoClick(utxo)}
-                      className={`block w-full text-left p-2 mb-2 border rounded-lg break-words whitespace-normal ${
-                        selectedUtxos.some(
-                          (selectedUtxo) =>
-                            selectedUtxo.tx_hash === utxo.tx_hash &&
-                            selectedUtxo.tx_pos === utxo.tx_pos
-                        )
-                          ? 'bg-blue-100'
-                          : 'bg-white'
-                      }`}
-                    >
-                      <RegularUTXOs
-                        address={selectedContractAddresses.join(', ')}
-                        utxos={[utxo]}
-                        loading={false}
-                      />
-                    </button>
+                    <div key={utxo.id} className="flex items-center">
+                      <button
+                        onClick={() => handleUtxoClick(utxo)}
+                        className={`block w-full text-left p-2 mb-2 border rounded-lg break-words whitespace-normal ${selectedUtxos.some((selectedUtxo) => selectedUtxo.tx_hash === utxo.tx_hash && selectedUtxo.tx_pos === utxo.tx_pos) ? 'bg-blue-100' : 'bg-white'}`}
+                      >
+                        <RegularUTXOs
+                          address={selectedContractAddresses.join(', ')}
+                          utxos={[utxo]}
+                          loading={false}
+                        />
+                      </button>
+                      <button
+                        className="bg-blue-500 text-white py-2 px-4 rounded mt-2 sm:mt-0 sm:ml-4"
+                        onClick={() => setShowPopup(true)}
+                      >
+                        {utxo.contractName}
+                      </button>
+                    </div>
                   ))}
                 {filteredContractUTXOs
                   .filter((utxo) => utxo.token_data)
                   .map((utxo) => (
-                    <button
-                      key={utxo.id}
-                      onClick={() => handleUtxoClick(utxo)}
-                      className={`block w-full text-left p-2 mb-2 border rounded-lg break-words whitespace-normal ${
-                        selectedUtxos.some(
-                          (selectedUtxo) =>
-                            selectedUtxo.tx_hash === utxo.tx_hash &&
-                            selectedUtxo.tx_pos === utxo.tx_pos
-                        )
-                          ? 'bg-blue-100'
-                          : 'bg-white'
-                      }`}
-                    >
-                      <CashTokenUTXOs
-                        address={selectedContractAddresses.join(', ')}
-                        utxos={[utxo]}
-                        loading={false}
-                      />
-                    </button>
+                    <div key={utxo.id} className="flex items-center">
+                      <button
+                        onClick={() => handleUtxoClick(utxo)}
+                        className={`block w-full text-left p-2 mb-2 border rounded-lg break-words whitespace-normal ${selectedUtxos.some((selectedUtxo) => selectedUtxo.tx_hash === utxo.tx_hash && selectedUtxo.tx_pos === utxo.tx_pos) ? 'bg-blue-100' : 'bg-white'}`}
+                      >
+                        <CashTokenUTXOs
+                          address={selectedContractAddresses.join(', ')}
+                          utxos={[utxo]}
+                          loading={false}
+                        />
+                      </button>
+                      <button
+                        className="bg-blue-500 text-white py-2 px-4 rounded mt-2 sm:mt-0 sm:ml-4"
+                        onClick={() => setShowPopup(true)}
+                      >
+                        {utxo.contractName}
+                      </button>
+                    </div>
                   ))}
               </>
             )}
@@ -754,7 +728,7 @@ const Transaction: React.FC = () => {
         selectedContractAddresses.length > 0 && (
           <SelectContractFunctionPopup
             contractAddress={selectedContractAddresses}
-            contractABI={selectedContractABIs}
+            contractABI={currentContractABI}
             onClose={() => setShowPopup(false)}
             onFunctionSelect={handleContractFunctionSelect}
           />

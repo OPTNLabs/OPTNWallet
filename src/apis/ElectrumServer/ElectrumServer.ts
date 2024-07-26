@@ -1,3 +1,4 @@
+// src/apis/ElectrumServer/ElectrumServer.ts
 import { ElectrumClient, ElectrumTransport } from 'electrum-cash';
 import { chipnetServers } from '../../utils/servers/ElectrumServers';
 
@@ -41,7 +42,7 @@ export default function ElectrumService() {
     return false;
   }
 
-  async function getUTXOS(address: string): Promise<any[]> {
+  async function getUTXOS(address: string): Promise<any> {
     const electrum = await electrumConnect();
     try {
       const UTXOs = await electrum.request(
@@ -62,8 +63,10 @@ export default function ElectrumService() {
     const electrum = await electrumConnect();
     try {
       const params = [address, 'include_tokens'];
-      const response: { confirmed: number; unconfirmed: number } =
-        await electrum.request('blockchain.address.get_balance', ...params);
+      const response: any = await electrum.request(
+        'blockchain.address.get_balance',
+        ...params
+      );
       console.log('Get Balance response:', response);
       if (
         response &&
@@ -80,10 +83,10 @@ export default function ElectrumService() {
     }
   }
 
-  async function broadcastTransaction(tx_hex: string): Promise<string> {
+  async function broadcastTransaction(tx_hex: string) {
     const electrum = await electrumConnect();
     try {
-      const tx_hash: string = await electrum.request(
+      const tx_hash = await electrum.request(
         'blockchain.transaction.broadcast',
         tx_hex
       );
@@ -93,17 +96,17 @@ export default function ElectrumService() {
     }
   }
 
-  async function getTransactionHistory(
-    address: string
-  ): Promise<{ tx_hash: string; height: number }[]> {
+  async function getTransactionHistory(address: string) {
     const electrum = await electrumConnect();
     try {
       if (!address) {
         throw new Error('Invalid address: Address cannot be undefined');
       }
       console.log(`Fetching transaction history for address: ${address}`);
-      const history: { tx_hash: string; height: number }[] =
-        await electrum.request('blockchain.address.get_history', address);
+      const history = await electrum.request(
+        'blockchain.address.get_history',
+        address
+      );
       console.log(
         `Fetched transaction history for address ${address}:`,
         history

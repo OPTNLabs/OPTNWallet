@@ -1,11 +1,10 @@
-// @ts-expect-error
-
 import {
   ElectrumNetworkProvider,
   TransactionBuilder,
   Network,
   SignatureTemplate,
 } from 'cashscript';
+import ContractManager from '../ContractManager/ContractManager';
 
 export interface UTXO {
   tx_hash: string;
@@ -30,36 +29,48 @@ export interface TransactionOutput {
 
 export default function TransactionBuilder3() {
   const provider = new ElectrumNetworkProvider(Network.CHIPNET);
+  const contractManager = ContractManager();
 
-  async function buildTransaction(utxos: UTXO[], outputs: TransactionOutput[]) {
+  async function buildTransaction(
+    utxos: UTXO[],
+    outputs: TransactionOutput[],
+    contractFunction: string,
+    contractFunctionInputs: any[]
+  ) {
     const txBuilder = new TransactionBuilder({ provider });
 
     // Prepare UTXOs with unlockers
-    const unlockableUtxos = utxos.map((utxo) => {
-      if (utxo.privateKey) {
-        // Regular UTXO
-        const signatureTemplate = new SignatureTemplate(utxo.privateKey);
-        return {
-          txid: utxo.tx_hash,
-          vout: utxo.tx_pos,
-          satoshis: BigInt(utxo.amount),
-          scriptPubKey: signatureTemplate.lockingBytecode,
-          unlocker: signatureTemplate.unlockP2PKH(),
-          token_data: utxo.token_data,
-        };
-      } else {
-        // Contract UTXO
-        const contractUnlockFunction = getContractUnlockFunction(utxo);
-        return {
-          txid: utxo.tx_hash,
-          vout: utxo.tx_pos,
-          satoshis: BigInt(utxo.amount),
-          scriptPubKey: contractUnlockFunction.lockingBytecode,
-          unlocker: contractUnlockFunction.unlocker,
-          token_data: utxo.token_data,
-        };
-      }
-    });
+    const unlockableUtxos = await Promise.all(
+      utxos.map(async (utxo) => {
+        if (utxo.privateKey) {
+          // Regular UTXO
+          const signatureTemplate = new SignatureTemplate(utxo.privateKey);
+          return {
+            txid: utxo.tx_hash,
+            vout: utxo.tx_pos,
+            satoshis: BigInt(utxo.amount),
+            scriptPubKey: signatureTemplate.lockingBytecode,
+            unlocker: signatureTemplate.unlockP2PKH(),
+            token_data: utxo.token_data,
+          };
+        } else {
+          // Contract UTXO
+          const contractUnlockFunction = await getContractUnlockFunction(
+            utxo,
+            contractFunction,
+            contractFunctionInputs
+          );
+          return {
+            txid: utxo.tx_hash,
+            vout: utxo.tx_pos,
+            satoshis: BigInt(utxo.amount),
+            scriptPubKey: contractUnlockFunction.lockingBytecode,
+            unlocker: contractUnlockFunction.unlocker,
+            token_data: utxo.token_data,
+          };
+        }
+      })
+    );
 
     // Adding inputs
     txBuilder.addInputs(unlockableUtxos);
@@ -97,30 +108,43 @@ export default function TransactionBuilder3() {
     }
   }
 
-  function getContractUnlockFunction(utxo) {
-    const { contractName, abi, args } = utxo;
-    const contract = new ContractManager().loadArtifact(contractName);
-
-    // Find the matching function in the ABI
-    const abiFunction = abi.find((func) => func.name === 'spend');
-    if (!abiFunction) {
+  async function getContractUnlockFunction(
+    utxo,
+    contractFunction,
+    contractFunctionInputs
+  ) {
+    const contractInstance = await contractManager.getContractInstanceByAddress(
+      utxo.address
+    );
+    if (!contractInstance) {
       throw new Error(
-        `ABI function 'spend' not found in contract ${contractName}`
+        `Contract instance not found for address ${utxo.address}`
       );
     }
 
-    // Construct the unlocker
-    const unlocker = contract.functions.spend(...args);
+    const contract = contractInstance;
+    const abiFunction = contract.abi.find(
+      (func) => func.name === contractFunction
+    );
+    if (!abiFunction) {
+      throw new Error(
+        `ABI function '${contractFunction}' not found in contract ${contract.contractName}`
+      );
+    }
+
+    const unlocker = contract.unlock[contractFunction](
+      ...contractFunctionInputs
+    );
 
     return {
-      lockingBytecode: contract.lockingBytecode,
+      lockingBytecode: contract.redeemScript,
       unlocker,
     };
   }
 
   const sendTransaction = async (tx: string) => {
     try {
-      const txid = provider.sendRawTransaction(tx);
+      const txid = await provider.sendRawTransaction(tx);
       return txid;
     } catch (error) {
       console.log(error);

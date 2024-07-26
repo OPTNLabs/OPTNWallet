@@ -70,6 +70,7 @@ const ContractTransactionPage: React.FC = () => {
           await contractManager.getContractInstanceByAddress(
             selectedContract.address
           );
+        console.log(contractInstance);
 
         const manualContract = new Contract(
           contractInstance.artifact,
@@ -116,8 +117,8 @@ const ContractTransactionPage: React.FC = () => {
 
           console.log(transactionBuilder.build().length / 2);
 
-          const sendTx = await transactionBuilder.send();
-          console.log(`Transaction detail: `, sendTx.txid);
+          // const sendTx = await transactionBuilder.send();
+          // console.log(`Transaction detail: `, sendTx.txid);
         } else {
           console.error('Contract instance not found');
         }

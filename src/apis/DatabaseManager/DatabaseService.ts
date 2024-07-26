@@ -83,7 +83,7 @@ export default function DatabaseService() {
     }
   }
 
-  function resultToJSON(result: any[]): {
+  function resultToJSON(result: (string | undefined)[]): {
     mnemonic: string;
     passphrase: string;
   } {
