@@ -1,4 +1,4 @@
-// @ts-nocheck
+// @ts-expect-error
 // src/components/Layout.tsx
 
 import React, { useState, useEffect } from 'react';

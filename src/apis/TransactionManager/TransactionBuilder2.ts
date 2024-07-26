@@ -1,4 +1,4 @@
-// @ts-nocheck
+// @ts-expect-error
 
 import { URL } from 'url';
 import { compileFile } from 'cashc';

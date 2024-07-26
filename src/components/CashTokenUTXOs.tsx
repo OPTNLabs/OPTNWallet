@@ -1,4 +1,4 @@
-// @ts-nocheck
+// @ts-expect-error
 import React from 'react';
 
 const CashTokenUTXOs = ({ address, utxos, loading }) => {

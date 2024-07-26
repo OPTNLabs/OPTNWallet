@@ -1,4 +1,3 @@
-// @ts-nocheck
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import TransactionBuilders, {
@@ -12,7 +11,7 @@ import ContractManager from '../apis/ContractManager/ContractManager';
 import SelectContractFunctionPopup from '../components/SelectContractFunctionPopup';
 
 interface ExtendedUTXO extends UTXO {
-  id: number;
+  id: string; // Change id to string to make it unique across all UTXOs
   height: number;
 }
 
@@ -112,7 +111,7 @@ const Transaction: React.FC = () => {
           typeof row.height === 'number'
         ) {
           fetchedUTXOs.push({
-            id: row.id as number,
+            id: `${row.tx_hash}:${row.tx_pos}`, // Use tx_hash and tx_pos to create a unique id
             address: row.address,
             tokenAddress: addressInfo ? addressInfo.tokenAddress : '',
             amount: row.amount,
@@ -139,6 +138,7 @@ const Transaction: React.FC = () => {
           const contractUTXOs = contract.utxos;
           return contractUTXOs.map((utxo) => ({
             ...utxo,
+            id: `${utxo.tx_hash}:${utxo.tx_pos}`, // Use tx_hash and tx_pos to create a unique id
             address: contract.address,
             tokenAddress: contract.tokenAddress,
             contractName: contract.contract_name, // Add contract name
@@ -231,15 +231,16 @@ const Transaction: React.FC = () => {
   };
 
   const handleUtxoClick = (utxo: ExtendedUTXO) => {
-    setSelectedUtxos((prevSelectedUtxos) => {
-      if (
-        prevSelectedUtxos.some((selectedUtxo) => selectedUtxo.id === utxo.id)
-      ) {
-        return prevSelectedUtxos.filter(
+    setSelectedUtxos((prevSelected) => {
+      const isSelected = prevSelected.some(
+        (selectedUtxo) => selectedUtxo.id === utxo.id
+      );
+      if (isSelected) {
+        return prevSelected.filter(
           (selectedUtxo) => selectedUtxo.id !== utxo.id
         );
       } else {
-        return [...prevSelectedUtxos, utxo];
+        return [...prevSelected, utxo];
       }
     });
   };
@@ -313,27 +314,28 @@ const Transaction: React.FC = () => {
 
         // Calculate total selected UTXO amount
         const totalUtxoAmount = selectedUtxos.reduce(
-          (sum, utxo) => sum + utxo.amount,
-          0
+          (sum, utxo) => sum + BigInt(utxo.amount),
+          BigInt(0)
         );
 
         // Calculate total output amount
         const totalOutputAmount = outputs.reduce(
-          (sum, output) => sum + output.amount,
-          0
+          (sum, output) => sum + BigInt(output.amount),
+          BigInt(0)
         );
 
         // Calculate remainder
-        const remainder = totalUtxoAmount - totalOutputAmount - bytecodeSize;
+        const remainder =
+          totalUtxoAmount - totalOutputAmount - BigInt(bytecodeSize);
 
         // Remove the placeholder output
         txOutputs.pop();
 
         // Add the change address with the actual remainder
-        if (changeAddress && remainder > 0) {
+        if (changeAddress && remainder > BigInt(0)) {
           txOutputs.push({
             recipientAddress: changeAddress,
-            amount: remainder,
+            amount: Number(remainder), // Convert to Number for compatibility
           });
         }
 
@@ -377,8 +379,8 @@ const Transaction: React.FC = () => {
   };
 
   const totalSelectedUtxoAmount = selectedUtxos.reduce(
-    (sum, utxo) => sum + utxo.amount,
-    0
+    (sum, utxo) => sum + BigInt(utxo.amount),
+    BigInt(0)
   );
 
   const availableTokenCategories = [
@@ -412,7 +414,7 @@ const Transaction: React.FC = () => {
         <div className="overflow-y-auto max-h-96">
           {addresses.map((addressObj, index) => (
             <div
-              key={index}
+              key={addressObj.address} // Use address as the key
               className="flex items-center mb-2 break-words whitespace-normal"
             >
               <input
@@ -431,9 +433,9 @@ const Transaction: React.FC = () => {
         </div>
         <h4 className="text-md font-semibold mb-2">Contract Addresses</h4>
         <div className="overflow-y-auto max-h-96">
-          {contractAddresses.map((contractObj, index) => (
+          {contractAddresses.map((contractObj) => (
             <div
-              key={index}
+              key={contractObj.address} // Use address as the key
               className="flex items-center mb-2 break-words whitespace-normal"
             >
               <input
@@ -466,8 +468,11 @@ const Transaction: React.FC = () => {
           .filter((addressObj) =>
             selectedAddresses.includes(addressObj.address)
           )
-          .map((addressObj, index) => (
-            <div key={index} className="p-2 border rounded-lg mb-2">
+          .map((addressObj) => (
+            <div
+              key={addressObj.address}
+              className="p-2 border rounded-lg mb-2"
+            >
               {utxos
                 .filter(
                   (utxo) =>
@@ -479,7 +484,9 @@ const Transaction: React.FC = () => {
                     onClick={() => handleUtxoClick(utxo)}
                     className={`block w-full text-left p-2 mb-2 border rounded-lg break-words whitespace-normal ${
                       selectedUtxos.some(
-                        (selectedUtxo) => selectedUtxo.id === utxo.id
+                        (selectedUtxo) =>
+                          selectedUtxo.tx_hash === utxo.tx_hash &&
+                          selectedUtxo.tx_pos === utxo.tx_pos
                       )
                         ? 'bg-blue-100'
                         : 'bg-white'
@@ -501,8 +508,11 @@ const Transaction: React.FC = () => {
           .filter((addressObj) =>
             selectedAddresses.includes(addressObj.address)
           )
-          .map((addressObj, index) => (
-            <div key={index} className="p-2 border rounded-lg mb-2">
+          .map((addressObj) => (
+            <div
+              key={addressObj.address}
+              className="p-2 border rounded-lg mb-2"
+            >
               {utxos
                 .filter(
                   (utxo) =>
@@ -514,7 +524,9 @@ const Transaction: React.FC = () => {
                     onClick={() => handleUtxoClick(utxo)}
                     className={`block w-full text-left p-2 mb-2 border rounded-lg break-words whitespace-normal ${
                       selectedUtxos.some(
-                        (selectedUtxo) => selectedUtxo.id === utxo.id
+                        (selectedUtxo) =>
+                          selectedUtxo.tx_hash === utxo.tx_hash &&
+                          selectedUtxo.tx_pos === utxo.tx_pos
                       )
                         ? 'bg-blue-100'
                         : 'bg-white'
@@ -530,38 +542,70 @@ const Transaction: React.FC = () => {
             </div>
           ))}
       </div>
-      {selectedContractAddresses.length > 0 && (
-        <div className="mb-6">
-          <h3 className="text-lg font-semibold mb-2">Contract UTXOs</h3>
+      <div className="mb-6">
+        <h3 className="text-lg font-semibold mb-2">Contract UTXOs</h3>
+        {selectedContractAddresses.length > 0 && (
           <div className="p-2 border rounded-lg mb-2">
             {filteredContractUTXOs.length > 0 && (
               <>
-                <RegularUTXOs
-                  address={selectedContractAddresses.join(', ')}
-                  utxos={filteredContractUTXOs.filter(
-                    (utxo) => !utxo.token_data
-                  )}
-                  loading={false}
-                />
-                <CashTokenUTXOs
-                  address={selectedContractAddresses.join(', ')}
-                  utxos={filteredContractUTXOs.filter(
-                    (utxo) => utxo.token_data
-                  )}
-                  loading={false}
-                />
+                {filteredContractUTXOs
+                  .filter((utxo) => !utxo.token_data)
+                  .map((utxo) => (
+                    <button
+                      key={utxo.id}
+                      onClick={() => handleUtxoClick(utxo)}
+                      className={`block w-full text-left p-2 mb-2 border rounded-lg break-words whitespace-normal ${
+                        selectedUtxos.some(
+                          (selectedUtxo) =>
+                            selectedUtxo.tx_hash === utxo.tx_hash &&
+                            selectedUtxo.tx_pos === utxo.tx_pos
+                        )
+                          ? 'bg-blue-100'
+                          : 'bg-white'
+                      }`}
+                    >
+                      <RegularUTXOs
+                        address={selectedContractAddresses.join(', ')}
+                        utxos={[utxo]}
+                        loading={false}
+                      />
+                    </button>
+                  ))}
+                {filteredContractUTXOs
+                  .filter((utxo) => utxo.token_data)
+                  .map((utxo) => (
+                    <button
+                      key={utxo.id}
+                      onClick={() => handleUtxoClick(utxo)}
+                      className={`block w-full text-left p-2 mb-2 border rounded-lg break-words whitespace-normal ${
+                        selectedUtxos.some(
+                          (selectedUtxo) =>
+                            selectedUtxo.tx_hash === utxo.tx_hash &&
+                            selectedUtxo.tx_pos === utxo.tx_pos
+                        )
+                          ? 'bg-blue-100'
+                          : 'bg-white'
+                      }`}
+                    >
+                      <CashTokenUTXOs
+                        address={selectedContractAddresses.join(', ')}
+                        utxos={[utxo]}
+                        loading={false}
+                      />
+                    </button>
+                  ))}
               </>
             )}
           </div>
-        </div>
-      )}
+        )}
+      </div>
       <div className="mb-6">
         <h3 className="text-lg font-semibold mb-2">
           Selected Transaction Inputs
         </h3>
-        {selectedUtxos.map((utxo, index) => (
+        {selectedUtxos.map((utxo) => (
           <div
-            key={index}
+            key={utxo.id}
             className="flex items-center mb-2 break-words whitespace-normal"
           >
             <span className="break-words">{`Address: ${utxo.address}, Amount: ${utxo.amount}, Tx Hash: ${utxo.tx_hash}, Position: ${utxo.tx_pos}, Height: ${utxo.height}`}</span>
@@ -660,7 +704,7 @@ const Transaction: React.FC = () => {
       </div>
       <div className="mb-6">
         <h3 className="text-lg font-semibold mb-2">
-          Total Selected UTXO Amount: {totalSelectedUtxoAmount}
+          Total Selected UTXO Amount: {totalSelectedUtxoAmount.toString()}
         </h3>
       </div>
       <div className="mb-6">

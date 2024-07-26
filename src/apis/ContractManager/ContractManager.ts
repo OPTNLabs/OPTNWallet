@@ -1,4 +1,4 @@
-// @ts-nocheck
+// @ts-expect-error
 import { Contract, Network, ElectrumNetworkProvider } from 'cashscript';
 import DatabaseService from '../DatabaseManager/DatabaseService';
 import p2pkhArtifact from './artifacts/p2pkh.json';
@@ -76,6 +76,7 @@ export default function ContractManager() {
           contract,
           balance,
           formattedUTXOs,
+          artifact.abi,
           artifact
         );
       }
@@ -106,6 +107,7 @@ export default function ContractManager() {
     contract,
     balance,
     utxos,
+    abi,
     artifact
   ) {
     await dbService.ensureDatabaseStarted();
@@ -115,8 +117,8 @@ export default function ContractManager() {
 
     const insertQuery = `
       INSERT INTO instantiated_contracts 
-      (contract_name, address, token_address, opcount, bytesize, bytecode, balance, utxos, created_at, artifact, redeemScript, unlock) 
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      (contract_name, address, token_address, opcount, bytesize, bytecode, balance, utxos, created_at, artifact, abi, redeemScript, unlock) 
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `;
     const params = [
       contractName,
@@ -134,6 +136,7 @@ export default function ContractManager() {
       ),
       new Date().toISOString(),
       JSON.stringify(artifact),
+      JSON.stringify(abi),
       JSON.stringify(contract.redeemScript),
       JSON.stringify(
         Object.keys(contract.unlock).reduce((acc, key) => {
@@ -185,9 +188,21 @@ export default function ContractManager() {
               }))
             : [],
         artifact: JSON.parse(row.artifact),
+        abi: JSON.parse(row.abi),
         redeemScript: JSON.parse(row.redeemScript),
         unlock: JSON.parse(row.unlock),
       });
+
+      // Recreate the unlock functions
+      if (instances[instances.length - 1].unlock) {
+        const unlockFunctions = {};
+        Object.keys(instances[instances.length - 1].unlock).forEach((key) => {
+          unlockFunctions[key] = new Function(
+            'return ' + instances[instances.length - 1].unlock[key]
+          )();
+        });
+        instances[instances.length - 1].unlock = unlockFunctions;
+      }
     }
     statement.free();
     return instances;
@@ -216,9 +231,21 @@ export default function ContractManager() {
               }))
             : [],
         artifact: JSON.parse(row.artifact),
+        abi: JSON.parse(row.abi),
         redeemScript: JSON.parse(row.redeemScript),
         unlock: JSON.parse(row.unlock),
       };
+
+      // Recreate the unlock functions
+      if (contractInstance.unlock) {
+        const unlockFunctions = {};
+        Object.keys(contractInstance.unlock).forEach((key) => {
+          unlockFunctions[key] = new Function(
+            'return ' + contractInstance.unlock[key]
+          )();
+        });
+        contractInstance.unlock = unlockFunctions;
+      }
     }
     statement.free();
     return contractInstance;
