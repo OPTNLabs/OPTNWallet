@@ -1,4 +1,3 @@
-// @ts-expect-error
 import { Contract, Network, ElectrumNetworkProvider } from 'cashscript';
 import DatabaseService from '../DatabaseManager/DatabaseService';
 import p2pkhArtifact from './artifacts/p2pkh.json';
@@ -48,12 +47,10 @@ export default function ContractManager() {
 
       console.log('Contract:', contract);
 
-      // Fetch contract details
       const balance = await contract.getBalance();
       console.log('Balance', balance);
       const utxos = await electrum.getUTXOS(contract.address);
 
-      // Convert Electrum UTXO format to match the expected UTXOs format
       const formattedUTXOs = utxos.map((utxo) => ({
         tx_hash: utxo.tx_hash,
         tx_pos: utxo.tx_pos,
@@ -63,10 +60,8 @@ export default function ContractManager() {
       }));
       console.log('Formatted UTXOs:', formattedUTXOs);
 
-      // Save the contract artifact to the database
       await saveContractArtifact(artifact);
 
-      // Save the contract instance to the database if not exists
       const existingContract = await getContractInstanceByAddress(
         contract.address
       );
