@@ -1,4 +1,3 @@
-// @ts-expect-error
 import React, { useState, useEffect } from 'react';
 import { useSelector } from 'react-redux';
 import { useNavigate } from 'react-router-dom';
@@ -18,6 +17,9 @@ const ContractView = () => {
   const navigate = useNavigate();
   const wallet_id = useSelector(
     (state: RootState) => state.wallet_id.currentWalletId
+  );
+  const currentNetwork = useSelector(
+    (state: RootState) => state.network.currentNetwork
   );
 
   useEffect(() => {
@@ -116,7 +118,8 @@ const ContractView = () => {
 
       const contract = await contractManager.createContract(
         selectedContractFile,
-        args
+        args,
+        currentNetwork
       );
       setContractDetails(contract);
 

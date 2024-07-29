@@ -1,6 +1,4 @@
 import { Contract, ElectrumNetworkProvider } from 'cashscript';
-import { useSelector } from 'react-redux';
-import { RootState } from '../../redux/store';
 import DatabaseService from '../DatabaseManager/DatabaseService';
 import p2pkhArtifact from './artifacts/p2pkh.json';
 import transferWithTimeoutArtifact from './artifacts/transfer_with_timeout.json';
@@ -22,16 +20,13 @@ export default function ContractManager() {
     loadArtifact,
   };
 
-  async function createContract(artifactName, constructorArgs) {
+  async function createContract(artifactName, constructorArgs, currentNetwork) {
     try {
       const artifact = loadArtifact(artifactName);
       if (!artifact) {
         throw new Error(`Artifact ${artifactName} could not be loaded`);
       }
 
-      const currentNetwork = useSelector(
-        (state: RootState) => state.network.currentNetwork
-      );
       const provider = new ElectrumNetworkProvider(currentNetwork);
       const addressType = 'p2sh32';
 
