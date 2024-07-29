@@ -37,8 +37,14 @@ const WalletImport = () => {
     }
 
     try {
+      console.log(
+        'Checking account with given recovery phrase and passphrase...'
+      );
       const check = await WalletManage.checkAccount(recoveryPhrase, passphrase);
+      console.log('Account check result:', check);
+
       if (!check) {
+        console.log('Account does not exist, attempting to create...');
         const createAccountSuccess = await WalletManage.createWallet(
           walletName,
           recoveryPhrase,
@@ -52,8 +58,12 @@ const WalletImport = () => {
         }
       }
 
+      console.log('Setting wallet ID...');
       let walletID = await WalletManage.setWalletId(recoveryPhrase, passphrase);
+      console.log('Wallet ID:', walletID);
+
       if (walletID == null) {
+        console.log('No wallet ID found, creating a new wallet...');
         const created = await WalletManage.createWallet(
           walletName,
           recoveryPhrase,
@@ -73,7 +83,7 @@ const WalletImport = () => {
         navigate(`/home/${walletID}`);
       }
     } catch (e) {
-      console.log(e);
+      console.log('Error importing account:', e);
     }
   };
 
