@@ -1,5 +1,3 @@
-// src/components/WalletCreate.tsx
-
 import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import DatabaseService from '../apis/DatabaseManager/DatabaseService';
@@ -25,11 +23,18 @@ const WalletCreation = () => {
   useEffect(() => {
     console.log('Wallet ID: ', wallet_id);
     const initDb = async () => {
-      const dbStarted = await dbService.startDatabase();
-      if (dbStarted) {
-        console.log('Database has been started.');
+      try {
+        console.log('Starting database...');
+        const dbStarted = await dbService.startDatabase();
+        if (dbStarted) {
+          console.log('Database has been started.');
+          await generateMnemonicPhrase(); // Ensure to wait for mnemonic generation
+        } else {
+          console.error('Failed to start the database.');
+        }
+      } catch (error) {
+        console.error('Error initializing database:', error);
       }
-      await generateMnemonicPhrase(); // Ensure to wait for mnemonic generation
     };
     initDb();
   }, []);
@@ -78,6 +83,7 @@ const WalletCreation = () => {
         <div className="text-white font-bold text-xl mb-4 text-center">
           Generated Mnemonic:
         </div>
+        {console.log(mnemonicPhrase)}
         <div className="text-center mb-4 p-2 bg-gray-200 rounded-md">
           {mnemonicPhrase ? mnemonicPhrase : 'Generating...'}
         </div>
