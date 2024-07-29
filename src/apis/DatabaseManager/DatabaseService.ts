@@ -1,3 +1,5 @@
+// src/apis/DatabaseManager/DatabaseService.ts
+
 import initSqlJs, { Database } from 'sql.js';
 import { createTables } from '../../utils/schema/schema';
 
@@ -17,16 +19,20 @@ export default function DatabaseService() {
   };
 
   async function startDatabase(): Promise<Database> {
+    console.log('Starting database...');
     const SQLModule = await SQL;
     const savedDb = localStorage.getItem('OPTNDatabase');
     if (savedDb) {
+      console.log('Loading saved database...');
       const fileBuffer = new Uint8Array(JSON.parse(savedDb));
       db = new SQLModule.Database(fileBuffer);
     } else {
+      console.log('Creating new database...');
       db = new SQLModule.Database();
       createTables(db); // Ensure the schema is created if no saved DB exists
     }
     await updateSchema(db); // Ensure schema is updated
+    console.log('Database started.');
     return db;
   }
 
@@ -45,7 +51,7 @@ export default function DatabaseService() {
 
     const data = db.export();
     localStorage.setItem('OPTNDatabase', JSON.stringify(Array.from(data)));
-    // console.log(`Database saved to local storage`);
+    console.log('Database saved to local storage');
   }
 
   function getDatabase(): Database | null {

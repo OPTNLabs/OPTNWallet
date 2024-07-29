@@ -29,14 +29,20 @@ const WalletCreation = () => {
       if (dbStarted) {
         console.log('Database has been started.');
       }
-      generateMnemonicPhrase();
+      await generateMnemonicPhrase(); // Ensure to wait for mnemonic generation
     };
     initDb();
   }, []);
 
   const generateMnemonicPhrase = async () => {
-    const mnemonic = await KeyGen.generateMnemonic();
-    setMnemonicPhrase(mnemonic);
+    console.log('Generating mnemonic phrase...');
+    try {
+      const mnemonic = await KeyGen.generateMnemonic();
+      console.log('Generated mnemonic phrase:', mnemonic);
+      setMnemonicPhrase(mnemonic);
+    } catch (error) {
+      console.error('Error generating mnemonic:', error);
+    }
   };
 
   const handleCreateAccount = async () => {
@@ -49,7 +55,7 @@ const WalletCreation = () => {
           passphrase
         );
         if (createAccountSuccess) {
-          console.log('Account created succcessfully.');
+          console.log('Account created successfully.');
         }
       } catch (e) {
         console.log(e);
@@ -73,7 +79,7 @@ const WalletCreation = () => {
           Generated Mnemonic:
         </div>
         <div className="text-center mb-4 p-2 bg-gray-200 rounded-md">
-          {mnemonicPhrase}
+          {mnemonicPhrase ? mnemonicPhrase : 'Generating...'}
         </div>
         <div className="mb-4">
           <label className="block text-white mb-2">Set Wallet Name</label>
