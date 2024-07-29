@@ -12,6 +12,7 @@ import { resetUTXOs } from '../redux/utxoSlice';
 import WalletManager from '../apis/WalletManager/WalletManager';
 import { useNavigate } from 'react-router-dom';
 import { resetTransactions } from '../redux/transactionSlice';
+import NetworkSettingsView from '../components/NetworkSettingsView';
 
 const Settings = () => {
   const [selectedOption, setSelectedOption] = useState('');
@@ -49,6 +50,8 @@ const Settings = () => {
         return <TermsOfUse />;
       case 'contact':
         return <ContactUs />;
+      case 'network':
+        return <NetworkSettingsView />;
       default:
         return null;
     }
@@ -97,6 +100,12 @@ const Settings = () => {
             className="block w-full py-2 px-4 border rounded-lg mb-2 mx-2"
           >
             Contact Us
+          </button>
+          <button
+            onClick={() => handleOptionClick('network')}
+            className="block w-full py-2 px-4 border rounded-lg mb-2 mx-2"
+          >
+            Network
           </button>
           <button
             onClick={handleLogout}

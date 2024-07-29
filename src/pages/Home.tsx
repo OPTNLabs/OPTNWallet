@@ -1,5 +1,3 @@
-// @ts-expect-error
-// src/pages/Home.tsx
 import React, { useState, useEffect, useRef } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { useDispatch, useSelector } from 'react-redux';
@@ -12,6 +10,8 @@ import RegularUTXOs from '../components/RegularUTXOs';
 import CashTokenUTXOs from '../components/CashTokenUTXOs';
 import ElectrumService from '../apis/ElectrumServer/ElectrumServer';
 import { setUTXOs, resetUTXOs } from '../redux/utxoSlice';
+import BitcoinCashCard from '../components/BitcoinCashCard';
+import CashTokenCard from '../components/CashTokenCard';
 
 const batchAmount = 10;
 
@@ -235,9 +235,47 @@ const Home = () => {
     navigate(`/contract`);
   };
 
+  const calculateTotalBitcoinCash = () => {
+    return Object.values(utxos)
+      .flat()
+      .reduce((acc, utxo) => acc + utxo.amount, 0);
+  };
+
+  const calculateCashTokenTotals = () => {
+    const tokenTotals = {};
+    Object.values(cashTokenUtxos)
+      .flat()
+      .forEach((utxo) => {
+        let tokenData = utxo.token_data;
+
+        if (typeof tokenData === 'string') {
+          try {
+            tokenData = JSON.parse(tokenData);
+          } catch (error) {
+            console.error('Error parsing token_data:', error);
+            tokenData = {};
+          }
+        }
+
+        const category = tokenData.category;
+        const amount = parseFloat(tokenData.amount);
+
+        if (category) {
+          if (tokenTotals[category]) {
+            tokenTotals[category] += amount;
+          } else {
+            tokenTotals[category] = amount;
+          }
+        }
+      });
+
+    console.log('Token Totals:', tokenTotals); // Debug statement
+    return tokenTotals;
+  };
+
   return (
-    <>
-      <section className="flex flex-col min-h-screen bg-gray-100 p-4">
+    <div className="relative min-h-screen bg-gray-100">
+      <div className="fixed top-0 left-0 w-full bg-gray-100 z-10 pb-8">
         <div className="text-xl font-bold text-center mb-4">
           Hello {currentWalletId}
         </div>
@@ -292,82 +330,102 @@ const Home = () => {
             </div>
           </div>
         )}
-        <button
-          className="mt-4 p-2 bg-red-500 text-white rounded hover:bg-red-600 transition duration-300 w-full max-w-md mx-auto"
-          onClick={toContractView}
-        >
-          Contracts
-        </button>
-        <button
-          className="mt-4 p-2 bg-blue-500 text-white rounded hover:bg-blue-600 transition duration-300 w-full max-w-md mx-auto"
-          onClick={togglePopup}
-        >
-          Show All Addresses
-        </button>
-        <button
-          className="mt-4 p-2 bg-blue-500 text-white rounded hover:bg-blue-600 transition duration-300 w-full max-w-md mx-auto"
-          onClick={handleFetchUTXOsClick}
-          disabled={fetchingUTXOs || generatingKeys}
-        >
-          Fetch UTXOs
-        </button>
-        <button
-          className="mt-4 p-2 bg-blue-500 text-white rounded hover:bg-blue-600 transition duration-300 w-full max-w-md mx-auto"
-          onClick={handleGenerateNewKey}
-          disabled={fetchingUTXOs || generatingKeys}
-        >
-          Generate New Key
-        </button>
-        {showPopup && (
-          <div className="fixed inset-0 bg-gray-600 bg-opacity-50 overflow-y-auto h-full w-full">
-            <div className="relative top-20 mx-auto p-5 border w-3/4 shadow-lg rounded-md bg-white">
-              <div className="text-center text-lg font-bold mb-4">
-                All Address Information
-              </div>
-              <div className="overflow-y-auto max-h-96">
-                {keyPairs.length > 0 ? (
-                  keyPairs.map((keyPair, index) => (
-                    <div
-                      key={index}
-                      className="p-4 mb-4 border rounded-lg shadow-md bg-white overflow-x-auto"
-                    >
-                      <p className="text-sm break-words">
-                        <strong>Address:</strong> {keyPair.address}
-                      </p>
-                      <p className="text-sm break-words">
-                        <strong>CashToken Address:</strong>{' '}
-                        {keyPair.tokenAddress}
-                      </p>
-                      <RegularUTXOs
-                        address={keyPair.address}
-                        utxos={utxos[keyPair.address]}
-                        loading={loading[keyPair.address]}
-                      />
-                      <CashTokenUTXOs
-                        address={keyPair.address}
-                        utxos={cashTokenUtxos[keyPair.address]}
-                        loading={loading[keyPair.address]}
-                      />
-                    </div>
-                  ))
-                ) : (
-                  <p className="text-center">No keys available yet.</p>
-                )}
-              </div>
-              <button
-                className="mt-4 p-2 bg-red-500 text-white rounded hover:bg-red-600 transition duration-300 w-full"
-                onClick={togglePopup}
-              >
-                Close
-              </button>
-            </div>
-          </div>
-        )}
+        <div className="flex flex-col items-center space-y-4">
+          <button
+            className="mt-4 p-2 bg-red-500 text-white rounded hover:bg-red-600 transition duration-300 w-full max-w-md"
+            onClick={toContractView}
+          >
+            Contracts
+          </button>
+          <button
+            className="mt-4 p-2 bg-blue-500 text-white rounded hover:bg-blue-600 transition duration-300 w-full max-w-md"
+            onClick={togglePopup}
+          >
+            Show All Addresses
+          </button>
+          <button
+            className="mt-4 p-2 bg-blue-500 text-white rounded hover:bg-blue-600 transition duration-300 w-full max-w-md"
+            onClick={handleFetchUTXOsClick}
+            disabled={fetchingUTXOs || generatingKeys}
+          >
+            Fetch UTXOs
+          </button>
+          <button
+            className="mt-4 p-2 bg-blue-500 text-white rounded hover:bg-blue-600 transition duration-300 w-full max-w-md"
+            onClick={handleGenerateNewKey}
+            disabled={fetchingUTXOs || generatingKeys}
+          >
+            Generate New Key
+          </button>
+        </div>
         <div className="font-bold text-xl text-center mt-4">
           Total Balance: {totalBalance}
         </div>
-      </section>
-    </>
+        <div className="w-full max-w-md mx-auto mt-4">
+          <BitcoinCashCard totalAmount={calculateTotalBitcoinCash()} />
+        </div>
+      </div>
+      <div className="flex flex-col items-center w-full max-w-md mx-auto mt-4 pt-4">
+        <div
+          className="w-full overflow-y-auto"
+          style={{ maxHeight: 'calc(100vh - 300px)' }}
+        >
+          {Object.entries(calculateCashTokenTotals()).map(
+            ([category, amount], idx) => (
+              <CashTokenCard
+                key={idx}
+                category={category}
+                totalAmount={amount}
+              />
+            )
+          )}
+        </div>
+      </div>
+      {showPopup && (
+        <div className="fixed inset-0 bg-gray-600 bg-opacity-50 overflow-y-auto h-full w-full z-20">
+          <div className="relative top-20 mx-auto p-5 border w-3/4 shadow-lg rounded-md bg-white">
+            <div className="text-center text-lg font-bold mb-4">
+              All Address Information
+            </div>
+            <div className="overflow-y-auto max-h-96">
+              {keyPairs.length > 0 ? (
+                keyPairs.map((keyPair, index) => (
+                  <div
+                    key={index}
+                    className="p-4 mb-4 border rounded-lg shadow-md bg-white overflow-x-auto"
+                  >
+                    <p className="text-sm break-words">
+                      <strong>Address:</strong> {keyPair.address}
+                    </p>
+                    <p className="text-sm break-words">
+                      <strong>CashToken Address:</strong> {keyPair.tokenAddress}
+                    </p>
+                    <RegularUTXOs
+                      address={keyPair.address}
+                      utxos={utxos[keyPair.address]}
+                      loading={loading[keyPair.address]}
+                    />
+                    <CashTokenUTXOs
+                      address={keyPair.address}
+                      utxos={cashTokenUtxos[keyPair.address]}
+                      loading={loading[keyPair.address]}
+                    />
+                  </div>
+                ))
+              ) : (
+                <p className="text-center">No keys available yet.</p>
+              )}
+            </div>
+            <button
+              className="mt-4 p-2 bg-red-500 text-white rounded hover:bg-red-600 transition duration-300 w-full"
+              onClick={togglePopup}
+            >
+              Close
+            </button>
+          </div>
+        </div>
+      )}
+    </div>
   );
 };
 

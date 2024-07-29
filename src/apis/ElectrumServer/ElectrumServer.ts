@@ -1,18 +1,26 @@
-// src/apis/ElectrumServer/ElectrumServer.ts
 import { ElectrumClient, ElectrumTransport } from 'electrum-cash';
-import { chipnetServers } from '../../utils/servers/ElectrumServers';
-
-export enum Network {
-  CHIPNET,
-}
+import {
+  chipnetServers,
+  mainnetServers,
+} from '../../utils/servers/ElectrumServers';
+import { store } from '../../redux/store';
+import { Network } from '../../redux/networkSlice';
 
 const testServer = chipnetServers[0];
+const mainServer = mainnetServers[0];
 
 let electrum: ElectrumClient | null = null;
 
+function getCurrentServer(): string {
+  const state = store.getState();
+  const currentNetwork = state.network.currentNetwork;
+
+  return currentNetwork === Network.MAINNET ? mainServer : testServer;
+}
+
 export default function ElectrumService() {
   async function electrumConnect(
-    server: string = testServer
+    server: string = getCurrentServer()
   ): Promise<ElectrumClient> {
     if (electrum) {
       console.log('Reusing existing Electrum connection');

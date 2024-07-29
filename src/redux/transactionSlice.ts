@@ -1,4 +1,3 @@
-// src/redux/transactionSlice.ts
 import { createSlice, PayloadAction } from '@reduxjs/toolkit';
 
 export interface Transaction {
@@ -33,12 +32,32 @@ const transactionSlice = createSlice({
     ) => {
       const currentTransactions =
         state.transactions[action.payload.wallet_id] || [];
-      const uniqueNewTransactions = action.payload.transactions.filter(
-        (tx) => !currentTransactions.find((t) => t.tx_hash === tx.tx_hash)
+      const updatedTransactions = action.payload.transactions.reduce(
+        (acc, tx) => {
+          const existingTx = currentTransactions.find(
+            (t) => t.tx_hash === tx.tx_hash
+          );
+          if (existingTx) {
+            if (
+              existingTx.height === -1 ||
+              existingTx.height === 0 ||
+              existingTx.height !== tx.height
+            ) {
+              return acc.concat(tx);
+            } else {
+              return acc;
+            }
+          } else {
+            return acc.concat(tx);
+          }
+        },
+        [] as Transaction[]
       );
       state.transactions[action.payload.wallet_id] = [
-        ...currentTransactions,
-        ...uniqueNewTransactions,
+        ...currentTransactions.filter(
+          (t) => !updatedTransactions.find((utx) => utx.tx_hash === t.tx_hash)
+        ),
+        ...updatedTransactions,
       ];
     },
     resetTransactions: (state) => {

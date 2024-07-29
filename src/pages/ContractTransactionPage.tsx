@@ -10,7 +10,6 @@ import {
   ElectrumNetworkProvider,
   TransactionBuilder,
   SignatureTemplate,
-  Network,
   Contract,
 } from 'cashscript';
 
@@ -56,13 +55,17 @@ const ContractTransactionPage: React.FC = () => {
     console.log('contract function', contractFunction);
     setShowPopup(false);
 
+    const currentNetwork = useSelector(
+      (state: RootState) => state.network.currentNetwork
+    );
+
     if (selectedContract) {
       const keyManager = KeyManager();
       const keys = await keyManager.retrieveKeys(walletId);
       const userKey = keys[0];
 
       if (userKey) {
-        const provider = new ElectrumNetworkProvider(Network.CHIPNET);
+        const provider = new ElectrumNetworkProvider(currentNetwork);
         console.log(userKey);
 
         const contractManager = ContractManager();

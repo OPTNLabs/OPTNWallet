@@ -14,12 +14,14 @@ import walletReducer from './walletSlice';
 import utxoReducer from './utxoSlice';
 import transactionReducer from './transactionSlice';
 import contractReducer from './contractSlice';
+import networkReducer from './networkSlice'; // Import the new slice
 
 const rootReducer = combineReducers({
   wallet_id: walletReducer,
   utxos: utxoReducer,
   transactions: transactionReducer,
   contract: contractReducer,
+  network: networkReducer, // Add the new slice to the root reducer
 });
 
 const persistConfig = {
