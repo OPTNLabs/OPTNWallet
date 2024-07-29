@@ -1,18 +1,26 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import TransactionBuilders, {
+import TransactionBuilderHelper, {
   TransactionOutput,
   UTXO,
-} from '../apis/TransactionManager/TransactionBuilder3';
+} from '../apis/TransactionManager/TransactionBuilderHelper';
 import DatabaseService from '../apis/DatabaseManager/DatabaseService';
 import RegularUTXOs from '../components/RegularUTXOs';
 import CashTokenUTXOs from '../components/CashTokenUTXOs';
 import ContractManager from '../apis/ContractManager/ContractManager';
 import SelectContractFunctionPopup from '../components/SelectContractFunctionPopup';
+import {
+  SignatureTemplate,
+  Contract,
+  ElectrumNetworkProvider,
+  Network,
+} from 'cashscript';
+import { bigIntToString, stringToBigInt } from '../utils/bigIntConversion';
 
 interface ExtendedUTXO extends UTXO {
-  id: string; // Change id to string to make it unique across all UTXOs
+  id: string;
   height: number;
+  unlocker?: any;
 }
 
 const Transaction: React.FC = () => {
@@ -57,7 +65,7 @@ const Transaction: React.FC = () => {
 
   useEffect(() => {
     const fetchWalletId = async () => {
-      const activeWalletId = 1; // Replace this with the actual logic to fetch the active wallet ID
+      const activeWalletId = 1;
       setWalletId(activeWalletId);
     };
     fetchWalletId();
@@ -91,7 +99,7 @@ const Transaction: React.FC = () => {
         }
       }
       addressesStatement.free();
-      console.log('Fetched addresses:', fetchedAddresses); // Debug log
+      console.log('Fetched addresses:', fetchedAddresses);
 
       const utxosQuery = `SELECT * FROM UTXOs WHERE wallet_id = ?`;
       const utxosStatement = db.prepare(utxosQuery);
@@ -112,7 +120,7 @@ const Transaction: React.FC = () => {
           typeof row.height === 'number'
         ) {
           fetchedUTXOs.push({
-            id: `${row.tx_hash}:${row.tx_pos}`, // Use tx_hash and tx_pos to create a unique id
+            id: `${row.tx_hash}:${row.tx_pos}`,
             address: row.address,
             tokenAddress: addressInfo ? addressInfo.tokenAddress : '',
             amount: row.amount,
@@ -127,49 +135,44 @@ const Transaction: React.FC = () => {
         }
       }
       utxosStatement.free();
-      console.log('Fetched UTXOs:', fetchedUTXOs); // Debug log
+      console.log('Fetched UTXOs:', fetchedUTXOs);
 
-      // Fetch contract instances
       const contractInstances = await contractManager.fetchContractInstances();
-      console.log('Fetched contract instances:', contractInstances); // Debug log
+      console.log('Fetched contract instances:', contractInstances);
 
-      // Fetch UTXOs for contract instances
       const contractUTXOs = await Promise.all(
         contractInstances.map(async (contract) => {
           const contractUTXOs = contract.utxos;
           return contractUTXOs.map((utxo) => ({
             ...utxo,
-            id: `${utxo.tx_hash}:${utxo.tx_pos}`, // Use tx_hash and tx_pos to create a unique id
+            id: `${utxo.tx_hash}:${utxo.tx_pos}`,
             address: contract.address,
             tokenAddress: contract.token_address,
-            contractName: contract.contract_name, // Add contract name
-            abi: contract.abi, // Add contract ABI
+            contractName: contract.contract_name,
+            abi: contract.abi,
           }));
         })
       ).then((results) => results.flat());
 
-      console.log('Fetched contract UTXOs:', contractUTXOs); // Debug log
+      console.log('Fetched contract UTXOs:', contractUTXOs);
 
-      // Combine UTXOs
       const allUTXOs = [...fetchedUTXOs, ...contractUTXOs];
 
-      // Filter addresses with associated UTXOs
       const addressesWithUTXOs = fetchedAddresses.filter((addressObj) =>
         allUTXOs.some((utxo) => utxo.address === addressObj.address)
       );
       setAddresses(addressesWithUTXOs);
 
-      // Extract contract addresses
       const contractAddressList = contractInstances.map((contract) => ({
         address: contract.address,
         tokenAddress: contract.token_address,
-        contractName: contract.contract_name, // Add contract name
-        abi: contract.abi, // Add contract ABI
+        contractName: contract.contract_name,
+        abi: contract.abi,
       }));
       setContractAddresses(contractAddressList);
 
       setUtxos(allUTXOs);
-      setContractUTXOs(contractUTXOs); // Set contract UTXOs
+      setContractUTXOs(contractUTXOs);
     };
 
     const fetchPrivateKey = async (
@@ -231,22 +234,63 @@ const Transaction: React.FC = () => {
     }
   };
 
-  const handleUtxoClick = (utxo: ExtendedUTXO) => {
-    setSelectedUtxos((prevSelected) => {
-      const isSelected = prevSelected.some(
-        (selectedUtxo) => selectedUtxo.id === utxo.id
+  const handleUtxoClick = async (utxo: ExtendedUTXO) => {
+    console.log('Selected UTXOs before function inputs:', selectedUtxos);
+    const isSelected = selectedUtxos.some(
+      (selectedUtxo) => selectedUtxo.id === utxo.id
+    );
+
+    if (isSelected) {
+      setSelectedUtxos(
+        selectedUtxos.filter((selectedUtxo) => selectedUtxo.id !== utxo.id)
       );
-      if (isSelected) {
-        return prevSelected.filter(
-          (selectedUtxo) => selectedUtxo.id !== utxo.id
-        );
-      } else {
-        if (utxo.abi) {
-          setCurrentContractABI(utxo.abi);
+    } else {
+      if (utxo.abi) {
+        setCurrentContractABI(utxo.abi);
+
+        if (contractFunction && contractFunctionInputs) {
+          const contractManager = ContractManager();
+          const contractInstance =
+            await contractManager.getContractInstanceByAddress(utxo.address);
+
+          if (contractInstance) {
+            const provider = new ElectrumNetworkProvider(Network.CHIPNET);
+            const manualContract = new Contract(
+              contractInstance.artifact,
+              [contractFunctionInputs.map((input) => input.value)],
+              {
+                provider,
+                addressType: 'p2sh32',
+              }
+            );
+
+            const unlockerInputs = contractFunctionInputs.map((input) =>
+              input.type === 'sig'
+                ? new SignatureTemplate(input.value)
+                : input.value
+            );
+            const unlocker = manualContract.unlock[contractFunction](
+              ...unlockerInputs
+            );
+
+            utxo = {
+              ...utxo,
+              unlocker,
+            };
+
+            console.log('Unlocker for contract UTXO:', unlocker);
+          } else {
+            console.warn('Contract instance not found');
+          }
+        } else {
+          console.warn('Contract function and inputs are not set');
         }
-        return [...prevSelected, utxo];
       }
-    });
+
+      setSelectedUtxos([...selectedUtxos, utxo]);
+    }
+
+    console.log('Selected UTXOs after function inputs:', selectedUtxos);
   };
 
   const addOutput = () => {
@@ -268,7 +312,6 @@ const Transaction: React.FC = () => {
             amount: Number(tokenAmount),
             category: tokenUTXO.token_data.category,
           };
-          // Use the CashToken address format if token is included
           const tokenAddress = addresses.find(
             (addr) => addr.address === recipientAddress
           )?.tokenAddress;
@@ -291,69 +334,68 @@ const Transaction: React.FC = () => {
   };
 
   const buildTransaction = async () => {
-    const txBuilder = TransactionBuilders();
-    console.log(`Selected UTXOs: ${JSON.stringify(selectedUtxos, null, 2)}`);
+    const txBuilder = TransactionBuilderHelper();
+    console.log(`Selected UTXOs: ${selectedUtxos}`);
     console.log(`txOutputs: ${JSON.stringify(outputs, null, 2)}`);
     try {
-      // Add the change address with a placeholder value of 546 satoshis
       const placeholderOutput = {
         recipientAddress: changeAddress,
         amount: 546,
       };
       const txOutputs = [...outputs, placeholderOutput];
 
-      // Build the transaction with the placeholder
+      console.log(
+        'Building transaction with placeholder output:',
+        placeholderOutput
+      );
       const transaction = await txBuilder.buildTransaction(
-        selectedUtxos,
-        txOutputs
+        selectedUtxos.map(bigIntToString),
+        txOutputs,
+        contractFunction,
+        contractFunctionInputs
       );
       console.log('Built Transaction with Placeholder:', transaction);
 
       if (transaction) {
-        // Calculate bytecode size
         const bytecodeSize = transaction.length / 2;
         setBytecodeSize(bytecodeSize);
 
-        // Calculate total selected UTXO amount
         const totalUtxoAmount = selectedUtxos.reduce(
           (sum, utxo) => sum + BigInt(utxo.amount),
           BigInt(0)
         );
 
-        // Calculate total output amount
         const totalOutputAmount = outputs.reduce(
           (sum, output) => sum + BigInt(output.amount),
           BigInt(0)
         );
 
-        // Calculate remainder
         const remainder =
           totalUtxoAmount - totalOutputAmount - BigInt(bytecodeSize);
 
-        // Remove the placeholder output
         txOutputs.pop();
 
-        // Add the change address with the actual remainder
         if (changeAddress && remainder > BigInt(0)) {
           txOutputs.push({
             recipientAddress: changeAddress,
-            amount: Number(remainder), // Convert to Number for compatibility
+            amount: Number(remainder),
           });
         }
 
-        // Build the final transaction
+        console.log('Building final transaction with outputs:', txOutputs);
         const finalTransaction = await txBuilder.buildTransaction(
-          selectedUtxos,
-          txOutputs
+          selectedUtxos.map(bigIntToString),
+          txOutputs,
+          contractFunction,
+          contractFunctionInputs
         );
         console.log(
           `Selected UTXOs: ${JSON.stringify(selectedUtxos, null, 2)}`
         );
         console.log(`txOutputs: ${JSON.stringify(txOutputs, null, 2)}`);
-        console.log('Final Transaction:', txBuilder);
-        console.log('Built Final Transaction:', finalTransaction);
+        console.log('Final Transaction:', finalTransaction);
         setRawTX(finalTransaction);
-        setFinalOutputs(txOutputs); // Set final outputs to render
+        setFinalOutputs(txOutputs);
       } else {
         setRawTX('');
       }
@@ -364,7 +406,7 @@ const Transaction: React.FC = () => {
   };
 
   const sendTransaction = async () => {
-    const txBuilder = TransactionBuilders();
+    const txBuilder = TransactionBuilderHelper();
     try {
       const txid = await txBuilder.sendTransaction(rawTX);
       console.log('Sent Transaction:', txid);
@@ -397,6 +439,8 @@ const Transaction: React.FC = () => {
   ) => {
     setContractFunction(contractFunction);
     setContractFunctionInputs(inputs);
+    console.log('Selected Contract Function:', contractFunction);
+    console.log('Selected Contract Function Inputs:', inputs);
   };
 
   const filteredContractUTXOs = contractUTXOs.filter((utxo) =>
@@ -474,7 +518,15 @@ const Transaction: React.FC = () => {
                   <button
                     key={utxo.id}
                     onClick={() => handleUtxoClick(utxo)}
-                    className={`block w-full text-left p-2 mb-2 border rounded-lg break-words whitespace-normal ${selectedUtxos.some((selectedUtxo) => selectedUtxo.tx_hash === utxo.tx_hash && selectedUtxo.tx_pos === utxo.tx_pos) ? 'bg-blue-100' : 'bg-white'}`}
+                    className={`block w-full text-left p-2 mb-2 border rounded-lg break-words whitespace-normal ${
+                      selectedUtxos.some(
+                        (selectedUtxo) =>
+                          selectedUtxo.tx_hash === utxo.tx_hash &&
+                          selectedUtxo.tx_pos === utxo.tx_pos
+                      )
+                        ? 'bg-blue-100'
+                        : 'bg-white'
+                    }`}
                   >
                     <RegularUTXOs
                       address={addressObj.address}
@@ -506,7 +558,15 @@ const Transaction: React.FC = () => {
                   <button
                     key={utxo.id}
                     onClick={() => handleUtxoClick(utxo)}
-                    className={`block w-full text-left p-2 mb-2 border rounded-lg break-words whitespace-normal ${selectedUtxos.some((selectedUtxo) => selectedUtxo.tx_hash === utxo.tx_hash && selectedUtxo.tx_pos === utxo.tx_pos) ? 'bg-blue-100' : 'bg-white'}`}
+                    className={`block w-full text-left p-2 mb-2 border rounded-lg break-words whitespace-normal ${
+                      selectedUtxos.some(
+                        (selectedUtxo) =>
+                          selectedUtxo.tx_hash === utxo.tx_hash &&
+                          selectedUtxo.tx_pos === utxo.tx_pos
+                      )
+                        ? 'bg-blue-100'
+                        : 'bg-white'
+                    }`}
                   >
                     <CashTokenUTXOs
                       address={addressObj.address}
@@ -530,7 +590,15 @@ const Transaction: React.FC = () => {
                     <div key={utxo.id} className="flex items-center">
                       <button
                         onClick={() => handleUtxoClick(utxo)}
-                        className={`block w-full text-left p-2 mb-2 border rounded-lg break-words whitespace-normal ${selectedUtxos.some((selectedUtxo) => selectedUtxo.tx_hash === utxo.tx_hash && selectedUtxo.tx_pos === utxo.tx_pos) ? 'bg-blue-100' : 'bg-white'}`}
+                        className={`block w-full text-left p-2 mb-2 border rounded-lg break-words whitespace-normal ${
+                          selectedUtxos.some(
+                            (selectedUtxo) =>
+                              selectedUtxo.tx_hash === utxo.tx_hash &&
+                              selectedUtxo.tx_pos === utxo.tx_pos
+                          )
+                            ? 'bg-blue-100'
+                            : 'bg-white'
+                        }`}
                       >
                         <RegularUTXOs
                           address={selectedContractAddresses.join(', ')}
@@ -552,7 +620,15 @@ const Transaction: React.FC = () => {
                     <div key={utxo.id} className="flex items-center">
                       <button
                         onClick={() => handleUtxoClick(utxo)}
-                        className={`block w-full text-left p-2 mb-2 border rounded-lg break-words whitespace-normal ${selectedUtxos.some((selectedUtxo) => selectedUtxo.tx_hash === utxo.tx_hash && selectedUtxo.tx_pos === utxo.tx_pos) ? 'bg-blue-100' : 'bg-white'}`}
+                        className={`block w-full text-left p-2 mb-2 border rounded-lg break-words whitespace-normal ${
+                          selectedUtxos.some(
+                            (selectedUtxo) =>
+                              selectedUtxo.tx_hash === utxo.tx_hash &&
+                              selectedUtxo.tx_pos === utxo.tx_pos
+                          )
+                            ? 'bg-blue-100'
+                            : 'bg-white'
+                        }`}
                       >
                         <CashTokenUTXOs
                           address={selectedContractAddresses.join(', ')}
@@ -583,6 +659,9 @@ const Transaction: React.FC = () => {
             className="flex items-center mb-2 break-words whitespace-normal"
           >
             <span className="break-words">{`Address: ${utxo.address}, Amount: ${utxo.amount}, Tx Hash: ${utxo.tx_hash}, Position: ${utxo.tx_pos}, Height: ${utxo.height}`}</span>
+            {!utxo.unlocker && utxo.abi && (
+              <span className="text-red-500 ml-2">Missing unlocker!</span>
+            )}
           </div>
         ))}
       </div>
@@ -727,7 +806,6 @@ const Transaction: React.FC = () => {
         selectedContractABIs.length > 0 &&
         selectedContractAddresses.length > 0 && (
           <SelectContractFunctionPopup
-            contractAddress={selectedContractAddresses}
             contractABI={currentContractABI}
             onClose={() => setShowPopup(false)}
             onFunctionSelect={handleContractFunctionSelect}

@@ -58,9 +58,10 @@ const SelectContractFunctionPopup: React.FC<
   };
 
   const handleSelect = () => {
-    const inputValuesArray = inputs.map(
-      (input) => inputValues[input.name] || ''
-    );
+    const inputValuesArray = inputs.map((input) => ({
+      type: input.type,
+      value: inputValues[input.name] || '',
+    }));
     onFunctionSelect(selectedFunction, inputValuesArray);
     onClose();
   };

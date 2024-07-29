@@ -91,7 +91,11 @@ const TransactionHistory: React.FC = () => {
             timestamp: string;
             amount: string; // Initially a string
           };
-        if (!uniqueTransactions.has(transaction.tx_hash)) {
+        if (
+          !uniqueTransactions.has(transaction.tx_hash) ||
+          transaction.height === -1 ||
+          transaction.height === 0
+        ) {
           newTransactions.push({
             ...transaction,
             amount: parseFloat(transaction.amount), // Convert amount to number
@@ -181,56 +185,34 @@ const TransactionHistory: React.FC = () => {
 
   return (
     <div className="flex flex-col h-full">
-      <div className="container mx-auto p-4 flex-shrink-0">
+      <div className="sticky top-0 bg-white z-10 p-4">
         <h1 className="text-2xl font-bold mb-4">Transaction History</h1>
-        <div className="mb-4 flex-wrap space-x-2 space-y-2 md:space-y-0 md:flex md:justify-between">
-          <button
-            onClick={toggleSortOrder}
-            className="py-1 px-2 bg-gray-200 rounded md:py-2 md:px-4"
-          >
-            {sortOrder === 'asc' ? 'Ascending' : 'Descending'}
-          </button>
+        <div className="mb-4 flex flex-col space-y-2 md:space-y-0 md:flex-row md:justify-between">
+          <div className="flex justify-between">
+            <button
+              onClick={toggleSortOrder}
+              className="py-1 px-2 bg-gray-200 rounded md:py-2 md:px-4"
+            >
+              {sortOrder === 'asc' ? 'Ascending' : 'Descending'}
+            </button>
+            <select
+              value={transactionsPerPage}
+              onChange={handleTransactionsPerPageChange}
+              className="py-1 px-2 bg-white border rounded md:py-2 md:px-4"
+            >
+              <option value={10}>10 per page</option>
+              <option value={20}>20 per page</option>
+              <option value={30}>30 per page</option>
+            </select>
+          </div>
           <button
             onClick={fetchTransactionHistory}
-            className="py-1 px-2 bg-blue-500 text-white rounded md:py-2 md:px-4"
+            className="py-1 px-2 bg-blue-500 text-white rounded md:py-2 md:px-4 self-center"
             disabled={loading}
           >
             Fetch Transaction History
           </button>
-          <select
-            value={transactionsPerPage}
-            onChange={handleTransactionsPerPageChange}
-            className="py-1 px-2 bg-white border rounded md:py-2 md:px-4"
-          >
-            <option value={10}>10 per page</option>
-            <option value={20}>20 per page</option>
-            <option value={30}>30 per page</option>
-          </select>
         </div>
-        {loading && progress < 100 && (
-          <div className="w-full max-w-md mx-auto">
-            <div className="relative pt-1">
-              <div className="flex mb-2 items-center justify-between">
-                <div>
-                  <span className="text-xs font-semibold inline-block py-1 px-2 uppercase rounded-full text-blue-600 bg-blue-200">
-                    Loading Transaction History...
-                  </span>
-                </div>
-                <div className="text-right">
-                  <span className="text-xs font-semibold inline-block text-blue-600">
-                    {Math.round(progress)}%
-                  </span>
-                </div>
-              </div>
-              <div className="overflow-hidden h-2 mb-4 text-xs flex rounded bg-blue-200">
-                <div
-                  style={{ width: `${progress}%` }}
-                  className="shadow-none flex flex-col text-center whitespace-nowrap text-white justify-center bg-blue-500"
-                ></div>
-              </div>
-            </div>
-          </div>
-        )}
       </div>
       <div className="flex-grow overflow-y-auto mb-16">
         {transactions.length === 0 ? (
@@ -248,12 +230,6 @@ const TransactionHistory: React.FC = () => {
                 <p>
                   <strong>Height:</strong> {tx.height}
                 </p>
-                {/* <p>
-                  <strong>Timestamp:</strong> {tx.timestamp}
-                </p>
-                <p>
-                  <strong>Amount:</strong> {tx.amount}
-                </p> */}
               </li>
             ))}
           </ul>
