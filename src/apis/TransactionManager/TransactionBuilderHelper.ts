@@ -3,11 +3,10 @@ import {
   TransactionBuilder,
   Network,
   SignatureTemplate,
-  Contract,
+  HashType,
 } from 'cashscript';
 import ContractManager from '../ContractManager/ContractManager';
-import { bigIntToString, stringToBigInt } from '../utils/bigIntConversion';
-import { scriptToBytecode } from '@cashscript/utils';
+import KeyManager from '../WalletManager/KeyManager';
 
 export interface UTXO {
   tx_hash: string;
@@ -33,12 +32,13 @@ export interface TransactionOutput {
 export default function TransactionBuilderHelper() {
   const provider = new ElectrumNetworkProvider(Network.CHIPNET);
   const contractManager = ContractManager();
+  const keyManager = KeyManager();
 
   async function buildTransaction(
     utxos: UTXO[],
     outputs: TransactionOutput[],
-    contractFunction: string | null,
-    contractFunctionInputs: any[] | null
+    contractFunction: string | null = null,
+    contractFunctionInputs: any[] | null = null
   ) {
     const txBuilder = new TransactionBuilder({ provider });
 
@@ -49,38 +49,77 @@ export default function TransactionBuilderHelper() {
 
     const unlockableUtxos = await Promise.all(
       utxos.map(async (utxo) => {
-        if (utxo.privateKey) {
-          const signatureTemplate = new SignatureTemplate(utxo.privateKey);
-          return {
-            txid: utxo.tx_hash,
-            vout: utxo.tx_pos,
-            satoshis: BigInt(utxo.amount),
-            scriptPubKey: signatureTemplate.lockingBytecode,
-            unlocker: signatureTemplate.unlockP2PKH(),
-            token_data: utxo.token_data,
-          };
-        } else {
-          if (!contractFunction || !contractFunctionInputs) {
-            throw new Error(
-              'Contract function and inputs are required for contract UTXOs'
+        console.log('Processing UTXO:', utxo);
+
+        let unlocker: any;
+
+        if (!contractFunction || !contractFunctionInputs) {
+          // Non-contract UTXOs (e.g., P2PKH)
+          let privateKey = utxo.privateKey;
+          console.log('Using private key from UTXO:', privateKey);
+
+          // If privateKey from UTXO is not available, fetch from database
+          if (!privateKey) {
+            console.log(
+              'Private key not found in UTXO, fetching from database'
+            );
+            privateKey = keyManager.fetchAddressPrivateKey(utxo.address);
+            console.log(
+              'Fetched private key for address:',
+              utxo.address,
+              'Result:',
+              privateKey
             );
           }
+
+          if (!privateKey || privateKey.length === 0) {
+            console.error(
+              `Private key not found or empty for address: ${utxo.address}`
+            );
+            throw new Error(
+              `Private key not found or empty for address: ${utxo.address}`
+            );
+          }
+
+          console.log('Private key found:', privateKey);
+
+          // Additional check to ensure it's a Uint8Array
+          if (!(privateKey instanceof Uint8Array)) {
+            console.error(
+              'Fetched private key is not a Uint8Array:',
+              privateKey
+            );
+            throw new Error('Fetched private key is not a Uint8Array');
+          }
+
+          const signatureTemplate = new SignatureTemplate(
+            privateKey,
+            HashType.SIGHASH_ALL
+          );
+          unlocker = signatureTemplate.unlockP2PKH();
+
+          console.log('Using unlockP2PKH for non-contract UTXO');
+        } else {
+          // Contract UTXOs
+          console.log('Fetching contract unlock function for UTXO');
           const contractUnlockFunction = await getContractUnlockFunction(
             utxo,
             contractFunction,
             contractFunctionInputs
           );
-          return {
-            txid: utxo.tx_hash,
-            vout: utxo.tx_pos,
-            satoshis: BigInt(utxo.amount),
-            scriptPubKey: scriptToBytecode(
-              contractUnlockFunction.lockingBytecode
-            ),
-            unlocker: contractUnlockFunction.unlocker,
-            token_data: utxo.token_data,
-          };
+
+          unlocker = contractUnlockFunction.unlocker;
+
+          console.log('Using Contract Unlocker for contract UTXO');
         }
+
+        return {
+          txid: utxo.tx_hash,
+          vout: utxo.tx_pos,
+          satoshis: BigInt(utxo.amount),
+          unlocker,
+          token_data: utxo.token_data,
+        };
       })
     );
 

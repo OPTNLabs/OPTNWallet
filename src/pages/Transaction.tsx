@@ -335,7 +335,7 @@ const Transaction: React.FC = () => {
 
   const buildTransaction = async () => {
     const txBuilder = TransactionBuilderHelper();
-    console.log(`Selected UTXOs: ${selectedUtxos}`);
+    console.log(`Selected UTXOs: ${JSON.stringify(selectedUtxos)}`);
     console.log(`txOutputs: ${JSON.stringify(outputs, null, 2)}`);
     try {
       const placeholderOutput = {
@@ -349,7 +349,7 @@ const Transaction: React.FC = () => {
         placeholderOutput
       );
       const transaction = await txBuilder.buildTransaction(
-        selectedUtxos.map(bigIntToString),
+        selectedUtxos,
         txOutputs,
         contractFunction,
         contractFunctionInputs
@@ -384,7 +384,7 @@ const Transaction: React.FC = () => {
 
         console.log('Building final transaction with outputs:', txOutputs);
         const finalTransaction = await txBuilder.buildTransaction(
-          selectedUtxos.map(bigIntToString),
+          selectedUtxos,
           txOutputs,
           contractFunction,
           contractFunctionInputs
