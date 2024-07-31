@@ -1,4 +1,3 @@
-// @ts-expect-error
 import DatabaseService from '../DatabaseManager/DatabaseService';
 import KeyGeneration from './KeyGeneration';
 import AddressManager from '../AddressManager/AddressManager';
@@ -25,19 +24,19 @@ export default function KeyManager() {
       }
 
       const query = `
-                SELECT 
-                    id, 
-                    public_key, 
-                    private_key, 
-                    address,
-                    token_address,
-                    pubkey_hash,
-                    account_index,
-                    change_index,
-                    address_index
-                FROM keys 
-                WHERE wallet_id = :walletid
-            `;
+        SELECT 
+          id, 
+          public_key, 
+          private_key, 
+          address,
+          token_address,
+          pubkey_hash,
+          account_index,
+          change_index,
+          address_index
+        FROM keys 
+        WHERE wallet_id = :walletid
+      `;
       const statement = db.prepare(query);
       statement.bind({ ':walletid': wallet_id });
 
@@ -138,9 +137,9 @@ export default function KeyManager() {
         const pubkeyHash = keys.alicePkh;
 
         const insertQuery = db.prepare(`
-                    INSERT INTO keys (wallet_id, public_key, private_key, address, token_address, pubkey_hash, account_index, change_index, address_index) 
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?);
-                `);
+          INSERT INTO keys (wallet_id, public_key, private_key, address, token_address, pubkey_hash, account_index, change_index, address_index) 
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?);
+        `);
         insertQuery.run([
           wallet_id,
           publicKey,
@@ -176,18 +175,34 @@ export default function KeyManager() {
   }
 
   function fetchAddressPrivateKey(address: string) {
+    console.log('Fetching private key for address:', address);
     dbService.ensureDatabaseStarted();
     const db = dbService.getDatabase();
     if (db == null) {
+      console.error('Database is null, cannot fetch private key');
       return null;
     }
     const fetchAddressQuery = db.prepare(`
-            SELECT private_key 
-            FROM keys 
-            WHERE address = ?;
-        `);
+      SELECT private_key 
+      FROM keys 
+      WHERE address = ?;
+    `);
     const result = fetchAddressQuery.get([address]);
     fetchAddressQuery.free();
-    return result;
+    if (result) {
+      console.log('Raw private key result:', result.private_key);
+    } else {
+      console.log('No result found for address:', address);
+    }
+
+    // Return the private key as Uint8Array
+    const privateKey = result ? new Uint8Array(result.private_key) : null;
+    console.log(
+      'Fetched private key for address:',
+      address,
+      'Result:',
+      privateKey
+    );
+    return privateKey;
   }
 }
