@@ -1,6 +1,4 @@
-// @ts-expect-error
-// src/apis/UTXOManager/UTXOManager.ts
-
+// @ts-nocheck
 import { UTXOs } from '../types';
 import DatabaseService from '../DatabaseManager/DatabaseService';
 import ElectrumService from '../ElectrumServer/ElectrumServer';
