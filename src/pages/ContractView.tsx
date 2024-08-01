@@ -80,7 +80,7 @@ const ContractView = () => {
   const parseInputValue = (value, type) => {
     switch (type) {
       case 'int':
-        return BigInt(value);
+        return BigInt(value); // Return BigInt directly
       case 'bool':
         return value === 'true';
       case 'string':
@@ -142,6 +142,23 @@ const ContractView = () => {
       const instances = await contractManager.fetchContractInstances();
       setContractInstances(instances);
     } catch (err) {
+      setError(err.message);
+    }
+  };
+
+  const updateContract = async (address) => {
+    try {
+      const contractManager = ContractManager();
+      const { added, removed } =
+        await contractManager.updateContractUTXOs(address);
+
+      console.log(`UTXOs updated. Added: ${added}, Removed: ${removed}`);
+
+      // Reload contract instances to reflect updated UTXOs
+      const instances = await contractManager.fetchContractInstances();
+      setContractInstances(instances);
+    } catch (err) {
+      console.error('Error updating UTXOs:', err);
       setError(err.message);
     }
   };
@@ -264,6 +281,12 @@ const ContractView = () => {
                       loading={false}
                     />
                   </div>
+                  <button
+                    onClick={() => updateContract(instance.address)}
+                    className="bg-green-500 text-white py-2 px-4 my-2 rounded"
+                  >
+                    Update
+                  </button>
                   <button
                     onClick={() => deleteContract(instance.id)}
                     className="bg-red-500 text-white py-2 px-4 my-2 rounded"
