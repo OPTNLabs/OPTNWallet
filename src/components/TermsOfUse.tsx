@@ -1,7 +1,6 @@
 const TermsOfUse = () => {
   return (
-    <div>
-      <h2 className="text-xl font-bold mb-2">Terms of Use</h2>
+    <div className="overflow-y-auto h-full">
       <p className="border p-4 rounded-lg bg-gray-100">
         <strong>1. Acceptance of Terms</strong>
         <br />

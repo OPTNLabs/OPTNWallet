@@ -1,6 +1,7 @@
 import { Contract, ElectrumNetworkProvider } from 'cashscript';
 import DatabaseService from '../DatabaseManager/DatabaseService';
 import p2pkhArtifact from './artifacts/p2pkh.json';
+import IntrospectionCovenant from './artifacts/IntrospectionCovenant.json';
 import transferWithTimeoutArtifact from './artifacts/transfer_with_timeout.json';
 import announcementArtifact from './artifacts/announcement.json';
 import ElectrumService from '../ElectrumServer/ElectrumServer';
@@ -18,7 +19,27 @@ export default function ContractManager() {
     fetchContractInstances,
     getContractInstanceByAddress,
     loadArtifact,
+    fetchConstructorArgs,
   };
+
+  // Add the fetchConstructorArgs method
+  async function fetchConstructorArgs(address: string) {
+    await dbService.ensureDatabaseStarted();
+    const db = dbService.getDatabase();
+
+    const query =
+      'SELECT constructor_args FROM cashscript_addresses WHERE address = ?';
+    const statement = db.prepare(query);
+    statement.bind([address]);
+
+    let constructorArgs = null;
+    if (statement.step()) {
+      const row = statement.getAsObject();
+      constructorArgs = JSON.parse(row.constructor_args);
+    }
+    statement.free();
+    return constructorArgs;
+  }
 
   async function createContract(artifactName, constructorArgs, currentNetwork) {
     try {
@@ -252,6 +273,7 @@ export default function ContractManager() {
         p2pkh: p2pkhArtifact,
         transfer_with_timeout: transferWithTimeoutArtifact,
         announcement: announcementArtifact,
+        IntrospectionCovenant: IntrospectionCovenant,
       };
 
       const artifact = artifacts[artifactName];
@@ -276,6 +298,10 @@ export default function ContractManager() {
         {
           fileName: 'announcement',
           contractName: announcementArtifact.contractName,
+        },
+        {
+          fileName: 'IntrospectionCovenant',
+          contractName: IntrospectionCovenant.contractName,
         },
       ];
     } catch (error) {

@@ -116,7 +116,7 @@ const Settings = () => {
         </div>
       ) : (
         <div
-          className="fixed inset-0 bg-white p-4 z-50 overflow-auto"
+          className="fixed inset-0 bg-white p-4 z-50 overflow-hidden"
           style={{
             height: `calc(100vh - ${navBarHeight}px)`,
             top: 0,

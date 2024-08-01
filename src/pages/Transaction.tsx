@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { useSelector, useDispatch } from 'react-redux';
 import TransactionBuilderHelper, {
   TransactionOutput,
   UTXO,
@@ -14,8 +15,15 @@ import {
   Contract,
   ElectrumNetworkProvider,
   Network,
+  HashType, // Ensure HashType is imported correctly
 } from 'cashscript';
 import { bigIntToString, stringToBigInt } from '../utils/bigIntConversion';
+import { RootState } from '../redux/store';
+import {
+  setSelectedFunction,
+  setInputs,
+  setInputValues,
+} from '../redux/contractSlice';
 
 interface ExtendedUTXO extends UTXO {
   id: string;
@@ -62,6 +70,17 @@ const Transaction: React.FC = () => {
   const [contractUTXOs, setContractUTXOs] = useState<ExtendedUTXO[]>([]);
   const [currentContractABI, setCurrentContractABI] = useState<any[]>([]);
   const navigate = useNavigate();
+  const dispatch = useDispatch();
+
+  const selectedFunction = useSelector(
+    (state: RootState) => state.contract.selectedFunction
+  );
+  const functionInputs = useSelector(
+    (state: RootState) => state.contract.inputs
+  );
+  const inputValues = useSelector(
+    (state: RootState) => state.contract.inputValues
+  );
 
   useEffect(() => {
     const fetchWalletId = async () => {
@@ -247,47 +266,24 @@ const Transaction: React.FC = () => {
     } else {
       if (utxo.abi) {
         setCurrentContractABI(utxo.abi);
+        setShowPopup(true);
+        // Store UTXO temporarily until function is selected
+        return;
+      } else {
+        const provider = new ElectrumNetworkProvider(Network.CHIPNET);
+        const signatureTemplate = new SignatureTemplate(
+          utxo.privateKey!,
+          HashType.SIGHASH_ALL
+        );
+        const unlocker = signatureTemplate.unlockP2PKH();
 
-        if (contractFunction && contractFunctionInputs) {
-          const contractManager = ContractManager();
-          const contractInstance =
-            await contractManager.getContractInstanceByAddress(utxo.address);
+        utxo = {
+          ...utxo,
+          unlocker,
+        };
 
-          if (contractInstance) {
-            const provider = new ElectrumNetworkProvider(Network.CHIPNET);
-            const manualContract = new Contract(
-              contractInstance.artifact,
-              [contractFunctionInputs.map((input) => input.value)],
-              {
-                provider,
-                addressType: 'p2sh32',
-              }
-            );
-
-            const unlockerInputs = contractFunctionInputs.map((input) =>
-              input.type === 'sig'
-                ? new SignatureTemplate(input.value)
-                : input.value
-            );
-            const unlocker = manualContract.unlock[contractFunction](
-              ...unlockerInputs
-            );
-
-            utxo = {
-              ...utxo,
-              unlocker,
-            };
-
-            console.log('Unlocker for contract UTXO:', unlocker);
-          } else {
-            console.warn('Contract instance not found');
-          }
-        } else {
-          console.warn('Contract function and inputs are not set');
-        }
+        setSelectedUtxos([...selectedUtxos, utxo]);
       }
-
-      setSelectedUtxos([...selectedUtxos, utxo]);
     }
 
     console.log('Selected UTXOs after function inputs:', selectedUtxos);
@@ -335,7 +331,7 @@ const Transaction: React.FC = () => {
 
   const buildTransaction = async () => {
     const txBuilder = TransactionBuilderHelper();
-    console.log(`Selected UTXOs: ${JSON.stringify(selectedUtxos)}`);
+    console.log(`${selectedUtxos}`);
     console.log(`txOutputs: ${JSON.stringify(outputs, null, 2)}`);
     try {
       const placeholderOutput = {
@@ -351,8 +347,8 @@ const Transaction: React.FC = () => {
       const transaction = await txBuilder.buildTransaction(
         selectedUtxos,
         txOutputs,
-        contractFunction,
-        contractFunctionInputs
+        selectedFunction,
+        functionInputs
       );
       console.log('Built Transaction with Placeholder:', transaction);
 
@@ -386,8 +382,8 @@ const Transaction: React.FC = () => {
         const finalTransaction = await txBuilder.buildTransaction(
           selectedUtxos,
           txOutputs,
-          contractFunction,
-          contractFunctionInputs
+          selectedFunction,
+          functionInputs
         );
         console.log(
           `Selected UTXOs: ${JSON.stringify(selectedUtxos, null, 2)}`
@@ -439,8 +435,35 @@ const Transaction: React.FC = () => {
   ) => {
     setContractFunction(contractFunction);
     setContractFunctionInputs(inputs);
+    dispatch(setSelectedFunction(contractFunction));
+    dispatch(setInputs(inputs));
     console.log('Selected Contract Function:', contractFunction);
     console.log('Selected Contract Function Inputs:', inputs);
+
+    const unlockerInputs = inputs.map((input) =>
+      input.type === 'sig' ? new SignatureTemplate(input.value) : input.value
+    );
+
+    const unlocker = {
+      contractFunction,
+      unlockerInputs,
+    };
+
+    const utxoIndex = utxos.findIndex(
+      (utxo) => utxo.abi && utxo.abi === currentContractABI
+    );
+
+    if (utxoIndex !== -1) {
+      const utxo = utxos[utxoIndex];
+      utxos[utxoIndex] = {
+        ...utxo,
+        unlocker,
+      };
+
+      setSelectedUtxos([...selectedUtxos, utxos[utxoIndex]]);
+    }
+
+    setShowPopup(false);
   };
 
   const filteredContractUTXOs = contractUTXOs.filter((utxo) =>
@@ -606,12 +629,6 @@ const Transaction: React.FC = () => {
                           loading={false}
                         />
                       </button>
-                      <button
-                        className="bg-blue-500 text-white py-2 px-4 rounded mt-2 sm:mt-0 sm:ml-4"
-                        onClick={() => setShowPopup(true)}
-                      >
-                        {utxo.contractName}
-                      </button>
                     </div>
                   ))}
                 {filteredContractUTXOs
@@ -635,12 +652,6 @@ const Transaction: React.FC = () => {
                           utxos={[utxo]}
                           loading={false}
                         />
-                      </button>
-                      <button
-                        className="bg-blue-500 text-white py-2 px-4 rounded mt-2 sm:mt-0 sm:ml-4"
-                        onClick={() => setShowPopup(true)}
-                      >
-                        {utxo.contractName}
                       </button>
                     </div>
                   ))}
@@ -802,15 +813,13 @@ const Transaction: React.FC = () => {
           </a>
         </div>
       )}
-      {showPopup &&
-        selectedContractABIs.length > 0 &&
-        selectedContractAddresses.length > 0 && (
-          <SelectContractFunctionPopup
-            contractABI={currentContractABI}
-            onClose={() => setShowPopup(false)}
-            onFunctionSelect={handleContractFunctionSelect}
-          />
-        )}
+      {showPopup && currentContractABI.length > 0 && (
+        <SelectContractFunctionPopup
+          contractABI={currentContractABI}
+          onClose={() => setShowPopup(false)}
+          onFunctionSelect={handleContractFunctionSelect}
+        />
+      )}
     </div>
   );
 };
