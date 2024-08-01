@@ -3,7 +3,6 @@ import { nodePolyfills } from 'vite-plugin-node-polyfills';
 import topLevelAwait from 'vite-plugin-top-level-await';
 import react from '@vitejs/plugin-react-swc';
 
-// https://vitejs.dev/config/
 export default defineConfig({
   plugins: [
     react(), // React plugin configuration with SWC
@@ -16,5 +15,25 @@ export default defineConfig({
   ],
   build: {
     target: ['es2020', 'chrome87', 'safari14', 'firefox78', 'edge88', 'node20'],
+    rollupOptions: {
+      output: {
+        manualChunks: {
+          'sql-wasm': ['sql.js'],
+        },
+      },
+    },
+  },
+  server: {
+    mimeTypes: {
+      'application/wasm': ['wasm'],
+    },
+    fs: {
+      allow: ['..'], // Allow serving files from one level up to handle node_modules
+    },
+  },
+  resolve: {
+    alias: {
+      '/node_modules/sql.js/dist/': 'node_modules/sql.js/dist/',
+    },
   },
 });
