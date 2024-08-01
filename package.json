@@ -13,7 +13,8 @@
     "capacitor:add:android": "npx cap add android",
     "capacitor:copy": "npx cap copy",
     "capacitor:sync": "npx cap sync",
-    "capacitor:open:android": "npx cap open android"
+    "capacitor:open:android": "npx cap open android",
+    "serve": "npx serve -s dist"
   },
   "dependencies": {
     "@bitauth/libauth": "^2.0.0-alpha.8",

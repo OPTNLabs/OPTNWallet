@@ -386,9 +386,7 @@ const Transaction: React.FC = () => {
           selectedFunction,
           functionInputs
         );
-        console.log(
-          `Selected UTXOs: ${JSON.stringify(selectedUtxos, null, 2)}`
-        );
+        console.log(`Selected UTXOs: ${selectedUtxos}`);
         console.log(`txOutputs: ${JSON.stringify(txOutputs, null, 2)}`);
         console.log('Final Transaction:', finalTransaction);
         setRawTX(finalTransaction);

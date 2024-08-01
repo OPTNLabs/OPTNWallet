@@ -152,9 +152,9 @@ export default function TransactionBuilderHelper() {
     console.log('Transaction Outputs:', txOutputs);
 
     txBuilder.addOutputs(txOutputs);
+    console.log('tx builder:', txBuilder);
 
     try {
-      console.log('tx builder:', txBuilder);
       const builtTransaction = txBuilder.build();
       console.log('Built Transaction:', builtTransaction);
       return builtTransaction;

@@ -7,6 +7,27 @@ import transferWithTimeoutArtifact from './artifacts/transfer_with_timeout.json'
 import announcementArtifact from './artifacts/announcement.json';
 import ElectrumService from '../ElectrumServer/ElectrumServer';
 
+function parseInputValue(value, type) {
+  switch (type) {
+    case 'int':
+      return BigInt(value);
+    case 'bool':
+      return value === 'true';
+    case 'string':
+      return value;
+    case 'bytes':
+      return value;
+    case 'pubkey':
+      return value;
+    case 'sig':
+      return value;
+    case 'datasig':
+      return value;
+    default:
+      return value;
+  }
+}
+
 export default function ContractManager() {
   const dbService = DatabaseService();
   const electrum = ElectrumService();
@@ -21,6 +42,7 @@ export default function ContractManager() {
     getContractInstanceByAddress,
     loadArtifact,
     fetchConstructorArgs,
+    updateContractUTXOs,
   };
 
   // Add the fetchConstructorArgs method
@@ -70,9 +92,13 @@ export default function ContractManager() {
         throw new Error('Constructor arguments are required');
       }
 
-      console.log('Creating contract with:', artifact, constructorArgs);
+      const parsedArgs = constructorArgs.map((arg, index) =>
+        parseInputValue(arg, artifact.constructorInputs[index].type)
+      );
 
-      const contract = new Contract(artifact, constructorArgs, {
+      console.log('Creating contract with:', artifact, parsedArgs);
+
+      const contract = new Contract(artifact, parsedArgs, {
         provider,
         addressType,
       });
@@ -143,7 +169,11 @@ export default function ContractManager() {
     `;
     const params = [
       address,
-      JSON.stringify(constructorArgs),
+      JSON.stringify(
+        constructorArgs.map((arg) =>
+          typeof arg === 'bigint' ? arg.toString() : arg
+        )
+      ),
       balance.toString(),
     ];
 
@@ -400,5 +430,94 @@ export default function ContractManager() {
     }
     statement.free();
     return artifact;
+  }
+
+  async function updateContractUTXOs(address) {
+    try {
+      const utxos = await electrum.getUTXOS(address);
+      const formattedUTXOs = utxos.map((utxo) => ({
+        tx_hash: utxo.tx_hash,
+        tx_pos: utxo.tx_pos,
+        amount: BigInt(utxo.value),
+        height: utxo.height,
+        token: utxo.token_data ? utxo.token_data : null,
+        prefix: 'bchtest', // Ensure prefix is provided
+      }));
+
+      console.log('Fetched UTXOs:', formattedUTXOs);
+
+      await dbService.ensureDatabaseStarted();
+      const db = dbService.getDatabase();
+
+      // Fetch existing UTXOs from the database for this address
+      const query = 'SELECT tx_hash, tx_pos FROM UTXOs WHERE address = ?';
+      const statement = db.prepare(query);
+      statement.bind([address]);
+
+      const existingUTXOs = [];
+      while (statement.step()) {
+        const row = statement.getAsObject();
+        existingUTXOs.push(row);
+      }
+      statement.free();
+
+      // Identify UTXOs to add or remove
+      const newUTXOs = formattedUTXOs.filter(
+        (utxo) =>
+          !existingUTXOs.some(
+            (existing) =>
+              existing.tx_hash === utxo.tx_hash &&
+              existing.tx_pos === utxo.tx_pos
+          )
+      );
+
+      const staleUTXOs = existingUTXOs.filter(
+        (existing) =>
+          !formattedUTXOs.some(
+            (utxo) =>
+              utxo.tx_hash === existing.tx_hash &&
+              utxo.tx_pos === existing.tx_pos
+          )
+      );
+
+      console.log('New UTXOs:', newUTXOs);
+      console.log('Stale UTXOs:', staleUTXOs);
+
+      // Add new UTXOs to the database
+      const insertQuery = `
+        INSERT INTO UTXOs (address, height, tx_hash, tx_pos, amount, token_data, prefix) 
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+      `;
+      for (const utxo of newUTXOs) {
+        console.log('Adding UTXO:', utxo);
+        const insertStatement = db.prepare(insertQuery);
+        insertStatement.run([
+          address,
+          utxo.height,
+          utxo.tx_hash,
+          utxo.tx_pos,
+          utxo.amount.toString(),
+          utxo.token ? JSON.stringify(utxo.token) : null,
+          utxo.prefix,
+        ]);
+        insertStatement.free();
+      }
+
+      // Remove stale UTXOs from the database
+      const deleteQuery =
+        'DELETE FROM UTXOs WHERE address = ? AND tx_hash = ? AND tx_pos = ?';
+      for (const utxo of staleUTXOs) {
+        console.log('Removing stale UTXO:', utxo);
+        const deleteStatement = db.prepare(deleteQuery);
+        deleteStatement.run([address, utxo.tx_hash, utxo.tx_pos]);
+        deleteStatement.free();
+      }
+
+      await dbService.saveDatabaseToFile();
+      return { added: newUTXOs.length, removed: staleUTXOs.length };
+    } catch (error) {
+      console.error('Error updating UTXOs:', error);
+      throw error;
+    }
   }
 }
