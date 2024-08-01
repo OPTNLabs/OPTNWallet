@@ -1,7 +1,11 @@
 // @ts-nocheck
 import React, { useState, useEffect } from 'react';
 import { useDispatch } from 'react-redux';
-import { setSelectedFunction, setInputs } from '../redux/contractSlice';
+import {
+  setSelectedFunction,
+  setInputs,
+  setInputValues,
+} from '../redux/contractSlice';
 
 interface SelectContractFunctionPopupProps {
   contractABI: any[];
@@ -59,9 +63,39 @@ const SelectContractFunctionPopup: React.FC<
       type: input.type,
       value: inputValues[input.name] || '',
     }));
+    console.log(
+      `selectedFunction ${typeof selectedFunction}: ${selectedFunction}`
+    );
+    console.log(`inputs ${typeof inputs}: ${inputs}`);
+    console.log(`inputValues ${typeof inputValues}: ${inputValues}`);
+
+    if (!selectedFunction || !inputs) {
+      console.error('Selected function or inputs are undefined');
+      return;
+    }
+
+    // Create an object to store the input values in the desired format
+    const inputValuesObject = inputs.reduce((acc, input) => {
+      acc[input.name] = inputValues[input.name] || '';
+      return acc;
+    }, {});
+
+    console.log('inputValuesObject', inputValuesObject);
+
+    try {
+      console.log('Dispatching setSelectedFunction');
+      dispatch(setSelectedFunction(selectedFunction));
+
+      console.log('Dispatching setInputs');
+      dispatch(setInputs(inputs));
+
+      console.log('Dispatching setInputValues');
+      dispatch(setInputValues(inputValuesObject)); // Dispatch input values to Redux store
+    } catch (error) {
+      console.error('Error dispatching actions:', error);
+    }
+
     onFunctionSelect(selectedFunction, inputValuesArray);
-    dispatch(setSelectedFunction(selectedFunction));
-    dispatch(setInputs(inputs));
     onClose();
   };
 

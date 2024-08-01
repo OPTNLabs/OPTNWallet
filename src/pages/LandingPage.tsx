@@ -15,6 +15,16 @@ const LandingPage = () => {
               <h3>In-Development</h3>
               <p>Wallet for Transaction Covenants</p>
             </div>
+
+            {/* Add the image here */}
+            <div className="flex justify-center mt-4">
+              <img
+                src="assets/images/OPTNWelcome1.png"
+                alt="Welcome"
+                className="max-w-full h-auto"
+              />
+            </div>
+
             <div className="flex flex-row mt-4 justify-center lg:justify-start">
               <Link
                 to="/createwallet"

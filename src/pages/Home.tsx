@@ -341,7 +341,11 @@ const Home = () => {
       >
         {Object.entries(calculateCashTokenTotals()).map(
           ([category, amount]) => (
-            <CashTokenCard key={category} category={category} amount={amount} />
+            <CashTokenCard
+              key={category}
+              category={category}
+              totalAmount={amount}
+            />
           )
         )}
       </div>

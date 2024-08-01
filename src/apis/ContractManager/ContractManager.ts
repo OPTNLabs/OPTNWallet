@@ -33,10 +33,20 @@ export default function ContractManager() {
     const statement = db.prepare(query);
     statement.bind([address]);
 
+    console.log('statement', statement);
+
+    console.log('Address:', address); // Debugging line
+
     let constructorArgs = null;
     if (statement.step()) {
       const row = statement.getAsObject();
-      constructorArgs = JSON.parse(row.constructor_args);
+      console.log('Row:', row); // Debugging line
+      try {
+        constructorArgs = JSON.parse(row.constructor_args);
+      } catch (e) {
+        console.error('Error parsing JSON:', e); // Log the error for debugging
+        constructorArgs = null;
+      }
     }
     statement.free();
     return constructorArgs;
@@ -96,6 +106,9 @@ export default function ContractManager() {
           artifact.abi,
           artifact
         );
+
+        // Save constructor arguments to the database
+        await saveConstructorArgs(contract.address, constructorArgs, balance);
       }
 
       return {
@@ -117,6 +130,27 @@ export default function ContractManager() {
       console.error('Error creating contract:', error);
       throw error;
     }
+  }
+
+  async function saveConstructorArgs(address, constructorArgs, balance) {
+    await dbService.ensureDatabaseStarted();
+    const db = dbService.getDatabase();
+
+    const insertQuery = `
+      INSERT INTO cashscript_addresses 
+      (address, constructor_args, balance) 
+      VALUES (?, ?, ?)
+    `;
+    const params = [
+      address,
+      JSON.stringify(constructorArgs),
+      balance.toString(),
+    ];
+
+    const statement = db.prepare(insertQuery);
+    statement.run(params);
+    statement.free();
+    await dbService.saveDatabaseToFile();
   }
 
   async function saveContractInstance(
