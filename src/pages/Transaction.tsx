@@ -434,6 +434,8 @@ const Transaction: React.FC = () => {
     contractFunction: string,
     inputs: any[]
   ) => {
+    console.log(contractFunction);
+    console.log(inputs);
     setContractFunction(contractFunction);
     setContractFunctionInputs(inputs);
     dispatch(setSelectedFunction(contractFunction));

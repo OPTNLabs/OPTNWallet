@@ -186,6 +186,8 @@ export default function TransactionBuilderHelper() {
       utxo.address
     );
 
+    console.log('Constructor Args: ', constructorArgs);
+
     const contract = new Contract(contractInstance.artifact, constructorArgs, {
       provider,
       addressType: 'p2sh32',

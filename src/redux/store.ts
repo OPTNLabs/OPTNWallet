@@ -10,7 +10,6 @@ import {
   REGISTER,
 } from 'redux-persist';
 import storage from 'redux-persist/lib/storage';
-import { thunk } from 'redux-thunk'; // Correct import of redux-thunk
 import walletReducer from './walletSlice';
 import utxoReducer from './utxoSlice';
 import transactionReducer from './transactionSlice';
@@ -39,7 +38,7 @@ const store = configureStore({
       serializableCheck: {
         ignoredActions: [FLUSH, REHYDRATE, PAUSE, PERSIST, PURGE, REGISTER],
       },
-    }).concat(thunk), // Add thunk middleware here
+    }),
 });
 
 const persistor = persistStore(store);
