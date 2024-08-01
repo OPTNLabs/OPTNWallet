@@ -4,14 +4,16 @@ import {
   Network,
   SignatureTemplate,
   HashType,
+  Contract,
 } from 'cashscript';
 import ContractManager from '../ContractManager/ContractManager';
 import KeyManager from '../WalletManager/KeyManager';
+import { bigIntToString, stringToBigInt } from '../../utils/bigIntConversion';
 
 export interface UTXO {
   tx_hash: string;
   tx_pos: number;
-  amount: number;
+  amount: number | bigint;
   address: string;
   privateKey?: Uint8Array;
   token_data?: {
@@ -22,9 +24,9 @@ export interface UTXO {
 
 export interface TransactionOutput {
   recipientAddress: string;
-  amount: number;
+  amount: number | bigint;
   token?: {
-    amount: number;
+    amount: number | bigint;
     category: string;
   };
 }
@@ -53,7 +55,7 @@ export default function TransactionBuilderHelper() {
 
         let unlocker: any;
 
-        if (!contractFunction || !contractFunctionInputs) {
+        if (!utxo.contractName || !utxo.abi) {
           // Non-contract UTXOs (e.g., P2PKH)
           let privateKey = utxo.privateKey;
           console.log('Using private key from UTXO:', privateKey);
@@ -178,14 +180,15 @@ export default function TransactionBuilderHelper() {
       );
     }
 
-    const contract = new Contract(
-      contractInstance.artifact,
-      contractFunctionInputs.map((input) => input.value),
-      {
-        provider,
-        addressType: 'p2sh32',
-      }
+    // Fetch constructor arguments from the database
+    const constructorArgs = await contractManager.fetchConstructorArgs(
+      utxo.address
     );
+
+    const contract = new Contract(contractInstance.artifact, constructorArgs, {
+      provider,
+      addressType: 'p2sh32',
+    });
 
     const abiFunction = contractInstance.abi.find(
       (func) => func.name === contractFunction

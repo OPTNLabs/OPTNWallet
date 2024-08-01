@@ -184,7 +184,7 @@ const TransactionHistory: React.FC = () => {
   const totalPages = Math.ceil(transactions.length / transactionsPerPage);
 
   return (
-    <div className="flex flex-col h-full">
+    <div className="flex flex-col h-screen">
       <div className="sticky top-0 bg-white z-10 p-4">
         <h1 className="text-2xl font-bold mb-4">Transaction History</h1>
         <div className="mb-4 flex flex-col space-y-2 md:space-y-0 md:flex-row md:justify-between">
@@ -214,7 +214,7 @@ const TransactionHistory: React.FC = () => {
           </button>
         </div>
       </div>
-      <div className="flex-grow overflow-y-auto mb-16">
+      <div className="flex-grow overflow-y-auto">
         {transactions.length === 0 ? (
           <p className="text-center">No transactions available.</p>
         ) : (
@@ -237,7 +237,7 @@ const TransactionHistory: React.FC = () => {
       </div>
       <div
         className="fixed bottom-0 left-0 right-0 p-4 bg-white z-10 flex justify-between items-center"
-        style={{ marginBottom: navBarHeight }}
+        style={{ paddingBottom: navBarHeight }}
       >
         <button
           onClick={handlePreviousPage}

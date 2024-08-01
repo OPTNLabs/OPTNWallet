@@ -1,6 +1,3 @@
-// @ts-expect-error
-// src/components/RecoveryPhrase.tsx
-
 import React, { useState, useEffect } from 'react';
 import WalletManager from '../apis/WalletManager/WalletManager';
 
@@ -21,10 +18,19 @@ const RecoveryPhrase = () => {
     fetchMnemonic();
   }, []);
 
+  const words = mnemonic.split(' ');
+
   return (
-    <div>
-      <h2 className="text-xl font-bold mb-2">Recovery Phrase</h2>
-      <p className="border p-4 rounded-lg bg-gray-100">{mnemonic}</p>
+    <div className="flex justify-center">
+      <div className="text-center">
+        <div className="border p-4 rounded-lg bg-gray-100 grid grid-cols-2 gap-x-4 justify-center">
+          {words.map((word, index) => (
+            <div key={index} className="text-left">
+              {index + 1}. {word}
+            </div>
+          ))}
+        </div>
+      </div>
     </div>
   );
 };

@@ -9,7 +9,7 @@ import WalletManager from '../apis/WalletManager/WalletManager';
 import RegularUTXOs from '../components/RegularUTXOs';
 import CashTokenUTXOs from '../components/CashTokenUTXOs';
 import ElectrumService from '../apis/ElectrumServer/ElectrumServer';
-import { setUTXOs, resetUTXOs } from '../redux/utxoSlice';
+import { setUTXOs } from '../redux/utxoSlice';
 import BitcoinCashCard from '../components/BitcoinCashCard';
 import CashTokenCard from '../components/CashTokenCard';
 
@@ -274,112 +274,75 @@ const Home = () => {
   };
 
   return (
-    <div className="relative min-h-screen bg-gray-100">
-      <div className="fixed top-0 left-0 w-full bg-gray-100 z-10 pb-8">
-        <div className="text-xl font-bold text-center mb-4">
-          Hello {currentWalletId}
-        </div>
-        <div className="text-lg font-semibold text-center mt-4 mb-2">
-          Generating Public/Private Keys:
-        </div>
-        {generatingKeys && (
-          <div className="w-full max-w-md mx-auto">
-            <div className="relative pt-1">
-              <div className="flex mb-2 items-center justify-between">
-                <div>
-                  <span className="text-xs font-semibold inline-block py-1 px-2 uppercase rounded-full text-blue-600 bg-blue-200">
-                    Generating Keys...
-                  </span>
-                </div>
-                <div className="text-right">
-                  <span className="text-xs font-semibold inline-block text-blue-600">
-                    {Math.round(keyProgress)}%
-                  </span>
-                </div>
-              </div>
-              <div className="overflow-hidden h-2 mb-4 text-xs flex rounded bg-blue-200">
-                <div
-                  style={{ width: `${keyProgress}%` }}
-                  className="shadow-none flex flex-col text-center whitespace-nowrap text-white justify-center bg-blue-500"
-                ></div>
-              </div>
-            </div>
-          </div>
-        )}
-        {fetchingUTXOs && (
-          <div className="w-full max-w-md mx-auto mt-4">
-            <div className="relative pt-1">
-              <div className="flex mb-2 items-center justify-between">
-                <div>
-                  <span className="text-xs font-semibold inline-block py-1 px-2 uppercase rounded-full text-green-600 bg-green-200">
-                    Fetching UTXOs...
-                  </span>
-                </div>
-                <div className="text-right">
-                  <span className="text-xs font-semibold inline-block text-green-600">
-                    {Math.round(utxoProgress)}%
-                  </span>
-                </div>
-              </div>
-              <div className="overflow-hidden h-2 mb-4 text-xs flex rounded bg-green-200">
-                <div
-                  style={{ width: `${utxoProgress}%` }}
-                  className="shadow-none flex flex-col text-center whitespace-nowrap text-white justify-center bg-green-500"
-                ></div>
-              </div>
-            </div>
-          </div>
-        )}
-        <div className="flex flex-col items-center space-y-4">
-          <button
-            className="mt-4 p-2 bg-red-500 text-white rounded hover:bg-red-600 transition duration-300 w-full max-w-md"
-            onClick={toContractView}
-          >
-            Contracts
-          </button>
-          <button
-            className="mt-4 p-2 bg-blue-500 text-white rounded hover:bg-blue-600 transition duration-300 w-full max-w-md"
-            onClick={togglePopup}
-          >
-            Show All Addresses
-          </button>
-          <button
-            className="mt-4 p-2 bg-blue-500 text-white rounded hover:bg-blue-600 transition duration-300 w-full max-w-md"
-            onClick={handleFetchUTXOsClick}
-            disabled={fetchingUTXOs || generatingKeys}
-          >
-            Fetch UTXOs
-          </button>
-          <button
-            className="mt-4 p-2 bg-blue-500 text-white rounded hover:bg-blue-600 transition duration-300 w-full max-w-md"
-            onClick={handleGenerateNewKey}
-            disabled={fetchingUTXOs || generatingKeys}
-          >
-            Generate New Key
-          </button>
-        </div>
-        <div className="font-bold text-xl text-center mt-4">
-          Total Balance: {totalBalance}
-        </div>
+    <div className="container mx-auto p-4 pb-16">
+      <h1 className="text-2xl font-bold mb-4">Home</h1>
+      {fetchingUTXOs && (
         <div className="w-full max-w-md mx-auto mt-4">
-          <BitcoinCashCard totalAmount={calculateTotalBitcoinCash()} />
+          <div className="relative pt-1">
+            <div className="flex mb-2 items-center justify-between">
+              <div>
+                <span className="text-xs font-semibold inline-block py-1 px-2 uppercase rounded-full text-green-600 bg-green-200">
+                  Fetching UTXOs...
+                </span>
+              </div>
+              <div className="text-right">
+                <span className="text-xs font-semibold inline-block text-green-600">
+                  {Math.round(utxoProgress)}%
+                </span>
+              </div>
+            </div>
+            <div className="overflow-hidden h-2 mb-4 text-xs flex rounded bg-green-200">
+              <div
+                style={{ width: `${utxoProgress}%` }}
+                className="shadow-none flex flex-col text-center whitespace-nowrap text-white justify-center bg-green-500"
+              ></div>
+            </div>
+          </div>
         </div>
-      </div>
-      <div className="flex flex-col items-center w-full max-w-md mx-auto mt-4 pt-4">
-        <div
-          className="w-full overflow-y-auto"
-          style={{ maxHeight: 'calc(100vh - 300px)' }}
+      )}
+      <div className="flex flex-col items-center space-y-4">
+        <button
+          className="mt-4 p-2 bg-red-500 text-white rounded hover:bg-red-600 transition duration-300 w-full max-w-md"
+          onClick={toContractView}
         >
-          {Object.entries(calculateCashTokenTotals()).map(
-            ([category, amount], idx) => (
-              <CashTokenCard
-                key={idx}
-                category={category}
-                totalAmount={amount}
-              />
-            )
-          )}
-        </div>
+          Contracts
+        </button>
+        <button
+          className="mt-4 p-2 bg-blue-500 text-white rounded hover:bg-blue-600 transition duration-300 w-full max-w-md"
+          onClick={togglePopup}
+        >
+          Show All Addresses
+        </button>
+        <button
+          className="mt-4 p-2 bg-blue-500 text-white rounded hover:bg-blue-600 transition duration-300 w-full max-w-md"
+          onClick={handleFetchUTXOsClick}
+          disabled={fetchingUTXOs || generatingKeys}
+        >
+          Fetch UTXOs
+        </button>
+        <button
+          className="mt-4 p-2 bg-blue-500 text-white rounded hover:bg-blue-600 transition duration-300 w-full max-w-md"
+          onClick={handleGenerateNewKey}
+          disabled={fetchingUTXOs || generatingKeys}
+        >
+          Generate New Key
+        </button>
+      </div>
+      <div className="font-bold text-xl text-center mt-4">
+        Total Balance: {totalBalance}
+      </div>
+      <div className="w-full max-w-md mx-auto mt-4">
+        <BitcoinCashCard totalAmount={calculateTotalBitcoinCash()} />
+      </div>
+      <div
+        className="w-full max-w-md mx-auto mt-4 overflow-y-auto"
+        style={{ maxHeight: '50vh' }}
+      >
+        {Object.entries(calculateCashTokenTotals()).map(
+          ([category, amount]) => (
+            <CashTokenCard key={category} category={category} amount={amount} />
+          )
+        )}
       </div>
       {showPopup && (
         <div className="fixed inset-0 bg-gray-600 bg-opacity-50 overflow-y-auto h-full w-full z-20">

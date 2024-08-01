@@ -9,19 +9,20 @@ import {
   PURGE,
   REGISTER,
 } from 'redux-persist';
-import storage from 'redux-persist/lib/storage'; // defaults to localStorage for web
+import storage from 'redux-persist/lib/storage';
+import { thunk } from 'redux-thunk'; // Correct import of redux-thunk
 import walletReducer from './walletSlice';
 import utxoReducer from './utxoSlice';
 import transactionReducer from './transactionSlice';
 import contractReducer from './contractSlice';
-import networkReducer from './networkSlice'; // Import the new slice
+import networkReducer from './networkSlice';
 
 const rootReducer = combineReducers({
   wallet_id: walletReducer,
   utxos: utxoReducer,
   transactions: transactionReducer,
   contract: contractReducer,
-  network: networkReducer, // Add the new slice to the root reducer
+  network: networkReducer,
 });
 
 const persistConfig = {
@@ -38,7 +39,7 @@ const store = configureStore({
       serializableCheck: {
         ignoredActions: [FLUSH, REHYDRATE, PAUSE, PERSIST, PURGE, REGISTER],
       },
-    }),
+    }).concat(thunk), // Add thunk middleware here
 });
 
 const persistor = persistStore(store);

@@ -1,6 +1,3 @@
-// @ts-expect-error
-// src/components/Layout.tsx
-
 import React, { useState, useEffect } from 'react';
 import { Outlet } from 'react-router-dom';
 import BottomNavBar from './BottomNavBar';
@@ -18,7 +15,7 @@ const Layout = () => {
   return (
     <div className="min-h-screen flex flex-col">
       <div
-        className="flex-grow"
+        className="flex-grow overflow-auto"
         style={{ paddingBottom: `var(--navbar-height)` }}
       >
         <Outlet />

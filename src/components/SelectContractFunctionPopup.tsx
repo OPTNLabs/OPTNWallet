@@ -1,4 +1,6 @@
 import React, { useState, useEffect } from 'react';
+import { useDispatch } from 'react-redux';
+import { setSelectedFunction, setInputs } from '../redux/contractSlice';
 
 interface SelectContractFunctionPopupProps {
   contractABI: any[];
@@ -13,10 +15,9 @@ const SelectContractFunctionPopup: React.FC<
   const [selectedFunction, setSelectedFunction] = useState<string>('');
   const [inputs, setInputs] = useState<any[]>([]);
   const [inputValues, setInputValues] = useState<{ [key: string]: string }>({});
+  const dispatch = useDispatch();
 
   useEffect(() => {
-    console.log('Contract ABI:', contractABI); // Debug log
-
     if (!contractABI || !Array.isArray(contractABI)) {
       console.error('Contract ABI is null, undefined, or not an array');
       return;
@@ -28,15 +29,10 @@ const SelectContractFunctionPopup: React.FC<
       .filter(
         (item, index, self) =>
           self.findIndex((f) => f.name === item.name) === index
-      ); // Ensure unique function names
+      );
 
-    console.log('Function Names:', allFunctionNames); // Debug log
     setFunctions(allFunctionNames);
   }, [contractABI]);
-
-  useEffect(() => {
-    console.log('Functions State:', functions); // Debug log
-  }, [functions]);
 
   const handleFunctionSelect = (e: React.ChangeEvent<HTMLSelectElement>) => {
     const selectedFunctionName = e.target.value;
@@ -63,6 +59,8 @@ const SelectContractFunctionPopup: React.FC<
       value: inputValues[input.name] || '',
     }));
     onFunctionSelect(selectedFunction, inputValuesArray);
+    dispatch(setSelectedFunction(selectedFunction));
+    dispatch(setInputs(inputs));
     onClose();
   };
 
