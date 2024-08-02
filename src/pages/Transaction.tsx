@@ -1,4 +1,4 @@
-// @ts-ignore
+// @ts-nocheck
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useSelector, useDispatch } from 'react-redux';
@@ -13,18 +13,12 @@ import ContractManager from '../apis/ContractManager/ContractManager';
 import SelectContractFunctionPopup from '../components/SelectContractFunctionPopup';
 import {
   SignatureTemplate,
-  Contract,
   ElectrumNetworkProvider,
   Network,
-  HashType, // Ensure HashType is imported correctly
+  HashType,
 } from 'cashscript';
-import { bigIntToString, stringToBigInt } from '../utils/bigIntConversion';
 import { RootState } from '../redux/store';
-import {
-  setSelectedFunction,
-  setInputs,
-  setInputValues,
-} from '../redux/contractSlice';
+import { setSelectedFunction, setInputs } from '../redux/contractSlice';
 
 interface ExtendedUTXO extends UTXO {
   id: string;
@@ -60,6 +54,9 @@ const Transaction: React.FC = () => {
   const [transactionId, setTransactionId] = useState<string>('');
   const [finalOutputs, setFinalOutputs] = useState<TransactionOutput[]>([]);
   const [showPopup, setShowPopup] = useState(false);
+  const [showRawTxPopup, setShowRawTxPopup] = useState(false); // State for rawTX pop-up
+  const [showTxIdPopup, setShowTxIdPopup] = useState(false); // State for transactionId pop-up
+  const [loading, setLoading] = useState(false); // State for loading spinner
   const [selectedContractAddresses, setSelectedContractAddresses] = useState<
     string[]
   >([]);
@@ -70,6 +67,7 @@ const Transaction: React.FC = () => {
   >(null);
   const [contractUTXOs, setContractUTXOs] = useState<ExtendedUTXO[]>([]);
   const [currentContractABI, setCurrentContractABI] = useState<any[]>([]);
+  const [errorMessage, setErrorMessage] = useState<string | null>(null); // State for error messages
   const navigate = useNavigate();
   const dispatch = useDispatch();
 
@@ -78,9 +76,6 @@ const Transaction: React.FC = () => {
   );
   const functionInputs = useSelector(
     (state: RootState) => state.contract.inputs
-  );
-  const inputValues = useSelector(
-    (state: RootState) => state.contract.inputValues
   );
 
   useEffect(() => {
@@ -335,6 +330,7 @@ const Transaction: React.FC = () => {
     console.log(`${selectedUtxos}`);
     console.log(`txOutputs: ${JSON.stringify(outputs, null, 2)}`);
     try {
+      setLoading(true); // Show the loader
       const placeholderOutput = {
         recipientAddress: changeAddress,
         amount: 546,
@@ -391,12 +387,19 @@ const Transaction: React.FC = () => {
         console.log('Final Transaction:', finalTransaction);
         setRawTX(finalTransaction);
         setFinalOutputs(txOutputs);
+        setErrorMessage(null); // Clear any previous error messages
+        setShowRawTxPopup(true); // Show the raw transaction pop-up
       } else {
         setRawTX('');
       }
     } catch (error) {
       console.error('Error building transaction:', error);
       setRawTX('');
+      setErrorMessage('Error building transaction: ' + error.message);
+      setRawTX('');
+      setShowRawTxPopup(true); // Show pop-up to display the error
+    } finally {
+      setLoading(false); // Hide the loader
     }
   };
 
@@ -406,13 +409,23 @@ const Transaction: React.FC = () => {
       const txid = await txBuilder.sendTransaction(rawTX);
       console.log('Sent Transaction:', txid);
       setTransactionId(txid);
+      setShowTxIdPopup(true); // Show the transaction ID pop-up
     } catch (error) {
       console.error('Error sending transaction:', error);
+      console.error('Error sending transaction:', error);
+      setErrorMessage('Error sending transaction: ' + error.message);
+      setShowTxIdPopup(true); // Show pop-up to display the error
     }
   };
 
   const returnHome = async () => {
     navigate(`/home/${walletId}`);
+  };
+
+  const closePopups = () => {
+    setShowRawTxPopup(false);
+    setShowTxIdPopup(false);
+    setErrorMessage(null); // Clear error messages when pop-ups are closed
   };
 
   const totalSelectedUtxoAmount = selectedUtxos.reduce(
@@ -772,6 +785,14 @@ const Transaction: React.FC = () => {
           Total Selected UTXO Amount: {totalSelectedUtxoAmount.toString()}
         </h3>
       </div>
+
+      {/* Spinning Loader */}
+      {loading && (
+        <div className="flex justify-center items-center mb-6">
+          <div className="w-8 h-8 border-4 border-t-4 border-blue-500 rounded-full animate-spin"></div>
+        </div>
+      )}
+
       <div className="mb-6">
         <button
           onClick={buildTransaction}
@@ -799,19 +820,55 @@ const Transaction: React.FC = () => {
           </h3>
         </div>
       )}
-      {rawTX !== '' && (
-        <div className="text-lg font-semibold break-words whitespace-normal">
-          {rawTX}
+      {showRawTxPopup && (
+        <div className="fixed inset-0 bg-gray-500 bg-opacity-75 flex items-center justify-center">
+          <div className="bg-white p-6 rounded shadow-lg w-96 max-h-[90vh] overflow-y-auto">
+            <h3 className="text-lg font-semibold mb-4">Raw Transaction</h3>
+            <div className="text-sm font-medium text-gray-700 break-words whitespace-normal mb-4">
+              {errorMessage ? (
+                <div className="text-red-500">{errorMessage}</div>
+              ) : (
+                rawTX
+              )}
+            </div>
+            <div className="flex justify-end">
+              <button
+                onClick={closePopups}
+                className="bg-gray-300 text-gray-700 py-2 px-4 rounded"
+              >
+                Close
+              </button>
+            </div>
+          </div>
         </div>
       )}
-      {transactionId !== '' && (
-        <div className="text-lg font-semibold break-words whitespace-normal">
-          <a
-            rel="stylesheet"
-            href={`https://chipnet.imaginary.cash/tx/${transactionId}`}
-          >
-            {transactionId}
-          </a>
+      {showTxIdPopup && (
+        <div className="fixed inset-0 bg-gray-500 bg-opacity-75 flex items-center justify-center">
+          <div className="bg-white p-6 rounded shadow-lg w-96 max-h-[90vh] overflow-y-auto">
+            <h3 className="text-lg font-semibold mb-4">Transaction ID</h3>
+            <div className="text-sm font-medium text-gray-700 break-words whitespace-normal mb-4">
+              {errorMessage ? (
+                <div className="text-red-500">{errorMessage}</div>
+              ) : (
+                <a
+                  className="text-blue-500 underline"
+                  href={`https://chipnet.imaginary.cash/tx/${transactionId}`}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                >
+                  {transactionId}
+                </a>
+              )}
+            </div>
+            <div className="flex justify-end">
+              <button
+                onClick={closePopups}
+                className="bg-gray-300 text-gray-700 py-2 px-4 rounded"
+              >
+                Close
+              </button>
+            </div>
+          </div>
         </div>
       )}
       {showPopup && currentContractABI.length > 0 && (

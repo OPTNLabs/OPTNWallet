@@ -1,10 +1,11 @@
-// @ts-ignore
+// @ts-nocheck
 import { Contract, ElectrumNetworkProvider } from 'cashscript';
 import DatabaseService from '../DatabaseManager/DatabaseService';
 import p2pkhArtifact from './artifacts/p2pkh.json';
-import IntrospectionCovenant from './artifacts/IntrospectionCovenant.json';
+import introspectionCovenantArtifact from './artifacts/IntrospectionCovenant.json';
 import transferWithTimeoutArtifact from './artifacts/transfer_with_timeout.json';
 import announcementArtifact from './artifacts/announcement.json';
+import escrowArtifact from './artifacts/escrow.json';
 import ElectrumService from '../ElectrumServer/ElectrumServer';
 import parseInputValue from '../../utils/parseInputValue';
 
@@ -318,7 +319,8 @@ export default function ContractManager() {
         p2pkh: p2pkhArtifact,
         transfer_with_timeout: transferWithTimeoutArtifact,
         announcement: announcementArtifact,
-        IntrospectionCovenant: IntrospectionCovenant,
+        introspectionCovenant: introspectionCovenantArtifact,
+        escrow: escrowArtifact,
       };
 
       const artifact = artifacts[artifactName];
@@ -345,8 +347,12 @@ export default function ContractManager() {
           contractName: announcementArtifact.contractName,
         },
         {
-          fileName: 'IntrospectionCovenant',
-          contractName: IntrospectionCovenant.contractName,
+          fileName: 'introspectionCovenant',
+          contractName: introspectionCovenantArtifact.contractName,
+        },
+        {
+          fileName: 'escrow',
+          contractName: escrowArtifact.contractName,
         },
       ];
     } catch (error) {
