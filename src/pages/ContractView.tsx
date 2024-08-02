@@ -1,4 +1,4 @@
-// @ts-nocheck
+// @ts-ignore
 import React, { useState, useEffect } from 'react';
 import { useSelector } from 'react-redux';
 import { useNavigate } from 'react-router-dom';
@@ -6,6 +6,7 @@ import ContractManager from '../apis/ContractManager/ContractManager';
 import { RootState } from '../redux/store';
 import RegularUTXOs from '../components/RegularUTXOs';
 import CashTokenUTXOs from '../components/CashTokenUTXOs';
+import parseInputValue from '../utils/parseInputValue';
 
 const ContractView = () => {
   const [contractDetails, setContractDetails] = useState(null);
@@ -75,27 +76,6 @@ const ContractView = () => {
   const handleInputChange = (event) => {
     const { name, value } = event.target;
     setInputValues({ ...inputValues, [name]: value });
-  };
-
-  const parseInputValue = (value, type) => {
-    switch (type) {
-      case 'int':
-        return BigInt(value); // Return BigInt directly
-      case 'bool':
-        return value === 'true';
-      case 'string':
-        return value;
-      case 'bytes':
-        return value; // Assuming input is provided in hex format
-      case 'pubkey':
-        return value; // Assuming input is provided in hex format
-      case 'sig':
-        return value; // Assuming input is provided in hex format
-      case 'datasig':
-        return value; // Assuming input is provided in hex format
-      default:
-        return value; // Default to string
-    }
   };
 
   const createContract = async () => {

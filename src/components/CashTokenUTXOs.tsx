@@ -46,7 +46,7 @@ const CashTokenUTXOs = ({ address, utxos, loading }) => {
               className="p-2 mb-2 border rounded-lg overflow-x-auto"
             >
               <p className="break-words">
-                <strong>Amount:</strong> {utxo.amount}
+                <strong>Amount:</strong> {utxo.amount} satoshis
               </p>
               <p className="break-words">
                 <strong>Token Amount:</strong> {tokenData.amount || 'N/A'}

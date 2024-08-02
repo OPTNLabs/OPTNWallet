@@ -1,4 +1,4 @@
-// @ts-nocheck
+// @ts-ignore
 import React, { useState, useEffect, useRef } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { useDispatch, useSelector } from 'react-redux';
@@ -330,7 +330,7 @@ const Home = () => {
         </button>
       </div>
       <div className="font-bold text-xl text-center mt-4">
-        Total Balance: {totalBalance}
+        Total Balance: {totalBalance} satoshis
       </div>
       <div className="w-full max-w-md mx-auto mt-4">
         <BitcoinCashCard totalAmount={calculateTotalBitcoinCash()} />

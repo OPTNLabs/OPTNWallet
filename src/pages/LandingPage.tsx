@@ -19,7 +19,7 @@ const LandingPage = () => {
             {/* Add the image here */}
             <div className="flex justify-center mt-4">
               <img
-                src="/public/OPTNWelcome1.png"
+                src="/assets/images/OPTNWelcome1.png"
                 alt="Welcome"
                 className="max-w-full h-auto"
               />
