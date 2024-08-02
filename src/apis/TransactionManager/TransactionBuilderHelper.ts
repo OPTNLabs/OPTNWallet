@@ -1,4 +1,4 @@
-// @ts-nocheck
+// @ts-ignore
 import {
   ElectrumNetworkProvider,
   TransactionBuilder,
@@ -10,6 +10,7 @@ import {
 import ContractManager from '../ContractManager/ContractManager';
 import KeyManager from '../WalletManager/KeyManager';
 import { bigIntToString, stringToBigInt } from '../../utils/bigIntConversion';
+import parseInputValue from '../../utils/parseInputValue';
 
 export interface UTXO {
   tx_hash: string;
@@ -173,7 +174,11 @@ export default function TransactionBuilderHelper() {
     const contractInstance = await contractManager.getContractInstanceByAddress(
       utxo.address
     );
-    console.log('Fetched contract instance:', contractInstance);
+    console.log(
+      'Fetched contract instance constructor inputs:',
+      contractInstance.artifact.constructorInputs
+    );
+    console.log('Fetched contract function inputs:', contractFunctionInputs);
 
     if (!contractInstance) {
       throw new Error(
@@ -181,9 +186,15 @@ export default function TransactionBuilderHelper() {
       );
     }
 
-    // Fetch constructor arguments from the database
-    const constructorArgs = await contractManager.fetchConstructorArgs(
+    // Reference constructorInputs directly from the contract artifact
+    const constructorInputs = await contractManager.fetchConstructorArgs(
       utxo.address
+    );
+
+    console.log('Constructor Inputs', constructorInputs);
+
+    const constructorArgs = contractInstance.artifact.constructorInputs.map(
+      (input, index) => parseInputValue(constructorInputs[index], input.type)
     );
 
     console.log('Constructor Args: ', constructorArgs);

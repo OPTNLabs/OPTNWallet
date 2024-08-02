@@ -1,4 +1,4 @@
-// @ts-nocheck
+// @ts-ignore
 import { Contract, ElectrumNetworkProvider } from 'cashscript';
 import DatabaseService from '../DatabaseManager/DatabaseService';
 import p2pkhArtifact from './artifacts/p2pkh.json';
@@ -6,27 +6,7 @@ import IntrospectionCovenant from './artifacts/IntrospectionCovenant.json';
 import transferWithTimeoutArtifact from './artifacts/transfer_with_timeout.json';
 import announcementArtifact from './artifacts/announcement.json';
 import ElectrumService from '../ElectrumServer/ElectrumServer';
-
-function parseInputValue(value, type) {
-  switch (type) {
-    case 'int':
-      return BigInt(value);
-    case 'bool':
-      return value === 'true';
-    case 'string':
-      return value;
-    case 'bytes':
-      return value;
-    case 'pubkey':
-      return value;
-    case 'sig':
-      return value;
-    case 'datasig':
-      return value;
-    default:
-      return value;
-  }
-}
+import parseInputValue from '../../utils/parseInputValue';
 
 export default function ContractManager() {
   const dbService = DatabaseService();

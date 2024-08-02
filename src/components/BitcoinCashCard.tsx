@@ -9,7 +9,7 @@ const BitcoinCashCard = ({ totalAmount }) => {
         <FaBitcoin className="text-green-500 text-3xl mr-3" />
         <div className="text-lg font-bold">Bitcoin Cash</div>
       </div>
-      <div className="text-lg font-bold">{totalAmount}</div>
+      <div className="text-lg font-bold">{totalAmount} satoshis</div>
     </div>
   );
 };
