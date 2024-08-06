@@ -79,8 +79,15 @@ const WalletCreation = () => {
   };
 
   return (
-    <div className="min-h-screen bg-black flex flex-col items-center justify-center p-4">
-      <div className="bg-black shadow-md rounded-lg p-6 w-full max-w-md">
+    <div className="min-h-screen bg-slate-600 flex flex-col items-center justify-center p-4">
+      <div className="bg-slate-600 p-6 w-full max-w-md">
+        <div className="flex justify-center mt-4">
+          <img
+            src="/assets/images/OPTNWelcome1.png"
+            alt="Welcome"
+            className="max-w-full h-auto"
+          />
+        </div>
         <div className="text-white font-bold text-xl mb-4 text-center">
           Generated Mnemonic:
         </div>
@@ -88,7 +95,9 @@ const WalletCreation = () => {
         <div className="text-center mb-4 p-2 bg-gray-200 rounded-md">
           {mnemonicPhrase ? mnemonicPhrase : 'Generating...'}
         </div>
-        <div className="mb-4">
+
+        {/*Remove the following div section*/}
+        {/* <div className="mb-4">
           <label className="block text-white mb-2">Set Wallet Name</label>
           <input
             placeholder={wallet_id.toString()}
@@ -99,7 +108,8 @@ const WalletCreation = () => {
             }
             className="w-full p-2 border border-gray-300 rounded-md"
           />
-        </div>
+        </div> */}
+
         <div className="mb-4">
           <label className="block text-white mb-2">Set Passphrase</label>
           <input

@@ -67,6 +67,8 @@ const Settings = () => {
         return 'Terms of Use';
       case 'contact':
         return 'Contact Us';
+      case 'network':
+        return 'Network';
       default:
         return '';
     }
@@ -74,7 +76,14 @@ const Settings = () => {
 
   return (
     <div className="container mx-auto p-4">
-      <h1 className="text-2xl font-bold mb-4">Settings</h1>
+      <div className="flex justify-center mt-4">
+        <img
+          src="/assets/images/OPTNWelcome1.png"
+          alt="Welcome"
+          className="max-w-full h-auto"
+        />
+      </div>
+      <h1 className="text-2xl font-bold mb-4 text-center">Settings</h1>
       {!selectedOption ? (
         <div className="mb-4">
           <button

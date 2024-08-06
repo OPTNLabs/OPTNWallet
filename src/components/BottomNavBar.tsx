@@ -22,7 +22,7 @@ const BottomNavBar: React.FC<BottomNavBarProps> = ({ setNavBarHeight }) => {
 
   return (
     <nav
-      className="fixed bottom-0 w-full bg-gray-800 text-white flex justify-around items-center py-4 z-50"
+      className="fixed bottom-0 w-full bg-gradient-to-t from-teal-500 to-lime-500 text-white flex justify-around items-center py-4 z-50"
       id="bottomNavBar"
       ref={navBarRef}
     >

@@ -1,4 +1,3 @@
-// @ts-nocheck
 import React, { useState, useCallback, useEffect } from 'react';
 import { useDispatch, useSelector } from 'react-redux';
 import { RootState } from '../redux/store';
@@ -29,7 +28,7 @@ const TransactionHistory: React.FC = () => {
     selectTransactions(state, wallet_id || '')
   );
   const [progress, setProgress] = useState(0); // Track progress of loading
-  const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('asc'); // Track sort order
+  const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('desc'); // Track sort order
   const [loading, setLoading] = useState(false);
   const [fetchedAddresses, setFetchedAddresses] = useState<Set<string>>(
     new Set()
@@ -177,6 +176,14 @@ const TransactionHistory: React.FC = () => {
     setCurrentPage((prevPage) => Math.max(prevPage - 1, 1));
   };
 
+  const handleFirstPage = () => {
+    setCurrentPage(1);
+  };
+
+  const handleLastPage = () => {
+    setCurrentPage(totalPages);
+  };
+
   const paginatedTransactions = sortedTransactions().slice(
     (currentPage - 1) * transactionsPerPage,
     currentPage * transactionsPerPage
@@ -187,6 +194,13 @@ const TransactionHistory: React.FC = () => {
   return (
     <div className="flex flex-col h-screen">
       <div className="sticky top-0 bg-white z-10 p-4">
+        <div className="flex justify-center mt-4">
+          <img
+            src="/assets/images/OPTNWelcome1.png"
+            alt="Welcome"
+            className="max-w-full h-auto"
+          />
+        </div>
         <h1 className="text-2xl font-bold mb-4">Transaction History</h1>
         <div className="mb-4 flex flex-col space-y-2 md:space-y-0 md:flex-row md:justify-between">
           <div className="flex justify-between">
@@ -241,25 +255,43 @@ const TransactionHistory: React.FC = () => {
         style={{ paddingBottom: navBarHeight }}
       >
         <button
+          onClick={handleFirstPage}
+          className={`py-2 px-4 mx-1 rounded ${
+            currentPage === 1 ? 'bg-gray-400' : 'bg-gray-200'
+          }`}
+          disabled={currentPage === 1}
+        >
+          First
+        </button>
+        <button
           onClick={handlePreviousPage}
-          className={`py-2 px-4 rounded ${
+          className={`py-2 px-4 mx-1 rounded ${
             currentPage === 1 ? 'bg-gray-400' : 'bg-gray-200'
           }`}
           disabled={currentPage === 1}
         >
           Previous
         </button>
-        <div className="py-2 px-4">
-          Page {currentPage} of {totalPages}
+        <div className="py-2">
+          {currentPage}/{totalPages}
         </div>
         <button
           onClick={handleNextPage}
-          className={`py-2 px-4 rounded ${
+          className={`py-2 px-4 mx-1 rounded ${
             currentPage === totalPages ? 'bg-gray-400' : 'bg-gray-200'
           }`}
           disabled={currentPage === totalPages}
         >
           Next
+        </button>
+        <button
+          onClick={handleLastPage}
+          className={`py-2 px-4 mx-1 rounded ${
+            currentPage === totalPages ? 'bg-gray-400' : 'bg-gray-200'
+          }`}
+          disabled={currentPage === totalPages}
+        >
+          Last
         </button>
       </div>
       <BottomNavBar setNavBarHeight={setNavBarHeight} />

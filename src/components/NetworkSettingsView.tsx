@@ -15,8 +15,7 @@ const NetworkSettingsView = () => {
   };
 
   return (
-    <div>
-      <h2 className="text-xl font-bold mb-2">Network Settings</h2>
+    <div className="overflow-y-auto h-full">
       <div className="p-4 rounded-lg bg-gray-100">
         <label className="block mb-2">Select Network:</label>
         <select
@@ -27,6 +26,13 @@ const NetworkSettingsView = () => {
           <option value={Network.CHIPNET}>Chipnet</option>
           <option value={Network.MAINNET}>Mainnet</option>
         </select>
+      </div>
+      <div className="flex justify-center mt-4">
+        <img
+          src="/assets/images/OPTNWelcome2.png"
+          alt="Welcome"
+          className="max-w-full h-auto"
+        />
       </div>
     </div>
   );

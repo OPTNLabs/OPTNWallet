@@ -68,13 +68,6 @@ const Transaction: React.FC = () => {
   const [contractUTXOs, setContractUTXOs] = useState<ExtendedUTXO[]>([]);
   const [currentContractABI, setCurrentContractABI] = useState<any[]>([]);
   const [errorMessage, setErrorMessage] = useState<string | null>(null); // State for error messages
-  const [showWalletAddressesPopup, setShowWalletAddressesPopup] =
-    useState(false); // State for wallet addresses popup
-  const [showContractAddressesPopup, setShowContractAddressesPopup] =
-    useState(false); // State for contract addresses popup
-  const [showRegularUTXOsPopup, setShowRegularUTXOsPopup] = useState(false); // State for regular UTXOs popup
-  const [showCashTokenUTXOsPopup, setShowCashTokenUTXOsPopup] = useState(false); // State for cash token UTXOs popup
-  const [showContractUTXOsPopup, setShowContractUTXOsPopup] = useState(false); // State for contract UTXOs popup
   const navigate = useNavigate();
   const dispatch = useDispatch();
 
@@ -185,11 +178,6 @@ const Transaction: React.FC = () => {
       );
       setAddresses(addressesWithUTXOs);
 
-      // Set default change address to the first available address if it hasn't been set yet
-      if (!changeAddress && addressesWithUTXOs.length > 0) {
-        setChangeAddress(addressesWithUTXOs[0].address);
-      }
-
       const contractAddressList = contractInstances.map((contract) => ({
         address: contract.address,
         tokenAddress: contract.token_address,
@@ -226,7 +214,7 @@ const Transaction: React.FC = () => {
     if (walletId !== null) {
       fetchAddressesAndUTXOs(walletId);
     }
-  }, [walletId, changeAddress]);
+  }, [walletId]);
 
   const toggleAddressSelection = (address: string) => {
     if (selectedAddresses.includes(address)) {
@@ -496,138 +484,74 @@ const Transaction: React.FC = () => {
     selectedContractAddresses.includes(utxo.address)
   );
 
-  const filteredRegularUTXOs = utxos.filter(
-    (utxo) => selectedAddresses.includes(utxo.address) && !utxo.token_data
-  );
-
-  const filteredCashTokenUTXOs = utxos.filter(
-    (utxo) => selectedAddresses.includes(utxo.address) && utxo.token_data
-  );
-
   return (
     <div className="container mx-auto p-4 overflow-x-hidden">
-      <div className="flex justify-center mt-4">
-        <img
-          src="/assets/images/OPTNWelcome1.png"
-          alt="Welcome"
-          className="max-w-full h-auto"
-        />
-      </div>
       <h1 className="text-2xl font-bold mb-4">Transaction Builder</h1>
       <div className="mb-6">
         <h3 className="text-lg font-semibold mb-2">
           Select Addresses to Spend From
         </h3>
-        {/* Wallet Addresses Button */}
-        <button
-          className="bg-blue-500 text-white mx-1 py-2 px-4 rounded mb-2"
-          onClick={() => setShowWalletAddressesPopup(true)}
-        >
-          Wallet Addresses
-        </button>
-        {showWalletAddressesPopup && (
-          <div className="fixed inset-0 bg-gray-500 bg-opacity-75 flex items-center justify-center">
-            <div className="bg-white p-6 rounded shadow-lg w-full max-w-md max-h-[90vh] overflow-hidden">
-              <h4 className="text-md font-semibold mb-4">Wallet Addresses</h4>
-              <div className="overflow-y-auto max-h-80">
-                {addresses.map((addressObj, index) => (
-                  <div
-                    key={addressObj.address}
-                    className="flex items-center mb-2 break-words whitespace-normal"
-                  >
-                    <input
-                      type="checkbox"
-                      checked={selectedAddresses.includes(addressObj.address)}
-                      onChange={() =>
-                        toggleAddressSelection(addressObj.address)
-                      }
-                      className="mr-2"
-                    />
-                    <span className="break-words overflow-x-auto">
-                      {`Address: ${addressObj.address}`}
-                      <br />
-                      {`Token Address: ${addressObj.tokenAddress}`}
-                    </span>
-                  </div>
-                ))}
-              </div>
-              <button
-                className="bg-gray-300 text-gray-700 py-2 px-4 rounded mt-4"
-                onClick={() => setShowWalletAddressesPopup(false)}
-              >
-                Close
-              </button>
+        <h4 className="text-md font-semibold mb-2">Wallet Addresses</h4>
+        <div className="overflow-y-auto max-h-96">
+          {addresses.map((addressObj, index) => (
+            <div
+              key={addressObj.address}
+              className="flex items-center mb-2 break-words whitespace-normal"
+            >
+              <input
+                type="checkbox"
+                checked={selectedAddresses.includes(addressObj.address)}
+                onChange={() => toggleAddressSelection(addressObj.address)}
+                className="mr-2"
+              />
+              <span className="break-words overflow-x-auto">
+                {`Address: ${addressObj.address}`}
+                <br />
+                {`Token Address: ${addressObj.tokenAddress}`}
+              </span>
             </div>
-          </div>
-        )}
-        {/* Contract Addresses Button */}
-        <button
-          className="bg-blue-500 text-white mx-1 py-2 px-4 rounded mb-2"
-          onClick={() => setShowContractAddressesPopup(true)}
-        >
-          Contract Addresses
-        </button>
-        {showContractAddressesPopup && (
-          <div className="fixed inset-0 bg-gray-500 bg-opacity-75 flex items-center justify-center">
-            <div className="bg-white p-6 rounded shadow-lg w-full max-w-md max-h-[90vh] overflow-hidden">
-              <h4 className="text-md font-semibold mb-4">Contract Addresses</h4>
-              <div className="overflow-y-auto max-h-80">
-                {contractAddresses.map((contractObj) => (
-                  <div
-                    key={contractObj.address}
-                    className="flex items-center mb-2 break-words whitespace-normal"
-                  >
-                    <input
-                      type="checkbox"
-                      checked={selectedContractAddresses.includes(
-                        contractObj.address
-                      )}
-                      onChange={() => {
-                        toggleAddressSelection(contractObj.address);
-                        toggleContractSelection(
-                          contractObj.address,
-                          contractObj.abi
-                        );
-                      }}
-                      className="mr-2"
-                    />
-                    <span className="break-words overflow-x-auto">{`Contract Address: ${contractObj.address}, Token Address: ${contractObj.tokenAddress}`}</span>
-                  </div>
-                ))}
-              </div>
-              <button
-                className="bg-gray-300 text-gray-700 py-2 px-4 rounded mt-4"
-                onClick={() => setShowContractAddressesPopup(false)}
-              >
-                Close
-              </button>
+          ))}
+        </div>
+        <h4 className="text-md font-semibold mb-2">Contract Addresses</h4>
+        <div className="overflow-y-auto max-h-96">
+          {contractAddresses.map((contractObj) => (
+            <div
+              key={contractObj.address}
+              className="flex items-center mb-2 break-words whitespace-normal"
+            >
+              <input
+                type="checkbox"
+                checked={selectedContractAddresses.includes(
+                  contractObj.address
+                )}
+                onChange={() => {
+                  toggleAddressSelection(contractObj.address);
+                  toggleContractSelection(contractObj.address, contractObj.abi);
+                }}
+                className="mr-2"
+              />
+              <span className="break-words overflow-x-auto">{`Contract Address: ${contractObj.address}, Token Address: ${contractObj.tokenAddress}`}</span>
             </div>
-          </div>
-        )}
+          ))}
+        </div>
       </div>
       <div className="mb-6">
-        {selectedAddresses.length > 0 && (
-          <>
-            <button
-              className="bg-blue-500 text-white py-2 px-4 rounded mb-2"
-              onClick={() => setShowRegularUTXOsPopup(true)}
+        <h3 className="text-lg font-semibold mb-2">Regular UTXOs</h3>
+        {addresses
+          .filter((addressObj) =>
+            selectedAddresses.includes(addressObj.address)
+          )
+          .map((addressObj) => (
+            <div
+              key={addressObj.address}
+              className="p-2 border rounded-lg mb-2"
             >
-              View Regular UTXOs
-            </button>
-            <button
-              className="bg-blue-500 text-white py-2 px-4 rounded mb-2"
-              onClick={() => setShowCashTokenUTXOsPopup(true)}
-            >
-              View CashToken UTXOs
-            </button>
-          </>
-        )}
-        {showRegularUTXOsPopup && (
-          <div className="fixed inset-0 bg-gray-500 bg-opacity-75 flex items-center justify-center">
-            <div className="bg-white p-6 rounded shadow-lg w-full max-w-md max-h-[90vh] overflow-hidden">
-              <h4 className="text-md font-semibold mb-4">Regular UTXOs</h4>
-              <div className="overflow-y-auto max-h-80">
-                {filteredRegularUTXOs.map((utxo) => (
+              {utxos
+                .filter(
+                  (utxo) =>
+                    utxo.address === addressObj.address && !utxo.token_data
+                )
+                .map((utxo) => (
                   <button
                     key={utxo.id}
                     onClick={() => handleUtxoClick(utxo)}
@@ -642,28 +566,32 @@ const Transaction: React.FC = () => {
                     }`}
                   >
                     <RegularUTXOs
-                      address={utxo.address}
+                      address={addressObj.address}
                       utxos={[utxo]}
                       loading={false}
                     />
                   </button>
                 ))}
-              </div>
-              <button
-                className="bg-gray-300 text-gray-700 py-2 px-4 rounded mt-4"
-                onClick={() => setShowRegularUTXOsPopup(false)}
-              >
-                Close
-              </button>
             </div>
-          </div>
-        )}
-        {showCashTokenUTXOsPopup && (
-          <div className="fixed inset-0 bg-gray-500 bg-opacity-75 flex items-center justify-center">
-            <div className="bg-white p-6 rounded shadow-lg w-full max-w-md max-h-[90vh] overflow-hidden">
-              <h4 className="text-md font-semibold mb-4">CashToken UTXOs</h4>
-              <div className="overflow-y-auto max-h-80">
-                {filteredCashTokenUTXOs.map((utxo) => (
+          ))}
+      </div>
+      <div className="mb-6">
+        <h3 className="text-lg font-semibold mb-2">CashToken UTXOs</h3>
+        {addresses
+          .filter((addressObj) =>
+            selectedAddresses.includes(addressObj.address)
+          )
+          .map((addressObj) => (
+            <div
+              key={addressObj.address}
+              className="p-2 border rounded-lg mb-2"
+            >
+              {utxos
+                .filter(
+                  (utxo) =>
+                    utxo.address === addressObj.address && utxo.token_data
+                )
+                .map((utxo) => (
                   <button
                     key={utxo.id}
                     onClick={() => handleUtxoClick(utxo)}
@@ -678,66 +606,71 @@ const Transaction: React.FC = () => {
                     }`}
                   >
                     <CashTokenUTXOs
-                      address={utxo.address}
+                      address={addressObj.address}
                       utxos={[utxo]}
                       loading={false}
                     />
                   </button>
                 ))}
-              </div>
-              <button
-                className="bg-gray-300 text-gray-700 py-2 px-4 rounded mt-4"
-                onClick={() => setShowCashTokenUTXOsPopup(false)}
-              >
-                Close
-              </button>
             </div>
-          </div>
-        )}
+          ))}
       </div>
       <div className="mb-6">
+        <h3 className="text-lg font-semibold mb-2">Contract UTXOs</h3>
         {selectedContractAddresses.length > 0 && (
-          <button
-            className="bg-blue-500 text-white py-2 px-4 rounded mb-2"
-            onClick={() => setShowContractUTXOsPopup(true)}
-          >
-            View Contract UTXOs
-          </button>
-        )}
-        {showContractUTXOsPopup && (
-          <div className="fixed inset-0 bg-gray-500 bg-opacity-75 flex items-center justify-center">
-            <div className="bg-white p-6 rounded shadow-lg w-full max-w-md max-h-[90vh] overflow-hidden">
-              <h4 className="text-md font-semibold mb-4">Contract UTXOs</h4>
-              <div className="overflow-y-auto max-h-80">
-                {filteredContractUTXOs.map((utxo) => (
-                  <button
-                    key={utxo.id}
-                    onClick={() => handleUtxoClick(utxo)}
-                    className={`block w-full text-left p-2 mb-2 border rounded-lg break-words whitespace-normal ${
-                      selectedUtxos.some(
-                        (selectedUtxo) =>
-                          selectedUtxo.tx_hash === utxo.tx_hash &&
-                          selectedUtxo.tx_pos === utxo.tx_pos
-                      )
-                        ? 'bg-blue-100'
-                        : 'bg-white'
-                    }`}
-                  >
-                    <RegularUTXOs
-                      address={utxo.address}
-                      utxos={[utxo]}
-                      loading={false}
-                    />
-                  </button>
-                ))}
-              </div>
-              <button
-                className="bg-gray-300 text-gray-700 py-2 px-4 rounded mt-4"
-                onClick={() => setShowContractUTXOsPopup(false)}
-              >
-                Close
-              </button>
-            </div>
+          <div className="p-2 border rounded-lg mb-2">
+            {filteredContractUTXOs.length > 0 && (
+              <>
+                {filteredContractUTXOs
+                  .filter((utxo) => !utxo.token_data)
+                  .map((utxo) => (
+                    <div key={utxo.id} className="flex items-center">
+                      <button
+                        onClick={() => handleUtxoClick(utxo)}
+                        className={`block w-full text-left p-2 mb-2 border rounded-lg break-words whitespace-normal ${
+                          selectedUtxos.some(
+                            (selectedUtxo) =>
+                              selectedUtxo.tx_hash === utxo.tx_hash &&
+                              selectedUtxo.tx_pos === utxo.tx_pos
+                          )
+                            ? 'bg-blue-100'
+                            : 'bg-white'
+                        }`}
+                      >
+                        <RegularUTXOs
+                          address={selectedContractAddresses.join(', ')}
+                          utxos={[utxo]}
+                          loading={false}
+                        />
+                      </button>
+                    </div>
+                  ))}
+                {filteredContractUTXOs
+                  .filter((utxo) => utxo.token_data)
+                  .map((utxo) => (
+                    <div key={utxo.id} className="flex items-center">
+                      <button
+                        onClick={() => handleUtxoClick(utxo)}
+                        className={`block w-full text-left p-2 mb-2 border rounded-lg break-words whitespace-normal ${
+                          selectedUtxos.some(
+                            (selectedUtxo) =>
+                              selectedUtxo.tx_hash === utxo.tx_hash &&
+                              selectedUtxo.tx_pos === utxo.tx_pos
+                          )
+                            ? 'bg-blue-100'
+                            : 'bg-white'
+                        }`}
+                      >
+                        <CashTokenUTXOs
+                          address={selectedContractAddresses.join(', ')}
+                          utxos={[utxo]}
+                          loading={false}
+                        />
+                      </button>
+                    </div>
+                  ))}
+              </>
+            )}
           </div>
         )}
       </div>
@@ -748,15 +681,11 @@ const Transaction: React.FC = () => {
         {selectedUtxos.map((utxo) => (
           <div
             key={utxo.id}
-            className="flex flex-col items-start mb-2 w-full break-words whitespace-normal"
+            className="flex items-center mb-2 break-words whitespace-normal"
           >
-            <span className="w-full">{`Address: ${utxo.address}`}</span>
-            <span className="w-full">{`Amount: ${utxo.amount}`}</span>
-            <span className="w-full">{`Tx Hash: ${utxo.tx_hash}`}</span>
-            <span className="w-full">{`Position: ${utxo.tx_pos}`}</span>
-            <span className="w-full">{`Height: ${utxo.height}`}</span>
+            <span className="break-words">{`Address: ${utxo.address}, Amount: ${utxo.amount}, Tx Hash: ${utxo.tx_hash}, Position: ${utxo.tx_pos}, Height: ${utxo.height}`}</span>
             {!utxo.unlocker && utxo.abi && (
-              <span className="text-red-500 w-full">Missing unlocker!</span>
+              <span className="text-red-500 ml-2">Missing unlocker!</span>
             )}
           </div>
         ))}
@@ -766,19 +695,15 @@ const Transaction: React.FC = () => {
         {outputs.map((output, index) => (
           <div
             key={index}
-            className="flex flex-col items-start mb-2 w-full break-words whitespace-normal"
+            className="flex items-center mb-2 break-words whitespace-normal"
           >
-            <span className="w-full">{`Recipient: ${output.recipientAddress}`}</span>
-            <span className="w-full">{`Amount: ${output.amount}`}</span>
+            <span className="break-words">{`Recipient: ${output.recipientAddress}, Amount: ${output.amount}`}</span>
             {output.token && (
-              <>
-                <span className="w-full">{`Token: ${output.token.amount}`}</span>
-                <span className="w-full">{`Category: ${output.token.category}`}</span>
-              </>
+              <span className="break-words">{`, Token: ${output.token.amount}, Category: ${output.token.category}`}</span>
             )}
             <button
               onClick={() => removeOutput(index)}
-              className="text-red-500"
+              className="ml-2 text-red-500"
             >
               Remove
             </button>
@@ -791,15 +716,11 @@ const Transaction: React.FC = () => {
           {finalOutputs.map((output, index) => (
             <div
               key={index}
-              className="flex flex-col items-start mb-2 w-full break-words whitespace-normal"
+              className="flex items-center mb-2 break-words whitespace-normal"
             >
-              <span className="w-full">{`Recipient: ${output.recipientAddress}`}</span>
-              <span className="w-full">{`Amount: ${output.amount}`}</span>
+              <span className="break-words">{`Recipient: ${output.recipientAddress}, Amount: ${output.amount}`}</span>
               {output.token && (
-                <>
-                  <span className="w-full">{`Token: ${output.token.amount}`}</span>
-                  <span className="w-full">{`Category: ${output.token.category}`}</span>
-                </>
+                <span className="break-words">{`, Token: ${output.token.amount}, Category: ${output.token.category}`}</span>
               )}
             </div>
           ))}

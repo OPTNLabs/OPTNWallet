@@ -1,30 +1,32 @@
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { useDispatch } from 'react-redux';
+import { useDispatch, useSelector } from 'react-redux';
 import { setWalletId } from '../redux/walletSlice';
-import WalletManager from '../apis/WalletManager/WalletManager';
-import LandingPage from './LandingPage';
+// import WalletManager from '../apis/WalletManager/WalletManager';
+import { RootState } from '../redux/store';
 
 const RootHandler = () => {
   const [loading, setLoading] = useState(true);
   const navigate = useNavigate();
   const dispatch = useDispatch();
+  const walletId = useSelector(
+    (state: RootState) => state.wallet_id.currentWalletId
+  );
 
   useEffect(() => {
     const checkExistingWallet = async () => {
       console.log('Checking for existing wallet...');
-      const walletManager = WalletManager();
-      const walletId = await walletManager.walletExists();
 
-      if (walletId) {
+      if (walletId === 1) {
         console.log(`Wallet found with ID: ${walletId}`);
         dispatch(setWalletId(walletId));
-        setLoading(false); // Wallet found, stop loading
         navigate(`/home/${walletId}`);
       } else {
         console.log('No wallet found.');
-        setLoading(false); // No wallet found, stop loading
+        navigate('/landing'); // Redirect to the landing page if no wallet is found
       }
+
+      setLoading(false); // Set loading to false after navigation
     };
 
     checkExistingWallet();
@@ -34,7 +36,7 @@ const RootHandler = () => {
     return <div>Loading...</div>;
   }
 
-  return <LandingPage />;
+  return null; // Render nothing since navigation handles redirection
 };
 
 export default RootHandler;

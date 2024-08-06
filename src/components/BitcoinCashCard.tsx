@@ -8,8 +8,8 @@ const BitcoinCashCard = ({ totalAmount }) => {
       <div className="flex items-center">
         <FaBitcoin className="text-green-500 text-3xl mr-3" />
         <div className="text-lg font-bold">Bitcoin Cash</div>
+        <div className="text-lg font-bold">: {totalAmount} satoshis</div>
       </div>
-      <div className="text-lg font-bold">{totalAmount} satoshis</div>
     </div>
   );
 };
