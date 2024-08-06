@@ -31,6 +31,13 @@ const RecoveryPhrase = () => {
             </div>
           ))}
         </div>
+        <div className="flex justify-center mt-4">
+          <img
+            src="/assets/images/OPTNWelcome3.png"
+            alt="Welcome"
+            className="max-w-full h-auto"
+          />
+        </div>
       </div>
     </div>
   );

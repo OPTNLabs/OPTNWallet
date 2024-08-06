@@ -276,7 +276,44 @@ const Home = () => {
 
   return (
     <div className="container mx-auto p-4 pb-16">
-      <h1 className="text-2xl font-bold mb-4">Home</h1>
+      <div className="flex justify-center mt-4">
+        <img
+          src="/assets/images/OPTNWelcome1.png"
+          alt="Welcome"
+          className="max-w-full h-auto"
+        />
+      </div>
+      <div className="flex flex-col items-center space-y-4">
+        <button
+          className="mt-4 p-2 bg-red-500 text-white rounded hover:bg-red-600 transition duration-300 w-full max-w-md"
+          onClick={toContractView}
+        >
+          Contracts
+        </button>
+        <button
+          className="mt-4 p-2 bg-blue-500 text-white rounded hover:bg-blue-600 transition duration-300 w-full max-w-md"
+          onClick={handleFetchUTXOsClick}
+          disabled={fetchingUTXOs || generatingKeys}
+        >
+          Fetch UTXOs
+        </button>
+        <button
+          className="mt-4 p-2 bg-blue-500 text-white rounded hover:bg-blue-600 transition duration-300 w-full max-w-md"
+          onClick={handleGenerateNewKey}
+          disabled={fetchingUTXOs || generatingKeys}
+        >
+          Generate New Key
+        </button>
+      </div>
+      {/* <div className="font-bold text-xl text-center mt-4">
+        Regular Balance: {totalBalance} satoshis
+      </div> */}
+      <button
+        className="w-full max-w-md mx-auto mt-4 flex items-center justify-center"
+        onClick={togglePopup}
+      >
+        <BitcoinCashCard totalAmount={calculateTotalBitcoinCash()} />
+      </button>
       {fetchingUTXOs && (
         <div className="w-full max-w-md mx-auto mt-4">
           <div className="relative pt-1">
@@ -301,40 +338,6 @@ const Home = () => {
           </div>
         </div>
       )}
-      <div className="flex flex-col items-center space-y-4">
-        <button
-          className="mt-4 p-2 bg-red-500 text-white rounded hover:bg-red-600 transition duration-300 w-full max-w-md"
-          onClick={toContractView}
-        >
-          Contracts
-        </button>
-        <button
-          className="mt-4 p-2 bg-blue-500 text-white rounded hover:bg-blue-600 transition duration-300 w-full max-w-md"
-          onClick={togglePopup}
-        >
-          Show All Addresses
-        </button>
-        <button
-          className="mt-4 p-2 bg-blue-500 text-white rounded hover:bg-blue-600 transition duration-300 w-full max-w-md"
-          onClick={handleFetchUTXOsClick}
-          disabled={fetchingUTXOs || generatingKeys}
-        >
-          Fetch UTXOs
-        </button>
-        <button
-          className="mt-4 p-2 bg-blue-500 text-white rounded hover:bg-blue-600 transition duration-300 w-full max-w-md"
-          onClick={handleGenerateNewKey}
-          disabled={fetchingUTXOs || generatingKeys}
-        >
-          Generate New Key
-        </button>
-      </div>
-      <div className="font-bold text-xl text-center mt-4">
-        Total Balance: {totalBalance} satoshis
-      </div>
-      <div className="w-full max-w-md mx-auto mt-4">
-        <BitcoinCashCard totalAmount={calculateTotalBitcoinCash()} />
-      </div>
       <div
         className="w-full max-w-md mx-auto mt-4 overflow-y-auto"
         style={{ maxHeight: '50vh' }}

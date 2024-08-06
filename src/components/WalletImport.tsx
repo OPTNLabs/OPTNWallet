@@ -92,8 +92,15 @@ const WalletImport = () => {
   };
 
   return (
-    <div className="min-h-screen bg-black flex flex-col items-center justify-center p-4">
-      <div className="bg-black shadow-md rounded-lg p-6 w-full max-w-md">
+    <div className="min-h-screen bg-slate-600 flex flex-col items-center justify-center p-4">
+      <div className="bg-slate-600 p-6 w-full max-w-md">
+        <div className="flex justify-center mt-4">
+          <img
+            src="/assets/images/OPTNWelcome1.png"
+            alt="Welcome"
+            className="max-w-full h-auto"
+          />
+        </div>
         <div className="text-white font-bold text-xl mb-4 text-center">
           Import Wallet
         </div>
@@ -113,7 +120,9 @@ const WalletImport = () => {
             className="w-full p-2 border border-gray-300 rounded-md"
           />
         </div>
-        <div className="mb-4">
+
+        {/*Remove the following div section*/}
+        {/* <div className="mb-4">
           <label className="block text-white mb-2">Set Wallet Name</label>
           <input
             placeholder={wallet_id.toString()}
@@ -124,7 +133,8 @@ const WalletImport = () => {
             }
             className="w-full p-2 border border-gray-300 rounded-md"
           />
-        </div>
+        </div> */}
+
         <button
           onClick={handleImportAccount}
           className="w-full bg-blue-500 text-white py-2 px-4 rounded-md hover:bg-blue-600 transition duration-300 my-2"

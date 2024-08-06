@@ -17,7 +17,7 @@ const CashTokenCard = ({ category, totalAmount }) => {
         </p>
       </div>
       <p className="text-sm break-words">
-        <strong>Token Amount:</strong> {totalAmount}
+        <strong>CashToken Amount:</strong> {totalAmount}
       </p>
     </div>
   );

@@ -153,6 +153,13 @@ const ContractView = () => {
 
   return (
     <div className="container mx-auto p-4">
+      <div className="flex justify-center mt-4">
+        <img
+          src="/assets/images/OPTNWelcome1.png"
+          alt="Welcome"
+          className="max-w-full h-auto"
+        />
+      </div>
       <h2 className="text-lg font-semibold mb-2">Select Contract</h2>
       <select
         className="border p-2 mb-4 w-full"
