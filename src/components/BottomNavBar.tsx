@@ -62,20 +62,39 @@ const BottomNavBar: React.FC<BottomNavBarProps> = ({ setNavBarHeight }) => {
           fill="none"
           xmlns="http://www.w3.org/2000/svg"
         >
-          <path
-            d="M22 2L11 13"
+          <circle
+            cx="12"
+            cy="12"
+            r="10"
             stroke="white"
             strokeWidth="2"
-            strokeLinecap="round"
-            strokeLinejoin="round"
+            fill="none"
           />
           <path
-            d="M22 2L15 22L11 13L2 9L22 2Z"
+            d="M12 2 A10 10 0 0 1 22 12"
             stroke="white"
             strokeWidth="2"
-            strokeLinecap="round"
-            strokeLinejoin="round"
+            fill="none"
           />
+          <polyline
+            points="20,12 22,12 22,10"
+            stroke="white"
+            strokeWidth="2"
+            fill="none"
+          />
+          <rect
+            x="6"
+            y="9"
+            width="12"
+            height="6"
+            rx="2"
+            ry="2"
+            stroke="white"
+            strokeWidth="2"
+            fill="none"
+          />
+          <line x1="6" y1="11" x2="18" y2="11" stroke="white" strokeWidth="2" />
+          <line x1="6" y1="13" x2="18" y2="13" stroke="white" strokeWidth="2" />
         </svg>
         <span>History</span>
       </Link>
