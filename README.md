@@ -1,30 +1,83 @@
-# React + TypeScript + Vite
+# Welcome to OPTN Wallet
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+Welcome to the OPTN Wallet project! OPTN Wallet is a cutting-edge cryptocurrency wallet designed for secure and efficient transactions. Visit our [website](https://optn-website.vercel.app/) for more information.
 
-Currently, two official plugins are available:
+## Developer Quick Start
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react/README.md) uses [Babel](https://babeljs.io/) for Fast Refresh
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react-swc) uses [SWC](https://swc.rs/) for Fast Refresh
+To get started with the development of the OPTN Wallet, follow the steps below:
 
-## Expanding the ESLint configuration
+### Repository
 
-If you are developing a production application, we recommend updating the configuration to enable type aware lint rules:
+The source code for the OPTN Wallet is hosted on GitHub. You can find the repository at the following link:
+[GitHub Repository](https://github.com/BitcoinBay/OPTNWallet)
 
-- Configure the top-level `parserOptions` property like this:
+### Local Development Build
 
-```js
-export default {
-  // other rules...
-  parserOptions: {
-    ecmaVersion: 'latest',
-    sourceType: 'module',
-    project: ['./tsconfig.json', './tsconfig.node.json'],
-    tsconfigRootDir: __dirname,
-  },
-}
-```
+1. **Clone the Repository**
 
-- Replace `plugin:@typescript-eslint/recommended` to `plugin:@typescript-eslint/recommended-type-checked` or `plugin:@typescript-eslint/strict-type-checked`
-- Optionally add `plugin:@typescript-eslint/stylistic-type-checked`
-- Install [eslint-plugin-react](https://github.com/jsx-eslint/eslint-plugin-react) and add `plugin:react/recommended` & `plugin:react/jsx-runtime` to the `extends` list
+   ```bash
+   git clone https://github.com/BitcoinBay/OPTNWallet.git
+   cd OPTNWallet
+   ```
+
+2. **Install Dependencies**
+
+   ```bash
+   npm install
+   ```
+
+3. **Run Development Server**
+   ```bash
+   npm run dev
+   ```
+
+### Building the App for Android / iOS
+
+1. **Initialize Capacitor**
+
+   ```bash
+   npm run capacitor:init
+   ```
+
+2. **Add Android Platform**
+
+   ```bash
+   npm run capacitor:add:android
+   ```
+
+3. **Copy Web Assets**
+
+   ```bash
+   npm run capacitor:copy
+   ```
+
+4. **Sync Capacitor Plugins**
+
+   ```bash
+   npm run capacitor:sync
+   ```
+
+5. **Open Android Studio**
+
+   ```bash
+   npm run capacitor:open:android
+   ```
+
+6. **Build the Project**
+   - For Android: Use Android Studio to build and run the project on an emulator or a physical device.
+   - For iOS: Open the `ios` folder in Xcode and build the project.
+
+### Available Scripts
+
+- **Start Development Server:** `npm run dev`
+- **Build for Production:** `npm run build`
+- **Lint the Code:** `npm run lint`
+- **Preview the Production Build:** `npm run preview`
+- **Format the Code:** `npm run format`
+- **Serve the Production Build:** `npm run serve`
+
+## Contribution & Contact
+
+We welcome contributions from the community! Join our [Telegram Group](https://t.me/+KLBMsVW0xHY1YWI5) to connect with the developers and other contributors.
+
+Thank you for your interest in the OPTN Wallet project!
