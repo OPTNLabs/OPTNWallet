@@ -9,8 +9,15 @@ const ContactUs = () => {
       <p className="border p-4 rounded-lg bg-gray-100">
         Telegram
         <br />
-        <a href="https://t.me/+u7yGBhnCEOo3NDIx" className="text-sky-600">
-          https://t.me/+u7yGBhnCEOo3NDIx
+        <a href="https://t.me/+KLBMsVW0xHY1YWI5" className="text-sky-600">
+          https://t.me/+KLBMsVW0xHY1YWI5
+        </a>
+        <br />
+        <br />
+        Website
+        <br />
+        <a href="https://optn-website.vercel.app/" className="text-sky-600">
+          https://optn-website.vercel.app/
         </a>
         <br />
         <br />
