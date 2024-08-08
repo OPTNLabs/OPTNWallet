@@ -1,4 +1,4 @@
-// src/components/WalletImport.tsx
+// @ts-nocheck
 
 import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';

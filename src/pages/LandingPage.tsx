@@ -17,10 +17,9 @@ const LandingPage = () => {
               />
             </div>
             <div className="text-white text-base lg:text-xl mt-4 text-center lg:text-left">
-              <h3>Pre-Alpha Demo</h3>
+              <h3>Alpha Demo</h3>
               <br />
               <p>Bitcoin Covenants Wallet</p>
-              <p>On BTC and BCH</p>
             </div>
             <div className="flex flex-row mt-4 justify-center lg:justify-start">
               <Link
