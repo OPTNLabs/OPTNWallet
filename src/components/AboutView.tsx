@@ -44,7 +44,7 @@ const AboutView = () => {
         </p>
 
         <br />
-        <strong>Additional Resources</strong>
+        <strong>Additional Information</strong>
         <ul className="list-disc list-inside">
           <li>
             <a href="https://covenants.info/" style={{ color: 'blue' }}>
@@ -61,6 +61,14 @@ const AboutView = () => {
           </li>
           <li>
             <a
+              href="https://github.com/CashScript/cashscript/tree/master/examples"
+              style={{ color: 'blue' }}
+            >
+              CashScript Covenant Examples
+            </a>
+          </li>
+          <li>
+            <a
               href="https://cointelegraph.com/news/what-are-bitcoin-covenants-and-how-do-they-work"
               style={{ color: 'blue' }}
             >
@@ -68,7 +76,6 @@ const AboutView = () => {
             </a>
           </li>
         </ul>
-
         <br />
         <strong>Feedback and Support</strong>
         <p>
