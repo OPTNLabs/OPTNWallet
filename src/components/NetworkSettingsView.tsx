@@ -27,6 +27,11 @@ const NetworkSettingsView = () => {
           <option value={Network.MAINNET}>Mainnet</option>
         </select>
       </div>
+      <div className="p-4 rounded-lg">
+        <a href="https://tbch.googol.cash/" className="text-blue-600">
+          Testnet Faucet - Select Chipnet Network
+        </a>
+      </div>
       <div className="flex justify-center mt-4">
         <img
           src="/assets/images/OPTNWelcome2.png"
