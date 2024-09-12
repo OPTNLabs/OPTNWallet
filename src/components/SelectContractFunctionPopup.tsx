@@ -1,27 +1,40 @@
 // @ts-nocheck
 import React, { useState, useEffect } from 'react';
-import { useDispatch } from 'react-redux';
+import { useDispatch, useSelector } from 'react-redux';
+import AddressSelectionPopup from './AddressSelectionPopup';
 import {
   setSelectedFunction,
   setInputs,
   setInputValues,
 } from '../redux/contractSlice';
+import { encodePrivateKeyWif } from '@bitauth/libauth';
+import KeyManager from '../apis/WalletManager/KeyManager';
 
-interface SelectContractFunctionPopupProps {
-  contractABI: any[];
-  onClose: () => void;
-  onFunctionSelect: (contractFunction: string, inputs: any[]) => void;
-}
+// Function to convert a byte array to hex string
+const hexString = (pkh) => {
+  return Array.from(pkh, (byte) => byte.toString(16).padStart(2, '0')).join('');
+};
 
-const SelectContractFunctionPopup: React.FC<
-  SelectContractFunctionPopupProps
-> = ({ contractABI, onClose, onFunctionSelect }) => {
-  const [functions, setFunctions] = useState<any[]>([]);
-  const [selectedFunction, setSelectedFunction] = useState<string>('');
-  const [inputs, setInputs] = useState<any[]>([]);
-  const [inputValues, setInputValues] = useState<{ [key: string]: string }>({});
+const SelectContractFunctionPopup = ({
+  contractABI,
+  onClose,
+  onFunctionSelect,
+}) => {
+  const [functions, setFunctions] = useState([]);
+  const [selectedFunction, setSelectedFunction] = useState('');
+  const [inputs, setInputs] = useState([]);
+  const [inputValues, setInputValues] = useState({});
+  const [placeholders, setPlaceholders] = useState({}); // Store placeholder values
+  const [showAddressPopup, setShowAddressPopup] = useState(false);
+  const [selectedInput, setSelectedInput] = useState(null);
+
+  const keyManager = KeyManager();
   const dispatch = useDispatch();
 
+  // Get the current walletId from the Redux store
+  const walletId = useSelector((state) => state.wallet_id.currentWalletId);
+
+  // Fetch the ABI functions
   useEffect(() => {
     if (!contractABI || !Array.isArray(contractABI)) {
       console.error('Contract ABI is null, undefined, or not an array');
@@ -39,7 +52,7 @@ const SelectContractFunctionPopup: React.FC<
     setFunctions(allFunctionNames);
   }, [contractABI]);
 
-  const handleFunctionSelect = (e: React.ChangeEvent<HTMLSelectElement>) => {
+  const handleFunctionSelect = (e) => {
     const selectedFunctionName = e.target.value;
     setSelectedFunction(selectedFunctionName);
 
@@ -48,55 +61,84 @@ const SelectContractFunctionPopup: React.FC<
     );
     setInputs(functionAbi?.inputs || []);
     setInputValues({});
+    setPlaceholders({}); // Reset placeholders on function select
   };
 
-  const handleInputChange = (
-    e: React.ChangeEvent<HTMLInputElement>,
-    index: number
-  ) => {
+  // Handle manual input change
+  const handleInputChange = (e) => {
     const { name, value } = e.target;
-    setInputValues({ ...inputValues, [name]: value });
+    setInputValues((prev) => ({
+      ...prev,
+      [name]: value,
+    }));
   };
 
+  // Handle the function selection and dispatch to Redux
   const handleSelect = () => {
     const inputValuesArray = inputs.map((input) => ({
       type: input.type,
       value: inputValues[input.name] || '',
     }));
-    console.log(
-      `selectedFunction ${typeof selectedFunction}: ${selectedFunction}`
-    );
-    console.log(`inputs ${typeof inputs}: ${inputs}`);
-    console.log(`inputValues ${typeof inputValues}: ${inputValues}`);
 
-    if (!selectedFunction || !inputs) {
-      console.error('Selected function or inputs are undefined');
-      return;
-    }
-
-    // Create an object to store the input values in the desired format
-    const inputValuesObject = inputs.reduce((acc, input) => {
-      acc[input.name] = inputValues[input.name] || '';
-      return acc;
-    }, {});
-
-    console.log('inputValuesObject', inputValuesObject);
-
-    try {
-      console.log('Dispatching setSelectedFunction');
-      dispatch(setSelectedFunction(selectedFunction));
-
-      console.log('Dispatching setInputs');
-      dispatch(setInputs(inputs));
-
-      console.log('Dispatching setInputValues');
-      dispatch(setInputValues(inputValuesObject)); // Dispatch input values to Redux store
-    } catch (error) {
-      console.error('Error dispatching actions:', error);
-    }
+    dispatch(setSelectedFunction(selectedFunction));
+    dispatch(setInputs(inputs));
+    dispatch(setInputValues(inputValues));
 
     onFunctionSelect(selectedFunction, inputValuesArray);
     onClose();
+  };
+
+  // Fetch keys based on the selected address and walletId
+  const fetchKeysForAddress = async (address) => {
+    try {
+      if (walletId === 0) {
+        throw new Error('Invalid walletId');
+      }
+
+      const keys = await keyManager.retrieveKeys(walletId); // Use walletId from the Redux store
+      const selectedKey = keys.find((key) => key.address === address);
+
+      if (selectedKey) {
+        const publicKeyHex = hexString(selectedKey.publicKey);
+        const privateKeyWif = encodePrivateKeyWif(
+          selectedKey.privateKey,
+          'testnet'
+        );
+
+        console.log(publicKeyHex);
+        console.log(privateKeyWif);
+
+        // Update placeholder values based on the selected input type (pubkey or sig)
+        setPlaceholders((prev) => {
+          let updatedPlaceholders = { ...prev };
+
+          if (selectedInput === 'pubkey') {
+            updatedPlaceholders['pubkey'] = publicKeyHex; // Only update pubkey placeholder
+          } else if (selectedInput === 'sig') {
+            updatedPlaceholders['sig'] = privateKeyWif; // Only update sig placeholder
+          }
+
+          console.log('Updated placeholders:', updatedPlaceholders);
+          return updatedPlaceholders;
+        });
+      } else {
+        console.error(`No keys found for address: ${address}`);
+      }
+    } catch (error) {
+      console.error('Error fetching keys:', error);
+    }
+  };
+
+  // Handle selecting an address from the AddressSelectionPopup
+  const handleAddressSelect = (address) => {
+    console.log('Selected Address:', address);
+    fetchKeysForAddress(address); // Fetch the public and private keys based on the selected address
+  };
+
+  // Open the address popup for pubkey or sig selection
+  const openAddressPopup = (inputType) => {
+    setSelectedInput(inputType);
+    setShowAddressPopup(true);
   };
 
   return (
@@ -123,12 +165,20 @@ const SelectContractFunctionPopup: React.FC<
               </label>
               <input
                 type="text"
-                name={input.name}
-                value={inputValues[input.name] || ''}
-                onChange={(e) => handleInputChange(e, index)}
+                name={input.name} // Ensure this matches keys in inputValues (like 'pubkey', 'sig')
+                value={inputValues[input.name] || ''} // Ensure inputValues has the correct key
+                onChange={handleInputChange}
                 className="border p-2 w-full"
-                placeholder={`Enter ${input.name}`}
+                placeholder={placeholders[input.name] || `Enter ${input.name}`} // Use placeholder if present
               />
+              {(input.type === 'pubkey' || input.type === 'sig') && (
+                <button
+                  className="bg-blue-500 text-white py-1 px-2 rounded mt-2"
+                  onClick={() => openAddressPopup(input.type)}
+                >
+                  Select {input.type}
+                </button>
+              )}
             </div>
           ))}
         </div>
@@ -146,6 +196,12 @@ const SelectContractFunctionPopup: React.FC<
             Cancel
           </button>
         </div>
+        {showAddressPopup && (
+          <AddressSelectionPopup
+            onSelect={handleAddressSelect}
+            onClose={() => setShowAddressPopup(false)}
+          />
+        )}
       </div>
     </div>
   );
