@@ -30,4 +30,5 @@ const contractSlice = createSlice({
 
 export const { setSelectedFunction, setInputs, setInputValues } =
   contractSlice.actions;
+
 export default contractSlice.reducer;
