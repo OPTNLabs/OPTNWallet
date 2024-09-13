@@ -1,4 +1,3 @@
-// @ts-nocheck
 import initSqlJs, { Database } from 'sql.js';
 import { createTables } from '../../utils/schema/schema';
 
@@ -8,7 +7,7 @@ const startDatabase = async () => {
   try {
     console.log('Initializing SQL.js...');
     const SQLModule = await initSqlJs({
-      locateFile: (file) => `/sql-wasm.wasm`,
+      locateFile: () => `/sql-wasm.wasm`,
     });
     console.log('SQL.js initialized.');
 

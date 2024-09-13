@@ -1,0 +1,251 @@
+import DatabaseService from '../DatabaseManager/DatabaseService';
+import KeyGeneration from './KeyGeneration';
+import AddressManager from '../AddressManager/AddressManager';
+import { Address } from '../types';
+
+export default function KeyManager() {
+  const dbService = DatabaseService();
+  const KeyGen = KeyGeneration();
+  const ManageAddress = AddressManager();
+
+  return {
+    retrieveKeys,
+    createKeys,
+    fetchAddressPrivateKey,
+  };
+
+  function isArrayBuffer(data: any): data is ArrayBuffer {
+    return data instanceof Uint8Array || data instanceof ArrayBuffer;
+  }
+
+  function convertToUint8Array(data: string | number): Uint8Array {
+    if (typeof data === 'string') {
+      return Uint8Array.from(atob(data), (c) => c.charCodeAt(0));
+    }
+    console.error('Unexpected data type for conversion:', data);
+    return new Uint8Array(); // Return empty Uint8Array in case of unexpected type
+  }
+
+  async function retrieveKeys(wallet_id: number) {
+    try {
+      await dbService.ensureDatabaseStarted();
+      const db = dbService.getDatabase();
+      if (db == null) {
+        console.error('Database is null');
+        return [];
+      }
+
+      const query = `
+        SELECT 
+          id, 
+          public_key, 
+          private_key, 
+          address,
+          token_address,
+          pubkey_hash,
+          account_index,
+          change_index,
+          address_index
+        FROM keys 
+        WHERE wallet_id = :walletid
+      `;
+      const statement = db.prepare(query);
+      statement.bind({ ':walletid': wallet_id });
+
+      const result = [];
+
+      while (statement.step()) {
+        const row = statement.getAsObject();
+
+        // Convert binary or base64 string data to Uint8Array
+        const publicKey = isArrayBuffer(row.public_key)
+          ? new Uint8Array(row.public_key)
+          : convertToUint8Array(row.public_key);
+        const privateKey = isArrayBuffer(row.private_key)
+          ? new Uint8Array(row.private_key)
+          : convertToUint8Array(row.private_key);
+        const pubkeyHash = isArrayBuffer(row.pubkey_hash)
+          ? new Uint8Array(row.pubkey_hash)
+          : convertToUint8Array(row.pubkey_hash);
+
+        result.push({
+          id: row.id as number,
+          publicKey,
+          privateKey,
+          address: row.address as string,
+          tokenAddress: row.token_address as string,
+          pubkeyHash,
+          accountIndex: row.account_index as number,
+          changeIndex: row.change_index as number,
+          addressIndex: row.address_index as number,
+        });
+      }
+
+      statement.free();
+      console.log('Keys retrieved:', result);
+      return result;
+    } catch (error) {
+      console.error('Error retrieving keys:', error);
+      throw error;
+    }
+  }
+
+  async function createKeys(
+    wallet_id: number,
+    accountNumber: number,
+    changeNumber: number,
+    addressNumber: number
+  ) {
+    try {
+      await dbService.ensureDatabaseStarted();
+      const db = dbService.getDatabase();
+      if (db == null) {
+        console.error('Database is null');
+        return;
+      }
+
+      const getIdQuery = db.prepare(
+        `SELECT mnemonic, passphrase FROM wallets WHERE id = ?;`
+      );
+      const result = getIdQuery.get([wallet_id]) as unknown;
+
+      if (result && typeof result === 'object' && 'mnemonic' in result) {
+        const mnemonic = (result as { mnemonic: string }).mnemonic;
+        const passphrase =
+          'passphrase' in result && result.passphrase
+            ? (result as { passphrase: string }).passphrase
+            : '';
+
+        console.log('Generating keys with:', {
+          mnemonic,
+          passphrase,
+          accountNumber,
+          changeNumber,
+          addressNumber,
+        });
+
+        const keys = await KeyGen.generateKeys(
+          mnemonic,
+          passphrase,
+          accountNumber,
+          changeNumber,
+          addressNumber
+        );
+
+        if (keys) {
+          console.log('Generated keys:', keys);
+
+          const existingKeyQuery = db.prepare(`
+            SELECT COUNT(*) as count FROM keys WHERE address = ?;
+          `);
+          existingKeyQuery.bind([keys.aliceAddress]);
+          const count = existingKeyQuery.getAsObject().count as number;
+          if (count > 0) {
+            console.log(
+              `Key for address ${keys.aliceAddress} already exists. Skipping...`
+            );
+            existingKeyQuery.free();
+            return;
+          }
+          existingKeyQuery.free();
+
+          const publicKey = keys.alicePub;
+          const privateKey = keys.alicePriv;
+          const address = keys.aliceAddress;
+          const tokenAddress = keys.aliceTokenAddress;
+          const pubkeyHash = keys.alicePkh;
+
+          const insertQuery = db.prepare(`
+            INSERT INTO keys (wallet_id, public_key, private_key, address, token_address, pubkey_hash, account_index, change_index, address_index) 
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?);
+          `);
+          insertQuery.run([
+            wallet_id,
+            publicKey,
+            privateKey,
+            address,
+            tokenAddress,
+            pubkeyHash,
+            accountNumber,
+            changeNumber,
+            addressNumber,
+          ]);
+          insertQuery.free();
+          const newAddress: Address = {
+            wallet_id: wallet_id,
+            address: keys.aliceAddress,
+            balance: 0,
+            hd_index: addressNumber,
+            change_index: changeNumber,
+            prefix: 'bchtest',
+          };
+
+          console.log('Registering new address:', newAddress);
+          await ManageAddress.registerAddress(newAddress);
+          await dbService.saveDatabaseToFile();
+          console.log('Keys created and saved successfully.');
+        } else {
+          console.error('Failed to generate keys.');
+        }
+      } else {
+        console.error(
+          'Mnemonic or passphrase not found for the given wallet id'
+        );
+      }
+    } catch (error) {
+      console.error('Error creating keys:', error);
+      throw error;
+    }
+  }
+
+  function fetchAddressPrivateKey(address: string) {
+    console.log('Fetching private key for address:', address);
+    dbService.ensureDatabaseStarted();
+    const db = dbService.getDatabase();
+    if (db == null) {
+      console.error('Database is null, cannot fetch private key');
+      return null;
+    }
+    const fetchAddressQuery = db.prepare(`
+      SELECT private_key 
+      FROM keys 
+      WHERE address = ?;
+    `);
+    const result = fetchAddressQuery.get([address]) as unknown;
+
+    if (result && typeof result === 'object' && 'private_key' in result) {
+      const privateKeyValue = (result as { private_key: string | number })
+        .private_key;
+
+      let privateKey: Uint8Array | null = null;
+
+      if (typeof privateKeyValue === 'string') {
+        // Handle string (base64 or other encoding)
+        privateKey = convertToUint8Array(privateKeyValue);
+      } else if (typeof privateKeyValue === 'number') {
+        // Log or handle if it's a number (depending on what a number represents in your case)
+        console.error(
+          'Unexpected number type for private_key:',
+          privateKeyValue
+        );
+        return null; // Or handle number case differently if needed
+      }
+
+      if (privateKey) {
+        console.log(
+          'Fetched private key for address:',
+          address,
+          'Result:',
+          privateKey
+        );
+        return privateKey;
+      } else {
+        console.error('Failed to convert private_key to Uint8Array');
+        return null;
+      }
+    } else {
+      console.log('No result found for address:', address);
+      return null;
+    }
+  }
+}
