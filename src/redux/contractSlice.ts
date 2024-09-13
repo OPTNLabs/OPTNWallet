@@ -16,13 +16,16 @@ const contractSlice = createSlice({
   name: 'contract',
   initialState,
   reducers: {
-    setSelectedFunction(state, action: PayloadAction<string>) {
+    setSelectedFunction: (state, action: PayloadAction<string>) => {
       state.selectedFunction = action.payload;
     },
-    setInputs(state, action: PayloadAction<any[]>) {
+    setInputs: (state, action: PayloadAction<any[]>) => {
       state.inputs = action.payload;
     },
-    setInputValues(state, action: PayloadAction<{ [key: string]: string }>) {
+    setInputValues: (
+      state,
+      action: PayloadAction<{ [key: string]: string }>
+    ) => {
       state.inputValues = action.payload;
     },
   },

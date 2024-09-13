@@ -18,7 +18,11 @@ import {
   HashType,
 } from 'cashscript';
 import { RootState } from '../redux/store';
-import { setSelectedFunction, setInputs } from '../redux/contractSlice';
+import {
+  setSelectedFunction,
+  setInputs,
+  setInputValues,
+} from '../redux/contractSlice';
 
 interface ExtendedUTXO extends UTXO {
   id: string;
@@ -455,19 +459,28 @@ const Transaction: React.FC = () => {
 
   const handleContractFunctionSelect = (
     contractFunction: string,
-    inputs: any[]
+    inputs: { [key: string]: string }
   ) => {
-    console.log(contractFunction);
-    console.log(inputs);
-    setContractFunction(contractFunction);
-    setContractFunctionInputs(inputs);
-    dispatch(setSelectedFunction(contractFunction));
-    dispatch(setInputs(inputs));
     console.log('Selected Contract Function:', contractFunction);
     console.log('Selected Contract Function Inputs:', inputs);
 
-    const unlockerInputs = inputs.map((input) =>
-      input.type === 'sig' ? new SignatureTemplate(input.value) : input.value
+    // Validate inputs is an object, not an array
+    if (typeof inputs !== 'object' || Array.isArray(inputs)) {
+      console.error("Error: 'inputs' is not a valid object. Received:", inputs);
+      return;
+    }
+
+    // Set contract function and inputs
+    setContractFunction(contractFunction);
+    setContractFunctionInputs(inputs);
+
+    // Dispatch actions to set the selected function and input values
+    dispatch(setSelectedFunction(contractFunction));
+    dispatch(setInputValues(inputs)); // Ensure inputs are properly dispatched
+
+    // Create an unlocker template from the input values
+    const unlockerInputs = Object.entries(inputs).map(([key, value]) =>
+      key === 's' ? new SignatureTemplate(value) : value
     );
 
     const unlocker = {
@@ -475,6 +488,7 @@ const Transaction: React.FC = () => {
       unlockerInputs,
     };
 
+    // Find the matching UTXO and update it with unlocker
     const utxoIndex = utxos.findIndex(
       (utxo) => utxo.abi && utxo.abi === currentContractABI
     );
@@ -489,6 +503,7 @@ const Transaction: React.FC = () => {
       setSelectedUtxos([...selectedUtxos, utxos[utxoIndex]]);
     }
 
+    // Close the popup
     setShowPopup(false);
   };
 
