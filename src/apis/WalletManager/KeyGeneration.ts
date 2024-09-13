@@ -1,5 +1,3 @@
-// src/apis/WalletManager/KeyGeneration.ts
-
 import {
   deriveHdPath,
   secp256k1,
