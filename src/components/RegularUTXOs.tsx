@@ -1,7 +1,4 @@
-// @ts-nocheck
-import React from 'react';
-
-const RegularUTXOs = ({ address, utxos, loading }) => {
+const RegularUTXOs = ({ utxos, loading }) => {
   return (
     <div>
       <h4 className="font-semibold">Regular UTXOs:</h4>

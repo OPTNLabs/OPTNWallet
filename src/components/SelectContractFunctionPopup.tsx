@@ -1,4 +1,3 @@
-// @ts-nocheck
 import React, { useState, useEffect } from 'react';
 import { useDispatch, useSelector } from 'react-redux';
 import AddressSelectionPopup from './AddressSelectionPopup';
@@ -9,35 +8,49 @@ import {
 } from '../redux/contractSlice';
 import { encodePrivateKeyWif } from '@bitauth/libauth';
 import KeyManager from '../apis/WalletManager/KeyManager';
+import { RootState, AppDispatch } from '../redux/store';
 
 // Function to convert a byte array to hex string
-const hexString = (pkh) => {
+const hexString = (pkh: Uint8Array) => {
   return Array.from(pkh, (byte) => byte.toString(16).padStart(2, '0')).join('');
 };
 
-const SelectContractFunctionPopup = ({
-  contractABI,
-  onClose,
-  onFunctionSelect,
-}) => {
-  const [functions, setFunctions] = useState([]);
-  const [selectedFunction, setSelectedFunction] = useState('');
-  const [inputs, setInputs] = useState([]);
-  const [inputValues, setInputValues] = useState({});
-  const [placeholders, setPlaceholders] = useState({}); // Store placeholder values
-  const [showAddressPopup, setShowAddressPopup] = useState(false);
-  const [selectedInput, setSelectedInput] = useState(null);
+interface SelectContractFunctionPopupProps {
+  contractABI: any[];
+  onClose: () => void;
+  onFunctionSelect: (
+    selectedFunction: string,
+    inputValues: { [key: string]: string }
+  ) => void;
+}
+
+const SelectContractFunctionPopup: React.FC<
+  SelectContractFunctionPopupProps
+> = ({ contractABI, onClose, onFunctionSelect }) => {
+  const [functions, setFunctions] = useState<any[]>([]);
+  const [selectedFunction, setSelectedFunctionState] = useState<string>('');
+  const [inputs, setInputsState] = useState<any[]>([]);
+  const [inputValues, setInputValuesState] = useState<{
+    [key: string]: string;
+  }>({});
+  const [placeholders, setPlaceholders] = useState<{ [key: string]: string }>(
+    {}
+  );
+  const [showAddressPopup, setShowAddressPopup] = useState<boolean>(false);
+  const [selectedInput, setSelectedInput] = useState<string | null>(null);
 
   const keyManager = KeyManager();
-  const dispatch = useDispatch();
+  const dispatch: AppDispatch = useDispatch();
 
   // Get the current walletId from the Redux store
-  const walletId = useSelector((state) => state.wallet_id.currentWalletId);
+  const walletId = useSelector(
+    (state: RootState) => state.wallet_id.currentWalletId
+  );
 
   // Fetch the ABI functions
   useEffect(() => {
     if (!contractABI || !Array.isArray(contractABI)) {
-      console.error('Contract ABI is null, undefined, or not an array');
+      console.error('Contract ABI is invalid or not an array');
       return;
     }
 
@@ -52,50 +65,69 @@ const SelectContractFunctionPopup = ({
     setFunctions(allFunctionNames);
   }, [contractABI]);
 
-  const handleFunctionSelect = (e) => {
+  const handleFunctionSelect = (e: React.ChangeEvent<HTMLSelectElement>) => {
     const selectedFunctionName = e.target.value;
-    setSelectedFunction(selectedFunctionName);
+    setSelectedFunctionState(selectedFunctionName);
 
     const functionAbi = functions.find(
       (item) => item.name === selectedFunctionName
     );
-    setInputs(functionAbi?.inputs || []);
-    setInputValues({});
-    setPlaceholders({}); // Reset placeholders on function select
+    setInputsState(functionAbi?.inputs || []);
+    setInputValuesState({});
+    setPlaceholders({});
   };
 
-  // Handle manual input change
-  const handleInputChange = (e) => {
+  const handleInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const { name, value } = e.target;
-    setInputValues((prev) => ({
-      ...prev,
-      [name]: value,
-    }));
+    setInputValuesState((prev) => ({ ...prev, [name]: value }));
   };
 
-  // Handle the function selection and dispatch to Redux
   const handleSelect = () => {
-    const inputValuesArray = inputs.map((input) => ({
-      type: input.type,
-      value: inputValues[input.name] || '',
-    }));
+    console.log('Selected function:', selectedFunction);
+    console.log('Inputs:', inputs);
+    console.log('Input values before dispatch:', inputValues);
 
-    dispatch(setSelectedFunction(selectedFunction));
-    dispatch(setInputs(inputs));
-    dispatch(setInputValues(inputValues));
+    // Merge input values with placeholders to get the final input values object
+    const inputValuesObject = inputs.reduce<{ [key: string]: string }>(
+      (acc, input) => {
+        // Map placeholders 'pubkey' to 'pk' and 'sig' to 's'
+        if (input.name === 'pk') {
+          acc[input.name] =
+            inputValues[input.name] || placeholders['pubkey'] || '';
+        } else if (input.name === 's') {
+          acc[input.name] =
+            inputValues[input.name] || placeholders['sig'] || '';
+        } else {
+          acc[input.name] = inputValues[input.name] || '';
+        }
+        return acc;
+      },
+      {}
+    );
 
-    onFunctionSelect(selectedFunction, inputValuesArray);
-    onClose();
+    console.log('Dispatching input values object:', inputValuesObject);
+
+    try {
+      dispatch(setSelectedFunction(selectedFunction));
+      dispatch(setInputs(inputs)); // Ensure this is always an array
+      dispatch(setInputValues(inputValuesObject));
+
+      onFunctionSelect(selectedFunction, inputValuesObject);
+
+      // Close the popup
+      onClose();
+    } catch (error) {
+      console.error('Error occurred during dispatch or handling:', error);
+    }
   };
 
-  // Fetch keys based on the selected address and walletId
-  const fetchKeysForAddress = async (address) => {
+  const fetchKeysForAddress = async (address: string) => {
     try {
       if (walletId === 0) {
         throw new Error('Invalid walletId');
       }
 
-      const keys = await keyManager.retrieveKeys(walletId); // Use walletId from the Redux store
+      const keys = await keyManager.retrieveKeys(walletId);
       const selectedKey = keys.find((key) => key.address === address);
 
       if (selectedKey) {
@@ -105,20 +137,20 @@ const SelectContractFunctionPopup = ({
           'testnet'
         );
 
-        console.log(publicKeyHex);
-        console.log(privateKeyWif);
+        console.log('Fetched publicKeyHex:', publicKeyHex);
+        console.log('Fetched privateKeyWif:', privateKeyWif);
 
-        // Update placeholder values based on the selected input type (pubkey or sig)
         setPlaceholders((prev) => {
-          let updatedPlaceholders = { ...prev };
-
+          const updatedPlaceholders = { ...prev };
           if (selectedInput === 'pubkey') {
-            updatedPlaceholders['pubkey'] = publicKeyHex; // Only update pubkey placeholder
+            updatedPlaceholders['pubkey'] = publicKeyHex;
           } else if (selectedInput === 'sig') {
-            updatedPlaceholders['sig'] = privateKeyWif; // Only update sig placeholder
+            updatedPlaceholders['sig'] = privateKeyWif;
           }
-
-          console.log('Updated placeholders:', updatedPlaceholders);
+          console.log(
+            'Updated placeholders after fetching keys:',
+            updatedPlaceholders
+          );
           return updatedPlaceholders;
         });
       } else {
@@ -129,14 +161,12 @@ const SelectContractFunctionPopup = ({
     }
   };
 
-  // Handle selecting an address from the AddressSelectionPopup
-  const handleAddressSelect = (address) => {
-    console.log('Selected Address:', address);
-    fetchKeysForAddress(address); // Fetch the public and private keys based on the selected address
+  const handleAddressSelect = (address: string) => {
+    console.log('Address clicked:', address);
+    fetchKeysForAddress(address);
   };
 
-  // Open the address popup for pubkey or sig selection
-  const openAddressPopup = (inputType) => {
+  const openAddressPopup = (inputType: string) => {
     setSelectedInput(inputType);
     setShowAddressPopup(true);
   };
@@ -158,29 +188,34 @@ const SelectContractFunctionPopup = ({
           ))}
         </select>
         <div className="mb-4">
-          {inputs.map((input, index) => (
-            <div key={index} className="mb-2">
-              <label className="block text-sm font-medium text-gray-700">
-                {input.name} ({input.type})
-              </label>
-              <input
-                type="text"
-                name={input.name} // Ensure this matches keys in inputValues (like 'pubkey', 'sig')
-                value={inputValues[input.name] || ''} // Ensure inputValues has the correct key
-                onChange={handleInputChange}
-                className="border p-2 w-full"
-                placeholder={placeholders[input.name] || `Enter ${input.name}`} // Use placeholder if present
-              />
-              {(input.type === 'pubkey' || input.type === 'sig') && (
-                <button
-                  className="bg-blue-500 text-white py-1 px-2 rounded mt-2"
-                  onClick={() => openAddressPopup(input.type)}
-                >
-                  Select {input.type}
-                </button>
-              )}
-            </div>
-          ))}
+          {Array.isArray(inputs) &&
+            inputs.map((input, index) => (
+              <div key={index} className="mb-2">
+                <label className="block text-sm font-medium text-gray-700">
+                  {input.name} ({input.type})
+                </label>
+                <input
+                  type="text"
+                  name={input.name}
+                  value={
+                    inputValues[input.name] || placeholders[input.name] || ''
+                  }
+                  onChange={handleInputChange}
+                  className="border p-2 w-full"
+                  placeholder={
+                    placeholders[input.name] || `Enter ${input.name}`
+                  }
+                />
+                {(input.type === 'pubkey' || input.type === 'sig') && (
+                  <button
+                    className="bg-blue-500 text-white py-1 px-2 rounded mt-2"
+                    onClick={() => openAddressPopup(input.type)}
+                  >
+                    Select {input.type}
+                  </button>
+                )}
+              </div>
+            ))}
         </div>
         <div className="flex justify-end">
           <button

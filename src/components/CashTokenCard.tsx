@@ -1,6 +1,4 @@
-// @ts-nocheck
-import React from 'react';
-import { FaBitcoin } from 'react-icons/fa'; // Example icon, replace with actual icons if needed
+import { FaBitcoin } from 'react-icons/fa';
 
 const CashTokenCard = ({ category, totalAmount }) => {
   const shortenTxHash = (txHash) => {
