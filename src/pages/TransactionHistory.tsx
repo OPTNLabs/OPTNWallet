@@ -1,4 +1,3 @@
-// @ts-nocheck
 import React, { useState, useCallback, useEffect } from 'react';
 import { useDispatch, useSelector } from 'react-redux';
 import { RootState } from '../redux/store';
@@ -194,6 +193,16 @@ const TransactionHistory: React.FC = () => {
 
   return (
     <div className="flex flex-col h-screen">
+      {/* Progress bar */}
+      {loading && (
+        <div className="w-full h-2 bg-gray-200">
+          <div
+            className="h-full bg-blue-500"
+            style={{ width: `${progress}%` }}
+          ></div>
+        </div>
+      )}
+
       <div className="sticky top-0 bg-white z-10 p-4">
         <div className="flex justify-center mt-4">
           <img
@@ -226,10 +235,11 @@ const TransactionHistory: React.FC = () => {
             className="py-1 px-2 bg-blue-500 text-white rounded md:py-2 md:px-4 self-center"
             disabled={loading}
           >
-            Fetch Transaction History
+            {loading ? 'Fetching...' : 'Fetch Transaction History'}
           </button>
         </div>
       </div>
+
       <div className="flex-grow overflow-y-auto">
         {transactions.length === 0 ? (
           <p className="text-center">No transactions available.</p>
@@ -251,6 +261,7 @@ const TransactionHistory: React.FC = () => {
           </ul>
         )}
       </div>
+
       <div
         className="fixed bottom-0 left-0 right-0 p-4 bg-white z-10 flex justify-between items-center"
         style={{ paddingBottom: navBarHeight }}
@@ -295,6 +306,7 @@ const TransactionHistory: React.FC = () => {
           Last
         </button>
       </div>
+
       <BottomNavBar setNavBarHeight={setNavBarHeight} />
     </div>
   );

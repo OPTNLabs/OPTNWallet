@@ -1,5 +1,3 @@
-// @ts-nocheck
-import React from 'react';
 import { useSelector, useDispatch } from 'react-redux';
 import { RootState, AppDispatch } from '../redux/store';
 import { setNetwork, Network } from '../redux/networkSlice';

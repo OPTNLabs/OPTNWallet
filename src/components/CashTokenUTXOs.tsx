@@ -1,7 +1,4 @@
-// @ts-nocheck
-import React from 'react';
-
-const CashTokenUTXOs = ({ address, utxos, loading }) => {
+const CashTokenUTXOs = ({ utxos, loading }) => {
   return (
     <div>
       <h4 className="font-semibold">CashToken UTXOs:</h4>
