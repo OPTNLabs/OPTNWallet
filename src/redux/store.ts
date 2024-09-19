@@ -1,3 +1,4 @@
+// src/redux/store.ts
 import { configureStore, combineReducers } from '@reduxjs/toolkit';
 import {
   persistStore,
@@ -15,6 +16,7 @@ import utxoReducer from './utxoSlice';
 import transactionReducer from './transactionSlice';
 import contractReducer from './contractSlice';
 import networkReducer from './networkSlice';
+import transactionBuilderReducer from './transactionBuilderSlice'; // New reducer
 
 const rootReducer = combineReducers({
   wallet_id: walletReducer,
@@ -22,6 +24,7 @@ const rootReducer = combineReducers({
   transactions: transactionReducer,
   contract: contractReducer,
   network: networkReducer,
+  transactionBuilder: transactionBuilderReducer, // Add the new reducer
 });
 
 const persistConfig = {

@@ -6,6 +6,7 @@ import {
 import { deriveHdPrivateNodeFromSeed } from '@bitauth/libauth';
 import { hash160 } from '@cashscript/utils';
 import * as bip39 from 'bip39';
+import { HdNode } from '../../types/types';
 
 export default function KeyGeneration() {
   return {
@@ -25,25 +26,40 @@ export default function KeyGeneration() {
     account_index: number,
     change_index: number,
     address_index: number
-  ) {
+  ): Promise<{
+    alicePub: Uint8Array | string;
+    alicePriv: Uint8Array;
+    alicePkh: Uint8Array;
+    aliceAddress: string;
+    aliceTokenAddress: string;
+  } | null> {
     console.log('Generating seed...');
-    const seed = await bip39.mnemonicToSeed(mnemonic, passphrase);
-    const rootNode = deriveHdPrivateNodeFromSeed(seed, true);
+    const seed: Uint8Array = await bip39.mnemonicToSeed(mnemonic, passphrase);
+
+    // Defining rootNode as type HdNode
+    const rootNode: HdNode = deriveHdPrivateNodeFromSeed(seed, true);
+    console.log('rootNode:', rootNode);
+
     const baseDerivationPath = `m/44'/1'/${account_index}'`;
 
     console.log('Deriving HD path...');
-    const aliceNode = deriveHdPath(
+    // Defining aliceNode as type HdNode
+    const aliceNode: HdNode | string = deriveHdPath(
       rootNode,
       `${baseDerivationPath}/${change_index}/${address_index}`
     );
+
+    console.log('aliceNode:', aliceNode);
 
     if (typeof aliceNode === 'string') {
       console.error('Error deriving HD path:', aliceNode);
       throw new Error();
     }
 
-    const alicePub = secp256k1.derivePublicKeyCompressed(aliceNode.privateKey);
-    const alicePriv = aliceNode.privateKey;
+    const alicePub: Uint8Array | string = secp256k1.derivePublicKeyCompressed(
+      aliceNode.privateKey
+    );
+    const alicePriv: Uint8Array = aliceNode.privateKey;
 
     if (typeof alicePub === 'string') {
       console.error('Error deriving public key:', alicePub);
@@ -51,20 +67,20 @@ export default function KeyGeneration() {
     }
 
     console.log('Hashing public key...');
-    const alicePkh = hash160(alicePub);
+    const alicePkh: Uint8Array = hash160(alicePub);
     if (!alicePkh) {
       console.error('Failed to generate public key hash.');
       return null;
     }
 
     console.log('Encoding address...');
-    const aliceAddress = encodeCashAddress({
+    const aliceAddress: string = encodeCashAddress({
       payload: alicePkh,
       prefix: 'bchtest',
       type: 'p2pkh',
     }).address;
 
-    const aliceTokenAddress = encodeCashAddress({
+    const aliceTokenAddress: string = encodeCashAddress({
       payload: alicePkh,
       prefix: 'bchtest',
       type: 'p2pkhWithTokens',

@@ -1,5 +1,5 @@
+import { Address } from '../../types/types';
 import DatabaseService from '../DatabaseManager/DatabaseService';
-import { Address } from '../types';
 
 export default function AddressManager() {
   const dbService = DatabaseService();

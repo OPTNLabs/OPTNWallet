@@ -14,7 +14,7 @@ import { setUTXOs } from '../redux/utxoSlice';
 import BitcoinCashCard from '../components/BitcoinCashCard';
 import CashTokenCard from '../components/CashTokenCard';
 
-const batchAmount = 10;
+const batchAmount = 1;
 
 const Home = () => {
   const [keyPairs, setKeyPairs] = useState([]);

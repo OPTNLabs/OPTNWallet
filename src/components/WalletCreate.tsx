@@ -1,4 +1,3 @@
-// @ts-nocheck
 import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import DatabaseService from '../apis/DatabaseManager/DatabaseService';
@@ -10,7 +9,9 @@ import WalletManager from '../apis/WalletManager/WalletManager';
 
 const WalletCreation = () => {
   const [mnemonicPhrase, setMnemonicPhrase] = useState('');
-  const [walletName, setWalletName] = useState('');
+  const [
+    walletName, //setWalletName
+  ] = useState('');
   const [passphrase, setPassphrase] = useState('');
   const dbService = DatabaseService();
   const WalletManage = WalletManager();
@@ -91,7 +92,6 @@ const WalletCreation = () => {
         <div className="text-white font-bold text-xl mb-4 text-center">
           Generated Mnemonic:
         </div>
-        {console.log(mnemonicPhrase)}
         <div className="text-center mb-4 p-2 bg-gray-200 rounded-md">
           {mnemonicPhrase ? mnemonicPhrase : 'Generating...'}
         </div>
