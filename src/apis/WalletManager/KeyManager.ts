@@ -1,8 +1,22 @@
-// @ts-nocheck
 import DatabaseService from '../DatabaseManager/DatabaseService';
 import KeyGeneration from './KeyGeneration';
 import AddressManager from '../AddressManager/AddressManager';
-import { Address } from '../types';
+import { Address } from '../../types/types';
+
+// Type guard to check if a value is a string
+function isString(value: any): value is string {
+  return typeof value === 'string';
+}
+
+// Type guard to check if a value is an ArrayBufferLike (Uint8Array or ArrayBuffer)
+function isArrayBufferLike(value: any): value is ArrayBufferLike {
+  return value instanceof Uint8Array || value instanceof ArrayBuffer;
+}
+
+// Helper function to convert any type to string safely
+function toString(value: any): string {
+  return isString(value) ? value : String(value);
+}
 
 export default function KeyManager() {
   const dbService = DatabaseService();
@@ -15,6 +29,7 @@ export default function KeyManager() {
     fetchAddressPrivateKey,
   };
 
+  // Function to retrieve keys from the database
   async function retrieveKeys(wallet_id: number) {
     try {
       await dbService.ensureDatabaseStarted();
@@ -45,21 +60,46 @@ export default function KeyManager() {
 
       while (statement.step()) {
         const row = statement.getAsObject();
-        result.push({
+
+        console.log('Retrieved raw row from keys table:', row); // Log each row
+
+        const publicKey = isArrayBufferLike(row.public_key)
+          ? new Uint8Array(row.public_key)
+          : isString(row.public_key)
+            ? Uint8Array.from(atob(row.public_key), (c) => c.charCodeAt(0))
+            : new Uint8Array(); // Handle as empty if neither condition is met
+
+        const privateKey = isArrayBufferLike(row.private_key)
+          ? new Uint8Array(row.private_key)
+          : isString(row.private_key)
+            ? Uint8Array.from(atob(row.private_key), (c) => c.charCodeAt(0))
+            : new Uint8Array();
+
+        const pubkeyHash = isArrayBufferLike(row.pubkey_hash)
+          ? new Uint8Array(row.pubkey_hash)
+          : isString(row.pubkey_hash)
+            ? Uint8Array.from(atob(row.pubkey_hash), (c) => c.charCodeAt(0))
+            : new Uint8Array();
+
+        const keyData = {
           id: row.id as number,
-          publicKey: new Uint8Array(row.public_key),
-          privateKey: new Uint8Array(row.private_key),
+          publicKey,
+          privateKey,
           address: row.address as string,
           tokenAddress: row.token_address as string,
-          pubkeyHash: new Uint8Array(row.pubkey_hash),
+          pubkeyHash,
           accountIndex: row.account_index as number,
           changeIndex: row.change_index as number,
           addressIndex: row.address_index as number,
-        });
+        };
+
+        console.log('Formatted key data:', keyData); // Log the formatted key data
+
+        result.push(keyData);
       }
 
       statement.free();
-      console.log('Keys retrieved:', result);
+      console.log('Keys retrieved:', result); // Log the full result
       return result;
     } catch (error) {
       console.error('Error retrieving keys:', error);
@@ -67,12 +107,13 @@ export default function KeyManager() {
     }
   }
 
+  // Function to create and store keys in the database
   async function createKeys(
     wallet_id: number,
     accountNumber: number,
     changeNumber: number,
     addressNumber: number
-  ) {
+  ): Promise<void> {
     try {
       await dbService.ensureDatabaseStarted();
       const db = dbService.getDatabase();
@@ -84,9 +125,19 @@ export default function KeyManager() {
       const getIdQuery = db.prepare(
         `SELECT mnemonic, passphrase FROM wallets WHERE id = ?;`
       );
-      const result = dbService.resultToJSON(getIdQuery.get([wallet_id]));
+      const row = getIdQuery.get([wallet_id]) as (
+        | string
+        | number
+        | undefined
+      )[];
       getIdQuery.free();
-      console.log('Result from DB:', result);
+
+      const result = dbService.resultToJSON([
+        toString(row[0]),
+        toString(row[1]),
+      ]);
+
+      console.log('Result from wallets table:', result); // Log the wallet details
 
       if (!result.mnemonic) {
         console.error(
@@ -114,15 +165,14 @@ export default function KeyManager() {
       );
 
       if (keys) {
-        console.log('Generated keys:', keys);
+        console.log('Generated keys:', keys); // Log the generated keys
+
         const existingKeyQuery = db.prepare(`
           SELECT COUNT(*) as count FROM keys WHERE address = ?;
         `);
         existingKeyQuery.bind([keys.aliceAddress]);
-        if (
-          existingKeyQuery.step() &&
-          existingKeyQuery.getAsObject().count > 0
-        ) {
+        const count = existingKeyQuery.getAsObject().count as number;
+        if (count > 0) {
           console.log(
             `Key for address ${keys.aliceAddress} already exists. Skipping...`
           );
@@ -136,6 +186,18 @@ export default function KeyManager() {
         const address = keys.aliceAddress;
         const tokenAddress = keys.aliceTokenAddress;
         const pubkeyHash = keys.alicePkh;
+
+        console.log('Inserting keys into database:', {
+          wallet_id,
+          publicKey,
+          privateKey,
+          address,
+          tokenAddress,
+          pubkeyHash,
+          accountNumber,
+          changeNumber,
+          addressNumber,
+        }); // Log the keys being inserted
 
         const insertQuery = db.prepare(`
           INSERT INTO keys (wallet_id, public_key, private_key, address, token_address, pubkey_hash, account_index, change_index, address_index) 
@@ -153,6 +215,7 @@ export default function KeyManager() {
           addressNumber,
         ]);
         insertQuery.free();
+
         const newAddress: Address = {
           wallet_id: wallet_id,
           address: keys.aliceAddress,
@@ -162,7 +225,8 @@ export default function KeyManager() {
           prefix: 'bchtest',
         };
 
-        console.log('Registering new address:', newAddress);
+        console.log('Registering new address:', newAddress); // Log the new address
+
         await ManageAddress.registerAddress(newAddress);
         await dbService.saveDatabaseToFile();
         console.log('Keys created and saved successfully.');
@@ -175,35 +239,50 @@ export default function KeyManager() {
     }
   }
 
-  function fetchAddressPrivateKey(address: string) {
-    console.log('Fetching private key for address:', address);
+  // Function to fetch private key by address
+  function fetchAddressPrivateKey(address: string): Uint8Array | null {
+    console.log('Attempting to fetch private key for address:', address);
+
+    // Ensure the database is started
     dbService.ensureDatabaseStarted();
     const db = dbService.getDatabase();
+
+    // Check if the database is properly initialized
     if (db == null) {
       console.error('Database is null, cannot fetch private key');
       return null;
     }
-    const fetchAddressQuery = db.prepare(`
-      SELECT private_key 
-      FROM keys 
-      WHERE address = ?;
-    `);
-    const result = fetchAddressQuery.get([address]);
-    fetchAddressQuery.free();
-    if (result) {
-      console.log('Raw private key result:', result.private_key);
-    } else {
-      console.log('No result found for address:', address);
-    }
 
-    // Return the private key as Uint8Array
-    const privateKey = result ? new Uint8Array(result.private_key) : null;
-    console.log(
-      'Fetched private key for address:',
-      address,
-      'Result:',
-      privateKey
-    );
-    return privateKey;
+    console.log('Database connection established.');
+
+    // Prepare the query to fetch the private key from the database
+    const fetchAddressQuery = db.prepare(`
+    SELECT private_key 
+    FROM keys 
+    WHERE address = ?;
+  `);
+
+    console.log('Query prepared to fetch private key for address:', address);
+
+    // Get the result
+    const result = fetchAddressQuery.get([address]) as any;
+    fetchAddressQuery.free();
+
+    // Log the raw result
+    console.log('Raw query result:', result);
+
+    // Check if the result is a valid array with the Uint8Array inside
+    if (
+      Array.isArray(result) &&
+      result.length > 0 &&
+      result[0] instanceof Uint8Array
+    ) {
+      const privateKey = result[0];
+      console.log('Private key extracted:', privateKey);
+      return privateKey;
+    } else {
+      console.warn('No private key found for address:', address);
+      return null;
+    }
   }
 }

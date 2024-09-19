@@ -1,14 +1,11 @@
 import { Link } from 'react-router-dom';
-// import NavBar from '../components/NavBar';
 
 const LandingPage = () => {
   return (
     <>
       <section className="min-h-screen bg-slate-600 flex flex-col justify-center items-center">
-        {/* <NavBar /> */}
         <div className="flex flex-col lg:flex-row items-center mx-4 lg:mx-20">
           <div className="flex flex-col w-full lg:w-1/2 lg:pr-4 items-center lg:items-start">
-            {/* Add the image here */}
             <div className="flex justify-center mt-4">
               <img
                 src="/assets/images/OPTNWelcome1.png"

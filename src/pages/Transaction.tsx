@@ -2,6 +2,7 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useSelector, useDispatch } from 'react-redux';
+import OutputList from '../components/OutputList';
 import TransactionBuilderHelper, {
   TransactionOutput,
   UTXO,
@@ -17,12 +18,13 @@ import {
   Network,
   HashType,
 } from 'cashscript';
-import { RootState } from '../redux/store';
+import { RootState, AppDispatch } from '../redux/store';
 import {
   setSelectedFunction,
   setInputs,
   setInputValues,
 } from '../redux/contractSlice';
+import { addTxOutput, removeTxOutput } from '../redux/transactionBuilderSlice';
 
 interface ExtendedUTXO extends UTXO {
   id: string;
@@ -80,7 +82,11 @@ const Transaction: React.FC = () => {
   const [showCashTokenUTXOsPopup, setShowCashTokenUTXOsPopup] = useState(false); // State for cash token UTXOs popup
   const [showContractUTXOsPopup, setShowContractUTXOsPopup] = useState(false); // State for contract UTXOs popup
   const navigate = useNavigate();
-  const dispatch = useDispatch();
+  const dispatch: AppDispatch = useDispatch();
+
+  const txOutputs = useSelector(
+    (state: RootState) => state.transactionBuilder.txOutputs
+  );
 
   const selectedFunction = useSelector(
     (state: RootState) => state.contract.selectedFunction
@@ -334,11 +340,15 @@ const Transaction: React.FC = () => {
       setTransferAmount('');
       setTokenAmount('');
       setSelectedTokenCategory('');
+
+      dispatch(addTxOutput(newOutput));
     }
   };
 
   const removeOutput = (index: number) => {
     setOutputs(outputs.filter((_, i) => i !== index));
+
+    dispatch(removeTxOutput(index));
   };
 
   const buildTransaction = async () => {
@@ -777,28 +787,30 @@ const Transaction: React.FC = () => {
         ))}
       </div>
       <div className="mb-6">
-        <h3 className="text-lg font-semibold mb-2">Transaction Outputs</h3>
-        {outputs.map((output, index) => (
-          <div
-            key={index}
-            className="flex flex-col items-start mb-2 w-full break-words whitespace-normal"
-          >
-            <span className="w-full">{`Recipient: ${output.recipientAddress}`}</span>
-            <span className="w-full">{`Amount: ${output.amount}`}</span>
-            {output.token && (
-              <>
-                <span className="w-full">{`Token: ${output.token.amount}`}</span>
-                <span className="w-full">{`Category: ${output.token.category}`}</span>
-              </>
-            )}
-            <button
-              onClick={() => removeOutput(index)}
-              className="text-red-500"
+        <div className="mb-6">
+          <h3 className="text-lg font-semibold mb-2">Transaction Outputs</h3>
+          {outputs.map((output, index) => (
+            <div
+              key={index}
+              className="flex flex-col items-start mb-2 w-full break-words whitespace-normal"
             >
-              Remove
-            </button>
-          </div>
-        ))}
+              <span className="w-full">{`Recipient: ${output.recipientAddress}`}</span>
+              <span className="w-full">{`Amount: ${output.amount.toString()}`}</span>
+              {output.token && (
+                <>
+                  <span className="w-full">{`Token: ${output.token.amount.toString()}`}</span>
+                  <span className="w-full">{`Category: ${output.token.category}`}</span>
+                </>
+              )}
+              <button
+                onClick={() => removeOutput(index)}
+                className="text-red-500"
+              >
+                Remove
+              </button>
+            </div>
+          ))}
+        </div>
       </div>
       {finalOutputs.length > 0 && (
         <div className="mb-6">

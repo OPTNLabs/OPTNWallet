@@ -1,10 +1,15 @@
-import { ElectrumClient, ElectrumTransport } from 'electrum-cash';
+import {
+  ElectrumClient,
+  ElectrumTransport,
+  RequestResponse,
+} from 'electrum-cash';
 import {
   chipnetServers,
   mainnetServers,
 } from '../../utils/servers/ElectrumServers';
 import { store } from '../../redux/store';
 import { Network } from '../../redux/networkSlice';
+import { TransactionHistoryItem, UTXO } from '../../types/types';
 
 const testServer = chipnetServers[0];
 const mainServer = mainnetServers[0];
@@ -16,6 +21,31 @@ function getCurrentServer(): string {
   const currentNetwork = state.network.currentNetwork;
 
   return currentNetwork === Network.MAINNET ? mainServer : testServer;
+}
+
+// Type guard to check if response is UTXO[]
+function isUTXOArray(response: RequestResponse): response is UTXO[] {
+  return (
+    Array.isArray(response) &&
+    response.every(
+      (item) => 'tx_hash' in item && 'height' in item && 'value' in item
+    )
+  );
+}
+
+// Type guard to check if response is TransactionHistoryItem[]
+function isTransactionHistoryArray(
+  response: RequestResponse
+): response is TransactionHistoryItem[] {
+  return (
+    Array.isArray(response) &&
+    response.every((item) => 'tx_hash' in item && 'height' in item)
+  );
+}
+
+// Type guard to check if response is a string (for transaction hashes)
+function isStringResponse(response: RequestResponse): response is string {
+  return typeof response === 'string';
 }
 
 export default function ElectrumService() {
@@ -50,20 +80,23 @@ export default function ElectrumService() {
     return false;
   }
 
-  async function getUTXOS(address: string): Promise<any> {
+  async function getUTXOS(address: string): Promise<UTXO[]> {
     const electrum = await electrumConnect();
     try {
-      const UTXOs = await electrum.request(
+      const UTXOs: RequestResponse = await electrum.request(
         'blockchain.address.listunspent',
         address
       );
-      console.log(`Fetched UTXOs for address ${address}:`, UTXOs);
-      if (UTXOs) {
+
+      if (isUTXOArray(UTXOs)) {
+        console.log(`Fetched UTXOs for address ${address}:`, UTXOs);
         return UTXOs;
+      } else {
+        throw new Error('Invalid UTXO response format');
       }
+    } catch (error) {
+      console.error('Error fetching UTXOs:', error);
       return [];
-    } finally {
-      // Keep the connection open for subsequent requests
     }
   }
 
@@ -76,6 +109,7 @@ export default function ElectrumService() {
         ...params
       );
       console.log('Get Balance response:', response);
+
       if (
         response &&
         typeof response.confirmed === 'number' &&
@@ -91,37 +125,52 @@ export default function ElectrumService() {
     }
   }
 
-  async function broadcastTransaction(tx_hex: string) {
+  async function broadcastTransaction(tx_hex: string): Promise<string> {
     const electrum = await electrumConnect();
     try {
-      const tx_hash = await electrum.request(
+      const tx_hash: RequestResponse = await electrum.request(
         'blockchain.transaction.broadcast',
         tx_hex
       );
-      return tx_hash;
-    } finally {
-      // Keep the connection open for subsequent requests
+
+      if (isStringResponse(tx_hash)) {
+        console.log(`Broadcasted transaction: ${tx_hash}`);
+        return tx_hash;
+      } else {
+        throw new Error('Invalid transaction hash response format');
+      }
+    } catch (error) {
+      console.error('Error broadcasting transaction:', error);
+      return error.message || 'Unknown error';
     }
   }
 
-  async function getTransactionHistory(address: string) {
+  async function getTransactionHistory(
+    address: string
+  ): Promise<TransactionHistoryItem[] | null> {
     const electrum = await electrumConnect();
     try {
       if (!address) {
         throw new Error('Invalid address: Address cannot be undefined');
       }
       console.log(`Fetching transaction history for address: ${address}`);
-      const history = await electrum.request(
+      const history: RequestResponse = await electrum.request(
         'blockchain.address.get_history',
         address
       );
-      console.log(
-        `Fetched transaction history for address ${address}:`,
-        history
-      );
-      return history;
-    } finally {
-      // Keep the connection open for subsequent requests
+
+      if (isTransactionHistoryArray(history)) {
+        console.log(
+          `Fetched transaction history for address ${address}:`,
+          history
+        );
+        return history;
+      } else {
+        throw new Error('Invalid transaction history response format');
+      }
+    } catch (error) {
+      console.error('Error fetching transaction history:', error);
+      return null;
     }
   }
 
