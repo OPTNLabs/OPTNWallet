@@ -1,23 +1,25 @@
-// @ts-nocheck
-
 import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import DatabaseService from '../apis/DatabaseManager/DatabaseService';
-import { useDispatch, useSelector } from 'react-redux';
-import { RootState } from '../redux/store';
+import {
+  useDispatch, //useSelector
+} from 'react-redux';
+// import { RootState } from '../redux/store';
 import { setWalletId } from '../redux/walletSlice';
 import WalletManager from '../apis/WalletManager/WalletManager';
 
 const WalletImport = () => {
   const [recoveryPhrase, setRecoveryPhrase] = useState('');
-  const [walletName, setWalletName] = useState('OPTN');
+  const [
+    walletName, //setWalletName
+  ] = useState('OPTN');
   const [passphrase, setPassphrase] = useState('');
   const dbService = DatabaseService();
   const WalletManage = WalletManager();
   const navigate = useNavigate();
-  const wallet_id = useSelector(
-    (state: RootState) => state.wallet_id.currentWalletId
-  );
+  // const wallet_id = useSelector(
+  //   (state: RootState) => state.wallet_id.currentWalletId
+  // );
   const dispatch = useDispatch();
 
   useEffect(() => {

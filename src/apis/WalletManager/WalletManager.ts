@@ -1,10 +1,10 @@
-// @ts-nocheck
-import { hexToBin } from '@bitauth/libauth';
-import KeyManager from './KeyManager';
 import { createTables } from '../../utils/schema/schema';
 import DatabaseService from '../DatabaseManager/DatabaseService';
 
-const KeyManage = KeyManager();
+// Helper function to safely cast SQL values to number
+function toNumber(value: any): number {
+  return typeof value === 'number' ? value : parseInt(value, 10);
+}
 
 export default function WalletManager() {
   return {
@@ -15,7 +15,7 @@ export default function WalletManager() {
     deleteWallet,
     walletExists,
     getWalletInfo,
-    clearAllData, // Add this
+    clearAllData,
   };
 
   async function clearAllData(): Promise<void> {
@@ -91,7 +91,7 @@ export default function WalletManager() {
 
       if (query.step()) {
         const row = query.getAsObject();
-        walletId = row.id;
+        walletId = toNumber(row.id); // Explicitly cast to number
         console.log(`Found wallet ID: ${walletId}`);
       } else {
         console.log('No wallet found in the database.');
@@ -105,7 +105,10 @@ export default function WalletManager() {
     }
   }
 
-  async function setWalletId(mnemonic: string, passphrase: string): number {
+  async function setWalletId(
+    mnemonic: string,
+    passphrase: string
+  ): Promise<number | null> {
     const dbService = DatabaseService();
     const db = dbService.getDatabase();
     if (!db) {
@@ -121,10 +124,8 @@ export default function WalletManager() {
 
       while (query.step()) {
         const row = query.getAsObject();
-        if (row.id) {
-          walletId = row.id;
-          break;
-        }
+        walletId = toNumber(row.id); // Explicitly cast to number
+        break;
       }
       query.free();
       return walletId;
@@ -155,7 +156,7 @@ export default function WalletManager() {
 
       while (query.step()) {
         const row = query.getAsObject();
-        if (row.count > 0) {
+        if (toNumber(row.count) > 0) {
           accountExists = true;
         }
       }
@@ -167,7 +168,7 @@ export default function WalletManager() {
 
       while (queryMnemonic.step()) {
         const rowMnemonic = queryMnemonic.getAsObject();
-        if (rowMnemonic.count > 0) {
+        if (toNumber(rowMnemonic.count) > 0) {
           accountExists = true;
         }
       }
@@ -202,7 +203,7 @@ export default function WalletManager() {
 
     while (query.step()) {
       const row = query.getAsObject();
-      if (row.count > 0) {
+      if (toNumber(row.count) > 0) {
         accountExists = true;
       }
     }
@@ -233,7 +234,7 @@ export default function WalletManager() {
 
       if (query.step()) {
         const row = query.getAsObject();
-        if (row.count > 0) {
+        if (toNumber(row.count) > 0) {
           walletExists = true;
         }
       }

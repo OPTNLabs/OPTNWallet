@@ -1,9 +1,10 @@
 import initSqlJs, { Database } from 'sql.js';
 import { createTables } from '../../utils/schema/schema';
 
+// Define the type for the DB variable
 let db: Database | null = null;
 
-const startDatabase = async () => {
+const startDatabase = async (): Promise<Database | null> => {
   try {
     console.log('Initializing SQL.js...');
     const SQLModule = await initSqlJs({
@@ -33,13 +34,13 @@ const startDatabase = async () => {
   }
 };
 
-const ensureDatabaseStarted = async () => {
+const ensureDatabaseStarted = async (): Promise<void> => {
   if (!db) {
     await startDatabase();
   }
 };
 
-const saveDatabaseToFile = async () => {
+const saveDatabaseToFile = async (): Promise<void> => {
   await ensureDatabaseStarted();
   if (!db) {
     console.log('Database not started.');
@@ -51,9 +52,9 @@ const saveDatabaseToFile = async () => {
   console.log('Database saved to local storage');
 };
 
-const getDatabase = () => db;
+const getDatabase = (): Database | null => db;
 
-const clearDatabase = async () => {
+const clearDatabase = async (): Promise<void> => {
   await ensureDatabaseStarted();
   if (db) {
     db.exec('VACUUM;'); // Ensure all changes are committed
@@ -72,10 +73,11 @@ const clearDatabase = async () => {
   }
 };
 
-const updateSchema = async (db: Database) => {
+const updateSchema = async (db: Database): Promise<void> => {
   const result = db.exec(`
     PRAGMA table_info(instantiated_contracts);
   `);
+
   const columns = result[0].values.map((row) => row[1] as string);
   if (!columns.includes('abi')) {
     db.run(`
@@ -84,17 +86,14 @@ const updateSchema = async (db: Database) => {
   }
 };
 
+// Typing the resultToJSON function, ensuring proper return types
 const resultToJSON = (
   result: (string | undefined)[]
-): {
-  mnemonic: string;
-  passphrase: string;
-} => {
+): { mnemonic: string; passphrase: string } => {
   if (!result || result.length === 0) {
     return { mnemonic: '', passphrase: '' };
   }
 
-  // Assuming the result is an array with two elements: mnemonic and passphrase
   const obj = {
     mnemonic: result[0] as string,
     passphrase: result[1] ? (result[1] as string) : '',
