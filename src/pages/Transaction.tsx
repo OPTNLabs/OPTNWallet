@@ -353,8 +353,9 @@ const Transaction: React.FC = () => {
 
   const buildTransaction = async () => {
     const txBuilder = TransactionBuilderHelper();
-    console.log(`${selectedUtxos}`);
+    console.log(`${JSON.stringify(selectedUtxos)}`);
     console.log(`txOutputs: ${JSON.stringify(outputs, null, 2)}`);
+    console.log(`functionINputs: ${JSON.stringify(functionInputs)}`);
     try {
       setLoading(true); // Show the loader
       const placeholderOutput = {

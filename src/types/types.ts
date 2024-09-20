@@ -8,6 +8,7 @@ export interface UTXO {
   tx_hash: string;
   tx_pos: number;
   value: number;
+  amount?: number;
   prefix?: string; // Default to 'bchtest' for now
   token_data?: {
     amount: string;
