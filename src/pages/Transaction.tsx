@@ -353,9 +353,10 @@ const Transaction: React.FC = () => {
 
   const buildTransaction = async () => {
     const txBuilder = TransactionBuilderHelper();
-    console.log(`${JSON.stringify(selectedUtxos)}`);
+  
     console.log(`txOutputs: ${JSON.stringify(outputs, null, 2)}`);
-    console.log(`functionINputs: ${JSON.stringify(functionInputs)}`);
+    console.log(`functionInputs: ${JSON.stringify(functionInputs)}`);
+  
     try {
       setLoading(true); // Show the loader
       const placeholderOutput = {
@@ -363,72 +364,61 @@ const Transaction: React.FC = () => {
         amount: 546,
       };
       const txOutputs = [...outputs, placeholderOutput];
-
-      console.log(
-        'Building transaction with placeholder output:',
-        placeholderOutput
-      );
+  
       const transaction = await txBuilder.buildTransaction(
         selectedUtxos,
         txOutputs,
         selectedFunction,
-        functionInputs
+        functionInputs // Pass contract function inputs here
       );
-      console.log('Built Transaction with Placeholder:', transaction);
-
+  
       if (transaction) {
         const bytecodeSize = transaction.length / 2;
         setBytecodeSize(bytecodeSize);
-
+  
         const totalUtxoAmount = selectedUtxos.reduce(
           (sum, utxo) => sum + BigInt(utxo.amount),
           BigInt(0)
         );
-
+  
         const totalOutputAmount = outputs.reduce(
           (sum, output) => sum + BigInt(output.amount),
           BigInt(0)
         );
-
+  
         const remainder =
           totalUtxoAmount - totalOutputAmount - BigInt(bytecodeSize);
-
+  
         txOutputs.pop();
-
+  
         if (changeAddress && remainder > BigInt(0)) {
           txOutputs.push({
             recipientAddress: changeAddress,
             amount: Number(remainder),
           });
         }
-
-        console.log('Building final transaction with outputs:', txOutputs);
+  
         const finalTransaction = await txBuilder.buildTransaction(
           selectedUtxos,
           txOutputs,
           selectedFunction,
-          functionInputs
+          functionInputs // Ensure inputs are passed again here
         );
-        console.log(`Selected UTXOs: ${selectedUtxos}`);
-        console.log(`txOutputs: ${JSON.stringify(txOutputs, null, 2)}`);
-        console.log('Final Transaction:', finalTransaction);
+  
         setRawTX(finalTransaction);
         setFinalOutputs(txOutputs);
-        setErrorMessage(null); // Clear any previous error messages
-        setShowRawTxPopup(true); // Show the raw transaction pop-up
-      } else {
-        setRawTX('');
+        setErrorMessage(null);
+        setShowRawTxPopup(true); // Show raw TX pop-up
       }
     } catch (error) {
       console.error('Error building transaction:', error);
       setRawTX('');
       setErrorMessage('Error building transaction: ' + error.message);
-      setRawTX('');
-      setShowRawTxPopup(true); // Show pop-up to display the error
+      setShowRawTxPopup(true); // Show error pop-up
     } finally {
-      setLoading(false); // Hide the loader
+      setLoading(false);
     }
-  };
+  };  
 
   const sendTransaction = async () => {
     const txBuilder = TransactionBuilderHelper();
