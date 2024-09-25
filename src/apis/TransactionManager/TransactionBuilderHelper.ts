@@ -50,7 +50,6 @@ export default function TransactionBuilderHelper() {
           );
 
           // Ensure privateKey exists and is Uint8Array
-
           if (!privateKey || privateKey.length === 0) {
             console.error(
               `Private key not found or empty for address: ${processedUtxo.address}`
@@ -124,6 +123,7 @@ export default function TransactionBuilderHelper() {
     }
   }
 
+  // Ensure proper handling of `SignatureTemplate` for `sig` types
   async function getContractUnlockFunction(
     utxo: UTXO,
     contractFunction: string,
@@ -181,7 +181,9 @@ export default function TransactionBuilderHelper() {
       'ABI function for contractFunction:',
       contractFunction,
       'ABI Function:',
-      abiFunction
+      abiFunction,
+      'Contract Function Inputs',
+      contractFunctionInputs
     );
 
     if (!abiFunction) {
@@ -190,14 +192,16 @@ export default function TransactionBuilderHelper() {
       );
     }
 
-    // Log the contract function inputs before processing
-    console.log('Contract function inputs:', contractFunctionInputs);
-
-    // Create the unlocker for the contract
+    // Ensure that the contract function inputs are mapped correctly
     const unlocker = contract.unlock[contractFunction](
-      ...contractFunctionInputs.map((input) =>
-        input.type === 'sig' ? new SignatureTemplate(input.value) : input.value
-      )
+      ...contractFunctionInputs.map((input) => {
+        if (input.type === 'sig') {
+          // Handle signature input with `SignatureTemplate`
+          return new SignatureTemplate(input.value, HashType.SIGHASH_ALL);
+        } else {
+          return input.value;
+        }
+      })
     );
 
     console.log('Generated unlocker for contract function:', unlocker);
