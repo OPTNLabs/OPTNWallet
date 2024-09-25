@@ -76,7 +76,7 @@
 }
 
 .popup-inner {
-  @apply bg-white p-5 rounded-md shadow-lg w-125 max-w-90;
+  @apply max-h-screen overflow-y-auto bg-white p-5 rounded-md shadow-lg w-125 max-w-90;
 }
 
 :root {
