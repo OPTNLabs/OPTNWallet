@@ -9,11 +9,7 @@ import {
 import { encodePrivateKeyWif } from '@bitauth/libauth';
 import KeyManager from '../apis/WalletManager/KeyManager';
 import { RootState, AppDispatch } from '../redux/store';
-
-// Function to convert a byte array to hex string
-const hexString = (pkh: Uint8Array) => {
-  return Array.from(pkh, (byte) => byte.toString(16).padStart(2, '0')).join('');
-};
+import { hexString } from '../utils/hex';
 
 interface SelectContractFunctionPopupProps {
   contractABI: any[];
