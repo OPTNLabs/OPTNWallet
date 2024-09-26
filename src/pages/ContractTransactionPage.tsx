@@ -131,8 +131,8 @@ const ContractTransactionPage: React.FC = () => {
 
   return (
     <div className="container mx-auto p-4">
-      <h1 className="text-2xl font-bold mb-4">Contract Transactions</h1>
-      <ContractList
+      <h1 className="text-2xl font-bold mb-4">Disable</h1>
+      {/* <ContractList
         contracts={contracts}
         onSelectContract={handleSelectContract}
       />
@@ -157,7 +157,7 @@ const ContractTransactionPage: React.FC = () => {
               ))}
           </ul>
         </div>
-      )}
+      )} */}
     </div>
   );
 };

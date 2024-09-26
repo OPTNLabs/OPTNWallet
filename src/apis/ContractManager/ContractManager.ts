@@ -143,10 +143,16 @@ export default function ContractManager() {
     await dbService.ensureDatabaseStarted();
     const db = dbService.getDatabase();
 
+    console.log('Saving constructor args for:', {
+      address,
+      constructorArgs,
+      balance,
+    });
+
     const insertQuery = `
-      INSERT INTO cashscript_addresses 
-      (address, constructor_args, balance) 
-      VALUES (?, ?, ?)
+        INSERT INTO cashscript_addresses 
+        (address, constructor_args, balance) 
+        VALUES (?, ?, ?)
     `;
     const params = [
       address,
@@ -157,6 +163,8 @@ export default function ContractManager() {
       ),
       balance.toString(),
     ];
+
+    console.log('Insert Query Parameters:', params);
 
     const statement = db.prepare(insertQuery);
     statement.run(params);
@@ -175,12 +183,19 @@ export default function ContractManager() {
     await dbService.ensureDatabaseStarted();
     const db = dbService.getDatabase();
 
-    console.log('balance:', balance);
+    console.log('Saving contract instance:', {
+      contractName,
+      contract,
+      balance,
+      utxos,
+      abi,
+      artifact,
+    });
 
     const insertQuery = `
-      INSERT INTO instantiated_contracts 
-      (contract_name, address, token_address, opcount, bytesize, bytecode, balance, utxos, created_at, artifact, abi, redeemScript, unlock) 
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO instantiated_contracts 
+        (contract_name, address, token_address, opcount, bytesize, bytecode, balance, utxos, created_at, artifact, abi, redeemScript, unlock) 
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `;
     const params = [
       contractName,
@@ -208,7 +223,7 @@ export default function ContractManager() {
       ),
     ];
 
-    console.log('Inserting contract instance with params:', params);
+    console.log('Insert Query Parameters:', params);
 
     const statement = db.prepare(insertQuery);
     statement.run(params);
@@ -231,13 +246,16 @@ export default function ContractManager() {
     await dbService.ensureDatabaseStarted();
     const db = dbService.getDatabase();
 
+    console.log('Fetching contract instances from database');
+
     const query = 'SELECT * FROM instantiated_contracts';
     const statement = db.prepare(query);
 
     const instances = [];
     while (statement.step()) {
       const row = statement.getAsObject();
-      console.log(row);
+      console.log('Fetched Row:', row);
+
       instances.push({
         ...row,
         balance:
@@ -254,17 +272,6 @@ export default function ContractManager() {
         redeemScript: JSON.parse(row.redeemScript),
         unlock: JSON.parse(row.unlock),
       });
-
-      // Recreate the unlock functions
-      if (instances[instances.length - 1].unlock) {
-        const unlockFunctions = {};
-        Object.keys(instances[instances.length - 1].unlock).forEach((key) => {
-          unlockFunctions[key] = new Function(
-            'return ' + instances[instances.length - 1].unlock[key]
-          )();
-        });
-        instances[instances.length - 1].unlock = unlockFunctions;
-      }
     }
     statement.free();
     return instances;
@@ -327,6 +334,9 @@ export default function ContractManager() {
       if (!artifact) {
         throw new Error(`Artifact ${artifactName} not found`);
       }
+
+      console.log('Loaded artifact:', artifact);
+
       return artifact;
     } catch (error) {
       console.error('Error loading artifact:', error);
@@ -427,10 +437,10 @@ export default function ContractManager() {
         amount: BigInt(utxo.value),
         height: utxo.height,
         token: utxo.token_data ? utxo.token_data : null,
-        prefix: 'bchtest', // Ensure prefix is provided
+        prefix: 'bchtest',
       }));
 
-      console.log('Fetched UTXOs:', formattedUTXOs);
+      console.log('Fetched UTXOs from Electrum:', formattedUTXOs);
 
       await dbService.ensureDatabaseStarted();
       const db = dbService.getDatabase();
@@ -446,6 +456,8 @@ export default function ContractManager() {
         existingUTXOs.push(row);
       }
       statement.free();
+
+      console.log('Existing UTXOs from Database:', existingUTXOs);
 
       // Identify UTXOs to add or remove
       const newUTXOs = formattedUTXOs.filter(
@@ -466,16 +478,16 @@ export default function ContractManager() {
           )
       );
 
-      console.log('New UTXOs:', newUTXOs);
-      console.log('Stale UTXOs:', staleUTXOs);
+      console.log('New UTXOs to add:', newUTXOs);
+      console.log('Stale UTXOs to remove:', staleUTXOs);
 
       // Add new UTXOs to the database
       const insertQuery = `
-        INSERT INTO UTXOs (address, height, tx_hash, tx_pos, amount, token_data, prefix) 
-        VALUES (?, ?, ?, ?, ?, ?, ?)
-      `;
+            INSERT INTO UTXOs (address, height, tx_hash, tx_pos, amount, token_data, prefix) 
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+        `;
       for (const utxo of newUTXOs) {
-        console.log('Adding UTXO:', utxo);
+        console.log('Inserting new UTXO into database:', utxo);
         const insertStatement = db.prepare(insertQuery);
         insertStatement.run([
           address,
@@ -493,11 +505,56 @@ export default function ContractManager() {
       const deleteQuery =
         'DELETE FROM UTXOs WHERE address = ? AND tx_hash = ? AND tx_pos = ?';
       for (const utxo of staleUTXOs) {
-        console.log('Removing stale UTXO:', utxo);
+        console.log('Deleting stale UTXO from database:', utxo);
         const deleteStatement = db.prepare(deleteQuery);
         deleteStatement.run([address, utxo.tx_hash, utxo.tx_pos]);
         deleteStatement.free();
       }
+
+      // Fetch the updated UTXOs from the database to update the `instantiated_contracts` table
+      const updatedUtxosQuery = 'SELECT * FROM UTXOs WHERE address = ?';
+      const updatedStatement = db.prepare(updatedUtxosQuery);
+      updatedStatement.bind([address]);
+
+      const updatedUtxos = [];
+      while (updatedStatement.step()) {
+        const row = updatedStatement.getAsObject();
+        updatedUtxos.push({
+          tx_hash: row.tx_hash,
+          tx_pos: row.tx_pos,
+          amount: BigInt(row.amount), // Convert back to BigInt
+          height: row.height,
+          token_data: row.token_data ? JSON.parse(row.token_data) : null,
+        });
+      }
+      updatedStatement.free();
+
+      console.log('Updated UTXOs:', updatedUtxos);
+
+      // Update the `instantiated_contracts` table with the new UTXOs
+      const updateContractQuery = `
+            UPDATE instantiated_contracts 
+            SET utxos = ? 
+            WHERE address = ?
+        `;
+      const updateParams = [
+        JSON.stringify(
+          updatedUtxos.map((utxo) => ({
+            ...utxo,
+            amount: utxo.amount.toString(), // Convert BigInt to string for storage
+          }))
+        ),
+        address,
+      ];
+
+      console.log(
+        'Updating instantiated_contracts with new UTXOs:',
+        updateParams
+      );
+
+      const updateStatement = db.prepare(updateContractQuery);
+      updateStatement.run(updateParams);
+      updateStatement.free();
 
       await dbService.saveDatabaseToFile();
       return { added: newUTXOs.length, removed: staleUTXOs.length };
