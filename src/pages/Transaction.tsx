@@ -353,10 +353,10 @@ const Transaction: React.FC = () => {
 
   const buildTransaction = async () => {
     const txBuilder = TransactionBuilderHelper();
-  
+
     console.log(`txOutputs: ${JSON.stringify(outputs, null, 2)}`);
-    console.log(`functionInputs: ${JSON.stringify(functionInputs)}`);
-  
+    console.log(`functionInputs: ${JSON.stringify(contractFunctionInputs)}`);
+
     try {
       setLoading(true); // Show the loader
       const placeholderOutput = {
@@ -364,47 +364,49 @@ const Transaction: React.FC = () => {
         amount: 546,
       };
       const txOutputs = [...outputs, placeholderOutput];
-  
+
       const transaction = await txBuilder.buildTransaction(
         selectedUtxos,
         txOutputs,
         selectedFunction,
-        functionInputs // Pass contract function inputs here
+        contractFunctionInputs // Pass contract function inputs here
       );
-  
+
       if (transaction) {
         const bytecodeSize = transaction.length / 2;
         setBytecodeSize(bytecodeSize);
-  
+
         const totalUtxoAmount = selectedUtxos.reduce(
           (sum, utxo) => sum + BigInt(utxo.amount),
           BigInt(0)
         );
-  
+
         const totalOutputAmount = outputs.reduce(
           (sum, output) => sum + BigInt(output.amount),
           BigInt(0)
         );
-  
+
         const remainder =
           totalUtxoAmount - totalOutputAmount - BigInt(bytecodeSize);
-  
+
         txOutputs.pop();
-  
+
         if (changeAddress && remainder > BigInt(0)) {
           txOutputs.push({
             recipientAddress: changeAddress,
             amount: Number(remainder),
           });
         }
-  
+
+        console.log('txbuilder: ', txBuilder);
+
         const finalTransaction = await txBuilder.buildTransaction(
           selectedUtxos,
           txOutputs,
           selectedFunction,
-          functionInputs // Ensure inputs are passed again here
+          contractFunctionInputs // Ensure inputs are passed again here
         );
-  
+
         setRawTX(finalTransaction);
         setFinalOutputs(txOutputs);
         setErrorMessage(null);
@@ -418,7 +420,7 @@ const Transaction: React.FC = () => {
     } finally {
       setLoading(false);
     }
-  };  
+  };
 
   const sendTransaction = async () => {
     const txBuilder = TransactionBuilderHelper();

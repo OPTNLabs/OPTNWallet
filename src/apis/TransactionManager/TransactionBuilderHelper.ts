@@ -194,12 +194,17 @@ export default function TransactionBuilderHelper() {
 
     // Ensure that the contract function inputs are mapped correctly
     const unlocker = contract.unlock[contractFunction](
-      ...contractFunctionInputs.map((input) => {
-        if (input.type === 'sig') {
+      ...abiFunction.inputs.map((input) => {
+        // Get the corresponding value from contractFunctionInputs using the input name
+        const inputValue = contractFunctionInputs[input.name];
+
+        // Check if the input name is 's' (for signature)
+        if (input.name === 's') {
           // Handle signature input with `SignatureTemplate`
-          return new SignatureTemplate(input.value, HashType.SIGHASH_ALL);
+          return new SignatureTemplate(inputValue, HashType.SIGHASH_ALL);
         } else {
-          return input.value;
+          // For other inputs, return the value directly
+          return inputValue;
         }
       })
     );

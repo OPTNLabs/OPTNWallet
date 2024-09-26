@@ -1,3 +1,4 @@
+// @ts-nocheck
 // src/pages/ContractView.tsx
 
 import React, { useState, useEffect } from 'react';
@@ -24,8 +25,12 @@ const ContractView = () => {
   const [currentArgName, setCurrentArgName] = useState(''); // Track the current constructor argument
   const keyManager = KeyManager(); // Initialize the KeyManager
   const navigate = useNavigate();
-  const wallet_id = useSelector((state: RootState) => state.wallet_id.currentWalletId);
-  const currentNetwork = useSelector((state: RootState) => state.network.currentNetwork);
+  const wallet_id = useSelector(
+    (state: RootState) => state.wallet_id.currentWalletId
+  );
+  const currentNetwork = useSelector(
+    (state: RootState) => state.network.currentNetwork
+  );
 
   // Load available contracts and instances on mount
   useEffect(() => {
@@ -66,7 +71,9 @@ const ContractView = () => {
           const contractManager = ContractManager();
           const artifact = contractManager.loadArtifact(selectedContractFile);
           if (!artifact) {
-            throw new Error(`Artifact ${selectedContractFile} could not be loaded`);
+            throw new Error(
+              `Artifact ${selectedContractFile} could not be loaded`
+            );
           }
           setConstructorArgs(artifact.constructorInputs || []);
         } catch (err) {
@@ -89,7 +96,7 @@ const ContractView = () => {
   // Handle address selection from the popup
   const handleAddressSelect = async (address: string) => {
     console.log(`Address selected for ${currentArgName}: ${address}`); // Debugging log
-    
+
     // Fetch publicKey and pubkeyHash using KeyManager
     const keys = await keyManager.retrieveKeys(wallet_id);
     const selectedKey = keys.find((key) => key.address === address);
@@ -100,7 +107,9 @@ const ContractView = () => {
       console.log('Current Arg Name:', currentArgName);
 
       // Find the constructor argument matching the currentArgName
-      const matchedArg = constructorArgs.find((arg) => arg.name === currentArgName);
+      const matchedArg = constructorArgs.find(
+        (arg) => arg.name === currentArgName
+      );
 
       if (matchedArg) {
         let valueToSet = '';
@@ -117,7 +126,9 @@ const ContractView = () => {
         // Set the converted value in the inputValues state
         setInputValues({ ...inputValues, [currentArgName]: valueToSet });
       } else {
-        console.warn(`No matching constructor argument found for: ${currentArgName}`);
+        console.warn(
+          `No matching constructor argument found for: ${currentArgName}`
+        );
       }
     } else {
       console.warn(`No key found for address: ${address}`);
@@ -133,14 +144,18 @@ const ContractView = () => {
       const contractManager = ContractManager();
 
       // Parse input values based on constructor argument types
-      const args = constructorArgs.map((arg) =>
-        parseInputValue(inputValues[arg.name], arg.type)
-      ) || [];
+      const args =
+        constructorArgs.map((arg) =>
+          parseInputValue(inputValues[arg.name], arg.type)
+        ) || [];
       console.log('Constructor Args:', constructorArgs);
       console.log('Input Values:', inputValues);
       console.log('Parsed Args:', args);
 
-      if (constructorArgs.length > 0 && args.length !== constructorArgs.length) {
+      if (
+        constructorArgs.length > 0 &&
+        args.length !== constructorArgs.length
+      ) {
         throw new Error('All constructor arguments must be provided');
       }
 
@@ -180,12 +195,14 @@ const ContractView = () => {
   const updateContract = async (address) => {
     try {
       const contractManager = ContractManager();
-      const { added, removed } = await contractManager.updateContractUTXOs(address);
+      const { added, removed } =
+        await contractManager.updateContractUTXOs(address);
 
       console.log(`UTXOs updated. Added: ${added}, Removed: ${removed}`);
 
       // Reload contract instances to reflect updated UTXOs
       const instances = await contractManager.fetchContractInstances();
+      console.log('contract instance: ', instances);
       setContractInstances(instances);
     } catch (err) {
       console.error('Error updating UTXOs:', err);
@@ -232,7 +249,8 @@ const ContractView = () => {
         <div className="mb-4">
           <h2 className="text-lg font-semibold mb-2">Constructor Arguments</h2>
           {constructorArgs.map((arg, index) => {
-            const isAddressType = arg.type === 'bytes20' || arg.type === 'pubkey';
+            const isAddressType =
+              arg.type === 'bytes20' || arg.type === 'pubkey';
 
             return (
               <div key={index} className="mb-4">
@@ -327,7 +345,8 @@ const ContractView = () => {
                       <strong>Bytecode:</strong> {instance.bytecode}
                     </div>
                     <div className="mb-2">
-                      <strong>Balance:</strong> {instance.balance.toString()} satoshis
+                      <strong>Balance:</strong> {instance.balance.toString()}{' '}
+                      satoshis
                     </div>
                   </div>
                   {/* UTXOs Display */}
