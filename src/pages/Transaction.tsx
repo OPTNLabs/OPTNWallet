@@ -21,7 +21,7 @@ import {
 import { RootState, AppDispatch } from '../redux/store';
 import {
   setSelectedFunction,
-  setInputs,
+  // setInputs,
   setInputValues,
 } from '../redux/contractSlice';
 import { addTxOutput, removeTxOutput } from '../redux/transactionBuilderSlice';
