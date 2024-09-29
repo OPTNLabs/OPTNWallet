@@ -5,7 +5,7 @@ import {
   setSelectedFunction,
   setInputs,
   setInputValues,
-} from '../redux/contractSlice';
+} from '../redux/contractSlice'; // Importing actions from contractSlice
 import { encodePrivateKeyWif } from '@bitauth/libauth';
 import KeyManager from '../apis/WalletManager/KeyManager';
 import { RootState, AppDispatch } from '../redux/store';
@@ -29,9 +29,6 @@ const SelectContractFunctionPopup: React.FC<
   const [inputValues, setInputValuesState] = useState<{
     [key: string]: string;
   }>({});
-  const [placeholders, setPlaceholders] = useState<{ [key: string]: string }>(
-    {}
-  );
   const [showAddressPopup, setShowAddressPopup] = useState<boolean>(false);
   const [selectedInput, setSelectedInput] = useState<string | null>(null);
 
@@ -70,7 +67,6 @@ const SelectContractFunctionPopup: React.FC<
     );
     setInputsState(functionAbi?.inputs || []);
     setInputValuesState({});
-    setPlaceholders({});
   };
 
   const handleInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -83,19 +79,10 @@ const SelectContractFunctionPopup: React.FC<
     console.log('Inputs:', inputs);
     console.log('Input values before dispatch:', inputValues);
 
-    // Merge input values with placeholders to get the final input values object
+    // Prepare the input values object
     const inputValuesObject = inputs.reduce<{ [key: string]: string }>(
       (acc, input) => {
-        // Map placeholders 'pubkey' to 'pk' and 'sig' to 's'
-        if (input.name === 'pk') {
-          acc[input.name] =
-            inputValues[input.name] || placeholders['pubkey'] || '';
-        } else if (input.name === 's') {
-          acc[input.name] =
-            inputValues[input.name] || placeholders['sig'] || '';
-        } else {
-          acc[input.name] = inputValues[input.name] || '';
-        }
+        acc[input.name] = inputValues[input.name] || '';
         return acc;
       },
       {}
@@ -104,11 +91,11 @@ const SelectContractFunctionPopup: React.FC<
     console.log('Dispatching input values object:', inputValuesObject);
 
     try {
-      dispatch(setSelectedFunction(selectedFunction));
-      dispatch(setInputs(inputs)); // Ensure this is always an array
-      dispatch(setInputValues(inputValuesObject));
+      dispatch(setSelectedFunction(selectedFunction)); // Dispatch the selected function
+      dispatch(setInputs(inputs)); // Dispatch the inputs (ABI details)
+      dispatch(setInputValues(inputValuesObject)); // Dispatch the input values
 
-      onFunctionSelect(selectedFunction, inputValuesObject);
+      onFunctionSelect(selectedFunction, inputValuesObject); // Pass the data to the parent component
 
       // Close the popup
       onClose();
@@ -136,18 +123,18 @@ const SelectContractFunctionPopup: React.FC<
         console.log('Fetched publicKeyHex:', publicKeyHex);
         console.log('Fetched privateKeyWif:', privateKeyWif);
 
-        setPlaceholders((prev) => {
-          const updatedPlaceholders = { ...prev };
-          if (selectedInput === 'pubkey') {
-            updatedPlaceholders['pubkey'] = publicKeyHex;
-          } else if (selectedInput === 'sig') {
-            updatedPlaceholders['sig'] = privateKeyWif;
+        setInputValuesState((prev) => {
+          const updatedValues = { ...prev };
+          if (selectedInput === 'pk') {
+            updatedValues['pk'] = publicKeyHex; // Set publicKeyHex for 'pk'
+          } else if (selectedInput === 's') {
+            updatedValues['s'] = privateKeyWif; // Set privateKeyWif for 's'
           }
-          console.log(
-            'Updated placeholders after fetching keys:',
-            updatedPlaceholders
-          );
-          return updatedPlaceholders;
+
+          // Dispatch the updated values to the Redux store
+          dispatch(setInputValues(updatedValues));
+
+          return updatedValues;
         });
       } else {
         console.error(`No keys found for address: ${address}`);
@@ -160,6 +147,7 @@ const SelectContractFunctionPopup: React.FC<
   const handleAddressSelect = (address: string) => {
     console.log('Address clicked:', address);
     fetchKeysForAddress(address);
+    setShowAddressPopup(false);
   };
 
   const openAddressPopup = (inputType: string) => {
@@ -193,19 +181,14 @@ const SelectContractFunctionPopup: React.FC<
                 <input
                   type="text"
                   name={input.name}
-                  value={
-                    inputValues[input.name] || placeholders[input.name] || ''
-                  }
+                  value={inputValues[input.name] || ''}
                   onChange={handleInputChange}
                   className="border p-2 w-full"
-                  placeholder={
-                    placeholders[input.name] || `Enter ${input.name}`
-                  }
                 />
                 {(input.type === 'pubkey' || input.type === 'sig') && (
                   <button
                     className="bg-blue-500 text-white py-1 px-2 rounded mt-2"
-                    onClick={() => openAddressPopup(input.type)}
+                    onClick={() => openAddressPopup(input.name)}
                   >
                     Select {input.type}
                   </button>
