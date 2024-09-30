@@ -31,6 +31,7 @@ export const createTables = (db: any) => {
       wallet_name VARCHAR(255),
       mnemonic TEXT,
       passphrase TEXT,
+      networkType TEXT,
       balance INT
     );
   `);

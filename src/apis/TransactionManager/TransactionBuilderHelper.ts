@@ -11,6 +11,7 @@ import ContractManager from '../ContractManager/ContractManager';
 import KeyManager from '../WalletManager/KeyManager';
 import { bigIntToString, stringToBigInt } from '../../utils/bigIntConversion';
 import parseInputValue from '../../utils/parseInputValue';
+import { useSelector } from 'react-redux';
 
 export interface UTXO {
   tx_hash: string;
@@ -34,7 +35,11 @@ export interface TransactionOutput {
 }
 
 export default function TransactionBuilderHelper() {
-  const provider = new ElectrumNetworkProvider(Network.CHIPNET);
+  const currentNetwork = useSelector(
+    (state: RootState) => state.network.currentNetwork
+  );
+
+  const provider = new ElectrumNetworkProvider(currentNetwork);
   const contractManager = ContractManager();
   const keyManager = KeyManager();
 

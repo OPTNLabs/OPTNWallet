@@ -3,6 +3,7 @@ import { hexToBin } from '@bitauth/libauth';
 import KeyManager from './KeyManager';
 import { createTables } from '../../utils/schema/schema';
 import DatabaseService from '../DatabaseManager/DatabaseService';
+import { Network } from '../../redux/networkSlice';
 
 const KeyManage = KeyManager();
 
@@ -184,7 +185,8 @@ export default function WalletManager() {
   async function createWallet(
     wallet_name: string,
     mnemonic: string,
-    passphrase: string
+    passphrase: string,
+    networkType: Network
   ): Promise<boolean> {
     const dbService = DatabaseService();
     const db = dbService.getDatabase();
@@ -211,9 +213,9 @@ export default function WalletManager() {
       return false;
     }
     const createAccountQuery = db.prepare(
-      'INSERT INTO wallets (wallet_name, mnemonic, passphrase, balance) VALUES (?, ?, ?, ?);'
+      'INSERT INTO wallets (wallet_name, mnemonic, passphrase, networkType, balance) VALUES (?, ?, ?, ?, ?);'
     );
-    createAccountQuery.run([wallet_name, mnemonic, passphrase, 0]);
+    createAccountQuery.run([wallet_name, mnemonic, passphrase, networkType, 0]);
     createAccountQuery.free();
     await dbService.saveDatabaseToFile();
     return true;
