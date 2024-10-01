@@ -11,6 +11,11 @@ import KeyManager from '../apis/WalletManager/KeyManager';
 import { RootState, AppDispatch } from '../redux/store';
 import { hexString } from '../utils/hex';
 
+interface AbiInput {
+  name: string;
+  type: string;
+}
+
 interface SelectContractFunctionPopupProps {
   contractABI: any[];
   onClose: () => void;
@@ -25,12 +30,12 @@ const SelectContractFunctionPopup: React.FC<
 > = ({ contractABI, onClose, onFunctionSelect }) => {
   const [functions, setFunctions] = useState<any[]>([]);
   const [selectedFunction, setSelectedFunctionState] = useState<string>('');
-  const [inputs, setInputsState] = useState<any[]>([]);
+  const [inputs, setInputsState] = useState<AbiInput[]>([]);
   const [inputValues, setInputValuesState] = useState<{
     [key: string]: string;
   }>({});
   const [showAddressPopup, setShowAddressPopup] = useState<boolean>(false);
-  const [selectedInput, setSelectedInput] = useState<string | null>(null);
+  const [selectedInput, setSelectedInput] = useState<AbiInput | null>(null);
 
   const keyManager = KeyManager();
   const dispatch: AppDispatch = useDispatch();
@@ -125,10 +130,12 @@ const SelectContractFunctionPopup: React.FC<
 
         setInputValuesState((prev) => {
           const updatedValues = { ...prev };
-          if (selectedInput === 'pk') {
-            updatedValues['pk'] = publicKeyHex; // Set publicKeyHex for 'pk'
-          } else if (selectedInput === 's') {
-            updatedValues['s'] = privateKeyWif; // Set privateKeyWif for 's'
+
+          // Use the "type" field to determine if the input is a public key or a signature
+          if (selectedInput?.type === 'pubkey') {
+            updatedValues[selectedInput.name] = publicKeyHex; // Set publicKeyHex for 'pubkey'
+          } else if (selectedInput?.type === 'sig') {
+            updatedValues[selectedInput.name] = privateKeyWif; // Set privateKeyWif for 'sig'
           }
 
           // Dispatch the updated values to the Redux store
@@ -150,8 +157,8 @@ const SelectContractFunctionPopup: React.FC<
     setShowAddressPopup(false);
   };
 
-  const openAddressPopup = (inputType: string) => {
-    setSelectedInput(inputType);
+  const openAddressPopup = (input: AbiInput) => {
+    setSelectedInput(input); // Set the entire AbiInput, so we can access both name and type
     setShowAddressPopup(true);
   };
 
@@ -188,7 +195,7 @@ const SelectContractFunctionPopup: React.FC<
                 {(input.type === 'pubkey' || input.type === 'sig') && (
                   <button
                     className="bg-blue-500 text-white py-1 px-2 rounded mt-2"
-                    onClick={() => openAddressPopup(input.name)}
+                    onClick={() => openAddressPopup(input)} // Pass the entire AbiInput object
                   >
                     Select {input.type}
                   </button>
