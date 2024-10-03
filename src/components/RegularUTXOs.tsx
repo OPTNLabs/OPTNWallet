@@ -1,5 +1,4 @@
 const RegularUTXOs = ({ utxos, loading }) => {
-  console.log('UTXOs:', utxos);
   return (
     <div>
       <h4 className="font-semibold">Regular UTXOs:</h4>
