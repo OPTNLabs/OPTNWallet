@@ -1,4 +1,3 @@
-// @ts-nocheck
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useSelector, useDispatch } from 'react-redux';
@@ -26,12 +25,6 @@ import {
 } from '../redux/contractSlice';
 import { addTxOutput, removeTxOutput } from '../redux/transactionBuilderSlice';
 
-interface ExtendedUTXO extends UTXO {
-  id: string;
-  height: number;
-  unlocker?: any;
-}
-
 const Transaction: React.FC = () => {
   const [walletId, setWalletId] = useState<number | null>(null);
   const [addresses, setAddresses] = useState<
@@ -46,8 +39,9 @@ const Transaction: React.FC = () => {
     }[]
   >([]);
   const [selectedAddresses, setSelectedAddresses] = useState<string[]>([]);
-  const [utxos, setUtxos] = useState<ExtendedUTXO[]>([]);
-  const [selectedUtxos, setSelectedUtxos] = useState<ExtendedUTXO[]>([]);
+  const [utxos, setUtxos] = useState<UTXO[]>([]);
+  const [selectedUtxos, setSelectedUtxos] = useState<UTXO[]>([]);
+  const [tempUtxos, setTempUtxos] = useState<UTXO>();
   const [outputs, setOutputs] = useState<TransactionOutput[]>([]);
   const [recipientAddress, setRecipientAddress] = useState<string>('');
   const [transferAmount, setTransferAmount] = useState<number | string>('');
@@ -71,7 +65,7 @@ const Transaction: React.FC = () => {
   const [contractFunctionInputs, setContractFunctionInputs] = useState<
     any[] | null
   >(null);
-  const [contractUTXOs, setContractUTXOs] = useState<ExtendedUTXO[]>([]);
+  const [contractUTXOs, setContractUTXOs] = useState<UTXO[]>([]);
   const [currentContractABI, setCurrentContractABI] = useState<any[]>([]);
   const [errorMessage, setErrorMessage] = useState<string | null>(null); // State for error messages
   const [showWalletAddressesPopup, setShowWalletAddressesPopup] =
@@ -136,7 +130,7 @@ const Transaction: React.FC = () => {
       const utxosQuery = `SELECT * FROM UTXOs WHERE wallet_id = ?`;
       const utxosStatement = db.prepare(utxosQuery);
       utxosStatement.bind([walletId]);
-      const fetchedUTXOs: ExtendedUTXO[] = [];
+      const fetchedUTXOs: UTXO[] = [];
       while (utxosStatement.step()) {
         const row = utxosStatement.getAsObject();
         const addressInfo = fetchedAddresses.find(
@@ -271,7 +265,7 @@ const Transaction: React.FC = () => {
     }
   };
 
-  const handleUtxoClick = async (utxo: ExtendedUTXO) => {
+  const handleUtxoClick = async (utxo: UTXO) => {
     console.log('Selected UTXOs before function inputs:', selectedUtxos);
     const isSelected = selectedUtxos.some(
       (selectedUtxo) => selectedUtxo.id === utxo.id
@@ -283,6 +277,8 @@ const Transaction: React.FC = () => {
       );
     } else {
       if (utxo.abi) {
+        console.log('contract utxo: ', utxo);
+        setTempUtxos(utxo);
         setCurrentContractABI(utxo.abi);
         setShowPopup(true);
         // Store UTXO temporarily until function is selected
@@ -493,7 +489,11 @@ const Transaction: React.FC = () => {
 
     // Find the matching UTXO and update it with unlocker
     const utxoIndex = utxos.findIndex(
-      (utxo) => utxo.abi && utxo.abi === currentContractABI
+      (utxo) =>
+        utxo.abi &&
+        utxo.abi === currentContractABI &&
+        utxo.tx_pos === tempUtxos.tx_pos &&
+        utxo.tx_hash === tempUtxos.tx_hash
     );
 
     if (utxoIndex !== -1) {
