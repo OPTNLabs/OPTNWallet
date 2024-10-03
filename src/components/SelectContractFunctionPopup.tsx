@@ -125,8 +125,8 @@ const SelectContractFunctionPopup: React.FC<
           'testnet'
         );
 
-        console.log('Fetched publicKeyHex:', publicKeyHex);
-        console.log('Fetched privateKeyWif:', privateKeyWif);
+        // console.log('Fetched publicKeyHex:', publicKeyHex);
+        // console.log('Fetched privateKeyWif:', privateKeyWif);
 
         setInputValuesState((prev) => {
           const updatedValues = { ...prev };

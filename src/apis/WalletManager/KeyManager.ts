@@ -61,7 +61,7 @@ export default function KeyManager() {
       while (statement.step()) {
         const row = statement.getAsObject();
 
-        console.log('Retrieved raw row from keys table:', row); // Log each row
+        // console.log('Retrieved raw row from keys table:', row); // Log each row
 
         const publicKey = isArrayBufferLike(row.public_key)
           ? new Uint8Array(row.public_key)
@@ -93,13 +93,13 @@ export default function KeyManager() {
           addressIndex: row.address_index as number,
         };
 
-        console.log('Formatted key data:', keyData); // Log the formatted key data
+        // console.log('Formatted key data:', keyData); // Log the formatted key data
 
         result.push(keyData);
       }
 
       statement.free();
-      console.log('Keys retrieved:', result); // Log the full result
+      // console.log('Keys retrieved:', result); // Log the full result
       return result;
     } catch (error) {
       console.error('Error retrieving keys:', error);
