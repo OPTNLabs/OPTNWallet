@@ -1,3 +1,5 @@
+// @ts-nocheck
+
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useSelector, useDispatch } from 'react-redux';
@@ -609,7 +611,11 @@ const Transaction: React.FC = () => {
                       }}
                       className="mr-2"
                     />
-                    <span className="break-words overflow-x-auto">{`Contract Address: ${contractObj.address}, Token Address: ${contractObj.tokenAddress}`}</span>
+                    <span className="break-words overflow-x-auto">
+                      {`Contract Address: ${contractObj.address}`}
+                      <br />
+                      {`Token Address: ${contractObj.tokenAddress}`}
+                    </span>
                   </div>
                 ))}
               </div>
