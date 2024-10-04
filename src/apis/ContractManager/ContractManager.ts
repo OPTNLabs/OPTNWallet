@@ -430,6 +430,7 @@ export default function ContractManager() {
 
   async function updateContractUTXOs(address) {
     try {
+      // Fetch UTXOs for the given address
       const utxos = await electrum.getUTXOS(address);
       const formattedUTXOs = utxos.map((utxo) => ({
         tx_hash: utxo.tx_hash,
@@ -445,6 +446,50 @@ export default function ContractManager() {
       await dbService.ensureDatabaseStarted();
       const db = dbService.getDatabase();
 
+      // Get the contract instance by address
+      const contractInstance = await getContractInstanceByAddress(address);
+      if (!contractInstance) {
+        throw new Error(`Contract instance not found for address: ${address}`);
+      }
+
+      const contractName = contractInstance.contract_name;
+      console.log(
+        `Found contract instance for address ${address} with name ${contractName}`
+      );
+
+      // Fetch the contract artifact
+      const artifact = await getContractArtifact(contractName);
+      if (!artifact) {
+        throw new Error(`Artifact not found for contract: ${contractName}`);
+      }
+
+      // Fetch the constructor arguments for the contract instance
+      const constructorArgs = await fetchConstructorArgs(address);
+      if (!constructorArgs || constructorArgs.length === 0) {
+        throw new Error(
+          `Constructor arguments not found for contract at address: ${address}`
+        );
+      }
+
+      // Cross-reference constructor arguments with the artifact's constructor inputs
+      const parsedConstructorArgs = constructorArgs.map((arg, index) => {
+        const inputType = artifact.constructorInputs[index].type;
+
+        // Use parseInputValue to correctly convert the argument based on the input type
+        return parseInputValue(arg, inputType);
+      });
+
+      console.log('Parsed Constructor Arguments:', parsedConstructorArgs);
+
+      // Create the contract instance using the artifact and parsed constructor arguments
+      const contract = new Contract(artifact, parsedConstructorArgs, {
+        provider: new ElectrumNetworkProvider(contractInstance.network),
+      });
+
+      // Get updated balance
+      const updatedBalance = await contract.getBalance();
+      console.log('Updated Contract Balance:', updatedBalance);
+
       // Fetch existing UTXOs from the database for this address
       const query = 'SELECT tx_hash, tx_pos FROM UTXOs WHERE address = ?';
       const statement = db.prepare(query);
@@ -456,8 +501,6 @@ export default function ContractManager() {
         existingUTXOs.push(row);
       }
       statement.free();
-
-      console.log('Existing UTXOs from Database:', existingUTXOs);
 
       // Identify UTXOs to add or remove
       const newUTXOs = formattedUTXOs.filter(
@@ -478,16 +521,12 @@ export default function ContractManager() {
           )
       );
 
-      console.log('New UTXOs to add:', newUTXOs);
-      console.log('Stale UTXOs to remove:', staleUTXOs);
-
       // Add new UTXOs to the database
       const insertQuery = `
             INSERT INTO UTXOs (address, height, tx_hash, tx_pos, amount, token_data, prefix) 
             VALUES (?, ?, ?, ?, ?, ?, ?)
         `;
       for (const utxo of newUTXOs) {
-        console.log('Inserting new UTXO into database:', utxo);
         const insertStatement = db.prepare(insertQuery);
         insertStatement.run([
           address,
@@ -505,52 +544,27 @@ export default function ContractManager() {
       const deleteQuery =
         'DELETE FROM UTXOs WHERE address = ? AND tx_hash = ? AND tx_pos = ?';
       for (const utxo of staleUTXOs) {
-        console.log('Deleting stale UTXO from database:', utxo);
         const deleteStatement = db.prepare(deleteQuery);
         deleteStatement.run([address, utxo.tx_hash, utxo.tx_pos]);
         deleteStatement.free();
       }
 
-      // Fetch the updated UTXOs from the database to update the `instantiated_contracts` table
-      const updatedUtxosQuery = 'SELECT * FROM UTXOs WHERE address = ?';
-      const updatedStatement = db.prepare(updatedUtxosQuery);
-      updatedStatement.bind([address]);
-
-      const updatedUtxos = [];
-      while (updatedStatement.step()) {
-        const row = updatedStatement.getAsObject();
-        updatedUtxos.push({
-          tx_hash: row.tx_hash,
-          tx_pos: row.tx_pos,
-          amount: BigInt(row.amount), // Convert back to BigInt
-          height: row.height,
-          token_data: row.token_data ? JSON.parse(row.token_data) : null,
-        });
-      }
-      updatedStatement.free();
-
-      console.log('Updated UTXOs:', updatedUtxos);
-
-      // Update the `instantiated_contracts` table with the new UTXOs
+      // Update the `instantiated_contracts` table with the new UTXOs and balance
       const updateContractQuery = `
             UPDATE instantiated_contracts 
-            SET utxos = ? 
+            SET utxos = ?, balance = ? 
             WHERE address = ?
         `;
       const updateParams = [
         JSON.stringify(
-          updatedUtxos.map((utxo) => ({
+          formattedUTXOs.map((utxo) => ({
             ...utxo,
-            amount: utxo.amount.toString(), // Convert BigInt to string for storage
+            amount: utxo.amount.toString(),
           }))
         ),
+        updatedBalance.toString(),
         address,
       ];
-
-      console.log(
-        'Updating instantiated_contracts with new UTXOs:',
-        updateParams
-      );
 
       const updateStatement = db.prepare(updateContractQuery);
       updateStatement.run(updateParams);
@@ -559,7 +573,7 @@ export default function ContractManager() {
       await dbService.saveDatabaseToFile();
       return { added: newUTXOs.length, removed: staleUTXOs.length };
     } catch (error) {
-      console.error('Error updating UTXOs:', error);
+      console.error('Error updating UTXOs and balance:', error);
       throw error;
     }
   }
