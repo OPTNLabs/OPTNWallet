@@ -2,11 +2,18 @@
 import { UTXOs } from '../types';
 import DatabaseService from '../DatabaseManager/DatabaseService';
 import ElectrumService from '../ElectrumServer/ElectrumServer';
+import { Network } from '../../redux/networkSlice';
+import { store } from '../../redux/store';
 
 export default async function UTXOManager() {
   const dbService = DatabaseService();
   await dbService.ensureDatabaseStarted();
   const Electrum = ElectrumService();
+  const state = store.getState();
+  const prefix =
+    state.network.currentNetwork === Network.MAINNET
+      ? 'bitcoincash'
+      : 'bchtest';
 
   return {
     storeUTXOs,
@@ -68,7 +75,7 @@ export default async function UTXOManager() {
         amount: utxo.value,
         address: address,
         height: utxo.height,
-        prefix: 'bchtest',
+        prefix,
         token_data: utxo.token_data ? JSON.stringify(utxo.token_data) : null,
       }));
 
@@ -191,7 +198,7 @@ export default async function UTXOManager() {
           tx_hash: utxo.tx_hash,
           tx_pos: utxo.tx_pos,
           amount: utxo.value,
-          prefix: 'bchtest',
+          prefix,
           token_data: utxo.token_data ? JSON.stringify(utxo.token_data) : null,
         }));
 
