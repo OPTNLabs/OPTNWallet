@@ -1,5 +1,8 @@
-// @ts-nocheck
-import React, { useState, useEffect } from 'react';
+import {
+  // React,
+  useState,
+  useEffect,
+} from 'react';
 import { useSelector } from 'react-redux';
 import { useNavigate } from 'react-router-dom';
 import ContractManager from '../apis/ContractManager/ContractManager';
@@ -12,7 +15,7 @@ import parseInputValue from '../utils/parseInputValue';
 import AddressSelectionPopup from '../components/AddressSelectionPopup';
 
 const ContractView = () => {
-  const [contractDetails, setContractDetails] = useState(null);
+  // const [contractDetails, setContractDetails] = useState(null);
   const [error, setError] = useState(null);
   const [availableContracts, setAvailableContracts] = useState([]);
   const [selectedContractFile, setSelectedContractFile] = useState('');
@@ -134,7 +137,8 @@ const ContractView = () => {
         args,
         currentNetwork
       );
-      setContractDetails(contract);
+      console.log(contract);
+      // setContractDetails(contract);
 
       const instances = await contractManager.fetchContractInstances();
       setContractInstances(instances);
