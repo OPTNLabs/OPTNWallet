@@ -10,11 +10,20 @@ import { hash160 } from '@cashscript/utils';
 import * as bip39 from 'bip39';
 import { Network } from '../../redux/networkSlice';
 import { store } from '../../redux/store';
+import KeyManager from './KeyManager';
+import DatabaseService from '../DatabaseManager/DatabaseService';
 
+const KeyManage = KeyManager();
+const dbService = DatabaseService();
 export default function KeyGeneration() {
+  const state = store.getState();
+  const currentWalletId = state.wallet_id.currentWalletId;
+
   return {
     generateMnemonic,
     generateKeys,
+    getKeysFromWallet,
+    handleGenerateKeys,
   };
 
   async function generateMnemonic(): Promise<string> {
@@ -30,7 +39,6 @@ export default function KeyGeneration() {
     change_index: number,
     address_index: number
   ) {
-    const state = store.getState();
     console.log('Generating seed...');
     const seed = await bip39.mnemonicToSeed(mnemonic, passphrase);
     const rootNode = deriveHdPrivateNodeFromSeed(seed, true);
@@ -93,5 +101,43 @@ export default function KeyGeneration() {
       aliceAddress,
       aliceTokenAddress,
     };
+  }
+  async function handleGenerateKeys(index) {
+    const currentWalletId = state.wallet_id.currentWalletId;
+    if (!currentWalletId) return;
+
+    await KeyManage.createKeys(
+      currentWalletId,
+      0, // accountNumber
+      0, // changeNumber
+      index // addressNumber based on the current index
+    );
+    await dbService.saveDatabaseToFile();
+    const newKeys = await KeyManage.retrieveKeys(currentWalletId);
+    return newKeys[newKeys.length - 1];
+  }
+  async function getKeysFromWallet(currentWalletId) {
+    const batchAmount = 10;
+
+    if (!currentWalletId) {
+      console.log('currentWalletId is not valid: ', currentWalletId);
+    }
+    const existingKeys = await KeyManage.retrieveKeys(currentWalletId);
+    let keyPairs = existingKeys;
+
+    const newKeys = [];
+    const keySet = new Set(existingKeys.map((key) => key.address));
+    if (existingKeys.length < batchAmount) {
+      for (let i = existingKeys.length; i < batchAmount; i++) {
+        const newKey = await handleGenerateKeys(i);
+        if (newKey && !keySet.has(newKey.address)) {
+          newKeys.push(newKey);
+          keySet.add(newKey.address);
+        }
+        // setKeyProgress(((i + 1) / batchAmount) * 100);
+      }
+      keyPairs = [...existingKeys, ...newKeys];
+    }
+    return keyPairs;
   }
 }
