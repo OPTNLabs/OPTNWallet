@@ -8,6 +8,8 @@ import {
 import { deriveHdPrivateNodeFromSeed } from '@bitauth/libauth';
 import { hash160 } from '@cashscript/utils';
 import * as bip39 from 'bip39';
+import { Network } from '../../redux/networkSlice';
+import { store } from '../../redux/store';
 
 export default function KeyGeneration() {
   return {
@@ -28,6 +30,7 @@ export default function KeyGeneration() {
     change_index: number,
     address_index: number
   ) {
+    const state = store.getState();
     console.log('Generating seed...');
     const seed = await bip39.mnemonicToSeed(mnemonic, passphrase);
     const rootNode = deriveHdPrivateNodeFromSeed(seed, true);
@@ -58,17 +61,20 @@ export default function KeyGeneration() {
       console.error('Failed to generate public key hash.');
       return null;
     }
-
+    const prefix =
+      state.network.currentNetwork === Network.MAINNET
+        ? 'bitcoincash'
+        : 'bchtest';
     console.log('Encoding address...');
     const aliceAddress = encodeCashAddress({
       payload: alicePkh,
-      prefix: 'bchtest',
+      prefix,
       type: 'p2pkh',
     }).address;
 
     const aliceTokenAddress = encodeCashAddress({
       payload: alicePkh,
-      prefix: 'bchtest',
+      prefix,
       type: 'p2pkhWithTokens',
     }).address;
 
