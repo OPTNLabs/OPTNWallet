@@ -1,4 +1,3 @@
-// @ts-nocheck
 import { Contract, ElectrumNetworkProvider } from 'cashscript';
 import DatabaseService from '../DatabaseManager/DatabaseService';
 import p2pkhArtifact from './artifacts/p2pkh.json';
@@ -37,7 +36,6 @@ export default function ContractManager() {
     statement.bind([address]);
 
     console.log('statement', statement);
-
     console.log('Address:', address); // Debugging line
 
     let constructorArgs = null;
@@ -45,7 +43,7 @@ export default function ContractManager() {
       const row = statement.getAsObject();
       console.log('Row:', row); // Debugging line
       try {
-        constructorArgs = JSON.parse(row.constructor_args);
+        constructorArgs = JSON.parse(String(row.constructor_args));
       } catch (e) {
         console.error('Error parsing JSON:', e); // Log the error for debugging
         constructorArgs = null;
@@ -267,10 +265,10 @@ export default function ContractManager() {
                 amount: BigInt(utxo.amount), // Convert back to BigInt
               }))
             : [],
-        artifact: JSON.parse(row.artifact),
-        abi: JSON.parse(row.abi),
-        redeemScript: JSON.parse(row.redeemScript),
-        unlock: JSON.parse(row.unlock),
+        artifact: JSON.parse(String(row.artifact)),
+        abi: JSON.parse(String(row.abi)),
+        redeemScript: JSON.parse(String(row.redeemScript)),
+        unlock: JSON.parse(String(row.unlock)),
       });
     }
     statement.free();
@@ -294,15 +292,15 @@ export default function ContractManager() {
           typeof row.balance === 'number' ? BigInt(row.balance) : BigInt(0),
         utxos:
           typeof row.utxos === 'string'
-            ? JSON.parse(row.utxos).map((utxo) => ({
+            ? JSON.parse(parseInputValue(row.utxos, 'string')).map((utxo) => ({
                 ...utxo,
                 amount: BigInt(utxo.amount), // Convert back to BigInt
               }))
             : [],
-        artifact: JSON.parse(row.artifact),
-        abi: JSON.parse(row.abi),
-        redeemScript: JSON.parse(row.redeemScript),
-        unlock: JSON.parse(row.unlock),
+        artifact: JSON.parse(parseInputValue(row.artifact, 'string')),
+        abi: JSON.parse(parseInputValue(row.abi, 'string')),
+        redeemScript: JSON.parse(parseInputValue(row.redeemScript, 'string')),
+        unlock: JSON.parse(parseInputValue(row.unlock, 'string')),
       };
 
       // Recreate the unlock functions
