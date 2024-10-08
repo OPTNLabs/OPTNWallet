@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import KeyManager from '../apis/WalletManager/KeyManager';
+import KeyService from '../services/KeyService';
 
 interface AddressSelectionPopupProps {
   onSelect: (address: string) => void;
@@ -11,12 +11,11 @@ const AddressSelectionPopup: React.FC<AddressSelectionPopupProps> = ({
   onClose,
 }) => {
   const [addresses, setAddresses] = useState<any[]>([]);
-  const keyManager = KeyManager();
 
   useEffect(() => {
     const fetchAddresses = async () => {
       try {
-        const keys = await keyManager.retrieveKeys(1); // Assuming wallet_id = 1
+        const keys = await KeyService.retrieveKeys(1); // Assuming wallet_id = 1
         setAddresses(keys);
       } catch (error) {
         console.error('Error fetching addresses:', error);
