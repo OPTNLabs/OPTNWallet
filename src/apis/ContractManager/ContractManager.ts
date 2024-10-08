@@ -8,10 +8,13 @@ import announcementArtifact from './artifacts/announcement.json';
 import escrowArtifact from './artifacts/escrow.json';
 import ElectrumService from '../ElectrumServer/ElectrumServer';
 import parseInputValue from '../../utils/parseInputValue';
+import { Network } from '../../redux/networkSlice';
+import { store } from '../../redux/store';
 
 export default function ContractManager() {
   const dbService = DatabaseService();
   const electrum = ElectrumService();
+  const state = store.getState();
 
   return {
     createContract,
@@ -430,6 +433,10 @@ export default function ContractManager() {
 
   async function updateContractUTXOs(address) {
     try {
+      const prefix =
+        state.network.currentNetwork === Network.MAINNET
+          ? 'bitcoincash'
+          : 'bchtest';
       const utxos = await electrum.getUTXOS(address);
       const formattedUTXOs = utxos.map((utxo) => ({
         tx_hash: utxo.tx_hash,
@@ -437,7 +444,7 @@ export default function ContractManager() {
         amount: BigInt(utxo.value),
         height: utxo.height,
         token: utxo.token_data ? utxo.token_data : null,
-        prefix: 'bchtest',
+        prefix, // Ensure prefix is provided
       }));
 
       console.log('Fetched UTXOs from Electrum:', formattedUTXOs);
