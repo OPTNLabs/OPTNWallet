@@ -1,17 +1,18 @@
-// @ts-nocheck
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { useDispatch, useSelector } from 'react-redux';
 import { RootState } from '../redux/store';
-import KeyGeneration from '../apis/WalletManager/KeyGeneration';
-import UTXOManager from '../apis/UTXOManager/UTXOManager';
 import WalletManager from '../apis/WalletManager/WalletManager';
 import RegularUTXOs from '../components/RegularUTXOs';
 import CashTokenUTXOs from '../components/CashTokenUTXOs';
-import ElectrumService from '../apis/ElectrumServer/ElectrumServer';
+import ElectrumServer from '../apis/ElectrumServer/ElectrumServer';
 import { setUTXOs } from '../redux/utxoSlice';
 import BitcoinCashCard from '../components/BitcoinCashCard';
 import CashTokenCard from '../components/CashTokenCard';
+import KeyService from '../services/KeyService';
+import UTXOService from '../services/UTXOService';
+
+const batchAmount = 10;
 
 const Home = () => {
   const [keyPairs, setKeyPairs] = useState([]);
@@ -23,24 +24,23 @@ const Home = () => {
   const [generatingKeys, setGeneratingKeys] = useState(false);
   const [fetchingUTXOs, setFetchingUTXOs] = useState(false);
   const [showPopup, setShowPopup] = useState(false);
-  const KeyGenerate = KeyGeneration();
-
   const navigate = useNavigate();
   const dispatch = useDispatch();
-  const ManageUTXOsRef = useRef(null);
+  const { wallet_id } = useParams<{ wallet_id: string }>();
+  const WalletManage = WalletManager();
 
   const currentWalletId = useSelector(
     (state: RootState) => state.wallet_id.currentWalletId
   );
-
+  const totalBalance = useSelector(
+    (state: RootState) => state.utxos.totalBalance
+  );
   const reduxUTXOs = useSelector((state: RootState) => state.utxos.utxos);
 
   useEffect(() => {
-    const initializeUTXOManager = async () => {
-      ManageUTXOsRef.current = await UTXOManager();
+    const initializeUTXOService = async () => {
       if (currentWalletId) {
-        const keys = await KeyGenerate.getKeysFromWallet(currentWalletId);
-        setKeyPairs(keys);
+        await generateKeys();
         if (Object.keys(reduxUTXOs).length > 0) {
           setUtxosFromRedux(reduxUTXOs);
         } else {
@@ -49,7 +49,7 @@ const Home = () => {
       }
     };
 
-    initializeUTXOManager();
+    initializeUTXOService();
   }, [currentWalletId, reduxUTXOs]);
 
   const setUtxosFromRedux = (reduxUTXOs) => {
@@ -68,12 +68,108 @@ const Home = () => {
     setCashTokenUtxos(cashTokenUtxosMap);
   };
 
+  const generateKeys = async () => {
+    if (currentWalletId) {
+      setGeneratingKeys(true);
+      const existingKeys = await KeyService.retrieveKeys(currentWalletId);
+      setKeyPairs(existingKeys);
+
+      let newKeys = [];
+      const keySet = new Set(existingKeys.map((key) => key.address));
+      if (existingKeys.length < batchAmount) {
+        for (let i = existingKeys.length; i < batchAmount; i++) {
+          const newKey = await handleGenerateKeys(i);
+          if (newKey && !keySet.has(newKey.address)) {
+            newKeys.push(newKey);
+            keySet.add(newKey.address);
+          }
+          setKeyProgress(((i + 1) / batchAmount) * 100);
+        }
+        setKeyPairs([...existingKeys, ...newKeys]);
+      }
+      setGeneratingKeys(false);
+    }
+  };
+
+  const fetchUTXOs = async (walletKeys) => {
+    setFetchingUTXOs(true);
+    const utxosMap = {};
+    const cashTokenUtxosMap = {};
+    const uniqueUTXOs = new Set();
+    const loadingState = {};
+    let total = 0;
+
+    const electrumServer = ElectrumServer();
+    await electrumServer.electrumConnect();
+
+    for (const key of walletKeys) {
+      loadingState[key.address] = true;
+    }
+    setLoading(loadingState);
+
+    for (let i = 0; i < walletKeys.length; i++) {
+      const key = walletKeys[i];
+      console.log(`Key ${i}:`, key.address);
+      const addressUTXOs = await UTXOService.fetchAndStoreUTXOs(
+        currentWalletId,
+        key.address
+      );
+      console.log(`Fetched UTXOs for address ${key.address}:`, addressUTXOs);
+
+      utxosMap[key.address] = addressUTXOs.filter((utxo) => {
+        const utxoKey = `${utxo.tx_hash}-${utxo.tx_pos}-${utxo.address}`;
+        if (uniqueUTXOs.has(utxoKey)) {
+          return false;
+        }
+        if (utxo.address === key.address && !utxo.token_data) {
+          uniqueUTXOs.add(utxoKey);
+          total += utxo.amount;
+          return true;
+        }
+        return false;
+      });
+
+      cashTokenUtxosMap[key.address] = addressUTXOs.filter((utxo) => {
+        const utxoKey = `${utxo.tx_hash}-${utxo.tx_pos}-${utxo.address}`;
+        if (uniqueUTXOs.has(utxoKey)) {
+          return false;
+        }
+        if (utxo.address === key.address && utxo.token_data) {
+          uniqueUTXOs.add(utxoKey);
+          total += utxo.amount;
+          return true;
+        }
+        return false;
+      });
+
+      loadingState[key.address] = false;
+      setLoading({ ...loadingState });
+      setUtxoProgress(((i + 1) / walletKeys.length) * 100);
+    }
+
+    await electrumServer.electrumDisconnect();
+
+    setUtxos(utxosMap);
+    setCashTokenUtxos(cashTokenUtxosMap);
+    setFetchingUTXOs(false);
+
+    // Update Redux with the new UTXOs
+    const newUTXOs = walletKeys.reduce((acc, key) => {
+      acc[key.address] = [
+        ...utxosMap[key.address],
+        ...cashTokenUtxosMap[key.address],
+      ];
+      return acc;
+    }, {});
+    dispatch(setUTXOs({ newUTXOs }));
+  };
+
   const fetchUTXOsFromDatabase = async (walletId) => {
     const utxosMap = {};
     const cashTokenUtxosMap = {};
 
     for (const key of keyPairs) {
-      const addressUTXOs = await ManageUTXOsRef.current.fetchUTXOsByAddress(
+      const addressUTXOs = await UTXOService.fetchAndStoreUTXOs(
         walletId,
         key.address
       );
@@ -99,24 +195,33 @@ const Home = () => {
     dispatch(setUTXOs({ newUTXOs }));
   };
 
+  const handleGenerateKeys = async (index) => {
+    if (currentWalletId != null) {
+      await KeyService.createKeys(
+        currentWalletId,
+        0, // accountNumber
+        0, // changeNumber
+        index // addressNumber based on the current index
+      );
+      const newKeys = await KeyService.retrieveKeys(currentWalletId);
+      return newKeys[newKeys.length - 1];
+    }
+  };
+
   const togglePopup = () => {
     setShowPopup(!showPopup);
   };
 
-  const handleFetchUTXOsClick = async () => {
-    const UTXOs = await ManageUTXOsRef.current.fetchUTXOs(keyPairs);
-    setUtxos(UTXOs.utxosMap);
-    setCashTokenUtxos(UTXOs.cashTokenUtxosMap);
+  const handleFetchUTXOsClick = () => {
+    fetchUTXOs(keyPairs);
   };
 
   const handleGenerateNewKey = async () => {
-    const newKey = await KeyGenerate.handleGenerateKeys(keyPairs.length);
+    const newKey = await handleGenerateKeys(keyPairs.length);
     const keySet = new Set(keyPairs.map((key) => key.address));
     if (newKey && !keySet.has(newKey.address)) {
       setKeyPairs((prevKeys) => [...prevKeys, newKey]);
-      const UTXOs = await ManageUTXOsRef.current.fetchUTXOs([newKey]);
-      setUtxos(UTXOs.utxosMap);
-      setCashTokenUtxos(UTXOs.cashTokenUtxosMap);
+      fetchUTXOs([newKey]);
     }
   };
 
@@ -193,9 +298,6 @@ const Home = () => {
           Generate New Key
         </button>
       </div>
-      {/* <div className="font-bold text-xl text-center mt-4">
-        Regular Balance: {totalBalance} satoshis
-      </div> */}
       <button
         className="w-full max-w-md mx-auto mt-4 flex items-center justify-center"
         onClick={togglePopup}
