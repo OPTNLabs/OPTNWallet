@@ -1,4 +1,5 @@
-const CashTokenUTXOs = ({ utxos, loading }) => {
+const CashTokenUTXOs = ({ address, utxos, loading }) => {
+  console.log(address);
   return (
     <div>
       <h4 className="font-semibold">CashToken UTXOs:</h4>

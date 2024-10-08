@@ -2,6 +2,12 @@
 
 Welcome to the OPTN Wallet project! OPTN Wallet is a cutting-edge cryptocurrency wallet designed for secure and efficient transactions. Visit our [website](https://optn-website.vercel.app/) for more information.
 
+## Testnet Faucet
+
+To get testnet coins from Chipnet, navigate to Network under the Settings tab and click on the link. Paste your address and make sure to select "chipnet"
+
+![Chipnet Faucet](public/assets/images/Faucet.png)
+
 ## Developer Quick Start
 
 To get started with the development of the OPTN Wallet, follow the steps below:

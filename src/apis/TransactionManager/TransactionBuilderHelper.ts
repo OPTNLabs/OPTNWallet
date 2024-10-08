@@ -185,9 +185,9 @@ export default function TransactionBuilderHelper() {
     console.log(
       'ABI function for contractFunction:',
       contractFunction,
-      'ABI Function:',
+      '\nABI Function:',
       abiFunction,
-      'Contract Function Inputs',
+      '\nContract Function Inputs',
       contractFunctionInputs
     );
 
@@ -204,7 +204,7 @@ export default function TransactionBuilderHelper() {
         const inputValue = contractFunctionInputs[input.name];
 
         // Check if the input name is 's' (for signature)
-        if (input.name === 's') {
+        if (input.type === 'sig') {
           // Handle signature input with `SignatureTemplate`
           return new SignatureTemplate(inputValue, HashType.SIGHASH_ALL);
         } else {
