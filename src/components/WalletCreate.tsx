@@ -4,8 +4,10 @@ import DatabaseService from '../apis/DatabaseManager/DatabaseService';
 import KeyGeneration from '../apis/WalletManager/KeyGeneration';
 import { useDispatch, useSelector } from 'react-redux';
 import { RootState } from '../redux/store';
-import { setWalletId } from '../redux/walletSlice';
+import { setWalletId, setWalletNetwork } from '../redux/walletSlice';
 import WalletManager from '../apis/WalletManager/WalletManager';
+import { Network, setNetwork } from '../redux/networkSlice';
+import NetworkSwitch from './modules/NetworkSwitch';
 
 const WalletCreation = () => {
   const [mnemonicPhrase, setMnemonicPhrase] = useState('');
@@ -13,6 +15,7 @@ const WalletCreation = () => {
     walletName, //setWalletName
   ] = useState('');
   const [passphrase, setPassphrase] = useState('');
+  const [networkType, setNetworkType] = useState<Network>(Network.CHIPNET);
   const dbService = DatabaseService();
   const WalletManage = WalletManager();
   const navigate = useNavigate();
@@ -21,7 +24,7 @@ const WalletCreation = () => {
     (state: RootState) => state.wallet_id.currentWalletId
   );
   const dispatch = useDispatch();
-
+  console.log(networkType);
   useEffect(() => {
     console.log('Wallet ID: ', wallet_id);
     const initDb = async () => {
@@ -59,7 +62,8 @@ const WalletCreation = () => {
         const createAccountSuccess = await WalletManage.createWallet(
           walletName,
           mnemonicPhrase,
-          passphrase
+          passphrase,
+          networkType
         );
         if (createAccountSuccess) {
           console.log('Account created successfully.');
@@ -69,8 +73,12 @@ const WalletCreation = () => {
       }
     }
     const walletID = await WalletManage.setWalletId(mnemonicPhrase, passphrase);
+
     if (walletID != null) {
+      console.log(`Wallet ID valid: ${walletID}`);
       dispatch(setWalletId(walletID));
+      dispatch(setWalletNetwork(networkType));
+      dispatch(setNetwork(networkType));
       navigate(`/home/${walletID}`);
     }
   };
@@ -118,6 +126,10 @@ const WalletCreation = () => {
             className="w-full p-2 border border-gray-300 rounded-md"
           />
         </div>
+        <NetworkSwitch
+          networkType={networkType}
+          setNetworkType={setNetworkType}
+        />
         <button
           onClick={handleCreateAccount}
           className="w-full bg-blue-500 text-white py-2 px-4 rounded-md hover:bg-blue-600 transition duration-300 my-2"

@@ -2,6 +2,8 @@ import DatabaseService from '../DatabaseManager/DatabaseService';
 import KeyGeneration from './KeyGeneration';
 import AddressManager from '../AddressManager/AddressManager';
 import { Address } from '../../types/types';
+import { Network } from '../../redux/networkSlice';
+import { store } from '../../redux/store';
 
 // Type guard to check if a value is a string
 function isString(value: any): value is string {
@@ -22,7 +24,7 @@ export default function KeyManager() {
   const dbService = DatabaseService();
   const KeyGen = KeyGeneration();
   const ManageAddress = AddressManager();
-
+  const state = store.getState();
   return {
     retrieveKeys,
     createKeys,
@@ -215,14 +217,17 @@ export default function KeyManager() {
           addressNumber,
         ]);
         insertQuery.free();
-
+        const prefix =
+          state.network.currentNetwork === Network.MAINNET
+            ? 'bitcoincash'
+            : 'bchtest';
         const newAddress: Address = {
           wallet_id: wallet_id,
           address: keys.aliceAddress,
           balance: 0,
           hd_index: addressNumber,
           change_index: changeNumber,
-          prefix: 'bchtest',
+          prefix,
         };
 
         console.log('Registering new address:', newAddress); // Log the new address
