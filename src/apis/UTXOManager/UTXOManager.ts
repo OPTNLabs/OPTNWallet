@@ -4,7 +4,7 @@ import { Network } from '../../redux/networkSlice';
 import { store } from '../../redux/store';
 import { setUTXOs } from '../../redux/utxoSlice';
 
-export default function UTXOManager() {
+export default async function UTXOManager() {
   const dbService = DatabaseService();
   await dbService.ensureDatabaseStarted();
   const Electrum = ElectrumService();
