@@ -21,6 +21,8 @@ export interface UTXO {
   privateKey?: Uint8Array; // Optional field for private key used in P2PKH
   contractName?: string; // For contract-related UTXOs
   abi?: object[]; // ABI for contract-related UTXOs
+  id?: string;
+  unlocker?: any;
 }
 
 // TransactionHistoryItem remains the same

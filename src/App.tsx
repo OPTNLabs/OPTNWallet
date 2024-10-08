@@ -5,7 +5,7 @@ import Layout from './components/Layout';
 import RootHandler from './pages/RootHandler';
 import Home from './pages/Home';
 import CreateWallet from './pages/CreateWallet';
-import ContractTransactionPage from './pages/ContractTransactionPage';
+// import ContractTransactionPage from './pages/ContractTransactionPage';
 import ContractView from './pages/ContractView';
 import ImportWallet from './pages/ImportWallet';
 import Settings from './pages/Settings';
@@ -29,10 +29,10 @@ function App() {
           <Route element={<Layout />}>
             <Route path="/home/:wallet_id" element={<Home />} />
             <Route path="/contract" element={<ContractView />} />
-            <Route
+            {/* <Route
               path="/contractsetup"
               element={<ContractTransactionPage />}
-            />
+            /> */}
             <Route path="/transaction" element={<Transaction />} />
             <Route
               path="/transactions/:wallet_id"
