@@ -1,29 +1,29 @@
-// @ts-nocheck
-// src/pages/ContractView.tsx
-
-import React, { useState, useEffect } from 'react';
+import {
+  // React,
+  useState,
+  useEffect,
+} from 'react';
 import { useSelector } from 'react-redux';
 import { useNavigate } from 'react-router-dom';
 import ContractManager from '../apis/ContractManager/ContractManager';
-import KeyManager from '../apis/WalletManager/KeyManager'; // Import KeyManager
-import { hexString } from '../utils/hex'; // Import the hex conversion utility
+import { hexString } from '../utils/hex';
 import { RootState } from '../redux/store';
 import RegularUTXOs from '../components/RegularUTXOs';
 import CashTokenUTXOs from '../components/CashTokenUTXOs';
 import parseInputValue from '../utils/parseInputValue';
-import AddressSelectionPopup from '../components/AddressSelectionPopup'; // Import the AddressSelectionPopup component
+import AddressSelectionPopup from '../components/AddressSelectionPopup';
+import KeyService from '../services/KeyService';
 
 const ContractView = () => {
-  const [contractDetails, setContractDetails] = useState(null);
+  // const [contractDetails, setContractDetails] = useState(null);
   const [error, setError] = useState(null);
   const [availableContracts, setAvailableContracts] = useState([]);
   const [selectedContractFile, setSelectedContractFile] = useState('');
   const [constructorArgs, setConstructorArgs] = useState([]);
   const [inputValues, setInputValues] = useState({});
   const [contractInstances, setContractInstances] = useState([]);
-  const [showAddressPopup, setShowAddressPopup] = useState(false); // Control address popup visibility
-  const [currentArgName, setCurrentArgName] = useState(''); // Track the current constructor argument
-  const keyManager = KeyManager(); // Initialize the KeyManager
+  const [showAddressPopup, setShowAddressPopup] = useState(false);
+  const [currentArgName, setCurrentArgName] = useState('');
   const navigate = useNavigate();
   const wallet_id = useSelector(
     (state: RootState) => state.wallet_id.currentWalletId
@@ -32,7 +32,6 @@ const ContractView = () => {
     (state: RootState) => state.network.currentNetwork
   );
 
-  // Load available contracts and instances on mount
   useEffect(() => {
     const loadAvailableContracts = async () => {
       try {
@@ -63,7 +62,6 @@ const ContractView = () => {
     loadContractInstances();
   }, []);
 
-  // Load contract details when a contract is selected
   useEffect(() => {
     const loadContractDetails = async () => {
       if (selectedContractFile) {
@@ -86,71 +84,45 @@ const ContractView = () => {
     loadContractDetails();
   }, [selectedContractFile]);
 
-  // Handle input changes for constructor arguments
   const handleInputChange = (event) => {
     const { name, value } = event.target;
     setInputValues({ ...inputValues, [name]: value });
-    console.log(`Input changed: ${name} = ${value}`); // Debugging log
+    console.log(`Input changed: ${name} = ${value}`);
   };
 
-  // Handle address selection from the popup
   const handleAddressSelect = async (address: string) => {
-    console.log(`Address selected for ${currentArgName}: ${address}`); // Debugging log
+    console.log(`Address selected for ${currentArgName}: ${address}`);
 
-    // Fetch publicKey and pubkeyHash using KeyManager
-    const keys = await keyManager.retrieveKeys(wallet_id);
+    const keys = await KeyService.retrieveKeys(wallet_id);
     const selectedKey = keys.find((key) => key.address === address);
 
     if (selectedKey) {
-      console.log('Selected Key Data:', selectedKey);
-      console.log('Constructor Args:', constructorArgs);
-      console.log('Current Arg Name:', currentArgName);
-
-      // Find the constructor argument matching the currentArgName
       const matchedArg = constructorArgs.find(
         (arg) => arg.name === currentArgName
       );
 
       if (matchedArg) {
         let valueToSet = '';
-
-        // Check the argument type and convert the corresponding value
         if (matchedArg.type === 'pubkey') {
-          valueToSet = hexString(selectedKey.publicKey); // Convert publicKey to hex string
-          console.log(`Converted publicKey to hex string: ${valueToSet}`);
+          valueToSet = hexString(selectedKey.publicKey);
         } else if (matchedArg.type === 'bytes20') {
-          valueToSet = hexString(selectedKey.pubkeyHash); // Convert pubkeyHash to hex string
-          console.log(`Converted pubkeyHash to hex string: ${valueToSet}`);
+          valueToSet = hexString(selectedKey.pubkeyHash);
         }
 
-        // Set the converted value in the inputValues state
         setInputValues({ ...inputValues, [currentArgName]: valueToSet });
-      } else {
-        console.warn(
-          `No matching constructor argument found for: ${currentArgName}`
-        );
       }
-    } else {
-      console.warn(`No key found for address: ${address}`);
     }
-
     setShowAddressPopup(false);
     setCurrentArgName('');
   };
 
-  // Create a new contract instance
   const createContract = async () => {
     try {
       const contractManager = ContractManager();
-
-      // Parse input values based on constructor argument types
       const args =
         constructorArgs.map((arg) =>
           parseInputValue(inputValues[arg.name], arg.type)
         ) || [];
-      console.log('Constructor Args:', constructorArgs);
-      console.log('Input Values:', inputValues);
-      console.log('Parsed Args:', args);
 
       if (
         constructorArgs.length > 0 &&
@@ -159,15 +131,14 @@ const ContractView = () => {
         throw new Error('All constructor arguments must be provided');
       }
 
-      // Create the contract instance
       const contract = await contractManager.createContract(
         selectedContractFile,
         args,
         currentNetwork
       );
-      setContractDetails(contract);
+      console.log(contract);
+      // setContractDetails(contract);
 
-      // Reload contract instances
       const instances = await contractManager.fetchContractInstances();
       setContractInstances(instances);
     } catch (err) {
@@ -176,13 +147,11 @@ const ContractView = () => {
     }
   };
 
-  // Delete a contract instance
   const deleteContract = async (contractId) => {
     try {
       const contractManager = ContractManager();
       await contractManager.deleteContractInstance(contractId);
 
-      // Reload contract instances
       const instances = await contractManager.fetchContractInstances();
       setContractInstances(instances);
     } catch (err) {
@@ -191,7 +160,7 @@ const ContractView = () => {
     }
   };
 
-  // Update a contract instance's UTXOs
+  // Update a contract instance's UTXOs and balance
   const updateContract = async (address) => {
     try {
       const contractManager = ContractManager();
@@ -200,12 +169,28 @@ const ContractView = () => {
 
       console.log(`UTXOs updated. Added: ${added}, Removed: ${removed}`);
 
-      // Reload contract instances to reflect updated UTXOs
-      const instances = await contractManager.fetchContractInstances();
-      console.log('contract instance: ', instances);
-      setContractInstances(instances);
+      const updatedContractInstance =
+        await contractManager.getContractInstanceByAddress(address);
+
+      // Calculate the total balance by summing all the UTXO amounts
+      const totalBalance = updatedContractInstance.utxos.reduce((sum, utxo) => {
+        return sum + BigInt(utxo.amount);
+      }, BigInt(0));
+
+      // Update the state with the new UTXOs and calculated balance
+      setContractInstances((prevInstances) =>
+        prevInstances.map((instance) =>
+          instance.address === address
+            ? {
+                ...instance,
+                balance: totalBalance, // Set calculated balance
+                utxos: updatedContractInstance.utxos, // Update UTXOs
+              }
+            : instance
+        )
+      );
     } catch (err) {
-      console.error('Error updating UTXOs:', err);
+      console.error('Error updating UTXOs and balance:', err);
       setError(err.message);
     }
   };
@@ -220,7 +205,6 @@ const ContractView = () => {
 
   return (
     <div className="container mx-auto p-4">
-      {/* Header Image */}
       <div className="flex justify-center mt-4">
         <img
           src="/assets/images/OPTNWelcome1.png"
@@ -229,7 +213,6 @@ const ContractView = () => {
         />
       </div>
 
-      {/* Contract Selection */}
       <h2 className="text-lg font-semibold mb-2">Select Contract</h2>
       <select
         className="border p-2 mb-4 w-full"
@@ -244,7 +227,6 @@ const ContractView = () => {
         ))}
       </select>
 
-      {/* Constructor Arguments */}
       {constructorArgs.length > 0 && (
         <div className="mb-4">
           <h2 className="text-lg font-semibold mb-2">Constructor Arguments</h2>
@@ -258,7 +240,6 @@ const ContractView = () => {
                   {arg.name} ({arg.type})
                 </label>
                 {isAddressType ? (
-                  // Display address selection button for specific types
                   <>
                     <button
                       type="button"
@@ -270,7 +251,6 @@ const ContractView = () => {
                     >
                       Select Address
                     </button>
-                    {/* Display selected address */}
                     {inputValues[arg.name] && (
                       <div className="mt-2">
                         Selected {arg.type}: {inputValues[arg.name]}
@@ -278,7 +258,6 @@ const ContractView = () => {
                     )}
                   </>
                 ) : (
-                  // Regular input for other types
                   <input
                     type="text"
                     name={arg.name}
@@ -293,7 +272,6 @@ const ContractView = () => {
         </div>
       )}
 
-      {/* Create Contract Button */}
       {selectedContractFile && (
         <button
           onClick={createContract}
@@ -303,7 +281,6 @@ const ContractView = () => {
         </button>
       )}
 
-      {/* Address Selection Popup */}
       {showAddressPopup && (
         <AddressSelectionPopup
           onSelect={handleAddressSelect}
@@ -314,7 +291,6 @@ const ContractView = () => {
         />
       )}
 
-      {/* Display Contract Instances */}
       {contractInstances.length > 0 && (
         <div className="mt-8">
           <h2 className="text-lg font-semibold mb-2">Instantiated Contracts</h2>
@@ -349,7 +325,7 @@ const ContractView = () => {
                       satoshis
                     </div>
                   </div>
-                  {/* UTXOs Display */}
+
                   <div className="mb-2">
                     <strong>UTXOs:</strong>
                     <RegularUTXOs
@@ -381,7 +357,6 @@ const ContractView = () => {
                       loading={false}
                     />
                   </div>
-                  {/* Update and Delete Buttons */}
                   <button
                     onClick={() => updateContract(instance.address)}
                     className="bg-green-500 text-white py-2 px-4 my-2 rounded"
@@ -401,7 +376,6 @@ const ContractView = () => {
         </div>
       )}
 
-      {/* Go Back Button */}
       <button
         onClick={returnHome}
         className="w-full bg-red-500 text-white py-2 px-4 rounded-md hover:bg-red-600 transition duration-300 my-2"
