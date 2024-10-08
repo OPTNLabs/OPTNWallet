@@ -7,6 +7,8 @@ import {
 // import { RootState } from '../redux/store';
 import { setWalletId } from '../redux/walletSlice';
 import WalletManager from '../apis/WalletManager/WalletManager';
+import NetworkSwitch from './modules/NetworkSwitch';
+import { Network } from '../redux/networkSlice';
 
 const WalletImport = () => {
   const [recoveryPhrase, setRecoveryPhrase] = useState('');
@@ -14,6 +16,7 @@ const WalletImport = () => {
     walletName, //setWalletName
   ] = useState('OPTN');
   const [passphrase, setPassphrase] = useState('');
+  const [networkType, setNetworkType] = useState<Network>(Network.CHIPNET);
   const dbService = DatabaseService();
   const WalletManage = WalletManager();
   const navigate = useNavigate();
@@ -50,7 +53,8 @@ const WalletImport = () => {
         const createAccountSuccess = await WalletManage.createWallet(
           walletName,
           recoveryPhrase,
-          passphrase
+          passphrase,
+          networkType
         );
         if (createAccountSuccess) {
           console.log('Account imported successfully.');
@@ -69,7 +73,8 @@ const WalletImport = () => {
         const created = await WalletManage.createWallet(
           walletName,
           recoveryPhrase,
-          passphrase
+          passphrase,
+          networkType
         );
         if (created) {
           console.log('New imported wallet created successfully');
@@ -122,7 +127,10 @@ const WalletImport = () => {
             className="w-full p-2 border border-gray-300 rounded-md"
           />
         </div>
-
+        <NetworkSwitch
+          networkType={networkType}
+          setNetworkType={setNetworkType}
+        />
         {/*Remove the following div section*/}
         {/* <div className="mb-4">
           <label className="block text-white mb-2">Set Wallet Name</label>

@@ -83,6 +83,9 @@ const Transaction: React.FC = () => {
   const [showContractUTXOsPopup, setShowContractUTXOsPopup] = useState(false); // State for contract UTXOs popup
   const navigate = useNavigate();
   const dispatch: AppDispatch = useDispatch();
+  const currentNetwork = useSelector(
+    (state: RootState) => state.network.currentNetwork
+  );
 
   const txOutputs = useSelector(
     (state: RootState) => state.transactionBuilder.txOutputs
@@ -288,7 +291,7 @@ const Transaction: React.FC = () => {
         // Store UTXO temporarily until function is selected
         return;
       } else {
-        const provider = new ElectrumNetworkProvider(Network.CHIPNET);
+        const provider = new ElectrumNetworkProvider(currentNetwork);
         const signatureTemplate = new SignatureTemplate(
           utxo.privateKey!,
           HashType.SIGHASH_ALL

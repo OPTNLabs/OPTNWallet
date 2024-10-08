@@ -1,17 +1,26 @@
 import { UTXO } from '../../types/types';
 import DatabaseService from '../DatabaseManager/DatabaseService';
 import ElectrumService from '../ElectrumServer/ElectrumServer';
+import { Network } from '../../redux/networkSlice';
+import { store } from '../../redux/store';
+import { setUTXOs } from '../../redux/utxoSlice';
 
 export default async function UTXOManager() {
   const dbService = DatabaseService();
   await dbService.ensureDatabaseStarted();
   const Electrum = ElectrumService();
+  const state = store.getState();
+  const prefix =
+    state.network.currentNetwork === Network.MAINNET
+      ? 'bitcoincash'
+      : 'bchtest';
 
   return {
     storeUTXOs,
     fetchUTXOsByAddress,
     checkNewUTXOs,
     deleteUTXOs,
+    fetchUTXOs,
   };
 
   // Typing for UTXO objects and return values
@@ -78,8 +87,8 @@ export default async function UTXOManager() {
         value: utxo.value,
         address: address,
         height: utxo.height,
-        prefix: 'bchtest',
-        token_data: utxo.token_data || null, // Ensure token_data is null or an object
+        prefix,
+        token_data: utxo.token_data ? JSON.stringify(utxo.token_data) : null,
       }));
 
       console.log(`Formatted UTXOs for address ${address}:`, formattedUTXOs);
@@ -205,9 +214,9 @@ export default async function UTXOManager() {
           height: utxo.height,
           tx_hash: utxo.tx_hash,
           tx_pos: utxo.tx_pos,
-          value: utxo.value,
-          prefix: 'bchtest',
-          token_data: utxo.token_data ? utxo.token_data : null, // Ensure token_data is not a string
+          amount: utxo.value,
+          prefix,
+          token_data: utxo.token_data ? JSON.stringify(utxo.token_data) : null,
         }));
 
         // Store new UTXOs
@@ -219,5 +228,77 @@ export default async function UTXOManager() {
         );
       }
     }
+  }
+  async function fetchUTXOs(walletKeys) {
+    // setFetchingUTXOs(true);
+    const utxosMap = {};
+    const cashTokenUtxosMap = {};
+    const uniqueUTXOs = new Set();
+    const loadingState = {};
+
+    const electrumService = ElectrumService();
+    await electrumService.electrumConnect();
+
+    for (const key of walletKeys) {
+      loadingState[key.address] = true;
+    }
+    // setLoading(loadingState);
+
+    for (let i = 0; i < walletKeys.length; i++) {
+      const key = walletKeys[i];
+      console.log(`Key ${i}:`, key.address);
+      const addressUTXOs = await fetchUTXOsByAddress(
+        state.wallet_id.currentWalletId,
+        key.address
+      );
+      console.log(`Fetched UTXOs for address ${key.address}:`, addressUTXOs);
+
+      utxosMap[key.address] = addressUTXOs.filter((utxo) => {
+        const utxoKey = `${utxo.tx_hash}-${utxo.tx_pos}-${utxo.address}`;
+        if (uniqueUTXOs.has(utxoKey)) {
+          return false;
+        }
+        if (utxo.address === key.address && !utxo.token_data) {
+          uniqueUTXOs.add(utxoKey);
+          total += utxo.amount;
+          return true;
+        }
+        return false;
+      });
+
+      cashTokenUtxosMap[key.address] = addressUTXOs.filter((utxo) => {
+        const utxoKey = `${utxo.tx_hash}-${utxo.tx_pos}-${utxo.address}`;
+        if (uniqueUTXOs.has(utxoKey)) {
+          return false;
+        }
+        if (utxo.address === key.address && utxo.token_data) {
+          uniqueUTXOs.add(utxoKey);
+          total += utxo.amount;
+          return true;
+        }
+        return false;
+      });
+
+      loadingState[key.address] = false;
+      // setLoading({ ...loadingState });
+      // setUtxoProgress(((i + 1) / walletKeys.length) * 100);
+    }
+
+    await electrumService.electrumDisconnect();
+
+    // Update Redux with the new UTXOs
+    const newUTXOs = walletKeys.reduce((acc, key) => {
+      acc[key.address] = [
+        ...utxosMap[key.address],
+        ...cashTokenUtxosMap[key.address],
+      ];
+      return acc;
+    }, {});
+    store.dispatch(setUTXOs({ newUTXOs }));
+
+    return { utxosMap, cashTokenUtxosMap };
+    // setUtxos(utxosMap);
+    // setCashTokenUtxos(cashTokenUtxosMap);
+    // setFetchingUTXOs(false);
   }
 }
