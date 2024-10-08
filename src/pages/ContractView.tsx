@@ -6,13 +6,13 @@ import {
 import { useSelector } from 'react-redux';
 import { useNavigate } from 'react-router-dom';
 import ContractManager from '../apis/ContractManager/ContractManager';
-import KeyManager from '../apis/WalletManager/KeyManager';
 import { hexString } from '../utils/hex';
 import { RootState } from '../redux/store';
 import RegularUTXOs from '../components/RegularUTXOs';
 import CashTokenUTXOs from '../components/CashTokenUTXOs';
 import parseInputValue from '../utils/parseInputValue';
 import AddressSelectionPopup from '../components/AddressSelectionPopup';
+import KeyService from '../services/KeyService';
 
 const ContractView = () => {
   // const [contractDetails, setContractDetails] = useState(null);
@@ -24,7 +24,6 @@ const ContractView = () => {
   const [contractInstances, setContractInstances] = useState([]);
   const [showAddressPopup, setShowAddressPopup] = useState(false);
   const [currentArgName, setCurrentArgName] = useState('');
-  const keyManager = KeyManager();
   const navigate = useNavigate();
   const wallet_id = useSelector(
     (state: RootState) => state.wallet_id.currentWalletId
@@ -94,7 +93,7 @@ const ContractView = () => {
   const handleAddressSelect = async (address: string) => {
     console.log(`Address selected for ${currentArgName}: ${address}`);
 
-    const keys = await keyManager.retrieveKeys(wallet_id);
+    const keys = await KeyService.retrieveKeys(wallet_id);
     const selectedKey = keys.find((key) => key.address === address);
 
     if (selectedKey) {

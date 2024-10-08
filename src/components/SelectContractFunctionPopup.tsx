@@ -7,9 +7,9 @@ import {
   setInputValues,
 } from '../redux/contractSlice'; // Importing actions from contractSlice
 import { encodePrivateKeyWif } from '@bitauth/libauth';
-import KeyManager from '../apis/WalletManager/KeyManager';
 import { RootState, AppDispatch } from '../redux/store';
 import { hexString } from '../utils/hex';
+import KeyService from '../services/KeyService';
 
 interface AbiInput {
   name: string;
@@ -37,7 +37,6 @@ const SelectContractFunctionPopup: React.FC<
   const [showAddressPopup, setShowAddressPopup] = useState<boolean>(false);
   const [selectedInput, setSelectedInput] = useState<AbiInput | null>(null);
 
-  const keyManager = KeyManager();
   const dispatch: AppDispatch = useDispatch();
 
   // Get the current walletId from the Redux store
@@ -115,7 +114,7 @@ const SelectContractFunctionPopup: React.FC<
         throw new Error('Invalid walletId');
       }
 
-      const keys = await keyManager.retrieveKeys(walletId);
+      const keys = await KeyService.retrieveKeys(walletId);
       const selectedKey = keys.find((key) => key.address === address);
 
       if (selectedKey) {

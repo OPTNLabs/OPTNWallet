@@ -1,9 +1,8 @@
-import ElectrumService from '../ElectrumServer/ElectrumServer';
 import DatabaseService from '../DatabaseManager/DatabaseService';
 import { TransactionHistoryItem } from '../../types/types'; // Assuming TransactionHistoryItem is defined in the types file
+import ElectrumService from '../../services/ElectrumService';
 
 export default function TransactionManager() {
-  const electrumService = ElectrumService();
   const dbService = DatabaseService();
 
   // Define the function with proper return type and parameter types
@@ -19,7 +18,7 @@ export default function TransactionManager() {
     try {
       // Fetch transaction history using Electrum service
       const history: TransactionHistoryItem[] =
-        await electrumService.getTransactionHistory(address);
+        await ElectrumService.getTransactionHistory(address);
 
       // Check if history is an array
       if (!Array.isArray(history)) {
