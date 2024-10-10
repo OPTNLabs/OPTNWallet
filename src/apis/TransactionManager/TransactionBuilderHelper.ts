@@ -1,7 +1,6 @@
 import {
   ElectrumNetworkProvider,
   TransactionBuilder,
-  Network,
   SignatureTemplate,
   HashType,
   Contract,
@@ -9,13 +8,11 @@ import {
 import ContractManager from '../ContractManager/ContractManager';
 import KeyManager from '../WalletManager/KeyManager';
 import parseInputValue from '../../utils/parseInputValue';
-import { useSelector } from 'react-redux';
 import { UTXO, TransactionOutput } from '../../types/types'; // Updated import to include UTXO and TransactionOutput interfaces
+import { store } from '../../redux/store';
 
 export default function TransactionBuilderHelper() {
-  const currentNetwork = useSelector(
-    (state: RootState) => state.network.currentNetwork
-  );
+  const currentNetwork = store.getState().network.currentNetwork;
 
   const provider = new ElectrumNetworkProvider(currentNetwork);
   const contractManager = ContractManager();

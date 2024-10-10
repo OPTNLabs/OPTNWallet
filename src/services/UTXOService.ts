@@ -23,27 +23,27 @@ const UTXOService = {
     console.log(`Formatted UTXOs for address ${address}:`, formattedUTXOs);
 
     // Store UTXOs in the database
-    await manager.storeUTXOs(
+    (await manager).storeUTXOs(
       formattedUTXOs.map((utxo) => ({
         ...utxo,
         wallet_id: walletId,
       }))
     );
 
-    return manager.fetchUTXOsByAddress(walletId, address);
+    return (await manager).fetchUTXOsByAddress(walletId, address);
   },
 
   async checkNewUTXOs(walletId: number): Promise<void> {
     const manager = UTXOManager();
 
     // Fetch addresses from the database using the new method
-    const queriedAddresses = await manager.fetchAddressesByWalletId(walletId);
+    const queriedAddresses = (await manager).fetchAddressesByWalletId(walletId);
 
     // Loop through each address to check for new UTXOs
-    for (const address of queriedAddresses) {
+    for (const address of await queriedAddresses) {
       try {
         const fetchedUTXOs = await ElectrumService.getUTXOS(address.address);
-        const existingUTXOs = await manager.fetchUTXOsByAddress(
+        const existingUTXOs = (await manager).fetchUTXOsByAddress(
           walletId,
           address.address
         );
@@ -52,12 +52,12 @@ const UTXOService = {
         const fetchedUTXOKeys = new Set(
           fetchedUTXOs.map((utxo: UTXO) => `${utxo.tx_hash}-${utxo.tx_pos}`)
         );
-        const utxosToDelete = existingUTXOs.filter(
+        const utxosToDelete = (await existingUTXOs).filter(
           (utxo) => !fetchedUTXOKeys.has(`${utxo.tx_hash}-${utxo.tx_pos}`)
         );
 
         // Delete outdated UTXOs
-        await manager.deleteUTXOs(walletId, utxosToDelete);
+        (await manager).deleteUTXOs(walletId, utxosToDelete);
 
         // Store new UTXOs
         const newUTXOs = fetchedUTXOs.map((utxo: UTXO) => ({
@@ -70,7 +70,7 @@ const UTXOService = {
           prefix: 'bchtest',
           token_data: utxo.token_data ? utxo.token_data : null,
         }));
-        await manager.storeUTXOs(newUTXOs);
+        (await manager).storeUTXOs(newUTXOs);
       } catch (error) {
         console.error(
           `Error fetching or storing UTXOs for address ${address.address}:`,
