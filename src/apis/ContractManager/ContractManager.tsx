@@ -5,14 +5,13 @@ import introspectionCovenantArtifact from './artifacts/IntrospectionCovenant.jso
 import transferWithTimeoutArtifact from './artifacts/transfer_with_timeout.json';
 import announcementArtifact from './artifacts/announcement.json';
 import escrowArtifact from './artifacts/escrow.json';
-import ElectrumService from '../ElectrumServer/ElectrumServer';
 import parseInputValue from '../../utils/parseInputValue';
 import { Network } from '../../redux/networkSlice';
 import { store } from '../../redux/store';
+import ElectrumService from '../../services/ElectrumService';
 
 export default function ContractManager() {
   const dbService = DatabaseService();
-  const electrum = ElectrumService();
   const state = store.getState();
 
   return {
@@ -90,7 +89,7 @@ export default function ContractManager() {
 
       const balance = await contract.getBalance();
       console.log('Balance', balance);
-      const utxos = await electrum.getUTXOS(contract.address);
+      const utxos = await ElectrumService.getUTXOS(contract.address);
 
       const formattedUTXOs = utxos.map((utxo) => ({
         tx_hash: utxo.tx_hash,
@@ -426,7 +425,7 @@ export default function ContractManager() {
         state.network.currentNetwork === Network.MAINNET
           ? 'bitcoincash'
           : 'bchtest';
-      const utxos = await electrum.getUTXOS(address);
+      const utxos = await ElectrumService.getUTXOS(address);
       const formattedUTXOs = utxos.map((utxo) => ({
         tx_hash: utxo.tx_hash,
         tx_pos: utxo.tx_pos,
