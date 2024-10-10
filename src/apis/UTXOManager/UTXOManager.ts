@@ -3,7 +3,7 @@ import { Network } from '../../redux/networkSlice';
 import { store } from '../../redux/store';
 import { UTXO } from '../../types/types';
 
-export default function UTXOManager() {
+export default async function UTXOManager() {
   const dbService = DatabaseService();
   const state = store.getState();
   const prefix =
