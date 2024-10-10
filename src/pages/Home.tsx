@@ -263,7 +263,7 @@ const Home = () => {
         }
       });
 
-    console.log('Token Totals:', tokenTotals); // Debug statement
+    // console.log('Token Totals:', tokenTotals); // Debug statement
     return tokenTotals;
   };
 
