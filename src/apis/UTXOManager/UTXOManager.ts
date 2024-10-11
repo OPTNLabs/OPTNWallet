@@ -2,6 +2,9 @@ import DatabaseService from '../DatabaseManager/DatabaseService';
 import { Network } from '../../redux/networkSlice';
 import { store } from '../../redux/store';
 import { UTXO } from '../../types/types';
+import ElectrumServer from '../ElectrumServer/ElectrumServer';
+import UTXOService from '../../services/UTXOService';
+import { setUTXOs } from '../../redux/utxoSlice';
 
 export default async function UTXOManager() {
   const dbService = DatabaseService();
@@ -16,8 +19,114 @@ export default async function UTXOManager() {
     fetchUTXOsByAddress,
     deleteUTXOs,
     fetchAddressesByWalletId,
+    fetchUTXOs,
+    fetchUTXOsFromDatabase,
   };
 
+  async function fetchUTXOsFromDatabase(keyPairs) {
+    const utxosMap = {};
+    const cashTokenUtxosMap = {};
+
+    for (const key of keyPairs) {
+      const addressUTXOs = await UTXOService.fetchAndStoreUTXOs(
+        state.wallet_id.currentWalletId,
+        key.address
+      );
+      console.log(`Stored UTXOs for address ${key.address}:`, addressUTXOs);
+
+      utxosMap[key.address] = addressUTXOs.filter((utxo) => !utxo.token_data);
+      cashTokenUtxosMap[key.address] = addressUTXOs.filter(
+        (utxo) => utxo.token_data
+      );
+    }
+    // Update Redux with the stored UTXOs
+    const newUTXOs = keyPairs.reduce((acc, key) => {
+      acc[key.address] = [
+        ...utxosMap[key.address],
+        ...cashTokenUtxosMap[key.address],
+      ];
+      return acc;
+    }, {});
+    store.dispatch(setUTXOs({ newUTXOs }));
+
+    return { utxosMap, cashTokenUtxosMap };
+    // setUtxos(utxosMap);
+    // setCashTokenUtxos(cashTokenUtxosMap);
+  }
+
+  async function fetchUTXOs(walletKeys) {
+    // setFetchingUTXOs(true);
+    const utxosMap = {};
+    const cashTokenUtxosMap = {};
+    const uniqueUTXOs = new Set();
+    const loadingState = {};
+    let total = 0;
+
+    const electrumServer = ElectrumServer();
+    await electrumServer.electrumConnect();
+
+    for (const key of walletKeys) {
+      loadingState[key.address] = true;
+    }
+    // setLoading(loadingState);
+
+    for (let i = 0; i < walletKeys.length; i++) {
+      const key = walletKeys[i];
+      console.log(`Key ${i}:`, key.address);
+      const addressUTXOs = await UTXOService.fetchAndStoreUTXOs(
+        state.wallet_id.currentWalletId,
+        key.address
+      );
+      console.log(`Fetched UTXOs for address ${key.address}:`, addressUTXOs);
+
+      utxosMap[key.address] = addressUTXOs.filter((utxo) => {
+        const utxoKey = `${utxo.tx_hash}-${utxo.tx_pos}-${utxo.address}`;
+        if (uniqueUTXOs.has(utxoKey)) {
+          return false;
+        }
+        if (utxo.address === key.address && !utxo.token_data) {
+          uniqueUTXOs.add(utxoKey);
+          total += utxo.amount;
+          return true;
+        }
+        return false;
+      });
+
+      cashTokenUtxosMap[key.address] = addressUTXOs.filter((utxo) => {
+        const utxoKey = `${utxo.tx_hash}-${utxo.tx_pos}-${utxo.address}`;
+        if (uniqueUTXOs.has(utxoKey)) {
+          return false;
+        }
+        if (utxo.address === key.address && utxo.token_data) {
+          uniqueUTXOs.add(utxoKey);
+          total += utxo.amount;
+          return true;
+        }
+        return false;
+      });
+
+      loadingState[key.address] = false;
+      // setLoading({ ...loadingState });
+      // setUtxoProgress(((i + 1) / walletKeys.length) * 100);
+    }
+
+    await electrumServer.electrumDisconnect();
+
+    // Update Redux with the new UTXOs
+    const newUTXOs = walletKeys.reduce((acc, key) => {
+      acc[key.address] = [
+        ...utxosMap[key.address],
+        ...cashTokenUtxosMap[key.address],
+      ];
+      return acc;
+    }, {}); // setFetchingUTXOs(false);
+
+    store.dispatch(setUTXOs({ newUTXOs }));
+
+    return { utxosMap, cashTokenUtxosMap };
+    // setUtxos(utxosMap);
+    // setCashTokenUtxos(cashTokenUtxosMap);
+  }
   // Store UTXOs in the database
   async function storeUTXOs(utxos: UTXO[]): Promise<void> {
     await dbService.ensureDatabaseStarted();
