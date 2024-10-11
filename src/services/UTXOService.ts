@@ -1,6 +1,12 @@
 import ElectrumService from './ElectrumService';
 import UTXOManager from '../apis/UTXOManager/UTXOManager';
 import { UTXO } from '../types/types';
+import { Network } from '../redux/networkSlice';
+import { store } from '../redux/store';
+
+const state = store.getState();
+const prefix =
+  state.network.currentNetwork === Network.MAINNET ? 'bitcoincash' : 'bchtest';
 
 const UTXOService = {
   async fetchAndStoreUTXOs(walletId: number, address: string): Promise<UTXO[]> {
@@ -16,7 +22,7 @@ const UTXOService = {
       value: utxo.value,
       address: address,
       height: utxo.height,
-      prefix: 'bchtest',
+      prefix,
       token_data: utxo.token_data || null,
     }));
 
@@ -67,7 +73,7 @@ const UTXOService = {
           tx_hash: utxo.tx_hash,
           tx_pos: utxo.tx_pos,
           value: utxo.value,
-          prefix: 'bchtest',
+          prefix,
           token_data: utxo.token_data ? utxo.token_data : null,
         }));
         (await manager).storeUTXOs(newUTXOs);
