@@ -2,11 +2,8 @@ import DatabaseService from '../DatabaseManager/DatabaseService';
 import { Network } from '../../redux/networkSlice';
 import { store } from '../../redux/store';
 import { UTXO } from '../../types/types';
-import ElectrumServer from '../ElectrumServer/ElectrumServer';
-import UTXOService from '../../services/UTXOService';
-import { setUTXOs } from '../../redux/utxoSlice';
 
-export default async function UTXOManager() {
+export default function UTXOManager() {
   const dbService = DatabaseService();
   const state = store.getState();
   const prefix =
@@ -19,127 +16,21 @@ export default async function UTXOManager() {
     fetchUTXOsByAddress,
     deleteUTXOs,
     fetchAddressesByWalletId,
-    fetchUTXOs,
     fetchUTXOsFromDatabase,
   };
 
-  async function fetchUTXOsFromDatabase(keyPairs) {
-    const utxosMap = {};
-    const cashTokenUtxosMap = {};
-
-    for (const key of keyPairs) {
-      const addressUTXOs = await UTXOService.fetchAndStoreUTXOs(
-        state.wallet_id.currentWalletId,
-        key.address
-      );
-      console.log(`Stored UTXOs for address ${key.address}:`, addressUTXOs);
-
-      utxosMap[key.address] = addressUTXOs.filter((utxo) => !utxo.token_data);
-      cashTokenUtxosMap[key.address] = addressUTXOs.filter(
-        (utxo) => utxo.token_data
-      );
-    }
-    // Update Redux with the stored UTXOs
-    const newUTXOs = keyPairs.reduce((acc, key) => {
-      acc[key.address] = [
-        ...utxosMap[key.address],
-        ...cashTokenUtxosMap[key.address],
-      ];
-      return acc;
-    }, {});
-    store.dispatch(setUTXOs({ newUTXOs }));
-
-    return { utxosMap, cashTokenUtxosMap };
-    // setUtxos(utxosMap);
-    // setCashTokenUtxos(cashTokenUtxosMap);
-  }
-
-  async function fetchUTXOs(walletKeys) {
-    // setFetchingUTXOs(true);
-    const utxosMap = {};
-    const cashTokenUtxosMap = {};
-    const uniqueUTXOs = new Set();
-    const loadingState = {};
-    let total = 0;
-
-    const electrumServer = ElectrumServer();
-    await electrumServer.electrumConnect();
-
-    for (const key of walletKeys) {
-      loadingState[key.address] = true;
-    }
-    // setLoading(loadingState);
-
-    for (let i = 0; i < walletKeys.length; i++) {
-      const key = walletKeys[i];
-      console.log(`Key ${i}:`, key.address);
-      const addressUTXOs = await UTXOService.fetchAndStoreUTXOs(
-        state.wallet_id.currentWalletId,
-        key.address
-      );
-      console.log(`Fetched UTXOs for address ${key.address}:`, addressUTXOs);
-
-      utxosMap[key.address] = addressUTXOs.filter((utxo) => {
-        const utxoKey = `${utxo.tx_hash}-${utxo.tx_pos}-${utxo.address}`;
-        if (uniqueUTXOs.has(utxoKey)) {
-          return false;
-        }
-        if (utxo.address === key.address && !utxo.token_data) {
-          uniqueUTXOs.add(utxoKey);
-          total += utxo.amount;
-          return true;
-        }
-        return false;
-      });
-
-      cashTokenUtxosMap[key.address] = addressUTXOs.filter((utxo) => {
-        const utxoKey = `${utxo.tx_hash}-${utxo.tx_pos}-${utxo.address}`;
-        if (uniqueUTXOs.has(utxoKey)) {
-          return false;
-        }
-        if (utxo.address === key.address && utxo.token_data) {
-          uniqueUTXOs.add(utxoKey);
-          total += utxo.amount;
-          return true;
-        }
-        return false;
-      });
-
-      loadingState[key.address] = false;
-      // setLoading({ ...loadingState });
-      // setUtxoProgress(((i + 1) / walletKeys.length) * 100);
-    }
-
-    await electrumServer.electrumDisconnect();
-
-    // Update Redux with the new UTXOs
-    const newUTXOs = walletKeys.reduce((acc, key) => {
-      acc[key.address] = [
-        ...utxosMap[key.address],
-        ...cashTokenUtxosMap[key.address],
-      ];
-      return acc;
-    }, {}); // setFetchingUTXOs(false);
-
-    store.dispatch(setUTXOs({ newUTXOs }));
-
-    return { utxosMap, cashTokenUtxosMap };
-    // setUtxos(utxosMap);
-    // setCashTokenUtxos(cashTokenUtxosMap);
-  }
   // Store UTXOs in the database
   async function storeUTXOs(utxos: UTXO[]): Promise<void> {
-    await dbService.ensureDatabaseStarted();
-    const db = dbService.getDatabase();
-    if (!db) {
-      console.log('Database not started.');
-      return;
-    }
     try {
-      const query = db.prepare(`
+      await dbService.ensureDatabaseStarted();
+      const db = dbService.getDatabase();
+      if (!db) throw new Error('Database not started.');
+
+      const insertQuery = db.prepare(`
         INSERT INTO UTXOs(wallet_id, address, height, tx_hash, tx_pos, amount, prefix, token_data) 
         VALUES (?, ?, ?, ?, ?, ?, ?, ?);
       `);
+
       for (const utxo of utxos) {
         const existsQuery = db.prepare(`
           SELECT COUNT(*) AS count FROM UTXOs WHERE wallet_id = ? AND tx_hash = ? AND tx_pos = ?;
@@ -147,7 +38,7 @@ export default async function UTXOManager() {
         existsQuery.bind([utxo.wallet_id, utxo.tx_hash, utxo.tx_pos]);
 
         if (existsQuery.step() && existsQuery.getAsObject().count === 0) {
-          query.run([
+          insertQuery.run([
             utxo.wallet_id,
             utxo.address,
             utxo.height || 0,
@@ -161,11 +52,11 @@ export default async function UTXOManager() {
         }
         existsQuery.free();
       }
-      query.free();
+      insertQuery.free();
+      await dbService.saveDatabaseToFile();
     } catch (error) {
-      console.log('Error storing UTXOs:', error);
+      console.error('Error storing UTXOs:', error);
     }
-    await dbService.saveDatabaseToFile();
   }
 
   // Fetch UTXOs from the database by address
@@ -173,83 +64,110 @@ export default async function UTXOManager() {
     walletId: number,
     address: string
   ): Promise<UTXO[]> {
-    await dbService.ensureDatabaseStarted();
-    const db = dbService.getDatabase();
-    if (!db) {
-      console.error('Database not started.');
-      return [];
-    }
-
     try {
-      const storedUTXOsQuery = db.prepare(`
+      await dbService.ensureDatabaseStarted();
+      const db = dbService.getDatabase();
+      if (!db) throw new Error('Database not started.');
+
+      const query = db.prepare(`
         SELECT * FROM UTXOs WHERE wallet_id = ? AND address = ?;
       `);
-      storedUTXOsQuery.bind([walletId, address]);
+      query.bind([walletId, address]);
 
-      const storedUTXOs: UTXO[] = [];
-      while (storedUTXOsQuery.step()) {
-        const result = storedUTXOsQuery.getAsObject();
-
-        if (typeof result.token_data === 'string') {
-          result.token_data = JSON.parse(result.token_data);
-        } else {
-          result.token_data = null;
-        }
-
-        storedUTXOs.push(result as unknown as UTXO);
+      const utxos: UTXO[] = [];
+      while (query.step()) {
+        const result = query.getAsObject();
+        result.token_data =
+          typeof result.token_data === 'string'
+            ? JSON.parse(result.token_data)
+            : null;
+        utxos.push(result as UTXO);
       }
-      storedUTXOsQuery.free();
+      query.free();
 
-      return storedUTXOs;
+      return utxos;
     } catch (error) {
-      console.error(`Error fetching UTXOs for address ${address}:`, error);
+      console.error(`Error fetching UTXOs for ${address}:`, error);
       return [];
     }
   }
 
   // Delete UTXOs from the database
   async function deleteUTXOs(walletId: number, utxos: UTXO[]): Promise<void> {
-    await dbService.ensureDatabaseStarted();
-    const db = dbService.getDatabase();
-    if (!db) {
-      console.log('Database not started.');
-      return;
-    }
     try {
+      await dbService.ensureDatabaseStarted();
+      const db = dbService.getDatabase();
+      if (!db) throw new Error('Database not started.');
+
+      db.exec('BEGIN TRANSACTION;');
+
       const query = db.prepare(`
         DELETE FROM UTXOs WHERE wallet_id = ? AND tx_hash = ? AND tx_pos = ? AND address = ?;
       `);
+
       for (const utxo of utxos) {
         query.run([walletId, utxo.tx_hash, utxo.tx_pos, utxo.address]);
       }
+
       query.free();
+      db.exec('COMMIT;');
+      await dbService.saveDatabaseToFile();
     } catch (error) {
-      console.log('Error deleting UTXOs:', error);
+      console.error('Error deleting UTXOs:', error);
+      db.exec('ROLLBACK;'); // Rollback in case of failure
     }
-    await dbService.saveDatabaseToFile();
   }
 
-  // New method to fetch addresses by wallet_id
+  // Fetch addresses by wallet ID from the database
   async function fetchAddressesByWalletId(
     walletId: number
   ): Promise<{ address: string }[]> {
-    await dbService.ensureDatabaseStarted();
-    const db = dbService.getDatabase();
-    if (!db) {
-      throw new Error('Database not started.');
+    try {
+      await dbService.ensureDatabaseStarted();
+      const db = dbService.getDatabase();
+      if (!db) throw new Error('Database not started.');
+
+      const query = db.prepare(
+        'SELECT address FROM addresses WHERE wallet_id = ?'
+      );
+      query.bind([walletId]);
+
+      const addresses: { address: string }[] = [];
+      while (query.step()) {
+        addresses.push(query.getAsObject() as { address: string });
+      }
+      query.free();
+
+      return addresses;
+    } catch (error) {
+      console.error('Error fetching addresses:', error);
+      return [];
     }
+  }
 
-    const query = 'SELECT address FROM addresses WHERE wallet_id = :walletid';
-    const statement = db.prepare(query);
-    statement.bind({ ':walletid': walletId });
+  // Fetch UTXOs from the database for multiple addresses
+  async function fetchUTXOsFromDatabase(keyPairs) {
+    const utxosMap: Record<string, UTXO[]> = {};
+    const cashTokenUtxosMap: Record<string, UTXO[]> = {};
 
-    const addresses: { address: string }[] = [];
-    while (statement.step()) {
-      const row = statement.getAsObject();
-      addresses.push({ address: row.address as string });
+    try {
+      for (const key of keyPairs) {
+        const addressUTXOs = await fetchUTXOsByAddress(
+          state.wallet_id.currentWalletId,
+          key.address
+        );
+        console.log(`Fetched UTXOs for ${key.address}:`, addressUTXOs);
+
+        utxosMap[key.address] = addressUTXOs.filter((utxo) => !utxo.token_data);
+        cashTokenUtxosMap[key.address] = addressUTXOs.filter(
+          (utxo) => utxo.token_data
+        );
+      }
+
+      return { utxosMap, cashTokenUtxosMap };
+    } catch (error) {
+      console.error('Error fetching UTXOs from database:', error);
+      return { utxosMap: {}, cashTokenUtxosMap: {} };
     }
-    statement.free();
-
-    return addresses;
   }
 }
