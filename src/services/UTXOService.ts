@@ -3,86 +3,136 @@ import UTXOManager from '../apis/UTXOManager/UTXOManager';
 import { UTXO } from '../types/types';
 import { Network } from '../redux/networkSlice';
 import { store } from '../redux/store';
+import { removeUTXOs, setUTXOs } from '../redux/utxoSlice';
 
 const state = store.getState();
 const prefix =
   state.network.currentNetwork === Network.MAINNET ? 'bitcoincash' : 'bchtest';
 
 const UTXOService = {
+  // Fetch UTXOs from Electrum and store them in the database and Redux
   async fetchAndStoreUTXOs(walletId: number, address: string): Promise<UTXO[]> {
-    const manager = UTXOManager();
+    try {
+      const manager = await UTXOManager();
 
-    // Fetch UTXOs from Electrum service
-    const utxos = await ElectrumService.getUTXOS(address);
-    console.log(`Raw UTXOs response for address ${address}:`, utxos);
+      // Fetch UTXOs from Electrum
+      const fetchedUTXOs = await ElectrumService.getUTXOS(address);
+      console.log(`Fetched UTXOs for ${address}:`, fetchedUTXOs);
 
-    const formattedUTXOs: UTXO[] = utxos.map((utxo: UTXO) => ({
-      tx_hash: utxo.tx_hash,
-      tx_pos: utxo.tx_pos,
-      value: utxo.value,
-      address: address,
-      height: utxo.height,
-      prefix,
-      token_data: utxo.token_data || null,
-    }));
-
-    console.log(`Formatted UTXOs for address ${address}:`, formattedUTXOs);
-
-    // Store UTXOs in the database
-    (await manager).storeUTXOs(
-      formattedUTXOs.map((utxo) => ({
-        ...utxo,
+      // Format UTXOs for storage
+      const formattedUTXOs = fetchedUTXOs.map((utxo: UTXO) => ({
+        tx_hash: utxo.tx_hash,
+        tx_pos: utxo.tx_pos,
+        value: utxo.value,
+        address,
+        height: utxo.height,
+        prefix,
+        token_data: utxo.token_data || null,
         wallet_id: walletId,
-      }))
-    );
+      }));
 
-    return (await manager).fetchUTXOsByAddress(walletId, address);
+      console.log(`Formatted UTXOs for ${address}:`, formattedUTXOs);
+
+      // Fetch existing UTXOs from the database
+      const existingUTXOs = await manager.fetchUTXOsByAddress(
+        walletId,
+        address
+      );
+
+      // Identify outdated UTXOs to delete
+      const fetchedUTXOKeys = new Set(
+        fetchedUTXOs.map((utxo) => `${utxo.tx_hash}-${utxo.tx_pos}`)
+      );
+
+      const utxosToDelete = existingUTXOs.filter(
+        (utxo) => !fetchedUTXOKeys.has(`${utxo.tx_hash}-${utxo.tx_pos}`)
+      );
+
+      if (utxosToDelete.length > 0) {
+        console.log(`Deleting outdated UTXOs for ${address}:`, utxosToDelete);
+        await manager.deleteUTXOs(walletId, utxosToDelete);
+
+        // Remove them from Redux as well
+        store.dispatch(removeUTXOs({ address, utxosToRemove: utxosToDelete }));
+      }
+
+      // Store new UTXOs
+      await manager.storeUTXOs(formattedUTXOs);
+
+      // Update Redux store with the new UTXOs
+      const updatedUTXOs = await manager.fetchUTXOsByAddress(walletId, address);
+      store.dispatch(setUTXOs({ newUTXOs: { [address]: updatedUTXOs } }));
+
+      return updatedUTXOs;
+    } catch (error) {
+      console.error(`Error in fetchAndStoreUTXOs for ${address}:`, error);
+      return [];
+    }
   },
 
+  // Check for new UTXOs and synchronize with the database and Redux
   async checkNewUTXOs(walletId: number): Promise<void> {
-    const manager = UTXOManager();
+    try {
+      const manager = await UTXOManager();
 
-    // Fetch addresses from the database using the new method
-    const queriedAddresses = (await manager).fetchAddressesByWalletId(walletId);
+      // Fetch all addresses linked to the wallet
+      const queriedAddresses = await manager.fetchAddressesByWalletId(walletId);
+      console.log('Queried addresses:', queriedAddresses);
 
-    // Loop through each address to check for new UTXOs
-    for (const address of await queriedAddresses) {
-      try {
-        const fetchedUTXOs = await ElectrumService.getUTXOS(address.address);
-        const existingUTXOs = (await manager).fetchUTXOsByAddress(
-          walletId,
-          address.address
-        );
+      for (const { address } of queriedAddresses) {
+        try {
+          // Fetch UTXOs from Electrum
+          const fetchedUTXOs = await ElectrumService.getUTXOS(address);
+          console.log(`Fetched UTXOs for ${address}:`, fetchedUTXOs);
 
-        // Determine outdated UTXOs to delete
-        const fetchedUTXOKeys = new Set(
-          fetchedUTXOs.map((utxo: UTXO) => `${utxo.tx_hash}-${utxo.tx_pos}`)
-        );
-        const utxosToDelete = (await existingUTXOs).filter(
-          (utxo) => !fetchedUTXOKeys.has(`${utxo.tx_hash}-${utxo.tx_pos}`)
-        );
+          // Fetch existing UTXOs from the database
+          const existingUTXOs = await manager.fetchUTXOsByAddress(
+            walletId,
+            address
+          );
 
-        // Delete outdated UTXOs
-        (await manager).deleteUTXOs(walletId, utxosToDelete);
+          // Identify outdated UTXOs to delete
+          const fetchedUTXOKeys = new Set(
+            fetchedUTXOs.map((utxo) => `${utxo.tx_hash}-${utxo.tx_pos}`)
+          );
 
-        // Store new UTXOs
-        const newUTXOs = fetchedUTXOs.map((utxo: UTXO) => ({
-          wallet_id: walletId,
-          address: address.address,
-          height: utxo.height,
-          tx_hash: utxo.tx_hash,
-          tx_pos: utxo.tx_pos,
-          value: utxo.value,
-          prefix,
-          token_data: utxo.token_data ? utxo.token_data : null,
-        }));
-        (await manager).storeUTXOs(newUTXOs);
-      } catch (error) {
-        console.error(
-          `Error fetching or storing UTXOs for address ${address.address}:`,
-          error
-        );
+          const utxosToDelete = existingUTXOs.filter(
+            (utxo) => !fetchedUTXOKeys.has(`${utxo.tx_hash}-${utxo.tx_pos}`)
+          );
+
+          if (utxosToDelete.length > 0) {
+            console.log(
+              `Deleting outdated UTXOs for ${address}:`,
+              utxosToDelete
+            );
+            await manager.deleteUTXOs(walletId, utxosToDelete);
+          }
+
+          // Store new UTXOs
+          const newUTXOs = fetchedUTXOs.map((utxo: UTXO) => ({
+            ...utxo,
+            wallet_id: walletId,
+            address,
+            prefix,
+            token_data: utxo.token_data || null,
+          }));
+
+          if (newUTXOs.length > 0) {
+            console.log(`Storing new UTXOs for ${address}:`, newUTXOs);
+            await manager.storeUTXOs(newUTXOs);
+          }
+
+          // Update Redux with the new UTXOs
+          store.dispatch(setUTXOs({ newUTXOs: { [address]: newUTXOs } }));
+        } catch (error) {
+          console.error(
+            `Error processing UTXOs for address ${address}:`,
+            error
+          );
+        }
       }
+    } catch (error) {
+      console.error('Error checking new UTXOs:', error);
     }
   },
 };
