@@ -1,4 +1,8 @@
-import { useState, useEffect } from 'react';
+import {
+  // React,
+  useState,
+  useEffect,
+} from 'react';
 import { useSelector } from 'react-redux';
 import { useNavigate } from 'react-router-dom';
 import ContractManager from '../apis/ContractManager/ContractManager';
@@ -11,6 +15,7 @@ import AddressSelectionPopup from '../components/AddressSelectionPopup';
 import KeyService from '../services/KeyService';
 
 const ContractView = () => {
+  // const [contractDetails, setContractDetails] = useState(null);
   const [error, setError] = useState(null);
   const [availableContracts, setAvailableContracts] = useState([]);
   const [selectedContractFile, setSelectedContractFile] = useState('');
@@ -132,6 +137,7 @@ const ContractView = () => {
         currentNetwork
       );
       console.log(contract);
+      // setContractDetails(contract);
 
       const instances = await contractManager.fetchContractInstances();
       setContractInstances(instances);
@@ -163,7 +169,6 @@ const ContractView = () => {
 
       console.log(`UTXOs updated. Added: ${added}, Removed: ${removed}`);
 
-      // Fetch updated contract instance from the database
       const updatedContractInstance =
         await contractManager.getContractInstanceByAddress(address);
 
@@ -326,7 +331,7 @@ const ContractView = () => {
                     <RegularUTXOs
                       address={instance.address}
                       utxos={instance.utxos
-                        .filter((utxo) => !utxo.token && utxo.height > 0) // Filter out stale UTXOs
+                        .filter((utxo) => !utxo.token)
                         .map((utxo) => ({
                           ...utxo,
                           amount: utxo.amount.toString(),
@@ -342,8 +347,8 @@ const ContractView = () => {
                         .map((utxo) => ({
                           ...utxo,
                           amount: utxo.amount.toString(),
-                          tx_hash: utxo.tx_hash,
-                          tx_pos: utxo.tx_pos,
+                          tx_hash: utxo.txid,
+                          tx_pos: utxo.vout,
                           token_data: {
                             amount: utxo.token.amount,
                             category: utxo.token.category,
