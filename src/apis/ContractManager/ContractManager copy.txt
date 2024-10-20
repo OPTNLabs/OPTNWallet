@@ -419,14 +419,12 @@ export default function ContractManager() {
     return artifact;
   }
 
-  async function updateContractUTXOs(address: string) {
+  async function updateContractUTXOs(address) {
     try {
       const prefix =
         state.network.currentNetwork === Network.MAINNET
           ? 'bitcoincash'
           : 'bchtest';
-
-      // Fetch UTXOs from Electrum for the given address
       const utxos = await ElectrumService.getUTXOS(address);
       const formattedUTXOs = utxos.map((utxo) => ({
         tx_hash: utxo.tx_hash,
@@ -437,54 +435,10 @@ export default function ContractManager() {
         prefix, // Ensure prefix is provided
       }));
 
-      console.log('Fetched UTXOs from Electrum:', formattedUTXOs);
+      console.log('Fetched UTXOs:', formattedUTXOs);
 
       await dbService.ensureDatabaseStarted();
       const db = dbService.getDatabase();
-
-      // Get the contract instance by address
-      const contractInstance = await getContractInstanceByAddress(address);
-      if (!contractInstance) {
-        throw new Error(`Contract instance not found for address: ${address}`);
-      }
-
-      const contractName = contractInstance.contract_name;
-      console.log(
-        `Found contract instance for address ${address} with name ${contractName}`
-      );
-
-      // Fetch the contract artifact
-      const artifact = await getContractArtifact(contractName);
-      if (!artifact) {
-        throw new Error(`Artifact not found for contract: ${contractName}`);
-      }
-
-      // Fetch the constructor arguments for the contract instance
-      const constructorArgs = await fetchConstructorArgs(address);
-      if (!constructorArgs || constructorArgs.length === 0) {
-        throw new Error(
-          `Constructor arguments not found for contract at address: ${address}`
-        );
-      }
-
-      // Cross-reference constructor arguments with the artifact's constructor inputs
-      const parsedConstructorArgs = constructorArgs.map((arg, index) => {
-        const inputType = artifact.constructorInputs[index].type;
-
-        // Use parseInputValue to correctly convert the argument based on the input type
-        return parseInputValue(arg, inputType);
-      });
-
-      console.log('Parsed Constructor Arguments:', parsedConstructorArgs);
-
-      // Create the contract instance using the artifact and parsed constructor arguments
-      const contract = new Contract(artifact, parsedConstructorArgs, {
-        provider: new ElectrumNetworkProvider(contractInstance.network),
-      });
-
-      // Get updated balance
-      const updatedBalance = await contract.getBalance();
-      console.log('Updated Contract Balance:', updatedBalance);
 
       // Fetch existing UTXOs from the database for this address
       const query = 'SELECT tx_hash, tx_pos FROM UTXOs WHERE address = ?';
@@ -550,31 +504,10 @@ export default function ContractManager() {
         deleteStatement.free();
       }
 
-      // Update the `instantiated_contracts` table with the new UTXOs and balance
-      const updateContractQuery = `
-        UPDATE instantiated_contracts 
-        SET utxos = ?, balance = ? 
-        WHERE address = ?
-      `;
-      const updateParams = [
-        JSON.stringify(
-          formattedUTXOs.map((utxo) => ({
-            ...utxo,
-            amount: utxo.amount.toString(),
-          }))
-        ),
-        updatedBalance.toString(),
-        address,
-      ];
-
-      const updateStatement = db.prepare(updateContractQuery);
-      updateStatement.run(updateParams);
-      updateStatement.free();
-
       await dbService.saveDatabaseToFile();
       return { added: newUTXOs.length, removed: staleUTXOs.length };
     } catch (error) {
-      console.error('Error updating UTXOs and balance:', error);
+      console.error('Error updating UTXOs:', error);
       throw error;
     }
   }
