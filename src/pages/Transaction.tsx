@@ -325,7 +325,7 @@ const Transaction: React.FC = () => {
     const transactionID = await TransactionManage.sendTransaction(rawTX);
     if (transactionID.txid) setTransactionId(transactionID.txid);
     if (transactionID.errorMessage) setErrorMessage(transactionID.errorMessage);
-    setShowRawTxPopup(true);
+    setShowTxIdPopup(true);
   };
 
   const returnHome = async () => {
