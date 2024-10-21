@@ -1,8 +1,14 @@
 import DatabaseService from '../DatabaseManager/DatabaseService';
 import { TransactionHistoryItem } from '../../types/types'; // Assuming TransactionHistoryItem is defined in the types file
 import ElectrumService from '../../services/ElectrumService';
+import TransactionBuilderHelper from './TransactionBuilderHelper';
+import { addTxOutput } from '../../redux/transactionBuilderSlice';
+import { store } from '../../redux/store';
+// import { TransactionOutput } from '../../types/types';
 
 export default function TransactionManager() {
+  const state = store.getState();
+
   const dbService = DatabaseService();
 
   // Define the function with proper return type and parameter types
@@ -76,8 +82,162 @@ export default function TransactionManager() {
       );
     }
   }
+  async function sendTransaction(rawTX) {
+    const txBuilder = TransactionBuilderHelper();
+    let txid = null;
+    let errorMessage = null;
+    try {
+      txid = await txBuilder.sendTransaction(rawTX);
+      console.log('Sent Transaction:', txid);
+    } catch (error) {
+      console.error('Error sending transaction:', error);
+      errorMessage = 'Error sending transaction: ' + error.message;
+    }
+    return {
+      txid,
+      errorMessage,
+    };
+  }
+  async function addOutput(
+    recipientAddress,
+    transferAmount,
+    tokenAmount,
+    selectedTokenCategory,
+    selectedUtxos,
+    addresses
+  ) {
+    if (recipientAddress && (transferAmount || tokenAmount)) {
+      const newOutput = {
+        recipientAddress,
+        amount: Number(transferAmount) || 0,
+      };
 
+      if (selectedTokenCategory) {
+        const tokenUTXO = selectedUtxos.find(
+          (utxo) =>
+            utxo.token_data &&
+            utxo.token_data.category === selectedTokenCategory
+        );
+
+        if (tokenUTXO && tokenUTXO.token_data) {
+          newOutput.token = {
+            amount: Number(tokenAmount),
+            category: tokenUTXO.token_data.category,
+          };
+          const tokenAddress = addresses.find(
+            (addr) => addr.address === recipientAddress
+          )?.tokenAddress;
+          if (tokenAddress) {
+            newOutput.recipientAddress = tokenAddress;
+          }
+        }
+      }
+      store.dispatch(addTxOutput(newOutput));
+      return newOutput;
+    }
+  }
+  const buildTransaction = async (
+    outputs,
+    contractFunctionInputs,
+    changeAddress,
+    selectedUtxos
+  ) => {
+    const selectedFunction = state.contract.selectedFunction;
+    const txBuilder = TransactionBuilderHelper();
+    const returnObj = {
+      bytecodeSize: 0,
+      finalTransaction: '',
+      finalOutputs: null,
+      errorMsg: '',
+    };
+
+    console.log(`txOutputs: ${JSON.stringify(outputs, null, 2)}`);
+    console.log(`functionInputs: ${JSON.stringify(contractFunctionInputs)}`);
+
+    try {
+      // setLoading(true); // Show the loader
+      const placeholderOutput = {
+        recipientAddress: changeAddress,
+        amount: 546,
+      };
+      const txOutputs = [...outputs, placeholderOutput];
+
+      const transaction = await txBuilder.buildTransaction(
+        selectedUtxos,
+        txOutputs,
+        selectedFunction,
+        contractFunctionInputs // Pass contract function inputs here
+      );
+
+      if (transaction) {
+        const bytecodeSize = transaction.length / 2;
+        returnObj.bytecodeSize = bytecodeSize;
+
+        const totalUtxoAmount = selectedUtxos.reduce(
+          (sum, utxo) => sum + BigInt(utxo.amount),
+          BigInt(0)
+        );
+
+        const totalOutputAmount = outputs.reduce(
+          (sum, output) => sum + BigInt(output.amount),
+          BigInt(0)
+        );
+
+        const remainder =
+          totalUtxoAmount - totalOutputAmount - BigInt(bytecodeSize);
+
+        txOutputs.pop();
+
+        if (changeAddress && remainder > BigInt(0)) {
+          txOutputs.push({
+            recipientAddress: changeAddress,
+            amount: Number(remainder),
+          });
+        }
+
+        console.log('txbuilder: ', txBuilder);
+
+        const finalTransaction = await txBuilder.buildTransaction(
+          selectedUtxos,
+          txOutputs,
+          selectedFunction,
+          contractFunctionInputs // Ensure inputs are passed again here
+        );
+        returnObj.finalTransaction = finalTransaction;
+        returnObj.finalOutputs = txOutputs;
+
+        returnObj.errorMsg = '';
+        // setShowRawTxPopup(true); // Show raw TX pop-up
+      }
+    } catch (err) {
+      throw new Error(err);
+    }
+    return returnObj;
+  };
+  const fetchPrivateKey = async (
+    address: string
+  ): Promise<Uint8Array | null> => {
+    const dbService = DatabaseService();
+    await dbService.ensureDatabaseStarted();
+    const db = dbService.getDatabase();
+    const privateKeyQuery = `SELECT private_key FROM keys WHERE wallet_id = ? AND address = ?`;
+    const privateKeyStatement = db.prepare(privateKeyQuery);
+    privateKeyStatement.bind([state.wallet_id.currentWalletId, address]);
+    let privateKey = new Uint8Array();
+    while (privateKeyStatement.step()) {
+      const row = privateKeyStatement.getAsObject();
+      if (row.private_key) {
+        privateKey = new Uint8Array(row.private_key);
+      }
+    }
+    privateKeyStatement.free();
+    return privateKey.length > 0 ? privateKey : null;
+  };
   return {
     fetchAndStoreTransactionHistory,
+    sendTransaction,
+    addOutput,
+    buildTransaction,
+    fetchPrivateKey,
   };
 }
