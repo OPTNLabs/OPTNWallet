@@ -1,7 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useSelector, useDispatch } from 'react-redux';
-import OutputList from '../components/OutputList';
 import TransactionBuilderHelper, {
   TransactionOutput,
   UTXO,
@@ -14,7 +13,6 @@ import SelectContractFunctionPopup from '../components/SelectContractFunctionPop
 import {
   SignatureTemplate,
   ElectrumNetworkProvider,
-  Network,
   HashType,
 } from 'cashscript';
 import { RootState, AppDispatch } from '../redux/store';
@@ -24,6 +22,7 @@ import {
   setInputValues,
 } from '../redux/contractSlice';
 import { addTxOutput, removeTxOutput } from '../redux/transactionBuilderSlice';
+import TransactionManager from '../apis/TransactionManager/TransactionManager';
 
 const Transaction: React.FC = () => {
   const [walletId, setWalletId] = useState<number | null>(null);
@@ -77,20 +76,8 @@ const Transaction: React.FC = () => {
   const [showContractUTXOsPopup, setShowContractUTXOsPopup] = useState(false); // State for contract UTXOs popup
   const navigate = useNavigate();
   const dispatch: AppDispatch = useDispatch();
-  const currentNetwork = useSelector(
-    (state: RootState) => state.network.currentNetwork
-  );
 
-  const txOutputs = useSelector(
-    (state: RootState) => state.transactionBuilder.txOutputs
-  );
-
-  const selectedFunction = useSelector(
-    (state: RootState) => state.contract.selectedFunction
-  );
-  const functionInputs = useSelector(
-    (state: RootState) => state.contract.inputs
-  );
+  const TransactionManage = TransactionManager();
 
   useEffect(() => {
     const fetchWalletId = async () => {
@@ -139,7 +126,7 @@ const Transaction: React.FC = () => {
         const addressInfo = fetchedAddresses.find(
           (addr) => addr.address === row.address
         );
-        const privateKey = await fetchPrivateKey(walletId, row.address);
+        const privateKey = await TransactionManage.fetchPrivateKey(row.address);
         if (
           privateKey &&
           typeof row.address === 'string' &&
@@ -209,27 +196,6 @@ const Transaction: React.FC = () => {
       setContractUTXOs(contractUTXOs);
     };
 
-    const fetchPrivateKey = async (
-      walletId: number,
-      address: string
-    ): Promise<Uint8Array | null> => {
-      const dbService = DatabaseService();
-      await dbService.ensureDatabaseStarted();
-      const db = dbService.getDatabase();
-      const privateKeyQuery = `SELECT private_key FROM keys WHERE wallet_id = ? AND address = ?`;
-      const privateKeyStatement = db.prepare(privateKeyQuery);
-      privateKeyStatement.bind([walletId, address]);
-      let privateKey = new Uint8Array();
-      while (privateKeyStatement.step()) {
-        const row = privateKeyStatement.getAsObject();
-        if (row.private_key) {
-          privateKey = new Uint8Array(row.private_key);
-        }
-      }
-      privateKeyStatement.free();
-      return privateKey.length > 0 ? privateKey : null;
-    };
-
     if (walletId !== null) {
       fetchAddressesAndUTXOs(walletId);
     }
@@ -287,7 +253,6 @@ const Transaction: React.FC = () => {
         // Store UTXO temporarily until function is selected
         return;
       } else {
-        const provider = new ElectrumNetworkProvider(currentNetwork);
         const signatureTemplate = new SignatureTemplate(
           utxo.privateKey!,
           HashType.SIGHASH_ALL
@@ -306,34 +271,16 @@ const Transaction: React.FC = () => {
     console.log('Selected UTXOs after function inputs:', selectedUtxos);
   };
 
-  const addOutput = () => {
+  const addOutput = async () => {
     if (recipientAddress && (transferAmount || tokenAmount)) {
-      const newOutput: TransactionOutput = {
+      const newOutput = await TransactionManage.addOutput(
         recipientAddress,
-        amount: Number(transferAmount) || 0,
-      };
-
-      if (selectedTokenCategory) {
-        const tokenUTXO = selectedUtxos.find(
-          (utxo) =>
-            utxo.token_data &&
-            utxo.token_data.category === selectedTokenCategory
-        );
-
-        if (tokenUTXO && tokenUTXO.token_data) {
-          newOutput.token = {
-            amount: Number(tokenAmount),
-            category: tokenUTXO.token_data.category,
-          };
-          const tokenAddress = addresses.find(
-            (addr) => addr.address === recipientAddress
-          )?.tokenAddress;
-          if (tokenAddress) {
-            newOutput.recipientAddress = tokenAddress;
-          }
-        }
-      }
-
+        transferAmount,
+        tokenAmount,
+        selectedTokenCategory,
+        selectedUtxos,
+        addresses
+      );
       setOutputs([...outputs, newOutput]);
       setRecipientAddress('');
       setTransferAmount('');
@@ -341,99 +288,44 @@ const Transaction: React.FC = () => {
       setSelectedTokenCategory('');
 
       dispatch(addTxOutput(newOutput));
+      console.log(outputs);
     }
   };
 
   const removeOutput = (index: number) => {
     setOutputs(outputs.filter((_, i) => i !== index));
-
     dispatch(removeTxOutput(index));
   };
 
   const buildTransaction = async () => {
-    const txBuilder = TransactionBuilderHelper();
-
-    console.log(`txOutputs: ${JSON.stringify(outputs, null, 2)}`);
-    console.log(`functionInputs: ${JSON.stringify(contractFunctionInputs)}`);
-
     try {
-      setLoading(true); // Show the loader
-      const placeholderOutput = {
-        recipientAddress: changeAddress,
-        amount: 546,
-      };
-      const txOutputs = [...outputs, placeholderOutput];
-
-      const transaction = await txBuilder.buildTransaction(
-        selectedUtxos,
-        txOutputs,
-        selectedFunction,
-        contractFunctionInputs // Pass contract function inputs here
+      setLoading(true);
+      const transaction = await TransactionManage.buildTransaction(
+        outputs,
+        contractFunctionInputs,
+        changeAddress,
+        selectedUtxos
       );
-
-      if (transaction) {
-        const bytecodeSize = transaction.length / 2;
-        setBytecodeSize(bytecodeSize);
-
-        const totalUtxoAmount = selectedUtxos.reduce(
-          (sum, utxo) => sum + BigInt(utxo.amount),
-          BigInt(0)
-        );
-
-        const totalOutputAmount = outputs.reduce(
-          (sum, output) => sum + BigInt(output.amount),
-          BigInt(0)
-        );
-
-        const remainder =
-          totalUtxoAmount - totalOutputAmount - BigInt(bytecodeSize);
-
-        txOutputs.pop();
-
-        if (changeAddress && remainder > BigInt(0)) {
-          txOutputs.push({
-            recipientAddress: changeAddress,
-            amount: Number(remainder),
-          });
-        }
-
-        console.log('txbuilder: ', txBuilder);
-
-        const finalTransaction = await txBuilder.buildTransaction(
-          selectedUtxos,
-          txOutputs,
-          selectedFunction,
-          contractFunctionInputs // Ensure inputs are passed again here
-        );
-
-        setRawTX(finalTransaction);
-        setFinalOutputs(txOutputs);
-        setErrorMessage(null);
-        setShowRawTxPopup(true); // Show raw TX pop-up
-      }
-    } catch (error) {
-      console.error('Error building transaction:', error);
+      setBytecodeSize(transaction.bytecodeSize);
+      setLoading(false);
+      setRawTX(transaction.finalTransaction);
+      setFinalOutputs(transaction.finalOutputs);
+      setErrorMessage(transaction.errorMsg);
+      setShowRawTxPopup(true);
+    } catch (err) {
+      console.error('Error building transaction:', err);
       setRawTX('');
-      setErrorMessage('Error building transaction: ' + error.message);
+      setErrorMessage('Error building transaction: ' + err.message);
       setShowRawTxPopup(true); // Show error pop-up
-    } finally {
       setLoading(false);
     }
   };
 
   const sendTransaction = async () => {
-    const txBuilder = TransactionBuilderHelper();
-    try {
-      const txid = await txBuilder.sendTransaction(rawTX);
-      console.log('Sent Transaction:', txid);
-      setTransactionId(txid);
-      setShowTxIdPopup(true); // Show the transaction ID pop-up
-    } catch (error) {
-      console.error('Error sending transaction:', error);
-      console.error('Error sending transaction:', error);
-      setErrorMessage('Error sending transaction: ' + error.message);
-      setShowTxIdPopup(true); // Show pop-up to display the error
-    }
+    const transactionID = await TransactionManage.sendTransaction(rawTX);
+    if (transactionID.txid) setTransactionId(transactionID.txid);
+    if (transactionID.errorMessage) setErrorMessage(transactionID.errorMessage);
+    setShowRawTxPopup(true);
   };
 
   const returnHome = async () => {
