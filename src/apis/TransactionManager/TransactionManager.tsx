@@ -99,12 +99,12 @@ export default function TransactionManager() {
     };
   }
   async function addOutput(
-    recipientAddress,
-    transferAmount,
-    tokenAmount,
-    selectedTokenCategory,
-    selectedUtxos,
-    addresses
+    recipientAddress, //mandatory
+    transferAmount, //mandatory
+    tokenAmount = '',
+    selectedTokenCategory = '',
+    selectedUtxos = [],
+    addresses = []
   ) {
     if (recipientAddress && (transferAmount || tokenAmount)) {
       const newOutput = {

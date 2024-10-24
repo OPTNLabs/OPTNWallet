@@ -1,10 +1,8 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { useSelector, useDispatch } from 'react-redux';
-import TransactionBuilderHelper, {
-  TransactionOutput,
-  UTXO,
-} from '../apis/TransactionManager/TransactionBuilderHelper';
+import { useDispatch } from 'react-redux';
+import { TransactionOutput } from '../apis/TransactionManager/TransactionBuilderHelper';
+import { UTXO } from '../types/types';
 import DatabaseService from '../apis/DatabaseManager/DatabaseService';
 import RegularUTXOs from '../components/RegularUTXOs';
 import CashTokenUTXOs from '../components/CashTokenUTXOs';
@@ -84,6 +82,7 @@ const Transaction: React.FC = () => {
       const activeWalletId = 1;
       setWalletId(activeWalletId);
     };
+
     fetchWalletId();
   }, []);
 
@@ -178,6 +177,17 @@ const Transaction: React.FC = () => {
         allUTXOs.some((utxo) => utxo.address === addressObj.address)
       );
       setAddresses(addressesWithUTXOs);
+
+      //If there is only one wallet address auto select it
+      if (
+        addressesWithUTXOs.length === 1 &&
+        !selectedAddresses.includes(addressesWithUTXOs[0].address)
+      ) {
+        setSelectedAddresses([
+          ...selectedAddresses,
+          addressesWithUTXOs[0].address,
+        ]);
+      }
 
       // Set default change address to the first available address if it hasn't been set yet
       if (!changeAddress && addressesWithUTXOs.length > 0) {
@@ -443,7 +453,7 @@ const Transaction: React.FC = () => {
             <div className="bg-white p-6 rounded shadow-lg w-full max-w-md max-h-[90vh] overflow-hidden">
               <h4 className="text-md font-semibold mb-4">Wallet Addresses</h4>
               <div className="overflow-y-auto max-h-80">
-                {addresses.map((addressObj, index) => (
+                {addresses.map((addressObj) => (
                   <div
                     key={addressObj.address}
                     className="flex items-center mb-2 break-words whitespace-normal"
