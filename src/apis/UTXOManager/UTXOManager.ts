@@ -1,15 +1,15 @@
 import DatabaseService from '../DatabaseManager/DatabaseService';
-import { Network } from '../../redux/networkSlice';
+// import { Network } from '../../redux/networkSlice';
 import { store } from '../../redux/store';
 import { UTXO } from '../../types/types';
 
 export default function UTXOManager() {
   const dbService = DatabaseService();
   const state = store.getState();
-  const prefix =
-    state.network.currentNetwork === Network.MAINNET
-      ? 'bitcoincash'
-      : 'bchtest';
+  // const prefix =
+  //   state.network.currentNetwork === Network.MAINNET
+  //     ? 'bitcoincash'
+  //     : 'bchtest';
 
   return {
     storeUTXOs,
@@ -81,7 +81,7 @@ export default function UTXOManager() {
           typeof result.token_data === 'string'
             ? JSON.parse(result.token_data)
             : null;
-        utxos.push(result as UTXO);
+        utxos.push(result as unknown as UTXO);
       }
       query.free();
 
@@ -94,16 +94,18 @@ export default function UTXOManager() {
 
   // Delete UTXOs from the database
   async function deleteUTXOs(walletId: number, utxos: UTXO[]): Promise<void> {
+    let db; // Declare db variable outside of the try block
+
     try {
       await dbService.ensureDatabaseStarted();
-      const db = dbService.getDatabase();
+      db = dbService.getDatabase();
       if (!db) throw new Error('Database not started.');
 
       db.exec('BEGIN TRANSACTION;');
 
       const query = db.prepare(`
-        DELETE FROM UTXOs WHERE wallet_id = ? AND tx_hash = ? AND tx_pos = ? AND address = ?;
-      `);
+      DELETE FROM UTXOs WHERE wallet_id = ? AND tx_hash = ? AND tx_pos = ? AND address = ?;
+    `);
 
       for (const utxo of utxos) {
         query.run([walletId, utxo.tx_hash, utxo.tx_pos, utxo.address]);
@@ -114,7 +116,9 @@ export default function UTXOManager() {
       await dbService.saveDatabaseToFile();
     } catch (error) {
       console.error('Error deleting UTXOs:', error);
-      db.exec('ROLLBACK;'); // Rollback in case of failure
+      if (db) {
+        db.exec('ROLLBACK;'); // Rollback in case of failure, if db is available
+      }
     }
   }
 

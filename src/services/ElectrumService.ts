@@ -37,7 +37,7 @@ const ElectrumService = {
       );
 
       if (isUTXOArray(UTXOs)) {
-        console.log(`Fetched UTXOs for address ${address}:`, UTXOs);
+        // console.log(`Fetched UTXOs for address ${address}:`, UTXOs);
         return UTXOs;
       } else {
         throw new Error('Invalid UTXO response format');
@@ -56,7 +56,7 @@ const ElectrumService = {
         address,
         'include_tokens'
       );
-      console.log('Get Balance response:', response);
+      // console.log('Get Balance response:', response);
 
       if (
         response &&
@@ -103,17 +103,17 @@ const ElectrumService = {
         throw new Error('Invalid address: Address cannot be undefined');
       }
 
-      console.log(`Fetching transaction history for address: ${address}`);
+      // console.log(`Fetching transaction history for address: ${address}`);
       const history: RequestResponse = await server.request(
         'blockchain.address.get_history',
         address
       );
 
       if (isTransactionHistoryArray(history)) {
-        console.log(
-          `Fetched transaction history for address ${address}:`,
-          history
-        );
+        // console.log(
+        //   `Fetched transaction history for address ${address}:`,
+        //   history
+        // );
         return history;
       } else {
         throw new Error('Invalid transaction history response format');
@@ -121,6 +121,160 @@ const ElectrumService = {
     } catch (error) {
       console.error('Error fetching transaction history:', error);
       return null;
+    }
+  },
+
+  async subscribeAddress(address: string, callback: (status: string) => void) {
+    const server = await ElectrumServer().electrumConnect();
+    try {
+      const status: RequestResponse = await server.request(
+        'blockchain.address.subscribe',
+        address
+      );
+
+      if (isStringResponse(status)) {
+        console.log(`Subscribed to address: ${address}, status: ${status}`);
+        // Here, you would set up the callback mechanism to listen for notifications.
+        server.on('notification', (method: string, params: any[]) => {
+          if (
+            method === 'blockchain.address.subscribe' &&
+            params[0] === address
+          ) {
+            callback(params[1]);
+          }
+        });
+      } else {
+        throw new Error('Invalid subscription response format');
+      }
+    } catch (error) {
+      console.error('Error subscribing to address:', error);
+    }
+  },
+
+  async subscribeBlockHeaders(callback: (header: any) => void) {
+    const server = await ElectrumServer().electrumConnect();
+    try {
+      await server.request('blockchain.headers.subscribe');
+
+      console.log('Subscribed to block headers');
+      // Set up callback for block header notifications
+      server.on('notification', (method: string, params: any[]) => {
+        if (method === 'blockchain.headers.subscribe') {
+          callback(params[0]);
+        }
+      });
+    } catch (error) {
+      console.error('Error subscribing to block headers:', error);
+    }
+  },
+
+  async subscribeTransaction(
+    txHash: string,
+    callback: (height: number) => void
+  ) {
+    const server = await ElectrumServer().electrumConnect();
+    try {
+      const height: RequestResponse = await server.request(
+        'blockchain.transaction.subscribe',
+        txHash
+      );
+
+      if (typeof height === 'number') {
+        console.log(`Subscribed to transaction: ${txHash}, height: ${height}`);
+        // Set up callback for transaction notifications
+        server.on('notification', (method: string, params: any[]) => {
+          if (
+            method === 'blockchain.transaction.subscribe' &&
+            params[0] === txHash
+          ) {
+            callback(params[1]);
+          }
+        });
+      } else {
+        throw new Error('Invalid transaction subscription response format');
+      }
+    } catch (error) {
+      console.error('Error subscribing to transaction:', error);
+    }
+  },
+
+  async subscribeDoubleSpendProof(
+    txHash: string,
+    callback: (dsProof: any) => void
+  ) {
+    const server = await ElectrumServer().electrumConnect();
+    try {
+      await server.request('blockchain.transaction.dsproof.subscribe', txHash);
+
+      console.log(
+        `Subscribed to double-spend proof for transaction: ${txHash}`
+      );
+      // Set up callback for double-spend proof notifications
+      server.on('notification', (method: string, params: any[]) => {
+        if (
+          method === 'blockchain.transaction.dsproof.subscribe' &&
+          params[0] === txHash
+        ) {
+          callback(params[1]);
+        }
+      });
+    } catch (error) {
+      console.error('Error subscribing to double-spend proof:', error);
+    }
+  },
+
+  async unsubscribeAddress(address: string): Promise<boolean> {
+    const server = await ElectrumServer().electrumConnect();
+    try {
+      const result: RequestResponse = await server.request(
+        'blockchain.address.unsubscribe',
+        address
+      );
+      return result === true;
+    } catch (error) {
+      console.error('Error unsubscribing from address:', error);
+      return false;
+    }
+  },
+
+  async unsubscribeBlockHeaders(): Promise<boolean> {
+    const server = await ElectrumServer().electrumConnect();
+    try {
+      const result: RequestResponse = await server.request(
+        'blockchain.headers.unsubscribe'
+      );
+      return result === true;
+    } catch (error) {
+      console.error('Error unsubscribing from block headers:', error);
+      return false;
+    }
+  },
+
+  async unsubscribeTransaction(txHash: string): Promise<boolean> {
+    const server = await ElectrumServer().electrumConnect();
+    try {
+      const result: RequestResponse = await server.request(
+        'blockchain.transaction.unsubscribe',
+        txHash
+      );
+      return result === true;
+    } catch (error) {
+      console.error('Error unsubscribing from transaction:', error);
+      return false;
+    }
+  },
+
+  async unsubscribeDoubleSpendProof(txHash: string): Promise<boolean> {
+    const server = await ElectrumServer().electrumConnect();
+    try {
+      const result: RequestResponse = await server.request(
+        'blockchain.transaction.dsproof.unsubscribe',
+        txHash
+      );
+      return result === true;
+    } catch (error) {
+      console.error('Error unsubscribing from double-spend proof:', error);
+      return false;
     }
   },
 };

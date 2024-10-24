@@ -3,19 +3,16 @@ import KeyGeneration from './KeyGeneration';
 import AddressManager from '../AddressManager/AddressManager';
 import { Address } from '../../types/types';
 import { Network } from '../../redux/networkSlice';
-import { store } from '../../redux/store';
 
-// Type guard to check if a value is a string
+// Type guards and helper function for type conversions
 function isString(value: any): value is string {
   return typeof value === 'string';
 }
 
-// Type guard to check if a value is an ArrayBufferLike (Uint8Array or ArrayBuffer)
 function isArrayBufferLike(value: any): value is ArrayBufferLike {
   return value instanceof Uint8Array || value instanceof ArrayBuffer;
 }
 
-// Helper function to convert any type to string safely
 function toString(value: any): string {
   return isString(value) ? value : String(value);
 }
@@ -24,7 +21,7 @@ export default function KeyManager() {
   const dbService = DatabaseService();
   const KeyGen = KeyGeneration();
   const ManageAddress = AddressManager();
-  const state = store.getState();
+
   return {
     retrieveKeys,
     createKeys,
@@ -65,7 +62,7 @@ export default function KeyManager() {
         ? new Uint8Array(row.public_key)
         : isString(row.public_key)
           ? Uint8Array.from(atob(row.public_key), (c) => c.charCodeAt(0))
-          : new Uint8Array(); // Handle as empty if neither condition is met
+          : new Uint8Array();
 
       const privateKey = isArrayBufferLike(row.private_key)
         ? new Uint8Array(row.private_key)
@@ -103,7 +100,8 @@ export default function KeyManager() {
     wallet_id: number,
     accountNumber: number,
     changeNumber: number,
-    addressNumber: number
+    addressNumber: number,
+    networkType: Network // Accept networkType as a parameter
   ): Promise<void> {
     await dbService.ensureDatabaseStarted();
     const db = dbService.getDatabase();
@@ -129,6 +127,7 @@ export default function KeyManager() {
     const passphrase = result.passphrase || '';
 
     const keys = await KeyGen.generateKeys(
+      networkType,
       mnemonic,
       passphrase,
       accountNumber,
@@ -164,10 +163,9 @@ export default function KeyManager() {
         addressNumber,
       ]);
       insertQuery.free();
+
       const prefix =
-        state.network.currentNetwork === Network.MAINNET
-          ? 'bitcoincash'
-          : 'bchtest';
+        networkType === Network.MAINNET ? 'bitcoincash' : 'bchtest';
       const newAddress: Address = {
         wallet_id,
         address: keys.aliceAddress,
@@ -202,12 +200,8 @@ export default function KeyManager() {
     const result = fetchAddressQuery.get([address]) as any;
     fetchAddressQuery.free();
 
-    if (
-      Array.isArray(result) &&
-      result.length > 0 &&
-      result[0] instanceof Uint8Array
-    ) {
-      return result[0];
+    if (result && isArrayBufferLike(result.private_key)) {
+      return new Uint8Array(result.private_key);
     } else {
       throw new Error(`No private key found for address: ${address}`);
     }

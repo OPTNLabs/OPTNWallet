@@ -1,42 +1,46 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import DatabaseService from '../apis/DatabaseManager/DatabaseService';
-import KeyGeneration from '../apis/WalletManager/KeyGeneration';
-import { useDispatch, useSelector } from 'react-redux';
-import { RootState } from '../redux/store';
-import { setWalletId, setWalletNetwork } from '../redux/walletSlice';
+import KeyService from '../services/KeyService';
 import WalletManager from '../apis/WalletManager/WalletManager';
+import { useDispatch, useSelector } from 'react-redux';
+import { setWalletId, setWalletNetwork } from '../redux/walletSlice';
 import { Network, setNetwork } from '../redux/networkSlice';
 import NetworkSwitch from './modules/NetworkSwitch';
+import { selectCurrentNetwork } from '../redux/selectors/networkSelectors';
 
 const WalletCreation = () => {
   const [mnemonicPhrase, setMnemonicPhrase] = useState('');
-  const [
-    walletName, //setWalletName
-  ] = useState('');
+  // const [walletName, setWalletName] = useState('OPTN');
   const [passphrase, setPassphrase] = useState('');
-  const [networkType, setNetworkType] = useState<Network>(Network.CHIPNET);
   const dbService = DatabaseService();
-  const WalletManage = WalletManager();
   const navigate = useNavigate();
-  const KeyGen = KeyGeneration();
-  const wallet_id = useSelector(
-    (state: RootState) => state.wallet_id.currentWalletId
-  );
+  // const wallet_id = useSelector(
+  //   (state: RootState) => state.wallet_id.currentWalletId
+  // );
+  const currentNetwork = useSelector(selectCurrentNetwork);
   const dispatch = useDispatch();
-  console.log(networkType);
+  const walletManager = WalletManager();
+
+  // temporary constant value
+  const walletName = 'OPTN';
+
+  // Ref to track if initialization has occurred
+  const hasInitialized = useRef(false);
+
   useEffect(() => {
-    console.log('Wallet ID: ', wallet_id);
     const initDb = async () => {
+      if (hasInitialized.current) {
+        return; // Prevent double initialization
+      }
+      hasInitialized.current = true;
+
       try {
-        console.log('Starting database...');
         const dbStarted = await dbService.startDatabase();
-        if (dbStarted) {
-          console.log('Database has been started.');
-          await generateMnemonicPhrase(); // Ensure to wait for mnemonic generation
-        } else {
-          console.error('Failed to start the database.');
+        if (!dbStarted) {
+          throw new Error('Failed to start the database.');
         }
+        await generateMnemonicPhrase();
       } catch (error) {
         console.error('Error initializing database:', error);
       }
@@ -45,9 +49,8 @@ const WalletCreation = () => {
   }, []);
 
   const generateMnemonicPhrase = async () => {
-    console.log('Generating mnemonic phrase...');
     try {
-      const mnemonic = await KeyGen.generateMnemonic();
+      const mnemonic = await KeyService.generateMnemonic();
       console.log('Generated mnemonic phrase:', mnemonic);
       setMnemonicPhrase(mnemonic);
     } catch (error) {
@@ -56,34 +59,54 @@ const WalletCreation = () => {
   };
 
   const handleCreateAccount = async () => {
-    const check = await WalletManage.checkAccount(mnemonicPhrase, passphrase);
-    if (!check) {
-      try {
-        const createAccountSuccess = await WalletManage.createWallet(
-          walletName,
-          mnemonicPhrase,
-          passphrase,
-          networkType
-        );
-        if (createAccountSuccess) {
-          console.log('Account created successfully.');
-        }
-      } catch (e) {
-        console.log(e);
+    // console.log('Creating account...');
+    try {
+      const accountExists = await walletManager.checkAccount(
+        mnemonicPhrase,
+        passphrase
+      );
+      if (accountExists) {
+        console.log('Account already exists.');
+        return;
       }
-    }
-    const walletID = await WalletManage.setWalletId(mnemonicPhrase, passphrase);
 
-    if (walletID != null) {
-      console.log(`Wallet ID valid: ${walletID}`);
+      // Create wallet using WalletManager
+      const createWalletSuccess = await walletManager.createWallet(
+        walletName,
+        mnemonicPhrase,
+        passphrase,
+        currentNetwork
+      );
+      if (!createWalletSuccess) {
+        throw new Error('Failed to create wallet in the database.');
+      }
+
+      // console.log('Wallet saved to database successfully.');
+
+      // Set wallet ID and network in Redux
+      const walletID = await walletManager.setWalletId(
+        mnemonicPhrase,
+        passphrase
+      );
+      if (walletID == null) {
+        throw new Error('Failed to set wallet ID in the Redux store.');
+      }
+
       dispatch(setWalletId(walletID));
-      dispatch(setWalletNetwork(networkType));
-      dispatch(setNetwork(networkType));
+      dispatch(setWalletNetwork(currentNetwork));
+      dispatch(setNetwork(currentNetwork));
+
+      // Create initial keys using KeyService
+      await KeyService.createKeys(walletID, 0, 0, 0);
+
+      console.log('Keys generated and account created successfully.');
       navigate(`/home/${walletID}`);
+    } catch (e) {
+      console.error('Error creating account:', e);
     }
   };
 
-  const returnHome = async () => {
+  const returnHome = () => {
     navigate(`/`);
   };
 
@@ -104,20 +127,6 @@ const WalletCreation = () => {
           {mnemonicPhrase ? mnemonicPhrase : 'Generating...'}
         </div>
 
-        {/*Remove the following div section*/}
-        {/* <div className="mb-4">
-          <label className="block text-white mb-2">Set Wallet Name</label>
-          <input
-            placeholder={wallet_id.toString()}
-            onChange={(e) =>
-              setWalletName(
-                e.target.value ? e.target.value : wallet_id.toString()
-              )
-            }
-            className="w-full p-2 border border-gray-300 rounded-md"
-          />
-        </div> */}
-
         <div className="mb-4">
           <label className="block text-white mb-2">Set Passphrase</label>
           <input
@@ -127,8 +136,8 @@ const WalletCreation = () => {
           />
         </div>
         <NetworkSwitch
-          networkType={networkType}
-          setNetworkType={setNetworkType}
+          networkType={currentNetwork}
+          setNetworkType={(network: Network) => dispatch(setNetwork(network))}
         />
         <button
           onClick={handleCreateAccount}

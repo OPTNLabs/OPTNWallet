@@ -250,12 +250,18 @@ const TransactionHistory: React.FC = () => {
                 key={tx.tx_hash}
                 className="p-4 border rounded-lg shadow-md bg-white break-words"
               >
-                <p>
-                  <strong>Transaction Hash:</strong> {tx.tx_hash}
-                </p>
-                <p>
-                  <strong>Height:</strong> {tx.height}
-                </p>
+                <a
+                  href={`https://chipnet.imaginary.cash/tx/${tx.tx_hash}`}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                >
+                  <p>
+                    <strong>Transaction Hash:</strong> {tx.tx_hash}
+                  </p>
+                  <p>
+                    <strong>Height:</strong> {tx.height}
+                  </p>
+                </a>
               </li>
             ))}
           </ul>
