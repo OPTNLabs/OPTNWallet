@@ -20,6 +20,12 @@ const networkSlice = createSlice({
     setNetwork: (state, action: PayloadAction<Network>) => {
       state.currentNetwork = action.payload;
     },
+    toggleNetwork: (state) => {
+      state.currentNetwork =
+        state.currentNetwork === Network.MAINNET
+          ? Network.CHIPNET
+          : Network.MAINNET;
+    },
   },
 });
 

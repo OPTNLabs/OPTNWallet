@@ -1,13 +1,11 @@
-const CashTokenUTXOs = ({ address, utxos, loading }) => {
-  console.log(address);
-
+const CashTokenUTXOs = ({ utxos, loading }) => {
   const safelyParseTokenData = (tokenData) => {
     if (!tokenData) return {}; // Return an empty object if null/undefined
     if (typeof tokenData === 'string') {
       try {
         return JSON.parse(tokenData);
       } catch (error) {
-        console.error('Error parsing token_data:', error);
+        console.error(`Error parsing token_data for address:`, error);
         return {}; // Fallback to empty object on parsing failure
       }
     }

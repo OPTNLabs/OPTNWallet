@@ -17,7 +17,7 @@ const UTXOService = {
 
       // Fetch UTXOs from Electrum
       const fetchedUTXOs = await ElectrumService.getUTXOS(address);
-      console.log(`Fetched UTXOs for ${address}:`, fetchedUTXOs);
+      // console.log(`Fetched UTXOs for ${address}:`, fetchedUTXOs);
 
       // Format UTXOs for storage
       const formattedUTXOs = fetchedUTXOs.map((utxo: UTXO) => ({
@@ -31,7 +31,7 @@ const UTXOService = {
         wallet_id: walletId,
       }));
 
-      console.log(`Formatted UTXOs for ${address}:`, formattedUTXOs);
+      // console.log(`Formatted UTXOs for ${address}:`, formattedUTXOs);
 
       // Fetch existing UTXOs from the database
       const existingUTXOs = await manager.fetchUTXOsByAddress(

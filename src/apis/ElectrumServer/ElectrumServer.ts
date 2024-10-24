@@ -8,6 +8,7 @@ import {
   mainnetServers,
 } from '../../utils/servers/ElectrumServers';
 import { store } from '../../redux/store';
+import { selectCurrentNetwork } from '../../redux/selectors/networkSelectors';
 import { Network } from '../../redux/networkSlice';
 
 const testServer = chipnetServers[0];
@@ -17,7 +18,7 @@ let electrum: ElectrumClient | null = null;
 
 function getCurrentServer(): string {
   const state = store.getState();
-  const currentNetwork = state.network.currentNetwork;
+  const currentNetwork = selectCurrentNetwork(state);
 
   return currentNetwork === Network.MAINNET ? mainServer : testServer;
 }
@@ -40,14 +41,14 @@ export default function ElectrumServer() {
     );
 
     await electrum.connect();
-    console.log('Connected to Electrum server');
+    // console.log('Connected to Electrum server:', server);
     return electrum;
   }
 
   async function electrumDisconnect(): Promise<boolean> {
     if (electrum) {
       await electrum.disconnect(true);
-      console.log('Disconnected from Electrum server');
+      // console.log('Disconnected from Electrum server');
       electrum = null;
       return true;
     }
@@ -59,7 +60,9 @@ export default function ElectrumServer() {
     ...params: any[]
   ): Promise<RequestResponse> {
     const electrum = await electrumConnect();
-    return await electrum.request(method, ...params);
+    const response = await await electrum.request(method, ...params);
+    await electrumDisconnect();
+    return response;
   }
 
   return {

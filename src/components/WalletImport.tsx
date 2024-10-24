@@ -1,35 +1,44 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import DatabaseService from '../apis/DatabaseManager/DatabaseService';
-import {
-  useDispatch, //useSelector
-} from 'react-redux';
-// import { RootState } from '../redux/store';
+import { useDispatch, useSelector } from 'react-redux';
 import { setWalletId } from '../redux/walletSlice';
 import WalletManager from '../apis/WalletManager/WalletManager';
 import NetworkSwitch from './modules/NetworkSwitch';
-import { Network } from '../redux/networkSlice';
+import { Network, setNetwork } from '../redux/networkSlice';
+import { selectCurrentNetwork } from '../redux/selectors/networkSelectors';
 
 const WalletImport = () => {
   const [recoveryPhrase, setRecoveryPhrase] = useState('');
-  const [
-    walletName, //setWalletName
-  ] = useState('OPTN');
   const [passphrase, setPassphrase] = useState('');
-  const [networkType, setNetworkType] = useState<Network>(Network.CHIPNET);
   const dbService = DatabaseService();
-  const WalletManage = WalletManager();
+  const walletManager = WalletManager();
   const navigate = useNavigate();
-  // const wallet_id = useSelector(
-  //   (state: RootState) => state.wallet_id.currentWalletId
-  // );
+  const currentNetwork = useSelector(selectCurrentNetwork);
   const dispatch = useDispatch();
+
+  // temporary constant value
+  const walletName = 'OPTN';
+
+  // Ref to track if initialization has occurred
+  const hasInitialized = useRef(false);
 
   useEffect(() => {
     const initDb = async () => {
-      const dbStarted = await dbService.startDatabase();
-      if (dbStarted) {
+      if (hasInitialized.current) {
+        return; // Prevent double initialization
+      }
+      hasInitialized.current = true;
+
+      console.log('Starting database...');
+      try {
+        const dbStarted = await dbService.startDatabase();
+        if (!dbStarted) {
+          throw new Error('Failed to start the database.');
+        }
         console.log('Database has been started.');
+      } catch (error) {
+        console.error('Error initializing database:', error);
       }
     };
     initDb();
@@ -45,56 +54,47 @@ const WalletImport = () => {
       console.log(
         'Checking account with given recovery phrase and passphrase...'
       );
-      const check = await WalletManage.checkAccount(recoveryPhrase, passphrase);
-      console.log('Account check result:', check);
+      const accountExists = await walletManager.checkAccount(
+        recoveryPhrase,
+        passphrase
+      );
 
-      if (!check) {
+      if (!accountExists) {
         console.log('Account does not exist, attempting to create...');
-        const createAccountSuccess = await WalletManage.createWallet(
+        const createAccountSuccess = await walletManager.createWallet(
           walletName,
           recoveryPhrase,
           passphrase,
-          networkType
+          currentNetwork
         );
-        if (createAccountSuccess) {
-          console.log('Account imported successfully.');
-        } else {
-          console.log('Failed to import account.');
+        if (!createAccountSuccess) {
+          console.error('Failed to import account.');
           return;
         }
+        console.log('Account imported successfully.');
       }
 
       console.log('Setting wallet ID...');
-      let walletID = await WalletManage.setWalletId(recoveryPhrase, passphrase);
-      console.log('Wallet ID:', walletID);
-
+      let walletID = await walletManager.setWalletId(
+        recoveryPhrase,
+        passphrase
+      );
       if (walletID == null) {
-        console.log('No wallet ID found, creating a new wallet...');
-        const created = await WalletManage.createWallet(
-          walletName,
-          recoveryPhrase,
-          passphrase,
-          networkType
-        );
-        if (created) {
-          console.log('New imported wallet created successfully');
-          walletID = await WalletManage.setWalletId(recoveryPhrase, passphrase);
-        } else {
-          console.log('Failed to create a new wallet.');
-          return;
-        }
+        console.error('Failed to set wallet ID.');
+        return;
       }
 
-      if (walletID != null) {
-        dispatch(setWalletId(walletID));
-        navigate(`/home/${walletID}`);
-      }
+      dispatch(setWalletId(walletID));
+      dispatch(setNetwork(currentNetwork));
+      console.log('Wallet ID set and network updated.');
+
+      navigate(`/home/${walletID}`);
     } catch (e) {
-      console.log('Error importing account:', e);
+      console.error('Error importing account:', e);
     }
   };
 
-  const returnHome = async () => {
+  const returnHome = () => {
     navigate(`/`);
   };
 
@@ -114,7 +114,7 @@ const WalletImport = () => {
         <div className="mb-4">
           <label className="block text-white mb-2">Recovery Phrase</label>
           <input
-            type="password"
+            type="text"
             onChange={(e) => setRecoveryPhrase(e.target.value)}
             className="w-full p-2 border border-gray-300 rounded-md"
           />
@@ -128,23 +128,9 @@ const WalletImport = () => {
           />
         </div>
         <NetworkSwitch
-          networkType={networkType}
-          setNetworkType={setNetworkType}
+          networkType={currentNetwork}
+          setNetworkType={(network: Network) => dispatch(setNetwork(network))}
         />
-        {/*Remove the following div section*/}
-        {/* <div className="mb-4">
-          <label className="block text-white mb-2">Set Wallet Name</label>
-          <input
-            placeholder={wallet_id.toString()}
-            onChange={(e) =>
-              setWalletName(
-                e.target.value ? e.target.value : wallet_id.toString()
-              )
-            }
-            className="w-full p-2 border border-gray-300 rounded-md"
-          />
-        </div> */}
-
         <button
           onClick={handleImportAccount}
           className="w-full bg-blue-500 text-white py-2 px-4 rounded-md hover:bg-blue-600 transition duration-300 my-2"

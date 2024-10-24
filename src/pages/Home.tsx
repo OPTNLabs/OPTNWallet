@@ -33,8 +33,6 @@ const Home: React.FC = () => {
 
     setGeneratingKeys(true);
     const existingKeys = await KeyService.retrieveKeys(currentWalletId);
-    setKeyPairs(existingKeys);
-
     const newKeys = [];
     const keySet = new Set(existingKeys.map((key) => key.address));
 
@@ -44,7 +42,6 @@ const Home: React.FC = () => {
         newKeys.push(newKey);
         keySet.add(newKey.address);
       }
-      setUtxoProgress(((i + 1) / batchAmount) * 100);
     }
 
     setKeyPairs((prevKeys) => [...prevKeys, ...newKeys]);
@@ -56,17 +53,31 @@ const Home: React.FC = () => {
 
     setFetchingUTXOs(true);
     const allUTXOs: Record<string, any[]> = {};
+    const totalKeyPairs = keyPairs.length;
 
     try {
+      let completed = 0;
+
       for (const keyPair of keyPairs) {
         setLoading((prev) => ({ ...prev, [keyPair.address]: true }));
-        const fetchedUTXOs = await UTXOService.fetchAndStoreUTXOs(
-          currentWalletId,
-          keyPair.address
-        );
-        allUTXOs[keyPair.address] = fetchedUTXOs;
-        setLoading((prev) => ({ ...prev, [keyPair.address]: false }));
+        try {
+          const fetchedUTXOs = await UTXOService.fetchAndStoreUTXOs(
+            currentWalletId,
+            keyPair.address
+          );
+          allUTXOs[keyPair.address] = fetchedUTXOs;
+        } catch (error) {
+          console.error(
+            `Error fetching UTXOs for address ${keyPair.address}:`,
+            error
+          );
+        } finally {
+          setLoading((prev) => ({ ...prev, [keyPair.address]: false }));
+          completed++;
+          setUtxoProgress((completed / totalKeyPairs) * 100);
+        }
       }
+
       dispatch(setUTXOs({ newUTXOs: allUTXOs }));
     } catch (error) {
       console.error('Error fetching UTXOs:', error);
@@ -92,9 +103,20 @@ const Home: React.FC = () => {
   const handleGenerateKeys = async (index: number) => {
     if (!currentWalletId) return null;
 
-    await KeyService.createKeys(currentWalletId, 0, 0, index);
-    const newKeys = await KeyService.retrieveKeys(currentWalletId);
-    return newKeys[newKeys.length - 1];
+    try {
+      // Create new key
+      await KeyService.createKeys(currentWalletId, 0, 0, index);
+
+      // Retrieve the newly created key only (instead of fetching all keys again)
+      const newKeys = await KeyService.retrieveKeys(currentWalletId);
+      const newKey = newKeys[newKeys.length - 1];
+
+      if (newKey) {
+        setKeyPairs((prevKeys) => [...prevKeys, newKey]);
+      }
+    } catch (error) {
+      console.error('Error generating new key:', error);
+    }
   };
 
   const togglePopup = () => setShowPopup(!showPopup);
@@ -108,6 +130,7 @@ const Home: React.FC = () => {
   const calculateTotalBitcoinCash = () =>
     Object.values(reduxUTXOs)
       .flat()
+      .filter((utxo) => !utxo.token_data)
       .reduce((acc, utxo) => acc + utxo.amount, 0);
 
   const calculateCashTokenTotals = () => {
@@ -149,7 +172,7 @@ const Home: React.FC = () => {
         </button>
         <button
           className="mt-4 p-2 bg-blue-500 text-white rounded hover:bg-blue-600 transition duration-300 w-full max-w-md"
-          onClick={handleGenerateKeys.bind(null, keyPairs.length)}
+          onClick={() => handleGenerateKeys(keyPairs.length)}
           disabled={fetchingUTXOs || generatingKeys}
         >
           Generate New Key
@@ -215,14 +238,12 @@ const Home: React.FC = () => {
                     <strong>Address:</strong> {keyPair.address}
                   </p>
                   <RegularUTXOs
-                    address={keyPair.address}
                     utxos={filterRegularUTXOs(
                       reduxUTXOs[keyPair.address] || []
                     )}
                     loading={loading[keyPair.address]}
                   />
                   <CashTokenUTXOs
-                    address={keyPair.address}
                     utxos={filterCashTokenUTXOs(
                       reduxUTXOs[keyPair.address] || []
                     )}
