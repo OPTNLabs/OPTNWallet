@@ -1,26 +1,33 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useDispatch } from 'react-redux';
-import { TransactionOutput } from '../apis/TransactionManager/TransactionBuilderHelper';
-import { UTXO } from '../types/types';
-import DatabaseService from '../apis/DatabaseManager/DatabaseService';
-import RegularUTXOs from '../components/RegularUTXOs';
-import CashTokenUTXOs from '../components/CashTokenUTXOs';
-import ContractManager from '../apis/ContractManager/ContractManager';
-import SelectContractFunctionPopup from '../components/SelectContractFunctionPopup';
+import { TransactionOutput } from '../../apis/TransactionManager/TransactionBuilderHelper';
+import { UTXO } from '../../types/types';
+import DatabaseService from '../../apis/DatabaseManager/DatabaseService';
+import RegularUTXOs from '../../components/RegularUTXOs';
+import CashTokenUTXOs from '../../components/CashTokenUTXOs';
+import ContractManager from '../../apis/ContractManager/ContractManager';
+import SelectContractFunctionPopup from '../../components/SelectContractFunctionPopup';
 import {
   SignatureTemplate,
   ElectrumNetworkProvider,
   HashType,
 } from 'cashscript';
-import { RootState, AppDispatch } from '../redux/store';
+import { RootState, AppDispatch } from '../../redux/store';
 import {
   setSelectedFunction,
   // setInputs,
   setInputValues,
-} from '../redux/contractSlice';
-import { addTxOutput, removeTxOutput } from '../redux/transactionBuilderSlice';
-import TransactionManager from '../apis/TransactionManager/TransactionManager';
+} from '../../redux/contractSlice';
+import {
+  addTxOutput,
+  removeTxOutput,
+} from '../../redux/transactionBuilderSlice';
+import TransactionManager from '../../apis/TransactionManager/TransactionManager';
+import AddressSelection from './AddressSelection';
+import OutputSelection from './OutputSelection';
+import TransactionBuilder from './TransactionBuilder';
+import Popup from './Popup';
 
 const Transaction: React.FC = () => {
   const [walletId, setWalletId] = useState<number | null>(null);
@@ -65,10 +72,7 @@ const Transaction: React.FC = () => {
   const [contractUTXOs, setContractUTXOs] = useState<UTXO[]>([]);
   const [currentContractABI, setCurrentContractABI] = useState<any[]>([]);
   const [errorMessage, setErrorMessage] = useState<string | null>(null); // State for error messages
-  const [showWalletAddressesPopup, setShowWalletAddressesPopup] =
-    useState(false); // State for wallet addresses popup
-  const [showContractAddressesPopup, setShowContractAddressesPopup] =
-    useState(false); // State for contract addresses popup
+  // State for contract addresses popup
   const [showRegularUTXOsPopup, setShowRegularUTXOsPopup] = useState(false); // State for regular UTXOs popup
   const [showCashTokenUTXOsPopup, setShowCashTokenUTXOsPopup] = useState(false); // State for cash token UTXOs popup
   const [showContractUTXOsPopup, setShowContractUTXOsPopup] = useState(false); // State for contract UTXOs popup
@@ -211,39 +215,6 @@ const Transaction: React.FC = () => {
     }
   }, [walletId, changeAddress]);
 
-  const toggleAddressSelection = (address: string) => {
-    if (selectedAddresses.includes(address)) {
-      setSelectedAddresses(
-        selectedAddresses.filter(
-          (selectedAddress) => selectedAddress !== address
-        )
-      );
-    } else {
-      setSelectedAddresses([...selectedAddresses, address]);
-    }
-  };
-
-  const toggleContractSelection = (address: string, abi: {}) => {
-    if (
-      selectedContractAddresses.includes(address) &&
-      selectedContractABIs.includes(abi)
-    ) {
-      setSelectedContractAddresses(
-        selectedContractAddresses.filter(
-          (selectedContractAddress) => selectedContractAddress !== address
-        )
-      );
-      setSelectedContractABIs(
-        selectedContractABIs.filter(
-          (selectedContractABI) => selectedContractABI !== abi
-        )
-      );
-    } else {
-      setSelectedContractAddresses([...selectedContractAddresses, address]);
-      setSelectedContractABIs([...selectedContractABIs, abi]);
-    }
-  };
-
   const handleUtxoClick = async (utxo: UTXO) => {
     console.log('Selected UTXOs before function inputs:', selectedUtxos);
     const isSelected = selectedUtxos.some(
@@ -345,6 +316,7 @@ const Transaction: React.FC = () => {
   const closePopups = () => {
     setShowRawTxPopup(false);
     setShowTxIdPopup(false);
+    setShowContractUTXOsPopup(false);
     setErrorMessage(null); // Clear error messages when pop-ups are closed
   };
 
@@ -437,191 +409,17 @@ const Transaction: React.FC = () => {
         />
       </div>
       <h1 className="text-2xl font-bold mb-4">Transaction Builder</h1>
-      <div className="mb-6">
-        <h3 className="text-lg font-semibold mb-2">
-          Select Addresses to Spend From
-        </h3>
-        {/* Wallet Addresses Button */}
-        <button
-          className="bg-blue-500 text-white mx-1 py-2 px-4 rounded mb-2"
-          onClick={() => setShowWalletAddressesPopup(true)}
-        >
-          Wallet Addresses
-        </button>
-        {showWalletAddressesPopup && (
-          <div className="fixed inset-0 bg-gray-500 bg-opacity-75 flex items-center justify-center">
-            <div className="bg-white p-6 rounded shadow-lg w-full max-w-md max-h-[90vh] overflow-hidden">
-              <h4 className="text-md font-semibold mb-4">Wallet Addresses</h4>
-              <div className="overflow-y-auto max-h-80">
-                {addresses.map((addressObj) => (
-                  <div
-                    key={addressObj.address}
-                    className="flex items-center mb-2 break-words whitespace-normal"
-                  >
-                    <input
-                      type="checkbox"
-                      checked={selectedAddresses.includes(addressObj.address)}
-                      onChange={() =>
-                        toggleAddressSelection(addressObj.address)
-                      }
-                      className="mr-2"
-                    />
-                    <span className="break-words overflow-x-auto">
-                      {`Address: ${addressObj.address}`}
-                      <br />
-                      {`Token Address: ${addressObj.tokenAddress}`}
-                    </span>
-                  </div>
-                ))}
-              </div>
-              <button
-                className="bg-gray-300 text-gray-700 py-2 px-4 rounded mt-4"
-                onClick={() => setShowWalletAddressesPopup(false)}
-              >
-                Close
-              </button>
-            </div>
-          </div>
-        )}
-        {/* Contract Addresses Button */}
-        <button
-          className="bg-blue-500 text-white mx-1 py-2 px-4 rounded mb-2"
-          onClick={() => setShowContractAddressesPopup(true)}
-        >
-          Contract Addresses
-        </button>
-        {showContractAddressesPopup && (
-          <div className="fixed inset-0 bg-gray-500 bg-opacity-75 flex items-center justify-center">
-            <div className="bg-white p-6 rounded shadow-lg w-full max-w-md max-h-[90vh] overflow-hidden">
-              <h4 className="text-md font-semibold mb-4">Contract Addresses</h4>
-              <div className="overflow-y-auto max-h-80">
-                {contractAddresses.map((contractObj) => (
-                  <div
-                    key={contractObj.address}
-                    className="flex items-center mb-2 break-words whitespace-normal"
-                  >
-                    <input
-                      type="checkbox"
-                      checked={selectedContractAddresses.includes(
-                        contractObj.address
-                      )}
-                      onChange={() => {
-                        toggleAddressSelection(contractObj.address);
-                        toggleContractSelection(
-                          contractObj.address,
-                          contractObj.abi
-                        );
-                      }}
-                      className="mr-2"
-                    />
-                    <span className="break-words overflow-x-auto">
-                      {`Contract Address: ${contractObj.address}`}
-                      <br />
-                      {`Token Address: ${contractObj.tokenAddress}`}
-                    </span>
-                  </div>
-                ))}
-              </div>
-              <button
-                className="bg-gray-300 text-gray-700 py-2 px-4 rounded mt-4"
-                onClick={() => setShowContractAddressesPopup(false)}
-              >
-                Close
-              </button>
-            </div>
-          </div>
-        )}
-      </div>
-      <div className="mb-6">
-        {selectedAddresses.length > 0 && (
-          <>
-            <button
-              className="bg-blue-500 text-white py-2 px-4 rounded mb-2"
-              onClick={() => setShowRegularUTXOsPopup(true)}
-            >
-              View Regular UTXOs
-            </button>
-            <button
-              className="bg-blue-500 text-white py-2 px-4 rounded mb-2"
-              onClick={() => setShowCashTokenUTXOsPopup(true)}
-            >
-              View CashToken UTXOs
-            </button>
-          </>
-        )}
-        {showRegularUTXOsPopup && (
-          <div className="fixed inset-0 bg-gray-500 bg-opacity-75 flex items-center justify-center">
-            <div className="bg-white p-6 rounded shadow-lg w-full max-w-md max-h-[90vh] overflow-hidden">
-              <h4 className="text-md font-semibold mb-4">Regular UTXOs</h4>
-              <div className="overflow-y-auto max-h-80">
-                {filteredRegularUTXOs.map((utxo) => (
-                  <button
-                    key={utxo.id}
-                    onClick={() => handleUtxoClick(utxo)}
-                    className={`block w-full text-left p-2 mb-2 border rounded-lg break-words whitespace-normal ${
-                      selectedUtxos.some(
-                        (selectedUtxo) =>
-                          selectedUtxo.tx_hash === utxo.tx_hash &&
-                          selectedUtxo.tx_pos === utxo.tx_pos
-                      )
-                        ? 'bg-blue-100'
-                        : 'bg-white'
-                    }`}
-                  >
-                    <RegularUTXOs
-                      address={utxo.address}
-                      utxos={[utxo]}
-                      loading={false}
-                    />
-                  </button>
-                ))}
-              </div>
-              <button
-                className="bg-gray-300 text-gray-700 py-2 px-4 rounded mt-4"
-                onClick={() => setShowRegularUTXOsPopup(false)}
-              >
-                Close
-              </button>
-            </div>
-          </div>
-        )}
-        {showCashTokenUTXOsPopup && (
-          <div className="fixed inset-0 bg-gray-500 bg-opacity-75 flex items-center justify-center">
-            <div className="bg-white p-6 rounded shadow-lg w-full max-w-md max-h-[90vh] overflow-hidden">
-              <h4 className="text-md font-semibold mb-4">CashToken UTXOs</h4>
-              <div className="overflow-y-auto max-h-80">
-                {filteredCashTokenUTXOs.map((utxo) => (
-                  <button
-                    key={utxo.id}
-                    onClick={() => handleUtxoClick(utxo)}
-                    className={`block w-full text-left p-2 mb-2 border rounded-lg break-words whitespace-normal ${
-                      selectedUtxos.some(
-                        (selectedUtxo) =>
-                          selectedUtxo.tx_hash === utxo.tx_hash &&
-                          selectedUtxo.tx_pos === utxo.tx_pos
-                      )
-                        ? 'bg-blue-100'
-                        : 'bg-white'
-                    }`}
-                  >
-                    <CashTokenUTXOs
-                      address={utxo.address}
-                      utxos={[utxo]}
-                      loading={false}
-                    />
-                  </button>
-                ))}
-              </div>
-              <button
-                className="bg-gray-300 text-gray-700 py-2 px-4 rounded mt-4"
-                onClick={() => setShowCashTokenUTXOsPopup(false)}
-              >
-                Close
-              </button>
-            </div>
-          </div>
-        )}
-      </div>
+      <AddressSelection
+        addresses={addresses}
+        selectedAddresses={selectedAddresses}
+        contractAddresses={contractAddresses}
+        selectedContractAddresses={selectedContractAddresses}
+        setSelectedContractAddresses={setSelectedContractAddresses}
+        selectedContractABIs={selectedContractABIs}
+        setSelectedContractABIs={setSelectedContractABIs}
+        setSelectedAddresses={setSelectedAddresses}
+      />
+
       <div className="mb-6">
         {selectedContractAddresses.length > 0 && (
           <button
@@ -632,40 +430,32 @@ const Transaction: React.FC = () => {
           </button>
         )}
         {showContractUTXOsPopup && (
-          <div className="fixed inset-0 bg-gray-500 bg-opacity-75 flex items-center justify-center">
-            <div className="bg-white p-6 rounded shadow-lg w-full max-w-md max-h-[90vh] overflow-hidden">
-              <h4 className="text-md font-semibold mb-4">Contract UTXOs</h4>
-              <div className="overflow-y-auto max-h-80">
-                {filteredContractUTXOs.map((utxo) => (
-                  <button
-                    key={utxo.id}
-                    onClick={() => handleUtxoClick(utxo)}
-                    className={`block w-full text-left p-2 mb-2 border rounded-lg break-words whitespace-normal ${
-                      selectedUtxos.some(
-                        (selectedUtxo) =>
-                          selectedUtxo.tx_hash === utxo.tx_hash &&
-                          selectedUtxo.tx_pos === utxo.tx_pos
-                      )
-                        ? 'bg-blue-100'
-                        : 'bg-white'
-                    }`}
-                  >
-                    <RegularUTXOs
-                      address={utxo.address}
-                      utxos={[utxo]}
-                      loading={false}
-                    />
-                  </button>
-                ))}
-              </div>
-              <button
-                className="bg-gray-300 text-gray-700 py-2 px-4 rounded mt-4"
-                onClick={() => setShowContractUTXOsPopup(false)}
-              >
-                Close
-              </button>
+          <Popup closePopups={closePopups}>
+            <h4 className="text-md font-semibold mb-4">Contract UTXOs</h4>
+            <div className="overflow-y-auto max-h-80">
+              {filteredContractUTXOs.map((utxo) => (
+                <button
+                  key={utxo.id}
+                  onClick={() => handleUtxoClick(utxo)}
+                  className={`block w-full text-left p-2 mb-2 border rounded-lg break-words whitespace-normal ${
+                    selectedUtxos.some(
+                      (selectedUtxo) =>
+                        selectedUtxo.tx_hash === utxo.tx_hash &&
+                        selectedUtxo.tx_pos === utxo.tx_pos
+                    )
+                      ? 'bg-blue-100'
+                      : 'bg-white'
+                  }`}
+                >
+                  <RegularUTXOs
+                    address={utxo.address}
+                    utxos={[utxo]}
+                    loading={false}
+                  />
+                </button>
+              ))}
             </div>
-          </div>
+          </Popup>
         )}
       </div>
       <div className="mb-6">
@@ -734,93 +524,27 @@ const Transaction: React.FC = () => {
           ))}
         </div>
       )}
-      <div className="mb-6">
-        <h3 className="text-lg font-semibold mb-2">Add Output</h3>
-        <input
-          type="text"
-          value={recipientAddress}
-          placeholder="Recipient Address"
-          onChange={(e) => setRecipientAddress(e.target.value)}
-          className="border p-2 mb-2 w-full break-words whitespace-normal"
-        />
-        <input
-          type="number"
-          value={transferAmount}
-          placeholder="Regular Amount"
-          onChange={(e) => setTransferAmount(e.target.value)}
-          className="border p-2 mb-2 w-full break-words whitespace-normal"
-        />
-        <input
-          type="number"
-          value={tokenAmount}
-          placeholder="Token Amount"
-          onChange={(e) => setTokenAmount(e.target.value)}
-          className="border p-2 mb-2 w-full break-words whitespace-normal"
-        />
-        {availableTokenCategories.length > 0 && (
-          <select
-            value={selectedTokenCategory}
-            onChange={(e) => setSelectedTokenCategory(e.target.value)}
-            className="border p-2 mb-2 w-full break-words whitespace-normal"
-          >
-            <option value="">Select Token Category</option>
-            {availableTokenCategories.map((category, index) => (
-              <option key={index} value={category}>
-                {category}
-              </option>
-            ))}
-          </select>
-        )}
-        <button
-          onClick={addOutput}
-          className="bg-blue-500 text-white py-2 px-4 rounded"
-        >
-          Add Output
-        </button>
-      </div>
-      <div className="mb-6">
-        <h3 className="text-lg font-semibold mb-2">Change Address</h3>
-        <input
-          type="text"
-          value={changeAddress}
-          placeholder="Change Address"
-          onChange={(e) => setChangeAddress(e.target.value)}
-          className="border p-2 mb-2 w-full break-words whitespace-normal"
-        />
-      </div>
-      <div className="mb-6">
-        <h3 className="text-lg font-semibold mb-2">
-          Total Selected UTXO Amount: {totalSelectedUtxoAmount.toString()}
-        </h3>
-      </div>
-
-      {/* Spinning Loader */}
-      {loading && (
-        <div className="flex justify-center items-center mb-6">
-          <div className="w-8 h-8 border-4 border-t-4 border-blue-500 rounded-full animate-spin"></div>
-        </div>
-      )}
-
-      <div className="mb-6">
-        <button
-          onClick={buildTransaction}
-          className="bg-green-500 text-white py-2 px-4 rounded mr-2"
-        >
-          Build Transaction
-        </button>
-        <button
-          onClick={sendTransaction}
-          className="bg-red-500 text-white py-2 px-4 rounded"
-        >
-          Send Transaction
-        </button>
-      </div>
-      <button
-        onClick={returnHome}
-        className="bg-red-500 text-white py-2 px-4 rounded"
-      >
-        Go Back
-      </button>
+      <OutputSelection
+        recipientAddress={recipientAddress}
+        setRecipientAddress={setRecipientAddress}
+        transferAmount={transferAmount}
+        setTransferAmount={setTransferAmount}
+        tokenAmount={tokenAmount}
+        setTokenAmount={setTokenAmount}
+        utxos={utxos}
+        selectedTokenCategory={selectedTokenCategory}
+        setSelectedTokenCategory={setSelectedTokenCategory}
+        addOutput={addOutput}
+        changeAddress={changeAddress}
+        setChangeAddress={setChangeAddress}
+      />
+      <TransactionBuilder
+        totalSelectedUtxoAmount={totalSelectedUtxoAmount}
+        loading={loading}
+        buildTransaction={buildTransaction}
+        sendTransaction={sendTransaction}
+        returnHome={returnHome}
+      />
       {bytecodeSize !== null && (
         <div className="mb-6 break-words whitespace-normal">
           <h3 className="text-lg font-semibold mb-2">
@@ -829,55 +553,35 @@ const Transaction: React.FC = () => {
         </div>
       )}
       {showRawTxPopup && (
-        <div className="fixed inset-0 bg-gray-500 bg-opacity-75 flex items-center justify-center">
-          <div className="bg-white p-6 rounded shadow-lg w-96 max-h-[90vh] overflow-y-auto">
-            <h3 className="text-lg font-semibold mb-4">Raw Transaction</h3>
-            <div className="text-sm font-medium text-gray-700 break-words whitespace-normal mb-4">
-              {errorMessage ? (
-                <div className="text-red-500">{errorMessage}</div>
-              ) : (
-                rawTX
-              )}
-            </div>
-            <div className="flex justify-end">
-              <button
-                onClick={closePopups}
-                className="bg-gray-300 text-gray-700 py-2 px-4 rounded"
-              >
-                Close
-              </button>
-            </div>
+        <Popup closePopups={closePopups}>
+          <h3 className="text-lg font-semibold mb-4">Raw Transaction</h3>
+          <div className="text-sm font-medium text-gray-700 break-words whitespace-normal mb-4">
+            {errorMessage ? (
+              <div className="text-red-500">{errorMessage}</div>
+            ) : (
+              rawTX
+            )}
           </div>
-        </div>
+        </Popup>
       )}
       {showTxIdPopup && (
-        <div className="fixed inset-0 bg-gray-500 bg-opacity-75 flex items-center justify-center">
-          <div className="bg-white p-6 rounded shadow-lg w-96 max-h-[90vh] overflow-y-auto">
-            <h3 className="text-lg font-semibold mb-4">Transaction ID</h3>
-            <div className="text-sm font-medium text-gray-700 break-words whitespace-normal mb-4">
-              {errorMessage ? (
-                <div className="text-red-500">{errorMessage}</div>
-              ) : (
-                <a
-                  className="text-blue-500 underline"
-                  href={`https://chipnet.imaginary.cash/tx/${transactionId}`}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                >
-                  {transactionId}
-                </a>
-              )}
-            </div>
-            <div className="flex justify-end">
-              <button
-                onClick={closePopups}
-                className="bg-gray-300 text-gray-700 py-2 px-4 rounded"
+        <Popup closePopups={closePopups}>
+          <h3 className="text-lg font-semibold mb-4">Transaction ID</h3>
+          <div className="text-sm font-medium text-gray-700 break-words whitespace-normal mb-4">
+            {errorMessage ? (
+              <div className="text-red-500">{errorMessage}</div>
+            ) : (
+              <a
+                className="text-blue-500 underline"
+                href={`https://chipnet.imaginary.cash/tx/${transactionId}`}
+                target="_blank"
+                rel="noopener noreferrer"
               >
-                Close
-              </button>
-            </div>
+                {transactionId}
+              </a>
+            )}
           </div>
-        </div>
+        </Popup>
       )}
       {showPopup && currentContractABI.length > 0 && (
         <SelectContractFunctionPopup

@@ -9,7 +9,7 @@ import CreateWallet from './pages/CreateWallet';
 import ContractView from './pages/ContractView';
 import ImportWallet from './pages/ImportWallet';
 import Settings from './pages/Settings';
-import Transaction from './pages/Transaction';
+import Transaction from './pages/Transaction/Transaction';
 import TransactionHistory from './pages/TransactionHistory';
 import LandingPage from './pages/LandingPage'; // Import the LandingPage
 import { RootState } from './redux/store';
