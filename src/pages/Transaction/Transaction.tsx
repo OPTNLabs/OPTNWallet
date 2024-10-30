@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { useDispatch } from 'react-redux';
+import { useDispatch, useSelector } from 'react-redux';
 import { TransactionOutput, UTXO } from '../../types/types';
 import DatabaseService from '../../apis/DatabaseManager/DatabaseService';
 import RegularUTXOs from '../../components/RegularUTXOs';
@@ -27,6 +27,8 @@ import AddressSelection from './AddressSelection';
 import OutputSelection from './OutputSelection';
 import TransactionBuilder from './TransactionBuilder';
 import Popup from './Popup';
+import { selectCurrentNetwork } from '../../redux/selectors/networkSelectors';
+import { Network } from '../../redux/networkSlice';
 
 const Transaction: React.FC = () => {
   const [walletId, setWalletId] = useState<number | null>(null);
@@ -79,6 +81,10 @@ const Transaction: React.FC = () => {
   const dispatch: AppDispatch = useDispatch();
 
   const TransactionManage = TransactionManager();
+
+  const currentNetwork = useSelector((state: RootState) =>
+    selectCurrentNetwork(state)
+  );
 
   useEffect(() => {
     const fetchWalletId = async () => {
@@ -654,7 +660,11 @@ const Transaction: React.FC = () => {
             ) : (
               <a
                 className="text-blue-500 underline"
-                href={`https://chipnet.imaginary.cash/tx/${transactionId}`}
+                href={
+                  currentNetwork === Network.CHIPNET
+                    ? `https://chipnet.imaginary.cash/tx/${transactionId}`
+                    : `https://blockchair.com/bitcoin-cash/transaction/${transactionId}`
+                }
                 target="_blank"
                 rel="noopener noreferrer"
               >

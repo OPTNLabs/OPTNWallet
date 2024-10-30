@@ -8,6 +8,8 @@ import DatabaseService from '../apis/DatabaseManager/DatabaseService';
 import { createSelector } from 'reselect';
 import BottomNavBar from '../components/BottomNavBar';
 import { shortenTxHash } from '../utils/shortenHash';
+import { selectCurrentNetwork } from '../redux/selectors/networkSelectors';
+import { Network } from '../redux/networkSlice';
 
 interface Transaction {
   tx_hash: string;
@@ -38,6 +40,10 @@ const TransactionHistory: React.FC = () => {
   const [transactionsPerPage, setTransactionsPerPage] = useState(10);
   const [navBarHeight, setNavBarHeight] = useState(0);
   const dbService = DatabaseService();
+
+  const currentNetwork = useSelector((state: RootState) =>
+    selectCurrentNetwork(state)
+  );
 
   useEffect(() => {
     // Adjust the height of the container based on the navbar height
@@ -248,7 +254,11 @@ const TransactionHistory: React.FC = () => {
           <ul className="space-y-4 px-4">
             {paginatedTransactions.map((tx) => (
               <a
-                href={`https://chipnet.imaginary.cash/tx/${tx.tx_hash}`}
+                href={
+                  currentNetwork === Network.CHIPNET
+                    ? `https://chipnet.imaginary.cash/tx/${tx.tx_hash}`
+                    : `https://blockchair.com/bitcoin-cash/transaction/${tx.tx_hash}`
+                }
                 target="_blank"
                 rel="noopener noreferrer"
               >
