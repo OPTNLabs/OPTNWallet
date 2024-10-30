@@ -3,6 +3,7 @@ import KeyGeneration from './KeyGeneration';
 import AddressManager from '../AddressManager/AddressManager';
 import { Address } from '../../types/types';
 import { Network } from '../../redux/networkSlice';
+import { PREFIX } from '../../utils/constants';
 
 // Type guards and helper function for type conversions
 function isString(value: any): value is string {
@@ -165,7 +166,7 @@ export default function KeyManager() {
       insertQuery.free();
 
       const prefix =
-        networkType === Network.MAINNET ? 'bitcoincash' : 'bchtest';
+        networkType === Network.MAINNET ? PREFIX.mainnet : PREFIX.chipnet;
       const newAddress: Address = {
         wallet_id,
         address: keys.aliceAddress,
