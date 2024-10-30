@@ -1,8 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useDispatch } from 'react-redux';
-import { TransactionOutput } from '../../apis/TransactionManager/TransactionBuilderHelper';
-import { UTXO } from '../../types/types';
+import { TransactionOutput, UTXO } from '../../types/types';
 import DatabaseService from '../../apis/DatabaseManager/DatabaseService';
 import RegularUTXOs from '../../components/RegularUTXOs';
 import CashTokenUTXOs from '../../components/CashTokenUTXOs';
@@ -317,6 +316,8 @@ const Transaction: React.FC = () => {
     setShowRawTxPopup(false);
     setShowTxIdPopup(false);
     setShowContractUTXOsPopup(false);
+    setShowRegularUTXOsPopup(false);
+    setShowCashTokenUTXOsPopup(false);
     setErrorMessage(null); // Clear error messages when pop-ups are closed
   };
 
@@ -420,6 +421,86 @@ const Transaction: React.FC = () => {
         setSelectedAddresses={setSelectedAddresses}
       />
 
+      <div>
+        {selectedAddresses.length > 0 && (
+          <>
+            <button
+              className="bg-blue-500 text-white py-2 px-4 rounded mb-2"
+              onClick={() => setShowRegularUTXOsPopup(true)}
+            >
+              View Regular UTXOs
+            </button>
+          </>
+        )}
+        {showRegularUTXOsPopup && (
+          <Popup closePopups={closePopups}>
+            <h4 className="text-md font-semibold mb-4">Regular UTXOs</h4>
+            <div className="overflow-y-auto max-h-80">
+              {filteredRegularUTXOs.map((utxo) => (
+                <button
+                  key={utxo.id}
+                  onClick={() => handleUtxoClick(utxo)}
+                  className={`block w-full text-left p-2 mb-2 border rounded-lg break-words whitespace-normal ${
+                    selectedUtxos.some(
+                      (selectedUtxo) =>
+                        selectedUtxo.tx_hash === utxo.tx_hash &&
+                        selectedUtxo.tx_pos === utxo.tx_pos
+                    )
+                      ? 'bg-blue-100'
+                      : 'bg-white'
+                  }`}
+                >
+                  <RegularUTXOs
+                    address={utxo.address}
+                    utxos={[utxo]}
+                    loading={false}
+                  />
+                </button>
+              ))}
+            </div>
+          </Popup>
+        )}
+      </div>
+      <div>
+        {selectedAddresses.length > 0 && (
+          <>
+            <button
+              className="bg-blue-500 text-white py-2 px-4 rounded mb-2"
+              onClick={() => setShowCashTokenUTXOsPopup(true)}
+            >
+              View CashToken UTXOs
+            </button>
+          </>
+        )}
+        {showCashTokenUTXOsPopup && (
+          <Popup closePopups={closePopups}>
+            <h4 className="text-md font-semibold mb-4">CashToken UTXOs</h4>
+            <div className="overflow-y-auto max-h-80">
+              {filteredCashTokenUTXOs.map((utxo) => (
+                <button
+                  key={utxo.id}
+                  onClick={() => handleUtxoClick(utxo)}
+                  className={`block w-full text-left p-2 mb-2 border rounded-lg break-words whitespace-normal ${
+                    selectedUtxos.some(
+                      (selectedUtxo) =>
+                        selectedUtxo.tx_hash === utxo.tx_hash &&
+                        selectedUtxo.tx_pos === utxo.tx_pos
+                    )
+                      ? 'bg-blue-100'
+                      : 'bg-white'
+                  }`}
+                >
+                  <CashTokenUTXOs
+                    address={utxo.address}
+                    utxos={[utxo]}
+                    loading={false}
+                  />
+                </button>
+              ))}
+            </div>
+          </Popup>
+        )}
+      </div>
       <div className="mb-6">
         {selectedContractAddresses.length > 0 && (
           <button
