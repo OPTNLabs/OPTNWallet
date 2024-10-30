@@ -9,6 +9,8 @@ import CashTokenUTXOs from '../components/CashTokenUTXOs';
 import parseInputValue from '../utils/parseInputValue';
 import AddressSelectionPopup from '../components/AddressSelectionPopup';
 import KeyService from '../services/KeyService';
+import { shortenTxHash } from '../utils/shortenHash';
+import { PREFIX } from '../utils/constants';
 
 const ContractView = () => {
   const [error, setError] = useState(null);
@@ -248,7 +250,8 @@ const ContractView = () => {
                     </button>
                     {inputValues[arg.name] && (
                       <div className="mt-2">
-                        Selected {arg.type}: {inputValues[arg.name]}
+                        Selected {arg.type}:{' '}
+                        {shortenTxHash(inputValues[arg.name])}
                       </div>
                     )}
                   </>
@@ -301,10 +304,18 @@ const ContractView = () => {
                       <strong>Contract Name:</strong> {instance.contract_name}
                     </div>
                     <div className="mb-2">
-                      <strong>Address:</strong> {instance.address}
+                      <strong>Address:</strong>{' '}
+                      {shortenTxHash(
+                        instance.address,
+                        PREFIX[currentNetwork].length
+                      )}
                     </div>
                     <div className="mb-2">
-                      <strong>Token Address:</strong> {instance.token_address}
+                      <strong>Token Address:</strong>{' '}
+                      {shortenTxHash(
+                        instance.token_address,
+                        PREFIX[currentNetwork].length
+                      )}
                     </div>
                     <div className="mb-2">
                       <strong>Opcount:</strong> {instance.opcount}
@@ -313,7 +324,8 @@ const ContractView = () => {
                       <strong>Bytesize:</strong> {instance.bytesize}
                     </div>
                     <div className="mb-2">
-                      <strong>Bytecode:</strong> {instance.bytecode}
+                      <strong>Bytecode:</strong>{' '}
+                      {shortenTxHash(instance.bytecode)}
                     </div>
                     <div className="mb-2">
                       <strong>Balance:</strong> {instance.balance.toString()}{' '}
