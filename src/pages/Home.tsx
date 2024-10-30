@@ -63,7 +63,6 @@ const Home: React.FC = () => {
 
     try {
       let completed = 0;
-
       for (const keyPair of keyPairs) {
         setLoading((prev) => ({ ...prev, [keyPair.address]: true }));
         try {
@@ -84,6 +83,7 @@ const Home: React.FC = () => {
         }
       }
 
+      // Update Redux store in a single batch after fetching all UTXOs
       dispatch(setUTXOs({ newUTXOs: allUTXOs }));
     } catch (error) {
       console.error('Error fetching UTXOs:', error);
