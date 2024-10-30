@@ -1,3 +1,5 @@
+import { shortenTxHash } from '../utils/shortenHash';
+
 const CashTokenUTXOs = ({ utxos, loading }) => {
   const safelyParseTokenData = (tokenData) => {
     if (!tokenData) return {}; // Return an empty object if null/undefined
@@ -54,10 +56,11 @@ const CashTokenUTXOs = ({ utxos, loading }) => {
                 <strong>Token Amount:</strong> {tokenData.amount || 'N/A'}
               </p>
               <p className="break-words">
-                <strong>Token Category:</strong> {tokenData.category || 'N/A'}
+                <strong>Token Category:</strong>{' '}
+                {shortenTxHash(tokenData.category) || 'N/A'}
               </p>
               <p className="break-words">
-                <strong>Transaction Hash:</strong> {utxo.tx_hash}
+                <strong>Transaction Hash:</strong> {shortenTxHash(utxo.tx_hash)}
               </p>
               <p className="break-words">
                 <strong>Position:</strong> {utxo.tx_pos}

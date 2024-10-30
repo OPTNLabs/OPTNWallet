@@ -7,6 +7,7 @@ import { useParams } from 'react-router-dom';
 import DatabaseService from '../apis/DatabaseManager/DatabaseService';
 import { createSelector } from 'reselect';
 import BottomNavBar from '../components/BottomNavBar';
+import { shortenTxHash } from '../utils/shortenHash';
 
 interface Transaction {
   tx_hash: string;
@@ -246,23 +247,24 @@ const TransactionHistory: React.FC = () => {
         ) : (
           <ul className="space-y-4 px-4">
             {paginatedTransactions.map((tx) => (
-              <li
-                key={tx.tx_hash}
-                className="p-4 border rounded-lg shadow-md bg-white break-words"
+              <a
+                href={`https://chipnet.imaginary.cash/tx/${tx.tx_hash}`}
+                target="_blank"
+                rel="noopener noreferrer"
               >
-                <a
-                  href={`https://chipnet.imaginary.cash/tx/${tx.tx_hash}`}
-                  target="_blank"
-                  rel="noopener noreferrer"
+                <li
+                  key={tx.tx_hash}
+                  className="p-4 border rounded-lg shadow-md bg-white break-words"
                 >
                   <p>
-                    <strong>Transaction Hash:</strong> {tx.tx_hash}
+                    <strong>Transaction Hash:</strong>{' '}
+                    {shortenTxHash(tx.tx_hash)}
                   </p>
                   <p>
                     <strong>Height:</strong> {tx.height}
                   </p>
-                </a>
-              </li>
+                </li>
+              </a>
             ))}
           </ul>
         )}

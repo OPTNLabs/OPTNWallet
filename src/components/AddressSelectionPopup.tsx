@@ -1,5 +1,10 @@
 import React, { useState, useEffect } from 'react';
 import KeyService from '../services/KeyService';
+import { shortenTxHash } from '../utils/shortenHash';
+import { PREFIX } from '../utils/constants';
+import { useSelector } from 'react-redux';
+import { RootState } from '../redux/store';
+import { selectCurrentNetwork } from '../redux/selectors/networkSelectors';
 
 interface AddressSelectionPopupProps {
   onSelect: (address: string) => void;
@@ -11,6 +16,9 @@ const AddressSelectionPopup: React.FC<AddressSelectionPopupProps> = ({
   onClose,
 }) => {
   const [addresses, setAddresses] = useState<any[]>([]);
+  const currentNetwork = useSelector((state: RootState) =>
+    selectCurrentNetwork(state)
+  );
 
   useEffect(() => {
     const fetchAddresses = async () => {
@@ -44,7 +52,7 @@ const AddressSelectionPopup: React.FC<AddressSelectionPopupProps> = ({
                   className="border p-2 w-full text-left break-words"
                   onClick={() => handleSelect(addr.address)}
                 >
-                  {addr.address}
+                  {shortenTxHash(addr.address, PREFIX[currentNetwork].length)}
                 </button>
               </li>
             ))}

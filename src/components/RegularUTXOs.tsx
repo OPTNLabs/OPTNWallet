@@ -1,3 +1,5 @@
+import { shortenTxHash } from '../utils/shortenHash';
+
 const RegularUTXOs = ({ utxos, loading }) => {
   return (
     <div>
@@ -32,7 +34,7 @@ const RegularUTXOs = ({ utxos, loading }) => {
               <strong>Amount:</strong> {utxo.amount.toString()} satoshis
             </p>
             <p className="break-words">
-              <strong>Transaction Hash:</strong> {utxo.tx_hash}
+              <strong>Transaction Hash:</strong> {shortenTxHash(utxo.tx_hash)}
             </p>
             <p className="break-words">
               <strong>Position:</strong> {utxo.tx_pos}

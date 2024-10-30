@@ -2,13 +2,12 @@ import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useDispatch, useSelector } from 'react-redux';
 import { RootState } from '../redux/store';
-import RegularUTXOs from '../components/RegularUTXOs';
-import CashTokenUTXOs from '../components/CashTokenUTXOs';
 import BitcoinCashCard from '../components/BitcoinCashCard';
 import CashTokenCard from '../components/CashTokenCard';
 import KeyService from '../services/KeyService';
 import UTXOService from '../services/UTXOService';
 import { setUTXOs } from '../redux/utxoSlice';
+import Popup from '../components/Popup';
 
 const batchAmount = 10;
 
@@ -33,18 +32,25 @@ const Home: React.FC = () => {
 
     setGeneratingKeys(true);
     const existingKeys = await KeyService.retrieveKeys(currentWalletId);
-    const newKeys = [];
-    const keySet = new Set(existingKeys.map((key) => key.address));
 
-    for (let i = existingKeys.length; i < batchAmount; i++) {
-      const newKey = await handleGenerateKeys(i);
-      if (newKey && !keySet.has(newKey.address)) {
-        newKeys.push(newKey);
-        keySet.add(newKey.address);
+    // If no keys exist, generate them
+    if (existingKeys.length === 0) {
+      const newKeys = [];
+      const keySet = new Set(existingKeys.map((key) => key.address));
+
+      for (let i = existingKeys.length; i < batchAmount; i++) {
+        const newKey = await handleGenerateKeys(i);
+        if (newKey && !keySet.has(newKey.address)) {
+          newKeys.push(newKey);
+          keySet.add(newKey.address);
+        }
       }
+
+      setKeyPairs((prevKeys) => [...prevKeys, ...newKeys]);
+    } else {
+      setKeyPairs(existingKeys);
     }
 
-    setKeyPairs((prevKeys) => [...prevKeys, ...newKeys]);
     setGeneratingKeys(false);
   }, [currentWalletId, generatingKeys]);
 
@@ -120,12 +126,6 @@ const Home: React.FC = () => {
   };
 
   const togglePopup = () => setShowPopup(!showPopup);
-
-  const filterRegularUTXOs = (utxos: any[]) =>
-    utxos.filter((utxo) => !utxo.token_data);
-
-  const filterCashTokenUTXOs = (utxos: any[]) =>
-    utxos.filter((utxo) => utxo.token_data);
 
   const calculateTotalBitcoinCash = () =>
     Object.values(reduxUTXOs)
@@ -223,43 +223,12 @@ const Home: React.FC = () => {
         )}
       </div>
       {showPopup && (
-        <div className="fixed inset-0 bg-gray-600 bg-opacity-50">
-          <div className="relative top-20 mx-auto p-5 w-3/4 bg-white rounded-md shadow-lg">
-            <div className="text-center text-lg font-bold">
-              All Address Information
-            </div>
-            <div className="max-h-96 overflow-y-auto">
-              {keyPairs.map((keyPair, index) => (
-                <div
-                  key={index}
-                  className="p-4 mb-4 bg-white rounded-lg shadow-md"
-                >
-                  <p>
-                    <strong>Address:</strong> {keyPair.address}
-                  </p>
-                  <RegularUTXOs
-                    utxos={filterRegularUTXOs(
-                      reduxUTXOs[keyPair.address] || []
-                    )}
-                    loading={loading[keyPair.address]}
-                  />
-                  <CashTokenUTXOs
-                    utxos={filterCashTokenUTXOs(
-                      reduxUTXOs[keyPair.address] || []
-                    )}
-                    loading={loading[keyPair.address]}
-                  />
-                </div>
-              ))}
-            </div>
-            <button
-              className="mt-4 w-full bg-red-500 text-white rounded hover:bg-red-600"
-              onClick={togglePopup}
-            >
-              Close
-            </button>
-          </div>
-        </div>
+        <Popup
+          keyPairs={keyPairs}
+          reduxUTXOs={reduxUTXOs}
+          loading={loading}
+          togglePopup={togglePopup}
+        />
       )}
     </div>
   );

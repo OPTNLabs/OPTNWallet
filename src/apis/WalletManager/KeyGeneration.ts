@@ -8,6 +8,7 @@ import { hash160 } from '@cashscript/utils';
 import * as bip39 from 'bip39';
 import { Network } from '../../redux/networkSlice';
 import { HdNode } from '../../types/types';
+import { COIN_TYPE } from '../../utils/constants';
 
 export default function KeyGeneration() {
   return {
@@ -35,6 +36,12 @@ export default function KeyGeneration() {
     aliceAddress: string;
     aliceTokenAddress: string;
   } | null> {
+    // Assign coin_type based on network type
+    const coin_type =
+      networkType === Network.MAINNET
+        ? COIN_TYPE.bitcoincash
+        : COIN_TYPE.testnet;
+
     // console.log('Generating seed...');
     const seed: Uint8Array = await bip39.mnemonicToSeed(mnemonic, passphrase);
 
@@ -42,7 +49,7 @@ export default function KeyGeneration() {
     const rootNode: HdNode = deriveHdPrivateNodeFromSeed(seed, true);
     // console.log('rootNode:', rootNode);
 
-    const baseDerivationPath = `m/44'/1'/${account_index}'`;
+    const baseDerivationPath = `m/44'/${coin_type}'/${account_index}'`;
 
     // console.log('Deriving HD path...');
     // Defining aliceNode as type HdNode
