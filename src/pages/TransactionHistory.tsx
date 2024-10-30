@@ -254,6 +254,7 @@ const TransactionHistory: React.FC = () => {
           <ul className="space-y-4 px-4">
             {paginatedTransactions.map((tx) => (
               <a
+                key={tx.tx_hash} // Move the key prop here
                 href={
                   currentNetwork === Network.CHIPNET
                     ? `https://chipnet.imaginary.cash/tx/${tx.tx_hash}`
@@ -262,10 +263,7 @@ const TransactionHistory: React.FC = () => {
                 target="_blank"
                 rel="noopener noreferrer"
               >
-                <li
-                  key={tx.tx_hash}
-                  className="p-4 border rounded-lg shadow-md bg-white break-words"
-                >
+                <li className="p-4 border rounded-lg shadow-md bg-white break-words">
                   <p>
                     <strong>Transaction Hash:</strong>{' '}
                     {shortenTxHash(tx.tx_hash)}
