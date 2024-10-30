@@ -201,8 +201,10 @@ export default function KeyManager() {
     const result = fetchAddressQuery.get([address]) as any;
     fetchAddressQuery.free();
 
-    if (result && isArrayBufferLike(result.private_key)) {
-      return new Uint8Array(result.private_key);
+    console.log(result);
+
+    if (result && isArrayBufferLike(result[0])) {
+      return new Uint8Array(result[0]);
     } else {
       throw new Error(`No private key found for address: ${address}`);
     }

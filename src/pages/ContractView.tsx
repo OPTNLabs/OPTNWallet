@@ -335,9 +335,10 @@ const ContractView = () => {
 
                   <div className="mb-2">
                     <strong>UTXOs:</strong>
+                    {console.log(instance)}
                     <RegularUTXOs
                       utxos={instance.utxos
-                        .filter((utxo) => !utxo.token && utxo.height > 0) // Filter out stale UTXOs
+                        .filter((utxo) => !utxo.token) // Filter out stale UTXOs
                         .map((utxo) => ({
                           ...utxo,
                           amount: utxo.amount.toString(),

@@ -6,17 +6,16 @@ import {
   Contract,
 } from 'cashscript';
 import ContractManager from '../ContractManager/ContractManager';
-import KeyManager from '../WalletManager/KeyManager';
 import parseInputValue from '../../utils/parseInputValue';
 import { UTXO, TransactionOutput } from '../../types/types'; // Updated import to include UTXO and TransactionOutput interfaces
 import { store } from '../../redux/store';
+import KeyService from '../../services/KeyService';
 
 export default function TransactionBuilderHelper() {
   const currentNetwork = store.getState().network.currentNetwork;
 
   const provider = new ElectrumNetworkProvider(currentNetwork);
   const contractManager = ContractManager();
-  const keyManager = KeyManager();
 
   async function buildTransaction(
     utxos: UTXO[],
@@ -36,12 +35,11 @@ export default function TransactionBuilderHelper() {
           value: utxo.value || utxo.amount, // Use `value` if available, else convert `amount`
         };
 
-        console.log('Processed UTXO:', processedUtxo);
-
         // Check for contract-related UTXOs with `contractName` and `abi`
         if (!processedUtxo.contractName || !processedUtxo.abi) {
+          console.log('Processed UTXO:', processedUtxo);
           // Non-contract UTXOs (e.g., P2PKH)
-          let privateKey = keyManager.fetchAddressPrivateKey(
+          let privateKey = await KeyService.fetchAddressPrivateKey(
             processedUtxo.address
           );
           console.log(
@@ -74,6 +72,7 @@ export default function TransactionBuilderHelper() {
           unlocker = signatureTemplate.unlockP2PKH();
           console.log('Using unlockP2PKH for non-contract UTXO');
         } else {
+          console.log('Processed UTXO:', processedUtxo);
           // Contract UTXOs
           const contractUnlockFunction = await getContractUnlockFunction(
             processedUtxo,
