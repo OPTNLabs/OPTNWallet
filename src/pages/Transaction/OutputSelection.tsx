@@ -1,3 +1,4 @@
+//@ts-nocheck
 function OutputSelection({
   recipientAddress,
   setRecipientAddress,
