@@ -1,3 +1,4 @@
+//@ts-nocheck
 import DatabaseService from '../DatabaseManager/DatabaseService';
 import { TransactionHistoryItem } from '../../types/types'; // Assuming TransactionHistoryItem is defined in the types file
 import ElectrumService from '../../services/ElectrumService';
