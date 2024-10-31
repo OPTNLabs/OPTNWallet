@@ -30,6 +30,7 @@
     "@electrum-cash/network": "^3.3.0",
     "@reduxjs/toolkit": "^2.2.5",
     "@types/sql.js": "^1.4.9",
+    "axios": "^1.7.7",
     "bip39": "^3.1.0",
     "cashc": "^0.9.3",
     "cashscript": "^0.9.3",

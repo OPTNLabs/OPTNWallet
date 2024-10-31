@@ -148,7 +148,7 @@ const Home: React.FC = () => {
   };
 
   return (
-    <div className="container mx-auto p-4 pb-16">
+    <div className="container mx-auto p-4 pb-16 mt-12">
       <div className="flex justify-center mt-4">
         <img
           src="/assets/images/OPTNWelcome1.png"
@@ -209,18 +209,22 @@ const Home: React.FC = () => {
         </div>
       )}
       <div
-        className="w-full max-w-md mx-auto mt-4 overflow-y-auto"
+        className="w-full max-w-full mx-auto mt-4 overflow-x-auto"
         style={{ maxHeight: '50vh' }}
       >
-        {Object.entries(calculateCashTokenTotals()).map(
-          ([category, amount]) => (
-            <CashTokenCard
-              key={category}
-              category={category}
-              totalAmount={amount}
-            />
-          )
-        )}
+        <div className="flex space-x-4">
+          {Object.entries(calculateCashTokenTotals()).map(
+            ([category, amount]) => (
+              <div key={category}>
+                <CashTokenCard
+                  key={category}
+                  category={category}
+                  totalAmount={amount}
+                />
+              </div>
+            )
+          )}
+        </div>
       </div>
       {showPopup && (
         <Popup

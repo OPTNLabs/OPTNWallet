@@ -6,27 +6,27 @@ let db: Database | null = null;
 
 const startDatabase = async (): Promise<Database | null> => {
   try {
-    console.log('Initializing SQL.js...');
+    // console.log('Initializing SQL.js...');
     const SQLModule = await initSqlJs({
       locateFile: () => `/sql-wasm.wasm`,
     });
-    console.log('SQL.js initialized.');
+    // console.log('SQL.js initialized.');
 
     const savedDb = localStorage.getItem('OPTNDatabase');
     if (savedDb) {
-      console.log('Loading saved database...');
+      // console.log('Loading saved database...');
       const fileBuffer = new Uint8Array(JSON.parse(savedDb));
       db = new SQLModule.Database(fileBuffer);
-      console.log('Saved database loaded.');
+      // console.log('Saved database loaded.');
     } else {
-      console.log('Creating new database...');
+      // console.log('Creating new database...');
       db = new SQLModule.Database();
       createTables(db); // Ensure the schema is created if no saved DB exists
-      console.log('New database created.');
+      // console.log('New database created.');
     }
 
     await updateSchema(db); // Ensure schema is updated
-    console.log('Database started.');
+    // console.log('Database started.');
     return db;
   } catch (error) {
     console.error('Error starting database:', error);
@@ -49,7 +49,7 @@ const saveDatabaseToFile = async (): Promise<void> => {
 
   const data = db.export();
   localStorage.setItem('OPTNDatabase', JSON.stringify(Array.from(data)));
-  console.log('Database saved to local storage');
+  // console.log('Database saved to local storage');
 };
 
 const getDatabase = (): Database | null => db;
