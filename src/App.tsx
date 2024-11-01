@@ -12,6 +12,7 @@ import Settings from './pages/Settings';
 import Transaction from './pages/Transaction/Transaction';
 import TransactionHistory from './pages/TransactionHistory';
 import LandingPage from './pages/LandingPage'; // Import the LandingPage
+import Receive from './pages/Receive';
 import { RootState } from './redux/store';
 
 function App() {
@@ -29,10 +30,7 @@ function App() {
           <Route element={<Layout />}>
             <Route path="/home/:wallet_id" element={<Home />} />
             <Route path="/contract" element={<ContractView />} />
-            {/* <Route
-              path="/contractsetup"
-              element={<ContractTransactionPage />}
-            /> */}
+            <Route path="/receive" element={<Receive />} />
             <Route path="/transaction" element={<Transaction />} />
             <Route
               path="/transactions/:wallet_id"
