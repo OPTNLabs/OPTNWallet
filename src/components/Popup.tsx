@@ -6,7 +6,7 @@ import CashTokenUTXOs from '../components/CashTokenUTXOs';
 import { selectCurrentNetwork } from '../redux/selectors/networkSelectors';
 import { PREFIX } from '../utils/constants';
 import { shortenTxHash } from '../utils/shortenHash';
-import QRCode from 'react-qr-code';
+import { QRCodeSVG } from 'qrcode.react';
 import { Toast } from '@capacitor/toast';
 
 interface PopupProps {
@@ -81,7 +81,6 @@ const Popup: React.FC<PopupProps> = ({
                   onClick={() => handleAddressClick(index)}
                 >
                   <p>
-                    <strong>Address:</strong>{' '}
                     {shortenTxHash(
                       keyPair.address,
                       PREFIX[currentNetwork].length
@@ -94,10 +93,17 @@ const Popup: React.FC<PopupProps> = ({
         ) : (
           <>
             <div className="flex flex-col items-center mb-4">
-              <QRCode
+              <QRCodeSVG
                 value={keyPairs[selectedKeyPairIndex].address}
                 size={128}
+                imageSettings={{
+                  src: '/assets/images/OPTNUIkeyline.png',
+                  height: 30, // Adjust height as needed
+                  width: 30, // Adjust width as needed
+                  excavate: true, // To clear the space around the image so it is more visible
+                }}
               />
+
               <p
                 className="mt-4 p-2 bg-gray-200 rounded cursor-pointer hover:bg-gray-300"
                 onClick={() =>
