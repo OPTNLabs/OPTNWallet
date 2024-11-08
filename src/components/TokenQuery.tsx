@@ -81,7 +81,7 @@ const TokenQuery: React.FC<TokenQueryProps> = ({ tokenId }) => {
       <p>Total Supply: {totalSupply}</p>
       <p>Active Minting: {activeMinting ? 'Yes' : 'No'}</p>
       <p>Total NFTs: {nftSupply}</p>
-      {/* <p>Auth Head: {authHead}</p> */}
+      <p>Auth Head: {authHead}</p>
     </div>
   );
 };

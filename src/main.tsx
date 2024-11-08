@@ -1,3 +1,4 @@
+// src/main.tsx
 import React from 'react';
 import ReactDOM from 'react-dom/client';
 import App from './App.tsx';
@@ -6,6 +7,23 @@ import { BrowserRouter } from 'react-router-dom';
 import { Provider } from 'react-redux';
 import { PersistGate } from 'redux-persist/integration/react';
 import { store, persistor } from './redux/store';
+import { updatePrices } from './redux/priceFeedSlice';
+
+// Initialize the worker directly
+const priceFeedWorker = new Worker(
+  new URL('./workers/priceFeedWorker.ts', import.meta.url),
+  { type: 'module' } // Ensure worker uses module type
+);
+
+// Listen to messages from the worker
+priceFeedWorker.onmessage = (event) => {
+  const { type, data } = event.data;
+  if (type === 'PRICE_UPDATE') {
+    store.dispatch(updatePrices(data));
+  } else if (type === 'PRICE_ERROR') {
+    console.error('Price feed worker error:', data);
+  }
+};
 
 ReactDOM.createRoot(document.getElementById('root')!).render(
   <React.StrictMode>

@@ -69,6 +69,47 @@
   .overflow-y-auto::-webkit-scrollbar-thumb:hover {
     background-color: rgba(0, 0, 0, 0.4);
   }
+
+  /* New utilities for the price ticker */
+  .scrolling-ticker {
+    @apply overflow-hidden relative w-full h-12 /* Added background color for better visibility */;
+  }
+
+  .scrolling-ticker-content {
+    @apply whitespace-nowrap flex items-center animate-marquee;
+  }
+
+  .scrolling-price-item {
+    @apply bg-white px-4 py-2 rounded-lg shadow-md flex items-center space-x-4 mx-4;
+  }
+}
+
+/* Keyframes for smoother carousel animation */
+@keyframes marquee {
+  0% {
+    transform: translateX(0);
+  }
+  100% {
+    transform: translateX(-50%);
+  }
+}
+
+/* Applying the marquee animation to the ticker */
+.animate-marquee {
+  animation: marquee 3s linear infinite; /* Set longer duration for smoother scrolling */
+}
+
+/* Create seamless duplicate content */
+.scrolling-ticker-content::after {
+  content: '';
+  display: block;
+  width: 100%;
+}
+
+/* Prevent horizontal scrolling for entire page */
+html,
+body {
+  overflow-x: hidden; /* Prevent horizontal scrolling on the entire page */
 }
 
 .popup {
