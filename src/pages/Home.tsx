@@ -8,6 +8,7 @@ import KeyService from '../services/KeyService';
 import UTXOService from '../services/UTXOService';
 import { setUTXOs } from '../redux/utxoSlice';
 import Popup from '../components/Popup';
+import PriceFeed from '../components/PriceFeed';
 
 const batchAmount = 10;
 
@@ -149,6 +150,7 @@ const Home: React.FC = () => {
 
   return (
     <div className="container mx-auto p-4 pb-16 mt-12">
+      <PriceFeed />
       <div className="flex justify-center mt-4">
         <img
           src="/assets/images/OPTNWelcome1.png"
@@ -178,12 +180,12 @@ const Home: React.FC = () => {
           Generate New Key
         </button>
       </div>
-      <button
-        className="w-full max-w-md mx-auto mt-4 flex items-center justify-center"
-        onClick={togglePopup}
-      >
-        <BitcoinCashCard totalAmount={calculateTotalBitcoinCash()} />
-      </button>
+      <div className="w-full max-w-md mx-auto mt-4 flex items-center justify-center">
+        <BitcoinCashCard
+          totalAmount={calculateTotalBitcoinCash()}
+          togglePopup={togglePopup}
+        />
+      </div>
       {fetchingUTXOs && (
         <div className="w-full max-w-md mx-auto mt-4">
           <div className="relative pt-1">

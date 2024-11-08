@@ -129,9 +129,9 @@ const Receive: React.FC = () => {
                 }
               >
                 <p>
-                  <strong>
+                  {/* <strong>
                     {isTokenAddress ? 'Token Address:' : 'Regular Address:'}
-                  </strong>{' '}
+                  </strong>{' '} */}
                   {shortenTxHash(
                     isTokenAddress ? keyPair.tokenAddress : keyPair.address,
                     PREFIX[currentNetwork].length
