@@ -4,6 +4,7 @@
 export interface UTXO {
   wallet_id?: number; // This field is used internally in our app, not part of Electrum response
   address?: string;
+  tokenAddress?: string;
   height: number;
   tx_hash: string;
   tx_pos: number;

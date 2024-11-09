@@ -1,5 +1,4 @@
-//@ts-nocheck
-import React, { useState } from 'react';
+import { useState } from 'react';
 import { FaBitcoin } from 'react-icons/fa';
 import { shortenTxHash } from '../utils/shortenHash';
 import TokenQuery from './TokenQuery';

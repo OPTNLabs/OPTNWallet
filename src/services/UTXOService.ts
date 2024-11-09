@@ -1,4 +1,3 @@
-//@ts-nocheck
 import ElectrumService from './ElectrumService';
 import UTXOManager from '../apis/UTXOManager/UTXOManager';
 import { UTXO } from '../types/types';
