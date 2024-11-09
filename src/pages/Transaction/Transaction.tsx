@@ -1,4 +1,3 @@
-//@ts-nocheck
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useDispatch, useSelector } from 'react-redux';
@@ -10,7 +9,7 @@ import ContractManager from '../../apis/ContractManager/ContractManager';
 import SelectContractFunctionPopup from '../../components/SelectContractFunctionPopup';
 import {
   SignatureTemplate,
-  ElectrumNetworkProvider,
+  // ElectrumNetworkProvider,
   HashType,
 } from 'cashscript';
 import { RootState, AppDispatch } from '../../redux/store';
@@ -50,8 +49,8 @@ const Transaction: React.FC = () => {
   const [tempUtxos, setTempUtxos] = useState<UTXO>();
   const [outputs, setOutputs] = useState<TransactionOutput[]>([]);
   const [recipientAddress, setRecipientAddress] = useState<string>('');
-  const [transferAmount, setTransferAmount] = useState<number | string>('');
-  const [tokenAmount, setTokenAmount] = useState<number | string>('');
+  const [transferAmount, setTransferAmount] = useState<number>(0);
+  const [tokenAmount, setTokenAmount] = useState<number>(0);
   const [selectedTokenCategory, setSelectedTokenCategory] =
     useState<string>('');
   const [changeAddress, setChangeAddress] = useState<string>('');
@@ -67,10 +66,14 @@ const Transaction: React.FC = () => {
     string[]
   >([]);
   const [selectedContractABIs, setSelectedContractABIs] = useState<any[]>([]);
-  const [contractFunction, setContractFunction] = useState<string | null>(null);
-  const [contractFunctionInputs, setContractFunctionInputs] = useState<
-    any[] | null
-  >(null);
+  // const [
+  //   // contractFunction,
+  //   setContractFunction,
+  // ] = useState<string | null>(null);
+  const [contractFunctionInputs, setContractFunctionInputs] = useState<{
+    [key: string]: string;
+  } | null>(null);
+
   const [contractUTXOs, setContractUTXOs] = useState<UTXO[]>([]);
   const [currentContractABI, setCurrentContractABI] = useState<any[]>([]);
   const [errorMessage, setErrorMessage] = useState<string | null>(null); // State for error messages
@@ -132,33 +135,51 @@ const Transaction: React.FC = () => {
       const fetchedUTXOs: UTXO[] = [];
       while (utxosStatement.step()) {
         const row = utxosStatement.getAsObject();
-        const addressInfo = fetchedAddresses.find(
-          (addr) => addr.address === row.address
-        );
-        const privateKey = await TransactionManage.fetchPrivateKey(row.address);
-        if (
-          privateKey &&
-          typeof row.address === 'string' &&
-          typeof row.amount === 'number' &&
-          typeof row.tx_hash === 'string' &&
-          typeof row.tx_pos === 'number' &&
-          typeof row.height === 'number'
-        ) {
+        console.log(row);
+
+        // Convert row fields to appropriate types
+        const address =
+          typeof row.address === 'string' ? row.address : String(row.address);
+        const amount =
+          typeof row.amount === 'number' ? row.amount : Number(row.amount);
+        const txHash =
+          typeof row.tx_hash === 'string' ? row.tx_hash : String(row.tx_hash);
+        const txPos =
+          typeof row.tx_pos === 'number' ? row.tx_pos : Number(row.tx_pos);
+        const height =
+          typeof row.height === 'number' ? row.height : Number(row.height);
+        const tokenData = row.token_data
+          ? JSON.parse(String(row.token_data))
+          : undefined;
+
+        // Fetch the private key (assume it must exist)
+        const privateKey = await TransactionManage.fetchPrivateKey(address);
+
+        // Ensure that all necessary values are valid after conversion
+        if (privateKey && !isNaN(amount) && !isNaN(txPos) && !isNaN(height)) {
+          // Get addressInfo, if available
+          const addressInfo = fetchedAddresses.find(
+            (addr) => addr.address === address
+          );
+
+          // Add the valid UTXO to the fetchedUTXOs array
           fetchedUTXOs.push({
-            id: `${row.tx_hash}:${row.tx_pos}`,
-            address: row.address,
+            id: `${txHash}:${txPos}`,
+            address: address,
             tokenAddress: addressInfo ? addressInfo.tokenAddress : '',
-            amount: row.amount,
-            tx_hash: row.tx_hash,
-            tx_pos: row.tx_pos,
-            height: row.height,
+            amount: amount,
+            tx_hash: txHash,
+            tx_pos: txPos,
+            height: height,
             privateKey: privateKey,
-            token_data: row.token_data ? JSON.parse(row.token_data) : undefined,
+            token_data: tokenData,
+            value: amount,
           });
         } else {
-          console.error('Private key not found for address:', row.address);
+          console.error('Invalid data in row or private key not found:', row);
         }
       }
+
       utxosStatement.free();
       console.log('Fetched UTXOs:', fetchedUTXOs);
 
@@ -270,8 +291,8 @@ const Transaction: React.FC = () => {
       );
       setOutputs([...outputs, newOutput]);
       setRecipientAddress('');
-      setTransferAmount('');
-      setTokenAmount('');
+      setTransferAmount(0);
+      setTokenAmount(0);
       setSelectedTokenCategory('');
 
       dispatch(addTxOutput(newOutput));
@@ -333,13 +354,13 @@ const Transaction: React.FC = () => {
     BigInt(0)
   );
 
-  const availableTokenCategories = [
-    ...new Set(
-      utxos
-        .filter((utxo) => utxo.token_data)
-        .map((utxo) => utxo.token_data!.category)
-    ),
-  ];
+  // const availableTokenCategories = [
+  //   ...new Set(
+  //     utxos
+  //       .filter((utxo) => utxo.token_data)
+  //       .map((utxo) => utxo.token_data!.category)
+  //   ),
+  // ];
 
   const handleContractFunctionSelect = (
     contractFunction: string,
@@ -355,7 +376,7 @@ const Transaction: React.FC = () => {
     }
 
     // Set contract function and inputs
-    setContractFunction(contractFunction);
+    // setContractFunction(contractFunction);
     setContractFunctionInputs(inputs);
 
     // Dispatch actions to set the selected function and input values
@@ -458,7 +479,7 @@ const Transaction: React.FC = () => {
                   }`}
                 >
                   <RegularUTXOs
-                    address={utxo.address}
+                    // address={utxo.address}
                     utxos={[utxo]}
                     loading={false}
                   />
@@ -498,7 +519,7 @@ const Transaction: React.FC = () => {
                   }`}
                 >
                   <CashTokenUTXOs
-                    address={utxo.address}
+                    // address={utxo.address}
                     utxos={[utxo]}
                     loading={false}
                   />
@@ -536,7 +557,7 @@ const Transaction: React.FC = () => {
                   }`}
                 >
                   <RegularUTXOs
-                    address={utxo.address}
+                    // address={utxo.address}
                     utxos={[utxo]}
                     loading={false}
                   />

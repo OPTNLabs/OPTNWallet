@@ -1,4 +1,3 @@
-//@ts-nocheck
 function OutputSelection({
   recipientAddress,
   setRecipientAddress,
@@ -52,7 +51,7 @@ function OutputSelection({
             className="border p-2 mb-2 w-full break-words whitespace-normal"
           >
             <option value="">Select Token Category</option>
-            {availableTokenCategories.map((category, index) => (
+            {availableTokenCategories.map((category: string, index) => (
               <option key={index} value={category}>
                 {category}
               </option>

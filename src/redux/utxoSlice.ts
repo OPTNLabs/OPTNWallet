@@ -1,19 +1,6 @@
 // src/redux/utxoSlice.ts
 import { createSlice, PayloadAction } from '@reduxjs/toolkit';
-
-interface TokenData {
-  amount: string;
-  category: string;
-}
-
-interface UTXO {
-  tx_hash: string;
-  tx_pos: number;
-  amount: number;
-  address: string;
-  height: number;
-  token_data: TokenData | null;
-}
+import { UTXO } from '../types/types';
 
 interface UTXOState {
   utxos: Record<string, UTXO[]>;

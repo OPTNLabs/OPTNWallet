@@ -70,13 +70,14 @@
     background-color: rgba(0, 0, 0, 0.4);
   }
 
-  /* New utilities for the price ticker */
+  /* Updated utilities for the price ticker carousel */
   .scrolling-ticker {
-    @apply overflow-hidden relative w-full h-12 /* Added background color for better visibility */;
+    @apply overflow-hidden relative w-full h-12; /* Height is set to fit the ticker content */
   }
 
   .scrolling-ticker-content {
-    @apply whitespace-nowrap flex items-center animate-marquee;
+    @apply whitespace-nowrap flex items-center; /* Flexbox is used to align items in a row */
+    animation: marquee 3s linear infinite; /* Carousel-like continuous scrolling */
   }
 
   .scrolling-price-item {
@@ -84,7 +85,7 @@
   }
 }
 
-/* Keyframes for smoother carousel animation */
+/* Keyframes for seamless carousel scrolling animation */
 @keyframes marquee {
   0% {
     transform: translateX(0);
@@ -94,16 +95,21 @@
   }
 }
 
-/* Applying the marquee animation to the ticker */
-.animate-marquee {
-  animation: marquee 3s linear infinite; /* Set longer duration for smoother scrolling */
+/* Duplicate the content for seamless scrolling */
+.scrolling-ticker-content {
+  display: flex;
 }
 
-/* Create seamless duplicate content */
 .scrolling-ticker-content::after {
   content: '';
   display: block;
+  flex-shrink: 0;
   width: 100%;
+}
+
+/* Pause animation on hover */
+.scrolling-ticker:hover .scrolling-ticker-content {
+  animation-play-state: paused;
 }
 
 /* Prevent horizontal scrolling for entire page */

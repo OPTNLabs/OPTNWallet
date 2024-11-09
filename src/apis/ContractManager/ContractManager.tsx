@@ -1,4 +1,3 @@
-//@ts-nocheck
 import { Contract, ElectrumNetworkProvider } from 'cashscript';
 import DatabaseService from '../DatabaseManager/DatabaseService';
 import p2pkhArtifact from './artifacts/p2pkh.json';
@@ -47,7 +46,9 @@ export default function ContractManager() {
       const row = statement.getAsObject();
       console.log('Row:', row); // Debugging line
       try {
-        constructorArgs = JSON.parse(row.constructor_args);
+        if (typeof row.constructor_args === 'string') {
+          constructorArgs = JSON.parse(row.constructor_args);
+        }
       } catch (e) {
         console.error('Error parsing JSON:', e); // Log the error for debugging
         constructorArgs = null;
@@ -251,10 +252,14 @@ export default function ContractManager() {
                 amount: BigInt(utxo.amount), // Convert back to BigInt
               }))
             : [],
-        artifact: JSON.parse(row.artifact),
-        abi: JSON.parse(row.abi),
-        redeemScript: JSON.parse(row.redeemScript),
-        unlock: JSON.parse(row.unlock),
+        artifact:
+          typeof row.artifact === 'string' ? JSON.parse(row.artifact) : null,
+        abi: typeof row.abi === 'string' ? JSON.parse(row.abi) : [],
+        redeemScript:
+          typeof row.redeemScript === 'string'
+            ? JSON.parse(row.redeemScript)
+            : null,
+        unlock: typeof row.unlock === 'string' ? JSON.parse(row.unlock) : null,
       });
 
       // Recreate the unlock functions
@@ -294,10 +299,14 @@ export default function ContractManager() {
                 amount: BigInt(utxo.amount), // Convert back to BigInt
               }))
             : [],
-        artifact: JSON.parse(row.artifact),
-        abi: JSON.parse(row.abi),
-        redeemScript: JSON.parse(row.redeemScript),
-        unlock: JSON.parse(row.unlock),
+        artifact:
+          typeof row.artifact === 'string' ? JSON.parse(row.artifact) : null,
+        abi: typeof row.abi === 'string' ? JSON.parse(row.abi) : [],
+        redeemScript:
+          typeof row.redeemScript === 'string'
+            ? JSON.parse(row.redeemScript)
+            : null,
+        unlock: typeof row.unlock === 'string' ? JSON.parse(row.unlock) : null,
       };
 
       // Recreate the unlock functions

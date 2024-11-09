@@ -1,11 +1,21 @@
-//@ts-nocheck
 import DatabaseService from '../DatabaseManager/DatabaseService';
-import { TransactionHistoryItem } from '../../types/types'; // Assuming TransactionHistoryItem is defined in the types file
+import {
+  TransactionHistoryItem,
+  TransactionOutput,
+  UTXO,
+} from '../../types/types'; // Assuming TransactionHistoryItem is defined in the types file
 import ElectrumService from '../../services/ElectrumService';
 import TransactionBuilderHelper from './TransactionBuilderHelper';
 import { addTxOutput } from '../../redux/transactionBuilderSlice';
 import { store } from '../../redux/store';
-// import { TransactionOutput } from '../../types/types';
+
+function isString(value: any): value is string {
+  return typeof value === 'string';
+}
+
+function isArrayBufferLike(value: any): value is ArrayBufferLike {
+  return value instanceof Uint8Array || value instanceof ArrayBuffer;
+}
 
 export default function TransactionManager() {
   const state = store.getState();
@@ -83,6 +93,7 @@ export default function TransactionManager() {
       );
     }
   }
+
   async function sendTransaction(rawTX) {
     const txBuilder = TransactionBuilderHelper();
     let txid = null;
@@ -99,16 +110,18 @@ export default function TransactionManager() {
       errorMessage,
     };
   }
+
   async function addOutput(
-    recipientAddress, //mandatory
-    transferAmount, //mandatory
-    tokenAmount = '',
-    selectedTokenCategory = '',
-    selectedUtxos = [],
-    addresses = []
+    recipientAddress: string, // mandatory
+    transferAmount: number, // mandatory
+    tokenAmount: number,
+    selectedTokenCategory: string = '',
+    selectedUtxos: UTXO[] = [],
+    addresses: { address: string; tokenAddress?: string }[] = []
   ) {
     if (recipientAddress && (transferAmount || tokenAmount)) {
-      const newOutput = {
+      // Define newOutput as a TransactionOutput type
+      const newOutput: TransactionOutput = {
         recipientAddress,
         amount: Number(transferAmount) || 0,
       };
@@ -137,18 +150,19 @@ export default function TransactionManager() {
       return newOutput;
     }
   }
+
   const buildTransaction = async (
-    outputs,
-    contractFunctionInputs,
-    changeAddress,
-    selectedUtxos
+    outputs: TransactionOutput[],
+    contractFunctionInputs: any,
+    changeAddress: string,
+    selectedUtxos: UTXO[]
   ) => {
     const selectedFunction = state.contract.selectedFunction;
     const txBuilder = TransactionBuilderHelper();
     const returnObj = {
       bytecodeSize: 0,
       finalTransaction: '',
-      finalOutputs: null,
+      finalOutputs: null as TransactionOutput[] | null,
       errorMsg: '',
     };
 
@@ -156,8 +170,7 @@ export default function TransactionManager() {
     console.log(`functionInputs: ${JSON.stringify(contractFunctionInputs)}`);
 
     try {
-      // setLoading(true); // Show the loader
-      const placeholderOutput = {
+      const placeholderOutput: TransactionOutput = {
         recipientAddress: changeAddress,
         amount: 546,
       };
@@ -167,7 +180,7 @@ export default function TransactionManager() {
         selectedUtxos,
         txOutputs,
         selectedFunction,
-        contractFunctionInputs // Pass contract function inputs here
+        contractFunctionInputs
       );
 
       if (transaction) {
@@ -184,6 +197,7 @@ export default function TransactionManager() {
           BigInt(0)
         );
 
+        // Convert bytecodeSize to BigInt for arithmetic operation
         const remainder =
           totalUtxoAmount - totalOutputAmount - BigInt(bytecodeSize);
 
@@ -202,19 +216,19 @@ export default function TransactionManager() {
           selectedUtxos,
           txOutputs,
           selectedFunction,
-          contractFunctionInputs // Ensure inputs are passed again here
+          contractFunctionInputs
         );
         returnObj.finalTransaction = finalTransaction;
         returnObj.finalOutputs = txOutputs;
 
         returnObj.errorMsg = '';
-        // setShowRawTxPopup(true); // Show raw TX pop-up
       }
     } catch (err) {
       throw new Error(err);
     }
     return returnObj;
   };
+
   const fetchPrivateKey = async (
     address: string
   ): Promise<Uint8Array | null> => {
@@ -228,12 +242,17 @@ export default function TransactionManager() {
     while (privateKeyStatement.step()) {
       const row = privateKeyStatement.getAsObject();
       if (row.private_key) {
-        privateKey = new Uint8Array(row.private_key);
+        privateKey = isArrayBufferLike(row.private_key)
+          ? new Uint8Array(row.private_key)
+          : isString(row.private_key)
+            ? Uint8Array.from(atob(row.private_key), (c) => c.charCodeAt(0))
+            : new Uint8Array();
       }
     }
     privateKeyStatement.free();
     return privateKey.length > 0 ? privateKey : null;
   };
+
   return {
     fetchAndStoreTransactionHistory,
     sendTransaction,
