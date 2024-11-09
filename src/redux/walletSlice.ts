@@ -32,3 +32,9 @@ export const { setWalletId, resetWallet, setWalletNetwork } =
   walletSlice.actions;
 
 export default walletSlice.reducer;
+
+// Selectors
+export const selectWalletId = (state: { wallet_id: WalletState }) =>
+  state.wallet_id.currentWalletId;
+export const selectNetworkType = (state: { wallet_id: WalletState }) =>
+  state.wallet_id.networkType;
