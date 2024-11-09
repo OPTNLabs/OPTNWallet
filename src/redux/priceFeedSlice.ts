@@ -1,4 +1,3 @@
-//@ts-nocheck
 import { createSlice, PayloadAction } from '@reduxjs/toolkit';
 
 type AssetData = {
@@ -21,7 +20,7 @@ const priceFeedSlice = createSlice({
   name: 'priceFeed',
   initialState: {} as PriceFeedState,
   reducers: {
-    updatePrices: (state, action: PayloadAction<PriceFeedState>) => {
+    updatePrices: (_, action: PayloadAction<PriceFeedState>) => {
       return { ...action.payload }; // Replace with the latest prices
     },
   },
