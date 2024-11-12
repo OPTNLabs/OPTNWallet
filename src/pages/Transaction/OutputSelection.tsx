@@ -32,14 +32,14 @@ function OutputSelection({
         />
         <input
           type="number"
-          value={transferAmount}
+          value={transferAmount === 0 ? 'amount' : transferAmount}
           placeholder="Regular Amount"
           onChange={(e) => setTransferAmount(e.target.value)}
           className="border p-2 mb-2 w-full break-words whitespace-normal"
         />
         <input
           type="number"
-          value={tokenAmount}
+          value={tokenAmount === 0 ? 'amount' : tokenAmount}
           placeholder="Token Amount"
           onChange={(e) => setTokenAmount(e.target.value)}
           className="border p-2 mb-2 w-full break-words whitespace-normal"
