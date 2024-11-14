@@ -6,25 +6,59 @@ import BitcoinCashCard from '../components/BitcoinCashCard';
 import CashTokenCard from '../components/CashTokenCard';
 import KeyService from '../services/KeyService';
 import UTXOService from '../services/UTXOService';
-import { setUTXOs } from '../redux/utxoSlice';
+import { setUTXOs, setFetchingUTXOs, setInitialized } from '../redux/utxoSlice'; // Import setInitialized action
 import Popup from '../components/Popup';
 import PriceFeed from '../components/PriceFeed';
+import { TailSpin } from 'react-loader-spinner';
 
 const batchAmount = 10;
 
+const initialUTXO: Record<string, any[]> = {
+  default: [
+    {
+      wallet_id: 0,
+      address: '',
+      tokenAddress: '',
+      height: 0,
+      tx_hash: '',
+      tx_pos: 0,
+      value: 0,
+      amount: 0,
+      prefix: 'bchtest',
+      token_data: null,
+      privateKey: new Uint8Array(),
+      contractName: '',
+      abi: [],
+      id: '',
+      unlocker: null,
+    },
+  ],
+};
+
 const Home: React.FC = () => {
-  const [keyPairs, setKeyPairs] = useState([]);
-  const [utxoProgress, setUtxoProgress] = useState(0);
-  const [generatingKeys, setGeneratingKeys] = useState(false);
-  const [fetchingUTXOs, setFetchingUTXOs] = useState(false);
-  const [showPopup, setShowPopup] = useState(false);
-  const [loading, setLoading] = useState<Record<string, boolean>>({});
   const navigate = useNavigate();
   const dispatch = useDispatch();
   const currentWalletId = useSelector(
     (state: RootState) => state.wallet_id.currentWalletId
   );
   const reduxUTXOs = useSelector((state: RootState) => state.utxos.utxos);
+  const fetchingUTXOsRedux = useSelector(
+    (state: RootState) => state.utxos.fetchingUTXOs
+  );
+  const IsInitialized = useSelector(
+    (state: RootState) => state.utxos.initialized
+  );
+  const [keyPairs, setKeyPairs] = useState([]);
+  const [generatingKeys, setGeneratingKeys] = useState(false);
+  const [showPopup, setShowPopup] = useState(false);
+  const [loading, setLoading] = useState<Record<string, boolean>>({});
+  const [placeholderUTXOs, setPlaceholderUTXOs] = useState<
+    Record<string, any[]>
+  >(Object.keys(reduxUTXOs).length === 0 ? initialUTXO : reduxUTXOs); // Placeholder UTXOs to prevent UI flicker
+  const [placeholderBalance, setPlaceholderBalance] = useState(0); // Placeholder balance for BitcoinCashCard
+  const [placeholderTokenTotals, setPlaceholderTokenTotals] = useState<
+    Record<string, number>
+  >({}); // Placeholder token totals for CashTokenCard
 
   const initialized = useRef(false);
 
@@ -56,14 +90,12 @@ const Home: React.FC = () => {
   }, [currentWalletId, generatingKeys]);
 
   const fetchAndStoreUTXOs = useCallback(async () => {
-    if (fetchingUTXOs || !currentWalletId) return;
+    if (fetchingUTXOsRedux || !currentWalletId) return;
 
-    setFetchingUTXOs(true);
+    dispatch(setFetchingUTXOs(true));
     const allUTXOs: Record<string, any[]> = {};
-    const totalKeyPairs = keyPairs.length;
 
     try {
-      let completed = 0;
       for (const keyPair of keyPairs) {
         setLoading((prev) => ({ ...prev, [keyPair.address]: true }));
         try {
@@ -79,33 +111,63 @@ const Home: React.FC = () => {
           );
         } finally {
           setLoading((prev) => ({ ...prev, [keyPair.address]: false }));
-          completed++;
-          setUtxoProgress((completed / totalKeyPairs) * 100);
         }
       }
 
+      // Set placeholder UTXOs to prevent UI flicker
+      setPlaceholderUTXOs(allUTXOs);
+      setPlaceholderBalance(calculateTotalBitcoinCash(allUTXOs));
+      setPlaceholderTokenTotals(calculateCashTokenTotals(allUTXOs));
+
       // Update Redux store in a single batch after fetching all UTXOs
       dispatch(setUTXOs({ newUTXOs: allUTXOs }));
+
+      // Set initialized to true after first successful fetch
+      dispatch(setInitialized(true));
     } catch (error) {
       console.error('Error fetching UTXOs:', error);
     } finally {
-      setFetchingUTXOs(false);
+      dispatch(setFetchingUTXOs(false));
     }
-  }, [keyPairs, fetchingUTXOs, currentWalletId, dispatch]);
+  }, [keyPairs, fetchingUTXOsRedux, currentWalletId, dispatch]);
 
   useEffect(() => {
     if (initialized.current || !currentWalletId) return;
 
     const initializeUTXOs = async () => {
       await generateKeys();
-      if (Object.keys(reduxUTXOs).length === 0) {
+      if (Object.keys(placeholderUTXOs).length === 0) {
         await fetchAndStoreUTXOs();
+      } else {
+        setPlaceholderBalance(calculateTotalBitcoinCash(placeholderUTXOs));
+        setPlaceholderTokenTotals(calculateCashTokenTotals(placeholderUTXOs));
       }
     };
 
     initializeUTXOs();
     initialized.current = true;
-  }, [currentWalletId, generateKeys, reduxUTXOs, fetchAndStoreUTXOs]);
+  }, [currentWalletId, generateKeys, placeholderUTXOs, fetchAndStoreUTXOs]);
+
+  // Automatically start the initialization process if IsInitialized is false
+  useEffect(() => {
+    if (!IsInitialized && !fetchingUTXOsRedux && currentWalletId) {
+      generateKeys().then(fetchAndStoreUTXOs);
+    }
+  }, [
+    IsInitialized,
+    fetchingUTXOsRedux,
+    currentWalletId,
+    generateKeys,
+    fetchAndStoreUTXOs,
+  ]);
+
+  useEffect(() => {
+    if (!fetchingUTXOsRedux) {
+      setPlaceholderUTXOs(reduxUTXOs);
+      setPlaceholderBalance(calculateTotalBitcoinCash(reduxUTXOs));
+      setPlaceholderTokenTotals(calculateCashTokenTotals(reduxUTXOs));
+    }
+  }, [fetchingUTXOsRedux, reduxUTXOs]);
 
   const handleGenerateKeys = async (index: number) => {
     if (!currentWalletId) return null;
@@ -128,15 +190,15 @@ const Home: React.FC = () => {
 
   const togglePopup = () => setShowPopup(!showPopup);
 
-  const calculateTotalBitcoinCash = () =>
-    Object.values(reduxUTXOs)
+  const calculateTotalBitcoinCash = (utxos: Record<string, any[]>) =>
+    Object.values(utxos)
       .flat()
       .filter((utxo) => !utxo.token_data)
       .reduce((acc, utxo) => acc + utxo.amount, 0);
 
-  const calculateCashTokenTotals = () => {
+  const calculateCashTokenTotals = (utxos: Record<string, any[]>) => {
     const tokenTotals: Record<string, number> = {};
-    Object.values(reduxUTXOs)
+    Object.values(utxos)
       .flat()
       .forEach((utxo) => {
         const { category, amount } = utxo.token_data || {};
@@ -166,72 +228,60 @@ const Home: React.FC = () => {
           Contracts
         </button>
         <button
-          className="mt-4 p-2 bg-blue-500 text-white rounded hover:bg-blue-600 transition duration-300 w-full max-w-md"
+          className="flex justify-center items-center mt-4 p-2 bg-blue-500 text-white rounded hover:bg-blue-600 transition duration-300 w-full max-w-md"
           onClick={fetchAndStoreUTXOs}
-          disabled={fetchingUTXOs || generatingKeys}
+          disabled={fetchingUTXOsRedux || generatingKeys}
         >
-          Fetch UTXOs
+          {fetchingUTXOsRedux === false ? (
+            `Fetch UTXOs`
+          ) : (
+            <div className="flex justify-center items-center w-full">
+              <TailSpin
+                visible={true}
+                height="24"
+                width="24"
+                color="white" // Match the spinner color with the button text color
+                ariaLabel="tail-spin-loading"
+                radius="1"
+              />
+            </div>
+          )}
         </button>
         <button
           className="mt-4 p-2 bg-blue-500 text-white rounded hover:bg-blue-600 transition duration-300 w-full max-w-md"
           onClick={() => handleGenerateKeys(keyPairs.length)}
-          disabled={fetchingUTXOs || generatingKeys}
+          disabled={fetchingUTXOsRedux || generatingKeys}
         >
           Generate New Key
         </button>
       </div>
       <div className="w-full max-w-md mx-auto mt-4 flex items-center justify-center">
         <BitcoinCashCard
-          totalAmount={calculateTotalBitcoinCash()}
+          totalAmount={placeholderBalance}
           togglePopup={togglePopup}
         />
       </div>
-      {fetchingUTXOs && (
-        <div className="w-full max-w-md mx-auto mt-4">
-          <div className="relative pt-1">
-            <div className="flex mb-2 items-center justify-between">
-              <div>
-                <span className="text-xs font-semibold inline-block py-1 px-2 uppercase rounded-full text-green-600 bg-green-200">
-                  Fetching UTXOs...
-                </span>
-              </div>
-              <div className="text-right">
-                <span className="text-xs font-semibold inline-block text-green-600">
-                  {Math.round(utxoProgress)}%
-                </span>
-              </div>
-            </div>
-            <div className="overflow-hidden h-2 mb-4 text-xs flex rounded bg-green-200">
-              <div
-                style={{ width: `${utxoProgress}%` }}
-                className="shadow-none flex flex-col text-center whitespace-nowrap text-white justify-center bg-green-500"
-              ></div>
-            </div>
-          </div>
-        </div>
-      )}
       <div
         className="w-full max-w-full mx-auto mt-4 overflow-x-auto"
         style={{ maxHeight: '50vh' }}
       >
         <div className="flex space-x-4">
-          {Object.entries(calculateCashTokenTotals()).map(
-            ([category, amount]) => (
-              <div key={category}>
-                <CashTokenCard
-                  key={category}
-                  category={category}
-                  totalAmount={amount}
-                />
-              </div>
-            )
-          )}
+          {Object.entries(placeholderTokenTotals).map(([category, amount]) => (
+            <div key={category}>
+              <CashTokenCard
+                key={category}
+                category={category}
+                totalAmount={amount}
+              />
+            </div>
+          ))}
         </div>
       </div>
+
       {showPopup && (
         <Popup
           keyPairs={keyPairs}
-          reduxUTXOs={reduxUTXOs}
+          reduxUTXOs={placeholderUTXOs}
           loading={loading}
           togglePopup={togglePopup}
         />

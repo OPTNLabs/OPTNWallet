@@ -1,5 +1,7 @@
 // src/workers/priceFeedWorker.ts
 
+import { INTERVAL } from '../utils/constants';
+
 type AssetData = {
   id: string;
   rank: string;
@@ -48,7 +50,7 @@ async function fetchPrices() {
 }
 
 // Fetch prices every minute
-setInterval(fetchPrices, 60 * 1000);
+setInterval(fetchPrices, INTERVAL);
 
 // Fetch prices immediately after service worker starts
 fetchPrices();

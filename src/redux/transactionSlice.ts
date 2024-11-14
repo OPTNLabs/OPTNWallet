@@ -1,14 +1,8 @@
 import { createSlice, PayloadAction } from '@reduxjs/toolkit';
-
-export interface Transaction {
-  tx_hash: string;
-  height: number;
-  timestamp: string;
-  amount: number;
-}
+import { TransactionHistoryItem } from '../types/types';
 
 interface TransactionState {
-  transactions: Record<string, Transaction[]>;
+  transactions: Record<string, TransactionHistoryItem[]>;
 }
 
 const initialState: TransactionState = {
@@ -21,14 +15,20 @@ const transactionSlice = createSlice({
   reducers: {
     setTransactions: (
       state,
-      action: PayloadAction<{ wallet_id: number; transactions: Transaction[] }>
+      action: PayloadAction<{
+        wallet_id: number;
+        transactions: TransactionHistoryItem[];
+      }>
     ) => {
       state.transactions[action.payload.wallet_id] =
         action.payload.transactions;
     },
     addTransactions: (
       state,
-      action: PayloadAction<{ wallet_id: number; transactions: Transaction[] }>
+      action: PayloadAction<{
+        wallet_id: number;
+        transactions: TransactionHistoryItem[];
+      }>
     ) => {
       const currentTransactions =
         state.transactions[action.payload.wallet_id] || [];
@@ -51,7 +51,7 @@ const transactionSlice = createSlice({
             return acc.concat(tx);
           }
         },
-        [] as Transaction[]
+        [] as TransactionHistoryItem[]
       );
       state.transactions[action.payload.wallet_id] = [
         ...currentTransactions.filter(

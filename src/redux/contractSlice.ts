@@ -28,10 +28,13 @@ const contractSlice = createSlice({
     ) => {
       state.inputValues = action.payload;
     },
+    resetContract: (state) => {
+      Object.assign(state, initialState);
+    },
   },
 });
 
-export const { setSelectedFunction, setInputs, setInputValues } =
+export const { setSelectedFunction, setInputs, setInputValues, resetContract } =
   contractSlice.actions;
 
 export default contractSlice.reducer;

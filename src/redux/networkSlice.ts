@@ -26,8 +26,11 @@ const networkSlice = createSlice({
           ? Network.CHIPNET
           : Network.MAINNET;
     },
+    resetNetwork: (state) => {
+      state === initialState;
+    },
   },
 });
 
-export const { setNetwork } = networkSlice.actions;
+export const { setNetwork, resetNetwork, toggleNetwork } = networkSlice.actions;
 export default networkSlice.reducer;

@@ -70,69 +70,18 @@ const UTXOService = {
     }
   },
 
-  // Check for new UTXOs and synchronize with the database and Redux
-  async checkNewUTXOs(walletId: number): Promise<void> {
+  // Fetch existing UTXOs from the database and return them
+  async fetchUTXOsFromDatabase(keyPairs: { address: string }[]): Promise<{
+    utxosMap: Record<string, UTXO[]>;
+    cashTokenUtxosMap: Record<string, UTXO[]>;
+  }> {
     try {
       const manager = await UTXOManager();
-
-      // Fetch all addresses linked to the wallet
-      const queriedAddresses = await manager.fetchAddressesByWalletId(walletId);
-      console.log('Queried addresses:', queriedAddresses);
-
-      for (const { address } of queriedAddresses) {
-        try {
-          // Fetch UTXOs from Electrum
-          const fetchedUTXOs = await ElectrumService.getUTXOS(address);
-          console.log(`Fetched UTXOs for ${address}:`, fetchedUTXOs);
-
-          // Fetch existing UTXOs from the database
-          const existingUTXOs = await manager.fetchUTXOsByAddress(
-            walletId,
-            address
-          );
-
-          // Identify outdated UTXOs to delete
-          const fetchedUTXOKeys = new Set(
-            fetchedUTXOs.map((utxo) => `${utxo.tx_hash}-${utxo.tx_pos}`)
-          );
-
-          const utxosToDelete = existingUTXOs.filter(
-            (utxo) => !fetchedUTXOKeys.has(`${utxo.tx_hash}-${utxo.tx_pos}`)
-          );
-
-          if (utxosToDelete.length > 0) {
-            console.log(
-              `Deleting outdated UTXOs for ${address}:`,
-              utxosToDelete
-            );
-            await manager.deleteUTXOs(walletId, utxosToDelete);
-          }
-
-          // Store new UTXOs
-          const newUTXOs = fetchedUTXOs.map((utxo: UTXO) => ({
-            ...utxo,
-            wallet_id: walletId,
-            address,
-            prefix,
-            token_data: utxo.token_data || null,
-          }));
-
-          if (newUTXOs.length > 0) {
-            console.log(`Storing new UTXOs for ${address}:`, newUTXOs);
-            await manager.storeUTXOs(newUTXOs);
-          }
-
-          // Update Redux with the new UTXOs
-          store.dispatch(setUTXOs({ newUTXOs: { [address]: newUTXOs } }));
-        } catch (error) {
-          console.error(
-            `Error processing UTXOs for address ${address}:`,
-            error
-          );
-        }
-      }
+      const result = await manager.fetchUTXOsFromDatabase(keyPairs);
+      return result;
     } catch (error) {
-      console.error('Error checking new UTXOs:', error);
+      console.error('Error fetching UTXOs from database:', error);
+      return { utxosMap: {}, cashTokenUtxosMap: {} };
     }
   },
 };

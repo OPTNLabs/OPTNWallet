@@ -77,7 +77,13 @@ const PriceFeed: React.FC = () => {
               }
             >
               <div className="flex flex-col">
-                <span className="text-gray-600 text-xl">
+                <span
+                  className={
+                    parseFloat(data.changePercent24Hr) < 0
+                      ? 'text-red-500'
+                      : 'text-green-500'
+                  }
+                >
                   {parseFloat(data.changePercent24Hr).toFixed(2)}%
                 </span>
                 <span className="text-gray-500 text-sm">24 hr</span>
