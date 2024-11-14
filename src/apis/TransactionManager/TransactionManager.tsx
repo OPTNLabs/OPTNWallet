@@ -8,34 +8,28 @@ import ElectrumService from '../../services/ElectrumService';
 import TransactionBuilderHelper from './TransactionBuilderHelper';
 import { addTxOutput } from '../../redux/transactionBuilderSlice';
 import { store } from '../../redux/store';
-
-function isString(value: any): value is string {
-  return typeof value === 'string';
-}
-
-function isArrayBufferLike(value: any): value is ArrayBufferLike {
-  return value instanceof Uint8Array || value instanceof ArrayBuffer;
-}
+import KeyService from '../../services/KeyService';
 
 export default function TransactionManager() {
   const state = store.getState();
 
   const dbService = DatabaseService();
 
-  // Define the function with proper return type and parameter types
+  // Fetch and store transaction history in the database
   async function fetchAndStoreTransactionHistory(
     walletId: string,
     address: string
-  ): Promise<void> {
+  ): Promise<TransactionHistoryItem[]> {
     const db = dbService.getDatabase();
     if (!db) {
       throw new Error('Could not get database');
     }
 
+    let history: TransactionHistoryItem[] = [];
+
     try {
       // Fetch transaction history using Electrum service
-      const history: TransactionHistoryItem[] =
-        await ElectrumService.getTransactionHistory(address);
+      history = await ElectrumService.getTransactionHistory(address);
 
       // Check if history is an array
       if (!Array.isArray(history)) {
@@ -48,8 +42,6 @@ export default function TransactionManager() {
       db.exec('BEGIN TRANSACTION');
 
       for (const tx of history) {
-        console.log('TX:', tx);
-
         // Query for existing transactions by wallet_id and tx_hash
         const existingTransaction = db.exec(`
           SELECT tx_hash, height FROM transactions WHERE wallet_id = ${walletId} AND tx_hash = '${tx.tx_hash}'
@@ -92,9 +84,12 @@ export default function TransactionManager() {
         error
       );
     }
+
+    return history;
   }
 
-  async function sendTransaction(rawTX) {
+  // Send a raw transaction to the network
+  async function sendTransaction(rawTX: string) {
     const txBuilder = TransactionBuilderHelper();
     let txid = null;
     let errorMessage = null;
@@ -111,16 +106,16 @@ export default function TransactionManager() {
     };
   }
 
+  // Add a new output to the transaction builder
   async function addOutput(
-    recipientAddress: string, // mandatory
-    transferAmount: number, // mandatory
+    recipientAddress: string,
+    transferAmount: number,
     tokenAmount: number,
     selectedTokenCategory: string = '',
     selectedUtxos: UTXO[] = [],
     addresses: { address: string; tokenAddress?: string }[] = []
   ) {
     if (recipientAddress && (transferAmount || tokenAmount)) {
-      // Define newOutput as a TransactionOutput type
       const newOutput: TransactionOutput = {
         recipientAddress,
         amount: Number(transferAmount) || 0,
@@ -151,6 +146,7 @@ export default function TransactionManager() {
     }
   }
 
+  // Build a transaction using provided inputs and outputs
   const buildTransaction = async (
     outputs: TransactionOutput[],
     contractFunctionInputs: any,
@@ -229,28 +225,11 @@ export default function TransactionManager() {
     return returnObj;
   };
 
+  // Fetch private key using KeyService (refactored to avoid direct DB access)
   const fetchPrivateKey = async (
     address: string
   ): Promise<Uint8Array | null> => {
-    const dbService = DatabaseService();
-    await dbService.ensureDatabaseStarted();
-    const db = dbService.getDatabase();
-    const privateKeyQuery = `SELECT private_key FROM keys WHERE wallet_id = ? AND address = ?`;
-    const privateKeyStatement = db.prepare(privateKeyQuery);
-    privateKeyStatement.bind([state.wallet_id.currentWalletId, address]);
-    let privateKey = new Uint8Array();
-    while (privateKeyStatement.step()) {
-      const row = privateKeyStatement.getAsObject();
-      if (row.private_key) {
-        privateKey = isArrayBufferLike(row.private_key)
-          ? new Uint8Array(row.private_key)
-          : isString(row.private_key)
-            ? Uint8Array.from(atob(row.private_key), (c) => c.charCodeAt(0))
-            : new Uint8Array();
-      }
-    }
-    privateKeyStatement.free();
-    return privateKey.length > 0 ? privateKey : null;
+    return await KeyService.fetchAddressPrivateKey(address);
   };
 
   return {

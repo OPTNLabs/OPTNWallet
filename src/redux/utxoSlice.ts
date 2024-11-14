@@ -5,11 +5,15 @@ import { UTXO } from '../types/types';
 interface UTXOState {
   utxos: Record<string, UTXO[]>;
   totalBalance: number;
+  fetchingUTXOs: boolean;
+  initialized: boolean;
 }
 
 const initialState: UTXOState = {
   utxos: {},
   totalBalance: 0,
+  fetchingUTXOs: false,
+  initialized: false,
 };
 
 // Helper to calculate total balance from UTXOs
@@ -82,12 +86,27 @@ const utxoSlice = createSlice({
       // Recalculate the total balance
       state.totalBalance = calculateTotalBalance(state.utxos);
     },
+
+    // Action to set fetchingUTXOs state
+    setFetchingUTXOs: (state, action: PayloadAction<boolean>) => {
+      state.fetchingUTXOs = action.payload;
+    },
+
+    setInitialized: (state, action: PayloadAction<boolean>) => {
+      state.initialized = action.payload;
+    },
   },
 });
 
 // Export actions
-export const { setUTXOs, resetUTXOs, updateUTXOsForAddress, removeUTXOs } =
-  utxoSlice.actions;
+export const {
+  setUTXOs,
+  resetUTXOs,
+  updateUTXOsForAddress,
+  removeUTXOs,
+  setFetchingUTXOs,
+  setInitialized,
+} = utxoSlice.actions;
 
 // Export reducer
 export default utxoSlice.reducer;

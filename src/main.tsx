@@ -8,6 +8,8 @@ import { Provider } from 'react-redux';
 import { PersistGate } from 'redux-persist/integration/react';
 import { store, persistor } from './redux/store';
 import { updatePrices } from './redux/priceFeedSlice';
+import startUTXOWorker from './workers/UTXOWorkerService';
+import startTransactionWorker from './workers/TransactionWorkerService.ts';
 
 // Initialize the worker directly
 const priceFeedWorker = new Worker(
@@ -24,6 +26,12 @@ priceFeedWorker.onmessage = (event) => {
     console.error('Price feed worker error:', data);
   }
 };
+
+// Start the UTXO worker service
+startUTXOWorker();
+
+// Start the TX History worker service
+startTransactionWorker();
 
 ReactDOM.createRoot(document.getElementById('root')!).render(
   <React.StrictMode>

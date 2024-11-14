@@ -17,84 +17,9 @@ export default function TransactionBuilderHelper() {
   const provider = new ElectrumNetworkProvider(currentNetwork);
   const contractManager = ContractManager();
 
-  async function buildTransaction(
-    utxos: UTXO[],
-    outputs: TransactionOutput[],
-    contractFunction: string | null = null,
-    contractFunctionInputs: any[] | null = null
-  ) {
-    const txBuilder = new TransactionBuilder({ provider });
-
-    const unlockableUtxos = await Promise.all(
-      utxos.map(async (utxo) => {
-        let unlocker: any;
-
-        // Ensure the UTXO has `value`, convert `amount` to `value`
-        const processedUtxo = {
-          ...utxo,
-          value: utxo.value || utxo.amount, // Use `value` if available, else convert `amount`
-        };
-
-        // Check for contract-related UTXOs with `contractName` and `abi`
-        if (!processedUtxo.contractName || !processedUtxo.abi) {
-          console.log('Processed UTXO:', processedUtxo);
-          // Non-contract UTXOs (e.g., P2PKH)
-          let privateKey = await KeyService.fetchAddressPrivateKey(
-            processedUtxo.address
-          );
-          console.log(
-            'Fetched private key for address:',
-            processedUtxo.address,
-            'Result:',
-            privateKey
-          );
-
-          // Ensure privateKey exists and is Uint8Array
-          if (!privateKey || privateKey.length === 0) {
-            console.error(
-              `Private key not found or empty for address: ${processedUtxo.address}`
-            );
-            throw new Error(
-              `Private key not found or empty for address: ${processedUtxo.address}`
-            );
-          } else if (!(privateKey instanceof Uint8Array)) {
-            console.error(
-              'Fetched private key is not a Uint8Array:',
-              privateKey
-            );
-            throw new Error('Fetched private key is not a Uint8Array');
-          }
-
-          const signatureTemplate = new SignatureTemplate(
-            privateKey,
-            HashType.SIGHASH_ALL
-          );
-          unlocker = signatureTemplate.unlockP2PKH();
-          console.log('Using unlockP2PKH for non-contract UTXO');
-        } else {
-          console.log('Processed UTXO:', processedUtxo);
-          // Contract UTXOs
-          const contractUnlockFunction = await getContractUnlockFunction(
-            processedUtxo,
-            contractFunction,
-            contractFunctionInputs
-          );
-          unlocker = contractUnlockFunction.unlocker;
-        }
-
-        return {
-          txid: processedUtxo.tx_hash,
-          vout: processedUtxo.tx_pos,
-          satoshis: BigInt(processedUtxo.value), // Use `value` field
-          unlocker,
-          token_data: processedUtxo.token_data,
-        };
-      })
-    );
-
-    txBuilder.addInputs(unlockableUtxos);
-
-    const txOutputs = outputs.map((output) => {
+  // Add a new function to build transaction outputs
+  function prepareTransactionOutputs(outputs: TransactionOutput[]): any[] {
+    return outputs.map((output) => {
       const baseOutput = {
         to: output.recipientAddress,
         amount: BigInt(output.amount),
@@ -112,7 +37,63 @@ export default function TransactionBuilderHelper() {
 
       return baseOutput;
     });
+  }
 
+  async function buildTransaction(
+    utxos: UTXO[],
+    outputs: TransactionOutput[],
+    contractFunction: string | null = null,
+    contractFunctionInputs: any[] | null = null
+  ) {
+    const txBuilder = new TransactionBuilder({ provider });
+
+    const unlockableUtxos = await Promise.all(
+      utxos.map(async (utxo) => {
+        let unlocker: any;
+
+        const processedUtxo = {
+          ...utxo,
+          value: utxo.value || utxo.amount,
+        };
+
+        if (!processedUtxo.contractName || !processedUtxo.abi) {
+          const privateKey = await KeyService.fetchAddressPrivateKey(
+            processedUtxo.address
+          );
+
+          if (!privateKey || privateKey.length === 0) {
+            throw new Error(
+              `Private key not found or empty for address: ${processedUtxo.address}`
+            );
+          }
+
+          const signatureTemplate = new SignatureTemplate(
+            privateKey,
+            HashType.SIGHASH_ALL
+          );
+          unlocker = signatureTemplate.unlockP2PKH();
+        } else {
+          const contractUnlockFunction = await getContractUnlockFunction(
+            processedUtxo,
+            contractFunction,
+            contractFunctionInputs
+          );
+          unlocker = contractUnlockFunction.unlocker;
+        }
+
+        return {
+          txid: processedUtxo.tx_hash,
+          vout: processedUtxo.tx_pos,
+          satoshis: BigInt(processedUtxo.value),
+          unlocker,
+          token_data: processedUtxo.token_data,
+        };
+      })
+    );
+
+    txBuilder.addInputs(unlockableUtxos);
+
+    const txOutputs = prepareTransactionOutputs(outputs);
     txBuilder.addOutputs(txOutputs);
 
     try {
