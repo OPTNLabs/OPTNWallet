@@ -30,6 +30,8 @@ export interface UTXO {
 export interface TransactionHistoryItem {
   height: number;
   tx_hash: string;
+  timestamp?: string;
+  amount?: string | number;
   fee?: number; // Optional field if the transaction is from the mempool
 }
 

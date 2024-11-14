@@ -5,15 +5,22 @@ import RecoveryPhrase from '../components/RecoveryPhrase';
 import AboutView from '../components/AboutView';
 import TermsOfUse from '../components/TermsOfUse';
 import ContactUs from '../components/ContactUs';
-import { useDispatch } from 'react-redux';
-import { setWalletId } from '../redux/walletSlice';
+import { useDispatch, useSelector } from 'react-redux';
+import { resetWallet, setWalletId } from '../redux/walletSlice';
 import { resetUTXOs } from '../redux/utxoSlice';
 import WalletManager from '../apis/WalletManager/WalletManager';
 import { useNavigate } from 'react-router-dom';
 import { resetTransactions } from '../redux/transactionSlice';
 import NetworkSettingsView from '../components/NetworkSettingsView';
+import { resetContract } from '../redux/contractSlice';
+import { resetNetwork } from '../redux/networkSlice';
+import { clearTransaction } from '../redux/transactionBuilderSlice';
+import { RootState } from '../redux/store';
 
 const Settings = () => {
+  const currentWalletId = useSelector(
+    (state: RootState) => state.wallet_id.currentWalletId
+  );
   const [selectedOption, setSelectedOption] = useState('');
   const [navBarHeight, setNavBarHeight] = useState(0);
   const dispatch = useDispatch();
@@ -32,10 +39,15 @@ const Settings = () => {
 
   const handleLogout = async () => {
     const walletManager = WalletManager();
+    await walletManager.deleteWallet(currentWalletId); // Clear the entire database
     await walletManager.clearAllData(); // Clear the entire database
     dispatch(setWalletId(0)); // Reset wallet ID in Redux store
     dispatch(resetUTXOs()); // Reset UTXOs in Redux store
     dispatch(resetTransactions()); // Reset transactions in Redux store
+    dispatch(resetWallet());
+    dispatch(resetContract());
+    dispatch(resetNetwork());
+    dispatch(clearTransaction());
     navigate('/');
   };
 

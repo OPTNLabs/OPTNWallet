@@ -10,13 +10,7 @@ import BottomNavBar from '../components/BottomNavBar';
 import { shortenTxHash } from '../utils/shortenHash';
 import { selectCurrentNetwork } from '../redux/selectors/networkSelectors';
 import { Network } from '../redux/networkSlice';
-
-interface Transaction {
-  tx_hash: string;
-  height: number;
-  timestamp: string;
-  amount: number; // Updated to number
-}
+import { TransactionHistoryItem } from '../types/types';
 
 const selectTransactions = createSelector(
   (state: RootState) => state.transactions.transactions,
@@ -29,6 +23,9 @@ const TransactionHistory: React.FC = () => {
   const { wallet_id } = useParams<{ wallet_id: string }>();
   const transactions = useSelector((state: RootState) =>
     selectTransactions(state, wallet_id || '')
+  );
+  const IsInitialized = useSelector(
+    (state: RootState) => state.utxos.initialized
   );
   const [progress, setProgress] = useState(0); // Track progress of loading
   const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('desc'); // Track sort order
@@ -60,6 +57,13 @@ const TransactionHistory: React.FC = () => {
     };
   }, []);
 
+  // Fetch transaction history if not already loaded and IsInitialized is true
+  useEffect(() => {
+    if (IsInitialized && transactions.length === 0 && !loading) {
+      fetchTransactionHistory();
+    }
+  }, [IsInitialized, transactions, loading]);
+
   const fetchTransactionHistory = async () => {
     if (!wallet_id || loading) return;
 
@@ -74,10 +78,12 @@ const TransactionHistory: React.FC = () => {
     for (const [index, address] of addresses.entries()) {
       if (fetchedAddresses.has(address)) continue;
 
-      await transactionManager.fetchAndStoreTransactionHistory(
-        wallet_id,
-        address
-      );
+      const newTransactions =
+        await transactionManager.fetchAndStoreTransactionHistory(
+          wallet_id,
+          address
+        );
+
       const db = dbService.getDatabase();
       if (!db) {
         console.error('Database not started.');
@@ -89,15 +95,9 @@ const TransactionHistory: React.FC = () => {
       `);
       storedTransactionsQuery.bind([wallet_id]);
 
-      const newTransactions: Transaction[] = [];
       while (storedTransactionsQuery.step()) {
         const transaction =
-          storedTransactionsQuery.getAsObject() as unknown as {
-            tx_hash: string;
-            height: number;
-            timestamp: string;
-            amount: string; // Initially a string
-          };
+          storedTransactionsQuery.getAsObject() as unknown as TransactionHistoryItem;
         if (
           !uniqueTransactions.has(transaction.tx_hash) ||
           transaction.height === -1 ||
@@ -105,7 +105,7 @@ const TransactionHistory: React.FC = () => {
         ) {
           newTransactions.push({
             ...transaction,
-            amount: parseFloat(transaction.amount), // Convert amount to number
+            amount: transaction.amount,
           });
           uniqueTransactions.add(transaction.tx_hash);
         }
@@ -252,9 +252,9 @@ const TransactionHistory: React.FC = () => {
           <p className="text-center">No transactions available.</p>
         ) : (
           <ul className="space-y-4 px-4">
-            {paginatedTransactions.map((tx) => (
+            {paginatedTransactions.map((tx, id) => (
               <a
-                key={tx.tx_hash} // Move the key prop here
+                key={id + tx.tx_hash} // Move the key prop here
                 href={
                   currentNetwork === Network.CHIPNET
                     ? `https://chipnet.imaginary.cash/tx/${tx.tx_hash}`
