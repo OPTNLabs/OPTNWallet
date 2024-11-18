@@ -69,6 +69,7 @@ export interface HdNode {
 export type Address = {
   wallet_id: number;
   address: string;
+  token_address?: string;
   balance: number;
   hd_index: number;
   change_index: number;
