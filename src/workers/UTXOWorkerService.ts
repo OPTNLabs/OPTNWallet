@@ -5,6 +5,8 @@ import { store } from '../redux/store';
 import { setUTXOs, setFetchingUTXOs } from '../redux/utxoSlice';
 import { INTERVAL } from '../utils/constants';
 
+let utxoInterval: NodeJS.Timeout | null = null;
+
 async function fetchAndStoreUTXOs() {
   const state = store.getState();
   const currentWalletId = state.wallet_id.currentWalletId;
@@ -40,11 +42,20 @@ async function fetchAndStoreUTXOs() {
 }
 
 function startUTXOWorker() {
-  // Fetch UTXOs every minute
-  setInterval(fetchAndStoreUTXOs, INTERVAL);
-
-  // Fetch UTXOs immediately after service worker starts
-  fetchAndStoreUTXOs();
+  if (!utxoInterval) {
+    // Fetch UTXOs immediately after service worker starts
+    fetchAndStoreUTXOs();
+    // Fetch UTXOs at defined intervals
+    utxoInterval = setInterval(fetchAndStoreUTXOs, INTERVAL);
+  }
 }
 
-export default startUTXOWorker;
+function stopUTXOWorker() {
+  if (utxoInterval) {
+    clearInterval(utxoInterval);
+    utxoInterval = null;
+    console.log('UTXO Worker stopped');
+  }
+}
+
+export { startUTXOWorker, stopUTXOWorker };

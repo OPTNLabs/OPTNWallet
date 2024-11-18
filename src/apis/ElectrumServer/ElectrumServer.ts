@@ -14,8 +14,6 @@ import { Network } from '../../redux/networkSlice';
 const testServer = chipnetServers[0];
 const mainServer = mainnetServers[0];
 
-let electrum: ElectrumClient | null = null;
-
 function getCurrentServer(): string {
   const state = store.getState();
   const currentNetwork = selectCurrentNetwork(state);
@@ -24,23 +22,26 @@ function getCurrentServer(): string {
 }
 
 export default function ElectrumServer() {
+  let electrum: ElectrumClient | null = null;
+
   async function electrumConnect(
     server: string = getCurrentServer()
   ): Promise<ElectrumClient> {
     if (electrum) {
       console.log('Reusing existing Electrum connection');
-      return electrum;
+      electrum.connection.reconnect;
+    } else {
+      electrum = new ElectrumClient(
+        'OPTNWallet',
+        '1.5.3',
+        server,
+        ElectrumTransport.WSS.Port,
+        ElectrumTransport.WSS.Scheme
+      );
+
+      await electrum.connect();
     }
 
-    electrum = new ElectrumClient(
-      'OPTNWallet',
-      '1.5.3',
-      server,
-      ElectrumTransport.WSS.Port,
-      ElectrumTransport.WSS.Scheme
-    );
-
-    await electrum.connect();
     // console.log('Connected to Electrum server:', server);
     return electrum;
   }

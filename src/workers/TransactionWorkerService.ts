@@ -5,6 +5,8 @@ import { store } from '../redux/store';
 import { addTransactions } from '../redux/transactionSlice';
 import { INTERVAL } from '../utils/constants';
 
+let transactionInterval: NodeJS.Timeout | null = null;
+
 async function fetchAndStoreTransactionHistory() {
   const state = store.getState();
   const currentWalletId = state.wallet_id.currentWalletId;
@@ -55,13 +57,25 @@ function startTransactionWorker() {
   const state = store.getState();
   const IsInitialized = state.utxos.initialized;
 
-  // Fetch transaction history every minute
-  if (!IsInitialized) fetchAndStoreTransactionHistory();
-
-  setInterval(fetchAndStoreTransactionHistory, INTERVAL);
-
-  // Fetch transaction history immediately after worker starts
-  fetchAndStoreTransactionHistory();
+  if (!transactionInterval) {
+    // Fetch transaction history immediately after worker starts if not initialized
+    if (!IsInitialized) {
+      fetchAndStoreTransactionHistory();
+    }
+    // Fetch transaction history at defined intervals
+    transactionInterval = setInterval(
+      fetchAndStoreTransactionHistory,
+      INTERVAL
+    );
+  }
 }
 
-export default startTransactionWorker;
+function stopTransactionWorker() {
+  if (transactionInterval) {
+    clearInterval(transactionInterval);
+    transactionInterval = null;
+    console.log('Transaction Worker stopped');
+  }
+}
+
+export { startTransactionWorker, stopTransactionWorker };
