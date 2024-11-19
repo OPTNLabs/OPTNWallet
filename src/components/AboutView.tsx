@@ -1,6 +1,6 @@
 const AboutView = () => {
   return (
-    <div className="overflow-y-auto h-full">
+    <div className="overflow-y-auto h-5/6">
       <div className="p-4 rounded-lg bg-gray-100">
         <strong>Overview</strong>
         <p>
