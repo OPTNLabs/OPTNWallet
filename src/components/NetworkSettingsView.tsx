@@ -13,7 +13,7 @@ const NetworkSettingsView = () => {
   };
 
   return (
-    <div className="overflow-y-auto h-full">
+    <div className="h-5/6">
       <div className="p-4 rounded-lg bg-gray-100">
         <label className="block mb-2">Select Network:</label>
         <select
@@ -35,6 +35,8 @@ const NetworkSettingsView = () => {
           src="/assets/images/OPTNWelcome2.png"
           alt="Welcome"
           className="max-w-full h-auto"
+          width={'50%'}
+          height={'50%'}
         />
       </div>
     </div>

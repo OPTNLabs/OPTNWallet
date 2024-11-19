@@ -47,7 +47,7 @@ const TransactionHistory: React.FC = () => {
     const adjustHeight = () => {
       const bottomNavBar = document.getElementById('bottomNavBar');
       if (bottomNavBar) {
-        setNavBarHeight(bottomNavBar.offsetHeight);
+        setNavBarHeight(bottomNavBar.offsetHeight * 1.5);
       }
     };
     adjustHeight();
@@ -298,7 +298,7 @@ const TransactionHistory: React.FC = () => {
           }`}
           disabled={currentPage === 1}
         >
-          Previous
+          {'<'}
         </button>
         <div className="py-2">
           {currentPage}/{totalPages}
@@ -310,7 +310,7 @@ const TransactionHistory: React.FC = () => {
           }`}
           disabled={currentPage === totalPages}
         >
-          Next
+          {'>'}
         </button>
         <button
           onClick={handleLastPage}
@@ -323,7 +323,7 @@ const TransactionHistory: React.FC = () => {
         </button>
       </div>
 
-      <BottomNavBar setNavBarHeight={setNavBarHeight} />
+      {/* <BottomNavBar setNavBarHeight={setNavBarHeight} /> */}
     </div>
   );
 };

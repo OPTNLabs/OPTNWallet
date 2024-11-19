@@ -129,7 +129,7 @@ const Settings = () => {
           </button>
           <button
             onClick={handleLogout}
-            className="block w-full py-2 px-4 border rounded-lg mb-2 mx-2 bg-red-500 text-white"
+            className="block w-full py-2 px-4 border rounded-lg mb-2 mx-2 bg-red-500 text-white text-xl font-bold"
           >
             Log Out
           </button>
@@ -138,23 +138,21 @@ const Settings = () => {
         <div
           className="fixed inset-0 bg-white p-4 z-50 overflow-hidden"
           style={{
-            height: `calc(100vh - ${navBarHeight}px)`,
+            height: `calc(90vh - ${navBarHeight}px)`,
             top: 0,
             paddingBottom: `${navBarHeight}px`,
           }}
         >
-          <div className="flex items-center justify-between mb-4">
-            <button
-              onClick={() => setSelectedOption('')}
-              className="text-gray-800 py-2 px-4 rounded"
-            >
-              ←
-            </button>
-            <h2 className="text-xl font-bold">{renderTitle()}</h2>
-            <div className="w-16"></div>{' '}
-            {/* Empty div to balance the flex layout */}
+          <div className="container mx-auto p-4">
+            <h2 className="text-3xl text-center font-bold">{renderTitle()}</h2>
           </div>
           {renderContent()}
+          <button
+            className="block w-full text-center text-xl font-bold py-2 px-4 border rounded-lg m-2 mx-2 bg-red-500 text-white"
+            onClick={() => setSelectedOption('')}
+          >
+            Back
+          </button>
         </div>
       )}
     </div>

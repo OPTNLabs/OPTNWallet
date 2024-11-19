@@ -1,6 +1,6 @@
 const TermsOfUse = () => {
   return (
-    <div className="overflow-y-auto h-full">
+    <div className="overflow-y-auto h-5/6">
       <p className="border p-4 rounded-lg bg-gray-100">
         <strong>1. Acceptance of Terms</strong>
         <br />
