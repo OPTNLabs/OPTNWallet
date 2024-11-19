@@ -23,9 +23,9 @@ const RecoveryPhrase = () => {
   return (
     <div className="flex justify-center">
       <div className="text-center">
-        <div className="border p-4 rounded-lg bg-gray-100 grid grid-cols-2 gap-x-4 justify-center">
+        <div className="border p-4 rounded-lg bg-gray-100 grid grid-cols-2 gap-y-2">
           {words.map((word, index) => (
-            <div key={index} className="text-left">
+            <div key={index} className="text-center">
               {index + 1}. {word}
             </div>
           ))}
@@ -35,6 +35,8 @@ const RecoveryPhrase = () => {
             src="/assets/images/OPTNWelcome3.png"
             alt="Welcome"
             className="max-w-full h-auto"
+            width={'50%'}
+            height={'50%'}
           />
         </div>
       </div>

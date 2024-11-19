@@ -30,6 +30,8 @@ const ContactUs = () => {
           src="/assets/images/OPTNWelcome2.png"
           alt="Welcome"
           className="max-w-full h-auto"
+          width={'50%'}
+          height={'50%'}
         />
       </div>
     </div>
