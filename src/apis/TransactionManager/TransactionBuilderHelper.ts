@@ -3,10 +3,10 @@ import {
   TransactionBuilder,
   SignatureTemplate,
   HashType,
-  Contract,
+  // Contract,
 } from 'cashscript';
 import ContractManager from '../ContractManager/ContractManager';
-import parseInputValue from '../../utils/parseInputValue';
+// import parseInputValue from '../../utils/parseInputValue';
 import { UTXO, TransactionOutput } from '../../types/types'; // Updated import to include UTXO and TransactionOutput interfaces
 import { store } from '../../redux/store';
 import KeyService from '../../services/KeyService';
@@ -73,11 +73,16 @@ export default function TransactionBuilderHelper() {
           );
           unlocker = signatureTemplate.unlockP2PKH();
         } else {
-          const contractUnlockFunction = await getContractUnlockFunction(
-            processedUtxo,
-            contractFunction,
-            contractFunctionInputs
-          );
+          if (!contractFunction || !contractFunctionInputs) {
+            throw new Error('Contract function and inputs must be provided');
+          }
+
+          const contractUnlockFunction =
+            await contractManager.getContractUnlockFunction(
+              processedUtxo,
+              contractFunction,
+              contractFunctionInputs
+            );
           unlocker = contractUnlockFunction.unlocker;
         }
 
@@ -103,100 +108,6 @@ export default function TransactionBuilderHelper() {
       console.error('Error building transaction:', error);
       return null;
     }
-  }
-
-  // Ensure proper handling of `SignatureTemplate` for `sig` types
-  async function getContractUnlockFunction(
-    utxo: UTXO,
-    contractFunction: string,
-    contractFunctionInputs: any[]
-  ) {
-    // Log the contract function inputs before processing
-    console.log('Contract function inputs:', contractFunctionInputs);
-
-    console.log('Fetching contract instance for UTXO address:', utxo.address);
-
-    // Fetch the contract instance for the UTXO's address
-    const contractInstance = await contractManager.getContractInstanceByAddress(
-      utxo.address
-    );
-
-    if (!contractInstance) {
-      throw new Error(
-        `Contract instance not found for address ${utxo.address}`
-      );
-    }
-
-    console.log('Contract instance fetched:', contractInstance);
-    console.log('Contract artifact:', contractInstance.artifact);
-
-    // Fetch constructor inputs for the contract
-    const constructorInputs = await contractManager.fetchConstructorArgs(
-      utxo.address
-    );
-    console.log('Fetched constructor inputs:', constructorInputs);
-
-    // Parse constructor arguments using the contract's artifact
-    const constructorArgs = contractInstance.artifact.constructorInputs.map(
-      (input, index) => parseInputValue(constructorInputs[index], input.type)
-    );
-
-    console.log('Parsed constructor arguments:', constructorArgs);
-
-    // Create a new contract instance
-    const contract = new Contract(contractInstance.artifact, constructorArgs, {
-      provider,
-      addressType: 'p2sh32',
-    });
-
-    console.log(
-      'Created contract instance with parsed constructor arguments:',
-      contract
-    );
-
-    // Find the ABI function in the contract using the provided function name
-    const abiFunction = contractInstance.abi.find(
-      (func) => func.name === contractFunction
-    );
-
-    console.log(
-      'ABI function for contractFunction:',
-      contractFunction,
-      '\nABI Function:',
-      abiFunction,
-      '\nContract Function Inputs',
-      contractFunctionInputs
-    );
-
-    if (!abiFunction) {
-      throw new Error(
-        `ABI function '${contractFunction}' not found in contract`
-      );
-    }
-
-    // Ensure that the contract function inputs are mapped correctly
-    const unlocker = contract.unlock[contractFunction](
-      ...abiFunction.inputs.map((input) => {
-        // Get the corresponding value from contractFunctionInputs using the input name
-        const inputValue = contractFunctionInputs[input.name];
-
-        // Check if the input name is 's' (for signature)
-        if (input.type === 'sig') {
-          // Handle signature input with `SignatureTemplate`
-          return new SignatureTemplate(inputValue, HashType.SIGHASH_ALL);
-        } else {
-          // For other inputs, return the value directly
-          return inputValue;
-        }
-      })
-    );
-
-    console.log('Generated unlocker for contract function:', unlocker);
-
-    return {
-      lockingBytecode: contract.redeemScript,
-      unlocker,
-    };
   }
 
   const sendTransaction = async (tx: string) => {

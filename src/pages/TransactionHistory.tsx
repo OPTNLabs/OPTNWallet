@@ -6,7 +6,6 @@ import { addTransactions } from '../redux/transactionSlice';
 import { useParams } from 'react-router-dom';
 import DatabaseService from '../apis/DatabaseManager/DatabaseService';
 import { createSelector } from 'reselect';
-import BottomNavBar from '../components/BottomNavBar';
 import { shortenTxHash } from '../utils/shortenHash';
 import { selectCurrentNetwork } from '../redux/selectors/networkSelectors';
 import { Network } from '../redux/networkSlice';
