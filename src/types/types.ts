@@ -3,7 +3,7 @@
 // ElectrumClient related interfaces with updates
 export interface UTXO {
   wallet_id?: number; // This field is used internally in our app, not part of Electrum response
-  address?: string;
+  address: string;
   tokenAddress?: string;
   height: number;
   tx_hash: string;

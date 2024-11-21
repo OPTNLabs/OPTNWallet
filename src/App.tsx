@@ -9,7 +9,7 @@ import CreateWallet from './pages/CreateWallet';
 import ContractView from './pages/ContractView';
 import ImportWallet from './pages/ImportWallet';
 import Settings from './pages/Settings';
-import Transaction from './pages/Transaction/Transaction';
+import Transaction from './pages/Transaction';
 import TransactionHistory from './pages/TransactionHistory';
 import LandingPage from './pages/LandingPage';
 import Receive from './pages/Receive';
