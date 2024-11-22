@@ -1,0 +1,27 @@
+{
+  "contractName": "AuthGuard",
+  "constructorInputs": [
+    {
+      "name": "tokenId",
+      "type": "bytes"
+    }
+  ],
+  "abi": [
+    {
+      "name": "unlockWithNft",
+      "inputs": [
+        {
+          "name": "keepGuarded",
+          "type": "bool"
+        }
+      ]
+    }
+  ],
+  "bytecode": "OP_1 OP_UTXOTOKENCATEGORY OP_EQUALVERIFY OP_1 OP_UTXOTOKENAMOUNT OP_0 OP_NUMEQUALVERIFY OP_IF OP_0 OP_OUTPUTBYTECODE OP_INPUTINDEX OP_UTXOBYTECODE OP_EQUALVERIFY OP_ENDIF OP_1",
+  "source": "pragma cashscript ^0.9.0;\n\n// AuthGuard covenant\n// Covenant unlocked by an AuthKey NFT\n\n// Opcode count: 10 (max 201)\n// Bytesize: 48 (max 520)\n\ncontract AuthGuard(\n    bytes tokenId\n) {\n    function unlockWithNft(\n        bool keepGuarded\n    ) {\n        // Check that the second input holds the AuthKey NFT\n        require(tx.inputs[1].tokenCategory == tokenId);\n        require(tx.inputs[1].tokenAmount == 0);\n\n        // if keepGuarded is false, the AuthHead can be released from the AuthGuard covenant\n        if(keepGuarded){\n            // Self preservation of AuthGuard covenant as the first output\n            require(tx.outputs[0].lockingBytecode == tx.inputs[this.activeInputIndex].lockingBytecode);\n        }\n    }\n}\n",
+  "compiler": {
+    "name": "cashc",
+    "version": "0.9.3"
+  },
+  "updatedAt": "2024-11-19T21:00:17.713Z"
+}
