@@ -1,8 +1,13 @@
 import { createSlice, PayloadAction } from '@reduxjs/toolkit';
 
+interface ContractInput {
+  name: string;
+  type: string;
+  // Add other relevant fields, such as description or validation rules
+}
 interface ContractState {
   selectedFunction: string | null;
-  inputs: any[];
+  inputs: ContractInput[];
   inputValues: { [key: string]: string };
 }
 

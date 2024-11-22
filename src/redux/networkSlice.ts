@@ -27,7 +27,7 @@ const networkSlice = createSlice({
           : Network.MAINNET;
     },
     resetNetwork: (state) => {
-      state === initialState;
+      Object.assign(state, initialState);
     },
   },
 });
