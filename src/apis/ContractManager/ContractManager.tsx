@@ -1,3 +1,5 @@
+// src/apis/ContractManager/ContractManager.tsx
+
 import {
   Contract,
   ElectrumNetworkProvider,
@@ -573,7 +575,7 @@ export default function ContractManager() {
   async function getContractUnlockFunction(
     utxo: UTXO,
     contractFunction: string,
-    contractFunctionInputs: any[]
+    contractFunctionInputs: { [key: string]: any }
   ) {
     // Log the contract function inputs before processing
     console.log('Contract function inputs:', contractFunctionInputs);
@@ -598,8 +600,10 @@ export default function ContractManager() {
 
     // Parse constructor arguments using the contract's artifact
     const constructorArgs = contractInstance.artifact.constructorInputs.map(
-      (input: any, index: number) =>
-        parseInputValue(constructorInputs[index], input.type)
+      (
+        input: any
+        // index: number
+      ) => parseInputValue(contractFunctionInputs[input.name], input.type)
     );
 
     console.log('Parsed constructor arguments:', constructorArgs);
@@ -625,7 +629,7 @@ export default function ContractManager() {
       contractFunction,
       '\nABI Function:',
       abiFunction,
-      '\nContract Function Inputs',
+      '\nContract Function Inputs:',
       contractFunctionInputs
     );
 

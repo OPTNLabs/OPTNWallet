@@ -30,7 +30,7 @@ async function fetchAndStoreTransactionHistory() {
       const address = keyPair.address;
       const updatedHistory =
         await transactionManager.fetchAndStoreTransactionHistory(
-          currentWalletId.toString(),
+          currentWalletId,
           address
         );
 

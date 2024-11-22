@@ -79,7 +79,7 @@ const TransactionHistory: React.FC = () => {
 
       const newTransactions =
         await transactionManager.fetchAndStoreTransactionHistory(
-          wallet_id,
+          parseInt(wallet_id),
           address
         );
 
@@ -321,8 +321,6 @@ const TransactionHistory: React.FC = () => {
           Last
         </button>
       </div>
-
-      {/* <BottomNavBar setNavBarHeight={setNavBarHeight} /> */}
     </div>
   );
 };

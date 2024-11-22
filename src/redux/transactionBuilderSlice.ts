@@ -1,14 +1,13 @@
 // src/redux/transactionBuilderSlice.ts
+
 import { createSlice, PayloadAction } from '@reduxjs/toolkit';
-import { TransactionOutput, UTXO } from '../types/types';
+import { TransactionOutput } from '../types/types';
 
 interface TransactionBuilderState {
-  txInputs: UTXO[];
   txOutputs: TransactionOutput[];
 }
 
 const initialState: TransactionBuilderState = {
-  txInputs: [],
   txOutputs: [],
 };
 
@@ -16,35 +15,33 @@ const transactionBuilderSlice = createSlice({
   name: 'transactionBuilder',
   initialState,
   reducers: {
-    addTxInput: (state, action: PayloadAction<UTXO>) => {
-      state.txInputs.push(action.payload);
-    },
-    removeTxInput: (state, action: PayloadAction<number>) => {
-      state.txInputs = state.txInputs.filter(
-        (_, index) => index !== action.payload
-      );
-    },
     addTxOutput: (state, action: PayloadAction<TransactionOutput>) => {
+      console.log('Reducer: addTxOutput called with payload:', action.payload);
       state.txOutputs.push(action.payload);
+      console.log('Reducer: txOutputs after addTxOutput:', state.txOutputs);
     },
     removeTxOutput: (state, action: PayloadAction<number>) => {
-      state.txOutputs = state.txOutputs.filter(
-        (_, index) => index !== action.payload
-      );
+      console.log('Reducer: removeTxOutput called with index:', action.payload);
+      state.txOutputs.splice(action.payload, 1);
+      console.log('Reducer: txOutputs after removeTxOutput:', state.txOutputs);
     },
     clearTransaction: (state) => {
-      state.txInputs = [];
+      console.log('Reducer: clearTransaction called');
       state.txOutputs = [];
+      console.log(
+        'Reducer: txOutputs after clearTransaction:',
+        state.txOutputs
+      );
+    },
+    setTxOutputs: (state, action: PayloadAction<TransactionOutput[]>) => {
+      console.log('Reducer: setTxOutputs called with payload:', action.payload);
+      state.txOutputs = action.payload;
+      console.log('Reducer: txOutputs after setTxOutputs:', state.txOutputs);
     },
   },
 });
 
-export const {
-  addTxInput,
-  removeTxInput,
-  addTxOutput,
-  removeTxOutput,
-  clearTransaction,
-} = transactionBuilderSlice.actions;
+export const { addTxOutput, removeTxOutput, clearTransaction, setTxOutputs } =
+  transactionBuilderSlice.actions;
 
 export default transactionBuilderSlice.reducer;
