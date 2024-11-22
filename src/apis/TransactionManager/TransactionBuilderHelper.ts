@@ -1,23 +1,27 @@
+// src/apis/TransactionManager/TransactionBuilderHelper.ts
+
 import {
   ElectrumNetworkProvider,
   TransactionBuilder,
   SignatureTemplate,
   HashType,
-  // Contract,
 } from 'cashscript';
 import ContractManager from '../ContractManager/ContractManager';
-// import parseInputValue from '../../utils/parseInputValue';
 import { UTXO, TransactionOutput } from '../../types/types'; // Updated import to include UTXO and TransactionOutput interfaces
 import { store } from '../../redux/store';
 import KeyService from '../../services/KeyService';
 
 export default function TransactionBuilderHelper() {
   const currentNetwork = store.getState().network.currentNetwork;
-
   const provider = new ElectrumNetworkProvider(currentNetwork);
   const contractManager = ContractManager();
 
-  // Add a new function to build transaction outputs
+  /**
+   * Prepares transaction outputs by formatting them according to CashScript requirements.
+   *
+   * @param outputs - An array of TransactionOutput objects.
+   * @returns An array of formatted outputs.
+   */
   function prepareTransactionOutputs(outputs: TransactionOutput[]): any[] {
     return outputs.map((output) => {
       const baseOutput = {
@@ -39,14 +43,24 @@ export default function TransactionBuilderHelper() {
     });
   }
 
+  /**
+   * Builds a transaction using selected UTXOs, outputs, and optional contract functions.
+   *
+   * @param utxos - An array of selected UTXOs.
+   * @param outputs - An array of desired transaction outputs.
+   * @param contractFunction - (Optional) The name of the contract function to invoke.
+   * @param contractFunctionInputs - (Optional) An object containing inputs for the contract function.
+   * @returns The built transaction or null if an error occurs.
+   */
   async function buildTransaction(
     utxos: UTXO[],
     outputs: TransactionOutput[],
     contractFunction: string | null = null,
-    contractFunctionInputs: any[] | null = null
+    contractFunctionInputs: { [key: string]: any } | null = null
   ) {
     const txBuilder = new TransactionBuilder({ provider });
 
+    // Prepare unlockable UTXOs with appropriate unlockers
     const unlockableUtxos = await Promise.all(
       utxos.map(async (utxo) => {
         let unlocker: any;
@@ -57,6 +71,7 @@ export default function TransactionBuilderHelper() {
         };
 
         if (!processedUtxo.contractName || !processedUtxo.abi) {
+          // Regular UTXO - use signature unlocker
           const privateKey = await KeyService.fetchAddressPrivateKey(
             processedUtxo.address
           );
@@ -73,6 +88,7 @@ export default function TransactionBuilderHelper() {
           );
           unlocker = signatureTemplate.unlockP2PKH();
         } else {
+          // Contract UTXO - use contract unlocker
           if (!contractFunction || !contractFunctionInputs) {
             throw new Error('Contract function and inputs must be provided');
           }
@@ -96,20 +112,29 @@ export default function TransactionBuilderHelper() {
       })
     );
 
+    // Add inputs to the transaction builder
     txBuilder.addInputs(unlockableUtxos);
 
+    // Prepare and add outputs
     const txOutputs = prepareTransactionOutputs(outputs);
     txBuilder.addOutputs(txOutputs);
 
     try {
-      const builtTransaction = txBuilder.build();
+      const builtTransaction = await txBuilder.build(); // Ensure await is present
+      console.log('Built Transaction:', builtTransaction);
       return builtTransaction;
     } catch (error) {
       console.error('Error building transaction:', error);
-      return null;
+      throw error; // Propagate the error upwards for better handling
     }
   }
 
+  /**
+   * Sends a raw transaction to the network.
+   *
+   * @param tx - The raw transaction hex string.
+   * @returns The transaction ID or null if an error occurs.
+   */
   const sendTransaction = async (tx: string) => {
     try {
       const txid = await provider.sendRawTransaction(tx);

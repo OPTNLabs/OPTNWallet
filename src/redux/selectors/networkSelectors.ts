@@ -1,4 +1,8 @@
-import { RootState } from '../store';
+// src/redux/selectors/networkSelectors.ts
 
-export const selectCurrentNetwork = (state: RootState) =>
-  state.network.currentNetwork;
+import { RootState } from '../store';
+import { Network } from '../networkSlice';
+
+export const selectCurrentNetwork = (state: RootState): Network => {
+  return state.network.currentNetwork;
+};

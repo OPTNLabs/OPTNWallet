@@ -93,13 +93,14 @@ export const createTables = (db: any) => {
       timestamp TEXT NOT NULL,
       amount INT NOT NULL,
       FOREIGN KEY(wallet_id) REFERENCES wallets(id)
+      UNIQUE(wallet_id, tx_hash)
     );
   `);
 
   db.run(`
     CREATE TABLE IF NOT EXISTS cashscript_artifacts (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
-      contract_name VARCHAR(255),
+      contract_name VARCHAR(255) UNIQUE,
       constructor_inputs TEXT,
       abi TEXT,
       bytecode TEXT,
@@ -114,7 +115,7 @@ export const createTables = (db: any) => {
     CREATE TABLE IF NOT EXISTS cashscript_addresses (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       wallet_id INT,
-      address VARCHAR(255) NOT NULL,
+      address VARCHAR(255) NOT NULL UNIQUE,
       artifact_id INT,
       constructor_args TEXT,
       balance INT,
@@ -136,7 +137,9 @@ export const createTables = (db: any) => {
       balance INT,
       utxos TEXT,
       created_at TEXT,
+      updated_at TEXT,
       artifact TEXT,
+      abi TEXT,
       redeemScript TEXT,
       unlock TEXT
     );
