@@ -61,7 +61,7 @@ const transactionSlice = createSlice({
       ];
     },
     resetTransactions: (state) => {
-      state.transactions = {};
+      Object.assign(state, initialState);
     },
   },
 });

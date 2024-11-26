@@ -15,6 +15,7 @@ export default defineConfig({
   ],
   build: {
     target: ['es2020', 'chrome87', 'safari14', 'firefox78', 'edge88', 'node20'],
+    sourcemap: true,
     rollupOptions: {
       output: {
         manualChunks: {
@@ -26,6 +27,7 @@ export default defineConfig({
   server: {
     mimeTypes: {
       'application/wasm': ['wasm'],
+      'application/json': ['map'],
     },
     fs: {
       allow: ['..'], // Allow serving files from one level up to handle node_modules
@@ -36,4 +38,15 @@ export default defineConfig({
       '/node_modules/sql.js/dist/': 'node_modules/sql.js/dist/',
     },
   },
+  optimizeDeps: {
+    exclude: [
+      'vite-plugin-node-polyfills_shims_buffer.js',
+      'react.js',
+      '@cashscript_utils.js',
+      'electrum-cash.js',
+      '@bitauth_libauth.js',
+      'reselect.js',
+    ],
+  },
+  logLevel: 'error', // Only display error logs
 });
