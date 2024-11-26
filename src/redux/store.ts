@@ -4,19 +4,27 @@ import { combineReducers, configureStore } from '@reduxjs/toolkit';
 import transactionBuilderReducer from './transactionBuilderSlice';
 import contractReducer from './contractSlice';
 import networkReducer from './networkSlice';
+import walletReducer from './walletSlice';
+import utxoReducer from './utxoSlice';
+import transactionReducer from './transactionSlice';
+import priceFeedReducer from './priceFeedSlice';
 import { persistStore, persistReducer } from 'redux-persist';
 import storage from 'redux-persist/lib/storage'; // defaults to localStorage for web
 
 const persistConfig = {
   key: 'root',
   storage,
-  whitelist: ['transactionBuilder', 'contract', 'network'], // Add other slices here
+  whitelist: ['wallet_id', 'transactionBuilder', 'contract', 'network'], // Add other slices here
 };
 
 const rootReducer = combineReducers({
-  transactionBuilder: transactionBuilderReducer,
+  wallet_id: walletReducer,
+  utxos: utxoReducer,
+  transactions: transactionReducer,
   contract: contractReducer,
   network: networkReducer,
+  transactionBuilder: transactionBuilderReducer,
+  priceFeed: priceFeedReducer,
 });
 
 const persistedReducer = persistReducer(persistConfig, rootReducer);

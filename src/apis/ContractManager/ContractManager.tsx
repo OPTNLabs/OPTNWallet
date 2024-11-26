@@ -599,20 +599,28 @@ export default function ContractManager() {
     console.log('Fetched constructor inputs:', constructorInputs);
 
     // Parse constructor arguments using the contract's artifact
-    const constructorArgs = contractInstance.artifact.constructorInputs.map(
-      (
-        input: any
-        // index: number
-      ) => parseInputValue(contractFunctionInputs[input.name], input.type)
+    const parsedConstructorArgs =
+      contractInstance.artifact.constructorInputs.map(
+        (input: any, index: number) => {
+          const argValue = constructorInputs[index];
+          if (argValue === undefined) {
+            throw new Error(`Missing constructor argument for ${input.name}`);
+          }
+          return parseInputValue(argValue, input.type);
+        }
+      );
+
+    console.log('Parsed constructor arguments:', parsedConstructorArgs);
+
+    // Create a new contract instance with parsed constructor arguments
+    const contract = new Contract(
+      contractInstance.artifact,
+      parsedConstructorArgs,
+      {
+        provider: new ElectrumNetworkProvider(state.network.currentNetwork),
+        addressType: 'p2sh32',
+      }
     );
-
-    console.log('Parsed constructor arguments:', constructorArgs);
-
-    // Create a new contract instance
-    const contract = new Contract(contractInstance.artifact, constructorArgs, {
-      provider: new ElectrumNetworkProvider(state.network.currentNetwork),
-      addressType: 'p2sh32',
-    });
 
     console.log(
       'Created contract instance with parsed constructor arguments:',
@@ -639,7 +647,7 @@ export default function ContractManager() {
       );
     }
 
-    // Ensure that the contract function inputs are mapped correctly
+    // Create unlocker with function inputs
     const unlocker = contract.unlock[contractFunction](
       ...abiFunction.inputs.map((input: any) => {
         // Get the corresponding value from contractFunctionInputs using the input name
@@ -650,8 +658,8 @@ export default function ContractManager() {
           // Handle signature input with `SignatureTemplate`
           return new SignatureTemplate(inputValue, HashType.SIGHASH_ALL);
         } else {
-          // For other inputs, return the value directly
-          return inputValue;
+          // For other inputs, parse the input value based on its type
+          return parseInputValue(inputValue, input.type);
         }
       })
     );

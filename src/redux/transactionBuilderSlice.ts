@@ -26,8 +26,7 @@ const transactionBuilderSlice = createSlice({
       console.log('Reducer: txOutputs after removeTxOutput:', state.txOutputs);
     },
     clearTransaction: (state) => {
-      console.log('Reducer: clearTransaction called');
-      state.txOutputs = [];
+      Object.assign(state, initialState);
       console.log(
         'Reducer: txOutputs after clearTransaction:',
         state.txOutputs

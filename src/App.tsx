@@ -29,43 +29,43 @@ function App() {
   );
   const location = useLocation();
 
-  useEffect(() => {
-    if (walletId === 1) {
-      // Start the UTXO and Transaction workers if walletId is 1 and workers aren't already started
-      if (!utxoWorkerStarted) {
-        startUTXOWorker();
-        utxoWorkerStarted = true;
-      }
-      if (!transactionWorkerStarted) {
-        startTransactionWorker();
-        transactionWorkerStarted = true;
-      }
-    } else {
-      // Stop workers if walletId is not 1
-      if (utxoWorkerStarted) {
-        stopUTXOWorker();
-        utxoWorkerStarted = false;
-      }
-      if (transactionWorkerStarted) {
-        stopTransactionWorker();
-        transactionWorkerStarted = false;
-      }
-    }
+  // useEffect(() => {
+  //   if (walletId === 1) {
+  //     // Start the UTXO and Transaction workers if walletId is 1 and workers aren't already started
+  //     if (!utxoWorkerStarted) {
+  //       startUTXOWorker();
+  //       utxoWorkerStarted = true;
+  //     }
+  //     if (!transactionWorkerStarted) {
+  //       startTransactionWorker();
+  //       transactionWorkerStarted = true;
+  //     }
+  //   } else {
+  //     // Stop workers if walletId is not 1
+  //     if (utxoWorkerStarted) {
+  //       stopUTXOWorker();
+  //       utxoWorkerStarted = false;
+  //     }
+  //     if (transactionWorkerStarted) {
+  //       stopTransactionWorker();
+  //       transactionWorkerStarted = false;
+  //     }
+  //   }
 
-    // Cleanup function
-    return () => {
-      if (walletId !== 1) {
-        if (utxoWorkerStarted) {
-          stopUTXOWorker();
-          utxoWorkerStarted = false;
-        }
-        if (transactionWorkerStarted) {
-          stopTransactionWorker();
-          transactionWorkerStarted = false;
-        }
-      }
-    };
-  }, [walletId, location.pathname]);
+  //   // Cleanup function
+  //   return () => {
+  //     if (walletId !== 1) {
+  //       if (utxoWorkerStarted) {
+  //         stopUTXOWorker();
+  //         utxoWorkerStarted = false;
+  //       }
+  //       if (transactionWorkerStarted) {
+  //         stopTransactionWorker();
+  //         transactionWorkerStarted = false;
+  //       }
+  //     }
+  //   };
+  // }, [walletId, location.pathname]);
 
   return (
     <Routes>

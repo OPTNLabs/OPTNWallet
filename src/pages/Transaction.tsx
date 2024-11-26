@@ -10,7 +10,11 @@ import CashTokenUTXOs from '../components/CashTokenUTXOs';
 import SelectContractFunctionPopup from '../components/SelectContractFunctionPopup';
 import { SignatureTemplate, HashType } from 'cashscript';
 import { RootState, AppDispatch } from '../redux/store';
-import { setSelectedFunction, setInputValues } from '../redux/contractSlice';
+import {
+  setSelectedFunction,
+  setInputValues,
+  resetContract,
+} from '../redux/contractSlice'; // Import resetContract
 import {
   addTxOutput,
   removeTxOutput,
@@ -24,6 +28,7 @@ import Popup from '../components/transaction/Popup';
 import OutputSelection from '../components/transaction/OutputSelection';
 import TransactionBuilder from '../components/transaction/TransactionBuilder';
 import ErrorBoundary from '../components/ErrorBoundary'; // Import ErrorBoundary
+import { resetTransactions } from '../redux/transactionSlice';
 
 const Transaction: React.FC = () => {
   // Local State Variables (Outputs are now managed by Redux)
@@ -102,6 +107,7 @@ const Transaction: React.FC = () => {
       // TODO: Implement actual logic to get active wallet ID
       const activeWalletId = 1;
       setWalletId(activeWalletId);
+      dispatch(clearTransaction());
     };
 
     fetchWalletId();
@@ -176,6 +182,11 @@ const Transaction: React.FC = () => {
       setSelectedUtxos(
         selectedUtxos.filter((selectedUtxo) => selectedUtxo.id !== utxo.id)
       );
+
+      // If the UTXO being deselected was a contract UTXO, reset the contract state
+      if (utxo.abi) {
+        dispatch(resetContract());
+      }
     } else {
       if (utxo.abi) {
         console.log('Contract UTXO:', utxo);
@@ -196,6 +207,9 @@ const Transaction: React.FC = () => {
         };
 
         setSelectedUtxos([...selectedUtxos, updatedUtxo]);
+
+        // Reset contract state since a regular UTXO is being selected
+        dispatch(resetContract());
       }
     }
 
@@ -322,15 +336,28 @@ const Transaction: React.FC = () => {
    */
   const handleSendTransaction = async () => {
     try {
+      setLoading(true);
       const transactionID = await transactionService.sendTransaction(rawTX);
-      if (transactionID.txid) setTransactionId(transactionID.txid);
-      if (transactionID.errorMessage)
+
+      if (transactionID.txid) {
+        setTransactionId(transactionID.txid);
+      }
+
+      if (transactionID.errorMessage) {
         setErrorMessage(transactionID.errorMessage);
+      } else {
+        // Only reset the contract state if the transaction was successful
+        dispatch(resetTransactions());
+        dispatch(resetContract());
+      }
+
       setShowTxIdPopup(true);
+      setLoading(false);
     } catch (error: any) {
       console.error('Error sending transaction:', error);
       setErrorMessage('Error sending transaction: ' + error.message);
       setShowTxIdPopup(true);
+      setLoading(false);
     }
   };
 
