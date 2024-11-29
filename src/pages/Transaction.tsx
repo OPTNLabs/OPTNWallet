@@ -1,13 +1,18 @@
 // src/pages/Transaction.tsx
 
-import React, { useState, useEffect } from 'react';
+import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useDispatch, useSelector } from 'react-redux';
 import { TransactionOutput, UTXO } from '../types/types';
-import TransactionService from '../services/TransactionService'; // Ensure correct import path
-import RegularUTXOs from '../components/RegularUTXOs';
-import CashTokenUTXOs from '../components/CashTokenUTXOs';
+import AddressSelection from '../components/transaction/AddressSelection';
+import OutputSelection from '../components/transaction/OutputSelection';
+import SelectedUTXOsDisplay from '../components/transaction/SelectedUTXOsDisplay';
+import TransactionOutputsDisplay from '../components/transaction/TransactionOutputsDisplay';
+import TransactionActions from '../components/transaction/TransactionActions';
+import UTXOSelection from '../components/transaction/UTXOSelection';
 import SelectContractFunctionPopup from '../components/SelectContractFunctionPopup';
+import ErrorAndStatusPopups from '../components/transaction/ErrorAndStatusPopups';
+import ErrorBoundary from '../components/ErrorBoundary'; // Import ErrorBoundary
 import { SignatureTemplate, HashType } from 'cashscript';
 import { RootState, AppDispatch } from '../redux/store';
 import {
@@ -23,12 +28,10 @@ import {
 } from '../redux/transactionBuilderSlice';
 import { selectCurrentNetwork } from '../redux/selectors/networkSelectors';
 import { Network } from '../redux/networkSlice';
-import AddressSelection from '../components/transaction/AddressSelection';
-import Popup from '../components/transaction/Popup';
-import OutputSelection from '../components/transaction/OutputSelection';
-import TransactionBuilder from '../components/transaction/TransactionBuilder';
-import ErrorBoundary from '../components/ErrorBoundary'; // Import ErrorBoundary
 import { resetTransactions } from '../redux/transactionSlice';
+import useFetchWalletData from '../hooks/useFetchWalletData';
+import useHandleTransaction from '../hooks/useHandleTransaction';
+import TransactionService from '../services/TransactionService';
 
 const Transaction: React.FC = () => {
   // Local State Variables (Outputs are now managed by Redux)
@@ -78,9 +81,6 @@ const Transaction: React.FC = () => {
   const navigate = useNavigate();
   const dispatch: AppDispatch = useDispatch();
 
-  // Correctly initialize TransactionService
-  const transactionService = TransactionService; // Ensure TransactionService is a function that returns the service object
-
   const currentNetwork = useSelector((state: RootState) =>
     selectCurrentNetwork(state)
   );
@@ -93,79 +93,18 @@ const Transaction: React.FC = () => {
     (state: RootState) => state.transactionBuilder.txOutputs
   );
 
-  // Add this useEffect to log txOutputs whenever they change
-  useEffect(() => {
-    console.log('txOutputs updated:', txOutputs);
-  }, [txOutputs]);
-
-  /**
-   * Fetch wallet ID on component mount.
-   * Replace the hardcoded `1` with actual logic to retrieve the active wallet ID.
-   */
-  useEffect(() => {
-    const fetchWalletId = async () => {
-      // TODO: Implement actual logic to get active wallet ID
-      const activeWalletId = 1;
-      setWalletId(activeWalletId);
-      dispatch(clearTransaction());
-    };
-
-    fetchWalletId();
-  }, []);
-
-  /**
-   * Fetch addresses and UTXOs whenever `walletId` changes.
-   * Removed `changeAddress` and `selectedAddresses` from dependencies to prevent infinite loop.
-   */
-  useEffect(() => {
-    const fetchData = async (walletId: number) => {
-      try {
-        const { addresses, utxos, contractAddresses } =
-          await transactionService.fetchAddressesAndUTXOs(walletId);
-        setAddresses(addresses);
-        setContractAddresses(contractAddresses);
-        setUtxos(utxos);
-        setContractUTXOs(
-          contractAddresses.flatMap((contract) =>
-            utxos.filter((utxo) => utxo.address === contract.address)
-          )
-        );
-
-        // Auto-select the first address if only one exists
-        if (
-          addresses.length === 1 &&
-          !selectedAddresses.includes(addresses[0].address)
-        ) {
-          setSelectedAddresses([addresses[0].address]);
-        }
-
-        // Set default change address
-        if (!changeAddress && addresses.length > 0) {
-          setChangeAddress(addresses[0].address);
-        }
-      } catch (error) {
-        console.error('Error fetching addresses and UTXOs:', error);
-        setErrorMessage(
-          'Error fetching addresses and UTXOs: ' + (error as Error).message
-        );
-      }
-    };
-
-    if (walletId !== null) {
-      fetchData(walletId);
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [walletId]);
-
-  /**
-   * Handle changes to `selectedAddresses` to auto-select change address if needed.
-   * This is a separate useEffect to manage state updates without causing the main fetchData useEffect to re-run.
-   */
-  useEffect(() => {
-    if (selectedAddresses.length === 1) {
-      setChangeAddress(selectedAddresses[0]);
-    }
-  }, [selectedAddresses]);
+  // Log txOutputs whenever they change
+  useFetchWalletData(
+    walletId,
+    selectedAddresses,
+    setAddresses,
+    setContractAddresses,
+    setUtxos,
+    setContractUTXOs,
+    setSelectedAddresses,
+    setChangeAddress,
+    setErrorMessage
+  );
 
   /**
    * Handle the selection and deselection of UTXOs.
@@ -222,7 +161,7 @@ const Transaction: React.FC = () => {
   const handleAddOutput = () => {
     if (recipientAddress && (transferAmount || tokenAmount)) {
       try {
-        const newOutput = transactionService.addOutput(
+        const newOutput = TransactionService.addOutput(
           recipientAddress,
           transferAmount,
           tokenAmount,
@@ -258,107 +197,26 @@ const Transaction: React.FC = () => {
   };
 
   /**
-   * Builds the transaction.
+   * Use custom hook to handle building and sending transactions.
    */
-  const handleBuildTransaction = async () => {
-    try {
-      setLoading(true);
-      console.log('Building transaction with:');
-      console.log('Outputs:', txOutputs);
-      console.log('Contract Function Inputs:', contractFunctionInputs);
-      console.log('Selected Function:', selectedFunction);
-      console.log('Selected UTXOs:', selectedUtxos);
-
-      // Optionally, notify the user that no outputs are added and a change output will be added automatically
-      if (txOutputs.length === 0) {
-        console.log(
-          'No outputs added. A change output will be added automatically.'
-        );
-      }
-
-      // If a contract function is selected, ensure inputs are provided
-      if (
-        selectedFunction &&
-        (!contractFunctionInputs ||
-          Object.keys(contractFunctionInputs).length === 0)
-      ) {
-        setErrorMessage(
-          'Please provide all required contract function inputs.'
-        );
-        setLoading(false);
-        return;
-      }
-
-      const transaction = await transactionService.buildTransaction(
-        txOutputs,
-        contractFunctionInputs,
-        changeAddress,
-        selectedUtxos
-      );
-
-      if (!transaction) {
-        setErrorMessage('Failed to build transaction.');
-        setLoading(false);
-        return;
-      }
-
-      console.log('Transaction Build Result:', transaction);
-
-      setBytecodeSize(transaction.bytecodeSize);
-      setRawTX(transaction.finalTransaction);
-      // Removed `setFinalOutputs` as outputs are managed by Redux
-
-      // **[Modification]**: Update the Redux outputs state with finalOutputs
-      if (transaction.finalOutputs) {
-        // Clear existing outputs
-        dispatch(clearTransaction());
-
-        // Set the entire txOutputs array to finalOutputs
-        dispatch(setTxOutputs(transaction.finalOutputs));
-
-        console.log('Final Outputs after Build:', transaction.finalOutputs);
-      }
-
-      setErrorMessage(transaction.errorMsg);
-      setShowRawTxPopup(true);
-      setLoading(false);
-    } catch (err: any) {
-      console.error('Error building transaction:', err);
-      setRawTX('');
-      setErrorMessage('Error building transaction: ' + err.message);
-      setShowRawTxPopup(true);
-      setLoading(false);
-    }
-  };
+  const { handleBuildTransaction: buildTransaction, handleSendTransaction } =
+    useHandleTransaction(
+      txOutputs,
+      contractFunctionInputs,
+      changeAddress,
+      selectedUtxos,
+      setBytecodeSize,
+      setRawTX,
+      setErrorMessage,
+      setShowRawTxPopup,
+      setLoading
+    );
 
   /**
    * Sends the built transaction.
    */
-  const handleSendTransaction = async () => {
-    try {
-      setLoading(true);
-      const transactionID = await transactionService.sendTransaction(rawTX);
-
-      if (transactionID.txid) {
-        setTransactionId(transactionID.txid);
-      }
-
-      if (transactionID.errorMessage) {
-        setErrorMessage(transactionID.errorMessage);
-      } else {
-        // Only reset the contract state if the transaction was successful
-        dispatch(resetTransactions());
-        dispatch(resetContract());
-      }
-
-      setShowTxIdPopup(true);
-      setLoading(false);
-    } catch (error: any) {
-      console.error('Error sending transaction:', error);
-      setErrorMessage('Error sending transaction: ' + error.message);
-      setShowTxIdPopup(true);
-      setLoading(false);
-    }
+  const sendTransaction = () => {
+    handleSendTransaction(rawTX, setTransactionId);
   };
 
   /**
@@ -409,7 +267,7 @@ const Transaction: React.FC = () => {
 
     // Create an unlocker template from the input values
     const unlockerInputs = Object.entries(inputs).map(([key, value]) =>
-      key === 's' ? new SignatureTemplate(value) : value
+      key === 's' ? new SignatureTemplate(value, HashType.SIGHASH_ALL) : value
     );
 
     const unlocker = {
@@ -478,161 +336,32 @@ const Transaction: React.FC = () => {
           setSelectedAddresses={setSelectedAddresses}
         />
 
-        {/* Regular UTXOs Popup */}
-        <div>
-          {selectedAddresses.length > 0 && (
-            <button
-              className="bg-blue-500 text-white py-2 px-4 rounded mb-2"
-              onClick={() => setShowRegularUTXOsPopup(true)}
-            >
-              View Regular UTXOs
-            </button>
-          )}
-          {showRegularUTXOsPopup && (
-            <Popup closePopups={closePopups}>
-              <h4 className="text-md font-semibold mb-4">Regular UTXOs</h4>
-              <div className="overflow-y-auto max-h-80">
-                {filteredRegularUTXOs.map((utxo) => (
-                  <button
-                    key={utxo.id}
-                    onClick={() => handleUtxoClick(utxo)}
-                    className={`block w-full text-left p-2 mb-2 border rounded-lg break-words whitespace-normal ${
-                      selectedUtxos.some(
-                        (selectedUtxo) =>
-                          selectedUtxo.tx_hash === utxo.tx_hash &&
-                          selectedUtxo.tx_pos === utxo.tx_pos
-                      )
-                        ? 'bg-blue-100'
-                        : 'bg-white'
-                    }`}
-                  >
-                    <RegularUTXOs utxos={[utxo]} loading={false} />
-                  </button>
-                ))}
-              </div>
-            </Popup>
-          )}
-        </div>
-
-        {/* CashToken UTXOs Popup */}
-        <div>
-          {selectedAddresses.length > 0 && (
-            <button
-              className="bg-blue-500 text-white py-2 px-4 rounded mb-2"
-              onClick={() => setShowCashTokenUTXOsPopup(true)}
-            >
-              View CashToken UTXOs
-            </button>
-          )}
-          {showCashTokenUTXOsPopup && (
-            <Popup closePopups={closePopups}>
-              <h4 className="text-md font-semibold mb-4">CashToken UTXOs</h4>
-              <div className="overflow-y-auto max-h-80">
-                {filteredCashTokenUTXOs.map((utxo) => (
-                  <button
-                    key={utxo.id}
-                    onClick={() => handleUtxoClick(utxo)}
-                    className={`block w-full text-left p-2 mb-2 border rounded-lg break-words whitespace-normal ${
-                      selectedUtxos.some(
-                        (selectedUtxo) =>
-                          selectedUtxo.tx_hash === utxo.tx_hash &&
-                          selectedUtxo.tx_pos === utxo.tx_pos
-                      )
-                        ? 'bg-blue-100'
-                        : 'bg-white'
-                    }`}
-                  >
-                    <CashTokenUTXOs utxos={[utxo]} loading={false} />
-                  </button>
-                ))}
-              </div>
-            </Popup>
-          )}
-        </div>
-
-        {/* Contract UTXOs Popup */}
-        <div className="mb-6">
-          {selectedContractAddresses.length > 0 && (
-            <button
-              className="bg-blue-500 text-white py-2 px-4 rounded mb-2"
-              onClick={() => setShowContractUTXOsPopup(true)}
-            >
-              View Contract UTXOs
-            </button>
-          )}
-          {showContractUTXOsPopup && (
-            <Popup closePopups={closePopups}>
-              <h4 className="text-md font-semibold mb-4">Contract UTXOs</h4>
-              <div className="overflow-y-auto max-h-80">
-                {filteredContractUTXOs.map((utxo) => (
-                  <button
-                    key={utxo.id}
-                    onClick={() => handleUtxoClick(utxo)}
-                    className={`block w-full text-left p-2 mb-2 border rounded-lg break-words whitespace-normal ${
-                      selectedUtxos.some(
-                        (selectedUtxo) =>
-                          selectedUtxo.tx_hash === utxo.tx_hash &&
-                          selectedUtxo.tx_pos === utxo.tx_pos
-                      )
-                        ? 'bg-blue-100'
-                        : 'bg-white'
-                    }`}
-                  >
-                    <RegularUTXOs utxos={[utxo]} loading={false} />
-                  </button>
-                ))}
-              </div>
-            </Popup>
-          )}
-        </div>
+        {/* UTXO Selection Component */}
+        <UTXOSelection
+          selectedAddresses={selectedAddresses}
+          contractAddresses={contractAddresses}
+          filteredRegularUTXOs={filteredRegularUTXOs}
+          filteredCashTokenUTXOs={filteredCashTokenUTXOs}
+          filteredContractUTXOs={filteredContractUTXOs}
+          selectedUtxos={selectedUtxos}
+          handleUtxoClick={handleUtxoClick}
+          showRegularUTXOsPopup={showRegularUTXOsPopup}
+          setShowRegularUTXOsPopup={setShowRegularUTXOsPopup}
+          showCashTokenUTXOsPopup={showCashTokenUTXOsPopup}
+          setShowCashTokenUTXOsPopup={setShowCashTokenUTXOsPopup}
+          showContractUTXOsPopup={showContractUTXOsPopup}
+          setShowContractUTXOsPopup={setShowContractUTXOsPopup}
+          closePopups={closePopups}
+        />
 
         {/* Selected Transaction Inputs */}
-        <div className="mb-6">
-          <h3 className="text-lg font-semibold mb-2">
-            Selected Transaction Inputs
-          </h3>
-          {selectedUtxos.map((utxo) => (
-            <div
-              key={utxo.id}
-              className="flex flex-col items-start mb-2 w-full break-words whitespace-normal"
-            >
-              <span className="w-full">{`Address: ${utxo.address}`}</span>
-              <span className="w-full">{`Amount: ${utxo.amount}`}</span>
-              <span className="w-full">{`Tx Hash: ${utxo.tx_hash}`}</span>
-              <span className="w-full">{`Position: ${utxo.tx_pos}`}</span>
-              <span className="w-full">{`Height: ${utxo.height}`}</span>
-              {!utxo.unlocker && utxo.abi && (
-                <span className="text-red-500 w-full">Missing unlocker!</span>
-              )}
-            </div>
-          ))}
-        </div>
+        <SelectedUTXOsDisplay selectedUtxos={selectedUtxos} />
 
-        {/* Transaction Outputs */}
-        <div className="mb-6">
-          <h3 className="text-lg font-semibold mb-2">Transaction Outputs</h3>
-          {txOutputs.map((output, index) => (
-            <div
-              key={index}
-              className="flex flex-col items-start mb-2 w-full break-words whitespace-normal"
-            >
-              <span className="w-full">{`Recipient: ${output.recipientAddress}`}</span>
-              <span className="w-full">{`Amount: ${output.amount.toString()}`}</span>
-              {output.token && (
-                <>
-                  <span className="w-full">{`Token: ${output.token.amount.toString()}`}</span>
-                  <span className="w-full">{`Category: ${output.token.category}`}</span>
-                </>
-              )}
-              <button
-                onClick={() => handleRemoveOutput(index)}
-                className="text-red-500"
-              >
-                Remove
-              </button>
-            </div>
-          ))}
-        </div>
+        {/* Transaction Outputs Display */}
+        <TransactionOutputsDisplay
+          txOutputs={txOutputs}
+          handleRemoveOutput={handleRemoveOutput}
+        />
 
         {/* Output Selection Component */}
         <OutputSelection
@@ -650,12 +379,12 @@ const Transaction: React.FC = () => {
           setChangeAddress={setChangeAddress}
         />
 
-        {/* Transaction Builder Component */}
-        <TransactionBuilder
+        {/* Transaction Actions Component */}
+        <TransactionActions
           totalSelectedUtxoAmount={totalSelectedUtxoAmount}
           loading={loading}
-          buildTransaction={handleBuildTransaction}
-          sendTransaction={handleSendTransaction}
+          buildTransaction={buildTransaction}
+          sendTransaction={sendTransaction}
           returnHome={returnHome}
         />
 
@@ -668,44 +397,18 @@ const Transaction: React.FC = () => {
           </div>
         )}
 
-        {/* Raw Transaction Popup */}
-        {showRawTxPopup && (
-          <Popup closePopups={closePopups}>
-            <h3 className="text-lg font-semibold mb-4">Raw Transaction</h3>
-            <div className="text-sm font-medium text-gray-700 break-words whitespace-normal mb-4">
-              {errorMessage ? (
-                <div className="text-red-500">{errorMessage}</div>
-              ) : (
-                rawTX
-              )}
-            </div>
-          </Popup>
-        )}
-
-        {/* Transaction ID Popup */}
-        {showTxIdPopup && (
-          <Popup closePopups={closePopups}>
-            <h3 className="text-lg font-semibold mb-4">Transaction ID</h3>
-            <div className="text-sm font-medium text-gray-700 break-words whitespace-normal mb-4">
-              {errorMessage ? (
-                <div className="text-red-500">{errorMessage}</div>
-              ) : (
-                <a
-                  className="text-blue-500 underline"
-                  href={
-                    currentNetwork === Network.CHIPNET
-                      ? `https://chipnet.imaginary.cash/tx/${transactionId}`
-                      : `https://blockchair.com/bitcoin-cash/transaction/${transactionId}`
-                  }
-                  target="_blank"
-                  rel="noopener noreferrer"
-                >
-                  {transactionId}
-                </a>
-              )}
-            </div>
-          </Popup>
-        )}
+        {/* Error and Status Popups */}
+        <ErrorAndStatusPopups
+          showRawTxPopup={showRawTxPopup}
+          // setShowRawTxPopup={setShowRawTxPopup}
+          showTxIdPopup={showTxIdPopup}
+          // setShowTxIdPopup={setShowTxIdPopup}
+          rawTX={rawTX}
+          transactionId={transactionId}
+          errorMessage={errorMessage}
+          currentNetwork={currentNetwork}
+          closePopups={closePopups}
+        />
 
         {/* Contract Function Selection Popup */}
         {showPopup && currentContractABI.length > 0 && (
