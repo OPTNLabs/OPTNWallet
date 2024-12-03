@@ -6,21 +6,17 @@ import { Network } from '../../redux/networkSlice';
 
 interface ErrorAndStatusPopupsProps {
   showRawTxPopup: boolean;
-  // setShowRawTxPopup: React.Dispatch<React.SetStateAction<boolean>>;
   showTxIdPopup: boolean;
-  // setShowTxIdPopup: React.Dispatch<React.SetStateAction<boolean>>;
   rawTX: string;
   transactionId: string;
   errorMessage: string | null;
-  currentNetwork: Network;
+  currentNetwork: string; // Adjust the type based on your Network type
   closePopups: () => void;
 }
 
 const ErrorAndStatusPopups: React.FC<ErrorAndStatusPopupsProps> = ({
   showRawTxPopup,
-  // setShowRawTxPopup,
   showTxIdPopup,
-  // setShowTxIdPopup,
   rawTX,
   transactionId,
   errorMessage,
@@ -32,39 +28,45 @@ const ErrorAndStatusPopups: React.FC<ErrorAndStatusPopupsProps> = ({
       {/* Raw Transaction Popup */}
       {showRawTxPopup && (
         <Popup closePopups={closePopups}>
-          <h3 className="text-lg font-semibold mb-4">Raw Transaction</h3>
-          <div className="text-sm font-medium text-gray-700 break-words whitespace-normal mb-4">
-            {errorMessage ? (
-              <div className="text-red-500">{errorMessage}</div>
-            ) : (
-              rawTX
-            )}
-          </div>
+          <h3 className="text-lg font-semibold mb-2">Raw Transaction</h3>
+          <textarea
+            readOnly
+            value={rawTX}
+            className="w-full h-40 p-2 border rounded"
+          />
         </Popup>
       )}
 
       {/* Transaction ID Popup */}
-      {showTxIdPopup && (
+      {showTxIdPopup && transactionId && (
         <Popup closePopups={closePopups}>
-          <h3 className="text-lg font-semibold mb-4">Transaction ID</h3>
-          <div className="text-sm font-medium text-gray-700 break-words whitespace-normal mb-4">
-            {errorMessage ? (
-              <div className="text-red-500">{errorMessage}</div>
-            ) : (
-              <a
-                className="text-blue-500 underline"
-                href={
-                  currentNetwork === Network.CHIPNET
-                    ? `https://chipnet.imaginary.cash/tx/${transactionId}`
-                    : `https://blockchair.com/bitcoin-cash/transaction/${transactionId}`
-                }
-                target="_blank"
-                rel="noopener noreferrer"
-              >
-                {transactionId}
-              </a>
-            )}
-          </div>
+          <h3 className="text-lg font-semibold mb-2">Transaction Successful</h3>
+          <p>Your transaction has been broadcasted successfully!</p>
+          <p>
+            <strong>Transaction ID:</strong> {transactionId}
+          </p>
+          <p>
+            <a
+              href={
+                currentNetwork === Network.CHIPNET
+                  ? `https://chipnet.imaginary.cash/tx/${transactionId}`
+                  : `https://blockchair.com/bitcoin-cash/transaction/${transactionId}`
+              }
+              target="_blank"
+              rel="noopener noreferrer"
+              className="text-blue-500 underline"
+            >
+              View on Explorer
+            </a>
+          </p>
+        </Popup>
+      )}
+
+      {/* Error Message Popup */}
+      {errorMessage && (
+        <Popup closePopups={closePopups}>
+          <h3 className="text-lg font-semibold mb-2">Error</h3>
+          <p>{errorMessage}</p>
         </Popup>
       )}
     </>

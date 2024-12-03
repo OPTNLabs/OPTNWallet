@@ -1,9 +1,9 @@
 // src/pages/Transaction.tsx
 
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useDispatch, useSelector } from 'react-redux';
-import { TransactionOutput, UTXO } from '../types/types';
+import { UTXO } from '../types/types';
 import AddressSelection from '../components/transaction/AddressSelection';
 import OutputSelection from '../components/transaction/OutputSelection';
 import SelectedUTXOsDisplay from '../components/transaction/SelectedUTXOsDisplay';
@@ -21,21 +21,24 @@ import {
   resetContract,
 } from '../redux/contractSlice'; // Import resetContract
 import {
-  addTxOutput,
+  // addTxOutput,
   removeTxOutput,
   clearTransaction,
-  setTxOutputs,
+  // setTxOutputs,
 } from '../redux/transactionBuilderSlice';
 import { selectCurrentNetwork } from '../redux/selectors/networkSelectors';
 import { Network } from '../redux/networkSlice';
-import { resetTransactions } from '../redux/transactionSlice';
 import useFetchWalletData from '../hooks/useFetchWalletData';
 import useHandleTransaction from '../hooks/useHandleTransaction';
 import TransactionService from '../services/TransactionService';
+import {
+  selectWalletId,
+  setWalletId,
+  selectNetworkType,
+} from '../redux/walletSlice';
 
 const Transaction: React.FC = () => {
-  // Local State Variables (Outputs are now managed by Redux)
-  const [walletId, setWalletId] = useState<number | null>(null);
+  // Removed local walletId state
   const [addresses, setAddresses] = useState<
     { address: string; tokenAddress: string }[]
   >([]);
@@ -93,6 +96,19 @@ const Transaction: React.FC = () => {
     (state: RootState) => state.transactionBuilder.txOutputs
   );
 
+  const walletId = useSelector(selectWalletId);
+  const networkType = useSelector(selectNetworkType);
+
+  console.log('Selected Wallet ID from Redux:', walletId);
+  console.log('Current Network Type:', networkType);
+
+  // Reset transactions and contract states when the component mounts
+  useEffect(() => {
+    dispatch(clearTransaction());
+    dispatch(resetContract());
+    console.log('Transaction and Contract states have been reset.');
+  }, [dispatch]);
+
   // Log txOutputs whenever they change
   useFetchWalletData(
     walletId,
@@ -105,6 +121,22 @@ const Transaction: React.FC = () => {
     setChangeAddress,
     setErrorMessage
   );
+
+  // Use useEffect to set the walletId if not set
+  useEffect(() => {
+    if (walletId === 0) {
+      // assuming 0 is invalid, initial value
+      const fetchWalletId = async () => {
+        // TODO: Implement actual logic to get active wallet ID
+        const activeWalletId = 1;
+        dispatch(setWalletId(activeWalletId));
+        console.log('Wallet ID set to:', activeWalletId);
+        // dispatch(clearTransaction());
+      };
+
+      fetchWalletId();
+    }
+  }, [dispatch, walletId]);
 
   /**
    * Handle the selection and deselection of UTXOs.
@@ -209,6 +241,7 @@ const Transaction: React.FC = () => {
       setRawTX,
       setErrorMessage,
       setShowRawTxPopup,
+      setShowTxIdPopup, // Pass the setter to the hook
       setLoading
     );
 

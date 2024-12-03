@@ -1,9 +1,8 @@
 // src/hooks/useHandleTransaction.ts
 
-// import { useState } from 'react';
+import { useDispatch } from 'react-redux';
 import TransactionService from '../services/TransactionService';
 import { TransactionOutput, UTXO } from '../types/types';
-import { useDispatch } from 'react-redux';
 import {
   clearTransaction,
   setTxOutputs,
@@ -27,6 +26,7 @@ const useHandleTransaction = (
   setRawTX: React.Dispatch<React.SetStateAction<string>>,
   setErrorMessage: React.Dispatch<React.SetStateAction<string | null>>,
   setShowRawTxPopup: React.Dispatch<React.SetStateAction<boolean>>,
+  setShowTxIdPopup: React.Dispatch<React.SetStateAction<boolean>>, // Added parameter
   setLoading: React.Dispatch<React.SetStateAction<boolean>>
 ) => {
   const dispatch = useDispatch();
@@ -104,6 +104,7 @@ const useHandleTransaction = (
 
       if (transactionID.txid) {
         setTransactionId(transactionID.txid);
+        setShowTxIdPopup(true); // Trigger the popup
       }
 
       if (transactionID.errorMessage) {
@@ -119,6 +120,7 @@ const useHandleTransaction = (
     } catch (error: any) {
       console.error('Error sending transaction:', error);
       setErrorMessage('Error sending transaction: ' + error.message);
+      setShowTxIdPopup(false); // Ensure popup is not shown on error
       setLoading(false);
       return { txid: null, errorMessage: error.message };
     }

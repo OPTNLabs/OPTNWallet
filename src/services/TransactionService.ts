@@ -56,7 +56,7 @@ class TransactionService {
     }
     addressesStatement.free();
 
-    console.log('Fetched addresses:', fetchedAddresses);
+    console.log('Fetched addresses from DB:', fetchedAddresses);
 
     // Fetch UTXOs from UTXOs table
     const utxosQuery = `SELECT * FROM UTXOs WHERE wallet_id = ?`;
@@ -65,7 +65,7 @@ class TransactionService {
     const fetchedUTXOs: UTXO[] = [];
     while (utxosStatement.step()) {
       const row = utxosStatement.getAsObject();
-      console.log(row);
+      console.log('Fetched UTXO row:', row);
 
       // Convert row fields to appropriate types
       const address =
