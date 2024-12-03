@@ -1,24 +1,8 @@
 // src/hooks/useFetchWalletData.ts
 
-import {
-  useEffect,
-  // useState
-} from 'react';
+import { useEffect } from 'react';
 import { UTXO } from '../types/types';
-// import { useDispatch } from 'react-redux';
 import TransactionService from '../services/TransactionService';
-// import { clearTransaction, setTxOutputs } from '../redux/transactionBuilderSlice';
-
-// interface WalletData {
-//   addresses: { address: string; tokenAddress: string }[];
-//   utxos: UTXO[];
-//   contractAddresses: {
-//     address: string;
-//     tokenAddress: string;
-//     contractName: string;
-//     abi: any[];
-//   }[];
-// }
 
 const useFetchWalletData = (
   walletId: number | null,
@@ -42,13 +26,16 @@ const useFetchWalletData = (
   setChangeAddress: React.Dispatch<React.SetStateAction<string>>,
   setErrorMessage: React.Dispatch<React.SetStateAction<string | null>>
 ) => {
-  // const dispatch = useDispatch();
-
   useEffect(() => {
     const fetchData = async (walletId: number) => {
       try {
         const { addresses, utxos, contractAddresses } =
           await TransactionService.fetchAddressesAndUTXOs(walletId);
+
+        console.log('Fetched Addresses:', addresses);
+        console.log('Fetched Contract Addresses:', contractAddresses);
+        console.log('Fetched UTXOs:', utxos);
+
         setAddresses(addresses);
         setContractAddresses(contractAddresses);
         setUtxos(utxos);
@@ -64,11 +51,13 @@ const useFetchWalletData = (
           !selectedAddresses.includes(addresses[0].address)
         ) {
           setSelectedAddresses([addresses[0].address]);
+          console.log(`Auto-selected address: ${addresses[0].address}`);
         }
 
         // Set default change address
         if (addresses.length > 0) {
           setChangeAddress(addresses[0].address);
+          console.log(`Set change address to: ${addresses[0].address}`);
         }
       } catch (error) {
         console.error('Error fetching addresses and UTXOs:', error);
