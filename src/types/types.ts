@@ -24,6 +24,9 @@ export interface UTXO {
   abi?: object[]; // ABI for contract-related UTXOs
   id?: string;
   unlocker?: any;
+  // **New Fields**
+  contractFunction?: string;
+  contractFunctionInputs?: { [key: string]: any };
 }
 
 // TransactionHistoryItem remains the same
