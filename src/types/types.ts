@@ -36,6 +36,7 @@ export interface TransactionHistoryItem {
   timestamp?: string;
   amount?: string | number;
   fee?: number; // Optional field if the transaction is from the mempool
+  address?: string; // Optional field for including address
 }
 
 // Transaction Output
