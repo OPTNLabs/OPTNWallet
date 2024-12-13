@@ -28,7 +28,7 @@ export default function ElectrumServer() {
     server: string = getCurrentServer()
   ): Promise<ElectrumClient> {
     if (electrum) {
-      console.log('Reusing existing Electrum connection');
+      // console.log('Reusing existing Electrum connection');
       electrum.connection.reconnect;
     } else {
       electrum = new ElectrumClient(

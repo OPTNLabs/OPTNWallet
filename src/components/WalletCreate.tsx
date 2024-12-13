@@ -51,7 +51,7 @@ const WalletCreation = () => {
   const generateMnemonicPhrase = async () => {
     try {
       const mnemonic = await KeyService.generateMnemonic();
-      console.log('Generated mnemonic phrase:', mnemonic);
+      // console.log('Generated mnemonic phrase:', mnemonic);
       setMnemonicPhrase(mnemonic);
     } catch (error) {
       console.error('Error generating mnemonic:', error);
@@ -99,7 +99,7 @@ const WalletCreation = () => {
       // Create initial keys using KeyService
       await KeyService.createKeys(walletID, 0, 0, 0);
 
-      console.log('Keys generated and account created successfully.');
+      // console.log('Keys generated and account created successfully.');
       navigate(`/home/${walletID}`);
     } catch (e) {
       console.error('Error creating account:', e);

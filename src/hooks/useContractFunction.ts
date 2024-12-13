@@ -28,8 +28,8 @@ const useContractFunction = () => {
     selectedUtxos,
     setSelectedUtxos,
   }: ContractFunctionParams) => {
-    console.log('Selected Contract Function:', contractFunction);
-    console.log('Selected Contract Function Inputs:', inputs);
+    // console.log('Selected Contract Function:', contractFunction);
+    // console.log('Selected Contract Function Inputs:', inputs);
 
     // Validate inputs is an object, not an array
     if (typeof inputs !== 'object' || Array.isArray(inputs)) {
@@ -50,10 +50,10 @@ const useContractFunction = () => {
     setSelectedUtxos([...selectedUtxos, updatedUtxo]);
 
     // **Add Logging Here**
-    console.log(
-      'Updated UTXO in hook with contractFunction and contractFunctionInputs:',
-      updatedUtxo
-    );
+    // console.log(
+    //   'Updated UTXO in hook with contractFunction and contractFunctionInputs:',
+    //   updatedUtxo
+    // );
   };
 
   return { handleContractFunctionSelect };

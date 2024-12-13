@@ -56,7 +56,7 @@ class TransactionService {
     }
     addressesStatement.free();
 
-    console.log('Fetched addresses from DB:', fetchedAddresses);
+    // console.log('Fetched addresses from DB:', fetchedAddresses);
 
     // Fetch UTXOs from UTXOs table
     const utxosQuery = `SELECT * FROM UTXOs WHERE wallet_id = ?`;
@@ -65,7 +65,7 @@ class TransactionService {
     const fetchedUTXOs: UTXO[] = [];
     while (utxosStatement.step()) {
       const row = utxosStatement.getAsObject();
-      console.log('Fetched UTXO row:', row);
+      // console.log('Fetched UTXO row:', row);
 
       // Convert row fields to appropriate types
       const address =
@@ -120,12 +120,12 @@ class TransactionService {
       }
     }
     utxosStatement.free();
-    console.log('Fetched UTXOs:', fetchedUTXOs);
+    // console.log('Fetched UTXOs:', fetchedUTXOs);
 
     // Fetch contract instances
     const contractInstances =
       await this.contractManager.fetchContractInstances();
-    console.log('Fetched contract instances:', contractInstances);
+    // console.log('Fetched contract instances:', contractInstances);
 
     // Fetch contract UTXOs
     const contractUTXOs = await Promise.all(
@@ -142,7 +142,7 @@ class TransactionService {
       })
     ).then((results) => results.flat());
 
-    console.log('Fetched contract UTXOs:', contractUTXOs);
+    // console.log('Fetched contract UTXOs:', contractUTXOs);
 
     const allUTXOs = [...fetchedUTXOs, ...contractUTXOs];
 
@@ -184,17 +184,17 @@ class TransactionService {
     selectedUtxos: UTXO[],
     addresses: { address: string; tokenAddress: string }[]
   ): TransactionOutput | undefined {
-    console.log(
-      'TransactionService: Adding output with recipient:',
-      recipientAddress
-    );
-    console.log('TransactionService: Transfer Amount:', transferAmount);
-    console.log('TransactionService: Token Amount:', tokenAmount);
-    console.log(
-      'TransactionService: Selected Token Category:',
-      selectedTokenCategory
-    );
-    console.log('TransactionService: Selected UTXOs:', selectedUtxos);
+    // console.log(
+    //   'TransactionService: Adding output with recipient:',
+    //   recipientAddress
+    // );
+    // console.log('TransactionService: Transfer Amount:', transferAmount);
+    // console.log('TransactionService: Token Amount:', tokenAmount);
+    // console.log(
+    //   'TransactionService: Selected Token Category:',
+    //   selectedTokenCategory
+    // );
+    // console.log('TransactionService: Selected UTXOs:', selectedUtxos);
 
     return this.transactionManager.addOutput(
       recipientAddress,
@@ -226,11 +226,11 @@ class TransactionService {
     finalOutputs: TransactionOutput[] | null;
     errorMsg: string;
   }> {
-    console.log('Building transaction with:');
-    console.log('Outputs:', outputs);
-    console.log('Contract Function Inputs:', contractFunctionInputs);
-    console.log('Change Address:', changeAddress);
-    console.log('Selected UTXOs:', selectedUtxos);
+    // console.log('Building transaction with:');
+    // console.log('Outputs:', outputs);
+    // console.log('Contract Function Inputs:', contractFunctionInputs);
+    // console.log('Change Address:', changeAddress);
+    // console.log('Selected UTXOs:', selectedUtxos);
 
     return await this.transactionManager.buildTransaction(
       outputs,

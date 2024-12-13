@@ -15,14 +15,14 @@ const RootHandler = () => {
 
   useEffect(() => {
     const checkExistingWallet = async () => {
-      console.log('Checking for existing wallet...');
+      // console.log('Checking for existing wallet...');
 
       if (walletId === 1) {
-        console.log(`Wallet found with ID: ${walletId}`);
+        // console.log(`Wallet found with ID: ${walletId}`);
         dispatch(setWalletId(walletId));
         navigate(`/home/${walletId}`);
       } else {
-        console.log('No wallet found.');
+        console.error('No wallet found.');
         navigate('/landing'); // Redirect to the landing page if no wallet is found
       }
 

@@ -24,8 +24,8 @@ const SelectedContractFunction: React.FC<SelectedContractFunctionProps> = ({
   const dispatch = useDispatch();
 
   const handleContractFunctionSelect = () => {
-    console.log('Selected Contract Function:', contractFunction);
-    console.log('Selected Contract Function Inputs:', inputs);
+    // console.log('Selected Contract Function:', contractFunction);
+    // console.log('Selected Contract Function Inputs:', inputs);
 
     // Validate inputs is an object, not an array
     if (typeof inputs !== 'object' || Array.isArray(inputs)) {
@@ -56,7 +56,7 @@ const SelectedContractFunction: React.FC<SelectedContractFunctionProps> = ({
       setSelectedUtxos([...selectedUtxos, updatedUtxo]);
 
       // **Add Logging Here**
-      console.log('Updated UTXO in SelectedContractFunction:', updatedUtxo);
+      // console.log('Updated UTXO in SelectedContractFunction:', updatedUtxo);
     }
   };
 

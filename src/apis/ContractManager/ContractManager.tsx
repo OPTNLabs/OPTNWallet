@@ -82,7 +82,7 @@ export default function ContractManager() {
     }
 
     // **Add Logging Here**
-    console.log('Parsed Contract Instance:', contractInstance);
+    // console.log('Parsed Contract Instance:', contractInstance);
 
     return contractInstance;
   }
@@ -282,7 +282,7 @@ export default function ContractManager() {
     ];
 
     // **Add Logging Before Saving**
-    console.log('Saving contract instance with params:', params);
+    // console.log('Saving contract instance with params:', params);
 
     const statement = db.prepare(insertQuery);
     statement.run(params);
@@ -290,7 +290,7 @@ export default function ContractManager() {
     await dbService.saveDatabaseToFile();
 
     // **Add Logging After Saving**
-    console.log('Contract instance saved successfully.');
+    // console.log('Contract instance saved successfully.');
   }
 
   async function deleteContractInstance(contractId: number) {
@@ -465,7 +465,7 @@ export default function ContractManager() {
       }));
 
       // **Add Logging After Formatting UTXOs**
-      console.log('Formatted UTXOs with new fields:', formattedUTXOs);
+      // console.log('Formatted UTXOs with new fields:', formattedUTXOs);
 
       await dbService.ensureDatabaseStarted();
       const db = dbService.getDatabase();
@@ -588,10 +588,10 @@ export default function ContractManager() {
         ];
 
         // **Add Logging Before Update**
-        console.log(
-          'Updating instantiated_contracts with params:',
-          updateParams
-        );
+        // console.log(
+        //   'Updating instantiated_contracts with params:',
+        //   updateParams
+        // );
 
         db.run(updateContractQuery, updateParams);
 
@@ -618,11 +618,11 @@ export default function ContractManager() {
     contractFunctionInputs: { [key: string]: any }
   ) {
     // Log the contract function inputs before processing
-    console.log('Processing UTXO for unlock function:', utxo);
-    console.log('Contract Function:', contractFunction);
-    console.log('Contract Function Inputs:', contractFunctionInputs);
+    // console.log('Processing UTXO for unlock function:', utxo);
+    // console.log('Contract Function:', contractFunction);
+    // console.log('Contract Function Inputs:', contractFunctionInputs);
 
-    console.log('Fetching contract instance for UTXO address:', utxo.address);
+    // console.log('Fetching contract instance for UTXO address:', utxo.address);
 
     // Fetch the contract instance for the UTXO's address
     const contractInstance = await getContractInstanceByAddress(utxo.address);
@@ -633,12 +633,12 @@ export default function ContractManager() {
       );
     }
 
-    console.log('Contract instance fetched:', contractInstance);
-    console.log('Contract artifact:', contractInstance.artifact);
+    // console.log('Contract instance fetched:', contractInstance);
+    // console.log('Contract artifact:', contractInstance.artifact);
 
     // Fetch constructor inputs for the contract
     const constructorInputs = await fetchConstructorArgs(utxo.address);
-    console.log('Fetched constructor inputs:', constructorInputs);
+    // console.log('Fetched constructor inputs:', constructorInputs);
 
     // Parse constructor arguments using the contract's artifact
     const parsedConstructorArgs =
@@ -652,7 +652,7 @@ export default function ContractManager() {
         }
       );
 
-    console.log('Parsed constructor arguments:', parsedConstructorArgs);
+    // console.log('Parsed constructor arguments:', parsedConstructorArgs);
 
     // Create a new contract instance with parsed constructor arguments
     const contract = new Contract(
@@ -664,24 +664,24 @@ export default function ContractManager() {
       }
     );
 
-    console.log(
-      'Created contract instance with parsed constructor arguments:',
-      contract
-    );
+    // console.log(
+    //   'Created contract instance with parsed constructor arguments:',
+    //   contract
+    // );
 
     // Find the ABI function in the contract using the provided function name
     const abiFunction = contractInstance.abi.find(
       (func: any) => func.name === contractFunction
     );
 
-    console.log(
-      'ABI function for contractFunction:',
-      contractFunction,
-      '\nABI Function:',
-      abiFunction,
-      '\nContract Function Inputs:',
-      contractFunctionInputs
-    );
+    // console.log(
+    //   'ABI function for contractFunction:',
+    //   contractFunction,
+    //   '\nABI Function:',
+    //   abiFunction,
+    //   '\nContract Function Inputs:',
+    //   contractFunctionInputs
+    // );
 
     if (!abiFunction) {
       throw new Error(
@@ -706,7 +706,7 @@ export default function ContractManager() {
       })
     );
 
-    console.log('Generated unlocker for contract function:', unlocker);
+    // console.log('Generated unlocker for contract function:', unlocker);
 
     return {
       lockingBytecode: contract.redeemScript,

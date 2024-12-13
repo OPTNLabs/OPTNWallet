@@ -52,6 +52,9 @@ const Transaction: React.FC = () => {
   >([]);
   const [selectedAddresses, setSelectedAddresses] = useState<string[]>([]);
   const [utxos, setUtxos] = useState<UTXO[]>([]);
+  const [selectedContractAddresses, setSelectedContractAddresses] = useState<
+    string[]
+  >([]);
   const [selectedUtxos, setSelectedUtxos] = useState<UTXO[]>([]);
   const [tempUtxos, setTempUtxos] = useState<UTXO | undefined>();
   const [recipientAddress, setRecipientAddress] = useState<string>('');
@@ -68,9 +71,6 @@ const Transaction: React.FC = () => {
   const [showRawTxPopup, setShowRawTxPopup] = useState(false);
   const [showTxIdPopup, setShowTxIdPopup] = useState(false);
   const [loading, setLoading] = useState(false);
-  const [selectedContractAddresses, setSelectedContractAddresses] = useState<
-    string[]
-  >([]);
   const [selectedContractABIs, setSelectedContractABIs] = useState<any[]>([]);
   const [contractFunctionInputs, setContractFunctionInputs] = useState<{
     [key: string]: string;
@@ -106,7 +106,7 @@ const Transaction: React.FC = () => {
   useEffect(() => {
     dispatch(clearTransaction());
     dispatch(resetContract());
-    console.log('Transaction and Contract states have been reset.');
+    // console.log('Transaction and Contract states have been reset.');
   }, [dispatch]);
 
   // Log txOutputs whenever they change
@@ -130,7 +130,7 @@ const Transaction: React.FC = () => {
         // TODO: Implement actual logic to get active wallet ID
         const activeWalletId = 1;
         dispatch(setWalletId(activeWalletId));
-        console.log('Wallet ID set to:', activeWalletId);
+        // console.log('Wallet ID set to:', activeWalletId);
         // dispatch(clearTransaction());
       };
 
@@ -160,7 +160,7 @@ const Transaction: React.FC = () => {
       }
     } else {
       if (utxo.abi) {
-        console.log('Contract UTXO:', utxo);
+        // console.log('Contract UTXO:', utxo);
         setTempUtxos(utxo);
         setCurrentContractABI(utxo.abi);
         setShowPopup(true);
@@ -183,11 +183,11 @@ const Transaction: React.FC = () => {
         dispatch(resetContract());
 
         // **Add Logging Here**
-        console.log('Selected a non-contract UTXO:', updatedUtxo);
+        // console.log('Selected a non-contract UTXO:', updatedUtxo);
       }
     }
 
-    console.log('Selected UTXOs after function inputs:', selectedUtxos);
+    // console.log('Selected UTXOs after function inputs:', selectedUtxos);
   };
 
   /**
@@ -213,7 +213,7 @@ const Transaction: React.FC = () => {
           setTokenAmount(0);
           setSelectedTokenCategory('');
 
-          console.log('Updated Outputs:', txOutputs);
+          // console.log('Updated Outputs:', txOutputs);
         }
       } catch (error: any) {
         console.error('Error adding output:', error);
@@ -285,8 +285,8 @@ const Transaction: React.FC = () => {
     contractFunction: string,
     inputs: { [key: string]: string }
   ) => {
-    console.log('Selected Contract Function:', contractFunction);
-    console.log('Selected Contract Function Inputs:', inputs);
+    // console.log('Selected Contract Function:', contractFunction);
+    // console.log('Selected Contract Function Inputs:', inputs);
 
     // Validate inputs is an object, not an array
     if (typeof inputs !== 'object' || Array.isArray(inputs)) {
@@ -322,10 +322,10 @@ const Transaction: React.FC = () => {
       setSelectedUtxos([...selectedUtxos, updatedUtxo]);
 
       // **Add Logging Here**
-      console.log(
-        'Updated UTXO with contractFunction and contractFunctionInputs:',
-        updatedUtxo
-      );
+      // console.log(
+      //   'Updated UTXO with contractFunction and contractFunctionInputs:',
+      //   updatedUtxo
+      // );
     }
 
     // Close the popup
