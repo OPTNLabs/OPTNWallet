@@ -81,6 +81,16 @@ class TransactionService {
       const tokenData = row.token_data
         ? JSON.parse(String(row.token_data))
         : undefined;
+      const contractFunction =
+        typeof row.contractFunction === 'string' &&
+        row.contractFunction.length > 0
+          ? row.contractFunction
+          : undefined;
+      const contractFunctionInputs =
+        typeof row.contractFunctionInputs === 'string' &&
+        row.contractFunctionInputs.length > 0
+          ? JSON.parse(row.contractFunctionInputs)
+          : undefined;
 
       // Fetch the private key
       const privateKey = await KeyService.fetchAddressPrivateKey(address);
@@ -101,6 +111,9 @@ class TransactionService {
           privateKey: privateKey,
           token_data: tokenData,
           value: amount,
+          // **Assign New Fields**
+          contractFunction,
+          contractFunctionInputs,
         });
       } else {
         console.error('Invalid data in row or private key not found:', row);

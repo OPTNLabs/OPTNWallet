@@ -1,7 +1,12 @@
 // src/App.tsx
-import { Routes, Route, Navigate, useLocation } from 'react-router-dom';
+import {
+  Routes,
+  Route,
+  Navigate,
+  // useLocation
+} from 'react-router-dom';
 import { useSelector } from 'react-redux';
-import { useEffect } from 'react';
+// import { useEffect } from 'react';
 import Layout from './components/Layout';
 import RootHandler from './pages/RootHandler';
 import Home from './pages/Home';
@@ -14,20 +19,20 @@ import TransactionHistory from './pages/TransactionHistory';
 import LandingPage from './pages/LandingPage';
 import Receive from './pages/Receive';
 import { RootState } from './redux/store';
-import { startUTXOWorker, stopUTXOWorker } from './workers/UTXOWorkerService';
-import {
-  startTransactionWorker,
-  stopTransactionWorker,
-} from './workers/TransactionWorkerService';
+// import { startUTXOWorker, stopUTXOWorker } from './workers/UTXOWorkerService';
+// import {
+//   startTransactionWorker,
+//   stopTransactionWorker,
+// } from './workers/TransactionWorkerService';
 
-let utxoWorkerStarted = false;
-let transactionWorkerStarted = false;
+// let utxoWorkerStarted = false;
+// let transactionWorkerStarted = false;
 
 function App() {
   const walletId = useSelector(
     (state: RootState) => state.wallet_id.currentWalletId
   );
-  const location = useLocation();
+  // const location = useLocation();
 
   // useEffect(() => {
   //   if (walletId === 1) {
