@@ -45,9 +45,9 @@ async function fetchAndStoreTransactionHistory() {
       }
     }
 
-    console.log(
-      `Fetched and stored transaction history for wallet ID ${currentWalletId}`
-    );
+    // console.log(
+    //   `Fetched and stored transaction history for wallet ID ${currentWalletId}`
+    // );
   } catch (error) {
     console.error('Error fetching and storing transaction history:', error);
   }
@@ -74,7 +74,7 @@ function stopTransactionWorker() {
   if (transactionInterval) {
     clearInterval(transactionInterval);
     transactionInterval = null;
-    console.log('Transaction Worker stopped');
+    // console.log('Transaction Worker stopped');
   }
 }
 

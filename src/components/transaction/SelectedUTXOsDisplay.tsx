@@ -9,10 +9,10 @@ const SelectedUTXOsDisplay: React.FC<SelectedUTXOsDisplayProps> = ({
   selectedUtxos,
 }) => {
   // **Add Logging Here**
-  console.log(
-    'Rendering SelectedUTXOsDisplay with selectedUtxos:',
-    selectedUtxos
-  );
+  // console.log(
+  //   'Rendering SelectedUTXOsDisplay with selectedUtxos:',
+  //   selectedUtxos
+  // );
 
   return (
     <div className="mb-6">

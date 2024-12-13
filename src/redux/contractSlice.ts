@@ -22,29 +22,29 @@ const contractSlice = createSlice({
   initialState,
   reducers: {
     setSelectedFunction: (state, action: PayloadAction<string>) => {
-      console.log(
-        'Reducer: setSelectedFunction called with payload:',
-        action.payload
-      );
+      // console.log(
+      //   'Reducer: setSelectedFunction called with payload:',
+      //   action.payload
+      // );
       state.selectedFunction = action.payload;
     },
     setInputs: (state, action: PayloadAction<any[]>) => {
-      console.log('Reducer: setInputs called with payload:', action.payload);
+      // console.log('Reducer: setInputs called with payload:', action.payload);
       state.inputs = action.payload;
     },
     setInputValues: (
       state,
       action: PayloadAction<{ [key: string]: string }>
     ) => {
-      console.log(
-        'Reducer: setInputValues called with payload:',
-        action.payload
-      );
+      // console.log(
+      //   'Reducer: setInputValues called with payload:',
+      //   action.payload
+      // );
       state.inputValues = action.payload;
     },
     resetContract: (state) => {
       Object.assign(state, initialState);
-      console.log('Reducer: Contract state has been reset.');
+      // console.log('Reducer: Contract state has been reset.');
     },
   },
 });

@@ -133,7 +133,7 @@ const ElectrumService = {
       );
 
       if (isStringResponse(status)) {
-        console.log(`Subscribed to address: ${address}, status: ${status}`);
+        // console.log(`Subscribed to address: ${address}, status: ${status}`);
         // Here, you would set up the callback mechanism to listen for notifications.
         server.on('notification', (method: string, params: any[]) => {
           if (
@@ -156,7 +156,7 @@ const ElectrumService = {
     try {
       await server.request('blockchain.headers.subscribe');
 
-      console.log('Subscribed to block headers');
+      // console.log('Subscribed to block headers');
       // Set up callback for block header notifications
       server.on('notification', (method: string, params: any[]) => {
         if (method === 'blockchain.headers.subscribe') {
@@ -180,7 +180,7 @@ const ElectrumService = {
       );
 
       if (typeof height === 'number') {
-        console.log(`Subscribed to transaction: ${txHash}, height: ${height}`);
+        // console.log(`Subscribed to transaction: ${txHash}, height: ${height}`);
         // Set up callback for transaction notifications
         server.on('notification', (method: string, params: any[]) => {
           if (
@@ -206,9 +206,9 @@ const ElectrumService = {
     try {
       await server.request('blockchain.transaction.dsproof.subscribe', txHash);
 
-      console.log(
-        `Subscribed to double-spend proof for transaction: ${txHash}`
-      );
+      // console.log(
+      //   `Subscribed to double-spend proof for transaction: ${txHash}`
+      // );
       // Set up callback for double-spend proof notifications
       server.on('notification', (method: string, params: any[]) => {
         if (

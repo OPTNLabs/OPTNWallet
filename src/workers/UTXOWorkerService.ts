@@ -4,6 +4,7 @@ import UTXOService from '../services/UTXOService';
 import { store } from '../redux/store';
 import { setUTXOs, setFetchingUTXOs } from '../redux/utxoSlice';
 import { INTERVAL } from '../utils/constants';
+import ContractManager from '../apis/ContractManager/ContractManager';
 
 let utxoInterval: NodeJS.Timeout | null = null;
 
@@ -26,6 +27,7 @@ async function fetchAndStoreUTXOs() {
         currentWalletId,
         keyPair.address
       );
+
       allUTXOs[keyPair.address] = fetchedUTXOs;
     } catch (error) {
       console.error(
@@ -35,10 +37,25 @@ async function fetchAndStoreUTXOs() {
     }
   }
 
+  const contractManager = ContractManager();
+  const instances = await contractManager.fetchContractInstances();
+  const contractAddresses = instances.map(instance => instance.address);
+
+  for (const address of contractAddresses) {
+    try {
+      await contractManager.updateContractUTXOs(address)
+    } catch (error) {
+      console.error(
+        `Error fetching UTXOs for address ${address}:`,
+        error
+      );
+    }
+  }
+
   // Update Redux store in a single batch after fetching all UTXOs
   store.dispatch(setUTXOs({ newUTXOs: allUTXOs }));
   store.dispatch(setFetchingUTXOs(false)); // Set fetching UTXOs state to false
-  console.log(allUTXOs);
+  // console.log(allUTXOs);
 }
 
 function startUTXOWorker() {
@@ -54,7 +71,7 @@ function stopUTXOWorker() {
   if (utxoInterval) {
     clearInterval(utxoInterval);
     utxoInterval = null;
-    console.log('UTXO Worker stopped');
+    // console.log('UTXO Worker stopped');
   }
 }
 

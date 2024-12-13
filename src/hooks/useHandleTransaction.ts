@@ -34,10 +34,10 @@ const useHandleTransaction = (
   const handleBuildTransaction = async () => {
     try {
       setLoading(true);
-      console.log('Building transaction with:');
-      console.log('Outputs:', txOutputs);
-      console.log('Contract Function Inputs:', contractFunctionInputs);
-      console.log('Selected UTXOs:', selectedUtxos); // **Add Logging**
+      // console.log('Building transaction with:');
+      // console.log('Outputs:', txOutputs);
+      // console.log('Contract Function Inputs:', contractFunctionInputs);
+      // console.log('Selected UTXOs:', selectedUtxos); // **Add Logging**
 
       // If a contract function is selected, ensure inputs are provided
       if (
@@ -65,7 +65,7 @@ const useHandleTransaction = (
         return;
       }
 
-      console.log('Transaction Build Result:', transaction);
+      // console.log('Transaction Build Result:', transaction);
 
       setBytecodeSize(transaction.bytecodeSize);
       setRawTX(transaction.finalTransaction);
@@ -78,7 +78,7 @@ const useHandleTransaction = (
         // Set the entire txOutputs array to finalOutputs
         dispatch(setTxOutputs(transaction.finalOutputs));
 
-        console.log('Final Outputs after Build:', transaction.finalOutputs);
+        // console.log('Final Outputs after Build:', transaction.finalOutputs);
       }
 
       setErrorMessage(transaction.errorMsg);

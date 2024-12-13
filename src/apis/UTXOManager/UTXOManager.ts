@@ -48,7 +48,7 @@ export default function UTXOManager() {
             utxo.prefix || 'unknown',
             utxo.token_data ? JSON.stringify(utxo.token_data) : null,
           ]);
-          console.log(`Stored UTXO: ${JSON.stringify(utxo)}`);
+          // console.log(`Stored UTXO: ${JSON.stringify(utxo)}`);
         }
         existsQuery.free();
       }
@@ -160,7 +160,7 @@ export default function UTXOManager() {
           state.wallet_id.currentWalletId,
           key.address
         );
-        console.log(`Fetched UTXOs for ${key.address}:`, addressUTXOs);
+        // console.log(`Fetched UTXOs for ${key.address}:`, addressUTXOs);
 
         utxosMap[key.address] = addressUTXOs.filter((utxo) => !utxo.token_data);
         cashTokenUtxosMap[key.address] = addressUTXOs.filter(

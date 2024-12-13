@@ -83,7 +83,7 @@ const UTXOSelection: React.FC<UTXOSelectionProps> = ({
       </div>
 
       {/* CashToken UTXOs Button and Popup */}
-      <div>
+      {/* <div>
         {selectedAddresses.length > 0 && (
           <button
             className="bg-blue-500 text-white py-2 px-4 rounded mb-2"
@@ -116,7 +116,7 @@ const UTXOSelection: React.FC<UTXOSelectionProps> = ({
             </div>
           </Popup>
         )}
-      </div>
+      </div> */}
 
       {/* Contract UTXOs Button and Popup */}
       <div className="mb-6">
