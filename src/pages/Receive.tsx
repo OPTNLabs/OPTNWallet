@@ -170,14 +170,14 @@ const Receive: React.FC = () => {
               <>
                 <div className="w-full max-w-md mb-4">
                   <label className="block text-sm font-medium text-gray-700 mb-1">
-                    Amount (BTC)
+                    Amount (BCH)
                   </label>
                   <input
                     type="text"
                     value={amount}
                     onChange={(e) => setAmount(e.target.value)}
                     className="border p-2 w-full rounded-md"
-                    placeholder="Enter amount in BTC (e.g. 0.01)"
+                    placeholder="Enter amount in BCH (e.g. 0.01)"
                   />
                 </div>
                 <div className="w-full max-w-md mb-4">
