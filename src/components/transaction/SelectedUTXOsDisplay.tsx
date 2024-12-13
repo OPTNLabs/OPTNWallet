@@ -8,6 +8,12 @@ interface SelectedUTXOsDisplayProps {
 const SelectedUTXOsDisplay: React.FC<SelectedUTXOsDisplayProps> = ({
   selectedUtxos,
 }) => {
+  // **Add Logging Here**
+  console.log(
+    'Rendering SelectedUTXOsDisplay with selectedUtxos:',
+    selectedUtxos
+  );
+
   return (
     <div className="mb-6">
       <h3 className="text-lg font-semibold mb-2">

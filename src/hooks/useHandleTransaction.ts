@@ -37,8 +37,7 @@ const useHandleTransaction = (
       console.log('Building transaction with:');
       console.log('Outputs:', txOutputs);
       console.log('Contract Function Inputs:', contractFunctionInputs);
-      // Note: selectedFunction is accessed via Redux in the component
-      // Ensure it is passed as a parameter if needed
+      console.log('Selected UTXOs:', selectedUtxos); // **Add Logging**
 
       // If a contract function is selected, ensure inputs are provided
       if (

@@ -55,11 +55,10 @@ export default function ContractManager() {
           ? JSON.parse(row.utxos).map((utxo: any) => ({
               ...utxo,
               amount: BigInt(utxo.amount),
-              // **Parse New Fields**
-              contractFunction: utxo.contractFunction || undefined,
+              contractFunction: utxo.contractFunction || undefined, // New Field
               contractFunctionInputs: utxo.contractFunctionInputs
                 ? JSON.parse(utxo.contractFunctionInputs)
-                : undefined,
+                : undefined, // New Field
             }))
           : [],
       artifact:
@@ -81,6 +80,9 @@ export default function ContractManager() {
         ])
       );
     }
+
+    // **Add Logging Here**
+    console.log('Parsed Contract Instance:', contractInstance);
 
     return contractInstance;
   }
@@ -279,10 +281,16 @@ export default function ContractManager() {
       ),
     ];
 
+    // **Add Logging Before Saving**
+    console.log('Saving contract instance with params:', params);
+
     const statement = db.prepare(insertQuery);
     statement.run(params);
     statement.free();
     await dbService.saveDatabaseToFile();
+
+    // **Add Logging After Saving**
+    console.log('Contract instance saved successfully.');
   }
 
   async function deleteContractInstance(contractId: number) {
@@ -450,12 +458,14 @@ export default function ContractManager() {
         height: utxo.height,
         token: utxo.token_data || undefined,
         prefix,
-        // **Add New Fields**
-        contractFunction: utxo.contractFunction || undefined,
+        contractFunction: utxo.contractFunction || null, // New Field
         contractFunctionInputs: utxo.contractFunctionInputs
           ? JSON.stringify(utxo.contractFunctionInputs)
-          : undefined,
+          : null, // New Field
       }));
+
+      // **Add Logging After Formatting UTXOs**
+      console.log('Formatted UTXOs with new fields:', formattedUTXOs);
 
       await dbService.ensureDatabaseStarted();
       const db = dbService.getDatabase();
@@ -567,12 +577,22 @@ export default function ContractManager() {
             formattedUTXOs.map((utxo) => ({
               ...utxo,
               amount: utxo.amount.toString(),
+              // **Ensure new fields are included**
+              contractFunction: utxo.contractFunction || null,
+              contractFunctionInputs: utxo.contractFunctionInputs || null,
             }))
           ),
           updatedBalance.toString(),
           new Date().toISOString(), // Update the updated_at timestamp
           address,
         ];
+
+        // **Add Logging Before Update**
+        console.log(
+          'Updating instantiated_contracts with params:',
+          updateParams
+        );
+
         db.run(updateContractQuery, updateParams);
 
         // Commit transaction
@@ -598,7 +618,9 @@ export default function ContractManager() {
     contractFunctionInputs: { [key: string]: any }
   ) {
     // Log the contract function inputs before processing
-    console.log('Contract function inputs:', contractFunctionInputs);
+    console.log('Processing UTXO for unlock function:', utxo);
+    console.log('Contract Function:', contractFunction);
+    console.log('Contract Function Inputs:', contractFunctionInputs);
 
     console.log('Fetching contract instance for UTXO address:', utxo.address);
 
@@ -670,11 +692,15 @@ export default function ContractManager() {
     // Create unlocker with function inputs
     const unlocker = contract.unlock[contractFunction](
       ...abiFunction.inputs.map((input: any) => {
+        // Get the corresponding value from contractFunctionInputs using the input name
         const inputValue = contractFunctionInputs[input.name];
 
+        // Check if the input type is 'sig' (for signature)
         if (input.type === 'sig') {
+          // Handle signature input with `SignatureTemplate`
           return new SignatureTemplate(inputValue, HashType.SIGHASH_ALL);
         } else {
+          // For other inputs, parse the input value based on its type
           return parseInputValue(inputValue, input.type);
         }
       })

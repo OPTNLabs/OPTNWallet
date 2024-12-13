@@ -34,7 +34,7 @@ import TransactionService from '../services/TransactionService';
 import {
   selectWalletId,
   setWalletId,
-  selectNetworkType,
+  // selectNetworkType,
 } from '../redux/walletSlice';
 
 const Transaction: React.FC = () => {
@@ -97,10 +97,10 @@ const Transaction: React.FC = () => {
   );
 
   const walletId = useSelector(selectWalletId);
-  const networkType = useSelector(selectNetworkType);
+  // const networkType = useSelector(selectNetworkType);
 
-  console.log('Selected Wallet ID from Redux:', walletId);
-  console.log('Current Network Type:', networkType);
+  // console.log('Selected Wallet ID from Redux:', walletId);
+  // console.log('Current Network Type:', networkType);
 
   // Reset transactions and contract states when the component mounts
   useEffect(() => {
@@ -144,7 +144,7 @@ const Transaction: React.FC = () => {
    * @param utxo - The UTXO being clicked.
    */
   const handleUtxoClick = (utxo: UTXO) => {
-    console.log('Selected UTXOs before function inputs:', selectedUtxos);
+    // console.log('Selected UTXOs before function inputs:', selectedUtxos);
     const isSelected = selectedUtxos.some(
       (selectedUtxo) => selectedUtxo.id === utxo.id
     );
@@ -181,6 +181,9 @@ const Transaction: React.FC = () => {
 
         // Reset contract state since a regular UTXO is being selected
         dispatch(resetContract());
+
+        // **Add Logging Here**
+        console.log('Selected a non-contract UTXO:', updatedUtxo);
       }
     }
 
@@ -313,8 +316,16 @@ const Transaction: React.FC = () => {
       const updatedUtxo: UTXO = {
         ...tempUtxos,
         unlocker,
+        contractFunction, // Ensure this is set
+        contractFunctionInputs: inputs, // Ensure this is set
       };
       setSelectedUtxos([...selectedUtxos, updatedUtxo]);
+
+      // **Add Logging Here**
+      console.log(
+        'Updated UTXO with contractFunction and contractFunctionInputs:',
+        updatedUtxo
+      );
     }
 
     // Close the popup

@@ -48,6 +48,12 @@ const useContractFunction = () => {
       contractFunctionInputs: inputs,
     };
     setSelectedUtxos([...selectedUtxos, updatedUtxo]);
+
+    // **Add Logging Here**
+    console.log(
+      'Updated UTXO in hook with contractFunction and contractFunctionInputs:',
+      updatedUtxo
+    );
   };
 
   return { handleContractFunctionSelect };
