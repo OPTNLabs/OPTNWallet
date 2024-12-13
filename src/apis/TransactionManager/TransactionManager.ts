@@ -67,9 +67,9 @@ export default function TransactionManager() {
       // Commit the transaction after successful operations
       db.exec('COMMIT');
 
-      console.log(
-        `Fetched and stored transaction history for address ${address}`
-      );
+      // console.log(
+      //   `Fetched and stored transaction history for address ${address}`
+      // );
     } catch (error) {
       // Rollback the transaction in case of any errors
       db.exec('ROLLBACK');
@@ -167,7 +167,7 @@ export default function TransactionManager() {
 
     // Dispatch the new output to the Redux store
     store.dispatch(addTxOutput(newOutput));
-    console.log('TransactionManager: Added new output:', newOutput);
+    // console.log('TransactionManager: Added new output:', newOutput);
     return newOutput;
   }
 
@@ -191,14 +191,14 @@ export default function TransactionManager() {
     finalOutputs: TransactionOutput[] | null;
     errorMsg: string;
   }> => {
-    console.log(
-      `TransactionManager: txOutputs: ${JSON.stringify(outputs, null, 2)}`
-    );
-    console.log(
-      `TransactionManager" functionInputs: ${JSON.stringify(contractFunctionInputs)}`
-    );
-    console.log('TransactionManager: Change Address:', changeAddress);
-    console.log('TransactionManager: Selected UTXOs:', selectedUtxos);
+    // console.log(
+    //   `TransactionManager: txOutputs: ${JSON.stringify(outputs, null, 2)}`
+    // );
+    // console.log(
+    //   `TransactionManager" functionInputs: ${JSON.stringify(contractFunctionInputs)}`
+    // );
+    // console.log('TransactionManager: Change Address:', changeAddress);
+    // console.log('TransactionManager: Selected UTXOs:', selectedUtxos);
     // Fetch the latest state
     // const state = store.getState();
     // const selectedFunction = state.contract.selectedFunction;
@@ -217,10 +217,10 @@ export default function TransactionManager() {
         amount: 546, // Dust amount to ensure proper transaction formatting
       };
       const txOutputsWithPlaceholder = [...outputs, placeholderOutput];
-      console.log(
-        'Transaction Outputs with Placeholder:',
-        txOutputsWithPlaceholder
-      );
+      // console.log(
+      //   'Transaction Outputs with Placeholder:',
+      //   txOutputsWithPlaceholder
+      // );
 
       // First build to get bytecode size
       const transaction = await txBuilder.buildTransaction(
@@ -229,7 +229,7 @@ export default function TransactionManager() {
         // selectedFunction,
         // contractFunctionInputs
       );
-      console.log('Transaction after first build:', transaction);
+      // console.log('Transaction after first build:', transaction);
 
       if (transaction) {
         // Calculate bytecode size based on transaction length
@@ -241,28 +241,28 @@ export default function TransactionManager() {
           (sum, utxo) => sum + BigInt(utxo.amount),
           BigInt(0)
         );
-        console.log(`Total UTXO Amount: ${totalUtxoAmount}`);
+        // console.log(`Total UTXO Amount: ${totalUtxoAmount}`);
 
         const totalOutputAmount = outputs.reduce(
           (sum, output) => sum + BigInt(output.amount),
           BigInt(0)
         );
-        console.log(`Total Output Amount: ${totalOutputAmount}`);
+        // console.log(`Total Output Amount: ${totalOutputAmount}`);
 
         // Calculate the remaining amount after outputs and bytecode
         const remainder =
           totalUtxoAmount - totalOutputAmount - BigInt(bytecodeSize);
-        console.log(`Bytecode Size: ${bytecodeSize}`);
-        console.log(`Remainder: ${remainder}`);
+        // console.log(`Bytecode Size: ${bytecodeSize}`);
+        // console.log(`Remainder: ${remainder}`);
 
         // Remove the placeholder output
         const txOutputs = [...outputs];
-        console.log('Transaction Outputs before adding change:', txOutputs);
+        // console.log('Transaction Outputs before adding change:', txOutputs);
 
         // Add the change output if there's a remainder
         if (changeAddress && remainder > BigInt(0)) {
           const changeAmount = Number(remainder);
-          console.log(`Calculated Change Amount: ${changeAmount}`);
+          // console.log(`Calculated Change Amount: ${changeAmount}`);
 
           if (changeAmount > 0) {
             const changeOutput: TransactionOutput = {
@@ -272,7 +272,7 @@ export default function TransactionManager() {
               // isChange: true,
             };
             txOutputs.push(changeOutput);
-            console.log('Added Change Output:', changeOutput);
+            // console.log('Added Change Output:', changeOutput);
           } else {
             console.warn('No sufficient remainder to add a change output.');
           }
@@ -280,7 +280,7 @@ export default function TransactionManager() {
           console.warn('No remainder to add a change output.');
         }
 
-        console.log('Final Transaction Outputs:', txOutputs);
+        // console.log('Final Transaction Outputs:', txOutputs);
 
         // Build the final transaction with the updated outputs
         const finalTransaction = await txBuilder.buildTransaction(
@@ -289,12 +289,12 @@ export default function TransactionManager() {
           // selectedFunction,
           // contractFunctionInputs
         );
-        console.log('Final Transaction:', finalTransaction);
+        // console.log('Final Transaction:', finalTransaction);
 
         returnObj.finalTransaction = finalTransaction;
         returnObj.finalOutputs = txOutputs;
 
-        console.log('Final Transaction Outputs:', txOutputs);
+        // console.log('Final Transaction Outputs:', txOutputs);
 
         returnObj.errorMsg = '';
       }

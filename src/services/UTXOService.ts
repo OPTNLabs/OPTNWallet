@@ -49,7 +49,7 @@ const UTXOService = {
       );
 
       if (utxosToDelete.length > 0) {
-        console.log(`Deleting outdated UTXOs for ${address}:`, utxosToDelete);
+        // console.log(`Deleting outdated UTXOs for ${address}:`, utxosToDelete);
         await manager.deleteUTXOs(walletId, utxosToDelete);
 
         // Remove them from Redux as well

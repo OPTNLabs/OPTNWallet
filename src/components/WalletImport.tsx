@@ -30,13 +30,13 @@ const WalletImport = () => {
       }
       hasInitialized.current = true;
 
-      console.log('Starting database...');
+      // console.log('Starting database...');
       try {
         const dbStarted = await dbService.startDatabase();
         if (!dbStarted) {
           throw new Error('Failed to start the database.');
         }
-        console.log('Database has been started.');
+        // console.log('Database has been started.');
       } catch (error) {
         console.error('Error initializing database:', error);
       }
@@ -51,16 +51,16 @@ const WalletImport = () => {
     }
 
     try {
-      console.log(
-        'Checking account with given recovery phrase and passphrase...'
-      );
+      // console.log(
+      //   'Checking account with given recovery phrase and passphrase...'
+      // );
       const accountExists = await walletManager.checkAccount(
         recoveryPhrase,
         passphrase
       );
 
       if (!accountExists) {
-        console.log('Account does not exist, attempting to create...');
+        // console.log('Account does not exist, attempting to create...');
         const createAccountSuccess = await walletManager.createWallet(
           walletName,
           recoveryPhrase,
@@ -71,10 +71,10 @@ const WalletImport = () => {
           console.error('Failed to import account.');
           return;
         }
-        console.log('Account imported successfully.');
+        // console.log('Account imported successfully.');
       }
 
-      console.log('Setting wallet ID...');
+      // console.log('Setting wallet ID...');
       let walletID = await walletManager.setWalletId(
         recoveryPhrase,
         passphrase
@@ -86,7 +86,7 @@ const WalletImport = () => {
 
       dispatch(setWalletId(walletID));
       dispatch(setNetwork(currentNetwork));
-      console.log('Wallet ID set and network updated.');
+      // console.log('Wallet ID set and network updated.');
 
       navigate(`/home/${walletID}`);
     } catch (e) {

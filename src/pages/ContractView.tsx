@@ -84,11 +84,11 @@ const ContractView = () => {
   const handleInputChange = (event) => {
     const { name, value } = event.target;
     setInputValues({ ...inputValues, [name]: value });
-    console.log(`Input changed: ${name} = ${value}`);
+    // console.log(`Input changed: ${name} = ${value}`);
   };
 
   const handleAddressSelect = async (address: string) => {
-    console.log(`Address selected for ${currentArgName}: ${address}`);
+    // console.log(`Address selected for ${currentArgName}: ${address}`);
 
     const keys = await KeyService.retrieveKeys(wallet_id);
     const selectedKey = keys.find((key) => key.address === address);
@@ -128,12 +128,12 @@ const ContractView = () => {
         throw new Error('All constructor arguments must be provided');
       }
 
-      const contract = await contractManager.createContract(
-        selectedContractFile,
-        args,
-        currentNetwork
-      );
-      console.log(contract);
+      // const contract = await contractManager.createContract(
+      //   selectedContractFile,
+      //   args,
+      //   currentNetwork
+      // );
+      // console.log(contract);
 
       const instances = await contractManager.fetchContractInstances();
       setContractInstances(instances);

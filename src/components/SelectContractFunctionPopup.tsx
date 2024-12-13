@@ -79,9 +79,9 @@ const SelectContractFunctionPopup: React.FC<
   };
 
   const handleSelect = () => {
-    console.log('Selected function:', selectedFunction);
-    console.log('Inputs:', inputs);
-    console.log('Input values before dispatch:', inputValues);
+    // console.log('Selected function:', selectedFunction);
+    // console.log('Inputs:', inputs);
+    // console.log('Input values before dispatch:', inputValues);
 
     // Prepare the input values object
     const inputValuesObject = inputs.reduce<{ [key: string]: string }>(
@@ -92,7 +92,7 @@ const SelectContractFunctionPopup: React.FC<
       {}
     );
 
-    console.log('Dispatching input values object:', inputValuesObject);
+    // console.log('Dispatching input values object:', inputValuesObject);
 
     try {
       dispatch(setSelectedFunction(selectedFunction)); // Dispatch the selected function
@@ -102,7 +102,7 @@ const SelectContractFunctionPopup: React.FC<
       onFunctionSelect(selectedFunction, inputValuesObject); // Pass the data to the parent component
 
       // **Add Logging After Dispatch and Selection**
-      console.log('Dispatched contract function and inputs.');
+      // console.log('Dispatched contract function and inputs.');
 
       // Close the popup
       onClose();

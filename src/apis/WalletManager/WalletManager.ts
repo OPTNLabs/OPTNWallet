@@ -93,7 +93,7 @@ export default function WalletManager() {
       if (query.step()) {
         const row = query.getAsObject();
         walletId = toNumber(row.id); // Explicitly cast to number
-        console.log(`Found wallet ID: ${walletId}`);
+        // console.log(`Found wallet ID: ${walletId}`);
       } else {
         console.log('No wallet found in the database.');
       }
