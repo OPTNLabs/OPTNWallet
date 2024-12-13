@@ -34,7 +34,7 @@ const AddressSelectionPopup: React.FC<AddressSelectionPopupProps> = ({
   }, []);
 
   const handleSelect = (address: string) => {
-    console.log('Address clicked:', address); // Debugging log
+    // console.log('Address clicked:', address); // Debugging log
     onSelect(address); // Pass selected address to parent
   };
 

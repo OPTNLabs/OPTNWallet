@@ -184,6 +184,18 @@ class TransactionService {
     selectedUtxos: UTXO[],
     addresses: { address: string; tokenAddress: string }[]
   ): TransactionOutput | undefined {
+    console.log(
+      'TransactionService: Adding output with recipient:',
+      recipientAddress
+    );
+    console.log('TransactionService: Transfer Amount:', transferAmount);
+    console.log('TransactionService: Token Amount:', tokenAmount);
+    console.log(
+      'TransactionService: Selected Token Category:',
+      selectedTokenCategory
+    );
+    console.log('TransactionService: Selected UTXOs:', selectedUtxos);
+
     return this.transactionManager.addOutput(
       recipientAddress,
       transferAmount,
@@ -214,6 +226,12 @@ class TransactionService {
     finalOutputs: TransactionOutput[] | null;
     errorMsg: string;
   }> {
+    console.log('Building transaction with:');
+    console.log('Outputs:', outputs);
+    console.log('Contract Function Inputs:', contractFunctionInputs);
+    console.log('Change Address:', changeAddress);
+    console.log('Selected UTXOs:', selectedUtxos);
+
     return await this.transactionManager.buildTransaction(
       outputs,
       contractFunctionInputs,
