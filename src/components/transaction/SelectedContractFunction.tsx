@@ -54,6 +54,9 @@ const SelectedContractFunction: React.FC<SelectedContractFunctionProps> = ({
         unlocker,
       };
       setSelectedUtxos([...selectedUtxos, updatedUtxo]);
+
+      // **Add Logging Here**
+      console.log('Updated UTXO in SelectedContractFunction:', updatedUtxo);
     }
   };
 

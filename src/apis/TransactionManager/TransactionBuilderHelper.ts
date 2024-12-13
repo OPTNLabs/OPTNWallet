@@ -54,9 +54,9 @@ export default function TransactionBuilderHelper() {
    */
   async function buildTransaction(
     utxos: UTXO[],
-    outputs: TransactionOutput[],
-    contractFunction: string | null = null,
-    contractFunctionInputs: { [key: string]: any } | null = null
+    outputs: TransactionOutput[]
+    // contractFunction: string | null = null,
+    // contractFunctionInputs: { [key: string]: any } | null = null
   ) {
     const txBuilder = new TransactionBuilder({ provider });
 
@@ -89,15 +89,15 @@ export default function TransactionBuilderHelper() {
           unlocker = signatureTemplate.unlockP2PKH();
         } else {
           // Contract UTXO - use contract unlocker
-          if (!contractFunction || !contractFunctionInputs) {
+          if (!utxo.contractFunction || !utxo.contractFunctionInputs) {
             throw new Error('Contract function and inputs must be provided');
           }
 
           const contractUnlockFunction =
             await contractManager.getContractUnlockFunction(
               processedUtxo,
-              contractFunction,
-              contractFunctionInputs
+              utxo.contractFunction,
+              utxo.contractFunctionInputs
             );
           unlocker = contractUnlockFunction.unlocker;
         }

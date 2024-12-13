@@ -101,6 +101,9 @@ const SelectContractFunctionPopup: React.FC<
 
       onFunctionSelect(selectedFunction, inputValuesObject); // Pass the data to the parent component
 
+      // **Add Logging After Dispatch and Selection**
+      console.log('Dispatched contract function and inputs.');
+
       // Close the popup
       onClose();
     } catch (error) {
@@ -151,7 +154,7 @@ const SelectContractFunctionPopup: React.FC<
   };
 
   const handleAddressSelect = (address: string) => {
-    console.log('Address clicked:', address);
+    // console.log('Address clicked:', address);
     fetchKeysForAddress(address);
     setShowAddressPopup(false);
   };

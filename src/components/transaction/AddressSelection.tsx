@@ -34,13 +34,13 @@ const AddressSelection: React.FC<AddressSelectionProps> = ({
   const [showContractAddressesPopup, setShowContractAddressesPopup] =
     useState(false);
 
-  console.log('AddressSelection Props:', {
-    addresses,
-    selectedAddresses,
-    contractAddresses,
-    selectedContractAddresses,
-    selectedContractABIs,
-  });
+  // console.log('AddressSelection Props:', {
+  //   addresses,
+  //   selectedAddresses,
+  //   contractAddresses,
+  //   selectedContractAddresses,
+  //   selectedContractABIs,
+  // });
 
   const toggleAddressSelection = (address: string) => {
     if (selectedAddresses.includes(address)) {

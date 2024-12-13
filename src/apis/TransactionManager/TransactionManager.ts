@@ -191,9 +191,17 @@ export default function TransactionManager() {
     finalOutputs: TransactionOutput[] | null;
     errorMsg: string;
   }> => {
+    console.log(
+      `TransactionManager: txOutputs: ${JSON.stringify(outputs, null, 2)}`
+    );
+    console.log(
+      `TransactionManager" functionInputs: ${JSON.stringify(contractFunctionInputs)}`
+    );
+    console.log('TransactionManager: Change Address:', changeAddress);
+    console.log('TransactionManager: Selected UTXOs:', selectedUtxos);
     // Fetch the latest state
-    const state = store.getState();
-    const selectedFunction = state.contract.selectedFunction;
+    // const state = store.getState();
+    // const selectedFunction = state.contract.selectedFunction;
     const txBuilder = TransactionBuilderHelper();
     const returnObj = {
       bytecodeSize: 0,
@@ -201,10 +209,6 @@ export default function TransactionManager() {
       finalOutputs: [] as TransactionOutput[],
       errorMsg: '',
     };
-
-    console.log(`txOutputs: ${JSON.stringify(outputs, null, 2)}`);
-    console.log(`functionInputs: ${JSON.stringify(contractFunctionInputs)}`);
-    console.log(`selectedFunction: ${selectedFunction}`);
 
     try {
       // Add a placeholder output for change to calculate bytecode size
@@ -221,9 +225,9 @@ export default function TransactionManager() {
       // First build to get bytecode size
       const transaction = await txBuilder.buildTransaction(
         selectedUtxos,
-        txOutputsWithPlaceholder,
-        selectedFunction,
-        contractFunctionInputs
+        txOutputsWithPlaceholder
+        // selectedFunction,
+        // contractFunctionInputs
       );
       console.log('Transaction after first build:', transaction);
 
@@ -281,9 +285,9 @@ export default function TransactionManager() {
         // Build the final transaction with the updated outputs
         const finalTransaction = await txBuilder.buildTransaction(
           selectedUtxos,
-          txOutputs,
-          selectedFunction,
-          contractFunctionInputs
+          txOutputs
+          // selectedFunction,
+          // contractFunctionInputs
         );
         console.log('Final Transaction:', finalTransaction);
 
