@@ -33,7 +33,7 @@ import useHandleTransaction from '../hooks/useHandleTransaction';
 import TransactionService from '../services/TransactionService';
 import {
   selectWalletId,
-  setWalletId,
+  // setWalletId,
   // selectNetworkType,
 } from '../redux/walletSlice';
 
@@ -123,20 +123,20 @@ const Transaction: React.FC = () => {
   );
 
   // Use useEffect to set the walletId if not set
-  useEffect(() => {
-    if (walletId === 0) {
-      // assuming 0 is invalid, initial value
-      const fetchWalletId = async () => {
-        // TODO: Implement actual logic to get active wallet ID
-        const activeWalletId = 1;
-        dispatch(setWalletId(activeWalletId));
-        // console.log('Wallet ID set to:', activeWalletId);
-        // dispatch(clearTransaction());
-      };
+  // useEffect(() => {
+  //   if (walletId === 0) {
+  //     // assuming 0 is invalid, initial value
+  //     const fetchWalletId = async () => {
+  //       // TODO: Implement actual logic to get active wallet ID
+  //       const activeWalletId = 1;
+  //       dispatch(setWalletId(activeWalletId));
+  //       // console.log('Wallet ID set to:', activeWalletId);
+  //       // dispatch(clearTransaction());
+  //     };
 
-      fetchWalletId();
-    }
-  }, [dispatch, walletId]);
+  //     fetchWalletId();
+  //   }
+  // }, [dispatch, walletId]);
 
   /**
    * Handle the selection and deselection of UTXOs.

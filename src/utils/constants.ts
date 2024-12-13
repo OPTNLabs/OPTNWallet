@@ -9,4 +9,4 @@ export enum COIN_TYPE {
   testnet = 1,
 }
 
-export const INTERVAL = 60 * 1000; // 1-minute interval
+export const INTERVAL = 300 * 1000; // 1-minute interval

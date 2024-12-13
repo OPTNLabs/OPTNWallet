@@ -7,7 +7,7 @@ import CashTokenCard from '../components/CashTokenCard';
 import KeyService from '../services/KeyService';
 import UTXOService from '../services/UTXOService';
 import { setUTXOs, setFetchingUTXOs, setInitialized } from '../redux/utxoSlice'; // Import setInitialized action
-import Popup from '../components/Popup';
+// import Popup from '../components/Popup';
 import PriceFeed from '../components/PriceFeed';
 import { TailSpin } from 'react-loader-spinner';
 
@@ -278,14 +278,14 @@ const Home: React.FC = () => {
         </div>
       </div>
 
-      {showPopup && (
+      {/* {showPopup && (
         <Popup
           keyPairs={keyPairs}
           reduxUTXOs={placeholderUTXOs}
           loading={loading}
           togglePopup={togglePopup}
         />
-      )}
+      )} */}
     </div>
   );
 };

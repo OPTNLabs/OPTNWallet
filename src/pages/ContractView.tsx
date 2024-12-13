@@ -11,6 +11,7 @@ import AddressSelectionPopup from '../components/AddressSelectionPopup';
 import KeyService from '../services/KeyService';
 import { shortenTxHash } from '../utils/shortenHash';
 import { PREFIX } from '../utils/constants';
+import { Toast } from '@capacitor/toast';
 
 const ContractView = () => {
   const [error, setError] = useState(null);
@@ -85,6 +86,17 @@ const ContractView = () => {
     const { name, value } = event.target;
     setInputValues({ ...inputValues, [name]: value });
     // console.log(`Input changed: ${name} = ${value}`);
+  };
+
+  const handleCopyAddress = async (address: string) => {
+    try {
+      await navigator.clipboard.writeText(address);
+      await Toast.show({
+        text: 'Address copied to clipboard!',
+      });
+    } catch (error) {
+      console.error('Failed to copy address:', error);
+    }
   };
 
   const handleAddressSelect = async (address: string) => {
@@ -303,21 +315,27 @@ const ContractView = () => {
                     <div className="mb-2 overflow-x-auto">
                       <strong>Contract Name:</strong> {instance.contract_name}
                     </div>
-                    <div className="mb-2">
+                    <div
+                      className="mb-2"
+                      onClick={() => handleCopyAddress(instance.address)}
+                    >
                       <strong>Address:</strong>{' '}
                       {shortenTxHash(
                         instance.address,
                         PREFIX[currentNetwork].length
                       )}
                     </div>
-                    <div className="mb-2">
+                    <div
+                      className="mb-2"
+                      onClick={() => handleCopyAddress(instance.token_address)}
+                    >
                       <strong>Token Address:</strong>{' '}
                       {shortenTxHash(
                         instance.token_address,
                         PREFIX[currentNetwork].length
                       )}
                     </div>
-                    <div className="mb-2">
+                    {/* <div className="mb-2">
                       <strong>Opcount:</strong> {instance.opcount}
                     </div>
                     <div className="mb-2">
@@ -326,7 +344,7 @@ const ContractView = () => {
                     <div className="mb-2">
                       <strong>Bytecode:</strong>{' '}
                       {shortenTxHash(instance.bytecode)}
-                    </div>
+                    </div> */}
                     <div className="mb-2">
                       <strong>Balance:</strong> {instance.balance.toString()}{' '}
                       satoshis

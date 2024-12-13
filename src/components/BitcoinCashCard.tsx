@@ -23,7 +23,7 @@ const BitcoinCashCard: React.FC<BitcoinCashCardProps> = ({
   );
 
   // State for display mode
-  const [displayMode, setDisplayMode] = useState<DisplayMode>(DisplayMode.BCH);
+  const [displayMode, setDisplayMode] = useState<DisplayMode>(DisplayMode.USD);
 
   // Calculate the total in BCH (1 BCH = 100,000,000 satoshis)
   const totalBch = totalAmount / 100000000;
@@ -75,17 +75,17 @@ const BitcoinCashCard: React.FC<BitcoinCashCardProps> = ({
           {displayMode !== DisplayMode.BCH && (
             <button
               onClick={() => setDisplayMode(DisplayMode.BCH)}
-              className="p-1 px-3 rounded bg-gray-300 hover:bg-green-500 hover:text-white transition duration-200"
+              className="p-1 px-3 rounded bg-gray-300 hover:bg-gray-300 transition duration-200"
             >
-              BCH
+              USD
             </button>
           )}
           {displayMode !== DisplayMode.USD && (
             <button
               onClick={() => setDisplayMode(DisplayMode.USD)}
-              className="p-1 px-3 rounded bg-gray-300 hover:bg-green-500 hover:text-white transition duration-200"
+              className="p-1 px-3 rounded bg-green-500 hover:bg-green-500 transition duration-200"
             >
-              USD
+              BCH
             </button>
           )}
         </div>
