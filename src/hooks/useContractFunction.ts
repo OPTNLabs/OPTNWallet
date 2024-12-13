@@ -1,14 +1,14 @@
 // src/hooks/useContractFunction.ts
 
-import { useState } from 'react';
+// import { useState } from 'react';
 import { useDispatch } from 'react-redux';
 import {
   setSelectedFunction,
   setInputValues,
-  resetContract,
+  // resetContract,
 } from '../redux/contractSlice';
 import { UTXO } from '../types/types';
-import { SignatureTemplate, HashType } from 'cashscript';
+// import { SignatureTemplate, HashType } from 'cashscript';
 
 interface ContractFunctionParams {
   contractFunction: string;
@@ -41,24 +41,13 @@ const useContractFunction = () => {
     dispatch(setSelectedFunction(contractFunction));
     dispatch(setInputValues(inputs));
 
-    // Create an unlocker template from the input values
-    const unlockerInputs = Object.entries(inputs).map(([key, value]) =>
-      key === 's' ? new SignatureTemplate(value, HashType.SIGHASH_ALL) : value
-    );
-
-    const unlocker = {
+    // **Set the new fields in UTXO**
+    const updatedUtxo: UTXO = {
+      ...tempUtxos,
       contractFunction,
-      unlockerInputs,
+      contractFunctionInputs: inputs,
     };
-
-    // Find the matching UTXO and update it with unlocker
-    if (tempUtxos) {
-      const updatedUtxo: UTXO = {
-        ...tempUtxos,
-        unlocker,
-      };
-      setSelectedUtxos([...selectedUtxos, updatedUtxo]);
-    }
+    setSelectedUtxos([...selectedUtxos, updatedUtxo]);
   };
 
   return { handleContractFunctionSelect };

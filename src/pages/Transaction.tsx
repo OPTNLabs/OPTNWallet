@@ -27,7 +27,7 @@ import {
   // setTxOutputs,
 } from '../redux/transactionBuilderSlice';
 import { selectCurrentNetwork } from '../redux/selectors/networkSelectors';
-import { Network } from '../redux/networkSlice';
+// import { Network } from '../redux/networkSlice';
 import useFetchWalletData from '../hooks/useFetchWalletData';
 import useHandleTransaction from '../hooks/useHandleTransaction';
 import TransactionService from '../services/TransactionService';
@@ -89,9 +89,9 @@ const Transaction: React.FC = () => {
   );
 
   // Access Redux state using useSelector
-  const selectedFunction = useSelector(
-    (state: RootState) => state.contract.selectedFunction
-  );
+  // const selectedFunction = useSelector(
+  //   (state: RootState) => state.contract.selectedFunction
+  // );
   const txOutputs = useSelector(
     (state: RootState) => state.transactionBuilder.txOutputs
   );

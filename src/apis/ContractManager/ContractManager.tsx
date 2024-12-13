@@ -55,6 +55,11 @@ export default function ContractManager() {
           ? JSON.parse(row.utxos).map((utxo: any) => ({
               ...utxo,
               amount: BigInt(utxo.amount),
+              // **Parse New Fields**
+              contractFunction: utxo.contractFunction || undefined,
+              contractFunctionInputs: utxo.contractFunctionInputs
+                ? JSON.parse(utxo.contractFunctionInputs)
+                : undefined,
             }))
           : [],
       artifact:
@@ -119,6 +124,8 @@ export default function ContractManager() {
 
       const provider = new ElectrumNetworkProvider(currentNetwork);
       const addressType = 'p2sh32';
+      const prefix =
+        currentNetwork === Network.MAINNET ? 'bitcoincash' : 'bchtest';
 
       if (
         artifact.constructorInputs.length > 0 &&
@@ -146,6 +153,12 @@ export default function ContractManager() {
         amount: BigInt(utxo.value),
         height: utxo.height,
         token: utxo.token_data || undefined,
+        prefix,
+        // **Add New Fields**
+        contractFunction: utxo.contractFunction || undefined,
+        contractFunctionInputs: utxo.contractFunctionInputs
+          ? JSON.stringify(utxo.contractFunctionInputs)
+          : undefined,
       }));
 
       await saveContractArtifact(artifact);
@@ -435,8 +448,13 @@ export default function ContractManager() {
         tx_pos: utxo.tx_pos,
         amount: BigInt(utxo.value),
         height: utxo.height,
-        token: utxo.token_data || null,
+        token: utxo.token_data || undefined,
         prefix,
+        // **Add New Fields**
+        contractFunction: utxo.contractFunction || undefined,
+        contractFunctionInputs: utxo.contractFunctionInputs
+          ? JSON.stringify(utxo.contractFunctionInputs)
+          : undefined,
       }));
 
       await dbService.ensureDatabaseStarted();
@@ -509,8 +527,8 @@ export default function ContractManager() {
       try {
         // Batch insert new UTXOs
         const insertUTXOQuery = `
-          INSERT INTO UTXOs (address, height, tx_hash, tx_pos, amount, token_data, prefix) 
-          VALUES (?, ?, ?, ?, ?, ?, ?)
+          INSERT INTO UTXOs (address, height, tx_hash, tx_pos, amount, token_data, prefix, contractFunction, contractFunctionInputs) 
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
         `;
         const insertStmt = db.prepare(insertUTXOQuery);
         for (const utxo of newUTXOs) {
@@ -522,6 +540,8 @@ export default function ContractManager() {
             utxo.amount.toString(),
             utxo.token ? JSON.stringify(utxo.token) : null,
             utxo.prefix,
+            utxo.contractFunction || null, // New Field
+            utxo.contractFunctionInputs || null, // New Field
           ]);
         }
         insertStmt.free();
@@ -650,15 +670,11 @@ export default function ContractManager() {
     // Create unlocker with function inputs
     const unlocker = contract.unlock[contractFunction](
       ...abiFunction.inputs.map((input: any) => {
-        // Get the corresponding value from contractFunctionInputs using the input name
         const inputValue = contractFunctionInputs[input.name];
 
-        // Check if the input type is 'sig' (for signature)
         if (input.type === 'sig') {
-          // Handle signature input with `SignatureTemplate`
           return new SignatureTemplate(inputValue, HashType.SIGHASH_ALL);
         } else {
-          // For other inputs, parse the input value based on its type
           return parseInputValue(inputValue, input.type);
         }
       })

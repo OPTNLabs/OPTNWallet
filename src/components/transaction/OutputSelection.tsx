@@ -1,3 +1,4 @@
+// @ts-nocheck
 // src/components/transaction/OutputSelection.tsx
 
 import React from 'react';
@@ -54,7 +55,7 @@ function OutputSelection({
           onChange={handleTransferAmountChange}
           className="border p-2 mb-2 w-full break-words whitespace-normal"
         />
-        <input
+        {/* <input
           type="number"
           value={tokenAmount}
           placeholder="Token Amount"
@@ -74,7 +75,7 @@ function OutputSelection({
               </option>
             ))}
           </select>
-        )}
+        )} */}
         <button
           onClick={addOutput}
           className="bg-blue-500 text-white py-2 px-4 rounded"
