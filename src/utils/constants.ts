@@ -10,3 +10,5 @@ export enum COIN_TYPE {
 }
 
 export const INTERVAL = 300 * 1000; // 1-minute interval
+
+export const DUST = 546;

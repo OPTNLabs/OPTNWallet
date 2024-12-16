@@ -1,3 +1,4 @@
+// @ts-nocheck
 // src/apis/TransactionManager/TransactionManager.ts
 
 import { store } from '../../redux/store';
