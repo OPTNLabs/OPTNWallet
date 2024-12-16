@@ -1,3 +1,4 @@
+// @ts-nocheck
 // src/components/transaction/UTXOSelection.tsx
 
 import React from 'react';

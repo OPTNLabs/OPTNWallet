@@ -7,7 +7,7 @@ import { UTXO } from '../types/types';
 import AddressSelection from '../components/transaction/AddressSelection';
 import OutputSelection from '../components/transaction/OutputSelection';
 import SelectedUTXOsDisplay from '../components/transaction/SelectedUTXOsDisplay';
-import TransactionOutputsDisplay from '../components/transaction/TransactionOutputsDisplay';
+// import TransactionOutputsDisplay from '../components/transaction/TransactionOutputsDisplay';
 import TransactionActions from '../components/transaction/TransactionActions';
 import UTXOSelection from '../components/transaction/UTXOSelection';
 import SelectContractFunctionPopup from '../components/SelectContractFunctionPopup';
@@ -402,13 +402,16 @@ const Transaction: React.FC = () => {
         <SelectedUTXOsDisplay selectedUtxos={selectedUtxos} />
 
         {/* Transaction Outputs Display */}
-        <TransactionOutputsDisplay
+        {/* <TransactionOutputsDisplay
           txOutputs={txOutputs}
           handleRemoveOutput={handleRemoveOutput}
-        />
+        /> */}
 
         {/* Output Selection Component */}
         <OutputSelection
+          txOutputs={txOutputs}
+          handleRemoveOutput={handleRemoveOutput}
+          currentNetwork={currentNetwork}
           recipientAddress={recipientAddress}
           setRecipientAddress={setRecipientAddress}
           transferAmount={transferAmount}
