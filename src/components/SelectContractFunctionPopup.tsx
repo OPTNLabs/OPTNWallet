@@ -10,6 +10,7 @@ import { encodePrivateKeyWif } from '@bitauth/libauth';
 import { RootState, AppDispatch } from '../redux/store';
 import { hexString } from '../utils/hex';
 import KeyService from '../services/KeyService';
+import { shortenTxHash } from '../utils/shortenHash';
 
 interface AbiInput {
   name: string;
@@ -190,7 +191,7 @@ const SelectContractFunctionPopup: React.FC<
                 <input
                   type="text"
                   name={input.name}
-                  value={inputValues[input.name] || ''}
+                  value={shortenTxHash(inputValues[input.name]) || ''}
                   onChange={handleInputChange}
                   className="border p-2 w-full"
                 />

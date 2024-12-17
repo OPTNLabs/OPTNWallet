@@ -1,8 +1,12 @@
+// android/app/build.gradle
+
 apply plugin: 'com.android.application'
+apply plugin: 'kotlin-android' // Add this line
 
 android {
     namespace "optn.wallet.app"
     compileSdk rootProject.ext.compileSdkVersion
+
     defaultConfig {
         applicationId "optn.wallet.app"
         minSdkVersion rootProject.ext.minSdkVersion
@@ -11,11 +15,10 @@ android {
         versionName "1.0"
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
         aaptOptions {
-             // Files and dirs to omit from the packaged assets dir, modified to accommodate modern web apps.
-             // Default: https://android.googlesource.com/platform/frameworks/base/+/282e181b58cf72b6ca770dc7ca5f91f135444502/tools/aapt/AaptAssets.cpp#61
             ignoreAssetsPattern '!.svn:!.git:!.ds_store:!*.scc:.*:!CVS:!thumbs.db:!picasa.ini:!*~'
         }
     }
+
     signingConfigs {
         release {
             keyAlias 'OPTN-key-alias'
@@ -24,12 +27,22 @@ android {
             storePassword 'OPTNWallet'
         }
     }
+
     buildTypes {
         release {
             signingConfig signingConfigs.release
             minifyEnabled false
             proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
         }
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+
+    kotlinOptions {
+        jvmTarget = "17" // Add this block
     }
 }
 
@@ -45,6 +58,7 @@ dependencies {
     implementation "androidx.coordinatorlayout:coordinatorlayout:$androidxCoordinatorLayoutVersion"
     implementation "androidx.core:core-splashscreen:$coreSplashScreenVersion"
     implementation project(':capacitor-android')
+    implementation "org.jetbrains.kotlin:kotlin-stdlib:1.8.10" // Add this line
     testImplementation "junit:junit:$junitVersion"
     androidTestImplementation "androidx.test.ext:junit:$androidxJunitVersion"
     androidTestImplementation "androidx.test.espresso:espresso-core:$androidxEspressoCoreVersion"

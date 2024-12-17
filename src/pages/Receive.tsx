@@ -7,20 +7,30 @@ import { shortenTxHash } from '../utils/shortenHash';
 import { PREFIX } from '../utils/constants';
 import { selectCurrentNetwork } from '../redux/selectors/networkSelectors';
 import { QRCodeSVG } from 'qrcode.react';
+import { hexString } from '../utils/hex';
+
+type QRCodeType = 'address' | 'pubKey' | 'pkh';
 
 const Receive: React.FC = () => {
-  const [keyPairs, setKeyPairs] = useState([]);
+  const [keyPairs, setKeyPairs] = useState<any[]>([]); // Replace 'any' with appropriate type if available
   const [selectedAddress, setSelectedAddress] = useState<string | null>(null);
+  const [selectedPubKey, setSelectedPubKey] = useState<string | null>(null);
+  const [selectedPKH, setSelectedPKH] = useState<string | null>(null);
   const [isTokenAddress, setIsTokenAddress] = useState(false);
   const [showBip21Fields, setShowBip21Fields] = useState(false);
   const [amount, setAmount] = useState<string>('');
   const [label, setLabel] = useState<string>('');
-  const [message, setMessage] = useState<string>('');
+  // const [message, setMessage] = useState<string>('');
+  const [qrCodeType, setQrCodeType] = useState<QRCodeType>('address');
+
   const currentWalletId = useSelector(
     (state: RootState) => state.wallet_id.currentWalletId
   );
   const currentNetwork = useSelector((state: RootState) =>
     selectCurrentNetwork(state)
+  );
+  const wallet_id = useSelector(
+    (state: RootState) => state.wallet_id.currentWalletId
   );
 
   // Fetch existing keys when component is mounted
@@ -43,8 +53,21 @@ const Receive: React.FC = () => {
     fetchKeys();
   }, [currentWalletId]);
 
-  const handleAddressSelect = (address: string) => {
-    setSelectedAddress(address);
+  const handleAddressSelect = async (address: string) => {
+    const keys = await KeyService.retrieveKeys(wallet_id);
+    const selectedKey = keys.find((key: any) => key.address === address);
+
+    if (selectedKey) {
+      const pubkey = hexString(selectedKey.publicKey);
+      const pkh = hexString(selectedKey.pubkeyHash);
+
+      setSelectedAddress(address);
+      setSelectedPubKey(pubkey);
+      setSelectedPKH(pkh);
+      setQrCodeType('address'); // Default to address QR code upon selection
+    } else {
+      console.error('Selected key not found');
+    }
   };
 
   const handleCopyAddress = async (address: string) => {
@@ -55,6 +78,9 @@ const Receive: React.FC = () => {
       });
     } catch (error) {
       console.error('Failed to copy address:', error);
+      await Toast.show({
+        text: 'Failed to copy address.',
+      });
     }
   };
 
@@ -70,7 +96,7 @@ const Receive: React.FC = () => {
     const params = new URLSearchParams();
     if (amount) params.append('amount', amount);
     if (label) params.append('label', label);
-    if (message) params.append('message', message);
+    // if (message) params.append('message', message);
 
     if (params.toString()) {
       uri += `?${params.toString()}`;
@@ -115,10 +141,10 @@ const Receive: React.FC = () => {
       <div className="flex flex-col items-center space-y-4 h-full">
         {!selectedAddress ? (
           <div
-            className="overflow-y-auto w-full max-w-md flex-grow  rounded-md p-4"
+            className="overflow-y-auto w-full max-w-md flex-grow rounded-md p-4"
             style={{ height: 'calc(100vh - var(--navbar-height) - 200px)' }} // Adjusting height dynamically
           >
-            {keyPairs.map((keyPair, index) => (
+            {keyPairs.map((keyPair: any, index: number) => (
               <div
                 key={index}
                 className="p-4 mb-4 bg-white rounded-lg shadow-md cursor-pointer hover:bg-gray-100"
@@ -144,28 +170,58 @@ const Receive: React.FC = () => {
           <>
             <div className="flex flex-col items-center mb-4">
               <QRCodeSVG
-                value={buildBip21Uri()}
+                value={
+                  qrCodeType === 'address'
+                    ? buildBip21Uri()
+                    : qrCodeType === 'pubKey'
+                      ? selectedPubKey || ''
+                      : selectedPKH || ''
+                }
                 size={200}
-                imageSettings={{
-                  src: '/assets/images/OPTNUIkeyline.png',
-                  height: 40, // Adjust height as needed
-                  width: 40, // Adjust width as needed
-                  excavate: true, // To clear the space around the image so it is more visible
-                }}
+                // imageSettings={{
+                //   src: '/assets/images/OPTNUIkeyline.png',
+                //   height: 40, // Adjust height as needed
+                //   width: 40, // Adjust width as needed
+                //   excavate: true, // To clear the space around the image so it is more visible
+                // }}
               />
               <p
                 className="mt-4 p-2 bg-gray-200 rounded cursor-pointer hover:bg-gray-300"
-                onClick={() => handleCopyAddress(buildBip21Uri())}
+                onClick={() =>
+                  handleCopyAddress(
+                    qrCodeType === 'address'
+                      ? buildBip21Uri()
+                      : qrCodeType === 'pubKey'
+                        ? selectedPubKey || ''
+                        : selectedPKH || ''
+                  )
+                }
               >
-                {shortenTxHash(selectedAddress, PREFIX[currentNetwork].length)}
+                {qrCodeType === 'address'
+                  ? shortenTxHash(
+                      selectedAddress,
+                      PREFIX[currentNetwork].length
+                    )
+                  : qrCodeType === 'pubKey'
+                    ? shortenTxHash(
+                        selectedPubKey || ''
+                        // PREFIX[currentNetwork].length
+                      )
+                    : shortenTxHash(
+                        selectedPKH || ''
+                        // PREFIX[currentNetwork].length
+                      )}
               </p>
             </div>
-            <button
-              className="mt-4 text-sm text-blue-500 underline"
-              onClick={() => setShowBip21Fields(!showBip21Fields)}
-            >
-              Specify Amount
-            </button>
+
+            {qrCodeType === 'address' && (
+              <button
+                className="mt-4 text-sm text-blue-500 underline"
+                onClick={() => setShowBip21Fields(!showBip21Fields)}
+              >
+                Specify Amount
+              </button>
+            )}
             {showBip21Fields && (
               <>
                 <div className="w-full max-w-md mb-4">
@@ -192,7 +248,7 @@ const Receive: React.FC = () => {
                     placeholder="Enter label (e.g. Donation)"
                   />
                 </div>
-                <div className="w-full max-w-md mb-4">
+                {/* <div className="w-full max-w-md mb-4">
                   <label className="block text-sm font-medium text-gray-700 mb-1">
                     Message
                   </label>
@@ -203,9 +259,42 @@ const Receive: React.FC = () => {
                     className="border p-2 w-full rounded-md"
                     placeholder="Enter message (e.g. Thank you for your support!)"
                   />
-                </div>
+                </div> */}
               </>
             )}
+            {/* Toggle Buttons */}
+            <div className="flex space-x-4 mt-4">
+              <button
+                className={`px-4 py-2 rounded ${
+                  qrCodeType === 'address'
+                    ? 'bg-blue-500 text-white'
+                    : 'bg-gray-200 text-gray-700'
+                }`}
+                onClick={() => setQrCodeType('address')}
+              >
+                Address
+              </button>
+              <button
+                className={`px-4 py-2 rounded ${
+                  qrCodeType === 'pubKey'
+                    ? 'bg-blue-500 text-white'
+                    : 'bg-gray-200 text-gray-700'
+                }`}
+                onClick={() => setQrCodeType('pubKey')}
+              >
+                Public Key
+              </button>
+              <button
+                className={`px-4 py-2 rounded ${
+                  qrCodeType === 'pkh'
+                    ? 'bg-blue-500 text-white'
+                    : 'bg-gray-200 text-gray-700'
+                }`}
+                onClick={() => setQrCodeType('pkh')}
+              >
+                PKH
+              </button>
+            </div>
             <button
               className="mt-4 w-full bg-red-500 text-white rounded hover:bg-red-600"
               onClick={() => setSelectedAddress(null)}
