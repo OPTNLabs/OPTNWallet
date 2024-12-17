@@ -96,12 +96,12 @@ const Popup: React.FC<PopupProps> = ({
               <QRCodeSVG
                 value={keyPairs[selectedKeyPairIndex].address}
                 size={128}
-                imageSettings={{
-                  src: '/assets/images/OPTNUIkeyline.png',
-                  height: 30, // Adjust height as needed
-                  width: 30, // Adjust width as needed
-                  excavate: true, // To clear the space around the image so it is more visible
-                }}
+                // imageSettings={{
+                //   src: '/assets/images/OPTNUIkeyline.png',
+                //   height: 30, // Adjust height as needed
+                //   width: 30, // Adjust width as needed
+                //   excavate: true, // To clear the space around the image so it is more visible
+                // }}
               />
 
               <p

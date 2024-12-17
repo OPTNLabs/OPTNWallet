@@ -9,12 +9,7 @@ import Popup from './Popup';
 
 interface UTXOSelectionProps {
   selectedAddresses: string[];
-  contractAddresses: {
-    address: string;
-    tokenAddress: string;
-    contractName: string;
-    abi: any[];
-  }[];
+  selectedContractAddresses: string[];
   filteredRegularUTXOs: UTXO[];
   filteredCashTokenUTXOs: UTXO[];
   filteredContractUTXOs: UTXO[];
@@ -31,7 +26,7 @@ interface UTXOSelectionProps {
 
 const UTXOSelection: React.FC<UTXOSelectionProps> = ({
   selectedAddresses,
-  contractAddresses,
+  selectedContractAddresses,
   filteredRegularUTXOs,
   filteredCashTokenUTXOs,
   filteredContractUTXOs,
@@ -45,16 +40,21 @@ const UTXOSelection: React.FC<UTXOSelectionProps> = ({
   setShowContractUTXOsPopup,
   closePopups,
 }) => {
+  // Compute regular addresses by excluding contract addresses
+  const regularAddresses = selectedAddresses.filter(
+    (addr) => !selectedContractAddresses.includes(addr)
+  );
+
   return (
     <>
       {/* Regular UTXOs Button and Popup */}
       <div>
-        {selectedAddresses.length > 0 && (
+        {regularAddresses.length > 0 && (
           <button
             className="bg-blue-500 text-white py-2 px-4 rounded mb-2"
             onClick={() => setShowRegularUTXOsPopup(true)}
           >
-            View Regular UTXOs
+            Regular UTXOs
           </button>
         )}
         {showRegularUTXOsPopup && (
@@ -84,8 +84,9 @@ const UTXOSelection: React.FC<UTXOSelectionProps> = ({
       </div>
 
       {/* CashToken UTXOs Button and Popup */}
-      {/* <div>
-        {selectedAddresses.length > 0 && (
+      {/* Uncomment and adjust as needed
+      <div>
+        {regularAddresses.length > 0 && (
           <button
             className="bg-blue-500 text-white py-2 px-4 rounded mb-2"
             onClick={() => setShowCashTokenUTXOsPopup(true)}
@@ -117,16 +118,19 @@ const UTXOSelection: React.FC<UTXOSelectionProps> = ({
             </div>
           </Popup>
         )}
-      </div> */}
+      </div>
+      */}
 
       {/* Contract UTXOs Button and Popup */}
       <div className="mb-6">
-        {contractAddresses.length > 0 && (
+        {selectedContractAddresses.length > 0 && (
           <button
             className="bg-blue-500 text-white py-2 px-4 rounded mb-2"
-            onClick={() => setShowContractUTXOsPopup(true)}
+            onClick={() => {
+              setShowContractUTXOsPopup(true);
+            }}
           >
-            View Contract UTXOs
+            Contract UTXOs
           </button>
         )}
         {showContractUTXOsPopup && (

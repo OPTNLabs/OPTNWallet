@@ -1,7 +1,7 @@
 // src/pages/Transaction.tsx
 
 import React, { useEffect, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+// import { useNavigate } from 'react-router-dom';
 import { useDispatch, useSelector } from 'react-redux';
 import { UTXO } from '../types/types';
 import AddressSelection from '../components/transaction/AddressSelection';
@@ -81,7 +81,7 @@ const Transaction: React.FC = () => {
   const [showRegularUTXOsPopup, setShowRegularUTXOsPopup] = useState(false);
   const [showCashTokenUTXOsPopup, setShowCashTokenUTXOsPopup] = useState(false);
   const [showContractUTXOsPopup, setShowContractUTXOsPopup] = useState(false);
-  const navigate = useNavigate();
+  // const navigate = useNavigate();
   const dispatch: AppDispatch = useDispatch();
 
   const currentNetwork = useSelector((state: RootState) =>
@@ -144,7 +144,7 @@ const Transaction: React.FC = () => {
    * @param utxo - The UTXO being clicked.
    */
   const handleUtxoClick = (utxo: UTXO) => {
-    // console.log('Selected UTXOs before function inputs:', selectedUtxos);
+    console.log('Selected UTXOs before function inputs:', selectedUtxos);
     const isSelected = selectedUtxos.some(
       (selectedUtxo) => selectedUtxo.id === utxo.id
     );
@@ -160,10 +160,11 @@ const Transaction: React.FC = () => {
       }
     } else {
       if (utxo.abi) {
-        // console.log('Contract UTXO:', utxo);
+        console.log('Contract UTXO:', utxo);
+        setShowPopup(true);
         setTempUtxos(utxo);
         setCurrentContractABI(utxo.abi);
-        setShowPopup(true);
+        setSelectedContractAddresses((prev) => [...prev, utxo.address]);
         return;
       } else {
         const signatureTemplate = new SignatureTemplate(
@@ -178,16 +179,17 @@ const Transaction: React.FC = () => {
         };
 
         setSelectedUtxos([...selectedUtxos, updatedUtxo]);
+        setSelectedAddresses((prev) => [...prev, utxo.address]);
 
         // Reset contract state since a regular UTXO is being selected
         dispatch(resetContract());
 
         // **Add Logging Here**
-        // console.log('Selected a non-contract UTXO:', updatedUtxo);
+        console.log('Selected a non-contract UTXO:', updatedUtxo);
       }
     }
 
-    // console.log('Selected UTXOs after function inputs:', selectedUtxos);
+    console.log('Selected UTXOs after function inputs:', selectedUtxos);
   };
 
   /**
@@ -258,9 +260,9 @@ const Transaction: React.FC = () => {
   /**
    * Navigates back to the home page.
    */
-  const returnHome = async () => {
-    navigate(`/home/${walletId}`);
-  };
+  // const returnHome = async () => {
+  //   navigate(`/home/${walletId}`);
+  // };
 
   /**
    * Closes all popups and clears error messages.
@@ -285,8 +287,8 @@ const Transaction: React.FC = () => {
     contractFunction: string,
     inputs: { [key: string]: string }
   ) => {
-    // console.log('Selected Contract Function:', contractFunction);
-    // console.log('Selected Contract Function Inputs:', inputs);
+    console.log('Selected Contract Function:', contractFunction);
+    console.log('Selected Contract Function Inputs:', inputs);
 
     // Validate inputs is an object, not an array
     if (typeof inputs !== 'object' || Array.isArray(inputs)) {
@@ -322,10 +324,10 @@ const Transaction: React.FC = () => {
       setSelectedUtxos([...selectedUtxos, updatedUtxo]);
 
       // **Add Logging Here**
-      // console.log(
-      //   'Updated UTXO with contractFunction and contractFunctionInputs:',
-      //   updatedUtxo
-      // );
+      console.log(
+        'Updated UTXO with contractFunction and contractFunctionInputs:',
+        updatedUtxo
+      );
     }
 
     // Close the popup
@@ -383,7 +385,8 @@ const Transaction: React.FC = () => {
         {/* UTXO Selection Component */}
         <UTXOSelection
           selectedAddresses={selectedAddresses}
-          contractAddresses={contractAddresses}
+          selectedContractAddresses={selectedContractAddresses}
+          // contractAddresses={contractAddresses}
           filteredRegularUTXOs={filteredRegularUTXOs}
           filteredCashTokenUTXOs={filteredCashTokenUTXOs}
           filteredContractUTXOs={filteredContractUTXOs}
@@ -432,7 +435,7 @@ const Transaction: React.FC = () => {
           loading={loading}
           buildTransaction={buildTransaction}
           sendTransaction={sendTransaction}
-          returnHome={returnHome}
+          // returnHome={returnHome}
         />
 
         {/* Bytecode Size Display */}

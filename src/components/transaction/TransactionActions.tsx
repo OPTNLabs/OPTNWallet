@@ -7,7 +7,7 @@ interface TransactionActionsProps {
   loading: boolean;
   buildTransaction: () => void;
   sendTransaction: () => void;
-  returnHome: () => void;
+  // returnHome: () => void;
 }
 
 const TransactionActions: React.FC<TransactionActionsProps> = ({
@@ -15,7 +15,7 @@ const TransactionActions: React.FC<TransactionActionsProps> = ({
   loading,
   buildTransaction,
   sendTransaction,
-  returnHome,
+  // returnHome,
 }) => {
   return (
     <>
@@ -37,21 +37,21 @@ const TransactionActions: React.FC<TransactionActionsProps> = ({
           onClick={buildTransaction}
           className="bg-green-500 text-white py-2 px-4 rounded mr-2"
         >
-          Build Transaction
+          Build TX
         </button>
         <button
           onClick={sendTransaction}
           className="bg-red-500 text-white py-2 px-4 rounded"
         >
-          Send Transaction
+          Send TX
         </button>
       </div>
-      <button
+      {/* <button
         onClick={returnHome}
         className="bg-red-500 text-white py-2 px-4 rounded"
       >
         Go Back
-      </button>
+      </button> */}
     </>
   );
 };

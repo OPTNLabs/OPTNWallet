@@ -11,15 +11,19 @@ import { resetUTXOs } from '../redux/utxoSlice';
 import WalletManager from '../apis/WalletManager/WalletManager';
 import { useNavigate } from 'react-router-dom';
 import { resetTransactions } from '../redux/transactionSlice';
-// import NetworkSettingsView from '../components/NetworkSettingsView';
+import NetworkSettingsView from '../components/NetworkSettingsView';
 import { resetContract } from '../redux/contractSlice';
-import { resetNetwork } from '../redux/networkSlice';
+import { Network, resetNetwork } from '../redux/networkSlice';
 import { clearTransaction } from '../redux/transactionBuilderSlice';
 import { RootState } from '../redux/store';
+import { selectCurrentNetwork } from '../redux/selectors/networkSelectors';
 
 const Settings = () => {
   const currentWalletId = useSelector(
     (state: RootState) => state.wallet_id.currentWalletId
+  );
+  const currentNetwork = useSelector((state: RootState) =>
+    selectCurrentNetwork(state)
   );
   const [selectedOption, setSelectedOption] = useState('');
   const [navBarHeight, setNavBarHeight] = useState(0);
@@ -61,8 +65,8 @@ const Settings = () => {
         return <TermsOfUse />;
       case 'contact':
         return <ContactUs />;
-      // case 'network':
-      //   return <NetworkSettingsView />;
+      case 'network':
+        return <NetworkSettingsView />;
       default:
         return null;
     }
@@ -78,8 +82,8 @@ const Settings = () => {
         return 'Terms of Use';
       case 'contact':
         return 'Contact Us';
-      // case 'network':
-      //   return 'Network';
+      case 'network':
+        return 'Network';
       default:
         return '';
     }
@@ -121,12 +125,14 @@ const Settings = () => {
           >
             Contact Us
           </button>
-          {/* <button
-            onClick={() => handleOptionClick('network')}
-            className="block w-full py-2 px-4 border rounded-lg mb-2 mx-2"
-          >
-            Network
-          </button> */}
+          {currentNetwork === Network.CHIPNET && (
+            <button
+              onClick={() => handleOptionClick('network')}
+              className="block w-full py-2 px-4 border rounded-lg mb-2 mx-2"
+            >
+              Faucet
+            </button>
+          )}
           <button
             onClick={handleLogout}
             className="block w-full py-2 px-4 border rounded-lg mb-2 mx-2 bg-red-500 text-white text-xl font-bold"
@@ -138,9 +144,8 @@ const Settings = () => {
         <div
           className="fixed inset-0 bg-white p-4 z-50 overflow-hidden"
           style={{
-            height: `calc(90vh - ${navBarHeight}px)`,
-            top: 0,
-            paddingBottom: `${navBarHeight}px`,
+            height: `calc(100vh - ${navBarHeight}px)`,
+            // paddingBottom: `${navBarHeight}px`,
           }}
         >
           <div className="container mx-auto p-4">

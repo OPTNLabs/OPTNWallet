@@ -34,14 +34,7 @@ const AddressSelection: React.FC<AddressSelectionProps> = ({
   const [showContractAddressesPopup, setShowContractAddressesPopup] =
     useState(false);
 
-  // console.log('AddressSelection Props:', {
-  //   addresses,
-  //   selectedAddresses,
-  //   contractAddresses,
-  //   selectedContractAddresses,
-  //   selectedContractABIs,
-  // });
-
+  // Toggle selection for regular wallet addresses
   const toggleAddressSelection = (address: string) => {
     if (selectedAddresses.includes(address)) {
       setSelectedAddresses(
@@ -54,6 +47,7 @@ const AddressSelection: React.FC<AddressSelectionProps> = ({
     }
   };
 
+  // Toggle selection for contract addresses
   const toggleContractSelection = (address: string, abi: any) => {
     const isSelected =
       selectedContractAddresses.includes(address) &&
@@ -88,12 +82,13 @@ const AddressSelection: React.FC<AddressSelectionProps> = ({
       <h3 className="text-lg font-semibold mb-2">
         Select Addresses to Spend From
       </h3>
+
       {/* Wallet Addresses Button */}
       <button
         className="bg-blue-500 text-white mx-1 py-2 px-4 rounded mb-2"
         onClick={() => setShowWalletAddressesPopup(true)}
       >
-        Wallet Addresses
+        Wallet
       </button>
       {showWalletAddressesPopup && (
         <Popup closePopups={closePopups}>
@@ -102,34 +97,42 @@ const AddressSelection: React.FC<AddressSelectionProps> = ({
             {addresses.length === 0 ? (
               <p>No wallet addresses available.</p>
             ) : (
-              addresses.map((addressObj) => (
-                <div
-                  key={addressObj.address}
-                  className="flex items-center mb-2 break-words whitespace-normal"
-                >
-                  <input
-                    type="checkbox"
-                    checked={selectedAddresses.includes(addressObj.address)}
-                    onChange={() => toggleAddressSelection(addressObj.address)}
-                    className="mr-2"
-                  />
-                  <span className="break-words overflow-x-auto">
-                    {`Address: ${addressObj.address}`}
-                    <br />
-                    {`Token Address: ${addressObj.tokenAddress}`}
-                  </span>
-                </div>
-              ))
+              addresses.map((addressObj) => {
+                const isSelected = selectedAddresses.includes(
+                  addressObj.address
+                );
+
+                return (
+                  <button
+                    key={addressObj.address}
+                    onClick={() => toggleAddressSelection(addressObj.address)}
+                    className={`w-full text-left p-2 mb-2 border rounded-lg break-words whitespace-normal focus:outline-none ${
+                      isSelected ? 'bg-blue-100' : 'bg-white border-gray-300'
+                    }`}
+                    aria-pressed={isSelected}
+                  >
+                    <div className="flex flex-col">
+                      <span className="font-medium">
+                        Address: {addressObj.address}
+                      </span>
+                      <span className="text-sm text-gray-600">
+                        Token Address: {addressObj.tokenAddress}
+                      </span>
+                    </div>
+                  </button>
+                );
+              })
             )}
           </div>
         </Popup>
       )}
+
       {/* Contract Addresses Button */}
       <button
         className="bg-blue-500 text-white mx-1 py-2 px-4 rounded mb-2"
         onClick={() => setShowContractAddressesPopup(true)}
       >
-        Contract Addresses
+        Contracts
       </button>
       {showContractAddressesPopup && (
         <Popup closePopups={closePopups}>
@@ -138,32 +141,40 @@ const AddressSelection: React.FC<AddressSelectionProps> = ({
             {contractAddresses.length === 0 ? (
               <p>No contract addresses available.</p>
             ) : (
-              contractAddresses.map((contractObj) => (
-                <div
-                  key={contractObj.address}
-                  className="flex items-center mb-2 break-words whitespace-normal"
-                >
-                  <input
-                    type="checkbox"
-                    checked={selectedContractAddresses.includes(
-                      contractObj.address
-                    )}
-                    onChange={() => {
-                      toggleAddressSelection(contractObj.address);
+              contractAddresses.map((contractObj) => {
+                const isSelected =
+                  selectedContractAddresses.includes(contractObj.address) &&
+                  selectedContractABIs.some(
+                    (existingAbi) =>
+                      JSON.stringify(existingAbi) ===
+                      JSON.stringify(contractObj.abi)
+                  );
+
+                return (
+                  <button
+                    key={contractObj.address}
+                    onClick={() =>
                       toggleContractSelection(
                         contractObj.address,
                         contractObj.abi
-                      );
-                    }}
-                    className="mr-2"
-                  />
-                  <span className="break-words overflow-x-auto">
-                    {`Contract Address: ${contractObj.address}`}
-                    <br />
-                    {`Token Address: ${contractObj.tokenAddress}`}
-                  </span>
-                </div>
-              ))
+                      )
+                    }
+                    className={`w-full text-left p-2 mb-2 border rounded-lg break-words whitespace-normal focus:outline-none ${
+                      isSelected ? 'bg-blue-100 ' : 'bg-white border-gray-300'
+                    }`}
+                    aria-pressed={isSelected}
+                  >
+                    <div className="flex flex-col">
+                      <span className="font-medium">
+                        Contract Name: {contractObj.contractName}
+                      </span>
+                      <span className="text-sm text-gray-600">
+                        Contract Address: {contractObj.address}
+                      </span>
+                    </div>
+                  </button>
+                );
+              })
             )}
           </div>
         </Popup>
