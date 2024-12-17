@@ -1,6 +1,6 @@
 const ContactUs = () => {
   return (
-    <div>
+    <div className="h-5/6">
       <p className="border p-4 rounded-lg bg-gray-100">
         Telegram
         <br />

@@ -2,10 +2,13 @@
 // src/components/transaction/OutputSelection.tsx
 
 import React from 'react';
-import { CapacitorBarcodeScanner, CapacitorBarcodeScannerTypeHint } from '@capacitor/barcode-scanner';
+import {
+  CapacitorBarcodeScanner,
+  CapacitorBarcodeScannerTypeHint,
+} from '@capacitor/barcode-scanner';
 import { Toast } from '@capacitor/toast';
 import { FaCamera } from 'react-icons/fa';
-import { TransactionOutput } from '../../types/types'; // Adjust the path based on your project structure
+import { TransactionOutput, UTXO } from '../../types/types'; // Ensure UTXO type is defined
 import { shortenTxHash } from '../../utils/shortenHash';
 import { Network } from '../../redux/networkSlice';
 import { PREFIX, DUST } from '../../utils/constants'; // Import DUST
@@ -18,7 +21,7 @@ interface OutputSelectionProps {
   setTransferAmount: (amount: number) => void;
   tokenAmount: number;
   setTokenAmount: (amount: number) => void;
-  utxos: any[]; // Replace `any` with the appropriate UTXO type
+  utxos: UTXO[]; // Replaced `any` with `UTXO`
   selectedTokenCategory: string;
   setSelectedTokenCategory: (category: string) => void;
   addOutput: () => void;
@@ -74,27 +77,50 @@ const OutputSelection: React.FC<OutputSelectionProps> = ({
     setTokenAmount(value === '' ? 0 : Number(value));
   };
 
+  // // Function to check and request camera permissions
+  // const checkAndRequestPermissions = async (): Promise<boolean> => {
+  //   const permission = await CapacitorBarcodeScanner.checkPermission({
+  //     force: true,
+  //   });
+  //   if (permission.granted) {
+  //     return true;
+  //   } else {
+  //     await Toast.show({
+  //       text: 'Camera permission is required to scan QR codes.',
+  //     });
+  //     return false;
+  //   }
+  // };
+
   // Function to initiate barcode scanning
   const scanBarcode = async () => {
-    try {
-      // Check and request camera permission
-      const permission = await CapacitorBarcodeScanner.checkPermission({ force: true });
-      if (permission.granted) {
-        // Initiate barcode scanning with desired options
-        const result = await CapacitorBarcodeScanner.scanBarcode({
-          hint: CapacitorBarcodeScannerTypeHint.ALL,
-        });
+    // const hasPermission = true; //await checkAndRequestPermissions();
+    // if (!hasPermission) {
+    //   return;
+    // }
 
-        // If a scan result is obtained, set it as the recipient address
-        if (result && result.ScanResult) {
-          setRecipientAddress(result.ScanResult);
-        }
+    try {
+      // Initiate barcode scanning with desired options
+      const result = await CapacitorBarcodeScanner.scanBarcode({
+        hint: CapacitorBarcodeScannerTypeHint.ALL,
+      });
+
+      // If a scan result is obtained, set it as the recipient address
+      if (result && result.ScanResult) {
+        setRecipientAddress(result.ScanResult);
+        await Toast.show({
+          text: `Scanned: ${result.ScanResult}`,
+        });
       } else {
-        alert('Camera permission is required to scan QR codes.');
+        await Toast.show({
+          text: 'No QR code detected. Please try again.',
+        });
       }
     } catch (error) {
       console.error('Barcode scan error:', error);
-      alert('Failed to scan barcode. Please try again.');
+      await Toast.show({
+        text: 'Failed to scan QR code. Please ensure camera permissions are granted and try again.',
+      });
     }
   };
 
@@ -124,7 +150,12 @@ const OutputSelection: React.FC<OutputSelectionProps> = ({
             >
               <div className="flex justify-between w-full">
                 <span className="font-medium">Recipient:</span>
-                <span>{shortenTxHash(output.recipientAddress, PREFIX[currentNetwork].length)}</span>
+                <span>
+                  {shortenTxHash(
+                    output.recipientAddress,
+                    PREFIX[currentNetwork].length
+                  )}
+                </span>
               </div>
               <div className="flex justify-between w-full">
                 <span className="font-medium">Amount:</span>
@@ -220,7 +251,6 @@ const OutputSelection: React.FC<OutputSelectionProps> = ({
         <button
           onClick={handleAddOutput}
           className={`bg-blue-500 text-white py-2 px-4 rounded`}
-          // disabled={transferAmount < DUST}
         >
           Add Output
         </button>

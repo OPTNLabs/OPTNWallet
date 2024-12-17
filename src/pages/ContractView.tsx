@@ -1,27 +1,51 @@
-import { useState, useEffect } from 'react';
+// src/pages/ContractView.tsx
+
+import React, { useState, useEffect } from 'react';
 import { useSelector } from 'react-redux';
 import { useNavigate } from 'react-router-dom';
+import { TailSpin } from 'react-loader-spinner';
 import ContractManager from '../apis/ContractManager/ContractManager';
 import { hexString } from '../utils/hex';
 import { RootState } from '../redux/store';
-import RegularUTXOs from '../components/RegularUTXOs';
-import CashTokenUTXOs from '../components/CashTokenUTXOs';
 import parseInputValue from '../utils/parseInputValue';
 import AddressSelectionPopup from '../components/AddressSelectionPopup';
 import KeyService from '../services/KeyService';
 import { shortenTxHash } from '../utils/shortenHash';
 import { PREFIX } from '../utils/constants';
 import { Toast } from '@capacitor/toast';
+import Popup from '../components/transaction/Popup';
+
+// Import Barcode Scanner
+import {
+  CapacitorBarcodeScanner,
+  CapacitorBarcodeScannerTypeHint,
+} from '@capacitor/barcode-scanner';
+import { FaCamera } from 'react-icons/fa'; // Optional: If you want to use an icon for the scan button
+
+// type QRCodeType = 'address' | 'pubKey' | 'pkh';
 
 const ContractView = () => {
-  const [error, setError] = useState(null);
-  const [availableContracts, setAvailableContracts] = useState([]);
-  const [selectedContractFile, setSelectedContractFile] = useState('');
-  const [constructorArgs, setConstructorArgs] = useState([]);
-  const [inputValues, setInputValues] = useState({});
-  const [contractInstances, setContractInstances] = useState([]);
-  const [showAddressPopup, setShowAddressPopup] = useState(false);
-  const [currentArgName, setCurrentArgName] = useState('');
+  const [isLoading, setIsLoading] = useState<boolean>(false);
+  const [error, setError] = useState<string | null>(null);
+  const [availableContracts, setAvailableContracts] = useState<any[]>([]);
+  const [selectedContractFile, setSelectedContractFile] = useState<string>('');
+  const [constructorArgs, setConstructorArgs] = useState<any[]>([]);
+  const [inputValues, setInputValues] = useState<{ [key: string]: any }>({});
+  const [contractInstances, setContractInstances] = useState<any[]>([]);
+  const [showAddressPopup, setShowAddressPopup] = useState<boolean>(false);
+  const [currentArgName, setCurrentArgName] = useState<string>('');
+  const [showConstructorArgsPopup, setShowConstructorArgsPopup] =
+    useState<boolean>(false); // State for constructor args popup
+  const [showErrorPopup, setShowErrorPopup] = useState<boolean>(false); // New state for error popup
+  const [errorMessage, setErrorMessage] = useState<string>(''); // Error message content
+  // const [
+  //   // showScanButton,
+  //   setShowScanButton,
+  // ] = useState<{
+  //   [key: string]: boolean;
+  // }>({});
+  const [isScanning, setIsScanning] = useState<boolean>(false);
+
   const navigate = useNavigate();
   const wallet_id = useSelector(
     (state: RootState) => state.wallet_id.currentWalletId
@@ -39,7 +63,7 @@ const ContractView = () => {
           throw new Error('No available contracts found');
         }
         setAvailableContracts(contracts);
-      } catch (err) {
+      } catch (err: any) {
         console.error('Error loading available contracts:', err);
         setError(err.message);
       }
@@ -50,7 +74,7 @@ const ContractView = () => {
         const contractManager = ContractManager();
         const instances = await contractManager.fetchContractInstances();
         setContractInstances(instances);
-      } catch (err) {
+      } catch (err: any) {
         console.error('Error loading contract instances:', err);
         setError(err.message);
       }
@@ -72,7 +96,8 @@ const ContractView = () => {
             );
           }
           setConstructorArgs(artifact.constructorInputs || []);
-        } catch (err) {
+          setShowConstructorArgsPopup(true); // Open the constructor args popup
+        } catch (err: any) {
           console.error('Error loading contract details:', err);
           setError(err.message);
         }
@@ -82,7 +107,7 @@ const ContractView = () => {
     loadContractDetails();
   }, [selectedContractFile]);
 
-  const handleInputChange = (event) => {
+  const handleInputChange = (event: React.ChangeEvent<HTMLInputElement>) => {
     const { name, value } = event.target;
     setInputValues({ ...inputValues, [name]: value });
     // console.log(`Input changed: ${name} = ${value}`);
@@ -96,6 +121,9 @@ const ContractView = () => {
       });
     } catch (error) {
       console.error('Failed to copy address:', error);
+      await Toast.show({
+        text: 'Failed to copy address.',
+      });
     }
   };
 
@@ -125,7 +153,76 @@ const ContractView = () => {
     setCurrentArgName('');
   };
 
+  const scanBarcode = async () => {
+    try {
+      // Initiate barcode scanning with desired options
+      const result = await CapacitorBarcodeScanner.scanBarcode({
+        hint: CapacitorBarcodeScannerTypeHint.ALL,
+      });
+
+      // If a scan result is obtained, set it as the input value
+      if (result && result.ScanResult) {
+        // Optionally, validate the scan result based on the expected type
+        // For simplicity, assume the QR code contains the required value directly
+        const matchedArg = constructorArgs.find(
+          (arg) => arg.name === currentArgName
+        );
+        if (matchedArg) {
+          // let valueToSet = '';
+          // if (matchedArg.type === 'pubkey') {
+          //   valueToSet = hexString(selectedKey.publicKey);
+          // } else if (matchedArg.type === 'bytes20') {
+          //   valueToSet = hexString(selectedKey.pubkeyHash);
+          // }
+          setInputValues((prev) => ({
+            ...prev,
+            [currentArgName]: result.ScanResult,
+          }));
+          await Toast.show({
+            text: `Scanned: ${result.ScanResult}`,
+          });
+        }
+      } else {
+        await Toast.show({
+          text: 'No QR code detected. Please try again.',
+        });
+      }
+    } catch (error) {
+      console.error('Barcode scan error:', error);
+      await Toast.show({
+        text: 'Failed to scan QR code. Please ensure camera permissions are granted and try again.',
+      });
+    } finally {
+      setCurrentArgName('');
+      setIsScanning(false); // End scanning
+    }
+  };
+
+  const validateConstructorArgs = (): boolean => {
+    for (const arg of constructorArgs) {
+      if (
+        inputValues[arg.name] === undefined ||
+        inputValues[arg.name] === null ||
+        inputValues[arg.name].toString().trim() === ''
+      ) {
+        setErrorMessage(
+          `Please provide a value for "${arg.name}" (${arg.type}).`
+        );
+        setShowErrorPopup(true);
+        return false;
+      }
+    }
+    return true;
+  };
+
   const createContract = async () => {
+    // Validate constructor arguments
+    if (!validateConstructorArgs()) {
+      return;
+    }
+
+    setIsLoading(true); // Start loading
+
     try {
       const contractManager = ContractManager();
       const args =
@@ -140,36 +237,53 @@ const ContractView = () => {
         throw new Error('All constructor arguments must be provided');
       }
 
-      // const contract = await contractManager.createContract(
-      //   selectedContractFile,
-      //   args,
-      //   currentNetwork
-      // );
-      // console.log(contract);
+      await contractManager.createContract(
+        selectedContractFile,
+        args,
+        currentNetwork
+      );
 
       const instances = await contractManager.fetchContractInstances();
       setContractInstances(instances);
-    } catch (err) {
+      setSelectedContractFile('');
+      setConstructorArgs([]);
+      setInputValues({});
+      setShowConstructorArgsPopup(false); // Close the popup after creation
+
+      await Toast.show({
+        text: 'Contract created successfully!',
+      });
+    } catch (err: any) {
       console.error('Error creating contract:', err);
-      setError(err.message);
+      setErrorMessage(`Failed to create contract: ${err.message}`);
+      setShowErrorPopup(true); // Show error popup
+    } finally {
+      setIsLoading(false); // Stop loading
     }
   };
 
-  const deleteContract = async (contractId) => {
+  const deleteContract = async (contractId: string) => {
     try {
       const contractManager = ContractManager();
-      await contractManager.deleteContractInstance(contractId);
+      await contractManager.deleteContractInstance(parseInt(contractId));
 
       const instances = await contractManager.fetchContractInstances();
       setContractInstances(instances);
-    } catch (err) {
+
+      await Toast.show({
+        text: 'Contract deleted successfully!',
+      });
+    } catch (err: any) {
       console.error('Error deleting contract:', err);
       setError(err.message);
+      await Toast.show({
+        text: 'Failed to delete contract.',
+      });
     }
   };
 
   // Update a contract instance's UTXOs and balance
-  const updateContract = async (address) => {
+  const updateContract = async (address: string) => {
     try {
       const contractManager = ContractManager();
       const { added, removed } =
@@ -182,9 +296,12 @@ const ContractView = () => {
         await contractManager.getContractInstanceByAddress(address);
 
       // Calculate the total balance by summing all the UTXO amounts
-      const totalBalance = updatedContractInstance.utxos.reduce((sum, utxo) => {
-        return sum + BigInt(utxo.amount);
-      }, BigInt(0));
+      const totalBalance = updatedContractInstance.utxos.reduce(
+        (sum: bigint, utxo: any) => {
+          return sum + BigInt(utxo.amount);
+        },
+        BigInt(0)
+      );
 
       // Update the state with the new UTXOs and calculated balance
       setContractInstances((prevInstances) =>
@@ -198,10 +315,22 @@ const ContractView = () => {
             : instance
         )
       );
-    } catch (err) {
+
+      await Toast.show({
+        text: 'Contract updated successfully!',
+      });
+    } catch (err: any) {
       console.error('Error updating UTXOs and balance:', err);
       setError(err.message);
+      await Toast.show({
+        text: 'Failed to update contract.',
+      });
     }
+  };
+
+  const handleErrorPopupClose = () => {
+    setShowErrorPopup(false);
+    setErrorMessage('');
   };
 
   if (error) {
@@ -236,8 +365,18 @@ const ContractView = () => {
         ))}
       </select>
 
-      {constructorArgs.length > 0 && (
-        <div className="mb-4">
+      {/* Render the Constructor Arguments inside a Popup */}
+      {showConstructorArgsPopup && (
+        <Popup
+          closePopups={() => {
+            setShowConstructorArgsPopup(false);
+            setSelectedContractFile('');
+            setConstructorArgs([]);
+            setInputValues({});
+            // setShowScanButton({});
+            setCurrentArgName('');
+          }}
+        >
           <h2 className="text-lg font-semibold mb-2">Constructor Arguments</h2>
           {constructorArgs.map((arg, index) => {
             const isAddressType =
@@ -250,20 +389,38 @@ const ContractView = () => {
                 </label>
                 {isAddressType ? (
                   <>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setCurrentArgName(arg.name);
-                        setShowAddressPopup(true);
-                      }}
-                      className="bg-blue-500 text-white py-2 px-4 rounded mb-2"
-                    >
-                      Select Address
-                    </button>
+                    <div className="flex items-center">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setCurrentArgName(arg.name);
+                          setShowAddressPopup(true);
+                        }}
+                        className="bg-blue-500 text-white py-2 px-4 rounded mr-2"
+                        disabled={isScanning} // Disable button during scan
+                        aria-label={`Select Address for ${arg.name}`}
+                      >
+                        Select Address
+                      </button>
+                      <button
+                        type="button"
+                        onClick={scanBarcode}
+                        className={`bg-green-500 text-white py-2 px-4 rounded ${
+                          isScanning ? 'opacity-50 cursor-not-allowed' : ''
+                        }`}
+                        disabled={isScanning}
+                        aria-label={`Scan QR Code for ${arg.name}`}
+                      >
+                        <FaCamera /> {/* Optional: Camera icon */}
+                      </button>
+                    </div>
                     {inputValues[arg.name] && (
                       <div className="mt-2">
                         Selected {arg.type}:{' '}
-                        {shortenTxHash(inputValues[arg.name])}
+                        {shortenTxHash(
+                          inputValues[arg.name],
+                          PREFIX[currentNetwork].length
+                        )}
                       </div>
                     )}
                   </>
@@ -273,32 +430,35 @@ const ContractView = () => {
                     name={arg.name}
                     value={inputValues[arg.name] || ''}
                     onChange={handleInputChange}
-                    className="border p-2 w-full"
+                    className="border p-2 w-full rounded-md"
+                    placeholder={`Enter ${arg.name}`}
                   />
                 )}
               </div>
             );
           })}
-        </div>
-      )}
 
-      {selectedContractFile && (
-        <button
-          onClick={createContract}
-          className="bg-blue-500 text-white py-2 px-4 rounded mb-4"
-        >
-          Create Contract
-        </button>
-      )}
-
-      {showAddressPopup && (
-        <AddressSelectionPopup
-          onSelect={handleAddressSelect}
-          onClose={() => {
-            setShowAddressPopup(false);
-            setCurrentArgName('');
-          }}
-        />
+          <button
+            onClick={createContract}
+            className={`bg-blue-500 text-white py-2 px-4 rounded mb-4 flex items-center justify-center ${
+              isLoading ? 'cursor-not-allowed opacity-50' : ''
+            }`}
+            disabled={isLoading} // Disable the button while loading
+          >
+            {isLoading ? (
+              <TailSpin
+                visible={true}
+                height="24"
+                width="24"
+                color="white" // Match the spinner color with the button text color
+                ariaLabel="tail-spin-loading"
+                radius="1"
+              />
+            ) : (
+              'Create Contract'
+            )}
+          </button>
+        </Popup>
       )}
 
       {contractInstances.length > 0 && (
@@ -316,7 +476,7 @@ const ContractView = () => {
                       <strong>Contract Name:</strong> {instance.contract_name}
                     </div>
                     <div
-                      className="mb-2"
+                      className="mb-2 cursor-pointer"
                       onClick={() => handleCopyAddress(instance.address)}
                     >
                       <strong>Address:</strong>{' '}
@@ -326,7 +486,7 @@ const ContractView = () => {
                       )}
                     </div>
                     <div
-                      className="mb-2"
+                      className="mb-2 cursor-pointer"
                       onClick={() => handleCopyAddress(instance.token_address)}
                     >
                       <strong>Token Address:</strong>{' '}
@@ -335,7 +495,9 @@ const ContractView = () => {
                         PREFIX[currentNetwork].length
                       )}
                     </div>
-                    {/* <div className="mb-2">
+                    {/* Additional Contract Details (Optional) */}
+                    {/* 
+                    <div className="mb-2">
                       <strong>Opcount:</strong> {instance.opcount}
                     </div>
                     <div className="mb-2">
@@ -344,13 +506,16 @@ const ContractView = () => {
                     <div className="mb-2">
                       <strong>Bytecode:</strong>{' '}
                       {shortenTxHash(instance.bytecode)}
-                    </div> */}
+                    </div> 
+                    */}
                     <div className="mb-2">
                       <strong>Balance:</strong> {instance.balance.toString()}{' '}
                       satoshis
                     </div>
                   </div>
 
+                  {/* Additional Contract Information (Optional) */}
+                  {/* 
                   <div className="mb-2">
                     <strong>UTXOs:</strong>
                     <RegularUTXOs
@@ -379,7 +544,8 @@ const ContractView = () => {
                         }))}
                       loading={false}
                     />
-                  </div>
+                  </div> 
+                  */}
                   <button
                     onClick={() => updateContract(instance.address)}
                     className="bg-green-500 text-white py-2 px-4 my-2 rounded"
@@ -405,6 +571,31 @@ const ContractView = () => {
       >
         Go Back
       </button>
+
+      {/* Address Selection Popup */}
+      {showAddressPopup && (
+        <AddressSelectionPopup
+          onSelect={handleAddressSelect}
+          onClose={() => {
+            setShowAddressPopup(false);
+            setCurrentArgName('');
+          }}
+        />
+      )}
+
+      {/* Error Popup */}
+      {showErrorPopup && (
+        <Popup closePopups={handleErrorPopupClose}>
+          <h2 className="text-lg font-semibold mb-2">Error</h2>
+          <p className="mb-4">{errorMessage}</p>
+          <button
+            onClick={handleErrorPopupClose}
+            className="mt-4 bg-red-500 text-white py-2 px-4 rounded"
+          >
+            Close
+          </button>
+        </Popup>
+      )}
     </div>
   );
 };

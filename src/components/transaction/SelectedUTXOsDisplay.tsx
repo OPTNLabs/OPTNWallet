@@ -27,17 +27,17 @@ const SelectedUTXOsDisplay: React.FC<SelectedUTXOsDisplayProps> = ({
           <span className="w-full">{`Address: ${utxo.address}`}</span>
           <span className="w-full">{`Amount: ${utxo.amount}`}</span>
           <span className="w-full">{`Tx Hash: ${utxo.tx_hash}`}</span>
-          <span className="w-full">{`Position: ${utxo.tx_pos}`}</span>
-          <span className="w-full">{`Height: ${utxo.height}`}</span>
+          {/* <span className="w-full">{`Position: ${utxo.tx_pos}`}</span>
+          <span className="w-full">{`Height: ${utxo.height}`}</span> */}
           {/* **Display New Fields (Optional) */}
           {utxo.contractFunction && (
             <span className="w-full">{`Contract Function: ${utxo.contractFunction}`}</span>
           )}
-          {utxo.contractFunctionInputs && (
+          {/* {utxo.contractFunctionInputs && (
             <span className="w-full">{`Contract Function Inputs: ${JSON.stringify(
               utxo.contractFunctionInputs
             )}`}</span>
-          )}
+          )} */}
           {!utxo.unlocker && utxo.abi && (
             <span className="text-red-500 w-full">Missing unlocker!</span>
           )}
