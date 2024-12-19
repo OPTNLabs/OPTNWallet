@@ -1,3 +1,5 @@
+// src/components/SelectContractFunctionPopup.tsx
+
 import React, { useState, useEffect } from 'react';
 import { useDispatch, useSelector } from 'react-redux';
 import AddressSelectionPopup from './AddressSelectionPopup';
@@ -8,9 +10,16 @@ import {
 } from '../redux/contractSlice'; // Importing actions from contractSlice
 import { encodePrivateKeyWif } from '@bitauth/libauth';
 import { RootState, AppDispatch } from '../redux/store';
-import { hexString } from '../utils/hex';
+import { hexString, hexToUint8Array } from '../utils/hex';
 import KeyService from '../services/KeyService';
 import { shortenTxHash } from '../utils/shortenHash';
+import {
+  CapacitorBarcodeScanner,
+  CapacitorBarcodeScannerTypeHint,
+} from '@capacitor/barcode-scanner';
+import { FaCamera } from 'react-icons/fa'; // Optional: If you want to use an icon for the scan button
+import { Toast } from '@capacitor/toast';
+// import { PREFIX } from '../utils/constants';
 
 interface AbiInput {
   name: string;
@@ -32,11 +41,12 @@ const SelectContractFunctionPopup: React.FC<
   const [functions, setFunctions] = useState<any[]>([]);
   const [selectedFunction, setSelectedFunctionState] = useState<string>('');
   const [inputs, setInputsState] = useState<AbiInput[]>([]);
-  const [inputValues, setInputValuesState] = useState<{
+  const [inputValuesState, setInputValuesState] = useState<{
     [key: string]: string;
   }>({});
   const [showAddressPopup, setShowAddressPopup] = useState<boolean>(false);
   const [selectedInput, setSelectedInput] = useState<AbiInput | null>(null);
+  const [isScanning, setIsScanning] = useState<boolean>(false);
 
   const dispatch: AppDispatch = useDispatch();
 
@@ -44,6 +54,11 @@ const SelectContractFunctionPopup: React.FC<
   const walletId = useSelector(
     (state: RootState) => state.wallet_id.currentWalletId
   );
+
+  // Synchronize local inputValuesState with Redux's inputValues
+  useEffect(() => {
+    dispatch(setInputValues(inputValuesState));
+  }, [inputValuesState, dispatch]);
 
   // Fetch the ABI functions
   useEffect(() => {
@@ -71,93 +86,172 @@ const SelectContractFunctionPopup: React.FC<
       (item) => item.name === selectedFunctionName
     );
     setInputsState(functionAbi?.inputs || []);
-    setInputValuesState({});
+    setInputValuesState({}); // Reset input values when function changes
   };
 
   const handleInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const { name, value } = e.target;
     setInputValuesState((prev) => ({ ...prev, [name]: value }));
+    // Dispatch is handled by useEffect
   };
 
-  const handleSelect = () => {
-    // console.log('Selected function:', selectedFunction);
-    // console.log('Inputs:', inputs);
-    // console.log('Input values before dispatch:', inputValues);
-
-    // Prepare the input values object
-    const inputValuesObject = inputs.reduce<{ [key: string]: string }>(
-      (acc, input) => {
-        acc[input.name] = inputValues[input.name] || '';
-        return acc;
-      },
-      {}
-    );
-
-    // console.log('Dispatching input values object:', inputValuesObject);
-
+  const handleAddressSelect = async (address: string) => {
+    // Fetch and set the appropriate input value based on the selected input's type
     try {
-      dispatch(setSelectedFunction(selectedFunction)); // Dispatch the selected function
-      dispatch(setInputs(inputs)); // Dispatch the inputs (ABI details)
-      dispatch(setInputValues(inputValuesObject)); // Dispatch the input values
-
-      onFunctionSelect(selectedFunction, inputValuesObject); // Pass the data to the parent component
-
-      // **Add Logging After Dispatch and Selection**
-      // console.log('Dispatched contract function and inputs.');
-
-      // Close the popup
-      onClose();
-    } catch (error) {
-      console.error('Error occurred during dispatch or handling:', error);
-    }
-  };
-
-  const fetchKeysForAddress = async (address: string) => {
-    try {
-      if (walletId === 0) {
-        throw new Error('Invalid walletId');
-      }
+      if (!selectedInput) return;
 
       const keys = await KeyService.retrieveKeys(walletId);
       const selectedKey = keys.find((key) => key.address === address);
 
       if (selectedKey) {
-        const publicKeyHex = hexString(selectedKey.publicKey);
-        const privateKeyWif = encodePrivateKeyWif(
-          selectedKey.privateKey,
-          'testnet'
-        );
+        let valueToSet = '';
+        if (selectedInput.type === 'pubkey') {
+          valueToSet = hexString(selectedKey.publicKey);
+        } else if (selectedInput.type === 'bytes20') {
+          valueToSet = hexString(selectedKey.pubkeyHash);
+        } else if (selectedInput.type === 'sig') {
+          // const privateKeyBytes = hexString(selectedKey.privateKey);
+          valueToSet = encodePrivateKeyWif(selectedKey.privateKey, 'testnet'); // Adjust network as needed
+        }
 
-        // console.log('Fetched publicKeyHex:', publicKeyHex);
-        // console.log('Fetched privateKeyWif:', privateKeyWif);
+        setInputValuesState((prev) => ({
+          ...prev,
+          [selectedInput.name]: valueToSet,
+        }));
 
-        setInputValuesState((prev) => {
-          const updatedValues = { ...prev };
-
-          // Use the "type" field to determine if the input is a public key or a signature
-          if (selectedInput?.type === 'pubkey') {
-            updatedValues[selectedInput.name] = publicKeyHex; // Set publicKeyHex for 'pubkey'
-          } else if (selectedInput?.type === 'sig') {
-            updatedValues[selectedInput.name] = privateKeyWif; // Set privateKeyWif for 'sig'
-          }
-
-          // Dispatch the updated values to the Redux store
-          dispatch(setInputValues(updatedValues));
-
-          return updatedValues;
+        await Toast.show({
+          text: `Set ${selectedInput.name}: ${valueToSet}`,
         });
       } else {
         console.error(`No keys found for address: ${address}`);
+        await Toast.show({
+          text: `No keys found for address: ${address}`,
+        });
       }
     } catch (error) {
       console.error('Error fetching keys:', error);
+      await Toast.show({
+        text: 'Failed to fetch keys.',
+      });
+    }
+
+    setShowAddressPopup(false);
+    setSelectedInput(null);
+  };
+
+  const scanBarcode = async (argName: string, argType: string) => {
+    if (isScanning) {
+      // Prevent multiple scans at the same time
+      return;
+    }
+
+    setIsScanning(true); // Start scanning
+
+    try {
+      // Initiate barcode scanning with desired options
+      const result = await CapacitorBarcodeScanner.scanBarcode({
+        hint: CapacitorBarcodeScannerTypeHint.ALL,
+        cameraDirection: 1, // Use BACK camera; change if needed
+      });
+
+      // If a scan result is obtained, set it as the input value
+      if (result && result.ScanResult) {
+        const scannedValue = result.ScanResult.trim();
+
+        // Validate the scan result based on the expected type
+        const isValidHex = (str: string) => /^[0-9a-fA-F]+$/.test(str);
+
+        if (argType === 'sig') {
+          if (!isValidHex(scannedValue)) {
+            await Toast.show({
+              text: `Invalid ${argType} format. Please scan a valid QR code.`,
+            });
+          } else {
+            try {
+              // Convert hex string to Uint8Array
+              // Encode to WIF
+              const wif = encodePrivateKeyWif(
+                hexToUint8Array(scannedValue),
+                'testnet'
+              ); // Adjust network as needed
+
+              setInputValuesState((prev) => ({
+                ...prev,
+                [argName]: wif,
+              }));
+
+              await Toast.show({
+                text: `Scanned and set ${argName}: ${wif}`,
+              });
+            } catch (error) {
+              console.error('Failed to encode private key to WIF:', error);
+              await Toast.show({
+                text: `Failed to process ${argName}.`,
+              });
+            }
+          }
+        } else if (argType === 'pubkey' || argType === 'bytes20') {
+          if (!isValidHex(scannedValue)) {
+            await Toast.show({
+              text: `Invalid ${argType} format. Please scan a valid QR code.`,
+            });
+          } else {
+            setInputValuesState((prev) => ({
+              ...prev,
+              [argName]: scannedValue,
+            }));
+            await Toast.show({
+              text: `Scanned and set ${argName}: ${scannedValue}`,
+            });
+          }
+        } else {
+          // Handle other types if necessary
+          setInputValuesState((prev) => ({
+            ...prev,
+            [argName]: scannedValue,
+          }));
+          await Toast.show({
+            text: `Scanned and set ${argName}: ${scannedValue}`,
+          });
+        }
+      } else {
+        await Toast.show({
+          text: 'No QR code detected. Please try again.',
+        });
+      }
+    } catch (error) {
+      console.error('Barcode scan error:', error);
+      await Toast.show({
+        text: 'Failed to scan QR code. Please ensure camera permissions are granted and try again.',
+      });
+    } finally {
+      setShowAddressPopup(false);
+      setSelectedInput(null);
+      setIsScanning(false); // End scanning
     }
   };
 
-  const handleAddressSelect = (address: string) => {
-    // console.log('Address clicked:', address);
-    fetchKeysForAddress(address);
-    setShowAddressPopup(false);
+  const handleSelect = () => {
+    // Prepare the input values object
+    const inputValuesObject = inputs.reduce<{ [key: string]: string }>(
+      (acc, input) => {
+        acc[input.name] = inputValuesState[input.name] || '';
+        return acc;
+      },
+      {}
+    );
+
+    try {
+      dispatch(setSelectedFunction(selectedFunction)); // Dispatch the selected function
+      dispatch(setInputs(inputs)); // Dispatch the inputs (ABI details)
+      // No need to dispatch setInputValues here; it's handled by useEffect
+
+      onFunctionSelect(selectedFunction, inputValuesObject); // Pass the data to the parent component
+
+      onClose(); // Close the popup
+    } catch (error) {
+      console.error('Error occurred during dispatch or handling:', error);
+    }
   };
 
   const openAddressPopup = (input: AbiInput) => {
@@ -166,11 +260,11 @@ const SelectContractFunctionPopup: React.FC<
   };
 
   return (
-    <div className="fixed inset-0 bg-gray-500 bg-opacity-75 flex items-center justify-center">
-      <div className="bg-white p-6 rounded shadow-lg w-96">
-        <h2 className="text-xl font-semibold mb-4">Select a function</h2>
+    <div className="fixed inset-0 bg-gray-500 bg-opacity-75 flex items-center justify-center z-50">
+      <div className="bg-white p-6 rounded shadow-lg w-96 max-h-screen overflow-y-auto">
+        <h2 className="text-xl font-semibold mb-4">Select a Function</h2>
         <select
-          className="border p-2 w-full mb-4"
+          className="border p-2 w-full mb-4 rounded-md"
           value={selectedFunction}
           onChange={handleFunctionSelect}
         >
@@ -183,33 +277,68 @@ const SelectContractFunctionPopup: React.FC<
         </select>
         <div className="mb-4">
           {Array.isArray(inputs) &&
-            inputs.map((input, index) => (
-              <div key={index} className="mb-2">
-                <label className="block text-sm font-medium text-gray-700">
-                  {input.name} ({input.type})
-                </label>
-                <input
-                  type="text"
-                  name={input.name}
-                  value={shortenTxHash(inputValues[input.name]) || ''}
-                  onChange={handleInputChange}
-                  className="border p-2 w-full"
-                />
-                {(input.type === 'pubkey' || input.type === 'sig') && (
-                  <button
-                    className="bg-blue-500 text-white py-1 px-2 rounded mt-2"
-                    onClick={() => openAddressPopup(input)} // Pass the entire AbiInput object
-                  >
-                    Select {input.type}
-                  </button>
-                )}
-              </div>
-            ))}
+            inputs.map((input, index) => {
+              const isAddressType =
+                input.type === 'sig' || input.type === 'pubkey';
+
+              return (
+                <div key={index} className="mb-4">
+                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                    {input.name} ({input.type})
+                  </label>
+                  {isAddressType ? (
+                    <>
+                      <div className="flex items-center">
+                        <button
+                          type="button"
+                          onClick={() => openAddressPopup(input)}
+                          className="bg-blue-500 text-white py-2 px-4 rounded mr-2 flex-1"
+                          disabled={isScanning} // Disable button during scan
+                          aria-label={`Select Address for ${input.name}`}
+                        >
+                          Select Address
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => scanBarcode(input.name, input.type)} // Pass arg.name and arg.type directly
+                          className={`bg-green-500 text-white py-2 px-4 rounded flex items-center justify-center ${
+                            isScanning ? 'opacity-50 cursor-not-allowed' : ''
+                          } flex-1`}
+                          disabled={isScanning}
+                          aria-label={`Scan QR Code for ${input.name}`}
+                        >
+                          <FaCamera className="mr-1" /> Scan
+                        </button>
+                      </div>
+                      {inputValuesState[input.name] && (
+                        <div className="mt-2 text-sm text-gray-600">
+                          Selected {input.type}:{' '}
+                          {shortenTxHash(
+                            inputValuesState[input.name]
+                            // PREFIX['testnet'].length // Adjust 'testnet' based on your network
+                          )}
+                        </div>
+                      )}
+                    </>
+                  ) : (
+                    <input
+                      type="text"
+                      name={input.name}
+                      value={inputValuesState[input.name] || ''}
+                      onChange={handleInputChange}
+                      className="border p-2 w-full rounded-md"
+                      placeholder={`Enter ${input.name}`}
+                    />
+                  )}
+                </div>
+              );
+            })}
         </div>
         <div className="flex justify-end">
           <button
             className="bg-blue-500 text-white py-2 px-4 rounded mr-2"
             onClick={handleSelect}
+            disabled={!selectedFunction} // Disable if no function is selected
           >
             Select
           </button>
@@ -220,10 +349,13 @@ const SelectContractFunctionPopup: React.FC<
             Cancel
           </button>
         </div>
-        {showAddressPopup && (
+        {showAddressPopup && selectedInput && (
           <AddressSelectionPopup
             onSelect={handleAddressSelect}
-            onClose={() => setShowAddressPopup(false)}
+            onClose={() => {
+              setShowAddressPopup(false);
+              setSelectedInput(null);
+            }}
           />
         )}
       </div>

@@ -38,12 +38,6 @@ const ContractView = () => {
     useState<boolean>(false); // State for constructor args popup
   const [showErrorPopup, setShowErrorPopup] = useState<boolean>(false); // New state for error popup
   const [errorMessage, setErrorMessage] = useState<string>(''); // Error message content
-  // const [
-  //   // showScanButton,
-  //   setShowScanButton,
-  // ] = useState<{
-  //   [key: string]: boolean;
-  // }>({});
   const [isScanning, setIsScanning] = useState<boolean>(false);
 
   const navigate = useNavigate();
@@ -110,7 +104,8 @@ const ContractView = () => {
   const handleInputChange = (event: React.ChangeEvent<HTMLInputElement>) => {
     const { name, value } = event.target;
     setInputValues({ ...inputValues, [name]: value });
-    // console.log(`Input changed: ${name} = ${value}`);
+    // Optional: Debugging
+    console.log(`Input changed: ${name} = ${value}`);
   };
 
   const handleCopyAddress = async (address: string) => {
@@ -147,41 +142,44 @@ const ContractView = () => {
         }
 
         setInputValues({ ...inputValues, [currentArgName]: valueToSet });
+
+        // Optional: Debugging
+        console.log(`Set inputValues for ${currentArgName}: ${valueToSet}`);
       }
     }
     setShowAddressPopup(false);
     setCurrentArgName('');
   };
 
-  const scanBarcode = async () => {
+  const scanBarcode = async (argName: string) => {
+    if (isScanning) {
+      // Prevent multiple scans at the same time
+      return;
+    }
+
+    setIsScanning(true); // Start scanning
+
     try {
       // Initiate barcode scanning with desired options
       const result = await CapacitorBarcodeScanner.scanBarcode({
         hint: CapacitorBarcodeScannerTypeHint.ALL,
+        cameraDirection: 1, // Use BACK camera; change if needed
       });
 
       // If a scan result is obtained, set it as the input value
       if (result && result.ScanResult) {
         // Optionally, validate the scan result based on the expected type
         // For simplicity, assume the QR code contains the required value directly
-        const matchedArg = constructorArgs.find(
-          (arg) => arg.name === currentArgName
-        );
-        if (matchedArg) {
-          // let valueToSet = '';
-          // if (matchedArg.type === 'pubkey') {
-          //   valueToSet = hexString(selectedKey.publicKey);
-          // } else if (matchedArg.type === 'bytes20') {
-          //   valueToSet = hexString(selectedKey.pubkeyHash);
-          // }
-          setInputValues((prev) => ({
-            ...prev,
-            [currentArgName]: result.ScanResult,
-          }));
-          await Toast.show({
-            text: `Scanned: ${result.ScanResult}`,
-          });
-        }
+        setInputValues((prev) => ({
+          ...prev,
+          [argName]: result.ScanResult,
+        }));
+        await Toast.show({
+          text: `Scanned: ${result.ScanResult}`,
+        });
+
+        // Optional: Debugging
+        console.log(`Scanned value for ${argName}: ${result.ScanResult}`);
       } else {
         await Toast.show({
           text: 'No QR code detected. Please try again.',
@@ -193,7 +191,6 @@ const ContractView = () => {
         text: 'Failed to scan QR code. Please ensure camera permissions are granted and try again.',
       });
     } finally {
-      setCurrentArgName('');
       setIsScanning(false); // End scanning
     }
   };
@@ -373,7 +370,6 @@ const ContractView = () => {
             setSelectedContractFile('');
             setConstructorArgs([]);
             setInputValues({});
-            // setShowScanButton({});
             setCurrentArgName('');
           }}
         >
@@ -404,7 +400,7 @@ const ContractView = () => {
                       </button>
                       <button
                         type="button"
-                        onClick={scanBarcode}
+                        onClick={() => scanBarcode(arg.name)} // Pass arg.name directly
                         className={`bg-green-500 text-white py-2 px-4 rounded ${
                           isScanning ? 'opacity-50 cursor-not-allowed' : ''
                         }`}
