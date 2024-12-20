@@ -392,7 +392,7 @@ const ContractView = () => {
                           setCurrentArgName(arg.name);
                           setShowAddressPopup(true);
                         }}
-                        className="bg-blue-500 text-white py-2 px-4 rounded mr-2"
+                        className="bg-blue-500 font-bold text-white py-2 px-4 rounded mr-2"
                         disabled={isScanning} // Disable button during scan
                         aria-label={`Select Address for ${arg.name}`}
                       >
@@ -451,7 +451,7 @@ const ContractView = () => {
                 radius="1"
               />
             ) : (
-              'Create Contract'
+              <div className="font-bold">Create Contract</div>
             )}
           </button>
         </Popup>
@@ -544,13 +544,13 @@ const ContractView = () => {
                   */}
                   <button
                     onClick={() => updateContract(instance.address)}
-                    className="bg-green-500 text-white py-2 px-4 my-2 rounded"
+                    className="bg-green-500 font-bold text-white py-2 px-4 my-2 rounded"
                   >
                     Update
                   </button>
                   <button
                     onClick={() => deleteContract(instance.id)}
-                    className="bg-red-500 text-white py-2 px-4 my-2 rounded"
+                    className="bg-red-500 font-bold text-white py-2 px-4 my-2 rounded"
                   >
                     Delete
                   </button>
@@ -563,7 +563,7 @@ const ContractView = () => {
 
       <button
         onClick={returnHome}
-        className="w-full bg-red-500 text-white py-2 px-4 rounded-md hover:bg-red-600 transition duration-300 my-2"
+        className="w-full bg-red-500 font-bold text-white py-2 px-4 rounded-md hover:bg-red-600 transition duration-300 my-2"
       >
         Go Back
       </button>
@@ -586,7 +586,7 @@ const ContractView = () => {
           <p className="mb-4">{errorMessage}</p>
           <button
             onClick={handleErrorPopupClose}
-            className="mt-4 bg-red-500 text-white py-2 px-4 rounded"
+            className="mt-4 bg-red-500 font-bold text-white py-2 px-4 rounded"
           >
             Close
           </button>

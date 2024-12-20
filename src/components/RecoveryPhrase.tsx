@@ -35,7 +35,7 @@ const RecoveryPhrase = () => {
         {!isRevealed ? (
           <button
             onClick={handleReveal}
-            className="bg-blue-500 hover:bg-blue-600 text-white font-semibold py-2 px-4 rounded-lg shadow-md transition duration-300"
+            className="bg-blue-500 hover:bg-blue-600 text-white font-bold py-2 px-4 rounded-lg shadow-md transition duration-300"
           >
             Reveal Backup Phrase
           </button>
@@ -51,7 +51,7 @@ const RecoveryPhrase = () => {
             {/* Optional: Hide button */}
             <button
               onClick={handleHide}
-              className="mt-4 bg-red-500 hover:bg-red-600 text-white font-semibold py-2 px-4 rounded-lg shadow-md transition duration-300"
+              className="mt-4 bg-red-500 hover:bg-red-600 text-white font-bold py-2 px-4 rounded-lg shadow-md transition duration-300"
             >
               Hide Backup Phrase
             </button>

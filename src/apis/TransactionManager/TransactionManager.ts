@@ -211,6 +211,19 @@ export default function TransactionManager() {
       errorMsg: '',
     };
 
+    // Calculate total input and output amounts
+    const totalUtxoAmount = selectedUtxos.reduce(
+      (sum, utxo) => sum + BigInt(utxo.amount),
+      BigInt(0)
+    );
+    // console.log(`Total UTXO Amount: ${totalUtxoAmount}`);
+
+    const totalOutputAmount = outputs.reduce(
+      (sum, output) => sum + BigInt(output.amount),
+      BigInt(0)
+    );
+    // console.log(`Total Output Amount: ${totalOutputAmount}`);
+
     try {
       // Add a placeholder output for change to calculate bytecode size
       const placeholderOutput: TransactionOutput = {
@@ -227,28 +240,12 @@ export default function TransactionManager() {
       const transaction = await txBuilder.buildTransaction(
         selectedUtxos,
         txOutputsWithPlaceholder
-        // selectedFunction,
-        // contractFunctionInputs
       );
       // console.log('Transaction after first build:', transaction);
 
       if (transaction) {
         // Calculate bytecode size based on transaction length
         const bytecodeSize = transaction.length / 2;
-        returnObj.bytecodeSize = bytecodeSize;
-
-        // Calculate total input and output amounts
-        const totalUtxoAmount = selectedUtxos.reduce(
-          (sum, utxo) => sum + BigInt(utxo.amount),
-          BigInt(0)
-        );
-        // console.log(`Total UTXO Amount: ${totalUtxoAmount}`);
-
-        const totalOutputAmount = outputs.reduce(
-          (sum, output) => sum + BigInt(output.amount),
-          BigInt(0)
-        );
-        // console.log(`Total Output Amount: ${totalOutputAmount}`);
 
         // Calculate the remaining amount after outputs and bytecode
         const remainder =
@@ -292,6 +289,7 @@ export default function TransactionManager() {
         );
         // console.log('Final Transaction:', finalTransaction);
 
+        returnObj.bytecodeSize = finalTransaction.length / 2;
         returnObj.finalTransaction = finalTransaction;
         returnObj.finalOutputs = txOutputs;
 
