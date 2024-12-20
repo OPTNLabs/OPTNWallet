@@ -222,7 +222,7 @@ const TransactionHistory: React.FC = () => {
           <div className="flex justify-between">
             <button
               onClick={toggleSortOrder}
-              className="py-1 px-2 bg-gray-200 rounded md:py-2 md:px-4"
+              className="py-1 px-2 bg-gray-200 font-bold rounded md:py-2 md:px-4"
             >
               {sortOrder === 'asc' ? 'Ascending' : 'Descending'}
             </button>
@@ -238,7 +238,7 @@ const TransactionHistory: React.FC = () => {
           </div>
           <button
             onClick={fetchTransactionHistory}
-            className="py-1 px-2 bg-blue-500 text-white rounded md:py-2 md:px-4 self-center"
+            className="py-1 px-2 bg-blue-500 font-bold text-white rounded md:py-2 md:px-4 self-center"
             disabled={loading}
           >
             {loading ? 'Fetching...' : 'Fetch Transaction History'}
@@ -283,7 +283,7 @@ const TransactionHistory: React.FC = () => {
       >
         <button
           onClick={handleFirstPage}
-          className={`py-2 px-4 mx-1 rounded ${
+          className={`py-2 px-4 mx-1 font-bold rounded ${
             currentPage === 1 ? 'bg-gray-400' : 'bg-gray-200'
           }`}
           disabled={currentPage === 1}
@@ -292,7 +292,7 @@ const TransactionHistory: React.FC = () => {
         </button>
         <button
           onClick={handlePreviousPage}
-          className={`py-2 px-4 mx-1 rounded ${
+          className={`py-2 px-4 mx-1 font-bold rounded ${
             currentPage === 1 ? 'bg-gray-400' : 'bg-gray-200'
           }`}
           disabled={currentPage === 1}
@@ -304,7 +304,7 @@ const TransactionHistory: React.FC = () => {
         </div>
         <button
           onClick={handleNextPage}
-          className={`py-2 px-4 mx-1 rounded ${
+          className={`py-2 px-4 mx-1 font-bold rounded ${
             currentPage === totalPages ? 'bg-gray-400' : 'bg-gray-200'
           }`}
           disabled={currentPage === totalPages}
@@ -313,7 +313,7 @@ const TransactionHistory: React.FC = () => {
         </button>
         <button
           onClick={handleLastPage}
-          className={`py-2 px-4 mx-1 rounded ${
+          className={`py-2 px-4 mx-1 font-bold rounded ${
             currentPage === totalPages ? 'bg-gray-400' : 'bg-gray-200'
           }`}
           disabled={currentPage === totalPages}

@@ -32,6 +32,30 @@ const useHandleTransaction = (
   const dispatch = useDispatch();
 
   const handleBuildTransaction = async () => {
+    const inputSum: number = selectedUtxos.reduce((sum, utxo) => {
+      // Prefer 'amount' if it exists; otherwise, use 'value'
+      const utxoAmount: number = utxo.amount ?? utxo.value;
+      return sum + utxoAmount;
+    }, 0);
+
+    // Calculate the sum of transaction outputs
+    const outputSum: number = txOutputs.reduce((sum, txOutput) => {
+      // Ensure that txOutput.amount is a bigint
+      const txAmount: number = Number(txOutput.amount);
+      return sum + txAmount;
+    }, 0);
+
+    if (outputSum > inputSum || inputSum === 0) {
+      setErrorMessage(
+        'Error building transaction: ' + 'output amount exceeds inputs'
+      );
+      setRawTX('');
+      return;
+    }
+
+    setBytecodeSize(0);
+    setRawTX('');
+
     try {
       setLoading(true);
       // console.log('Building transaction with:');
@@ -59,7 +83,7 @@ const useHandleTransaction = (
           selectedUtxos
         );
 
-      if (!transaction) {
+      if (!transaction.finalTransaction) {
         setErrorMessage('Failed to build transaction.');
         setLoading(false);
         return;
@@ -67,11 +91,10 @@ const useHandleTransaction = (
 
       // console.log('Transaction Build Result:', transaction);
 
-      setBytecodeSize(transaction.bytecodeSize);
-      setRawTX(transaction.finalTransaction);
-
       // Update Redux outputs state with finalOutputs
       if (transaction.finalOutputs) {
+        setBytecodeSize(transaction.bytecodeSize);
+        setRawTX(transaction.finalTransaction);
         // Clear existing outputs
         dispatch(clearTransaction());
 
@@ -110,6 +133,7 @@ const useHandleTransaction = (
         setErrorMessage(transactionID.errorMessage);
       } else {
         // Reset both transaction and contract states if successful
+        setRawTX('');
         dispatch(resetTransactions());
         dispatch(resetContract());
       }

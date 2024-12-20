@@ -103,32 +103,32 @@ const Settings = () => {
         <div className="mb-4">
           <button
             onClick={() => handleOptionClick('recovery')}
-            className="block w-full py-2 px-4 border rounded-lg mb-2 mx-2"
+            className="block w-full font-bold py-2 px-4 border rounded-lg mb-2 mx-2"
           >
             Recovery Phrase
           </button>
           <button
             onClick={() => handleOptionClick('about')}
-            className="block w-full py-2 px-4 border rounded-lg mb-2 mx-2"
+            className="block w-full font-bold py-2 px-4 border rounded-lg mb-2 mx-2"
           >
             About
           </button>
           <button
             onClick={() => handleOptionClick('terms')}
-            className="block w-full py-2 px-4 border rounded-lg mb-2 mx-2"
+            className="block w-full font-bold py-2 px-4 border rounded-lg mb-2 mx-2"
           >
             Terms of Use
           </button>
           <button
             onClick={() => handleOptionClick('contact')}
-            className="block w-full py-2 px-4 border rounded-lg mb-2 mx-2"
+            className="block w-full font-bold py-2 px-4 border rounded-lg mb-2 mx-2"
           >
             Contact Us
           </button>
           {currentNetwork === Network.CHIPNET && (
             <button
               onClick={() => handleOptionClick('network')}
-              className="block w-full py-2 px-4 border rounded-lg mb-2 mx-2"
+              className="block w-full font-bold py-2 px-4 border rounded-lg mb-2 mx-2"
             >
               Faucet
             </button>

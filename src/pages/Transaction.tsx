@@ -36,6 +36,7 @@ import {
   // setWalletId,
   // selectNetworkType,
 } from '../redux/walletSlice';
+import SweepPaperWallet from '../components/SweepPaperWallet';
 
 const Transaction: React.FC = () => {
   // Removed local walletId state
@@ -81,6 +82,14 @@ const Transaction: React.FC = () => {
   const [showRegularUTXOsPopup, setShowRegularUTXOsPopup] = useState(false);
   const [showCashTokenUTXOsPopup, setShowCashTokenUTXOsPopup] = useState(false);
   const [showContractUTXOsPopup, setShowContractUTXOsPopup] = useState(false);
+  const [paperWalletUTXOs, setPaperWalletUTXOs] = useState<UTXO[]>([]);
+  // const [selectedPaperWalletUTXOs, setSelectedPaperWalletUTXOs] = useState<
+  //   UTXO[]
+  // >([]);
+  const [showPaperWalletUTXOsPopup, setShowPaperWalletUTXOsPopup] =
+    useState<boolean>(false);
+  const [showOutputs, setShowOutputs] = useState<boolean>(false);
+
   // const navigate = useNavigate();
   const dispatch: AppDispatch = useDispatch();
 
@@ -144,9 +153,16 @@ const Transaction: React.FC = () => {
    * @param utxo - The UTXO being clicked.
    */
   const handleUtxoClick = (utxo: UTXO) => {
-    console.log('Selected UTXOs before function inputs:', selectedUtxos);
-    const isSelected = selectedUtxos.some(
-      (selectedUtxo) => selectedUtxo.id === utxo.id
+    console.log('Selected UTXO:', utxo);
+    if (rawTX !== '' && txOutputs.length !== 0) {
+      handleRemoveOutput(-1);
+    }
+    setRawTX('');
+    const isSelected = selectedUtxos.some((selectedUtxo) =>
+      selectedUtxo.id
+        ? selectedUtxo.id === utxo.id
+        : selectedUtxo.tx_hash + selectedUtxo.tx_pos ===
+          utxo.tx_hash + utxo.tx_pos
     );
 
     if (isSelected) {
@@ -166,26 +182,42 @@ const Transaction: React.FC = () => {
         setCurrentContractABI(utxo.abi);
         setSelectedContractAddresses((prev) => [...prev, utxo.address]);
         return;
+      } else if (utxo.isPaperWallet) {
+        console.log('Selected a Paper Wallet UTXO:', paperWalletUTXOs);
+
+        // const isDuplicate = paperWalletUTXOs.some(
+        //   (existingUtxo) =>
+        //     existingUtxo.tx_hash === utxo.tx_hash &&
+        //     existingUtxo.tx_pos === utxo.tx_pos
+        // );
+        // if (!isDuplicate) {
+        // setSelectedPaperWalletUTXOs([...selectedPaperWalletUTXOs, utxo]);
+        setSelectedUtxos([...selectedUtxos, utxo]);
+        setSelectedAddresses((prev) => [...prev, utxo.address]);
+        setShowPaperWalletUTXOsPopup(true);
+        dispatch(resetContract());
+        console.log('Selected a Paper Wallet UTXO:', utxo);
+        // }
       } else {
-        const signatureTemplate = new SignatureTemplate(
-          utxo.privateKey!,
-          HashType.SIGHASH_ALL
-        );
-        const unlocker = signatureTemplate.unlockP2PKH();
+        // const signatureTemplate = new SignatureTemplate(
+        //   utxo.privateKey!,
+        //   HashType.SIGHASH_ALL
+        // );
+        // const unlocker = signatureTemplate.unlockP2PKH();
 
-        const updatedUtxo: UTXO = {
-          ...utxo,
-          unlocker,
-        };
+        // const updatedUtxo: UTXO = {
+        //   ...utxo,
+        //   unlocker,
+        // };
 
-        setSelectedUtxos([...selectedUtxos, updatedUtxo]);
+        setSelectedUtxos([...selectedUtxos, utxo]);
         setSelectedAddresses((prev) => [...prev, utxo.address]);
 
         // Reset contract state since a regular UTXO is being selected
         dispatch(resetContract());
 
         // **Add Logging Here**
-        console.log('Selected a non-contract UTXO:', updatedUtxo);
+        console.log('Selected a non-contract UTXO:', utxo);
       }
     }
 
@@ -197,6 +229,9 @@ const Transaction: React.FC = () => {
    */
   const handleAddOutput = () => {
     if (recipientAddress && (transferAmount || tokenAmount)) {
+      if (rawTX !== '' && txOutputs.length !== 0) {
+        handleRemoveOutput(-1);
+      }
       try {
         const newOutput = TransactionService.addOutput(
           recipientAddress,
@@ -230,6 +265,7 @@ const Transaction: React.FC = () => {
    * @param index - The index of the output to remove.
    */
   const handleRemoveOutput = (index: number) => {
+    setRawTX('');
     dispatch(removeTxOutput(index));
   };
 
@@ -275,6 +311,8 @@ const Transaction: React.FC = () => {
     setShowCashTokenUTXOsPopup(false);
     setShowPopup(false);
     setErrorMessage(null);
+    setShowPaperWalletUTXOsPopup(false);
+    setShowOutputs(false);
   };
 
   /**
@@ -351,7 +389,7 @@ const Transaction: React.FC = () => {
 
   // Calculate the total amount from selected UTXOs
   const totalSelectedUtxoAmount = selectedUtxos.reduce(
-    (sum, utxo) => sum + BigInt(utxo.amount),
+    (sum, utxo) => sum + BigInt(utxo.amount ? utxo.amount : utxo.value),
     BigInt(0)
   );
 
@@ -370,17 +408,23 @@ const Transaction: React.FC = () => {
         {/* Page Title */}
         <h1 className="text-2xl font-bold mb-4">Transaction Builder</h1>
 
-        {/* Address Selection Component */}
-        <AddressSelection
-          addresses={addresses}
-          selectedAddresses={selectedAddresses}
-          contractAddresses={contractAddresses}
-          selectedContractAddresses={selectedContractAddresses}
-          setSelectedContractAddresses={setSelectedContractAddresses}
-          selectedContractABIs={selectedContractABIs}
-          setSelectedContractABIs={setSelectedContractABIs}
-          setSelectedAddresses={setSelectedAddresses}
-        />
+        {/* Flex Container for AddressSelection and SweepPaperWallet */}
+        <div className="flex flex-wrap gap-2 mb-6 justify-center">
+          {/* Address Selection Component */}
+          <AddressSelection
+            addresses={addresses}
+            selectedAddresses={selectedAddresses}
+            contractAddresses={contractAddresses}
+            selectedContractAddresses={selectedContractAddresses}
+            setSelectedContractAddresses={setSelectedContractAddresses}
+            selectedContractABIs={selectedContractABIs}
+            setSelectedContractABIs={setSelectedContractABIs}
+            setSelectedAddresses={setSelectedAddresses}
+          />
+
+          {/* Sweep Paper Wallet Component */}
+          <SweepPaperWallet setPaperWalletUTXOs={setPaperWalletUTXOs} />
+        </div>
 
         {/* UTXO Selection Component */}
         <UTXOSelection
@@ -398,11 +442,19 @@ const Transaction: React.FC = () => {
           setShowCashTokenUTXOsPopup={setShowCashTokenUTXOsPopup}
           showContractUTXOsPopup={showContractUTXOsPopup}
           setShowContractUTXOsPopup={setShowContractUTXOsPopup}
+          paperWalletUTXOs={paperWalletUTXOs}
+          showPaperWalletUTXOsPopup={showPaperWalletUTXOsPopup}
+          setShowPaperWalletUTXOsPopup={setShowPaperWalletUTXOsPopup}
+          // selectedPaperWalletUTXOs={selectedPaperWalletUTXOs}
           closePopups={closePopups}
         />
 
         {/* Selected Transaction Inputs */}
-        <SelectedUTXOsDisplay selectedUtxos={selectedUtxos} />
+        <SelectedUTXOsDisplay
+          selectedUtxos={selectedUtxos}
+          totalSelectedUtxoAmount={totalSelectedUtxoAmount}
+          handleUtxoClick={handleUtxoClick}
+        />
 
         {/* Transaction Outputs Display */}
         {/* <TransactionOutputsDisplay
@@ -427,25 +479,29 @@ const Transaction: React.FC = () => {
           addOutput={handleAddOutput}
           changeAddress={changeAddress}
           setChangeAddress={setChangeAddress}
-        />
-
-        {/* Transaction Actions Component */}
-        <TransactionActions
-          totalSelectedUtxoAmount={totalSelectedUtxoAmount}
-          loading={loading}
-          buildTransaction={buildTransaction}
-          sendTransaction={sendTransaction}
-          // returnHome={returnHome}
+          showOutputs={showOutputs}
+          setShowOutputs={setShowOutputs}
+          closePopups={closePopups}
         />
 
         {/* Bytecode Size Display */}
-        {bytecodeSize !== null && (
+        {bytecodeSize !== 0 && rawTX !== '' && (
           <div className="mb-6 break-words whitespace-normal">
             <h3 className="text-lg font-semibold mb-2">
-              Bytecode Size: {bytecodeSize} bytes
+              Transaction Fee: {bytecodeSize} sats
             </h3>
           </div>
         )}
+
+        {/* Transaction Actions Component */}
+        <TransactionActions
+          // totalSelectedUtxoAmount={totalSelectedUtxoAmount}
+          loading={loading}
+          buildTransaction={buildTransaction}
+          sendTransaction={sendTransaction}
+          rawTX={rawTX}
+          // returnHome={returnHome}
+        />
 
         {/* Error and Status Popups */}
         <ErrorAndStatusPopups

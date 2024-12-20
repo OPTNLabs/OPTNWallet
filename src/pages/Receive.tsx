@@ -10,6 +10,7 @@ import { PREFIX } from '../utils/constants';
 import { selectCurrentNetwork } from '../redux/selectors/networkSelectors';
 import { QRCodeSVG } from 'qrcode.react';
 import { hexString } from '../utils/hex';
+import { encodePrivateKeyWif } from '@bitauth/libauth-v3';
 // import { FaCamera } from 'react-icons/fa'; // Optional: If you want to use an icon for the scan button
 
 type QRCodeType = 'address' | 'pubKey' | 'pkh' | 'pk';
@@ -78,7 +79,7 @@ const Receive: React.FC = () => {
     if (selectedKey) {
       const pubkey = hexString(selectedKey.publicKey);
       const pkh = hexString(selectedKey.pubkeyHash);
-      const pk = hexString(selectedKey.privateKey);
+      const pk = encodePrivateKeyWif(selectedKey.privateKey, 'testnet');
 
       setSelectedAddress(address);
       setSelectedPubKey(pubkey);
@@ -104,24 +105,24 @@ const Receive: React.FC = () => {
     }
   };
 
-  // const handleCopyPK = async () => {
-  //   const confirmCopy = window.confirm(
-  //     'Are you sure you want to copy your private key? Exposing it can compromise your funds.'
-  //   );
-  //   if (confirmCopy && selectedPK) {
-  //     try {
-  //       await navigator.clipboard.writeText(selectedPK);
-  //       await Toast.show({
-  //         text: 'Private Key copied to clipboard!',
-  //       });
-  //     } catch (error) {
-  //       console.error('Failed to copy private key:', error);
-  //       await Toast.show({
-  //         text: 'Failed to copy private key.',
-  //       });
-  //     }
-  //   }
-  // };
+  const handleCopyPK = async () => {
+    const confirmCopy = window.confirm(
+      'Are you sure you want to copy your private key? Exposing it can compromise your funds.'
+    );
+    if (confirmCopy && selectedPK) {
+      try {
+        await navigator.clipboard.writeText(selectedPK);
+        await Toast.show({
+          text: 'Private Key copied to clipboard!',
+        });
+      } catch (error) {
+        console.error('Failed to copy private key:', error);
+        await Toast.show({
+          text: 'Failed to copy private key.',
+        });
+      }
+    }
+  };
 
   const toggleAddressType = () => {
     setIsTokenAddress(!isTokenAddress);
@@ -251,7 +252,7 @@ const Receive: React.FC = () => {
                   <QRCodeSVG value={selectedPK || ''} size={200} />
                   <p
                     className="mt-4 p-2 bg-gray-200 rounded cursor-pointer hover:bg-gray-300"
-                    // onClick={handleCopyPK}
+                    onClick={handleCopyPK}
                   >
                     {shortenTxHash(
                       selectedPK || '',
@@ -341,7 +342,7 @@ const Receive: React.FC = () => {
               )}
               <div className="flex space-x-4 mt-4 w-full justify-center">
                 <button
-                  className={`px-4 py-2 rounded ${
+                  className={`px-4 py-2 rounded font-bold ${
                     qrCodeType === 'address'
                       ? 'bg-blue-500 text-white'
                       : 'bg-gray-200 text-gray-700'
@@ -355,7 +356,7 @@ const Receive: React.FC = () => {
                   Address
                 </button>
                 <button
-                  className={`px-4 py-2 rounded ${
+                  className={`px-4 py-2 rounded font-bold ${
                     qrCodeType === 'pubKey'
                       ? 'bg-blue-500 text-white'
                       : 'bg-gray-200 text-gray-700'
@@ -378,12 +379,6 @@ const Receive: React.FC = () => {
                               pressesLeft > 1 ? 's' : ''
                             } to unlock the Private Key button.`,
                           });
-                        } else {
-                          Toast.show({
-                            text: `Public Key button pressed ${newCount} time${
-                              newCount > 1 ? 's' : ''
-                            }.`,
-                          });
                         }
                       }
                     }
@@ -393,7 +388,7 @@ const Receive: React.FC = () => {
                   PubKey
                 </button>
                 <button
-                  className={`px-4 py-2 rounded ${
+                  className={`px-4 py-2 rounded font-bold ${
                     qrCodeType === 'pkh'
                       ? 'bg-blue-500 text-white'
                       : 'bg-gray-200 text-gray-700'
@@ -409,7 +404,7 @@ const Receive: React.FC = () => {
                 {/* **Conditionally Render the PK Button** */}
                 {showPKButton && (
                   <button
-                    className={`px-4 py-2 rounded ${
+                    className={`px-4 py-2 rounded font-bold ${
                       qrCodeType === 'pk'
                         ? 'bg-blue-500 text-white'
                         : 'bg-gray-200 text-gray-700'

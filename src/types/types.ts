@@ -23,6 +23,7 @@ export interface UTXO {
   contractName?: string; // For contract-related UTXOs
   abi?: object[]; // ABI for contract-related UTXOs
   id?: string;
+  isPaperWallet?: boolean;
   unlocker?: any;
   // **New Fields**
   contractFunction?: string;

@@ -78,18 +78,24 @@ const AddressSelection: React.FC<AddressSelectionProps> = ({
   };
 
   return (
-    <div className="mb-6">
-      <h3 className="text-lg font-semibold mb-2">
-        Select Addresses to Spend From
-      </h3>
-
+    <div className="flex flex-wrap gap-2">
       {/* Wallet Addresses Button */}
       <button
-        className="bg-blue-500 text-white mx-1 py-2 px-4 rounded mb-2"
+        className="bg-blue-500 font-bold text-white py-2 px-4 rounded flex-1"
         onClick={() => setShowWalletAddressesPopup(true)}
       >
         Wallet
       </button>
+
+      {/* Contracts Addresses Button */}
+      <button
+        className="bg-blue-500 font-bold text-white py-2 px-4 rounded flex-1"
+        onClick={() => setShowContractAddressesPopup(true)}
+      >
+        Contracts
+      </button>
+
+      {/* Popup for Wallet Addresses */}
       {showWalletAddressesPopup && (
         <Popup closePopups={closePopups}>
           <h4 className="text-md font-semibold mb-4">Wallet Addresses</h4>
@@ -127,13 +133,7 @@ const AddressSelection: React.FC<AddressSelectionProps> = ({
         </Popup>
       )}
 
-      {/* Contract Addresses Button */}
-      <button
-        className="bg-blue-500 text-white mx-1 py-2 px-4 rounded mb-2"
-        onClick={() => setShowContractAddressesPopup(true)}
-      >
-        Contracts
-      </button>
+      {/* Popup for Contract Addresses */}
       {showContractAddressesPopup && (
         <Popup closePopups={closePopups}>
           <h4 className="text-md font-semibold mb-4">Contract Addresses</h4>

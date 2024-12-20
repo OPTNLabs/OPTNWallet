@@ -75,7 +75,7 @@ const BitcoinCashCard: React.FC<BitcoinCashCardProps> = ({
           {displayMode !== DisplayMode.BCH && (
             <button
               onClick={() => setDisplayMode(DisplayMode.BCH)}
-              className="p-1 px-3 rounded bg-gray-300 hover:bg-gray-300 transition duration-200"
+              className="p-1 px-3 rounded bg-gray-300 font-bold hover:bg-gray-300 transition duration-200"
             >
               USD
             </button>
@@ -83,7 +83,7 @@ const BitcoinCashCard: React.FC<BitcoinCashCardProps> = ({
           {displayMode !== DisplayMode.USD && (
             <button
               onClick={() => setDisplayMode(DisplayMode.USD)}
-              className="p-1 px-3 rounded bg-green-500 hover:bg-green-500 transition duration-200"
+              className="p-1 px-3 rounded bg-green-500 font-bold hover:bg-green-500 transition duration-200"
             >
               BCH
             </button>

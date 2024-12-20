@@ -1,7 +1,7 @@
 // @ts-nocheck
 // src/components/transaction/OutputSelection.tsx
 
-import React from 'react';
+import React, { useState } from 'react';
 import {
   CapacitorBarcodeScanner,
   CapacitorBarcodeScannerTypeHint,
@@ -12,6 +12,10 @@ import { TransactionOutput, UTXO } from '../../types/types'; // Ensure UTXO type
 import { shortenTxHash } from '../../utils/shortenHash';
 import { Network } from '../../redux/networkSlice';
 import { PREFIX, DUST } from '../../utils/constants'; // Import DUST
+import Popup from './Popup';
+import { AppDispatch } from '../../redux/store';
+import { useDispatch } from 'react-redux';
+import { clearTransaction } from '../../redux/transactionBuilderSlice';
 
 interface OutputSelectionProps {
   recipientAddress: string;
@@ -29,6 +33,9 @@ interface OutputSelectionProps {
   setChangeAddress: (address: string) => void;
   txOutputs: TransactionOutput[];
   handleRemoveOutput: (index: number) => void;
+  showOutputs: boolean;
+  setShowOutputs: React.Dispatch<React.SetStateAction<boolean>>;
+  closePopups: () => void;
 }
 
 const OutputSelection: React.FC<OutputSelectionProps> = ({
@@ -47,7 +54,18 @@ const OutputSelection: React.FC<OutputSelectionProps> = ({
   setChangeAddress,
   txOutputs,
   handleRemoveOutput,
+  showOutputs,
+  setShowOutputs,
+  closePopups,
 }) => {
+  const [showPopup, setShowPopup] = useState<boolean>(false); // Local state for popup visibility
+  const dispatch: AppDispatch = useDispatch();
+
+  // Function to toggle the popup
+  const togglePopup = () => {
+    setShowPopup((prev) => !prev);
+  };
+
   // Extract unique token categories from UTXOs
   const availableTokenCategories = [
     ...new Set(
@@ -138,88 +156,126 @@ const OutputSelection: React.FC<OutputSelectionProps> = ({
   return (
     <>
       {/* Transaction Outputs Display Section */}
-      <div className="mb-6">
-        <h3 className="text-lg font-semibold mb-2">Transaction Outputs</h3>
-        {txOutputs.length === 0 ? (
-          <p className="text-gray-500">No outputs added yet.</p>
-        ) : (
-          txOutputs.map((output, index) => (
-            <div
-              key={index}
-              className="flex flex-col items-start mb-4 p-4 border rounded w-full break-words whitespace-normal bg-gray-50"
+      <div className="mb-4">
+        <div className="flex justify-between items-center mb-4">
+          <h3 className="text-lg font-semibold mb-2">Transaction Outputs</h3>
+          {txOutputs.length > 0 && (
+            <button
+              onClick={togglePopup}
+              className="bg-blue-500 font-bold text-white py-1 px-2 rounded hover:bg-blue-600 transition-colors duration-200"
             >
-              <div className="flex justify-between w-full">
-                <span className="font-medium">Recipient:</span>
-                <span>
-                  {shortenTxHash(
-                    output.recipientAddress,
-                    PREFIX[currentNetwork].length
-                  )}
-                </span>
-              </div>
-              <div className="flex justify-between w-full">
-                <span className="font-medium">Amount:</span>
-                <span>{output.amount.toString()}</span>
-              </div>
-              {output.token && (
-                <>
-                  <div className="flex justify-between w-full">
-                    <span className="font-medium">Token:</span>
-                    <span>{output.token.amount.toString()}</span>
+              Show
+            </button>
+          )}
+        </div>
+
+        {showPopup && (
+          <Popup closePopups={() => setShowPopup(false)}>
+            {txOutputs.length === 0 ? (
+              <p className="text-gray-500">No outputs added yet.</p>
+            ) : (
+              <div className="max-h-[50vh] overflow-y-auto">
+                {txOutputs.map((output, index) => (
+                  <div
+                    key={index}
+                    className="flex flex-col items-start mb-4 p-4 border rounded w-full break-words whitespace-normal bg-gray-50"
+                  >
+                    <div className="flex justify-between w-full">
+                      <span className="font-medium">Recipient:</span>
+                      <span>
+                        {shortenTxHash(
+                          output.recipientAddress,
+                          PREFIX[currentNetwork].length
+                        )}
+                      </span>
+                    </div>
+                    <div className="flex justify-between w-full">
+                      <span className="font-medium">Amount:</span>
+                      <span>{output.amount.toString()}</span>
+                    </div>
+                    {output.token && (
+                      <>
+                        <div className="flex justify-between w-full">
+                          <span className="font-medium">Token:</span>
+                          <span>{output.token.amount.toString()}</span>
+                        </div>
+                        <div className="flex justify-between w-full">
+                          <span className="font-medium">Category:</span>
+                          <span>{output.token.category}</span>
+                        </div>
+                      </>
+                    )}
+                    <button
+                      onClick={() => {
+                        handleRemoveOutput(index);
+                        console.log(txOutputs);
+                        if (txOutputs.length === 1) togglePopup();
+                      }}
+                      className="bg-red-400 font-bold text-white py-1 px-2 rounded-md hover:bg-red-600 transition duration-300"
+                    >
+                      Remove
+                    </button>
                   </div>
-                  <div className="flex justify-between w-full">
-                    <span className="font-medium">Category:</span>
-                    <span>{output.token.category}</span>
-                  </div>
-                </>
-              )}
+                ))}
+              </div>
+            )}
+            <div className="flex justify-center mt-4">
               <button
-                onClick={() => handleRemoveOutput(index)}
-                className="mt-2 text-red-500 hover:underline"
+                onClick={() => {
+                  dispatch(clearTransaction());
+                  togglePopup();
+                }}
+                className="bg-red-400 font-bold text-white py-1 px-2 rounded-md hover:bg-red-600 transition duration-300"
               >
-                Remove
+                Remove All
               </button>
             </div>
-          ))
+          </Popup>
         )}
-      </div>
-
-      {/* Add Output Section */}
-      <div className="mb-6">
-        <h3 className="text-lg font-semibold mb-2">Add Output</h3>
-
-        {/* Recipient Address Input with Scan Button */}
-        <div className="flex items-center mb-2">
-          <input
-            type="text"
-            value={recipientAddress}
-            placeholder="Recipient Address"
-            onChange={(e) => setRecipientAddress(e.target.value)}
-            className="border p-2 w-full break-words whitespace-normal"
-          />
-          <button
-            onClick={scanBarcode}
-            className="ml-2 bg-green-500 text-white p-2 rounded"
-            title="Scan QR Code"
-          >
-            <FaCamera />
-          </button>
+        <div className="mb-4">
+          <h3 className="text-lg font-semibold">{`${txOutputs.length} Recipient${txOutputs.length === 1 ? `` : `s`} - Total: ${txOutputs.reduce(
+            (sum, utxo) => sum + Number(utxo.amount),
+            0
+          )}`}</h3>
         </div>
 
-        {/* Regular Transfer Amount Input */}
-        <div className="mb-2">
-          <input
-            type="number"
-            value={transferAmount}
-            placeholder={`Regular Amount (Min: ${DUST})`}
-            onChange={handleTransferAmountChange}
-            className="border p-2 w-full break-words whitespace-normal"
-            min={DUST}
-          />
-        </div>
+        {/* Add Output Section */}
+        {txOutputs.length < 10 && (
+          <div className="mb-6">
+            <h3 className="text-lg font-semibold mb-2">Add Output</h3>
 
-        {/* Uncomment the following section if you want to include token amount and category selection */}
-        {/*
+            {/* Recipient Address Input with Scan Button */}
+            <div className="flex items-center mb-2">
+              <input
+                type="text"
+                value={recipientAddress}
+                placeholder="Recipient Address"
+                onChange={(e) => setRecipientAddress(e.target.value)}
+                className="border p-2 w-full break-words whitespace-normal"
+              />
+              <button
+                onClick={scanBarcode}
+                className="ml-2 bg-green-500 text-white p-2 rounded"
+                title="Scan QR Code"
+              >
+                <FaCamera />
+              </button>
+            </div>
+
+            {/* Regular Transfer Amount Input */}
+            <div className="mb-2">
+              <input
+                type="number"
+                value={transferAmount}
+                placeholder={`Regular Amount (Min: ${DUST})`}
+                onChange={handleTransferAmountChange}
+                className="border p-2 w-full break-words whitespace-normal"
+                min={DUST}
+              />
+            </div>
+
+            {/* Uncomment the following section if you want to include token amount and category selection */}
+            {/*
         <div className="mb-2">
           <input
             type="number"
@@ -247,25 +303,27 @@ const OutputSelection: React.FC<OutputSelectionProps> = ({
         )}
         */}
 
-        {/* Add Output Button */}
-        <button
-          onClick={handleAddOutput}
-          className={`bg-blue-500 text-white py-2 px-4 rounded`}
-        >
-          Add Output
-        </button>
-      </div>
+            {/* Add Output Button */}
+            <button
+              onClick={handleAddOutput}
+              className={`bg-blue-500 font-bold text-white py-2 px-4 rounded`}
+            >
+              Add Output
+            </button>
+          </div>
+        )}
 
-      {/* Change Address Section */}
-      <div className="mb-6">
-        <h3 className="text-lg font-semibold mb-2">Change Address</h3>
-        <input
-          type="text"
-          value={changeAddress}
-          placeholder="Change Address"
-          onChange={(e) => setChangeAddress(e.target.value)}
-          className="border p-2 mb-2 w-full break-words whitespace-normal"
-        />
+        {/* Change Address Section */}
+        <div className="mb-6">
+          <h3 className="text-lg font-semibold mb-2">Change Address</h3>
+          <input
+            type="text"
+            value={changeAddress}
+            placeholder="Change Address"
+            onChange={(e) => setChangeAddress(e.target.value)}
+            className="border p-2 mb-2 w-full break-words whitespace-normal"
+          />
+        </div>
       </div>
     </>
   );

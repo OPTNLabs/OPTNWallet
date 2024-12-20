@@ -21,6 +21,10 @@ interface UTXOSelectionProps {
   setShowCashTokenUTXOsPopup: React.Dispatch<React.SetStateAction<boolean>>;
   showContractUTXOsPopup: boolean;
   setShowContractUTXOsPopup: React.Dispatch<React.SetStateAction<boolean>>;
+  paperWalletUTXOs: UTXO[];
+  showPaperWalletUTXOsPopup: boolean;
+  setShowPaperWalletUTXOsPopup: React.Dispatch<React.SetStateAction<boolean>>;
+  // selectedPaperWalletUTXOs: UTXO[]; // New prop to receive paper wallet UTXOs
   closePopups: () => void;
 }
 
@@ -38,6 +42,10 @@ const UTXOSelection: React.FC<UTXOSelectionProps> = ({
   setShowCashTokenUTXOsPopup,
   showContractUTXOsPopup,
   setShowContractUTXOsPopup,
+  paperWalletUTXOs,
+  showPaperWalletUTXOsPopup,
+  setShowPaperWalletUTXOsPopup,
+  // selectedPaperWalletUTXOs,
   closePopups,
 }) => {
   // Compute regular addresses by excluding contract addresses
@@ -46,12 +54,12 @@ const UTXOSelection: React.FC<UTXOSelectionProps> = ({
   );
 
   return (
-    <>
+    <div className="flex flex-wrap gap-2 mb-6 justify-center">
       {/* Regular UTXOs Button and Popup */}
       <div>
         {regularAddresses.length > 0 && (
           <button
-            className="bg-blue-500 text-white py-2 px-4 rounded mb-2"
+            className="bg-blue-500 font-bold text-white py-2 px-4 rounded mb-2"
             onClick={() => setShowRegularUTXOsPopup(true)}
           >
             Regular UTXOs
@@ -125,7 +133,7 @@ const UTXOSelection: React.FC<UTXOSelectionProps> = ({
       <div className="mb-6">
         {selectedContractAddresses.length > 0 && (
           <button
-            className="bg-blue-500 text-white py-2 px-4 rounded mb-2"
+            className="bg-blue-500 font-bold text-white py-2 px-4 rounded mb-2"
             onClick={() => {
               setShowContractUTXOsPopup(true);
             }}
@@ -158,7 +166,42 @@ const UTXOSelection: React.FC<UTXOSelectionProps> = ({
           </Popup>
         )}
       </div>
-    </>
+      {/* Paper Wallet UTXOs Button and Popup */}
+      <div className="mb-4">
+        {paperWalletUTXOs.length > 0 && (
+          <button
+            className="bg-green-500 font-bold text-white py-2 px-4 rounded mb-2 mr-2"
+            onClick={() => setShowPaperWalletUTXOsPopup(true)}
+          >
+            Paper Wallet UTXOs
+          </button>
+        )}
+        {showPaperWalletUTXOsPopup && (
+          <Popup closePopups={closePopups}>
+            <h4 className="text-md font-semibold mb-4">Paper Wallet UTXOs</h4>
+            <div className="overflow-y-auto max-h-80">
+              {paperWalletUTXOs.map((utxo) => (
+                <button
+                  key={utxo.id ? utxo.id : utxo.tx_hash + utxo.tx_pos}
+                  onClick={() => handleUtxoClick(utxo)}
+                  className={`block w-full text-left p-2 mb-2 border rounded-lg break-words whitespace-normal ${
+                    selectedUtxos.some(
+                      (selectedUtxo) =>
+                        selectedUtxo.tx_hash === utxo.tx_hash &&
+                        selectedUtxo.tx_pos === utxo.tx_pos
+                    )
+                      ? 'bg-blue-100'
+                      : 'bg-white'
+                  }`}
+                >
+                  <RegularUTXOs utxos={[utxo]} loading={false} />
+                </button>
+              ))}
+            </div>
+          </Popup>
+        )}
+      </div>
+    </div>
   );
 };
 
