@@ -10,7 +10,10 @@ import {
 } from '../redux/contractSlice'; // Importing actions from contractSlice
 import { encodePrivateKeyWif } from '@bitauth/libauth';
 import { RootState, AppDispatch } from '../redux/store';
-import { hexString, hexToUint8Array } from '../utils/hex';
+import {
+  hexString,
+  // hexToUint8Array
+} from '../utils/hex';
 import KeyService from '../services/KeyService';
 import { shortenTxHash } from '../utils/shortenHash';
 import {
@@ -162,34 +165,34 @@ const SelectContractFunctionPopup: React.FC<
         const isValidHex = (str: string) => /^[0-9a-fA-F]+$/.test(str);
 
         if (argType === 'sig') {
-          if (!isValidHex(scannedValue)) {
+          // if (!isValidHex(scannedValue)) {
+          //   await Toast.show({
+          //     text: `Invalid ${argType} format. Please scan a valid QR code.`,
+          //   });
+          // } else {
+          try {
+            // Convert hex string to Uint8Array
+            // Encode to WIF
+            // const wif = encodePrivateKeyWif(
+            //   hexToUint8Array(scannedValue),
+            //   'testnet'
+            // ); // Adjust network as needed
+
+            setInputValuesState((prev) => ({
+              ...prev,
+              [argName]: scannedValue,
+            }));
+
             await Toast.show({
-              text: `Invalid ${argType} format. Please scan a valid QR code.`,
+              text: `Scanned and set ${argName}: ${scannedValue}`,
             });
-          } else {
-            try {
-              // Convert hex string to Uint8Array
-              // Encode to WIF
-              const wif = encodePrivateKeyWif(
-                hexToUint8Array(scannedValue),
-                'testnet'
-              ); // Adjust network as needed
-
-              setInputValuesState((prev) => ({
-                ...prev,
-                [argName]: wif,
-              }));
-
-              await Toast.show({
-                text: `Scanned and set ${argName}: ${wif}`,
-              });
-            } catch (error) {
-              console.error('Failed to encode private key to WIF:', error);
-              await Toast.show({
-                text: `Failed to process ${argName}.`,
-              });
-            }
+          } catch (error) {
+            console.error('Failed to encode private key to WIF:', error);
+            await Toast.show({
+              text: `Failed to process ${argName}.`,
+            });
           }
+          // }
         } else if (argType === 'pubkey' || argType === 'bytes20') {
           if (!isValidHex(scannedValue)) {
             await Toast.show({
@@ -283,7 +286,7 @@ const SelectContractFunctionPopup: React.FC<
 
               return (
                 <div key={index} className="mb-4">
-                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                  <label className="block text-sm font-bold text-gray-700 mb-1">
                     {input.name} ({input.type})
                   </label>
                   {isAddressType ? (
@@ -292,7 +295,7 @@ const SelectContractFunctionPopup: React.FC<
                         <button
                           type="button"
                           onClick={() => openAddressPopup(input)}
-                          className="bg-blue-500 text-white py-2 px-4 rounded mr-2 flex-1"
+                          className="bg-blue-500 text-white font-bold py-2 px-4 rounded mr-2 flex-1"
                           disabled={isScanning} // Disable button during scan
                           aria-label={`Select Address for ${input.name}`}
                         >
@@ -301,7 +304,7 @@ const SelectContractFunctionPopup: React.FC<
                         <button
                           type="button"
                           onClick={() => scanBarcode(input.name, input.type)} // Pass arg.name and arg.type directly
-                          className={`bg-green-500 text-white py-2 px-4 rounded flex items-center justify-center ${
+                          className={`bg-green-500 font-bold text-white py-2 px-4 rounded flex items-center justify-center ${
                             isScanning ? 'opacity-50 cursor-not-allowed' : ''
                           } flex-1`}
                           disabled={isScanning}
@@ -336,14 +339,14 @@ const SelectContractFunctionPopup: React.FC<
         </div>
         <div className="flex justify-end">
           <button
-            className="bg-blue-500 text-white py-2 px-4 rounded mr-2"
+            className="bg-blue-500 font-bold text-white py-2 px-4 rounded mr-2"
             onClick={handleSelect}
             disabled={!selectedFunction} // Disable if no function is selected
           >
             Select
           </button>
           <button
-            className="bg-gray-300 text-gray-700 py-2 px-4 rounded"
+            className="bg-gray-300 font-bold text-gray-700 py-2 px-4 rounded"
             onClick={onClose}
           >
             Cancel

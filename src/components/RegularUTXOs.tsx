@@ -31,7 +31,8 @@ const RegularUTXOs = ({ utxos, loading }) => {
         utxos.map((utxo, idx) => (
           <div key={idx} className="p-2 mb-2 border rounded-lg overflow-x-auto">
             <p className="break-words">
-              <strong>Amount:</strong> {utxo.amount.toString()} satoshis
+              <strong>Amount:</strong>{' '}
+              {utxo.amount ? utxo.amount.toString() : utxo.value} satoshis
             </p>
             <p className="break-words">
               <strong>Transaction Hash:</strong> {shortenTxHash(utxo.tx_hash)}
