@@ -2,6 +2,7 @@
 
 import { useDispatch } from 'react-redux';
 import TransactionService from '../services/TransactionService';
+// import { Toast } from '@capacitor/toast';
 import { TransactionOutput, UTXO } from '../types/types';
 import {
   clearTransaction,
@@ -32,20 +33,28 @@ const useHandleTransaction = (
   const dispatch = useDispatch();
 
   const handleBuildTransaction = async () => {
-    const inputSum: number = selectedUtxos.reduce((sum, utxo) => {
+    // Calculate the sum of selected UTXOs as bigint
+    const inputSum = selectedUtxos.reduce((sum, utxo) => {
       // Prefer 'amount' if it exists; otherwise, use 'value'
-      const utxoAmount: number = utxo.amount ?? utxo.value;
+      // Convert to bigint for the calculation
+      const utxoAmount =
+        utxo.amount !== undefined ? BigInt(utxo.amount) : BigInt(utxo.value);
+
       return sum + utxoAmount;
-    }, 0);
+    }, 0n);
 
-    // Calculate the sum of transaction outputs
-    const outputSum: number = txOutputs.reduce((sum, txOutput) => {
+    // Calculate the sum of transaction outputs as bigint
+    const outputSum = txOutputs.reduce((sum, txOutput) => {
       // Ensure that txOutput.amount is a bigint
-      const txAmount: number = Number(txOutput.amount);
+      const txAmount = BigInt(txOutput.amount);
       return sum + txAmount;
-    }, 0);
+    }, 0n);
 
-    if (outputSum > inputSum || inputSum === 0) {
+    // await Toast.show({
+    //   text: `Input: ${inputSum}, Output: ${outputSum}`,
+    // });
+
+    if (outputSum > inputSum || inputSum === BigInt(0)) {
       setErrorMessage(
         'Error building transaction: ' + 'output amount exceeds inputs'
       );
@@ -82,6 +91,10 @@ const useHandleTransaction = (
           changeAddress,
           selectedUtxos
         );
+
+      // await Toast.show({
+      //   text: `Input: ${transaction.bytecodeSize}, Output: ${transaction.errorMsg}, Input: ${transaction.finalOutputs}, Output: ${transaction.finalTransaction}`,
+      // });
 
       if (!transaction.finalTransaction) {
         setErrorMessage('Failed to build transaction.');
