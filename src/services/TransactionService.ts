@@ -146,10 +146,6 @@ class TransactionService {
 
     const allUTXOs = [...fetchedUTXOs, ...contractUTXOs];
 
-    const addressesWithUTXOs = fetchedAddresses.filter((addressObj) =>
-      allUTXOs.some((utxo) => utxo.address === addressObj.address)
-    );
-
     // Fetch contractAddresses
     const contractAddressList = contractInstances.map((contract) => ({
       address: contract.address,
@@ -159,7 +155,7 @@ class TransactionService {
     }));
 
     return {
-      addresses: addressesWithUTXOs,
+      addresses: fetchedAddresses,
       utxos: allUTXOs,
       contractAddresses: contractAddressList,
     };

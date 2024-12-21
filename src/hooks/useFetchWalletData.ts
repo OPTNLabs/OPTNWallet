@@ -6,7 +6,7 @@ import TransactionService from '../services/TransactionService';
 
 const useFetchWalletData = (
   walletId: number | null,
-  selectedAddresses: string[],
+  // selectedAddresses: string[],
   setAddresses: React.Dispatch<
     React.SetStateAction<{ address: string; tokenAddress: string }[]>
   >,
@@ -22,7 +22,7 @@ const useFetchWalletData = (
   >,
   setUtxos: React.Dispatch<React.SetStateAction<UTXO[]>>,
   setContractUTXOs: React.Dispatch<React.SetStateAction<UTXO[]>>,
-  setSelectedAddresses: React.Dispatch<React.SetStateAction<string[]>>,
+  // setSelectedAddresses: React.Dispatch<React.SetStateAction<string[]>>,
   setChangeAddress: React.Dispatch<React.SetStateAction<string>>,
   setErrorMessage: React.Dispatch<React.SetStateAction<string | null>>
 ) => {
@@ -32,7 +32,8 @@ const useFetchWalletData = (
         const { addresses, utxos, contractAddresses } =
           await TransactionService.fetchAddressesAndUTXOs(walletId);
 
-        // console.log('Fetched Addresses:', addresses);
+        console.log('Fetched Addresses:', addresses);
+        console.log('Wallet ID:', walletId);
         // console.log('Fetched Contract Addresses:', contractAddresses);
         // console.log('Fetched UTXOs:', utxos);
 
@@ -46,13 +47,13 @@ const useFetchWalletData = (
         );
 
         // Auto-select the first address if only one exists
-        if (
-          addresses.length === 1 &&
-          !selectedAddresses.includes(addresses[0].address)
-        ) {
-          setSelectedAddresses([addresses[0].address]);
-          // console.log(`Auto-selected address: ${addresses[0].address}`);
-        }
+        // if (
+        //   addresses.length === 1 &&
+        //   !selectedAddresses.includes(addresses[0].address)
+        // ) {
+        //   setSelectedAddresses([addresses[0].address]);
+        //   // console.log(`Auto-selected address: ${addresses[0].address}`);
+        // }
 
         // Set default change address
         if (addresses.length > 0) {

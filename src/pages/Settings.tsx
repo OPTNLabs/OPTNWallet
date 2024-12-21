@@ -11,12 +11,12 @@ import { resetUTXOs } from '../redux/utxoSlice';
 import WalletManager from '../apis/WalletManager/WalletManager';
 import { useNavigate } from 'react-router-dom';
 import { resetTransactions } from '../redux/transactionSlice';
-import NetworkSettingsView from '../components/NetworkSettingsView';
 import { resetContract } from '../redux/contractSlice';
 import { Network, resetNetwork } from '../redux/networkSlice';
 import { clearTransaction } from '../redux/transactionBuilderSlice';
 import { RootState } from '../redux/store';
 import { selectCurrentNetwork } from '../redux/selectors/networkSelectors';
+import FaucetView from '../components/FaucetView';
 
 const Settings = () => {
   const currentWalletId = useSelector(
@@ -66,7 +66,7 @@ const Settings = () => {
       case 'contact':
         return <ContactUs />;
       case 'network':
-        return <NetworkSettingsView />;
+        return <FaucetView />;
       default:
         return null;
     }
@@ -91,6 +91,7 @@ const Settings = () => {
 
   return (
     <div className="container mx-auto p-4">
+      {/* Welcome Image */}
       <div className="flex justify-center mt-4">
         <img
           src="/assets/images/OPTNWelcome1.png"
@@ -98,54 +99,58 @@ const Settings = () => {
           className="max-w-full h-auto"
         />
       </div>
+
+      {/* Settings Title */}
       <h1 className="text-2xl font-bold mb-4 text-center">Settings</h1>
+
+      {/* Options Menu */}
       {!selectedOption ? (
-        <div className="mb-4">
+        <div className="flex flex-col items-center space-y-4">
           <button
             onClick={() => handleOptionClick('recovery')}
-            className="block w-full font-bold py-2 px-4 border rounded-lg mb-2 mx-2"
+            className="w-full max-w-md bg-blue-500 hover:bg-green-600 transition duration-300 text-white font-bold py-2 px-4 border rounded-lg"
           >
             Recovery Phrase
           </button>
           <button
             onClick={() => handleOptionClick('about')}
-            className="block w-full font-bold py-2 px-4 border rounded-lg mb-2 mx-2"
+            className="w-full max-w-md bg-blue-500 hover:bg-green-600 transition duration-300 text-white font-bold py-2 px-4 border rounded-lg"
           >
             About
           </button>
           <button
             onClick={() => handleOptionClick('terms')}
-            className="block w-full font-bold py-2 px-4 border rounded-lg mb-2 mx-2"
+            className="w-full max-w-md bg-blue-500 hover:bg-green-600 transition duration-300 text-white font-bold py-2 px-4 border rounded-lg"
           >
             Terms of Use
           </button>
           <button
             onClick={() => handleOptionClick('contact')}
-            className="block w-full font-bold py-2 px-4 border rounded-lg mb-2 mx-2"
+            className="w-full max-w-md bg-blue-500 hover:bg-green-600 transition duration-300 text-white font-bold py-2 px-4 border rounded-lg"
           >
             Contact Us
           </button>
           {currentNetwork === Network.CHIPNET && (
             <button
               onClick={() => handleOptionClick('network')}
-              className="block w-full font-bold py-2 px-4 border rounded-lg mb-2 mx-2"
+              className="w-full max-w-md bg-blue-500 hover:bg-green-600 transition duration-300 text-white font-bold py-2 px-4 border rounded-lg"
             >
               Faucet
             </button>
           )}
           <button
             onClick={handleLogout}
-            className="block w-full py-2 px-4 border rounded-lg mb-2 mx-2 bg-red-500 text-white text-xl font-bold"
+            className="w-full max-w-md py-2 px-4 border rounded-lg bg-red-500 hover:bg-red-700 transition duration-300 text-white text-xl font-bold"
           >
             Log Out
           </button>
         </div>
       ) : (
+        /* Overlay for Selected Option */
         <div
-          className="fixed inset-0 bg-white p-4 z-50 overflow-hidden"
+          className="fixed inset-0 bg-white p-4 z-50 overflow-auto"
           style={{
             height: `calc(100vh - ${navBarHeight}px)`,
-            // paddingBottom: `${navBarHeight}px`,
           }}
         >
           <div className="container mx-auto p-4">
@@ -153,7 +158,7 @@ const Settings = () => {
           </div>
           {renderContent()}
           <button
-            className="block w-full text-center text-xl font-bold py-2 px-4 border rounded-lg m-2 mx-2 bg-red-500 text-white"
+            className="w-full max-w-md py-2 px-4 border rounded-lg bg-red-500 hover:bg-red-700 transition duration-300 text-white text-xl font-bold"
             onClick={() => setSelectedOption('')}
           >
             Back

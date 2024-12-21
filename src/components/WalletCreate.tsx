@@ -97,7 +97,7 @@ const WalletCreation = () => {
       dispatch(setNetwork(currentNetwork));
 
       // Create initial keys using KeyService
-      await KeyService.createKeys(walletID, 0, 0, 0);
+      // await KeyService.createKeys(walletID, 0, 0, 0);
 
       // console.log('Keys generated and account created successfully.');
       navigate(`/home/${walletID}`);

@@ -1,10 +1,5 @@
 // src/App.tsx
-import {
-  Routes,
-  Route,
-  Navigate,
-  useLocation
-} from 'react-router-dom';
+import { Routes, Route, Navigate, useLocation } from 'react-router-dom';
 import { useSelector } from 'react-redux';
 import { useEffect } from 'react';
 import Layout from './components/Layout';
@@ -60,6 +55,7 @@ function App() {
     // Cleanup function
     return () => {
       if (walletId !== 1) {
+        console.log(walletId);
         if (utxoWorkerStarted) {
           stopUTXOWorker();
           utxoWorkerStarted = false;

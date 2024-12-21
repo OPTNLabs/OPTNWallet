@@ -122,9 +122,9 @@ const SelectContractFunctionPopup: React.FC<
           [selectedInput.name]: valueToSet,
         }));
 
-        await Toast.show({
-          text: `Set ${selectedInput.name}: ${valueToSet}`,
-        });
+        // await Toast.show({
+        //   text: `Set ${selectedInput.name}: ${valueToSet}`,
+        // });
       } else {
         console.error(`No keys found for address: ${address}`);
         await Toast.show({
@@ -183,9 +183,9 @@ const SelectContractFunctionPopup: React.FC<
               [argName]: scannedValue,
             }));
 
-            await Toast.show({
-              text: `Scanned and set ${argName}: ${scannedValue}`,
-            });
+            // await Toast.show({
+            //   text: `Scanned and set ${argName}: ${scannedValue}`,
+            // });
           } catch (error) {
             console.error('Failed to encode private key to WIF:', error);
             await Toast.show({
@@ -203,9 +203,9 @@ const SelectContractFunctionPopup: React.FC<
               ...prev,
               [argName]: scannedValue,
             }));
-            await Toast.show({
-              text: `Scanned and set ${argName}: ${scannedValue}`,
-            });
+            // await Toast.show({
+            //   text: `Scanned and set ${argName}: ${scannedValue}`,
+            // });
           }
         } else {
           // Handle other types if necessary
@@ -213,9 +213,9 @@ const SelectContractFunctionPopup: React.FC<
             ...prev,
             [argName]: scannedValue,
           }));
-          await Toast.show({
-            text: `Scanned and set ${argName}: ${scannedValue}`,
-          });
+          // await Toast.show({
+          //   text: `Scanned and set ${argName}: ${scannedValue}`,
+          // });
         }
       } else {
         await Toast.show({

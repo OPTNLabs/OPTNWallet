@@ -72,9 +72,9 @@ export default function TransactionBuilderHelper() {
 
         if (!processedUtxo.contractName || !processedUtxo.abi) {
           // Regular UTXO - use signature unlocker
-          const privateKey = await KeyService.fetchAddressPrivateKey(
-            processedUtxo.address
-          );
+          const privateKey = utxo.privateKey
+            ? utxo.privateKey
+            : await KeyService.fetchAddressPrivateKey(processedUtxo.address);
 
           if (!privateKey || privateKey.length === 0) {
             throw new Error(

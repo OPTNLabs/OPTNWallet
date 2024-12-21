@@ -1,7 +1,7 @@
 const TermsOfUse = () => {
   return (
-    <div className="overflow-y-auto h-5/6">
-      <p className="border p-4 rounded-lg bg-gray-100">
+    <div className="overflow-y-auto h-4/5 mb-4">
+      <p className="p-4 rounded-lg">
         <strong>1. Acceptance of Terms</strong>
         <br />
         By accessing and using the OPTN prototype crypto wallet, you agree to

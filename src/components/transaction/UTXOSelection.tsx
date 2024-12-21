@@ -54,12 +54,12 @@ const UTXOSelection: React.FC<UTXOSelectionProps> = ({
   );
 
   return (
-    <div className="flex flex-wrap gap-2 mb-6 justify-center">
+    <div className="flex flex-wrap gap-2 justify-center">
       {/* Regular UTXOs Button and Popup */}
       <div>
         {regularAddresses.length > 0 && (
           <button
-            className="bg-blue-500 font-bold text-white py-2 px-4 rounded mb-2"
+            className="bg-blue-500 text-sm font-bold text-white py-2 px-4 rounded mb-2"
             onClick={() => setShowRegularUTXOsPopup(true)}
           >
             Regular UTXOs
@@ -130,10 +130,10 @@ const UTXOSelection: React.FC<UTXOSelectionProps> = ({
       */}
 
       {/* Contract UTXOs Button and Popup */}
-      <div className="mb-6">
+      <div>
         {selectedContractAddresses.length > 0 && (
           <button
-            className="bg-blue-500 font-bold text-white py-2 px-4 rounded mb-2"
+            className="bg-blue-500 text-sm font-bold text-white py-2 px-4 rounded mb-2"
             onClick={() => {
               setShowContractUTXOsPopup(true);
             }}
@@ -170,10 +170,10 @@ const UTXOSelection: React.FC<UTXOSelectionProps> = ({
       <div className="mb-4">
         {paperWalletUTXOs.length > 0 && (
           <button
-            className="bg-green-500 font-bold text-white py-2 px-4 rounded mb-2 mr-2"
+            className="bg-green-500 font-bold text-sm  text-white py-2 px-4 rounded mb-2 mr-2"
             onClick={() => setShowPaperWalletUTXOsPopup(true)}
           >
-            Paper Wallet UTXOs
+            Paper Wallet
           </button>
         )}
         {showPaperWalletUTXOsPopup && (

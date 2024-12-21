@@ -11,6 +11,7 @@ import { selectCurrentNetwork } from '../redux/selectors/networkSelectors';
 import { QRCodeSVG } from 'qrcode.react';
 import { hexString } from '../utils/hex';
 import { encodePrivateKeyWif } from '@bitauth/libauth-v3';
+// import { Network } from '../redux/networkSlice';
 // import { FaCamera } from 'react-icons/fa'; // Optional: If you want to use an icon for the scan button
 
 type QRCodeType = 'address' | 'pubKey' | 'pkh' | 'pk';
@@ -72,7 +73,7 @@ const Receive: React.FC = () => {
     };
   }, []);
 
-  const handleAddressSelect = async (address: string) => {
+  const handleAddressSelect = async (tokenAddress: string, address: string) => {
     const keys = await KeyService.retrieveKeys(wallet_id);
     const selectedKey = keys.find((key: any) => key.address === address);
 
@@ -81,7 +82,11 @@ const Receive: React.FC = () => {
       const pkh = hexString(selectedKey.pubkeyHash);
       const pk = encodePrivateKeyWif(selectedKey.privateKey, 'testnet');
 
-      setSelectedAddress(address);
+      if (isTokenAddress) {
+        setSelectedAddress(tokenAddress);
+      } else {
+        setSelectedAddress(address);
+      }
       setSelectedPubKey(pubkey);
       setSelectedPK(pk);
       setSelectedPKH(pkh);
@@ -181,17 +186,15 @@ const Receive: React.FC = () => {
       <div className="flex flex-col items-center space-y-4 h-full">
         {!selectedAddress ? (
           <div
-            className="overflow-y-auto w-full max-w-md flex-grow rounded-md p-4"
-            style={{ height: 'calc(100vh - var(--navbar-height) - 200px)' }} // Adjusting height dynamically
+            className="overflow-y-auto font-bold w-full max-w-md flex-grow rounded-md p-4"
+            style={{ height: 'calc(100vh - var(--navbar-height) - 250px)' }} // Adjusting height dynamically
           >
             {keyPairs.map((keyPair: any, index: number) => (
               <div
                 key={index}
-                className="p-4 mb-4 bg-white rounded-lg shadow-md cursor-pointer hover:bg-gray-100"
+                className="p-4 mb-4 bg-white rounded-lg shadow-md cursor-pointer hover:bg-gray-600 hover:text-white"
                 onClick={() =>
-                  handleAddressSelect(
-                    isTokenAddress ? keyPair.tokenAddress : keyPair.address
-                  )
+                  handleAddressSelect(keyPair.tokenAddress, keyPair.address)
                 }
               >
                 <p>
@@ -266,13 +269,22 @@ const Receive: React.FC = () => {
                 </>
               ) : (
                 <>
+                  <div className="flex justify-center items-base line mt-4">
+                    <img
+                      src="/assets/images/OPTNWelcome3.png"
+                      alt="Welcome"
+                      className="max-w-full h-auto"
+                      width={'32%'}
+                      height={'32%'}
+                    />
+                  </div>
                   <button
                     className="mt-4 px-4 py-2 font-bold bg-red-500 text-white rounded hover:bg-red-700"
                     onClick={() => setShowPKQRCode(true)}
                   >
                     Show Private Key
                   </button>
-                  <div className="mt-2 text-center py-2 text-red-500">
+                  <div className="mt-2 text-center text-red-500">
                     Warning: Displaying your private key can compromise your
                     funds. Ensure you keep it secure.
                   </div>
@@ -372,14 +384,14 @@ const Receive: React.FC = () => {
                         });
                       } else {
                         setPublicKeyPressCount(newCount);
-                        if (newCount >= 6) {
-                          const pressesLeft = 10 - newCount;
-                          Toast.show({
-                            text: `Press the Public Key button ${pressesLeft} more time${
-                              pressesLeft > 1 ? 's' : ''
-                            } to unlock the Private Key button.`,
-                          });
-                        }
+                        // if (newCount >= 6) {
+                        //   const pressesLeft = 10 - newCount;
+                        //   // Toast.show({
+                        //   //   text: `Press the Public Key button ${pressesLeft} more time${
+                        //   //     pressesLeft > 1 ? 's' : ''
+                        //   //   } to unlock the Private Key button.`,
+                        //   // });
+                        // }
                       }
                     }
                     setQrCodeType('pubKey');

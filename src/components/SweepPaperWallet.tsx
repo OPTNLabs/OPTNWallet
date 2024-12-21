@@ -28,7 +28,7 @@ const SweepPaperWallet: React.FC<SweepPaperWalletProps> = ({
 }) => {
   // State variables
   // const [wifKey, setWifKey] = useState<string>('');
-  const [cashAddress, setCashAddress] = useState<string>('');
+  // const [cashAddress, setCashAddress] = useState<string>('');
   const [loading, setLoading] = useState<boolean>(false);
   const [error, setError] = useState<string>('');
 
@@ -66,7 +66,7 @@ const SweepPaperWallet: React.FC<SweepPaperWalletProps> = ({
   const processWifKey = async (wif: string) => {
     setLoading(true);
     setError('');
-    setCashAddress('');
+    // setCashAddress('');
 
     try {
       // Decode the WIF key
@@ -104,7 +104,7 @@ const SweepPaperWallet: React.FC<SweepPaperWalletProps> = ({
 
       const { address } = addressResult;
 
-      setCashAddress(address);
+      // setCashAddress(address);
 
       // Fetch UTXOs
       const fetchedUtxos = await ElectrumService.getUTXOS(address).then(
@@ -125,10 +125,11 @@ const SweepPaperWallet: React.FC<SweepPaperWalletProps> = ({
           isPaperWallet: true,
           address: address,
           amount: utxo.value,
+          privateKey: pkArray,
         }));
-        await Toast.show({
-          text: `Fetched ${markedUtxos.length} UTXO(s).`,
-        });
+        // await Toast.show({
+        //   text: `Fetched ${markedUtxos.length} UTXO(s).`,
+        // });
         setPaperWalletUTXOs(markedUtxos);
       }
     } catch (err) {
@@ -142,23 +143,8 @@ const SweepPaperWallet: React.FC<SweepPaperWalletProps> = ({
     }
   };
 
-  // // Handler to manually input WIF key (optional)
-  // const handleManualInput = async () => {
-  //   if (!wifKey) {
-  //     await Toast.show({
-  //       text: 'Please enter a WIF key.',
-  //     });
-  //     return;
-  //   }
-
-  //   await processWifKey(wifKey);
-  // };
-
   return (
     <div className="flex items-center">
-      {/* <h3 className="text-lg font-semibold mb-2">Sweep Paper Wallet</h3> */}
-      {/* QR Code Scanning Section */}
-      {/* <div className="mb-2"> */}
       <button
         onClick={handleScan}
         className="bg-green-500 font-bold text-white py-2 px-4 rounded flex items-center flex-1"
@@ -166,43 +152,6 @@ const SweepPaperWallet: React.FC<SweepPaperWalletProps> = ({
       >
         <FaCamera className="mr-2" /> Scan
       </button>
-      {/* </div> */}
-      {/* OR Divider */}
-      {/* <div className="flex items-center mb-4">
-        <hr className="flex-grow border-gray-300" />
-        <span className="mx-2 text-gray-500">OR</span>
-        <hr className="flex-grow border-gray-300" />
-      </div> */}
-      {/* Manual WIF Input Section */}
-      {/* <div className="mb-4">
-        <label
-          htmlFor="wifInput"
-          className="block text-sm font-medium text-gray-700 mb-1"
-        >
-          Enter WIF Private Key
-        </label>
-        <input
-          type="text"
-          id="wifInput"
-          value={wifKey}
-          onChange={(e) => setWifKey(e.target.value)}
-          className="border p-2 w-full rounded-md"
-          placeholder="L1aW4aubDFB7yfras2S1mN3bqg9w1e..."
-        />
-        <button
-          onClick={handleManualInput}
-          className="mt-2 bg-blue-500 text-white py-2 px-4 rounded"
-          disabled={loading}
-        >
-          Submit WIF
-        </button>
-      </div> */}
-      {/* Loading Indicator */}
-      {/* {loading && (
-        <div className="mb-4">
-          <span className="text-blue-500">Processing...</span>
-        </div>
-      )} */}
       {/* Error Message */}
       {error && (
         <div className="mb-4 text-red-500">
@@ -210,12 +159,12 @@ const SweepPaperWallet: React.FC<SweepPaperWalletProps> = ({
         </div>
       )}
       {/* Cash Address Display */}
-      {cashAddress && (
+      {/* {cashAddress && (
         <div className="mb-4">
           <h4 className="text-md font-semibold mb-2">Cash Address</h4>
           <p className="bg-gray-100 p-2 rounded break-words">{cashAddress}</p>
         </div>
-      )}
+      )} */}
     </div>
   );
 };

@@ -5,7 +5,7 @@ import { FaBitcoin } from 'react-icons/fa';
 
 interface BitcoinCashCardProps {
   totalAmount: number; // in satoshis
-  togglePopup: () => void; // Add a togglePopup prop
+  // togglePopup: () => void; // Add a togglePopup prop
 }
 
 enum DisplayMode {
@@ -15,7 +15,7 @@ enum DisplayMode {
 
 const BitcoinCashCard: React.FC<BitcoinCashCardProps> = ({
   totalAmount,
-  togglePopup,
+  // togglePopup,
 }) => {
   // Get the BCH price from Redux
   const bchPriceUsd = useSelector(
@@ -65,7 +65,10 @@ const BitcoinCashCard: React.FC<BitcoinCashCardProps> = ({
     <div className="p-4 mb-4 border rounded-lg shadow-md bg-white flex flex-col w-full max-w-md">
       <div className="flex items-center justify-between">
         {/* Only this section triggers the togglePopup */}
-        <div className="flex items-center cursor-pointer" onClick={togglePopup}>
+        <div
+          className="flex items-center cursor-pointer"
+          // onClick={togglePopup}
+        >
           <FaBitcoin className="text-green-500 text-3xl mr-3" />
           <div>{renderAmount()}</div>
         </div>
@@ -75,7 +78,7 @@ const BitcoinCashCard: React.FC<BitcoinCashCardProps> = ({
           {displayMode !== DisplayMode.BCH && (
             <button
               onClick={() => setDisplayMode(DisplayMode.BCH)}
-              className="p-1 px-3 rounded bg-gray-300 font-bold hover:bg-gray-300 transition duration-200"
+              className="p-1 px-3 rounded text-white bg-gray-500 font-bold hover:bg-gray-600 transition duration-200"
             >
               USD
             </button>
@@ -83,7 +86,7 @@ const BitcoinCashCard: React.FC<BitcoinCashCardProps> = ({
           {displayMode !== DisplayMode.USD && (
             <button
               onClick={() => setDisplayMode(DisplayMode.USD)}
-              className="p-1 px-3 rounded bg-green-500 font-bold hover:bg-green-500 transition duration-200"
+              className="p-1 px-3 rounded text-white bg-green-500 font-bold hover:bg-green-600 transition duration-200"
             >
               BCH
             </button>
