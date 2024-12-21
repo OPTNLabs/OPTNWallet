@@ -121,12 +121,12 @@ const Transaction: React.FC = () => {
   // Log txOutputs whenever they change
   useFetchWalletData(
     walletId,
-    selectedAddresses,
+    // selectedAddresses,
     setAddresses,
     setContractAddresses,
     setUtxos,
     setContractUTXOs,
-    setSelectedAddresses,
+    // setSelectedAddresses,
     setChangeAddress,
     setErrorMessage
   );

@@ -126,9 +126,9 @@ const OutputSelection: React.FC<OutputSelectionProps> = ({
       // If a scan result is obtained, set it as the recipient address
       if (result && result.ScanResult) {
         setRecipientAddress(result.ScanResult);
-        await Toast.show({
-          text: `Scanned: ${result.ScanResult}`,
-        });
+        // await Toast.show({
+        //   text: `Scanned: ${result.ScanResult}`,
+        // });
       } else {
         await Toast.show({
           text: 'No QR code detected. Please try again.',
@@ -144,6 +144,9 @@ const OutputSelection: React.FC<OutputSelectionProps> = ({
 
   // Function to handle adding an output with validation
   const handleAddOutput = async () => {
+    // await Toast.show({
+    //   text: `Change Address: ${changeAddress}`,
+    // });
     if (transferAmount < DUST) {
       await Toast.show({
         text: `Transfer amount must be at least ${DUST}.`,
@@ -232,12 +235,14 @@ const OutputSelection: React.FC<OutputSelectionProps> = ({
             </div>
           </Popup>
         )}
-        <div className="mb-4">
-          <h3 className="text-lg font-semibold">{`${txOutputs.length} Recipient${txOutputs.length === 1 ? `` : `s`} - Total: ${txOutputs.reduce(
-            (sum, utxo) => sum + Number(utxo.amount),
-            0
-          )}`}</h3>
-        </div>
+        {txOutputs.length > 0 && (
+          <div className="mb-4">
+            <h3 className="text-lg font-semibold">{`${txOutputs.length} Recipient${txOutputs.length === 1 ? `` : `s`} - Total: ${txOutputs.reduce(
+              (sum, utxo) => sum + Number(utxo.amount),
+              0
+            )}`}</h3>
+          </div>
+        )}
 
         {/* Add Output Section */}
         {txOutputs.length < 10 && (

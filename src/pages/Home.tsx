@@ -1,6 +1,6 @@
+// @ts-nocheck
 // src/pages/Home.tsx
 
-// @ts-nocheck
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useDispatch, useSelector } from 'react-redux';
@@ -283,7 +283,7 @@ const Home: React.FC = () => {
       <div className="w-full max-w-md mx-auto mt-4 flex items-center justify-center">
         <BitcoinCashCard
           totalAmount={placeholderBalance}
-          togglePopup={() => setShowCashTokenPopup(true)} // Assuming togglePopup was meant for BitcoinCashCard
+          // togglePopup={() => setShowCashTokenPopup(true)} // Assuming togglePopup was meant for BitcoinCashCard
         />
       </div>
 
@@ -291,7 +291,7 @@ const Home: React.FC = () => {
       <div className="w-full max-w-full mx-auto mt-4 flex justify-center">
         <button
           onClick={() => setShowCashTokenPopup(true)}
-          className="bg-blue-500 font-bold text-white py-2 px-4 rounded mt-4 mx-auto"
+          className="w-full max-w-md bg-blue-500 hover:bg-blue-600 transition duration-300 font-bold text-white py-2 px-4 rounded mt-4 mx-auto"
         >
           Show CashTokens
         </button>

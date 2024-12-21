@@ -46,7 +46,7 @@ const TransactionHistory: React.FC = () => {
     const adjustHeight = () => {
       const bottomNavBar = document.getElementById('bottomNavBar');
       if (bottomNavBar) {
-        setNavBarHeight(bottomNavBar.offsetHeight * 1.5);
+        setNavBarHeight(bottomNavBar.offsetHeight * 1.75);
       }
     };
     adjustHeight();
@@ -209,6 +209,7 @@ const TransactionHistory: React.FC = () => {
         </div>
       )}
 
+      {/* Header and controls (remain at top) */}
       <div className="sticky top-0 bg-white z-10 p-4">
         <div className="flex justify-center mt-4">
           <img
@@ -222,9 +223,9 @@ const TransactionHistory: React.FC = () => {
           <div className="flex justify-between">
             <button
               onClick={toggleSortOrder}
-              className="py-1 px-2 bg-gray-200 font-bold rounded md:py-2 md:px-4"
+              className="py-1 px-2 bg-gray-200 hover:bg-gray-800 hover:text-white transition duration-300 font-bold rounded md:py-2 md:px-4"
             >
-              {sortOrder === 'asc' ? 'Ascending' : 'Descending'}
+              {sortOrder === 'asc' ? 'Oldest' : 'Newest'}
             </button>
             <select
               value={transactionsPerPage}
@@ -238,7 +239,7 @@ const TransactionHistory: React.FC = () => {
           </div>
           <button
             onClick={fetchTransactionHistory}
-            className="py-1 px-2 bg-blue-500 font-bold text-white rounded md:py-2 md:px-4 self-center"
+            className="py-1 px-2 bg-blue-500 hover:bg-blue-600 transition duration-300 font-bold text-white rounded md:py-2 md:px-4 self-center"
             disabled={loading}
           >
             {loading ? 'Fetching...' : 'Fetch Transaction History'}
@@ -246,11 +247,12 @@ const TransactionHistory: React.FC = () => {
         </div>
       </div>
 
-      <div className="flex-grow overflow-y-auto">
+      {/* Scrollable transactions container with fixed height */}
+      <div className="h-1/2 overflow-y-auto px-4">
         {transactions.length === 0 ? (
           <p className="text-center">No transactions available.</p>
         ) : (
-          <ul className="space-y-4 px-4">
+          <ul className="space-y-4">
             {paginatedTransactions.map((tx, id) => (
               <a
                 key={id + tx.tx_hash} // Move the key prop here
@@ -277,15 +279,17 @@ const TransactionHistory: React.FC = () => {
         )}
       </div>
 
+      {/* Bottom navigation (fixed at the bottom) */}
       <div
+        id="bottomNavBar"
         className="fixed bottom-0 left-0 right-0 p-4 bg-white z-10 flex justify-between items-center"
         style={{ paddingBottom: navBarHeight }}
       >
         <button
           onClick={handleFirstPage}
           className={`py-2 px-4 mx-1 font-bold rounded ${
-            currentPage === 1 ? 'bg-gray-400' : 'bg-gray-200'
-          }`}
+            currentPage === 1 ? 'bg-gray-500 text-white' : 'bg-gray-200'
+          } hover:bg-gray-800 hover:text-white transition duration-300`}
           disabled={currentPage === 1}
         >
           First
@@ -293,8 +297,8 @@ const TransactionHistory: React.FC = () => {
         <button
           onClick={handlePreviousPage}
           className={`py-2 px-4 mx-1 font-bold rounded ${
-            currentPage === 1 ? 'bg-gray-400' : 'bg-gray-200'
-          }`}
+            currentPage === 1 ? 'bg-gray-500 text-white' : 'bg-gray-200'
+          } hover:bg-gray-800 hover:text-white transition duration-300`}
           disabled={currentPage === 1}
         >
           {'<'}
@@ -305,8 +309,10 @@ const TransactionHistory: React.FC = () => {
         <button
           onClick={handleNextPage}
           className={`py-2 px-4 mx-1 font-bold rounded ${
-            currentPage === totalPages ? 'bg-gray-400' : 'bg-gray-200'
-          }`}
+            currentPage === totalPages
+              ? 'bg-gray-500 text-white'
+              : 'bg-gray-200'
+          } hover:bg-gray-800 hover:text-white transition duration-300`}
           disabled={currentPage === totalPages}
         >
           {'>'}
@@ -314,8 +320,10 @@ const TransactionHistory: React.FC = () => {
         <button
           onClick={handleLastPage}
           className={`py-2 px-4 mx-1 font-bold rounded ${
-            currentPage === totalPages ? 'bg-gray-400' : 'bg-gray-200'
-          }`}
+            currentPage === totalPages
+              ? 'bg-gray-500 text-white'
+              : 'bg-gray-200'
+          } hover:bg-gray-800 hover:text-white transition duration-300`}
           disabled={currentPage === totalPages}
         >
           Last

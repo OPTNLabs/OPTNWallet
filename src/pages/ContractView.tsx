@@ -174,9 +174,9 @@ const ContractView = () => {
           ...prev,
           [argName]: result.ScanResult,
         }));
-        await Toast.show({
-          text: `Scanned: ${result.ScanResult}`,
-        });
+        // await Toast.show({
+        //   text: `Scanned: ${result.ScanResult}`,
+        // });
 
         // Optional: Debugging
         console.log(`Scanned value for ${argName}: ${result.ScanResult}`);
@@ -392,7 +392,7 @@ const ContractView = () => {
                           setCurrentArgName(arg.name);
                           setShowAddressPopup(true);
                         }}
-                        className="bg-blue-500 font-bold text-white py-2 px-4 rounded mr-2"
+                        className="bg-blue-500 hover:bg-blue-600 transition duration-300 font-bold text-white py-2 px-4 rounded mr-2"
                         disabled={isScanning} // Disable button during scan
                         aria-label={`Select Address for ${arg.name}`}
                       >
@@ -401,7 +401,7 @@ const ContractView = () => {
                       <button
                         type="button"
                         onClick={() => scanBarcode(arg.name)} // Pass arg.name directly
-                        className={`bg-green-500 text-white py-2 px-4 rounded ${
+                        className={`bg-green-500 hover:bg-green-600 transition duration-300 text-white py-2 px-4 rounded ${
                           isScanning ? 'opacity-50 cursor-not-allowed' : ''
                         }`}
                         disabled={isScanning}
@@ -436,7 +436,7 @@ const ContractView = () => {
 
           <button
             onClick={createContract}
-            className={`bg-blue-500 text-white py-2 px-4 rounded mb-4 flex items-center justify-center ${
+            className={`bg-blue-500 hover:bg-blue-600 transition duration-300  text-white py-2 px-4 rounded mb-4 flex items-center justify-center ${
               isLoading ? 'cursor-not-allowed opacity-50' : ''
             }`}
             disabled={isLoading} // Disable the button while loading
@@ -458,9 +458,9 @@ const ContractView = () => {
       )}
 
       {contractInstances.length > 0 && (
-        <div className="mt-8">
+        <div>
           <h2 className="text-lg font-semibold mb-2">Instantiated Contracts</h2>
-          <div className="overflow-y-auto max-h-96">
+          <div className="overflow-y-auto max-h-80 mb-4">
             <ul>
               {contractInstances.map((instance) => (
                 <li
@@ -544,13 +544,13 @@ const ContractView = () => {
                   */}
                   <button
                     onClick={() => updateContract(instance.address)}
-                    className="bg-green-500 font-bold text-white py-2 px-4 my-2 rounded"
+                    className="bg-green-500 hover:bg-green-600 font-bold text-white py-2 px-4 my-2 rounded"
                   >
                     Update
                   </button>
                   <button
                     onClick={() => deleteContract(instance.id)}
-                    className="bg-red-500 font-bold text-white py-2 px-4 my-2 rounded"
+                    className="bg-red-500 hover:bg-red-600 font-bold text-white py-2 px-4 my-2 rounded"
                   >
                     Delete
                   </button>
