@@ -50,7 +50,14 @@ const ContractDetails = () => {
           {/* EscrowMS2 Contract */}
           <div className="mb-6">
             <h4 className="text-xl font-semibold">
-              EscrowMS2 (Multi-Signature Escrow)
+              <a
+                href="https://github.com/BitcoinBay/OPTNWallet/blob/main/src/apis/ContractManager/escrowMS2.cash"
+                className="text-blue-600 hover:underline"
+                target="_blank"
+                rel="noopener noreferrer"
+              >
+                EscrowMS2 (Multi-Party Escrow)
+              </a>
             </h4>
             <p className="mb-2">
               Enhances the basic escrow functionality by introducing multiple
