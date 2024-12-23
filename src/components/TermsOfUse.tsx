@@ -11,9 +11,10 @@ const TermsOfUse = () => {
         <br />
         <strong>2. Purpose</strong>
         <br />
-        The OPTN wallet is provided for demonstration purposes only. It is
-        intended for use by investors and potential clients to evaluate the
-        functionality of the wallet.
+        The OPTN wallet is currently available for beta testing by the public.
+        It is intended for users to explore and provide feedback on its
+        innovative functionality and user-centric design as we work towards the
+        full release.
         <br />
         <br />
         <strong>3. No Liability</strong>
@@ -31,21 +32,13 @@ const TermsOfUse = () => {
         accuracy, or completeness of the wallet's functionality.
         <br />
         <br />
-        <strong>5. Intellectual Property</strong>
-        <br />
-        All intellectual property rights in and to the OPTN wallet and its
-        content are owned by the developers. Users are granted a limited,
-        non-exclusive, and revocable license to use the wallet for evaluation
-        purposes only.
-        <br />
-        <br />
-        <strong>6. Modifications</strong>
+        <strong>5. Modifications</strong>
         <br />
         The developers reserve the right to modify or discontinue the OPTN
         wallet at any time without prior notice.
         <br />
         <br />
-        <strong>7. Contact Information</strong>
+        <strong>6. Contact Information</strong>
         <br />
         For any inquiries or issues related to the OPTN wallet, please refer to
         the contact information provided separately.

@@ -44,9 +44,10 @@ const AboutView = () => {
         {/* Intended Use Section */}
         <h3 className="text-2xl font-bold mb-2">Intended Use</h3>
         <p className="mb-4">
-          The OPTN wallet is currently provided as a prototype for demonstration
-          purposes. It is intended for investors and potential clients to
-          evaluate its innovative functionality and user-centric design.
+          The OPTN wallet is currently available for beta testing by the public.
+          It is intended for users to explore and provide feedback on its
+          innovative functionality and user-centric design as we work towards
+          the full release.
         </p>
 
         {/* Additional Information Section */}

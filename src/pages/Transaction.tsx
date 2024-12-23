@@ -153,7 +153,7 @@ const Transaction: React.FC = () => {
    * @param utxo - The UTXO being clicked.
    */
   const handleUtxoClick = (utxo: UTXO) => {
-    console.log('Selected UTXO:', utxo);
+    // console.log('Selected UTXO:', utxo);
     if (rawTX !== '' && txOutputs.length !== 0) {
       handleRemoveOutput(-1);
     }
@@ -176,14 +176,14 @@ const Transaction: React.FC = () => {
       }
     } else {
       if (utxo.abi) {
-        console.log('Contract UTXO:', utxo);
+        // console.log('Contract UTXO:', utxo);
         setShowPopup(true);
         setTempUtxos(utxo);
         setCurrentContractABI(utxo.abi);
         setSelectedContractAddresses((prev) => [...prev, utxo.address]);
         return;
       } else if (utxo.isPaperWallet) {
-        console.log('Selected a Paper Wallet UTXO:', paperWalletUTXOs);
+        // console.log('Selected a Paper Wallet UTXO:', paperWalletUTXOs);
 
         // const isDuplicate = paperWalletUTXOs.some(
         //   (existingUtxo) =>
@@ -196,7 +196,7 @@ const Transaction: React.FC = () => {
         setSelectedAddresses((prev) => [...prev, utxo.address]);
         setShowPaperWalletUTXOsPopup(true);
         dispatch(resetContract());
-        console.log('Selected a Paper Wallet UTXO:', utxo);
+        // console.log('Selected a Paper Wallet UTXO:', utxo);
         // }
       } else {
         // const signatureTemplate = new SignatureTemplate(
@@ -217,11 +217,11 @@ const Transaction: React.FC = () => {
         dispatch(resetContract());
 
         // **Add Logging Here**
-        console.log('Selected a non-contract UTXO:', utxo);
+        // console.log('Selected a non-contract UTXO:', utxo);
       }
     }
 
-    console.log('Selected UTXOs after function inputs:', selectedUtxos);
+    // console.log('Selected UTXOs after function inputs:', selectedUtxos);
   };
 
   /**
@@ -325,8 +325,8 @@ const Transaction: React.FC = () => {
     contractFunction: string,
     inputs: { [key: string]: string }
   ) => {
-    console.log('Selected Contract Function:', contractFunction);
-    console.log('Selected Contract Function Inputs:', inputs);
+    // console.log('Selected Contract Function:', contractFunction);
+    // console.log('Selected Contract Function Inputs:', inputs);
 
     // Validate inputs is an object, not an array
     if (typeof inputs !== 'object' || Array.isArray(inputs)) {
@@ -362,10 +362,10 @@ const Transaction: React.FC = () => {
       setSelectedUtxos([...selectedUtxos, updatedUtxo]);
 
       // **Add Logging Here**
-      console.log(
-        'Updated UTXO with contractFunction and contractFunctionInputs:',
-        updatedUtxo
-      );
+      // console.log(
+      //   'Updated UTXO with contractFunction and contractFunctionInputs:',
+      //   updatedUtxo
+      // );
     }
 
     // Close the popup

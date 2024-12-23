@@ -46,7 +46,7 @@ const WalletImport = () => {
 
   const handleImportAccount = async () => {
     if (recoveryPhrase === '') {
-      console.log('Recovery Phrase cannot be empty.');
+      console.error('Recovery Phrase cannot be empty.');
       return;
     }
 
@@ -60,7 +60,7 @@ const WalletImport = () => {
       );
 
       if (!accountExists) {
-        // console.log('Account does not exist, attempting to create...');
+        // console.error('Account does not exist, attempting to create...');
         const createAccountSuccess = await walletManager.createWallet(
           walletName,
           recoveryPhrase,
