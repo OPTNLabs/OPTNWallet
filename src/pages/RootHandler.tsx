@@ -17,7 +17,7 @@ const RootHandler = () => {
 
   useEffect(() => {
     const checkExistingWallet = async () => {
-      console.log(`Current walletId: ${walletId}`);
+      // console.log(`Current walletId: ${walletId}`);
 
       try {
         if (walletId === 1) {
@@ -32,9 +32,7 @@ const RootHandler = () => {
               const success = await WalletManager().deleteWallet(index);
               // If WalletManager exports deleteWallet directly:
               // const success = await deleteWallet(index);
-              if (success) {
-                console.log(`Deleted wallet with ID: ${index}`);
-              } else {
+              if (!success) {
                 console.error(`Failed to delete wallet with ID: ${index}`);
               }
             } catch (deleteError) {

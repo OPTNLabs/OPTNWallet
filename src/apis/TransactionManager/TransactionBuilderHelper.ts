@@ -140,7 +140,7 @@ export default function TransactionBuilderHelper() {
       const txid = await provider.sendRawTransaction(tx);
       return txid;
     } catch (error) {
-      console.log(error);
+      console.error(error);
       return null;
     }
   };

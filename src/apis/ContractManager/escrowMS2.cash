@@ -1,0 +1,39 @@
+pragma cashscript ^0.9.0;
+
+contract Escrow(bytes20 arbiter1, bytes20 arbiter2, bytes20 buyer, bytes20 seller) {
+    function eitherAuthSpend(pubkey pk, sig s) {
+        require(hash160(pk) == arbiter1 || hash160(pk) == arbiter2);
+        require(checkSig(s, pk));
+
+        // Check that the correct amount is sent
+        // int minerFee = 1000; // hardcoded fee
+        int amount = tx.inputs[this.activeInputIndex].value;         // - minerFee
+        require(tx.outputs[0].value == amount);
+
+        // Check that the transaction sends to either the buyer or the seller
+        bytes25 buyerLock = new LockingBytecodeP2PKH(buyer);
+        bytes25 sellerLock = new LockingBytecodeP2PKH(seller);
+        bool sendsToBuyer = tx.outputs[0].lockingBytecode == buyerLock;
+        bool sendsToSeller = tx.outputs[0].lockingBytecode == sellerLock;
+        require(sendsToBuyer || sendsToSeller);
+    }
+
+    function bothAuthSpend(pubkey pk1, sig s1, pubkey pk2, sig s2) {
+        require(hash160(pk1) == arbiter1);
+        require(checkSig(s1, pk1));
+        require(hash160(pk2) == arbiter2);
+        require(checkSig(s2, pk2));
+
+        // Check that the correct amount is sent
+        // int minerFee = 1000; // hardcoded fee
+        int amount = tx.inputs[this.activeInputIndex].value;         // - minerFee
+        require(tx.outputs[0].value == amount);
+
+        // Check that the transaction sends to either the buyer or the seller
+        bytes25 buyerLock = new LockingBytecodeP2PKH(buyer);
+        bytes25 sellerLock = new LockingBytecodeP2PKH(seller);
+        bool sendsToBuyer = tx.outputs[0].lockingBytecode == buyerLock;
+        bool sendsToSeller = tx.outputs[0].lockingBytecode == sellerLock;
+        require(sendsToBuyer || sendsToSeller);
+    }
+}

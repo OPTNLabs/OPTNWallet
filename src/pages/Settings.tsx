@@ -17,6 +17,7 @@ import { clearTransaction } from '../redux/transactionBuilderSlice';
 import { RootState } from '../redux/store';
 import { selectCurrentNetwork } from '../redux/selectors/networkSelectors';
 import FaucetView from '../components/FaucetView';
+import ContractDetails from '../components/ContractDetails';
 
 const Settings = () => {
   const currentWalletId = useSelector(
@@ -67,6 +68,8 @@ const Settings = () => {
         return <ContactUs />;
       case 'network':
         return <FaucetView />;
+      case 'ContractDetails':
+        return <ContractDetails />;
       default:
         return null;
     }
@@ -84,6 +87,8 @@ const Settings = () => {
         return 'Contact Us';
       case 'network':
         return 'Network';
+      case 'ContractDetails':
+        return 'Contract Description';
       default:
         return '';
     }
@@ -108,32 +113,38 @@ const Settings = () => {
         <div className="flex flex-col items-center space-y-4">
           <button
             onClick={() => handleOptionClick('recovery')}
-            className="w-full max-w-md bg-blue-500 hover:bg-green-600 transition duration-300 text-white font-bold py-2 px-4 border rounded-lg"
+            className="w-full max-w-md bg-blue-500 hover:bg-blue-600 transition duration-300 text-white font-bold py-2 px-4 border rounded-lg"
           >
             Recovery Phrase
           </button>
           <button
             onClick={() => handleOptionClick('about')}
-            className="w-full max-w-md bg-blue-500 hover:bg-green-600 transition duration-300 text-white font-bold py-2 px-4 border rounded-lg"
+            className="w-full max-w-md bg-blue-500 hover:bg-blue-600 transition duration-300 text-white font-bold py-2 px-4 border rounded-lg"
           >
             About
           </button>
           <button
             onClick={() => handleOptionClick('terms')}
-            className="w-full max-w-md bg-blue-500 hover:bg-green-600 transition duration-300 text-white font-bold py-2 px-4 border rounded-lg"
+            className="w-full max-w-md bg-blue-500 hover:bg-blue-600 transition duration-300 text-white font-bold py-2 px-4 border rounded-lg"
           >
             Terms of Use
           </button>
           <button
             onClick={() => handleOptionClick('contact')}
-            className="w-full max-w-md bg-blue-500 hover:bg-green-600 transition duration-300 text-white font-bold py-2 px-4 border rounded-lg"
+            className="w-full max-w-md bg-blue-500 hover:bg-blue-600 transition duration-300 text-white font-bold py-2 px-4 border rounded-lg"
           >
             Contact Us
+          </button>
+          <button
+            onClick={() => handleOptionClick('ContractDetails')}
+            className="w-full max-w-md bg-blue-500 hover:bg-blue-600 transition duration-300 text-white font-bold py-2 px-4 border rounded-lg"
+          >
+            Contract Info
           </button>
           {currentNetwork === Network.CHIPNET && (
             <button
               onClick={() => handleOptionClick('network')}
-              className="w-full max-w-md bg-blue-500 hover:bg-green-600 transition duration-300 text-white font-bold py-2 px-4 border rounded-lg"
+              className="w-full max-w-md bg-blue-500 hover:bg-blue-600 transition duration-300 text-white font-bold py-2 px-4 border rounded-lg"
             >
               Faucet
             </button>

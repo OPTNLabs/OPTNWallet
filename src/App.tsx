@@ -55,7 +55,7 @@ function App() {
     // Cleanup function
     return () => {
       if (walletId !== 1) {
-        console.log(walletId);
+        // console.log(walletId);
         if (utxoWorkerStarted) {
           stopUTXOWorker();
           utxoWorkerStarted = false;

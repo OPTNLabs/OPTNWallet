@@ -43,7 +43,7 @@ const ensureDatabaseStarted = async (): Promise<void> => {
 const saveDatabaseToFile = async (): Promise<void> => {
   await ensureDatabaseStarted();
   if (!db) {
-    console.log('Database not started.');
+    console.error('Database not started.');
     return;
   }
 

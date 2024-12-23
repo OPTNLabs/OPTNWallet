@@ -83,7 +83,7 @@ const ElectrumService = {
       );
 
       if (isStringResponse(txHash)) {
-        console.log(`Broadcasted transaction: ${txHash}`);
+        // console.log(`Broadcasted transaction: ${txHash}`);
         return txHash;
       } else {
         throw new Error('Invalid transaction hash response format');

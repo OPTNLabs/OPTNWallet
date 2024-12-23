@@ -7,16 +7,17 @@ import {
   HashType,
 } from 'cashscript';
 import DatabaseService from '../DatabaseManager/DatabaseService';
-import p2pkhArtifact from './artifacts/p2pkh.json';
-import introspectionCovenantArtifact from './artifacts/IntrospectionCovenant.json';
-import transferWithTimeoutArtifact from './artifacts/transfer_with_timeout.json';
-import announcementArtifact from './artifacts/announcement.json';
-import escrowArtifact from './artifacts/escrow.json';
 import parseInputValue from '../../utils/parseInputValue';
 import { Network } from '../../redux/networkSlice';
 import { store } from '../../redux/store';
 import ElectrumService from '../../services/ElectrumService';
 import { UTXO } from '../../types/types';
+import p2pkhArtifact from './artifacts/p2pkh.json';
+// import bip38Artifact from './artifacts/bip38.json';
+import transferWithTimeoutArtifact from './artifacts/transfer_with_timeout.json';
+// import announcementArtifact from './artifacts/announcement.json';
+import escrowArtifact from './artifacts/escrow.json';
+import escrowMS2Artifact from './artifacts/escrowMS2.json';
 
 export default function ContractManager() {
   const dbService = DatabaseService();
@@ -26,9 +27,10 @@ export default function ContractManager() {
   const artifactCache: { [key: string]: any } = {
     p2pkh: p2pkhArtifact,
     transfer_with_timeout: transferWithTimeoutArtifact,
-    announcement: announcementArtifact,
-    introspectionCovenant: introspectionCovenantArtifact,
+    // announcement: announcementArtifact,
     escrow: escrowArtifact,
+    escrowMS2: escrowMS2Artifact,
+    // bip38: bip38Artifact,
   };
 
   return {

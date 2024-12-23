@@ -2,7 +2,7 @@
 
 import { useDispatch } from 'react-redux';
 import TransactionService from '../services/TransactionService';
-// import { Toast } from '@capacitor/toast';
+import { Toast } from '@capacitor/toast';
 import { TransactionOutput, UTXO } from '../types/types';
 import {
   clearTransaction,
@@ -144,6 +144,9 @@ const useHandleTransaction = (
 
       if (transactionID.errorMessage) {
         setErrorMessage(transactionID.errorMessage);
+        await Toast.show({
+          text: `Error: ${transactionID.errorMessage}`,
+        });
       } else {
         // Reset both transaction and contract states if successful
         setRawTX('');

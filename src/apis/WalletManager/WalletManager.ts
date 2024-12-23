@@ -71,7 +71,7 @@ export default function WalletManager() {
       await dbService.saveDatabaseToFile();
       return true;
     } catch (e) {
-      console.log(e);
+      console.error(e);
       return false;
     }
   }
@@ -80,7 +80,7 @@ export default function WalletManager() {
     const dbService = DatabaseService();
     const db = dbService.getDatabase();
     if (!db) {
-      console.log('Database not started.');
+      console.error('Database not started.');
       return null;
     }
 
@@ -95,7 +95,7 @@ export default function WalletManager() {
         walletId = toNumber(row.id); // Explicitly cast to number
         // console.log(`Found wallet ID: ${walletId}`);
       } else {
-        console.log('No wallet found in the database.');
+        console.error('No wallet found in the database.');
       }
 
       query.free();
@@ -253,7 +253,7 @@ export default function WalletManager() {
     const dbService = DatabaseService();
     const db = dbService.getDatabase();
     if (!db) {
-      console.log('Database not started.');
+      console.error('Database not started.');
       return null;
     }
 
