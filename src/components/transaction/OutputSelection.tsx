@@ -211,7 +211,7 @@ const OutputSelection: React.FC<OutputSelectionProps> = ({
                     <button
                       onClick={() => {
                         handleRemoveOutput(index);
-                        console.log(txOutputs);
+                        // console.log(txOutputs);
                         if (txOutputs.length === 1) togglePopup();
                       }}
                       className="bg-red-400 font-bold text-white py-1 px-2 rounded-md hover:bg-red-600 transition duration-300"

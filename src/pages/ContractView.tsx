@@ -105,7 +105,7 @@ const ContractView = () => {
     const { name, value } = event.target;
     setInputValues({ ...inputValues, [name]: value });
     // Optional: Debugging
-    console.log(`Input changed: ${name} = ${value}`);
+    // console.log(`Input changed: ${name} = ${value}`);
   };
 
   const handleCopyAddress = async (address: string) => {
@@ -144,7 +144,7 @@ const ContractView = () => {
         setInputValues({ ...inputValues, [currentArgName]: valueToSet });
 
         // Optional: Debugging
-        console.log(`Set inputValues for ${currentArgName}: ${valueToSet}`);
+        // console.log(`Set inputValues for ${currentArgName}: ${valueToSet}`);
       }
     }
     setShowAddressPopup(false);
@@ -179,7 +179,7 @@ const ContractView = () => {
         // });
 
         // Optional: Debugging
-        console.log(`Scanned value for ${argName}: ${result.ScanResult}`);
+        // console.log(`Scanned value for ${argName}: ${result.ScanResult}`);
       } else {
         await Toast.show({
           text: 'No QR code detected. Please try again.',
@@ -283,10 +283,10 @@ const ContractView = () => {
   const updateContract = async (address: string) => {
     try {
       const contractManager = ContractManager();
-      const { added, removed } =
-        await contractManager.updateContractUTXOs(address);
+      // const { added, removed } =
+      await contractManager.updateContractUTXOs(address);
 
-      console.log(`UTXOs updated. Added: ${added}, Removed: ${removed}`);
+      // console.log(`UTXOs updated. Added: ${added}, Removed: ${removed}`);
 
       // Fetch updated contract instance from the database
       const updatedContractInstance =

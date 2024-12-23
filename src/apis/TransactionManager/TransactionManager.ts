@@ -95,7 +95,7 @@ export default function TransactionManager() {
     let errorMessage: string | null = null;
     try {
       txid = await txBuilder.sendTransaction(rawTX);
-      console.log('Sent Transaction:', txid);
+      // console.log('Sent Transaction:', txid);
     } catch (error: any) {
       console.error('Error sending transaction:', error);
       errorMessage = 'Error sending transaction: ' + error.message;

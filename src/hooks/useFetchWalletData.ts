@@ -32,8 +32,8 @@ const useFetchWalletData = (
         const { addresses, utxos, contractAddresses } =
           await TransactionService.fetchAddressesAndUTXOs(walletId);
 
-        console.log('Fetched Addresses:', addresses);
-        console.log('Wallet ID:', walletId);
+        // console.log('Fetched Addresses:', addresses);
+        // console.log('Wallet ID:', walletId);
         // console.log('Fetched Contract Addresses:', contractAddresses);
         // console.log('Fetched UTXOs:', utxos);
 

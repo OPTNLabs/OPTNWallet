@@ -66,7 +66,7 @@ const WalletCreation = () => {
         passphrase
       );
       if (accountExists) {
-        console.log('Account already exists.');
+        console.error('Account already exists.');
         return;
       }
 
