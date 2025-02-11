@@ -33,9 +33,10 @@ export default function ElectrumServer() {
     } else {
       electrum = new ElectrumClient(
         'OPTNWallet',
-        '1.5.3',
+        '1.5.1',
         server,
-        ElectrumTransport.WSS.Port,
+        50004,
+        // ElectrumTransport.WSS.Port,
         ElectrumTransport.WSS.Scheme
       );
 
