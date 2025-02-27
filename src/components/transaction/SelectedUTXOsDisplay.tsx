@@ -4,17 +4,21 @@ import React, { useState } from 'react';
 import { UTXO } from '../../types/types';
 import Popup from './Popup'; // Import the Popup component
 import { shortenTxHash } from '../../utils/shortenHash';
+import { PREFIX } from '../../utils/constants';
+import { Network } from '../../redux/networkSlice';
 
 interface SelectedUTXOsDisplayProps {
   selectedUtxos: UTXO[];
   totalSelectedUtxoAmount: BigInt;
   handleUtxoClick: (utxo: UTXO) => void;
+  currentNetwork: Network;
 }
 
 const SelectedUTXOsDisplay: React.FC<SelectedUTXOsDisplayProps> = ({
   selectedUtxos,
   totalSelectedUtxoAmount,
   handleUtxoClick,
+  currentNetwork,
 }) => {
   const [showPopup, setShowPopup] = useState<boolean>(false); // Local state for popup visibility
 
@@ -53,7 +57,10 @@ const SelectedUTXOsDisplay: React.FC<SelectedUTXOsDisplayProps> = ({
                   onClick={() => handleUtxoClick(utxo)}
                   className="flex flex-col items-start mb-2 w-full break-words whitespace-normal border p-2 rounded bg-blue-100"
                 >
-                  <span className="w-full">{`Address: ${shortenTxHash(utxo.address)}`}</span>
+                  <span className="w-full">{`Address: ${shortenTxHash(
+                    utxo.address,
+                    PREFIX[currentNetwork].length
+                  )}`}</span>
                   <span className="w-full">{`Amount: ${utxo.amount ? utxo.amount : utxo.value} sats`}</span>
                   <span className="w-full">{`Tx Hash: ${shortenTxHash(utxo.tx_hash)}`}</span>
                   <span className="w-full">{`Position: ${utxo.tx_pos}`}</span>

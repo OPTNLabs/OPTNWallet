@@ -454,6 +454,7 @@ const Transaction: React.FC = () => {
           selectedUtxos={selectedUtxos}
           totalSelectedUtxoAmount={totalSelectedUtxoAmount}
           handleUtxoClick={handleUtxoClick}
+          currentNetwork={currentNetwork}
         />
 
         {/* Transaction Outputs Display */}
