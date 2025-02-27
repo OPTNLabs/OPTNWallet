@@ -258,8 +258,8 @@ const TransactionHistory: React.FC = () => {
                 key={id + tx.tx_hash} // Move the key prop here
                 href={
                   currentNetwork === Network.CHIPNET
-                    ? `https://chipnet.imaginary.cash/tx/${tx.tx_hash}`
-                    : `https://blockchair.com/bitcoin-cash/transaction/${tx.tx_hash}`
+                    ? `https://chipnet.bch.ninja/tx/${tx.tx_hash}`
+                    : `https://explorer.bch.ninja/tx/${tx.tx_hash}`
                 }
                 target="_blank"
                 rel="noopener noreferrer"
