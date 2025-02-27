@@ -50,7 +50,7 @@ const ErrorAndStatusPopups: React.FC<ErrorAndStatusPopupsProps> = ({
               href={
                 currentNetwork === Network.CHIPNET
                   ? `https://chipnet.imaginary.cash/tx/${transactionId}`
-                  : `https://blockchair.com/bitcoin-cash/transaction/${transactionId}`
+                  : `https://explorer.bch.ninja/tx/${transactionId}`
               }
               target="_blank"
               rel="noopener noreferrer"

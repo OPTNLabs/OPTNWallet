@@ -95,21 +95,6 @@ const OutputSelection: React.FC<OutputSelectionProps> = ({
     setTokenAmount(value === '' ? 0 : Number(value));
   };
 
-  // // Function to check and request camera permissions
-  // const checkAndRequestPermissions = async (): Promise<boolean> => {
-  //   const permission = await CapacitorBarcodeScanner.checkPermission({
-  //     force: true,
-  //   });
-  //   if (permission.granted) {
-  //     return true;
-  //   } else {
-  //     await Toast.show({
-  //       text: 'Camera permission is required to scan QR codes.',
-  //     });
-  //     return false;
-  //   }
-  // };
-
   // Function to initiate barcode scanning
   const scanBarcode = async () => {
     // const hasPermission = true; //await checkAndRequestPermissions();
@@ -280,33 +265,32 @@ const OutputSelection: React.FC<OutputSelectionProps> = ({
             </div>
 
             {/* Uncomment the following section if you want to include token amount and category selection */}
-            {/*
-        <div className="mb-2">
-          <input
-            type="number"
-            value={tokenAmount}
-            placeholder="Token Amount"
-            onChange={handleTokenAmountChange}
-            className="border p-2 w-full break-words whitespace-normal"
-          />
-        </div>
-        {availableTokenCategories.length > 0 && (
-          <div className="mb-2">
-            <select
-              value={selectedTokenCategory}
-              onChange={(e) => setSelectedTokenCategory(e.target.value)}
-              className="border p-2 w-full break-words whitespace-normal"
-            >
-              <option value="">Select Token Category</option>
-              {availableTokenCategories.map((category: string, index) => (
-                <option key={index} value={category}>
-                  {category}
-                </option>
-              ))}
-            </select>
-          </div>
-        )}
-        */}
+
+            <div className="mb-2">
+              <input
+                type="number"
+                value={tokenAmount}
+                placeholder="Token Amount"
+                onChange={handleTokenAmountChange}
+                className="border p-2 w-full break-words whitespace-normal"
+              />
+            </div>
+            {availableTokenCategories.length > 0 && (
+              <div className="mb-2">
+                <select
+                  value={selectedTokenCategory}
+                  onChange={(e) => setSelectedTokenCategory(e.target.value)}
+                  className="border p-2 w-full break-words whitespace-normal"
+                >
+                  <option value="">Select Token Category</option>
+                  {availableTokenCategories.map((category: string, index) => (
+                    <option key={index} value={category}>
+                      {category}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            )}
 
             {/* Add Output Button */}
             <button
