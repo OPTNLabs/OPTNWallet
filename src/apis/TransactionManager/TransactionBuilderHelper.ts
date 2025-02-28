@@ -119,6 +119,8 @@ export default function TransactionBuilderHelper() {
     const txOutputs = prepareTransactionOutputs(outputs);
     txBuilder.addOutputs(txOutputs);
 
+    console.log(txBuilder);
+
     try {
       const builtTransaction = await txBuilder.build(); // Ensure await is present
       // console.log('Built Transaction:', builtTransaction);
