@@ -474,7 +474,7 @@ const Transaction: React.FC = () => {
           setTransferAmount={setTransferAmount}
           tokenAmount={tokenAmount}
           setTokenAmount={setTokenAmount}
-          utxos={utxos}
+          utxos={utxos.concat(contractUTXOs)}
           selectedTokenCategory={selectedTokenCategory}
           setSelectedTokenCategory={setSelectedTokenCategory}
           addOutput={handleAddOutput}

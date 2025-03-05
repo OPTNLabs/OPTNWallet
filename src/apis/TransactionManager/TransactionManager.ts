@@ -192,6 +192,9 @@ export default function TransactionManager() {
     finalOutputs: TransactionOutput[] | null;
     errorMsg: string;
   }> => {
+    console.log(
+      `TransactionManager: txInputs: ${JSON.stringify(selectedUtxos, null, 2)}`
+    );
     // console.log(
     //   `TransactionManager: txOutputs: ${JSON.stringify(outputs, null, 2)}`
     // );
