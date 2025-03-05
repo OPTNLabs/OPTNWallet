@@ -79,6 +79,7 @@ const OutputSelection: React.FC<OutputSelectionProps> = ({
   const handleTransferAmountChange = (
     e: React.ChangeEvent<HTMLInputElement>
   ) => {
+    console.log(utxos)
     const value = e.target.value;
     const numValue = Number(value);
 
