@@ -70,8 +70,8 @@ const OutputSelection: React.FC<OutputSelectionProps> = ({
   const availableTokenCategories = [
     ...new Set(
       utxos
-        .filter((utxo) => utxo.token_data)
-        .map((utxo) => utxo.token_data!.category)
+        .filter((utxo) => utxo.token)
+        .map((utxo) => utxo.token!.category)
     ),
   ];
 

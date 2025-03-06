@@ -102,7 +102,7 @@ const useHandleTransaction = (
         return;
       }
 
-      console.log('Transaction Build Result:', transaction);
+      // console.log('Transaction Build Result:', transaction);
 
       // Update Redux outputs state with finalOutputs
       if (transaction.finalOutputs) {
@@ -114,7 +114,7 @@ const useHandleTransaction = (
         // Set the entire txOutputs array to finalOutputs
         dispatch(setTxOutputs(transaction.finalOutputs));
 
-        console.log('Final Outputs after Build:', transaction.finalOutputs);
+        // console.log('Final Outputs after Build:', transaction.finalOutputs);
       }
 
       setErrorMessage(transaction.errorMsg);

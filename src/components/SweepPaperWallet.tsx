@@ -109,7 +109,7 @@ const SweepPaperWallet: React.FC<SweepPaperWalletProps> = ({
       // Fetch UTXOs
       const fetchedUtxos = await ElectrumService.getUTXOS(address).then(
         (res) => {
-          return res.filter((utxo) => !utxo.token_data);
+          return res.filter((utxo) => !utxo.token);
         }
       );
 
