@@ -78,8 +78,8 @@ class TransactionService {
         typeof row.tx_pos === 'number' ? row.tx_pos : Number(row.tx_pos);
       const height =
         typeof row.height === 'number' ? row.height : Number(row.height);
-      const tokenData = row.token_data
-        ? JSON.parse(String(row.token_data))
+      const tokenData = row.token
+        ? JSON.parse(String(row.token))
         : undefined;
       const contractFunction =
         typeof row.contractFunction === 'string' &&
@@ -109,7 +109,7 @@ class TransactionService {
           tx_pos: txPos,
           height: height,
           privateKey: privateKey,
-          token_data: tokenData,
+          token: tokenData,
           value: amount,
           // **Assign New Fields**
           contractFunction,

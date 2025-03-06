@@ -107,8 +107,12 @@ export default function TransactionBuilderHelper() {
           vout: processedUtxo.tx_pos,
           satoshis: BigInt(processedUtxo.value),
           unlocker,
-          token_data: processedUtxo.token_data,
-        };
+          token: processedUtxo.token
+          ? {
+              ...processedUtxo.token,
+              amount: BigInt(processedUtxo.token.amount), // convert amount to bigint
+            }
+          : undefined,        };
       })
     );
 
@@ -119,7 +123,7 @@ export default function TransactionBuilderHelper() {
     const txOutputs = prepareTransactionOutputs(outputs);
     txBuilder.addOutputs(txOutputs);
 
-    console.log(txBuilder);
+    // console.log(txBuilder);
 
     try {
       const builtTransaction = await txBuilder.build(); // Ensure await is present

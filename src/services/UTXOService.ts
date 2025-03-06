@@ -27,7 +27,7 @@ const UTXOService = {
         address,
         height: utxo.height,
         prefix,
-        token_data: utxo.token_data || null,
+        token: utxo.token,
         wallet_id: walletId,
       }));
 
@@ -63,6 +63,7 @@ const UTXOService = {
       const updatedUTXOs = await manager.fetchUTXOsByAddress(walletId, address);
       store.dispatch(setUTXOs({ newUTXOs: { [address]: updatedUTXOs } }));
 
+      // console.log("updated UTXOs", updatedUTXOs)
       return updatedUTXOs;
     } catch (error) {
       console.error(`Error in fetchAndStoreUTXOs for ${address}:`, error);

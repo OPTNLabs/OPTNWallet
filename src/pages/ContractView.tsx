@@ -533,7 +533,7 @@ const ContractView = () => {
                           amount: utxo.amount.toString(),
                           tx_hash: utxo.tx_hash,
                           tx_pos: utxo.tx_pos,
-                          token_data: {
+                          token: {
                             amount: utxo.token.amount,
                             category: utxo.token.category,
                           },

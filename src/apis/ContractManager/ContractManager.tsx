@@ -156,7 +156,7 @@ export default function ContractManager() {
         tx_pos: utxo.tx_pos,
         amount: BigInt(utxo.value),
         height: utxo.height,
-        token: utxo.token_data || undefined,
+        token: utxo.token || undefined,
         prefix,
         // **Add New Fields**
         contractFunction: utxo.contractFunction || undefined,
@@ -452,13 +452,13 @@ export default function ContractManager() {
       const prefix =
         currentNetwork === Network.MAINNET ? 'bitcoincash' : 'bchtest';
 
-      const utxos = await ElectrumService.getUTXOS(address);
-      const formattedUTXOs = utxos.map((utxo: any) => ({
+      const utxos: UTXO[] = await ElectrumService.getUTXOS(address);
+      const formattedUTXOs = utxos.map((utxo: UTXO) => ({
         tx_hash: utxo.tx_hash,
         tx_pos: utxo.tx_pos,
         amount: BigInt(utxo.value),
         height: utxo.height,
-        token: utxo.token_data || undefined,
+        token: utxo.token || undefined,
         prefix,
         contractFunction: utxo.contractFunction || null, // New Field
         contractFunctionInputs: utxo.contractFunctionInputs
@@ -539,7 +539,7 @@ export default function ContractManager() {
       try {
         // Batch insert new UTXOs
         const insertUTXOQuery = `
-          INSERT INTO UTXOs (address, height, tx_hash, tx_pos, amount, token_data, prefix, contractFunction, contractFunctionInputs) 
+          INSERT INTO UTXOs (address, height, tx_hash, tx_pos, amount, token, prefix, contractFunction, contractFunctionInputs) 
           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
         `;
         const insertStmt = db.prepare(insertUTXOQuery);
