@@ -380,11 +380,11 @@ const Transaction: React.FC = () => {
   );
 
   const filteredRegularUTXOs = utxos.filter(
-    (utxo) => selectedAddresses.includes(utxo.address) && !utxo.token_data
+    (utxo) => selectedAddresses.includes(utxo.address) && !utxo.token
   );
 
   const filteredCashTokenUTXOs = utxos.filter(
-    (utxo) => selectedAddresses.includes(utxo.address) && utxo.token_data
+    (utxo) => selectedAddresses.includes(utxo.address) && utxo.token
   );
 
   // Calculate the total amount from selected UTXOs

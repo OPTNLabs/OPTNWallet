@@ -77,7 +77,7 @@ export const createTables = (db: any) => {
       tx_pos INT NOT NULL,
       amount INT NOT NULL,
       prefix VARCHAR(255) NOT NULL,
-      token_data TEXT,
+      token TEXT,
       contractFunction TEXT, -- New Field
       contractFunctionInputs TEXT, -- New Field
       FOREIGN KEY(wallet_id) REFERENCES wallets(id),

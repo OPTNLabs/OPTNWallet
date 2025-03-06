@@ -148,7 +148,7 @@ const Popup: React.FC<PopupProps> = ({
                     utxos={
                       reduxUTXOs[
                         keyPairs[selectedKeyPairIndex].address
-                      ]?.filter((utxo) => !utxo.token_data) || []
+                      ]?.filter((utxo) => !utxo.token) || []
                     }
                     loading={loading[keyPairs[selectedKeyPairIndex].address]}
                   />
@@ -158,7 +158,7 @@ const Popup: React.FC<PopupProps> = ({
                     utxos={
                       reduxUTXOs[
                         keyPairs[selectedKeyPairIndex].address
-                      ]?.filter((utxo) => utxo.token_data) || []
+                      ]?.filter((utxo) => utxo.token) || []
                     }
                     loading={loading[keyPairs[selectedKeyPairIndex].address]}
                   />

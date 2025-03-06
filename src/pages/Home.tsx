@@ -28,7 +28,7 @@ const initialUTXO: Record<string, any[]> = {
       value: 0,
       amount: 0,
       prefix: 'bchtest',
-      token_data: null,
+      token: null,
       privateKey: new Uint8Array(),
       contractName: '',
       abi: [],
@@ -196,16 +196,17 @@ const Home: React.FC = () => {
   const calculateTotalBitcoinCash = (utxos: Record<string, any[]>) =>
     Object.values(utxos)
       .flat()
-      .filter((utxo) => !utxo.token_data)
+      .filter((utxo) => !utxo.token)
       .reduce((acc, utxo) => acc + utxo.amount, 0);
 
   // Function to calculate Cash Token Totals
   const calculateCashTokenTotals = (utxos: Record<string, any[]>) => {
     const tokenTotals: Record<string, number> = {};
+    // console.log(utxos)
     Object.values(utxos)
       .flat()
       .forEach((utxo) => {
-        const { category, amount } = utxo.token_data || {};
+        const { category, amount } = utxo.token || {};
         if (category) {
           tokenTotals[category] =
             (tokenTotals[category] || 0) + parseFloat(amount);

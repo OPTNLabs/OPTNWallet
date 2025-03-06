@@ -143,13 +143,13 @@ export default function TransactionManager() {
     if (selectedTokenCategory) {
       const tokenUTXO = selectedUtxos.find(
         (utxo) =>
-          utxo.token_data && utxo.token_data.category === selectedTokenCategory
+          utxo.token && utxo.token.category === selectedTokenCategory
       );
 
-      if (tokenUTXO && tokenUTXO.token_data) {
+      if (tokenUTXO && tokenUTXO.token) {
         newOutput.token = {
           amount: tokenAmount,
-          category: tokenUTXO.token_data.category,
+          category: tokenUTXO.token.category,
         };
 
         // Update the recipient address to the token address if available
@@ -192,9 +192,9 @@ export default function TransactionManager() {
     finalOutputs: TransactionOutput[] | null;
     errorMsg: string;
   }> => {
-    console.log(
-      `TransactionManager: txInputs: ${JSON.stringify(selectedUtxos, null, 2)}`
-    );
+    // console.log(
+    //   `TransactionManager: txInputs: ${JSON.stringify(selectedUtxos, null, 2)}`
+    // );
     // console.log(
     //   `TransactionManager: txOutputs: ${JSON.stringify(outputs, null, 2)}`
     // );

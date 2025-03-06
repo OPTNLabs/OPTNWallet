@@ -1,5 +1,14 @@
 // src/types/types.ts
 
+export interface Token {
+  amount: string;
+  category: string;
+  nft?: {
+    capability: string;
+    commitment: string;
+  };
+}
+
 // ElectrumClient related interfaces with updates
 export interface UTXO {
   wallet_id?: number; // This field is used internally in our app, not part of Electrum response
@@ -11,14 +20,8 @@ export interface UTXO {
   value: number;
   amount?: number;
   prefix?: string; // Default to 'bchtest' for now
-  token_data?: {
-    amount: string;
-    category: string;
-    nft?: {
-      capability: string;
-      commitment: string;
-    };
-  } | null; // token_data can be null in some cases
+  token_data?: Token | null
+  token?: Token | null; // token can be null in some cases
   privateKey?: Uint8Array; // Optional field for private key used in P2PKH
   contractName?: string; // For contract-related UTXOs
   abi?: object[]; // ABI for contract-related UTXOs

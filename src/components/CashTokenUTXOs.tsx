@@ -7,7 +7,7 @@ const CashTokenUTXOs = ({ utxos, loading }) => {
       try {
         return JSON.parse(tokenData);
       } catch (error) {
-        console.error(`Error parsing token_data for address:`, error);
+        console.error(`Error parsing token for address:`, error);
         return {}; // Fallback to empty object on parsing failure
       }
     }
@@ -42,7 +42,7 @@ const CashTokenUTXOs = ({ utxos, loading }) => {
       ) : (
         utxos &&
         utxos.map((utxo, idx) => {
-          const tokenData = safelyParseTokenData(utxo.token_data);
+          const tokenData = safelyParseTokenData(utxo.token);
 
           return (
             <div
