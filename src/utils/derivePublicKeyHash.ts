@@ -4,7 +4,7 @@ import {
   CashAddressNetworkPrefix,
   decodeCashAddressFormat,
   decodeCashAddressFormatWithoutPrefix,
-} from '@bitauth/libauth-v3';
+} from '@bitauth/libauth';
 
 /**
  * derivePrefix - Extract the address prefix

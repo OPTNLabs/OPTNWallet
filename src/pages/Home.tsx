@@ -1,4 +1,3 @@
-// @ts-nocheck
 // src/pages/Home.tsx
 
 import React, { useState, useEffect, useCallback, useRef } from 'react';
@@ -217,11 +216,11 @@ const Home: React.FC = () => {
 
   // Sorting and Grouping Placeholder Token Totals
   const fungibleTokens = Object.entries(placeholderTokenTotals)
-    .filter(([category, amount]) => amount > 0)
+    .filter(([, amount]) => amount > 0)
     .sort((a, b) => b[1] - a[1]); // Sort descending by amount
 
   const nonFungibleTokens = Object.entries(placeholderTokenTotals)
-    .filter(([category, amount]) => amount <= 0)
+    .filter(([, amount]) => amount <= 0)
     .sort((a, b) => b[1] - a[1]); // Sort descending by amount
 
   return (

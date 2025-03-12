@@ -49,7 +49,7 @@ const ErrorAndStatusPopups: React.FC<ErrorAndStatusPopupsProps> = ({
             <a
               href={
                 currentNetwork === Network.CHIPNET
-                  ? `https://chipnet.imaginary.cash/tx/${transactionId}`
+                  ? `https://chipnet.bch.ninja/tx/${transactionId}`
                   : `https://explorer.bch.ninja/tx/${transactionId}`
               }
               target="_blank"

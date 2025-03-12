@@ -2,8 +2,8 @@ import {
   deriveHdPath,
   secp256k1,
   encodeCashAddress,
-} from '@bitauth/libauth-v3';
-import { deriveHdPrivateNodeFromSeed } from '@bitauth/libauth';
+  deriveHdPrivateNodeFromSeed,
+} from '@bitauth/libauth';
 import { hash160 } from '@cashscript/utils';
 import * as bip39 from 'bip39';
 import { Network } from '../../redux/networkSlice';
@@ -46,7 +46,9 @@ export default function KeyGeneration() {
     const seed: Uint8Array = await bip39.mnemonicToSeed(mnemonic, passphrase);
 
     // Defining rootNode as type HdNode
-    const rootNode: HdNode = deriveHdPrivateNodeFromSeed(seed, true);
+    const rootNode: HdNode = deriveHdPrivateNodeFromSeed(seed, {
+      assumeValidity: true,
+    });
     // console.log('rootNode:', rootNode);
 
     const baseDerivationPath = `m/44'/${coin_type}'/${account_index}'`;

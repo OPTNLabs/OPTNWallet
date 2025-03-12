@@ -10,7 +10,7 @@ import { PREFIX } from '../utils/constants';
 import { selectCurrentNetwork } from '../redux/selectors/networkSelectors';
 import { QRCodeSVG } from 'qrcode.react';
 import { hexString } from '../utils/hex';
-import { encodePrivateKeyWif } from '@bitauth/libauth-v3';
+import { encodePrivateKeyWif } from '@bitauth/libauth';
 // import { Network } from '../redux/networkSlice';
 // import { FaCamera } from 'react-icons/fa'; // Optional: If you want to use an icon for the scan button
 

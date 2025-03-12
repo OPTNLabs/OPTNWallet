@@ -44,14 +44,26 @@ export interface TransactionHistoryItem {
 }
 
 // Transaction Output
-export interface TransactionOutput {
-  recipientAddress: string;
-  amount: number | bigint;
-  token?: {
-    amount: number | bigint;
-    category: string;
-  };
-}
+export type TransactionOutput =
+  | {
+      // Regular transaction output variant
+      recipientAddress: string;
+      amount: number | bigint;
+      token?: {
+        amount: number | bigint;
+        category: string;
+      };
+      // Explicitly disallow opReturn here
+      opReturn?: never;
+    }
+  | {
+      // OP_RETURN output variant
+      opReturn: string[];
+      // Explicitly disallow regular transaction fields
+      recipientAddress?: never;
+      amount?: never;
+      token?: never;
+    };
 
 // Electrum Request Response type (from electrum-cash library)
 export type RequestResponse =

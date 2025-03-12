@@ -10,7 +10,7 @@ import {
   instantiateSha256,
   RecoveryId,
   utf8ToBin,
-} from '@bitauth/libauth-v3';
+} from '@bitauth/libauth';
 
 import { derivePrefix } from './derivePublicKeyHash';
 import { hash160 } from './hash160';
