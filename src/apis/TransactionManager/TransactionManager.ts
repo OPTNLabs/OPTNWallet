@@ -1,4 +1,3 @@
-// @ts-nocheck
 // src/apis/TransactionManager/TransactionManager.ts
 
 import { store } from '../../redux/store';
@@ -142,8 +141,7 @@ export default function TransactionManager() {
     // Handle token transfers if a category is selected
     if (selectedTokenCategory) {
       const tokenUTXO = selectedUtxos.find(
-        (utxo) =>
-          utxo.token && utxo.token.category === selectedTokenCategory
+        (utxo) => utxo.token && utxo.token.category === selectedTokenCategory
       );
 
       if (tokenUTXO && tokenUTXO.token) {
@@ -198,9 +196,7 @@ export default function TransactionManager() {
     // console.log(
     //   `TransactionManager: txOutputs: ${JSON.stringify(outputs, null, 2)}`
     // );
-    // console.log(
-    //   `TransactionManager" functionInputs: ${JSON.stringify(contractFunctionInputs)}`
-    // );
+    console.log(`Unused Params: ${JSON.stringify(contractFunctionInputs)}`);
     // console.log('TransactionManager: Change Address:', changeAddress);
     // console.log('TransactionManager: Selected UTXOs:', selectedUtxos);
     // Fetch the latest state
