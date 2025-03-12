@@ -4,7 +4,7 @@ export interface Token {
   amount: string;
   category: string;
   nft?: {
-    capability: string;
+    capability: 'none' | 'mutable' | 'minting';
     commitment: string;
   };
 }
@@ -20,7 +20,7 @@ export interface UTXO {
   value: number;
   amount?: number;
   prefix?: string; // Default to 'bchtest' for now
-  token_data?: Token | null
+  token_data?: Token | null;
   token?: Token | null; // token can be null in some cases
   privateKey?: Uint8Array; // Optional field for private key used in P2PKH
   contractName?: string; // For contract-related UTXOs
