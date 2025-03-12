@@ -1,4 +1,3 @@
-// @ts-nocheck
 // src/components/transaction/OutputSelection.tsx
 
 import React, { useState } from 'react';
@@ -58,6 +57,9 @@ const OutputSelection: React.FC<OutputSelectionProps> = ({
   setShowOutputs,
   closePopups,
 }) => {
+  console.warn(
+    `Unused Params: ${showOutputs}, ${setShowOutputs}, ${closePopups}`
+  );
   const [showPopup, setShowPopup] = useState<boolean>(false); // Local state for popup visibility
   const dispatch: AppDispatch = useDispatch();
 
@@ -69,9 +71,7 @@ const OutputSelection: React.FC<OutputSelectionProps> = ({
   // Extract unique token categories from UTXOs
   const availableTokenCategories = [
     ...new Set(
-      utxos
-        .filter((utxo) => utxo.token)
-        .map((utxo) => utxo.token!.category)
+      utxos.filter((utxo) => utxo.token).map((utxo) => utxo.token!.category)
     ),
   ];
 
@@ -79,7 +79,7 @@ const OutputSelection: React.FC<OutputSelectionProps> = ({
   const handleTransferAmountChange = (
     e: React.ChangeEvent<HTMLInputElement>
   ) => {
-    console.log(utxos)
+    console.log(utxos);
     const value = e.target.value;
     const numValue = Number(value);
 

@@ -24,22 +24,29 @@ export default function TransactionBuilderHelper() {
    */
   function prepareTransactionOutputs(outputs: TransactionOutput[]): any[] {
     return outputs.map((output) => {
-      const baseOutput = {
-        to: output.recipientAddress,
-        amount: BigInt(output.amount),
-      };
-
-      if (output.token) {
+      if ('opReturn' in output && output.opReturn !== undefined) {
+        // Process the OP_RETURN output variant
         return {
-          ...baseOutput,
-          token: {
-            amount: BigInt(output.token.amount),
-            category: output.token.category,
-          },
+          opReturn: output.opReturn,
         };
-      }
+      } else {
+        const baseOutput = {
+          to: output.recipientAddress,
+          amount: BigInt(output.amount),
+        };
 
-      return baseOutput;
+        if (output.token) {
+          return {
+            ...baseOutput,
+            token: {
+              amount: BigInt(output.token.amount),
+              category: output.token.category,
+            },
+          };
+        }
+
+        return baseOutput;
+      }
     });
   }
 
@@ -108,11 +115,12 @@ export default function TransactionBuilderHelper() {
           satoshis: BigInt(processedUtxo.value),
           unlocker,
           token: processedUtxo.token
-          ? {
-              ...processedUtxo.token,
-              amount: BigInt(processedUtxo.token.amount), // convert amount to bigint
-            }
-          : undefined,        };
+            ? {
+                ...processedUtxo.token,
+                amount: BigInt(processedUtxo.token.amount), // convert amount to bigint
+              }
+            : undefined,
+        };
       })
     );
 
