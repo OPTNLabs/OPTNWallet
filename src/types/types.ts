@@ -52,6 +52,7 @@ export type TransactionOutput =
       token?: {
         amount: number | bigint;
         category: string;
+        // nft
       };
       // Explicitly disallow opReturn here
       opReturn?: never;
