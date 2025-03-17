@@ -293,11 +293,13 @@ const OutputSelection: React.FC<OutputSelectionProps> = ({
                       className="border p-2 w-full break-words whitespace-normal"
                     >
                       <option value="">Select Token Category</option>
-                      {availableTokenCategories.map((category: string, index) => (
-                        <option key={index} value={category}>
-                          {category}
-                        </option>
-                      ))}
+                      {availableTokenCategories.map(
+                        (category: string, index) => (
+                          <option key={index} value={category}>
+                            {category}
+                          </option>
+                        )
+                      )}
                     </select>
                   </div>
                 )}

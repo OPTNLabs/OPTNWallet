@@ -37,6 +37,7 @@ import {
   // selectNetworkType,
 } from '../redux/walletSlice';
 import SweepPaperWallet from '../components/SweepPaperWallet';
+import AvailableUTXOsDisplay from '../components/transaction/AvailableUTXOsDisplay';
 
 const Transaction: React.FC = () => {
   // Removed local walletId state
@@ -82,6 +83,7 @@ const Transaction: React.FC = () => {
   const [showRegularUTXOsPopup, setShowRegularUTXOsPopup] = useState(false);
   const [showCashTokenUTXOsPopup, setShowCashTokenUTXOsPopup] = useState(false);
   const [showContractUTXOsPopup, setShowContractUTXOsPopup] = useState(false);
+  const [showCTUTXOs, setShowCTUTXOs] = useState<boolean>(false);
   const [paperWalletUTXOs, setPaperWalletUTXOs] = useState<UTXO[]>([]);
   // const [selectedPaperWalletUTXOs, setSelectedPaperWalletUTXOs] = useState<
   //   UTXO[]
@@ -313,6 +315,7 @@ const Transaction: React.FC = () => {
     setErrorMessage(null);
     setShowPaperWalletUTXOsPopup(false);
     setShowOutputs(false);
+    setShowCTUTXOs(false);
   };
 
   /**
@@ -425,6 +428,18 @@ const Transaction: React.FC = () => {
           {/* Sweep Paper Wallet Component */}
           <SweepPaperWallet setPaperWalletUTXOs={setPaperWalletUTXOs} />
         </div>
+
+        {/* Available UTXOs (New Component) */}
+        <AvailableUTXOsDisplay
+          utxos={utxos}
+          // contractUtxos={contractUTXOs}
+          selectedUtxos={selectedUtxos}
+          handleUtxoClick={handleUtxoClick}
+          showCTUTXOs={showCTUTXOs}
+          setShowCTUTXOs={setShowCTUTXOs}
+          currentNetwork={currentNetwork}
+          closePopups={closePopups}
+        />
 
         {/* UTXO Selection Component */}
         <UTXOSelection

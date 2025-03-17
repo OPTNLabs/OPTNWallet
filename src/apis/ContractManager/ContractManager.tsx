@@ -488,7 +488,10 @@ export default function ContractManager() {
       }
 
       const constructorArgs = await fetchConstructorArgs(address);
-      if (!constructorArgs || constructorArgs.length === 0) {
+      if (
+        artifact.constructorInputs > 0 &&
+        (!constructorArgs || constructorArgs.length === 0)
+      ) {
         throw new Error(
           `Constructor arguments not found for contract at address: ${address}`
         );
