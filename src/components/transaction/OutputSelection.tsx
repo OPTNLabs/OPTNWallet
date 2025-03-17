@@ -1,5 +1,3 @@
-// src/components/transaction/OutputSelection.tsx
-
 import React, { useState } from 'react';
 import {
   CapacitorBarcodeScanner,
@@ -7,10 +5,10 @@ import {
 } from '@capacitor/barcode-scanner';
 import { Toast } from '@capacitor/toast';
 import { FaCamera } from 'react-icons/fa';
-import { TransactionOutput, UTXO } from '../../types/types'; // Ensure UTXO type is defined
+import { TransactionOutput, UTXO } from '../../types/types';
 import { shortenTxHash } from '../../utils/shortenHash';
 import { Network } from '../../redux/networkSlice';
-import { PREFIX, DUST } from '../../utils/constants'; // Import DUST
+import { PREFIX, DUST } from '../../utils/constants';
 import Popup from './Popup';
 import { AppDispatch } from '../../redux/store';
 import { useDispatch } from 'react-redux';
@@ -24,7 +22,7 @@ interface OutputSelectionProps {
   setTransferAmount: (amount: number) => void;
   tokenAmount: number;
   setTokenAmount: (amount: number) => void;
-  utxos: UTXO[]; // Replaced `any` with `UTXO`
+  utxos: UTXO[];
   selectedTokenCategory: string;
   setSelectedTokenCategory: (category: string) => void;
   addOutput: () => void;
@@ -60,8 +58,18 @@ const OutputSelection: React.FC<OutputSelectionProps> = ({
   console.warn(
     `Unused Params: ${showOutputs}, ${setShowOutputs}, ${closePopups}`
   );
-  const [showPopup, setShowPopup] = useState<boolean>(false); // Local state for popup visibility
+  const [showPopup, setShowPopup] = useState<boolean>(false);
   const dispatch: AppDispatch = useDispatch();
+
+  // New state for OP_RETURN input visibility and text
+  const [showOpReturn, setShowOpReturn] = useState<boolean>(false);
+  const [opReturnText, setOpReturnText] = useState<string>('');
+
+  // Prepare the OP_RETURN text into an array of strings
+  const opReturnArray = opReturnText
+    .split(' ')
+    .map((s) => s.trim())
+    .filter((s) => s.length > 0);
 
   // Function to toggle the popup
   const togglePopup = () => {
@@ -98,23 +106,13 @@ const OutputSelection: React.FC<OutputSelectionProps> = ({
 
   // Function to initiate barcode scanning
   const scanBarcode = async () => {
-    // const hasPermission = true; //await checkAndRequestPermissions();
-    // if (!hasPermission) {
-    //   return;
-    // }
-
     try {
-      // Initiate barcode scanning with desired options
       const result = await CapacitorBarcodeScanner.scanBarcode({
         hint: CapacitorBarcodeScannerTypeHint.ALL,
       });
 
-      // If a scan result is obtained, set it as the recipient address
       if (result && result.ScanResult) {
         setRecipientAddress(result.ScanResult);
-        // await Toast.show({
-        //   text: `Scanned: ${result.ScanResult}`,
-        // });
       } else {
         await Toast.show({
           text: 'No QR code detected. Please try again.',
@@ -130,15 +128,13 @@ const OutputSelection: React.FC<OutputSelectionProps> = ({
 
   // Function to handle adding an output with validation
   const handleAddOutput = async () => {
-    // await Toast.show({
-    //   text: `Change Address: ${changeAddress}`,
-    // });
     if (transferAmount < DUST) {
       await Toast.show({
         text: `Transfer amount must be at least ${DUST}.`,
       });
       return;
     }
+    // You might later extend addOutput to also include opReturnArray data
     addOutput();
   };
 
@@ -197,7 +193,6 @@ const OutputSelection: React.FC<OutputSelectionProps> = ({
                     <button
                       onClick={() => {
                         handleRemoveOutput(index);
-                        // console.log(txOutputs);
                         if (txOutputs.length === 1) togglePopup();
                       }}
                       className="bg-red-400 font-bold text-white py-1 px-2 rounded-md hover:bg-red-600 transition duration-300"
@@ -223,7 +218,9 @@ const OutputSelection: React.FC<OutputSelectionProps> = ({
         )}
         {txOutputs.length > 0 && (
           <div className="mb-4">
-            <h3 className="text-lg font-semibold">{`${txOutputs.length} Recipient${txOutputs.length === 1 ? `` : `s`} - Total: ${txOutputs.reduce(
+            <h3 className="text-lg font-semibold">{`${txOutputs.length} Recipient${
+              txOutputs.length === 1 ? '' : 's'
+            } - Total: ${txOutputs.reduce(
               (sum, utxo) => sum + Number(utxo.amount),
               0
             )}`}</h3>
@@ -235,68 +232,103 @@ const OutputSelection: React.FC<OutputSelectionProps> = ({
           <div className="mb-6">
             <h3 className="text-lg font-semibold mb-2">Add Output</h3>
 
-            {/* Recipient Address Input with Scan Button */}
-            <div className="flex items-center mb-2">
-              <input
-                type="text"
-                value={recipientAddress}
-                placeholder="Recipient Address"
-                onChange={(e) => setRecipientAddress(e.target.value)}
-                className="border p-2 w-full break-words whitespace-normal"
-              />
+            {/* OP_RETURN Toggle Button */}
+            <div className="mb-2">
               <button
-                onClick={scanBarcode}
-                className="ml-2 bg-green-500 text-white p-2 rounded"
-                title="Scan QR Code"
+                onClick={() => setShowOpReturn((prev) => !prev)}
+                className="bg-purple-500 font-bold text-white py-1 px-2 rounded"
               >
-                <FaCamera />
+                {showOpReturn ? 'Hide OP_RETURN' : 'Show OP_RETURN'}
               </button>
             </div>
 
-            {/* Regular Transfer Amount Input */}
-            <div className="mb-2">
-              <input
-                type="number"
-                value={transferAmount}
-                placeholder={`Regular Amount (Min: ${DUST})`}
-                onChange={handleTransferAmountChange}
-                className="border p-2 w-full break-words whitespace-normal"
-                min={DUST}
-              />
-            </div>
+            {/* Conditionally display regular inputs or OP_RETURN inputs */}
+            {!showOpReturn ? (
+              <>
+                {/* Recipient Address Input with Scan Button */}
+                <div className="flex items-center mb-2">
+                  <input
+                    type="text"
+                    value={recipientAddress}
+                    placeholder="Recipient Address"
+                    onChange={(e) => setRecipientAddress(e.target.value)}
+                    className="border p-2 w-full break-words whitespace-normal"
+                  />
+                  <button
+                    onClick={scanBarcode}
+                    className="ml-2 bg-green-500 text-white p-2 rounded"
+                    title="Scan QR Code"
+                  >
+                    <FaCamera />
+                  </button>
+                </div>
 
-            {/* Uncomment the following section if you want to include token amount and category selection */}
+                {/* Regular Transfer Amount Input */}
+                <div className="mb-2">
+                  <input
+                    type="number"
+                    value={transferAmount}
+                    placeholder={`Regular Amount (Min: ${DUST})`}
+                    onChange={handleTransferAmountChange}
+                    className="border p-2 w-full break-words whitespace-normal"
+                    min={DUST}
+                  />
+                </div>
 
-            <div className="mb-2">
-              <input
-                type="number"
-                value={tokenAmount}
-                placeholder="Token Amount"
-                onChange={handleTokenAmountChange}
-                className="border p-2 w-full break-words whitespace-normal"
-              />
-            </div>
-            {availableTokenCategories.length > 0 && (
-              <div className="mb-2">
-                <select
-                  value={selectedTokenCategory}
-                  onChange={(e) => setSelectedTokenCategory(e.target.value)}
-                  className="border p-2 w-full break-words whitespace-normal"
-                >
-                  <option value="">Select Token Category</option>
-                  {availableTokenCategories.map((category: string, index) => (
-                    <option key={index} value={category}>
-                      {category}
-                    </option>
-                  ))}
-                </select>
-              </div>
+                {/* Token Amount Input */}
+                <div className="mb-2">
+                  <input
+                    type="number"
+                    value={tokenAmount}
+                    placeholder="Token Amount"
+                    onChange={handleTokenAmountChange}
+                    className="border p-2 w-full break-words whitespace-normal"
+                  />
+                </div>
+                {availableTokenCategories.length > 0 && (
+                  <div className="mb-2">
+                    <select
+                      value={selectedTokenCategory}
+                      onChange={(e) => setSelectedTokenCategory(e.target.value)}
+                      className="border p-2 w-full break-words whitespace-normal"
+                    >
+                      <option value="">Select Token Category</option>
+                      {availableTokenCategories.map((category: string, index) => (
+                        <option key={index} value={category}>
+                          {category}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                )}
+              </>
+            ) : (
+              <>
+                {/* OP_RETURN Input and Preview */}
+                <div className="mb-2">
+                  <input
+                    type="text"
+                    value={opReturnText}
+                    placeholder="OP_RETURN Text"
+                    onChange={(e) => setOpReturnText(e.target.value)}
+                    className="border p-2 w-full break-words whitespace-normal"
+                  />
+                </div>
+                <div className="mb-2">
+                  <label className="font-medium block mb-1">
+                    Prepared OP_RETURN Data:
+                  </label>
+                  <pre className="bg-gray-100 p-2 rounded text-sm">
+                    {JSON.stringify(opReturnArray, null, 2)}
+                  </pre>
+                </div>
+              </>
             )}
 
             {/* Add Output Button */}
             <button
               onClick={handleAddOutput}
-              className={`bg-blue-500 font-bold text-white py-2 px-4 rounded`}
+              className="bg-blue-500 font-bold text-white py-2 px-4 rounded"
             >
               Add Output
             </button>

@@ -158,7 +158,7 @@ export default function ContractManager() {
         height: utxo.height,
         token: utxo.token || undefined,
         prefix,
-        // **Add New Fields**
+        // **Add New Fields** - TODO : implement inpur parsing
         contractFunction: utxo.contractFunction || undefined,
         contractFunctionInputs: utxo.contractFunctionInputs
           ? JSON.stringify(utxo.contractFunctionInputs)
