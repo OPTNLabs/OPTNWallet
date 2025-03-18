@@ -23,6 +23,7 @@ interface OutputSelectionProps {
   tokenAmount: number;
   setTokenAmount: (amount: number) => void;
   utxos: UTXO[];
+  selectedUtxos: UTXO[];
   selectedTokenCategory: string;
   setSelectedTokenCategory: (category: string) => void;
   addOutput: () => void;
@@ -44,6 +45,7 @@ const OutputSelection: React.FC<OutputSelectionProps> = ({
   tokenAmount,
   setTokenAmount,
   utxos,
+  selectedUtxos,
   selectedTokenCategory,
   setSelectedTokenCategory,
   addOutput,
@@ -58,12 +60,14 @@ const OutputSelection: React.FC<OutputSelectionProps> = ({
   console.warn(
     `Unused Params: ${showOutputs}, ${setShowOutputs}, ${closePopups}`
   );
-  const [showPopup, setShowPopup] = useState<boolean>(false);
   const dispatch: AppDispatch = useDispatch();
 
-  // New state for OP_RETURN input visibility and text
+  // OP_RETURN state
   const [showOpReturn, setShowOpReturn] = useState<boolean>(false);
   const [opReturnText, setOpReturnText] = useState<string>('');
+
+  // CashToken creation state
+  const [showCashToken, setShowCashToken] = useState<boolean>(false);
 
   // Prepare the OP_RETURN text into an array of strings
   const opReturnArray = opReturnText
@@ -71,10 +75,8 @@ const OutputSelection: React.FC<OutputSelectionProps> = ({
     .map((s) => s.trim())
     .filter((s) => s.length > 0);
 
-  // Function to toggle the popup
-  const togglePopup = () => {
-    setShowPopup((prev) => !prev);
-  };
+  // Local popup
+  const [showPopup, setShowPopup] = useState<boolean>(false);
 
   // Extract unique token categories from UTXOs
   const availableTokenCategories = [
@@ -83,14 +85,17 @@ const OutputSelection: React.FC<OutputSelectionProps> = ({
     ),
   ];
 
+  // Toggle popup
+  const togglePopup = () => {
+    setShowPopup((prev) => !prev);
+  };
+
   // Handle changes to the regular transfer amount input
   const handleTransferAmountChange = (
     e: React.ChangeEvent<HTMLInputElement>
   ) => {
-    console.log(utxos);
     const value = e.target.value;
     const numValue = Number(value);
-
     if (value === '') {
       setTransferAmount(0);
     } else {
@@ -104,13 +109,12 @@ const OutputSelection: React.FC<OutputSelectionProps> = ({
     setTokenAmount(value === '' ? 0 : Number(value));
   };
 
-  // Function to initiate barcode scanning
+  // Barcode scanning
   const scanBarcode = async () => {
     try {
       const result = await CapacitorBarcodeScanner.scanBarcode({
         hint: CapacitorBarcodeScannerTypeHint.ALL,
       });
-
       if (result && result.ScanResult) {
         setRecipientAddress(result.ScanResult);
       } else {
@@ -126,7 +130,7 @@ const OutputSelection: React.FC<OutputSelectionProps> = ({
     }
   };
 
-  // Function to handle adding an output with validation
+  // Handle adding an output with validation
   const handleAddOutput = async () => {
     if (transferAmount < DUST) {
       await Toast.show({
@@ -134,7 +138,7 @@ const OutputSelection: React.FC<OutputSelectionProps> = ({
       });
       return;
     }
-    // You might later extend addOutput to also include opReturnArray data
+    // Later, you can incorporate opReturnText or token data
     addOutput();
   };
 
@@ -216,6 +220,7 @@ const OutputSelection: React.FC<OutputSelectionProps> = ({
             </div>
           </Popup>
         )}
+
         {txOutputs.length > 0 && (
           <div className="mb-4">
             <h3 className="text-lg font-semibold">{`${txOutputs.length} Recipient${
@@ -232,18 +237,33 @@ const OutputSelection: React.FC<OutputSelectionProps> = ({
           <div className="mb-6">
             <h3 className="text-lg font-semibold mb-2">Add Output</h3>
 
-            {/* OP_RETURN Toggle Button */}
-            <div className="mb-2">
+            {/* Button row for toggling OP_RETURN or CashToken creation */}
+            <div className="mb-2 flex justify-between items-center">
               <button
-                onClick={() => setShowOpReturn((prev) => !prev)}
+                onClick={() => {
+                  // Optionally hide the other panel if it’s open
+                  setShowCashToken(false);
+                  setShowOpReturn((prev) => !prev);
+                }}
                 className="bg-purple-500 font-bold text-white py-1 px-2 rounded"
               >
                 {showOpReturn ? 'Hide OP_RETURN' : 'Show OP_RETURN'}
               </button>
+
+              <button
+                onClick={() => {
+                  // Optionally hide the other panel if it’s open
+                  setShowOpReturn(false);
+                  setShowCashToken((prev) => !prev);
+                }}
+                className="bg-orange-500 font-bold text-white py-1 px-2 rounded"
+              >
+                Create CashToken
+              </button>
             </div>
 
-            {/* Conditionally display regular inputs or OP_RETURN inputs */}
-            {!showOpReturn ? (
+            {/* If neither toggle is active, show normal inputs */}
+            {!showOpReturn && !showCashToken && (
               <>
                 {/* Recipient Address Input with Scan Button */}
                 <div className="flex items-center mb-2">
@@ -285,6 +305,8 @@ const OutputSelection: React.FC<OutputSelectionProps> = ({
                     className="border p-2 w-full break-words whitespace-normal"
                   />
                 </div>
+
+                {/* Token Category Dropdown (optional) */}
                 {availableTokenCategories.length > 0 && (
                   <div className="mb-2">
                     <select
@@ -304,9 +326,11 @@ const OutputSelection: React.FC<OutputSelectionProps> = ({
                   </div>
                 )}
               </>
-            ) : (
+            )}
+
+            {/* OP_RETURN section */}
+            {showOpReturn && (
               <>
-                {/* OP_RETURN Input and Preview */}
                 <div className="mb-2">
                   <input
                     type="text"
@@ -323,6 +347,69 @@ const OutputSelection: React.FC<OutputSelectionProps> = ({
                   <pre className="bg-gray-100 p-2 rounded text-sm">
                     {JSON.stringify(opReturnArray, null, 2)}
                   </pre>
+                </div>
+              </>
+            )}
+
+            {/* Create CashToken section */}
+            {showCashToken && (
+              <>
+                <div className="flex items-center mb-2">
+                  <input
+                    type="text"
+                    value={recipientAddress}
+                    placeholder="Recipient Address"
+                    onChange={(e) => setRecipientAddress(e.target.value)}
+                    className="border p-2 w-full break-words whitespace-normal"
+                  />
+                  <button
+                    onClick={scanBarcode}
+                    className="ml-2 bg-green-500 text-white p-2 rounded"
+                    title="Scan QR Code"
+                  >
+                    <FaCamera />
+                  </button>
+                </div>
+
+                <div className="mb-2">
+                  <input
+                    type="number"
+                    value={transferAmount}
+                    placeholder={`Regular Amount (Min: ${DUST})`}
+                    onChange={handleTransferAmountChange}
+                    className="border p-2 w-full break-words whitespace-normal"
+                    min={DUST}
+                  />
+                </div>
+
+                <div className="mb-2">
+                  <input
+                    type="number"
+                    value={tokenAmount}
+                    placeholder="Token Amount"
+                    onChange={handleTokenAmountChange}
+                    className="border p-2 w-full break-words whitespace-normal"
+                  />
+                </div>
+
+                <div className="mb-2">
+                  <select
+                    value={selectedTokenCategory}
+                    onChange={(e) => setSelectedTokenCategory(e.target.value)}
+                    className="border p-2 w-full break-words whitespace-normal"
+                  >
+                    <option value="">
+                      Select a UTXO to use for creating CashToken
+                    </option>
+
+                    {selectedUtxos
+                      .filter((utxo) => !utxo.token) // Only UTXOs without token
+                      .map((utxo, index) => (
+                        <option key={utxo.tx_hash + index} value={utxo.tx_hash}>
+                          {utxo.tx_hash}
+                        </option>
+                      ))}
+                  </select>
                 </div>
               </>
             )}

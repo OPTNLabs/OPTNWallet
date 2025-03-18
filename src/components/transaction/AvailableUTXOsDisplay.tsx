@@ -29,7 +29,9 @@ const AvailableUTXOsDisplay: React.FC<AvailableUTXOsDisplayProps> = ({
   closePopups,
 }) => {
   // Optionally filter UTXOs for those with tx_pos === 0
-  const filteredRegularUTXOs = utxos.filter((utxo) => utxo.tx_pos === 0);
+  const filteredRegularUTXOs = utxos.filter(
+    (utxo) => utxo.tx_pos === 0 && !utxo.token
+  );
   // const filteredContractUTXOs = contractUtxos.filter(
   //   (utxo) => utxo.tx_pos === 0
   // );
