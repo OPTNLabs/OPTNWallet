@@ -1,7 +1,7 @@
 // src/types/types.ts
 
 export interface Token {
-  amount: string;
+  amount: number | bigint;
   category: string;
   nft?: {
     capability: 'none' | 'mutable' | 'minting';
@@ -20,7 +20,6 @@ export interface UTXO {
   value: number;
   amount?: number;
   prefix?: string; // Default to 'bchtest' for now
-  token_data?: Token | null;
   token?: Token | null; // token can be null in some cases
   privateKey?: Uint8Array; // Optional field for private key used in P2PKH
   contractName?: string; // For contract-related UTXOs
@@ -49,11 +48,7 @@ export type TransactionOutput =
       // Regular transaction output variant
       recipientAddress: string;
       amount: number | bigint;
-      token?: {
-        amount: number | bigint;
-        category: string;
-        // nft
-      };
+      token?: Token;
       // Explicitly disallow opReturn here
       opReturn?: never;
     }
