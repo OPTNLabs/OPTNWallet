@@ -115,6 +115,7 @@ export default function TransactionManager() {
    * @param selectedUtxos - The selected UTXOs for the transaction.
    * @param addresses - An array of addresses with optional token addresses.
    * @returns The newly created TransactionOutput or undefined if inputs are invalid.
+   * @TODO modify newOutput.token to include NFT data
    */
   function addOutput(
     recipientAddress: string,
