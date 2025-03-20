@@ -46,9 +46,10 @@ export default function UTXOManager() {
             utxo.tx_pos,
             utxo.value,
             utxo.prefix || 'unknown',
+            // utxo.token ? JSON.stringify(utxo.token) : null,
             utxo.token ? JSON.stringify(utxo.token) : null,
           ]);
-          // console.log(`Stored UTXO: ${JSON.stringify(utxo)}`);
+          console.log(`Stored UTXO: ${JSON.stringify(utxo)}`);
         }
         existsQuery.free();
       }
@@ -77,12 +78,11 @@ export default function UTXOManager() {
       const utxos: UTXO[] = [];
       while (query.step()) {
         const result = query.getAsObject();
-        // console.log(result.token)
+        // console.log(result)
         result.token =
           typeof result.token === 'string'
             ? JSON.parse(result.token)
-            // ? result.token
-            : null;
+            : result.token
         utxos.push(result as unknown as UTXO);
       }
       query.free();

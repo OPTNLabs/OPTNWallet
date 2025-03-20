@@ -20,6 +20,7 @@ export interface UTXO {
   value: number;
   amount?: number;
   prefix?: string; // Default to 'bchtest' for now
+  token_data?: Token | null; // only used for fetching response from electrum server
   token?: Token | null; // token can be null in some cases
   privateKey?: Uint8Array; // Optional field for private key used in P2PKH
   contractName?: string; // For contract-related UTXOs
