@@ -8,7 +8,7 @@ export const chipnetServers = [
 ];
 
 export const mainnetServers = [
-  'explorer.bch.ninja',
   'bch.imaginary.cash',
+  'explorer.bch.ninja',
   // '192.168.0.151',
 ];

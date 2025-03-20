@@ -111,11 +111,10 @@ export default function TransactionManager() {
    * @param recipientAddress - The address of the transaction recipient.
    * @param transferAmount - The amount to transfer in satoshis.
    * @param tokenAmount - The amount of tokens to transfer.
-   * @param selectedTokenCategory - The category of the selected token.
+   * @param selectedTokenCategory - The category of the selected token **or** the genesis UTXO tx_hash.
    * @param selectedUtxos - The selected UTXOs for the transaction.
    * @param addresses - An array of addresses with optional token addresses.
    * @returns The newly created TransactionOutput or undefined if inputs are invalid.
-   * @TODO modify newOutput.token to include NFT data
    */
   function addOutput(
     recipientAddress: string,
@@ -133,43 +132,80 @@ export default function TransactionManager() {
       return undefined;
     }
 
-    // Initialize the new output
+    // Initialize the new output (regular output by default)
     const newOutput: TransactionOutput = {
       recipientAddress,
       amount: transferAmount || 0,
     };
 
-    // Handle token transfers if a category is selected
+    // If a token category OR a genesis tx_hash is selected
     if (selectedTokenCategory) {
-      const tokenUTXO = selectedUtxos.find(
+      // 1. Attempt to find an existing token UTXO if user is sending an existing token.
+      const existingTokenUTXO = selectedUtxos.find(
         (utxo) => utxo.token && utxo.token.category === selectedTokenCategory
       );
 
-      if (tokenUTXO && tokenUTXO.token) {
+      // 2. Or attempt to find a 'genesis' UTXO if user is creating a new CashToken.
+      //    We specifically look for a UTXO with tx_pos === 0, no token data, 
+      //    and whose tx_hash matches selectedTokenCategory.
+      const genesisUtxo = selectedUtxos.find(
+        (utxo) =>
+          !utxo.token &&
+          utxo.tx_pos === 0 &&
+          utxo.tx_hash === selectedTokenCategory
+      );
+
+      if (existingTokenUTXO && existingTokenUTXO.token) {
+        // Case: Sending an existing token
         newOutput.token = {
           amount: tokenAmount,
-          category: tokenUTXO.token.category,
+          category: existingTokenUTXO.token.category,
         };
 
-        // Update the recipient address to the token address if available
+        // Optionally redirect recipient address to a token address
         const tokenAddress = addresses.find(
           (addr) => addr.address === recipientAddress
         )?.tokenAddress;
         if (tokenAddress) {
           newOutput.recipientAddress = tokenAddress;
         }
+      } else if (genesisUtxo) {
+        // Case: Creating a new CashToken via this "genesis" UTXO
+        newOutput.token = {
+          amount: tokenAmount,
+          // Use the UTXO's tx_hash in place of a pre-existing token category
+          category: genesisUtxo.tx_hash,
+
+          // Optionally attach NFT data if you have fields like:
+          // nft: {
+          //   capability: 'minting',
+          //   commitment: '' // etc.
+          // }
+        };
+
+        // Optionally redirect address just as above if you have a token-specific address
+        const tokenAddress = addresses.find(
+          (addr) => addr.address === recipientAddress
+        )?.tokenAddress;
+        if (tokenAddress) {
+          newOutput.recipientAddress = tokenAddress;
+        }
+
+        // If needed, do any other logic for genesis creation here
+        // e.g., logging, validations, etc.
       } else {
+        // Fallback: We did not find either a matching token or a valid genesis UTXO
         console.warn(
-          'addOutput: No matching token UTXO found for selected category.'
+          'addOutput: Could not find an existing token UTXO or a valid genesis UTXO matching selectedTokenCategory.'
         );
       }
     }
 
-    // Dispatch the new output to the Redux store
+    // Dispatch the new output to Redux
     store.dispatch(addTxOutput(newOutput));
-    // console.log('TransactionManager: Added new output:', newOutput);
     return newOutput;
   }
+
 
   /**
    * Builds a transaction using the provided outputs, contract function inputs, change address, and selected UTXOs.

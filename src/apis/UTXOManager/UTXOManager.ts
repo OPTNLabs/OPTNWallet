@@ -49,7 +49,7 @@ export default function UTXOManager() {
             // utxo.token ? JSON.stringify(utxo.token) : null,
             utxo.token ? JSON.stringify(utxo.token) : null,
           ]);
-          console.log(`Stored UTXO: ${JSON.stringify(utxo)}`);
+          // console.log(`Stored UTXO: ${JSON.stringify(utxo)}`);
         }
         existsQuery.free();
       }

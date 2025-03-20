@@ -62,11 +62,13 @@ const OutputSelection: React.FC<OutputSelectionProps> = ({
   );
   const dispatch: AppDispatch = useDispatch();
 
-  // OP_RETURN state
+  // Popup states
+  const [showPopup, setShowPopup] = useState<boolean>(false); // For showing existing outputs
+  const [showAddOutputPopup, setShowAddOutputPopup] = useState<boolean>(false); // For "Add Output" section
+
+  // OP_RETURN and CashToken creation toggles
   const [showOpReturn, setShowOpReturn] = useState<boolean>(false);
   const [opReturnText, setOpReturnText] = useState<string>('');
-
-  // CashToken creation state
   const [showCashToken, setShowCashToken] = useState<boolean>(false);
 
   // Prepare the OP_RETURN text into an array of strings
@@ -75,17 +77,14 @@ const OutputSelection: React.FC<OutputSelectionProps> = ({
     .map((s) => s.trim())
     .filter((s) => s.length > 0);
 
-  // Local popup
-  const [showPopup, setShowPopup] = useState<boolean>(false);
-
-  // Extract unique token categories from UTXOs
+  // Extract unique token categories from UTXOs (existing tokens)
   const availableTokenCategories = [
     ...new Set(
       utxos.filter((utxo) => utxo.token).map((utxo) => utxo.token!.category)
     ),
   ];
 
-  // Toggle popup
+  // Toggle the popup that shows existing outputs
   const togglePopup = () => {
     setShowPopup((prev) => !prev);
   };
@@ -130,7 +129,7 @@ const OutputSelection: React.FC<OutputSelectionProps> = ({
     }
   };
 
-  // Handle adding an output with validation
+  // Validate and add output
   const handleAddOutput = async () => {
     if (transferAmount < DUST) {
       await Toast.show({
@@ -138,7 +137,7 @@ const OutputSelection: React.FC<OutputSelectionProps> = ({
       });
       return;
     }
-    // Later, you can incorporate opReturnText or token data
+    // Future: incorporate opReturnText or other token data
     addOutput();
   };
 
@@ -148,6 +147,8 @@ const OutputSelection: React.FC<OutputSelectionProps> = ({
       <div className="mb-4">
         <div className="flex justify-between items-center mb-4">
           <h3 className="text-lg font-semibold mb-2">Transaction Outputs</h3>
+
+          {/* "Show" button for existing outputs popup */}
           {txOutputs.length > 0 && (
             <button
               onClick={togglePopup}
@@ -158,6 +159,7 @@ const OutputSelection: React.FC<OutputSelectionProps> = ({
           )}
         </div>
 
+        {/* Popup with existing outputs */}
         {showPopup && (
           <Popup closePopups={() => setShowPopup(false)}>
             {txOutputs.length === 0 ? (
@@ -221,6 +223,7 @@ const OutputSelection: React.FC<OutputSelectionProps> = ({
           </Popup>
         )}
 
+        {/* Summary of existing outputs */}
         {txOutputs.length > 0 && (
           <div className="mb-4">
             <h3 className="text-lg font-semibold">{`${txOutputs.length} Recipient${
@@ -232,191 +235,11 @@ const OutputSelection: React.FC<OutputSelectionProps> = ({
           </div>
         )}
 
-        {/* Add Output Section */}
+        {/* Button that opens the "Add Output" popup */}
         {txOutputs.length < 10 && (
           <div className="mb-6">
-            <h3 className="text-lg font-semibold mb-2">Add Output</h3>
-
-            {/* Button row for toggling OP_RETURN or CashToken creation */}
-            <div className="mb-2 flex justify-between items-center">
-              <button
-                onClick={() => {
-                  // Optionally hide the other panel if it’s open
-                  setShowCashToken(false);
-                  setShowOpReturn((prev) => !prev);
-                }}
-                className="bg-purple-500 font-bold text-white py-1 px-2 rounded"
-              >
-                {showOpReturn ? 'Hide OP_RETURN' : 'Show OP_RETURN'}
-              </button>
-
-              <button
-                onClick={() => {
-                  // Optionally hide the other panel if it’s open
-                  setShowOpReturn(false);
-                  setShowCashToken((prev) => !prev);
-                }}
-                className="bg-orange-500 font-bold text-white py-1 px-2 rounded"
-              >
-                Create CashToken
-              </button>
-            </div>
-
-            {/* If neither toggle is active, show normal inputs */}
-            {!showOpReturn && !showCashToken && (
-              <>
-                {/* Recipient Address Input with Scan Button */}
-                <div className="flex items-center mb-2">
-                  <input
-                    type="text"
-                    value={recipientAddress}
-                    placeholder="Recipient Address"
-                    onChange={(e) => setRecipientAddress(e.target.value)}
-                    className="border p-2 w-full break-words whitespace-normal"
-                  />
-                  <button
-                    onClick={scanBarcode}
-                    className="ml-2 bg-green-500 text-white p-2 rounded"
-                    title="Scan QR Code"
-                  >
-                    <FaCamera />
-                  </button>
-                </div>
-
-                {/* Regular Transfer Amount Input */}
-                <div className="mb-2">
-                  <input
-                    type="number"
-                    value={transferAmount}
-                    placeholder={`Regular Amount (Min: ${DUST})`}
-                    onChange={handleTransferAmountChange}
-                    className="border p-2 w-full break-words whitespace-normal"
-                    min={DUST}
-                  />
-                </div>
-
-                {/* Token Amount Input */}
-                <div className="mb-2">
-                  <input
-                    type="number"
-                    value={tokenAmount}
-                    placeholder="Token Amount"
-                    onChange={handleTokenAmountChange}
-                    className="border p-2 w-full break-words whitespace-normal"
-                  />
-                </div>
-
-                {/* Token Category Dropdown (optional) */}
-                {availableTokenCategories.length > 0 && (
-                  <div className="mb-2">
-                    <select
-                      value={selectedTokenCategory}
-                      onChange={(e) => setSelectedTokenCategory(e.target.value)}
-                      className="border p-2 w-full break-words whitespace-normal"
-                    >
-                      <option value="">Select Token Category</option>
-                      {availableTokenCategories.map(
-                        (category: string, index) => (
-                          <option key={index} value={category}>
-                            {category}
-                          </option>
-                        )
-                      )}
-                    </select>
-                  </div>
-                )}
-              </>
-            )}
-
-            {/* OP_RETURN section */}
-            {showOpReturn && (
-              <>
-                <div className="mb-2">
-                  <input
-                    type="text"
-                    value={opReturnText}
-                    placeholder="OP_RETURN Text"
-                    onChange={(e) => setOpReturnText(e.target.value)}
-                    className="border p-2 w-full break-words whitespace-normal"
-                  />
-                </div>
-                <div className="mb-2">
-                  <label className="font-medium block mb-1">
-                    Prepared OP_RETURN Data:
-                  </label>
-                  <pre className="bg-gray-100 p-2 rounded text-sm">
-                    {JSON.stringify(opReturnArray, null, 2)}
-                  </pre>
-                </div>
-              </>
-            )}
-
-            {/* Create CashToken section */}
-            {showCashToken && (
-              <>
-                <div className="flex items-center mb-2">
-                  <input
-                    type="text"
-                    value={recipientAddress}
-                    placeholder="Recipient Address"
-                    onChange={(e) => setRecipientAddress(e.target.value)}
-                    className="border p-2 w-full break-words whitespace-normal"
-                  />
-                  <button
-                    onClick={scanBarcode}
-                    className="ml-2 bg-green-500 text-white p-2 rounded"
-                    title="Scan QR Code"
-                  >
-                    <FaCamera />
-                  </button>
-                </div>
-
-                <div className="mb-2">
-                  <input
-                    type="number"
-                    value={transferAmount}
-                    placeholder={`Regular Amount (Min: ${DUST})`}
-                    onChange={handleTransferAmountChange}
-                    className="border p-2 w-full break-words whitespace-normal"
-                    min={DUST}
-                  />
-                </div>
-
-                <div className="mb-2">
-                  <input
-                    type="number"
-                    value={tokenAmount}
-                    placeholder="Token Amount"
-                    onChange={handleTokenAmountChange}
-                    className="border p-2 w-full break-words whitespace-normal"
-                  />
-                </div>
-
-                <div className="mb-2">
-                  <select
-                    value={selectedTokenCategory}
-                    onChange={(e) => setSelectedTokenCategory(e.target.value)}
-                    className="border p-2 w-full break-words whitespace-normal"
-                  >
-                    <option value="">
-                      Select a UTXO to use for creating CashToken
-                    </option>
-
-                    {selectedUtxos
-                      .filter((utxo) => !utxo.token) // Only UTXOs without token
-                      .map((utxo, index) => (
-                        <option key={utxo.tx_hash + index} value={utxo.tx_hash}>
-                          {utxo.tx_hash}
-                        </option>
-                      ))}
-                  </select>
-                </div>
-              </>
-            )}
-
-            {/* Add Output Button */}
             <button
-              onClick={handleAddOutput}
+              onClick={() => setShowAddOutputPopup(true)}
               className="bg-blue-500 font-bold text-white py-2 px-4 rounded"
             >
               Add Output
@@ -424,7 +247,205 @@ const OutputSelection: React.FC<OutputSelectionProps> = ({
           </div>
         )}
 
-        {/* Change Address Section */}
+        {/* The "Add Output" popup */}
+        {showAddOutputPopup && (
+          <Popup closePopups={() => setShowAddOutputPopup(false)}>
+            <div className="mb-6">
+              <h3 className="text-lg font-semibold mb-2">Add Output</h3>
+
+              {/* Button row for toggling OP_RETURN or CashToken creation */}
+              <div className="mb-2 flex justify-between items-center">
+                <button
+                  onClick={() => {
+                    setShowCashToken(false);
+                    setShowOpReturn((prev) => !prev);
+                  }}
+                  className="bg-purple-500 font-bold text-white py-1 px-2 rounded"
+                >
+                  {showOpReturn ? 'Hide OP_RETURN' : 'Show OP_RETURN'}
+                </button>
+
+                <button
+                  onClick={() => {
+                    setShowOpReturn(false);
+                    setShowCashToken((prev) => !prev);
+                  }}
+                  className="bg-orange-500 font-bold text-white py-1 px-2 rounded"
+                >
+                  Create CashToken
+                </button>
+              </div>
+
+              {/* If neither toggle is active, show normal inputs */}
+              {!showOpReturn && !showCashToken && (
+                <>
+                  {/* Recipient Address Input with Scan Button */}
+                  <div className="flex items-center mb-2">
+                    <input
+                      type="text"
+                      value={recipientAddress}
+                      placeholder="Recipient Address"
+                      onChange={(e) => setRecipientAddress(e.target.value)}
+                      className="border p-2 w-full break-words whitespace-normal"
+                    />
+                    <button
+                      onClick={scanBarcode}
+                      className="ml-2 bg-green-500 text-white p-2 rounded"
+                      title="Scan QR Code"
+                    >
+                      <FaCamera />
+                    </button>
+                  </div>
+
+                  {/* Regular Transfer Amount Input */}
+                  <div className="mb-2">
+                    <input
+                      type="number"
+                      value={transferAmount}
+                      placeholder={`Regular Amount (Min: ${DUST})`}
+                      onChange={handleTransferAmountChange}
+                      className="border p-2 w-full break-words whitespace-normal"
+                      min={DUST}
+                    />
+                  </div>
+
+                  {/* Token Amount Input */}
+                  <div className="mb-2">
+                    <input
+                      type="number"
+                      value={tokenAmount}
+                      placeholder="Token Amount"
+                      onChange={handleTokenAmountChange}
+                      className="border p-2 w-full break-words whitespace-normal"
+                    />
+                  </div>
+
+                  {/* Token Category Dropdown (optional) */}
+                  {availableTokenCategories.length > 0 && (
+                    <div className="mb-2">
+                      <select
+                        value={selectedTokenCategory}
+                        onChange={(e) =>
+                          setSelectedTokenCategory(e.target.value)
+                        }
+                        className="border p-2 w-full break-words whitespace-normal"
+                      >
+                        <option value="">Select Token Category</option>
+                        {availableTokenCategories.map((category, index) => (
+                          <option key={index} value={category}>
+                            {category}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                  )}
+                </>
+              )}
+
+              {/* OP_RETURN section */}
+              {showOpReturn && (
+                <>
+                  <div className="mb-2">
+                    <input
+                      type="text"
+                      value={opReturnText}
+                      placeholder="OP_RETURN Text"
+                      onChange={(e) => setOpReturnText(e.target.value)}
+                      className="border p-2 w-full break-words whitespace-normal"
+                    />
+                  </div>
+                  <div className="mb-2">
+                    <label className="font-medium block mb-1">
+                      Prepared OP_RETURN Data:
+                    </label>
+                    <pre className="bg-gray-100 p-2 rounded text-sm">
+                      {JSON.stringify(opReturnArray, null, 2)}
+                    </pre>
+                  </div>
+                </>
+              )}
+
+              {/* Create CashToken section */}
+              {showCashToken && (
+                <>
+                  <div className="flex items-center mb-2">
+                    <input
+                      type="text"
+                      value={recipientAddress}
+                      placeholder="Recipient Address"
+                      onChange={(e) => setRecipientAddress(e.target.value)}
+                      className="border p-2 w-full break-words whitespace-normal"
+                    />
+                    <button
+                      onClick={scanBarcode}
+                      className="ml-2 bg-green-500 text-white p-2 rounded"
+                      title="Scan QR Code"
+                    >
+                      <FaCamera />
+                    </button>
+                  </div>
+
+                  <div className="mb-2">
+                    <input
+                      type="number"
+                      value={transferAmount}
+                      placeholder={`Regular Amount (Min: ${DUST})`}
+                      onChange={handleTransferAmountChange}
+                      className="border p-2 w-full break-words whitespace-normal"
+                      min={DUST}
+                    />
+                  </div>
+
+                  <div className="mb-2">
+                    <input
+                      type="number"
+                      value={tokenAmount}
+                      placeholder="Token Amount"
+                      onChange={handleTokenAmountChange}
+                      className="border p-2 w-full break-words whitespace-normal"
+                    />
+                  </div>
+
+                  <div className="mb-2">
+                    <select
+                      value={selectedTokenCategory}
+                      onChange={(e) => setSelectedTokenCategory(e.target.value)}
+                      className="border p-2 w-full break-words whitespace-normal"
+                    >
+                      <option value="">
+                        Select a UTXO to use for creating CashToken
+                      </option>
+                      {selectedUtxos
+                        .filter((utxo) => !utxo.token && utxo.tx_pos === 0)
+                        .map((utxo, index) => (
+                          <option
+                            key={utxo.tx_hash + index}
+                            value={utxo.tx_hash}
+                          >
+                            {utxo.tx_hash}
+                          </option>
+                        ))}
+                    </select>
+                  </div>
+                </>
+              )}
+
+              {/* Add Output Button */}
+              <button
+                onClick={() => {
+                  handleAddOutput();
+                  // Optionally close popup after adding
+                  // setShowAddOutputPopup(false);
+                }}
+                className="bg-blue-500 font-bold text-white py-2 px-4 rounded"
+              >
+                Add Output
+              </button>
+            </div>
+          </Popup>
+        )}
+
+        {/* Change Address Section (outside the popup) */}
         <div className="mb-6">
           <h3 className="text-lg font-semibold mb-2">Change Address</h3>
           <input
