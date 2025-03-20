@@ -1,7 +1,7 @@
 // src/services/TransactionService.ts
 
 import DatabaseService from '../apis/DatabaseManager/DatabaseService';
-import { TransactionOutput, UTXO } from '../types/types';
+import { Token, TransactionOutput, UTXO } from '../types/types';
 import ContractManager from '../apis/ContractManager/ContractManager';
 import TransactionManager from '../apis/TransactionManager/TransactionManager';
 import KeyService from '../services/KeyService';
@@ -78,7 +78,7 @@ class TransactionService {
         typeof row.tx_pos === 'number' ? row.tx_pos : Number(row.tx_pos);
       const height =
         typeof row.height === 'number' ? row.height : Number(row.height);
-      const tokenData = row.token ? JSON.parse(String(row.token)) : undefined;
+      const tokenData = row.token ? JSON.parse(String(row.token)) as Token : undefined;
       const contractFunction =
         typeof row.contractFunction === 'string' &&
         row.contractFunction.length > 0
