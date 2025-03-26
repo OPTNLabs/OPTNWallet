@@ -26,7 +26,7 @@ interface OutputSelectionProps {
   selectedUtxos: UTXO[];
   selectedTokenCategory: string;
   setSelectedTokenCategory: (category: string) => void;
-  addOutput: () => void;
+  addOutput: () => void; // This function can later be updated to accept NFT details
   changeAddress: string;
   setChangeAddress: (address: string) => void;
   txOutputs: TransactionOutput[];
@@ -63,13 +63,19 @@ const OutputSelection: React.FC<OutputSelectionProps> = ({
   const dispatch: AppDispatch = useDispatch();
 
   // Popup states
-  const [showPopup, setShowPopup] = useState<boolean>(false); // For showing existing outputs
+  const [showPopup, setShowPopup] = useState<boolean>(false);   // For displaying existing outputs
   const [showAddOutputPopup, setShowAddOutputPopup] = useState<boolean>(false); // For "Add Output" section
 
-  // OP_RETURN and CashToken creation toggles
+  // Toggles for different UI states
   const [showOpReturn, setShowOpReturn] = useState<boolean>(false);
   const [opReturnText, setOpReturnText] = useState<string>('');
+
   const [showCashToken, setShowCashToken] = useState<boolean>(false);
+
+  // create NFT toggle & fields
+  const [showNFTCashToken, setShowNFTCashToken] = useState<boolean>(false);
+  const [nftCapability, setNftCapability] = useState<'none' | 'mutable' | 'minting'>('none');
+  const [nftCommitment, setNftCommitment] = useState<string>('');
 
   // Prepare the OP_RETURN text into an array of strings
   const opReturnArray = opReturnText
@@ -77,12 +83,31 @@ const OutputSelection: React.FC<OutputSelectionProps> = ({
     .map((s) => s.trim())
     .filter((s) => s.length > 0);
 
-  // Extract unique token categories from UTXOs (existing tokens)
+  // Extract unique token categories from UTXOs (existing tokens only)
   const availableTokenCategories = [
     ...new Set(
       utxos.filter((utxo) => utxo.token).map((utxo) => utxo.token!.category)
     ),
   ];
+
+  /**
+   * Helper to reset all form values to default whenever toggling between views
+   */
+  const resetFormValues = () => {
+    // Clear the toggles
+    setShowOpReturn(false);
+    setShowCashToken(false);
+    setShowNFTCashToken(false);
+
+    // Reset text fields
+    setRecipientAddress('');
+    setOpReturnText('');
+    setTransferAmount(0);
+    setTokenAmount(0);
+    setSelectedTokenCategory('');
+    setNftCapability('none');
+    setNftCommitment('');
+  };
 
   // Toggle the popup that shows existing outputs
   const togglePopup = () => {
@@ -108,7 +133,7 @@ const OutputSelection: React.FC<OutputSelectionProps> = ({
     setTokenAmount(value === '' ? 0 : Number(value));
   };
 
-  // Barcode scanning
+  // Scan a QR code
   const scanBarcode = async () => {
     try {
       const result = await CapacitorBarcodeScanner.scanBarcode({
@@ -137,7 +162,6 @@ const OutputSelection: React.FC<OutputSelectionProps> = ({
       });
       return;
     }
-    // Future: incorporate opReturnText or other token data
     addOutput();
   };
 
@@ -159,7 +183,7 @@ const OutputSelection: React.FC<OutputSelectionProps> = ({
           )}
         </div>
 
-        {/* Popup with existing outputs */}
+        {/* Popup showing existing outputs */}
         {showPopup && (
           <Popup closePopups={() => setShowPopup(false)}>
             {txOutputs.length === 0 ? (
@@ -194,6 +218,18 @@ const OutputSelection: React.FC<OutputSelectionProps> = ({
                           <span className="font-medium">Category:</span>
                           <span>{output.token.category}</span>
                         </div>
+                        {output.token.nft && (
+                          <>
+                            <div className="flex justify-between w-full">
+                              <span className="font-medium">Capability:</span>
+                              <span>{output.token.nft.capability}</span>
+                            </div>
+                            <div className="flex justify-between w-full">
+                              <span className="font-medium">Commitment:</span>
+                              <span>{output.token.nft.commitment}</span>
+                            </div>
+                          </>
+                        )}
                       </>
                     )}
                     <button
@@ -239,7 +275,10 @@ const OutputSelection: React.FC<OutputSelectionProps> = ({
         {txOutputs.length < 10 && (
           <div className="mb-6">
             <button
-              onClick={() => setShowAddOutputPopup(true)}
+              onClick={() => {
+                resetFormValues(); // Clear everything before showing
+                setShowAddOutputPopup(true);
+              }}
               className="bg-blue-500 font-bold text-white py-2 px-4 rounded"
             >
               Add Output
@@ -253,33 +292,46 @@ const OutputSelection: React.FC<OutputSelectionProps> = ({
             <div className="mb-6">
               <h3 className="text-lg font-semibold mb-2">Add Output</h3>
 
-              {/* Button row for toggling OP_RETURN or CashToken creation */}
-              <div className="mb-2 flex justify-between items-center">
+              {/* Button row for toggling OP_RETURN, CashToken, or NFT */}
+              <div className="mb-2 flex flex-wrap gap-2">
+                {/* OP_RETURN button (comment out if not needed) */}
+                {/* 
                 <button
                   onClick={() => {
-                    setShowCashToken(false);
-                    setShowOpReturn((prev) => !prev);
+                    resetFormValues();
+                    setShowOpReturn(true);
                   }}
                   className="bg-purple-500 font-bold text-white py-1 px-2 rounded"
                 >
-                  {showOpReturn ? 'Hide OP_RETURN' : 'Show OP_RETURN'}
+                  Show OP_RETURN
                 </button>
+                */}
 
                 <button
                   onClick={() => {
-                    setShowOpReturn(false);
-                    setShowCashToken((prev) => !prev);
+                    resetFormValues();
+                    setShowCashToken(true);
                   }}
                   className="bg-orange-500 font-bold text-white py-1 px-2 rounded"
                 >
                   Create CashToken
                 </button>
+
+                <button
+                  onClick={() => {
+                    resetFormValues();
+                    setShowNFTCashToken(true);
+                  }}
+                  className="bg-pink-500 font-bold text-white py-1 px-2 rounded"
+                >
+                  Create NFT
+                </button>
               </div>
 
-              {/* If neither toggle is active, show normal inputs */}
-              {!showOpReturn && !showCashToken && (
+              {/* If no toggles, show normal inputs */}
+              {!showOpReturn && !showCashToken && !showNFTCashToken && (
                 <>
-                  {/* Recipient Address Input with Scan Button */}
+                  {/* Recipient Address Input */}
                   <div className="flex items-center mb-2">
                     <input
                       type="text"
@@ -426,6 +478,98 @@ const OutputSelection: React.FC<OutputSelectionProps> = ({
                           </option>
                         ))}
                     </select>
+                  </div>
+                </>
+              )}
+
+              {/* Create NFT section */}
+              {showNFTCashToken && (
+                <>
+                  <div className="flex items-center mb-2">
+                    <input
+                      type="text"
+                      value={recipientAddress}
+                      placeholder="Recipient Address for NFT"
+                      onChange={(e) => setRecipientAddress(e.target.value)}
+                      className="border p-2 w-full break-words whitespace-normal"
+                    />
+                    <button
+                      onClick={scanBarcode}
+                      className="ml-2 bg-green-500 text-white p-2 rounded"
+                      title="Scan QR Code"
+                    >
+                      <FaCamera />
+                    </button>
+                  </div>
+
+                  <div className="mb-2">
+                    <input
+                      type="number"
+                      value={transferAmount}
+                      placeholder={`Regular Amount (Min: ${DUST})`}
+                      onChange={handleTransferAmountChange}
+                      className="border p-2 w-full break-words whitespace-normal"
+                      min={DUST}
+                    />
+                  </div>
+
+                  <div className="mb-2">
+                    <input
+                      type="number"
+                      value={tokenAmount}
+                      placeholder="NFT Token Amount"
+                      onChange={handleTokenAmountChange}
+                      className="border p-2 w-full break-words whitespace-normal"
+                    />
+                  </div>
+
+                  <div className="mb-2">
+                    <select
+                      value={selectedTokenCategory}
+                      onChange={(e) => setSelectedTokenCategory(e.target.value)}
+                      className="border p-2 w-full break-words whitespace-normal"
+                    >
+                      <option value="">
+                        Select a UTXO to use for creating NFT
+                      </option>
+                      {selectedUtxos
+                        .filter((utxo) => !utxo.token && utxo.tx_pos === 0)
+                        .map((utxo, index) => (
+                          <option
+                            key={utxo.tx_hash + index}
+                            value={utxo.tx_hash}
+                          >
+                            {utxo.tx_hash}
+                          </option>
+                        ))}
+                    </select>
+                  </div>
+
+                  {/* Additional NFT fields: capability & commitment */}
+                  <div className="mb-2">
+                    <label className="font-medium block mb-1">NFT Capability</label>
+                    <select
+                      value={nftCapability}
+                      onChange={(e) =>
+                        setNftCapability(e.target.value as 'none' | 'mutable' | 'minting')
+                      }
+                      className="border p-2 w-full break-words whitespace-normal"
+                    >
+                      <option value="none">none</option>
+                      <option value="mutable">mutable</option>
+                      <option value="minting">minting</option>
+                    </select>
+                  </div>
+
+                  <div className="mb-2">
+                    <label className="font-medium block mb-1">NFT Commitment</label>
+                    <input
+                      type="text"
+                      value={nftCommitment}
+                      onChange={(e) => setNftCommitment(e.target.value)}
+                      placeholder="Up to 40 bytes (string form here)"
+                      className="border p-2 w-full break-words whitespace-normal"
+                    />
                   </div>
                 </>
               )}
