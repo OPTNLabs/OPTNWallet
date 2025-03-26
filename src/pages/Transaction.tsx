@@ -92,6 +92,9 @@ const Transaction: React.FC = () => {
     useState<boolean>(false);
   const [showOutputs, setShowOutputs] = useState<boolean>(false);
 
+  const [nftCapability, setNftCapability] = useState<'none' | 'mutable' | 'minting'>('none');
+  const [nftCommitment, setNftCommitment] = useState<string>('');
+
   // const navigate = useNavigate();
   const dispatch: AppDispatch = useDispatch();
 
@@ -241,7 +244,9 @@ const Transaction: React.FC = () => {
           tokenAmount,
           selectedTokenCategory,
           selectedUtxos,
-          addresses
+          addresses,
+          nftCapability,
+          nftCommitment
         );
 
         if (newOutput) {
@@ -251,8 +256,10 @@ const Transaction: React.FC = () => {
           setTransferAmount(0);
           setTokenAmount(0);
           setSelectedTokenCategory('');
+          setNftCapability('none');
+          setNftCommitment('');
 
-          // console.log('Updated Outputs:', txOutputs);
+          console.log('Updated Outputs:', newOutput);
         }
       } catch (error: any) {
         console.error('Error adding output:', error);
@@ -499,6 +506,10 @@ const Transaction: React.FC = () => {
           showOutputs={showOutputs}
           setShowOutputs={setShowOutputs}
           closePopups={closePopups}
+          nftCapability={nftCapability}
+          setNftCapability={setNftCapability}
+          nftCommitment={nftCommitment}
+          setNftCommitment={setNftCommitment}
         />
 
         {/* Bytecode Size Display */}

@@ -176,7 +176,9 @@ class TransactionService {
     tokenAmount: number,
     selectedTokenCategory: string,
     selectedUtxos: UTXO[],
-    addresses: { address: string; tokenAddress: string }[]
+    addresses: { address: string; tokenAddress: string }[],
+    nftCapability?: 'none' | 'mutable' | 'minting',
+    nftCommitment?: string
   ): TransactionOutput | undefined {
     // console.log(
     //   'TransactionService: Adding output with recipient:',
@@ -196,7 +198,9 @@ class TransactionService {
       tokenAmount,
       selectedTokenCategory,
       selectedUtxos,
-      addresses
+      addresses,
+      nftCapability,
+      nftCommitment
     );
   }
 

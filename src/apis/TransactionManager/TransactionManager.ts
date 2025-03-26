@@ -114,6 +114,8 @@ export default function TransactionManager() {
    * @param selectedTokenCategory - The category of the selected token **or** the genesis UTXO tx_hash.
    * @param selectedUtxos - The selected UTXOs for the transaction.
    * @param addresses - An array of addresses with optional token addresses.
+   * @param nftCapability - Optional; if present, indicates we're creating or transferring an NFT with the given capability.
+   * @param nftCommitment - Optional; if present, indicates the NFT commitment string (up to 40 bytes).
    * @returns The newly created TransactionOutput or undefined if inputs are invalid.
    */
   function addOutput(
@@ -122,7 +124,9 @@ export default function TransactionManager() {
     tokenAmount: number,
     selectedTokenCategory: string = '',
     selectedUtxos: UTXO[] = [],
-    addresses: { address: string; tokenAddress?: string }[] = []
+    addresses: { address: string; tokenAddress?: string }[] = [],
+    nftCapability?: 'none' | 'mutable' | 'minting',
+    nftCommitment?: string
   ): TransactionOutput | undefined {
     // Validate inputs
     if (!recipientAddress || (!transferAmount && !tokenAmount)) {
@@ -132,13 +136,13 @@ export default function TransactionManager() {
       return undefined;
     }
 
-    // Initialize the new output (regular output by default)
+    // Initialize a new, regular transaction output by default
     const newOutput: TransactionOutput = {
       recipientAddress,
       amount: transferAmount || 0,
     };
 
-    // If a token category OR a genesis tx_hash is selected
+    // If we have a token category or a genesis UTXO
     if (selectedTokenCategory) {
       // 1. Attempt to find an existing token UTXO if user is sending an existing token.
       const existingTokenUTXO = selectedUtxos.find(
@@ -146,8 +150,7 @@ export default function TransactionManager() {
       );
 
       // 2. Or attempt to find a 'genesis' UTXO if user is creating a new CashToken.
-      //    We specifically look for a UTXO with tx_pos === 0, no token data, 
-      //    and whose tx_hash matches selectedTokenCategory.
+      //    specifically a UTXO with tx_pos === 0, no token data, and whose tx_hash matches selectedTokenCategory
       const genesisUtxo = selectedUtxos.find(
         (utxo) =>
           !utxo.token &&
@@ -156,13 +159,22 @@ export default function TransactionManager() {
       );
 
       if (existingTokenUTXO && existingTokenUTXO.token) {
-        // Case: Sending an existing token
+        // Case: transferring an existing token
         newOutput.token = {
           amount: tokenAmount,
           category: existingTokenUTXO.token.category,
         };
 
-        // Optionally redirect recipient address to a token address
+        // If NFT data is provided, treat it as an NFT => tokenAmount must be 0
+        if (nftCapability && nftCommitment !== undefined) {
+          delete newOutput.token.amount; // NFT is non-fungible: enforce 0 fungible amount
+          newOutput.token.nft = {
+            capability: nftCapability,
+            commitment: nftCommitment,
+          };
+        }
+
+        // Optionally redirect recipient to a token address if available
         const tokenAddress = addresses.find(
           (addr) => addr.address === recipientAddress
         )?.tokenAddress;
@@ -170,42 +182,41 @@ export default function TransactionManager() {
           newOutput.recipientAddress = tokenAddress;
         }
       } else if (genesisUtxo) {
-        // Case: Creating a new CashToken via this "genesis" UTXO
+        // Case: creating a new CashToken or NFT from a genesis UTXO
         newOutput.token = {
-          amount: tokenAmount,
-          // Use the UTXO's tx_hash in place of a pre-existing token category
+          // If NFT data is present, enforce 0 fungible token amount
+          amount: nftCapability && nftCommitment !== undefined ? 0 : tokenAmount,
           category: genesisUtxo.tx_hash,
-
-          // Optionally attach NFT data if you have fields like:
-          // nft: {
-          //   capability: 'minting',
-          //   commitment: '' // etc.
-          // }
         };
 
-        // Optionally redirect address just as above if you have a token-specific address
+        // If NFT data is provided, attach it
+        if (nftCapability && nftCommitment !== undefined) {
+          newOutput.token.nft = {
+            capability: nftCapability,
+            commitment: nftCommitment,
+          };
+        }
+
+        // Optionally redirect address if there's a special token address
         const tokenAddress = addresses.find(
           (addr) => addr.address === recipientAddress
         )?.tokenAddress;
         if (tokenAddress) {
           newOutput.recipientAddress = tokenAddress;
         }
-
-        // If needed, do any other logic for genesis creation here
-        // e.g., logging, validations, etc.
       } else {
-        // Fallback: We did not find either a matching token or a valid genesis UTXO
+        // Fallback: no existing token or valid genesis UTXO found
         console.warn(
-          'addOutput: Could not find an existing token UTXO or a valid genesis UTXO matching selectedTokenCategory.'
+          'addOutput: No matching token UTXO or valid genesis UTXO found for the selected category.'
         );
       }
     }
 
     // Dispatch the new output to Redux
     store.dispatch(addTxOutput(newOutput));
+    console.log(newOutput)
     return newOutput;
   }
-
 
   /**
    * Builds a transaction using the provided outputs, contract function inputs, change address, and selected UTXOs.
@@ -332,6 +343,7 @@ export default function TransactionManager() {
         // console.log('Final Transaction Outputs:', txOutputs);
 
         returnObj.errorMsg = '';
+        console.log(txOutputs)
       }
     } catch (err: any) {
       console.error('Error building transaction:', err);
