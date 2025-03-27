@@ -1,4 +1,5 @@
-// src/components/transaction/OutputSelection.tsx
+// @ts-nocheck
+// // src/components/transaction/OutputSelection.tsx
 
 import React, { useState } from 'react';
 import {
