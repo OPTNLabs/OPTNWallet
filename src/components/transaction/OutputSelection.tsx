@@ -1,7 +1,7 @@
 // @ts-nocheck
-// // src/components/transaction/OutputSelection.tsx
+// src/components/transaction/OutputSelection.tsx
 
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   CapacitorBarcodeScanner,
   CapacitorBarcodeScannerTypeHint,
@@ -38,7 +38,7 @@ interface OutputSelectionProps {
   setShowOutputs: React.Dispatch<React.SetStateAction<boolean>>;
   closePopups: () => void;
 
-  // New NFT-related props
+  // NFT
   nftCapability: 'none' | 'mutable' | 'minting';
   setNftCapability: (value: 'none' | 'mutable' | 'minting') => void;
   nftCommitment: string;
@@ -66,7 +66,6 @@ const OutputSelection: React.FC<OutputSelectionProps> = ({
   setShowOutputs,
   closePopups,
 
-  // The new NFT props
   nftCapability,
   setNftCapability,
   nftCommitment,
@@ -74,73 +73,78 @@ const OutputSelection: React.FC<OutputSelectionProps> = ({
 }) => {
   const dispatch: AppDispatch = useDispatch();
 
-  // For showing existing outputs
+  // Popup states
   const [showPopup, setShowPopup] = useState<boolean>(false);
-
-  // For "Add Output" popup
   const [showAddOutputPopup, setShowAddOutputPopup] = useState<boolean>(false);
+
+  // Toggling among the three "views"
+  const [showRegularTx, setShowRegularTx] = useState<boolean>(false);
+  const [showCashToken, setShowCashToken] = useState<boolean>(false);
+  const [showNFTCashToken, setShowNFTCashToken] = useState<boolean>(false);
+
+  // Title label for the main "Add Output" popup
+  const [popupTitle, setPopupTitle] = useState<string>('Add Output');
+
+  // Additional sub-popup for NFT config
+  const [showNFTConfigPopup, setShowNFTConfigPopup] = useState<boolean>(false);
 
   // OP_RETURN toggles
   const [showOpReturn, setShowOpReturn] = useState<boolean>(false);
   const [opReturnText, setOpReturnText] = useState<string>('');
+  const opReturnArray = opReturnText.split(' ').map((s) => s.trim()).filter((s) => s.length > 0);
 
-  // Toggles for fungible / NFT creation
-  const [showCashToken, setShowCashToken] = useState<boolean>(false);
-  const [showNFTCashToken, setShowNFTCashToken] = useState<boolean>(false);
+  // Identify "genesis-capable" UTXOs among the user's selection
+  const hasGenesisUtxoSelected = selectedUtxos.some(
+    (utxo) => !utxo.token && utxo.tx_pos === 0
+  );
 
-  // Prepare OP_RETURN array
-  const opReturnArray = opReturnText
-    .split(' ')
-    .map((s) => s.trim())
-    .filter((s) => s.length > 0);
+  // Only show token categories for the user’s currently selected token-based UTXOs
+  const selectedTokenUtxos = selectedUtxos.filter((u) => u.token);
+  const categoriesFromSelected = [...new Set(selectedTokenUtxos.map((u) => u.token.category))];
 
-  /**
-   * Additional logs for debugging
-   */
-  // console.log('Debug: ALL utxos from props:', utxos);
+  // If user toggles "Create NFT," default tokenAmount to 0
+  useEffect(() => {
+    if (showNFTCashToken) {
+      setTokenAmount(0);
+    }
+  }, [showNFTCashToken, setTokenAmount]);
 
-  // Filter only those with a non-null token
-  const tokenizedUtxos = utxos.filter((u) => u.token !== null && u.token !== undefined);
-  console.log('Debug: UTXOs with non-null .token:', tokenizedUtxos);
-
-  // Extract existing token categories
-  const availableTokenCategories = [
-    ...new Set(tokenizedUtxos.map((utxo) => utxo.token.category)),
-  ];
-  console.log('Debug: availableTokenCategories:', availableTokenCategories);
-
-  /**
-   * Helper to reset all form values when toggling between views
-   */
+  /** Resets form toggles/fields */
   const resetFormValues = () => {
-    setShowOpReturn(false);
+    setShowRegularTx(false);
     setShowCashToken(false);
     setShowNFTCashToken(false);
+    setShowOpReturn(false);
+    setShowNFTConfigPopup(false);
+    setPopupTitle('Add Output');
+
     setRecipientAddress('');
-    setOpReturnText('');
     setTransferAmount(0);
     setTokenAmount(0);
     setSelectedTokenCategory('');
     setNftCapability('none');
     setNftCommitment('');
+    setOpReturnText('');
   };
 
   const togglePopup = () => {
     setShowPopup((prev) => !prev);
   };
 
-  // Change handlers
+  // Input change handlers
   const handleTransferAmountChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const value = e.target.value;
     setTransferAmount(value === '' ? 0 : Number(value));
   };
 
   const handleTokenAmountChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    // If in NFT creation, we do not allow editing tokenAmount
+    if (showNFTCashToken) return;
     const value = e.target.value;
     setTokenAmount(value === '' ? 0 : Number(value));
   };
 
-  // Scan a QR code
+  // QR code scanning
   const scanBarcode = async () => {
     try {
       const result = await CapacitorBarcodeScanner.scanBarcode({
@@ -173,9 +177,9 @@ const OutputSelection: React.FC<OutputSelectionProps> = ({
   return (
     <>
       <div className="mb-4">
+        {/* Transaction Outputs Section */}
         <div className="flex justify-between items-center mb-4">
           <h3 className="text-lg font-semibold mb-2">Transaction Outputs</h3>
-
           {txOutputs.length > 0 && (
             <button
               onClick={togglePopup}
@@ -186,6 +190,7 @@ const OutputSelection: React.FC<OutputSelectionProps> = ({
           )}
         </div>
 
+        {/* Popup with existing outputs */}
         {showPopup && (
           <Popup closePopups={() => setShowPopup(false)}>
             {txOutputs.length === 0 ? (
@@ -197,29 +202,28 @@ const OutputSelection: React.FC<OutputSelectionProps> = ({
                     key={index}
                     className="flex flex-col items-start mb-4 p-4 border rounded w-full break-words whitespace-normal bg-gray-50"
                   >
+                    {/* Recipient */}
                     <div className="flex justify-between w-full">
                       <span className="font-medium">Recipient:</span>
-                      <span>
-                        {shortenTxHash(
-                          output.recipientAddress,
-                          PREFIX[currentNetwork].length
-                        )}
-                      </span>
+                      <span>{shortenTxHash(output.recipientAddress, PREFIX[currentNetwork].length)}</span>
                     </div>
+                    {/* Amount */}
                     <div className="flex justify-between w-full">
                       <span className="font-medium">Amount:</span>
                       <span>{output.amount.toString()}</span>
                     </div>
+                    {/* Token */}
                     {output.token && (
                       <>
                         <div className="flex justify-between w-full">
                           <span className="font-medium">Token:</span>
-                          <span>{output.token.amount.toString()}</span>
+                          <span>{output.token.amount ? output.token.amount.toString() : 'NFT'}</span>
                         </div>
                         <div className="flex justify-between w-full">
                           <span className="font-medium">Category:</span>
                           <span>{output.token.category}</span>
                         </div>
+                        {/* NFT */}
                         {output.token.nft && (
                           <>
                             <div className="flex justify-between w-full">
@@ -234,6 +238,7 @@ const OutputSelection: React.FC<OutputSelectionProps> = ({
                         )}
                       </>
                     )}
+                    {/* Remove Output button */}
                     <button
                       onClick={() => {
                         handleRemoveOutput(index);
@@ -247,6 +252,7 @@ const OutputSelection: React.FC<OutputSelectionProps> = ({
                 ))}
               </div>
             )}
+            {/* Remove All */}
             <div className="flex justify-center mt-4">
               <button
                 onClick={() => {
@@ -261,23 +267,27 @@ const OutputSelection: React.FC<OutputSelectionProps> = ({
           </Popup>
         )}
 
+        {/* Summary of existing outputs */}
         {txOutputs.length > 0 && (
           <div className="mb-4">
-            <h3 className="text-lg font-semibold">{`${txOutputs.length} Recipient${
-              txOutputs.length === 1 ? '' : 's'
-            } - Total: ${txOutputs.reduce(
-              (sum, utxo) => sum + Number(utxo.amount),
-              0
-            )}`}</h3>
+            <h3 className="text-lg font-semibold">
+              {`${txOutputs.length} Recipient${txOutputs.length === 1 ? '' : 's'} - Total: ${txOutputs.reduce(
+                (sum, utxo) => sum + Number(utxo.amount),
+                0
+              )}`}
+            </h3>
           </div>
         )}
 
-        {/* Add Output Section */}
+        {/* "Add Output" Button */}
         {txOutputs.length < 10 && (
           <div className="mb-6">
             <button
               onClick={() => {
                 resetFormValues();
+                // default to "Send Regular Transaction"
+                setShowRegularTx(true);
+                setPopupTitle('Send Regular Transaction');
                 setShowAddOutputPopup(true);
               }}
               className="bg-blue-500 font-bold text-white py-2 px-4 rounded"
@@ -287,162 +297,156 @@ const OutputSelection: React.FC<OutputSelectionProps> = ({
           </div>
         )}
 
+        {/* "Add Output" Popup */}
         {showAddOutputPopup && (
           <Popup closePopups={() => setShowAddOutputPopup(false)}>
             <div className="mb-6">
-              <h3 className="text-lg font-semibold mb-2">Add Output</h3>
+              <h3 className="text-lg font-semibold mb-2">{popupTitle}</h3>
 
               <div className="mb-2 flex flex-wrap gap-2">
-                {/* 
+                {/* Send Regular Transaction */}
                 <button
                   onClick={() => {
                     resetFormValues();
-                    setShowOpReturn(true);
+                    setShowRegularTx(true);
+                    setPopupTitle('Send Regular Transaction');
                   }}
-                  className="bg-purple-500 font-bold text-white py-1 px-2 rounded"
+                  className={`font-bold py-1 px-2 rounded ${
+                    showRegularTx
+                      ? 'bg-blue-600 text-white'
+                      : 'bg-blue-200 text-gray-800'
+                  }`}
                 >
-                  Show OP_RETURN
+                  Send Regular Transaction
                 </button>
-                */}
+
+                {/* Create CashToken */}
                 <button
                   onClick={() => {
                     resetFormValues();
                     setShowCashToken(true);
+                    setPopupTitle('Create CashToken');
                   }}
-                  className="bg-orange-500 font-bold text-white py-1 px-2 rounded"
+                  disabled={!hasGenesisUtxoSelected}
+                  className={`font-bold py-1 px-2 rounded ${
+                    showCashToken
+                      ? 'bg-orange-500 text-white'
+                      : 'bg-orange-200 text-gray-800'
+                  } ${
+                    !hasGenesisUtxoSelected
+                      ? 'cursor-not-allowed opacity-50'
+                      : 'hover:bg-orange-600'
+                  }`}
                 >
                   Create CashToken
                 </button>
 
+                {/* Create NFT */}
                 <button
                   onClick={() => {
                     resetFormValues();
                     setShowNFTCashToken(true);
+                    setPopupTitle('Create NFT');
                   }}
-                  className="bg-pink-500 font-bold text-white py-1 px-2 rounded"
+                  disabled={!hasGenesisUtxoSelected}
+                  className={`font-bold py-1 px-2 rounded ${
+                    showNFTCashToken
+                      ? 'bg-pink-500 text-white'
+                      : 'bg-pink-200 text-gray-800'
+                  } ${
+                    !hasGenesisUtxoSelected
+                      ? 'cursor-not-allowed opacity-50'
+                      : 'hover:bg-pink-600'
+                  }`}
                 >
                   Create NFT
                 </button>
               </div>
 
-              {/* Default view if no toggles */}
-              {!showOpReturn && !showCashToken && !showNFTCashToken && (
+              {/* Regular TX view */}
+              {showRegularTx && (
                 <>
-                  <div className="flex items-center mb-2">
-                    <input
-                      type="text"
-                      value={recipientAddress}
-                      placeholder="Recipient Address"
-                      onChange={(e) => setRecipientAddress(e.target.value)}
-                      className="border p-2 w-full break-words whitespace-normal"
-                    />
-                    <button
-                      onClick={scanBarcode}
-                      className="ml-2 bg-green-500 text-white p-2 rounded"
-                      title="Scan QR Code"
-                    >
-                      <FaCamera />
-                    </button>
+                  <div className="mb-2">
+                    <label className="block font-medium mb-1">Recipient Address</label>
+                    <div className="flex items-center">
+                      <input
+                        type="text"
+                        value={recipientAddress}
+                        onChange={(e) => setRecipientAddress(e.target.value)}
+                        className="border p-2 w-full break-words whitespace-normal"
+                      />
+                      <button
+                        onClick={scanBarcode}
+                        className="ml-2 bg-green-500 text-white p-2 rounded"
+                        title="Scan QR Code"
+                      >
+                        <FaCamera />
+                      </button>
+                    </div>
                   </div>
 
                   <div className="mb-2">
+                    <label className="block font-medium mb-1">Transfer Amount (Sats)</label>
                     <input
                       type="number"
                       value={transferAmount}
-                      placeholder={`Regular Amount (Min: ${DUST})`}
                       onChange={handleTransferAmountChange}
                       className="border p-2 w-full break-words whitespace-normal"
                       min={DUST}
                     />
                   </div>
 
-                  <div className="mb-2">
-                    <input
-                      type="number"
-                      value={tokenAmount}
-                      placeholder="Token Amount"
-                      onChange={handleTokenAmountChange}
-                      className="border p-2 w-full break-words whitespace-normal"
-                    />
-                  </div>
+                  {/* If user has token-based UTXOs selected, show token fields */}
+                  {categoriesFromSelected.length > 0 && (
+                    <>
+                      <div className="mb-2">
+                        <label className="block font-medium mb-1">Token Amount</label>
+                        <input
+                          type="number"
+                          value={tokenAmount}
+                          onChange={handleTokenAmountChange}
+                          className="border p-2 w-full break-words whitespace-normal"
+                        />
+                      </div>
 
-                  {/* Show categories that have token data */}
-                  {availableTokenCategories.length > 0 && (
-                    <div className="mb-2">
-                      <select
-                        value={selectedTokenCategory}
-                        onChange={(e) => setSelectedTokenCategory(e.target.value)}
-                        className="border p-2 w-full break-words whitespace-normal"
-                      >
-                        <option value="">Select Token Category</option>
-                        {availableTokenCategories.map((category, index) => (
-                          <option key={index} value={category}>
-                            {category}
-                          </option>
-                        ))}
-                      </select>
-                    </div>
+                      <div className="mb-2">
+                        <label className="block font-medium mb-1">Token Category</label>
+                        <select
+                          value={selectedTokenCategory}
+                          onChange={(e) => setSelectedTokenCategory(e.target.value)}
+                          className="border p-2 w-full break-words whitespace-normal"
+                        >
+                          <option value="">Select Cashtoken UTXO</option>
+                          {categoriesFromSelected.map((cat, idx) => (
+                            <option key={idx} value={cat}>
+                              {cat}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+                    </>
                   )}
 
-                  <div className="mb-2">
-                    <label className="font-medium block mb-1">NFT Capability</label>
-                    <select
-                      value={nftCapability}
-                      onChange={(e) =>
-                        setNftCapability(e.target.value as 'none' | 'mutable' | 'minting')
-                      }
-                      className="border p-2 w-full break-words whitespace-normal"
+                  {/* Right-aligned "Add Output" button for non-NFT flows */}
+                  <div className="flex justify-end mt-4">
+                    <button
+                      onClick={handleAddOutput}
+                      className="bg-blue-500 font-bold text-white py-2 px-4 rounded"
                     >
-                      <option value="none">none</option>
-                      <option value="mutable">mutable</option>
-                      <option value="minting">minting</option>
-                    </select>
-                  </div>
-
-                  <div className="mb-2">
-                    <label className="font-medium block mb-1">NFT Commitment</label>
-                    <input
-                      type="text"
-                      value={nftCommitment}
-                      onChange={(e) => setNftCommitment(e.target.value)}
-                      placeholder="Up to 40 bytes (string form here)"
-                      className="border p-2 w-full break-words whitespace-normal"
-                    />
+                      Add Output
+                    </button>
                   </div>
                 </>
               )}
 
-              {/* OP_RETURN section */}
-              {showOpReturn && (
-                <>
-                  <div className="mb-2">
-                    <input
-                      type="text"
-                      value={opReturnText}
-                      placeholder="OP_RETURN Text"
-                      onChange={(e) => setOpReturnText(e.target.value)}
-                      className="border p-2 w-full break-words whitespace-normal"
-                    />
-                  </div>
-                  <div className="mb-2">
-                    <label className="font-medium block mb-1">
-                      Prepared OP_RETURN Data:
-                    </label>
-                    <pre className="bg-gray-100 p-2 rounded text-sm">
-                      {JSON.stringify(opReturnArray, null, 2)}
-                    </pre>
-                  </div>
-                </>
-              )}
-
-              {/* Create CashToken section */}
+              {/* Create CashToken */}
               {showCashToken && (
                 <>
+                  <label className="block font-medium mb-1">Recipient Address</label>
                   <div className="flex items-center mb-2">
                     <input
                       type="text"
                       value={recipientAddress}
-                      placeholder="Recipient Address"
                       onChange={(e) => setRecipientAddress(e.target.value)}
                       className="border p-2 w-full break-words whitespace-normal"
                     />
@@ -456,10 +460,10 @@ const OutputSelection: React.FC<OutputSelectionProps> = ({
                   </div>
 
                   <div className="mb-2">
+                    <label className="block font-medium mb-1">Transfer Amount (Sats)</label>
                     <input
                       type="number"
                       value={transferAmount}
-                      placeholder={`Regular Amount (Min: ${DUST})`}
                       onChange={handleTransferAmountChange}
                       className="border p-2 w-full break-words whitespace-normal"
                       min={DUST}
@@ -467,24 +471,23 @@ const OutputSelection: React.FC<OutputSelectionProps> = ({
                   </div>
 
                   <div className="mb-2">
+                    <label className="block font-medium mb-1">Token Amount</label>
                     <input
                       type="number"
                       value={tokenAmount}
-                      placeholder="Token Amount"
                       onChange={handleTokenAmountChange}
                       className="border p-2 w-full break-words whitespace-normal"
                     />
                   </div>
 
                   <div className="mb-2">
+                    <label className="block font-medium mb-1">Genesis UTXO for new Token</label>
                     <select
                       value={selectedTokenCategory}
                       onChange={(e) => setSelectedTokenCategory(e.target.value)}
                       className="border p-2 w-full break-words whitespace-normal"
                     >
-                      <option value="">
-                        Select a UTXO to use for creating CashToken
-                      </option>
+                      <option value="">Select Genesis UTXO</option>
                       {selectedUtxos
                         .filter((utxo) => !utxo.token && utxo.tx_pos === 0)
                         .map((utxo, index) => (
@@ -494,17 +497,27 @@ const OutputSelection: React.FC<OutputSelectionProps> = ({
                         ))}
                     </select>
                   </div>
+
+                  {/* Right-aligned "Add Output" button for non-NFT flows */}
+                  <div className="flex justify-end mt-4">
+                    <button
+                      onClick={handleAddOutput}
+                      className="bg-blue-500 font-bold text-white py-2 px-4 rounded"
+                    >
+                      Add Output
+                    </button>
+                  </div>
                 </>
               )}
 
-              {/* Create NFT section */}
+              {/* Create NFT */}
               {showNFTCashToken && (
                 <>
+                  <label className="block font-medium mb-1">Recipient Address</label>
                   <div className="flex items-center mb-2">
                     <input
                       type="text"
                       value={recipientAddress}
-                      placeholder="Recipient Address for NFT"
                       onChange={(e) => setRecipientAddress(e.target.value)}
                       className="border p-2 w-full break-words whitespace-normal"
                     />
@@ -518,10 +531,10 @@ const OutputSelection: React.FC<OutputSelectionProps> = ({
                   </div>
 
                   <div className="mb-2">
+                    <label className="block font-medium mb-1">Transfer Amount (Sats)</label>
                     <input
                       type="number"
                       value={transferAmount}
-                      placeholder={`Regular Amount (Min: ${DUST})`}
                       onChange={handleTransferAmountChange}
                       className="border p-2 w-full break-words whitespace-normal"
                       min={DUST}
@@ -529,24 +542,25 @@ const OutputSelection: React.FC<OutputSelectionProps> = ({
                   </div>
 
                   <div className="mb-2">
+                    <label className="block font-medium mb-1">NFT Token Amount</label>
+                    {/* default to 0, user can't change */}
                     <input
                       type="number"
                       value={tokenAmount}
-                      placeholder="NFT Token Amount"
                       onChange={handleTokenAmountChange}
                       className="border p-2 w-full break-words whitespace-normal"
+                      disabled
                     />
                   </div>
 
                   <div className="mb-2">
+                    <label className="block font-medium mb-1">Genesis UTXO for new NFT</label>
                     <select
                       value={selectedTokenCategory}
                       onChange={(e) => setSelectedTokenCategory(e.target.value)}
                       className="border p-2 w-full break-words whitespace-normal"
                     >
-                      <option value="">
-                        Select a UTXO to use for creating NFT
-                      </option>
+                      <option value="">Select Genesis UTXO</option>
                       {selectedUtxos
                         .filter((utxo) => !utxo.token && utxo.tx_pos === 0)
                         .map((utxo, index) => (
@@ -557,46 +571,77 @@ const OutputSelection: React.FC<OutputSelectionProps> = ({
                     </select>
                   </div>
 
-                  <div className="mb-2">
-                    <label className="font-medium block mb-1">NFT Capability</label>
-                    <select
-                      value={nftCapability}
-                      onChange={(e) =>
-                        setNftCapability(e.target.value as 'none' | 'mutable' | 'minting')
-                      }
-                      className="border p-2 w-full break-words whitespace-normal"
+                  {/* new row with "Configure NFT" on left, "Add Output" on right */}
+                  <div className="flex justify-between items-center mt-4">
+                    <button
+                      onClick={() => setShowNFTConfigPopup(true)}
+                      className="bg-purple-500 text-white font-bold py-2 px-4 rounded"
                     >
-                      <option value="none">none</option>
-                      <option value="mutable">mutable</option>
-                      <option value="minting">minting</option>
-                    </select>
-                  </div>
+                      Configure NFT
+                    </button>
 
-                  <div className="mb-2">
-                    <label className="font-medium block mb-1">NFT Commitment</label>
-                    <input
-                      type="text"
-                      value={nftCommitment}
-                      onChange={(e) => setNftCommitment(e.target.value)}
-                      placeholder="Up to 40 bytes (string form here)"
-                      className="border p-2 w-full break-words whitespace-normal"
-                    />
+                    <button
+                      onClick={handleAddOutput}
+                      className="bg-blue-500 font-bold text-white py-2 px-4 rounded"
+                    >
+                      Add Output
+                    </button>
                   </div>
                 </>
               )}
 
-              <button
-                onClick={() => {
-                  handleAddOutput();
-                }}
-                className="bg-blue-500 font-bold text-white py-2 px-4 rounded"
-              >
-                Add Output
-              </button>
+              {/* The NFT config sub-popup */}
+              {showNFTConfigPopup && (
+                <Popup closePopups={() => setShowNFTConfigPopup(false)}>
+                  <div className="p-4">
+                    <h3 className="text-lg font-semibold mb-2">NFT Configuration</h3>
+                    <div className="mb-2">
+                      <label className="block font-medium mb-1">NFT Capability</label>
+                      <select
+                        value={nftCapability}
+                        onChange={(e) =>
+                          setNftCapability(e.target.value as 'none' | 'mutable' | 'minting')
+                        }
+                        className="border p-2 w-full"
+                      >
+                        <option value="none">none</option>
+                        <option value="mutable">mutable</option>
+                        <option value="minting">minting</option>
+                      </select>
+                    </div>
+
+                    <div className="mb-2">
+                      <label className="block font-medium mb-1">NFT Commitment</label>
+                      <input
+                        type="text"
+                        value={nftCommitment}
+                        onChange={(e) => setNftCommitment(e.target.value)}
+                        placeholder="Up to 40 bytes"
+                        className="border p-2 w-full break-words whitespace-normal"
+                      />
+                    </div>
+
+                    <button
+                      onClick={() => setShowNFTConfigPopup(false)}
+                      className="bg-blue-500 text-white font-bold py-1 px-3 rounded"
+                    >
+                      Done
+                    </button>
+                  </div>
+                </Popup>
+              )}
+
+              {/* OP_RETURN if needed */}
+              {showOpReturn && (
+                <>
+                  {/* user’s OP_RETURN inputs */}
+                </>
+              )}
             </div>
           </Popup>
         )}
 
+        {/* Change Address Input */}
         <div className="mb-6">
           <h3 className="text-lg font-semibold mb-2">Change Address</h3>
           <input

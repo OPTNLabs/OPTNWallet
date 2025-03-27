@@ -114,8 +114,8 @@ export default function TransactionManager() {
    * @param selectedTokenCategory - The category of the selected token **or** the genesis UTXO tx_hash.
    * @param selectedUtxos - The selected UTXOs for the transaction.
    * @param addresses - An array of addresses with optional token addresses.
-   * @param nftCapability - Optional; if present, indicates we're creating or transferring an NFT with the given capability.
-   * @param nftCommitment - Optional; if present, indicates the NFT commitment string (up to 40 bytes).
+   * @param nftCapability - (For genesis only) capability if creating an NFT
+   * @param nftCommitment - (For genesis only) commitment if creating an NFT
    * @returns The newly created TransactionOutput or undefined if inputs are invalid.
    */
   function addOutput(
@@ -136,21 +136,21 @@ export default function TransactionManager() {
       return undefined;
     }
 
-    // Initialize a new, regular transaction output by default
+    // Initialize a new transaction output (regular by default)
     const newOutput: TransactionOutput = {
       recipientAddress,
       amount: transferAmount || 0,
     };
 
-    // If we have a token category or a genesis UTXO
+    // If user selected a token category or a genesis tx_hash
     if (selectedTokenCategory) {
-      // 1. Attempt to find an existing token UTXO if user is sending an existing token.
+      // 1) Attempt to find an existing token UTXO if user is transferring an existing token
       const existingTokenUTXO = selectedUtxos.find(
         (utxo) => utxo.token && utxo.token.category === selectedTokenCategory
       );
 
-      // 2. Or attempt to find a 'genesis' UTXO if user is creating a new CashToken.
-      //    specifically a UTXO with tx_pos === 0, no token data, and whose tx_hash matches selectedTokenCategory
+      // 2) Or find a 'genesis' UTXO if user is creating a new CashToken:
+      //    specifically a UTXO with tx_pos === 0, no .token, and matching tx_hash
       const genesisUtxo = selectedUtxos.find(
         (utxo) =>
           !utxo.token &&
@@ -159,18 +159,20 @@ export default function TransactionManager() {
       );
 
       if (existingTokenUTXO && existingTokenUTXO.token) {
-        // Case: transferring an existing token
+        // ------- TRANSFERRING EXISTING TOKEN -------
+        // Start by copying the category
         newOutput.token = {
-          amount: tokenAmount,
+          amount: tokenAmount, // For fungible tokens
           category: existingTokenUTXO.token.category,
         };
 
-        // If NFT data is provided, treat it as an NFT => tokenAmount must be 0
-        if (nftCapability && nftCommitment !== undefined) {
-          delete newOutput.token.amount; // NFT is non-fungible: enforce 0 fungible amount
+        // If the existing token is actually an NFT (utxo.token.nft is present),
+        // replicate its capability & commitment. Also ensure amount is undefined.
+        if (existingTokenUTXO.token.nft) {
+          delete newOutput.token.amount; // Non-fungible => remove fungible amount
           newOutput.token.nft = {
-            capability: nftCapability,
-            commitment: nftCommitment,
+            capability: existingTokenUTXO.token.nft.capability,
+            commitment: existingTokenUTXO.token.nft.commitment,
           };
         }
 
@@ -181,15 +183,15 @@ export default function TransactionManager() {
         if (tokenAddress) {
           newOutput.recipientAddress = tokenAddress;
         }
+
       } else if (genesisUtxo) {
-        // Case: creating a new CashToken or NFT from a genesis UTXO
+        // ------- CREATING A NEW CASHTOKEN (GENESIS) -------
         newOutput.token = {
           // If NFT data is present, enforce 0 fungible token amount
           amount: nftCapability && nftCommitment !== undefined ? 0 : tokenAmount,
           category: genesisUtxo.tx_hash,
         };
 
-        // If NFT data is provided, attach it
         if (nftCapability && nftCommitment !== undefined) {
           newOutput.token.nft = {
             capability: nftCapability,
@@ -197,13 +199,14 @@ export default function TransactionManager() {
           };
         }
 
-        // Optionally redirect address if there's a special token address
+        // Optionally redirect to special token address if it exists
         const tokenAddress = addresses.find(
           (addr) => addr.address === recipientAddress
         )?.tokenAddress;
         if (tokenAddress) {
           newOutput.recipientAddress = tokenAddress;
         }
+
       } else {
         // Fallback: no existing token or valid genesis UTXO found
         console.warn(
@@ -212,9 +215,9 @@ export default function TransactionManager() {
       }
     }
 
-    // Dispatch the new output to Redux
+    // Dispatch this new output to Redux
     store.dispatch(addTxOutput(newOutput));
-    console.log(newOutput)
+    console.log('[TransactionManager.addOutput] New Output:', newOutput);
     return newOutput;
   }
 
@@ -246,7 +249,7 @@ export default function TransactionManager() {
     // );
     console.warn(`Unused Params: ${JSON.stringify(contractFunctionInputs)}`);
     // console.log('TransactionManager: Change Address:', changeAddress);
-    // console.log('TransactionManager: Selected UTXOs:', selectedUtxos);
+    console.log('TransactionManager: Selected UTXOs:', selectedUtxos);
     // Fetch the latest state
     // const state = store.getState();
     // const selectedFunction = state.contract.selectedFunction;
