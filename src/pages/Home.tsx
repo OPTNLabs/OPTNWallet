@@ -247,6 +247,14 @@ const Home: React.FC = () => {
           Contracts
         </button>
 
+        {/* Navigate to Apps Page */}
+        <button
+          className="mt-4 p-2 bg-green-500 font-bold text-white rounded hover:bg-green-600 transition duration-300 w-full max-w-md"
+          onClick={() => navigate('/apps')}
+        >
+          Apps
+        </button>
+
         {/* Fetch UTXOs Button */}
         <button
           className="flex justify-center items-center mt-4 p-2 bg-blue-500 font-bold text-white rounded hover:bg-blue-600 transition duration-300 w-full max-w-md"

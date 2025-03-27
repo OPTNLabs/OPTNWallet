@@ -13,12 +13,15 @@ import Transaction from './pages/Transaction';
 import TransactionHistory from './pages/TransactionHistory';
 import LandingPage from './pages/LandingPage';
 import Receive from './pages/Receive';
+import AppsView from './pages/AppsView';
+import AppFundMe from './pages/apps/FundMe';
 import { RootState } from './redux/store';
 import { startUTXOWorker, stopUTXOWorker } from './workers/UTXOWorkerService';
 import {
   startTransactionWorker,
   stopTransactionWorker,
 } from './workers/TransactionWorkerService';
+import CampaignDetail from './pages/apps/utils/CampaignDetail';
 
 let utxoWorkerStarted = false;
 let transactionWorkerStarted = false;
@@ -76,6 +79,9 @@ function App() {
           <Route element={<Layout />}>
             <Route path="/home/:wallet_id" element={<Home />} />
             <Route path="/contract" element={<ContractView />} />
+            <Route path="/apps" element={<AppsView />} />
+            <Route path="/apps/fundme" element={<AppFundMe />} />
+            <Route path="/campaign/:id" element={<CampaignDetail />} />
             <Route path="/receive" element={<Receive />} />
             <Route path="/transaction" element={<Transaction />} />
             <Route
