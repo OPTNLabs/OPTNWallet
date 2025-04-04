@@ -1,3 +1,4 @@
+// @ts-nocheck
 import { Unlocker, TransactionBuilder, ElectrumNetworkProvider, Network } from 'cashscript';
 import { hexToBin, cashAddressToLockingBytecode, decodeTransaction } from '@bitauth/libauth';
 

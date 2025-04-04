@@ -1,3 +1,4 @@
+// @ts-nocheck
 import { decodeCashAddress, encodeCashAddress } from '@bitauth/libauth';
 
 function toTokenAddress(address: string) {

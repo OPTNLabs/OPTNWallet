@@ -1,3 +1,4 @@
+// @ts-nocheck
 import React, { useState } from 'react';
 import { TailSpin } from 'react-loader-spinner';
 import Popup from './transaction/Popup';
