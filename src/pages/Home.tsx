@@ -12,6 +12,8 @@ import { setUTXOs, setFetchingUTXOs, setInitialized } from '../redux/utxoSlice';
 import PriceFeed from '../components/PriceFeed';
 import { TailSpin } from 'react-loader-spinner';
 import Popup from '../components/transaction/Popup';
+import DAppConnectionTester from '../components/DAppConnectionTester';
+import ScanWcQr from '../components/ScanWcQr';
 
 const batchAmount = 10;
 
@@ -236,6 +238,11 @@ const Home: React.FC = () => {
           className="max-w-full h-auto"
         />
       </div>
+
+      {/* Testing Walletconnect */}
+      <ScanWcQr />
+      <DAppConnectionTester />
+      {/* End of Testing Walletconnect */}
 
       {/* Action Buttons */}
       <div className="flex flex-col items-center space-y-4">
