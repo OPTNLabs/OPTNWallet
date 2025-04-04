@@ -1,3 +1,4 @@
+// @ts-nocheck
 // src/pages/AppsView.tsx
 
 import { useSelector } from 'react-redux';

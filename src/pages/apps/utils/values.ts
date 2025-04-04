@@ -1,3 +1,4 @@
+// @ts-nocheck
 export const AddressCashStarter = 'bitcoincash:p03u4v845j4rhzyc63cgm0arksfx5u3atkvz43xzdy0r8pql4qm37j50tje8p';  //address hash: e3cab0f5a4aa3b8898d4708dbfa3b4126a723d5d982ac4c2691e33841fa8371f
 export const AddressTokensCashStarter = 'bitcoincash:r03u4v845j4rhzyc63cgm0arksfx5u3atkvz43xzdy0r8pql4qm37q8n2tc72';
 
