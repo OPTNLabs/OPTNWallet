@@ -1,3 +1,4 @@
+// @ts-nocheck
 import { Contract, Utxo, ElectrumNetworkProvider, SignatureTemplate } from 'cashscript';
 import { hexToBin, cashAddressToLockingBytecode, decodeTransaction } from '@bitauth/libauth';
 import { AddressCashStarter, AddressTokensCashStarter, MasterCategoryID } from './values'

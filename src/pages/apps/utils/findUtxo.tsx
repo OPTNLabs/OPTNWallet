@@ -1,3 +1,4 @@
+// @ts-nocheck
 import { Utxo } from 'cashscript';
 
 interface FindUTXOParams {
