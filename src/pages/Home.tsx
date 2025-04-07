@@ -12,8 +12,10 @@ import { setUTXOs, setFetchingUTXOs, setInitialized } from '../redux/utxoSlice';
 import PriceFeed from '../components/PriceFeed';
 import { TailSpin } from 'react-loader-spinner';
 import Popup from '../components/transaction/Popup';
-import DAppConnectionTester from '../components/DAppConnectionTester';
-import ScanWcQr from '../components/ScanWcQr';
+// import DAppConnectionTester from '../components/DAppConnectionTester';
+import ScanWcQr from '../components/WcConnectionManager';
+import SessionProposalModal from '../components/SessionProposalModal';
+import WcConnectionManager from '../components/WcConnectionManager';
 
 const batchAmount = 10;
 
@@ -240,8 +242,8 @@ const Home: React.FC = () => {
       </div>
 
       {/* Testing Walletconnect */}
-      <ScanWcQr />
-      <DAppConnectionTester />
+      <SessionProposalModal />
+      <WcConnectionManager />
       {/* End of Testing Walletconnect */}
 
       {/* Action Buttons */}

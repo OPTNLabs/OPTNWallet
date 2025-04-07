@@ -44,6 +44,7 @@
     "cashscript": "^0.10.5",
     "decimal.js": "^10.4.3",
     "delay": "^6.0.0",
+    "dotenv": "^16.4.7",
     "ecpair": "^2.1.0",
     "electrum": "^4.15.4",
     "electrum-cash": "^2.0.10",
