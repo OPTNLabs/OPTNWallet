@@ -1,324 +1,339 @@
 // src/redux/walletconnectSlice.ts
-import { createSlice, createAsyncThunk, PayloadAction } from '@reduxjs/toolkit'
+
+import 'dotenv/config'
+import { createSlice, createAsyncThunk } from '@reduxjs/toolkit'
 import { Core } from '@walletconnect/core'
-import { WalletKit, type WalletKitTypes, type IWalletKit } from '@reown/walletkit'
-import type { SessionTypes } from '@walletconnect/types'
-import type { Wallet, TestNetWallet } from 'mainnet-js'
-import { getSdkError } from '@walletconnect/utils'
-import type { RootState } from './store'
-
-// --- LIBAUTH & BCH SIGNING IMPORTS (optional placeholders) ---
 import {
-  // Example – only if you want advanced transaction signing:
-  generateTransaction,
-  encodeTransaction,
-  sha256,
-  hash256,
-  hexToBin,
-  binToHex,
-  AuthenticationProgramState,
-  TransactionGenerationError,
-  // etc.
-} from '@bitauth/libauth'
+  WalletKit,
+  type WalletKitTypes,
+  type IWalletKit,
+} from '@reown/walletkit'
+import { getSdkError } from '@walletconnect/utils'
+import type { SessionTypes } from '@walletconnect/types'
+import type { RootState } from './store'
+import KeyService from '../services/KeyService'
 
-// If you have custom types for transaction signing:
-type TransactionRequestWC = WalletKitTypes.SessionRequest
-// or define more strongly as needed.
+// -- Optional debug placeholders, so TS doesn't complain if they're unused.
+import * as _Toast from '@capacitor/toast'
+import * as _SignedMessage from '../utils/signed'
+console.debug('[walletconnectSlice] Debug placeholders:', {
+  ToastModule: _Toast,
+  SignedMessageModule: _SignedMessage,
+})
 
-type WalletconnectState = {
+// JSON-RPC union types for success/error responses
+type JsonRpcSuccess<T = unknown> = {
+  id: number
+  jsonrpc: '2.0'
+  result: T
+}
+type JsonRpcError = {
+  id: number
+  jsonrpc: '2.0'
+  error: {
+    code: number
+    message: string
+  }
+}
+type JsonRpcResponse<T = unknown> = JsonRpcSuccess<T> | JsonRpcError
+
+// Slice state
+interface WalletconnectState {
   web3wallet: IWalletKit | null
   activeSessions: Record<string, SessionTypes.Struct> | null
-
-  // We'll store a reference to the user’s BCH wallet + address
-  bchWallet: Wallet | TestNetWallet | null
-  walletAddress: string | null
+  pendingProposal: WalletKitTypes.SessionProposal | null
 }
 
 const initialState: WalletconnectState = {
   web3wallet: null,
   activeSessions: null,
-  bchWallet: null,
-  walletAddress: null,
+  pendingProposal: null,
 }
 
-// ──────────────────────────────────────────────────────────────────────────
-//  THUNK: Initialize WalletConnect
-// ──────────────────────────────────────────────────────────────────────────
+// 1) initWalletConnect
 export const initWalletConnect = createAsyncThunk(
   'walletconnect/init',
   async (_, { dispatch }) => {
     console.log('[WalletconnectSlice] initWalletConnect triggered')
 
-    const core = new Core({
-      projectId: '<PROJECT_ID>', // Replace with your actual WC project ID
-    })
+    // Use your .env or inline project ID
+    const projectId = 'f62aa2bb589104d059ca7b5bb64b18fb'
+    console.log('[WalletconnectSlice] Using projectId:', projectId)
+
+    const core = new Core({ projectId })
     console.log('[WalletconnectSlice] Created Core instance')
 
+    // The metadata will appear on the dApp side
     const metadata = {
       name: 'OPTN Wallet',
       description: 'OPTN WalletConnect Integration',
+      // For dev, match your local domain if you want to avoid mismatch warnings
       url: 'https://optn.cash',
       icons: ['https://optn.cash/logo.png'],
     }
 
     const web3wallet = await WalletKit.init({ core, metadata })
-    console.log('[WalletconnectSlice] WalletKit initialized:', web3wallet)
+    console.log('[WalletconnectSlice] WalletKit initialized')
 
     const activeSessions = web3wallet.getActiveSessions()
-    console.log('[WalletconnectSlice] activeSessions at init:', activeSessions)
+    console.log('[WalletconnectSlice] Active sessions at init:', activeSessions)
 
-    // Listen for incoming session requests (e.g. dApp requests)
-    web3wallet.on('session_request', (event) => {
-      console.log('[WalletconnectSlice] session_request event:', event)
-      dispatch(handleWcRequest(event))
+    // ----------------------------
+    // A) Listen for session_proposal
+    // ----------------------------
+    web3wallet.on('session_proposal', (proposal) => {
+      console.log('[WalletconnectSlice] session_proposal event:', proposal)
+      // store the proposal in Redux so we can show a modal
+      dispatch(receiveSessionProposal(proposal))
+    })
+
+    // ----------------------------
+    // B) Listen for session_request
+    // ----------------------------
+    web3wallet.on('session_request', (sessionEvent) => {
+      console.log('[WalletconnectSlice] session_request event:', sessionEvent)
+      dispatch(handleWcRequest(sessionEvent))
     })
 
     return { web3wallet, activeSessions }
   }
 )
 
-// ──────────────────────────────────────────────────────────────────────────
-//  THUNK: Pair (connect) from scanned or typed URI (wc:...)
-// ──────────────────────────────────────────────────────────────────────────
-export const wcPair = createAsyncThunk(
-  'walletconnect/pair',
-  async (uri: string, { getState }) => {
-    console.log('[WalletconnectSlice] wcPair triggered with URI:', uri)
+// 2) Session Proposal – Approve or Reject
 
+// We'll store the proposal in Redux, so we define a simple action
+export const receiveSessionProposal = createSlice({
+  name: 'sessionProposal',
+  initialState: null as WalletKitTypes.SessionProposal | null,
+  reducers: {
+    setProposal: (state, action) => action.payload,
+  },
+}).actions.setProposal
+
+// Thunk: Approve the session proposal
+export const approveSessionProposal = createAsyncThunk(
+  'walletconnect/approveSessionProposal',
+  async (_, { getState }) => {
     const state = getState() as RootState
     const walletKit = state.walletconnect.web3wallet
-    if (!walletKit) {
-      console.error('[WalletconnectSlice] Cannot pair - no walletKit!')
-      throw new Error('WalletConnect is not initialized')
+    const proposal = state.walletconnect.pendingProposal
+    if (!walletKit || !proposal) {
+      throw new Error('No walletKit or proposal to approve')
     }
 
-    console.log('[WalletconnectSlice] Pairing now...')
-    await walletKit.pair({ uri })
-    console.log('[WalletconnectSlice] Pairing attempt completed')
+    // Build minimal "namespaces" for BCH
+    // e.g. define chain "bch:main" or "bch:test"
+    const chainId = 'bch:main'
+    const address = 'bitcoincash:qEXAMPLE...' // You can refine this from KeyService or user selection
+    const accountCaip = `${chainId}:${address}`
+
+    // If the dApp requests eip155 or something else, you'd need to handle that logic,
+    // but let's force a bch namespace for demonstration
+    const approvedNamespaces = {
+      bch: {
+        chains: [chainId],
+        methods: [
+          'bch_getAddresses',
+          'bch_signMessage',
+          'bch_signTransaction',
+        ],
+        events: [],
+        accounts: [accountCaip],
+      },
+    }
+
+    console.log('[WalletconnectSlice] Approving session with:', approvedNamespaces)
+    // Approve the session
+    const session = await walletKit.approveSession({
+      id: proposal.id,
+      namespaces: approvedNamespaces,
+    })
+    console.log('[WalletconnectSlice] session approved:', session)
+    return session
   }
 )
 
-// ──────────────────────────────────────────────────────────────────────────
-//  ACTION: Set the bchWallet & derived address
-// ──────────────────────────────────────────────────────────────────────────
-/** 
- * If you want to store the user’s mainnet-js wallet and its address in Redux,
- * you can dispatch this from your app whenever you have a new or loaded wallet.
- */
-export const setBchWallet = createAsyncThunk(
-  'walletconnect/setBchWallet',
-  async (wallet: Wallet | TestNetWallet) => {
-    // Retrieve an address. Replace getDepositAddress with your own logic.
-    const walletAddress = wallet.getDepositAddress()
-    console.log('[WalletconnectSlice] setBchWallet, address =', walletAddress)
+// Thunk: Reject the session proposal
+export const rejectSessionProposal = createAsyncThunk(
+  'walletconnect/rejectSessionProposal',
+  async (_, { getState }) => {
+    const state = getState() as RootState
+    const walletKit = state.walletconnect.web3wallet
+    const proposal = state.walletconnect.pendingProposal
+    if (!walletKit || !proposal) {
+      throw new Error('No walletKit or proposal to reject')
+    }
 
-    return { wallet, address: walletAddress }
+    await walletKit.rejectSession({
+      id: proposal.id,
+      reason: getSdkError('USER_REJECTED'),
+    })
+    console.log('[WalletconnectSlice] session rejected')
   }
 )
 
-// ──────────────────────────────────────────────────────────────────────────
-//  THUNK: Handle incoming session requests from the dApp
-// ──────────────────────────────────────────────────────────────────────────
+// 3) handleWcRequest
 export const handleWcRequest = createAsyncThunk(
   'walletconnect/request',
-  async (event: WalletKitTypes.SessionRequest, { getState }) => {
+  async (sessionEvent: WalletKitTypes.SessionRequest, { getState }) => {
     const state = getState() as RootState
-    const { web3wallet, bchWallet, walletAddress } = state.walletconnect
-
-    if (!web3wallet) {
-      console.error('[WalletconnectSlice] handleWcRequest: no web3wallet!')
+    const walletKit = state.walletconnect.web3wallet
+    const currentWalletId = state.wallet_id.currentWalletId
+    if (!walletKit) {
       throw new Error('WalletConnect not initialized')
     }
-    if (!bchWallet || !walletAddress) {
-      console.warn('[WalletconnectSlice] handleWcRequest: no bchWallet or walletAddress set!')
-      // Depending on your logic, you may want to throw or simply respond with an error:
-      // throw new Error('No BCH wallet loaded')
-      // or just proceed with an error response
+    if (!currentWalletId) {
+      throw new Error('No wallet selected – cannot fetch keys')
     }
 
-    const { topic, params, id } = event
+    const { topic, params, id } = sessionEvent
     const { request } = params
     const method = request.method
+    console.log(`[handleWcRequest] Incoming method: ${method}`)
 
-    console.log('[WalletconnectSlice] handleWcRequest ->', method)
-    console.log('[WalletconnectSlice] event details:', event)
+    let response: JsonRpcResponse = {
+      id,
+      jsonrpc: '2.0',
+      result: `Method ${method} not implemented yet.`,
+    }
 
-    // Switch on method
     switch (method) {
-      case 'bch_getAddresses':
-      case 'bch_getAccounts': {
-        // Return your main address. Possibly more logic needed for multi-account.
-        const result = [walletAddress || '']  
-        const response = { id, jsonrpc: '2.0', result }
-        await web3wallet.respondSessionRequest({ topic, response })
-        console.log(`[WalletconnectSlice] responded with address: ${result}`)
+      case 'bch_getAccounts':
+      case 'bch_getAddresses': {
+        console.log('[handleWcRequest] bch_getAddresses triggered')
+        const allKeys = await KeyService.retrieveKeys(currentWalletId)
+        const addresses = allKeys.map((k) => k.address)
+        response = { id, jsonrpc: '2.0', result: addresses }
         break
       }
 
       case 'bch_signMessage':
       case 'personal_sign': {
-        // Minimal sign message. Usually the dApp provides the message in request.params
-        console.log('[WalletconnectSlice] signing message:', request.params)
-        await signMessage(event, bchWallet)
+        console.log('[handleWcRequest] bch_signMessage triggered')
+        // For demonstration, sign with the first address
+        const allKeys = await KeyService.retrieveKeys(currentWalletId)
+        if (!allKeys.length) {
+          throw new Error('No keys found in DB!')
+        }
+
+        const addressObj = allKeys[0]
+        const privateKey = await KeyService.fetchAddressPrivateKey(addressObj.address)
+        if (!privateKey) {
+          throw new Error('Private key not found')
+        }
+
+        // parse the message from request
+        let message = ''
+        if (Array.isArray(request.params) && request.params.length > 0) {
+          message = request.params[0]
+        } else if (typeof request.params === 'object' && request.params.message) {
+          message = request.params.message
+        } else {
+          message = 'Hello from BCH (fallback)'
+        }
+
+        console.log('[handleWcRequest] Signing message:', message)
+
+        // Actually sign (placeholder)
+        // If using your SignedMessage class, do:
+        //   const signedResult = await SignedMessage.sign(message, privateKey)
+        //   const base64Sig = signedResult.signature
+        //   response = { id, jsonrpc: '2.0', result: base64Sig }
+        response = { id, jsonrpc: '2.0', result: 'PLACEHOLDER_SIGNATURE' }
         break
       }
 
       case 'bch_signTransaction': {
-        console.log('[WalletconnectSlice] signing transaction request')
-        await signTransactionWC(event, bchWallet)
+        console.log('[handleWcRequest] bch_signTransaction triggered')
+        // Example: parse transaction details from request, sign inputs, etc.
+        response = { id, jsonrpc: '2.0', result: '0xDEADBEEF' }
         break
       }
 
       default: {
-        // If unknown method, respond with an error
-        const response = {
+        console.warn('[handleWcRequest] Unsupported method:', method)
+        response = {
           id,
           jsonrpc: '2.0',
-          error: { code: 1001, message: `Unsupported method ${method}` },
+          error: {
+            code: 1001,
+            message: `Unsupported method: ${method}`,
+          },
         }
-        await web3wallet.respondSessionRequest({ topic, response })
-        console.warn(`[WalletconnectSlice] Unsupported method: ${method}`)
+        break
       }
     }
+
+    console.log('[handleWcRequest] Responding with:', response)
+    await walletKit.respondSessionRequest({ topic, response })
   }
 )
 
-// ──────────────────────────────────────────────────────────────────────────
-//  HELPER: Sign a message
-// ──────────────────────────────────────────────────────────────────────────
-async function signMessage(
-  event: WalletKitTypes.SessionRequest,
-  wallet: Wallet | TestNetWallet | null
-) {
-  if (!wallet) {
-    console.error('[signMessage] no wallet found!')
-    throw new Error('No BCH wallet loaded')
+// 4) Pair from typed or scanned URI
+export const wcPair = createAsyncThunk(
+  'walletconnect/pair',
+  async (uri: string, { getState }) => {
+    console.log('[walletconnectSlice] wcPair triggered with URI:', uri)
+    const state = getState() as RootState
+    const walletKit = state.walletconnect.web3wallet
+    if (!walletKit) {
+      throw new Error('WalletConnect is not initialized')
+    }
+    await walletKit.pair({ uri })
+    console.log('[walletconnectSlice] Pairing attempt completed')
   }
+)
 
-  const { topic, params, id } = event
-  const { request } = params
-  const { message } = request.params
-
-  console.log('[signMessage] Received message:', message)
-
-  // The .sign() method is from mainnet-js
-  const signedResult = await wallet.sign(message)
-
-  // Example result includes signature
-  // If your wallet returns a more complex object, adapt the line below
-  const signature = signedResult?.signature ?? 'No signature'
-
-  // Respond to WC
-  const response = { id, jsonrpc: '2.0', result: signature }
-  const state = (window as any).store?.getState()?.walletconnect // or handle differently
-  if (state?.web3wallet) {
-    await state.web3wallet.respondSessionRequest({ topic, response })
-    console.log('[signMessage] responded to dApp with signature')
-  } else {
-    console.error('[signMessage] Could not respond - no web3wallet in store')
-  }
-}
-
-// ──────────────────────────────────────────────────────────────────────────
-//  HELPER: Sign a transaction
-// ──────────────────────────────────────────────────────────────────────────
-async function signTransactionWC(
-  event: WalletKitTypes.SessionRequest,
-  wallet: Wallet | TestNetWallet | null
-) {
-  if (!wallet) {
-    console.error('[signTransactionWC] no wallet found!')
-    throw new Error('No BCH wallet loaded')
-  }
-
-  const { topic, params, id } = event
-  const { request } = params
-
-  console.log('[signTransactionWC] request:', request)
-  // request.params might include: { transaction, sourceOutputs, broadcast }
-
-  // For example:
-  // const { transaction, sourceOutputs, broadcast } = request.params
-
-  // Perform your signing logic here – see your Pinia code for advanced steps
-
-  // As a placeholder, we just return a fake TX ID
-  const dummySignedTx = {
-    signedTransaction: 'FAKE_SIGNED_TX_HEX',
-    signedTransactionHash: 'FAKE_SIGNED_TX_HASH',
-  }
-
-  // And respond
-  const response = { id, jsonrpc: '2.0', result: dummySignedTx }
-
-  const state = (window as any).store?.getState()?.walletconnect // or handle differently
-  if (state?.web3wallet) {
-    await state.web3wallet.respondSessionRequest({ topic, response })
-    console.log('[signTransactionWC] responded to dApp with dummy transaction')
-  } else {
-    console.error('[signTransactionWC] Could not respond - no web3wallet in store')
-  }
-}
-
-// ──────────────────────────────────────────────────────────────────────────
-//  HELPER: Reject a request
-// ──────────────────────────────────────────────────────────────────────────
-async function rejectRequest(event: WalletKitTypes.SessionRequest) {
-  const { topic, params, id } = event
-  const response = {
-    id,
-    jsonrpc: '2.0',
-    error: getSdkError('USER_REJECTED'),
-  }
-
-  const state = (window as any).store?.getState()?.walletconnect
-  if (state?.web3wallet) {
-    await state.web3wallet.respondSessionRequest({ topic, response })
-    console.log('[rejectRequest] Rejected request for method', params.request.method)
-  } else {
-    console.error('[rejectRequest] Could not respond - no web3wallet in store')
-  }
-}
-
-// ──────────────────────────────────────────────────────────────────────────
-//  SLICE DEFINITION
-// ──────────────────────────────────────────────────────────────────────────
 const walletconnectSlice = createSlice({
   name: 'walletconnect',
   initialState,
-  reducers: {},
+  reducers: {
+    // We'll store the proposal in Redux so a React modal can read it
+    setPendingProposal: (state, action) => {
+      state.pendingProposal = action.payload
+    },
+    clearPendingProposal: (state) => {
+      state.pendingProposal = null
+    },
+  },
   extraReducers: (builder) => {
-    // initWalletConnect
     builder.addCase(initWalletConnect.fulfilled, (state, action) => {
-      console.log('[WalletconnectSlice] initWalletConnect.fulfilled')
+      console.log('[walletconnectSlice] initWalletConnect.fulfilled')
       state.web3wallet = action.payload.web3wallet
       state.activeSessions = action.payload.activeSessions
     })
     builder.addCase(initWalletConnect.rejected, (_, action) => {
-      console.error('[WalletconnectSlice] initWalletConnect.rejected:', action.error)
+      console.error('[walletconnectSlice] initWalletConnect.rejected:', action.error)
     })
 
-    // wcPair
-    builder.addCase(wcPair.rejected, (_, action) => {
-      console.error('[WalletconnectSlice] wcPair.rejected:', action.error)
+    // handle session proposals
+    builder.addCase(approveSessionProposal.fulfilled, (state, action) => {
+      console.log('[walletconnectSlice] approveSessionProposal.fulfilled')
+      state.pendingProposal = null
+    })
+    builder.addCase(approveSessionProposal.rejected, (_, action) => {
+      console.error('[walletconnectSlice] approveSessionProposal.rejected:', action.error)
     })
 
-    // setBchWallet
-    builder.addCase(setBchWallet.fulfilled, (state, action) => {
-      const { wallet, address } = action.payload
-      state.bchWallet = wallet
-      state.walletAddress = address
-      console.log('[WalletconnectSlice] bchWallet set. Address =', address)
+    builder.addCase(rejectSessionProposal.fulfilled, (state) => {
+      console.log('[walletconnectSlice] rejectSessionProposal.fulfilled')
+      state.pendingProposal = null
     })
-    builder.addCase(setBchWallet.rejected, (_, action) => {
-      console.error('[WalletconnectSlice] setBchWallet.rejected:', action.error)
+    builder.addCase(rejectSessionProposal.rejected, (_, action) => {
+      console.error('[walletconnectSlice] rejectSessionProposal.rejected:', action.error)
     })
 
-    // handleWcRequest
+    // handle session requests
     builder.addCase(handleWcRequest.rejected, (_, action) => {
-      console.error('[WalletconnectSlice] handleWcRequest.rejected:', action.error)
+      console.error('[walletconnectSlice] handleWcRequest.rejected:', action.error)
+    })
+
+    // handle pairing
+    builder.addCase(wcPair.rejected, (_, action) => {
+      console.error('[walletconnectSlice] wcPair.rejected:', action.error)
     })
   },
 })
 
+export const { setPendingProposal, clearPendingProposal } = walletconnectSlice.actions
 export default walletconnectSlice.reducer

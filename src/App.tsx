@@ -1,6 +1,6 @@
 // src/App.tsx
 import { Routes, Route, Navigate, useLocation } from 'react-router-dom';
-import { useSelector } from 'react-redux';
+import { useDispatch, useSelector } from 'react-redux';
 import { useEffect } from 'react';
 import Layout from './components/Layout';
 import RootHandler from './pages/RootHandler';
@@ -15,22 +15,30 @@ import LandingPage from './pages/LandingPage';
 import Receive from './pages/Receive';
 import AppsView from './pages/AppsView';
 import AppFundMe from './pages/apps/FundMe';
-import { RootState } from './redux/store';
+import { AppDispatch, RootState } from './redux/store';
 import { startUTXOWorker, stopUTXOWorker } from './workers/UTXOWorkerService';
 import {
   startTransactionWorker,
   stopTransactionWorker,
 } from './workers/TransactionWorkerService';
 import CampaignDetail from './pages/apps/utils/CampaignDetail';
+import { initWalletConnect } from './redux/walletconnectSlice';
 
 let utxoWorkerStarted = false;
 let transactionWorkerStarted = false;
 
 function App() {
+  const dispatch = useDispatch<AppDispatch>();
   const walletId = useSelector(
     (state: RootState) => state.wallet_id.currentWalletId
   );
   const location = useLocation();
+
+    // 1) Initialize WalletConnect once
+    useEffect(() => {
+      console.log('[App] Dispatching initWalletConnect()');
+      dispatch(initWalletConnect());
+    }, [dispatch]);
 
   useEffect(() => {
     if (walletId === 1) {
