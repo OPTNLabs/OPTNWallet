@@ -16,27 +16,24 @@ const WcConnectionManager: React.FC = () => {
   const [scanning, setScanning] = useState<boolean>(false)
   const [uri, setUri] = useState('')
 
-  // Manually Connect
   const handleManualConnect = async () => {
     console.log('[WcConnectionManager] handleManualConnect called with:', uri)
     if (!uri.trim().startsWith('wc:')) {
       console.warn('[WcConnectionManager] Invalid WC URI:', uri)
-      await Toast.show({ text: 'Please provide a valid WalletConnect URI.' })
+      await Toast.show({ text: 'Please provide a valid WalletConnect URI' })
       return
     }
-
     try {
-      console.log('[WcConnectionManager] Dispatching wcPair for manual URI')
+      console.log('[WcConnectionManager] Dispatching wcPair')
       await dispatch(wcPair(uri.trim())).unwrap()
       console.log('[WcConnectionManager] Manual connect successful')
       await Toast.show({ text: 'WalletConnect pairing successful!' })
     } catch (err) {
       console.error('[WcConnectionManager] Error pairing manually:', err)
-      await Toast.show({ text: `Error pairing: ${String(err)}` })
+      await Toast.show({ text: `Error: ${String(err)}` })
     }
   }
 
-  // Barcode Scanner
   const handleScan = async () => {
     console.log('[WcConnectionManager] handleScan called')
     try {
@@ -45,30 +42,24 @@ const WcConnectionManager: React.FC = () => {
         hint: CapacitorBarcodeScannerTypeHint.ALL,
         cameraDirection: 1,
       })
-
       console.log('[WcConnectionManager] Scan result:', result)
       if (result && result.ScanResult) {
         const scannedData = result.ScanResult.trim()
         if (scannedData.startsWith('wc:')) {
           console.log('[WcConnectionManager] dispatching wcPair for scannedData')
-          try {
-            await dispatch(wcPair(scannedData)).unwrap()
-            console.log('[WcConnectionManager] QR connect successful')
-            await Toast.show({ text: 'WalletConnect pairing successful via QR!' })
-          } catch (err) {
-            console.error('[WcConnectionManager] Error pairing via QR:', err)
-            await Toast.show({ text: `Error pairing: ${String(err)}` })
-          }
+          await dispatch(wcPair(scannedData)).unwrap()
+          console.log('[WcConnectionManager] QR connect successful')
+          await Toast.show({ text: 'WalletConnect pairing successful via QR!' })
         } else {
-          console.warn('[WcConnectionManager] Not a WalletConnect URI:', scannedData)
-          await Toast.show({ text: 'Not a valid WalletConnect URI.' })
+          console.warn('[WcConnectionManager] Not a valid wc: URI:', scannedData)
+          await Toast.show({ text: 'Not a valid WalletConnect URI' })
         }
       } else {
-        await Toast.show({ text: 'No QR code detected. Please try again.' })
+        await Toast.show({ text: 'No QR code detected. Try again.' })
       }
     } catch (err) {
-      console.error('[WcConnectionManager] handleScan error:', err)
-      await Toast.show({ text: 'Failed to scan. Check permissions and try again.' })
+      console.error('[WcConnectionManager] Scan error:', err)
+      await Toast.show({ text: `Scan error: ${String(err)}` })
     } finally {
       setScanning(false)
       console.log('[WcConnectionManager] Scan finished')
