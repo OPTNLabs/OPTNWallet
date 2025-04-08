@@ -1,73 +1,67 @@
 // src/components/SessionProposalModal.tsx
 
 import React from 'react'
-import { useDispatch, useSelector } from 'react-redux'
+import { useSelector, useDispatch } from 'react-redux'
 import { RootState, AppDispatch } from '../redux/store'
 import {
   approveSessionProposal,
   rejectSessionProposal,
   clearPendingProposal,
 } from '../redux/walletconnectSlice'
+import { Toast } from '@capacitor/toast'
 
 const SessionProposalModal: React.FC = () => {
   const dispatch = useDispatch<AppDispatch>()
-  const pendingProposal = useSelector((state: RootState) => state.walletconnect.pendingProposal)
+  const proposal = useSelector((state: RootState) => state.walletconnect.pendingProposal)
 
-  if (!pendingProposal) {
-    return null // no proposal, no modal
+  if (!proposal) {
+    return null // No proposal => no modal => no UI
   }
 
-  const { proposer } = pendingProposal.params
+  const { id, params } = proposal
+  const { proposer } = params
   const { metadata } = proposer
 
   const handleApprove = async () => {
+    console.log('[SessionProposalModal] Approving session with ID:', id)
     try {
       await dispatch(approveSessionProposal()).unwrap()
-      // clear out the proposal from the store
+      console.log('[SessionProposalModal] Approve success.')
+      await Toast.show({ text: 'Session approved!' })
       dispatch(clearPendingProposal())
     } catch (err) {
-      console.error('[SessionProposalModal] Error approving session:', err)
+      console.error('[SessionProposalModal] error approving session:', err)
+      await Toast.show({ text: String(err) })
     }
   }
 
   const handleReject = async () => {
+    console.log('[SessionProposalModal] Rejecting session with ID:', id)
     try {
       await dispatch(rejectSessionProposal()).unwrap()
+      console.log('[SessionProposalModal] Reject success.')
+      await Toast.show({ text: 'Session rejected.' })
       dispatch(clearPendingProposal())
     } catch (err) {
-      console.error('[SessionProposalModal] Error rejecting session:', err)
+      console.error('[SessionProposalModal] error rejecting session:', err)
+      await Toast.show({ text: String(err) })
     }
   }
 
   return (
-    <div className="fixed top-0 left-0 w-full h-full bg-black bg-opacity-50 flex justify-center items-center z-50">
-      <div className="bg-white p-4 w-96 rounded shadow-lg space-y-4">
-        <h2 className="text-lg font-bold">Approve Session?</h2>
-        <div className="flex items-center">
-          {metadata.icons[0] && (
-            <img
-              src={metadata.icons[0]}
-              alt="DApp icon"
-              className="w-10 h-10 mr-4"
-            />
-          )}
-          <div>
-            <p className="font-semibold">{metadata.name}</p>
-            <p className="text-blue-600">{metadata.url}</p>
-            <p className="text-sm text-gray-700">{metadata.description}</p>
-          </div>
-        </div>
-        <div className="space-x-2 mt-4 flex justify-end">
-          <button
-            onClick={handleApprove}
-            className="bg-green-600 text-white py-1 px-3 rounded"
-          >
+    <div className="fixed inset-0 bg-black bg-opacity-50 z-50 flex items-center justify-center">
+      <div className="bg-white p-4 w-96 rounded shadow-md">
+        <h3 className="text-lg font-bold mb-2">Session Proposal</h3>
+        <p className="mb-4">
+          <strong>DApp Name:</strong> {metadata.name}<br />
+          <strong>Description:</strong> {metadata.description}<br />
+          <strong>Website:</strong> {metadata.url}
+        </p>
+        <div className="flex justify-end space-x-2">
+          <button onClick={handleApprove} className="bg-green-600 text-white px-3 py-1 rounded">
             Approve
           </button>
-          <button
-            onClick={handleReject}
-            className="bg-red-600 text-white py-1 px-3 rounded"
-          >
+          <button onClick={handleReject} className="bg-red-600 text-white px-3 py-1 rounded">
             Reject
           </button>
         </div>
