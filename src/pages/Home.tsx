@@ -13,7 +13,7 @@ import PriceFeed from '../components/PriceFeed';
 import { TailSpin } from 'react-loader-spinner';
 import Popup from '../components/transaction/Popup';
 // import DAppConnectionTester from '../components/DAppConnectionTester';
-import ScanWcQr from '../components/WcConnectionManager';
+// import ScanWcQr from '../components/WcConnectionManager';
 import SessionProposalModal from '../components/SessionProposalModal';
 import WcConnectionManager from '../components/WcConnectionManager';
 
