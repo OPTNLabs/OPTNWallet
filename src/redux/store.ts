@@ -22,7 +22,7 @@ const persistConfig = {
     'transations',
     'utxos',
     'wallet_id',
-    'walletconnect'
+    // 'walletconnect'
   ],
 };
 

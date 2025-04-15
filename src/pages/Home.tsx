@@ -13,9 +13,12 @@ import PriceFeed from '../components/PriceFeed';
 import { TailSpin } from 'react-loader-spinner';
 import Popup from '../components/transaction/Popup';
 // import DAppConnectionTester from '../components/DAppConnectionTester';
-// import ScanWcQr from '../components/WcConnectionManager';
-import SessionProposalModal from '../components/SessionProposalModal';
-import WcConnectionManager from '../components/WcConnectionManager';
+// // import ScanWcQr from '../components/WcConnectionManager';
+// import SessionProposalModal from '../components/SessionProposalModal';
+// import { SignMessageModal } from '../components/walletconnect/SignMessageModal';
+// import { SignTransactionModal } from '../components/walletconnect/SignTransactionModal';
+// import { SessionList } from '../components/walletconnect/SessionList';
+// import WcConnectionManager from '../components/WcConnectionManager';
 
 const batchAmount = 10;
 
@@ -241,9 +244,13 @@ const Home: React.FC = () => {
         />
       </div>
 
-      {/* Testing Walletconnect */}
-      <SessionProposalModal />
-      <WcConnectionManager />
+      {/* Render WalletConnect Manager */}
+      {/* Render modals if there are any pending requests */}
+      {/* <SessionProposalModal />
+      <SignMessageModal />
+      <SignTransactionModal />
+      {/* <SessionList /> */}
+      {/* <WcConnectionManager /> */}
       {/* End of Testing Walletconnect */}
 
       {/* Action Buttons */}

@@ -1,70 +1,48 @@
-// src/components/SessionProposalModal.tsx
-
+// src/components/walletconnect/SessionProposalModal.tsx
 import React from 'react'
 import { useSelector, useDispatch } from 'react-redux'
-import { RootState, AppDispatch } from '../redux/store'
-import {
-  approveSessionProposal,
-  rejectSessionProposal,
-  clearPendingProposal,
-} from '../redux/walletconnectSlice'
-import { Toast } from '@capacitor/toast'
+import { AppDispatch, RootState } from '../redux/store'
+import { approveSessionProposal, rejectSessionProposal } from '../redux/walletconnectSlice'
 
 const SessionProposalModal: React.FC = () => {
   const dispatch = useDispatch<AppDispatch>()
-  const proposal = useSelector((state: RootState) => state.walletconnect.pendingProposal)
+  const pendingProposal = useSelector((state: RootState) => state.walletconnect.pendingProposal)
 
-  if (!proposal) {
-    return null // No proposal => no modal => no UI
+  if (!pendingProposal) {
+    return null // no proposal => hide the modal
   }
 
-  const { id, params } = proposal
-  const { proposer } = params
-  const { metadata } = proposer
+  const dappMeta = pendingProposal.params.proposer.metadata
+  // maybe chain info from pendingProposal.params.requiredNamespaces['bch'].chains
 
   const handleApprove = async () => {
-    console.log('[SessionProposalModal] Approving session with ID:', id)
     try {
       await dispatch(approveSessionProposal()).unwrap()
-      console.log('[SessionProposalModal] Approve success.')
-      await Toast.show({ text: 'Session approved!' })
-      dispatch(clearPendingProposal())
     } catch (err) {
-      console.error('[SessionProposalModal] error approving session:', err)
-      await Toast.show({ text: String(err) })
+      console.error('Error approving WC session:', err)
     }
   }
 
   const handleReject = async () => {
-    console.log('[SessionProposalModal] Rejecting session with ID:', id)
     try {
       await dispatch(rejectSessionProposal()).unwrap()
-      console.log('[SessionProposalModal] Reject success.')
-      await Toast.show({ text: 'Session rejected.' })
-      dispatch(clearPendingProposal())
     } catch (err) {
-      console.error('[SessionProposalModal] error rejecting session:', err)
-      await Toast.show({ text: String(err) })
+      console.error('Error rejecting WC session:', err)
     }
   }
 
   return (
-    <div className="fixed inset-0 bg-black bg-opacity-50 z-50 flex items-center justify-center">
-      <div className="bg-white p-4 w-96 rounded shadow-md">
-        <h3 className="text-lg font-bold mb-2">Session Proposal</h3>
-        <p className="mb-4">
-          <strong>DApp Name:</strong> {metadata.name}<br />
-          <strong>Description:</strong> {metadata.description}<br />
-          <strong>Website:</strong> {metadata.url}
-        </p>
-        <div className="flex justify-end space-x-2">
-          <button onClick={handleApprove} className="bg-green-600 text-white px-3 py-1 rounded">
-            Approve
-          </button>
-          <button onClick={handleReject} className="bg-red-600 text-white px-3 py-1 rounded">
-            Reject
-          </button>
-        </div>
+    <div className="fixed top-0 left-0 w-screen h-screen flex items-center justify-center">
+      <div className="bg-white p-6 border border-gray-300 rounded">
+        <h2>WC Session Proposal</h2>
+        <img src={dappMeta.icons[0]} alt="dAppIcon" style={{ width:50 }} />
+        <p>{dappMeta.name}</p>
+        <a href={dappMeta.url} target="_blank" rel="noreferrer">{dappMeta.url}</a>
+        <p>{dappMeta.description}</p>
+
+        {/* Approve / Reject Buttons */}
+        <button onClick={handleApprove} className="bg-green-500 text-white px-4 py-2">Approve</button>
+        <button onClick={handleReject} className="bg-red-500 text-white px-4 py-2">Reject</button>
       </div>
     </div>
   )
