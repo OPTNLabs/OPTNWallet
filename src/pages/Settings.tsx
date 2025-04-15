@@ -1,36 +1,48 @@
 // src/pages/Settings.tsx
 
-import { useState, useEffect } from 'react';
-import RecoveryPhrase from '../components/RecoveryPhrase';
-import AboutView from '../components/AboutView';
-import TermsOfUse from '../components/TermsOfUse';
-import ContactUs from '../components/ContactUs';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
+// import { useNavigate } from 'react-router-dom';
 import { useDispatch, useSelector } from 'react-redux';
+import { RootState } from '../redux/store';
+// import BitcoinCashCard from '../components/BitcoinCashCard';
+// import CashTokenCard from '../components/CashTokenCard';
+// import KeyService from '../services/KeyService';
+// import UTXOService from '../services/UTXOService';
+// import { setUTXOs, setFetchingUTXOs, setInitialized } from '../redux/utxoSlice';
+// import PriceFeed from '../components/PriceFeed';
+// import { TailSpin } from 'react-loader-spinner';
+// import Popup from '../components/transaction/Popup';
+import SessionProposalModal from '../components/walletconnect/SessionProposalModal';
+import WcConnectionManager from '../components/WcConnectionManager';
+import { SessionList } from '../components/walletconnect/SessionList';
+import { useNavigate } from 'react-router-dom';
+import WalletManager from '../apis/WalletManager/WalletManager';
 import { resetWallet, setWalletId } from '../redux/walletSlice';
 import { resetUTXOs } from '../redux/utxoSlice';
-import WalletManager from '../apis/WalletManager/WalletManager';
-import { useNavigate } from 'react-router-dom';
 import { resetTransactions } from '../redux/transactionSlice';
 import { resetContract } from '../redux/contractSlice';
 import { Network, resetNetwork } from '../redux/networkSlice';
 import { clearTransaction } from '../redux/transactionBuilderSlice';
-import { RootState } from '../redux/store';
 import { selectCurrentNetwork } from '../redux/selectors/networkSelectors';
 import FaucetView from '../components/FaucetView';
 import ContractDetails from '../components/ContractDetails';
+import RecoveryPhrase from '../components/RecoveryPhrase';
+import AboutView from '../components/AboutView';
+import TermsOfUse from '../components/TermsOfUse';
+import ContactUs from '../components/ContactUs';
+// Import any other components you need
 
-const Settings = () => {
-  const currentWalletId = useSelector(
-    (state: RootState) => state.wallet_id.currentWalletId
-  );
-  const currentNetwork = useSelector((state: RootState) =>
-    selectCurrentNetwork(state)
-  );
+const Settings: React.FC = () => {
+  const navigate = useNavigate();
+  const dispatch = useDispatch();
+  const currentWalletId = useSelector((state: RootState) => state.wallet_id.currentWalletId);
+  const currentNetwork = useSelector((state: RootState) => selectCurrentNetwork(state));
+  // **Move the active sessions hook to the top-level**
+  const walletconnectActiveSessions = useSelector((state: RootState) => state.walletconnect.activeSessions);
+  
   const [selectedOption, setSelectedOption] = useState('');
   const [navBarHeight, setNavBarHeight] = useState(0);
-  const dispatch = useDispatch();
-  const navigate = useNavigate();
-
+  
   useEffect(() => {
     const navBar = document.getElementById('bottomNavBar');
     if (navBar) {
@@ -44,11 +56,11 @@ const Settings = () => {
 
   const handleLogout = async () => {
     const walletManager = WalletManager();
-    await walletManager.deleteWallet(currentWalletId); // Clear the entire database
-    await walletManager.clearAllData(); // Clear the entire database
-    dispatch(setWalletId(0)); // Reset wallet ID in Redux store
-    dispatch(resetUTXOs()); // Reset UTXOs in Redux store
-    dispatch(resetTransactions()); // Reset transactions in Redux store
+    await walletManager.deleteWallet(currentWalletId);
+    await walletManager.clearAllData();
+    dispatch(setWalletId(0));
+    dispatch(resetUTXOs());
+    dispatch(resetTransactions());
     dispatch(resetWallet());
     dispatch(resetContract());
     dispatch(resetNetwork());
@@ -66,10 +78,27 @@ const Settings = () => {
         return <TermsOfUse />;
       case 'contact':
         return <ContactUs />;
-      case 'network':
-        return <FaucetView />;
       case 'ContractDetails':
         return <ContractDetails />;
+      case 'network':
+        return <FaucetView />;
+      case 'walletconnect':
+        return (
+          <div className="p-4">
+            <h2 className="text-3xl text-center font-bold mb-4">WalletConnect</h2>
+            <WcConnectionManager />
+            <SessionProposalModal />
+            <SessionList
+              activeSessions={walletconnectActiveSessions}  // Use the constant here
+              onDeleteSession={(topic: string) => {
+                console.log(`Delete session: ${topic}`);
+              }}
+              onOpenSettings={(topic: string) => {
+                console.log(`Open settings for session: ${topic}`);
+              }}
+            />
+          </div>
+        );
       default:
         return null;
     }
@@ -85,10 +114,12 @@ const Settings = () => {
         return 'Terms of Use';
       case 'contact':
         return 'Contact Us';
+      case 'ContractDetails':
+        return 'Contract Info';
       case 'network':
         return 'Network';
-      case 'ContractDetails':
-        return 'Contract Description';
+      case 'walletconnect':
+        return 'WalletConnect';
       default:
         return '';
     }
@@ -96,7 +127,6 @@ const Settings = () => {
 
   return (
     <div className="container mx-auto p-4">
-      {/* Welcome Image */}
       <div className="flex justify-center mt-4">
         <img
           src="/assets/images/OPTNWelcome1.png"
@@ -104,11 +134,7 @@ const Settings = () => {
           className="max-w-full h-auto"
         />
       </div>
-
-      {/* Settings Title */}
       <h1 className="text-2xl font-bold mb-4 text-center">Settings</h1>
-
-      {/* Options Menu */}
       {!selectedOption ? (
         <div className="flex flex-col items-center space-y-4">
           <button
@@ -141,7 +167,7 @@ const Settings = () => {
           >
             Contract Info
           </button>
-          {currentNetwork === Network.CHIPNET && (
+          {currentNetwork === "chipnet" && (
             <button
               onClick={() => handleOptionClick('network')}
               className="w-full max-w-md bg-blue-500 hover:bg-blue-600 transition duration-300 text-white font-bold py-2 px-4 border rounded-lg"
@@ -150,6 +176,12 @@ const Settings = () => {
             </button>
           )}
           <button
+            onClick={() => handleOptionClick('walletconnect')}
+            className="w-full max-w-md bg-blue-500 hover:bg-blue-600 transition duration-300 text-white font-bold py-2 px-4 border rounded-lg"
+          >
+            WalletConnect
+          </button>
+          <button
             onClick={handleLogout}
             className="w-full max-w-md py-2 px-4 border rounded-lg bg-red-500 hover:bg-red-700 transition duration-300 text-white text-xl font-bold"
           >
@@ -157,12 +189,9 @@ const Settings = () => {
           </button>
         </div>
       ) : (
-        /* Overlay for Selected Option */
         <div
           className="fixed inset-0 bg-white p-4 z-50 overflow-auto"
-          style={{
-            height: `calc(100vh - ${navBarHeight}px)`,
-          }}
+          style={{ height: `calc(100vh - ${navBarHeight}px)` }}
         >
           <div className="container mx-auto p-4">
             <h2 className="text-3xl text-center font-bold">{renderTitle()}</h2>
