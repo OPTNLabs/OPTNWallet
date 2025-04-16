@@ -21,7 +21,6 @@ import escrowMS2Artifact from './artifacts/escrowMS2.json';
 
 export default function ContractManager() {
   const dbService = DatabaseService();
-  const state = store.getState();
 
   // Cache artifacts in memory to avoid redundant loading
   const artifactCache: { [key: string]: any } = {
@@ -447,6 +446,8 @@ export default function ContractManager() {
   }
 
   async function updateContractUTXOs(address: string) {
+    const state = store.getState();
+
     try {
       const currentNetwork = state.network.currentNetwork;
       const prefix =
@@ -622,6 +623,8 @@ export default function ContractManager() {
     contractFunction: string,
     contractFunctionInputs: { [key: string]: any }
   ) {
+    const state = store.getState();
+
     // Log the contract function inputs before processing
     // console.log('Processing UTXO for unlock function:', utxo);
     // console.log('Contract Function:', contractFunction);

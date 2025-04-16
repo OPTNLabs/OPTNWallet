@@ -1,10 +1,9 @@
-import React, { useState, useEffect, useCallback } from 'react';
+// src/pages/Settings.tsx
+
+import React, { useState, useEffect } from 'react';
 import { useDispatch, useSelector } from 'react-redux';
 import { RootState, AppDispatch } from '../redux/store';
 import { useNavigate } from 'react-router-dom';
-import SessionProposalModal from '../components/walletconnect/SessionProposalModal';
-import WcConnectionManager from '../components/WcConnectionManager';
-import { SessionList } from '../components/walletconnect/SessionList';
 import WalletManager from '../apis/WalletManager/WalletManager';
 import { resetWallet, setWalletId } from '../redux/walletSlice';
 import { resetUTXOs } from '../redux/utxoSlice';
@@ -18,21 +17,18 @@ import ContractDetails from '../components/ContractDetails';
 import RecoveryPhrase from '../components/RecoveryPhrase';
 import AboutView from '../components/AboutView';
 import TermsOfUse from '../components/TermsOfUse';
-import ContactUs    from '../components/ContactUs';
-import { disconnectSession } from '../redux/walletconnectSlice';
-import SessionSettingsModal from '../components/walletconnect/SessionSettingsModal';
+import ContactUs from '../components/ContactUs';
+import WalletConnectPanel from '../components/walletconnect/WalletConnectPanel';
 
 const Settings: React.FC = () => {
   const navigate = useNavigate();
-  // Use AppDispatch here so that our dispatch is properly typed.
+  // Use AppDispatch to type dispatch correctly for thunks.
   const dispatch = useDispatch<AppDispatch>();
   const currentWalletId = useSelector((state: RootState) => state.wallet_id.currentWalletId);
   const currentNetwork = useSelector((state: RootState) => selectCurrentNetwork(state));
-  const walletconnectActiveSessions = useSelector((state: RootState) => state.walletconnect.activeSessions);
 
   const [selectedOption, setSelectedOption] = useState('');
   const [navBarHeight, setNavBarHeight] = useState(0);
-  const [selectedSessionForSettings, setSelectedSessionForSettings] = useState<string | null>(null);
 
   useEffect(() => {
     const navBar = document.getElementById('bottomNavBar');
@@ -59,14 +55,6 @@ const Settings: React.FC = () => {
     navigate('/');
   };
 
-  const handleDeleteSession = useCallback((topic: string) => {
-    dispatch(disconnectSession(topic));
-  }, [dispatch]);
-
-  const handleOpenSettings = useCallback((topic: string) => {
-    setSelectedSessionForSettings(topic);
-  }, []);
-
   const renderContent = () => {
     switch (selectedOption) {
       case 'recovery':
@@ -82,18 +70,7 @@ const Settings: React.FC = () => {
       case 'network':
         return <FaucetView />;
       case 'walletconnect':
-        return (
-          <div className="p-4">
-            <h2 className="text-3xl text-center font-bold mb-4">WalletConnect</h2>
-            <WcConnectionManager />
-            <SessionProposalModal />
-            <SessionList
-              activeSessions={walletconnectActiveSessions}
-              onDeleteSession={handleDeleteSession}
-              onOpenSettings={handleOpenSettings}
-            />
-          </div>
-        );
+        return <WalletConnectPanel />;
       default:
         return null;
     }
@@ -195,9 +172,6 @@ const Settings: React.FC = () => {
             Back
           </button>
         </div>
-      )}
-      {selectedSessionForSettings && (
-        <SessionSettingsModal sessionTopic={selectedSessionForSettings} onClose={() => setSelectedSessionForSettings(null)} />
       )}
     </div>
   );
