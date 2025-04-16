@@ -252,6 +252,23 @@ export const wcPair = createAsyncThunk(
   }
 );
 
+export const disconnectSession = createAsyncThunk(
+  'walletconnect/disconnectSession',
+  async (topic: string, { getState }) => {
+    const state = getState() as RootState
+    const walletKit = state.walletconnect.web3wallet
+    if (!walletKit) throw new Error('WalletConnect not initialized')
+    console.log('[disconnectSession] disconnecting session for topic:', topic)
+    await walletKit.disconnectSession({
+      topic,
+      reason: getSdkError('USER_DISCONNECTED'),
+    })
+    // Optionally update active sessions after disconnecting:
+    const updatedSessions = walletKit.getActiveSessions();
+    return updatedSessions;
+  }
+);
+
 export const respondWithMessageSignature = createAsyncThunk(
   'walletconnect/respondWithMessageSignature',
   async (signMsgRequest: WalletKitTypes.SessionRequest, { getState }) => {
@@ -405,6 +422,15 @@ const walletconnectSlice = createSlice({
     // Pairing
     builder.addCase(wcPair.rejected, (_, action) => {
       console.error('[wcPair.rejected]', action.error);
+    });
+
+    // disconnect session
+    builder.addCase(disconnectSession.fulfilled, (state, action) => {
+      console.log('[disconnectSession.fulfilled] Updated active sessions', action.payload);
+      state.activeSessions = action.payload;
+    });
+    builder.addCase(disconnectSession.rejected, (_, action) => {
+      console.error('[disconnectSession.rejected]', action.error);
     });
   },
 });
