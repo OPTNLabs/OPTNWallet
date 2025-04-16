@@ -1,27 +1,16 @@
-// src/pages/Settings.tsx
-
-import React, { useState, useEffect, useCallback, useRef } from 'react';
-// import { useNavigate } from 'react-router-dom';
+import React, { useState, useEffect, useCallback } from 'react';
 import { useDispatch, useSelector } from 'react-redux';
-import { RootState } from '../redux/store';
-// import BitcoinCashCard from '../components/BitcoinCashCard';
-// import CashTokenCard from '../components/CashTokenCard';
-// import KeyService from '../services/KeyService';
-// import UTXOService from '../services/UTXOService';
-// import { setUTXOs, setFetchingUTXOs, setInitialized } from '../redux/utxoSlice';
-// import PriceFeed from '../components/PriceFeed';
-// import { TailSpin } from 'react-loader-spinner';
-// import Popup from '../components/transaction/Popup';
+import { RootState, AppDispatch } from '../redux/store';
+import { useNavigate } from 'react-router-dom';
 import SessionProposalModal from '../components/walletconnect/SessionProposalModal';
 import WcConnectionManager from '../components/WcConnectionManager';
 import { SessionList } from '../components/walletconnect/SessionList';
-import { useNavigate } from 'react-router-dom';
 import WalletManager from '../apis/WalletManager/WalletManager';
 import { resetWallet, setWalletId } from '../redux/walletSlice';
 import { resetUTXOs } from '../redux/utxoSlice';
 import { resetTransactions } from '../redux/transactionSlice';
 import { resetContract } from '../redux/contractSlice';
-import { Network, resetNetwork } from '../redux/networkSlice';
+import { resetNetwork } from '../redux/networkSlice';
 import { clearTransaction } from '../redux/transactionBuilderSlice';
 import { selectCurrentNetwork } from '../redux/selectors/networkSelectors';
 import FaucetView from '../components/FaucetView';
@@ -29,20 +18,22 @@ import ContractDetails from '../components/ContractDetails';
 import RecoveryPhrase from '../components/RecoveryPhrase';
 import AboutView from '../components/AboutView';
 import TermsOfUse from '../components/TermsOfUse';
-import ContactUs from '../components/ContactUs';
-// Import any other components you need
+import ContactUs    from '../components/ContactUs';
+import { disconnectSession } from '../redux/walletconnectSlice';
+import SessionSettingsModal from '../components/walletconnect/SessionSettingsModal';
 
 const Settings: React.FC = () => {
   const navigate = useNavigate();
-  const dispatch = useDispatch();
+  // Use AppDispatch here so that our dispatch is properly typed.
+  const dispatch = useDispatch<AppDispatch>();
   const currentWalletId = useSelector((state: RootState) => state.wallet_id.currentWalletId);
   const currentNetwork = useSelector((state: RootState) => selectCurrentNetwork(state));
-  // **Move the active sessions hook to the top-level**
   const walletconnectActiveSessions = useSelector((state: RootState) => state.walletconnect.activeSessions);
-  
+
   const [selectedOption, setSelectedOption] = useState('');
   const [navBarHeight, setNavBarHeight] = useState(0);
-  
+  const [selectedSessionForSettings, setSelectedSessionForSettings] = useState<string | null>(null);
+
   useEffect(() => {
     const navBar = document.getElementById('bottomNavBar');
     if (navBar) {
@@ -68,6 +59,14 @@ const Settings: React.FC = () => {
     navigate('/');
   };
 
+  const handleDeleteSession = useCallback((topic: string) => {
+    dispatch(disconnectSession(topic));
+  }, [dispatch]);
+
+  const handleOpenSettings = useCallback((topic: string) => {
+    setSelectedSessionForSettings(topic);
+  }, []);
+
   const renderContent = () => {
     switch (selectedOption) {
       case 'recovery':
@@ -89,13 +88,9 @@ const Settings: React.FC = () => {
             <WcConnectionManager />
             <SessionProposalModal />
             <SessionList
-              activeSessions={walletconnectActiveSessions}  // Use the constant here
-              onDeleteSession={(topic: string) => {
-                console.log(`Delete session: ${topic}`);
-              }}
-              onOpenSettings={(topic: string) => {
-                console.log(`Open settings for session: ${topic}`);
-              }}
+              activeSessions={walletconnectActiveSessions}
+              onDeleteSession={handleDeleteSession}
+              onOpenSettings={handleOpenSettings}
             />
           </div>
         );
@@ -128,11 +123,7 @@ const Settings: React.FC = () => {
   return (
     <div className="container mx-auto p-4">
       <div className="flex justify-center mt-4">
-        <img
-          src="/assets/images/OPTNWelcome1.png"
-          alt="Welcome"
-          className="max-w-full h-auto"
-        />
+        <img src="/assets/images/OPTNWelcome1.png" alt="Welcome" className="max-w-full h-auto" />
       </div>
       <h1 className="text-2xl font-bold mb-4 text-center">Settings</h1>
       {!selectedOption ? (
@@ -204,6 +195,9 @@ const Settings: React.FC = () => {
             Back
           </button>
         </div>
+      )}
+      {selectedSessionForSettings && (
+        <SessionSettingsModal sessionTopic={selectedSessionForSettings} onClose={() => setSelectedSessionForSettings(null)} />
       )}
     </div>
   );
