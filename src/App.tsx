@@ -36,9 +36,8 @@ function App() {
 
     // 1) Initialize WalletConnect once
     useEffect(() => {
-      console.log('[App] Dispatching initWalletConnect()');
-      dispatch(initWalletConnect());
-    }, [dispatch]);
+      dispatch(initWalletConnect())
+    }, [dispatch])
 
   useEffect(() => {
     if (walletId === 1) {
