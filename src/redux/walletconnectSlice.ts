@@ -1,7 +1,7 @@
 // src/redux/walletconnectSlice.ts
 
 import 'dotenv/config';
-import { createSlice, createAsyncThunk } from '@reduxjs/toolkit';
+import { createSlice, createAsyncThunk, PayloadAction } from '@reduxjs/toolkit';
 import {
   importWalletTemplate,
   walletTemplateP2pkhNonHd,
@@ -97,6 +97,7 @@ export const initWalletConnect = createAsyncThunk(
       '[walletconnectSlice] Active sessions at init:',
       activeSessions
     );
+    
 
     // Listen for session proposals
     web3wallet.on('session_proposal', async (proposal) => {
@@ -105,6 +106,13 @@ export const initWalletConnect = createAsyncThunk(
         text: 'Session proposal from dApp! Check console or modal.',
       });
       dispatch(setPendingProposal(proposal));
+    });
+
+    // once the peer actually settles the session, fire a "session_update"
+    // we cast to any to avoid the built‑in Event typing, and just re‑pull all sessions
+    (web3wallet as any).on("session_update", () => {
+      console.log("🟢 session_update fired, refreshing active sessions");
+      dispatch(setActiveSessions(web3wallet.getActiveSessions()));
     });
 
     // Listen for session requests
@@ -227,30 +235,10 @@ export const handleWcRequest = createAsyncThunk(
       case 'bch_signMessage':
       case 'personal_sign': {
         dispatch(setPendingSignMsg(sessionEvent));
-        // console.log('[handleWcRequest] => bch_signMessage / personal_sign')
-        // const allKeys = await KeyService.retrieveKeys(currentWalletId)
-        // if (!allKeys.length) throw new Error('No keys found in DB!')
-        // const address = allKeys[0].address
-        // const privateKey = await KeyService.fetchAddressPrivateKey(address)
-        // if (!privateKey) throw new Error('No private key for address')
-        // let message = ''
-        // if (Array.isArray(request.params) && request.params.length) {
-        //   message = request.params[0]
-        // } else if (typeof request.params === 'object' && request.params?.message) {
-        //   message = request.params.message
-        // } else {
-        //   message = 'Hello from BCH fallback'
-        // }
-        // console.log(`[handleWcRequest] signing message => ${message.slice(0,30)}...`)
-        // const signatureResult = await SignedMessage.sign(message, privateKey)
-        // const base64Sig = signatureResult.signature
-        // response = { id, jsonrpc: '2.0', result: base64Sig }
         return;
       }
       case 'bch_signTransaction': {
         dispatch(setPendingSignTx(sessionEvent));
-        // For transaction signing, placeholder for now.
-        // response = { id, jsonrpc: '2.0', result: '0xDEADBEEF' }
         return;
       }
       default: {
@@ -479,6 +467,9 @@ const walletconnectSlice = createSlice({
       console.log('[walletconnectSlice] clearPendingSignTx.');
       state.pendingSignTx = null;
     },
+    setActiveSessions: (state, action: PayloadAction<Record<string, SessionTypes.Struct>>) => {
+      state.activeSessions = action.payload;
+    },
   },
   extraReducers: (builder) => {
     // Initialization
@@ -495,7 +486,12 @@ const walletconnectSlice = createSlice({
     builder.addCase(approveSessionProposal.fulfilled, (state, _action) => {
       console.log('[approveSessionProposal.fulfilled] => session approved');
       state.pendingProposal = null;
+      // pull in the newly‑approved session so the UI updates immediately:
+      if (state.web3wallet) {
+        state.activeSessions = state.web3wallet.getActiveSessions();
+      }
     });
+
     builder.addCase(approveSessionProposal.rejected, (_, action) => {
       console.error('[approveSessionProposal.rejected]', action.error);
     });
@@ -504,6 +500,10 @@ const walletconnectSlice = createSlice({
     builder.addCase(rejectSessionProposal.fulfilled, (state) => {
       console.log('[rejectSessionProposal.fulfilled] => session rejected');
       state.pendingProposal = null;
+      // pull in the newly‑approved session:
+  if (state.web3wallet) {
+    state.activeSessions = state.web3wallet.getActiveSessions()
+  }
     });
     builder.addCase(rejectSessionProposal.rejected, (_, action) => {
       console.error('[rejectSessionProposal.rejected]', action.error);
@@ -549,6 +549,7 @@ const walletconnectSlice = createSlice({
 
 export const {
   setPendingProposal,
+  setActiveSessions,
   clearPendingProposal,
   setPendingSignMsg,
   clearPendingSignMsg,
