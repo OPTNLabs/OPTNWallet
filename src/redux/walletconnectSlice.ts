@@ -15,6 +15,11 @@ import {
   type TransactionTemplateFixed,
   type Input,
   type Output,
+  SigningSerializationFlag,
+  CompilationContextBCH,
+  generateSigningSerializationBCH,
+  hash256,
+  secp256k1,
 } from '@bitauth/libauth';
 import { Core } from '@walletconnect/core';
 import {
@@ -31,9 +36,16 @@ import { SignedMessage } from '../utils/signed';
 import { PREFIX } from '../utils/constants';
 import { parseExtendedJson } from '../utils/parseExtendedJson';
 import TransactionService from '../services/TransactionService';
+import { ContractInfo } from '../types/wcInterfaces';
+import { getPublicKeyCompressed } from '../utils/hex';
 
 // For BCH mainnet, the CAIP-2 format for Bitcoin Cash is "bch:bitcoincash"
-const BCH_CAIP2 = 'bch:bitcoincash';
+// somewhere near the top of src/redux/walletconnectSlice.ts
+const CAIP2_BY_NETWORK: Record<string, string> = {
+  mainnet: "bch:bitcoincash",
+  chipnet: "bch:bchtest",
+};
+
 
 // The methods and events required by the dApp
 const BCH_METHODS = [
@@ -127,60 +139,37 @@ export const initWalletConnect = createAsyncThunk(
 
 // 2) Approve or Reject a session proposal
 export const approveSessionProposal = createAsyncThunk(
-  'walletconnect/approveSessionProposal',
+  "walletconnect/approveSessionProposal",
   async (_, { getState }) => {
     const state = getState() as RootState;
-    const walletKit = state.walletconnect.web3wallet;
-    const proposal = state.walletconnect.pendingProposal;
-    const currentNetwork = state.network.currentNetwork;
-    if (!walletKit || !proposal) {
-      throw new Error('No walletKit or proposal to approve.');
+    const walletKit = state.walletconnect.web3wallet!;
+    const proposal = state.walletconnect.pendingProposal!;
+    const currentNetwork = state.network.currentNetwork; // e.g. "mainnet" or "chipnet"
+
+    // look up the right CAIP-2 prefix
+    const namespace = CAIP2_BY_NETWORK[currentNetwork];
+    if (!namespace) {
+      throw new Error(`Unsupported network for CAIP-2: ${currentNetwork}`);
     }
 
-    const currentWalletId = state.wallet_id.currentWalletId;
-    const allKeys = await KeyService.retrieveKeys(currentWalletId);
-    if (!allKeys.length) {
-      throw new Error('No addresses found in DB!');
-    }
-    const firstAddress = allKeys[0].address;
-    console.log('Retrieved firstAddress:', firstAddress);
+    // strip off the libauth PREFIX (e.g. "bitcoincash:" or "bchtest:")
+    const addressPrefix = PREFIX[currentNetwork];
+    const firstAddress = (await KeyService.retrieveKeys(state.wallet_id.currentWalletId!))[0].address;
+    const account = `${namespace}${firstAddress.slice(addressPrefix.length)}`;
 
-    // Derive the CAIP-10 account string. Assume PREFIX[currentNetwork] returns "bitcoincash:"
-    const derivedAccount = `${BCH_CAIP2}${firstAddress.slice(PREFIX[currentNetwork].length)}`;
-    console.log('Derived CAIP-10 account:', derivedAccount);
-
-    // Build namespaces with debug log
-    const { id, params } = proposal;
-    console.log(
-      `[approveSessionProposal] Attempting to build namespaces for CAIP-10 address: ${derivedAccount}`
-    );
-
-    let approvedNamespaces;
-    try {
-      approvedNamespaces = buildApprovedNamespaces({
-        proposal: params,
-        supportedNamespaces: {
-          bch: {
-            chains: [BCH_CAIP2], // Expected to be "bch:bitcoincash"
-            methods: BCH_METHODS,
-            events: BCH_EVENTS,
-            accounts: [derivedAccount],
-          },
+    const approvedNamespaces = buildApprovedNamespaces({
+      proposal: proposal.params,
+      supportedNamespaces: {
+        bch: {
+          chains: [namespace],
+          methods: BCH_METHODS,
+          events: BCH_EVENTS,
+          accounts: [account],
         },
-      });
-    } catch (err) {
-      console.error('[approveSessionProposal] error building namespaces:', err);
-      throw new Error('Failed to build approved namespaces.');
-    }
-
-    // Approve session with the built namespaces
-    const session = await walletKit.approveSession({
-      id,
-      namespaces: approvedNamespaces,
+      },
     });
 
-    console.log('[approveSessionProposal] session approved =>', session);
-    return session;
+    return walletKit.approveSession({ id: proposal.id, namespaces: approvedNamespaces });
   }
 );
 
@@ -317,89 +306,132 @@ export const respondWithMessageSignature = createAsyncThunk(
 );
 
 // (Include respondWithMessageError thunk here as shown above)
-
 export const respondWithTxSignature = createAsyncThunk(
   'walletconnect/respondWithTxSignature',
   async (signTxRequest: WalletKitTypes.SessionRequest, { getState }) => {
     const state = getState() as RootState;
     const walletKit = state.walletconnect.web3wallet;
-    if (!walletKit) throw new Error('WalletKit not initialized');
+    if (!walletKit) throw new Error('WalletConnect not initialized');
 
-    /******** 1.  Grab the payload sent by the dApp *************************/
+    // 1. Parse the inbound payload
     const { id, topic, params } = signTxRequest;
-    // Some dApps send “extended‑json” (numbers as strings, BigInt, etc.)
     const rawParams = params.request.params as any;
-    const request = parseExtendedJson
-      ? parseExtendedJson(JSON.stringify(rawParams))
-      : rawParams;
-
+    const request = parseExtendedJson(JSON.stringify(rawParams));
     const txDetails = request.transaction as TransactionCommon;
-    const sourceOutputs = request.sourceOutputs as
-      | (Input & Output)[]
-      | undefined;
+    const sourceOutputs = request.sourceOutputs as (Input & Output & ContractInfo)[];
     if (!txDetails || !sourceOutputs) {
       throw new Error('Malformed WalletConnect transaction request');
     }
 
-    /******** 2.  Fetch user key ********************************************/
-    const walletId = state.wallet_id.currentWalletId;
+    // 2. Grab the user’s key
+    const walletId = state.wallet_id.currentWalletId!;
     const [firstKey] = await KeyService.retrieveKeys(walletId);
     if (!firstKey) throw new Error('No key available');
     const privKey = await KeyService.fetchAddressPrivateKey(firstKey.address);
     if (!privKey) throw new Error('Private key not found');
 
-    /******** 3.  Build libauth compiler ************************************/
+    // 3. Prepare libauth compiler
     const template = importWalletTemplate(walletTemplateP2pkhNonHd);
-    if (typeof template === 'string') throw new Error(template); // template error
+    if (typeof template === 'string') throw new Error(template);
     const compiler = walletTemplateToCompilerBCH(template);
 
-    /******** 4.  Fill every input with an unlocking script *****************/
-    const txTemplate = { ...txDetails } as TransactionTemplateFixed<
-      typeof compiler
-    >;
-
-    txTemplate.inputs.forEach((input, i) => {
+    // 4. Build a TransactionTemplate and fill in unlocking scripts
+    const txTemplate = { ...txDetails } as TransactionTemplateFixed<typeof compiler>;
+    txTemplate.inputs.forEach(async (input, i) => {
       const utxo = sourceOutputs[i];
-      input.unlockingBytecode = {
-        compiler,
-        data: { keys: { privateKeys: { key: privKey } } },
-        valueSatoshis: utxo.valueSatoshis,
-        script: 'unlock', // standard P2PKH unlock function
-        token: utxo.token, // undefined for BCH, present for CashTokens
-      };
+
+      // Contract input?
+      if (utxo.contract?.artifact?.contractName) {
+        let hexUnlock = binToHex(utxo.unlockingBytecode);
+        // signature placeholder = 65 zero‑bytes prefixed by length=0x41
+        const sigPlaceholder = '41' + binToHex(new Uint8Array(65).fill(0));
+        // pubkey placeholder = 33 zero‑bytes prefixed by length=0x21
+        const pubkeyPlaceholder = '21' + binToHex(new Uint8Array(33).fill(0));
+
+        // ---- insert real signature ----
+        if (hexUnlock.includes(sigPlaceholder)) {
+          const hashType = SigningSerializationFlag.allOutputs |
+                           SigningSerializationFlag.utxos |
+                           SigningSerializationFlag.forkId;
+          const context = {
+            inputIndex: i,
+            sourceOutputs,
+            transaction: txDetails,
+          } as CompilationContextBCH;
+          const sighashPre = generateSigningSerializationBCH(context, {
+            coveredBytecode: utxo.contract.redeemScript!,
+            signingSerializationType: new Uint8Array([hashType]),
+          });
+          const sighash = hash256(sighashPre);
+          const sig = secp256k1.signMessageHashSchnorr(privKey, sighash);
+          const sigWithType = Uint8Array.from([...sig as Uint8Array, hashType]);
+          hexUnlock = hexUnlock.replace(
+            sigPlaceholder,
+            '41' + binToHex(sigWithType)
+          );
+        }
+
+        // ---- insert real pubkey ----
+        if (hexUnlock.includes(pubkeyPlaceholder)) {
+          // 1) derive the compressed pubkey as bytes
+          const maybePubkey = getPublicKeyCompressed(privKey, false);
+          if (typeof maybePubkey === 'string') {
+            // shouldn’t happen, but guard against it
+            throw new Error('Unexpected string from getPublicKeyCompressed');
+          }
+          // now TS knows `maybePubkey` is Uint8Array
+          const pubkeyHex = binToHex(maybePubkey);
+        
+          // 2) replace placeholder
+          hexUnlock = hexUnlock.replace(
+            pubkeyPlaceholder,
+            '21' + pubkeyHex
+          );
+        }
+
+        input.unlockingBytecode = hexToBin(hexUnlock);
+
+      } else {
+        // Standard P2PKH:
+        input.unlockingBytecode = {
+          compiler,
+          data: { keys: { privateKeys: { key: privKey } } },
+          valueSatoshis: utxo.valueSatoshis,
+          script: 'unlock',
+          token: utxo.token,
+        };
+      }
     });
 
-    /******** 5.  Generate & encode signed tx ******************************/
+    // 5. Generate & encode
     const generated = generateTransaction(txTemplate);
     if (!generated.success) {
       throw new Error('Transaction signing failed');
     }
-    const rawTx = encodeTransaction(generated.transaction);
-    const txid = binToHex(sha256.hash(sha256.hash(rawTx)).reverse());
+    const rawSigned = encodeTransaction(generated.transaction);
+    const txid = binToHex(sha256.hash(sha256.hash(rawSigned)).reverse());
 
     const signedTxObject = {
-      signedTransaction: binToHex(rawTx),
+      signedTransaction: binToHex(rawSigned),
       signedTransactionHash: txid,
     };
 
-    /******** 6.  (optional) broadcast *************************************/
+    // 6. Optional broadcast
     if (request.broadcast) {
       try {
-        // You can broadcast with whatever API you already use
-        await TransactionService.sendTransaction(binToHex(rawTx));
-      } catch (e) {
-        console.error('Broadcast failed', e);
-        // Still return the signed hex – responsibility of the dApp.
+        await TransactionService.sendTransaction(binToHex(rawSigned));
+      } catch {
+        console.warn('Broadcast failed, returning signed hex anyway');
       }
     }
 
-    /******** 7.  Reply to WalletConnect ************************************/
+    // 7. Respond back to WalletConnect
     await walletKit.respondSessionRequest({
       topic,
       response: { id, jsonrpc: '2.0', result: signedTxObject },
     });
 
-    return signedTxObject; // reducer will clear pendingSignTx
+    return signedTxObject;
   }
 );
 
