@@ -13,7 +13,7 @@ import {
 } from '@bitauth/libauth';
 
 import { derivePrefix } from './derivePublicKeyHash';
-import { hash160 } from './hash160';
+import { hash160 } from './hash';
 import {
   SignedMessageI,
   SignedMessageResponseI,
