@@ -23,11 +23,13 @@ import {
 } from './workers/TransactionWorkerService';
 import CampaignDetail from './pages/apps/utils/CampaignDetail';
 import { initWalletConnect } from './redux/walletconnectSlice';
+import { usePrices } from './hooks/usePrices';
 
 let utxoWorkerStarted = false;
 let transactionWorkerStarted = false;
 
 function App() {
+  usePrices();
   const dispatch = useDispatch<AppDispatch>();
   const walletId = useSelector(
     (state: RootState) => state.wallet_id.currentWalletId

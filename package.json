@@ -19,6 +19,7 @@
   },
   "dependencies": {
     "@bitauth/libauth": "^3.0.0",
+    "@capacitor-community/http": "^1.4.1",
     "@capacitor/android": "^6.1.0",
     "@capacitor/barcode-scanner": "^1.0.4",
     "@capacitor/camera": "^6.0.1",

@@ -217,7 +217,7 @@ export default function TransactionManager() {
 
     // Dispatch this new output to Redux
     store.dispatch(addTxOutput(newOutput));
-    console.log('[TransactionManager.addOutput] New Output:', newOutput);
+    // console.log('[TransactionManager.addOutput] New Output:', newOutput);
     return newOutput;
   }
 
@@ -249,7 +249,7 @@ export default function TransactionManager() {
     // );
     console.warn(`Unused Params: ${JSON.stringify(contractFunctionInputs)}`);
     // console.log('TransactionManager: Change Address:', changeAddress);
-    console.log('TransactionManager: Selected UTXOs:', selectedUtxos);
+    // console.log('TransactionManager: Selected UTXOs:', selectedUtxos);
     // Fetch the latest state
     // const state = store.getState();
     // const selectedFunction = state.contract.selectedFunction;
@@ -346,7 +346,7 @@ export default function TransactionManager() {
         // console.log('Final Transaction Outputs:', txOutputs);
 
         returnObj.errorMsg = '';
-        console.log(txOutputs)
+        // console.log(txOutputs)
       }
     } catch (err: any) {
       console.error('Error building transaction:', err);
