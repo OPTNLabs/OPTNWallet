@@ -46,7 +46,6 @@ const CAIP2_BY_NETWORK: Record<string, string> = {
   chipnet: "bch:bchtest",
 };
 
-
 // The methods and events required by the dApp
 const BCH_METHODS = [
   'bch_getAddresses',

@@ -29,6 +29,13 @@ export default defineConfig({
       'application/wasm': ['wasm'],
       'application/json': ['map'],
     },
+    proxy: {
+      '/cryptoapi': {
+        target: 'https://rest.cryptoapis.io',
+        changeOrigin: true,
+        rewrite: (path) => path.replace(/^\/cryptoapi/, ''),
+      },
+    },
     fs: {
       allow: ['..'], // Allow serving files from one level up to handle node_modules
     },
