@@ -107,3 +107,16 @@ export async function queryAuthHead(tokenId: string): Promise<any> {
   }`;
   return await queryChainGraph(queryReqAuthHead);
 }
+
+export async function queryTransactionByHash(txid: string): Promise<any> {
+  const query = `query {
+    transaction(where: { hash: { _eq: "\\\\x${txid}" } }) {
+      outputs {
+        scriptPubKey {
+          hex
+        }
+      }
+    }
+  }`;
+  return queryChainGraph(query);
+}
