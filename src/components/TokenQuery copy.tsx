@@ -57,14 +57,19 @@ const TokenQuery: React.FC<TokenQueryProps> = ({ tokenId }) => {
         const ahTx = ahRaw ? latin1ToHex(ahRaw) : null;
         setAuthHead(ahTx);
 
-        // 5) On-chain metadata
-        if (ahTx) {
-          const bcmr = new BcmrService();
-          const idReg = await bcmr.resolveIdentityRegistry(ahTx);
-          setRegistry(idReg);
-          const snap = bcmr.extractIdentity(ahTx, idReg.registry);
-          setSnapshot(snap);
-        }
+        // 5) Resolve the *registered* authbase for this token category
+        //    (this will fall back to tokenId if no override in bcmr_tokens)
+        const bcmr = new BcmrService();
+        const authbase = await bcmr.getCategoryAuthbase(tokenId);
+        console.log('→ authbase for this category:', authbase);
+
+        // 6) Now fetch the registry from cache or IPFS/HTTP
+        const idReg = await bcmr.resolveIdentityRegistry(authbase);
+        setRegistry(idReg);
+
+        // 7) Pull out the current snapshot
+        const snap = bcmr.extractIdentity(authbase, idReg.registry);
+        setSnapshot(snap);
       } catch (err: any) {
         console.error('Error fetching token data:', err);
         setError(err.message || 'Failed to fetch token data.');
