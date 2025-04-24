@@ -24,8 +24,12 @@ const Settings: React.FC = () => {
   const navigate = useNavigate();
   // Use AppDispatch to type dispatch correctly for thunks.
   const dispatch = useDispatch<AppDispatch>();
-  const currentWalletId = useSelector((state: RootState) => state.wallet_id.currentWalletId);
-  const currentNetwork = useSelector((state: RootState) => selectCurrentNetwork(state));
+  const currentWalletId = useSelector(
+    (state: RootState) => state.wallet_id.currentWalletId
+  );
+  const currentNetwork = useSelector((state: RootState) =>
+    selectCurrentNetwork(state)
+  );
 
   const [selectedOption, setSelectedOption] = useState('');
   const [navBarHeight, setNavBarHeight] = useState(0);
@@ -100,7 +104,11 @@ const Settings: React.FC = () => {
   return (
     <div className="container mx-auto p-4">
       <div className="flex justify-center mt-4">
-        <img src="/assets/images/OPTNWelcome1.png" alt="Welcome" className="max-w-full h-auto" />
+        <img
+          src="/assets/images/OPTNWelcome1.png"
+          alt="Welcome"
+          className="max-w-full h-auto"
+        />
       </div>
       <h1 className="text-2xl font-bold mb-4 text-center">Settings</h1>
       {!selectedOption ? (
@@ -135,7 +143,7 @@ const Settings: React.FC = () => {
           >
             Contract Info
           </button>
-          {currentNetwork === "chipnet" && (
+          {currentNetwork === 'chipnet' && (
             <button
               onClick={() => handleOptionClick('network')}
               className="w-full max-w-md bg-blue-500 hover:bg-blue-600 transition duration-300 text-white font-bold py-2 px-4 border rounded-lg"
