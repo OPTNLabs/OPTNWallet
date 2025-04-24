@@ -21,6 +21,7 @@ const TokenQuery: React.FC<TokenQueryProps> = ({ tokenId }) => {
   const [authHead, setAuthHead] = useState<string | null>(null);
   const [registry, setRegistry] = useState<IdentityRegistry | null>(null);
   const [snapshot, setSnapshot] = useState<IdentitySnapshot | null>(null);
+  const [iconDataUri, setIconDataUri] = useState<string | null>(null);
   const [loading, setLoading] = useState<boolean>(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -50,26 +51,26 @@ const TokenQuery: React.FC<TokenQueryProps> = ({ tokenId }) => {
 
         // 4) Auth head
         const ahData = await queryAuthHead(tokenId);
-        // GraphQL returns '\x' prefix; strip it
         const ahRaw =
           ahData?.data?.transaction?.[0]?.authchains?.[0]?.authhead
             ?.identity_output?.[0]?.transaction_hash;
         const ahTx = ahRaw ? latin1ToHex(ahRaw) : null;
         setAuthHead(ahTx);
 
-        // 5) Resolve the *registered* authbase for this token category
-        //    (this will fall back to tokenId if no override in bcmr_tokens)
+        // 5) BCMR lookup
         const bcmr = new BcmrService();
         const authbase = await bcmr.getCategoryAuthbase(tokenId);
-        console.log('→ authbase for this category:', authbase);
-
-        // 6) Now fetch the registry from cache or IPFS/HTTP
         const idReg = await bcmr.resolveIdentityRegistry(authbase);
         setRegistry(idReg);
+        console.log(registry);
 
-        // 7) Pull out the current snapshot
+        // 6) Snapshot
         const snap = bcmr.extractIdentity(authbase, idReg.registry);
         setSnapshot(snap);
+
+        // 7) Icon
+        const dataUri = await bcmr.resolveIcon(authbase);
+        setIconDataUri(dataUri);
       } catch (err: any) {
         console.error('Error fetching token data:', err);
         setError(err.message || 'Failed to fetch token data.');
@@ -86,7 +87,7 @@ const TokenQuery: React.FC<TokenQueryProps> = ({ tokenId }) => {
 
   return (
     <div className="token-query space-y-4">
-      <h3>Token ID: {shortenTxHash(tokenId)}</h3>
+      <h3 className="font-semibold">Token ID: {shortenTxHash(tokenId)}</h3>
       <p>Total Supply: {totalSupply}</p>
       <p>Active Minting: {activeMinting ? 'Yes' : 'No'}</p>
       <p>Total NFTs: {nftSupply}</p>
@@ -94,15 +95,15 @@ const TokenQuery: React.FC<TokenQueryProps> = ({ tokenId }) => {
 
       {snapshot && (
         <div className="bcmr-meta p-4 border rounded-lg">
-          <h4 className="text-lg font-semibold">{snapshot.name}</h4>
-          {snapshot.description && <p>{snapshot.description}</p>}
-          {snapshot.uris?.icon && (
+          {(iconDataUri || snapshot.uris?.icon) && (
             <img
-              src={snapshot.uris.icon}
+              src={iconDataUri || snapshot.uris!.icon!}
               alt={`${snapshot.name} icon`}
-              className="w-16 h-16 rounded mt-2"
+              className="w-16 h-16 rounded mb-2"
             />
           )}
+          <h4 className="text-lg font-semibold">{snapshot.name}</h4>
+          {snapshot.description && <p>{snapshot.description}</p>}
           {snapshot.uris?.web && (
             <p className="mt-2">
               <a

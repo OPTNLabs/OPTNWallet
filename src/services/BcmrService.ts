@@ -8,6 +8,7 @@ import {
   // If you want base64 encoding later:
   // binToBase64,
 } from '@bitauth/libauth';
+import { Filesystem, Directory, Encoding } from '@capacitor/filesystem';
 import {
   queryAuthHead,
   queryTransactionByHash,
@@ -17,6 +18,8 @@ import { ipfsFetch } from '../utils/ipfs';
 import DatabaseService from '../apis/DatabaseManager/DatabaseService';
 import { sha256 } from '../utils/hash';
 import { DateTime } from 'luxon';
+
+const ICON_CACHE = new Map<string, string | null>();
 
 // ----------------------------------------------------------------------------
 // Fallback local registry
@@ -65,6 +68,8 @@ export interface IdentityRegistry {
 export default class BcmrService {
   private db = DatabaseService().getDatabase();
   private CACHE_TTL_MS = 7 * 24 * 60 * 60 * 1000; // 7d
+
+  private inMemoryRegistries = new Map<string, IdentityRegistry>();
 
   public async getCategoryAuthbase(category: string): Promise<string> {
     const res = this.db.exec(
@@ -122,7 +127,6 @@ export default class BcmrService {
          registryData = excluded.registryData`,
       [authbase, registryUri, lastFetch, registryHash, json]
     );
-    await DatabaseService().saveDatabaseToFile();
     mergeRegistry(registry);
     return { registry, registryHash, registryUri, lastFetch };
   }
@@ -152,13 +156,23 @@ export default class BcmrService {
   ): Promise<IdentityRegistry> {
     const authbase = await this.getCategoryAuthbase(categoryOrAuthbase);
 
-    // try cache
+    // 0) in-memory shortcut
+    const cachedInMem = this.inMemoryRegistries.get(authbase);
+    if (cachedInMem) return cachedInMem;
+
+    // 1) try cache on‐disk
+    let fromDisk: IdentityRegistry | undefined;
     try {
       const cached = await this.loadIdentityRegistry(authbase);
       const age =
         DateTime.now().toMillis() -
         DateTime.fromISO(cached.lastFetch).toMillis();
-      if (age < this.CACHE_TTL_MS) return cached;
+      if (age < this.CACHE_TTL_MS) {
+        fromDisk = cached;
+        mergeRegistry(cached.registry);
+        this.inMemoryRegistries.set(authbase, cached);
+        return cached;
+      }
       // stale ⇒ force refresh
       throw new BcmrRefreshError(cached.registryUri);
     } catch (e) {
@@ -171,10 +185,8 @@ export default class BcmrService {
       // fall through to fetch fresh
     }
 
-    // determine URI (preserve old one if present)
-    const existing = await this.loadIdentityRegistry(authbase).catch(
-      () => undefined
-    );
+    // 2) fetch fresh (either on‐chain fallback or off‐chain JSON)
+    const existing = fromDisk;
     const registryUri =
       existing?.registryUri || this.getDefaultRegistryUri(authbase);
 
@@ -194,10 +206,20 @@ export default class BcmrService {
         (imported as any).registryIdentity,
         registryUri
       );
-      if (onChain) return onChain;
+      if (onChain) {
+        this.inMemoryRegistries.set(authbase, onChain);
+        return onChain;
+      }
     }
 
-    return this.commitIdentityRegistry(authbase, imported, registryUri);
+    // 3) commit fresh to DB (but _don’t_ call saveDatabaseToFile here)
+    const justFetched = await this.commitIdentityRegistry(
+      authbase,
+      imported,
+      registryUri
+    );
+    this.inMemoryRegistries.set(authbase, justFetched);
+    return justFetched;
   }
 
   // ----------------------------------------------------------------------------
@@ -283,5 +305,104 @@ export default class BcmrService {
     }
   }
 
-  // …the rest of your class (preload, purge, exportLocalBcmr, resolveIcon) …
+  public async preloadMetadataRegistries(): Promise<IdentityRegistry[]> {
+    const res = this.db.exec(`SELECT authbase FROM bcmr;`);
+    if (res.length === 0) return [];
+    const cols = res[0].columns;
+    const idx = cols.indexOf('authbase');
+    return Promise.all(
+      res[0].values.map((row) => this.loadIdentityRegistry(row[idx] as string))
+    );
+  }
+
+  /**
+   * Wipe all on-chain registry caches (both the registry table and the mapping table)
+   */
+  public async purgeBcmrData(): Promise<void> {
+    this.db.run(`DELETE FROM bcmr; DELETE FROM bcmr_tokens;`);
+    await DatabaseService().saveDatabaseToFile();
+  }
+
+  /**
+   * Return the full in-memory “local” registry (including any merges you’ve done)
+   */
+  public exportLocalBcmr(): MetadataRegistry {
+    return LOCAL_BCMR;
+  }
+
+  /**
+   * Fetch an identity or NFT‐type icon via IPFS, with on-device caching via Capacitor Filesystem.
+   */
+  public async resolveIcon(
+    authbase: string,
+    nftCommitment?: string
+  ): Promise<string | null> {
+    // pick the right URI map
+    const snapshot = this.extractIdentity(authbase);
+    const uris = nftCommitment
+      ? snapshot.token?.nfts?.parse &&
+        (snapshot.token.nfts as any).types[nftCommitment]?.uris
+      : snapshot.uris;
+    const iconUri = uris?.icon;
+    if (!iconUri) return null;
+
+    // use hash of authbase or authbase+nft as filename
+    const filename = nftCommitment
+      ? sha256.text(`${authbase}${nftCommitment}`)
+      : authbase;
+    const filePath = `optn/icons/${filename}`;
+
+    // 1) in-memory cache
+    if (ICON_CACHE.has(filePath)) {
+      return ICON_CACHE.get(filePath);
+    }
+
+    // 2) try reading from filesystem cache
+    try {
+      const read = await Filesystem.readFile({
+        path: filePath,
+        directory: Directory.Cache,
+        encoding: Encoding.UTF8,
+      });
+      const dataUri = `data:;base64,${read.data}`;
+      ICON_CACHE.set(filePath, dataUri);
+      return dataUri;
+    } catch {
+      // not on disk yet
+    }
+
+    // 3) fetch from IPFS
+    const resp = await ipfsFetch(iconUri);
+    if (!resp.ok) {
+      ICON_CACHE.set(filePath, null);
+      return null;
+    }
+    const buf = new Uint8Array(await resp.arrayBuffer());
+    const { binToBase64 } = await import('@bitauth/libauth');
+    const b64 = binToBase64(buf);
+    const dataUri = `data:;base64,${b64}`;
+
+    // 4) write to filesystem cache for next time
+    try {
+      await Filesystem.writeFile({
+        path: filePath,
+        directory: Directory.Cache,
+        encoding: Encoding.UTF8,
+        data: b64,
+      });
+    } catch {
+      // ignore write errors
+    }
+
+    ICON_CACHE.set(filePath, dataUri);
+    return dataUri;
+  }
+
+  /**
+   * Persist any pending BCMR cache updates to disk.
+   * Call this once when your app finishes initializing all metadata.
+   */
+  public async flushCache(): Promise<void> {
+    await DatabaseService().saveDatabaseToFile();
+  }
 }

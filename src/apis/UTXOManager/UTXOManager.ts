@@ -54,7 +54,7 @@ export default function UTXOManager() {
         existsQuery.free();
       }
       insertQuery.free();
-      await dbService.saveDatabaseToFile();
+      // await dbService.saveDatabaseToFile();
     } catch (error) {
       console.error('Error storing UTXOs:', error);
     }
@@ -82,7 +82,7 @@ export default function UTXOManager() {
         result.token =
           typeof result.token === 'string'
             ? JSON.parse(result.token)
-            : result.token
+            : result.token;
         utxos.push(result as unknown as UTXO);
       }
       query.free();
@@ -117,7 +117,7 @@ export default function UTXOManager() {
 
       query.free();
       db.exec('COMMIT;');
-      await dbService.saveDatabaseToFile();
+      // await dbService.saveDatabaseToFile();
     } catch (error) {
       console.error('Error deleting UTXOs:', error);
       if (db) {

@@ -22,6 +22,7 @@ export default function WalletManager() {
   async function clearAllData(): Promise<void> {
     const dbService = DatabaseService();
     await dbService.clearDatabase(); // Call clearDatabase function
+    // await dbService.saveDatabaseToFile();
   }
 
   async function deleteWallet(wallet_id: number): Promise<boolean | null> {
@@ -68,7 +69,7 @@ export default function WalletManager() {
       query.bind({ ':walletid': wallet_id });
       query.run();
 
-      await dbService.saveDatabaseToFile();
+      // await dbService.saveDatabaseToFile();
       return true;
     } catch (e) {
       console.error(e);

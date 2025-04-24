@@ -4,6 +4,7 @@ import { UTXO } from '../types/types';
 import { Network } from '../redux/networkSlice';
 import { store } from '../redux/store';
 import { removeUTXOs, setUTXOs } from '../redux/utxoSlice';
+// import DatabaseService from '../apis/DatabaseManager/DatabaseService';
 
 const state = store.getState();
 const prefix =
@@ -58,6 +59,7 @@ const UTXOService = {
 
       // Store new UTXOs
       await manager.storeUTXOs(formattedUTXOs);
+      // await DatabaseService().saveDatabaseToFile();
 
       // Update Redux store with the new UTXOs
       const updatedUTXOs = await manager.fetchUTXOsByAddress(walletId, address);

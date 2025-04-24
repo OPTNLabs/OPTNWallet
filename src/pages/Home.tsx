@@ -12,6 +12,8 @@ import { setUTXOs, setFetchingUTXOs, setInitialized } from '../redux/utxoSlice';
 import PriceFeed from '../components/PriceFeed';
 import { TailSpin } from 'react-loader-spinner';
 import Popup from '../components/transaction/Popup';
+import DatabaseService from '../apis/DatabaseManager/DatabaseService';
+import BcmrService from '../services/BcmrService';
 // import DAppConnectionTester from '../components/DAppConnectionTester';
 // // import ScanWcQr from '../components/WcConnectionManager';
 // import SessionProposalModal from '../components/SessionProposalModal';
@@ -67,6 +69,7 @@ const Home: React.FC = () => {
     Record<string, number>
   >({}); // Placeholder token totals for CashTokenCard
   const [showCashTokenPopup, setShowCashTokenPopup] = useState(false); // Local state for CashToken Popup
+  const [metadataPreloaded, setMetadataPreloaded] = useState(false);
 
   const initialized = useRef(false);
 
@@ -128,6 +131,7 @@ const Home: React.FC = () => {
 
       // Update Redux store in a single batch after fetching all UTXOs
       dispatch(setUTXOs({ newUTXOs: allUTXOs }));
+      await DatabaseService().saveDatabaseToFile();
 
       // Set initialized to true after first successful fetch
       dispatch(setInitialized(true));
@@ -168,6 +172,30 @@ const Home: React.FC = () => {
     generateKeys,
     fetchAndStoreUTXOs,
   ]);
+
+  // After UTXOs + Redux are initialized, preload _all_ token‐metadata and save once:
+  useEffect(() => {
+    if (!IsInitialized) return;
+    (async () => {
+      // preload BCMR for every category you've discovered
+      const bcmr = new BcmrService();
+      const categories = Object.keys(placeholderTokenTotals);
+      await Promise.all(
+        categories.map(async (category) => {
+          const authbase = await bcmr.getCategoryAuthbase(category);
+          await bcmr.resolveIdentityRegistry(authbase);
+        })
+      );
+      setMetadataPreloaded(true);
+    })();
+  }, [IsInitialized, placeholderTokenTotals]);
+
+  // Do one disk write when both UTXOs and metadata are done
+  useEffect(() => {
+    if (IsInitialized && metadataPreloaded) {
+      DatabaseService().saveDatabaseToFile();
+    }
+  }, [IsInitialized, metadataPreloaded]);
 
   // Update placeholders when UTXOs are fetched
   useEffect(() => {
