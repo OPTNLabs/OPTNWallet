@@ -146,80 +146,46 @@ export default class BcmrService {
   }
 
   /**
-   * 1) Try cache (7d TTL)
-   * 2) Fetch off-chain JSON
-   * 3) If JSON.registryIdentity is a string → on-chain fallback
-   * 4) Commit & return
+   * 1) in-memory?
+   * 2) on-disk?
+   *     • if stale, trigger a background update but still return the disk copy
+   * 3) otherwise fetch & commit (sync)
    */
   public async resolveIdentityRegistry(
     categoryOrAuthbase: string
   ): Promise<IdentityRegistry> {
     const authbase = await this.getCategoryAuthbase(categoryOrAuthbase);
 
-    // 0) in-memory shortcut
-    const cachedInMem = this.inMemoryRegistries.get(authbase);
-    if (cachedInMem) return cachedInMem;
+    // 1) in-memory
+    const inMem = this.inMemoryRegistries.get(authbase);
+    if (inMem) return inMem;
 
-    // 1) try cache on‐disk
-    let fromDisk: IdentityRegistry | undefined;
+    // 2) on-disk
+    let disk: IdentityRegistry | undefined;
     try {
-      const cached = await this.loadIdentityRegistry(authbase);
+      disk = await this.loadIdentityRegistry(authbase);
+      // merge into LOCAL_BCMR for immediate use
+      mergeRegistry(disk.registry);
+      this.inMemoryRegistries.set(authbase, disk);
+
+      // if stale, kick off a background refresh
       const age =
         DateTime.now().toMillis() -
-        DateTime.fromISO(cached.lastFetch).toMillis();
-      if (age < this.CACHE_TTL_MS) {
-        fromDisk = cached;
-        mergeRegistry(cached.registry);
-        this.inMemoryRegistries.set(authbase, cached);
-        return cached;
+        DateTime.fromISO(disk.lastFetch).toMillis();
+      if (age >= this.CACHE_TTL_MS) {
+        // fire-and-forget
+        this.backgroundRefresh(authbase, disk.registryUri);
       }
-      // stale ⇒ force refresh
-      throw new BcmrRefreshError(cached.registryUri);
+
+      return disk;
     } catch (e) {
-      if (
-        !(e instanceof BcmrRefreshError) &&
-        !(e instanceof Error && e.message.startsWith('No BCMR'))
-      ) {
-        throw e;
-      }
-      // fall through to fetch fresh
+      // missing on disk? fall through to fetch
     }
 
-    // 2) fetch fresh (either on‐chain fallback or off‐chain JSON)
-    const existing = fromDisk;
-    const registryUri =
-      existing?.registryUri || this.getDefaultRegistryUri(authbase);
-
-    // fetch off-chain JSON
-    const resp = await ipfsFetch(registryUri);
-    if (!resp.ok)
-      throw new Error(
-        `Failed fetching registry from ${registryUri}: ${resp.status}`
-      );
-    const data = await resp.json();
-    const imported = importMetadataRegistry(data);
-    if (typeof imported === 'string') throw new Error(imported);
-
-    // on-chain fallback?
-    if (typeof (imported as any).registryIdentity === 'string') {
-      const onChain = await this.resolveAuthChainRegistry(
-        (imported as any).registryIdentity,
-        registryUri
-      );
-      if (onChain) {
-        this.inMemoryRegistries.set(authbase, onChain);
-        return onChain;
-      }
-    }
-
-    // 3) commit fresh to DB (but _don’t_ call saveDatabaseToFile here)
-    const justFetched = await this.commitIdentityRegistry(
-      authbase,
-      imported,
-      registryUri
-    );
-    this.inMemoryRegistries.set(authbase, justFetched);
-    return justFetched;
+    // 3) first-time fetch
+    const uri = this.getDefaultRegistryUri(authbase);
+    const fresh = await this.fetchAndCommitRegistry(authbase, uri);
+    return fresh;
   }
 
   // ----------------------------------------------------------------------------
@@ -405,4 +371,50 @@ export default class BcmrService {
   public async flushCache(): Promise<void> {
     await DatabaseService().saveDatabaseToFile();
   }
+
+  // A little helper that actually fetches & commits one registry:
+  private async fetchAndCommitRegistry(
+    authbase: string,
+    uri: string
+  ): Promise<IdentityRegistry> {
+    const resp = await ipfsFetch(uri);
+    if (!resp.ok) {
+      throw new Error(`Failed fetching registry from ${uri}: ${resp.status}`);
+    }
+    const data = await resp.json();
+    const imported = importMetadataRegistry(data);
+    if (typeof imported === 'string') throw new Error(imported);
+
+    // on-chain fallback
+    if (typeof (imported as any).registryIdentity === 'string') {
+      const onChain = await this.resolveAuthChainRegistry(
+        (imported as any).registryIdentity,
+        uri
+      );
+      if (onChain) {
+        this.inMemoryRegistries.set(authbase, onChain);
+        return onChain;
+      }
+    }
+
+    const committed = await this.commitIdentityRegistry(
+      authbase,
+      imported,
+      uri
+    );
+    this.inMemoryRegistries.set(authbase, committed);
+    return committed;
+  }
+
+  private async backgroundRefresh(
+    authbase: string,
+    fallbackUri: string
+  ): Promise<void> {
+    try {
+      await this.fetchAndCommitRegistry(authbase, fallbackUri);
+    } catch (e) {
+      console.error(e)
+    }
+  }
+  
 }
