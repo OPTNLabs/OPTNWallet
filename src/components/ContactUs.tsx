@@ -15,7 +15,7 @@ const ContactUs = () => {
     },
     {
       name: 'Website',
-      href: 'https://optn-website.vercel.app/',
+      href: 'https://www.optnlabs.com/',
       icon: <FaGlobe size={24} />,
       bgColor: 'bg-green-500',
       hoverColor: 'hover:bg-green-600',

@@ -1,37 +1,38 @@
+// src/apis/DatabaseManager/DatabaseService.ts
+
 import initSqlJs, { Database } from 'sql.js';
 import { createTables } from '../../utils/schema/schema';
+import { get as idbGet, set as idbSet } from 'idb-keyval';
 
-// Define the type for the DB variable
+// single shared DB handle
 let db: Database | null = null;
 
+// ** Debounce state **
+let saveTimeout: number | null = null;
+let pendingSavePromise: Promise<void> | null = null;
+
+/** write into IndexedDB instead of localStorage */
+async function realSaveDatabase(): Promise<void> {
+  if (!db) return;
+  const data = db.export(); // Uint8Array
+  await idbSet('OPTNDatabase', data); // store raw bytes
+  // console.log('Persisted DB to IndexedDB');
+}
+
 const startDatabase = async (): Promise<Database | null> => {
-  try {
-    // console.log('Initializing SQL.js...');
-    const SQLModule = await initSqlJs({
-      locateFile: () => `/sql-wasm.wasm`,
-    });
-    // console.log('SQL.js initialized.');
-
-    const savedDb = localStorage.getItem('OPTNDatabase');
-    if (savedDb) {
-      // console.log('Loading saved database...');
-      const fileBuffer = new Uint8Array(JSON.parse(savedDb));
-      db = new SQLModule.Database(fileBuffer);
-      // console.log('Saved database loaded.');
-    } else {
-      // console.log('Creating new database...');
-      db = new SQLModule.Database();
-      createTables(db); // Ensure the schema is created if no saved DB exists
-      // console.log('New database created.');
-    }
-
-    await updateSchema(db); // Ensure schema is updated
-    // console.log('Database started.');
-    return db;
-  } catch (error) {
-    console.error('Error starting database:', error);
-    throw error;
+  const SQLModule = await initSqlJs({
+    locateFile: () => `/sql-wasm.wasm`,
+  });
+  const saved = await idbGet('OPTNDatabase');
+  if (saved) {
+    // saved is already Uint8Array
+    db = new SQLModule.Database(new Uint8Array(saved as any));
+  } else {
+    db = new SQLModule.Database();
+    createTables(db);
   }
+  await updateSchema(db);
+  return db;
 };
 
 const ensureDatabaseStarted = async (): Promise<void> => {
@@ -40,16 +41,34 @@ const ensureDatabaseStarted = async (): Promise<void> => {
   }
 };
 
+/**
+ * Debounced save: schedule a real save 500ms in the future,
+ * coalescing multiple calls into one. Returns a promise that
+ * resolves after the actual save finishes.
+ */
 const saveDatabaseToFile = async (): Promise<void> => {
   await ensureDatabaseStarted();
-  if (!db) {
-    console.error('Database not started.');
-    return;
-  }
+  if (!db) return;
 
-  const data = db.export();
-  localStorage.setItem('OPTNDatabase', JSON.stringify(Array.from(data)));
-  // console.log('Database saved to local storage');
+  if (!pendingSavePromise) {
+    pendingSavePromise = new Promise((resolve) => {
+      if (saveTimeout !== null) {
+        clearTimeout(saveTimeout);
+      }
+      saveTimeout = window.setTimeout(async () => {
+        try {
+          await realSaveDatabase();
+        } catch (e) {
+          console.error('Failed debounced save:', e);
+        }
+        // reset for next batch
+        pendingSavePromise = null;
+        saveTimeout = null;
+        resolve();
+      }, 500);
+    });
+  }
+  return pendingSavePromise;
 };
 
 const getDatabase = (): Database | null => db;
@@ -57,7 +76,7 @@ const getDatabase = (): Database | null => db;
 const clearDatabase = async (): Promise<void> => {
   await ensureDatabaseStarted();
   if (db) {
-    db.exec('VACUUM;'); // Ensure all changes are committed
+    db.exec('VACUUM;');
     db.exec(`
       DROP TABLE IF EXISTS wallets;
       DROP TABLE IF EXISTS keys;
@@ -68,45 +87,37 @@ const clearDatabase = async (): Promise<void> => {
       DROP TABLE IF EXISTS cashscript_addresses;
       DROP TABLE IF EXISTS instantiated_contracts;
     `);
-    createTables(db); // Recreate empty tables after dropping
-    await saveDatabaseToFile(); // Save changes to local storage
+    createTables(db);
+    // You can debounce this too, but usually on clear you want immediate:
+    await realSaveDatabase();
   }
 };
 
 const updateSchema = async (db: Database): Promise<void> => {
-  const result = db.exec(`
-    PRAGMA table_info(instantiated_contracts);
-  `);
-
+  const result = db.exec(`PRAGMA table_info(instantiated_contracts);`);
   const columns = result[0].values.map((row) => row[1] as string);
   if (!columns.includes('abi')) {
-    db.run(`
-      ALTER TABLE instantiated_contracts ADD COLUMN abi TEXT;
-    `);
+    db.run(`ALTER TABLE instantiated_contracts ADD COLUMN abi TEXT;`);
   }
 };
 
-// Typing the resultToJSON function, ensuring proper return types
 const resultToJSON = (
   result: (string | undefined)[]
 ): { mnemonic: string; passphrase: string } => {
   if (!result || result.length === 0) {
     return { mnemonic: '', passphrase: '' };
   }
-
-  const obj = {
+  return {
     mnemonic: result[0] as string,
     passphrase: result[1] ? (result[1] as string) : '',
   };
-
-  return obj;
 };
 
 export default function DatabaseService() {
   return {
     startDatabase,
-    saveDatabaseToFile,
     ensureDatabaseStarted,
+    saveDatabaseToFile,
     getDatabase,
     clearDatabase,
     resultToJSON,
