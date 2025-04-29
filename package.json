@@ -50,6 +50,7 @@
     "ecpair": "^2.1.0",
     "electrum": "^4.15.4",
     "electrum-cash": "^2.0.10",
+    "idb-keyval": "^6.2.1",
     "luxon": "^3.6.1",
     "path": "^0.12.7",
     "qrcode.react": "^4.1.0",

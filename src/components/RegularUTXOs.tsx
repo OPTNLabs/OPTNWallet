@@ -1,3 +1,6 @@
+// src/components/RegularUTXOs.tsx
+
+import { FaBitcoin } from 'react-icons/fa';
 import { shortenTxHash } from '../utils/shortenHash';
 
 const RegularUTXOs = ({ utxos, loading }) => {
@@ -29,20 +32,31 @@ const RegularUTXOs = ({ utxos, loading }) => {
       ) : (
         utxos &&
         utxos.map((utxo, idx) => (
-          <div key={idx} className="p-2 mb-2 border rounded-lg overflow-x-auto">
-            <p className="break-words">
-              <strong>Amount:</strong>{' '}
-              {utxo.amount ? utxo.amount.toString() : utxo.value} satoshis
-            </p>
-            <p className="break-words">
-              <strong>Transaction Hash:</strong> {shortenTxHash(utxo.tx_hash)}
-            </p>
-            <p className="break-words">
-              <strong>Position:</strong> {utxo.tx_pos}
-            </p>
-            <p className="break-words">
-              <strong>Height:</strong> {utxo.height}
-            </p>
+          <div
+            key={idx}
+            className="p-3 mb-3 border rounded-lg grid grid-cols-[1fr_auto] gap-4"
+          >
+            <div className="space-y-1">
+              <p className="break-words">
+                <strong>Amount:</strong>{' '}
+                {utxo.amount ? utxo.amount.toString() : utxo.value} satoshis
+              </p>
+              <p className="break-words">
+                <strong>Tx Hash:</strong> {shortenTxHash(utxo.tx_hash)}
+              </p>
+              <p className="break-words">
+                <strong>Position:</strong> {utxo.tx_pos}
+              </p>
+              <p className="break-words">
+                <strong>Height:</strong> {utxo.height}
+              </p>
+            </div>
+            <div className="flex flex-col items-center space-y-2">
+              <FaBitcoin className="text-green-500 text-4xl " />
+              <span className="text-base font-medium text-center">
+                Bitcoin Cash
+              </span>
+            </div>
           </div>
         ))
       )}

@@ -8,6 +8,8 @@ import {
 } from '@capacitor/barcode-scanner';
 import { Toast } from '@capacitor/toast';
 import { FaCamera } from 'react-icons/fa';
+import { IdentitySnapshot } from '@bitauth/libauth';
+import BcmrService from '../../services/BcmrService';
 import { TransactionOutput, UTXO } from '../../types/types';
 import { shortenTxHash } from '../../utils/shortenHash';
 import { Network } from '../../redux/networkSlice';
@@ -91,7 +93,10 @@ const OutputSelection: React.FC<OutputSelectionProps> = ({
   // OP_RETURN toggles
   const [showOpReturn, setShowOpReturn] = useState<boolean>(false);
   const [opReturnText, setOpReturnText] = useState<string>('');
-  const opReturnArray = opReturnText.split(' ').map((s) => s.trim()).filter((s) => s.length > 0);
+  const opReturnArray = opReturnText
+    .split(' ')
+    .map((s) => s.trim())
+    .filter((s) => s.length > 0);
 
   // Identify "genesis-capable" UTXOs among the user's selection
   const hasGenesisUtxoSelected = selectedUtxos.some(
@@ -100,7 +105,38 @@ const OutputSelection: React.FC<OutputSelectionProps> = ({
 
   // Only show token categories for the user’s currently selected token-based UTXOs
   const selectedTokenUtxos = selectedUtxos.filter((u) => u.token);
-  const categoriesFromSelected = [...new Set(selectedTokenUtxos.map((u) => u.token.category))];
+  const categoriesFromSelected = [
+    ...new Set(selectedTokenUtxos.map((u) => u.token.category)),
+  ];
+
+  // <categoryHex> → { name: string, iconUri: string | null }
+  const [tokenMetadata, setTokenMetadata] = useState<
+    Record<string, { name: string; iconUri: string | null }>
+  >({});
+
+  // Whenever the set of categories changes, fetch any missing metadata
+  useEffect(() => {
+    const svc = new BcmrService();
+    (async () => {
+      const newMeta: Record<string, { name: string; iconUri: string | null }> =
+        {};
+      for (const category of categoriesFromSelected) {
+        if (!tokenMetadata[category]) {
+          const authbase = await svc.getCategoryAuthbase(category);
+          const idReg = await svc.resolveIdentityRegistry(authbase);
+          const snap: IdentitySnapshot = svc.extractIdentity(
+            authbase,
+            idReg.registry
+          );
+          const iconUri = await svc.resolveIcon(authbase);
+          newMeta[category] = { name: snap.name, iconUri };
+        }
+      }
+      if (Object.keys(newMeta).length > 0) {
+        setTokenMetadata((prev) => ({ ...prev, ...newMeta }));
+      }
+    })();
+  }, [categoriesFromSelected]);
 
   // If user toggles "Create NFT," default tokenAmount to 0
   useEffect(() => {
@@ -132,7 +168,9 @@ const OutputSelection: React.FC<OutputSelectionProps> = ({
   };
 
   // Input change handlers
-  const handleTransferAmountChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleTransferAmountChange = (
+    e: React.ChangeEvent<HTMLInputElement>
+  ) => {
     const value = e.target.value;
     setTransferAmount(value === '' ? 0 : Number(value));
   };
@@ -205,7 +243,12 @@ const OutputSelection: React.FC<OutputSelectionProps> = ({
                     {/* Recipient */}
                     <div className="flex justify-between w-full">
                       <span className="font-medium">Recipient:</span>
-                      <span>{shortenTxHash(output.recipientAddress, PREFIX[currentNetwork].length)}</span>
+                      <span>
+                        {shortenTxHash(
+                          output.recipientAddress,
+                          PREFIX[currentNetwork].length
+                        )}
+                      </span>
                     </div>
                     {/* Amount */}
                     <div className="flex justify-between w-full">
@@ -217,7 +260,11 @@ const OutputSelection: React.FC<OutputSelectionProps> = ({
                       <>
                         <div className="flex justify-between w-full">
                           <span className="font-medium">Token:</span>
-                          <span>{output.token.amount ? output.token.amount.toString() : 'NFT'}</span>
+                          <span>
+                            {output.token.amount
+                              ? output.token.amount.toString()
+                              : 'NFT'}
+                          </span>
                         </div>
                         <div className="flex justify-between w-full">
                           <span className="font-medium">Category:</span>
@@ -305,7 +352,7 @@ const OutputSelection: React.FC<OutputSelectionProps> = ({
 
               <div className="mb-2 flex flex-wrap gap-2">
                 {/* Send Regular Transaction */}
-                <button
+                {/* <button
                   onClick={() => {
                     resetFormValues();
                     setShowRegularTx(true);
@@ -318,56 +365,52 @@ const OutputSelection: React.FC<OutputSelectionProps> = ({
                   }`}
                 >
                   Send Regular Transaction
-                </button>
+                </button> */}
 
-                {/* Create CashToken */}
-                <button
-                  onClick={() => {
-                    resetFormValues();
-                    setShowCashToken(true);
-                    setPopupTitle('Create CashToken');
-                  }}
-                  disabled={!hasGenesisUtxoSelected}
-                  className={`font-bold py-1 px-2 rounded ${
-                    showCashToken
-                      ? 'bg-orange-500 text-white'
-                      : 'bg-orange-200 text-gray-800'
-                  } ${
-                    !hasGenesisUtxoSelected
-                      ? 'cursor-not-allowed opacity-50'
-                      : 'hover:bg-orange-600'
-                  }`}
-                >
-                  Create CashToken
-                </button>
+                {hasGenesisUtxoSelected && (
+                  <>
+                    {/* Create CashToken */}
+                    <button
+                      onClick={() => {
+                        resetFormValues();
+                        setShowCashToken(true);
+                        setPopupTitle('Create CashToken');
+                      }}
+                      className={`font-bold py-1 px-2 rounded ${
+                        showCashToken
+                          ? 'bg-orange-500 text-white'
+                          : 'bg-orange-200 text-gray-800'
+                      } hover:bg-orange-600`}
+                    >
+                      Create CashToken
+                    </button>
 
-                {/* Create NFT */}
-                <button
-                  onClick={() => {
-                    resetFormValues();
-                    setShowNFTCashToken(true);
-                    setPopupTitle('Create NFT');
-                  }}
-                  disabled={!hasGenesisUtxoSelected}
-                  className={`font-bold py-1 px-2 rounded ${
-                    showNFTCashToken
-                      ? 'bg-pink-500 text-white'
-                      : 'bg-pink-200 text-gray-800'
-                  } ${
-                    !hasGenesisUtxoSelected
-                      ? 'cursor-not-allowed opacity-50'
-                      : 'hover:bg-pink-600'
-                  }`}
-                >
-                  Create NFT
-                </button>
+                    {/* Create NFT */}
+                    <button
+                      onClick={() => {
+                        resetFormValues();
+                        setShowNFTCashToken(true);
+                        setPopupTitle('Create NFT');
+                      }}
+                      className={`font-bold py-1 px-2 rounded ${
+                        showNFTCashToken
+                          ? 'bg-pink-500 text-white'
+                          : 'bg-pink-200 text-gray-800'
+                      } hover:bg-pink-600`}
+                    >
+                      Create NFT
+                    </button>
+                  </>
+                )}
               </div>
 
               {/* Regular TX view */}
               {showRegularTx && (
                 <>
                   <div className="mb-2">
-                    <label className="block font-medium mb-1">Recipient Address</label>
+                    <label className="block font-medium mb-1">
+                      Recipient Address
+                    </label>
                     <div className="flex items-center">
                       <input
                         type="text"
@@ -386,7 +429,9 @@ const OutputSelection: React.FC<OutputSelectionProps> = ({
                   </div>
 
                   <div className="mb-2">
-                    <label className="block font-medium mb-1">Transfer Amount (Sats)</label>
+                    <label className="block font-medium mb-1">
+                      Transfer Amount (Sats)
+                    </label>
                     <input
                       type="number"
                       value={transferAmount}
@@ -400,7 +445,9 @@ const OutputSelection: React.FC<OutputSelectionProps> = ({
                   {categoriesFromSelected.length > 0 && (
                     <>
                       <div className="mb-2">
-                        <label className="block font-medium mb-1">Token Amount</label>
+                        <label className="block font-medium mb-1">
+                          Token Amount
+                        </label>
                         <input
                           type="number"
                           value={tokenAmount}
@@ -410,19 +457,56 @@ const OutputSelection: React.FC<OutputSelectionProps> = ({
                       </div>
 
                       <div className="mb-2">
-                        <label className="block font-medium mb-1">Token Category</label>
+                        <label className="block font-medium mb-1">
+                          Token Category
+                        </label>
                         <select
                           value={selectedTokenCategory}
-                          onChange={(e) => setSelectedTokenCategory(e.target.value)}
+                          onChange={(e) =>
+                            setSelectedTokenCategory(e.target.value)
+                          }
                           className="border p-2 w-full break-words whitespace-normal"
                         >
                           <option value="">Select Cashtoken UTXO</option>
-                          {categoriesFromSelected.map((cat, idx) => (
-                            <option key={idx} value={cat}>
-                              {cat}
-                            </option>
-                          ))}
+                          {categoriesFromSelected.map((category) => {
+                            const meta = tokenMetadata[category];
+                            return (
+                              <option key={category} value={category}>
+                                {meta?.name ?? shortenTxHash(category)}
+                              </option>
+                            );
+                          })}
                         </select>
+                        {/* ↓ preview of name & icon for the selected one */}
+                        {selectedTokenCategory &&
+                          tokenMetadata[selectedTokenCategory] &&
+                          (() => {
+                            const meta = tokenMetadata[selectedTokenCategory];
+                            // find an example UTXO for this category to inspect nft
+                            const example = selectedUtxos.find(
+                              (u) => u.token?.category === selectedTokenCategory
+                            );
+                            const isNft = !!example?.token?.nft;
+                            return (
+                              <div className="flex justify-between items-center mt-2">
+                                <div className="flex items-center">
+                                  {meta.iconUri && (
+                                    <img
+                                      src={meta.iconUri}
+                                      alt={meta.name}
+                                      className="w-6 h-6 rounded mr-2"
+                                    />
+                                  )}
+                                  <span className="font-medium">
+                                    {meta.name}
+                                  </span>
+                                </div>
+                                <span className="text-sm font-medium">
+                                  {isNft ? 'NFT' : 'FT'}
+                                </span>
+                              </div>
+                            );
+                          })()}
                       </div>
                     </>
                   )}
@@ -442,7 +526,9 @@ const OutputSelection: React.FC<OutputSelectionProps> = ({
               {/* Create CashToken */}
               {showCashToken && (
                 <>
-                  <label className="block font-medium mb-1">Recipient Address</label>
+                  <label className="block font-medium mb-1">
+                    Recipient Address
+                  </label>
                   <div className="flex items-center mb-2">
                     <input
                       type="text"
@@ -460,7 +546,9 @@ const OutputSelection: React.FC<OutputSelectionProps> = ({
                   </div>
 
                   <div className="mb-2">
-                    <label className="block font-medium mb-1">Transfer Amount (Sats)</label>
+                    <label className="block font-medium mb-1">
+                      Transfer Amount (Sats)
+                    </label>
                     <input
                       type="number"
                       value={transferAmount}
@@ -471,7 +559,9 @@ const OutputSelection: React.FC<OutputSelectionProps> = ({
                   </div>
 
                   <div className="mb-2">
-                    <label className="block font-medium mb-1">Token Amount</label>
+                    <label className="block font-medium mb-1">
+                      Token Amount
+                    </label>
                     <input
                       type="number"
                       value={tokenAmount}
@@ -481,7 +571,9 @@ const OutputSelection: React.FC<OutputSelectionProps> = ({
                   </div>
 
                   <div className="mb-2">
-                    <label className="block font-medium mb-1">Genesis UTXO for new Token</label>
+                    <label className="block font-medium mb-1">
+                      Genesis UTXO for new Token
+                    </label>
                     <select
                       value={selectedTokenCategory}
                       onChange={(e) => setSelectedTokenCategory(e.target.value)}
@@ -491,7 +583,10 @@ const OutputSelection: React.FC<OutputSelectionProps> = ({
                       {selectedUtxos
                         .filter((utxo) => !utxo.token && utxo.tx_pos === 0)
                         .map((utxo, index) => (
-                          <option key={utxo.tx_hash + index} value={utxo.tx_hash}>
+                          <option
+                            key={utxo.tx_hash + index}
+                            value={utxo.tx_hash}
+                          >
                             {utxo.tx_hash}
                           </option>
                         ))}
@@ -513,7 +608,9 @@ const OutputSelection: React.FC<OutputSelectionProps> = ({
               {/* Create NFT */}
               {showNFTCashToken && (
                 <>
-                  <label className="block font-medium mb-1">Recipient Address</label>
+                  <label className="block font-medium mb-1">
+                    Recipient Address
+                  </label>
                   <div className="flex items-center mb-2">
                     <input
                       type="text"
@@ -531,7 +628,9 @@ const OutputSelection: React.FC<OutputSelectionProps> = ({
                   </div>
 
                   <div className="mb-2">
-                    <label className="block font-medium mb-1">Transfer Amount (Sats)</label>
+                    <label className="block font-medium mb-1">
+                      Transfer Amount (Sats)
+                    </label>
                     <input
                       type="number"
                       value={transferAmount}
@@ -542,7 +641,9 @@ const OutputSelection: React.FC<OutputSelectionProps> = ({
                   </div>
 
                   <div className="mb-2">
-                    <label className="block font-medium mb-1">NFT Token Amount</label>
+                    <label className="block font-medium mb-1">
+                      NFT Token Amount
+                    </label>
                     {/* default to 0, user can't change */}
                     <input
                       type="number"
@@ -554,7 +655,9 @@ const OutputSelection: React.FC<OutputSelectionProps> = ({
                   </div>
 
                   <div className="mb-2">
-                    <label className="block font-medium mb-1">Genesis UTXO for new NFT</label>
+                    <label className="block font-medium mb-1">
+                      Genesis UTXO for new NFT
+                    </label>
                     <select
                       value={selectedTokenCategory}
                       onChange={(e) => setSelectedTokenCategory(e.target.value)}
@@ -564,7 +667,10 @@ const OutputSelection: React.FC<OutputSelectionProps> = ({
                       {selectedUtxos
                         .filter((utxo) => !utxo.token && utxo.tx_pos === 0)
                         .map((utxo, index) => (
-                          <option key={utxo.tx_hash + index} value={utxo.tx_hash}>
+                          <option
+                            key={utxo.tx_hash + index}
+                            value={utxo.tx_hash}
+                          >
                             {utxo.tx_hash}
                           </option>
                         ))}
@@ -594,13 +700,19 @@ const OutputSelection: React.FC<OutputSelectionProps> = ({
               {showNFTConfigPopup && (
                 <Popup closePopups={() => setShowNFTConfigPopup(false)}>
                   <div className="p-4">
-                    <h3 className="text-lg font-semibold mb-2">NFT Configuration</h3>
+                    <h3 className="text-lg font-semibold mb-2">
+                      NFT Configuration
+                    </h3>
                     <div className="mb-2">
-                      <label className="block font-medium mb-1">NFT Capability</label>
+                      <label className="block font-medium mb-1">
+                        NFT Capability
+                      </label>
                       <select
                         value={nftCapability}
                         onChange={(e) =>
-                          setNftCapability(e.target.value as 'none' | 'mutable' | 'minting')
+                          setNftCapability(
+                            e.target.value as 'none' | 'mutable' | 'minting'
+                          )
                         }
                         className="border p-2 w-full"
                       >
@@ -611,7 +723,9 @@ const OutputSelection: React.FC<OutputSelectionProps> = ({
                     </div>
 
                     <div className="mb-2">
-                      <label className="block font-medium mb-1">NFT Commitment</label>
+                      <label className="block font-medium mb-1">
+                        NFT Commitment
+                      </label>
                       <input
                         type="text"
                         value={nftCommitment}
@@ -632,11 +746,7 @@ const OutputSelection: React.FC<OutputSelectionProps> = ({
               )}
 
               {/* OP_RETURN if needed */}
-              {showOpReturn && (
-                <>
-                  {/* user’s OP_RETURN inputs */}
-                </>
-              )}
+              {showOpReturn && <>{/* user’s OP_RETURN inputs */}</>}
             </div>
           </Popup>
         )}

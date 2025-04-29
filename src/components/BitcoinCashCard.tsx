@@ -15,18 +15,19 @@ enum DisplayMode {
 
 const BitcoinCashCard: React.FC<Props> = ({ totalAmount }) => {
   // grab the BCH→USD rate (string | null)
-  const bchRate = useSelector(
-    (state: RootState) => state.priceFeed['BCH']
-  );
+  const bchRate = useSelector((state: RootState) => state.priceFeed['BCH']);
 
   const [mode, setMode] = useState<DisplayMode>(DisplayMode.USD);
 
   // conversions
   const totalBch = totalAmount / 1e8;
-  const totalUsd =
-    bchRate !== null
-      ? (totalBch * parseFloat(bchRate)).toFixed(2)
-      : null;
+
+  // parse the rate, fall back to 0 if it's null or not a finite number
+  const rateNum = parseFloat(bchRate ?? '');
+  const safeRate = Number.isFinite(rateNum) ? rateNum : 0;
+
+  // always a string like "123.45"
+  const totalUsd = (totalBch * safeRate).toFixed(2);
 
   // render
   return (
@@ -34,25 +35,17 @@ const BitcoinCashCard: React.FC<Props> = ({ totalAmount }) => {
       <div className="flex items-center justify-between">
         <div className="flex items-center space-x-3">
           <FaBitcoin className="text-green-500 text-3xl" />
-          {mode === DisplayMode.USD ? (
+          {mode === DisplayMode.BCH ? (
             <div>
-              <div className="text-lg font-bold">
-                {totalUsd !== null ? `$${totalUsd} USD` : '—'}
-              </div>
+              <div className="text-lg font-bold">${totalUsd} USD</div>
               <div className="text-sm text-gray-600">
                 {totalBch.toFixed(8)} BCH
               </div>
             </div>
           ) : (
             <div>
-              <div className="text-lg font-bold">
-                {totalBch.toFixed(8)} BCH
-              </div>
-              {totalUsd !== null && (
-                <div className="text-sm text-gray-600">
-                  ${totalUsd} USD
-                </div>
-              )}
+              <div className="text-lg font-bold">{totalBch.toFixed(8)} BCH</div>
+              <div className="text-sm text-gray-600">${totalUsd} USD</div>
             </div>
           )}
         </div>
@@ -61,7 +54,7 @@ const BitcoinCashCard: React.FC<Props> = ({ totalAmount }) => {
           {mode !== DisplayMode.BCH && (
             <button
               onClick={() => setMode(DisplayMode.BCH)}
-              className="p-1 px-3 rounded text-white bg-gray-500 font-bold hover:bg-gray-600 transition duration-200"
+              className="p-1 px-3 rounded text-white bg-green-500 font-bold hover:bg-green-600 transition duration-200"
             >
               BCH
             </button>
@@ -69,7 +62,7 @@ const BitcoinCashCard: React.FC<Props> = ({ totalAmount }) => {
           {mode !== DisplayMode.USD && (
             <button
               onClick={() => setMode(DisplayMode.USD)}
-              className="p-1 px-3 rounded text-white bg-green-500 font-bold hover:bg-green-600 transition duration-200"
+              className="p-1 px-3 rounded text-white bg-gray-500 font-bold hover:bg-gray-600 transition duration-200"
             >
               USD
             </button>
