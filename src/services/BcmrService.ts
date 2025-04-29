@@ -52,11 +52,11 @@ function mergeRegistry(registry: MetadataRegistry) {
 // ----------------------------------------------------------------------------
 // Custom error to force cache refresh
 // ----------------------------------------------------------------------------
-class BcmrRefreshError extends Error {
-  constructor(public uri: string) {
-    super(`Invalidate cache for ${uri}`);
-  }
-}
+// class BcmrRefreshError extends Error {
+//   constructor(public uri: string) {
+//     super(`Invalidate cache for ${uri}`);
+//   }
+// }
 
 export interface IdentityRegistry {
   registry: MetadataRegistry;
@@ -156,33 +156,30 @@ export default class BcmrService {
   ): Promise<IdentityRegistry> {
     const authbase = await this.getCategoryAuthbase(categoryOrAuthbase);
 
-    // 1) in-memory
-    const inMem = this.inMemoryRegistries.get(authbase);
-    if (inMem) return inMem;
+    // 1. fast in-memory
+    const cached = this.inMemoryRegistries.get(authbase);
+    if (cached) return cached;
 
-    // 2) on-disk
-    let disk: IdentityRegistry | undefined;
+    // 2. try load from sqlite
+    let diskEntry: IdentityRegistry | undefined;
     try {
-      disk = await this.loadIdentityRegistry(authbase);
-      // merge into LOCAL_BCMR for immediate use
-      mergeRegistry(disk.registry);
-      this.inMemoryRegistries.set(authbase, disk);
+      diskEntry = await this.loadIdentityRegistry(authbase);
+      mergeRegistry(diskEntry.registry);
+      this.inMemoryRegistries.set(authbase, diskEntry);
 
-      // if stale, kick off a background refresh
+      // if >7d old, refresh in background
       const age =
         DateTime.now().toMillis() -
-        DateTime.fromISO(disk.lastFetch).toMillis();
+        DateTime.fromISO(diskEntry.lastFetch).toMillis();
       if (age >= this.CACHE_TTL_MS) {
-        // fire-and-forget
-        this.backgroundRefresh(authbase, disk.registryUri);
+        this.backgroundRefresh(authbase, diskEntry.registryUri);
       }
-
-      return disk;
-    } catch (e) {
-      // missing on disk? fall through to fetch
+      return diskEntry;
+    } catch {
+      // no local cache, fall through
     }
 
-    // 3) first-time fetch
+    // 3. first-time or completely missing → must fetch & commit synchronously
     const uri = this.getDefaultRegistryUri(authbase);
     const fresh = await this.fetchAndCommitRegistry(authbase, uri);
     return fresh;
@@ -378,9 +375,7 @@ export default class BcmrService {
     uri: string
   ): Promise<IdentityRegistry> {
     const resp = await ipfsFetch(uri);
-    if (!resp.ok) {
-      throw new Error(`Failed fetching registry from ${uri}: ${resp.status}`);
-    }
+    if (!resp.ok) throw new Error(`Fetch failed: ${resp.status}`);
     const data = await resp.json();
     const imported = importMetadataRegistry(data);
     if (typeof imported === 'string') throw new Error(imported);
@@ -397,6 +392,7 @@ export default class BcmrService {
       }
     }
 
+    // commit to sqlite
     const committed = await this.commitIdentityRegistry(
       authbase,
       imported,
@@ -408,13 +404,12 @@ export default class BcmrService {
 
   private async backgroundRefresh(
     authbase: string,
-    fallbackUri: string
+    uri: string
   ): Promise<void> {
     try {
-      await this.fetchAndCommitRegistry(authbase, fallbackUri);
-    } catch (e) {
-      console.error(e)
+      await this.fetchAndCommitRegistry(authbase, uri);
+    } catch (err) {
+      console.error('BCMR background refresh failed', err);
     }
   }
-  
 }

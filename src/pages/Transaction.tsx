@@ -92,7 +92,9 @@ const Transaction: React.FC = () => {
     useState<boolean>(false);
   const [showOutputs, setShowOutputs] = useState<boolean>(false);
 
-  const [nftCapability, setNftCapability] = useState<'none' | 'mutable' | 'minting'>('none');
+  const [nftCapability, setNftCapability] = useState<
+    'none' | 'mutable' | 'minting'
+  >('none');
   const [nftCommitment, setNftCommitment] = useState<string>('');
 
   // const navigate = useNavigate();
@@ -436,7 +438,7 @@ const Transaction: React.FC = () => {
           <SweepPaperWallet setPaperWalletUTXOs={setPaperWalletUTXOs} />
         </div>
 
-        {/* Available UTXOs (New Component) */}
+        {/* Available UTXOs (New Component) for Cashtoken Genesis*/}
         <AvailableUTXOsDisplay
           utxos={utxos}
           // contractUtxos={contractUTXOs}

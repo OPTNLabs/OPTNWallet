@@ -183,6 +183,8 @@ export default function ContractManager() {
         await saveConstructorArgs(contract.address, constructorArgs, balance);
       }
 
+      await dbService.saveDatabaseToFile();
+
       return {
         address: contract.address,
         tokenAddress: contract.tokenAddress,
@@ -233,7 +235,7 @@ export default function ContractManager() {
     const statement = db.prepare(insertQuery);
     statement.run(params);
     statement.free();
-    await dbService.saveDatabaseToFile();
+    // await dbService.saveDatabaseToFile();
   }
 
   async function saveContractInstance(
@@ -288,7 +290,7 @@ export default function ContractManager() {
     const statement = db.prepare(insertQuery);
     statement.run(params);
     statement.free();
-    await dbService.saveDatabaseToFile();
+    // await dbService.saveDatabaseToFile();
 
     // **Add Logging After Saving**
     // console.log('Contract instance saved successfully.');
@@ -401,7 +403,7 @@ export default function ContractManager() {
       const statement = db.prepare(insertQuery);
       statement.run(params);
       statement.free();
-      await dbService.saveDatabaseToFile();
+      // await dbService.saveDatabaseToFile();
     } catch (error) {
       console.error('Error saving contract artifact:', error);
       throw error;
@@ -609,7 +611,7 @@ export default function ContractManager() {
         throw transError;
       }
 
-      await dbService.saveDatabaseToFile();
+      // await dbService.saveDatabaseToFile();
       return { added: newUTXOs.length, removed: staleUTXOs.length };
     } catch (error) {
       console.error('Error updating UTXOs and balance:', error);
