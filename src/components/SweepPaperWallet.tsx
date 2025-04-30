@@ -10,7 +10,7 @@ import {
   decodePrivateKeyWif,
   privateKeyToP2pkhCashAddress,
 } from '@bitauth/libauth';
-// import RegularUTXOs from './RegularUTXOs';
+// import UTXOCard from './UTXOCard';
 import { FaCamera } from 'react-icons/fa';
 import ElectrumService from '../services/ElectrumService';
 import { UTXO } from '../types/types';

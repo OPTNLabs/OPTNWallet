@@ -42,8 +42,8 @@ import { getPublicKeyCompressed } from '../utils/hex';
 // For BCH mainnet, the CAIP-2 format for Bitcoin Cash is "bch:bitcoincash"
 // somewhere near the top of src/redux/walletconnectSlice.ts
 const CAIP2_BY_NETWORK: Record<string, string> = {
-  mainnet: "bch:bitcoincash",
-  chipnet: "bch:bchtest",
+  mainnet: 'bch:bitcoincash',
+  chipnet: 'bch:bchtest',
 };
 
 // The methods and events required by the dApp
@@ -108,7 +108,6 @@ export const initWalletConnect = createAsyncThunk(
       '[walletconnectSlice] Active sessions at init:',
       activeSessions
     );
-    
 
     // Listen for session proposals
     web3wallet.on('session_proposal', async (proposal) => {
@@ -121,8 +120,8 @@ export const initWalletConnect = createAsyncThunk(
 
     // once the peer actually settles the session, fire a "session_update"
     // we cast to any to avoid the built‑in Event typing, and just re‑pull all sessions
-    (web3wallet as any).on("session_update", () => {
-      console.log("🟢 session_update fired, refreshing active sessions");
+    (web3wallet as any).on('session_update', () => {
+      console.log('🟢 session_update fired, refreshing active sessions');
       dispatch(setActiveSessions(web3wallet.getActiveSessions()));
     });
 
@@ -138,7 +137,7 @@ export const initWalletConnect = createAsyncThunk(
 
 // 2) Approve or Reject a session proposal
 export const approveSessionProposal = createAsyncThunk(
-  "walletconnect/approveSessionProposal",
+  'walletconnect/approveSessionProposal',
   async (_, { getState }) => {
     const state = getState() as RootState;
     const walletKit = state.walletconnect.web3wallet!;
@@ -153,7 +152,9 @@ export const approveSessionProposal = createAsyncThunk(
 
     // strip off the libauth PREFIX (e.g. "bitcoincash:" or "bchtest:")
     const addressPrefix = PREFIX[currentNetwork];
-    const firstAddress = (await KeyService.retrieveKeys(state.wallet_id.currentWalletId!))[0].address;
+    const firstAddress = (
+      await KeyService.retrieveKeys(state.wallet_id.currentWalletId!)
+    )[0].address;
     const account = `${namespace}${firstAddress.slice(addressPrefix.length)}`;
 
     const approvedNamespaces = buildApprovedNamespaces({
@@ -168,7 +169,10 @@ export const approveSessionProposal = createAsyncThunk(
       },
     });
 
-    return walletKit.approveSession({ id: proposal.id, namespaces: approvedNamespaces });
+    return walletKit.approveSession({
+      id: proposal.id,
+      namespaces: approvedNamespaces,
+    });
   }
 );
 
@@ -317,7 +321,9 @@ export const respondWithTxSignature = createAsyncThunk(
     const rawParams = params.request.params as any;
     const request = parseExtendedJson(JSON.stringify(rawParams));
     const txDetails = request.transaction as TransactionCommon;
-    const sourceOutputs = request.sourceOutputs as (Input & Output & ContractInfo)[];
+    const sourceOutputs = request.sourceOutputs as (Input &
+      Output &
+      ContractInfo)[];
     if (!txDetails || !sourceOutputs) {
       throw new Error('Malformed WalletConnect transaction request');
     }
@@ -335,63 +341,56 @@ export const respondWithTxSignature = createAsyncThunk(
     const compiler = walletTemplateToCompilerBCH(template);
 
     // 4. Build a TransactionTemplate and fill in unlocking scripts
-    const txTemplate = { ...txDetails } as TransactionTemplateFixed<typeof compiler>;
-    txTemplate.inputs.forEach(async (input, i) => {
+    const txTemplate = { ...txDetails } as TransactionTemplateFixed<
+      typeof compiler
+    >;
+    for (let i = 0; i < txTemplate.inputs.length; i++) {
+      const input = txTemplate.inputs[i];
       const utxo = sourceOutputs[i];
 
-      // Contract input?
       if (utxo.contract?.artifact?.contractName) {
+        // — same placeholder detection & splice logic you already had —
         let hexUnlock = binToHex(utxo.unlockingBytecode);
-        // signature placeholder = 65 zero‑bytes prefixed by length=0x41
         const sigPlaceholder = '41' + binToHex(new Uint8Array(65).fill(0));
-        // pubkey placeholder = 33 zero‑bytes prefixed by length=0x21
         const pubkeyPlaceholder = '21' + binToHex(new Uint8Array(33).fill(0));
 
-        // ---- insert real signature ----
         if (hexUnlock.includes(sigPlaceholder)) {
-          const hashType = SigningSerializationFlag.allOutputs |
-                           SigningSerializationFlag.utxos |
-                           SigningSerializationFlag.forkId;
+          const hashType =
+            SigningSerializationFlag.allOutputs |
+            SigningSerializationFlag.utxos |
+            SigningSerializationFlag.forkId;
           const context = {
             inputIndex: i,
             sourceOutputs,
             transaction: txDetails,
           } as CompilationContextBCH;
-          const sighashPre = generateSigningSerializationBCH(context, {
+          const preimage = generateSigningSerializationBCH(context, {
             coveredBytecode: utxo.contract.redeemScript!,
             signingSerializationType: new Uint8Array([hashType]),
           });
-          const sighash = hash256(sighashPre);
-          const sig = secp256k1.signMessageHashSchnorr(privKey, sighash);
-          const sigWithType = Uint8Array.from([...sig as Uint8Array, hashType]);
+          const sighash = hash256(preimage);
+          const sig = secp256k1.signMessageHashSchnorr(
+            privKey,
+            sighash
+          ) as Uint8Array;
+          const sigWithType = Uint8Array.from([...sig, hashType]);
           hexUnlock = hexUnlock.replace(
             sigPlaceholder,
             '41' + binToHex(sigWithType)
           );
         }
 
-        // ---- insert real pubkey ----
         if (hexUnlock.includes(pubkeyPlaceholder)) {
-          // 1) derive the compressed pubkey as bytes
-          const maybePubkey = getPublicKeyCompressed(privKey, false);
-          if (typeof maybePubkey === 'string') {
-            // shouldn’t happen, but guard against it
-            throw new Error('Unexpected string from getPublicKeyCompressed');
-          }
-          // now TS knows `maybePubkey` is Uint8Array
-          const pubkeyHex = binToHex(maybePubkey);
-        
-          // 2) replace placeholder
+          const pubkey = getPublicKeyCompressed(privKey, false) as Uint8Array;
           hexUnlock = hexUnlock.replace(
             pubkeyPlaceholder,
-            '21' + pubkeyHex
+            '21' + binToHex(pubkey)
           );
         }
 
         input.unlockingBytecode = hexToBin(hexUnlock);
-
       } else {
-        // Standard P2PKH:
+        // Standard P2PKH
         input.unlockingBytecode = {
           compiler,
           data: { keys: { privateKeys: { key: privKey } } },
@@ -400,7 +399,7 @@ export const respondWithTxSignature = createAsyncThunk(
           token: utxo.token,
         };
       }
-    });
+    }
 
     // 5. Generate & encode
     const generated = generateTransaction(txTemplate);
@@ -498,7 +497,10 @@ const walletconnectSlice = createSlice({
       console.log('[walletconnectSlice] clearPendingSignTx.');
       state.pendingSignTx = null;
     },
-    setActiveSessions: (state, action: PayloadAction<Record<string, SessionTypes.Struct>>) => {
+    setActiveSessions: (
+      state,
+      action: PayloadAction<Record<string, SessionTypes.Struct>>
+    ) => {
       state.activeSessions = action.payload;
     },
   },
@@ -532,9 +534,9 @@ const walletconnectSlice = createSlice({
       console.log('[rejectSessionProposal.fulfilled] => session rejected');
       state.pendingProposal = null;
       // pull in the newly‑approved session:
-  if (state.web3wallet) {
-    state.activeSessions = state.web3wallet.getActiveSessions()
-  }
+      if (state.web3wallet) {
+        state.activeSessions = state.web3wallet.getActiveSessions();
+      }
     });
     builder.addCase(rejectSessionProposal.rejected, (_, action) => {
       console.error('[rejectSessionProposal.rejected]', action.error);

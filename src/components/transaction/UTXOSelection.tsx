@@ -2,8 +2,7 @@
 
 import React from 'react';
 import { UTXO } from '../../types/types';
-import RegularUTXOs from '../RegularUTXOs';
-import CashTokenUTXOs from '../CashTokenUTXOs';
+import UTXOCard from '../UTXOCard';
 import Popup from './Popup';
 
 interface UTXOSelectionProps {
@@ -82,7 +81,7 @@ const UTXOSelection: React.FC<UTXOSelectionProps> = ({
                       : 'bg-white'
                   }`}
                 >
-                  <RegularUTXOs utxos={[utxo]} loading={false} />
+                  <UTXOCard utxos={[utxo]} loading={false} />
                 </button>
               ))}
             </div>
@@ -130,7 +129,7 @@ const UTXOSelection: React.FC<UTXOSelectionProps> = ({
                                 : 'bg-white'
                             }`}
                           >
-                            <CashTokenUTXOs utxos={[utxo]} loading={false} />
+                            <UTXOCard utxos={[utxo]} loading={false} />
                           </button>
                         ))}
                       </div>
@@ -155,7 +154,7 @@ const UTXOSelection: React.FC<UTXOSelectionProps> = ({
                                 : 'bg-white'
                             }`}
                           >
-                            <CashTokenUTXOs utxos={[utxo]} loading={false} />
+                            <UTXOCard utxos={[utxo]} loading={false} />
                           </button>
                         ))}
                       </div>
@@ -198,7 +197,7 @@ const UTXOSelection: React.FC<UTXOSelectionProps> = ({
                       : 'bg-white'
                   }`}
                 >
-                  <RegularUTXOs utxos={[utxo]} loading={false} />
+                  <UTXOCard utxos={[utxo]} loading={false} />
                 </button>
               ))}
             </div>
@@ -233,7 +232,7 @@ const UTXOSelection: React.FC<UTXOSelectionProps> = ({
                       : 'bg-white'
                   }`}
                 >
-                  <RegularUTXOs utxos={[utxo]} loading={false} />
+                  <UTXOCard utxos={[utxo]} loading={false} />
                 </button>
               ))}
             </div>
