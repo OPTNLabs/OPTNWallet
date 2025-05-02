@@ -29,6 +29,7 @@
     "@capacitor/dialog": "^6.0.1",
     "@capacitor/filesystem": "^6.0.3",
     "@capacitor/ios": "^6.1.0",
+    "@capacitor/splash-screen": "^6.0.3",
     "@capacitor/toast": "^6.0.2",
     "@cashscript/utils": "^0.9.3",
     "@electrum-cash/network": "^3.3.0",
@@ -71,6 +72,7 @@
     "vite-plugin-top-level-await": "^1.4.1"
   },
   "devDependencies": {
+    "@capacitor/assets": "^3.0.5",
     "@types/react": "^18.2.66",
     "@types/react-dom": "^18.2.22",
     "@typescript-eslint/eslint-plugin": "^7.2.0",

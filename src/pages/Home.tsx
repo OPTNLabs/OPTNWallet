@@ -14,37 +14,30 @@ import { TailSpin } from 'react-loader-spinner';
 import Popup from '../components/transaction/Popup';
 import DatabaseService from '../apis/DatabaseManager/DatabaseService';
 import BcmrService from '../services/BcmrService';
-// import DAppConnectionTester from '../components/DAppConnectionTester';
-// // import ScanWcQr from '../components/WcConnectionManager';
-// import SessionProposalModal from '../components/SessionProposalModal';
-// import { SignMessageModal } from '../components/walletconnect/SignMessageModal';
-// import { SignTransactionModal } from '../components/walletconnect/SignTransactionModal';
-// import { SessionList } from '../components/walletconnect/SessionList';
-// import WcConnectionManager from '../components/WcConnectionManager';
 
 const batchAmount = 10;
 
-const initialUTXO: Record<string, any[]> = {
-  default: [
-    {
-      wallet_id: 0,
-      address: '',
-      tokenAddress: '',
-      height: 0,
-      tx_hash: '',
-      tx_pos: 0,
-      value: 0,
-      amount: 0,
-      prefix: 'bchtest',
-      token: null,
-      privateKey: new Uint8Array(),
-      contractName: '',
-      abi: [],
-      id: '',
-      unlocker: null,
-    },
-  ],
-};
+// const initialUTXO: Record<string, any[]> = {
+//   default: [
+//     {
+//       wallet_id: 0,
+//       address: '',
+//       tokenAddress: '',
+//       height: 0,
+//       tx_hash: '',
+//       tx_pos: 0,
+//       value: 0,
+//       amount: 0,
+//       prefix: 'bchtest',
+//       token: null,
+//       privateKey: new Uint8Array(),
+//       contractName: '',
+//       abi: [],
+//       id: '',
+//       unlocker: null,
+//     },
+//   ],
+// };
 
 const Home: React.FC = () => {
   const navigate = useNavigate();
@@ -63,7 +56,10 @@ const Home: React.FC = () => {
   const [generatingKeys, setGeneratingKeys] = useState(false);
   const [placeholderUTXOs, setPlaceholderUTXOs] = useState<
     Record<string, any[]>
-  >(Object.keys(reduxUTXOs).length === 0 ? initialUTXO : reduxUTXOs); // Placeholder UTXOs to prevent UI flicker
+  >(Object.keys(reduxUTXOs).length > 0 ? reduxUTXOs : {}); // Placeholder UTXOs to prevent UI flicker
+
+  // const lastUTXOsRef = useRef<Record<string, any[]>>(placeholderUTXOs);
+
   const [placeholderBalance, setPlaceholderBalance] = useState(0); // Placeholder balance for BitcoinCashCard
   const [placeholderTokenTotals, setPlaceholderTokenTotals] = useState<
     Record<string, number>
@@ -160,18 +156,15 @@ const Home: React.FC = () => {
     initialized.current = true;
   }, [currentWalletId, generateKeys, placeholderUTXOs, fetchAndStoreUTXOs]);
 
-  // Automatically start the initialization process if IsInitialized is false
-  useEffect(() => {
-    if (!IsInitialized && !fetchingUTXOsRedux && currentWalletId) {
-      generateKeys().then(fetchAndStoreUTXOs);
-    }
-  }, [
-    IsInitialized,
-    fetchingUTXOsRedux,
-    currentWalletId,
-    generateKeys,
-    fetchAndStoreUTXOs,
-  ]);
+  // Once we have keys (and haven’t initialized yet), fetch UTXOs exactly once
+  // useEffect(() => {
+  //   if (keyPairs.length === 0 || IsInitialized) return;
+  //   fetchAndStoreUTXOs();
+  // }, [
+  //   keyPairs, // rerun when addresses land
+  //   IsInitialized, // stop as soon as we’re initialized
+  //   fetchAndStoreUTXOs,
+  // ]);
 
   // After UTXOs + Redux are initialized, preload _all_ token‐metadata and save once:
   useEffect(() => {
@@ -199,7 +192,7 @@ const Home: React.FC = () => {
 
   // Update placeholders when UTXOs are fetched
   useEffect(() => {
-    if (!fetchingUTXOsRedux) {
+    if (!fetchingUTXOsRedux && Object.keys(reduxUTXOs).length > 0) {
       setPlaceholderUTXOs(reduxUTXOs);
       setPlaceholderBalance(calculateTotalBitcoinCash(reduxUTXOs));
       setPlaceholderTokenTotals(calculateCashTokenTotals(reduxUTXOs));
