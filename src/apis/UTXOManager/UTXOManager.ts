@@ -27,7 +27,7 @@ export default function UTXOManager() {
       if (!db) throw new Error('Database not started.');
 
       const insertQuery = db.prepare(`
-        INSERT INTO UTXOs(wallet_id, address, height, tx_hash, tx_pos, amount, prefix, token_data) 
+        INSERT INTO UTXOs(wallet_id, address, height, tx_hash, tx_pos, amount, prefix, token) 
         VALUES (?, ?, ?, ?, ?, ?, ?, ?);
       `);
 
@@ -46,14 +46,15 @@ export default function UTXOManager() {
             utxo.tx_pos,
             utxo.value,
             utxo.prefix || 'unknown',
-            utxo.token_data ? JSON.stringify(utxo.token_data) : null,
+            // utxo.token ? JSON.stringify(utxo.token) : null,
+            utxo.token ? JSON.stringify(utxo.token) : null,
           ]);
           // console.log(`Stored UTXO: ${JSON.stringify(utxo)}`);
         }
         existsQuery.free();
       }
       insertQuery.free();
-      await dbService.saveDatabaseToFile();
+      // await dbService.saveDatabaseToFile();
     } catch (error) {
       console.error('Error storing UTXOs:', error);
     }
@@ -77,13 +78,16 @@ export default function UTXOManager() {
       const utxos: UTXO[] = [];
       while (query.step()) {
         const result = query.getAsObject();
-        result.token_data =
-          typeof result.token_data === 'string'
-            ? JSON.parse(result.token_data)
-            : null;
+        // console.log(result)
+        result.token =
+          typeof result.token === 'string'
+            ? JSON.parse(result.token)
+            : result.token;
         utxos.push(result as unknown as UTXO);
       }
       query.free();
+
+      // console.log(utxos)
 
       return utxos;
     } catch (error) {
@@ -113,7 +117,7 @@ export default function UTXOManager() {
 
       query.free();
       db.exec('COMMIT;');
-      await dbService.saveDatabaseToFile();
+      // await dbService.saveDatabaseToFile();
     } catch (error) {
       console.error('Error deleting UTXOs:', error);
       if (db) {
@@ -162,9 +166,9 @@ export default function UTXOManager() {
         );
         // console.log(`Fetched UTXOs for ${key.address}:`, addressUTXOs);
 
-        utxosMap[key.address] = addressUTXOs.filter((utxo) => !utxo.token_data);
+        utxosMap[key.address] = addressUTXOs.filter((utxo) => !utxo.token);
         cashTokenUtxosMap[key.address] = addressUTXOs.filter(
-          (utxo) => utxo.token_data
+          (utxo) => utxo.token
         );
       }
 

@@ -20,25 +20,52 @@ export default function TransactionBuilderHelper() {
    * Prepares transaction outputs by formatting them according to CashScript requirements.
    *
    * @param outputs - An array of TransactionOutput objects.
-   * @returns An array of formatted outputs.
+   * @returns An array of formatted outputs for cashscript TransactionBuilder.
    */
   function prepareTransactionOutputs(outputs: TransactionOutput[]): any[] {
     return outputs.map((output) => {
+      // If this is an OP_RETURN variant
+      if ('opReturn' in output && output.opReturn !== undefined) {
+        return {
+          opReturn: output.opReturn,
+        };
+      }
+
+      // Otherwise, this is a "regular" or token output
       const baseOutput = {
         to: output.recipientAddress,
         amount: BigInt(output.amount),
       };
 
+      // If there's a token field
       if (output.token) {
-        return {
-          ...baseOutput,
-          token: {
-            amount: BigInt(output.token.amount),
-            category: output.token.category,
-          },
-        };
+        // If the token has NFT data, we enforce a zero fungible amount
+        if (output.token.nft) {
+          return {
+            ...baseOutput,
+            // Always zero for NFT
+            token: {
+              amount: BigInt(0), // or remove this entirely if desired
+              category: output.token.category,
+              nft: {
+                capability: output.token.nft.capability,
+                commitment: output.token.nft.commitment,
+              },
+            },
+          };
+        } else {
+          // Fungible token only
+          return {
+            ...baseOutput,
+            token: {
+              amount: BigInt(output.token.amount),
+              category: output.token.category,
+            },
+          };
+        }
       }
 
+      // If there's no token, return the base output
       return baseOutput;
     });
   }
@@ -107,7 +134,12 @@ export default function TransactionBuilderHelper() {
           vout: processedUtxo.tx_pos,
           satoshis: BigInt(processedUtxo.value),
           unlocker,
-          token_data: processedUtxo.token_data,
+          token: processedUtxo.token
+            ? {
+                ...processedUtxo.token,
+                amount: BigInt(processedUtxo.token.amount), // convert amount to bigint
+              }
+            : undefined,
         };
       })
     );
@@ -118,6 +150,8 @@ export default function TransactionBuilderHelper() {
     // Prepare and add outputs
     const txOutputs = prepareTransactionOutputs(outputs);
     txBuilder.addOutputs(txOutputs);
+
+    // console.log(txBuilder);
 
     try {
       const builtTransaction = await txBuilder.build(); // Ensure await is present

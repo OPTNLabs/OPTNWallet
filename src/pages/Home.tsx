@@ -1,4 +1,3 @@
-// @ts-nocheck
 // src/pages/Home.tsx
 
 import React, { useState, useEffect, useCallback, useRef } from 'react';
@@ -13,30 +12,32 @@ import { setUTXOs, setFetchingUTXOs, setInitialized } from '../redux/utxoSlice';
 import PriceFeed from '../components/PriceFeed';
 import { TailSpin } from 'react-loader-spinner';
 import Popup from '../components/transaction/Popup';
+import DatabaseService from '../apis/DatabaseManager/DatabaseService';
+import BcmrService from '../services/BcmrService';
 
 const batchAmount = 10;
 
-const initialUTXO: Record<string, any[]> = {
-  default: [
-    {
-      wallet_id: 0,
-      address: '',
-      tokenAddress: '',
-      height: 0,
-      tx_hash: '',
-      tx_pos: 0,
-      value: 0,
-      amount: 0,
-      prefix: 'bchtest',
-      token_data: null,
-      privateKey: new Uint8Array(),
-      contractName: '',
-      abi: [],
-      id: '',
-      unlocker: null,
-    },
-  ],
-};
+// const initialUTXO: Record<string, any[]> = {
+//   default: [
+//     {
+//       wallet_id: 0,
+//       address: '',
+//       tokenAddress: '',
+//       height: 0,
+//       tx_hash: '',
+//       tx_pos: 0,
+//       value: 0,
+//       amount: 0,
+//       prefix: 'bchtest',
+//       token: null,
+//       privateKey: new Uint8Array(),
+//       contractName: '',
+//       abi: [],
+//       id: '',
+//       unlocker: null,
+//     },
+//   ],
+// };
 
 const Home: React.FC = () => {
   const navigate = useNavigate();
@@ -55,12 +56,16 @@ const Home: React.FC = () => {
   const [generatingKeys, setGeneratingKeys] = useState(false);
   const [placeholderUTXOs, setPlaceholderUTXOs] = useState<
     Record<string, any[]>
-  >(Object.keys(reduxUTXOs).length === 0 ? initialUTXO : reduxUTXOs); // Placeholder UTXOs to prevent UI flicker
+  >(Object.keys(reduxUTXOs).length > 0 ? reduxUTXOs : {}); // Placeholder UTXOs to prevent UI flicker
+
+  // const lastUTXOsRef = useRef<Record<string, any[]>>(placeholderUTXOs);
+
   const [placeholderBalance, setPlaceholderBalance] = useState(0); // Placeholder balance for BitcoinCashCard
   const [placeholderTokenTotals, setPlaceholderTokenTotals] = useState<
     Record<string, number>
   >({}); // Placeholder token totals for CashTokenCard
   const [showCashTokenPopup, setShowCashTokenPopup] = useState(false); // Local state for CashToken Popup
+  const [metadataPreloaded, setMetadataPreloaded] = useState(false);
 
   const initialized = useRef(false);
 
@@ -122,6 +127,7 @@ const Home: React.FC = () => {
 
       // Update Redux store in a single batch after fetching all UTXOs
       dispatch(setUTXOs({ newUTXOs: allUTXOs }));
+      await DatabaseService().saveDatabaseToFile();
 
       // Set initialized to true after first successful fetch
       dispatch(setInitialized(true));
@@ -150,22 +156,43 @@ const Home: React.FC = () => {
     initialized.current = true;
   }, [currentWalletId, generateKeys, placeholderUTXOs, fetchAndStoreUTXOs]);
 
-  // Automatically start the initialization process if IsInitialized is false
+  // Once we have keys (and haven’t initialized yet), fetch UTXOs exactly once
+  // useEffect(() => {
+  //   if (keyPairs.length === 0 || IsInitialized) return;
+  //   fetchAndStoreUTXOs();
+  // }, [
+  //   keyPairs, // rerun when addresses land
+  //   IsInitialized, // stop as soon as we’re initialized
+  //   fetchAndStoreUTXOs,
+  // ]);
+
+  // After UTXOs + Redux are initialized, preload _all_ token‐metadata and save once:
   useEffect(() => {
-    if (!IsInitialized && !fetchingUTXOsRedux && currentWalletId) {
-      generateKeys().then(fetchAndStoreUTXOs);
+    if (!IsInitialized) return;
+    (async () => {
+      // preload BCMR for every category you've discovered
+      const bcmr = new BcmrService();
+      const categories = Object.keys(placeholderTokenTotals);
+      await Promise.all(
+        categories.map(async (category) => {
+          const authbase = await bcmr.getCategoryAuthbase(category);
+          await bcmr.resolveIdentityRegistry(authbase);
+        })
+      );
+      setMetadataPreloaded(true);
+    })();
+  }, [IsInitialized, placeholderTokenTotals]);
+
+  // Do one disk write when both UTXOs and metadata are done
+  useEffect(() => {
+    if (IsInitialized && metadataPreloaded) {
+      DatabaseService().saveDatabaseToFile();
     }
-  }, [
-    IsInitialized,
-    fetchingUTXOsRedux,
-    currentWalletId,
-    generateKeys,
-    fetchAndStoreUTXOs,
-  ]);
+  }, [IsInitialized, metadataPreloaded]);
 
   // Update placeholders when UTXOs are fetched
   useEffect(() => {
-    if (!fetchingUTXOsRedux) {
+    if (!fetchingUTXOsRedux && Object.keys(reduxUTXOs).length > 0) {
       setPlaceholderUTXOs(reduxUTXOs);
       setPlaceholderBalance(calculateTotalBitcoinCash(reduxUTXOs));
       setPlaceholderTokenTotals(calculateCashTokenTotals(reduxUTXOs));
@@ -196,16 +223,17 @@ const Home: React.FC = () => {
   const calculateTotalBitcoinCash = (utxos: Record<string, any[]>) =>
     Object.values(utxos)
       .flat()
-      .filter((utxo) => !utxo.token_data)
+      .filter((utxo) => !utxo.token)
       .reduce((acc, utxo) => acc + utxo.amount, 0);
 
   // Function to calculate Cash Token Totals
   const calculateCashTokenTotals = (utxos: Record<string, any[]>) => {
     const tokenTotals: Record<string, number> = {};
+    // console.log(utxos)
     Object.values(utxos)
       .flat()
       .forEach((utxo) => {
-        const { category, amount } = utxo.token_data || {};
+        const { category, amount } = utxo.token || {};
         if (category) {
           tokenTotals[category] =
             (tokenTotals[category] || 0) + parseFloat(amount);
@@ -216,11 +244,11 @@ const Home: React.FC = () => {
 
   // Sorting and Grouping Placeholder Token Totals
   const fungibleTokens = Object.entries(placeholderTokenTotals)
-    .filter(([category, amount]) => amount > 0)
+    .filter(([, amount]) => amount > 0)
     .sort((a, b) => b[1] - a[1]); // Sort descending by amount
 
   const nonFungibleTokens = Object.entries(placeholderTokenTotals)
-    .filter(([category, amount]) => amount <= 0)
+    .filter(([, amount]) => amount <= 0)
     .sort((a, b) => b[1] - a[1]); // Sort descending by amount
 
   return (
@@ -237,6 +265,15 @@ const Home: React.FC = () => {
         />
       </div>
 
+      {/* Render WalletConnect Manager */}
+      {/* Render modals if there are any pending requests */}
+      {/* <SessionProposalModal />
+      <SignMessageModal />
+      <SignTransactionModal />
+      {/* <SessionList /> */}
+      {/* <WcConnectionManager /> */}
+      {/* End of Testing Walletconnect */}
+
       {/* Action Buttons */}
       <div className="flex flex-col items-center space-y-4">
         {/* Navigate to Contracts Page */}
@@ -245,6 +282,14 @@ const Home: React.FC = () => {
           onClick={() => navigate('/contract')}
         >
           Contracts
+        </button>
+
+        {/* Navigate to Apps Page */}
+        <button
+          className="mt-4 p-2 bg-green-500 font-bold text-white rounded hover:bg-green-600 transition duration-300 w-full max-w-md"
+          onClick={() => navigate('/apps')}
+        >
+          Apps
         </button>
 
         {/* Fetch UTXOs Button */}

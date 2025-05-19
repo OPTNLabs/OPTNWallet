@@ -4,6 +4,7 @@ import { UTXO } from '../types/types';
 import { Network } from '../redux/networkSlice';
 import { store } from '../redux/store';
 import { removeUTXOs, setUTXOs } from '../redux/utxoSlice';
+// import DatabaseService from '../apis/DatabaseManager/DatabaseService';
 
 const state = store.getState();
 const prefix =
@@ -27,7 +28,7 @@ const UTXOService = {
         address,
         height: utxo.height,
         prefix,
-        token_data: utxo.token_data || null,
+        token: utxo.token,
         wallet_id: walletId,
       }));
 
@@ -58,11 +59,13 @@ const UTXOService = {
 
       // Store new UTXOs
       await manager.storeUTXOs(formattedUTXOs);
+      // await DatabaseService().saveDatabaseToFile();
 
       // Update Redux store with the new UTXOs
       const updatedUTXOs = await manager.fetchUTXOsByAddress(walletId, address);
       store.dispatch(setUTXOs({ newUTXOs: { [address]: updatedUTXOs } }));
 
+      // console.log("updated UTXOs", updatedUTXOs)
       return updatedUTXOs;
     } catch (error) {
       console.error(`Error in fetchAndStoreUTXOs for ${address}:`, error);

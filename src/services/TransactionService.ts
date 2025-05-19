@@ -1,7 +1,7 @@
 // src/services/TransactionService.ts
 
 import DatabaseService from '../apis/DatabaseManager/DatabaseService';
-import { TransactionOutput, UTXO } from '../types/types';
+import { Token, TransactionOutput, UTXO } from '../types/types';
 import ContractManager from '../apis/ContractManager/ContractManager';
 import TransactionManager from '../apis/TransactionManager/TransactionManager';
 import KeyService from '../services/KeyService';
@@ -78,9 +78,7 @@ class TransactionService {
         typeof row.tx_pos === 'number' ? row.tx_pos : Number(row.tx_pos);
       const height =
         typeof row.height === 'number' ? row.height : Number(row.height);
-      const tokenData = row.token_data
-        ? JSON.parse(String(row.token_data))
-        : undefined;
+      const tokenData = row.token ? JSON.parse(String(row.token)) as Token : undefined;
       const contractFunction =
         typeof row.contractFunction === 'string' &&
         row.contractFunction.length > 0
@@ -109,7 +107,7 @@ class TransactionService {
           tx_pos: txPos,
           height: height,
           privateKey: privateKey,
-          token_data: tokenData,
+          token: tokenData,
           value: amount,
           // **Assign New Fields**
           contractFunction,
@@ -178,7 +176,9 @@ class TransactionService {
     tokenAmount: number,
     selectedTokenCategory: string,
     selectedUtxos: UTXO[],
-    addresses: { address: string; tokenAddress: string }[]
+    addresses: { address: string; tokenAddress: string }[],
+    nftCapability?: 'none' | 'mutable' | 'minting',
+    nftCommitment?: string
   ): TransactionOutput | undefined {
     // console.log(
     //   'TransactionService: Adding output with recipient:',
@@ -198,7 +198,9 @@ class TransactionService {
       tokenAmount,
       selectedTokenCategory,
       selectedUtxos,
-      addresses
+      addresses,
+      nftCapability,
+      nftCommitment
     );
   }
 

@@ -24,6 +24,12 @@ export const createTables = (db: any) => {
   // db.run(`
   //   DROP TABLE IF EXISTS instantiated_contracts;
   // `);
+  // db.run(`
+  //   DROP TABLE IF EXISTS bcmr;
+  // `);
+  // db.run(`
+  //   DROP TABLE IF EXISTS bcmr_tokens;
+  // `);
 
   db.run(`
     CREATE TABLE IF NOT EXISTS wallets (
@@ -77,7 +83,7 @@ export const createTables = (db: any) => {
       tx_pos INT NOT NULL,
       amount INT NOT NULL,
       prefix VARCHAR(255) NOT NULL,
-      token_data TEXT,
+      token TEXT,
       contractFunction TEXT, -- New Field
       contractFunctionInputs TEXT, -- New Field
       FOREIGN KEY(wallet_id) REFERENCES wallets(id),
@@ -146,4 +152,24 @@ export const createTables = (db: any) => {
       unlock TEXT
     );
   `);
+
+  // BCMR: “on‑chain metadata registry” cache
+  db.run(`
+      CREATE TABLE IF NOT EXISTS bcmr (
+        authbase        TEXT PRIMARY KEY,        -- 32‑byte hex TXID
+        registryUri     TEXT NOT NULL,           -- the URI we fetched from OP_RETURN or DNS
+        lastFetch       TEXT NOT NULL,           -- ISO timestamp of when we last refreshed
+        registryHash    TEXT NOT NULL,            -- sha256 of the JSON we imported
+        registryData    TEXT NOT NULL            -- the raw JSON we fetched
+      );
+    `);
+
+  // map each token “category” to its authbase
+  db.run(`
+      CREATE TABLE IF NOT EXISTS bcmr_tokens (
+        category        TEXT PRIMARY KEY,        -- cashtoken category hex
+        authbase        TEXT NOT NULL,           -- points into bcmr.authbase
+        FOREIGN KEY(authbase) REFERENCES bcmr(authbase)
+      );
+    `);
 };

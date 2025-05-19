@@ -21,7 +21,6 @@ import escrowMS2Artifact from './artifacts/escrowMS2.json';
 
 export default function ContractManager() {
   const dbService = DatabaseService();
-  const state = store.getState();
 
   // Cache artifacts in memory to avoid redundant loading
   const artifactCache: { [key: string]: any } = {
@@ -156,9 +155,9 @@ export default function ContractManager() {
         tx_pos: utxo.tx_pos,
         amount: BigInt(utxo.value),
         height: utxo.height,
-        token: utxo.token_data || undefined,
+        token: utxo.token || undefined,
         prefix,
-        // **Add New Fields**
+        // **Add New Fields** - TODO : implement inpur parsing
         contractFunction: utxo.contractFunction || undefined,
         contractFunctionInputs: utxo.contractFunctionInputs
           ? JSON.stringify(utxo.contractFunctionInputs)
@@ -183,6 +182,8 @@ export default function ContractManager() {
         // Save constructor arguments to the database
         await saveConstructorArgs(contract.address, constructorArgs, balance);
       }
+
+      await dbService.saveDatabaseToFile();
 
       return {
         address: contract.address,
@@ -234,7 +235,7 @@ export default function ContractManager() {
     const statement = db.prepare(insertQuery);
     statement.run(params);
     statement.free();
-    await dbService.saveDatabaseToFile();
+    // await dbService.saveDatabaseToFile();
   }
 
   async function saveContractInstance(
@@ -289,7 +290,7 @@ export default function ContractManager() {
     const statement = db.prepare(insertQuery);
     statement.run(params);
     statement.free();
-    await dbService.saveDatabaseToFile();
+    // await dbService.saveDatabaseToFile();
 
     // **Add Logging After Saving**
     // console.log('Contract instance saved successfully.');
@@ -402,7 +403,7 @@ export default function ContractManager() {
       const statement = db.prepare(insertQuery);
       statement.run(params);
       statement.free();
-      await dbService.saveDatabaseToFile();
+      // await dbService.saveDatabaseToFile();
     } catch (error) {
       console.error('Error saving contract artifact:', error);
       throw error;
@@ -447,18 +448,20 @@ export default function ContractManager() {
   }
 
   async function updateContractUTXOs(address: string) {
+    const state = store.getState();
+
     try {
       const currentNetwork = state.network.currentNetwork;
       const prefix =
         currentNetwork === Network.MAINNET ? 'bitcoincash' : 'bchtest';
 
-      const utxos = await ElectrumService.getUTXOS(address);
-      const formattedUTXOs = utxos.map((utxo: any) => ({
+      const utxos: UTXO[] = await ElectrumService.getUTXOS(address);
+      const formattedUTXOs = utxos.map((utxo: UTXO) => ({
         tx_hash: utxo.tx_hash,
         tx_pos: utxo.tx_pos,
         amount: BigInt(utxo.value),
         height: utxo.height,
-        token: utxo.token_data || undefined,
+        token: utxo.token || undefined,
         prefix,
         contractFunction: utxo.contractFunction || null, // New Field
         contractFunctionInputs: utxo.contractFunctionInputs
@@ -488,7 +491,10 @@ export default function ContractManager() {
       }
 
       const constructorArgs = await fetchConstructorArgs(address);
-      if (!constructorArgs || constructorArgs.length === 0) {
+      if (
+        artifact.constructorInputs > 0 &&
+        (!constructorArgs || constructorArgs.length === 0)
+      ) {
         throw new Error(
           `Constructor arguments not found for contract at address: ${address}`
         );
@@ -539,7 +545,7 @@ export default function ContractManager() {
       try {
         // Batch insert new UTXOs
         const insertUTXOQuery = `
-          INSERT INTO UTXOs (address, height, tx_hash, tx_pos, amount, token_data, prefix, contractFunction, contractFunctionInputs) 
+          INSERT INTO UTXOs (address, height, tx_hash, tx_pos, amount, token, prefix, contractFunction, contractFunctionInputs) 
           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
         `;
         const insertStmt = db.prepare(insertUTXOQuery);
@@ -605,7 +611,7 @@ export default function ContractManager() {
         throw transError;
       }
 
-      await dbService.saveDatabaseToFile();
+      // await dbService.saveDatabaseToFile();
       return { added: newUTXOs.length, removed: staleUTXOs.length };
     } catch (error) {
       console.error('Error updating UTXOs and balance:', error);
@@ -619,6 +625,8 @@ export default function ContractManager() {
     contractFunction: string,
     contractFunctionInputs: { [key: string]: any }
   ) {
+    const state = store.getState();
+
     // Log the contract function inputs before processing
     // console.log('Processing UTXO for unlock function:', utxo);
     // console.log('Contract Function:', contractFunction);

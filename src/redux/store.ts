@@ -8,6 +8,7 @@ import walletReducer from './walletSlice';
 import utxoReducer from './utxoSlice';
 import transactionReducer from './transactionSlice';
 import priceFeedReducer from './priceFeedSlice';
+import walletconnectReducer from './walletconnectSlice';
 import { persistStore, persistReducer } from 'redux-persist';
 import storage from 'redux-persist/lib/storage'; // defaults to localStorage for web
 
@@ -21,6 +22,7 @@ const persistConfig = {
     'transations',
     'utxos',
     'wallet_id',
+    // 'walletconnect'
   ],
 };
 
@@ -32,6 +34,7 @@ const rootReducer = combineReducers({
   network: networkReducer,
   transactionBuilder: transactionBuilderReducer,
   priceFeed: priceFeedReducer,
+  walletconnect: walletconnectReducer,
 });
 
 const persistedReducer = persistReducer(persistConfig, rootReducer);

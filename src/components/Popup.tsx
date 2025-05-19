@@ -1,8 +1,7 @@
 import React, { useState } from 'react';
 import { useSelector } from 'react-redux';
 import { RootState } from '../redux/store';
-import RegularUTXOs from '../components/RegularUTXOs';
-import CashTokenUTXOs from '../components/CashTokenUTXOs';
+import UTXOCard from '../components/UTXOCard';
 import { selectCurrentNetwork } from '../redux/selectors/networkSelectors';
 import { PREFIX } from '../utils/constants';
 import { shortenTxHash } from '../utils/shortenHash';
@@ -144,21 +143,21 @@ const Popup: React.FC<PopupProps> = ({
               selectedUTXOType === UTXOType.CASH_TOKEN) && (
               <div className="max-h-36 overflow-y-auto p-4 mb-4 bg-white rounded-lg shadow-md">
                 {selectedUTXOType === UTXOType.REGULAR && (
-                  <RegularUTXOs
+                  <UTXOCard
                     utxos={
                       reduxUTXOs[
                         keyPairs[selectedKeyPairIndex].address
-                      ]?.filter((utxo) => !utxo.token_data) || []
+                      ]?.filter((utxo) => !utxo.token) || []
                     }
                     loading={loading[keyPairs[selectedKeyPairIndex].address]}
                   />
                 )}
                 {selectedUTXOType === UTXOType.CASH_TOKEN && (
-                  <CashTokenUTXOs
+                  <UTXOCard
                     utxos={
                       reduxUTXOs[
                         keyPairs[selectedKeyPairIndex].address
-                      ]?.filter((utxo) => utxo.token_data) || []
+                      ]?.filter((utxo) => utxo.token) || []
                     }
                     loading={loading[keyPairs[selectedKeyPairIndex].address]}
                   />
