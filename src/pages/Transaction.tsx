@@ -1,6 +1,6 @@
 // src/pages/Transaction.tsx
 
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 // import { useNavigate } from 'react-router-dom';
 import { useDispatch, useSelector } from 'react-redux';
 import { UTXO } from '../types/types';
@@ -387,22 +387,48 @@ const Transaction: React.FC = () => {
   /**
    * Filters UTXOs based on selected addresses and contract addresses.
    */
-  const filteredContractUTXOs = contractUTXOs.filter((utxo) =>
-    selectedContractAddresses.includes(utxo.address)
+  // const filteredContractUTXOs = contractUTXOs.filter((utxo) =>
+  //   selectedContractAddresses.includes(utxo.address)
+  // );
+
+  // const filteredRegularUTXOs = utxos.filter(
+  //   (utxo) => selectedAddresses.includes(utxo.address) && !utxo.token
+  // );
+
+  // const filteredCashTokenUTXOs = utxos.filter(
+  //   (utxo) => selectedAddresses.includes(utxo.address) && utxo.token
+  // );
+
+  // // Calculate the total amount from selected UTXOs
+  // const totalSelectedUtxoAmount = selectedUtxos.reduce(
+  //   (sum, utxo) => sum + BigInt(utxo.amount ? utxo.amount : utxo.value),
+  //   BigInt(0)
+  // );
+
+  const filteredRegularUTXOs = useMemo(
+    () =>
+      utxos.filter((u) => selectedAddresses.includes(u.address) && !u.token),
+    [utxos, selectedAddresses]
   );
 
-  const filteredRegularUTXOs = utxos.filter(
-    (utxo) => selectedAddresses.includes(utxo.address) && !utxo.token
+  const filteredCashTokenUTXOs = useMemo(
+    () =>
+      utxos.filter((u) => selectedAddresses.includes(u.address) && !!u.token),
+    [utxos, selectedAddresses]
   );
 
-  const filteredCashTokenUTXOs = utxos.filter(
-    (utxo) => selectedAddresses.includes(utxo.address) && utxo.token
+  const filteredContractUTXOs = useMemo(
+    () => contractUTXOs.filter((u) => selectedAddresses.includes(u.address)),
+    [contractUTXOs, selectedAddresses]
   );
 
-  // Calculate the total amount from selected UTXOs
-  const totalSelectedUtxoAmount = selectedUtxos.reduce(
-    (sum, utxo) => sum + BigInt(utxo.amount ? utxo.amount : utxo.value),
-    BigInt(0)
+  const totalSelectedUtxoAmount = useMemo(
+    () =>
+      selectedUtxos.reduce(
+        (sum, u) => sum + BigInt(u.amount || u.value),
+        BigInt(0)
+      ),
+    [selectedUtxos]
   );
 
   return (
