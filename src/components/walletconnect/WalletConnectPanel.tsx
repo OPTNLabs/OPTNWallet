@@ -55,8 +55,8 @@ export default function WalletConnectPanel() {
       )}
 
       {/* Signing request modals */}
-      <SignMessageModal />
-      <SignTransactionModal />
+      {/* <SignMessageModal /> */}
+      {/* <SignTransactionModal /> */}
     </div>
   );
 }
