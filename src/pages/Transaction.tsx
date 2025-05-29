@@ -305,13 +305,6 @@ const Transaction: React.FC = () => {
   };
 
   /**
-   * Navigates back to the home page.
-   */
-  // const returnHome = async () => {
-  //   navigate(`/home/${walletId}`);
-  // };
-
-  /**
    * Closes all popups and clears error messages.
    */
   const closePopups = () => {
@@ -383,27 +376,6 @@ const Transaction: React.FC = () => {
     // Close the popup
     setShowPopup(false);
   };
-
-  /**
-   * Filters UTXOs based on selected addresses and contract addresses.
-   */
-  // const filteredContractUTXOs = contractUTXOs.filter((utxo) =>
-  //   selectedContractAddresses.includes(utxo.address)
-  // );
-
-  // const filteredRegularUTXOs = utxos.filter(
-  //   (utxo) => selectedAddresses.includes(utxo.address) && !utxo.token
-  // );
-
-  // const filteredCashTokenUTXOs = utxos.filter(
-  //   (utxo) => selectedAddresses.includes(utxo.address) && utxo.token
-  // );
-
-  // // Calculate the total amount from selected UTXOs
-  // const totalSelectedUtxoAmount = selectedUtxos.reduce(
-  //   (sum, utxo) => sum + BigInt(utxo.amount ? utxo.amount : utxo.value),
-  //   BigInt(0)
-  // );
 
   const filteredRegularUTXOs = useMemo(
     () =>

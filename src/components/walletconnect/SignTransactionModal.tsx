@@ -9,48 +9,6 @@ import {
 } from '../../redux/walletconnectSlice';
 import { binToHex, lockingBytecodeToCashAddress } from '@bitauth/libauth';
 
-function parseOpReturnChunks(bytecode: Uint8Array): string[] {
-  const chunks: string[] = ['OP_RETURN'];
-  let i = 1;
-
-  while (i < bytecode.length) {
-    const op = bytecode[i++];
-    if (op === 0x00) {
-      chunks.push('OP_0');
-    } else if (op >= 0x01 && op <= 0x4b) {
-      const len = op;
-      const data = bytecode.slice(i, i + len);
-      chunks.push(binToHex(data));
-      i += len;
-    } else if (op === 0x4c) {
-      const len = bytecode[i++];
-      const data = bytecode.slice(i, i + len);
-      chunks.push(binToHex(data));
-      i += len;
-    } else if (op === 0x4d) {
-      const len = bytecode[i] + (bytecode[i + 1] << 8);
-      i += 2;
-      const data = bytecode.slice(i, i + len);
-      chunks.push(binToHex(data));
-      i += len;
-    } else if (op === 0x4e) {
-      const len =
-        bytecode[i] +
-        (bytecode[i + 1] << 8) +
-        (bytecode[i + 2] << 16) +
-        (bytecode[i + 3] << 24);
-      i += 4;
-      const data = bytecode.slice(i, i + len);
-      chunks.push(binToHex(data));
-      i += len;
-    } else {
-      chunks.push(`OP_${op.toString(16).padStart(2, '0')}`);
-    }
-  }
-
-  return chunks;
-}
-
 export function SignTransactionModal() {
   const dispatch = useDispatch<AppDispatch>();
   const signTxRequest = useSelector(

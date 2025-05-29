@@ -18,6 +18,7 @@ import { ipfsFetch } from '../utils/ipfs';
 import DatabaseService from '../apis/DatabaseManager/DatabaseService';
 import { sha256 } from '../utils/hash';
 import { DateTime } from 'luxon';
+import { Database } from 'sql.js';
 
 const ICON_CACHE = new Map<string, string | null>();
 
@@ -72,13 +73,23 @@ export default class BcmrService {
   private inMemoryRegistries = new Map<string, IdentityRegistry>();
 
   public async getCategoryAuthbase(category: string): Promise<string> {
-    const res = this.db.exec(
-      'SELECT authbase FROM bcmr_tokens WHERE category = ?',
-      [category]
-    );
+    const db = await this.getDb();
+    const res = db.exec('SELECT authbase FROM bcmr_tokens WHERE category = ?', [
+      category,
+    ]);
     if (res.length === 0 || res[0].values.length === 0) return category;
     const cols = res[0].columns;
     return res[0].values[0][cols.indexOf('authbase')] as string;
+  }
+
+  private async getDb(): Promise<Database> {
+    if (!this.db) {
+      await DatabaseService().ensureDatabaseStarted();
+      const db = DatabaseService().getDatabase();
+      if (!db) throw new Error('Database failed to initialize');
+      this.db = db;
+    }
+    return this.db;
   }
 
   private getDefaultRegistryUri(authbase: string): string {
@@ -375,7 +386,7 @@ export default class BcmrService {
     uri: string
   ): Promise<IdentityRegistry> {
     const resp = await ipfsFetch(uri);
-    if (!resp.ok) throw new Error(`Fetch failed: ${resp.status}`);
+    // if (!resp.ok) throw new Error(`Fetch failed: ${resp.status}`);
     const data = await resp.json();
     const imported = importMetadataRegistry(data);
     if (typeof imported === 'string') throw new Error(imported);
