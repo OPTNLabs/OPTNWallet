@@ -367,6 +367,22 @@ const OutputSelection: React.FC<OutputSelectionProps> = ({
                   Send Regular Transaction
                 </button> */}
 
+                {/* Create OP_RETURN */}
+                <button
+                  onClick={() => {
+                    resetFormValues();
+                    setShowOpReturn(true);
+                    setPopupTitle('Create OP_RETURN Output');
+                  }}
+                  className={`font-bold py-1 px-2 rounded ${
+                    showOpReturn
+                      ? 'bg-yellow-400 text-white'
+                      : 'bg-yellow-200 text-gray-800'
+                  } hover:bg-yellow-500`}
+                >
+                  Create OP_RETURN
+                </button>
+
                 {hasGenesisUtxoSelected && (
                   <>
                     {/* Create CashToken */}
@@ -746,7 +762,64 @@ const OutputSelection: React.FC<OutputSelectionProps> = ({
               )}
 
               {/* OP_RETURN if needed */}
-              {showOpReturn && <>{/* user’s OP_RETURN inputs */}</>}
+              {showOpReturn && (
+                <>
+                  <label className="block font-medium mb-1">
+                    OP_RETURN Data
+                  </label>
+                  <textarea
+                    value={opReturnText}
+                    onChange={(e) => setOpReturnText(e.target.value)}
+                    placeholder="Enter space-separated ASCII words"
+                    className="border p-2 w-full break-words whitespace-normal h-32"
+                  />
+                  <div className="flex justify-end mt-4">
+                    <button
+                      onClick={async () => {
+                        try {
+                          if (opReturnArray.length === 0) {
+                            await Toast.show({
+                              text: 'OP_RETURN data cannot be empty.',
+                            });
+                            return;
+                          }
+
+                          const encoder = new TextEncoder();
+                          const chunks: number[] = [];
+
+                          for (const word of opReturnArray) {
+                            const bytes = Array.from(encoder.encode(word));
+                            chunks.push(bytes.length, ...bytes);
+                          }
+
+                          const bytecode = Uint8Array.from([0x6a, ...chunks]);
+
+                          const opReturnOutput = {
+                            recipientAddress: 'OP_RETURN',
+                            amount: 0,
+                            token: null,
+                            lockingBytecode: bytecode,
+                          };
+
+                          dispatch({
+                            type: 'transactionBuilder/addOutput',
+                            payload: opReturnOutput,
+                          });
+                          setShowAddOutputPopup(false);
+                        } catch (err) {
+                          console.error('Error adding OP_RETURN output:', err);
+                          await Toast.show({
+                            text: 'Failed to add OP_RETURN output.',
+                          });
+                        }
+                      }}
+                      className="bg-yellow-500 font-bold text-white py-2 px-4 rounded"
+                    >
+                      Add OP_RETURN Output
+                    </button>
+                  </div>
+                </>
+              )}
             </div>
           </Popup>
         )}

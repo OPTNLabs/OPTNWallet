@@ -7,8 +7,8 @@ import WcConnectionManager from '../WcConnectionManager';
 import SessionProposalModal from './SessionProposalModal';
 import { SessionList } from './SessionList';
 import SessionSettingsModal from './SessionSettingsModal';
-import { SignMessageModal } from './SignMessageModal';
-import { SignTransactionModal } from './SignTransactionModal';
+// import { SignMessageModal } from './SignMessageModal';
+// import { SignTransactionModal } from './SignTransactionModal';
 import { disconnectSession } from '../../redux/walletconnectSlice';
 
 export default function WalletConnectPanel() {
