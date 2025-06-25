@@ -78,6 +78,7 @@ export const createTables = (db: any) => {
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       wallet_id INT,
       address VARCHAR(255) NOT NULL,
+      token_address VARCHAR(255),
       height INT NOT NULL,
       tx_hash TEXT NOT NULL,
       tx_pos INT NOT NULL,

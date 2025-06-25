@@ -39,30 +39,21 @@ export default function TransactionBuilderHelper() {
 
       // If there's a token field
       if (output.token) {
-        // If the token has NFT data, we enforce a zero fungible amount
-        if (output.token.nft) {
-          return {
-            ...baseOutput,
-            // Always zero for NFT
-            token: {
-              amount: BigInt(0), // or remove this entirely if desired
-              category: output.token.category,
+        return {
+          ...baseOutput,
+          token: {
+            category: output.token.category,
+            ...(output.token.nft && {
               nft: {
                 capability: output.token.nft.capability,
                 commitment: output.token.nft.commitment,
               },
-            },
-          };
-        } else {
-          // Fungible token only
-          return {
-            ...baseOutput,
-            token: {
+            }),
+            ...(output.token.amount && {
               amount: BigInt(output.token.amount),
-              category: output.token.category,
-            },
-          };
-        }
+            }),
+          },
+        };
       }
 
       // If there's no token, return the base output
