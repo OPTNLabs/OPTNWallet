@@ -28,7 +28,7 @@ function isStringResponse(response: RequestResponse): response is string {
 }
 
 const ElectrumService = {
-  async getUTXOS(address: string): Promise<UTXO[]> {
+  async getUTXOs(address: string): Promise<UTXO[]> {
     const server = ElectrumServer();
     try {
       const UTXOs: RequestResponse = await server.request(
