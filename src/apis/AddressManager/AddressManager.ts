@@ -31,7 +31,46 @@ export default function AddressManager() {
     }
   }
 
+  async function fetchTokenAddress(
+    wallet_id: number,
+    address: string
+  ): Promise<string | null> {
+    try {
+      await dbService.ensureDatabaseStarted();
+      const db = dbService.getDatabase();
+      if (db == null) {
+        throw new Error('Database is null');
+      }
+
+      const fetchTokenAddressQuery = db.prepare(`
+        SELECT token_address 
+        FROM keys 
+        WHERE wallet_id = ? AND address = ?;
+      `);
+
+      const result = fetchTokenAddressQuery.getAsObject([
+        wallet_id,
+        address,
+      ]) as { token_address: string | null };
+
+      fetchTokenAddressQuery.free();
+
+      if (result && result.token_address) {
+        return result.token_address;
+      } else {
+        console.warn(
+          `No token_address found for wallet_id: ${wallet_id}, address: ${address}`
+        );
+        return null;
+      }
+    } catch (error) {
+      console.error('Failed to fetch token_address:', error);
+      return null;
+    }
+  }
+
   return {
     registerAddress,
+    fetchTokenAddress,
   };
 }
