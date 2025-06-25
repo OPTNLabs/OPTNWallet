@@ -27,8 +27,8 @@ export default function UTXOManager() {
       if (!db) throw new Error('Database not started.');
 
       const insertQuery = db.prepare(`
-        INSERT INTO UTXOs(wallet_id, address, height, tx_hash, tx_pos, amount, prefix, token) 
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?);
+        INSERT INTO UTXOs(wallet_id, address, token_address, height, tx_hash, tx_pos, amount, prefix, token) 
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?);
       `);
 
       for (const utxo of utxos) {
@@ -41,20 +41,18 @@ export default function UTXOManager() {
           insertQuery.run([
             utxo.wallet_id,
             utxo.address,
+            utxo.tokenAddress || null, // Store tokenAddress
             utxo.height || 0,
             utxo.tx_hash,
             utxo.tx_pos,
             utxo.value,
             utxo.prefix || 'unknown',
-            // utxo.token ? JSON.stringify(utxo.token) : null,
             utxo.token ? JSON.stringify(utxo.token) : null,
           ]);
-          // console.log(`Stored UTXO: ${JSON.stringify(utxo)}`);
         }
         existsQuery.free();
       }
       insertQuery.free();
-      // await dbService.saveDatabaseToFile();
     } catch (error) {
       console.error('Error storing UTXOs:', error);
     }
@@ -71,23 +69,32 @@ export default function UTXOManager() {
       if (!db) throw new Error('Database not started.');
 
       const query = db.prepare(`
-        SELECT * FROM UTXOs WHERE wallet_id = ? AND address = ?;
+        SELECT wallet_id, address, token_address, height, tx_hash, tx_pos, amount AS value, prefix, token
+        FROM UTXOs WHERE wallet_id = ? AND address = ?;
       `);
       query.bind([walletId, address]);
 
       const utxos: UTXO[] = [];
       while (query.step()) {
         const result = query.getAsObject();
-        // console.log(result)
         result.token =
           typeof result.token === 'string'
             ? JSON.parse(result.token)
             : result.token;
-        utxos.push(result as unknown as UTXO);
+        utxos.push({
+          wallet_id: result.wallet_id as number,
+          address: result.address as string,
+          tokenAddress: result.token_address as string | undefined,
+          height: result.height as number,
+          tx_hash: result.tx_hash as string,
+          tx_pos: result.tx_pos as number,
+          value: result.value as number,
+          amount: result.value as number,
+          prefix: result.prefix as string,
+          token: result.token as any,
+        });
       }
       query.free();
-
-      // console.log(utxos)
 
       return utxos;
     } catch (error) {

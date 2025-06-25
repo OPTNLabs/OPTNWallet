@@ -148,7 +148,7 @@ export default function ContractManager() {
       });
 
       const balance = await contract.getBalance();
-      const utxos = await ElectrumService.getUTXOS(contract.address);
+      const utxos = await ElectrumService.getUTXOs(contract.address);
 
       const formattedUTXOs = utxos.map((utxo: any) => ({
         tx_hash: utxo.tx_hash,
@@ -455,7 +455,7 @@ export default function ContractManager() {
       const prefix =
         currentNetwork === Network.MAINNET ? 'bitcoincash' : 'bchtest';
 
-      const utxos: UTXO[] = await ElectrumService.getUTXOS(address);
+      const utxos: UTXO[] = await ElectrumService.getUTXOs(address);
       const formattedUTXOs = utxos.map((utxo: UTXO) => ({
         tx_hash: utxo.tx_hash,
         tx_pos: utxo.tx_pos,
