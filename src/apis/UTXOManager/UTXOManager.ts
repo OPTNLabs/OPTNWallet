@@ -21,40 +21,42 @@ export default function UTXOManager() {
 
   // Store UTXOs in the database
   async function storeUTXOs(utxos: UTXO[]): Promise<void> {
+    let db;
     try {
       await dbService.ensureDatabaseStarted();
       const db = dbService.getDatabase();
       if (!db) throw new Error('Database not started.');
 
+      // Begin a transaction for atomicity
+      db.exec('BEGIN TRANSACTION;');
+
       const insertQuery = db.prepare(`
-        INSERT INTO UTXOs(wallet_id, address, token_address, height, tx_hash, tx_pos, amount, prefix, token) 
+        INSERT OR REPLACE INTO UTXOs(wallet_id, address, token_address, height, tx_hash, tx_pos, amount, prefix, token) 
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?);
       `);
 
       for (const utxo of utxos) {
-        const existsQuery = db.prepare(`
-          SELECT COUNT(*) AS count FROM UTXOs WHERE wallet_id = ? AND tx_hash = ? AND tx_pos = ?;
-        `);
-        existsQuery.bind([utxo.wallet_id, utxo.tx_hash, utxo.tx_pos]);
-
-        if (existsQuery.step() && existsQuery.getAsObject().count === 0) {
-          insertQuery.run([
-            utxo.wallet_id,
-            utxo.address,
-            utxo.tokenAddress || null, // Store tokenAddress
-            utxo.height || 0,
-            utxo.tx_hash,
-            utxo.tx_pos,
-            utxo.value,
-            utxo.prefix || 'unknown',
-            utxo.token ? JSON.stringify(utxo.token) : null,
-          ]);
-        }
-        existsQuery.free();
+        insertQuery.run([
+          utxo.wallet_id,
+          utxo.address,
+          utxo.tokenAddress || null,
+          utxo.height || 0,
+          utxo.tx_hash,
+          utxo.tx_pos,
+          utxo.value,
+          utxo.prefix || 'unknown',
+          utxo.token ? JSON.stringify(utxo.token) : null,
+        ]);
       }
+
       insertQuery.free();
+      db.exec('COMMIT;');
     } catch (error) {
       console.error('Error storing UTXOs:', error);
+      if (db) {
+        db.exec('ROLLBACK;');
+      }
+      throw error; // Re-throw to handle upstream if needed
     }
   }
 

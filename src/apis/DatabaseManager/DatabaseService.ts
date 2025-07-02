@@ -4,18 +4,60 @@ import initSqlJs, { Database } from 'sql.js';
 import { createTables } from '../../utils/schema/schema';
 import { get as idbGet, set as idbSet } from 'idb-keyval';
 
-// single shared DB handle
+// Single shared DB handle
 let db: Database | null = null;
 
 // ** Debounce state **
 let saveTimeout: number | null = null;
 let pendingSavePromise: Promise<void> | null = null;
 
-/** write into IndexedDB instead of localStorage */
+// ** Migrations Array **
+const migrations: Array<(db: Database) => Promise<void>> = [
+  async (db) => {
+    // Migration to version 1: Create initial tables
+    createTables(db);
+  },
+  async (db) => {
+    // Migration to version 2: Ensure BCMR tables and add bcmr_metadata
+    db.run(`
+      CREATE TABLE IF NOT EXISTS bcmr (
+        authbase TEXT PRIMARY KEY,
+        registryUri TEXT NOT NULL,
+        lastFetch TEXT NOT NULL,
+        registryHash TEXT NOT NULL,
+        registryData TEXT NOT NULL
+      );
+    `);
+    db.run(`
+      CREATE TABLE IF NOT EXISTS bcmr_tokens (
+        category TEXT PRIMARY KEY,
+        authbase TEXT NOT NULL,
+        FOREIGN KEY(authbase) REFERENCES bcmr(authbase)
+      );
+    `);
+    db.run(`
+      CREATE TABLE IF NOT EXISTS bcmr_metadata (
+        category TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        description TEXT NOT NULL,
+        decimals INTEGER NOT NULL,
+        symbol TEXT NOT NULL,
+        is_nft BOOLEAN NOT NULL,
+        nfts TEXT,
+        uris TEXT,
+        extensions TEXT,
+        FOREIGN KEY(category) REFERENCES bcmr_tokens(category)
+      );
+    `);
+  },
+  // Add future migrations here as needed
+];
+
+/** Write into IndexedDB instead of localStorage */
 async function realSaveDatabase(): Promise<void> {
   if (!db) return;
   const data = db.export(); // Uint8Array
-  await idbSet('OPTNDatabase', data); // store raw bytes
+  await idbSet('OPTNDatabase', data); // Store raw bytes
   // console.log('Persisted DB to IndexedDB');
 }
 
@@ -25,13 +67,25 @@ const startDatabase = async (): Promise<Database | null> => {
   });
   const saved = await idbGet('OPTNDatabase');
   if (saved) {
-    // saved is already Uint8Array
     db = new SQLModule.Database(new Uint8Array(saved as any));
   } else {
     db = new SQLModule.Database();
-    createTables(db);
+    db.run('PRAGMA user_version = 0;'); // New databases start at version 0
   }
-  await updateSchema(db);
+
+  // Apply migrations
+  const versionResult = db.exec('PRAGMA user_version;');
+  let currentVersion = versionResult[0].values[0][0] as number;
+  const targetVersion = migrations.length;
+
+  for (let v = currentVersion + 1; v <= targetVersion; v++) {
+    await migrations[v - 1](db);
+    db.run(`PRAGMA user_version = ${v};`);
+  }
+
+  // Save immediately after migrations to persist schema changes
+  await realSaveDatabase();
+
   return db;
 };
 
@@ -61,7 +115,6 @@ const saveDatabaseToFile = async (): Promise<void> => {
         } catch (e) {
           console.error('Failed debounced save:', e);
         }
-        // reset for next batch
         pendingSavePromise = null;
         saveTimeout = null;
         resolve();
@@ -76,7 +129,7 @@ const getDatabase = (): Database | null => db;
 const clearDatabase = async (): Promise<void> => {
   await ensureDatabaseStarted();
   if (db) {
-    db.exec('VACUUM;');
+    // Drop all tables
     db.exec(`
       DROP TABLE IF EXISTS wallets;
       DROP TABLE IF EXISTS keys;
@@ -86,18 +139,19 @@ const clearDatabase = async (): Promise<void> => {
       DROP TABLE IF EXISTS cashscript_artifacts;
       DROP TABLE IF EXISTS cashscript_addresses;
       DROP TABLE IF EXISTS instantiated_contracts;
+      DROP TABLE IF EXISTS bcmr;
+      DROP TABLE IF EXISTS bcmr_tokens;
     `);
-    createTables(db);
-    // You can debounce this too, but usually on clear you want immediate:
+    // Reset schema version to 0
+    db.run('PRAGMA user_version = 0;');
+    // Apply all migrations
+    const targetVersion = migrations.length;
+    for (let v = 1; v <= targetVersion; v++) {
+      await migrations[v - 1](db);
+      db.run(`PRAGMA user_version = ${v};`);
+    }
+    // Save immediately
     await realSaveDatabase();
-  }
-};
-
-const updateSchema = async (db: Database): Promise<void> => {
-  const result = db.exec(`PRAGMA table_info(instantiated_contracts);`);
-  const columns = result[0].values.map((row) => row[1] as string);
-  if (!columns.includes('abi')) {
-    db.run(`ALTER TABLE instantiated_contracts ADD COLUMN abi TEXT;`);
   }
 };
 
