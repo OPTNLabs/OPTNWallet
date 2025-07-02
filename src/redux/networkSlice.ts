@@ -23,8 +23,8 @@ const networkSlice = createSlice({
     toggleNetwork: (state) => {
       state.currentNetwork =
         state.currentNetwork === Network.MAINNET
-          ? Network.CHIPNET
-          : Network.MAINNET;
+          ? Network.MAINNET
+          : Network.CHIPNET;
     },
     resetNetwork: (state) => {
       Object.assign(state, initialState);
