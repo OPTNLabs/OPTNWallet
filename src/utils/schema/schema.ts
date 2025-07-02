@@ -173,4 +173,19 @@ export const createTables = (db: any) => {
         FOREIGN KEY(authbase) REFERENCES bcmr(authbase)
       );
     `);
+
+  db.run(`
+    CREATE TABLE IF NOT EXISTS bcmr_metadata (
+      category TEXT PRIMARY KEY,
+      name TEXT NOT NULL,
+      description TEXT NOT NULL,
+      decimals INTEGER NOT NULL,
+      symbol TEXT NOT NULL,
+      is_nft BOOLEAN NOT NULL,
+      nfts TEXT,
+      uris TEXT,
+      extensions TEXT,
+      FOREIGN KEY(category) REFERENCES bcmr_tokens(category)
+    );
+  `);
 };

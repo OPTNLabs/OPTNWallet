@@ -156,6 +156,7 @@ const Home: React.FC = () => {
 
   useEffect(() => {
     if (!fetchingUTXOsRedux && Object.keys(reduxUTXOs).length > 0) {
+      console.log('[Home] Redux UTXOs with metadata:', reduxUTXOs);
       setPlaceholderUTXOs(reduxUTXOs);
       setPlaceholderBalance(calculateTotalBitcoinCash(reduxUTXOs));
       setPlaceholderTokenTotals(calculateCashTokenTotals(reduxUTXOs));
@@ -189,8 +190,9 @@ const Home: React.FC = () => {
     Object.values(utxos)
       .flat()
       .forEach((utxo) => {
-        const { category, amount } = utxo.token || {};
+        const { category, amount, BcmrTokenMetadata } = utxo.token || {};
         if (category) {
+          console.log(`[Home] Token for category ${category}:`, { amount, BcmrTokenMetadata });
           tokenTotals[category] =
             (tokenTotals[category] || 0) + parseFloat(amount);
         }

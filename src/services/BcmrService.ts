@@ -19,6 +19,7 @@ import DatabaseService from '../apis/DatabaseManager/DatabaseService';
 import { sha256 } from '../utils/hash';
 import { DateTime } from 'luxon';
 import { Database } from 'sql.js';
+import { BcmrTokenMetadata } from '../types/types';
 
 const ICON_CACHE = new Map<string, string | null>();
 
@@ -162,23 +163,53 @@ export default class BcmrService {
    *     • if stale, trigger a background update but still return the disk copy
    * 3) otherwise fetch & commit (sync)
    */
+  private async storeSnapshot(snapshot: IdentitySnapshot): Promise<void> {
+    const db = await this.getDb();
+    const category = snapshot.token?.category;
+    if (!category) {
+      console.warn('Snapshot missing token.category, cannot store');
+      return;
+    }
+    const name = snapshot.name || '';
+    const description = snapshot.description || '';
+    const decimals = snapshot.token?.decimals || 0;
+    const symbol = snapshot.token?.symbol || '';
+    const is_nft = !!snapshot.token?.nfts;
+    const is_nft_value = is_nft ? 1 : 0;
+    const nfts = snapshot.token?.nfts ? JSON.stringify(snapshot.token.nfts) : null;
+    const uris = snapshot.uris ? JSON.stringify(snapshot.uris) : null;
+    const extensions = snapshot.extensions ? JSON.stringify(snapshot.extensions) : null;
+
+    const query = db.prepare(`
+      INSERT OR REPLACE INTO bcmr_metadata (
+        category, name, description, decimals, symbol, is_nft, nfts, uris, extensions
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?);
+    `);
+    query.run([category, name, description, decimals, symbol, is_nft_value, nfts, uris, extensions]);
+    query.free();
+  }
+
   public async resolveIdentityRegistry(
     categoryOrAuthbase: string
   ): Promise<IdentityRegistry> {
     const authbase = await this.getCategoryAuthbase(categoryOrAuthbase);
 
-    // 1. fast in-memory
     const cached = this.inMemoryRegistries.get(authbase);
     if (cached) return cached;
 
-    // 2. try load from sqlite
     let diskEntry: IdentityRegistry | undefined;
     try {
       diskEntry = await this.loadIdentityRegistry(authbase);
       mergeRegistry(diskEntry.registry);
       this.inMemoryRegistries.set(authbase, diskEntry);
 
-      // if >7d old, refresh in background
+      try {
+        const snapshot = this.extractIdentity(authbase, diskEntry.registry);
+        await this.storeSnapshot(snapshot);
+      } catch (err) {
+        console.warn(`Failed to store snapshot for ${authbase} from disk:`, err);
+      }
+
       const age =
         DateTime.now().toMillis() -
         DateTime.fromISO(diskEntry.lastFetch).toMillis();
@@ -187,13 +218,45 @@ export default class BcmrService {
       }
       return diskEntry;
     } catch {
-      // no local cache, fall through
+      // No local cache, fall through
     }
 
-    // 3. first-time or completely missing → must fetch & commit synchronously
     const uri = this.getDefaultRegistryUri(authbase);
     const fresh = await this.fetchAndCommitRegistry(authbase, uri);
+
+    try {
+      const snapshot = this.extractIdentity(authbase, fresh.registry);
+      await this.storeSnapshot(snapshot);
+    } catch (err) {
+      console.warn(`Failed to store snapshot for ${authbase} from fetch:`, err);
+    }
+
     return fresh;
+  }
+
+  public async getSnapshot(category: string): Promise<BcmrTokenMetadata | null> {
+    const db = await this.getDb();
+    const query = db.prepare('SELECT * FROM bcmr_metadata WHERE category = ?');
+    query.bind([category]);
+    if (query.step()) {
+      const row = query.getAsObject();
+      query.free();
+      return {
+        name: row.name as string,
+        description: row.description as string,
+        token: {
+          category: row.category as string,
+          symbol: row.symbol as string,
+          decimals: row.decimals as number,
+        },
+        is_nft: row.is_nft === 1,
+        nfts: row.nfts ? JSON.parse(row.nfts as string) : undefined,
+        uris: row.uris ? JSON.parse(row.uris as string) : undefined,
+        extensions: row.extensions ? JSON.parse(row.extensions as string) : undefined,
+      };
+    }
+    query.free();
+    return null;
   }
 
   // ----------------------------------------------------------------------------
@@ -385,32 +448,51 @@ export default class BcmrService {
     authbase: string,
     uri: string
   ): Promise<IdentityRegistry> {
-    const resp = await ipfsFetch(uri);
-    // if (!resp.ok) throw new Error(`Fetch failed: ${resp.status}`);
-    const data = await resp.json();
-    const imported = importMetadataRegistry(data);
-    if (typeof imported === 'string') throw new Error(imported);
-
-    // on-chain fallback
-    if (typeof (imported as any).registryIdentity === 'string') {
-      const onChain = await this.resolveAuthChainRegistry(
-        (imported as any).registryIdentity,
-        uri
-      );
-      if (onChain) {
-        this.inMemoryRegistries.set(authbase, onChain);
-        return onChain;
+    try {
+      console.log(`[BcmrService] Fetching registry for authbase ${authbase} from URI ${uri}`);
+      const resp = await ipfsFetch(uri);
+      if (!resp.ok) {
+        console.error(`[BcmrService] Fetch failed for ${uri}: Status ${resp.status}`);
+        throw new Error(`Fetch failed: ${resp.status}`);
       }
-    }
 
-    // commit to sqlite
-    const committed = await this.commitIdentityRegistry(
-      authbase,
-      imported,
-      uri
-    );
-    this.inMemoryRegistries.set(authbase, committed);
-    return committed;
+      let data;
+      try {
+        data = await resp.json();
+        console.log(`[BcmrService] Successfully parsed JSON for ${uri}:`, data);
+      } catch (error) {
+        console.error(`[BcmrService] Invalid JSON response from ${uri}:`, error);
+        throw new Error(`Invalid JSON response from ${uri}`);
+      }
+
+      const imported = importMetadataRegistry(data);
+      if (typeof imported === 'string') {
+        console.error(`[BcmrService] Failed to import metadata for ${uri}:`, imported);
+        throw new Error(imported);
+      }
+
+      // on-chain fallback
+      if (typeof (imported as any).registryIdentity === 'string') {
+        const onChain = await this.resolveAuthChainRegistry(
+          (imported as any).registryIdentity,
+          uri
+        );
+        if (onChain) {
+          console.log(`[BcmrService] Used on-chain fallback for ${authbase}`);
+          this.inMemoryRegistries.set(authbase, onChain);
+          return onChain;
+        }
+      }
+
+      // commit to sqlite
+      const committed = await this.commitIdentityRegistry(authbase, imported, uri);
+      this.inMemoryRegistries.set(authbase, committed);
+      console.log(`[BcmrService] Committed registry for authbase ${authbase}`);
+      return committed;
+    } catch (error) {
+      console.error(`[BcmrService] Error in fetchAndCommitRegistry for ${uri}:`, error);
+      throw error;
+    }
   }
 
   private async backgroundRefresh(

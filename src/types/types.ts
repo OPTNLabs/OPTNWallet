@@ -7,6 +7,8 @@ export interface Token {
     capability: 'none' | 'mutable' | 'minting';
     commitment: string;
   };
+  BcmrTokenMetadata?: BcmrTokenMetadata;      // NEW INCLUSION
+
 }
 
 // ElectrumClient related interfaces with updates
@@ -137,3 +139,47 @@ export type Address = {
   change_index: number;
   prefix: string;
 };
+
+// BCMR Responses
+// NEW INCLUSION BELOW
+export interface BcmrTokenMetadata {
+  name: string
+  description: string
+  token: {
+    category: string
+    decimals: number
+    symbol: string
+  }
+  is_nft: boolean
+  nfts?: Record<string, BcmrNftMetadata>
+  uris: Record<string, string>
+  extensions: BcmrExtensions
+}
+
+export interface BcmrNftMetadata {
+  name: string
+  description: string
+  uris: Record<string, string>
+  extensions: BcmrExtensions
+}
+
+export interface BcmrIndexerResponse {
+  name: string
+  description: string
+  token: {
+    category: string
+    decimals: number
+    symbol: string
+  }
+  is_nft: boolean
+  type_metadata: BcmrNftMetadata
+  uris: Record<string, string>
+  extensions: BcmrExtensions
+}
+
+export type BcmrExtensions = {
+  [extensionIdentifier: string]:
+    | string
+    | { [key: string]: string }
+    | { [keyA: string]: { [keyB: string]: string } };
+}
