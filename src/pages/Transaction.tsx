@@ -61,9 +61,9 @@ const Transaction: React.FC = () => {
   const [tempUtxos, setTempUtxos] = useState<UTXO | undefined>();
   const [recipientAddress, setRecipientAddress] = useState<string>('');
   const [transferAmount, setTransferAmount] = useState<number>(0);
-  const [tokenAmount, setTokenAmount] = useState<number>(0);
+  const [tokenAmount, setTokenAmount] = useState<number | bigint>(0);
   const [selectedTokenCategory, setSelectedTokenCategory] =
-    useState<string>('');
+    useState<string>('none');
   const [changeAddress, setChangeAddress] = useState<string>('');
   const [bytecodeSize, setBytecodeSize] = useState<number | null>(null);
   const [rawTX, setRawTX] = useState<string>('');
@@ -243,7 +243,7 @@ const Transaction: React.FC = () => {
         const newOutput = TransactionService.addOutput(
           recipientAddress,
           transferAmount,
-          tokenAmount,
+          Number(tokenAmount),
           selectedTokenCategory,
           selectedUtxos,
           addresses,
@@ -503,9 +503,6 @@ const Transaction: React.FC = () => {
           addOutput={handleAddOutput}
           changeAddress={changeAddress}
           setChangeAddress={setChangeAddress}
-          showOutputs={showOutputs}
-          setShowOutputs={setShowOutputs}
-          closePopups={closePopups}
           nftCapability={nftCapability}
           setNftCapability={setNftCapability}
           nftCommitment={nftCommitment}
