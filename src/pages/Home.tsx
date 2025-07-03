@@ -40,7 +40,7 @@ const Home: React.FC = () => {
   >(Object.keys(reduxUTXOs).length > 0 ? reduxUTXOs : {});
   const [placeholderBalance, setPlaceholderBalance] = useState(0);
   const [placeholderTokenTotals, setPlaceholderTokenTotals] = useState<
-    Record<string, number>
+    Record<string, { amount: number; decimals: number }>
   >({});
   const [showCashTokenPopup, setShowCashTokenPopup] = useState(false);
   const [metadataPreloaded, setMetadataPreloaded] = useState(false);
@@ -125,7 +125,6 @@ const Home: React.FC = () => {
     initialized.current = true;
   }, [currentWalletId, generateKeys, placeholderUTXOs, fetchAndStoreUTXOs]);
 
-  // ✅ NEW: Refetch UTXOs if returning from /transaction success
   useEffect(() => {
     const fromTxSuccess = location?.state?.fromTxSuccess;
     if (fromTxSuccess && keyPairs.length > 0) {
@@ -186,26 +185,32 @@ const Home: React.FC = () => {
       .reduce((acc, utxo) => acc + utxo.amount, 0);
 
   const calculateCashTokenTotals = (utxos: Record<string, any[]>) => {
-    const tokenTotals: Record<string, number> = {};
+    const tokenTotals: Record<string, { amount: number; decimals: number }> = {};
     Object.values(utxos)
       .flat()
       .forEach((utxo) => {
         const { category, amount, BcmrTokenMetadata } = utxo.token || {};
         if (category) {
           console.log(`[Home] Token for category ${category}:`, { amount, BcmrTokenMetadata });
-          tokenTotals[category] =
-            (tokenTotals[category] || 0) + parseFloat(amount);
+          const parsedAmount = parseFloat(amount || '0');
+          const decimals = BcmrTokenMetadata?.token?.decimals ?? 0; // Default to 0 if undefined
+          if (tokenTotals[category]) {
+            tokenTotals[category].amount += parsedAmount;
+          } else {
+            tokenTotals[category] = { amount: parsedAmount, decimals };
+          }
         }
       });
+    console.log('[Home] Calculated token totals:', tokenTotals);
     return tokenTotals;
   };
 
   const fungibleTokens = Object.entries(placeholderTokenTotals)
-    .filter(([, amount]) => amount > 0)
-    .sort((a, b) => b[1] - a[1]);
+    .filter(([, { amount }]) => amount > 0)
+    .sort((a, b) => b[1].amount - a[1].amount);
   const nonFungibleTokens = Object.entries(placeholderTokenTotals)
-    .filter(([, amount]) => amount <= 0)
-    .sort((a, b) => b[1] - a[1]);
+    .filter(([, { amount }]) => amount <= 0)
+    .sort((a, b) => b[1].amount - a[1].amount);
 
   return (
     <div className="container mx-auto p-4 pb-16 mt-12">
@@ -281,11 +286,12 @@ const Home: React.FC = () => {
               <div className="mb-2">
                 <h4 className="text-lg font-semibold mb-2">Fungible Tokens</h4>
                 <div className="flex flex-col">
-                  {fungibleTokens.map(([category, amount]) => (
+                  {fungibleTokens.map(([category, { amount, decimals }]) => (
                     <CashTokenCard
                       key={category}
                       category={category}
                       totalAmount={amount}
+                      decimals={decimals}
                     />
                   ))}
                 </div>
@@ -297,20 +303,21 @@ const Home: React.FC = () => {
                   Non-Fungible Tokens
                 </h4>
                 <div className="flex flex-col">
-                  {nonFungibleTokens.map(([category, amount]) => (
+                  {nonFungibleTokens.map(([category, { amount, decimals }]) => (
                     <CashTokenCard
                       key={category}
                       category={category}
                       totalAmount={amount}
+                      decimals={decimals}
                     />
                   ))}
                 </div>
               </div>
             )}
+            {fungibleTokens.length === 0 && nonFungibleTokens.length === 0 && (
+              <p className="text-center text-gray-500">No CashTokens Available</p>
+            )}
           </div>
-          {fungibleTokens.length === 0 && nonFungibleTokens.length === 0 && (
-            <p className="text-center text-gray-500">No CashTokens Available</p>
-          )}
         </Popup>
       )}
     </div>

@@ -449,25 +449,25 @@ export default class BcmrService {
     uri: string
   ): Promise<IdentityRegistry> {
     try {
-      console.log(`[BcmrService] Fetching registry for authbase ${authbase} from URI ${uri}`);
+      // console.log(`[BcmrService] Fetching registry for authbase ${authbase} from URI ${uri}`);
       const resp = await ipfsFetch(uri);
       if (!resp.ok) {
-        console.error(`[BcmrService] Fetch failed for ${uri}: Status ${resp.status}`);
+        // console.error(`[BcmrService] Fetch failed for ${uri}: Status ${resp.status}`);
         throw new Error(`Fetch failed: ${resp.status}`);
       }
 
       let data;
       try {
         data = await resp.json();
-        console.log(`[BcmrService] Successfully parsed JSON for ${uri}:`, data);
+        // console.log(`[BcmrService] Successfully parsed JSON for ${uri}:`, data);
       } catch (error) {
-        console.error(`[BcmrService] Invalid JSON response from ${uri}:`, error);
+        // console.error(`[BcmrService] Invalid JSON response from ${uri}:`, error);
         throw new Error(`Invalid JSON response from ${uri}`);
       }
 
       const imported = importMetadataRegistry(data);
       if (typeof imported === 'string') {
-        console.error(`[BcmrService] Failed to import metadata for ${uri}:`, imported);
+        // console.error(`[BcmrService] Failed to import metadata for ${uri}:`, imported);
         throw new Error(imported);
       }
 
@@ -478,7 +478,7 @@ export default class BcmrService {
           uri
         );
         if (onChain) {
-          console.log(`[BcmrService] Used on-chain fallback for ${authbase}`);
+          // console.log(`[BcmrService] Used on-chain fallback for ${authbase}`);
           this.inMemoryRegistries.set(authbase, onChain);
           return onChain;
         }
@@ -487,10 +487,10 @@ export default class BcmrService {
       // commit to sqlite
       const committed = await this.commitIdentityRegistry(authbase, imported, uri);
       this.inMemoryRegistries.set(authbase, committed);
-      console.log(`[BcmrService] Committed registry for authbase ${authbase}`);
+      // console.log(`[BcmrService] Committed registry for authbase ${authbase}`);
       return committed;
     } catch (error) {
-      console.error(`[BcmrService] Error in fetchAndCommitRegistry for ${uri}:`, error);
+      // console.error(`[BcmrService] Error in fetchAndCommitRegistry for ${uri}:`, error);
       throw error;
     }
   }
