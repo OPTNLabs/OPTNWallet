@@ -5,12 +5,14 @@ export enum Network {
   MAINNET = 'mainnet',
 }
 
+
+
 interface NetworkState {
   currentNetwork: Network;
 }
 
 const initialState: NetworkState = {
-  currentNetwork: Network.CHIPNET,
+  currentNetwork: Network.MAINNET,
 };
 
 const networkSlice = createSlice({

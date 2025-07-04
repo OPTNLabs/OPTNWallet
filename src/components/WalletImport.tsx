@@ -11,13 +11,14 @@ import { selectCurrentNetwork } from '../redux/selectors/networkSelectors';
 const WalletImport = () => {
   const [recoveryPhrase, setRecoveryPhrase] = useState('');
   const [passphrase, setPassphrase] = useState('');
+  const [showAdvanced, setShowAdvanced] = useState(false);
   const dbService = DatabaseService();
   const walletManager = WalletManager();
   const navigate = useNavigate();
   const currentNetwork = useSelector(selectCurrentNetwork);
   const dispatch = useDispatch();
 
-  // temporary constant value
+  // Temporary constant value
   const walletName = 'OPTN';
 
   // Ref to track if initialization has occurred
@@ -30,19 +31,24 @@ const WalletImport = () => {
       }
       hasInitialized.current = true;
 
-      // console.log('Starting database...');
       try {
         const dbStarted = await dbService.startDatabase();
         if (!dbStarted) {
           throw new Error('Failed to start the database.');
         }
-        // console.log('Database has been started.');
       } catch (error) {
         console.error('Error initializing database:', error);
       }
     };
     initDb();
   }, []);
+
+  // Reset passphrase when advanced options are hidden
+  useEffect(() => {
+    if (!showAdvanced) {
+      setPassphrase('');
+    }
+  }, [showAdvanced]);
 
   const handleImportAccount = async () => {
     if (recoveryPhrase === '') {
@@ -51,16 +57,12 @@ const WalletImport = () => {
     }
 
     try {
-      // console.log(
-      //   'Checking account with given recovery phrase and passphrase...'
-      // );
       const accountExists = await walletManager.checkAccount(
         recoveryPhrase,
         passphrase
       );
 
       if (!accountExists) {
-        // console.error('Account does not exist, attempting to create...');
         const createAccountSuccess = await walletManager.createWallet(
           walletName,
           recoveryPhrase,
@@ -71,10 +73,8 @@ const WalletImport = () => {
           console.error('Failed to import account.');
           return;
         }
-        // console.log('Account imported successfully.');
       }
 
-      // console.log('Setting wallet ID...');
       let walletID = await walletManager.setWalletId(
         recoveryPhrase,
         passphrase
@@ -86,7 +86,6 @@ const WalletImport = () => {
 
       dispatch(setWalletId(walletID));
       dispatch(setNetwork(currentNetwork));
-      // console.log('Wallet ID set and network updated.');
 
       navigate(`/home/${walletID}`);
     } catch (e) {
@@ -111,26 +110,52 @@ const WalletImport = () => {
         <div className="text-white font-bold text-xl mb-4 text-center">
           Import Wallet
         </div>
-        <div className="mb-4">
-          <label className="block text-white mb-2">Recovery Phrase</label>
-          <input
-            type="text"
-            onChange={(e) => setRecoveryPhrase(e.target.value)}
-            className="w-full p-2 border border-gray-300 rounded-md"
-          />
+        {/* Fixed-height container for inputs and toggle */}
+        <div className="flex flex-col min-h-[300px]">
+          <div className="mb-4">
+            <label className="block text-white mb-2">Recovery Phrase</label>
+            <input
+              type="text"
+              onChange={(e) => setRecoveryPhrase(e.target.value)}
+              className="w-full p-2 border border-gray-300 rounded-md"
+            />
+          </div>
+          {/* Toggle for advanced options */}
+          <div className="mb-4 flex flex-row gap-2 items-center text-white">
+            <span>Basic</span>
+            <div
+              onClick={() => setShowAdvanced(!showAdvanced)}
+              className={`w-12 h-6 rounded-full flex items-center cursor-pointer relative transition-colors ${
+                showAdvanced ? 'bg-green-400' : 'bg-orange-400'
+              }`}
+            >
+              <div
+                className={`w-6 h-6 bg-white rounded-full shadow-md transform transition-transform ${
+                  showAdvanced ? 'translate-x-6' : 'translate-x-0'
+                }`}
+              />
+            </div>
+            <span>Advanced</span>
+          </div>
+          {/* Advanced options: Passphrase and NetworkSwitch */}
+          {showAdvanced && (
+            <>
+              <div className="mb-4">
+                <label className="block text-white mb-2">Passphrase - Optional</label>
+                <input
+                  type="password"
+                  value={passphrase}
+                  onChange={(e) => setPassphrase(e.target.value)}
+                  className="w-full p-2 border border-gray-300 rounded-md"
+                />
+              </div>
+              <NetworkSwitch
+                networkType={currentNetwork}
+                setNetworkType={(network: Network) => dispatch(setNetwork(network))}
+              />
+            </>
+          )}
         </div>
-        <div className="mb-4">
-          <label className="block text-white mb-2">Passphrase - Optional</label>
-          <input
-            type="password"
-            onChange={(e) => setPassphrase(e.target.value)}
-            className="w-full p-2 border border-gray-300 rounded-md"
-          />
-        </div>
-        <NetworkSwitch
-          networkType={currentNetwork}
-          setNetworkType={(network: Network) => dispatch(setNetwork(network))}
-        />
         <button
           onClick={handleImportAccount}
           className="w-full bg-blue-500 text-white py-2 px-4 rounded-md hover:bg-blue-600 transition duration-300 my-2 text-xl font-bold"

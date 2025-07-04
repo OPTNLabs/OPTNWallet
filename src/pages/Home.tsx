@@ -166,12 +166,14 @@ const Home: React.FC = () => {
     if (!currentWalletId) return null;
 
     try {
-      await KeyService.createKeys(currentWalletId, 0, 0, index);
-      const newKeys = await KeyService.retrieveKeys(currentWalletId);
-      const newKey = newKeys[newKeys.length - 1];
-
-      if (newKey) {
-        setKeyPairs((prevKeys) => [...prevKeys, newKey]);
+      for (let i = 0; i < 2; i++) {
+        await KeyService.createKeys(currentWalletId, 0, i, index);
+        const newKeys = await KeyService.retrieveKeys(currentWalletId);
+        const newKey = newKeys[newKeys.length - 1];
+  
+        if (newKey) {
+          setKeyPairs((prevKeys) => [...prevKeys, newKey]);
+        }
       }
     } catch (error) {
       console.error('Error generating new key:', error);
