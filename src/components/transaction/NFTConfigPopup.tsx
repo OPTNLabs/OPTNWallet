@@ -4,8 +4,8 @@ import Popup from './Popup';
 interface NFTConfigPopupProps {
   show: boolean;
   setShow: (value: boolean) => void;
-  nftCapability: 'none' | 'mutable' | 'minting';
-  setNftCapability: (value: 'none' | 'mutable' | 'minting') => void;
+  nftCapability: undefined | 'none' | 'mutable' | 'minting';
+  setNftCapability: (value: undefined | 'none' | 'mutable' | 'minting') => void;
   nftCommitment: string;
   setNftCommitment: (value: string) => void;
 }
@@ -27,7 +27,7 @@ const NFTConfigPopup: React.FC<NFTConfigPopupProps> = ({
           <label className="block font-medium mb-1">NFT Capability</label>
           <select
             value={nftCapability}
-            onChange={(e) => setNftCapability(e.target.value as 'none' | 'mutable' | 'minting')}
+            onChange={(e) => setNftCapability(e.target.value as undefined | 'none' | 'mutable' | 'minting')}
             className="border p-2 w-full"
           >
             <option value="none">none</option>
