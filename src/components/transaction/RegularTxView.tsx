@@ -141,16 +141,16 @@ const RegularTxView: React.FC<RegularTxViewProps> = ({
           <label className="font-medium">Transfer Amount (Sats)</label>
           <div className="flex space-x-2">
             <button
-              onClick={() => setTransferAmount(totalSats)}
+              onClick={() => setTransferAmount(totalSats - 2000)}
               className="border border-gray-300 bg-blue-500 text-white px-3 py-1 rounded hover:bg-blue-600 transition-colors"
             >
-              Max ({totalSats})
+              Max ({totalSats < 2000 ? 0 : totalSats - 2000})
             </button>
           </div>
         </div>
         <input
           type="number"
-          value={transferAmount > totalSats ? totalSats : transferAmount}
+          value={totalSats < 2000 ? 0 : transferAmount > totalSats - 2000 ? totalSats - 2000 : transferAmount}
           onChange={(e) => {
             const value = e.target.value;
             setTransferAmount(value === '' ? 0 : Number(value));
@@ -189,7 +189,7 @@ const RegularTxView: React.FC<RegularTxViewProps> = ({
           {isNft ? (
             <input
               type="number"
-              value={1}
+              value={0}
               disabled
               readOnly
               className="border p-2 w-full break-words whitespace-normal text-gray-400 bg-gray-100"

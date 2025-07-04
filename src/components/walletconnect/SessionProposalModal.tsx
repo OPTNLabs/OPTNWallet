@@ -52,13 +52,13 @@ function SessionProposalModal() {
         <div className="flex justify-around mt-6">
           <button
             onClick={handleApprove}
-            className="px-4 py-2 bg-green-500 hover:bg-green-600 text-white rounded"
+            className="px-4 py-2 bg-green-500 hover:bg-green-600 font-bold text-white rounded"
           >
             Approve
           </button>
           <button
             onClick={handleReject}
-            className="px-4 py-2 bg-red-500 hover:bg-red-600 text-white rounded"
+            className="px-4 py-2 bg-red-500 hover:bg-red-600 font-bold text-white rounded"
           >
             Reject
           </button>

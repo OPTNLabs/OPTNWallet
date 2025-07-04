@@ -125,7 +125,7 @@ export default function TransactionManager() {
     selectedTokenCategory: string = '',
     selectedUtxos: UTXO[] = [],
     addresses: { address: string; tokenAddress?: string }[] = [],
-    nftCapability?: 'none' | 'mutable' | 'minting',
+    nftCapability?: undefined | 'none' | 'mutable' | 'minting',
     nftCommitment?: string
   ): TransactionOutput | undefined {
     // Validate inputs

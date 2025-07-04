@@ -93,9 +93,9 @@ const Transaction: React.FC = () => {
   const [showOutputs, setShowOutputs] = useState<boolean>(false);
 
   const [nftCapability, setNftCapability] = useState<
-    'none' | 'mutable' | 'minting'
-  >('none');
-  const [nftCommitment, setNftCommitment] = useState<string>('');
+    undefined | 'none' | 'mutable' | 'minting'
+  >(undefined);
+  const [nftCommitment, setNftCommitment] = useState<undefined | string>(undefined);
 
   // const navigate = useNavigate();
   const dispatch: AppDispatch = useDispatch();
@@ -235,6 +235,11 @@ const Transaction: React.FC = () => {
    * Adds a new transaction output.
    */
   const handleAddOutput = () => {
+    if (!recipientAddress || (!transferAmount && !tokenAmount)) {
+      setErrorMessage('Recipient address and an amount are required');
+      return;
+    }
+
     if (recipientAddress && (transferAmount || tokenAmount)) {
       if (rawTX !== '' && txOutputs.length !== 0) {
         handleRemoveOutput(-1);
@@ -258,8 +263,8 @@ const Transaction: React.FC = () => {
           setTransferAmount(0);
           setTokenAmount(0);
           setSelectedTokenCategory('');
-          setNftCapability('none');
-          setNftCommitment('');
+          setNftCapability(undefined);
+          setNftCommitment(undefined);
 
           console.log('Updated Outputs:', newOutput);
         }
@@ -301,7 +306,12 @@ const Transaction: React.FC = () => {
    * Sends the built transaction.
    */
   const sendTransaction = () => {
-    handleSendTransaction(rawTX, setTransactionId);
+    try {
+      if (!rawTX) throw new Error('No transaction built');
+      handleSendTransaction(rawTX, setTransactionId);
+    } catch (error: any) {
+      setErrorMessage(`Failed to send transaction: ${error.message}`);
+    }
   };
 
   /**

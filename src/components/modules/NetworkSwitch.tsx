@@ -2,6 +2,7 @@ import { Network } from '../../redux/networkSlice';
 
 const NetworkSwitch = ({ networkType, setNetworkType }) => {
   const handleToggle = () => {
+    console.log(networkType)
     setNetworkType(
       networkType === Network.CHIPNET ? Network.MAINNET : Network.CHIPNET
     );
