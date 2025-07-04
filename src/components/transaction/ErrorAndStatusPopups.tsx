@@ -16,6 +16,8 @@ import {
   TransactionCommon,
   // type TransactionCommon,
 } from '@bitauth/libauth';
+import { PREFIX } from '../../utils/constants';
+import { shortenTxHash } from '../../utils/shortenHash';
 
 interface ErrorAndStatusPopupsProps {
   showRawTxPopup: boolean;
@@ -126,9 +128,9 @@ const ErrorAndStatusPopups: React.FC<ErrorAndStatusPopupsProps> = ({
                   <div key={idx} className="ml-4 mt-1">
                     <p>
                       • txid:{' '}
-                      {Buffer.from(input.outpointTransactionHash)
+                      {shortenTxHash(Buffer.from(input.outpointTransactionHash)
                         .reverse()
-                        .toString('hex')}
+                        .toString('hex'), PREFIX[currentNetwork].length)}
                     </p>
                     <p>• index: {input.outpointIndex}</p>
                     {/* <p>• sequence: {input.sequenceNumber}</p> */}
@@ -172,12 +174,12 @@ const ErrorAndStatusPopups: React.FC<ErrorAndStatusPopupsProps> = ({
                           <p>
                             • Address:{' '}
                             <span className="font-mono text-blue-600 break-all">
-                              {toCashAddress(
+                              {shortenTxHash(toCashAddress(
                                 lockingBytecode,
                                 currentNetwork === Network.MAINNET
                                   ? 'bitcoincash'
                                   : 'bchtest'
-                              )}
+                              ), PREFIX[currentNetwork].length)}
                             </span>
                           </p>
                         </>
@@ -241,12 +243,21 @@ const ErrorAndStatusPopups: React.FC<ErrorAndStatusPopupsProps> = ({
 
       {showTxIdPopup && transactionId && (
         <Popup closePopups={handleClose}>
-          <h3 className="text-lg font-semibold mb-2">Transaction Successful</h3>
-          <p>Your transaction has been broadcasted successfully!</p>
-          <p>
-            <strong>Transaction ID:</strong> {transactionId}
-          </p>
-          <p>
+          <div className="flex flex-col items-center p-4">
+            <div className="text-green-500 text-4xl mb-4">✅</div>
+            <h3 className="text-xl font-bold mb-2">Transaction Successful</h3>
+            <p className="text-center mb-4">Your transaction has been broadcasted successfully!</p>
+            <div className="flex items-center mb-4">
+              <strong className="mr-2">Transaction ID:</strong>
+              <span className="font-mono">{shortenTxHash(transactionId)}</span>
+              <button
+                onClick={() => navigator.clipboard.writeText(transactionId)}
+                className="ml-2 px-2 py-1 bg-gray-200 rounded hover:bg-gray-300"
+                title="Copy to clipboard"
+              >
+                📋
+              </button>
+            </div>
             <a
               href={
                 currentNetwork === Network.CHIPNET
@@ -255,18 +266,27 @@ const ErrorAndStatusPopups: React.FC<ErrorAndStatusPopupsProps> = ({
               }
               target="_blank"
               rel="noopener noreferrer"
-              className="text-blue-500 underline"
+              className="bg-blue-500 text-white py-2 px-4 rounded hover:bg-blue-600 transition duration-300"
             >
               View on Explorer
             </a>
-          </p>
+          </div>
         </Popup>
       )}
 
       {errorMessage && (
-        <Popup closePopups={closePopups}>
-          <h3 className="text-lg font-semibold mb-2">Error</h3>
-          <p>{errorMessage}</p>
+        <Popup closePopups={closePopups} closeButtonText="Close">
+          <div className="flex flex-col items-center p-6">
+            <div className="text-red-600 text-4xl mb-4">⚠️</div>
+            <h3 className="text-2xl font-bold text-gray-800 mb-3">Transaction Error</h3>
+            <p className="text-gray-600 text-center text-sm mb-6">{errorMessage}</p>
+            <button
+              onClick={closePopups}
+              className="bg-red-500 font-bold text-white py-2 px-6 rounded-lg hover:bg-red-600 transition duration-300"
+            >
+              Try Again
+            </button>
+          </div>
         </Popup>
       )}
     </>

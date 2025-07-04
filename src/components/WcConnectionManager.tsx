@@ -76,19 +76,18 @@ const WcConnectionManager: React.FC = () => {
           value={uri}
           onChange={(e) => setUri(e.target.value)}
         />
-        <button onClick={handleManualConnect} className="bg-blue-500 text-white p-2 rounded">
-          Connect
-        </button>
-      </div>
-
-      <div className="flex items-center space-x-2">
+        <div className="flex flex-col items-center space-x-2">
         <button
           onClick={handleScan}
-          className="bg-green-500 text-white py-2 px-4 rounded flex items-center"
+          className="bg-green-500 text-white font-bold py-2 px-4 rounded flex items-center"
           disabled={scanning}
         >
           <FaCamera className="mr-2" />
           {scanning ? 'Scanning...' : 'Scan WC QR'}
+        </button>
+      </div>
+        <button onClick={handleManualConnect} className="bg-blue-500 text-white font-bold p-2 rounded">
+          Connect
         </button>
       </div>
     </div>

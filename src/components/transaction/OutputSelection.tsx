@@ -34,9 +34,9 @@ interface OutputSelectionProps {
   setChangeAddress: (address: string) => void;
   txOutputs: TransactionOutput[];
   handleRemoveOutput: (index: number) => void;
-  nftCapability: 'none' | 'mutable' | 'minting';
-  setNftCapability: (value: 'none' | 'mutable' | 'minting') => void;
-  nftCommitment: string;
+  nftCapability: undefined | 'none' | 'mutable' | 'minting';
+  setNftCapability: (value: undefined | 'none' | 'mutable' | 'minting') => void;
+  nftCommitment: undefined | string;
   setNftCommitment: (value: string) => void;
 }
 
@@ -92,8 +92,8 @@ const OutputSelection: React.FC<OutputSelectionProps> = ({
     setTransferAmount(0);
     setTokenAmount(0);
     setSelectedTokenCategory('');
-    setNftCapability('none');
-    setNftCommitment('');
+    setNftCapability(undefined);
+    setNftCommitment(undefined);
     setOpReturnText('');
   };
 
