@@ -176,16 +176,30 @@ export default class BcmrService {
     const symbol = snapshot.token?.symbol || '';
     const is_nft = !!snapshot.token?.nfts;
     const is_nft_value = is_nft ? 1 : 0;
-    const nfts = snapshot.token?.nfts ? JSON.stringify(snapshot.token.nfts) : null;
+    const nfts = snapshot.token?.nfts
+      ? JSON.stringify(snapshot.token.nfts)
+      : null;
     const uris = snapshot.uris ? JSON.stringify(snapshot.uris) : null;
-    const extensions = snapshot.extensions ? JSON.stringify(snapshot.extensions) : null;
+    const extensions = snapshot.extensions
+      ? JSON.stringify(snapshot.extensions)
+      : null;
 
     const query = db.prepare(`
       INSERT OR REPLACE INTO bcmr_metadata (
         category, name, description, decimals, symbol, is_nft, nfts, uris, extensions
       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?);
     `);
-    query.run([category, name, description, decimals, symbol, is_nft_value, nfts, uris, extensions]);
+    query.run([
+      category,
+      name,
+      description,
+      decimals,
+      symbol,
+      is_nft_value,
+      nfts,
+      uris,
+      extensions,
+    ]);
     query.free();
   }
 
@@ -207,7 +221,10 @@ export default class BcmrService {
         const snapshot = this.extractIdentity(authbase, diskEntry.registry);
         await this.storeSnapshot(snapshot);
       } catch (err) {
-        console.warn(`Failed to store snapshot for ${authbase} from disk:`, err);
+        console.warn(
+          `Failed to store snapshot for ${authbase} from disk:`,
+          err
+        );
       }
 
       const age =
@@ -228,13 +245,15 @@ export default class BcmrService {
       const snapshot = this.extractIdentity(authbase, fresh.registry);
       await this.storeSnapshot(snapshot);
     } catch (err) {
-      console.warn(`Failed to store snapshot for ${authbase} from fetch:`, err);
+      // console.warn(`Failed to store snapshot for ${authbase} from fetch:`, err);
     }
 
     return fresh;
   }
 
-  public async getSnapshot(category: string): Promise<BcmrTokenMetadata | null> {
+  public async getSnapshot(
+    category: string
+  ): Promise<BcmrTokenMetadata | null> {
     const db = await this.getDb();
     const query = db.prepare('SELECT * FROM bcmr_metadata WHERE category = ?');
     query.bind([category]);
@@ -252,7 +271,9 @@ export default class BcmrService {
         is_nft: row.is_nft === 1,
         nfts: row.nfts ? JSON.parse(row.nfts as string) : undefined,
         uris: row.uris ? JSON.parse(row.uris as string) : undefined,
-        extensions: row.extensions ? JSON.parse(row.extensions as string) : undefined,
+        extensions: row.extensions
+          ? JSON.parse(row.extensions as string)
+          : undefined,
       };
     }
     query.free();
@@ -451,10 +472,10 @@ export default class BcmrService {
     try {
       // console.log(`[BcmrService] Fetching registry for authbase ${authbase} from URI ${uri}`);
       const resp = await ipfsFetch(uri);
-      if (!resp.ok) {
-        // console.error(`[BcmrService] Fetch failed for ${uri}: Status ${resp.status}`);
-        throw new Error(`Fetch failed: ${resp.status}`);
-      }
+      // if (!resp.ok) {
+      //   // console.error(`[BcmrService] Fetch failed for ${uri}: Status ${resp.status}`);
+      //   throw new Error(`Fetch failed: ${resp.status}`);
+      // }
 
       let data;
       try {
@@ -485,13 +506,17 @@ export default class BcmrService {
       }
 
       // commit to sqlite
-      const committed = await this.commitIdentityRegistry(authbase, imported, uri);
+      const committed = await this.commitIdentityRegistry(
+        authbase,
+        imported,
+        uri
+      );
       this.inMemoryRegistries.set(authbase, committed);
       // console.log(`[BcmrService] Committed registry for authbase ${authbase}`);
       return committed;
     } catch (error) {
       // console.error(`[BcmrService] Error in fetchAndCommitRegistry for ${uri}:`, error);
-      throw error;
+      // throw error;
     }
   }
 

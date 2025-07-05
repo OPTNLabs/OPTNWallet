@@ -39,16 +39,13 @@ async function fetchAndStoreUTXOs() {
 
   const contractManager = ContractManager();
   const instances = await contractManager.fetchContractInstances();
-  const contractAddresses = instances.map(instance => instance.address);
+  const contractAddresses = instances.map((instance) => instance.address);
 
   for (const address of contractAddresses) {
     try {
-      await contractManager.updateContractUTXOs(address)
+      await contractManager.updateContractUTXOs(address);
     } catch (error) {
-      console.error(
-        `Error fetching UTXOs for address ${address}:`,
-        error
-      );
+      console.error(`Error fetching UTXOs for address ${address}:`, error);
     }
   }
 

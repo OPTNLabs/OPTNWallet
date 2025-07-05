@@ -36,7 +36,7 @@ const CashTokenCard: React.FC<CashTokenCardProps> = ({
         const uri = await bcmr.resolveIcon(authbase);
         setIconUri(uri);
       } catch (err) {
-        console.error('Failed to load token metadata', err);
+        // console.error('Failed to load token metadata', err);
       }
     };
     loadMetadata();
@@ -50,7 +50,8 @@ const CashTokenCard: React.FC<CashTokenCardProps> = ({
   };
 
   // Calculate the formatted amount, preserving original behavior for 0
-  const formattedAmount = totalAmount !== 0 ? formatAmount(totalAmount, decimals) : '';
+  const formattedAmount =
+    totalAmount !== 0 ? formatAmount(totalAmount, decimals) : '';
 
   return (
     <>

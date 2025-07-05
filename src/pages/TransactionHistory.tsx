@@ -154,13 +154,23 @@ const TransactionHistory: React.FC = () => {
   };
 
   const sortedTransactions = useCallback(() => {
-    return [...transactions].sort((a, b) => {
+    // Filter unconfirmed transactions (height <= 0) and reverse to show most recent first
+    const unconfirmed = transactions.filter((tx) => tx.height <= 0).reverse();
+
+    // Filter confirmed transactions (height > 0)
+    const confirmed = transactions.filter((tx) => tx.height > 0);
+
+    // Sort confirmed transactions based on sortOrder
+    const sortedConfirmed = confirmed.sort((a, b) => {
       if (sortOrder === 'asc') {
         return a.height - b.height;
       } else {
         return b.height - a.height;
       }
     });
+
+    // Combine unconfirmed and sorted confirmed transactions
+    return [...unconfirmed, ...sortedConfirmed];
   }, [transactions, sortOrder]);
 
   const toggleSortOrder = () => {
@@ -270,7 +280,13 @@ const TransactionHistory: React.FC = () => {
                     {shortenTxHash(tx.tx_hash)}
                   </p>
                   <p>
-                    <strong>Height:</strong> {tx.height}
+                    {tx.height > 0 ? (
+                      <div>
+                        <strong>Height:</strong> {tx.height}
+                      </div>
+                    ) : (
+                      <strong>Pending Transaction</strong>
+                    )}
                   </p>
                 </li>
               </a>

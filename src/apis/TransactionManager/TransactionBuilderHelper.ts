@@ -17,6 +17,56 @@ export default function TransactionBuilderHelper() {
   const contractManager = ContractManager();
 
   /**
+   * Extracts the body of a specified function from the contract source code.
+   *
+   * @param source - The contract source code as a string.
+   * @param functionName - The name of the function to extract.
+   * @returns The function body as a string, or null if not found.
+   */
+  function extractFunctionBody(source: string, functionName: string): string | null {
+    // Regex to match function definition, e.g., "function timeout(sig senderSig) {"
+    const functionRegex = new RegExp(`function\\s+${functionName}\\s*\\(.*?\\)\\s*{`, 's');
+    const match = source.match(functionRegex);
+    if (!match || match.index === undefined) return null;
+
+    const startIndex = match.index + match[0].length;
+    let braceCount = 1;
+    let endIndex = startIndex;
+
+    // Count braces to find the end of the function body
+    while (endIndex < source.length && braceCount > 0) {
+      if (source[endIndex] === '{') braceCount++;
+      else if (source[endIndex] === '}') braceCount--;
+      endIndex++;
+    }
+
+    if (braceCount === 0) {
+      return source.substring(startIndex, endIndex - 1).trim();
+    }
+    return null;
+  }
+
+  /**
+   * Checks if the specified function uses time-related keywords (tx.time, tx.age, this.age).
+   *
+   * @param contractInstance - The contract instance containing the artifact.
+   * @param functionName - The name of the function to check.
+   * @returns True if the function uses tx.time, tx.age, or this.age; false otherwise.
+   */
+  function doesFunctionUseTimeKeywords(contractInstance: any, functionName: string): boolean {
+    const source = contractInstance.artifact.source;
+    const functionBody = extractFunctionBody(source, functionName);
+    if (!functionBody) return false;
+
+    // Check for any of the time-related keywords
+    return (
+      functionBody.includes('tx.time') ||
+      functionBody.includes('tx.age') ||
+      functionBody.includes('this.age')
+    );
+  }
+
+  /**
    * Prepares transaction outputs by formatting them according to CashScript requirements.
    *
    * @param outputs - An array of TransactionOutput objects.
@@ -77,6 +127,7 @@ export default function TransactionBuilderHelper() {
     // contractFunctionInputs: { [key: string]: any } | null = null
   ) {
     const txBuilder = new TransactionBuilder({ provider });
+    let needsLocktime = false;
 
     // Prepare unlockable UTXOs with appropriate unlockers
     const unlockableUtxos = await Promise.all(
@@ -107,8 +158,20 @@ export default function TransactionBuilderHelper() {
           unlocker = signatureTemplate.unlockP2PKH();
         } else {
           // Contract UTXO - use contract unlocker
+          const contractInstance = await contractManager.getContractInstanceByAddress(utxo.address)
+          console.log(contractInstance)
+          // console.log(utxo)
           if (!utxo.contractFunction || !utxo.contractFunctionInputs) {
             throw new Error('Contract function and inputs must be provided');
+          }
+
+          // Check if the selected function uses time keywords
+          const usesTimeKeywords = doesFunctionUseTimeKeywords(
+            contractInstance,
+            utxo.contractFunction
+          );
+          if (usesTimeKeywords) {
+            needsLocktime = true;
           }
 
           const contractUnlockFunction =
@@ -142,7 +205,11 @@ export default function TransactionBuilderHelper() {
     const txOutputs = prepareTransactionOutputs(outputs);
     txBuilder.addOutputs(txOutputs);
 
-    // console.log(txBuilder);
+    // Set locktime if any contract function uses time keywords
+    if (needsLocktime) {
+      const currentBlockHeight = await provider.getBlockHeight();
+      txBuilder.setLocktime(currentBlockHeight);
+    }
 
     try {
       const builtTransaction = await txBuilder.build(); // Ensure await is present

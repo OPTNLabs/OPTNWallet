@@ -41,9 +41,12 @@ const RegularTxView: React.FC<RegularTxViewProps> = ({
     ? selectedUtxos.some((u) => u.token?.category === selectedTokenCategory && u.token.nft)
     : false;
 
-  const totalSats = useMemo(() => {
-    return selectedUtxos.reduce((sum, utxo) => sum + (utxo.value || 0), 0);
-  }, [selectedUtxos]);
+    const totalSats = useMemo(() => {
+      return selectedUtxos.reduce((sum, utxo) => {
+        const value = utxo.value || utxo.amount || 0; // Support both properties
+        return sum + BigInt(value); // Use BigInt for consistency
+      }, BigInt(0)); // Start with BigInt(0)
+    }, [selectedUtxos]);
 
   const tokenTotals = useMemo(() => {
     const totals: Record<string, bigint> = {};
@@ -141,23 +144,23 @@ const RegularTxView: React.FC<RegularTxViewProps> = ({
           <label className="font-medium">Transfer Amount (Sats)</label>
           <div className="flex space-x-2">
             <button
-              onClick={() => setTransferAmount(totalSats - 2000)}
+              onClick={() => setTransferAmount(Number(totalSats - 2000n))}
               className="border border-gray-300 bg-blue-500 text-white px-3 py-1 rounded hover:bg-blue-600 transition-colors"
             >
-              Max ({totalSats < 2000 ? 0 : totalSats - 2000})
+              Max ({totalSats < 2000n ? 0 : Number(totalSats - 2000n)})
             </button>
           </div>
         </div>
         <input
           type="number"
-          value={totalSats < 2000 ? 0 : transferAmount > totalSats - 2000 ? totalSats - 2000 : transferAmount}
+          value={totalSats < 2000 ? 0 : transferAmount > Number(totalSats - 2000n) ? Number(totalSats - 2000n) : transferAmount}
           onChange={(e) => {
             const value = e.target.value;
             setTransferAmount(value === '' ? 0 : Number(value));
           }}
           className="border p-2 w-full break-words whitespace-normal"
           min={DUST}
-          max={totalSats}
+          max={Number(totalSats)}
         />
       </div>
       {selectedTokenCategory && selectedTokenCategory !== 'none' && (
@@ -238,7 +241,7 @@ const RegularTxView: React.FC<RegularTxViewProps> = ({
           </div>
         )}
       </div>
-      <div className="flex justific-end mt-4">
+      <div className="flex flex-col items-end justific-end mt-4">
         <button
           onClick={handleAddOutput}
           className="bg-blue-500 font-bold text-white py-2 px-4 rounded"
