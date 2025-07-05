@@ -19,6 +19,7 @@ import AboutView from '../components/AboutView';
 import TermsOfUse from '../components/TermsOfUse';
 import ContactUs from '../components/ContactUs';
 import WalletConnectPanel from '../components/walletconnect/WalletConnectPanel';
+// import { resetWalletConnectState } from '../redux/walletconnectSlice';
 
 const Settings: React.FC = () => {
   const navigate = useNavigate();
@@ -56,6 +57,7 @@ const Settings: React.FC = () => {
     dispatch(resetContract());
     dispatch(resetNetwork());
     dispatch(clearTransaction());
+    // dispatch(resetWalletConnectState());
     navigate('/');
   };
 

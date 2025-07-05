@@ -125,12 +125,19 @@ const Home: React.FC = () => {
     initialized.current = true;
   }, [currentWalletId, generateKeys, placeholderUTXOs, fetchAndStoreUTXOs]);
 
+  const hasFetchedForTx = useRef(false);
   useEffect(() => {
     const fromTxSuccess = location?.state?.fromTxSuccess;
-    if (fromTxSuccess && keyPairs.length > 0) {
+    if (fromTxSuccess && keyPairs.length > 0 && !hasFetchedForTx.current) {
       fetchAndStoreUTXOs();
+      hasFetchedForTx.current = true;
     }
-  }, [location?.state, keyPairs, fetchAndStoreUTXOs]);
+  }, [
+    location,
+    // location?.state,
+    keyPairs,
+    fetchAndStoreUTXOs,
+  ]);
 
   useEffect(() => {
     if (!IsInitialized) return;
@@ -155,7 +162,7 @@ const Home: React.FC = () => {
 
   useEffect(() => {
     if (!fetchingUTXOsRedux && Object.keys(reduxUTXOs).length > 0) {
-      console.log('[Home] Redux UTXOs with metadata:', reduxUTXOs);
+      // console.log('[Home] Redux UTXOs with metadata:', reduxUTXOs);
       setPlaceholderUTXOs(reduxUTXOs);
       setPlaceholderBalance(calculateTotalBitcoinCash(reduxUTXOs));
       setPlaceholderTokenTotals(calculateCashTokenTotals(reduxUTXOs));
@@ -170,7 +177,7 @@ const Home: React.FC = () => {
         await KeyService.createKeys(currentWalletId, 0, i, index);
         const newKeys = await KeyService.retrieveKeys(currentWalletId);
         const newKey = newKeys[newKeys.length - 1];
-  
+
         if (newKey) {
           setKeyPairs((prevKeys) => [...prevKeys, newKey]);
         }
@@ -187,13 +194,17 @@ const Home: React.FC = () => {
       .reduce((acc, utxo) => acc + utxo.amount, 0);
 
   const calculateCashTokenTotals = (utxos: Record<string, any[]>) => {
-    const tokenTotals: Record<string, { amount: number; decimals: number }> = {};
+    const tokenTotals: Record<string, { amount: number; decimals: number }> =
+      {};
     Object.values(utxos)
       .flat()
       .forEach((utxo) => {
         const { category, amount, BcmrTokenMetadata } = utxo.token || {};
         if (category) {
-          console.log(`[Home] Token for category ${category}:`, { amount, BcmrTokenMetadata });
+          // console.log(`[Home] Token for category ${category}:`, {
+          //   amount,
+          //   BcmrTokenMetadata,
+          // });
           const parsedAmount = parseFloat(amount || '0');
           const decimals = BcmrTokenMetadata?.token?.decimals ?? 0; // Default to 0 if undefined
           if (tokenTotals[category]) {
@@ -203,7 +214,7 @@ const Home: React.FC = () => {
           }
         }
       });
-    console.log('[Home] Calculated token totals:', tokenTotals);
+    // console.log('[Home] Calculated token totals:', tokenTotals);
     return tokenTotals;
   };
 
@@ -317,7 +328,9 @@ const Home: React.FC = () => {
               </div>
             )}
             {fungibleTokens.length === 0 && nonFungibleTokens.length === 0 && (
-              <p className="text-center text-gray-500">No CashTokens Available</p>
+              <p className="text-center text-gray-500">
+                No CashTokens Available
+              </p>
             )}
           </div>
         </Popup>

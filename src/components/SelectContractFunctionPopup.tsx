@@ -81,6 +81,11 @@ const SelectContractFunctionPopup: React.FC<
     setFunctions(allFunctionNames);
   }, [contractABI]);
 
+  const allInputsFilled = inputs.every(
+    (input) =>
+      inputValuesState[input.name] && inputValuesState[input.name].trim() !== ''
+  );
+
   const handleFunctionSelect = (e: React.ChangeEvent<HTMLSelectElement>) => {
     const selectedFunctionName = e.target.value;
     setSelectedFunctionState(selectedFunctionName);
@@ -291,26 +296,26 @@ const SelectContractFunctionPopup: React.FC<
                   </label>
                   {isAddressType ? (
                     <>
-                      <div className="flex items-center">
+                      <div className="flex items-center justify-between">
                         <button
                           type="button"
                           onClick={() => openAddressPopup(input)}
-                          className="bg-blue-500 text-white font-bold py-2 px-4 rounded mr-2 flex-1"
-                          disabled={isScanning} // Disable button during scan
+                          className="bg-blue-500 hover:bg-blue-600 text-white font-bold py-2 px-4 rounded min-w-fit mr-2"
+                          disabled={isScanning}
                           aria-label={`Select Address for ${input.name}`}
                         >
                           Select Address
                         </button>
                         <button
                           type="button"
-                          onClick={() => scanBarcode(input.name, input.type)} // Pass arg.name and arg.type directly
-                          className={`bg-green-500 font-bold text-white py-2 px-4 rounded flex items-center justify-center ${
+                          onClick={() => scanBarcode(input.name, input.type)}
+                          className={`w-12 h-12 bg-green-500 hover:bg-green-600 font-bold text-white rounded flex items-center justify-center ${
                             isScanning ? 'opacity-50 cursor-not-allowed' : ''
-                          } flex-1`}
+                          }`}
                           disabled={isScanning}
                           aria-label={`Scan QR Code for ${input.name}`}
                         >
-                          <FaCamera className="mr-1" /> Scan
+                          <FaCamera className="text-lg" />
                         </button>
                       </div>
                       {inputValuesState[input.name] && (
@@ -339,17 +344,21 @@ const SelectContractFunctionPopup: React.FC<
         </div>
         <div className="flex justify-end">
           <button
-            className="bg-blue-500 font-bold text-white py-2 px-4 rounded mr-2"
+            className={`font-bold text-white py-2 px-4 rounded mr-2 ${
+              !selectedFunction || !allInputsFilled
+                ? 'bg-gray-500 cursor-not-allowed'
+                : 'bg-green-500 hover:bg-green-600'
+            }`}
             onClick={handleSelect}
-            disabled={!selectedFunction} // Disable if no function is selected
+            disabled={!selectedFunction || !allInputsFilled}
           >
             Select
           </button>
           <button
-            className="bg-gray-300 font-bold text-gray-700 py-2 px-4 rounded"
+            className="bg-red-500 hover:bg-red-600 font-bold text-white py-2 px-4 rounded"
             onClick={onClose}
           >
-            Cancel
+            Back
           </button>
         </div>
         {showAddressPopup && selectedInput && (
