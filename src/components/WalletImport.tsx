@@ -111,17 +111,9 @@ const WalletImport = () => {
           Import Wallet
         </div>
         {/* Fixed-height container for inputs and toggle */}
-        <div className="flex flex-col min-h-[300px]">
-          <div className="mb-4">
-            <label className="block text-white mb-2">Recovery Phrase</label>
-            <input
-              type="text"
-              onChange={(e) => setRecoveryPhrase(e.target.value)}
-              className="w-full p-2 border border-gray-300 rounded-md"
-            />
-          </div>
+        <div className="flex flex-col items-center min-h-[300px]">
           {/* Toggle for advanced options */}
-          <div className="mb-4 flex flex-row gap-2 items-center text-white">
+          {/* <div className="mb-4 flex flex-row items-center gap-2 items-center text-white">
             <span>Basic</span>
             <div
               onClick={() => setShowAdvanced(!showAdvanced)}
@@ -136,25 +128,39 @@ const WalletImport = () => {
               />
             </div>
             <span>Advanced</span>
-          </div>
+          </div> */}
           {/* Advanced options: Passphrase and NetworkSwitch */}
-          {showAdvanced && (
-            <>
-              <div className="mb-4">
-                <label className="block text-white mb-2">Passphrase - Optional</label>
-                <input
-                  type="password"
-                  value={passphrase}
-                  onChange={(e) => setPassphrase(e.target.value)}
-                  className="w-full p-2 border border-gray-300 rounded-md"
-                />
-              </div>
-              <NetworkSwitch
-                networkType={currentNetwork}
-                setNetworkType={(network: Network) => dispatch(setNetwork(network))}
+          {/* {showAdvanced && ( */}
+          <>
+            {/* <div className="mb-4">
+              <label className="block text-white mb-2">
+                Passphrase - Optional
+              </label>
+              <input
+                type="password"
+                value={passphrase}
+                onChange={(e) => setPassphrase(e.target.value)}
+                className="w-full p-2 border border-gray-300 rounded-md"
               />
-            </>
-          )}
+            </div> */}
+            <NetworkSwitch
+              networkType={currentNetwork}
+              setNetworkType={(network: Network) =>
+                dispatch(setNetwork(network))
+              }
+            />
+          </>
+          {/* )} */}
+          <div className="mb-4 flex flex-col items-center">
+            <label className="text-white font-bold text-xl mb-2 text-center">
+              Recovery Phrase
+            </label>
+            <input
+              type="text"
+              onChange={(e) => setRecoveryPhrase(e.target.value)}
+              className="w-full p-2 border border-gray-300 rounded-md"
+            />
+          </div>
         </div>
         <button
           onClick={handleImportAccount}

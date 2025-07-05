@@ -95,7 +95,9 @@ const Transaction: React.FC = () => {
   const [nftCapability, setNftCapability] = useState<
     undefined | 'none' | 'mutable' | 'minting'
   >(undefined);
-  const [nftCommitment, setNftCommitment] = useState<undefined | string>(undefined);
+  const [nftCommitment, setNftCommitment] = useState<undefined | string>(
+    undefined
+  );
 
   // const navigate = useNavigate();
   const dispatch: AppDispatch = useDispatch();
@@ -400,8 +402,11 @@ const Transaction: React.FC = () => {
   );
 
   const filteredContractUTXOs = useMemo(
-    () => contractUTXOs.filter((u) => selectedAddresses.includes(u.address)),
-    [contractUTXOs, selectedAddresses]
+    () =>
+      contractUTXOs.filter((u) =>
+        selectedContractAddresses.includes(u.address)
+      ),
+    [contractUTXOs, selectedContractAddresses]
   );
 
   const totalSelectedUtxoAmount = useMemo(

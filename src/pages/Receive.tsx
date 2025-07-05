@@ -6,7 +6,7 @@ import { RootState } from '../redux/store';
 import KeyService from '../services/KeyService';
 import { Toast } from '@capacitor/toast';
 import { shortenTxHash } from '../utils/shortenHash';
-import { PREFIX } from '../utils/constants';
+import { COIN_TYPE, PREFIX } from '../utils/constants';
 import { selectCurrentNetwork } from '../redux/selectors/networkSelectors';
 import { QRCodeSVG } from 'qrcode.react';
 import { hexString } from '../utils/hex';
@@ -45,8 +45,8 @@ const Receive: React.FC = () => {
 
       try {
         const existingKeys = await KeyService.retrieveKeys(currentWalletId);
-        const mainKeys = existingKeys.filter(key => key.changeIndex === 0);
-        const changeKeys = existingKeys.filter(key => key.changeIndex === 1);
+        const mainKeys = existingKeys.filter((key) => key.changeIndex === 0);
+        const changeKeys = existingKeys.filter((key) => key.changeIndex === 1);
         if (mainKeys.length > 0 && changeKeys.length > 0) {
           setMainKeyPairs(mainKeys);
           setChangeKeyPairs(changeKeys);
@@ -140,7 +140,8 @@ const Receive: React.FC = () => {
   };
 
   // Determine which key pairs to display
-  const keyPairsToDisplay = addressType === 'main' ? mainKeyPairs : changeKeyPairs;
+  const keyPairsToDisplay =
+    addressType === 'main' ? mainKeyPairs : changeKeyPairs;
 
   return (
     <div className="container mx-auto p-4 pb-16 mt-12 h-full relative">
@@ -149,22 +150,26 @@ const Receive: React.FC = () => {
           Select an Address
         </div>
         {/* New toggle buttons for main/change */}
-        
+
         {!selectedAddress && (
           <div>
             <div className="flex justify-center space-x-4 mb-4">
               <button
-                className={`px-4 py-2 rounded ${
-                  addressType === 'main' ? 'bg-blue-500 text-white' : 'bg-gray-200 text-gray-700'
-                }`}
+                className={`px-4 py-2 font-bold rounded ${
+                  addressType === 'main'
+                    ? 'bg-blue-500 text-white'
+                    : 'bg-gray-200 text-gray-700'
+                } ${addressType === 'main' ? 'hover:bg-blue-600' : 'hover:bg-gray-300'}`}
                 onClick={() => setAddressType('main')}
               >
                 Main Addresses
               </button>
               <button
-                className={`px-4 py-2 rounded ${
-                  addressType === 'change' ? 'bg-blue-500 text-white' : 'bg-gray-200 text-gray-700'
-                }`}
+                className={`px-4 py-2 font-bold rounded ${
+                  addressType === 'change'
+                    ? 'bg-blue-500 text-white'
+                    : 'bg-gray-200 text-gray-700'
+                } ${addressType === 'change' ? 'hover:bg-blue-600' : 'hover:bg-gray-300'}`}
                 onClick={() => setAddressType('change')}
               >
                 Change Addresses
@@ -173,7 +178,7 @@ const Receive: React.FC = () => {
             <div className="flex flex-row gap-2 items-center text-gray-800 mb-4">
               <span
                 className={`${isTokenAddress ? 'text-gray-400' : 'text-black'}`}
-                >
+              >
                 Regular Address
               </span>
               <div
@@ -181,16 +186,16 @@ const Receive: React.FC = () => {
                 className={`w-12 h-6 bg-gray-300 rounded-full flex items-center cursor-pointer relative transition-colors duration-300 ${
                   isTokenAddress ? 'bg-orange-400' : 'bg-green-400'
                 }`}
-                >
+              >
                 <div
                   className={`w-6 h-6 bg-white rounded-full shadow-md transform transition-transform duration-300 ${
                     isTokenAddress ? 'translate-x-6' : 'translate-x'
                   }`}
-                  />
+                />
               </div>
               <span
                 className={`${isTokenAddress ? 'text-black' : 'text-gray-400'}`}
-                >
+              >
                 Token Address
               </span>
             </div>
@@ -206,7 +211,7 @@ const Receive: React.FC = () => {
             {keyPairsToDisplay.map((keyPair: any, index: number) => (
               <div
                 key={index}
-                className="p-4 mb-4 bg-white rounded-lg shadow-md cursor-pointer hover:bg-gray-600 hover:text-white"
+                className="p-4 mb-4 bg-white rounded-lg shadow-md cursor-pointer hover:bg-gray-500 hover:text-white"
                 onClick={() =>
                   handleAddressSelect(keyPair.tokenAddress, keyPair.address)
                 }
@@ -217,7 +222,7 @@ const Receive: React.FC = () => {
                     PREFIX[currentNetwork].length
                   )}
                   <br />
-                  {`${keyPair.changeIndex} / ${keyPair.addressIndex}`}
+                  {`m/44'/${PREFIX[currentNetwork] === PREFIX.mainnet ? COIN_TYPE.bitcoincash : COIN_TYPE.testnet}'/0'/${keyPair.changeIndex}/${keyPair.addressIndex}`}
                 </p>
               </div>
             ))}
@@ -273,7 +278,7 @@ const Receive: React.FC = () => {
                     onClick={handleCopyPK}
                   >
                     {shortenTxHash(
-                      selectedPK || '',
+                      selectedPK || ''
                       // PREFIX[currentNetwork].length
                     )}
                   </p>

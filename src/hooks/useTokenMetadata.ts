@@ -26,7 +26,7 @@ const useTokenMetadata = (categories: string[]) => {
             iconUri,
           };
         } catch (e) {
-          console.error('Failed loading metadata for', category, e);
+          // console.error('Failed loading metadata for', category, e);
         }
       }
       setMetadata((prev) => ({ ...prev, ...newMeta }));

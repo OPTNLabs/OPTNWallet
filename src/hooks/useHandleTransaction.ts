@@ -102,7 +102,7 @@ const useHandleTransaction = (
       // });
 
       if (!transaction.finalTransaction) {
-        setErrorMessage('Failed to build transaction.');
+        setErrorMessage(`Failed to build transaction: ${transaction.errorMsg}`);
         setLoading(false);
         return;
       }
