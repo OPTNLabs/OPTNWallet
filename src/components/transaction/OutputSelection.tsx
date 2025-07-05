@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { CapacitorBarcodeScanner, CapacitorBarcodeScannerTypeHint } from '@capacitor/barcode-scanner';
 import { Toast } from '@capacitor/toast';
 import { useDispatch } from 'react-redux';
@@ -80,6 +80,13 @@ const OutputSelection: React.FC<OutputSelectionProps> = ({
   useEffect(() => {
     if (showNFTCashToken) setTokenAmount(0);
   }, [showNFTCashToken, setTokenAmount]);
+
+  const totalSats = useMemo(() => {
+    return selectedUtxos.reduce((sum, utxo) => {
+      const value = utxo.value || utxo.amount || 0; // Support both properties
+      return sum + BigInt(value); // Use BigInt for consistency
+    }, BigInt(0)); // Start with BigInt(0)
+  }, [selectedUtxos]);
 
   const resetFormValues = () => {
     setShowRegularTx(false);
@@ -248,7 +255,7 @@ const OutputSelection: React.FC<OutputSelectionProps> = ({
           </div>
         )}
         {txOutputs.length < 10 && (
-          <div className="mb-6">
+          <div className="mb-6 flex flex-col items-end">
             <button
               onClick={() => {
                 resetFormValues();

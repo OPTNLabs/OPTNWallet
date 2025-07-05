@@ -40,6 +40,9 @@ const useFetchWalletData = (
         setAddresses(addresses);
         setContractAddresses(contractAddresses);
         setUtxos(utxos);
+        // console.log(contractAddresses.flatMap((contract) =>
+        //   utxos.filter((utxo) => utxo.address === contract.address)
+        // ))
         setContractUTXOs(
           contractAddresses.flatMap((contract) =>
             utxos.filter((utxo) => utxo.address === contract.address)

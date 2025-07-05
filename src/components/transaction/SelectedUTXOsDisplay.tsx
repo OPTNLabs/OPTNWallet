@@ -27,12 +27,19 @@ export default function SelectedUTXOsDisplay({
 
   // Updated tokenMetadata to include symbol and decimals
   const [tokenMetadata, setTokenMetadata] = useState<
-    Record<string, { name: string; symbol: string; decimals: number; iconUri: string | null }>
+    Record<
+      string,
+      { name: string; symbol: string; decimals: number; iconUri: string | null }
+    >
   >({});
 
   // Function to format token amounts based on decimals
-  const formatTokenAmount = (amount: number | string | bigint, decimals: number = 0): string => {
-    const numAmount = typeof amount === 'string' ? parseFloat(amount) : Number(amount);
+  const formatTokenAmount = (
+    amount: number | string | bigint,
+    decimals: number = 0
+  ): string => {
+    const numAmount =
+      typeof amount === 'string' ? parseFloat(amount) : Number(amount);
     if (decimals === 0) return numAmount.toString();
     const divisor = Math.pow(10, decimals);
     const formatted = (numAmount / divisor).toFixed(decimals);
@@ -54,15 +61,18 @@ export default function SelectedUTXOsDisplay({
         try {
           const authbase = await svc.getCategoryAuthbase(category);
           const reg = await svc.resolveIdentityRegistry(authbase);
-          const snap: IdentitySnapshot = svc.extractIdentity(authbase, reg.registry);
+          const snap: IdentitySnapshot = svc.extractIdentity(
+            authbase,
+            reg.registry
+          );
           const iconUri = await svc.resolveIcon(authbase);
           // Extract decimals and symbol from the snapshot
           const decimals = snap.token?.decimals || 0;
           const symbol = snap.token?.symbol || '';
           newMeta[category] = { name: snap.name, symbol, decimals, iconUri };
-          console.log('Fetched metadata for', category, newMeta[category]);
+          // console.log('Fetched metadata for', category, newMeta[category]);
         } catch (e) {
-          console.error('Failed loading metadata for', category, e);
+          // console.error('Failed loading metadata for', category, e);
         }
       }
       // Merge into cache
@@ -118,13 +128,17 @@ export default function SelectedUTXOsDisplay({
                     {isToken ? (
                       <span className="w-full">
                         Amount:{' '}
-                        {formatTokenAmount(utxo.token!.amount, meta?.decimals || 0)}{' '}
+                        {formatTokenAmount(
+                          utxo.token!.amount,
+                          meta?.decimals || 0
+                        )}{' '}
                         {meta?.symbol || 'tokens'}
                       </span>
                     ) : (
                       <>
                         <span className="w-full">
-                          Amount: {utxo.amount != null ? utxo.amount : utxo.value} sats
+                          Amount:{' '}
+                          {utxo.amount != null ? utxo.amount : utxo.value} sats
                         </span>
                         <span className="w-full">
                           Tx Hash: {shortenTxHash(utxo.tx_hash)}

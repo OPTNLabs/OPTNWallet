@@ -38,19 +38,19 @@ const AvailableUTXOsDisplay: React.FC<AvailableUTXOsDisplayProps> = ({
 
   return (
     <div className="mb-4">
-      <div className="flex justify-between items-center mb-4">
-        <h3 className="text-lg font-semibold">CashToken Genesis UTXOs</h3>
-        {/* {(filteredRegularUTXOs.length > 0 ||
-          filteredContractUTXOs.length > 0) && ( */}
-        {filteredRegularUTXOs.length > 0 && (
-          <button
-            onClick={() => setShowCTUTXOs(true)}
-            className="bg-blue-500 font-bold text-white py-1 px-2 rounded hover:bg-blue-600 transition-colors duration-200"
-          >
-            Show
-          </button>
-        )}
-      </div>
+      {/*
+        <div className="flex justify-between items-center mb-4">
+          <h3 className="text-lg font-semibold">CashToken Genesis UTXOs</h3>
+          {filteredRegularUTXOs.length > 0 && (
+            <button
+              onClick={() => setShowCTUTXOs(true)}
+              className="bg-blue-500 font-bold text-white py-1 px-2 rounded hover:bg-blue-600 transition-colors duration-200"
+            >
+              Show
+            </button>
+          )}
+        </div>
+      */}
 
       {/* Show popup only if showCTUTXOs is true */}
       {showCTUTXOs && (

@@ -481,7 +481,9 @@ export const checkAndDisconnectExpiredSessions = createAsyncThunk(
 
     for (const [topic, session] of Object.entries(activeSessions)) {
       if (session.expiry && currentTime >= session.expiry) {
-        console.log(`[checkAndDisconnectExpiredSessions] Disconnecting expired session: ${topic}`);
+        console.log(
+          `[checkAndDisconnectExpiredSessions] Disconnecting expired session: ${topic}`
+        );
         await dispatch(disconnectSession(topic));
       }
     }
