@@ -21,10 +21,10 @@ android {
 
     signingConfigs {
         release {
-            keyAlias 'OPTN-key-alias'
-            keyPassword 'OPTNWallet'
-            storeFile file('optn-key.keystore')
-            storePassword 'OPTNWallet'
+            storeFile file(System.getenv("RELEASE_STORE_FILE") ?: RELEASE_STORE_FILE)
+            storePassword System.getenv("RELEASE_STORE_PASSWORD") ?: RELEASE_STORE_PASSWORD
+            keyAlias System.getenv("RELEASE_KEY_ALIAS") ?: RELEASE_KEY_ALIAS
+            keyPassword System.getenv("RELEASE_KEY_PASSWORD") ?: RELEASE_KEY_PASSWORD
         }
     }
 

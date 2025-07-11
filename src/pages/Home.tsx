@@ -103,6 +103,7 @@ const Home: React.FC = () => {
       }
 
       setPlaceholderUTXOs(allUTXOs);
+      console.log(placeholderUTXOs);
       setPlaceholderTokenTotals(calculateCashTokenTotals(allUTXOs));
       dispatch(setUTXOs({ newUTXOs: allUTXOs }));
       await DatabaseService().saveDatabaseToFile();
