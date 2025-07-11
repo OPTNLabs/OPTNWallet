@@ -20,6 +20,7 @@ export function SessionList({
     <div className="space-y-4">
       {Object.entries(activeSessions).map(([topic, session]) => {
         const dappMeta = session.peer.metadata;
+        console.log(dappMeta);
         return (
           <div
             key={topic}
@@ -41,7 +42,9 @@ export function SessionList({
                 >
                   {dappMeta.url}
                 </a>
-                <p className="text-gray-600 text-sm mt-1">{dappMeta.description}</p>
+                <p className="text-gray-600 text-sm mt-1">
+                  {dappMeta.description}
+                </p>
               </div>
             </div>
             <div className="flex justify-between mt-4 md:mt-0">

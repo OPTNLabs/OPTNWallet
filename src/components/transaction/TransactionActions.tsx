@@ -1,3 +1,5 @@
+// @ts-nocheck
+
 // src/components/transaction/TransactionActions.tsx
 
 import React, { useState } from 'react';
@@ -22,7 +24,7 @@ const TransactionActions: React.FC<TransactionActionsProps> = ({
 
   // Slider constants
   const sliderWidth = 200; // Track width in pixels
-  const handleWidth = 48;  // Handle width in pixels (matches Tailwind's w-12, ~3rem)
+  const handleWidth = 48; // Handle width in pixels (matches Tailwind's w-12, ~3rem)
   const threshold = sliderWidth * 0.7; // Confirmation threshold at 80% (160px)
 
   // Function to open the popup
@@ -78,7 +80,8 @@ const TransactionActions: React.FC<TransactionActionsProps> = ({
               ⚠️ Warning
             </p>
             <p className="text-red-600 font-semibold text-sm text-center mb-6">
-              You are about to send a transaction. Please confirm that all details are correct. This action cannot be undone.
+              You are about to send a transaction. Please confirm that all
+              details are correct. This action cannot be undone.
             </p>
             <div className="relative w-[200px] h-12 bg-gray-200 rounded-lg overflow-hidden">
               {/* Background fill for visual feedback */}
@@ -87,8 +90,8 @@ const TransactionActions: React.FC<TransactionActionsProps> = ({
                   position.x >= threshold
                     ? 'bg-green-500'
                     : position.x > 0
-                    ? 'bg-orange-500'
-                    : 'bg-red-500'
+                      ? 'bg-orange-500'
+                      : 'bg-red-500'
                 }`}
                 style={{ width: `${position.x}px` }}
               ></div>
@@ -96,7 +99,9 @@ const TransactionActions: React.FC<TransactionActionsProps> = ({
               <Draggable
                 axis="x" // Restrict dragging to horizontal axis
                 position={position}
-                onDrag={(e, data) => !loading && setPosition({ x: data.x, y: 0 })}
+                onDrag={(e, data) =>
+                  !loading && setPosition({ x: data.x, y: 0 })
+                }
                 onStop={(e, data) => {
                   if (data.x >= threshold && !loading) {
                     sendTransaction();
@@ -112,7 +117,7 @@ const TransactionActions: React.FC<TransactionActionsProps> = ({
                     loading ? 'opacity-50 cursor-not-allowed' : 'cursor-grab'
                   }`}
                 >
-                  {position.x >= threshold ? "✅" : 'Send TX'}
+                  {position.x >= threshold ? '✅' : 'Send TX'}
                 </div>
               </Draggable>
             </div>

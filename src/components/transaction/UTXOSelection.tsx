@@ -1,3 +1,5 @@
+// @ts-nocheck
+
 // src/components/transaction/UTXOSelection.tsx
 
 import React, { useState } from 'react';

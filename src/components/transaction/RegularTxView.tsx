@@ -14,7 +14,10 @@ interface RegularTxViewProps {
   setTokenAmount: (amount: number) => void;
   selectedTokenCategory: string;
   setSelectedTokenCategory: (category: string) => void;
-  tokenMetadata: Record<string, { name: string; symbol: string; decimals: number; iconUri: string | null }>;
+  tokenMetadata: Record<
+    string,
+    { name: string; symbol: string; decimals: number; iconUri: string | null }
+  >;
   selectedUtxos: UTXO[];
   scanBarcode: () => void;
   handleAddOutput: () => void;
@@ -26,7 +29,7 @@ const RegularTxView: React.FC<RegularTxViewProps> = ({
   transferAmount,
   setTransferAmount,
   categoriesFromSelected,
-  tokenAmount,
+  // tokenAmount,
   setTokenAmount,
   selectedTokenCategory,
   setSelectedTokenCategory,
@@ -37,20 +40,23 @@ const RegularTxView: React.FC<RegularTxViewProps> = ({
 }) => {
   const [inputTokenAmount, setInputTokenAmount] = useState<string>('');
 
-  const isNft = selectedTokenCategory && selectedTokenCategory !== 'none'
-    ? selectedUtxos.some((u) => u.token?.category === selectedTokenCategory && u.token.nft)
-    : false;
+  const isNft =
+    selectedTokenCategory && selectedTokenCategory !== 'none'
+      ? selectedUtxos.some(
+          (u) => u.token?.category === selectedTokenCategory && u.token.nft
+        )
+      : false;
 
-    const totalSats = useMemo(() => {
-      return selectedUtxos.reduce((sum, utxo) => {
-        const value = utxo.value || utxo.amount || 0; // Support both properties
-        return sum + BigInt(value); // Use BigInt for consistency
-      }, BigInt(0)); // Start with BigInt(0)
-    }, [selectedUtxos]);
+  const totalSats = useMemo(() => {
+    return selectedUtxos.reduce((sum, utxo) => {
+      const value = utxo.value || utxo.amount || 0; // Support both properties
+      return sum + BigInt(value); // Use BigInt for consistency
+    }, BigInt(0)); // Start with BigInt(0)
+  }, [selectedUtxos]);
 
   const tokenTotals = useMemo(() => {
     const totals: Record<string, bigint> = {};
-    selectedUtxos.forEach(utxo => {
+    selectedUtxos.forEach((utxo) => {
       if (utxo.token) {
         const category = utxo.token.category;
         const amount = utxo.token.amount;
@@ -85,7 +91,9 @@ const RegularTxView: React.FC<RegularTxViewProps> = ({
     }
   }, [selectedTokenCategory, isNft, setTokenAmount]);
 
-  const handleInputTokenAmountChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleInputTokenAmountChange = (
+    e: React.ChangeEvent<HTMLInputElement>
+  ) => {
     const value = e.target.value;
     const decimals = tokenMetadata[selectedTokenCategory]?.decimals || 0;
     const maxTokenAmount = tokenTotals[selectedTokenCategory] || BigInt(0);
@@ -94,7 +102,11 @@ const RegularTxView: React.FC<RegularTxViewProps> = ({
     if (regex.test(value) || value === '') {
       setInputTokenAmount(value);
 
-      if (!isNft && selectedTokenCategory && tokenMetadata[selectedTokenCategory]) {
+      if (
+        !isNft &&
+        selectedTokenCategory &&
+        tokenMetadata[selectedTokenCategory]
+      ) {
         try {
           const amount = parseFloat(value);
           if (!isNaN(amount)) {
@@ -153,7 +165,13 @@ const RegularTxView: React.FC<RegularTxViewProps> = ({
         </div>
         <input
           type="number"
-          value={totalSats < 2000 ? 0 : transferAmount > Number(totalSats - 2000n) ? Number(totalSats - 2000n) : transferAmount}
+          value={
+            totalSats < 2000
+              ? 0
+              : transferAmount > Number(totalSats - 2000n)
+                ? Number(totalSats - 2000n)
+                : transferAmount
+          }
           onChange={(e) => {
             const value = e.target.value;
             setTransferAmount(value === '' ? 0 : Number(value));
@@ -176,15 +194,25 @@ const RegularTxView: React.FC<RegularTxViewProps> = ({
               <div className="flex space-x-2">
                 <button
                   onClick={() => {
-                    const maxTokenAmount = tokenTotals[selectedTokenCategory] || BigInt(0);
-                    const decimals = tokenMetadata[selectedTokenCategory]?.decimals || 0;
-                    const formattedMax = formatTokenAmount(maxTokenAmount, decimals);
+                    const maxTokenAmount =
+                      tokenTotals[selectedTokenCategory] || BigInt(0);
+                    const decimals =
+                      tokenMetadata[selectedTokenCategory]?.decimals || 0;
+                    const formattedMax = formatTokenAmount(
+                      maxTokenAmount,
+                      decimals
+                    );
                     setInputTokenAmount(formattedMax);
                     setTokenAmount(Number(maxTokenAmount));
                   }}
                   className="border border-gray-300 bg-blue-500 text-white px-3 py-1 rounded hover:bg-blue-600 transition-colors"
                 >
-                  Max ({formatTokenAmount(tokenTotals[selectedTokenCategory] || BigInt(0), tokenMetadata[selectedTokenCategory]?.decimals || 0)})
+                  Max (
+                  {formatTokenAmount(
+                    tokenTotals[selectedTokenCategory] || BigInt(0),
+                    tokenMetadata[selectedTokenCategory]?.decimals || 0
+                  )}
+                  )
                 </button>
               </div>
             )}
@@ -225,21 +253,26 @@ const RegularTxView: React.FC<RegularTxViewProps> = ({
             );
           })}
         </select>
-        {selectedTokenCategory !== 'none' && tokenMetadata[selectedTokenCategory] && (
-          <div className="flex justify-between items-center mt-2">
-            <div className="flex items-center">
-              {tokenMetadata[selectedTokenCategory].iconUri && (
-                <img
-                  src={tokenMetadata[selectedTokenCategory].iconUri}
-                  alt={tokenMetadata[selectedTokenCategory].name}
-                  className="w-6 h-6 rounded mr-2"
-                />
-              )}
-              <span className="font-medium">{tokenMetadata[selectedTokenCategory].name}</span>
+        {selectedTokenCategory !== 'none' &&
+          tokenMetadata[selectedTokenCategory] && (
+            <div className="flex justify-between items-center mt-2">
+              <div className="flex items-center">
+                {tokenMetadata[selectedTokenCategory].iconUri && (
+                  <img
+                    src={tokenMetadata[selectedTokenCategory].iconUri}
+                    alt={tokenMetadata[selectedTokenCategory].name}
+                    className="w-6 h-6 rounded mr-2"
+                  />
+                )}
+                <span className="font-medium">
+                  {tokenMetadata[selectedTokenCategory].name}
+                </span>
+              </div>
+              <span className="text-sm font-medium">
+                {isNft ? 'NFT' : 'FT'}
+              </span>
             </div>
-            <span className="text-sm font-medium">{isNft ? 'NFT' : 'FT'}</span>
-          </div>
-        )}
+          )}
       </div>
       <div className="flex flex-col items-end justific-end mt-4">
         <button

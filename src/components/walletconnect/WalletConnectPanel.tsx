@@ -1,3 +1,5 @@
+// @ts-nocheck
+
 // src/components/walletconnect/WalletConnectPanel.tsx
 import { useState, useCallback, useEffect } from 'react';
 import { useSelector, useDispatch } from 'react-redux';

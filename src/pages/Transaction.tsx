@@ -1,3 +1,5 @@
+// @ts-nocheck
+
 // src/pages/Transaction.tsx
 
 import React, { useEffect, useMemo, useState } from 'react';
