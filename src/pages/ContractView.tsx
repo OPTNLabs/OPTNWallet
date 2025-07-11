@@ -542,18 +542,20 @@ const ContractView = () => {
                     />
                   </div> 
                   */}
-                  <button
-                    onClick={() => updateContract(instance.address)}
-                    className="bg-green-500 hover:bg-green-600 font-bold text-white py-2 px-4 my-2 rounded"
-                  >
-                    Update
-                  </button>
-                  <button
-                    onClick={() => deleteContract(instance.id)}
-                    className="bg-red-500 hover:bg-red-600 font-bold text-white py-2 px-4 my-2 rounded"
-                  >
-                    Delete
-                  </button>
+                  <div className="grid grid-cols-[auto,auto] justify-between">
+                    <button
+                      onClick={() => deleteContract(instance.id)}
+                      className="bg-red-500 hover:bg-red-600 font-bold text-white py-2 px-4 my-2 rounded "
+                    >
+                      Delete
+                    </button>
+                    <button
+                      onClick={() => updateContract(instance.address)}
+                      className="bg-green-500 hover:bg-green-600 font-bold text-white py-2 px-4 my-2 rounded justify-self-end"
+                    >
+                      Update
+                    </button>
+                  </div>
                 </li>
               ))}
             </ul>
