@@ -25,7 +25,7 @@ const AvailableUTXOsDisplay: React.FC<AvailableUTXOsDisplayProps> = ({
   handleUtxoClick,
   currentNetwork,
   showCTUTXOs,
-  setShowCTUTXOs,
+  // setShowCTUTXOs,
   closePopups,
 }) => {
   // Optionally filter UTXOs for those with tx_pos === 0
