@@ -1,5 +1,12 @@
-import React, { useState, useEffect, useMemo } from 'react';
-import { CapacitorBarcodeScanner, CapacitorBarcodeScannerTypeHint } from '@capacitor/barcode-scanner';
+import React, {
+  useState,
+  useEffect,
+  // useMemo
+} from 'react';
+import {
+  CapacitorBarcodeScanner,
+  CapacitorBarcodeScannerTypeHint,
+} from '@capacitor/barcode-scanner';
 import { Toast } from '@capacitor/toast';
 import { useDispatch } from 'react-redux';
 import { AppDispatch } from '../../redux/store';
@@ -73,20 +80,26 @@ const OutputSelection: React.FC<OutputSelectionProps> = ({
   const [popupTitle, setPopupTitle] = useState('Add Output');
   const [opReturnText, setOpReturnText] = useState('');
 
-  const hasGenesisUtxoSelected = selectedUtxos.some((utxo) => !utxo.token && utxo.tx_pos === 0);
-  const categoriesFromSelected = [...new Set(selectedUtxos.filter((u) => u.token).map((u) => u.token.category))];
+  const hasGenesisUtxoSelected = selectedUtxos.some(
+    (utxo) => !utxo.token && utxo.tx_pos === 0
+  );
+  const categoriesFromSelected = [
+    ...new Set(
+      selectedUtxos.filter((u) => u.token).map((u) => u.token.category)
+    ),
+  ];
   const tokenMetadata = useTokenMetadata(categoriesFromSelected);
 
   useEffect(() => {
     if (showNFTCashToken) setTokenAmount(0);
   }, [showNFTCashToken, setTokenAmount]);
 
-  const totalSats = useMemo(() => {
-    return selectedUtxos.reduce((sum, utxo) => {
-      const value = utxo.value || utxo.amount || 0; // Support both properties
-      return sum + BigInt(value); // Use BigInt for consistency
-    }, BigInt(0)); // Start with BigInt(0)
-  }, [selectedUtxos]);
+  // const totalSats = useMemo(() => {
+  //   return selectedUtxos.reduce((sum, utxo) => {
+  //     const value = utxo.value || utxo.amount || 0; // Support both properties
+  //     return sum + BigInt(value); // Use BigInt for consistency
+  //   }, BigInt(0)); // Start with BigInt(0)
+  // }, [selectedUtxos]);
 
   const resetFormValues = () => {
     setShowRegularTx(false);
@@ -106,7 +119,9 @@ const OutputSelection: React.FC<OutputSelectionProps> = ({
 
   const togglePopup = () => setShowPopup((prev) => !prev);
 
-  const handleTransferAmountChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleTransferAmountChange = (
+    e: React.ChangeEvent<HTMLInputElement>
+  ) => {
     const value = e.target.value;
     setTransferAmount(value === '' ? 0 : Number(value));
   };
@@ -126,7 +141,9 @@ const OutputSelection: React.FC<OutputSelectionProps> = ({
       else await Toast.show({ text: 'No QR code detected. Please try again.' });
     } catch (error) {
       console.error('Barcode scan error:', error);
-      await Toast.show({ text: 'Failed to scan QR code. Please ensure camera permissions are granted and try again.' });
+      await Toast.show({
+        text: 'Failed to scan QR code. Please ensure camera permissions are granted and try again.',
+      });
     }
   };
 
@@ -139,7 +156,10 @@ const OutputSelection: React.FC<OutputSelectionProps> = ({
   };
 
   const addOpReturnOutput = async () => {
-    const opReturnArray = opReturnText.split(' ').map((s) => s.trim()).filter((s) => s.length > 0);
+    const opReturnArray = opReturnText
+      .split(' ')
+      .map((s) => s.trim())
+      .filter((s) => s.length > 0);
     if (opReturnArray.length === 0) {
       await Toast.show({ text: 'OP_RETURN data cannot be empty.' });
       return;
@@ -188,7 +208,12 @@ const OutputSelection: React.FC<OutputSelectionProps> = ({
                   >
                     <div className="flex justify-between w-full">
                       <span className="font-medium">Recipient:</span>
-                      <span>{shortenTxHash(output.recipientAddress, PREFIX[currentNetwork].length)}</span>
+                      <span>
+                        {shortenTxHash(
+                          output.recipientAddress,
+                          PREFIX[currentNetwork].length
+                        )}
+                      </span>
                     </div>
                     <div className="flex justify-between w-full">
                       <span className="font-medium">Amount:</span>
@@ -198,7 +223,11 @@ const OutputSelection: React.FC<OutputSelectionProps> = ({
                       <>
                         <div className="flex justify-between w-full">
                           <span className="font-medium">Token:</span>
-                          <span>{output.token.amount ? output.token.amount.toString() : 'NFT'}</span>
+                          <span>
+                            {output.token.amount
+                              ? output.token.amount.toString()
+                              : 'NFT'}
+                          </span>
                         </div>
                         <div className="flex justify-between w-full">
                           <span className="font-medium">Category:</span>
