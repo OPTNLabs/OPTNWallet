@@ -25,12 +25,28 @@ export default function SelectedUTXOsDisplay({
 }: SelectedUTXOsDisplayProps) {
   const [showPopup, setShowPopup] = useState(false);
 
-  // categoryHex → { name, iconUri }
+  // Updated tokenMetadata to include symbol and decimals
   const [tokenMetadata, setTokenMetadata] = useState<
-    Record<string, { name: string; iconUri: string | null }>
+    Record<
+      string,
+      { name: string; symbol: string; decimals: number; iconUri: string | null }
+    >
   >({});
 
-  // whenever the set of categories changes, fetch any missing metadata
+  // Function to format token amounts based on decimals
+  const formatTokenAmount = (
+    amount: number | string | bigint,
+    decimals: number = 0
+  ): string => {
+    const numAmount =
+      typeof amount === 'string' ? parseFloat(amount) : Number(amount);
+    if (decimals === 0) return numAmount.toString();
+    const divisor = Math.pow(10, decimals);
+    const formatted = (numAmount / divisor).toFixed(decimals);
+    return formatted.replace(/\.?0+$/, ''); // Remove trailing zeros
+  };
+
+  // Fetch token metadata when categories change
   useEffect(() => {
     const svc = new BcmrService();
     const missing = selectedUtxos
@@ -50,12 +66,16 @@ export default function SelectedUTXOsDisplay({
             reg.registry
           );
           const iconUri = await svc.resolveIcon(authbase);
-          newMeta[category] = { name: snap.name, iconUri };
+          // Extract decimals and symbol from the snapshot
+          const decimals = snap.token?.decimals || 0;
+          const symbol = snap.token?.symbol || '';
+          newMeta[category] = { name: snap.name, symbol, decimals, iconUri };
+          // console.log('Fetched metadata for', category, newMeta[category]);
         } catch (e) {
-          console.error('Failed loading metadata for', category, e);
+          // console.error('Failed loading metadata for', category, e);
         }
       }
-      // merge into cache
+      // Merge into cache
       setTokenMetadata((prev) => ({ ...prev, ...newMeta }));
     })();
   }, [selectedUtxos, tokenMetadata]);
@@ -85,6 +105,7 @@ export default function SelectedUTXOsDisplay({
             ) : (
               selectedUtxos.map((utxo) => {
                 const key = utxo.id ?? `${utxo.tx_hash}-${utxo.tx_pos}`;
+                const isToken = !!utxo.token; // Check if it's a CashToken
                 const cat = utxo.token?.category;
                 const meta = cat ? tokenMetadata[cat] : null;
 
@@ -96,25 +117,35 @@ export default function SelectedUTXOsDisplay({
                   >
                     {/* Address */}
                     <span className="w-full">
-                      Address:{' '}
+                      {/* Address:{' '} */}
                       {shortenTxHash(
-                        utxo.address,
+                        meta ? utxo.tokenAddress : utxo.address,
                         PREFIX[currentNetwork].length
                       )}
                     </span>
 
-                    {/* Amount */}
-                    <span className="w-full">
-                      Amount: {utxo.amount != null ? utxo.amount : utxo.value}{' '}
-                      sats
-                    </span>
-
-                    {/* Tx Hash */}
-                    <span className="w-full">
-                      Tx Hash: {shortenTxHash(utxo.tx_hash)}
-                    </span>
-                    {/* Position */}
-                    <span className="w-full">Position: {utxo.tx_pos}</span>
+                    {/* Conditional rendering based on whether it's a token */}
+                    {isToken ? (
+                      <span className="w-full">
+                        Amount:{' '}
+                        {formatTokenAmount(
+                          utxo.token!.amount,
+                          meta?.decimals || 0
+                        )}{' '}
+                        {meta?.symbol || 'tokens'}
+                      </span>
+                    ) : (
+                      <>
+                        <span className="w-full">
+                          Amount:{' '}
+                          {utxo.amount != null ? utxo.amount : utxo.value} sats
+                        </span>
+                        <span className="w-full">
+                          Tx Hash: {shortenTxHash(utxo.tx_hash)}
+                        </span>
+                        <span className="w-full">Position: {utxo.tx_pos}</span>
+                      </>
+                    )}
 
                     {/* Contract Function */}
                     {utxo.contractFunction && (
@@ -128,11 +159,10 @@ export default function SelectedUTXOsDisplay({
                       </span>
                     )}
 
-                    {/* —— NEW: Token Metadata Preview —— */}
+                    {/* Token Metadata Preview */}
                     <div className="flex justify-between items-center mt-2">
                       {meta ? (
                         <>
-                          {/* left: icon + name */}
                           <div className="flex items-center">
                             {meta.iconUri && (
                               <img
@@ -143,19 +173,16 @@ export default function SelectedUTXOsDisplay({
                             )}
                             <span className="font-medium">{meta.name}</span>
                           </div>
-                          {/* right: FT / NFT badge */}
                           <span className="text-sm font-medium">
                             {utxo.token?.nft ? 'NFT' : 'FT'}
                           </span>
                         </>
                       ) : (
                         <>
-                          {/* fallback for BCH */}
                           <div className="flex items-center">
                             <FaBitcoin className="text-green-500 text-3xl mr-2" />
                             <span className="font-medium">Bitcoin Cash</span>
                           </div>
-                          {/* you can optionally render nothing or some placeholder here */}
                           <span />
                         </>
                       )}
@@ -171,9 +198,7 @@ export default function SelectedUTXOsDisplay({
       {selectedUtxos.length > 0 && (
         <div className="mt-4">
           <h3 className="text-lg font-semibold">
-            {`${selectedUtxos.length} Input${
-              selectedUtxos.length === 1 ? '' : 's'
-            } - Total: ${totalSelectedUtxoAmount.toString()}`}
+            {`${selectedUtxos.length} Input${selectedUtxos.length === 1 ? '' : 's'} - Total: ${totalSelectedUtxoAmount.toString()}`}
           </h3>
         </div>
       )}

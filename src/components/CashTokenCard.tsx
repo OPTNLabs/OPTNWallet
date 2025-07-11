@@ -8,11 +8,13 @@ import { IdentitySnapshot } from '@bitauth/libauth';
 interface CashTokenCardProps {
   category: string;
   totalAmount: number;
+  decimals: number;
 }
 
 const CashTokenCard: React.FC<CashTokenCardProps> = ({
   category,
   totalAmount,
+  decimals,
 }) => {
   const [showTokenQuery, setShowTokenQuery] = useState(false);
   const [iconUri, setIconUri] = useState<string | null>(null);
@@ -34,11 +36,22 @@ const CashTokenCard: React.FC<CashTokenCardProps> = ({
         const uri = await bcmr.resolveIcon(authbase);
         setIconUri(uri);
       } catch (err) {
-        console.error('Failed to load token metadata', err);
+        // console.error('Failed to load token metadata', err);
       }
     };
     loadMetadata();
   }, [category]);
+
+  // Function to format totalAmount based on decimals
+  const formatAmount = (amount: number, decimals: number): string => {
+    const divisor = Math.pow(10, decimals);
+    const formatted = (amount / divisor).toFixed(decimals);
+    return formatted.replace(/\.?0+$/, '');
+  };
+
+  // Calculate the formatted amount, preserving original behavior for 0
+  const formattedAmount =
+    totalAmount !== 0 ? formatAmount(totalAmount, decimals) : '';
 
   return (
     <>
@@ -70,7 +83,7 @@ const CashTokenCard: React.FC<CashTokenCardProps> = ({
           </div>
         </div>
         <div className="text-sm font-medium text-gray-700">
-          {totalAmount !== 0 ? totalAmount : ''}
+          {formattedAmount}
         </div>
       </div>
 

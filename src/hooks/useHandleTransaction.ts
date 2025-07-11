@@ -33,6 +33,11 @@ const useHandleTransaction = (
   const dispatch = useDispatch();
 
   const handleBuildTransaction = async () => {
+    if (selectedUtxos.length === 0) {
+      setErrorMessage('No input selected');
+      setRawTX('')
+      return;
+    }
     // Calculate the sum of selected UTXOs as bigint
     const inputSum = selectedUtxos.reduce((sum, utxo) => {
       // Prefer 'amount' if it exists; otherwise, use 'value'
@@ -97,7 +102,7 @@ const useHandleTransaction = (
       // });
 
       if (!transaction.finalTransaction) {
-        setErrorMessage('Failed to build transaction.');
+        setErrorMessage(`Failed to build transaction: ${transaction.errorMsg}`);
         setLoading(false);
         return;
       }

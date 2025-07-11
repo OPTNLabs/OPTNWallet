@@ -468,6 +468,28 @@ export const respondWithMessageError = createAsyncThunk(
   }
 );
 
+// Thunk to check and disconnect expired sessions
+export const checkAndDisconnectExpiredSessions = createAsyncThunk(
+  'walletconnect/checkAndDisconnectExpiredSessions',
+  async (_, { getState, dispatch }) => {
+    const state = getState() as RootState;
+    const walletKit = state.walletconnect.web3wallet;
+    const activeSessions = state.walletconnect.activeSessions;
+    if (!walletKit || !activeSessions) return;
+
+    const currentTime = Math.floor(Date.now() / 1000); // Current Unix timestamp in seconds
+
+    for (const [topic, session] of Object.entries(activeSessions)) {
+      if (session.expiry && currentTime >= session.expiry) {
+        console.log(
+          `[checkAndDisconnectExpiredSessions] Disconnecting expired session: ${topic}`
+        );
+        await dispatch(disconnectSession(topic));
+      }
+    }
+  }
+);
+
 // Reducer actions for setting pending sign requests
 const walletconnectSlice = createSlice({
   name: 'walletconnect',

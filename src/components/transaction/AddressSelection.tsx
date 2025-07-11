@@ -2,6 +2,12 @@
 
 import React, { useState } from 'react';
 import Popup from './Popup';
+import { shortenTxHash } from '../../utils/shortenHash';
+import { useSelector } from 'react-redux';
+import { RootState } from '../../redux/store';
+import { selectCurrentNetwork } from '../../redux/selectors/networkSelectors';
+import { PREFIX } from '../../utils/constants';
+// import { Network } from 'cashscript';
 
 interface AddressSelectionProps {
   addresses: { address: string; tokenAddress: string }[];
@@ -33,6 +39,10 @@ const AddressSelection: React.FC<AddressSelectionProps> = ({
     useState(false); // State for wallet addresses popup
   const [showContractAddressesPopup, setShowContractAddressesPopup] =
     useState(false);
+
+  const currentNetwork = useSelector((state: RootState) =>
+    selectCurrentNetwork(state)
+  );
 
   // Toggle selection for regular wallet addresses
   const toggleAddressSelection = (address: string) => {
@@ -119,10 +129,18 @@ const AddressSelection: React.FC<AddressSelectionProps> = ({
                   >
                     <div className="flex flex-col">
                       <span className="font-medium">
-                        Address: {addressObj.address}
+                        Address:{' '}
+                        {shortenTxHash(
+                          addressObj.address,
+                          PREFIX[currentNetwork].length
+                        )}
                       </span>
                       <span className="text-sm text-gray-600">
-                        Token Address: {addressObj.tokenAddress}
+                        Token Address:{' '}
+                        {shortenTxHash(
+                          addressObj.tokenAddress,
+                          PREFIX[currentNetwork].length
+                        )}
                       </span>
                     </div>
                   </button>
@@ -169,7 +187,11 @@ const AddressSelection: React.FC<AddressSelectionProps> = ({
                         Contract Name: {contractObj.contractName}
                       </span>
                       <span className="text-sm text-gray-600">
-                        Contract Address: {contractObj.address}
+                        Contract Address:{' '}
+                        {shortenTxHash(
+                          contractObj.address,
+                          PREFIX[currentNetwork].length
+                        )}
                       </span>
                     </div>
                   </button>

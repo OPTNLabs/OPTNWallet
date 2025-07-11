@@ -1,3 +1,5 @@
+// @ts-nocheck
+
 import { useState, useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import DatabaseService from '../apis/DatabaseManager/DatabaseService';
@@ -11,18 +13,15 @@ import { selectCurrentNetwork } from '../redux/selectors/networkSelectors';
 
 const WalletCreation = () => {
   const [mnemonicPhrase, setMnemonicPhrase] = useState('');
-  // const [walletName, setWalletName] = useState('OPTN');
   const [passphrase, setPassphrase] = useState('');
+  const [showAdvanced, setShowAdvanced] = useState(false);
   const dbService = DatabaseService();
   const navigate = useNavigate();
-  // const wallet_id = useSelector(
-  //   (state: RootState) => state.wallet_id.currentWalletId
-  // );
   const currentNetwork = useSelector(selectCurrentNetwork);
   const dispatch = useDispatch();
   const walletManager = WalletManager();
 
-  // temporary constant value
+  // Temporary constant value
   const walletName = 'OPTN';
 
   // Ref to track if initialization has occurred
@@ -48,10 +47,16 @@ const WalletCreation = () => {
     initDb();
   }, []);
 
+  // Reset passphrase when advanced options are hidden
+  useEffect(() => {
+    if (!showAdvanced) {
+      setPassphrase('');
+    }
+  }, [showAdvanced]);
+
   const generateMnemonicPhrase = async () => {
     try {
       const mnemonic = await KeyService.generateMnemonic();
-      // console.log('Generated mnemonic phrase:', mnemonic);
       setMnemonicPhrase(mnemonic);
     } catch (error) {
       console.error('Error generating mnemonic:', error);
@@ -59,7 +64,6 @@ const WalletCreation = () => {
   };
 
   const handleCreateAccount = async () => {
-    // console.log('Creating account...');
     try {
       const accountExists = await walletManager.checkAccount(
         mnemonicPhrase,
@@ -70,7 +74,6 @@ const WalletCreation = () => {
         return;
       }
 
-      // Create wallet using WalletManager
       const createWalletSuccess = await walletManager.createWallet(
         walletName,
         mnemonicPhrase,
@@ -81,9 +84,6 @@ const WalletCreation = () => {
         throw new Error('Failed to create wallet in the database.');
       }
 
-      // console.log('Wallet saved to database successfully.');
-
-      // Set wallet ID and network in Redux
       const walletID = await walletManager.setWalletId(
         mnemonicPhrase,
         passphrase
@@ -96,10 +96,6 @@ const WalletCreation = () => {
       dispatch(setWalletNetwork(currentNetwork));
       dispatch(setNetwork(currentNetwork));
 
-      // Create initial keys using KeyService
-      // await KeyService.createKeys(walletID, 0, 0, 0);
-
-      // console.log('Keys generated and account created successfully.');
       navigate(`/home/${walletID}`);
     } catch (e) {
       console.error('Error creating account:', e);
@@ -109,6 +105,12 @@ const WalletCreation = () => {
   const returnHome = () => {
     navigate(`/`);
   };
+
+  // Split mnemonic phrase into words and prepare for two-column display
+  const mnemonicWords = mnemonicPhrase ? mnemonicPhrase.split(' ') : [];
+  const halfLength = Math.ceil(mnemonicWords.length / 2);
+  const firstColumn = mnemonicWords.slice(0, halfLength);
+  const secondColumn = mnemonicWords.slice(halfLength);
 
   return (
     <div className="min-h-screen bg-slate-600 flex flex-col items-center justify-center p-4">
@@ -121,24 +123,84 @@ const WalletCreation = () => {
           />
         </div>
         <div className="text-white font-bold text-xl mb-4 text-center">
-          Generated Mnemonic:
-        </div>
-        <div className="text-center mb-4 p-2 bg-gray-200 rounded-md">
-          {mnemonicPhrase ? mnemonicPhrase : 'Generating...'}
+          Create Wallet
         </div>
 
-        <div className="mb-4">
-          <label className="block text-white mb-2">Set Passphrase</label>
-          <input
-            type="password"
-            onChange={(e) => setPassphrase(e.target.value)}
-            className="w-full p-2 border border-gray-300 rounded-md"
-          />
+        {/* Fixed-height container for inputs and toggle */}
+        <div className="flex flex-col items-center min-h-[300px]">
+          {/* Toggle for advanced options */}
+          {/* <div className="mb-4 flex flex-row gap-2 items-center text-white">
+            <span>Basic</span>
+            <div
+              onClick={() => setShowAdvanced(!showAdvanced)}
+              className={`w-12 h-6 rounded-full flex items-center cursor-pointer relative transition-colors ${
+                showAdvanced ? 'bg-green-400' : 'bg-orange-400'
+              }`}
+            >
+              <div
+                className={`w-6 h-6 bg-white rounded-full shadow-md transform transition-transform ${
+                  showAdvanced ? 'translate-x-6' : 'translate-x-0'
+                }`}
+              />
+            </div>
+            <span>Advanced</span>
+          </div> */}
+          {/* Advanced options: Passphrase and NetworkSwitch */}
+          {/* {showAdvanced && ( */}
+          <>
+            {/* <div className="mb-4">
+                <label className="block text-white mb-2">
+                  Passphrase - Optional
+                </label>
+                <input
+                  type="password"
+                  value={passphrase}
+                  onChange={(e) => setPassphrase(e.target.value)}
+                  className="w-full p-2 border border-gray-300 rounded-md"
+                />
+              </div> */}
+            <NetworkSwitch
+              networkType={currentNetwork}
+              setNetworkType={(network: Network) =>
+                dispatch(setNetwork(network))
+              }
+            />
+          </>
+          {/* )} */}
+          {/* Mnemonic phrase display in two columns */}
+          <div className="text-white font-bold text-xl mb-2 text-center">
+            Generated Mnemonic:
+          </div>
+          {mnemonicPhrase ? (
+            <div className="grid grid-cols-2 gap-4 mb-4 p-2 bg-gray-200 rounded-md">
+              <div>
+                {firstColumn.map((word, index) => (
+                  <div key={index} className="flex items-center mb-2">
+                    <span className="w-8 text-gray-700">{index + 1}.</span>
+                    <span className="text-gray-700">{word}</span>
+                  </div>
+                ))}
+              </div>
+              <div>
+                {secondColumn.map((word, index) => (
+                  <div
+                    key={index + halfLength}
+                    className="flex items-center mb-2"
+                  >
+                    <span className="w-8 text-gray-700">
+                      {index + halfLength + 1}.
+                    </span>
+                    <span className="text-gray-700">{word}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          ) : (
+            <div className="text-center mb-4 p-2 bg-gray-200 rounded-md">
+              Generating...
+            </div>
+          )}
         </div>
-        <NetworkSwitch
-          networkType={currentNetwork}
-          setNetworkType={(network: Network) => dispatch(setNetwork(network))}
-        />
         <button
           onClick={handleCreateAccount}
           className="w-full bg-blue-500 text-white py-2 px-4 rounded-md hover:bg-blue-600 transition duration-300 my-2 text-xl font-bold"

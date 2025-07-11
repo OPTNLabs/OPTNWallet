@@ -66,6 +66,7 @@ const TokenQuery: React.FC<TokenQueryProps> = ({ tokenId }) => {
 
         // 6) Snapshot
         const snap = bcmr.extractIdentity(authbase, idReg.registry);
+        console.log(snap);
         setSnapshot(snap);
 
         // 7) Icon

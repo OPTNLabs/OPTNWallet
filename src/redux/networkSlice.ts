@@ -5,12 +5,14 @@ export enum Network {
   MAINNET = 'mainnet',
 }
 
+
+
 interface NetworkState {
   currentNetwork: Network;
 }
 
 const initialState: NetworkState = {
-  currentNetwork: Network.CHIPNET,
+  currentNetwork: Network.MAINNET,
 };
 
 const networkSlice = createSlice({
@@ -23,8 +25,8 @@ const networkSlice = createSlice({
     toggleNetwork: (state) => {
       state.currentNetwork =
         state.currentNetwork === Network.MAINNET
-          ? Network.CHIPNET
-          : Network.MAINNET;
+          ? Network.MAINNET
+          : Network.CHIPNET;
     },
     resetNetwork: (state) => {
       Object.assign(state, initialState);

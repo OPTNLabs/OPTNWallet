@@ -125,7 +125,7 @@ export default function TransactionManager() {
     selectedTokenCategory: string = '',
     selectedUtxos: UTXO[] = [],
     addresses: { address: string; tokenAddress?: string }[] = [],
-    nftCapability?: 'none' | 'mutable' | 'minting',
+    nftCapability?: undefined | 'none' | 'mutable' | 'minting',
     nftCommitment?: string
   ): TransactionOutput | undefined {
     // Validate inputs
@@ -251,8 +251,9 @@ export default function TransactionManager() {
     // console.log('TransactionManager: Change Address:', changeAddress);
     // console.log('TransactionManager: Selected UTXOs:', selectedUtxos);
     // Fetch the latest state
-    // const state = store.getState();
-    // const selectedFunction = state.contract.selectedFunction;
+    const state = store.getState();
+    const selectedFunction = state.contract.selectedFunction;
+    console.log(selectedFunction)
     const txBuilder = TransactionBuilderHelper();
     const returnObj = {
       bytecodeSize: 0,
@@ -289,7 +290,7 @@ export default function TransactionManager() {
       // First build to get bytecode size
       const transaction = await txBuilder.buildTransaction(
         selectedUtxos,
-        txOutputsWithPlaceholder
+        txOutputsWithPlaceholder,
       );
       // console.log('Transaction after first build:', transaction);
 
@@ -334,8 +335,6 @@ export default function TransactionManager() {
         const finalTransaction = await txBuilder.buildTransaction(
           selectedUtxos,
           txOutputs
-          // selectedFunction,
-          // contractFunctionInputs
         );
         // console.log('Final Transaction:', finalTransaction);
 

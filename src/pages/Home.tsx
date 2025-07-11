@@ -1,7 +1,7 @@
 // src/pages/Home.tsx
 
 import React, { useState, useEffect, useCallback, useRef } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useLocation } from 'react-router-dom';
 import { useDispatch, useSelector } from 'react-redux';
 import { RootState } from '../redux/store';
 import BitcoinCashCard from '../components/BitcoinCashCard';
@@ -17,31 +17,12 @@ import BcmrService from '../services/BcmrService';
 
 const batchAmount = 10;
 
-// const initialUTXO: Record<string, any[]> = {
-//   default: [
-//     {
-//       wallet_id: 0,
-//       address: '',
-//       tokenAddress: '',
-//       height: 0,
-//       tx_hash: '',
-//       tx_pos: 0,
-//       value: 0,
-//       amount: 0,
-//       prefix: 'bchtest',
-//       token: null,
-//       privateKey: new Uint8Array(),
-//       contractName: '',
-//       abi: [],
-//       id: '',
-//       unlocker: null,
-//     },
-//   ],
-// };
-
 const Home: React.FC = () => {
   const navigate = useNavigate();
+  const location = useLocation();
   const dispatch = useDispatch();
+
+  // Redux selectors
   const currentWalletId = useSelector(
     (state: RootState) => state.wallet_id.currentWalletId
   );
@@ -52,31 +33,32 @@ const Home: React.FC = () => {
   const IsInitialized = useSelector(
     (state: RootState) => state.utxos.initialized
   );
+  const totalBalance = useSelector(
+    (state: RootState) => state.utxos.totalBalance
+  );
+
+  // Local state
   const [keyPairs, setKeyPairs] = useState<any[]>([]);
   const [generatingKeys, setGeneratingKeys] = useState(false);
   const [placeholderUTXOs, setPlaceholderUTXOs] = useState<
     Record<string, any[]>
-  >(Object.keys(reduxUTXOs).length > 0 ? reduxUTXOs : {}); // Placeholder UTXOs to prevent UI flicker
-
-  // const lastUTXOsRef = useRef<Record<string, any[]>>(placeholderUTXOs);
-
-  const [placeholderBalance, setPlaceholderBalance] = useState(0); // Placeholder balance for BitcoinCashCard
+  >(Object.keys(reduxUTXOs).length > 0 ? reduxUTXOs : {});
+  const [placeholderBalance, setPlaceholderBalance] = useState(totalBalance);
   const [placeholderTokenTotals, setPlaceholderTokenTotals] = useState<
-    Record<string, number>
-  >({}); // Placeholder token totals for CashTokenCard
-  const [showCashTokenPopup, setShowCashTokenPopup] = useState(false); // Local state for CashToken Popup
+    Record<string, { amount: number; decimals: number }>
+  >({});
+  const [showCashTokenPopup, setShowCashTokenPopup] = useState(false);
   const [metadataPreloaded, setMetadataPreloaded] = useState(false);
 
-  const initialized = useRef(false);
+  const hasFetchedForTx = useRef(false);
 
-  // Function to generate keys
+  // Generate keys logic
   const generateKeys = useCallback(async () => {
     if (!currentWalletId || generatingKeys) return;
 
     setGeneratingKeys(true);
     const existingKeys = await KeyService.retrieveKeys(currentWalletId);
 
-    // If no keys exist, generate them
     if (existingKeys.length === 0) {
       const newKeys = [];
       const keySet = new Set(existingKeys.map((key: any) => key.address));
@@ -97,7 +79,7 @@ const Home: React.FC = () => {
     setGeneratingKeys(false);
   }, [currentWalletId, generatingKeys]);
 
-  // Function to fetch and store UTXOs
+  // Fetch and store UTXOs
   const fetchAndStoreUTXOs = useCallback(async () => {
     if (fetchingUTXOsRedux || !currentWalletId) return;
 
@@ -120,16 +102,10 @@ const Home: React.FC = () => {
         }
       }
 
-      // Set placeholder UTXOs to prevent UI flicker
       setPlaceholderUTXOs(allUTXOs);
-      setPlaceholderBalance(calculateTotalBitcoinCash(allUTXOs));
       setPlaceholderTokenTotals(calculateCashTokenTotals(allUTXOs));
-
-      // Update Redux store in a single batch after fetching all UTXOs
       dispatch(setUTXOs({ newUTXOs: allUTXOs }));
       await DatabaseService().saveDatabaseToFile();
-
-      // Set initialized to true after first successful fetch
       dispatch(setInitialized(true));
     } catch (error) {
       console.error('Error fetching UTXOs:', error);
@@ -138,39 +114,45 @@ const Home: React.FC = () => {
     }
   }, [keyPairs, fetchingUTXOsRedux, currentWalletId, dispatch]);
 
-  // Initial UTXO and Key generation
+  // Load keys when wallet ID changes
   useEffect(() => {
-    if (initialized.current || !currentWalletId) return;
+    if (!currentWalletId) return;
 
-    const initializeUTXOs = async () => {
-      await generateKeys();
-      if (Object.keys(placeholderUTXOs).length === 0) {
-        await fetchAndStoreUTXOs();
-      } else {
-        setPlaceholderBalance(calculateTotalBitcoinCash(placeholderUTXOs));
-        setPlaceholderTokenTotals(calculateCashTokenTotals(placeholderUTXOs));
+    const loadKeys = async () => {
+      const existingKeys = await KeyService.retrieveKeys(currentWalletId);
+      setKeyPairs(existingKeys);
+      if (existingKeys.length === 0) {
+        await generateKeys();
       }
     };
+    loadKeys();
+  }, [currentWalletId, generateKeys]);
 
-    initializeUTXOs();
-    initialized.current = true;
-  }, [currentWalletId, generateKeys, placeholderUTXOs, fetchAndStoreUTXOs]);
+  // Fetch UTXOs when keys are available and not initialized
+  useEffect(() => {
+    if (keyPairs.length > 0 && !IsInitialized) {
+      fetchAndStoreUTXOs();
+    }
+  }, [keyPairs, IsInitialized, fetchAndStoreUTXOs]);
 
-  // Once we have keys (and haven’t initialized yet), fetch UTXOs exactly once
-  // useEffect(() => {
-  //   if (keyPairs.length === 0 || IsInitialized) return;
-  //   fetchAndStoreUTXOs();
-  // }, [
-  //   keyPairs, // rerun when addresses land
-  //   IsInitialized, // stop as soon as we’re initialized
-  //   fetchAndStoreUTXOs,
-  // ]);
+  // Sync placeholderBalance with totalBalance from Redux
+  useEffect(() => {
+    setPlaceholderBalance(totalBalance);
+  }, [totalBalance]);
 
-  // After UTXOs + Redux are initialized, preload _all_ token‐metadata and save once:
+  // Handle post-transaction UTXO refresh
+  useEffect(() => {
+    const fromTxSuccess = location?.state?.fromTxSuccess;
+    if (fromTxSuccess && keyPairs.length > 0 && !hasFetchedForTx.current) {
+      fetchAndStoreUTXOs();
+      hasFetchedForTx.current = true;
+    }
+  }, [location, keyPairs, fetchAndStoreUTXOs]);
+
+  // Preload token metadata
   useEffect(() => {
     if (!IsInitialized) return;
     (async () => {
-      // preload BCMR for every category you've discovered
       const bcmr = new BcmrService();
       const categories = Object.keys(placeholderTokenTotals);
       await Promise.all(
@@ -183,80 +165,71 @@ const Home: React.FC = () => {
     })();
   }, [IsInitialized, placeholderTokenTotals]);
 
-  // Do one disk write when both UTXOs and metadata are done
+  // Save database when metadata is preloaded
   useEffect(() => {
     if (IsInitialized && metadataPreloaded) {
       DatabaseService().saveDatabaseToFile();
     }
   }, [IsInitialized, metadataPreloaded]);
 
-  // Update placeholders when UTXOs are fetched
+  // Sync placeholder state with Redux UTXOs
   useEffect(() => {
     if (!fetchingUTXOsRedux && Object.keys(reduxUTXOs).length > 0) {
       setPlaceholderUTXOs(reduxUTXOs);
-      setPlaceholderBalance(calculateTotalBitcoinCash(reduxUTXOs));
       setPlaceholderTokenTotals(calculateCashTokenTotals(reduxUTXOs));
     }
   }, [fetchingUTXOsRedux, reduxUTXOs]);
 
-  // Function to handle key generation
+  // Helper to generate new keys
   const handleGenerateKeys = async (index: number) => {
     if (!currentWalletId) return null;
 
     try {
-      // Create new key
-      await KeyService.createKeys(currentWalletId, 0, 0, index);
+      for (let i = 0; i < 2; i++) {
+        await KeyService.createKeys(currentWalletId, 0, i, index);
+        const newKeys = await KeyService.retrieveKeys(currentWalletId);
+        const newKey = newKeys[newKeys.length - 1];
 
-      // Retrieve the newly created key only (instead of fetching all keys again)
-      const newKeys = await KeyService.retrieveKeys(currentWalletId);
-      const newKey = newKeys[newKeys.length - 1];
-
-      if (newKey) {
-        setKeyPairs((prevKeys) => [...prevKeys, newKey]);
+        if (newKey) {
+          setKeyPairs((prevKeys) => [...prevKeys, newKey]);
+        }
       }
     } catch (error) {
       console.error('Error generating new key:', error);
     }
   };
 
-  // Function to calculate total Bitcoin Cash
-  const calculateTotalBitcoinCash = (utxos: Record<string, any[]>) =>
-    Object.values(utxos)
-      .flat()
-      .filter((utxo) => !utxo.token)
-      .reduce((acc, utxo) => acc + utxo.amount, 0);
-
-  // Function to calculate Cash Token Totals
+  // Calculate token totals
   const calculateCashTokenTotals = (utxos: Record<string, any[]>) => {
-    const tokenTotals: Record<string, number> = {};
-    // console.log(utxos)
+    const tokenTotals: Record<string, { amount: number; decimals: number }> =
+      {};
     Object.values(utxos)
       .flat()
       .forEach((utxo) => {
-        const { category, amount } = utxo.token || {};
+        const { category, amount, BcmrTokenMetadata } = utxo.token || {};
         if (category) {
-          tokenTotals[category] =
-            (tokenTotals[category] || 0) + parseFloat(amount);
+          const parsedAmount = parseFloat(amount || '0');
+          const decimals = BcmrTokenMetadata?.token?.decimals ?? 0;
+          if (tokenTotals[category]) {
+            tokenTotals[category].amount += parsedAmount;
+          } else {
+            tokenTotals[category] = { amount: parsedAmount, decimals };
+          }
         }
       });
     return tokenTotals;
   };
 
-  // Sorting and Grouping Placeholder Token Totals
   const fungibleTokens = Object.entries(placeholderTokenTotals)
-    .filter(([, amount]) => amount > 0)
-    .sort((a, b) => b[1] - a[1]); // Sort descending by amount
-
+    .filter(([, { amount }]) => amount > 0)
+    .sort((a, b) => b[1].amount - a[1].amount);
   const nonFungibleTokens = Object.entries(placeholderTokenTotals)
-    .filter(([, amount]) => amount <= 0)
-    .sort((a, b) => b[1] - a[1]); // Sort descending by amount
+    .filter(([, { amount }]) => amount <= 0)
+    .sort((a, b) => b[1].amount - a[1].amount);
 
   return (
     <div className="container mx-auto p-4 pb-16 mt-12">
-      {/* Price Feed Component */}
       <PriceFeed />
-
-      {/* Welcome Image */}
       <div className="flex justify-center mt-4">
         <img
           src="/assets/images/OPTNWelcome1.png"
@@ -265,34 +238,19 @@ const Home: React.FC = () => {
         />
       </div>
 
-      {/* Render WalletConnect Manager */}
-      {/* Render modals if there are any pending requests */}
-      {/* <SessionProposalModal />
-      <SignMessageModal />
-      <SignTransactionModal />
-      {/* <SessionList /> */}
-      {/* <WcConnectionManager /> */}
-      {/* End of Testing Walletconnect */}
-
-      {/* Action Buttons */}
       <div className="flex flex-col items-center space-y-4">
-        {/* Navigate to Contracts Page */}
         <button
           className="mt-4 p-2 bg-red-500 font-bold text-white rounded hover:bg-red-600 transition duration-300 w-full max-w-md"
           onClick={() => navigate('/contract')}
         >
           Contracts
         </button>
-
-        {/* Navigate to Apps Page */}
         <button
           className="mt-4 p-2 bg-green-500 font-bold text-white rounded hover:bg-green-600 transition duration-300 w-full max-w-md"
           onClick={() => navigate('/apps')}
         >
           Apps
         </button>
-
-        {/* Fetch UTXOs Button */}
         <button
           className="flex justify-center items-center mt-4 p-2 bg-blue-500 font-bold text-white rounded hover:bg-blue-600 transition duration-300 w-full max-w-md"
           onClick={fetchAndStoreUTXOs}
@@ -306,15 +264,13 @@ const Home: React.FC = () => {
                 visible={true}
                 height="24"
                 width="24"
-                color="white" // Match the spinner color with the button text color
+                color="white"
                 ariaLabel="tail-spin-loading"
                 radius="1"
               />
             </div>
           )}
         </button>
-
-        {/* Generate New Key Button */}
         <button
           className="mt-4 p-2 bg-blue-500 font-bold text-white rounded hover:bg-blue-600 transition duration-300 w-full max-w-md"
           onClick={() => handleGenerateKeys(keyPairs.length)}
@@ -324,15 +280,10 @@ const Home: React.FC = () => {
         </button>
       </div>
 
-      {/* Bitcoin Cash Card */}
       <div className="w-full max-w-md mx-auto mt-4 flex items-center justify-center">
-        <BitcoinCashCard
-          totalAmount={placeholderBalance}
-          // togglePopup={() => setShowCashTokenPopup(true)} // Assuming togglePopup was meant for BitcoinCashCard
-        />
+        <BitcoinCashCard totalAmount={placeholderBalance} />
       </div>
 
-      {/* Button to Open Popup for CashToken Cards */}
       <div className="w-full max-w-full mx-auto mt-4 flex justify-center">
         <button
           onClick={() => setShowCashTokenPopup(true)}
@@ -342,51 +293,48 @@ const Home: React.FC = () => {
         </button>
       </div>
 
-      {/* Popup Rendering for CashToken Cards */}
       {showCashTokenPopup && (
         <Popup closePopups={() => setShowCashTokenPopup(false)}>
-          <h3 className="text-xl font-bold mb-4 ">Cash Tokens</h3>
-
-          {/* Fungible Tokens Section */}
+          <h3 className="text-xl font-bold mb-4">Cash Tokens</h3>
           <div className="max-h-[50vh] overflow-y-auto">
             {fungibleTokens.length > 0 && (
               <div className="mb-2">
                 <h4 className="text-lg font-semibold mb-2">Fungible Tokens</h4>
                 <div className="flex flex-col">
-                  {fungibleTokens.map(([category, amount]) => (
+                  {fungibleTokens.map(([category, { amount, decimals }]) => (
                     <CashTokenCard
                       key={category}
                       category={category}
                       totalAmount={amount}
+                      decimals={decimals}
                     />
                   ))}
                 </div>
               </div>
             )}
-
-            {/* Non-Fungible Tokens Section */}
             {nonFungibleTokens.length > 0 && (
               <div className="mb-2">
                 <h4 className="text-lg font-semibold mb-2">
                   Non-Fungible Tokens
                 </h4>
                 <div className="flex flex-col">
-                  {nonFungibleTokens.map(([category, amount]) => (
+                  {nonFungibleTokens.map(([category, { amount, decimals }]) => (
                     <CashTokenCard
                       key={category}
                       category={category}
                       totalAmount={amount}
+                      decimals={decimals}
                     />
                   ))}
                 </div>
               </div>
             )}
+            {fungibleTokens.length === 0 && nonFungibleTokens.length === 0 && (
+              <p className="text-center text-gray-500">
+                No CashTokens Available
+              </p>
+            )}
           </div>
-
-          {/* Handle case when there are no tokens */}
-          {fungibleTokens.length === 0 && nonFungibleTokens.length === 0 && (
-            <p className="text-center text-gray-500">No CashTokens Available</p>
-          )}
         </Popup>
       )}
     </div>

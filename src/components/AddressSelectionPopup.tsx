@@ -42,14 +42,16 @@ const AddressSelectionPopup: React.FC<AddressSelectionPopupProps> = ({
     <div className="fixed inset-0 bg-gray-500 bg-opacity-75 flex items-center justify-center z-50">
       {/* Popup Container */}
       <div className="bg-white p-6 rounded shadow-lg w-full max-w-md">
-        <h2 className="text-xl font-bold mb-4">Select an Address</h2>
+        <h2 className="flex flex-col items-center text-xl font-bold mb-4">
+          Select an Address
+        </h2>
         {/* Scrollable address list */}
         <div className="max-h-64 overflow-y-auto mb-4">
           <ul>
             {addresses.map((addr) => (
               <li key={addr.id} className="mb-2">
                 <button
-                  className="border p-2 w-full text-left break-words"
+                  className="hover:bg-gray-100 flex flex-col items-center border p-2 w-full text-left break-words"
                   onClick={() => handleSelect(addr.address)}
                 >
                   {shortenTxHash(addr.address, PREFIX[currentNetwork].length)}
@@ -58,12 +60,14 @@ const AddressSelectionPopup: React.FC<AddressSelectionPopupProps> = ({
             ))}
           </ul>
         </div>
-        <button
-          className="bg-gray-300 font-bold text-gray-700 py-2 px-4 rounded"
-          onClick={onClose}
-        >
-          Cancel
-        </button>
+        <div className="flex flex-col">
+          <button
+            className="bg-red-500 hover:bg-red-600 font-bold text-white py-2 px-4 rounded"
+            onClick={onClose}
+          >
+            Back
+          </button>
+        </div>
       </div>
     </div>
   );
