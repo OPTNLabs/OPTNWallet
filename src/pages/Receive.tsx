@@ -1,5 +1,4 @@
 // src/pages/Receive.tsx
-
 import React, { useState, useEffect } from 'react';
 import { useSelector } from 'react-redux';
 import { RootState } from '../redux/store';
@@ -26,7 +25,6 @@ const Receive: React.FC = () => {
   const [publicKeyPressCount, setPublicKeyPressCount] = useState<number>(0);
   const [showPKButton, setShowPKButton] = useState<boolean>(false);
   const [showPKQRCode, setShowPKQRCode] = useState<boolean>(false);
-  // New state for toggling main/change key pairs
   const [addressType, setAddressType] = useState<'main' | 'change'>('main');
 
   const currentWalletId = useSelector(
@@ -45,8 +43,12 @@ const Receive: React.FC = () => {
 
       try {
         const existingKeys = await KeyService.retrieveKeys(currentWalletId);
-        const mainKeys = existingKeys.filter((key) => key.changeIndex === 0);
-        const changeKeys = existingKeys.filter((key) => key.changeIndex === 1);
+        const mainKeys = existingKeys
+          .filter((key) => key.changeIndex === 0)
+          .sort((a, b) => a.addressIndex - b.addressIndex); // Sort by addressIndex ascending
+        const changeKeys = existingKeys
+          .filter((key) => key.changeIndex === 1)
+          .sort((a, b) => a.addressIndex - b.addressIndex); // Sort by addressIndex ascending
         if (mainKeys.length > 0 && changeKeys.length > 0) {
           setMainKeyPairs(mainKeys);
           setChangeKeyPairs(changeKeys);
@@ -149,8 +151,6 @@ const Receive: React.FC = () => {
         <div className="text-lg font-bold text-center mb-4">
           Select an Address
         </div>
-        {/* New toggle buttons for main/change */}
-
         {!selectedAddress && (
           <div>
             <div className="flex justify-center space-x-4 mb-4">
@@ -277,10 +277,7 @@ const Receive: React.FC = () => {
                     className="mt-4 p-2 bg-gray-200 rounded cursor-pointer hover:bg-gray-300"
                     onClick={handleCopyPK}
                   >
-                    {shortenTxHash(
-                      selectedPK || ''
-                      // PREFIX[currentNetwork].length
-                    )}
+                    {shortenTxHash(selectedPK || '')}
                   </p>
                 </>
               ) : (

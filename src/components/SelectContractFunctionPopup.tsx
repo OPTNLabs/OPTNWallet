@@ -7,22 +7,19 @@ import {
   setSelectedFunction,
   setInputs,
   setInputValues,
-} from '../redux/contractSlice'; // Importing actions from contractSlice
+} from '../redux/contractSlice';
 import { encodePrivateKeyWif } from '@bitauth/libauth';
 import { RootState, AppDispatch } from '../redux/store';
-import {
-  hexString,
-  // hexToUint8Array
-} from '../utils/hex';
+import { hexString } from '../utils/hex';
 import KeyService from '../services/KeyService';
 import { shortenTxHash } from '../utils/shortenHash';
 import {
   CapacitorBarcodeScanner,
   CapacitorBarcodeScannerTypeHint,
 } from '@capacitor/barcode-scanner';
-import { FaCamera } from 'react-icons/fa'; // Optional: If you want to use an icon for the scan button
+import { FaCamera } from 'react-icons/fa';
 import { Toast } from '@capacitor/toast';
-// import { PREFIX } from '../utils/constants';
+import { DataSigner } from '../utils/dataSigner';
 
 interface AbiInput {
   name: string;
@@ -30,6 +27,7 @@ interface AbiInput {
 }
 
 interface SelectContractFunctionPopupProps {
+  currentContractSource: string;
   contractABI: any[];
   onClose: () => void;
   onFunctionSelect: (
@@ -40,7 +38,7 @@ interface SelectContractFunctionPopupProps {
 
 const SelectContractFunctionPopup: React.FC<
   SelectContractFunctionPopupProps
-> = ({ contractABI, onClose, onFunctionSelect }) => {
+> = ({ currentContractSource, contractABI, onClose, onFunctionSelect }) => {
   const [functions, setFunctions] = useState<any[]>([]);
   const [selectedFunction, setSelectedFunctionState] = useState<string>('');
   const [inputs, setInputsState] = useState<AbiInput[]>([]);
@@ -50,10 +48,13 @@ const SelectContractFunctionPopup: React.FC<
   const [showAddressPopup, setShowAddressPopup] = useState<boolean>(false);
   const [selectedInput, setSelectedInput] = useState<AbiInput | null>(null);
   const [isScanning, setIsScanning] = useState<boolean>(false);
+  const [usesCheckDataSig, setUsesCheckDataSig] = useState<boolean>(false);
+  const [messageInput, setMessageInput] = useState<{ [key: string]: string }>(
+    {}
+  );
+  const [bytesParamName, setBytesParamName] = useState<string | null>(null);
 
   const dispatch: AppDispatch = useDispatch();
-
-  // Get the current walletId from the Redux store
   const walletId = useSelector(
     (state: RootState) => state.wallet_id.currentWalletId
   );
@@ -62,6 +63,50 @@ const SelectContractFunctionPopup: React.FC<
   useEffect(() => {
     dispatch(setInputValues(inputValuesState));
   }, [inputValuesState, dispatch]);
+
+  // Parse contract source to check for checkdatasig and identify bytes parameter
+  useEffect(() => {
+    if (selectedFunction && currentContractSource) {
+      try {
+        const functionRegex = new RegExp(
+          `function\\s+${selectedFunction}\\s*\\(([^)]*)\\)\\s*{([\\s\\S]*?)}`,
+          'i'
+        );
+        const match = currentContractSource.match(functionRegex);
+        if (match && match[2]) {
+          const functionBody = match[2];
+          const hasCheckDataSig =
+            /checkdatasig\s*\(\s*(\w+)\s*,\s*(\w+)\s*,\s*(\w+)\s*\)/i.test(
+              functionBody
+            );
+          setUsesCheckDataSig(hasCheckDataSig);
+
+          if (hasCheckDataSig) {
+            const checkDataSigMatch = functionBody.match(
+              /checkdatasig\s*\(\s*(\w+)\s*,\s*(\w+)\s*,\s*(\w+)\s*\)/i
+            );
+            if (checkDataSigMatch && checkDataSigMatch[2]) {
+              setBytesParamName(checkDataSigMatch[2]); // The second argument is the message (bytes)
+            } else {
+              setBytesParamName(null);
+            }
+          } else {
+            setBytesParamName(null);
+          }
+        } else {
+          setUsesCheckDataSig(false);
+          setBytesParamName(null);
+        }
+      } catch (error) {
+        console.error('Error parsing contract source for checkdatasig:', error);
+        setUsesCheckDataSig(false);
+        setBytesParamName(null);
+      }
+    } else {
+      setUsesCheckDataSig(false);
+      setBytesParamName(null);
+    }
+  }, [selectedFunction, currentContractSource]);
 
   // Fetch the ABI functions
   useEffect(() => {
@@ -94,17 +139,37 @@ const SelectContractFunctionPopup: React.FC<
       (item) => item.name === selectedFunctionName
     );
     setInputsState(functionAbi?.inputs || []);
-    setInputValuesState({}); // Reset input values when function changes
+    setInputValuesState({});
+    setMessageInput({});
   };
 
   const handleInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const { name, value } = e.target;
     setInputValuesState((prev) => ({ ...prev, [name]: value }));
-    // Dispatch is handled by useEffect
+  };
+
+  const generateMessage = async (argName: string) => {
+    const data = messageInput[argName];
+    if (!data) {
+      await Toast.show({
+        text: 'Please enter data to generate the message.',
+      });
+      return;
+    }
+    try {
+      // Initialize DataSigner with a dummy private key (not used for createMessage)
+      const signer = new DataSigner(new Uint8Array(32)); // Dummy key, as createMessage doesn't use it
+      const message = signer.createMessage(data);
+      const messageHex = Buffer.from(message).toString('hex');
+      setInputValuesState((prev) => ({ ...prev, [argName]: messageHex }));
+      await Toast.show({ text: 'Message generated successfully!' });
+    } catch (error) {
+      console.error('Error generating message:', error);
+      await Toast.show({ text: 'Failed to generate message.' });
+    }
   };
 
   const handleAddressSelect = async (address: string) => {
-    // Fetch and set the appropriate input value based on the selected input's type
     try {
       if (!selectedInput) return;
 
@@ -118,18 +183,12 @@ const SelectContractFunctionPopup: React.FC<
         } else if (selectedInput.type === 'bytes20') {
           valueToSet = hexString(selectedKey.pubkeyHash);
         } else if (selectedInput.type === 'sig') {
-          // const privateKeyBytes = hexString(selectedKey.privateKey);
-          valueToSet = encodePrivateKeyWif(selectedKey.privateKey, 'testnet'); // Adjust network as needed
+          valueToSet = encodePrivateKeyWif(selectedKey.privateKey, 'testnet');
         }
-
         setInputValuesState((prev) => ({
           ...prev,
           [selectedInput.name]: valueToSet,
         }));
-
-        // await Toast.show({
-        //   text: `Set ${selectedInput.name}: ${valueToSet}`,
-        // });
       } else {
         console.error(`No keys found for address: ${address}`);
         await Toast.show({
@@ -148,57 +207,20 @@ const SelectContractFunctionPopup: React.FC<
   };
 
   const scanBarcode = async (argName: string, argType: string) => {
-    if (isScanning) {
-      // Prevent multiple scans at the same time
-      return;
-    }
+    if (isScanning) return;
 
-    setIsScanning(true); // Start scanning
-
+    setIsScanning(true);
     try {
-      // Initiate barcode scanning with desired options
       const result = await CapacitorBarcodeScanner.scanBarcode({
         hint: CapacitorBarcodeScannerTypeHint.ALL,
-        cameraDirection: 1, // Use BACK camera; change if needed
+        cameraDirection: 1,
       });
 
-      // If a scan result is obtained, set it as the input value
       if (result && result.ScanResult) {
         const scannedValue = result.ScanResult.trim();
-
-        // Validate the scan result based on the expected type
         const isValidHex = (str: string) => /^[0-9a-fA-F]+$/.test(str);
 
-        if (argType === 'sig') {
-          // if (!isValidHex(scannedValue)) {
-          //   await Toast.show({
-          //     text: `Invalid ${argType} format. Please scan a valid QR code.`,
-          //   });
-          // } else {
-          try {
-            // Convert hex string to Uint8Array
-            // Encode to WIF
-            // const wif = encodePrivateKeyWif(
-            //   hexToUint8Array(scannedValue),
-            //   'testnet'
-            // ); // Adjust network as needed
-
-            setInputValuesState((prev) => ({
-              ...prev,
-              [argName]: scannedValue,
-            }));
-
-            // await Toast.show({
-            //   text: `Scanned and set ${argName}: ${scannedValue}`,
-            // });
-          } catch (error) {
-            console.error('Failed to encode private key to WIF:', error);
-            await Toast.show({
-              text: `Failed to process ${argName}.`,
-            });
-          }
-          // }
-        } else if (argType === 'pubkey' || argType === 'bytes20') {
+        if (argType === 'pubkey' || argType === 'bytes20') {
           if (!isValidHex(scannedValue)) {
             await Toast.show({
               text: `Invalid ${argType} format. Please scan a valid QR code.`,
@@ -208,19 +230,18 @@ const SelectContractFunctionPopup: React.FC<
               ...prev,
               [argName]: scannedValue,
             }));
-            // await Toast.show({
-            //   text: `Scanned and set ${argName}: ${scannedValue}`,
-            // });
           }
+        } else if (
+          argType === 'bytes' &&
+          argName === bytesParamName &&
+          usesCheckDataSig
+        ) {
+          setMessageInput((prev) => ({ ...prev, [argName]: scannedValue }));
         } else {
-          // Handle other types if necessary
           setInputValuesState((prev) => ({
             ...prev,
             [argName]: scannedValue,
           }));
-          // await Toast.show({
-          //   text: `Scanned and set ${argName}: ${scannedValue}`,
-          // });
         }
       } else {
         await Toast.show({
@@ -235,12 +256,11 @@ const SelectContractFunctionPopup: React.FC<
     } finally {
       setShowAddressPopup(false);
       setSelectedInput(null);
-      setIsScanning(false); // End scanning
+      setIsScanning(false);
     }
   };
 
   const handleSelect = () => {
-    // Prepare the input values object
     const inputValuesObject = inputs.reduce<{ [key: string]: string }>(
       (acc, input) => {
         acc[input.name] = inputValuesState[input.name] || '';
@@ -250,20 +270,17 @@ const SelectContractFunctionPopup: React.FC<
     );
 
     try {
-      dispatch(setSelectedFunction(selectedFunction)); // Dispatch the selected function
-      dispatch(setInputs(inputs)); // Dispatch the inputs (ABI details)
-      // No need to dispatch setInputValues here; it's handled by useEffect
-
-      onFunctionSelect(selectedFunction, inputValuesObject); // Pass the data to the parent component
-
-      onClose(); // Close the popup
+      dispatch(setSelectedFunction(selectedFunction));
+      dispatch(setInputs(inputs));
+      onFunctionSelect(selectedFunction, inputValuesObject);
+      onClose();
     } catch (error) {
       console.error('Error occurred during dispatch or handling:', error);
     }
   };
 
   const openAddressPopup = (input: AbiInput) => {
-    setSelectedInput(input); // Set the entire AbiInput, so we can access both name and type
+    setSelectedInput(input);
     setShowAddressPopup(true);
   };
 
@@ -288,6 +305,63 @@ const SelectContractFunctionPopup: React.FC<
             inputs.map((input, index) => {
               const isAddressType =
                 input.type === 'sig' || input.type === 'pubkey';
+
+              if (
+                input.type === 'bytes' &&
+                input.name === bytesParamName &&
+                usesCheckDataSig
+              ) {
+                return (
+                  <div key={index} className="mb-4">
+                    <label className="block text-sm font-bold text-gray-700 mb-1">
+                      {input.name} (message for checkdatasig)
+                    </label>
+                    <input
+                      type="text"
+                      name={`${input.name}_message`}
+                      value={messageInput[input.name] || ''}
+                      onChange={(e) =>
+                        setMessageInput({
+                          ...messageInput,
+                          [input.name]: e.target.value,
+                        })
+                      }
+                      className="border p-2 w-full rounded-md mb-2"
+                      placeholder={`Enter message for ${input.name}`}
+                    />
+                    {/* <div className="flex items-center mb-2">
+                      <button
+                        type="button"
+                        onClick={() => scanBarcode(input.name, input.type)}
+                        className={`w-12 h-12 bg-green-500 hover:bg-green-600 font-bold text-white rounded flex items-center justify-center ${
+                          isScanning ? 'opacity-50 cursor-not-allowed' : ''
+                        }`}
+                        disabled={isScanning}
+                        aria-label={`Scan QR Code for ${input.name}`}
+                      >
+                        <FaCamera className="text-lg" />
+                      </button>
+                    </div> */}
+                    <button
+                      type="button"
+                      onClick={() => generateMessage(input.name)}
+                      className={`bg-green-500 hover:bg-green-600 text-white font-bold py-2 px-4 rounded ${
+                        !messageInput[input.name]
+                          ? 'opacity-50 cursor-not-allowed'
+                          : ''
+                      }`}
+                      disabled={!messageInput[input.name]}
+                    >
+                      Generate Message
+                    </button>
+                    {inputValuesState[input.name] && (
+                      <div className="mt-2 text-sm text-gray-600">
+                        Message: {shortenTxHash(inputValuesState[input.name])}
+                      </div>
+                    )}
+                  </div>
+                );
+              }
 
               return (
                 <div key={index} className="mb-4">
@@ -321,10 +395,7 @@ const SelectContractFunctionPopup: React.FC<
                       {inputValuesState[input.name] && (
                         <div className="mt-2 text-sm text-gray-600">
                           Selected {input.type}:{' '}
-                          {shortenTxHash(
-                            inputValuesState[input.name]
-                            // PREFIX['testnet'].length // Adjust 'testnet' based on your network
-                          )}
+                          {shortenTxHash(inputValuesState[input.name])}
                         </div>
                       )}
                     </>

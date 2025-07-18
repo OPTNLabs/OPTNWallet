@@ -48,7 +48,9 @@ const TransactionTypeSelector: React.FC<TransactionTypeSelectorProps> = ({
           setPopupTitle('Create OP_RETURN Output');
         }}
         className={`font-bold py-1 px-2 rounded ${
-          showOpReturn ? 'bg-yellow-400 text-white' : 'bg-yellow-200 text-gray-800'
+          showOpReturn
+            ? 'bg-yellow-400 text-white'
+            : 'bg-yellow-200 text-gray-800'
         } hover:bg-yellow-500`}
       >
         Create OP_RETURN
@@ -62,7 +64,9 @@ const TransactionTypeSelector: React.FC<TransactionTypeSelectorProps> = ({
               setPopupTitle('Create CashToken');
             }}
             className={`font-bold py-1 px-2 rounded ${
-              showCashToken ? 'bg-orange-500 text-white' : 'bg-orange-200 text-gray-800'
+              showCashToken
+                ? 'bg-orange-500 text-white'
+                : 'bg-orange-200 text-gray-800'
             } hover:bg-orange-600`}
           >
             Create CashToken
@@ -74,7 +78,9 @@ const TransactionTypeSelector: React.FC<TransactionTypeSelectorProps> = ({
               setPopupTitle('Create NFT');
             }}
             className={`font-bold py-1 px-2 rounded ${
-              showNFTCashToken ? 'bg-pink-500 text-white' : 'bg-pink-200 text-gray-800'
+              showNFTCashToken
+                ? 'bg-pink-500 text-white'
+                : 'bg-pink-200 text-gray-800'
             } hover:bg-pink-600`}
           >
             Create NFT

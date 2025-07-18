@@ -21,6 +21,9 @@ import {
   CapacitorBarcodeScannerTypeHint,
 } from '@capacitor/barcode-scanner';
 import { FaCamera } from 'react-icons/fa'; // Optional: If you want to use an icon for the scan button
+// import { match } from 'assert';
+// import { binToHex } from '@bitauth/libauth';
+import { DataSigner } from '../utils/dataSigner';
 
 // type QRCodeType = 'address' | 'pubKey' | 'pkh';
 
@@ -39,6 +42,12 @@ const ContractView = () => {
   const [showErrorPopup, setShowErrorPopup] = useState<boolean>(false); // New state for error popup
   const [errorMessage, setErrorMessage] = useState<string>(''); // Error message content
   const [isScanning, setIsScanning] = useState<boolean>(false);
+
+  // New states for 'datasig' handling
+  const [selectedAddresses, setSelectedAddresses] = useState<{
+    [key: string]: string;
+  }>({});
+  const [dataToSign, setDataToSign] = useState<{ [key: string]: string }>({});
 
   const navigate = useNavigate();
   const wallet_id = useSelector(
@@ -139,8 +148,12 @@ const ContractView = () => {
           valueToSet = hexString(selectedKey.publicKey);
         } else if (matchedArg.type === 'bytes20') {
           valueToSet = hexString(selectedKey.pubkeyHash);
+        } else if (matchedArg.type === 'datasig') {
+          setSelectedAddresses({
+            ...selectedAddresses,
+            [currentArgName]: address,
+          });
         }
-
         setInputValues({ ...inputValues, [currentArgName]: valueToSet });
 
         // Optional: Debugging
@@ -149,6 +162,29 @@ const ContractView = () => {
     }
     setShowAddressPopup(false);
     setCurrentArgName('');
+  };
+
+  const generateSignature = async (argName: string) => {
+    const address = selectedAddresses[argName];
+    const data = dataToSign[argName];
+    if (!address || !data) {
+      await Toast.show({
+        text: 'Please select an address and enter data to sign.',
+      });
+      return;
+    }
+    try {
+      const privKey = await KeyService.fetchAddressPrivateKey(address);
+      const signer = new DataSigner(privKey);
+      const message = signer.createMessage(data);
+      const signature = signer.signMessage(message);
+      const signatureHex = Buffer.from(signature).toString('hex');
+      setInputValues({ ...inputValues, [argName]: signatureHex });
+      await Toast.show({ text: 'Signature generated successfully!' });
+    } catch (error) {
+      console.error('Error generating signature:', error);
+      await Toast.show({ text: 'Failed to generate signature.' });
+    }
   };
 
   const scanBarcode = async (argName: string) => {
@@ -245,6 +281,8 @@ const ContractView = () => {
       setSelectedContractFile('');
       setConstructorArgs([]);
       setInputValues({});
+      setSelectedAddresses({});
+      setDataToSign({});
       setShowConstructorArgsPopup(false); // Close the popup after creation
 
       await Toast.show({
@@ -374,86 +412,157 @@ const ContractView = () => {
           }}
         >
           <h2 className="text-lg font-semibold mb-2">Constructor Arguments</h2>
-          {constructorArgs.map((arg, index) => {
-            const isAddressType =
-              arg.type === 'bytes20' || arg.type === 'pubkey';
-
-            return (
-              <div key={index} className="mb-4">
-                <label className="block text-sm font-medium text-gray-700">
-                  {arg.name} ({arg.type})
-                </label>
-                {isAddressType ? (
-                  <>
-                    <div className="flex items-center">
+          <div className="max-h-96 overflow-y-auto mb-4">
+            {constructorArgs.map((arg, index) => {
+              if (arg.type === 'datasig') {
+                return (
+                  <div key={index} className="mb-4">
+                    <label className="block text-sm font-medium text-gray-700">
+                      {arg.name} (datasig)
+                    </label>
+                    <input
+                      type="text"
+                      name={`${arg.name}_data`}
+                      value={dataToSign[arg.name] || ''}
+                      onChange={(e) =>
+                        setDataToSign({
+                          ...dataToSign,
+                          [arg.name]: e.target.value,
+                        })
+                      }
+                      className="border p-2 w-full rounded-md mb-2"
+                      placeholder={`Enter data to sign for ${arg.name}`}
+                    />
+                    <div className="flex items-center mb-2">
                       <button
                         type="button"
                         onClick={() => {
                           setCurrentArgName(arg.name);
                           setShowAddressPopup(true);
                         }}
-                        className="bg-blue-500 hover:bg-blue-600 transition duration-300 font-bold text-white py-2 px-4 rounded mr-2"
-                        disabled={isScanning} // Disable button during scan
+                        className={`bg-blue-500 hover:bg-blue-600 transition duration-300 font-bold text-white py-2 px-4 rounded mr-2 ${
+                          isScanning ? 'opacity-50 cursor-not-allowed' : ''
+                        }`}
+                        disabled={isScanning}
                         aria-label={`Select Address for ${arg.name}`}
                       >
                         Select Address
                       </button>
                       <button
                         type="button"
-                        onClick={() => scanBarcode(arg.name)} // Pass arg.name directly
-                        className={`bg-green-500 hover:bg-green-600 transition duration-300 text-white py-2 px-4 rounded ${
-                          isScanning ? 'opacity-50 cursor-not-allowed' : ''
+                        onClick={() => generateSignature(arg.name)}
+                        className={`bg-green-500 hover:bg-green-600 transition duration-300 font-bold text-white py-2 px-4 rounded ${
+                          !selectedAddresses[arg.name] || !dataToSign[arg.name]
+                            ? 'opacity-50 cursor-not-allowed'
+                            : ''
                         }`}
-                        disabled={isScanning}
-                        aria-label={`Scan QR Code for ${arg.name}`}
+                        disabled={
+                          !selectedAddresses[arg.name] || !dataToSign[arg.name]
+                        }
                       >
-                        <FaCamera /> {/* Optional: Camera icon */}
+                        Sign Message
                       </button>
                     </div>
-                    {inputValues[arg.name] && (
-                      <div className="mt-2">
-                        Selected {arg.type}:{' '}
+                    {selectedAddresses[arg.name] && (
+                      <div className="text-sm mt-2">
                         {shortenTxHash(
-                          inputValues[arg.name],
+                          selectedAddresses[arg.name],
                           PREFIX[currentNetwork].length
                         )}
                       </div>
                     )}
-                  </>
-                ) : (
-                  <input
-                    type="text"
-                    name={arg.name}
-                    value={inputValues[arg.name] || ''}
-                    onChange={handleInputChange}
-                    className="border p-2 w-full rounded-md"
-                    placeholder={`Enter ${arg.name}`}
-                  />
-                )}
-              </div>
-            );
-          })}
+                    {inputValues[arg.name] && (
+                      <div className="mt-2">
+                        Signature: {shortenTxHash(inputValues[arg.name], 0)}
+                      </div>
+                    )}
+                  </div>
+                );
+              } else {
+                const isAddressType =
+                  arg.type === 'bytes20' || arg.type === 'pubkey';
+                return (
+                  <div key={index} className="mb-4">
+                    <label className="block text-sm font-medium text-gray-700">
+                      {arg.name} ({arg.type})
+                    </label>
+                    {isAddressType ? (
+                      <>
+                        <div className="flex items-center">
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setCurrentArgName(arg.name);
+                              setShowAddressPopup(true);
+                            }}
+                            className={`bg-blue-500 hover:bg-blue-600 transition duration-300 font-bold text-white py-2 px-4 rounded mr-2 ${
+                              isScanning ? 'opacity-50 cursor-not-allowed' : ''
+                            }`}
+                            disabled={isScanning}
+                            aria-label={`Select Address for ${arg.name}`}
+                          >
+                            Select Address
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => scanBarcode(arg.name)}
+                            className={`bg-green-500 hover:bg-green-600 transition duration-300 text-white py-2 px-4 rounded ${
+                              isScanning ? 'opacity-50 cursor-not-allowed' : ''
+                            }`}
+                            disabled={isScanning}
+                            aria-label={`Scan QR Code for ${arg.name}`}
+                          >
+                            <FaCamera />
+                          </button>
+                        </div>
+                        {inputValues[arg.name] && (
+                          <div className="mt-2">
+                            Selected {arg.type}:{' '}
+                            {shortenTxHash(
+                              inputValues[arg.name],
+                              PREFIX[currentNetwork].length
+                            )}
+                          </div>
+                        )}
+                      </>
+                    ) : (
+                      <input
+                        type="text"
+                        name={arg.name}
+                        value={inputValues[arg.name] || ''}
+                        onChange={handleInputChange}
+                        className="border p-2 w-full rounded-md"
+                        placeholder={`Enter ${arg.name}`}
+                      />
+                    )}
+                  </div>
+                );
+              }
+            })}
+          </div>
 
-          <button
-            onClick={createContract}
-            className={`bg-blue-500 hover:bg-blue-600 transition duration-300  text-white py-2 px-4 rounded mb-4 flex items-center justify-center ${
-              isLoading ? 'cursor-not-allowed opacity-50' : ''
-            }`}
-            disabled={isLoading} // Disable the button while loading
-          >
-            {isLoading ? (
-              <TailSpin
-                visible={true}
-                height="24"
-                width="24"
-                color="white" // Match the spinner color with the button text color
-                ariaLabel="tail-spin-loading"
-                radius="1"
-              />
-            ) : (
-              <div className="font-bold">Create Contract</div>
-            )}
-          </button>
+          <div className="flex flex-col items-end ">
+            <button
+              onClick={createContract}
+              className={`bg-green-500 hover:bg-green-600 transition duration-300  text-white py-2 px-4 rounded mb-4 flex items-center justify-center ${
+                isLoading ? 'cursor-not-allowed opacity-50' : ''
+              }`}
+              disabled={isLoading} // Disable the button while loading
+            >
+              {isLoading ? (
+                <TailSpin
+                  visible={true}
+                  height="24"
+                  width="24"
+                  color="white" // Match the spinner color with the button text color
+                  ariaLabel="tail-spin-loading"
+                  radius="1"
+                />
+              ) : (
+                <div className="font-bold">Create Contract</div>
+              )}
+            </button>
+          </div>
         </Popup>
       )}
 
@@ -491,57 +600,12 @@ const ContractView = () => {
                         PREFIX[currentNetwork].length
                       )}
                     </div>
-                    {/* Additional Contract Details (Optional) */}
-                    {/* 
-                    <div className="mb-2">
-                      <strong>Opcount:</strong> {instance.opcount}
-                    </div>
-                    <div className="mb-2">
-                      <strong>Bytesize:</strong> {instance.bytesize}
-                    </div>
-                    <div className="mb-2">
-                      <strong>Bytecode:</strong>{' '}
-                      {shortenTxHash(instance.bytecode)}
-                    </div> 
-                    */}
                     <div className="mb-2">
                       <strong>Balance:</strong> {instance.balance.toString()}{' '}
                       satoshis
                     </div>
                   </div>
 
-                  {/* Additional Contract Information (Optional) */}
-                  {/* 
-                  <div className="mb-2">
-                    <strong>UTXOs:</strong>
-                    <RegularUTXOs
-                      utxos={instance.utxos
-                        .filter((utxo) => !utxo.token) // Filter out stale UTXOs
-                        .map((utxo) => ({
-                          ...utxo,
-                          amount: utxo.amount.toString(),
-                          tx_hash: utxo.tx_hash,
-                          tx_pos: utxo.tx_pos,
-                        }))}
-                      loading={false}
-                    />
-                    <CashTokenUTXOs
-                      utxos={instance.utxos
-                        .filter((utxo) => utxo.token)
-                        .map((utxo) => ({
-                          ...utxo,
-                          amount: utxo.amount.toString(),
-                          tx_hash: utxo.tx_hash,
-                          tx_pos: utxo.tx_pos,
-                          token: {
-                            amount: utxo.token.amount,
-                            category: utxo.token.category,
-                          },
-                        }))}
-                      loading={false}
-                    />
-                  </div> 
-                  */}
                   <div className="grid grid-cols-[auto,auto] justify-between">
                     <button
                       onClick={() => deleteContract(instance.id)}
