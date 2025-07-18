@@ -103,7 +103,7 @@ const Home: React.FC = () => {
       }
 
       setPlaceholderUTXOs(allUTXOs);
-      console.log(placeholderUTXOs);
+      // console.log(placeholderUTXOs);
       setPlaceholderTokenTotals(calculateCashTokenTotals(allUTXOs));
       dispatch(setUTXOs({ newUTXOs: allUTXOs }));
       await DatabaseService().saveDatabaseToFile();
@@ -246,12 +246,12 @@ const Home: React.FC = () => {
         >
           Contracts
         </button>
-        <button
+        {/* <button
           className="mt-4 p-2 bg-green-500 font-bold text-white rounded hover:bg-green-600 transition duration-300 w-full max-w-md"
           onClick={() => navigate('/apps')}
         >
           Apps
-        </button>
+        </button> */}
         <button
           className="flex justify-center items-center mt-4 p-2 bg-blue-500 font-bold text-white rounded hover:bg-blue-600 transition duration-300 w-full max-w-md"
           onClick={fetchAndStoreUTXOs}
@@ -274,7 +274,11 @@ const Home: React.FC = () => {
         </button>
         <button
           className="mt-4 p-2 bg-blue-500 font-bold text-white rounded hover:bg-blue-600 transition duration-300 w-full max-w-md"
-          onClick={() => handleGenerateKeys(keyPairs.length)}
+          onClick={() =>
+            handleGenerateKeys(
+              Math.max(...keyPairs.map((keyPair) => keyPair.addressIndex)) + 1
+            )
+          }
           disabled={fetchingUTXOsRedux || generatingKeys}
         >
           Generate New Key

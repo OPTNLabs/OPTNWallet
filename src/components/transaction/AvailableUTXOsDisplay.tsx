@@ -4,7 +4,7 @@ import React from 'react';
 import { UTXO } from '../../types/types';
 import Popup from './Popup';
 import { shortenTxHash } from '../../utils/shortenHash';
-import { PREFIX } from '../../utils/constants';
+import { PREFIX, SATSINBITCOIN } from '../../utils/constants';
 import { Network } from '../../redux/networkSlice';
 
 interface AvailableUTXOsDisplayProps {
@@ -86,7 +86,7 @@ const AvailableUTXOsDisplay: React.FC<AvailableUTXOsDisplayProps> = ({
                           )}`}
                         </span>
                         <span className="w-full">
-                          {`Amount: ${utxo.amount ? utxo.amount : utxo.value} sats`}
+                          {`${(utxo.amount ? utxo.amount : utxo.value) / SATSINBITCOIN} BCH`}
                         </span>
                         <span className="w-full">
                           {`Tx Hash: ${shortenTxHash(utxo.tx_hash)}`}

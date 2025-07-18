@@ -14,9 +14,9 @@ import { clearTransaction } from '../../redux/transactionBuilderSlice';
 import { TransactionOutput, UTXO } from '../../types/types';
 import { shortenTxHash } from '../../utils/shortenHash';
 import { Network } from '../../redux/networkSlice';
-import { PREFIX, DUST } from '../../utils/constants';
+import { PREFIX, DUST, SATSINBITCOIN } from '../../utils/constants';
 import Popup from './Popup';
-import TransactionTypeSelector from './TransactionTypeSelector';
+// import TransactionTypeSelector from './TransactionTypeSelector';
 import RegularTxView from './RegularTxView';
 import CashTokenView from './CashTokenView';
 import NFTView from './NFTView';
@@ -80,9 +80,9 @@ const OutputSelection: React.FC<OutputSelectionProps> = ({
   const [popupTitle, setPopupTitle] = useState('Add Output');
   const [opReturnText, setOpReturnText] = useState('');
 
-  const hasGenesisUtxoSelected = selectedUtxos.some(
-    (utxo) => !utxo.token && utxo.tx_pos === 0
-  );
+  // const hasGenesisUtxoSelected = selectedUtxos.some(
+  //   (utxo) => !utxo.token && utxo.tx_pos === 0
+  // );
   const categoriesFromSelected = [
     ...new Set(
       selectedUtxos.filter((u) => u.token).map((u) => u.token.category)
@@ -184,17 +184,17 @@ const OutputSelection: React.FC<OutputSelectionProps> = ({
   return (
     <>
       <div className="mb-4">
-        <div className="flex justify-between items-center mb-4">
-          <h3 className="text-lg font-semibold mb-2">Transaction Outputs</h3>
-          {txOutputs.length > 0 && (
+        {txOutputs.length > 0 && (
+          <div className="flex justify-between items-center mb-4">
+            <h3 className="text-lg font-semibold mb-2">Transaction Outputs</h3>
             <button
               onClick={togglePopup}
               className="bg-blue-500 font-bold text-white py-1 px-2 rounded hover:bg-blue-600 transition-colors duration-200"
             >
-              Show
+              Show Outputs
             </button>
-          )}
-        </div>
+          </div>
+        )}
         {showPopup && (
           <Popup closePopups={() => setShowPopup(false)}>
             {txOutputs.length === 0 ? (
@@ -207,7 +207,7 @@ const OutputSelection: React.FC<OutputSelectionProps> = ({
                     className="flex flex-col items-start mb-4 p-4 border rounded w-full break-words whitespace-normal bg-gray-50"
                   >
                     <div className="flex justify-between w-full">
-                      <span className="font-medium">Recipient:</span>
+                      {/* <span className="font-medium">Recipient:</span> */}
                       <span>
                         {shortenTxHash(
                           output.recipientAddress,
@@ -217,7 +217,7 @@ const OutputSelection: React.FC<OutputSelectionProps> = ({
                     </div>
                     <div className="flex justify-between w-full">
                       <span className="font-medium">Amount:</span>
-                      <span>{output.amount.toString()}</span>
+                      <span>{Number(output.amount) / SATSINBITCOIN} BCH</span>
                     </div>
                     {output.token && (
                       <>
@@ -273,36 +273,56 @@ const OutputSelection: React.FC<OutputSelectionProps> = ({
             </div>
           </Popup>
         )}
-        {txOutputs.length > 0 && (
+        {selectedUtxos.length > 0 ? (
           <div className="mb-4">
-            <h3 className="text-lg font-semibold">
-              {`${txOutputs.length} Recipient${txOutputs.length === 1 ? '' : 's'} - Total: ${txOutputs.reduce(
-                (sum, utxo) => sum + Number(utxo.amount),
-                0
-              )}`}
-            </h3>
+            {txOutputs.length > 0 ? (
+              <h3 className="text-lg font-semibold">
+                {`${txOutputs.length} Recipient${txOutputs.length === 1 ? '' : 's'} - ${
+                  txOutputs.reduce(
+                    (sum, utxo) => sum + Number(utxo.amount),
+                    0
+                  ) / SATSINBITCOIN
+                } BCH`}
+              </h3>
+            ) : (
+              <div className="font-bold flex flex-col text-xl">
+                (3) Add recipients
+              </div>
+            )}
+            {txOutputs.length <= 10 && (
+              <div className="mt-4 flex justify-end">
+                <button
+                  onClick={() => {
+                    resetFormValues();
+                    setShowRegularTx(true);
+                    setPopupTitle('Send Regular Transaction');
+                    setShowAddOutputPopup(true);
+                  }}
+                  className="bg-blue-500 font-bold text-white py-2 px-4 rounded"
+                >
+                  Add Output
+                </button>
+              </div>
+            )}
           </div>
-        )}
-        {txOutputs.length < 10 && (
-          <div className="mb-6 flex flex-col items-end">
-            <button
-              onClick={() => {
-                resetFormValues();
-                setShowRegularTx(true);
-                setPopupTitle('Send Regular Transaction');
-                setShowAddOutputPopup(true);
-              }}
-              className="bg-blue-500 font-bold text-white py-2 px-4 rounded"
-            >
-              Add Output
-            </button>
+        ) : null}
+        {selectedUtxos.length > 0 && (
+          <div className="mb-6">
+            <h3 className="text-lg font-semibold mb-2">Change Address</h3>
+            <input
+              type="text"
+              value={changeAddress}
+              placeholder="Change Address"
+              onChange={(e) => setChangeAddress(e.target.value)}
+              className="border p-2 mb-2 w-full break-words whitespace-normal"
+            />
           </div>
         )}
         {showAddOutputPopup && (
           <Popup closePopups={() => setShowAddOutputPopup(false)}>
             <div className="mb-6">
               <h3 className="text-lg font-semibold mb-2">{popupTitle}</h3>
-              <TransactionTypeSelector
+              {/* <TransactionTypeSelector
                 showRegularTx={showRegularTx}
                 setShowRegularTx={setShowRegularTx}
                 showCashToken={showCashToken}
@@ -314,7 +334,7 @@ const OutputSelection: React.FC<OutputSelectionProps> = ({
                 hasGenesisUtxoSelected={hasGenesisUtxoSelected}
                 resetFormValues={resetFormValues}
                 setPopupTitle={setPopupTitle}
-              />
+              /> */}
               {showRegularTx && (
                 <RegularTxView
                   recipientAddress={recipientAddress}
@@ -380,16 +400,6 @@ const OutputSelection: React.FC<OutputSelectionProps> = ({
             </div>
           </Popup>
         )}
-        <div className="mb-6">
-          <h3 className="text-lg font-semibold mb-2">Change Address</h3>
-          <input
-            type="text"
-            value={changeAddress}
-            placeholder="Change Address"
-            onChange={(e) => setChangeAddress(e.target.value)}
-            className="border p-2 mb-2 w-full break-words whitespace-normal"
-          />
-        </div>
       </div>
     </>
   );
