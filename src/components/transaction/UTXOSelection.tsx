@@ -66,6 +66,63 @@ const UTXOSelection: React.FC<UTXOSelectionProps> = ({
     (utxo) => utxo.token
   );
 
+  // Reusable component for rendering fungible and non-fungible token sections
+  const TokenSection: React.FC<{
+    utxos: any[];
+    selectedUtxos: any[];
+    handleUtxoClick: (utxo: any) => void;
+  }> = ({ utxos, selectedUtxos, handleUtxoClick }) => {
+    const fungibleUtxos = utxos.filter((u) => !u.token?.nft);
+    const nonFungibleUtxos = utxos.filter((u) => u.token?.nft);
+
+    return (
+      <div className="space-y-4">
+        {fungibleUtxos.length > 0 && (
+          <div>
+            <h6 className="font-semibold mb-2">Fungible Tokens</h6>
+            {fungibleUtxos.map((utxo) => (
+              <button
+                key={utxo.id}
+                onClick={() => handleUtxoClick(utxo)}
+                className={`block w-full text-left p-2 mb-2 border rounded-lg break-words whitespace-normal ${
+                  selectedUtxos.some(
+                    (s) =>
+                      s.tx_hash === utxo.tx_hash && s.tx_pos === utxo.tx_pos
+                  )
+                    ? 'bg-blue-100'
+                    : 'bg-white'
+                }`}
+              >
+                <UTXOCard utxos={[utxo]} loading={false} />
+              </button>
+            ))}
+          </div>
+        )}
+        {nonFungibleUtxos.length > 0 && (
+          <div>
+            <h6 className="font-semibold mb-2">Non-Fungible Tokens</h6>
+            {nonFungibleUtxos.map((utxo) => (
+              <button
+                key={utxo.id}
+                onClick={() => handleUtxoClick(utxo)}
+                className={`block w-full text-left p-2 mb-2 border rounded-lg break-words whitespace-normal ${
+                  selectedUtxos.some(
+                    (s) =>
+                      s.tx_hash === utxo.tx_hash && s.tx_pos === utxo.tx_pos
+                  )
+                    ? 'bg-blue-100'
+                    : 'bg-white'
+                }`}
+              >
+                <UTXOCard utxos={[utxo]} loading={false} />
+              </button>
+            ))}
+          </div>
+        )}
+      </div>
+    );
+  };
+
   return (
     <div className="flex flex-wrap gap-2 justify-center">
       {/* Regular UTXOs Button and Popup */}
@@ -81,7 +138,7 @@ const UTXOSelection: React.FC<UTXOSelectionProps> = ({
         )}
         {showRegularUTXOsPopup && (
           <Popup closePopups={closePopups}>
-            <h4 className="text-md font-semibold mb-4">Regular UTXOs</h4>
+            {/* <h4 className="text-md font-semibold mb-4">Regular UTXOs</h4> */}
             <div className="flex justify-between mb-4">
               <button
                 className={`py-2 px-4 rounded ${
@@ -107,7 +164,7 @@ const UTXOSelection: React.FC<UTXOSelectionProps> = ({
             <div className="overflow-y-auto max-h-80 space-y-4">
               {regularView === 'Wallet' && (
                 <div>
-                  <h5 className="font-semibold mb-2">From Wallet Addresses</h5>
+                  <h5 className="font-semibold mb-2">Wallet Address UTXOs</h5>
                   {filteredRegularUTXOs.map((utxo) => (
                     <button
                       key={utxo.id}
@@ -129,9 +186,7 @@ const UTXOSelection: React.FC<UTXOSelectionProps> = ({
               )}
               {regularView === 'Contract' && (
                 <div>
-                  <h5 className="font-semibold mb-2">
-                    From Contract Addresses
-                  </h5>
+                  <h5 className="font-semibold mb-2">Contract Address UTXOs</h5>
                   {contractRegularUTXOs.map((utxo) => (
                     <button
                       key={utxo.id}
@@ -169,7 +224,6 @@ const UTXOSelection: React.FC<UTXOSelectionProps> = ({
         )}
         {showCashTokenUTXOsPopup && (
           <Popup closePopups={closePopups}>
-            <h4 className="text-md font-semibold mb-4">CashToken UTXOs</h4>
             <div className="flex justify-between mb-4">
               <button
                 className={`py-2 px-4 rounded ${
@@ -195,126 +249,22 @@ const UTXOSelection: React.FC<UTXOSelectionProps> = ({
             <div className="overflow-y-auto max-h-80 space-y-4">
               {cashTokenView === 'Wallet' && (
                 <div>
-                  <h5 className="font-semibold mb-2">From Wallet Addresses</h5>
-                  <div className="space-y-4">
-                    {/* Fungible Tokens */}
-                    {filteredCashTokenUTXOs.filter((u) => !u.token?.nft)
-                      .length > 0 && (
-                      <div>
-                        <h6 className="font-semibold mb-2">Fungible Tokens</h6>
-                        {filteredCashTokenUTXOs
-                          .filter((u) => !u.token?.nft)
-                          .map((utxo) => (
-                            <button
-                              key={utxo.id}
-                              onClick={() => handleUtxoClick(utxo)}
-                              className={`block w-full text-left p-2 mb-2 border rounded-lg break-words whitespace-normal ${
-                                selectedUtxos.some(
-                                  (s) =>
-                                    s.tx_hash === utxo.tx_hash &&
-                                    s.tx_pos === utxo.tx_pos
-                                )
-                                  ? 'bg-blue-100'
-                                  : 'bg-white'
-                              }`}
-                            >
-                              <UTXOCard utxos={[utxo]} loading={false} />
-                            </button>
-                          ))}
-                      </div>
-                    )}
-                    {/* Non-Fungible Tokens */}
-                    {filteredCashTokenUTXOs.filter((u) => u.token?.nft).length >
-                      0 && (
-                      <div>
-                        <h6 className="font-semibold mb-2">
-                          Non-Fungible Tokens
-                        </h6>
-                        {filteredCashTokenUTXOs
-                          .filter((u) => u.token?.nft)
-                          .map((utxo) => (
-                            <button
-                              key={utxo.id}
-                              onClick={() => handleUtxoClick(utxo)}
-                              className={`block w-full text-left p-2 mb-2 border rounded-lg break-words whitespace-normal ${
-                                selectedUtxos.some(
-                                  (s) =>
-                                    s.tx_hash === utxo.tx_hash &&
-                                    s.tx_pos === utxo.tx_pos
-                                )
-                                  ? 'bg-blue-100'
-                                  : 'bg-white'
-                              }`}
-                            >
-                              <UTXOCard utxos={[utxo]} loading={false} />
-                            </button>
-                          ))}
-                      </div>
-                    )}
-                  </div>
+                  <h5 className="font-semibold mb-2">Wallet Address UTXOs</h5>
+                  <TokenSection
+                    utxos={filteredCashTokenUTXOs}
+                    selectedUtxos={selectedUtxos}
+                    handleUtxoClick={handleUtxoClick}
+                  />
                 </div>
               )}
               {cashTokenView === 'Contract' && (
                 <div>
-                  <h5 className="font-semibold mb-2">
-                    From Contract Addresses
-                  </h5>
-                  <div className="space-y-4">
-                    {/* Fungible Tokens */}
-                    {contractCashTokenUTXOs.filter((u) => !u.token?.nft)
-                      .length > 0 && (
-                      <div>
-                        <h6 className="font-semibold mb-2">Fungible Tokens</h6>
-                        {contractCashTokenUTXOs
-                          .filter((u) => !u.token?.nft)
-                          .map((utxo) => (
-                            <button
-                              key={utxo.id}
-                              onClick={() => handleUtxoClick(utxo)}
-                              className={`block w-full text-left p-2 mb-2 border rounded-lg break-words whitespace-normal ${
-                                selectedUtxos.some(
-                                  (s) =>
-                                    s.tx_hash === utxo.tx_hash &&
-                                    s.tx_pos === utxo.tx_pos
-                                )
-                                  ? 'bg-blue-100'
-                                  : 'bg-white'
-                              }`}
-                            >
-                              <UTXOCard utxos={[utxo]} loading={false} />
-                            </button>
-                          ))}
-                      </div>
-                    )}
-                    {/* Non-Fungible Tokens */}
-                    {contractCashTokenUTXOs.filter((u) => u.token?.nft).length >
-                      0 && (
-                      <div>
-                        <h6 className="font-semibold mb-2">
-                          Non-Fungible Tokens
-                        </h6>
-                        {contractCashTokenUTXOs
-                          .filter((u) => u.token?.nft)
-                          .map((utxo) => (
-                            <button
-                              key={utxo.id}
-                              onClick={() => handleUtxoClick(utxo)}
-                              className={`block w-full text-left p-2 mb-2 border rounded-lg break-words whitespace-normal ${
-                                selectedUtxos.some(
-                                  (s) =>
-                                    s.tx_hash === utxo.tx_hash &&
-                                    s.tx_pos === utxo.tx_pos
-                                )
-                                  ? 'bg-blue-100'
-                                  : 'bg-white'
-                              }`}
-                            >
-                              <UTXOCard utxos={[utxo]} loading={false} />
-                            </button>
-                          ))}
-                      </div>
-                    )}
-                  </div>
+                  <h5 className="font-semibold mb-2">Contract Address UTXOs</h5>
+                  <TokenSection
+                    utxos={contractCashTokenUTXOs}
+                    selectedUtxos={selectedUtxos}
+                    handleUtxoClick={handleUtxoClick}
+                  />
                 </div>
               )}
             </div>

@@ -2,7 +2,7 @@ import React, { useState, useEffect, useMemo } from 'react';
 import { FaCamera } from 'react-icons/fa';
 import { UTXO } from '../../types/types';
 import { shortenTxHash } from '../../utils/shortenHash';
-import { DUST } from '../../utils/constants';
+import { DUST, SATSINBITCOIN } from '../../utils/constants';
 
 interface RegularTxViewProps {
   recipientAddress: string;
@@ -39,6 +39,7 @@ const RegularTxView: React.FC<RegularTxViewProps> = ({
   handleAddOutput,
 }) => {
   const [inputTokenAmount, setInputTokenAmount] = useState<string>('');
+  const maxLimit = 2000n;
 
   const isNft =
     selectedTokenCategory && selectedTokenCategory !== 'none'
@@ -153,32 +154,44 @@ const RegularTxView: React.FC<RegularTxViewProps> = ({
       </div>
       <div className="mb-4">
         <div className="flex items-center justify-between mb-1">
-          <label className="font-medium">Transfer Amount (Sats)</label>
+          <label className="font-medium">Transfer Amount</label>
           <div className="flex space-x-2">
             <button
-              onClick={() => setTransferAmount(Number(totalSats - 2000n))}
+              onClick={() => setTransferAmount(Number(totalSats - maxLimit))}
               className="border border-gray-300 bg-blue-500 text-white px-3 py-1 rounded hover:bg-blue-600 transition-colors"
             >
-              Max ({totalSats < 2000n ? 0 : Number(totalSats - 2000n)})
+              Max{' '}
+              <span className="text-sm">
+                {totalSats < maxLimit
+                  ? 0
+                  : Number(totalSats - maxLimit) / SATSINBITCOIN}
+              </span>{' '}
+              BCH
             </button>
           </div>
         </div>
         <input
           type="number"
+          step="0.00000001" // Allow up to 8 decimal places for Bitcoin
           value={
-            totalSats < 2000
+            totalSats < maxLimit
               ? 0
-              : transferAmount > Number(totalSats - 2000n)
-                ? Number(totalSats - 2000n)
-                : transferAmount
+              : transferAmount > Number(totalSats - maxLimit)
+                ? Number(totalSats - maxLimit) / 100_000_000 // Convert to Bitcoin
+                : transferAmount / 100_000_000 // Convert to Bitcoin
           }
           onChange={(e) => {
             const value = e.target.value;
-            setTransferAmount(value === '' ? 0 : Number(value));
+            // Convert Bitcoin input to Satoshis (BigInt)
+            const satoshis =
+              value === ''
+                ? BigInt(0)
+                : BigInt(Math.round(parseFloat(value) * 100_000_000));
+            setTransferAmount(Number(satoshis));
           }}
           className="border p-2 w-full break-words whitespace-normal"
-          min={DUST}
-          max={Number(totalSats)}
+          min={Number(DUST) / 100_000_000} // Convert DUST to Bitcoin
+          max={Number(totalSats) / 100_000_000} // Convert totalSats to Bitcoin
         />
       </div>
       {selectedTokenCategory && selectedTokenCategory !== 'none' && (
