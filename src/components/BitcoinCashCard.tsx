@@ -3,6 +3,7 @@ import React, { useState } from 'react';
 import { useSelector } from 'react-redux';
 import { RootState } from '../redux/store';
 import { FaBitcoin } from 'react-icons/fa';
+import { SATSINBITCOIN } from '../utils/constants';
 
 interface Props {
   totalAmount: number; // in satoshis
@@ -20,7 +21,7 @@ const BitcoinCashCard: React.FC<Props> = ({ totalAmount }) => {
   const [mode, setMode] = useState<DisplayMode>(DisplayMode.USD);
 
   // conversions
-  const totalBch = totalAmount / 1e8;
+  const totalBch = totalAmount / SATSINBITCOIN;
 
   // parse the rate, fall back to 0 if it's null or not a finite number
   const rateNum = parseFloat(bchRate ?? '');

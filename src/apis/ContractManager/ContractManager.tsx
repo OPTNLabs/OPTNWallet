@@ -13,11 +13,12 @@ import { store } from '../../redux/store';
 import ElectrumService from '../../services/ElectrumService';
 import { UTXO } from '../../types/types';
 import p2pkhArtifact from './artifacts/p2pkh.json';
-// import bip38Artifact from './artifacts/bip38.json';
+import bip38Artifact from './artifacts/bip38.json';
 import transferWithTimeoutArtifact from './artifacts/transfer_with_timeout.json';
 // import announcementArtifact from './artifacts/announcement.json';
 import escrowArtifact from './artifacts/escrow.json';
 import escrowMS2Artifact from './artifacts/escrowMS2.json';
+import MSVault from './artifacts/MSVault.json';
 
 export default function ContractManager() {
   const dbService = DatabaseService();
@@ -29,7 +30,8 @@ export default function ContractManager() {
     // announcement: announcementArtifact,
     escrow: escrowArtifact,
     escrowMS2: escrowMS2Artifact,
-    // bip38: bip38Artifact,
+    bip38: bip38Artifact,
+    msVault: MSVault,
   };
 
   return {

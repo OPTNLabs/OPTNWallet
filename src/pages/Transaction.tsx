@@ -38,8 +38,9 @@ import {
   // setWalletId,
   // selectNetworkType,
 } from '../redux/walletSlice';
-import SweepPaperWallet from '../components/SweepPaperWallet';
 import AvailableUTXOsDisplay from '../components/transaction/AvailableUTXOsDisplay';
+import ContractManager from '../apis/ContractManager/ContractManager';
+import { SATSINBITCOIN } from '../utils/constants';
 
 const Transaction: React.FC = () => {
   // Removed local walletId state
@@ -81,6 +82,8 @@ const Transaction: React.FC = () => {
   } | null>(null);
   const [contractUTXOs, setContractUTXOs] = useState<UTXO[]>([]);
   const [currentContractABI, setCurrentContractABI] = useState<any[]>([]);
+  const [currentContractSource, setCurrentContractSource] =
+    useState<string>('');
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [showRegularUTXOsPopup, setShowRegularUTXOsPopup] = useState(false);
   const [showCashTokenUTXOsPopup, setShowCashTokenUTXOsPopup] = useState(false);
@@ -163,7 +166,7 @@ const Transaction: React.FC = () => {
    *
    * @param utxo - The UTXO being clicked.
    */
-  const handleUtxoClick = (utxo: UTXO) => {
+  const handleUtxoClick = async (utxo: UTXO) => {
     // console.log('Selected UTXO:', utxo);
     if (rawTX !== '' && txOutputs.length !== 0) {
       handleRemoveOutput(-1);
@@ -187,10 +190,17 @@ const Transaction: React.FC = () => {
       }
     } else {
       if (utxo.abi) {
+        const contractManager = ContractManager();
+
+        const constructorArgs =
+          await contractManager.getContractInstanceByAddress(utxo.address);
+
+        // console.log(constructorArgs.artifact.source);
         // console.log('Contract UTXO:', utxo);
         setShowPopup(true);
         setTempUtxos(utxo);
         setCurrentContractABI(utxo.abi);
+        setCurrentContractSource(constructorArgs.artifact.source);
         setSelectedContractAddresses((prev) => [...prev, utxo.address]);
         return;
       } else if (utxo.isPaperWallet) {
@@ -435,11 +445,12 @@ const Transaction: React.FC = () => {
         {/* Page Title */}
         <h1 className="text-2xl font-bold mb-4">Transaction Builder</h1>
 
-        {/* Flex Container for AddressSelection and SweepPaperWallet */}
+        {/* Flex Container for AddressSelection */}
         <div className="flex flex-wrap gap-2 mb-6 justify-center">
           {/* Address Selection Component */}
           <AddressSelection
             addresses={addresses}
+            selectedUtxos={selectedUtxos}
             selectedAddresses={selectedAddresses}
             contractAddresses={contractAddresses}
             selectedContractAddresses={selectedContractAddresses}
@@ -447,10 +458,8 @@ const Transaction: React.FC = () => {
             selectedContractABIs={selectedContractABIs}
             setSelectedContractABIs={setSelectedContractABIs}
             setSelectedAddresses={setSelectedAddresses}
+            setPaperWalletUTXOs={setPaperWalletUTXOs}
           />
-
-          {/* Sweep Paper Wallet Component */}
-          <SweepPaperWallet setPaperWalletUTXOs={setPaperWalletUTXOs} />
         </div>
 
         {/* Available UTXOs (New Component) for Cashtoken Genesis*/}
@@ -491,6 +500,8 @@ const Transaction: React.FC = () => {
         {/* Selected Transaction Inputs */}
         <SelectedUTXOsDisplay
           selectedUtxos={selectedUtxos}
+          selectedAddresses={selectedAddresses}
+          selectedContractAddresses={selectedContractAddresses}
           totalSelectedUtxoAmount={totalSelectedUtxoAmount}
           handleUtxoClick={handleUtxoClick}
           currentNetwork={currentNetwork}
@@ -530,7 +541,7 @@ const Transaction: React.FC = () => {
         {bytecodeSize !== 0 && rawTX !== '' && (
           <div className="mb-6 break-words whitespace-normal">
             <h3 className="text-lg font-semibold mb-2">
-              Transaction Fee: {bytecodeSize} sats
+              Transaction Fee: {bytecodeSize / SATSINBITCOIN} BCH
             </h3>
           </div>
         )}
@@ -542,6 +553,9 @@ const Transaction: React.FC = () => {
           buildTransaction={buildTransaction}
           sendTransaction={sendTransaction}
           rawTX={rawTX}
+          txOutputs={txOutputs}
+          selectedUtxos={selectedUtxos}
+
           // returnHome={returnHome}
         />
 
@@ -561,6 +575,7 @@ const Transaction: React.FC = () => {
         {/* Contract Function Selection Popup */}
         {showPopup && currentContractABI.length > 0 && (
           <SelectContractFunctionPopup
+            currentContractSource={currentContractSource}
             contractABI={currentContractABI}
             onClose={() => setShowPopup(false)}
             onFunctionSelect={handleContractFunctionSelect}

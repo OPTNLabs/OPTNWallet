@@ -16,7 +16,7 @@ import {
   TransactionCommon,
   // type TransactionCommon,
 } from '@bitauth/libauth';
-import { PREFIX } from '../../utils/constants';
+import { PREFIX, SATSINBITCOIN } from '../../utils/constants';
 import { shortenTxHash } from '../../utils/shortenHash';
 
 interface ErrorAndStatusPopupsProps {
@@ -128,9 +128,12 @@ const ErrorAndStatusPopups: React.FC<ErrorAndStatusPopupsProps> = ({
                   <div key={idx} className="ml-4 mt-1">
                     <p>
                       • txid:{' '}
-                      {shortenTxHash(Buffer.from(input.outpointTransactionHash)
-                        .reverse()
-                        .toString('hex'), PREFIX[currentNetwork].length)}
+                      {shortenTxHash(
+                        Buffer.from(input.outpointTransactionHash)
+                          .reverse()
+                          .toString('hex'),
+                        PREFIX[currentNetwork].length
+                      )}
                     </p>
                     <p>• index: {input.outpointIndex}</p>
                     {/* <p>• sequence: {input.sequenceNumber}</p> */}
@@ -141,7 +144,7 @@ const ErrorAndStatusPopups: React.FC<ErrorAndStatusPopupsProps> = ({
               <div className="mt-2">
                 <strong>Outputs:</strong>
                 {decodedTx.outputs.map((output, idx) => {
-                  const value = output.valueSatoshis.toString();
+                  const value = output.valueSatoshis;
                   const lockingBytecode = ensureUint8Array(
                     output.lockingBytecode
                   );
@@ -153,7 +156,7 @@ const ErrorAndStatusPopups: React.FC<ErrorAndStatusPopupsProps> = ({
                       key={idx}
                       className="ml-4 mt-2 border-b pb-2 space-y-1 text-sm"
                     >
-                      <p>• value: {value} sats</p>
+                      <p>• {Number(value) / SATSINBITCOIN} BCH</p>
 
                       {isOpReturn ? (
                         <>
@@ -174,12 +177,15 @@ const ErrorAndStatusPopups: React.FC<ErrorAndStatusPopupsProps> = ({
                           <p>
                             • Address:{' '}
                             <span className="font-mono text-blue-600 break-all">
-                              {shortenTxHash(toCashAddress(
-                                lockingBytecode,
-                                currentNetwork === Network.MAINNET
-                                  ? 'bitcoincash'
-                                  : 'bchtest'
-                              ), PREFIX[currentNetwork].length)}
+                              {shortenTxHash(
+                                toCashAddress(
+                                  lockingBytecode,
+                                  currentNetwork === Network.MAINNET
+                                    ? 'bitcoincash'
+                                    : 'bchtest'
+                                ),
+                                PREFIX[currentNetwork].length
+                              )}
                             </span>
                           </p>
                         </>
@@ -246,7 +252,9 @@ const ErrorAndStatusPopups: React.FC<ErrorAndStatusPopupsProps> = ({
           <div className="flex flex-col items-center p-4">
             <div className="text-green-500 text-4xl mb-4">✅</div>
             <h3 className="text-xl font-bold mb-2">Transaction Successful</h3>
-            <p className="text-center mb-4">Your transaction has been broadcasted successfully!</p>
+            <p className="text-center mb-4">
+              Your transaction has been broadcasted successfully!
+            </p>
             <div className="flex items-center mb-4">
               <strong className="mr-2">Transaction ID:</strong>
               <span className="font-mono">{shortenTxHash(transactionId)}</span>
@@ -278,8 +286,12 @@ const ErrorAndStatusPopups: React.FC<ErrorAndStatusPopupsProps> = ({
         <Popup closePopups={closePopups} closeButtonText="Close">
           <div className="flex flex-col items-center p-6">
             <div className="text-red-600 text-4xl mb-4">⚠️</div>
-            <h3 className="text-2xl font-bold text-gray-800 mb-3">Transaction Error</h3>
-            <p className="text-gray-600 text-center text-sm mb-6">{errorMessage}</p>
+            <h3 className="text-2xl font-bold text-gray-800 mb-3">
+              Transaction Error
+            </h3>
+            <p className="text-gray-600 text-center text-sm mb-6">
+              {errorMessage}
+            </p>
             <button
               onClick={closePopups}
               className="bg-red-500 font-bold text-white py-2 px-6 rounded-lg hover:bg-red-600 transition duration-300"

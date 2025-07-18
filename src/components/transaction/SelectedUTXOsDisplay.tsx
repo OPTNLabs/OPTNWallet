@@ -5,13 +5,15 @@ import { FaBitcoin } from 'react-icons/fa';
 import { UTXO } from '../../types/types';
 import Popup from './Popup';
 import { shortenTxHash } from '../../utils/shortenHash';
-import { PREFIX } from '../../utils/constants';
+import { PREFIX, SATSINBITCOIN } from '../../utils/constants';
 import { Network } from '../../redux/networkSlice';
 import BcmrService from '../../services/BcmrService';
 import { IdentitySnapshot } from '@bitauth/libauth';
 
 interface SelectedUTXOsDisplayProps {
   selectedUtxos: UTXO[];
+  selectedAddresses: string[];
+  selectedContractAddresses: string[];
   totalSelectedUtxoAmount: BigInt;
   handleUtxoClick: (utxo: UTXO) => void;
   currentNetwork: Network;
@@ -19,6 +21,8 @@ interface SelectedUTXOsDisplayProps {
 
 export default function SelectedUTXOsDisplay({
   selectedUtxos,
+  selectedAddresses,
+  selectedContractAddresses,
   totalSelectedUtxoAmount,
   handleUtxoClick,
   currentNetwork,
@@ -84,17 +88,24 @@ export default function SelectedUTXOsDisplay({
 
   return (
     <div className="mb-4">
-      <div className="flex justify-between items-center mb-4">
-        <h3 className="text-lg font-semibold">Transaction Inputs</h3>
-        {selectedUtxos.length > 0 && (
+      {selectedUtxos.length > 0 ? (
+        <div className="flex justify-between items-center mb-4">
+          <h3 className="text-lg font-semibold">Transaction Inputs</h3>
           <button
             onClick={togglePopup}
             className="bg-blue-500 font-bold text-white py-1 px-2 rounded hover:bg-blue-600 transition-colors duration-200"
           >
-            Show
+            Show Inputs
           </button>
-        )}
-      </div>
+        </div>
+      ) : selectedAddresses.length > 0 ||
+        selectedContractAddresses.length > 0 ? (
+        <div className="font-bold flex-col text-xl">
+          (2) Select UTXO(s) to spend from
+        </div>
+      ) : (
+        <></>
+      )}
 
       {showPopup && (
         <Popup closePopups={() => setShowPopup(false)}>
@@ -137,13 +148,14 @@ export default function SelectedUTXOsDisplay({
                     ) : (
                       <>
                         <span className="w-full">
-                          Amount:{' '}
-                          {utxo.amount != null ? utxo.amount : utxo.value} sats
+                          {(utxo.amount != null ? utxo.amount : utxo.value) /
+                            SATSINBITCOIN}{' '}
+                          BCH
                         </span>
                         <span className="w-full">
                           Tx Hash: {shortenTxHash(utxo.tx_hash)}
                         </span>
-                        <span className="w-full">Position: {utxo.tx_pos}</span>
+                        {/* <span className="w-full">Position: {utxo.tx_pos}</span> */}
                       </>
                     )}
 
@@ -198,7 +210,7 @@ export default function SelectedUTXOsDisplay({
       {selectedUtxos.length > 0 && (
         <div className="mt-4">
           <h3 className="text-lg font-semibold">
-            {`${selectedUtxos.length} Input${selectedUtxos.length === 1 ? '' : 's'} - Total: ${totalSelectedUtxoAmount.toString()}`}
+            {`${selectedUtxos.length} Input${selectedUtxos.length === 1 ? '' : 's'} - ${Number(totalSelectedUtxoAmount) / SATSINBITCOIN} BCH`}
           </h3>
         </div>
       )}

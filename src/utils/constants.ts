@@ -7,7 +7,7 @@ export enum PREFIX {
 export enum COIN_TYPE {
   bitcoincash = 145,
   testnet = 1,
-  legacy = 0
+  legacy = 0,
 }
 
 export enum Network {
@@ -16,5 +16,7 @@ export enum Network {
 }
 
 export const INTERVAL = 300 * 1000; // 1-minute interval
+
+export const SATSINBITCOIN = 100000000;
 
 export const DUST = 546;

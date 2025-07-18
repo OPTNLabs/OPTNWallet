@@ -5,12 +5,15 @@
 import React, { useState } from 'react';
 import Popup from './Popup';
 import Draggable from 'react-draggable';
+import { TransactionOutput, UTXO } from '../../types/types';
 
 interface TransactionActionsProps {
   loading: boolean;
   buildTransaction: () => void;
   sendTransaction: () => void;
   rawTX: string;
+  txOutputs: TransactionOutput[];
+  selectedUtxos: UTXO[];
 }
 
 const TransactionActions: React.FC<TransactionActionsProps> = ({
@@ -18,6 +21,8 @@ const TransactionActions: React.FC<TransactionActionsProps> = ({
   buildTransaction,
   sendTransaction,
   rawTX,
+  txOutputs,
+  selectedUtxos,
 }) => {
   const [isPopupOpen, setIsPopupOpen] = useState(false);
   const [position, setPosition] = useState({ x: 0, y: 0 });
@@ -47,29 +52,37 @@ const TransactionActions: React.FC<TransactionActionsProps> = ({
         </div>
       )}
 
-      {/* Button Container with Flex Layout */}
-      <div className="flex justify-between mb-6">
-        <button
-          onClick={buildTransaction}
-          disabled={loading}
-          className={`bg-green-500 font-bold text-white py-2 px-4 rounded ${
-            loading ? 'opacity-50 cursor-not-allowed' : ''
-          }`}
-        >
-          Build TX
-        </button>
-        {rawTX.length > 0 && (
-          <button
-            onClick={handleOpenPopup}
-            disabled={loading}
-            className={`bg-red-500 font-bold text-white py-2 px-4 rounded ${
-              loading ? 'opacity-50 cursor-not-allowed' : ''
-            }`}
-          >
-            Send TX
-          </button>
-        )}
-      </div>
+      {txOutputs.length > 0 && selectedUtxos.length > 0 && (
+        <div className="mb-6">
+          <div className="font-bold flex flex-col text-xl">
+            {rawTX === ''
+              ? '(4) Build Transaction'
+              : '(5) Confirm and Send Transaction'}
+          </div>
+          <div className="flex justify-between mt-4">
+            <button
+              onClick={buildTransaction}
+              disabled={loading}
+              className={`bg-green-500 font-bold text-white py-2 px-4 rounded ${
+                loading ? 'opacity-50 cursor-not-allowed' : ''
+              }`}
+            >
+              Build TX
+            </button>
+            {rawTX !== '' && (
+              <button
+                onClick={handleOpenPopup}
+                disabled={loading}
+                className={`bg-red-500 font-bold text-white py-2 px-4 rounded ${
+                  loading ? 'opacity-50 cursor-not-allowed' : ''
+                }`}
+              >
+                Send TX
+              </button>
+            )}
+          </div>
+        </div>
+      )}
 
       {/* Popup with Warning and Swipe Confirmation */}
       {isPopupOpen && (
@@ -80,8 +93,9 @@ const TransactionActions: React.FC<TransactionActionsProps> = ({
               ⚠️ Warning
             </p>
             <p className="text-red-600 font-semibold text-sm text-center mb-6">
-              You are about to send a transaction. Please confirm that all
-              details are correct. This action cannot be undone.
+              You are about to <strong>send</strong> a transaction. Please
+              confirm that all details are correct. This action{' '}
+              <strong>cannot</strong> be undone.
             </p>
             <div className="relative w-[200px] h-12 bg-gray-200 rounded-lg overflow-hidden">
               {/* Background fill for visual feedback */}
@@ -94,7 +108,11 @@ const TransactionActions: React.FC<TransactionActionsProps> = ({
                       : 'bg-red-500'
                 }`}
                 style={{ width: `${position.x}px` }}
-              ></div>
+              />
+              {/* Centered "Drag to Confirm" text */}
+              <div className="absolute inset-0 flex items-center justify-center text-sm font-semibold z-10 pointer-events-none">
+                Drag to Confirm
+              </div>
               {/* Draggable handle */}
               <Draggable
                 axis="x" // Restrict dragging to horizontal axis
@@ -117,7 +135,7 @@ const TransactionActions: React.FC<TransactionActionsProps> = ({
                     loading ? 'opacity-50 cursor-not-allowed' : 'cursor-grab'
                   }`}
                 >
-                  {position.x >= threshold ? '✅' : 'Send TX'}
+                  {position.x >= threshold ? '✅' : '➔'}
                 </div>
               </Draggable>
             </div>

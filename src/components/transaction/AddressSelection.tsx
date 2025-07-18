@@ -7,10 +7,13 @@ import { useSelector } from 'react-redux';
 import { RootState } from '../../redux/store';
 import { selectCurrentNetwork } from '../../redux/selectors/networkSelectors';
 import { PREFIX } from '../../utils/constants';
+import { UTXO } from '../../types/types';
+import SweepPaperWallet from '../SweepPaperWallet';
 // import { Network } from 'cashscript';
 
 interface AddressSelectionProps {
   addresses: { address: string; tokenAddress: string }[];
+  selectedUtxos: UTXO[];
   selectedAddresses: string[];
   contractAddresses: {
     address: string;
@@ -23,10 +26,12 @@ interface AddressSelectionProps {
   selectedContractABIs: any[];
   setSelectedContractABIs: React.Dispatch<React.SetStateAction<any[]>>;
   setSelectedAddresses: React.Dispatch<React.SetStateAction<string[]>>;
+  setPaperWalletUTXOs: React.Dispatch<React.SetStateAction<UTXO[]>>;
 }
-
+//SweepPaperWallet
 const AddressSelection: React.FC<AddressSelectionProps> = ({
   addresses,
+  selectedUtxos,
   selectedAddresses,
   contractAddresses,
   selectedContractAddresses,
@@ -34,6 +39,7 @@ const AddressSelection: React.FC<AddressSelectionProps> = ({
   selectedContractABIs,
   setSelectedContractABIs,
   setSelectedAddresses,
+  setPaperWalletUTXOs,
 }) => {
   const [showWalletAddressesPopup, setShowWalletAddressesPopup] =
     useState(false); // State for wallet addresses popup
@@ -104,6 +110,16 @@ const AddressSelection: React.FC<AddressSelectionProps> = ({
       >
         Contracts
       </button>
+
+      <SweepPaperWallet setPaperWalletUTXOs={setPaperWalletUTXOs} />
+
+      {selectedAddresses.length === 0 &&
+        selectedContractAddresses.length === 0 &&
+        selectedUtxos.length === 0 && (
+          <div className="font-bold flex-col text-xl">
+            (1) Select an address from the wallet or contracts
+          </div>
+        )}
 
       {/* Popup for Wallet Addresses */}
       {showWalletAddressesPopup && (

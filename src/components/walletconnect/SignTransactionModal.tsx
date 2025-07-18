@@ -8,6 +8,7 @@ import {
   respondWithTxError,
 } from '../../redux/walletconnectSlice';
 import { binToHex, lockingBytecodeToCashAddress } from '@bitauth/libauth';
+import { SATSINBITCOIN } from '../../utils/constants';
 
 export function SignTransactionModal() {
   const dispatch = useDispatch<AppDispatch>();
@@ -86,11 +87,11 @@ export function SignTransactionModal() {
     }
   }
 
-  const totalInput = sourceOutputs.reduce(
+  const totalInput: bigint = sourceOutputs.reduce(
     (sum: bigint, o: any) => sum + parseSatoshis(o.valueSatoshis),
     0n
   );
-  const totalOutput = outputs.reduce(
+  const totalOutput: bigint = outputs.reduce(
     (sum: bigint, o: any) => sum + parseSatoshis(o.valueSatoshis),
     0n
   );
@@ -144,20 +145,20 @@ export function SignTransactionModal() {
             const txid = binToHex(
               ensureUint8Array(source.outpointTransactionHash)
             );
-            const value = parseSatoshis(source.valueSatoshis).toString();
+            const value = parseSatoshis(source.valueSatoshis);
             return (
               <div key={i} className="ml-2">
                 <div>
                   TXID: <span className="font-mono break-all">{txid}</span>
                 </div>
                 <div>Index: {source.outpointIndex}</div>
-                <div>Value: {value} sats</div>
+                <div>{Number(value) / SATSINBITCOIN} BCH</div>
               </div>
             );
           })}
 
           {outputs.map((output: any, i: number) => {
-            const value = parseSatoshis(output.valueSatoshis).toString();
+            const value = parseSatoshis(output.valueSatoshis);
             const lockingBytecode = ensureUint8Array(output.lockingBytecode);
             const isOpReturn = lockingBytecode[0] === 0x6a;
             const token = output.token;
@@ -188,7 +189,7 @@ export function SignTransactionModal() {
                     {address}
                   </span>
                 </div>
-                <div>Value: {value} sats</div>
+                <div>{Number(value) / SATSINBITCOIN} BCH</div>
                 {token && (
                   <div className="text-sm bg-green-50 border border-green-200 rounded p-2 space-y-1">
                     <div>
@@ -226,10 +227,10 @@ export function SignTransactionModal() {
           })}
 
           <div className="text-sm border-t pt-2">
-            <div>Total Input: {totalInput.toString()} sats</div>
-            <div>Total Output: {totalOutput.toString()} sats</div>
+            <div>Total Input: {Number(totalInput) / SATSINBITCOIN} BCH</div>
+            <div>Total Output: {Number(totalOutput) / SATSINBITCOIN} BCH</div>
             <div className="font-semibold">
-              Estimated Fee: {fee.toString()} sats
+              Estimated Fee: {Number(fee) / SATSINBITCOIN} BCH
             </div>
             <div>Broadcast: {shouldBroadcast ? 'Yes' : 'No'}</div>
           </div>

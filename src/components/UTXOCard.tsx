@@ -4,6 +4,7 @@ import { FaBitcoin } from 'react-icons/fa';
 import { shortenTxHash } from '../utils/shortenHash';
 import { UTXO } from '../types/types';
 import BcmrService from '../services/BcmrService';
+import { SATSINBITCOIN } from '../utils/constants';
 
 interface UTXOCardProps {
   utxos: UTXO[];
@@ -19,7 +20,7 @@ const UTXOCard: React.FC<UTXOCardProps> = ({ utxos, loading }) => {
     const fetchIcons = async () => {
       // Get unique token categories from utxos
       const categories = Array.from(
-        new Set(utxos.filter(u => u.token).map(u => u.token!.category))
+        new Set(utxos.filter((u) => u.token).map((u) => u.token!.category))
       );
       const bcmr = new BcmrService();
 
@@ -30,10 +31,10 @@ const UTXOCard: React.FC<UTXOCardProps> = ({ utxos, loading }) => {
         try {
           const authbase = await bcmr.getCategoryAuthbase(category);
           const iconUri = await bcmr.resolveIcon(authbase);
-          setIconUris(prev => ({ ...prev, [category]: iconUri }));
+          setIconUris((prev) => ({ ...prev, [category]: iconUri }));
         } catch (error) {
           // console.error(`Failed to fetch icon for category ${category}:`, error);
-          setIconUris(prev => ({ ...prev, [category]: null }));
+          setIconUris((prev) => ({ ...prev, [category]: null }));
         }
       }
     };
@@ -42,8 +43,12 @@ const UTXOCard: React.FC<UTXOCardProps> = ({ utxos, loading }) => {
   }, [utxos]); // Re-run when utxos change
 
   // Function to format token amounts based on decimals
-  const formatTokenAmount = (amount: number | string | bigint, decimals: number = 0): string => {
-    const numAmount = typeof amount === 'string' ? parseFloat(amount) : Number(amount);
+  const formatTokenAmount = (
+    amount: number | string | bigint,
+    decimals: number = 0
+  ): string => {
+    const numAmount =
+      typeof amount === 'string' ? parseFloat(amount) : Number(amount);
     if (decimals === 0) return numAmount.toString();
     const divisor = Math.pow(10, decimals);
     const formatted = (numAmount / divisor).toFixed(decimals);
@@ -75,7 +80,7 @@ const UTXOCard: React.FC<UTXOCardProps> = ({ utxos, loading }) => {
 
   return (
     <div>
-      <h4 className="font-semibold mb-2">UTXOs:</h4>
+      {/* <h4 className="font-semibold mb-2">UTXOs:</h4> */}
       {utxos.map((utxo, i) => {
         const isToken = Boolean(utxo.token);
         const tokenData = isToken ? utxo.token : null;
@@ -93,20 +98,23 @@ const UTXOCard: React.FC<UTXOCardProps> = ({ utxos, loading }) => {
                 <>
                   <p>
                     <strong>Amount:</strong>{' '}
-                    {formatTokenAmount(tokenData!.amount, metadata?.token.decimals || 0)}{' '}
+                    {formatTokenAmount(
+                      tokenData!.amount,
+                      metadata?.token.decimals || 0
+                    )}{' '}
                     {metadata?.token.symbol || 'tokens'}
                   </p>
                   <p>
                     <strong>Name:</strong> {metadata?.name || 'Unknown Token'}
                   </p>
                   <p>
-                    <strong>Satoshis:</strong> {utxo.value} sats
+                    {utxo.value / SATSINBITCOIN} <strong>BCH</strong>
                   </p>
                 </>
               ) : (
                 <>
                   <p>
-                    <strong>Amount:</strong> {(utxo.amount ?? utxo.value).toString()} satoshis
+                    {utxo.value / SATSINBITCOIN} <strong>BCH</strong>
                   </p>
                   <p>
                     <strong>Tx Hash:</strong> {shortenTxHash(utxo.tx_hash)}
@@ -147,7 +155,9 @@ const UTXOCard: React.FC<UTXOCardProps> = ({ utxos, loading }) => {
               ) : (
                 <>
                   <FaBitcoin className="text-green-500 text-4xl" />
-                  <span className="text-base font-medium text-center">Bitcoin Cash</span>
+                  <span className="text-base font-medium text-center">
+                    Bitcoin Cash
+                  </span>
                 </>
               )}
             </div>
