@@ -148,6 +148,19 @@ export default function KeyManager() {
         throw new Error(`Key for address ${keys.aliceAddress} already exists`);
       }
 
+      const existingTokenKeyQuery = db.prepare(`
+        SELECT COUNT(*) as count FROM keys WHERE token_address = ?;
+      `);
+      existingTokenKeyQuery.bind([keys.aliceTokenAddress]);
+      const tokenCount = existingTokenKeyQuery.getAsObject().count as number;
+      existingTokenKeyQuery.free();
+
+      if (tokenCount > 0) {
+        throw new Error(
+          `Key for token address ${keys.aliceTokenAddress} already exists`
+        );
+      }
+
       const insertQuery = db.prepare(`
         INSERT INTO keys (wallet_id, public_key, private_key, address, token_address, pubkey_hash, account_index, change_index, address_index) 
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?);

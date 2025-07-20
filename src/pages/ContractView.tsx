@@ -386,7 +386,9 @@ const ContractView = () => {
         />
       </div>
 
-      <h2 className="text-lg font-semibold mb-2">Select Contract</h2>
+      <h2 className="text-lg font-semibold flex flex-col items-center mb-2">
+        Select Contract
+      </h2>
       <select
         className="border p-2 mb-4 w-full"
         value={selectedContractFile}
@@ -411,7 +413,9 @@ const ContractView = () => {
             setCurrentArgName('');
           }}
         >
-          <h2 className="text-lg font-semibold mb-2">Constructor Arguments</h2>
+          <h2 className="text-lg font-semibold flex flex-col items-center mb-2">
+            Constructor Arguments
+          </h2>
           <div className="max-h-96 overflow-y-auto mb-4">
             {constructorArgs.map((arg, index) => {
               if (arg.type === 'datasig') {
@@ -519,8 +523,8 @@ const ContractView = () => {
                           <div className="mt-2">
                             Selected {arg.type}:{' '}
                             {shortenTxHash(
-                              inputValues[arg.name],
-                              PREFIX[currentNetwork].length
+                              inputValues[arg.name]
+                              // PREFIX[currentNetwork].length
                             )}
                           </div>
                         )}
@@ -568,7 +572,9 @@ const ContractView = () => {
 
       {contractInstances.length > 0 && (
         <div>
-          <h2 className="text-lg font-semibold mb-2">Instantiated Contracts</h2>
+          <h2 className="text-lg font-semibold flex flex-col items-center mb-2">
+            Instantiated Contracts
+          </h2>
           <div className="overflow-y-auto max-h-80 mb-4">
             <ul>
               {contractInstances.map((instance) => (

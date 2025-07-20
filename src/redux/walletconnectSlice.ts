@@ -84,13 +84,13 @@ const initialState: WalletconnectState = {
 export const initWalletConnect = createAsyncThunk(
   'walletconnect/init',
   async (_, { dispatch }) => {
-    console.log('[walletconnectSlice] initWalletConnect triggered');
+    // console.log('[walletconnectSlice] initWalletConnect triggered');
 
     const projectId = 'f62aa2bb589104d059ca7b5bb64b18fb';
-    console.log('[walletconnectSlice] Using projectId:', projectId);
+    // console.log('[walletconnectSlice] Using projectId:', projectId);
 
     const core = new Core({ projectId });
-    console.log('[walletconnectSlice] Created Core instance');
+    // console.log('[walletconnectSlice] Created Core instance');
 
     const metadata = {
       name: 'OPTN Wallet',
@@ -98,20 +98,20 @@ export const initWalletConnect = createAsyncThunk(
       url: 'https://optnlabs.com',
       icons: ['https://optnlabs.com/logo.png'],
     };
-    console.log('[walletconnectSlice] Using metadata:', metadata);
+    // console.log('[walletconnectSlice] Using metadata:', metadata);
 
     const web3wallet = await WalletKit.init({ core, metadata });
-    console.log('[walletconnectSlice] WalletKit initialized');
+    // console.log('[walletconnectSlice] WalletKit initialized');
 
     const activeSessions = web3wallet.getActiveSessions();
-    console.log(
-      '[walletconnectSlice] Active sessions at init:',
-      activeSessions
-    );
+    // console.log(
+    //   '[walletconnectSlice] Active sessions at init:',
+    //   activeSessions
+    // );
 
     // Listen for session proposals
     web3wallet.on('session_proposal', async (proposal) => {
-      console.log('[walletconnectSlice] session_proposal event:', proposal);
+      // console.log('[walletconnectSlice] session_proposal event:', proposal);
       await Toast.show({
         text: 'Session proposal from dApp! Check console or modal.',
       });
@@ -121,13 +121,13 @@ export const initWalletConnect = createAsyncThunk(
     // once the peer actually settles the session, fire a "session_update"
     // we cast to any to avoid the built‑in Event typing, and just re‑pull all sessions
     (web3wallet as any).on('session_update', () => {
-      console.log('🟢 session_update fired, refreshing active sessions');
+      // console.log('🟢 session_update fired, refreshing active sessions');
       dispatch(setActiveSessions(web3wallet.getActiveSessions()));
     });
 
     // Listen for session requests
     web3wallet.on('session_request', (sessionEvent) => {
-      console.log('[walletconnectSlice] session_request event:', sessionEvent);
+      // console.log('[walletconnectSlice] session_request event:', sessionEvent);
       dispatch(handleWcRequest(sessionEvent));
     });
 
@@ -185,7 +185,7 @@ export const rejectSessionProposal = createAsyncThunk(
     if (!walletKit || !proposal) {
       throw new Error('No walletKit or proposal to reject.');
     }
-    console.log('[rejectSessionProposal] user rejected =>', proposal.id);
+    // console.log('[rejectSessionProposal] user rejected =>', proposal.id);
     await Toast.show({ text: 'Rejecting session...' });
 
     await walletKit.rejectSession({
@@ -212,7 +212,7 @@ export const handleWcRequest = createAsyncThunk(
     const { topic, params, id } = sessionEvent;
     const { request } = params;
     const method = request.method;
-    console.log('[handleWcRequest] method =>', method);
+    // console.log('[handleWcRequest] method =>', method);
 
     let response: JsonRpcResponse<unknown> | undefined;
 
@@ -242,7 +242,7 @@ export const handleWcRequest = createAsyncThunk(
       }
     }
     if (response) {
-      console.log('[handleWcRequest] responding =>', response);
+      // console.log('[handleWcRequest] responding =>', response);
       await walletKit.respondSessionRequest({ topic, response });
     }
   }
@@ -255,9 +255,9 @@ export const wcPair = createAsyncThunk(
     const state = getState() as RootState;
     const walletKit = state.walletconnect.web3wallet;
     if (!walletKit) throw new Error('WalletKit not ready');
-    console.log('[wcPair] pairing with =>', uri);
+    // console.log('[wcPair] pairing with =>', uri);
     await walletKit.pair({ uri });
-    console.log('[wcPair] pairing done');
+    // console.log('[wcPair] pairing done');
     await Toast.show({ text: 'Paired. Waiting for proposal...' });
   }
 );
@@ -268,7 +268,7 @@ export const disconnectSession = createAsyncThunk(
     const state = getState() as RootState;
     const walletKit = state.walletconnect.web3wallet;
     if (!walletKit) throw new Error('WalletConnect not initialized');
-    console.log('[disconnectSession] disconnecting session for topic:', topic);
+    // console.log('[disconnectSession] disconnecting session for topic:', topic);
     await walletKit.disconnectSession({
       topic,
       reason: getSdkError('USER_DISCONNECTED'),
@@ -481,9 +481,9 @@ export const checkAndDisconnectExpiredSessions = createAsyncThunk(
 
     for (const [topic, session] of Object.entries(activeSessions)) {
       if (session.expiry && currentTime >= session.expiry) {
-        console.log(
-          `[checkAndDisconnectExpiredSessions] Disconnecting expired session: ${topic}`
-        );
+        // console.log(
+        //   `[checkAndDisconnectExpiredSessions] Disconnecting expired session: ${topic}`
+        // );
         await dispatch(disconnectSession(topic));
       }
     }
@@ -496,27 +496,27 @@ const walletconnectSlice = createSlice({
   initialState,
   reducers: {
     setPendingProposal: (state, action) => {
-      console.log('[walletconnectSlice] setPendingProposal =>', action.payload);
+      // console.log('[walletconnectSlice] setPendingProposal =>', action.payload);
       state.pendingProposal = action.payload;
     },
     clearPendingProposal: (state) => {
-      console.log('[walletconnectSlice] clearPendingProposal.');
+      // console.log('[walletconnectSlice] clearPendingProposal.');
       state.pendingProposal = null;
     },
     setPendingSignMsg: (state, action) => {
-      console.log('[walletconnectSlice] setPendingSignMsg =>', action.payload);
+      // console.log('[walletconnectSlice] setPendingSignMsg =>', action.payload);
       state.pendingSignMsg = action.payload;
     },
     clearPendingSignMsg: (state) => {
-      console.log('[walletconnectSlice] clearPendingSignMsg.');
+      // console.log('[walletconnectSlice] clearPendingSignMsg.');
       state.pendingSignMsg = null;
     },
     setPendingSignTx: (state, action) => {
-      console.log('[walletconnectSlice] setPendingSignTx =>', action.payload);
+      // console.log('[walletconnectSlice] setPendingSignTx =>', action.payload);
       state.pendingSignTx = action.payload;
     },
     clearPendingSignTx: (state) => {
-      console.log('[walletconnectSlice] clearPendingSignTx.');
+      // console.log('[walletconnectSlice] clearPendingSignTx.');
       state.pendingSignTx = null;
     },
     setActiveSessions: (
@@ -529,7 +529,7 @@ const walletconnectSlice = createSlice({
   extraReducers: (builder) => {
     // Initialization
     builder.addCase(initWalletConnect.fulfilled, (state, action) => {
-      console.log('[initWalletConnect.fulfilled]');
+      // console.log('[initWalletConnect.fulfilled]');
       state.web3wallet = action.payload.web3wallet;
       state.activeSessions = action.payload.activeSessions;
     });
@@ -539,7 +539,7 @@ const walletconnectSlice = createSlice({
 
     // Approve proposal
     builder.addCase(approveSessionProposal.fulfilled, (state, _action) => {
-      console.log('[approveSessionProposal.fulfilled] => session approved');
+      // console.log('[approveSessionProposal.fulfilled] => session approved');
       state.pendingProposal = null;
       // pull in the newly‑approved session so the UI updates immediately:
       if (state.web3wallet) {
@@ -553,7 +553,7 @@ const walletconnectSlice = createSlice({
 
     // Reject proposal
     builder.addCase(rejectSessionProposal.fulfilled, (state) => {
-      console.log('[rejectSessionProposal.fulfilled] => session rejected');
+      // console.log('[rejectSessionProposal.fulfilled] => session rejected');
       state.pendingProposal = null;
       // pull in the newly‑approved session:
       if (state.web3wallet) {
@@ -576,10 +576,10 @@ const walletconnectSlice = createSlice({
 
     // disconnect session
     builder.addCase(disconnectSession.fulfilled, (state, action) => {
-      console.log(
-        '[disconnectSession.fulfilled] Updated active sessions',
-        action.payload
-      );
+      // console.log(
+      //   '[disconnectSession.fulfilled] Updated active sessions',
+      //   action.payload
+      // );
       state.activeSessions = action.payload;
     });
     builder.addCase(disconnectSession.rejected, (_, action) => {

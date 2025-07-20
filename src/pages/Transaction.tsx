@@ -443,7 +443,9 @@ const Transaction: React.FC = () => {
         </div>
 
         {/* Page Title */}
-        <h1 className="text-2xl font-bold mb-4">Transaction Builder</h1>
+        <h1 className="text-2xl font-bold flex flex-col items-center mb-4">
+          Transaction Builder
+        </h1>
 
         {/* Flex Container for AddressSelection */}
         <div className="flex flex-wrap gap-2 mb-6 justify-center">
@@ -463,7 +465,7 @@ const Transaction: React.FC = () => {
         </div>
 
         {/* Available UTXOs (New Component) for Cashtoken Genesis*/}
-        <AvailableUTXOsDisplay
+        {/* <AvailableUTXOsDisplay
           utxos={utxos}
           // contractUtxos={contractUTXOs}
           selectedUtxos={selectedUtxos}
@@ -472,7 +474,7 @@ const Transaction: React.FC = () => {
           setShowCTUTXOs={setShowCTUTXOs}
           currentNetwork={currentNetwork}
           closePopups={closePopups}
-        />
+        /> */}
 
         {/* UTXO Selection Component */}
         <UTXOSelection

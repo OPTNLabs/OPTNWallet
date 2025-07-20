@@ -110,7 +110,7 @@ const ErrorAndStatusPopups: React.FC<ErrorAndStatusPopupsProps> = ({
     <>
       {showRawTxPopup && (
         <Popup closePopups={closePopups}>
-          <h3 className="text-lg font-semibold mb-2">
+          <h3 className="text-lg font-semibold flex flex-col items-center mb-2">
             Raw Transaction Details
           </h3>
           {decodedTx ? (
@@ -123,7 +123,7 @@ const ErrorAndStatusPopups: React.FC<ErrorAndStatusPopupsProps> = ({
               </p> */}
 
               <div className="mt-2">
-                <strong>Inputs:</strong>
+                <strong className="flex flex-col items-center">Inputs</strong>
                 {decodedTx.inputs.map((input, idx) => (
                   <div key={idx} className="ml-4 mt-1">
                     <p>
@@ -142,7 +142,7 @@ const ErrorAndStatusPopups: React.FC<ErrorAndStatusPopupsProps> = ({
               </div>
 
               <div className="mt-2">
-                <strong>Outputs:</strong>
+                <strong className="flex flex-col items-center">Outputs</strong>
                 {decodedTx.outputs.map((output, idx) => {
                   const value = output.valueSatoshis;
                   const lockingBytecode = ensureUint8Array(
@@ -256,7 +256,7 @@ const ErrorAndStatusPopups: React.FC<ErrorAndStatusPopupsProps> = ({
               Your transaction has been broadcasted successfully!
             </p>
             <div className="flex items-center mb-4">
-              <strong className="mr-2">Transaction ID:</strong>
+              <strong className="mr-2">TX ID:</strong>
               <span className="font-mono">{shortenTxHash(transactionId)}</span>
               <button
                 onClick={() => navigator.clipboard.writeText(transactionId)}
@@ -269,7 +269,7 @@ const ErrorAndStatusPopups: React.FC<ErrorAndStatusPopupsProps> = ({
             <a
               href={
                 currentNetwork === Network.CHIPNET
-                  ? `https://chipnet.bch.ninja/tx/${transactionId}`
+                  ? `https://chipnet.chaingraph.cash/tx/${transactionId}`
                   : `https://explorer.bch.ninja/tx/${transactionId}`
               }
               target="_blank"

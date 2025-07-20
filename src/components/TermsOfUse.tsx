@@ -4,44 +4,55 @@ const TermsOfUse = () => {
       <p className="p-4 rounded-lg">
         <strong>1. Acceptance of Terms</strong>
         <br />
-        By accessing and using the OPTN prototype crypto wallet, you agree to
-        comply with and be bound by these Terms of Use. If you do not agree to
-        these terms, please do not use the wallet.
+        By accessing and using the OPTN Crypto Wallet App ("the App"), you agree
+        to comply with and be bound by these Terms of Use. If you do not agree
+        to these terms, please do not use the App.
         <br />
         <br />
         <strong>2. Purpose</strong>
         <br />
-        The OPTN wallet is currently available for beta testing by the public.
-        It is intended for users to explore and provide feedback on its
-        innovative functionality and user-centric design as we work towards the
-        full release.
+        The OPTN Crypto Wallet App is a live application designed to allow users
+        to securely store, send, and receive cryptocurrency. The App provides a
+        user-centric interface for managing digital assets, but it is your
+        responsibility to ensure the security of your private keys and assets.
         <br />
         <br />
-        <strong>3. No Liability</strong>
+        <strong>3. User Responsibilities</strong>
         <br />
-        The developers of OPTN assume no liability for any loss or damage
-        arising from the use of this prototype wallet. Users should not use real
-        cryptocurrency or sensitive personal information within this demo
-        application.
-        <br />
-        <br />
-        <strong>4. No Warranty</strong>
-        <br />
-        The OPTN wallet is provided "as is" without any warranties, express or
-        implied. The developers make no guarantees regarding the reliability,
-        accuracy, or completeness of the wallet's functionality.
-        <br />
-        <br />
-        <strong>5. Modifications</strong>
-        <br />
-        The developers reserve the right to modify or discontinue the OPTN
-        wallet at any time without prior notice.
+        As a live app, the OPTN Crypto Wallet App handles real cryptocurrency.
+        You are solely responsible for:
+        <ul className="list-disc pl-6">
+          <li>Safeguarding your private keys and recovery phrases.</li>
+          <li>Verifying transaction details before confirming any actions.</li>
+          <li>Ensuring the security of your device and the App.</li>
+        </ul>
+        The development team is not responsible for any loss of assets or
+        unauthorized access resulting from your failure to follow these
+        practices.
         <br />
         <br />
-        <strong>6. Contact Information</strong>
+        <strong>4. No Liability</strong>
         <br />
-        For any inquiries or issues related to the OPTN wallet, please refer to
-        the contact information provided separately.
+        The developers of the OPTN Crypto Wallet App assume no liability for any
+        loss, damage, or unauthorized access arising from your use of the App.
+        This includes, but is not limited to, loss of cryptocurrency, data
+        breaches, or device malfunctions. You acknowledge that you use the App
+        at your own risk.
+        <br />
+        <br />
+        <strong>5. No Warranty</strong>
+        <br />
+        The App is provided "as is" without any warranties, express or implied.
+        The developers make no guarantees regarding the reliability, accuracy,
+        or completeness of the App's functionality. We do not warrant that the
+        App will be error-free or uninterrupted.
+        <br />
+        <br />
+        <strong>6. Modifications</strong>
+        <br />
+        The developers reserve the right to modify, suspend, or discontinue the
+        App at any time without prior notice. We may also update these Terms of
+        Use, and it is your responsibility to review them periodically.
       </p>
     </div>
   );
