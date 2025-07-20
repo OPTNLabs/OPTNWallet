@@ -201,6 +201,9 @@ const OutputSelection: React.FC<OutputSelectionProps> = ({
               <p className="text-gray-500">No outputs added yet.</p>
             ) : (
               <div className="max-h-[50vh] overflow-y-auto">
+                <h3 className="text-lg font-semibold flex flex-col items-center mb-4">
+                  Transaction Outputs
+                </h3>
                 {txOutputs.map((output, index) => (
                   <div
                     key={index}
@@ -295,7 +298,7 @@ const OutputSelection: React.FC<OutputSelectionProps> = ({
                   onClick={() => {
                     resetFormValues();
                     setShowRegularTx(true);
-                    setPopupTitle('Send Regular Transaction');
+                    setPopupTitle('Add Recipient');
                     setShowAddOutputPopup(true);
                   }}
                   className="bg-blue-500 font-bold text-white py-2 px-4 rounded"

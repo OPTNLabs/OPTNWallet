@@ -20,7 +20,7 @@ export function SessionList({
     <div className="space-y-4">
       {Object.entries(activeSessions).map(([topic, session]) => {
         const dappMeta = session.peer.metadata;
-        console.log(dappMeta);
+        // console.log(dappMeta);
         return (
           <div
             key={topic}

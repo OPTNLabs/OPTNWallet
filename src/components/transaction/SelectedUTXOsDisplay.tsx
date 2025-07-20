@@ -90,7 +90,7 @@ export default function SelectedUTXOsDisplay({
     <div className="mb-4">
       {selectedUtxos.length > 0 ? (
         <div className="flex justify-between items-center mb-4">
-          <h3 className="text-lg font-semibold">Transaction Inputs</h3>
+          <h3 className="text-lg font-semibold ">Transaction Inputs</h3>
           <button
             onClick={togglePopup}
             className="bg-blue-500 font-bold text-white py-1 px-2 rounded hover:bg-blue-600 transition-colors duration-200"
@@ -109,7 +109,9 @@ export default function SelectedUTXOsDisplay({
 
       {showPopup && (
         <Popup closePopups={() => setShowPopup(false)}>
-          <h3 className="text-lg font-semibold mb-4">Transaction Inputs</h3>
+          <h3 className="text-lg font-semibold flex flex-col items-center mb-4">
+            Transaction Inputs
+          </h3>
           <div className="max-h-[50vh] overflow-y-auto">
             {selectedUtxos.length === 0 ? (
               <p>No UTXOs selected.</p>

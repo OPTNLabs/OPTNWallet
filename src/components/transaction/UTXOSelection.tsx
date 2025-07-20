@@ -164,7 +164,9 @@ const UTXOSelection: React.FC<UTXOSelectionProps> = ({
             <div className="overflow-y-auto max-h-80 space-y-4">
               {regularView === 'Wallet' && (
                 <div>
-                  <h5 className="font-semibold mb-2">Wallet Address UTXOs</h5>
+                  <h5 className="font-semibold flex flex-col items-center mb-2">
+                    Wallet Address UTXOs
+                  </h5>
                   {filteredRegularUTXOs.map((utxo) => (
                     <button
                       key={utxo.id}
@@ -186,7 +188,9 @@ const UTXOSelection: React.FC<UTXOSelectionProps> = ({
               )}
               {regularView === 'Contract' && (
                 <div>
-                  <h5 className="font-semibold mb-2">Contract Address UTXOs</h5>
+                  <h5 className="font-semibold flex flex-col items-center mb-2">
+                    Contract Address UTXOs
+                  </h5>
                   {contractRegularUTXOs.map((utxo) => (
                     <button
                       key={utxo.id}
@@ -249,7 +253,9 @@ const UTXOSelection: React.FC<UTXOSelectionProps> = ({
             <div className="overflow-y-auto max-h-80 space-y-4">
               {cashTokenView === 'Wallet' && (
                 <div>
-                  <h5 className="font-semibold mb-2">Wallet Address UTXOs</h5>
+                  <h5 className="font-semibold flex flex-col items-center mb-2">
+                    Wallet Address UTXOs
+                  </h5>
                   <TokenSection
                     utxos={filteredCashTokenUTXOs}
                     selectedUtxos={selectedUtxos}
@@ -259,7 +265,9 @@ const UTXOSelection: React.FC<UTXOSelectionProps> = ({
               )}
               {cashTokenView === 'Contract' && (
                 <div>
-                  <h5 className="font-semibold mb-2">Contract Address UTXOs</h5>
+                  <h5 className="font-semibold flex flex-col items-center mb-2">
+                    Contract Address UTXOs
+                  </h5>
                   <TokenSection
                     utxos={contractCashTokenUTXOs}
                     selectedUtxos={selectedUtxos}

@@ -228,7 +228,9 @@ const TransactionHistory: React.FC = () => {
             className="max-w-full h-auto"
           />
         </div>
-        <h1 className="text-2xl font-bold mb-4">Transaction History</h1>
+        <h1 className="text-2xl font-bold flex flex-col items-center mb-4">
+          Transaction History
+        </h1>
         <div className="mb-4 flex flex-col space-y-2 md:space-y-0 md:flex-row md:justify-between">
           <div className="flex justify-between">
             <button
@@ -275,15 +277,10 @@ const TransactionHistory: React.FC = () => {
                 rel="noopener noreferrer"
               >
                 <li className="p-4 border rounded-lg shadow-md bg-white break-words">
-                  <p>
-                    <strong>Transaction Hash:</strong>{' '}
-                    {shortenTxHash(tx.tx_hash)}
-                  </p>
+                  <strong>Transaction Hash:</strong> {shortenTxHash(tx.tx_hash)}
                   <p>
                     {tx.height > 0 ? (
-                      <div>
-                        <strong>Height:</strong> {tx.height}
-                      </div>
+                      <strong>Height: {tx.height}</strong>
                     ) : (
                       <strong>Pending Transaction</strong>
                     )}
