@@ -33,9 +33,6 @@ const Home: React.FC = () => {
   const IsInitialized = useSelector(
     (state: RootState) => state.utxos.initialized
   );
-  const totalBalance = useSelector(
-    (state: RootState) => state.utxos.totalBalance
-  );
 
   // Local state
   const [keyPairs, setKeyPairs] = useState<any[]>([]);
@@ -43,7 +40,7 @@ const Home: React.FC = () => {
   const [placeholderUTXOs, setPlaceholderUTXOs] = useState<
     Record<string, any[]>
   >(Object.keys(reduxUTXOs).length > 0 ? reduxUTXOs : {});
-  const [placeholderBalance, setPlaceholderBalance] = useState(totalBalance);
+  const [placeholderBalance, setPlaceholderBalance] = useState(0);
   const [placeholderTokenTotals, setPlaceholderTokenTotals] = useState<
     Record<string, { amount: number; decimals: number }>
   >({});
@@ -51,6 +48,48 @@ const Home: React.FC = () => {
   const [metadataPreloaded, setMetadataPreloaded] = useState(false);
 
   const hasFetchedForTx = useRef(false);
+
+  // Calculate balance from UTXOs
+  const calculateBalance = (utxos: Record<string, any[]>) => {
+    return Object.values(utxos)
+      .flat()
+      .reduce((total, utxo) => total + (utxo.value || 0), 0);
+  };
+
+  // Calculate token totals from UTXOs
+  const calculateCashTokenTotals = (utxos: Record<string, any[]>) => {
+    const tokenTotals: Record<string, { amount: number; decimals: number }> =
+      {};
+    Object.values(utxos)
+      .flat()
+      .forEach((utxo) => {
+        const { category, amount, BcmrTokenMetadata } = utxo.token || {};
+        if (category) {
+          const parsedAmount = parseFloat(amount || '0');
+          const decimals = BcmrTokenMetadata?.token?.decimals ?? 0;
+          if (tokenTotals[category]) {
+            tokenTotals[category].amount += parsedAmount;
+          } else {
+            tokenTotals[category] = { amount: parsedAmount, decimals };
+          }
+        }
+      });
+    return tokenTotals;
+  };
+
+  // Update balance and token totals when placeholderUTXOs changes
+  useEffect(() => {
+    const balance = calculateBalance(placeholderUTXOs);
+    setPlaceholderBalance(balance);
+    setPlaceholderTokenTotals(calculateCashTokenTotals(placeholderUTXOs));
+  }, [placeholderUTXOs]);
+
+  // Sync placeholderUTXOs with reduxUTXOs when not fetching
+  useEffect(() => {
+    if (!fetchingUTXOsRedux && Object.keys(reduxUTXOs).length > 0) {
+      setPlaceholderUTXOs(reduxUTXOs);
+    }
+  }, [fetchingUTXOsRedux, reduxUTXOs]);
 
   // Generate keys logic
   const generateKeys = useCallback(async () => {
@@ -103,8 +142,6 @@ const Home: React.FC = () => {
       }
 
       setPlaceholderUTXOs(allUTXOs);
-      // console.log(placeholderUTXOs);
-      setPlaceholderTokenTotals(calculateCashTokenTotals(allUTXOs));
       dispatch(setUTXOs({ newUTXOs: allUTXOs }));
       await DatabaseService().saveDatabaseToFile();
       dispatch(setInitialized(true));
@@ -135,11 +172,6 @@ const Home: React.FC = () => {
       fetchAndStoreUTXOs();
     }
   }, [keyPairs, IsInitialized, fetchAndStoreUTXOs]);
-
-  // Sync placeholderBalance with totalBalance from Redux
-  useEffect(() => {
-    setPlaceholderBalance(totalBalance);
-  }, [totalBalance]);
 
   // Handle post-transaction UTXO refresh
   useEffect(() => {
@@ -173,14 +205,6 @@ const Home: React.FC = () => {
     }
   }, [IsInitialized, metadataPreloaded]);
 
-  // Sync placeholder state with Redux UTXOs
-  useEffect(() => {
-    if (!fetchingUTXOsRedux && Object.keys(reduxUTXOs).length > 0) {
-      setPlaceholderUTXOs(reduxUTXOs);
-      setPlaceholderTokenTotals(calculateCashTokenTotals(reduxUTXOs));
-    }
-  }, [fetchingUTXOsRedux, reduxUTXOs]);
-
   // Helper to generate new keys
   const handleGenerateKeys = async (index: number) => {
     if (!currentWalletId) return null;
@@ -198,27 +222,6 @@ const Home: React.FC = () => {
     } catch (error) {
       console.error('Error generating new key:', error);
     }
-  };
-
-  // Calculate token totals
-  const calculateCashTokenTotals = (utxos: Record<string, any[]>) => {
-    const tokenTotals: Record<string, { amount: number; decimals: number }> =
-      {};
-    Object.values(utxos)
-      .flat()
-      .forEach((utxo) => {
-        const { category, amount, BcmrTokenMetadata } = utxo.token || {};
-        if (category) {
-          const parsedAmount = parseFloat(amount || '0');
-          const decimals = BcmrTokenMetadata?.token?.decimals ?? 0;
-          if (tokenTotals[category]) {
-            tokenTotals[category].amount += parsedAmount;
-          } else {
-            tokenTotals[category] = { amount: parsedAmount, decimals };
-          }
-        }
-      });
-    return tokenTotals;
   };
 
   const fungibleTokens = Object.entries(placeholderTokenTotals)
@@ -300,11 +303,15 @@ const Home: React.FC = () => {
 
       {showCashTokenPopup && (
         <Popup closePopups={() => setShowCashTokenPopup(false)}>
-          <h3 className="text-xl font-bold mb-4">Cash Tokens</h3>
+          <h3 className="text-xl flex flex-col items-center font-bold mb-4">
+            Cash Tokens
+          </h3>
           <div className="max-h-[50vh] overflow-y-auto">
             {fungibleTokens.length > 0 && (
               <div className="mb-2">
-                <h4 className="text-lg font-semibold mb-2">Fungible Tokens</h4>
+                <h4 className="text-lg font-semibold flex flex-col items-center mb-2">
+                  Fungible Tokens
+                </h4>
                 <div className="flex flex-col">
                   {fungibleTokens.map(([category, { amount, decimals }]) => (
                     <CashTokenCard
@@ -319,7 +326,7 @@ const Home: React.FC = () => {
             )}
             {nonFungibleTokens.length > 0 && (
               <div className="mb-2">
-                <h4 className="text-lg font-semibold mb-2">
+                <h4 className="text-lg font-semibold flex flex-col items-center mb-2">
                   Non-Fungible Tokens
                 </h4>
                 <div className="flex flex-col">

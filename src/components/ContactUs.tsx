@@ -23,7 +23,7 @@ const ContactUs = () => {
     },
     {
       name: 'GitHub',
-      href: 'https://github.com/BitcoinBay/OPTNWallet',
+      href: 'https://github.com/OPTNLabs/OPTNWallet',
       icon: <FaGithub size={24} />,
       bgColor: 'bg-gray-600',
       hoverColor: 'hover:bg-gray-800',

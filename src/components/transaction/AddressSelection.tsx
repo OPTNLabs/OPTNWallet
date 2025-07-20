@@ -124,7 +124,9 @@ const AddressSelection: React.FC<AddressSelectionProps> = ({
       {/* Popup for Wallet Addresses */}
       {showWalletAddressesPopup && (
         <Popup closePopups={closePopups}>
-          <h4 className="text-md font-semibold mb-4">Wallet Addresses</h4>
+          <h4 className="text-md font-semibold flex flex-col items-center mb-4">
+            Wallet Addresses
+          </h4>
           <div className="overflow-y-auto max-h-80">
             {addresses.length === 0 ? (
               <p>No wallet addresses available.</p>
@@ -170,7 +172,9 @@ const AddressSelection: React.FC<AddressSelectionProps> = ({
       {/* Popup for Contract Addresses */}
       {showContractAddressesPopup && (
         <Popup closePopups={closePopups}>
-          <h4 className="text-md font-semibold mb-4">Contract Addresses</h4>
+          <h4 className="text-md font-semibold flex flex-col items-center mb-4">
+            Contract Addresses
+          </h4>
           <div className="overflow-y-auto max-h-80">
             {contractAddresses.length === 0 ? (
               <p>No contract addresses available.</p>
