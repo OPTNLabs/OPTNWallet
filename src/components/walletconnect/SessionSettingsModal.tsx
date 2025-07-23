@@ -11,16 +11,18 @@ interface Props {
 
 const SessionSettingsModal: React.FC<Props> = ({ sessionTopic, onClose }) => {
   const dispatch = useDispatch<AppDispatch>();
-  const session = useSelector((state: RootState) => state.walletconnect.activeSessions?.[sessionTopic]);
+  const session = useSelector(
+    (state: RootState) => state.walletconnect.activeSessions?.[sessionTopic]
+  );
 
   if (!session) return null;
   const dappMeta = session.peer.metadata;
 
   // Correct expiry timestamp conversion (assuming seconds)
   const timeZone = Intl.DateTimeFormat().resolvedOptions().timeZone;
-  console.log(session.expiry)
-  console.log("expires at: ", new Date(session.expiry * 1000).toLocaleString('en-US', { timeZone }));
-  console.log("current time: ", new Date().toLocaleString('en-US', { timeZone }));
+  // console.log(session.expiry)
+  // console.log("expires at: ", new Date(session.expiry * 1000).toLocaleString('en-US', { timeZone }));
+  // console.log("current time: ", new Date().toLocaleString('en-US', { timeZone }));
 
   const handleDisconnect = async () => {
     try {
@@ -47,18 +49,27 @@ const SessionSettingsModal: React.FC<Props> = ({ sessionTopic, onClose }) => {
           />
           <div className="flex-col text-center">
             <p className="font-bold text-xl">{dappMeta.name}</p>
-            <a href={dappMeta.url} target="_blank" rel="noreferrer" className="text-blue-500 underline text-sm">
+            <a
+              href={dappMeta.url}
+              target="_blank"
+              rel="noreferrer"
+              className="text-blue-500 underline text-sm"
+            >
               {dappMeta.url}
             </a>
             {/* Description */}
             <p className="text-gray-600 mb-4">{dappMeta.description}</p>
 
-            {session.expiry && 
+            {session.expiry && (
               <div>
                 <p>Disconnects On</p>
-                <p>{new Date(session.expiry * 1000).toLocaleString('en-US', { timeZone })}</p>
+                <p>
+                  {new Date(session.expiry * 1000).toLocaleString('en-US', {
+                    timeZone,
+                  })}
+                </p>
               </div>
-            }          
+            )}
           </div>
         </div>
 

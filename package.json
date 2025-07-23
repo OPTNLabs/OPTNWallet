@@ -15,7 +15,8 @@
     "capacitor:copy": "npx cap copy",
     "capacitor:sync": "npx cap sync",
     "capacitor:open:android": "npx cap open android",
-    "serve": "npx serve -s dist"
+    "serve": "npx serve -s dist",
+    "build:aab": "dotenv -e .env -- npm run build && npx cap sync && npx cap build android"
   },
   "dependencies": {
     "@bitauth/libauth": "^3.0.0",
@@ -80,6 +81,7 @@
     "@typescript-eslint/parser": "^7.2.0",
     "@vitejs/plugin-react-swc": "^3.6.0",
     "autoprefixer": "^10.4.19",
+    "dotenv-cli": "^8.0.0",
     "eslint": "^8.57.0",
     "eslint-config-prettier": "^9.1.0",
     "eslint-plugin-prettier": "^5.1.3",

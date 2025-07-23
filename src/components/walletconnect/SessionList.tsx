@@ -17,7 +17,7 @@ export function SessionList({
   }
 
   return (
-    <div className="space-y-4">
+    <div className="space-y-4 max-h-96 overflow-y-auto">
       {Object.entries(activeSessions).map(([topic, session]) => {
         const dappMeta = session.peer.metadata;
         // console.log(dappMeta);
