@@ -131,8 +131,8 @@ const ErrorAndStatusPopups: React.FC<ErrorAndStatusPopupsProps> = ({
                       {shortenTxHash(
                         Buffer.from(input.outpointTransactionHash)
                           .reverse()
-                          .toString('hex'),
-                        PREFIX[currentNetwork].length
+                          .toString('hex')
+                        // PREFIX[currentNetwork].length
                       )}
                     </p>
                     <p>• index: {input.outpointIndex}</p>

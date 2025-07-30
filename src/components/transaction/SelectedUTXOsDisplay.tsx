@@ -9,6 +9,8 @@ import { PREFIX, SATSINBITCOIN } from '../../utils/constants';
 import { Network } from '../../redux/networkSlice';
 import BcmrService from '../../services/BcmrService';
 import { IdentitySnapshot } from '@bitauth/libauth';
+import { useSelector } from 'react-redux';
+import { RootState } from '../../redux/store';
 
 interface SelectedUTXOsDisplayProps {
   selectedUtxos: UTXO[];
@@ -36,6 +38,8 @@ export default function SelectedUTXOsDisplay({
       { name: string; symbol: string; decimals: number; iconUri: string | null }
     >
   >({});
+
+  const prices = useSelector((s: RootState) => s.priceFeed);
 
   // Function to format token amounts based on decimals
   const formatTokenAmount = (
@@ -211,8 +215,13 @@ export default function SelectedUTXOsDisplay({
 
       {selectedUtxos.length > 0 && (
         <div className="mt-4">
-          <h3 className="text-lg font-semibold">
-            {`${selectedUtxos.length} Input${selectedUtxos.length === 1 ? '' : 's'} - ${Number(totalSelectedUtxoAmount) / SATSINBITCOIN} BCH`}
+          <h3 className="flex flex-col">
+            <span>
+              {`${selectedUtxos.length} Input${selectedUtxos.length === 1 ? '' : 's'} - ${Number(totalSelectedUtxoAmount) / SATSINBITCOIN} BCH`}
+            </span>
+            <span>
+              {`$ ${((Number(totalSelectedUtxoAmount) / SATSINBITCOIN) * Number(prices['BCH'])).toFixed(2)} USD`}
+            </span>
           </h3>
         </div>
       )}

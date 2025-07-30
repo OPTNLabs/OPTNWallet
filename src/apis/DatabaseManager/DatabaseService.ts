@@ -14,41 +14,7 @@ let pendingSavePromise: Promise<void> | null = null;
 // ** Migrations Array **
 const migrations: Array<(db: Database) => Promise<void>> = [
   async (db) => {
-    // Migration to version 1: Create initial tables
     createTables(db);
-  },
-  async (db) => {
-    // Migration to version 2: Ensure BCMR tables and add bcmr_metadata
-    db.run(`
-      CREATE TABLE IF NOT EXISTS bcmr (
-        authbase TEXT PRIMARY KEY,
-        registryUri TEXT NOT NULL,
-        lastFetch TEXT NOT NULL,
-        registryHash TEXT NOT NULL,
-        registryData TEXT NOT NULL
-      );
-    `);
-    db.run(`
-      CREATE TABLE IF NOT EXISTS bcmr_tokens (
-        category TEXT PRIMARY KEY,
-        authbase TEXT NOT NULL,
-        FOREIGN KEY(authbase) REFERENCES bcmr(authbase)
-      );
-    `);
-    db.run(`
-      CREATE TABLE IF NOT EXISTS bcmr_metadata (
-        category TEXT PRIMARY KEY,
-        name TEXT NOT NULL,
-        description TEXT NOT NULL,
-        decimals INTEGER NOT NULL,
-        symbol TEXT NOT NULL,
-        is_nft BOOLEAN NOT NULL,
-        nfts TEXT,
-        uris TEXT,
-        extensions TEXT,
-        FOREIGN KEY(category) REFERENCES bcmr_tokens(category)
-      );
-    `);
   },
   // Add future migrations here as needed
 ];
