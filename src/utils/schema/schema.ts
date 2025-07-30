@@ -1,36 +1,4 @@
 export const createTables = (db: any) => {
-  // // Drop and create existing tables
-  // db.run(`
-  //   DROP TABLE IF EXISTS UTXOs;
-  // `);
-  // db.run(`
-  //     DROP TABLE IF EXISTS wallets;
-  // `);
-  // db.run(`
-  //     DROP TABLE IF EXISTS keys;
-  // `);
-  // db.run(`
-  //     DROP TABLE IF EXISTS addresses;
-  // `);
-  // db.run(`
-  //     DROP TABLE IF EXISTS transactions;
-  // `);
-  // db.run(`
-  //   DROP TABLE IF EXISTS cashscript_artifacts;
-  // `);
-  // db.run(`
-  //   DROP TABLE IF EXISTS cashscript_addresses;
-  // `);
-  // db.run(`
-  //   DROP TABLE IF EXISTS instantiated_contracts;
-  // `);
-  // db.run(`
-  //   DROP TABLE IF EXISTS bcmr;
-  // `);
-  // db.run(`
-  //   DROP TABLE IF EXISTS bcmr_tokens;
-  // `);
-
   db.run(`
     CREATE TABLE IF NOT EXISTS wallets (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -154,7 +122,6 @@ export const createTables = (db: any) => {
     );
   `);
 
-  // BCMR: “on‑chain metadata registry” cache
   db.run(`
       CREATE TABLE IF NOT EXISTS bcmr (
         authbase        TEXT PRIMARY KEY,        -- 32‑byte hex TXID
@@ -165,7 +132,6 @@ export const createTables = (db: any) => {
       );
     `);
 
-  // map each token “category” to its authbase
   db.run(`
       CREATE TABLE IF NOT EXISTS bcmr_tokens (
         category        TEXT PRIMARY KEY,        -- cashtoken category hex
