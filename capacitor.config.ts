@@ -8,7 +8,7 @@ const config: CapacitorConfig = {
   appId: 'optn.wallet.app',
   appName: 'optn-wallet',
   webDir: 'dist',
-  bundledWebRuntime: false,
+  // bundledWebRuntime: false,
   plugins: {
     SplashScreen: {
       launchShowDuration: 2000, // time (ms) to show splash
@@ -17,6 +17,9 @@ const config: CapacitorConfig = {
       androidSplashResourceName: 'splash', // uses drawable named “splash”
       iosSplashResourceName: 'splash', // uses asset named “splash”
       showSpinner: false,
+    },
+    CapacitorHttp: {
+      enabled: true,
     },
   },
   android: {

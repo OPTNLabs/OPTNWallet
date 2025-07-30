@@ -68,7 +68,7 @@ const Transaction: React.FC = () => {
   const [selectedTokenCategory, setSelectedTokenCategory] =
     useState<string>('none');
   const [changeAddress, setChangeAddress] = useState<string>('');
-  const [bytecodeSize, setBytecodeSize] = useState<number | null>(null);
+  const [bytecodeSize, setBytecodeSize] = useState<number>(0);
   const [rawTX, setRawTX] = useState<string>('');
   const [transactionId, setTransactionId] = useState<string>('');
   // Removed local `finalOutputs` as we will use Redux's `txOutputs`
@@ -106,6 +106,8 @@ const Transaction: React.FC = () => {
 
   // const navigate = useNavigate();
   const dispatch: AppDispatch = useDispatch();
+
+  const prices = useSelector((s: RootState) => s.priceFeed);
 
   const currentNetwork = useSelector((state: RootState) =>
     selectCurrentNetwork(state)
@@ -296,6 +298,7 @@ const Transaction: React.FC = () => {
    */
   const handleRemoveOutput = (index: number) => {
     setRawTX('');
+    setBytecodeSize(0);
     dispatch(removeTxOutput(index));
   };
 
@@ -542,8 +545,18 @@ const Transaction: React.FC = () => {
         {/* Bytecode Size Display */}
         {bytecodeSize !== 0 && rawTX !== '' && (
           <div className="mb-6 break-words whitespace-normal">
-            <h3 className="text-lg font-semibold mb-2">
-              Transaction Fee: {bytecodeSize / SATSINBITCOIN} BCH
+            <h3 className="flex justify-between items-baseline mb-2">
+              <span className="font-bold">Transaction Fee:</span>
+              <div className="flex flex-col items-end text-sm">
+                <span className="text-right">
+                  {(bytecodeSize / SATSINBITCOIN).toFixed(8)} BCH
+                </span>
+                <span className="text-right">
+                  {(bytecodeSize / SATSINBITCOIN) * prices['BCH'] < 1
+                    ? `¢ ${((bytecodeSize / SATSINBITCOIN) * prices['BCH'] * 100).toFixed(2)} cents USD`
+                    : `$ ${((bytecodeSize / SATSINBITCOIN) * prices['BCH']).toFixed(2)} USD`}
+                </span>
+              </div>
             </h3>
           </div>
         )}

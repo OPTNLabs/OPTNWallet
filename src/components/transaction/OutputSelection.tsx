@@ -8,8 +8,8 @@ import {
   CapacitorBarcodeScannerTypeHint,
 } from '@capacitor/barcode-scanner';
 import { Toast } from '@capacitor/toast';
-import { useDispatch } from 'react-redux';
-import { AppDispatch } from '../../redux/store';
+import { useDispatch, useSelector } from 'react-redux';
+import { AppDispatch, RootState } from '../../redux/store';
 import { clearTransaction } from '../../redux/transactionBuilderSlice';
 import { TransactionOutput, UTXO } from '../../types/types';
 import { shortenTxHash } from '../../utils/shortenHash';
@@ -79,6 +79,8 @@ const OutputSelection: React.FC<OutputSelectionProps> = ({
   const [showNFTConfigPopup, setShowNFTConfigPopup] = useState(false);
   const [popupTitle, setPopupTitle] = useState('Add Output');
   const [opReturnText, setOpReturnText] = useState('');
+
+  const prices = useSelector((s: RootState) => s.priceFeed);
 
   // const hasGenesisUtxoSelected = selectedUtxos.some(
   //   (utxo) => !utxo.token && utxo.tx_pos === 0
@@ -279,13 +281,23 @@ const OutputSelection: React.FC<OutputSelectionProps> = ({
         {selectedUtxos.length > 0 ? (
           <div className="mb-4">
             {txOutputs.length > 0 ? (
-              <h3 className="text-lg font-semibold">
-                {`${txOutputs.length} Recipient${txOutputs.length === 1 ? '' : 's'} - ${
-                  txOutputs.reduce(
+              <h3 className="flex flex-col">
+                <span>
+                  {`${txOutputs.length} Recipient${txOutputs.length === 1 ? '' : 's'} - ${
+                    txOutputs.reduce(
+                      (sum, utxo) => sum + Number(utxo.amount),
+                      0
+                    ) / SATSINBITCOIN
+                  } BCH`}
+                </span>
+                <span>{`$ ${(
+                  (txOutputs.reduce(
                     (sum, utxo) => sum + Number(utxo.amount),
                     0
-                  ) / SATSINBITCOIN
-                } BCH`}
+                  ) /
+                    SATSINBITCOIN) *
+                  Number(prices['BCH'])
+                ).toFixed(2)} USD`}</span>
               </h3>
             ) : (
               <div className="font-bold flex flex-col text-xl">

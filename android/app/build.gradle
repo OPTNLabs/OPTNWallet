@@ -1,7 +1,7 @@
 // android/app/build.gradle
 
 apply plugin: 'com.android.application'
-apply plugin: 'kotlin-android' // Add this line
+apply plugin: 'kotlin-android' 
 
 android {
     namespace "optn.wallet.app"
@@ -37,12 +37,12 @@ android {
     }
 
     compileOptions {
-        sourceCompatibility JavaVersion.VERSION_17
-        targetCompatibility JavaVersion.VERSION_17
+        sourceCompatibility JavaVersion.VERSION_21
+        targetCompatibility JavaVersion.VERSION_21
     }
 
     kotlinOptions {
-        jvmTarget = "17" // Add this block
+        jvmTarget = "21"
     }
 }
 
@@ -58,7 +58,7 @@ dependencies {
     implementation "androidx.coordinatorlayout:coordinatorlayout:$androidxCoordinatorLayoutVersion"
     implementation "androidx.core:core-splashscreen:$coreSplashScreenVersion"
     implementation project(':capacitor-android')
-    implementation "org.jetbrains.kotlin:kotlin-stdlib:1.8.10" // Add this line
+    implementation "org.jetbrains.kotlin:kotlin-stdlib:2.0.0"
     testImplementation "junit:junit:$junitVersion"
     androidTestImplementation "androidx.test.ext:junit:$androidxJunitVersion"
     androidTestImplementation "androidx.test.espresso:espresso-core:$androidxEspressoCoreVersion"
