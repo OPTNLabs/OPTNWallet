@@ -441,7 +441,7 @@ const Transaction: React.FC = () => {
           <img
             src="/assets/images/OPTNWelcome1.png"
             alt="Welcome"
-            className="max-w-full h-auto"
+            className="w-3/4 h-auto"
           />
         </div>
 

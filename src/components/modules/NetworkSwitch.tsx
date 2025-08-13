@@ -2,7 +2,7 @@ import { Network } from '../../redux/networkSlice';
 
 const NetworkSwitch = ({ networkType, setNetworkType }) => {
   const handleToggle = () => {
-    console.log(networkType)
+    // console.log(networkType)
     setNetworkType(
       networkType === Network.CHIPNET ? Network.MAINNET : Network.CHIPNET
     );
@@ -10,7 +10,7 @@ const NetworkSwitch = ({ networkType, setNetworkType }) => {
 
   return (
     <div className="flex flex-row gap-2 items-center text-white">
-      <span>Chipnet</span>
+      <span>Testnet</span>
       <div
         onClick={handleToggle}
         className={`w-12 h-6 rounded-full flex items-center cursor-pointer relative transition-colors ${
