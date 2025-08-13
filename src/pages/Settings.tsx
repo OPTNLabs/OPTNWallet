@@ -109,7 +109,7 @@ const Settings: React.FC = () => {
         <img
           src="/assets/images/OPTNWelcome1.png"
           alt="Welcome"
-          className="max-w-full h-auto"
+          className="w-3/4 h-auto"
         />
       </div>
       <h1 className="text-2xl font-bold mb-4 text-center">Settings</h1>
