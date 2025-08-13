@@ -2,40 +2,41 @@ import { Link } from 'react-router-dom';
 
 const LandingPage = () => {
   return (
-    <>
-      <section className="min-h-screen bg-slate-600 flex flex-col justify-center items-center">
-        <div className="flex flex-col lg:flex-row items-center mx-4 lg:mx-20">
-          <div className="flex flex-col w-full lg:w-1/2 lg:pr-4 items-center lg:items-start">
-            <div className="flex justify-center mt-4">
-              <img
-                src="/assets/images/OPTNWelcome1.png"
-                alt="Welcome"
-                className="max-w-full h-auto"
-              />
-            </div>
-            <div className="text-white text-base lg:text-xl mt-4 text-center lg:text-left">
-              <h3>Alpha Demo</h3>
-              <br />
-              <p>Bitcoin Covenants Wallet</p>
-            </div>
-            <div className="flex flex-row mt-4 justify-center lg:justify-start">
-              <Link
-                to="/createwallet"
-                className="bg-white mr-4 text-gray-800 font-semibold py-2 px-4 border-gray-400 rounded-xl text-center"
-              >
-                Create Wallet
-              </Link>
-              <Link
-                to="/importwallet"
-                className="bg-white text-gray-800 font-semibold py-2 px-4 border-gray-400 rounded-xl text-center"
-              >
-                Import Wallet
-              </Link>
-            </div>
+    <section className="min-h-screen bg-gradient-to-br from-slate-600 via-slate-600 to-slate-600 flex flex-col justify-center items-center px-4">
+      <div className="flex flex-col lg:flex-row items-center max-w-6xl mx-auto gap-8 lg:gap-12">
+        {/* Image Section */}
+        <div className="flex justify-center w-full lg:w-1/2">
+          <img
+            src="/assets/images/OPTNWelcome1.png"
+            alt="Smart BCH Wallet"
+            className="max-w-full h-auto w-3/4 lg:w-full object-contain transition-transform duration-300 hover:scale-105"
+          />
+        </div>
+        {/* Text and CTA Section */}
+        <div className="flex flex-col w-full lg:w-1/2 items-center lg:items-start text-center lg:text-left">
+          {/* <h1 className="text-3xl lg:text-5xl font-bold text-white mb-4 tracking-tight">
+            Bitcoin Cash Wallet
+          </h1> */}
+          <h1 className="text-lg font-bold lg:text-xl text-gray-200 mx-12 max-w-md">
+            Powered with Bitcoin Covenants for Bitcoin Cash
+          </h1>
+          <div className="flex flex-col sm:flex-row gap-4 mt-20">
+            <Link
+              to="/createwallet"
+              className="bg-white text-black font-semibold py-3 px-24 rounded-lg mx-4 my-4 shadow-md"
+            >
+              Create Wallet
+            </Link>
+            <Link
+              to="/importwallet"
+              className="bg-white text-black font-semibold py-3 px-24 rounded-lg mx-4 my-4 shadow-md"
+            >
+              Import Wallet
+            </Link>
           </div>
         </div>
-      </section>
-    </>
+      </div>
+    </section>
   );
 };
 
