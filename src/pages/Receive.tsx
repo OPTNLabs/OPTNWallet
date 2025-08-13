@@ -146,11 +146,15 @@ const Receive: React.FC = () => {
     addressType === 'main' ? mainKeyPairs : changeKeyPairs;
 
   return (
-    <div className="container mx-auto p-4 pb-16 mt-12 h-full relative">
+    <div className="container mx-auto p-4 pb-16 h-full relative">
       <div className="flex flex-col items-center mb-4">
-        {/* <div className="text-lg font-bold text-center mb-4">
-          Select an Address
-        </div> */}
+        <div className="flex justify-center mt-4 my-4">
+          <img
+            src="/assets/images/OPTNWelcome1.png"
+            alt="Welcome"
+            className="w-3/4 h-auto"
+          />
+        </div>
         {!selectedAddress && (
           <div>
             <div className="flex justify-center space-x-4 mb-4">
