@@ -236,18 +236,18 @@ const Home: React.FC = () => {
     .sort((a, b) => b[1].amount - a[1].amount);
 
   return (
-    <div className="container mx-auto p-4 pb-16 mt-12">
-      {/* <PriceFeed />
-      <BlockHeaderDisplay /> */}
+    <div className="container mx-auto p-4 pb-16">
+      {/* <BlockHeaderDisplay /> */}
       <div className="flex justify-center mt-4">
         <img
           src="/assets/images/OPTNWelcome1.png"
           alt="Welcome"
-          className="max-w-full h-auto"
+          className="w-3/4 h-auto"
         />
       </div>
+      <PriceFeed />
 
-      <div className="flex flex-col items-center space-y-4">
+      <div className="flex flex-col items-center py-3 space-y-4">
         <button
           className="mt-4 p-2 bg-red-500 font-bold text-white rounded hover:bg-red-600 transition duration-300 w-full max-w-md"
           onClick={() => navigate('/contract')}
