@@ -1,4 +1,3 @@
-// @ts-nocheck
 // src/pages/Home.tsx
 
 import React, { useState, useEffect, useCallback, useRef } from 'react';
@@ -15,6 +14,7 @@ import { TailSpin } from 'react-loader-spinner';
 import Popup from '../components/transaction/Popup';
 import DatabaseService from '../apis/DatabaseManager/DatabaseService';
 import BcmrService from '../services/BcmrService';
+import BlockHeaderDisplay from '../components/blockheader';
 
 const batchAmount = 10;
 
@@ -237,7 +237,8 @@ const Home: React.FC = () => {
 
   return (
     <div className="container mx-auto p-4 pb-16 mt-12">
-      <PriceFeed />
+      {/* <PriceFeed />
+      <BlockHeaderDisplay /> */}
       <div className="flex justify-center mt-4">
         <img
           src="/assets/images/OPTNWelcome1.png"

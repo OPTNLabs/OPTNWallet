@@ -63,7 +63,7 @@ export default function ElectrumServer() {
   ): Promise<RequestResponse> {
     const electrum = await electrumConnect();
     const response = await await electrum.request(method, ...params);
-    await electrumDisconnect();
+    // await electrumDisconnect();
     return response;
   }
 
