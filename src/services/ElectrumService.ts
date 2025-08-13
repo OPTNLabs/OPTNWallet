@@ -133,6 +133,22 @@ const ElectrumService = {
     }
   },
 
+  async getLatestBlock() {
+    // : Promise<BlockHeader[] | null>
+    const server = ElectrumServer();
+    try {
+      const block: RequestResponse = await server.request(
+        'blockchain.headers.get_tip'
+      );
+      console.log(block);
+
+      return block;
+    } catch (error) {
+      console.error('Error fetching block:', error);
+      return null;
+    }
+  },
+
   async subscribeAddress(address: string, callback: (status: string) => void) {
     const server = await ElectrumServer().electrumConnect();
     try {
@@ -165,7 +181,7 @@ const ElectrumService = {
     try {
       await server.request('blockchain.headers.subscribe');
 
-      // console.log('Subscribed to block headers');
+      console.log('Subscribed to block headers');
       // Set up callback for block header notifications
       server.on('notification', (method: string, params: any[]) => {
         if (method === 'blockchain.headers.subscribe') {
