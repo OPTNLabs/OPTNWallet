@@ -16,7 +16,7 @@ export function usePrices() {
     let alive = true;
 
     async function fetchAll() {
-    //   console.group('[usePrices] fetchAll start');
+      //   console.group('[usePrices] fetchAll start');
       const result: Rates = {};
 
       for (const symbol of SYMBOLS) {
@@ -26,12 +26,14 @@ export function usePrices() {
         result[symbol] = r;
       }
 
+      console.log(result);
+
       if (alive) {
         // console.log('[usePrices] dispatching updatePrices with', result);
         setRates(result);
         dispatch(updatePrices(result));
       }
-    //   console.groupEnd();
+      //   console.groupEnd();
     }
 
     fetchAll();

@@ -1,3 +1,4 @@
+//@ts-nocheck
 import { useState, useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Tooltip } from 'react-tooltip';
@@ -13,7 +14,7 @@ import { selectCurrentNetwork } from '../redux/selectors/networkSelectors';
 const WalletCreation = () => {
   const [mnemonicPhrase, setMnemonicPhrase] = useState('');
   const [passphrase, setPassphrase] = useState('');
-  const [showAdvanced, setShowAdvanced] = useState(false);
+  // const [showAdvanced, setShowAdvanced] = useState(false);
   const dbService = DatabaseService();
   const navigate = useNavigate();
   const currentNetwork = useSelector(selectCurrentNetwork);
@@ -39,9 +40,9 @@ const WalletCreation = () => {
     initDb();
   }, []);
 
-  useEffect(() => {
-    if (!showAdvanced) setPassphrase('');
-  }, [showAdvanced]);
+  // useEffect(() => {
+  //   if (!showAdvanced) setPassphrase('');
+  // }, [showAdvanced]);
 
   const generateMnemonicPhrase = async () => {
     try {
@@ -54,7 +55,10 @@ const WalletCreation = () => {
 
   const handleCreateAccount = async () => {
     try {
-      const accountExists = await walletManager.checkAccount(mnemonicPhrase, passphrase);
+      const accountExists = await walletManager.checkAccount(
+        mnemonicPhrase,
+        passphrase
+      );
       if (accountExists) {
         console.error('Account already exists.');
         return;
@@ -66,10 +70,15 @@ const WalletCreation = () => {
         passphrase,
         currentNetwork
       );
-      if (!createWalletSuccess) throw new Error('Failed to create wallet in the database.');
+      if (!createWalletSuccess)
+        throw new Error('Failed to create wallet in the database.');
 
-      const walletID = await walletManager.setWalletId(mnemonicPhrase, passphrase);
-      if (walletID == null) throw new Error('Failed to set wallet ID in the Redux store.');
+      const walletID = await walletManager.setWalletId(
+        mnemonicPhrase,
+        passphrase
+      );
+      if (walletID == null)
+        throw new Error('Failed to set wallet ID in the Redux store.');
 
       dispatch(setWalletId(walletID));
       dispatch(setWalletNetwork(currentNetwork));
@@ -92,7 +101,11 @@ const WalletCreation = () => {
     <div className="min-h-screen bg-slate-600 flex flex-col items-center justify-center p-4">
       <div className="bg-slate-600 p-6 w-full max-w-md">
         <div className="flex justify-center mt-4">
-          <img src="/assets/images/OPTNWelcome1.png" alt="Welcome" className="max-w-full h-auto" />
+          <img
+            src="/assets/images/OPTNWelcome1.png"
+            alt="Welcome"
+            className="max-w-full h-auto"
+          />
         </div>
         <div className="text-white font-bold text-xl mb-4 text-center">
           Create Wallet
@@ -103,7 +116,9 @@ const WalletCreation = () => {
           <div className="flex items-center gap-2 mb-4">
             <NetworkSwitch
               networkType={currentNetwork}
-              setNetworkType={(network: Network) => dispatch(setNetwork(network))}
+              setNetworkType={(network: Network) =>
+                dispatch(setNetwork(network))
+              }
             />
             <span
               data-tooltip-id="network-tooltip"
@@ -114,7 +129,7 @@ const WalletCreation = () => {
             <Tooltip
               id="network-tooltip"
               place="top"
-              className='max-w-[80vw] whitespace-normal break-words text-sm leading-snug'
+              className="max-w-[80vw] whitespace-normal break-words text-sm leading-snug"
               content="Select the blockchain network your wallet will connect to (e.g., Mainnet or CHIPNET Testnet)."
             />
           </div>
@@ -131,7 +146,7 @@ const WalletCreation = () => {
             <Tooltip
               id="mnemonic-tooltip"
               place="top"
-              className='max-w-[80vw] whitespace-normal break-words text-sm leading-snug font-normal'
+              className="max-w-[80vw] whitespace-normal break-words text-sm leading-snug font-normal"
               content="Your mnemonic (seed phrase) is the master key to your wallet. Store it securely and never share it—anyone with it can access your funds."
             />
           </div>
@@ -148,15 +163,22 @@ const WalletCreation = () => {
               </div>
               <div>
                 {secondColumn.map((word, index) => (
-                  <div key={index + halfLength} className="flex items-center mb-2">
-                    <span className="w-8 text-gray-700">{index + halfLength + 1}.</span>
+                  <div
+                    key={index + halfLength}
+                    className="flex items-center mb-2"
+                  >
+                    <span className="w-8 text-gray-700">
+                      {index + halfLength + 1}.
+                    </span>
                     <span className="text-gray-700">{word}</span>
                   </div>
                 ))}
               </div>
             </div>
           ) : (
-            <div className="text-center mb-4 p-2 bg-gray-200 rounded-md">Generating...</div>
+            <div className="text-center mb-4 p-2 bg-gray-200 rounded-md">
+              Generating...
+            </div>
           )}
         </div>
 
