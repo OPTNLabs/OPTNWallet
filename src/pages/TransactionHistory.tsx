@@ -61,6 +61,7 @@ const TransactionHistory: React.FC = () => {
     }
   }, [IsInitialized, transactions, loading]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // replace inside fetchTransactionHistory
   const fetchTransactionHistory = useCallback(async () => {
     if (!wallet_id || loading) return;
 
@@ -70,15 +71,14 @@ const TransactionHistory: React.FC = () => {
     try {
       await dbService.ensureDatabaseStarted();
       const db = dbService.getDatabase();
-
       if (!db) {
         console.error('Database not started.');
-        return; // finally{} will still run and clear loading
+        return;
       }
 
       const addressesQuery = db.prepare(`
-        SELECT address FROM addresses WHERE wallet_id = ?;
-      `);
+      SELECT address FROM addresses WHERE wallet_id = ?;
+    `);
       addressesQuery.bind([wallet_id]);
 
       const addresses: string[] = [];
@@ -90,59 +90,80 @@ const TransactionHistory: React.FC = () => {
       }
       addressesQuery.free();
 
-      const totalAddresses = addresses.length;
+      // === only scan addresses we haven't fetched yet ===
+      const pending = addresses.filter((a) => !fetchedAddresses.has(a));
+      const totalToScan = pending.length;
 
-      // Nothing to scan? Mark done and exit.
-      if (totalAddresses === 0) {
+      if (totalToScan === 0) {
         setProgress(100);
-        return;
+        return; // no work
       }
 
       const transactionManager = TransactionManager();
       const uniqueTransactions = new Set(transactions.map((tx) => tx.tx_hash));
 
-      for (const [index, address] of addresses.entries()) {
-        // skip if already fetched
-        if (fetchedAddresses.has(address)) {
-          setProgress(((index + 1) / totalAddresses) * 100);
-          continue;
-        }
+      for (const [index, address] of pending.entries()) {
+        let newTransactions: TransactionHistoryItem[] = [];
 
-        const newTransactions: TransactionHistoryItem[] =
-          await transactionManager.fetchAndStoreTransactionHistory(
-            parseInt(wallet_id, 10),
-            address
-          );
+        try {
+          // Try fetching/storing for this address
+          newTransactions =
+            await transactionManager.fetchAndStoreTransactionHistory(
+              parseInt(wallet_id, 10),
+              address
+            );
+        } catch (err: any) {
+          const msg = String(err?.message ?? '');
+
+          // Swallow the benign sqlite-wasm rollback warning
+          if (/cannot rollback - no transaction is active/i.test(msg)) {
+            console.debug(
+              '[TXH] No active transaction to rollback (benign) for address:',
+              address
+            );
+          } else {
+            // Log other errors once per address, but keep going
+            console.warn(
+              '[TXH] fetchAndStoreTransactionHistory failed for address:',
+              address,
+              err
+            );
+          }
+          // Don't rethrow; continue to mark fetched and update progress
+        }
 
         // Reopen DB handle (in case manager wrote to it) and pull transactions for this wallet
         const liveDb = dbService.getDatabase();
         if (!liveDb) {
-          console.error('Database not started after fetch.');
-          return;
-        }
+          console.error(
+            'Database not started after fetch; skipping address',
+            address
+          );
+          // still mark as fetched + update progress and continue
+        } else {
+          const storedTransactionsQuery = liveDb.prepare(`
+      SELECT * FROM transactions WHERE wallet_id = ?;
+    `);
+          storedTransactionsQuery.bind([wallet_id]);
 
-        const storedTransactionsQuery = liveDb.prepare(`
-          SELECT * FROM transactions WHERE wallet_id = ?;
-        `);
-        storedTransactionsQuery.bind([wallet_id]);
+          while (storedTransactionsQuery.step()) {
+            const transaction =
+              storedTransactionsQuery.getAsObject() as unknown as TransactionHistoryItem;
 
-        while (storedTransactionsQuery.step()) {
-          const transaction =
-            storedTransactionsQuery.getAsObject() as unknown as TransactionHistoryItem;
-
-          if (
-            !uniqueTransactions.has(transaction.tx_hash) ||
-            transaction.height === -1 ||
-            transaction.height === 0
-          ) {
-            newTransactions.push({
-              ...transaction,
-              amount: transaction.amount,
-            });
-            uniqueTransactions.add(transaction.tx_hash);
+            if (
+              !uniqueTransactions.has(transaction.tx_hash) ||
+              transaction.height === -1 ||
+              transaction.height === 0
+            ) {
+              newTransactions.push({
+                ...transaction,
+                amount: transaction.amount,
+              });
+              uniqueTransactions.add(transaction.tx_hash);
+            }
           }
+          storedTransactionsQuery.free();
         }
-        storedTransactionsQuery.free();
 
         if (newTransactions.length > 0) {
           dispatch(
@@ -153,21 +174,23 @@ const TransactionHistory: React.FC = () => {
           );
         }
 
-        // functional update to avoid stale closure
+        // Mark this address as processed even if it errored, so we don't keep retrying it
         setFetchedAddresses((prev) => {
           const next = new Set(prev);
           next.add(address);
           return next;
         });
 
-        setProgress(((index + 1) / totalAddresses) * 100);
+        // progress based on *pending* work
+        setProgress(Math.round(((index + 1) / totalToScan) * 100));
       }
+
+      // loop completed normally
+      setProgress(100);
     } catch (e) {
       console.error('Failed to fetch transaction history:', e);
     } finally {
-      // Always clear loading, even if we bailed early.
-      setLoading(false);
-      setProgress(100);
+      setLoading(false); // don't force progress to 100 here
     }
   }, [wallet_id, loading, dbService, fetchedAddresses, dispatch, transactions]);
 
@@ -224,13 +247,12 @@ const TransactionHistory: React.FC = () => {
 
   return (
     <div className="flex flex-col h-screen">
-      {/* Progress bar */}
-      {loading && (
+      {(loading || (progress > 0 && progress < 100)) && (
         <div className="w-full h-2 bg-gray-200">
           <div
             className="h-full bg-blue-500"
             style={{ width: `${progress}%` }}
-          ></div>
+          />
         </div>
       )}
 

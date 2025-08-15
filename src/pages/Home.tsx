@@ -14,7 +14,7 @@ import { TailSpin } from 'react-loader-spinner';
 import Popup from '../components/transaction/Popup';
 import DatabaseService from '../apis/DatabaseManager/DatabaseService';
 import BcmrService from '../services/BcmrService';
-import BlockHeaderDisplay from '../components/blockheader';
+// import BlockHeaderDisplay from '../components/blockheader';
 
 const batchAmount = 10;
 
@@ -235,6 +235,8 @@ const Home: React.FC = () => {
     .filter(([, { amount }]) => amount <= 0)
     .sort((a, b) => b[1].amount - a[1].amount);
 
+  const displayBalance = fetchingUTXOsRedux ? placeholderBalance : userBalance;
+
   return (
     <div className="container mx-auto p-4 pb-16">
       {/* <BlockHeaderDisplay /> */}
@@ -294,7 +296,7 @@ const Home: React.FC = () => {
       </div>
 
       <div className="w-full max-w-md mx-auto mt-4 flex items-center justify-center">
-        <BitcoinCashCard totalAmount={userBalance} />
+        <BitcoinCashCard totalAmount={displayBalance} />{' '}
       </div>
 
       <div className="w-full max-w-full mx-auto mt-4 flex justify-center">
