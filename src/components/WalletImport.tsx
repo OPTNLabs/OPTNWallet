@@ -1,3 +1,4 @@
+//@ts-nocheck
 import { useState, useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Tooltip } from 'react-tooltip';
@@ -72,14 +73,31 @@ const WalletImport = () => {
     }
   };
 
-  const handleKeyDown = (idx: number, e: React.KeyboardEvent<HTMLInputElement>) => {
+  const handleKeyDown = (
+    idx: number,
+    e: React.KeyboardEvent<HTMLInputElement>
+  ) => {
     const value = recoveryWords[idx];
+
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      if (idx < TOTAL_WORDS - 1) {
+        focusIndex(idx + 1);
+      } else {
+        void handleImportAccount();
+      }
+      return;
+    }
 
     if (e.key === 'Backspace' && value.length === 0 && idx > 0) {
       e.preventDefault();
       focusIndex(idx - 1);
     }
-    if (e.key === 'ArrowLeft' && (e.currentTarget.selectionStart ?? 0) === 0 && idx > 0) {
+    if (
+      e.key === 'ArrowLeft' &&
+      (e.currentTarget.selectionStart ?? 0) === 0 &&
+      idx > 0
+    ) {
       focusIndex(idx - 1);
     }
     if (
@@ -102,7 +120,10 @@ const WalletImport = () => {
     const recoveryPhrase = recoveryWords.map(normalize).join(' ');
 
     try {
-      const accountExists = await walletManager.checkAccount(recoveryPhrase, passphrase);
+      const accountExists = await walletManager.checkAccount(
+        recoveryPhrase,
+        passphrase
+      );
 
       if (!accountExists) {
         const createAccountSuccess = await walletManager.createWallet(
@@ -117,7 +138,10 @@ const WalletImport = () => {
         }
       }
 
-      let walletID = await walletManager.setWalletId(recoveryPhrase, passphrase);
+      let walletID = await walletManager.setWalletId(
+        recoveryPhrase,
+        passphrase
+      );
       if (walletID == null) {
         console.error('Failed to set wallet ID.');
         return;
@@ -154,7 +178,9 @@ const WalletImport = () => {
           <div className="flex items-center justify-center gap-2 mb-4 w-full">
             <NetworkSwitch
               networkType={currentNetwork}
-              setNetworkType={(network: Network) => dispatch(setNetwork(network))}
+              setNetworkType={(network: Network) =>
+                dispatch(setNetwork(network))
+              }
             />
             <span
               data-tooltip-id="network-tooltip"
@@ -175,7 +201,9 @@ const WalletImport = () => {
           {/* Recovery Phrase heading centered with tooltip */}
           <div className="w-full mb-3">
             <div className="mb-2 flex items-center justify-center gap-2">
-              <span className='text-white font-bold text-xl'>Recovery Phrase</span>
+              <span className="text-white font-bold text-xl">
+                Recovery Phrase
+              </span>
               <span
                 data-tooltip-id="recovery-tooltip"
                 className="cursor-pointer text-yellow-300 text-lg font-bold select-none"
@@ -213,6 +241,7 @@ const WalletImport = () => {
                       value={recoveryWords[i]}
                       onChange={(e) => handleWordChange(i, e.target.value)}
                       onKeyDown={(e) => handleKeyDown(i, e)}
+                      enterKeyHint={i < TOTAL_WORDS - 1 ? 'next' : 'done'}
                       className="flex-1 min-w-0 px-3 py-1 border border-gray-300 rounded-md text-gray-900"
                       placeholder="word"
                     />

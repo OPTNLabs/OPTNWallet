@@ -14,18 +14,15 @@ import { shortenTxHash } from '../utils/shortenHash';
 import { PREFIX } from '../utils/constants';
 import { Toast } from '@capacitor/toast';
 import Popup from '../components/transaction/Popup';
+import { Tooltip } from 'react-tooltip';
 
 // Import Barcode Scanner
 import {
   CapacitorBarcodeScanner,
   CapacitorBarcodeScannerTypeHint,
 } from '@capacitor/barcode-scanner';
-import { FaCamera } from 'react-icons/fa'; // Optional: If you want to use an icon for the scan button
-// import { match } from 'assert';
-// import { binToHex } from '@bitauth/libauth';
+import { FaCamera } from 'react-icons/fa';
 import { DataSigner } from '../utils/dataSigner';
-
-// type QRCodeType = 'address' | 'pubKey' | 'pkh';
 
 const ContractView = () => {
   const [isLoading, setIsLoading] = useState<boolean>(false);
@@ -38,12 +35,12 @@ const ContractView = () => {
   const [showAddressPopup, setShowAddressPopup] = useState<boolean>(false);
   const [currentArgName, setCurrentArgName] = useState<string>('');
   const [showConstructorArgsPopup, setShowConstructorArgsPopup] =
-    useState<boolean>(false); // State for constructor args popup
-  const [showErrorPopup, setShowErrorPopup] = useState<boolean>(false); // New state for error popup
-  const [errorMessage, setErrorMessage] = useState<string>(''); // Error message content
+    useState<boolean>(false);
+  const [showErrorPopup, setShowErrorPopup] = useState<boolean>(false);
+  const [errorMessage, setErrorMessage] = useState<string>('');
   const [isScanning, setIsScanning] = useState<boolean>(false);
 
-  // New states for 'datasig' handling
+  // datasig helpers
   const [selectedAddresses, setSelectedAddresses] = useState<{
     [key: string]: string;
   }>({});
@@ -93,47 +90,37 @@ const ContractView = () => {
         try {
           const contractManager = ContractManager();
           const artifact = contractManager.loadArtifact(selectedContractFile);
-          if (!artifact) {
+          if (!artifact)
             throw new Error(
               `Artifact ${selectedContractFile} could not be loaded`
             );
-          }
           setConstructorArgs(artifact.constructorInputs || []);
-          setShowConstructorArgsPopup(true); // Open the constructor args popup
+          setShowConstructorArgsPopup(true);
         } catch (err: any) {
           console.error('Error loading contract details:', err);
           setError(err.message);
         }
       }
     };
-
     loadContractDetails();
   }, [selectedContractFile]);
 
   const handleInputChange = (event: React.ChangeEvent<HTMLInputElement>) => {
     const { name, value } = event.target;
     setInputValues({ ...inputValues, [name]: value });
-    // Optional: Debugging
-    // console.log(`Input changed: ${name} = ${value}`);
   };
 
   const handleCopyAddress = async (address: string) => {
     try {
       await navigator.clipboard.writeText(address);
-      await Toast.show({
-        text: 'Address copied to clipboard!',
-      });
+      await Toast.show({ text: 'Address copied to clipboard!' });
     } catch (error) {
       console.error('Failed to copy address:', error);
-      await Toast.show({
-        text: 'Failed to copy address.',
-      });
+      await Toast.show({ text: 'Failed to copy address.' });
     }
   };
 
   const handleAddressSelect = async (address: string) => {
-    // console.log(`Address selected for ${currentArgName}: ${address}`);
-
     const keys = await KeyService.retrieveKeys(wallet_id);
     const selectedKey = keys.find((key) => key.address === address);
 
@@ -141,23 +128,19 @@ const ContractView = () => {
       const matchedArg = constructorArgs.find(
         (arg) => arg.name === currentArgName
       );
-
       if (matchedArg) {
         let valueToSet = '';
-        if (matchedArg.type === 'pubkey') {
+        if (matchedArg.type === 'pubkey')
           valueToSet = hexString(selectedKey.publicKey);
-        } else if (matchedArg.type === 'bytes20') {
+        else if (matchedArg.type === 'bytes20')
           valueToSet = hexString(selectedKey.pubkeyHash);
-        } else if (matchedArg.type === 'datasig') {
+        else if (matchedArg.type === 'datasig') {
           setSelectedAddresses({
             ...selectedAddresses,
             [currentArgName]: address,
           });
         }
         setInputValues({ ...inputValues, [currentArgName]: valueToSet });
-
-        // Optional: Debugging
-        // console.log(`Set inputValues for ${currentArgName}: ${valueToSet}`);
       }
     }
     setShowAddressPopup(false);
@@ -188,38 +171,17 @@ const ContractView = () => {
   };
 
   const scanBarcode = async (argName: string) => {
-    if (isScanning) {
-      // Prevent multiple scans at the same time
-      return;
-    }
-
-    setIsScanning(true); // Start scanning
-
+    if (isScanning) return;
+    setIsScanning(true);
     try {
-      // Initiate barcode scanning with desired options
       const result = await CapacitorBarcodeScanner.scanBarcode({
         hint: CapacitorBarcodeScannerTypeHint.ALL,
-        cameraDirection: 1, // Use BACK camera; change if needed
+        cameraDirection: 1,
       });
-
-      // If a scan result is obtained, set it as the input value
       if (result && result.ScanResult) {
-        // Optionally, validate the scan result based on the expected type
-        // For simplicity, assume the QR code contains the required value directly
-        setInputValues((prev) => ({
-          ...prev,
-          [argName]: result.ScanResult,
-        }));
-        // await Toast.show({
-        //   text: `Scanned: ${result.ScanResult}`,
-        // });
-
-        // Optional: Debugging
-        // console.log(`Scanned value for ${argName}: ${result.ScanResult}`);
+        setInputValues((prev) => ({ ...prev, [argName]: result.ScanResult }));
       } else {
-        await Toast.show({
-          text: 'No QR code detected. Please try again.',
-        });
+        await Toast.show({ text: 'No QR code detected. Please try again.' });
       }
     } catch (error) {
       console.error('Barcode scan error:', error);
@@ -227,7 +189,7 @@ const ContractView = () => {
         text: 'Failed to scan QR code. Please ensure camera permissions are granted and try again.',
       });
     } finally {
-      setIsScanning(false); // End scanning
+      setIsScanning(false);
     }
   };
 
@@ -249,33 +211,25 @@ const ContractView = () => {
   };
 
   const createContract = async () => {
-    // Validate constructor arguments
-    if (!validateConstructorArgs()) {
-      return;
-    }
-
-    setIsLoading(true); // Start loading
-
+    if (!validateConstructorArgs()) return;
+    setIsLoading(true);
     try {
       const contractManager = ContractManager();
       const args =
         constructorArgs.map((arg) =>
           parseInputValue(inputValues[arg.name], arg.type)
         ) || [];
-
       if (
         constructorArgs.length > 0 &&
         args.length !== constructorArgs.length
       ) {
         throw new Error('All constructor arguments must be provided');
       }
-
       await contractManager.createContract(
         selectedContractFile,
         args,
         currentNetwork
       );
-
       const instances = await contractManager.fetchContractInstances();
       setContractInstances(instances);
       setSelectedContractFile('');
@@ -283,17 +237,14 @@ const ContractView = () => {
       setInputValues({});
       setSelectedAddresses({});
       setDataToSign({});
-      setShowConstructorArgsPopup(false); // Close the popup after creation
-
-      await Toast.show({
-        text: 'Contract created successfully!',
-      });
+      setShowConstructorArgsPopup(false);
+      await Toast.show({ text: 'Contract created successfully!' });
     } catch (err: any) {
       console.error('Error creating contract:', err);
       setErrorMessage(`Failed to create contract: ${err.message}`);
-      setShowErrorPopup(true); // Show error popup
+      setShowErrorPopup(true);
     } finally {
-      setIsLoading(false); // Stop loading
+      setIsLoading(false);
     }
   };
 
@@ -301,65 +252,42 @@ const ContractView = () => {
     try {
       const contractManager = ContractManager();
       await contractManager.deleteContractInstance(parseInt(contractId));
-
       const instances = await contractManager.fetchContractInstances();
       setContractInstances(instances);
-
-      await Toast.show({
-        text: 'Contract deleted successfully!',
-      });
+      await Toast.show({ text: 'Contract deleted successfully!' });
     } catch (err: any) {
       console.error('Error deleting contract:', err);
       setError(err.message);
-      await Toast.show({
-        text: 'Failed to delete contract.',
-      });
+      await Toast.show({ text: 'Failed to delete contract.' });
     }
   };
 
-  // Update a contract instance's UTXOs and balance
   const updateContract = async (address: string) => {
     try {
       const contractManager = ContractManager();
-      // const { added, removed } =
       await contractManager.updateContractUTXOs(address);
-
-      // console.log(`UTXOs updated. Added: ${added}, Removed: ${removed}`);
-
-      // Fetch updated contract instance from the database
       const updatedContractInstance =
         await contractManager.getContractInstanceByAddress(address);
-
-      // Calculate the total balance by summing all the UTXO amounts
       const totalBalance = updatedContractInstance.utxos.reduce(
-        (sum: bigint, utxo: any) => {
-          return sum + BigInt(utxo.amount);
-        },
+        (sum: bigint, utxo: any) => sum + BigInt(utxo.amount),
         BigInt(0)
       );
-
-      // Update the state with the new UTXOs and calculated balance
-      setContractInstances((prevInstances) =>
-        prevInstances.map((instance) =>
-          instance.address === address
+      setContractInstances((prev) =>
+        prev.map((inst) =>
+          inst.address === address
             ? {
-                ...instance,
-                balance: totalBalance, // Set calculated balance
-                utxos: updatedContractInstance.utxos, // Update UTXOs
+                ...inst,
+                balance: totalBalance,
+                utxos: updatedContractInstance.utxos,
               }
-            : instance
+            : inst
         )
       );
-
-      await Toast.show({
-        text: 'Contract updated successfully!',
-      });
+      await Toast.show({ text: 'Contract updated successfully!' });
     } catch (err: any) {
       console.error('Error updating UTXOs and balance:', err);
       setError(err.message);
-      await Toast.show({
-        text: 'Failed to update contract.',
-      });
+      await Toast.show({ text: 'Failed to update contract.' });
     }
   };
 
@@ -368,13 +296,9 @@ const ContractView = () => {
     setErrorMessage('');
   };
 
-  if (error) {
-    return <div>Error: {error}</div>;
-  }
+  if (error) return <div>Error: {error}</div>;
 
-  const returnHome = () => {
-    navigate(`/home/${wallet_id}`);
-  };
+  const returnHome = () => navigate(`/home/${wallet_id}`);
 
   return (
     <div className="container mx-auto p-4">
@@ -386,9 +310,11 @@ const ContractView = () => {
         />
       </div>
 
-      <h2 className="text-lg font-semibold flex flex-col items-center mb-2">
-        Select Contract
+      {/* Select Contract + tooltip */}
+      <h2 className="text-lg font-semibold flex items-center justify-center gap-2 mb-2">
+        <span>Select Contract</span>
       </h2>
+
       <select
         className="border p-2 mb-4 w-full"
         value={selectedContractFile}
@@ -402,7 +328,7 @@ const ContractView = () => {
         ))}
       </select>
 
-      {/* Render the Constructor Arguments inside a Popup */}
+      {/* Constructor Args Popup */}
       {showConstructorArgsPopup && (
         <Popup
           closePopups={() => {
@@ -413,17 +339,40 @@ const ContractView = () => {
             setCurrentArgName('');
           }}
         >
-          <h2 className="text-lg font-semibold flex flex-col items-center mb-2">
-            Constructor Arguments
+          {/* Popup title + tooltip */}
+          <h2 className="text-lg font-semibold flex items-center justify-center gap-2 mb-2">
+            <span>Constructor Arguments</span>
+            <span
+              data-tooltip-id="constructor-tt"
+              className="cursor-pointer text-blue-500 text-lg font-bold select-none"
+              aria-label="Constructor args info"
+              role="img"
+            ></span>
           </h2>
+
           <div className="max-h-96 overflow-y-auto mb-4">
             {constructorArgs.map((arg, index) => {
               if (arg.type === 'datasig') {
                 return (
                   <div key={index} className="mb-4">
-                    <label className="block text-sm font-medium text-gray-700">
-                      {arg.name} (datasig)
+                    <label className="text-sm font-medium text-gray-700 flex items-center gap-2">
+                      <span>{arg.name} (datasig)</span>
+                      <span
+                        data-tooltip-id={`datasig-tt-${index}`}
+                        className="cursor-pointer text-yellow-600 text-base font-bold select-none"
+                        aria-label="Data signature info"
+                        role="img"
+                      >
+                        ⓘ
+                      </span>
+                      <Tooltip
+                        id={`datasig-tt-${index}`}
+                        place="top"
+                        className="max-w-[80vw] whitespace-normal break-words text-sm leading-snug"
+                        content="Sign arbitrary data with a selected wallet address. The resulting signature (hex) is passed to the constructor."
+                      />
                     </label>
+
                     <input
                       type="text"
                       name={`${arg.name}_data`}
@@ -437,18 +386,20 @@ const ContractView = () => {
                       className="border p-2 w-full rounded-md mb-2"
                       placeholder={`Enter data to sign for ${arg.name}`}
                     />
-                    <div className="flex items-center mb-2">
+
+                    <div className="flex items-center mb-2 gap-2">
                       <button
                         type="button"
                         onClick={() => {
                           setCurrentArgName(arg.name);
                           setShowAddressPopup(true);
                         }}
-                        className={`bg-blue-500 hover:bg-blue-600 transition duration-300 font-bold text-white py-2 px-4 rounded mr-2 ${
+                        className={`bg-blue-500 hover:bg-blue-600 transition duration-300 font-bold text-white py-2 px-4 rounded ${
                           isScanning ? 'opacity-50 cursor-not-allowed' : ''
                         }`}
                         disabled={isScanning}
                         aria-label={`Select Address for ${arg.name}`}
+                        data-tooltip-id={`select-addr-tt-${index}`}
                       >
                         Select Address
                       </button>
@@ -463,10 +414,18 @@ const ContractView = () => {
                         disabled={
                           !selectedAddresses[arg.name] || !dataToSign[arg.name]
                         }
+                        data-tooltip-id={`sign-msg-tt-${index}`}
                       >
                         Sign Message
                       </button>
+                      <Tooltip
+                        id={`sign-msg-tt-${index}`}
+                        place="top"
+                        className="max-w-[80vw] whitespace-normal break-words text-sm leading-snug"
+                        content="Create a signature using the selected address' private key over the provided data."
+                      />
                     </div>
+
                     {selectedAddresses[arg.name] && (
                       <div className="text-sm mt-2">
                         {shortenTxHash(
@@ -487,26 +446,57 @@ const ContractView = () => {
                   arg.type === 'bytes20' || arg.type === 'pubkey';
                 return (
                   <div key={index} className="mb-4">
-                    <label className="block text-sm font-medium text-gray-700">
-                      {arg.name} ({arg.type})
+                    <label className="text-sm font-medium text-gray-700 flex items-center gap-2">
+                      <span>
+                        {arg.name} ({arg.type})
+                      </span>
+                      <span
+                        data-tooltip-id={`argtype-tt-${index}`}
+                        className="cursor-pointer text-yellow-600 text-base font-bold select-none"
+                        aria-label="Argument type info"
+                        role="img"
+                      >
+                        ⓘ
+                      </span>
+                      <Tooltip
+                        id={`argtype-tt-${index}`}
+                        place="top"
+                        className="max-w-[80vw] whitespace-normal break-words text-sm leading-snug"
+                        content={
+                          isAddressType
+                            ? arg.type === 'pubkey'
+                              ? 'Public key in hex. Use “Select Address” to fill automatically.'
+                              : '20-byte hash (hex) of an address/public key. Use “Select Address”.'
+                            : `Enter a value matching type: ${arg.type}.`
+                        }
+                      />
                     </label>
+
                     {isAddressType ? (
                       <>
-                        <div className="flex items-center">
+                        <div className="flex items-center gap-2">
                           <button
                             type="button"
                             onClick={() => {
                               setCurrentArgName(arg.name);
                               setShowAddressPopup(true);
                             }}
-                            className={`bg-blue-500 hover:bg-blue-600 transition duration-300 font-bold text-white py-2 px-4 rounded mr-2 ${
+                            className={`bg-blue-500 hover:bg-blue-600 transition duration-300 font-bold text-white py-2 px-4 rounded ${
                               isScanning ? 'opacity-50 cursor-not-allowed' : ''
                             }`}
                             disabled={isScanning}
                             aria-label={`Select Address for ${arg.name}`}
+                            data-tooltip-id={`select-addr2-tt-${index}`}
                           >
                             Select Address
                           </button>
+                          <Tooltip
+                            id={`select-addr2-tt-${index}`}
+                            place="top"
+                            className="max-w-[80vw] whitespace-normal break-words text-sm leading-snug"
+                            content="Pick an address from your wallet to auto-fill this argument."
+                          />
+
                           <button
                             type="button"
                             onClick={() => scanBarcode(arg.name)}
@@ -515,17 +505,22 @@ const ContractView = () => {
                             }`}
                             disabled={isScanning}
                             aria-label={`Scan QR Code for ${arg.name}`}
+                            data-tooltip-id={`scan-qr-tt-${index}`}
                           >
                             <FaCamera />
                           </button>
+                          <Tooltip
+                            id={`scan-qr-tt-${index}`}
+                            place="top"
+                            className="max-w-[80vw] whitespace-normal break-words text-sm leading-snug"
+                            content="Scan a QR code to populate this field."
+                          />
                         </div>
+
                         {inputValues[arg.name] && (
                           <div className="mt-2">
                             Selected {arg.type}:{' '}
-                            {shortenTxHash(
-                              inputValues[arg.name]
-                              // PREFIX[currentNetwork].length
-                            )}
+                            {shortenTxHash(inputValues[arg.name])}
                           </div>
                         )}
                       </>
@@ -545,20 +540,21 @@ const ContractView = () => {
             })}
           </div>
 
-          <div className="flex flex-col items-end ">
+          <div className="flex flex-col items-end">
             <button
               onClick={createContract}
-              className={`bg-green-500 hover:bg-green-600 transition duration-300  text-white py-2 px-4 rounded mb-4 flex items-center justify-center ${
+              className={`bg-green-500 hover:bg-green-600 transition duration-300 text-white py-2 px-4 rounded mb-4 flex items-center justify-center ${
                 isLoading ? 'cursor-not-allowed opacity-50' : ''
               }`}
-              disabled={isLoading} // Disable the button while loading
+              disabled={isLoading}
+              data-tooltip-id="create-contract-tt"
             >
               {isLoading ? (
                 <TailSpin
                   visible={true}
                   height="24"
                   width="24"
-                  color="white" // Match the spinner color with the button text color
+                  color="white"
                   ariaLabel="tail-spin-loading"
                   radius="1"
                 />
@@ -566,15 +562,22 @@ const ContractView = () => {
                 <div className="font-bold">Create Contract</div>
               )}
             </button>
+            <Tooltip
+              id="create-contract-tt"
+              place="top"
+              className="max-w-[80vw] whitespace-normal break-words text-sm leading-snug"
+              content="Instantiate the selected contract using the values provided above."
+            />
           </div>
         </Popup>
       )}
 
       {contractInstances.length > 0 && (
         <div>
-          <h2 className="text-lg font-semibold flex flex-col items-center mb-2">
-            Instantiated Contracts
+          <h2 className="text-lg font-semibold flex items-center justify-center gap-2 mb-2">
+            <span>Instantiated Contracts</span>
           </h2>
+
           <div className="overflow-y-auto max-h-80 mb-4">
             <ul>
               {contractInstances.map((instance) => (
@@ -586,8 +589,9 @@ const ContractView = () => {
                     <div className="mb-2 overflow-x-auto">
                       <strong>Contract Name:</strong> {instance.contract_name}
                     </div>
+
                     <div
-                      className="mb-2 cursor-pointer"
+                      className="mb-2 cursor-pointer flex items-center text-sm gap-2"
                       onClick={() => handleCopyAddress(instance.address)}
                     >
                       <strong>Address:</strong>{' '}
@@ -596,8 +600,9 @@ const ContractView = () => {
                         PREFIX[currentNetwork].length
                       )}
                     </div>
+
                     <div
-                      className="mb-2 cursor-pointer"
+                      className="mb-2 cursor-pointer flex items-center text-sm gap-2"
                       onClick={() => handleCopyAddress(instance.token_address)}
                     >
                       <strong>Token Address:</strong>{' '}
@@ -606,7 +611,8 @@ const ContractView = () => {
                         PREFIX[currentNetwork].length
                       )}
                     </div>
-                    <div className="mb-2">
+
+                    <div className="mb-2 text-sm">
                       <strong>Balance:</strong> {instance.balance.toString()}{' '}
                       satoshis
                     </div>
@@ -615,16 +621,31 @@ const ContractView = () => {
                   <div className="grid grid-cols-[auto,auto] justify-between">
                     <button
                       onClick={() => deleteContract(instance.id)}
-                      className="bg-red-500 hover:bg-red-600 font-bold text-white py-2 px-4 my-2 rounded "
+                      className="bg-red-500 hover:bg-red-600 font-bold text-white py-2 px-4 my-2 rounded"
+                      data-tooltip-id={`delete-tt-${instance.id}`}
                     >
                       Delete
                     </button>
+                    <Tooltip
+                      id={`delete-tt-${instance.id}`}
+                      place="top"
+                      className="max-w-[80vw] whitespace-normal break-words text-sm leading-snug"
+                      content="Remove this contract instance from your local list."
+                    />
+
                     <button
                       onClick={() => updateContract(instance.address)}
                       className="bg-green-500 hover:bg-green-600 font-bold text-white py-2 px-4 my-2 rounded justify-self-end"
+                      data-tooltip-id={`update-tt-${instance.id}`}
                     >
                       Update
                     </button>
+                    <Tooltip
+                      id={`update-tt-${instance.id}`}
+                      place="top"
+                      className="max-w-[80vw] whitespace-normal break-words text-sm leading-snug"
+                      content="Refresh UTXOs and balance for this contract address."
+                    />
                   </div>
                 </li>
               ))}

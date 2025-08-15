@@ -157,29 +157,33 @@ const Receive: React.FC = () => {
         </div>
         {!selectedAddress && (
           <div>
-            <div className="flex justify-center space-x-4 mb-4">
+            <div className="flex justify-center space-x-4 mb-4 w-full max-w-md">
               <button
-                className={`px-4 py-2 font-bold rounded ${
+                className={`flex-1 min-w-[120px] px-4 py-2 font-bold rounded text-center ${
                   addressType === 'main'
                     ? 'bg-blue-500 text-white'
                     : 'bg-gray-200 text-gray-700'
                 } ${addressType === 'main' ? 'hover:bg-blue-600' : 'hover:bg-gray-300'}`}
                 onClick={() => setAddressType('main')}
               >
-                Main Addresses
+                Main <br />
+                Addresses
               </button>
               <button
-                className={`px-4 py-2 font-bold rounded ${
+                className={`flex-1 min-w-[120px] px-4 py-2 font-bold rounded text-center ${
                   addressType === 'change'
                     ? 'bg-blue-500 text-white'
                     : 'bg-gray-200 text-gray-700'
                 } ${addressType === 'change' ? 'hover:bg-blue-600' : 'hover:bg-gray-300'}`}
                 onClick={() => setAddressType('change')}
               >
-                Change Addresses
+                Change <br />
+                Addresses
               </button>
             </div>
-            <div className="flex flex-row gap-2 items-center text-gray-800 mb-4">
+
+            <div className="flex flex-row gap-2 items-center justify-center text-gray-800 mb-4">
+              {' '}
               <span
                 className={`${isTokenAddress ? 'text-gray-400' : 'text-black'}`}
               >
