@@ -23,6 +23,12 @@ import {
 } from '@capacitor/barcode-scanner';
 import { FaCamera } from 'react-icons/fa';
 import { DataSigner } from '../utils/dataSigner';
+import ElectrumService from '../services/ElectrumService';
+
+interface BlockHeader {
+  height: number;
+  hex: string;
+}
 
 const ContractView = () => {
   const [isLoading, setIsLoading] = useState<boolean>(false);
@@ -39,7 +45,7 @@ const ContractView = () => {
   const [showErrorPopup, setShowErrorPopup] = useState<boolean>(false);
   const [errorMessage, setErrorMessage] = useState<string>('');
   const [isScanning, setIsScanning] = useState<boolean>(false);
-
+  const [blockHeader, setBlockHeader] = useState<BlockHeader | null>(null);
   // datasig helpers
   const [selectedAddresses, setSelectedAddresses] = useState<{
     [key: string]: string;
@@ -53,6 +59,34 @@ const ContractView = () => {
   const currentNetwork = useSelector(
     (state: RootState) => state.network.currentNetwork
   );
+
+  useEffect(() => {
+    // Initial fetch of latest block
+    const fetchInitialBlock = async () => {
+      try {
+        const block = await ElectrumService.getLatestBlock();
+        if (block) {
+          setBlockHeader(block as BlockHeader);
+        }
+      } catch (err) {
+        console.error('Failed to fetch initial block header', err);
+      }
+    };
+
+    // Subscribe to block header updates
+    const handleBlockUpdate = (header: BlockHeader) => {
+      setBlockHeader(header);
+      setError(null);
+    };
+
+    fetchInitialBlock();
+    ElectrumService.subscribeBlockHeaders(handleBlockUpdate);
+
+    // Cleanup subscription on component unmount
+    return () => {
+      // Note: You might need to implement an unsubscribe method in your ElectrumServer
+    };
+  }, []);
 
   useEffect(() => {
     const loadAvailableContracts = async () => {
@@ -342,15 +376,30 @@ const ContractView = () => {
           {/* Popup title + tooltip */}
           <h2 className="text-lg font-semibold flex items-center justify-center gap-2 mb-2">
             <span>Constructor Arguments</span>
-            <span
-              data-tooltip-id="constructor-tt"
-              className="cursor-pointer text-blue-500 text-lg font-bold select-none"
-              aria-label="Constructor args info"
-              role="img"
-            ></span>
           </h2>
 
           <div className="max-h-96 overflow-y-auto mb-4">
+            <p className="flex flex-col items-center">
+              <div className="flex items-center">
+                <span>Current Block Height</span>
+                <span
+                  data-tooltip-id="block-height"
+                  className="cursor-pointer text-yellow-600 text-base font-bold select-none"
+                  aria-label="Data signature info"
+                  role="img"
+                >
+                  ⓘ
+                </span>
+              </div>
+              <Tooltip
+                id="block-height"
+                place="top"
+                className="max-w-[80vw] whitespace-normal break-words text-sm leading-snug"
+                content="Blocks increment on an average interval of 10 minutes."
+              />
+              <span className="font-bold">{blockHeader.height}</span>
+            </p>
+
             {constructorArgs.map((arg, index) => {
               if (arg.type === 'datasig') {
                 return (
