@@ -5,7 +5,7 @@ export const chipnetServers = [
 ];
 
 export const mainnetServers = [
-  'electrum.imaginary.cash',
   'explorer.bch.ninja',
+  'electrum.imaginary.cash',
   'bch.imaginary.cash',
 ];
