@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { FaCamera } from 'react-icons/fa';
-import { UTXO } from '../../types/types';
+import { TransactionOutput, UTXO } from '../../types/types';
 import { shortenTxHash } from '../../utils/shortenHash';
 import { DUST, SATSINBITCOIN } from '../../utils/constants';
 
@@ -21,6 +21,7 @@ interface RegularTxViewProps {
   selectedUtxos: UTXO[];
   scanBarcode: () => void;
   handleAddOutput: () => void;
+  txOutputs: TransactionOutput[];
 }
 
 const RegularTxView: React.FC<RegularTxViewProps> = ({
@@ -37,9 +38,12 @@ const RegularTxView: React.FC<RegularTxViewProps> = ({
   selectedUtxos,
   scanBarcode,
   handleAddOutput,
+  txOutputs
 }) => {
   const [inputTokenAmount, setInputTokenAmount] = useState<string>('');
-  const maxLimit = 2000n;
+
+  // Reserve 2000 sats to cover fees (~1 sat/byte * <=2000 bytes)
+  const FEE_RESERVE_SATS = 2000n;
 
   const isNft =
     selectedTokenCategory && selectedTokenCategory !== 'none'
@@ -48,12 +52,31 @@ const RegularTxView: React.FC<RegularTxViewProps> = ({
         )
       : false;
 
+  // Total available sats from inputs
   const totalSats = useMemo(() => {
     return selectedUtxos.reduce((sum, utxo) => {
       const value = utxo.value || utxo.amount || 0; // Support both properties
-      return sum + BigInt(value); // Use BigInt for consistency
-    }, BigInt(0)); // Start with BigInt(0)
+      return sum + BigInt(value);
+    }, BigInt(0));
   }, [selectedUtxos]);
+
+  // Total sats already allocated to outputs
+  const totalOutputAmount = useMemo(() => {
+    return txOutputs.reduce((sum, output) => {
+      // Only count regular outputs (ignore OP_RETURN which has no amount)
+      if ('amount' in output && output.amount !== undefined) {
+        if (typeof output.amount === 'bigint') return sum + output.amount;
+        if (typeof output.amount === 'number') return sum + BigInt(output.amount);
+      }
+      return sum;
+    }, BigInt(0));
+  }, [txOutputs]);
+
+  // Spendable = inputs - already allocated - fee reserve (floored at 0)
+  const remainingSpendable = useMemo(() => {
+    const rem = totalSats - totalOutputAmount - FEE_RESERVE_SATS;
+    return rem > 0n ? rem : 0n;
+  }, [totalSats, totalOutputAmount]);
 
   const tokenTotals = useMemo(() => {
     const totals: Record<string, bigint> = {};
@@ -78,6 +101,10 @@ const RegularTxView: React.FC<RegularTxViewProps> = ({
     const decimalPart = padded.slice(-decimals).padEnd(decimals, '0');
     return `${integerPart}.${decimalPart}`;
   };
+
+  useEffect(() => {
+    console.log(txOutputs);
+  }, [txOutputs]);
 
   useEffect(() => {
     if (selectedTokenCategory === 'none') {
@@ -157,14 +184,22 @@ const RegularTxView: React.FC<RegularTxViewProps> = ({
           <label className="font-medium">Transfer Amount</label>
           <div className="flex space-x-2">
             <button
-              onClick={() => setTransferAmount(Number(totalSats - maxLimit))}
-              className="border border-gray-300 bg-blue-500 text-white px-3 py-1 rounded hover:bg-blue-600 transition-colors"
+              onClick={() => setTransferAmount(Number(remainingSpendable))}
+              disabled={remainingSpendable === 0n}
+              className={`border border-gray-300 px-3 py-1 rounded transition-colors ${
+                remainingSpendable === 0n
+                  ? 'bg-gray-300 text-gray-600 cursor-not-allowed'
+                  : 'bg-blue-500 text-white hover:bg-blue-600'
+              }`}
+              title={
+                remainingSpendable === 0n
+                  ? 'No spendable balance after fee reserve'
+                  : 'Set to maximum spendable (leaves 1000 sats for fees)'
+              }
             >
               Max{' '}
               <span className="text-sm">
-                {totalSats < maxLimit
-                  ? 0
-                  : Number(totalSats - maxLimit) / SATSINBITCOIN}
+                {Number(remainingSpendable) / SATSINBITCOIN}
               </span>{' '}
               BCH
             </button>
@@ -174,15 +209,13 @@ const RegularTxView: React.FC<RegularTxViewProps> = ({
           type="number"
           step="0.00000001" // Allow up to 8 decimal places for Bitcoin
           value={
-            totalSats < maxLimit
-              ? 0
-              : transferAmount > Number(totalSats - maxLimit)
-                ? Number(totalSats - maxLimit) / 100_000_000 // Convert to Bitcoin
-                : transferAmount / 100_000_000 // Convert to Bitcoin
+            // Clamp display to remaining spendable (in BCH)
+            transferAmount > Number(remainingSpendable)
+              ? Number(remainingSpendable) / 100_000_000
+              : transferAmount / 100_000_000
           }
           onChange={(e) => {
             const value = e.target.value;
-            // Convert Bitcoin input to Satoshis (BigInt)
             const satoshis =
               value === ''
                 ? BigInt(0)
@@ -190,9 +223,12 @@ const RegularTxView: React.FC<RegularTxViewProps> = ({
             setTransferAmount(Number(satoshis));
           }}
           className="border p-2 w-full break-words whitespace-normal"
-          min={Number(DUST) / 100_000_000} // Convert DUST to Bitcoin
-          max={Number(totalSats) / 100_000_000} // Convert totalSats to Bitcoin
+          min={Number(DUST) / 100_000_000} // Convert DUST to BCH
+          max={Number(remainingSpendable) / 100_000_000} // Cap to spendable after fee reserve
         />
+        <div className="mt-1 text-xs text-gray-600">
+          Leaving a {Number(FEE_RESERVE_SATS)} sat fee reserve.
+        </div>
       </div>
       {selectedTokenCategory && selectedTokenCategory !== 'none' && (
         <div className="mb-4">
@@ -244,7 +280,10 @@ const RegularTxView: React.FC<RegularTxViewProps> = ({
               value={inputTokenAmount}
               onChange={handleInputTokenAmountChange}
               className="border p-2 w-full break-words whitespace-normal"
-              placeholder={`Enter amount (max ${formatTokenAmount(tokenTotals[selectedTokenCategory] || BigInt(0), tokenMetadata[selectedTokenCategory]?.decimals || 0)})`}
+              placeholder={`Enter amount (max ${formatTokenAmount(
+                tokenTotals[selectedTokenCategory] || BigInt(0),
+                tokenMetadata[selectedTokenCategory]?.decimals || 0
+              )})`}
             />
           )}
         </div>

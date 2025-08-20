@@ -365,6 +365,7 @@ const OutputSelection: React.FC<OutputSelectionProps> = ({
                   selectedUtxos={selectedUtxos}
                   scanBarcode={scanBarcode}
                   handleAddOutput={handleAddOutput}
+                  txOutputs={txOutputs}
                 />
               )}
               {showCashToken && (
