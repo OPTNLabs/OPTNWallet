@@ -4,18 +4,20 @@
  * High-level wrapper around ElectrumServer that provides:
  *  - Request helpers for UTXOs, balances, transactions
  *  - Broadcasting transactions
- *  - Subscriptions (address, blocks, transactions, double-spend proofs)
+ *  - Subscriptions to addresses, blocks, transactions, double-spend proofs
  *  - Unsubscribe helpers
  *
  * Uses type guards to validate Electrum responses.
- * Maintains a central notification router to avoid duplicate listeners.
+ * Designed to keep the rest of the app abstracted away from raw RPC calls.
  */
 
 import ElectrumServer from '../apis/ElectrumServer/ElectrumServer';
 import { RequestResponse } from 'electrum-cash';
 import { TransactionHistoryItem, UTXO } from '../types/types';
 
-// ---------- Type Guards ----------
+/**
+ * Type guard: checks if Electrum response is an array of UTXOs
+ */
 function isUTXOArray(response: RequestResponse): response is UTXO[] {
   return (
     Array.isArray(response) &&
@@ -25,6 +27,9 @@ function isUTXOArray(response: RequestResponse): response is UTXO[] {
   );
 }
 
+/**
+ * Type guard: checks if Electrum response is an array of transaction history items
+ */
 function isTransactionHistoryArray(
   response: RequestResponse
 ): response is TransactionHistoryItem[] {
@@ -34,58 +39,27 @@ function isTransactionHistoryArray(
   );
 }
 
+/**
+ * Type guard: checks if Electrum response is a string
+ * (typically used for transaction hashes or subscription statuses)
+ */
 function isStringResponse(response: RequestResponse): response is string {
   return typeof response === 'string';
 }
 
-// ---------- Notification Routing ----------
 /**
- * Registry for active subscription callbacks.
- * Keys are RPC methods (e.g. blockchain.address.subscribe),
- * values are maps of subscription keys (address/txHash) to callbacks.
+ * ElectrumService
+ *
+ * Provides high-level async methods for interacting with Electrum.
+ * Handles data transformation and validation via type guards.
  */
-const subscriptionRegistry: Record<
-  string,
-  Map<string, (data: any) => void>
-> = {
-  'blockchain.address.subscribe': new Map(),
-  'blockchain.headers.subscribe': new Map(),
-  'blockchain.transaction.subscribe': new Map(),
-  'blockchain.transaction.dsproof.subscribe': new Map(),
-};
-
-/**
- * Sets up a single notification router on the Electrum client.
- * Ensures we only bind one 'notification' listener no matter how many subscriptions exist.
- */
-async function ensureNotificationRouter() {
-  const client = await ElectrumServer().electrumConnect();
-
-  // If already set up, do nothing
-  if ((client as any)._optnNotificationRouterInstalled) return;
-
-  client.on('notification', (method: string, params: any[]) => {
-    const registry = subscriptionRegistry[method];
-    if (!registry) return;
-
-    if (params.length >= 2) {
-      const key = params[0]; // e.g. address or txHash
-      const data = params[1];
-      const cb = registry.get(key);
-      if (cb) cb(data);
-    } else if (params.length === 1) {
-      // For block headers, only one param (header object)
-      const cb = registry.get('tip');
-      if (cb) cb(params[0]);
-    }
-  });
-
-  (client as any)._optnNotificationRouterInstalled = true;
-}
-
-// ---------- Service ----------
 const ElectrumService = {
-  /** Fetch UTXOs for an address */
+  /**
+   * Get list of UTXOs for an address.
+   *
+   * @param address BCH address
+   * @returns {Promise<UTXO[]>} List of unspent outputs
+   */
   async getUTXOs(address: string): Promise<UTXO[]> {
     const server = ElectrumServer();
     try {
@@ -93,6 +67,7 @@ const ElectrumService = {
         'blockchain.address.listunspent',
         address
       );
+
       if (isUTXOArray(UTXOs)) {
         return UTXOs.map((utxo) => {
           if (utxo.token_data) {
@@ -101,15 +76,21 @@ const ElectrumService = {
           }
           return utxo;
         });
+      } else {
+        throw new Error('Invalid UTXO response format');
       }
-      throw new Error('Invalid UTXO response format');
     } catch (error) {
       console.error('Error fetching UTXOs:', error);
       return [];
     }
   },
 
-  /** Get total balance for an address */
+  /**
+   * Get balance (confirmed + unconfirmed) for an address.
+   *
+   * @param address BCH address
+   * @returns {Promise<number>} Total satoshi balance
+   */
   async getBalance(address: string): Promise<number> {
     const server = ElectrumServer();
     try {
@@ -118,21 +99,28 @@ const ElectrumService = {
         address,
         'include_tokens'
       );
+
       if (
         response &&
         typeof response.confirmed === 'number' &&
         typeof response.unconfirmed === 'number'
       ) {
         return response.confirmed + response.unconfirmed;
+      } else {
+        throw new Error('Unexpected response format');
       }
-      throw new Error('Unexpected balance format');
     } catch (error) {
       console.error('Error getting balance:', error);
       return 0;
     }
   },
 
-  /** Broadcast a raw transaction */
+  /**
+   * Broadcast a transaction to the network.
+   *
+   * @param txHex Raw transaction hex
+   * @returns {Promise<string>} Transaction hash if successful
+   */
   async broadcastTransaction(txHex: string): Promise<string> {
     const server = ElectrumServer();
     try {
@@ -140,54 +128,88 @@ const ElectrumService = {
         'blockchain.transaction.broadcast',
         txHex
       );
-      if (isStringResponse(txHash)) return txHash;
-      throw new Error('Invalid transaction hash response');
+
+      if (isStringResponse(txHash)) {
+        return txHash;
+      } else {
+        throw new Error('Invalid transaction hash response format');
+      }
     } catch (error: any) {
       console.error('Error broadcasting transaction:', error);
       return error.message || 'Unknown error';
     }
   },
 
-  /** Fetch transaction history for an address */
+  /**
+   * Fetch full transaction history for an address.
+   *
+   * @param address BCH address
+   * @returns {Promise<TransactionHistoryItem[] | null>}
+   */
   async getTransactionHistory(
     address: string
   ): Promise<TransactionHistoryItem[] | null> {
     const server = ElectrumServer();
     try {
+      if (!address) {
+        throw new Error('Invalid address: Address cannot be undefined');
+      }
+
       const history: RequestResponse = await server.request(
         'blockchain.address.get_history',
         address
       );
-      if (isTransactionHistoryArray(history)) return history;
-      throw new Error('Invalid transaction history format');
+
+      if (isTransactionHistoryArray(history)) {
+        return history;
+      } else {
+        throw new Error('Invalid transaction history response format');
+      }
     } catch (error) {
       console.error('Error fetching transaction history:', error);
       return null;
     }
   },
 
-  /** Fetch the latest block header */
+  /**
+   * Fetch the latest block header (tip of the chain).
+   */
   async getLatestBlock() {
     const server = ElectrumServer();
     try {
-      return await server.request('blockchain.headers.get_tip');
+      const block: RequestResponse = await server.request(
+        'blockchain.headers.get_tip'
+      );
+      return block;
     } catch (error) {
-      console.error('Error fetching block tip:', error);
+      console.error('Error fetching block:', error);
       return null;
     }
   },
 
-  /** Subscribe to address status updates */
+  /**
+   * Subscribe to address updates (balance/history changes).
+   *
+   * @param address BCH address
+   * @param callback Called with new status string when address changes
+   */
   async subscribeAddress(address: string, callback: (status: string) => void) {
-    const client = await ElectrumServer().electrumConnect();
+    const server = await ElectrumServer().electrumConnect();
     try {
-      const status: RequestResponse = await client.request(
+      const status: RequestResponse = await server.request(
         'blockchain.address.subscribe',
         address
       );
+
       if (isStringResponse(status)) {
-        await ensureNotificationRouter();
-        subscriptionRegistry['blockchain.address.subscribe'].set(address, callback);
+        server.on('notification', (method: string, params: any[]) => {
+          if (
+            method === 'blockchain.address.subscribe' &&
+            params[0] === address
+          ) {
+            callback(params[1]);
+          }
+        });
       } else {
         throw new Error('Invalid subscription response format');
       }
@@ -196,61 +218,100 @@ const ElectrumService = {
     }
   },
 
-  /** Subscribe to block headers */
+  /**
+   * Subscribe to new block headers.
+   *
+   * @param callback Called with new block header when tip updates
+   */
   async subscribeBlockHeaders(callback: (header: any) => void) {
-    const client = await ElectrumServer().electrumConnect();
+    const server = await ElectrumServer().electrumConnect();
     try {
-      await client.request('blockchain.headers.subscribe');
-      await ensureNotificationRouter();
-      subscriptionRegistry['blockchain.headers.subscribe'].set('tip', callback);
+      await server.request('blockchain.headers.subscribe');
+
+      server.on('notification', (method: string, params: any[]) => {
+        if (method === 'blockchain.headers.subscribe') {
+          callback(params[0]);
+        }
+      });
     } catch (error) {
       console.error('Error subscribing to block headers:', error);
     }
   },
 
-  /** Subscribe to a transaction’s confirmation updates */
-  async subscribeTransaction(txHash: string, callback: (height: number) => void) {
-    const client = await ElectrumServer().electrumConnect();
+  /**
+   * Subscribe to transaction confirmation updates.
+   *
+   * @param txHash Transaction hash
+   * @param callback Called with block height on confirmation change
+   */
+  async subscribeTransaction(
+    txHash: string,
+    callback: (height: number) => void
+  ) {
+    const server = await ElectrumServer().electrumConnect();
     try {
-      const height: RequestResponse = await client.request(
+      const height: RequestResponse = await server.request(
         'blockchain.transaction.subscribe',
         txHash
       );
+
       if (typeof height === 'number') {
-        await ensureNotificationRouter();
-        subscriptionRegistry['blockchain.transaction.subscribe'].set(txHash, callback);
+        server.on('notification', (method: string, params: any[]) => {
+          if (
+            method === 'blockchain.transaction.subscribe' &&
+            params[0] === txHash
+          ) {
+            callback(params[1]);
+          }
+        });
       } else {
-        throw new Error('Invalid transaction subscription format');
+        throw new Error('Invalid transaction subscription response format');
       }
     } catch (error) {
       console.error('Error subscribing to transaction:', error);
     }
   },
 
-  /** Subscribe to double-spend proofs for a transaction */
+  /**
+   * Subscribe to double-spend proofs for a transaction.
+   *
+   * @param txHash Transaction hash
+   * @param callback Called with double-spend proof object
+   */
   async subscribeDoubleSpendProof(
     txHash: string,
     callback: (dsProof: any) => void
   ) {
-    const client = await ElectrumServer().electrumConnect();
+    const server = await ElectrumServer().electrumConnect();
     try {
-      await client.request('blockchain.transaction.dsproof.subscribe', txHash);
-      await ensureNotificationRouter();
-      subscriptionRegistry['blockchain.transaction.dsproof.subscribe'].set(txHash, callback);
+      await server.request('blockchain.transaction.dsproof.subscribe', txHash);
+
+      server.on('notification', (method: string, params: any[]) => {
+        if (
+          method === 'blockchain.transaction.dsproof.subscribe' &&
+          params[0] === txHash
+        ) {
+          callback(params[1]);
+        }
+      });
     } catch (error) {
       console.error('Error subscribing to double-spend proof:', error);
     }
   },
 
-  /** Unsubscribe from address updates */
+  /**
+   * Unsubscribe from address updates.
+   *
+   * @param address BCH address
+   * @returns {Promise<boolean>} True if unsubscribed
+   */
   async unsubscribeAddress(address: string): Promise<boolean> {
-    const client = await ElectrumServer().electrumConnect();
+    const server = await ElectrumServer().electrumConnect();
     try {
-      const result: RequestResponse = await client.request(
+      const result: RequestResponse = await server.request(
         'blockchain.address.unsubscribe',
         address
       );
-      subscriptionRegistry['blockchain.address.subscribe'].delete(address);
       return result === true;
     } catch (error) {
       console.error('Error unsubscribing from address:', error);
@@ -258,14 +319,13 @@ const ElectrumService = {
     }
   },
 
-  /** Unsubscribe from block headers */
+  /** Unsubscribe from block header updates */
   async unsubscribeBlockHeaders(): Promise<boolean> {
-    const client = await ElectrumServer().electrumConnect();
+    const server = await ElectrumServer().electrumConnect();
     try {
-      const result: RequestResponse = await client.request(
+      const result: RequestResponse = await server.request(
         'blockchain.headers.unsubscribe'
       );
-      subscriptionRegistry['blockchain.headers.subscribe'].delete('tip');
       return result === true;
     } catch (error) {
       console.error('Error unsubscribing from block headers:', error);
@@ -275,13 +335,12 @@ const ElectrumService = {
 
   /** Unsubscribe from transaction updates */
   async unsubscribeTransaction(txHash: string): Promise<boolean> {
-    const client = await ElectrumServer().electrumConnect();
+    const server = await ElectrumServer().electrumConnect();
     try {
-      const result: RequestResponse = await client.request(
+      const result: RequestResponse = await server.request(
         'blockchain.transaction.unsubscribe',
         txHash
       );
-      subscriptionRegistry['blockchain.transaction.subscribe'].delete(txHash);
       return result === true;
     } catch (error) {
       console.error('Error unsubscribing from transaction:', error);
@@ -289,15 +348,14 @@ const ElectrumService = {
     }
   },
 
-  /** Unsubscribe from double-spend proofs */
+  /** Unsubscribe from double-spend proof updates */
   async unsubscribeDoubleSpendProof(txHash: string): Promise<boolean> {
-    const client = await ElectrumServer().electrumConnect();
+    const server = await ElectrumServer().electrumConnect();
     try {
-      const result: RequestResponse = await client.request(
+      const result: RequestResponse = await server.request(
         'blockchain.transaction.dsproof.unsubscribe',
         txHash
       );
-      subscriptionRegistry['blockchain.transaction.dsproof.subscribe'].delete(txHash);
       return result === true;
     } catch (error) {
       console.error('Error unsubscribing from double-spend proof:', error);
