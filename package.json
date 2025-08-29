@@ -28,6 +28,7 @@
     "@capacitor/dialog": "^7.0.0",
     "@capacitor/filesystem": "^7.0.0",
     "@capacitor/ios": "^7.0.0",
+    "@capacitor/local-notifications": "^7.0.2",
     "@capacitor/splash-screen": "^7.0.0",
     "@capacitor/toast": "^7.0.0",
     "@cashscript/utils": "^0.9.3",
@@ -96,5 +97,6 @@
     "typescript": "^5.2.2",
     "vite": "^5.2.0",
     "vite-plugin-node-polyfills": "^0.22.0"
-  }
+  },
+  "packageManager": "yarn@1.22.22+sha512.a6b2f7906b721bba3d67d4aff083df04dad64c399707841b7acf00f6b133b7ac24255f2652fa22ae3534329dc6180534e98d17432037ff6fd140556e2bb3137e"
 }
