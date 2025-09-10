@@ -28,9 +28,6 @@ const getLogo = (symbol: string) => {
   }
 };
 
-const fmtUSD = (n: number) =>
-  n.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-
 const PriceFeed: React.FC = () => {
   const prices = useSelector((s: RootState) => s.priceFeed);
 
@@ -49,15 +46,9 @@ const PriceFeed: React.FC = () => {
         showDots={false}
       >
         {ASSETS.map((symbol) => {
-          const key = `${symbol}-USD`;
-          const datum = prices[key];
-          const display = datum ? `$${fmtUSD(datum.price)}` : 'Loading…';
-          const meta =
-            datum
-              ? `${datum.source}${
-                  datum.ts ? ` • ${Math.max(0, Math.floor((Date.now() - datum.ts) / 1000))}s` : ''
-                }`
-              : '—';
+          const rate = prices[symbol];
+          const display =
+            rate != null ? `$${Number(rate).toFixed(2)}` : 'Loading…';
 
           return (
             <div
@@ -65,13 +56,12 @@ const PriceFeed: React.FC = () => {
               className="scrolling-price-item bg-white px-6 py-12 rounded-lg shadow-lg grid grid-cols-[auto,1fr,auto] items-center gap-x-4 mx-4"
             >
               {getLogo(symbol)}
-              <div className="flex flex-col">
-                <span className="font-semibold text-lg text-gray-800">{symbol}</span>
-                <span className="text-gray-500 text-xs">USD</span>
-              </div>
-              <div className="flex flex-col items-end font-bold">
-                <div className="text-gray-700 text-xl">{display}</div>
-                <span className="text-gray-400 text-xs">{meta}</span>
+              <span className="font-semibold text-lg capitalize text-gray-800">
+                {symbol}
+              </span>
+              <div className="flex flex-col items-center font-bold">
+                <div className="text-gray-600 text-xl">{display}</div>
+                <span className="text-gray-500 text-sm">USD</span>
               </div>
             </div>
           );
