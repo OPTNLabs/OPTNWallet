@@ -15,18 +15,22 @@ enum DisplayMode {
 }
 
 const BitcoinCashCard: React.FC<Props> = ({ totalAmount }) => {
-  // New state shape: key is 'BCH-USD' → { price, ts, source }
-  const bchQuote = useSelector((state: RootState) => state.priceFeed['BCH-USD']);
+  // grab the BCH→USD rate (string | null)
+  const bchRate = useSelector((state: RootState) => state.priceFeed['BCH']);
 
   const [mode, setMode] = useState<DisplayMode>(DisplayMode.USD);
 
   // conversions
   const totalBch = totalAmount / SATSINBITCOIN;
 
-  // use numeric price, fall back to 0 if undefined
-  const safeRate = bchQuote?.price ?? 0;
+  // parse the rate, fall back to 0 if it's null or not a finite number
+  const rateNum = parseFloat(bchRate ?? '');
+  const safeRate = Number.isFinite(rateNum) ? rateNum : 0;
+
+  // always a string like "123.45"
   const totalUsd = (totalBch * safeRate).toFixed(2);
 
+  // render
   return (
     <div className="p-4 mb-4 border rounded-lg shadow-md bg-white flex flex-col w-full max-w-md">
       <div className="flex items-center justify-between">
@@ -35,7 +39,9 @@ const BitcoinCashCard: React.FC<Props> = ({ totalAmount }) => {
           {mode === DisplayMode.BCH ? (
             <div>
               <div className="text-lg font-bold">${totalUsd} USD</div>
-              <div className="text-sm text-gray-600">{totalBch.toFixed(8)} BCH</div>
+              <div className="text-sm text-gray-600">
+                {totalBch.toFixed(8)} BCH
+              </div>
             </div>
           ) : (
             <div>
@@ -63,16 +69,6 @@ const BitcoinCashCard: React.FC<Props> = ({ totalAmount }) => {
             </button>
           )}
         </div>
-      </div>
-
-      {/* tiny status footer */}
-      <div className="mt-2 text-xs text-gray-400">
-        {bchQuote
-          ? `Source: ${bchQuote.source} • Updated ${Math.max(
-              0,
-              Math.floor((Date.now() - bchQuote.ts) / 1000)
-            )}s ago`
-          : 'Fetching BCH price…'}
       </div>
     </div>
   );

@@ -1,39 +1,37 @@
+// src/hooks/usePrices.ts
 import { useEffect, useState } from 'react';
 import { useDispatch } from 'react-redux';
-import { getRate } from '../services/priceService';
-import { updatePrices } from '../redux/priceFeedSlice';
+import { getQuotesUSD, type BaseSymbol } from '../services/priceService';
+import { upsertPrices, type PriceDatum } from '../redux/priceFeedSlice';
 import { INTERVAL } from '../utils/constants';
 
-const SYMBOLS = ['BTC', 'BCH', 'ETH'] as const;
+const BASES: BaseSymbol[] = ['BTC', 'BCH', 'ETH'];
 
-export type Rates = Record<string, string | null>;
+export type PriceMap = Record<string, PriceDatum | undefined>; // key = 'BTC-USD', ...
 
 export function usePrices() {
   const dispatch = useDispatch();
-  const [rates, setRates] = useState<Rates>({});
+  const [prices, setPrices] = useState<PriceMap>({});
 
   useEffect(() => {
     let alive = true;
 
     async function fetchAll() {
-      //   console.group('[usePrices] fetchAll start');
-      const result: Rates = {};
+      try {
+        const quotes = await getQuotesUSD(BASES);
+        const payload: Record<string, PriceDatum> = Object.fromEntries(
+          quotes.map((q) => [
+            `${q.base}-${q.quote}`,
+            { price: q.price, ts: q.ts, source: q.source } as PriceDatum,
+          ])
+        );
 
-      for (const symbol of SYMBOLS) {
-        // console.log(`[usePrices] fetching ${symbol}`);
-        const r = await getRate(symbol);
-        // console.log(`[usePrices] result ${symbol}:`, r);
-        result[symbol] = r;
+        if (!alive) return;
+        dispatch(upsertPrices(payload));
+        setPrices(payload);
+      } catch (_e) {
+        // optional: log or surface telemetry
       }
-
-      console.log(result);
-
-      if (alive) {
-        // console.log('[usePrices] dispatching updatePrices with', result);
-        setRates(result);
-        dispatch(updatePrices(result));
-      }
-      //   console.groupEnd();
     }
 
     fetchAll();
@@ -44,5 +42,5 @@ export function usePrices() {
     };
   }, [dispatch]);
 
-  return rates;
+  return prices;
 }
