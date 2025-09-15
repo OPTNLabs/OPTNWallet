@@ -29,7 +29,10 @@ const getLogo = (symbol: string) => {
 };
 
 const fmtUSD = (n: number) =>
-  n.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  n.toLocaleString(undefined, {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  });
 
 const PriceFeed: React.FC = () => {
   const prices = useSelector((s: RootState) => s.priceFeed);
@@ -52,12 +55,13 @@ const PriceFeed: React.FC = () => {
           const key = `${symbol}-USD`;
           const datum = prices[key];
           const display = datum ? `$${fmtUSD(datum.price)}` : 'Loading…';
-          const meta =
-            datum
-              ? `${datum.source}${
-                  datum.ts ? ` • ${Math.max(0, Math.floor((Date.now() - datum.ts) / 1000))}s` : ''
-                }`
-              : '—';
+          const meta = datum
+            ? `${datum.source}${
+                datum.ts
+                  ? ` • ${Math.max(0, Math.floor((Date.now() - datum.ts) / 1000))}s`
+                  : ''
+              }`
+            : '—';
 
           return (
             <div
@@ -66,12 +70,14 @@ const PriceFeed: React.FC = () => {
             >
               {getLogo(symbol)}
               <div className="flex flex-col">
-                <span className="font-semibold text-lg text-gray-800">{symbol}</span>
+                <span className="font-semibold text-lg text-gray-800">
+                  {symbol}
+                </span>
                 <span className="text-gray-500 text-xs">USD</span>
               </div>
               <div className="flex flex-col items-end font-bold">
                 <div className="text-gray-700 text-xl">{display}</div>
-                <span className="text-gray-400 text-xs">{meta}</span>
+                {/* <span className="text-gray-400 text-xs">{meta}</span> */}
               </div>
             </div>
           );
