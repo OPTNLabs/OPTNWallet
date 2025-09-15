@@ -1,9 +1,8 @@
 import {
   ElectrumClient,
-  // ElectrumTransport,
+  ElectrumTransport,
   RequestResponse,
-} from '@electrum-cash/network';
-import { ElectrumWebSocket } from '@electrum-cash/web-socket';
+} from 'electrum-cash';
 import {
   chipnetServers,
   mainnetServers,
@@ -35,7 +34,7 @@ const notificationHandlers = new Set<NotificationHandler>();
 
 // Registry of active subscriptions for resubscribe-on-reconnect
 // We key by method + JSON.stringify(params)
-type SubEntry = { method: string; params?: any[] };
+type SubEntry = { method: string; params: any[] };
 const activeSubs = new Map<string, SubEntry>();
 
 function getNetworkAndServers(): { network: Network; servers: string[] } {
@@ -71,24 +70,8 @@ function resetBackoff() {
   nextAllowedConnectTs = 0;
 }
 
-function subKey(method: string, params?: any[]): string {
+function subKey(method: string, params: any[] = []): string {
   return `${method}:${JSON.stringify(params ?? [])}`;
-}
-
-function parseServerEntry(entry: string, defaultPort = WSS_PORT) {
-  // Supports "wss://host:50004", "ws://host:50003", or just "host"
-  if (entry.startsWith('ws://') || entry.startsWith('wss://')) {
-    const u = new URL(entry);
-    const host = u.hostname;
-    const port = u.port
-      ? Number(u.port)
-      : u.protocol === 'wss:'
-        ? 50004
-        : 50003;
-    const encrypted = u.protocol === 'wss:';
-    return { host, port, encrypted };
-  }
-  return { host: entry, port: defaultPort, encrypted: true }; // default to WSS
 }
 
 async function wireNotificationsOnce(client: ElectrumClient) {
@@ -108,14 +91,12 @@ async function wireNotificationsOnce(client: ElectrumClient) {
 
 async function resubscribeAll() {
   if (!electrum) return;
+  // Replay every active subscription on the live client
   for (const { method, params } of activeSubs.values()) {
     try {
-      await electrum.subscribe(
-        method,
-        params && params.length ? params : undefined
-      );
+      await electrum.subscribe(method, ...(params ?? []));
     } catch {
-      // best-effort; continue
+      // If a sub fails, keep going — caller handlers will still see future attempts
     }
   }
 }
@@ -154,21 +135,13 @@ export default function ElectrumServer() {
       try {
         for (let i = 0; i < tryOrder.length; i++) {
           const host = tryOrder[i];
-          const { host: h, port, encrypted } = parseServerEntry(host, WSS_PORT);
-          const socket = new ElectrumWebSocket(
-            h,
-            port,
-            encrypted,
-            CONNECT_TIMEOUT_MS
+          const client = new ElectrumClient(
+            'OPTNWallet',
+            '1.5.1',
+            host,
+            WSS_PORT,
+            ElectrumTransport.WSS.Scheme
           );
-          const client = new ElectrumClient('OPTNWallet', '1.5.1', socket);
-          // const client = new ElectrumClient(
-          //   'OPTNWallet',
-          //   '1.5.1',
-          //   host,
-          //   WSS_PORT,
-          //   ElectrumTransport.WSS.Scheme
-          // );
 
           try {
             await withTimeout(
@@ -240,22 +213,17 @@ export default function ElectrumServer() {
    *   subscribe('blockchain.scripthash.subscribe', scripthash)         // script activity
    *   subscribe('blockchain.address.subscribe', 'bitcoincash:qq...')   // address activity (Electrum Cash)
    */
-  async function subscribe(method: string, params?: any[]): Promise<void> {
+  async function subscribe(method: string, ...params: any[]): Promise<void> {
     await electrumConnect();
     const key = subKey(method, params);
     try {
-      await electrum.subscribe(
-        method,
-        params && params.length ? params : undefined
-      );
+      await electrum.subscribe(method, ...params);
       activeSubs.set(key, { method, params });
-    } catch {
+    } catch (err) {
+      // Retry once on a fresh connection
       await electrumDisconnect();
       await electrumConnect();
-      await electrum.subscribe(
-        method,
-        params && params.length ? params : undefined
-      );
+      await electrum.subscribe(method, ...params);
       activeSubs.set(key, { method, params });
     }
   }
@@ -266,19 +234,18 @@ export default function ElectrumServer() {
    * - For scripthash & headers, servers typically don't expose a generic unsubscribe.
    *   We remove from local registry so we won't resubscribe on reconnect.
    */
-  async function unsubscribe(method: string, params?: any[]): Promise<void> {
+  async function unsubscribe(method: string, ...params: any[]): Promise<void> {
     await electrumConnect();
     const key = subKey(method, params);
     activeSubs.delete(key);
 
+    // Best-effort RPC unsubscribe for address flavor (Electrum Cash extension).
     if (method === 'blockchain.address.subscribe') {
       try {
-        // Some servers support this Electrum Cash extension; ignore failures.
-        await electrum.request(
-          'blockchain.address.unsubscribe',
-          ...(params ?? [])
-        );
-      } catch {}
+        await electrum.request('blockchain.address.unsubscribe', ...params);
+      } catch {
+        /* some servers may not support unsubscribe; ignore */
+      }
     }
   }
 

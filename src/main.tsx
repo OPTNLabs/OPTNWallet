@@ -1,5 +1,6 @@
 // src/main.tsx
-import 'dotenv/config'
+import './polyfills/node-globals';
+import 'dotenv/config';
 
 import React from 'react';
 import ReactDOM from 'react-dom/client';
