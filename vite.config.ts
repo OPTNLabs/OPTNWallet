@@ -8,9 +8,9 @@ export default defineConfig(({ mode }) => {
   // Load .env (both VITE_* and non-prefixed) for server-side use here
   const env = loadEnv(mode, process.cwd(), '');
 
-  const CG_KEY      = env.VITE_CG_API_KEY      || env.CG_API_KEY;        // CoinGecko
-  const COINCAP_KEY = env.VITE_COINCAP_API_KEY || env.COINCAP_API_KEY;   // CoinCap
-  const CRYPTO_KEY  = env.VITE_CRYPTOAPIS_KEY  || env.CRYPTOAPIS_KEY;    // CryptoAPIs
+  const CG_KEY = env.VITE_CG_API_KEY || env.CG_API_KEY; // CoinGecko
+  const COINCAP_KEY = env.VITE_COINCAP_API_KEY || env.COINCAP_API_KEY; // CoinCap
+  const CRYPTO_KEY = env.VITE_CRYPTOAPIS_KEY || env.CRYPTOAPIS_KEY; // CryptoAPIs
 
   return {
     plugins: [
@@ -22,7 +22,14 @@ export default defineConfig(({ mode }) => {
       }),
     ],
     build: {
-      target: ['es2020', 'chrome87', 'safari14', 'firefox78', 'edge88', 'node20'],
+      target: [
+        'es2020',
+        'chrome87',
+        'safari14',
+        'firefox78',
+        'edge88',
+        'node20',
+      ],
       sourcemap: true,
       rollupOptions: {
         output: {
@@ -33,6 +40,7 @@ export default defineConfig(({ mode }) => {
       },
     },
     // vite.config.ts — keep everything else the same above/below
+    // vite.config.ts (only server + preview shown)
     server: {
       mimeTypes: {
         'application/wasm': ['wasm'],
@@ -40,51 +48,69 @@ export default defineConfig(({ mode }) => {
       },
       fs: { allow: ['..'] },
       proxy: {
-        // CoinGecko
+        // CoinGecko (FREE/DEMO): public host + demo header
         '/coingecko': {
-          target: 'https://pro-api.coingecko.com',
+          target: 'https://api.coingecko.com',
           changeOrigin: true,
           rewrite: (p) => p.replace(/^\/coingecko/, ''),
-          configure: (proxy) => {
-            proxy.on('proxyReq', (proxyReq) => {
-              // Use the env values captured by loadEnv()
-              if (CG_KEY) {
-                proxyReq.setHeader('x-cg-demo-api-key', CG_KEY);
-                proxyReq.setHeader('x-cg-pro-api-key', CG_KEY); // harmless if demo; improves compatibility
-              }
-              proxyReq.setHeader('accept', 'application/json');
-            });
-          },
+          headers: CG_KEY
+            ? { 'x-cg-demo-api-key': CG_KEY, accept: 'application/json' }
+            : { accept: 'application/json' },
         },
 
-        // CoinCap (REST host)
+        // CoinCap (FREE): public host; key optional
         '/coincap': {
-          target: 'https://rest.coincap.io',
+          target: 'https://api.coincap.io',
           changeOrigin: true,
           rewrite: (p) => p.replace(/^\/coincap/, ''),
-          configure: (proxy) => {
-            proxy.on('proxyReq', (proxyReq) => {
-              if (COINCAP_KEY) {
-                proxyReq.setHeader('Authorization', `Bearer ${COINCAP_KEY}`);
+          headers: COINCAP_KEY
+            ? {
+                Authorization: `Bearer ${COINCAP_KEY}`,
+                accept: 'application/json',
               }
-              proxyReq.setHeader('accept', 'application/json');
-            });
-          },
+            : { accept: 'application/json' },
         },
 
-        // CryptoAPIs
+        // CryptoAPIs: most market-data return 401/402 on free; inject if you have a key
         '/cryptoapi': {
           target: 'https://rest.cryptoapis.io',
           changeOrigin: true,
           rewrite: (p) => p.replace(/^\/cryptoapi/, ''),
-          configure: (proxy) => {
-            proxy.on('proxyReq', (proxyReq) => {
-              if (CRYPTO_KEY) {
-                proxyReq.setHeader('x-api-key', CRYPTO_KEY);
+          headers: CRYPTO_KEY
+            ? { 'x-api-key': CRYPTO_KEY, accept: 'application/json' }
+            : { accept: 'application/json' },
+        },
+      },
+    },
+    // Make preview behave like dev (so proxy also works with `vite preview`)
+    preview: {
+      proxy: {
+        '/coingecko': {
+          target: 'https://api.coingecko.com',
+          changeOrigin: true,
+          rewrite: (p) => p.replace(/^\/coingecko/, ''),
+          headers: CG_KEY
+            ? { 'x-cg-demo-api-key': CG_KEY, accept: 'application/json' }
+            : { accept: 'application/json' },
+        },
+        '/coincap': {
+          target: 'https://api.coincap.io',
+          changeOrigin: true,
+          rewrite: (p) => p.replace(/^\/coincap/, ''),
+          headers: COINCAP_KEY
+            ? {
+                Authorization: `Bearer ${COINCAP_KEY}`,
+                accept: 'application/json',
               }
-              proxyReq.setHeader('accept', 'application/json');
-            });
-          },
+            : { accept: 'application/json' },
+        },
+        '/cryptoapi': {
+          target: 'https://rest.cryptoapis.io',
+          changeOrigin: true,
+          rewrite: (p) => p.replace(/^\/cryptoapi/, ''),
+          headers: CRYPTO_KEY
+            ? { 'x-api-key': CRYPTO_KEY, accept: 'application/json' }
+            : { accept: 'application/json' },
         },
       },
     },
