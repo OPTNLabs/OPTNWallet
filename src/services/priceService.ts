@@ -9,7 +9,7 @@ export type Quote = {
   base: BaseSymbol;
   quote: QuoteSymbol; // 'USD'
   price: number;
-  ts: number;         // ms epoch (provider ts if available, else Date.now())
+  ts: number; // ms epoch (provider ts if available, else Date.now())
   source: 'coingecko' | 'coincap' | 'cryptoapis';
 };
 
@@ -19,37 +19,42 @@ export type Quote = {
  */
 function env(name: string): string | undefined {
   // Vite style
-  const viteVal = (typeof import.meta !== 'undefined' && (import.meta as any).env)
-    ? (import.meta as any).env[name]
-    : undefined;
+  const viteVal =
+    typeof import.meta !== 'undefined' && (import.meta as any).env
+      ? (import.meta as any).env[name]
+      : undefined;
   // Node style (SSR / native builds)
-  const nodeVal = (typeof process !== 'undefined' && (process as any).env)
-    ? (process as any).env[name]
-    : undefined;
+  const nodeVal =
+    typeof process !== 'undefined' && (process as any).env
+      ? (process as any).env[name]
+      : undefined;
   return viteVal ?? nodeVal;
 }
 
-const CG_KEY       = env('VITE_CG_API_KEY')       || env('CG_API_KEY');         // CoinGecko (optional on web if proxied)
-const COINCAP_KEY  = env('VITE_COINCAP_API_KEY')  || env('COINCAP_API_KEY');    // CoinCap
-const CRYPTO_KEY   = env('VITE_CRYPTOAPIS_KEY')   || env('CRYPTOAPIS_KEY');     // CryptoAPIs
+const CG_KEY = env('VITE_CG_API_KEY') || env('CG_API_KEY'); // CoinGecko (optional on web if proxied)
+const COINCAP_KEY = env('VITE_COINCAP_API_KEY') || env('COINCAP_API_KEY'); // CoinCap
+const CRYPTO_KEY = env('VITE_CRYPTOAPIS_KEY') || env('CRYPTOAPIS_KEY'); // CryptoAPIs
 
 /** ===== Provider base URLs =====
  * For web, call RELATIVE proxy paths so secrets are injected server-side.
  * For native, call provider URLs directly with headers.
  */
+// Detect environments
 const isWeb = Capacitor.getPlatform() === 'web';
+const isDev =
+  typeof import.meta !== 'undefined' && (import.meta as any).env?.DEV;
 
-// CoinGecko: batch markets
-const CG_BASE_WEB  = '/coingecko';                              // proxy to https://pro-api.coingecko.com
-const CG_BASE      = 'https://pro-api.coingecko.com';
+// CoinGecko: use proxy in dev, real host otherwise
+const CG_BASE_WEB = isDev ? '/coingecko' : 'https://api.coingecko.com';
+const CG_BASE = 'https://api.coingecko.com';
 
-// CoinCap: batch assets
-const CC_BASE_WEB  = '/coincap';                                // proxy to https://api.coincap.io
-const CC_BASE      = 'https://rest.coincap.io';
+// CoinCap
+const CC_BASE_WEB = isDev ? '/coincap' : 'https://api.coincap.io';
+const CC_BASE = 'https://api.coincap.io';
 
-// CryptoAPIs: per pair
-const CA_BASE_WEB  = '/cryptoapi';                              // proxy to https://rest.cryptoapis.io
-const CA_BASE      = 'https://rest.cryptoapis.io';
+// CryptoAPIs
+const CA_BASE_WEB = isDev ? '/cryptoapi' : 'https://rest.cryptoapis.io';
+const CA_BASE = 'https://rest.cryptoapis.io';
 
 /** ===== ID maps ===== */
 const COINGECKO_IDS: Record<BaseSymbol, string> = {
@@ -71,18 +76,32 @@ async function httpGetJSON(
     headers,
     params,
     timeoutMs = 8000,
-  }: { headers?: Record<string, string>; params?: Record<string, string | number | boolean>; timeoutMs?: number } = {}
+  }: {
+    headers?: Record<string, string>;
+    params?: Record<string, string | number | boolean>;
+    timeoutMs?: number;
+  } = {}
 ): Promise<any> {
   const qp = params
-    ? '?' + Object.entries(params).map(([k, v]) => `${encodeURIComponent(k)}=${encodeURIComponent(String(v))}`).join('&')
+    ? '?' +
+      Object.entries(params)
+        .map(
+          ([k, v]) =>
+            `${encodeURIComponent(k)}=${encodeURIComponent(String(v))}`
+        )
+        .join('&')
     : '';
   const full = url + qp;
 
   if (!isWeb) {
     // Native: CapacitorHttp + manual timeout race
     return await Promise.race([
-      CapacitorHttp.get({ url: full, headers, params: undefined }).then(r => r.data),
-      new Promise((_, rej) => setTimeout(() => rej(new Error('Timeout')), timeoutMs)),
+      CapacitorHttp.get({ url: full, headers, params: undefined }).then(
+        (r) => r.data
+      ),
+      new Promise((_, rej) =>
+        setTimeout(() => rej(new Error('Timeout')), timeoutMs)
+      ),
     ]);
   }
 
@@ -108,13 +127,15 @@ async function httpGetJSON(
 
 // CoinGecko: GET /api/v3/coins/markets?vs_currency=usd&ids=...
 async function fetchFromCoinGecko(bases: BaseSymbol[]): Promise<Quote[]> {
-  const ids = bases.map(b => COINGECKO_IDS[b]).join(',');
+  const ids = bases.map((b) => COINGECKO_IDS[b]).join(',');
   const baseUrl = isWeb ? CG_BASE_WEB : CG_BASE;
   const url = `${baseUrl}/api/v3/coins/markets`;
   const headers: Record<string, string> = {};
 
-  // Do NOT send secrets from the web — proxy should add them.
-  if (!isWeb && CG_KEY) headers['x-cg-demo-api-key'] = CG_KEY;
+  // Attach key on native OR web prod (dev proxy injects it)
+  if ((!isWeb || !isDev) && CG_KEY) {
+    headers['x-cg-demo-api-key'] = CG_KEY; // free/demo header
+  }
 
   const data = await httpGetJSON(url, {
     headers,
@@ -124,14 +145,23 @@ async function fetchFromCoinGecko(bases: BaseSymbol[]): Promise<Quote[]> {
   // Expect array of items with current_price
   const now = Date.now();
   const quotes: Quote[] = Array.isArray(data)
-    ? data
+    ? (data
         .map((it: any) => {
           const base = invert(COINGECKO_IDS)[it.id] as BaseSymbol | undefined;
-          const price = typeof it?.current_price === 'number' ? it.current_price : Number(it?.current_price);
+          const price =
+            typeof it?.current_price === 'number'
+              ? it.current_price
+              : Number(it?.current_price);
           if (!base || !isFinite(price)) return null;
-          return { base, quote: 'USD', price, ts: now, source: 'coingecko' } as Quote;
+          return {
+            base,
+            quote: 'USD',
+            price,
+            ts: now,
+            source: 'coingecko',
+          } as Quote;
         })
-        .filter(Boolean) as Quote[]
+        .filter(Boolean) as Quote[])
     : [];
 
   return quotes;
@@ -139,12 +169,14 @@ async function fetchFromCoinGecko(bases: BaseSymbol[]): Promise<Quote[]> {
 
 // CoinCap: GET /v2/assets?ids=bitcoin,bitcoin-cash,ethereum
 async function fetchFromCoinCap(bases: BaseSymbol[]): Promise<Quote[]> {
-  const ids = bases.map(b => COINCAP_IDS[b]).join(',');
+  const ids = bases.map((b) => COINCAP_IDS[b]).join(',');
   const baseUrl = isWeb ? CC_BASE_WEB : CC_BASE;
   const url = `${baseUrl}/v2/assets`;
   const headers: Record<string, string> = {};
 
-  if (!isWeb && COINCAP_KEY) headers['Authorization'] = `Bearer ${COINCAP_KEY}`;
+  // CoinCap key optional on free; add only if we have it and not using dev proxy
+  if ((!isWeb || !isDev) && COINCAP_KEY)
+    headers['Authorization'] = `Bearer ${COINCAP_KEY}`;
 
   const json = await httpGetJSON(url, {
     headers,
@@ -170,7 +202,8 @@ async function fetchFromCoinCap(bases: BaseSymbol[]): Promise<Quote[]> {
 async function fetchFromCryptoAPIs(bases: BaseSymbol[]): Promise<Quote[]> {
   const baseUrl = isWeb ? CA_BASE_WEB : CA_BASE;
   const headers: Record<string, string> = {};
-  if (!isWeb && CRYPTO_KEY) headers['x-api-key'] = CRYPTO_KEY;
+
+  if ((!isWeb || !isDev) && CRYPTO_KEY) headers['x-api-key'] = CRYPTO_KEY;
 
   const tsSec = Math.floor(Date.now() / 1000);
 
@@ -236,7 +269,8 @@ export async function getQuotesUSD(bases: BaseSymbol[]): Promise<Quote[]> {
   const missing2 = unique.filter((b) => !collected[b]);
   if (missing2.length) {
     try {
-      for (const q of await fetchFromCryptoAPIs(missing2)) collected[q.base] = q;
+      for (const q of await fetchFromCryptoAPIs(missing2))
+        collected[q.base] = q;
     } catch (e: any) {
       // console.warn('CryptoAPIs failed', e?.status || e);
     }
