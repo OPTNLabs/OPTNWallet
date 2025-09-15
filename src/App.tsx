@@ -2,6 +2,7 @@
 import { Routes, Route, Navigate, useLocation } from 'react-router-dom';
 import { useDispatch, useSelector } from 'react-redux';
 import { useEffect } from 'react';
+import { LocalNotifications } from '@capacitor/local-notifications';
 import Layout from './components/Layout';
 import RootHandler from './pages/RootHandler';
 import Home from './pages/Home';
@@ -27,6 +28,9 @@ import { usePrices } from './hooks/usePrices';
 import { SignTransactionModal } from './components/walletconnect/SignTransactionModal';
 import { SignMessageModal } from './components/walletconnect/SignMessageModal';
 
+// 🔔 Always-on in-app popup for incoming UTXOs
+import UtxoNotificationCenter from './components/notifications/UtxoNotificationCenter';
+
 let utxoWorkerStarted = false;
 let transactionWorkerStarted = false;
 
@@ -43,9 +47,29 @@ function App() {
     dispatch(initWalletConnect());
   }, [dispatch]);
 
+  // 2) OS-level Local Notifications: permission + Android channel
+  useEffect(() => {
+    (async () => {
+      try {
+        await LocalNotifications.requestPermissions();
+        await LocalNotifications.createChannel({
+          id: 'utxo',
+          name: 'UTXO Alerts',
+          importance: 5,
+          visibility: 1,
+          vibration: true,
+          sound: 'default',
+          lights: true,
+        });
+      } catch (e) {
+        console.warn('LocalNotifications init failed:', e);
+      }
+    })();
+  }, []);
+
+  // 3) Start/stop workers based on walletId
   useEffect(() => {
     if (walletId === 1) {
-      // Start the UTXO and Transaction workers if walletId is 1 and workers aren't already started
       if (!utxoWorkerStarted) {
         startUTXOWorker();
         utxoWorkerStarted = true;
@@ -55,7 +79,6 @@ function App() {
         transactionWorkerStarted = true;
       }
     } else {
-      // Stop workers if walletId is not 1
       if (utxoWorkerStarted) {
         stopUTXOWorker();
         utxoWorkerStarted = false;
@@ -66,10 +89,8 @@ function App() {
       }
     }
 
-    // Cleanup function
     return () => {
       if (walletId !== 1) {
-        // console.log(walletId);
         if (utxoWorkerStarted) {
           stopUTXOWorker();
           utxoWorkerStarted = false;
@@ -121,9 +142,12 @@ function App() {
         )}
       </Routes>
 
-      {/* 🔥 This ensures the modals is always active */}
+      {/* 🔥 Always active modals */}
       <SignMessageModal />
       <SignTransactionModal />
+
+      {/* 🔔 Always-on in-app UTXO popup (only when wallet exists) */}
+      {walletId === 1 && <UtxoNotificationCenter />}
     </>
   );
 }
