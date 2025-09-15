@@ -1,46 +1,69 @@
 // vite.config.ts
+import { fileURLToPath } from 'node:url';
+import { dirname, resolve as resolvePath } from 'node:path';
+const __dirname = dirname(fileURLToPath(import.meta.url));
+
 import { defineConfig, loadEnv } from 'vite';
-import { nodePolyfills } from 'vite-plugin-node-polyfills';
 import topLevelAwait from 'vite-plugin-top-level-await';
 import react from '@vitejs/plugin-react-swc';
+// import { nodePolyfills } from 'vite-plugin-node-polyfills'; // <— TEMP: comment out
 
 export default defineConfig(({ mode }) => {
-  // Load .env (both VITE_* and non-prefixed) for server-side use here
   const env = loadEnv(mode, process.cwd(), '');
 
-  const CG_KEY = env.VITE_CG_API_KEY || env.CG_API_KEY; // CoinGecko
-  const COINCAP_KEY = env.VITE_COINCAP_API_KEY || env.COINCAP_API_KEY; // CoinCap
-  const CRYPTO_KEY = env.VITE_CRYPTOAPIS_KEY || env.CRYPTOAPIS_KEY; // CryptoAPIs
+  const CG_KEY = env.VITE_CG_API_KEY || env.CG_API_KEY;
+  const COINCAP_KEY = env.VITE_COINCAP_API_KEY || env.COINCAP_API_KEY;
+  const CRYPTO_KEY = env.VITE_CRYPTOAPIS_KEY || env.CRYPTOAPIS_KEY;
+
+  // Prefer browser entry points everywhere (resolver + prebundler).
+  const BROWSER_CONDITIONS = ['browser', 'module', 'import', 'default'];
 
   return {
     plugins: [
       react(),
-      nodePolyfills(),
+      // nodePolyfills(), // <— TEMP: keep commented while we fix resolution
       topLevelAwait({
         promiseExportName: '__tla',
         promiseImportName: (i) => `__tla_${i}`,
       }),
     ],
-    build: {
-      target: [
-        'es2020',
-        'chrome87',
-        'safari14',
-        'firefox78',
-        'edge88',
-        'node20',
+    resolve: {
+      alias: {
+        '/node_modules/sql.js/dist/': 'node_modules/sql.js/dist/',
+        net: resolvePath(__dirname, 'src/shims/net.ts'),
+        tls: resolvePath(__dirname, 'src/shims/tls.ts'),
+      },
+      // Tell Vite/rollup resolver to choose "browser" export variants
+      conditions: ['module', 'import', 'default'],
+    },
+    optimizeDeps: {
+      // Make sure esbuild also uses browser conditions during prebundle
+      include: ['@electrum-cash/network', '@electrum-cash/web-socket'],
+      esbuildOptions: {
+        conditions: BROWSER_CONDITIONS,
+        mainFields: ['browser', 'module', 'main'],
+      },
+      exclude: [
+        'vite-plugin-node-polyfills_shims_buffer.js',
+        'react.js',
+        '@cashscript_utils.js',
+        'electrum-cash.js',
+        '@bitauth_libauth.js',
+        'reselect.js',
+        '@electrum-cash/network',
+        '@electrum-cash/web-socket',
       ],
+    },
+    build: {
+      // IMPORTANT: remove node targets so the toolchain doesn’t prefer Node builds
+      target: ['es2020', 'chrome87', 'safari14', 'firefox78', 'edge88'],
       sourcemap: true,
       rollupOptions: {
         output: {
-          manualChunks: {
-            'sql-wasm': ['sql.js'],
-          },
+          manualChunks: { 'sql-wasm': ['sql.js'] },
         },
       },
     },
-    // vite.config.ts — keep everything else the same above/below
-    // vite.config.ts (only server + preview shown)
     server: {
       mimeTypes: {
         'application/wasm': ['wasm'],
@@ -48,7 +71,6 @@ export default defineConfig(({ mode }) => {
       },
       fs: { allow: ['..'] },
       proxy: {
-        // CoinGecko (FREE/DEMO): public host + demo header
         '/coingecko': {
           target: 'https://api.coingecko.com',
           changeOrigin: true,
@@ -57,8 +79,6 @@ export default defineConfig(({ mode }) => {
             ? { 'x-cg-demo-api-key': CG_KEY, accept: 'application/json' }
             : { accept: 'application/json' },
         },
-
-        // CoinCap (FREE): public host; key optional
         '/coincap': {
           target: 'https://api.coincap.io',
           changeOrigin: true,
@@ -70,8 +90,6 @@ export default defineConfig(({ mode }) => {
               }
             : { accept: 'application/json' },
         },
-
-        // CryptoAPIs: most market-data return 401/402 on free; inject if you have a key
         '/cryptoapi': {
           target: 'https://rest.cryptoapis.io',
           changeOrigin: true,
@@ -82,7 +100,6 @@ export default defineConfig(({ mode }) => {
         },
       },
     },
-    // Make preview behave like dev (so proxy also works with `vite preview`)
     preview: {
       proxy: {
         '/coingecko': {
@@ -113,21 +130,6 @@ export default defineConfig(({ mode }) => {
             : { accept: 'application/json' },
         },
       },
-    },
-    resolve: {
-      alias: {
-        '/node_modules/sql.js/dist/': 'node_modules/sql.js/dist/',
-      },
-    },
-    optimizeDeps: {
-      exclude: [
-        'vite-plugin-node-polyfills_shims_buffer.js',
-        'react.js',
-        '@cashscript_utils.js',
-        'electrum-cash.js',
-        '@bitauth_libauth.js',
-        'reselect.js',
-      ],
     },
     logLevel: 'error',
   };
