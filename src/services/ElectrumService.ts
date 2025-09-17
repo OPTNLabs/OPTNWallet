@@ -91,6 +91,7 @@ const ElectrumService = {
   /** Fetch UTXOs for an address */
   async getUTXOs(address: string): Promise<UTXO[]> {
     const server = ElectrumServer();
+    console.log("request address:", address)
     try {
       const UTXOs: RequestResponse = await server.request(
         'blockchain.address.listunspent',
@@ -183,6 +184,7 @@ const ElectrumService = {
   /** Subscribe to address status updates */
   async subscribeAddress(address: string, callback: (status: string) => void) {
     const server = ElectrumServer();
+    console.log("subscribe address:", address)
     try {
       // Initial status comes back from subscribe; notifications arrive later
       await server.subscribe('blockchain.address.subscribe', [address]);
