@@ -202,119 +202,119 @@ const Home: React.FC = () => {
   }, [location, keyPairs, fetchAndStoreUTXOs]);
 
   // 🔔 helper to notify on newly-seen UTXOs (not on baseline/initial state)
-  const notifyNewUtxos = useCallback(
-    async (address: string, oldSet: Set<string>, freshlyFetched: any[]) => {
-      // const freshSet = new Set(
-      //   freshlyFetched.map((u: any) => `${u.tx_hash}:${u.tx_pos}`)
-      // );
-      const newOnes = freshlyFetched.filter(
-        (u: any) => !oldSet.has(`${u.tx_hash}:${u.tx_pos}`)
-      );
-      if (newOnes.length === 0) return;
+  // const notifyNewUtxos = useCallback(
+  //   async (address: string, oldSet: Set<string>, freshlyFetched: any[]) => {
+  //     // const freshSet = new Set(
+  //     //   freshlyFetched.map((u: any) => `${u.tx_hash}:${u.tx_pos}`)
+  //     // );
+  //     const newOnes = freshlyFetched.filter(
+  //       (u: any) => !oldSet.has(`${u.tx_hash}:${u.tx_pos}`)
+  //     );
+  //     if (newOnes.length === 0) return;
 
-      // One notification per UTXO (or you can batch them)
-      for (const u of newOnes) {
-        try {
-          const id = Math.floor(Date.now() % 2147483647);
-          await LocalNotifications.schedule({
-            notifications: [
-              {
-                id,
-                title: 'Funds received',
-                body: `${u.value ?? 0} sats to ${address.slice(0, 10)}…`,
-                channelId: 'utxo',
-                extra: { address, txid: u.tx_hash, value: u.value ?? 0 },
-              },
-            ],
-          });
-        } catch (e) {
-          console.warn('Local notification failed:', e);
-        }
-      }
+  //     // One notification per UTXO (or you can batch them)
+  //     for (const u of newOnes) {
+  //       try {
+  //         const id = Math.floor(Date.now() % 2147483647);
+  //         await LocalNotifications.schedule({
+  //           notifications: [
+  //             {
+  //               id,
+  //               title: 'Funds received',
+  //               body: `${u.value ?? 0} sats to ${address.slice(0, 10)}…`,
+  //               channelId: 'utxo',
+  //               extra: { address, txid: u.tx_hash, value: u.value ?? 0 },
+  //             },
+  //           ],
+  //         });
+  //       } catch (e) {
+  //         console.warn('Local notification failed:', e);
+  //       }
+  //     }
 
-      // Update the ref baseline for this address
-      const baseline = new Map(Object.entries(utxosRef.current));
-      baseline.set(address, freshlyFetched);
-      utxosRef.current = Object.fromEntries(baseline.entries()) as any;
-    },
-    []
-  );
+  //     // Update the ref baseline for this address
+  //     const baseline = new Map(Object.entries(utxosRef.current));
+  //     baseline.set(address, freshlyFetched);
+  //     utxosRef.current = Object.fromEntries(baseline.entries()) as any;
+  //   },
+  //   []
+  // );
 
   // ---- Electrum subscriptions: headers + per-address status ----
   // We intentionally DO NOT unsubscribe on unmount so the app keeps listening.
-  useEffect(() => {
-    if (!IsInitialized || keyPairs.length === 0 || !currentWalletId) return;
-    const addrs = keyPairs.map((k: any) => k.address).filter(Boolean);
+  // useEffect(() => {
+  //   if (!IsInitialized || keyPairs.length === 0 || !currentWalletId) return;
+  //   const addrs = keyPairs.map((k: any) => k.address).filter(Boolean);
 
-    // Subscribe to new block headers; refresh confirmations for all addresses
-    (async () => {
-      try {
-        await ElectrumService.subscribeBlockHeaders(async (_header: any) => {
-          for (const addr of addrs) {
-            try {
-              const utxos = await ElectrumService.getUTXOs(addr);
-              dispatch(updateUTXOsForAddress({ address: addr, utxos }));
-            } catch (e) {
-              console.error('UTXO refresh on new block failed for', addr, e);
-            }
-          }
-          try {
-            await DatabaseService().saveDatabaseToFile();
-          } catch {}
-        });
-      } catch (e) {
-        console.error('subscribeBlockHeaders failed:', e);
-      }
-    })();
+  //   // Subscribe to new block headers; refresh confirmations for all addresses
+  //   (async () => {
+  //     try {
+  //       await ElectrumService.subscribeBlockHeaders(async (_header: any) => {
+  //         for (const addr of addrs) {
+  //           try {
+  //             const utxos = await ElectrumService.getUTXOs(addr);
+  //             dispatch(updateUTXOsForAddress({ address: addr, utxos }));
+  //           } catch (e) {
+  //             console.error('UTXO refresh on new block failed for', addr, e);
+  //           }
+  //         }
+  //         try {
+  //           await DatabaseService().saveDatabaseToFile();
+  //         } catch {}
+  //       });
+  //     } catch (e) {
+  //       console.error('subscribeBlockHeaders failed:', e);
+  //     }
+  //   })();
 
-    // Subscribe to each address once; on each status change, pull UTXOs and notify on *new* UTXOs only
-    (async () => {
-      for (const addr of addrs) {
-        if (__subscribedAddresses.has(addr)) continue;
-        __subscribedAddresses.add(addr);
+  //   // Subscribe to each address once; on each status change, pull UTXOs and notify on *new* UTXOs only
+  //   (async () => {
+  //     for (const addr of addrs) {
+  //       if (__subscribedAddresses.has(addr)) continue;
+  //       __subscribedAddresses.add(addr);
 
-        // Establish an initial baseline (avoid spamming for existing UTXOs)
-        try {
-          const baseline = await ElectrumService.getUTXOs(addr);
-          dispatch(updateUTXOsForAddress({ address: addr, utxos: baseline }));
-          const m = new Map(Object.entries(utxosRef.current));
-          m.set(addr, baseline);
-          utxosRef.current = Object.fromEntries(m.entries()) as any;
-        } catch (e) {
-          console.warn('Baseline UTXOs failed for', addr, e);
-        }
+  //       // Establish an initial baseline (avoid spamming for existing UTXOs)
+  //       try {
+  //         const baseline = await ElectrumService.getUTXOs(addr);
+  //         dispatch(updateUTXOsForAddress({ address: addr, utxos: baseline }));
+  //         const m = new Map(Object.entries(utxosRef.current));
+  //         m.set(addr, baseline);
+  //         utxosRef.current = Object.fromEntries(m.entries()) as any;
+  //       } catch (e) {
+  //         console.warn('Baseline UTXOs failed for', addr, e);
+  //       }
 
-        try {
-          await ElectrumService.subscribeAddress(
-            addr,
-            async (_status: string) => {
-              try {
-                // Old set (baseline) from ref:
-                const old = utxosRef.current?.[addr] ?? [];
-                const oldSet = new Set(
-                  old.map((u: any) => `${u.tx_hash}:${u.tx_pos}`)
-                );
+  //       try {
+  //         await ElectrumService.subscribeAddress(
+  //           addr,
+  //           async (_status: string) => {
+  //             try {
+  //               // Old set (baseline) from ref:
+  //               const old = utxosRef.current?.[addr] ?? [];
+  //               const oldSet = new Set(
+  //                 old.map((u: any) => `${u.tx_hash}:${u.tx_pos}`)
+  //               );
 
-                // Fetch latest, update store
-                const utxos = await ElectrumService.getUTXOs(addr);
-                dispatch(updateUTXOsForAddress({ address: addr, utxos }));
-                try {
-                  await DatabaseService().saveDatabaseToFile();
-                } catch {}
+  //               // Fetch latest, update store
+  //               const utxos = await ElectrumService.getUTXOs(addr);
+  //               dispatch(updateUTXOsForAddress({ address: addr, utxos }));
+  //               try {
+  //                 await DatabaseService().saveDatabaseToFile();
+  //               } catch {}
 
-                // 🔔 notify only for newly seen UTXOs
-                await notifyNewUtxos(addr, oldSet, utxos);
-              } catch (e) {
-                console.error('subscribeAddress update failed for', addr, e);
-              }
-            }
-          );
-        } catch (e) {
-          console.error('subscribeAddress failed for', addr, e);
-        }
-      }
-    })();
-  }, [IsInitialized, keyPairs, currentWalletId, dispatch, notifyNewUtxos]);
+  //               // 🔔 notify only for newly seen UTXOs
+  //               await notifyNewUtxos(addr, oldSet, utxos);
+  //             } catch (e) {
+  //               console.error('subscribeAddress update failed for', addr, e);
+  //             }
+  //           }
+  //         );
+  //       } catch (e) {
+  //         console.error('subscribeAddress failed for', addr, e);
+  //       }
+  //     }
+  //   })();
+  // }, [IsInitialized, keyPairs, currentWalletId, dispatch, notifyNewUtxos]);
 
   // Preload token metadata
   useEffect(() => {
