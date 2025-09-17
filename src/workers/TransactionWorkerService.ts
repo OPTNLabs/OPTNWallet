@@ -4,8 +4,10 @@ import TransactionManager from '../apis/TransactionManager/TransactionManager';
 import { store } from '../redux/store';
 import { addTransactions } from '../redux/transactionSlice';
 import { INTERVAL } from '../utils/constants';
+import { requestUTXORefreshFor } from './UTXOWorkerService';
 
 let transactionInterval: NodeJS.Timeout | null = null;
+let transactionStartRetry: NodeJS.Timeout | null = null;
 
 async function fetchAndStoreTransactionHistory() {
   const state = store.getState();
@@ -13,7 +15,7 @@ async function fetchAndStoreTransactionHistory() {
   const transactionManager = TransactionManager();
 
   if (!currentWalletId) {
-    console.error('Missing wallet ID');
+    // Wallet not ready yet; just skip quietly.
     return;
   }
 
@@ -21,7 +23,7 @@ async function fetchAndStoreTransactionHistory() {
     // Retrieve key pairs for addresses associated with the wallet
     const keyPairs = await KeyService.retrieveKeys(currentWalletId);
     if (!keyPairs || keyPairs.length === 0) {
-      console.error('No key pairs found for wallet ID:', currentWalletId);
+      // Keys not ready yet; skip quietly.
       return;
     }
 
@@ -43,38 +45,72 @@ async function fetchAndStoreTransactionHistory() {
           })
         );
       }
-    }
 
-    // console.log(
-    //   `Fetched and stored transaction history for wallet ID ${currentWalletId}`
-    // );
+      // Ask UTXO worker to refresh this address (keeps UTXO set in sync)
+      requestUTXORefreshFor(address, 60);
+    }
   } catch (error) {
     console.error('Error fetching and storing transaction history:', error);
   }
 }
 
-function startTransactionWorker() {
-  const state = store.getState();
-  const IsInitialized = state.utxos.initialized;
+async function walletReady(): Promise<boolean> {
+  const { wallet_id } = store.getState();
+  const currentWalletId = wallet_id.currentWalletId;
+  if (!currentWalletId) return false;
 
-  if (!transactionInterval) {
-    // Fetch transaction history immediately after worker starts if not initialized
-    if (!IsInitialized) {
-      fetchAndStoreTransactionHistory();
-    }
-    // Fetch transaction history at defined intervals
-    transactionInterval = setInterval(
-      fetchAndStoreTransactionHistory,
-      INTERVAL
-    );
+  try {
+    const keys = await KeyService.retrieveKeys(currentWalletId);
+    return Array.isArray(keys) && keys.length > 0;
+  } catch {
+    return false;
   }
 }
 
+function startTransactionWorker() {
+  if (transactionInterval) return;
+
+  // Defer starting until wallet + keys are available
+  const tryStart = async () => {
+    if (!(await walletReady())) {
+      if (!transactionStartRetry) {
+        transactionStartRetry = setTimeout(tryStart, 500);
+      } else {
+        // Re-arm
+        clearTimeout(transactionStartRetry);
+        transactionStartRetry = setTimeout(tryStart, 500);
+      }
+      return;
+    }
+
+    // Ready: clear any pending retry
+    if (transactionStartRetry) {
+      clearTimeout(transactionStartRetry);
+      transactionStartRetry = null;
+    }
+
+    const { utxos } = store.getState();
+    if (!utxos.initialized) {
+      // Initial catch-up once
+      fetchAndStoreTransactionHistory();
+    }
+
+    // Then poll at interval
+    transactionInterval = setInterval(fetchAndStoreTransactionHistory, INTERVAL);
+  };
+
+  // Kick the first attempt
+  tryStart();
+}
+
 function stopTransactionWorker() {
+  if (transactionStartRetry) {
+    clearTimeout(transactionStartRetry);
+    transactionStartRetry = null;
+  }
   if (transactionInterval) {
     clearInterval(transactionInterval);
     transactionInterval = null;
-    // console.log('Transaction Worker stopped');
   }
 }
 

@@ -41,6 +41,11 @@ import {
 import AvailableUTXOsDisplay from '../components/transaction/AvailableUTXOsDisplay';
 import ContractManager from '../apis/ContractManager/ContractManager';
 import { SATSINBITCOIN } from '../utils/constants';
+// import {
+//   optimisticRemoveSpentByOutpoints,
+//   requestUTXORefreshForMany,
+// } from '../workers/UTXOWorkerService';
+
 
 const Transaction: React.FC = () => {
   // Removed local walletId state
@@ -104,6 +109,17 @@ const Transaction: React.FC = () => {
     undefined
   );
 
+  // const spentOutpoints = useMemo(
+  //   () =>
+  //     selectedUtxos.map(u => ({ tx_hash: u.tx_hash, tx_pos: u.tx_pos })),
+  //   [selectedUtxos]
+  // );
+
+  // const touchedAddresses = useMemo(
+  //   () => Array.from(new Set(selectedUtxos.map(u => u.address))).filter(Boolean),
+  //   [selectedUtxos]
+  // );
+
   // const navigate = useNavigate();
   const dispatch: AppDispatch = useDispatch();
 
@@ -147,21 +163,22 @@ const Transaction: React.FC = () => {
     setErrorMessage
   );
 
-  // Use useEffect to set the walletId if not set
   // useEffect(() => {
-  //   if (walletId === 0) {
-  //     // assuming 0 is invalid, initial value
-  //     const fetchWalletId = async () => {
-  //       // TODO: Implement actual logic to get active wallet ID
-  //       const activeWalletId = 1;
-  //       dispatch(setWalletId(activeWalletId));
-  //       // console.log('Wallet ID set to:', activeWalletId);
-  //       // dispatch(clearTransaction());
-  //     };
+  //   // Treat a 64-hex txid (or whenever your UI toggles showTxIdPopup) as success
+  //   const looksLikeTxId = /^[0-9a-f]{64}$/i.test(transactionId);
+  //   if (!looksLikeTxId) return;
 
-  //     fetchWalletId();
-  //   }
-  // }, [dispatch, walletId]);
+  //   // 1) Drop the inputs we just spent (immediate UI correctness)
+  //   optimisticRemoveSpentByOutpoints(spentOutpoints);
+
+  //   // 2) Force a canonical refresh for all touched addresses
+  //   requestUTXORefreshForMany(touchedAddresses, 0);
+
+  //   // (Optional) you could also clear local selection here if you want:
+  //   // setSelectedUtxos([]);
+  //   // setSelectedAddresses(prev => prev.filter(a => !touchedAddresses.includes(a)));
+  // }, [transactionId, spentOutpoints, touchedAddresses]);
+
 
   /**
    * Handle the selection and deselection of UTXOs.

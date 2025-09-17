@@ -1,7 +1,7 @@
 // src/App.tsx
 import { Routes, Route, Navigate, useLocation } from 'react-router-dom';
 import { useDispatch, useSelector } from 'react-redux';
-import { useEffect } from 'react';
+import { useEffect, useRef } from 'react';
 import { LocalNotifications } from '@capacitor/local-notifications';
 import Layout from './components/Layout';
 import RootHandler from './pages/RootHandler';
@@ -24,6 +24,7 @@ import {
 } from './workers/TransactionWorkerService';
 import CampaignDetail from './pages/apps/utils/CampaignDetail';
 import { initWalletConnect } from './redux/walletconnectSlice';
+import { clearNotifications } from './redux/notificationsSlice';
 import { usePrices } from './hooks/usePrices';
 import { SignTransactionModal } from './components/walletconnect/SignTransactionModal';
 import { SignMessageModal } from './components/walletconnect/SignMessageModal';
@@ -40,6 +41,8 @@ function App() {
   const walletId = useSelector(
     (state: RootState) => state.wallet_id.currentWalletId
   );
+  const utxoQueue = useSelector((s: RootState) => s.notifications.queue);
+  const notified = useRef<Set<string>>(new Set());
   const location = useLocation();
 
   // 1) Initialize WalletConnect once
@@ -66,6 +69,44 @@ function App() {
       }
     })();
   }, []);
+
+  // 🔔 Bridge in-app queue -> OS notifications
+  useEffect(() => {
+    (async () => {
+      for (const n of utxoQueue) {
+        if (notified.current.has(n.id)) continue;
+
+        // Capacitor requires a numeric id; derive a stable-ish one
+        const numericId =
+          Math.abs([...n.id].reduce((a, c) => ((a << 5) - a + c.charCodeAt(0)) | 0, 0)) % 2147483647;
+
+        try {
+          await LocalNotifications.schedule({
+            notifications: [
+              {
+                id: numericId,
+                title: 'Funds received',
+                body: `${n.value ?? 0} sats to ${n.address.slice(0, 10)}…`,
+                channelId: 'utxo',
+                extra: { address: n.address, txid: n.txid, value: n.value ?? 0 },
+              },
+            ],
+          });
+        } catch (e) {
+          console.warn('Local notification schedule failed:', e);
+        }
+        notified.current.add(n.id);
+      }
+    })();
+  }, [utxoQueue]);
+
+  // Optional: clear queue on wallet switch to avoid showing stale toasts
+  useEffect(() => {
+    if (walletId !== 1) {
+      dispatch(clearNotifications());
+      notified.current.clear();
+    }
+  }, [walletId, dispatch]);
 
   // 3) Start/stop workers based on walletId
   useEffect(() => {

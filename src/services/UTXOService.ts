@@ -1,3 +1,4 @@
+// src/services/UTXOService.ts
 import ElectrumService from './ElectrumService';
 import UTXOManager from '../apis/UTXOManager/UTXOManager';
 import AddressManager from '../apis/AddressManager/AddressManager';
@@ -7,9 +8,15 @@ import { Network } from '../redux/networkSlice';
 import { store } from '../redux/store';
 import { removeUTXOs, setUTXOs } from '../redux/utxoSlice';
 
-const state = store.getState();
-const prefix =
-  state.network.currentNetwork === Network.MAINNET ? 'bitcoincash' : 'bchtest';
+function getPrefix(): string {
+  try {
+    const state = store.getState();
+    return state.network.currentNetwork === Network.MAINNET ? 'bitcoincash' : 'bchtest';
+  } catch {
+    // Fallback if store isn't ready (should be rare)
+    return 'bitcoincash';
+  }
+}
 
 const UTXOService = {
   async fetchAndStoreUTXOs(walletId: number, address: string): Promise<UTXO[]> {
@@ -19,55 +26,38 @@ const UTXOService = {
 
       // Fetch UTXOs from Electrum
       const fetchedUTXOs = await ElectrumService.getUTXOs(address);
-      // console.log(`[UTXOService] Fetched UTXOs for address ${address}:`, fetchedUTXOs);
 
-      // Fetch and store BCMR metadata for token categories
+      // Fetch and attach BCMR metadata…
       const bcmrService = new BcmrService();
       const uniqueCategories = new Set<string>();
       for (const utxo of fetchedUTXOs) {
-        if (utxo.token && utxo.token.category) {
-          uniqueCategories.add(utxo.token.category);
-        }
+        if (utxo.token?.category) uniqueCategories.add(utxo.token.category);
       }
-      // console.log(`[UTXOService] Unique token categories:`, Array.from(uniqueCategories));
-
       if (uniqueCategories.size > 0) {
-        try {
-          // Fetch metadata for each category, allowing partial failures
-          const metadataResults = await Promise.all(
-            Array.from(uniqueCategories).map(async (category) => {
-              try {
-                await bcmrService.resolveIdentityRegistry(category);
-                const metadata = await bcmrService.getSnapshot(category);
-                // console.log(`[UTXOService] Metadata for category ${category}:`, metadata);
-                return { category, metadata };
-              } catch (error) {
-                // console.error(`[UTXOService] Error fetching metadata for category ${category}:`, error);
-                return { category, metadata: null };
-              }
-            })
-          );
-
-          // Attach metadata to UTXOs
-          for (const utxo of fetchedUTXOs) {
-            if (utxo.token && utxo.token.category) {
-              const result = metadataResults.find((r) => r.category === utxo.token.category);
-              if (result?.metadata) {
-                utxo.token.BcmrTokenMetadata = result.metadata;
-              }
+        const metadataResults = await Promise.all(
+          [...uniqueCategories].map(async (category) => {
+            try {
+              await bcmrService.resolveIdentityRegistry(category);
+              const metadata = await bcmrService.getSnapshot(category);
+              return { category, metadata };
+            } catch {
+              return { category, metadata: null };
             }
+          })
+        );
+        for (const utxo of fetchedUTXOs) {
+          if (utxo.token?.category) {
+            const res = metadataResults.find((r) => r.category === utxo.token!.category);
+            if (res?.metadata) utxo.token.BcmrTokenMetadata = res.metadata;
           }
-          // console.log(`[UTXOService] UTXOs with attached BCMR metadata:`, fetchedUTXOs);
-        } catch (error) {
-          console.error('[UTXOService] Error processing BCMR metadata:', error);
         }
       }
 
-      // Fetch tokenAddress
+      // Token address & network prefix
       const tokenAddress = await addressManager.fetchTokenAddress(walletId, address);
-      // console.log(`[UTXOService] Token address for ${address}:`, tokenAddress);
+      const prefix = getPrefix(); // <-- use lazy getter
 
-      // Format UTXOs for storage
+      // Format for storage
       const formattedUTXOs = fetchedUTXOs.map((utxo: UTXO) => ({
         tx_hash: utxo.tx_hash,
         tx_pos: utxo.tx_pos,
@@ -76,38 +66,26 @@ const UTXOService = {
         address,
         height: utxo.height,
         prefix,
-        token: utxo.token, // Includes BcmrTokenMetadata if present
+        token: utxo.token,
         wallet_id: walletId,
         tokenAddress: tokenAddress || undefined,
       }));
-      // console.log(`[UTXOService] Formatted UTXOs with metadata for storage:`, formattedUTXOs);
 
-      // Fetch existing UTXOs from the database
+      // Diff against DB and delete removed ones
       const existingUTXOs = await manager.fetchUTXOsByAddress(walletId, address);
-      // console.log(`[UTXOService] Existing UTXOs in database:`, existingUTXOs);
-
-      // Identify outdated UTXOs to delete
-      const fetchedUTXOKeys = new Set(
-        fetchedUTXOs.map((utxo) => `${utxo.tx_hash}-${utxo.tx_pos}`)
-      );
+      const fetchedKeys = new Set(formattedUTXOs.map((u) => `${u.tx_hash}-${u.tx_pos}`));
       const utxosToDelete = existingUTXOs.filter(
-        (utxo) => !fetchedUTXOKeys.has(`${utxo.tx_hash}-${utxo.tx_pos}`)
+        (u) => !fetchedKeys.has(`${u.tx_hash}-${u.tx_pos}`)
       );
-
       if (utxosToDelete.length > 0) {
         await manager.deleteUTXOs(walletId, utxosToDelete);
         store.dispatch(removeUTXOs({ address, utxosToRemove: utxosToDelete }));
-        // console.log(`[UTXOService] Deleted outdated UTXOs:`, utxosToDelete);
       }
 
-      // Store new UTXOs
+      // Store and update Redux
       await manager.storeUTXOs(formattedUTXOs);
-      // console.log(`[UTXOService] Stored UTXOs in database`);
-
-      // Update Redux store with the new UTXOs
       const updatedUTXOs = await manager.fetchUTXOsByAddress(walletId, address);
       store.dispatch(setUTXOs({ newUTXOs: { [address]: updatedUTXOs } }));
-      // console.log(`[UTXOService] Updated Redux with UTXOs:`, updatedUTXOs);
 
       return updatedUTXOs;
     } catch (error) {
@@ -122,8 +100,7 @@ const UTXOService = {
   }> {
     try {
       const manager = await UTXOManager();
-      const result = await manager.fetchUTXOsFromDatabase(keyPairs);
-      return result;
+      return await manager.fetchUTXOsFromDatabase(keyPairs);
     } catch (error) {
       console.error('Error fetching UTXOs from database:', error);
       return { utxosMap: {}, cashTokenUtxosMap: {} };

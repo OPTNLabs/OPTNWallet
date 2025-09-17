@@ -108,17 +108,23 @@ async function wireNotificationsOnce(client: ElectrumClient) {
 
 async function resubscribeAll() {
   if (!electrum) return;
+
   for (const { method, params } of activeSubs.values()) {
     try {
-      await electrum.subscribe(
-        method,
-        params && params.length ? params : undefined
-      );
+      if (!params || params.length === 0) {
+        await electrum.subscribe(method); // no arg at all
+      } else if (params.length === 1) {
+        await electrum.subscribe(method, params[0]); // pass the single value
+      } else {
+        // If a method ever needs >1 args, go through request()
+        await electrum.request(method, ...params);
+      }
     } catch {
-      // best-effort; continue
+      // best-effort; keep going
     }
   }
 }
+
 
 // ---------- API ----------
 export default function ElectrumServer() {
@@ -241,24 +247,30 @@ export default function ElectrumServer() {
    *   subscribe('blockchain.address.subscribe', 'bitcoincash:qq...')   // address activity (Electrum Cash)
    */
   async function subscribe(method: string, params?: any[]): Promise<void> {
-    await electrumConnect();
-    const key = subKey(method, params);
-    try {
-      await electrum.subscribe(
-        method,
-        params && params.length ? params : undefined
-      );
-      activeSubs.set(key, { method, params });
-    } catch {
-      await electrumDisconnect();
-      await electrumConnect();
-      await electrum.subscribe(
-        method,
-        params && params.length ? params : undefined
-      );
-      activeSubs.set(key, { method, params });
+  await electrumConnect();
+  const key = subKey(method, params);
+
+  const doSubscribe = async () => {
+    if (!params || params.length === 0) {
+      await electrum!.subscribe(method);
+    } else if (params.length === 1) {
+      await electrum!.subscribe(method, params[0]);
+    } else {
+      await electrum!.request(method, ...params);
     }
+  };
+
+  try {
+    await doSubscribe();
+    activeSubs.set(key, { method, params });
+  } catch {
+    await electrumDisconnect();
+    await electrumConnect();
+    await doSubscribe();
+    activeSubs.set(key, { method, params });
   }
+}
+
 
   /**
    * Unsubscribe:

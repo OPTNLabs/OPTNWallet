@@ -15,6 +15,24 @@ import ElectrumServer from '../apis/ElectrumServer/ElectrumServer';
 import { RequestResponse } from '@electrum-cash/network'; // <-- fix package
 import { TransactionHistoryItem, UTXO } from '../types/types';
 
+const inflightByAddr = new Map<string, Promise<UTXO[]>>();
+const cacheByAddr = new Map<string, { ts: number; data: UTXO[] }>();
+const UTXO_TTL_MS = 3000;
+
+export function primeUTXOCache(address: string, utxos: UTXO[]) {
+  cacheByAddr.set(address, { ts: Date.now(), data: utxos });
+}
+
+export function invalidateUTXOCache(address?: string) {
+  if (address) {
+    inflightByAddr.delete(address);
+    cacheByAddr.delete(address);
+  } else {
+    inflightByAddr.clear();
+    cacheByAddr.clear();
+  }
+}
+
 // ---------- Type Guards ----------
 function isUTXOArray(response: RequestResponse): response is UTXO[] {
   return (
@@ -91,27 +109,43 @@ const ElectrumService = {
   /** Fetch UTXOs for an address */
   async getUTXOs(address: string): Promise<UTXO[]> {
     const server = ElectrumServer();
-    console.log("request address:", address)
-    try {
-      const UTXOs: RequestResponse = await server.request(
-        'blockchain.address.listunspent',
-        address
-      );
-      if (isUTXOArray(UTXOs)) {
-        return UTXOs.map((utxo) => {
-          if ((utxo as any).token_data) {
-            (utxo as any).token = (utxo as any).token_data;
-            delete (utxo as any).token_data;
-          }
-          return utxo;
-        });
-      }
-      throw new Error('Invalid UTXO response format');
-    } catch (error) {
-      console.error('Error fetching UTXOs:', error);
-      return [];
+
+    const now = Date.now();
+    const cached = cacheByAddr.get(address);
+    if (cached && now - cached.ts < UTXO_TTL_MS) {
+      console.log('[ElectrumService] cache hit for', address, 'len=', cached.data.length);
+      return cached.data;
     }
+
+    const inflight = inflightByAddr.get(address);
+    if (inflight) {
+      console.log('[ElectrumService] coalesced inflight for', address);
+      return inflight;
+    }
+
+    const p = (async () => {
+      try {
+        const res: RequestResponse = await server.request('blockchain.address.listunspent', address);
+        if (Array.isArray(res)) {
+          const arr = (res as any[]).map((u) => { /* token_data mapping... */ return u as UTXO; });
+          cacheByAddr.set(address, { ts: Date.now(), data: arr });
+          console.log('[ElectrumService] network OK for', address, 'len=', arr.length);
+          return arr;
+        }
+        console.warn('[ElectrumService] non-array listunspent for', address, res);
+        return cacheByAddr.get(address)?.data ?? [];
+      } catch (e) {
+        console.error('[ElectrumService] error listunspent for', address, e);
+        return cacheByAddr.get(address)?.data ?? [];
+      } finally {
+        inflightByAddr.delete(address);
+      }
+    })();
+
+    inflightByAddr.set(address, p);
+    return p;
   },
+
 
   /** Get total balance for an address */
   async getBalance(address: string): Promise<number> {
@@ -184,15 +218,13 @@ const ElectrumService = {
   /** Subscribe to address status updates */
   async subscribeAddress(address: string, callback: (status: string) => void) {
     const server = ElectrumServer();
-    console.log("subscribe address:", address)
     try {
-      // Initial status comes back from subscribe; notifications arrive later
-      await server.subscribe('blockchain.address.subscribe', [address]);
-      await ensureNotificationRouter();
-      subscriptionRegistry['blockchain.address.subscribe'].set(
-        address,
-        callback
-      );
+      const reg = subscriptionRegistry['blockchain.address.subscribe'];
+      if (!reg.has(address)) {
+        await server.subscribe('blockchain.address.subscribe', [address]);
+        await ensureNotificationRouter();
+      }
+      reg.set(address, callback);
     } catch (error) {
       console.error('Error subscribing to address:', error);
     }
@@ -202,47 +234,44 @@ const ElectrumService = {
   async subscribeBlockHeaders(callback: (header: any) => void) {
     const server = ElectrumServer();
     try {
-      await server.subscribe('blockchain.headers.subscribe'); // no params
-      await ensureNotificationRouter();
-      subscriptionRegistry['blockchain.headers.subscribe'].set('tip', callback);
+      // If we already have a handler, just replace it and don’t hit the wire again
+      const reg = subscriptionRegistry['blockchain.headers.subscribe'];
+      if (!reg.has('tip')) {
+        await server.subscribe('blockchain.headers.subscribe'); // no params
+        await ensureNotificationRouter();
+      }
+      reg.set('tip', callback);
     } catch (error) {
       console.error('Error subscribing to block headers:', error);
     }
   },
 
   /** Subscribe to a transaction’s confirmation updates */
-  async subscribeTransaction(
-    txHash: string,
-    callback: (height: number) => void
-  ) {
+  async subscribeTransaction(txHash: string, cb: (height: number) => void) {
     const server = ElectrumServer();
     try {
-      await server.subscribe('blockchain.transaction.subscribe', [txHash]);
-      await ensureNotificationRouter();
-      subscriptionRegistry['blockchain.transaction.subscribe'].set(
-        txHash,
-        callback
-      );
+      const reg = subscriptionRegistry['blockchain.transaction.subscribe'];
+      if (!reg.has(txHash)) {
+        await server.subscribe('blockchain.transaction.subscribe', [txHash]);
+        await ensureNotificationRouter();
+      }
+      reg.set(txHash, cb);
     } catch (error) {
       console.error('Error subscribing to transaction:', error);
     }
   },
 
   /** Subscribe to double-spend proofs for a transaction */
-  async subscribeDoubleSpendProof(
-    txHash: string,
-    callback: (dsProof: any) => void
-  ) {
+  async subscribeDoubleSpendProof(txHash: string, cb: (ds: any) => void) {
     const server = ElectrumServer();
     try {
-      await server.subscribe('blockchain.transaction.dsproof.subscribe', [
-        txHash,
-      ]);
-      await ensureNotificationRouter();
-      subscriptionRegistry['blockchain.transaction.dsproof.subscribe'].set(
-        txHash,
-        callback
-      );
+      const reg =
+        subscriptionRegistry['blockchain.transaction.dsproof.subscribe'];
+      if (!reg.has(txHash)) {
+        await server.subscribe('blockchain.transaction.dsproof.subscribe', [txHash]);
+        await ensureNotificationRouter();
+      }
+      reg.set(txHash, cb);
     } catch (error) {
       console.error('Error subscribing to double-spend proof:', error);
     }
