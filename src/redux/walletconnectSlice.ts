@@ -1,6 +1,6 @@
 // src/redux/walletconnectSlice.ts
 
-import 'dotenv/config';
+// import 'dotenv/config';
 import { createSlice, createAsyncThunk, PayloadAction } from '@reduxjs/toolkit';
 import {
   importWalletTemplate,
@@ -86,7 +86,7 @@ export const initWalletConnect = createAsyncThunk(
   async (_, { dispatch }) => {
     // console.log('[walletconnectSlice] initWalletConnect triggered');
 
-    const projectId = 'f62aa2bb589104d059ca7b5bb64b18fb';
+    const projectId = import.meta.env.VITE_WC_PROJECT_ID;
     // console.log('[walletconnectSlice] Using projectId:', projectId);
 
     const core = new Core({ projectId });

@@ -22,8 +22,9 @@ const notificationsSlice = createSlice({
   name: 'notifications',
   initialState,
   reducers: {
-    enqueueNotification: (state, action: PayloadAction<UtxoNotification>) => {
+    enqueueNotification: (state, action) => {
       state.queue.push(action.payload);
+      if (state.queue.length > 10) state.queue.shift(); // cap
     },
     dequeueNotification: (state, action: PayloadAction<{ id: string }>) => {
       state.queue = state.queue.filter((n) => n.id !== action.payload.id);

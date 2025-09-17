@@ -5,6 +5,10 @@ import { Token, TransactionOutput, UTXO } from '../types/types';
 import ContractManager from '../apis/ContractManager/ContractManager';
 import TransactionManager from '../apis/TransactionManager/TransactionManager';
 import KeyService from '../services/KeyService';
+import {
+  optimisticRemoveSpentByOutpoints,
+  requestUTXORefreshForMany,
+} from '../workers/UTXOWorkerService';
 
 /**
  * TransactionService encapsulates all transaction-related business logic.
@@ -244,11 +248,23 @@ class TransactionService {
    * @param rawTX - The raw transaction hex string.
    * @returns An object containing the transaction ID and any error message.
    */
-  async sendTransaction(rawTX: string): Promise<{
+  async sendTransaction(rawTX: string, spentInputs?: UTXO[]): Promise<{
     txid: string | null;
     errorMessage: string | null;
+    
   }> {
-    return await this.transactionManager.sendTransaction(rawTX);
+    const res = await this.transactionManager.sendTransaction(rawTX);
+
+    // If broadcast succeeded, optimistically drop spent UTXOs and refresh those addresses
+    if (res?.txid && spentInputs?.length) {
+      const outpoints = spentInputs.map(u => ({ tx_hash: u.tx_hash, tx_pos: u.tx_pos }));
+      optimisticRemoveSpentByOutpoints(outpoints);
+
+      const addrs = Array.from(new Set(spentInputs.map(u => u.address).filter(Boolean)));
+      requestUTXORefreshForMany(addrs, 0);
+    }
+
+    return res;
   }
 
   /**

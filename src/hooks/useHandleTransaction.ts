@@ -10,6 +10,7 @@ import {
 } from '../redux/transactionBuilderSlice';
 import { resetTransactions } from '../redux/transactionSlice';
 import { resetContract } from '../redux/contractSlice';
+import { optimisticRemoveSpentByOutpoints, requestUTXORefreshForMany } from '../workers/UTXOWorkerService';
 
 interface BuildTransactionResult {
   bytecodeSize: number;
@@ -140,20 +141,18 @@ const useHandleTransaction = (
   ) => {
     try {
       setLoading(true);
-      const transactionID = await TransactionService.sendTransaction(rawTX);
+      // ⬇️ pass selectedUtxos so the service can tell the worker what to prune/refresh
+      const transactionID = await TransactionService.sendTransaction(rawTX, selectedUtxos);
 
       if (transactionID.txid) {
         setTransactionId(transactionID.txid);
-        setShowTxIdPopup(true); // Trigger the popup
+        setShowTxIdPopup(true);
       }
 
       if (transactionID.errorMessage) {
         setErrorMessage(transactionID.errorMessage);
-        await Toast.show({
-          text: `Error: ${transactionID.errorMessage}`,
-        });
+        await Toast.show({ text: `Error: ${transactionID.errorMessage}` });
       } else {
-        // Reset both transaction and contract states if successful
         setRawTX('');
         dispatch(resetTransactions());
         dispatch(resetContract());
@@ -164,7 +163,7 @@ const useHandleTransaction = (
     } catch (error: any) {
       console.error('Error sending transaction:', error);
       setErrorMessage('Error sending transaction: ' + error.message);
-      setShowTxIdPopup(false); // Ensure popup is not shown on error
+      setShowTxIdPopup(false);
       setLoading(false);
       return { txid: null, errorMessage: error.message };
     }
