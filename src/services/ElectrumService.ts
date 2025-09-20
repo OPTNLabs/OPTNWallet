@@ -33,15 +33,15 @@ export function invalidateUTXOCache(address?: string) {
   }
 }
 
-// ---------- Type Guards ----------
-function isUTXOArray(response: RequestResponse): response is UTXO[] {
-  return (
-    Array.isArray(response) &&
-    response.every(
-      (item) => 'tx_hash' in item && 'height' in item && 'value' in item
-    )
-  );
-}
+// // ---------- Type Guards ----------
+// function isUTXOArray(response: RequestResponse): response is UTXO[] {
+//   return (
+//     Array.isArray(response) &&
+//     response.every(
+//       (item) => 'tx_hash' in item && 'height' in item && 'value' in item
+//     )
+//   );
+// }
 
 function isTransactionHistoryArray(
   response: RequestResponse
@@ -113,7 +113,12 @@ const ElectrumService = {
     const now = Date.now();
     const cached = cacheByAddr.get(address);
     if (cached && now - cached.ts < UTXO_TTL_MS) {
-      console.log('[ElectrumService] cache hit for', address, 'len=', cached.data.length);
+      console.log(
+        '[ElectrumService] cache hit for',
+        address,
+        'len=',
+        cached.data.length
+      );
       return cached.data;
     }
 
@@ -125,14 +130,28 @@ const ElectrumService = {
 
     const p = (async () => {
       try {
-        const res: RequestResponse = await server.request('blockchain.address.listunspent', address);
+        const res: RequestResponse = await server.request(
+          'blockchain.address.listunspent',
+          address
+        );
         if (Array.isArray(res)) {
-          const arr = (res as any[]).map((u) => { /* token_data mapping... */ return u as UTXO; });
+          const arr = (res as any[]).map((u) => {
+            /* token_data mapping... */ return u as UTXO;
+          });
           cacheByAddr.set(address, { ts: Date.now(), data: arr });
-          console.log('[ElectrumService] network OK for', address, 'len=', arr.length);
+          console.log(
+            '[ElectrumService] network OK for',
+            address,
+            'len=',
+            arr.length
+          );
           return arr;
         }
-        console.warn('[ElectrumService] non-array listunspent for', address, res);
+        console.warn(
+          '[ElectrumService] non-array listunspent for',
+          address,
+          res
+        );
         return cacheByAddr.get(address)?.data ?? [];
       } catch (e) {
         console.error('[ElectrumService] error listunspent for', address, e);
@@ -145,7 +164,6 @@ const ElectrumService = {
     inflightByAddr.set(address, p);
     return p;
   },
-
 
   /** Get total balance for an address */
   async getBalance(address: string): Promise<number> {
@@ -268,7 +286,9 @@ const ElectrumService = {
       const reg =
         subscriptionRegistry['blockchain.transaction.dsproof.subscribe'];
       if (!reg.has(txHash)) {
-        await server.subscribe('blockchain.transaction.dsproof.subscribe', [txHash]);
+        await server.subscribe('blockchain.transaction.dsproof.subscribe', [
+          txHash,
+        ]);
         await ensureNotificationRouter();
       }
       reg.set(txHash, cb);
