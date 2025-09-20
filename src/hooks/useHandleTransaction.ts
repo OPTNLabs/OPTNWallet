@@ -10,7 +10,7 @@ import {
 } from '../redux/transactionBuilderSlice';
 import { resetTransactions } from '../redux/transactionSlice';
 import { resetContract } from '../redux/contractSlice';
-import { optimisticRemoveSpentByOutpoints, requestUTXORefreshForMany } from '../workers/UTXOWorkerService';
+// import { optimisticRemoveSpentByOutpoints, requestUTXORefreshForMany } from '../workers/UTXOWorkerService';
 
 interface BuildTransactionResult {
   bytecodeSize: number;
@@ -36,7 +36,7 @@ const useHandleTransaction = (
   const handleBuildTransaction = async () => {
     if (selectedUtxos.length === 0) {
       setErrorMessage('No input selected');
-      setRawTX('')
+      setRawTX('');
       return;
     }
     // Calculate the sum of selected UTXOs as bigint
@@ -142,7 +142,10 @@ const useHandleTransaction = (
     try {
       setLoading(true);
       // ⬇️ pass selectedUtxos so the service can tell the worker what to prune/refresh
-      const transactionID = await TransactionService.sendTransaction(rawTX, selectedUtxos);
+      const transactionID = await TransactionService.sendTransaction(
+        rawTX,
+        selectedUtxos
+      );
 
       if (transactionID.txid) {
         setTransactionId(transactionID.txid);
