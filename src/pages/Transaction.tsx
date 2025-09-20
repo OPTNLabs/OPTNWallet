@@ -1,5 +1,3 @@
-// @ts-nocheck
-
 // src/pages/Transaction.tsx
 
 import React, { useEffect, useMemo, useState } from 'react';
@@ -38,14 +36,13 @@ import {
   // setWalletId,
   // selectNetworkType,
 } from '../redux/walletSlice';
-import AvailableUTXOsDisplay from '../components/transaction/AvailableUTXOsDisplay';
+// import AvailableUTXOsDisplay from '../components/transaction/AvailableUTXOsDisplay';
 import ContractManager from '../apis/ContractManager/ContractManager';
 import { SATSINBITCOIN } from '../utils/constants';
 // import {
 //   optimisticRemoveSpentByOutpoints,
 //   requestUTXORefreshForMany,
 // } from '../workers/UTXOWorkerService';
-
 
 const Transaction: React.FC = () => {
   // Removed local walletId state
@@ -61,7 +58,7 @@ const Transaction: React.FC = () => {
     }[]
   >([]);
   const [selectedAddresses, setSelectedAddresses] = useState<string[]>([]);
-  const [utxos, setUtxos] = useState<UTXO[]>([]);
+  // const [utxos, setUtxos] = useState<UTXO[]>([]);
   const [selectedContractAddresses, setSelectedContractAddresses] = useState<
     string[]
   >([]);
@@ -93,14 +90,14 @@ const Transaction: React.FC = () => {
   const [showRegularUTXOsPopup, setShowRegularUTXOsPopup] = useState(false);
   const [showCashTokenUTXOsPopup, setShowCashTokenUTXOsPopup] = useState(false);
   const [showContractUTXOsPopup, setShowContractUTXOsPopup] = useState(false);
-  const [showCTUTXOs, setShowCTUTXOs] = useState<boolean>(false);
+  // const [showCTUTXOs, setShowCTUTXOs] = useState<boolean>(false);
   const [paperWalletUTXOs, setPaperWalletUTXOs] = useState<UTXO[]>([]);
   // const [selectedPaperWalletUTXOs, setSelectedPaperWalletUTXOs] = useState<
   //   UTXO[]
   // >([]);
   const [showPaperWalletUTXOsPopup, setShowPaperWalletUTXOsPopup] =
     useState<boolean>(false);
-  const [showOutputs, setShowOutputs] = useState<boolean>(false);
+  // const [showOutputs, setShowOutputs] = useState<boolean>(false);
 
   const [nftCapability, setNftCapability] = useState<
     undefined | 'none' | 'mutable' | 'minting'
@@ -127,6 +124,13 @@ const Transaction: React.FC = () => {
 
   const currentNetwork = useSelector((state: RootState) =>
     selectCurrentNetwork(state)
+  );
+
+  const utxosByAddress = useSelector((s: RootState) => s.utxos.utxos);
+
+  const utxos = useMemo(
+    () => Object.values(utxosByAddress).flat(),
+    [utxosByAddress]
   );
 
   // Access Redux state using useSelector
@@ -156,7 +160,8 @@ const Transaction: React.FC = () => {
     // selectedAddresses,
     setAddresses,
     setContractAddresses,
-    setUtxos,
+    // setUtxos,
+    (() => {}) as any,
     setContractUTXOs,
     // setSelectedAddresses,
     setChangeAddress,
@@ -178,7 +183,6 @@ const Transaction: React.FC = () => {
   //   // setSelectedUtxos([]);
   //   // setSelectedAddresses(prev => prev.filter(a => !touchedAddresses.includes(a)));
   // }, [transactionId, spentOutpoints, touchedAddresses]);
-
 
   /**
    * Handle the selection and deselection of UTXOs.
@@ -360,8 +364,8 @@ const Transaction: React.FC = () => {
     setShowPopup(false);
     setErrorMessage(null);
     setShowPaperWalletUTXOsPopup(false);
-    setShowOutputs(false);
-    setShowCTUTXOs(false);
+    // setShowOutputs(false);
+    // setShowCTUTXOs(false);
   };
 
   /**
@@ -498,8 +502,8 @@ const Transaction: React.FC = () => {
 
         {/* UTXO Selection Component */}
         <UTXOSelection
-          selectedAddresses={selectedAddresses}
-          selectedContractAddresses={selectedContractAddresses}
+          // selectedAddresses={selectedAddresses}
+          // selectedContractAddresses={selectedContractAddresses}
           // contractAddresses={contractAddresses}
           filteredRegularUTXOs={filteredRegularUTXOs}
           filteredCashTokenUTXOs={filteredCashTokenUTXOs}
@@ -569,9 +573,9 @@ const Transaction: React.FC = () => {
                   {(bytecodeSize / SATSINBITCOIN).toFixed(8)} BCH
                 </span>
                 <span className="text-right">
-                  {(bytecodeSize / SATSINBITCOIN) * prices['BCH'] < 1
-                    ? `¢ ${((bytecodeSize / SATSINBITCOIN) * prices['BCH'] * 100).toFixed(2)} cents USD`
-                    : `$ ${((bytecodeSize / SATSINBITCOIN) * prices['BCH']).toFixed(2)} USD`}
+                  {(bytecodeSize / SATSINBITCOIN) * Number(prices['BCH']) < 1
+                    ? `¢ ${((bytecodeSize / SATSINBITCOIN) * Number(prices['BCH']) * 100).toFixed(2)} cents USD`
+                    : `$ ${((bytecodeSize / SATSINBITCOIN) * Number(prices['BCH'])).toFixed(2)} USD`}
                 </span>
               </div>
             </h3>

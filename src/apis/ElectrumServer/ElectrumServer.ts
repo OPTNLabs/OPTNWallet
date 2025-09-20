@@ -1,7 +1,9 @@
+// src/apis/ElectrumServer/ElectrumServer.ts
+
 import {
   ElectrumClient,
-  // ElectrumTransport,
   RequestResponse,
+  ElectrumClientEvents,
 } from '@electrum-cash/network';
 import { ElectrumWebSocket } from '@electrum-cash/web-socket';
 import {
@@ -18,9 +20,12 @@ const BACKOFF_BASE_MS = 3000;
 const BACKOFF_MAX_MS = 60000;
 const WSS_PORT = 50004;
 
+// Convenience alias for a typed Electrum client
+type ECClient = ElectrumClient<ElectrumClientEvents>;
+
 // ---------- Internal state ----------
-let electrum: ElectrumClient | null = null;
-let connectPromise: Promise<ElectrumClient> | null = null;
+let electrum: ECClient | null = null;
+let connectPromise: Promise<ECClient> | null = null;
 let serverIndex = 0;
 let backoffMs = BACKOFF_BASE_MS;
 let nextAllowedConnectTs = 0;
@@ -91,10 +96,9 @@ function parseServerEntry(entry: string, defaultPort = WSS_PORT) {
   return { host: entry, port: defaultPort, encrypted: true }; // default to WSS
 }
 
-async function wireNotificationsOnce(client: ElectrumClient) {
+async function wireNotificationsOnce(client: ECClient) {
   if (notificationsWired) return;
   client.on('notification', (msg: Notification) => {
-    // Fan-out to subscribers
     for (const h of notificationHandlers) {
       try {
         h(msg);
@@ -112,11 +116,10 @@ async function resubscribeAll() {
   for (const { method, params } of activeSubs.values()) {
     try {
       if (!params || params.length === 0) {
-        await electrum.subscribe(method); // no arg at all
+        await electrum.subscribe(method);
       } else if (params.length === 1) {
-        await electrum.subscribe(method, params[0]); // pass the single value
+        await electrum.subscribe(method, params[0]);
       } else {
-        // If a method ever needs >1 args, go through request()
         await electrum.request(method, ...params);
       }
     } catch {
@@ -125,12 +128,9 @@ async function resubscribeAll() {
   }
 }
 
-
 // ---------- API ----------
 export default function ElectrumServer() {
-  async function electrumConnect(
-    customServer?: string
-  ): Promise<ElectrumClient> {
+  async function electrumConnect(customServer?: string): Promise<ECClient> {
     if (electrum) return electrum;
 
     const now = Date.now();
@@ -167,14 +167,11 @@ export default function ElectrumServer() {
             encrypted,
             CONNECT_TIMEOUT_MS
           );
-          const client = new ElectrumClient('OPTNWallet', '1.5.1', socket);
-          // const client = new ElectrumClient(
-          //   'OPTNWallet',
-          //   '1.5.1',
-          //   host,
-          //   WSS_PORT,
-          //   ElectrumTransport.WSS.Scheme
-          // );
+          const client = new ElectrumClient<ElectrumClientEvents>(
+            'OPTNWallet',
+            '1.5.1',
+            socket
+          );
 
           try {
             await withTimeout(
@@ -231,11 +228,15 @@ export default function ElectrumServer() {
   ): Promise<RequestResponse> {
     await electrumConnect();
     try {
-      return await electrum.request(method, ...params);
+      const res = await electrum.request(method, ...params);
+      if (res instanceof Error) throw res;
+      return res;
     } catch (err) {
       await electrumDisconnect();
       await electrumConnect(); // may throw if backoff is active
-      return await electrum.request(method, ...params);
+      const res = await electrum.request(method, ...params);
+      if (res instanceof Error) throw res;
+      return res;
     }
   }
 
@@ -247,30 +248,29 @@ export default function ElectrumServer() {
    *   subscribe('blockchain.address.subscribe', 'bitcoincash:qq...')   // address activity (Electrum Cash)
    */
   async function subscribe(method: string, params?: any[]): Promise<void> {
-  await electrumConnect();
-  const key = subKey(method, params);
-
-  const doSubscribe = async () => {
-    if (!params || params.length === 0) {
-      await electrum!.subscribe(method);
-    } else if (params.length === 1) {
-      await electrum!.subscribe(method, params[0]);
-    } else {
-      await electrum!.request(method, ...params);
-    }
-  };
-
-  try {
-    await doSubscribe();
-    activeSubs.set(key, { method, params });
-  } catch {
-    await electrumDisconnect();
     await electrumConnect();
-    await doSubscribe();
-    activeSubs.set(key, { method, params });
-  }
-}
+    const key = subKey(method, params);
 
+    const doSubscribe = async () => {
+      if (!params || params.length === 0) {
+        await electrum!.subscribe(method);
+      } else if (params.length === 1) {
+        await electrum!.subscribe(method, params[0]);
+      } else {
+        await electrum!.request(method, ...params);
+      }
+    };
+
+    try {
+      await doSubscribe();
+      activeSubs.set(key, { method, params });
+    } catch {
+      await electrumDisconnect();
+      await electrumConnect();
+      await doSubscribe();
+      activeSubs.set(key, { method, params });
+    }
+  }
 
   /**
    * Unsubscribe:
@@ -290,7 +290,9 @@ export default function ElectrumServer() {
           'blockchain.address.unsubscribe',
           ...(params ?? [])
         );
-      } catch {}
+      } catch {
+        /* ignore */
+      }
     }
   }
 

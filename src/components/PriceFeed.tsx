@@ -55,13 +55,13 @@ const PriceFeed: React.FC = () => {
           const key = `${symbol}-USD`;
           const datum = prices[key];
           const display = datum ? `$${fmtUSD(datum.price)}` : 'Loading…';
-          const meta = datum
-            ? `${datum.source}${
-                datum.ts
-                  ? ` • ${Math.max(0, Math.floor((Date.now() - datum.ts) / 1000))}s`
-                  : ''
-              }`
-            : '—';
+          // const meta = datum
+          //   ? `${datum.source}${
+          //       datum.ts
+          //         ? ` • ${Math.max(0, Math.floor((Date.now() - datum.ts) / 1000))}s`
+          //         : ''
+          //     }`
+          //   : '—';
 
           return (
             <div

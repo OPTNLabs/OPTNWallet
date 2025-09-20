@@ -1,5 +1,3 @@
-// @ts-nocheck
-
 // src/components/transaction/UTXOSelection.tsx
 
 import React, { useState } from 'react';
@@ -8,8 +6,8 @@ import UTXOCard from '../UTXOCard';
 import Popup from './Popup';
 
 interface UTXOSelectionProps {
-  selectedAddresses: string[];
-  selectedContractAddresses: string[];
+  // selectedAddresses: string[];
+  // selectedContractAddresses: string[];
   filteredRegularUTXOs: UTXO[];
   filteredCashTokenUTXOs: UTXO[];
   filteredContractUTXOs: UTXO[];
@@ -28,8 +26,8 @@ interface UTXOSelectionProps {
 }
 
 const UTXOSelection: React.FC<UTXOSelectionProps> = ({
-  selectedAddresses,
-  selectedContractAddresses,
+  // selectedAddresses,
+  // selectedContractAddresses,
   filteredRegularUTXOs,
   filteredCashTokenUTXOs,
   filteredContractUTXOs,
@@ -54,9 +52,9 @@ const UTXOSelection: React.FC<UTXOSelectionProps> = ({
   );
 
   // Compute regular addresses by excluding contract addresses
-  const regularAddresses = selectedAddresses.filter(
-    (addr) => !selectedContractAddresses.includes(addr)
-  );
+  // const regularAddresses = selectedAddresses.filter(
+  //   (addr) => !selectedContractAddresses.includes(addr)
+  // );
 
   // Split contract UTXOs into regular (non-token) and cash token (token) categories
   const contractRegularUTXOs = filteredContractUTXOs.filter(
