@@ -1,5 +1,3 @@
-// @ts-nocheck
-
 // src/components/transaction/TransactionActions.tsx
 
 import React, { useState } from 'react';
@@ -117,10 +115,12 @@ const TransactionActions: React.FC<TransactionActionsProps> = ({
               <Draggable
                 axis="x" // Restrict dragging to horizontal axis
                 position={position}
-                onDrag={(e, data) =>
-                  !loading && setPosition({ x: data.x, y: 0 })
-                }
+                onDrag={(e, data) => {
+                  void e;
+                  !loading && setPosition({ x: data.x, y: 0 });
+                }}
                 onStop={(e, data) => {
+                  void e;
                   if (data.x >= threshold && !loading) {
                     sendTransaction();
                   } else {

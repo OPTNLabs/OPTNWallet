@@ -9,7 +9,7 @@ import {
   setFetchingUTXOs,
   updateUTXOsForAddress,
   setInitialized,
-  removeUTXOs
+  removeUTXOs,
 } from '../redux/utxoSlice';
 import { enqueueNotification } from '../redux/notificationsSlice';
 import { invalidateUTXOCache } from '../services/ElectrumService';
@@ -51,7 +51,8 @@ export function optimisticRemoveSpentByOutpoints(
   // Index current UTXOs by outpoint
   const index = new Map<string, { address: string; utxo: any }>();
   for (const [addr, list] of Object.entries(utxosByAddress)) {
-    for (const u of list) index.set(`${u.tx_hash}-${u.tx_pos}`, { address: addr, utxo: u });
+    for (const u of list)
+      index.set(`${u.tx_hash}-${u.tx_pos}`, { address: addr, utxo: u });
   }
 
   // Group removals per address
@@ -66,7 +67,9 @@ export function optimisticRemoveSpentByOutpoints(
 
   // Optimistically remove, invalidate cache and force immediate refresh
   for (const addr of touched) {
-    store.dispatch(removeUTXOs({ address: addr, utxosToRemove: toRemoveByAddr[addr] }));
+    store.dispatch(
+      removeUTXOs({ address: addr, utxosToRemove: toRemoveByAddr[addr] })
+    );
     invalidateUTXOCache(addr);
   }
   requestUTXORefreshForMany(touched, 0);
@@ -90,10 +93,14 @@ async function refreshAddress(address: string) {
   if (!currentWalletId) return;
 
   try {
+    invalidateUTXOCache(address);
     const prev = state.utxos.utxos[address] ?? [];
     const prevSet = new Set(prev.map((u: any) => `${u.tx_hash}:${u.tx_pos}`));
 
-    const utxos = await UTXOService.fetchAndStoreUTXOs(currentWalletId, address);
+    const utxos = await UTXOService.fetchAndStoreUTXOs(
+      currentWalletId,
+      address
+    );
 
     store.dispatch(updateUTXOsForAddress({ address, utxos }));
 
@@ -205,9 +212,12 @@ async function establishSubscriptions() {
       refreshAddressSoon(addr, 0);
 
       try {
-        await ElectrumService.subscribeAddress(addr, async (_status: string) => {
-          refreshAddressSoon(addr, 80);
-        });
+        await ElectrumService.subscribeAddress(
+          addr,
+          async (_status: string) => {
+            refreshAddressSoon(addr, 80);
+          }
+        );
       } catch (e) {
         console.error('subscribeAddress failed for', addr, e);
       }

@@ -3,7 +3,7 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
 import { useDispatch, useSelector } from 'react-redux';
-import { LocalNotifications } from '@capacitor/local-notifications';
+// import { LocalNotifications } from '@capacitor/local-notifications';
 import { RootState } from '../redux/store';
 import BitcoinCashCard from '../components/BitcoinCashCard';
 import CashTokenCard from '../components/CashTokenCard';
@@ -14,7 +14,7 @@ import {
   setFetchingUTXOs,
   setInitialized,
   updateUTXOsForAddress,
-  replaceAllUTXOs
+  replaceAllUTXOs,
 } from '../redux/utxoSlice';
 import PriceFeed from '../components/PriceFeed';
 import { TailSpin } from 'react-loader-spinner';
@@ -67,22 +67,27 @@ const Home: React.FC = () => {
   const hasFetchedForTx = useRef(false);
 
   const headerRefreshScheduled = useRef(false);
-  const runHeaderRefresh = useCallback((addrs: string[]) => {
-    if (headerRefreshScheduled.current) return;       // collapse bursts
-    headerRefreshScheduled.current = true;
-    setTimeout(async () => {
-      for (const addr of addrs) {
-        try {
-          const utxos = await ElectrumService.getUTXOs(addr);
-          dispatch(updateUTXOsForAddress({ address: addr, utxos }));
-        } catch (e) {
-          console.error('UTXO refresh on new block failed for', addr, e);
+  const runHeaderRefresh = useCallback(
+    (addrs: string[]) => {
+      if (headerRefreshScheduled.current) return; // collapse bursts
+      headerRefreshScheduled.current = true;
+      setTimeout(async () => {
+        for (const addr of addrs) {
+          try {
+            const utxos = await ElectrumService.getUTXOs(addr);
+            dispatch(updateUTXOsForAddress({ address: addr, utxos }));
+          } catch (e) {
+            console.error('UTXO refresh on new block failed for', addr, e);
+          }
         }
-      }
-      try { await DatabaseService().saveDatabaseToFile(); } catch {}
-      headerRefreshScheduled.current = false;
-    }, 750);
-  }, [dispatch]);
+        try {
+          await DatabaseService().saveDatabaseToFile();
+        } catch {}
+        headerRefreshScheduled.current = false;
+      }, 750);
+    },
+    [dispatch]
+  );
 
   // Keep latest UTXOs in a ref to compare inside async callbacks (avoid stale closures)
   const utxosRef = useRef(reduxUTXOs);
@@ -119,11 +124,21 @@ const Home: React.FC = () => {
   };
 
   useEffect(() => {
-    console.log('[Home] fetchingUTXOsRedux=', fetchingUTXOsRedux, 'IsInitialized=', IsInitialized);
+    console.log(
+      '[Home] fetchingUTXOsRedux=',
+      fetchingUTXOsRedux,
+      'IsInitialized=',
+      IsInitialized
+    );
   }, [fetchingUTXOsRedux, IsInitialized]);
 
   useEffect(() => {
-    console.log('[Home] userBalance (redux)=', userBalance, 'utxo keys=', Object.keys(reduxUTXOs));
+    console.log(
+      '[Home] userBalance (redux)=',
+      userBalance,
+      'utxo keys=',
+      Object.keys(reduxUTXOs)
+    );
   }, [userBalance, reduxUTXOs]);
 
   useEffect(() => {
@@ -282,16 +297,26 @@ const Home: React.FC = () => {
   // We intentionally DO NOT unsubscribe on unmount so the app keeps listening.
   useEffect(() => {
     if (!USE_HOME_SUBS) return;
-    if (!IsInitialized || fetchingUTXOsRedux || keyPairs.length === 0 || !currentWalletId) return;
+    if (
+      !IsInitialized ||
+      fetchingUTXOsRedux ||
+      keyPairs.length === 0 ||
+      !currentWalletId
+    )
+      return;
     const addrs = keyPairs.map((k: any) => k.address).filter(Boolean);
 
     (async () => {
       try {
         if (!headersSubDone.current) {
-          await ElectrumService.subscribeBlockHeaders((_h) => runHeaderRefresh(addrs));
+          await ElectrumService.subscribeBlockHeaders((_h) =>
+            runHeaderRefresh(addrs)
+          );
           headersSubDone.current = true;
         }
-      } catch (e) { console.error('subscribeBlockHeaders failed:', e); }
+      } catch (e) {
+        console.error('subscribeBlockHeaders failed:', e);
+      }
     })();
 
     (async () => {
@@ -300,12 +325,17 @@ const Home: React.FC = () => {
         __subscribedAddresses.add(addr);
 
         // Baseline only if Redux doesn’t already have UTXOs
-        const already = Array.isArray(utxosRef.current?.[addr]) && utxosRef.current![addr].length > 0;
+        const already =
+          Array.isArray(utxosRef.current?.[addr]) &&
+          utxosRef.current![addr].length > 0;
         if (!already) {
           try {
             const baseline = await ElectrumService.getUTXOs(addr);
-            if (baseline.length > 0) { // <- don’t overwrite with []
-              dispatch(updateUTXOsForAddress({ address: addr, utxos: baseline }));
+            if (baseline.length > 0) {
+              // <- don’t overwrite with []
+              dispatch(
+                updateUTXOsForAddress({ address: addr, utxos: baseline })
+              );
               const m = new Map(Object.entries(utxosRef.current));
               m.set(addr, baseline);
               utxosRef.current = Object.fromEntries(m.entries()) as any;
@@ -327,7 +357,9 @@ const Home: React.FC = () => {
               if (utxos.length === 0 && current.length > 0) return;
 
               dispatch(updateUTXOsForAddress({ address: addr, utxos }));
-              try { await DatabaseService().saveDatabaseToFile(); } catch {}
+              try {
+                await DatabaseService().saveDatabaseToFile();
+              } catch {}
 
               // notify-new-utxos (optional)
               // await notifyNewUtxos(addr, currentSet, utxos);
@@ -340,8 +372,14 @@ const Home: React.FC = () => {
         }
       }
     })();
-  }, [IsInitialized, fetchingUTXOsRedux, keyPairs, currentWalletId, dispatch, runHeaderRefresh]);
-
+  }, [
+    IsInitialized,
+    fetchingUTXOsRedux,
+    keyPairs,
+    currentWalletId,
+    dispatch,
+    runHeaderRefresh,
+  ]);
 
   // Preload token metadata
   useEffect(() => {

@@ -19,7 +19,7 @@ import AboutView from '../components/AboutView';
 import TermsOfUse from '../components/TermsOfUse';
 import ContactUs from '../components/ContactUs';
 import WalletConnectPanel from '../components/walletconnect/WalletConnectPanel';
-// import { resetWalletConnectState } from '../redux/walletconnectSlice';
+import ElectrumServer from '../apis/ElectrumServer/ElectrumServer';
 
 const Settings: React.FC = () => {
   const navigate = useNavigate();
@@ -57,7 +57,13 @@ const Settings: React.FC = () => {
     dispatch(resetContract());
     dispatch(resetNetwork());
     dispatch(clearTransaction());
-    // dispatch(resetWalletConnectState());
+    // Ensure Electrum is fully disconnected before nuking state
+    try {
+      const { electrumDisconnect } = ElectrumServer();
+      await electrumDisconnect();
+    } catch (e) {
+      console.warn('[Settings] Electrum disconnect (on logout) warning:', e);
+    }
     navigate('/');
   };
 

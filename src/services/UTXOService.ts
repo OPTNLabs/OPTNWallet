@@ -6,12 +6,14 @@ import BcmrService from './BcmrService';
 import { UTXO } from '../types/types';
 import { Network } from '../redux/networkSlice';
 import { store } from '../redux/store';
-import { removeUTXOs, setUTXOs } from '../redux/utxoSlice';
+// import { removeUTXOs, setUTXOs } from '../redux/utxoSlice';
 
 function getPrefix(): string {
   try {
     const state = store.getState();
-    return state.network.currentNetwork === Network.MAINNET ? 'bitcoincash' : 'bchtest';
+    return state.network.currentNetwork === Network.MAINNET
+      ? 'bitcoincash'
+      : 'bchtest';
   } catch {
     // Fallback if store isn't ready (should be rare)
     return 'bitcoincash';
@@ -47,18 +49,24 @@ const UTXOService = {
         );
         for (const utxo of fetchedUTXOs) {
           if (utxo.token?.category) {
-            const res = metadataResults.find((r) => r.category === utxo.token!.category);
+            const res = metadataResults.find(
+              (r) => r.category === utxo.token!.category
+            );
             if (res?.metadata) utxo.token.BcmrTokenMetadata = res.metadata;
           }
         }
       }
 
       // Token address & network prefix
-      const tokenAddress = await addressManager.fetchTokenAddress(walletId, address);
+      const tokenAddress = await addressManager.fetchTokenAddress(
+        walletId,
+        address
+      );
       const prefix = getPrefix(); // <-- use lazy getter
 
       // Format for storage
       const formattedUTXOs = fetchedUTXOs.map((utxo: UTXO) => ({
+        id: `${utxo.tx_hash}:${utxo.tx_pos}`,
         tx_hash: utxo.tx_hash,
         tx_pos: utxo.tx_pos,
         value: utxo.value,
@@ -72,24 +80,32 @@ const UTXOService = {
       }));
 
       // Diff against DB and delete removed ones
-      const existingUTXOs = await manager.fetchUTXOsByAddress(walletId, address);
-      const fetchedKeys = new Set(formattedUTXOs.map((u) => `${u.tx_hash}-${u.tx_pos}`));
+      const existingUTXOs = await manager.fetchUTXOsByAddress(
+        walletId,
+        address
+      );
+      const fetchedKeys = new Set(
+        formattedUTXOs.map((u) => `${u.tx_hash}-${u.tx_pos}`)
+      );
       const utxosToDelete = existingUTXOs.filter(
         (u) => !fetchedKeys.has(`${u.tx_hash}-${u.tx_pos}`)
       );
       if (utxosToDelete.length > 0) {
         await manager.deleteUTXOs(walletId, utxosToDelete);
-        store.dispatch(removeUTXOs({ address, utxosToRemove: utxosToDelete }));
+        // store.dispatch(removeUTXOs({ address, utxosToRemove: utxosToDelete }));
       }
 
       // Store and update Redux
       await manager.storeUTXOs(formattedUTXOs);
       const updatedUTXOs = await manager.fetchUTXOsByAddress(walletId, address);
-      store.dispatch(setUTXOs({ newUTXOs: { [address]: updatedUTXOs } }));
+      // store.dispatch(setUTXOs({ newUTXOs: { [address]: updatedUTXOs } }));
 
       return updatedUTXOs;
     } catch (error) {
-      console.error(`[UTXOService] Error in fetchAndStoreUTXOs for ${address}:`, error);
+      console.error(
+        `[UTXOService] Error in fetchAndStoreUTXOs for ${address}:`,
+        error
+      );
       return [];
     }
   },
