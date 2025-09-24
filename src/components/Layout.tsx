@@ -13,14 +13,20 @@ const Layout = () => {
   }, [navBarHeight]);
 
   return (
-    <div className="min-h-screen flex flex-col">
+    <div className="flex flex-col min-h-[100dvh]">
       <div
-        className="flex-grow overflow-auto"
-        style={{ paddingBottom: `var(--navbar-height)` }}
+        className="flex-1 min-h-0 overflow-y-auto"
+        style={{
+          paddingBottom: `calc(var(--navbar-height) + var(--safe-bottom))`,
+        }}
       >
         <Outlet />
       </div>
-      <BottomNavBar setNavBarHeight={setNavBarHeight} />
+
+      {/* Ensure the bar accounts for safe area */}
+      <div className="safe-area-bottom">
+        <BottomNavBar setNavBarHeight={setNavBarHeight} />
+      </div>
     </div>
   );
 };

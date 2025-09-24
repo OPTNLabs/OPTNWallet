@@ -6,7 +6,7 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 import { defineConfig, loadEnv } from 'vite';
 import topLevelAwait from 'vite-plugin-top-level-await';
 import react from '@vitejs/plugin-react-swc';
-// import { nodePolyfills } from 'vite-plugin-node-polyfills'; // <— TEMP: comment out
+import { nodePolyfills } from 'vite-plugin-node-polyfills';
 
 export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, process.cwd(), '');
@@ -19,12 +19,16 @@ export default defineConfig(({ mode }) => {
   const BROWSER_CONDITIONS = ['browser', 'module', 'import', 'default'];
 
   return {
+    base: mode === 'development' ? '/' : './',
     plugins: [
       react(),
-      // nodePolyfills(), // <— TEMP: keep commented while we fix resolution
       topLevelAwait({
         promiseExportName: '__tla',
         promiseImportName: (i) => `__tla_${i}`,
+      }),
+      nodePolyfills({
+        protocolImports: true,
+        globals: { process: true, Buffer: true },
       }),
     ],
     resolve: {
@@ -33,13 +37,17 @@ export default defineConfig(({ mode }) => {
         net: resolvePath(__dirname, 'src/shims/net.ts'),
         tls: resolvePath(__dirname, 'src/shims/tls.ts'),
       },
-      // Tell Vite/rollup resolver to choose "browser" export variants
-      conditions: ['module', 'import', 'default'],
+      conditions: BROWSER_CONDITIONS,
+    },
+    define: {
+      // Make sure any `process.env.X` access does not crash at runtime.
+      'process.env': {},
+      global: 'window',
     },
     optimizeDeps: {
-      // Make sure esbuild also uses browser conditions during prebundle
       include: ['@electrum-cash/network', '@electrum-cash/web-socket'],
       esbuildOptions: {
+        define: { global: 'window', 'process.env': '{}' },
         conditions: BROWSER_CONDITIONS,
         mainFields: ['browser', 'module', 'main'],
       },
@@ -55,7 +63,6 @@ export default defineConfig(({ mode }) => {
       ],
     },
     build: {
-      // IMPORTANT: remove node targets so the toolchain doesn’t prefer Node builds
       target: ['es2020', 'chrome87', 'safari14', 'firefox78', 'edge88'],
       sourcemap: true,
       rollupOptions: {
@@ -75,28 +82,37 @@ export default defineConfig(({ mode }) => {
           target: 'https://api.coingecko.com',
           changeOrigin: true,
           rewrite: (p) => p.replace(/^\/coingecko/, ''),
-          headers: CG_KEY
-            ? { 'x-cg-demo-api-key': CG_KEY, accept: 'application/json' }
-            : { accept: 'application/json' },
+          headers: (() => {
+            const headers: Record<string, string> = {
+              accept: 'application/json',
+            };
+            if (CG_KEY) headers['x-cg-demo-api-key'] = CG_KEY;
+            return headers;
+          })(),
         },
         '/coincap': {
           target: 'https://api.coincap.io',
           changeOrigin: true,
           rewrite: (p) => p.replace(/^\/coincap/, ''),
-          headers: COINCAP_KEY
-            ? {
-                Authorization: `Bearer ${COINCAP_KEY}`,
-                accept: 'application/json',
-              }
-            : { accept: 'application/json' },
+          headers: (() => {
+            const headers: Record<string, string> = {
+              accept: 'application/json',
+            };
+            if (COINCAP_KEY) headers['Authorization'] = `Bearer ${COINCAP_KEY}`;
+            return headers;
+          })(),
         },
         '/cryptoapi': {
           target: 'https://rest.cryptoapis.io',
           changeOrigin: true,
           rewrite: (p) => p.replace(/^\/cryptoapi/, ''),
-          headers: CRYPTO_KEY
-            ? { 'x-api-key': CRYPTO_KEY, accept: 'application/json' }
-            : { accept: 'application/json' },
+          headers: (() => {
+            const headers: Record<string, string> = {
+              accept: 'application/json',
+            };
+            if (CRYPTO_KEY) headers['x-api-key'] = CRYPTO_KEY;
+            return headers;
+          })(),
         },
       },
     },
