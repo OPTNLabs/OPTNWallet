@@ -78,7 +78,9 @@ function App() {
 
         // Capacitor requires a numeric id; derive a stable-ish one
         const numericId =
-          Math.abs([...n.id].reduce((a, c) => ((a << 5) - a + c.charCodeAt(0)) | 0, 0)) % 2147483647;
+          Math.abs(
+            [...n.id].reduce((a, c) => ((a << 5) - a + c.charCodeAt(0)) | 0, 0)
+          ) % 2147483647;
 
         try {
           await LocalNotifications.schedule({
@@ -88,7 +90,11 @@ function App() {
                 title: 'Funds received',
                 body: `${n.value ?? 0} sats to ${n.address.slice(0, 10)}…`,
                 channelId: 'utxo',
-                extra: { address: n.address, txid: n.txid, value: n.value ?? 0 },
+                extra: {
+                  address: n.address,
+                  txid: n.txid,
+                  value: n.value ?? 0,
+                },
               },
             ],
           });
@@ -145,51 +151,51 @@ function App() {
   }, [walletId, location.pathname]);
 
   return (
-    <>
-      <Routes>
-        <Route path="/" element={<RootHandler />} />
-        {walletId === 1 ? (
-          <>
-            <Route element={<Layout />}>
-              <Route path="/home/:wallet_id" element={<Home />} />
-              <Route path="/contract" element={<ContractView />} />
-              <Route path="/apps" element={<AppsView />} />
-              <Route path="/apps/fundme" element={<AppFundMe />} />
-              <Route path="/campaign/:id" element={<CampaignDetail />} />
-              <Route path="/receive" element={<Receive />} />
-              <Route path="/transaction" element={<Transaction />} />
+    <div className="app-shell">
+      <main className="main-flex-1">
+        <Routes>
+          <Route path="/" element={<RootHandler />} />
+          {walletId === 1 ? (
+            <>
+              <Route element={<Layout />}>
+                <Route path="/home/:wallet_id" element={<Home />} />
+                <Route path="/contract" element={<ContractView />} />
+                <Route path="/apps" element={<AppsView />} />
+                <Route path="/apps/fundme" element={<AppFundMe />} />
+                <Route path="/campaign/:id" element={<CampaignDetail />} />
+                <Route path="/receive" element={<Receive />} />
+                <Route path="/transaction" element={<Transaction />} />
+                <Route
+                  path="/transactions/:wallet_id"
+                  element={<TransactionHistory />}
+                />
+                <Route path="/settings" element={<Settings />} />
+              </Route>
               <Route
-                path="/transactions/:wallet_id"
-                element={<TransactionHistory />}
+                path="/"
+                element={<Navigate to={`/home/${walletId}`} replace />}
               />
-              <Route path="/settings" element={<Settings />} />
-            </Route>
-            <Route
-              path="/"
-              element={<Navigate to={`/home/${walletId}`} replace />}
-            />
-            <Route
-              path="*"
-              element={<Navigate to={`/home/${walletId}`} replace />}
-            />
-          </>
-        ) : (
-          <>
-            <Route path="/landing" element={<LandingPage />} />
-            <Route path="/createwallet" element={<CreateWallet />} />
-            <Route path="/importwallet" element={<ImportWallet />} />
-            <Route path="*" element={<Navigate to="/landing" replace />} />
-          </>
-        )}
-      </Routes>
-
-      {/* 🔥 Always active modals */}
-      <SignMessageModal />
-      <SignTransactionModal />
-
-      {/* 🔔 Always-on in-app UTXO popup (only when wallet exists) */}
-      {walletId === 1 && <UtxoNotificationCenter />}
-    </>
+              <Route
+                path="*"
+                element={<Navigate to={`/home/${walletId}`} replace />}
+              />
+            </>
+          ) : (
+            <>
+              <Route path="/landing" element={<LandingPage />} />
+              <Route path="/createwallet" element={<CreateWallet />} />
+              <Route path="/importwallet" element={<ImportWallet />} />
+              <Route path="*" element={<Navigate to="/landing" replace />} />
+            </>
+          )}
+        </Routes>
+        {/* 🔥 Always active modals */}
+        <SignMessageModal />
+        <SignTransactionModal />
+        {/* 🔔 Always-on in-app UTXO popup (only when wallet exists) */}
+        {walletId === 1 && <UtxoNotificationCenter />}
+      </main>
+    </div>
   );
 }
 
