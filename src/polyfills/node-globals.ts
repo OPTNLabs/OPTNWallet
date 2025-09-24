@@ -11,3 +11,9 @@ declare global {
 
 if (!window.process) window.process = processPolyfill;
 if (!window.Buffer) window.Buffer = BufferPolyfill;
+
+const g: any = globalThis as any;
+
+if (!g.global) g.global = g; // some libs expect `global`
+if (!g.process) g.process = { env: {} }; // avoid ReferenceError for `process`
+if (!g.Buffer) g.Buffer = Buffer; // for libs that expect Buffer
