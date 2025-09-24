@@ -2,12 +2,13 @@ import { Link } from 'react-router-dom';
 
 const LandingPage = () => {
   return (
-    <section className="min-h-screen bg-gradient-to-br from-slate-600 via-slate-600 to-slate-600 flex flex-col justify-center items-center px-4">
-      <div className="flex flex-col lg:flex-row items-center max-w-6xl mx-auto gap-8 lg:gap-12">
+    <section className="min-h-[100dvh] bg-gradient-to-br from-slate-600 via-slate-600 to-slate-600 flex flex-col justify-center items-center px-4">
+      <div className="safe-area-top" />
+      <main className="flex flex-col lg:flex-row items-center max-w-6xl mx-auto gap-8 lg:gap-12">
         {/* Image Section */}
         <div className="flex justify-center w-full lg:w-1/2">
           <img
-            src="/assets/images/OPTNWelcome1.png"
+            src={`${import.meta.env.BASE_URL}assets/images/OPTNWelcome1.png`}
             alt="Smart BCH Wallet"
             className="max-w-full h-auto w-3/4 lg:w-full object-contain transition-transform duration-300 hover:scale-105"
           />
@@ -35,7 +36,8 @@ const LandingPage = () => {
             </Link>
           </div>
         </div>
-      </div>
+      </main>
+      <div className="safe-area-bottom" />
     </section>
   );
 };
