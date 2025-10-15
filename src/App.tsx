@@ -3,6 +3,8 @@ import { Routes, Route, Navigate, useLocation } from 'react-router-dom';
 import { useDispatch, useSelector } from 'react-redux';
 import { useEffect, useRef } from 'react';
 import { LocalNotifications } from '@capacitor/local-notifications';
+import { Capacitor } from '@capacitor/core';
+import { StatusBar, Style } from '@capacitor/status-bar';
 import Layout from './components/Layout';
 import RootHandler from './pages/RootHandler';
 import Home from './pages/Home';
@@ -32,6 +34,9 @@ import { SignMessageModal } from './components/walletconnect/SignMessageModal';
 // 🔔 Always-on in-app popup for incoming UTXOs
 import UtxoNotificationCenter from './components/notifications/UtxoNotificationCenter';
 
+// ✅ Simple Send (new)
+import SimpleSend from './pages/SimpleSend';
+
 let utxoWorkerStarted = false;
 let transactionWorkerStarted = false;
 
@@ -49,6 +54,18 @@ function App() {
   useEffect(() => {
     dispatch(initWalletConnect());
   }, [dispatch]);
+
+  useEffect(() => {
+    // Only run this on Android (safe if you also ship iOS)
+    if (Capacitor.getPlatform() === 'android') {
+      // WebView draws behind the status bar
+      StatusBar.setOverlaysWebView({ overlay: true });
+      // Make the bar transparent so your page color shows through
+      StatusBar.setBackgroundColor({ color: '#00000000' });
+      // Pick icon color that contrasts your top background
+      StatusBar.setStyle({ style: Style.Light }); // or Style.Dark if you use a light bg
+    }
+  }, []);
 
   // 2) OS-level Local Notifications: permission + Android channel
   useEffect(() => {
@@ -164,13 +181,21 @@ function App() {
                 <Route path="/apps/fundme" element={<AppFundMe />} />
                 <Route path="/campaign/:id" element={<CampaignDetail />} />
                 <Route path="/receive" element={<Receive />} />
+
+                {/* ✅ NEW: Simple Send default route */}
+                <Route path="/send" element={<SimpleSend />} />
+
+                {/* Advanced builder remains intact */}
                 <Route path="/transaction" element={<Transaction />} />
+
                 <Route
                   path="/transactions/:wallet_id"
                   element={<TransactionHistory />}
                 />
                 <Route path="/settings" element={<Settings />} />
               </Route>
+
+              {/* Keep default redirects unchanged */}
               <Route
                 path="/"
                 element={<Navigate to={`/home/${walletId}`} replace />}
