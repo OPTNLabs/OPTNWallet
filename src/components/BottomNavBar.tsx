@@ -51,6 +51,7 @@ const BottomNavBar: React.FC<BottomNavBarProps> = ({ setNavBarHeight }) => {
         </svg>
         <span>Home</span>
       </Link>
+
       <Link to="/receive" className="flex flex-col items-center">
         <svg
           width="24"
@@ -75,6 +76,7 @@ const BottomNavBar: React.FC<BottomNavBarProps> = ({ setNavBarHeight }) => {
         </svg>
         <span>Receive</span>
       </Link>
+
       <Link
         to={`/transactions/${walletId}`}
         className="flex flex-col items-center"
@@ -122,7 +124,9 @@ const BottomNavBar: React.FC<BottomNavBarProps> = ({ setNavBarHeight }) => {
         </svg>
         <span>History</span>
       </Link>
-      <Link to="/transaction" className="flex flex-col items-center">
+
+      {/* ✅ Replace "Transaction" with "Send" and link to /send */}
+      <Link to="/send" className="flex flex-col items-center">
         <svg
           width="24"
           height="24"
@@ -130,6 +134,7 @@ const BottomNavBar: React.FC<BottomNavBarProps> = ({ setNavBarHeight }) => {
           fill="none"
           xmlns="http://www.w3.org/2000/svg"
         >
+          {/* Paper plane / send icon */}
           <path
             d="M22 2L11 13"
             stroke="white"
@@ -145,8 +150,9 @@ const BottomNavBar: React.FC<BottomNavBarProps> = ({ setNavBarHeight }) => {
             strokeLinejoin="round"
           />
         </svg>
-        <span>Transaction</span>
+        <span>Send</span>
       </Link>
+
       <Link to="/settings" className="flex flex-col items-center">
         <svg
           width="24"

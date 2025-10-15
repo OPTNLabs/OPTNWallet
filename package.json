@@ -32,6 +32,7 @@
     "@capacitor/ios": "^7.0.0",
     "@capacitor/local-notifications": "^7.0.2",
     "@capacitor/splash-screen": "^7.0.0",
+    "@capacitor/status-bar": "^7.0.3",
     "@capacitor/toast": "^7.0.0",
     "@cashscript/utils": "^0.9.3",
     "@electrum-cash/network": "^4.1.3",
