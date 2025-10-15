@@ -6,7 +6,6 @@ import BcmrService from './BcmrService';
 import { UTXO } from '../types/types';
 import { Network } from '../redux/networkSlice';
 import { store } from '../redux/store';
-// import { removeUTXOs, setUTXOs } from '../redux/utxoSlice';
 
 function getPrefix(): string {
   try {
@@ -15,7 +14,6 @@ function getPrefix(): string {
       ? 'bitcoincash'
       : 'bchtest';
   } catch {
-    // Fallback if store isn't ready (should be rare)
     return 'bitcoincash';
   }
 }
@@ -26,10 +24,9 @@ const UTXOService = {
       const manager = await UTXOManager();
       const addressManager = AddressManager();
 
-      // Fetch UTXOs from Electrum
       const fetchedUTXOs = await ElectrumService.getUTXOs(address);
 
-      // Fetch and attach BCMR metadata…
+      // BCMR
       const bcmrService = new BcmrService();
       const uniqueCategories = new Set<string>();
       for (const utxo of fetchedUTXOs) {
@@ -57,14 +54,12 @@ const UTXOService = {
         }
       }
 
-      // Token address & network prefix
       const tokenAddress = await addressManager.fetchTokenAddress(
         walletId,
         address
       );
-      const prefix = getPrefix(); // <-- use lazy getter
+      const prefix = getPrefix();
 
-      // Format for storage
       const formattedUTXOs = fetchedUTXOs.map((utxo: UTXO) => ({
         id: `${utxo.tx_hash}:${utxo.tx_pos}`,
         tx_hash: utxo.tx_hash,
@@ -92,13 +87,10 @@ const UTXOService = {
       );
       if (utxosToDelete.length > 0) {
         await manager.deleteUTXOs(walletId, utxosToDelete);
-        // store.dispatch(removeUTXOs({ address, utxosToRemove: utxosToDelete }));
       }
 
-      // Store and update Redux
       await manager.storeUTXOs(formattedUTXOs);
       const updatedUTXOs = await manager.fetchUTXOsByAddress(walletId, address);
-      // store.dispatch(setUTXOs({ newUTXOs: { [address]: updatedUTXOs } }));
 
       return updatedUTXOs;
     } catch (error) {
@@ -120,6 +112,27 @@ const UTXOService = {
     } catch (error) {
       console.error('Error fetching UTXOs from database:', error);
       return { utxosMap: {}, cashTokenUtxosMap: {} };
+    }
+  },
+
+  // ✅ NEW: fetch all wallet UTXOs (across every address) from DB
+  async fetchAllWalletUtxos(
+    walletId: number
+  ): Promise<{ allUtxos: UTXO[]; tokenUtxos: UTXO[] }> {
+    try {
+      const manager = await UTXOManager();
+      const addrs = await manager.fetchAddressesByWalletId(walletId);
+      if (!addrs.length) return { allUtxos: [], tokenUtxos: [] };
+
+      const { utxosMap, cashTokenUtxosMap } =
+        await manager.fetchUTXOsFromDatabase(addrs);
+      const allUtxos = Object.values(utxosMap).flat();
+      const tokenUtxos = Object.values(cashTokenUtxosMap).flat();
+      // Note: utxosMap excludes tokens (see manager), tokenUtxos holds token-carrying UTXOs
+      return { allUtxos, tokenUtxos };
+    } catch (e) {
+      console.error('fetchAllWalletUtxos failed:', e);
+      return { allUtxos: [], tokenUtxos: [] };
     }
   },
 };

@@ -16,7 +16,7 @@ import { shortenTxHash } from '../../utils/shortenHash';
 import { Network } from '../../redux/networkSlice';
 import { PREFIX, DUST, SATSINBITCOIN } from '../../utils/constants';
 import Popup from './Popup';
-// import TransactionTypeSelector from './TransactionTypeSelector';
+import TransactionTypeSelector from './TransactionTypeSelector';
 import RegularTxView from './RegularTxView';
 import CashTokenView from './CashTokenView';
 import NFTView from './NFTView';
@@ -82,9 +82,9 @@ const OutputSelection: React.FC<OutputSelectionProps> = ({
 
   const prices = useSelector((s: RootState) => s.priceFeed);
 
-  // const hasGenesisUtxoSelected = selectedUtxos.some(
-  //   (utxo) => !utxo.token && utxo.tx_pos === 0
-  // );
+  const hasGenesisUtxoSelected = selectedUtxos.some(
+    (utxo) => !utxo.token && utxo.tx_pos === 0
+  );
   const categoriesFromSelected = [
     ...new Set(
       selectedUtxos.filter((u) => u.token).map((u) => u.token.category)
@@ -337,7 +337,7 @@ const OutputSelection: React.FC<OutputSelectionProps> = ({
           <Popup closePopups={() => setShowAddOutputPopup(false)}>
             <div className="mb-6">
               <h3 className="text-lg font-semibold mb-2">{popupTitle}</h3>
-              {/* <TransactionTypeSelector
+              <TransactionTypeSelector
                 showRegularTx={showRegularTx}
                 setShowRegularTx={setShowRegularTx}
                 showCashToken={showCashToken}
@@ -349,7 +349,7 @@ const OutputSelection: React.FC<OutputSelectionProps> = ({
                 hasGenesisUtxoSelected={hasGenesisUtxoSelected}
                 resetFormValues={resetFormValues}
                 setPopupTitle={setPopupTitle}
-              /> */}
+              />
               {showRegularTx && (
                 <RegularTxView
                   recipientAddress={recipientAddress}
