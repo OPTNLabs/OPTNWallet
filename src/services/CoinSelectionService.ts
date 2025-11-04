@@ -1,21 +1,37 @@
 // src/services/CoinSelectionService.ts
+
 import { UTXO } from '../types/types';
 
 export type CoinSelectionOptions = {
+  /**
+   * Prefer confirmed UTXOs only (height > 0). Default: true
+   */
   preferConfirmed?: boolean;
+  /**
+   * Hard cap to avoid overly-large transactions. Default: 20
+   */
   maxInputs?: number;
-  skipTokenUtxos?: boolean; // applies to BCH-only selection
+  /**
+   * Skip UTXOs that carry CashTokens (BCH-only simple send safety). Default: true
+   */
+  skipTokenUtxos?: boolean;
 };
 
 export type CoinSelectionResult = {
   selected: UTXO[];
+  /**
+   * Sum of selected satoshis (BCH only; token satoshis are still BCH in UTXOs)
+   */
   totalSelectedSats: bigint;
 };
 
-function isP2pkhSpendableBase(utxo: UTXO): boolean {
+function isSpendableP2PKH(utxo: UTXO, skipTokenUtxos: boolean): boolean {
   const anyU = utxo as any;
   const isContract = !!anyU.abi || !!anyU.contractName;
   const isPaper = !!anyU.isPaperWallet;
+  const hasToken = !!utxo.token;
+
+  if (skipTokenUtxos && hasToken) return false;
   return !isContract && !isPaper;
 }
 
@@ -23,12 +39,18 @@ function isConfirmed(utxo: UTXO): boolean {
   return typeof utxo.height === 'number' && utxo.height > 0;
 }
 
+/**
+ * Very light fee guesser for selection pre-checks only.
+ * Final fee is computed by TransactionManager.buildTransaction().
+ */
 function roughFeeForInputs(inputCount: number): bigint {
-  const bytes = 120 + inputCount * 148 + 2 * 34;
-  return BigInt(bytes);
+  const bytes = 120 + inputCount * 148 + 2 * 34; // base + p2pkh inputs + 2 outputs
+  return BigInt(bytes); // 1 sat/byte
 }
 
-// ========== BCH for fees (unchanged behavior) ==========
+/**
+ * Largest-first greedy selector for BCH.
+ */
 export function selectForBch(
   targetSats: bigint,
   utxos: UTXO[],
@@ -39,8 +61,7 @@ export function selectForBch(
   const skipTokenUtxos = opts.skipTokenUtxos ?? true;
 
   const pool = utxos
-    .filter((u) => isP2pkhSpendableBase(u))
-    .filter((u) => (skipTokenUtxos ? !u.token : true))
+    .filter((u) => isSpendableP2PKH(u, skipTokenUtxos))
     .filter((u) => (preferConfirmed ? isConfirmed(u) : true))
     .sort((a, b) =>
       Number(BigInt(b.amount ?? b.value) - BigInt(a.amount ?? a.value))
@@ -59,63 +80,72 @@ export function selectForBch(
     if (running >= targetSats + roughFee) break;
   }
 
-  return { selected, totalSelectedSats: running };
+  return {
+    selected,
+    totalSelectedSats: running,
+  };
 }
 
-// ========== CashToken: FT by category ==========
-export function selectTokenFtByCategory(
+/** -------- CashToken helpers (single-category only) -------- **/
+
+/**
+ * Select fungible token UTXOs (single category) until >= tokenAmount.
+ * Returns { tokenInputs, totalTokenAmount }.
+ * Excludes NFT-carrying UTXOs.
+ */
+export function selectTokenFtInputs(
   category: string,
-  tokenAmountNeeded: bigint,
-  utxos: UTXO[],
+  tokenUtxos: UTXO[],
+  tokenAmount: bigint,
   opts: { preferConfirmed?: boolean; maxInputs?: number } = {}
-): { selectedTokenUtxos: UTXO[]; totalTokenAmount: bigint } {
+): { tokenInputs: UTXO[]; totalTokenAmount: bigint } {
   const preferConfirmed = opts.preferConfirmed ?? true;
   const maxInputs = opts.maxInputs ?? 50;
 
-  const pool = utxos
-    .filter(isP2pkhSpendableBase)
-    .filter((u) => !!u.token && u.token.category === category && !u.token.nft)
+  const pool = tokenUtxos
+    .filter((u) => u.token?.category === category)
+    .filter((u) => !u.token?.nft) // FT only
     .filter((u) => (preferConfirmed ? isConfirmed(u) : true))
-    // largest-first by token amount
     .sort((a, b) =>
-      Number(BigInt(b.token!.amount ?? 0) - BigInt(a.token!.amount ?? 0))
+      Number(BigInt(b.token?.amount ?? 0) - BigInt(a.token?.amount ?? 0))
     );
 
-  const selectedTokenUtxos: UTXO[] = [];
+  const tokenInputs: UTXO[] = [];
   let running = BigInt(0);
 
-  for (
-    let i = 0;
-    i < pool.length && selectedTokenUtxos.length < maxInputs;
-    i++
-  ) {
+  for (let i = 0; i < pool.length && tokenInputs.length < maxInputs; i++) {
     const u = pool[i];
-    const amt = BigInt(u.token!.amount ?? 0);
-    selectedTokenUtxos.push(u);
+    const amt = BigInt(u.token?.amount ?? 0);
+    tokenInputs.push(u);
     running += amt;
-    if (running >= tokenAmountNeeded) break;
+    if (running >= tokenAmount) break;
   }
 
-  return { selectedTokenUtxos, totalTokenAmount: running };
+  return { tokenInputs, totalTokenAmount: running };
 }
 
-// ========== CashToken: NFT by category (choose exact NFT) ==========
-export function selectNftByCategory(
+/**
+ * Pick exactly one NFT UTXO for a category. Optionally filter by commitment.
+ */
+export function selectNftInput(
   category: string,
-  utxos: UTXO[],
-  opts: { preferConfirmed?: boolean; commitment?: string } = {}
-): { nftUtxo: UTXO | null } {
+  tokenUtxos: UTXO[],
+  opts: { preferConfirmed?: boolean; commitmentHex?: string } = {}
+): UTXO | null {
   const preferConfirmed = opts.preferConfirmed ?? true;
-  const commitment = opts.commitment;
+  const commitmentHex = opts.commitmentHex?.toLowerCase();
 
-  const pool = utxos
-    .filter(isP2pkhSpendableBase)
-    .filter((u) => !!u.token && u.token.category === category && !!u.token.nft)
+  const pool = tokenUtxos
+    .filter((u) => u.token?.category === category)
+    .filter((u) => !!u.token?.nft)
     .filter((u) => (preferConfirmed ? isConfirmed(u) : true));
 
-  const nftUtxo = commitment
-    ? pool.find((u) => u.token!.nft!.commitment === commitment) || null
-    : pool[0] || null;
-
-  return { nftUtxo };
+  if (commitmentHex) {
+    const found = pool.find(
+      (u) => (u.token!.nft!.commitment || '').toLowerCase() === commitmentHex
+    );
+    return found ?? null;
+  }
+  // default: first available
+  return pool[0] ?? null;
 }

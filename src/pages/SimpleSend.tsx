@@ -1,8 +1,18 @@
 // src/pages/SimpleSend.tsx
 
-import React, { useMemo, useState } from 'react';
+import React, { useMemo, useState, useEffect } from 'react';
 import { Link } from 'react-router-dom';
 import useSimpleSend from '../hooks/useSimpleSend';
+import BcmrService from '../services/BcmrService';
+import { shortenTxHash } from '../utils/shortenHash';
+import { PREFIX } from '../utils/constants';
+import Draggable from 'react-draggable';
+import {
+  CapacitorBarcodeScanner,
+  CapacitorBarcodeScannerTypeHint,
+} from '@capacitor/barcode-scanner';
+import { Toast } from '@capacitor/toast';
+import { FaCamera } from 'react-icons/fa';
 
 function Label({ children }: { children: React.ReactNode }) {
   return (
@@ -10,12 +20,6 @@ function Label({ children }: { children: React.ReactNode }) {
       {children}
     </label>
   );
-}
-
-function truncateAddr(addr: string, left = 10, right = 8) {
-  if (!addr) return '—';
-  if (addr.length <= left + right) return addr;
-  return `${addr.slice(0, left)}…${addr.slice(-right)}`;
 }
 
 function copy(text: string) {
@@ -26,46 +30,47 @@ function copy(text: string) {
 
 export default function SimpleSend() {
   const {
-    // form
-    assetType,
-    setAssetType,
     recipient,
     setRecipient,
+
+    // asset choice
+    assetType,
+    setAssetType,
+
+    // BCH
     amountBch,
     setAmountBch,
 
-    // token ui
-    tokenCategories,
+    // token fields
     selectedCategory,
     setSelectedCategory,
-    tokenAmount,
-    setTokenAmount,
-    availableNfts,
-    selectedNft,
-    setSelectedNft,
+    amountToken,
+    setAmountToken,
+    selectedNftCommitment,
+    setSelectedNftCommitment,
 
-    // wallet/meta
     currentNetwork,
     addresses,
     selectedChangeAddress,
     setSelectedChangeAddress,
 
-    // flow
+    // token-aware change destination (resolved)
+    tokenChangeAddress,
+
+    categories,
+
     mode,
     error,
     review,
     txid,
 
-    // actions
     reset,
     doReview,
     doSend,
 
-    // display
     fiatSummary,
 
-    // debug
-    selectedForTx, // UTXO[] chosen during doReview()
+    selectedForTx, // debug
   } = useSimpleSend() as any;
 
   const isSending = mode === 'sending';
@@ -73,17 +78,116 @@ export default function SimpleSend() {
   const [showInputsJson, setShowInputsJson] = useState(false);
   const [showOutputsJson, setShowOutputsJson] = useState(false);
 
-  const primaryBtn =
-    'w-full inline-flex items-center justify-center rounded-xl px-4 py-2.5 font-semibold ' +
-    'bg-emerald-500 hover:bg-emerald-400 active:bg-emerald-500 ' +
-    'text-emerald-950 shadow-sm shadow-emerald-700/30 ' +
-    'focus:outline-none focus:ring-4 focus:ring-emerald-300/60 ' +
-    'disabled:opacity-60 disabled:cursor-not-allowed';
-  const secondaryBtn =
-    'w-28 inline-flex items-center justify-center rounded-xl px-4 py-2.5 font-semibold ' +
-    'bg-white/70 hover:bg-white text-emerald-900 ' +
-    'shadow-sm focus:outline-none focus:ring-4 focus:ring-emerald-200 ' +
-    'disabled:opacity-60 disabled:cursor-not-allowed';
+  // ─────────────────────────────────────────────────────────────
+  // Swipe-to-confirm modal state
+  // ─────────────────────────────────────────────────────────────
+  const [confirmOpen, setConfirmOpen] = useState(false);
+  const [sliderPos, setSliderPos] = useState({ x: 0, y: 0 });
+  const sliderWidth = 240; // track width
+  const handleWidth = 48;
+  const threshold = sliderWidth * 0.7;
+
+  const openConfirm = () => setConfirmOpen(true);
+  const closeConfirm = () => {
+    setConfirmOpen(false);
+    setSliderPos({ x: 0, y: 0 });
+  };
+
+  // Non-async to satisfy DraggableEventHandler (must return void | false)
+  const onSwipeStop = (_e: any, data: any) => {
+    if (data.x >= threshold && !isSending) {
+      doSend()
+        .catch(() => {})
+        .finally(() => {
+          setSliderPos({ x: 0, y: 0 });
+          setConfirmOpen(false);
+        });
+    } else {
+      setSliderPos({ x: 0, y: 0 });
+    }
+  };
+
+  // ─────────────────────────────────────────────────────────────
+  // BCMR metadata cache for categories (FT & NFT)
+  // ─────────────────────────────────────────────────────────────
+  const [tokenMeta, setTokenMeta] = useState<
+    Record<string, { name: string; symbol: string; decimals: number }>
+  >({});
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      if (!Array.isArray(categories) || categories.length === 0) return;
+
+      const bcmr = new BcmrService();
+      const uniques = Array.from(
+        new Set(categories.map((c: any) => c.category))
+      );
+      const acc: [
+        string,
+        { name: string; symbol: string; decimals: number },
+      ][] = [];
+
+      for (const cat of uniques) {
+        try {
+          // Prefer snapshot (local), otherwise resolve and retry snapshot
+          let snap = await bcmr.getSnapshot(cat);
+          if (!snap) {
+            try {
+              await bcmr.resolveIdentityRegistry(cat);
+              snap = await bcmr.getSnapshot(cat);
+            } catch {
+              // ignore individual failures
+            }
+          }
+          if (snap) {
+            acc.push([
+              cat,
+              {
+                name: snap.name || '',
+                symbol: snap.token?.symbol || '',
+                decimals: snap.token?.decimals ?? 0,
+              },
+            ]);
+          }
+        } catch {
+          // ignore category
+        }
+      }
+
+      if (!cancelled && acc.length > 0) {
+        setTokenMeta((prev) => ({ ...prev, ...Object.fromEntries(acc) }));
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [categories]);
+
+  function displayNameFor(cat: string) {
+    const m = tokenMeta[cat];
+    if (!m) return `${cat.slice(0, 8)}…`;
+    if (m.name && m.symbol) return `${m.name} (${m.symbol})`;
+    if (m.name) return m.name;
+    if (m.symbol) return m.symbol;
+    return `${cat.slice(0, 8)}…`;
+  }
+
+  function formatFtAmount(amount: bigint, decimals: number) {
+    const s = amount.toString();
+    if (decimals <= 0) return s;
+    if (s.length <= decimals) {
+      const frac = s.padStart(decimals, '0').replace(/0+$/, '');
+      return `0.${frac || '0'}`;
+    }
+    const whole = s.slice(0, s.length - decimals);
+    const frac = s.slice(s.length - decimals).replace(/0+$/, '');
+    return frac ? `${whole}.${frac}` : whole;
+  }
+
+  // UI helpers / masks
+  const prefixLen = PREFIX[currentNetwork]?.length ?? 0;
+  const mask = (addr: string) => shortenTxHash(addr, prefixLen);
 
   // ===== Debug helpers =====
   const inputSum = useMemo(() => {
@@ -96,7 +200,7 @@ export default function SimpleSend() {
 
   const outputsTableRows = useMemo(() => {
     if (!review?.finalOutputs?.length) return [];
-    return review.finalOutputs.map((o, idx) => {
+    return review.finalOutputs.map((o: any, idx: number) => {
       if ('opReturn' in o && o.opReturn) {
         return {
           i: idx,
@@ -107,32 +211,89 @@ export default function SimpleSend() {
           details: o.opReturn.join(' | '),
         };
       }
-      const token = (o as any).token ? JSON.stringify((o as any).token) : '—';
+      const token = o.token
+        ? JSON.stringify(
+            {
+              ...o.token,
+              amount:
+                typeof o.token.amount === 'bigint'
+                  ? o.token.amount.toString()
+                  : o.token.amount,
+            },
+            null,
+            0
+          )
+        : '—';
       return {
         i: idx,
         type: 'P2PKH',
-        address: (o as any).recipientAddress,
-        amount: Number((o as any).amount || 0),
+        address: mask(o.recipientAddress || ''),
+        amount: Number(o.amount || 0),
         token,
         details: '',
       };
     });
-  }, [review]);
+  }, [review, currentNetwork]);
 
   const inputsTableRows = useMemo(() => {
     if (!Array.isArray(selectedForTx)) return [];
     return selectedForTx.map((u: any, idx: number) => ({
       i: idx,
       outpoint: `${u?.tx_hash}:${u?.tx_pos}`,
-      address: u?.address,
+      address: mask(u?.address || ''),
       amount: Number(u?.amount ?? u?.value ?? 0),
       height: u?.height ?? 0,
       token: u?.token ? 'yes' : 'no',
       contract: u?.abi || u?.contractName ? 'yes' : 'no',
     }));
-  }, [selectedForTx]);
+  }, [selectedForTx, currentNetwork]);
 
   const rawHexLen = review?.rawTx ? review.rawTx.length : 0;
+
+  // UI helpers for token category dropdowns
+  const ftCategories = categories.filter((c: any) => c.ftAmount > 0n);
+  const nftCategories = categories.filter((c: any) => c.isNft);
+
+  // Simple derived UX state
+  const canReview =
+    (assetType === 'bch' && !!recipient && !!amountBch) ||
+    (assetType === 'ft' &&
+      !!recipient &&
+      !!selectedCategory &&
+      !!amountToken) ||
+    (assetType === 'nft' && !!recipient && !!selectedCategory);
+
+  // ─────────────────────────────────────────────────────────────
+  // QR Scanner for recipient
+  // ─────────────────────────────────────────────────────────────
+  const [scanBusy, setScanBusy] = useState(false);
+
+  const handleScanRecipient = async () => {
+    try {
+      setScanBusy(true);
+      const result = await CapacitorBarcodeScanner.scanBarcode({
+        hint: CapacitorBarcodeScannerTypeHint.ALL,
+        cameraDirection: 1, // back camera
+      });
+
+      const scanned = result?.ScanResult?.trim();
+      if (!scanned) {
+        await Toast.show({ text: 'No QR detected. Try again.' });
+        return;
+      }
+
+      const maybeAddr = scanned.startsWith('bitcoincash:') ? scanned : scanned;
+      setRecipient(maybeAddr);
+      await Toast.show({ text: 'Recipient loaded from QR.' });
+    } catch (e) {
+      console.error('QR scan failed:', e);
+      await Toast.show({
+        text: 'Failed to scan QR. Check camera permissions and try again.',
+      });
+    } finally {
+      setScanBusy(false);
+    }
+  };
 
   return (
     <div className="container mx-auto p-4 max-w-xl">
@@ -177,46 +338,90 @@ export default function SimpleSend() {
 
       {/* Card */}
       <div className="space-y-4 rounded-2xl border border-emerald-300/60 bg-gradient-to-b from-emerald-50 to-white p-4 shadow-md">
-        {/* Asset type */}
+        {/* Asset Type */}
         <div className="flex flex-col gap-1">
           <Label>Asset</Label>
           <div className="grid grid-cols-3 gap-2">
-            {(['bch', 'ft', 'nft'] as const).map((t) => (
-              <button
-                key={t}
-                type="button"
-                onClick={() => setAssetType(t)}
-                className={
-                  'rounded-xl px-3 py-2.5 font-semibold border ' +
-                  (assetType === t
-                    ? 'bg-emerald-500 text-emerald-950 border-emerald-600'
-                    : 'bg-white text-emerald-900 border-emerald-200 hover:border-emerald-300')
-                }
-              >
-                {t === 'bch' ? 'BCH' : t === 'ft' ? 'Fungible Token' : 'NFT'}
-              </button>
-            ))}
+            <button
+              type="button"
+              className={`rounded-xl px-3 py-2 font-semibold border ${
+                assetType === 'bch'
+                  ? 'bg-emerald-500 text-emerald-950 border-emerald-500'
+                  : 'bg-white text-emerald-800 border-emerald-200'
+              }`}
+              onClick={() => setAssetType('bch')}
+            >
+              BCH
+            </button>
+            <button
+              type="button"
+              className={`rounded-xl px-3 py-2 font-semibold border ${
+                assetType === 'ft'
+                  ? 'bg-emerald-500 text-emerald-950 border-emerald-500'
+                  : 'bg-white text-emerald-800 border-emerald-200'
+              }`}
+              onClick={() => setAssetType('ft')}
+            >
+              Token (FT)
+            </button>
+            <button
+              type="button"
+              className={`rounded-xl px-3 py-2 font-semibold border ${
+                assetType === 'nft'
+                  ? 'bg-emerald-500 text-emerald-950 border-emerald-500'
+                  : 'bg-white text-emerald-800 border-emerald-200'
+              }`}
+              onClick={() => setAssetType('nft')}
+            >
+              NFT
+            </button>
+          </div>
+          <div className="text-[11px] text-emerald-900/70">
+            Note: Token outputs carry 1,000 sats each to remain spendable.
           </div>
         </div>
 
         {/* To */}
         <div className="flex flex-col gap-1">
           <Label>To</Label>
-          <input
-            value={recipient}
-            onChange={(e) => setRecipient(e.target.value)}
-            placeholder={
-              assetType === 'bch'
-                ? 'bitcoincash:...'
-                : 'token-aware address (bitcoincash:/simpleledger:)'
-            }
-            className="w-full rounded-xl bg-white px-3 py-2.5 text-emerald-950 placeholder-emerald-900/40
+          <div className="flex items-center gap-2">
+            <input
+              value={recipient}
+              onChange={(e) => setRecipient(e.target.value.trim())}
+              placeholder={
+                assetType === 'bch'
+                  ? 'bitcoincash:...'
+                  : 'bitcoincash: or token-aware address'
+              }
+              className="w-full rounded-xl bg-white px-3 py-2.5 text-emerald-950 placeholder-emerald-900/40
                        outline-none ring-2 ring-emerald-200 focus:ring-4 focus:ring-emerald-300"
-          />
-          {/* TODO: add QR scanner button next to input */}
+            />
+            <button
+              type="button"
+              onClick={handleScanRecipient}
+              disabled={scanBusy}
+              title="Scan QR"
+              className="shrink-0 inline-flex items-center justify-center rounded-xl px-3 py-2.5 font-semibold
+                         bg-emerald-500 hover:bg-emerald-400 active:bg-emerald-500 text-emerald-950 shadow-sm
+                         disabled:opacity-60 disabled:cursor-not-allowed"
+            >
+              <FaCamera />
+            </button>
+          </div>
+          {!!recipient && (
+            <div className="text-[11px] text-emerald-900/70">
+              {mask(recipient)}
+              <button
+                className="ml-2 text-emerald-700 underline"
+                onClick={() => copy(recipient)}
+              >
+                Copy
+              </button>
+            </div>
+          )}
         </div>
 
-        {/* Amount / Token controls */}
+        {/* Amount (BCH) */}
         {assetType === 'bch' && (
           <div className="flex flex-col gap-1">
             <Label>Amount (BCH)</Label>
@@ -226,84 +431,102 @@ export default function SimpleSend() {
               inputMode="decimal"
               placeholder="0.00000000"
               className="w-full rounded-xl bg-white px-3 py-2.5 text-emerald-950 placeholder-emerald-900/40
-                         outline-none ring-2 ring-emerald-200 focus:ring-4 focus:ring-emerald-300"
+                       outline-none ring-2 ring-emerald-200 focus:ring-4 focus:ring-emerald-300"
             />
+            <div className="text-[11px] text-emerald-900/70">
+              Network fee is calculated at 1 sat/byte. We also keep a small
+              buffer to ensure change is spendable.
+            </div>
           </div>
         )}
 
-        {(assetType === 'ft' || assetType === 'nft') && (
+        {/* FT controls */}
+        {assetType === 'ft' && (
           <>
-            {/* Category */}
             <div className="flex flex-col gap-1">
               <Label>Token category</Label>
               <select
                 value={selectedCategory}
                 onChange={(e) => setSelectedCategory(e.target.value)}
-                className="w-full rounded-xl bg-white px-3 py-2.5 text-emerald-950 outline-none ring-2 ring-emerald-200 focus:ring-4 focus:ring-emerald-300"
+                className="w-full appearance-none rounded-xl bg-white px-3 py-2.5 text-emerald-950
+                           outline-none ring-2 ring-emerald-200 focus:ring-4 focus:ring-emerald-300
+                           cursor-pointer"
               >
-                {!tokenCategories.length && (
-                  <option value="" disabled>
-                    Loading…
-                  </option>
-                )}
-                {tokenCategories.map((cat: string) => (
-                  <option key={cat} value={cat}>
-                    {cat.slice(0, 18)}…{cat.slice(-6)}
-                  </option>
-                ))}
+                <option value="" disabled>
+                  Select category…
+                </option>
+                {ftCategories.map((c: any) => {
+                  const pretty = displayNameFor(c.category);
+                  const dec = tokenMeta[c.category]?.decimals ?? 0;
+                  const human = formatFtAmount(c.ftAmount, dec);
+                  return (
+                    <option key={c.category} value={c.category}>
+                      {pretty} · Balance: {human}
+                    </option>
+                  );
+                })}
               </select>
-              <div className="text-xs text-emerald-900/70">
-                Only this category will be included.
+            </div>
+            <div className="flex flex-col gap-1">
+              <Label>Token amount</Label>
+              <input
+                value={amountToken}
+                onChange={(e) =>
+                  setAmountToken(e.target.value.replace(/\D/g, ''))
+                }
+                inputMode="numeric"
+                placeholder="e.g., 1000"
+                className="w-full rounded-xl bg-white px-3 py-2.5 text-emerald-950 placeholder-emerald-900/40
+                         outline-none ring-2 ring-emerald-200 focus:ring-4 focus:ring-emerald-300"
+              />
+              <div className="text-[11px] text-emerald-900/70">
+                BCH inputs are added only to pay network fees. Token change (if
+                any) returns to your token-aware change address.
               </div>
             </div>
+          </>
+        )}
 
-            {/* FT amount */}
-            {assetType === 'ft' && (
+        {/* NFT controls */}
+        {assetType === 'nft' && (
+          <>
+            <div className="flex flex-col gap-1">
+              <Label>NFT category</Label>
+              <select
+                value={selectedCategory}
+                onChange={(e) => setSelectedCategory(e.target.value)}
+                className="w-full appearance-none rounded-xl bg-white px-3 py-2.5 text-emerald-950
+                           outline-none ring-2 ring-emerald-200 focus:ring-4 focus:ring-emerald-300
+                           cursor-pointer"
+              >
+                <option value="" disabled>
+                  Select category…
+                </option>
+                {nftCategories.map((c: any) => {
+                  const pretty = displayNameFor(c.category);
+                  return (
+                    <option key={c.category} value={c.category}>
+                      {pretty} · NFTs: {c.nftCommitments.length}
+                    </option>
+                  );
+                })}
+              </select>
+            </div>
+            {/* Optional: choose specific NFT by commitment */}
+            {selectedCategory && (
               <div className="flex flex-col gap-1">
-                <Label>Token amount (integer)</Label>
+                <Label>NFT commitment (optional)</Label>
                 <input
-                  value={tokenAmount}
-                  onChange={(e) => setTokenAmount(e.target.value)}
-                  inputMode="numeric"
-                  placeholder="e.g. 1000"
+                  value={selectedNftCommitment}
+                  onChange={(e) =>
+                    setSelectedNftCommitment(e.target.value.trim())
+                  }
+                  placeholder="hex commitment…"
                   className="w-full rounded-xl bg-white px-3 py-2.5 text-emerald-950 placeholder-emerald-900/40
                              outline-none ring-2 ring-emerald-200 focus:ring-4 focus:ring-emerald-300"
                 />
-                <div className="text-xs text-emerald-900/70">
-                  BCH inputs are added automatically for fees.
-                </div>
-              </div>
-            )}
-
-            {/* NFT selector */}
-            {assetType === 'nft' && (
-              <div className="flex flex-col gap-1">
-                <Label>NFT</Label>
-                <select
-                  value={selectedNft?.commitment || ''}
-                  onChange={(e) => {
-                    const c = e.target.value;
-                    const nft =
-                      availableNfts.find((n: any) => n.commitment === c) ||
-                      null;
-                    setSelectedNft(nft);
-                  }}
-                  className="w-full rounded-xl bg-white px-3 py-2.5 text-emerald-950 outline-none ring-2 ring-emerald-200 focus:ring-4 focus:ring-emerald-300"
-                >
-                  {!availableNfts.length && (
-                    <option value="" disabled>
-                      No NFTs in this category
-                    </option>
-                  )}
-                  {availableNfts.map((n: any) => (
-                    <option key={n.commitment} value={n.commitment}>
-                      {n.capability}@{n.commitment.slice(0, 12)}…
-                      {n.commitment.slice(-6)}
-                    </option>
-                  ))}
-                </select>
-                <div className="text-xs text-emerald-900/70">
-                  Only the selected NFT will be sent.
+                <div className="text-[11px] text-emerald-900/70">
+                  Leave blank to send the first available NFT in this category.
                 </div>
               </div>
             )}
@@ -328,7 +551,7 @@ export default function SimpleSend() {
               )}
               {addresses.map((a: any) => (
                 <option key={a.address} value={a.address}>
-                  {truncateAddr(a.address)}
+                  {mask(a.address)}
                 </option>
               ))}
             </select>
@@ -337,11 +560,24 @@ export default function SimpleSend() {
               ▼
             </div>
           </div>
-          <div className="text-xs text-emerald-900/70">
-            Using change:{' '}
+
+          {/* tiny label for token-aware change destination */}
+          <div className="text-[11px] text-emerald-900/70 mt-1">
+            Token change will go to:{' '}
             <span className="font-mono">
-              {truncateAddr(selectedChangeAddress)}
+              {mask(tokenChangeAddress || selectedChangeAddress)}
             </span>
+            <button
+              className="ml-2 text-emerald-700 underline"
+              onClick={() => copy(tokenChangeAddress || selectedChangeAddress)}
+            >
+              Copy
+            </button>
+          </div>
+
+          <div className="text-xs text-emerald-900/70">
+            Using BCH change:{' '}
+            <span className="font-mono">{mask(selectedChangeAddress)}</span>
           </div>
         </div>
 
@@ -350,8 +586,9 @@ export default function SimpleSend() {
           <button
             type="button"
             onClick={doReview}
-            disabled={isSending}
-            className={primaryBtn}
+            disabled={isSending || !canReview}
+            className="w-full inline-flex items-center justify-center rounded-xl px-4 py-2.5 font-semibold bg-emerald-500 hover:bg-emerald-400 active:bg-emerald-500 text-emerald-950 shadow-sm shadow-emerald-700/30 focus:outline-none focus:ring-4 focus:ring-emerald-300/60 disabled:opacity-60 disabled:cursor-not-allowed"
+            title={!canReview ? 'Fill the required fields first' : 'Review'}
           >
             Review
           </button>
@@ -359,7 +596,7 @@ export default function SimpleSend() {
             type="button"
             onClick={reset}
             disabled={isSending}
-            className={secondaryBtn}
+            className="w-28 inline-flex items-center justify-center rounded-xl px-4 py-2.5 font-semibold bg-white/70 hover:bg-white text-emerald-900 shadow-sm focus:outline-none focus:ring-4 focus:ring-emerald-200 disabled:opacity-60 disabled:cursor-not-allowed"
             title="Clear form"
           >
             Reset
@@ -369,7 +606,7 @@ export default function SimpleSend() {
 
       {/* Error */}
       {mode === 'error' && error && (
-        <div className="mt-4 p-3 rounded-xl border border-red-300 bg-red-50 text-red-800 text-sm shadow-sm">
+        <div className="mt-4 p-3 rounded-2xl border border-red-300 bg-red-50 text-red-800 text-sm shadow-sm">
           {error}
         </div>
       )}
@@ -386,25 +623,60 @@ export default function SimpleSend() {
                 className="font-mono truncate max-w-[60%]"
                 title={recipient}
               >
-                {recipient}
+                {shortenTxHash(recipient, prefixLen)}
               </span>
             </div>
 
-            {/* Amount line is meaningful for BCH; for tokens, USD rows show fee totals */}
-            <div className="flex justify-between">
-              <span className="font-medium">
-                {assetType === 'bch' ? 'Amount' : 'Token fee (BCH)'}
-              </span>
-              <span>
-                {(Number.parseFloat(amountBch) || 0).toFixed(8)} BCH
-                {!!fiatSummary.amountUsd && assetType === 'bch' && (
-                  <span className="opacity-70">
-                    {' '}
-                    · ${fiatSummary.amountUsd.toFixed(2)} USD
-                  </span>
-                )}
-              </span>
-            </div>
+            {/* Amount / Asset */}
+            {assetType === 'bch' && (
+              <div className="flex justify-between">
+                <span className="font-medium">Amount</span>
+                <span>
+                  {(Number.parseFloat(amountBch) || 0).toFixed(8)} BCH
+                  {!!fiatSummary.amountUsd && (
+                    <span className="opacity-70">
+                      {' '}
+                      · ${fiatSummary.amountUsd.toFixed(2)} USD
+                    </span>
+                  )}
+                </span>
+              </div>
+            )}
+
+            {assetType !== 'bch' && (
+              <div className="flex justify-between">
+                <span className="font-medium">Asset</span>
+                <span className="font-mono">
+                  {assetType.toUpperCase()} ·{' '}
+                  {selectedCategory ? displayNameFor(selectedCategory) : '—'}
+                  {assetType === 'ft' && amountToken
+                    ? ` · amount: ${amountToken}`
+                    : ''}
+                </span>
+              </div>
+            )}
+
+            {/* Token change pretty-print */}
+            {review.tokenChange && (
+              <div className="flex justify-between">
+                <span className="font-medium">Token change</span>
+                <span
+                  className="font-mono"
+                  title={review.tokenChange.amount.toString()}
+                >
+                  {(() => {
+                    const dec =
+                      tokenMeta[review.tokenChange!.category]?.decimals ?? 0;
+                    const pretty = formatFtAmount(
+                      review.tokenChange!.amount,
+                      dec
+                    );
+                    const name = displayNameFor(review.tokenChange!.category);
+                    return `${pretty} ${name}`;
+                  })()}
+                </span>
+              </div>
+            )}
 
             <div className="flex justify-between">
               <span className="font-medium">Fee</span>
@@ -418,9 +690,8 @@ export default function SimpleSend() {
                 )}
               </span>
             </div>
-
             <div className="flex justify-between">
-              <span className="font-medium">Total</span>
+              <span className="font-medium">Total (BCH)</span>
               <span>
                 {(review.totalSats / 100_000_000).toFixed(8)} BCH
                 {!!fiatSummary.totalUsd && (
@@ -431,35 +702,6 @@ export default function SimpleSend() {
                 )}
               </span>
             </div>
-
-            {/* Small token summary when applicable */}
-            {(assetType === 'ft' || assetType === 'nft') && (
-              <div className="text-xs mt-1 text-emerald-900/80 space-y-0.5">
-                <div>
-                  <span className="font-medium">Category:</span>{' '}
-                  <span className="font-mono">
-                    {selectedCategory
-                      ? `${selectedCategory.slice(0, 14)}…${selectedCategory.slice(-6)}`
-                      : '—'}
-                  </span>
-                </div>
-                {assetType === 'ft' && (
-                  <div>
-                    <span className="font-medium">FT amount:</span>{' '}
-                    {tokenAmount || 0}
-                  </div>
-                )}
-                {assetType === 'nft' && selectedNft && (
-                  <div>
-                    <span className="font-medium">NFT:</span>{' '}
-                    {selectedNft.capability}@
-                    {selectedNft.commitment.slice(0, 10)}…
-                    {selectedNft.commitment.slice(-6)}
-                  </div>
-                )}
-              </div>
-            )}
-
             <div className="flex justify-between text-xs text-emerald-900/70">
               <span>Outputs</span>
               <span>{review.finalOutputs.length}</span>
@@ -469,16 +711,17 @@ export default function SimpleSend() {
           <div className="flex gap-2 pt-2">
             <button
               type="button"
-              onClick={doSend}
+              onClick={openConfirm}
               disabled={isSending}
-              className={primaryBtn}
+              className="w-full inline-flex items-center justify-center rounded-xl px-4 py-2.5 font-semibold bg-emerald-500 hover:bg-emerald-400 active:bg-emerald-500 text-emerald-950 shadow-sm focus:outline-none focus:ring-4 focus:ring-emerald-300/60 disabled:opacity-60 disabled:cursor-not-allowed"
+              title="Swipe to confirm"
             >
               Send
             </button>
             <button
               type="button"
               onClick={() => window.history.back()}
-              className={secondaryBtn}
+              className="w-28 inline-flex items-center justify-center rounded-xl px-4 py-2.5 font-semibold bg-white/70 hover:bg-white text-emerald-900 shadow-sm focus:outline-none focus:ring-4 focus:ring-emerald-200"
               title="Edit details"
             >
               Edit
@@ -509,7 +752,13 @@ export default function SimpleSend() {
                 <button
                   type="button"
                   onClick={() =>
-                    copy(JSON.stringify(review.finalOutputs, null, 2))
+                    copy(
+                      JSON.stringify(
+                        review.finalOutputs,
+                        (_k, v) => (typeof v === 'bigint' ? v.toString() : v),
+                        2
+                      )
+                    )
                   }
                   className="text-xs px-2 py-1 rounded-md bg-white hover:bg-amber-100 text-amber-900 border border-amber-300"
                   title="Copy outputs JSON"
@@ -520,7 +769,15 @@ export default function SimpleSend() {
               {Array.isArray(selectedForTx) && selectedForTx.length > 0 && (
                 <button
                   type="button"
-                  onClick={() => copy(JSON.stringify(selectedForTx, null, 2))}
+                  onClick={() =>
+                    copy(
+                      JSON.stringify(
+                        selectedForTx,
+                        (_k, v) => (typeof v === 'bigint' ? v.toString() : v),
+                        2
+                      )
+                    )
+                  }
                   className="text-xs px-2 py-1 rounded-md bg-white hover:bg-amber-100 text-amber-900 border border-amber-300"
                   title="Copy inputs JSON"
                 >
@@ -580,7 +837,7 @@ export default function SimpleSend() {
                     </tr>
                   </thead>
                   <tbody>
-                    {inputsTableRows.length === 0 ? (
+                    {selectedForTx.length === 0 ? (
                       <tr>
                         <td
                           className="px-3 py-3 text-center text-amber-700"
@@ -597,9 +854,7 @@ export default function SimpleSend() {
                         >
                           <td className="px-3 py-2">{r.i}</td>
                           <td className="px-3 py-2 font-mono">{r.outpoint}</td>
-                          <td className="px-3 py-2 font-mono">
-                            {truncateAddr(r.address)}
-                          </td>
+                          <td className="px-3 py-2 font-mono">{r.address}</td>
                           <td className="px-3 py-2 text-right">{r.amount}</td>
                           <td className="px-3 py-2 text-right">{r.height}</td>
                           <td className="px-3 py-2 text-center">{r.token}</td>
@@ -614,7 +869,11 @@ export default function SimpleSend() {
               </div>
             ) : (
               <pre className="text-xs p-3 overflow-auto max-h-64 text-amber-900">
-                {JSON.stringify(selectedForTx ?? [], null, 2)}
+                {JSON.stringify(
+                  selectedForTx,
+                  (_k, v) => (typeof v === 'bigint' ? v.toString() : v),
+                  2
+                )}
               </pre>
             )}
           </div>
@@ -662,9 +921,7 @@ export default function SimpleSend() {
                         <tr key={r.i} className="border-t border-amber-100">
                           <td className="px-3 py-2">{r.i}</td>
                           <td className="px-3 py-2">{r.type}</td>
-                          <td className="px-3 py-2 font-mono">
-                            {r.address ? truncateAddr(r.address) : '—'}
-                          </td>
+                          <td className="px-3 py-2 font-mono">{r.address}</td>
                           <td className="px-3 py-2 text-right">{r.amount}</td>
                           <td className="px-3 py-2">{r.token}</td>
                           <td className="px-3 py-2">{r.details}</td>
@@ -676,14 +933,18 @@ export default function SimpleSend() {
               </div>
             ) : (
               <pre className="text-xs p-3 overflow-auto max-h-64 text-amber-900">
-                {JSON.stringify(review?.finalOutputs ?? [], null, 2)}
+                {JSON.stringify(
+                  review?.finalOutputs ?? [],
+                  (_k, v) => (typeof v === 'bigint' ? v.toString() : v),
+                  2
+                )}
               </pre>
             )}
           </div>
 
           {/* Raw TX preview */}
           <div className="rounded-lg bg-white border border-amber-200">
-            <div className="flex items-center justify-between px-3 py-2 border-b border-amber-200">
+            <div className="flex items-center justify-between px-3 py-2 border-amber-200 border-b">
               <div className="text-sm font-bold text-amber-900">
                 Raw transaction
               </div>
@@ -706,6 +967,80 @@ export default function SimpleSend() {
             Transaction sent ✅
           </div>
           <div className="break-all font-mono text-emerald-900">{txid}</div>
+        </div>
+      )}
+
+      {/* Swipe-to-confirm Modal */}
+      {confirmOpen && (
+        <div
+          className="fixed inset-0 z-[999] flex items-center justify-center bg-black/50 p-4"
+          role="dialog"
+          aria-modal="true"
+        >
+          <div className="w-full max-w-sm rounded-2xl bg-white shadow-xl p-5">
+            <div className="text-xl font-extrabold text-emerald-900 mb-1">
+              Confirm Transaction
+            </div>
+            <div className="text-sm text-emerald-900/80 mb-4">
+              Review looks good? Swipe to send. This action cannot be undone.
+            </div>
+
+            <div className="relative h-14 w-full bg-emerald-100 rounded-xl overflow-hidden select-none">
+              {/* Fill/feedback */}
+              <div
+                className={`absolute top-0 left-0 h-full transition-all duration-200 ${
+                  sliderPos.x >= threshold
+                    ? 'bg-emerald-500'
+                    : sliderPos.x > 0
+                      ? 'bg-amber-400'
+                      : 'bg-emerald-200'
+                }`}
+                style={{ width: Math.max(0, sliderPos.x) }}
+              />
+              {/* Center text */}
+              <div className="absolute inset-0 flex items-center justify-center text-[13px] font-bold text-emerald-950/80 pointer-events-none">
+                Drag to Confirm
+              </div>
+              {/* Draggable handle */}
+              <Draggable
+                axis="x"
+                position={sliderPos}
+                onDrag={(e, data) => {
+                  void e;
+                  if (!isSending) setSliderPos({ x: data.x, y: 0 });
+                }}
+                onStop={onSwipeStop}
+                bounds={{ left: 0, right: sliderWidth - handleWidth }}
+                disabled={isSending}
+              >
+                <div
+                  className={`absolute top-1/2 -translate-y-1/2 w-12 h-12 rounded-xl bg-emerald-600 text-white
+                              flex items-center justify-center text-lg shadow-md ${
+                                isSending
+                                  ? 'opacity-60 cursor-not-allowed'
+                                  : 'cursor-grab'
+                              }`}
+                  style={{ left: 0 }}
+                  title="Drag to confirm"
+                >
+                  {sliderPos.x >= threshold ? '✅' : '➔'}
+                </div>
+              </Draggable>
+            </div>
+
+            <div className="mt-4 flex justify-between">
+              <button
+                type="button"
+                onClick={closeConfirm}
+                className="inline-flex items-center justify-center rounded-xl px-4 py-2.5 font-semibold bg-white text-emerald-900 border border-emerald-300 hover:bg-emerald-50"
+              >
+                Back
+              </button>
+              <div className="text-xs text-emerald-900/70 self-center">
+                Slide handle to the right to send
+              </div>
+            </div>
+          </div>
         </div>
       )}
     </div>
