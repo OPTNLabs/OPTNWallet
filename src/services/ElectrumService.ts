@@ -12,8 +12,8 @@
  */
 
 import ElectrumServer from '../apis/ElectrumServer/ElectrumServer';
-import { RequestResponse } from '@electrum-cash/network'; // <-- fix package
-import { TransactionHistoryItem, UTXO } from '../types/types';
+import { RequestResponse } from '@electrum-cash/network';
+import { TransactionHistoryItem, UTXO, Token } from '../types/types';
 
 const inflightByAddr = new Map<string, Promise<UTXO[]>>();
 const cacheByAddr = new Map<string, { ts: number; data: UTXO[] }>();
@@ -33,15 +33,40 @@ export function invalidateUTXOCache(address?: string) {
   }
 }
 
-// // ---------- Type Guards ----------
-// function isUTXOArray(response: RequestResponse): response is UTXO[] {
-//   return (
-//     Array.isArray(response) &&
-//     response.every(
-//       (item) => 'tx_hash' in item && 'height' in item && 'value' in item
-//     )
-//   );
-// }
+/** Normalize any electrum token shape into our canonical Token */
+function normalizeTokenField(raw: any): Token | null {
+  if (!raw) return null;
+
+  // Accept several common shapes:
+  // - raw.token_data
+  // - raw.token
+  // - raw (already token-like)
+  const t = raw.token ?? raw.token_data ?? raw;
+  if (!t) return null;
+
+  const category = t.category ?? t.tokenCategory ?? t.categoryId;
+  if (!category) return null;
+
+  let amount: number | bigint = t.amount ?? 0;
+  if (typeof amount === 'string') {
+    const n = Number(amount);
+    amount = Number.isFinite(n) ? n : 0;
+  }
+
+  const nft = t.nft
+    ? {
+        capability: t.nft.capability as 'none' | 'mutable' | 'minting',
+        commitment: t.nft.commitment ?? '',
+      }
+    : undefined;
+
+  return {
+    category: String(category),
+    amount,
+    nft,
+    // BCMR metadata is added later in UTXOService
+  };
+}
 
 function isTransactionHistoryArray(
   response: RequestResponse
@@ -135,9 +160,24 @@ const ElectrumService = {
           address
         );
         if (Array.isArray(res)) {
-          const arr = (res as any[]).map((u) => {
-            /* token_data mapping... */ return u as UTXO;
+          const arr: UTXO[] = (res as any[]).map((u) => {
+            const token = normalizeTokenField(u.token ?? u.token_data);
+
+            const out: UTXO = {
+              address: u.address ?? address,
+              height: Number(u.height ?? 0),
+              tx_hash: String(u.tx_hash),
+              tx_pos: Number(u.tx_pos),
+              value: Number(u.value ?? 0),
+              amount: Number(u.value ?? 0),
+              prefix: undefined, // set later in UTXOService if needed
+              token, // canonical field our app expects
+              token_data: undefined, // avoid carrying alternate field
+              id: `${u.tx_hash}:${u.tx_pos}`,
+            };
+            return out;
           });
+
           cacheByAddr.set(address, { ts: Date.now(), data: arr });
           console.log(
             '[ElectrumService] network OK for',
@@ -252,7 +292,6 @@ const ElectrumService = {
   async subscribeBlockHeaders(callback: (header: any) => void) {
     const server = ElectrumServer();
     try {
-      // If we already have a handler, just replace it and don’t hit the wire again
       const reg = subscriptionRegistry['blockchain.headers.subscribe'];
       if (!reg.has('tip')) {
         await server.subscribe('blockchain.headers.subscribe'); // no params
@@ -314,8 +353,6 @@ const ElectrumService = {
   async unsubscribeBlockHeaders(): Promise<boolean> {
     const server = ElectrumServer();
     try {
-      // Most servers don’t support an RPC unsubscribe for headers; our server wrapper
-      // simply stops resubscribing after reconnect by removing local registry entries.
       await server.unsubscribe('blockchain.headers.subscribe');
       subscriptionRegistry['blockchain.headers.subscribe'].delete('tip');
       return true;

@@ -91,9 +91,13 @@ function App() {
   useEffect(() => {
     (async () => {
       for (const n of utxoQueue) {
+        // 🔒 belt & suspenders: ignore confirmed items at the bridge too
+        if (typeof (n as any).height === 'number' && (n as any).height > 0)
+          continue;
+
         if (notified.current.has(n.id)) continue;
 
-        // Capacitor requires a numeric id; derive a stable-ish one
+        // Derive a stable numeric id from the deterministic id (txid:vout)
         const numericId =
           Math.abs(
             [...n.id].reduce((a, c) => ((a << 5) - a + c.charCodeAt(0)) | 0, 0)
@@ -111,6 +115,7 @@ function App() {
                   address: n.address,
                   txid: n.txid,
                   value: n.value ?? 0,
+                  height: (n as any).height ?? 0,
                 },
               },
             ],
