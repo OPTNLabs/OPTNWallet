@@ -3,7 +3,7 @@ import ElectrumService from './ElectrumService';
 import UTXOManager from '../apis/UTXOManager/UTXOManager';
 import AddressManager from '../apis/AddressManager/AddressManager';
 import BcmrService from './BcmrService';
-import { UTXO } from '../types/types';
+import { UTXO, Token } from '../types/types';
 import { Network } from '../redux/networkSlice';
 import { store } from '../redux/store';
 
@@ -18,15 +18,52 @@ function getPrefix(): string {
   }
 }
 
+/** Belt & suspenders: normalize any stray token shapes before storing */
+function normalizeTokenField(raw: any): Token | null {
+  if (!raw) return null;
+  const t = raw.token ?? raw.token_data ?? raw;
+  if (!t) return null;
+
+  const category = t.category ?? t.tokenCategory ?? t.categoryId;
+  if (!category) return null;
+
+  let amount: number | bigint = t.amount ?? 0;
+  if (typeof amount === 'string') {
+    const n = Number(amount);
+    amount = Number.isFinite(n) ? n : 0;
+  }
+
+  const nft = t.nft
+    ? {
+        capability: t.nft.capability as 'none' | 'mutable' | 'minting',
+        commitment: t.nft.commitment ?? '',
+      }
+    : undefined;
+
+  return {
+    category: String(category),
+    amount,
+    nft,
+  };
+}
+
 const UTXOService = {
   async fetchAndStoreUTXOs(walletId: number, address: string): Promise<UTXO[]> {
     try {
       const manager = await UTXOManager();
       const addressManager = AddressManager();
 
+      // Fetch from electrum (already normalized inside ElectrumService),
+      // but we defensively normalize again in case of future changes.
       const fetchedUTXOs = await ElectrumService.getUTXOs(address);
+      for (const u of fetchedUTXOs) {
+        if (!u.token && (u as any).token_data) {
+          u.token = normalizeTokenField((u as any).token_data);
+          (u as any).token_data = undefined;
+        }
+      }
 
-      // BCMR
+      // BCMR enrichment — gather unique token categories
       const bcmrService = new BcmrService();
       const uniqueCategories = new Set<string>();
       for (const utxo of fetchedUTXOs) {
@@ -54,13 +91,15 @@ const UTXOService = {
         }
       }
 
+      // Token address resolution (if available)
       const tokenAddress = await addressManager.fetchTokenAddress(
         walletId,
         address
       );
       const prefix = getPrefix();
 
-      const formattedUTXOs = fetchedUTXOs.map((utxo: UTXO) => ({
+      // Format for DB
+      const formattedUTXOs: UTXO[] = fetchedUTXOs.map((utxo: UTXO) => ({
         id: `${utxo.tx_hash}:${utxo.tx_pos}`,
         tx_hash: utxo.tx_hash,
         tx_pos: utxo.tx_pos,
@@ -69,7 +108,7 @@ const UTXOService = {
         address,
         height: utxo.height,
         prefix,
-        token: utxo.token,
+        token: utxo.token ?? null,
         wallet_id: walletId,
         tokenAddress: tokenAddress || undefined,
       }));
@@ -89,10 +128,18 @@ const UTXOService = {
         await manager.deleteUTXOs(walletId, utxosToDelete);
       }
 
+      // Persist latest snapshot
       await manager.storeUTXOs(formattedUTXOs);
-      const updatedUTXOs = await manager.fetchUTXOsByAddress(walletId, address);
 
-      return updatedUTXOs;
+      // IMPORTANT: read back using the split maps and merge coin + token UTXOs
+      const { utxosMap, cashTokenUtxosMap } =
+        await manager.fetchUTXOsFromDatabase([{ address }]);
+      const merged = [
+        ...(utxosMap[address] ?? []),
+        ...(cashTokenUtxosMap[address] ?? []),
+      ];
+
+      return merged;
     } catch (error) {
       console.error(
         `[UTXOService] Error in fetchAndStoreUTXOs for ${address}:`,
@@ -115,7 +162,9 @@ const UTXOService = {
     }
   },
 
-  // ✅ NEW: fetch all wallet UTXOs (across every address) from DB
+  // Fetch all wallet UTXOs (across every address) from DB
+  // Note: utxosMap excludes tokens (by design in the manager),
+  //       tokenUtxos holds token-carrying UTXOs.
   async fetchAllWalletUtxos(
     walletId: number
   ): Promise<{ allUtxos: UTXO[]; tokenUtxos: UTXO[] }> {
@@ -126,9 +175,10 @@ const UTXOService = {
 
       const { utxosMap, cashTokenUtxosMap } =
         await manager.fetchUTXOsFromDatabase(addrs);
+
       const allUtxos = Object.values(utxosMap).flat();
       const tokenUtxos = Object.values(cashTokenUtxosMap).flat();
-      // Note: utxosMap excludes tokens (see manager), tokenUtxos holds token-carrying UTXOs
+
       return { allUtxos, tokenUtxos };
     } catch (e) {
       console.error('fetchAllWalletUtxos failed:', e);
