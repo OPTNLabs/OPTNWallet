@@ -105,17 +105,24 @@ async function refreshAddress(address: string) {
     store.dispatch(updateUTXOsForAddress({ address, utxos }));
 
     // Detect brand-new UTXOs and enqueue popup notifications
+    // Detect brand-new *unconfirmed* UTXOs and enqueue popup notifications
     for (const u of utxos) {
       const key = `${u.tx_hash}:${u.tx_pos}`;
+      const height = typeof u.height === 'number' ? u.height : 0;
+
+      // Only notify on mempool/unconfirmed (height <= 0)
+      if (height > 0) continue;
+
       if (!prevSet.has(key)) {
         store.dispatch(
           enqueueNotification({
-            id: `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+            id: key, // deterministic id prevents duplicates
             kind: 'utxo',
             address,
             value: u.value ?? 0,
             txid: u.tx_hash,
             createdAt: Date.now(),
+            height,
           })
         );
       }
