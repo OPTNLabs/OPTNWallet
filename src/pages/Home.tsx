@@ -214,13 +214,7 @@ const Home: React.FC = () => {
       }
 
       setPlaceholderUTXOs(allUTXOs);
-<<<<<<< HEAD
       dispatch(replaceAllUTXOs({ utxosByAddress: allUTXOs }));
-=======
-      console.log(placeholderUTXOs);
-      setPlaceholderTokenTotals(calculateCashTokenTotals(allUTXOs));
-      dispatch(setUTXOs({ newUTXOs: allUTXOs }));
->>>>>>> fa0b674 (update app deployment)
       await DatabaseService().saveDatabaseToFile();
       dispatch(setInitialized(true));
     } catch (error) {
