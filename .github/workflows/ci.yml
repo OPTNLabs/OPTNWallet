@@ -1,0 +1,40 @@
+name: CI
+on:
+  pull_request:
+  push:
+    branches: [dev]
+
+jobs:
+  web-ci:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install deps
+        run: npm ci
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Typecheck
+        run: npx tsc -b
+
+      - name: Unit tests
+        run: npm run test -- --run
+
+      - name: Build web (sanity)
+        run: npm run build
+
+      - name: Upload web dist
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: web-dist
+          path: dist/
