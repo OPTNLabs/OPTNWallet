@@ -30,7 +30,9 @@ async function queryChainGraph(queryReq: string): Promise<GraphQLResponse> {
   }
 }
 
-export async function queryTotalSupplyFT(tokenId: string): Promise<any> {
+export async function queryTotalSupplyFT(
+  tokenId: string
+): Promise<GraphQLResponse> {
   const queryReqTotalSupply = `query {
     transaction(
       where: {
@@ -48,7 +50,9 @@ export async function queryTotalSupplyFT(tokenId: string): Promise<any> {
   return await queryChainGraph(queryReqTotalSupply);
 }
 
-export async function queryActiveMinting(tokenId: string): Promise<any> {
+export async function queryActiveMinting(
+  tokenId: string
+): Promise<GraphQLResponse> {
   const queryReqActiveMinting = `query {
     output(
       where: {
@@ -66,7 +70,7 @@ export async function queryActiveMinting(tokenId: string): Promise<any> {
 export async function querySupplyNFTs(
   tokenId: string,
   offset: number = 0
-): Promise<any> {
+): Promise<GraphQLResponse> {
   const queryReqTotalSupply = `query {
     output(
       offset: ${offset}
@@ -86,7 +90,7 @@ export async function querySupplyNFTs(
   return await queryChainGraph(queryReqTotalSupply);
 }
 
-export async function queryAuthHead(tokenId: string): Promise<any> {
+export async function queryAuthHead(tokenId: string): Promise<GraphQLResponse> {
   const queryReqAuthHead = `query {
     transaction(
       where: {
@@ -108,7 +112,9 @@ export async function queryAuthHead(tokenId: string): Promise<any> {
   return await queryChainGraph(queryReqAuthHead);
 }
 
-export async function queryTransactionByHash(txid: string): Promise<any> {
+export async function queryTransactionByHash(
+  txid: string
+): Promise<GraphQLResponse> {
   const query = `query {
     transaction(where: { hash: { _eq: "\\\\x${txid}" } }) {
       outputs {

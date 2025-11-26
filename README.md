@@ -61,6 +61,7 @@ The source code is hosted on GitHub: [OPTN Wallet Repository](https://github.com
    cd OPTNWallet
 
 
+
 ```
 OPTNWallet
 ├─ .editorconfig
@@ -228,7 +229,6 @@ OPTNWallet
 │  │  ├─ contractSlice.ts
 │  │  ├─ networkSlice.ts
 │  │  ├─ notificationsSlice.ts
-│  │  ├─ priceFeedSlice copy.ts
 │  │  ├─ priceFeedSlice.ts
 │  │  ├─ selectors
 │  │  │  └─ networkSelectors.ts
@@ -240,17 +240,13 @@ OPTNWallet
 │  │  └─ walletconnectSlice.ts
 │  ├─ services
 │  │  ├─ BcmrService.ts
-│  │  ├─ BcmrSnapshotStorage.ts
 │  │  ├─ CoinSelectionService.ts
 │  │  ├─ ElectrumService.ts
-│  │  ├─ ElectrumServiceTemp.ts
 │  │  ├─ ElectrumSubscriptionManager.ts
-│  │  ├─ KeyService copy.ts
 │  │  ├─ KeyService.ts
 │  │  ├─ Notify.ts
 │  │  ├─ TransactionService.ts
 │  │  ├─ UTXOService.ts
-│  │  ├─ priceService copy.ts
 │  │  └─ priceService.ts
 │  ├─ shim
 │  │  ├─ net.ts
