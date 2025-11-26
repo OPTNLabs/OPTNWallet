@@ -43,7 +43,9 @@ export default function KeyGeneration() {
         : COIN_TYPE.testnet;
 
     // console.log('Generating seed...');
-    const seed: Uint8Array = await bip39.mnemonicToSeed(mnemonic, passphrase);
+    const seed: Uint8Array = Uint8Array.from(
+      await bip39.mnemonicToSeed(mnemonic, passphrase)
+    );
 
     // Defining rootNode as type HdNode
     const rootNode: HdNode = deriveHdPrivateNodeFromSeed(seed, {
