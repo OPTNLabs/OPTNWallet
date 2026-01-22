@@ -152,9 +152,13 @@ export const approveSessionProposal = createAsyncThunk(
 
     // strip off the libauth PREFIX (e.g. "bitcoincash:" or "bchtest:")
     const addressPrefix = PREFIX[currentNetwork];
-    const firstAddress = (
-      await KeyService.retrieveKeys(state.wallet_id.currentWalletId!)
-    )[0].address;
+    const keys = await KeyService.retrieveKeys(
+      state.wallet_id.currentWalletId!
+    );
+    if (!keys.length) {
+      throw new Error('No keys available for current wallet');
+    }
+    const firstAddress = keys[0].address;
     const account = `${namespace}${firstAddress.slice(addressPrefix.length)}`;
 
     const approvedNamespaces = buildApprovedNamespaces({

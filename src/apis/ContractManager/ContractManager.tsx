@@ -11,6 +11,7 @@ import parseInputValue from '../../utils/parseInputValue';
 import { Network } from '../../redux/networkSlice';
 import { store } from '../../redux/store';
 import ElectrumService from '../../services/ElectrumService';
+import KeyService from '../../services/KeyService';
 import { UTXO } from '../../types/types';
 import p2pkhArtifact from './artifacts/p2pkh.json';
 import bip38Artifact from './artifacts/bip38.json';
@@ -701,22 +702,54 @@ export default function ContractManager() {
       );
     }
 
-    // Create unlocker with function inputs
-    const unlocker = contract.unlock[contractFunction](
-      ...abiFunction.inputs.map((input: any) => {
-        // Get the corresponding value from contractFunctionInputs using the input name
+    // Create unlock args with function inputs (async because sigaddr needs key lookup)
+    const args = await Promise.all(
+      abiFunction.inputs.map(async (input: any) => {
         const inputValue = contractFunctionInputs[input.name];
 
-        // Check if the input type is 'sig' (for signature)
         if (input.type === 'sig') {
-          // Handle signature input with `SignatureTemplate`
-          return new SignatureTemplate(inputValue, HashType.SIGHASH_ALL);
-        } else {
-          // For other inputs, parse the input value based on its type
-          return parseInputValue(inputValue, input.type);
+          if (
+            typeof inputValue !== 'string' ||
+            inputValue.trim().length === 0
+          ) {
+            throw new Error(
+              `Missing signature input for '${input.name}'. Use sigaddr:<address>.`
+            );
+          }
+
+          const v = inputValue.trim();
+
+          // Baseline: prefer address-referenced signing
+          if (v.startsWith('sigaddr:')) {
+            const addr = v.slice('sigaddr:'.length).trim();
+            if (!addr) throw new Error(`Invalid sigaddr for '${input.name}'.`);
+
+            const pk = await KeyService.fetchAddressPrivateKey(addr);
+            if (!pk || pk.length === 0) {
+              throw new Error(`Private key not found for sigaddr '${addr}'.`);
+            }
+
+            return new SignatureTemplate(pk, HashType.SIGHASH_ALL);
+          }
+
+          // Explicit escape hatch (user must opt-in by prefix)
+          if (v.startsWith('sigkey:')) {
+            const keyMaterial = v.slice('sigkey:'.length).trim();
+            if (!keyMaterial)
+              throw new Error(`Invalid sigkey for '${input.name}'.`);
+            return new SignatureTemplate(keyMaterial, HashType.SIGHASH_ALL);
+          }
+
+          // Anything else is rejected (prevents accidental key injection via addons)
+          throw new Error(
+            `Unsupported sig input for '${input.name}'. Use sigaddr:<address> (recommended) or sigkey:<wif|hex> (explicit).`
+          );
         }
+
+        return parseInputValue(inputValue, input.type);
       })
     );
+    const unlocker = contract.unlock[contractFunction](...args);
 
     // console.log('Generated unlocker for contract function:', unlocker);
 

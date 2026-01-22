@@ -1,48 +1,35 @@
 // src/pages/Transaction.tsx
 
 import React, { useEffect, useMemo, useState } from 'react';
-// import { useNavigate } from 'react-router-dom';
 import { useDispatch, useSelector } from 'react-redux';
 import { UTXO } from '../types/types';
 import AddressSelection from '../components/transaction/AddressSelection';
 import OutputSelection from '../components/transaction/OutputSelection';
 import SelectedUTXOsDisplay from '../components/transaction/SelectedUTXOsDisplay';
-// import TransactionOutputsDisplay from '../components/transaction/TransactionOutputsDisplay';
 import TransactionActions from '../components/transaction/TransactionActions';
 import UTXOSelection from '../components/transaction/UTXOSelection';
 import SelectContractFunctionPopup from '../components/SelectContractFunctionPopup';
 import ErrorAndStatusPopups from '../components/transaction/ErrorAndStatusPopups';
-import ErrorBoundary from '../components/ErrorBoundary'; // Import ErrorBoundary
+import ErrorBoundary from '../components/ErrorBoundary';
 import { SignatureTemplate, HashType } from 'cashscript';
 import { RootState, AppDispatch } from '../redux/store';
 import {
   setSelectedFunction,
   setInputValues,
   resetContract,
-} from '../redux/contractSlice'; // Import resetContract
+} from '../redux/contractSlice';
 import {
-  // addTxOutput,
   removeTxOutput,
   clearTransaction,
-  // setTxOutputs,
 } from '../redux/transactionBuilderSlice';
 import { selectCurrentNetwork } from '../redux/selectors/networkSelectors';
-// import { Network } from '../redux/networkSlice';
 import useFetchWalletData from '../hooks/useFetchWalletData';
 import useHandleTransaction from '../hooks/useHandleTransaction';
 import TransactionService from '../services/TransactionService';
-import {
-  selectWalletId,
-  // setWalletId,
-  // selectNetworkType,
-} from '../redux/walletSlice';
-// import AvailableUTXOsDisplay from '../components/transaction/AvailableUTXOsDisplay';
+import { selectWalletId } from '../redux/walletSlice';
 import ContractManager from '../apis/ContractManager/ContractManager';
 import { SATSINBITCOIN } from '../utils/constants';
-// import {
-//   optimisticRemoveSpentByOutpoints,
-//   requestUTXORefreshForMany,
-// } from '../workers/UTXOWorkerService';
+import { PaperWalletSecretStore } from '../services/PaperWalletSecretStore';
 
 const Transaction: React.FC = () => {
   // Removed local walletId state
@@ -133,24 +120,16 @@ const Transaction: React.FC = () => {
     [utxosByAddress]
   );
 
-  // Access Redux state using useSelector
-  // const selectedFunction = useSelector(
-  //   (state: RootState) => state.contract.selectedFunction
-  // );
   const txOutputs = useSelector(
     (state: RootState) => state.transactionBuilder.txOutputs
   );
 
   const walletId = useSelector(selectWalletId);
-  // const networkType = useSelector(selectNetworkType);
-
-  // console.log('Selected Wallet ID from Redux:', walletId);
-  // console.log('Current Network Type:', networkType);
-
   // Reset transactions and contract states when the component mounts
   useEffect(() => {
     dispatch(clearTransaction());
     dispatch(resetContract());
+    PaperWalletSecretStore.clear();
     // console.log('Transaction and Contract states have been reset.');
   }, [dispatch]);
 
@@ -167,22 +146,6 @@ const Transaction: React.FC = () => {
     setChangeAddress,
     setErrorMessage
   );
-
-  // useEffect(() => {
-  //   // Treat a 64-hex txid (or whenever your UI toggles showTxIdPopup) as success
-  //   const looksLikeTxId = /^[0-9a-f]{64}$/i.test(transactionId);
-  //   if (!looksLikeTxId) return;
-
-  //   // 1) Drop the inputs we just spent (immediate UI correctness)
-  //   optimisticRemoveSpentByOutpoints(spentOutpoints);
-
-  //   // 2) Force a canonical refresh for all touched addresses
-  //   requestUTXORefreshForMany(touchedAddresses, 0);
-
-  //   // (Optional) you could also clear local selection here if you want:
-  //   // setSelectedUtxos([]);
-  //   // setSelectedAddresses(prev => prev.filter(a => !touchedAddresses.includes(a)));
-  // }, [transactionId, spentOutpoints, touchedAddresses]);
 
   /**
    * Handle the selection and deselection of UTXOs.
@@ -203,6 +166,10 @@ const Transaction: React.FC = () => {
     );
 
     if (isSelected) {
+      if (utxo.isPaperWallet) {
+        PaperWalletSecretStore.del(utxo.tx_hash, utxo.tx_pos);
+      }
+
       setSelectedUtxos(
         selectedUtxos.filter((selectedUtxo) => selectedUtxo.id !== utxo.id)
       );
@@ -243,17 +210,6 @@ const Transaction: React.FC = () => {
         // console.log('Selected a Paper Wallet UTXO:', utxo);
         // }
       } else {
-        // const signatureTemplate = new SignatureTemplate(
-        //   utxo.privateKey!,
-        //   HashType.SIGHASH_ALL
-        // );
-        // const unlocker = signatureTemplate.unlockP2PKH();
-
-        // const updatedUtxo: UTXO = {
-        //   ...utxo,
-        //   unlocker,
-        // };
-
         setSelectedUtxos([...selectedUtxos, utxo]);
         setSelectedAddresses((prev) => [...prev, utxo.address]);
 
@@ -285,7 +241,7 @@ const Transaction: React.FC = () => {
         const newOutput = TransactionService.addOutput(
           recipientAddress,
           transferAmount,
-          Number(tokenAmount),
+          tokenAmount,
           selectedTokenCategory,
           selectedUtxos,
           addresses,
@@ -364,8 +320,7 @@ const Transaction: React.FC = () => {
     setShowPopup(false);
     setErrorMessage(null);
     setShowPaperWalletUTXOsPopup(false);
-    // setShowOutputs(false);
-    // setShowCTUTXOs(false);
+    PaperWalletSecretStore.clear();
   };
 
   /**
