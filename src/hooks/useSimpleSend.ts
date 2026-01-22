@@ -10,7 +10,7 @@ import useFetchWalletData from './useFetchWalletData';
 import { UTXO, TransactionOutput } from '../types/types';
 import TransactionService from '../services/TransactionService';
 import { selectCurrentNetwork } from '../redux/selectors/networkSelectors';
-import { SATSINBITCOIN } from '../utils/constants';
+import { SATSINBITCOIN, TOKEN_OUTPUT_SATS } from '../utils/constants';
 import UTXOService from '../services/UTXOService';
 import {
   selectNftInput,
@@ -31,9 +31,6 @@ type ReviewState = {
 
 type SimpleSendMode = 'idle' | 'review' | 'sending' | 'sent' | 'error';
 type AssetType = 'bch' | 'ft' | 'nft';
-
-// Token output policy: send at least 1,000 sats with token-bearing outputs
-const TOKEN_OUTPUT_SATS = 1000;
 
 // Extra BCH fee buffer (BCH change must be at least this, separate from tokens)
 const FEE_BUFFER_SATS = 1000;

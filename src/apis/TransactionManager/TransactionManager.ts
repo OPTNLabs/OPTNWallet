@@ -3,7 +3,6 @@
 import { store } from '../../redux/store';
 import { addTxOutput } from '../../redux/transactionBuilderSlice';
 import ElectrumService from '../../services/ElectrumService';
-import KeyService from '../../services/KeyService';
 import {
   TransactionHistoryItem,
   TransactionOutput,
@@ -11,16 +10,13 @@ import {
 } from '../../types/types';
 import DatabaseService from '../DatabaseManager/DatabaseService';
 import TransactionBuilderHelper from './TransactionBuilderHelper';
+import { DUST, TOKEN_OUTPUT_SATS } from '../../utils/constants';
 
 export default function TransactionManager() {
   const dbService = DatabaseService();
 
   /**
    * Fetches transaction history from the Electrum service and stores it in the database.
-   *
-   * @param walletId - The ID of the wallet.
-   * @param address - The address to fetch transaction history for.
-   * @returns An array of TransactionHistoryItem.
    */
   async function fetchAndStoreTransactionHistory(
     walletId: number,
@@ -34,20 +30,16 @@ export default function TransactionManager() {
     let history: TransactionHistoryItem[] = [];
 
     try {
-      // Fetch transaction history using Electrum service
       history = await ElectrumService.getTransactionHistory(address);
 
-      // Validate the fetched history
       if (!Array.isArray(history)) {
         throw new Error('Invalid transaction history format');
       }
 
       const timestamp = new Date().toISOString();
 
-      // Begin a database transaction for batch operations
       db.exec('BEGIN TRANSACTION');
 
-      // Prepare the upsert statement using the UNIQUE constraint
       const upsertStmt = db.prepare(`
         INSERT INTO transactions (wallet_id, tx_hash, height, timestamp, amount)
         VALUES (?, ?, ?, ?, 0)
@@ -56,22 +48,13 @@ export default function TransactionManager() {
           timestamp = excluded.timestamp
       `);
 
-      // Iterate through each transaction and perform upsert
       for (const tx of history) {
         upsertStmt.run([walletId, tx.tx_hash, tx.height, timestamp]);
       }
 
-      // Finalize the prepared statement
       upsertStmt.free();
-
-      // Commit the transaction after successful operations
       db.exec('COMMIT');
-
-      // console.log(
-      //   `Fetched and stored transaction history for address ${address}`
-      // );
     } catch (error) {
-      // Rollback the transaction in case of any errors
       db.exec('ROLLBACK');
       console.error(
         `Failed to fetch and store transaction history for address ${address}:`,
@@ -84,9 +67,6 @@ export default function TransactionManager() {
 
   /**
    * Sends a raw transaction to the network using the TransactionBuilderHelper.
-   *
-   * @param rawTX - The raw transaction hex string.
-   * @returns An object containing the transaction ID and any error message.
    */
   async function sendTransaction(rawTX: string) {
     const txBuilder = TransactionBuilderHelper();
@@ -94,7 +74,6 @@ export default function TransactionManager() {
     let errorMessage: string | null = null;
     try {
       txid = await txBuilder.sendTransaction(rawTX);
-      // console.log('Sent Transaction:', txid);
     } catch (error: any) {
       console.error('Error sending transaction:', error);
       errorMessage = 'Error sending transaction: ' + error.message;
@@ -108,20 +87,14 @@ export default function TransactionManager() {
   /**
    * Adds a new output to the transaction builder.
    *
-   * @param recipientAddress - The address of the transaction recipient.
-   * @param transferAmount - The amount to transfer in satoshis.
-   * @param tokenAmount - The amount of tokens to transfer.
-   * @param selectedTokenCategory - The category of the selected token **or** the genesis UTXO tx_hash.
-   * @param selectedUtxos - The selected UTXOs for the transaction.
-   * @param addresses - An array of addresses with optional token addresses.
-   * @param nftCapability - (For genesis only) capability if creating an NFT
-   * @param nftCommitment - (For genesis only) commitment if creating an NFT
-   * @returns The newly created TransactionOutput or undefined if inputs are invalid.
+   * Baseline rules:
+   * - token-bearing outputs must have >= TOKEN_OUTPUT_SATS sats
+   * - NFT token.amount must exist and should be 0 (do not delete it)
    */
   function addOutput(
     recipientAddress: string,
     transferAmount: number,
-    tokenAmount: number,
+    tokenAmount: number | bigint,
     selectedTokenCategory: string = '',
     selectedUtxos: UTXO[] = [],
     addresses: { address: string; tokenAddress?: string }[] = [],
@@ -136,21 +109,16 @@ export default function TransactionManager() {
       return undefined;
     }
 
-    // Initialize a new transaction output (regular by default)
     const newOutput: TransactionOutput = {
       recipientAddress,
       amount: transferAmount || 0,
     };
 
-    // If user selected a token category or a genesis tx_hash
     if (selectedTokenCategory) {
-      // 1) Attempt to find an existing token UTXO if user is transferring an existing token
       const existingTokenUTXO = selectedUtxos.find(
         (utxo) => utxo.token && utxo.token.category === selectedTokenCategory
       );
 
-      // 2) Or find a 'genesis' UTXO if user is creating a new CashToken:
-      //    specifically a UTXO with tx_pos === 0, no .token, and matching tx_hash
       const genesisUtxo = selectedUtxos.find(
         (utxo) =>
           !utxo.token &&
@@ -160,23 +128,21 @@ export default function TransactionManager() {
 
       if (existingTokenUTXO && existingTokenUTXO.token) {
         // ------- TRANSFERRING EXISTING TOKEN -------
-        // Start by copying the category
         newOutput.token = {
-          amount: tokenAmount, // For fungible tokens
+          amount: tokenAmount, // default FT amount
           category: existingTokenUTXO.token.category,
         };
 
-        // If the existing token is actually an NFT (utxo.token.nft is present),
-        // replicate its capability & commitment. Also ensure amount is undefined.
+        // NFT transfer: keep amount field present, force 0
         if (existingTokenUTXO.token.nft) {
-          delete newOutput.token.amount; // Non-fungible => remove fungible amount
+          newOutput.token.amount = 0;
           newOutput.token.nft = {
             capability: existingTokenUTXO.token.nft.capability,
             commitment: existingTokenUTXO.token.nft.commitment,
           };
         }
 
-        // Optionally redirect recipient to a token address if available
+        // Redirect to token address if available
         const tokenAddress = addresses.find(
           (addr) => addr.address === recipientAddress
         )?.tokenAddress;
@@ -184,22 +150,27 @@ export default function TransactionManager() {
           newOutput.recipientAddress = tokenAddress;
         }
 
+        // Enforce token-bearing sats minimum
+        if ((newOutput as any).amount < TOKEN_OUTPUT_SATS) {
+          (newOutput as any).amount = TOKEN_OUTPUT_SATS;
+        }
       } else if (genesisUtxo) {
         // ------- CREATING A NEW CASHTOKEN (GENESIS) -------
+        const isNftGenesis = nftCapability && nftCommitment !== undefined;
+
         newOutput.token = {
-          // If NFT data is present, enforce 0 fungible token amount
-          amount: nftCapability && nftCommitment !== undefined ? 0 : tokenAmount,
+          amount: isNftGenesis ? 0 : tokenAmount,
           category: genesisUtxo.tx_hash,
         };
 
-        if (nftCapability && nftCommitment !== undefined) {
+        if (isNftGenesis) {
           newOutput.token.nft = {
             capability: nftCapability,
-            commitment: nftCommitment,
+            commitment: nftCommitment!,
           };
         }
 
-        // Optionally redirect to special token address if it exists
+        // Redirect to token address if available
         const tokenAddress = addresses.find(
           (addr) => addr.address === recipientAddress
         )?.tokenAddress;
@@ -207,28 +178,30 @@ export default function TransactionManager() {
           newOutput.recipientAddress = tokenAddress;
         }
 
+        // Enforce token-bearing sats minimum
+        if ((newOutput as any).amount < TOKEN_OUTPUT_SATS) {
+          (newOutput as any).amount = TOKEN_OUTPUT_SATS;
+        }
       } else {
-        // Fallback: no existing token or valid genesis UTXO found
         console.warn(
           'addOutput: No matching token UTXO or valid genesis UTXO found for the selected category.'
         );
       }
     }
 
-    // Dispatch this new output to Redux
     store.dispatch(addTxOutput(newOutput));
-    // console.log('[TransactionManager.addOutput] New Output:', newOutput);
     return newOutput;
   }
 
   /**
-   * Builds a transaction using the provided outputs, contract function inputs, change address, and selected UTXOs.
+   * Builds a transaction using the provided outputs, change address, and selected UTXOs.
    *
-   * @param outputs - An array of TransactionOutput objects.
-   * @param contractFunctionInputs - The inputs for the contract function.
-   * @param changeAddress - The address to send any remaining funds.
-   * @param selectedUtxos - An array of selected UTXOs for the transaction.
-   * @returns An object containing bytecode size, final transaction, final outputs, and any error message.
+   * Baseline rules:
+   * - Fee policy: 1 sat/byte
+   * - Change output is added only if >= DUST
+   * - If remainder < DUST, no change output is added (remainder goes to fee)
+   * - Token-bearing outputs should already have minimum sats, and TransactionBuilderHelper
+   *   enforces it again at build time.
    */
   const buildTransaction = async (
     outputs: TransactionOutput[],
@@ -241,19 +214,8 @@ export default function TransactionManager() {
     finalOutputs: TransactionOutput[] | null;
     errorMsg: string;
   }> => {
-    // console.log(
-    //   `TransactionManager: txInputs: ${JSON.stringify(selectedUtxos, null, 2)}`
-    // );
-    // console.log(
-    //   `TransactionManager: txOutputs: ${JSON.stringify(outputs, null, 2)}`
-    // );
     console.warn(`Unused Params: ${JSON.stringify(contractFunctionInputs)}`);
-    // console.log('TransactionManager: Change Address:', changeAddress);
-    // console.log('TransactionManager: Selected UTXOs:', selectedUtxos);
-    // Fetch the latest state
-    const state = store.getState();
-    const selectedFunction = state.contract.selectedFunction;
-    console.log(selectedFunction)
+
     const txBuilder = TransactionBuilderHelper();
     const returnObj = {
       bytecodeSize: 0,
@@ -262,109 +224,99 @@ export default function TransactionManager() {
       errorMsg: '',
     };
 
-    // Calculate total input and output amounts
-    const totalUtxoAmount = selectedUtxos.reduce(
-      (sum, utxo) => sum + BigInt(utxo.amount),
-      BigInt(0)
-    );
-    // console.log(`Total UTXO Amount: ${totalUtxoAmount}`);
+    // Defensive: amount might be in .value for some UTXOs, but your code currently uses .amount.
+    // Keep behavior stable: prefer amount, fallback to value.
+    const totalUtxoAmount = selectedUtxos.reduce((sum, utxo) => {
+      const n = (utxo.amount ?? utxo.value) as number;
+      return sum + BigInt(n || 0);
+    }, 0n);
 
     const totalOutputAmount = outputs.reduce(
-      (sum, output) => sum + BigInt(output.amount),
-      BigInt(0)
+      (sum, output) => sum + BigInt(output.amount as any),
+      0n
     );
-    // console.log(`Total Output Amount: ${totalOutputAmount}`);
 
     try {
-      // Add a placeholder output for change to calculate bytecode size
-      const placeholderOutput: TransactionOutput = {
-        recipientAddress: changeAddress,
-        amount: 546, // Dust amount to ensure proper transaction formatting
-      };
-      const txOutputsWithPlaceholder = [...outputs, placeholderOutput];
-      // console.log(
-      //   'Transaction Outputs with Placeholder:',
-      //   txOutputsWithPlaceholder
-      // );
+      // 1) First build WITHOUT adding change to estimate fee at 1 sat/byte.
+      //    If build fails without change (rare, but possible if builder requires change),
+      //    we’ll fall back to a placeholder.
+      let estimatedBytecodeSize = 0;
 
-      // First build to get bytecode size
-      const transaction = await txBuilder.buildTransaction(
-        selectedUtxos,
-        txOutputsWithPlaceholder,
-      );
-      // console.log('Transaction after first build:', transaction);
-
-      if (transaction) {
-        // Calculate bytecode size based on transaction length
-        const bytecodeSize = transaction.length / 2;
-
-        // Calculate the remaining amount after outputs and bytecode
-        const remainder =
-          totalUtxoAmount - totalOutputAmount - BigInt(bytecodeSize);
-        // console.log(`Bytecode Size: ${bytecodeSize}`);
-        // console.log(`Remainder: ${remainder}`);
-
-        // Remove the placeholder output
-        const txOutputs = [...outputs];
-        // console.log('Transaction Outputs before adding change:', txOutputs);
-
-        // Add the change output if there's a remainder
-        if (changeAddress && remainder > BigInt(0)) {
-          const changeAmount = Number(remainder);
-          // console.log(`Calculated Change Amount: ${changeAmount}`);
-
-          if (changeAmount > 0) {
-            const changeOutput: TransactionOutput = {
-              recipientAddress: changeAddress,
-              amount: changeAmount,
-              // Optionally, mark this as a change output
-              // isChange: true,
-            };
-            txOutputs.push(changeOutput);
-            // console.log('Added Change Output:', changeOutput);
-          } else {
-            console.warn('No sufficient remainder to add a change output.');
-          }
-        } else {
-          console.warn('No remainder to add a change output.');
-        }
-
-        // console.log('Final Transaction Outputs:', txOutputs);
-
-        // Build the final transaction with the updated outputs
-        const finalTransaction = await txBuilder.buildTransaction(
+      try {
+        const txNoChange = await txBuilder.buildTransaction(
           selectedUtxos,
-          txOutputs
+          outputs
         );
-        // console.log('Final Transaction:', finalTransaction);
-
-        returnObj.bytecodeSize = finalTransaction.length / 2;
-        returnObj.finalTransaction = finalTransaction;
-        returnObj.finalOutputs = txOutputs;
-
-        // console.log('Final Transaction Outputs:', txOutputs);
-
-        returnObj.errorMsg = '';
-        // console.log(txOutputs)
+        estimatedBytecodeSize = txNoChange.length / 2;
+      } catch (e) {
+        // Fallback: placeholder change output to allow size estimation
+        const placeholder: TransactionOutput = {
+          recipientAddress: changeAddress,
+          amount: DUST,
+        };
+        const txWithPlaceholder = await txBuilder.buildTransaction(
+          selectedUtxos,
+          [...outputs, placeholder]
+        );
+        estimatedBytecodeSize = txWithPlaceholder.length / 2;
       }
+
+      // Fee = 1 sat/byte * bytecodeSize
+      const fee = BigInt(estimatedBytecodeSize);
+
+      // Remainder after paying outputs + fee
+      const remainder = totalUtxoAmount - totalOutputAmount - fee;
+
+      if (remainder < 0n) {
+        throw new Error(
+          `Insufficient funds: inputs=${totalUtxoAmount.toString()} outputs=${totalOutputAmount.toString()} fee≈${fee.toString()}`
+        );
+      }
+
+      const txOutputs: TransactionOutput[] = [...outputs];
+
+      // Only add change if it is >= DUST
+      if (changeAddress && remainder >= BigInt(DUST)) {
+        txOutputs.push({
+          recipientAddress: changeAddress,
+          amount: Number(remainder),
+        });
+      } else {
+        // remainder < DUST => no change, remainder is added to fee implicitly
+        // (This is the correct "no dust change" policy.)
+      }
+
+      // 2) Final build
+      const finalTransaction = await txBuilder.buildTransaction(
+        selectedUtxos,
+        txOutputs
+      );
+
+      returnObj.bytecodeSize = finalTransaction.length / 2;
+      returnObj.finalTransaction = finalTransaction;
+      returnObj.finalOutputs = txOutputs;
+      returnObj.errorMsg = '';
+
+      return returnObj;
     } catch (err: any) {
       console.error('Error building transaction:', err);
       returnObj.errorMsg = err.message || 'Unknown error';
+      return returnObj;
     }
-    return returnObj;
   };
 
   /**
    * Fetches the private key for a given address using the KeyService.
-   *
-   * @param address - The address to fetch the private key for.
-   * @returns A Uint8Array representing the private key or null if not found.
+   * (Note: you said key storage baseline is deferred; leaving this unchanged.)
    */
-  const fetchPrivateKey = async (
-    address: string
-  ): Promise<Uint8Array | null> => {
-    return await KeyService.fetchAddressPrivateKey(address);
-  };
+  async function fetchPrivateKey(address: string): Promise<Uint8Array | null> {
+    // Keeping this so other code that calls TransactionManager.fetchPrivateKey won't break
+    // even if unused in current flows.
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-return
+    return await (
+      await import('../../services/KeyService')
+    ).default.fetchAddressPrivateKey(address);
+  }
 
   return {
     fetchAndStoreTransactionHistory,

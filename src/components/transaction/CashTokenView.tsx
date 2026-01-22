@@ -62,13 +62,19 @@ const CashTokenView: React.FC<CashTokenViewProps> = ({
         <label className="block font-medium mb-1">Token Amount</label>
         <input
           type="number"
-          value={Number(tokenAmount)}
+          value={
+            typeof tokenAmount === 'bigint'
+              ? tokenAmount.toString()
+              : String(tokenAmount ?? '')
+          }
           onChange={handleTokenAmountChange}
           className="border p-2 w-full break-words whitespace-normal"
         />
       </div>
       <div className="mb-2">
-        <label className="block font-medium mb-1">Genesis UTXO for new Token</label>
+        <label className="block font-medium mb-1">
+          Genesis UTXO for new Token
+        </label>
         <select
           value={selectedTokenCategory}
           onChange={(e) => setSelectedTokenCategory(e.target.value)}
