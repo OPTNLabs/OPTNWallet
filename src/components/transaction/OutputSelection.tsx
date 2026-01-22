@@ -112,7 +112,7 @@ const OutputSelection: React.FC<OutputSelectionProps> = ({
     setPopupTitle('Add Output');
     setRecipientAddress('');
     setTransferAmount(0);
-    setTokenAmount(0);
+    setTokenAmount(0n);
     setSelectedTokenCategory('');
     setNftCapability(undefined);
     setNftCommitment(undefined);
@@ -130,8 +130,17 @@ const OutputSelection: React.FC<OutputSelectionProps> = ({
 
   const handleTokenAmountChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     if (showNFTCashToken) return;
-    const value = e.target.value;
-    setTokenAmount(value === '' ? 0 : Number(value));
+    const value = e.target.value.trim();
+
+    if (value === '') {
+      setTokenAmount(0n);
+      return;
+    }
+
+    // enforce digits only
+    if (!/^\d+$/.test(value)) return;
+
+    setTokenAmount(BigInt(value));
   };
 
   const scanBarcode = async () => {
