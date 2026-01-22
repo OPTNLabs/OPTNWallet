@@ -62,14 +62,20 @@ const NFTView: React.FC<NFTViewProps> = ({
         <label className="block font-medium mb-1">NFT Token Amount</label>
         <input
           type="number"
-          value={Number(tokenAmount)}
+          value={
+            typeof tokenAmount === 'bigint'
+              ? tokenAmount.toString()
+              : String(tokenAmount ?? '')
+          }
           onChange={() => {}} // Disabled
           className="border p-2 w-full break-words whitespace-normal"
           disabled
         />
       </div>
       <div className="mb-2">
-        <label className="block font-medium mb-1">Genesis UTXO for new NFT</label>
+        <label className="block font-medium mb-1">
+          Genesis UTXO for new NFT
+        </label>
         <select
           value={selectedTokenCategory}
           onChange={(e) => setSelectedTokenCategory(e.target.value)}

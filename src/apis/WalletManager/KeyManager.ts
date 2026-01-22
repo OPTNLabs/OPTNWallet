@@ -41,7 +41,6 @@ export default function KeyManager() {
       SELECT 
         id, 
         public_key, 
-        private_key, 
         address,
         token_address,
         pubkey_hash,
@@ -65,12 +64,6 @@ export default function KeyManager() {
           ? Uint8Array.from(atob(row.public_key), (c) => c.charCodeAt(0))
           : new Uint8Array();
 
-      const privateKey = isArrayBufferLike(row.private_key)
-        ? new Uint8Array(row.private_key)
-        : isString(row.private_key)
-          ? Uint8Array.from(atob(row.private_key), (c) => c.charCodeAt(0))
-          : new Uint8Array();
-
       const pubkeyHash = isArrayBufferLike(row.pubkey_hash)
         ? new Uint8Array(row.pubkey_hash)
         : isString(row.pubkey_hash)
@@ -80,7 +73,6 @@ export default function KeyManager() {
       const keyData = {
         id: row.id as number,
         publicKey,
-        privateKey,
         address: row.address as string,
         tokenAddress: row.token_address as string,
         pubkeyHash,
@@ -214,12 +206,18 @@ export default function KeyManager() {
     const result = fetchAddressQuery.get([address]) as any;
     fetchAddressQuery.free();
 
-    // console.log(result);
-
-    if (result && isArrayBufferLike(result[0])) {
-      return new Uint8Array(result[0]);
-    } else {
+    if (!result || result[0] == null) {
       throw new Error(`No private key found for address: ${address}`);
     }
+
+    // Support either a binary blob (preferred) or base64 string (legacy/alternate)
+    if (isArrayBufferLike(result[0])) {
+      return new Uint8Array(result[0]);
+    }
+    if (isString(result[0])) {
+      return Uint8Array.from(atob(result[0]), (c) => c.charCodeAt(0));
+    }
+
+    throw new Error(`Unsupported private key format for address: ${address}`);
   }
 }

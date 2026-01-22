@@ -8,7 +8,6 @@ import {
   setInputs,
   setInputValues,
 } from '../redux/contractSlice';
-import { encodePrivateKeyWif } from '@bitauth/libauth';
 import { RootState, AppDispatch } from '../redux/store';
 import { hexString } from '../utils/hex';
 import KeyService from '../services/KeyService';
@@ -183,7 +182,7 @@ const SelectContractFunctionPopup: React.FC<
         } else if (selectedInput.type === 'bytes20') {
           valueToSet = hexString(selectedKey.pubkeyHash);
         } else if (selectedInput.type === 'sig') {
-          valueToSet = encodePrivateKeyWif(selectedKey.privateKey, 'testnet');
+          valueToSet = `sigaddr:${address}`;
         }
         setInputValuesState((prev) => ({
           ...prev,
@@ -219,6 +218,20 @@ const SelectContractFunctionPopup: React.FC<
       if (result && result.ScanResult) {
         const scannedValue = result.ScanResult.trim();
         const isValidHex = (str: string) => /^[0-9a-fA-F]+$/.test(str);
+
+        const looksLikeCashaddr = (str: string) =>
+          /^(bitcoincash:|bchtest:)?[0-9a-z]{20,}$/i.test(str);
+
+        // If scanning a signature arg, interpret scanned address as sigaddr:<address>
+        if (argType === 'sig') {
+          const v = scannedValue.startsWith('sigaddr:')
+            ? scannedValue
+            : looksLikeCashaddr(scannedValue)
+              ? `sigaddr:${scannedValue}`
+              : scannedValue;
+          setInputValuesState((prev) => ({ ...prev, [argName]: v }));
+          return;
+        }
 
         if (argType === 'pubkey' || argType === 'bytes20') {
           if (!isValidHex(scannedValue)) {

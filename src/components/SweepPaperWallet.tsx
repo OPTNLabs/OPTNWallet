@@ -14,6 +14,7 @@ import {
 import { FaCamera } from 'react-icons/fa';
 import ElectrumService from '../services/ElectrumService';
 import { UTXO } from '../types/types';
+import { PaperWalletSecretStore } from '../services/PaperWalletSecretStore';
 import { useSelector } from 'react-redux';
 import { RootState } from '../redux/store';
 import { selectCurrentNetwork } from '../redux/selectors/networkSelectors';
@@ -66,6 +67,7 @@ const SweepPaperWallet: React.FC<SweepPaperWalletProps> = ({
   const processWifKey = async (wif: string) => {
     setLoading(true);
     setError('');
+    PaperWalletSecretStore.clear();
     // setCashAddress('');
 
     try {
@@ -118,15 +120,18 @@ const SweepPaperWallet: React.FC<SweepPaperWalletProps> = ({
           text: 'No UTXOs found for this address.',
         });
       } else {
-        // Mark UTXOs as paper wallet UTXOs
-        const markedUtxos = fetchedUtxos.map((utxo) => ({
-          ...utxo,
-          id: undefined,
-          isPaperWallet: true,
-          address: address,
-          amount: utxo.value,
-          privateKey: pkArray,
-        }));
+        // Register key in-memory per outpoint, and mark UTXOs as paper wallet UTXOs
+        const markedUtxos = fetchedUtxos.map((utxo) => {
+          PaperWalletSecretStore.set(utxo.tx_hash, utxo.tx_pos, pkArray);
+          return {
+            ...utxo,
+            id: undefined,
+            isPaperWallet: true,
+            address: address,
+            amount: utxo.value,
+            // NOTE: do NOT attach privateKey to UTXO objects
+          };
+        });
         // await Toast.show({
         //   text: `Fetched ${markedUtxos.length} UTXO(s).`,
         // });

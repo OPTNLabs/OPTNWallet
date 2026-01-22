@@ -7,25 +7,48 @@ import {
   HashType,
 } from 'cashscript';
 import ContractManager from '../ContractManager/ContractManager';
-import { UTXO, TransactionOutput } from '../../types/types'; // Updated import to include UTXO and TransactionOutput interfaces
+import { UTXO, TransactionOutput } from '../../types/types';
 import { store } from '../../redux/store';
 import KeyService from '../../services/KeyService';
+import { PaperWalletSecretStore } from '../../services/PaperWalletSecretStore';
+import { TOKEN_OUTPUT_SATS } from '../../utils/constants';
 
 export default function TransactionBuilderHelper() {
   const currentNetwork = store.getState().network.currentNetwork;
   const provider = new ElectrumNetworkProvider(currentNetwork);
   const contractManager = ContractManager();
 
+  // Safe bigint coercion for number | bigint | string | undefined/null
+  function toBigIntAmount(value: unknown): bigint {
+    if (typeof value === 'bigint') return value;
+    if (typeof value === 'number') {
+      if (!Number.isFinite(value)) return 0n;
+      // BCH sats + token amounts should be integers
+      return BigInt(Math.trunc(value));
+    }
+    if (typeof value === 'string') {
+      const trimmed = value.trim();
+      if (!trimmed) return 0n;
+      try {
+        return BigInt(trimmed);
+      } catch {
+        return 0n;
+      }
+    }
+    return 0n;
+  }
+
   /**
    * Extracts the body of a specified function from the contract source code.
-   *
-   * @param source - The contract source code as a string.
-   * @param functionName - The name of the function to extract.
-   * @returns The function body as a string, or null if not found.
    */
-  function extractFunctionBody(source: string, functionName: string): string | null {
-    // Regex to match function definition, e.g., "function timeout(sig senderSig) {"
-    const functionRegex = new RegExp(`function\\s+${functionName}\\s*\\(.*?\\)\\s*{`, 's');
+  function extractFunctionBody(
+    source: string,
+    functionName: string
+  ): string | null {
+    const functionRegex = new RegExp(
+      `function\\s+${functionName}\\s*\\(.*?\\)\\s*{`,
+      's'
+    );
     const match = source.match(functionRegex);
     if (!match || match.index === undefined) return null;
 
@@ -33,7 +56,6 @@ export default function TransactionBuilderHelper() {
     let braceCount = 1;
     let endIndex = startIndex;
 
-    // Count braces to find the end of the function body
     while (endIndex < source.length && braceCount > 0) {
       if (source[endIndex] === '{') braceCount++;
       else if (source[endIndex] === '}') braceCount--;
@@ -48,17 +70,15 @@ export default function TransactionBuilderHelper() {
 
   /**
    * Checks if the specified function uses time-related keywords (tx.time, tx.age, this.age).
-   *
-   * @param contractInstance - The contract instance containing the artifact.
-   * @param functionName - The name of the function to check.
-   * @returns True if the function uses tx.time, tx.age, or this.age; false otherwise.
    */
-  function doesFunctionUseTimeKeywords(contractInstance: any, functionName: string): boolean {
+  function doesFunctionUseTimeKeywords(
+    contractInstance: any,
+    functionName: string
+  ): boolean {
     const source = contractInstance.artifact.source;
     const functionBody = extractFunctionBody(source, functionName);
     if (!functionBody) return false;
 
-    // Check for any of the time-related keywords
     return (
       functionBody.includes('tx.time') ||
       functionBody.includes('tx.age') ||
@@ -69,25 +89,32 @@ export default function TransactionBuilderHelper() {
   /**
    * Prepares transaction outputs by formatting them according to CashScript requirements.
    *
-   * @param outputs - An array of TransactionOutput objects.
-   * @returns An array of formatted outputs for cashscript TransactionBuilder.
+   * Token-bearing outputs are forced to have at least TOKEN_OUTPUT_SATS sats.
+   * Token.amount is always included (NFTs should use amount=0).
    */
   function prepareTransactionOutputs(outputs: TransactionOutput[]): any[] {
     return outputs.map((output) => {
-      // If this is an OP_RETURN variant
+      // OP_RETURN variant
       if ('opReturn' in output && output.opReturn !== undefined) {
         return {
           opReturn: output.opReturn,
         };
       }
 
-      // Otherwise, this is a "regular" or token output
+      // Regular or token output
+      let amountSats = toBigIntAmount(output.amount);
+
+      // Enforce token-bearing outputs have minimum sats
+      if (output.token) {
+        const minTokenSats = BigInt(TOKEN_OUTPUT_SATS);
+        if (amountSats < minTokenSats) amountSats = minTokenSats;
+      }
+
       const baseOutput = {
         to: output.recipientAddress,
-        amount: BigInt(output.amount),
+        amount: amountSats,
       };
 
-      // If there's a token field
       if (output.token) {
         return {
           ...baseOutput,
@@ -99,80 +126,87 @@ export default function TransactionBuilderHelper() {
                 commitment: output.token.nft.commitment,
               },
             }),
-            ...(output.token.amount && {
-              amount: BigInt(output.token.amount),
-            }),
+            // Always include amount: NFTs should be 0; FTs should be set by caller.
+            amount: toBigIntAmount((output.token as any).amount ?? 0),
           },
         };
       }
 
-      // If there's no token, return the base output
       return baseOutput;
     });
   }
 
   /**
-   * Builds a transaction using selected UTXOs, outputs, and optional contract functions.
-   *
-   * @param utxos - An array of selected UTXOs.
-   * @param outputs - An array of desired transaction outputs.
-   * @param contractFunction - (Optional) The name of the contract function to invoke.
-   * @param contractFunctionInputs - (Optional) An object containing inputs for the contract function.
-   * @returns The built transaction or null if an error occurs.
+   * Builds a transaction using selected UTXOs and outputs.
    */
-  async function buildTransaction(
-    utxos: UTXO[],
-    outputs: TransactionOutput[]
-    // contractFunction: string | null = null,
-    // contractFunctionInputs: { [key: string]: any } | null = null
-  ) {
+  async function buildTransaction(utxos: UTXO[], outputs: TransactionOutput[]) {
     const txBuilder = new TransactionBuilder({ provider });
     let needsLocktime = false;
 
-    // Prepare unlockable UTXOs with appropriate unlockers
     const unlockableUtxos = await Promise.all(
       utxos.map(async (utxo) => {
         let unlocker: any;
 
+        // Prefer nullish coalescing so 0 doesn't fall through
+        const value = (utxo.value ?? utxo.amount) as number | undefined;
+        if (
+          value === undefined ||
+          value === null ||
+          Number.isNaN(Number(value))
+        ) {
+          throw new Error(
+            `UTXO missing value/amount for ${utxo.tx_hash}:${utxo.tx_pos}`
+          );
+        }
+
         const processedUtxo = {
           ...utxo,
-          value: utxo.value || utxo.amount,
+          value,
         };
 
         if (!processedUtxo.contractName || !processedUtxo.abi) {
-          // Regular UTXO - use signature unlocker
-          const privateKey = utxo.privateKey
-            ? utxo.privateKey
-            : await KeyService.fetchAddressPrivateKey(processedUtxo.address);
+          let signingKey: Uint8Array | undefined;
 
-          if (!privateKey || privateKey.length === 0) {
-            throw new Error(
-              `Private key not found or empty for address: ${processedUtxo.address}`
+          if (processedUtxo.isPaperWallet) {
+            signingKey = PaperWalletSecretStore.get(
+              processedUtxo.tx_hash,
+              processedUtxo.tx_pos
             );
+            if (!signingKey || signingKey.length === 0) {
+              throw new Error(
+                `Paper wallet key missing for outpoint ${processedUtxo.tx_hash}:${processedUtxo.tx_pos}`
+              );
+            }
+          } else {
+            signingKey = await KeyService.fetchAddressPrivateKey(
+              processedUtxo.address
+            );
+            if (!signingKey || signingKey.length === 0) {
+              throw new Error(
+                `Private key not found or empty for address: ${processedUtxo.address}`
+              );
+            }
           }
 
           const signatureTemplate = new SignatureTemplate(
-            privateKey,
+            signingKey,
             HashType.SIGHASH_ALL
           );
           unlocker = signatureTemplate.unlockP2PKH();
         } else {
-          // Contract UTXO - use contract unlocker
-          const contractInstance = await contractManager.getContractInstanceByAddress(utxo.address)
-          console.log(contractInstance)
-          // console.log(utxo)
+          // Contract UTXO - contract unlocker
+          const contractInstance =
+            await contractManager.getContractInstanceByAddress(utxo.address);
+
           if (!utxo.contractFunction || !utxo.contractFunctionInputs) {
             throw new Error('Contract function and inputs must be provided');
           }
 
-          // Check if the selected function uses time keywords
           const usesTimeKeywords = doesFunctionUseTimeKeywords(
             contractInstance,
             utxo.contractFunction
           );
-          if (usesTimeKeywords) {
-            needsLocktime = true;
-          }
+          if (usesTimeKeywords) needsLocktime = true;
 
           const contractUnlockFunction =
             await contractManager.getContractUnlockFunction(
@@ -191,42 +225,35 @@ export default function TransactionBuilderHelper() {
           token: processedUtxo.token
             ? {
                 ...processedUtxo.token,
-                amount: BigInt(processedUtxo.token.amount), // convert amount to bigint
+                // Always coerce safely; NFTs should end up with 0n
+                amount: toBigIntAmount(
+                  (processedUtxo.token as any).amount ?? 0
+                ),
               }
             : undefined,
         };
       })
     );
 
-    // Add inputs to the transaction builder
     txBuilder.addInputs(unlockableUtxos);
 
-    // Prepare and add outputs
     const txOutputs = prepareTransactionOutputs(outputs);
     txBuilder.addOutputs(txOutputs);
 
-    // Set locktime if any contract function uses time keywords
     if (needsLocktime) {
       const currentBlockHeight = await provider.getBlockHeight();
       txBuilder.setLocktime(currentBlockHeight);
     }
 
     try {
-      const builtTransaction = await txBuilder.build(); // Ensure await is present
-      // console.log('Built Transaction:', builtTransaction);
+      const builtTransaction = await txBuilder.build();
       return builtTransaction;
     } catch (error) {
       console.error('Error building transaction:', error);
-      throw error; // Propagate the error upwards for better handling
+      throw error;
     }
   }
 
-  /**
-   * Sends a raw transaction to the network.
-   *
-   * @param tx - The raw transaction hex string.
-   * @returns The transaction ID or null if an error occurs.
-   */
   const sendTransaction = async (tx: string) => {
     try {
       const txid = await provider.sendRawTransaction(tx);

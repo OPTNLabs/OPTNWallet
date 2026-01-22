@@ -9,22 +9,17 @@ import { COIN_TYPE, PREFIX } from '../utils/constants';
 import { selectCurrentNetwork } from '../redux/selectors/networkSelectors';
 import { QRCodeSVG } from 'qrcode.react';
 import { hexString } from '../utils/hex';
-import { encodePrivateKeyWif } from '@bitauth/libauth';
 
-type QRCodeType = 'address' | 'pubKey' | 'pkh' | 'pk';
+type QRCodeType = 'address' | 'pubKey' | 'pkh';
 
 const Receive: React.FC = () => {
   const [mainKeyPairs, setMainKeyPairs] = useState<any[]>([]);
   const [changeKeyPairs, setChangeKeyPairs] = useState<any[]>([]);
   const [selectedAddress, setSelectedAddress] = useState<string | null>(null);
   const [selectedPubKey, setSelectedPubKey] = useState<string | null>(null);
-  const [selectedPK, setSelectedPK] = useState<string | null>(null);
   const [selectedPKH, setSelectedPKH] = useState<string | null>(null);
   const [isTokenAddress, setIsTokenAddress] = useState(false);
   const [qrCodeType, setQrCodeType] = useState<QRCodeType>('address');
-  const [publicKeyPressCount, setPublicKeyPressCount] = useState<number>(0);
-  const [showPKButton, setShowPKButton] = useState<boolean>(false);
-  const [showPKQRCode, setShowPKQRCode] = useState<boolean>(false);
   const [addressType, setAddressType] = useState<'main' | 'change'>('main');
 
   const currentWalletId = useSelector(
@@ -43,13 +38,17 @@ const Receive: React.FC = () => {
 
       try {
         const existingKeys = await KeyService.retrieveKeys(currentWalletId);
+
         const mainKeys = existingKeys
-          .filter((key) => key.changeIndex === 0)
-          .sort((a, b) => a.addressIndex - b.addressIndex); // Sort by addressIndex ascending
+          .filter((key: any) => key.changeIndex === 0)
+          .sort((a: any, b: any) => a.addressIndex - b.addressIndex);
+
         const changeKeys = existingKeys
-          .filter((key) => key.changeIndex === 1)
-          .sort((a, b) => a.addressIndex - b.addressIndex); // Sort by addressIndex ascending
-        if (mainKeys.length > 0 && changeKeys.length > 0) {
+          .filter((key: any) => key.changeIndex === 1)
+          .sort((a: any, b: any) => a.addressIndex - b.addressIndex);
+
+        // ✅ allow either list to exist
+        if (mainKeys.length > 0 || changeKeys.length > 0) {
           setMainKeyPairs(mainKeys);
           setChangeKeyPairs(changeKeys);
         } else {
@@ -63,67 +62,31 @@ const Receive: React.FC = () => {
     fetchKeys();
   }, [currentWalletId]);
 
-  useEffect(() => {
-    return () => {
-      setPublicKeyPressCount(0);
-      setShowPKButton(false);
-      setShowPKQRCode(false);
-    };
-  }, []);
-
   const handleAddressSelect = async (tokenAddress: string, address: string) => {
     const keys = await KeyService.retrieveKeys(wallet_id);
     const selectedKey = keys.find((key: any) => key.address === address);
 
-    if (selectedKey) {
-      const pubkey = hexString(selectedKey.publicKey);
-      const pkh = hexString(selectedKey.pubkeyHash);
-      const pk = encodePrivateKeyWif(selectedKey.privateKey, 'testnet');
-
-      if (isTokenAddress) {
-        setSelectedAddress(tokenAddress);
-      } else {
-        setSelectedAddress(address);
-      }
-      setSelectedPubKey(pubkey);
-      setSelectedPK(pk);
-      setSelectedPKH(pkh);
-      setQrCodeType('address');
-    } else {
+    if (!selectedKey) {
       console.error('Selected key not found');
+      return;
     }
+
+    const pubkey = hexString(selectedKey.publicKey);
+    const pkh = hexString(selectedKey.pubkeyHash);
+
+    setSelectedAddress(isTokenAddress ? tokenAddress : address);
+    setSelectedPubKey(pubkey);
+    setSelectedPKH(pkh);
+    setQrCodeType('address');
   };
 
-  const handleCopyAddress = async (address: string) => {
+  const handleCopy = async (text: string) => {
     try {
-      await navigator.clipboard.writeText(address);
-      await Toast.show({
-        text: 'Address copied to clipboard!',
-      });
+      await navigator.clipboard.writeText(text);
+      await Toast.show({ text: 'Copied to clipboard!' });
     } catch (error) {
-      console.error('Failed to copy address:', error);
-      await Toast.show({
-        text: 'Failed to copy address.',
-      });
-    }
-  };
-
-  const handleCopyPK = async () => {
-    const confirmCopy = window.confirm(
-      'Are you sure you want to copy your private key? Exposing it can compromise your funds.'
-    );
-    if (confirmCopy && selectedPK) {
-      try {
-        await navigator.clipboard.writeText(selectedPK);
-        await Toast.show({
-          text: 'Private Key copied to clipboard!',
-        });
-      } catch (error) {
-        console.error('Failed to copy private key:', error);
-        await Toast.show({
-          text: 'Failed to copy private key.',
-        });
-      }
+      console.error('Failed to copy:', error);
+      await Toast.show({ text: 'Failed to copy.' });
     }
   };
 
@@ -133,15 +96,10 @@ const Receive: React.FC = () => {
 
   const buildBip21Uri = () => {
     if (!selectedAddress) return '';
-    let uri = `${selectedAddress}`;
-    const params = new URLSearchParams();
-    if (params.toString()) {
-      uri += `?${params.toString()}`;
-    }
-    return uri;
+    // Keep it simple for now; add amount/label/message params later if needed
+    return selectedAddress;
   };
 
-  // Determine which key pairs to display
   const keyPairsToDisplay =
     addressType === 'main' ? mainKeyPairs : changeKeyPairs;
 
@@ -155,6 +113,7 @@ const Receive: React.FC = () => {
             className="w-3/4 h-auto"
           />
         </div>
+
         {!selectedAddress && (
           <div>
             <div className="flex justify-center space-x-4 mb-4 w-full max-w-md">
@@ -163,7 +122,11 @@ const Receive: React.FC = () => {
                   addressType === 'main'
                     ? 'bg-blue-500 text-white'
                     : 'bg-gray-200 text-gray-700'
-                } ${addressType === 'main' ? 'hover:bg-blue-600' : 'hover:bg-gray-300'}`}
+                } ${
+                  addressType === 'main'
+                    ? 'hover:bg-blue-600'
+                    : 'hover:bg-gray-300'
+                }`}
                 onClick={() => setAddressType('main')}
               >
                 Main <br />
@@ -174,7 +137,11 @@ const Receive: React.FC = () => {
                   addressType === 'change'
                     ? 'bg-blue-500 text-white'
                     : 'bg-gray-200 text-gray-700'
-                } ${addressType === 'change' ? 'hover:bg-blue-600' : 'hover:bg-gray-300'}`}
+                } ${
+                  addressType === 'change'
+                    ? 'hover:bg-blue-600'
+                    : 'hover:bg-gray-300'
+                }`}
                 onClick={() => setAddressType('change')}
               >
                 Change <br />
@@ -183,7 +150,6 @@ const Receive: React.FC = () => {
             </div>
 
             <div className="flex flex-row gap-2 items-center justify-center text-gray-800 mb-4">
-              {' '}
               <span
                 className={`${isTokenAddress ? 'text-gray-400' : 'text-black'}`}
               >
@@ -210,6 +176,7 @@ const Receive: React.FC = () => {
           </div>
         )}
       </div>
+
       <div className="flex flex-col items-center space-y-4 h-full">
         {!selectedAddress ? (
           <div
@@ -230,7 +197,11 @@ const Receive: React.FC = () => {
                     PREFIX[currentNetwork].length
                   )}
                   <br />
-                  {`m/44'/${PREFIX[currentNetwork] === PREFIX.mainnet ? COIN_TYPE.bitcoincash : COIN_TYPE.testnet}'/0'/${keyPair.changeIndex}/${keyPair.addressIndex}`}
+                  {`m/44'/${
+                    PREFIX[currentNetwork] === PREFIX.mainnet
+                      ? COIN_TYPE.bitcoincash
+                      : COIN_TYPE.testnet
+                  }'/0'/${keyPair.changeIndex}/${keyPair.addressIndex}`}
                 </p>
               </div>
             ))}
@@ -238,162 +209,79 @@ const Receive: React.FC = () => {
         ) : (
           <>
             <div className="flex flex-col items-center mb-4">
-              {qrCodeType !== 'pk' ? (
-                <>
-                  <QRCodeSVG
-                    value={
-                      qrCodeType === 'address'
-                        ? buildBip21Uri()
-                        : qrCodeType === 'pubKey'
-                          ? selectedPubKey || ''
-                          : qrCodeType === 'pkh'
-                            ? selectedPKH || ''
-                            : ''
-                    }
-                    size={200}
-                  />
-                  <p
-                    className="mt-4 p-2 bg-gray-200 rounded cursor-pointer hover:bg-gray-300"
-                    onClick={() =>
-                      handleCopyAddress(
-                        qrCodeType === 'address'
-                          ? buildBip21Uri()
-                          : qrCodeType === 'pubKey'
-                            ? selectedPubKey || ''
-                            : qrCodeType === 'pkh'
-                              ? selectedPKH || ''
-                              : ''
-                      )
-                    }
-                  >
-                    {qrCodeType === 'address'
-                      ? shortenTxHash(
-                          selectedAddress,
-                          PREFIX[currentNetwork].length
-                        )
-                      : qrCodeType === 'pubKey'
-                        ? shortenTxHash(selectedPubKey || '')
-                        : qrCodeType === 'pkh'
-                          ? shortenTxHash(selectedPKH || '')
-                          : ''}
-                  </p>
-                </>
-              ) : showPKQRCode ? (
-                <>
-                  <QRCodeSVG value={selectedPK || ''} size={200} />
-                  <p
-                    className="mt-4 p-2 bg-gray-200 rounded cursor-pointer hover:bg-gray-300"
-                    onClick={handleCopyPK}
-                  >
-                    {shortenTxHash(selectedPK || '')}
-                  </p>
-                </>
-              ) : (
-                <>
-                  <div className="flex justify-center items-base line mt-4">
-                    <img
-                      src="/assets/images/OPTNWelcome3.png"
-                      alt="Welcome"
-                      className="max-w-full h-auto"
-                      width={'32%'}
-                      height={'32%'}
-                    />
-                  </div>
-                  <button
-                    className="mt-4 px-4 py-2 font-bold bg-red-500 text-white rounded hover:bg-red-700"
-                    onClick={() => setShowPKQRCode(true)}
-                  >
-                    Show Private Key
-                  </button>
-                  <div className="mt-2 text-center text-red-500">
-                    Warning: Displaying your private key can compromise your
-                    funds. Ensure you keep it secure.
-                  </div>
-                </>
-              )}
-            </div>
-            <div className="flex flex-col items-center relative w-full max-w-md">
-              {publicKeyPressCount >= 6 && publicKeyPressCount < 10 && (
-                <div className="absolute -top-6 mb-2 text-sm text-red-500 text-center">
-                  Press {10 - publicKeyPressCount} more time
-                  {10 - publicKeyPressCount > 1 ? 's' : ''} to unlock the
-                  Private Key button.
-                </div>
-              )}
-              <div className="flex space-x-4 mt-4 w-full justify-center">
-                <button
-                  className={`px-4 py-2 rounded font-bold ${
+              <QRCodeSVG
+                value={
+                  qrCodeType === 'address'
+                    ? buildBip21Uri()
+                    : qrCodeType === 'pubKey'
+                      ? selectedPubKey || ''
+                      : selectedPKH || ''
+                }
+                size={200}
+              />
+              <p
+                className="mt-4 p-2 bg-gray-200 rounded cursor-pointer hover:bg-gray-300"
+                onClick={() =>
+                  handleCopy(
                     qrCodeType === 'address'
-                      ? 'bg-blue-500 text-white'
-                      : 'bg-gray-200 text-gray-700'
-                  }`}
-                  onClick={() => {
-                    setPublicKeyPressCount(0);
-                    setQrCodeType('address');
-                  }}
-                >
-                  Address
-                </button>
-                <button
-                  className={`px-4 py-2 rounded font-bold ${
-                    qrCodeType === 'pubKey'
-                      ? 'bg-blue-500 text-white'
-                      : 'bg-gray-200 text-gray-700'
-                  }`}
-                  onClick={() => {
-                    if (!showPKButton) {
-                      const newCount = publicKeyPressCount + 1;
-                      if (newCount >= 10) {
-                        setShowPKButton(true);
-                        setPublicKeyPressCount(0);
-                        Toast.show({
-                          text: 'Private Key button unlocked!',
-                        });
-                      } else {
-                        setPublicKeyPressCount(newCount);
-                      }
-                    }
-                    setQrCodeType('pubKey');
-                  }}
-                >
-                  PubKey
-                </button>
-                <button
-                  className={`px-4 py-2 rounded font-bold ${
-                    qrCodeType === 'pkh'
-                      ? 'bg-blue-500 text-white'
-                      : 'bg-gray-200 text-gray-700'
-                  }`}
-                  onClick={() => {
-                    setPublicKeyPressCount(0);
-                    setQrCodeType('pkh');
-                  }}
-                >
-                  PKH
-                </button>
-                {showPKButton && (
-                  <button
-                    className={`px-4 py-2 rounded font-bold ${
-                      qrCodeType === 'pk'
-                        ? 'bg-blue-500 text-white'
-                        : 'bg-gray-200 text-gray-700'
-                    }`}
-                    onClick={() => {
-                      setQrCodeType('pk');
-                      setShowPKQRCode(false);
-                    }}
-                  >
-                    Sig
-                  </button>
-                )}
-              </div>
+                      ? buildBip21Uri()
+                      : qrCodeType === 'pubKey'
+                        ? selectedPubKey || ''
+                        : selectedPKH || ''
+                  )
+                }
+              >
+                {qrCodeType === 'address'
+                  ? shortenTxHash(
+                      selectedAddress,
+                      PREFIX[currentNetwork].length
+                    )
+                  : qrCodeType === 'pubKey'
+                    ? shortenTxHash(selectedPubKey || '')
+                    : shortenTxHash(selectedPKH || '')}
+              </p>
             </div>
+
+            <div className="flex space-x-4 mt-4 w-full justify-center">
+              <button
+                className={`px-4 py-2 rounded font-bold ${
+                  qrCodeType === 'address'
+                    ? 'bg-blue-500 text-white'
+                    : 'bg-gray-200 text-gray-700'
+                }`}
+                onClick={() => setQrCodeType('address')}
+              >
+                Address
+              </button>
+              <button
+                className={`px-4 py-2 rounded font-bold ${
+                  qrCodeType === 'pubKey'
+                    ? 'bg-blue-500 text-white'
+                    : 'bg-gray-200 text-gray-700'
+                }`}
+                onClick={() => setQrCodeType('pubKey')}
+              >
+                PubKey
+              </button>
+              <button
+                className={`px-4 py-2 rounded font-bold ${
+                  qrCodeType === 'pkh'
+                    ? 'bg-blue-500 text-white'
+                    : 'bg-gray-200 text-gray-700'
+                }`}
+                onClick={() => setQrCodeType('pkh')}
+              >
+                PKH
+              </button>
+            </div>
+
             <button
               className="mt-4 w-full text-xl font-bold py-2 bg-red-500 text-white rounded hover:bg-red-600"
               onClick={() => {
                 setSelectedAddress(null);
-                setShowPKButton(false);
-                setShowPKQRCode(false);
+                setSelectedPubKey(null);
+                setSelectedPKH(null);
+                setQrCodeType('address');
               }}
             >
               Back
