@@ -12,12 +12,23 @@ import DatabaseService from '../DatabaseManager/DatabaseService';
 import TransactionBuilderHelper from './TransactionBuilderHelper';
 import { DUST, TOKEN_OUTPUT_SATS } from '../../utils/constants';
 
+function estimateAddP2PKHOutputBytes(
+  baseTxBytes: number,
+  currentOutputsCount: number
+): number {
+  const OUTPUT_BYTES = 34;
+
+  const varintSize = (n: number) =>
+    n < 0xfd ? 1 : n <= 0xffff ? 3 : n <= 0xffffffff ? 5 : 9;
+  const before = varintSize(currentOutputsCount);
+  const after = varintSize(currentOutputsCount + 1);
+
+  return baseTxBytes + OUTPUT_BYTES + (after - before);
+}
+
 export default function TransactionManager() {
   const dbService = DatabaseService();
 
-  /**
-   * Fetches transaction history from the Electrum service and stores it in the database.
-   */
   async function fetchAndStoreTransactionHistory(
     walletId: number,
     address: string
@@ -65,9 +76,6 @@ export default function TransactionManager() {
     return history;
   }
 
-  /**
-   * Sends a raw transaction to the network using the TransactionBuilderHelper.
-   */
   async function sendTransaction(rawTX: string) {
     const txBuilder = TransactionBuilderHelper();
     let txid: string | null = null;
@@ -84,13 +92,6 @@ export default function TransactionManager() {
     };
   }
 
-  /**
-   * Adds a new output to the transaction builder.
-   *
-   * Baseline rules:
-   * - token-bearing outputs must have >= TOKEN_OUTPUT_SATS sats
-   * - NFT token.amount must exist and should be 0 (do not delete it)
-   */
   function addOutput(
     recipientAddress: string,
     transferAmount: number,
@@ -101,7 +102,6 @@ export default function TransactionManager() {
     nftCapability?: undefined | 'none' | 'mutable' | 'minting',
     nftCommitment?: string
   ): TransactionOutput | undefined {
-    // Validate inputs
     if (!recipientAddress || (!transferAmount && !tokenAmount)) {
       console.warn(
         'addOutput: Invalid inputs. recipientAddress and at least one amount required.'
@@ -127,13 +127,11 @@ export default function TransactionManager() {
       );
 
       if (existingTokenUTXO && existingTokenUTXO.token) {
-        // ------- TRANSFERRING EXISTING TOKEN -------
         newOutput.token = {
-          amount: tokenAmount, // default FT amount
+          amount: tokenAmount,
           category: existingTokenUTXO.token.category,
         };
 
-        // NFT transfer: keep amount field present, force 0
         if (existingTokenUTXO.token.nft) {
           newOutput.token.amount = 0;
           newOutput.token.nft = {
@@ -142,7 +140,6 @@ export default function TransactionManager() {
           };
         }
 
-        // Redirect to token address if available
         const tokenAddress = addresses.find(
           (addr) => addr.address === recipientAddress
         )?.tokenAddress;
@@ -150,12 +147,10 @@ export default function TransactionManager() {
           newOutput.recipientAddress = tokenAddress;
         }
 
-        // Enforce token-bearing sats minimum
         if ((newOutput as any).amount < TOKEN_OUTPUT_SATS) {
           (newOutput as any).amount = TOKEN_OUTPUT_SATS;
         }
       } else if (genesisUtxo) {
-        // ------- CREATING A NEW CASHTOKEN (GENESIS) -------
         const isNftGenesis = nftCapability && nftCommitment !== undefined;
 
         newOutput.token = {
@@ -170,7 +165,6 @@ export default function TransactionManager() {
           };
         }
 
-        // Redirect to token address if available
         const tokenAddress = addresses.find(
           (addr) => addr.address === recipientAddress
         )?.tokenAddress;
@@ -178,7 +172,6 @@ export default function TransactionManager() {
           newOutput.recipientAddress = tokenAddress;
         }
 
-        // Enforce token-bearing sats minimum
         if ((newOutput as any).amount < TOKEN_OUTPUT_SATS) {
           (newOutput as any).amount = TOKEN_OUTPUT_SATS;
         }
@@ -193,15 +186,99 @@ export default function TransactionManager() {
     return newOutput;
   }
 
+  // ----------------------------
+  // Helpers (local, no new files)
+  // ----------------------------
+
+  function utxoSats(utxo: UTXO): bigint {
+    const raw: any =
+      (utxo as any).satoshis ??
+      (utxo as any).value ??
+      (utxo as any).amount ??
+      0;
+
+    if (typeof raw === 'bigint') return raw;
+    if (typeof raw === 'number') {
+      return BigInt(Number.isFinite(raw) ? Math.trunc(raw) : 0);
+    }
+    if (typeof raw === 'string') {
+      try {
+        return BigInt(raw.trim() || '0');
+      } catch {
+        return 0n;
+      }
+    }
+    return 0n;
+  }
+
+  function outputSats(o: TransactionOutput): bigint {
+    if ('opReturn' in o && o.opReturn !== undefined) return 0n;
+
+    const hasToken = !!(o as any).token;
+
+    const raw: any = (o as any).amount;
+    let sats = 0n;
+
+    if (typeof raw === 'bigint') sats = raw;
+    else if (typeof raw === 'number')
+      sats = BigInt(Number.isFinite(raw) ? Math.trunc(raw) : 0);
+    else if (typeof raw === 'string') {
+      try {
+        sats = BigInt(raw.trim() || '0');
+      } catch {
+        sats = 0n;
+      }
+    }
+
+    // match TransactionBuilderHelper.prepareTransactionOutputs
+    if (hasToken) {
+      const minTokenSats = BigInt(TOKEN_OUTPUT_SATS);
+      if (sats < minTokenSats) sats = minTokenSats;
+    }
+
+    return sats;
+  }
+
+  function sumInputs(selectedUtxos: UTXO[]): bigint {
+    return selectedUtxos.reduce((sum, u) => sum + utxoSats(u), 0n);
+  }
+
+  function sumOutputs(outputs: TransactionOutput[]): bigint {
+    return outputs.reduce((sum, o) => sum + outputSats(o), 0n);
+  }
+
+  function txBytesFromHex(hex: string): number {
+    return Math.floor(hex.length / 2);
+  }
+
+  function formatMinRelayError(params: {
+    paying: bigint;
+    size: number;
+    needAtLeast: number;
+    shortBy: number;
+    tip?: string;
+  }): string {
+    const { paying, size, needAtLeast, shortBy, tip } = params;
+    return [
+      'Min relay fee not met under 1 sat/byte policy.',
+      `paying=${paying.toString()} sats`,
+      `size=${size} bytes`,
+      `need_at_least=${needAtLeast} sats`,
+      `short_by=${shortBy} sats`,
+      tip
+        ? tip
+        : `Tip: remove/reduce any manual "change back to yourself" output and let Change Address auto-add change.`,
+    ].join(' ');
+  }
+
   /**
    * Builds a transaction using the provided outputs, change address, and selected UTXOs.
    *
-   * Baseline rules:
+   * Baseline rules (Advanced Builder):
    * - Fee policy: 1 sat/byte
-   * - Change output is added only if >= DUST
-   * - If remainder < DUST, no change output is added (remainder goes to fee)
-   * - Token-bearing outputs should already have minimum sats, and TransactionBuilderHelper
-   *   enforces it again at build time.
+   * - ALWAYS attempt to add a separate change output if changeAddress is provided.
+   * - Only skip auto-change if an output is explicitly marked as manual change
+   *   via (o as any)._manualChange === true (not by address equality).
    */
   const buildTransaction = async (
     outputs: TransactionOutput[],
@@ -220,98 +297,191 @@ export default function TransactionManager() {
     const returnObj = {
       bytecodeSize: 0,
       finalTransaction: '',
-      finalOutputs: [] as TransactionOutput[],
+      finalOutputs: null as TransactionOutput[] | null,
       errorMsg: '',
     };
 
-    // Defensive: amount might be in .value for some UTXOs, but your code currently uses .amount.
-    // Keep behavior stable: prefer amount, fallback to value.
-    const totalUtxoAmount = selectedUtxos.reduce((sum, utxo) => {
-      const n = (utxo.amount ?? utxo.value) as number;
-      return sum + BigInt(n || 0);
-    }, 0n);
-
-    const totalOutputAmount = outputs.reduce(
-      (sum, output) => sum + BigInt(output.amount as any),
-      0n
-    );
+    // track intended outputs so we can return them even on failure (debug UX)
+    let intendedOutputs: TransactionOutput[] = outputs;
 
     try {
-      // 1) First build WITHOUT adding change to estimate fee at 1 sat/byte.
-      //    If build fails without change (rare, but possible if builder requires change),
-      //    we’ll fall back to a placeholder.
-      let estimatedBytecodeSize = 0;
+      if (!selectedUtxos || selectedUtxos.length === 0) {
+        throw new Error('No inputs selected.');
+      }
+      if (!outputs || outputs.length === 0) {
+        throw new Error('No outputs specified.');
+      }
 
-      try {
-        const txNoChange = await txBuilder.buildTransaction(
-          selectedUtxos,
-          outputs
-        );
-        estimatedBytecodeSize = txNoChange.length / 2;
-      } catch (e) {
-        // Fallback: placeholder change output to allow size estimation
+      const inputTotal = sumInputs(selectedUtxos);
+      const outputsNoChange = [...outputs];
+
+      // IMPORTANT CHANGE:
+      // Do NOT treat "any output to changeAddress" as a manual change output.
+      // Only treat it as manual change if explicitly flagged.
+      const hasExplicitManualChangeOutput =
+        !!changeAddress &&
+        outputsNoChange.some((o) => {
+          if ('opReturn' in o && o.opReturn !== undefined) return false;
+          return (o as any)._manualChange === true;
+        });
+
+      // 1) Estimate bytes WITHOUT change first
+      const txNoChangeHex = await txBuilder.buildTransaction(
+        selectedUtxos,
+        outputsNoChange
+      );
+      const bytesNoChange = txBytesFromHex(txNoChangeHex);
+      const feeNoChange = BigInt(bytesNoChange);
+
+      const outNoChangeTotal = sumOutputs(outputsNoChange);
+      const remainderCandidate = inputTotal - outNoChangeTotal - feeNoChange;
+
+      // Advanced/debug mode: always attempt auto-change if changeAddress is present
+      // (unless explicitly flagged as manual change output).
+      const shouldTryAutoChange =
+        !!changeAddress && !hasExplicitManualChangeOutput;
+
+      console.warn('[ATB]', {
+        inputTotal: inputTotal.toString(),
+        outNoChangeTotal: outNoChangeTotal.toString(),
+        bytesNoChange,
+        feeNoChange: feeNoChange.toString(),
+        remainderCandidate: remainderCandidate.toString(),
+        changeAddress,
+        hasExplicitManualChangeOutput,
+        shouldTryAutoChange,
+      });
+
+      let plannedOutputs: TransactionOutput[] = outputsNoChange;
+
+      if (shouldTryAutoChange) {
         const placeholder: TransactionOutput = {
           recipientAddress: changeAddress,
           amount: DUST,
         };
-        const txWithPlaceholder = await txBuilder.buildTransaction(
-          selectedUtxos,
-          [...outputs, placeholder]
-        );
-        estimatedBytecodeSize = txWithPlaceholder.length / 2;
+
+        let bytesWithChange: number;
+
+        // 2) Re-estimate bytes WITH placeholder change output (preferred)
+        try {
+          const txWithChangeHex = await txBuilder.buildTransaction(
+            selectedUtxos,
+            [...outputsNoChange, placeholder]
+          );
+          bytesWithChange = txBytesFromHex(txWithChangeHex);
+          console.warn('[ATB] placeholder build OK', { bytesWithChange });
+        } catch (e: any) {
+          bytesWithChange = estimateAddP2PKHOutputBytes(
+            bytesNoChange,
+            outputsNoChange.length
+          );
+          console.warn('[ATB] placeholder build FAILED -> estimated', {
+            bytesWithChange,
+            err: e?.message ?? String(e),
+          });
+        }
+
+        const feeWithChange = BigInt(bytesWithChange);
+        const remainder = inputTotal - outNoChangeTotal - feeWithChange;
+
+        // Only add change if it is >= DUST
+        if (remainder >= BigInt(DUST)) {
+          plannedOutputs = [
+            ...outputsNoChange,
+            { recipientAddress: changeAddress, amount: Number(remainder) },
+          ];
+        } else {
+          plannedOutputs = outputsNoChange;
+        }
       }
 
-      // Fee = 1 sat/byte * bytecodeSize
-      const fee = BigInt(estimatedBytecodeSize);
+      intendedOutputs = plannedOutputs;
 
-      // Remainder after paying outputs + fee
-      const remainder = totalUtxoAmount - totalOutputAmount - fee;
-
-      if (remainder < 0n) {
-        throw new Error(
-          `Insufficient funds: inputs=${totalUtxoAmount.toString()} outputs=${totalOutputAmount.toString()} fee≈${fee.toString()}`
-        );
-      }
-
-      const txOutputs: TransactionOutput[] = [...outputs];
-
-      // Only add change if it is >= DUST
-      if (changeAddress && remainder >= BigInt(DUST)) {
-        txOutputs.push({
-          recipientAddress: changeAddress,
-          amount: Number(remainder),
-        });
-      } else {
-        // remainder < DUST => no change, remainder is added to fee implicitly
-        // (This is the correct "no dust change" policy.)
-      }
-
-      // 2) Final build
-      const finalTransaction = await txBuilder.buildTransaction(
+      // 3) Build final transaction
+      let finalHex = await txBuilder.buildTransaction(
         selectedUtxos,
-        txOutputs
+        plannedOutputs
       );
 
-      returnObj.bytecodeSize = finalTransaction.length / 2;
-      returnObj.finalTransaction = finalTransaction;
-      returnObj.finalOutputs = txOutputs;
-      returnObj.errorMsg = '';
+      // 4) Validate min relay fee using ACTUAL bytes and ACTUAL fee paid.
+      const actualBytes = txBytesFromHex(finalHex);
+      const outputsTotal = sumOutputs(plannedOutputs);
+      const feePaid = inputTotal - outputsTotal;
 
+      if (feePaid < BigInt(actualBytes)) {
+        // Stabilizing retry: recompute change using actualBytes as fee
+        if (changeAddress && !hasExplicitManualChangeOutput) {
+          const feeActual = BigInt(actualBytes);
+          const remainder2 = inputTotal - outNoChangeTotal - feeActual;
+
+          if (remainder2 >= BigInt(DUST)) {
+            const outputsRetry: TransactionOutput[] = [
+              ...outputsNoChange,
+              { recipientAddress: changeAddress, amount: Number(remainder2) },
+            ];
+
+            intendedOutputs = outputsRetry;
+
+            finalHex = await txBuilder.buildTransaction(
+              selectedUtxos,
+              outputsRetry
+            );
+
+            const bytesRetry = txBytesFromHex(finalHex);
+            const outputsRetryTotal = sumOutputs(outputsRetry);
+            const feePaidRetry = inputTotal - outputsRetryTotal;
+
+            if (feePaidRetry < BigInt(bytesRetry)) {
+              const shortBy = Number(BigInt(bytesRetry) - feePaidRetry);
+              throw new Error(
+                formatMinRelayError({
+                  paying: feePaidRetry,
+                  size: bytesRetry,
+                  needAtLeast: bytesRetry,
+                  shortBy,
+                })
+              );
+            }
+
+            returnObj.bytecodeSize = bytesRetry;
+            returnObj.finalTransaction = finalHex;
+            returnObj.finalOutputs = outputsRetry;
+            returnObj.errorMsg = '';
+            return returnObj;
+          }
+        }
+
+        const shortBy = Number(BigInt(actualBytes) - feePaid);
+        throw new Error(
+          formatMinRelayError({
+            paying: feePaid,
+            size: actualBytes,
+            needAtLeast: actualBytes,
+            shortBy,
+          })
+        );
+      }
+
+      // Success
+      returnObj.bytecodeSize = actualBytes;
+      returnObj.finalTransaction = finalHex;
+      returnObj.finalOutputs = plannedOutputs;
+      returnObj.errorMsg = '';
       return returnObj;
     } catch (err: any) {
       console.error('Error building transaction:', err);
-      returnObj.errorMsg = err.message || 'Unknown error';
+
+      // Debug UX requirement: still return the intended outputs (including change)
+      // even if the contract rejects the shape and the tx fails to build.
+      returnObj.finalOutputs = intendedOutputs;
+      returnObj.finalTransaction = '';
+      returnObj.bytecodeSize = 0;
+      returnObj.errorMsg = err?.message || 'Unknown error';
       return returnObj;
     }
   };
 
-  /**
-   * Fetches the private key for a given address using the KeyService.
-   * (Note: you said key storage baseline is deferred; leaving this unchanged.)
-   */
   async function fetchPrivateKey(address: string): Promise<Uint8Array | null> {
-    // Keeping this so other code that calls TransactionManager.fetchPrivateKey won't break
-    // even if unused in current flows.
     // eslint-disable-next-line @typescript-eslint/no-unsafe-return
     return await (
       await import('../../services/KeyService')
