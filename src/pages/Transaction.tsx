@@ -30,6 +30,7 @@ import { selectWalletId } from '../redux/walletSlice';
 import ContractManager from '../apis/ContractManager/ContractManager';
 import { SATSINBITCOIN } from '../utils/constants';
 import { PaperWalletSecretStore } from '../services/PaperWalletSecretStore';
+import KeyService from '../services/KeyService';
 
 const Transaction: React.FC = () => {
   // Removed local walletId state
@@ -329,54 +330,53 @@ const Transaction: React.FC = () => {
    * @param contractFunction - The selected contract function name.
    * @param inputs - The inputs for the contract function.
    */
-  const handleContractFunctionSelect = (
+  const handleContractFunctionSelect = async (
     contractFunction: string,
-    inputs: { [key: string]: string }
+    inputs: { [key: string]: string },
+    abiInputs: { name: string; type: string }[]
   ) => {
-    // console.log('Selected Contract Function:', contractFunction);
-    // console.log('Selected Contract Function Inputs:', inputs);
-
-    // Validate inputs is an object, not an array
     if (typeof inputs !== 'object' || Array.isArray(inputs)) {
       console.error("Error: 'inputs' is not a valid object. Received:", inputs);
       return;
     }
 
-    // Set contract function and inputs
     setContractFunctionInputs(inputs);
-
-    // Dispatch actions to set the selected function and input values
     dispatch(setSelectedFunction(contractFunction));
     dispatch(setInputValues(inputs));
 
-    // Create an unlocker template from the input values
-    const unlockerInputs = Object.entries(inputs).map(([key, value]) =>
-      key === 's' ? new SignatureTemplate(value, HashType.SIGHASH_ALL) : value
+    // Build unlockerInputs in ABI order, converting sig => SignatureTemplate(privateKey)
+    const unlockerInputs = await Promise.all(
+      abiInputs.map(async (abiIn) => {
+        const raw = inputs[abiIn.name] ?? '';
+
+        if (abiIn.type === 'sig') {
+          const address = raw.startsWith('sigaddr:')
+            ? raw.slice('sigaddr:'.length)
+            : raw;
+
+          const pk = await KeyService.fetchAddressPrivateKey(address);
+          if (!pk)
+            throw new Error(`Missing private key for address: ${address}`);
+
+          return new SignatureTemplate(pk, HashType.SIGHASH_ALL);
+        }
+
+        return raw;
+      })
     );
 
-    const unlocker = {
-      contractFunction,
-      unlockerInputs,
-    };
+    const unlocker = { contractFunction, unlockerInputs };
 
-    // Find the matching UTXO and update it with unlocker
     if (tempUtxos) {
       const updatedUtxo: UTXO = {
         ...tempUtxos,
         unlocker,
-        contractFunction, // Ensure this is set
-        contractFunctionInputs: inputs, // Ensure this is set
+        contractFunction,
+        contractFunctionInputs: inputs,
       };
       setSelectedUtxos([...selectedUtxos, updatedUtxo]);
-
-      // **Add Logging Here**
-      // console.log(
-      //   'Updated UTXO with contractFunction and contractFunctionInputs:',
-      //   updatedUtxo
-      // );
     }
 
-    // Close the popup
     setShowPopup(false);
   };
 
@@ -519,19 +519,35 @@ const Transaction: React.FC = () => {
         />
 
         {/* Bytecode Size Display */}
-        {bytecodeSize !== 0 && rawTX !== '' && (
+        {Number.isFinite(bytecodeSize) && bytecodeSize > 0 && rawTX !== '' && (
           <div className="mb-6 break-words whitespace-normal">
             <h3 className="flex justify-between items-baseline mb-2">
               <span className="font-bold">Transaction Fee:</span>
               <div className="flex flex-col items-end text-sm">
-                <span className="text-right">
-                  {(bytecodeSize / SATSINBITCOIN).toFixed(8)} BCH
-                </span>
-                <span className="text-right">
-                  {(bytecodeSize / SATSINBITCOIN) * Number(prices['BCH']) < 1
-                    ? `¢ ${((bytecodeSize / SATSINBITCOIN) * Number(prices['BCH']) * 100).toFixed(2)} cents USD`
-                    : `$ ${((bytecodeSize / SATSINBITCOIN) * Number(prices['BCH'])).toFixed(2)} USD`}
-                </span>
+                {(() => {
+                  const feeBch = bytecodeSize / SATSINBITCOIN;
+
+                  const bchUsdDatum = prices?.['BCH-USD'];
+                  const bchUsd = bchUsdDatum?.price;
+                  const hasPrice =
+                    typeof bchUsd === 'number' && Number.isFinite(bchUsd);
+
+                  return (
+                    <>
+                      <span className="text-right">
+                        {feeBch.toFixed(8)} BCH
+                      </span>
+
+                      <span className="text-right">
+                        {hasPrice
+                          ? feeBch * bchUsd < 1
+                            ? `¢ ${(feeBch * bchUsd * 100).toFixed(2)} cents USD`
+                            : `$ ${(feeBch * bchUsd).toFixed(2)} USD`
+                          : 'USD price unavailable'}
+                      </span>
+                    </>
+                  );
+                })()}
               </div>
             </h3>
           </div>

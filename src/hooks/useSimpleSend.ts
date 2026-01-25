@@ -135,7 +135,7 @@ export default function useSimpleSend() {
   const [selectedForTx, setSelectedForTx] = useState<UTXO[]>([]);
   const [txid, setTxid] = useState<string>('');
 
-  const priceUsd = Number(prices['BCH'] || 0);
+  const priceUsd = Number(prices['BCH-USD'] || 0);
 
   const reset = useCallback(() => {
     setMode('idle');
@@ -432,7 +432,7 @@ export default function useSimpleSend() {
           selectedCategory,
           tokenUtxos,
           tokAmt,
-          { preferConfirmed: true, maxInputs: 100 }
+          { preferConfirmed: false, maxInputs: 100 }
         );
         if (!tokenInputs.length) {
           setError('No token UTXOs available for the selected category.');
@@ -442,10 +442,10 @@ export default function useSimpleSend() {
 
         // Manual FT remainder calculation over chosen inputs
         const totalFromInputs = tokenInputs.reduce((sum, u) => {
+          const amtRaw = u.token?.amount ?? 0;
           const amt =
-            u.token?.category === selectedCategory
-              ? BigInt(u.token?.amount ?? 0)
-              : 0n;
+            typeof amtRaw === 'bigint' ? amtRaw : BigInt(Math.trunc(amtRaw));
+
           return sum + amt;
         }, 0n);
 
@@ -497,7 +497,7 @@ export default function useSimpleSend() {
           return;
         }
         const nftInput = selectNftInput(selectedCategory, tokenUtxos, {
-          preferConfirmed: true,
+          preferConfirmed: false,
           commitmentHex: selectedNftCommitment || undefined,
         });
         if (!nftInput) {
@@ -585,7 +585,11 @@ export default function useSimpleSend() {
         const c = (u.token.nft.commitment || '').toLowerCase();
         if (c && !rec.nftCommitments.includes(c)) rec.nftCommitments.push(c);
       } else {
-        rec.ftAmount += BigInt(u.token?.amount ?? 0);
+        const amtRaw = u.token?.amount ?? 0;
+        const amt =
+          typeof amtRaw === 'bigint' ? amtRaw : BigInt(Math.trunc(amtRaw));
+
+        rec.ftAmount += BigInt(amt ?? 0);
       }
       set.set(cat, rec);
     }
