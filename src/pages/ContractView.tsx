@@ -16,7 +16,6 @@ import { Toast } from '@capacitor/toast';
 import Popup from '../components/transaction/Popup';
 import { Tooltip } from 'react-tooltip';
 
-// Import Barcode Scanner
 import {
   CapacitorBarcodeScanner,
   CapacitorBarcodeScannerTypeHint,
@@ -46,6 +45,7 @@ const ContractView = () => {
   const [errorMessage, setErrorMessage] = useState<string>('');
   const [isScanning, setIsScanning] = useState<boolean>(false);
   const [blockHeader, setBlockHeader] = useState<BlockHeader | null>(null);
+
   // datasig helpers
   const [selectedAddresses, setSelectedAddresses] = useState<{
     [key: string]: string;
@@ -61,7 +61,6 @@ const ContractView = () => {
   );
 
   useEffect(() => {
-    // Initial fetch of latest block
     const fetchInitialBlock = async () => {
       try {
         const block = await ElectrumService.getLatestBlock();
@@ -73,7 +72,6 @@ const ContractView = () => {
       }
     };
 
-    // Subscribe to block header updates
     const handleBlockUpdate = (header: BlockHeader) => {
       setBlockHeader(header);
       setError(null);
@@ -82,9 +80,8 @@ const ContractView = () => {
     fetchInitialBlock();
     ElectrumService.subscribeBlockHeaders(handleBlockUpdate);
 
-    // Cleanup subscription on component unmount
     return () => {
-      // Note: You might need to implement an unsubscribe method in your ElectrumServer
+      // (optional) add unsubscribe later
     };
   }, []);
 
@@ -92,7 +89,7 @@ const ContractView = () => {
     const loadAvailableContracts = async () => {
       try {
         const contractManager = ContractManager();
-        const contracts = contractManager.listAvailableArtifacts();
+        const contracts = await contractManager.listAvailableArtifacts();
         if (!contracts || contracts.length === 0) {
           throw new Error('No available contracts found');
         }
@@ -123,11 +120,13 @@ const ContractView = () => {
       if (selectedContractFile) {
         try {
           const contractManager = ContractManager();
-          const artifact = contractManager.loadArtifact(selectedContractFile);
-          if (!artifact)
+          const artifact =
+            await contractManager.loadArtifact(selectedContractFile);
+          if (!artifact) {
             throw new Error(
               `Artifact ${selectedContractFile} could not be loaded`
             );
+          }
           setConstructorArgs(artifact.constructorInputs || []);
           setShowConstructorArgsPopup(true);
         } catch (err: any) {
@@ -290,7 +289,7 @@ const ContractView = () => {
       setContractInstances(instances);
       await Toast.show({ text: 'Contract deleted successfully!' });
     } catch (err: any) {
-      console.error('Error deleting contract:', err);
+      console.error('Error deleting contract instance:', err);
       setError(err.message);
       await Toast.show({ text: 'Failed to delete contract.' });
     }
@@ -344,7 +343,6 @@ const ContractView = () => {
         />
       </div>
 
-      {/* Select Contract + tooltip */}
       <h2 className="text-lg font-semibold flex items-center justify-center gap-2 mb-2">
         <span>Select Contract</span>
       </h2>
@@ -362,7 +360,6 @@ const ContractView = () => {
         ))}
       </select>
 
-      {/* Constructor Args Popup */}
       {showConstructorArgsPopup && (
         <Popup
           closePopups={() => {
@@ -373,7 +370,6 @@ const ContractView = () => {
             setCurrentArgName('');
           }}
         >
-          {/* Popup title + tooltip */}
           <h2 className="text-lg font-semibold flex items-center justify-center gap-2 mb-2">
             <span>Constructor Arguments</span>
           </h2>
@@ -397,7 +393,7 @@ const ContractView = () => {
                 className="max-w-[80vw] whitespace-normal break-words text-sm leading-snug"
                 content="Blocks increment on an average interval of 10 minutes."
               />
-              <span className="font-bold">{blockHeader.height}</span>
+              <span className="font-bold">{blockHeader?.height ?? '-'}</span>
             </p>
 
             {constructorArgs.map((arg, index) => {
@@ -448,10 +444,10 @@ const ContractView = () => {
                         }`}
                         disabled={isScanning}
                         aria-label={`Select Address for ${arg.name}`}
-                        data-tooltip-id={`select-addr-tt-${index}`}
                       >
                         Select Address
                       </button>
+
                       <button
                         type="button"
                         onClick={() => generateSignature(arg.name)}
@@ -463,16 +459,9 @@ const ContractView = () => {
                         disabled={
                           !selectedAddresses[arg.name] || !dataToSign[arg.name]
                         }
-                        data-tooltip-id={`sign-msg-tt-${index}`}
                       >
                         Sign Message
                       </button>
-                      <Tooltip
-                        id={`sign-msg-tt-${index}`}
-                        place="top"
-                        className="max-w-[80vw] whitespace-normal break-words text-sm leading-snug"
-                        content="Create a signature using the selected address' private key over the provided data."
-                      />
                     </div>
 
                     {selectedAddresses[arg.name] && (
@@ -535,16 +524,9 @@ const ContractView = () => {
                             }`}
                             disabled={isScanning}
                             aria-label={`Select Address for ${arg.name}`}
-                            data-tooltip-id={`select-addr2-tt-${index}`}
                           >
                             Select Address
                           </button>
-                          <Tooltip
-                            id={`select-addr2-tt-${index}`}
-                            place="top"
-                            className="max-w-[80vw] whitespace-normal break-words text-sm leading-snug"
-                            content="Pick an address from your wallet to auto-fill this argument."
-                          />
 
                           <button
                             type="button"
@@ -554,16 +536,9 @@ const ContractView = () => {
                             }`}
                             disabled={isScanning}
                             aria-label={`Scan QR Code for ${arg.name}`}
-                            data-tooltip-id={`scan-qr-tt-${index}`}
                           >
                             <FaCamera />
                           </button>
-                          <Tooltip
-                            id={`scan-qr-tt-${index}`}
-                            place="top"
-                            className="max-w-[80vw] whitespace-normal break-words text-sm leading-snug"
-                            content="Scan a QR code to populate this field."
-                          />
                         </div>
 
                         {inputValues[arg.name] && (
@@ -596,7 +571,6 @@ const ContractView = () => {
                 isLoading ? 'cursor-not-allowed opacity-50' : ''
               }`}
               disabled={isLoading}
-              data-tooltip-id="create-contract-tt"
             >
               {isLoading ? (
                 <TailSpin
@@ -611,12 +585,6 @@ const ContractView = () => {
                 <div className="font-bold">Create Contract</div>
               )}
             </button>
-            <Tooltip
-              id="create-contract-tt"
-              place="top"
-              className="max-w-[80vw] whitespace-normal break-words text-sm leading-snug"
-              content="Instantiate the selected contract using the values provided above."
-            />
           </div>
         </Popup>
       )}
@@ -671,30 +639,16 @@ const ContractView = () => {
                     <button
                       onClick={() => deleteContract(instance.id)}
                       className="bg-red-500 hover:bg-red-600 font-bold text-white py-2 px-4 my-2 rounded"
-                      data-tooltip-id={`delete-tt-${instance.id}`}
                     >
                       Delete
                     </button>
-                    <Tooltip
-                      id={`delete-tt-${instance.id}`}
-                      place="top"
-                      className="max-w-[80vw] whitespace-normal break-words text-sm leading-snug"
-                      content="Remove this contract instance from your local list."
-                    />
 
                     <button
                       onClick={() => updateContract(instance.address)}
                       className="bg-green-500 hover:bg-green-600 font-bold text-white py-2 px-4 my-2 rounded justify-self-end"
-                      data-tooltip-id={`update-tt-${instance.id}`}
                     >
                       Update
                     </button>
-                    <Tooltip
-                      id={`update-tt-${instance.id}`}
-                      place="top"
-                      className="max-w-[80vw] whitespace-normal break-words text-sm leading-snug"
-                      content="Refresh UTXOs and balance for this contract address."
-                    />
                   </div>
                 </li>
               ))}
@@ -710,7 +664,6 @@ const ContractView = () => {
         Go Back
       </button>
 
-      {/* Address Selection Popup */}
       {showAddressPopup && (
         <AddressSelectionPopup
           onSelect={handleAddressSelect}
@@ -721,7 +674,6 @@ const ContractView = () => {
         />
       )}
 
-      {/* Error Popup */}
       {showErrorPopup && (
         <Popup closePopups={handleErrorPopupClose}>
           <h2 className="text-lg font-semibold mb-2">Error</h2>

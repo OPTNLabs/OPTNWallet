@@ -61,3 +61,224 @@ The source code is hosted on GitHub: [OPTN Wallet Repository](https://github.com
    cd OPTNWallet
 
 
+
+```
+OPTNWallet
+├─ .editorconfig
+├─ .eslintrc.cjs
+├─ .eslintrc.json
+├─ .prettierrc
+├─ LICENSE
+├─ README.md
+├─ build.sh
+├─ capacitor.config.ts
+├─ index.html
+├─ module.d.ts
+├─ package-lock.json
+├─ package.json
+├─ postcss.config.js
+├─ releaseBuild.sh
+├─ resources
+│  └─ splash.png
+├─ scripts
+├─ src
+│  ├─ App.tsx
+│  ├─ addons
+│  │  └─ builtin
+│  │     └─ index.ts
+│  ├─ apis
+│  │  ├─ AddressManager
+│  │  │  └─ AddressManager.ts
+│  │  ├─ ChaingraphManager
+│  │  │  └─ ChaingraphManager.ts
+│  │  ├─ ContractManager
+│  │  │  ├─ ContractManager.tsx
+│  │  │  └─ artifacts
+│  │  │     ├─ AuthGuard.json
+│  │  │     ├─ MSVault.json
+│  │  │     ├─ announcement.json
+│  │  │     ├─ bip38.json
+│  │  │     ├─ escrow.json
+│  │  │     ├─ escrowMS2.json
+│  │  │     ├─ p2pkh.json
+│  │  │     └─ transfer_with_timeout.json
+│  │  ├─ DatabaseManager
+│  │  │  └─ DatabaseService.ts
+│  │  ├─ ElectrumServer
+│  │  │  └─ ElectrumServer.ts
+│  │  ├─ TransactionManager
+│  │  │  ├─ TransactionBuilderHelper.ts
+│  │  │  └─ TransactionManager.ts
+│  │  ├─ UTXOManager
+│  │  │  └─ UTXOManager.ts
+│  │  └─ WalletManager
+│  │     ├─ KeyGeneration.ts
+│  │     ├─ KeyManager.ts
+│  │     ├─ WalletManager.ts
+│  │     └─ __tests__
+│  ├─ assets
+│  │  ├─ OPTNWelcome1.png
+│  │  └─ bcmr-optn-local.json
+│  ├─ components
+│  │  ├─ AboutView.tsx
+│  │  ├─ AddressSelectionPopup.tsx
+│  │  ├─ BitcoinCashCard.tsx
+│  │  ├─ BottomNavBar.tsx
+│  │  ├─ CashTokenCard.tsx
+│  │  ├─ CashTokenUTXOs.tsx
+│  │  ├─ ContactUs.tsx
+│  │  ├─ ContractDetails.tsx
+│  │  ├─ ContractModal.tsx
+│  │  ├─ ErrorBoundary.tsx
+│  │  ├─ FaucetView.tsx
+│  │  ├─ InteractWithContractPopup.tsx
+│  │  ├─ Layout.tsx
+│  │  ├─ Popup.tsx
+│  │  ├─ PriceFeed.tsx
+│  │  ├─ RecoveryPhrase.tsx
+│  │  ├─ RegularUTXOs.tsx
+│  │  ├─ SelectContractFunctionPopup.tsx
+│  │  ├─ SessionProposalModal.tsx
+│  │  ├─ SweepPaperWallet.tsx
+│  │  ├─ TermsOfUse.tsx
+│  │  ├─ TokenQuery.tsx
+│  │  ├─ UTXOCard.tsx
+│  │  ├─ WalletCreate.tsx
+│  │  ├─ WalletImport.tsx
+│  │  ├─ WcConnectionManager.tsx
+│  │  ├─ blockheader.tsx
+│  │  ├─ modules
+│  │  │  └─ NetworkSwitch.tsx
+│  │  ├─ notifications
+│  │  │  └─ UtxoNotificationCenter.tsx
+│  │  ├─ transaction
+│  │  │  ├─ AddressSelection.tsx
+│  │  │  ├─ AvailableUTXOsDisplay.tsx
+│  │  │  ├─ CashTokenView.tsx
+│  │  │  ├─ ErrorAndStatusPopups.tsx
+│  │  │  ├─ NFTConfigPopup.tsx
+│  │  │  ├─ NFTView.tsx
+│  │  │  ├─ OpReturnView.tsx
+│  │  │  ├─ OutputSelection.tsx
+│  │  │  ├─ Popup.tsx
+│  │  │  ├─ RegularTxView.tsx
+│  │  │  ├─ SelectedContractFunction.tsx
+│  │  │  ├─ SelectedUTXOsDisplay.tsx
+│  │  │  ├─ TransactionActions.tsx
+│  │  │  ├─ TransactionBuilder.tsx
+│  │  │  ├─ TransactionOutputsDisplay.tsx
+│  │  │  ├─ TransactionTypeSelector.tsx
+│  │  │  └─ UTXOSelection.tsx
+│  │  └─ walletconnect
+│  │     ├─ SessionList.tsx
+│  │     ├─ SessionProposalModal.tsx
+│  │     ├─ SessionSettingsModal.tsx
+│  │     ├─ SignMessageModal.tsx
+│  │     ├─ SignTransactionModal.tsx
+│  │     └─ WalletConnectPanel.tsx
+│  ├─ hooks
+│  │  ├─ useContractFunction.ts
+│  │  ├─ useFetchWalletData.ts
+│  │  ├─ useHandleTransaction.ts
+│  │  ├─ usePrices.ts
+│  │  ├─ useSimpleSend.ts
+│  │  └─ useTokenMetadata.ts
+│  ├─ index.css
+│  ├─ main.tsx
+│  ├─ pages
+│  │  ├─ AppsView.tsx
+│  │  ├─ ContractView.tsx
+│  │  ├─ CreateWallet.tsx
+│  │  ├─ Home.tsx
+│  │  ├─ ImportWallet.tsx
+│  │  ├─ LandingPage.tsx
+│  │  ├─ Receive.tsx
+│  │  ├─ RootHandler.tsx
+│  │  ├─ Settings.tsx
+│  │  ├─ SimpleSend.tsx
+│  │  ├─ Transaction.tsx
+│  │  ├─ TransactionHistory.tsx
+│  │  └─ apps
+│  │     ├─ FundMe.tsx
+│  │     └─ utils
+│  │        ├─ CampaignDetail.tsx
+│  │        ├─ ConsolidateModal.tsx
+│  │        ├─ PledgeModal.tsx
+│  │        ├─ bch.png
+│  │        ├─ cashstarterCancel.tsx
+│  │        ├─ cashstarterClaim.tsx
+│  │        ├─ cashstarterPledge.tsx
+│  │        ├─ cashstarterRefund.tsx
+│  │        ├─ cashstarterStop.tsx
+│  │        ├─ consolidateUTXOs.tsx
+│  │        ├─ findUtxo.tsx
+│  │        ├─ managerInitialize.tsx
+│  │        ├─ toTokenAddress.tsx
+│  │        └─ values.ts
+│  ├─ polyfills
+│  │  └─ node-globals.ts
+│  ├─ redux
+│  │  ├─ contractSlice.ts
+│  │  ├─ networkSlice.ts
+│  │  ├─ notificationsSlice.ts
+│  │  ├─ priceFeedSlice.ts
+│  │  ├─ selectors
+│  │  │  └─ networkSelectors.ts
+│  │  ├─ store.ts
+│  │  ├─ transactionBuilderSlice.ts
+│  │  ├─ transactionSlice.ts
+│  │  ├─ utxoSlice.ts
+│  │  ├─ walletSlice.ts
+│  │  └─ walletconnectSlice.ts
+│  ├─ services
+│  │  ├─ AddonsAllowlist.ts
+│  │  ├─ AddonsRegistry.ts
+│  │  ├─ BcmrService.ts
+│  │  ├─ CoinSelectionService.ts
+│  │  ├─ ElectrumService.ts
+│  │  ├─ ElectrumSubscriptionManager.ts
+│  │  ├─ KeyService.ts
+│  │  ├─ Notify.ts
+│  │  ├─ PaperWalletSecretStore.ts
+│  │  ├─ TransactionService.ts
+│  │  ├─ UTXOService.ts
+│  │  └─ priceService.ts
+│  ├─ shim
+│  │  ├─ net.ts
+│  │  └─ tls.ts
+│  ├─ types
+│  │  ├─ addons.ts
+│  │  ├─ types.ts
+│  │  └─ wcInterfaces.ts
+│  ├─ utils
+│  │  ├─ bigIntConversion.ts
+│  │  ├─ constants.ts
+│  │  ├─ dataSigner.ts
+│  │  ├─ derivePublicKeyHash.ts
+│  │  ├─ hash.ts
+│  │  ├─ hex.ts
+│  │  ├─ ipfs.ts
+│  │  ├─ parseExtendedJson.ts
+│  │  ├─ parseInputValue.ts
+│  │  ├─ schema
+│  │  │  ├─ schema.ts
+│  │  │  └─ tempSchema.ts
+│  │  ├─ servers
+│  │  │  └─ ElectrumServers.ts
+│  │  ├─ shortenHash.ts
+│  │  ├─ signed.ts
+│  │  ├─ signedMessage.ts
+│  │  └─ utxoHelpers.ts
+│  ├─ vite-env.d.ts
+│  └─ workers
+│     ├─ TransactionWorkerService.ts
+│     ├─ UTXOWorkerService.ts
+│     └─ priceFeedWorker.ts
+├─ tailwind.config.js
+├─ test.js
+├─ tsconfig.json
+├─ tsconfig.node.json
+├─ vite.config.ts
+└─ vitest.config.ts
+
+```

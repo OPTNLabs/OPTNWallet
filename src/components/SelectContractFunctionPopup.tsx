@@ -31,7 +31,8 @@ interface SelectContractFunctionPopupProps {
   onClose: () => void;
   onFunctionSelect: (
     selectedFunction: string,
-    inputValues: { [key: string]: string }
+    inputValues: { [key: string]: string },
+    abiInputs: AbiInput[]
   ) => void;
 }
 
@@ -273,7 +274,7 @@ const SelectContractFunctionPopup: React.FC<
     }
   };
 
-  const handleSelect = () => {
+  const handleSelect = async () => {
     const inputValuesObject = inputs.reduce<{ [key: string]: string }>(
       (acc, input) => {
         acc[input.name] = inputValuesState[input.name] || '';
@@ -285,7 +286,9 @@ const SelectContractFunctionPopup: React.FC<
     try {
       dispatch(setSelectedFunction(selectedFunction));
       dispatch(setInputs(inputs));
-      onFunctionSelect(selectedFunction, inputValuesObject);
+
+      await onFunctionSelect(selectedFunction, inputValuesObject, inputs);
+
       onClose();
     } catch (error) {
       console.error('Error occurred during dispatch or handling:', error);

@@ -86,6 +86,7 @@ export default function SimpleSend() {
   const sliderWidth = 240; // track width
   const handleWidth = 48;
   const threshold = sliderWidth * 0.7;
+  const maxX = sliderWidth - handleWidth;
 
   const openConfirm = () => setConfirmOpen(true);
   const closeConfirm = () => {
@@ -96,15 +97,17 @@ export default function SimpleSend() {
   // Non-async to satisfy DraggableEventHandler (must return void | false)
   const onSwipeStop = (_e: any, data: any) => {
     if (data.x >= threshold && !isSending) {
-      doSend()
-        .catch(() => {})
-        .finally(() => {
-          setSliderPos({ x: 0, y: 0 });
-          setConfirmOpen(false);
-        });
-    } else {
+      // ✅ Close + reset immediately so the modal can’t get “stuck”
       setSliderPos({ x: 0, y: 0 });
+      setConfirmOpen(false);
+
+      // Fire send without awaiting (avoids blocking UI if it hangs)
+      void doSend().catch(() => {});
+      return;
     }
+
+    // Not far enough: snap back
+    setSliderPos({ x: 0, y: 0 });
   };
 
   // ─────────────────────────────────────────────────────────────
@@ -578,6 +581,12 @@ export default function SimpleSend() {
           <div className="text-xs text-emerald-900/70">
             Using BCH change:{' '}
             <span className="font-mono">{mask(selectedChangeAddress)}</span>
+            <button
+              className="ml-2 text-emerald-700 underline"
+              onClick={() => copy(selectedChangeAddress)}
+            >
+              Copy
+            </button>
           </div>
         </div>
 
@@ -1005,22 +1014,21 @@ export default function SimpleSend() {
               <Draggable
                 axis="x"
                 position={sliderPos}
-                onDrag={(e, data) => {
-                  void e;
-                  if (!isSending) setSliderPos({ x: data.x, y: 0 });
+                onDrag={(_e, data) => {
+                  if (isSending) return;
+                  const x = Math.max(0, Math.min(maxX, data.x));
+                  setSliderPos({ x, y: 0 });
                 }}
                 onStop={onSwipeStop}
                 bounds={{ left: 0, right: sliderWidth - handleWidth }}
                 disabled={isSending}
               >
                 <div
-                  className={`absolute top-1/2 -translate-y-1/2 w-12 h-12 rounded-xl bg-emerald-600 text-white
-                              flex items-center justify-center text-lg shadow-md ${
-                                isSending
-                                  ? 'opacity-60 cursor-not-allowed'
-                                  : 'cursor-grab'
-                              }`}
-                  style={{ left: 0 }}
+                  className={`absolute top-1/2 w-12 h-12 rounded-xl bg-emerald-600 text-white
+              flex items-center justify-center text-lg shadow-md ${
+                isSending ? 'opacity-60 cursor-not-allowed' : 'cursor-grab'
+              }`}
+                  style={{ left: 0, marginTop: -(handleWidth / 2) }}
                   title="Drag to confirm"
                 >
                   {sliderPos.x >= threshold ? '✅' : '➔'}

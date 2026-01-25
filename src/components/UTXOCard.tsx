@@ -11,6 +11,57 @@ interface UTXOCardProps {
   loading: boolean;
 }
 
+const SATS_PER_BCH_BIGINT = BigInt(SATSINBITCOIN);
+
+function formatBchFromSats(
+  sats: number | string | bigint | undefined | null
+): string {
+  if (sats === null || sats === undefined) return '0';
+
+  // bigint-safe formatting (no precision loss)
+  if (typeof sats === 'bigint') {
+    const whole = sats / SATS_PER_BCH_BIGINT;
+    const frac = sats % SATS_PER_BCH_BIGINT;
+
+    let fracStr = frac.toString().padStart(8, '0');
+    fracStr = fracStr.replace(/0+$/, ''); // trim trailing zeros
+
+    return fracStr.length ? `${whole.toString()}.${fracStr}` : whole.toString();
+  }
+
+  // number/string formatting
+  const n = typeof sats === 'string' ? Number(sats) : sats;
+  if (!Number.isFinite(n)) return '0';
+
+  return (n / SATSINBITCOIN).toFixed(8).replace(/\.?0+$/, '');
+}
+
+// Function to format token amounts based on decimals
+function formatTokenAmount(
+  amount: number | string | bigint,
+  decimals: number = 0
+): string {
+  if (decimals === 0) return amount.toString();
+
+  // bigint-safe formatting for tokens too (prevents precision loss)
+  if (typeof amount === 'bigint') {
+    const base = 10n ** BigInt(decimals);
+    const whole = amount / base;
+    const frac = amount % base;
+
+    let fracStr = frac.toString().padStart(decimals, '0');
+    fracStr = fracStr.replace(/0+$/, '');
+
+    return fracStr.length ? `${whole.toString()}.${fracStr}` : whole.toString();
+  }
+
+  const numAmount = typeof amount === 'string' ? Number(amount) : amount;
+  if (!Number.isFinite(numAmount)) return '0';
+
+  const divisor = Math.pow(10, decimals);
+  return (numAmount / divisor).toFixed(decimals).replace(/\.?0+$/, '');
+}
+
 const UTXOCard: React.FC<UTXOCardProps> = ({ utxos, loading }) => {
   // State to store icon data URIs, keyed by category
   const [iconUris, setIconUris] = useState<Record<string, string | null>>({});
@@ -33,27 +84,14 @@ const UTXOCard: React.FC<UTXOCardProps> = ({ utxos, loading }) => {
           const iconUri = await bcmr.resolveIcon(authbase);
           setIconUris((prev) => ({ ...prev, [category]: iconUri }));
         } catch (error) {
-          // console.error(`Failed to fetch icon for category ${category}:`, error);
           setIconUris((prev) => ({ ...prev, [category]: null }));
         }
       }
     };
 
     fetchIcons();
-  }, [utxos]); // Re-run when utxos change
-
-  // Function to format token amounts based on decimals
-  const formatTokenAmount = (
-    amount: number | string | bigint,
-    decimals: number = 0
-  ): string => {
-    const numAmount =
-      typeof amount === 'string' ? parseFloat(amount) : Number(amount);
-    if (decimals === 0) return numAmount.toString();
-    const divisor = Math.pow(10, decimals);
-    const formatted = (numAmount / divisor).toFixed(decimals);
-    return formatted.replace(/\.?0+$/, ''); // Remove trailing zeros
-  };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [utxos]); // keep simple; iconUris is intentionally not a dependency to avoid loops
 
   if (loading) {
     return (
@@ -80,13 +118,19 @@ const UTXOCard: React.FC<UTXOCardProps> = ({ utxos, loading }) => {
 
   return (
     <div>
-      {/* <h4 className="font-semibold mb-2">UTXOs:</h4> */}
       {utxos.map((utxo, i) => {
         const isToken = Boolean(utxo.token);
         const tokenData = isToken ? utxo.token : null;
         const metadata = tokenData?.BcmrTokenMetadata || null;
         const category = tokenData?.category || null;
         const iconUri = category ? iconUris[category] : null;
+
+        // ✅ Contract UTXOs may not have `value`, but do have `amount`
+        const sats = (utxo.value ?? utxo.amount) as
+          | number
+          | string
+          | bigint
+          | undefined;
 
         return (
           <div
@@ -108,13 +152,13 @@ const UTXOCard: React.FC<UTXOCardProps> = ({ utxos, loading }) => {
                     <strong>Name:</strong> {metadata?.name || 'Unknown Token'}
                   </p>
                   <p>
-                    {utxo.value / SATSINBITCOIN} <strong>BCH</strong>
+                    {formatBchFromSats(sats)} <strong>BCH</strong>
                   </p>
                 </>
               ) : (
                 <>
                   <p>
-                    {utxo.value / SATSINBITCOIN} <strong>BCH</strong>
+                    {formatBchFromSats(sats)} <strong>BCH</strong>
                   </p>
                   <p>
                     <strong>Tx Hash:</strong> {shortenTxHash(utxo.tx_hash)}
@@ -128,6 +172,7 @@ const UTXOCard: React.FC<UTXOCardProps> = ({ utxos, loading }) => {
                 </>
               )}
             </div>
+
             <div className="flex flex-col items-center space-y-2">
               {isToken && metadata ? (
                 <>
@@ -164,6 +209,7 @@ const UTXOCard: React.FC<UTXOCardProps> = ({ utxos, loading }) => {
           </div>
         );
       })}
+
       {!utxos.length && <p className="text-gray-500">No UTXOs to display.</p>}
     </div>
   );

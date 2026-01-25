@@ -81,6 +81,7 @@ const OutputSelection: React.FC<OutputSelectionProps> = ({
   const [opReturnText, setOpReturnText] = useState('');
 
   const prices = useSelector((s: RootState) => s.priceFeed);
+  const bchUsd = prices['BCH-USD']?.price ?? 0;
 
   const hasGenesisUtxoSelected = selectedUtxos.some(
     (utxo) => !utxo.token && utxo.tx_pos === 0
@@ -305,7 +306,7 @@ const OutputSelection: React.FC<OutputSelectionProps> = ({
                     0
                   ) /
                     SATSINBITCOIN) *
-                  Number(prices['BCH'])
+                  bchUsd
                 ).toFixed(2)} USD`}</span>
               </h3>
             ) : (
