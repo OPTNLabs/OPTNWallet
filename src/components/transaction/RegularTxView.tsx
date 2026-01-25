@@ -1,3 +1,5 @@
+// src/components/transaction/RegularTxView.tsx
+
 import React, { useState, useEffect, useMemo } from 'react';
 import { FaCamera } from 'react-icons/fa';
 import { TransactionOutput, UTXO } from '../../types/types';

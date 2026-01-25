@@ -5,7 +5,7 @@ import { FaBitcoin } from 'react-icons/fa';
 import { UTXO } from '../../types/types';
 import Popup from './Popup';
 import { shortenTxHash } from '../../utils/shortenHash';
-import { PREFIX, SATSINBITCOIN } from '../../utils/constants';
+import { PREFIX } from '../../utils/constants';
 import { Network } from '../../redux/networkSlice';
 import BcmrService from '../../services/BcmrService';
 import { IdentitySnapshot } from '@bitauth/libauth';
@@ -19,6 +19,74 @@ interface SelectedUTXOsDisplayProps {
   totalSelectedUtxoAmount: BigInt;
   handleUtxoClick: (utxo: UTXO) => void;
   currentNetwork: Network;
+}
+
+// ---- BigInt-safe formatting helpers ----
+const SATS_PER_BCH = 100_000_000n;
+
+function toBigIntSats(v: unknown): bigint {
+  if (typeof v === 'bigint') return v;
+  if (typeof v === 'number') return BigInt(Math.trunc(v));
+  if (typeof v === 'string' && v.trim() !== '') {
+    try {
+      return BigInt(v);
+    } catch {
+      return 0n;
+    }
+  }
+  return 0n;
+}
+
+function formatSatsToBchString(satsLike: bigint | number): string {
+  const sats =
+    typeof satsLike === 'bigint' ? satsLike : BigInt(Math.trunc(satsLike));
+  const sign = sats < 0n ? '-' : '';
+  const abs = sats < 0n ? -sats : sats;
+
+  const whole = abs / SATS_PER_BCH;
+  const frac = abs % SATS_PER_BCH;
+
+  const fracStr = frac.toString().padStart(8, '0').replace(/0+$/, '');
+
+  return sign + whole.toString() + (fracStr ? `.${fracStr}` : '');
+}
+
+function pow10BigInt(decimals: number): bigint {
+  // decimals are typically small (0-18). Keep it simple.
+  let x = 1n;
+  for (let i = 0; i < decimals; i++) x *= 10n;
+  return x;
+}
+
+// Token amount formatter that supports number | bigint + decimals
+function formatTokenAmount(
+  amount: number | string | bigint,
+  decimals: number = 0
+): string {
+  if (decimals <= 0) return String(amount);
+
+  // Prefer bigint math when possible
+  if (typeof amount === 'bigint') {
+    const base = pow10BigInt(decimals);
+    const sign = amount < 0n ? '-' : '';
+    const abs = amount < 0n ? -amount : amount;
+
+    const whole = abs / base;
+    const frac = abs % base;
+
+    const fracStr = frac.toString().padStart(decimals, '0').replace(/0+$/, '');
+
+    return sign + whole.toString() + (fracStr ? `.${fracStr}` : '');
+  }
+
+  // Fallback to number formatting
+  const numAmount =
+    typeof amount === 'string' ? parseFloat(amount) : Number(amount);
+  if (!Number.isFinite(numAmount)) return '0';
+
+  const divisor = Math.pow(10, decimals);
+  const formatted = (numAmount / divisor).toFixed(decimals);
+  return formatted.replace(/\.?0+$/, '');
 }
 
 export default function SelectedUTXOsDisplay({
@@ -40,19 +108,7 @@ export default function SelectedUTXOsDisplay({
   >({});
 
   const prices = useSelector((s: RootState) => s.priceFeed);
-
-  // Function to format token amounts based on decimals
-  const formatTokenAmount = (
-    amount: number | string | bigint,
-    decimals: number = 0
-  ): string => {
-    const numAmount =
-      typeof amount === 'string' ? parseFloat(amount) : Number(amount);
-    if (decimals === 0) return numAmount.toString();
-    const divisor = Math.pow(10, decimals);
-    const formatted = (numAmount / divisor).toFixed(decimals);
-    return formatted.replace(/\.?0+$/, ''); // Remove trailing zeros
-  };
+  const bchUsd = prices['BCH-USD']?.price ?? 0;
 
   // Fetch token metadata when categories change
   useEffect(() => {
@@ -74,21 +130,28 @@ export default function SelectedUTXOsDisplay({
             reg.registry
           );
           const iconUri = await svc.resolveIcon(authbase);
-          // Extract decimals and symbol from the snapshot
+
           const decimals = snap.token?.decimals || 0;
           const symbol = snap.token?.symbol || '';
           newMeta[category] = { name: snap.name, symbol, decimals, iconUri };
-          // console.log('Fetched metadata for', category, newMeta[category]);
         } catch (e) {
-          // console.error('Failed loading metadata for', category, e);
+          // ignore
         }
       }
-      // Merge into cache
       setTokenMetadata((prev) => ({ ...prev, ...newMeta }));
     })();
   }, [selectedUtxos, tokenMetadata]);
 
   const togglePopup = () => setShowPopup((v) => !v);
+
+  // Total BCH string (BigInt-safe)
+  const totalBchStr = formatSatsToBchString(
+    totalSelectedUtxoAmount as unknown as bigint
+  );
+  const totalBchNum = parseFloat(totalBchStr);
+  const totalUsd = Number.isFinite(totalBchNum)
+    ? (totalBchNum * bchUsd).toFixed(2)
+    : '0.00';
 
   return (
     <div className="mb-4">
@@ -122,9 +185,12 @@ export default function SelectedUTXOsDisplay({
             ) : (
               selectedUtxos.map((utxo) => {
                 const key = utxo.id ?? `${utxo.tx_hash}-${utxo.tx_pos}`;
-                const isToken = !!utxo.token; // Check if it's a CashToken
+                const isToken = !!utxo.token;
                 const cat = utxo.token?.category;
                 const meta = cat ? tokenMetadata[cat] : null;
+
+                // BigInt-safe sats (handles contract UTXOs that may use bigint)
+                const sats = toBigIntSats(utxo.amount ?? utxo.value);
 
                 return (
                   <button
@@ -134,7 +200,6 @@ export default function SelectedUTXOsDisplay({
                   >
                     {/* Address */}
                     <span className="w-full">
-                      {/* Address:{' '} */}
                       {shortenTxHash(
                         meta ? utxo.tokenAddress : utxo.address,
                         PREFIX[currentNetwork].length
@@ -154,14 +219,11 @@ export default function SelectedUTXOsDisplay({
                     ) : (
                       <>
                         <span className="w-full">
-                          {(utxo.amount != null ? utxo.amount : utxo.value) /
-                            SATSINBITCOIN}{' '}
-                          BCH
+                          {formatSatsToBchString(sats)} BCH
                         </span>
                         <span className="w-full">
                           Tx Hash: {shortenTxHash(utxo.tx_hash)}
                         </span>
-                        {/* <span className="w-full">Position: {utxo.tx_pos}</span> */}
                       </>
                     )}
 
@@ -217,11 +279,9 @@ export default function SelectedUTXOsDisplay({
         <div className="mt-4">
           <h3 className="flex flex-col">
             <span>
-              {`${selectedUtxos.length} Input${selectedUtxos.length === 1 ? '' : 's'} - ${Number(totalSelectedUtxoAmount) / SATSINBITCOIN} BCH`}
+              {`${selectedUtxos.length} Input${selectedUtxos.length === 1 ? '' : 's'} - ${totalBchStr} BCH`}
             </span>
-            <span>
-              {`$ ${((Number(totalSelectedUtxoAmount) / SATSINBITCOIN) * Number(prices['BCH'])).toFixed(2)} USD`}
-            </span>
+            <span>{`$ ${totalUsd} USD`}</span>
           </h3>
         </div>
       )}

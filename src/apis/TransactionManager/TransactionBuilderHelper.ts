@@ -102,32 +102,32 @@ export default function TransactionBuilderHelper() {
       }
 
       // Regular or token output
-      let amountSats = toBigIntAmount(output.amount);
+      let amountSats = toBigIntAmount((output as any).amount);
 
       // Enforce token-bearing outputs have minimum sats
-      if (output.token) {
+      if ((output as any).token) {
         const minTokenSats = BigInt(TOKEN_OUTPUT_SATS);
         if (amountSats < minTokenSats) amountSats = minTokenSats;
       }
 
       const baseOutput = {
-        to: output.recipientAddress,
+        to: (output as any).recipientAddress,
         amount: amountSats,
       };
 
-      if (output.token) {
+      if ((output as any).token) {
         return {
           ...baseOutput,
           token: {
-            category: output.token.category,
-            ...(output.token.nft && {
+            category: (output as any).token.category,
+            ...((output as any).token.nft && {
               nft: {
-                capability: output.token.nft.capability,
-                commitment: output.token.nft.commitment,
+                capability: (output as any).token.nft.capability,
+                commitment: (output as any).token.nft.commitment,
               },
             }),
             // Always include amount: NFTs should be 0; FTs should be set by caller.
-            amount: toBigIntAmount((output.token as any).amount ?? 0),
+            amount: toBigIntAmount(((output as any).token as any).amount ?? 0),
           },
         };
       }
@@ -183,7 +183,15 @@ export default function TransactionBuilderHelper() {
             );
             if (!signingKey || signingKey.length === 0) {
               throw new Error(
-                `Private key not found or empty for address: ${processedUtxo.address}`
+                [
+                  'Private key not found for selected input address.',
+                  `address=${processedUtxo.address}`,
+                  `outpoint=${processedUtxo.tx_hash}:${processedUtxo.tx_pos}`,
+                  'Likely causes:',
+                  '- address encoding mismatch (cashaddr vs token addr vs prefixed)',
+                  '- wallet keys table no longer stores this address',
+                  '- KeyService lookup now requires walletId/account and is not provided here',
+                ].join(' ')
               );
             }
           }
@@ -255,13 +263,14 @@ export default function TransactionBuilderHelper() {
   }
 
   const sendTransaction = async (tx: string) => {
-    try {
-      const txid = await provider.sendRawTransaction(tx);
-      return txid;
-    } catch (error) {
-      console.error(error);
-      return null;
+    // IMPORTANT: do not swallow broadcast errors
+    const txid = await provider.sendRawTransaction(tx);
+
+    if (!txid || typeof txid !== 'string') {
+      throw new Error(`Broadcast returned invalid txid: ${String(txid)}`);
     }
+
+    return txid;
   };
 
   return {

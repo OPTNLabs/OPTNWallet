@@ -141,25 +141,30 @@ const useHandleTransaction = (
   ) => {
     try {
       setLoading(true);
-      // ⬇️ pass selectedUtxos so the service can tell the worker what to prune/refresh
       const transactionID = await TransactionService.sendTransaction(
         rawTX,
         selectedUtxos
       );
 
-      if (transactionID.txid) {
-        setTransactionId(transactionID.txid);
-        setShowTxIdPopup(true);
+      // If we didn't get a txid, treat as an error even if no errorMessage was returned.
+      if (!transactionID?.txid) {
+        const msg =
+          transactionID?.errorMessage ?? 'Broadcast failed (no txid returned).';
+        setErrorMessage(msg);
+        await Toast.show({ text: `Error: ${msg}` });
+        setShowTxIdPopup(false);
+        setLoading(false);
+        return { txid: null, errorMessage: msg };
       }
 
-      if (transactionID.errorMessage) {
-        setErrorMessage(transactionID.errorMessage);
-        await Toast.show({ text: `Error: ${transactionID.errorMessage}` });
-      } else {
-        setRawTX('');
-        dispatch(resetTransactions());
-        dispatch(resetContract());
-      }
+      // Success path
+      setTransactionId(transactionID.txid);
+      setShowTxIdPopup(true);
+
+      // Clear state only on success
+      setRawTX('');
+      dispatch(resetTransactions());
+      dispatch(resetContract());
 
       setLoading(false);
       return transactionID;

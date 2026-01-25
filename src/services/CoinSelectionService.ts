@@ -115,7 +115,10 @@ export function selectTokenFtInputs(
 
   for (let i = 0; i < pool.length && tokenInputs.length < maxInputs; i++) {
     const u = pool[i];
-    const amt = BigInt(u.token?.amount ?? 0);
+    const amtRaw = u.token?.amount ?? 0;
+    const amt =
+      typeof amtRaw === 'bigint' ? amtRaw : BigInt(Math.trunc(amtRaw));
+
     tokenInputs.push(u);
     running += amt;
     if (running >= tokenAmount) break;
