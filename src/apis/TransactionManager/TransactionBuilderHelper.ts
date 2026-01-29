@@ -38,6 +38,83 @@ export default function TransactionBuilderHelper() {
     return 0n;
   }
 
+  function normalizeCategory(x: unknown): string {
+    if (typeof x !== 'string') return '';
+    return x.trim().toLowerCase().replace(/^0x/, '');
+  }
+
+  function validateAuthGuardShape(utxos: UTXO[], outputs: TransactionOutput[]) {
+    // Find first AuthGuard contract spend in inputs
+    const idx = utxos.findIndex(
+      (u) =>
+        String(u.contractName ?? '').toLowerCase() === 'authguard' &&
+        String(u.contractFunction ?? '') === 'unlockWithNft'
+    );
+
+    if (idx === -1) return; // not an AuthGuard spend
+
+    // AuthGuard contract checks tx.inputs[1] specifically
+    if (utxos.length < 2) {
+      throw new Error(
+        'AuthGuard spend requires at least 2 inputs: [authHead, authKeyNFT, ...]'
+      );
+    }
+
+    // Strongly enforce the recommended ordering for v1 UX
+    if (idx !== 0) {
+      throw new Error(
+        `AuthGuard spend requires authHead to be inputs[0] (got inputs[${idx}]). Ensure inputs=[authHead, authKeyNFT, ...fee].`
+      );
+    }
+
+    const authKey = utxos[1];
+    if (!authKey.token) {
+      throw new Error(
+        'AuthGuard spend requires inputs[1] to be the AuthKey NFT (token UTXO with amount=0).'
+      );
+    }
+
+    const authKeyAmt = toBigIntAmount((authKey.token as any).amount ?? 0);
+    if (authKeyAmt !== 0n) {
+      throw new Error(
+        `AuthKey must be NFT-only (token amount must be 0). Got amount=${authKeyAmt.toString()}`
+      );
+    }
+
+    // If keepGuarded=true, outputs[0] must preserve locking bytecode.
+    // We can’t compute bytecode here, but we can enforce a sane structure:
+    const keep = !!(utxos[0].contractFunctionInputs as any)?.keepGuarded;
+
+    if (keep) {
+      if (!outputs || outputs.length === 0) {
+        throw new Error(
+          'AuthGuard keepGuarded=true requires outputs[0] to be the authHead continuation.'
+        );
+      }
+      const o0 = outputs[0];
+      if ('opReturn' in o0 && o0.opReturn !== undefined) {
+        throw new Error(
+          'AuthGuard keepGuarded=true requires outputs[0] to be a normal output (not OP_RETURN).'
+        );
+      }
+      const toAddr = (o0 as any).recipientAddress;
+      if (!toAddr || typeof toAddr !== 'string') {
+        throw new Error(
+          'AuthGuard keepGuarded=true requires outputs[0].recipientAddress to be the authHead contract address.'
+        );
+      }
+      // Best-effort check: if the contract UTXO has an address, ensure output[0] targets it
+      const headAddr = utxos[0].address;
+      if (headAddr && String(toAddr) !== String(headAddr)) {
+        throw new Error(
+          `AuthGuard keepGuarded=true requires outputs[0] to pay back to authHead address. expected=${headAddr} got=${String(
+            toAddr
+          )}`
+        );
+      }
+    }
+  }
+
   /**
    * Extracts the body of a specified function from the contract source code.
    */
@@ -140,6 +217,9 @@ export default function TransactionBuilderHelper() {
    * Builds a transaction using selected UTXOs and outputs.
    */
   async function buildTransaction(utxos: UTXO[], outputs: TransactionOutput[]) {
+    // Preflight: fail early with clear errors for covenant ordering constraints
+    validateAuthGuardShape(utxos, outputs);
+
     const txBuilder = new TransactionBuilder({ provider });
     let needsLocktime = false;
 

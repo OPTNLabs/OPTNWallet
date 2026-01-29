@@ -21,6 +21,10 @@ import { DateTime } from 'luxon';
 import { Database } from 'sql.js';
 import { BcmrTokenMetadata } from '../types/types';
 
+import { store } from '../redux/store';
+import { Network } from '../redux/networkSlice';
+import { getBcmrLatestRegistryUrl } from '../utils/servers/InfraUrls';
+
 const ICON_CACHE = new Map<string, string | null>();
 
 // ----------------------------------------------------------------------------
@@ -35,11 +39,10 @@ function mergeRegistry(registry: MetadataRegistry) {
   if (!registry.identities) return;
   LOCAL_BCMR.identities = LOCAL_BCMR.identities || {};
   for (const authbase of Object.keys(registry.identities)) {
-    // both of these are timestamp→IdentitySnapshot maps
     const localHistory =
       (LOCAL_BCMR.identities as Record<string, IdentityHistory>)[authbase] ||
       {};
-    const remoteHistory = registry.identities[authbase]!; // also IdentityHistory
+    const remoteHistory = registry.identities[authbase]!;
     const merged: IdentityHistory = {
       ...localHistory,
       ...remoteHistory,
@@ -94,7 +97,8 @@ export default class BcmrService {
   }
 
   private getDefaultRegistryUri(authbase: string): string {
-    return `https://bcmr.paytaca.com/api/registries/${authbase}/latest`;
+    const net: Network = store.getState().network.currentNetwork;
+    return getBcmrLatestRegistryUrl(net, authbase);
   }
 
   private async loadIdentityRegistry(

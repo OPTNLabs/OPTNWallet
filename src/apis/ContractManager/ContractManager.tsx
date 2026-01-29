@@ -21,6 +21,7 @@ import transferWithTimeoutArtifact from './artifacts/transfer_with_timeout.json'
 import escrowArtifact from './artifacts/escrow.json';
 import escrowMS2Artifact from './artifacts/escrowMS2.json';
 import MSVault from './artifacts/MSVault.json';
+import AuthGuardArtifact from './artifacts/AuthGuard.json';
 
 import AddonsRegistry from '../../services/AddonsRegistry';
 import type {
@@ -54,6 +55,7 @@ export default function ContractManager() {
     escrowMS2: escrowMS2Artifact,
     bip38: bip38Artifact,
     msVault: MSVault,
+    authguard: AuthGuardArtifact,
   };
 
   return {
@@ -717,19 +719,42 @@ export default function ContractManager() {
   ) {
     const state = store.getState();
 
-    const contractInstance = await getContractInstanceByAddress(utxo.address);
+    // 1) Try DB instantiated contract first (current behavior)
+    let contractInstance = await getContractInstanceByAddress(utxo.address);
+
+    // 2) Fallback: build from artifact directly (patient-0 / no DB)
     if (!contractInstance) {
-      throw new Error(
-        `Contract instance not found for address ${utxo.address}`
-      );
+      const name = utxo.contractName;
+      if (!name) {
+        throw new Error(
+          `Contract instance not found for address ${utxo.address} and utxo.contractName is missing`
+        );
+      }
+
+      // Prefer builtin/addon resolver first
+      const artifact =
+        (await loadArtifact(name)) ?? (await getContractArtifact(name));
+      if (!artifact) {
+        throw new Error(`Contract artifact not found for ${name}`);
+      }
+
+      contractInstance = {
+        artifact,
+        abi: artifact.abi ?? [],
+      };
     }
 
-    const constructorInputs = await fetchConstructorArgs(utxo.address);
+    // 3) Constructor args: prefer UTXO override, else DB lookup
+    const constructorInputs =
+      Array.isArray((utxo as any).contractConstructorArgs) &&
+      (utxo as any).contractConstructorArgs.length > 0
+        ? (utxo as any).contractConstructorArgs
+        : await fetchConstructorArgs(utxo.address);
 
     const parsedConstructorArgs =
       contractInstance.artifact.constructorInputs.map(
         (input: any, index: number) => {
-          const argValue = constructorInputs[index];
+          const argValue = constructorInputs?.[index];
           if (argValue === undefined) {
             throw new Error(`Missing constructor argument for ${input.name}`);
           }

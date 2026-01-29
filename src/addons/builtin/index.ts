@@ -16,6 +16,21 @@ export const BUILTIN_ADDONS: AddonManifest[] = [
     version: '0.0.1',
     description: 'Builtin addon scaffold to validate addon contract loading.',
     permissions: [{ kind: 'none' }],
+
+    // ✅ Patient-0 app (v1: declarative + config.screen mapping)
+    apps: [
+      {
+        id: 'authguard',
+        name: 'AuthGuard',
+        description: 'Patient-0 marketplace app (SDK + routing smoke test).',
+        iconUri: null, // ✅ fall back to DEFAULT_ICON in AppsView
+        kind: 'declarative',
+        config: {
+          screen: 'AuthGuardApp',
+        },
+      },
+    ],
+
     contracts: [
       {
         id: 'p2pkh-demo',
@@ -26,6 +41,7 @@ export const BUILTIN_ADDONS: AddonManifest[] = [
         functions: [],
       },
     ],
+
     iconUri: null,
   },
 ];
