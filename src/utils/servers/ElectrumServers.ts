@@ -1,7 +1,7 @@
 export const chipnetServers = [
+  'electrum-chipnet.optnlabs.com',
   'chipnet.bch.ninja',
   'chipnet.imaginary.cash',
-  //   'explorer.bch.ninja',
 ];
 
 export const mainnetServers = [
