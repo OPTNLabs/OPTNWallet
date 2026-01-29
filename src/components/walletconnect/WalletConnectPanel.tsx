@@ -10,6 +10,7 @@ import SessionProposalModal from './SessionProposalModal';
 import { SessionList } from './SessionList';
 import SessionSettingsModal from './SessionSettingsModal';
 import { disconnectSession } from '../../redux/walletconnectSlice';
+import { SignMessageModal } from './SignMessageModal';
 
 export default function WalletConnectPanel() {
   const dispatch = useDispatch<AppDispatch>();
@@ -68,7 +69,7 @@ export default function WalletConnectPanel() {
       )}
 
       {/* Signing request modals */}
-      {/* <SignMessageModal /> */}
+      <SignMessageModal />
       {/* <SignTransactionModal /> */}
     </div>
   );
