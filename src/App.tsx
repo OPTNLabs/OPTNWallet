@@ -36,6 +36,7 @@ import UtxoNotificationCenter from './components/notifications/UtxoNotificationC
 
 // ✅ Simple Send (new)
 import SimpleSend from './pages/SimpleSend';
+import MarketplaceAppHost from './pages/apps/MarketplaceAppHost';
 
 let utxoWorkerStarted = false;
 let transactionWorkerStarted = false;
@@ -183,6 +184,7 @@ function App() {
                 <Route path="/home/:wallet_id" element={<Home />} />
                 <Route path="/contract" element={<ContractView />} />
                 <Route path="/apps" element={<AppsView />} />
+                <Route path="/apps/:appId" element={<MarketplaceAppHost />} />
                 <Route path="/apps/fundme" element={<AppFundMe />} />
                 <Route path="/campaign/:id" element={<CampaignDetail />} />
                 <Route path="/receive" element={<Receive />} />

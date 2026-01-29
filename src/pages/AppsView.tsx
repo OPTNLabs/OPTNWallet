@@ -1,46 +1,70 @@
 // src/pages/AppsView.tsx
 
-import React, { useEffect, useMemo, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useSelector } from 'react-redux';
 import { useNavigate } from 'react-router-dom';
 import { RootState } from '../redux/store';
 
 import AddonsRegistry from '../services/AddonsRegistry';
+import type { AddonAppDefinition, AddonManifest } from '../types/addons';
 
 type AppCard = {
-  id: string; // route id
+  id: string; // "fundme" OR "<addonId>:<appId>"
   name: string;
-  icon?: string | null;
-  description?: string;
+  icon: string;
+  description: string;
   source: 'builtin' | 'addon';
 };
 
-const AppsView: React.FC = () => {
+const DEFAULT_ICON = '/assets/images/OPTNWelcome1.png';
+
+const AppsView = () => {
   const navigate = useNavigate();
   const wallet_id = useSelector(
     (state: RootState) => state.wallet_id.currentWalletId
   );
 
-  const [addonApps, setAddonApps] = useState<AppCard[]>([]);
-  const [addonInitErr, setAddonInitErr] = useState<string | null>(null);
+  const [cards, setCards] = useState<AppCard[]>([]);
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     let mounted = true;
 
     (async () => {
       try {
+        setError(null);
+
         const reg = AddonsRegistry();
         await reg.init();
-        const apps = reg.getApps().map((a) => ({
-          id: `addon:${a.fullId}`, // route-safe prefix
-          name: a.name,
-          icon: a.iconUri ?? null,
-          description: a.description ?? '',
-          source: 'addon' as const,
-        }));
-        if (mounted) setAddonApps(apps);
+        const manifests: AddonManifest[] = reg.getAddons();
+
+        const out: AppCard[] = [];
+
+        // ✅ Keep FundMe as-is (do NOT break existing route)
+        out.push({
+          id: 'fundme',
+          name: 'FundMe',
+          icon: '/assets/images/fundme.png',
+          description: 'BCH Crowdfunding',
+          source: 'builtin',
+        });
+
+        // ✅ Add addon apps
+        for (const m of manifests) {
+          for (const a of (m.apps ?? []) as AddonAppDefinition[]) {
+            out.push({
+              id: `${m.id}:${a.id}`,
+              name: a.name,
+              icon: (a.iconUri || m.iconUri || DEFAULT_ICON) as string,
+              description: a.description || '',
+              source: 'addon',
+            });
+          }
+        }
+
+        if (mounted) setCards(out);
       } catch (e: any) {
-        if (mounted) setAddonInitErr(e?.message ?? String(e));
+        if (mounted) setError(e?.message ?? String(e));
       }
     })();
 
@@ -49,25 +73,12 @@ const AppsView: React.FC = () => {
     };
   }, []);
 
-  const builtinApps: AppCard[] = useMemo(
-    () => [
-      {
-        id: 'fundme',
-        name: 'FundMe',
-        icon: '/assets/images/fundme.png',
-        description: 'BCH Crowdfunding',
-        source: 'builtin',
-      },
-    ],
-    []
-  );
-
-  const apps: AppCard[] = useMemo(
-    () => [...builtinApps, ...addonApps],
-    [builtinApps, addonApps]
-  );
-
   const handleAppClick = (appId: string) => {
+    if (appId === 'fundme') {
+      navigate('/apps/fundme');
+      return;
+    }
+    // addon app => /apps/<addonId>:<appId>
     navigate(`/apps/${appId}`);
   };
 
@@ -81,45 +92,40 @@ const AppsView: React.FC = () => {
         />
       </div>
 
-      <div className="flex justify-between items-center mb-6 mt-4">
-        <h1 className="text-2xl font-bold">Apps</h1>
-        <button
-          onClick={() => navigate(`/home/${wallet_id}`)}
-          className="bg-red-500 hover:bg-red-600 text-white py-2 px-4 rounded"
-        >
-          Go Back
-        </button>
-      </div>
-
-      {addonInitErr && (
-        <div className="mb-4 p-2 rounded border border-yellow-400 bg-yellow-50 text-sm">
-          Addons failed to initialize: {addonInitErr}
-        </div>
-      )}
-
-      <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
-        {apps.map((app) => (
-          <div
-            key={app.id}
-            onClick={() => handleAppClick(app.id)}
-            className="p-4 border rounded-lg shadow hover:shadow-md transition-shadow cursor-pointer"
+      <div className="container mx-auto p-4">
+        <div className="flex justify-between items-center mb-6">
+          <h1 className="text-2xl font-bold">Apps</h1>
+          <button
+            onClick={() => navigate(`/home/${wallet_id}`)}
+            className="bg-red-500 hover:bg-red-600 text-white py-2 px-4 rounded"
           >
-            <div className="flex flex-col items-center">
-              <img
-                src={app.icon ?? '/assets/images/OPTNLogo.png'}
-                alt={app.name}
-                className="w-16 h-16 mb-2"
-              />
-              <h3 className="font-semibold text-center">{app.name}</h3>
-              <p className="text-sm text-gray-600 text-center">
-                {app.description}
-              </p>
-              <span className="mt-2 text-xs text-gray-500">
-                {app.source === 'addon' ? 'Marketplace' : 'Built-in'}
-              </span>
-            </div>
+            Go Back
+          </button>
+        </div>
+
+        {error && (
+          <div className="mb-4 p-3 rounded bg-red-50 text-red-700 text-sm">
+            Failed to load addon apps: {error}
           </div>
-        ))}
+        )}
+
+        <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
+          {cards.map((app) => (
+            <div
+              key={app.id}
+              onClick={() => handleAppClick(app.id)}
+              className="p-4 border rounded-lg shadow hover:shadow-md transition-shadow cursor-pointer"
+            >
+              <div className="flex flex-col items-center">
+                <img src={app.icon} alt={app.name} className="w-16 h-16 mb-2" />
+                <h3 className="font-semibold text-center">{app.name}</h3>
+                <p className="text-sm text-gray-600 text-center">
+                  {app.description}
+                </p>
+              </div>
+            </div>
+          ))}
+        </div>
       </div>
     </div>
   );

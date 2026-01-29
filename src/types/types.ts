@@ -31,6 +31,8 @@ export interface UTXO {
   // **New Fields**
   contractFunction?: string;
   contractFunctionInputs?: { [key: string]: any };
+  // Optional: provide constructor args at spend-time (bypass DB lookup)
+  contractConstructorArgs?: any[];
 }
 
 // TransactionHistoryItem remains the same
