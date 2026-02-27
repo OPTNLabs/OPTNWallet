@@ -7,14 +7,15 @@ Welcome to the OPTN Wallet project! This guide helps you set up the development 
 The project is organized to separate frontend components, API interactions, and backend services. Below is a breakdown of key directories and files:
 
 - **Root Configuration & Build Files**:
+
   - `.editorconfig`, `.eslintrc.cjs`, `.eslintrc.json`, `.prettierrc`: Code style and formatting configurations.
   - `package.json`, `package-lock.json`: Project metadata and dependency management.
   - `tsconfig.json`, `tsconfig.node.json`: TypeScript configuration files.
   - `vite.config.ts`: Vite configuration for building the app.
   - `tailwind.config.js`: Tailwind CSS configuration.
   - `capacitor.config.ts`: Configuration for mobile builds using Capacitor.
-
 - **Source Code (`src`)**:
+
   - **Entry Points & Global Assets**:
     - `App.tsx`: Main React entry point.
     - `index.html`, `index.css`, `main.tsx`: Base HTML and styling files.
@@ -43,8 +44,8 @@ The project is organized to separate frontend components, API interactions, and 
     - `src/types`: TypeScript definitions for consistent type usage.
   - **Web Workers (`src/workers`)**: Offloads heavy computations to separate threads:
     - Worker services like `TransactionWorkerService.ts`, `UTXOWorkerService.ts`, `priceFeedWorker.ts`.
-
 - **Additional Folders**:
+
   - **Patches (`patches`)**: Contains patches for third-party dependencies when needed.
 
 ## Getting Started
@@ -61,6 +62,8 @@ The source code is hosted on GitHub: [OPTN Wallet Repository](https://github.com
    cd OPTNWallet
 
 
+
+   ```
 
 ```
 OPTNWallet
@@ -282,3 +285,176 @@ OPTNWallet
 └─ vitest.config.ts
 
 ```
+
+## Addon SDK Guide (Beta)
+
+This section explains how the OPTN addon system works and how third-party apps can integrate contracts and transaction flows with the wallet.
+
+### What You Get Today
+
+The addon system is currently a hosted extension model:
+
+- Addons declare metadata, permissions, contracts, and apps via a manifest.
+- The wallet loads manifests through `AddonsRegistry`.
+- Addon apps run inside wallet-hosted React screens.
+- Addon logic uses a restricted SDK (`createAddonSDK`) to:
+  - read wallet UTXOs,
+  - build and broadcast transactions,
+  - get signing templates for wallet-owned addresses,
+  - call allowlisted HTTPS JSON APIs.
+
+Current v1 constraint: addons are loaded from the built-in list (`src/addons/builtin/index.ts`), not yet from remote install packages.
+
+### Core Architecture
+
+Main files:
+
+- `src/types/addons.ts`: manifest + addon types.
+- `src/services/AddonsRegistry.ts`: loads/validates addons, resolves contracts/apps.
+- `src/services/AddonsSDK.ts`: runtime SDK exposed to addon apps.
+- `src/services/AddonsAllowlist.ts`: permission and URL enforcement.
+- `src/pages/AppsView.tsx`: shows addon apps in UI.
+- `src/pages/apps/MarketplaceAppHost.tsx`: resolves an addon app and injects SDK.
+- `src/apis/ContractManager/ContractManager.tsx`: makes addon contracts available in Contract UI via `addon:<addonId>:<contractId>`.
+
+Runtime flow:
+
+1. App opens `/apps`.
+2. `AppsView` loads addon manifests via `AddonsRegistry`.
+3. User taps app card (`/apps/<addonId>:<appId>`).
+4. `MarketplaceAppHost` resolves app + manifest, creates SDK with wallet context.
+5. Screen component uses SDK for UTXOs, signing templates, tx build, and broadcast.
+
+### Manifest Format (Third-Party Contract/App Declaration)
+
+Use `AddonManifest` shape from `src/types/addons.ts`.
+
+```ts
+const MY_ADDON: AddonManifest = {
+  id: 'com.example.myaddon',
+  name: 'Example Addon',
+  version: '0.1.0',
+  description: 'Production addon',
+  permissions: [{ kind: 'none' }], // or { kind: 'http', domains: [...] }
+  apps: [
+    {
+      id: 'myapp',
+      name: 'My App',
+      kind: 'declarative',
+      config: { screen: 'MyAppScreenId' },
+    },
+  ],
+  contracts: [
+    {
+      id: 'my-contract',
+      name: 'My Contract',
+      cashscriptArtifact: myArtifactJson,
+      functions: [{ id: 'claim', name: 'Claim', intent: 'send' }],
+    },
+  ],
+};
+```
+
+Registry validation:
+
+- unique addon `id`.
+- non-empty `name`, `version`.
+- `permissions` must be valid.
+- at least 1 contract.
+- app kind must be `declarative`.
+- contract artifacts must be inline objects.
+
+### SDK Surface
+
+From `createAddonSDK(...)`:
+
+- `sdk.utxos.listForAddress(address)`: read UTXOs from Electrum for one address (address-restricted if host passes allowlist).
+- `sdk.utxos.listForWallet()`: returns wallet UTXOs.
+- `sdk.utxos.refreshAndStore(address)`: refresh + persist UTXOs for wallet address.
+- `sdk.tx.build({ inputs, outputs, changeAddress })`: build tx hex.
+- `sdk.tx.broadcast(hex)`: broadcast raw tx.
+- `sdk.signing.signatureTemplateForAddress(address)`: returns `SignatureTemplate` (never exports keys).
+- `sdk.http.fetchJson(url)`: HTTPS JSON fetch only if permission + global allowlist checks pass.
+- `sdk.logging.info/warn/error(...)`: namespaced logs.
+
+Notes:
+
+- `bcmr` is intentionally disabled for addons in v1.
+- HTTP domains are hard fail-closed by `AddonsAllowlist`.
+
+### Contract Integration Path
+
+Add your contract artifact in manifest `contracts[]`.
+
+Once loaded, contracts are exposed by `ContractManager.listAvailableArtifacts()` as:
+
+- `fileName: addon:<addonId>:<contractId>`
+- `source: addon`
+
+Artifact resolution supports:
+
+- `addon:<addonId>:<contractId>` (preferred)
+- `addon:<contractId>` (legacy fallback)
+
+This allows addon contracts to use the same contract creation/interaction pipeline as built-in contracts.
+
+### Transaction Flow for Third-Party Apps
+
+Recommended flow inside your app screen:
+
+1. Fetch wallet UTXOs with `sdk.utxos.listForWallet()`.
+2. Select inputs and build outputs (`TransactionOutput[]`).
+3. For plain P2PKH inputs: no extra unlock fields required.
+4. For contract inputs: set on each input UTXO:
+   - `contractName`
+   - `abi`
+   - `contractFunction`
+   - `contractFunctionInputs`
+   - optional `contractConstructorArgs` if constructor args are not in DB
+5. Build tx via `sdk.tx.build(...)`.
+6. Present confirmation UX.
+7. Broadcast with `sdk.tx.broadcast(hex)`.
+8. Refresh wallet UTXOs.
+
+Why step 4 matters:
+
+- `TransactionBuilderHelper` resolves contract unlockers via `ContractManager.getContractUnlockFunction(...)`.
+- Contract ABI `sig` inputs can be passed as:
+  - `sigaddr:<walletAddress>` (recommended), or
+  - `sigkey:<wif|hex>` (explicit).
+
+### Security Model
+
+- No direct private key export via SDK.
+- Signing can be constrained to wallet-owned addresses when host allowlist context is provided.
+- URL access is HTTPS-only and domain-allowlisted.
+- No localhost, `.local`, raw IP hosts, wildcard domains, or credentialed URLs.
+- Unknown permission kinds are rejected (fail-closed).
+
+### Integrating a New Third-Party App (Current v1 Path)
+
+Until marketplace package install is wired, use:
+
+1. Add manifest to `src/addons/builtin/index.ts`.
+2. Add app screen component under `src/pages/apps/...`.
+3. Map `config.screen` (or app id) to component in `MarketplaceAppHost.tsx`.
+4. In the screen, accept `manifest` + `sdk` props and implement UTXO/tx flow with SDK APIs.
+5. Add needed HTTP domains to global allowlist in `AddonsAllowlist.ts` before using `kind: 'http'`.
+
+### Integration Checklist
+
+- Manifest has a unique `id`.
+- Contract artifact is valid CashScript artifact JSON.
+- App kind is `declarative` with `config.screen`.
+- App screen is mapped in `MarketplaceAppHost`.
+- Input selection handles BCH, token, and contract UTXOs correctly.
+- Contract spends set `contractFunction` + `contractFunctionInputs`.
+- Confirmation is shown before broadcast.
+- Broadcast failure path is surfaced to users.
+
+### Known v1 Gaps
+
+- No remote addon install/update yet.
+- Declarative app entries still map to built-in host components.
+- BCMR remains disabled for addons.
+- HTTP global allowlist is empty by default until maintainers populate it.
