@@ -1,6 +1,7 @@
 // src/apis/ChaingraphManager/ChaingraphManager.ts
 
-const chaingraphUrl = 'https://gql.chaingraph.pat.mn/v1/graphql';
+import { store } from '../../redux/store';
+import { getInfraUrls } from '../../utils/servers/InfraUrls';
 
 export interface GraphQLResponse<T = any> {
   data?: T;
@@ -17,6 +18,8 @@ async function queryChainGraph<T = any>(
   };
 
   try {
+    const net = store.getState().network.currentNetwork;
+    const { chaingraphUrl } = getInfraUrls(net);
     const response = await fetch(chaingraphUrl, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },

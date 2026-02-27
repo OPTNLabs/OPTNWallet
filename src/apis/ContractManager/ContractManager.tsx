@@ -432,11 +432,25 @@ export default function ContractManager() {
    * - addon key (e.g. "addon:<addonId>:<contractId>" or legacy "addon:<contractId>")
    */
   async function loadArtifact(artifactName: string): Promise<any | null> {
-    // Builtin first
-    if (artifactCache[artifactName]) return artifactCache[artifactName];
+    const raw = String(artifactName ?? '').trim();
+    if (!raw) return null;
+
+    // Builtin first (robust)
+    if (artifactCache[raw]) return artifactCache[raw];
+    const key = raw.toLowerCase();
+    if (artifactCache[key]) return artifactCache[key];
+
+    // Match by artifact.contractName (case-insensitive)
+    for (const k of Object.keys(artifactCache)) {
+      const a = artifactCache[k];
+      const cn = String(a?.contractName ?? '')
+        .trim()
+        .toLowerCase();
+      if (cn && cn === key) return a;
+    }
 
     // Addon resolution
-    const parsed = normalizeAddonKey(artifactName);
+    const parsed = normalizeAddonKey(raw);
     if (!parsed?.contractId) return null;
 
     await addonsInit;
@@ -744,23 +758,30 @@ export default function ContractManager() {
       };
     }
 
-    // 3) Constructor args: prefer UTXO override, else DB lookup
-    const constructorInputs =
-      Array.isArray((utxo as any).contractConstructorArgs) &&
-      (utxo as any).contractConstructorArgs.length > 0
-        ? (utxo as any).contractConstructorArgs
-        : await fetchConstructorArgs(utxo.address);
+    // 3) Constructor args
+    // Allow contracts with ZERO constructor inputs (do not require DB lookups).
+    const ctorSpec: any[] = Array.isArray(
+      contractInstance.artifact?.constructorInputs
+    )
+      ? contractInstance.artifact.constructorInputs
+      : [];
 
-    const parsedConstructorArgs =
-      contractInstance.artifact.constructorInputs.map(
-        (input: any, index: number) => {
-          const argValue = constructorInputs?.[index];
-          if (argValue === undefined) {
-            throw new Error(`Missing constructor argument for ${input.name}`);
-          }
-          return parseInputValue(argValue, input.type);
+    let parsedConstructorArgs: any[] = [];
+    if (ctorSpec.length > 0) {
+      const constructorInputs =
+        Array.isArray((utxo as any).contractConstructorArgs) &&
+        (utxo as any).contractConstructorArgs.length > 0
+          ? (utxo as any).contractConstructorArgs
+          : await fetchConstructorArgs(utxo.address);
+
+      parsedConstructorArgs = ctorSpec.map((input: any, index: number) => {
+        const argValue = constructorInputs?.[index];
+        if (argValue === undefined) {
+          throw new Error(`Missing constructor argument for ${input.name}`);
         }
-      );
+        return parseInputValue(argValue, input.type);
+      });
+    }
 
     const contract = new Contract(
       contractInstance.artifact,
