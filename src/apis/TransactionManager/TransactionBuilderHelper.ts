@@ -290,11 +290,15 @@ export default function TransactionBuilderHelper() {
             throw new Error('Contract function and inputs must be provided');
           }
 
-          const usesTimeKeywords = doesFunctionUseTimeKeywords(
-            contractInstance,
-            utxo.contractFunction
-          );
-          if (usesTimeKeywords) needsLocktime = true;
+          // Patient-0 / fresh contract outputs may not have a DB instance.
+          // Avoid null-deref; locktime can still be detected later if needed.
+          if (contractInstance) {
+            const usesTimeKeywords = doesFunctionUseTimeKeywords(
+              contractInstance,
+              utxo.contractFunction
+            );
+            if (usesTimeKeywords) needsLocktime = true;
+          }
 
           const contractUnlockFunction =
             await contractManager.getContractUnlockFunction(

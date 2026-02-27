@@ -1,10 +1,11 @@
 // src/pages/apps/patient0/AuthGuardApp.tsx
 
-import { useCallback, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import type { AddonManifest, AddonAppDefinition } from '../../../types/addons';
 import type { AddonSDK } from '../../../services/AddonsSDK';
 import type { UTXO, TransactionOutput, Token } from '../../../types/types';
 
+import AddressManager from '../../../apis/AddressManager/AddressManager';
 import AUTHGUARD_ARTIFACT from '../../../apis/ContractManager/artifacts/AuthGuard.json';
 import { DUST, TOKEN_OUTPUT_SATS } from '../../../utils/constants';
 
@@ -54,6 +55,85 @@ function normalizeCategory(x: unknown): string {
   return x.trim().toLowerCase().replace(/^0x/i, '');
 }
 
+function normalizeTokenIdTxid(tokenId: string): string {
+  const hex = normalizeCategory(tokenId);
+  if (!/^[0-9a-f]{64}$/.test(hex)) {
+    throw new Error(
+      `Invalid tokenId/txid (expected 64 hex chars): ${String(tokenId)}`
+    );
+  }
+  return hex;
+}
+
+function currentWalletId(): number {
+  try {
+    const id = Number(store.getState().wallet_id.currentWalletId ?? 0);
+    return Number.isFinite(id) ? id : 0;
+  } catch {
+    return 0;
+  }
+}
+
+async function toCashTokenAddressForWallet(
+  walletId: number,
+  address: string
+): Promise<string> {
+  const addr = String(address ?? '').trim();
+  if (!addr) return '';
+  if (!walletId) return addr;
+
+  try {
+    const manager = AddressManager();
+    const mapped = await manager.fetchTokenAddress(walletId, addr);
+    return mapped || addr;
+  } catch {
+    return addr;
+  }
+}
+
+function toTokenCashaddrFallback(address: string): string {
+  // Pragmatic fallback:
+  // - q... -> z...
+  // - p... -> y...
+  const a = String(address ?? '').trim();
+  if (!a) return '';
+
+  const lower = a.toLowerCase();
+
+  // Already token-aware
+  if (lower.includes(':z') || lower.includes(':y')) return a;
+  if (!lower.includes(':')) {
+    const c0 = lower[0];
+    if (c0 === 'q') return `z${a.slice(1)}`;
+    if (c0 === 'p') return `y${a.slice(1)}`;
+    return a;
+  }
+
+  const [prefix, payloadRaw] = a.split(':', 2);
+  const payload = payloadRaw ?? '';
+  if (!payload) return a;
+
+  const c0 = payload[0]?.toLowerCase();
+  if (c0 === 'q') return `${prefix}:z${payload.slice(1)}`;
+  if (c0 === 'p') return `${prefix}:y${payload.slice(1)}`;
+  return a;
+}
+
+async function toCashTokenAddressBestEffort(
+  walletId: number,
+  address: string
+): Promise<string> {
+  const addr = String(address ?? '').trim();
+  if (!addr) return '';
+
+  // Wallet mapping first (wallet-controlled addresses)
+  const mapped = await toCashTokenAddressForWallet(walletId, addr);
+  if (mapped && mapped !== addr) return mapped;
+
+  // Fallback for contract/external addresses
+  return toTokenCashaddrFallback(addr);
+}
+
 function tokenAmountIsZero(t: Token | null | undefined): boolean {
   if (!t) return false;
   return toBigIntSafe((t as any).amount ?? 0) === 0n;
@@ -82,10 +162,6 @@ function bytesToHex(bytes: Uint8Array): string {
     .join('');
 }
 
-/**
- * Normalize sdk.utxos.listForWallet() return shape.
- * Some implementations return { allUtxos } only, others return { allUtxos, tokenUtxos }.
- */
 function mergeWalletUtxos(res: any): UTXO[] {
   const all: UTXO[] = Array.isArray(res?.allUtxos) ? res.allUtxos : [];
   const tok: UTXO[] = Array.isArray(res?.tokenUtxos) ? res.tokenUtxos : [];
@@ -95,6 +171,9 @@ function mergeWalletUtxos(res: any): UTXO[] {
   return uniqUtxos([...(all ?? []), ...(tok ?? []), ...(tok2 ?? [])]);
 }
 
+type MintType = 'ft' | 'nft';
+type MintTarget = 'authguard' | 'custom';
+
 export default function AuthGuardApp({
   manifest,
   sdk,
@@ -103,7 +182,7 @@ export default function AuthGuardApp({
   const [walletUtxos, setWalletUtxos] = useState<UTXO[]>([]);
   const [selected, setSelected] = useState<UTXO | null>(null);
 
-  // AuthGuard v1 (patient-0) states
+  // AuthGuard v1 states
   const [genesisUtxo, setGenesisUtxo] = useState<UTXO | null>(null);
   const [authHeadUtxo, setAuthHeadUtxo] = useState<UTXO | null>(null);
   const [authKeyUtxo, setAuthKeyUtxo] = useState<UTXO | null>(null);
@@ -112,9 +191,21 @@ export default function AuthGuardApp({
   const [ftAmount, setFtAmount] = useState<string>('1'); // bigint string
   const [keepGuarded, setKeepGuarded] = useState<boolean>(true);
 
-  // Step 0 (Create Token) state
-  const [reserveSupply, setReserveSupply] = useState<string>('1000000'); // bigint string
-  const [step0Status, setStep0Status] = useState<string>('');
+  // Step 0A: Create AuthKey (independent)
+  const [authKeyOwner, setAuthKeyOwner] = useState<string>('');
+  const [step0AStatus, setStep0AStatus] = useState<string>('');
+
+  // Step 0B: Mint token (independent)
+  const [mintType, setMintType] = useState<MintType>('ft');
+  const [mintTarget, setMintTarget] = useState<MintTarget>('authguard');
+  const [mintTo, setMintTo] = useState<string>(''); // only used when mintTarget=custom
+  const [mintFtAmount, setMintFtAmount] = useState<string>('1000000');
+  const [mintNftCapability, setMintNftCapability] = useState<
+    'none' | 'mutable' | 'minting'
+  >('none');
+  const [mintNftCommitment, setMintNftCommitment] = useState<string>(''); // hex
+  const [mintAlsoAuthKey, setMintAlsoAuthKey] = useState<boolean>(false);
+  const [step0BStatus, setStep0BStatus] = useState<string>('');
 
   const [feeUtxo, setFeeUtxo] = useState<UTXO | null>(null);
 
@@ -128,6 +219,9 @@ export default function AuthGuardApp({
     UTXO[]
   >([]);
   const [authHeadStatus, setAuthHeadStatus] = useState<string>('');
+  const [authGuardCashAddress, setAuthGuardCashAddress] = useState<string>('');
+  const [authGuardTokenAddress, setAuthGuardTokenAddress] =
+    useState<string>('');
 
   // ---------------------------------------------------------------------------
   // Derived values
@@ -138,11 +232,16 @@ export default function AuthGuardApp({
     if (genesisUtxo && genesisUtxo.tx_pos === 0 && !genesisUtxo.token) {
       return genesisUtxo.tx_hash;
     }
-    // fallback: infer from authHead token category if present
-    if (authHeadUtxo?.token?.category)
-      return String(authHeadUtxo.token.category);
+
+    // Convenience: if user selected an AuthKey NFT, use its category
+    const cat = (authKeyUtxo as any)?.token?.category;
+    if (typeof cat === 'string') {
+      const hex = cat.trim().toLowerCase().replace(/^0x/i, '');
+      if (/^[0-9a-f]{64}$/.test(hex)) return hex;
+    }
+
     return null;
-  }, [genesisUtxo, authHeadUtxo]);
+  }, [genesisUtxo, authKeyUtxo]);
 
   const MIN_GENESIS_SATS = useMemo(() => {
     const base = 2 * Number(TOKEN_OUTPUT_SATS);
@@ -163,7 +262,6 @@ export default function AuthGuardApp({
       const merged = mergeWalletUtxos(res);
       setWalletUtxos(merged);
 
-      // default fee pick
       const pickFee =
         merged.find(
           (u) => (u.value ?? 0) > 3000 && !u.token && !u.abi && !u.contractName
@@ -200,6 +298,11 @@ export default function AuthGuardApp({
   }
 
   async function broadcastTx(hex: string) {
+    const ok = window.confirm(
+      'Broadcast this transaction?\n\nThis will spend UTXOs from your wallet and cannot be undone.'
+    );
+    if (!ok) throw new Error('Broadcast cancelled by user.');
+
     const tb = TransactionBuilderHelper();
     const txid = await tb.sendTransaction(hex);
     if (!txid || typeof txid !== 'string') {
@@ -234,7 +337,7 @@ export default function AuthGuardApp({
     all: UTXO[],
     tokenIdHex: string,
     addr: string
-  ): UTXO | null {
+  ) {
     const t = normalizeCategory(tokenIdHex);
     return (
       all.find((u) => {
@@ -267,10 +370,26 @@ export default function AuthGuardApp({
     return c.address;
   }
 
-  /**
-   * Derive the *locking bytecode hex* for the AuthGuard contract address.
-   * We try multiple CashScript shapes to stay robust across versions.
-   */
+  function deriveAuthGuardTokenAddress(tokenIdHex: string): string {
+    const net = currentNetwork();
+    const provider = new ElectrumNetworkProvider(net);
+
+    const ctorInputs = (AUTHGUARD_ARTIFACT as any)?.constructorInputs ?? [];
+    if (!Array.isArray(ctorInputs) || ctorInputs.length !== 1) {
+      throw new Error('AuthGuard artifact constructorInputs unexpected shape.');
+    }
+
+    const parsedArg = parseInputValue(`0x${tokenIdHex}`, ctorInputs[0].type);
+
+    const c: any = new Contract(AUTHGUARD_ARTIFACT as any, [parsedArg], {
+      provider,
+      addressType: 'p2sh32',
+    });
+
+    const tokenAddr = String(c?.tokenAddress ?? '').trim();
+    return tokenAddr || c.address;
+  }
+
   function deriveAuthGuardLockingBytecodeHex(tokenIdHex: string): string {
     const net = currentNetwork();
     const provider = new ElectrumNetworkProvider(net);
@@ -286,7 +405,6 @@ export default function AuthGuardApp({
       addressType: 'p2sh32',
     });
 
-    // Try common CashScript properties/methods:
     const candidates: any[] = [
       c.lockingBytecode,
       c.lockingScript,
@@ -297,134 +415,201 @@ export default function AuthGuardApp({
     ].filter(Boolean);
 
     const first = candidates[0];
-    if (!first) {
-      throw new Error(
-        `Could not derive AuthGuard locking bytecode from artifact/contract. (No lockingBytecode/lockingScript/getLockingBytecode/getLockingScript on Contract instance)`
-      );
-    }
+    if (!first) throw new Error('Could not derive AuthGuard locking bytecode.');
 
-    // Normalize to hex string
-    if (typeof first === 'string') {
+    if (typeof first === 'string')
       return first.trim().toLowerCase().replace(/^0x/i, '');
-    }
-    if (first instanceof Uint8Array) {
-      return bytesToHex(first);
-    }
+    if (first instanceof Uint8Array) return bytesToHex(first);
     if (Array.isArray(first) && first.length && typeof first[0] === 'number') {
       return bytesToHex(Uint8Array.from(first));
     }
-    if (first?.bytecode instanceof Uint8Array) {
+    if (first?.bytecode instanceof Uint8Array)
       return bytesToHex(first.bytecode);
-    }
 
-    throw new Error(
-      `Could not normalize AuthGuard locking bytecode. Got type=${typeof first} keys=${Object.keys(first ?? {})}`
-    );
+    throw new Error('Could not normalize AuthGuard locking bytecode.');
   }
 
+  const derivedAuthGuardAddress = useMemo(() => {
+    try {
+      if (!tokenId) return '';
+      return deriveAuthGuardAddress(normalizeTokenIdTxid(tokenId));
+    } catch {
+      return '';
+    }
+  }, [tokenId]);
+
+  const derivedAuthGuardTokenAddress = useMemo(() => {
+    try {
+      if (!tokenId) return '';
+      return deriveAuthGuardTokenAddress(normalizeTokenIdTxid(tokenId));
+    } catch {
+      return '';
+    }
+  }, [tokenId]);
+
+  const derivedAuthGuardLockingHex = useMemo(() => {
+    try {
+      if (!tokenId) return '';
+      return deriveAuthGuardLockingBytecodeHex(normalizeTokenIdTxid(tokenId));
+    } catch {
+      return '';
+    }
+  }, [tokenId]);
+
+  useEffect(() => {
+    let mounted = true;
+    (async () => {
+      if (!derivedAuthGuardAddress) {
+        if (mounted) setAuthGuardCashAddress('');
+        return;
+      }
+      const cashAddr = await toCashTokenAddressBestEffort(
+        currentWalletId(),
+        derivedAuthGuardAddress
+      );
+      if (mounted) setAuthGuardCashAddress(cashAddr);
+    })();
+    return () => {
+      mounted = false;
+    };
+  }, [derivedAuthGuardAddress]);
+
+  useEffect(() => {
+    let mounted = true;
+    (async () => {
+      if (!derivedAuthGuardTokenAddress) {
+        if (mounted) setAuthGuardTokenAddress('');
+        return;
+      }
+      const tokenAddr = await toCashTokenAddressBestEffort(
+        currentWalletId(),
+        derivedAuthGuardTokenAddress
+      );
+      if (mounted) setAuthGuardTokenAddress(tokenAddr);
+    })();
+    return () => {
+      mounted = false;
+    };
+  }, [derivedAuthGuardTokenAddress]);
+
   // ---------------------------------------------------------------------------
-  // Step 0: Create Token (AuthKey + seed AuthHead reserves)
+  // IMPORTANT UX NOTE:
+  // For a given category (tokenId), the FIRST SPEND of the genesis is the mint moment.
+  // If you spend it to mint only AuthKey, you can’t mint FT supply later for that same category.
   // ---------------------------------------------------------------------------
 
-  const createTokenStep0 = useCallback(async () => {
+  const firstSpendWarning = useMemo(() => {
+    if (!tokenId) return '';
+    if (!genesisUtxo) {
+      // If tokenId derived from authKey, genesis may not be selected.
+      return 'Reminder: initial minting happens on the FIRST spend of the category’s vout=0 genesis. If that spend already happened, you cannot create new supply for that category.';
+    }
+    return 'Reminder: initial minting happens on the FIRST spend of this selected vout=0 genesis. If you broadcast a tx that spends it without minting your desired supply, you cannot mint that supply later for this category.';
+  }, [tokenId, genesisUtxo]);
+
+  // ---------------------------------------------------------------------------
+  // Step 0A: Create AuthKey NFT only (no FT reserve)
+  // ---------------------------------------------------------------------------
+
+  const createAuthKeyOnlyStep0A = useCallback(async () => {
     setBusy(true);
     setBuildErr('');
     setBuildHex('');
     setBuildBytes(0);
-    setStep0Status('');
+    setStep0AStatus('');
 
     try {
-      const addr = await getPrimaryWalletAddress();
+      const primary = await getPrimaryWalletAddress();
 
-      // Ensure fresh UTXOs
       const res0 = await sdk.utxos.listForWallet();
       const allUtxos0 = mergeWalletUtxos(res0);
       setWalletUtxos(allUtxos0);
 
-      // 1) Find or create suitable genesis candidate (vout=0, non-token)
-      let genesis = findSuitableGenesisCandidate(allUtxos0, addr);
-      let tokenIdHex: string;
+      let genesis = genesisUtxo;
 
+      // If user didn't pick a genesis, try find/create one for convenience
       if (!genesis) {
-        const feeInput =
-          feeUtxo ??
-          allUtxos0.find(
-            (u) => (u.value ?? 0) > MIN_GENESIS_SATS + 2000 && !u.token
-          ) ??
-          allUtxos0.find(
-            (u) =>
-              (u.value ?? 0) > MIN_GENESIS_SATS + 2000 &&
-              !u.token &&
-              u.address === addr
-          ) ??
-          null;
-
-        if (!feeInput) {
-          throw new Error(
-            `No suitable BCH UTXO found to create genesis candidate. Need > ${
-              MIN_GENESIS_SATS + 2000
-            } sats.`
-          );
-        }
-
-        setStep0Status('Creating vout=0 genesis candidate (tx1)…');
-
-        const outputs1: TransactionOutput[] = [
-          { recipientAddress: addr, amount: MIN_GENESIS_SATS },
-        ];
-
-        const built1 = await buildTx([feeInput], outputs1, addr);
-        const txid1 = await broadcastTx(built1.hex);
-
-        tokenIdHex = txid1;
-
-        setStep0Status(`tx1 broadcasted: ${txid1}. Refreshing UTXOs…`);
-
-        const res1 = await sdk.utxos.listForWallet();
-        const after1 = mergeWalletUtxos(res1);
-        setWalletUtxos(after1);
-
-        genesis =
-          after1.find(
-            (u) => u.tx_hash === txid1 && u.tx_pos === 0 && !u.token
-          ) ?? null;
-
+        genesis = findSuitableGenesisCandidate(allUtxos0, primary);
         if (!genesis) {
-          throw new Error(
-            'tx1 broadcasted, but genesis UTXO not visible yet. Try “Load Wallet UTXOs” and run Step 0 again.'
-          );
-        }
+          const feeInput =
+            feeUtxo ??
+            allUtxos0.find(
+              (u) => (u.value ?? 0) > MIN_GENESIS_SATS + 2000 && !u.token
+            ) ??
+            null;
+          if (!feeInput) {
+            throw new Error(
+              `No suitable BCH UTXO found to create genesis candidate. Need > ${
+                MIN_GENESIS_SATS + 2000
+              } sats.`
+            );
+          }
 
-        setGenesisUtxo(genesis);
+          setStep0AStatus('Creating vout=0 genesis candidate (tx1)…');
+          const outputs1: TransactionOutput[] = [
+            { recipientAddress: primary, amount: MIN_GENESIS_SATS },
+          ];
+          const built1 = await buildTx([feeInput], outputs1, primary);
+          const txid1 = await broadcastTx(built1.hex);
+
+          setStep0AStatus(`tx1 broadcasted: ${txid1}. Refreshing UTXOs…`);
+
+          const res1 = await sdk.utxos.listForWallet();
+          const after1 = mergeWalletUtxos(res1);
+          setWalletUtxos(after1);
+
+          genesis =
+            after1.find(
+              (u) => u.tx_hash === txid1 && u.tx_pos === 0 && !u.token
+            ) ?? null;
+
+          if (!genesis) {
+            throw new Error(
+              'tx1 broadcasted, but genesis UTXO not visible yet. Try “Load Wallet UTXOs” and re-run.'
+            );
+          }
+
+          setGenesisUtxo(genesis);
+        } else {
+          setGenesisUtxo(genesis);
+        }
       } else {
-        tokenIdHex = genesis.tx_hash;
-        setGenesisUtxo(genesis);
-        setStep0Status(
-          'Found suitable vout=0 genesis candidate. Skipping tx1.'
+        if (genesis.tx_pos !== 0 || genesis.token) {
+          throw new Error('Selected genesis must be non-token and vout=0.');
+        }
+      }
+
+      const tokenIdHex = normalizeTokenIdTxid(genesis!.tx_hash);
+
+      const allow = await loadWalletAddresses();
+      const ownerBase = (authKeyOwner || primary).trim();
+      if (!ownerBase) throw new Error('AuthKey owner address is required.');
+      if (!allow.has(ownerBase)) {
+        throw new Error(
+          'AuthKey owner must be one of your wallet addresses (wallet-controlled).'
         );
       }
 
-      // If AuthKey already exists for tokenId, skip tx2
-      const haveKeyNow = findAuthKeyForTokenId(allUtxos0, tokenIdHex, addr);
-      if (haveKeyNow) {
-        setAuthKeyUtxo(haveKeyNow);
-        setStep0Status('AuthKey already exists in wallet. Step 0 complete.');
+      // If already exists, just select it
+      const latest = mergeWalletUtxos(await sdk.utxos.listForWallet());
+      const have = findAuthKeyForTokenId(latest, tokenIdHex, ownerBase);
+      if (have) {
+        setAuthKeyUtxo(have);
+        setStep0AStatus('AuthKey already exists for this category.');
         return;
       }
 
-      // 2) tx2: mint AuthKey NFT + seed AuthGuard with FT reserve
-      const reserve = toBigIntSafe(reserveSupply);
-      if (reserve <= 0n)
-        throw new Error('Reserve supply must be a positive integer.');
+      // Build the FIRST SPEND of genesis:
+      // Mint ONLY AuthKey NFT to owner. No FT reserve output.
+      // NOTE: This means you cannot mint FT supply later for this category.
+      const ownerTokenAddr = await toCashTokenAddressBestEffort(
+        currentWalletId(),
+        ownerBase
+      );
 
-      const authGuardAddr = deriveAuthGuardAddress(tokenIdHex);
-
-      setStep0Status('Minting AuthKey NFT + seeding AuthHead reserves (tx2)…');
-
-      const outputs2: TransactionOutput[] = [
-        // AuthKey NFT to primary address (capability none, amount 0)
+      const outputs: TransactionOutput[] = [
         {
-          recipientAddress: addr,
+          recipientAddress: ownerTokenAddr,
           amount: Math.max(Number(TOKEN_OUTPUT_SATS), Number(DUST)),
           token: {
             category: tokenIdHex,
@@ -432,41 +617,286 @@ export default function AuthGuardApp({
             nft: { capability: 'none', commitment: '' as any },
           },
         },
-
-        // AuthHead reserve output to AuthGuard contract address
-        {
-          recipientAddress: authGuardAddr,
-          amount: Math.max(Number(TOKEN_OUTPUT_SATS), Number(DUST)),
-          token: { category: tokenIdHex, amount: reserve as any },
-        },
       ];
 
-      const built2 = await buildTx([genesis!], outputs2, addr);
-      const txid2 = await broadcastTx(built2.hex);
+      const feeInput2 =
+        feeUtxo ??
+        allUtxos0.find(
+          (u) => (u.value ?? 0) > 3000 && !u.token && u.address === primary
+        ) ??
+        allUtxos0.find((u) => (u.value ?? 0) > 3000 && !u.token) ??
+        null;
+      if (!feeInput2) throw new Error('No suitable BCH fee UTXO found.');
 
-      setStep0Status(`tx2 broadcasted: ${txid2}. Refreshing UTXOs…`);
+      const inputs =
+        feeInput2.tx_hash === genesis!.tx_hash &&
+        feeInput2.tx_pos === genesis!.tx_pos
+          ? [genesis!]
+          : [genesis!, feeInput2];
+
+      setStep0AStatus('Minting AuthKey NFT (first spend of genesis)…');
+
+      const built = await buildTx(inputs, outputs, ownerBase);
+      const txid = await broadcastTx(built.hex);
+
+      setStep0AStatus(`AuthKey tx broadcasted: ${txid}. Refreshing UTXOs…`);
 
       const res2 = await sdk.utxos.listForWallet();
       const after2 = mergeWalletUtxos(res2);
       setWalletUtxos(after2);
 
-      const k2 = findAuthKeyForTokenId(after2, tokenIdHex, addr);
+      // Refresh selection
+      const k2 = after2.find((u) => {
+        if (!u.token) return false;
+        if (!tokenAmountIsZero(u.token)) return false;
+        if (!u.token.nft) return false;
+        if (u.token.nft.capability !== 'none') return false;
+        return (
+          normalizeCategory(u.token.category) === normalizeCategory(tokenIdHex)
+        );
+      });
       if (k2) setAuthKeyUtxo(k2);
 
-      // AuthHead lives at contract address, so discover via Chaingraph
-      setAuthHeadUtxo(null);
-      setAuthHeadCandidatesChain([]);
-
-      setStep0Status(
-        'Step 0 complete. AuthKey minted. Click “Load AuthHead (Chaingraph)” to discover AuthHead.'
+      setStep0AStatus(
+        'Step 0A complete. AuthKey minted. (Note: no FT supply was created for this category.)'
       );
     } catch (e: any) {
       setBuildErr(e?.message ?? String(e));
-      setStep0Status('');
+      setStep0AStatus('');
     } finally {
       setBusy(false);
     }
-  }, [sdk, loadWalletAddresses, feeUtxo, MIN_GENESIS_SATS, reserveSupply]);
+  }, [
+    sdk,
+    loadWalletAddresses,
+    feeUtxo,
+    MIN_GENESIS_SATS,
+    authKeyOwner,
+    genesisUtxo,
+  ]);
+
+  // ---------------------------------------------------------------------------
+  // Step 0B: Mint token (FT or NFT) from selected vout=0 to a recipient
+  // - default recipient: AuthGuard tokenaddr
+  // - can optionally mint AuthKey in SAME tx (recommended for AuthGuard-protected categories)
+  // ---------------------------------------------------------------------------
+
+  function validateHexEven(x: string) {
+    const s = String(x ?? '')
+      .trim()
+      .toLowerCase()
+      .replace(/^0x/i, '');
+    if (!s) return '';
+    if (!/^[0-9a-f]*$/.test(s)) {
+      throw new Error('NFT commitment must be hex.');
+    }
+    if (s.length % 2 !== 0) {
+      throw new Error('NFT commitment hex must have even length.');
+    }
+    return s;
+  }
+
+  const mintTokenStep0B = useCallback(async () => {
+    setBusy(true);
+    setBuildErr('');
+    setBuildHex('');
+    setBuildBytes(0);
+    setStep0BStatus('');
+
+    try {
+      const primary = await getPrimaryWalletAddress();
+
+      const res0 = await sdk.utxos.listForWallet();
+      const allUtxos0 = mergeWalletUtxos(res0);
+      setWalletUtxos(allUtxos0);
+
+      const genesis = genesisUtxo;
+      if (!genesis) {
+        throw new Error(
+          'Select a vout=0 non-token genesis UTXO (TokenId) first.'
+        );
+      }
+      if (genesis.tx_pos !== 0 || genesis.token) {
+        throw new Error('Selected genesis must be non-token and vout=0.');
+      }
+
+      const tokenIdHex = normalizeTokenIdTxid(genesis.tx_hash);
+
+      // Choose mint recipient
+      let mintRecipientBase = '';
+      if (mintTarget === 'authguard') {
+        mintRecipientBase =
+          authGuardTokenAddress ||
+          (await toCashTokenAddressBestEffort(
+            currentWalletId(),
+            deriveAuthGuardTokenAddress(tokenIdHex)
+          ));
+      } else {
+        mintRecipientBase = mintTo.trim();
+        if (!mintRecipientBase) throw new Error('Mint-to address is required.');
+      }
+
+      const mintRecipient = await toCashTokenAddressBestEffort(
+        currentWalletId(),
+        mintRecipientBase
+      );
+
+      // Optional AuthKey minted in same tx (recommended if this category will be guarded)
+      let ownerBase = '';
+      let ownerTokenAddr = '';
+      if (mintAlsoAuthKey) {
+        const allow = await loadWalletAddresses();
+        ownerBase = (authKeyOwner || primary).trim();
+        if (!ownerBase) throw new Error('AuthKey owner address is required.');
+        if (!allow.has(ownerBase)) {
+          throw new Error(
+            'AuthKey owner must be one of your wallet addresses (wallet-controlled).'
+          );
+        }
+        ownerTokenAddr = await toCashTokenAddressBestEffort(
+          currentWalletId(),
+          ownerBase
+        );
+      }
+
+      // Build outputs
+      const outputs: TransactionOutput[] = [];
+
+      if (mintType === 'ft') {
+        const amt = toBigIntSafe(mintFtAmount);
+        if (amt <= 0n) throw new Error('FT amount must be a positive integer.');
+
+        // (optional) AuthKey NFT output
+        if (mintAlsoAuthKey) {
+          outputs.push({
+            recipientAddress: ownerTokenAddr,
+            amount: Math.max(Number(TOKEN_OUTPUT_SATS), Number(DUST)),
+            token: {
+              category: tokenIdHex,
+              amount: 0n as any,
+              nft: { capability: 'none', commitment: '' as any },
+            },
+          });
+        }
+
+        // FT supply output to mintRecipient (tokenaddr)
+        outputs.push({
+          recipientAddress: mintRecipient,
+          amount: Math.max(Number(TOKEN_OUTPUT_SATS), Number(DUST)),
+          token: { category: tokenIdHex, amount: amt as any },
+        });
+      } else {
+        // NFT mint
+        const commitment = validateHexEven(mintNftCommitment);
+        const nft = {
+          capability: mintNftCapability,
+          commitment: commitment as any,
+        };
+
+        // (optional) AuthKey NFT output
+        if (mintAlsoAuthKey) {
+          outputs.push({
+            recipientAddress: ownerTokenAddr,
+            amount: Math.max(Number(TOKEN_OUTPUT_SATS), Number(DUST)),
+            token: {
+              category: tokenIdHex,
+              amount: 0n as any,
+              nft: { capability: 'none', commitment: '' as any },
+            },
+          });
+        }
+
+        outputs.push({
+          recipientAddress: mintRecipient,
+          amount: Math.max(Number(TOKEN_OUTPUT_SATS), Number(DUST)),
+          token: {
+            category: tokenIdHex,
+            amount: 0n as any,
+            nft: nft as any,
+          },
+        });
+      }
+
+      // Inputs: genesis + fee input (unless fee input == genesis)
+      const feeInput =
+        feeUtxo ??
+        allUtxos0.find(
+          (u) => (u.value ?? 0) > 3000 && !u.token && u.address === primary
+        ) ??
+        allUtxos0.find((u) => (u.value ?? 0) > 3000 && !u.token) ??
+        null;
+      if (!feeInput) throw new Error('No suitable BCH fee UTXO found.');
+
+      const inputs =
+        feeInput.tx_hash === genesis.tx_hash &&
+        feeInput.tx_pos === genesis.tx_pos
+          ? [genesis]
+          : [genesis, feeInput];
+
+      setStep0BStatus(
+        `Minting ${mintType.toUpperCase()} (first spend of genesis)…`
+      );
+
+      // Change address should be a wallet-controlled address.
+      // Use the primary cashaddr base, builder handles change output.
+      const built = await buildTx(inputs, outputs, primary);
+      const txid = await broadcastTx(built.hex);
+
+      setStep0BStatus(`Mint tx broadcasted: ${txid}. Refreshing UTXOs…`);
+
+      const res2 = await sdk.utxos.listForWallet();
+      const after2 = mergeWalletUtxos(res2);
+      setWalletUtxos(after2);
+
+      // If AuthKey minted here, attempt to auto-select it
+      if (mintAlsoAuthKey) {
+        const allow = await loadWalletAddresses();
+        const owner = (authKeyOwner || primary).trim();
+        if (owner && allow.has(owner)) {
+          const k2 = after2.find((u) => {
+            if (!u.token) return false;
+            if (!tokenAmountIsZero(u.token)) return false;
+            if (!u.token.nft) return false;
+            if (u.token.nft.capability !== 'none') return false;
+            return (
+              normalizeCategory(u.token.category) ===
+              normalizeCategory(tokenIdHex)
+            );
+          });
+          if (k2) setAuthKeyUtxo(k2);
+        }
+      }
+
+      // If minted to AuthGuard, you can now discover AuthHead via Chaingraph
+      setAuthHeadUtxo(null);
+      setAuthHeadCandidatesChain([]);
+
+      setStep0BStatus(
+        mintTarget === 'authguard'
+          ? 'Mint complete. If you minted FT to AuthGuard, click “Load AuthHead (Chaingraph)” below.'
+          : 'Mint complete.'
+      );
+    } catch (e: any) {
+      setBuildErr(e?.message ?? String(e));
+      setStep0BStatus('');
+    } finally {
+      setBusy(false);
+    }
+  }, [
+    sdk,
+    loadWalletAddresses,
+    feeUtxo,
+    genesisUtxo,
+    mintType,
+    mintTarget,
+    mintTo,
+    mintFtAmount,
+    mintNftCapability,
+    mintNftCommitment,
+    mintAlsoAuthKey,
+    authKeyOwner,
+    authGuardTokenAddress,
+  ]);
 
   // ---------------------------------------------------------------------------
   // Chaingraph: discover AuthHead candidates for selected tokenId
@@ -532,7 +962,10 @@ export default function AuthGuardApp({
 
         const out: UTXO = {
           id: `${tx_hash}:${tx_pos}`,
-          address: deriveAuthGuardAddress(tokenId), // contract address for display
+          address:
+            authGuardTokenAddress ||
+            authGuardCashAddress ||
+            deriveAuthGuardTokenAddress(normalizeTokenIdTxid(tokenId)),
           tx_hash,
           tx_pos,
           value,
@@ -556,14 +989,13 @@ export default function AuthGuardApp({
         );
       } else {
         setAuthHeadStatus(`Found ${deduped.length} candidate(s).`);
-        // Auto-select first if none selected
         if (!authHeadUtxo) setAuthHeadUtxo(deduped[0]);
       }
     } catch (e: any) {
       setAuthHeadStatus('');
       setBuildErr(e?.message ?? String(e));
     }
-  }, [tokenId, authHeadUtxo]);
+  }, [tokenId, authHeadUtxo, authGuardCashAddress, authGuardTokenAddress]);
 
   // ---------------------------------------------------------------------------
   // Existing smoke test
@@ -605,7 +1037,7 @@ export default function AuthGuardApp({
   }, [sdk, selected, loadWalletAddresses]);
 
   // ---------------------------------------------------------------------------
-  // Build issuance/dispense tx
+  // Build AuthGuard dispense (FT transfer from AuthHead reserve)
   // ---------------------------------------------------------------------------
 
   const buildIssueFt = useCallback(async () => {
@@ -621,9 +1053,10 @@ export default function AuthGuardApp({
 
       if (!tokenId) {
         throw new Error(
-          'TokenId missing. Select a genesis UTXO (vout=0, non-token) or load an AuthHead from Chaingraph.'
+          'TokenId missing. Select a genesis UTXO (vout=0, non-token) or select an AuthKey (category).'
         );
       }
+      const tokenIdNorm = normalizeTokenIdTxid(tokenId);
 
       const head = authHeadUtxo;
       if (!head)
@@ -643,21 +1076,24 @@ export default function AuthGuardApp({
 
       const to = recipient.trim();
       if (!to) throw new Error('Recipient address is required.');
+      const toTokenAddr = await toCashTokenAddressBestEffort(
+        currentWalletId(),
+        to
+      );
 
       const sendAmt = toBigIntSafe(ftAmount);
       if (sendAmt <= 0n)
         throw new Error('FT amount must be a positive integer.');
 
       const headToken = head.token;
-      if (!headToken?.category) {
+      if (!headToken?.category)
         throw new Error('AuthHead UTXO has no token attached.');
-      }
 
       const headCat = normalizeCategory(headToken.category);
-      const expected = normalizeCategory(tokenId);
+      const expected = tokenIdNorm;
       if (headCat !== expected) {
         throw new Error(
-          `AuthHead token category mismatch. expected=${tokenId} got=${String(
+          `AuthHead token category mismatch. expected=${tokenIdNorm} got=${String(
             headToken.category
           )}`
         );
@@ -674,27 +1110,30 @@ export default function AuthGuardApp({
 
       const outputs: TransactionOutput[] = [];
 
-      const headContinuation: TransactionOutput = {
-        recipientAddress: head.address, // keep same contract address (locking bytecode)
+      // Continue reserve back to AuthGuard token address
+      outputs.push({
+        recipientAddress:
+          authGuardTokenAddress ||
+          (await toCashTokenAddressBestEffort(currentWalletId(), head.address)),
         amount: Math.max(Number(TOKEN_OUTPUT_SATS), Number(DUST)),
         ...(remaining > 0n
-          ? { token: { category: tokenId, amount: remaining } }
+          ? { token: { category: tokenIdNorm, amount: remaining } }
           : {}),
-      };
-      outputs.push(headContinuation);
-
-      outputs.push({
-        recipientAddress: to,
-        amount: Math.max(Number(TOKEN_OUTPUT_SATS), Number(DUST)),
-        token: { category: tokenId, amount: sendAmt },
       });
 
-      // Tag authHead as contract spend (your host builder will use ContractManager unlocker)
+      // Recipient gets FT
+      outputs.push({
+        recipientAddress: toTokenAddr,
+        amount: Math.max(Number(TOKEN_OUTPUT_SATS), Number(DUST)),
+        token: { category: tokenIdNorm, amount: sendAmt },
+      });
+
       const headInput: UTXO = {
         ...head,
-        contractName: (head as any).contractName ?? 'authGuard',
+        contractName: 'AuthGuard',
         abi: (head as any).abi ?? (AUTHGUARD_ARTIFACT as any).abi,
         contractFunction: 'unlockWithNft',
+        contractConstructorArgs: [`0x${tokenIdNorm}`],
         contractFunctionInputs: { keepGuarded },
       };
 
@@ -725,6 +1164,7 @@ export default function AuthGuardApp({
     recipient,
     ftAmount,
     keepGuarded,
+    authGuardTokenAddress,
   ]);
 
   // ---------------------------------------------------------------------------
@@ -745,7 +1185,6 @@ export default function AuthGuardApp({
     });
   }, [walletUtxos, tokenId]);
 
-  // Combined candidates: wallet-tagged (if ever present) + chaingraph results
   const authHeadCandidates = useMemo(() => {
     const t = tokenId ? normalizeCategory(tokenId) : '';
 
@@ -775,8 +1214,7 @@ export default function AuthGuardApp({
 
   const dispenseMissing = useMemo(() => {
     const missing: string[] = [];
-    if (!tokenId)
-      missing.push('TokenId (genesis UTXO vout=0) is not selected.');
+    if (!tokenId) missing.push('TokenId (genesis vout=0) is not selected.');
     if (!authHeadUtxo) missing.push('AuthHead UTXO is not selected.');
     if (!authKeyUtxo) missing.push('AuthKey NFT UTXO is not selected.');
     if (!feeUtxo) missing.push('Fee UTXO is not selected.');
@@ -830,6 +1268,19 @@ export default function AuthGuardApp({
     );
   };
 
+  const pickGenesis = useCallback((u: UTXO) => {
+    try {
+      if (u.tx_pos !== 0 || !!u.token) {
+        throw new Error('Genesis must be a non-token UTXO with tx_pos==0.');
+      }
+      normalizeTokenIdTxid(u.tx_hash);
+      setGenesisUtxo(u);
+      setBuildErr('');
+    } catch (e: any) {
+      setBuildErr(e?.message ?? String(e));
+    }
+  }, []);
+
   // ---------------------------------------------------------------------------
   // UI
   // ---------------------------------------------------------------------------
@@ -864,65 +1315,245 @@ export default function AuthGuardApp({
       <div className="border rounded p-3 mb-4">
         <div className="font-semibold mb-2">AuthGuard v1</div>
 
-        {/* STEP 0: Create Token */}
+        {/* --- WARNING --- */}
+        {firstSpendWarning && (
+          <div className="mb-3 p-2 rounded border bg-yellow-50 text-xs text-yellow-800">
+            <div className="font-semibold mb-1">Minting nuance</div>
+            <div>{firstSpendWarning}</div>
+          </div>
+        )}
+
+        {/* STEP 0A: Create AuthKey only */}
         <div className="border rounded p-3 mb-4 bg-gray-50">
-          <div className="font-semibold mb-1">Step 0 — Create Token</div>
+          <div className="font-semibold mb-1">
+            Step 0A — Create AuthKey NFT (optional)
+          </div>
           <div className="text-xs text-gray-600 mb-3">
-            Creates the required primitives with{' '}
-            <span className="font-semibold">two transactions</span> but a single
-            in-app action:
-            <ul className="list-disc ml-5 mt-1">
-              <li>
-                If no suitable <span className="font-mono">vout=0</span> UTXO
-                exists, tx1 creates one at your first wallet address.
-              </li>
-              <li>
-                tx2 mints the <span className="font-semibold">AuthKey NFT</span>{' '}
-                (capability <span className="font-mono">none</span>) and seeds
-                the <span className="font-semibold">AuthHead</span> reserves at
-                the AuthGuard contract address.
-              </li>
-              <li>
-                AuthHead discovery should be done via Chaingraph (per your
-                plan).
-              </li>
-            </ul>
+            This is only needed if you want{' '}
+            <span className="font-semibold">
+              AuthGuard-protected dispensing
+            </span>
+            .
+            <br />
+            It mints an <span className="font-semibold">
+              NFT-only AuthKey
+            </span>{' '}
+            (amount=0, capability=none).
+            <br />
+            <span className="font-semibold">
+              If you mint AuthKey but do not mint FT supply in the same tx, you
+              cannot mint FT later for that category.
+            </span>
           </div>
 
           <div className="grid gap-2">
             <label className="text-xs text-gray-600">
-              Reserve supply to seed at AuthHead (FT amount)
+              AuthKey owner address (must be wallet-controlled)
               <input
-                className="mt-1 w-full border rounded p-2 text-sm font-mono"
-                value={reserveSupply}
-                onChange={(e) => setReserveSupply(e.target.value)}
-                placeholder="1000000"
+                className="mt-1 w-full border rounded p-2 text-sm"
+                value={authKeyOwner}
+                onChange={(e) => setAuthKeyOwner(e.target.value)}
+                placeholder="bchtest:... (one of your wallet addresses)"
               />
             </label>
 
-            <div className="text-xs text-gray-600">
-              Minimum recommended genesis sats:{' '}
-              <span className="font-mono">{MIN_GENESIS_SATS}</span>
-            </div>
-
             <button
               disabled={busy}
-              onClick={createTokenStep0}
+              onClick={createAuthKeyOnlyStep0A}
               className="bg-purple-700 hover:bg-purple-800 disabled:opacity-50 text-white py-2 px-3 rounded"
             >
-              Create Token (AuthKey + Seed Reserves)
+              Create AuthKey NFT Only
             </button>
 
-            {step0Status && (
+            {step0AStatus && (
               <div className="text-xs text-gray-700">
-                <span className="font-semibold">Status:</span> {step0Status}
+                <span className="font-semibold">Status:</span> {step0AStatus}
+              </div>
+            )}
+          </div>
+        </div>
+
+        {/* STEP 0B: Mint tokens (FT or NFT) */}
+        <div className="border rounded p-3 mb-4 bg-gray-50">
+          <div className="font-semibold mb-1">
+            Step 0B — Mint Token (FT or NFT)
+          </div>
+          <div className="text-xs text-gray-600 mb-3">
+            Mint from a wallet <span className="font-mono">vout=0</span> UTXO
+            (category anchor). You can mint to{' '}
+            <span className="font-semibold">AuthGuard tokenaddr</span> (default)
+            or any tokenaddr.
+            <br />
+            Optional: mint AuthKey in the{' '}
+            <span className="font-semibold">same transaction</span> (recommended
+            for guarded categories).
+          </div>
+
+          <div className="grid gap-3">
+            <div className="flex flex-wrap gap-3 text-sm">
+              <label className="flex items-center gap-2">
+                <input
+                  type="radio"
+                  checked={mintType === 'ft'}
+                  onChange={() => setMintType('ft')}
+                />
+                FT
+              </label>
+              <label className="flex items-center gap-2">
+                <input
+                  type="radio"
+                  checked={mintType === 'nft'}
+                  onChange={() => setMintType('nft')}
+                />
+                NFT
+              </label>
+            </div>
+
+            {mintType === 'ft' ? (
+              <label className="text-xs text-gray-600">
+                FT amount (integer)
+                <input
+                  className="mt-1 w-full border rounded p-2 text-sm font-mono"
+                  value={mintFtAmount}
+                  onChange={(e) => setMintFtAmount(e.target.value)}
+                  placeholder="1000000"
+                />
+              </label>
+            ) : (
+              <div className="grid gap-2">
+                <label className="text-xs text-gray-600">
+                  NFT capability
+                  <select
+                    className="mt-1 w-full border rounded p-2 text-sm"
+                    value={mintNftCapability}
+                    onChange={(e) =>
+                      setMintNftCapability(e.target.value as any)
+                    }
+                  >
+                    <option value="none">none</option>
+                    <option value="mutable">mutable</option>
+                    <option value="minting">minting</option>
+                  </select>
+                </label>
+
+                <label className="text-xs text-gray-600">
+                  NFT commitment (hex, optional)
+                  <input
+                    className="mt-1 w-full border rounded p-2 text-sm font-mono"
+                    value={mintNftCommitment}
+                    onChange={(e) => setMintNftCommitment(e.target.value)}
+                    placeholder="(hex bytes, even length)"
+                  />
+                </label>
+              </div>
+            )}
+
+            <div className="flex flex-wrap gap-3 text-sm">
+              <label className="flex items-center gap-2">
+                <input
+                  type="radio"
+                  checked={mintTarget === 'authguard'}
+                  onChange={() => setMintTarget('authguard')}
+                />
+                Mint to AuthGuard (recommended)
+              </label>
+              <label className="flex items-center gap-2">
+                <input
+                  type="radio"
+                  checked={mintTarget === 'custom'}
+                  onChange={() => setMintTarget('custom')}
+                />
+                Mint to custom token address
+              </label>
+            </div>
+
+            {mintTarget === 'custom' && (
+              <label className="text-xs text-gray-600">
+                Mint-to address (tokenaddr recommended)
+                <input
+                  className="mt-1 w-full border rounded p-2 text-sm"
+                  value={mintTo}
+                  onChange={(e) => setMintTo(e.target.value)}
+                  placeholder="bitcoincash:z... or bchtest:z..."
+                />
+              </label>
+            )}
+
+            <label className="flex items-center gap-2 text-sm">
+              <input
+                type="checkbox"
+                checked={mintAlsoAuthKey}
+                onChange={(e) => setMintAlsoAuthKey(e.target.checked)}
+              />
+              Also mint AuthKey NFT in this same transaction
+            </label>
+
+            {mintAlsoAuthKey && (
+              <label className="text-xs text-gray-600">
+                AuthKey owner address (must be wallet-controlled)
+                <input
+                  className="mt-1 w-full border rounded p-2 text-sm"
+                  value={authKeyOwner}
+                  onChange={(e) => setAuthKeyOwner(e.target.value)}
+                  placeholder="bchtest:... (one of your wallet addresses)"
+                />
+              </label>
+            )}
+
+            <button
+              disabled={busy || !genesisUtxo}
+              onClick={mintTokenStep0B}
+              className="bg-purple-700 hover:bg-purple-800 disabled:opacity-50 text-white py-2 px-3 rounded"
+              title={
+                !genesisUtxo
+                  ? 'Select a genesis UTXO (vout=0) first.'
+                  : undefined
+              }
+            >
+              Mint Token (First Spend)
+            </button>
+
+            {step0BStatus && (
+              <div className="text-xs text-gray-700">
+                <span className="font-semibold">Status:</span> {step0BStatus}
               </div>
             )}
 
             {tokenId && (
+              <div className="text-xs space-y-1">
+                <div>
+                  <span className="font-semibold">tokenId/category:</span>{' '}
+                  <span className="font-mono">{tokenId}</span>
+                </div>
+
+                {derivedAuthGuardAddress && (
+                  <div>
+                    <span className="font-semibold">AuthGuard cashaddr:</span>{' '}
+                    <span className="font-mono break-all">
+                      {authGuardCashAddress || derivedAuthGuardAddress}
+                    </span>
+                  </div>
+                )}
+
+                {authGuardTokenAddress && (
+                  <div>
+                    <span className="font-semibold">AuthGuard tokenaddr:</span>{' '}
+                    <span className="font-mono break-all">
+                      {authGuardTokenAddress}
+                    </span>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {tokenId && derivedAuthGuardLockingHex && (
               <div className="text-xs">
-                <span className="font-semibold">tokenId:</span>{' '}
-                <span className="font-mono">{tokenId}</span>
+                <span className="font-semibold">
+                  AuthGuard locking bytecode:
+                </span>{' '}
+                <span className="font-mono break-all">
+                  {derivedAuthGuardLockingHex}
+                </span>
               </div>
             )}
           </div>
@@ -963,7 +1594,7 @@ export default function AuthGuardApp({
                       !!genesisUtxo &&
                         genesisUtxo.tx_hash === u.tx_hash &&
                         genesisUtxo.tx_pos === u.tx_pos,
-                      () => setGenesisUtxo(u),
+                      () => pickGenesis(u),
                       'Genesis candidate (tx_pos=0)'
                     )
                   )
@@ -1089,15 +1720,17 @@ export default function AuthGuardApp({
 
           {/* 5) Dispense */}
           <div className="grid gap-2">
-            <div className="text-sm font-semibold">5) Dispense</div>
+            <div className="text-sm font-semibold">
+              5) Dispense (AuthGuard → Recipient)
+            </div>
 
             <label className="text-xs text-gray-600">
-              Recipient Address
+              Recipient Address (tokenaddr recommended)
               <input
                 className="mt-1 w-full border rounded p-2 text-sm"
                 value={recipient}
                 onChange={(e) => setRecipient(e.target.value)}
-                placeholder="bitcoincash:..."
+                placeholder="bitcoincash:... or bchtest:..."
               />
             </label>
 
@@ -1120,7 +1753,6 @@ export default function AuthGuardApp({
               keepGuarded (default true)
             </label>
 
-            {/* Missing-field warnings */}
             {dispenseMissing.length > 0 && (
               <div className="text-xs text-red-600 space-y-1">
                 {dispenseMissing.map((m) => (
@@ -1139,7 +1771,7 @@ export default function AuthGuardApp({
                   : undefined
               }
             >
-              Build Issue / Dispense (FT)
+              Build Dispense (FT)
             </button>
 
             <div className="text-xs text-gray-500">
@@ -1167,8 +1799,8 @@ export default function AuthGuardApp({
             readOnly
           />
           <div className="text-xs text-gray-500 mt-2">
-            Patient-0: FT issuance build only. Next step is signing/broadcast UX
-            + genesis/deploy.
+            Build-only UX. Broadcast happens only in actions that explicitly
+            call broadcastTx().
           </div>
         </div>
       )}

@@ -29,6 +29,16 @@ export const BUILTIN_ADDONS: AddonManifest[] = [
           screen: 'AuthGuardApp',
         },
       },
+      {
+        id: 'mintCashTokensPoCApp',
+        name: 'MintCashTokensPoCApp',
+        description: 'Mint Cashtokens',
+        iconUri: null, // ✅ fall back to DEFAULT_ICON in AppsView
+        kind: 'declarative',
+        config: {
+          screen: 'MintCashTokensPoCApp',
+        },
+      },
     ],
 
     contracts: [

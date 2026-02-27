@@ -6,23 +6,20 @@ import { Network } from '../../redux/networkSlice';
 // Keep these as *base* URLs/hosts (no trailing slashes unless needed).
 
 export type InfraUrls = {
-  electrumHost: string; // host only (no scheme)
-  chaingraphGraphqlUrl: string; // full URL
+  chaingraphUrl: string; // full URL
   bcmrApiBaseUrl: string; // base URL for BCMR API (no trailing slash)
 };
 
 export const INFRA_URLS: Record<Network, InfraUrls> = {
   [Network.CHIPNET]: {
-    electrumHost: 'electrum-chipnet.optnlabs.com',
-    chaingraphGraphqlUrl: 'https://chaingraph.optnlabs.com/v1/graphql',
-    bcmrApiBaseUrl: 'http://bcmr.optnlabs.com/api',
+    chaingraphUrl: 'https://chaingraph.optnlabs.com/v1/graphql',
+    bcmrApiBaseUrl: 'https://bcmr.optnlabs.com/api',
   },
 
   // MAINNET: keeping existing public infra defaults for now.
   // Swap these later when OPTN mainnet endpoints are live.
   [Network.MAINNET]: {
-    electrumHost: 'explorer.bch.ninja',
-    chaingraphGraphqlUrl: 'https://chaingraph.optnlabs.com/v1/graphql', // fallback
+    chaingraphUrl: 'https://gql.chaingraph.pat.mn/v1/graphql',
     bcmrApiBaseUrl: 'https://bcmr.paytaca.com/api',
   },
 };
@@ -44,7 +41,6 @@ function readEnv(key: string): string | undefined {
 
 /**
  * Allow env overrides:
- * - VITE_ELECTRUM_HOST
  * - VITE_CHAINGRAPH_URL
  * - VITE_BCMR_API_BASE_URL
  *
@@ -53,15 +49,12 @@ function readEnv(key: string): string | undefined {
 export function getInfraUrls(network: Network): InfraUrls {
   const base = INFRA_URLS[network];
 
-  const electrumHost = readEnv('VITE_ELECTRUM_HOST') || base.electrumHost;
-  const chaingraphGraphqlUrl =
-    readEnv('VITE_CHAINGRAPH_URL') || base.chaingraphGraphqlUrl;
+  const chaingraphUrl = readEnv('VITE_CHAINGRAPH_URL') || base.chaingraphUrl;
   const bcmrApiBaseUrl =
     readEnv('VITE_BCMR_API_BASE_URL') || base.bcmrApiBaseUrl;
 
   return {
-    electrumHost,
-    chaingraphGraphqlUrl,
+    chaingraphUrl,
     bcmrApiBaseUrl: bcmrApiBaseUrl.replace(/\/+$/, ''), // trim trailing /
   };
 }
