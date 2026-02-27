@@ -12,6 +12,7 @@ import type { AddonManifest, AddonAppDefinition } from '../../types/addons';
 import { createAddonSDK, type AddonSDK } from '../../services/AddonsSDK';
 
 import AuthGuardApp from './patient0/AuthGuardApp';
+import MintCashTokensPoCApp from './mint-cashtokens-poc/MintCashTokensPoCApp';
 
 type ResolvedApp = {
   manifest: AddonManifest;
@@ -178,6 +179,10 @@ export default function MarketplaceAppHost() {
           />
         );
 
+      case 'MintCashTokensPoCApp':
+      case 'mintCashTokensPoCApp':
+        return <MintCashTokensPoCApp />;
+
       default:
         return (
           <div className="p-4">
@@ -243,14 +248,14 @@ export default function MarketplaceAppHost() {
   }
 
   return (
-    <div className="container mx-auto p-4 pb-16">
-      <div className="flex items-center justify-between mb-4">
-        <div>
+    <div className="container mx-auto p-4 pb-16 h-screen flex flex-col">
+      <div className="flex items-center justify-between mb-4 flex-none">
+        {/* <div>
           <div className="text-xl font-bold">{resolved?.app.name}</div>
           <div className="text-sm text-gray-600">
             {resolved?.app.description}
           </div>
-        </div>
+        </div> */}
 
         <button
           onClick={() => navigate('/apps')}
@@ -259,8 +264,9 @@ export default function MarketplaceAppHost() {
           Back
         </button>
       </div>
-
-      {renderApp()}
+      <div className="flex-1 min-h-0 overflow-y-auto overscroll-contain">
+        {renderApp()}
+      </div>
     </div>
   );
 }
