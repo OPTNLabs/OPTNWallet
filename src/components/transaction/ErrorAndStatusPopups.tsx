@@ -18,6 +18,7 @@ import {
 } from '@bitauth/libauth';
 import { PREFIX, SATSINBITCOIN } from '../../utils/constants';
 import { shortenTxHash } from '../../utils/shortenHash';
+import { ensureUint8Array } from '../../utils/binary';
 
 interface ErrorAndStatusPopupsProps {
   showRawTxPopup: boolean;
@@ -42,19 +43,6 @@ const ErrorAndStatusPopups: React.FC<ErrorAndStatusPopupsProps> = ({
   const walletId = useSelector(
     (state: RootState) => state.wallet_id.currentWalletId
   );
-
-  const ensureUint8Array = (input: any): Uint8Array => {
-    if (input instanceof Uint8Array) return input;
-    if (typeof input === 'string' && input.startsWith('<Uint8Array: 0x')) {
-      const hex = input.slice('<Uint8Array: 0x'.length, -1);
-      const bytes = new Uint8Array(hex.length / 2);
-      for (let i = 0; i < hex.length; i += 2) {
-        bytes[i / 2] = parseInt(hex.slice(i, i + 2), 16);
-      }
-      return bytes;
-    }
-    return new Uint8Array();
-  };
 
   const toCashAddress = (
     bytecode: Uint8Array,
@@ -160,13 +148,13 @@ const ErrorAndStatusPopups: React.FC<ErrorAndStatusPopupsProps> = ({
 
                       {isOpReturn ? (
                         <>
-                          <p className="font-semibold text-gray-700">
+                          <p className="font-semibold wallet-muted">
                             OP_RETURN Output:
                           </p>
                           {parsePushData(lockingBytecode).map((entry, i) => (
                             <p
                               key={i}
-                              className="text-gray-700 ml-2 text-xs font-mono"
+                              className="wallet-muted ml-2 text-xs font-mono"
                             >
                               {entry}
                             </p>
@@ -176,7 +164,7 @@ const ErrorAndStatusPopups: React.FC<ErrorAndStatusPopupsProps> = ({
                         <>
                           <p>
                             • Address:{' '}
-                            <span className="font-mono text-blue-600 break-all">
+                            <span className="font-mono wallet-link break-all">
                               {shortenTxHash(
                                 toCashAddress(
                                   lockingBytecode,
@@ -192,7 +180,7 @@ const ErrorAndStatusPopups: React.FC<ErrorAndStatusPopupsProps> = ({
                       )}
 
                       {token && (
-                        <div className="bg-green-50 border border-green-200 rounded p-2 mt-2 space-y-1 text-xs">
+                        <div className="wallet-surface-strong border border-[var(--wallet-border)] rounded p-2 mt-2 space-y-1 text-xs">
                           <div>
                             <strong>Token Category:</strong>{' '}
                             <span className="font-mono break-all">
@@ -234,13 +222,13 @@ const ErrorAndStatusPopups: React.FC<ErrorAndStatusPopupsProps> = ({
             </div>
           ) : (
             <>
-              <p className="text-sm mb-2 text-red-600">
+              <p className="text-sm mb-2 wallet-danger-text">
                 Unable to decode transaction. Showing raw hex:
               </p>
               <textarea
                 readOnly
                 value={rawTX}
-                className="w-full h-40 p-2 border rounded text-xs"
+                className="w-full h-40 p-2 border rounded text-xs wallet-input"
               />
             </>
           )}
@@ -250,7 +238,7 @@ const ErrorAndStatusPopups: React.FC<ErrorAndStatusPopupsProps> = ({
       {showTxIdPopup && transactionId && (
         <Popup closePopups={handleClose}>
           <div className="flex flex-col items-center p-4">
-            <div className="text-green-500 text-4xl mb-4">✅</div>
+            <div className="wallet-accent-icon text-4xl mb-4">✅</div>
             <h3 className="text-xl font-bold mb-2">Transaction Successful</h3>
             <p className="text-center mb-4">
               Your transaction has been broadcasted successfully!
@@ -260,7 +248,7 @@ const ErrorAndStatusPopups: React.FC<ErrorAndStatusPopupsProps> = ({
               <span className="font-mono">{shortenTxHash(transactionId)}</span>
               <button
                 onClick={() => navigator.clipboard.writeText(transactionId)}
-                className="ml-2 px-2 py-1 bg-gray-200 rounded hover:bg-gray-300"
+                className="wallet-btn-secondary ml-2 px-2 py-1"
                 title="Copy to clipboard"
               >
                 📋
@@ -274,7 +262,7 @@ const ErrorAndStatusPopups: React.FC<ErrorAndStatusPopupsProps> = ({
               }
               target="_blank"
               rel="noopener noreferrer"
-              className="bg-blue-500 text-white py-2 px-4 rounded hover:bg-blue-600 transition duration-300"
+              className="wallet-btn-primary py-2 px-4"
             >
               View on Explorer
             </a>
@@ -285,16 +273,16 @@ const ErrorAndStatusPopups: React.FC<ErrorAndStatusPopupsProps> = ({
       {errorMessage && (
         <Popup closePopups={closePopups} closeButtonText="Close">
           <div className="flex flex-col items-center p-6">
-            <div className="text-red-600 text-4xl mb-4">⚠️</div>
-            <h3 className="text-2xl font-bold text-gray-800 mb-3">
+            <div className="wallet-danger-text text-4xl mb-4">⚠️</div>
+            <h3 className="text-2xl font-bold wallet-text-strong mb-3">
               Transaction Error
             </h3>
-            <p className="text-gray-600 text-center text-sm mb-6">
+            <p className="wallet-muted text-center text-sm mb-6">
               {errorMessage}
             </p>
             <button
               onClick={closePopups}
-              className="bg-red-500 font-bold text-white py-2 px-6 rounded-lg hover:bg-red-600 transition duration-300"
+              className="wallet-btn-danger py-2 px-6"
             >
               Try Again
             </button>

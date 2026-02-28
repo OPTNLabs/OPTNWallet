@@ -1,15 +1,16 @@
-import React, { useState, useCallback, useEffect } from 'react';
+import React, { useMemo } from 'react';
 import { useDispatch, useSelector } from 'react-redux';
-import { RootState } from '../redux/store';
-import TransactionManager from '../apis/TransactionManager/TransactionManager';
-import { addTransactions } from '../redux/transactionSlice';
+import { AppDispatch, RootState } from '../redux/store';
 import { useParams } from 'react-router-dom';
-import DatabaseService from '../apis/DatabaseManager/DatabaseService';
 import { createSelector } from 'reselect';
 import { shortenTxHash } from '../utils/shortenHash';
 import { selectCurrentNetwork } from '../redux/selectors/networkSelectors';
 import { Network } from '../redux/networkSlice';
-import { TransactionHistoryItem } from '../types/types';
+import { useTransactionHistoryFetch } from './transaction-history/useTransactionHistoryFetch';
+import { useTransactionHistoryPagination } from './transaction-history/useTransactionHistoryPagination';
+import PageHeader from '../components/ui/PageHeader';
+import EmptyState from '../components/ui/EmptyState';
+import StatusChip from '../components/ui/StatusChip';
 
 const selectTransactions = createSelector(
   (state: RootState) => state.transactions.transactions,
@@ -18,7 +19,7 @@ const selectTransactions = createSelector(
 );
 
 const TransactionHistory: React.FC = () => {
-  const dispatch = useDispatch();
+  const dispatch = useDispatch<AppDispatch>();
   const { wallet_id } = useParams<{ wallet_id: string }>();
   const transactions = useSelector((state: RootState) =>
     selectTransactions(state, wallet_id || '')
@@ -26,358 +27,166 @@ const TransactionHistory: React.FC = () => {
   const IsInitialized = useSelector(
     (state: RootState) => state.utxos.initialized
   );
-  const [progress, setProgress] = useState(0);
-  const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('desc');
-  const [loading, setLoading] = useState(false);
-  const [fetchedAddresses, setFetchedAddresses] = useState<Set<string>>(
-    new Set()
-  );
-  const [currentPage, setCurrentPage] = useState(1);
-  const [transactionsPerPage, setTransactionsPerPage] = useState(10);
-  const [navBarHeight, setNavBarHeight] = useState(0);
-  const dbService = DatabaseService();
 
   const currentNetwork = useSelector((state: RootState) =>
     selectCurrentNetwork(state)
   );
 
-  useEffect(() => {
-    const adjustHeight = () => {
-      const bottomNavBar = document.getElementById('bottomNavBar');
-      if (bottomNavBar) {
-        setNavBarHeight(bottomNavBar.offsetHeight * 1.75);
-      }
-    };
-    adjustHeight();
-    window.addEventListener('resize', adjustHeight);
-    return () => {
-      window.removeEventListener('resize', adjustHeight);
-    };
-  }, []);
+  const { progress, loading, fetchTransactionHistory } = useTransactionHistoryFetch({
+    walletIdParam: wallet_id,
+    isInitialized: IsInitialized,
+    transactionCount: transactions.length,
+    dispatch,
+  });
 
-  useEffect(() => {
-    if (IsInitialized && transactions.length === 0 && !loading) {
-      fetchTransactionHistory();
-    }
-  }, [IsInitialized, transactions, loading]); // eslint-disable-line react-hooks/exhaustive-deps
+  const {
+    sortOrder,
+    transactionsPerPage,
+    currentPage,
+    totalPages,
+    hasTransactions,
+    paginatedTransactions,
+    toggleSortOrder,
+    handleTransactionsPerPageChange,
+    handleNextPage,
+    handlePreviousPage,
+    handleFirstPage,
+    handleLastPage,
+  } = useTransactionHistoryPagination({ transactions });
 
-  // replace inside fetchTransactionHistory
-  const fetchTransactionHistory = useCallback(async () => {
-    if (!wallet_id || loading) return;
-
-    setLoading(true);
-    setProgress(0);
-
-    try {
-      await dbService.ensureDatabaseStarted();
-      const db = dbService.getDatabase();
-      if (!db) {
-        console.error('Database not started.');
-        return;
-      }
-
-      const addressesQuery = db.prepare(`
-      SELECT address FROM addresses WHERE wallet_id = ?;
-    `);
-      addressesQuery.bind([wallet_id]);
-
-      const addresses: string[] = [];
-      while (addressesQuery.step()) {
-        const result = addressesQuery.getAsObject();
-        if (typeof result.address === 'string') {
-          addresses.push(result.address);
-        }
-      }
-      addressesQuery.free();
-
-      // === only scan addresses we haven't fetched yet ===
-      const pending = addresses.filter((a) => !fetchedAddresses.has(a));
-      const totalToScan = pending.length;
-
-      if (totalToScan === 0) {
-        setProgress(100);
-        return; // no work
-      }
-
-      const transactionManager = TransactionManager();
-      const uniqueTransactions = new Set(transactions.map((tx) => tx.tx_hash));
-
-      for (const [index, address] of pending.entries()) {
-        let newTransactions: TransactionHistoryItem[] = [];
-
-        try {
-          // Try fetching/storing for this address
-          newTransactions =
-            await transactionManager.fetchAndStoreTransactionHistory(
-              parseInt(wallet_id, 10),
-              address
-            );
-        } catch (err: any) {
-          const msg = String(err?.message ?? '');
-
-          // Swallow the benign sqlite-wasm rollback warning
-          if (/cannot rollback - no transaction is active/i.test(msg)) {
-            console.debug(
-              '[TXH] No active transaction to rollback (benign) for address:',
-              address
-            );
-          } else {
-            // Log other errors once per address, but keep going
-            console.warn(
-              '[TXH] fetchAndStoreTransactionHistory failed for address:',
-              address,
-              err
-            );
-          }
-          // Don't rethrow; continue to mark fetched and update progress
-        }
-
-        // Reopen DB handle (in case manager wrote to it) and pull transactions for this wallet
-        const liveDb = dbService.getDatabase();
-        if (!liveDb) {
-          console.error(
-            'Database not started after fetch; skipping address',
-            address
-          );
-          // still mark as fetched + update progress and continue
-        } else {
-          const storedTransactionsQuery = liveDb.prepare(`
-      SELECT * FROM transactions WHERE wallet_id = ?;
-    `);
-          storedTransactionsQuery.bind([wallet_id]);
-
-          while (storedTransactionsQuery.step()) {
-            const transaction =
-              storedTransactionsQuery.getAsObject() as unknown as TransactionHistoryItem;
-
-            if (
-              !uniqueTransactions.has(transaction.tx_hash) ||
-              transaction.height === -1 ||
-              transaction.height === 0
-            ) {
-              newTransactions.push({
-                ...transaction,
-                amount: transaction.amount,
-              });
-              uniqueTransactions.add(transaction.tx_hash);
-            }
-          }
-          storedTransactionsQuery.free();
-        }
-
-        if (newTransactions.length > 0) {
-          dispatch(
-            addTransactions({
-              wallet_id: parseInt(wallet_id, 10),
-              transactions: newTransactions,
-            })
-          );
-        }
-
-        // Mark this address as processed even if it errored, so we don't keep retrying it
-        setFetchedAddresses((prev) => {
-          const next = new Set(prev);
-          next.add(address);
-          return next;
-        });
-
-        // progress based on *pending* work
-        setProgress(Math.round(((index + 1) / totalToScan) * 100));
-      }
-
-      // loop completed normally
-      setProgress(100);
-    } catch (e) {
-      console.error('Failed to fetch transaction history:', e);
-    } finally {
-      setLoading(false); // don't force progress to 100 here
-    }
-  }, [wallet_id, loading, dbService, fetchedAddresses, dispatch, transactions]);
-
-  const sortedTransactions = useCallback(() => {
-    const unconfirmed = transactions.filter((tx) => tx.height <= 0).reverse();
-    const confirmed = transactions.filter((tx) => tx.height > 0);
-    const sortedConfirmed = confirmed.sort((a, b) =>
-      sortOrder === 'asc' ? a.height - b.height : b.height - a.height
-    );
-    return [...unconfirmed, ...sortedConfirmed];
-  }, [transactions, sortOrder]);
-
-  const toggleSortOrder = () => {
-    setSortOrder((prevOrder) => (prevOrder === 'asc' ? 'desc' : 'asc'));
-  };
-
-  const handleTransactionsPerPageChange = (
-    e: React.ChangeEvent<HTMLSelectElement>
-  ) => {
-    const nextPerPage = parseInt(e.target.value, 10);
-    setTransactionsPerPage(nextPerPage);
-    setCurrentPage(1);
-  };
-
-  // ---- Pagination helpers (clamped & empty-safe) ----
-  const hasTransactions = transactions.length > 0;
-  const rawTotalPages = Math.ceil(transactions.length / transactionsPerPage);
-  const totalPages = Math.max(1, rawTotalPages);
-
-  const handleNextPage = () => {
-    if (!hasTransactions) return;
-    setCurrentPage((prevPage) => Math.min(prevPage + 1, totalPages));
-  };
-
-  const handlePreviousPage = () => {
-    if (!hasTransactions) return;
-    setCurrentPage((prevPage) => Math.max(prevPage - 1, 1));
-  };
-
-  const handleFirstPage = () => {
-    if (!hasTransactions) return;
-    setCurrentPage(1);
-  };
-
-  const handleLastPage = () => {
-    if (!hasTransactions) return;
-    setCurrentPage(totalPages);
-  };
-
-  const paginatedTransactions = sortedTransactions().slice(
-    (currentPage - 1) * transactionsPerPage,
-    currentPage * transactionsPerPage
+  const explorerBase = useMemo(
+    () =>
+      currentNetwork === Network.CHIPNET
+        ? 'https://chipnet.bch.ninja/tx/'
+        : 'https://explorer.bch.ninja/tx/',
+    [currentNetwork]
   );
+  const relativeAge = (timestamp?: string) => {
+    if (!timestamp) return null;
+    const parsed = Date.parse(timestamp);
+    if (Number.isNaN(parsed)) return null;
+    const diffMs = Date.now() - parsed;
+    if (diffMs < 0) return 'just now';
+    const mins = Math.floor(diffMs / 60000);
+    if (mins < 1) return 'just now';
+    if (mins < 60) return `${mins}m ago`;
+    const hours = Math.floor(mins / 60);
+    if (hours < 24) return `${hours}h ago`;
+    const days = Math.floor(hours / 24);
+    return `${days}d ago`;
+  };
 
   return (
-    <div className="flex flex-col h-screen">
+    <div className="container mx-auto max-w-md h-[calc(100dvh-var(--navbar-height)-var(--safe-bottom))] px-4 pt-4 pb-3 flex flex-col overflow-hidden wallet-page">
       {(loading || (progress > 0 && progress < 100)) && (
-        <div className="w-full h-2 bg-gray-200">
+        <div className="w-full h-1.5 wallet-surface-strong rounded-full overflow-hidden mb-2 shrink-0">
           <div
-            className="h-full bg-blue-500"
+            className="h-full wallet-inline-progress"
             style={{ width: `${progress}%` }}
           />
         </div>
       )}
 
-      {/* Header and controls */}
-      <div className="sticky top-0 bg-white z-10 p-4">
-        <div className="flex justify-center mt-4">
-          <img
-            src="/assets/images/OPTNWelcome1.png"
-            alt="Welcome"
-            className="w-3/4 h-auto"
-          />
-        </div>
-        <h1 className="text-2xl font-bold flex flex-col items-center mb-4">
-          Transaction History
-        </h1>
-        <div className="mb-4 flex flex-col space-y-2 md:space-y-0 md:flex-row md:justify-between">
-          <div className="flex justify-between">
-            <button
-              onClick={toggleSortOrder}
-              className="py-1 px-2 bg-gray-200 hover:bg-gray-800 hover:text-white transition duration-300 font-bold rounded md:py-2 md:px-4"
-            >
-              {sortOrder === 'asc' ? 'Oldest' : 'Newest'}
-            </button>
-            <select
-              value={transactionsPerPage}
-              onChange={handleTransactionsPerPageChange}
-              className="py-1 px-2 bg-white border rounded md:py-2 md:px-4"
-            >
-              <option value={10}>10 per page</option>
-              <option value={20}>20 per page</option>
-              <option value={30}>30 per page</option>
-            </select>
-          </div>
+      <PageHeader title="Transaction History" subtitle="Browse confirmed and pending transfers" compact />
+
+      <div className="wallet-card p-3 mb-3 shrink-0">
+        <div className="mb-3 grid grid-cols-2 gap-2">
           <button
-            onClick={fetchTransactionHistory}
-            className="py-1 px-2 bg-blue-500 hover:bg-blue-600 transition duration-300 font-bold text-white rounded md:py-2 md:px-4 self-center"
-            disabled={loading}
+            onClick={toggleSortOrder}
+            className="wallet-btn-secondary py-2 px-3 text-sm"
           >
-            {loading ? 'Fetching...' : 'Fetch Transaction History'}
+            {sortOrder === 'asc' ? 'Oldest first' : 'Newest first'}
           </button>
+          <select
+            value={transactionsPerPage}
+            onChange={handleTransactionsPerPageChange}
+            className="wallet-input py-2 px-3 text-sm"
+          >
+            <option value={10}>10 per page</option>
+            <option value={20}>20 per page</option>
+            <option value={30}>30 per page</option>
+          </select>
         </div>
+        <button
+          onClick={fetchTransactionHistory}
+          className="wallet-btn-primary w-full py-2 px-3 text-sm"
+          disabled={loading}
+        >
+          {loading ? `Fetching... ${progress}%` : 'Refresh Transaction History'}
+        </button>
       </div>
 
-      {/* Scrollable transactions container */}
-      <div className="h-1/2 overflow-y-auto px-4">
+      <div className="flex-1 min-h-0 overflow-y-auto pr-1">
         {!hasTransactions ? (
-          <p className="text-center">No transactions available.</p>
+          <EmptyState message="No transactions available yet." />
         ) : (
-          <ul className="space-y-4">
+          <ul className="space-y-3">
             {paginatedTransactions.map((tx, id) => (
-              <a
-                key={id + tx.tx_hash}
-                href={
-                  currentNetwork === Network.CHIPNET
-                    ? `https://chipnet.bch.ninja/tx/${tx.tx_hash}`
-                    : `https://explorer.bch.ninja/tx/${tx.tx_hash}`
-                }
-                target="_blank"
-                rel="noopener noreferrer"
-              >
-                <li className="p-4 border rounded-lg shadow-md bg-white break-words">
-                  <strong>Transaction Hash:</strong> {shortenTxHash(tx.tx_hash)}
-                  <p>
+              <li key={id + tx.tx_hash}>
+                <a
+                  href={`${explorerBase}${tx.tx_hash}`}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="wallet-card p-4 block hover:brightness-[0.98] transition"
+                >
+                  <div className="flex items-start justify-between gap-3">
+                    <div>
+                      <div className="text-xs wallet-muted mb-1">
+                        Transaction Hash
+                      </div>
+                      <div className="font-mono text-sm break-all wallet-text-strong">
+                        {shortenTxHash(tx.tx_hash)}
+                      </div>
+                    </div>
+                    {tx.height > 0 ? <StatusChip tone="success">Confirmed</StatusChip> : <StatusChip tone="warning">Pending</StatusChip>}
+                  </div>
+                  <div className="mt-2 text-sm">
                     {tx.height > 0 ? (
-                      <strong>Height: {tx.height}</strong>
+                      <span className="wallet-text-strong">Block: {tx.height}</span>
                     ) : (
-                      <strong>Pending Transaction</strong>
+                      <span className="wallet-muted">Awaiting confirmation</span>
                     )}
-                  </p>
-                </li>
-              </a>
+                    {relativeAge(tx.timestamp) ? (
+                      <span className="ml-2 wallet-muted text-xs">
+                        {relativeAge(tx.timestamp)}
+                      </span>
+                    ) : null}
+                  </div>
+                </a>
+              </li>
             ))}
           </ul>
         )}
       </div>
 
-      {/* Bottom navigation */}
-      <div
-        id="bottomNavBar"
-        className="fixed bottom-0 left-0 right-0 p-4 bg-white z-10 flex justify-between items-center"
-        style={{ paddingBottom: navBarHeight }}
-      >
+      <div className="wallet-card mt-3 p-3 flex items-center justify-between gap-2 shrink-0">
         <button
           onClick={handleFirstPage}
-          className={`py-2 px-4 mx-1 font-bold rounded ${
-            !hasTransactions || currentPage === 1
-              ? 'bg-gray-500 text-white'
-              : 'bg-gray-200'
-          } hover:bg-gray-800 hover:text-white transition duration-300`}
+          className="wallet-btn-secondary py-2 px-3 text-sm font-bold"
           disabled={!hasTransactions || currentPage === 1}
         >
           First
         </button>
         <button
           onClick={handlePreviousPage}
-          className={`py-2 px-4 mx-1 font-bold rounded ${
-            !hasTransactions || currentPage === 1
-              ? 'bg-gray-500 text-white'
-              : 'bg-gray-200'
-          } hover:bg-gray-800 hover:text-white transition duration-300`}
+          className="wallet-btn-secondary py-2 px-3 text-sm font-bold"
           disabled={!hasTransactions || currentPage === 1}
         >
           {'<'}
         </button>
-        <div className="py-2">
+        <div className="py-2 text-sm wallet-text-strong min-w-[56px] text-center">
           {hasTransactions ? `${currentPage}/${totalPages}` : '0/0'}
         </div>
         <button
           onClick={handleNextPage}
-          className={`py-2 px-4 mx-1 font-bold rounded ${
-            !hasTransactions || currentPage === totalPages
-              ? 'bg-gray-500 text-white'
-              : 'bg-gray-200'
-          } hover:bg-gray-800 hover:text-white transition duration-300`}
+          className="wallet-btn-secondary py-2 px-3 text-sm font-bold"
           disabled={!hasTransactions || currentPage === totalPages}
         >
           {'>'}
         </button>
         <button
           onClick={handleLastPage}
-          className={`py-2 px-4 mx-1 font-bold rounded ${
-            !hasTransactions || currentPage === totalPages
-              ? 'bg-gray-500 text-white'
-              : 'bg-gray-200'
-          } hover:bg-gray-800 hover:text-white transition duration-300`}
+          className="wallet-btn-secondary py-2 px-3 text-sm font-bold"
           disabled={!hasTransactions || currentPage === totalPages}
         >
           Last

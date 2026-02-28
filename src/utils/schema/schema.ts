@@ -1,4 +1,8 @@
-export const createTables = (db: any) => {
+type DatabaseRunner = {
+  run: (query: string) => void;
+};
+
+export const createTables = (db: DatabaseRunner) => {
   db.run(`
     CREATE TABLE IF NOT EXISTS wallets (
       id INTEGER PRIMARY KEY AUTOINCREMENT,

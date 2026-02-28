@@ -1,8 +1,8 @@
 // src/pages/Transaction.tsx
 
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { Dispatch, SetStateAction, useState } from 'react';
 import { useDispatch, useSelector } from 'react-redux';
-import { UTXO } from '../types/types';
+import { ContractAddressRecord, UTXO } from '../types/types';
 import AddressSelection from '../components/transaction/AddressSelection';
 import OutputSelection from '../components/transaction/OutputSelection';
 import SelectedUTXOsDisplay from '../components/transaction/SelectedUTXOsDisplay';
@@ -11,26 +11,18 @@ import UTXOSelection from '../components/transaction/UTXOSelection';
 import SelectContractFunctionPopup from '../components/SelectContractFunctionPopup';
 import ErrorAndStatusPopups from '../components/transaction/ErrorAndStatusPopups';
 import ErrorBoundary from '../components/ErrorBoundary';
-import { SignatureTemplate, HashType } from 'cashscript';
 import { RootState, AppDispatch } from '../redux/store';
-import {
-  setSelectedFunction,
-  setInputValues,
-  resetContract,
-} from '../redux/contractSlice';
-import {
-  removeTxOutput,
-  clearTransaction,
-} from '../redux/transactionBuilderSlice';
 import { selectCurrentNetwork } from '../redux/selectors/networkSelectors';
 import useFetchWalletData from '../hooks/useFetchWalletData';
 import useHandleTransaction from '../hooks/useHandleTransaction';
-import TransactionService from '../services/TransactionService';
 import { selectWalletId } from '../redux/walletSlice';
-import ContractManager from '../apis/ContractManager/ContractManager';
-import { SATSINBITCOIN } from '../utils/constants';
-import { PaperWalletSecretStore } from '../services/PaperWalletSecretStore';
-import KeyService from '../services/KeyService';
+import { useTransactionHandlers } from './transaction/useTransactionHandlers';
+import { useTransactionInit } from './transaction/useTransactionInit';
+import { useTransactionDerived } from './transaction/useTransactionDerived';
+import PageHeader from '../components/ui/PageHeader';
+import SectionCard from '../components/ui/SectionCard';
+
+const noopSetUtxos: Dispatch<SetStateAction<UTXO[]>> = () => undefined;
 
 const Transaction: React.FC = () => {
   // Removed local walletId state
@@ -38,12 +30,7 @@ const Transaction: React.FC = () => {
     { address: string; tokenAddress: string }[]
   >([]);
   const [contractAddresses, setContractAddresses] = useState<
-    {
-      address: string;
-      tokenAddress: string;
-      contractName: string;
-      abi: any[];
-    }[]
+    ContractAddressRecord[]
   >([]);
   const [selectedAddresses, setSelectedAddresses] = useState<string[]>([]);
   // const [utxos, setUtxos] = useState<UTXO[]>([]);
@@ -66,26 +53,26 @@ const Transaction: React.FC = () => {
   const [showRawTxPopup, setShowRawTxPopup] = useState(false);
   const [showTxIdPopup, setShowTxIdPopup] = useState(false);
   const [loading, setLoading] = useState(false);
-  const [selectedContractABIs, setSelectedContractABIs] = useState<any[]>([]);
+  const [selectedContractABIs, setSelectedContractABIs] = useState<unknown[]>(
+    []
+  );
   const [contractFunctionInputs, setContractFunctionInputs] = useState<{
     [key: string]: string;
   } | null>(null);
   const [contractUTXOs, setContractUTXOs] = useState<UTXO[]>([]);
-  const [currentContractABI, setCurrentContractABI] = useState<any[]>([]);
+  const [currentContractABI, setCurrentContractABI] = useState<unknown[]>([]);
   const [currentContractSource, setCurrentContractSource] =
     useState<string>('');
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [showRegularUTXOsPopup, setShowRegularUTXOsPopup] = useState(false);
   const [showCashTokenUTXOsPopup, setShowCashTokenUTXOsPopup] = useState(false);
   const [showContractUTXOsPopup, setShowContractUTXOsPopup] = useState(false);
-  // const [showCTUTXOs, setShowCTUTXOs] = useState<boolean>(false);
   const [paperWalletUTXOs, setPaperWalletUTXOs] = useState<UTXO[]>([]);
   // const [selectedPaperWalletUTXOs, setSelectedPaperWalletUTXOs] = useState<
   //   UTXO[]
   // >([]);
   const [showPaperWalletUTXOsPopup, setShowPaperWalletUTXOsPopup] =
     useState<boolean>(false);
-  // const [showOutputs, setShowOutputs] = useState<boolean>(false);
 
   const [nftCapability, setNftCapability] = useState<
     undefined | 'none' | 'mutable' | 'minting'
@@ -116,23 +103,12 @@ const Transaction: React.FC = () => {
 
   const utxosByAddress = useSelector((s: RootState) => s.utxos.utxos);
 
-  const utxos = useMemo(
-    () => Object.values(utxosByAddress).flat(),
-    [utxosByAddress]
-  );
-
   const txOutputs = useSelector(
     (state: RootState) => state.transactionBuilder.txOutputs
   );
 
   const walletId = useSelector(selectWalletId);
-  // Reset transactions and contract states when the component mounts
-  useEffect(() => {
-    dispatch(clearTransaction());
-    dispatch(resetContract());
-    PaperWalletSecretStore.clear();
-    // console.log('Transaction and Contract states have been reset.');
-  }, [dispatch]);
+  useTransactionInit(dispatch);
 
   // Log txOutputs whenever they change
   useFetchWalletData(
@@ -141,144 +117,12 @@ const Transaction: React.FC = () => {
     setAddresses,
     setContractAddresses,
     // setUtxos,
-    (() => {}) as any,
+    noopSetUtxos,
     setContractUTXOs,
     // setSelectedAddresses,
     setChangeAddress,
     setErrorMessage
   );
-
-  /**
-   * Handle the selection and deselection of UTXOs.
-   *
-   * @param utxo - The UTXO being clicked.
-   */
-  const handleUtxoClick = async (utxo: UTXO) => {
-    // console.log('Selected UTXO:', utxo);
-    if (rawTX !== '' && txOutputs.length !== 0) {
-      handleRemoveOutput(-1);
-    }
-    setRawTX('');
-    const isSelected = selectedUtxos.some((selectedUtxo) =>
-      selectedUtxo.id
-        ? selectedUtxo.id === utxo.id
-        : selectedUtxo.tx_hash + selectedUtxo.tx_pos ===
-          utxo.tx_hash + utxo.tx_pos
-    );
-
-    if (isSelected) {
-      if (utxo.isPaperWallet) {
-        PaperWalletSecretStore.del(utxo.tx_hash, utxo.tx_pos);
-      }
-
-      setSelectedUtxos(
-        selectedUtxos.filter((selectedUtxo) => selectedUtxo.id !== utxo.id)
-      );
-
-      // If the UTXO being deselected was a contract UTXO, reset the contract state
-      if (utxo.abi) {
-        dispatch(resetContract());
-      }
-    } else {
-      if (utxo.abi) {
-        const contractManager = ContractManager();
-
-        const constructorArgs =
-          await contractManager.getContractInstanceByAddress(utxo.address);
-
-        // console.log(constructorArgs.artifact.source);
-        // console.log('Contract UTXO:', utxo);
-        setShowPopup(true);
-        setTempUtxos(utxo);
-        setCurrentContractABI(utxo.abi);
-        setCurrentContractSource(constructorArgs.artifact.source);
-        setSelectedContractAddresses((prev) => [...prev, utxo.address]);
-        return;
-      } else if (utxo.isPaperWallet) {
-        // console.log('Selected a Paper Wallet UTXO:', paperWalletUTXOs);
-
-        // const isDuplicate = paperWalletUTXOs.some(
-        //   (existingUtxo) =>
-        //     existingUtxo.tx_hash === utxo.tx_hash &&
-        //     existingUtxo.tx_pos === utxo.tx_pos
-        // );
-        // if (!isDuplicate) {
-        // setSelectedPaperWalletUTXOs([...selectedPaperWalletUTXOs, utxo]);
-        setSelectedUtxos([...selectedUtxos, utxo]);
-        setSelectedAddresses((prev) => [...prev, utxo.address]);
-        setShowPaperWalletUTXOsPopup(true);
-        dispatch(resetContract());
-        // console.log('Selected a Paper Wallet UTXO:', utxo);
-        // }
-      } else {
-        setSelectedUtxos([...selectedUtxos, utxo]);
-        setSelectedAddresses((prev) => [...prev, utxo.address]);
-
-        // Reset contract state since a regular UTXO is being selected
-        dispatch(resetContract());
-
-        // **Add Logging Here**
-        // console.log('Selected a non-contract UTXO:', utxo);
-      }
-    }
-
-    // console.log('Selected UTXOs after function inputs:', selectedUtxos);
-  };
-
-  /**
-   * Adds a new transaction output.
-   */
-  const handleAddOutput = () => {
-    if (!recipientAddress || (!transferAmount && !tokenAmount)) {
-      setErrorMessage('Recipient address and an amount are required');
-      return;
-    }
-
-    if (recipientAddress && (transferAmount || tokenAmount)) {
-      if (rawTX !== '' && txOutputs.length !== 0) {
-        handleRemoveOutput(-1);
-      }
-      try {
-        const newOutput = TransactionService.addOutput(
-          recipientAddress,
-          transferAmount,
-          tokenAmount,
-          selectedTokenCategory,
-          selectedUtxos,
-          addresses,
-          nftCapability,
-          nftCommitment
-        );
-
-        if (newOutput) {
-          // Dispatch to Redux is already handled in TransactionManager.addOutput
-          // Optionally, reset form fields
-          setRecipientAddress('');
-          setTransferAmount(0);
-          setTokenAmount(0);
-          setSelectedTokenCategory('');
-          setNftCapability(undefined);
-          setNftCommitment(undefined);
-
-          console.log('Updated Outputs:', newOutput);
-        }
-      } catch (error: any) {
-        console.error('Error adding output:', error);
-        setErrorMessage('Error adding output: ' + error.message);
-      }
-    }
-  };
-
-  /**
-   * Removes a transaction output at a specified index.
-   *
-   * @param index - The index of the output to remove.
-   */
-  const handleRemoveOutput = (index: number) => {
-    setRawTX('');
-    setBytecodeSize(0);
-    dispatch(removeTxOutput(index));
-  };
 
   /**
    * Use custom hook to handle building and sending transactions.
@@ -297,137 +141,104 @@ const Transaction: React.FC = () => {
       setLoading
     );
 
-  /**
-   * Sends the built transaction.
-   */
-  const sendTransaction = () => {
-    try {
-      if (!rawTX) throw new Error('No transaction built');
-      handleSendTransaction(rawTX, setTransactionId);
-    } catch (error: any) {
-      setErrorMessage(`Failed to send transaction: ${error.message}`);
-    }
-  };
+  const {
+    handleRemoveOutput,
+    handleUtxoClick,
+    handleAddOutput,
+    sendTransaction,
+    closePopups,
+    handleContractFunctionSelect,
+  } = useTransactionHandlers({
+    dispatch,
+    rawTX,
+    txOutputsLength: txOutputs.length,
+    selectedUtxos,
+    tempUtxos,
+    recipientAddress,
+    transferAmount,
+    tokenAmount,
+    selectedTokenCategory,
+    addresses,
+    nftCapability,
+    nftCommitment,
+    handleSendTransaction,
+    txSetters: {
+      setRawTX,
+      setBytecodeSize,
+      setErrorMessage,
+    },
+    selectionSetters: {
+      setSelectedUtxos,
+      setSelectedAddresses,
+      setSelectedContractAddresses,
+    },
+    contractSetters: {
+      setShowPopup,
+      setTempUtxos,
+      setCurrentContractABI,
+      setCurrentContractSource,
+    },
+    outputSetters: {
+      setRecipientAddress,
+      setTransferAmount,
+      setTokenAmount,
+      setSelectedTokenCategory,
+      setNftCapability,
+      setNftCommitment,
+    },
+    popupSetters: {
+      setShowPaperWalletUTXOsPopup,
+      setShowRawTxPopup,
+      setShowTxIdPopup,
+      setShowContractUTXOsPopup,
+      setShowRegularUTXOsPopup,
+      setShowCashTokenUTXOsPopup,
+    },
+  });
 
-  /**
-   * Closes all popups and clears error messages.
-   */
-  const closePopups = () => {
-    setShowRawTxPopup(false);
-    setShowTxIdPopup(false);
-    setShowContractUTXOsPopup(false);
-    setShowRegularUTXOsPopup(false);
-    setShowCashTokenUTXOsPopup(false);
-    setShowPopup(false);
-    setErrorMessage(null);
-    setShowPaperWalletUTXOsPopup(false);
-    PaperWalletSecretStore.clear();
-  };
+  const handleSend = () => sendTransaction(setTransactionId);
 
-  /**
-   * Handles the selection of a contract function from the popup.
-   *
-   * @param contractFunction - The selected contract function name.
-   * @param inputs - The inputs for the contract function.
-   */
-  const handleContractFunctionSelect = async (
+  const onContractFunctionSelect = async (
     contractFunction: string,
     inputs: { [key: string]: string },
     abiInputs: { name: string; type: string }[]
   ) => {
-    if (typeof inputs !== 'object' || Array.isArray(inputs)) {
-      console.error("Error: 'inputs' is not a valid object. Received:", inputs);
-      return;
-    }
-
     setContractFunctionInputs(inputs);
-    dispatch(setSelectedFunction(contractFunction));
-    dispatch(setInputValues(inputs));
-
-    // Build unlockerInputs in ABI order, converting sig => SignatureTemplate(privateKey)
-    const unlockerInputs = await Promise.all(
-      abiInputs.map(async (abiIn) => {
-        const raw = inputs[abiIn.name] ?? '';
-
-        if (abiIn.type === 'sig') {
-          const address = raw.startsWith('sigaddr:')
-            ? raw.slice('sigaddr:'.length)
-            : raw;
-
-          const pk = await KeyService.fetchAddressPrivateKey(address);
-          if (!pk)
-            throw new Error(`Missing private key for address: ${address}`);
-
-          return new SignatureTemplate(pk, HashType.SIGHASH_ALL);
-        }
-
-        return raw;
-      })
-    );
-
-    const unlocker = { contractFunction, unlockerInputs };
-
-    if (tempUtxos) {
-      const updatedUtxo: UTXO = {
-        ...tempUtxos,
-        unlocker,
-        contractFunction,
-        contractFunctionInputs: inputs,
-      };
-      setSelectedUtxos([...selectedUtxos, updatedUtxo]);
-    }
-
-    setShowPopup(false);
+    await handleContractFunctionSelect(contractFunction, inputs, abiInputs);
   };
 
-  const filteredRegularUTXOs = useMemo(
-    () =>
-      utxos.filter((u) => selectedAddresses.includes(u.address) && !u.token),
-    [utxos, selectedAddresses]
-  );
-
-  const filteredCashTokenUTXOs = useMemo(
-    () =>
-      utxos.filter((u) => selectedAddresses.includes(u.address) && !!u.token),
-    [utxos, selectedAddresses]
-  );
-
-  const filteredContractUTXOs = useMemo(
-    () =>
-      contractUTXOs.filter((u) =>
-        selectedContractAddresses.includes(u.address)
-      ),
-    [contractUTXOs, selectedContractAddresses]
-  );
-
-  const totalSelectedUtxoAmount = useMemo(
-    () =>
-      selectedUtxos.reduce(
-        (sum, u) => sum + BigInt(u.amount || u.value),
-        BigInt(0)
-      ),
-    [selectedUtxos]
-  );
+  const {
+    utxos,
+    filteredRegularUTXOs,
+    filteredCashTokenUTXOs,
+    filteredContractUTXOs,
+    totalSelectedUtxoAmount,
+    showFee,
+    feeBch,
+    feeUsdLabel,
+  } = useTransactionDerived({
+    utxosByAddress,
+    contractUTXOs,
+    selectedAddresses,
+    selectedContractAddresses,
+    selectedUtxos,
+    bytecodeSize,
+    rawTX,
+    prices,
+  });
 
   return (
     <ErrorBoundary>
-      <div className="container mx-auto p-4 overflow-x-hidden">
-        {/* Welcome Image */}
-        <div className="flex justify-center mt-4">
-          <img
-            src="/assets/images/OPTNWelcome1.png"
-            alt="Welcome"
-            className="w-3/4 h-auto"
-          />
-        </div>
-
-        {/* Page Title */}
-        <h1 className="text-2xl font-bold flex flex-col items-center mb-4">
-          Transaction Builder
-        </h1>
+      <div className="container mx-auto max-w-xl p-4 pb-16 overflow-x-hidden wallet-page">
+        <PageHeader
+          title="Transaction Builder"
+          subtitle="Advanced transaction construction"
+          compact
+        />
 
         {/* Flex Container for AddressSelection */}
-        <div className="flex flex-wrap gap-2 mb-6 justify-center">
+        <SectionCard className="mb-4">
+          <div className="flex flex-wrap gap-2 justify-center">
           {/* Address Selection Component */}
           <AddressSelection
             addresses={addresses}
@@ -441,19 +252,8 @@ const Transaction: React.FC = () => {
             setSelectedAddresses={setSelectedAddresses}
             setPaperWalletUTXOs={setPaperWalletUTXOs}
           />
-        </div>
-
-        {/* Available UTXOs (New Component) for Cashtoken Genesis*/}
-        {/* <AvailableUTXOsDisplay
-          utxos={utxos}
-          // contractUtxos={contractUTXOs}
-          selectedUtxos={selectedUtxos}
-          handleUtxoClick={handleUtxoClick}
-          showCTUTXOs={showCTUTXOs}
-          setShowCTUTXOs={setShowCTUTXOs}
-          currentNetwork={currentNetwork}
-          closePopups={closePopups}
-        /> */}
+          </div>
+        </SectionCard>
 
         {/* UTXO Selection Component */}
         <UTXOSelection
@@ -488,12 +288,6 @@ const Transaction: React.FC = () => {
           currentNetwork={currentNetwork}
         />
 
-        {/* Transaction Outputs Display */}
-        {/* <TransactionOutputsDisplay
-          txOutputs={txOutputs}
-          handleRemoveOutput={handleRemoveOutput}
-        /> */}
-
         {/* Output Selection Component */}
         <OutputSelection
           txOutputs={txOutputs}
@@ -519,35 +313,13 @@ const Transaction: React.FC = () => {
         />
 
         {/* Bytecode Size Display */}
-        {Number.isFinite(bytecodeSize) && bytecodeSize > 0 && rawTX !== '' && (
+        {showFee && (
           <div className="mb-6 break-words whitespace-normal">
             <h3 className="flex justify-between items-baseline mb-2">
               <span className="font-bold">Transaction Fee:</span>
               <div className="flex flex-col items-end text-sm">
-                {(() => {
-                  const feeBch = bytecodeSize / SATSINBITCOIN;
-
-                  const bchUsdDatum = prices?.['BCH-USD'];
-                  const bchUsd = bchUsdDatum?.price;
-                  const hasPrice =
-                    typeof bchUsd === 'number' && Number.isFinite(bchUsd);
-
-                  return (
-                    <>
-                      <span className="text-right">
-                        {feeBch.toFixed(8)} BCH
-                      </span>
-
-                      <span className="text-right">
-                        {hasPrice
-                          ? feeBch * bchUsd < 1
-                            ? `¢ ${(feeBch * bchUsd * 100).toFixed(2)} cents USD`
-                            : `$ ${(feeBch * bchUsd).toFixed(2)} USD`
-                          : 'USD price unavailable'}
-                      </span>
-                    </>
-                  );
-                })()}
+                <span className="text-right">{feeBch.toFixed(8)} BCH</span>
+                <span className="text-right">{feeUsdLabel}</span>
               </div>
             </h3>
           </div>
@@ -558,7 +330,7 @@ const Transaction: React.FC = () => {
           // totalSelectedUtxoAmount={totalSelectedUtxoAmount}
           loading={loading}
           buildTransaction={buildTransaction}
-          sendTransaction={sendTransaction}
+          sendTransaction={handleSend}
           rawTX={rawTX}
           txOutputs={txOutputs}
           selectedUtxos={selectedUtxos}
@@ -585,7 +357,7 @@ const Transaction: React.FC = () => {
             currentContractSource={currentContractSource}
             contractABI={currentContractABI}
             onClose={() => setShowPopup(false)}
-            onFunctionSelect={handleContractFunctionSelect}
+            onFunctionSelect={onContractFunctionSelect}
           />
         )}
       </div>

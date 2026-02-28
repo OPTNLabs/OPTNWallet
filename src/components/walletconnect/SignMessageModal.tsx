@@ -37,12 +37,12 @@ export function SignMessageModal() {
   };
 
   return (
-    <div className="fixed inset-0 flex items-center justify-center bg-black bg-opacity-70 z-50">
-      <div className="bg-white rounded-lg shadow-lg max-w-md w-full p-6 space-y-4">
+    <div className="wallet-popup-backdrop">
+      <div className="wallet-popup-panel max-w-md w-full space-y-4">
         <h3 className="text-xl font-bold text-center">Sign Message Request</h3>
 
         {dappMetadata && (
-          <div className="text-sm text-gray-600">
+          <div className="text-sm wallet-muted">
             <div>
               <strong>DApp Name:</strong> {dappMetadata.name}
             </div>
@@ -52,7 +52,7 @@ export function SignMessageModal() {
                 href={dappMetadata.url}
                 target="_blank"
                 rel="noopener noreferrer"
-                className="text-blue-500 underline"
+                className="wallet-link underline"
               >
                 {dappMetadata.url}
               </a>
@@ -60,12 +60,12 @@ export function SignMessageModal() {
           </div>
         )}
 
-        <div className="bg-gray-100 rounded p-3 font-mono text-sm max-h-40 overflow-auto">
+        <div className="wallet-surface-strong rounded p-3 font-mono text-sm max-h-40 overflow-auto">
           <strong>Message to Sign:</strong>
           <pre className="whitespace-pre-wrap break-words">{message}</pre>
         </div>
 
-        <div className="bg-gray-50 rounded p-2 text-xs text-gray-500 max-h-24 overflow-auto">
+        <div className="wallet-surface rounded p-2 text-xs wallet-muted max-h-24 overflow-auto">
           <strong>Raw Request:</strong>
           <pre>{JSON.stringify(request, null, 2)}</pre>
         </div>
@@ -73,13 +73,13 @@ export function SignMessageModal() {
         <div className="flex justify-around pt-2">
           <button
             onClick={handleSign}
-            className="px-4 py-2 bg-green-500 hover:bg-green-600 text-white rounded"
+            className="wallet-btn-primary"
           >
             Sign
           </button>
           <button
             onClick={handleCancel}
-            className="px-4 py-2 bg-red-500 hover:bg-red-600 text-white rounded"
+            className="wallet-btn-danger"
           >
             Cancel
           </button>

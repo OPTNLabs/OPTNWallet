@@ -8,12 +8,58 @@ import topLevelAwait from 'vite-plugin-top-level-await';
 import react from '@vitejs/plugin-react-swc';
 import { nodePolyfills } from 'vite-plugin-node-polyfills';
 
+function buildApiProxy(
+  cgKey?: string,
+  coincapKey?: string,
+  cryptoKey?: string
+) {
+  return {
+    '/coingecko': {
+      target: 'https://api.coingecko.com',
+      changeOrigin: true,
+      rewrite: (p: string) => p.replace(/^\/coingecko/, ''),
+      headers: (() => {
+        const headers: Record<string, string> = {
+          accept: 'application/json',
+        };
+        if (cgKey) headers['x-cg-demo-api-key'] = cgKey;
+        return headers;
+      })(),
+    },
+    '/coincap': {
+      target: 'https://api.coincap.io',
+      changeOrigin: true,
+      rewrite: (p: string) => p.replace(/^\/coincap/, ''),
+      headers: (() => {
+        const headers: Record<string, string> = {
+          accept: 'application/json',
+        };
+        if (coincapKey) headers['Authorization'] = `Bearer ${coincapKey}`;
+        return headers;
+      })(),
+    },
+    '/cryptoapi': {
+      target: 'https://rest.cryptoapis.io',
+      changeOrigin: true,
+      rewrite: (p: string) => p.replace(/^\/cryptoapi/, ''),
+      headers: (() => {
+        const headers: Record<string, string> = {
+          accept: 'application/json',
+        };
+        if (cryptoKey) headers['x-api-key'] = cryptoKey;
+        return headers;
+      })(),
+    },
+  };
+}
+
 export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, process.cwd(), '');
 
   const CG_KEY = env.VITE_CG_API_KEY || env.CG_API_KEY;
   const COINCAP_KEY = env.VITE_COINCAP_API_KEY || env.COINCAP_API_KEY;
   const CRYPTO_KEY = env.VITE_CRYPTOAPIS_KEY || env.CRYPTOAPIS_KEY;
+  const apiProxy = buildApiProxy(CG_KEY, COINCAP_KEY, CRYPTO_KEY);
 
   const BROWSER_CONDITIONS = ['browser', 'module', 'import', 'default'];
 
@@ -33,8 +79,8 @@ export default defineConfig(({ mode }) => {
     resolve: {
       alias: {
         '/node_modules/sql.js/dist/': 'node_modules/sql.js/dist/',
-        net: resolvePath(__dirname, 'src/shims/net.ts'),
-        tls: resolvePath(__dirname, 'src/shims/tls.ts'),
+        net: resolvePath(__dirname, 'src/shim/net.ts'),
+        tls: resolvePath(__dirname, 'src/shim/tls.ts'),
       },
       conditions: BROWSER_CONDITIONS,
     },
@@ -97,84 +143,10 @@ export default defineConfig(({ mode }) => {
         'application/json': ['map'],
       },
       fs: { allow: ['..'] },
-      proxy: {
-        '/coingecko': {
-          target: 'https://api.coingecko.com',
-          changeOrigin: true,
-          rewrite: (p) => p.replace(/^\/coingecko/, ''),
-          headers: (() => {
-            const headers: Record<string, string> = {
-              accept: 'application/json',
-            };
-            if (CG_KEY) headers['x-cg-demo-api-key'] = CG_KEY;
-            return headers;
-          })(),
-        },
-        '/coincap': {
-          target: 'https://api.coincap.io',
-          changeOrigin: true,
-          rewrite: (p) => p.replace(/^\/coincap/, ''),
-          headers: (() => {
-            const headers: Record<string, string> = {
-              accept: 'application/json',
-            };
-            if (COINCAP_KEY) headers['Authorization'] = `Bearer ${COINCAP_KEY}`;
-            return headers;
-          })(),
-        },
-        '/cryptoapi': {
-          target: 'https://rest.cryptoapis.io',
-          changeOrigin: true,
-          rewrite: (p) => p.replace(/^\/cryptoapi/, ''),
-          headers: (() => {
-            const headers: Record<string, string> = {
-              accept: 'application/json',
-            };
-            if (CRYPTO_KEY) headers['x-api-key'] = CRYPTO_KEY;
-            return headers;
-          })(),
-        },
-      },
+      proxy: apiProxy,
     },
     preview: {
-      proxy: {
-        '/coingecko': {
-          target: 'https://api.coingecko.com',
-          changeOrigin: true,
-          rewrite: (p) => p.replace(/^\/coingecko/, ''),
-          headers: (() => {
-            const headers: Record<string, string> = {
-              accept: 'application/json',
-            };
-            if (CG_KEY) headers['x-cg-demo-api-key'] = CG_KEY;
-            return headers;
-          })(),
-        },
-        '/coincap': {
-          target: 'https://api.coincap.io',
-          changeOrigin: true,
-          rewrite: (p) => p.replace(/^\/coincap/, ''),
-          headers: (() => {
-            const headers: Record<string, string> = {
-              accept: 'application/json',
-            };
-            if (COINCAP_KEY) headers['Authorization'] = `Bearer ${COINCAP_KEY}`;
-            return headers;
-          })(),
-        },
-        '/cryptoapi': {
-          target: 'https://rest.cryptoapis.io',
-          changeOrigin: true,
-          rewrite: (p) => p.replace(/^\/cryptoapi/, ''),
-          headers: (() => {
-            const headers: Record<string, string> = {
-              accept: 'application/json',
-            };
-            if (CRYPTO_KEY) headers['x-api-key'] = CRYPTO_KEY;
-            return headers;
-          })(),
-        },
-      },
+      proxy: apiProxy,
     },
     logLevel: 'error',
   };

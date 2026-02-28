@@ -19,15 +19,22 @@ import {
 import { FaCamera } from 'react-icons/fa';
 import { Toast } from '@capacitor/toast';
 import { DataSigner } from '../utils/dataSigner';
+import { logError } from '../utils/errorHandling';
 
 interface AbiInput {
   name: string;
   type: string;
 }
 
+interface ContractAbiItem {
+  name?: string;
+  type?: string;
+  inputs?: AbiInput[];
+}
+
 interface SelectContractFunctionPopupProps {
   currentContractSource: string;
-  contractABI: any[];
+  contractABI: ContractAbiItem[];
   onClose: () => void;
   onFunctionSelect: (
     selectedFunction: string,
@@ -39,7 +46,7 @@ interface SelectContractFunctionPopupProps {
 const SelectContractFunctionPopup: React.FC<
   SelectContractFunctionPopupProps
 > = ({ currentContractSource, contractABI, onClose, onFunctionSelect }) => {
-  const [functions, setFunctions] = useState<any[]>([]);
+  const [functions, setFunctions] = useState<ContractAbiItem[]>([]);
   const [selectedFunction, setSelectedFunctionState] = useState<string>('');
   const [inputs, setInputsState] = useState<AbiInput[]>([]);
   const [inputValuesState, setInputValuesState] = useState<{
@@ -98,7 +105,11 @@ const SelectContractFunctionPopup: React.FC<
           setBytesParamName(null);
         }
       } catch (error) {
-        console.error('Error parsing contract source for checkdatasig:', error);
+        logError(
+          'SelectContractFunctionPopup.parseContractSource',
+          error,
+          { selectedFunction }
+        );
         setUsesCheckDataSig(false);
         setBytesParamName(null);
       }
@@ -111,7 +122,7 @@ const SelectContractFunctionPopup: React.FC<
   // Fetch the ABI functions
   useEffect(() => {
     if (!contractABI || !Array.isArray(contractABI)) {
-      console.error('Contract ABI is invalid or not an array');
+      logError('SelectContractFunctionPopup.invalidContractAbi', contractABI);
       return;
     }
 
@@ -164,7 +175,9 @@ const SelectContractFunctionPopup: React.FC<
       setInputValuesState((prev) => ({ ...prev, [argName]: messageHex }));
       await Toast.show({ text: 'Message generated successfully!' });
     } catch (error) {
-      console.error('Error generating message:', error);
+      logError('SelectContractFunctionPopup.generateMessage', error, {
+        argName,
+      });
       await Toast.show({ text: 'Failed to generate message.' });
     }
   };
@@ -190,13 +203,15 @@ const SelectContractFunctionPopup: React.FC<
           [selectedInput.name]: valueToSet,
         }));
       } else {
-        console.error(`No keys found for address: ${address}`);
+        logError('SelectContractFunctionPopup.addressKeyMissing', address);
         await Toast.show({
           text: `No keys found for address: ${address}`,
         });
       }
     } catch (error) {
-      console.error('Error fetching keys:', error);
+      logError('SelectContractFunctionPopup.handleAddressSelect', error, {
+        address,
+      });
       await Toast.show({
         text: 'Failed to fetch keys.',
       });
@@ -263,7 +278,10 @@ const SelectContractFunctionPopup: React.FC<
         });
       }
     } catch (error) {
-      console.error('Barcode scan error:', error);
+      logError('SelectContractFunctionPopup.scanBarcode', error, {
+        argName,
+        argType,
+      });
       await Toast.show({
         text: 'Failed to scan QR code. Please ensure camera permissions are granted and try again.',
       });
@@ -291,7 +309,9 @@ const SelectContractFunctionPopup: React.FC<
 
       onClose();
     } catch (error) {
-      console.error('Error occurred during dispatch or handling:', error);
+      logError('SelectContractFunctionPopup.handleSelect', error, {
+        selectedFunction,
+      });
     }
   };
 
@@ -301,11 +321,11 @@ const SelectContractFunctionPopup: React.FC<
   };
 
   return (
-    <div className="fixed inset-0 bg-gray-500 bg-opacity-75 flex items-center justify-center z-50">
-      <div className="bg-white p-6 rounded shadow-lg w-96 max-h-screen overflow-y-auto">
+    <div className="wallet-popup-backdrop">
+      <div className="wallet-popup-panel w-96 max-h-screen overflow-y-auto">
         <h2 className="text-xl font-semibold mb-4">Select a Function</h2>
         <select
-          className="border p-2 w-full mb-4 rounded-md"
+          className="wallet-input w-full mb-4"
           value={selectedFunction}
           onChange={handleFunctionSelect}
         >
@@ -329,7 +349,7 @@ const SelectContractFunctionPopup: React.FC<
               ) {
                 return (
                   <div key={index} className="mb-4">
-                    <label className="block text-sm font-bold text-gray-700 mb-1">
+                    <label className="block text-sm font-bold wallet-muted mb-1">
                       {input.name} (message for checkdatasig)
                     </label>
                     <input
@@ -342,14 +362,14 @@ const SelectContractFunctionPopup: React.FC<
                           [input.name]: e.target.value,
                         })
                       }
-                      className="border p-2 w-full rounded-md mb-2"
+                      className="wallet-input w-full mb-2"
                       placeholder={`Enter message for ${input.name}`}
                     />
                     {/* <div className="flex items-center mb-2">
                       <button
                         type="button"
                         onClick={() => scanBarcode(input.name, input.type)}
-                        className={`w-12 h-12 bg-green-500 hover:bg-green-600 font-bold text-white rounded flex items-center justify-center ${
+                        className={`w-12 h-12 wallet-btn-primary font-bold rounded flex items-center justify-center ${
                           isScanning ? 'opacity-50 cursor-not-allowed' : ''
                         }`}
                         disabled={isScanning}
@@ -361,7 +381,7 @@ const SelectContractFunctionPopup: React.FC<
                     <button
                       type="button"
                       onClick={() => generateMessage(input.name)}
-                      className={`bg-green-500 hover:bg-green-600 text-white font-bold py-2 px-4 rounded ${
+                      className={`wallet-btn-primary ${
                         !messageInput[input.name]
                           ? 'opacity-50 cursor-not-allowed'
                           : ''
@@ -371,7 +391,7 @@ const SelectContractFunctionPopup: React.FC<
                       Generate Message
                     </button>
                     {inputValuesState[input.name] && (
-                      <div className="mt-2 text-sm text-gray-600">
+                      <div className="mt-2 text-sm wallet-muted">
                         Message: {shortenTxHash(inputValuesState[input.name])}
                       </div>
                     )}
@@ -381,7 +401,7 @@ const SelectContractFunctionPopup: React.FC<
 
               return (
                 <div key={index} className="mb-4">
-                  <label className="block text-sm font-bold text-gray-700 mb-1">
+                  <label className="block text-sm font-bold wallet-muted mb-1">
                     {input.name} ({input.type})
                   </label>
                   {isAddressType ? (
@@ -390,7 +410,7 @@ const SelectContractFunctionPopup: React.FC<
                         <button
                           type="button"
                           onClick={() => openAddressPopup(input)}
-                          className="bg-blue-500 hover:bg-blue-600 text-white font-bold py-2 px-4 rounded min-w-fit mr-2"
+                          className="wallet-btn-primary min-w-fit mr-2"
                           disabled={isScanning}
                           aria-label={`Select Address for ${input.name}`}
                         >
@@ -399,7 +419,7 @@ const SelectContractFunctionPopup: React.FC<
                         <button
                           type="button"
                           onClick={() => scanBarcode(input.name, input.type)}
-                          className={`w-12 h-12 bg-green-500 hover:bg-green-600 font-bold text-white rounded flex items-center justify-center ${
+                          className={`w-12 h-12 wallet-btn-primary rounded flex items-center justify-center ${
                             isScanning ? 'opacity-50 cursor-not-allowed' : ''
                           }`}
                           disabled={isScanning}
@@ -409,7 +429,7 @@ const SelectContractFunctionPopup: React.FC<
                         </button>
                       </div>
                       {inputValuesState[input.name] && (
-                        <div className="mt-2 text-sm text-gray-600">
+                        <div className="mt-2 text-sm wallet-muted">
                           Selected {input.type}:{' '}
                           {shortenTxHash(inputValuesState[input.name])}
                         </div>
@@ -421,7 +441,7 @@ const SelectContractFunctionPopup: React.FC<
                       name={input.name}
                       value={inputValuesState[input.name] || ''}
                       onChange={handleInputChange}
-                      className="border p-2 w-full rounded-md"
+                      className="wallet-input w-full"
                       placeholder={`Enter ${input.name}`}
                     />
                   )}
@@ -431,10 +451,10 @@ const SelectContractFunctionPopup: React.FC<
         </div>
         <div className="flex justify-end">
           <button
-            className={`font-bold text-white py-2 px-4 rounded mr-2 ${
+            className={`wallet-btn-primary mr-2 ${
               !selectedFunction || !allInputsFilled
-                ? 'bg-gray-500 cursor-not-allowed'
-                : 'bg-green-500 hover:bg-green-600'
+                ? 'opacity-50 cursor-not-allowed'
+                : ''
             }`}
             onClick={handleSelect}
             disabled={!selectedFunction || !allInputsFilled}
@@ -442,7 +462,7 @@ const SelectContractFunctionPopup: React.FC<
             Select
           </button>
           <button
-            className="bg-red-500 hover:bg-red-600 font-bold text-white py-2 px-4 rounded"
+            className="wallet-btn-danger"
             onClick={onClose}
           >
             Back

@@ -1,14 +1,19 @@
 // src/apis/ChaingraphManager/ChaingraphManager.ts
 
 import { store } from '../../redux/store';
-import { getInfraUrls } from '../../utils/servers/InfraUrls';
+import {
+  getInfraUrlPools,
+  runWithFailover,
+} from '../../utils/servers/InfraUrls';
 
-export interface GraphQLResponse<T = any> {
+export interface GraphQLResponse<T = Record<string, unknown>> {
   data?: T;
-  errors?: any;
+  errors?: unknown;
 }
 
-async function queryChainGraph<T = any>(
+const CHAINGRAPH_TIMEOUT_MS = 12000;
+
+async function queryChainGraph<T = Record<string, unknown>>(
   queryReq: string
 ): Promise<GraphQLResponse<T>> {
   const jsonObj = {
@@ -19,14 +24,35 @@ async function queryChainGraph<T = any>(
 
   try {
     const net = store.getState().network.currentNetwork;
-    const { chaingraphUrl } = getInfraUrls(net);
-    const response = await fetch(chaingraphUrl, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(jsonObj),
-    });
+    const { chaingraphUrls } = getInfraUrlPools(net);
+    return await runWithFailover(
+      `chaingraph:${net}`,
+      chaingraphUrls,
+      async (chaingraphUrl) => {
+        const controller = new AbortController();
+        const timeout = setTimeout(
+          () => controller.abort(),
+          CHAINGRAPH_TIMEOUT_MS
+        );
+        let response: Response;
+        try {
+          response = await fetch(chaingraphUrl, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(jsonObj),
+            signal: controller.signal,
+          });
+        } finally {
+          clearTimeout(timeout);
+        }
 
-    return (await response.json()) as GraphQLResponse<T>;
+        if (!response.ok) {
+          throw new Error(`HTTP ${response.status}`);
+        }
+
+        return (await response.json()) as GraphQLResponse<T>;
+      }
+    );
   } catch (error) {
     console.error('Error querying ChainGraph:', error);
     throw new Error('Failed to query ChainGraph');
@@ -195,7 +221,7 @@ export async function queryUnspentOutputsByLockingBytecode(
 /**
  * Utility for callers to strip Chaingraph byte strings: "\\x<hex>" -> "<hex>"
  */
-export function stripChaingraphHexBytes(x: any): string {
+export function stripChaingraphHexBytes(x: unknown): string {
   if (!x) return '';
   return String(x)
     .trim()

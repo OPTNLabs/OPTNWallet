@@ -1,6 +1,3 @@
-// src/components/confirm/TxSummary.tsx
-import type { TransactionOutput, UTXO } from '../../types/types';
-
 export type TxSummaryInput = {
   txid: string;
   vout: number;
@@ -17,8 +14,8 @@ export type TxSummaryOutput = {
 
 type Props = {
   // Legacy/generic shape
-  inputs?: TxSummaryInput[];
-  outputs?: TxSummaryOutput[];
+  inputs?: unknown[];
+  outputs?: unknown[];
   txSizeBytes?: number;
   feeSats?: number;
   feeRate?: number;
@@ -28,13 +25,10 @@ type Props = {
   fee?: bigint;
   title?: string;
   subtitle?: string;
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  inputsRaw?: any[];
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  outputsRaw?: any[];
+  inputsRaw?: unknown[];
+  outputsRaw?: unknown[];
   // Backward-compatible aliases used by current app
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  [k: string]: any;
+  [k: string]: unknown;
 };
 
 function fmt(n: number) {
@@ -63,46 +57,52 @@ function shortAddr(addr: string) {
 }
 
 function normalizeInputs(
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  maybeUtxoInputs: any[] | undefined,
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  maybeGenericInputs: any[] | undefined
+  maybeUtxoInputs: unknown[] | undefined,
+  maybeGenericInputs: unknown[] | undefined
 ): TxSummaryInput[] {
   if (Array.isArray(maybeGenericInputs) && maybeGenericInputs.length > 0) {
-    return maybeGenericInputs.map((i) => ({
-      txid: String(i.txid ?? ''),
-      vout: Number(i.vout ?? 0),
-      sats: toNum(i.sats ?? 0),
-      token: !!i.token,
-    }));
+    return maybeGenericInputs.map((i) => {
+      const row = (i ?? {}) as Record<string, unknown>;
+      return {
+        txid: String(row.txid ?? ''),
+        vout: Number(row.vout ?? 0),
+        sats: toNum(row.sats ?? 0),
+        token: !!row.token,
+      };
+    });
   }
   if (!Array.isArray(maybeUtxoInputs)) return [];
-  return maybeUtxoInputs.map((u) => ({
-    txid: String(u.tx_hash ?? ''),
-    vout: Number(u.tx_pos ?? 0),
-    sats: toNum(u.value ?? u.amount ?? 0),
-    token: !!u.token,
-  }));
+  return maybeUtxoInputs.map((u) => {
+    const row = (u ?? {}) as Record<string, unknown>;
+    return {
+      txid: String(row.tx_hash ?? ''),
+      vout: Number(row.tx_pos ?? 0),
+      sats: toNum(row.value ?? row.amount ?? 0),
+      token: !!row.token,
+    };
+  });
 }
 
 function normalizeOutputs(
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  maybeTxOutputs: any[] | undefined,
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  maybeGenericOutputs: any[] | undefined
+  maybeTxOutputs: unknown[] | undefined,
+  maybeGenericOutputs: unknown[] | undefined
 ): TxSummaryOutput[] {
   if (Array.isArray(maybeGenericOutputs) && maybeGenericOutputs.length > 0) {
-    return maybeGenericOutputs.map((o, idx) => ({
-      index: Number(o.index ?? idx),
-      address: String(o.address ?? ''),
-      sats: toNum(o.sats ?? 0),
-      kind: o.kind === 'token' ? 'token' : 'bch',
-    }));
+    return maybeGenericOutputs.map((o, idx) => {
+      const row = (o ?? {}) as Record<string, unknown>;
+      return {
+        index: Number(row.index ?? idx),
+        address: String(row.address ?? ''),
+        sats: toNum(row.sats ?? 0),
+        kind: row.kind === 'token' ? 'token' : 'bch',
+      };
+    });
   }
   if (!Array.isArray(maybeTxOutputs)) return [];
   return maybeTxOutputs
-    .map((o: TransactionOutput, idx: number) => {
-      if ('opReturn' in o && o.opReturn) {
+    .map((o, idx: number) => {
+      const row = (o ?? {}) as Record<string, unknown>;
+      if (Array.isArray(row.opReturn)) {
         return {
           index: idx,
           address: 'OP_RETURN',
@@ -112,20 +112,18 @@ function normalizeOutputs(
       }
       return {
         index: idx,
-        address: String(o.recipientAddress ?? ''),
-        sats: toNum(o.amount ?? 0),
-        kind: o.token ? 'token' as const : 'bch' as const,
+        address: String(row.recipientAddress ?? ''),
+        sats: toNum(row.amount ?? 0),
+        kind: row.token ? ('token' as const) : ('bch' as const),
       };
     });
 }
 
 export default function TxSummary(props: Props) {
-  const utxoInputs = ((props.inputs as unknown as UTXO[]) ??
-    props.inputsRaw) as unknown[] | undefined;
-  const txOutputs = ((props.outputs as unknown as TransactionOutput[]) ??
-    props.outputsRaw) as unknown[] | undefined;
-  const genericInputs = props.inputs as unknown[] | undefined;
-  const genericOutputs = props.outputs as unknown[] | undefined;
+  const genericInputs = props.inputs;
+  const genericOutputs = props.outputs;
+  const utxoInputs = props.inputsRaw ?? props.inputs;
+  const txOutputs = props.outputsRaw ?? props.outputs;
   const inputs = normalizeInputs(utxoInputs, genericInputs);
   const outputs = normalizeOutputs(txOutputs, genericOutputs);
 
@@ -146,15 +144,15 @@ export default function TxSummary(props: Props) {
         <div className="space-y-1">
           {props.title ? <div className="text-lg font-semibold">{props.title}</div> : null}
           {props.subtitle ? (
-            <div className="text-sm text-gray-600">{props.subtitle}</div>
+            <div className="text-sm wallet-muted">{props.subtitle}</div>
           ) : null}
         </div>
       )}
 
-      <div className="rounded-2xl border bg-white overflow-hidden">
+      <div className="wallet-card overflow-hidden">
         <div className="px-4 py-3 border-b">
-          <div className="text-sm text-gray-600">Inputs</div>
-          <div className="text-base sm:text-lg font-semibold">
+          <div className="text-sm wallet-muted">Inputs</div>
+          <div className="text-base sm:text-lg font-semibold wallet-text-strong">
             {inputs.length} • {fmt(inTotal)} sats
           </div>
         </div>
@@ -169,7 +167,7 @@ export default function TxSummary(props: Props) {
                 <div className="font-mono text-sm sm:text-base truncate">
                   {shortRef(i.txid, i.vout)}
                 </div>
-                <div className="text-sm text-gray-600">
+                <div className="text-sm wallet-muted">
                   {i.token ? 'token input' : 'bch input'}
                 </div>
               </div>
@@ -182,10 +180,10 @@ export default function TxSummary(props: Props) {
         </div>
       </div>
 
-      <div className="rounded-2xl border bg-white overflow-hidden">
+      <div className="wallet-card overflow-hidden">
         <div className="px-4 py-3 border-b">
-          <div className="text-sm text-gray-600">Outputs</div>
-          <div className="text-base sm:text-lg font-semibold">
+          <div className="text-sm wallet-muted">Outputs</div>
+          <div className="text-base sm:text-lg font-semibold wallet-text-strong">
             {outputs.length} • {fmt(outTotal)} sats
           </div>
         </div>
@@ -213,19 +211,19 @@ export default function TxSummary(props: Props) {
         </div>
       </div>
 
-      <div className="rounded-2xl border bg-white px-4 py-3">
+      <div className="wallet-card px-4 py-3">
         <div className="grid grid-cols-2 gap-y-2 text-sm sm:text-base">
-          <div className="text-gray-600">Tx size</div>
+          <div className="wallet-muted">Tx size</div>
           <div className="text-right font-semibold">
             {txSizeBytes != null ? `${fmt(txSizeBytes)} bytes` : '—'}
           </div>
 
-          <div className="text-gray-600">Fee</div>
+          <div className="wallet-muted">Fee</div>
           <div className="text-right font-semibold">
             {feeSats != null ? `${fmt(feeSats)} sats` : '—'}
           </div>
 
-          <div className="text-gray-600">Fee rate</div>
+          <div className="wallet-muted">Fee rate</div>
           <div className="text-right font-semibold">
             {computedFeeRate != null ? `${computedFeeRate} sat/byte` : '—'}
           </div>

@@ -16,7 +16,7 @@ interface SelectedUTXOsDisplayProps {
   selectedUtxos: UTXO[];
   selectedAddresses: string[];
   selectedContractAddresses: string[];
-  totalSelectedUtxoAmount: BigInt;
+  totalSelectedUtxoAmount: bigint;
   handleUtxoClick: (utxo: UTXO) => void;
   currentNetwork: Network;
 }
@@ -113,9 +113,13 @@ export default function SelectedUTXOsDisplay({
   // Fetch token metadata when categories change
   useEffect(() => {
     const svc = new BcmrService();
-    const missing = selectedUtxos
-      .map((u) => u.token?.category)
-      .filter((c): c is string => !!c && !(c in tokenMetadata));
+    const missing = Array.from(
+      new Set(
+        selectedUtxos
+          .map((u) => u.token?.category)
+          .filter((c): c is string => !!c && !(c in tokenMetadata))
+      )
+    );
 
     if (missing.length === 0) return;
 
@@ -138,16 +142,16 @@ export default function SelectedUTXOsDisplay({
           // ignore
         }
       }
-      setTokenMetadata((prev) => ({ ...prev, ...newMeta }));
+      if (Object.keys(newMeta).length > 0) {
+        setTokenMetadata((prev) => ({ ...prev, ...newMeta }));
+      }
     })();
   }, [selectedUtxos, tokenMetadata]);
 
   const togglePopup = () => setShowPopup((v) => !v);
 
   // Total BCH string (BigInt-safe)
-  const totalBchStr = formatSatsToBchString(
-    totalSelectedUtxoAmount as unknown as bigint
-  );
+  const totalBchStr = formatSatsToBchString(totalSelectedUtxoAmount);
   const totalBchNum = parseFloat(totalBchStr);
   const totalUsd = Number.isFinite(totalBchNum)
     ? (totalBchNum * bchUsd).toFixed(2)
@@ -160,7 +164,7 @@ export default function SelectedUTXOsDisplay({
           <h3 className="text-lg font-semibold ">Transaction Inputs</h3>
           <button
             onClick={togglePopup}
-            className="bg-blue-500 font-bold text-white py-1 px-2 rounded hover:bg-blue-600 transition-colors duration-200"
+            className="wallet-btn-primary font-bold py-1 px-2"
           >
             Show Inputs
           </button>
@@ -196,7 +200,7 @@ export default function SelectedUTXOsDisplay({
                   <button
                     key={key}
                     onClick={() => handleUtxoClick(utxo)}
-                    className="flex flex-col items-start mb-2 w-full break-words whitespace-normal border p-2 rounded bg-blue-100"
+                    className="flex flex-col items-start mb-2 w-full break-words whitespace-normal border border-[var(--wallet-border)] p-2 rounded wallet-surface-strong"
                   >
                     {/* Address */}
                     <span className="w-full">
@@ -234,7 +238,7 @@ export default function SelectedUTXOsDisplay({
                       </span>
                     )}
                     {!utxo.unlocker && utxo.abi && (
-                      <span className="text-red-500 w-full">
+                      <span className="wallet-danger-text w-full">
                         Missing unlocker!
                       </span>
                     )}
@@ -260,7 +264,7 @@ export default function SelectedUTXOsDisplay({
                       ) : (
                         <>
                           <div className="flex items-center">
-                            <FaBitcoin className="text-green-500 text-3xl mr-2" />
+                            <FaBitcoin className="wallet-accent-icon text-3xl mr-2" />
                             <span className="font-medium">Bitcoin Cash</span>
                           </div>
                           <span />

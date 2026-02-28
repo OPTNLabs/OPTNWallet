@@ -6,6 +6,8 @@ import { TransactionOutput, UTXO } from '../../types/types';
 import { shortenTxHash } from '../../utils/shortenHash';
 import { DUST, SATSINBITCOIN } from '../../utils/constants';
 
+const FEE_RESERVE_SATS = 2000n;
+
 interface RegularTxViewProps {
   recipientAddress: string;
   setRecipientAddress: (address: string) => void;
@@ -43,9 +45,6 @@ const RegularTxView: React.FC<RegularTxViewProps> = ({
   txOutputs,
 }) => {
   const [inputTokenAmount, setInputTokenAmount] = useState<string>('');
-
-  // Reserve 2000 sats to cover fees (~1 sat/byte * <=2000 bytes)
-  const FEE_RESERVE_SATS = 2000n;
 
   const isNft =
     selectedTokenCategory && selectedTokenCategory !== 'none'
@@ -104,10 +103,6 @@ const RegularTxView: React.FC<RegularTxViewProps> = ({
     const decimalPart = padded.slice(-decimals).padEnd(decimals, '0');
     return `${integerPart}.${decimalPart}`;
   };
-
-  useEffect(() => {
-    console.log(txOutputs);
-  }, [txOutputs]);
 
   useEffect(() => {
     if (selectedTokenCategory === 'none') {
@@ -172,11 +167,11 @@ const RegularTxView: React.FC<RegularTxViewProps> = ({
             type="text"
             value={recipientAddress}
             onChange={(e) => setRecipientAddress(e.target.value)}
-            className="border p-2 w-full break-words whitespace-normal"
+            className="wallet-input w-full break-words whitespace-normal"
           />
           <button
             onClick={() => void scanBarcode()} // ✅ avoid unhandled promise
-            className="ml-2 bg-green-500 text-white p-2 rounded"
+            className="ml-2 wallet-btn-primary p-2"
             title="Scan QR Code"
           >
             <FaCamera />
@@ -191,10 +186,10 @@ const RegularTxView: React.FC<RegularTxViewProps> = ({
             <button
               onClick={() => setTransferAmount(Number(remainingSpendable))}
               disabled={remainingSpendable === 0n}
-              className={`border border-gray-300 px-3 py-1 rounded transition-colors ${
+              className={`px-3 py-1 rounded transition-colors ${
                 remainingSpendable === 0n
-                  ? 'bg-gray-300 text-gray-600 cursor-not-allowed'
-                  : 'bg-blue-500 text-white hover:bg-blue-600'
+                  ? 'wallet-btn-secondary opacity-60 cursor-not-allowed'
+                  : 'wallet-btn-primary'
               }`}
               title={
                 remainingSpendable === 0n
@@ -227,12 +222,12 @@ const RegularTxView: React.FC<RegularTxViewProps> = ({
                 : BigInt(Math.round(parseFloat(value) * 100_000_000));
             setTransferAmount(Number(satoshis));
           }}
-          className="border p-2 w-full break-words whitespace-normal"
+          className="wallet-input w-full break-words whitespace-normal"
           min={Number(DUST) / 100_000_000}
           max={Number(remainingSpendable) / 100_000_000}
         />
 
-        <div className="mt-1 text-xs text-gray-600">
+        <div className="mt-1 text-xs wallet-muted">
           Leaving a {Number(FEE_RESERVE_SATS)} sat fee reserve.
         </div>
       </div>
@@ -262,7 +257,7 @@ const RegularTxView: React.FC<RegularTxViewProps> = ({
                     setInputTokenAmount(formattedMax);
                     setTokenAmount(maxTokenAmount); // ✅ fix: bigint safe
                   }}
-                  className="border border-gray-300 bg-blue-500 text-white px-3 py-1 rounded hover:bg-blue-600 transition-colors"
+                  className="wallet-btn-primary px-3 py-1"
                 >
                   Max (
                   {formatTokenAmount(
@@ -281,14 +276,14 @@ const RegularTxView: React.FC<RegularTxViewProps> = ({
               value={0}
               disabled
               readOnly
-              className="border p-2 w-full break-words whitespace-normal text-gray-400 bg-gray-100"
+              className="wallet-input w-full break-words whitespace-normal wallet-muted wallet-surface-strong"
             />
           ) : (
             <input
               type="text"
               value={inputTokenAmount}
               onChange={handleInputTokenAmountChange}
-              className="border p-2 w-full break-words whitespace-normal"
+              className="wallet-input w-full break-words whitespace-normal"
               placeholder={`Enter amount (max ${formatTokenAmount(
                 tokenTotals[selectedTokenCategory] || BigInt(0),
                 tokenMetadata[selectedTokenCategory]?.decimals || 0
@@ -303,7 +298,7 @@ const RegularTxView: React.FC<RegularTxViewProps> = ({
         <select
           value={selectedTokenCategory}
           onChange={(e) => setSelectedTokenCategory(e.target.value)}
-          className="border p-2 w-full break-words whitespace-normal"
+          className="wallet-input w-full break-words whitespace-normal"
         >
           <option value="none">None</option>
           {categoriesFromSelected.map((category) => {
@@ -341,7 +336,7 @@ const RegularTxView: React.FC<RegularTxViewProps> = ({
       <div className="flex flex-col items-end justific-end mt-4">
         <button
           onClick={() => void handleAddOutput()} // ✅ avoid unhandled promise
-          className="bg-blue-500 font-bold text-white py-2 px-4 rounded"
+          className="wallet-btn-primary"
         >
           Add Output
         </button>

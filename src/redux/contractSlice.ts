@@ -28,7 +28,7 @@ const contractSlice = createSlice({
       // );
       state.selectedFunction = action.payload;
     },
-    setInputs: (state, action: PayloadAction<any[]>) => {
+    setInputs: (state, action: PayloadAction<ContractInput[]>) => {
       // console.log('Reducer: setInputs called with payload:', action.payload);
       state.inputs = action.payload;
     },

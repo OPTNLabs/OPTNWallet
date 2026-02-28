@@ -30,21 +30,21 @@ const BitcoinCashCard: React.FC<Props> = ({ totalAmount }) => {
   const totalUsd = (totalBch * safeRate).toFixed(2);
 
   return (
-    <div className="p-4 mb-4 border rounded-lg shadow-md bg-white flex flex-col w-full max-w-md">
+    <div className="wallet-card p-4 mb-4 flex flex-col w-full max-w-md">
       <div className="flex items-center justify-between">
         <div className="flex items-center space-x-3">
-          <FaBitcoin className="text-green-500 text-3xl" />
+          <FaBitcoin className="wallet-accent-icon text-3xl" />
           {mode === DisplayMode.BCH ? (
             <div>
               <div className="text-lg font-bold">${totalUsd} USD</div>
-              <div className="text-sm text-gray-600">
+              <div className="text-sm wallet-muted">
                 {totalBch.toFixed(8)} BCH
               </div>
             </div>
           ) : (
             <div>
               <div className="text-lg font-bold">{totalBch.toFixed(8)} BCH</div>
-              <div className="text-sm text-gray-600">${totalUsd} USD</div>
+              <div className="text-sm wallet-muted">${totalUsd} USD</div>
             </div>
           )}
         </div>
@@ -53,7 +53,7 @@ const BitcoinCashCard: React.FC<Props> = ({ totalAmount }) => {
           {mode !== DisplayMode.BCH && (
             <button
               onClick={() => setMode(DisplayMode.BCH)}
-              className="p-1 px-3 rounded text-white bg-green-500 font-bold hover:bg-green-600 transition duration-200"
+              className="wallet-btn-primary p-1 px-3"
             >
               BCH
             </button>
@@ -61,7 +61,7 @@ const BitcoinCashCard: React.FC<Props> = ({ totalAmount }) => {
           {mode !== DisplayMode.USD && (
             <button
               onClick={() => setMode(DisplayMode.USD)}
-              className="p-1 px-3 rounded text-white bg-gray-500 font-bold hover:bg-gray-600 transition duration-200"
+              className="wallet-btn-secondary p-1 px-3"
             >
               USD
             </button>
@@ -70,7 +70,7 @@ const BitcoinCashCard: React.FC<Props> = ({ totalAmount }) => {
       </div>
 
       {/* tiny status footer */}
-      {/* <div className="mt-2 text-xs text-gray-400">
+      {/* <div className="mt-2 text-xs wallet-muted">
         {bchQuote
           ? `Source: ${bchQuote.source} • Updated ${Math.max(
               0,

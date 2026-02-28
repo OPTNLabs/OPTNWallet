@@ -4,17 +4,9 @@ import AddressManager from '../AddressManager/AddressManager';
 import { Address } from '../../types/types';
 import { Network } from '../../redux/networkSlice';
 import { PREFIX } from '../../utils/constants';
+import { isArrayBufferLike, isString } from '../../utils/typeGuards';
 
-// Type guards and helper function for type conversions
-function isString(value: any): value is string {
-  return typeof value === 'string';
-}
-
-function isArrayBufferLike(value: any): value is ArrayBufferLike {
-  return value instanceof Uint8Array || value instanceof ArrayBuffer;
-}
-
-function toString(value: any): string {
+function toString(value: unknown): string {
   return isString(value) ? value : String(value);
 }
 
@@ -105,7 +97,10 @@ export default function KeyManager() {
     const getIdQuery = db.prepare(
       `SELECT mnemonic, passphrase FROM wallets WHERE id = ?;`
     );
-    const row = getIdQuery.get([wallet_id]) as (string | number | undefined)[];
+    const row =
+      (getIdQuery.get([wallet_id]) as
+        | (string | number | undefined)[]
+        | undefined) ?? [];
     getIdQuery.free();
 
     const result = dbService.resultToJSON([toString(row[0]), toString(row[1])]);
@@ -203,10 +198,10 @@ export default function KeyManager() {
       WHERE address = ?;
     `);
 
-    const result = fetchAddressQuery.get([address]) as any;
+    const result = fetchAddressQuery.get([address]) as unknown[] | undefined;
     fetchAddressQuery.free();
 
-    if (!result || result[0] == null) {
+    if (!result || result.length === 0 || result[0] == null) {
       throw new Error(`No private key found for address: ${address}`);
     }
 

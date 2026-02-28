@@ -6,10 +6,29 @@
  * Goals:
  * - Allow add-ons to contribute contracts + callable functions to the app.
  * - Allow add-ons to do HTTP only via an explicit allowlist (domain-based).
+ * - Gate SDK access behind explicit capability permissions.
  * - Disallow anything that could access wallet secrets directly.
  */
 
 export type AddonId = string;
+
+export const ADDON_CAPABILITIES = [
+  'wallet:context:read',
+  'wallet:addresses:read',
+  'utxo:wallet:read',
+  'utxo:address:read',
+  'utxo:address:refresh',
+  'chain:query',
+  'tx:build',
+  'tx:add_output',
+  'tx:broadcast',
+  'contracts:derive',
+  'ui:confirm',
+  'signing:signature_template',
+  'http:fetch_json',
+] as const;
+
+export type AddonCapability = (typeof ADDON_CAPABILITIES)[number];
 
 export type AddonPermission =
   | {
@@ -19,6 +38,10 @@ export type AddonPermission =
        * Example: ["api.example.com", "myservice.io"]
        */
       domains: string[];
+    }
+  | {
+      kind: 'capabilities';
+      capabilities: AddonCapability[];
     }
   | {
       kind: 'none';
@@ -60,6 +83,12 @@ export interface AddonAppDefinition {
    * Keep as unknown for v1 so we can evolve without breaking addons.
    */
   config?: unknown;
+
+  /**
+   * Optional app-level capability subset.
+   * If present, the host should expose only these capabilities to this app.
+   */
+  requiredCapabilities?: AddonCapability[];
 }
 
 export interface ResolvedAddonAppDefinition extends AddonAppDefinition {
@@ -113,7 +142,7 @@ export interface AddonManifest {
 
   /**
    * Permissions requested by the addon.
-   * v1: only `http` (restricted by global allowlist).
+   * v1: `http` (domain-restricted) + `capabilities` (SDK scope).
    */
   permissions: AddonPermission[];
 
@@ -132,6 +161,12 @@ export interface AddonManifest {
    * For builtins this can be omitted.
    */
   enabledByDefault?: boolean;
+
+  /**
+   * Optional trust tier assigned during review.
+   * This should tune policy (prompt frequency/limits), never bypass capabilities.
+   */
+  trustTier?: 'restricted' | 'reviewed' | 'internal';
 
   /**
    * Optional apps exposed by the addon (data-only).
