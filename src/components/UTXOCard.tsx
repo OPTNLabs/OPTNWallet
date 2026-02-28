@@ -1,5 +1,5 @@
 // src/components/UTXOCard.tsx
-import React, { useState, useEffect } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { FaBitcoin } from 'react-icons/fa';
 import { shortenTxHash } from '../utils/shortenHash';
 import { UTXO } from '../types/types';
@@ -65,37 +65,54 @@ function formatTokenAmount(
 const UTXOCard: React.FC<UTXOCardProps> = ({ utxos, loading }) => {
   // State to store icon data URIs, keyed by category
   const [iconUris, setIconUris] = useState<Record<string, string | null>>({});
+  const bcmr = useMemo(() => new BcmrService(), []);
+  const queuedCategories = useRef<Set<string>>(new Set());
 
   // Fetch icons when utxos change
   useEffect(() => {
-    const fetchIcons = async () => {
-      // Get unique token categories from utxos
-      const categories = Array.from(
-        new Set(utxos.filter((u) => u.token).map((u) => u.token!.category))
-      );
-      const bcmr = new BcmrService();
+    let isActive = true;
 
-      for (const category of categories) {
-        // Skip if already fetched or in progress
-        if (iconUris[category] !== undefined) continue;
+    const categories = Array.from(
+      new Set(
+        utxos
+          .map((u) => u.token?.category)
+          .filter((category): category is string => Boolean(category))
+      )
+    );
+    const toFetch = categories.filter((category) => {
+      if (queuedCategories.current.has(category)) return false;
+      queuedCategories.current.add(category);
+      return true;
+    });
 
+    if (toFetch.length === 0) return () => undefined;
+
+    void Promise.all(
+      toFetch.map(async (category) => {
         try {
           const authbase = await bcmr.getCategoryAuthbase(category);
           const iconUri = await bcmr.resolveIcon(authbase);
-          setIconUris((prev) => ({ ...prev, [category]: iconUri }));
-        } catch (error) {
-          setIconUris((prev) => ({ ...prev, [category]: null }));
+          if (!isActive) return;
+          setIconUris((prev) =>
+            prev[category] === undefined ? { ...prev, [category]: iconUri } : prev
+          );
+        } catch {
+          if (!isActive) return;
+          setIconUris((prev) =>
+            prev[category] === undefined ? { ...prev, [category]: null } : prev
+          );
         }
-      }
-    };
+      })
+    );
 
-    fetchIcons();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [utxos]); // keep simple; iconUris is intentionally not a dependency to avoid loops
+    return () => {
+      isActive = false;
+    };
+  }, [bcmr, utxos]);
 
   if (loading) {
     return (
-      <div className="flex items-center text-gray-500">
+      <div className="flex items-center wallet-muted">
         <svg className="animate-spin h-5 w-5 mr-2" viewBox="0 0 24 24">
           <circle
             className="opacity-25"
@@ -135,7 +152,7 @@ const UTXOCard: React.FC<UTXOCardProps> = ({ utxos, loading }) => {
         return (
           <div
             key={i}
-            className="p-3 mb-3 border rounded-lg grid grid-cols-[1fr_auto] gap-4"
+            className="wallet-card p-3 mb-3 grid grid-cols-[1fr_auto] gap-4"
           >
             <div className="space-y-1 text-sm">
               {isToken ? (
@@ -184,13 +201,13 @@ const UTXOCard: React.FC<UTXOCardProps> = ({ utxos, loading }) => {
                         className="w-12 h-12 rounded"
                       />
                     ) : (
-                      <div className="w-12 h-12 bg-gray-200 rounded flex items-center justify-center">
-                        <span className="text-gray-500">No Icon</span>
+                      <div className="w-12 h-12 wallet-surface-strong rounded flex items-center justify-center">
+                        <span className="wallet-muted">No Icon</span>
                       </div>
                     )
                   ) : (
-                    <div className="w-12 h-12 bg-gray-200 rounded flex items-center justify-center">
-                      <span className="text-gray-500">Loading...</span>
+                    <div className="w-12 h-12 wallet-surface-strong rounded flex items-center justify-center">
+                      <span className="wallet-muted">Loading...</span>
                     </div>
                   )}
                   <span className="text-base font-medium text-center">
@@ -199,7 +216,7 @@ const UTXOCard: React.FC<UTXOCardProps> = ({ utxos, loading }) => {
                 </>
               ) : (
                 <>
-                  <FaBitcoin className="text-green-500 text-4xl" />
+                  <FaBitcoin className="wallet-accent-icon text-4xl" />
                   <span className="text-base font-medium text-center">
                     Bitcoin Cash
                   </span>
@@ -210,7 +227,7 @@ const UTXOCard: React.FC<UTXOCardProps> = ({ utxos, loading }) => {
         );
       })}
 
-      {!utxos.length && <p className="text-gray-500">No UTXOs to display.</p>}
+      {!utxos.length && <p className="wallet-muted">No UTXOs to display.</p>}
     </div>
   );
 };

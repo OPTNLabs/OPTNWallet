@@ -66,9 +66,9 @@ const UTXOSelection: React.FC<UTXOSelectionProps> = ({
 
   // Reusable component for rendering fungible and non-fungible token sections
   const TokenSection: React.FC<{
-    utxos: any[];
-    selectedUtxos: any[];
-    handleUtxoClick: (utxo: any) => void;
+    utxos: UTXO[];
+    selectedUtxos: UTXO[];
+    handleUtxoClick: (utxo: UTXO) => void;
   }> = ({ utxos, selectedUtxos, handleUtxoClick }) => {
     const fungibleUtxos = utxos.filter((u) => !u.token?.nft);
     const nonFungibleUtxos = utxos.filter((u) => u.token?.nft);
@@ -87,8 +87,8 @@ const UTXOSelection: React.FC<UTXOSelectionProps> = ({
                     (s) =>
                       s.tx_hash === utxo.tx_hash && s.tx_pos === utxo.tx_pos
                   )
-                    ? 'bg-blue-100'
-                    : 'bg-white'
+                    ? 'wallet-selectable-active'
+                    : 'wallet-selectable-inactive'
                 }`}
               >
                 <UTXOCard utxos={[utxo]} loading={false} />
@@ -108,8 +108,8 @@ const UTXOSelection: React.FC<UTXOSelectionProps> = ({
                     (s) =>
                       s.tx_hash === utxo.tx_hash && s.tx_pos === utxo.tx_pos
                   )
-                    ? 'bg-blue-100'
-                    : 'bg-white'
+                    ? 'wallet-selectable-active'
+                    : 'wallet-selectable-inactive'
                 }`}
               >
                 <UTXOCard utxos={[utxo]} loading={false} />
@@ -128,7 +128,7 @@ const UTXOSelection: React.FC<UTXOSelectionProps> = ({
         {(filteredRegularUTXOs.length > 0 ||
           contractRegularUTXOs.length > 0) && (
           <button
-            className="bg-blue-500 text-sm font-bold text-white py-2 px-4 rounded mb-2"
+            className="wallet-btn-primary text-sm font-bold mb-2"
             onClick={() => setShowRegularUTXOsPopup(true)}
           >
             Regular UTXOs
@@ -141,8 +141,8 @@ const UTXOSelection: React.FC<UTXOSelectionProps> = ({
               <button
                 className={`py-2 px-4 rounded ${
                   regularView === 'Wallet'
-                    ? 'bg-blue-500 text-white'
-                    : 'bg-gray-200 text-black'
+                    ? 'wallet-segment-active'
+                    : 'wallet-segment-inactive'
                 }`}
                 onClick={() => setRegularView('Wallet')}
               >
@@ -151,8 +151,8 @@ const UTXOSelection: React.FC<UTXOSelectionProps> = ({
               <button
                 className={`py-2 px-4 rounded ${
                   regularView === 'Contract'
-                    ? 'bg-blue-500 text-white'
-                    : 'bg-gray-200 text-black'
+                    ? 'wallet-segment-active'
+                    : 'wallet-segment-inactive'
                 }`}
                 onClick={() => setRegularView('Contract')}
               >
@@ -175,8 +175,8 @@ const UTXOSelection: React.FC<UTXOSelectionProps> = ({
                             selectedUtxo.tx_hash === utxo.tx_hash &&
                             selectedUtxo.tx_pos === utxo.tx_pos
                         )
-                          ? 'bg-blue-100'
-                          : 'bg-white'
+                          ? 'wallet-selectable-active'
+                          : 'wallet-selectable-inactive'
                       }`}
                     >
                       <UTXOCard utxos={[utxo]} loading={false} />
@@ -199,8 +199,8 @@ const UTXOSelection: React.FC<UTXOSelectionProps> = ({
                             selectedUtxo.tx_hash === utxo.tx_hash &&
                             selectedUtxo.tx_pos === utxo.tx_pos
                         )
-                          ? 'bg-blue-100'
-                          : 'bg-white'
+                          ? 'wallet-selectable-active'
+                          : 'wallet-selectable-inactive'
                       }`}
                     >
                       <UTXOCard utxos={[utxo]} loading={false} />
@@ -218,7 +218,7 @@ const UTXOSelection: React.FC<UTXOSelectionProps> = ({
         {(filteredCashTokenUTXOs.length > 0 ||
           contractCashTokenUTXOs.length > 0) && (
           <button
-            className="bg-blue-500 text-sm font-bold text-white py-2 px-4 rounded mb-2"
+            className="wallet-btn-primary text-sm font-bold mb-2"
             onClick={() => setShowCashTokenUTXOsPopup(true)}
           >
             CashToken UTXOs
@@ -230,8 +230,8 @@ const UTXOSelection: React.FC<UTXOSelectionProps> = ({
               <button
                 className={`py-2 px-4 rounded ${
                   cashTokenView === 'Wallet'
-                    ? 'bg-blue-500 text-white'
-                    : 'bg-gray-200 text-black'
+                    ? 'wallet-segment-active'
+                    : 'wallet-segment-inactive'
                 }`}
                 onClick={() => setCashTokenView('Wallet')}
               >
@@ -240,8 +240,8 @@ const UTXOSelection: React.FC<UTXOSelectionProps> = ({
               <button
                 className={`py-2 px-4 rounded ${
                   cashTokenView === 'Contract'
-                    ? 'bg-blue-500 text-white'
-                    : 'bg-gray-200 text-black'
+                    ? 'wallet-segment-active'
+                    : 'wallet-segment-inactive'
                 }`}
                 onClick={() => setCashTokenView('Contract')}
               >
@@ -282,7 +282,7 @@ const UTXOSelection: React.FC<UTXOSelectionProps> = ({
       <div className="mb-4">
         {paperWalletUTXOs.length > 0 && (
           <button
-            className="bg-green-500 font-bold text-sm text-white py-2 px-4 rounded mb-2 mr-2"
+            className="wallet-btn-primary font-bold text-sm mb-2 mr-2"
             onClick={() => setShowPaperWalletUTXOsPopup(true)}
           >
             Paper Wallet
@@ -302,8 +302,8 @@ const UTXOSelection: React.FC<UTXOSelectionProps> = ({
                         selectedUtxo.tx_hash === utxo.tx_hash &&
                         selectedUtxo.tx_pos === utxo.tx_pos
                     )
-                      ? 'bg-blue-100'
-                      : 'bg-white'
+                      ? 'wallet-selectable-active'
+                      : 'wallet-selectable-inactive'
                   }`}
                 >
                   <UTXOCard utxos={[utxo]} loading={false} />

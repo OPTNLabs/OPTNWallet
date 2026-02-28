@@ -1,4 +1,3 @@
-// @ts-nocheck
 
 // src/components/walletconnect/WalletConnectPanel.tsx
 import { useState, useCallback, useEffect } from 'react';
@@ -23,12 +22,11 @@ export default function WalletConnectPanel() {
   useEffect(() => {
     const now = Math.floor(Date.now() / 1000); // Current time in seconds
     const expiredTopics = Object.entries(sessions)
-      .filter(([topic, session]) => session.expiry && now > session.expiry)
+      .filter(([, session]) => session.expiry && now > session.expiry)
       .map(([topic]) => topic);
 
     // Disconnect all expired sessions
     expiredTopics.forEach((topic) => {
-      console.log(`Disconnecting expired session: ${topic}`);
       dispatch(disconnectSession(topic));
     });
   }, [sessions, dispatch]);

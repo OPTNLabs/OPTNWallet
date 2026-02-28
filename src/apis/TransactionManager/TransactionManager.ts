@@ -11,20 +11,13 @@ import {
 import DatabaseService from '../DatabaseManager/DatabaseService';
 import TransactionBuilderHelper from './TransactionBuilderHelper';
 import { DUST, TOKEN_OUTPUT_SATS } from '../../utils/constants';
-
-function estimateAddP2PKHOutputBytes(
-  baseTxBytes: number,
-  currentOutputsCount: number
-): number {
-  const OUTPUT_BYTES = 34;
-
-  const varintSize = (n: number) =>
-    n < 0xfd ? 1 : n <= 0xffff ? 3 : n <= 0xffffffff ? 5 : 9;
-  const before = varintSize(currentOutputsCount);
-  const after = varintSize(currentOutputsCount + 1);
-
-  return baseTxBytes + OUTPUT_BYTES + (after - before);
-}
+import { logError, toErrorMessage } from '../../utils/errorHandling';
+import {
+  estimateAddP2PKHOutputBytes,
+  formatMinRelayError,
+  hasExplicitManualChangeOutput,
+  txBytesFromHex,
+} from './feePolicy';
 
 export default function TransactionManager() {
   const dbService = DatabaseService();
@@ -39,6 +32,7 @@ export default function TransactionManager() {
     }
 
     let history: TransactionHistoryItem[] = [];
+    let transactionOpened = false;
 
     try {
       history = await ElectrumService.getTransactionHistory(address);
@@ -50,6 +44,7 @@ export default function TransactionManager() {
       const timestamp = new Date().toISOString();
 
       db.exec('BEGIN TRANSACTION');
+      transactionOpened = true;
 
       const upsertStmt = db.prepare(`
         INSERT INTO transactions (wallet_id, tx_hash, height, timestamp, amount)
@@ -65,12 +60,15 @@ export default function TransactionManager() {
 
       upsertStmt.free();
       db.exec('COMMIT');
+      transactionOpened = false;
     } catch (error) {
-      db.exec('ROLLBACK');
-      console.error(
-        `Failed to fetch and store transaction history for address ${address}:`,
-        error
-      );
+      if (transactionOpened) {
+        db.exec('ROLLBACK');
+      }
+      logError('TransactionManager.fetchAndStoreTransactionHistory', error, {
+        address,
+        walletId,
+      });
     }
 
     return history;
@@ -82,9 +80,9 @@ export default function TransactionManager() {
     let errorMessage: string | null = null;
     try {
       txid = await txBuilder.sendTransaction(rawTX);
-    } catch (error: any) {
-      console.error('Error sending transaction:', error);
-      errorMessage = 'Error sending transaction: ' + error.message;
+    } catch (error: unknown) {
+      logError('TransactionManager.sendTransaction', error);
+      errorMessage = 'Error sending transaction: ' + toErrorMessage(error);
     }
     return {
       txid,
@@ -147,8 +145,8 @@ export default function TransactionManager() {
           newOutput.recipientAddress = tokenAddress;
         }
 
-        if ((newOutput as any).amount < TOKEN_OUTPUT_SATS) {
-          (newOutput as any).amount = TOKEN_OUTPUT_SATS;
+        if (newOutput.amount < TOKEN_OUTPUT_SATS) {
+          newOutput.amount = TOKEN_OUTPUT_SATS;
         }
       } else if (genesisUtxo) {
         const isNftGenesis = nftCapability && nftCommitment !== undefined;
@@ -172,8 +170,8 @@ export default function TransactionManager() {
           newOutput.recipientAddress = tokenAddress;
         }
 
-        if ((newOutput as any).amount < TOKEN_OUTPUT_SATS) {
-          (newOutput as any).amount = TOKEN_OUTPUT_SATS;
+        if (newOutput.amount < TOKEN_OUTPUT_SATS) {
+          newOutput.amount = TOKEN_OUTPUT_SATS;
         }
       } else {
         console.warn(
@@ -191,11 +189,8 @@ export default function TransactionManager() {
   // ----------------------------
 
   function utxoSats(utxo: UTXO): bigint {
-    const raw: any =
-      (utxo as any).satoshis ??
-      (utxo as any).value ??
-      (utxo as any).amount ??
-      0;
+    const src = utxo as UTXO & { satoshis?: unknown };
+    const raw = src.satoshis ?? src.value ?? src.amount ?? 0;
 
     if (typeof raw === 'bigint') return raw;
     if (typeof raw === 'number') {
@@ -214,21 +209,13 @@ export default function TransactionManager() {
   function outputSats(o: TransactionOutput): bigint {
     if ('opReturn' in o && o.opReturn !== undefined) return 0n;
 
-    const hasToken = !!(o as any).token;
-
-    const raw: any = (o as any).amount;
+    const hasToken = !!o.token;
+    const raw = o.amount;
     let sats = 0n;
 
     if (typeof raw === 'bigint') sats = raw;
     else if (typeof raw === 'number')
       sats = BigInt(Number.isFinite(raw) ? Math.trunc(raw) : 0);
-    else if (typeof raw === 'string') {
-      try {
-        sats = BigInt(raw.trim() || '0');
-      } catch {
-        sats = 0n;
-      }
-    }
 
     // match TransactionBuilderHelper.prepareTransactionOutputs
     if (hasToken) {
@@ -247,30 +234,6 @@ export default function TransactionManager() {
     return outputs.reduce((sum, o) => sum + outputSats(o), 0n);
   }
 
-  function txBytesFromHex(hex: string): number {
-    return Math.floor(hex.length / 2);
-  }
-
-  function formatMinRelayError(params: {
-    paying: bigint;
-    size: number;
-    needAtLeast: number;
-    shortBy: number;
-    tip?: string;
-  }): string {
-    const { paying, size, needAtLeast, shortBy, tip } = params;
-    return [
-      'Min relay fee not met under 1 sat/byte policy.',
-      `paying=${paying.toString()} sats`,
-      `size=${size} bytes`,
-      `need_at_least=${needAtLeast} sats`,
-      `short_by=${shortBy} sats`,
-      tip
-        ? tip
-        : `Tip: remove/reduce any manual "change back to yourself" output and let Change Address auto-add change.`,
-    ].join(' ');
-  }
-
   /**
    * Builds a transaction using the provided outputs, change address, and selected UTXOs.
    *
@@ -282,7 +245,7 @@ export default function TransactionManager() {
    */
   const buildTransaction = async (
     outputs: TransactionOutput[],
-    contractFunctionInputs: { [key: string]: any } | null,
+    _contractFunctionInputs: Record<string, unknown> | null,
     changeAddress: string,
     selectedUtxos: UTXO[]
   ): Promise<{
@@ -291,8 +254,6 @@ export default function TransactionManager() {
     finalOutputs: TransactionOutput[] | null;
     errorMsg: string;
   }> => {
-    console.warn(`Unused Params: ${JSON.stringify(contractFunctionInputs)}`);
-
     const txBuilder = TransactionBuilderHelper();
     const returnObj = {
       bytecodeSize: 0,
@@ -318,12 +279,10 @@ export default function TransactionManager() {
       // IMPORTANT CHANGE:
       // Do NOT treat "any output to changeAddress" as a manual change output.
       // Only treat it as manual change if explicitly flagged.
-      const hasExplicitManualChangeOutput =
-        !!changeAddress &&
-        outputsNoChange.some((o) => {
-          if ('opReturn' in o && o.opReturn !== undefined) return false;
-          return (o as any)._manualChange === true;
-        });
+      const explicitManualChangeOutput = hasExplicitManualChangeOutput(
+        outputsNoChange,
+        changeAddress
+      );
 
       // 1) Estimate bytes WITHOUT change first
       const txNoChangeHex = await txBuilder.buildTransaction(
@@ -334,23 +293,12 @@ export default function TransactionManager() {
       const feeNoChange = BigInt(bytesNoChange);
 
       const outNoChangeTotal = sumOutputs(outputsNoChange);
-      const remainderCandidate = inputTotal - outNoChangeTotal - feeNoChange;
+      void (inputTotal - outNoChangeTotal - feeNoChange);
 
       // Advanced/debug mode: always attempt auto-change if changeAddress is present
       // (unless explicitly flagged as manual change output).
       const shouldTryAutoChange =
-        !!changeAddress && !hasExplicitManualChangeOutput;
-
-      console.warn('[ATB]', {
-        inputTotal: inputTotal.toString(),
-        outNoChangeTotal: outNoChangeTotal.toString(),
-        bytesNoChange,
-        feeNoChange: feeNoChange.toString(),
-        remainderCandidate: remainderCandidate.toString(),
-        changeAddress,
-        hasExplicitManualChangeOutput,
-        shouldTryAutoChange,
-      });
+        !!changeAddress && !explicitManualChangeOutput;
 
       let plannedOutputs: TransactionOutput[] = outputsNoChange;
 
@@ -369,16 +317,12 @@ export default function TransactionManager() {
             [...outputsNoChange, placeholder]
           );
           bytesWithChange = txBytesFromHex(txWithChangeHex);
-          console.warn('[ATB] placeholder build OK', { bytesWithChange });
-        } catch (e: any) {
+        } catch (error: unknown) {
           bytesWithChange = estimateAddP2PKHOutputBytes(
             bytesNoChange,
             outputsNoChange.length
           );
-          console.warn('[ATB] placeholder build FAILED -> estimated', {
-            bytesWithChange,
-            err: e?.message ?? String(e),
-          });
+          void error;
         }
 
         const feeWithChange = BigInt(bytesWithChange);
@@ -410,7 +354,7 @@ export default function TransactionManager() {
 
       if (feePaid < BigInt(actualBytes)) {
         // Stabilizing retry: recompute change using actualBytes as fee
-        if (changeAddress && !hasExplicitManualChangeOutput) {
+        if (changeAddress && !explicitManualChangeOutput) {
           const feeActual = BigInt(actualBytes);
           const remainder2 = inputTotal - outNoChangeTotal - feeActual;
 
@@ -468,21 +412,20 @@ export default function TransactionManager() {
       returnObj.finalOutputs = plannedOutputs;
       returnObj.errorMsg = '';
       return returnObj;
-    } catch (err: any) {
-      console.error('Error building transaction:', err);
+    } catch (error: unknown) {
+      logError('TransactionManager.buildTransaction', error);
 
       // Debug UX requirement: still return the intended outputs (including change)
       // even if the contract rejects the shape and the tx fails to build.
       returnObj.finalOutputs = intendedOutputs;
       returnObj.finalTransaction = '';
       returnObj.bytecodeSize = 0;
-      returnObj.errorMsg = err?.message || 'Unknown error';
+      returnObj.errorMsg = toErrorMessage(error);
       return returnObj;
     }
   };
 
   async function fetchPrivateKey(address: string): Promise<Uint8Array | null> {
-    // eslint-disable-next-line @typescript-eslint/no-unsafe-return
     return await (
       await import('../../services/KeyService')
     ).default.fetchAddressPrivateKey(address);

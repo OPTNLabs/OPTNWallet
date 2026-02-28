@@ -35,8 +35,8 @@ const SessionSettingsModal: React.FC<Props> = ({ sessionTopic, onClose }) => {
   };
 
   return (
-    <div className="fixed inset-0 flex items-center justify-center bg-black bg-opacity-70 z-50">
-      <div className="bg-white rounded-lg shadow-lg max-w-md w-full p-6">
+    <div className="wallet-popup-backdrop">
+      <div className="wallet-popup-panel max-w-md w-full">
         {/* Modal Header */}
         {/* <h2 className="text-2xl font-bold mb-4 text-center">Session Settings</h2> */}
 
@@ -53,12 +53,12 @@ const SessionSettingsModal: React.FC<Props> = ({ sessionTopic, onClose }) => {
               href={dappMeta.url}
               target="_blank"
               rel="noreferrer"
-              className="text-blue-500 underline text-sm"
+              className="wallet-link underline text-sm"
             >
               {dappMeta.url}
             </a>
             {/* Description */}
-            <p className="text-gray-600 mb-4">{dappMeta.description}</p>
+            <p className="wallet-muted mb-4">{dappMeta.description}</p>
 
             {session.expiry && (
               <div>
@@ -77,13 +77,13 @@ const SessionSettingsModal: React.FC<Props> = ({ sessionTopic, onClose }) => {
         <div className="flex justify-between mt-4">
           <button
             onClick={onClose}
-            className="px-4 py-2 bg-gray-300 font-bold hover:bg-gray-400 text-gray-800 rounded"
+            className="wallet-btn-secondary"
           >
             Close
           </button>
           <button
             onClick={handleDisconnect}
-            className="px-4 py-2 bg-red-500 font-bold hover:bg-red-600 text-white rounded"
+            className="wallet-btn-danger px-4 py-2"
           >
             Disconnect
           </button>

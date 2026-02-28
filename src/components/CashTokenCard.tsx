@@ -7,7 +7,7 @@ import { IdentitySnapshot } from '@bitauth/libauth';
 
 interface CashTokenCardProps {
   category: string;
-  totalAmount: number;
+  totalAmount: bigint;
   decimals: number;
 }
 
@@ -42,27 +42,29 @@ const CashTokenCard: React.FC<CashTokenCardProps> = ({
     loadMetadata();
   }, [category]);
 
-  // Function to format totalAmount based on decimals
-  const formatAmount = (amount: number, decimals: number): string => {
-    const divisor = Math.pow(10, decimals);
-    const formatted = (amount / divisor).toFixed(decimals);
-    return formatted.replace(/\.?0+$/, '');
+  const formatAmountWithDecimals = (amount: bigint, decimalPlaces: number): string => {
+    if (decimalPlaces <= 0) return amount.toString();
+    const amountStr = amount.toString();
+    const padded = amountStr.padStart(decimalPlaces + 1, '0');
+    const integerPart = padded.slice(0, -decimalPlaces) || '0';
+    const fractionalPart = padded.slice(-decimalPlaces).replace(/0+$/, '');
+    return fractionalPart ? `${integerPart}.${fractionalPart}` : integerPart;
   };
 
-  // Calculate the formatted amount, preserving original behavior for 0
-  const formattedAmount =
-    totalAmount !== 0 ? formatAmount(totalAmount, decimals) : '';
+  const rawAmount = totalAmount.toString();
+  const decimalAmount =
+    decimals > 0 ? formatAmountWithDecimals(totalAmount, decimals) : null;
 
   return (
     <>
       {/* Card */}
       <div
-        className="p-4 mb-4 border rounded-lg shadow-sm bg-white flex items-center justify-between cursor-pointer hover:bg-gray-50"
+        className="wallet-card p-4 mb-4 flex items-center justify-between cursor-pointer hover:brightness-[0.98]"
         onClick={toggleTokenQueryPopup}
       >
         <div className="flex items-center space-x-3 overflow-hidden">
           {/* icon */}
-          <div className="w-8 h-8 bg-gray-100 rounded flex items-center justify-center flex-shrink-0">
+          <div className="w-8 h-8 wallet-surface-strong rounded flex items-center justify-center flex-shrink-0">
             {iconUri ? (
               <img
                 src={iconUri}
@@ -70,27 +72,32 @@ const CashTokenCard: React.FC<CashTokenCardProps> = ({
                 className="w-full h-full rounded"
               />
             ) : (
-              <FaBitcoin className="text-blue-500 text-xl" />
+              <FaBitcoin className="wallet-accent-icon text-xl" />
             )}
           </div>
           <div className="flex flex-col truncate">
             <span className="text-base font-semibold truncate">
               {tokenName}
             </span>
-            <span className="text-xs text-gray-500 truncate">
+            <span className="text-xs wallet-muted truncate">
               {shortenTxHash(category)}
             </span>
           </div>
         </div>
-        <div className="text-sm font-medium text-gray-700">
-          {formattedAmount}
+        <div className="text-right">
+          <div className="text-sm font-medium wallet-text-strong">
+            {rawAmount}
+          </div>
+          {decimalAmount && decimalAmount !== rawAmount && (
+            <div className="text-xs wallet-muted">{decimalAmount}</div>
+          )}
         </div>
       </div>
 
       {/* Bottom-sheet */}
       {showTokenQuery && (
-        <div className="fixed inset-0 bg-black bg-opacity-40 z-50 flex justify-end">
-          <div className="bg-white w-full rounded-t-xl p-4 max-h-[85vh] overflow-y-auto shadow-xl">
+        <div className="wallet-popup-backdrop z-50 flex justify-end">
+          <div className="wallet-popup-panel w-full rounded-t-xl p-4 max-h-[85vh] overflow-y-auto shadow-xl">
             <div className="text-center text-lg font-bold mb-4">
               {tokenName} Details
             </div>
@@ -98,7 +105,7 @@ const CashTokenCard: React.FC<CashTokenCardProps> = ({
               <TokenQuery tokenId={category} />
             </div>
             <button
-              className="mt-2 w-full py-3 bg-gray-200 text-gray-800 rounded-lg font-medium hover:bg-gray-300 transition"
+              className="wallet-btn-secondary mt-2 w-full py-3"
               onClick={toggleTokenQueryPopup}
             >
               Close

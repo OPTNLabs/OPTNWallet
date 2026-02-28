@@ -13,7 +13,6 @@ import { Contract, ElectrumNetworkProvider } from 'cashscript';
 import { store } from '../../../redux/store';
 import { Network } from '../../../redux/networkSlice';
 import parseInputValue from '../../../utils/parseInputValue';
-import TransactionBuilderHelper from '../../../apis/TransactionManager/TransactionBuilderHelper';
 
 import {
   queryUnspentOutputsByLockingBytecode,
@@ -298,17 +297,13 @@ export default function AuthGuardApp({
   }
 
   async function broadcastTx(hex: string) {
-    const ok = window.confirm(
-      'Broadcast this transaction?\n\nThis will spend UTXOs from your wallet and cannot be undone.'
-    );
-    if (!ok) throw new Error('Broadcast cancelled by user.');
-
-    const tb = TransactionBuilderHelper();
-    const txid = await tb.sendTransaction(hex);
-    if (!txid || typeof txid !== 'string') {
-      throw new Error(`Broadcast returned invalid txid: ${String(txid)}`);
+    const res = await sdk.tx.broadcast(hex);
+    if (!res.txid || typeof res.txid !== 'string') {
+      throw new Error(
+        `Broadcast returned invalid txid: ${res.errorMessage ?? String(res.txid)}`
+      );
     }
-    return txid;
+    return res.txid;
   }
 
   async function getPrimaryWalletAddress(): Promise<string> {

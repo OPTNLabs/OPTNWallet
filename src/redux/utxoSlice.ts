@@ -16,11 +16,10 @@ const initialState: UTXOState = {
   initialized: false,
 };
 
-// Helper to calculate total balance from UTXOs
-const calculateTotalBalance = (utxos: Record<string, UTXO[]>) =>
-  Object.values(utxos)
-    .flat()
-    .reduce((sum, utxo: any) => sum + (utxo.value ?? utxo.amount ?? 0), 0);
+const utxoAmount = (utxo: UTXO): number => utxo.value ?? utxo.amount ?? 0;
+
+const sumAddressBalance = (utxos: UTXO[] | undefined): number =>
+  (utxos ?? []).reduce((sum, utxo) => sum + utxoAmount(utxo), 0);
 
 const utxoSlice = createSlice({
   name: 'utxos',
@@ -29,37 +28,35 @@ const utxoSlice = createSlice({
     // Action to set UTXOs in the Redux state
     setUTXOs: (state, action: PayloadAction<{ newUTXOs: Record<string, UTXO[]> }>) => {
       const entries = Object.entries(action.payload.newUTXOs);
-      console.log('[utxoSlice] setUTXOs MERGE keys=', entries.map(([k]) => k));
       for (const [addr, list] of entries) {
+        const prevBalance = sumAddressBalance(state.utxos[addr]);
         state.utxos[addr] = list;
+        const nextBalance = sumAddressBalance(list);
+        state.totalBalance += nextBalance - prevBalance;
       }
-      state.totalBalance = calculateTotalBalance(state.utxos);
-      console.log('[utxoSlice] setUTXOs totalBalance=', state.totalBalance);
     },
 
      replaceAllUTXOs: (state, action: PayloadAction<{ utxosByAddress: Record<string, UTXO[]> }>) => {
-      console.log('[utxoSlice] replaceAllUTXOs keys=', Object.keys(action.payload.utxosByAddress));
       state.utxos = { ...action.payload.utxosByAddress };
-      state.totalBalance = calculateTotalBalance(state.utxos);
-      console.log('[utxoSlice] replaceAllUTXOs totalBalance=', state.totalBalance);
+      state.totalBalance = Object.values(state.utxos).reduce(
+        (sum, list) => sum + sumAddressBalance(list),
+        0
+      );
     },
 
     updateUTXOsForAddress: (state, action: PayloadAction<{ address: string; utxos: UTXO[] }>) => {
       const { address, utxos } = action.payload;
-      const prevLen = state.utxos[address]?.length ?? 0;
-      console.log('[utxoSlice] updateUTXOsForAddress addr=', address, 'prevLen=', prevLen, 'newLen=', utxos.length);
+      const prevBalance = sumAddressBalance(state.utxos[address]);
       state.utxos[address] = utxos;
-      state.totalBalance = calculateTotalBalance(state.utxos);
-      console.log('[utxoSlice] totalBalance after update=', state.totalBalance);
+      const nextBalance = sumAddressBalance(utxos);
+      state.totalBalance += nextBalance - prevBalance;
     },
 
     setFetchingUTXOs: (state, action: PayloadAction<boolean>) => {
-      console.log('[utxoSlice] setFetchingUTXOs =>', action.payload);
       state.fetchingUTXOs = action.payload;
     },
 
     setInitialized: (state, action: PayloadAction<boolean>) => {
-      console.log('[utxoSlice] setInitialized =>', action.payload);
       state.initialized = action.payload;
     },
 
@@ -73,8 +70,13 @@ const utxoSlice = createSlice({
       const { address, utxosToRemove } = action.payload;
       if (!state.utxos[address]) return;
       const toRemove = new Set(utxosToRemove.map(u => `${u.tx_hash}-${u.tx_pos}`));
-      state.utxos[address] = state.utxos[address].filter(u => !toRemove.has(`${u.tx_hash}-${u.tx_pos}`));
-      state.totalBalance = calculateTotalBalance(state.utxos);
+      const prevBalance = sumAddressBalance(state.utxos[address]);
+      const nextUtxos = state.utxos[address].filter(
+        (u) => !toRemove.has(`${u.tx_hash}-${u.tx_pos}`)
+      );
+      state.utxos[address] = nextUtxos;
+      const nextBalance = sumAddressBalance(nextUtxos);
+      state.totalBalance += nextBalance - prevBalance;
     },
   },
 });

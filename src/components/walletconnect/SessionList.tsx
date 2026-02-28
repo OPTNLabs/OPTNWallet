@@ -13,7 +13,7 @@ export function SessionList({
   onOpenSettings,
 }: Props) {
   if (!activeSessions || Object.keys(activeSessions).length === 0) {
-    return <div className="text-center text-gray-600">No active sessions.</div>;
+    return <div className="text-center wallet-muted">No active sessions.</div>;
   }
 
   return (
@@ -24,7 +24,7 @@ export function SessionList({
         return (
           <div
             key={topic}
-            className="p-4 border rounded-lg shadow-sm bg-white flex flex-col md:flex-row md:items-center justify-between"
+            className="wallet-card p-4 flex flex-col md:flex-row md:items-center justify-between"
           >
             <div className="flex items-center space-x-4">
               <img
@@ -38,11 +38,11 @@ export function SessionList({
                   href={dappMeta.url}
                   target="_blank"
                   rel="noreferrer"
-                  className="text-sm text-blue-500 underline"
+                  className="text-sm wallet-link underline"
                 >
                   {dappMeta.url}
                 </a>
-                <p className="text-gray-600 text-sm mt-1">
+                <p className="wallet-muted text-sm mt-1">
                   {dappMeta.description}
                 </p>
               </div>
@@ -50,13 +50,13 @@ export function SessionList({
             <div className="flex justify-between mt-4 md:mt-0">
               <button
                 onClick={() => onOpenSettings(topic)}
-                className="px-4 py-2 font-bold bg-gray-200 hover:bg-gray-300 rounded"
+                className="wallet-btn-secondary"
               >
                 Settings
               </button>
               <button
                 onClick={() => onDeleteSession(topic)}
-                className="px-4 py-2 font-bold bg-red-500 hover:bg-red-600 text-white rounded"
+                className="wallet-btn-danger px-4 py-2"
               >
                 Disconnect
               </button>

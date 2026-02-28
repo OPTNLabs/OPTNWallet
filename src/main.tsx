@@ -10,14 +10,17 @@ import { HashRouter } from 'react-router-dom';
 import { Provider } from 'react-redux';
 import { PersistGate } from 'redux-persist/integration/react';
 import { store, persistor } from './redux/store';
+import { ThemeProvider } from './context/ThemeContext';
 
 ReactDOM.createRoot(document.getElementById('root')!).render(
   <React.StrictMode>
     <Provider store={store}>
       <PersistGate loading={null} persistor={persistor}>
-        <HashRouter>
-          <App />
-        </HashRouter>
+        <ThemeProvider>
+          <HashRouter>
+            <App />
+          </HashRouter>
+        </ThemeProvider>
       </PersistGate>
     </Provider>
   </React.StrictMode>

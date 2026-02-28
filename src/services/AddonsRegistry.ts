@@ -1,11 +1,16 @@
 // src/services/AddonsRegistry.ts
 import type {
+  AddonCapability,
   AddonManifest,
   AddonContractDefinition,
   ResolvedAddonContractDefinition,
   ResolvedAddonAppDefinition,
 } from '../types/addons';
-import { validateAddonPermissions } from './AddonsAllowlist';
+import {
+  getAddonGrantedCapabilities,
+  validateAddonPermissions,
+} from './AddonsAllowlist';
+import { validateAddonManifestAgainstSchema } from './addons/AddonManifestSchema';
 
 /**
  * v1 Registry:
@@ -44,6 +49,15 @@ export default function AddonsRegistry() {
       if (!m?.id) continue;
 
       validateManifestShape(m);
+      const schemaErrors = validateAddonManifestAgainstSchema(m);
+      if (schemaErrors.length) {
+        throw new Error(
+          `Addon "${m.id}" failed schema checks: ${schemaErrors.join('; ')}`
+        );
+      }
+
+      validateAddonPermissions(m);
+      const manifestCapabilities = getAddonGrantedCapabilities(m);
 
       // Validate apps (optional)
       if (m.apps) {
@@ -55,25 +69,58 @@ export default function AddonsRegistry() {
           if (!a || typeof a !== 'object') {
             throw new Error(`Addon "${m.id}" has invalid app entry`);
           }
-          if (typeof (a as any).id !== 'string' || !(a as any).id.trim()) {
+          if (typeof a.id !== 'string' || !a.id.trim()) {
             throw new Error(`Addon "${m.id}" app missing id`);
           }
-          if (seenAppIds.has((a as any).id)) {
+          if (seenAppIds.has(a.id)) {
             throw new Error(
-              `Duplicate app id within addon "${m.id}": ${(a as any).id}`
+              `Duplicate app id within addon "${m.id}": ${a.id}`
             );
           }
-          seenAppIds.add((a as any).id);
+          seenAppIds.add(a.id);
 
-          if (typeof (a as any).name !== 'string' || !(a as any).name.trim()) {
+          if (typeof a.name !== 'string' || !a.name.trim()) {
             throw new Error(
-              `Addon "${m.id}" app "${(a as any).id}" missing name`
+              `Addon "${m.id}" app "${a.id}" missing name`
             );
           }
-          if ((a as any).kind !== 'declarative') {
+          if (a.kind !== 'declarative') {
             throw new Error(
-              `Addon "${m.id}" app "${(a as any).id}" has unsupported kind`
+              `Addon "${m.id}" app "${a.id}" has unsupported kind`
             );
+          }
+
+          const requiredCapabilities = a.requiredCapabilities;
+          if (requiredCapabilities !== undefined) {
+            if (
+              !Array.isArray(requiredCapabilities) ||
+              requiredCapabilities.length === 0
+            ) {
+              throw new Error(
+                `Addon "${m.id}" app "${a.id}" requiredCapabilities must be a non-empty array when provided`
+              );
+            }
+
+            const seenCapabilities = new Set<string>();
+            for (const cap of requiredCapabilities as AddonCapability[]) {
+              if (typeof cap !== 'string' || !cap.trim()) {
+                throw new Error(
+                  `Addon "${m.id}" app "${a.id}" has invalid required capability`
+                );
+              }
+              if (seenCapabilities.has(cap)) {
+                throw new Error(
+                  `Addon "${m.id}" app "${a.id}" has duplicate required capability: ${cap}`
+                );
+              }
+              seenCapabilities.add(cap);
+
+              if (!manifestCapabilities.has(cap)) {
+                throw new Error(
+                  `Addon "${m.id}" app "${a.id}" requires capability not granted by manifest: ${cap}`
+                );
+              }
+            }
           }
         }
       }
@@ -81,8 +128,6 @@ export default function AddonsRegistry() {
       if (seenAddonIds.has(m.id)) {
         throw new Error(`Duplicate addon id detected: ${m.id}`);
       }
-
-      validateAddonPermissions(m);
 
       // validate contract ids within addon + across all addons
       const seenContractIdsWithinAddon = new Set<string>();
@@ -153,10 +198,10 @@ export default function AddonsRegistry() {
     m: AddonManifest,
     cRaw: unknown
   ): asserts cRaw is AddonContractDefinition {
-    const c = cRaw as any;
+    const c = cRaw as Record<string, unknown>;
 
     const contractId =
-      typeof c?.id === 'string' && c.id.trim() ? c.id : '(unknown)';
+      typeof c.id === 'string' && c.id.trim() ? c.id : '(unknown)';
 
     if (!c || typeof c !== 'object') {
       throw new Error(`Addon "${m.id}" has invalid contract entry`);
@@ -195,7 +240,7 @@ export default function AddonsRegistry() {
       const apps = m.apps ?? [];
       for (const a of apps) {
         out.push({
-          ...(a as any),
+          ...a,
           addonId: m.id,
           fullId: `${m.id}:${a.id}`,
         });

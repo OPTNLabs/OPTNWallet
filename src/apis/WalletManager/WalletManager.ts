@@ -3,8 +3,8 @@ import DatabaseService from '../DatabaseManager/DatabaseService';
 import { Network } from '../../redux/networkSlice';
 
 // Helper function to safely cast SQL values to number
-function toNumber(value: any): number {
-  return typeof value === 'number' ? value : parseInt(value, 10);
+function toNumber(value: unknown): number {
+  return typeof value === 'number' ? value : parseInt(String(value), 10);
 }
 
 export default function WalletManager() {

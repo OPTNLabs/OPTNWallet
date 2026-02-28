@@ -27,12 +27,12 @@ export interface UTXO {
   abi?: object[]; // ABI for contract-related UTXOs
   id?: string;
   isPaperWallet?: boolean;
-  unlocker?: any;
+  unlocker?: unknown;
   // **New Fields**
   contractFunction?: string;
-  contractFunctionInputs?: { [key: string]: any };
+  contractFunctionInputs?: Record<string, unknown>;
   // Optional: provide constructor args at spend-time (bypass DB lookup)
-  contractConstructorArgs?: any[];
+  contractConstructorArgs?: unknown[];
 }
 
 // TransactionHistoryItem remains the same
@@ -183,3 +183,28 @@ export type BcmrExtensions = {
     | { [key: string]: string }
     | { [keyA: string]: { [keyB: string]: string } };
 };
+
+export type ErrorContext = Record<string, unknown>;
+
+export type AppErrorCode =
+  | 'UNKNOWN'
+  | 'ELECTRUM'
+  | 'NETWORK'
+  | 'DATABASE'
+  | 'VALIDATION'
+  | 'WALLETCONNECT';
+
+export interface AppError {
+  code: AppErrorCode;
+  message: string;
+  ts: number;
+  cause?: unknown;
+  context?: ErrorContext;
+}
+
+export interface ContractAddressRecord {
+  address: string;
+  tokenAddress: string;
+  contractName: string;
+  abi: unknown[];
+}

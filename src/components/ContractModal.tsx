@@ -1,4 +1,3 @@
-// @ts-nocheck
 import React, { useState } from 'react';
 import { TailSpin } from 'react-loader-spinner';
 import Popup from './transaction/Popup';
@@ -14,11 +13,11 @@ interface AppAction {
     name: string;
     description: string;
     parameters: ActionParameter[];
-    handler: (params: any) => Promise<void>;
+    handler: (params: Record<string, string>) => Promise<void>;
 }
 interface ContractModalProps {
   action: AppAction;
-  onSubmit: (params: any) => Promise<void>;
+  onSubmit: (params: Record<string, string>) => Promise<void>;
   onClose: () => void;
   isLoading: boolean;
   error: string | null;
@@ -31,7 +30,7 @@ const ContractModal: React.FC<ContractModalProps> = ({
   isLoading,
   error
 }) => {
-  const [params, setParams] = useState<{[key: string]: any}>({});
+  const [params, setParams] = useState<Record<string, string>>({});
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -40,43 +39,43 @@ const ContractModal: React.FC<ContractModalProps> = ({
 
   return (
     <Popup closePopups={onClose}>
-      <h2 className="text-lg font-semibold mb-4">{action.name}</h2>
-      <p className="text-gray-600 mb-4">{action.description}</p>
+      <h2 className="text-lg font-semibold mb-4 wallet-text-strong">{action.name}</h2>
+      <p className="wallet-muted mb-4">{action.description}</p>
 
       <form onSubmit={handleSubmit}>
         {action.parameters.map((param) => (
           <div key={param.name} className="mb-4">
-            <label className="block text-sm font-medium text-gray-700">
+            <label className="block text-sm font-medium wallet-text-strong">
               {param.name}
-              {param.required && <span className="text-red-500">*</span>}
+              {param.required && <span className="wallet-danger-text">*</span>}
             </label>
             <input
               type="text"
-              className="mt-1 block w-full rounded-md border-gray-300 shadow-sm"
+              className="mt-1 block w-full wallet-input"
               value={params[param.name] || ''}
               onChange={(e) => setParams({...params, [param.name]: e.target.value})}
               required={param.required}
             />
-            <p className="text-sm text-gray-500">{param.description}</p>
+            <p className="text-sm wallet-muted">{param.description}</p>
           </div>
         ))}
 
         {error && (
-          <div className="text-red-500 mb-4">{error}</div>
+          <div className="wallet-danger-text mb-4">{error}</div>
         )}
 
         <div className="flex justify-end gap-2">
           <button
             type="button"
             onClick={onClose}
-            className="px-4 py-2 border rounded-md"
+            className="wallet-btn-secondary"
           >
             Cancel
           </button>
           <button
             type="submit"
             disabled={isLoading}
-            className="px-4 py-2 bg-blue-500 text-white rounded-md disabled:opacity-50"
+            className="wallet-btn-primary"
           >
             {isLoading ? (
               <TailSpin visible={true} height="24" width="24" color="white" />

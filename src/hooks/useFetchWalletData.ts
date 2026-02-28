@@ -1,7 +1,7 @@
 // src/hooks/useFetchWalletData.ts
 
 import { useEffect } from 'react';
-import { UTXO } from '../types/types';
+import { ContractAddressRecord, UTXO } from '../types/types';
 import TransactionService from '../services/TransactionService';
 
 const useFetchWalletData = (
@@ -11,14 +11,7 @@ const useFetchWalletData = (
     React.SetStateAction<{ address: string; tokenAddress: string }[]>
   >,
   setContractAddresses: React.Dispatch<
-    React.SetStateAction<
-      {
-        address: string;
-        tokenAddress: string;
-        contractName: string;
-        abi: any[];
-      }[]
-    >
+    React.SetStateAction<ContractAddressRecord[]>
   >,
   setUtxos: React.Dispatch<React.SetStateAction<UTXO[]>>,
   setContractUTXOs: React.Dispatch<React.SetStateAction<UTXO[]>>,
@@ -27,10 +20,16 @@ const useFetchWalletData = (
   setErrorMessage: React.Dispatch<React.SetStateAction<string | null>>
 ) => {
   useEffect(() => {
-    const fetchData = async (walletId: number) => {
+    if (walletId === null) return;
+
+    let isActive = true;
+
+    const fetchData = async () => {
       try {
         const { addresses, utxos, contractAddresses } =
           await TransactionService.fetchAddressesAndUTXOs(walletId);
+
+        if (!isActive) return;
 
         // console.log('Fetched Addresses:', addresses);
         // console.log('Wallet ID:', walletId);
@@ -40,13 +39,11 @@ const useFetchWalletData = (
         setAddresses(addresses);
         setContractAddresses(contractAddresses);
         setUtxos(utxos);
-        // console.log(contractAddresses.flatMap((contract) =>
-        //   utxos.filter((utxo) => utxo.address === contract.address)
-        // ))
+        const contractAddressSet = new Set(
+          contractAddresses.map((contract) => contract.address)
+        );
         setContractUTXOs(
-          contractAddresses.flatMap((contract) =>
-            utxos.filter((utxo) => utxo.address === contract.address)
-          )
+          utxos.filter((utxo) => contractAddressSet.has(utxo.address))
         );
 
         // Auto-select the first address if only one exists
@@ -64,6 +61,7 @@ const useFetchWalletData = (
           // console.log(`Set change address to: ${addresses[0].address}`);
         }
       } catch (error) {
+        if (!isActive) return;
         console.error('Error fetching addresses and UTXOs:', error);
         setErrorMessage(
           'Error fetching addresses and UTXOs: ' + (error as Error).message
@@ -71,11 +69,20 @@ const useFetchWalletData = (
       }
     };
 
-    if (walletId !== null) {
-      fetchData(walletId);
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [walletId]);
+    void fetchData();
+
+    return () => {
+      isActive = false;
+    };
+  }, [
+    walletId,
+    setAddresses,
+    setChangeAddress,
+    setContractAddresses,
+    setContractUTXOs,
+    setErrorMessage,
+    setUtxos,
+  ]);
 };
 
 export default useFetchWalletData;

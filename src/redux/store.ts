@@ -10,6 +10,7 @@ import transactionReducer from './transactionSlice';
 import priceFeedReducer from './priceFeedSlice';
 import walletconnectReducer from './walletconnectSlice';
 import { persistStore, persistReducer } from 'redux-persist';
+import type { PersistMigrate, PersistedState } from 'redux-persist/es/types';
 
 import notificationsReducer from './notificationsSlice';
 
@@ -32,13 +33,16 @@ const persistConfig = {
     // 'walletconnect'
   ],
   version: 2,
-  migrate: async (state: any) => {
+  migrate: (async (state: PersistedState) => {
     if (!state) return state;
     // Ensure large slices aren't accidentally retained
-    delete state.utxos;
-    delete state.transactions;
-    return state;
-  },
+    const sanitizedState: PersistedState & { [key: string]: unknown } = {
+      ...state,
+    };
+    delete sanitizedState.utxos;
+    delete sanitizedState.transactions;
+    return sanitizedState;
+  }) as PersistMigrate,
 };
 
 const rootReducer = combineReducers({

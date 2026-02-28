@@ -27,8 +27,8 @@ function SessionProposalModal() {
   };
 
   return (
-    <div className="fixed inset-0 flex items-center justify-center bg-black bg-opacity-50 z-50">
-      <div className="bg-white rounded-lg shadow-lg max-w-md w-full p-6">
+    <div className="wallet-popup-backdrop">
+      <div className="wallet-popup-panel max-w-md w-full">
         <h2 className="text-2xl font-bold text-center mb-4">Approve Session</h2>
         <div className="flex justify-center mb-4">
           <img
@@ -43,22 +43,22 @@ function SessionProposalModal() {
             href={dappMetadata.url}
             target="_blank"
             rel="noreferrer"
-            className="text-blue-500 underline text-sm"
+            className="wallet-link underline text-sm"
           >
             {dappMetadata.url}
           </a>
-          <p className="text-gray-600 text-sm mt-2">{dappMetadata.description}</p>
+          <p className="wallet-muted text-sm mt-2">{dappMetadata.description}</p>
         </div>
         <div className="flex justify-around mt-6">
           <button
             onClick={handleApprove}
-            className="px-4 py-2 bg-green-500 hover:bg-green-600 font-bold text-white rounded"
+            className="wallet-btn-primary px-4 py-2"
           >
             Approve
           </button>
           <button
             onClick={handleReject}
-            className="px-4 py-2 bg-red-500 hover:bg-red-600 font-bold text-white rounded"
+            className="wallet-btn-danger px-4 py-2"
           >
             Reject
           </button>

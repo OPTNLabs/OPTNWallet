@@ -1,14 +1,10 @@
-// @ts-nocheck
-import React, { useState, useEffect } from 'react';
+import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { useSelector } from 'react-redux';
-import { RootState } from '../../redux/store';
 import ContractModal from '../../components/ContractModal';
 import { Toast } from '@capacitor/toast';
 import axios, { AxiosError } from 'axios';
-import { Utxo } from 'cashscript';
 import ElectrumServer from '../../apis/ElectrumServer/ElectrumServer';
-import { AddressCashStarter, MasterCategoryID } from './utils/values';
+import { AddressCashStarter, MasterCategoryID } from './fundme/values';
 import SignClient from '@walletconnect/sign-client'
 import { WalletConnectModal } from '@walletconnect/modal';
 
@@ -65,14 +61,20 @@ const FundMeApp = () => {
   const [totalPledges, setTotalPledges] = useState<number>(0);
   const [walletConnectInstance, setWalletConnectInstance] = useState<SignClient | null>(null);
   const [walletConnectSession, setWalletConnectSession] = useState<any>(null);
-  const [connectedChain, setConnectedChain] = useState<string | null>('bch:bchtest');
+  const [connectedChain] = useState<string | null>('bch:bchtest');
   const [usersAddress, setUsersAddress] = useState<string | null>(null);
   const [isEmpty, setIsEmpty] = useState(false);
   const [campaigns, setCampaigns] = useState<ElectrumUtxo[]>([]);
-  const [expiredCampaigns, setExpiredCampaigns] = useState<ElectrumUtxo[]>([]);
+  const [_expiredCampaigns, setExpiredCampaigns] = useState<ElectrumUtxo[]>(
+    []
+  );
   const [campaignsMap, setCampaignsMap] = useState<Map<number, CampaignUtxo | null>>(new Map());
-  const [expiredCampaignsMap, setExpiredCampaignsMap] = useState<Map<number, CampaignUtxo | null>>(new Map());
-  const [archivedCampaignsMap, setArchivedCampaignsMap] = useState<Map<number, ArchivedCampaign | null>>(new Map());
+  const [expiredCampaignsMap, setExpiredCampaignsMap] = useState<
+    Map<number, CampaignUtxo | null>
+  >(new Map());
+  const [archivedCampaignsMap, setArchivedCampaignsMap] = useState<
+    Map<number, ArchivedCampaign | null>
+  >(new Map());
   const [campaignType, setCampaignType] = useState<string>('active');
   //connectedChain: network === 'mainnet' ? 'bch:bitcoincash' : 'bch:bchtest' 
 
@@ -83,6 +85,9 @@ const FundMeApp = () => {
 
   // Create an instance of ElectrumServer
   const electrumServer = ElectrumServer();
+  void _expiredCampaigns;
+  void expiredCampaignsMap;
+  void archivedCampaignsMap;
 
 
   useEffect(() => {
@@ -163,7 +168,7 @@ const FundMeApp = () => {
         });
         console.log('session_event added...');
 
-        client.on('session_update', ({ topic, params }) => {
+        client.on('session_update', ({ params }) => {
           console.log('session_update');
           console.log(params);
         });
@@ -230,10 +235,10 @@ const manualSetupSignClient = async () => {
       });
       console.log('session_event added...');
 
-      client.on('session_update', ({ topic, params }) => {
-        console.log('session_update');
-        console.log(params);
-      });
+	      client.on('session_update', ({ params }) => {
+	        console.log('session_update');
+	        console.log(params);
+	      });
       console.log('session_update added...');
 
       client.on('session_delete', () => {
@@ -369,6 +374,8 @@ const initBlockchain = async () => {
     console.error('initBlockchain(): Error in blockchain initialization:', error);
   }
 }
+void handleDisconnectWC;
+void initBlockchain;
 //////////////////////////////////////////////////
 ////////// UseEffect: Fetch campaigns on page load
 //////////////////////////////////////////////////
@@ -552,7 +559,7 @@ useEffect(() => {
       name: 'Create Campaign',
       description: 'Create a new campaign',
       parameters: [/* ... */],
-      handler: async (params) => {
+      handler: async (_params) => {
         // Implementation
       }
     },
@@ -726,7 +733,7 @@ useEffect(() => {
           {[...campaignsMap.values()].map((campaign) => (
             campaign && (
               <div 
-                key={campaign.txid} 
+                key={`${campaign.tx_hash}:${campaign.tx_pos}`} 
                 className="bg-gray-900 rounded-xl overflow-hidden border border-gray-700 shadow-[0_0_15px_rgba(0,0,0,0.2)] hover:shadow-[0_0_20px_rgba(10,193,142,0.3)] hover:border-[#0AC18E] transition-all duration-300">
                 <div 
                   className="w-full max-w-[500px] aspect-[500/120] bg-cover bg-center mx-auto" 

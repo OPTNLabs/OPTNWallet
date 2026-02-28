@@ -46,7 +46,7 @@ const TransactionActions: React.FC<TransactionActionsProps> = ({
       {/* Spinning Loader */}
       {loading && (
         <div className="flex justify-center items-center mb-6">
-          <div className="w-8 h-8 border-4 border-t-4 border-blue-500 rounded-full animate-spin"></div>
+          <div className="w-8 h-8 border-4 border-t-4 border-[var(--wallet-accent)] rounded-full animate-spin"></div>
         </div>
       )}
 
@@ -61,9 +61,7 @@ const TransactionActions: React.FC<TransactionActionsProps> = ({
             <button
               onClick={buildTransaction}
               disabled={loading}
-              className={`bg-green-500 font-bold text-white py-2 px-4 rounded ${
-                loading ? 'opacity-50 cursor-not-allowed' : ''
-              }`}
+              className="wallet-btn-primary font-bold"
             >
               Build TX
             </button>
@@ -71,9 +69,7 @@ const TransactionActions: React.FC<TransactionActionsProps> = ({
               <button
                 onClick={handleOpenPopup}
                 disabled={loading}
-                className={`bg-red-500 font-bold text-white py-2 px-4 rounded ${
-                  loading ? 'opacity-50 cursor-not-allowed' : ''
-                }`}
+                className="wallet-btn-danger font-bold"
               >
                 Send TX
               </button>
@@ -87,23 +83,23 @@ const TransactionActions: React.FC<TransactionActionsProps> = ({
         <Popup closePopups={handleClose} closeButtonText="Back">
           <div className="flex flex-col items-center p-4">
             <h2 className="text-2xl font-bold mb-4">Confirm Transaction</h2>
-            <p className="text-red-600 font-bold text-xl mb-6 text-center">
+            <p className="font-bold text-xl mb-6 text-center wallet-danger-text">
               ⚠️ Warning
             </p>
-            <p className="text-red-600 font-semibold text-sm text-center mb-6">
+            <p className="font-semibold text-sm text-center mb-6 wallet-danger-text">
               You are about to <strong>send</strong> a transaction. Please
               confirm that all details are correct. This action{' '}
               <strong>cannot</strong> be undone.
             </p>
-            <div className="relative w-[200px] h-12 bg-gray-200 rounded-lg overflow-hidden">
+            <div className="relative w-[200px] h-12 wallet-surface-strong rounded-lg overflow-hidden border border-[var(--wallet-border)]">
               {/* Background fill for visual feedback */}
               <div
                 className={`absolute top-0 left-0 h-full transition-all duration-300 ${
                   position.x >= threshold
-                    ? 'bg-green-500'
+                    ? 'wallet-inline-progress'
                     : position.x > 0
-                      ? 'bg-orange-500'
-                      : 'bg-red-500'
+                      ? 'bg-[var(--wallet-accent-soft)]'
+                      : 'wallet-danger-fill'
                 }`}
                 style={{ width: `${position.x}px` }}
               />
@@ -131,7 +127,7 @@ const TransactionActions: React.FC<TransactionActionsProps> = ({
                 disabled={loading} // Disable dragging when loading
               >
                 <div
-                  className={`absolute w-12 h-12 bg-blue-500 text-white flex items-center justify-center text-center rounded-lg ${
+                  className={`absolute w-12 h-12 wallet-btn-primary flex items-center justify-center text-center rounded-lg ${
                     loading ? 'opacity-50 cursor-not-allowed' : 'cursor-grab'
                   }`}
                 >

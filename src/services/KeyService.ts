@@ -2,14 +2,7 @@ import { store } from '../redux/store';
 import { selectCurrentNetwork } from '../redux/selectors/networkSelectors';
 import KeyManager from '../apis/WalletManager/KeyManager';
 import KeyGeneration from '../apis/WalletManager/KeyGeneration';
-
-function isString(value: any): value is string {
-  return typeof value === 'string';
-}
-
-function isArrayBufferLike(value: any): value is ArrayBufferLike {
-  return value instanceof Uint8Array || value instanceof ArrayBuffer;
-}
+import { isArrayBufferLike, isString } from '../utils/typeGuards';
 
 const KeyService = {
   async generateMnemonic() {
