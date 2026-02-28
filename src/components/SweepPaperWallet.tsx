@@ -152,14 +152,14 @@ const SweepPaperWallet: React.FC<SweepPaperWalletProps> = ({
     <div className="flex items-center">
       <button
         onClick={handleScan}
-        className="bg-green-500 font-bold text-white py-2 px-4 rounded flex items-center flex-1"
+        className="wallet-btn-primary font-bold py-2 px-4 flex items-center flex-1"
         disabled={loading}
       >
         <FaCamera className="mr-2" /> Scan
       </button>
       {/* Error Message */}
       {error && (
-        <div className="mb-4 text-red-500">
+        <div className="mb-4 wallet-danger-text">
           <span>{error}</span>
         </div>
       )}
@@ -167,7 +167,7 @@ const SweepPaperWallet: React.FC<SweepPaperWalletProps> = ({
       {/* {cashAddress && (
         <div className="mb-4">
           <h4 className="text-md font-semibold mb-2">Cash Address</h4>
-          <p className="bg-gray-100 p-2 rounded break-words">{cashAddress}</p>
+          <p className="wallet-surface-strong p-2 rounded break-words">{cashAddress}</p>
         </div>
       )} */}
     </div>

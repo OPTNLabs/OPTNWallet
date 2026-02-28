@@ -26,9 +26,8 @@ export type CoinSelectionResult = {
 };
 
 function isSpendableP2PKH(utxo: UTXO, skipTokenUtxos: boolean): boolean {
-  const anyU = utxo as any;
-  const isContract = !!anyU.abi || !!anyU.contractName;
-  const isPaper = !!anyU.isPaperWallet;
+  const isContract = !!utxo.abi || !!utxo.contractName;
+  const isPaper = !!utxo.isPaperWallet;
   const hasToken = !!utxo.token;
 
   if (skipTokenUtxos && hasToken) return false;

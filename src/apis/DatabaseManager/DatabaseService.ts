@@ -3,6 +3,7 @@
 import initSqlJs, { Database } from 'sql.js';
 import { createTables } from '../../utils/schema/schema';
 import { get as idbGet, set as idbSet } from 'idb-keyval';
+import { logError } from '../../utils/errorHandling';
 
 // Single shared DB handle
 let db: Database | null = null;
@@ -32,8 +33,14 @@ const startDatabase = async (): Promise<Database | null> => {
     locateFile: () => `/sql-wasm.wasm`,
   });
   const saved = await idbGet('OPTNDatabase');
-  if (saved) {
-    db = new SQLModule.Database(new Uint8Array(saved as any));
+  const savedBytes =
+    saved instanceof Uint8Array
+      ? saved
+      : saved instanceof ArrayBuffer
+        ? new Uint8Array(saved)
+        : null;
+  if (savedBytes) {
+    db = new SQLModule.Database(savedBytes);
   } else {
     db = new SQLModule.Database();
     db.run('PRAGMA user_version = 0;'); // New databases start at version 0
@@ -41,7 +48,7 @@ const startDatabase = async (): Promise<Database | null> => {
 
   // Apply migrations
   const versionResult = db.exec('PRAGMA user_version;');
-  let currentVersion = versionResult[0].values[0][0] as number;
+  const currentVersion = versionResult[0].values[0][0] as number;
   const targetVersion = migrations.length;
 
   for (let v = currentVersion + 1; v <= targetVersion; v++) {
@@ -78,8 +85,8 @@ const saveDatabaseToFile = async (): Promise<void> => {
       saveTimeout = window.setTimeout(async () => {
         try {
           await realSaveDatabase();
-        } catch (e) {
-          console.error('Failed debounced save:', e);
+        } catch (error) {
+          logError('DatabaseService.saveDatabaseToFile', error);
         }
         pendingSavePromise = null;
         saveTimeout = null;

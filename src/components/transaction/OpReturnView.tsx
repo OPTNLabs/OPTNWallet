@@ -18,12 +18,12 @@ const OpReturnView: React.FC<OpReturnViewProps> = ({
         value={opReturnText}
         onChange={(e) => setOpReturnText(e.target.value)}
         placeholder="Enter space-separated ASCII words"
-        className="border p-2 w-full break-words whitespace-normal h-32"
+        className="wallet-input p-2 w-full break-words whitespace-normal h-32"
       />
       <div className="flex justify-end mt-4">
         <button
           onClick={addOpReturnOutput}
-          className="bg-yellow-500 font-bold text-white py-2 px-4 rounded"
+          className="wallet-btn-primary font-bold py-2 px-4"
         >
           Add OP_RETURN Output
         </button>

@@ -1,8 +1,21 @@
 name: CI
 on:
   pull_request:
+    paths-ignore:
+      - 'docs/**'
+      - '**/*.md'
   push:
     branches: [dev]
+    paths-ignore:
+      - 'docs/**'
+      - '**/*.md'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   web-ci:
@@ -20,21 +33,25 @@ jobs:
       - name: Install deps
         run: npm ci
 
-      - name: Lint
-        run: npm run lint
+      - name: Lint (Core)
+        run: npm run lint:core
 
-      - name: Typecheck
-        run: npx tsc -b
+      - name: Typecheck (Core)
+        run: npm run typecheck:core
 
       - name: Unit tests
         run: npm run test -- --run
+
+      - name: Addon manifest validation
+        run: npm run addons:validate
 
       - name: Build web (sanity)
         run: npm run build
 
       - name: Upload web dist
-        if: always()
+        if: github.event_name == 'push' && always()
         uses: actions/upload-artifact@v4
         with:
           name: web-dist
           path: dist/
+          retention-days: 7

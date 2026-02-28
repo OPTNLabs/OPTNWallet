@@ -201,7 +201,7 @@ const OutputSelection: React.FC<OutputSelectionProps> = ({
             <h3 className="text-lg font-semibold mb-2">Transaction Outputs</h3>
             <button
               onClick={togglePopup}
-              className="bg-blue-500 font-bold text-white py-1 px-2 rounded hover:bg-blue-600 transition-colors duration-200"
+              className="wallet-btn-primary py-1 px-2"
             >
               Show Outputs
             </button>
@@ -210,7 +210,7 @@ const OutputSelection: React.FC<OutputSelectionProps> = ({
         {showPopup && (
           <Popup closePopups={() => setShowPopup(false)}>
             {txOutputs.length === 0 ? (
-              <p className="text-gray-500">No outputs added yet.</p>
+              <p className="wallet-muted">No outputs added yet.</p>
             ) : (
               <div className="max-h-[50vh] overflow-y-auto">
                 <h3 className="text-lg font-semibold flex flex-col items-center mb-4">
@@ -219,7 +219,7 @@ const OutputSelection: React.FC<OutputSelectionProps> = ({
                 {txOutputs.map((output, index) => (
                   <div
                     key={index}
-                    className="flex flex-col items-start mb-4 p-4 border rounded w-full break-words whitespace-normal bg-gray-50"
+                    className="flex flex-col items-start mb-4 p-4 border rounded w-full break-words whitespace-normal wallet-surface-strong border-[var(--wallet-border)]"
                   >
                     <div className="flex justify-between w-full">
                       {/* <span className="font-medium">Recipient:</span> */}
@@ -267,7 +267,7 @@ const OutputSelection: React.FC<OutputSelectionProps> = ({
                         handleRemoveOutput(index);
                         if (txOutputs.length === 1) togglePopup();
                       }}
-                      className="bg-red-400 font-bold text-white py-1 px-2 rounded-md hover:bg-red-600 transition duration-300"
+                      className="wallet-btn-danger py-1 px-2"
                     >
                       Remove
                     </button>
@@ -281,7 +281,7 @@ const OutputSelection: React.FC<OutputSelectionProps> = ({
                   dispatch(clearTransaction());
                   togglePopup();
                 }}
-                className="bg-red-400 font-bold text-white py-1 px-2 rounded-md hover:bg-red-600 transition duration-300"
+                className="wallet-btn-danger py-1 px-2"
               >
                 Remove All
               </button>
@@ -323,7 +323,7 @@ const OutputSelection: React.FC<OutputSelectionProps> = ({
                     setPopupTitle('Add Recipient');
                     setShowAddOutputPopup(true);
                   }}
-                  className="bg-blue-500 font-bold text-white py-2 px-4 rounded"
+                  className="wallet-btn-primary"
                 >
                   Add Output
                 </button>
@@ -339,7 +339,7 @@ const OutputSelection: React.FC<OutputSelectionProps> = ({
               value={changeAddress}
               placeholder="Change Address"
               onChange={(e) => setChangeAddress(e.target.value)}
-              className="border p-2 mb-2 w-full break-words whitespace-normal"
+              className="wallet-input mb-2 w-full break-words whitespace-normal"
             />
           </div>
         )}

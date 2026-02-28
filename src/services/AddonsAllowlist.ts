@@ -1,5 +1,10 @@
 // src/services/AddonsAllowlist.ts
-import type { AddonManifest, AddonPermission } from '../types/addons';
+import {
+  ADDON_CAPABILITIES,
+  type AddonCapability,
+  type AddonManifest,
+  type AddonPermission,
+} from '../types/addons';
 
 /**
  * Global allowlist for addon HTTP calls.
@@ -13,6 +18,7 @@ const ALLOWED_ADDON_HTTP_DOMAINS = new Set<string>([
   // 'bcmr.optnlabs.com',
   // 'chaingraph.optnlabs.com',
 ]);
+const KNOWN_ADDON_CAPABILITIES = new Set<AddonCapability>(ADDON_CAPABILITIES);
 
 function normalizeDomain(d: string): string {
   return d.trim().toLowerCase();
@@ -84,15 +90,63 @@ export function validateAddonPermissions(manifest: AddonManifest): void {
         continue;
       }
 
+      case 'capabilities': {
+        if (
+          !Array.isArray(perm.capabilities) ||
+          perm.capabilities.length === 0
+        ) {
+          throw new Error(
+            `Addon "${manifest.id}" requests capabilities permission with no capabilities`
+          );
+        }
+
+        const seen = new Set<string>();
+        for (const raw of perm.capabilities) {
+          if (typeof raw !== 'string') {
+            throw new Error(
+              `Addon "${manifest.id}" has invalid capability value: ${String(raw)}`
+            );
+          }
+          if (!KNOWN_ADDON_CAPABILITIES.has(raw as AddonCapability)) {
+            throw new Error(
+              `Addon "${manifest.id}" requests unknown capability: "${raw}"`
+            );
+          }
+          if (seen.has(raw)) {
+            throw new Error(
+              `Addon "${manifest.id}" has duplicate capability: "${raw}"`
+            );
+          }
+          seen.add(raw);
+        }
+
+        continue;
+      }
+
       default: {
         // Fail-closed for any future permission kinds.
         assertNever(
           perm as never,
-          `Unsupported addon permission: ${(perm as AddonPermission as any).kind}`
+          `Unsupported addon permission`
         );
       }
     }
   }
+}
+
+export function getAddonGrantedCapabilities(
+  manifest: AddonManifest
+): Set<AddonCapability> {
+  const out = new Set<AddonCapability>();
+  for (const perm of manifest.permissions) {
+    if (perm.kind !== 'capabilities') continue;
+    for (const cap of perm.capabilities) {
+      if (KNOWN_ADDON_CAPABILITIES.has(cap)) {
+        out.add(cap);
+      }
+    }
+  }
+  return out;
 }
 
 /**

@@ -15,26 +15,52 @@ export const BUILTIN_ADDONS: AddonManifest[] = [
     name: 'OPTN Builtin Demo',
     version: '0.0.1',
     description: 'Builtin addon scaffold to validate addon contract loading.',
-    permissions: [{ kind: 'none' }],
+    trustTier: 'internal',
+    permissions: [
+      {
+        kind: 'capabilities',
+        capabilities: [
+          'wallet:context:read',
+          'wallet:addresses:read',
+          'utxo:wallet:read',
+          'tx:add_output',
+          'tx:build',
+          'tx:broadcast',
+        ],
+      },
+    ],
 
     // ✅ Patient-0 app (v1: declarative + config.screen mapping)
     apps: [
       {
         id: 'authguard',
         name: 'AuthGuard',
-        description: 'Patient-0 marketplace app (SDK + routing smoke test).',
+        description: 'Token-gated access control v1',
         iconUri: null, // ✅ fall back to DEFAULT_ICON in AppsView
         kind: 'declarative',
+        requiredCapabilities: [
+          'utxo:wallet:read',
+          'tx:build',
+          'tx:broadcast',
+        ],
         config: {
           screen: 'AuthGuardApp',
         },
       },
       {
         id: 'mintCashTokensPoCApp',
-        name: 'MintCashTokensPoCApp',
-        description: 'Mint Cashtokens',
+        name: 'Mint Cashtokens',
+        description: 'V1',
         iconUri: null, // ✅ fall back to DEFAULT_ICON in AppsView
         kind: 'declarative',
+        requiredCapabilities: [
+          'wallet:context:read',
+          'wallet:addresses:read',
+          'utxo:wallet:read',
+          'tx:add_output',
+          'tx:build',
+          'tx:broadcast',
+        ],
         config: {
           screen: 'MintCashTokensPoCApp',
         },
