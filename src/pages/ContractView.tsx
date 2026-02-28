@@ -1,13 +1,13 @@
 // src/pages/ContractView.tsx
 
-import React, { useState, useEffect } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { useSelector } from 'react-redux';
 import { useNavigate } from 'react-router-dom';
 import { TailSpin } from 'react-loader-spinner';
 import ContractManager from '../apis/ContractManager/ContractManager';
+import type { ContractInstanceRow } from '../apis/ContractManager/ContractManager';
 import { hexString } from '../utils/hex';
 import { RootState } from '../redux/store';
-import parseInputValue from '../utils/parseInputValue';
 import AddressSelectionPopup from '../components/AddressSelectionPopup';
 import KeyService from '../services/KeyService';
 import { shortenTxHash } from '../utils/shortenHash';
@@ -15,6 +15,7 @@ import { PREFIX } from '../utils/constants';
 import { Toast } from '@capacitor/toast';
 import Popup from '../components/transaction/Popup';
 import { Tooltip } from 'react-tooltip';
+import { logError, toErrorMessage } from '../utils/errorHandling';
 
 import {
   CapacitorBarcodeScanner,
@@ -23,20 +24,44 @@ import {
 import { FaCamera } from 'react-icons/fa';
 import { DataSigner } from '../utils/dataSigner';
 import ElectrumService from '../services/ElectrumService';
+import {
+  createContractAndFetchInstances,
+  deleteContractAndFetchInstances,
+  updateContractAndRebuildInstance,
+} from './contract-view/services';
+import {
+  parseConstructorArgs,
+  validateConstructorArgsComplete,
+} from './contract-view/utils';
+import PageHeader from '../components/ui/PageHeader';
+import SectionCard from '../components/ui/SectionCard';
+import EmptyState from '../components/ui/EmptyState';
 
 interface BlockHeader {
   height: number;
   hex: string;
 }
 
+interface ContractArg {
+  name: string;
+  type: string;
+}
+
+interface AvailableContract {
+  fileName: string;
+  contractName: string;
+}
+
 const ContractView = () => {
   const [isLoading, setIsLoading] = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);
-  const [availableContracts, setAvailableContracts] = useState<any[]>([]);
+  const [availableContracts, setAvailableContracts] = useState<
+    AvailableContract[]
+  >([]);
   const [selectedContractFile, setSelectedContractFile] = useState<string>('');
-  const [constructorArgs, setConstructorArgs] = useState<any[]>([]);
-  const [inputValues, setInputValues] = useState<{ [key: string]: any }>({});
-  const [contractInstances, setContractInstances] = useState<any[]>([]);
+  const [constructorArgs, setConstructorArgs] = useState<ContractArg[]>([]);
+  const [inputValues, setInputValues] = useState<Record<string, string>>({});
+  const [contractInstances, setContractInstances] = useState<ContractInstanceRow[]>([]);
   const [showAddressPopup, setShowAddressPopup] = useState<boolean>(false);
   const [currentArgName, setCurrentArgName] = useState<string>('');
   const [showConstructorArgsPopup, setShowConstructorArgsPopup] =
@@ -53,6 +78,7 @@ const ContractView = () => {
   const [dataToSign, setDataToSign] = useState<{ [key: string]: string }>({});
 
   const navigate = useNavigate();
+  const contractManager = useMemo(() => ContractManager(), []);
   const wallet_id = useSelector(
     (state: RootState) => state.wallet_id.currentWalletId
   );
@@ -68,7 +94,7 @@ const ContractView = () => {
           setBlockHeader(block as BlockHeader);
         }
       } catch (err) {
-        console.error('Failed to fetch initial block header', err);
+        logError('ContractView.fetchInitialBlock', err);
       }
     };
 
@@ -88,38 +114,35 @@ const ContractView = () => {
   useEffect(() => {
     const loadAvailableContracts = async () => {
       try {
-        const contractManager = ContractManager();
         const contracts = await contractManager.listAvailableArtifacts();
         if (!contracts || contracts.length === 0) {
           throw new Error('No available contracts found');
         }
         setAvailableContracts(contracts);
-      } catch (err: any) {
-        console.error('Error loading available contracts:', err);
-        setError(err.message);
+      } catch (err) {
+        logError('ContractView.loadAvailableContracts', err);
+        setError(toErrorMessage(err, 'Failed to load available contracts.'));
       }
     };
 
     const loadContractInstances = async () => {
       try {
-        const contractManager = ContractManager();
         const instances = await contractManager.fetchContractInstances();
         setContractInstances(instances);
-      } catch (err: any) {
-        console.error('Error loading contract instances:', err);
-        setError(err.message);
+      } catch (err) {
+        logError('ContractView.loadContractInstances', err);
+        setError(toErrorMessage(err, 'Failed to load contract instances.'));
       }
     };
 
     loadAvailableContracts();
     loadContractInstances();
-  }, []);
+  }, [contractManager]);
 
   useEffect(() => {
     const loadContractDetails = async () => {
       if (selectedContractFile) {
         try {
-          const contractManager = ContractManager();
           const artifact =
             await contractManager.loadArtifact(selectedContractFile);
           if (!artifact) {
@@ -127,16 +150,18 @@ const ContractView = () => {
               `Artifact ${selectedContractFile} could not be loaded`
             );
           }
-          setConstructorArgs(artifact.constructorInputs || []);
+          setConstructorArgs((artifact.constructorInputs || []) as ContractArg[]);
           setShowConstructorArgsPopup(true);
-        } catch (err: any) {
-          console.error('Error loading contract details:', err);
-          setError(err.message);
+        } catch (err) {
+          logError('ContractView.loadContractDetails', err, {
+            selectedContractFile,
+          });
+          setError(toErrorMessage(err, 'Failed to load contract details.'));
         }
       }
     };
     loadContractDetails();
-  }, [selectedContractFile]);
+  }, [selectedContractFile, contractManager]);
 
   const handleInputChange = (event: React.ChangeEvent<HTMLInputElement>) => {
     const { name, value } = event.target;
@@ -148,7 +173,7 @@ const ContractView = () => {
       await navigator.clipboard.writeText(address);
       await Toast.show({ text: 'Address copied to clipboard!' });
     } catch (error) {
-      console.error('Failed to copy address:', error);
+      logError('ContractView.copyAddress', error, { address });
       await Toast.show({ text: 'Failed to copy address.' });
     }
   };
@@ -198,7 +223,7 @@ const ContractView = () => {
       setInputValues({ ...inputValues, [argName]: signatureHex });
       await Toast.show({ text: 'Signature generated successfully!' });
     } catch (error) {
-      console.error('Error generating signature:', error);
+      logError('ContractView.generateSignature', error, { argName });
       await Toast.show({ text: 'Failed to generate signature.' });
     }
   };
@@ -217,7 +242,7 @@ const ContractView = () => {
         await Toast.show({ text: 'No QR code detected. Please try again.' });
       }
     } catch (error) {
-      console.error('Barcode scan error:', error);
+      logError('ContractView.scanBarcode', error, { argName });
       await Toast.show({
         text: 'Failed to scan QR code. Please ensure camera permissions are granted and try again.',
       });
@@ -227,44 +252,28 @@ const ContractView = () => {
   };
 
   const validateConstructorArgs = (): boolean => {
-    for (const arg of constructorArgs) {
-      if (
-        inputValues[arg.name] === undefined ||
-        inputValues[arg.name] === null ||
-        inputValues[arg.name].toString().trim() === ''
-      ) {
-        setErrorMessage(
-          `Please provide a value for "${arg.name}" (${arg.type}).`
-        );
-        setShowErrorPopup(true);
-        return false;
-      }
+    const validation = validateConstructorArgsComplete(constructorArgs, inputValues);
+    if (!validation.valid) {
+      setErrorMessage(validation.errorMessage ?? 'Missing constructor arguments.');
+      setShowErrorPopup(true);
+      return false;
     }
-    return true;
+    return validation.valid;
   };
 
   const createContract = async () => {
     if (!validateConstructorArgs()) return;
     setIsLoading(true);
     try {
-      const contractManager = ContractManager();
-      const args =
-        constructorArgs.map((arg) =>
-          parseInputValue(inputValues[arg.name], arg.type)
-        ) || [];
-      if (
-        constructorArgs.length > 0 &&
-        args.length !== constructorArgs.length
-      ) {
-        throw new Error('All constructor arguments must be provided');
-      }
-      await contractManager.createContract(
+      const args = parseConstructorArgs(constructorArgs, inputValues) || [];
+      const instances = await createContractAndFetchInstances({
+        contractManager,
         selectedContractFile,
         args,
+        constructorArgs,
         currentNetwork
-      );
-      const instances = await contractManager.fetchContractInstances();
-      setContractInstances(instances);
+      });
+      setContractInstances(instances as ContractInstanceRow[]);
       setSelectedContractFile('');
       setConstructorArgs([]);
       setInputValues({});
@@ -272,54 +281,57 @@ const ContractView = () => {
       setDataToSign({});
       setShowConstructorArgsPopup(false);
       await Toast.show({ text: 'Contract created successfully!' });
-    } catch (err: any) {
-      console.error('Error creating contract:', err);
-      setErrorMessage(`Failed to create contract: ${err.message}`);
+    } catch (err) {
+      logError('ContractView.createContract', err, {
+        selectedContractFile,
+      });
+      setErrorMessage(
+        `Failed to create contract: ${toErrorMessage(err, 'Unknown error')}`
+      );
       setShowErrorPopup(true);
     } finally {
       setIsLoading(false);
     }
   };
 
-  const deleteContract = async (contractId: string) => {
+  const deleteContract = async (contractId: number | string) => {
     try {
-      const contractManager = ContractManager();
-      await contractManager.deleteContractInstance(parseInt(contractId));
-      const instances = await contractManager.fetchContractInstances();
-      setContractInstances(instances);
+      const instances = await deleteContractAndFetchInstances({
+        contractManager,
+        contractId: Number(contractId),
+      });
+      setContractInstances(instances as ContractInstanceRow[]);
       await Toast.show({ text: 'Contract deleted successfully!' });
-    } catch (err: any) {
-      console.error('Error deleting contract instance:', err);
-      setError(err.message);
+    } catch (err) {
+      logError('ContractView.deleteContract', err, { contractId });
+      setError(toErrorMessage(err, 'Failed to delete contract.'));
       await Toast.show({ text: 'Failed to delete contract.' });
     }
   };
 
   const updateContract = async (address: string) => {
     try {
-      const contractManager = ContractManager();
-      await contractManager.updateContractUTXOs(address);
-      const updatedContractInstance =
-        await contractManager.getContractInstanceByAddress(address);
-      const totalBalance = updatedContractInstance.utxos.reduce(
-        (sum: bigint, utxo: any) => sum + BigInt(utxo.amount),
-        BigInt(0)
-      );
+      const { updatedContractInstance, totalBalance } =
+        await updateContractAndRebuildInstance({
+          contractManager,
+          address,
+        });
       setContractInstances((prev) =>
         prev.map((inst) =>
           inst.address === address
             ? {
                 ...inst,
                 balance: totalBalance,
-                utxos: updatedContractInstance.utxos,
+                utxos:
+                  updatedContractInstance.utxos as ContractInstanceRow['utxos'],
               }
             : inst
         )
       );
       await Toast.show({ text: 'Contract updated successfully!' });
-    } catch (err: any) {
-      console.error('Error updating UTXOs and balance:', err);
-      setError(err.message);
+    } catch (err) {
+      logError('ContractView.updateContract', err, { address });
+      setError(toErrorMessage(err, 'Failed to update contract.'));
       await Toast.show({ text: 'Failed to update contract.' });
     }
   };
@@ -329,26 +341,25 @@ const ContractView = () => {
     setErrorMessage('');
   };
 
-  if (error) return <div>Error: {error}</div>;
+  if (error) {
+    return (
+      <div className="container mx-auto max-w-md p-4 pb-16 wallet-page">
+        <PageHeader title="Contracts" compact />
+        <EmptyState message={`Error: ${error}`} />
+      </div>
+    );
+  }
 
   const returnHome = () => navigate(`/home/${wallet_id}`);
 
   return (
-    <div className="container mx-auto p-4">
-      <div className="flex justify-center mt-4">
-        <img
-          src="/assets/images/OPTNWelcome1.png"
-          alt="Welcome"
-          className="max-w-full h-auto"
-        />
-      </div>
+    <div className="container mx-auto max-w-xl p-4 pb-16 wallet-page">
+      <PageHeader title="Contracts" subtitle="Instantiate and manage contracts" compact />
 
-      <h2 className="text-lg font-semibold flex items-center justify-center gap-2 mb-2">
-        <span>Select Contract</span>
-      </h2>
+      <SectionCard title="Select Contract" className="mb-4">
 
       <select
-        className="border p-2 mb-4 w-full"
+        className="wallet-input mb-4 w-full"
         value={selectedContractFile}
         onChange={(e) => setSelectedContractFile(e.target.value)}
       >
@@ -359,6 +370,7 @@ const ContractView = () => {
           </option>
         ))}
       </select>
+      </SectionCard>
 
       {showConstructorArgsPopup && (
         <Popup
@@ -380,7 +392,7 @@ const ContractView = () => {
                 <span>Current Block Height</span>
                 <span
                   data-tooltip-id="block-height"
-                  className="cursor-pointer text-yellow-600 text-base font-bold select-none"
+                  className="cursor-pointer wallet-accent-icon text-base font-bold select-none"
                   aria-label="Data signature info"
                   role="img"
                 >
@@ -400,11 +412,11 @@ const ContractView = () => {
               if (arg.type === 'datasig') {
                 return (
                   <div key={index} className="mb-4">
-                    <label className="text-sm font-medium text-gray-700 flex items-center gap-2">
+                    <label className="text-sm font-medium wallet-muted flex items-center gap-2">
                       <span>{arg.name} (datasig)</span>
                       <span
                         data-tooltip-id={`datasig-tt-${index}`}
-                        className="cursor-pointer text-yellow-600 text-base font-bold select-none"
+                        className="cursor-pointer wallet-accent-icon text-base font-bold select-none"
                         aria-label="Data signature info"
                         role="img"
                       >
@@ -428,7 +440,7 @@ const ContractView = () => {
                           [arg.name]: e.target.value,
                         })
                       }
-                      className="border p-2 w-full rounded-md mb-2"
+                      className="wallet-input w-full mb-2"
                       placeholder={`Enter data to sign for ${arg.name}`}
                     />
 
@@ -439,7 +451,7 @@ const ContractView = () => {
                           setCurrentArgName(arg.name);
                           setShowAddressPopup(true);
                         }}
-                        className={`bg-blue-500 hover:bg-blue-600 transition duration-300 font-bold text-white py-2 px-4 rounded ${
+                        className={`wallet-btn-primary ${
                           isScanning ? 'opacity-50 cursor-not-allowed' : ''
                         }`}
                         disabled={isScanning}
@@ -451,7 +463,7 @@ const ContractView = () => {
                       <button
                         type="button"
                         onClick={() => generateSignature(arg.name)}
-                        className={`bg-green-500 hover:bg-green-600 transition duration-300 font-bold text-white py-2 px-4 rounded ${
+                        className={`wallet-btn-primary ${
                           !selectedAddresses[arg.name] || !dataToSign[arg.name]
                             ? 'opacity-50 cursor-not-allowed'
                             : ''
@@ -484,13 +496,13 @@ const ContractView = () => {
                   arg.type === 'bytes20' || arg.type === 'pubkey';
                 return (
                   <div key={index} className="mb-4">
-                    <label className="text-sm font-medium text-gray-700 flex items-center gap-2">
+                    <label className="text-sm font-medium wallet-muted flex items-center gap-2">
                       <span>
                         {arg.name} ({arg.type})
                       </span>
                       <span
                         data-tooltip-id={`argtype-tt-${index}`}
-                        className="cursor-pointer text-yellow-600 text-base font-bold select-none"
+                        className="cursor-pointer wallet-accent-icon text-base font-bold select-none"
                         aria-label="Argument type info"
                         role="img"
                       >
@@ -519,7 +531,7 @@ const ContractView = () => {
                               setCurrentArgName(arg.name);
                               setShowAddressPopup(true);
                             }}
-                            className={`bg-blue-500 hover:bg-blue-600 transition duration-300 font-bold text-white py-2 px-4 rounded ${
+                            className={`wallet-btn-primary ${
                               isScanning ? 'opacity-50 cursor-not-allowed' : ''
                             }`}
                             disabled={isScanning}
@@ -531,7 +543,7 @@ const ContractView = () => {
                           <button
                             type="button"
                             onClick={() => scanBarcode(arg.name)}
-                            className={`bg-green-500 hover:bg-green-600 transition duration-300 text-white py-2 px-4 rounded ${
+                            className={`wallet-btn-primary ${
                               isScanning ? 'opacity-50 cursor-not-allowed' : ''
                             }`}
                             disabled={isScanning}
@@ -554,7 +566,7 @@ const ContractView = () => {
                         name={arg.name}
                         value={inputValues[arg.name] || ''}
                         onChange={handleInputChange}
-                        className="border p-2 w-full rounded-md"
+                        className="wallet-input w-full"
                         placeholder={`Enter ${arg.name}`}
                       />
                     )}
@@ -567,7 +579,7 @@ const ContractView = () => {
           <div className="flex flex-col items-end">
             <button
               onClick={createContract}
-              className={`bg-green-500 hover:bg-green-600 transition duration-300 text-white py-2 px-4 rounded mb-4 flex items-center justify-center ${
+              className={`wallet-btn-primary mb-4 flex items-center justify-center ${
                 isLoading ? 'cursor-not-allowed opacity-50' : ''
               }`}
               disabled={isLoading}
@@ -590,17 +602,14 @@ const ContractView = () => {
       )}
 
       {contractInstances.length > 0 && (
-        <div>
-          <h2 className="text-lg font-semibold flex items-center justify-center gap-2 mb-2">
-            <span>Instantiated Contracts</span>
-          </h2>
+        <SectionCard title="Instantiated Contracts">
 
           <div className="overflow-y-auto max-h-80 mb-4">
             <ul>
               {contractInstances.map((instance) => (
                 <li
                   key={instance.id}
-                  className="mb-4 p-4 border rounded bg-gray-100"
+                  className="mb-4 p-4 wallet-card"
                 >
                   <div>
                     <div className="mb-2 overflow-x-auto">
@@ -638,14 +647,14 @@ const ContractView = () => {
                   <div className="grid grid-cols-[auto,auto] justify-between">
                     <button
                       onClick={() => deleteContract(instance.id)}
-                      className="bg-red-500 hover:bg-red-600 font-bold text-white py-2 px-4 my-2 rounded"
+                      className="wallet-btn-danger my-2"
                     >
                       Delete
                     </button>
 
                     <button
                       onClick={() => updateContract(instance.address)}
-                      className="bg-green-500 hover:bg-green-600 font-bold text-white py-2 px-4 my-2 rounded justify-self-end"
+                      className="wallet-btn-primary my-2 justify-self-end"
                     >
                       Update
                     </button>
@@ -654,12 +663,12 @@ const ContractView = () => {
               ))}
             </ul>
           </div>
-        </div>
+        </SectionCard>
       )}
 
       <button
         onClick={returnHome}
-        className="w-full bg-red-500 font-bold text-white py-2 px-4 rounded-md hover:bg-red-600 transition duration-300 my-2"
+        className="wallet-btn-danger w-full my-2"
       >
         Go Back
       </button>
@@ -680,7 +689,7 @@ const ContractView = () => {
           <p className="mb-4">{errorMessage}</p>
           <button
             onClick={handleErrorPopupClose}
-            className="mt-4 bg-red-500 font-bold text-white py-2 px-4 rounded"
+            className="mt-4 wallet-btn-danger"
           >
             Close
           </button>

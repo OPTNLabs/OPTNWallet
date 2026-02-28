@@ -23,7 +23,10 @@ import { BcmrTokenMetadata } from '../types/types';
 
 import { store } from '../redux/store';
 import { Network } from '../redux/networkSlice';
-import { getBcmrLatestRegistryUrl } from '../utils/servers/InfraUrls';
+import {
+  getBcmrLatestRegistryUrls,
+  runWithFailover,
+} from '../utils/servers/InfraUrls';
 
 const ICON_CACHE = new Map<string, string | null>();
 
@@ -70,8 +73,55 @@ export interface IdentityRegistry {
   lastFetch: string;
 }
 
+type ChaingraphOutput = {
+  scriptPubKey?: { hex?: string };
+};
+
+type ChaingraphTx = {
+  outputs?: ChaingraphOutput[];
+};
+
+type RegistryWithIdentity = MetadataRegistry & { registryIdentity?: string };
+
+function hasIdentityHistory(
+  registry: MetadataRegistry
+): registry is MetadataRegistry & {
+  identities: Record<string, RegistryTimestampKeyedValues<IdentitySnapshot>>;
+} {
+  return typeof registry === 'object' && registry !== null && !!registry.identities;
+}
+
+function getRegistryIdentity(registry: MetadataRegistry): string | undefined {
+  const maybe = registry as RegistryWithIdentity;
+  return typeof maybe.registryIdentity === 'string'
+    ? maybe.registryIdentity
+    : undefined;
+}
+
+function getNftUrisForCommitment(
+  snapshot: IdentitySnapshot,
+  nftCommitment: string
+): Record<string, string> | undefined {
+  const nfts = snapshot.token?.nfts as
+    | { types?: Record<string, { uris?: Record<string, string> }> }
+    | undefined;
+  return nfts?.types?.[nftCommitment]?.uris;
+}
+
+function dedupeUrls(urls: string[]): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const url of urls) {
+    if (!url || seen.has(url)) continue;
+    seen.add(url);
+    out.push(url);
+  }
+  return out;
+}
+
 export default class BcmrService {
-  private db = DatabaseService().getDatabase();
+  private readonly dbService = DatabaseService();
+  private db = this.dbService.getDatabase();
   private CACHE_TTL_MS = 7 * 24 * 60 * 60 * 1000; // 7d
 
   private inMemoryRegistries = new Map<string, IdentityRegistry>();
@@ -88,23 +138,24 @@ export default class BcmrService {
 
   private async getDb(): Promise<Database> {
     if (!this.db) {
-      await DatabaseService().ensureDatabaseStarted();
-      const db = DatabaseService().getDatabase();
+      await this.dbService.ensureDatabaseStarted();
+      const db = this.dbService.getDatabase();
       if (!db) throw new Error('Database failed to initialize');
       this.db = db;
     }
     return this.db;
   }
 
-  private getDefaultRegistryUri(authbase: string): string {
+  private getDefaultRegistryUris(authbase: string): string[] {
     const net: Network = store.getState().network.currentNetwork;
-    return getBcmrLatestRegistryUrl(net, authbase);
+    return getBcmrLatestRegistryUrls(net, authbase);
   }
 
   private async loadIdentityRegistry(
     authbase: string
   ): Promise<IdentityRegistry> {
-    const res = this.db.exec(
+    const db = await this.getDb();
+    const res = db.exec(
       `SELECT registryUri, lastFetch, registryHash, registryData
          FROM bcmr WHERE authbase = ?`,
       [authbase]
@@ -129,10 +180,11 @@ export default class BcmrService {
     registry: MetadataRegistry,
     registryUri: string
   ): Promise<IdentityRegistry> {
+    const db = await this.getDb();
     const json = JSON.stringify(registry);
     const registryHash = sha256.text(json);
     const lastFetch = new Date().toISOString();
-    this.db.run(
+    db.run(
       `INSERT INTO bcmr
          (authbase, registryUri, lastFetch, registryHash, registryData)
        VALUES (?, ?, ?, ?, ?)
@@ -151,9 +203,9 @@ export default class BcmrService {
     authbase: string,
     registry: MetadataRegistry = LOCAL_BCMR
   ): IdentitySnapshot {
-    const history = (registry as any).identities?.[
-      authbase
-    ] as RegistryTimestampKeyedValues<IdentitySnapshot>;
+    const history = hasIdentityHistory(registry)
+      ? registry.identities[authbase]
+      : undefined;
     if (!history) {
       throw new Error(`No identity history for ${authbase}`);
     }
@@ -242,8 +294,8 @@ export default class BcmrService {
       // No local cache, fall through
     }
 
-    const uri = this.getDefaultRegistryUri(authbase);
-    const fresh = await this.fetchAndCommitRegistry(authbase, uri);
+    const uris = this.getDefaultRegistryUris(authbase);
+    const fresh = await this.fetchAndCommitRegistry(authbase, uris);
 
     try {
       const snapshot = this.extractIdentity(authbase, fresh.registry);
@@ -292,7 +344,7 @@ export default class BcmrService {
    * 1) Ask Chaingraph for the authHead txid
    * 2) Fetch that single transaction’s outputs
    */
-  private async resolveAuthChain(authbase: string): Promise<any[]> {
+  private async resolveAuthChain(authbase: string): Promise<ChaingraphTx[]> {
     // 1) get the head of the authchain
     const authHeadData = await queryAuthHead(authbase);
     const headHash =
@@ -304,17 +356,17 @@ export default class BcmrService {
 
     // 2) fetch the full tx
     const txResp = await queryTransactionByHash(headHash);
-    const tx = txResp?.data?.transaction?.[0];
+    const tx = txResp?.data?.transaction?.[0] as ChaingraphTx | undefined;
     if (!tx) {
       throw new Error(`Chaingraph missing transaction ${headHash}`);
     }
     return [tx];
   }
 
-  private findBcmrOutput(tx: any): any | null {
+  private findBcmrOutput(tx: ChaingraphTx): ChaingraphOutput | null {
     return (
-      tx.outputs?.find((o: any) =>
-        o.scriptPubKey.hex.startsWith('6a0442434d52')
+      tx.outputs?.find((o) =>
+        String(o.scriptPubKey?.hex ?? '').startsWith('6a0442434d52')
       ) || null
     );
   }
@@ -348,13 +400,13 @@ export default class BcmrService {
   ): Promise<IdentityRegistry | null> {
     try {
       const chain = await this.resolveAuthChain(authbase);
-      let latest: any = null;
+      let latest: ChaingraphOutput | null = null;
       for (const tx of chain) {
         const out = this.findBcmrOutput(tx);
         if (out) latest = out;
       }
       if (!latest) return null;
-      const { uris } = this.parseBcmrOutput(latest.scriptPubKey.hex);
+      const { uris } = this.parseBcmrOutput(String(latest.scriptPubKey?.hex ?? ''));
       const uri = uris[0] || fallbackUri;
       const resp = await ipfsFetch(uri);
       if (!resp.ok) throw new Error(`Failed ${uri}`);
@@ -368,7 +420,8 @@ export default class BcmrService {
   }
 
   public async preloadMetadataRegistries(): Promise<IdentityRegistry[]> {
-    const res = this.db.exec(`SELECT authbase FROM bcmr;`);
+    const db = await this.getDb();
+    const res = db.exec(`SELECT authbase FROM bcmr;`);
     if (res.length === 0) return [];
     const cols = res[0].columns;
     const idx = cols.indexOf('authbase');
@@ -381,8 +434,9 @@ export default class BcmrService {
    * Wipe all on-chain registry caches (both the registry table and the mapping table)
    */
   public async purgeBcmrData(): Promise<void> {
-    this.db.run(`DELETE FROM bcmr; DELETE FROM bcmr_tokens;`);
-    await DatabaseService().saveDatabaseToFile();
+    const db = await this.getDb();
+    db.run(`DELETE FROM bcmr; DELETE FROM bcmr_tokens;`);
+    await this.dbService.saveDatabaseToFile();
   }
 
   /**
@@ -402,8 +456,7 @@ export default class BcmrService {
     // pick the right URI map
     const snapshot = this.extractIdentity(authbase);
     const uris = nftCommitment
-      ? snapshot.token?.nfts?.parse &&
-        (snapshot.token.nfts as any).types[nftCommitment]?.uris
+      ? getNftUrisForCommitment(snapshot, nftCommitment)
       : snapshot.uris;
     const iconUri = uris?.icon;
     if (!iconUri) return null;
@@ -465,63 +518,61 @@ export default class BcmrService {
    * Call this once when your app finishes initializing all metadata.
    */
   public async flushCache(): Promise<void> {
-    await DatabaseService().saveDatabaseToFile();
+    await this.dbService.saveDatabaseToFile();
   }
 
   // A little helper that actually fetches & commits one registry:
   private async fetchAndCommitRegistry(
     authbase: string,
-    uri: string
+    uriOrUris: string | string[]
   ): Promise<IdentityRegistry> {
-    try {
-      // console.log(`[BcmrService] Fetching registry for authbase ${authbase} from URI ${uri}`);
-      const resp = await ipfsFetch(uri);
-      // if (!resp.ok) {
-      //   // console.error(`[BcmrService] Fetch failed for ${uri}: Status ${resp.status}`);
-      //   throw new Error(`Fetch failed: ${resp.status}`);
-      // }
+    const uris = Array.isArray(uriOrUris) ? uriOrUris : [uriOrUris];
+    const net: Network = store.getState().network.currentNetwork;
 
-      let data;
-      try {
-        data = await resp.json();
-        // console.log(`[BcmrService] Successfully parsed JSON for ${uri}:`, data);
-      } catch (error) {
-        // console.error(`[BcmrService] Invalid JSON response from ${uri}:`, error);
-        throw new Error(`Invalid JSON response from ${uri}`);
-      }
+    return runWithFailover(
+      `bcmr:${net}:${authbase}`,
+      uris,
+      async (uri): Promise<IdentityRegistry> => {
+        const resp = await ipfsFetch(uri);
+        if (!resp.ok) {
+          throw new Error(`Fetch failed: HTTP ${resp.status}`);
+        }
 
-      const imported = importMetadataRegistry(data);
-      if (typeof imported === 'string') {
-        // console.error(`[BcmrService] Failed to import metadata for ${uri}:`, imported);
-        throw new Error(imported);
-      }
+        let data;
+        try {
+          data = await resp.json();
+        } catch {
+          throw new Error(`Invalid JSON response from ${uri}`);
+        }
 
-      // on-chain fallback
-      if (typeof (imported as any).registryIdentity === 'string') {
-        const onChain = await this.resolveAuthChainRegistry(
-          (imported as any).registryIdentity,
+        const imported = importMetadataRegistry(data);
+        if (typeof imported === 'string') {
+          throw new Error(imported);
+        }
+
+        // on-chain fallback
+        const registryIdentity = getRegistryIdentity(imported);
+        if (registryIdentity) {
+          const onChain = await this.resolveAuthChainRegistry(
+            registryIdentity,
+            uri
+          );
+          if (onChain) {
+            this.inMemoryRegistries.set(authbase, onChain);
+            return onChain;
+          }
+        }
+
+        // commit to sqlite
+        const committed = await this.commitIdentityRegistry(
+          authbase,
+          imported,
           uri
         );
-        if (onChain) {
-          // console.log(`[BcmrService] Used on-chain fallback for ${authbase}`);
-          this.inMemoryRegistries.set(authbase, onChain);
-          return onChain;
-        }
+        this.inMemoryRegistries.set(authbase, committed);
+        return committed;
       }
-
-      // commit to sqlite
-      const committed = await this.commitIdentityRegistry(
-        authbase,
-        imported,
-        uri
-      );
-      this.inMemoryRegistries.set(authbase, committed);
-      // console.log(`[BcmrService] Committed registry for authbase ${authbase}`);
-      return committed;
-    } catch (error) {
-      // console.error(`[BcmrService] Error in fetchAndCommitRegistry for ${uri}:`, error);
-      // throw error;
-    }
+    );
   }
 
   private async backgroundRefresh(
@@ -529,7 +580,8 @@ export default class BcmrService {
     uri: string
   ): Promise<void> {
     try {
-      await this.fetchAndCommitRegistry(authbase, uri);
+      const uris = dedupeUrls([uri, ...this.getDefaultRegistryUris(authbase)]);
+      await this.fetchAndCommitRegistry(authbase, uris);
     } catch (err) {
       console.error('BCMR background refresh failed', err);
     }

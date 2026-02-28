@@ -18,17 +18,23 @@ export type Quote = {
  * IMPORTANT: do not expose provider keys in the browser; use a proxy for web.
  */
 function env(name: string): string | undefined {
+  const metaEnv =
+    typeof import.meta !== 'undefined'
+      ? ((import.meta as ImportMeta & { env?: Record<string, unknown> }).env ??
+        {})
+      : {};
+  const nodeEnv =
+    typeof process !== 'undefined'
+      ? ((process as { env?: Record<string, unknown> }).env ?? {})
+      : {};
+
   // Vite style
-  const viteVal =
-    typeof import.meta !== 'undefined' && (import.meta as any).env
-      ? (import.meta as any).env[name]
-      : undefined;
+  const viteVal = metaEnv[name];
   // Node style (SSR / native builds)
-  const nodeVal =
-    typeof process !== 'undefined' && (process as any).env
-      ? (process as any).env[name]
-      : undefined;
-  return viteVal ?? nodeVal;
+  const nodeVal = nodeEnv[name];
+  if (typeof viteVal === 'string') return viteVal;
+  if (typeof nodeVal === 'string') return nodeVal;
+  return undefined;
 }
 
 const CG_KEY = env('VITE_CG_API_KEY') || env('CG_API_KEY'); // CoinGecko (optional on web if proxied)
@@ -42,7 +48,8 @@ const CRYPTO_KEY = env('VITE_CRYPTOAPIS_KEY') || env('CRYPTOAPIS_KEY'); // Crypt
 // Detect environments
 const isWeb = Capacitor.getPlatform() === 'web';
 const isDev =
-  typeof import.meta !== 'undefined' && (import.meta as any).env?.DEV;
+  typeof import.meta !== 'undefined' &&
+  Boolean((import.meta as ImportMeta & { env?: { DEV?: unknown } }).env?.DEV);
 
 // CoinGecko: use proxy in dev, real host otherwise
 const CG_BASE_WEB = isDev ? '/coingecko' : 'https://api.coingecko.com';
@@ -81,7 +88,7 @@ async function httpGetJSON(
     params?: Record<string, string | number | boolean>;
     timeoutMs?: number;
   } = {}
-): Promise<any> {
+): Promise<unknown> {
   const qp = params
     ? '?' +
       Object.entries(params)
@@ -112,7 +119,10 @@ async function httpGetJSON(
     const res = await fetch(full, { headers, signal: ctrl.signal });
     const json = await res.json().catch(() => ({}));
     if (!res.ok) {
-      const err: any = new Error(`HTTP ${res.status}`);
+      const err = new Error(`HTTP ${res.status}`) as Error & {
+        status?: number;
+        body?: unknown;
+      };
       err.status = res.status;
       err.body = json;
       throw err;
@@ -144,14 +154,18 @@ async function fetchFromCoinGecko(bases: BaseSymbol[]): Promise<Quote[]> {
 
   // Expect array of items with current_price
   const now = Date.now();
+  type CoinGeckoMarket = { id?: string; current_price?: number | string };
   const quotes: Quote[] = Array.isArray(data)
     ? (data
-        .map((it: any) => {
-          const base = invert(COINGECKO_IDS)[it.id] as BaseSymbol | undefined;
+        .map((it) => {
+          const row = (it ?? {}) as CoinGeckoMarket;
+          const base = invert(COINGECKO_IDS)[String(row.id ?? '')] as
+            | BaseSymbol
+            | undefined;
           const price =
-            typeof it?.current_price === 'number'
-              ? it.current_price
-              : Number(it?.current_price);
+            typeof row.current_price === 'number'
+              ? row.current_price
+              : Number(row.current_price);
           if (!base || !isFinite(price)) return null;
           return {
             base,
@@ -183,13 +197,17 @@ async function fetchFromCoinCap(bases: BaseSymbol[]): Promise<Quote[]> {
     params: { ids },
   });
 
-  const arr = Array.isArray(json?.data) ? json.data : [];
+  const arr = Array.isArray((json as { data?: unknown[] } | undefined)?.data)
+    ? (json as { data?: unknown[] }).data!
+    : [];
   const now = Date.now();
   const inv = invert(COINCAP_IDS);
+  type CoinCapAsset = { id?: string; priceUsd?: string | number };
   const quotes: Quote[] = arr
-    .map((it: any) => {
-      const base = inv[it.id] as BaseSymbol | undefined;
-      const price = Number(it?.priceUsd);
+    .map((it) => {
+      const row = (it ?? {}) as CoinCapAsset;
+      const base = inv[String(row.id ?? '')] as BaseSymbol | undefined;
+      const price = Number(row.priceUsd);
       if (!base || !isFinite(price)) return null;
       return { base, quote: 'USD', price, ts: now, source: 'coincap' } as Quote;
     })
@@ -214,7 +232,11 @@ async function fetchFromCryptoAPIs(bases: BaseSymbol[]): Promise<Quote[]> {
         headers,
         params: { calculationTimestamp: tsSec },
       });
-      const item = json?.data?.item;
+      const item = (
+        json as {
+          data?: { item?: { rate?: number | string; calculationTimestamp?: number | string } };
+        }
+      )?.data?.item;
       const price = Number(item?.rate);
       const t = Number(item?.calculationTimestamp);
       if (!isFinite(price)) return null;
@@ -246,12 +268,12 @@ function invert(obj: Record<string, string>): Record<string, string> {
  */
 export async function getQuotesUSD(bases: BaseSymbol[]): Promise<Quote[]> {
   const unique = Array.from(new Set(bases));
-  const collected: Record<BaseSymbol, Quote> = {} as any;
+  const collected = {} as Record<BaseSymbol, Quote>;
 
   // Try CoinGecko first
   try {
     for (const q of await fetchFromCoinGecko(unique)) collected[q.base] = q;
-  } catch (e: any) {
+  } catch (e: unknown) {
     // console.warn('CoinGecko failed', e?.status || e);
   }
 
@@ -260,7 +282,7 @@ export async function getQuotesUSD(bases: BaseSymbol[]): Promise<Quote[]> {
   if (missing1.length) {
     try {
       for (const q of await fetchFromCoinCap(missing1)) collected[q.base] = q;
-    } catch (e: any) {
+    } catch (e: unknown) {
       // console.warn('CoinCap failed', e?.status || e);
     }
   }
@@ -271,7 +293,7 @@ export async function getQuotesUSD(bases: BaseSymbol[]): Promise<Quote[]> {
     try {
       for (const q of await fetchFromCryptoAPIs(missing2))
         collected[q.base] = q;
-    } catch (e: any) {
+    } catch (e: unknown) {
       // console.warn('CryptoAPIs failed', e?.status || e);
     }
   }

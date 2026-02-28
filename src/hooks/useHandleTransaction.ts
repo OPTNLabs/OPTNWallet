@@ -10,6 +10,7 @@ import {
 } from '../redux/transactionBuilderSlice';
 import { resetTransactions } from '../redux/transactionSlice';
 import { resetContract } from '../redux/contractSlice';
+import { logError, toErrorMessage } from '../utils/errorHandling';
 // import { optimisticRemoveSpentByOutpoints, requestUTXORefreshForMany } from '../workers/UTXOWorkerService';
 
 interface BuildTransactionResult {
@@ -126,10 +127,13 @@ const useHandleTransaction = (
       setErrorMessage(transaction.errorMsg);
       setShowRawTxPopup(true);
       setLoading(false);
-    } catch (err: any) {
-      console.error('Error building transaction:', err);
+    } catch (err) {
+      logError('useHandleTransaction.handleBuildTransaction', err, {
+        outputCount: txOutputs.length,
+        utxoCount: selectedUtxos.length,
+      });
       setRawTX('');
-      setErrorMessage('Error building transaction: ' + err.message);
+      setErrorMessage('Error building transaction: ' + toErrorMessage(err));
       setShowRawTxPopup(true);
       setLoading(false);
     }
@@ -168,12 +172,15 @@ const useHandleTransaction = (
 
       setLoading(false);
       return transactionID;
-    } catch (error: any) {
-      console.error('Error sending transaction:', error);
-      setErrorMessage('Error sending transaction: ' + error.message);
+    } catch (error) {
+      logError('useHandleTransaction.handleSendTransaction', error, {
+        selectedUtxoCount: selectedUtxos.length,
+      });
+      const message = toErrorMessage(error);
+      setErrorMessage('Error sending transaction: ' + message);
       setShowTxIdPopup(false);
       setLoading(false);
-      return { txid: null, errorMessage: error.message };
+      return { txid: null, errorMessage: message };
     }
   };
 

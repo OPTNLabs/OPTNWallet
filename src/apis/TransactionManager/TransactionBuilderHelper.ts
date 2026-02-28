@@ -17,6 +17,7 @@ export default function TransactionBuilderHelper() {
   const currentNetwork = store.getState().network.currentNetwork;
   const provider = new ElectrumNetworkProvider(currentNetwork);
   const contractManager = ContractManager();
+  type ContractSourceCarrier = { artifact?: { source?: string } };
 
   // Safe bigint coercion for number | bigint | string | undefined/null
   function toBigIntAmount(value: unknown): bigint {
@@ -36,11 +37,6 @@ export default function TransactionBuilderHelper() {
       }
     }
     return 0n;
-  }
-
-  function normalizeCategory(x: unknown): string {
-    if (typeof x !== 'string') return '';
-    return x.trim().toLowerCase().replace(/^0x/, '');
   }
 
   function validateAuthGuardShape(utxos: UTXO[], outputs: TransactionOutput[]) {
@@ -74,7 +70,7 @@ export default function TransactionBuilderHelper() {
       );
     }
 
-    const authKeyAmt = toBigIntAmount((authKey.token as any).amount ?? 0);
+    const authKeyAmt = toBigIntAmount(authKey.token.amount ?? 0);
     if (authKeyAmt !== 0n) {
       throw new Error(
         `AuthKey must be NFT-only (token amount must be 0). Got amount=${authKeyAmt.toString()}`
@@ -83,7 +79,8 @@ export default function TransactionBuilderHelper() {
 
     // If keepGuarded=true, outputs[0] must preserve locking bytecode.
     // We can’t compute bytecode here, but we can enforce a sane structure:
-    const keep = !!(utxos[0].contractFunctionInputs as any)?.keepGuarded;
+    const keep =
+      utxos[0].contractFunctionInputs?.['keepGuarded'] === true;
 
     if (keep) {
       if (!outputs || outputs.length === 0) {
@@ -97,7 +94,7 @@ export default function TransactionBuilderHelper() {
           'AuthGuard keepGuarded=true requires outputs[0] to be a normal output (not OP_RETURN).'
         );
       }
-      const toAddr = (o0 as any).recipientAddress;
+      const toAddr = o0.recipientAddress;
       if (!toAddr || typeof toAddr !== 'string') {
         throw new Error(
           'AuthGuard keepGuarded=true requires outputs[0].recipientAddress to be the authHead contract address.'
@@ -149,10 +146,11 @@ export default function TransactionBuilderHelper() {
    * Checks if the specified function uses time-related keywords (tx.time, tx.age, this.age).
    */
   function doesFunctionUseTimeKeywords(
-    contractInstance: any,
+    contractInstance: ContractSourceCarrier,
     functionName: string
   ): boolean {
-    const source = contractInstance.artifact.source;
+    const source = contractInstance.artifact?.source;
+    if (!source) return false;
     const functionBody = extractFunctionBody(source, functionName);
     if (!functionBody) return false;
 
@@ -169,7 +167,7 @@ export default function TransactionBuilderHelper() {
    * Token-bearing outputs are forced to have at least TOKEN_OUTPUT_SATS sats.
    * Token.amount is always included (NFTs should use amount=0).
    */
-  function prepareTransactionOutputs(outputs: TransactionOutput[]): any[] {
+  function prepareTransactionOutputs(outputs: TransactionOutput[]): unknown[] {
     return outputs.map((output) => {
       // OP_RETURN variant
       if ('opReturn' in output && output.opReturn !== undefined) {
@@ -179,32 +177,32 @@ export default function TransactionBuilderHelper() {
       }
 
       // Regular or token output
-      let amountSats = toBigIntAmount((output as any).amount);
+      let amountSats = toBigIntAmount(output.amount);
 
       // Enforce token-bearing outputs have minimum sats
-      if ((output as any).token) {
+      if (output.token) {
         const minTokenSats = BigInt(TOKEN_OUTPUT_SATS);
         if (amountSats < minTokenSats) amountSats = minTokenSats;
       }
 
       const baseOutput = {
-        to: (output as any).recipientAddress,
+        to: output.recipientAddress,
         amount: amountSats,
       };
 
-      if ((output as any).token) {
+      if (output.token) {
         return {
           ...baseOutput,
           token: {
-            category: (output as any).token.category,
-            ...((output as any).token.nft && {
+            category: output.token.category,
+            ...(output.token.nft && {
               nft: {
-                capability: (output as any).token.nft.capability,
-                commitment: (output as any).token.nft.commitment,
+                capability: output.token.nft.capability,
+                commitment: output.token.nft.commitment,
               },
             }),
             // Always include amount: NFTs should be 0; FTs should be set by caller.
-            amount: toBigIntAmount(((output as any).token as any).amount ?? 0),
+            amount: toBigIntAmount(output.token.amount ?? 0),
           },
         };
       }
@@ -220,12 +218,12 @@ export default function TransactionBuilderHelper() {
     // Preflight: fail early with clear errors for covenant ordering constraints
     validateAuthGuardShape(utxos, outputs);
 
-    const txBuilder = new TransactionBuilder({ provider });
-    let needsLocktime = false;
+      const txBuilder = new TransactionBuilder({ provider });
+      let needsLocktime = false;
 
-    const unlockableUtxos = await Promise.all(
-      utxos.map(async (utxo) => {
-        let unlocker: any;
+      const unlockableUtxos = await Promise.all(
+        utxos.map(async (utxo) => {
+        let unlocker: unknown;
 
         // Prefer nullish coalescing so 0 doesn't fall through
         const value = (utxo.value ?? utxo.amount) as number | undefined;
@@ -318,19 +316,19 @@ export default function TransactionBuilderHelper() {
             ? {
                 ...processedUtxo.token,
                 // Always coerce safely; NFTs should end up with 0n
-                amount: toBigIntAmount(
-                  (processedUtxo.token as any).amount ?? 0
-                ),
+                amount: toBigIntAmount(processedUtxo.token.amount ?? 0),
               }
             : undefined,
         };
       })
     );
 
-    txBuilder.addInputs(unlockableUtxos);
+    txBuilder.addInputs(
+      unlockableUtxos as Parameters<typeof txBuilder.addInputs>[0]
+    );
 
     const txOutputs = prepareTransactionOutputs(outputs);
-    txBuilder.addOutputs(txOutputs);
+    txBuilder.addOutputs(txOutputs as Parameters<typeof txBuilder.addOutputs>[0]);
 
     if (needsLocktime) {
       const currentBlockHeight = await provider.getBlockHeight();

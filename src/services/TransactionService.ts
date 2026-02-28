@@ -1,13 +1,20 @@
 // src/services/TransactionService.ts
 
 import DatabaseService from '../apis/DatabaseManager/DatabaseService';
-import { Token, TransactionOutput, UTXO } from '../types/types';
+import {
+  ContractAddressRecord,
+  Token,
+  TransactionOutput,
+  UTXO,
+} from '../types/types';
 import ContractManager from '../apis/ContractManager/ContractManager';
+import type { ContractInstanceRow } from '../apis/ContractManager/ContractManager';
 import TransactionManager from '../apis/TransactionManager/TransactionManager';
 import {
   optimisticRemoveSpentByOutpoints,
   requestUTXORefreshForMany,
 } from '../workers/UTXOWorkerService';
+import { logError } from '../utils/errorHandling';
 
 /**
  * TransactionService encapsulates all transaction-related business logic.
@@ -26,12 +33,7 @@ class TransactionService {
   async fetchAddressesAndUTXOs(walletId: number): Promise<{
     addresses: { address: string; tokenAddress: string }[];
     utxos: UTXO[];
-    contractAddresses: {
-      address: string;
-      tokenAddress: string;
-      contractName: string;
-      abi: any[];
-    }[];
+    contractAddresses: ContractAddressRecord[];
   }> {
     await this.dbService.ensureDatabaseStarted();
     const db = this.dbService.getDatabase();
@@ -59,6 +61,9 @@ class TransactionService {
       }
     }
     addressesStatement.free();
+    const tokenAddressByAddress = new Map(
+      fetchedAddresses.map((item) => [item.address, item.tokenAddress])
+    );
 
     // Fetch UTXOs from UTXOs table, but only those that belong to addresses
     // present in the keys table for this wallet (no private key loading required).
@@ -107,14 +112,10 @@ class TransactionService {
 
       // Validate data (no private key validation here; keys are only needed at signing time)
       if (!isNaN(amount) && !isNaN(txPos) && !isNaN(height)) {
-        const addressInfo = fetchedAddresses.find(
-          (addr) => addr.address === address
-        );
-
         fetchedUTXOs.push({
           id: `${txHash}:${txPos}`,
           address: address,
-          tokenAddress: addressInfo ? addressInfo.tokenAddress : '',
+          tokenAddress: tokenAddressByAddress.get(address) ?? '',
           amount: amount,
           tx_hash: txHash,
           tx_pos: txPos,
@@ -126,29 +127,53 @@ class TransactionService {
           contractFunctionInputs,
         });
       } else {
-        console.error('Invalid data in row:', row);
+        logError('TransactionService.fetchAddressesAndUTXOs.invalidRow', row, {
+          walletId,
+        });
       }
     }
     utxosStatement.free();
 
     // Fetch contract instances
-    const contractInstances =
+    const contractInstances: ContractInstanceRow[] =
       await this.contractManager.fetchContractInstances();
 
     // Fetch contract UTXOs
-    const contractUTXOs = await Promise.all(
-      contractInstances.map(async (contract) => {
-        const contractUTXOs = contract.utxos;
-        return contractUTXOs.map((utxo) => ({
-          ...utxo,
-          id: `${utxo.tx_hash}:${utxo.tx_pos}`,
+    const contractUTXOs: UTXO[] = contractInstances.flatMap((contract) =>
+      contract.utxos.map((utxo) => {
+        const txHash = String(utxo.tx_hash);
+        const txPos = Number(utxo.tx_pos);
+        const amountNum = Number(utxo.amount);
+        const heightNum =
+          typeof utxo.height === 'number'
+            ? utxo.height
+            : Number(utxo.height ?? 0);
+        const contractFunctionInputs =
+          utxo.contractFunctionInputs &&
+          typeof utxo.contractFunctionInputs === 'object'
+            ? utxo.contractFunctionInputs
+            : undefined;
+
+        return {
+          id: `${txHash}:${txPos}`,
+          tx_hash: txHash,
+          tx_pos: txPos,
+          amount: amountNum,
+          value: amountNum,
+          height: heightNum,
           address: contract.address,
           tokenAddress: contract.token_address,
           contractName: contract.contract_name,
           abi: contract.abi,
-        }));
+          token:
+            utxo.token && typeof utxo.token === 'object'
+              ? (utxo.token as Token)
+              : undefined,
+          contractFunction: utxo.contractFunction || undefined,
+          contractFunctionInputs,
+        } as UTXO;
       })
-    ).then((results) => results.flat());
+    );
 
     const allUTXOs = [...fetchedUTXOs, ...contractUTXOs];
 
@@ -211,7 +236,7 @@ class TransactionService {
    */
   async buildTransaction(
     outputs: TransactionOutput[],
-    contractFunctionInputs: any,
+    contractFunctionInputs: Record<string, unknown> | null,
     changeAddress: string,
     selectedUtxos: UTXO[]
   ): Promise<{

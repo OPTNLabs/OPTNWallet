@@ -14,9 +14,20 @@ type AppCard = {
   icon: string;
   description: string;
   source: 'builtin' | 'addon';
+  disabled?: boolean;
 };
 
 const DEFAULT_ICON = '/assets/images/OPTNWelcome1.png';
+
+function isComingSoonApp(appId: string, appName: string): boolean {
+  const normalizedId = appId.toLowerCase();
+  const normalizedName = appName.toLowerCase();
+  return (
+    normalizedId === 'fundme' ||
+    normalizedId.endsWith(':authguard') ||
+    normalizedName === 'authguard'
+  );
+}
 
 const AppsView = () => {
   const navigate = useNavigate();
@@ -47,6 +58,7 @@ const AppsView = () => {
           icon: '/assets/images/fundme.png',
           description: 'BCH Crowdfunding',
           source: 'builtin',
+          disabled: true,
         });
 
         // ✅ Add addon apps
@@ -58,13 +70,16 @@ const AppsView = () => {
               icon: (a.iconUri || m.iconUri || DEFAULT_ICON) as string,
               description: a.description || '',
               source: 'addon',
+              disabled: isComingSoonApp(`${m.id}:${a.id}`, a.name),
             });
           }
         }
 
         if (mounted) setCards(out);
-      } catch (e: any) {
-        if (mounted) setError(e?.message ?? String(e));
+      } catch (e: unknown) {
+        if (mounted) {
+          setError(e instanceof Error ? e.message : String(e));
+        }
       }
     })();
 
@@ -73,7 +88,10 @@ const AppsView = () => {
     };
   }, []);
 
-  const handleAppClick = (appId: string) => {
+  const handleAppClick = (app: AppCard) => {
+    if (app.disabled) return;
+
+    const appId = app.id;
     if (appId === 'fundme') {
       navigate('/apps/fundme');
       return;
@@ -88,7 +106,7 @@ const AppsView = () => {
         <img
           src="/assets/images/OPTNWelcome1.png"
           alt="Welcome"
-          className="max-w-full h-auto"
+          className="w-full max-w-[260px] h-auto object-contain"
         />
       </div>
 
@@ -97,14 +115,14 @@ const AppsView = () => {
           <h1 className="text-2xl font-bold">Apps</h1>
           <button
             onClick={() => navigate(`/home/${wallet_id}`)}
-            className="bg-red-500 hover:bg-red-600 text-white py-2 px-4 rounded"
+            className="wallet-btn-danger py-2 px-4"
           >
             Go Back
           </button>
         </div>
 
         {error && (
-          <div className="mb-4 p-3 rounded bg-red-50 text-red-700 text-sm">
+          <div className="mb-4 p-3 rounded border wallet-danger-panel text-sm">
             Failed to load addon apps: {error}
           </div>
         )}
@@ -113,14 +131,22 @@ const AppsView = () => {
           {cards.map((app) => (
             <div
               key={app.id}
-              onClick={() => handleAppClick(app.id)}
-              className="p-4 border rounded-lg shadow hover:shadow-md transition-shadow cursor-pointer"
+              onClick={() => handleAppClick(app)}
+              className={`wallet-card p-4 rounded-lg transition-shadow ${
+                app.disabled
+                  ? 'opacity-80 cursor-not-allowed'
+                  : 'hover:shadow-md cursor-pointer'
+              }`}
             >
               <div className="flex flex-col items-center">
-                <img src={app.icon} alt={app.name} className="w-16 h-16 mb-2" />
+                <img
+                  src={app.icon}
+                  alt={app.name}
+                  className="w-16 h-16 mb-2 object-contain"
+                />
                 <h3 className="font-semibold text-center">{app.name}</h3>
-                <p className="text-sm text-gray-600 text-center">
-                  {app.description}
+                <p className="text-sm wallet-muted text-center">
+                  {app.disabled ? 'Coming soon' : app.description}
                 </p>
               </div>
             </div>

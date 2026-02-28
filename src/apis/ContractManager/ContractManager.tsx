@@ -13,29 +13,38 @@ import { store } from '../../redux/store';
 import ElectrumService from '../../services/ElectrumService';
 import KeyService from '../../services/KeyService';
 import { UTXO } from '../../types/types';
-
-import p2pkhArtifact from './artifacts/p2pkh.json';
-import bip38Artifact from './artifacts/bip38.json';
-import transferWithTimeoutArtifact from './artifacts/transfer_with_timeout.json';
-// import announcementArtifact from './artifacts/announcement.json';
-import escrowArtifact from './artifacts/escrow.json';
-import escrowMS2Artifact from './artifacts/escrowMS2.json';
-import MSVault from './artifacts/MSVault.json';
-import AuthGuardArtifact from './artifacts/AuthGuard.json';
-
 import AddonsRegistry from '../../services/AddonsRegistry';
+import {
+  findAddonContract,
+  normalizeAddonKey,
+  outpointKey,
+  parseJsonOr,
+  serializeUnlockFunctions,
+  toStoredContractUtxo,
+} from './helpers';
+import { createBuiltinArtifactCache } from './artifacts';
+import { parseContractInstanceRow } from './parsers';
 import type {
-  AddonManifest,
-  AddonContractDefinition,
-} from '../../types/addons';
+  AbiFunction,
+  AbiInput,
+  AvailableContractEntry,
+  ContractArtifact,
+  ContractInstanceRow,
+  ContractManagerApi,
+  SqlRow,
+  StoredContractRow,
+  StoredContractUtxo,
+} from './types';
+type ContractCtorArtifact = ConstructorParameters<typeof Contract>[0];
 
-type AvailableContractEntry = {
-  fileName: string;
-  contractName: string;
-  source: 'builtin' | 'addon';
-};
+export type {
+  AvailableContractEntry,
+  ContractArtifact,
+  ContractInstanceRow,
+  StoredContractUtxo,
+} from './types';
 
-export default function ContractManager() {
+export default function ContractManager(): ContractManagerApi {
   const dbService = DatabaseService();
 
   // ---- Addons (no React hooks here; ContractManager is not a component) ----
@@ -47,16 +56,7 @@ export default function ContractManager() {
   });
 
   // Cache artifacts in memory to avoid redundant loading
-  const artifactCache: { [key: string]: any } = {
-    p2pkh: p2pkhArtifact,
-    transfer_with_timeout: transferWithTimeoutArtifact,
-    // announcement: announcementArtifact,
-    escrow: escrowArtifact,
-    escrowMS2: escrowMS2Artifact,
-    bip38: bip38Artifact,
-    msVault: MSVault,
-    authguard: AuthGuardArtifact,
-  };
+  const artifactCache = createBuiltinArtifactCache();
 
   return {
     createContract,
@@ -76,89 +76,6 @@ export default function ContractManager() {
   // Helpers
   // ------------------------
 
-  function parseContractInstance(row: any) {
-    const contractInstance = {
-      ...row,
-      balance: BigInt(row.balance || 0),
-      utxos:
-        typeof row.utxos === 'string'
-          ? JSON.parse(row.utxos).map((utxo: any) => ({
-              ...utxo,
-              amount: BigInt(utxo.amount),
-              contractFunction: utxo.contractFunction || undefined,
-              contractFunctionInputs: utxo.contractFunctionInputs
-                ? JSON.parse(utxo.contractFunctionInputs)
-                : undefined,
-            }))
-          : [],
-      artifact:
-        typeof row.artifact === 'string' ? JSON.parse(row.artifact) : null,
-      abi: typeof row.abi === 'string' ? JSON.parse(row.abi) : [],
-      redeemScript:
-        typeof row.redeemScript === 'string'
-          ? JSON.parse(row.redeemScript)
-          : null,
-      unlock: typeof row.unlock === 'string' ? JSON.parse(row.unlock) : null,
-      updated_at: row.updated_at,
-    };
-
-    if (contractInstance.unlock) {
-      contractInstance.unlock = Object.fromEntries(
-        Object.entries(contractInstance.unlock).map(([key, funcStr]) => [
-          key,
-          new Function(`return ${funcStr}`)(),
-        ])
-      );
-    }
-
-    return contractInstance;
-  }
-
-  function normalizeAddonKey(key: string): {
-    addonId?: string;
-    contractId?: string;
-  } | null {
-    if (!key.startsWith('addon:')) return null;
-
-    // Supported formats:
-    // - addon:<addonId>:<contractId> (preferred)
-    // - addon:<contractId> (legacy)
-    const rest = key.slice('addon:'.length);
-    if (!rest) return null;
-
-    const parts = rest.split(':').filter(Boolean);
-
-    if (parts.length === 1) {
-      return { contractId: parts[0] }; // legacy
-    }
-
-    if (parts.length >= 2) {
-      return { addonId: parts[0], contractId: parts.slice(1).join(':') };
-    }
-
-    return null;
-  }
-
-  function findAddonContract(
-    manifests: AddonManifest[],
-    addonId: string | undefined,
-    contractId: string
-  ): AddonContractDefinition | null {
-    // If addonId is provided, search only that addon
-    if (addonId) {
-      const m = manifests.find((x) => x.id === addonId);
-      if (!m) return null;
-      return m.contracts.find((c) => c.id === contractId) || null;
-    }
-
-    // Legacy fallback: global search by contractId
-    for (const m of manifests) {
-      const found = m.contracts.find((c) => c.id === contractId);
-      if (found) return found;
-    }
-    return null;
-  }
-
   // ------------------------
   // Public API
   // ------------------------
@@ -172,18 +89,10 @@ export default function ContractManager() {
     const statement = db.prepare(query);
     statement.bind([address]);
 
-    let constructorArgs: any[] | null = null;
+    let constructorArgs: unknown[] | null = null;
     if (statement.step()) {
-      const row = statement.getAsObject();
-      try {
-        constructorArgs =
-          typeof (row as any).constructor_args === 'string'
-            ? JSON.parse((row as any).constructor_args)
-            : null;
-      } catch (e) {
-        console.error('Error parsing JSON:', e);
-        constructorArgs = null;
-      }
+      const row = statement.getAsObject() as SqlRow;
+      constructorArgs = parseJsonOr<unknown[] | null>(row.constructor_args, null);
     }
     statement.free();
     return constructorArgs;
@@ -191,7 +100,7 @@ export default function ContractManager() {
 
   async function createContract(
     artifactName: string,
-    constructorArgs: any[],
+    constructorArgs: unknown[],
     currentNetwork: Network
   ) {
     try {
@@ -218,7 +127,7 @@ export default function ContractManager() {
         parseInputValue(arg, artifact.constructorInputs[index].type)
       );
 
-      const contract = new Contract(artifact, parsedArgs, {
+      const contract = new Contract(artifact as ContractCtorArtifact, parsedArgs, {
         provider,
         addressType,
       });
@@ -226,18 +135,9 @@ export default function ContractManager() {
       const balance = await contract.getBalance();
       const utxos = await ElectrumService.getUTXOs(contract.address);
 
-      const formattedUTXOs = utxos.map((utxo: any) => ({
-        tx_hash: utxo.tx_hash,
-        tx_pos: utxo.tx_pos,
-        amount: BigInt(utxo.value),
-        height: utxo.height,
-        token: utxo.token || undefined,
-        prefix,
-        contractFunction: utxo.contractFunction || undefined,
-        contractFunctionInputs: utxo.contractFunctionInputs
-          ? JSON.stringify(utxo.contractFunctionInputs)
-          : undefined,
-      }));
+      const formattedUTXOs: StoredContractUtxo[] = utxos.map((utxo) =>
+        toStoredContractUtxo(utxo, prefix, false)
+      );
 
       await saveContractArtifact(artifact);
 
@@ -269,12 +169,7 @@ export default function ContractManager() {
         utxos: formattedUTXOs,
         abi: artifact.abi,
         redeemScript: contract.redeemScript,
-        unlock: Object.fromEntries(
-          Object.entries(contract.unlock).map(([key, func]) => [
-            key,
-            func.toString(),
-          ])
-        ),
+        unlock: serializeUnlockFunctions(contract.unlock),
       };
     } catch (error) {
       console.error('Error creating contract:', error);
@@ -284,7 +179,7 @@ export default function ContractManager() {
 
   async function saveConstructorArgs(
     address: string,
-    constructorArgs: any[],
+    constructorArgs: unknown[],
     balance: bigint
   ) {
     await dbService.ensureDatabaseStarted();
@@ -316,9 +211,9 @@ export default function ContractManager() {
     contractName: string,
     contract: Contract,
     balance: bigint,
-    utxos: any[],
-    abi: any[],
-    artifact: any
+    utxos: Array<Record<string, unknown>>,
+    abi: unknown[],
+    artifact: unknown
   ) {
     await dbService.ensureDatabaseStarted();
     const db = dbService.getDatabase();
@@ -342,9 +237,11 @@ export default function ContractManager() {
       contract.bytecode,
       balance.toString(),
       JSON.stringify(
-        (utxos || []).map((utxo: any) => ({
+        (utxos || []).map((utxo) => ({
           ...utxo,
-          amount: utxo.amount?.toString?.() ?? String(utxo.amount),
+          amount:
+            (utxo.amount as { toString?: () => string } | undefined)?.toString?.() ??
+            String(utxo.amount),
         }))
       ),
       new Date().toISOString(),
@@ -352,14 +249,7 @@ export default function ContractManager() {
       JSON.stringify(artifact),
       JSON.stringify(abi),
       JSON.stringify(contract.redeemScript),
-      JSON.stringify(
-        Object.fromEntries(
-          Object.entries(contract.unlock).map(([key, func]) => [
-            key,
-            func.toString(),
-          ])
-        )
-      ),
+      JSON.stringify(serializeUnlockFunctions(contract.unlock)),
     ];
 
     const statement = db.prepare(insertQuery);
@@ -391,10 +281,10 @@ export default function ContractManager() {
       const query = 'SELECT * FROM instantiated_contracts';
       const statement = db.prepare(query);
 
-      const instances: any[] = [];
+      const instances: ContractInstanceRow[] = [];
       while (statement.step()) {
         const row = statement.getAsObject();
-        instances.push(parseContractInstance(row));
+        instances.push(parseContractInstanceRow(row));
       }
       statement.free();
       return instances;
@@ -413,10 +303,10 @@ export default function ContractManager() {
       const statement = db.prepare(query);
       statement.bind([address]);
 
-      let contractInstance: any = null;
+      let contractInstance: ContractInstanceRow | null = null;
       if (statement.step()) {
         const row = statement.getAsObject();
-        contractInstance = parseContractInstance(row);
+        contractInstance = parseContractInstanceRow(row);
       }
       statement.free();
       return contractInstance;
@@ -431,7 +321,7 @@ export default function ContractManager() {
    * - builtin key (e.g. "p2pkh")
    * - addon key (e.g. "addon:<addonId>:<contractId>" or legacy "addon:<contractId>")
    */
-  async function loadArtifact(artifactName: string): Promise<any | null> {
+  async function loadArtifact(artifactName: string): Promise<ContractArtifact | null> {
     const raw = String(artifactName ?? '').trim();
     if (!raw) return null;
 
@@ -464,7 +354,7 @@ export default function ContractManager() {
 
     if (!contract) return null;
 
-    return contract.cashscriptArtifact as any;
+    return contract.cashscriptArtifact as ContractArtifact;
   }
 
   async function listAvailableArtifacts(): Promise<AvailableContractEntry[]> {
@@ -497,7 +387,7 @@ export default function ContractManager() {
     }
   }
 
-  async function saveContractArtifact(artifact: any) {
+  async function saveContractArtifact(artifact: ContractArtifact) {
     try {
       await dbService.ensureDatabaseStarted();
       const db = dbService.getDatabase();
@@ -536,7 +426,9 @@ export default function ContractManager() {
     }
   }
 
-  async function getContractArtifact(contractName: string) {
+  async function getContractArtifact(
+    contractName: string
+  ): Promise<ContractArtifact | null> {
     try {
       await dbService.ensureDatabaseStarted();
       const db = dbService.getDatabase();
@@ -546,23 +438,26 @@ export default function ContractManager() {
       const statement = db.prepare(query);
       statement.bind([contractName]);
 
-      let artifact: any = null;
+      let artifact: ContractArtifact | null = null;
       if (statement.step()) {
-        const row: any = statement.getAsObject();
+        const row = statement.getAsObject() as SqlRow;
         artifact = {
-          contractName: row.contract_name,
+          contractName: String(row.contract_name),
           constructorInputs:
             typeof row.constructor_inputs === 'string'
-              ? JSON.parse(row.constructor_inputs)
+              ? parseJsonOr<AbiInput[]>(row.constructor_inputs, [])
               : [],
-          abi: typeof row.abi === 'string' ? JSON.parse(row.abi) : [],
-          bytecode: row.bytecode,
-          source: row.source,
+          abi:
+            typeof row.abi === 'string'
+              ? parseJsonOr<AbiFunction[]>(row.abi, [])
+              : [],
+          bytecode: String(row.bytecode ?? ''),
+          source: String(row.source ?? 'unknown'),
           compiler: {
-            name: row.compiler_name,
-            version: row.compiler_version,
+            name: String(row.compiler_name ?? 'unknown'),
+            version: String(row.compiler_version ?? 'unknown'),
           },
-          updatedAt: row.updated_at,
+          updatedAt: String(row.updated_at ?? ''),
         };
       }
       statement.free();
@@ -582,18 +477,9 @@ export default function ContractManager() {
         currentNetwork === Network.MAINNET ? 'bitcoincash' : 'bchtest';
 
       const utxos: UTXO[] = await ElectrumService.getUTXOs(address);
-      const formattedUTXOs = utxos.map((utxo: UTXO) => ({
-        tx_hash: utxo.tx_hash,
-        tx_pos: utxo.tx_pos,
-        amount: BigInt(utxo.value),
-        height: utxo.height,
-        token: utxo.token || undefined,
-        prefix,
-        contractFunction: utxo.contractFunction || null,
-        contractFunctionInputs: utxo.contractFunctionInputs
-          ? JSON.stringify(utxo.contractFunctionInputs)
-          : null,
-      }));
+      const formattedUTXOs = utxos.map((utxo) =>
+        toStoredContractUtxo(utxo, prefix, true)
+      );
 
       await dbService.ensureDatabaseStarted();
       const db = dbService.getDatabase();
@@ -628,9 +514,13 @@ export default function ContractManager() {
       );
 
       const provider = new ElectrumNetworkProvider(currentNetwork);
-      const contract = new Contract(artifact, parsedConstructorArgs, {
+      const contract = new Contract(
+        artifact as ContractCtorArtifact,
+        parsedConstructorArgs,
+        {
         provider,
-      });
+        }
+      );
 
       const updatedBalance = await contract.getBalance();
 
@@ -639,25 +529,28 @@ export default function ContractManager() {
       const existingStmt = db.prepare(existingUTXOsQuery);
       existingStmt.bind([address]);
 
-      const existingUTXOs: any[] = [];
+      const existingUTXOs: StoredContractRow[] = [];
       while (existingStmt.step()) {
-        const row = existingStmt.getAsObject();
-        existingUTXOs.push(row);
+        const row = existingStmt.getAsObject() as SqlRow;
+        existingUTXOs.push({
+          tx_hash: String(row.tx_hash),
+          tx_pos: Number(row.tx_pos),
+        });
       }
       existingStmt.free();
 
       const existingSet = new Set(
-        existingUTXOs.map((u) => `${(u as any).tx_hash}:${(u as any).tx_pos}`)
+        existingUTXOs.map((u) => outpointKey(u.tx_hash, u.tx_pos))
       );
       const newSet = new Set(
-        formattedUTXOs.map((u) => `${u.tx_hash}:${u.tx_pos}`)
+        formattedUTXOs.map((u) => outpointKey(u.tx_hash, u.tx_pos))
       );
 
       const newUTXOs = formattedUTXOs.filter(
-        (u) => !existingSet.has(`${u.tx_hash}:${u.tx_pos}`)
+        (u) => !existingSet.has(outpointKey(u.tx_hash, u.tx_pos))
       );
       const staleUTXOs = existingUTXOs.filter(
-        (u) => !newSet.has(`${(u as any).tx_hash}:${(u as any).tx_pos}`)
+        (u) => !newSet.has(outpointKey(u.tx_hash, u.tx_pos))
       );
 
       db.run('BEGIN TRANSACTION');
@@ -688,7 +581,7 @@ export default function ContractManager() {
         `;
         const deleteStmt = db.prepare(deleteUTXOQuery);
         for (const u of staleUTXOs) {
-          deleteStmt.run([address, (u as any).tx_hash, (u as any).tx_pos]);
+          deleteStmt.run([address, u.tx_hash, u.tx_pos]);
         }
         deleteStmt.free();
 
@@ -729,12 +622,18 @@ export default function ContractManager() {
   async function getContractUnlockFunction(
     utxo: UTXO,
     contractFunction: string,
-    contractFunctionInputs: { [key: string]: any }
+    contractFunctionInputs: Record<string, unknown>
   ) {
     const state = store.getState();
+    type UnlockContext = {
+      artifact: ContractArtifact;
+      abi: AbiFunction[];
+    };
 
     // 1) Try DB instantiated contract first (current behavior)
-    let contractInstance = await getContractInstanceByAddress(utxo.address);
+    let contractInstance: UnlockContext | null = await getContractInstanceByAddress(
+      utxo.address
+    );
 
     // 2) Fallback: build from artifact directly (patient-0 / no DB)
     if (!contractInstance) {
@@ -760,21 +659,21 @@ export default function ContractManager() {
 
     // 3) Constructor args
     // Allow contracts with ZERO constructor inputs (do not require DB lookups).
-    const ctorSpec: any[] = Array.isArray(
+    const ctorSpec: AbiInput[] = Array.isArray(
       contractInstance.artifact?.constructorInputs
     )
       ? contractInstance.artifact.constructorInputs
       : [];
 
-    let parsedConstructorArgs: any[] = [];
+    let parsedConstructorArgs: unknown[] = [];
     if (ctorSpec.length > 0) {
       const constructorInputs =
-        Array.isArray((utxo as any).contractConstructorArgs) &&
-        (utxo as any).contractConstructorArgs.length > 0
-          ? (utxo as any).contractConstructorArgs
+        Array.isArray(utxo.contractConstructorArgs) &&
+        utxo.contractConstructorArgs.length > 0
+          ? utxo.contractConstructorArgs
           : await fetchConstructorArgs(utxo.address);
 
-      parsedConstructorArgs = ctorSpec.map((input: any, index: number) => {
+      parsedConstructorArgs = ctorSpec.map((input, index) => {
         const argValue = constructorInputs?.[index];
         if (argValue === undefined) {
           throw new Error(`Missing constructor argument for ${input.name}`);
@@ -784,7 +683,7 @@ export default function ContractManager() {
     }
 
     const contract = new Contract(
-      contractInstance.artifact,
+      contractInstance.artifact as ContractCtorArtifact,
       parsedConstructorArgs,
       {
         provider: new ElectrumNetworkProvider(state.network.currentNetwork),
@@ -793,7 +692,7 @@ export default function ContractManager() {
     );
 
     const abiFunction = contractInstance.abi.find(
-      (func: any) => func.name === contractFunction
+      (func) => func.name === contractFunction
     );
 
     if (!abiFunction) {
@@ -803,7 +702,7 @@ export default function ContractManager() {
     }
 
     const args = await Promise.all(
-      abiFunction.inputs.map(async (input: any) => {
+      (abiFunction.inputs ?? []).map(async (input) => {
         const inputValue = contractFunctionInputs[input.name];
 
         if (input.type === 'sig') {
