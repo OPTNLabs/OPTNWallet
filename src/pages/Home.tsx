@@ -1,7 +1,7 @@
 // src/pages/Home.tsx
 
-import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
-import { useNavigate, useLocation } from 'react-router-dom';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { useDispatch, useSelector } from 'react-redux';
 // import { LocalNotifications } from '@capacitor/local-notifications';
 import { AppDispatch, RootState } from '../redux/store';
@@ -34,7 +34,6 @@ const USE_HOME_SUBS = false;
 
 const Home: React.FC = () => {
   const navigate = useNavigate();
-  const location = useLocation();
   const dispatch = useDispatch<AppDispatch>();
   const dbService = useMemo(() => DatabaseService(), []);
 
@@ -67,7 +66,6 @@ const Home: React.FC = () => {
   });
   const [showCashTokenPopup, setShowCashTokenPopup] = useState(false);
 
-  const hasFetchedForTx = useRef(false);
   useHomeSubscriptions({
     enabled: USE_HOME_SUBS,
     isInitialized: IsInitialized,
@@ -134,15 +132,6 @@ const Home: React.FC = () => {
       fetchAndStoreUTXOs();
     }
   }, [keyPairs, IsInitialized, fetchAndStoreUTXOs]);
-
-  // Handle post-transaction UTXO refresh
-  useEffect(() => {
-    const fromTxSuccess = location?.state?.fromTxSuccess;
-    if (fromTxSuccess && keyPairs.length > 0 && !hasFetchedForTx.current) {
-      fetchAndStoreUTXOs();
-      hasFetchedForTx.current = true;
-    }
-  }, [location, keyPairs, fetchAndStoreUTXOs]);
 
   useHomeMetadataPreload({
     isInitialized: IsInitialized,

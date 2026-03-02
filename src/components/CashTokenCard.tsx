@@ -19,6 +19,7 @@ const CashTokenCard: React.FC<CashTokenCardProps> = ({
   const [showTokenQuery, setShowTokenQuery] = useState(false);
   const [iconUri, setIconUri] = useState<string | null>(null);
   const [tokenName, setTokenName] = useState<string>(shortenTxHash(category));
+  const [bcmrSnapshot, setBcmrSnapshot] = useState<IdentitySnapshot | null>(null);
 
   const toggleTokenQueryPopup = () => setShowTokenQuery(!showTokenQuery);
 
@@ -32,11 +33,13 @@ const CashTokenCard: React.FC<CashTokenCardProps> = ({
           authbase,
           idReg.registry
         );
+        setBcmrSnapshot(snap);
         setTokenName(snap.name);
         const uri = await bcmr.resolveIcon(authbase);
         setIconUri(uri);
       } catch (err) {
         // console.error('Failed to load token metadata', err);
+        setBcmrSnapshot(null);
       }
     };
     loadMetadata();
@@ -52,8 +55,14 @@ const CashTokenCard: React.FC<CashTokenCardProps> = ({
   };
 
   const rawAmount = totalAmount.toString();
-  const decimalAmount =
-    decimals > 0 ? formatAmountWithDecimals(totalAmount, decimals) : null;
+  const effectiveDecimals =
+    typeof bcmrSnapshot?.token?.decimals === 'number'
+      ? bcmrSnapshot.token.decimals
+      : decimals;
+  const displayAmount =
+    effectiveDecimals > 0
+      ? formatAmountWithDecimals(totalAmount, effectiveDecimals)
+      : rawAmount;
 
   return (
     <>
@@ -85,12 +94,7 @@ const CashTokenCard: React.FC<CashTokenCardProps> = ({
           </div>
         </div>
         <div className="text-right">
-          <div className="text-sm font-medium wallet-text-strong">
-            {rawAmount}
-          </div>
-          {decimalAmount && decimalAmount !== rawAmount && (
-            <div className="text-xs wallet-muted">{decimalAmount}</div>
-          )}
+          <div className="text-sm font-medium wallet-text-strong">{displayAmount}</div>
         </div>
       </div>
 
@@ -102,7 +106,11 @@ const CashTokenCard: React.FC<CashTokenCardProps> = ({
               {tokenName} Details
             </div>
             <div className="overflow-y-auto flex-grow mb-4">
-              <TokenQuery tokenId={category} />
+              <TokenQuery
+                tokenId={category}
+                prefetchedSnapshot={bcmrSnapshot}
+                prefetchedIconDataUri={iconUri}
+              />
             </div>
             <button
               className="wallet-btn-secondary mt-2 w-full py-3"

@@ -37,6 +37,7 @@ const Settings: React.FC = () => {
   );
 
   const [selectedOption, setSelectedOption] = useState('');
+
   const handleOptionClick = (option: string) => {
     setSelectedOption(option);
   };

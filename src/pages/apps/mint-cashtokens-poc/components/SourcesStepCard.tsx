@@ -1,3 +1,4 @@
+import { memo } from 'react';
 import { Badge, CardShell } from './uiPrimitives';
 import type { MintDisplayUtxo } from '../types';
 import { shortHash, utxoKey, utxoValue } from '../utils';
@@ -15,7 +16,7 @@ type SourcesStepCardProps = {
   onJumpToAmounts: () => void;
 };
 
-export default function SourcesStepCard({
+function SourcesStepCard({
   displayGenesisUtxos,
   selectedKeys,
   selectedCount,
@@ -138,3 +139,5 @@ export default function SourcesStepCard({
     </CardShell>
   );
 }
+
+export default memo(SourcesStepCard);

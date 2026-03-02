@@ -1,3 +1,4 @@
+import { memo } from 'react';
 import { Badge, CardShell } from './uiPrimitives';
 import type { WalletAddressRecord } from '../types';
 import { shortHash } from '../utils';
@@ -11,7 +12,7 @@ type RecipientsStepCardProps = {
   onCopyAddress: (address: string) => void;
 };
 
-export default function RecipientsStepCard({
+function RecipientsStepCard({
   addresses,
   selectedRecipientCashAddrs,
   recipientTokenAddressByCash,
@@ -86,3 +87,5 @@ export default function RecipientsStepCard({
     </CardShell>
   );
 }
+
+export default memo(RecipientsStepCard);

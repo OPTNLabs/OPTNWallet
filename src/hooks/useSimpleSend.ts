@@ -31,6 +31,7 @@ import { toErrorMessage } from '../utils/errorHandling';
 import { parseAmountToSats, validateRecipient } from './simple-send/helpers';
 import { createSimpleSendPlanner } from './simple-send/planner';
 import { AssetType, ReviewState, SimpleSendMode } from './simple-send/types';
+import { parseBip21Uri } from '../utils/bip21';
 
 const noopSetContractAddresses: Dispatch<SetStateAction<ContractAddressRecord[]>> =
   () => undefined;
@@ -140,6 +141,13 @@ export default function useSimpleSend() {
   const [review, setReview] = useState<ReviewState | null>(null);
   const [selectedForTx, setSelectedForTx] = useState<UTXO[]>([]);
   const [txid, setTxid] = useState<string>('');
+  const parsedRecipient = useMemo(
+    () => parseBip21Uri(recipient, currentNetwork),
+    [recipient, currentNetwork]
+  );
+  const normalizedRecipient = parsedRecipient.isValidAddress
+    ? parsedRecipient.normalizedAddress
+    : recipient;
 
   const priceUsd = Number(prices['BCH-USD'] || 0);
 
@@ -159,7 +167,7 @@ export default function useSimpleSend() {
   const planner = useMemo(
     () =>
       createSimpleSendPlanner({
-        recipient,
+        recipient: normalizedRecipient,
         selectedCategory,
         amountToken,
         tokenChangeAddress,
@@ -167,7 +175,7 @@ export default function useSimpleSend() {
         dbUtxos,
       }),
     [
-      recipient,
+      normalizedRecipient,
       selectedCategory,
       amountToken,
       tokenChangeAddress,
@@ -180,7 +188,7 @@ export default function useSimpleSend() {
     try {
       setError('');
 
-      if (!validateRecipient(recipient)) {
+      if (!validateRecipient(normalizedRecipient)) {
         setError('Please enter a valid destination address.');
         setMode('error');
         return;
@@ -193,7 +201,7 @@ export default function useSimpleSend() {
 
       // ===== BCH =====
       if (assetType === 'bch') {
-        const targetSats = parseAmountToSats(amountBch);
+        const targetSats = parseAmountToSats(amountBch || parsedRecipient.amountRaw || '');
         if (targetSats <= 0) {
           setError('Amount must be greater than 0.');
           setMode('error');
@@ -355,7 +363,7 @@ export default function useSimpleSend() {
       setMode('error');
     }
   }, [
-    recipient,
+    normalizedRecipient,
     amountBch,
     assetType,
     selectedCategory,
@@ -364,6 +372,7 @@ export default function useSimpleSend() {
     dbUtxos,
     tokenUtxos,
     selectedChangeAddress,
+    parsedRecipient.amountRaw,
     planner,
   ]);
 

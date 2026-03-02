@@ -81,7 +81,21 @@ type ChaingraphTx = {
   outputs?: ChaingraphOutput[];
 };
 
-type RegistryWithIdentity = MetadataRegistry & { registryIdentity?: string };
+type BcmrIndexerTokenResponse = {
+  name?: string;
+  description?: string;
+  uris?: Record<string, string>;
+  token?: {
+    category?: string;
+    symbol?: string;
+    decimals?: number;
+  };
+  extensions?: Record<string, unknown>;
+};
+
+type RegistryWithIdentity = MetadataRegistry & {
+  registryIdentity?: string | Record<string, unknown>;
+};
 
 function hasIdentityHistory(
   registry: MetadataRegistry
@@ -93,9 +107,9 @@ function hasIdentityHistory(
 
 function getRegistryIdentity(registry: MetadataRegistry): string | undefined {
   const maybe = registry as RegistryWithIdentity;
-  return typeof maybe.registryIdentity === 'string'
-    ? maybe.registryIdentity
-    : undefined;
+  if (typeof maybe.registryIdentity !== 'string') return undefined;
+  const out = maybe.registryIdentity.toLowerCase();
+  return /^[0-9a-f]{64}$/.test(out) ? out : undefined;
 }
 
 function getNftUrisForCommitment(
@@ -119,6 +133,19 @@ function dedupeUrls(urls: string[]): string[] {
   return out;
 }
 
+function normalizeHexId(value: string): string {
+  return String(value ?? '')
+    .trim()
+    .toLowerCase()
+    .replace(/^0x/i, '');
+}
+
+function buildTokenLookupUrl(registryUrl: string, category: string): string | null {
+  const match = registryUrl.match(/^(.*)\/registries\/[^/]+\/latest\/?$/i);
+  if (!match) return null;
+  return `${match[1]}/tokens/${normalizeHexId(category)}/`;
+}
+
 export default class BcmrService {
   private readonly dbService = DatabaseService();
   private db = this.dbService.getDatabase();
@@ -127,11 +154,12 @@ export default class BcmrService {
   private inMemoryRegistries = new Map<string, IdentityRegistry>();
 
   public async getCategoryAuthbase(category: string): Promise<string> {
+    const normalizedCategory = normalizeHexId(category);
     const db = await this.getDb();
     const res = db.exec('SELECT authbase FROM bcmr_tokens WHERE category = ?', [
-      category,
+      normalizedCategory,
     ]);
-    if (res.length === 0 || res[0].values.length === 0) return category;
+    if (res.length === 0 || res[0].values.length === 0) return normalizedCategory;
     const cols = res[0].columns;
     return res[0].values[0][cols.indexOf('authbase')] as string;
   }
@@ -219,9 +247,12 @@ export default class BcmrService {
    *     • if stale, trigger a background update but still return the disk copy
    * 3) otherwise fetch & commit (sync)
    */
-  private async storeSnapshot(snapshot: IdentitySnapshot): Promise<void> {
+  private async storeSnapshot(
+    authbase: string,
+    snapshot: IdentitySnapshot
+  ): Promise<void> {
     const db = await this.getDb();
-    const category = snapshot.token?.category;
+    const category = normalizeHexId(snapshot.token?.category || '');
     if (!category) {
       console.warn('Snapshot missing token.category, cannot store');
       return;
@@ -257,6 +288,12 @@ export default class BcmrService {
       extensions,
     ]);
     query.free();
+
+    // Keep category -> authbase mapping fresh for lookups that start from token category.
+    db.run(
+      `INSERT OR REPLACE INTO bcmr_tokens (category, authbase) VALUES (?, ?)`,
+      [category, normalizeHexId(authbase)]
+    );
   }
 
   public async resolveIdentityRegistry(
@@ -275,7 +312,7 @@ export default class BcmrService {
 
       try {
         const snapshot = this.extractIdentity(authbase, diskEntry.registry);
-        await this.storeSnapshot(snapshot);
+        await this.storeSnapshot(authbase, snapshot);
       } catch (err) {
         console.warn(
           `Failed to store snapshot for ${authbase} from disk:`,
@@ -295,11 +332,22 @@ export default class BcmrService {
     }
 
     const uris = this.getDefaultRegistryUris(authbase);
-    const fresh = await this.fetchAndCommitRegistry(authbase, uris);
+    let fresh: IdentityRegistry;
+    try {
+      fresh = await this.fetchAndCommitRegistry(authbase, uris);
+    } catch (err) {
+      // If all indexer endpoints fail, try resolving directly from authchain BCMR OP_RETURN.
+      const onChain = await this.resolveAuthChainRegistry(authbase, uris[0] || '');
+      if (!onChain) {
+        throw err;
+      }
+      fresh = onChain;
+      this.inMemoryRegistries.set(authbase, fresh);
+    }
 
     try {
       const snapshot = this.extractIdentity(authbase, fresh.registry);
-      await this.storeSnapshot(snapshot);
+      await this.storeSnapshot(authbase, snapshot);
     } catch (err) {
       // console.warn(`Failed to store snapshot for ${authbase} from fetch:`, err);
     }
@@ -310,9 +358,10 @@ export default class BcmrService {
   public async getSnapshot(
     category: string
   ): Promise<BcmrTokenMetadata | null> {
+    const normalizedCategory = normalizeHexId(category);
     const db = await this.getDb();
     const query = db.prepare('SELECT * FROM bcmr_metadata WHERE category = ?');
-    query.bind([category]);
+    query.bind([normalizedCategory]);
     if (query.step()) {
       const row = query.getAsObject();
       query.free();
@@ -373,20 +422,43 @@ export default class BcmrService {
 
   private parseBcmrOutput(voutHex: string): { hash: string; uris: string[] } {
     let cursor = voutHex.indexOf('6a0442434d52');
+    if (cursor < 0) {
+      throw new Error('Not a BCMR OP_RETURN output.');
+    }
     cursor += '6a0442434d52'.length;
+    const hashPush = voutHex.slice(cursor, cursor + 2);
+    if (hashPush !== '20') {
+      throw new Error('Invalid BCMR hash push opcode.');
+    }
     cursor += 2; // OP_PUSHBYTES_32
     const hash = voutHex.slice(cursor, cursor + 64);
+    if (!/^[0-9a-f]{64}$/i.test(hash)) {
+      throw new Error('Invalid BCMR hash payload.');
+    }
     cursor += 64;
     const uris: string[] = [];
     while (cursor < voutHex.length) {
       const pushOp = voutHex.slice(cursor, cursor + 2);
       cursor += 2;
-      let len = parseInt(pushOp, 16) * 2;
+      let len = 0;
       if (pushOp === '4c') {
         len = parseInt(voutHex.slice(cursor, cursor + 2), 16) * 2;
         cursor += 2;
+      } else if (pushOp === '4d') {
+        const lo = parseInt(voutHex.slice(cursor, cursor + 2), 16);
+        const hi = parseInt(voutHex.slice(cursor + 2, cursor + 4), 16);
+        len = (lo + (hi << 8)) * 2;
+        cursor += 4;
+      } else if (pushOp === '4e') {
+        const b0 = parseInt(voutHex.slice(cursor, cursor + 2), 16);
+        const b1 = parseInt(voutHex.slice(cursor + 2, cursor + 4), 16);
+        const b2 = parseInt(voutHex.slice(cursor + 4, cursor + 6), 16);
+        const b3 = parseInt(voutHex.slice(cursor + 6, cursor + 8), 16);
+        len = (b0 + (b1 << 8) + (b2 << 16) + (b3 << 24)) * 2;
+        cursor += 8;
+      } else {
+        len = parseInt(pushOp, 16) * 2;
       }
-      // TODO: 4d/4e if you expect >75-byte URIs
       const uriHex = voutHex.slice(cursor, cursor + len);
       cursor += len;
       uris.push(Buffer.from(uriHex, 'hex').toString('utf8'));
@@ -487,12 +559,25 @@ export default class BcmrService {
     }
 
     // 3) fetch from IPFS
-    const resp = await ipfsFetch(iconUri);
+    let resp: Response;
+    try {
+      resp = await ipfsFetch(iconUri);
+    } catch {
+      ICON_CACHE.set(filePath, null);
+      return null;
+    }
     if (!resp.ok) {
       ICON_CACHE.set(filePath, null);
       return null;
     }
-    const buf = new Uint8Array(await resp.arrayBuffer());
+
+    let buf: Uint8Array;
+    try {
+      buf = new Uint8Array(await resp.arrayBuffer());
+    } catch {
+      ICON_CACHE.set(filePath, null);
+      return null;
+    }
     const { binToBase64 } = await import('@bitauth/libauth');
     const b64 = binToBase64(buf);
     const dataUri = `data:;base64,${b64}`;
@@ -547,6 +632,11 @@ export default class BcmrService {
 
         const imported = importMetadataRegistry(data);
         if (typeof imported === 'string') {
+          const fallback = await this.fetchIndexerTokenFallback(authbase, uri);
+          if (fallback) {
+            this.inMemoryRegistries.set(authbase, fallback);
+            return fallback;
+          }
           throw new Error(imported);
         }
 
@@ -573,6 +663,63 @@ export default class BcmrService {
         return committed;
       }
     );
+  }
+
+  private async fetchIndexerTokenFallback(
+    authbase: string,
+    registryUrl: string
+  ): Promise<IdentityRegistry | null> {
+    const tokenUrl = buildTokenLookupUrl(registryUrl, authbase);
+    if (!tokenUrl) return null;
+
+    const resp = await ipfsFetch(tokenUrl);
+    if (!resp.ok) return null;
+
+    let tokenData: BcmrIndexerTokenResponse;
+    try {
+      tokenData = (await resp.json()) as BcmrIndexerTokenResponse;
+    } catch {
+      return null;
+    }
+
+    const category = normalizeHexId(tokenData?.token?.category || authbase);
+    const symbol = String(tokenData?.token?.symbol || '').trim();
+    const decimals = Number.isFinite(tokenData?.token?.decimals)
+      ? Math.max(0, Math.trunc(Number(tokenData?.token?.decimals)))
+      : 0;
+    const name = String(tokenData?.name || '').trim() || category;
+    const description = String(tokenData?.description || '').trim() || undefined;
+    const uris = tokenData?.uris && Object.keys(tokenData.uris).length > 0
+      ? tokenData.uris
+      : undefined;
+
+    const latestRevision = new Date().toISOString();
+    const synthetic = {
+      $schema: 'https://cashtokens.org/bcmr-v2.schema.json',
+      version: { major: 0, minor: 0, patch: 0 },
+      latestRevision,
+      registryIdentity: normalizeHexId(authbase),
+      identities: {
+        [normalizeHexId(authbase)]: {
+          [latestRevision]: {
+            name,
+            description,
+            token: {
+              category,
+              symbol,
+              decimals,
+            },
+            uris,
+            extensions: tokenData.extensions,
+          },
+        },
+      },
+    };
+
+    const imported = importMetadataRegistry(synthetic);
+    if (typeof imported === 'string') return null;
+
+    return this.commitIdentityRegistry(normalizeHexId(authbase), imported, tokenUrl);
   }
 
   private async backgroundRefresh(

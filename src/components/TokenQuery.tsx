@@ -12,15 +12,25 @@ import { latin1ToHex } from '../utils/hex';
 
 interface TokenQueryProps {
   tokenId: string;
+  prefetchedSnapshot?: IdentitySnapshot | null;
+  prefetchedIconDataUri?: string | null;
 }
 
-const TokenQuery: React.FC<TokenQueryProps> = ({ tokenId }) => {
+const TokenQuery: React.FC<TokenQueryProps> = ({
+  tokenId,
+  prefetchedSnapshot = null,
+  prefetchedIconDataUri = null,
+}) => {
   const [totalSupply, setTotalSupply] = useState<number | null>(null);
   const [activeMinting, setActiveMinting] = useState<boolean | null>(null);
   const [nftSupply, setNftSupply] = useState<number | null>(null);
   const [authHead, setAuthHead] = useState<string | null>(null);
-  const [snapshot, setSnapshot] = useState<IdentitySnapshot | null>(null);
-  const [iconDataUri, setIconDataUri] = useState<string | null>(null);
+  const [snapshot, setSnapshot] = useState<IdentitySnapshot | null>(
+    prefetchedSnapshot
+  );
+  const [iconDataUri, setIconDataUri] = useState<string | null>(
+    prefetchedIconDataUri
+  );
   const [loading, setLoading] = useState<boolean>(true);
   const [error, setError] = useState<string | null>(null);
   const [bcmrError, setBcmrError] = useState<string | null>(null);
@@ -30,6 +40,8 @@ const TokenQuery: React.FC<TokenQueryProps> = ({ tokenId }) => {
       setLoading(true);
       setError(null);
       setBcmrError(null);
+      setSnapshot(prefetchedSnapshot);
+      setIconDataUri(prefetchedIconDataUri);
 
       let failedCoreQueries = 0;
 
@@ -94,8 +106,6 @@ const TokenQuery: React.FC<TokenQueryProps> = ({ tokenId }) => {
         setBcmrError(
           err instanceof Error ? err.message : 'Failed to fetch token data.'
         );
-        setSnapshot(null);
-        setIconDataUri(null);
       }
 
       if (failedCoreQueries >= 4) {
@@ -106,9 +116,9 @@ const TokenQuery: React.FC<TokenQueryProps> = ({ tokenId }) => {
     };
 
     fetchData();
-  }, [tokenId]);
+  }, [tokenId, prefetchedSnapshot, prefetchedIconDataUri]);
 
-  if (loading) return <p className="wallet-muted">Loading token data…</p>;
+  if (loading && !snapshot) return <p className="wallet-muted">Loading token data…</p>;
 
   return (
     <div className="token-query space-y-4">
@@ -118,6 +128,7 @@ const TokenQuery: React.FC<TokenQueryProps> = ({ tokenId }) => {
       <p>Active Minting: {activeMinting === null ? 'Unavailable' : activeMinting ? 'Yes' : 'No'}</p>
       <p>Total NFTs: {nftSupply ?? 'Unavailable'}</p>
       <p>Auth Head: {authHead ? shortenTxHash(authHead) : 'Unavailable'}</p>
+      {loading && <p className="wallet-muted">Loading token data…</p>}
       {bcmrError && (
         <p className="wallet-danger-text">
           BCMR metadata unavailable: {bcmrError}
@@ -125,7 +136,7 @@ const TokenQuery: React.FC<TokenQueryProps> = ({ tokenId }) => {
       )}
 
       {snapshot && (
-        <div className="bcmr-meta p-4 border rounded-lg wallet-card">
+        <div className="bcmr-meta p-4 border rounded-lg wallet-card max-h-64 overflow-y-auto">
           {(iconDataUri || snapshot.uris?.icon) && (
             <img
               src={iconDataUri || snapshot.uris!.icon!}
@@ -135,6 +146,13 @@ const TokenQuery: React.FC<TokenQueryProps> = ({ tokenId }) => {
           )}
           <h4 className="text-lg font-semibold">{snapshot.name}</h4>
           {snapshot.description && <p>{snapshot.description}</p>}
+          <div className="mt-2 space-y-1 text-sm wallet-muted break-all">
+            <p>Category: {snapshot.token?.category || tokenId}</p>
+            {snapshot.token?.symbol && <p>Symbol: {snapshot.token.symbol}</p>}
+            {typeof snapshot.token?.decimals === 'number' && (
+              <p>Decimals: {snapshot.token.decimals}</p>
+            )}
+          </div>
           {snapshot.uris?.web && (
             <p className="mt-2">
               <a
