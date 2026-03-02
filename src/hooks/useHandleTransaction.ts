@@ -8,7 +8,6 @@ import {
   clearTransaction,
   setTxOutputs,
 } from '../redux/transactionBuilderSlice';
-import { resetTransactions } from '../redux/transactionSlice';
 import { resetContract } from '../redux/contractSlice';
 import { logError, toErrorMessage } from '../utils/errorHandling';
 // import { optimisticRemoveSpentByOutpoints, requestUTXORefreshForMany } from '../workers/UTXOWorkerService';
@@ -30,7 +29,8 @@ const useHandleTransaction = (
   setErrorMessage: React.Dispatch<React.SetStateAction<string | null>>,
   setShowRawTxPopup: React.Dispatch<React.SetStateAction<boolean>>,
   setShowTxIdPopup: React.Dispatch<React.SetStateAction<boolean>>, // Added parameter
-  setLoading: React.Dispatch<React.SetStateAction<boolean>>
+  setLoading: React.Dispatch<React.SetStateAction<boolean>>,
+  onBroadcastSuccess?: () => void
 ) => {
   const dispatch = useDispatch();
 
@@ -167,8 +167,9 @@ const useHandleTransaction = (
 
       // Clear state only on success
       setRawTX('');
-      dispatch(resetTransactions());
+      dispatch(clearTransaction());
       dispatch(resetContract());
+      onBroadcastSuccess?.();
 
       setLoading(false);
       return transactionID;

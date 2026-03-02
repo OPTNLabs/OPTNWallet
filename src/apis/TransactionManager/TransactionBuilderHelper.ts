@@ -167,47 +167,46 @@ export default function TransactionBuilderHelper() {
    * Token-bearing outputs are forced to have at least TOKEN_OUTPUT_SATS sats.
    * Token.amount is always included (NFTs should use amount=0).
    */
-  function prepareTransactionOutputs(outputs: TransactionOutput[]): unknown[] {
-    return outputs.map((output) => {
-      // OP_RETURN variant
-      if ('opReturn' in output && output.opReturn !== undefined) {
-        return {
-          opReturn: output.opReturn,
-        };
-      }
+  function prepareStandardOutput(output: Exclude<TransactionOutput, { opReturn: string[] }>): unknown {
+    let amountSats = toBigIntAmount(output.amount);
 
-      // Regular or token output
-      let amountSats = toBigIntAmount(output.amount);
+    // Enforce token-bearing outputs have minimum sats
+    if (output.token) {
+      const minTokenSats = BigInt(TOKEN_OUTPUT_SATS);
+      if (amountSats < minTokenSats) amountSats = minTokenSats;
+    }
 
-      // Enforce token-bearing outputs have minimum sats
-      if (output.token) {
-        const minTokenSats = BigInt(TOKEN_OUTPUT_SATS);
-        if (amountSats < minTokenSats) amountSats = minTokenSats;
-      }
+    const baseOutput = {
+      to: output.recipientAddress,
+      amount: amountSats,
+    };
 
-      const baseOutput = {
-        to: output.recipientAddress,
-        amount: amountSats,
+    if (output.token) {
+      return {
+        ...baseOutput,
+        token: {
+          category: output.token.category,
+          ...(output.token.nft && {
+            nft: {
+              capability: output.token.nft.capability,
+              commitment: output.token.nft.commitment,
+            },
+          }),
+          // Always include amount: NFTs should be 0; FTs should be set by caller.
+          amount: toBigIntAmount(output.token.amount ?? 0),
+        },
       };
+    }
 
-      if (output.token) {
-        return {
-          ...baseOutput,
-          token: {
-            category: output.token.category,
-            ...(output.token.nft && {
-              nft: {
-                capability: output.token.nft.capability,
-                commitment: output.token.nft.commitment,
-              },
-            }),
-            // Always include amount: NFTs should be 0; FTs should be set by caller.
-            amount: toBigIntAmount(output.token.amount ?? 0),
-          },
-        };
+    return baseOutput;
+  }
+
+  function validateOpReturnChunks(chunks: string[]): string[] {
+    return chunks.map((chunk, index) => {
+      if (typeof chunk !== 'string') {
+        throw new Error(`OP_RETURN chunk at index ${index} must be a string.`);
       }
-
-      return baseOutput;
+      return chunk;
     });
   }
 
@@ -327,8 +326,23 @@ export default function TransactionBuilderHelper() {
       unlockableUtxos as Parameters<typeof txBuilder.addInputs>[0]
     );
 
-    const txOutputs = prepareTransactionOutputs(outputs);
-    txBuilder.addOutputs(txOutputs as Parameters<typeof txBuilder.addOutputs>[0]);
+    const standardOutputs: unknown[] = [];
+    for (const output of outputs) {
+      if ('opReturn' in output && output.opReturn !== undefined) {
+        txBuilder.addOpReturnOutput(validateOpReturnChunks(output.opReturn));
+        continue;
+      }
+      standardOutputs.push(
+        prepareStandardOutput(
+          output as Exclude<TransactionOutput, { opReturn: string[] }>
+        )
+      );
+    }
+    if (standardOutputs.length > 0) {
+      txBuilder.addOutputs(
+        standardOutputs as Parameters<typeof txBuilder.addOutputs>[0]
+      );
+    }
 
     if (needsLocktime) {
       const currentBlockHeight = await provider.getBlockHeight();

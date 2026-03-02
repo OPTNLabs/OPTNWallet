@@ -2,10 +2,12 @@ import type { AddonSDK } from '../../../../services/AddonsSDK';
 import type { TransactionOutput } from '../../../../types/types';
 import type {
   MintAppUtxo,
+  MintBcmrPublication,
   MintOutputDraft,
   WalletAddressRecord,
 } from '../types';
 import { selectFeeCandidates } from './selectFeeCandidates';
+import { buildBcmrPublicationOpReturn } from './bcmrOpReturn';
 import {
   shortHash,
   sumOutputs,
@@ -61,6 +63,7 @@ type BuildMintPreviewParams = {
   changeAddress: string;
   sdkAddressBook: WalletAddressRecord[];
   tokenOutputSats: number;
+  bcmrPublication?: MintBcmrPublication;
 };
 
 export async function buildMintPreview({
@@ -71,6 +74,7 @@ export async function buildMintPreview({
   changeAddress,
   sdkAddressBook,
   tokenOutputSats,
+  bcmrPublication,
 }: BuildMintPreviewParams): Promise<{
   built: SdkBuildResult;
   inputsForBuild: MintAppUtxo[];
@@ -96,10 +100,18 @@ export async function buildMintPreview({
   let built: SdkBuildResult | null = null;
 
   for (let i = 0; i < feeCandidates.length; i++) {
-    feeInputs = [...feeInputs, feeCandidates[i]];
-    inputsForBuild = [...genesisInputs, ...feeInputs];
+    feeInputs.push(feeCandidates[i]);
+    inputsForBuild = genesisInputs.concat(feeInputs);
 
     const outputs: TransactionOutput[] = [];
+    if (bcmrPublication?.enabled) {
+      const publication = buildBcmrPublicationOpReturn({
+        registryJson: bcmrPublication.registryJson,
+        uris: bcmrPublication.uris,
+      });
+      outputs.push({ opReturn: publication.opReturn });
+    }
+
     for (const d of activeOutputDrafts) {
       const src = sourceByKey.get(d.sourceKey);
       if (!src) continue;

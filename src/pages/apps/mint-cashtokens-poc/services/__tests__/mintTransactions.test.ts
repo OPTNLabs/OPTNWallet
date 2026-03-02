@@ -176,4 +176,47 @@ describe('mintTransactions', () => {
     expect(out.built.hex).toBe('c0de');
     expect(out.feePaid).toBe(454n);
   });
+
+  it('buildMintPreview prepends BCMR OP_RETURN output when enabled', async () => {
+    const genesis = makeUtxo({ tx_hash: 'g'.repeat(64), tx_pos: 0, value: 5000, token: null });
+    const fee = makeUtxo({ tx_hash: 'f'.repeat(64), tx_pos: 1, value: 2000, token: null });
+    const draft = makeDraft({ sourceKey: `${genesis.tx_hash}:0` });
+
+    const addOutput = vi.fn().mockReturnValue({
+      recipientAddress: 'bitcoincash:qrcp',
+      amount: 546n,
+      token: { category: genesis.tx_hash, amount: 1n },
+    });
+
+    const build = vi.fn().mockResolvedValue({
+      errorMsg: '',
+      hex: 'c0de',
+      finalOutputs: [
+        { opReturn: ['BCMR'] },
+        { recipientAddress: 'bitcoincash:qrcp', amount: 546n },
+      ],
+    });
+
+    const sdk = { tx: { addOutput, build } } as unknown as AddonSDK;
+
+    await buildMintPreview({
+      sdk,
+      selectedUtxos: [genesis],
+      flatUtxos: [genesis, fee],
+      activeOutputDrafts: [draft],
+      changeAddress: 'bitcoincash:qchange',
+      sdkAddressBook: [],
+      tokenOutputSats: 546,
+      bcmrPublication: {
+        enabled: true,
+        registryJson: '{"name":"demo"}',
+        uris: ['ipfs://bafy123'],
+      },
+    });
+
+    const firstBuildArg = build.mock.calls[0]?.[0] as {
+      outputs: Array<{ opReturn?: string[] }>;
+    };
+    expect(firstBuildArg.outputs[0].opReturn?.[0]).toBe('BCMR');
+  });
 });

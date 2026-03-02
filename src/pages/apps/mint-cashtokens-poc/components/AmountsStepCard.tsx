@@ -1,3 +1,4 @@
+import { memo, useMemo } from 'react';
 import { Badge, CardShell, PillButton, QuickChip } from './uiPrimitives';
 import type {
   MintAppUtxo,
@@ -21,7 +22,7 @@ type AmountsStepCardProps = {
   onRemoveOutputDraft: (id: string) => void;
 };
 
-export default function AmountsStepCard({
+function AmountsStepCard({
   selectedUtxos,
   selectedRecipientCount,
   activeOutputDrafts,
@@ -34,6 +35,21 @@ export default function AmountsStepCard({
   onDuplicateOutputDraft,
   onRemoveOutputDraft,
 }: AmountsStepCardProps) {
+  const selectedSourceByKey = useMemo(() => {
+    const out = new Map<string, MintAppUtxo>();
+    for (const u of selectedUtxos) out.set(utxoKey(u), u);
+    return out;
+  }, [selectedUtxos]);
+
+  const selectedSourceOptions = useMemo(
+    () =>
+      selectedUtxos.map((u) => {
+        const key = utxoKey(u);
+        return { key, label: key };
+      }),
+    [selectedUtxos]
+  );
+
   return (
     <CardShell
       title="Amounts"
@@ -77,9 +93,7 @@ export default function AmountsStepCard({
           ) : null}
 
           {activeOutputDrafts.map((d, idx) => {
-            const source = selectedUtxos.find(
-              (u) => utxoKey(u) === d.sourceKey
-            );
+            const source = selectedSourceByKey.get(d.sourceKey);
             if (!source) return null;
             const open = expandedDraftId === d.id;
             const collapsedLabel =
@@ -156,14 +170,11 @@ export default function AmountsStepCard({
                           }
                           className="wallet-input p-3 w-full rounded-xl"
                         >
-                          {selectedUtxos.map((u) => {
-                            const key = utxoKey(u);
-                            return (
-                              <option key={key} value={key}>
-                                {key}
-                              </option>
-                            );
-                          })}
+                          {selectedSourceOptions.map(({ key, label }) => (
+                            <option key={key} value={key}>
+                              {label}
+                            </option>
+                          ))}
                         </select>
                       </div>
                     </div>
@@ -309,3 +320,5 @@ export default function AmountsStepCard({
     </CardShell>
   );
 }
+
+export default memo(AmountsStepCard);

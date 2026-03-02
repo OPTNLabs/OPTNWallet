@@ -1,6 +1,6 @@
 // src/pages/Transaction.tsx
 
-import React, { Dispatch, SetStateAction, useState } from 'react';
+import React, { Dispatch, SetStateAction, useCallback, useState } from 'react';
 import { useDispatch, useSelector } from 'react-redux';
 import { ContractAddressRecord, UTXO } from '../types/types';
 import AddressSelection from '../components/transaction/AddressSelection';
@@ -110,6 +110,30 @@ const Transaction: React.FC = () => {
   const walletId = useSelector(selectWalletId);
   useTransactionInit(dispatch);
 
+  const resetTransactionViewState = useCallback(() => {
+    setSelectedAddresses([]);
+    setSelectedContractAddresses([]);
+    setSelectedContractABIs([]);
+    setSelectedUtxos([]);
+    setTempUtxos(undefined);
+    setRecipientAddress('');
+    setTransferAmount(0);
+    setTokenAmount(0);
+    setSelectedTokenCategory('none');
+    setBytecodeSize(0);
+    setRawTX('');
+    setShowPopup(false);
+    setContractFunctionInputs(null);
+    setCurrentContractABI([]);
+    setCurrentContractSource('');
+    setShowContractUTXOsPopup(false);
+    setShowRegularUTXOsPopup(false);
+    setShowCashTokenUTXOsPopup(false);
+    setShowPaperWalletUTXOsPopup(false);
+    setNftCapability(undefined);
+    setNftCommitment(undefined);
+  }, []);
+
   // Log txOutputs whenever they change
   useFetchWalletData(
     walletId,
@@ -138,7 +162,8 @@ const Transaction: React.FC = () => {
       setErrorMessage,
       setShowRawTxPopup,
       setShowTxIdPopup, // Pass the setter to the hook
-      setLoading
+      setLoading,
+      resetTransactionViewState
     );
 
   const {

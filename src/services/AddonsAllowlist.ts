@@ -16,7 +16,8 @@ const ALLOWED_ADDON_HTTP_DOMAINS = new Set<string>([
   // Put your infra endpoints here when ready, examples:
   // 'ipfs-gateway.optnlabs.com',
   // 'bcmr.optnlabs.com',
-  // 'chaingraph.optnlabs.com',
+  'chaingraph.optnlabs.com',
+  'gql.chaingraph.pat.mn',
 ]);
 const KNOWN_ADDON_CAPABILITIES = new Set<AddonCapability>(ADDON_CAPABILITIES);
 

@@ -55,9 +55,15 @@ const AddressSelectionPopup: React.FC<AddressSelectionPopupProps> = ({
   };
 
   return (
-    <div className="wallet-popup-backdrop">
+    <div className="wallet-popup-backdrop z-[1300] p-3 sm:p-4">
       {/* Popup Container */}
-      <div className="wallet-popup-panel w-full max-w-md">
+      <div
+        className="wallet-popup-panel w-full max-w-md"
+        style={{
+          maxHeight:
+            'calc(100dvh - var(--navbar-height) - var(--safe-bottom) - 0.75rem)',
+        }}
+      >
         <h2 className="flex flex-col items-center text-xl font-bold mb-4">
           Select an Address
         </h2>

@@ -384,7 +384,8 @@ export function createAddonSDK(
           selectedUtxos ?? [],
           addresses ?? [],
           nftCapability,
-          nftCommitment
+          nftCommitment,
+          false
         );
       },
 
@@ -412,7 +413,7 @@ export function createAddonSDK(
         return await withPolicyTimeout(
           'tx.broadcast',
           20_000,
-          async () => await txMgr.sendTransaction(hex)
+          async () => await TransactionService.sendTransaction(hex)
         );
       },
     },

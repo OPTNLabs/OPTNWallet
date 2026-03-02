@@ -37,11 +37,6 @@ import PageHeader from '../components/ui/PageHeader';
 import SectionCard from '../components/ui/SectionCard';
 import EmptyState from '../components/ui/EmptyState';
 
-interface BlockHeader {
-  height: number;
-  hex: string;
-}
-
 interface ContractArg {
   name: string;
   type: string;
@@ -52,6 +47,33 @@ interface AvailableContract {
   contractName: string;
 }
 
+const extractBlockHeight = (header: unknown): number | null => {
+  if (typeof header === 'number' && Number.isFinite(header)) {
+    return Math.trunc(header);
+  }
+  if (typeof header === 'string') {
+    const parsed = Number(header);
+    return Number.isFinite(parsed) ? Math.trunc(parsed) : null;
+  }
+  if (Array.isArray(header)) {
+    for (const item of header) {
+      const nestedHeight = extractBlockHeight(item);
+      if (nestedHeight !== null) return nestedHeight;
+    }
+    return null;
+  }
+  if (header && typeof header === 'object') {
+    const possibleHeight = header as Record<string, unknown>;
+    const directKeys = ['height', 'blockHeight', 'block_height', 'tip'];
+    for (const key of directKeys) {
+      const value = possibleHeight[key];
+      const parsed = extractBlockHeight(value);
+      if (parsed !== null) return parsed;
+    }
+  }
+  return null;
+};
+
 const ContractView = () => {
   const [isLoading, setIsLoading] = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);
@@ -61,7 +83,9 @@ const ContractView = () => {
   const [selectedContractFile, setSelectedContractFile] = useState<string>('');
   const [constructorArgs, setConstructorArgs] = useState<ContractArg[]>([]);
   const [inputValues, setInputValues] = useState<Record<string, string>>({});
-  const [contractInstances, setContractInstances] = useState<ContractInstanceRow[]>([]);
+  const [contractInstances, setContractInstances] = useState<
+    ContractInstanceRow[]
+  >([]);
   const [showAddressPopup, setShowAddressPopup] = useState<boolean>(false);
   const [currentArgName, setCurrentArgName] = useState<string>('');
   const [showConstructorArgsPopup, setShowConstructorArgsPopup] =
@@ -69,7 +93,7 @@ const ContractView = () => {
   const [showErrorPopup, setShowErrorPopup] = useState<boolean>(false);
   const [errorMessage, setErrorMessage] = useState<string>('');
   const [isScanning, setIsScanning] = useState<boolean>(false);
-  const [blockHeader, setBlockHeader] = useState<BlockHeader | null>(null);
+  const [blockHeight, setBlockHeight] = useState<number | null>(null);
 
   // datasig helpers
   const [selectedAddresses, setSelectedAddresses] = useState<{
@@ -90,16 +114,14 @@ const ContractView = () => {
     const fetchInitialBlock = async () => {
       try {
         const block = await ElectrumService.getLatestBlock();
-        if (block) {
-          setBlockHeader(block as BlockHeader);
-        }
+        setBlockHeight(extractBlockHeight(block));
       } catch (err) {
         logError('ContractView.fetchInitialBlock', err);
       }
     };
 
-    const handleBlockUpdate = (header: BlockHeader) => {
-      setBlockHeader(header);
+    const handleBlockUpdate = (header: unknown) => {
+      setBlockHeight(extractBlockHeight(header));
       setError(null);
     };
 
@@ -107,7 +129,7 @@ const ContractView = () => {
     ElectrumService.subscribeBlockHeaders(handleBlockUpdate);
 
     return () => {
-      // (optional) add unsubscribe later
+      void ElectrumService.unsubscribeBlockHeaders();
     };
   }, []);
 
@@ -150,7 +172,9 @@ const ContractView = () => {
               `Artifact ${selectedContractFile} could not be loaded`
             );
           }
-          setConstructorArgs((artifact.constructorInputs || []) as ContractArg[]);
+          setConstructorArgs(
+            (artifact.constructorInputs || []) as ContractArg[]
+          );
           setShowConstructorArgsPopup(true);
         } catch (err) {
           logError('ContractView.loadContractDetails', err, {
@@ -252,9 +276,14 @@ const ContractView = () => {
   };
 
   const validateConstructorArgs = (): boolean => {
-    const validation = validateConstructorArgsComplete(constructorArgs, inputValues);
+    const validation = validateConstructorArgsComplete(
+      constructorArgs,
+      inputValues
+    );
     if (!validation.valid) {
-      setErrorMessage(validation.errorMessage ?? 'Missing constructor arguments.');
+      setErrorMessage(
+        validation.errorMessage ?? 'Missing constructor arguments.'
+      );
       setShowErrorPopup(true);
       return false;
     }
@@ -271,7 +300,7 @@ const ContractView = () => {
         selectedContractFile,
         args,
         constructorArgs,
-        currentNetwork
+        currentNetwork,
       });
       setContractInstances(instances as ContractInstanceRow[]);
       setSelectedContractFile('');
@@ -354,65 +383,92 @@ const ContractView = () => {
 
   return (
     <div className="container mx-auto max-w-xl p-4 pb-16 wallet-page">
-      <PageHeader title="Contracts" subtitle="Instantiate and manage contracts" compact />
+      <PageHeader
+        title="Contracts"
+        subtitle="Instantiate and manage contracts"
+        compact
+      />
 
-      <SectionCard title="Select Contract" className="mb-4">
-
-      <select
-        className="wallet-input mb-4 w-full"
-        value={selectedContractFile}
-        onChange={(e) => setSelectedContractFile(e.target.value)}
-      >
-        <option value="">Select a contract</option>
-        {availableContracts.map((contract, index) => (
-          <option key={index} value={contract.fileName}>
-            {contract.contractName}
-          </option>
-        ))}
-      </select>
+      <SectionCard title="Contract Templates" className="mb-4">
+        <select
+          className="wallet-input mb-4 w-full"
+          value={selectedContractFile}
+          onChange={(e) => setSelectedContractFile(e.target.value)}
+        >
+          <option value="">Select a contract</option>
+          {availableContracts.map((contract, index) => (
+            <option key={index} value={contract.fileName}>
+              {contract.contractName}
+            </option>
+          ))}
+        </select>
       </SectionCard>
 
       {showConstructorArgsPopup && (
         <Popup
           closePopups={() => {
             setShowConstructorArgsPopup(false);
+            setShowAddressPopup(false);
             setSelectedContractFile('');
             setConstructorArgs([]);
             setInputValues({});
             setCurrentArgName('');
           }}
         >
-          <h2 className="text-lg font-semibold flex items-center justify-center gap-2 mb-2">
-            <span>Constructor Arguments</span>
-          </h2>
-
-          <div className="max-h-96 overflow-y-auto mb-4">
-            <p className="flex flex-col items-center">
-              <div className="flex items-center">
-                <span>Current Block Height</span>
-                <span
-                  data-tooltip-id="block-height"
-                  className="cursor-pointer wallet-accent-icon text-base font-bold select-none"
-                  aria-label="Data signature info"
-                  role="img"
-                >
-                  ⓘ
-                </span>
-              </div>
-              <Tooltip
-                id="block-height"
-                place="top"
-                className="max-w-[80vw] whitespace-normal break-words text-sm leading-snug"
-                content="Blocks increment on an average interval of 10 minutes."
-              />
-              <span className="font-bold">{blockHeader?.height ?? '-'}</span>
+          <div className="mb-4">
+            <h2 className="text-lg font-semibold text-center">
+              Constructor Arguments
+            </h2>
+            <p className="wallet-muted text-center text-sm mt-1">
+              Fill in each required value before creating the contract.
             </p>
+          </div>
+
+          <div
+            className="rounded-xl border px-4 py-3 mb-4"
+            style={{ borderColor: 'var(--wallet-border)' }}
+          >
+            <div className="flex items-center justify-center gap-1 text-sm wallet-muted">
+              <span>Current Block Height</span>
+              <span
+                data-tooltip-id="block-height"
+                className="cursor-pointer wallet-accent-icon text-base font-bold select-none"
+                aria-label="Block height info"
+                role="img"
+              >
+                ⓘ
+              </span>
+            </div>
+            <Tooltip
+              id="block-height"
+              place="top"
+              className="max-w-[80vw] whitespace-normal break-words text-sm leading-snug"
+              content="Blocks increment on an average interval of 10 minutes."
+            />
+            <div className="text-center text-2xl font-semibold tabular-nums mt-1">
+              {blockHeight ?? 'Unavailable'}
+            </div>
+          </div>
+
+          <div className="pr-1 mb-4 space-y-3">
+            {constructorArgs.length === 0 && (
+              <div
+                className="rounded-xl border p-3 text-sm wallet-muted"
+                style={{ borderColor: 'var(--wallet-border)' }}
+              >
+                This contract template has no constructor inputs.
+              </div>
+            )}
 
             {constructorArgs.map((arg, index) => {
               if (arg.type === 'datasig') {
                 return (
-                  <div key={index} className="mb-4">
-                    <label className="text-sm font-medium wallet-muted flex items-center gap-2">
+                  <div
+                    key={index}
+                    className="rounded-xl border p-3"
+                    style={{ borderColor: 'var(--wallet-border)' }}
+                  >
+                    <label className="text-sm font-medium wallet-muted flex items-center gap-2 mb-2">
                       <span>{arg.name} (datasig)</span>
                       <span
                         data-tooltip-id={`datasig-tt-${index}`}
@@ -441,7 +497,7 @@ const ContractView = () => {
                         })
                       }
                       className="wallet-input w-full mb-2"
-                      placeholder={`Enter data to sign for ${arg.name}`}
+                      placeholder={`Enter message for ${arg.name}`}
                     />
 
                     <div className="flex items-center mb-2 gap-2">
@@ -477,7 +533,8 @@ const ContractView = () => {
                     </div>
 
                     {selectedAddresses[arg.name] && (
-                      <div className="text-sm mt-2">
+                      <div className="text-sm wallet-muted">
+                        Signing address:{' '}
                         {shortenTxHash(
                           selectedAddresses[arg.name],
                           PREFIX[currentNetwork].length
@@ -485,101 +542,111 @@ const ContractView = () => {
                       </div>
                     )}
                     {inputValues[arg.name] && (
-                      <div className="mt-2">
+                      <div className="text-sm mt-1 wallet-muted">
                         Signature: {shortenTxHash(inputValues[arg.name], 0)}
                       </div>
                     )}
                   </div>
                 );
-              } else {
-                const isAddressType =
-                  arg.type === 'bytes20' || arg.type === 'pubkey';
-                return (
-                  <div key={index} className="mb-4">
-                    <label className="text-sm font-medium wallet-muted flex items-center gap-2">
-                      <span>
-                        {arg.name} ({arg.type})
-                      </span>
-                      <span
-                        data-tooltip-id={`argtype-tt-${index}`}
-                        className="cursor-pointer wallet-accent-icon text-base font-bold select-none"
-                        aria-label="Argument type info"
-                        role="img"
-                      >
-                        ⓘ
-                      </span>
-                      <Tooltip
-                        id={`argtype-tt-${index}`}
-                        place="top"
-                        className="max-w-[80vw] whitespace-normal break-words text-sm leading-snug"
-                        content={
-                          isAddressType
-                            ? arg.type === 'pubkey'
-                              ? 'Public key in hex. Use “Select Address” to fill automatically.'
-                              : '20-byte hash (hex) of an address/public key. Use “Select Address”.'
-                            : `Enter a value matching type: ${arg.type}.`
-                        }
-                      />
-                    </label>
-
-                    {isAddressType ? (
-                      <>
-                        <div className="flex items-center gap-2">
-                          <button
-                            type="button"
-                            onClick={() => {
-                              setCurrentArgName(arg.name);
-                              setShowAddressPopup(true);
-                            }}
-                            className={`wallet-btn-primary ${
-                              isScanning ? 'opacity-50 cursor-not-allowed' : ''
-                            }`}
-                            disabled={isScanning}
-                            aria-label={`Select Address for ${arg.name}`}
-                          >
-                            Select Address
-                          </button>
-
-                          <button
-                            type="button"
-                            onClick={() => scanBarcode(arg.name)}
-                            className={`wallet-btn-primary ${
-                              isScanning ? 'opacity-50 cursor-not-allowed' : ''
-                            }`}
-                            disabled={isScanning}
-                            aria-label={`Scan QR Code for ${arg.name}`}
-                          >
-                            <FaCamera />
-                          </button>
-                        </div>
-
-                        {inputValues[arg.name] && (
-                          <div className="mt-2">
-                            Selected {arg.type}:{' '}
-                            {shortenTxHash(inputValues[arg.name])}
-                          </div>
-                        )}
-                      </>
-                    ) : (
-                      <input
-                        type="text"
-                        name={arg.name}
-                        value={inputValues[arg.name] || ''}
-                        onChange={handleInputChange}
-                        className="wallet-input w-full"
-                        placeholder={`Enter ${arg.name}`}
-                      />
-                    )}
-                  </div>
-                );
               }
+
+              const isAddressType =
+                arg.type === 'bytes20' || arg.type === 'pubkey';
+              return (
+                <div
+                  key={index}
+                  className="rounded-xl border p-3"
+                  style={{ borderColor: 'var(--wallet-border)' }}
+                >
+                  <label className="text-sm font-medium wallet-muted flex items-center gap-2 mb-2">
+                    <span>
+                      {arg.name} ({arg.type})
+                    </span>
+                    <span
+                      data-tooltip-id={`argtype-tt-${index}`}
+                      className="cursor-pointer wallet-accent-icon text-base font-bold select-none"
+                      aria-label="Argument type info"
+                      role="img"
+                    >
+                      ⓘ
+                    </span>
+                    <Tooltip
+                      id={`argtype-tt-${index}`}
+                      place="top"
+                      className="max-w-[80vw] whitespace-normal break-words text-sm leading-snug"
+                      content={
+                        isAddressType
+                          ? arg.type === 'pubkey'
+                            ? 'Public key in hex. Use “Select Address” to fill automatically.'
+                            : '20-byte hash (hex) of an address/public key. Use “Select Address”.'
+                          : `Enter a value matching type: ${arg.type}.`
+                      }
+                    />
+                  </label>
+
+                  {isAddressType ? (
+                    <>
+                      <div className="flex items-center gap-2">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setCurrentArgName(arg.name);
+                            setShowAddressPopup(true);
+                          }}
+                          className={`wallet-btn-primary flex-1 ${
+                            isScanning ? 'opacity-50 cursor-not-allowed' : ''
+                          }`}
+                          disabled={isScanning}
+                          aria-label={`Select Address for ${arg.name}`}
+                        >
+                          Select Address
+                        </button>
+
+                        <button
+                          type="button"
+                          onClick={() => scanBarcode(arg.name)}
+                          className={`wallet-btn-primary h-11 w-11 p-0 ${
+                            isScanning ? 'opacity-50 cursor-not-allowed' : ''
+                          }`}
+                          disabled={isScanning}
+                          aria-label={`Scan QR Code for ${arg.name}`}
+                        >
+                          <FaCamera />
+                        </button>
+                      </div>
+
+                      {inputValues[arg.name] && (
+                        <div className="text-sm mt-2 wallet-muted break-all">
+                          Selected {arg.type}:{' '}
+                          {shortenTxHash(inputValues[arg.name])}
+                        </div>
+                      )}
+                    </>
+                  ) : (
+                    <input
+                      type="text"
+                      name={arg.name}
+                      value={inputValues[arg.name] || ''}
+                      onChange={handleInputChange}
+                      className="wallet-input w-full"
+                      placeholder={`Enter ${arg.name}`}
+                    />
+                  )}
+                </div>
+              );
             })}
           </div>
 
-          <div className="flex flex-col items-end">
+          <div
+            className="sticky bottom-0 pt-2 pb-1 flex justify-end"
+            style={{
+              background:
+                'linear-gradient(to top, var(--wallet-card-bg) 72%, transparent)',
+            }}
+          >
             <button
               onClick={createContract}
-              className={`wallet-btn-primary mb-4 flex items-center justify-center ${
+              className={`wallet-btn-primary w-full sm:w-auto sm:min-w-[190px] mb-4 flex items-center justify-center ${
                 isLoading ? 'cursor-not-allowed opacity-50' : ''
               }`}
               disabled={isLoading}
@@ -603,14 +670,10 @@ const ContractView = () => {
 
       {contractInstances.length > 0 && (
         <SectionCard title="Instantiated Contracts">
-
           <div className="overflow-y-auto max-h-80 mb-4">
             <ul>
               {contractInstances.map((instance) => (
-                <li
-                  key={instance.id}
-                  className="mb-4 p-4 wallet-card"
-                >
+                <li key={instance.id} className="mb-4 p-4 wallet-card">
                   <div>
                     <div className="mb-2 overflow-x-auto">
                       <strong>Contract Name:</strong> {instance.contract_name}
@@ -666,10 +729,7 @@ const ContractView = () => {
         </SectionCard>
       )}
 
-      <button
-        onClick={returnHome}
-        className="wallet-btn-danger w-full my-2"
-      >
+      <button onClick={returnHome} className="wallet-btn-danger w-full my-2">
         Go Back
       </button>
 
@@ -687,12 +747,6 @@ const ContractView = () => {
         <Popup closePopups={handleErrorPopupClose}>
           <h2 className="text-lg font-semibold mb-2">Error</h2>
           <p className="mb-4">{errorMessage}</p>
-          <button
-            onClick={handleErrorPopupClose}
-            className="mt-4 wallet-btn-danger"
-          >
-            Close
-          </button>
         </Popup>
       )}
     </div>
