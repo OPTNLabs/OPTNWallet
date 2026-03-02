@@ -3,6 +3,7 @@ import type { AddonAppDefinition, AddonManifest } from '../../types/addons';
 import type { AddonSDK } from '../../services/AddonsSDK';
 import AuthGuardApp from './patient0/AuthGuardApp';
 import MintCashTokensPoCApp from './mint-cashtokens-poc/MintCashTokensPoCApp';
+import MemoCashReaderApp from './memo-cash-reader/MemoCashReaderApp';
 
 type ResolvedAppLike = {
   manifest: AddonManifest;
@@ -33,6 +34,10 @@ export function renderDeclarativeScreen(params: {
     case 'MintCashTokensPoCApp':
     case 'mintCashTokensPoCApp':
       return <MintCashTokensPoCApp sdk={sdk} />;
+
+    case 'MemoCashReaderApp':
+    case 'memoCashReaderApp':
+      return <MemoCashReaderApp sdk={sdk} />;
 
     default:
       return null;

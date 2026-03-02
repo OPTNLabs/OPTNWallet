@@ -14,6 +14,8 @@ import {
   optimisticRemoveSpentByOutpoints,
   requestUTXORefreshForMany,
 } from '../workers/UTXOWorkerService';
+import KeyService from './KeyService';
+import { store } from '../redux/store';
 import { logError } from '../utils/errorHandling';
 
 /**
@@ -268,18 +270,38 @@ class TransactionService {
   }> {
     const res = await this.transactionManager.sendTransaction(rawTX);
 
-    // If broadcast succeeded, optimistically drop spent UTXOs and refresh those addresses
-    if (res?.txid && spentInputs?.length) {
-      const outpoints = spentInputs.map((u) => ({
-        tx_hash: u.tx_hash,
-        tx_pos: u.tx_pos,
-      }));
-      optimisticRemoveSpentByOutpoints(outpoints);
+    // If broadcast succeeded, optimistically drop spent UTXOs and refresh wallet addresses.
+    if (res?.txid) {
+      if (spentInputs?.length) {
+        const outpoints = spentInputs.map((u) => ({
+          tx_hash: u.tx_hash,
+          tx_pos: u.tx_pos,
+        }));
+        optimisticRemoveSpentByOutpoints(outpoints);
+      }
 
-      const addrs = Array.from(
-        new Set(spentInputs.map((u) => u.address).filter(Boolean))
+      const addrs = new Set<string>(
+        spentInputs?.map((u) => u.address).filter(Boolean) ?? []
       );
-      requestUTXORefreshForMany(addrs, 0);
+      const currentWalletId = store.getState().wallet_id.currentWalletId;
+      if (currentWalletId) {
+        try {
+          const keyPairs = await KeyService.retrieveKeys(currentWalletId);
+          for (const key of keyPairs ?? []) {
+            if (key.address) addrs.add(key.address);
+          }
+        } catch (error) {
+          logError(
+            'TransactionService.sendTransaction.retrieveKeysAfterBroadcast',
+            error,
+            { walletId: currentWalletId }
+          );
+        }
+      }
+
+      if (addrs.size > 0) {
+        requestUTXORefreshForMany(Array.from(addrs), 0);
+      }
     }
 
     return res;

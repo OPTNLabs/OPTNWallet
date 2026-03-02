@@ -1,12 +1,9 @@
-import { copyTextToClipboard } from './utils';
-
 type ChangeAddressSectionProps = {
   selectedChangeAddress: string;
   setSelectedChangeAddress: (address: string) => void;
   selectClass: string;
   addresses: { address: string; tokenAddress: string }[];
   mask: (value: string) => string;
-  tokenChangeAddress: string;
 };
 
 export function ChangeAddressSection({
@@ -15,7 +12,6 @@ export function ChangeAddressSection({
   selectClass,
   addresses,
   mask,
-  tokenChangeAddress,
 }: ChangeAddressSectionProps) {
   return (
     <div className="flex flex-col gap-1">
@@ -44,7 +40,7 @@ export function ChangeAddressSection({
         </div>
       </div>
 
-      <div className="text-[11px] wallet-muted mt-1">
+      {/* <div className="text-[11px] wallet-muted mt-1">
         Token change will go to:{' '}
         <span className="font-mono">
           {mask(tokenChangeAddress || selectedChangeAddress)}
@@ -68,7 +64,7 @@ export function ChangeAddressSection({
         >
           Copy
         </button>
-      </div>
+      </div> */}
     </div>
   );
 }

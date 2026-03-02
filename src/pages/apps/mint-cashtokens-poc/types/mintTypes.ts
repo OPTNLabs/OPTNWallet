@@ -20,6 +20,12 @@ export const DEFAULT_CFG: MintConfig = {
 export type MintAppUtxo = UTXO;
 export type MintDisplayUtxo = MintAppUtxo & { __synthetic?: 'bootstrap' };
 
+export type MintBcmrPublication = {
+  enabled: boolean;
+  registryJson: string;
+  uris: string[];
+};
+
 export type WalletAddressRecord = {
   address: string;
   tokenAddress: string;
