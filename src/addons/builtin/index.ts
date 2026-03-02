@@ -26,7 +26,12 @@ export const BUILTIN_ADDONS: AddonManifest[] = [
           'tx:add_output',
           'tx:build',
           'tx:broadcast',
+          'http:fetch_json',
         ],
+      },
+      {
+        kind: 'http',
+        domains: ['chaingraph.optnlabs.com', 'gql.chaingraph.pat.mn'],
       },
     ],
 
@@ -38,11 +43,7 @@ export const BUILTIN_ADDONS: AddonManifest[] = [
         description: 'Token-gated access control v1',
         iconUri: null, // ✅ fall back to DEFAULT_ICON in AppsView
         kind: 'declarative',
-        requiredCapabilities: [
-          'utxo:wallet:read',
-          'tx:build',
-          'tx:broadcast',
-        ],
+        requiredCapabilities: ['utxo:wallet:read', 'tx:build', 'tx:broadcast'],
         config: {
           screen: 'AuthGuardApp',
         },

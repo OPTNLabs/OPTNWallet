@@ -11,12 +11,19 @@ import React, {
 import { TOKEN_OUTPUT_SATS } from '../../../utils/constants';
 
 import {
+  buildBcmrPublicationOpReturn,
+  generateBcmrRegistryJson,
   buildBootstrapPreview,
   buildMintPreview,
+  parseUrisInput,
   selectFeeCandidates,
   selectGenesisUtxos,
   validateMintRequest,
 } from './services';
+import {
+  IpfsUploadResult,
+  uploadToIpfsRelay,
+} from '../../../services/IpfsService';
 import type { AddonSDK } from '../../../services/AddonsSDK';
 import { copyToClipboard } from '../../../utils/clipboard';
 
@@ -32,6 +39,7 @@ import {
 import { DEFAULT_CFG } from './types';
 import type {
   MintAppUtxo,
+  MintBcmrPublication,
   MintConfig,
   MintDisplayUtxo,
   MintOutputDraft,
@@ -48,6 +56,17 @@ import {
 type MintCashTokensPoCAppProps = {
   sdk: AddonSDK;
 };
+
+type BcmrFieldKey =
+  | 'tokenCategory'
+  | 'tokenName'
+  | 'tokenSymbol'
+  | 'tokenDecimals'
+  | 'iconUri'
+  | 'webUri'
+  | 'registry'
+  | 'image'
+  | 'general';
 
 type FlowState = {
   loading: boolean;
@@ -87,6 +106,8 @@ const initialConfirmState: ConfirmState = {
   warning: null,
   body: null,
 };
+
+const EMPTY_BCMR_ERRORS: Partial<Record<BcmrFieldKey, string>> = {};
 
 function flowReducer(state: FlowState, action: FlowAction): FlowState {
   switch (action.type) {
@@ -145,6 +166,25 @@ const MintCashTokensPoCApp: React.FC<MintCashTokensPoCAppProps> = ({ sdk }) => {
   const [confirmState, setConfirmState] =
     useState<ConfirmState>(initialConfirmState);
   const pendingConfirmActionRef = useRef<null | (() => Promise<void>)>(null);
+  const [bcmrEnabled, setBcmrEnabled] = useState(false);
+  const [bcmrRegistryJson, setBcmrRegistryJson] = useState('');
+  const [bcmrUrisText, setBcmrUrisText] = useState('');
+  const [bcmrAuthbase, setBcmrAuthbase] = useState('');
+  const [bcmrTokenCategory, setBcmrTokenCategory] = useState('');
+  const [bcmrTokenName, setBcmrTokenName] = useState('');
+  const [bcmrTokenDescription, setBcmrTokenDescription] = useState('');
+  const [bcmrTokenSymbol, setBcmrTokenSymbol] = useState('');
+  const [bcmrTokenDecimals, setBcmrTokenDecimals] = useState('0');
+  const [bcmrIconUri, setBcmrIconUri] = useState('');
+  const [bcmrWebUri, setBcmrWebUri] = useState('');
+  const [bcmrImageFile, setBcmrImageFile] = useState<File | null>(null);
+  const [bcmrImageUpload, setBcmrImageUpload] =
+    useState<IpfsUploadResult | null>(null);
+  const [bcmrRegistryUpload, setBcmrRegistryUpload] =
+    useState<IpfsUploadResult | null>(null);
+  const [bcmrFieldErrors, setBcmrFieldErrors] = useState<
+    Partial<Record<BcmrFieldKey, string>>
+  >({});
 
   const setErrorMessage = useCallback((value: string) => {
     dispatchFlow({ type: 'set_error', value });
@@ -157,6 +197,14 @@ const MintCashTokensPoCApp: React.FC<MintCashTokensPoCAppProps> = ({ sdk }) => {
   }, []);
   const setLoading = useCallback((value: boolean) => {
     dispatchFlow({ type: 'set_loading', value });
+  }, []);
+
+  const setBcmrFieldError = useCallback((field: BcmrFieldKey, value: string) => {
+    setBcmrFieldErrors((prev) => ({ ...prev, [field]: value }));
+  }, []);
+
+  const clearBcmrFieldErrors = useCallback(() => {
+    setBcmrFieldErrors(EMPTY_BCMR_ERRORS);
   }, []);
 
   const refreshWalletSnapshot = useCallback(async () => {
@@ -204,9 +252,16 @@ const MintCashTokensPoCApp: React.FC<MintCashTokensPoCAppProps> = ({ sdk }) => {
     [flatUtxos]
   );
 
+  const primaryRecipientAddress = useMemo(
+    () =>
+      selectedRecipientCashAddrs.values().next().value ||
+      addresses[0]?.address ||
+      '',
+    [selectedRecipientCashAddrs, addresses]
+  );
+
   const bootstrapGenesisUtxos: MintDisplayUtxo[] = useMemo(() => {
-    const addr =
-      Array.from(selectedRecipientCashAddrs)[0] || addresses[0]?.address || '';
+    const addr = primaryRecipientAddress;
     return bootstrapTxids.filter(Boolean).map(
       (tx_hash): MintDisplayUtxo => ({
         tx_hash,
@@ -218,7 +273,7 @@ const MintCashTokensPoCApp: React.FC<MintCashTokensPoCAppProps> = ({ sdk }) => {
         __synthetic: 'bootstrap',
       })
     );
-  }, [bootstrapTxids, selectedRecipientCashAddrs, addresses]);
+  }, [bootstrapTxids, primaryRecipientAddress]);
 
   const displayGenesisUtxos: MintDisplayUtxo[] = useMemo(() => {
     const all = [...bootstrapGenesisUtxos, ...walletGenesisCandidates];
@@ -233,10 +288,23 @@ const MintCashTokensPoCApp: React.FC<MintCashTokensPoCAppProps> = ({ sdk }) => {
     return out;
   }, [bootstrapGenesisUtxos, walletGenesisCandidates]);
 
+  const displayGenesisUtxoByKey = useMemo(() => {
+    const out = new Map<string, MintDisplayUtxo>();
+    for (const u of displayGenesisUtxos) {
+      out.set(utxoKey(u), u);
+    }
+    return out;
+  }, [displayGenesisUtxos]);
+
   const selectedUtxos: MintAppUtxo[] = useMemo(() => {
     if (selectedKeys.size === 0) return [];
-    return displayGenesisUtxos.filter((u) => selectedKeys.has(utxoKey(u)));
-  }, [displayGenesisUtxos, selectedKeys]);
+    const out: MintAppUtxo[] = [];
+    for (const key of selectedKeys) {
+      const utxo = displayGenesisUtxoByKey.get(key);
+      if (utxo) out.push(utxo);
+    }
+    return out;
+  }, [displayGenesisUtxoByKey, selectedKeys]);
 
   const selectedCount = selectedUtxos.length;
   const pendingCount = bootstrapGenesisUtxos.length;
@@ -247,6 +315,34 @@ const MintCashTokensPoCApp: React.FC<MintCashTokensPoCAppProps> = ({ sdk }) => {
   }, [addresses, selectedRecipientCashAddrs]);
 
   const selectedRecipientCount = orderedSelectedRecipients.length;
+
+  useEffect(() => {
+    const fallback = selectedUtxos[0]?.tx_hash || '';
+    if (!fallback) return;
+    setBcmrAuthbase((prev) => prev || fallback);
+    setBcmrTokenCategory((prev) => prev || fallback);
+  }, [selectedUtxos]);
+
+  const bcmrPublication = useMemo<MintBcmrPublication | undefined>(() => {
+    if (!bcmrEnabled) return undefined;
+    return {
+      enabled: true,
+      registryJson: bcmrRegistryJson,
+      uris: parseUrisInput(bcmrUrisText),
+    };
+  }, [bcmrEnabled, bcmrRegistryJson, bcmrUrisText]);
+
+  const bcmrPreview = useMemo(() => {
+    if (!bcmrPublication?.enabled) return null;
+    try {
+      return buildBcmrPublicationOpReturn({
+        registryJson: bcmrPublication.registryJson,
+        uris: bcmrPublication.uris,
+      });
+    } catch {
+      return null;
+    }
+  }, [bcmrPublication]);
 
   const recipientTokenAddressByCash = useMemo(() => {
     const out: Record<string, string> = {};
@@ -335,19 +431,17 @@ const MintCashTokensPoCApp: React.FC<MintCashTokensPoCAppProps> = ({ sdk }) => {
   }, []);
 
   const duplicateOutputDraft = useCallback((id: string) => {
-    setOutputDrafts((prev) =>
-      {
-        const target = prev.find((d) => d.id === id);
-        if (!target) return prev;
-        return [
-          ...prev,
-          {
-            ...target,
-            id: `draft-${Date.now()}-${draftSeq.current++}`,
-          },
-        ];
-      }
-    );
+    setOutputDrafts((prev) => {
+      const target = prev.find((d) => d.id === id);
+      if (!target) return prev;
+      return [
+        ...prev,
+        {
+          ...target,
+          id: `draft-${Date.now()}-${draftSeq.current++}`,
+        },
+      ];
+    });
   }, []);
 
   const toggleRecipient = useCallback((cashAddr: string) => {
@@ -373,9 +467,26 @@ const MintCashTokensPoCApp: React.FC<MintCashTokensPoCAppProps> = ({ sdk }) => {
   }, []);
 
   const selectedSourceKeySet = useMemo(
-    () => new Set(selectedUtxos.map((u) => utxoKey(u))),
-    [selectedUtxos]
+    () => new Set(selectedKeys),
+    [selectedKeys]
   );
+
+  const canGoToStep = useCallback(
+    (n: 1 | 2 | 3) => {
+      if (n === 1) return true;
+      if (n === 2) return selectedCount > 0;
+      return selectedCount > 0 && selectedRecipientCount > 0;
+    },
+    [selectedCount, selectedRecipientCount]
+  );
+
+  const handleBackStep = useCallback(() => {
+    setStep((s) => (s > 1 ? ((s - 1) as 1 | 2 | 3) : s));
+  }, []);
+
+  const handleContinueStep = useCallback(() => {
+    setStep((curr) => (curr === 1 ? 2 : 3));
+  }, []);
 
   const selectedRecipientSet = useMemo(
     () => new Set(orderedSelectedRecipients),
@@ -576,6 +687,7 @@ const MintCashTokensPoCApp: React.FC<MintCashTokensPoCAppProps> = ({ sdk }) => {
         changeAddress,
         sdkAddressBook,
         tokenOutputSats: TOKEN_OUTPUT_SATS,
+        bcmrPublication,
       });
 
       openConfirm({
@@ -634,6 +746,7 @@ const MintCashTokensPoCApp: React.FC<MintCashTokensPoCAppProps> = ({ sdk }) => {
     sdk,
     flatUtxos,
     sdkAddressBook,
+    bcmrPublication,
     openConfirm,
     setTxid,
     closeConfirm,
@@ -660,6 +773,128 @@ const MintCashTokensPoCApp: React.FC<MintCashTokensPoCAppProps> = ({ sdk }) => {
     setStep(3);
   }, []);
 
+  const mapBcmrErrorToField = useCallback((message: string): BcmrFieldKey => {
+    const lower = message.toLowerCase();
+    if (lower.includes('token category')) return 'tokenCategory';
+    if (lower.includes('token name')) return 'tokenName';
+    if (lower.includes('token symbol')) return 'tokenSymbol';
+    if (lower.includes('decimals')) return 'tokenDecimals';
+    if (lower.includes('icon')) return 'iconUri';
+    if (lower.includes('official site') || lower.includes('web')) return 'webUri';
+    if (lower.includes('uri')) return 'registry';
+    return 'general';
+  }, []);
+
+  const handleUploadBcmrImage = useCallback(async () => {
+    setBcmrFieldErrors((prev) => ({ ...prev, image: undefined, iconUri: undefined }));
+    if (!bcmrImageFile) {
+      setBcmrFieldError('image', 'Select an image file first.');
+      return;
+    }
+    setLoading(true);
+    try {
+      const result = await uploadToIpfsRelay(bcmrImageFile, {
+        filename: bcmrImageFile.name,
+      });
+      setBcmrImageUpload(result);
+      const ipfsUri = `ipfs://${result.cid}`;
+      setBcmrIconUri(ipfsUri);
+      setStatus('Image uploaded to IPFS.');
+    } catch (e: unknown) {
+      setBcmrFieldError(
+        'image',
+        getErrorMessage(e, 'Failed to upload image to IPFS.')
+      );
+    } finally {
+      setLoading(false);
+    }
+  }, [bcmrImageFile, setBcmrFieldError, setLoading, setStatus]);
+
+  const handleConfirmBcmr = useCallback(async () => {
+    const trimmedCategory = bcmrTokenCategory.trim();
+    const trimmedName = bcmrTokenName.trim();
+    const trimmedSymbol = bcmrTokenSymbol.trim();
+    const trimmedIcon = bcmrIconUri.trim();
+    const trimmedWeb = bcmrWebUri.trim();
+    const parsedDecimals = Number.parseInt(bcmrTokenDecimals, 10);
+
+    const nextErrors: Partial<Record<BcmrFieldKey, string>> = {};
+
+    if (!/^[0-9a-f]{64}$/i.test(bcmrAuthbase.trim())) {
+      nextErrors.general =
+        'Authbase is not ready. Select a valid source UTXO.';
+    }
+    if (!/^[0-9a-f]{64}$/i.test(trimmedCategory)) {
+      nextErrors.tokenCategory = 'Token category must be 64 hex characters.';
+    }
+    if (!trimmedName) {
+      nextErrors.tokenName = 'Name is required.';
+    }
+    if (!trimmedSymbol) {
+      nextErrors.tokenSymbol = 'Symbol is required.';
+    }
+    if (!Number.isFinite(parsedDecimals) || parsedDecimals < 0) {
+      nextErrors.tokenDecimals = 'Decimals must be a non-negative number.';
+    }
+    if (trimmedIcon && !/^(ipfs|https?):\/\//i.test(trimmedIcon)) {
+      nextErrors.iconUri = 'Icon URI must start with ipfs:// or https://';
+    }
+    if (trimmedWeb && !/^https?:\/\//i.test(trimmedWeb)) {
+      nextErrors.webUri =
+        'Official site must start with https:// or http://';
+    }
+
+    if (Object.keys(nextErrors).length > 0) {
+      setBcmrFieldErrors(nextErrors);
+      return;
+    }
+
+    clearBcmrFieldErrors();
+
+    setLoading(true);
+    try {
+      const json = generateBcmrRegistryJson({
+        authbase: bcmrAuthbase,
+        tokenCategory: bcmrTokenCategory,
+        tokenName: bcmrTokenName,
+        tokenDescription: bcmrTokenDescription,
+        tokenSymbol: bcmrTokenSymbol,
+        tokenDecimals: parsedDecimals,
+        iconUri: bcmrIconUri,
+        webUri: bcmrWebUri,
+      });
+      setBcmrRegistryJson(json);
+
+      const blob = new Blob([json], { type: 'application/json' });
+      const result = await uploadToIpfsRelay(blob, {
+        filename: 'bitcoin-cash-metadata-registry.json',
+      });
+      setBcmrRegistryUpload(result);
+      const ipfsUri = `ipfs://${result.cid}`;
+      setBcmrUrisText(ipfsUri);
+      setStatus('BCMR registry confirmed and uploaded to IPFS.');
+    } catch (e: unknown) {
+      const message = getErrorMessage(e, 'Failed to confirm BCMR metadata.');
+      const field = mapBcmrErrorToField(message);
+      setBcmrFieldError(field, message);
+    } finally {
+      setLoading(false);
+    }
+  }, [
+    clearBcmrFieldErrors,
+    bcmrTokenCategory,
+    bcmrTokenName,
+    bcmrTokenSymbol,
+    bcmrTokenDecimals,
+    bcmrIconUri,
+    bcmrWebUri,
+    bcmrAuthbase,
+    setLoading,
+    bcmrTokenDescription,
+    mapBcmrErrorToField,
+    setStatus,
+  ]);
+
   return (
     <div className="relative px-4 pt-4 pb-36 max-w-3xl mx-auto space-y-6 wallet-surface min-h-screen">
       {/* Top header */}
@@ -681,11 +916,7 @@ const MintCashTokensPoCApp: React.FC<MintCashTokensPoCAppProps> = ({ sdk }) => {
       {/* Stepper */}
       <Stepper
         step={step}
-        canGoTo={(n) => {
-          if (n === 1) return true;
-          if (n === 2) return selectedCount > 0;
-          return selectedCount > 0 && selectedRecipientCount > 0;
-        }}
+        canGoTo={canGoToStep}
         onStep={setStep}
       />
 
@@ -764,6 +995,214 @@ const MintCashTokensPoCApp: React.FC<MintCashTokensPoCAppProps> = ({ sdk }) => {
                 onRemoveOutputDraft={removeOutputDraft}
               />
             ) : null}
+            {mountedSteps.has(3) ? (
+              <div className="mt-4 wallet-card rounded-[20px] p-4 space-y-3">
+                <div className="flex items-center justify-between">
+                  <h3 className="text-base font-semibold">Token Metadata</h3>
+                  <label className="inline-flex items-center gap-2 text-sm">
+                    <input
+                      type="checkbox"
+                      checked={bcmrEnabled}
+                      onChange={(e) => setBcmrEnabled(e.target.checked)}
+                    />
+                    Include Metadata
+                  </label>
+                </div>
+                {bcmrEnabled ? (
+                  <>
+                    {bcmrFieldErrors.general ? (
+                      <div className="rounded-xl bg-red-50 dark:bg-red-950/40 text-red-800 dark:text-red-300 text-sm p-3">
+                        {bcmrFieldErrors.general}
+                      </div>
+                    ) : null}
+                    <div className="grid grid-cols-1 gap-2">
+                      <label className="block text-sm font-semibold">
+                        Token category
+                      </label>
+                      <input
+                        value={bcmrTokenCategory}
+                        onChange={(e) => setBcmrTokenCategory(e.target.value)}
+                        className="wallet-input w-full font-mono text-xs"
+                        placeholder="64-char category txid hex"
+                      />
+                      {bcmrFieldErrors.tokenCategory ? (
+                        <p className="text-xs wallet-danger-text">
+                          {bcmrFieldErrors.tokenCategory}
+                        </p>
+                      ) : null}
+                    </div>
+                    <div className="grid grid-cols-2 gap-2">
+                      <div>
+                        <label className="block text-sm font-semibold">
+                          Name
+                        </label>
+                        <input
+                          value={bcmrTokenName}
+                          onChange={(e) => setBcmrTokenName(e.target.value)}
+                          className="wallet-input w-full"
+                        />
+                        {bcmrFieldErrors.tokenName ? (
+                          <p className="text-xs wallet-danger-text mt-1">
+                            {bcmrFieldErrors.tokenName}
+                          </p>
+                        ) : null}
+                      </div>
+                      <div>
+                        <label className="block text-sm font-semibold">
+                          Symbol
+                        </label>
+                        <input
+                          value={bcmrTokenSymbol}
+                          onChange={(e) => setBcmrTokenSymbol(e.target.value)}
+                          className="wallet-input w-full"
+                        />
+                        {bcmrFieldErrors.tokenSymbol ? (
+                          <p className="text-xs wallet-danger-text mt-1">
+                            {bcmrFieldErrors.tokenSymbol}
+                          </p>
+                        ) : null}
+                      </div>
+                    </div>
+                    <div>
+                      <label className="block text-sm font-semibold">
+                        Description
+                      </label>
+                      <input
+                        value={bcmrTokenDescription}
+                        onChange={(e) =>
+                          setBcmrTokenDescription(e.target.value)
+                        }
+                        className="wallet-input w-full"
+                      />
+                    </div>
+                    <div className="grid grid-cols-2 gap-2">
+                      <div>
+                        <label className="block text-sm font-semibold">
+                          Decimals
+                        </label>
+                        <input
+                          type="number"
+                          min="0"
+                          value={bcmrTokenDecimals}
+                          onChange={(e) => setBcmrTokenDecimals(e.target.value)}
+                          className="wallet-input w-full"
+                        />
+                        {bcmrFieldErrors.tokenDecimals ? (
+                          <p className="text-xs wallet-danger-text mt-1">
+                            {bcmrFieldErrors.tokenDecimals}
+                          </p>
+                        ) : null}
+                      </div>
+                      <div>
+                        <label className="block text-sm font-semibold">
+                          Icon URI
+                        </label>
+                        <input
+                          value={bcmrIconUri}
+                          onChange={(e) => setBcmrIconUri(e.target.value)}
+                          className="wallet-input w-full font-mono text-xs"
+                          placeholder="ipfs://..."
+                        />
+                        {bcmrFieldErrors.iconUri ? (
+                          <p className="text-xs wallet-danger-text mt-1">
+                            {bcmrFieldErrors.iconUri}
+                          </p>
+                        ) : null}
+                      </div>
+                    </div>
+                    <div>
+                      <label className="block text-sm font-semibold">
+                        Official site
+                      </label>
+                      <input
+                        value={bcmrWebUri}
+                        onChange={(e) => setBcmrWebUri(e.target.value)}
+                        className="wallet-input w-full"
+                        placeholder="https://project.example"
+                      />
+                      {bcmrFieldErrors.webUri ? (
+                        <p className="text-xs wallet-danger-text mt-1">
+                          {bcmrFieldErrors.webUri}
+                        </p>
+                      ) : null}
+                    </div>
+                    <div className="rounded-xl wallet-surface-strong border border-[var(--wallet-border)] p-3 space-y-2">
+                      <label className="block text-sm font-semibold">
+                        Optional: upload icon image to IPFS
+                      </label>
+                      <input
+                        type="file"
+                        accept="image/*"
+                        className="wallet-input w-full"
+                        onChange={(e) =>
+                          setBcmrImageFile(e.target.files?.[0] ?? null)
+                        }
+                      />
+                      <div className="flex gap-2">
+                        <button
+                          type="button"
+                          onClick={handleUploadBcmrImage}
+                          disabled={!bcmrImageFile || loading}
+                        className="wallet-btn-secondary px-3 py-2 text-sm"
+                        >
+                          Save image
+                        </button>
+                      </div>
+                      {bcmrImageUpload ? (
+                        <div className="text-xs break-all">
+                          Image CID: {bcmrImageUpload.cid}
+                        </div>
+                      ) : null}
+                      {bcmrFieldErrors.image ? (
+                        <p className="text-xs wallet-danger-text">
+                          {bcmrFieldErrors.image}
+                        </p>
+                      ) : null}
+                    </div>
+                    <div className="space-y-2">
+                      <button
+                        type="button"
+                        onClick={handleConfirmBcmr}
+                        disabled={loading}
+                        className="wallet-btn-primary px-3 py-2 text-sm"
+                      >
+                        {loading ? 'Confirming…' : 'Confirm BCMR'}
+                      </button>
+                      {bcmrRegistryUpload ? (
+                        <div className="text-xs break-all">
+                          Registry URI: ipfs://{bcmrRegistryUpload.cid}
+                        </div>
+                      ) : null}
+                      {bcmrFieldErrors.registry ? (
+                        <p className="text-xs wallet-danger-text">
+                          {bcmrFieldErrors.registry}
+                        </p>
+                      ) : null}
+                    </div>
+                    {bcmrPreview ? (
+                      <div className="rounded-xl wallet-surface-strong border border-[var(--wallet-border)] p-3 text-xs space-y-1">
+                        <div className="break-all">
+                          <span className="font-semibold">sha256 hash: </span>
+                          <span className="font-mono">
+                            {bcmrPreview.hashHex}
+                          </span>
+                        </div>
+                        <div className="break-all">
+                          <span className="font-semibold">script hex: </span>
+                          <span className="font-mono">
+                            {bcmrPreview.scriptHex}
+                          </span>
+                        </div>
+                      </div>
+                    ) : (
+                      <div className="text-xs wallet-danger-text">
+                        Confirm BCMR to enable BCMR OP_RETURN.
+                      </div>
+                    )}
+                  </>
+                ) : null}
+              </div>
+            ) : null}
           </div>
         </div>
       </div>
@@ -834,9 +1273,7 @@ const MintCashTokensPoCApp: React.FC<MintCashTokensPoCAppProps> = ({ sdk }) => {
           <div className="grid grid-cols-2 gap-3">
             <button
               type="button"
-              onClick={() =>
-                setStep((s) => (s > 1 ? ((s - 1) as 1 | 2 | 3) : s))
-              }
+              onClick={handleBackStep}
               disabled={step === 1 || loading}
               className="wallet-btn-secondary px-4 py-3 font-semibold disabled:opacity-50"
             >
@@ -846,10 +1283,7 @@ const MintCashTokensPoCApp: React.FC<MintCashTokensPoCAppProps> = ({ sdk }) => {
             {step < 3 ? (
               <button
                 type="button"
-                onClick={() => {
-                  if (step === 1) setStep(2);
-                  else setStep(3);
-                }}
+                onClick={handleContinueStep}
                 disabled={
                   loading ||
                   (step === 1 && selectedCount === 0) ||
@@ -878,11 +1312,6 @@ const MintCashTokensPoCApp: React.FC<MintCashTokensPoCAppProps> = ({ sdk }) => {
             )}
           </div>
 
-          {errorMessage ? (
-            <div className="mt-3 text-[12px] text-red-700 dark:text-red-300 bg-red-50 dark:bg-red-950/40 border border-red-200 dark:border-red-900 rounded-xl p-3">
-              {errorMessage}
-            </div>
-          ) : null}
         </div>
       </div>
 

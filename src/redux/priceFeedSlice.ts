@@ -4,7 +4,7 @@ import { createSlice, PayloadAction } from '@reduxjs/toolkit';
 export type PriceDatum = {
   price: number;
   ts: number;
-  source: 'coingecko' | 'coincap' | 'cryptoapis';
+  source: 'optnlabs';
 };
 export type PriceFeedState = Record<string, PriceDatum | undefined>; // key = 'BTC-USD', 'BCH-USD', ...
 

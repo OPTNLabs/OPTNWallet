@@ -12,6 +12,7 @@ import { copyTextToClipboard, formatFtAmount } from './simple-send/utils';
 import { useTokenMetadata } from './simple-send/useTokenMetadata';
 import { useRecipientScanner } from './simple-send/useRecipientScanner';
 import { useSimpleSendViewModel } from './simple-send/useSimpleSendViewModel';
+import { parseBip21Uri } from '../utils/bip21';
 
 function Label({ children }: { children: React.ReactNode }) {
   return (
@@ -46,9 +47,6 @@ export default function SimpleSend() {
     addresses,
     selectedChangeAddress,
     setSelectedChangeAddress,
-
-    // token-aware change destination (resolved)
-    tokenChangeAddress,
 
     categories,
 
@@ -101,7 +99,21 @@ export default function SimpleSend() {
 
   const { scanBusy, handleScanRecipient } = useRecipientScanner({
     setRecipient,
+    setAmountBch,
+    setAssetType,
+    currentNetwork,
   });
+
+  const normalizeRecipientInput = () => {
+    const parsed = parseBip21Uri(recipient, currentNetwork);
+    if (!parsed.isValidAddress) return;
+
+    setRecipient(parsed.normalizedAddress);
+    if (parsed.amountRaw) {
+      setAssetType('bch');
+      setAmountBch(parsed.amountRaw);
+    }
+  };
 
   useEffect(() => {
     if (!pendingReviewFlow) return;
@@ -203,6 +215,7 @@ export default function SimpleSend() {
             <input
               value={recipient}
               onChange={(e) => setRecipient(e.target.value.trim())}
+              onBlur={normalizeRecipientInput}
               placeholder={
                 assetType === 'bch'
                   ? 'bitcoincash:...'
@@ -344,7 +357,6 @@ export default function SimpleSend() {
           selectClass={selectClass}
           addresses={addresses}
           mask={mask}
-          tokenChangeAddress={tokenChangeAddress}
         />
 
         {/* Actions */}

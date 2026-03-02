@@ -98,7 +98,8 @@ export default function TransactionManager() {
     selectedUtxos: UTXO[] = [],
     addresses: { address: string; tokenAddress?: string }[] = [],
     nftCapability?: undefined | 'none' | 'mutable' | 'minting',
-    nftCommitment?: string
+    nftCommitment?: string,
+    dispatchToStore = true
   ): TransactionOutput | undefined {
     if (!recipientAddress || (!transferAmount && !tokenAmount)) {
       console.warn(
@@ -180,7 +181,9 @@ export default function TransactionManager() {
       }
     }
 
-    store.dispatch(addTxOutput(newOutput));
+    if (dispatchToStore) {
+      store.dispatch(addTxOutput(newOutput));
+    }
     return newOutput;
   }
 

@@ -17,18 +17,12 @@ export type InfraUrlPools = {
 const DEFAULT_INFRA_URL_POOLS: Record<Network, InfraUrlPools> = {
   [Network.CHIPNET]: {
     electrumServers: [
-      'electrum-chipnet.optnlabs.com',
       'chipnet.bch.ninja',
       'chipnet.imaginary.cash',
+      'electrum-chipnet.optnlabs.com',
     ],
-    chaingraphUrls: [
-      'https://gql.chaingraph.pat.mn/v1/graphql',
-      'https://chaingraph.optnlabs.com/v1/graphql',
-    ],
-    bcmrApiBaseUrls: [
-      'https://bcmr-chipnet.paytaca.com/',
-      'https://bcmr.optnlabs.com/api',
-    ],
+    chaingraphUrls: ['https://gql.chaingraph.pat.mn/v1/graphql'],
+    bcmrApiBaseUrls: ['https://bcmr-chipnet.paytaca.com/api'],
     ipfsGateways: [
       'https://ipfs.io/ipfs',
       'https://cloudflare-ipfs.com/ipfs',

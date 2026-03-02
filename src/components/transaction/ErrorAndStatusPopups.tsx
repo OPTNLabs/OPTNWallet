@@ -3,9 +3,6 @@
 import React, { useMemo } from 'react';
 import Popup from './Popup';
 import { Network } from '../../redux/networkSlice';
-import { useNavigate } from 'react-router-dom';
-import { useSelector } from 'react-redux';
-import { RootState } from '../../redux/store';
 import {
   binToHex,
   decodeTransactionCommon,
@@ -39,11 +36,6 @@ const ErrorAndStatusPopups: React.FC<ErrorAndStatusPopupsProps> = ({
   currentNetwork,
   closePopups,
 }) => {
-  const navigate = useNavigate();
-  const walletId = useSelector(
-    (state: RootState) => state.wallet_id.currentWalletId
-  );
-
   const toCashAddress = (
     bytecode: Uint8Array,
     prefix: 'bitcoincash' | 'bchtest' | 'bchreg'
@@ -73,11 +65,6 @@ const ErrorAndStatusPopups: React.FC<ErrorAndStatusPopupsProps> = ({
 
   const handleClose = () => {
     closePopups();
-    if (showTxIdPopup && transactionId && walletId) {
-      setTimeout(() => {
-        navigate(`/home/${walletId}`, { state: { fromTxSuccess: true } });
-      }, 300);
-    }
   };
 
   // Decode transaction using libauth
