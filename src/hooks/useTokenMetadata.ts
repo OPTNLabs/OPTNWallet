@@ -1,18 +1,23 @@
-import { useState, useEffect } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import BcmrService from '../services/BcmrService'; // Adjust path as needed
 
 const useTokenMetadata = (categories: string[]) => {
   const [metadata, setMetadata] = useState<
     Record<string, { name: string; symbol: string; decimals: number; iconUri: string | null }>
   >({});
+  const svc = useMemo(() => new BcmrService(), []);
+  const requestedRef = useRef<Set<string>>(new Set());
 
   useEffect(() => {
-    const svc = new BcmrService();
-    const missing = categories.filter((c) => !(c in metadata));
+    const missing = categories.filter((c) => !requestedRef.current.has(c));
     if (missing.length === 0) return;
+    missing.forEach((c) => requestedRef.current.add(c));
 
-    (async () => {
-      const newMeta: Record<string, { name: string; symbol: string; decimals: number; iconUri: string | null }> = {};
+    void (async () => {
+      const newMeta: Record<
+        string,
+        { name: string; symbol: string; decimals: number; iconUri: string | null }
+      > = {};
       for (const category of missing) {
         try {
           const authbase = await svc.getCategoryAuthbase(category);
@@ -25,13 +30,15 @@ const useTokenMetadata = (categories: string[]) => {
             decimals: snap.token?.decimals || 0,
             iconUri,
           };
-        } catch (e) {
-          // console.error('Failed loading metadata for', category, e);
+        } catch {
+          // ignore single-token metadata failures
         }
       }
-      setMetadata((prev) => ({ ...prev, ...newMeta }));
+      if (Object.keys(newMeta).length > 0) {
+        setMetadata((prev) => ({ ...prev, ...newMeta }));
+      }
     })();
-  }, [categories]);
+  }, [categories, svc]);
 
   return metadata;
 };

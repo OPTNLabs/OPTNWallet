@@ -35,8 +35,10 @@ const TransactionTypeSelector: React.FC<TransactionTypeSelectorProps> = ({
           setShowRegularTx(true);
           setPopupTitle('Send Regular Transaction');
         }}
-        className={`font-bold py-1 px-2 rounded ${
-          showRegularTx ? 'bg-blue-600 text-white' : 'bg-blue-200 text-gray-800'
+        className={`font-bold py-1 px-2 rounded border ${
+          showRegularTx
+            ? 'wallet-segment-active border-[var(--wallet-accent)]'
+            : 'wallet-segment-inactive border-[var(--wallet-border)]'
         }`}
       >
         Create Output
@@ -47,11 +49,11 @@ const TransactionTypeSelector: React.FC<TransactionTypeSelectorProps> = ({
           setShowOpReturn(true);
           setPopupTitle('Create OP_RETURN Output');
         }}
-        className={`font-bold py-1 px-2 rounded ${
+        className={`font-bold py-1 px-2 rounded border ${
           showOpReturn
-            ? 'bg-yellow-400 text-white'
-            : 'bg-yellow-200 text-gray-800'
-        } hover:bg-yellow-500`}
+            ? 'wallet-segment-active border-[var(--wallet-accent)]'
+            : 'wallet-segment-inactive border-[var(--wallet-border)]'
+        }`}
       >
         Create OP_RETURN
       </button>
@@ -63,11 +65,11 @@ const TransactionTypeSelector: React.FC<TransactionTypeSelectorProps> = ({
               setShowCashToken(true);
               setPopupTitle('Create CashToken');
             }}
-            className={`font-bold py-1 px-2 rounded ${
+            className={`font-bold py-1 px-2 rounded border ${
               showCashToken
-                ? 'bg-orange-500 text-white'
-                : 'bg-orange-200 text-gray-800'
-            } hover:bg-orange-600`}
+                ? 'wallet-segment-active border-[var(--wallet-accent)]'
+                : 'wallet-segment-inactive border-[var(--wallet-border)]'
+            }`}
           >
             Create CashToken
           </button>
@@ -77,11 +79,11 @@ const TransactionTypeSelector: React.FC<TransactionTypeSelectorProps> = ({
               setShowNFTCashToken(true);
               setPopupTitle('Create NFT');
             }}
-            className={`font-bold py-1 px-2 rounded ${
+            className={`font-bold py-1 px-2 rounded border ${
               showNFTCashToken
-                ? 'bg-pink-500 text-white'
-                : 'bg-pink-200 text-gray-800'
-            } hover:bg-pink-600`}
+                ? 'wallet-segment-active border-[var(--wallet-accent)]'
+                : 'wallet-segment-inactive border-[var(--wallet-border)]'
+            }`}
           >
             Create NFT
           </button>
