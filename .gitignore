@@ -26,3 +26,9 @@ tsconfig.node.tsbuildinfo
 *.sln
 *.sw?
 .env
+.env.*
+
+# Android signing material (never commit)
+*.keystore
+*.jks
+android/key.properties

@@ -1,6 +1,7 @@
 import { createTables } from '../../utils/schema/schema';
 import DatabaseService from '../DatabaseManager/DatabaseService';
 import { Network } from '../../redux/networkSlice';
+import SecretCryptoService from '../../services/SecretCryptoService';
 
 // Helper function to safely cast SQL values to number
 function toNumber(value: unknown): number {
@@ -118,16 +119,20 @@ export default function WalletManager() {
     }
     createTables(db);
     try {
-      const query = db.prepare(
-        `SELECT id FROM wallets WHERE mnemonic = :mnemonic AND passphrase = :passphrase`
-      );
-      query.bind({ ':mnemonic': mnemonic, ':passphrase': passphrase });
+      const query = db.prepare(`SELECT id, mnemonic, passphrase FROM wallets`);
       let walletId: number | null = null;
-
       while (query.step()) {
-        const row = query.getAsObject();
-        walletId = toNumber(row.id); // Explicitly cast to number
-        break;
+        const row = query.getAsObject() as Record<string, unknown>;
+        const rowMnemonic = await SecretCryptoService.decryptText(
+          typeof row.mnemonic === 'string' ? row.mnemonic : ''
+        );
+        const rowPassphrase = await SecretCryptoService.decryptText(
+          typeof row.passphrase === 'string' ? row.passphrase : ''
+        );
+        if (rowMnemonic === mnemonic && rowPassphrase === passphrase) {
+          walletId = toNumber(row.id);
+          break;
+        }
       }
       query.free();
       return walletId;
@@ -149,34 +154,27 @@ export default function WalletManager() {
 
     createTables(db);
     try {
-      const query = db.prepare(
-        `SELECT COUNT(*) as count FROM wallets WHERE mnemonic = ? AND passphrase = ?`
-      );
-      query.bind([mnemonic, passphrase]);
-
+      const query = db.prepare(`SELECT mnemonic, passphrase FROM wallets`);
       let accountExists = false;
 
       while (query.step()) {
-        const row = query.getAsObject();
-        if (toNumber(row.count) > 0) {
+        const row = query.getAsObject() as Record<string, unknown>;
+        const rowMnemonic = await SecretCryptoService.decryptText(
+          typeof row.mnemonic === 'string' ? row.mnemonic : ''
+        );
+        const rowPassphrase = await SecretCryptoService.decryptText(
+          typeof row.passphrase === 'string' ? row.passphrase : ''
+        );
+        if (
+          (rowMnemonic === mnemonic && rowPassphrase === passphrase) ||
+          rowMnemonic === mnemonic
+        ) {
           accountExists = true;
-        }
-      }
-
-      const queryMnemonic = db.prepare(
-        `SELECT COUNT(*) as count FROM wallets WHERE mnemonic = ?`
-      );
-      queryMnemonic.bind([mnemonic]);
-
-      while (queryMnemonic.step()) {
-        const rowMnemonic = queryMnemonic.getAsObject();
-        if (toNumber(rowMnemonic.count) > 0) {
-          accountExists = true;
+          break;
         }
       }
 
       query.free();
-      queryMnemonic.free();
       return accountExists;
     } catch (error) {
       console.error('Error checking account:', error);
@@ -197,27 +195,24 @@ export default function WalletManager() {
     }
 
     createTables(db);
-    const query = db.prepare(
-      `SELECT COUNT(*) as count FROM wallets WHERE mnemonic = ? AND passphrase = ?`
-    );
-    query.bind([mnemonic, passphrase]);
-
-    let accountExists = false;
-
-    while (query.step()) {
-      const row = query.getAsObject();
-      if (toNumber(row.count) > 0) {
-        accountExists = true;
-      }
-    }
-
+    const accountExists = await checkAccount(mnemonic, passphrase);
     if (accountExists) {
       return false;
     }
+
+    const encryptedMnemonic = await SecretCryptoService.encryptText(mnemonic);
+    const encryptedPassphrase =
+      await SecretCryptoService.encryptText(passphrase);
     const createAccountQuery = db.prepare(
       'INSERT INTO wallets (wallet_name, mnemonic, passphrase, networkType, balance) VALUES (?, ?, ?, ?, ?);'
     );
-    createAccountQuery.run([wallet_name, mnemonic, passphrase, networkType, 0]);
+    createAccountQuery.run([
+      wallet_name,
+      encryptedMnemonic,
+      encryptedPassphrase,
+      networkType,
+      0,
+    ]);
     createAccountQuery.free();
     await dbService.saveDatabaseToFile();
     return true;
@@ -266,7 +261,17 @@ export default function WalletManager() {
       let walletInfo = null;
 
       if (query.step()) {
-        walletInfo = query.getAsObject();
+        walletInfo = query.getAsObject() as Record<string, unknown>;
+        if (typeof walletInfo.mnemonic === 'string') {
+          walletInfo.mnemonic = await SecretCryptoService.decryptText(
+            walletInfo.mnemonic
+          );
+        }
+        if (typeof walletInfo.passphrase === 'string') {
+          walletInfo.passphrase = await SecretCryptoService.decryptText(
+            walletInfo.passphrase
+          );
+        }
       }
 
       query.free();

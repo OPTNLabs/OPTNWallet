@@ -9,9 +9,12 @@ import { signWalletConnectTransactionRequest } from './signing';
 import {
   buildApprovedNamespacesForCurrentWallet,
   extractWalletConnectMessage,
+  normalizeWalletAddressCandidate,
   respondSessionError,
   respondSessionResult,
 } from './helpers';
+import { PREFIX } from '../../utils/constants';
+import { zeroize } from '../../utils/secureMemory';
 
 export const approveSessionProposal = createAsyncThunk(
   'walletconnect/approveSessionProposal',
@@ -82,17 +85,44 @@ export const respondWithMessageSignature = createAsyncThunk(
     const walletKit = state.walletconnect.web3wallet;
     const currentWalletId = state.wallet_id.currentWalletId;
     if (!walletKit) throw new Error('WalletKit not initialized');
+    if (!currentWalletId) throw new Error('No wallet selected');
     const allKeys = await KeyService.retrieveKeys(currentWalletId);
     if (!allKeys.length) throw new Error('No keys in DB');
-    const address = allKeys[0].address;
+    const walletAddresses = new Set(allKeys.map((k) => k.address));
+    const prefix = PREFIX[state.network.currentNetwork];
+    const rawParams = signMsgRequest.params.request.params;
+    const candidateValues: string[] = [];
+    if (Array.isArray(rawParams)) {
+      for (const item of rawParams) {
+        if (typeof item === 'string') candidateValues.push(item);
+      }
+    } else if (rawParams && typeof rawParams === 'object') {
+      const record = rawParams as Record<string, unknown>;
+      for (const key of ['address', 'account', 'from']) {
+        const value = record[key];
+        if (typeof value === 'string') candidateValues.push(value);
+      }
+    }
+
+    const requestedAddress = candidateValues
+      .map((candidate) => normalizeWalletAddressCandidate(candidate, prefix))
+      .find((candidate): candidate is string =>
+        !!candidate && walletAddresses.has(candidate)
+      );
+
+    const address = requestedAddress ?? allKeys[0].address;
     const privKey = await KeyService.fetchAddressPrivateKey(address);
     if (!privKey) throw new Error('No private key found');
-    const { id, topic } = signMsgRequest;
-    const message = extractWalletConnectMessage(signMsgRequest);
-    const signedMsgResult = await SignedMessage.sign(message, privKey);
-    const base64Signature = signedMsgResult.signature;
-    await respondSessionResult(walletKit, topic, id, base64Signature);
-    return base64Signature;
+    try {
+      const { id, topic } = signMsgRequest;
+      const message = extractWalletConnectMessage(signMsgRequest);
+      const signedMsgResult = await SignedMessage.sign(message, privKey);
+      const base64Signature = signedMsgResult.signature;
+      await respondSessionResult(walletKit, topic, id, base64Signature);
+      return base64Signature;
+    } finally {
+      zeroize(privKey);
+    }
   }
 );
 

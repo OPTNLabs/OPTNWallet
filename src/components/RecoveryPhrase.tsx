@@ -1,30 +1,33 @@
 import { useState, useEffect } from 'react';
 import WalletManager from '../apis/WalletManager/WalletManager';
+import DeviceIntegrityService from '../services/DeviceIntegrityService';
 
 const RecoveryPhrase = () => {
   const [mnemonic, setMnemonic] = useState('');
   const [isRevealed, setIsRevealed] = useState<boolean>(false);
 
   useEffect(() => {
-    const fetchMnemonic = async () => {
-      const walletManager = WalletManager();
-      const walletId = await walletManager.walletExists(); // Replace this with actual logic to fetch the current wallet ID
-      if (walletId) {
-        const walletInfo = await walletManager.getWalletInfo(walletId);
-        if (walletInfo) {
-          setMnemonic(walletInfo.mnemonic);
-        }
-      }
+    return () => {
+      setMnemonic('');
     };
-    fetchMnemonic();
   }, []);
 
-  const handleReveal = () => {
+  const handleReveal = async () => {
+    await DeviceIntegrityService.assertDeviceIntegrity('recovery_phrase_reveal');
+    const walletManager = WalletManager();
+    const walletId = await walletManager.walletExists();
+    if (walletId) {
+      const walletInfo = await walletManager.getWalletInfo(walletId);
+      if (walletInfo && typeof walletInfo.mnemonic === 'string') {
+        setMnemonic(walletInfo.mnemonic);
+      }
+    }
     setIsRevealed(true);
   };
 
   const handleHide = () => {
     setIsRevealed(false);
+    setMnemonic('');
   };
 
   const words = mnemonic.split(' ');

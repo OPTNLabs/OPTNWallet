@@ -3,6 +3,7 @@ import { selectCurrentNetwork } from '../redux/selectors/networkSelectors';
 import KeyManager from '../apis/WalletManager/KeyManager';
 import KeyGeneration from '../apis/WalletManager/KeyGeneration';
 import { isArrayBufferLike, isString } from '../utils/typeGuards';
+import DeviceIntegrityService from './DeviceIntegrityService';
 
 const KeyService = {
   async generateMnemonic() {
@@ -36,6 +37,7 @@ const KeyService = {
 
   // Consolidate the private key fetching and type handling here
   async fetchAddressPrivateKey(address: string): Promise<Uint8Array | null> {
+    await DeviceIntegrityService.assertDeviceIntegrity('fetchAddressPrivateKey');
     const keyManager = KeyManager();
     const privateKeyData = await keyManager.fetchAddressPrivateKey(address);
 

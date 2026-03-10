@@ -69,7 +69,7 @@ describe('KeyManager', () => {
     expect(Array.from(keys[0].pubkeyHash)).toEqual([4, 5, 6]);
   });
 
-  it('fetchAddressPrivateKey supports binary and base64 formats', () => {
+  it('fetchAddressPrivateKey supports binary and base64 formats', async () => {
     const fetchQuery = {
       get: vi
         .fn()
@@ -89,15 +89,15 @@ describe('KeyManager', () => {
 
     const km = KeyManager();
 
-    expect(Array.from(km.fetchAddressPrivateKey('bitcoincash:q1') || [])).toEqual([
-      9, 8, 7,
-    ]);
-    expect(Array.from(km.fetchAddressPrivateKey('bitcoincash:q2') || [])).toEqual([
-      6, 5, 4,
-    ]);
+    expect(
+      Array.from((await km.fetchAddressPrivateKey('bitcoincash:q1')) || [])
+    ).toEqual([9, 8, 7]);
+    expect(
+      Array.from((await km.fetchAddressPrivateKey('bitcoincash:q2')) || [])
+    ).toEqual([6, 5, 4]);
   });
 
-  it('fetchAddressPrivateKey throws when key is missing', () => {
+  it('fetchAddressPrivateKey throws when key is missing', async () => {
     const fetchQuery = {
       get: vi.fn(() => undefined),
       free: vi.fn(),
@@ -113,7 +113,7 @@ describe('KeyManager', () => {
     } as never);
 
     const km = KeyManager();
-    expect(() => km.fetchAddressPrivateKey('bitcoincash:qmissing')).toThrow(
+    await expect(km.fetchAddressPrivateKey('bitcoincash:qmissing')).rejects.toThrow(
       'No private key found'
     );
   });

@@ -21,18 +21,29 @@ android {
 
     signingConfigs {
         release {
-            storeFile file(System.getenv("RELEASE_STORE_FILE") ?: RELEASE_STORE_FILE)
-            storePassword System.getenv("RELEASE_STORE_PASSWORD") ?: RELEASE_STORE_PASSWORD
-            keyAlias System.getenv("RELEASE_KEY_ALIAS") ?: RELEASE_KEY_ALIAS
-            keyPassword System.getenv("RELEASE_KEY_PASSWORD") ?: RELEASE_KEY_PASSWORD
+            def releaseStoreFile = System.getenv("RELEASE_STORE_FILE")
+            def releaseStorePassword = System.getenv("RELEASE_STORE_PASSWORD")
+            def releaseKeyAlias = System.getenv("RELEASE_KEY_ALIAS")
+            def releaseKeyPassword = System.getenv("RELEASE_KEY_PASSWORD")
+
+            if (!releaseStoreFile || !releaseStorePassword || !releaseKeyAlias || !releaseKeyPassword) {
+                throw new GradleException("Release signing env vars are required: RELEASE_STORE_FILE, RELEASE_STORE_PASSWORD, RELEASE_KEY_ALIAS, RELEASE_KEY_PASSWORD")
+            }
+
+            storeFile file(releaseStoreFile)
+            storePassword releaseStorePassword
+            keyAlias releaseKeyAlias
+            keyPassword releaseKeyPassword
         }
     }
 
     buildTypes {
         release {
             signingConfig signingConfigs.release
-            minifyEnabled false
-            proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
+            minifyEnabled true
+            shrinkResources true
+            debuggable false
+            proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
         }
     }
 

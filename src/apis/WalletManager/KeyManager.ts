@@ -5,6 +5,10 @@ import { Address } from '../../types/types';
 import { Network } from '../../redux/networkSlice';
 import { PREFIX } from '../../utils/constants';
 import { isArrayBufferLike, isString } from '../../utils/typeGuards';
+import SecretCryptoService, {
+  isEncryptedPayload,
+} from '../../services/SecretCryptoService';
+import { zeroize } from '../../utils/secureMemory';
 
 function toString(value: unknown): string {
   return isString(value) ? value : String(value);
@@ -103,16 +107,18 @@ export default function KeyManager() {
         | undefined) ?? [];
     getIdQuery.free();
 
-    const result = dbService.resultToJSON([toString(row[0]), toString(row[1])]);
+    const encryptedMnemonic = toString(row[0]);
+    const encryptedPassphrase = toString(row[1]);
+    const mnemonic = await SecretCryptoService.decryptText(encryptedMnemonic);
+    const passphrase = await SecretCryptoService.decryptText(
+      encryptedPassphrase
+    );
 
-    if (!result.mnemonic) {
+    if (!mnemonic) {
       throw new Error(
         'Mnemonic or passphrase not found for the given wallet id'
       );
     }
-
-    const mnemonic = result.mnemonic;
-    const passphrase = result.passphrase || '';
 
     const keys = await KeyGen.generateKeys(
       networkType,
@@ -148,6 +154,9 @@ export default function KeyManager() {
         );
       }
 
+      const encryptedPrivateKey = await SecretCryptoService.encryptBytes(
+        keys.alicePriv
+      );
       const insertQuery = db.prepare(`
         INSERT INTO keys (wallet_id, public_key, private_key, address, token_address, pubkey_hash, account_index, change_index, address_index) 
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?);
@@ -155,7 +164,7 @@ export default function KeyManager() {
       insertQuery.run([
         wallet_id,
         keys.alicePub,
-        keys.alicePriv,
+        encryptedPrivateKey,
         keys.aliceAddress,
         keys.aliceTokenAddress,
         keys.alicePkh,
@@ -178,14 +187,17 @@ export default function KeyManager() {
 
       await ManageAddress.registerAddress(newAddress);
       await dbService.saveDatabaseToFile();
+      zeroize(keys.alicePriv);
     } else {
       throw new Error('Failed to generate keys');
     }
   }
 
   // Function to fetch private key by address
-  function fetchAddressPrivateKey(address: string): Uint8Array | null {
-    dbService.ensureDatabaseStarted();
+  async function fetchAddressPrivateKey(
+    address: string
+  ): Promise<Uint8Array | null> {
+    await dbService.ensureDatabaseStarted();
     const db = dbService.getDatabase();
 
     if (db == null) {
@@ -210,6 +222,13 @@ export default function KeyManager() {
       return new Uint8Array(result[0]);
     }
     if (isString(result[0])) {
+      if (isEncryptedPayload(result[0])) {
+        const decrypted = await SecretCryptoService.decryptBytes(result[0]);
+        if (!decrypted) {
+          throw new Error(`Invalid encrypted private key for address: ${address}`);
+        }
+        return decrypted;
+      }
       return Uint8Array.from(atob(result[0]), (c) => c.charCodeAt(0));
     }
 
