@@ -15,9 +15,11 @@ import PageHeader from '../components/ui/PageHeader';
 import SectionCard from '../components/ui/SectionCard';
 import EmptyState from '../components/ui/EmptyState';
 import { buildBip21Uri } from '../utils/bip21';
+import { zeroize } from '../utils/secureMemory';
 
 type QRCodeType = 'address' | 'pubKey' | 'pkh' | 'privkey';
 const PRIVKEY_UNLOCK_TAPS = 10;
+const ALLOW_PRIVATE_KEY_VIEW = import.meta.env.DEV;
 
 type WalletKeyPair = {
   address: string;
@@ -101,17 +103,22 @@ const Receive: React.FC = () => {
 
     const pubkey = hexString(selectedKey.publicKey);
     const pkh = hexString(selectedKey.pubkeyHash);
-    const privateKey = await KeyService.fetchAddressPrivateKey(address);
-
-    if (!privateKey) {
-      console.error('Selected private key not found');
-      return;
+    let wif: string | null = null;
+    if (ALLOW_PRIVATE_KEY_VIEW) {
+      const privateKey = await KeyService.fetchAddressPrivateKey(address);
+      if (!privateKey) {
+        console.error('Selected private key not found');
+        return;
+      }
+      try {
+        wif = encodePrivateKeyWif(
+          privateKey,
+          currentNetwork === Network.MAINNET ? 'mainnet' : 'testnet'
+        );
+      } finally {
+        zeroize(privateKey);
+      }
     }
-
-    const wif = encodePrivateKeyWif(
-      privateKey,
-      currentNetwork === Network.MAINNET ? 'mainnet' : 'testnet'
-    );
 
     setPubKeyTapCount(0);
     setIsPrivKeyUnlocked(false);
@@ -129,6 +136,11 @@ const Receive: React.FC = () => {
   };
 
   const handlePubKeyTabClick = () => {
+    if (!ALLOW_PRIVATE_KEY_VIEW) {
+      setQrCodeType('pubKey');
+      return;
+    }
+
     if (!isPrivKeyUnlocked) {
       const nextTapCount = pubKeyTapCount + 1;
       setPubKeyTapCount(nextTapCount);
@@ -388,7 +400,7 @@ const Receive: React.FC = () => {
                 BIP21
               </button>
             </div>
-            {!isPrivKeyUnlocked && pubKeyTapCount >= 5 && (
+            {ALLOW_PRIVATE_KEY_VIEW && !isPrivKeyUnlocked && pubKeyTapCount >= 5 && (
               <div className="wallet-surface-strong mt-2 px-4 py-2 rounded text-sm font-bold">
                 PrivKey unlock in {PRIVKEY_UNLOCK_TAPS - pubKeyTapCount} taps
               </div>

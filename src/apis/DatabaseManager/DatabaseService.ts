@@ -4,6 +4,9 @@ import initSqlJs, { Database } from 'sql.js';
 import { createTables } from '../../utils/schema/schema';
 import { get as idbGet, set as idbSet } from 'idb-keyval';
 import { logError } from '../../utils/errorHandling';
+import SecretCryptoService, {
+  isEncryptedPayload,
+} from '../../services/SecretCryptoService';
 
 // Single shared DB handle
 let db: Database | null = null;
@@ -19,6 +22,112 @@ const migrations: Array<(db: Database) => Promise<void>> = [
   },
   // Add future migrations here as needed
 ];
+
+function isArrayBufferLike(value: unknown): value is ArrayBuffer | Uint8Array {
+  return value instanceof ArrayBuffer || value instanceof Uint8Array;
+}
+
+function decodeBase64ToBytes(base64: string): Uint8Array | null {
+  try {
+    const binary = atob(base64);
+    const bytes = new Uint8Array(binary.length);
+    for (let i = 0; i < binary.length; i++) {
+      bytes[i] = binary.charCodeAt(i);
+    }
+    return bytes;
+  } catch {
+    return null;
+  }
+}
+
+async function migrateSecretColumnsAtRest(): Promise<boolean> {
+  if (!db) return false;
+  if (typeof (db as unknown as { prepare?: unknown }).prepare !== 'function') {
+    // Unit tests may provide minimal DB mocks without SQL prepare/iteration support.
+    return false;
+  }
+  let changed = false;
+
+  // wallets.mnemonic / wallets.passphrase
+  const walletRows = db.prepare(
+    'SELECT id, mnemonic, passphrase FROM wallets;'
+  );
+  const walletUpdates: Array<{
+    id: number;
+    mnemonic: string;
+    passphrase: string;
+  }> = [];
+
+  while (walletRows.step()) {
+    const row = walletRows.getAsObject() as Record<string, unknown>;
+    const id = Number(row.id);
+    const mnemonicRaw = typeof row.mnemonic === 'string' ? row.mnemonic : '';
+    const passphraseRaw =
+      typeof row.passphrase === 'string' ? row.passphrase : '';
+    const mnemonic =
+      mnemonicRaw && !isEncryptedPayload(mnemonicRaw)
+        ? await SecretCryptoService.encryptText(mnemonicRaw)
+        : mnemonicRaw;
+    const passphrase =
+      passphraseRaw && !isEncryptedPayload(passphraseRaw)
+        ? await SecretCryptoService.encryptText(passphraseRaw)
+        : passphraseRaw;
+
+    if (mnemonic !== mnemonicRaw || passphrase !== passphraseRaw) {
+      walletUpdates.push({ id, mnemonic, passphrase });
+      changed = true;
+    }
+  }
+  walletRows.free();
+
+  if (walletUpdates.length > 0) {
+    const updateWalletStmt = db.prepare(
+      'UPDATE wallets SET mnemonic = ?, passphrase = ? WHERE id = ?;'
+    );
+    for (const item of walletUpdates) {
+      updateWalletStmt.run([item.mnemonic, item.passphrase, item.id]);
+    }
+    updateWalletStmt.free();
+  }
+
+  // keys.private_key
+  const keyRows = db.prepare('SELECT id, private_key FROM keys;');
+  const keyUpdates: Array<{ id: number; privateKey: string }> = [];
+
+  while (keyRows.step()) {
+    const row = keyRows.getAsObject() as Record<string, unknown>;
+    const id = Number(row.id);
+    const raw = row.private_key;
+
+    if (typeof raw === 'string') {
+      if (isEncryptedPayload(raw)) continue;
+      const decoded = decodeBase64ToBytes(raw);
+      if (!decoded) continue;
+      const encrypted = await SecretCryptoService.encryptBytes(decoded);
+      keyUpdates.push({ id, privateKey: encrypted });
+      changed = true;
+      continue;
+    }
+
+    if (isArrayBufferLike(raw)) {
+      const bytes = raw instanceof Uint8Array ? raw : new Uint8Array(raw);
+      const encrypted = await SecretCryptoService.encryptBytes(bytes);
+      keyUpdates.push({ id, privateKey: encrypted });
+      changed = true;
+    }
+  }
+  keyRows.free();
+
+  if (keyUpdates.length > 0) {
+    const updateKeyStmt = db.prepare('UPDATE keys SET private_key = ? WHERE id = ?;');
+    for (const item of keyUpdates) {
+      updateKeyStmt.run([item.privateKey, item.id]);
+    }
+    updateKeyStmt.free();
+  }
+
+  return changed;
+}
 
 /** Write into IndexedDB instead of localStorage */
 async function realSaveDatabase(): Promise<void> {
@@ -57,6 +166,7 @@ const startDatabase = async (): Promise<Database | null> => {
   }
 
   // Save immediately after migrations to persist schema changes
+  await migrateSecretColumnsAtRest();
   await realSaveDatabase();
 
   return db;
