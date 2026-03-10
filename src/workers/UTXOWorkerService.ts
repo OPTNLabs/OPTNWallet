@@ -13,6 +13,8 @@ import {
 } from '../redux/utxoSlice';
 import { enqueueNotification } from '../redux/notificationsSlice';
 import { invalidateUTXOCache } from '../services/ElectrumService';
+import { logError, logWarn } from '../utils/errorHandling';
+import { UTXO } from '../types/types';
 
 // --- Subscriptions state ---
 let started = false;
@@ -22,13 +24,14 @@ let utxoStartRetry: NodeJS.Timeout | null = null;
 const subscribedAddresses = new Set<string>();
 const contractAddressSet = new Set<string>();
 const refreshTimers = new Map<string, ReturnType<typeof setTimeout>>();
+const contractManager = ContractManager();
 
 function refreshAddressSoon(address: string, ms = 120) {
   const prev = refreshTimers.get(address);
   if (prev) clearTimeout(prev);
   const t = setTimeout(() => {
     refreshAddress(address).catch((e) =>
-      console.error('Refresh address failed:', address, e)
+      logError('UTXOWorker.refreshAddressSoon', e, { address })
     );
     refreshTimers.delete(address);
   }, ms);
@@ -49,14 +52,14 @@ export function optimisticRemoveSpentByOutpoints(
   const utxosByAddress = state.utxos.utxos;
 
   // Index current UTXOs by outpoint
-  const index = new Map<string, { address: string; utxo: any }>();
+  const index = new Map<string, { address: string; utxo: UTXO }>();
   for (const [addr, list] of Object.entries(utxosByAddress)) {
     for (const u of list)
       index.set(`${u.tx_hash}-${u.tx_pos}`, { address: addr, utxo: u });
   }
 
   // Group removals per address
-  const toRemoveByAddr: Record<string, any[]> = {};
+  const toRemoveByAddr: Record<string, UTXO[]> = {};
   for (const op of outpoints) {
     const hit = index.get(`${op.tx_hash}-${op.tx_pos}`);
     if (hit) (toRemoveByAddr[hit.address] ??= []).push(hit.utxo);
@@ -82,10 +85,9 @@ async function refreshAddress(address: string) {
   // Contract addresses: update via ContractManager, skip popups
   if (contractAddressSet.has(address)) {
     try {
-      const contractManager = ContractManager();
       await contractManager.updateContractUTXOs(address);
     } catch (e) {
-      console.error('Contract UTXO update failed:', address, e);
+      logError('UTXOWorker.refreshAddress.contract', e, { address });
     }
     return;
   }
@@ -95,7 +97,7 @@ async function refreshAddress(address: string) {
   try {
     invalidateUTXOCache(address);
     const prev = state.utxos.utxos[address] ?? [];
-    const prevSet = new Set(prev.map((u: any) => `${u.tx_hash}:${u.tx_pos}`));
+    const prevSet = new Set(prev.map((u) => `${u.tx_hash}:${u.tx_pos}`));
 
     const utxos = await UTXOService.fetchAndStoreUTXOs(
       currentWalletId,
@@ -128,7 +130,7 @@ async function refreshAddress(address: string) {
       }
     }
   } catch (e) {
-    console.error('Wallet UTXO update failed:', address, e);
+    logError('UTXOWorker.refreshAddress.wallet', e, { address });
   }
 }
 
@@ -149,7 +151,7 @@ async function bootstrapAllUTXOs() {
 
   store.dispatch(setFetchingUTXOs(true));
 
-  const allUTXOs: Record<string, any[]> = {};
+  const allUTXOs: Record<string, UTXO[]> = {};
 
   // Wallet addresses
   for (const keyPair of keyPairs) {
@@ -160,13 +162,14 @@ async function bootstrapAllUTXOs() {
       );
       allUTXOs[keyPair.address] = fetchedUTXOs;
     } catch (error) {
-      console.error(`Error fetching UTXOs for ${keyPair.address}:`, error);
+      logError('UTXOWorker.bootstrapAllUTXOs.wallet', error, {
+        address: keyPair.address,
+      });
     }
   }
 
   // Contract instances
   try {
-    const contractManager = ContractManager();
     const instances = await contractManager.fetchContractInstances();
     const contractAddresses = instances.map((i) => i.address);
     for (const address of contractAddresses) {
@@ -174,11 +177,11 @@ async function bootstrapAllUTXOs() {
         await contractManager.updateContractUTXOs(address);
         contractAddressSet.add(address);
       } catch (error) {
-        console.error(`Error fetching contract UTXOs for ${address}:`, error);
+        logError('UTXOWorker.bootstrapAllUTXOs.contract', error, { address });
       }
     }
   } catch (e) {
-    console.error('Contract bootstrap failed:', e);
+    logError('UTXOWorker.bootstrapAllUTXOs.contractInit', e);
   }
 
   store.dispatch(setUTXOs({ newUTXOs: allUTXOs }));
@@ -190,13 +193,13 @@ async function establishSubscriptions() {
   // Headers (once)
   if (!headerSubscribed) {
     try {
-      await ElectrumService.subscribeBlockHeaders(async (_header: any) => {
+      await ElectrumService.subscribeBlockHeaders(async () => {
         for (const addr of subscribedAddresses) refreshAddressSoon(addr, 250);
         for (const addr of contractAddressSet) refreshAddressSoon(addr, 250);
       });
       headerSubscribed = true;
     } catch (e) {
-      console.error('Failed to subscribe to block headers:', e);
+      logError('UTXOWorker.establishSubscriptions.blockHeaders', e);
     }
   }
 
@@ -219,18 +222,17 @@ async function establishSubscriptions() {
       refreshAddressSoon(addr, 0);
 
       try {
-        await ElectrumService.subscribeAddress(
-          addr,
-          async (_status: string) => {
-            refreshAddressSoon(addr, 80);
-          }
-        );
+        await ElectrumService.subscribeAddress(addr, async () => {
+          refreshAddressSoon(addr, 80);
+        });
       } catch (e) {
-        console.error('subscribeAddress failed for', addr, e);
+        logError('UTXOWorker.establishSubscriptions.walletAddress', e, {
+          address: addr,
+        });
       }
     }
   } catch (e) {
-    console.error('Wallet subscription setup failed:', e);
+    logError('UTXOWorker.establishSubscriptions.walletInit', e);
   }
 
   // (Optional) contract addresses
@@ -241,11 +243,13 @@ async function establishSubscriptions() {
     refreshAddressSoon(addr, 0);
 
     try {
-      await ElectrumService.subscribeAddress(addr, async (_status: string) => {
+      await ElectrumService.subscribeAddress(addr, async () => {
         refreshAddressSoon(addr, 80);
       });
     } catch (e) {
-      console.error('subscribeAddress failed for contract', addr, e);
+      logError('UTXOWorker.establishSubscriptions.contractAddress', e, {
+        address: addr,
+      });
     }
   }
 }
@@ -279,13 +283,13 @@ async function startUTXOWorker() {
     try {
       await bootstrapAllUTXOs();
     } catch (e) {
-      console.error('UTXO bootstrap failed:', e);
+      logError('UTXOWorker.start.bootstrap', e);
     }
 
     try {
       await establishSubscriptions();
     } catch (e) {
-      console.error('Electrum subscription setup failed:', e);
+      logError('UTXOWorker.start.subscriptions', e);
     }
   };
 
@@ -306,8 +310,11 @@ async function stopUTXOWorker() {
 
   await Promise.all(
     [...subscribedAddresses].map((addr) =>
-      ElectrumService.unsubscribeAddress(addr).catch((e: any) =>
-        console.warn('Unsubscribe address failed:', addr, e)
+      ElectrumService.unsubscribeAddress(addr).catch((error: unknown) =>
+        logWarn('UTXOWorker.stop.unsubscribeAddress', 'Failed to unsubscribe', {
+          address: addr,
+          error,
+        })
       )
     )
   );
@@ -317,7 +324,9 @@ async function stopUTXOWorker() {
     try {
       await ElectrumService.unsubscribeBlockHeaders();
     } catch (e) {
-      console.warn('Unsubscribe headers failed:', e);
+      logWarn('UTXOWorker.stop.unsubscribeBlockHeaders', 'Failed to unsubscribe block headers', {
+        error: e,
+      });
     }
     headerSubscribed = false;
   }

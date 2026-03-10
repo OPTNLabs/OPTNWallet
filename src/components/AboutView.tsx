@@ -85,7 +85,7 @@ const AboutView = () => {
           <li className="mb-2">
             <a
               href="https://covenants.info/"
-              className="text-blue-600 hover:underline"
+              className="wallet-link hover:underline"
               target="_blank"
               rel="noopener noreferrer"
             >
@@ -95,7 +95,7 @@ const AboutView = () => {
           <li className="mb-2">
             <a
               href="https://next.cashscript.org/docs/guides/covenants"
-              className="text-blue-600 hover:underline"
+              className="wallet-link hover:underline"
               target="_blank"
               rel="noopener noreferrer"
             >
@@ -105,7 +105,7 @@ const AboutView = () => {
           <li className="mb-2">
             <a
               href="https://github.com/CashScript/cashscript/tree/master/examples"
-              className="text-blue-600 hover:underline"
+              className="wallet-link hover:underline"
               target="_blank"
               rel="noopener noreferrer"
             >
@@ -115,7 +115,7 @@ const AboutView = () => {
           <li className="mb-2">
             <a
               href="https://cointelegraph.com/news/what-are-bitcoin-covenants-and-how-do-they-work"
-              className="text-blue-600 hover:underline"
+              className="wallet-link hover:underline"
               target="_blank"
               rel="noopener noreferrer"
             >
@@ -131,7 +131,7 @@ const AboutView = () => {
           suggestions, run into issues, or need support, please contact us at{' '}
           <a
             href="mailto:info@optnlabs.com"
-            className="text-blue-600 hover:underline"
+            className="wallet-link hover:underline"
           >
             info@optnlabs.com
           </a>

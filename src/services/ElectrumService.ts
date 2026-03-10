@@ -13,7 +13,9 @@
 
 import ElectrumServer from '../apis/ElectrumServer/ElectrumServer';
 import { RequestResponse } from '@electrum-cash/network';
-import { TransactionHistoryItem, UTXO, Token } from '../types/types';
+import { TransactionHistoryItem, UTXO } from '../types/types';
+import { normalizeTokenField } from '../utils/tokenNormalization';
+import { logError, toErrorMessage } from '../utils/errorHandling';
 
 const inflightByAddr = new Map<string, Promise<UTXO[]>>();
 const cacheByAddr = new Map<string, { ts: number; data: UTXO[] }>();
@@ -31,41 +33,6 @@ export function invalidateUTXOCache(address?: string) {
     inflightByAddr.clear();
     cacheByAddr.clear();
   }
-}
-
-/** Normalize any electrum token shape into our canonical Token */
-function normalizeTokenField(raw: any): Token | null {
-  if (!raw) return null;
-
-  // Accept several common shapes:
-  // - raw.token_data
-  // - raw.token
-  // - raw (already token-like)
-  const t = raw.token ?? raw.token_data ?? raw;
-  if (!t) return null;
-
-  const category = t.category ?? t.tokenCategory ?? t.categoryId;
-  if (!category) return null;
-
-  let amount: number | bigint = t.amount ?? 0;
-  if (typeof amount === 'string') {
-    const n = Number(amount);
-    amount = Number.isFinite(n) ? n : 0;
-  }
-
-  const nft = t.nft
-    ? {
-        capability: t.nft.capability as 'none' | 'mutable' | 'minting',
-        commitment: t.nft.commitment ?? '',
-      }
-    : undefined;
-
-  return {
-    category: String(category),
-    amount,
-    nft,
-    // BCMR metadata is added later in UTXOService
-  };
 }
 
 function isTransactionHistoryArray(
@@ -87,7 +54,7 @@ function isStringResponse(response: RequestResponse): response is string {
  * Keys are RPC methods (e.g. blockchain.address.subscribe),
  * values are maps of subscription keys (address/txHash) to callbacks.
  */
-const subscriptionRegistry: Record<string, Map<string, (data: any) => void>> = {
+const subscriptionRegistry: Record<string, Map<string, (data: unknown) => void>> = {
   'blockchain.address.subscribe': new Map(),
   'blockchain.headers.subscribe': new Map(),
   'blockchain.transaction.subscribe': new Map(),
@@ -138,18 +105,11 @@ const ElectrumService = {
     const now = Date.now();
     const cached = cacheByAddr.get(address);
     if (cached && now - cached.ts < UTXO_TTL_MS) {
-      console.log(
-        '[ElectrumService] cache hit for',
-        address,
-        'len=',
-        cached.data.length
-      );
       return cached.data;
     }
 
     const inflight = inflightByAddr.get(address);
     if (inflight) {
-      console.log('[ElectrumService] coalesced inflight for', address);
       return inflight;
     }
 
@@ -160,11 +120,11 @@ const ElectrumService = {
           address
         );
         if (Array.isArray(res)) {
-          const arr: UTXO[] = (res as any[]).map((u) => {
+          const arr: UTXO[] = (res as Array<Record<string, unknown>>).map((u) => {
             const token = normalizeTokenField(u.token ?? u.token_data);
 
             const out: UTXO = {
-              address: u.address ?? address,
+              address: typeof u.address === 'string' ? u.address : address,
               height: Number(u.height ?? 0),
               tx_hash: String(u.tx_hash),
               tx_pos: Number(u.tx_pos),
@@ -179,12 +139,6 @@ const ElectrumService = {
           });
 
           cacheByAddr.set(address, { ts: Date.now(), data: arr });
-          console.log(
-            '[ElectrumService] network OK for',
-            address,
-            'len=',
-            arr.length
-          );
           return arr;
         }
         console.warn(
@@ -194,7 +148,7 @@ const ElectrumService = {
         );
         return cacheByAddr.get(address)?.data ?? [];
       } catch (e) {
-        console.error('[ElectrumService] error listunspent for', address, e);
+        logError('ElectrumService.getUTXOs', e, { address });
         return cacheByAddr.get(address)?.data ?? [];
       } finally {
         inflightByAddr.delete(address);
@@ -209,11 +163,11 @@ const ElectrumService = {
   async getBalance(address: string): Promise<number> {
     const server = ElectrumServer();
     try {
-      const response: any = await server.request(
+      const response = (await server.request(
         'blockchain.address.get_balance',
         address,
         'include_tokens'
-      );
+      )) as { confirmed?: unknown; unconfirmed?: unknown };
       if (
         response &&
         typeof response.confirmed === 'number' &&
@@ -223,7 +177,7 @@ const ElectrumService = {
       }
       throw new Error('Unexpected balance format');
     } catch (error) {
-      console.error('Error getting balance:', error);
+      logError('ElectrumService.getBalance', error, { address });
       return 0;
     }
   },
@@ -238,9 +192,9 @@ const ElectrumService = {
       );
       if (isStringResponse(txHash)) return txHash;
       throw new Error('Invalid transaction hash response');
-    } catch (error: any) {
-      console.error('Error broadcasting transaction:', error);
-      return error.message || 'Unknown error';
+    } catch (error) {
+      logError('ElectrumService.broadcastTransaction', error);
+      return toErrorMessage(error);
     }
   },
 
@@ -257,7 +211,7 @@ const ElectrumService = {
       if (isTransactionHistoryArray(history)) return history;
       throw new Error('Invalid transaction history format');
     } catch (error) {
-      console.error('Error fetching transaction history:', error);
+      logError('ElectrumService.getTransactionHistory', error, { address });
       return null;
     }
   },
@@ -268,7 +222,7 @@ const ElectrumService = {
     try {
       return await server.request('blockchain.headers.get_tip');
     } catch (error) {
-      console.error('Error fetching block tip:', error);
+      logError('ElectrumService.getLatestBlock', error);
       return null;
     }
   },
@@ -284,12 +238,12 @@ const ElectrumService = {
       }
       reg.set(address, callback);
     } catch (error) {
-      console.error('Error subscribing to address:', error);
+      logError('ElectrumService.subscribeAddress', error, { address });
     }
   },
 
   /** Subscribe to block headers */
-  async subscribeBlockHeaders(callback: (header: any) => void) {
+  async subscribeBlockHeaders(callback: (header: unknown) => void) {
     const server = ElectrumServer();
     try {
       const reg = subscriptionRegistry['blockchain.headers.subscribe'];
@@ -299,7 +253,7 @@ const ElectrumService = {
       }
       reg.set('tip', callback);
     } catch (error) {
-      console.error('Error subscribing to block headers:', error);
+      logError('ElectrumService.subscribeBlockHeaders', error);
     }
   },
 
@@ -314,12 +268,12 @@ const ElectrumService = {
       }
       reg.set(txHash, cb);
     } catch (error) {
-      console.error('Error subscribing to transaction:', error);
+      logError('ElectrumService.subscribeTransaction', error, { txHash });
     }
   },
 
   /** Subscribe to double-spend proofs for a transaction */
-  async subscribeDoubleSpendProof(txHash: string, cb: (ds: any) => void) {
+  async subscribeDoubleSpendProof(txHash: string, cb: (ds: unknown) => void) {
     const server = ElectrumServer();
     try {
       const reg =
@@ -332,7 +286,7 @@ const ElectrumService = {
       }
       reg.set(txHash, cb);
     } catch (error) {
-      console.error('Error subscribing to double-spend proof:', error);
+      logError('ElectrumService.subscribeDoubleSpendProof', error, { txHash });
     }
   },
 
@@ -344,7 +298,7 @@ const ElectrumService = {
       subscriptionRegistry['blockchain.address.subscribe'].delete(address);
       return true;
     } catch (error) {
-      console.error('Error unsubscribing from address:', error);
+      logError('ElectrumService.unsubscribeAddress', error, { address });
       return false;
     }
   },
@@ -357,7 +311,7 @@ const ElectrumService = {
       subscriptionRegistry['blockchain.headers.subscribe'].delete('tip');
       return true;
     } catch (error) {
-      console.error('Error unsubscribing from block headers:', error);
+      logError('ElectrumService.unsubscribeBlockHeaders', error);
       return false;
     }
   },
@@ -370,7 +324,7 @@ const ElectrumService = {
       subscriptionRegistry['blockchain.transaction.subscribe'].delete(txHash);
       return true;
     } catch (error) {
-      console.error('Error unsubscribing from transaction:', error);
+      logError('ElectrumService.unsubscribeTransaction', error, { txHash });
       return false;
     }
   },
@@ -387,7 +341,7 @@ const ElectrumService = {
       );
       return true;
     } catch (error) {
-      console.error('Error unsubscribing from double-spend proof:', error);
+      logError('ElectrumService.unsubscribeDoubleSpendProof', error, { txHash });
       return false;
     }
   },

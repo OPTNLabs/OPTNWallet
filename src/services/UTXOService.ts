@@ -3,9 +3,11 @@ import ElectrumService from './ElectrumService';
 import UTXOManager from '../apis/UTXOManager/UTXOManager';
 import AddressManager from '../apis/AddressManager/AddressManager';
 import BcmrService from './BcmrService';
-import { UTXO, Token } from '../types/types';
+import { UTXO } from '../types/types';
 import { Network } from '../redux/networkSlice';
 import { store } from '../redux/store';
+import { normalizeTokenField } from '../utils/tokenNormalization';
+import { logError } from '../utils/errorHandling';
 
 function getPrefix(): string {
   try {
@@ -18,35 +20,6 @@ function getPrefix(): string {
   }
 }
 
-/** Belt & suspenders: normalize any stray token shapes before storing */
-function normalizeTokenField(raw: any): Token | null {
-  if (!raw) return null;
-  const t = raw.token ?? raw.token_data ?? raw;
-  if (!t) return null;
-
-  const category = t.category ?? t.tokenCategory ?? t.categoryId;
-  if (!category) return null;
-
-  let amount: number | bigint = t.amount ?? 0;
-  if (typeof amount === 'string') {
-    const n = Number(amount);
-    amount = Number.isFinite(n) ? n : 0;
-  }
-
-  const nft = t.nft
-    ? {
-        capability: t.nft.capability as 'none' | 'mutable' | 'minting',
-        commitment: t.nft.commitment ?? '',
-      }
-    : undefined;
-
-  return {
-    category: String(category),
-    amount,
-    nft,
-  };
-}
-
 const UTXOService = {
   async fetchAndStoreUTXOs(walletId: number, address: string): Promise<UTXO[]> {
     try {
@@ -57,9 +30,10 @@ const UTXOService = {
       // but we defensively normalize again in case of future changes.
       const fetchedUTXOs = await ElectrumService.getUTXOs(address);
       for (const u of fetchedUTXOs) {
-        if (!u.token && (u as any).token_data) {
-          u.token = normalizeTokenField((u as any).token_data);
-          (u as any).token_data = undefined;
+        const uAny = u as UTXO & { token_data?: unknown };
+        if (!u.token && uAny.token_data) {
+          u.token = normalizeTokenField(uAny.token_data);
+          uAny.token_data = undefined;
         }
       }
 
@@ -133,7 +107,7 @@ const UTXOService = {
 
       // IMPORTANT: read back using the split maps and merge coin + token UTXOs
       const { utxosMap, cashTokenUtxosMap } =
-        await manager.fetchUTXOsFromDatabase([{ address }]);
+        await manager.fetchUTXOsFromDatabase([{ address }], walletId);
       const merged = [
         ...(utxosMap[address] ?? []),
         ...(cashTokenUtxosMap[address] ?? []),
@@ -141,10 +115,7 @@ const UTXOService = {
 
       return merged;
     } catch (error) {
-      console.error(
-        `[UTXOService] Error in fetchAndStoreUTXOs for ${address}:`,
-        error
-      );
+      logError('UTXOService.fetchAndStoreUTXOs', error, { walletId, address });
       return [];
     }
   },
@@ -155,9 +126,12 @@ const UTXOService = {
   }> {
     try {
       const manager = await UTXOManager();
-      return await manager.fetchUTXOsFromDatabase(keyPairs);
+      const currentWalletId = store.getState().wallet_id.currentWalletId;
+      return await manager.fetchUTXOsFromDatabase(keyPairs, currentWalletId);
     } catch (error) {
-      console.error('Error fetching UTXOs from database:', error);
+      logError('UTXOService.fetchUTXOsFromDatabase', error, {
+        addressCount: keyPairs.length,
+      });
       return { utxosMap: {}, cashTokenUtxosMap: {} };
     }
   },
@@ -174,14 +148,14 @@ const UTXOService = {
       if (!addrs.length) return { allUtxos: [], tokenUtxos: [] };
 
       const { utxosMap, cashTokenUtxosMap } =
-        await manager.fetchUTXOsFromDatabase(addrs);
+        await manager.fetchUTXOsFromDatabase(addrs, walletId);
 
-      const allUtxos = Object.values(utxosMap).flat();
+      const allUtxos = Object.values(utxosMap).flat().filter((u) => !u.token);
       const tokenUtxos = Object.values(cashTokenUtxosMap).flat();
 
       return { allUtxos, tokenUtxos };
     } catch (e) {
-      console.error('fetchAllWalletUtxos failed:', e);
+      logError('UTXOService.fetchAllWalletUtxos', e, { walletId });
       return { allUtxos: [], tokenUtxos: [] };
     }
   },

@@ -1,15 +1,32 @@
-// @ts-nocheck
 // src/pages/AppsView.tsx
 
+import { useEffect, useState } from 'react';
 import { useSelector } from 'react-redux';
 import { useNavigate } from 'react-router-dom';
 import { RootState } from '../redux/store';
 
-interface App {
-  id: string;
+import AddonsRegistry from '../services/AddonsRegistry';
+import type { AddonAppDefinition, AddonManifest } from '../types/addons';
+
+type AppCard = {
+  id: string; // "fundme" OR "<addonId>:<appId>"
   name: string;
   icon: string;
   description: string;
+  source: 'builtin' | 'addon';
+  disabled?: boolean;
+};
+
+const DEFAULT_ICON = '/assets/images/OPTNWelcome1.png';
+
+function isComingSoonApp(appId: string, appName: string): boolean {
+  const normalizedId = appId.toLowerCase();
+  const normalizedName = appName.toLowerCase();
+  return (
+    normalizedId === 'fundme' ||
+    normalizedId.endsWith(':authguard') ||
+    normalizedName === 'authguard'
+  );
 }
 
 const AppsView = () => {
@@ -18,19 +35,70 @@ const AppsView = () => {
     (state: RootState) => state.wallet_id.currentWalletId
   );
 
-    // Apps data
-    const apps: App[] = [
-      {
-        id: 'fundme',
-        name: 'FundMe',
-        icon: '/assets/images/fundme.png',
-        description: 'BCH Crowdfunding'
-      }
-    ];
+  const [cards, setCards] = useState<AppCard[]>([]);
+  const [error, setError] = useState<string | null>(null);
 
-    const handleAppClick = (appId: string) => {
-      navigate(`/apps/${appId}`);
+  useEffect(() => {
+    let mounted = true;
+
+    (async () => {
+      try {
+        setError(null);
+
+        const reg = AddonsRegistry();
+        await reg.init();
+        const manifests: AddonManifest[] = reg.getAddons();
+
+        const out: AppCard[] = [];
+
+        // ✅ Keep FundMe as-is (do NOT break existing route)
+        out.push({
+          id: 'fundme',
+          name: 'FundMe',
+          icon: '/assets/images/fundme.png',
+          description: 'BCH Crowdfunding',
+          source: 'builtin',
+          disabled: true,
+        });
+
+        // ✅ Add addon apps
+        for (const m of manifests) {
+          for (const a of (m.apps ?? []) as AddonAppDefinition[]) {
+            out.push({
+              id: `${m.id}:${a.id}`,
+              name: a.name,
+              icon: (a.iconUri || m.iconUri || DEFAULT_ICON) as string,
+              description: a.description || '',
+              source: 'addon',
+              disabled: isComingSoonApp(`${m.id}:${a.id}`, a.name),
+            });
+          }
+        }
+
+        if (mounted) setCards(out);
+      } catch (e: unknown) {
+        if (mounted) {
+          setError(e instanceof Error ? e.message : String(e));
+        }
+      }
+    })();
+
+    return () => {
+      mounted = false;
     };
+  }, []);
+
+  const handleAppClick = (app: AppCard) => {
+    if (app.disabled) return;
+
+    const appId = app.id;
+    if (appId === 'fundme') {
+      navigate('/apps/fundme');
+      return;
+    }
+    // addon app => /apps/<addonId>:<appId>
+    navigate(`/apps/${appId}`);
+  };
 
   return (
     <div className="container mx-auto p-4">
@@ -38,38 +106,53 @@ const AppsView = () => {
         <img
           src="/assets/images/OPTNWelcome1.png"
           alt="Welcome"
-          className="max-w-full h-auto"
+          className="w-full max-w-[260px] h-auto object-contain"
         />
       </div>
 
       <div className="container mx-auto p-4">
-      <div className="flex justify-between items-center mb-6">
-        <h1 className="text-2xl font-bold">Apps</h1>
-        <button
-          onClick={() => navigate(`/home/${wallet_id}`)}
-          className="bg-red-500 hover:bg-red-600 text-white py-2 px-4 rounded"
-        >
-          Go Back
-        </button>
-      </div>
-
-      {/* Grid of apps */}
-      <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
-        {apps.map((app) => (
-          <div
-            key={app.id}
-            onClick={() => handleAppClick(app.id)}
-            className="p-4 border rounded-lg shadow hover:shadow-md transition-shadow cursor-pointer"
+        <div className="flex justify-between items-center mb-6">
+          <h1 className="text-2xl font-bold">Apps</h1>
+          <button
+            onClick={() => navigate(`/home/${wallet_id}`)}
+            className="wallet-btn-danger py-2 px-4"
           >
-            <div className="flex flex-col items-center">
-              <img src={app.icon} alt={app.name} className="w-16 h-16 mb-2" />
-              <h3 className="font-semibold text-center">{app.name}</h3>
-              <p className="text-sm text-gray-600 text-center">{app.description}</p>
-            </div>
+            Go Back
+          </button>
+        </div>
+
+        {error && (
+          <div className="mb-4 p-3 rounded border wallet-danger-panel text-sm">
+            Failed to load addon apps: {error}
           </div>
-        ))}
+        )}
+
+        <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
+          {cards.map((app) => (
+            <div
+              key={app.id}
+              onClick={() => handleAppClick(app)}
+              className={`wallet-card p-4 rounded-lg transition-shadow ${
+                app.disabled
+                  ? 'opacity-80 cursor-not-allowed'
+                  : 'hover:shadow-md cursor-pointer'
+              }`}
+            >
+              <div className="flex flex-col items-center">
+                <img
+                  src={app.icon}
+                  alt={app.name}
+                  className="w-16 h-16 mb-2 object-contain"
+                />
+                <h3 className="font-semibold text-center">{app.name}</h3>
+                <p className="text-sm wallet-muted text-center">
+                  {app.disabled ? 'Coming soon' : app.description}
+                </p>
+              </div>
+            </div>
+          ))}
+        </div>
       </div>
-    </div>
     </div>
   );
 };

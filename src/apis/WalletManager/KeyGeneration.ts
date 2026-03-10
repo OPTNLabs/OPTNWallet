@@ -9,6 +9,7 @@ import * as bip39 from 'bip39';
 import { Network } from '../../redux/networkSlice';
 import { HdNode } from '../../types/types';
 import { COIN_TYPE } from '../../utils/constants';
+import { zeroize } from '../../utils/secureMemory';
 
 export default function KeyGeneration() {
   return {
@@ -43,69 +44,79 @@ export default function KeyGeneration() {
         : COIN_TYPE.testnet;
 
     // console.log('Generating seed...');
-    const seed: Uint8Array = await bip39.mnemonicToSeed(mnemonic, passphrase);
-
-    // Defining rootNode as type HdNode
-    const rootNode: HdNode = deriveHdPrivateNodeFromSeed(seed, {
-      assumeValidity: true,
-    });
-    // console.log('rootNode:', rootNode);
-
-    const baseDerivationPath = `m/44'/${coin_type}'/${account_index}'`;
-
-    // console.log('Deriving HD path...');
-    // Defining aliceNode as type HdNode
-    const aliceNode: HdNode | string = deriveHdPath(
-      rootNode,
-      `${baseDerivationPath}/${change_index}/${address_index}`
+    const seed: Uint8Array = Uint8Array.from(
+      await bip39.mnemonicToSeed(mnemonic, passphrase)
     );
+    let rootNode: HdNode | null = null;
 
-    // console.log('aliceNode:', aliceNode);
+    try {
+      // Defining rootNode as type HdNode
+      rootNode = deriveHdPrivateNodeFromSeed(seed, {
+        assumeValidity: true,
+      });
+      // console.log('rootNode:', rootNode);
 
-    if (typeof aliceNode === 'string') {
-      console.error('Error deriving HD path:', aliceNode);
-      throw new Error();
+      const baseDerivationPath = `m/44'/${coin_type}'/${account_index}'`;
+
+      // console.log('Deriving HD path...');
+      // Defining aliceNode as type HdNode
+      const aliceNode: HdNode | string = deriveHdPath(
+        rootNode,
+        `${baseDerivationPath}/${change_index}/${address_index}`
+      );
+
+      // console.log('aliceNode:', aliceNode);
+
+      if (typeof aliceNode === 'string') {
+        console.error('Error deriving HD path:', aliceNode);
+        throw new Error();
+      }
+
+      const alicePub: Uint8Array | string = secp256k1.derivePublicKeyCompressed(
+        aliceNode.privateKey
+      );
+      const alicePriv: Uint8Array = aliceNode.privateKey;
+
+      if (typeof alicePub === 'string') {
+        console.error('Error deriving public key:', alicePub);
+        zeroize(alicePriv);
+        return null;
+      }
+
+      // console.log('Hashing public key...');
+      const alicePkh: Uint8Array = hash160(alicePub);
+      if (!alicePkh) {
+        console.error('Failed to generate public key hash.');
+        zeroize(alicePriv);
+        return null;
+      }
+
+      // Use the network type provided as a parameter
+      const prefix = networkType === Network.MAINNET ? 'bitcoincash' : 'bchtest';
+
+      // console.log('Encoding address...');
+      const aliceAddress: string = encodeCashAddress({
+        payload: alicePkh,
+        prefix,
+        type: 'p2pkh',
+      }).address;
+
+      const aliceTokenAddress: string = encodeCashAddress({
+        payload: alicePkh,
+        prefix,
+        type: 'p2pkhWithTokens',
+      }).address;
+
+      return {
+        alicePub,
+        alicePriv,
+        alicePkh,
+        aliceAddress,
+        aliceTokenAddress,
+      };
+    } finally {
+      zeroize(seed);
+      if (rootNode) zeroize(rootNode.privateKey);
     }
-
-    const alicePub: Uint8Array | string = secp256k1.derivePublicKeyCompressed(
-      aliceNode.privateKey
-    );
-    const alicePriv: Uint8Array = aliceNode.privateKey;
-
-    if (typeof alicePub === 'string') {
-      console.error('Error deriving public key:', alicePub);
-      return null;
-    }
-
-    // console.log('Hashing public key...');
-    const alicePkh: Uint8Array = hash160(alicePub);
-    if (!alicePkh) {
-      console.error('Failed to generate public key hash.');
-      return null;
-    }
-
-    // Use the network type provided as a parameter
-    const prefix = networkType === Network.MAINNET ? 'bitcoincash' : 'bchtest';
-
-    // console.log('Encoding address...');
-    const aliceAddress: string = encodeCashAddress({
-      payload: alicePkh,
-      prefix,
-      type: 'p2pkh',
-    }).address;
-
-    const aliceTokenAddress: string = encodeCashAddress({
-      payload: alicePkh,
-      prefix,
-      type: 'p2pkhWithTokens',
-    }).address;
-
-    return {
-      alicePub,
-      alicePriv,
-      alicePkh,
-      aliceAddress,
-      aliceTokenAddress,
-    };
   }
 }

@@ -1,13 +1,23 @@
 // src/hooks/useSimpleSend.ts
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import {
+  Dispatch,
+  SetStateAction,
+  useCallback,
+  useEffect,
+  useMemo,
+  useState,
+} from 'react';
 import { useSelector } from 'react-redux';
 
 import { RootState } from '../redux/store';
 import { selectWalletId } from '../redux/walletSlice';
 import useFetchWalletData from './useFetchWalletData';
 
-import { UTXO, TransactionOutput } from '../types/types';
+import {
+  ContractAddressRecord,
+  UTXO,
+} from '../types/types';
 import TransactionService from '../services/TransactionService';
 import { selectCurrentNetwork } from '../redux/selectors/networkSelectors';
 import { SATSINBITCOIN } from '../utils/constants';
@@ -17,26 +27,15 @@ import {
   selectTokenFtInputs,
 } from '../services/CoinSelectionService';
 import AddressManager from '../apis/AddressManager/AddressManager';
+import { toErrorMessage } from '../utils/errorHandling';
+import { parseAmountToSats, validateRecipient } from './simple-send/helpers';
+import { createSimpleSendPlanner } from './simple-send/planner';
+import { AssetType, ReviewState, SimpleSendMode } from './simple-send/types';
+import { parseBip21Uri } from '../utils/bip21';
 
-type ReviewState = {
-  rawTx: string;
-  feeSats: number;
-  totalSats: number;
-  finalOutputs: TransactionOutput[];
-  tokenChange?: {
-    category: string;
-    amount: bigint;
-  };
-};
-
-type SimpleSendMode = 'idle' | 'review' | 'sending' | 'sent' | 'error';
-type AssetType = 'bch' | 'ft' | 'nft';
-
-// Token output policy: send at least 1,000 sats with token-bearing outputs
-const TOKEN_OUTPUT_SATS = 1000;
-
-// Extra BCH fee buffer (BCH change must be at least this, separate from tokens)
-const FEE_BUFFER_SATS = 1000;
+const noopSetContractAddresses: Dispatch<SetStateAction<ContractAddressRecord[]>> =
+  () => undefined;
+const noopSetUtxos: Dispatch<SetStateAction<UTXO[]>> = () => undefined;
 
 export default function useSimpleSend() {
   // Redux
@@ -51,14 +50,19 @@ export default function useSimpleSend() {
   const [defaultChangeAddress, setDefaultChangeAddress] = useState<string>('');
   const [error, setError] = useState<string>('');
 
+  const setErrorMessage = useCallback(
+    (value: string | null) => setError(value ?? ''),
+    []
+  );
+
   useFetchWalletData(
     walletId,
     setAddresses,
-    (() => {}) as any,
-    (() => {}) as any,
-    (() => {}) as any,
+    noopSetContractAddresses,
+    noopSetUtxos,
+    noopSetUtxos,
     setDefaultChangeAddress,
-    setError
+    setErrorMessage
   );
 
   // DB-backed UTXOs across whole wallet
@@ -71,7 +75,7 @@ export default function useSimpleSend() {
       const { allUtxos, tokenUtxos } =
         await UTXOService.fetchAllWalletUtxos(walletId);
       if (!cancelled) {
-        setDbUtxos(allUtxos); // BCH-only UTXOs (or those w/out tokens)
+        setDbUtxos((allUtxos || []).filter((u) => !u.token)); // non-token BCH UTXOs for fee funding
         setTokenUtxos(tokenUtxos || []);
       }
     })();
@@ -103,7 +107,7 @@ export default function useSimpleSend() {
         }
         const mgr = AddressManager();
         const tokenAddr = await mgr.fetchTokenAddress(
-          Number(walletId as any),
+          walletId,
           selectedChangeAddress
         );
         if (!cancelled)
@@ -137,8 +141,15 @@ export default function useSimpleSend() {
   const [review, setReview] = useState<ReviewState | null>(null);
   const [selectedForTx, setSelectedForTx] = useState<UTXO[]>([]);
   const [txid, setTxid] = useState<string>('');
+  const parsedRecipient = useMemo(
+    () => parseBip21Uri(recipient, currentNetwork),
+    [recipient, currentNetwork]
+  );
+  const normalizedRecipient = parsedRecipient.isValidAddress
+    ? parsedRecipient.normalizedAddress
+    : recipient;
 
-  const priceUsd = Number(prices['BCH'] || 0);
+  const priceUsd = Number(prices['BCH-USD'] || 0);
 
   const reset = useCallback(() => {
     setMode('idle');
@@ -153,226 +164,31 @@ export default function useSimpleSend() {
     setSelectedNftCommitment('');
   }, []);
 
-  const validateRecipient = (addr: string) =>
-    typeof addr === 'string' && addr.trim().length > 10;
-
-  const parseAmountToSats = (val: string): number => {
-    const n = Number(val);
-    if (!isFinite(n) || n <= 0) return 0;
-    return Math.round(n * SATSINBITCOIN);
-  };
-
-  // helpers
-  function isConfirmed(u: UTXO) {
-    return typeof u.height === 'number' && u.height > 0;
-  }
-  function sortLargestFirst(pool: UTXO[]) {
-    return [...pool].sort((a, b) =>
-      Number(BigInt(b.amount ?? b.value) - BigInt(a.amount ?? a.value))
-    );
-  }
-
-  // ----- Token outputs (use 1,000 sats) -----
-  function makeTokenOutputForRecipientFT(): TransactionOutput {
-    return {
-      recipientAddress: recipient,
-      amount: TOKEN_OUTPUT_SATS,
-      token: {
-        category: selectedCategory,
-        amount: BigInt(amountToken || '0'),
-      },
-    };
-  }
-
-  function makeTokenChangeOutputFT(remaining: bigint): TransactionOutput {
-    return {
-      recipientAddress: tokenChangeAddress || selectedChangeAddress,
-      amount: TOKEN_OUTPUT_SATS,
-      token: {
-        category: selectedCategory,
-        amount: remaining,
-      },
-    };
-  }
-
-  function makeTokenOutputForRecipientNFT(nftUtxo: UTXO): TransactionOutput {
-    return {
-      recipientAddress: recipient,
-      amount: TOKEN_OUTPUT_SATS,
-      token: {
-        category: nftUtxo.token!.category,
-        amount: 0n, // ✅ NFT outputs still include amount field (zero)
-        nft: {
-          capability: nftUtxo.token!.nft!.capability,
-          commitment: nftUtxo.token!.nft!.commitment,
-        },
-      },
-    };
-  }
-
-  function sumInputsSats(inputs: UTXO[]) {
-    return inputs.reduce((s, u) => s + Number(u.amount ?? u.value ?? 0), 0);
-  }
-
-  /**
-   * Attempt a build with given inputs & outputs.
-   * Returns fee (1 sat/byte), totalSats (outputs+fee), and computed change (BCH).
-   */
-  async function tryBuild(
-    inputs: UTXO[],
-    outputs: TransactionOutput[]
-  ): Promise<
-    | {
-        ok: true;
-        feeSats: number;
-        totalSats: number;
-        rawTx: string;
-        finalOutputs: TransactionOutput[];
-        changeSats: number;
-        inputSum: number;
-      }
-    | { ok: false; err: string }
-  > {
-    try {
-      const r = await TransactionService.buildTransaction(
-        outputs,
-        null,
-        selectedChangeAddress, // BCH change goes here (cashaddr)
-        inputs
-      );
-      if (r.errorMsg) return { ok: false, err: r.errorMsg };
-
-      const feeSats = r.bytecodeSize; // 1 sat/byte fee policy
-      const outputsTotal = outputs
-        .map((o) => Number(o.amount || 0))
-        .reduce((a, b) => a + b, 0);
-      const totalSats = outputsTotal + feeSats;
-      const inputSum = sumInputsSats(inputs);
-      const changeSats = inputSum - totalSats;
-
-      return {
-        ok: true,
-        feeSats,
-        totalSats,
-        rawTx: r.finalTransaction,
-        finalOutputs: r.finalOutputs ?? outputs,
-        changeSats,
-        inputSum,
-      };
-    } catch (e: any) {
-      return { ok: false, err: e?.message || 'build failed' };
-    }
-  }
-
-  /**
-   * Keep token inputs fixed; keep adding BCH inputs (confirmed → then include unconfirmed)
-   * until the builder succeeds AND we have at least FEE_BUFFER_SATS in BCH change.
-   * Token outputs are already balanced (inputs == outputs) via explicit manual calc.
-   */
-  async function addBchInputsUntilBuild(
-    fixedTokenInputs: UTXO[],
-    outputs: TransactionOutput[],
-    maxInputs = 50
-  ) {
-    const confirmedPool = sortLargestFirst(dbUtxos.filter(isConfirmed));
-    const unconfirmedPool = sortLargestFirst(
-      dbUtxos.filter((u) => !isConfirmed(u))
-    );
-
-    // Pass 1: confirmed only
-    for (let k = 0; k <= Math.min(maxInputs, confirmedPool.length); k++) {
-      const bchInputs = confirmedPool.slice(0, k);
-      const inputs = [...fixedTokenInputs, ...bchInputs] as UTXO[];
-      const res = await tryBuild(inputs, outputs);
-      if ('ok' in res && res.ok) {
-        if (res.changeSats >= FEE_BUFFER_SATS) {
-          return { ...res, inputs };
-        }
-      }
-    }
-
-    // Pass 2: include unconfirmed
-    const combinedPool = sortLargestFirst([
-      ...confirmedPool,
-      ...unconfirmedPool,
-    ]);
-    for (let k = 0; k <= Math.min(maxInputs, combinedPool.length); k++) {
-      const bchInputs = combinedPool.slice(0, k);
-      const inputs = [...fixedTokenInputs, ...bchInputs] as UTXO[];
-      const res = await tryBuild(inputs, outputs);
-      if ('ok' in res && res.ok) {
-        if (res.changeSats >= FEE_BUFFER_SATS) {
-          return { ...res, inputs };
-        }
-      }
-    }
-
-    return {
-      ok: false as const,
-      err: 'Unable to cover 1 sat/byte fee plus buffer. Add more BCH or lower the amount.',
-    };
-  }
-
-  /**
-   * BCH-only flow: add BCH inputs until build succeeds and BCH change ≥ buffer.
-   */
-  async function addBchOnlyUntilBuild(
-    targetSats: number,
-    maxInputs = 50
-  ): Promise<
-    | {
-        ok: true;
-        inputs: UTXO[];
-        feeSats: number;
-        totalSats: number;
-        rawTx: string;
-        finalOutputs: TransactionOutput[];
-      }
-    | { ok: false; err: string }
-  > {
-    const confirmedPool = sortLargestFirst(dbUtxos.filter(isConfirmed));
-    const unconfirmedPool = sortLargestFirst(
-      dbUtxos.filter((u) => !isConfirmed(u))
-    );
-
-    const outputs: TransactionOutput[] = [
-      { recipientAddress: recipient, amount: targetSats },
-    ];
-
-    // Pass 1: confirmed-only
-    for (let k = 1; k <= Math.min(maxInputs, confirmedPool.length); k++) {
-      const inputs = confirmedPool.slice(0, k);
-      const res = await tryBuild(inputs, outputs);
-      if ('ok' in res && res.ok) {
-        if (res.changeSats >= FEE_BUFFER_SATS) {
-          return { ok: true, inputs, ...res };
-        }
-      }
-    }
-
-    // Pass 2: include unconfirmed
-    const combined = sortLargestFirst([...confirmedPool, ...unconfirmedPool]);
-    for (let k = 1; k <= Math.min(maxInputs, combined.length); k++) {
-      const inputs = combined.slice(0, k);
-      const res = await tryBuild(inputs, outputs);
-      if ('ok' in res && res.ok) {
-        if (res.changeSats >= FEE_BUFFER_SATS) {
-          return { ok: true, inputs, ...res };
-        }
-      }
-    }
-
-    return {
-      ok: false,
-      err: 'Insufficient funds: can’t cover amount, 1 sat/byte fee, and 1000-sat buffer.',
-    };
-  }
+  const planner = useMemo(
+    () =>
+      createSimpleSendPlanner({
+        recipient: normalizedRecipient,
+        selectedCategory,
+        amountToken,
+        tokenChangeAddress,
+        selectedChangeAddress,
+        dbUtxos,
+      }),
+    [
+      normalizedRecipient,
+      selectedCategory,
+      amountToken,
+      tokenChangeAddress,
+      selectedChangeAddress,
+      dbUtxos,
+    ]
+  );
 
   const doReview = useCallback(async () => {
     try {
       setError('');
 
-      if (!validateRecipient(recipient)) {
+      if (!validateRecipient(normalizedRecipient)) {
         setError('Please enter a valid destination address.');
         setMode('error');
         return;
@@ -385,14 +201,14 @@ export default function useSimpleSend() {
 
       // ===== BCH =====
       if (assetType === 'bch') {
-        const targetSats = parseAmountToSats(amountBch);
+        const targetSats = parseAmountToSats(amountBch || parsedRecipient.amountRaw || '');
         if (targetSats <= 0) {
           setError('Amount must be greater than 0.');
           setMode('error');
           return;
         }
 
-        const attempt = await addBchOnlyUntilBuild(targetSats, 50);
+        const attempt = await planner.addBchOnlyUntilBuild(targetSats, 50);
         if (!attempt.ok) {
           setError('err' in attempt ? attempt.err : 'Build failed.');
           setMode('error');
@@ -412,7 +228,7 @@ export default function useSimpleSend() {
 
       // From here: token sends also need BCH for fees
       if (!dbUtxos.length) {
-        setError('No BCH UTXOs available to cover fees.');
+        setError('No non-token BCH UTXOs available to cover fees.');
         setMode('error');
         return;
       }
@@ -435,7 +251,7 @@ export default function useSimpleSend() {
           selectedCategory,
           tokenUtxos,
           tokAmt,
-          { preferConfirmed: true, maxInputs: 100 }
+          { preferConfirmed: false, maxInputs: 100 }
         );
         if (!tokenInputs.length) {
           setError('No token UTXOs available for the selected category.');
@@ -445,10 +261,10 @@ export default function useSimpleSend() {
 
         // Manual FT remainder calculation over chosen inputs
         const totalFromInputs = tokenInputs.reduce((sum, u) => {
+          const amtRaw = u.token?.amount ?? 0;
           const amt =
-            u.token?.category === selectedCategory
-              ? BigInt(u.token?.amount ?? 0)
-              : 0n;
+            typeof amtRaw === 'bigint' ? amtRaw : BigInt(Math.trunc(amtRaw));
+
           return sum + amt;
         }, 0n);
 
@@ -460,13 +276,17 @@ export default function useSimpleSend() {
 
         const changeTok = totalFromInputs - tokAmt;
 
-        const outputs: TransactionOutput[] = [makeTokenOutputForRecipientFT()];
+        const outputs = [planner.makeTokenOutputForRecipientFT()];
         if (changeTok > 0n) {
-          outputs.push(makeTokenChangeOutputFT(changeTok));
+          outputs.push(planner.makeTokenChangeOutputFT(changeTok));
         }
 
         // Fixed token inputs; add BCH until fee+buffer are covered (BCH change only).
-        const built = await addBchInputsUntilBuild(tokenInputs, outputs, 100);
+        const built = await planner.addBchInputsUntilBuild(
+          tokenInputs,
+          outputs,
+          100
+        );
         if (!('ok' in built) || !built.ok) {
           setError(
             'err' in built
@@ -500,7 +320,7 @@ export default function useSimpleSend() {
           return;
         }
         const nftInput = selectNftInput(selectedCategory, tokenUtxos, {
-          preferConfirmed: true,
+          preferConfirmed: false,
           commitmentHex: selectedNftCommitment || undefined,
         });
         if (!nftInput) {
@@ -509,12 +329,14 @@ export default function useSimpleSend() {
           return;
         }
 
-        const outputs: TransactionOutput[] = [
-          makeTokenOutputForRecipientNFT(nftInput),
-        ];
+        const outputs = [planner.makeTokenOutputForRecipientNFT(nftInput)];
 
         // Fixed NFT input; add BCH until fee+buffer are covered (BCH change only).
-        const built = await addBchInputsUntilBuild([nftInput], outputs, 100);
+        const built = await planner.addBchInputsUntilBuild(
+          [nftInput],
+          outputs,
+          100
+        );
         if (!('ok' in built) || !built.ok) {
           setError(
             'err' in built
@@ -536,12 +358,12 @@ export default function useSimpleSend() {
         setMode('review');
         return;
       }
-    } catch (e: any) {
-      setError(e?.message || 'Failed to prepare transaction.');
+    } catch (error: unknown) {
+      setError(toErrorMessage(error, 'Failed to prepare transaction.'));
       setMode('error');
     }
   }, [
-    recipient,
+    normalizedRecipient,
     amountBch,
     assetType,
     selectedCategory,
@@ -550,7 +372,8 @@ export default function useSimpleSend() {
     dbUtxos,
     tokenUtxos,
     selectedChangeAddress,
-    tokenChangeAddress,
+    parsedRecipient.amountRaw,
+    planner,
   ]);
 
   const doSend = useCallback(async () => {
@@ -563,8 +386,8 @@ export default function useSimpleSend() {
       if (!sentId) throw new Error('Broadcast failed with no txid returned.');
       setTxid(sentId);
       setMode('sent');
-    } catch (e: any) {
-      setError(e?.message || 'Failed to send transaction.');
+    } catch (error: unknown) {
+      setError(toErrorMessage(error, 'Failed to send transaction.'));
       setMode('error');
     }
   }, [review, selectedForTx]);
@@ -588,7 +411,11 @@ export default function useSimpleSend() {
         const c = (u.token.nft.commitment || '').toLowerCase();
         if (c && !rec.nftCommitments.includes(c)) rec.nftCommitments.push(c);
       } else {
-        rec.ftAmount += BigInt(u.token?.amount ?? 0);
+        const amtRaw = u.token?.amount ?? 0;
+        const amt =
+          typeof amtRaw === 'bigint' ? amtRaw : BigInt(Math.trunc(amtRaw));
+
+        rec.ftAmount += BigInt(amt ?? 0);
       }
       set.set(cat, rec);
     }

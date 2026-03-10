@@ -26,9 +26,8 @@ export type CoinSelectionResult = {
 };
 
 function isSpendableP2PKH(utxo: UTXO, skipTokenUtxos: boolean): boolean {
-  const anyU = utxo as any;
-  const isContract = !!anyU.abi || !!anyU.contractName;
-  const isPaper = !!anyU.isPaperWallet;
+  const isContract = !!utxo.abi || !!utxo.contractName;
+  const isPaper = !!utxo.isPaperWallet;
   const hasToken = !!utxo.token;
 
   if (skipTokenUtxos && hasToken) return false;
@@ -115,7 +114,10 @@ export function selectTokenFtInputs(
 
   for (let i = 0; i < pool.length && tokenInputs.length < maxInputs; i++) {
     const u = pool[i];
-    const amt = BigInt(u.token?.amount ?? 0);
+    const amtRaw = u.token?.amount ?? 0;
+    const amt =
+      typeof amtRaw === 'bigint' ? amtRaw : BigInt(Math.trunc(amtRaw));
+
     tokenInputs.push(u);
     running += amt;
     if (running >= tokenAmount) break;

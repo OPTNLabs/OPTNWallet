@@ -19,12 +19,12 @@ interface AddressSelectionProps {
     address: string;
     tokenAddress: string;
     contractName: string;
-    abi: any[];
+    abi: unknown[];
   }[];
   selectedContractAddresses: string[];
   setSelectedContractAddresses: React.Dispatch<React.SetStateAction<string[]>>;
-  selectedContractABIs: any[];
-  setSelectedContractABIs: React.Dispatch<React.SetStateAction<any[]>>;
+  selectedContractABIs: unknown[];
+  setSelectedContractABIs: React.Dispatch<React.SetStateAction<unknown[]>>;
   setSelectedAddresses: React.Dispatch<React.SetStateAction<string[]>>;
   setPaperWalletUTXOs: React.Dispatch<React.SetStateAction<UTXO[]>>;
 }
@@ -64,7 +64,7 @@ const AddressSelection: React.FC<AddressSelectionProps> = ({
   };
 
   // Toggle selection for contract addresses
-  const toggleContractSelection = (address: string, abi: any) => {
+  const toggleContractSelection = (address: string, abi: unknown[]) => {
     const isSelected =
       selectedContractAddresses.includes(address) &&
       selectedContractABIs.some(
@@ -97,7 +97,7 @@ const AddressSelection: React.FC<AddressSelectionProps> = ({
     <div className="flex flex-wrap gap-2">
       {/* Wallet Addresses Button */}
       <button
-        className="bg-blue-500 font-bold text-white py-2 px-4 rounded flex-1"
+        className="wallet-btn-primary flex-1"
         onClick={() => setShowWalletAddressesPopup(true)}
       >
         Wallet
@@ -105,7 +105,7 @@ const AddressSelection: React.FC<AddressSelectionProps> = ({
 
       {/* Contracts Addresses Button */}
       <button
-        className="bg-blue-500 font-bold text-white py-2 px-4 rounded flex-1"
+        className="wallet-btn-primary flex-1"
         onClick={() => setShowContractAddressesPopup(true)}
       >
         Contracts
@@ -141,7 +141,9 @@ const AddressSelection: React.FC<AddressSelectionProps> = ({
                     key={addressObj.address}
                     onClick={() => toggleAddressSelection(addressObj.address)}
                     className={`w-full text-left p-2 mb-2 border rounded-lg break-words whitespace-normal focus:outline-none ${
-                      isSelected ? 'bg-blue-100' : 'bg-white border-gray-300'
+                      isSelected
+                        ? 'wallet-selectable-active'
+                        : 'wallet-selectable-inactive'
                     }`}
                     aria-pressed={isSelected}
                   >
@@ -153,7 +155,7 @@ const AddressSelection: React.FC<AddressSelectionProps> = ({
                           PREFIX[currentNetwork].length
                         )}
                       </span>
-                      <span className="text-sm text-gray-600">
+                      <span className="text-sm wallet-muted">
                         Token Address:{' '}
                         {shortenTxHash(
                           addressObj.tokenAddress,
@@ -198,7 +200,9 @@ const AddressSelection: React.FC<AddressSelectionProps> = ({
                       )
                     }
                     className={`w-full text-left p-2 mb-2 border rounded-lg break-words whitespace-normal focus:outline-none ${
-                      isSelected ? 'bg-blue-100 ' : 'bg-white border-gray-300'
+                      isSelected
+                        ? 'wallet-selectable-active'
+                        : 'wallet-selectable-inactive'
                     }`}
                     aria-pressed={isSelected}
                   >
@@ -206,7 +210,7 @@ const AddressSelection: React.FC<AddressSelectionProps> = ({
                       <span className="font-medium">
                         Contract Name: {contractObj.contractName}
                       </span>
-                      <span className="text-sm text-gray-600">
+                      <span className="text-sm wallet-muted">
                         Contract Address:{' '}
                         {shortenTxHash(
                           contractObj.address,

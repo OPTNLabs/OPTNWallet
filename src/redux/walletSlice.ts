@@ -1,8 +1,9 @@
 // src/redux/walletSlice.ts
 import { createSlice, PayloadAction } from '@reduxjs/toolkit';
 import { Network } from './networkSlice';
+import type { RootState } from './store';
 
-interface WalletState {
+export interface WalletState {
   currentWalletId: number;
   networkType: Network;
 }
@@ -34,7 +35,7 @@ export const { setWalletId, resetWallet, setWalletNetwork } =
 export default walletSlice.reducer;
 
 // Selectors
-export const selectWalletId = (state: { wallet_id: WalletState }) =>
-  state.wallet_id.currentWalletId;
-export const selectNetworkType = (state: { wallet_id: WalletState }) =>
-  state.wallet_id.networkType;
+export const selectWalletId = (state: RootState) => state.wallet_id.currentWalletId;
+export const selectHasWallet = (state: RootState) =>
+  state.wallet_id.currentWalletId > 0;
+export const selectNetworkType = (state: RootState) => state.wallet_id.networkType;

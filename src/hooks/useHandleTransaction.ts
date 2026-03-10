@@ -8,8 +8,8 @@ import {
   clearTransaction,
   setTxOutputs,
 } from '../redux/transactionBuilderSlice';
-import { resetTransactions } from '../redux/transactionSlice';
 import { resetContract } from '../redux/contractSlice';
+import { logError, toErrorMessage } from '../utils/errorHandling';
 // import { optimisticRemoveSpentByOutpoints, requestUTXORefreshForMany } from '../workers/UTXOWorkerService';
 
 interface BuildTransactionResult {
@@ -29,7 +29,8 @@ const useHandleTransaction = (
   setErrorMessage: React.Dispatch<React.SetStateAction<string | null>>,
   setShowRawTxPopup: React.Dispatch<React.SetStateAction<boolean>>,
   setShowTxIdPopup: React.Dispatch<React.SetStateAction<boolean>>, // Added parameter
-  setLoading: React.Dispatch<React.SetStateAction<boolean>>
+  setLoading: React.Dispatch<React.SetStateAction<boolean>>,
+  onBroadcastSuccess?: () => void
 ) => {
   const dispatch = useDispatch();
 
@@ -126,10 +127,13 @@ const useHandleTransaction = (
       setErrorMessage(transaction.errorMsg);
       setShowRawTxPopup(true);
       setLoading(false);
-    } catch (err: any) {
-      console.error('Error building transaction:', err);
+    } catch (err) {
+      logError('useHandleTransaction.handleBuildTransaction', err, {
+        outputCount: txOutputs.length,
+        utxoCount: selectedUtxos.length,
+      });
       setRawTX('');
-      setErrorMessage('Error building transaction: ' + err.message);
+      setErrorMessage('Error building transaction: ' + toErrorMessage(err));
       setShowRawTxPopup(true);
       setLoading(false);
     }
@@ -141,34 +145,43 @@ const useHandleTransaction = (
   ) => {
     try {
       setLoading(true);
-      // ⬇️ pass selectedUtxos so the service can tell the worker what to prune/refresh
       const transactionID = await TransactionService.sendTransaction(
         rawTX,
         selectedUtxos
       );
 
-      if (transactionID.txid) {
-        setTransactionId(transactionID.txid);
-        setShowTxIdPopup(true);
+      // If we didn't get a txid, treat as an error even if no errorMessage was returned.
+      if (!transactionID?.txid) {
+        const msg =
+          transactionID?.errorMessage ?? 'Broadcast failed (no txid returned).';
+        setErrorMessage(msg);
+        await Toast.show({ text: `Error: ${msg}` });
+        setShowTxIdPopup(false);
+        setLoading(false);
+        return { txid: null, errorMessage: msg };
       }
 
-      if (transactionID.errorMessage) {
-        setErrorMessage(transactionID.errorMessage);
-        await Toast.show({ text: `Error: ${transactionID.errorMessage}` });
-      } else {
-        setRawTX('');
-        dispatch(resetTransactions());
-        dispatch(resetContract());
-      }
+      // Success path
+      setTransactionId(transactionID.txid);
+      setShowTxIdPopup(true);
+
+      // Clear state only on success
+      setRawTX('');
+      dispatch(clearTransaction());
+      dispatch(resetContract());
+      onBroadcastSuccess?.();
 
       setLoading(false);
       return transactionID;
-    } catch (error: any) {
-      console.error('Error sending transaction:', error);
-      setErrorMessage('Error sending transaction: ' + error.message);
+    } catch (error) {
+      logError('useHandleTransaction.handleSendTransaction', error, {
+        selectedUtxoCount: selectedUtxos.length,
+      });
+      const message = toErrorMessage(error);
+      setErrorMessage('Error sending transaction: ' + message);
       setShowTxIdPopup(false);
       setLoading(false);
-      return { txid: null, errorMessage: error.message };
+      return { txid: null, errorMessage: message };
     }
   };
 

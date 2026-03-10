@@ -18,11 +18,11 @@ const ASSETS = ['BTC', 'BCH', 'ETH'] as const;
 const getLogo = (symbol: string) => {
   switch (symbol) {
     case 'BTC':
-      return <FaBitcoin className="text-orange-500 text-3xl mr-3" />;
+      return <FaBitcoin className="wallet-coin-btc text-3xl mr-3" />;
     case 'BCH':
-      return <FaBitcoin className="text-green-500 text-3xl mr-3" />;
+      return <FaBitcoin className="wallet-accent-icon text-3xl mr-3" />;
     case 'ETH':
-      return <FaEthereum className="text-blue-500 text-3xl mr-3" />;
+      return <FaEthereum className="wallet-coin-eth text-3xl mr-3" />;
     default:
       return null;
   }
@@ -66,18 +66,18 @@ const PriceFeed: React.FC = () => {
           return (
             <div
               key={symbol}
-              className="scrolling-price-item bg-white px-6 py-12 rounded-lg shadow-lg grid grid-cols-[auto,1fr,auto] items-center gap-x-4 mx-4"
+              className="scrolling-price-item wallet-card px-6 py-12 rounded-lg shadow-lg grid grid-cols-[auto,1fr,auto] items-center gap-x-4 mx-4"
             >
               {getLogo(symbol)}
               <div className="flex flex-col">
-                <span className="font-semibold text-lg text-gray-800">
+                <span className="font-semibold text-lg wallet-text-strong">
                   {symbol}
                 </span>
-                <span className="text-gray-500 text-xs">USD</span>
+                <span className="wallet-muted text-xs">USD</span>
               </div>
               <div className="flex flex-col items-end font-bold">
-                <div className="text-gray-700 text-xl">{display}</div>
-                {/* <span className="text-gray-400 text-xs">{meta}</span> */}
+                <div className="wallet-text-strong text-xl">{display}</div>
+                {/* <span className="wallet-muted text-xs">{meta}</span> */}
               </div>
             </div>
           );

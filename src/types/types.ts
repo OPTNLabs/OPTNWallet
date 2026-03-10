@@ -7,8 +7,7 @@ export interface Token {
     capability: 'none' | 'mutable' | 'minting';
     commitment: string;
   };
-  BcmrTokenMetadata?: BcmrTokenMetadata;      // NEW INCLUSION
-
+  BcmrTokenMetadata?: BcmrTokenMetadata; // NEW INCLUSION
 }
 
 // ElectrumClient related interfaces with updates
@@ -24,15 +23,16 @@ export interface UTXO {
   prefix?: string; // Default to 'bchtest' for now
   token_data?: Token | null; // only used for fetching response from electrum server
   token?: Token | null; // token can be null in some cases
-  privateKey?: Uint8Array; // Optional field for private key used in P2PKH
   contractName?: string; // For contract-related UTXOs
   abi?: object[]; // ABI for contract-related UTXOs
   id?: string;
   isPaperWallet?: boolean;
-  unlocker?: any;
+  unlocker?: unknown;
   // **New Fields**
   contractFunction?: string;
-  contractFunctionInputs?: { [key: string]: any };
+  contractFunctionInputs?: Record<string, unknown>;
+  // Optional: provide constructor args at spend-time (bypass DB lookup)
+  contractConstructorArgs?: unknown[];
 }
 
 // TransactionHistoryItem remains the same
@@ -143,38 +143,38 @@ export type Address = {
 // BCMR Responses
 // NEW INCLUSION BELOW
 export interface BcmrTokenMetadata {
-  name: string
-  description: string
+  name: string;
+  description: string;
   token: {
-    category: string
-    decimals: number
-    symbol: string
-  }
-  is_nft: boolean
-  nfts?: Record<string, BcmrNftMetadata>
-  uris: Record<string, string>
-  extensions: BcmrExtensions
+    category: string;
+    decimals: number;
+    symbol: string;
+  };
+  is_nft: boolean;
+  nfts?: Record<string, BcmrNftMetadata>;
+  uris: Record<string, string>;
+  extensions: BcmrExtensions;
 }
 
 export interface BcmrNftMetadata {
-  name: string
-  description: string
-  uris: Record<string, string>
-  extensions: BcmrExtensions
+  name: string;
+  description: string;
+  uris: Record<string, string>;
+  extensions: BcmrExtensions;
 }
 
 export interface BcmrIndexerResponse {
-  name: string
-  description: string
+  name: string;
+  description: string;
   token: {
-    category: string
-    decimals: number
-    symbol: string
-  }
-  is_nft: boolean
-  type_metadata: BcmrNftMetadata
-  uris: Record<string, string>
-  extensions: BcmrExtensions
+    category: string;
+    decimals: number;
+    symbol: string;
+  };
+  is_nft: boolean;
+  type_metadata: BcmrNftMetadata;
+  uris: Record<string, string>;
+  extensions: BcmrExtensions;
 }
 
 export type BcmrExtensions = {
@@ -182,4 +182,29 @@ export type BcmrExtensions = {
     | string
     | { [key: string]: string }
     | { [keyA: string]: { [keyB: string]: string } };
+};
+
+export type ErrorContext = Record<string, unknown>;
+
+export type AppErrorCode =
+  | 'UNKNOWN'
+  | 'ELECTRUM'
+  | 'NETWORK'
+  | 'DATABASE'
+  | 'VALIDATION'
+  | 'WALLETCONNECT';
+
+export interface AppError {
+  code: AppErrorCode;
+  message: string;
+  ts: number;
+  cause?: unknown;
+  context?: ErrorContext;
+}
+
+export interface ContractAddressRecord {
+  address: string;
+  tokenAddress: string;
+  contractName: string;
+  abi: unknown[];
 }

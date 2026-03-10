@@ -22,7 +22,7 @@ const ContractDetails = () => {
             <h4 className="text-xl font-semibold">
               <a
                 href="https://github.com/OPTNLabs/OPTNWallet/blob/main/src/apis/ContractManager/artifacts/bip38.json"
-                className="text-blue-600 hover:underline"
+                className="wallet-link hover:underline"
                 target="_blank"
                 rel="noopener noreferrer"
               >
@@ -58,7 +58,7 @@ const ContractDetails = () => {
             <h4 className="text-xl font-semibold">
               <a
                 href="https://cashscript.org/docs/guides/covenants#restricting-p2pkh-recipients"
-                className="text-blue-600 hover:underline"
+                className="wallet-link hover:underline"
                 target="_blank"
                 rel="noopener noreferrer"
               >
@@ -94,7 +94,7 @@ const ContractDetails = () => {
             <h4 className="text-xl font-semibold">
               <a
                 href="https://github.com/OPTNLabs/OPTNWallet/blob/main/src/apis/ContractManager/artifacts/escrowMS2.json"
-                className="text-blue-600 hover:underline"
+                className="wallet-link hover:underline"
                 target="_blank"
                 rel="noopener noreferrer"
               >
@@ -130,7 +130,7 @@ const ContractDetails = () => {
             <h4 className="text-xl font-semibold">
               <a
                 href="https://github.com/OPTNLabs/OPTNWallet/blob/main/src/apis/ContractManager/artifacts/msvault.json"
-                className="text-blue-600 hover:underline"
+                className="wallet-link hover:underline"
                 target="_blank"
                 rel="noopener noreferrer"
               >
@@ -168,7 +168,7 @@ const ContractDetails = () => {
             <h4 className="text-xl font-semibold">
               <a
                 href="https://github.com/CashScript/cashscript/blob/master/examples/p2pkh.cash"
-                className="text-blue-600 hover:underline"
+                className="wallet-link hover:underline"
                 target="_blank"
                 rel="noopener noreferrer"
               >
@@ -203,7 +203,7 @@ const ContractDetails = () => {
             <h4 className="text-xl font-semibold">
               <a
                 href="https://github.com/CashScript/cashscript/blob/master/examples/transfer_with_timeout.cash"
-                className="text-blue-600 hover:underline"
+                className="wallet-link hover:underline"
                 target="_blank"
                 rel="noopener noreferrer"
               >

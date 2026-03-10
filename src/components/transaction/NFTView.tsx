@@ -38,11 +38,11 @@ const NFTView: React.FC<NFTViewProps> = ({
           type="text"
           value={recipientAddress}
           onChange={(e) => setRecipientAddress(e.target.value)}
-          className="border p-2 w-full break-words whitespace-normal"
+          className="wallet-input p-2 w-full break-words whitespace-normal"
         />
         <button
           onClick={scanBarcode}
-          className="ml-2 bg-green-500 text-white p-2 rounded"
+          className="ml-2 wallet-btn-primary p-2"
           title="Scan QR Code"
         >
           <FaCamera />
@@ -54,7 +54,7 @@ const NFTView: React.FC<NFTViewProps> = ({
           type="number"
           value={transferAmount}
           onChange={handleTransferAmountChange}
-          className="border p-2 w-full break-words whitespace-normal"
+          className="wallet-input p-2 w-full break-words whitespace-normal"
           min={DUST}
         />
       </div>
@@ -62,18 +62,24 @@ const NFTView: React.FC<NFTViewProps> = ({
         <label className="block font-medium mb-1">NFT Token Amount</label>
         <input
           type="number"
-          value={Number(tokenAmount)}
+          value={
+            typeof tokenAmount === 'bigint'
+              ? tokenAmount.toString()
+              : String(tokenAmount ?? '')
+          }
           onChange={() => {}} // Disabled
-          className="border p-2 w-full break-words whitespace-normal"
+          className="wallet-input p-2 w-full break-words whitespace-normal"
           disabled
         />
       </div>
       <div className="mb-2">
-        <label className="block font-medium mb-1">Genesis UTXO for new NFT</label>
+        <label className="block font-medium mb-1">
+          Genesis UTXO for new NFT
+        </label>
         <select
           value={selectedTokenCategory}
           onChange={(e) => setSelectedTokenCategory(e.target.value)}
-          className="border p-2 w-full break-words whitespace-normal"
+          className="wallet-input p-2 w-full break-words whitespace-normal"
         >
           <option value="">Select Genesis UTXO</option>
           {selectedUtxos
@@ -88,13 +94,13 @@ const NFTView: React.FC<NFTViewProps> = ({
       <div className="flex justify-between items-center mt-4">
         <button
           onClick={() => setShowNFTConfigPopup(true)}
-          className="bg-purple-500 text-white font-bold py-2 px-4 rounded"
+          className="wallet-btn-secondary font-bold py-2 px-4"
         >
           Configure NFT
         </button>
         <button
           onClick={handleAddOutput}
-          className="bg-blue-500 font-bold text-white py-2 px-4 rounded"
+          className="wallet-btn-primary font-bold py-2 px-4"
         >
           Add Output
         </button>
