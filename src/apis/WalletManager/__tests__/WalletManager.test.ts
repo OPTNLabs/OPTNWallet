@@ -12,6 +12,15 @@ vi.mock('../../../utils/schema/schema', () => ({
   createTables: vi.fn(),
 }));
 
+vi.mock('../../../services/SecretCryptoService', () => ({
+  default: {
+    encryptText: vi.fn(async (v: string) => `enc:${v}`),
+    decryptText: vi.fn(async (v: string) =>
+      typeof v === 'string' && v.startsWith('enc:') ? v.slice(4) : v
+    ),
+  },
+}));
+
 type MockStmt = {
   bind: ReturnType<typeof vi.fn>;
   step: ReturnType<typeof vi.fn>;
@@ -39,7 +48,7 @@ describe('WalletManager', () => {
   });
 
   it('createWallet returns false if wallet already exists', async () => {
-    const existsStmt = makeStmt([{ count: 1 }]);
+    const existsStmt = makeStmt([{ mnemonic: 'enc:mnemonic', passphrase: 'enc:pass' }]);
     const insertStmt = makeStmt();
 
     const db = {
@@ -65,7 +74,7 @@ describe('WalletManager', () => {
   });
 
   it('createWallet inserts and persists when wallet does not exist', async () => {
-    const existsStmt = makeStmt([{ count: 0 }]);
+    const existsStmt = makeStmt([{ mnemonic: 'enc:other', passphrase: 'enc:other-pass' }]);
     const insertStmt = makeStmt();
 
     const db = {
@@ -88,8 +97,8 @@ describe('WalletManager', () => {
     expect(created).toBe(true);
     expect(insertStmt.run).toHaveBeenCalledWith([
       'name',
-      'mnemonic',
-      'pass',
+      'enc:mnemonic',
+      'enc:pass',
       Network.MAINNET,
       0,
     ]);
@@ -97,7 +106,7 @@ describe('WalletManager', () => {
   });
 
   it('setWalletId resolves wallet id as number', async () => {
-    const selectStmt = makeStmt([{ id: '42' }]);
+    const selectStmt = makeStmt([{ id: '42', mnemonic: 'enc:mnemonic', passphrase: 'enc:pass' }]);
     const db = {
       prepare: vi.fn(() => selectStmt),
     };
