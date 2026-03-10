@@ -11,6 +11,8 @@ jobs:
     environment: production
     permissions:
       contents: write
+      id-token: write
+      attestations: write
 
     concurrency:
       group: android-release-${{ github.ref }}
@@ -18,6 +20,16 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Verify release tag is on main
+        run: |
+          git fetch origin main --depth=1
+          git merge-base --is-ancestor "${GITHUB_SHA}" "origin/main" || {
+            echo "Release tag must point to a commit reachable from main."
+            exit 1
+          }
 
       - name: Setup Node
         uses: actions/setup-node@v4
@@ -44,6 +56,18 @@ jobs:
         uses: gradle/actions/setup-gradle@v4
 
       # ---- Signing: map your GitHub secrets to the env your app/build.gradle expects ----
+      - name: Validate signing secrets
+        env:
+          KEYSTORE_B64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          STORE_PASS: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          KEY_PASS: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          test -n "$KEYSTORE_B64"
+          test -n "$STORE_PASS"
+          test -n "$KEY_ALIAS"
+          test -n "$KEY_PASS"
+
       - name: Prepare keystore file
         run: echo "${{ secrets.ANDROID_KEYSTORE_BASE64 }}" | base64 -d > android/keystore.jks
 
@@ -63,8 +87,25 @@ jobs:
           path: android/**/outputs/bundle/release/*.aab
           retention-days: 30
 
+      - name: Generate checksums
+        run: sha256sum android/**/outputs/bundle/release/*.aab > android/release-sha256.txt
+
+      - name: Upload checksums
+        uses: actions/upload-artifact@v4
+        with:
+          name: app-release-checksums
+          path: android/release-sha256.txt
+          retention-days: 30
+
+      - name: Attest release bundle provenance
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: android/**/outputs/bundle/release/*.aab
+
       - name: Create GitHub Release
         if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
         with:
-          files: android/**/outputs/bundle/release/*.aab
+          files: |
+            android/**/outputs/bundle/release/*.aab
+            android/release-sha256.txt

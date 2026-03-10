@@ -62,8 +62,12 @@ export async function buildApprovedNamespacesForCurrentWallet(
   if (!keys.length) {
     throw new Error('No keys available for current wallet');
   }
-  const firstAddress = keys[0].address;
-  const account = `${namespace}${firstAddress.slice(addressPrefix.length)}`;
+  const accounts = keys.map((k) => {
+    const bare = k.address.startsWith(addressPrefix)
+      ? k.address.slice(addressPrefix.length)
+      : k.address;
+    return `${namespace}:${bare}`;
+  });
 
   return buildApprovedNamespaces({
     proposal: proposal.params,
@@ -72,10 +76,28 @@ export async function buildApprovedNamespacesForCurrentWallet(
         chains: [namespace],
         methods: BCH_METHODS,
         events: BCH_EVENTS,
-        accounts: [account],
+        accounts,
       },
     },
   });
+}
+
+export function normalizeWalletAddressCandidate(
+  candidate: string,
+  addressPrefix: string
+): string | null {
+  const value = candidate.trim();
+  if (!value) return null;
+  if (value.startsWith(addressPrefix)) return value;
+
+  // CAIP-10 BCH account: bch:<chain>:<address_without_prefix>
+  const caipMatch = /^bch:[^:]+:(.+)$/i.exec(value);
+  if (caipMatch?.[1]) return `${addressPrefix}${caipMatch[1]}`;
+
+  // Bare cashaddr payload (without prefix)
+  if (!value.includes(':')) return `${addressPrefix}${value}`;
+
+  return null;
 }
 
 export function extractWalletConnectMessage(

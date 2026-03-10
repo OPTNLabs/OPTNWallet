@@ -65,11 +65,6 @@ export function SignMessageModal() {
           <pre className="whitespace-pre-wrap break-words">{message}</pre>
         </div>
 
-        <div className="wallet-surface rounded p-2 text-xs wallet-muted max-h-24 overflow-auto">
-          <strong>Raw Request:</strong>
-          <pre>{JSON.stringify(request, null, 2)}</pre>
-        </div>
-
         <div className="flex justify-around pt-2">
           <button
             onClick={handleSign}
