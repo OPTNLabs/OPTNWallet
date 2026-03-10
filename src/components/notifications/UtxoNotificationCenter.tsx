@@ -18,19 +18,19 @@ const ToastItem: React.FC<{
 
   return (
     <div
-      className="pointer-events-auto mb-3 w-80 max-w-[92vw] rounded-2xl border border-emerald-300/60 bg-white/95 p-4 shadow-xl backdrop-blur-sm"
+      className="pointer-events-auto mb-3 w-80 max-w-[92vw] wallet-card p-4 shadow-xl backdrop-blur-sm"
       role="status"
       aria-live="polite"
     >
       <div className="flex items-start gap-3">
-        <div className="mt-1 h-2.5 w-2.5 shrink-0 rounded-full bg-emerald-500" />
+        <div className="mt-1 h-2.5 w-2.5 shrink-0 rounded-full wallet-accent-icon" />
         <div className="flex-1">
-          <div className="text-sm font-semibold text-gray-900">{title}</div>
-          <div className="mt-0.5 text-sm text-gray-700">{body}</div>
+          <div className="text-sm font-semibold wallet-text-strong">{title}</div>
+          <div className="mt-0.5 text-sm wallet-muted">{body}</div>
         </div>
         <button
           onClick={() => onClose(id)}
-          className="ml-2 rounded-full p-1 text-gray-500 hover:bg-gray-100"
+          className="ml-2 rounded-full p-1 wallet-muted hover:brightness-95"
           aria-label="Dismiss"
           title="Dismiss"
         >

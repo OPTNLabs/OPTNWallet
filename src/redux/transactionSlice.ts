@@ -30,32 +30,36 @@ const transactionSlice = createSlice({
         transactions: TransactionHistoryItem[];
       }>
     ) => {
-      const currentTransactions =
-        state.transactions[action.payload.wallet_id] || [];
-      const updatedTransactions = action.payload.transactions.reduce(
-        (acc, tx) => {
-          const existingTx = currentTransactions.find(
-            (t) => t.tx_hash === tx.tx_hash
-          );
-          if (existingTx) {
-            if (
-              existingTx.height === -1 ||
-              existingTx.height === 0 ||
-              existingTx.height !== tx.height
-            ) {
-              return acc.concat(tx);
-            } else {
-              return acc;
-            }
-          } else {
-            return acc.concat(tx);
-          }
-        },
-        [] as TransactionHistoryItem[]
+      const currentTransactions = state.transactions[action.payload.wallet_id] || [];
+      if (action.payload.transactions.length === 0) return;
+
+      const existingByHash = new Map(
+        currentTransactions.map((tx) => [tx.tx_hash, tx] as const)
       );
+      const updatedTransactions: TransactionHistoryItem[] = [];
+
+      for (const tx of action.payload.transactions) {
+        const existingTx = existingByHash.get(tx.tx_hash);
+        if (!existingTx) {
+          updatedTransactions.push(tx);
+          continue;
+        }
+
+        if (
+          existingTx.height === -1 ||
+          existingTx.height === 0 ||
+          existingTx.height !== tx.height
+        ) {
+          updatedTransactions.push(tx);
+        }
+      }
+
+      if (updatedTransactions.length === 0) return;
+      const updatedHashes = new Set(updatedTransactions.map((tx) => tx.tx_hash));
+
       state.transactions[action.payload.wallet_id] = [
         ...currentTransactions.filter(
-          (t) => !updatedTransactions.find((utx) => utx.tx_hash === t.tx_hash)
+          (t) => !updatedHashes.has(t.tx_hash)
         ),
         ...updatedTransactions,
       ];

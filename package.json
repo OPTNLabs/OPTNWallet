@@ -7,18 +7,36 @@
     "dev": "vite --host",
     "test": "vitest run",
     "test:watch": "vitest",
+    "addons:validate": "vitest run src/services/addons/__tests__/BuiltinManifestValidation.test.ts",
+    "typecheck": "tsc -b",
+    "typecheck:core": "tsc -p tsconfig.core.json --noEmit",
     "build": "tsc && vite build",
     "lint": "eslint . --ext ts,tsx --report-unused-disable-directives --max-warnings 0",
+    "lint:core": "eslint src --ext ts,tsx --ignore-pattern 'src/pages/apps/**' --report-unused-disable-directives --max-warnings 0",
+    "ci:core": "npm run lint:core && npm run typecheck:core && npm run test -- --run && npm run build",
+    "security:audit": "npm audit --omit=dev --audit-level=high",
+    "security:audit:all": "npm audit --audit-level=high",
+    "security:test": "vitest run src/utils/__tests__/secureMemory.test.ts src/redux/walletconnect/__tests__/helpers.security.test.ts",
+    "security:ci": "npm run security:audit && npm run security:test",
     "preview": "vite preview",
     "postinstall": "patch-package",
     "format": "prettier --write \"src/**/*.{js,jsx,ts,tsx,json,css,scss,md}\"",
     "capacitor:init": "npx cap init",
     "capacitor:add:android": "npx cap add android",
+    "capacitor:add:ios": "npx cap add ios",
     "capacitor:copy": "npx cap copy",
     "capacitor:sync": "npx cap sync",
+    "capacitor:sync:android": "npx cap sync android",
+    "capacitor:sync:ios": "npx cap sync ios",
     "capacitor:open:android": "npx cap open android",
+    "capacitor:open:ios": "npx cap open ios",
     "serve": "npx serve -s dist",
-    "build:aab": "dotenv -e .env -- npm run build && npx cap sync && npx cap build android"
+    "android:prepare": "dotenv -e .env -- npm run build && npm run capacitor:sync:android",
+    "android:apk:dev": "npm run android:prepare && cd android && ./gradlew assembleDebug",
+    "android:apk:dev:install": "npm run android:apk:dev && adb install -r android/app/build/outputs/apk/debug/app-debug.apk",
+    "android:apk:prod": "npm run android:prepare && cd android && ./gradlew assembleRelease",
+    "android:aab:prod": "npm run android:prepare && cd android && ./gradlew bundleRelease",
+    "build:aab": "npm run android:aab:prod"
   },
   "dependencies": {
     "@bitauth/libauth": "^3.0.0",
@@ -101,5 +119,6 @@
     "vite": "^5.2.0",
     "vite-plugin-node-polyfills": "^0.22.0",
     "vitest": "^3.2.4"
-  }
+  },
+  "packageManager": "yarn@1.22.22+sha512.a6b2f7906b721bba3d67d4aff083df04dad64c399707841b7acf00f6b133b7ac24255f2652fa22ae3534329dc6180534e98d17432037ff6fd140556e2bb3137e"
 }

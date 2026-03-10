@@ -31,7 +31,7 @@ import { derivePrefix } from './derivePublicKeyHash';
 // see    https://github.com/Electron-Cash/Electron-Cash/blob/49f9f672364f50053a026e4a5cb30e92db2d195d/electroncash/bitcoin.py#L524
 function message_magic(str: string) {
   const length = utf8ToBin(str).length.toString(16);
-  let payload = `\x18Bitcoin Signed Message:\n`;
+  const payload = `\x18Bitcoin Signed Message:\n`;
   return new Uint8Array([
     ...utf8ToBin(payload),
     ...hexToBin(length),
@@ -66,23 +66,23 @@ export class SignedMessage implements SignedMessageI {
   ): Promise<SignedMessageResponseI> {
     const secp256k1 = await instantiateSecp256k1();
 
-    let messageHash = await hash_message(message);
-    let rs = secp256k1.signMessageHashRecoverableCompact(
+    const messageHash = await hash_message(message);
+    const rs = secp256k1.signMessageHashRecoverableCompact(
       privateKey,
       messageHash
     );
     if (typeof rs === 'string') {
       throw new Error(rs);
     }
-    let sigDer = secp256k1.signMessageHashDER(
+    const sigDer = secp256k1.signMessageHashDER(
       privateKey,
       messageHash
     ) as Uint8Array;
-    let sigSchnorr = secp256k1.signMessageHashSchnorr(
+    const sigSchnorr = secp256k1.signMessageHashSchnorr(
       privateKey,
       messageHash
     ) as Uint8Array;
-    let electronEncoding = new Uint8Array([
+    const electronEncoding = new Uint8Array([
       ...[31 + rs.recoveryId],
       ...rs.signature,
     ]);
@@ -122,8 +122,8 @@ export class SignedMessage implements SignedMessageI {
   ): Promise<VerifyMessageResponseI> {
     // Check that the signature is valid for the given message.
     const secp256k1 = await instantiateSecp256k1();
-    let messageHash = await hash_message(message);
-    let sig = base64ToBin(signature);
+    const messageHash = await hash_message(message);
+    const sig = base64ToBin(signature);
 
     let signatureValid = false;
     let keyMatch = false;
@@ -131,9 +131,9 @@ export class SignedMessage implements SignedMessageI {
     let pkh, signatureType;
 
     if (sig.length === 65) {
-      let rawSig = sig.length === 65 ? sig.slice(1) : sig;
-      let recoveryId = sig.slice(0, 1)[0] - 31;
-      let recoveredPk = secp256k1.recoverPublicKeyCompressed(
+      const rawSig = sig.length === 65 ? sig.slice(1) : sig;
+      const recoveryId = sig.slice(0, 1)[0] - 31;
+      const recoveredPk = secp256k1.recoverPublicKeyCompressed(
         rawSig,
         recoveryId as RecoveryId,
         messageHash
@@ -151,8 +151,8 @@ export class SignedMessage implements SignedMessageI {
       );
       if (cashaddr) {
         // Validate that the signature actually matches the provided cashaddr
-        let prefix = derivePrefix(cashaddr);
-        let resultingCashaddr = encodeCashAddress({
+        const prefix = derivePrefix(cashaddr);
+        const resultingCashaddr = encodeCashAddress({
           prefix,
           type: CashAddressType.p2pkh,
           payload: pkh,

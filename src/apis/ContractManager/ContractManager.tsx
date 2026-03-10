@@ -11,28 +11,52 @@ import parseInputValue from '../../utils/parseInputValue';
 import { Network } from '../../redux/networkSlice';
 import { store } from '../../redux/store';
 import ElectrumService from '../../services/ElectrumService';
+import KeyService from '../../services/KeyService';
 import { UTXO } from '../../types/types';
-import p2pkhArtifact from './artifacts/p2pkh.json';
-import bip38Artifact from './artifacts/bip38.json';
-import transferWithTimeoutArtifact from './artifacts/transfer_with_timeout.json';
-// import announcementArtifact from './artifacts/announcement.json';
-import escrowArtifact from './artifacts/escrow.json';
-import escrowMS2Artifact from './artifacts/escrowMS2.json';
-import MSVault from './artifacts/MSVault.json';
+import AddonsRegistry from '../../services/AddonsRegistry';
+import {
+  findAddonContract,
+  normalizeAddonKey,
+  outpointKey,
+  parseJsonOr,
+  serializeUnlockFunctions,
+  toStoredContractUtxo,
+} from './helpers';
+import { createBuiltinArtifactCache } from './artifacts';
+import { parseContractInstanceRow } from './parsers';
+import type {
+  AbiFunction,
+  AbiInput,
+  AvailableContractEntry,
+  ContractArtifact,
+  ContractInstanceRow,
+  ContractManagerApi,
+  SqlRow,
+  StoredContractRow,
+  StoredContractUtxo,
+} from './types';
+type ContractCtorArtifact = ConstructorParameters<typeof Contract>[0];
 
-export default function ContractManager() {
+export type {
+  AvailableContractEntry,
+  ContractArtifact,
+  ContractInstanceRow,
+  StoredContractUtxo,
+} from './types';
+
+export default function ContractManager(): ContractManagerApi {
   const dbService = DatabaseService();
 
+  // ---- Addons (no React hooks here; ContractManager is not a component) ----
+  const addons = AddonsRegistry();
+
+  // Kick off init once per service instance; safe even if BUILTIN_ADDONS is empty.
+  const addonsInit = addons.init().catch((e) => {
+    console.warn('[addons] init failed:', e);
+  });
+
   // Cache artifacts in memory to avoid redundant loading
-  const artifactCache: { [key: string]: any } = {
-    p2pkh: p2pkhArtifact,
-    transfer_with_timeout: transferWithTimeoutArtifact,
-    // announcement: announcementArtifact,
-    escrow: escrowArtifact,
-    escrowMS2: escrowMS2Artifact,
-    bip38: bip38Artifact,
-    msVault: MSVault,
-  };
+  const artifactCache = createBuiltinArtifactCache();
 
   return {
     createContract,
@@ -48,47 +72,13 @@ export default function ContractManager() {
     getContractUnlockFunction, // Added function to the exported object
   };
 
-  // Helper function to parse contract instance from DB row
-  function parseContractInstance(row: any) {
-    const contractInstance = {
-      ...row,
-      balance: BigInt(row.balance || 0),
-      utxos:
-        typeof row.utxos === 'string'
-          ? JSON.parse(row.utxos).map((utxo: any) => ({
-              ...utxo,
-              amount: BigInt(utxo.amount),
-              contractFunction: utxo.contractFunction || undefined, // New Field
-              contractFunctionInputs: utxo.contractFunctionInputs
-                ? JSON.parse(utxo.contractFunctionInputs)
-                : undefined, // New Field
-            }))
-          : [],
-      artifact:
-        typeof row.artifact === 'string' ? JSON.parse(row.artifact) : null,
-      abi: typeof row.abi === 'string' ? JSON.parse(row.abi) : [],
-      redeemScript:
-        typeof row.redeemScript === 'string'
-          ? JSON.parse(row.redeemScript)
-          : null,
-      unlock: typeof row.unlock === 'string' ? JSON.parse(row.unlock) : null,
-      updated_at: row.updated_at, // Ensure updated_at is included
-    };
+  // ------------------------
+  // Helpers
+  // ------------------------
 
-    if (contractInstance.unlock) {
-      contractInstance.unlock = Object.fromEntries(
-        Object.entries(contractInstance.unlock).map(([key, funcStr]) => [
-          key,
-          new Function(`return ${funcStr}`)(),
-        ])
-      );
-    }
-
-    // **Add Logging Here**
-    // console.log('Parsed Contract Instance:', contractInstance);
-
-    return contractInstance;
-  }
+  // ------------------------
+  // Public API
+  // ------------------------
 
   async function fetchConstructorArgs(address: string) {
     await dbService.ensureDatabaseStarted();
@@ -99,18 +89,10 @@ export default function ContractManager() {
     const statement = db.prepare(query);
     statement.bind([address]);
 
-    let constructorArgs: any[] | null = null;
+    let constructorArgs: unknown[] | null = null;
     if (statement.step()) {
-      const row = statement.getAsObject();
-      try {
-        constructorArgs =
-          typeof row.constructor_args === 'string'
-            ? JSON.parse(row.constructor_args)
-            : null;
-      } catch (e) {
-        console.error('Error parsing JSON:', e);
-        constructorArgs = null;
-      }
+      const row = statement.getAsObject() as SqlRow;
+      constructorArgs = parseJsonOr<unknown[] | null>(row.constructor_args, null);
     }
     statement.free();
     return constructorArgs;
@@ -118,11 +100,11 @@ export default function ContractManager() {
 
   async function createContract(
     artifactName: string,
-    constructorArgs: any[],
+    constructorArgs: unknown[],
     currentNetwork: Network
   ) {
     try {
-      const artifact = loadArtifact(artifactName);
+      const artifact = await loadArtifact(artifactName);
       if (!artifact) {
         throw new Error(`Artifact ${artifactName} could not be loaded`);
       }
@@ -133,6 +115,7 @@ export default function ContractManager() {
         currentNetwork === Network.MAINNET ? 'bitcoincash' : 'bchtest';
 
       if (
+        Array.isArray(artifact.constructorInputs) &&
         artifact.constructorInputs.length > 0 &&
         (!constructorArgs ||
           constructorArgs.length !== artifact.constructorInputs.length)
@@ -140,11 +123,11 @@ export default function ContractManager() {
         throw new Error('Constructor arguments are required');
       }
 
-      const parsedArgs = constructorArgs.map((arg, index) =>
+      const parsedArgs = (constructorArgs || []).map((arg, index) =>
         parseInputValue(arg, artifact.constructorInputs[index].type)
       );
 
-      const contract = new Contract(artifact, parsedArgs, {
+      const contract = new Contract(artifact as ContractCtorArtifact, parsedArgs, {
         provider,
         addressType,
       });
@@ -152,19 +135,9 @@ export default function ContractManager() {
       const balance = await contract.getBalance();
       const utxos = await ElectrumService.getUTXOs(contract.address);
 
-      const formattedUTXOs = utxos.map((utxo: any) => ({
-        tx_hash: utxo.tx_hash,
-        tx_pos: utxo.tx_pos,
-        amount: BigInt(utxo.value),
-        height: utxo.height,
-        token: utxo.token || undefined,
-        prefix,
-        // **Add New Fields** - TODO : implement inpur parsing
-        contractFunction: utxo.contractFunction || undefined,
-        contractFunctionInputs: utxo.contractFunctionInputs
-          ? JSON.stringify(utxo.contractFunctionInputs)
-          : undefined,
-      }));
+      const formattedUTXOs: StoredContractUtxo[] = utxos.map((utxo) =>
+        toStoredContractUtxo(utxo, prefix, false)
+      );
 
       await saveContractArtifact(artifact);
 
@@ -181,7 +154,6 @@ export default function ContractManager() {
           artifact
         );
 
-        // Save constructor arguments to the database
         await saveConstructorArgs(contract.address, constructorArgs, balance);
       }
 
@@ -197,12 +169,7 @@ export default function ContractManager() {
         utxos: formattedUTXOs,
         abi: artifact.abi,
         redeemScript: contract.redeemScript,
-        unlock: Object.fromEntries(
-          Object.entries(contract.unlock).map(([key, func]) => [
-            key,
-            func.toString(),
-          ])
-        ),
+        unlock: serializeUnlockFunctions(contract.unlock),
       };
     } catch (error) {
       console.error('Error creating contract:', error);
@@ -212,7 +179,7 @@ export default function ContractManager() {
 
   async function saveConstructorArgs(
     address: string,
-    constructorArgs: any[],
+    constructorArgs: unknown[],
     balance: bigint
   ) {
     await dbService.ensureDatabaseStarted();
@@ -224,10 +191,11 @@ export default function ContractManager() {
       VALUES (?, ?, ?)
       ON CONFLICT(address) DO UPDATE SET constructor_args=excluded.constructor_args, balance=excluded.balance
     `;
+
     const params = [
       address,
       JSON.stringify(
-        constructorArgs.map((arg) =>
+        (constructorArgs || []).map((arg) =>
           typeof arg === 'bigint' ? arg.toString() : arg
         )
       ),
@@ -237,16 +205,15 @@ export default function ContractManager() {
     const statement = db.prepare(insertQuery);
     statement.run(params);
     statement.free();
-    // await dbService.saveDatabaseToFile();
   }
 
   async function saveContractInstance(
     contractName: string,
     contract: Contract,
     balance: bigint,
-    utxos: any[],
-    abi: any[],
-    artifact: any
+    utxos: Array<Record<string, unknown>>,
+    abi: unknown[],
+    artifact: unknown
   ) {
     await dbService.ensureDatabaseStarted();
     const db = dbService.getDatabase();
@@ -260,6 +227,7 @@ export default function ContractManager() {
         utxos=excluded.utxos,
         updated_at=excluded.updated_at
     `;
+
     const params = [
       contractName,
       contract.address,
@@ -269,33 +237,24 @@ export default function ContractManager() {
       contract.bytecode,
       balance.toString(),
       JSON.stringify(
-        utxos.map((utxo) => ({ ...utxo, amount: utxo.amount.toString() }))
+        (utxos || []).map((utxo) => ({
+          ...utxo,
+          amount:
+            (utxo.amount as { toString?: () => string } | undefined)?.toString?.() ??
+            String(utxo.amount),
+        }))
       ),
       new Date().toISOString(),
-      new Date().toISOString(), // Set updated_at to current time
+      new Date().toISOString(),
       JSON.stringify(artifact),
       JSON.stringify(abi),
       JSON.stringify(contract.redeemScript),
-      JSON.stringify(
-        Object.fromEntries(
-          Object.entries(contract.unlock).map(([key, func]) => [
-            key,
-            func.toString(),
-          ])
-        )
-      ),
+      JSON.stringify(serializeUnlockFunctions(contract.unlock)),
     ];
-
-    // **Add Logging Before Saving**
-    // console.log('Saving contract instance with params:', params);
 
     const statement = db.prepare(insertQuery);
     statement.run(params);
     statement.free();
-    // await dbService.saveDatabaseToFile();
-
-    // **Add Logging After Saving**
-    // console.log('Contract instance saved successfully.');
   }
 
   async function deleteContractInstance(contractId: number) {
@@ -322,10 +281,10 @@ export default function ContractManager() {
       const query = 'SELECT * FROM instantiated_contracts';
       const statement = db.prepare(query);
 
-      const instances = [];
+      const instances: ContractInstanceRow[] = [];
       while (statement.step()) {
         const row = statement.getAsObject();
-        instances.push(parseContractInstance(row));
+        instances.push(parseContractInstanceRow(row));
       }
       statement.free();
       return instances;
@@ -344,10 +303,10 @@ export default function ContractManager() {
       const statement = db.prepare(query);
       statement.bind([address]);
 
-      let contractInstance: any = null;
+      let contractInstance: ContractInstanceRow | null = null;
       if (statement.step()) {
         const row = statement.getAsObject();
-        contractInstance = parseContractInstance(row);
+        contractInstance = parseContractInstanceRow(row);
       }
       statement.free();
       return contractInstance;
@@ -357,23 +316,78 @@ export default function ContractManager() {
     }
   }
 
-  function loadArtifact(artifactName: string) {
-    return artifactCache[artifactName] || null;
+  /**
+   * Load artifact by:
+   * - builtin key (e.g. "p2pkh")
+   * - addon key (e.g. "addon:<addonId>:<contractId>" or legacy "addon:<contractId>")
+   */
+  async function loadArtifact(artifactName: string): Promise<ContractArtifact | null> {
+    const raw = String(artifactName ?? '').trim();
+    if (!raw) return null;
+
+    // Builtin first (robust)
+    if (artifactCache[raw]) return artifactCache[raw];
+    const key = raw.toLowerCase();
+    if (artifactCache[key]) return artifactCache[key];
+
+    // Match by artifact.contractName (case-insensitive)
+    for (const k of Object.keys(artifactCache)) {
+      const a = artifactCache[k];
+      const cn = String(a?.contractName ?? '')
+        .trim()
+        .toLowerCase();
+      if (cn && cn === key) return a;
+    }
+
+    // Addon resolution
+    const parsed = normalizeAddonKey(raw);
+    if (!parsed?.contractId) return null;
+
+    await addonsInit;
+    const manifests = addons.getAddons();
+
+    const contract = findAddonContract(
+      manifests,
+      parsed.addonId,
+      parsed.contractId
+    );
+
+    if (!contract) return null;
+
+    return contract.cashscriptArtifact as ContractArtifact;
   }
 
-  function listAvailableArtifacts() {
+  async function listAvailableArtifacts(): Promise<AvailableContractEntry[]> {
     try {
-      return Object.keys(artifactCache).map((key) => ({
-        fileName: key,
-        contractName: artifactCache[key].contractName,
-      }));
+      const builtin: AvailableContractEntry[] = Object.keys(artifactCache).map(
+        (key) => ({
+          fileName: key,
+          contractName: artifactCache[key].contractName,
+          source: 'builtin',
+        })
+      );
+
+      await addonsInit;
+
+      const addonEntries: AvailableContractEntry[] = [];
+      for (const m of addons.getAddons()) {
+        for (const c of m.contracts) {
+          addonEntries.push({
+            fileName: `addon:${m.id}:${c.id}`,
+            contractName: c.name,
+            source: 'addon',
+          });
+        }
+      }
+
+      return [...builtin, ...addonEntries];
     } catch (error) {
       console.error('Error listing artifacts:', error);
       return [];
     }
   }
 
-  async function saveContractArtifact(artifact: any) {
+  async function saveContractArtifact(artifact: ContractArtifact) {
     try {
       await dbService.ensureDatabaseStarted();
       const db = dbService.getDatabase();
@@ -391,28 +405,30 @@ export default function ContractManager() {
           compiler_version=excluded.compiler_version,
           updated_at=excluded.updated_at
       `;
+
       const params = [
         artifact.contractName,
-        JSON.stringify(artifact.constructorInputs),
-        JSON.stringify(artifact.abi),
+        JSON.stringify(artifact.constructorInputs || []),
+        JSON.stringify(artifact.abi || []),
         artifact.bytecode,
-        artifact.source,
-        artifact.compiler.name,
-        artifact.compiler.version,
-        artifact.updatedAt,
+        artifact.source ?? 'unknown',
+        artifact.compiler?.name ?? 'unknown',
+        artifact.compiler?.version ?? 'unknown',
+        artifact.updatedAt ?? new Date().toISOString(),
       ];
 
       const statement = db.prepare(insertQuery);
       statement.run(params);
       statement.free();
-      // await dbService.saveDatabaseToFile();
     } catch (error) {
       console.error('Error saving contract artifact:', error);
       throw error;
     }
   }
 
-  async function getContractArtifact(contractName: string) {
+  async function getContractArtifact(
+    contractName: string
+  ): Promise<ContractArtifact | null> {
     try {
       await dbService.ensureDatabaseStarted();
       const db = dbService.getDatabase();
@@ -422,23 +438,26 @@ export default function ContractManager() {
       const statement = db.prepare(query);
       statement.bind([contractName]);
 
-      let artifact: any = null;
+      let artifact: ContractArtifact | null = null;
       if (statement.step()) {
-        const row = statement.getAsObject();
+        const row = statement.getAsObject() as SqlRow;
         artifact = {
-          contractName: row.contract_name,
+          contractName: String(row.contract_name),
           constructorInputs:
             typeof row.constructor_inputs === 'string'
-              ? JSON.parse(row.constructor_inputs)
+              ? parseJsonOr<AbiInput[]>(row.constructor_inputs, [])
               : [],
-          abi: typeof row.abi === 'string' ? JSON.parse(row.abi) : [],
-          bytecode: row.bytecode,
-          source: row.source,
+          abi:
+            typeof row.abi === 'string'
+              ? parseJsonOr<AbiFunction[]>(row.abi, [])
+              : [],
+          bytecode: String(row.bytecode ?? ''),
+          source: String(row.source ?? 'unknown'),
           compiler: {
-            name: row.compiler_name,
-            version: row.compiler_version,
+            name: String(row.compiler_name ?? 'unknown'),
+            version: String(row.compiler_version ?? 'unknown'),
           },
-          updatedAt: row.updated_at,
+          updatedAt: String(row.updated_at ?? ''),
         };
       }
       statement.free();
@@ -458,26 +477,13 @@ export default function ContractManager() {
         currentNetwork === Network.MAINNET ? 'bitcoincash' : 'bchtest';
 
       const utxos: UTXO[] = await ElectrumService.getUTXOs(address);
-      const formattedUTXOs = utxos.map((utxo: UTXO) => ({
-        tx_hash: utxo.tx_hash,
-        tx_pos: utxo.tx_pos,
-        amount: BigInt(utxo.value),
-        height: utxo.height,
-        token: utxo.token || undefined,
-        prefix,
-        contractFunction: utxo.contractFunction || null, // New Field
-        contractFunctionInputs: utxo.contractFunctionInputs
-          ? JSON.stringify(utxo.contractFunctionInputs)
-          : null, // New Field
-      }));
-
-      // **Add Logging After Formatting UTXOs**
-      // console.log('Formatted UTXOs with new fields:', formattedUTXOs);
+      const formattedUTXOs = utxos.map((utxo) =>
+        toStoredContractUtxo(utxo, prefix, true)
+      );
 
       await dbService.ensureDatabaseStarted();
       const db = dbService.getDatabase();
 
-      // Fetch contract instance
       const contractInstance = await getContractInstanceByAddress(address);
       if (!contractInstance) {
         throw new Error(`Contract instance not found for address: ${address}`);
@@ -494,7 +500,8 @@ export default function ContractManager() {
 
       const constructorArgs = await fetchConstructorArgs(address);
       if (
-        artifact.constructorInputs > 0 &&
+        Array.isArray(artifact.constructorInputs) &&
+        artifact.constructorInputs.length > 0 &&
         (!constructorArgs || constructorArgs.length === 0)
       ) {
         throw new Error(
@@ -502,81 +509,82 @@ export default function ContractManager() {
         );
       }
 
-      const parsedConstructorArgs = constructorArgs.map((arg, index) =>
+      const parsedConstructorArgs = (constructorArgs || []).map((arg, index) =>
         parseInputValue(arg, artifact.constructorInputs[index].type)
       );
 
       const provider = new ElectrumNetworkProvider(currentNetwork);
-      const contract = new Contract(artifact, parsedConstructorArgs, {
+      const contract = new Contract(
+        artifact as ContractCtorArtifact,
+        parsedConstructorArgs,
+        {
         provider,
-      });
+        }
+      );
 
       const updatedBalance = await contract.getBalance();
 
-      // Fetch existing UTXOs from the database
       const existingUTXOsQuery =
         'SELECT tx_hash, tx_pos FROM UTXOs WHERE address = ?';
       const existingStmt = db.prepare(existingUTXOsQuery);
       existingStmt.bind([address]);
 
-      const existingUTXOs = [];
+      const existingUTXOs: StoredContractRow[] = [];
       while (existingStmt.step()) {
-        const row = existingStmt.getAsObject();
-        existingUTXOs.push(row);
+        const row = existingStmt.getAsObject() as SqlRow;
+        existingUTXOs.push({
+          tx_hash: String(row.tx_hash),
+          tx_pos: Number(row.tx_pos),
+        });
       }
       existingStmt.free();
 
-      // Determine new and stale UTXOs using Sets for efficiency
       const existingSet = new Set(
-        existingUTXOs.map((utxo) => `${utxo.tx_hash}:${utxo.tx_pos}`)
+        existingUTXOs.map((u) => outpointKey(u.tx_hash, u.tx_pos))
       );
       const newSet = new Set(
-        formattedUTXOs.map((utxo) => `${utxo.tx_hash}:${utxo.tx_pos}`)
+        formattedUTXOs.map((u) => outpointKey(u.tx_hash, u.tx_pos))
       );
 
       const newUTXOs = formattedUTXOs.filter(
-        (utxo) => !existingSet.has(`${utxo.tx_hash}:${utxo.tx_pos}`)
+        (u) => !existingSet.has(outpointKey(u.tx_hash, u.tx_pos))
       );
       const staleUTXOs = existingUTXOs.filter(
-        (utxo) => !newSet.has(`${utxo.tx_hash}:${utxo.tx_pos}`)
+        (u) => !newSet.has(outpointKey(u.tx_hash, u.tx_pos))
       );
 
-      // Begin transaction for batch operations
       db.run('BEGIN TRANSACTION');
 
       try {
-        // Batch insert new UTXOs
         const insertUTXOQuery = `
           INSERT INTO UTXOs (address, height, tx_hash, tx_pos, amount, token, prefix, contractFunction, contractFunctionInputs) 
           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
         `;
         const insertStmt = db.prepare(insertUTXOQuery);
-        for (const utxo of newUTXOs) {
+        for (const u of newUTXOs) {
           insertStmt.run([
             address,
-            utxo.height,
-            utxo.tx_hash,
-            utxo.tx_pos,
-            utxo.amount.toString(),
-            utxo.token ? JSON.stringify(utxo.token) : null,
-            utxo.prefix,
-            utxo.contractFunction || null, // New Field
-            utxo.contractFunctionInputs || null, // New Field
+            u.height,
+            u.tx_hash,
+            u.tx_pos,
+            u.amount.toString(),
+            u.token ? JSON.stringify(u.token) : null,
+            u.prefix,
+            u.contractFunction || null,
+            u.contractFunctionInputs || null,
           ]);
         }
         insertStmt.free();
 
-        // Batch delete stale UTXOs
         const deleteUTXOQuery = `
           DELETE FROM UTXOs WHERE address = ? AND tx_hash = ? AND tx_pos = ?
         `;
         const deleteStmt = db.prepare(deleteUTXOQuery);
-        for (const utxo of staleUTXOs) {
-          deleteStmt.run([address, utxo.tx_hash, utxo.tx_pos]);
+        for (const u of staleUTXOs) {
+          deleteStmt.run([address, u.tx_hash, u.tx_pos]);
         }
         deleteStmt.free();
 
-        // Update the instantiated_contracts table with new UTXOs and updated balance
         const updateContractQuery = `
           UPDATE instantiated_contracts 
           SET utxos = ?, balance = ?, updated_at = ?
@@ -584,36 +592,26 @@ export default function ContractManager() {
         `;
         const updateParams = [
           JSON.stringify(
-            formattedUTXOs.map((utxo) => ({
-              ...utxo,
-              amount: utxo.amount.toString(),
-              // **Ensure new fields are included**
-              contractFunction: utxo.contractFunction || null,
-              contractFunctionInputs: utxo.contractFunctionInputs || null,
+            formattedUTXOs.map((u) => ({
+              ...u,
+              amount: u.amount.toString(),
+              contractFunction: u.contractFunction || null,
+              contractFunctionInputs: u.contractFunctionInputs || null,
             }))
           ),
           updatedBalance.toString(),
-          new Date().toISOString(), // Update the updated_at timestamp
+          new Date().toISOString(),
           address,
         ];
 
-        // **Add Logging Before Update**
-        // console.log(
-        //   'Updating instantiated_contracts with params:',
-        //   updateParams
-        // );
-
         db.run(updateContractQuery, updateParams);
 
-        // Commit transaction
         db.run('COMMIT');
       } catch (transError) {
-        // Rollback transaction on error
         db.run('ROLLBACK');
         throw transError;
       }
 
-      // await dbService.saveDatabaseToFile();
       return { added: newUTXOs.length, removed: staleUTXOs.length };
     } catch (error) {
       console.error('Error updating UTXOs and balance:', error);
@@ -621,54 +619,71 @@ export default function ContractManager() {
     }
   }
 
-  // New Function: getContractUnlockFunction
   async function getContractUnlockFunction(
     utxo: UTXO,
     contractFunction: string,
-    contractFunctionInputs: { [key: string]: any }
+    contractFunctionInputs: Record<string, unknown>
   ) {
     const state = store.getState();
+    type UnlockContext = {
+      artifact: ContractArtifact;
+      abi: AbiFunction[];
+    };
 
-    // Log the contract function inputs before processing
-    // console.log('Processing UTXO for unlock function:', utxo);
-    // console.log('Contract Function:', contractFunction);
-    // console.log('Contract Function Inputs:', contractFunctionInputs);
+    // 1) Try DB instantiated contract first (current behavior)
+    let contractInstance: UnlockContext | null = await getContractInstanceByAddress(
+      utxo.address
+    );
 
-    // console.log('Fetching contract instance for UTXO address:', utxo.address);
-
-    // Fetch the contract instance for the UTXO's address
-    const contractInstance = await getContractInstanceByAddress(utxo.address);
-
+    // 2) Fallback: build from artifact directly (patient-0 / no DB)
     if (!contractInstance) {
-      throw new Error(
-        `Contract instance not found for address ${utxo.address}`
-      );
+      const name = utxo.contractName;
+      if (!name) {
+        throw new Error(
+          `Contract instance not found for address ${utxo.address} and utxo.contractName is missing`
+        );
+      }
+
+      // Prefer builtin/addon resolver first
+      const artifact =
+        (await loadArtifact(name)) ?? (await getContractArtifact(name));
+      if (!artifact) {
+        throw new Error(`Contract artifact not found for ${name}`);
+      }
+
+      contractInstance = {
+        artifact,
+        abi: artifact.abi ?? [],
+      };
     }
 
-    // console.log('Contract instance fetched:', contractInstance);
-    // console.log('Contract artifact:', contractInstance.artifact);
+    // 3) Constructor args
+    // Allow contracts with ZERO constructor inputs (do not require DB lookups).
+    const ctorSpec: AbiInput[] = Array.isArray(
+      contractInstance.artifact?.constructorInputs
+    )
+      ? contractInstance.artifact.constructorInputs
+      : [];
 
-    // Fetch constructor inputs for the contract
-    const constructorInputs = await fetchConstructorArgs(utxo.address);
-    // console.log('Fetched constructor inputs:', constructorInputs);
+    let parsedConstructorArgs: unknown[] = [];
+    if (ctorSpec.length > 0) {
+      const constructorInputs =
+        Array.isArray(utxo.contractConstructorArgs) &&
+        utxo.contractConstructorArgs.length > 0
+          ? utxo.contractConstructorArgs
+          : await fetchConstructorArgs(utxo.address);
 
-    // Parse constructor arguments using the contract's artifact
-    const parsedConstructorArgs =
-      contractInstance.artifact.constructorInputs.map(
-        (input: any, index: number) => {
-          const argValue = constructorInputs[index];
-          if (argValue === undefined) {
-            throw new Error(`Missing constructor argument for ${input.name}`);
-          }
-          return parseInputValue(argValue, input.type);
+      parsedConstructorArgs = ctorSpec.map((input, index) => {
+        const argValue = constructorInputs?.[index];
+        if (argValue === undefined) {
+          throw new Error(`Missing constructor argument for ${input.name}`);
         }
-      );
+        return parseInputValue(argValue, input.type);
+      });
+    }
 
-    // console.log('Parsed constructor arguments:', parsedConstructorArgs);
-
-    // Create a new contract instance with parsed constructor arguments
     const contract = new Contract(
-      contractInstance.artifact,
+      contractInstance.artifact as ContractCtorArtifact,
       parsedConstructorArgs,
       {
         provider: new ElectrumNetworkProvider(state.network.currentNetwork),
@@ -676,24 +691,9 @@ export default function ContractManager() {
       }
     );
 
-    // console.log(
-    //   'Created contract instance with parsed constructor arguments:',
-    //   contract
-    // );
-
-    // Find the ABI function in the contract using the provided function name
     const abiFunction = contractInstance.abi.find(
-      (func: any) => func.name === contractFunction
+      (func) => func.name === contractFunction
     );
-
-    // console.log(
-    //   'ABI function for contractFunction:',
-    //   contractFunction,
-    //   '\nABI Function:',
-    //   abiFunction,
-    //   '\nContract Function Inputs:',
-    //   contractFunctionInputs
-    // );
 
     if (!abiFunction) {
       throw new Error(
@@ -701,24 +701,51 @@ export default function ContractManager() {
       );
     }
 
-    // Create unlocker with function inputs
-    const unlocker = contract.unlock[contractFunction](
-      ...abiFunction.inputs.map((input: any) => {
-        // Get the corresponding value from contractFunctionInputs using the input name
+    const args = await Promise.all(
+      (abiFunction.inputs ?? []).map(async (input) => {
         const inputValue = contractFunctionInputs[input.name];
 
-        // Check if the input type is 'sig' (for signature)
         if (input.type === 'sig') {
-          // Handle signature input with `SignatureTemplate`
-          return new SignatureTemplate(inputValue, HashType.SIGHASH_ALL);
-        } else {
-          // For other inputs, parse the input value based on its type
-          return parseInputValue(inputValue, input.type);
+          if (
+            typeof inputValue !== 'string' ||
+            inputValue.trim().length === 0
+          ) {
+            throw new Error(
+              `Missing signature input for '${input.name}'. Use sigaddr:<address>.`
+            );
+          }
+
+          const v = inputValue.trim();
+
+          if (v.startsWith('sigaddr:')) {
+            const addr = v.slice('sigaddr:'.length).trim();
+            if (!addr) throw new Error(`Invalid sigaddr for '${input.name}'.`);
+
+            const pk = await KeyService.fetchAddressPrivateKey(addr);
+            if (!pk || pk.length === 0) {
+              throw new Error(`Private key not found for sigaddr '${addr}'.`);
+            }
+
+            return new SignatureTemplate(pk, HashType.SIGHASH_ALL);
+          }
+
+          if (v.startsWith('sigkey:')) {
+            const keyMaterial = v.slice('sigkey:'.length).trim();
+            if (!keyMaterial)
+              throw new Error(`Invalid sigkey for '${input.name}'.`);
+            return new SignatureTemplate(keyMaterial, HashType.SIGHASH_ALL);
+          }
+
+          throw new Error(
+            `Unsupported sig input for '${input.name}'. Use sigaddr:<address> (recommended) or sigkey:<wif|hex> (explicit).`
+          );
         }
+
+        return parseInputValue(inputValue, input.type);
       })
     );
 
-    // console.log('Generated unlocker for contract function:', unlocker);
+    const unlocker = contract.unlock[contractFunction](...args);
 
     return {
       lockingBytecode: contract.redeemScript,

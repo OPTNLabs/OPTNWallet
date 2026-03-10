@@ -1,5 +1,5 @@
 // src/components/UTXOCard.tsx
-import React, { useState, useEffect } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { FaBitcoin } from 'react-icons/fa';
 import { shortenTxHash } from '../utils/shortenHash';
 import { UTXO } from '../types/types';
@@ -11,53 +11,108 @@ interface UTXOCardProps {
   loading: boolean;
 }
 
+const SATS_PER_BCH_BIGINT = BigInt(SATSINBITCOIN);
+
+function formatBchFromSats(
+  sats: number | string | bigint | undefined | null
+): string {
+  if (sats === null || sats === undefined) return '0';
+
+  // bigint-safe formatting (no precision loss)
+  if (typeof sats === 'bigint') {
+    const whole = sats / SATS_PER_BCH_BIGINT;
+    const frac = sats % SATS_PER_BCH_BIGINT;
+
+    let fracStr = frac.toString().padStart(8, '0');
+    fracStr = fracStr.replace(/0+$/, ''); // trim trailing zeros
+
+    return fracStr.length ? `${whole.toString()}.${fracStr}` : whole.toString();
+  }
+
+  // number/string formatting
+  const n = typeof sats === 'string' ? Number(sats) : sats;
+  if (!Number.isFinite(n)) return '0';
+
+  return (n / SATSINBITCOIN).toFixed(8).replace(/\.?0+$/, '');
+}
+
+// Function to format token amounts based on decimals
+function formatTokenAmount(
+  amount: number | string | bigint,
+  decimals: number = 0
+): string {
+  if (decimals === 0) return amount.toString();
+
+  // bigint-safe formatting for tokens too (prevents precision loss)
+  if (typeof amount === 'bigint') {
+    const base = 10n ** BigInt(decimals);
+    const whole = amount / base;
+    const frac = amount % base;
+
+    let fracStr = frac.toString().padStart(decimals, '0');
+    fracStr = fracStr.replace(/0+$/, '');
+
+    return fracStr.length ? `${whole.toString()}.${fracStr}` : whole.toString();
+  }
+
+  const numAmount = typeof amount === 'string' ? Number(amount) : amount;
+  if (!Number.isFinite(numAmount)) return '0';
+
+  const divisor = Math.pow(10, decimals);
+  return (numAmount / divisor).toFixed(decimals).replace(/\.?0+$/, '');
+}
+
 const UTXOCard: React.FC<UTXOCardProps> = ({ utxos, loading }) => {
   // State to store icon data URIs, keyed by category
   const [iconUris, setIconUris] = useState<Record<string, string | null>>({});
+  const bcmr = useMemo(() => new BcmrService(), []);
+  const queuedCategories = useRef<Set<string>>(new Set());
 
   // Fetch icons when utxos change
   useEffect(() => {
-    const fetchIcons = async () => {
-      // Get unique token categories from utxos
-      const categories = Array.from(
-        new Set(utxos.filter((u) => u.token).map((u) => u.token!.category))
-      );
-      const bcmr = new BcmrService();
+    let isActive = true;
 
-      for (const category of categories) {
-        // Skip if already fetched or in progress
-        if (iconUris[category] !== undefined) continue;
+    const categories = Array.from(
+      new Set(
+        utxos
+          .map((u) => u.token?.category)
+          .filter((category): category is string => Boolean(category))
+      )
+    );
+    const toFetch = categories.filter((category) => {
+      if (queuedCategories.current.has(category)) return false;
+      queuedCategories.current.add(category);
+      return true;
+    });
 
+    if (toFetch.length === 0) return () => undefined;
+
+    void Promise.all(
+      toFetch.map(async (category) => {
         try {
           const authbase = await bcmr.getCategoryAuthbase(category);
           const iconUri = await bcmr.resolveIcon(authbase);
-          setIconUris((prev) => ({ ...prev, [category]: iconUri }));
-        } catch (error) {
-          // console.error(`Failed to fetch icon for category ${category}:`, error);
-          setIconUris((prev) => ({ ...prev, [category]: null }));
+          if (!isActive) return;
+          setIconUris((prev) =>
+            prev[category] === undefined ? { ...prev, [category]: iconUri } : prev
+          );
+        } catch {
+          if (!isActive) return;
+          setIconUris((prev) =>
+            prev[category] === undefined ? { ...prev, [category]: null } : prev
+          );
         }
-      }
+      })
+    );
+
+    return () => {
+      isActive = false;
     };
-
-    fetchIcons();
-  }, [utxos]); // Re-run when utxos change
-
-  // Function to format token amounts based on decimals
-  const formatTokenAmount = (
-    amount: number | string | bigint,
-    decimals: number = 0
-  ): string => {
-    const numAmount =
-      typeof amount === 'string' ? parseFloat(amount) : Number(amount);
-    if (decimals === 0) return numAmount.toString();
-    const divisor = Math.pow(10, decimals);
-    const formatted = (numAmount / divisor).toFixed(decimals);
-    return formatted.replace(/\.?0+$/, ''); // Remove trailing zeros
-  };
+  }, [bcmr, utxos]);
 
   if (loading) {
     return (
-      <div className="flex items-center text-gray-500">
+      <div className="flex items-center wallet-muted">
         <svg className="animate-spin h-5 w-5 mr-2" viewBox="0 0 24 24">
           <circle
             className="opacity-25"
@@ -80,7 +135,6 @@ const UTXOCard: React.FC<UTXOCardProps> = ({ utxos, loading }) => {
 
   return (
     <div>
-      {/* <h4 className="font-semibold mb-2">UTXOs:</h4> */}
       {utxos.map((utxo, i) => {
         const isToken = Boolean(utxo.token);
         const tokenData = isToken ? utxo.token : null;
@@ -88,10 +142,17 @@ const UTXOCard: React.FC<UTXOCardProps> = ({ utxos, loading }) => {
         const category = tokenData?.category || null;
         const iconUri = category ? iconUris[category] : null;
 
+        // ✅ Contract UTXOs may not have `value`, but do have `amount`
+        const sats = (utxo.value ?? utxo.amount) as
+          | number
+          | string
+          | bigint
+          | undefined;
+
         return (
           <div
             key={i}
-            className="p-3 mb-3 border rounded-lg grid grid-cols-[1fr_auto] gap-4"
+            className="wallet-card p-3 mb-3 grid grid-cols-[1fr_auto] gap-4"
           >
             <div className="space-y-1 text-sm">
               {isToken ? (
@@ -108,13 +169,13 @@ const UTXOCard: React.FC<UTXOCardProps> = ({ utxos, loading }) => {
                     <strong>Name:</strong> {metadata?.name || 'Unknown Token'}
                   </p>
                   <p>
-                    {utxo.value / SATSINBITCOIN} <strong>BCH</strong>
+                    {formatBchFromSats(sats)} <strong>BCH</strong>
                   </p>
                 </>
               ) : (
                 <>
                   <p>
-                    {utxo.value / SATSINBITCOIN} <strong>BCH</strong>
+                    {formatBchFromSats(sats)} <strong>BCH</strong>
                   </p>
                   <p>
                     <strong>Tx Hash:</strong> {shortenTxHash(utxo.tx_hash)}
@@ -128,6 +189,7 @@ const UTXOCard: React.FC<UTXOCardProps> = ({ utxos, loading }) => {
                 </>
               )}
             </div>
+
             <div className="flex flex-col items-center space-y-2">
               {isToken && metadata ? (
                 <>
@@ -139,13 +201,13 @@ const UTXOCard: React.FC<UTXOCardProps> = ({ utxos, loading }) => {
                         className="w-12 h-12 rounded"
                       />
                     ) : (
-                      <div className="w-12 h-12 bg-gray-200 rounded flex items-center justify-center">
-                        <span className="text-gray-500">No Icon</span>
+                      <div className="w-12 h-12 wallet-surface-strong rounded flex items-center justify-center">
+                        <span className="wallet-muted">No Icon</span>
                       </div>
                     )
                   ) : (
-                    <div className="w-12 h-12 bg-gray-200 rounded flex items-center justify-center">
-                      <span className="text-gray-500">Loading...</span>
+                    <div className="w-12 h-12 wallet-surface-strong rounded flex items-center justify-center">
+                      <span className="wallet-muted">Loading...</span>
                     </div>
                   )}
                   <span className="text-base font-medium text-center">
@@ -154,7 +216,7 @@ const UTXOCard: React.FC<UTXOCardProps> = ({ utxos, loading }) => {
                 </>
               ) : (
                 <>
-                  <FaBitcoin className="text-green-500 text-4xl" />
+                  <FaBitcoin className="wallet-accent-icon text-4xl" />
                   <span className="text-base font-medium text-center">
                     Bitcoin Cash
                   </span>
@@ -164,7 +226,8 @@ const UTXOCard: React.FC<UTXOCardProps> = ({ utxos, loading }) => {
           </div>
         );
       })}
-      {!utxos.length && <p className="text-gray-500">No UTXOs to display.</p>}
+
+      {!utxos.length && <p className="wallet-muted">No UTXOs to display.</p>}
     </div>
   );
 };

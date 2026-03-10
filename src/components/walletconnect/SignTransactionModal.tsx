@@ -9,6 +9,7 @@ import {
 } from '../../redux/walletconnectSlice';
 import { binToHex, lockingBytecodeToCashAddress } from '@bitauth/libauth';
 import { SATSINBITCOIN } from '../../utils/constants';
+import { ensureUint8Array, parseSatoshis } from '../../utils/binary';
 
 export function SignTransactionModal() {
   const dispatch = useDispatch<AppDispatch>();
@@ -31,6 +32,21 @@ export function SignTransactionModal() {
   const inputs = tx?.inputs || [];
   const outputs = tx?.outputs || [];
 
+  type TxAmountCarrier = { valueSatoshis: unknown };
+  type TxToken = {
+    category: unknown;
+    amount?: unknown;
+    nft?: { capability?: string; commitment?: unknown };
+  };
+  type TxOutput = TxAmountCarrier & {
+    lockingBytecode: unknown;
+    token?: TxToken;
+  };
+  type TxInputSource = TxAmountCarrier & {
+    outpointTransactionHash: unknown;
+    outpointIndex: number;
+  };
+
   function parsePushData(bytecode: Uint8Array): string[] {
     const result: string[] = [];
     let i = 1; // skip OP_RETURN
@@ -46,34 +62,8 @@ export function SignTransactionModal() {
     return result;
   }
 
-  function ensureUint8Array(input: any): Uint8Array {
-    if (input instanceof Uint8Array) return input;
-    if (typeof input === 'string' && input.startsWith('<Uint8Array: 0x')) {
-      const hex = input.slice('<Uint8Array: 0x'.length, -1);
-      const bytes = new Uint8Array(hex.length / 2);
-      for (let i = 0; i < hex.length; i += 2) {
-        bytes[i / 2] = parseInt(hex.slice(i, i + 2), 16);
-      }
-      return bytes;
-    }
-    return new Uint8Array();
-  }
-
-  function parseSatoshis(value: any): bigint {
-    try {
-      if (typeof value === 'bigint') return value;
-      if (typeof value === 'string' && value.startsWith('<bigint:')) {
-        const match = value.match(/^<bigint:\s*(\d+)n>$/);
-        if (match) return BigInt(match[1]);
-      }
-      return BigInt(value);
-    } catch {
-      return 0n;
-    }
-  }
-
   function toCashAddress(
-    bytecode: any,
+    bytecode: unknown,
     prefix: 'bitcoincash' | 'bchtest' | 'bchreg' = 'bitcoincash'
   ): string {
     try {
@@ -87,12 +77,12 @@ export function SignTransactionModal() {
     }
   }
 
-  const totalInput: bigint = sourceOutputs.reduce(
-    (sum: bigint, o: any) => sum + parseSatoshis(o.valueSatoshis),
+  const totalInput: bigint = (sourceOutputs as TxInputSource[]).reduce(
+    (sum: bigint, o) => sum + parseSatoshis(o.valueSatoshis),
     0n
   );
-  const totalOutput: bigint = outputs.reduce(
-    (sum: bigint, o: any) => sum + parseSatoshis(o.valueSatoshis),
+  const totalOutput: bigint = (outputs as TxOutput[]).reduce(
+    (sum: bigint, o) => sum + parseSatoshis(o.valueSatoshis),
     0n
   );
   const fee = totalInput - totalOutput;
@@ -108,15 +98,15 @@ export function SignTransactionModal() {
   };
 
   return (
-    <div className="fixed inset-0 flex items-center justify-center bg-black bg-opacity-70 z-50">
-      <div className="bg-white rounded-lg shadow-lg max-w-2xl w-full p-6 flex flex-col space-y-4">
+    <div className="wallet-popup-backdrop">
+      <div className="wallet-popup-panel max-w-2xl w-full flex flex-col space-y-4">
         <h3 className="text-xl font-bold text-center">
           Sign Transaction Request
         </h3>
 
         <div className="overflow-y-auto max-h-[60vh] space-y-4 pr-1">
           {dappMetadata && (
-            <div className="text-sm text-gray-600">
+            <div className="text-sm wallet-muted">
               <div>
                 <strong>DApp Name:</strong> {dappMetadata.name}
               </div>
@@ -126,7 +116,7 @@ export function SignTransactionModal() {
                   href={dappMetadata.url}
                   target="_blank"
                   rel="noopener noreferrer"
-                  className="text-blue-500 underline"
+                  className="wallet-link underline"
                 >
                   {dappMetadata.url}
                 </a>
@@ -135,7 +125,7 @@ export function SignTransactionModal() {
           )}
 
           {userPrompt && (
-            <p className="text-sm bg-yellow-100 border border-yellow-300 rounded p-2 text-yellow-900">
+            <p className="text-sm wallet-surface-strong border border-[var(--wallet-border)] rounded p-2 wallet-text-strong">
               <strong>Prompt:</strong> {userPrompt}
             </p>
           )}
@@ -157,7 +147,7 @@ export function SignTransactionModal() {
             );
           })}
 
-          {outputs.map((output: any, i: number) => {
+          {(outputs as TxOutput[]).map((output, i: number) => {
             const value = parseSatoshis(output.valueSatoshis);
             const lockingBytecode = ensureUint8Array(output.lockingBytecode);
             const isOpReturn = lockingBytecode[0] === 0x6a;
@@ -166,12 +156,12 @@ export function SignTransactionModal() {
             if (isOpReturn) {
               const parsed = parsePushData(lockingBytecode);
               return (
-                <div key={i} className="ml-2 space-y-1 border-b pb-2 text-sm">
+                <div key={i} className="ml-2 space-y-1 border-b border-[var(--wallet-border)] pb-2 text-sm">
                   <strong>OP_RETURN Output</strong>
                   {parsed.map((data, j) => (
                     <div
                       key={j}
-                      className="font-mono text-gray-600 break-words"
+                      className="font-mono wallet-muted break-words"
                     >
                       {data}
                     </div>
@@ -182,16 +172,16 @@ export function SignTransactionModal() {
 
             const address = toCashAddress(lockingBytecode, 'bitcoincash');
             return (
-              <div key={i} className="ml-2 border-b pb-2 space-y-1">
+              <div key={i} className="ml-2 border-b border-[var(--wallet-border)] pb-2 space-y-1">
                 <div>
                   Address:{' '}
-                  <span className="font-mono text-blue-600 break-all">
+                  <span className="font-mono wallet-link break-all">
                     {address}
                   </span>
                 </div>
                 <div>{Number(value) / SATSINBITCOIN} BCH</div>
                 {token && (
-                  <div className="text-sm bg-green-50 border border-green-200 rounded p-2 space-y-1">
+                  <div className="text-sm wallet-surface-strong border border-[var(--wallet-border)] rounded p-2 space-y-1">
                     <div>
                       <strong>Token Category:</strong>{' '}
                       <span className="font-mono break-all">
@@ -226,7 +216,7 @@ export function SignTransactionModal() {
             );
           })}
 
-          <div className="text-sm border-t pt-2">
+          <div className="text-sm border-t border-[var(--wallet-border)] pt-2">
             <div>Total Input: {Number(totalInput) / SATSINBITCOIN} BCH</div>
             <div>Total Output: {Number(totalOutput) / SATSINBITCOIN} BCH</div>
             <div className="font-semibold">
@@ -239,13 +229,13 @@ export function SignTransactionModal() {
         <div className="flex justify-around pt-2">
           <button
             onClick={handleSign}
-            className="px-4 py-2 bg-green-500 hover:bg-green-600 text-white rounded"
+            className="wallet-btn-primary"
           >
             Sign
           </button>
           <button
             onClick={handleCancel}
-            className="px-4 py-2 bg-red-500 hover:bg-red-600 text-white rounded"
+            className="wallet-btn-danger"
           >
             Cancel
           </button>

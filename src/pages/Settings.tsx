@@ -1,6 +1,6 @@
 // src/pages/Settings.tsx
 
-import React, { useState, useEffect } from 'react';
+import React, { useState } from 'react';
 import { useDispatch, useSelector } from 'react-redux';
 import { RootState, AppDispatch } from '../redux/store';
 import { useNavigate } from 'react-router-dom';
@@ -19,10 +19,14 @@ import AboutView from '../components/AboutView';
 import TermsOfUse from '../components/TermsOfUse';
 import ContactUs from '../components/ContactUs';
 import WalletConnectPanel from '../components/walletconnect/WalletConnectPanel';
-import ElectrumServer from '../apis/ElectrumServer/ElectrumServer';
+import getElectrumAdapter from '../services/ElectrumAdapter';
+import { useTheme } from '../context/useTheme';
+import PageHeader from '../components/ui/PageHeader';
+import SectionCard from '../components/ui/SectionCard';
 
 const Settings: React.FC = () => {
   const navigate = useNavigate();
+  const { mode, toggleMode } = useTheme();
   // Use AppDispatch to type dispatch correctly for thunks.
   const dispatch = useDispatch<AppDispatch>();
   const currentWalletId = useSelector(
@@ -33,14 +37,6 @@ const Settings: React.FC = () => {
   );
 
   const [selectedOption, setSelectedOption] = useState('');
-  const [navBarHeight, setNavBarHeight] = useState(0);
-
-  useEffect(() => {
-    const navBar = document.getElementById('bottomNavBar');
-    if (navBar) {
-      setNavBarHeight(navBar.offsetHeight);
-    }
-  }, []);
 
   const handleOptionClick = (option: string) => {
     setSelectedOption(option);
@@ -59,8 +55,8 @@ const Settings: React.FC = () => {
     dispatch(clearTransaction());
     // Ensure Electrum is fully disconnected before nuking state
     try {
-      const { electrumDisconnect } = ElectrumServer();
-      await electrumDisconnect();
+      const electrum = getElectrumAdapter();
+      await electrum.disconnect();
     } catch (e) {
       console.warn('[Settings] Electrum disconnect (on logout) warning:', e);
     }
@@ -110,84 +106,84 @@ const Settings: React.FC = () => {
   };
 
   return (
-    <div className="container mx-auto p-4">
-      <div className="flex justify-center mt-4">
-        <img
-          src="/assets/images/OPTNWelcome1.png"
-          alt="Welcome"
-          className="w-3/4 h-auto"
-        />
-      </div>
-      <h1 className="text-2xl font-bold mb-4 text-center">Settings</h1>
+    <div className="container mx-auto max-w-md p-4 wallet-page">
+      <PageHeader title="Settings" compact />
       {!selectedOption ? (
-        <div className="flex flex-col items-center space-y-4">
-          <button
-            onClick={() => handleOptionClick('recovery')}
-            className="w-full max-w-md bg-blue-500 hover:bg-blue-600 transition duration-300 text-white font-bold py-2 px-4 border rounded-lg"
-          >
-            Recovery Phrase
-          </button>
-          <button
-            onClick={() => handleOptionClick('about')}
-            className="w-full max-w-md bg-blue-500 hover:bg-blue-600 transition duration-300 text-white font-bold py-2 px-4 border rounded-lg"
-          >
-            About
-          </button>
-          <button
-            onClick={() => handleOptionClick('terms')}
-            className="w-full max-w-md bg-blue-500 hover:bg-blue-600 transition duration-300 text-white font-bold py-2 px-4 border rounded-lg"
-          >
-            Terms of Use
-          </button>
-          <button
-            onClick={() => handleOptionClick('contact')}
-            className="w-full max-w-md bg-blue-500 hover:bg-blue-600 transition duration-300 text-white font-bold py-2 px-4 border rounded-lg"
-          >
-            Contact Us
-          </button>
-          <button
-            onClick={() => handleOptionClick('ContractDetails')}
-            className="w-full max-w-md bg-blue-500 hover:bg-blue-600 transition duration-300 text-white font-bold py-2 px-4 border rounded-lg"
-          >
-            Contract Info
-          </button>
-          {currentNetwork === 'chipnet' && (
+        <SectionCard>
+          <div className="flex flex-col items-center space-y-3">
             <button
-              onClick={() => handleOptionClick('network')}
-              className="w-full max-w-md bg-blue-500 hover:bg-blue-600 transition duration-300 text-white font-bold py-2 px-4 border rounded-lg"
+              onClick={toggleMode}
+              className="wallet-btn-secondary w-full max-w-md"
             >
-              Faucet
+              Theme: {mode === 'dark' ? 'Dark' : 'Light'} (tap to switch)
             </button>
-          )}
-          <button
-            onClick={() => handleOptionClick('walletconnect')}
-            className="w-full max-w-md bg-blue-500 hover:bg-blue-600 transition duration-300 text-white font-bold py-2 px-4 border rounded-lg"
-          >
-            WalletConnect
-          </button>
-          <button
-            onClick={handleLogout}
-            className="w-full max-w-md py-2 px-4 border rounded-lg bg-red-500 hover:bg-red-700 transition duration-300 text-white text-xl font-bold"
-          >
-            Log Out
-          </button>
-        </div>
+            <button
+              onClick={() => handleOptionClick('recovery')}
+              className="wallet-btn-primary w-full max-w-md"
+            >
+              Recovery Phrase
+            </button>
+            <button
+              onClick={() => handleOptionClick('about')}
+              className="wallet-btn-primary w-full max-w-md"
+            >
+              About
+            </button>
+            <button
+              onClick={() => handleOptionClick('terms')}
+              className="wallet-btn-primary w-full max-w-md"
+            >
+              Terms of Use
+            </button>
+            <button
+              onClick={() => handleOptionClick('contact')}
+              className="wallet-btn-primary w-full max-w-md"
+            >
+              Contact Us
+            </button>
+            <button
+              onClick={() => handleOptionClick('ContractDetails')}
+              className="wallet-btn-primary w-full max-w-md"
+            >
+              Contract Info
+            </button>
+            {currentNetwork === 'chipnet' && (
+              <button
+                onClick={() => handleOptionClick('network')}
+                className="wallet-btn-primary w-full max-w-md"
+              >
+                Faucet
+              </button>
+            )}
+            <button
+              onClick={() => handleOptionClick('walletconnect')}
+              className="wallet-btn-primary w-full max-w-md"
+            >
+              WalletConnect
+            </button>
+            <button
+              onClick={handleLogout}
+              className="wallet-btn-danger w-full max-w-md text-xl"
+            >
+              Log Out
+            </button>
+          </div>
+        </SectionCard>
       ) : (
-        <div
-          className="fixed inset-0 bg-white p-4 z-50 overflow-auto"
-          style={{ height: `calc(100vh - ${navBarHeight}px)` }}
-        >
-          <div className="container mx-auto p-4">
-            <h2 className="text-3xl text-center font-bold">{renderTitle()}</h2>
+        <SectionCard>
+          <div className="mb-4 flex justify-between items-center">
+            <h2 className="text-2xl font-bold wallet-text-strong">
+              {renderTitle()}
+            </h2>
+            <button
+              className="wallet-btn-secondary text-sm px-3 py-1.5"
+              onClick={() => setSelectedOption('')}
+            >
+              Back
+            </button>
           </div>
           {renderContent()}
-          <button
-            className="w-full max-w-md py-2 px-4 border rounded-lg bg-red-500 hover:bg-red-700 transition duration-300 text-white text-xl font-bold"
-            onClick={() => setSelectedOption('')}
-          >
-            Back
-          </button>
-        </div>
+        </SectionCard>
       )}
     </div>
   );

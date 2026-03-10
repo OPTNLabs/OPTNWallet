@@ -1,10 +1,10 @@
 // src/utils/parseInputValue.ts
 import { hexString } from './hex';
 
-export default function parseInputValue(value: any, type: string) {
+export default function parseInputValue(value: unknown, type: string) {
   switch (type) {
     case 'int':
-      return BigInt(value);
+      return BigInt(value as string | number | bigint | boolean);
     case 'bool':
       return value === 'true';
     case 'string':

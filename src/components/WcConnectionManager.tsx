@@ -74,11 +74,11 @@ const WcConnectionManager: React.FC = () => {
   };
 
   return (
-    <div className="space-y-4 p-4 bg-gray-100">
+    <div className="space-y-4 p-4 wallet-card">
       <div className="flex flex-col space-y-2">
         <label className="font-bold">Enter WalletConnect URI:</label>
         <input
-          className="border p-2"
+          className="wallet-input"
           placeholder="wc:..."
           value={uri}
           onChange={(e) => setUri(e.target.value)}
@@ -86,7 +86,7 @@ const WcConnectionManager: React.FC = () => {
         <div className="flex flex-col items-center space-x-2">
           <button
             onClick={handleScan}
-            className="bg-green-500 text-white font-bold py-2 px-4 rounded flex items-center"
+            className="wallet-btn-primary py-2 px-4 flex items-center"
             disabled={scanning}
           >
             <FaCamera className="mr-2" />
@@ -95,7 +95,7 @@ const WcConnectionManager: React.FC = () => {
         </div>
         <button
           onClick={handleManualConnect}
-          className="bg-blue-500 text-white font-bold p-2 rounded"
+          className="wallet-btn-primary"
         >
           Connect
         </button>
