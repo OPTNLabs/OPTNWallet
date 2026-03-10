@@ -7,8 +7,7 @@ import {
 } from '@electrum-cash/network';
 import { ElectrumWebSocket } from '@electrum-cash/web-socket';
 import {
-  chipnetServers,
-  mainnetServers,
+  getElectrumServers,
 } from '../../utils/servers/ElectrumServers';
 import { store } from '../../redux/store';
 import { selectCurrentNetwork } from '../../redux/selectors/networkSelectors';
@@ -22,6 +21,7 @@ const WSS_PORT = 50004;
 
 // Convenience alias for a typed Electrum client
 type ECClient = ElectrumClient<ElectrumClientEvents>;
+type ElectrumParams = RequestResponse[];
 
 // ---------- Internal state ----------
 let electrum: ECClient | null = null;
@@ -34,19 +34,19 @@ let nextAllowedConnectTs = 0;
 let notificationsWired = false;
 
 // Fan-out of notification listeners (UI, services, etc.)
-type Notification = { jsonrpc: '2.0'; method: string; params: any[] };
+type Notification = { jsonrpc: '2.0'; method: string; params: ElectrumParams };
 type NotificationHandler = (n: Notification) => void;
 const notificationHandlers = new Set<NotificationHandler>();
 
 // Registry of active subscriptions for resubscribe-on-reconnect
 // We key by method + JSON.stringify(params)
-type SubEntry = { method: string; params?: any[] };
+type SubEntry = { method: string; params?: ElectrumParams };
 const activeSubs = new Map<string, SubEntry>();
 
 function getNetworkAndServers(): { network: Network; servers: string[] } {
   const state = store.getState();
   const network = selectCurrentNetwork(state);
-  const servers = network === Network.MAINNET ? mainnetServers : chipnetServers;
+  const servers = getElectrumServers(network);
   return { network, servers };
 }
 
@@ -55,7 +55,7 @@ function withTimeout<T>(
   ms: number,
   label = 'operation'
 ): Promise<T> {
-  let t: any;
+  let t: ReturnType<typeof setTimeout> | undefined;
   const timeout = new Promise<never>((_, reject) => {
     t = setTimeout(
       () => reject(new Error(`${label} timed out after ${ms}ms`)),
@@ -76,7 +76,7 @@ function resetBackoff() {
   nextAllowedConnectTs = 0;
 }
 
-function subKey(method: string, params?: any[]): string {
+function subKey(method: string, params?: ElectrumParams): string {
   return `${method}:${JSON.stringify(params ?? [])}`;
 }
 
@@ -94,6 +94,13 @@ function parseServerEntry(entry: string, defaultPort = WSS_PORT) {
     return { host, port, encrypted };
   }
   return { host: entry, port: defaultPort, encrypted: true }; // default to WSS
+}
+
+function getNextServer(servers: string[], currentIdx: number): string | undefined {
+  if (servers.length < 2) return undefined;
+  const idx =
+    currentIdx >= 0 && currentIdx < servers.length ? currentIdx : 0;
+  return servers[(idx + 1) % servers.length];
 }
 
 async function wireNotificationsOnce(client: ECClient) {
@@ -224,7 +231,7 @@ export default function ElectrumServer() {
 
   async function request(
     method: string,
-    ...params: any[]
+    ...params: ElectrumParams
   ): Promise<RequestResponse> {
     await electrumConnect();
     try {
@@ -232,8 +239,10 @@ export default function ElectrumServer() {
       if (res instanceof Error) throw res;
       return res;
     } catch (err) {
+      const { servers } = getNetworkAndServers();
+      const nextServer = getNextServer(servers, serverIndex);
       await electrumDisconnect();
-      await electrumConnect(); // may throw if backoff is active
+      await electrumConnect(nextServer); // may throw if backoff is active
       const res = await electrum.request(method, ...params);
       if (res instanceof Error) throw res;
       return res;
@@ -247,7 +256,7 @@ export default function ElectrumServer() {
    *   subscribe('blockchain.scripthash.subscribe', scripthash)         // script activity
    *   subscribe('blockchain.address.subscribe', 'bitcoincash:qq...')   // address activity (Electrum Cash)
    */
-  async function subscribe(method: string, params?: any[]): Promise<void> {
+  async function subscribe(method: string, params?: ElectrumParams): Promise<void> {
     await electrumConnect();
     const key = subKey(method, params);
 
@@ -265,8 +274,10 @@ export default function ElectrumServer() {
       await doSubscribe();
       activeSubs.set(key, { method, params });
     } catch {
+      const { servers } = getNetworkAndServers();
+      const nextServer = getNextServer(servers, serverIndex);
       await electrumDisconnect();
-      await electrumConnect();
+      await electrumConnect(nextServer);
       await doSubscribe();
       activeSubs.set(key, { method, params });
     }
@@ -278,7 +289,7 @@ export default function ElectrumServer() {
    * - For scripthash & headers, servers typically don't expose a generic unsubscribe.
    *   We remove from local registry so we won't resubscribe on reconnect.
    */
-  async function unsubscribe(method: string, params?: any[]): Promise<void> {
+  async function unsubscribe(method: string, params?: ElectrumParams): Promise<void> {
     await electrumConnect();
     const key = subKey(method, params);
     activeSubs.delete(key);

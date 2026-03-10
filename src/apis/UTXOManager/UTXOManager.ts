@@ -1,11 +1,12 @@
 import DatabaseService from '../DatabaseManager/DatabaseService';
 // import { Network } from '../../redux/networkSlice';
 import { store } from '../../redux/store';
-import { UTXO } from '../../types/types';
+import { Token, UTXO } from '../../types/types';
+import { Database } from 'sql.js';
+import { logError } from '../../utils/errorHandling';
 
 export default function UTXOManager() {
   const dbService = DatabaseService();
-  const state = store.getState();
   // const prefix =
   //   state.network.currentNetwork === Network.MAINNET
   //     ? 'bitcoincash'
@@ -19,12 +20,24 @@ export default function UTXOManager() {
     fetchUTXOsFromDatabase,
   };
 
+  function parseToken(rawToken: unknown): Token | null | undefined {
+    if (typeof rawToken === 'string') {
+      try {
+        return JSON.parse(rawToken) as Token;
+      } catch {
+        return undefined;
+      }
+    }
+    if (rawToken && typeof rawToken === 'object') return rawToken as Token;
+    return undefined;
+  }
+
   // Store UTXOs in the database
   async function storeUTXOs(utxos: UTXO[]): Promise<void> {
-    let db;
+    let db: Database | null = null;
     try {
       await dbService.ensureDatabaseStarted();
-      const db = dbService.getDatabase();
+      db = dbService.getDatabase();
       if (!db) throw new Error('Database not started.');
 
       // Begin a transaction for atomicity
@@ -52,7 +65,7 @@ export default function UTXOManager() {
       insertQuery.free();
       db.exec('COMMIT;');
     } catch (error) {
-      console.error('Error storing UTXOs:', error);
+      logError('UTXOManager.storeUTXOs', error);
       if (db) {
         db.exec('ROLLBACK;');
       }
@@ -79,10 +92,7 @@ export default function UTXOManager() {
       const utxos: UTXO[] = [];
       while (query.step()) {
         const result = query.getAsObject();
-        result.token =
-          typeof result.token === 'string'
-            ? JSON.parse(result.token)
-            : result.token;
+        const token = parseToken(result.token);
         utxos.push({
           wallet_id: result.wallet_id as number,
           address: result.address as string,
@@ -93,14 +103,14 @@ export default function UTXOManager() {
           value: result.value as number,
           amount: result.value as number,
           prefix: result.prefix as string,
-          token: result.token as any,
+          token,
         });
       }
       query.free();
 
       return utxos;
     } catch (error) {
-      console.error(`Error fetching UTXOs for ${address}:`, error);
+      logError('UTXOManager.fetchUTXOsByAddress', error, { address, walletId });
       return [];
     }
   }
@@ -128,7 +138,7 @@ export default function UTXOManager() {
       db.exec('COMMIT;');
       // await dbService.saveDatabaseToFile();
     } catch (error) {
-      console.error('Error deleting UTXOs:', error);
+      logError('UTXOManager.deleteUTXOs', error, { walletId });
       if (db) {
         db.exec('ROLLBACK;'); // Rollback in case of failure, if db is available
       }
@@ -157,33 +167,81 @@ export default function UTXOManager() {
 
       return addresses;
     } catch (error) {
-      console.error('Error fetching addresses:', error);
+      logError('UTXOManager.fetchAddressesByWalletId', error, { walletId });
       return [];
     }
   }
 
   // Fetch UTXOs from the database for multiple addresses
-  async function fetchUTXOsFromDatabase(keyPairs) {
+  async function fetchUTXOsFromDatabase(
+    keyPairs: Array<{ address: string }>,
+    walletId?: number
+  ) {
     const utxosMap: Record<string, UTXO[]> = {};
     const cashTokenUtxosMap: Record<string, UTXO[]> = {};
 
     try {
-      for (const key of keyPairs) {
-        const addressUTXOs = await fetchUTXOsByAddress(
-          state.wallet_id.currentWalletId,
-          key.address
-        );
-        // console.log(`Fetched UTXOs for ${key.address}:`, addressUTXOs);
+      await dbService.ensureDatabaseStarted();
+      const db = dbService.getDatabase();
+      if (!db) throw new Error('Database not started.');
 
-        utxosMap[key.address] = addressUTXOs.filter((utxo) => !utxo.token);
-        cashTokenUtxosMap[key.address] = addressUTXOs.filter(
-          (utxo) => utxo.token
-        );
+      const currentWalletId = walletId ?? store.getState().wallet_id.currentWalletId;
+      if (!currentWalletId) {
+        return { utxosMap, cashTokenUtxosMap };
       }
+
+      const addresses = Array.from(
+        new Set(
+          keyPairs
+            .map((k) => (typeof k.address === 'string' ? k.address : ''))
+            .filter(Boolean)
+        )
+      );
+
+      for (const address of addresses) {
+        utxosMap[address] = [];
+        cashTokenUtxosMap[address] = [];
+      }
+
+      if (addresses.length === 0) {
+        return { utxosMap, cashTokenUtxosMap };
+      }
+
+      const placeholders = addresses.map(() => '?').join(', ');
+      const query = db.prepare(`
+        SELECT wallet_id, address, token_address, height, tx_hash, tx_pos, amount AS value, prefix, token
+        FROM UTXOs
+        WHERE wallet_id = ? AND address IN (${placeholders});
+      `);
+      query.bind([currentWalletId, ...addresses]);
+
+      while (query.step()) {
+        const result = query.getAsObject();
+        const address = result.address as string;
+        const utxo: UTXO = {
+          wallet_id: result.wallet_id as number,
+          address,
+          tokenAddress: result.token_address as string | undefined,
+          height: result.height as number,
+          tx_hash: result.tx_hash as string,
+          tx_pos: result.tx_pos as number,
+          value: result.value as number,
+          amount: result.value as number,
+          prefix: result.prefix as string,
+          token: parseToken(result.token),
+        };
+
+        if (utxo.token) {
+          cashTokenUtxosMap[address].push(utxo);
+        } else {
+          utxosMap[address].push(utxo);
+        }
+      }
+      query.free();
 
       return { utxosMap, cashTokenUtxosMap };
     } catch (error) {
-      console.error('Error fetching UTXOs from database:', error);
+      logError('UTXOManager.fetchUTXOsFromDatabase', error);
       return { utxosMap: {}, cashTokenUtxosMap: {} };
     }
   }

@@ -1,11 +1,60 @@
 name: CI
 on:
   pull_request:
+    paths-ignore:
+      - 'docs/**'
+      - '**/*.md'
   push:
     branches: [dev]
+    paths-ignore:
+      - 'docs/**'
+      - '**/*.md'
+
+permissions:
+  contents: read
+  pull-requests: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
+  dependency-review:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Dependency review
+        uses: actions/dependency-review-action@v4
+
+  secrets-scan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Gitleaks scan
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  dependency-audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - name: Install deps
+        run: npm ci --ignore-scripts
+      - name: Dependency audit (prod, high+)
+        run: npm run security:ci
+
   web-ci:
+    needs: [secrets-scan, dependency-audit]
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -20,21 +69,25 @@ jobs:
       - name: Install deps
         run: npm ci
 
-      - name: Lint
-        run: npm run lint
+      - name: Lint (Core)
+        run: npm run lint:core
 
-      - name: Typecheck
-        run: npx tsc -b
+      - name: Typecheck (Core)
+        run: npm run typecheck:core
 
       - name: Unit tests
         run: npm run test -- --run
+
+      - name: Addon manifest validation
+        run: npm run addons:validate
 
       - name: Build web (sanity)
         run: npm run build
 
       - name: Upload web dist
-        if: always()
+        if: github.event_name == 'push' && always()
         uses: actions/upload-artifact@v4
         with:
           name: web-dist
           path: dist/
+          retention-days: 7

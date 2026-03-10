@@ -28,7 +28,7 @@ const NFTConfigPopup: React.FC<NFTConfigPopupProps> = ({
           <select
             value={nftCapability}
             onChange={(e) => setNftCapability(e.target.value as undefined | 'none' | 'mutable' | 'minting')}
-            className="border p-2 w-full"
+            className="wallet-input p-2 w-full"
           >
             <option value="none">none</option>
             <option value="mutable">mutable</option>
@@ -42,12 +42,12 @@ const NFTConfigPopup: React.FC<NFTConfigPopupProps> = ({
             value={nftCommitment}
             onChange={(e) => setNftCommitment(e.target.value)}
             placeholder="Up to 40 bytes"
-            className="border p-2 w-full break-words whitespace-normal"
+            className="wallet-input p-2 w-full break-words whitespace-normal"
           />
         </div>
         <button
           onClick={() => setShow(false)}
-          className="bg-blue-500 text-white font-bold py-1 px-3 rounded"
+          className="wallet-btn-primary font-bold py-1 px-3"
         >
           Done
         </button>
