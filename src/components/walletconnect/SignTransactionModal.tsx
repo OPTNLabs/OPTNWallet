@@ -10,15 +10,19 @@ import {
 import { binToHex, lockingBytecodeToCashAddress } from '@bitauth/libauth';
 import { SATSINBITCOIN } from '../../utils/constants';
 import { ensureUint8Array, parseSatoshis } from '../../utils/binary';
+import { selectWalletId } from '../../redux/walletSlice';
+import useOutboundTransactions from '../../hooks/useOutboundTransactions';
 
 export function SignTransactionModal() {
   const dispatch = useDispatch<AppDispatch>();
+  const walletId = useSelector(selectWalletId);
   const signTxRequest = useSelector(
     (state: RootState) => state.walletconnect.pendingSignTx
   );
   const activeSessions = useSelector(
     (state: RootState) => state.walletconnect.activeSessions
   );
+  const { hasUnresolved } = useOutboundTransactions(walletId);
 
   if (!signTxRequest) return null;
 
@@ -86,8 +90,10 @@ export function SignTransactionModal() {
     0n
   );
   const fee = totalInput - totalOutput;
+  const broadcastLocked = shouldBroadcast && hasUnresolved;
 
   const handleSign = async () => {
+    if (broadcastLocked) return;
     await dispatch(respondWithTxSignature(signTxRequest));
     dispatch(clearPendingSignTx());
   };
@@ -128,6 +134,13 @@ export function SignTransactionModal() {
             <p className="text-sm wallet-surface-strong border border-[var(--wallet-border)] rounded p-2 wallet-text-strong">
               <strong>Prompt:</strong> {userPrompt}
             </p>
+          )}
+
+          {broadcastLocked && (
+            <div className="text-sm wallet-surface-strong border border-[var(--wallet-border)] rounded p-3 wallet-text-strong">
+              Another outgoing transaction is still syncing. To avoid duplicates while you are offline, this wallet
+              will only broadcast one unresolved transaction at a time.
+            </div>
           )}
 
           {inputs.map((_, i: number) => {
@@ -230,8 +243,14 @@ export function SignTransactionModal() {
           <button
             onClick={handleSign}
             className="wallet-btn-primary"
+            disabled={broadcastLocked}
+            title={
+              broadcastLocked
+                ? 'Wait for the previous outgoing transaction to sync first'
+                : undefined
+            }
           >
-            Sign
+            {broadcastLocked && shouldBroadcast ? 'Waiting for sync' : 'Sign'}
           </button>
           <button
             onClick={handleCancel}

@@ -1,16 +1,14 @@
 // src/components/transaction/SelectedUTXOsDisplay.tsx
-
-import { useState, useEffect } from 'react';
+import { useState } from 'react';
 import { FaBitcoin } from 'react-icons/fa';
 import { UTXO } from '../../types/types';
 import Popup from './Popup';
 import { shortenTxHash } from '../../utils/shortenHash';
 import { PREFIX } from '../../utils/constants';
 import { Network } from '../../redux/networkSlice';
-import BcmrService from '../../services/BcmrService';
-import { IdentitySnapshot } from '@bitauth/libauth';
 import { useSelector } from 'react-redux';
 import { RootState } from '../../redux/store';
+import useSharedTokenMetadata from '../../hooks/useSharedTokenMetadata';
 
 interface SelectedUTXOsDisplayProps {
   selectedUtxos: UTXO[];
@@ -98,55 +96,14 @@ export default function SelectedUTXOsDisplay({
   currentNetwork,
 }: SelectedUTXOsDisplayProps) {
   const [showPopup, setShowPopup] = useState(false);
-
-  // Updated tokenMetadata to include symbol and decimals
-  const [tokenMetadata, setTokenMetadata] = useState<
-    Record<
-      string,
-      { name: string; symbol: string; decimals: number; iconUri: string | null }
-    >
-  >({});
+  const tokenMetadata = useSharedTokenMetadata(
+    selectedUtxos
+      .map((u) => u.token?.category)
+      .filter((c): c is string => !!c)
+  );
 
   const prices = useSelector((s: RootState) => s.priceFeed);
   const bchUsd = prices['BCH-USD']?.price ?? 0;
-
-  // Fetch token metadata when categories change
-  useEffect(() => {
-    const svc = new BcmrService();
-    const missing = Array.from(
-      new Set(
-        selectedUtxos
-          .map((u) => u.token?.category)
-          .filter((c): c is string => !!c && !(c in tokenMetadata))
-      )
-    );
-
-    if (missing.length === 0) return;
-
-    (async () => {
-      const newMeta: typeof tokenMetadata = {};
-      for (const category of missing) {
-        try {
-          const authbase = await svc.getCategoryAuthbase(category);
-          const reg = await svc.resolveIdentityRegistry(authbase);
-          const snap: IdentitySnapshot = svc.extractIdentity(
-            authbase,
-            reg.registry
-          );
-          const iconUri = await svc.resolveIcon(authbase);
-
-          const decimals = snap.token?.decimals || 0;
-          const symbol = snap.token?.symbol || '';
-          newMeta[category] = { name: snap.name, symbol, decimals, iconUri };
-        } catch (e) {
-          // ignore
-        }
-      }
-      if (Object.keys(newMeta).length > 0) {
-        setTokenMetadata((prev) => ({ ...prev, ...newMeta }));
-      }
-    })();
-  }, [selectedUtxos, tokenMetadata]);
 
   const togglePopup = () => setShowPopup((v) => !v);
 

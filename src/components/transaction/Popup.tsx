@@ -16,13 +16,13 @@ const Popup: React.FC<PopupProps> = ({
   return (
     <div className="wallet-popup-backdrop z-[1200] p-3 sm:p-4">
       <div
-        className="wallet-popup-panel flex w-full max-w-md flex-col"
+        className="wallet-popup-panel flex w-full max-w-md min-w-0 flex-col overflow-x-hidden"
         style={{
           maxHeight:
             'calc(100dvh - var(--navbar-height) - var(--safe-bottom) - 0.75rem)',
         }}
       >
-        <div className="min-h-0 overflow-y-auto pr-1">{children}</div>
+        <div className="min-h-0 overflow-y-auto overflow-x-hidden pr-1">{children}</div>
         <div
           className="flex justify-center mt-4 pt-3 shrink-0"
           style={{ borderTop: '1px solid var(--wallet-border)' }}

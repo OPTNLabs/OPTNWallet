@@ -27,16 +27,15 @@ async function fetchAndStoreTransactionHistory() {
       return;
     }
 
-    // Fetch and store transaction history for each address
-    for (const keyPair of keyPairs) {
-      const address = keyPair.address;
-      const updatedHistory =
-        await transactionManager.fetchAndStoreTransactionHistory(
-          currentWalletId,
-          address
-        );
+    const addresses = keyPairs.map((keyPair) => keyPair.address).filter(Boolean);
+    const historyByAddress =
+      await transactionManager.fetchAndStoreTransactionHistories(
+        currentWalletId,
+        addresses
+      );
 
-      // Update Redux store with the new transactions
+    for (const address of addresses) {
+      const updatedHistory = historyByAddress[address] ?? [];
       if (updatedHistory.length > 0) {
         store.dispatch(
           addTransactions({
@@ -45,8 +44,6 @@ async function fetchAndStoreTransactionHistory() {
           })
         );
       }
-
-      // Ask UTXO worker to refresh this address (keeps UTXO set in sync)
       requestUTXORefreshFor(address, 60);
     }
   } catch (error) {

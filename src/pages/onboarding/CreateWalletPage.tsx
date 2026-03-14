@@ -66,9 +66,18 @@ const CreateWalletPage = () => {
       const walletID = await walletManager.setWalletId(mnemonicPhrase, passphrase);
       if (walletID == null) throw new Error('Failed to resolve created wallet ID.');
 
+      const walletInfo = await walletManager.getWalletInfo(walletID);
+      const resolvedNetwork =
+        walletInfo?.networkType === currentNetwork
+          ? currentNetwork
+          : walletInfo?.networkType;
+      if (!resolvedNetwork) {
+        throw new Error('Failed to resolve wallet network.');
+      }
+
       dispatch(setWalletId(walletID));
-      dispatch(setWalletNetwork(currentNetwork));
-      dispatch(setNetwork(currentNetwork));
+      dispatch(setWalletNetwork(resolvedNetwork));
+      dispatch(setNetwork(resolvedNetwork));
 
       navigate(`/home/${walletID}`);
     } catch (error) {

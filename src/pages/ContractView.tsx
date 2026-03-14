@@ -18,7 +18,6 @@ import { Tooltip } from 'react-tooltip';
 import { logError, toErrorMessage } from '../utils/errorHandling';
 
 import {
-  CapacitorBarcodeScanner,
   CapacitorBarcodeScannerTypeHint,
 } from '@capacitor/barcode-scanner';
 import { FaCamera } from 'react-icons/fa';
@@ -36,6 +35,10 @@ import {
 import PageHeader from '../components/ui/PageHeader';
 import SectionCard from '../components/ui/SectionCard';
 import EmptyState from '../components/ui/EmptyState';
+import {
+  getBarcodeScannerErrorMessage,
+  scanBarcodeSafely,
+} from '../utils/barcodeScanner';
 
 interface ContractArg {
   name: string;
@@ -64,7 +67,14 @@ const extractBlockHeight = (header: unknown): number | null => {
   }
   if (header && typeof header === 'object') {
     const possibleHeight = header as Record<string, unknown>;
-    const directKeys = ['height', 'blockHeight', 'block_height', 'tip'];
+    const directKeys = [
+      'height',
+      'blockHeight',
+      'block_height',
+      'tip',
+      'tipHeight',
+      'tip_height',
+    ];
     for (const key of directKeys) {
       const value = possibleHeight[key];
       const parsed = extractBlockHeight(value);
@@ -111,27 +121,54 @@ const ContractView = () => {
   );
 
   useEffect(() => {
-    const fetchInitialBlock = async () => {
+    let cancelled = false;
+    let retryTimer: ReturnType<typeof setTimeout> | null = null;
+
+    const fetchInitialBlock = async (attempt = 0) => {
       try {
         const block = await ElectrumService.getLatestBlock();
-        setBlockHeight(extractBlockHeight(block));
+        const parsedHeight = extractBlockHeight(block);
+        if (parsedHeight !== null) {
+          if (!cancelled) {
+            setBlockHeight(parsedHeight);
+          }
+          return;
+        }
+        if (!cancelled && attempt < 2) {
+          retryTimer = setTimeout(() => {
+            void fetchInitialBlock(attempt + 1);
+          }, 1500);
+        }
       } catch (err) {
-        logError('ContractView.fetchInitialBlock', err);
+        logError('ContractView.fetchInitialBlock', err, {
+          currentNetwork,
+          attempt,
+        });
+        if (!cancelled && attempt < 2) {
+          retryTimer = setTimeout(() => {
+            void fetchInitialBlock(attempt + 1);
+          }, 1500);
+        }
       }
     };
 
     const handleBlockUpdate = (header: unknown) => {
-      setBlockHeight(extractBlockHeight(header));
+      const parsedHeight = extractBlockHeight(header);
+      if (parsedHeight === null) return;
+      setBlockHeight(parsedHeight);
       setError(null);
     };
 
+    setBlockHeight(null);
     fetchInitialBlock();
-    ElectrumService.subscribeBlockHeaders(handleBlockUpdate);
+    void ElectrumService.subscribeBlockHeaders(handleBlockUpdate);
 
     return () => {
-      void ElectrumService.unsubscribeBlockHeaders();
+      cancelled = true;
+      if (retryTimer) clearTimeout(retryTimer);
+      void ElectrumService.unsubscribeBlockHeaders(handleBlockUpdate);
     };
-  }, []);
+  }, [currentNetwork]);
 
   useEffect(() => {
     const loadAvailableContracts = async () => {
@@ -256,7 +293,7 @@ const ContractView = () => {
     if (isScanning) return;
     setIsScanning(true);
     try {
-      const result = await CapacitorBarcodeScanner.scanBarcode({
+      const result = await scanBarcodeSafely({
         hint: CapacitorBarcodeScannerTypeHint.ALL,
         cameraDirection: 1,
       });
@@ -268,7 +305,7 @@ const ContractView = () => {
     } catch (error) {
       logError('ContractView.scanBarcode', error, { argName });
       await Toast.show({
-        text: 'Failed to scan QR code. Please ensure camera permissions are granted and try again.',
+        text: getBarcodeScannerErrorMessage(error),
       });
     } finally {
       setIsScanning(false);
@@ -385,7 +422,6 @@ const ContractView = () => {
     <div className="container mx-auto max-w-xl p-4 pb-16 wallet-page">
       <PageHeader
         title="Contracts"
-        subtitle="Instantiate and manage contracts"
         compact
       />
 

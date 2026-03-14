@@ -25,8 +25,8 @@ const DEFAULT_INFRA_URL_POOLS: Record<Network, InfraUrlPools> = {
     bcmrApiBaseUrls: ['https://bcmr-chipnet.paytaca.com/api'],
     ipfsGateways: [
       'https://ipfs.io/ipfs',
-      'https://cloudflare-ipfs.com/ipfs',
       'https://dweb.link/ipfs',
+      'https://cloudflare-ipfs.com/ipfs',
     ],
   },
 
@@ -40,8 +40,8 @@ const DEFAULT_INFRA_URL_POOLS: Record<Network, InfraUrlPools> = {
     bcmrApiBaseUrls: ['https://bcmr.paytaca.com/api'],
     ipfsGateways: [
       'https://ipfs.io/ipfs',
-      'https://cloudflare-ipfs.com/ipfs',
       'https://dweb.link/ipfs',
+      'https://cloudflare-ipfs.com/ipfs',
     ],
   },
 };

@@ -106,83 +106,91 @@ const Settings: React.FC = () => {
   };
 
   return (
-    <div className="container mx-auto max-w-md p-4 wallet-page">
+    <div className="container mx-auto max-w-md h-[calc(100dvh-var(--navbar-height)-var(--safe-bottom))] px-4 pt-4 pb-3 flex flex-col overflow-hidden wallet-page">
       <PageHeader title="Settings" compact />
       {!selectedOption ? (
-        <SectionCard>
-          <div className="flex flex-col items-center space-y-3">
-            <button
-              onClick={toggleMode}
-              className="wallet-btn-secondary w-full max-w-md"
-            >
-              Theme: {mode === 'dark' ? 'Dark' : 'Light'} (tap to switch)
-            </button>
-            <button
-              onClick={() => handleOptionClick('recovery')}
-              className="wallet-btn-primary w-full max-w-md"
-            >
-              Recovery Phrase
-            </button>
-            <button
-              onClick={() => handleOptionClick('about')}
-              className="wallet-btn-primary w-full max-w-md"
-            >
-              About
-            </button>
-            <button
-              onClick={() => handleOptionClick('terms')}
-              className="wallet-btn-primary w-full max-w-md"
-            >
-              Terms of Use
-            </button>
-            <button
-              onClick={() => handleOptionClick('contact')}
-              className="wallet-btn-primary w-full max-w-md"
-            >
-              Contact Us
-            </button>
-            <button
-              onClick={() => handleOptionClick('ContractDetails')}
-              className="wallet-btn-primary w-full max-w-md"
-            >
-              Contract Info
-            </button>
-            {currentNetwork === 'chipnet' && (
-              <button
-                onClick={() => handleOptionClick('network')}
-                className="wallet-btn-primary w-full max-w-md"
-              >
-                Faucet
-              </button>
-            )}
-            <button
-              onClick={() => handleOptionClick('walletconnect')}
-              className="wallet-btn-primary w-full max-w-md"
-            >
-              WalletConnect
-            </button>
-            <button
-              onClick={handleLogout}
-              className="wallet-btn-danger w-full max-w-md text-xl"
-            >
-              Log Out
-            </button>
+        <SectionCard className="flex-1 min-h-0 overflow-hidden">
+          <div className="flex h-full min-h-0 flex-col">
+            <div className="flex-1 min-h-0 overflow-y-auto pr-1">
+              <div className="flex flex-col items-center space-y-3">
+                <button
+                  onClick={toggleMode}
+                  className="wallet-btn-secondary w-full max-w-md"
+                >
+                  Theme: {mode === 'dark' ? 'Dark' : 'Light'} (tap to switch)
+                </button>
+                <button
+                  onClick={() => handleOptionClick('recovery')}
+                  className="wallet-btn-primary w-full max-w-md"
+                >
+                  Recovery Phrase
+                </button>
+                <button
+                  onClick={() => handleOptionClick('about')}
+                  className="wallet-btn-primary w-full max-w-md"
+                >
+                  About
+                </button>
+                <button
+                  onClick={() => handleOptionClick('terms')}
+                  className="wallet-btn-primary w-full max-w-md"
+                >
+                  Terms of Use
+                </button>
+                <button
+                  onClick={() => handleOptionClick('contact')}
+                  className="wallet-btn-primary w-full max-w-md"
+                >
+                  Contact Us
+                </button>
+                <button
+                  onClick={() => handleOptionClick('ContractDetails')}
+                  className="wallet-btn-primary w-full max-w-md"
+                >
+                  Contract Info
+                </button>
+                {currentNetwork === 'chipnet' && (
+                  <button
+                    onClick={() => handleOptionClick('network')}
+                    className="wallet-btn-primary w-full max-w-md"
+                  >
+                    Faucet
+                  </button>
+                )}
+                <button
+                  onClick={() => handleOptionClick('walletconnect')}
+                  className="wallet-btn-primary w-full max-w-md"
+                >
+                  WalletConnect
+                </button>
+                <button
+                  onClick={handleLogout}
+                  className="wallet-btn-danger w-full max-w-md text-xl"
+                >
+                  Log Out
+                </button>
+              </div>
+            </div>
           </div>
         </SectionCard>
       ) : (
-        <SectionCard>
-          <div className="mb-4 flex justify-between items-center">
-            <h2 className="text-2xl font-bold wallet-text-strong">
-              {renderTitle()}
-            </h2>
-            <button
-              className="wallet-btn-secondary text-sm px-3 py-1.5"
-              onClick={() => setSelectedOption('')}
-            >
-              Back
-            </button>
+        <SectionCard className="flex-1 min-h-0 overflow-hidden">
+          <div className="flex h-full min-h-0 flex-col">
+            <div className="mb-4 flex justify-between items-center shrink-0">
+              <h2 className="text-2xl font-bold wallet-text-strong">
+                {renderTitle()}
+              </h2>
+              <button
+                className="wallet-btn-secondary text-sm px-3 py-1.5"
+                onClick={() => setSelectedOption('')}
+              >
+                Back
+              </button>
+            </div>
+            <div className="flex-1 min-h-0 overflow-y-auto pr-1">
+              {renderContent()}
+            </div>
           </div>
-          {renderContent()}
         </SectionCard>
       )}
     </div>

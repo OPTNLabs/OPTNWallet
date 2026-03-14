@@ -1,7 +1,10 @@
 // src/hooks/useHandleTransaction.ts
 
 import { useDispatch } from 'react-redux';
-import TransactionService from '../services/TransactionService';
+import TransactionService, {
+  type BroadcastResult,
+  type BroadcastState,
+} from '../services/TransactionService';
 import { Toast } from '@capacitor/toast';
 import { TransactionOutput, UTXO } from '../types/types';
 import {
@@ -29,6 +32,7 @@ const useHandleTransaction = (
   setErrorMessage: React.Dispatch<React.SetStateAction<string | null>>,
   setShowRawTxPopup: React.Dispatch<React.SetStateAction<boolean>>,
   setShowTxIdPopup: React.Dispatch<React.SetStateAction<boolean>>, // Added parameter
+  setBroadcastState: React.Dispatch<React.SetStateAction<BroadcastState>>,
   setLoading: React.Dispatch<React.SetStateAction<boolean>>,
   onBroadcastSuccess?: () => void
 ) => {
@@ -142,12 +146,17 @@ const useHandleTransaction = (
   const handleSendTransaction = async (
     rawTX: string,
     setTransactionId: React.Dispatch<React.SetStateAction<string>>
-  ) => {
+  ): Promise<BroadcastResult> => {
     try {
       setLoading(true);
       const transactionID = await TransactionService.sendTransaction(
         rawTX,
-        selectedUtxos
+        selectedUtxos,
+        {
+          source: 'transaction-builder',
+          sourceLabel: 'Transaction Builder',
+          amountSummary: `${txOutputs.length} output${txOutputs.length === 1 ? '' : 's'}`,
+        }
       );
 
       // If we didn't get a txid, treat as an error even if no errorMessage was returned.
@@ -163,6 +172,7 @@ const useHandleTransaction = (
 
       // Success path
       setTransactionId(transactionID.txid);
+      setBroadcastState(transactionID.broadcastState ?? 'broadcasted');
       setShowTxIdPopup(true);
 
       // Clear state only on success

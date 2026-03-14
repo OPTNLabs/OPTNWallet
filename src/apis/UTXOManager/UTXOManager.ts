@@ -18,6 +18,7 @@ export default function UTXOManager() {
     deleteUTXOs,
     fetchAddressesByWalletId,
     fetchUTXOsFromDatabase,
+    replaceWalletAddressUTXOs,
   };
 
   function parseToken(rawToken: unknown): Token | null | undefined {
@@ -243,6 +244,94 @@ export default function UTXOManager() {
     } catch (error) {
       logError('UTXOManager.fetchUTXOsFromDatabase', error);
       return { utxosMap: {}, cashTokenUtxosMap: {} };
+    }
+  }
+
+  async function replaceWalletAddressUTXOs(
+    walletId: number,
+    utxosByAddress: Record<string, UTXO[]>
+  ): Promise<void> {
+    let db: Database | null = null;
+
+    try {
+      await dbService.ensureDatabaseStarted();
+      db = dbService.getDatabase();
+      if (!db) throw new Error('Database not started.');
+
+      const addresses = Object.keys(utxosByAddress).filter(Boolean);
+      if (addresses.length === 0) return;
+
+      const { utxosMap, cashTokenUtxosMap } = await fetchUTXOsFromDatabase(
+        addresses.map((address) => ({ address })),
+        walletId
+      );
+
+      const existingByAddress: Record<string, UTXO[]> = {};
+      for (const address of addresses) {
+        existingByAddress[address] = [
+          ...(utxosMap[address] ?? []),
+          ...(cashTokenUtxosMap[address] ?? []),
+        ];
+      }
+
+      db.exec('BEGIN TRANSACTION;');
+
+      const deleteSingleStmt = db.prepare(`
+        DELETE FROM UTXOs
+        WHERE wallet_id = ? AND tx_hash = ? AND tx_pos = ? AND address = ?;
+      `);
+      const deleteAddressStmt = db.prepare(`
+        DELETE FROM UTXOs
+        WHERE wallet_id = ? AND address = ?;
+      `);
+      const insertStmt = db.prepare(`
+        INSERT OR REPLACE INTO UTXOs(wallet_id, address, token_address, height, tx_hash, tx_pos, amount, prefix, token)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?);
+      `);
+
+      for (const address of addresses) {
+        const nextUtxos = utxosByAddress[address] ?? [];
+        const existing = existingByAddress[address] ?? [];
+
+        if (nextUtxos.length === 0) {
+          deleteAddressStmt.run([walletId, address]);
+          continue;
+        }
+
+        const nextKeys = new Set(
+          nextUtxos.map((utxo) => `${utxo.tx_hash}-${utxo.tx_pos}`)
+        );
+        for (const utxo of existing) {
+          if (!nextKeys.has(`${utxo.tx_hash}-${utxo.tx_pos}`)) {
+            deleteSingleStmt.run([walletId, utxo.tx_hash, utxo.tx_pos, utxo.address]);
+          }
+        }
+
+        for (const utxo of nextUtxos) {
+          insertStmt.run([
+            utxo.wallet_id,
+            utxo.address,
+            utxo.tokenAddress || null,
+            utxo.height || 0,
+            utxo.tx_hash,
+            utxo.tx_pos,
+            utxo.value,
+            utxo.prefix || 'unknown',
+            utxo.token ? JSON.stringify(utxo.token) : null,
+          ]);
+        }
+      }
+
+      insertStmt.free();
+      deleteSingleStmt.free();
+      deleteAddressStmt.free();
+      db.exec('COMMIT;');
+    } catch (error) {
+      logError('UTXOManager.replaceWalletAddressUTXOs', error, { walletId });
+      if (db) {
+        db.exec('ROLLBACK;');
+      }
+      throw error;
     }
   }
 }

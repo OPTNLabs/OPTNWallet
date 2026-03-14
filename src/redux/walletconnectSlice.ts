@@ -105,6 +105,10 @@ export const handleWcRequest = createAsyncThunk(
         return;
       }
       case 'bch_signTransaction': {
+        const existing = state.walletconnect.pendingSignTx;
+        if (existing?.id === sessionEvent.id && existing.topic === sessionEvent.topic) {
+          return;
+        }
         dispatch(setPendingSignTx(sessionEvent));
         return;
       }

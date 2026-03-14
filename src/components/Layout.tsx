@@ -1,9 +1,20 @@
 import { useState, useEffect } from 'react';
 import { Outlet } from 'react-router-dom';
+import { useSelector } from 'react-redux';
 import BottomNavBar from './BottomNavBar';
+import { selectWalletId } from '../redux/walletSlice';
+import useOutboundTransactions from '../hooks/useOutboundTransactions';
+import PendingOutboundPanel from './transaction/PendingOutboundPanel';
 
 const Layout = () => {
   const [navBarHeight, setNavBarHeight] = useState(0);
+  const walletId = useSelector(selectWalletId);
+  const {
+    outboundTransactions,
+    reconciling,
+    refresh,
+    release,
+  } = useOutboundTransactions(walletId);
 
   useEffect(() => {
     document.documentElement.style.setProperty(
@@ -20,6 +31,21 @@ const Layout = () => {
           paddingBottom: `calc(var(--navbar-height) + var(--safe-bottom))`,
         }}
       >
+        {outboundTransactions.length > 0 && (
+          <div className="px-4 pt-3">
+            <PendingOutboundPanel
+              records={outboundTransactions}
+              refreshing={reconciling}
+              onRefresh={() => {
+                void refresh();
+              }}
+              onRelease={(txid) => {
+                void release(txid);
+              }}
+              compact
+            />
+          </div>
+        )}
         <Outlet />
       </div>
 

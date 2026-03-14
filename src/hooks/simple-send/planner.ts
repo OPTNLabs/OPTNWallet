@@ -1,11 +1,9 @@
 import { TransactionOutput, UTXO } from '../../types/types';
 import TransactionService from '../../services/TransactionService';
-import { TOKEN_OUTPUT_SATS } from '../../utils/constants';
+import { DUST, TOKEN_OUTPUT_SATS } from '../../utils/constants';
 import { toErrorMessage } from '../../utils/errorHandling';
 import { BuildResult, BchBuildResult } from './types';
 import { isConfirmed, sortLargestFirst, sumInputsSats } from './helpers';
-
-const FEE_BUFFER_SATS = 1000;
 
 type PlannerParams = {
   recipient: string;
@@ -24,6 +22,15 @@ export function createSimpleSendPlanner({
   selectedChangeAddress,
   dbUtxos,
 }: PlannerParams) {
+  function sortFeeUtxosPreferred(pool: UTXO[]) {
+    return [...pool].sort((a, b) => {
+      const aNonZero = a.tx_pos !== 0 ? 1 : 0;
+      const bNonZero = b.tx_pos !== 0 ? 1 : 0;
+      if (aNonZero !== bNonZero) return bNonZero - aNonZero;
+      return Number(BigInt(b.amount ?? b.value) - BigInt(a.amount ?? a.value));
+    });
+  }
+
   async function tryBuild(
     inputs: UTXO[],
     outputs: TransactionOutput[]
@@ -109,16 +116,19 @@ export function createSimpleSendPlanner({
       };
     }
 
-    const confirmedPool = sortLargestFirst(feeUtxoPool.filter(isConfirmed));
-    const unconfirmedPool = sortLargestFirst(
+    const confirmedPool = sortFeeUtxosPreferred(feeUtxoPool.filter(isConfirmed));
+    const unconfirmedPool = sortFeeUtxosPreferred(
       feeUtxoPool.filter((u) => !isConfirmed(u))
     );
+
+    let lastErr = '';
 
     for (let k = 1; k <= Math.min(maxInputs, confirmedPool.length); k++) {
       const bchInputs = confirmedPool.slice(0, k);
       const inputs = [...fixedTokenInputs, ...bchInputs] as UTXO[];
       const res = await tryBuild(inputs, outputs);
-      if (res.ok && res.changeSats >= FEE_BUFFER_SATS) return { ...res, inputs };
+      if (res.ok && res.changeSats >= 0) return { ...res, inputs };
+      if (!res.ok && 'err' in res) lastErr = res.err;
     }
 
     const combinedPool = sortLargestFirst([...confirmedPool, ...unconfirmedPool]);
@@ -126,12 +136,14 @@ export function createSimpleSendPlanner({
       const bchInputs = combinedPool.slice(0, k);
       const inputs = [...fixedTokenInputs, ...bchInputs] as UTXO[];
       const res = await tryBuild(inputs, outputs);
-      if (res.ok && res.changeSats >= FEE_BUFFER_SATS) return { ...res, inputs };
+      if (res.ok && res.changeSats >= 0) return { ...res, inputs };
+      if (!res.ok && 'err' in res) lastErr = res.err;
     }
 
+    const availableSats = sumInputsSats(feeUtxoPool);
     return {
       ok: false as const,
-      err: 'Unable to cover 1 sat/byte fee plus buffer using non-token BCH UTXOs.',
+      err: `Unable to build with non-token BCH fee UTXOs (${feeUtxoPool.length} inputs, ${availableSats} sats). ${lastErr || `A BCH change output is only added when leftover funds exceed ${DUST} sats.`}`,
     };
   }
 
@@ -139,8 +151,8 @@ export function createSimpleSendPlanner({
     targetSats: number,
     maxInputs = 50
   ): Promise<BchBuildResult> {
-    const confirmedPool = sortLargestFirst(dbUtxos.filter(isConfirmed));
-    const unconfirmedPool = sortLargestFirst(
+    const confirmedPool = sortFeeUtxosPreferred(dbUtxos.filter(isConfirmed));
+    const unconfirmedPool = sortFeeUtxosPreferred(
       dbUtxos.filter((u) => !isConfirmed(u))
     );
 
@@ -148,26 +160,31 @@ export function createSimpleSendPlanner({
       { recipientAddress: recipient, amount: targetSats },
     ];
 
+    let lastErr = '';
+
     for (let k = 1; k <= Math.min(maxInputs, confirmedPool.length); k++) {
       const inputs = confirmedPool.slice(0, k);
       const res = await tryBuild(inputs, outputs);
-      if (res.ok && res.changeSats >= FEE_BUFFER_SATS) {
+      if (res.ok && res.changeSats >= 0) {
         return { ok: true, inputs, ...res };
       }
+      if (!res.ok && 'err' in res) lastErr = res.err;
     }
 
     const combined = sortLargestFirst([...confirmedPool, ...unconfirmedPool]);
     for (let k = 1; k <= Math.min(maxInputs, combined.length); k++) {
       const inputs = combined.slice(0, k);
       const res = await tryBuild(inputs, outputs);
-      if (res.ok && res.changeSats >= FEE_BUFFER_SATS) {
+      if (res.ok && res.changeSats >= 0) {
         return { ok: true, inputs, ...res };
       }
+      if (!res.ok && 'err' in res) lastErr = res.err;
     }
 
+    const availableSats = sumInputsSats(dbUtxos);
     return {
       ok: false,
-      err: 'Insufficient funds: can’t cover amount, 1 sat/byte fee, and 1000-sat buffer.',
+      err: `Unable to build BCH send with ${dbUtxos.length} fee candidates totaling ${availableSats} sats. ${lastErr || `A BCH change output is only added when leftover funds exceed ${DUST} sats.`}`,
     };
   }
 
