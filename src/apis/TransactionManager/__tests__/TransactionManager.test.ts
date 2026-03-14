@@ -84,14 +84,36 @@ describe('TransactionManager', () => {
 
     const tm = TransactionManager();
 
-    await expect(tm.sendTransaction('rawtx1')).resolves.toEqual({
+    await expect(tm.sendTransaction('00aa')).resolves.toEqual({
       txid: 'txid-ok',
       errorMessage: null,
     });
 
-    const fail = await tm.sendTransaction('rawtx2');
+    const fail = await tm.sendTransaction('00bb');
     expect(fail.txid).toBeNull();
     expect(fail.errorMessage).toContain('broadcast failed');
+  });
+
+  it('sendTransaction returns derived txid on ambiguous broadcast failure and does not rebroadcast same raw tx', async () => {
+    const sendTransaction = vi
+      .fn()
+      .mockRejectedValueOnce(new Error('request(blockchain.transaction.broadcast) timed out after 12000ms'));
+
+    mockedTxBuilderHelper.mockReturnValue({
+      sendTransaction,
+      buildTransaction: vi.fn(),
+    } as never);
+
+    const tm = TransactionManager();
+    const rawTx = '01000000000100';
+
+    const first = await tm.sendTransaction(rawTx);
+    expect(first.txid).toMatch(/^[0-9a-f]{64}$/);
+    expect(first.errorMessage).toBeNull();
+
+    const second = await tm.sendTransaction(rawTx);
+    expect(second).toEqual(first);
+    expect(sendTransaction).toHaveBeenCalledTimes(1);
   });
 
   it('addOutput builds token output from existing token UTXO and dispatches it', () => {

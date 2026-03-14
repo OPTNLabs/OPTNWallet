@@ -124,4 +124,52 @@ describe('DatabaseService', () => {
 
     expect(idbSet).toHaveBeenCalledTimes(2); // only one debounced save increment
   });
+
+  it('scheduleDatabaseSave coalesces and flushDatabaseToFile flushes immediately', async () => {
+    const idbGet = vi.fn(async () => null);
+    const idbSet = vi.fn(async () => {});
+
+    vi.doMock('idb-keyval', () => ({
+      get: idbGet,
+      set: idbSet,
+    }));
+
+    vi.doMock('../../../utils/schema/schema', () => ({
+      createTables: vi.fn(),
+    }));
+
+    class FakeDatabase {
+      version = 0;
+      run(sql: string) {
+        const m = sql.match(/PRAGMA user_version = (\d+)/);
+        if (m) this.version = Number(m[1]);
+      }
+      exec(sql: string) {
+        if (sql.includes('PRAGMA user_version;')) {
+          return [{ values: [[this.version]] }];
+        }
+        return [];
+      }
+      export() {
+        return new Uint8Array([7, 7, 7]);
+      }
+    }
+
+    vi.doMock('sql.js', () => ({
+      default: vi.fn(async () => ({ Database: FakeDatabase })),
+    }));
+
+    const mod = await import('../DatabaseService');
+    const svc = mod.default();
+
+    await svc.startDatabase();
+    expect(idbSet).toHaveBeenCalledTimes(1);
+
+    svc.scheduleDatabaseSave();
+    svc.scheduleDatabaseSave();
+    expect(idbSet).toHaveBeenCalledTimes(1);
+
+    await svc.flushDatabaseToFile();
+    expect(idbSet).toHaveBeenCalledTimes(2);
+  });
 });

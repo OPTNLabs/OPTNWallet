@@ -21,6 +21,8 @@ import { useTransactionInit } from './transaction/useTransactionInit';
 import { useTransactionDerived } from './transaction/useTransactionDerived';
 import PageHeader from '../components/ui/PageHeader';
 import SectionCard from '../components/ui/SectionCard';
+import { type BroadcastState } from '../services/TransactionService';
+import useOutboundTransactions from '../hooks/useOutboundTransactions';
 
 const noopSetUtxos: Dispatch<SetStateAction<UTXO[]>> = () => undefined;
 
@@ -48,6 +50,8 @@ const Transaction: React.FC = () => {
   const [bytecodeSize, setBytecodeSize] = useState<number>(0);
   const [rawTX, setRawTX] = useState<string>('');
   const [transactionId, setTransactionId] = useState<string>('');
+  const [broadcastState, setBroadcastState] =
+    useState<BroadcastState>('broadcasted');
   // Removed local `finalOutputs` as we will use Redux's `txOutputs`
   const [showPopup, setShowPopup] = useState(false);
   const [showRawTxPopup, setShowRawTxPopup] = useState(false);
@@ -108,6 +112,10 @@ const Transaction: React.FC = () => {
   );
 
   const walletId = useSelector(selectWalletId);
+  const {
+    hasUnresolved,
+    reservedOutpointKeys,
+  } = useOutboundTransactions(walletId);
   useTransactionInit(dispatch);
 
   const resetTransactionViewState = useCallback(() => {
@@ -122,6 +130,7 @@ const Transaction: React.FC = () => {
     setSelectedTokenCategory('none');
     setBytecodeSize(0);
     setRawTX('');
+    setBroadcastState('broadcasted');
     setShowPopup(false);
     setContractFunctionInputs(null);
     setCurrentContractABI([]);
@@ -162,6 +171,7 @@ const Transaction: React.FC = () => {
       setErrorMessage,
       setShowRawTxPopup,
       setShowTxIdPopup, // Pass the setter to the hook
+      setBroadcastState,
       setLoading,
       resetTransactionViewState
     );
@@ -178,6 +188,7 @@ const Transaction: React.FC = () => {
     rawTX,
     txOutputsLength: txOutputs.length,
     selectedUtxos,
+    reservedOutpointKeys,
     tempUtxos,
     recipientAddress,
     transferAmount,
@@ -255,28 +266,24 @@ const Transaction: React.FC = () => {
   return (
     <ErrorBoundary>
       <div className="container mx-auto max-w-xl p-4 pb-16 overflow-x-hidden wallet-page">
-        <PageHeader
-          title="Transaction Builder"
-          subtitle="Advanced transaction construction"
-          compact
-        />
+        <PageHeader title="Transaction Builder" compact />
 
         {/* Flex Container for AddressSelection */}
         <SectionCard className="mb-4">
           <div className="flex flex-wrap gap-2 justify-center">
-          {/* Address Selection Component */}
-          <AddressSelection
-            addresses={addresses}
-            selectedUtxos={selectedUtxos}
-            selectedAddresses={selectedAddresses}
-            contractAddresses={contractAddresses}
-            selectedContractAddresses={selectedContractAddresses}
-            setSelectedContractAddresses={setSelectedContractAddresses}
-            selectedContractABIs={selectedContractABIs}
-            setSelectedContractABIs={setSelectedContractABIs}
-            setSelectedAddresses={setSelectedAddresses}
-            setPaperWalletUTXOs={setPaperWalletUTXOs}
-          />
+            {/* Address Selection Component */}
+            <AddressSelection
+              addresses={addresses}
+              selectedUtxos={selectedUtxos}
+              selectedAddresses={selectedAddresses}
+              contractAddresses={contractAddresses}
+              selectedContractAddresses={selectedContractAddresses}
+              setSelectedContractAddresses={setSelectedContractAddresses}
+              selectedContractABIs={selectedContractABIs}
+              setSelectedContractABIs={setSelectedContractABIs}
+              setSelectedAddresses={setSelectedAddresses}
+              setPaperWalletUTXOs={setPaperWalletUTXOs}
+            />
           </div>
         </SectionCard>
 
@@ -359,6 +366,7 @@ const Transaction: React.FC = () => {
           rawTX={rawTX}
           txOutputs={txOutputs}
           selectedUtxos={selectedUtxos}
+          sendingLocked={hasUnresolved}
 
           // returnHome={returnHome}
         />
@@ -373,6 +381,7 @@ const Transaction: React.FC = () => {
           transactionId={transactionId}
           errorMessage={errorMessage}
           currentNetwork={currentNetwork}
+          broadcastState={broadcastState}
           closePopups={closePopups}
         />
 

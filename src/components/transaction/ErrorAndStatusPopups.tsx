@@ -16,6 +16,7 @@ import {
 import { PREFIX, SATSINBITCOIN } from '../../utils/constants';
 import { shortenTxHash } from '../../utils/shortenHash';
 import { ensureUint8Array } from '../../utils/binary';
+import { type BroadcastState } from '../../services/TransactionService';
 
 interface ErrorAndStatusPopupsProps {
   showRawTxPopup: boolean;
@@ -24,6 +25,7 @@ interface ErrorAndStatusPopupsProps {
   transactionId: string;
   errorMessage: string | null;
   currentNetwork: string;
+  broadcastState?: BroadcastState;
   closePopups: () => void;
 }
 
@@ -34,6 +36,7 @@ const ErrorAndStatusPopups: React.FC<ErrorAndStatusPopupsProps> = ({
   transactionId,
   errorMessage,
   currentNetwork,
+  broadcastState,
   closePopups,
 }) => {
   const toCashAddress = (
@@ -226,9 +229,15 @@ const ErrorAndStatusPopups: React.FC<ErrorAndStatusPopupsProps> = ({
         <Popup closePopups={handleClose}>
           <div className="flex flex-col items-center p-4">
             <div className="wallet-accent-icon text-4xl mb-4">✅</div>
-            <h3 className="text-xl font-bold mb-2">Transaction Successful</h3>
+            <h3 className="text-xl font-bold mb-2">
+              {broadcastState === 'submitted'
+                ? 'Transaction Submitted'
+                : 'Transaction Successful'}
+            </h3>
             <p className="text-center mb-4">
-              Your transaction has been broadcasted successfully!
+              {broadcastState === 'submitted'
+                ? 'Your transaction has been submitted. Use this txid as the reference and avoid sending it again.'
+                : 'Your transaction has been broadcasted successfully!'}
             </p>
             <div className="flex items-center mb-4">
               <strong className="mr-2">TX ID:</strong>

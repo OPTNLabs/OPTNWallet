@@ -4,7 +4,9 @@ import ContractManager from '../../apis/ContractManager/ContractManager';
 import { setInputValues, setSelectedFunction, resetContract } from '../../redux/contractSlice';
 import { removeTxOutput } from '../../redux/transactionBuilderSlice';
 import { AppDispatch } from '../../redux/store';
-import TransactionService from '../../services/TransactionService';
+import TransactionService, {
+  type BroadcastResult,
+} from '../../services/TransactionService';
 import { PaperWalletSecretStore } from '../../services/PaperWalletSecretStore';
 import KeyService from '../../services/KeyService';
 import { UTXO } from '../../types/types';
@@ -17,6 +19,7 @@ type UseTransactionHandlersParams = {
   rawTX: string;
   txOutputsLength: number;
   selectedUtxos: UTXO[];
+  reservedOutpointKeys?: Set<string>;
   tempUtxos?: UTXO;
   recipientAddress: string;
   transferAmount: number;
@@ -28,7 +31,7 @@ type UseTransactionHandlersParams = {
   handleSendTransaction: (
     rawTx: string,
     setTransactionId: Dispatch<SetStateAction<string>>
-  ) => Promise<{ txid: string | null; errorMessage: string | null }>;
+  ) => Promise<BroadcastResult>;
   txSetters: {
     setRawTX: (value: string) => void;
     setBytecodeSize: (value: number) => void;
@@ -74,6 +77,7 @@ export function useTransactionHandlers({
   rawTX,
   txOutputsLength,
   selectedUtxos,
+  reservedOutpointKeys,
   tempUtxos,
   recipientAddress,
   transferAmount,
@@ -135,6 +139,14 @@ export function useTransactionHandlers({
             utxo.tx_hash + utxo.tx_pos
       );
 
+      const outpointKey = `${utxo.tx_hash}:${utxo.tx_pos}`;
+      if (!isSelected && reservedOutpointKeys?.has(outpointKey)) {
+        setErrorMessage(
+          'This input is still reserved by an outgoing transaction that has not finished syncing yet.'
+        );
+        return;
+      }
+
       if (isSelected) {
         if (utxo.isPaperWallet) {
           PaperWalletSecretStore.del(utxo.tx_hash, utxo.tx_pos);
@@ -178,6 +190,7 @@ export function useTransactionHandlers({
       dispatch,
       handleRemoveOutput,
       rawTX,
+      reservedOutpointKeys,
       selectedUtxos,
       setCurrentContractABI,
       setCurrentContractSource,

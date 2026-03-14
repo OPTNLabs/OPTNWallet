@@ -6,12 +6,17 @@ type MockClient = {
   request: ReturnType<typeof vi.fn>;
   subscribe: ReturnType<typeof vi.fn>;
   on: ReturnType<typeof vi.fn>;
+  connection: {
+    send: ReturnType<typeof vi.fn>;
+  };
+  requestId: number;
+  requestResolvers: Record<number, (error?: Error, data?: unknown) => void>;
   __emit: (event: string, payload: unknown) => void;
 };
 
 function makeMockClient(): MockClient {
   const handlers = new Map<string, Array<(x: unknown) => void>>();
-  return {
+  const mock: MockClient = {
     connect: vi.fn(async () => {}),
     disconnect: vi.fn(async () => {}),
     request: vi.fn(async () => 'ok'),
@@ -21,11 +26,30 @@ function makeMockClient(): MockClient {
       list.push(cb);
       handlers.set(event, list);
     }),
+    connection: {
+      send: vi.fn((message: string) => {
+        const parsed = JSON.parse(message) as Array<{ id: number }> | { id: number };
+        const responses = Array.isArray(parsed)
+          ? parsed.map((item) => ({ id: item.id, result: `batched-${item.id}` }))
+          : [{ id: parsed.id, result: `batched-${parsed.id}` }];
+        queueMicrotask(() => {
+          for (const response of responses) {
+            const resolver = mock.requestResolvers[response.id];
+            resolver?.(undefined, response.result);
+            delete mock.requestResolvers[response.id];
+          }
+        });
+        return true;
+      }),
+    },
+    requestId: 0,
+    requestResolvers: {},
     __emit: (event: string, payload: unknown) => {
       const list = handlers.get(event) ?? [];
       for (const cb of list) cb(payload);
     },
   };
+  return mock;
 }
 
 async function loadServerWithMocks(
@@ -119,6 +143,19 @@ describe('ElectrumServer', () => {
     expect(first.request).toHaveBeenCalledWith('blockchain.headers.get_tip');
     expect(first.disconnect).toHaveBeenCalledWith(true);
     expect(second.request).toHaveBeenCalledWith('blockchain.headers.get_tip');
+  });
+
+  it('requestMany sends one batched payload and resolves responses by id', async () => {
+    const client = makeMockClient();
+    const server = await loadServerWithMocks([client]);
+
+    const results = await server.requestMany([
+      { method: 'server.ping', params: [] },
+      { method: 'server.version', params: ['probe', '1.4'] },
+    ]);
+
+    expect(client.connection.send).toHaveBeenCalledTimes(1);
+    expect(results).toEqual(['batched-1', 'batched-2']);
   });
 
   it('subscribe and unsubscribe manage address subscriptions', async () => {

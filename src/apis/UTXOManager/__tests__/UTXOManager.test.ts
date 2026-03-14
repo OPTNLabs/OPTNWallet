@@ -152,4 +152,89 @@ describe('UTXOManager', () => {
     expect(exec).toHaveBeenCalledWith('BEGIN TRANSACTION;');
     expect(exec).toHaveBeenCalledWith('ROLLBACK;');
   });
+
+  it('replaceWalletAddressUTXOs syncs multiple addresses in one transaction', async () => {
+    const queryStmt = makeStmt([
+      {
+        wallet_id: 5,
+        address: 'bitcoincash:q1',
+        token_address: 'token:q1',
+        height: 1,
+        tx_hash: 'a'.repeat(64),
+        tx_pos: 0,
+        value: 1000,
+        prefix: 'bitcoincash',
+        token: null,
+      },
+      {
+        wallet_id: 5,
+        address: 'bitcoincash:q2',
+        token_address: 'token:q2',
+        height: 1,
+        tx_hash: 'b'.repeat(64),
+        tx_pos: 1,
+        value: 2000,
+        prefix: 'bitcoincash',
+        token: null,
+      },
+    ]);
+    const deleteSingleStmt = makeStmt();
+    const deleteAddressStmt = makeStmt();
+    const insertStmt = makeStmt();
+    const exec = vi.fn();
+
+    const db = {
+      exec,
+      prepare: vi
+        .fn()
+        .mockReturnValueOnce(queryStmt)
+        .mockReturnValueOnce(deleteSingleStmt)
+        .mockReturnValueOnce(deleteAddressStmt)
+        .mockReturnValueOnce(insertStmt),
+    };
+
+    mockedDatabaseService.mockReturnValue({
+      ensureDatabaseStarted: vi.fn(async () => {}),
+      getDatabase: vi.fn(() => db),
+    } as never);
+
+    const mgr = UTXOManager();
+    await mgr.replaceWalletAddressUTXOs(5, {
+      'bitcoincash:q1': [
+        {
+          wallet_id: 5,
+          address: 'bitcoincash:q1',
+          tokenAddress: 'token:q1',
+          height: 2,
+          tx_hash: 'c'.repeat(64),
+          tx_pos: 0,
+          value: 1500,
+          amount: 1500,
+          prefix: 'bitcoincash',
+        },
+      ],
+      'bitcoincash:q2': [],
+    });
+
+    expect(exec).toHaveBeenCalledWith('BEGIN TRANSACTION;');
+    expect(deleteSingleStmt.run).toHaveBeenCalledWith([
+      5,
+      'a'.repeat(64),
+      0,
+      'bitcoincash:q1',
+    ]);
+    expect(deleteAddressStmt.run).toHaveBeenCalledWith([5, 'bitcoincash:q2']);
+    expect(insertStmt.run).toHaveBeenCalledWith([
+      5,
+      'bitcoincash:q1',
+      'token:q1',
+      2,
+      'c'.repeat(64),
+      0,
+      1500,
+      'bitcoincash',
+      null,
+    ]);
+    expect(exec).toHaveBeenCalledWith('COMMIT;');
+  });
 });
