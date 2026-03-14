@@ -18,7 +18,9 @@ import {
   ContractAddressRecord,
   UTXO,
 } from '../types/types';
-import TransactionService from '../services/TransactionService';
+import TransactionService, {
+  type BroadcastState,
+} from '../services/TransactionService';
 import { selectCurrentNetwork } from '../redux/selectors/networkSelectors';
 import { SATSINBITCOIN } from '../utils/constants';
 import UTXOService from '../services/UTXOService';
@@ -141,6 +143,8 @@ export default function useSimpleSend() {
   const [review, setReview] = useState<ReviewState | null>(null);
   const [selectedForTx, setSelectedForTx] = useState<UTXO[]>([]);
   const [txid, setTxid] = useState<string>('');
+  const [broadcastState, setBroadcastState] =
+    useState<BroadcastState>('broadcasted');
   const parsedRecipient = useMemo(
     () => parseBip21Uri(recipient, currentNetwork),
     [recipient, currentNetwork]
@@ -157,6 +161,7 @@ export default function useSimpleSend() {
     setReview(null);
     setSelectedForTx([]);
     setTxid('');
+    setBroadcastState('broadcasted');
     setAssetType('bch');
     setAmountBch('');
     setSelectedCategory('');
@@ -380,11 +385,22 @@ export default function useSimpleSend() {
     if (!review?.rawTx) return;
     try {
       setMode('sending');
-      const { txid: sentId, errorMessage } =
-        await TransactionService.sendTransaction(review.rawTx, selectedForTx);
+      const { txid: sentId, errorMessage, broadcastState: sentState } =
+        await TransactionService.sendTransaction(review.rawTx, selectedForTx, {
+          source: 'simple-send',
+          sourceLabel: 'Simple Send',
+          recipientSummary: normalizedRecipient,
+          amountSummary:
+            assetType === 'bch'
+              ? `${amountBch || parsedRecipient.amountRaw || ''} BCH`
+              : assetType === 'ft'
+                ? `${amountToken} tokens`
+                : 'NFT transfer',
+        });
       if (errorMessage) throw new Error(errorMessage);
       if (!sentId) throw new Error('Broadcast failed with no txid returned.');
       setTxid(sentId);
+      setBroadcastState(sentState ?? 'broadcasted');
       setMode('sent');
     } catch (error: unknown) {
       setError(toErrorMessage(error, 'Failed to send transaction.'));
@@ -476,6 +492,7 @@ export default function useSimpleSend() {
     error,
     review,
     txid,
+    broadcastState,
 
     // actions
     reset,

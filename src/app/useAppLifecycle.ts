@@ -1,27 +1,75 @@
-import { useEffect, useRef, type MutableRefObject } from 'react';
+import { useEffect, useRef, useState, type MutableRefObject } from 'react';
 import { Capacitor } from '@capacitor/core';
 import { LocalNotifications } from '@capacitor/local-notifications';
 import { StatusBar, Style } from '@capacitor/status-bar';
 import { useLocation } from 'react-router-dom';
+import DatabaseService from '../apis/DatabaseManager/DatabaseService';
+import WalletManager from '../apis/WalletManager/WalletManager';
 import {
   startUTXOWorker,
   stopUTXOWorker,
 } from '../workers/UTXOWorkerService';
-import {
-  startTransactionWorker,
-  stopTransactionWorker,
-} from '../workers/TransactionWorkerService';
 import { initWalletConnect } from '../redux/walletconnectSlice';
 import { clearNotifications, UtxoNotification } from '../redux/notificationsSlice';
 import { AppDispatch } from '../redux/store';
+import { reconcileOutboundTransactions } from '../services/OutboundTransactionReconciler';
+import { runOutboundReconcile } from '../services/RefreshCoordinator';
+import { Network, setNetwork } from '../redux/networkSlice';
+import { setWalletNetwork } from '../redux/walletSlice';
 
 let utxoWorkerStarted = false;
-let transactionWorkerStarted = false;
 
 export function useWalletConnectInitialization(dispatch: AppDispatch) {
   useEffect(() => {
     dispatch(initWalletConnect());
   }, [dispatch]);
+}
+
+export function useWalletNetworkBootstrap(
+  walletId: number | null,
+  dispatch: AppDispatch
+) {
+  const [ready, setReady] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    const syncWalletNetwork = async () => {
+      if (!walletId || walletId <= 0) {
+        if (!cancelled) setReady(true);
+        return;
+      }
+
+      try {
+        const dbService = DatabaseService();
+        const walletManager = WalletManager();
+        await dbService.ensureDatabaseStarted();
+        const walletInfo = await walletManager.getWalletInfo(walletId);
+        const resolvedNetwork =
+          walletInfo?.networkType === Network.MAINNET
+            ? Network.MAINNET
+            : walletInfo?.networkType === Network.CHIPNET
+              ? Network.CHIPNET
+              : null;
+
+        if (!cancelled && resolvedNetwork) {
+          dispatch(setWalletNetwork(resolvedNetwork));
+          dispatch(setNetwork(resolvedNetwork));
+        }
+      } finally {
+        if (!cancelled) setReady(true);
+      }
+    };
+
+    setReady(false);
+    void syncWalletNetwork();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [dispatch, walletId]);
+
+  return ready;
 }
 
 export function useStatusBarSync(mode: string) {
@@ -120,18 +168,10 @@ export function useWorkerLifecycle(walletId: number | null) {
         startUTXOWorker();
         utxoWorkerStarted = true;
       }
-      if (!transactionWorkerStarted) {
-        startTransactionWorker();
-        transactionWorkerStarted = true;
-      }
     } else {
       if (utxoWorkerStarted) {
         stopUTXOWorker();
         utxoWorkerStarted = false;
-      }
-      if (transactionWorkerStarted) {
-        stopTransactionWorker();
-        transactionWorkerStarted = false;
       }
     }
 
@@ -141,11 +181,53 @@ export function useWorkerLifecycle(walletId: number | null) {
           stopUTXOWorker();
           utxoWorkerStarted = false;
         }
-        if (transactionWorkerStarted) {
-          stopTransactionWorker();
-          transactionWorkerStarted = false;
-        }
       }
     };
   }, [hasWallet, location.pathname]);
+}
+
+export function useOutboundTransactionRecovery(walletId: number | null) {
+  const inFlight = useRef(false);
+
+  useEffect(() => {
+    if (!walletId || walletId <= 0) return;
+
+    const reconcile = async () => {
+      if (inFlight.current) return;
+      inFlight.current = true;
+      try {
+        await runOutboundReconcile(walletId, () =>
+          reconcileOutboundTransactions(walletId)
+        );
+      } finally {
+        inFlight.current = false;
+      }
+    };
+
+    const handleVisible = () => {
+      if (document.visibilityState === 'visible') {
+        void reconcile();
+      }
+    };
+    const handleOnline = () => {
+      void reconcile();
+    };
+
+    void reconcile();
+    window.addEventListener('focus', handleVisible);
+    window.addEventListener('online', handleOnline);
+    document.addEventListener('visibilitychange', handleVisible);
+    const interval = window.setInterval(() => {
+      if (document.visibilityState === 'visible') {
+        void reconcile();
+      }
+    }, 60_000);
+
+    return () => {
+      window.removeEventListener('focus', handleVisible);
+      window.removeEventListener('online', handleOnline);
+      document.removeEventListener('visibilitychange', handleVisible);
+      window.clearInterval(interval);
+    };
+  }, [walletId]);
 }

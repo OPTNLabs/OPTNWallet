@@ -1,6 +1,9 @@
 import { store } from '../redux/store';
 import { getInfraUrlPools, runWithFailover } from './servers/InfraUrls';
 
+const IPFS_GATEWAY_TIMEOUT_MS = 8000;
+const inflightGatewayRequests = new Map<string, Promise<Response>>();
+
 function normalizeIpfsPath(path: string): string {
   return path.replace(/^\/+/, '').replace(/^ipfs\//i, '');
 }
@@ -41,27 +44,53 @@ async function fetchFromGateways(ipfsPath: string, options?: RequestInit) {
   const net = store.getState().network.currentNetwork;
   const { ipfsGateways } = getInfraUrlPools(net);
   let lastResponse: Response | null = null;
+  const normalizedPath = normalizeIpfsPath(ipfsPath);
+  const requestKey = `${net}:${normalizedPath}`;
 
-  try {
-    return await runWithFailover(
-      `ipfs:${net}`,
-      ipfsGateways,
-      async (gateway) => {
-        const resp = await fetch(
-          `${gateway}/${normalizeIpfsPath(ipfsPath)}`,
-          options
-        );
-        if (!resp.ok) {
-          lastResponse = resp;
-          throw new Error(`HTTP ${resp.status}`);
-        }
-        return resp;
-      }
-    );
-  } catch (err) {
-    if (lastResponse) return lastResponse;
-    throw err;
+  const inflight = inflightGatewayRequests.get(requestKey);
+  if (inflight) {
+    const response = await inflight;
+    return typeof response.clone === 'function' ? response.clone() : response;
   }
+
+  const requestPromise = (async () => {
+    try {
+      return await runWithFailover(
+        `ipfs:${net}`,
+        ipfsGateways,
+        async (gateway) => {
+          const controller = new AbortController();
+          const signal = mergeAbortSignals(options?.signal, controller.signal);
+          const timeoutId = globalThis.setTimeout(() => {
+            controller.abort(new Error(`Timeout after ${IPFS_GATEWAY_TIMEOUT_MS}ms`));
+          }, IPFS_GATEWAY_TIMEOUT_MS);
+
+          try {
+            const resp = await fetch(`${gateway}/${normalizedPath}`, {
+              ...options,
+              signal,
+            });
+            if (!resp.ok) {
+              lastResponse = resp;
+              throw new Error(`HTTP ${resp.status}`);
+            }
+            return resp;
+          } finally {
+            globalThis.clearTimeout(timeoutId);
+          }
+        }
+      );
+    } catch (err) {
+      if (lastResponse) return lastResponse;
+      throw err;
+    } finally {
+      inflightGatewayRequests.delete(requestKey);
+    }
+  })();
+
+  inflightGatewayRequests.set(requestKey, requestPromise);
+  const response = await requestPromise;
+  return typeof response.clone === 'function' ? response.clone() : response;
 }
 
 export async function ipfsFetch(uri, options?) {
@@ -83,4 +112,26 @@ export async function ipfsFetch(uri, options?) {
     if (!fallbackIpfsPath) throw err;
     return fetchFromGateways(fallbackIpfsPath, options);
   }
+}
+
+function mergeAbortSignals(...signals: Array<AbortSignal | undefined>): AbortSignal | undefined {
+  const activeSignals = signals.filter(Boolean) as AbortSignal[];
+  if (activeSignals.length === 0) return undefined;
+  if (activeSignals.length === 1) return activeSignals[0];
+
+  const controller = new AbortController();
+  const abort = (event?: Event) => {
+    const source = event?.target as AbortSignal | null;
+    controller.abort(source?.reason);
+  };
+
+  activeSignals.forEach((signal) => {
+    if (signal.aborted) {
+      controller.abort(signal.reason);
+      return;
+    }
+    signal.addEventListener('abort', abort, { once: true });
+  });
+
+  return controller.signal;
 }

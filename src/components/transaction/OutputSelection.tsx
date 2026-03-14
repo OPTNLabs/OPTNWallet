@@ -4,10 +4,13 @@ import React, {
   // useMemo
 } from 'react';
 import {
-  CapacitorBarcodeScanner,
   CapacitorBarcodeScannerTypeHint,
 } from '@capacitor/barcode-scanner';
 import { Toast } from '@capacitor/toast';
+import {
+  getBarcodeScannerErrorMessage,
+  scanBarcodeSafely,
+} from '../../utils/barcodeScanner';
 import { useDispatch, useSelector } from 'react-redux';
 import { AppDispatch, RootState } from '../../redux/store';
 import { clearTransaction } from '../../redux/transactionBuilderSlice';
@@ -146,7 +149,7 @@ const OutputSelection: React.FC<OutputSelectionProps> = ({
 
   const scanBarcode = async () => {
     try {
-      const result = await CapacitorBarcodeScanner.scanBarcode({
+      const result = await scanBarcodeSafely({
         hint: CapacitorBarcodeScannerTypeHint.ALL,
       });
       if (result && result.ScanResult) setRecipientAddress(result.ScanResult);
@@ -154,7 +157,7 @@ const OutputSelection: React.FC<OutputSelectionProps> = ({
     } catch (error) {
       console.error('Barcode scan error:', error);
       await Toast.show({
-        text: 'Failed to scan QR code. Please ensure camera permissions are granted and try again.',
+        text: getBarcodeScannerErrorMessage(error),
       });
     }
   };

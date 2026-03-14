@@ -35,23 +35,22 @@
     /* Wallet theme variables (light by default) */
     --wallet-bg: #eef4f1;
     --wallet-bg-gradient:
-      radial-gradient(120% 72% at 50% -20%, rgba(109, 230, 178, 0.2) 0%, rgba(109, 230, 178, 0) 58%),
-      radial-gradient(100% 40% at 50% 115%, rgba(56, 208, 141, 0.16) 0%, rgba(56, 208, 141, 0) 68%),
-      linear-gradient(180deg, #f8fdf9 0%, #eef4f1 52%, #e7efe9 100%);
+      radial-gradient(110% 68% at 50% -18%, rgba(109, 230, 178, 0.14) 0%, rgba(109, 230, 178, 0) 55%),
+      linear-gradient(180deg, #f9fcfa 0%, #eef4f1 56%, #e8f0ea 100%);
     --wallet-text: #1f352c;
     --wallet-text-strong: #132f24;
-    --wallet-border: #c4d9cc;
-    --wallet-card-bg: rgba(255, 255, 255, 0.74);
-    --wallet-surface: #f5faf7;
-    --wallet-surface-strong: #e8f3ec;
+    --wallet-border: #c8ddd0;
+    --wallet-card-bg: rgba(255, 255, 255, 0.82);
+    --wallet-surface: #f6faf8;
+    --wallet-surface-strong: #eef6f1;
 
     --wallet-accent: #18b374;
     --wallet-accent-strong: #0a9a62;
     --wallet-accent-soft: #bdeed7;
     --wallet-link: #0e8e5b;
     --wallet-focus-ring: rgba(24, 179, 116, 0.28);
-    --wallet-shadow-card: 0 16px 36px rgba(17, 46, 33, 0.12), 0 1px 1px rgba(255, 255, 255, 0.72) inset;
-    --wallet-shadow-btn: 0 10px 22px rgba(16, 120, 76, 0.24), 0 1px 0 rgba(255, 255, 255, 0.24) inset;
+    --wallet-shadow-card: 0 10px 24px rgba(17, 46, 33, 0.08), 0 1px 1px rgba(255, 255, 255, 0.76) inset;
+    --wallet-shadow-btn: 0 8px 16px rgba(16, 120, 76, 0.18), 0 1px 0 rgba(255, 255, 255, 0.24) inset;
     --wallet-success-bg: #e9fbf1;
     --wallet-success-border: #8ddfb7;
     --wallet-success-text: #0f6c44;
@@ -95,23 +94,22 @@
   html.dark {
     --wallet-bg: #081710;
     --wallet-bg-gradient:
-      radial-gradient(125% 74% at 50% -24%, rgba(68, 231, 154, 0.2) 0%, rgba(68, 231, 154, 0) 56%),
-      radial-gradient(100% 42% at 50% 115%, rgba(18, 151, 92, 0.2) 0%, rgba(18, 151, 92, 0) 68%),
-      linear-gradient(180deg, #0d251a 0%, #081710 52%, #07130e 100%);
+      radial-gradient(118% 70% at 50% -22%, rgba(68, 231, 154, 0.14) 0%, rgba(68, 231, 154, 0) 54%),
+      linear-gradient(180deg, #0d251a 0%, #081710 54%, #07130e 100%);
     --wallet-text: #ddf5e8;
     --wallet-text-strong: #eefff6;
-    --wallet-border: #224136;
-    --wallet-card-bg: rgba(12, 33, 25, 0.74);
+    --wallet-border: #254539;
+    --wallet-card-bg: rgba(12, 33, 25, 0.78);
     --wallet-surface: #0c1f17;
-    --wallet-surface-strong: #133025;
+    --wallet-surface-strong: #143328;
 
     --wallet-accent: #35c98d;
     --wallet-accent-strong: #24b37a;
     --wallet-accent-soft: #1c4635;
     --wallet-link: #86ebbc;
     --wallet-focus-ring: rgba(53, 201, 141, 0.34);
-    --wallet-shadow-card: 0 20px 40px rgba(0, 0, 0, 0.44), 0 1px 0 rgba(196, 248, 222, 0.08) inset;
-    --wallet-shadow-btn: 0 14px 28px rgba(6, 71, 44, 0.5), 0 1px 0 rgba(240, 255, 247, 0.12) inset;
+    --wallet-shadow-card: 0 14px 30px rgba(0, 0, 0, 0.34), 0 1px 0 rgba(196, 248, 222, 0.08) inset;
+    --wallet-shadow-btn: 0 10px 20px rgba(6, 71, 44, 0.36), 0 1px 0 rgba(240, 255, 247, 0.12) inset;
     --wallet-success-bg: #0f3526;
     --wallet-success-border: #1d7e57;
     --wallet-success-text: #c4f8de;
@@ -163,13 +161,31 @@
   .wallet-card {
     @apply rounded-2xl border;
     border-color: var(--wallet-border);
-    background-color: var(--wallet-card-bg);
+    background:
+      linear-gradient(180deg, color-mix(in oklab, var(--wallet-card-bg) 94%, white 6%) 0%, var(--wallet-card-bg) 100%);
     box-shadow: var(--wallet-shadow-card);
     backdrop-filter: blur(18px) saturate(140%);
   }
 
+  .wallet-section {
+    @apply rounded-2xl border p-3;
+    border-color: color-mix(in oklab, var(--wallet-border) 64%, transparent);
+    background-color: color-mix(in oklab, var(--wallet-card-bg) 74%, var(--wallet-surface) 26%);
+  }
+
+  .wallet-keyline {
+    border-color: color-mix(in oklab, var(--wallet-border) 82%, transparent);
+  }
+
+  .wallet-signature-panel {
+    background:
+      linear-gradient(180deg, color-mix(in oklab, var(--wallet-surface-strong) 78%, var(--wallet-card-bg) 22%) 0%, color-mix(in oklab, var(--wallet-card-bg) 90%, transparent) 100%);
+    border-color: color-mix(in oklab, var(--wallet-border) 88%, transparent);
+    box-shadow: 0 14px 28px rgba(17, 46, 33, 0.07), inset 0 1px 0 rgba(255, 255, 255, 0.7);
+  }
+
   .wallet-btn-primary {
-    @apply inline-flex items-center justify-center rounded-[14px] px-4 py-2.5 font-semibold text-white transition duration-200 disabled:cursor-not-allowed disabled:opacity-60;
+    @apply inline-flex min-h-[44px] items-center justify-center rounded-[14px] px-4 py-2.5 font-semibold text-white transition duration-200 disabled:cursor-not-allowed disabled:opacity-60;
     background: var(--wallet-btn-primary-bg);
     box-shadow: var(--wallet-shadow-btn);
     letter-spacing: 0.01em;
@@ -186,7 +202,7 @@
   }
 
   .wallet-btn-secondary {
-    @apply inline-flex items-center justify-center rounded-[14px] px-4 py-2.5 font-semibold transition duration-200 disabled:cursor-not-allowed disabled:opacity-60;
+    @apply inline-flex min-h-[44px] items-center justify-center rounded-[14px] px-4 py-2.5 font-semibold transition duration-200 disabled:cursor-not-allowed disabled:opacity-60;
     color: var(--wallet-btn-secondary-text);
     background-color: var(--wallet-btn-secondary-bg);
     background-color: color-mix(in oklab, var(--wallet-btn-secondary-bg) 76%, transparent);
@@ -224,15 +240,17 @@
   .wallet-popup-panel {
     @apply w-full max-h-[90vh] max-w-md overflow-hidden rounded-2xl border p-6 shadow-xl;
     border-color: var(--wallet-border);
-    background-color: var(--wallet-card-bg);
+    background:
+      linear-gradient(180deg, color-mix(in oklab, var(--wallet-card-bg) 94%, white 6%) 0%, var(--wallet-card-bg) 100%);
   }
 
   .wallet-input {
-    @apply rounded-xl border px-3 py-2 transition;
+    @apply min-h-[46px] rounded-xl border px-3 py-2 transition;
     border-color: var(--wallet-border);
     background-color: var(--wallet-card-bg);
     color: var(--wallet-text);
     backdrop-filter: blur(10px) saturate(120%);
+    font-weight: 500;
   }
   .wallet-input::placeholder {
     color: var(--wallet-text-strong);
@@ -247,6 +265,25 @@
   .wallet-muted {
     color: var(--wallet-text-strong);
     opacity: 0.75;
+  }
+
+  .wallet-kicker {
+    @apply text-[11px] font-semibold uppercase tracking-[0.14em];
+    color: var(--wallet-text-strong);
+    opacity: 0.58;
+  }
+
+  .wallet-chip {
+    @apply inline-flex items-center rounded-full px-2.5 py-1 text-[11px] font-semibold;
+    border: 1px solid var(--wallet-border);
+    background-color: color-mix(in oklab, var(--wallet-surface-strong) 72%, transparent);
+    color: var(--wallet-text-strong);
+  }
+
+  .wallet-stat-row {
+    @apply flex items-center justify-between gap-3 rounded-xl px-3 py-2;
+    background-color: color-mix(in oklab, var(--wallet-surface-strong) 86%, transparent);
+    border: 1px solid color-mix(in oklab, var(--wallet-border) 70%, transparent);
   }
 
   .wallet-segment-active {
@@ -298,6 +335,16 @@
     background: var(--wallet-btn-primary-bg);
   }
 
+  .wallet-spinner {
+    width: 0.95rem;
+    height: 0.95rem;
+    border-radius: 999px;
+    border: 2px solid currentColor;
+    border-right-color: transparent;
+    animation: wallet-spin 0.8s linear infinite;
+    flex-shrink: 0;
+  }
+
   .wallet-success-panel {
     border-color: var(--wallet-success-border);
     background-color: var(--wallet-success-bg);
@@ -322,6 +369,15 @@
     border-color: var(--wallet-warning-border);
     background-color: var(--wallet-warning-bg);
     color: var(--wallet-warning-text);
+  }
+
+  .wallet-step-card {
+    animation: wallet-step-enter 260ms cubic-bezier(0.22, 1, 0.36, 1);
+    transform-origin: center top;
+  }
+
+  .wallet-success-appear {
+    animation: wallet-success-appear 320ms cubic-bezier(0.22, 1, 0.36, 1);
   }
 
   .wallet-coin-btc {
@@ -458,6 +514,37 @@
   to {
     opacity: 1;
     transform: translateY(0);
+  }
+}
+
+@keyframes wallet-step-enter {
+  from {
+    opacity: 0;
+    transform: translateY(14px) scale(0.985);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+@keyframes wallet-success-appear {
+  from {
+    opacity: 0;
+    transform: translateY(-8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes wallet-spin {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
   }
 }
 

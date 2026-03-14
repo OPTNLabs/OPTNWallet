@@ -1,9 +1,8 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState } from 'react';
 import { FaBitcoin } from 'react-icons/fa';
 import { shortenTxHash } from '../utils/shortenHash';
 import TokenQuery from './TokenQuery';
-import BcmrService from '../services/BcmrService';
-import { IdentitySnapshot } from '@bitauth/libauth';
+import useSharedTokenMetadata from '../hooks/useSharedTokenMetadata';
 
 interface CashTokenCardProps {
   category: string;
@@ -17,33 +16,12 @@ const CashTokenCard: React.FC<CashTokenCardProps> = ({
   decimals,
 }) => {
   const [showTokenQuery, setShowTokenQuery] = useState(false);
-  const [iconUri, setIconUri] = useState<string | null>(null);
-  const [tokenName, setTokenName] = useState<string>(shortenTxHash(category));
-  const [bcmrSnapshot, setBcmrSnapshot] = useState<IdentitySnapshot | null>(null);
+  const metadata = useSharedTokenMetadata([category])[category];
+  const iconUri = metadata?.iconUri ?? null;
+  const tokenName = metadata?.name || shortenTxHash(category);
+  const bcmrSnapshot = metadata?.snapshot ?? null;
 
   const toggleTokenQueryPopup = () => setShowTokenQuery(!showTokenQuery);
-
-  useEffect(() => {
-    const loadMetadata = async () => {
-      try {
-        const bcmr = new BcmrService();
-        const authbase = await bcmr.getCategoryAuthbase(category);
-        const idReg = await bcmr.resolveIdentityRegistry(authbase);
-        const snap: IdentitySnapshot = bcmr.extractIdentity(
-          authbase,
-          idReg.registry
-        );
-        setBcmrSnapshot(snap);
-        setTokenName(snap.name);
-        const uri = await bcmr.resolveIcon(authbase);
-        setIconUri(uri);
-      } catch (err) {
-        // console.error('Failed to load token metadata', err);
-        setBcmrSnapshot(null);
-      }
-    };
-    loadMetadata();
-  }, [category]);
 
   const formatAmountWithDecimals = (amount: bigint, decimalPlaces: number): string => {
     if (decimalPlaces <= 0) return amount.toString();
@@ -56,8 +34,8 @@ const CashTokenCard: React.FC<CashTokenCardProps> = ({
 
   const rawAmount = totalAmount.toString();
   const effectiveDecimals =
-    typeof bcmrSnapshot?.token?.decimals === 'number'
-      ? bcmrSnapshot.token.decimals
+    typeof metadata?.decimals === 'number'
+      ? metadata.decimals
       : decimals;
   const displayAmount =
     effectiveDecimals > 0

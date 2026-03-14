@@ -129,6 +129,133 @@ describe('ElectrumService', () => {
     await expect(ElectrumService.getTransactionHistory('bitcoincash:q1')).resolves.toEqual([
       { tx_hash: 'abc', height: 10 },
     ]);
-    await expect(ElectrumService.getTransactionHistory('bitcoincash:q1')).resolves.toBeNull();
+    await expect(ElectrumService.getTransactionHistory('bitcoincash:q2')).resolves.toBeNull();
+  });
+
+  it('coalesces inflight history requests for the same address', async () => {
+    let resolveHistory: ((value: unknown) => void) | null = null;
+    const server = {
+      request: vi.fn(
+        () =>
+          new Promise((resolve) => {
+            resolveHistory = resolve;
+          })
+      ),
+      subscribe: vi.fn(async () => {}),
+      unsubscribe: vi.fn(async () => {}),
+      onNotification: vi.fn(() => () => {}),
+    };
+
+    mockedElectrumServer.mockReturnValue(server as never);
+
+    const first = ElectrumService.getTransactionHistory('bitcoincash:q1');
+    const second = ElectrumService.getTransactionHistory('bitcoincash:q1');
+    resolveHistory?.([{ tx_hash: 'abc', height: 10 }]);
+
+    await expect(first).resolves.toEqual([{ tx_hash: 'abc', height: 10 }]);
+    await expect(second).resolves.toEqual([{ tx_hash: 'abc', height: 10 }]);
+    expect(server.request).toHaveBeenCalledTimes(1);
+  });
+
+  it('getTransactionHistoryMany batches uncached address lookups', async () => {
+    const server = {
+      request: vi.fn(async () => []),
+      requestMany: vi.fn(async () => [
+        [{ tx_hash: 'abc', height: 10 }],
+        [{ tx_hash: 'def', height: 12 }],
+      ]),
+      subscribe: vi.fn(async () => {}),
+      unsubscribe: vi.fn(async () => {}),
+      onNotification: vi.fn(() => () => {}),
+    };
+
+    mockedElectrumServer.mockReturnValue(server as never);
+
+    const result = await ElectrumService.getTransactionHistoryMany([
+      'bitcoincash:q1',
+      'bitcoincash:q2',
+    ]);
+
+    expect(server.requestMany).toHaveBeenCalledTimes(1);
+    expect(result['bitcoincash:q1']).toEqual([{ tx_hash: 'abc', height: 10 }]);
+    expect(result['bitcoincash:q2']).toEqual([{ tx_hash: 'def', height: 12 }]);
+  });
+
+  it('getTransactionVisibility detects seen and missing transactions', async () => {
+    const server = {
+      request: vi
+        .fn()
+        .mockResolvedValueOnce({ confirmations: 0, height: 0 })
+        .mockResolvedValueOnce({ confirmations: 2, height: 123 })
+        .mockRejectedValueOnce(new Error('No such mempool or blockchain transaction')),
+      subscribe: vi.fn(async () => {}),
+      unsubscribe: vi.fn(async () => {}),
+      onNotification: vi.fn(() => () => {}),
+    };
+
+    mockedElectrumServer.mockReturnValue(server as never);
+
+    await expect(ElectrumService.getTransactionVisibility('a'.repeat(64))).resolves.toEqual({
+      seen: true,
+      confirmed: false,
+    });
+    await expect(ElectrumService.getTransactionVisibility('b'.repeat(64))).resolves.toEqual({
+      seen: true,
+      confirmed: true,
+    });
+    await expect(ElectrumService.getTransactionVisibility('c'.repeat(64))).resolves.toEqual({
+      seen: false,
+      confirmed: false,
+    });
+  });
+
+  it('coalesces inflight transaction visibility lookups for the same txid', async () => {
+    let resolveVisibility: ((value: unknown) => void) | null = null;
+    const server = {
+      request: vi.fn(
+        () =>
+          new Promise((resolve) => {
+            resolveVisibility = resolve;
+          })
+      ),
+      subscribe: vi.fn(async () => {}),
+      unsubscribe: vi.fn(async () => {}),
+      onNotification: vi.fn(() => () => {}),
+    };
+
+    mockedElectrumServer.mockReturnValue(server as never);
+
+    const txid = 'd'.repeat(64);
+    const first = ElectrumService.getTransactionVisibility(txid);
+    const second = ElectrumService.getTransactionVisibility(txid);
+    resolveVisibility?.({ confirmations: 0, height: 0 });
+
+    await expect(first).resolves.toEqual({ seen: true, confirmed: false });
+    await expect(second).resolves.toEqual({ seen: true, confirmed: false });
+    expect(server.request).toHaveBeenCalledTimes(1);
+  });
+
+  it('getTransactionVisibilityMany batches tx visibility lookups', async () => {
+    const server = {
+      request: vi.fn(async () => ({})),
+      requestMany: vi.fn(async () => [
+        { confirmations: 0, height: 0 },
+        { confirmations: 3, height: 222 },
+      ]),
+      subscribe: vi.fn(async () => {}),
+      unsubscribe: vi.fn(async () => {}),
+      onNotification: vi.fn(() => () => {}),
+    };
+
+    mockedElectrumServer.mockReturnValue(server as never);
+
+    const result = await ElectrumService.getTransactionVisibilityMany([
+      'a'.repeat(64),
+      'b'.repeat(64),
+    ]);
+
+    expect(server.requestMany).toHaveBeenCalledTimes(1);
+    expect(result['a'.repeat(64)]).toEqual({ seen: true, confirmed: false });
+    expect(result['b'.repeat(64)]).toEqual({ seen: true, confirmed: true });
   });
 });

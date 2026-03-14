@@ -36,6 +36,7 @@ type PersistedConsent = Record<string, Record<string, true>>;
 const CONSENT_STORAGE_KEY = 'optn.addon.consent.v1';
 const SENSITIVE_RUNTIME_CAPABILITIES = new Set<AddonCapability>([
   'tx:broadcast',
+  'signing:message_sign',
   'signing:signature_template',
 ]);
 
@@ -75,12 +76,18 @@ function formatCapability(capability: AddonCapability): string {
       return 'Read UTXOs for wallet addresses';
     case 'utxo:address:refresh':
       return 'Refresh and store UTXOs for wallet addresses';
+    case 'bcmr:token:read':
+      return 'Read CashToken metadata';
+    case 'tokenindex:holders:read':
+      return 'Read TokenIndex holder lists';
     case 'tx:build':
       return 'Build transactions';
     case 'tx:add_output':
       return 'Construct transaction outputs';
     case 'tx:broadcast':
       return 'Broadcast transactions';
+    case 'signing:message_sign':
+      return 'Sign messages with wallet keys';
     case 'signing:signature_template':
       return 'Create signature templates';
     case 'http:fetch_json':

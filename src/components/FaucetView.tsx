@@ -12,9 +12,8 @@ const FaucetView = () => {
   };
 
   return (
-    <div className="flex flex-col items-center justify-center max-h-full p-4 h-4/5 mb-4">
-      {/* Faucet Method Card */}
-      <div className="w-full max-w-md space-y-4 mt-4">
+    <div className="flex h-full min-h-0 flex-col items-center px-4 pb-4">
+      <div className="w-full max-w-md space-y-4 overflow-y-auto pr-1">
         <a
           href={faucetMethod.href}
           target="_blank"

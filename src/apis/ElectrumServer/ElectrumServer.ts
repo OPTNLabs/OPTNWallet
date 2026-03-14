@@ -15,6 +15,7 @@ import { Network } from '../../redux/networkSlice';
 
 // ---------- Config ----------
 const CONNECT_TIMEOUT_MS = 8000;
+const REQUEST_TIMEOUT_MS = 12000;
 const BACKOFF_BASE_MS = 3000;
 const BACKOFF_MAX_MS = 60000;
 const WSS_PORT = 50004;
@@ -22,6 +23,10 @@ const WSS_PORT = 50004;
 // Convenience alias for a typed Electrum client
 type ECClient = ElectrumClient<ElectrumClientEvents>;
 type ElectrumParams = RequestResponse[];
+type BatchRequest = {
+  method: string;
+  params?: ElectrumParams;
+};
 
 // ---------- Internal state ----------
 let electrum: ECClient | null = null;
@@ -101,6 +106,93 @@ function getNextServer(servers: string[], currentIdx: number): string | undefine
   const idx =
     currentIdx >= 0 && currentIdx < servers.length ? currentIdx : 0;
   return servers[(idx + 1) % servers.length];
+}
+
+function buildBatchMessage(
+  calls: Array<{ id: number; method: string; params: ElectrumParams }>
+): string {
+  return JSON.stringify(
+    calls.map(({ id, method, params }) => ({
+      id,
+      method,
+      params,
+    }))
+  );
+}
+
+function canUseRawBatch(client: ECClient): client is ECClient & {
+  requestId: number;
+  requestResolvers: Record<
+    number,
+    (error?: Error, data?: RequestResponse) => void
+  >;
+  connection: {
+    send: (message: string) => boolean;
+  };
+} {
+  const candidate = client as ECClient & {
+    requestId?: unknown;
+    requestResolvers?: unknown;
+    connection?: { send?: unknown };
+  };
+
+  return (
+    typeof candidate.requestId === 'number' &&
+    typeof candidate.requestResolvers === 'object' &&
+    candidate.requestResolvers !== null &&
+    typeof candidate.connection?.send === 'function'
+  );
+}
+
+async function sendBatch(
+  client: ECClient,
+  calls: BatchRequest[]
+): Promise<Array<RequestResponse | Error>> {
+  if (!canUseRawBatch(client)) {
+    return await Promise.all(
+      calls.map(async ({ method, params = [] }) => {
+        try {
+          const result = await client.request(method, ...params);
+          return result;
+        } catch (error) {
+          return error instanceof Error ? error : new Error(String(error));
+        }
+      })
+    );
+  }
+
+  const batchCalls = calls.map(({ method, params = [] }) => {
+    client.requestId += 1;
+    return {
+      id: client.requestId,
+      method,
+      params,
+    };
+  });
+
+  const resolvers = batchCalls.map(
+    ({ id }) =>
+      new Promise<RequestResponse | Error>((resolve) => {
+        client.requestResolvers[id] = (error?: Error, data?: RequestResponse) => {
+          if (error) {
+            resolve(error);
+            return;
+          }
+          resolve(data as RequestResponse);
+        };
+      })
+  );
+
+  try {
+    client.connection.send(buildBatchMessage(batchCalls));
+  } catch (error) {
+    for (const { id } of batchCalls) {
+      delete client.requestResolvers[id];
+    }
+    throw error;
+  }
+
+  return await Promise.all(resolvers);
 }
 
 async function wireNotificationsOnce(client: ECClient) {
@@ -235,7 +327,11 @@ export default function ElectrumServer() {
   ): Promise<RequestResponse> {
     await electrumConnect();
     try {
-      const res = await electrum.request(method, ...params);
+      const res = await withTimeout(
+        electrum.request(method, ...params),
+        REQUEST_TIMEOUT_MS,
+        `request(${method})`
+      );
       if (res instanceof Error) throw res;
       return res;
     } catch (err) {
@@ -243,10 +339,44 @@ export default function ElectrumServer() {
       const nextServer = getNextServer(servers, serverIndex);
       await electrumDisconnect();
       await electrumConnect(nextServer); // may throw if backoff is active
-      const res = await electrum.request(method, ...params);
+      const res = await withTimeout(
+        electrum.request(method, ...params),
+        REQUEST_TIMEOUT_MS,
+        `request(${method})`
+      );
       if (res instanceof Error) throw res;
       return res;
     }
+  }
+
+  async function requestMany(
+    calls: BatchRequest[]
+  ): Promise<Array<RequestResponse | Error>> {
+    if (calls.length === 0) return [];
+
+    await electrumConnect();
+    try {
+      return await withTimeout(
+        sendBatch(electrum!, calls),
+        REQUEST_TIMEOUT_MS,
+        `requestMany(${calls.length})`
+      );
+    } catch {
+      const { servers } = getNetworkAndServers();
+      const nextServer = getNextServer(servers, serverIndex);
+      await electrumDisconnect();
+      await electrumConnect(nextServer);
+      return await withTimeout(
+        sendBatch(electrum!, calls),
+        REQUEST_TIMEOUT_MS,
+        `requestMany(${calls.length})`
+      );
+    }
+  }
+
+  async function electrumReconnect(customServer?: string): Promise<ECClient> {
+    await electrumDisconnect();
+    return electrumConnect(customServer);
   }
 
   /**
@@ -318,8 +448,10 @@ export default function ElectrumServer() {
 
   return {
     electrumConnect,
+    electrumReconnect,
     electrumDisconnect,
     request,
+    requestMany,
     subscribe,
     unsubscribe,
     onNotification,
