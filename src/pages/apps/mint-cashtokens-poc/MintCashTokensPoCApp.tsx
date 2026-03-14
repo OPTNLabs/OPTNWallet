@@ -617,8 +617,15 @@ const MintCashTokensPoCApp: React.FC<MintCashTokensPoCAppProps> = ({ sdk }) => {
             const k = `${sentTxid}:0`;
             setSelectedKeys((prev) => new Set(prev).add(k));
 
-            setStatus('Category UTXO created. Ready to mint.');
-            showToast('Category UTXO created');
+            const submitted = sent.broadcastState === 'submitted';
+            setStatus(
+              submitted
+                ? 'Category UTXO submitted. Keep the txid and avoid sending it again.'
+                : 'Category UTXO created. Ready to mint.'
+            );
+            showToast(
+              submitted ? 'Category UTXO submitted' : 'Category UTXO created'
+            );
             setStep(2);
             closeConfirm();
             await refreshWalletSnapshot();
@@ -713,9 +720,14 @@ const MintCashTokensPoCApp: React.FC<MintCashTokensPoCAppProps> = ({ sdk }) => {
             if (!sentTxid)
               throw new Error(sent?.errorMessage || 'Broadcast failed.');
             setTxid(sentTxid);
-            setStatus('Mint successful.');
+            const submitted = sent.broadcastState === 'submitted';
+            setStatus(
+              submitted
+                ? 'Mint transaction submitted. Keep the txid and avoid sending it again.'
+                : 'Mint successful.'
+            );
             closeConfirm();
-            showToast('Broadcasted');
+            showToast(submitted ? 'Transaction submitted' : 'Broadcasted');
             await refreshWalletSnapshot();
           } finally {
             setConfirmLoading(false);

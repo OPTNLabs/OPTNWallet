@@ -32,12 +32,13 @@ const TransactionHistory: React.FC = () => {
     selectCurrentNetwork(state)
   );
 
-  const { progress, loading, fetchTransactionHistory } = useTransactionHistoryFetch({
-    walletIdParam: wallet_id,
-    isInitialized: IsInitialized,
-    transactionCount: transactions.length,
-    dispatch,
-  });
+  const { loading, fetchTransactionHistory } =
+    useTransactionHistoryFetch({
+      walletIdParam: wallet_id,
+      isInitialized: IsInitialized,
+      transactionCount: transactions.length,
+      dispatch,
+    });
 
   const {
     sortOrder,
@@ -77,43 +78,40 @@ const TransactionHistory: React.FC = () => {
   };
 
   return (
-    <div className="container mx-auto max-w-md h-[calc(100dvh-var(--navbar-height)-var(--safe-bottom))] px-4 pt-4 pb-3 flex flex-col overflow-hidden wallet-page">
-      {(loading || (progress > 0 && progress < 100)) && (
-        <div className="w-full h-1.5 wallet-surface-strong rounded-full overflow-hidden mb-2 shrink-0">
-          <div
-            className="h-full wallet-inline-progress"
-            style={{ width: `${progress}%` }}
-          />
-        </div>
-      )}
-
-      <PageHeader title="Transaction History" subtitle="Browse confirmed and pending transfers" compact />
+	    <div className="container mx-auto max-w-md h-[calc(100dvh-var(--navbar-height)-var(--safe-bottom))] px-4 pt-4 pb-3 flex flex-col overflow-hidden wallet-page">
+	      <PageHeader title="Transaction History" compact />
 
       <div className="wallet-card p-3 mb-3 shrink-0">
-        <div className="mb-3 grid grid-cols-2 gap-2">
+        <div className="grid grid-cols-10 gap-2">
           <button
             onClick={toggleSortOrder}
-            className="wallet-btn-secondary py-2 px-3 text-sm"
+            className="wallet-btn-secondary col-span-4 py-2 px-3 text-sm"
           >
             {sortOrder === 'asc' ? 'Oldest first' : 'Newest first'}
           </button>
           <select
             value={transactionsPerPage}
             onChange={handleTransactionsPerPageChange}
-            className="wallet-input py-2 px-3 text-sm"
+            className="wallet-input col-span-4 py-1.5 px-3 text-sm"
           >
             <option value={10}>10 per page</option>
             <option value={20}>20 per page</option>
             <option value={30}>30 per page</option>
           </select>
+          <button
+            onClick={fetchTransactionHistory}
+            className="wallet-btn-secondary col-span-2 py-1.5 px-3 text-sm"
+            disabled={loading}
+          >
+            {loading ? (
+              <span className="flex items-center justify-center">
+                <span className="wallet-spinner" aria-hidden="true" />
+              </span>
+            ) : (
+              'Sync'
+            )}
+          </button>
         </div>
-        <button
-          onClick={fetchTransactionHistory}
-          className="wallet-btn-primary w-full py-2 px-3 text-sm"
-          disabled={loading}
-        >
-          {loading ? `Fetching... ${progress}%` : 'Refresh Transaction History'}
-        </button>
       </div>
 
       <div className="flex-1 min-h-0 overflow-y-auto pr-1">
@@ -138,13 +136,21 @@ const TransactionHistory: React.FC = () => {
                         {shortenTxHash(tx.tx_hash)}
                       </div>
                     </div>
-                    {tx.height > 0 ? <StatusChip tone="success">Confirmed</StatusChip> : <StatusChip tone="warning">Pending</StatusChip>}
+                    {tx.height > 0 ? (
+                      <StatusChip tone="success">Confirmed</StatusChip>
+                    ) : (
+                      <StatusChip tone="warning">Pending</StatusChip>
+                    )}
                   </div>
                   <div className="mt-2 text-sm">
                     {tx.height > 0 ? (
-                      <span className="wallet-text-strong">Block: {tx.height}</span>
+                      <span className="wallet-text-strong">
+                        Block: {tx.height}
+                      </span>
                     ) : (
-                      <span className="wallet-muted">Awaiting confirmation</span>
+                      <span className="wallet-muted">
+                        Awaiting confirmation
+                      </span>
                     )}
                     {relativeAge(tx.timestamp) ? (
                       <span className="ml-2 wallet-muted text-xs">

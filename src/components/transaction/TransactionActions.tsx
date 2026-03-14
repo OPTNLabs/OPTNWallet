@@ -12,6 +12,7 @@ interface TransactionActionsProps {
   rawTX: string;
   txOutputs: TransactionOutput[];
   selectedUtxos: UTXO[];
+  sendingLocked?: boolean;
 }
 
 const TransactionActions: React.FC<TransactionActionsProps> = ({
@@ -21,6 +22,7 @@ const TransactionActions: React.FC<TransactionActionsProps> = ({
   rawTX,
   txOutputs,
   selectedUtxos,
+  sendingLocked = false,
 }) => {
   const [isPopupOpen, setIsPopupOpen] = useState(false);
   const [position, setPosition] = useState({ x: 0, y: 0 });
@@ -60,16 +62,26 @@ const TransactionActions: React.FC<TransactionActionsProps> = ({
           <div className="flex justify-between mt-4">
             <button
               onClick={buildTransaction}
-              disabled={loading}
+              disabled={loading || sendingLocked}
               className="wallet-btn-primary font-bold"
+              title={
+                sendingLocked
+                  ? 'Wait for your previous outgoing transaction to sync first'
+                  : undefined
+              }
             >
               Build TX
             </button>
             {rawTX !== '' && (
               <button
                 onClick={handleOpenPopup}
-                disabled={loading}
+                disabled={loading || sendingLocked}
                 className="wallet-btn-danger font-bold"
+                title={
+                  sendingLocked
+                    ? 'Wait for your previous outgoing transaction to sync first'
+                    : undefined
+                }
               >
                 Send TX
               </button>

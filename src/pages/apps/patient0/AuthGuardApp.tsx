@@ -303,7 +303,10 @@ export default function AuthGuardApp({
         `Broadcast returned invalid txid: ${res.errorMessage ?? String(res.txid)}`
       );
     }
-    return res.txid;
+    return {
+      txid: res.txid,
+      broadcastState: res.broadcastState,
+    };
   }
 
   async function getPrimaryWalletAddress(): Promise<string> {
@@ -545,9 +548,14 @@ export default function AuthGuardApp({
             { recipientAddress: primary, amount: MIN_GENESIS_SATS },
           ];
           const built1 = await buildTx([feeInput], outputs1, primary);
-          const txid1 = await broadcastTx(built1.hex);
+          const sent1 = await broadcastTx(built1.hex);
+          const txid1 = sent1.txid;
+          const tx1ResultLabel =
+            sent1.broadcastState === 'submitted' ? 'submitted' : 'broadcasted';
 
-          setStep0AStatus(`tx1 broadcasted: ${txid1}. Refreshing UTXOs…`);
+          setStep0AStatus(
+            `tx1 ${tx1ResultLabel}: ${txid1}. Refreshing UTXOs…`
+          );
 
           const res1 = await sdk.utxos.listForWallet();
           const after1 = mergeWalletUtxos(res1);
@@ -560,7 +568,7 @@ export default function AuthGuardApp({
 
           if (!genesis) {
             throw new Error(
-              'tx1 broadcasted, but genesis UTXO not visible yet. Try “Load Wallet UTXOs” and re-run.'
+              `tx1 ${tx1ResultLabel}, but genesis UTXO not visible yet. Try “Load Wallet UTXOs” and re-run.`
             );
           }
 
@@ -632,9 +640,14 @@ export default function AuthGuardApp({
       setStep0AStatus('Minting AuthKey NFT (first spend of genesis)…');
 
       const built = await buildTx(inputs, outputs, ownerBase);
-      const txid = await broadcastTx(built.hex);
+      const sent = await broadcastTx(built.hex);
+      const txid = sent.txid;
 
-      setStep0AStatus(`AuthKey tx broadcasted: ${txid}. Refreshing UTXOs…`);
+      setStep0AStatus(
+        sent.broadcastState === 'submitted'
+          ? `AuthKey transaction submitted: ${txid}. Refreshing UTXOs…`
+          : `AuthKey tx broadcasted: ${txid}. Refreshing UTXOs…`
+      );
 
       const res2 = await sdk.utxos.listForWallet();
       const after2 = mergeWalletUtxos(res2);
@@ -835,9 +848,14 @@ export default function AuthGuardApp({
       // Change address should be a wallet-controlled address.
       // Use the primary cashaddr base, builder handles change output.
       const built = await buildTx(inputs, outputs, primary);
-      const txid = await broadcastTx(built.hex);
+      const sent = await broadcastTx(built.hex);
+      const txid = sent.txid;
 
-      setStep0BStatus(`Mint tx broadcasted: ${txid}. Refreshing UTXOs…`);
+      setStep0BStatus(
+        sent.broadcastState === 'submitted'
+          ? `Mint transaction submitted: ${txid}. Refreshing UTXOs…`
+          : `Mint tx broadcasted: ${txid}. Refreshing UTXOs…`
+      );
 
       const res2 = await sdk.utxos.listForWallet();
       const after2 = mergeWalletUtxos(res2);
@@ -867,9 +885,11 @@ export default function AuthGuardApp({
       setAuthHeadCandidatesChain([]);
 
       setStep0BStatus(
-        mintTarget === 'authguard'
-          ? 'Mint complete. If you minted FT to AuthGuard, click “Load AuthHead (Chaingraph)” below.'
-          : 'Mint complete.'
+        sent.broadcastState === 'submitted'
+          ? 'Mint submitted. Keep the txid as your reference and avoid sending it again.'
+          : mintTarget === 'authguard'
+            ? 'Mint complete. If you minted FT to AuthGuard, click “Load AuthHead (Chaingraph)” below.'
+            : 'Mint complete.'
       );
     } catch (e: any) {
       setBuildErr(e?.message ?? String(e));
