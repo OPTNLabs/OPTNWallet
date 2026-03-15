@@ -5,17 +5,48 @@ import ElectrumService, {
   invalidateUTXOCache,
   primeUTXOCache,
 } from '../ElectrumService';
+import DatabaseService from '../../apis/DatabaseManager/DatabaseService';
 
 vi.mock('../../apis/ElectrumServer/ElectrumServer', () => ({
   default: vi.fn(),
 }));
 
+vi.mock('../../apis/DatabaseManager/DatabaseService', () => ({
+  default: vi.fn(),
+}));
+
+vi.mock('../../redux/store', () => ({
+  store: {
+    getState: vi.fn(() => ({
+      wallet_id: { currentWalletId: 7 },
+      network: { currentNetwork: 'mainnet' },
+    })),
+  },
+}));
+
 describe('ElectrumService', () => {
   const mockedElectrumServer = vi.mocked(ElectrumServer);
+  const mockedDatabaseService = vi.mocked(DatabaseService);
+  let dbRow: Record<string, unknown> | null;
 
   beforeEach(() => {
     vi.clearAllMocks();
     invalidateUTXOCache();
+    dbRow = null;
+
+    mockedDatabaseService.mockReturnValue({
+      ensureDatabaseStarted: vi.fn(async () => {}),
+      scheduleDatabaseSave: vi.fn(),
+      getDatabase: vi.fn(() => ({
+        prepare: vi.fn(() => ({
+          bind: vi.fn(),
+          step: vi.fn(() => dbRow !== null),
+          getAsObject: vi.fn(() => dbRow ?? {}),
+          run: vi.fn(),
+          free: vi.fn(),
+        })),
+      })),
+    } as never);
   });
 
   it('getUTXOs maps Electrum rows and uses cache', async () => {
@@ -257,5 +288,97 @@ describe('ElectrumService', () => {
     expect(server.requestMany).toHaveBeenCalledTimes(1);
     expect(result['a'.repeat(64)]).toEqual({ seen: true, confirmed: false });
     expect(result['b'.repeat(64)]).toEqual({ seen: true, confirmed: true });
+  });
+
+  it('getTransactionDetails resolves timestamp, outputs, and prevout-backed inputs', async () => {
+    const server = {
+      request: vi.fn(async () => ({
+        txid: 'f'.repeat(64),
+        confirmations: 3,
+        height: 321,
+        blocktime: 1_700_000_000,
+        vin: [{ txid: 'e'.repeat(64), vout: 1 }],
+        vout: [
+          {
+            n: 0,
+            value: 0.001,
+            scriptPubKey: { address: 'bitcoincash:qrecipient' },
+          },
+        ],
+      })),
+      requestMany: vi.fn(async () => [
+        {
+          txid: 'e'.repeat(64),
+          vout: [
+            {
+              n: 1,
+              value: 0.0011,
+              scriptPubKey: { address: 'bitcoincash:qsender' },
+            },
+          ],
+        },
+      ]),
+      subscribe: vi.fn(async () => {}),
+      unsubscribe: vi.fn(async () => {}),
+      onNotification: vi.fn(() => () => {}),
+    };
+
+    mockedElectrumServer.mockReturnValue(server as never);
+
+    const result = await ElectrumService.getTransactionDetails('f'.repeat(64));
+
+    expect(server.request).toHaveBeenCalledWith(
+      'blockchain.transaction.get',
+      'f'.repeat(64),
+      true
+    );
+    expect(server.requestMany).toHaveBeenCalledTimes(1);
+    expect(result).toMatchObject({
+      txid: 'f'.repeat(64),
+      confirmations: 3,
+      height: 321,
+      feeSats: 10000,
+      timestamp: '2023-11-14T22:13:20.000Z',
+      inputs: [{ address: 'bitcoincash:qsender', amountSats: 110000 }],
+      outputs: [
+        { address: 'bitcoincash:qrecipient', amountSats: 100000, outputIndex: 0 },
+      ],
+    });
+  });
+
+  it('getTransactionDetails uses persisted details before calling Electrum', async () => {
+    dbRow = {
+      tx_hash: '1'.repeat(64),
+      confirmations: 9,
+      height: 555,
+      fee_sats: 222,
+      timestamp: '2026-03-14T18:00:00.000Z',
+      inputs_json: JSON.stringify([{ address: 'bitcoincash:qfrom', amountSats: 1000 }]),
+      outputs_json: JSON.stringify([{ address: 'bitcoincash:qto', amountSats: 778 }]),
+    };
+
+    const server = {
+      request: vi.fn(async () => {
+        throw new Error('should not fetch');
+      }),
+      requestMany: vi.fn(async () => []),
+      subscribe: vi.fn(async () => {}),
+      unsubscribe: vi.fn(async () => {}),
+      onNotification: vi.fn(() => () => {}),
+    };
+
+    mockedElectrumServer.mockReturnValue(server as never);
+
+    const result = await ElectrumService.getTransactionDetails('1'.repeat(64));
+
+    expect(server.request).not.toHaveBeenCalled();
+    expect(result).toMatchObject({
+      txid: '1'.repeat(64),
+      confirmations: 9,
+      height: 555,
+      feeSats: 222,
+      inputs: [{ address: 'bitcoincash:qfrom', amountSats: 1000 }],
+      outputs: [{ address: 'bitcoincash:qto', amountSats: 778 }],
+    });
   });
 });

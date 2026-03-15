@@ -100,7 +100,17 @@ const UTXOCard: React.FC<UTXOCardProps> = ({ utxos, loading }) => {
         const metadata = tokenData?.BcmrTokenMetadata || null;
         const category = tokenData?.category || null;
         const sharedMeta = category ? tokenMetadata[category] : null;
-        const iconUri = sharedMeta?.iconUri ?? null;
+        const fallbackIconUri =
+          metadata?.uris && typeof metadata.uris.icon === 'string'
+            ? metadata.uris.icon
+            : null;
+        const iconUri = sharedMeta?.iconUri ?? fallbackIconUri ?? null;
+        const tokenName = sharedMeta?.name || metadata?.name || 'Unknown Token';
+        const tokenSymbol = sharedMeta?.symbol || metadata?.token.symbol || 'tokens';
+        const tokenDecimals =
+          typeof sharedMeta?.decimals === 'number'
+            ? sharedMeta.decimals
+            : (metadata?.token.decimals ?? 0);
 
         // ✅ Contract UTXOs may not have `value`, but do have `amount`
         const sats = (utxo.value ?? utxo.amount) as
@@ -121,12 +131,12 @@ const UTXOCard: React.FC<UTXOCardProps> = ({ utxos, loading }) => {
                     <strong>Amount:</strong>{' '}
                     {formatTokenAmount(
                       tokenData!.amount,
-                      metadata?.token.decimals || 0
+                      tokenDecimals
                     )}{' '}
-                    {metadata?.token.symbol || 'tokens'}
+                    {tokenSymbol}
                   </p>
                   <p>
-                    <strong>Name:</strong> {metadata?.name || 'Unknown Token'}
+                    <strong>Name:</strong> {tokenName}
                   </p>
                   <p>
                     {formatBchFromSats(sats)} <strong>BCH</strong>
@@ -153,25 +163,19 @@ const UTXOCard: React.FC<UTXOCardProps> = ({ utxos, loading }) => {
             <div className="flex flex-col items-center space-y-2">
               {isToken && metadata ? (
                 <>
-                  {sharedMeta ? (
-                    iconUri ? (
-                      <img
-                        src={iconUri}
-                        alt={metadata.name || 'Token'}
-                        className="w-12 h-12 rounded"
-                      />
-                    ) : (
-                      <div className="w-12 h-12 wallet-surface-strong rounded flex items-center justify-center">
-                        <span className="wallet-muted">No Icon</span>
-                      </div>
-                    )
+                  {iconUri ? (
+                    <img
+                      src={iconUri}
+                      alt={tokenName}
+                      className="w-12 h-12 rounded"
+                    />
                   ) : (
                     <div className="w-12 h-12 wallet-surface-strong rounded flex items-center justify-center">
-                      <span className="wallet-muted">Loading...</span>
+                      <FaBitcoin className="wallet-accent-icon text-3xl" />
                     </div>
                   )}
                   <span className="text-base font-medium text-center">
-                    {sharedMeta?.name || metadata.name || 'Unknown Token'}
+                    {tokenName}
                   </span>
                 </>
               ) : (

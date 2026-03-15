@@ -11,7 +11,7 @@ export type SharedTokenMetadata = {
 };
 
 const bcmr = new BcmrService();
-const metadataCache = new Map<string, SharedTokenMetadata | null>();
+const metadataCache = new Map<string, SharedTokenMetadata>();
 const inflightMetadata = new Map<string, Promise<SharedTokenMetadata | null>>();
 
 async function loadTokenMetadata(
@@ -21,7 +21,7 @@ async function loadTokenMetadata(
   if (!normalized) return null;
 
   const cached = metadataCache.get(normalized);
-  if (cached !== undefined) return cached;
+  if (cached) return cached;
 
   const inflight = inflightMetadata.get(normalized);
   if (inflight) return inflight;
@@ -42,7 +42,6 @@ async function loadTokenMetadata(
       metadataCache.set(normalized, shared);
       return shared;
     } catch {
-      metadataCache.set(normalized, null);
       return null;
     } finally {
       inflightMetadata.delete(normalized);
@@ -55,7 +54,7 @@ async function loadTokenMetadata(
 
 export function getCachedTokenMetadata(
   category: string
-): SharedTokenMetadata | null | undefined {
+): SharedTokenMetadata | undefined {
   return metadataCache.get(String(category ?? '').trim());
 }
 

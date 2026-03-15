@@ -41,4 +41,23 @@ describe('AddonManifestSchema', () => {
     const errors = validateAddonManifestAgainstSchema(manifest);
     expect(errors.some((e) => e.includes('invalid trustTier'))).toBe(true);
   });
+
+  it('accepts an apps-only manifest with no contracts', () => {
+    const manifest: AddonManifest = {
+      id: 'apps.only',
+      name: 'Apps Only',
+      version: '1.0.0',
+      permissions: [{ kind: 'none' }],
+      contracts: [],
+      apps: [
+        {
+          id: 'a1',
+          name: 'App',
+          kind: 'declarative',
+        },
+      ],
+    };
+
+    expect(validateAddonManifestAgainstSchema(manifest)).toEqual([]);
+  });
 });

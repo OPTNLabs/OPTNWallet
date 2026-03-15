@@ -11,6 +11,7 @@ export type OutboundTransactionState =
 
 export const OUTBOUND_BROADCASTING_STALE_MS = 90 * 1000;
 export const OUTBOUND_RELEASE_DELAY_MS = 20 * 60 * 1000;
+export const OUTBOUND_REBROADCAST_COOLDOWN_MS = 30 * 1000;
 
 export type TrackedOutpoint = {
   tx_hash: string;
@@ -186,6 +187,18 @@ const OutboundTransactionTracker = {
     if (record.state === 'seen' || record.state === 'broadcasted') return false;
     const ageMs = Date.now() - Date.parse(record.updatedAt);
     return !Number.isNaN(ageMs) && ageMs >= OUTBOUND_RELEASE_DELAY_MS;
+  },
+
+  canClear(record: OutboundTransactionRecord): boolean {
+    if (record.state === 'submitted') return true;
+    return this.canRelease(record);
+  },
+
+  shouldRebroadcast(record: OutboundTransactionRecord): boolean {
+    if (record.state !== 'submitted') return false;
+    const baseline = record.lastCheckedAt ?? record.updatedAt;
+    const ageMs = Date.now() - Date.parse(baseline);
+    return !Number.isNaN(ageMs) && ageMs >= OUTBOUND_REBROADCAST_COOLDOWN_MS;
   },
 
   async remove(txid: string): Promise<void> {

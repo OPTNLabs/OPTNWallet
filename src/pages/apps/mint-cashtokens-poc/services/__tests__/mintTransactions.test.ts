@@ -177,7 +177,7 @@ describe('mintTransactions', () => {
     expect(out.feePaid).toBe(454n);
   });
 
-  it('buildMintPreview prepends BCMR OP_RETURN output when enabled', async () => {
+  it('buildMintPreview keeps a wallet-controlled output before BCMR OP_RETURN when enabled', async () => {
     const genesis = makeUtxo({ tx_hash: 'g'.repeat(64), tx_pos: 0, value: 5000, token: null });
     const fee = makeUtxo({ tx_hash: 'f'.repeat(64), tx_pos: 1, value: 2000, token: null });
     const draft = makeDraft({ sourceKey: `${genesis.tx_hash}:0` });
@@ -192,6 +192,7 @@ describe('mintTransactions', () => {
       errorMsg: '',
       hex: 'c0de',
       finalOutputs: [
+        { recipientAddress: 'bitcoincash:qchange', amount: 1000n },
         { opReturn: ['BCMR'] },
         { recipientAddress: 'bitcoincash:qrcp', amount: 546n },
       ],
@@ -215,8 +216,12 @@ describe('mintTransactions', () => {
     });
 
     const firstBuildArg = build.mock.calls[0]?.[0] as {
-      outputs: Array<{ opReturn?: string[] }>;
+      outputs: Array<{ recipientAddress?: string; amount?: bigint; opReturn?: string[] }>;
     };
-    expect(firstBuildArg.outputs[0].opReturn?.[0]).toBe('BCMR');
+    expect(firstBuildArg.outputs[0]).toEqual({
+      recipientAddress: 'bitcoincash:qchange',
+      amount: 1000n,
+    });
+    expect(firstBuildArg.outputs[1].opReturn?.[0]).toBe('BCMR');
   });
 });

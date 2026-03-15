@@ -118,18 +118,20 @@ export default function SelectedUTXOsDisplay({
     <div className="mb-4">
       {selectedUtxos.length > 0 ? (
         <div className="flex justify-between items-center mb-4">
-          <h3 className="text-lg font-semibold ">Transaction Inputs</h3>
+          <div>
+            <h3 className="text-lg font-semibold">Selected funds</h3>
+          </div>
           <button
             onClick={togglePopup}
             className="wallet-btn-primary font-bold py-1 px-2"
           >
-            Show Inputs
+            Review funds
           </button>
         </div>
       ) : selectedAddresses.length > 0 ||
         selectedContractAddresses.length > 0 ? (
-        <div className="font-bold flex-col text-xl">
-          (2) Select UTXO(s) to spend from
+        <div className="text-sm wallet-muted">
+          No funds selected yet.
         </div>
       ) : (
         <></>
@@ -137,8 +139,8 @@ export default function SelectedUTXOsDisplay({
 
       {showPopup && (
         <Popup closePopups={() => setShowPopup(false)}>
-          <h3 className="text-lg font-semibold flex flex-col items-center mb-4">
-            Transaction Inputs
+          <h3 className="text-lg font-semibold text-center mb-4">
+            Selected funds
           </h3>
           <div className="max-h-[50vh] overflow-y-auto">
             {selectedUtxos.length === 0 ? (
@@ -240,7 +242,7 @@ export default function SelectedUTXOsDisplay({
         <div className="mt-4">
           <h3 className="flex flex-col">
             <span>
-              {`${selectedUtxos.length} Input${selectedUtxos.length === 1 ? '' : 's'} - ${totalBchStr} BCH`}
+              {`${selectedUtxos.length} selected item${selectedUtxos.length === 1 ? '' : 's'} - ${totalBchStr} BCH`}
             </span>
             <span>{`$ ${totalUsd} USD`}</span>
           </h3>

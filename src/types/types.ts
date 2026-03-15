@@ -45,6 +45,23 @@ export interface TransactionHistoryItem {
   address?: string; // Optional field for including address
 }
 
+export interface TransactionDetailParticipant {
+  address: string;
+  amountSats?: number;
+  outputIndex?: number;
+  isWalletAddress?: boolean;
+}
+
+export interface TransactionDetails {
+  txid: string;
+  confirmations: number;
+  height?: number;
+  feeSats?: number;
+  timestamp?: string;
+  inputs: TransactionDetailParticipant[];
+  outputs: TransactionDetailParticipant[];
+}
+
 // Transaction Output
 export type TransactionOutput =
   | {

@@ -588,23 +588,8 @@ export default function MarketplaceAppHost() {
 
   return (
     <>
-      <div className="container mx-auto p-4 pb-16 h-screen flex flex-col">
-        <div className="flex items-center justify-between mb-4 flex-none">
-        {/* <div>
-          <div className="text-xl font-bold">{resolved?.app.name}</div>
-          <div className="text-sm text-gray-600">
-            {resolved?.app.description}
-          </div>
-        </div> */}
-
-          <button
-            onClick={() => navigate('/apps')}
-            className="bg-gray-200 hover:bg-gray-300 text-gray-900 py-2 px-4 rounded"
-          >
-            Back
-          </button>
-        </div>
-        <div className="flex-1 min-h-0 overflow-y-auto overscroll-contain">
+      <div className="mx-auto flex h-screen w-full max-w-md flex-col overflow-hidden px-4 pb-16">
+        <div className="flex-1 min-h-0 overflow-hidden">
           {renderApp()}
         </div>
       </div>

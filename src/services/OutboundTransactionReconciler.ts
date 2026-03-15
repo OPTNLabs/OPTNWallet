@@ -99,6 +99,17 @@ export async function reconcileOutboundTransactions(
   if (remaining.length === 0) return [];
 
   const transactionManager = TransactionManager();
+  await Promise.all(
+    remaining
+      .filter((record) => OutboundTransactionTracker.shouldRebroadcast(record))
+      .map((record) =>
+        transactionManager.sendTransaction(record.rawTx).catch(() => null)
+      )
+  );
+
+  const afterRetry = await OutboundTransactionTracker.listActive(walletId);
+  if (afterRetry.length === 0) return [];
+
   try {
     await transactionManager.fetchAndStoreTransactionHistories(
       walletId,
@@ -110,11 +121,11 @@ export async function reconcileOutboundTransactions(
 
   const seen = await listSeenTxids(
     walletId,
-    remaining.map((record) => record.txid)
+    afterRetry.map((record) => record.txid)
   );
 
   await Promise.all(
-    remaining
+    afterRetry
       .filter((record) => seen.has(record.txid))
       .map((record) => OutboundTransactionTracker.markState(record.txid, 'seen'))
   );

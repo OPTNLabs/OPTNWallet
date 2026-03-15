@@ -131,12 +131,14 @@ const UTXOSelection: React.FC<UTXOSelectionProps> = ({
             className="wallet-btn-primary text-sm font-bold mb-2"
             onClick={() => setShowRegularUTXOsPopup(true)}
           >
-            Regular UTXOs
+            BCH funds
           </button>
         )}
         {showRegularUTXOsPopup && (
           <Popup closePopups={closePopups}>
-            {/* <h4 className="text-md font-semibold mb-4">Regular UTXOs</h4> */}
+            <h4 className="text-md font-semibold text-center mb-4">
+              BCH funds
+            </h4>
             <div className="flex justify-between mb-4">
               <button
                 className={`py-2 px-4 rounded ${
@@ -163,7 +165,7 @@ const UTXOSelection: React.FC<UTXOSelectionProps> = ({
               {regularView === 'Wallet' && (
                 <div>
                   <h5 className="font-semibold flex flex-col items-center mb-2">
-                    Wallet Address UTXOs
+                    Wallet funds
                   </h5>
                   {filteredRegularUTXOs.map((utxo) => (
                     <button
@@ -187,7 +189,7 @@ const UTXOSelection: React.FC<UTXOSelectionProps> = ({
               {regularView === 'Contract' && (
                 <div>
                   <h5 className="font-semibold flex flex-col items-center mb-2">
-                    Contract Address UTXOs
+                    Contract funds
                   </h5>
                   {contractRegularUTXOs.map((utxo) => (
                     <button
@@ -221,11 +223,14 @@ const UTXOSelection: React.FC<UTXOSelectionProps> = ({
             className="wallet-btn-primary text-sm font-bold mb-2"
             onClick={() => setShowCashTokenUTXOsPopup(true)}
           >
-            CashToken UTXOs
+            Tokens & collectibles
           </button>
         )}
         {showCashTokenUTXOsPopup && (
           <Popup closePopups={closePopups}>
+            <h4 className="text-md font-semibold text-center mb-4">
+              Tokens & collectibles
+            </h4>
             <div className="flex justify-between mb-4">
               <button
                 className={`py-2 px-4 rounded ${
@@ -252,7 +257,7 @@ const UTXOSelection: React.FC<UTXOSelectionProps> = ({
               {cashTokenView === 'Wallet' && (
                 <div>
                   <h5 className="font-semibold flex flex-col items-center mb-2">
-                    Wallet Address UTXOs
+                    Wallet assets
                   </h5>
                   <TokenSection
                     utxos={filteredCashTokenUTXOs}
@@ -264,7 +269,7 @@ const UTXOSelection: React.FC<UTXOSelectionProps> = ({
               {cashTokenView === 'Contract' && (
                 <div>
                   <h5 className="font-semibold flex flex-col items-center mb-2">
-                    Contract Address UTXOs
+                    Contract assets
                   </h5>
                   <TokenSection
                     utxos={contractCashTokenUTXOs}
