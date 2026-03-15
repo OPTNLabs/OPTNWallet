@@ -1,7 +1,10 @@
 // src/apis/DatabaseManager/DatabaseService.ts
 
 import initSqlJs, { Database } from 'sql.js';
-import { createTables } from '../../utils/schema/schema';
+import {
+  createTables,
+  createTransactionDetailsTable,
+} from '../../utils/schema/schema';
 import { get as idbGet, set as idbSet } from 'idb-keyval';
 import { logError } from '../../utils/errorHandling';
 import SecretCryptoService, {
@@ -24,6 +27,9 @@ const SAVE_MAX_DELAY_MS = 3000;
 const migrations: Array<(db: Database) => Promise<void>> = [
   async (db) => {
     createTables(db);
+  },
+  async (db) => {
+    createTransactionDetailsTable(db);
   },
   // Add future migrations here as needed
 ];
@@ -276,6 +282,7 @@ const clearDatabase = async (): Promise<void> => {
       DROP TABLE IF EXISTS addresses;
       DROP TABLE IF EXISTS UTXOs;
       DROP TABLE IF EXISTS transactions;
+      DROP TABLE IF EXISTS transaction_details;
       DROP TABLE IF EXISTS cashscript_artifacts;
       DROP TABLE IF EXISTS cashscript_addresses;
       DROP TABLE IF EXISTS instantiated_contracts;

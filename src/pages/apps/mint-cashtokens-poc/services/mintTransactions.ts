@@ -66,6 +66,8 @@ type BuildMintPreviewParams = {
   bcmrPublication?: MintBcmrPublication;
 };
 
+const BCMR_IDENTITY_OUTPUT_SATS = 1000n;
+
 export async function buildMintPreview({
   sdk,
   selectedUtxos,
@@ -105,6 +107,11 @@ export async function buildMintPreview({
 
     const outputs: TransactionOutput[] = [];
     if (bcmrPublication?.enabled) {
+      outputs.push({
+        recipientAddress: changeAddress,
+        amount: BCMR_IDENTITY_OUTPUT_SATS,
+      });
+
       const publication = buildBcmrPublicationOpReturn({
         registryJson: bcmrPublication.registryJson,
         uris: bcmrPublication.uris,

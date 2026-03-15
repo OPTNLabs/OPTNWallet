@@ -151,6 +151,7 @@ export interface AddonManifest {
 
   /**
    * Contracts that the addon adds to the app.
+   * Apps-only addons can leave this empty.
    */
   contracts: AddonContractDefinition[];
 

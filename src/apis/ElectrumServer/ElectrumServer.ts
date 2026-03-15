@@ -268,7 +268,7 @@ export default function ElectrumServer() {
           );
           const client = new ElectrumClient<ElectrumClientEvents>(
             'OPTNWallet',
-            '1.5.1',
+            '1.5.2',
             socket
           );
 

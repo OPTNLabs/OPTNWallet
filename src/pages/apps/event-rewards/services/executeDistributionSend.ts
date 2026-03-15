@@ -1,4 +1,3 @@
-import { decodeCashAddress, encodeCashAddress } from '@bitauth/libauth';
 import { createSimpleSendPlanner } from '../../../../hooks/simple-send/planner';
 import { selectTokenFtInputs } from '../../../../services/CoinSelectionService';
 import TransactionService from '../../../../services/TransactionService';
@@ -6,6 +5,7 @@ import type { AddonSDK } from '../../../../services/AddonsSDK';
 import type { TransactionOutput, UTXO } from '../../../../types/types';
 import type { DistributionJobRecord } from '../types';
 import { TOKEN_OUTPUT_SATS } from '../../../../utils/constants';
+import { toTokenAwareCashAddress } from '../../../../utils/cashAddress';
 
 type CompleteDistributionJobArgs = {
   jobId: string;
@@ -16,38 +16,6 @@ type CompleteDistributionJobArgs = {
 type DistributionCompletionApi = {
   completeDistributionJob(args: CompleteDistributionJobArgs): Promise<unknown>;
 };
-
-function toTokenAwareAddress(address: string): string {
-  const decoded = decodeCashAddress(address);
-  if (typeof decoded === 'string') {
-    throw new Error(`Invalid recipient address: ${address}`);
-  }
-
-  if (
-    decoded.type === 'p2pkhWithTokens' ||
-    decoded.type === 'p2shWithTokens'
-  ) {
-    return address;
-  }
-
-  if (decoded.type === 'p2pkh') {
-    return encodeCashAddress({
-      prefix: decoded.prefix,
-      type: 'p2pkhWithTokens',
-      payload: decoded.payload,
-    }).address;
-  }
-
-  if (decoded.type === 'p2sh') {
-    return encodeCashAddress({
-      prefix: decoded.prefix,
-      type: 'p2shWithTokens',
-      payload: decoded.payload,
-    }).address;
-  }
-
-  throw new Error(`Unsupported token recipient address type: ${address}`);
-}
 
 export type DistributionTxPreview = {
   rawTx: string;
@@ -161,7 +129,7 @@ export async function buildApprovedDistributionTransaction(
     }
 
     const outputs: TransactionOutput[] = preparedJobs.map((job) => ({
-      recipientAddress: toTokenAwareAddress(job.destination_address),
+      recipientAddress: toTokenAwareCashAddress(job.destination_address),
       amount: TOKEN_OUTPUT_SATS,
       token: {
         category: tokenCategory,
@@ -202,8 +170,8 @@ export async function executeApprovedDistributionSend(
   const preview = await buildApprovedDistributionTransaction(sdk, jobs);
 
   const sent = await TransactionService.sendTransaction(preview.rawTx, preview.inputs, {
-    source: 'event-rewards',
-    sourceLabel: 'Event Rewards',
+    source: 'airdrops',
+    sourceLabel: 'Airdrops',
     amountSummary: `${preview.jobIds.length} recipient${preview.jobIds.length === 1 ? '' : 's'}`,
   });
   if (sent.errorMessage) {

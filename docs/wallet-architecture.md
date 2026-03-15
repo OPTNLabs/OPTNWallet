@@ -55,6 +55,17 @@ The app host resolves addon metadata, enforces launch/runtime consent, then expo
 - No direct secret exposure to addons:
   - Addons never receive raw wallet private keys.
 
+## Address Derivation Notes
+
+- Current live behavior is unchanged from the legacy wallet flow:
+  - wallet send flows still default change selection to the same address ordering used before this derivation-strategy work
+  - no new change-chain (`chain 1`) preference is active in the UI or runtime behavior
+- Dormant future-integration scaffolding now exists for BCH-only change-address preference work:
+  - `src/redux/preferencesSlice.ts`
+  - `src/utils/changeAddressPreference.ts`
+  - integration points in `src/hooks/useSimpleSend.ts` and `src/pages/Transaction.tsx`
+- That scaffolding is intentionally disabled right now so user experience remains unchanged while derivation strategy work continues in the background.
+
 ## Network and Infra Abstraction
 
 - Endpoint pool and failover utility: `src/utils/servers/InfraUrls.ts`

@@ -6,6 +6,7 @@ import { AppDispatch } from '../../redux/store';
 import { TransactionHistoryItem } from '../../types/types';
 import ElectrumService from '../../services/ElectrumService';
 import { reconcileOutboundTransactions } from '../../services/OutboundTransactionReconciler';
+import { planTransactionDetailRefresh } from '../../services/transactionDetailSync';
 import {
   runOutboundReconcile,
   runWalletHistoryRefresh,
@@ -31,6 +32,23 @@ function toHistoryItem(row: Record<string, unknown>): TransactionHistoryItem {
         ? undefined
         : (row.amount as string | number),
   };
+}
+
+function loadStoredTransactions(db: { prepare: (sql: string) => any }, walletId: number) {
+  const storedTransactionsQuery = db.prepare(`
+    SELECT tx_hash, height, timestamp, amount
+    FROM transactions
+    WHERE wallet_id = ?;
+  `);
+  storedTransactionsQuery.bind([walletId]);
+  const storedTransactions: TransactionHistoryItem[] = [];
+  while (storedTransactionsQuery.step()) {
+    storedTransactions.push(
+      toHistoryItem(storedTransactionsQuery.getAsObject())
+    );
+  }
+  storedTransactionsQuery.free();
+  return storedTransactions;
 }
 
 export function useTransactionHistoryFetch({
@@ -62,6 +80,7 @@ export function useTransactionHistoryFetch({
           console.error('Database not started.');
           return;
         }
+        const previousStoredTransactions = loadStoredTransactions(db, walletIdNum);
 
         const addressesQuery = db.prepare(`
       SELECT address FROM addresses WHERE wallet_id = ?;
@@ -104,19 +123,25 @@ export function useTransactionHistoryFetch({
         if (!liveDb) {
           console.error('Database not started after history fetch.');
         } else {
-          const storedTransactionsQuery = liveDb.prepare(`
-          SELECT tx_hash, height, timestamp, amount
-          FROM transactions
-          WHERE wallet_id = ?;
-        `);
-          storedTransactionsQuery.bind([walletIdNum]);
-          const storedTransactions: TransactionHistoryItem[] = [];
-          while (storedTransactionsQuery.step()) {
-            storedTransactions.push(
-              toHistoryItem(storedTransactionsQuery.getAsObject())
+          const storedTransactions = loadStoredTransactions(liveDb, walletIdNum);
+          const refreshPlan = planTransactionDetailRefresh({
+            previous: previousStoredTransactions,
+            next: storedTransactions,
+          });
+
+          const txidsToWarm = refreshPlan.reorgDetected
+            ? storedTransactions.map((tx) => tx.tx_hash)
+            : refreshPlan.txidsToRefresh;
+
+          if (txidsToWarm.length > 0) {
+            void Promise.allSettled(
+              txidsToWarm.map((txid) =>
+                ElectrumService.getTransactionDetails(txid, {
+                  forceRefresh: refreshPlan.reorgDetected,
+                })
+              )
             );
           }
-          storedTransactionsQuery.free();
 
           dispatch(
             setTransactions({

@@ -34,6 +34,10 @@ import { parseAmountToSats, validateRecipient } from './simple-send/helpers';
 import { createSimpleSendPlanner } from './simple-send/planner';
 import { AssetType, ReviewState, SimpleSendMode } from './simple-send/types';
 import { parseBip21Uri } from '../utils/bip21';
+import {
+  getLegacyDefaultChangeAddress,
+  getPreferredBchChangeAddress,
+} from '../utils/changeAddressPreference';
 
 const noopSetContractAddresses: Dispatch<SetStateAction<ContractAddressRecord[]>> =
   () => undefined;
@@ -44,13 +48,17 @@ export default function useSimpleSend() {
   const prices = useSelector((s: RootState) => s.priceFeed);
   const walletId = useSelector(selectWalletId);
   const currentNetwork = useSelector((s: RootState) => selectCurrentNetwork(s));
+  const preferInternalChangeForBch = false;
 
   // Wallet addresses + default change (also gives tokenAddress mapping)
   const [addresses, setAddresses] = useState<
     { address: string; tokenAddress: string }[]
   >([]);
   const [defaultChangeAddress, setDefaultChangeAddress] = useState<string>('');
+  const [preferredBchChangeAddress, setPreferredBchChangeAddress] =
+    useState<string>('');
   const [error, setError] = useState<string>('');
+  const [assetType, setAssetType] = useState<AssetType>('bch');
 
   const setErrorMessage = useCallback(
     (value: string | null) => setError(value ?? ''),
@@ -87,15 +95,73 @@ export default function useSimpleSend() {
   }, [walletId, addresses.length]);
 
   // BCH change address (P2PKH cashaddr as selected)
-  const [selectedChangeAddress, setSelectedChangeAddress] =
+  const [selectedChangeAddress, setSelectedChangeAddressState] =
     useState<string>('');
+  const [hasManualChangeSelection, setHasManualChangeSelection] =
+    useState(false);
+  const setSelectedChangeAddress = useCallback((address: string) => {
+    setHasManualChangeSelection(true);
+    setSelectedChangeAddressState(address);
+  }, []);
+
   useEffect(() => {
-    if (!selectedChangeAddress) {
-      setSelectedChangeAddress(
-        defaultChangeAddress || addresses[0]?.address || ''
-      );
+    setHasManualChangeSelection(false);
+    setSelectedChangeAddressState('');
+    setPreferredBchChangeAddress('');
+  }, [walletId]);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      if (!walletId) {
+        if (!cancelled) setPreferredBchChangeAddress('');
+        return;
+      }
+
+      if (!preferInternalChangeForBch) {
+        if (!cancelled) {
+          setPreferredBchChangeAddress(getLegacyDefaultChangeAddress(addresses));
+        }
+        return;
+      }
+
+      try {
+        const preferred = await getPreferredBchChangeAddress(walletId, addresses);
+        if (!cancelled) setPreferredBchChangeAddress(preferred);
+      } catch {
+        if (!cancelled) {
+          setPreferredBchChangeAddress(getLegacyDefaultChangeAddress(addresses));
+        }
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [walletId, addresses, preferInternalChangeForBch]);
+
+  useEffect(() => {
+    if (hasManualChangeSelection) return;
+
+    const legacyDefault =
+      defaultChangeAddress || getLegacyDefaultChangeAddress(addresses);
+    const nextDefault =
+      assetType === 'bch' && preferInternalChangeForBch
+        ? preferredBchChangeAddress || legacyDefault
+        : legacyDefault;
+
+    if (selectedChangeAddress !== nextDefault) {
+      setSelectedChangeAddressState(nextDefault);
     }
-  }, [defaultChangeAddress, addresses, selectedChangeAddress]);
+  }, [
+    assetType,
+    defaultChangeAddress,
+    addresses,
+    hasManualChangeSelection,
+    preferInternalChangeForBch,
+    preferredBchChangeAddress,
+    selectedChangeAddress,
+  ]);
 
   // Token-aware change address (for FT/NFT change outputs)
   const [tokenChangeAddress, setTokenChangeAddress] = useState<string>('');
@@ -125,7 +191,6 @@ export default function useSimpleSend() {
 
   // Form – shared
   const [recipient, setRecipient] = useState<string>('');
-  const [assetType, setAssetType] = useState<AssetType>('bch');
 
   // Form – BCH
   const [amountBch, setAmountBch] = useState<string>('');
