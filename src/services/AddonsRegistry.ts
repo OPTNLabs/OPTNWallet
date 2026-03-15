@@ -200,8 +200,8 @@ export default function AddonsRegistry() {
     if (!Array.isArray(m.permissions)) {
       throw new Error(`Addon "${m.id}" permissions must be an array`);
     }
-    if (!Array.isArray(m.contracts) || m.contracts.length === 0) {
-      throw new Error(`Addon "${m.id}" must include at least one contract`);
+    if (!Array.isArray(m.contracts)) {
+      throw new Error(`Addon "${m.id}" contracts must be an array`);
     }
   }
 

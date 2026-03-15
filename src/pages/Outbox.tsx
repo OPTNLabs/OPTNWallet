@@ -22,7 +22,7 @@ export default function Outbox() {
   const walletId = useSelector(selectWalletId);
   const {
     outboundTransactions,
-    canRelease,
+    canClear,
     reconciling,
     refresh,
     release,
@@ -138,13 +138,19 @@ export default function Outbox() {
                     onClick={() => {
                       void release(record.txid);
                     }}
-                    disabled={!canRelease(record.txid)}
+                    disabled={!canClear(record.txid)}
                     className="wallet-btn-secondary px-3 py-2 text-sm"
-                    title={`Available after ${Math.round(
-                      OUTBOUND_RELEASE_DELAY_MS / 60000
-                    )} minutes if the transaction is still unresolved`}
+                    title={
+                      record.state === 'submitted'
+                        ? 'Clear this pending lock if the transaction was not actually sent'
+                        : `Available after ${Math.round(
+                            OUTBOUND_RELEASE_DELAY_MS / 60000
+                          )} minutes if the transaction is still unresolved`
+                    }
                   >
-                    Release if stale
+                    {record.state === 'submitted'
+                      ? 'Clear pending lock'
+                      : 'Release if stale'}
                   </button>
                 </div>
               </div>

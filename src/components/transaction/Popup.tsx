@@ -1,6 +1,7 @@
 // src/components/transaction/Popup.tsx
 
 import React from 'react';
+import { createPortal } from 'react-dom';
 
 interface PopupProps {
   closePopups: () => void;
@@ -13,13 +14,13 @@ const Popup: React.FC<PopupProps> = ({
   children,
   closeButtonText = 'Close',
 }) => {
-  return (
+  const popup = (
     <div className="wallet-popup-backdrop z-[1200] p-3 sm:p-4">
       <div
         className="wallet-popup-panel flex w-full max-w-md min-w-0 flex-col overflow-x-hidden"
         style={{
           maxHeight:
-            'calc(100dvh - var(--navbar-height) - var(--safe-bottom) - 0.75rem)',
+            'calc(100dvh - var(--safe-bottom) - 1rem)',
         }}
       >
         <div className="min-h-0 overflow-y-auto overflow-x-hidden pr-1">{children}</div>
@@ -34,6 +35,8 @@ const Popup: React.FC<PopupProps> = ({
       </div>
     </div>
   );
+
+  return createPortal(popup, document.body);
 };
 
 export default Popup;
