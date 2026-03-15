@@ -38,8 +38,10 @@ describe('DatabaseService', () => {
     }));
 
     const createTables = vi.fn();
+    const createTransactionDetailsTable = vi.fn();
     vi.doMock('../../../utils/schema/schema', () => ({
       createTables,
+      createTransactionDetailsTable,
     }));
 
     class FakeDatabase {
@@ -87,6 +89,7 @@ describe('DatabaseService', () => {
 
     vi.doMock('../../../utils/schema/schema', () => ({
       createTables: vi.fn(),
+      createTransactionDetailsTable: vi.fn(),
     }));
 
     class FakeDatabase {
@@ -136,6 +139,7 @@ describe('DatabaseService', () => {
 
     vi.doMock('../../../utils/schema/schema', () => ({
       createTables: vi.fn(),
+      createTransactionDetailsTable: vi.fn(),
     }));
 
     class FakeDatabase {

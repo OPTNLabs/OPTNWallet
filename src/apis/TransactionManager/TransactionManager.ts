@@ -12,6 +12,7 @@ import DatabaseService from '../DatabaseManager/DatabaseService';
 import TransactionBuilderHelper from './TransactionBuilderHelper';
 import { DUST, TOKEN_OUTPUT_SATS } from '../../utils/constants';
 import { logError, toErrorMessage } from '../../utils/errorHandling';
+import { toTokenAwareCashAddress } from '../../utils/cashAddress';
 import { binToHex, hexToBin } from '../../utils/hex';
 import { sha256 } from '../../utils/hash';
 import {
@@ -53,8 +54,6 @@ export default function TransactionManager() {
     let transactionOpened = false;
 
     try {
-      const timestamp = new Date().toISOString();
-
       db.exec('BEGIN TRANSACTION');
       transactionOpened = true;
 
@@ -67,7 +66,7 @@ export default function TransactionManager() {
       `);
 
       for (const tx of history) {
-        upsertStmt.run([walletId, tx.tx_hash, tx.height, timestamp]);
+        upsertStmt.run([walletId, tx.tx_hash, tx.height, tx.timestamp ?? '']);
       }
 
       upsertStmt.free();
@@ -142,8 +141,7 @@ export default function TransactionManager() {
     if (
       priorAttempt &&
       (priorAttempt.state === 'broadcasting' ||
-        priorAttempt.state === 'broadcasted' ||
-        priorAttempt.state === 'submitted')
+        priorAttempt.state === 'broadcasted')
     ) {
       return {
         txid: priorAttempt.txid,
@@ -162,6 +160,14 @@ export default function TransactionManager() {
       source: 'wallet',
     });
 
+    if (derivedTxid && priorAttempt?.state === 'submitted') {
+      await OutboundTransactionTracker.markState(
+        derivedTxid,
+        'broadcasting',
+        priorAttempt.lastError ?? null
+      );
+    }
+
     try {
       txid = await txBuilder.sendTransaction(rawTX);
       if (derivedTxid) {
@@ -170,10 +176,20 @@ export default function TransactionManager() {
     } catch (error: unknown) {
       logError('TransactionManager.sendTransaction', error);
       const message = toErrorMessage(error);
-      if (derivedTxid && isAmbiguousBroadcastError(message)) {
+      if (
+        derivedTxid &&
+        (isAmbiguousBroadcastError(message) ||
+          /already in mempool|already have transaction|txn-already-known|already known/i.test(
+            message
+          ))
+      ) {
         await OutboundTransactionTracker.markState(
           derivedTxid,
-          'submitted',
+          /already in mempool|already have transaction|txn-already-known|already known/i.test(
+            message
+          )
+            ? 'broadcasted'
+            : 'submitted',
           message
         );
         txid = derivedTxid;
@@ -252,6 +268,8 @@ export default function TransactionManager() {
         )?.tokenAddress;
         if (tokenAddress) {
           newOutput.recipientAddress = tokenAddress;
+        } else {
+          newOutput.recipientAddress = toTokenAwareCashAddress(recipientAddress);
         }
 
         if (newOutput.amount < TOKEN_OUTPUT_SATS) {
@@ -277,6 +295,8 @@ export default function TransactionManager() {
         )?.tokenAddress;
         if (tokenAddress) {
           newOutput.recipientAddress = tokenAddress;
+        } else {
+          newOutput.recipientAddress = toTokenAwareCashAddress(recipientAddress);
         }
 
         if (newOutput.amount < TOKEN_OUTPUT_SATS) {
@@ -345,6 +365,22 @@ export default function TransactionManager() {
     return outputs.reduce((sum, o) => sum + outputSats(o), 0n);
   }
 
+  function normalizeTokenOutputs(
+    outputs: TransactionOutput[]
+  ): TransactionOutput[] {
+    return outputs.map((output): TransactionOutput => {
+      if ('opReturn' in output && output.opReturn !== undefined) {
+        return output;
+      }
+      if (!output.token) return output;
+      return {
+        recipientAddress: toTokenAwareCashAddress(output.recipientAddress),
+        amount: output.amount,
+        token: output.token,
+      };
+    });
+  }
+
   /**
    * Builds a transaction using the provided outputs, change address, and selected UTXOs.
    *
@@ -374,7 +410,7 @@ export default function TransactionManager() {
     };
 
     // track intended outputs so we can return them even on failure (debug UX)
-    let intendedOutputs: TransactionOutput[] = outputs;
+    let intendedOutputs: TransactionOutput[] = normalizeTokenOutputs(outputs);
 
     try {
       if (!selectedUtxos || selectedUtxos.length === 0) {
@@ -385,7 +421,7 @@ export default function TransactionManager() {
       }
 
       const inputTotal = sumInputs(selectedUtxos);
-      const outputsNoChange = [...outputs];
+      const outputsNoChange = [...intendedOutputs];
 
       // IMPORTANT CHANGE:
       // Do NOT treat "any output to changeAddress" as a manual change output.

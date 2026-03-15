@@ -25,7 +25,6 @@ export const ADDON_MANIFEST_SCHEMA = {
     },
     contracts: {
       type: 'array',
-      minItems: 1,
     },
     apps: {
       type: 'array',
@@ -90,8 +89,8 @@ export function validateAddonManifestAgainstSchema(
       validatePermissionShape(manifest.id || '(unknown)', permission, errors);
     }
   }
-  if (!Array.isArray(manifest.contracts) || manifest.contracts.length === 0) {
-    errors.push(`Addon "${manifest.id || '(unknown)'}" must define contracts`);
+  if (!Array.isArray(manifest.contracts)) {
+    errors.push(`Addon "${manifest.id || '(unknown)'}" contracts must be an array`);
   }
 
   if (

@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { ipfsFetch } from '../ipfs';
+import { ipfsFetch, resolveIpfsGatewayUrl } from '../ipfs';
 import { getInfraUrlPools, runWithFailover } from '../servers/InfraUrls';
 
 vi.mock('../../redux/store', () => ({
@@ -70,6 +70,12 @@ describe('ipfsFetch', () => {
     expect(fetchMock).toHaveBeenCalledWith(
       'https://example.com/resource.json',
       undefined
+    );
+  });
+
+  it('resolves IPFS URIs to the primary configured gateway URL', () => {
+    expect(resolveIpfsGatewayUrl('ipfs://QmHash/file.json')).toBe(
+      'https://gw1.example/ipfs/QmHash/file.json'
     );
   });
 });

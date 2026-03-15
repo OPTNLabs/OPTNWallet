@@ -2,6 +2,7 @@ import { TransactionOutput, UTXO } from '../../types/types';
 import TransactionService from '../../services/TransactionService';
 import { DUST, TOKEN_OUTPUT_SATS } from '../../utils/constants';
 import { toErrorMessage } from '../../utils/errorHandling';
+import { toTokenAwareCashAddress } from '../../utils/cashAddress';
 import { BuildResult, BchBuildResult } from './types';
 import { isConfirmed, sortLargestFirst, sumInputsSats } from './helpers';
 
@@ -68,7 +69,7 @@ export function createSimpleSendPlanner({
 
   function makeTokenOutputForRecipientFT(): TransactionOutput {
     return {
-      recipientAddress: recipient,
+      recipientAddress: toTokenAwareCashAddress(recipient),
       amount: TOKEN_OUTPUT_SATS,
       token: {
         category: selectedCategory,
@@ -90,7 +91,7 @@ export function createSimpleSendPlanner({
 
   function makeTokenOutputForRecipientNFT(nftUtxo: UTXO): TransactionOutput {
     return {
-      recipientAddress: recipient,
+      recipientAddress: toTokenAwareCashAddress(recipient),
       amount: TOKEN_OUTPUT_SATS,
       token: {
         category: nftUtxo.token!.category,

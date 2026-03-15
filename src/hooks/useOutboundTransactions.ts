@@ -44,6 +44,11 @@ export default function useOutboundTransactions(
         await load();
         return true;
       }
+      if (record.state === 'submitted') {
+        await OutboundTransactionTracker.remove(txid);
+        await load();
+        return true;
+      }
       if (!OutboundTransactionTracker.canRelease(record)) {
         await load();
         return false;
@@ -57,10 +62,11 @@ export default function useOutboundTransactions(
 
   useEffect(() => {
     void load();
+    void refresh();
     return OutboundTransactionTracker.subscribe(() => {
       void load();
     });
-  }, [load]);
+  }, [load, refresh]);
 
   const reservedOutpointKeys = useMemo(
     () =>
@@ -82,6 +88,10 @@ export default function useOutboundTransactions(
     canRelease: (txid: string) => {
       const record = records.find((item) => item.txid === txid);
       return record ? OutboundTransactionTracker.canRelease(record) : false;
+    },
+    canClear: (txid: string) => {
+      const record = records.find((item) => item.txid === txid);
+      return record ? OutboundTransactionTracker.canClear(record) : false;
     },
     releaseEligibleAfterMs: OUTBOUND_RELEASE_DELAY_MS,
     reconciling,

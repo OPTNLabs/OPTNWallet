@@ -14,7 +14,7 @@ import {
   queryTransactionByHash,
 } from '../apis/ChaingraphManager/ChaingraphManager';
 import bcmrLocalJson from '../assets/bcmr-optn-local.json';
-import { ipfsFetch } from '../utils/ipfs';
+import { ipfsFetch, resolveIpfsGatewayUrl } from '../utils/ipfs';
 import DatabaseService from '../apis/DatabaseManager/DatabaseService';
 import { sha256 } from '../utils/hash';
 import { DateTime } from 'luxon';
@@ -31,7 +31,8 @@ import {
 const ICON_CACHE = new Map<string, string | null>();
 const REGISTRY_CACHE = new Map<string, IdentityRegistry>();
 const REGISTRY_INFLIGHT = new Map<string, Promise<IdentityRegistry>>();
-const REGISTRY_MISS_CACHE = new Set<string>();
+const REGISTRY_MISS_CACHE = new Map<string, number>();
+const REGISTRY_MISS_TTL_MS = 30 * 1000;
 
 export class BcmrRegistryNotFoundError extends Error {
   constructor(
@@ -320,8 +321,15 @@ export default class BcmrService {
 
     const cached = REGISTRY_CACHE.get(authbase);
     if (cached) return cached;
-    if (REGISTRY_MISS_CACHE.has(authbase)) {
+    const missCachedAt = REGISTRY_MISS_CACHE.get(authbase);
+    if (
+      missCachedAt !== undefined &&
+      Date.now() - missCachedAt < REGISTRY_MISS_TTL_MS
+    ) {
       throw new BcmrRegistryNotFoundError(authbase);
+    }
+    if (missCachedAt !== undefined) {
+      REGISTRY_MISS_CACHE.delete(authbase);
     }
 
     const inflight = REGISTRY_INFLIGHT.get(authbase);
@@ -378,7 +386,7 @@ export default class BcmrService {
       const onChain = await this.resolveAuthChainRegistry(authbase, uris[0] || '');
       if (!onChain) {
         if (this.isMissingRegistryError(err)) {
-          REGISTRY_MISS_CACHE.add(authbase);
+          REGISTRY_MISS_CACHE.set(authbase, Date.now());
           throw new BcmrRegistryNotFoundError(authbase);
         }
         throw err;
@@ -605,12 +613,14 @@ export default class BcmrService {
     try {
       resp = await ipfsFetch(iconUri);
     } catch {
-      ICON_CACHE.set(filePath, null);
-      return null;
+      const gatewayUri = resolveIpfsGatewayUrl(iconUri);
+      ICON_CACHE.set(filePath, gatewayUri);
+      return gatewayUri;
     }
     if (!resp.ok) {
-      ICON_CACHE.set(filePath, null);
-      return null;
+      const gatewayUri = resolveIpfsGatewayUrl(iconUri);
+      ICON_CACHE.set(filePath, gatewayUri);
+      return gatewayUri;
     }
 
     let buf: Uint8Array;
@@ -662,6 +672,14 @@ export default class BcmrService {
       async (uri): Promise<IdentityRegistry> => {
         const resp = await ipfsFetch(uri);
         if (!resp.ok) {
+          if (resp.status === 404) {
+            const fallback = await this.fetchIndexerTokenFallback(authbase, uri);
+            if (fallback) {
+              REGISTRY_CACHE.set(authbase, fallback);
+              REGISTRY_MISS_CACHE.delete(authbase);
+              return fallback;
+            }
+          }
           throw new Error(`Fetch failed: HTTP ${resp.status}`);
         }
 

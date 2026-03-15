@@ -92,6 +92,19 @@ export default function PendingOutboundPanel({
                 </button>
               </div>
             )}
+            {onRelease &&
+              !OutboundTransactionTracker.canRelease(record) &&
+              OutboundTransactionTracker.canClear(record) && (
+                <div className="mt-2 flex justify-end">
+                  <button
+                    type="button"
+                    onClick={() => onRelease(record.txid)}
+                    className="wallet-btn-secondary px-2.5 py-1 text-[11px]"
+                  >
+                    Clear pending lock
+                  </button>
+                </div>
+              )}
           </div>
         ))}
       </div>

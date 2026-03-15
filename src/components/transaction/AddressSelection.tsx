@@ -95,15 +95,13 @@ const AddressSelection: React.FC<AddressSelectionProps> = ({
 
   return (
     <div className="flex flex-wrap gap-2">
-      {/* Wallet Addresses Button */}
       <button
         className="wallet-btn-primary flex-1"
         onClick={() => setShowWalletAddressesPopup(true)}
       >
-        Wallet
+        Wallet funds
       </button>
 
-      {/* Contracts Addresses Button */}
       <button
         className="wallet-btn-primary flex-1"
         onClick={() => setShowContractAddressesPopup(true)}
@@ -116,16 +114,15 @@ const AddressSelection: React.FC<AddressSelectionProps> = ({
       {selectedAddresses.length === 0 &&
         selectedContractAddresses.length === 0 &&
         selectedUtxos.length === 0 && (
-          <div className="font-bold flex-col text-xl">
-            (1) Select an address from the wallet or contracts
+          <div className="text-sm wallet-muted">
+            Select a source to continue.
           </div>
         )}
 
-      {/* Popup for Wallet Addresses */}
       {showWalletAddressesPopup && (
         <Popup closePopups={closePopups}>
-          <h4 className="text-md font-semibold flex flex-col items-center mb-4">
-            Wallet Addresses
+          <h4 className="text-md font-semibold text-center mb-4">
+            Wallet sources
           </h4>
           <div className="overflow-y-auto max-h-80">
             {addresses.length === 0 ? (
@@ -149,14 +146,14 @@ const AddressSelection: React.FC<AddressSelectionProps> = ({
                   >
                     <div className="flex flex-col">
                       <span className="font-medium">
-                        Address:{' '}
+                        BCH address:{' '}
                         {shortenTxHash(
                           addressObj.address,
                           PREFIX[currentNetwork].length
                         )}
                       </span>
                       <span className="text-sm wallet-muted">
-                        Token Address:{' '}
+                        Token address:{' '}
                         {shortenTxHash(
                           addressObj.tokenAddress,
                           PREFIX[currentNetwork].length
@@ -171,11 +168,10 @@ const AddressSelection: React.FC<AddressSelectionProps> = ({
         </Popup>
       )}
 
-      {/* Popup for Contract Addresses */}
       {showContractAddressesPopup && (
         <Popup closePopups={closePopups}>
-          <h4 className="text-md font-semibold flex flex-col items-center mb-4">
-            Contract Addresses
+          <h4 className="text-md font-semibold text-center mb-4">
+            Contract sources
           </h4>
           <div className="overflow-y-auto max-h-80">
             {contractAddresses.length === 0 ? (
@@ -208,10 +204,10 @@ const AddressSelection: React.FC<AddressSelectionProps> = ({
                   >
                     <div className="flex flex-col">
                       <span className="font-medium">
-                        Contract Name: {contractObj.contractName}
+                        {contractObj.contractName}
                       </span>
                       <span className="text-sm wallet-muted">
-                        Contract Address:{' '}
+                        Contract address:{' '}
                         {shortenTxHash(
                           contractObj.address,
                           PREFIX[currentNetwork].length

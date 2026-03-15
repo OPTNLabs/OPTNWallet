@@ -1,10 +1,6 @@
 // src/addons/builtin/index.ts
 import type { AddonManifest } from '../../types/addons';
 
-// Reuse an existing CashScript artifact as the addon-provided contract.
-// This keeps v1 simple: prove addon plumbing works end-to-end.
-import p2pkhArtifact from '../../apis/ContractManager/artifacts/p2pkh.json';
-
 /**
  * Keep this list small. These are "shipped with the app" addons.
  * Marketplace-installed addons will be loaded later from storage.
@@ -50,8 +46,8 @@ export const BUILTIN_ADDONS: AddonManifest[] = [
       },
       {
         id: 'mintCashTokensPoCApp',
-        name: 'Mint Cashtokens',
-        description: 'V1',
+        name: 'Mint Tokens',
+        description: 'Create fungible or non-fungible tokens',
         iconUri: null, // ✅ fall back to DEFAULT_ICON in AppsView
         kind: 'declarative',
         requiredCapabilities: [
@@ -67,17 +63,7 @@ export const BUILTIN_ADDONS: AddonManifest[] = [
         },
       },
     ],
-
-    contracts: [
-      {
-        id: 'p2pkh-demo',
-        name: 'Addon: P2PKH Demo',
-        description:
-          'Same artifact as builtin p2pkh, served through addon registry.',
-        cashscriptArtifact: p2pkhArtifact as unknown,
-        functions: [],
-      },
-    ],
+    contracts: [],
 
     iconUri: null,
   },
@@ -85,7 +71,8 @@ export const BUILTIN_ADDONS: AddonManifest[] = [
     id: 'optn.builtin.events',
     name: 'Airdrops',
     version: '0.0.1',
-    description: 'Builtin BCH and CashToken airdrop workspace for batch distribution.',
+    description:
+      'Builtin BCH and CashToken airdrop workspace for batch distribution.',
     trustTier: 'internal',
     permissions: [
       {
@@ -110,7 +97,7 @@ export const BUILTIN_ADDONS: AddonManifest[] = [
       {
         id: 'eventRewardsApp',
         name: 'Airdrops',
-        description: 'Batch distribute BCH and CashTokens from OPTN Wallet.',
+        description: 'Batch distribute BCH and CashTokens',
         iconUri: null,
         kind: 'declarative',
         requiredCapabilities: [
@@ -129,15 +116,7 @@ export const BUILTIN_ADDONS: AddonManifest[] = [
         },
       },
     ],
-    contracts: [
-      {
-        id: 'p2pkh-event-demo',
-        name: 'Addon: Airdrops P2PKH Demo',
-        description: 'Placeholder contract entry for the Airdrops addon manifest.',
-        cashscriptArtifact: p2pkhArtifact as unknown,
-        functions: [],
-      },
-    ],
+    contracts: [],
     iconUri: null,
   },
 ];

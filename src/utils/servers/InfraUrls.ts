@@ -24,24 +24,24 @@ const DEFAULT_INFRA_URL_POOLS: Record<Network, InfraUrlPools> = {
     chaingraphUrls: ['https://gql.chaingraph.pat.mn/v1/graphql'],
     bcmrApiBaseUrls: ['https://bcmr-chipnet.paytaca.com/api'],
     ipfsGateways: [
+      'https://ipfs.optnlabs.com/ipfs',
       'https://ipfs.io/ipfs',
       'https://dweb.link/ipfs',
-      'https://cloudflare-ipfs.com/ipfs',
     ],
   },
 
   [Network.MAINNET]: {
     electrumServers: [
-      'explorer.bch.ninja',
       'electrum.imaginary.cash',
       'bch.imaginary.cash',
+      'explorer.bch.ninja',
     ],
     chaingraphUrls: ['https://gql.chaingraph.pat.mn/v1/graphql'],
     bcmrApiBaseUrls: ['https://bcmr.paytaca.com/api'],
     ipfsGateways: [
+      'https://ipfs.optnlabs.com/ipfs',
       'https://ipfs.io/ipfs',
       'https://dweb.link/ipfs',
-      'https://cloudflare-ipfs.com/ipfs',
     ],
   },
 };

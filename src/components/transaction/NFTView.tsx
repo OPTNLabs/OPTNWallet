@@ -49,7 +49,7 @@ const NFTView: React.FC<NFTViewProps> = ({
         </button>
       </div>
       <div className="mb-2">
-        <label className="block font-medium mb-1">Transfer Amount (Sats)</label>
+        <label className="block font-medium mb-1">BCH amount (sats)</label>
         <input
           type="number"
           value={transferAmount}
@@ -59,7 +59,7 @@ const NFTView: React.FC<NFTViewProps> = ({
         />
       </div>
       <div className="mb-2">
-        <label className="block font-medium mb-1">NFT Token Amount</label>
+        <label className="block font-medium mb-1">Collectible amount</label>
         <input
           type="number"
           value={
@@ -74,14 +74,14 @@ const NFTView: React.FC<NFTViewProps> = ({
       </div>
       <div className="mb-2">
         <label className="block font-medium mb-1">
-          Genesis UTXO for new NFT
+          Genesis input for this collectible
         </label>
         <select
           value={selectedTokenCategory}
           onChange={(e) => setSelectedTokenCategory(e.target.value)}
           className="wallet-input p-2 w-full break-words whitespace-normal"
         >
-          <option value="">Select Genesis UTXO</option>
+          <option value="">Select genesis input</option>
           {selectedUtxos
             .filter((utxo) => !utxo.token && utxo.tx_pos === 0)
             .map((utxo, index) => (
@@ -96,13 +96,13 @@ const NFTView: React.FC<NFTViewProps> = ({
           onClick={() => setShowNFTConfigPopup(true)}
           className="wallet-btn-secondary font-bold py-2 px-4"
         >
-          Configure NFT
+          Configure collectible
         </button>
         <button
           onClick={handleAddOutput}
           className="wallet-btn-primary font-bold py-2 px-4"
         >
-          Add Output
+          Add recipient
         </button>
       </div>
     </>

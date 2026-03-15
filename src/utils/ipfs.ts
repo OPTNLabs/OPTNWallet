@@ -40,6 +40,18 @@ function extractIpfsPath(uri: string): string | null {
   return null;
 }
 
+export function resolveIpfsGatewayUrl(uri: string): string | null {
+  const ipfsPath = extractIpfsPath(uri);
+  if (!ipfsPath) return null;
+
+  const net = store.getState().network.currentNetwork;
+  const { ipfsGateways } = getInfraUrlPools(net);
+  const gateway = ipfsGateways[0];
+  if (!gateway) return null;
+
+  return `${gateway}/${normalizeIpfsPath(ipfsPath)}`;
+}
+
 async function fetchFromGateways(ipfsPath: string, options?: RequestInit) {
   const net = store.getState().network.currentNetwork;
   const { ipfsGateways } = getInfraUrlPools(net);

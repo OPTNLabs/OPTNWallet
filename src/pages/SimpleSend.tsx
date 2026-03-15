@@ -150,17 +150,20 @@ export default function SimpleSend() {
 
   return (
     <div className="container mx-auto max-w-xl h-[calc(100dvh-var(--navbar-height)-var(--safe-bottom))] px-4 pt-4 pb-3 flex flex-col overflow-hidden wallet-page">
-      <div className="mb-3 grid grid-cols-[1fr_auto] items-center gap-3 shrink-0">
-        <div className="min-w-0">
-          <PageHeader title="Simple Send" compact />
-        </div>
-        <Link
-          to="/transaction"
-          className="wallet-btn-secondary px-3 py-2 text-sm self-center"
-          title="Open advanced transaction builder"
-        >
-          Advanced
-        </Link>
+      <div className="shrink-0">
+        <PageHeader
+          title="Simple Send"
+          compact
+          titleAction={
+            <Link
+              to="/transaction"
+              className="wallet-btn-secondary px-3 py-2 text-sm"
+              title="Open advanced transaction builder"
+            >
+              Advanced
+            </Link>
+          }
+        />
       </div>
       <div className="wallet-card wallet-signature-panel flex-1 min-h-0 overflow-hidden p-4">
         <div className="flex h-full flex-col">

@@ -1,7 +1,10 @@
 import { describe, expect, it, vi, beforeEach } from 'vitest';
 import type { UTXO } from '../../../../../types/types';
 import type { AddonSDK } from '../../../../../services/AddonsSDK';
-import { executeApprovedDistributionSend } from '../executeDistributionSend';
+import {
+  buildApprovedDistributionTransaction,
+  executeApprovedDistributionSend,
+} from '../executeDistributionSend';
 import type { DistributionJobRecord } from '../../types';
 
 vi.mock('@bitauth/libauth', () => ({
@@ -189,7 +192,15 @@ describe('executeApprovedDistributionSend', () => {
       { preferConfirmed: false, maxInputs: 100 }
     );
     expect(plannerMock.addBchInputsUntilBuild).toHaveBeenCalled();
-    expect(sendTransactionMock).toHaveBeenCalledWith('deadbeef', [tokenUtxo, feeUtxo]);
+    expect(sendTransactionMock).toHaveBeenCalledWith(
+      'deadbeef',
+      [tokenUtxo, feeUtxo],
+      {
+        source: 'airdrops',
+        sourceLabel: 'Airdrops',
+        amountSummary: '2 recipients',
+      }
+    );
     expect(api.completeDistributionJob).toHaveBeenCalledTimes(2);
     expect(api.completeDistributionJob).toHaveBeenNthCalledWith(1, {
       jobId: 'dst_1',
@@ -236,5 +247,43 @@ describe('executeApprovedDistributionSend', () => {
       ],
       jobIds: ['dst_1', 'dst_2'],
     });
+  });
+
+  it('converts token recipients to CashTokens address format during build', async () => {
+    await buildApprovedDistributionTransaction(sdk, [
+      {
+        id: 'dst_1',
+        workspace_id: 'wrk_1',
+        recipient_id: 'rcp_1',
+        destination_address: 'bchtest:qqdest000000000000000000000000000000000',
+        asset_type: 'token',
+        status: 'prepared',
+        token_category: tokenUtxo.token!.category,
+        amount: '25',
+      } as DistributionJobRecord,
+    ]);
+
+    expect(plannerMock.addBchInputsUntilBuild).toHaveBeenCalledWith(
+      [tokenUtxo],
+      [
+        {
+          recipientAddress: 'bchtest:zqconverted0000000000000000000000000000000',
+          amount: 1000,
+          token: {
+            category: tokenUtxo.token!.category,
+            amount: 25n,
+          },
+        },
+        {
+          recipientAddress: 'bchtest:zqchange0000000000000000000000000000000',
+          amount: 1000,
+          token: {
+            category: tokenUtxo.token!.category,
+            amount: 75n,
+          },
+        },
+      ],
+      100
+    );
   });
 });
