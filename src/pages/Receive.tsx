@@ -66,8 +66,9 @@ const Receive: React.FC = () => {
       if (!currentWalletId) return;
 
       try {
-        const existingKeys =
-          (await KeyService.retrieveKeys(currentWalletId)) as WalletKeyPair[];
+        const existingKeys = (await KeyService.retrieveKeys(
+          currentWalletId
+        )) as WalletKeyPair[];
 
         const mainKeys = existingKeys
           .filter((key) => key.changeIndex === 0)
@@ -188,7 +189,9 @@ const Receive: React.FC = () => {
     if (!selectedAddress) return '';
     const parsedAmount = Number.parseFloat(bip21Amount);
     const amount =
-      Number.isFinite(parsedAmount) && parsedAmount > 0 ? bip21Amount : undefined;
+      Number.isFinite(parsedAmount) && parsedAmount > 0
+        ? bip21Amount
+        : undefined;
 
     return buildBip21Uri(selectedAddress, currentNetwork, {
       amount,
@@ -210,15 +213,15 @@ const Receive: React.FC = () => {
     addressType === 'main' ? mainKeyPairs : changeKeyPairs;
 
   return (
-    <div className="container mx-auto max-w-md p-4 pb-16 h-[calc(100dvh-var(--navbar-height)-var(--safe-bottom))] flex flex-col wallet-page">
-      <PageHeader title="Receive" subtitle="Choose an address and share QR" compact />
+    <div className="container mx-auto max-w-md h-[calc(100dvh-var(--navbar-height)-var(--safe-bottom))] px-4 pt-4 pb-3 flex flex-col overflow-hidden wallet-page">
+      <PageHeader title="Receive" compact />
 
       {!selectedAddress && (
         <SectionCard className="mb-3">
           <div>
             <div className="flex justify-center space-x-4 mb-4 w-full">
               <button
-                className={`flex-1 min-w-[120px] px-4 py-2 font-bold rounded text-center ${
+                className={`flex-1 min-w-[120px] px-4 py-2 font-bold rounded-[14px] text-center ${
                   addressType === 'main'
                     ? 'wallet-segment-active'
                     : 'wallet-segment-inactive'
@@ -229,7 +232,7 @@ const Receive: React.FC = () => {
                 Addresses
               </button>
               <button
-                className={`flex-1 min-w-[120px] px-4 py-2 font-bold rounded text-center ${
+                className={`flex-1 min-w-[120px] px-4 py-2 font-bold rounded-[14px] text-center ${
                   addressType === 'change'
                     ? 'wallet-segment-active'
                     : 'wallet-segment-inactive'
@@ -240,14 +243,13 @@ const Receive: React.FC = () => {
                 Addresses
               </button>
             </div>
-
           </div>
         </SectionCard>
       )}
 
       <div className="flex flex-col items-center space-y-3 flex-1 min-h-0">
         {!selectedAddress ? (
-          <div className="overflow-y-auto font-bold w-full flex-1 min-h-0 rounded-md p-1">
+          <div className="overflow-y-auto font-bold w-full flex-1 min-h-0 rounded-2xl p-1">
             {keyPairsToDisplay.length === 0 ? (
               <EmptyState message="No addresses found for this wallet." />
             ) : (
@@ -260,7 +262,10 @@ const Receive: React.FC = () => {
                   }
                 >
                   <p>
-                    {shortenTxHash(keyPair.address, PREFIX[currentNetwork].length)}
+                    {shortenTxHash(
+                      keyPair.address,
+                      PREFIX[currentNetwork].length
+                    )}
                     <br />
                     {`m/44'/${
                       PREFIX[currentNetwork] === PREFIX.mainnet
@@ -281,21 +286,21 @@ const Receive: React.FC = () => {
                     ? buildReceiveBip21Uri()
                     : qrCodeType === 'pubKey'
                       ? selectedPubKey || ''
-                    : qrCodeType === 'pkh'
-                      ? selectedPKH || ''
+                      : qrCodeType === 'pkh'
+                        ? selectedPKH || ''
                         : selectedPrivKey || ''
                 }
                 size={200}
               />
               <p
-                className="mt-4 p-2 wallet-surface-strong rounded cursor-pointer hover:brightness-[0.97]"
+                className="mt-4 p-2.5 wallet-surface-strong rounded-[14px] cursor-pointer hover:brightness-[0.97]"
                 onClick={() =>
                   handleCopy(
                     qrCodeType === 'address'
                       ? buildReceiveBip21Uri()
                       : qrCodeType === 'pubKey'
                         ? selectedPubKey || ''
-                      : qrCodeType === 'pkh'
+                        : qrCodeType === 'pkh'
                           ? selectedPKH || ''
                           : selectedPrivKey || ''
                   )
@@ -316,7 +321,9 @@ const Receive: React.FC = () => {
             {qrCodeType === 'address' && (
               <div className="mt-3 flex flex-row gap-2 items-center justify-center">
                 <span
-                  className={isTokenAddress ? 'wallet-muted' : 'wallet-text-strong'}
+                  className={
+                    isTokenAddress ? 'wallet-muted' : 'wallet-text-strong'
+                  }
                 >
                   Regular
                 </span>
@@ -336,7 +343,9 @@ const Receive: React.FC = () => {
                   />
                 </div>
                 <span
-                  className={isTokenAddress ? 'wallet-text-strong' : 'wallet-muted'}
+                  className={
+                    isTokenAddress ? 'wallet-text-strong' : 'wallet-muted'
+                  }
                 >
                   CashToken
                 </span>
@@ -345,7 +354,7 @@ const Receive: React.FC = () => {
 
             <div className="flex space-x-4 mt-4 w-full justify-center">
               <button
-                className={`px-4 py-2 rounded font-bold ${
+                className={`px-4 py-2 rounded-[14px] font-bold ${
                   qrCodeType === 'address'
                     ? 'wallet-segment-active'
                     : 'wallet-segment-inactive'
@@ -355,7 +364,7 @@ const Receive: React.FC = () => {
                 Address
               </button>
               <button
-                className={`px-4 py-2 rounded font-bold ${
+                className={`px-4 py-2 rounded-[14px] font-bold ${
                   qrCodeType === 'pubKey'
                     ? 'wallet-segment-active'
                     : 'wallet-segment-inactive'
@@ -365,7 +374,7 @@ const Receive: React.FC = () => {
                 PubKey
               </button>
               <button
-                className={`px-4 py-2 rounded font-bold ${
+                className={`px-4 py-2 rounded-[14px] font-bold ${
                   qrCodeType === 'pkh'
                     ? 'wallet-segment-active'
                     : 'wallet-segment-inactive'
@@ -376,7 +385,7 @@ const Receive: React.FC = () => {
               </button>
               {isPrivKeyUnlocked && (
                 <button
-                  className={`px-4 py-2 rounded font-bold ${
+                  className={`px-4 py-2 rounded-[14px] font-bold ${
                     qrCodeType === 'privkey'
                       ? 'wallet-segment-active'
                       : 'wallet-segment-inactive'
@@ -394,17 +403,19 @@ const Receive: React.FC = () => {
                 </p>
               )}
               <button
-                className="px-3 py-1 rounded-md text-xs font-semibold wallet-segment-inactive border border-[var(--wallet-border)]"
+                className="px-3 py-1 rounded-[14px] text-xs font-semibold wallet-segment-inactive border border-[var(--wallet-border)]"
                 onClick={() => setShowBip21Popup(true)}
               >
                 BIP21
               </button>
             </div>
-            {ALLOW_PRIVATE_KEY_VIEW && !isPrivKeyUnlocked && pubKeyTapCount >= 5 && (
-              <div className="wallet-surface-strong mt-2 px-4 py-2 rounded text-sm font-bold">
-                PrivKey unlock in {PRIVKEY_UNLOCK_TAPS - pubKeyTapCount} taps
-              </div>
-            )}
+            {ALLOW_PRIVATE_KEY_VIEW &&
+              !isPrivKeyUnlocked &&
+              pubKeyTapCount >= 5 && (
+                <div className="wallet-surface-strong mt-2 px-4 py-2 rounded-[14px] text-sm font-bold">
+                  PrivKey unlock in {PRIVKEY_UNLOCK_TAPS - pubKeyTapCount} taps
+                </div>
+              )}
 
             <div className="mt-auto pt-4">
               <button
@@ -451,7 +462,7 @@ const Receive: React.FC = () => {
                   onChange={(e) => handleBip21AmountChange(e.target.value)}
                   inputMode="decimal"
                   placeholder="Optional, e.g. 0.0105"
-                  className="w-full px-3 py-2 rounded wallet-surface-strong border border-[var(--wallet-border)] outline-none"
+                  className="w-full px-3 py-2 rounded-[14px] wallet-surface-strong border border-[var(--wallet-border)] outline-none"
                 />
               </div>
               <div>
@@ -462,7 +473,7 @@ const Receive: React.FC = () => {
                   value={bip21Label}
                   onChange={(e) => setBip21Label(e.target.value)}
                   placeholder="Optional"
-                  className="w-full px-3 py-2 rounded wallet-surface-strong border border-[var(--wallet-border)] outline-none"
+                  className="w-full px-3 py-2 rounded-[14px] wallet-surface-strong border border-[var(--wallet-border)] outline-none"
                 />
               </div>
               <div>
@@ -473,7 +484,7 @@ const Receive: React.FC = () => {
                   value={bip21Message}
                   onChange={(e) => setBip21Message(e.target.value)}
                   placeholder="Optional"
-                  className="w-full px-3 py-2 rounded wallet-surface-strong border border-[var(--wallet-border)] outline-none"
+                  className="w-full px-3 py-2 rounded-[14px] wallet-surface-strong border border-[var(--wallet-border)] outline-none"
                 />
               </div>
               <button

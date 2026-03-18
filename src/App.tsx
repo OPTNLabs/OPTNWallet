@@ -6,6 +6,7 @@ import Transaction from './pages/Transaction';
 import TransactionHistory from './pages/TransactionHistory';
 import Receive from './pages/Receive';
 import SimpleSend from './pages/SimpleSend';
+import Outbox from './pages/Outbox';
 import { Routes, Route, Navigate } from 'react-router-dom';
 import { useDispatch, useSelector } from 'react-redux';
 import Layout from './components/Layout';
@@ -20,21 +21,19 @@ import { SignMessageModal } from './components/walletconnect/SignMessageModal';
 import { useTheme } from './context/useTheme';
 import {
   useLocalNotificationSetup,
-  useNotificationQueueReset,
-  useStatusBarSync,
+    useNotificationQueueReset,
+    useOutboundTransactionRecovery,
+    useWalletNetworkBootstrap,
+    useStatusBarSync,
   useUtxoQueueToOsNotifications,
   useWalletConnectInitialization,
   useWorkerLifecycle,
 } from './app/useAppLifecycle';
+import UtxoNotificationCenter from './components/notifications/UtxoNotificationCenter';
+import MarketplaceAppHost from './pages/apps/MarketplaceAppHost';
 import CreateWalletPage from './pages/onboarding/CreateWalletPage';
 import ImportWalletPage from './pages/onboarding/ImportWalletPage';
 import LandingPage from './pages/onboarding/LandingPage';
-
-// 🔔 Always-on in-app popup for incoming UTXOs
-import UtxoNotificationCenter from './components/notifications/UtxoNotificationCenter';
-
-// ✅ Simple Send (new)
-import MarketplaceAppHost from './pages/apps/MarketplaceAppHost';
 
 function App() {
   usePrices();
@@ -49,7 +48,9 @@ function App() {
   useLocalNotificationSetup();
   const notified = useUtxoQueueToOsNotifications(utxoQueue);
   useNotificationQueueReset(walletId, dispatch, notified);
-  useWorkerLifecycle(walletId);
+  const walletNetworkReady = useWalletNetworkBootstrap(walletId, dispatch);
+  useWorkerLifecycle(walletNetworkReady ? walletId : null);
+  useOutboundTransactionRecovery(walletNetworkReady ? walletId : null);
 
   return (
     <div className="app-shell">
@@ -74,21 +75,15 @@ function App() {
                 />
                 <Route path="/campaign/:id" element={<CampaignDetail />} />
                 <Route path="/receive" element={<Receive />} />
-
-                {/* ✅ NEW: Simple Send default route */}
                 <Route path="/send" element={<SimpleSend />} />
-
-                {/* Advanced builder remains intact */}
+                <Route path="/outbox" element={<Outbox />} />
                 <Route path="/transaction" element={<Transaction />} />
-
                 <Route
                   path="/transactions/:wallet_id"
                   element={<TransactionHistory />}
                 />
                 <Route path="/settings" element={<Settings />} />
               </Route>
-
-              {/* Keep default redirects unchanged */}
               <Route
                 path="/"
                 element={<Navigate to={`/home/${walletId}`} replace />}

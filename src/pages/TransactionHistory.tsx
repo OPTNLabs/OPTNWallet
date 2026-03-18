@@ -1,4 +1,4 @@
-import React, { useMemo } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { useDispatch, useSelector } from 'react-redux';
 import { AppDispatch, RootState } from '../redux/store';
 import { useParams } from 'react-router-dom';
@@ -11,6 +11,8 @@ import { useTransactionHistoryPagination } from './transaction-history/useTransa
 import PageHeader from '../components/ui/PageHeader';
 import EmptyState from '../components/ui/EmptyState';
 import StatusChip from '../components/ui/StatusChip';
+import DatabaseService from '../apis/DatabaseManager/DatabaseService';
+import TransactionDetailPopup from './transaction-history/TransactionDetailPopup';
 
 const selectTransactions = createSelector(
   (state: RootState) => state.transactions.transactions,
@@ -31,13 +33,19 @@ const TransactionHistory: React.FC = () => {
   const currentNetwork = useSelector((state: RootState) =>
     selectCurrentNetwork(state)
   );
+  const [selectedTx, setSelectedTx] = useState<{
+    txid: string;
+    height: number;
+  } | null>(null);
+  const [walletAddresses, setWalletAddresses] = useState<Set<string>>(new Set());
 
-  const { progress, loading, fetchTransactionHistory } = useTransactionHistoryFetch({
-    walletIdParam: wallet_id,
-    isInitialized: IsInitialized,
-    transactionCount: transactions.length,
-    dispatch,
-  });
+  const { loading, fetchTransactionHistory } =
+    useTransactionHistoryFetch({
+      walletIdParam: wallet_id,
+      isInitialized: IsInitialized,
+      transactionCount: transactions.length,
+      dispatch,
+    });
 
   const {
     sortOrder,
@@ -61,59 +69,77 @@ const TransactionHistory: React.FC = () => {
         : 'https://explorer.bch.ninja/tx/',
     [currentNetwork]
   );
-  const relativeAge = (timestamp?: string) => {
-    if (!timestamp) return null;
-    const parsed = Date.parse(timestamp);
-    if (Number.isNaN(parsed)) return null;
-    const diffMs = Date.now() - parsed;
-    if (diffMs < 0) return 'just now';
-    const mins = Math.floor(diffMs / 60000);
-    if (mins < 1) return 'just now';
-    if (mins < 60) return `${mins}m ago`;
-    const hours = Math.floor(mins / 60);
-    if (hours < 24) return `${hours}h ago`;
-    const days = Math.floor(hours / 24);
-    return `${days}d ago`;
-  };
+
+  useEffect(() => {
+    let cancelled = false;
+
+    async function loadWalletAddresses() {
+      if (!wallet_id) return;
+      const dbService = DatabaseService();
+      await dbService.ensureDatabaseStarted();
+      const db = dbService.getDatabase();
+      if (!db) return;
+
+      const stmt = db.prepare(`
+        SELECT address FROM addresses WHERE wallet_id = ?;
+      `);
+      stmt.bind([wallet_id]);
+
+      const next = new Set<string>();
+      while (stmt.step()) {
+        const row = stmt.getAsObject();
+        if (typeof row.address === 'string' && row.address) {
+          next.add(row.address);
+        }
+      }
+      stmt.free();
+
+      if (!cancelled) {
+        setWalletAddresses(next);
+      }
+    }
+
+    void loadWalletAddresses();
+    return () => {
+      cancelled = true;
+    };
+  }, [wallet_id]);
 
   return (
-    <div className="container mx-auto max-w-md h-[calc(100dvh-var(--navbar-height)-var(--safe-bottom))] px-4 pt-4 pb-3 flex flex-col overflow-hidden wallet-page">
-      {(loading || (progress > 0 && progress < 100)) && (
-        <div className="w-full h-1.5 wallet-surface-strong rounded-full overflow-hidden mb-2 shrink-0">
-          <div
-            className="h-full wallet-inline-progress"
-            style={{ width: `${progress}%` }}
-          />
-        </div>
-      )}
-
-      <PageHeader title="Transaction History" subtitle="Browse confirmed and pending transfers" compact />
+	    <div className="container mx-auto max-w-md h-[calc(100dvh-var(--navbar-height)-var(--safe-bottom))] px-4 pt-4 pb-3 flex flex-col overflow-hidden wallet-page">
+	      <PageHeader title="Transaction History" compact />
 
       <div className="wallet-card p-3 mb-3 shrink-0">
-        <div className="mb-3 grid grid-cols-2 gap-2">
+        <div className="grid grid-cols-10 gap-2">
           <button
             onClick={toggleSortOrder}
-            className="wallet-btn-secondary py-2 px-3 text-sm"
+            className="wallet-btn-secondary col-span-4 py-2 px-3 text-sm"
           >
             {sortOrder === 'asc' ? 'Oldest first' : 'Newest first'}
           </button>
           <select
             value={transactionsPerPage}
             onChange={handleTransactionsPerPageChange}
-            className="wallet-input py-2 px-3 text-sm"
+            className="wallet-input col-span-4 py-1.5 px-3 text-sm"
           >
             <option value={10}>10 per page</option>
             <option value={20}>20 per page</option>
             <option value={30}>30 per page</option>
           </select>
+          <button
+            onClick={fetchTransactionHistory}
+            className="wallet-btn-secondary col-span-2 py-1.5 px-3 text-sm"
+            disabled={loading}
+          >
+            {loading ? (
+              <span className="flex items-center justify-center">
+                <span className="wallet-spinner" aria-hidden="true" />
+              </span>
+            ) : (
+              'Sync'
+            )}
+          </button>
         </div>
-        <button
-          onClick={fetchTransactionHistory}
-          className="wallet-btn-primary w-full py-2 px-3 text-sm"
-          disabled={loading}
-        >
-          {loading ? `Fetching... ${progress}%` : 'Refresh Transaction History'}
-        </button>
       </div>
 
       <div className="flex-1 min-h-0 overflow-y-auto pr-1">
@@ -123,11 +149,10 @@ const TransactionHistory: React.FC = () => {
           <ul className="space-y-3">
             {paginatedTransactions.map((tx, id) => (
               <li key={id + tx.tx_hash}>
-                <a
-                  href={`${explorerBase}${tx.tx_hash}`}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="wallet-card p-4 block hover:brightness-[0.98] transition"
+                <button
+                  type="button"
+                  onClick={() => setSelectedTx({ txid: tx.tx_hash, height: tx.height })}
+                  className="wallet-card p-4 block w-full text-left hover:brightness-[0.98] transition"
                 >
                   <div className="flex items-start justify-between gap-3">
                     <div>
@@ -138,21 +163,24 @@ const TransactionHistory: React.FC = () => {
                         {shortenTxHash(tx.tx_hash)}
                       </div>
                     </div>
-                    {tx.height > 0 ? <StatusChip tone="success">Confirmed</StatusChip> : <StatusChip tone="warning">Pending</StatusChip>}
+                    {tx.height > 0 ? (
+                      <StatusChip tone="success">Confirmed</StatusChip>
+                    ) : (
+                      <StatusChip tone="warning">Pending</StatusChip>
+                    )}
                   </div>
                   <div className="mt-2 text-sm">
                     {tx.height > 0 ? (
-                      <span className="wallet-text-strong">Block: {tx.height}</span>
-                    ) : (
-                      <span className="wallet-muted">Awaiting confirmation</span>
-                    )}
-                    {relativeAge(tx.timestamp) ? (
-                      <span className="ml-2 wallet-muted text-xs">
-                        {relativeAge(tx.timestamp)}
+                      <span className="wallet-text-strong">
+                        Block: {tx.height}
                       </span>
-                    ) : null}
+                    ) : (
+                      <span className="wallet-muted">
+                        Awaiting confirmation
+                      </span>
+                    )}
                   </div>
-                </a>
+                </button>
               </li>
             ))}
           </ul>
@@ -192,6 +220,16 @@ const TransactionHistory: React.FC = () => {
           Last
         </button>
       </div>
+
+      {selectedTx ? (
+        <TransactionDetailPopup
+          txid={selectedTx.txid}
+          txHeight={selectedTx.height}
+          explorerUrl={`${explorerBase}${selectedTx.txid}`}
+          walletAddresses={walletAddresses}
+          onClose={() => setSelectedTx(null)}
+        />
+      ) : null}
     </div>
   );
 };

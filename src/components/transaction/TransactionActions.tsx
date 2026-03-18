@@ -1,6 +1,6 @@
 // src/components/transaction/TransactionActions.tsx
 
-import React, { useState } from 'react';
+import React, { useRef, useState } from 'react';
 import Popup from './Popup';
 import Draggable from 'react-draggable';
 import { TransactionOutput, UTXO } from '../../types/types';
@@ -12,6 +12,7 @@ interface TransactionActionsProps {
   rawTX: string;
   txOutputs: TransactionOutput[];
   selectedUtxos: UTXO[];
+  sendingLocked?: boolean;
 }
 
 const TransactionActions: React.FC<TransactionActionsProps> = ({
@@ -21,14 +22,14 @@ const TransactionActions: React.FC<TransactionActionsProps> = ({
   rawTX,
   txOutputs,
   selectedUtxos,
+  sendingLocked = false,
 }) => {
   const [isPopupOpen, setIsPopupOpen] = useState(false);
   const [position, setPosition] = useState({ x: 0, y: 0 });
-
-  // Slider constants
-  const sliderWidth = 200; // Track width in pixels
-  const handleWidth = 48; // Handle width in pixels (matches Tailwind's w-12, ~3rem)
-  const threshold = sliderWidth * 0.7; // Confirmation threshold at 80% (160px)
+  const nodeRef = useRef<HTMLDivElement | null>(null);
+  const sliderWidth = 200;
+  const handleWidth = 48;
+  const threshold = sliderWidth * 0.7;
 
   // Function to open the popup
   const handleOpenPopup = () => {
@@ -60,16 +61,26 @@ const TransactionActions: React.FC<TransactionActionsProps> = ({
           <div className="flex justify-between mt-4">
             <button
               onClick={buildTransaction}
-              disabled={loading}
+              disabled={loading || sendingLocked}
               className="wallet-btn-primary font-bold"
+              title={
+                sendingLocked
+                  ? 'Wait for your previous outgoing transaction to sync first'
+                  : undefined
+              }
             >
               Build TX
             </button>
             {rawTX !== '' && (
               <button
                 onClick={handleOpenPopup}
-                disabled={loading}
+                disabled={loading || sendingLocked}
                 className="wallet-btn-danger font-bold"
+                title={
+                  sendingLocked
+                    ? 'Wait for your previous outgoing transaction to sync first'
+                    : undefined
+                }
               >
                 Send TX
               </button>
@@ -92,7 +103,6 @@ const TransactionActions: React.FC<TransactionActionsProps> = ({
               <strong>cannot</strong> be undone.
             </p>
             <div className="relative w-[200px] h-12 wallet-surface-strong rounded-lg overflow-hidden border border-[var(--wallet-border)]">
-              {/* Background fill for visual feedback */}
               <div
                 className={`absolute top-0 left-0 h-full transition-all duration-300 ${
                   position.x >= threshold
@@ -103,32 +113,35 @@ const TransactionActions: React.FC<TransactionActionsProps> = ({
                 }`}
                 style={{ width: `${position.x}px` }}
               />
-              {/* Centered "Drag to Confirm" text */}
               <div className="absolute inset-0 flex items-center justify-center text-sm font-semibold z-10 pointer-events-none">
                 Drag to Confirm
               </div>
-              {/* Draggable handle */}
               <Draggable
-                axis="x" // Restrict dragging to horizontal axis
+                nodeRef={nodeRef}
+                axis="x"
                 position={position}
                 onDrag={(e, data) => {
                   void e;
-                  !loading && setPosition({ x: data.x, y: 0 });
+                  if (!loading) setPosition({ x: data.x, y: 0 });
                 }}
                 onStop={(e, data) => {
                   void e;
                   if (data.x >= threshold && !loading) {
+                    handleClose();
                     sendTransaction();
                   } else {
-                    setPosition({ x: 0, y: 0 }); // Snap back if threshold not met
+                    setPosition({ x: 0, y: 0 });
                   }
                 }}
-                bounds={{ left: 0, right: sliderWidth - handleWidth }} // Keep handle within track
-                disabled={loading} // Disable dragging when loading
+                bounds={{ left: 0, right: sliderWidth - handleWidth }}
+                disabled={loading}
               >
                 <div
-                  className={`absolute w-12 h-12 wallet-btn-primary flex items-center justify-center text-center rounded-lg ${
-                    loading ? 'opacity-50 cursor-not-allowed' : 'cursor-grab'
+                  ref={nodeRef}
+                  className={`absolute top-0 left-0 z-20 flex h-12 w-12 items-center justify-center rounded-lg wallet-btn-primary ${
+                    loading
+                      ? 'opacity-50 cursor-not-allowed'
+                      : 'cursor-grab active:cursor-grabbing'
                   }`}
                 >
                   {position.x >= threshold ? '✅' : '➔'}

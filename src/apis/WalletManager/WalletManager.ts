@@ -214,7 +214,7 @@ export default function WalletManager() {
       0,
     ]);
     createAccountQuery.free();
-    await dbService.saveDatabaseToFile();
+    await dbService.flushDatabaseToFile();
     return true;
   }
 

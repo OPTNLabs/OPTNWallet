@@ -1,8 +1,7 @@
-import { useEffect, useState } from 'react';
-import BcmrService from '../../services/BcmrService';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import DatabaseService from '../../apis/DatabaseManager/DatabaseService';
-import { logError } from '../../utils/errorHandling';
 import { HomeTokenTotals } from './homeMetrics';
+import { preloadTokenMetadata } from '../../hooks/useSharedTokenMetadata';
 
 type UseHomeMetadataPreloadParams = {
   isInitialized: boolean;
@@ -14,29 +13,36 @@ export function useHomeMetadataPreload({
   placeholderTokenTotals,
 }: UseHomeMetadataPreloadParams) {
   const [metadataPreloaded, setMetadataPreloaded] = useState(false);
+  const attemptedCategoriesRef = useRef(new Set<string>());
+  const categories = useMemo(
+    () => Object.keys(placeholderTokenTotals).sort(),
+    [placeholderTokenTotals]
+  );
+  const categoriesKey = categories.join(',');
 
   useEffect(() => {
     if (!isInitialized) return;
     (async () => {
-      try {
-        const bcmr = new BcmrService();
-        const categories = Object.keys(placeholderTokenTotals);
-        await Promise.all(
-          categories.map(async (category) => {
-            const authbase = await bcmr.getCategoryAuthbase(category);
-            await bcmr.resolveIdentityRegistry(authbase);
-          })
-        );
+      const pendingCategories = categories.filter((category) => {
+        if (attemptedCategoriesRef.current.has(category)) return false;
+        attemptedCategoriesRef.current.add(category);
+        return true;
+      });
+
+      if (pendingCategories.length === 0) {
         setMetadataPreloaded(true);
-      } catch (error) {
-        logError('Home.preloadTokenMetadata', error);
+        return;
       }
+
+      await preloadTokenMetadata(pendingCategories);
+
+      setMetadataPreloaded(true);
     })();
-  }, [isInitialized, placeholderTokenTotals]);
+  }, [categories, categoriesKey, isInitialized]);
 
   useEffect(() => {
     if (isInitialized && metadataPreloaded) {
-      void DatabaseService().saveDatabaseToFile();
+      DatabaseService().scheduleDatabaseSave();
     }
   }, [isInitialized, metadataPreloaded]);
 }

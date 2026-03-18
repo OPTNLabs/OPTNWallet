@@ -1,9 +1,13 @@
 import { store } from '../redux/store';
 import { selectCurrentNetwork } from '../redux/selectors/networkSelectors';
 import KeyManager from '../apis/WalletManager/KeyManager';
+import WalletManager from '../apis/WalletManager/WalletManager';
 import KeyGeneration from '../apis/WalletManager/KeyGeneration';
 import { isArrayBufferLike, isString } from '../utils/typeGuards';
+import { SignedMessage } from '../utils/signed';
 import DeviceIntegrityService from './DeviceIntegrityService';
+import type { SignedMessageResponseI } from '../types/types';
+import { Network } from '../redux/networkSlice';
 
 const KeyService = {
   async generateMnemonic() {
@@ -24,6 +28,14 @@ const KeyService = {
   ) {
     const state = store.getState();
     const currentNetwork = selectCurrentNetwork(state);
+    const walletManager = WalletManager();
+    const walletInfo = await walletManager.getWalletInfo(walletId);
+    const resolvedNetwork =
+      walletInfo?.networkType === Network.MAINNET
+        ? Network.MAINNET
+        : walletInfo?.networkType === Network.CHIPNET
+          ? Network.CHIPNET
+          : currentNetwork;
     const keyManager = KeyManager();
 
     await keyManager.createKeys(
@@ -31,7 +43,7 @@ const KeyService = {
       accountNumber,
       changeNumber,
       addressNumber,
-      currentNetwork // Pass network type to KeyManager
+      resolvedNetwork
     );
   },
 
@@ -54,6 +66,18 @@ const KeyService = {
       );
       return null;
     }
+  },
+
+  async signMessageForAddress(
+    address: string,
+    message: string
+  ): Promise<SignedMessageResponseI> {
+    await DeviceIntegrityService.assertDeviceIntegrity('signMessageForAddress');
+    const privateKey = await this.fetchAddressPrivateKey(address);
+    if (!privateKey) {
+      throw new Error(`Missing private key for address: ${address}`);
+    }
+    return await SignedMessage.sign(message, privateKey);
   },
 };
 

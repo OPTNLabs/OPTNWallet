@@ -2,6 +2,25 @@ type DatabaseRunner = {
   run: (query: string) => void;
 };
 
+export const createTransactionDetailsTable = (db: DatabaseRunner) => {
+  db.run(`
+    CREATE TABLE IF NOT EXISTS transaction_details (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      wallet_id INT,
+      tx_hash TEXT NOT NULL,
+      confirmations INT NOT NULL,
+      height INT,
+      fee_sats INT,
+      timestamp TEXT NOT NULL,
+      inputs_json TEXT NOT NULL,
+      outputs_json TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      FOREIGN KEY(wallet_id) REFERENCES wallets(id),
+      UNIQUE(wallet_id, tx_hash)
+    );
+  `);
+};
+
 export const createTables = (db: DatabaseRunner) => {
   db.run(`
     CREATE TABLE IF NOT EXISTS wallets (
@@ -77,6 +96,8 @@ export const createTables = (db: DatabaseRunner) => {
       UNIQUE(wallet_id, tx_hash)
     );
   `);
+
+  createTransactionDetailsTable(db);
 
   db.run(`
     CREATE TABLE IF NOT EXISTS cashscript_artifacts (

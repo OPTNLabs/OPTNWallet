@@ -19,11 +19,14 @@ export const ADDON_CAPABILITIES = [
   'utxo:address:read',
   'utxo:address:refresh',
   'chain:query',
+  'bcmr:token:read',
+  'tokenindex:holders:read',
   'tx:build',
   'tx:add_output',
   'tx:broadcast',
   'contracts:derive',
   'ui:confirm',
+  'signing:message_sign',
   'signing:signature_template',
   'http:fetch_json',
 ] as const;
@@ -148,6 +151,7 @@ export interface AddonManifest {
 
   /**
    * Contracts that the addon adds to the app.
+   * Apps-only addons can leave this empty.
    */
   contracts: AddonContractDefinition[];
 

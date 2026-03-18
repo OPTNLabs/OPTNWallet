@@ -6,7 +6,8 @@ import {
 } from './AddonsAllowlist';
 
 import ElectrumService from './ElectrumService';
-import TransactionService from './TransactionService';
+import TransactionService, { type BroadcastResult } from './TransactionService';
+import OutboundTransactionTracker from './OutboundTransactionTracker';
 import UTXOService from './UTXOService';
 import AddressManager from '../apis/AddressManager/AddressManager';
 import {
@@ -22,6 +23,7 @@ import { getAddonSDKInfo, type AddonSDKInfo } from './addons/SDKContract';
 import TransactionManager from '../apis/TransactionManager/TransactionManager';
 
 import KeyService from './KeyService';
+import BcmrService from './BcmrService';
 import {
   SignatureTemplate,
   HashType,
@@ -30,7 +32,12 @@ import {
 } from 'cashscript';
 import parseInputValue from '../utils/parseInputValue';
 
-import type { UTXO, TransactionOutput } from '../types/types';
+import type {
+  BcmrTokenMetadata,
+  SignedMessageResponseI,
+  UTXO,
+  TransactionOutput,
+} from '../types/types';
 
 const toProviderNetwork = (
   network: string | null | undefined
@@ -51,6 +58,10 @@ const getConstructorInputType = (
   const maybeType = (input as { type?: unknown }).type;
   return typeof maybeType === 'string' ? maybeType : undefined;
 };
+
+function outpointKey(utxo: { tx_hash: string; tx_pos: number }): string {
+  return `${utxo.tx_hash}:${utxo.tx_pos}`;
+}
 
 export type AddonSDKContext = {
   walletId: number;
@@ -111,13 +122,25 @@ export type AddonSDK = {
     refreshAndStore(address: string): Promise<UTXO[]>;
   };
 
-  /**
-   * BCMR access is intentionally fail-closed for now.
-   * We’ll wire it later via a permission-gated HTTP bridge.
-   */
   bcmr: {
-    enabled: false;
-    whyDisabled: string;
+    getTokenMetadata(category: string): Promise<BcmrTokenMetadata | null>;
+  };
+
+  tokenIndex: {
+    listTokenHolders(args: {
+      category: string;
+      limit?: number;
+      cursor?: string;
+    }): Promise<{
+      holders: Array<{
+        locking_bytecode: string;
+        locking_address?: string | null;
+        ft_balance: string;
+        utxo_count: number;
+        updated_height: number;
+      }>;
+      next_cursor?: string | null;
+    }>;
   };
 
   chain: {
@@ -154,6 +177,7 @@ export type AddonSDK = {
     broadcast(hex: string): Promise<{
       txid: string | null;
       errorMessage: string | null;
+      broadcastState?: BroadcastResult['broadcastState'];
     }>;
   };
 
@@ -169,6 +193,13 @@ export type AddonSDK = {
   };
 
   signing: {
+    signMessage(args: {
+      address: string;
+      message: string;
+    }): Promise<SignedMessageResponseI & {
+      address: string;
+      encoding: 'bch-signed-message';
+    }>;
     // never return private keys; return SignatureTemplate only
     signatureTemplateForAddress(address: string): Promise<SignatureTemplate>;
   };
@@ -210,6 +241,7 @@ export function createAddonSDK(
   ctx: AddonSDKContext
 ): AddonSDK {
   const txMgr = TransactionManager();
+  const bcmr = new BcmrService();
   const manifestCapabilities = getAddonGrantedCapabilities(manifest);
   const effectiveCapabilities = new Set<AddonCapability>();
 
@@ -250,6 +282,19 @@ export function createAddonSDK(
     run: () => Promise<T>
   ) => {
     return await policy.withTimeout(operation, timeoutMs, run);
+  };
+
+  const getReservedOutpointKeys = async (): Promise<Set<string>> => {
+    const reserved = await OutboundTransactionTracker.listReservedOutpoints(
+      ctx.walletId
+    );
+    return new Set(reserved.map((outpoint) => outpointKey(outpoint)));
+  };
+
+  const filterReservedUtxos = async (utxos: UTXO[]): Promise<UTXO[]> => {
+    const reservedKeys = await getReservedOutpointKeys();
+    if (reservedKeys.size === 0) return utxos;
+    return utxos.filter((utxo) => !reservedKeys.has(outpointKey(utxo)));
   };
 
   return {
@@ -308,20 +353,32 @@ export function createAddonSDK(
         await authorizeCapability('utxo:address:read');
         assertAddressAllowed(ctx, address);
         // read-only electrum fetch (no DB)
-        return await withPolicyTimeout(
+        const utxos = await withPolicyTimeout(
           'utxos.listForAddress',
           20_000,
           async () => await ElectrumService.getUTXOs(address)
         );
+        return await filterReservedUtxos(utxos);
       },
 
       async listForWallet() {
         await authorizeCapability('utxo:wallet:read');
-        return await withPolicyTimeout(
+        const walletUtxos = await withPolicyTimeout(
           'utxos.listForWallet',
           25_000,
           async () => await UTXOService.fetchAllWalletUtxos(ctx.walletId)
         );
+        const reservedKeys = await getReservedOutpointKeys();
+        if (reservedKeys.size === 0) return walletUtxos;
+
+        return {
+          allUtxos: walletUtxos.allUtxos.filter(
+            (utxo) => !reservedKeys.has(outpointKey(utxo))
+          ),
+          tokenUtxos: walletUtxos.tokenUtxos.filter(
+            (utxo) => !reservedKeys.has(outpointKey(utxo))
+          ),
+        };
       },
 
       async refreshAndStore(address: string) {
@@ -357,11 +414,84 @@ export function createAddonSDK(
       },
     },
 
-    // Fail-closed BCMR for now (keeps marketplace rules simple)
     bcmr: {
-      enabled: false,
-      whyDisabled:
-        'BCMR is not exposed to addons yet. Wire via permission-gated HTTP endpoints later.',
+      async getTokenMetadata(category: string) {
+        await authorizeCapability('bcmr:token:read');
+        const normalized = String(category ?? '').trim().toLowerCase();
+        if (!/^[0-9a-f]{64}$/.test(normalized)) {
+          throw new Error('Invalid token category');
+        }
+
+        return await withPolicyTimeout(
+          'bcmr.getTokenMetadata',
+          20_000,
+          async () => {
+            let snapshot = await bcmr.getSnapshot(normalized);
+            if (snapshot) return snapshot;
+
+            try {
+              const authbase = await bcmr.getCategoryAuthbase(normalized);
+              await bcmr.resolveIdentityRegistry(authbase);
+              snapshot = await bcmr.getSnapshot(normalized);
+            } catch {
+              return null;
+            }
+            return snapshot;
+          }
+        );
+      },
+    },
+
+    tokenIndex: {
+      async listTokenHolders({ category, limit, cursor }) {
+        await authorizeCapability('tokenindex:holders:read');
+        const normalized = String(category ?? '').trim().toLowerCase();
+        if (!/^[0-9a-f]{64}$/.test(normalized)) {
+          throw new Error('Invalid token category');
+        }
+
+        const url = new URL(
+          `https://tokenindex.optnlabs.com/v1/token/${normalized}/holders`
+        );
+        url.searchParams.set(
+          'limit',
+          String(Math.min(Math.max(limit ?? 100, 1), 500))
+        );
+        if (cursor) {
+          url.searchParams.set('cursor', cursor);
+        }
+
+        assertUrlAllowedForAddon(manifest, url.toString());
+
+        return await withPolicyTimeout(
+          'tokenIndex.listTokenHolders',
+          20_000,
+          async () => {
+            const response = await fetch(url.toString(), {
+              headers: {
+                Accept: 'application/json',
+              },
+            });
+
+            if (!response.ok) {
+              throw new Error(
+                `TokenIndex ${response.status}: ${await response.text()}`
+              );
+            }
+
+            return (await response.json()) as {
+              holders: Array<{
+                locking_bytecode: string;
+                locking_address?: string | null;
+                ft_balance: string;
+                utxo_count: number;
+                updated_height: number;
+              }>;
+              next_cursor?: string | null;
+            };
+          }
+        );
+      },
     },
 
     tx: {
@@ -413,7 +543,13 @@ export function createAddonSDK(
         return await withPolicyTimeout(
           'tx.broadcast',
           20_000,
-          async () => await TransactionService.sendTransaction(hex)
+          async () =>
+            await TransactionService.sendTransaction(hex, undefined, {
+              source: 'addon',
+              sourceLabel: manifest.name
+                ? `App: ${manifest.name}`
+                : `App: ${manifest.id}`,
+            })
         );
       },
     },
@@ -466,6 +602,21 @@ export function createAddonSDK(
     },
 
     signing: {
+      async signMessage({ address, message }) {
+        await authorizeCapability('signing:message_sign');
+        assertAddressAllowed(ctx, address);
+        const signed = await withPolicyTimeout(
+          'signing.signMessage',
+          10_000,
+          async () => await KeyService.signMessageForAddress(address, message)
+        );
+        return {
+          ...signed,
+          address,
+          encoding: 'bch-signed-message' as const,
+        };
+      },
+
       async signatureTemplateForAddress(address: string) {
         await authorizeCapability('signing:signature_template');
         assertAddressAllowed(ctx, address);

@@ -23,16 +23,27 @@ import { validateAddonManifestAgainstSchema } from './addons/AddonManifestSchema
  * - Persist enabled/disabled state in DB
  * - Signature verification of addon packages
  */
-export default function AddonsRegistry() {
-  let initialized = false;
-  let manifests: AddonManifest[] = [];
+type AddonsRegistryApi = {
+  init: () => Promise<void>;
+  getAddons: () => AddonManifest[];
+  getContracts: () => ResolvedAddonContractDefinition[];
+  getApps: () => ResolvedAddonAppDefinition[];
+};
 
-  return {
+let initialized = false;
+let manifests: AddonManifest[] = [];
+let registrySingleton: AddonsRegistryApi | null = null;
+
+export default function AddonsRegistry() {
+  if (registrySingleton) return registrySingleton;
+
+  registrySingleton = {
     init,
     getAddons,
     getContracts,
     getApps,
   };
+  return registrySingleton;
 
   async function init(): Promise<void> {
     if (initialized) return;
@@ -189,8 +200,8 @@ export default function AddonsRegistry() {
     if (!Array.isArray(m.permissions)) {
       throw new Error(`Addon "${m.id}" permissions must be an array`);
     }
-    if (!Array.isArray(m.contracts) || m.contracts.length === 0) {
-      throw new Error(`Addon "${m.id}" must include at least one contract`);
+    if (!Array.isArray(m.contracts)) {
+      throw new Error(`Addon "${m.id}" contracts must be an array`);
     }
   }
 

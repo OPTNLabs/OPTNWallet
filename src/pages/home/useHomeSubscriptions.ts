@@ -57,7 +57,7 @@ export function useHomeSubscriptions({
           }
         }
         try {
-          await DatabaseService().saveDatabaseToFile();
+          DatabaseService().scheduleDatabaseSave();
         } catch (error) {
           logError('Home.runHeaderRefresh.saveDatabase', error);
         }
@@ -118,7 +118,7 @@ export function useHomeSubscriptions({
 
               dispatch(updateUTXOsForAddress({ address: addr, utxos }));
               try {
-                await DatabaseService().saveDatabaseToFile();
+                DatabaseService().scheduleDatabaseSave();
               } catch (error) {
                 logError('Home.subscribeAddress.saveDatabase', error, {
                   address: addr,
