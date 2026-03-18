@@ -75,11 +75,16 @@ export function useWalletNetworkBootstrap(
 
 export function useStatusBarSync(mode: string) {
   useEffect(() => {
-    if (Capacitor.getPlatform() === 'android') {
-      StatusBar.setOverlaysWebView({ overlay: true });
-      StatusBar.setBackgroundColor({ color: '#00000000' });
-      StatusBar.setStyle({ style: mode === 'dark' ? Style.Light : Style.Dark });
+    if (!Capacitor.isNativePlatform()) {
+      return;
     }
+
+    const platform = Capacitor.getPlatform();
+    if (platform === 'android') {
+      StatusBar.setOverlaysWebView({ overlay: false });
+    }
+
+    StatusBar.setStyle({ style: mode === 'dark' ? Style.Light : Style.Dark });
   }, [mode]);
 }
 
