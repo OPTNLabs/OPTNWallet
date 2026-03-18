@@ -1,7 +1,7 @@
 {
   "name": "optn-wallet",
   "private": true,
-  "version": "1.5.2",
+  "version": "1.5.3",
   "type": "module",
   "scripts": {
     "dev": "vite --host",
@@ -34,9 +34,10 @@
     "android:prepare": "dotenv -e .env -- npm run build && npm run capacitor:sync:android",
     "android:apk:dev": "npm run android:prepare && cd android && ./gradlew assembleDebug",
     "android:apk:dev:install": "npm run android:apk:dev && adb install -r android/app/build/outputs/apk/debug/app-debug.apk",
-    "android:apk:prod": "npm run android:prepare && cd android && ./gradlew assembleRelease",
-    "android:aab:prod": "npm run android:prepare && cd android && ./gradlew bundleRelease",
-    "build:aab": "npm run android:aab:prod"
+    "android:apk:prod": "dotenv -e .env -- bash -lc 'npm run android:prepare && cd android && ./gradlew assembleRelease'",
+    "android:aab:prod": "dotenv -e .env -- bash -lc 'npm run android:prepare && cd android && ./gradlew bundleRelease'",
+    "build:aab": "npm run android:aab:prod",
+    "build:apk": "npm run android:apk:prod"
   },
   "dependencies": {
     "@bitauth/libauth": "^3.0.0",

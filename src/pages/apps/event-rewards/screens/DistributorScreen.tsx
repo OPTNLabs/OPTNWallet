@@ -464,6 +464,16 @@ const DistributorScreen: React.FC<DistributorScreenProps> = ({
         })),
     [availableTokens, tokenMetadata]
   );
+  const includePickerValue = tokenOptions.some(
+    (token) => token.category === tokenImportDraft.includeCategory
+  )
+    ? tokenImportDraft.includeCategory
+    : '';
+  const excludePickerValue = tokenOptions.some(
+    (token) => token.category === tokenImportDraft.excludeCategory
+  )
+    ? tokenImportDraft.excludeCategory
+    : '';
 
   useEffect(() => {
     const defaultTokenCategory =
@@ -1263,7 +1273,7 @@ const DistributorScreen: React.FC<DistributorScreenProps> = ({
             <div className="text-sm font-medium wallet-text-strong">What are you sending?</div>
             <div className="grid grid-cols-2 gap-2">
               <select
-                className="wallet-input"
+                className="wallet-select"
                 value={distributionDraft.assetType}
                 onChange={(event) =>
                   setDistributionDraft((prev) => ({
@@ -1286,7 +1296,7 @@ const DistributorScreen: React.FC<DistributorScreenProps> = ({
             </div>
             {distributionDraft.assetType === 'token' ? (
               <select
-                className="wallet-input"
+                className="wallet-select"
                 value={distributionDraft.tokenCategory}
                 onChange={(event) =>
                   setDistributionDraft((prev) => ({
@@ -1591,7 +1601,7 @@ const DistributorScreen: React.FC<DistributorScreenProps> = ({
                 </div>
                 {!showManualReferenceInput && tokenOptions.length > 0 ? (
                   <select
-                    className="wallet-input"
+                    className="wallet-select"
                     value={amountRuleDraft.referenceCategory}
                     onChange={(event) =>
                       setAmountRuleDraft((prev) => ({
@@ -1871,8 +1881,8 @@ const DistributorScreen: React.FC<DistributorScreenProps> = ({
             {tokenOptions.length > 0 ? (
               <div className="space-y-2">
                 <select
-                  className="wallet-input w-full min-w-0"
-                  value=""
+                  className="wallet-select min-w-0"
+                  value={includePickerValue}
                   onChange={(event) => {
                     if (!event.target.value) return;
                     setTokenImportDraft((prev) => ({
@@ -1889,8 +1899,8 @@ const DistributorScreen: React.FC<DistributorScreenProps> = ({
                   ))}
                 </select>
                 <select
-                  className="wallet-input w-full min-w-0"
-                  value=""
+                  className="wallet-select min-w-0"
+                  value={excludePickerValue}
                   onChange={(event) => {
                     if (!event.target.value) return;
                     setTokenImportDraft((prev) => ({
