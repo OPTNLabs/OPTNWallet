@@ -157,7 +157,7 @@ export default function ContractManager(): ContractManagerApi {
         await saveConstructorArgs(contract.address, constructorArgs, balance);
       }
 
-      await dbService.saveDatabaseToFile();
+      await dbService.flushDatabaseToFile();
 
       return {
         address: contract.address,
@@ -266,7 +266,7 @@ export default function ContractManager(): ContractManagerApi {
       const statement = db.prepare(deleteQuery);
       statement.run([contractId]);
       statement.free();
-      await dbService.saveDatabaseToFile();
+      await dbService.flushDatabaseToFile();
     } catch (error) {
       console.error('Error deleting contract instance:', error);
       throw error;

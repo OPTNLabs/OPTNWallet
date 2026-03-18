@@ -18,8 +18,14 @@ const ALLOWED_ADDON_HTTP_DOMAINS = new Set<string>([
   // 'bcmr.optnlabs.com',
   'chaingraph.optnlabs.com',
   'gql.chaingraph.pat.mn',
+  'events.optnlabs.com',
+  'tokenindex.optnlabs.com',
 ]);
 const KNOWN_ADDON_CAPABILITIES = new Set<AddonCapability>(ADDON_CAPABILITIES);
+
+function isDevRuntime() {
+  return typeof import.meta !== 'undefined' && Boolean(import.meta.env?.DEV);
+}
 
 function normalizeDomain(d: string): string {
   return d.trim().toLowerCase();
@@ -155,7 +161,10 @@ export function getAddonGrantedCapabilities(
  */
 export function assertUrlAllowedForAddon(
   manifest: AddonManifest,
-  url: string
+  url: string,
+  options?: {
+    devMode?: boolean;
+  }
 ): void {
   let parsed: URL;
   try {
@@ -164,9 +173,15 @@ export function assertUrlAllowedForAddon(
     throw new Error(`Invalid URL: ${url}`);
   }
 
+  const hostname = normalizeDomain(parsed.hostname);
+  const isLocalDevUrl =
+    (options?.devMode ?? isDevRuntime()) &&
+    manifest.trustTier === 'internal' &&
+    parsed.protocol === 'http:' &&
+    (hostname === 'localhost' || hostname === '127.0.0.1');
+
   // Strongly prefer https for addon traffic.
-  // If you later need http for local dev, gate it behind a dev flag, not manifest.
-  if (parsed.protocol !== 'https:') {
+  if (!isLocalDevUrl && parsed.protocol !== 'https:') {
     throw new Error(
       `Addon "${manifest.id}" attempted non-https URL: ${parsed.protocol}`
     );
@@ -177,12 +192,14 @@ export function assertUrlAllowedForAddon(
     throw new Error(`Addon "${manifest.id}" attempted URL with credentials`);
   }
 
-  const hostname = normalizeDomain(parsed.hostname);
-
-  if (isDisallowedHost(hostname)) {
+  if (!isLocalDevUrl && isDisallowedHost(hostname)) {
     throw new Error(
       `Addon "${manifest.id}" attempted disallowed host: ${hostname}`
     );
+  }
+
+  if (isLocalDevUrl) {
+    return;
   }
 
   // addon must request http permission for that host

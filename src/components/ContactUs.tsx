@@ -26,9 +26,8 @@ const ContactUs = () => {
   ];
 
   return (
-    <div className="flex flex-col items-center justify-center max-h-full p-4 h-4/5 mb-4">
-      {/* Image Section */}
-      <div className="flex justify-center items-base line my-4">
+    <div className="flex h-full min-h-0 flex-col items-center px-4 pb-4">
+      <div className="flex justify-center my-3 shrink-0">
         <img
           src="/assets/images/OPTNWelcome3.png"
           alt="Welcome"
@@ -38,8 +37,7 @@ const ContactUs = () => {
         />
       </div>
 
-      {/* Contact Methods */}
-      <div className="w-full max-w-md space-y-4">
+      <div className="w-full max-w-md space-y-4 overflow-y-auto pr-1">
         {contactMethods.map((method) => (
           <a
             key={method.name}

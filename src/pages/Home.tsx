@@ -1,26 +1,23 @@
 // src/pages/Home.tsx
 
-import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useDispatch, useSelector } from 'react-redux';
 // import { LocalNotifications } from '@capacitor/local-notifications';
 import { AppDispatch, RootState } from '../redux/store';
 import BitcoinCashCard from '../components/BitcoinCashCard';
 import CashTokenCard from '../components/CashTokenCard';
+import PriceFeed from '../components/PriceFeed';
+import Popup from '../components/transaction/Popup';
 import UTXOService from '../services/UTXOService';
 import {
-  // setUTXOs,
   setFetchingUTXOs,
-  setInitialized,
   replaceAllUTXOs,
+  setInitialized,
 } from '../redux/utxoSlice';
-import PriceFeed from '../components/PriceFeed';
-import { TailSpin } from 'react-loader-spinner';
-import Popup from '../components/transaction/Popup';
 import DatabaseService from '../apis/DatabaseManager/DatabaseService';
-import { primeUTXOCache } from '../services/ElectrumService';
+import ElectrumService, { primeUTXOCache } from '../services/ElectrumService';
 import { UTXO } from '../types/types';
-import { logError } from '../utils/errorHandling';
 import { useHomeSubscriptions } from './home/useHomeSubscriptions';
 import { useHomeKeys } from './home/useHomeKeys';
 import { useHomePlaceholderState } from './home/useHomePlaceholderState';
@@ -28,7 +25,9 @@ import { useHomeMetadataPreload } from './home/useHomeMetadataPreload';
 import PageHeader from '../components/ui/PageHeader';
 import SectionCard from '../components/ui/SectionCard';
 import EmptyState from '../components/ui/EmptyState';
-import StatusChip from '../components/ui/StatusChip';
+import { refreshUTXOWorkerSubscriptions } from '../workers/UTXOWorkerService';
+import { logError } from '../utils/errorHandling';
+import { runWalletUtxoRefresh } from '../services/RefreshCoordinator';
 
 const USE_HOME_SUBS = false;
 
@@ -56,14 +55,11 @@ const Home: React.FC = () => {
   const { keyPairs, generatingKeys, handleGenerateKeys } = useHomeKeys({
     currentWalletId,
   });
-  const {
-    setPlaceholderUTXOs,
-    placeholderBalance,
-    placeholderTokenTotals,
-  } = useHomePlaceholderState({
-    reduxUTXOs,
-    fetchingUTXOsRedux,
-  });
+  const { placeholderBalance, placeholderTokenTotals } =
+    useHomePlaceholderState({
+      reduxUTXOs,
+      fetchingUTXOsRedux,
+    });
   const [showCashTokenPopup, setShowCashTokenPopup] = useState(false);
 
   useHomeSubscriptions({
@@ -76,62 +72,48 @@ const Home: React.FC = () => {
     dispatch,
   });
 
-  // Fetch and store UTXOs
-  const fetchAndStoreUTXOs = useCallback(async () => {
+  const handleRefresh = useCallback(async () => {
     if (fetchingUTXOsRedux || !currentWalletId || keyPairs.length === 0) return;
 
     dispatch(setFetchingUTXOs(true));
     const allUTXOs: Record<string, UTXO[]> = {};
 
     try {
-      const fetchResults = await Promise.allSettled(
-        keyPairs.map(async (keyPair) => ({
-          address: keyPair.address,
-          utxos: await UTXOService.fetchAndStoreUTXOs(
-            currentWalletId,
-            keyPair.address
-          ),
-        }))
-      );
+      await runWalletUtxoRefresh(currentWalletId, async () => {
+        await ElectrumService.reconnect();
 
-      for (const result of fetchResults) {
-        if (result.status === 'fulfilled') {
-          allUTXOs[result.value.address] = result.value.utxos;
-        } else {
-          logError('Home.fetchAndStoreUTXOs.address', result.reason);
+        const fetchedByAddress = await UTXOService.fetchAndStoreUTXOsMany(
+          currentWalletId,
+          keyPairs.map((keyPair) => keyPair.address)
+        );
+
+        for (const keyPair of keyPairs) {
+          allUTXOs[keyPair.address] = fetchedByAddress[keyPair.address] ?? [];
         }
-      }
 
-      for (const [addr, list] of Object.entries(allUTXOs)) {
-        primeUTXOCache(addr, list);
-      }
+        for (const [addr, list] of Object.entries(allUTXOs)) {
+          primeUTXOCache(addr, list);
+        }
 
-      setPlaceholderUTXOs(allUTXOs);
-      dispatch(replaceAllUTXOs({ utxosByAddress: allUTXOs }));
-      await dbService.saveDatabaseToFile();
-      dispatch(setInitialized(true));
+        dispatch(replaceAllUTXOs({ utxosByAddress: allUTXOs }));
+        dbService.scheduleDatabaseSave();
+        dispatch(setInitialized(true));
+        await refreshUTXOWorkerSubscriptions();
+      });
     } catch (error) {
-      logError('Home.fetchAndStoreUTXOs', error, {
+      logError('Home.handleRefresh', error, {
         walletId: currentWalletId,
       });
     } finally {
       dispatch(setFetchingUTXOs(false));
     }
-  }, [
-    keyPairs,
-    fetchingUTXOsRedux,
-    currentWalletId,
-    dispatch,
-    setPlaceholderUTXOs,
-    dbService,
-  ]);
+  }, [currentWalletId, dbService, dispatch, fetchingUTXOsRedux, keyPairs]);
 
-  // Fetch UTXOs when keys are available and not initialized
   useEffect(() => {
-    if (keyPairs.length > 0 && !IsInitialized) {
-      fetchAndStoreUTXOs();
+    if (keyPairs.length > 0 && currentWalletId) {
+      void refreshUTXOWorkerSubscriptions();
     }
-  }, [keyPairs, IsInitialized, fetchAndStoreUTXOs]);
+  }, [keyPairs, currentWalletId]);
 
   useHomeMetadataPreload({
     isInitialized: IsInitialized,
@@ -158,59 +140,45 @@ const Home: React.FC = () => {
 
   return (
     <div className="container mx-auto max-w-md p-4 pb-16 wallet-page">
-      <PageHeader title="Home" subtitle="Wallet overview" compact />
+      <PageHeader title="Home" compact />
       <PriceFeed />
 
       <SectionCard className="mt-3">
-        {(fetchingUTXOsRedux || generatingKeys) && (
-          <div className="mb-3 flex items-center justify-center">
-            <StatusChip tone="neutral">
-              {fetchingUTXOsRedux ? 'Refreshing wallet data...' : 'Generating new key...'}
-            </StatusChip>
-          </div>
-        )}
         <div className="flex flex-col items-center gap-3">
-        <button
+          <button
             className="wallet-btn-secondary w-full max-w-md"
-          onClick={() => navigate('/contract')}
-        >
-          Contracts
-        </button>
-        <button
+            onClick={() => navigate('/contract')}
+          >
+            Contracts
+          </button>
+          <button
             className="wallet-btn-primary w-full max-w-md"
-          onClick={() => navigate('/apps')}
-        >
-          Apps
-        </button>
-        <button
-            className="wallet-btn-primary flex justify-center items-center w-full max-w-md"
-          onClick={fetchAndStoreUTXOs}
-          disabled={fetchingUTXOsRedux || generatingKeys}
-        >
-          {fetchingUTXOsRedux === false ? (
-            `Fetch UTXOs`
-          ) : (
-            <div className="flex justify-center items-center w-full">
-              <TailSpin
-                visible={true}
-                height="24"
-                width="24"
-                color="white"
-                ariaLabel="tail-spin-loading"
-                radius="1"
-              />
-            </div>
-          )}
-        </button>
-        <button
-            className="wallet-btn-primary w-full max-w-md"
-          onClick={() =>
-            handleGenerateKeys(nextAddressIndex)
-          }
-          disabled={fetchingUTXOsRedux || generatingKeys}
-        >
-          Generate New Key
-        </button>
+            onClick={() => navigate('/apps')}
+          >
+            Apps
+          </button>
+          <div className="grid w-full max-w-md grid-cols-10 gap-3">
+            <button
+              className="wallet-btn-primary col-span-8 w-full"
+              onClick={() => handleGenerateKeys(nextAddressIndex)}
+              disabled={fetchingUTXOsRedux || generatingKeys}
+            >
+              New Address
+            </button>
+            <button
+              className="wallet-btn-secondary col-span-2 w-full"
+              onClick={handleRefresh}
+              disabled={fetchingUTXOsRedux || generatingKeys}
+            >
+              {fetchingUTXOsRedux ? (
+                <span className="flex items-center justify-center">
+                  <span className="wallet-spinner" aria-hidden="true" />
+                </span>
+              ) : (
+                'Sync'
+              )}
+            </button>
+          </div>
         </div>
       </SectionCard>
 

@@ -29,6 +29,17 @@ function isComingSoonApp(appId: string, appName: string): boolean {
   );
 }
 
+function shouldHideApp(appId: string, appName: string): boolean {
+  const normalizedId = appId.toLowerCase();
+  const normalizedName = appName.toLowerCase();
+  return (
+    normalizedId === 'fundme' ||
+    normalizedId.endsWith(':authguard') ||
+    normalizedName === 'fundme' ||
+    normalizedName === 'authguard'
+  );
+}
+
 const AppsView = () => {
   const navigate = useNavigate();
   const wallet_id = useSelector(
@@ -75,7 +86,9 @@ const AppsView = () => {
           }
         }
 
-        if (mounted) setCards(out);
+        if (mounted) {
+          setCards(out.filter((app) => !shouldHideApp(app.id, app.name)));
+        }
       } catch (e: unknown) {
         if (mounted) {
           setError(e instanceof Error ? e.message : String(e));
