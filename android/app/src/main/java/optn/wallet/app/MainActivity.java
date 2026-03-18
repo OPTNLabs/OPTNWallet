@@ -5,12 +5,14 @@ import android.view.WindowManager;
 import android.webkit.WebView;
 import com.getcapacitor.BridgeActivity;
 import optn.wallet.app.security.DeviceIntegrityPlugin;
+import optn.wallet.app.security.ScreenSecurityPlugin;
 import optn.wallet.app.security.SecureKeyStorePlugin;
 
 public class MainActivity extends BridgeActivity {
   @Override
   protected void onCreate(Bundle savedInstanceState) {
     registerPlugin(DeviceIntegrityPlugin.class);
+    registerPlugin(ScreenSecurityPlugin.class);
     registerPlugin(SecureKeyStorePlugin.class);
     super.onCreate(savedInstanceState);
 

@@ -5,6 +5,9 @@
   <style name="AppTheme" parent="Theme.AppCompat.DayNight.NoActionBar">
     <item name="windowActionBar">false</item>
     <item name="windowNoTitle">true</item>
+    <item name="android:windowBackground">@color/app_window_background</item>
+    <item name="android:colorBackground">@color/app_window_background</item>
+    <item name="android:windowDisablePreview">true</item>
 
     <!-- Only use framework-namespaced colors here (safe everywhere) -->
     <item name="android:statusBarColor">@android:color/transparent</item>
@@ -13,7 +16,11 @@
 
   <!-- Android 12+ splash; hands off to AppTheme afterwards -->
   <style name="LaunchTheme" parent="Theme.SplashScreen">
-    <item name="android:background">@drawable/splash</item>
+    <item name="android:background">@color/app_window_background</item>
+    <item name="android:windowBackground">@color/app_window_background</item>
+    <item name="windowSplashScreenBackground">@color/app_window_background</item>
+    <item name="windowSplashScreenAnimatedIcon">@mipmap/ic_launcher_foreground</item>
+    <item name="windowSplashScreenIconBackgroundColor">@android:color/transparent</item>
     <item name="postSplashScreenTheme">@style/AppTheme</item>
   </style>
 
