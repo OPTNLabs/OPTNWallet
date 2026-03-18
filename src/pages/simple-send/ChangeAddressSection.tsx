@@ -14,10 +14,15 @@ export function ChangeAddressSection({
   mask,
 }: ChangeAddressSectionProps) {
   return (
-    <div className="flex flex-col gap-1">
-      <label className="text-sm font-semibold wallet-text-strong">
-        Change address
-      </label>
+    <div className="rounded-2xl border border-[var(--wallet-border)] wallet-surface-strong px-3 py-3">
+      <div className="mb-2 flex items-center justify-between gap-3">
+        <label className="text-sm font-semibold wallet-text-strong">
+          Change address
+        </label>
+        <span className="text-[11px] wallet-muted font-mono">
+          {selectedChangeAddress ? mask(selectedChangeAddress) : 'Loading...'}
+        </span>
+      </div>
       <div className="relative">
         <select
           value={selectedChangeAddress}

@@ -1,10 +1,10 @@
 // src/components/UTXOCard.tsx
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React from 'react';
 import { FaBitcoin } from 'react-icons/fa';
 import { shortenTxHash } from '../utils/shortenHash';
 import { UTXO } from '../types/types';
-import BcmrService from '../services/BcmrService';
 import { SATSINBITCOIN } from '../utils/constants';
+import useSharedTokenMetadata from '../hooks/useSharedTokenMetadata';
 
 interface UTXOCardProps {
   utxos: UTXO[];
@@ -63,52 +63,11 @@ function formatTokenAmount(
 }
 
 const UTXOCard: React.FC<UTXOCardProps> = ({ utxos, loading }) => {
-  // State to store icon data URIs, keyed by category
-  const [iconUris, setIconUris] = useState<Record<string, string | null>>({});
-  const bcmr = useMemo(() => new BcmrService(), []);
-  const queuedCategories = useRef<Set<string>>(new Set());
-
-  // Fetch icons when utxos change
-  useEffect(() => {
-    let isActive = true;
-
-    const categories = Array.from(
-      new Set(
-        utxos
-          .map((u) => u.token?.category)
-          .filter((category): category is string => Boolean(category))
-      )
-    );
-    const toFetch = categories.filter((category) => {
-      if (queuedCategories.current.has(category)) return false;
-      queuedCategories.current.add(category);
-      return true;
-    });
-
-    if (toFetch.length === 0) return () => undefined;
-
-    void Promise.all(
-      toFetch.map(async (category) => {
-        try {
-          const authbase = await bcmr.getCategoryAuthbase(category);
-          const iconUri = await bcmr.resolveIcon(authbase);
-          if (!isActive) return;
-          setIconUris((prev) =>
-            prev[category] === undefined ? { ...prev, [category]: iconUri } : prev
-          );
-        } catch {
-          if (!isActive) return;
-          setIconUris((prev) =>
-            prev[category] === undefined ? { ...prev, [category]: null } : prev
-          );
-        }
-      })
-    );
-
-    return () => {
-      isActive = false;
-    };
-  }, [bcmr, utxos]);
+  const tokenMetadata = useSharedTokenMetadata(
+    utxos
+      .map((u) => u.token?.category)
+      .filter((category): category is string => Boolean(category))
+  );
 
   if (loading) {
     return (
@@ -140,7 +99,18 @@ const UTXOCard: React.FC<UTXOCardProps> = ({ utxos, loading }) => {
         const tokenData = isToken ? utxo.token : null;
         const metadata = tokenData?.BcmrTokenMetadata || null;
         const category = tokenData?.category || null;
-        const iconUri = category ? iconUris[category] : null;
+        const sharedMeta = category ? tokenMetadata[category] : null;
+        const fallbackIconUri =
+          metadata?.uris && typeof metadata.uris.icon === 'string'
+            ? metadata.uris.icon
+            : null;
+        const iconUri = sharedMeta?.iconUri ?? fallbackIconUri ?? null;
+        const tokenName = sharedMeta?.name || metadata?.name || 'Unknown Token';
+        const tokenSymbol = sharedMeta?.symbol || metadata?.token.symbol || 'tokens';
+        const tokenDecimals =
+          typeof sharedMeta?.decimals === 'number'
+            ? sharedMeta.decimals
+            : (metadata?.token.decimals ?? 0);
 
         // ✅ Contract UTXOs may not have `value`, but do have `amount`
         const sats = (utxo.value ?? utxo.amount) as
@@ -161,12 +131,12 @@ const UTXOCard: React.FC<UTXOCardProps> = ({ utxos, loading }) => {
                     <strong>Amount:</strong>{' '}
                     {formatTokenAmount(
                       tokenData!.amount,
-                      metadata?.token.decimals || 0
+                      tokenDecimals
                     )}{' '}
-                    {metadata?.token.symbol || 'tokens'}
+                    {tokenSymbol}
                   </p>
                   <p>
-                    <strong>Name:</strong> {metadata?.name || 'Unknown Token'}
+                    <strong>Name:</strong> {tokenName}
                   </p>
                   <p>
                     {formatBchFromSats(sats)} <strong>BCH</strong>
@@ -193,25 +163,19 @@ const UTXOCard: React.FC<UTXOCardProps> = ({ utxos, loading }) => {
             <div className="flex flex-col items-center space-y-2">
               {isToken && metadata ? (
                 <>
-                  {iconUri !== undefined ? (
-                    iconUri ? (
-                      <img
-                        src={iconUri}
-                        alt={metadata.name || 'Token'}
-                        className="w-12 h-12 rounded"
-                      />
-                    ) : (
-                      <div className="w-12 h-12 wallet-surface-strong rounded flex items-center justify-center">
-                        <span className="wallet-muted">No Icon</span>
-                      </div>
-                    )
+                  {iconUri ? (
+                    <img
+                      src={iconUri}
+                      alt={tokenName}
+                      className="w-12 h-12 rounded"
+                    />
                   ) : (
                     <div className="w-12 h-12 wallet-surface-strong rounded flex items-center justify-center">
-                      <span className="wallet-muted">Loading...</span>
+                      <FaBitcoin className="wallet-accent-icon text-3xl" />
                     </div>
                   )}
                   <span className="text-base font-medium text-center">
-                    {metadata.name || 'Unknown Token'}
+                    {tokenName}
                   </span>
                 </>
               ) : (

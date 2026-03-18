@@ -14,6 +14,10 @@ function toString(value: unknown): string {
   return isString(value) ? value : String(value);
 }
 
+function toCount(value: unknown): number {
+  return typeof value === 'number' ? value : Number.parseInt(String(value), 10) || 0;
+}
+
 export default function KeyManager() {
   const dbService = DatabaseService();
   const KeyGen = KeyGeneration();
@@ -134,23 +138,57 @@ export default function KeyManager() {
         SELECT COUNT(*) as count FROM keys WHERE address = ?;
       `);
       existingKeyQuery.bind([keys.aliceAddress]);
-      const count = existingKeyQuery.getAsObject().count as number;
+      existingKeyQuery.step();
+      const count = toCount(existingKeyQuery.getAsObject().count);
       existingKeyQuery.free();
-
-      if (count > 0) {
-        throw new Error(`Key for address ${keys.aliceAddress} already exists`);
-      }
 
       const existingTokenKeyQuery = db.prepare(`
         SELECT COUNT(*) as count FROM keys WHERE token_address = ?;
       `);
       existingTokenKeyQuery.bind([keys.aliceTokenAddress]);
-      const tokenCount = existingTokenKeyQuery.getAsObject().count as number;
+      existingTokenKeyQuery.step();
+      const tokenCount = toCount(existingTokenKeyQuery.getAsObject().count);
       existingTokenKeyQuery.free();
 
-      if (tokenCount > 0) {
+      if (count > 0 || tokenCount > 0) {
+        const existingKeyDetailsQuery = db.prepare(`
+          SELECT wallet_id, address, token_address
+          FROM keys
+          WHERE address = ? OR token_address = ?
+          LIMIT 1;
+        `);
+        existingKeyDetailsQuery.bind([
+          keys.aliceAddress,
+          keys.aliceTokenAddress,
+        ]);
+
+        let existingWalletId: number | null = null;
+        let existingAddress: string | null = null;
+        let existingTokenAddress: string | null = null;
+        if (existingKeyDetailsQuery.step()) {
+          const row = existingKeyDetailsQuery.getAsObject();
+          existingWalletId =
+            typeof row.wallet_id === 'number'
+              ? row.wallet_id
+              : Number(row.wallet_id);
+          existingAddress =
+            typeof row.address === 'string' ? row.address : null;
+          existingTokenAddress =
+            typeof row.token_address === 'string' ? row.token_address : null;
+        }
+        existingKeyDetailsQuery.free();
+
+        if (
+          existingWalletId === wallet_id &&
+          existingAddress === keys.aliceAddress &&
+          existingTokenAddress === keys.aliceTokenAddress
+        ) {
+          zeroize(keys.alicePriv);
+          return;
+        }
+
         throw new Error(
-          `Key for token address ${keys.aliceTokenAddress} already exists`
+          `Derived key already exists for wallet ${existingWalletId ?? 'unknown'}: ${keys.aliceAddress} / ${keys.aliceTokenAddress}`
         );
       }
 
@@ -186,7 +224,7 @@ export default function KeyManager() {
       };
 
       await ManageAddress.registerAddress(newAddress);
-      await dbService.saveDatabaseToFile();
+      await dbService.flushDatabaseToFile();
       zeroize(keys.alicePriv);
     } else {
       throw new Error('Failed to generate keys');

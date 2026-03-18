@@ -14,7 +14,7 @@ import {
   queryTransactionByHash,
 } from '../apis/ChaingraphManager/ChaingraphManager';
 import bcmrLocalJson from '../assets/bcmr-optn-local.json';
-import { ipfsFetch } from '../utils/ipfs';
+import { ipfsFetch, resolveIpfsGatewayUrl } from '../utils/ipfs';
 import DatabaseService from '../apis/DatabaseManager/DatabaseService';
 import { sha256 } from '../utils/hash';
 import { DateTime } from 'luxon';
@@ -29,6 +29,26 @@ import {
 } from '../utils/servers/InfraUrls';
 
 const ICON_CACHE = new Map<string, string | null>();
+const REGISTRY_CACHE = new Map<string, IdentityRegistry>();
+const REGISTRY_INFLIGHT = new Map<string, Promise<IdentityRegistry>>();
+const REGISTRY_MISS_CACHE = new Map<string, number>();
+const REGISTRY_MISS_TTL_MS = 30 * 1000;
+
+export class BcmrRegistryNotFoundError extends Error {
+  constructor(
+    public readonly authbase: string,
+    message = `No BCMR registry found for ${authbase}`
+  ) {
+    super(message);
+    this.name = 'BcmrRegistryNotFoundError';
+  }
+}
+
+export function isBcmrRegistryNotFoundError(
+  error: unknown
+): error is BcmrRegistryNotFoundError {
+  return error instanceof BcmrRegistryNotFoundError;
+}
 
 // ----------------------------------------------------------------------------
 // Fallback local registry
@@ -150,8 +170,6 @@ export default class BcmrService {
   private readonly dbService = DatabaseService();
   private db = this.dbService.getDatabase();
   private CACHE_TTL_MS = 7 * 24 * 60 * 60 * 1000; // 7d
-
-  private inMemoryRegistries = new Map<string, IdentityRegistry>();
 
   public async getCategoryAuthbase(category: string): Promise<string> {
     const normalizedCategory = normalizeHexId(category);
@@ -301,14 +319,42 @@ export default class BcmrService {
   ): Promise<IdentityRegistry> {
     const authbase = await this.getCategoryAuthbase(categoryOrAuthbase);
 
-    const cached = this.inMemoryRegistries.get(authbase);
+    const cached = REGISTRY_CACHE.get(authbase);
+    if (cached) return cached;
+    const missCachedAt = REGISTRY_MISS_CACHE.get(authbase);
+    if (
+      missCachedAt !== undefined &&
+      Date.now() - missCachedAt < REGISTRY_MISS_TTL_MS
+    ) {
+      throw new BcmrRegistryNotFoundError(authbase);
+    }
+    if (missCachedAt !== undefined) {
+      REGISTRY_MISS_CACHE.delete(authbase);
+    }
+
+    const inflight = REGISTRY_INFLIGHT.get(authbase);
+    if (inflight) return inflight;
+
+    const resolution = this.resolveIdentityRegistryUncached(authbase);
+    REGISTRY_INFLIGHT.set(authbase, resolution);
+    try {
+      return await resolution;
+    } finally {
+      REGISTRY_INFLIGHT.delete(authbase);
+    }
+  }
+
+  private async resolveIdentityRegistryUncached(
+    authbase: string
+  ): Promise<IdentityRegistry> {
+    const cached = REGISTRY_CACHE.get(authbase);
     if (cached) return cached;
 
     let diskEntry: IdentityRegistry | undefined;
     try {
       diskEntry = await this.loadIdentityRegistry(authbase);
       mergeRegistry(diskEntry.registry);
-      this.inMemoryRegistries.set(authbase, diskEntry);
+      REGISTRY_CACHE.set(authbase, diskEntry);
 
       try {
         const snapshot = this.extractIdentity(authbase, diskEntry.registry);
@@ -339,10 +385,14 @@ export default class BcmrService {
       // If all indexer endpoints fail, try resolving directly from authchain BCMR OP_RETURN.
       const onChain = await this.resolveAuthChainRegistry(authbase, uris[0] || '');
       if (!onChain) {
+        if (this.isMissingRegistryError(err)) {
+          REGISTRY_MISS_CACHE.set(authbase, Date.now());
+          throw new BcmrRegistryNotFoundError(authbase);
+        }
         throw err;
       }
       fresh = onChain;
-      this.inMemoryRegistries.set(authbase, fresh);
+      REGISTRY_CACHE.set(authbase, fresh);
     }
 
     try {
@@ -508,7 +558,7 @@ export default class BcmrService {
   public async purgeBcmrData(): Promise<void> {
     const db = await this.getDb();
     db.run(`DELETE FROM bcmr; DELETE FROM bcmr_tokens;`);
-    await this.dbService.saveDatabaseToFile();
+    await this.dbService.flushDatabaseToFile();
   }
 
   /**
@@ -563,12 +613,14 @@ export default class BcmrService {
     try {
       resp = await ipfsFetch(iconUri);
     } catch {
-      ICON_CACHE.set(filePath, null);
-      return null;
+      const gatewayUri = resolveIpfsGatewayUrl(iconUri);
+      ICON_CACHE.set(filePath, gatewayUri);
+      return gatewayUri;
     }
     if (!resp.ok) {
-      ICON_CACHE.set(filePath, null);
-      return null;
+      const gatewayUri = resolveIpfsGatewayUrl(iconUri);
+      ICON_CACHE.set(filePath, gatewayUri);
+      return gatewayUri;
     }
 
     let buf: Uint8Array;
@@ -603,7 +655,7 @@ export default class BcmrService {
    * Call this once when your app finishes initializing all metadata.
    */
   public async flushCache(): Promise<void> {
-    await this.dbService.saveDatabaseToFile();
+    await this.dbService.flushDatabaseToFile();
   }
 
   // A little helper that actually fetches & commits one registry:
@@ -620,6 +672,14 @@ export default class BcmrService {
       async (uri): Promise<IdentityRegistry> => {
         const resp = await ipfsFetch(uri);
         if (!resp.ok) {
+          if (resp.status === 404) {
+            const fallback = await this.fetchIndexerTokenFallback(authbase, uri);
+            if (fallback) {
+              REGISTRY_CACHE.set(authbase, fallback);
+              REGISTRY_MISS_CACHE.delete(authbase);
+              return fallback;
+            }
+          }
           throw new Error(`Fetch failed: HTTP ${resp.status}`);
         }
 
@@ -634,7 +694,7 @@ export default class BcmrService {
         if (typeof imported === 'string') {
           const fallback = await this.fetchIndexerTokenFallback(authbase, uri);
           if (fallback) {
-            this.inMemoryRegistries.set(authbase, fallback);
+            REGISTRY_CACHE.set(authbase, fallback);
             return fallback;
           }
           throw new Error(imported);
@@ -648,7 +708,7 @@ export default class BcmrService {
             uri
           );
           if (onChain) {
-            this.inMemoryRegistries.set(authbase, onChain);
+            REGISTRY_CACHE.set(authbase, onChain);
             return onChain;
           }
         }
@@ -659,7 +719,8 @@ export default class BcmrService {
           imported,
           uri
         );
-        this.inMemoryRegistries.set(authbase, committed);
+        REGISTRY_CACHE.set(authbase, committed);
+        REGISTRY_MISS_CACHE.delete(authbase);
         return committed;
       }
     );
@@ -730,7 +791,14 @@ export default class BcmrService {
       const uris = dedupeUrls([uri, ...this.getDefaultRegistryUris(authbase)]);
       await this.fetchAndCommitRegistry(authbase, uris);
     } catch (err) {
+      if (this.isMissingRegistryError(err)) return;
       console.error('BCMR background refresh failed', err);
     }
+  }
+
+  private isMissingRegistryError(error: unknown): boolean {
+    if (isBcmrRegistryNotFoundError(error)) return true;
+    const message = error instanceof Error ? error.message : String(error);
+    return message.includes('HTTP 404');
   }
 }

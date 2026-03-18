@@ -181,7 +181,7 @@ const RegularTxView: React.FC<RegularTxViewProps> = ({
 
       <div className="mb-4">
         <div className="flex items-center justify-between mb-1">
-          <label className="font-medium">Transfer Amount</label>
+          <label className="font-medium">Amount to send</label>
           <div className="flex space-x-2">
             <button
               onClick={() => setTransferAmount(Number(remainingSpendable))}

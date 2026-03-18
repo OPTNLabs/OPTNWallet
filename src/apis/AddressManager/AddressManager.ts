@@ -69,8 +69,50 @@ export default function AddressManager() {
     }
   }
 
+  async function fetchTokenAddresses(
+    wallet_id: number,
+    addresses: string[]
+  ): Promise<Record<string, string>> {
+    try {
+      await dbService.ensureDatabaseStarted();
+      const db = dbService.getDatabase();
+      if (db == null) {
+        throw new Error('Database is null');
+      }
+
+      const uniqueAddresses = Array.from(new Set(addresses.filter(Boolean)));
+      if (uniqueAddresses.length === 0) return {};
+
+      const placeholders = uniqueAddresses.map(() => '?').join(', ');
+      const query = db.prepare(`
+        SELECT address, token_address
+        FROM keys
+        WHERE wallet_id = ? AND address IN (${placeholders});
+      `);
+      query.bind([wallet_id, ...uniqueAddresses]);
+
+      const out: Record<string, string> = {};
+      while (query.step()) {
+        const row = query.getAsObject() as {
+          address?: string;
+          token_address?: string | null;
+        };
+        if (typeof row.address === 'string' && typeof row.token_address === 'string') {
+          out[row.address] = row.token_address;
+        }
+      }
+      query.free();
+
+      return out;
+    } catch (error) {
+      console.error('Failed to fetch token_addresses:', error);
+      return {};
+    }
+  }
+
   return {
     registerAddress,
     fetchTokenAddress,
+    fetchTokenAddresses,
   };
 }

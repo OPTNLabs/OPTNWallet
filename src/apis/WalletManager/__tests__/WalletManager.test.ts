@@ -60,17 +60,17 @@ describe('WalletManager', () => {
 
     const dbService = {
       getDatabase: vi.fn(() => db),
-      saveDatabaseToFile: vi.fn(async () => {}),
+      flushDatabaseToFile: vi.fn(async () => {}),
     };
 
-    mockedDatabaseService.mockReturnValue(dbService as never);
+    mockedDatabaseService.mockImplementation(() => dbService as never);
 
     const wm = WalletManager();
     const created = await wm.createWallet('name', 'mnemonic', 'pass', Network.CHIPNET);
 
     expect(created).toBe(false);
     expect(insertStmt.run).not.toHaveBeenCalled();
-    expect(dbService.saveDatabaseToFile).not.toHaveBeenCalled();
+    expect(dbService.flushDatabaseToFile).not.toHaveBeenCalled();
   });
 
   it('createWallet inserts and persists when wallet does not exist', async () => {
@@ -86,10 +86,10 @@ describe('WalletManager', () => {
 
     const dbService = {
       getDatabase: vi.fn(() => db),
-      saveDatabaseToFile: vi.fn(async () => {}),
+      flushDatabaseToFile: vi.fn(async () => {}),
     };
 
-    mockedDatabaseService.mockReturnValue(dbService as never);
+    mockedDatabaseService.mockImplementation(() => dbService as never);
 
     const wm = WalletManager();
     const created = await wm.createWallet('name', 'mnemonic', 'pass', Network.MAINNET);
@@ -102,7 +102,7 @@ describe('WalletManager', () => {
       Network.MAINNET,
       0,
     ]);
-    expect(dbService.saveDatabaseToFile).toHaveBeenCalledTimes(1);
+    expect(dbService.flushDatabaseToFile).toHaveBeenCalledTimes(1);
   });
 
   it('setWalletId resolves wallet id as number', async () => {
@@ -111,9 +111,12 @@ describe('WalletManager', () => {
       prepare: vi.fn(() => selectStmt),
     };
 
-    mockedDatabaseService.mockReturnValue({
-      getDatabase: vi.fn(() => db),
-    } as never);
+    mockedDatabaseService.mockImplementation(
+      () =>
+        ({
+          getDatabase: vi.fn(() => db),
+        }) as never
+    );
 
     const wm = WalletManager();
     const walletId = await wm.setWalletId('mnemonic', 'pass');

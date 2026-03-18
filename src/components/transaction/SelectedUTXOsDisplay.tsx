@@ -1,16 +1,14 @@
 // src/components/transaction/SelectedUTXOsDisplay.tsx
-
-import { useState, useEffect } from 'react';
+import { useState } from 'react';
 import { FaBitcoin } from 'react-icons/fa';
 import { UTXO } from '../../types/types';
 import Popup from './Popup';
 import { shortenTxHash } from '../../utils/shortenHash';
 import { PREFIX } from '../../utils/constants';
 import { Network } from '../../redux/networkSlice';
-import BcmrService from '../../services/BcmrService';
-import { IdentitySnapshot } from '@bitauth/libauth';
 import { useSelector } from 'react-redux';
 import { RootState } from '../../redux/store';
+import useSharedTokenMetadata from '../../hooks/useSharedTokenMetadata';
 
 interface SelectedUTXOsDisplayProps {
   selectedUtxos: UTXO[];
@@ -98,55 +96,14 @@ export default function SelectedUTXOsDisplay({
   currentNetwork,
 }: SelectedUTXOsDisplayProps) {
   const [showPopup, setShowPopup] = useState(false);
-
-  // Updated tokenMetadata to include symbol and decimals
-  const [tokenMetadata, setTokenMetadata] = useState<
-    Record<
-      string,
-      { name: string; symbol: string; decimals: number; iconUri: string | null }
-    >
-  >({});
+  const tokenMetadata = useSharedTokenMetadata(
+    selectedUtxos
+      .map((u) => u.token?.category)
+      .filter((c): c is string => !!c)
+  );
 
   const prices = useSelector((s: RootState) => s.priceFeed);
   const bchUsd = prices['BCH-USD']?.price ?? 0;
-
-  // Fetch token metadata when categories change
-  useEffect(() => {
-    const svc = new BcmrService();
-    const missing = Array.from(
-      new Set(
-        selectedUtxos
-          .map((u) => u.token?.category)
-          .filter((c): c is string => !!c && !(c in tokenMetadata))
-      )
-    );
-
-    if (missing.length === 0) return;
-
-    (async () => {
-      const newMeta: typeof tokenMetadata = {};
-      for (const category of missing) {
-        try {
-          const authbase = await svc.getCategoryAuthbase(category);
-          const reg = await svc.resolveIdentityRegistry(authbase);
-          const snap: IdentitySnapshot = svc.extractIdentity(
-            authbase,
-            reg.registry
-          );
-          const iconUri = await svc.resolveIcon(authbase);
-
-          const decimals = snap.token?.decimals || 0;
-          const symbol = snap.token?.symbol || '';
-          newMeta[category] = { name: snap.name, symbol, decimals, iconUri };
-        } catch (e) {
-          // ignore
-        }
-      }
-      if (Object.keys(newMeta).length > 0) {
-        setTokenMetadata((prev) => ({ ...prev, ...newMeta }));
-      }
-    })();
-  }, [selectedUtxos, tokenMetadata]);
 
   const togglePopup = () => setShowPopup((v) => !v);
 
@@ -161,18 +118,20 @@ export default function SelectedUTXOsDisplay({
     <div className="mb-4">
       {selectedUtxos.length > 0 ? (
         <div className="flex justify-between items-center mb-4">
-          <h3 className="text-lg font-semibold ">Transaction Inputs</h3>
+          <div>
+            <h3 className="text-lg font-semibold">Selected funds</h3>
+          </div>
           <button
             onClick={togglePopup}
             className="wallet-btn-primary font-bold py-1 px-2"
           >
-            Show Inputs
+            Review funds
           </button>
         </div>
       ) : selectedAddresses.length > 0 ||
         selectedContractAddresses.length > 0 ? (
-        <div className="font-bold flex-col text-xl">
-          (2) Select UTXO(s) to spend from
+        <div className="text-sm wallet-muted">
+          No funds selected yet.
         </div>
       ) : (
         <></>
@@ -180,8 +139,8 @@ export default function SelectedUTXOsDisplay({
 
       {showPopup && (
         <Popup closePopups={() => setShowPopup(false)}>
-          <h3 className="text-lg font-semibold flex flex-col items-center mb-4">
-            Transaction Inputs
+          <h3 className="text-lg font-semibold text-center mb-4">
+            Selected funds
           </h3>
           <div className="max-h-[50vh] overflow-y-auto">
             {selectedUtxos.length === 0 ? (
@@ -283,7 +242,7 @@ export default function SelectedUTXOsDisplay({
         <div className="mt-4">
           <h3 className="flex flex-col">
             <span>
-              {`${selectedUtxos.length} Input${selectedUtxos.length === 1 ? '' : 's'} - ${totalBchStr} BCH`}
+              {`${selectedUtxos.length} selected item${selectedUtxos.length === 1 ? '' : 's'} - ${totalBchStr} BCH`}
             </span>
             <span>{`$ ${totalUsd} USD`}</span>
           </h3>

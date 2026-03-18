@@ -1,7 +1,10 @@
 // src/apis/DatabaseManager/DatabaseService.ts
 
 import initSqlJs, { Database } from 'sql.js';
-import { createTables } from '../../utils/schema/schema';
+import {
+  createTables,
+  createTransactionDetailsTable,
+} from '../../utils/schema/schema';
 import { get as idbGet, set as idbSet } from 'idb-keyval';
 import { logError } from '../../utils/errorHandling';
 import SecretCryptoService, {
@@ -14,11 +17,19 @@ let db: Database | null = null;
 // ** Debounce state **
 let saveTimeout: number | null = null;
 let pendingSavePromise: Promise<void> | null = null;
+let resolvePendingSave: (() => void) | null = null;
+let firstQueuedSaveTs: number | null = null;
+
+const SAVE_DEBOUNCE_MS = 500;
+const SAVE_MAX_DELAY_MS = 3000;
 
 // ** Migrations Array **
 const migrations: Array<(db: Database) => Promise<void>> = [
   async (db) => {
     createTables(db);
+  },
+  async (db) => {
+    createTransactionDetailsTable(db);
   },
   // Add future migrations here as needed
 ];
@@ -137,6 +148,25 @@ async function realSaveDatabase(): Promise<void> {
   // console.log('Persisted DB to IndexedDB');
 }
 
+function clearScheduledSaveState(): void {
+  pendingSavePromise = null;
+  resolvePendingSave = null;
+  saveTimeout = null;
+  firstQueuedSaveTs = null;
+}
+
+async function performQueuedSave(): Promise<void> {
+  try {
+    await realSaveDatabase();
+  } catch (error) {
+    logError('DatabaseService.performQueuedSave', error);
+  } finally {
+    const resolve = resolvePendingSave;
+    clearScheduledSaveState();
+    resolve?.();
+  }
+}
+
 const startDatabase = async (): Promise<Database | null> => {
   const SQLModule = await initSqlJs({
     locateFile: () => `/sql-wasm.wasm`,
@@ -178,33 +208,66 @@ const ensureDatabaseStarted = async (): Promise<void> => {
   }
 };
 
+const queueSave = async (delayMs = SAVE_DEBOUNCE_MS): Promise<void> => {
+  await ensureDatabaseStarted();
+  if (!db) return;
+
+  const now = Date.now();
+  if (!pendingSavePromise) {
+    pendingSavePromise = new Promise((resolve) => {
+      resolvePendingSave = resolve;
+    });
+    firstQueuedSaveTs = now;
+  }
+
+  if (saveTimeout !== null) {
+    clearTimeout(saveTimeout);
+  }
+
+  const queuedAt = firstQueuedSaveTs ?? now;
+  const elapsed = now - queuedAt;
+  const remainingMaxDelay = Math.max(0, SAVE_MAX_DELAY_MS - elapsed);
+  const waitMs = Math.min(delayMs, remainingMaxDelay);
+
+  saveTimeout = window.setTimeout(() => {
+    void performQueuedSave();
+  }, waitMs);
+
+  return pendingSavePromise;
+};
+
 /**
  * Debounced save: schedule a real save 500ms in the future,
  * coalescing multiple calls into one. Returns a promise that
  * resolves after the actual save finishes.
  */
 const saveDatabaseToFile = async (): Promise<void> => {
+  return queueSave(SAVE_DEBOUNCE_MS);
+};
+
+const scheduleDatabaseSave = (): void => {
+  void queueSave(SAVE_DEBOUNCE_MS);
+};
+
+const flushDatabaseToFile = async (): Promise<void> => {
   await ensureDatabaseStarted();
   if (!db) return;
 
-  if (!pendingSavePromise) {
-    pendingSavePromise = new Promise((resolve) => {
-      if (saveTimeout !== null) {
-        clearTimeout(saveTimeout);
-      }
-      saveTimeout = window.setTimeout(async () => {
-        try {
-          await realSaveDatabase();
-        } catch (error) {
-          logError('DatabaseService.saveDatabaseToFile', error);
-        }
-        pendingSavePromise = null;
-        saveTimeout = null;
-        resolve();
-      }, 500);
-    });
+  if (saveTimeout !== null) {
+    clearTimeout(saveTimeout);
+    saveTimeout = null;
   }
-  return pendingSavePromise;
+
+  if (pendingSavePromise) {
+    await performQueuedSave();
+    return;
+  }
+
+  try {
+    await realSaveDatabase();
+  } catch (error) {
+    logError('DatabaseService.flushDatabaseToFile', error);
+  }
 };
 
 const getDatabase = (): Database | null => db;
@@ -219,6 +282,7 @@ const clearDatabase = async (): Promise<void> => {
       DROP TABLE IF EXISTS addresses;
       DROP TABLE IF EXISTS UTXOs;
       DROP TABLE IF EXISTS transactions;
+      DROP TABLE IF EXISTS transaction_details;
       DROP TABLE IF EXISTS cashscript_artifacts;
       DROP TABLE IF EXISTS cashscript_addresses;
       DROP TABLE IF EXISTS instantiated_contracts;
@@ -255,6 +319,8 @@ export default function DatabaseService() {
     startDatabase,
     ensureDatabaseStarted,
     saveDatabaseToFile,
+    scheduleDatabaseSave,
+    flushDatabaseToFile,
     getDatabase,
     clearDatabase,
     resultToJSON,

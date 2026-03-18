@@ -6,9 +6,9 @@ import {
   queryAuthHead,
 } from '../apis/ChaingraphManager/ChaingraphManager';
 import { shortenTxHash } from '../utils/shortenHash';
-import BcmrService from '../services/BcmrService';
 import { IdentitySnapshot } from '@bitauth/libauth';
 import { latin1ToHex } from '../utils/hex';
+import useSharedTokenMetadata from '../hooks/useSharedTokenMetadata';
 
 interface TokenQueryProps {
   tokenId: string;
@@ -34,14 +34,15 @@ const TokenQuery: React.FC<TokenQueryProps> = ({
   const [loading, setLoading] = useState<boolean>(true);
   const [error, setError] = useState<string | null>(null);
   const [bcmrError, setBcmrError] = useState<string | null>(null);
+  const sharedTokenMetadata = useSharedTokenMetadata([tokenId])[tokenId];
 
   useEffect(() => {
     const fetchData = async () => {
       setLoading(true);
       setError(null);
       setBcmrError(null);
-      setSnapshot(prefetchedSnapshot);
-      setIconDataUri(prefetchedIconDataUri);
+      setSnapshot(prefetchedSnapshot ?? sharedTokenMetadata?.snapshot ?? null);
+      setIconDataUri(prefetchedIconDataUri ?? sharedTokenMetadata?.iconUri ?? null);
 
       let failedCoreQueries = 0;
 
@@ -90,18 +91,18 @@ const TokenQuery: React.FC<TokenQueryProps> = ({
       }
 
       try {
-        // 5) BCMR lookup
-        const bcmr = new BcmrService();
-        const authbase = await bcmr.getCategoryAuthbase(tokenId);
-        const idReg = await bcmr.resolveIdentityRegistry(authbase);
-
-        // 6) Snapshot
-        const snap = bcmr.extractIdentity(authbase, idReg.registry);
-        setSnapshot(snap);
-
-        // 7) Icon
-        const dataUri = await bcmr.resolveIcon(authbase);
-        setIconDataUri(dataUri);
+        if (sharedTokenMetadata?.snapshot) {
+          setSnapshot(sharedTokenMetadata.snapshot);
+          setIconDataUri(sharedTokenMetadata.iconUri);
+        } else if (
+          !prefetchedSnapshot &&
+          !prefetchedIconDataUri &&
+          sharedTokenMetadata === undefined
+        ) {
+          // Shared metadata is still loading; avoid flashing an error state.
+        } else if (!prefetchedSnapshot) {
+          throw new Error('Failed to fetch token data.');
+        }
       } catch (err: unknown) {
         setBcmrError(
           err instanceof Error ? err.message : 'Failed to fetch token data.'
@@ -116,7 +117,7 @@ const TokenQuery: React.FC<TokenQueryProps> = ({
     };
 
     fetchData();
-  }, [tokenId, prefetchedSnapshot, prefetchedIconDataUri]);
+  }, [tokenId, prefetchedSnapshot, prefetchedIconDataUri, sharedTokenMetadata]);
 
   if (loading && !snapshot) return <p className="wallet-muted">Loading token data…</p>;
 
