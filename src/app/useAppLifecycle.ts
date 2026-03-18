@@ -16,6 +16,7 @@ import { reconcileOutboundTransactions } from '../services/OutboundTransactionRe
 import { runOutboundReconcile } from '../services/RefreshCoordinator';
 import { Network, setNetwork } from '../redux/networkSlice';
 import { setWalletNetwork } from '../redux/walletSlice';
+import ScreenSecurity from '../plugins/ScreenSecurity';
 
 let utxoWorkerStarted = false;
 
@@ -80,6 +81,23 @@ export function useStatusBarSync(mode: string) {
       StatusBar.setStyle({ style: mode === 'dark' ? Style.Light : Style.Dark });
     }
   }, [mode]);
+}
+
+export function useScreenSecurity() {
+  const location = useLocation();
+
+  useEffect(() => {
+    if (!Capacitor.isNativePlatform() || Capacitor.getPlatform() !== 'android') {
+      return;
+    }
+
+    const onboardingRoutes = new Set(['/', '/landing', '/createwallet', '/importwallet']);
+    const shouldEnableSecure = !onboardingRoutes.has(location.pathname);
+
+    void ScreenSecurity.setSecure({ enabled: shouldEnableSecure }).catch((error) => {
+      console.warn('Failed to update screen security state', error);
+    });
+  }, [location.pathname]);
 }
 
 export function useLocalNotificationSetup() {

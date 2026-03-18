@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { Toast } from '@capacitor/toast';
 import { useDispatch, useSelector } from 'react-redux';
 import { useNavigate } from 'react-router-dom';
 import DatabaseService from '../../apis/DatabaseManager/DatabaseService';
@@ -16,6 +17,7 @@ import NetworkSelector from './components/NetworkSelector';
 const CreateWalletPage = () => {
   const [mnemonicPhrase, setMnemonicPhrase] = useState('');
   const [passphrase] = useState('');
+  const [isSubmitting, setIsSubmitting] = useState(false);
 
   const dbService = useMemo(() => DatabaseService(), []);
   const walletManager = useMemo(() => WalletManager(), []);
@@ -38,6 +40,7 @@ const CreateWalletPage = () => {
         setMnemonicPhrase(mnemonic);
       } catch (error) {
         console.error('Error initializing wallet creation:', error);
+        await Toast.show({ text: 'Could not prepare wallet creation on this device.' });
       }
     };
 
@@ -45,6 +48,14 @@ const CreateWalletPage = () => {
   }, [dbService]);
 
   const handleCreateAccount = async () => {
+    if (!mnemonicPhrase.trim()) {
+      await Toast.show({ text: 'Mnemonic is still loading. Please wait a moment.' });
+      return;
+    }
+
+    if (isSubmitting) return;
+    setIsSubmitting(true);
+
     try {
       const accountExists = await walletManager.checkAccount(
         mnemonicPhrase,
@@ -52,6 +63,7 @@ const CreateWalletPage = () => {
       );
       if (accountExists) {
         console.error('Account already exists.');
+        await Toast.show({ text: 'This wallet is already available on this device.' });
         return;
       }
 
@@ -82,6 +94,9 @@ const CreateWalletPage = () => {
       navigate(`/home/${walletID}`);
     } catch (error) {
       console.error('Error creating account:', error);
+      await Toast.show({ text: 'Wallet creation failed on this device.' });
+    } finally {
+      setIsSubmitting(false);
     }
   };
 
@@ -133,9 +148,10 @@ const CreateWalletPage = () => {
 
         <button
           onClick={handleCreateAccount}
+          disabled={!mnemonicPhrase.trim() || isSubmitting}
           className="wallet-btn-primary w-full my-2 text-xl font-bold"
         >
-          Create Wallet
+          {isSubmitting ? 'Creating Wallet...' : 'Create Wallet'}
         </button>
         <button
           onClick={() => navigate('/')}

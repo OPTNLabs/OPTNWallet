@@ -95,16 +95,24 @@ async function decryptWithFallback(ciphertext: string): Promise<string> {
 
 async function encryptRaw(plaintext: string): Promise<string> {
   if (Capacitor.isNativePlatform() && Capacitor.getPlatform() === 'android') {
-    const { ciphertext } = await SecureKeyStore.encrypt({ plaintext });
-    return ciphertext;
+    try {
+      const { ciphertext } = await SecureKeyStore.encrypt({ plaintext });
+      return ciphertext;
+    } catch (error) {
+      console.warn('SecureKeyStore.encrypt failed, falling back to WebCrypto', error);
+    }
   }
   return await encryptWithFallback(plaintext);
 }
 
 async function decryptRaw(ciphertext: string): Promise<string> {
   if (Capacitor.isNativePlatform() && Capacitor.getPlatform() === 'android') {
-    const { plaintext } = await SecureKeyStore.decrypt({ ciphertext });
-    return plaintext;
+    try {
+      const { plaintext } = await SecureKeyStore.decrypt({ ciphertext });
+      return plaintext;
+    } catch (error) {
+      console.warn('SecureKeyStore.decrypt failed, falling back to WebCrypto', error);
+    }
   }
   return await decryptWithFallback(ciphertext);
 }
