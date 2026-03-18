@@ -2,7 +2,6 @@
 
 import React, { useState } from 'react';
 import {
-  CapacitorBarcodeScanner,
   CapacitorBarcodeScannerTypeHint,
 } from '@capacitor/barcode-scanner';
 import { Toast } from '@capacitor/toast';
@@ -19,6 +18,10 @@ import { useSelector } from 'react-redux';
 import { RootState } from '../redux/store';
 import { selectCurrentNetwork } from '../redux/selectors/networkSelectors';
 import { PREFIX } from '../utils/constants';
+import {
+  getBarcodeScannerErrorMessage,
+  scanBarcodeSafely,
+} from '../utils/barcodeScanner';
 
 interface SweepPaperWalletProps {
   setPaperWalletUTXOs: React.Dispatch<React.SetStateAction<UTXO[]>>;
@@ -41,7 +44,7 @@ const SweepPaperWallet: React.FC<SweepPaperWalletProps> = ({
   const handleScan = async () => {
     try {
       // Optionally, check and request permissions here
-      const result = await CapacitorBarcodeScanner.scanBarcode({
+      const result = await scanBarcodeSafely({
         hint: CapacitorBarcodeScannerTypeHint.ALL, // Hint for WIF format
         cameraDirection: 1, // 0 for front, 1 for back
       });
@@ -58,7 +61,7 @@ const SweepPaperWallet: React.FC<SweepPaperWalletProps> = ({
     } catch (err) {
       console.error('Scan error:', err);
       await Toast.show({
-        text: 'Failed to scan QR code. Please ensure camera permissions are granted and try again.',
+        text: getBarcodeScannerErrorMessage(err),
       });
     }
   };

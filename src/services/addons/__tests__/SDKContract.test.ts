@@ -12,5 +12,6 @@ describe('SDKContract', () => {
     expect(info.methods).toBe(ADDON_SDK_FEATURES);
     expect(info.modules.length).toBeGreaterThan(0);
     expect(info.capabilities).toEqual(['tx:build']);
+    expect(info.methods.signing).toContain('signMessage');
   });
 });

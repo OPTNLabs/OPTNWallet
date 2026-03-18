@@ -12,37 +12,48 @@ import DatabaseService from '../DatabaseManager/DatabaseService';
 import TransactionBuilderHelper from './TransactionBuilderHelper';
 import { DUST, TOKEN_OUTPUT_SATS } from '../../utils/constants';
 import { logError, toErrorMessage } from '../../utils/errorHandling';
+import { toTokenAwareCashAddress } from '../../utils/cashAddress';
+import { binToHex, hexToBin } from '../../utils/hex';
+import { sha256 } from '../../utils/hash';
 import {
   estimateAddP2PKHOutputBytes,
   formatMinRelayError,
   hasExplicitManualChangeOutput,
   txBytesFromHex,
 } from './feePolicy';
+import OutboundTransactionTracker from '../../services/OutboundTransactionTracker';
+
+function deriveTxidFromRawTx(rawTX: string): string | null {
+  try {
+    const txBytes = hexToBin(rawTX);
+    return binToHex(sha256.hash(sha256.hash(txBytes)).reverse());
+  } catch {
+    return null;
+  }
+}
+
+function isAmbiguousBroadcastError(message: string): boolean {
+  return /(timed out|timeout|socket|network|disconnect|connection|backoff|failed to fetch|websocket|offline|temporar)/i.test(
+    message
+  );
+}
 
 export default function TransactionManager() {
   const dbService = DatabaseService();
 
-  async function fetchAndStoreTransactionHistory(
+  function storeTransactionHistory(
     walletId: number,
-    address: string
-  ): Promise<TransactionHistoryItem[]> {
+    address: string,
+    history: TransactionHistoryItem[]
+  ): TransactionHistoryItem[] {
     const db = dbService.getDatabase();
     if (!db) {
       throw new Error('Could not get database');
     }
 
-    let history: TransactionHistoryItem[] = [];
     let transactionOpened = false;
 
     try {
-      history = await ElectrumService.getTransactionHistory(address);
-
-      if (!Array.isArray(history)) {
-        throw new Error('Invalid transaction history format');
-      }
-
-      const timestamp = new Date().toISOString();
-
       db.exec('BEGIN TRANSACTION');
       transactionOpened = true;
 
@@ -55,7 +66,7 @@ export default function TransactionManager() {
       `);
 
       for (const tx of history) {
-        upsertStmt.run([walletId, tx.tx_hash, tx.height, timestamp]);
+        upsertStmt.run([walletId, tx.tx_hash, tx.height, tx.timestamp ?? '']);
       }
 
       upsertStmt.free();
@@ -74,19 +85,132 @@ export default function TransactionManager() {
     return history;
   }
 
-  async function sendTransaction(rawTX: string) {
+  async function fetchAndStoreTransactionHistory(
+    walletId: number,
+    address: string
+  ): Promise<TransactionHistoryItem[]> {
+    const history = await ElectrumService.getTransactionHistory(address);
+    if (!Array.isArray(history)) {
+      throw new Error('Invalid transaction history format');
+    }
+
+    return storeTransactionHistory(walletId, address, history);
+  }
+
+  async function fetchAndStoreTransactionHistories(
+    walletId: number,
+    addresses: string[]
+  ): Promise<Record<string, TransactionHistoryItem[] | undefined>> {
+    const uniqueAddresses = Array.from(new Set(addresses.filter(Boolean)));
+    const histories = await ElectrumService.getTransactionHistoryMany(
+      uniqueAddresses
+    );
+    const stored: Record<string, TransactionHistoryItem[] | undefined> = {};
+
+    for (const address of uniqueAddresses) {
+      const history = histories[address];
+      if (!Array.isArray(history)) {
+        continue;
+      }
+
+      try {
+        stored[address] = storeTransactionHistory(walletId, address, history);
+      } catch (error) {
+        logError('TransactionManager.fetchAndStoreTransactionHistories', error, {
+          address,
+          walletId,
+        });
+      }
+    }
+
+    return stored;
+  }
+
+  async function sendTransaction(rawTX: string): Promise<{
+    txid: string | null;
+    errorMessage: string | null;
+    broadcastState?: 'broadcasted' | 'submitted';
+  }> {
     const txBuilder = TransactionBuilderHelper();
+    const derivedTxid = deriveTxidFromRawTx(rawTX);
+    const walletId = store.getState().wallet_id.currentWalletId ?? null;
+    const priorAttempt = derivedTxid
+      ? await OutboundTransactionTracker.getByTxid(derivedTxid)
+      : null;
+
+    if (
+      priorAttempt &&
+      (priorAttempt.state === 'broadcasting' ||
+        priorAttempt.state === 'broadcasted')
+    ) {
+      return {
+        txid: priorAttempt.txid,
+        errorMessage: null,
+        broadcastState:
+          priorAttempt.state === 'broadcasted' ? 'broadcasted' : 'submitted',
+      };
+    }
+
     let txid: string | null = null;
     let errorMessage: string | null = null;
+
+    await OutboundTransactionTracker.trackAttempt({
+      rawTx: rawTX,
+      walletId,
+      source: 'wallet',
+    });
+
+    if (derivedTxid && priorAttempt?.state === 'submitted') {
+      await OutboundTransactionTracker.markState(
+        derivedTxid,
+        'broadcasting',
+        priorAttempt.lastError ?? null
+      );
+    }
+
     try {
       txid = await txBuilder.sendTransaction(rawTX);
+      if (derivedTxid) {
+        await OutboundTransactionTracker.markState(derivedTxid, 'broadcasted');
+      }
     } catch (error: unknown) {
       logError('TransactionManager.sendTransaction', error);
-      errorMessage = 'Error sending transaction: ' + toErrorMessage(error);
+      const message = toErrorMessage(error);
+      if (
+        derivedTxid &&
+        (isAmbiguousBroadcastError(message) ||
+          /already in mempool|already have transaction|txn-already-known|already known/i.test(
+            message
+          ))
+      ) {
+        await OutboundTransactionTracker.markState(
+          derivedTxid,
+          /already in mempool|already have transaction|txn-already-known|already known/i.test(
+            message
+          )
+            ? 'broadcasted'
+            : 'submitted',
+          message
+        );
+        txid = derivedTxid;
+      } else {
+        if (derivedTxid) {
+          await OutboundTransactionTracker.remove(derivedTxid);
+        }
+        errorMessage = 'Error sending transaction: ' + message;
+      }
     }
     return {
       txid,
       errorMessage,
+      broadcastState:
+        txid && !errorMessage
+          ? derivedTxid &&
+            (await OutboundTransactionTracker.getByTxid(derivedTxid))?.state ===
+              'submitted'
+            ? 'submitted'
+            : 'broadcasted'
+          : undefined,
     };
   }
 
@@ -144,6 +268,8 @@ export default function TransactionManager() {
         )?.tokenAddress;
         if (tokenAddress) {
           newOutput.recipientAddress = tokenAddress;
+        } else {
+          newOutput.recipientAddress = toTokenAwareCashAddress(recipientAddress);
         }
 
         if (newOutput.amount < TOKEN_OUTPUT_SATS) {
@@ -169,6 +295,8 @@ export default function TransactionManager() {
         )?.tokenAddress;
         if (tokenAddress) {
           newOutput.recipientAddress = tokenAddress;
+        } else {
+          newOutput.recipientAddress = toTokenAwareCashAddress(recipientAddress);
         }
 
         if (newOutput.amount < TOKEN_OUTPUT_SATS) {
@@ -237,6 +365,22 @@ export default function TransactionManager() {
     return outputs.reduce((sum, o) => sum + outputSats(o), 0n);
   }
 
+  function normalizeTokenOutputs(
+    outputs: TransactionOutput[]
+  ): TransactionOutput[] {
+    return outputs.map((output): TransactionOutput => {
+      if ('opReturn' in output && output.opReturn !== undefined) {
+        return output;
+      }
+      if (!output.token) return output;
+      return {
+        recipientAddress: toTokenAwareCashAddress(output.recipientAddress),
+        amount: output.amount,
+        token: output.token,
+      };
+    });
+  }
+
   /**
    * Builds a transaction using the provided outputs, change address, and selected UTXOs.
    *
@@ -266,7 +410,7 @@ export default function TransactionManager() {
     };
 
     // track intended outputs so we can return them even on failure (debug UX)
-    let intendedOutputs: TransactionOutput[] = outputs;
+    let intendedOutputs: TransactionOutput[] = normalizeTokenOutputs(outputs);
 
     try {
       if (!selectedUtxos || selectedUtxos.length === 0) {
@@ -277,7 +421,7 @@ export default function TransactionManager() {
       }
 
       const inputTotal = sumInputs(selectedUtxos);
-      const outputsNoChange = [...outputs];
+      const outputsNoChange = [...intendedOutputs];
 
       // IMPORTANT CHANGE:
       // Do NOT treat "any output to changeAddress" as a manual change output.
@@ -436,6 +580,7 @@ export default function TransactionManager() {
 
   return {
     fetchAndStoreTransactionHistory,
+    fetchAndStoreTransactionHistories,
     sendTransaction,
     addOutput,
     buildTransaction,

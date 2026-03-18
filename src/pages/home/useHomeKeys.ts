@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import KeyService from '../../services/KeyService';
 import { logError } from '../../utils/errorHandling';
 
@@ -13,10 +13,14 @@ type UseHomeKeysParams = {
 export function useHomeKeys({ currentWalletId }: UseHomeKeysParams) {
   const [keyPairs, setKeyPairs] = useState<WalletKey[]>([]);
   const [generatingKeys, setGeneratingKeys] = useState(false);
+  const batchGenerationRef = useRef(false);
+  const inflightIndexesRef = useRef<Set<number>>(new Set());
 
   const handleGenerateKeys = useCallback(
     async (index: number) => {
-      if (!currentWalletId) return null;
+      if (!currentWalletId || inflightIndexesRef.current.has(index)) return null;
+
+      inflightIndexesRef.current.add(index);
 
       try {
         const before = await KeyService.retrieveKeys(currentWalletId);
@@ -36,6 +40,8 @@ export function useHomeKeys({ currentWalletId }: UseHomeKeysParams) {
           walletId: currentWalletId,
           index,
         });
+      } finally {
+        inflightIndexesRef.current.delete(index);
       }
       return null;
     },
@@ -43,21 +49,25 @@ export function useHomeKeys({ currentWalletId }: UseHomeKeysParams) {
   );
 
   const generateKeys = useCallback(async () => {
-    if (!currentWalletId || generatingKeys) return;
+    if (!currentWalletId || batchGenerationRef.current) return;
 
+    batchGenerationRef.current = true;
     setGeneratingKeys(true);
-    const existingKeys = await KeyService.retrieveKeys(currentWalletId);
+    try {
+      const existingKeys = await KeyService.retrieveKeys(currentWalletId);
 
-    if (existingKeys.length === 0) {
-      for (let i = 0; i < BATCH_AMOUNT; i++) {
-        await handleGenerateKeys(i);
+      if (existingKeys.length === 0) {
+        for (let i = 0; i < BATCH_AMOUNT; i++) {
+          await handleGenerateKeys(i);
+        }
+      } else {
+        setKeyPairs(existingKeys);
       }
-    } else {
-      setKeyPairs(existingKeys);
+    } finally {
+      batchGenerationRef.current = false;
+      setGeneratingKeys(false);
     }
-
-    setGeneratingKeys(false);
-  }, [currentWalletId, generatingKeys, handleGenerateKeys]);
+  }, [currentWalletId, handleGenerateKeys]);
 
   useEffect(() => {
     if (!currentWalletId) return;

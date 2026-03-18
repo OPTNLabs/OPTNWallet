@@ -1,12 +1,15 @@
 import { useState } from 'react';
 import {
-  CapacitorBarcodeScanner,
   CapacitorBarcodeScannerTypeHint,
 } from '@capacitor/barcode-scanner';
 import { Toast } from '@capacitor/toast';
 import { Network } from '../../redux/networkSlice';
 import { AssetType } from '../../hooks/simple-send/types';
 import { parseBip21Uri } from '../../utils/bip21';
+import {
+  getBarcodeScannerErrorMessage,
+  scanBarcodeSafely,
+} from '../../utils/barcodeScanner';
 
 type UseRecipientScannerParams = {
   setRecipient: (value: string) => void;
@@ -26,7 +29,7 @@ export function useRecipientScanner({
   const handleScanRecipient = async () => {
     try {
       setScanBusy(true);
-      const result = await CapacitorBarcodeScanner.scanBarcode({
+      const result = await scanBarcodeSafely({
         hint: CapacitorBarcodeScannerTypeHint.ALL,
         cameraDirection: 1,
       });
@@ -55,7 +58,7 @@ export function useRecipientScanner({
     } catch (e) {
       console.error('QR scan failed:', e);
       await Toast.show({
-        text: 'Failed to scan QR. Check camera permissions and try again.',
+        text: getBarcodeScannerErrorMessage(e),
       });
     } finally {
       setScanBusy(false);

@@ -4,10 +4,13 @@ import React, {
   // useMemo
 } from 'react';
 import {
-  CapacitorBarcodeScanner,
   CapacitorBarcodeScannerTypeHint,
 } from '@capacitor/barcode-scanner';
 import { Toast } from '@capacitor/toast';
+import {
+  getBarcodeScannerErrorMessage,
+  scanBarcodeSafely,
+} from '../../utils/barcodeScanner';
 import { useDispatch, useSelector } from 'react-redux';
 import { AppDispatch, RootState } from '../../redux/store';
 import { clearTransaction } from '../../redux/transactionBuilderSlice';
@@ -146,7 +149,7 @@ const OutputSelection: React.FC<OutputSelectionProps> = ({
 
   const scanBarcode = async () => {
     try {
-      const result = await CapacitorBarcodeScanner.scanBarcode({
+      const result = await scanBarcodeSafely({
         hint: CapacitorBarcodeScannerTypeHint.ALL,
       });
       if (result && result.ScanResult) setRecipientAddress(result.ScanResult);
@@ -154,7 +157,7 @@ const OutputSelection: React.FC<OutputSelectionProps> = ({
     } catch (error) {
       console.error('Barcode scan error:', error);
       await Toast.show({
-        text: 'Failed to scan QR code. Please ensure camera permissions are granted and try again.',
+        text: getBarcodeScannerErrorMessage(error),
       });
     }
   };
@@ -198,12 +201,14 @@ const OutputSelection: React.FC<OutputSelectionProps> = ({
       <div className="mb-4">
         {txOutputs.length > 0 && (
           <div className="flex justify-between items-center mb-4">
-            <h3 className="text-lg font-semibold mb-2">Transaction Outputs</h3>
+            <div>
+              <h3 className="text-lg font-semibold mb-1">Recipients</h3>
+            </div>
             <button
               onClick={togglePopup}
               className="wallet-btn-primary py-1 px-2"
             >
-              Show Outputs
+              Review recipients
             </button>
           </div>
         )}
@@ -213,8 +218,8 @@ const OutputSelection: React.FC<OutputSelectionProps> = ({
               <p className="wallet-muted">No outputs added yet.</p>
             ) : (
               <div className="max-h-[50vh] overflow-y-auto">
-                <h3 className="text-lg font-semibold flex flex-col items-center mb-4">
-                  Transaction Outputs
+                <h3 className="text-lg font-semibold text-center mb-4">
+                  Recipients
                 </h3>
                 {txOutputs.map((output, index) => (
                   <div
@@ -283,7 +288,7 @@ const OutputSelection: React.FC<OutputSelectionProps> = ({
                 }}
                 className="wallet-btn-danger py-1 px-2"
               >
-                Remove All
+                Remove all recipients
               </button>
             </div>
           </Popup>
@@ -311,7 +316,7 @@ const OutputSelection: React.FC<OutputSelectionProps> = ({
               </h3>
             ) : (
               <div className="font-bold flex flex-col text-xl">
-                (3) Add recipients
+                Add your first recipient
               </div>
             )}
             {txOutputs.length <= 10 && (
@@ -320,12 +325,12 @@ const OutputSelection: React.FC<OutputSelectionProps> = ({
                   onClick={() => {
                     resetFormValues();
                     setShowRegularTx(true);
-                    setPopupTitle('Add Recipient');
+                    setPopupTitle('Add a recipient');
                     setShowAddOutputPopup(true);
                   }}
                   className="wallet-btn-primary"
                 >
-                  Add Output
+                  Add recipient
                 </button>
               </div>
             )}
@@ -333,11 +338,13 @@ const OutputSelection: React.FC<OutputSelectionProps> = ({
         ) : null}
         {selectedUtxos.length > 0 && (
           <div className="mb-6">
-            <h3 className="text-lg font-semibold mb-2">Change Address</h3>
+            <h3 className="text-lg font-semibold mb-2">
+              Return leftover funds to
+            </h3>
             <input
               type="text"
               value={changeAddress}
-              placeholder="Change Address"
+              placeholder="Wallet address for leftover BCH"
               onChange={(e) => setChangeAddress(e.target.value)}
               className="wallet-input mb-2 w-full break-words whitespace-normal"
             />

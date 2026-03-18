@@ -5,6 +5,8 @@ import { store } from '../redux/store';
 import { addTransactions } from '../redux/transactionSlice';
 import { INTERVAL } from '../utils/constants';
 import { requestUTXORefreshFor } from './UTXOWorkerService';
+import ElectrumService from '../services/ElectrumService';
+import { planTransactionDetailRefresh } from '../services/transactionDetailSync';
 
 let transactionInterval: NodeJS.Timeout | null = null;
 let transactionStartRetry: NodeJS.Timeout | null = null;
@@ -20,6 +22,8 @@ async function fetchAndStoreTransactionHistory() {
   }
 
   try {
+    const currentTransactions =
+      store.getState().transactions.transactions[currentWalletId] ?? [];
     // Retrieve key pairs for addresses associated with the wallet
     const keyPairs = await KeyService.retrieveKeys(currentWalletId);
     if (!keyPairs || keyPairs.length === 0) {
@@ -27,16 +31,43 @@ async function fetchAndStoreTransactionHistory() {
       return;
     }
 
-    // Fetch and store transaction history for each address
-    for (const keyPair of keyPairs) {
-      const address = keyPair.address;
-      const updatedHistory =
-        await transactionManager.fetchAndStoreTransactionHistory(
-          currentWalletId,
-          address
-        );
+    const addresses = keyPairs.map((keyPair) => keyPair.address).filter(Boolean);
+    const historyByAddress =
+      await transactionManager.fetchAndStoreTransactionHistories(
+        currentWalletId,
+        addresses
+      );
 
-      // Update Redux store with the new transactions
+    const mergedByHash = new Map(
+      currentTransactions.map((tx) => [tx.tx_hash, tx] as const)
+    );
+    for (const address of addresses) {
+      const updatedHistory = historyByAddress[address] ?? [];
+      for (const tx of updatedHistory) {
+        mergedByHash.set(tx.tx_hash, tx);
+      }
+    }
+    const nextTransactions = Array.from(mergedByHash.values());
+    const refreshPlan = planTransactionDetailRefresh({
+      previous: currentTransactions,
+      next: nextTransactions,
+    });
+
+    const txidsToWarm = refreshPlan.reorgDetected
+      ? nextTransactions.map((tx) => tx.tx_hash)
+      : refreshPlan.txidsToRefresh;
+    if (txidsToWarm.length > 0) {
+      void Promise.allSettled(
+        txidsToWarm.map((txid) =>
+          ElectrumService.getTransactionDetails(txid, {
+            forceRefresh: refreshPlan.reorgDetected,
+          })
+        )
+      );
+    }
+
+    for (const address of addresses) {
+      const updatedHistory = historyByAddress[address] ?? [];
       if (updatedHistory.length > 0) {
         store.dispatch(
           addTransactions({
@@ -45,8 +76,6 @@ async function fetchAndStoreTransactionHistory() {
           })
         );
       }
-
-      // Ask UTXO worker to refresh this address (keeps UTXO set in sync)
       requestUTXORefreshFor(address, 60);
     }
   } catch (error) {

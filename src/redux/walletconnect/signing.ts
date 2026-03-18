@@ -172,7 +172,29 @@ export async function signWalletConnectTransactionRequest(
 
     if (request.broadcast) {
       try {
-        await TransactionService.sendTransaction(rawSignedHex);
+        const sessionMeta = state.walletconnect.activeSessions?.[topic]?.peer?.metadata;
+        const sent = await TransactionService.sendTransaction(
+          rawSignedHex,
+          undefined,
+          {
+            source: 'walletconnect',
+            sourceLabel: sessionMeta?.name
+              ? `WalletConnect: ${sessionMeta.name}`
+              : 'WalletConnect broadcast',
+            sessionTopic: topic,
+            dappName: sessionMeta?.name ?? null,
+            dappUrl: sessionMeta?.url ?? null,
+            requestId: String(id),
+            userPrompt:
+              typeof request.userPrompt === 'string' ? request.userPrompt : null,
+            amountSummary: `${txDetails.outputs.length} output${
+              txDetails.outputs.length === 1 ? '' : 's'
+            }`,
+          }
+        );
+        if (sent.errorMessage) {
+          throw new Error(sent.errorMessage);
+        }
       } catch {
         console.warn('Broadcast failed, returning signed hex anyway');
       }

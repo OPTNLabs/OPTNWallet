@@ -3,6 +3,8 @@ import KeyService from '../services/KeyService';
 import UTXOService from '../services/UTXOService';
 import ElectrumService from '../services/ElectrumService';
 import ContractManager from '../apis/ContractManager/ContractManager';
+import TransactionManager from '../apis/TransactionManager/TransactionManager';
+import DatabaseService from '../apis/DatabaseManager/DatabaseService';
 import { store } from '../redux/store';
 import {
   setUTXOs,
@@ -11,10 +13,12 @@ import {
   setInitialized,
   removeUTXOs,
 } from '../redux/utxoSlice';
+import { addTransactions } from '../redux/transactionSlice';
 import { enqueueNotification } from '../redux/notificationsSlice';
 import { invalidateUTXOCache } from '../services/ElectrumService';
 import { logError, logWarn } from '../utils/errorHandling';
 import { UTXO } from '../types/types';
+import { runWalletUtxoRefresh } from '../services/RefreshCoordinator';
 
 // --- Subscriptions state ---
 let started = false;
@@ -25,6 +29,10 @@ const subscribedAddresses = new Set<string>();
 const contractAddressSet = new Set<string>();
 const refreshTimers = new Map<string, ReturnType<typeof setTimeout>>();
 const contractManager = ContractManager();
+const transactionManager = TransactionManager();
+const dbService = DatabaseService();
+const inFlightRefreshes = new Map<string, Promise<void>>();
+const queuedRefreshes = new Set<string>();
 
 function refreshAddressSoon(address: string, ms = 120) {
   const prev = refreshTimers.get(address);
@@ -78,7 +86,50 @@ export function optimisticRemoveSpentByOutpoints(
   requestUTXORefreshForMany(touched, 0);
 }
 
-async function refreshAddress(address: string) {
+async function refreshWalletAddress(address: string, currentWalletId: number) {
+  const prev = store.getState().utxos.utxos[address] ?? [];
+  const prevSet = new Set(prev.map((u) => `${u.tx_hash}:${u.tx_pos}`));
+
+  const updatedHistory = await transactionManager.fetchAndStoreTransactionHistory(
+    currentWalletId,
+    address
+  );
+  if (updatedHistory.length > 0) {
+    store.dispatch(
+      addTransactions({
+        wallet_id: currentWalletId,
+        transactions: updatedHistory,
+      })
+    );
+  }
+
+  invalidateUTXOCache(address);
+  const utxos = await UTXOService.fetchAndStoreUTXOs(currentWalletId, address);
+  store.dispatch(updateUTXOsForAddress({ address, utxos }));
+
+  for (const u of utxos) {
+    const key = `${u.tx_hash}:${u.tx_pos}`;
+    const height = typeof u.height === 'number' ? u.height : 0;
+
+    if (height > 0) continue;
+
+    if (!prevSet.has(key)) {
+      store.dispatch(
+        enqueueNotification({
+          id: key,
+          kind: 'utxo',
+          address,
+          value: u.value ?? 0,
+          txid: u.tx_hash,
+          createdAt: Date.now(),
+          height,
+        })
+      );
+    }
+  }
+}
+
+async function performRefreshAddress(address: string) {
   const state = store.getState();
   const currentWalletId = state.wallet_id.currentWalletId;
 
@@ -95,43 +146,33 @@ async function refreshAddress(address: string) {
   if (!currentWalletId) return;
 
   try {
-    invalidateUTXOCache(address);
-    const prev = state.utxos.utxos[address] ?? [];
-    const prevSet = new Set(prev.map((u) => `${u.tx_hash}:${u.tx_pos}`));
-
-    const utxos = await UTXOService.fetchAndStoreUTXOs(
-      currentWalletId,
-      address
-    );
-
-    store.dispatch(updateUTXOsForAddress({ address, utxos }));
-
-    // Detect brand-new UTXOs and enqueue popup notifications
-    // Detect brand-new *unconfirmed* UTXOs and enqueue popup notifications
-    for (const u of utxos) {
-      const key = `${u.tx_hash}:${u.tx_pos}`;
-      const height = typeof u.height === 'number' ? u.height : 0;
-
-      // Only notify on mempool/unconfirmed (height <= 0)
-      if (height > 0) continue;
-
-      if (!prevSet.has(key)) {
-        store.dispatch(
-          enqueueNotification({
-            id: key, // deterministic id prevents duplicates
-            kind: 'utxo',
-            address,
-            value: u.value ?? 0,
-            txid: u.tx_hash,
-            createdAt: Date.now(),
-            height,
-          })
-        );
-      }
-    }
+    await refreshWalletAddress(address, currentWalletId);
+    dbService.scheduleDatabaseSave();
   } catch (e) {
     logError('UTXOWorker.refreshAddress.wallet', e, { address });
   }
+}
+
+async function refreshAddress(address: string) {
+  const inflight = inFlightRefreshes.get(address);
+  if (inflight) {
+    queuedRefreshes.add(address);
+    await inflight;
+    return;
+  }
+
+  const run = (async () => {
+    do {
+      queuedRefreshes.delete(address);
+      await performRefreshAddress(address);
+    } while (queuedRefreshes.has(address));
+  })().finally(() => {
+    inFlightRefreshes.delete(address);
+    queuedRefreshes.delete(address);
+  });
+
+  inFlightRefreshes.set(address, run);
+  await run;
 }
 
 async function bootstrapAllUTXOs() {
@@ -154,31 +195,34 @@ async function bootstrapAllUTXOs() {
   const allUTXOs: Record<string, UTXO[]> = {};
 
   // Wallet addresses
+  const fetchedWalletUTXOs = await UTXOService.fetchAndStoreUTXOsMany(
+    currentWalletId,
+    keyPairs.map((keyPair) => keyPair.address)
+  );
   for (const keyPair of keyPairs) {
-    try {
-      const fetchedUTXOs = await UTXOService.fetchAndStoreUTXOs(
-        currentWalletId,
-        keyPair.address
-      );
-      allUTXOs[keyPair.address] = fetchedUTXOs;
-    } catch (error) {
-      logError('UTXOWorker.bootstrapAllUTXOs.wallet', error, {
-        address: keyPair.address,
-      });
-    }
+    allUTXOs[keyPair.address] = fetchedWalletUTXOs[keyPair.address] ?? [];
   }
 
   // Contract instances
   try {
     const instances = await contractManager.fetchContractInstances();
     const contractAddresses = instances.map((i) => i.address);
-    for (const address of contractAddresses) {
-      try {
+    const contractResults = await Promise.allSettled(
+      contractAddresses.map(async (address) => {
         await contractManager.updateContractUTXOs(address);
-        contractAddressSet.add(address);
-      } catch (error) {
-        logError('UTXOWorker.bootstrapAllUTXOs.contract', error, { address });
+        return address;
+      })
+    );
+    for (let i = 0; i < contractResults.length; i++) {
+      const result = contractResults[i];
+      const address = contractAddresses[i];
+      if (result.status === 'fulfilled') {
+        contractAddressSet.add(result.value);
+        continue;
       }
+      logError('UTXOWorker.bootstrapAllUTXOs.contract', result.reason, {
+        address,
+      });
     }
   } catch (e) {
     logError('UTXOWorker.bootstrapAllUTXOs.contractInit', e);
@@ -254,6 +298,16 @@ async function establishSubscriptions() {
   }
 }
 
+async function refreshUTXOWorkerSubscriptions() {
+  if (!started) return;
+
+  try {
+    await establishSubscriptions();
+  } catch (e) {
+    logError('UTXOWorker.refreshSubscriptions', e);
+  }
+}
+
 async function startUTXOWorker() {
   if (started) return;
   started = true;
@@ -281,7 +335,9 @@ async function startUTXOWorker() {
     }
 
     try {
-      await bootstrapAllUTXOs();
+      await runWalletUtxoRefresh(currentWalletId, async () => {
+        await bootstrapAllUTXOs();
+      });
     } catch (e) {
       logError('UTXOWorker.start.bootstrap', e);
     }
@@ -332,4 +388,4 @@ async function stopUTXOWorker() {
   }
 }
 
-export { startUTXOWorker, stopUTXOWorker };
+export { startUTXOWorker, stopUTXOWorker, refreshUTXOWorkerSubscriptions };

@@ -3,9 +3,9 @@ import { useDispatch, useSelector } from 'react-redux';
 import { useNavigate } from 'react-router-dom';
 import DatabaseService from '../../apis/DatabaseManager/DatabaseService';
 import WalletManager from '../../apis/WalletManager/WalletManager';
-import { setNetwork } from '../../redux/networkSlice';
+import { Network, setNetwork } from '../../redux/networkSlice';
 import { selectCurrentNetwork } from '../../redux/selectors/networkSelectors';
-import { setWalletId } from '../../redux/walletSlice';
+import { setWalletId, setWalletNetwork } from '../../redux/walletSlice';
 import { ONBOARDING_WALLET_NAME } from './constants';
 import InfoTooltipIcon from './components/InfoTooltipIcon';
 import OnboardingCard from './components/OnboardingCard';
@@ -140,8 +140,17 @@ const ImportWalletPage = () => {
         return;
       }
 
+      const walletInfo = await walletManager.getWalletInfo(walletID);
+      const resolvedNetwork =
+        walletInfo?.networkType === Network.MAINNET
+          ? Network.MAINNET
+          : walletInfo?.networkType === Network.CHIPNET
+            ? Network.CHIPNET
+            : currentNetwork;
+
       dispatch(setWalletId(walletID));
-      dispatch(setNetwork(currentNetwork));
+      dispatch(setWalletNetwork(resolvedNetwork));
+      dispatch(setNetwork(resolvedNetwork));
       navigate(`/home/${walletID}`);
     } catch (error) {
       console.error('Error importing account:', error);

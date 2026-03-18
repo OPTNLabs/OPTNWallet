@@ -326,22 +326,18 @@ export default function TransactionBuilderHelper() {
       unlockableUtxos as Parameters<typeof txBuilder.addInputs>[0]
     );
 
-    const standardOutputs: unknown[] = [];
     for (const output of outputs) {
       if ('opReturn' in output && output.opReturn !== undefined) {
         txBuilder.addOpReturnOutput(validateOpReturnChunks(output.opReturn));
         continue;
       }
-      standardOutputs.push(
-        prepareStandardOutput(
-          output as Exclude<TransactionOutput, { opReturn: string[] }>
-        )
+
+      const standardOutput = prepareStandardOutput(
+        output as Exclude<TransactionOutput, { opReturn: string[] }>
       );
-    }
-    if (standardOutputs.length > 0) {
-      txBuilder.addOutputs(
-        standardOutputs as Parameters<typeof txBuilder.addOutputs>[0]
-      );
+      txBuilder.addOutputs([
+        standardOutput,
+      ] as Parameters<typeof txBuilder.addOutputs>[0]);
     }
 
     if (needsLocktime) {

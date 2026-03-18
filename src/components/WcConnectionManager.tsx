@@ -2,7 +2,6 @@
 
 import React, { useState } from 'react';
 import {
-  CapacitorBarcodeScanner,
   CapacitorBarcodeScannerTypeHint,
 } from '@capacitor/barcode-scanner';
 import { Toast } from '@capacitor/toast';
@@ -10,6 +9,10 @@ import { useDispatch } from 'react-redux';
 import { AppDispatch } from '../redux/store';
 import { wcPair } from '../redux/walletconnectSlice';
 import { FaCamera } from 'react-icons/fa';
+import {
+  getBarcodeScannerErrorMessage,
+  scanBarcodeSafely,
+} from '../utils/barcodeScanner';
 
 const WcConnectionManager: React.FC = () => {
   const dispatch = useDispatch<AppDispatch>();
@@ -38,7 +41,7 @@ const WcConnectionManager: React.FC = () => {
     // console.log('[WcConnectionManager] handleScan called');
     try {
       setScanning(true);
-      const result = await CapacitorBarcodeScanner.scanBarcode({
+      const result = await scanBarcodeSafely({
         hint: CapacitorBarcodeScannerTypeHint.ALL,
         cameraDirection: 1,
       });
@@ -66,7 +69,7 @@ const WcConnectionManager: React.FC = () => {
       }
     } catch (err) {
       console.error('[WcConnectionManager] Scan error:', err);
-      await Toast.show({ text: `Scan error: ${String(err)}` });
+      await Toast.show({ text: getBarcodeScannerErrorMessage(err) });
     } finally {
       setScanning(false);
       // console.log('[WcConnectionManager] Scan finished');

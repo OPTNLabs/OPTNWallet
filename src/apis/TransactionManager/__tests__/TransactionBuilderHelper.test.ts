@@ -11,6 +11,7 @@ let providerSendRawResponse: unknown = 'txid-ok';
 const txBuilderInstances: Array<{
   addInputs: ReturnType<typeof vi.fn>;
   addOutputs: ReturnType<typeof vi.fn>;
+  addOpReturnOutput: ReturnType<typeof vi.fn>;
   setLocktime: ReturnType<typeof vi.fn>;
   build: ReturnType<typeof vi.fn>;
 }> = [];
@@ -28,6 +29,7 @@ vi.mock('cashscript', () => {
   class MockTransactionBuilder {
     addInputs = vi.fn();
     addOutputs = vi.fn();
+    addOpReturnOutput = vi.fn();
     setLocktime = vi.fn();
     build = vi.fn(async () => 'deadbeef');
     constructor() {
@@ -87,6 +89,42 @@ describe('TransactionBuilderHelper', () => {
     vi.clearAllMocks();
     txBuilderInstances.length = 0;
     providerSendRawResponse = 'txid-ok';
+  });
+
+  it('buildTransaction preserves output order when OP_RETURN is between standard outputs', async () => {
+    mockedKeyService.fetchAddressPrivateKey.mockResolvedValue(
+      Uint8Array.from([1, 2, 3])
+    );
+
+    const helper = TransactionBuilderHelper();
+    await helper.buildTransaction(
+      [
+        {
+          address: 'bitcoincash:qsource',
+          height: 0,
+          tx_hash: 'a'.repeat(64),
+          tx_pos: 0,
+          value: 5000,
+        },
+      ],
+      [
+        { recipientAddress: 'bitcoincash:qfirst', amount: 1000 },
+        { opReturn: ['BCMR', '0x' + '11'.repeat(32), 'ipfs://bafy123'] },
+        { recipientAddress: 'bitcoincash:qsecond', amount: 546 },
+      ]
+    );
+
+    const builder = txBuilderInstances[0];
+    expect(builder.addOutputs).toHaveBeenCalledTimes(2);
+    expect(builder.addOutputs.mock.calls[0][0][0]).toEqual({
+      to: 'bitcoincash:qfirst',
+      amount: 1000n,
+    });
+    expect(builder.addOpReturnOutput).toHaveBeenCalledTimes(1);
+    expect(builder.addOutputs.mock.calls[1][0][0]).toEqual({
+      to: 'bitcoincash:qsecond',
+      amount: 546n,
+    });
   });
 
   it('buildTransaction prepares token outputs and uses p2pkh unlocker for regular utxos', async () => {

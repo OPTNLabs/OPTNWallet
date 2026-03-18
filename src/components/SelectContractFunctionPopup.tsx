@@ -13,13 +13,16 @@ import { hexString } from '../utils/hex';
 import KeyService from '../services/KeyService';
 import { shortenTxHash } from '../utils/shortenHash';
 import {
-  CapacitorBarcodeScanner,
   CapacitorBarcodeScannerTypeHint,
 } from '@capacitor/barcode-scanner';
 import { FaCamera } from 'react-icons/fa';
 import { Toast } from '@capacitor/toast';
 import { DataSigner } from '../utils/dataSigner';
 import { logError } from '../utils/errorHandling';
+import {
+  getBarcodeScannerErrorMessage,
+  scanBarcodeSafely,
+} from '../utils/barcodeScanner';
 
 interface AbiInput {
   name: string;
@@ -226,7 +229,7 @@ const SelectContractFunctionPopup: React.FC<
 
     setIsScanning(true);
     try {
-      const result = await CapacitorBarcodeScanner.scanBarcode({
+      const result = await scanBarcodeSafely({
         hint: CapacitorBarcodeScannerTypeHint.ALL,
         cameraDirection: 1,
       });
@@ -283,7 +286,7 @@ const SelectContractFunctionPopup: React.FC<
         argType,
       });
       await Toast.show({
-        text: 'Failed to scan QR code. Please ensure camera permissions are granted and try again.',
+        text: getBarcodeScannerErrorMessage(error),
       });
     } finally {
       setShowAddressPopup(false);

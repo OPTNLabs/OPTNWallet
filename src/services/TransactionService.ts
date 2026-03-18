@@ -17,6 +17,28 @@ import {
 import KeyService from './KeyService';
 import { store } from '../redux/store';
 import { logError } from '../utils/errorHandling';
+import OutboundTransactionTracker, {
+  deriveTrackedTxid,
+} from './OutboundTransactionTracker';
+
+export type BroadcastState = 'broadcasted' | 'submitted';
+export type BroadcastResult = {
+  txid: string | null;
+  errorMessage: string | null;
+  broadcastState?: BroadcastState;
+};
+
+export type SendTransactionOptions = {
+  source?: string;
+  sourceLabel?: string | null;
+  recipientSummary?: string | null;
+  amountSummary?: string | null;
+  sessionTopic?: string | null;
+  dappName?: string | null;
+  dappUrl?: string | null;
+  requestId?: string | null;
+  userPrompt?: string | null;
+};
 
 /**
  * TransactionService encapsulates all transaction-related business logic.
@@ -25,6 +47,16 @@ class TransactionService {
   private dbService = DatabaseService();
   private contractManager = ContractManager();
   private transactionManager = TransactionManager();
+
+  private schedulePostBroadcastRefresh(addresses: string[]): void {
+    const unique = Array.from(new Set(addresses.filter(Boolean)));
+    if (unique.length === 0) return;
+
+    // Refresh immediately, then once more after propagation delay so
+    // wallet and contract UTXO views converge even if Electrum lags briefly.
+    requestUTXORefreshForMany(unique, 0);
+    requestUTXORefreshForMany(unique, 1500);
+  }
 
   /**
    * Fetches addresses and UTXOs for a given walletId.
@@ -263,16 +295,50 @@ class TransactionService {
    */
   async sendTransaction(
     rawTX: string,
-    spentInputs?: UTXO[]
-  ): Promise<{
-    txid: string | null;
-    errorMessage: string | null;
-  }> {
-    const res = await this.transactionManager.sendTransaction(rawTX);
+    spentInputs?: UTXO[],
+    options?: SendTransactionOptions
+  ): Promise<BroadcastResult> {
+    const currentWalletId = store.getState().wallet_id.currentWalletId ?? null;
+    const currentTxid = deriveTrackedTxid(rawTX);
+    const activeOutbound = currentWalletId
+      ? await OutboundTransactionTracker.listActive(currentWalletId)
+      : [];
+    const conflictingPending = activeOutbound.find(
+      (record) => !currentTxid || record.txid !== currentTxid
+    );
 
-    // If broadcast succeeded, optimistically drop spent UTXOs and refresh wallet addresses.
+    if (conflictingPending) {
+      return {
+        txid: null,
+        errorMessage:
+          'Another outgoing transaction is still syncing. Wait for it to appear in history before sending a new one.',
+      };
+    }
+
+    const res: BroadcastResult =
+      await this.transactionManager.sendTransaction(rawTX);
+
     if (res?.txid) {
-      if (spentInputs?.length) {
+      await OutboundTransactionTracker.trackAttempt({
+        rawTx: rawTX,
+        walletId: currentWalletId,
+        source: options?.source ?? 'wallet',
+        sourceLabel: options?.sourceLabel ?? null,
+        recipientSummary: options?.recipientSummary ?? null,
+        amountSummary: options?.amountSummary ?? null,
+        sessionTopic: options?.sessionTopic ?? null,
+        dappName: options?.dappName ?? null,
+        dappUrl: options?.dappUrl ?? null,
+        requestId: options?.requestId ?? null,
+        userPrompt: options?.userPrompt ?? null,
+        spentInputs,
+      });
+    }
+
+    // Refresh wallet addresses after any successful hand-off, but only
+    // remove spendable UTXOs optimistically when broadcast was definite.
+    if (res?.txid) {
+      if (spentInputs?.length && res.broadcastState === 'broadcasted') {
         const outpoints = spentInputs.map((u) => ({
           tx_hash: u.tx_hash,
           tx_pos: u.tx_pos,
@@ -283,7 +349,6 @@ class TransactionService {
       const addrs = new Set<string>(
         spentInputs?.map((u) => u.address).filter(Boolean) ?? []
       );
-      const currentWalletId = store.getState().wallet_id.currentWalletId;
       if (currentWalletId) {
         try {
           const keyPairs = await KeyService.retrieveKeys(currentWalletId);
@@ -299,9 +364,7 @@ class TransactionService {
         }
       }
 
-      if (addrs.size > 0) {
-        requestUTXORefreshForMany(Array.from(addrs), 0);
-      }
+      this.schedulePostBroadcastRefresh(Array.from(addrs));
     }
 
     return res;

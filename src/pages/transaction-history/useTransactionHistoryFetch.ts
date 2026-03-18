@@ -4,6 +4,13 @@ import DatabaseService from '../../apis/DatabaseManager/DatabaseService';
 import { setTransactions } from '../../redux/transactionSlice';
 import { AppDispatch } from '../../redux/store';
 import { TransactionHistoryItem } from '../../types/types';
+import ElectrumService from '../../services/ElectrumService';
+import { reconcileOutboundTransactions } from '../../services/OutboundTransactionReconciler';
+import { planTransactionDetailRefresh } from '../../services/transactionDetailSync';
+import {
+  runOutboundReconcile,
+  runWalletHistoryRefresh,
+} from '../../services/RefreshCoordinator';
 
 type UseTransactionHistoryFetchParams = {
   walletIdParam: string | undefined;
@@ -27,6 +34,23 @@ function toHistoryItem(row: Record<string, unknown>): TransactionHistoryItem {
   };
 }
 
+function loadStoredTransactions(db: { prepare: (sql: string) => any }, walletId: number) {
+  const storedTransactionsQuery = db.prepare(`
+    SELECT tx_hash, height, timestamp, amount
+    FROM transactions
+    WHERE wallet_id = ?;
+  `);
+  storedTransactionsQuery.bind([walletId]);
+  const storedTransactions: TransactionHistoryItem[] = [];
+  while (storedTransactionsQuery.step()) {
+    storedTransactions.push(
+      toHistoryItem(storedTransactionsQuery.getAsObject())
+    );
+  }
+  storedTransactionsQuery.free();
+  return storedTransactions;
+}
+
 export function useTransactionHistoryFetch({
   walletIdParam,
   isInitialized,
@@ -47,101 +71,101 @@ export function useTransactionHistoryFetch({
     setProgress(0);
 
     try {
-      await dbService.ensureDatabaseStarted();
-      const db = dbService.getDatabase();
-      if (!db) {
-        console.error('Database not started.');
-        return;
-      }
+      await runWalletHistoryRefresh(walletIdNum, async () => {
+        await ElectrumService.reconnect();
 
-      const addressesQuery = db.prepare(`
+        await dbService.ensureDatabaseStarted();
+        const db = dbService.getDatabase();
+        if (!db) {
+          console.error('Database not started.');
+          return;
+        }
+        const previousStoredTransactions = loadStoredTransactions(db, walletIdNum);
+
+        const addressesQuery = db.prepare(`
       SELECT address FROM addresses WHERE wallet_id = ?;
     `);
-      addressesQuery.bind([walletIdParam]);
+        addressesQuery.bind([walletIdParam]);
 
-      const addresses: string[] = [];
-      while (addressesQuery.step()) {
-        const result = addressesQuery.getAsObject();
-        if (typeof result.address === 'string') {
-          addresses.push(result.address);
+        const addresses: string[] = [];
+        while (addressesQuery.step()) {
+          const result = addressesQuery.getAsObject();
+          if (typeof result.address === 'string') {
+            addresses.push(result.address);
+          }
         }
-      }
-      addressesQuery.free();
+        addressesQuery.free();
 
-      const pending = addresses.filter((a) => !fetchedAddresses.has(a));
-      const totalToScan = pending.length;
+        const pending = addresses.filter((a) => !fetchedAddresses.has(a));
+        const totalToScan = pending.length;
 
-      if (totalToScan === 0) {
-        setProgress(100);
-        return;
-      }
+        if (totalToScan === 0) {
+          setProgress(100);
+          return;
+        }
 
-      const transactionManager = TransactionManager();
-      const processedAddresses: string[] = [];
-
-      for (const [index, address] of pending.entries()) {
-        try {
-          await transactionManager.fetchAndStoreTransactionHistory(
+        const transactionManager = TransactionManager();
+        const processedAddresses: string[] = [];
+        const historyByAddress =
+          await transactionManager.fetchAndStoreTransactionHistories(
             walletIdNum,
-            address
+            pending
           );
-        } catch (err: unknown) {
-          const msg = err instanceof Error ? err.message : String(err ?? '');
 
-          if (/cannot rollback - no transaction is active/i.test(msg)) {
-            console.debug(
-              '[TXH] No active transaction to rollback (benign) for address:',
-              address
-            );
-          } else {
-            console.warn(
-              '[TXH] fetchAndStoreTransactionHistory failed for address:',
-              address,
-              err
-            );
+        pending.forEach((address, index) => {
+          if (Array.isArray(historyByAddress[address])) {
+            processedAddresses.push(address);
           }
-        }
-        processedAddresses.push(address);
-        setProgress(Math.round(((index + 1) / totalToScan) * 100));
-      }
-
-      const liveDb = dbService.getDatabase();
-      if (!liveDb) {
-        console.error('Database not started after history fetch.');
-      } else {
-        const storedTransactionsQuery = liveDb.prepare(`
-          SELECT tx_hash, height, timestamp, amount
-          FROM transactions
-          WHERE wallet_id = ?;
-        `);
-        storedTransactionsQuery.bind([walletIdNum]);
-        const storedTransactions: TransactionHistoryItem[] = [];
-        while (storedTransactionsQuery.step()) {
-          storedTransactions.push(
-            toHistoryItem(storedTransactionsQuery.getAsObject())
-          );
-        }
-        storedTransactionsQuery.free();
-
-        dispatch(
-          setTransactions({
-            wallet_id: walletIdNum,
-            transactions: storedTransactions,
-          })
-        );
-      }
-
-      if (processedAddresses.length > 0) {
-        setFetchedAddresses((prev) => {
-          const next = new Set(prev);
-          for (const address of processedAddresses) {
-            next.add(address);
-          }
-          return next;
+          setProgress(Math.round(((index + 1) / totalToScan) * 100));
         });
-      }
 
-      setProgress(100);
+        const liveDb = dbService.getDatabase();
+        if (!liveDb) {
+          console.error('Database not started after history fetch.');
+        } else {
+          const storedTransactions = loadStoredTransactions(liveDb, walletIdNum);
+          const refreshPlan = planTransactionDetailRefresh({
+            previous: previousStoredTransactions,
+            next: storedTransactions,
+          });
+
+          const txidsToWarm = refreshPlan.reorgDetected
+            ? storedTransactions.map((tx) => tx.tx_hash)
+            : refreshPlan.txidsToRefresh;
+
+          if (txidsToWarm.length > 0) {
+            void Promise.allSettled(
+              txidsToWarm.map((txid) =>
+                ElectrumService.getTransactionDetails(txid, {
+                  forceRefresh: refreshPlan.reorgDetected,
+                })
+              )
+            );
+          }
+
+          dispatch(
+            setTransactions({
+              wallet_id: walletIdNum,
+              transactions: storedTransactions,
+            })
+          );
+        }
+
+        if (processedAddresses.length > 0) {
+          setFetchedAddresses((prev) => {
+            const next = new Set(prev);
+            for (const address of processedAddresses) {
+              next.add(address);
+            }
+            return next;
+          });
+        }
+
+        await runOutboundReconcile(walletIdNum, () =>
+          reconcileOutboundTransactions(walletIdNum)
+        );
+        setProgress(100);
+      });
     } catch (e) {
       console.error('Failed to fetch transaction history:', e);
     } finally {
