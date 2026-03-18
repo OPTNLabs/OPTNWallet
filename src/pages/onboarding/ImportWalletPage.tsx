@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { Toast } from '@capacitor/toast';
 import { useDispatch, useSelector } from 'react-redux';
 import { useNavigate } from 'react-router-dom';
 import DatabaseService from '../../apis/DatabaseManager/DatabaseService';
@@ -19,6 +20,7 @@ const ImportWalletPage = () => {
     Array(TOTAL_WORDS).fill('')
   );
   const [passphrase] = useState('');
+  const [isSubmitting, setIsSubmitting] = useState(false);
 
   const dbService = useMemo(() => DatabaseService(), []);
   const walletManager = useMemo(() => WalletManager(), []);
@@ -39,6 +41,7 @@ const ImportWalletPage = () => {
         if (!dbStarted) throw new Error('Failed to start the database.');
       } catch (error) {
         console.error('Error initializing database:', error);
+        await Toast.show({ text: 'Could not prepare wallet import on this device.' });
       }
     };
 
@@ -108,15 +111,19 @@ const ImportWalletPage = () => {
   };
 
   const handleImportAccount = async () => {
+    if (isSubmitting) return;
+
     const missingWordIndex = recoveryWords.findIndex((word) => !normalize(word));
 
     if (missingWordIndex !== -1) {
       console.error(`Word #${missingWordIndex + 1} is empty.`);
       focusIndex(missingWordIndex);
+      await Toast.show({ text: `Word ${missingWordIndex + 1} is missing.` });
       return;
     }
 
     const recoveryPhrase = recoveryWords.map(normalize).join(' ');
+    setIsSubmitting(true);
 
     try {
       const accountExists = await walletManager.checkAccount(recoveryPhrase, passphrase);
@@ -130,6 +137,7 @@ const ImportWalletPage = () => {
         );
         if (!created) {
           console.error('Failed to import account.');
+          await Toast.show({ text: 'Wallet import failed on this device.' });
           return;
         }
       }
@@ -137,6 +145,7 @@ const ImportWalletPage = () => {
       const walletID = await walletManager.setWalletId(recoveryPhrase, passphrase);
       if (walletID == null) {
         console.error('Failed to set wallet ID.');
+        await Toast.show({ text: 'Wallet was saved, but the wallet ID could not be resolved.' });
         return;
       }
 
@@ -154,6 +163,9 @@ const ImportWalletPage = () => {
       navigate(`/home/${walletID}`);
     } catch (error) {
       console.error('Error importing account:', error);
+      await Toast.show({ text: 'Wallet import failed on this device.' });
+    } finally {
+      setIsSubmitting(false);
     }
   };
 
@@ -204,9 +216,10 @@ const ImportWalletPage = () => {
 
         <button
           onClick={handleImportAccount}
+          disabled={isSubmitting}
           className="wallet-btn-primary w-full my-2 text-xl font-bold"
         >
-          Import Wallet
+          {isSubmitting ? 'Importing Wallet...' : 'Import Wallet'}
         </button>
         <button
           onClick={() => navigate('/')}

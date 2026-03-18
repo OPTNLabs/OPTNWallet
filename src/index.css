@@ -262,6 +262,22 @@
     box-shadow: 0 0 0 4px var(--wallet-focus-ring);
   }
 
+  .wallet-select {
+    @apply wallet-input w-full;
+    appearance: none;
+    -webkit-appearance: none;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='14' height='9' viewBox='0 0 14 9' fill='none'%3E%3Cpath d='M1 1.5L7 7.5L13 1.5' stroke='%2326c281' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+    background-position: right 0.9rem center;
+    background-repeat: no-repeat;
+    background-size: 14px 9px;
+    padding-right: 2.8rem;
+    backdrop-filter: none;
+    line-height: 1.25;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
   .wallet-muted {
     color: var(--wallet-text-strong);
     opacity: 0.75;

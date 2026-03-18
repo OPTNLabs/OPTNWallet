@@ -23,6 +23,7 @@ import {
   useLocalNotificationSetup,
     useNotificationQueueReset,
     useOutboundTransactionRecovery,
+    useScreenSecurity,
     useWalletNetworkBootstrap,
     useStatusBarSync,
   useUtxoQueueToOsNotifications,
@@ -45,6 +46,7 @@ function App() {
 
   useWalletConnectInitialization(dispatch);
   useStatusBarSync(mode);
+  useScreenSecurity();
   useLocalNotificationSetup();
   const notified = useUtxoQueueToOsNotifications(utxoQueue);
   useNotificationQueueReset(walletId, dispatch, notified);
