@@ -4,9 +4,10 @@ import { createSlice, createAsyncThunk, PayloadAction } from '@reduxjs/toolkit';
 import { Core } from '@walletconnect/core';
 import {
   WalletKit,
+  type IWalletKit,
   type WalletKitTypes,
 } from '@reown/walletkit';
-import type { RootState } from './store';
+import type { AppDispatch, RootState } from './store';
 import KeyService from '../services/KeyService';
 import {
   ActiveSessionsPayload,
@@ -30,44 +31,59 @@ import {
 import { registerWalletConnectListeners } from './walletconnect/helpers';
 import { logError } from '../utils/errorHandling';
 
-// 1) Initialize WalletConnect
-export const initWalletConnect = createAsyncThunk(
-  'walletconnect/init',
-  async (_, { dispatch }) => {
-    // console.log('[walletconnectSlice] initWalletConnect triggered');
+let walletKitSingleton: IWalletKit | null = null;
+let walletKitInitPromise: Promise<{
+  web3wallet: IWalletKit;
+  activeSessions: ActiveSessionsPayload;
+}> | null = null;
+let walletKitListenersRegistered = false;
 
+async function initializeWalletConnect(dispatch: AppDispatch) {
+  if (!walletKitSingleton) {
     const projectId = import.meta.env.VITE_WC_PROJECT_ID;
-    // console.log('[walletconnectSlice] Using projectId:', projectId);
-
     const core = new Core({ projectId });
-    // console.log('[walletconnectSlice] Created Core instance');
-
     const metadata = {
       name: 'OPTN Wallet',
       description: 'OPTN WalletConnect Integration',
       url: 'https://optnlabs.com',
       icons: ['https://optnlabs.com/logo.png'],
     };
-    // console.log('[walletconnectSlice] Using metadata:', metadata);
 
-    const web3wallet = await WalletKit.init({ core, metadata });
-    // console.log('[walletconnectSlice] WalletKit initialized');
+    walletKitSingleton = await WalletKit.init({ core, metadata });
+  }
 
-    const activeSessions = web3wallet.getActiveSessions();
-    // console.log(
-    //   '[walletconnectSlice] Active sessions at init:',
-    //   activeSessions
-    // );
-
-    registerWalletConnectListeners(web3wallet, {
+  if (!walletKitListenersRegistered) {
+    registerWalletConnectListeners(walletKitSingleton, {
       onProposal: (proposal) => dispatch(setPendingProposal(proposal)),
       onSessionUpdate: () =>
-        dispatch(setActiveSessions(web3wallet.getActiveSessions())),
+        dispatch(setActiveSessions(walletKitSingleton!.getActiveSessions())),
       onSessionRequest: (sessionEvent) =>
         dispatch(handleWcRequest(sessionEvent)),
     });
+    walletKitListenersRegistered = true;
+  }
 
-    return { web3wallet, activeSessions };
+  return {
+    web3wallet: walletKitSingleton,
+    activeSessions: walletKitSingleton.getActiveSessions(),
+  };
+}
+
+// 1) Initialize WalletConnect
+export const initWalletConnect = createAsyncThunk(
+  'walletconnect/init',
+  async (_, { dispatch }) => {
+    if (walletKitSingleton) {
+      return initializeWalletConnect(dispatch as AppDispatch);
+    }
+
+    if (!walletKitInitPromise) {
+      walletKitInitPromise = initializeWalletConnect(dispatch as AppDispatch).finally(() => {
+        walletKitInitPromise = null;
+      });
+    }
+
+    return walletKitInitPromise;
   }
 );
 
