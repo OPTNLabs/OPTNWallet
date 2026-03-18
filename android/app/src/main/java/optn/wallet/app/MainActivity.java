@@ -3,6 +3,7 @@ package optn.wallet.app;
 import android.os.Bundle;
 import android.view.WindowManager;
 import android.webkit.WebView;
+import androidx.core.view.WindowCompat;
 import com.getcapacitor.BridgeActivity;
 import optn.wallet.app.security.DeviceIntegrityPlugin;
 import optn.wallet.app.security.ScreenSecurityPlugin;
@@ -15,6 +16,9 @@ public class MainActivity extends BridgeActivity {
     registerPlugin(ScreenSecurityPlugin.class);
     registerPlugin(SecureKeyStorePlugin.class);
     super.onCreate(savedInstanceState);
+
+    // Keep the WebView inside the system bars instead of drawing underneath them.
+    WindowCompat.setDecorFitsSystemWindows(getWindow(), true);
 
     // Disable the AppCompat action bar if one was created
     if (getSupportActionBar() != null) {
