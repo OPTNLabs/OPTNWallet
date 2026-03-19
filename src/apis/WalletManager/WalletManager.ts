@@ -2,6 +2,7 @@ import { createTables } from '../../utils/schema/schema';
 import DatabaseService from '../DatabaseManager/DatabaseService';
 import { Network } from '../../redux/networkSlice';
 import SecretCryptoService from '../../services/SecretCryptoService';
+import { WalletLookup, WalletRecord, WalletType } from '../../types/wallet';
 
 // Helper function to safely cast SQL values to number
 function toNumber(value: unknown): number {
@@ -110,7 +111,8 @@ export default function WalletManager() {
 
   async function setWalletId(
     mnemonic: string,
-    passphrase: string
+    passphrase: string,
+    lookup?: Pick<WalletLookup, 'networkType' | 'walletType'>
   ): Promise<number | null> {
     const dbService = DatabaseService();
     const db = dbService.getDatabase();
@@ -129,7 +131,28 @@ export default function WalletManager() {
         const rowPassphrase = await SecretCryptoService.decryptText(
           typeof row.passphrase === 'string' ? row.passphrase : ''
         );
-        if (rowMnemonic === mnemonic && rowPassphrase === passphrase) {
+        const rowNetwork =
+          row.networkType === Network.MAINNET
+            ? Network.MAINNET
+            : row.networkType === Network.CHIPNET
+              ? Network.CHIPNET
+              : null;
+        const rowWalletType =
+          row.walletType === WalletType.QUANTUMROOT
+            ? WalletType.QUANTUMROOT
+            : WalletType.STANDARD;
+        const networkMatches =
+          lookup?.networkType === undefined || rowNetwork === lookup.networkType;
+        const walletTypeMatches =
+          lookup?.walletType === undefined ||
+          rowWalletType === lookup.walletType;
+
+        if (
+          rowMnemonic === mnemonic &&
+          rowPassphrase === passphrase &&
+          networkMatches &&
+          walletTypeMatches
+        ) {
           walletId = toNumber(row.id);
           break;
         }
@@ -144,7 +167,8 @@ export default function WalletManager() {
 
   async function checkAccount(
     mnemonic: string,
-    passphrase: string
+    passphrase: string,
+    lookup?: Pick<WalletLookup, 'networkType' | 'walletType'>
   ): Promise<boolean> {
     const dbService = DatabaseService();
     const db = dbService.getDatabase();
@@ -165,9 +189,26 @@ export default function WalletManager() {
         const rowPassphrase = await SecretCryptoService.decryptText(
           typeof row.passphrase === 'string' ? row.passphrase : ''
         );
+        const rowNetwork =
+          row.networkType === Network.MAINNET
+            ? Network.MAINNET
+            : row.networkType === Network.CHIPNET
+              ? Network.CHIPNET
+              : null;
+        const rowWalletType =
+          row.walletType === WalletType.QUANTUMROOT
+            ? WalletType.QUANTUMROOT
+            : WalletType.STANDARD;
+        const networkMatches =
+          lookup?.networkType === undefined || rowNetwork === lookup.networkType;
+        const walletTypeMatches =
+          lookup?.walletType === undefined ||
+          rowWalletType === lookup.walletType;
         if (
-          (rowMnemonic === mnemonic && rowPassphrase === passphrase) ||
-          rowMnemonic === mnemonic
+          rowMnemonic === mnemonic &&
+          rowPassphrase === passphrase &&
+          networkMatches &&
+          walletTypeMatches
         ) {
           accountExists = true;
           break;
@@ -186,7 +227,8 @@ export default function WalletManager() {
     wallet_name: string,
     mnemonic: string,
     passphrase: string,
-    networkType: Network
+    networkType: Network,
+    walletType: WalletType = WalletType.STANDARD
   ): Promise<boolean> {
     const dbService = DatabaseService();
     const db = dbService.getDatabase();
@@ -195,7 +237,10 @@ export default function WalletManager() {
     }
 
     createTables(db);
-    const accountExists = await checkAccount(mnemonic, passphrase);
+    const accountExists = await checkAccount(mnemonic, passphrase, {
+      networkType,
+      walletType,
+    });
     if (accountExists) {
       return false;
     }
@@ -204,13 +249,14 @@ export default function WalletManager() {
     const encryptedPassphrase =
       await SecretCryptoService.encryptText(passphrase);
     const createAccountQuery = db.prepare(
-      'INSERT INTO wallets (wallet_name, mnemonic, passphrase, networkType, balance) VALUES (?, ?, ?, ?, ?);'
+      'INSERT INTO wallets (wallet_name, mnemonic, passphrase, networkType, walletType, balance) VALUES (?, ?, ?, ?, ?, ?);'
     );
     createAccountQuery.run([
       wallet_name,
       encryptedMnemonic,
       encryptedPassphrase,
       networkType,
+      walletType,
       0,
     ]);
     createAccountQuery.free();
@@ -261,7 +307,22 @@ export default function WalletManager() {
       let walletInfo = null;
 
       if (query.step()) {
-        walletInfo = query.getAsObject() as Record<string, unknown>;
+        const rawWalletInfo = query.getAsObject() as Record<string, unknown>;
+        const networkType =
+          rawWalletInfo.networkType === Network.MAINNET
+            ? Network.MAINNET
+            : rawWalletInfo.networkType === Network.CHIPNET
+              ? Network.CHIPNET
+              : null;
+        const walletType =
+          rawWalletInfo.walletType === WalletType.QUANTUMROOT
+            ? WalletType.QUANTUMROOT
+            : WalletType.STANDARD;
+        walletInfo = {
+          ...rawWalletInfo,
+          networkType,
+          walletType,
+        } as Record<string, unknown>;
         if (typeof walletInfo.mnemonic === 'string') {
           walletInfo.mnemonic = await SecretCryptoService.decryptText(
             walletInfo.mnemonic
@@ -275,7 +336,7 @@ export default function WalletManager() {
       }
 
       query.free();
-      return walletInfo;
+      return walletInfo as WalletRecord | null;
     } catch (error) {
       console.error('Error getting wallet info:', error);
       return null;
