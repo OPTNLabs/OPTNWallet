@@ -15,7 +15,8 @@ import { AppDispatch } from '../redux/store';
 import { reconcileOutboundTransactions } from '../services/OutboundTransactionReconciler';
 import { runOutboundReconcile } from '../services/RefreshCoordinator';
 import { Network, setNetwork } from '../redux/networkSlice';
-import { setWalletNetwork } from '../redux/walletSlice';
+import { setWalletNetwork, setWalletType } from '../redux/walletSlice';
+import { WalletType } from '../types/wallet';
 import ScreenSecurity from '../plugins/ScreenSecurity';
 
 let utxoWorkerStarted = false;
@@ -55,6 +56,7 @@ export function useWalletNetworkBootstrap(
 
         if (!cancelled && resolvedNetwork) {
           dispatch(setWalletNetwork(resolvedNetwork));
+          dispatch(setWalletType(walletInfo?.walletType ?? WalletType.STANDARD));
           dispatch(setNetwork(resolvedNetwork));
         }
       } finally {
