@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { Network } from '../../../redux/networkSlice';
 import WalletManager from '../WalletManager';
 import DatabaseService from '../../DatabaseManager/DatabaseService';
+import { WalletType } from '../../../types/wallet';
 
 vi.mock('../../DatabaseManager/DatabaseService', () => ({
   default: vi.fn(),
@@ -48,7 +49,14 @@ describe('WalletManager', () => {
   });
 
   it('createWallet returns false if wallet already exists', async () => {
-    const existsStmt = makeStmt([{ mnemonic: 'enc:mnemonic', passphrase: 'enc:pass' }]);
+    const existsStmt = makeStmt([
+      {
+        mnemonic: 'enc:mnemonic',
+        passphrase: 'enc:pass',
+        networkType: Network.CHIPNET,
+        walletType: WalletType.STANDARD,
+      },
+    ]);
     const insertStmt = makeStmt();
 
     const db = {
@@ -74,7 +82,14 @@ describe('WalletManager', () => {
   });
 
   it('createWallet inserts and persists when wallet does not exist', async () => {
-    const existsStmt = makeStmt([{ mnemonic: 'enc:other', passphrase: 'enc:other-pass' }]);
+    const existsStmt = makeStmt([
+      {
+        mnemonic: 'enc:other',
+        passphrase: 'enc:other-pass',
+        networkType: Network.CHIPNET,
+        walletType: WalletType.STANDARD,
+      },
+    ]);
     const insertStmt = makeStmt();
 
     const db = {
@@ -100,13 +115,22 @@ describe('WalletManager', () => {
       'enc:mnemonic',
       'enc:pass',
       Network.MAINNET,
+      WalletType.STANDARD,
       0,
     ]);
     expect(dbService.flushDatabaseToFile).toHaveBeenCalledTimes(1);
   });
 
   it('setWalletId resolves wallet id as number', async () => {
-    const selectStmt = makeStmt([{ id: '42', mnemonic: 'enc:mnemonic', passphrase: 'enc:pass' }]);
+    const selectStmt = makeStmt([
+      {
+        id: '42',
+        mnemonic: 'enc:mnemonic',
+        passphrase: 'enc:pass',
+        networkType: Network.MAINNET,
+        walletType: WalletType.STANDARD,
+      },
+    ]);
     const db = {
       prepare: vi.fn(() => selectStmt),
     };
@@ -119,8 +143,86 @@ describe('WalletManager', () => {
     );
 
     const wm = WalletManager();
-    const walletId = await wm.setWalletId('mnemonic', 'pass');
+    const walletId = await wm.setWalletId('mnemonic', 'pass', {
+      networkType: Network.MAINNET,
+      walletType: WalletType.STANDARD,
+    });
 
     expect(walletId).toBe(42);
+  });
+
+  it('allows the same mnemonic on a different network', async () => {
+    const existsStmt = makeStmt([
+      {
+        mnemonic: 'enc:mnemonic',
+        passphrase: 'enc:pass',
+        networkType: Network.CHIPNET,
+        walletType: WalletType.STANDARD,
+      },
+    ]);
+    const insertStmt = makeStmt();
+
+    const db = {
+      prepare: vi
+        .fn()
+        .mockReturnValueOnce(existsStmt)
+        .mockReturnValueOnce(insertStmt),
+    };
+
+    const dbService = {
+      getDatabase: vi.fn(() => db),
+      flushDatabaseToFile: vi.fn(async () => {}),
+    };
+
+    mockedDatabaseService.mockImplementation(() => dbService as never);
+
+    const wm = WalletManager();
+    const created = await wm.createWallet(
+      'name',
+      'mnemonic',
+      'pass',
+      Network.MAINNET
+    );
+
+    expect(created).toBe(true);
+    expect(insertStmt.run).toHaveBeenCalledTimes(1);
+  });
+
+  it('allows the same mnemonic and network for a different wallet type', async () => {
+    const existsStmt = makeStmt([
+      {
+        mnemonic: 'enc:mnemonic',
+        passphrase: 'enc:pass',
+        networkType: Network.MAINNET,
+        walletType: WalletType.STANDARD,
+      },
+    ]);
+    const insertStmt = makeStmt();
+
+    const db = {
+      prepare: vi
+        .fn()
+        .mockReturnValueOnce(existsStmt)
+        .mockReturnValueOnce(insertStmt),
+    };
+
+    const dbService = {
+      getDatabase: vi.fn(() => db),
+      flushDatabaseToFile: vi.fn(async () => {}),
+    };
+
+    mockedDatabaseService.mockImplementation(() => dbService as never);
+
+    const wm = WalletManager();
+    const created = await wm.createWallet(
+      'name',
+      'mnemonic',
+      'pass',
+      Network.MAINNET,
+      WalletType.QUANTUMROOT
+    );
+
+    expect(created).toBe(true);
+    expect(insertStmt.run).toHaveBeenCalledTimes(1);
   });
 });

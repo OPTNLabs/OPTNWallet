@@ -6,8 +6,9 @@ import DatabaseService from '../../apis/DatabaseManager/DatabaseService';
 import WalletManager from '../../apis/WalletManager/WalletManager';
 import { Network, setNetwork } from '../../redux/networkSlice';
 import { selectCurrentNetwork } from '../../redux/selectors/networkSelectors';
-import { setWalletId, setWalletNetwork } from '../../redux/walletSlice';
+import { setWalletId, setWalletNetwork, setWalletType } from '../../redux/walletSlice';
 import { ONBOARDING_WALLET_NAME } from './constants';
+import { WalletType } from '../../types/wallet';
 import InfoTooltipIcon from './components/InfoTooltipIcon';
 import OnboardingCard from './components/OnboardingCard';
 import OnboardingScreen from './components/OnboardingScreen';
@@ -126,14 +127,19 @@ const ImportWalletPage = () => {
     setIsSubmitting(true);
 
     try {
-      const accountExists = await walletManager.checkAccount(recoveryPhrase, passphrase);
+      const accountExists = await walletManager.checkAccount(
+        recoveryPhrase,
+        passphrase,
+        { networkType: currentNetwork, walletType: WalletType.STANDARD }
+      );
 
       if (!accountExists) {
         const created = await walletManager.createWallet(
           ONBOARDING_WALLET_NAME,
           recoveryPhrase,
           passphrase,
-          currentNetwork
+          currentNetwork,
+          WalletType.STANDARD
         );
         if (!created) {
           console.error('Failed to import account.');
@@ -142,7 +148,11 @@ const ImportWalletPage = () => {
         }
       }
 
-      const walletID = await walletManager.setWalletId(recoveryPhrase, passphrase);
+      const walletID = await walletManager.setWalletId(
+        recoveryPhrase,
+        passphrase,
+        { networkType: currentNetwork, walletType: WalletType.STANDARD }
+      );
       if (walletID == null) {
         console.error('Failed to set wallet ID.');
         await Toast.show({ text: 'Wallet was saved, but the wallet ID could not be resolved.' });
@@ -159,6 +169,7 @@ const ImportWalletPage = () => {
 
       dispatch(setWalletId(walletID));
       dispatch(setWalletNetwork(resolvedNetwork));
+      dispatch(setWalletType(walletInfo?.walletType ?? WalletType.STANDARD));
       dispatch(setNetwork(resolvedNetwork));
       navigate(`/home/${walletID}`);
     } catch (error) {
