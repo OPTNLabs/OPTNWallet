@@ -83,6 +83,52 @@ describe('ElectrumService', () => {
     expect(server.request).toHaveBeenCalledTimes(1);
   });
 
+  it('getUTXOsMany falls back to scripthash for addresses rejected by address RPC', async () => {
+    const server = {
+      request: vi
+        .fn()
+        .mockRejectedValueOnce(new Error('Invalid address: bchtest:qtest'))
+        .mockResolvedValueOnce([
+          {
+            tx_hash: 'c'.repeat(64),
+            tx_pos: 1,
+            value: 546,
+            height: 33,
+          },
+        ]),
+      requestMany: vi.fn(async () => [new Error('Invalid address: bchtest:qtest')]),
+      subscribe: vi.fn(async () => {}),
+      unsubscribe: vi.fn(async () => {}),
+      onNotification: vi.fn(() => () => {}),
+    };
+
+    mockedElectrumServer.mockReturnValue(server as never);
+
+    const address = 'bchtest:qqqsg7fpq3c4xz3pgc6algdm8tjst4x5jygfj4vfyw';
+    const result = await ElectrumService.getUTXOsMany([address]);
+
+    expect(result[address]).toEqual([
+      expect.objectContaining({
+        address,
+        tx_hash: 'c'.repeat(64),
+        tx_pos: 1,
+        value: 546,
+        height: 33,
+      }),
+    ]);
+    expect(server.requestMany).toHaveBeenCalledTimes(1);
+    expect(server.request).toHaveBeenNthCalledWith(
+      1,
+      'blockchain.address.listunspent',
+      address
+    );
+    expect(server.request).toHaveBeenNthCalledWith(
+      2,
+      'blockchain.scripthash.listunspent',
+      expect.any(String)
+    );
+  });
+
   it('primeUTXOCache seeds cache used by getUTXOs', async () => {
     const server = {
       request: vi.fn(async () => []),

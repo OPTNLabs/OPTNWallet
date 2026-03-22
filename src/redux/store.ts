@@ -9,6 +9,7 @@ import utxoReducer from './utxoSlice';
 import transactionReducer from './transactionSlice';
 import priceFeedReducer from './priceFeedSlice';
 import walletconnectReducer from './walletconnectSlice';
+import wizardconnectReducer from './wizardconnectSlice';
 import preferencesReducer from './preferencesSlice';
 import { persistStore, persistReducer } from 'redux-persist';
 import type { PersistMigrate, PersistedState } from 'redux-persist/es/types';
@@ -56,6 +57,7 @@ const rootReducer = combineReducers({
   transactionBuilder: transactionBuilderReducer,
   priceFeed: priceFeedReducer,
   walletconnect: walletconnectReducer,
+  wizardconnect: wizardconnectReducer,
   notifications: notificationsReducer,
   preferences: preferencesReducer,
 });

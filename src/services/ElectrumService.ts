@@ -20,11 +20,15 @@ import {
   UTXO,
 } from '../types/types';
 import DatabaseService from '../apis/DatabaseManager/DatabaseService';
-import { lockingBytecodeToCashAddress } from '@bitauth/libauth';
+import {
+  cashAddressToLockingBytecode,
+  lockingBytecodeToCashAddress,
+  sha256,
+} from '@bitauth/libauth';
 import { selectCurrentNetwork } from '../redux/selectors/networkSelectors';
 import { Network } from '../redux/networkSlice';
 import { store } from '../redux/store';
-import { hexToBin } from '../utils/hex';
+import { binToHex, hexToBin } from '../utils/hex';
 import { normalizeTokenField } from '../utils/tokenNormalization';
 import { logError, toErrorMessage } from '../utils/errorHandling';
 
@@ -162,6 +166,39 @@ function decodeAddressFromScriptHex(scriptHex: unknown): string | null {
     return typeof result === 'string' ? result : result.address;
   } catch {
     return null;
+  }
+}
+
+function isInvalidAddressError(error: unknown): boolean {
+  return toErrorMessage(error).toLowerCase().includes('invalid address');
+}
+
+function addressToElectrumScripthash(address: string): string {
+  const lockingBytecode = cashAddressToLockingBytecode(address);
+  if (typeof lockingBytecode === 'string') {
+    throw new Error(`Invalid address: ${address}`);
+  }
+
+  const digest = sha256.hash(lockingBytecode.bytecode);
+  return binToHex(Uint8Array.from(digest).reverse());
+}
+
+async function requestWithAddressFallback(
+  server: ReturnType<typeof ElectrumServer>,
+  addressMethod: string,
+  scripthashMethod: string,
+  address: string,
+  extraParams: RequestResponse[] = []
+): Promise<RequestResponse> {
+  try {
+    return await server.request(addressMethod, address, ...extraParams);
+  } catch (error) {
+    if (!isInvalidAddressError(error)) {
+      throw error;
+    }
+
+    const scripthash = addressToElectrumScripthash(address);
+    return await server.request(scripthashMethod, scripthash, ...extraParams);
   }
 }
 
@@ -538,8 +575,10 @@ const ElectrumService = {
 
     const p = (async () => {
       try {
-        const res: RequestResponse = await server.request(
+        const res = await requestWithAddressFallback(
+          server,
           'blockchain.address.listunspent',
+          'blockchain.scripthash.listunspent',
           address
         );
         if (Array.isArray(res)) {
@@ -598,9 +637,31 @@ const ElectrumService = {
     const batchPromise = (async () => {
       try {
         const batchResults = await server.requestMany(pendingCalls);
-        batchResults.forEach((response, index) => {
+        await Promise.all(batchResults.map(async (response, index) => {
           const address = pending[index];
           if (response instanceof Error) {
+            if (isInvalidAddressError(response)) {
+              try {
+                const fallbackResponse = await requestWithAddressFallback(
+                  server,
+                  'blockchain.address.listunspent',
+                  'blockchain.scripthash.listunspent',
+                  address
+                );
+                if (Array.isArray(fallbackResponse)) {
+                  const utxos = mapUtxoRows(
+                    address,
+                    fallbackResponse as Array<Record<string, unknown>>
+                  );
+                  cacheByAddr.set(address, { ts: Date.now(), data: utxos });
+                  results[address] = utxos;
+                  return;
+                }
+              } catch (fallbackError) {
+                logError('ElectrumService.getUTXOsMany', fallbackError, { address });
+              }
+            }
+
             logError('ElectrumService.getUTXOsMany', response, { address });
             results[address] = cacheByAddr.get(address)?.data ?? [];
             return;
@@ -617,7 +678,7 @@ const ElectrumService = {
           }
 
           results[address] = cacheByAddr.get(address)?.data ?? [];
-        });
+        }));
       } finally {
         pending.forEach((address) => inflightByAddr.delete(address));
       }
@@ -639,10 +700,12 @@ const ElectrumService = {
   async getBalance(address: string): Promise<number> {
     const server = ElectrumServer();
     try {
-      const response = (await server.request(
+      const response = (await requestWithAddressFallback(
+        server,
         'blockchain.address.get_balance',
+        'blockchain.scripthash.get_balance',
         address,
-        'include_tokens'
+        ['include_tokens']
       )) as { confirmed?: unknown; unconfirmed?: unknown };
       if (
         response &&
@@ -690,8 +753,10 @@ const ElectrumService = {
 
     const p = (async () => {
       try {
-        const history: RequestResponse = await server.request(
+        const history = await requestWithAddressFallback(
+          server,
           'blockchain.address.get_history',
+          'blockchain.scripthash.get_history',
           address
         );
         if (isTransactionHistoryArray(history)) {
@@ -746,9 +811,32 @@ const ElectrumService = {
     const batchPromise = (async () => {
       try {
         const batchResults = await server.requestMany(pendingCalls);
-        batchResults.forEach((response, index) => {
+        await Promise.all(batchResults.map(async (response, index) => {
           const address = pending[index];
           if (response instanceof Error) {
+            if (isInvalidAddressError(response)) {
+              try {
+                const fallbackResponse = await requestWithAddressFallback(
+                  server,
+                  'blockchain.address.get_history',
+                  'blockchain.scripthash.get_history',
+                  address
+                );
+                if (isTransactionHistoryArray(fallbackResponse)) {
+                  historyCacheByAddr.set(address, {
+                    ts: Date.now(),
+                    data: fallbackResponse,
+                  });
+                  results[address] = fallbackResponse;
+                  return;
+                }
+              } catch (fallbackError) {
+                logError('ElectrumService.getTransactionHistoryMany', fallbackError, {
+                  address,
+                });
+              }
+            }
+
             logError('ElectrumService.getTransactionHistoryMany', response, {
               address,
             });
@@ -766,7 +854,7 @@ const ElectrumService = {
           }
 
           results[address] = historyCacheByAddr.get(address)?.data ?? null;
-        });
+        }));
       } finally {
         pending.forEach((address) => inflightHistoryByAddr.delete(address));
       }

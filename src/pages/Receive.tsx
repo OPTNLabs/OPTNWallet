@@ -5,7 +5,8 @@ import { RootState } from '../redux/store';
 import KeyService from '../services/KeyService';
 import { Toast } from '@capacitor/toast';
 import { shortenTxHash } from '../utils/shortenHash';
-import { COIN_TYPE, PREFIX } from '../utils/constants';
+import { PREFIX } from '../utils/constants';
+import { getBchAddressPath } from '../services/HdWalletService';
 import { selectCurrentNetwork } from '../redux/selectors/networkSelectors';
 import { QRCodeSVG } from 'qrcode.react';
 import { hexString } from '../utils/hex';
@@ -267,11 +268,12 @@ const Receive: React.FC = () => {
                       PREFIX[currentNetwork].length
                     )}
                     <br />
-                    {`m/44'/${
-                      PREFIX[currentNetwork] === PREFIX.mainnet
-                        ? COIN_TYPE.bitcoincash
-                        : COIN_TYPE.testnet
-                    }'/0'/${keyPair.changeIndex}/${keyPair.addressIndex}`}
+                    {getBchAddressPath(
+                      currentNetwork,
+                      0,
+                      keyPair.changeIndex,
+                      keyPair.addressIndex
+                    )}
                   </p>
                 </div>
               ))

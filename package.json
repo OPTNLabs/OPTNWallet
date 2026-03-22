@@ -63,6 +63,8 @@
     "@walletconnect/modal": "^2.7.0",
     "@walletconnect/sign-client": "^2.19.2",
     "@walletconnect/utils": "^2.19.2",
+    "@wizardconnect/core": "^0.1.6",
+    "@wizardconnect/wallet": "^0.1.5",
     "axios": "^1.7.7",
     "bip39": "^3.1.0",
     "buffer": "^6.0.3",
