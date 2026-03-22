@@ -67,6 +67,7 @@ describe('WalletManager', () => {
     };
 
     const dbService = {
+      ensureDatabaseStarted: vi.fn(async () => {}),
       getDatabase: vi.fn(() => db),
       flushDatabaseToFile: vi.fn(async () => {}),
     };
@@ -100,6 +101,7 @@ describe('WalletManager', () => {
     };
 
     const dbService = {
+      ensureDatabaseStarted: vi.fn(async () => {}),
       getDatabase: vi.fn(() => db),
       flushDatabaseToFile: vi.fn(async () => {}),
     };
@@ -138,6 +140,45 @@ describe('WalletManager', () => {
     mockedDatabaseService.mockImplementation(
       () =>
         ({
+          ensureDatabaseStarted: vi.fn(async () => {}),
+          getDatabase: vi.fn(() => db),
+        }) as never
+    );
+
+    const wm = WalletManager();
+    const walletId = await wm.setWalletId('mnemonic', 'pass', {
+      networkType: Network.MAINNET,
+      walletType: WalletType.STANDARD,
+    });
+
+    expect(walletId).toBe(42);
+  });
+
+  it('setWalletId ignores wallets on a different network when lookup is provided', async () => {
+    const selectStmt = makeStmt([
+      {
+        id: '21',
+        mnemonic: 'enc:mnemonic',
+        passphrase: 'enc:pass',
+        networkType: Network.CHIPNET,
+        walletType: WalletType.STANDARD,
+      },
+      {
+        id: '42',
+        mnemonic: 'enc:mnemonic',
+        passphrase: 'enc:pass',
+        networkType: Network.MAINNET,
+        walletType: WalletType.STANDARD,
+      },
+    ]);
+    const db = {
+      prepare: vi.fn(() => selectStmt),
+    };
+
+    mockedDatabaseService.mockImplementation(
+      () =>
+        ({
+          ensureDatabaseStarted: vi.fn(async () => {}),
           getDatabase: vi.fn(() => db),
         }) as never
     );
@@ -170,6 +211,7 @@ describe('WalletManager', () => {
     };
 
     const dbService = {
+      ensureDatabaseStarted: vi.fn(async () => {}),
       getDatabase: vi.fn(() => db),
       flushDatabaseToFile: vi.fn(async () => {}),
     };
@@ -207,6 +249,7 @@ describe('WalletManager', () => {
     };
 
     const dbService = {
+      ensureDatabaseStarted: vi.fn(async () => {}),
       getDatabase: vi.fn(() => db),
       flushDatabaseToFile: vi.fn(async () => {}),
     };

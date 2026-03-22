@@ -3,6 +3,10 @@ import { selectCurrentNetwork } from '../redux/selectors/networkSelectors';
 import KeyManager from '../apis/WalletManager/KeyManager';
 import WalletManager from '../apis/WalletManager/WalletManager';
 import KeyGeneration from '../apis/WalletManager/KeyGeneration';
+import type {
+  BchStandardBranchName,
+  DerivedBchPublicAddress,
+} from './HdWalletService';
 import { isArrayBufferLike, isString } from '../utils/typeGuards';
 import { SignedMessage } from '../utils/signed';
 import DeviceIntegrityService from './DeviceIntegrityService';
@@ -18,6 +22,29 @@ const KeyService = {
   async retrieveKeys(walletId: number) {
     const keyManager = KeyManager();
     return await keyManager.retrieveKeys(walletId);
+  },
+
+  async getWalletXpubs(
+    walletId: number,
+    accountNumber = 0
+  ): Promise<Record<BchStandardBranchName, string>> {
+    const keyManager = KeyManager();
+    return await keyManager.getXpubs(walletId, accountNumber);
+  },
+
+  async deriveWalletAddressFromXpub(
+    walletId: number,
+    branchName: BchStandardBranchName,
+    addressIndex: number | bigint,
+    accountNumber = 0
+  ): Promise<DerivedBchPublicAddress> {
+    const keyManager = KeyManager();
+    return await keyManager.deriveAddressFromXpub(
+      walletId,
+      branchName,
+      addressIndex,
+      accountNumber
+    );
   },
 
   async createKeys(

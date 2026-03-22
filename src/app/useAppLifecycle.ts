@@ -10,6 +10,7 @@ import {
   stopUTXOWorker,
 } from '../workers/UTXOWorkerService';
 import { initWalletConnect } from '../redux/walletconnectSlice';
+import { initWizardConnect } from '../redux/wizardconnectSlice';
 import { clearNotifications, UtxoNotification } from '../redux/notificationsSlice';
 import { AppDispatch } from '../redux/store';
 import { reconcileOutboundTransactions } from '../services/OutboundTransactionReconciler';
@@ -25,6 +26,16 @@ export function useWalletConnectInitialization(dispatch: AppDispatch) {
   useEffect(() => {
     dispatch(initWalletConnect());
   }, [dispatch]);
+}
+
+export function useWizardConnectInitialization(
+  walletId: number | null,
+  dispatch: AppDispatch
+) {
+  useEffect(() => {
+    if (!walletId || walletId <= 0) return;
+    dispatch(initWizardConnect(walletId));
+  }, [dispatch, walletId]);
 }
 
 export function useWalletNetworkBootstrap(

@@ -1,28 +1,38 @@
 // src/components/walletconnect/SessionProposalModal.tsx
+import { useState } from 'react';
 import { useSelector, useDispatch } from 'react-redux';
 import { AppDispatch, RootState } from '../../redux/store';
 import { approveSessionProposal, rejectSessionProposal } from '../../redux/walletconnectSlice';
 
 function SessionProposalModal() {
   const dispatch = useDispatch<AppDispatch>();
+  const [submitting, setSubmitting] = useState(false);
   const proposal = useSelector((state: RootState) => state.walletconnect.pendingProposal);
   if (!proposal) return null; // No proposal → no modal
 
   const dappMetadata = proposal.params.proposer.metadata;
 
   const handleApprove = async () => {
+    if (submitting) return;
+    setSubmitting(true);
     try {
       await dispatch(approveSessionProposal()).unwrap();
     } catch (err) {
       console.error('Error approving session:', err);
+    } finally {
+      setSubmitting(false);
     }
   };
 
   const handleReject = async () => {
+    if (submitting) return;
+    setSubmitting(true);
     try {
       await dispatch(rejectSessionProposal()).unwrap();
     } catch (err) {
       console.error('Error rejecting session:', err);
+    } finally {
+      setSubmitting(false);
     }
   };
 
@@ -53,12 +63,14 @@ function SessionProposalModal() {
           <button
             onClick={handleApprove}
             className="wallet-btn-primary px-4 py-2"
+            disabled={submitting}
           >
-            Approve
+            {submitting ? 'Working...' : 'Approve'}
           </button>
           <button
             onClick={handleReject}
             className="wallet-btn-danger px-4 py-2"
+            disabled={submitting}
           >
             Reject
           </button>

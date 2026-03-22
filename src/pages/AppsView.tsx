@@ -23,7 +23,6 @@ function isComingSoonApp(appId: string, appName: string): boolean {
   const normalizedId = appId.toLowerCase();
   const normalizedName = appName.toLowerCase();
   return (
-    normalizedId === 'fundme' ||
     normalizedId.endsWith(':authguard') ||
     normalizedName === 'authguard'
   );
@@ -33,9 +32,7 @@ function shouldHideApp(appId: string, appName: string): boolean {
   const normalizedId = appId.toLowerCase();
   const normalizedName = appName.toLowerCase();
   return (
-    normalizedId === 'fundme' ||
     normalizedId.endsWith(':authguard') ||
-    normalizedName === 'fundme' ||
     normalizedName === 'authguard'
   );
 }
@@ -61,16 +58,6 @@ const AppsView = () => {
         const manifests: AddonManifest[] = reg.getAddons();
 
         const out: AppCard[] = [];
-
-        // ✅ Keep FundMe as-is (do NOT break existing route)
-        out.push({
-          id: 'fundme',
-          name: 'FundMe',
-          icon: '/assets/images/fundme.png',
-          description: 'BCH Crowdfunding',
-          source: 'builtin',
-          disabled: true,
-        });
 
         // ✅ Add addon apps
         for (const m of manifests) {
@@ -105,10 +92,6 @@ const AppsView = () => {
     if (app.disabled) return;
 
     const appId = app.id;
-    if (appId === 'fundme') {
-      navigate('/apps/fundme');
-      return;
-    }
     // addon app => /apps/<addonId>:<appId>
     navigate(`/apps/${appId}`);
   };
