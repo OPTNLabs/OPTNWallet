@@ -119,4 +119,51 @@ export const BUILTIN_ADDONS: AddonManifest[] = [
     contracts: [],
     iconUri: null,
   },
+  // Future built-in addons can be added here. Keep in mind these will be shipped with the app, so they should be high-quality, low-maintenance, and showcase best practices for addon development.
+  // {
+  //   id: 'optn.builtin.fundme',
+  //   name: 'FundMe',
+  //   version: '0.0.1',
+  //   description: 'Native in-wallet FundMe crowdfunding experience.',
+  //   trustTier: 'internal',
+  //   permissions: [
+  //     {
+  //       kind: 'capabilities',
+  //       capabilities: [
+  //         'wallet:context:read',
+  //         'wallet:addresses:read',
+  //         'chain:query',
+  //         'signing:signature_template',
+  //         'tx:broadcast',
+  //         'http:fetch_json',
+  //       ],
+  //     },
+  //     {
+  //       kind: 'http',
+  //       domains: ['fundme.cash'],
+  //     },
+  //   ],
+  //   apps: [
+  //     {
+  //       id: 'fundmeApp',
+  //       name: 'FundMe',
+  //       description: 'Browse BCH crowdfunding campaigns inside OPTN Wallet',
+  //       iconUri: '/assets/images/fundme.png',
+  //       kind: 'declarative',
+  //       requiredCapabilities: [
+  //         'wallet:context:read',
+  //         'wallet:addresses:read',
+  //         'chain:query',
+  //         'signing:signature_template',
+  //         'tx:broadcast',
+  //         'http:fetch_json',
+  //       ],
+  //       config: {
+  //         screen: 'FundMeAddonApp',
+  //       },
+  //     },
+  //   ],
+  //   contracts: [],
+  //   iconUri: '/assets/images/fundme.png',
+  // },
 ];

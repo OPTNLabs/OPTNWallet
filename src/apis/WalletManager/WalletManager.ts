@@ -115,13 +115,16 @@ export default function WalletManager() {
     lookup?: Pick<WalletLookup, 'networkType' | 'walletType'>
   ): Promise<number | null> {
     const dbService = DatabaseService();
+    await dbService.ensureDatabaseStarted();
     const db = dbService.getDatabase();
     if (!db) {
       return null;
     }
     createTables(db);
     try {
-      const query = db.prepare(`SELECT id, mnemonic, passphrase FROM wallets`);
+      const query = db.prepare(
+        `SELECT id, mnemonic, passphrase, networkType, walletType FROM wallets`
+      );
       let walletId: number | null = null;
       while (query.step()) {
         const row = query.getAsObject() as Record<string, unknown>;
@@ -171,6 +174,7 @@ export default function WalletManager() {
     lookup?: Pick<WalletLookup, 'networkType' | 'walletType'>
   ): Promise<boolean> {
     const dbService = DatabaseService();
+    await dbService.ensureDatabaseStarted();
     const db = dbService.getDatabase();
     if (!db) {
       return false;
@@ -178,7 +182,9 @@ export default function WalletManager() {
 
     createTables(db);
     try {
-      const query = db.prepare(`SELECT mnemonic, passphrase FROM wallets`);
+      const query = db.prepare(
+        `SELECT mnemonic, passphrase, networkType, walletType FROM wallets`
+      );
       let accountExists = false;
 
       while (query.step()) {
@@ -231,6 +237,7 @@ export default function WalletManager() {
     walletType: WalletType = WalletType.STANDARD
   ): Promise<boolean> {
     const dbService = DatabaseService();
+    await dbService.ensureDatabaseStarted();
     const db = dbService.getDatabase();
     if (!db) {
       return false;
@@ -293,6 +300,7 @@ export default function WalletManager() {
 
   async function getWalletInfo(walletId: number) {
     const dbService = DatabaseService();
+    await dbService.ensureDatabaseStarted();
     const db = dbService.getDatabase();
     if (!db) {
       console.error('Database not started.');
