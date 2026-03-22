@@ -1,10 +1,15 @@
 import DatabaseService from '../DatabaseManager/DatabaseService';
-import KeyGeneration from './KeyGeneration';
 import AddressManager from '../AddressManager/AddressManager';
 import { Address } from '../../types/types';
 import { Network } from '../../redux/networkSlice';
 import { PREFIX } from '../../utils/constants';
 import { isArrayBufferLike, isString } from '../../utils/typeGuards';
+import {
+  deriveBchChild,
+  deriveBchStandardXpubs,
+  type DerivedBchPublicAddress,
+  type BchStandardBranchName,
+} from '../../services/HdWalletService';
 import SecretCryptoService, {
   isEncryptedPayload,
 } from '../../services/SecretCryptoService';
@@ -20,14 +25,85 @@ function toCount(value: unknown): number {
 
 export default function KeyManager() {
   const dbService = DatabaseService();
-  const KeyGen = KeyGeneration();
   const ManageAddress = AddressManager();
 
   return {
+    getXpubs,
+    deriveAddressFromXpub,
     retrieveKeys,
     createKeys,
     fetchAddressPrivateKey,
   };
+
+  async function getWalletSeedMaterial(wallet_id: number) {
+    await dbService.ensureDatabaseStarted();
+    const db = dbService.getDatabase();
+    if (db == null) {
+      throw new Error('Database is null');
+    }
+
+    const query = db.prepare(
+      `SELECT mnemonic, passphrase, networkType FROM wallets WHERE id = ?;`
+    );
+    const row =
+      (query.get([wallet_id]) as
+        | (string | number | undefined)[]
+        | undefined) ?? [];
+    query.free();
+
+    const mnemonic = await SecretCryptoService.decryptText(toString(row[0]));
+    const passphrase = await SecretCryptoService.decryptText(toString(row[1]));
+    const networkType =
+      row[2] === Network.MAINNET
+        ? Network.MAINNET
+        : row[2] === Network.CHIPNET
+          ? Network.CHIPNET
+          : null;
+
+    if (!mnemonic || !networkType) {
+      throw new Error('Mnemonic or network not found for the given wallet id');
+    }
+
+    return {
+      mnemonic,
+      passphrase,
+      networkType,
+    };
+  }
+
+  async function getXpubs(
+    wallet_id: number,
+    accountNumber = 0
+  ): Promise<Record<BchStandardBranchName, string>> {
+    const { mnemonic, passphrase, networkType } = await getWalletSeedMaterial(wallet_id);
+    return deriveBchStandardXpubs(networkType, mnemonic, passphrase, accountNumber);
+  }
+
+  async function deriveAddressFromXpub(
+    wallet_id: number,
+    branchName: BchStandardBranchName,
+    addressIndex: number | bigint,
+    accountNumber = 0
+  ): Promise<DerivedBchPublicAddress> {
+    const { networkType } = await getWalletSeedMaterial(wallet_id);
+    const xpubs = await getXpubs(wallet_id, accountNumber);
+    const derived = await deriveBchChild(
+      networkType,
+      {
+        kind: 'xpub',
+        hdPublicKey: xpubs[branchName],
+      },
+      addressIndex
+    );
+
+    if (!derived || 'privateKey' in derived) {
+      throw new Error(
+        `Failed to derive public address from xpub for branch ${branchName}`
+      );
+    }
+
+    return derived;
+  }
 
   // Function to retrieve keys from the database
   async function retrieveKeys(wallet_id: number) {
@@ -102,42 +178,24 @@ export default function KeyManager() {
       throw new Error('Database is null');
     }
 
-    const getIdQuery = db.prepare(
-      `SELECT mnemonic, passphrase FROM wallets WHERE id = ?;`
-    );
-    const row =
-      (getIdQuery.get([wallet_id]) as
-        | (string | number | undefined)[]
-        | undefined) ?? [];
-    getIdQuery.free();
+    const { mnemonic, passphrase } = await getWalletSeedMaterial(wallet_id);
 
-    const encryptedMnemonic = toString(row[0]);
-    const encryptedPassphrase = toString(row[1]);
-    const mnemonic = await SecretCryptoService.decryptText(encryptedMnemonic);
-    const passphrase = await SecretCryptoService.decryptText(
-      encryptedPassphrase
-    );
-
-    if (!mnemonic) {
-      throw new Error(
-        'Mnemonic or passphrase not found for the given wallet id'
-      );
-    }
-
-    const keys = await KeyGen.generateKeys(
+    const keys = await deriveBchChild(
       networkType,
-      mnemonic,
-      passphrase,
-      accountNumber,
-      changeNumber,
+      {
+        mnemonic,
+        passphrase,
+        accountIndex: accountNumber,
+        branchIndex: changeNumber,
+      },
       addressNumber
     );
 
-    if (keys) {
+    if (keys && 'privateKey' in keys) {
       const existingKeyQuery = db.prepare(`
         SELECT COUNT(*) as count FROM keys WHERE address = ?;
       `);
-      existingKeyQuery.bind([keys.aliceAddress]);
+      existingKeyQuery.bind([keys.address]);
       existingKeyQuery.step();
       const count = toCount(existingKeyQuery.getAsObject().count);
       existingKeyQuery.free();
@@ -145,7 +203,7 @@ export default function KeyManager() {
       const existingTokenKeyQuery = db.prepare(`
         SELECT COUNT(*) as count FROM keys WHERE token_address = ?;
       `);
-      existingTokenKeyQuery.bind([keys.aliceTokenAddress]);
+      existingTokenKeyQuery.bind([keys.tokenAddress]);
       existingTokenKeyQuery.step();
       const tokenCount = toCount(existingTokenKeyQuery.getAsObject().count);
       existingTokenKeyQuery.free();
@@ -158,8 +216,8 @@ export default function KeyManager() {
           LIMIT 1;
         `);
         existingKeyDetailsQuery.bind([
-          keys.aliceAddress,
-          keys.aliceTokenAddress,
+          keys.address,
+          keys.tokenAddress,
         ]);
 
         let existingWalletId: number | null = null;
@@ -180,20 +238,20 @@ export default function KeyManager() {
 
         if (
           existingWalletId === wallet_id &&
-          existingAddress === keys.aliceAddress &&
-          existingTokenAddress === keys.aliceTokenAddress
+          existingAddress === keys.address &&
+          existingTokenAddress === keys.tokenAddress
         ) {
-          zeroize(keys.alicePriv);
+          zeroize(keys.privateKey);
           return;
         }
 
         throw new Error(
-          `Derived key already exists for wallet ${existingWalletId ?? 'unknown'}: ${keys.aliceAddress} / ${keys.aliceTokenAddress}`
+          `Derived key already exists for wallet ${existingWalletId ?? 'unknown'}: ${keys.address} / ${keys.tokenAddress}`
         );
       }
 
       const encryptedPrivateKey = await SecretCryptoService.encryptBytes(
-        keys.alicePriv
+        keys.privateKey
       );
       const insertQuery = db.prepare(`
         INSERT INTO keys (wallet_id, public_key, private_key, address, token_address, pubkey_hash, account_index, change_index, address_index) 
@@ -201,11 +259,11 @@ export default function KeyManager() {
       `);
       insertQuery.run([
         wallet_id,
-        keys.alicePub,
+        keys.publicKey,
         encryptedPrivateKey,
-        keys.aliceAddress,
-        keys.aliceTokenAddress,
-        keys.alicePkh,
+        keys.address,
+        keys.tokenAddress,
+        keys.publicKeyHash,
         accountNumber,
         changeNumber,
         addressNumber,
@@ -216,7 +274,7 @@ export default function KeyManager() {
         networkType === Network.MAINNET ? PREFIX.mainnet : PREFIX.chipnet;
       const newAddress: Address = {
         wallet_id,
-        address: keys.aliceAddress,
+        address: keys.address,
         balance: 0,
         hd_index: addressNumber,
         change_index: changeNumber,
@@ -225,7 +283,7 @@ export default function KeyManager() {
 
       await ManageAddress.registerAddress(newAddress);
       await dbService.flushDatabaseToFile();
-      zeroize(keys.alicePriv);
+      zeroize(keys.privateKey);
     } else {
       throw new Error('Failed to generate keys');
     }
