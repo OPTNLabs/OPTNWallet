@@ -62,6 +62,21 @@ export const BUILTIN_ADDONS: AddonManifest[] = [
           screen: 'MintCashTokensPoCApp',
         },
       },
+      {
+        id: 'cauldronSwapApp',
+        name: 'Cauldron',
+        description: 'Native BCH to token swaps via Cauldron pools',
+        iconUri: '/assets/images/cauldron-header-logo.png',
+        kind: 'declarative',
+        requiredCapabilities: [
+          'wallet:context:read',
+          'wallet:addresses:read',
+          'utxo:wallet:read',
+        ],
+        config: {
+          screen: 'CauldronSwapApp',
+        },
+      },
     ],
     contracts: [],
 

@@ -925,39 +925,38 @@ const MintCashTokensPoCApp: React.FC<MintCashTokensPoCAppProps> = ({ sdk }) => {
   ]);
 
   return (
-    <div className="wallet-page mx-auto flex h-full w-full max-w-md flex-col overflow-hidden px-4 pt-4 pb-4">
-      <div className="flex-1 min-h-0 overflow-y-auto overscroll-contain pb-4">
-        <div className="space-y-6">
-          {/* Top header */}
-          <div className="space-y-4">
-            <div className="flex justify-center">
-              <img
-                src="/assets/images/OPTNWelcome1.png"
-                alt="OPTN"
-                className="h-auto w-full max-w-[260px] object-contain"
-              />
-            </div>
+    <div className="container mx-auto max-w-md h-full min-h-0 px-4 pt-4 pb-3 flex flex-col overflow-hidden wallet-page">
+      <div className="flex-none space-y-4">
+        <div className="flex justify-center">
+          <img
+            src="/assets/images/OPTNWelcome1.png"
+            alt="OPTN"
+            className="h-auto w-full max-w-[260px] object-contain"
+          />
+        </div>
 
-            <div className="flex items-center justify-between gap-4">
-              <h1 className="min-w-0 truncate text-2xl font-bold wallet-text-strong tracking-[-0.02em]">
-                Mint Tokens
-              </h1>
-              <button
-                type="button"
-                onClick={() => navigate('/apps')}
-                className="wallet-btn-danger px-4 py-2"
-              >
-                Go Back
-              </button>
-            </div>
+        <div className="flex items-center justify-between gap-4">
+          <h1 className="min-w-0 truncate text-2xl font-bold wallet-text-strong tracking-[-0.02em]">
+            Mint Tokens
+          </h1>
+          <button
+            type="button"
+            onClick={() => navigate('/apps')}
+            className="wallet-btn-danger px-4 py-2"
+          >
+            Go Back
+          </button>
+        </div>
 
-            {/* Lightweight toast */}
-            {toast ? (
-              <div className="px-3 py-2 rounded-xl wallet-popup-panel text-xs font-semibold">
-                {toast}
-              </div>
-            ) : null}
+        {toast ? (
+          <div className="px-3 py-2 rounded-xl wallet-popup-panel text-xs font-semibold">
+            {toast}
           </div>
+        ) : null}
+      </div>
+
+      <div className="flex-1 min-h-0 overflow-y-auto overscroll-contain pt-4 pr-1">
+        <div className="space-y-6">
 
           {/* Stepper */}
           <Stepper step={step} canGoTo={canGoToStep} onStep={setStep} />
