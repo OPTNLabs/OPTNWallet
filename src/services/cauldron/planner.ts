@@ -137,7 +137,41 @@ export type NormalizedCauldronToken = {
   name: string;
   decimals: number | null;
   imageUrl: string | null;
+  tvlSats: number;
 };
+
+function parseTokenDecimals(value: unknown): number | null {
+  const parsed =
+    typeof value === 'number'
+      ? value
+      : typeof value === 'string' && value.trim()
+        ? Number(value)
+        : NaN;
+  if (!Number.isFinite(parsed)) return null;
+  return Math.max(0, Math.trunc(parsed));
+}
+
+function findWellKnownDecimals(entries: unknown): number | null {
+  if (!Array.isArray(entries)) return null;
+
+  for (const entry of entries) {
+    if (!entry || typeof entry !== 'object') continue;
+    const candidate = entry as Record<string, unknown>;
+    const token =
+      candidate.token && typeof candidate.token === 'object'
+        ? (candidate.token as Record<string, unknown>)
+        : null;
+
+    const decimals =
+      parseTokenDecimals(candidate.decimals) ??
+      parseTokenDecimals(token?.decimals);
+    if (decimals !== null) {
+      return decimals;
+    }
+  }
+
+  return null;
+}
 
 export function normalizeCauldronTokenRow(
   row: Record<string, unknown>
@@ -168,23 +202,30 @@ export function normalizeCauldronTokenRow(
     findString(row, ['display_name', 'name', 'token_name']) ||
     findString(bcmr ?? {}, ['name']) ||
     symbol;
-  const decimalsRaw = row.decimals ?? row.token_decimals ?? bcmrToken?.decimals;
+  const decimalsRaw =
+    row.decimals ??
+    row.token_decimals ??
+    bcmrToken?.decimals ??
+    findWellKnownDecimals(row.bcmr_well_known);
   const imageUrl =
     findString(row, ['icon', 'icon_url', 'image', 'image_url']) ||
     findString(bcmrUris ?? {}, ['icon']) ||
     null;
+  const tvlSats =
+    typeof row.tvl_sats === 'number'
+      ? row.tvl_sats
+      : typeof row.tvl_sats === 'string' && row.tvl_sats.trim()
+        ? Number(row.tvl_sats)
+        : 0;
+  const totalTvlSats = Number.isFinite(tvlSats) ? tvlSats * 2 : 0;
 
   return {
     tokenId,
     symbol,
     name,
-    decimals:
-      typeof decimalsRaw === 'number'
-        ? decimalsRaw
-        : typeof decimalsRaw === 'string' && decimalsRaw.trim()
-          ? Number(decimalsRaw)
-          : null,
+    decimals: parseTokenDecimals(decimalsRaw),
     imageUrl,
+    tvlSats: totalTvlSats,
   };
 }
 
@@ -216,8 +257,13 @@ export function planBestSinglePoolTradeForTargetDemand(
   let best: CauldronPoolTrade | null = null;
 
   for (const pool of pools) {
-    const pair = createCauldronPoolPair(pool, supplyTokenId, demandTokenId);
-    const trade = calcCauldronTradeWithTargetDemand(pair, demandAmount);
+    let trade;
+    try {
+      const pair = createCauldronPoolPair(pool, supplyTokenId, demandTokenId);
+      trade = calcCauldronTradeWithTargetDemand(pair, demandAmount);
+    } catch {
+      continue;
+    }
     if (!trade) continue;
 
     const poolTrade = toCauldronPoolTrade(pool, supplyTokenId, demandTokenId, {
@@ -247,8 +293,13 @@ export function planBestSinglePoolTradeForTargetSupply(
   let best: CauldronPoolTrade | null = null;
 
   for (const pool of pools) {
-    const pair = createCauldronPoolPair(pool, supplyTokenId, demandTokenId);
-    const trade = calcCauldronTradeWithTargetSupply(pair, supplyAmount);
+    let trade;
+    try {
+      const pair = createCauldronPoolPair(pool, supplyTokenId, demandTokenId);
+      trade = calcCauldronTradeWithTargetSupply(pair, supplyAmount);
+    } catch {
+      continue;
+    }
     if (!trade) continue;
 
     const poolTrade = toCauldronPoolTrade(pool, supplyTokenId, demandTokenId, {
@@ -316,12 +367,17 @@ export function planAggregatedTradeForTargetSupply(
 
     for (let i = 0; i < workingPools.length; i += 1) {
       const current = workingPools[i];
-      const pair = createCauldronPoolPair(
-        current.pool,
-        supplyTokenId,
-        demandTokenId
-      );
-      const trade = calcCauldronTradeWithTargetSupply(pair, chunk);
+      let trade;
+      try {
+        const pair = createCauldronPoolPair(
+          current.pool,
+          supplyTokenId,
+          demandTokenId
+        );
+        trade = calcCauldronTradeWithTargetSupply(pair, chunk);
+      } catch {
+        continue;
+      }
       if (!trade) continue;
 
       const poolTrade = toCauldronPoolTrade(

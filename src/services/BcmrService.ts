@@ -583,6 +583,16 @@ export default class BcmrService {
     const iconUri = uris?.icon;
     if (!iconUri) return null;
 
+    if (
+      iconUri.startsWith('http://') ||
+      iconUri.startsWith('https://') ||
+      iconUri.startsWith('data:') ||
+      iconUri.startsWith('blob:') ||
+      iconUri.startsWith('/')
+    ) {
+      return iconUri;
+    }
+
     // use hash of authbase or authbase+nft as filename
     const filename = nftCommitment
       ? sha256.text(`${authbase}${nftCommitment}`)
