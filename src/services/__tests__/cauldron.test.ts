@@ -191,6 +191,33 @@ describe('Cauldron service', () => {
       name: 'Breakfast Token',
       decimals: 2,
       imageUrl: 'ipfs://breakfast.png',
+      tvlSats: 0,
+    });
+  });
+
+  it('normalizes decimals from bcmr well-known metadata when present', () => {
+    const normalized = normalizeCauldronTokenRow({
+      token_id:
+        'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+      display_name: 'Moria USD',
+      display_symbol: 'MUSD',
+      bcmr_well_known: [
+        {
+          symbol: 'MUSD',
+          decimals: 4,
+          name: 'Moria USD',
+        },
+      ],
+    });
+
+    expect(normalized).toEqual({
+      tokenId:
+        'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+      symbol: 'MUSD',
+      name: 'Moria USD',
+      decimals: 4,
+      imageUrl: null,
+      tvlSats: 0,
     });
   });
 

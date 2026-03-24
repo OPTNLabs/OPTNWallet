@@ -88,11 +88,15 @@ function mergeTokenCatalog(
         name: `Token ${pool.output.tokenCategory.slice(0, 8)}`,
         decimals: null,
         imageUrl: null,
+        tvlSats: 0,
       });
     }
   }
 
-  return [...byId.values()].sort((a, b) => a.symbol.localeCompare(b.symbol));
+  return [...byId.values()].sort((a, b) => {
+    if (b.tvlSats !== a.tvlSats) return b.tvlSats - a.tvlSats;
+    return a.symbol.localeCompare(b.symbol);
+  });
 }
 
 function formatBchAmount(valueSats: bigint): string {
@@ -118,6 +122,22 @@ function formatTokenDisplayAmount(
 ): string {
   const amount = formatTokenAmount(value, decimals);
   return symbol ? `${amount} ${symbol}` : amount;
+}
+
+function formatApproxDisplayNumber(value: number, maxFractionDigits = 8): string {
+  if (!Number.isFinite(value) || value <= 0) return '0';
+  return value.toLocaleString('en-US', {
+    minimumFractionDigits: 0,
+    maximumFractionDigits: maxFractionDigits,
+    useGrouping: false,
+  });
+}
+
+function parseDisplayAmountToNumber(value: string): number | null {
+  const normalized = value.replace(/,/g, '').trim();
+  if (!normalized) return null;
+  const parsed = Number(normalized);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
 }
 
 function formatSignedBchAmount(valueSats: bigint): string {
@@ -152,6 +172,104 @@ function parseBchInputToSats(value: string): bigint | null {
   return parseDecimalToAtomic(value, 8);
 }
 
+function sanitizeDecimalInput(
+  value: string,
+  decimals: number,
+  maxAtomic?: bigint | null
+): string {
+  let sanitized = value.replace(/,/g, '.').replace(/[^0-9.]/g, '');
+  const firstDot = sanitized.indexOf('.');
+  if (firstDot !== -1) {
+    sanitized =
+      sanitized.slice(0, firstDot + 1) +
+      sanitized
+        .slice(firstDot + 1)
+        .replace(/\./g, '')
+        .slice(0, Math.max(0, decimals));
+  }
+
+  if (sanitized.startsWith('.')) {
+    sanitized = `0${sanitized}`;
+  }
+
+  const parsed = parseDecimalToAtomic(sanitized, decimals);
+  if (maxAtomic != null && parsed != null && parsed > maxAtomic) {
+    return formatTokenAmount(maxAtomic, decimals);
+  }
+
+  return sanitized;
+}
+
+function findFirstNumericExtensionValue(
+  value: unknown,
+  path: string[] = []
+): string | null {
+  if (path.length > 5 || value == null) return null;
+
+  if (typeof value === 'string') {
+    const trimmed = value.trim();
+    return /^\d+(\.\d+)?$/.test(trimmed) ? trimmed : null;
+  }
+  if (typeof value === 'number' && Number.isFinite(value) && value >= 0) {
+    return String(value);
+  }
+  if (typeof value !== 'object') return null;
+
+  const entries = Object.entries(value as Record<string, unknown>);
+  const preferredKeys = [
+    'max_supply',
+    'maxSupply',
+    'supply_cap',
+    'supplyCap',
+    'cap',
+    'total_supply',
+    'totalSupply',
+  ];
+
+  for (const key of preferredKeys) {
+    const match = entries.find(([entryKey]) => entryKey === key);
+    if (!match) continue;
+    const nested = findFirstNumericExtensionValue(match[1], [...path, match[0]]);
+    if (nested) return nested;
+  }
+
+  for (const [, nestedValue] of entries) {
+    const nested = findFirstNumericExtensionValue(nestedValue, [...path, '']);
+    if (nested) return nested;
+  }
+
+  return null;
+}
+
+function fuzzyTokenMatchScore(query: string, symbol: string, name: string): number {
+  const q = query.trim().toLowerCase();
+  if (!q) return 0;
+
+  const symbolValue = symbol.toLowerCase();
+  const nameValue = name.toLowerCase();
+  const combined = `${symbolValue} ${nameValue}`;
+
+  if (symbolValue === q) return 1000;
+  if (nameValue === q) return 950;
+  if (symbolValue.startsWith(q)) return 900;
+  if (nameValue.startsWith(q)) return 850;
+  if (symbolValue.includes(q)) return 800;
+  if (nameValue.includes(q)) return 750;
+  if (combined.includes(q)) return 700;
+
+  let cursor = 0;
+  for (const char of combined) {
+    if (char === q[cursor]) {
+      cursor += 1;
+      if (cursor === q.length) {
+        return 500 - combined.length;
+      }
+    }
+  }
+
+  return -1;
+}
+
 function applySlippage(amount: bigint, bps: bigint): bigint {
   return (amount * (10_000n - bps)) / 10_000n;
 }
@@ -163,7 +281,9 @@ function estimateBps(part: bigint, total: bigint): bigint {
 
 function shortAddress(value: string): string {
   if (!value) return '';
-  return value.length <= 18 ? value : `${value.slice(0, 10)}...${value.slice(-6)}`;
+  return value.length <= 18
+    ? value
+    : `${value.slice(0, 10)}...${value.slice(-6)}`;
 }
 
 function parseApyPercent(
@@ -183,6 +303,11 @@ function parseApyPercent(
 function formatPercentValue(value: number): string {
   if (!Number.isFinite(value)) return '0.00%';
   return `${value >= 0 ? '+' : ''}${value.toFixed(2)}%`;
+}
+
+function formatUnsignedPercentValue(value: number): string {
+  if (!Number.isFinite(value) || value < 0) return '0.00%';
+  return `${value.toFixed(2)}%`;
 }
 
 type DerivedPoolHistoryStats = {
@@ -355,7 +480,10 @@ const CauldronSwapApp: React.FC<CauldronSwapAppProps> = ({ sdk, app }) => {
 
   const [tokens, setTokens] = useState<NormalizedCauldronToken[]>([]);
   const [pools, setPools] = useState<CauldronPool[]>([]);
+  const [livePools, setLivePools] = useState<CauldronPool[]>([]);
   const [selectedTokenId, setSelectedTokenId] = useState<string>('');
+  const [tokenPickerOpen, setTokenPickerOpen] = useState(false);
+  const [tokenSearchQuery, setTokenSearchQuery] = useState('');
   const [activeView, setActiveView] = useState<CauldronView>('swap');
   const [direction, setDirection] = useState<SwapDirection>('bch_to_token');
   const [amount, setAmount] = useState<string>('0.001');
@@ -365,6 +493,9 @@ const CauldronSwapApp: React.FC<CauldronSwapAppProps> = ({ sdk, app }) => {
   const [submitting, setSubmitting] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [quote, setQuote] = useState<QuoteState | null>(null);
+  const [selectedTokenSpotPriceSats, setSelectedTokenSpotPriceSats] = useState<number | null>(
+    null
+  );
   const [showQuoteDetails, setShowQuoteDetails] = useState(true);
   const [reviewOpen, setReviewOpen] = useState(false);
   const [reviewWarningsAccepted, setReviewWarningsAccepted] = useState(false);
@@ -376,7 +507,9 @@ const CauldronSwapApp: React.FC<CauldronSwapAppProps> = ({ sdk, app }) => {
   >(null);
   const [selectedWalletPoolHistory, setSelectedWalletPoolHistory] =
     useState<CauldronPoolHistoryResponse | null>(null);
-  const [selectedWalletPoolApy, setSelectedWalletPoolApy] = useState<string | null>(null);
+  const [selectedWalletPoolApy, setSelectedWalletPoolApy] = useState<
+    string | null
+  >(null);
   const [loadingWalletPoolHistory, setLoadingWalletPoolHistory] =
     useState(false);
   const [, setApiStatus] = useState<{
@@ -388,14 +521,54 @@ const CauldronSwapApp: React.FC<CauldronSwapAppProps> = ({ sdk, app }) => {
   } | null>(null);
 
   const feeRate = 1n;
+  const quoteActionsDisabled = true;
   const amountInputRef = useRef<HTMLInputElement | null>(null);
   const selectedToken = useMemo(
     () => tokens.find((token) => token.tokenId === selectedTokenId) ?? null,
     [tokens, selectedTokenId]
   );
-  const sharedMetadata = useSharedTokenMetadata(
-    selectedTokenId ? [selectedTokenId] : []
+  const metadataCategories = useMemo(
+    () =>
+      Array.from(
+        new Set(
+          [
+            selectedTokenId,
+            ...tokens.map((token) => token.tokenId),
+            ...walletPoolPositions.map((position) => position.pool.output.tokenCategory),
+          ].filter(Boolean)
+        )
+      ),
+    [selectedTokenId, tokens, walletPoolPositions]
   );
+  const sharedMetadata = useSharedTokenMetadata(
+    metadataCategories
+  );
+  const filteredTokens = useMemo(() => {
+    const query = tokenSearchQuery.trim();
+    if (!query) return tokens;
+
+    return [...tokens]
+      .map((token) => {
+        const metadata = sharedMetadata[token.tokenId];
+        const symbol = metadata?.symbol || token.symbol;
+        const name = metadata?.name || token.name;
+        return {
+          token,
+          score: fuzzyTokenMatchScore(query, symbol, name),
+          symbol,
+          name,
+        };
+      })
+      .filter((entry) => entry.score >= 0)
+      .sort((left, right) => {
+        if (right.score !== left.score) return right.score - left.score;
+        if (right.token.tvlSats !== left.token.tvlSats) {
+          return right.token.tvlSats - left.token.tvlSats;
+        }
+        return left.symbol.localeCompare(right.symbol);
+      })
+      .map((entry) => entry.token);
+  }, [sharedMetadata, tokenSearchQuery, tokens]);
   const selectedMetadata = selectedTokenId
     ? sharedMetadata[selectedTokenId]
     : undefined;
@@ -489,8 +662,7 @@ const CauldronSwapApp: React.FC<CauldronSwapAppProps> = ({ sdk, app }) => {
 
         const normalizedTokens = [...tokenRows, ...walletTokenRows]
           .map((row) => normalizeCauldronTokenRow(row))
-          .filter((row): row is NormalizedCauldronToken => row !== null)
-          .sort((a, b) => a.symbol.localeCompare(b.symbol));
+          .filter((row): row is NormalizedCauldronToken => row !== null);
         const mergedTokens = mergeTokenCatalog(normalizedTokens, []);
 
         setTokens(mergedTokens);
@@ -527,10 +699,13 @@ const CauldronSwapApp: React.FC<CauldronSwapAppProps> = ({ sdk, app }) => {
 
     if (!selectedTokenId) {
       setPools([]);
+      setLivePools([]);
       return () => {
         cancelled = true;
       };
     }
+
+    setLivePools([]);
 
     void (async () => {
       try {
@@ -570,6 +745,42 @@ const CauldronSwapApp: React.FC<CauldronSwapAppProps> = ({ sdk, app }) => {
 
   useEffect(() => {
     let cancelled = false;
+
+    if (!selectedTokenId) {
+      setSelectedTokenSpotPriceSats(null);
+      return () => {
+        cancelled = true;
+      };
+    }
+
+    void (async () => {
+      try {
+        setSelectedTokenSpotPriceSats(null);
+        const client = new CauldronApiClient(currentNetwork);
+        const payload = await client.getCurrentPrice(selectedTokenId);
+        const price =
+          typeof payload.price === 'number'
+            ? payload.price
+            : typeof payload.price === 'string'
+              ? Number(payload.price)
+              : NaN;
+        if (!cancelled) {
+          setSelectedTokenSpotPriceSats(Number.isFinite(price) && price > 0 ? price : null);
+        }
+      } catch {
+        if (!cancelled) {
+          setSelectedTokenSpotPriceSats(null);
+        }
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [currentNetwork, direction, selectedTokenId]);
+
+  useEffect(() => {
+    let cancelled = false;
     let unsubscribe: (() => Promise<void>) | null = null;
 
     if (!selectedTokenId) {
@@ -588,12 +799,15 @@ const CauldronSwapApp: React.FC<CauldronSwapAppProps> = ({ sdk, app }) => {
             .map((row) => normalizeCauldronPoolRow(row))
             .filter((pool): pool is CauldronPool => pool !== null);
 
-          setPools(normalizedPools);
+          setLivePools(normalizedPools);
           setApiStatus((current) =>
             current
               ? {
                   ...current,
-                  poolsLoaded: normalizedPools.length,
+                  poolsLoaded:
+                    normalizedPools.length > 0
+                      ? normalizedPools.length
+                      : current.poolsLoaded,
                   liveUpdatesEnabled: true,
                   liveUpdatedAt: Date.now(),
                 }
@@ -628,8 +842,11 @@ const CauldronSwapApp: React.FC<CauldronSwapAppProps> = ({ sdk, app }) => {
   }, [currentNetwork, selectedTokenId]);
 
   const tokenPools = useMemo(
-    () => pools.filter((pool) => pool.output.tokenCategory === selectedTokenId),
-    [pools, selectedTokenId]
+    () =>
+      (livePools.length > 0 ? livePools : pools).filter(
+        (pool) => pool.output.tokenCategory === selectedTokenId
+      ),
+    [livePools, pools, selectedTokenId]
   );
   const visibleWalletPoolPositions = useMemo(() => {
     if (!selectedTokenId) return walletPoolPositions;
@@ -654,17 +871,22 @@ const CauldronSwapApp: React.FC<CauldronSwapAppProps> = ({ sdk, app }) => {
     selectedMetadata?.decimals ?? selectedToken?.decimals ?? 0;
   const tokenIconUri =
     selectedMetadata?.iconUri || selectedToken?.imageUrl || null;
-  const selectedPoolToken =
-    selectedWalletPoolPosition
-      ? tokens.find(
-          (token) =>
-            token.tokenId === selectedWalletPoolPosition.pool.output.tokenCategory
-        ) ?? null
-      : null;
+  const selectedTokenMaxSupplyAtomic = useMemo(() => {
+    const maxSupplyValue = findFirstNumericExtensionValue(
+      selectedMetadata?.snapshot?.extensions
+    );
+    if (!maxSupplyValue) return null;
+    return parseDecimalToAtomic(maxSupplyValue, effectiveDecimals);
+  }, [effectiveDecimals, selectedMetadata?.snapshot?.extensions]);
+  const selectedPoolToken = selectedWalletPoolPosition
+    ? tokens.find(
+        (token) =>
+          token.tokenId === selectedWalletPoolPosition.pool.output.tokenCategory
+      ) ?? null
+    : null;
   const selectedPoolSymbol = selectedPoolToken?.symbol ?? effectiveSymbol;
   const selectedPoolName = selectedPoolToken?.name ?? effectiveName;
-  const selectedPoolDecimals =
-    selectedPoolToken?.decimals ?? effectiveDecimals;
+  const selectedPoolDecimals = selectedPoolToken?.decimals ?? effectiveDecimals;
   const selectedWalletPoolStats = useMemo(
     () => derivePoolHistoryStats(selectedWalletPoolHistory),
     [selectedWalletPoolHistory]
@@ -756,6 +978,89 @@ const CauldronSwapApp: React.FC<CauldronSwapAppProps> = ({ sdk, app }) => {
         : parseDecimalToAtomic(amount, effectiveDecimals),
     [amount, direction, effectiveDecimals]
   );
+  const previewState = useMemo(() => {
+    if (
+      !selectedTokenId ||
+      !parsedAmount ||
+      parsedAmount <= 0n ||
+      tokenPools.length === 0
+    ) {
+      return { plan: null, error: null as string | null };
+    }
+
+    try {
+      return {
+        plan:
+          planAggregatedTradeForTargetSupply(
+            tokenPools,
+            direction === 'bch_to_token'
+              ? CAULDRON_NATIVE_BCH
+              : selectedTokenId,
+            direction === 'bch_to_token'
+              ? selectedTokenId
+              : CAULDRON_NATIVE_BCH,
+            parsedAmount
+          ) ?? null,
+        error: null as string | null,
+      };
+    } catch (error) {
+      return {
+        plan: null,
+        error:
+          error instanceof Error
+            ? error.message
+            : 'Unable to preview this Cauldron market right now.',
+      };
+    }
+  }, [direction, parsedAmount, selectedTokenId, tokenPools]);
+  const previewPlan = previewState.plan;
+  const previewError = previewState.error;
+  const inputAmountNumber = useMemo(
+    () => parseDisplayAmountToNumber(amount),
+    [amount]
+  );
+  const spotPreview = useMemo(() => {
+    if (!selectedTokenSpotPriceSats || !inputAmountNumber || inputAmountNumber <= 0) {
+      return null;
+    }
+    const tokenAtomsPerUnit = Math.pow(10, Math.max(effectiveDecimals, 0));
+    if (!Number.isFinite(tokenAtomsPerUnit) || tokenAtomsPerUnit <= 0) {
+      return null;
+    }
+
+    if (direction === 'bch_to_token') {
+      const supplySats = Number(parsedAmount ?? 0n);
+      if (!Number.isFinite(supplySats) || supplySats <= 0) return null;
+      return {
+        demandDisplay: formatApproxDisplayNumber(
+          supplySats / (selectedTokenSpotPriceSats * tokenAtomsPerUnit),
+          Math.min(Math.max(effectiveDecimals, 0), 8)
+        ),
+        rateLabel: `1 ${effectiveSymbol} = ${formatApproxDisplayNumber(
+          (selectedTokenSpotPriceSats * tokenAtomsPerUnit) / 100_000_000,
+          8
+        )} BCH`,
+      };
+    }
+
+    const receiveSats =
+      inputAmountNumber * tokenAtomsPerUnit * selectedTokenSpotPriceSats;
+    if (!Number.isFinite(receiveSats) || receiveSats <= 0) return null;
+    return {
+      demandDisplay: formatApproxDisplayNumber(receiveSats / 100_000_000, 8),
+      rateLabel: `1 BCH = ${formatApproxDisplayNumber(
+        100_000_000 / (selectedTokenSpotPriceSats * tokenAtomsPerUnit),
+        Math.min(Math.max(effectiveDecimals, 0), 8)
+      )} ${effectiveSymbol}`,
+    };
+  }, [
+    direction,
+    effectiveDecimals,
+    effectiveSymbol,
+    inputAmountNumber,
+    parsedAmount,
+    selectedTokenSpotPriceSats,
+  ]);
   const payBalanceCaption =
     direction === 'bch_to_token'
       ? 'Bitcoin Cash'
@@ -768,30 +1073,45 @@ const CauldronSwapApp: React.FC<CauldronSwapAppProps> = ({ sdk, app }) => {
     () =>
       quote
         ? quote.trades.reduce((sum, trade) => sum + trade.tradeFee, 0n)
-        : 0n,
-    [quote]
+        : previewPlan
+          ? previewPlan.trades.reduce((sum, trade) => sum + trade.tradeFee, 0n)
+          : 0n,
+    [previewPlan, quote]
   );
   const outputDisplayValue = useMemo(() => {
-    if (!quote) return '0';
+    const demand = quote?.totalDemand ?? previewPlan?.summary.demand ?? 0n;
+    if (demand <= 0n) return spotPreview?.demandDisplay ?? '0';
     return direction === 'bch_to_token'
-      ? formatTokenAmount(quote.totalDemand, effectiveDecimals)
-      : formatBchAmount(quote.totalDemand);
-  }, [direction, effectiveDecimals, quote]);
+      ? formatTokenAmount(demand, effectiveDecimals)
+      : formatBchAmount(demand);
+  }, [direction, effectiveDecimals, previewPlan, quote, spotPreview]);
   const quoteRateLabel = useMemo(() => {
-    if (!quote || quote.totalSupply <= 0n || quote.totalDemand <= 0n)
-      return null;
+    const totalSupply = quote?.totalSupply ?? previewPlan?.summary.supply ?? 0n;
+    const totalDemand = quote?.totalDemand ?? previewPlan?.summary.demand ?? 0n;
+    if (totalSupply <= 0n || totalDemand <= 0n) return spotPreview?.rateLabel ?? null;
     if (direction === 'bch_to_token') {
       const unitPrice =
-        (quote.totalSupply * 10n ** BigInt(effectiveDecimals)) /
-        quote.totalDemand;
+        (totalSupply * 10n ** BigInt(effectiveDecimals)) / totalDemand;
       return `1 ${effectiveSymbol} = ${formatCompactBchAmount(unitPrice)}`;
     }
     const unitPrice =
-      (quote.totalDemand * 10n ** BigInt(effectiveDecimals)) /
-      quote.totalSupply;
+      (totalDemand * 10n ** BigInt(effectiveDecimals)) / totalSupply;
     return `1 BCH = ${formatTokenAmount(unitPrice, effectiveDecimals)} ${effectiveSymbol}`;
-  }, [direction, effectiveDecimals, effectiveSymbol, quote]);
+  }, [direction, effectiveDecimals, effectiveSymbol, previewPlan, quote, spotPreview]);
+  const effectiveAtomicPriceSats = useMemo(() => {
+    const totalSupply = quote?.totalSupply ?? previewPlan?.summary.supply ?? 0n;
+    const totalDemand = quote?.totalDemand ?? previewPlan?.summary.demand ?? 0n;
+    if (totalSupply <= 0n || totalDemand <= 0n) return null;
+
+    if (direction === 'bch_to_token') {
+      return Number(totalSupply) / Number(totalDemand);
+    }
+    return Number(totalDemand) / Number(totalSupply);
+  }, [direction, previewPlan, quote]);
   const canSwap = Boolean(selectedTokenId && parsedAmount && parsedAmount > 0n);
+  const payUnitLabel = direction === 'bch_to_token' ? 'BCH' : effectiveSymbol;
+  const receiveUnitLabel =
+    direction === 'bch_to_token' ? effectiveSymbol : 'BCH';
   const spendSummary = quote
     ? direction === 'bch_to_token'
       ? formatCompactBchAmount(quote.totalSupply)
@@ -815,16 +1135,40 @@ const CauldronSwapApp: React.FC<CauldronSwapAppProps> = ({ sdk, app }) => {
           effectiveSymbol
         )
       : formatCompactBchAmount(quote.totalDemand)
-    : `0 ${direction === 'bch_to_token' ? effectiveSymbol : 'BCH'}`;
-  const payUnitLabel = direction === 'bch_to_token' ? 'BCH' : effectiveSymbol;
-  const receiveUnitLabel =
-    direction === 'bch_to_token' ? effectiveSymbol : 'BCH';
+    : previewPlan
+      ? direction === 'bch_to_token'
+        ? formatTokenDisplayAmount(
+            previewPlan.summary.demand,
+            effectiveDecimals,
+            effectiveSymbol
+          )
+        : formatCompactBchAmount(previewPlan.summary.demand)
+      : spotPreview
+        ? `${spotPreview.demandDisplay} ${receiveUnitLabel}`
+      : `0 ${direction === 'bch_to_token' ? effectiveSymbol : 'BCH'}`;
   const feeRatioBps = quote
     ? estimateBps(
         quote.estimatedFeeSatoshis,
         direction === 'bch_to_token' ? quote.totalSupply : quote.totalDemand
       )
     : 0n;
+  const priceImpactLabel = useMemo(() => {
+    if (
+      !selectedTokenSpotPriceSats ||
+      !effectiveAtomicPriceSats ||
+      !Number.isFinite(effectiveAtomicPriceSats) ||
+      effectiveAtomicPriceSats <= 0
+    ) {
+      return quote ? formatUnsignedPercentValue(Number(feeRatioBps) / 100) : 'Get quote';
+    }
+
+    const impact =
+      Math.abs(effectiveAtomicPriceSats - selectedTokenSpotPriceSats) /
+      selectedTokenSpotPriceSats;
+    return formatUnsignedPercentValue(impact * 100);
+  }, [effectiveAtomicPriceSats, feeRatioBps, quote, selectedTokenSpotPriceSats]);
+  const previewTradeCount =
+    quote?.trades.length ?? previewPlan?.trades.length ?? 0;
 
   const renderAssetBadge = (
     primaryLabel: string,
@@ -859,6 +1203,45 @@ const CauldronSwapApp: React.FC<CauldronSwapAppProps> = ({ sdk, app }) => {
       </div>
       <span className="text-[11px] wallet-muted">{secondaryLabel}</span>
     </div>
+  );
+
+  const renderTokenPickerTrigger = (compact = false) => (
+    <button
+      type="button"
+      onClick={() => {
+        setTokenSearchQuery('');
+        setTokenPickerOpen(true);
+      }}
+      disabled={loading || submitting || tokens.length === 0}
+      className="flex w-full items-center gap-2 rounded-xl border px-3 py-2 text-left transition"
+      style={{
+        backgroundColor: 'var(--wallet-surface-strong)',
+        borderColor: 'var(--wallet-border)',
+      }}
+    >
+      {tokenIconUri ? (
+        <img
+          src={tokenIconUri}
+          alt={effectiveSymbol}
+          className="h-7 w-7 rounded-full object-cover"
+        />
+      ) : (
+        <div className="flex h-7 w-7 items-center justify-center rounded-full bg-[var(--wallet-accent-soft)] text-xs font-bold wallet-text-strong">
+          {effectiveSymbol.slice(0, 1)}
+        </div>
+      )}
+      <div className="min-w-0 flex-1">
+        <div className="truncate text-sm font-semibold wallet-text-strong">
+          {effectiveSymbol} · {effectiveName}
+        </div>
+        {!compact && selectedToken?.tvlSats ? (
+          <div className="text-xs wallet-muted">
+            TVL {formatCompactBchAmount(BigInt(Math.trunc(selectedToken.tvlSats)))}
+          </div>
+        ) : null}
+      </div>
+      <span className="text-sm wallet-muted">⌄</span>
+    </button>
   );
 
   const handleQuote = async () => {
@@ -1076,7 +1459,7 @@ const CauldronSwapApp: React.FC<CauldronSwapAppProps> = ({ sdk, app }) => {
         </div>
         <div className="mt-3 flex items-center justify-between gap-3">
           <h1 className="min-w-0 truncate text-xl font-bold tracking-[-0.02em] wallet-text-strong">
-            {app.name}
+            {app.name} (Demo)
           </h1>
           <button
             type="button"
@@ -1154,37 +1537,7 @@ const CauldronSwapApp: React.FC<CauldronSwapAppProps> = ({ sdk, app }) => {
                       {direction === 'bch_to_token' ? (
                         renderAssetBadge('BCH', 'Wallet', null, 'bch')
                       ) : (
-                        <div className="flex items-center gap-2">
-                          {tokenIconUri ? (
-                            <img
-                              src={tokenIconUri}
-                              alt={effectiveSymbol}
-                              className="h-7 w-7 rounded-full object-cover"
-                            />
-                          ) : (
-                            <div className="flex h-7 w-7 items-center justify-center rounded-full bg-[var(--wallet-accent-soft)] text-xs font-bold wallet-text-strong">
-                              {effectiveSymbol.slice(0, 1)}
-                            </div>
-                          )}
-                          <select
-                            value={selectedTokenId}
-                            onChange={(event) => {
-                              setSelectedTokenId(event.target.value);
-                              setQuote(null);
-                            }}
-                            className="w-full border-0 bg-transparent p-0 text-sm font-semibold wallet-text-strong outline-none"
-                            disabled={loading || submitting}
-                          >
-                            {tokens.length === 0 ? (
-                              <option value="">No tokens</option>
-                            ) : null}
-                            {tokens.map((token) => (
-                              <option key={token.tokenId} value={token.tokenId}>
-                                {token.symbol} · {token.name}
-                              </option>
-                            ))}
-                          </select>
-                        </div>
+                        renderTokenPickerTrigger(true)
                       )}
                     </div>
                     <div
@@ -1197,7 +1550,25 @@ const CauldronSwapApp: React.FC<CauldronSwapAppProps> = ({ sdk, app }) => {
                           ref={amountInputRef}
                           value={amount}
                           onChange={(event) => {
-                            setAmount(event.target.value);
+                            const decimals =
+                              direction === 'bch_to_token' ? 8 : effectiveDecimals;
+                            const nextAmount = sanitizeDecimalInput(
+                              event.target.value,
+                              decimals,
+                              direction === 'token_to_bch'
+                                ? selectedTokenMaxSupplyAtomic
+                                : null
+                            );
+                            if (
+                              direction === 'token_to_bch' &&
+                              selectedTokenMaxSupplyAtomic != null &&
+                              nextAmount !== event.target.value
+                            ) {
+                              setMessage(
+                                'Amount was adjusted to match this token\'s allowed precision or published max supply.'
+                              );
+                            }
+                            setAmount(nextAmount);
                             setQuote(null);
                           }}
                           inputMode="decimal"
@@ -1265,37 +1636,7 @@ const CauldronSwapApp: React.FC<CauldronSwapAppProps> = ({ sdk, app }) => {
                       }}
                     >
                       {direction === 'bch_to_token' ? (
-                        <div className="flex items-center gap-2">
-                          {tokenIconUri ? (
-                            <img
-                              src={tokenIconUri}
-                              alt={effectiveSymbol}
-                              className="h-7 w-7 rounded-full object-cover"
-                            />
-                          ) : (
-                            <div className="flex h-7 w-7 items-center justify-center rounded-full bg-[var(--wallet-accent-soft)] text-xs font-bold wallet-text-strong">
-                              {effectiveSymbol.slice(0, 1)}
-                            </div>
-                          )}
-                          <select
-                            value={selectedTokenId}
-                            onChange={(event) => {
-                              setSelectedTokenId(event.target.value);
-                              setQuote(null);
-                            }}
-                            className="w-full border-0 bg-transparent p-0 text-sm font-semibold wallet-text-strong outline-none"
-                            disabled={loading || submitting}
-                          >
-                            {tokens.length === 0 ? (
-                              <option value="">No tokens</option>
-                            ) : null}
-                            {tokens.map((token) => (
-                              <option key={token.tokenId} value={token.tokenId}>
-                                {token.symbol} · {token.name}
-                              </option>
-                            ))}
-                          </select>
-                        </div>
+                        renderTokenPickerTrigger(true)
                       ) : (
                         renderAssetBadge('BCH', 'Wallet', null, 'bch')
                       )}
@@ -1334,8 +1675,11 @@ const CauldronSwapApp: React.FC<CauldronSwapAppProps> = ({ sdk, app }) => {
 
                   <button
                     type="button"
-                    onClick={quote ? handleReviewSwap : () => void handleQuote()}
+                    onClick={
+                      quote ? handleReviewSwap : () => void handleQuote()
+                    }
                     disabled={
+                      quoteActionsDisabled ||
                       loading ||
                       quoting ||
                       submitting ||
@@ -1385,31 +1729,51 @@ const CauldronSwapApp: React.FC<CauldronSwapAppProps> = ({ sdk, app }) => {
                         </span>
                       </div>
                       <div className="flex items-center justify-between gap-3">
+                        <span className="wallet-muted">
+                          Cauldron platform fee (0.0%)
+                        </span>
+                        <span className="wallet-text-strong">0 BCH</span>
+                      </div>
+                      <div className="flex items-center justify-between gap-3">
                         <span className="wallet-muted">Network fee</span>
                         <span className="wallet-text-strong">
-                          {formatCompactBchAmount(quote.estimatedFeeSatoshis)}
+                          {quote
+                            ? formatCompactBchAmount(quote.estimatedFeeSatoshis)
+                            : 'Get quote'}
                         </span>
                       </div>
                       <div className="flex items-center justify-between gap-3">
                         <span className="wallet-muted">Minimum receive</span>
                         <span className="wallet-text-strong">
-                          {direction === 'bch_to_token'
-                            ? formatTokenDisplayAmount(
-                                quote.minReceive,
-                                effectiveDecimals,
-                                effectiveSymbol
-                              )
-                            : formatCompactBchAmount(quote.minReceive)}
+                          {quote
+                            ? direction === 'bch_to_token'
+                              ? formatTokenDisplayAmount(
+                                  quote.minReceive,
+                                  effectiveDecimals,
+                                  effectiveSymbol
+                                )
+                              : formatCompactBchAmount(quote.minReceive)
+                            : 'Get quote'}
                         </span>
                       </div>
                       <div className="flex items-center justify-between gap-3">
                         <span className="wallet-muted">Pools used</span>
                         <span className="wallet-text-strong">
-                          {quote.trades.length}
+                          {previewTradeCount}
+                        </span>
+                      </div>
+                      <div className="flex items-center justify-between gap-3">
+                        <span className="wallet-muted">Price impact</span>
+                        <span className="wallet-text-strong">
+                          {priceImpactLabel}
                         </span>
                       </div>
                     </div>
                   ) : null}
+                </div>
+              ) : previewError ? (
+                <div className="px-1 text-xs text-amber-200">
+                  {previewError}
                 </div>
               ) : (
                 <div className="px-1 text-xs wallet-muted">
@@ -1444,25 +1808,7 @@ const CauldronSwapApp: React.FC<CauldronSwapAppProps> = ({ sdk, app }) => {
                   <span className="mb-2 block text-xs font-semibold uppercase tracking-[0.2em] wallet-muted">
                     Market Filter
                   </span>
-                  <select
-                    value={selectedTokenId}
-                    onChange={(event) => {
-                      setSelectedTokenId(event.target.value);
-                      setQuote(null);
-                    }}
-                    className={fieldClass}
-                    style={fieldStyle}
-                    disabled={loading || submitting}
-                  >
-                    {tokens.length === 0 ? (
-                      <option value="">No swap tokens discovered yet</option>
-                    ) : null}
-                    {tokens.map((token) => (
-                      <option key={token.tokenId} value={token.tokenId}>
-                        {token.symbol} · {token.name}
-                      </option>
-                    ))}
-                  </select>
+                  {renderTokenPickerTrigger()}
                 </label>
               </div>
 
@@ -1476,14 +1822,17 @@ const CauldronSwapApp: React.FC<CauldronSwapAppProps> = ({ sdk, app }) => {
                       className="space-y-3 overflow-y-auto pr-1"
                       style={{
                         maxHeight:
-                          visibleWalletPoolPositions.length > 1 ? '16rem' : 'none',
+                          visibleWalletPoolPositions.length > 1
+                            ? '16rem'
+                            : 'none',
                       }}
                     >
                       {visibleWalletPoolPositions.map((position) => {
                         const poolToken =
                           tokens.find(
                             (token) =>
-                              token.tokenId === position.pool.output.tokenCategory
+                              token.tokenId ===
+                              position.pool.output.tokenCategory
                           ) ?? null;
                         const poolTokenSymbol =
                           poolToken?.symbol ??
@@ -1678,7 +2027,9 @@ const CauldronSwapApp: React.FC<CauldronSwapAppProps> = ({ sdk, app }) => {
                         setReviewWarningsAccepted(event.target.checked)
                       }
                     />
-                    <span>I reviewed these warnings and still want to continue.</span>
+                    <span>
+                      I reviewed these warnings and still want to continue.
+                    </span>
                   </label>
                 </div>
               ) : null}
@@ -1708,7 +2059,9 @@ const CauldronSwapApp: React.FC<CauldronSwapAppProps> = ({ sdk, app }) => {
                                 : shortTokenId(input.utxo.token.category)
                             )
                           : formatCompactBchAmount(
-                              parseSatoshis(input.utxo.amount ?? input.utxo.value)
+                              parseSatoshis(
+                                input.utxo.amount ?? input.utxo.value
+                              )
                             )}
                       </span>
                     </div>
@@ -1756,7 +2109,10 @@ const CauldronSwapApp: React.FC<CauldronSwapAppProps> = ({ sdk, app }) => {
                 <div className="mt-2 space-y-2">
                   {quote.trades.map((trade) => (
                     <div
-                      key={trade.pool.poolId ?? `${trade.pool.txHash}:${trade.pool.outputIndex}`}
+                      key={
+                        trade.pool.poolId ??
+                        `${trade.pool.txHash}:${trade.pool.outputIndex}`
+                      }
                       className="flex items-center justify-between gap-3 text-sm"
                     >
                       <span className="wallet-muted">
@@ -1843,7 +2199,9 @@ const CauldronSwapApp: React.FC<CauldronSwapAppProps> = ({ sdk, app }) => {
                     </span>
                   </div>
                   <div className="mt-2 flex items-center justify-between gap-3">
-                    <span className="wallet-muted">{selectedPoolSymbol} reserve</span>
+                    <span className="wallet-muted">
+                      {selectedPoolSymbol} reserve
+                    </span>
                     <span className="font-medium text-white">
                       {formatTokenDisplayAmount(
                         selectedWalletPoolPosition.pool.output.tokenAmount,
@@ -1868,7 +2226,9 @@ const CauldronSwapApp: React.FC<CauldronSwapAppProps> = ({ sdk, app }) => {
                       </div>
                       {selectedWalletPoolStats.grossYieldPercent ? (
                         <div className="flex items-center justify-between gap-3">
-                          <span className="wallet-muted">Visible-window yield</span>
+                          <span className="wallet-muted">
+                            Visible-window yield
+                          </span>
                           <span className="font-medium text-white">
                             {selectedWalletPoolStats.grossYieldPercent}
                           </span>
@@ -1900,7 +2260,9 @@ const CauldronSwapApp: React.FC<CauldronSwapAppProps> = ({ sdk, app }) => {
                       </span>
                     </div>
                     <div className="mt-2 flex items-center justify-between gap-3">
-                      <span className="wallet-muted">{selectedPoolSymbol} reserve change</span>
+                      <span className="wallet-muted">
+                        {selectedPoolSymbol} reserve change
+                      </span>
                       <span className="font-medium text-white">
                         {formatSignedTokenDisplayAmount(
                           selectedWalletPoolStats.tokenReserveChange ?? 0n,
@@ -1914,86 +2276,202 @@ const CauldronSwapApp: React.FC<CauldronSwapAppProps> = ({ sdk, app }) => {
               </div>
 
               <div className="mt-4 border-t wallet-keyline pt-3">
-              <div className="mb-2 text-xs uppercase tracking-[0.18em] wallet-muted opacity-70">
-                Recent Activity
-              </div>
-              {loadingWalletPoolHistory ? (
-                <p className="text-sm wallet-muted">Loading pool history...</p>
-              ) : selectedWalletPoolHistory?.history?.length ? (
-                <div className="max-h-64 space-y-2 overflow-y-auto pr-1">
-                  {selectedWalletPoolHistory.history
-                    .slice(-5)
-                    .reverse()
-                    .map((entry, index, recentEntries) => {
-                      const previousEntry =
-                        selectedWalletPoolHistory.history[
-                          selectedWalletPoolHistory.history.length -
-                            recentEntries.length +
-                            (recentEntries.length - 1 - index) -
-                            1
-                        ] ?? null;
-                      const bchDelta = previousEntry
-                        ? parseSatoshis(entry.sats) - parseSatoshis(previousEntry.sats)
-                        : null;
-                      const tokenDelta = previousEntry
-                        ? parseSatoshis(entry.tokens) - parseSatoshis(previousEntry.tokens)
-                        : null;
+                <div className="mb-2 text-xs uppercase tracking-[0.18em] wallet-muted opacity-70">
+                  Recent Activity
+                </div>
+                {loadingWalletPoolHistory ? (
+                  <p className="text-sm wallet-muted">
+                    Loading pool history...
+                  </p>
+                ) : selectedWalletPoolHistory?.history?.length ? (
+                  <div className="max-h-64 space-y-2 overflow-y-auto pr-1">
+                    {selectedWalletPoolHistory.history
+                      .slice(-5)
+                      .reverse()
+                      .map((entry, index, recentEntries) => {
+                        const previousEntry =
+                          selectedWalletPoolHistory.history[
+                            selectedWalletPoolHistory.history.length -
+                              recentEntries.length +
+                              (recentEntries.length - 1 - index) -
+                              1
+                          ] ?? null;
+                        const bchDelta = previousEntry
+                          ? parseSatoshis(entry.sats) -
+                            parseSatoshis(previousEntry.sats)
+                          : null;
+                        const tokenDelta = previousEntry
+                          ? parseSatoshis(entry.tokens) -
+                            parseSatoshis(previousEntry.tokens)
+                          : null;
 
-                      return (
-                      <div
-                        key={`${entry.txid}:${entry.timestamp}`}
-                        className="wallet-section rounded-xl px-3 py-2"
-                      >
-                        <div className="flex items-center justify-between gap-3 text-xs wallet-muted opacity-80">
-                          <span>{formatTimestamp(entry.timestamp)}</span>
-                          <span>{shortTokenId(entry.txid)}</span>
-                        </div>
-                        <div className="mt-2 flex items-center justify-between gap-3 text-sm">
-                          <span className="wallet-muted">BCH reserve</span>
-                          <span className="font-medium text-white">
-                            {formatCompactBchAmount(parseSatoshis(entry.sats))}
-                          </span>
-                        </div>
-                        <div className="mt-1 flex items-center justify-between gap-3 text-sm">
-                          <span className="wallet-muted">{selectedPoolSymbol} reserve</span>
-                          <span className="font-medium text-white">
-                            {formatTokenDisplayAmount(
-                              parseSatoshis(entry.tokens),
-                              selectedPoolDecimals,
-                              selectedPoolSymbol
-                            )}
-                          </span>
-                        </div>
-                        {bchDelta !== null && tokenDelta !== null ? (
-                          <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-xs">
-                            <span className="wallet-muted">
-                              BCH delta{' '}
+                        return (
+                          <div
+                            key={`${entry.txid}:${entry.timestamp}`}
+                            className="wallet-section rounded-xl px-3 py-2"
+                          >
+                            <div className="flex items-center justify-between gap-3 text-xs wallet-muted opacity-80">
+                              <span>{formatTimestamp(entry.timestamp)}</span>
+                              <span>{shortTokenId(entry.txid)}</span>
+                            </div>
+                            <div className="mt-2 flex items-center justify-between gap-3 text-sm">
+                              <span className="wallet-muted">BCH reserve</span>
                               <span className="font-medium text-white">
-                                {formatSignedBchAmount(bchDelta)}
+                                {formatCompactBchAmount(
+                                  parseSatoshis(entry.sats)
+                                )}
                               </span>
-                            </span>
-                            <span className="wallet-muted">
-                              {selectedPoolSymbol} delta{' '}
+                            </div>
+                            <div className="mt-1 flex items-center justify-between gap-3 text-sm">
+                              <span className="wallet-muted">
+                                {selectedPoolSymbol} reserve
+                              </span>
                               <span className="font-medium text-white">
-                                {formatSignedTokenDisplayAmount(
-                                  tokenDelta,
+                                {formatTokenDisplayAmount(
+                                  parseSatoshis(entry.tokens),
                                   selectedPoolDecimals,
                                   selectedPoolSymbol
                                 )}
                               </span>
-                            </span>
+                            </div>
+                            {bchDelta !== null && tokenDelta !== null ? (
+                              <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-xs">
+                                <span className="wallet-muted">
+                                  BCH delta{' '}
+                                  <span className="font-medium text-white">
+                                    {formatSignedBchAmount(bchDelta)}
+                                  </span>
+                                </span>
+                                <span className="wallet-muted">
+                                  {selectedPoolSymbol} delta{' '}
+                                  <span className="font-medium text-white">
+                                    {formatSignedTokenDisplayAmount(
+                                      tokenDelta,
+                                      selectedPoolDecimals,
+                                      selectedPoolSymbol
+                                    )}
+                                  </span>
+                                </span>
+                              </div>
+                            ) : null}
                           </div>
-                        ) : null}
-                      </div>
-                    );
-                    })}
+                        );
+                      })}
+                  </div>
+                ) : (
+                  <p className="text-sm wallet-muted">
+                    No recent LP activity is available yet.
+                  </p>
+                )}
+              </div>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {tokenPickerOpen ? (
+        <div className="absolute inset-0 z-20 flex items-end bg-black/50 px-4 pb-4 pt-4">
+          <div className="wallet-card flex max-h-full w-full flex-col rounded-[28px] p-4">
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <div className="text-xs uppercase tracking-[0.18em] wallet-muted opacity-70">
+                  Select Token
+                </div>
+                <h2 className="mt-1 text-xl font-semibold wallet-text-strong">
+                  Cauldron Markets
+                </h2>
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  setTokenSearchQuery('');
+                  setTokenPickerOpen(false);
+                }}
+                className="wallet-btn-secondary px-4 py-2"
+              >
+                Close
+              </button>
+            </div>
+
+            <div className="mt-4 min-h-0 flex-1 space-y-2 overflow-y-auto pr-1">
+              <div className="sticky top-0 z-10 pb-2">
+                <input
+                  type="text"
+                  value={tokenSearchQuery}
+                  onChange={(event) => setTokenSearchQuery(event.target.value)}
+                  placeholder="Search token name or symbol"
+                  className={`${fieldClass} py-2.5`}
+                  style={fieldStyle}
+                />
+              </div>
+
+              {tokens.length === 0 ? (
+                <div className="rounded-2xl border border-[var(--wallet-border)] px-4 py-3 text-sm wallet-muted">
+                  No Cauldron tokens are available right now.
+                </div>
+              ) : filteredTokens.length === 0 ? (
+                <div className="rounded-2xl border border-[var(--wallet-border)] px-4 py-3 text-sm wallet-muted">
+                  No close token matches found.
                 </div>
               ) : (
-                <p className="text-sm wallet-muted">
-                  No recent LP activity is available yet.
-                </p>
+                filteredTokens.map((token) => {
+                  const metadata = sharedMetadata[token.tokenId];
+                  const iconUri = metadata?.iconUri || token.imageUrl || null;
+                  const isSelected = token.tokenId === selectedTokenId;
+
+                  return (
+                    <button
+                      key={token.tokenId}
+                      type="button"
+                      onClick={() => {
+                        setSelectedTokenId(token.tokenId);
+                        setQuote(null);
+                        setTokenSearchQuery('');
+                        setTokenPickerOpen(false);
+                      }}
+                      className="flex w-full items-center gap-3 rounded-2xl border px-3 py-3 text-left transition"
+                      style={{
+                        backgroundColor: isSelected
+                          ? 'var(--wallet-accent-soft)'
+                          : 'var(--wallet-surface)',
+                        borderColor: isSelected
+                          ? 'var(--wallet-accent)'
+                          : 'var(--wallet-border)',
+                      }}
+                    >
+                      {iconUri ? (
+                        <img
+                          src={iconUri}
+                          alt={token.symbol}
+                          className="h-10 w-10 rounded-full object-cover"
+                        />
+                      ) : (
+                        <div className="flex h-10 w-10 items-center justify-center rounded-full bg-[var(--wallet-accent-soft)] text-sm font-bold wallet-text-strong">
+                          {token.symbol.slice(0, 1)}
+                        </div>
+                      )}
+                      <div className="min-w-0 flex-1">
+                        <div className="truncate text-sm font-semibold wallet-text-strong">
+                          {metadata?.symbol || token.symbol}
+                        </div>
+                        <div className="truncate text-xs wallet-muted">
+                          {metadata?.name || token.name}
+                        </div>
+                      </div>
+                      <div className="text-right">
+                        <div className="text-[11px] uppercase tracking-[0.16em] wallet-muted opacity-70">
+                          TVL
+                        </div>
+                        <div className="text-xs font-medium wallet-text-strong">
+                          {token.tvlSats > 0
+                            ? formatCompactBchAmount(BigInt(Math.trunc(token.tvlSats)))
+                            : 'New'}
+                        </div>
+                      </div>
+                    </button>
+                  );
+                })
               )}
-              </div>
             </div>
           </div>
         </div>
