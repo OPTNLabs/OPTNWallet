@@ -64,6 +64,18 @@ export function buildCauldronPoolV0ExchangeUnlockingBytecode(
   ]);
 }
 
+export function buildCauldronPoolV0WithdrawUnlockingBytecodePlaceholder(
+  parameters: CauldronPoolParameters
+): Uint8Array {
+  return Uint8Array.from([
+    0x41,
+    ...new Uint8Array(65).fill(0),
+    0x21,
+    ...new Uint8Array(33).fill(0),
+    ...buildCauldronPoolV0ExchangeUnlockingBytecode(parameters),
+  ]);
+}
+
 export function getCauldronPoolV0WithdrawPublicKeyHash(
   redeemScript: Uint8Array
 ): Uint8Array | null {

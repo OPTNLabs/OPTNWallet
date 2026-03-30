@@ -1,0 +1,25 @@
+{
+  "folders": [
+	{
+		"path": "."
+	},
+	{
+		"path": "../riftenlabs/moria-contract"
+	},
+	{
+		"path": "../riftenlabs/rust-riftenlabs-defi"
+	},
+	{
+		"path": "../riftenlabs/cashlab"
+	},
+	{
+		"path": "../riftenlabs/riftenlabs-indexer"
+	},
+	{
+		"path": "../selene-wallet"
+	}
+],
+  "settings": {
+    "vs-code-prettier-eslint.prettierLast": false
+  }
+}

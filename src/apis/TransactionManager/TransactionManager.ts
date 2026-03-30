@@ -12,6 +12,7 @@ import DatabaseService from '../DatabaseManager/DatabaseService';
 import TransactionBuilderHelper from './TransactionBuilderHelper';
 import { DUST, TOKEN_OUTPUT_SATS } from '../../utils/constants';
 import { logError, toErrorMessage } from '../../utils/errorHandling';
+import { classifyBroadcastFailure } from '../../utils/broadcastErrors';
 import { toTokenAwareCashAddress } from '../../utils/cashAddress';
 import { binToHex, hexToBin } from '../../utils/hex';
 import { sha256 } from '../../utils/hash';
@@ -30,12 +31,6 @@ function deriveTxidFromRawTx(rawTX: string): string | null {
   } catch {
     return null;
   }
-}
-
-function isAmbiguousBroadcastError(message: string): boolean {
-  return /(timed out|timeout|socket|network|disconnect|connection|backoff|failed to fetch|websocket|offline|temporar)/i.test(
-    message
-  );
 }
 
 export default function TransactionManager() {
@@ -176,9 +171,10 @@ export default function TransactionManager() {
     } catch (error: unknown) {
       logError('TransactionManager.sendTransaction', error);
       const message = toErrorMessage(error);
+      const classified = classifyBroadcastFailure(message);
       if (
         derivedTxid &&
-        (isAmbiguousBroadcastError(message) ||
+        (classified.ambiguous ||
           /already in mempool|already have transaction|txn-already-known|already known/i.test(
             message
           ))
@@ -197,7 +193,7 @@ export default function TransactionManager() {
         if (derivedTxid) {
           await OutboundTransactionTracker.remove(derivedTxid);
         }
-        errorMessage = 'Error sending transaction: ' + message;
+        errorMessage = classified.userMessage;
       }
     }
     return {
