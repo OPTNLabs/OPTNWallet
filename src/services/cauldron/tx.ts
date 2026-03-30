@@ -18,9 +18,13 @@ import type { ContractInfo } from '../../types/wcInterfaces';
 import type { Token, UTXO } from '../../types/types';
 import {
   buildCauldronPoolV0ExchangeUnlockingBytecode,
+  buildCauldronPoolV0LockingBytecode,
+  buildCauldronPoolV0RedeemScript,
+  buildCauldronPoolV0WithdrawUnlockingBytecodePlaceholder,
 } from './script';
 import {
   CAULDRON_NATIVE_BCH,
+  type CauldronPool,
   type CauldronPoolTrade,
   type CauldronTokenId,
 } from './types';
@@ -55,6 +59,25 @@ export type BuiltCauldronTradeRequest = {
   walletInputs: ResolvedCauldronFundingInput[];
 };
 
+export type BuiltCauldronPoolDepositRequest = {
+  signRequest: SignTransactionRequest;
+  sourceOutputs: Array<Input & Output & ContractInfo>;
+  poolOutput: CauldronSettlementOutput;
+  settlementOutputs: CauldronSettlementOutput[];
+  estimatedFeeSatoshis: bigint;
+  walletInputs: ResolvedCauldronFundingInput[];
+  withdrawPublicKeyHash: Uint8Array;
+};
+
+export type BuiltCauldronPoolWithdrawRequest = {
+  signRequest: SignTransactionRequest;
+  sourceOutputs: Array<Input & Output & ContractInfo>;
+  settlementOutputs: CauldronSettlementOutput[];
+  estimatedFeeSatoshis: bigint;
+  ownerInput: ResolvedCauldronFundingInput;
+  pool: CauldronPool;
+};
+
 function toWalletPathName(changeIndex: number): WalletPathName {
   if (changeIndex === 0) return 'receive';
   if (changeIndex === 1) return 'change';
@@ -73,6 +96,22 @@ function tokenToLibauthToken(token: Token | null | undefined) {
           commitment: hexToBin(token.nft.commitment),
         }
       : undefined,
+  };
+}
+
+function buildCauldronPoolContractInfo(withdrawPublicKeyHash: Uint8Array): ContractInfo {
+  return {
+    contract: {
+      abiFunction: {
+        name: 'withdraw',
+        covenant: false,
+        inputs: [],
+      },
+      redeemScript: buildCauldronPoolV0RedeemScript({ withdrawPublicKeyHash }),
+      artifact: {
+        contractName: 'CauldronPoolV0',
+      },
+    },
   };
 }
 
@@ -169,6 +208,7 @@ function buildPoolSourceOutput(trade: CauldronPoolTrade): Input & Output & Contr
       amount: trade.pool.output.tokenAmount,
       category: hexToBin(trade.pool.output.tokenCategory),
     },
+    ...buildCauldronPoolContractInfo(trade.pool.parameters.withdrawPublicKeyHash),
   };
 }
 
@@ -292,6 +332,76 @@ function validateTradeDirection(poolTrades: CauldronPoolTrade[]): {
   };
 }
 
+function buildWalletSourceOutput(
+  input: ResolvedCauldronFundingInput
+): Input & Output & ContractInfo {
+  return {
+    outpointIndex: input.utxo.tx_pos,
+    outpointTransactionHash: hexToBin(input.utxo.tx_hash),
+    sequenceNumber: 0,
+    unlockingBytecode: new Uint8Array(),
+    lockingBytecode: input.lockingBytecode,
+    valueSatoshis: parseSatoshis(input.utxo.amount ?? input.utxo.value),
+    token: tokenToLibauthToken(input.utxo.token),
+  };
+}
+
+function buildWalletInput(input: ResolvedCauldronFundingInput): Input {
+  return {
+    outpointIndex: input.utxo.tx_pos,
+    outpointTransactionHash: hexToBin(input.utxo.tx_hash),
+    sequenceNumber: 0,
+    unlockingBytecode: new Uint8Array(),
+  };
+}
+
+function estimateFixedTransactionSize(args: {
+  inputSizes: number[];
+  outputs: CauldronSettlementOutput[];
+}): number {
+  const { inputSizes, outputs } = args;
+  return (
+    4 +
+    compactUintPrefixToLength(bigIntToCompactUint(BigInt(inputSizes.length))[0] as number) +
+    compactUintPrefixToLength(bigIntToCompactUint(BigInt(outputs.length))[0] as number) +
+    inputSizes.reduce((sum, size) => sum + size, 0) +
+    outputs.reduce((sum, output) => sum + outputSizeBytes(output), 0) +
+    4
+  );
+}
+
+function validateWalletTokenInputs(
+  walletInputs: ResolvedCauldronFundingInput[],
+  allowedTokenCategoryHex?: string
+): {
+  totalWalletBch: bigint;
+  totalMatchingTokenSupply: bigint;
+} {
+  let totalWalletBch = 0n;
+  let totalMatchingTokenSupply = 0n;
+
+  for (const input of walletInputs) {
+    totalWalletBch += parseSatoshis(input.utxo.amount ?? input.utxo.value);
+    const token = input.utxo.token;
+    if (!token) continue;
+
+    if (token.nft) {
+      throw new Error('NFT-bearing UTXOs are not supported for Cauldron funding');
+    }
+    if (!allowedTokenCategoryHex || token.category !== allowedTokenCategoryHex) {
+      throw new Error(
+        `Unexpected token funding input category for Cauldron transaction: ${token.category}`
+      );
+    }
+    totalMatchingTokenSupply += parseSatoshis(token.amount);
+  }
+
+  return {
+    totalWalletBch,
+    totalMatchingTokenSupply,
+  };
+}
+
 export async function resolveCauldronFundingInputs(
   walletId: number,
   utxos: UTXO[]
@@ -354,31 +464,21 @@ export function buildCauldronTradeRequest(params: {
   const { supplyTokenId, demandTokenId, totalSupply, totalDemand } =
     validateTradeDirection(poolTrades);
 
-  const totalWalletBch = walletInputs.reduce(
-    (sum, input) => sum + parseSatoshis(input.utxo.amount ?? input.utxo.value),
-    0n
+  const {
+    totalWalletBch,
+    totalMatchingTokenSupply: totalWalletTokenSupply,
+  } = validateWalletTokenInputs(
+    walletInputs,
+    supplyTokenId === CAULDRON_NATIVE_BCH ? undefined : supplyTokenId
   );
-  const totalWalletTokenSupply = walletInputs.reduce((sum, input) => {
-    const token = input.utxo.token;
-    if (!token) return sum;
-    return sum + parseSatoshis(token.amount);
-  }, 0n);
 
   if (supplyTokenId === CAULDRON_NATIVE_BCH) {
     if (walletInputs.some((input) => input.utxo.token)) {
       throw new Error('BCH-to-token Cauldron trades expect BCH-only funding inputs');
     }
   } else {
-    const matchingTokenTotal = walletInputs.reduce((sum, input) => {
-      return input.utxo.token?.category === supplyTokenId
-        ? sum + parseSatoshis(input.utxo.token.amount)
-        : sum;
-    }, 0n);
-    if (matchingTokenTotal < totalSupply) {
+    if (totalWalletTokenSupply < totalSupply) {
       throw new Error('Token-to-BCH Cauldron trades are missing token funding');
-    }
-    if (walletInputs.some((input) => input.utxo.token?.nft)) {
-      throw new Error('NFT-bearing UTXOs are not supported for Cauldron funding');
     }
   }
 
@@ -415,16 +515,7 @@ export function buildCauldronTradeRequest(params: {
 
   const sourceOutputs: Array<Input & Output & ContractInfo> = [
     ...poolTrades.map((trade) => buildPoolSourceOutput(trade)),
-    ...walletInputs.map((input) => ({
-      outpointIndex: input.utxo.tx_pos,
-      outpointTransactionHash: hexToBin(input.utxo.tx_hash),
-      sequenceNumber: 0,
-      unlockingBytecode: new Uint8Array(),
-      lockingBytecode: input.lockingBytecode,
-      valueSatoshis: parseSatoshis(input.utxo.amount ?? input.utxo.value),
-      token: tokenToLibauthToken(input.utxo.token),
-      address: input.utxo.address,
-    })),
+    ...walletInputs.map((input) => buildWalletSourceOutput(input)),
   ];
 
   const transaction: TransactionTemplateFixed<any> = {
@@ -439,12 +530,7 @@ export function buildCauldronTradeRequest(params: {
           trade.pool.parameters
         ),
       })),
-      ...walletInputs.map((input) => ({
-        outpointIndex: input.utxo.tx_pos,
-        outpointTransactionHash: hexToBin(input.utxo.tx_hash),
-        sequenceNumber: 0,
-        unlockingBytecode: new Uint8Array(),
-      })),
+      ...walletInputs.map((input) => buildWalletInput(input)),
     ],
     outputs: [
       ...poolTrades.map((trade) => buildPoolOutput(trade)),
@@ -482,6 +568,289 @@ export function buildCauldronTradeRequest(params: {
   };
 }
 
+export function buildCauldronPoolDepositRequest(params: {
+  walletInputs: ResolvedCauldronFundingInput[];
+  withdrawPublicKeyHash: Uint8Array;
+  tokenCategoryHex: string;
+  tokenAmount: bigint;
+  bchAmountSatoshis: bigint;
+  ownerAddress: string;
+  changeAddress: string;
+  feeRateSatsPerByte?: bigint | number;
+  broadcast?: boolean;
+  userPrompt?: string;
+  sequence?: number;
+}): BuiltCauldronPoolDepositRequest {
+  const {
+    walletInputs,
+    withdrawPublicKeyHash,
+    tokenCategoryHex,
+    tokenAmount,
+    bchAmountSatoshis,
+    ownerAddress,
+    changeAddress,
+    userPrompt,
+  } = params;
+  const feeRateSatsPerByte =
+    typeof params.feeRateSatsPerByte === 'bigint'
+      ? params.feeRateSatsPerByte
+      : BigInt(params.feeRateSatsPerByte ?? 1);
+  if (tokenAmount <= 0n) {
+    throw new Error('Cauldron pool token amount must be greater than zero');
+  }
+  if (bchAmountSatoshis < BigInt(DUST)) {
+    throw new Error('Cauldron pool BCH amount must be at least dust');
+  }
+
+  const {
+    totalWalletBch,
+    totalMatchingTokenSupply,
+  } = validateWalletTokenInputs(walletInputs, tokenCategoryHex);
+  if (totalMatchingTokenSupply < tokenAmount) {
+    throw new Error('Token funding is insufficient for Cauldron pool creation');
+  }
+
+  const poolOutput: CauldronSettlementOutput = {
+    lockingBytecode: buildCauldronPoolV0LockingBytecode({ withdrawPublicKeyHash }),
+    valueSatoshis: bchAmountSatoshis,
+    token: {
+      amount: tokenAmount,
+      category: hexToBin(tokenCategoryHex),
+    },
+  };
+
+  const buildOutputsForFee = (feeSatoshis: bigint): CauldronSettlementOutput[] => {
+    const outputs: CauldronSettlementOutput[] = [poolOutput];
+    const tokenChangeAmount = totalMatchingTokenSupply - tokenAmount;
+    if (tokenChangeAmount < 0n) {
+      throw new Error('Token funding is insufficient for Cauldron pool creation');
+    }
+    if (tokenChangeAmount > 0n) {
+      outputs.push(
+        buildCashAddressOutput(ownerAddress, BigInt(TOKEN_OUTPUT_SATS), {
+          amount: tokenChangeAmount,
+          categoryHex: tokenCategoryHex,
+        })
+      );
+    }
+
+    const bchChange =
+      totalWalletBch -
+      bchAmountSatoshis -
+      feeSatoshis -
+      (tokenChangeAmount > 0n ? BigInt(TOKEN_OUTPUT_SATS) : 0n);
+    if (bchChange >= BigInt(DUST)) {
+      outputs.push(buildCashAddressOutput(changeAddress, bchChange));
+    } else if (bchChange < 0n) {
+      throw new Error('Insufficient BCH funding for Cauldron pool creation');
+    }
+
+    return outputs;
+  };
+
+  let settlementOutputs = buildOutputsForFee(0n);
+  let estimatedFeeSatoshis =
+    BigInt(
+      estimateFixedTransactionSize({
+        inputSizes: walletInputs.map(() => 32 + 4 + 1 + (1 + 65 + 1 + 33) + 4),
+        outputs: settlementOutputs,
+      })
+    ) * feeRateSatsPerByte;
+
+  for (let i = 0; i < 3; i += 1) {
+    settlementOutputs = buildOutputsForFee(estimatedFeeSatoshis);
+    const nextFee =
+      BigInt(
+        estimateFixedTransactionSize({
+          inputSizes: walletInputs.map(() => 32 + 4 + 1 + (1 + 65 + 1 + 33) + 4),
+          outputs: settlementOutputs,
+        })
+      ) * feeRateSatsPerByte;
+    if (nextFee === estimatedFeeSatoshis) break;
+    estimatedFeeSatoshis = nextFee;
+  }
+
+  const sourceOutputs = walletInputs.map((input) => buildWalletSourceOutput(input));
+  const transaction: TransactionTemplateFixed<any> = {
+    version: 2,
+    locktime: 0,
+    inputs: walletInputs.map((input) => buildWalletInput(input)),
+    outputs: settlementOutputs,
+  };
+
+  const signRequest = {
+    action: 'sign_transaction_request',
+    time: Date.now(),
+    sequence: params.sequence ?? 0,
+    inputPaths: walletInputs.map((input, index) => [index, input.pathName, input.addressIndex]),
+    transaction: {
+      transaction,
+      sourceOutputs,
+      broadcast: params.broadcast ?? false,
+      userPrompt: userPrompt ?? 'Create Cauldron pool',
+    },
+  } as unknown as SignTransactionRequest;
+
+  return {
+    signRequest,
+    sourceOutputs,
+    poolOutput,
+    settlementOutputs,
+    estimatedFeeSatoshis,
+    walletInputs,
+    withdrawPublicKeyHash,
+  };
+}
+
+export function buildCauldronPoolWithdrawRequest(params: {
+  pool: CauldronPool;
+  ownerInput: ResolvedCauldronFundingInput;
+  recipientAddress: string;
+  feeRateSatsPerByte?: bigint | number;
+  broadcast?: boolean;
+  userPrompt?: string;
+  sequence?: number;
+  tokenOutputSatoshis?: bigint;
+}): BuiltCauldronPoolWithdrawRequest {
+  const {
+    pool,
+    ownerInput,
+    recipientAddress,
+    userPrompt,
+  } = params;
+  const feeRateSatsPerByte =
+    typeof params.feeRateSatsPerByte === 'bigint'
+      ? params.feeRateSatsPerByte
+      : BigInt(params.feeRateSatsPerByte ?? 1);
+  const tokenOutputSatoshis = params.tokenOutputSatoshis ?? BigInt(TOKEN_OUTPUT_SATS);
+  const poolWithdrawInputSize =
+    32 +
+    4 +
+    1 +
+    buildCauldronPoolV0WithdrawUnlockingBytecodePlaceholder(pool.parameters).length +
+    4;
+  const ownerP2pkhInputSize = 32 + 4 + 1 + (1 + 65 + 1 + 33) + 4;
+
+  const ownerToken = ownerInput.utxo.token;
+  if (ownerToken) {
+    throw new Error('Cauldron pool withdrawal owner input must be BCH-only');
+  }
+
+  const baseRecipientValue = pool.output.amountSatoshis >= tokenOutputSatoshis
+    ? pool.output.amountSatoshis
+    : tokenOutputSatoshis;
+  const ownerBchValue = parseSatoshis(ownerInput.utxo.amount ?? ownerInput.utxo.value);
+
+  const buildOutputsForFee = (feeSatoshis: bigint): CauldronSettlementOutput[] => {
+    const requiredFromOwner = tokenOutputSatoshis > pool.output.amountSatoshis
+      ? tokenOutputSatoshis - pool.output.amountSatoshis
+      : 0n;
+    const recipientValue = baseRecipientValue - feeSatoshis;
+    if (recipientValue < tokenOutputSatoshis) {
+      throw new Error('Cauldron pool reserve is too small to withdraw after fee');
+    }
+
+    const outputs: CauldronSettlementOutput[] = [
+      buildCashAddressOutput(recipientAddress, recipientValue, {
+        amount: pool.output.tokenAmount,
+        categoryHex: pool.output.tokenCategory,
+      }),
+    ];
+
+    const bchChange = ownerBchValue - requiredFromOwner;
+    if (bchChange >= BigInt(DUST)) {
+      outputs.push(buildCashAddressOutput(ownerInput.utxo.address, bchChange));
+    } else if (bchChange < 0n) {
+      throw new Error('Owner BCH input is insufficient to back the withdrawal output');
+    }
+
+    return outputs;
+  };
+
+  let settlementOutputs = buildOutputsForFee(0n);
+  let estimatedFeeSatoshis =
+    BigInt(
+      estimateFixedTransactionSize({
+        inputSizes: [poolWithdrawInputSize, ownerP2pkhInputSize],
+        outputs: settlementOutputs,
+      })
+    ) * feeRateSatsPerByte;
+
+  for (let i = 0; i < 3; i += 1) {
+    settlementOutputs = buildOutputsForFee(estimatedFeeSatoshis);
+    const nextFee =
+      BigInt(
+        estimateFixedTransactionSize({
+          inputSizes: [poolWithdrawInputSize, ownerP2pkhInputSize],
+          outputs: settlementOutputs,
+        })
+      ) * feeRateSatsPerByte;
+    if (nextFee === estimatedFeeSatoshis) break;
+    estimatedFeeSatoshis = nextFee;
+  }
+
+  const sourceOutputs: Array<Input & Output & ContractInfo> = [
+    {
+      outpointIndex: pool.outputIndex,
+      outpointTransactionHash: hexToBin(pool.txHash),
+      sequenceNumber: 0,
+      unlockingBytecode: buildCauldronPoolV0WithdrawUnlockingBytecodePlaceholder(
+        pool.parameters
+      ),
+      lockingBytecode: pool.output.lockingBytecode,
+      valueSatoshis: pool.output.amountSatoshis,
+      token: {
+        amount: pool.output.tokenAmount,
+        category: hexToBin(pool.output.tokenCategory),
+      },
+      ...buildCauldronPoolContractInfo(pool.parameters.withdrawPublicKeyHash),
+    },
+    buildWalletSourceOutput(ownerInput),
+  ];
+
+  const transaction: TransactionTemplateFixed<any> = {
+    version: 2,
+    locktime: 0,
+    inputs: [
+      {
+        outpointIndex: pool.outputIndex,
+        outpointTransactionHash: hexToBin(pool.txHash),
+        sequenceNumber: 0,
+        unlockingBytecode: buildCauldronPoolV0WithdrawUnlockingBytecodePlaceholder(
+          pool.parameters
+        ),
+      },
+      buildWalletInput(ownerInput),
+    ],
+    outputs: settlementOutputs,
+  };
+
+  const signRequest = {
+    action: 'sign_transaction_request',
+    time: Date.now(),
+    sequence: params.sequence ?? 0,
+    inputPaths: [
+      [0, ownerInput.pathName, ownerInput.addressIndex],
+      [1, ownerInput.pathName, ownerInput.addressIndex],
+    ],
+    transaction: {
+      transaction,
+      sourceOutputs,
+      broadcast: params.broadcast ?? false,
+      userPrompt: userPrompt ?? 'Withdraw Cauldron pool',
+    },
+  } as unknown as SignTransactionRequest;
+
+  return {
+    signRequest,
+    sourceOutputs,
+    settlementOutputs,
+    estimatedFeeSatoshis,
+    ownerInput,
+    pool,
+  };
+}
+
 export async function signCauldronTradeRequest(
   walletId: number,
   built: BuiltCauldronTradeRequest
@@ -508,6 +877,56 @@ export async function signAndBroadcastCauldronTradeRequest(
     {
       source: 'cauldron',
       sourceLabel: options?.sourceLabel ?? 'Cauldron',
+      recipientSummary: options?.recipientSummary ?? null,
+      amountSummary: options?.amountSummary ?? null,
+      userPrompt: options?.userPrompt ?? built.signRequest.transaction.userPrompt ?? null,
+    }
+  );
+}
+
+export async function signAndBroadcastCauldronPoolDepositRequest(
+  walletId: number,
+  built: BuiltCauldronPoolDepositRequest,
+  options?: {
+    sourceLabel?: string | null;
+    recipientSummary?: string | null;
+    amountSummary?: string | null;
+    userPrompt?: string | null;
+  }
+) {
+  const adapter = await OptnWizardWalletAdapter.create(walletId);
+  const result = await adapter.signTransaction(built.signRequest);
+  return TransactionService.sendTransaction(
+    result.signedTransaction,
+    built.walletInputs.map((input) => input.utxo),
+    {
+      source: 'cauldron',
+      sourceLabel: options?.sourceLabel ?? 'Cauldron Pool',
+      recipientSummary: options?.recipientSummary ?? null,
+      amountSummary: options?.amountSummary ?? null,
+      userPrompt: options?.userPrompt ?? built.signRequest.transaction.userPrompt ?? null,
+    }
+  );
+}
+
+export async function signAndBroadcastCauldronPoolWithdrawRequest(
+  walletId: number,
+  built: BuiltCauldronPoolWithdrawRequest,
+  options?: {
+    sourceLabel?: string | null;
+    recipientSummary?: string | null;
+    amountSummary?: string | null;
+    userPrompt?: string | null;
+  }
+) {
+  const adapter = await OptnWizardWalletAdapter.create(walletId);
+  const result = await adapter.signTransaction(built.signRequest);
+  return TransactionService.sendTransaction(
+    result.signedTransaction,
+    [built.ownerInput.utxo],
+    {
+      source: 'cauldron',
+      sourceLabel: options?.sourceLabel ?? 'Cauldron Pool Withdraw',
       recipientSummary: options?.recipientSummary ?? null,
       amountSummary: options?.amountSummary ?? null,
       userPrompt: options?.userPrompt ?? built.signRequest.transaction.userPrompt ?? null,

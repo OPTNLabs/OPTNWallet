@@ -317,6 +317,14 @@ class TransactionService {
 
     const res: BroadcastResult =
       await this.transactionManager.sendTransaction(rawTX);
+    const trackedTxid = deriveTrackedTxid(rawTX);
+
+    if (res?.errorMessage || !res?.txid) {
+      if (trackedTxid) {
+        await OutboundTransactionTracker.remove(trackedTxid);
+      }
+      return res;
+    }
 
     if (res?.txid) {
       await OutboundTransactionTracker.trackAttempt({
