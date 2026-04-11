@@ -157,8 +157,13 @@ export async function queryTransactionByHash(
   const t = normHex(txid);
   const query = `query {
     transaction(where: { hash: { _eq: "\\\\x${t}" } }) {
+      hash
+      inputs {
+        outpoint_transaction_hash
+        outpoint_index
+      }
       outputs {
-        scriptPubKey { hex }
+        locking_bytecode
       }
     }
   }`;
