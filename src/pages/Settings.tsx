@@ -19,6 +19,8 @@ import AboutView from '../components/AboutView';
 import TermsOfUse from '../components/TermsOfUse';
 import ContactUs from '../components/ContactUs';
 import WalletConnectPanel from '../components/walletconnect/WalletConnectPanel';
+import WizardConnectPanel from '../components/wizardconnect/WizardConnectPanel';
+import { disconnectAllWizardConnections } from '../redux/wizardconnectSlice';
 import getElectrumAdapter from '../services/ElectrumAdapter';
 import { useTheme } from '../context/useTheme';
 import PageHeader from '../components/ui/PageHeader';
@@ -53,6 +55,7 @@ const Settings: React.FC = () => {
     dispatch(resetContract());
     dispatch(resetNetwork());
     dispatch(clearTransaction());
+    await dispatch(disconnectAllWizardConnections());
     // Ensure Electrum is fully disconnected before nuking state
     try {
       const electrum = getElectrumAdapter();
@@ -79,6 +82,8 @@ const Settings: React.FC = () => {
         return <FaucetView />;
       case 'walletconnect':
         return <WalletConnectPanel />;
+      case 'wizardconnect':
+        return <WizardConnectPanel />;
       default:
         return null;
     }
@@ -100,6 +105,8 @@ const Settings: React.FC = () => {
         return 'Network';
       case 'walletconnect':
         return 'WalletConnect';
+      case 'wizardconnect':
+        return 'WizardConnect';
       default:
         return '';
     }
@@ -162,6 +169,12 @@ const Settings: React.FC = () => {
                   className="wallet-btn-primary w-full max-w-md"
                 >
                   WalletConnect
+                </button>
+                <button
+                  onClick={() => handleOptionClick('wizardconnect')}
+                  className="wallet-btn-primary w-full max-w-md"
+                >
+                  WizardConnect
                 </button>
                 <button
                   onClick={handleLogout}

@@ -17,7 +17,7 @@ const BottomNavBar: React.FC<BottomNavBarProps> = ({ setNavBarHeight }) => {
 
   return (
     <nav
-      className="fixed bottom-0 left-0 right-0 w-full wallet-nav-gradient py-3 z-50"
+      className="fixed bottom-0 left-0 right-0 z-50 w-full wallet-nav-gradient py-3"
       id="bottomNavBar"
       ref={navBarRef}
     >
