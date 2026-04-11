@@ -1,4 +1,8 @@
-import { importMetadataRegistry } from '@bitauth/libauth';
+import {
+  importMetadataRegistry,
+  MetadataRegistry,
+  IdentityHistory,
+} from '@bitauth/libauth';
 
 export type BcmrGeneratorInput = {
   authbase: string;
@@ -12,6 +16,7 @@ export type BcmrGeneratorInput = {
   latestRevision?: string;
   registryName?: string;
   registryDescription?: string;
+  baseRegistry?: MetadataRegistry | string;
 };
 
 type BcmrV2Registry = {
@@ -19,22 +24,7 @@ type BcmrV2Registry = {
   version: { major: number; minor: number; patch: number };
   latestRevision: string;
   registryIdentity: string;
-  identities: Record<
-    string,
-    Record<
-      string,
-      {
-        name: string;
-        description?: string;
-        token: {
-          category: string;
-          symbol: string;
-          decimals: number;
-        };
-        uris?: Record<string, string>;
-      }
-    >
-  >;
+  identities: Record<string, IdentityHistory>;
 };
 
 function requireText(value: string, field: string): string {
@@ -69,6 +59,18 @@ function ensureValidRegistry(registry: BcmrV2Registry): BcmrV2Registry {
   return registry;
 }
 
+function normalizeBaseRegistry(
+  registry: MetadataRegistry | string | undefined
+): BcmrV2Registry | undefined {
+  if (!registry) return undefined;
+  const imported =
+    typeof registry === 'string' ? importMetadataRegistry(registry) : registry;
+  if (typeof imported === 'string') {
+    throw new Error(imported);
+  }
+  return imported as BcmrV2Registry;
+}
+
 export function generateBcmrRegistry(input: BcmrGeneratorInput): BcmrV2Registry {
   const authbase = requireHexTxid(input.authbase, 'Authbase');
   const tokenCategory = requireHexTxid(input.tokenCategory, 'Token category');
@@ -99,16 +101,25 @@ export function generateBcmrRegistry(input: BcmrGeneratorInput): BcmrV2Registry 
     uris: Object.keys(uris).length > 0 ? uris : undefined,
   };
 
+  const baseRegistry = normalizeBaseRegistry(input.baseRegistry);
+  const mergedIdentities: Record<string, IdentityHistory> = {
+    ...(baseRegistry?.identities || {}),
+  };
+  mergedIdentities[authbase] = {
+    ...(mergedIdentities[authbase] || {}),
+    [latestRevision]: snapshot,
+  };
+
   return ensureValidRegistry({
     $schema: 'https://cashtokens.org/bcmr-v2.schema.json',
-    version: { major: 0, minor: 0, patch: 0 },
+    version: {
+      major: baseRegistry?.version?.major ?? 0,
+      minor: baseRegistry?.version?.minor ?? 0,
+      patch: (baseRegistry?.version?.patch ?? 0) + 1,
+    },
     latestRevision,
     registryIdentity: authbase,
-    identities: {
-      [authbase]: {
-        [latestRevision]: snapshot,
-      },
-    },
+    identities: mergedIdentities,
   });
 }
 

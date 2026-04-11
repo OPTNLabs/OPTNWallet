@@ -5,6 +5,7 @@ import {
   SigningSerializationFlag,
   binToHex,
   createVirtualMachineBCH,
+  encodeTransaction,
   generateSigningSerializationBCH,
   generateTransaction,
   hash160,
@@ -30,6 +31,10 @@ import {
   buildCauldronPoolV0RedeemScript,
   buildCauldronPoolWithdrawRequest,
   buildCauldronTradeRequest,
+  assertSignedTransactionCovenantValidity,
+  assertSignedTransactionFeeSufficiency,
+  analyzeCauldronMarketLiquidity,
+  calculateSignedTransactionFeeSatoshis,
   calcCauldronPairRate,
   calcCauldronTradeFee,
   calcCauldronTradeWithTargetDemand,
@@ -341,6 +346,22 @@ describe('Cauldron service', () => {
     expect(normalized?.poolId).toBe('aa'.repeat(32));
   });
 
+  it('preserves exact bigint reserves when normalizing pool rows', () => {
+    const normalized = normalizeCauldronPoolRow({
+      txid: 'ab'.repeat(32),
+      tx_pos: 3,
+      sats: '1234567890123456',
+      token_id:
+        'f6677f3d3805d70949b375d36e094ff0ec9ece2a2cb1fde6d8b0e90b368f1f63',
+      token_amount: '987654321098765432',
+      owner_pkh: 'b034dc7821b2b25c38b5825cdc4af9e6ace02be7',
+    });
+
+    expect(normalized).not.toBeNull();
+    expect(normalized?.output.amountSatoshis).toBe(1_234_567_890_123_456n);
+    expect(normalized?.output.tokenAmount).toBe(987_654_321_098_765_432n);
+  });
+
   it('normalizes live Rostrum pool rows from cauldron.contract.subscribe', () => {
     const normalized = normalizeCauldronPoolRow({
       new_utxo_txid: '12'.repeat(32),
@@ -503,6 +524,39 @@ describe('Cauldron service', () => {
     expect((aggregated?.summary.demand ?? 0n) > 0n).toBe(true);
   });
 
+  it('analyzes executable liquidity in both directions for a token market', () => {
+    const tokenId =
+      'f6677f3d3805d70949b375d36e094ff0ec9ece2a2cb1fde6d8b0e90b368f1f63';
+    const makePool = (txHashSeed: string, sats: bigint, tokens: bigint) => ({
+      version: '0' as const,
+      parameters: { withdrawPublicKeyHash: WITHDRAW_PKH },
+      txHash: txHashSeed.repeat(64).slice(0, 64),
+      outputIndex: 0,
+      output: {
+        amountSatoshis: sats,
+        tokenCategory: tokenId,
+        tokenAmount: tokens,
+        lockingBytecode: buildCauldronPoolV0LockingBytecode({
+          withdrawPublicKeyHash: WITHDRAW_PKH,
+        }),
+      },
+    });
+
+    const liquidity = analyzeCauldronMarketLiquidity(
+      [
+        makePool('1', 1_118_498_378n, 11n),
+        makePool('2', 2_000_000_000n, 20n),
+      ],
+      tokenId
+    );
+
+    expect(liquidity.bchToToken.executablePoolCount).toBe(2);
+    expect(liquidity.bchToToken.maxDemand).toBeGreaterThan(0n);
+    expect(liquidity.tokenToBch.executablePoolCount).toBe(2);
+    expect(liquidity.tokenToBch.maxSupply).toBeGreaterThan(0n);
+    expect(liquidity.tokenToBch.maxDemand).toBeGreaterThan(0n);
+  });
+
   it('builds a signed swap transaction that passes the Cauldron VM checks', () => {
     const sampleTokenId =
       '412064756d6d7920746f6b656e2069642c203132332031323320313233212121';
@@ -556,6 +610,303 @@ describe('Cauldron service', () => {
     expect(signed.transaction.outputs[0]?.valueSatoshis).toBe(1_545_050_219n);
     expect(signed.transaction.outputs[1]?.valueSatoshis).toBe(2_044_130_514n);
     expect(signed.transaction.outputs[2]?.token?.amount).toBe(12n);
+  });
+
+  it('builds a signed token-to-BCH swap transaction that passes the Cauldron VM checks', () => {
+    const sampleTokenId =
+      '412064756d6d7920746f6b656e2069642c203132332031323320313233212121';
+    const zeroWithdrawPkh = new Uint8Array(20);
+    const pool = {
+      version: '0' as const,
+      parameters: { withdrawPublicKeyHash: zeroWithdrawPkh },
+      txHash: '42'.repeat(32),
+      outputIndex: 0,
+      output: {
+        amountSatoshis: 1_118_498_378n,
+        tokenCategory: sampleTokenId,
+        tokenAmount: 11n,
+        lockingBytecode: buildCauldronPoolV0LockingBytecode({
+          withdrawPublicKeyHash: zeroWithdrawPkh,
+        }),
+      },
+    };
+    const walletInput = createWalletInputFixture({
+      txHash: '52'.repeat(32),
+      txPos: 1,
+      value: 800n,
+      token: {
+        category: sampleTokenId,
+        amount: 3n,
+      },
+    });
+    const bchFundingInput = createWalletInputFixture({
+      txHash: '53'.repeat(32),
+      txPos: 2,
+      value: 100_000_000n,
+    });
+
+    const built = buildCauldronTradeRequest({
+      poolTrades: [
+        toCauldronPoolTrade(pool, sampleTokenId, CAULDRON_NATIVE_BCH, {
+          supply: 2n,
+          demand: 171_561_988n,
+          tradeFee: 514_685n,
+        }),
+      ],
+      walletInputs: [walletInput, bchFundingInput],
+      recipientAddress: TEST_CASHADDR,
+      changeAddress: TEST_CASHADDR,
+      tokenChangeAddress: TEST_CASHADDR,
+      feeRateSatsPerByte: 1n,
+    });
+
+    const signed = signRequestForTest({
+      signRequest: built.signRequest as any,
+      keyByInputIndex: new Map([
+        [1, TEST_PRIVATE_KEY],
+        [2, TEST_PRIVATE_KEY],
+      ]),
+    });
+
+    expectVmAccepts(signed);
+    expect(signed.transaction.outputs[0]?.valueSatoshis).toBe(946_936_390n);
+    expect(signed.transaction.outputs[0]?.token?.amount).toBe(13n);
+  });
+
+  it('keeps token-to-BCH swap fee estimates high enough for the signed transaction size', () => {
+    const sampleTokenId =
+      '412064756d6d7920746f6b656e2069642c203132332031323320313233212121';
+    const zeroWithdrawPkh = new Uint8Array(20);
+    const pool = {
+      version: '0' as const,
+      parameters: { withdrawPublicKeyHash: zeroWithdrawPkh },
+      txHash: '42'.repeat(32),
+      outputIndex: 0,
+      output: {
+        amountSatoshis: 1_118_498_378n,
+        tokenCategory: sampleTokenId,
+        tokenAmount: 11n,
+        lockingBytecode: buildCauldronPoolV0LockingBytecode({
+          withdrawPublicKeyHash: zeroWithdrawPkh,
+        }),
+      },
+    };
+    const tokenFundingInput = createWalletInputFixture({
+      txHash: '52'.repeat(32),
+      txPos: 1,
+      value: 800n,
+      token: {
+        category: sampleTokenId,
+        amount: 3n,
+      },
+    });
+    const bchFundingInput = createWalletInputFixture({
+      txHash: '53'.repeat(32),
+      txPos: 2,
+      value: 100_000_000n,
+    });
+
+    const built = buildCauldronTradeRequest({
+      poolTrades: [
+        toCauldronPoolTrade(pool, sampleTokenId, CAULDRON_NATIVE_BCH, {
+          supply: 2n,
+          demand: 171_561_988n,
+          tradeFee: 514_685n,
+        }),
+      ],
+      walletInputs: [tokenFundingInput, bchFundingInput],
+      recipientAddress: TEST_CASHADDR,
+      changeAddress: TEST_CASHADDR,
+      tokenChangeAddress: TEST_CASHADDR,
+      feeRateSatsPerByte: 1n,
+    });
+
+    const signed = signRequestForTest({
+      signRequest: built.signRequest as any,
+      keyByInputIndex: new Map([
+        [1, TEST_PRIVATE_KEY],
+        [2, TEST_PRIVATE_KEY],
+      ]),
+    });
+    const signedHex = binToHex(encodeTransaction(signed.transaction));
+
+    expect(() =>
+      assertSignedTransactionFeeSufficiency({
+        signedTransactionHex: signedHex,
+        sourceOutputs: built.sourceOutputs,
+        estimatedFeeSatoshis: built.estimatedFeeSatoshis,
+        transactionLabel: 'Cauldron swap',
+      })
+    ).not.toThrow();
+  });
+
+  it('measures the actual fee paid by a signed Cauldron transaction', () => {
+    const sampleTokenId =
+      '412064756d6d7920746f6b656e2069642c203132332031323320313233212121';
+    const zeroWithdrawPkh = new Uint8Array(20);
+    const pool = {
+      version: '0' as const,
+      parameters: { withdrawPublicKeyHash: zeroWithdrawPkh },
+      txHash: '41'.repeat(32),
+      outputIndex: 0,
+      output: {
+        amountSatoshis: 1_122_751_507n,
+        tokenCategory: sampleTokenId,
+        tokenAmount: 11n,
+        lockingBytecode: buildCauldronPoolV0LockingBytecode({
+          withdrawPublicKeyHash: zeroWithdrawPkh,
+        }),
+      },
+    };
+    const walletInput = createWalletInputFixture({
+      value: 14n * 100_000_000n,
+    });
+
+    const built = buildCauldronTradeRequest({
+      poolTrades: [
+        toCauldronPoolTrade(pool, CAULDRON_NATIVE_BCH, sampleTokenId, {
+          supply: 422_298_712n,
+          demand: 3n,
+          tradeFee: 1_266_896n,
+        }),
+      ],
+      walletInputs: [walletInput],
+      recipientAddress: TEST_CASHADDR,
+      changeAddress: TEST_CASHADDR,
+      feeRateSatsPerByte: 1n,
+    });
+
+    const signed = signRequestForTest({
+      signRequest: built.signRequest as any,
+      keyByInputIndex: new Map([[1, TEST_PRIVATE_KEY]]),
+    });
+    const signedHex = binToHex(encodeTransaction(signed.transaction));
+    const { actualFeeSatoshis, transactionSizeBytes } =
+      calculateSignedTransactionFeeSatoshis(signedHex, built.sourceOutputs);
+
+    expect(actualFeeSatoshis).toBeGreaterThan(0n);
+    expect(transactionSizeBytes).toBeGreaterThan(0n);
+    expect(actualFeeSatoshis).toBeGreaterThanOrEqual(built.estimatedFeeSatoshis);
+  });
+
+  it('rejects a signed Cauldron transaction before broadcast if it violates covenant rules', () => {
+    const sampleTokenId =
+      '412064756d6d7920746f6b656e2069642c203132332031323320313233212121';
+    const zeroWithdrawPkh = new Uint8Array(20);
+    const pool = {
+      version: '0' as const,
+      parameters: { withdrawPublicKeyHash: zeroWithdrawPkh },
+      txHash: '41'.repeat(32),
+      outputIndex: 0,
+      output: {
+        amountSatoshis: 1_122_751_507n,
+        tokenCategory: sampleTokenId,
+        tokenAmount: 11n,
+        lockingBytecode: buildCauldronPoolV0LockingBytecode({
+          withdrawPublicKeyHash: zeroWithdrawPkh,
+        }),
+      },
+    };
+    const walletInput = createWalletInputFixture({
+      value: 14n * 100_000_000n,
+    });
+
+    const built = buildCauldronTradeRequest({
+      poolTrades: [
+        toCauldronPoolTrade(pool, CAULDRON_NATIVE_BCH, sampleTokenId, {
+          supply: 422_298_712n,
+          demand: 3n,
+          tradeFee: 1_266_896n,
+        }),
+      ],
+      walletInputs: [walletInput],
+      recipientAddress: TEST_CASHADDR,
+      changeAddress: TEST_CASHADDR,
+      feeRateSatsPerByte: 1n,
+    });
+
+    const signed = signRequestForTest({
+      signRequest: built.signRequest as any,
+      keyByInputIndex: new Map([[1, TEST_PRIVATE_KEY]]),
+    });
+    signed.transaction.outputs[0] = {
+      ...signed.transaction.outputs[0]!,
+      valueSatoshis: signed.transaction.outputs[0]!.valueSatoshis - 1n,
+    };
+    const signedHex = binToHex(encodeTransaction(signed.transaction));
+
+    expect(() =>
+      assertSignedTransactionCovenantValidity({
+        signedTransactionHex: signedHex,
+        sourceOutputs: built.sourceOutputs,
+        transactionLabel: 'Cauldron swap',
+      })
+    ).toThrow('Cauldron swap does not satisfy the on-chain covenant rules');
+    expect(() =>
+      assertSignedTransactionCovenantValidity({
+        signedTransactionHex: signedHex,
+        sourceOutputs: built.sourceOutputs,
+        transactionLabel: 'Cauldron swap',
+      })
+    ).toThrow(`${pool.txHash}:${pool.outputIndex}`);
+  });
+
+  it('rejects a signed Cauldron transaction if the actual fee falls below the required amount', () => {
+    const sampleTokenId =
+      '412064756d6d7920746f6b656e2069642c203132332031323320313233212121';
+    const zeroWithdrawPkh = new Uint8Array(20);
+    const pool = {
+      version: '0' as const,
+      parameters: { withdrawPublicKeyHash: zeroWithdrawPkh },
+      txHash: '41'.repeat(32),
+      outputIndex: 0,
+      output: {
+        amountSatoshis: 1_122_751_507n,
+        tokenCategory: sampleTokenId,
+        tokenAmount: 11n,
+        lockingBytecode: buildCauldronPoolV0LockingBytecode({
+          withdrawPublicKeyHash: zeroWithdrawPkh,
+        }),
+      },
+    };
+    const walletInput = createWalletInputFixture({
+      value: 14n * 100_000_000n,
+    });
+
+    const built = buildCauldronTradeRequest({
+      poolTrades: [
+        toCauldronPoolTrade(pool, CAULDRON_NATIVE_BCH, sampleTokenId, {
+          supply: 422_298_712n,
+          demand: 3n,
+          tradeFee: 1_266_896n,
+        }),
+      ],
+      walletInputs: [walletInput],
+      recipientAddress: TEST_CASHADDR,
+      changeAddress: TEST_CASHADDR,
+      feeRateSatsPerByte: 1n,
+    });
+
+    const signed = signRequestForTest({
+      signRequest: built.signRequest as any,
+      keyByInputIndex: new Map([[1, TEST_PRIVATE_KEY]]),
+    });
+    const signedHex = binToHex(encodeTransaction(signed.transaction));
+    const { actualFeeSatoshis } = calculateSignedTransactionFeeSatoshis(
+      signedHex,
+      built.sourceOutputs
+    );
+
+    expect(() =>
+      assertSignedTransactionFeeSufficiency({
+        signedTransactionHex: signedHex,
+        sourceOutputs: built.sourceOutputs,
+        estimatedFeeSatoshis: actualFeeSatoshis + 1n,
+        transactionLabel: 'Cauldron swap',
+      })
+    ).toThrow(
+      'Cauldron swap fee is too low after signing.'
+    );
   });
 
   it('builds a mocknet-backed Cauldron pool deposit transaction with deterministic outputs', async () => {

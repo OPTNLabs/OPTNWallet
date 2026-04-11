@@ -25,6 +25,7 @@ describe('ipfsFetch', () => {
       chaingraphUrls: [],
       bcmrApiBaseUrls: [],
       ipfsGateways: ['https://gw1.example/ipfs', 'https://gw2.example/ipfs'],
+      ipfsUploadRelayBases: [],
     });
   });
 

@@ -1,7 +1,11 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import DatabaseService from '../../apis/DatabaseManager/DatabaseService';
 import { HomeTokenTotals } from './homeMetrics';
-import { preloadTokenMetadata } from '../../hooks/useSharedTokenMetadata';
+import {
+  getCachedTokenMetadata,
+  METADATA_FAILURE_TTL_MS,
+  preloadTokenMetadata,
+} from '../../hooks/useSharedTokenMetadata';
 
 type UseHomeMetadataPreloadParams = {
   isInitialized: boolean;
@@ -13,7 +17,7 @@ export function useHomeMetadataPreload({
   placeholderTokenTotals,
 }: UseHomeMetadataPreloadParams) {
   const [metadataPreloaded, setMetadataPreloaded] = useState(false);
-  const attemptedCategoriesRef = useRef(new Set<string>());
+  const [retryNonce, setRetryNonce] = useState(0);
   const categories = useMemo(
     () => Object.keys(placeholderTokenTotals).sort(),
     [placeholderTokenTotals]
@@ -22,23 +26,60 @@ export function useHomeMetadataPreload({
 
   useEffect(() => {
     if (!isInitialized) return;
-    (async () => {
-      const pendingCategories = categories.filter((category) => {
-        if (attemptedCategoriesRef.current.has(category)) return false;
-        attemptedCategoriesRef.current.add(category);
-        return true;
-      });
+    let cancelled = false;
+    const runPreload = async () => {
+      const pendingCategories = categories.filter(
+        (category) => getCachedTokenMetadata(category)?.status !== 'ready'
+      );
 
       if (pendingCategories.length === 0) {
+        if (cancelled) return;
         setMetadataPreloaded(true);
         return;
       }
 
       await preloadTokenMetadata(pendingCategories);
 
+      if (cancelled) return;
       setMetadataPreloaded(true);
-    })();
-  }, [categories, categoriesKey, isInitialized]);
+    };
+
+    let timeoutId: number | undefined;
+    let idleId: number | undefined;
+    const browserWindow = typeof window !== 'undefined' ? window : undefined;
+    if (browserWindow && 'requestIdleCallback' in browserWindow) {
+      idleId = browserWindow.requestIdleCallback(() => {
+        void runPreload();
+      });
+    } else {
+      timeoutId = browserWindow?.setTimeout(() => {
+        void runPreload();
+      }, 0);
+    }
+
+    const retryTimer = browserWindow?.setTimeout(() => {
+      if (!cancelled) {
+        setRetryNonce((value) => value + 1);
+      }
+    }, METADATA_FAILURE_TTL_MS);
+
+    return () => {
+      cancelled = true;
+      if (
+        idleId !== undefined &&
+        browserWindow &&
+        'cancelIdleCallback' in browserWindow
+      ) {
+        browserWindow.cancelIdleCallback(idleId);
+      }
+      if (timeoutId !== undefined && browserWindow) {
+        browserWindow.clearTimeout(timeoutId);
+      }
+      if (retryTimer !== undefined && browserWindow) {
+        browserWindow.clearTimeout(retryTimer);
+      }
+    };
+  }, [categories, categoriesKey, isInitialized, retryNonce]);
 
   useEffect(() => {
     if (isInitialized && metadataPreloaded) {

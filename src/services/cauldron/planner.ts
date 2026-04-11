@@ -18,6 +18,8 @@ import {
 } from './script';
 import {
   CAULDRON_NATIVE_BCH,
+  type CauldronDirectionLiquidity,
+  type CauldronMarketLiquidity,
   type CauldronPool,
   type CauldronPoolTrade,
   type CauldronTokenId,
@@ -110,8 +112,8 @@ export function normalizeCauldronPoolRow(
       tx_pos: Number(
         rawRow.tx_pos ?? rawRow.vout ?? rawRow.output_index ?? rawRow.new_utxo_n ?? 0
       ),
-      value: Number(findBigInt(row, ['value', 'sats', 'amount', 'value_satoshis'])),
-      amount: Number(findBigInt(row, ['value', 'sats', 'amount', 'value_satoshis'])),
+      value: findBigInt(row, ['value', 'sats', 'amount', 'value_satoshis']),
+      amount: findBigInt(row, ['value', 'sats', 'amount', 'value_satoshis']),
       token: {
         category: tokenCategory,
         amount: findBigInt(row, ['token_amount', 'amount_token', 'tokenAmount', 'tokens']),
@@ -248,6 +250,55 @@ export function rankCauldronPoolsBySpotPrice(
   });
 }
 
+export function analyzeCauldronDirectionLiquidity(
+  pools: CauldronPool[],
+  supplyTokenId: CauldronTokenId,
+  demandTokenId: CauldronTokenId
+): CauldronDirectionLiquidity {
+  let executablePoolCount = 0;
+  let maxSupply = 0n;
+  let maxDemand = 0n;
+
+  for (const pool of pools) {
+    try {
+      const pair = createCauldronPoolPair(pool, supplyTokenId, demandTokenId);
+      const poolMaxDemand = pair.reserveB - pair.minReserveB;
+      if (poolMaxDemand <= 0n) continue;
+      const trade = calcCauldronTradeWithTargetDemand(pair, poolMaxDemand);
+      if (!trade || trade.supply <= 0n || trade.demand <= 0n) continue;
+      executablePoolCount += 1;
+      maxSupply += trade.supply;
+      maxDemand += trade.demand;
+    } catch {
+      continue;
+    }
+  }
+
+  return {
+    executablePoolCount,
+    maxSupply,
+    maxDemand,
+  };
+}
+
+export function analyzeCauldronMarketLiquidity(
+  pools: CauldronPool[],
+  tokenId: string
+): CauldronMarketLiquidity {
+  return {
+    bchToToken: analyzeCauldronDirectionLiquidity(
+      pools,
+      CAULDRON_NATIVE_BCH,
+      tokenId
+    ),
+    tokenToBch: analyzeCauldronDirectionLiquidity(
+      pools,
+      tokenId,
+      CAULDRON_NATIVE_BCH
+    ),
+  };
+}
+
 export function planBestSinglePoolTradeForTargetDemand(
   pools: CauldronPool[],
   supplyTokenId: CauldronTokenId,
@@ -320,25 +371,7 @@ export function planBestSinglePoolTradeForTargetSupply(
   };
 }
 
-function applyTradeToPool(
-  pool: CauldronPool,
-  trade: CauldronPoolTrade
-): CauldronPool {
-  return {
-    ...pool,
-    output: {
-      ...pool.output,
-      amountSatoshis:
-        pool.output.amountSatoshis +
-        (trade.supplyTokenId === CAULDRON_NATIVE_BCH ? trade.supply : -trade.demand),
-      tokenAmount:
-        pool.output.tokenAmount +
-        (trade.supplyTokenId === CAULDRON_NATIVE_BCH ? -trade.demand : trade.supply),
-    },
-  };
-}
-
-export function planAggregatedTradeForTargetSupply(
+function planAggregatedTradeForTargetSupplyWithChunkCount(
   pools: CauldronPool[],
   supplyTokenId: CauldronTokenId,
   demandTokenId: CauldronTokenId,
@@ -350,18 +383,19 @@ export function planAggregatedTradeForTargetSupply(
   const workingPools = pools.map((pool) => ({
     key: formatPoolOutpoint(pool),
     pool,
+    allocatedSupply: 0n,
+    allocatedDemand: 0n,
+    allocatedTradeFee: 0n,
   }));
-  const trades: CauldronPoolTrade[] = [];
   let remaining = supplyAmount;
 
-  for (let step = 0; step < chunkCount && remaining > 0n; step += 1) {
-    const stepsLeft = BigInt(chunkCount - step);
-    const chunk = remaining / stepsLeft > 0n ? remaining / stepsLeft : remaining;
-
+  const findBestPoolAllocation = (increment: bigint) => {
     let best:
       | {
           index: number;
           trade: CauldronPoolTrade;
+          marginalDemand: bigint;
+          marginalTradeFee: bigint;
         }
       | null = null;
 
@@ -369,16 +403,18 @@ export function planAggregatedTradeForTargetSupply(
       const current = workingPools[i];
       let trade;
       try {
-        const pair = createCauldronPoolPair(
-          current.pool,
-          supplyTokenId,
-          demandTokenId
+        const pair = createCauldronPoolPair(current.pool, supplyTokenId, demandTokenId);
+        trade = calcCauldronTradeWithTargetSupply(
+          pair,
+          current.allocatedSupply + increment
         );
-        trade = calcCauldronTradeWithTargetSupply(pair, chunk);
       } catch {
         continue;
       }
       if (!trade) continue;
+      const marginalDemand = trade.demand - current.allocatedDemand;
+      const marginalTradeFee = trade.tradeFee - current.allocatedTradeFee;
+      if (marginalDemand <= 0n || marginalTradeFee < 0n) continue;
 
       const poolTrade = toCauldronPoolTrade(
         current.pool,
@@ -393,41 +429,124 @@ export function planAggregatedTradeForTargetSupply(
 
       if (
         !best ||
-        poolTrade.demand > best.trade.demand ||
-        (poolTrade.demand === best.trade.demand &&
-          poolTrade.tradeFee < best.trade.tradeFee)
+        marginalDemand > best.marginalDemand ||
+        (marginalDemand === best.marginalDemand &&
+          marginalTradeFee < best.marginalTradeFee)
       ) {
-        best = { index: i, trade: poolTrade };
+        best = { index: i, trade: poolTrade, marginalDemand, marginalTradeFee };
       }
     }
 
+    return best;
+  };
+
+  for (let step = 0; step < chunkCount && remaining > 0n; step += 1) {
+    const stepsLeft = BigInt(chunkCount - step);
+    const chunk = remaining / stepsLeft > 0n ? remaining / stepsLeft : remaining;
+    const best = findBestPoolAllocation(chunk) ?? (chunk !== remaining
+      ? findBestPoolAllocation(remaining)
+      : null);
+
     if (!best) {
-      if (trades.length === 0) return null;
+      if (workingPools.every((entry) => entry.allocatedSupply === 0n)) return null;
       break;
     }
 
-    trades.push(best.trade);
-    remaining -= best.trade.supply;
+    remaining -= best.trade.supply - workingPools[best.index]!.allocatedSupply;
     workingPools[best.index] = {
       ...workingPools[best.index],
-      pool: applyTradeToPool(workingPools[best.index].pool, best.trade),
+      allocatedSupply: best.trade.supply,
+      allocatedDemand: best.trade.demand,
+      allocatedTradeFee: best.trade.tradeFee,
     };
   }
 
   if (remaining > 0n) {
-    const fallback = planBestSinglePoolTradeForTargetSupply(
-      workingPools.map((entry) => entry.pool),
-      supplyTokenId,
-      demandTokenId,
-      remaining
-    );
-    if (!fallback) return null;
-    trades.push(fallback.trade);
+    const bestFallback = findBestPoolAllocation(remaining);
+
+    if (!bestFallback) return null;
+    workingPools[bestFallback.index] = {
+      ...workingPools[bestFallback.index],
+      allocatedSupply: bestFallback.trade.supply,
+      allocatedDemand: bestFallback.trade.demand,
+      allocatedTradeFee: bestFallback.trade.tradeFee,
+    };
   }
 
+  const trades = workingPools
+    .filter((entry) => entry.allocatedSupply > 0n)
+    .map((entry) =>
+      toCauldronPoolTrade(entry.pool, supplyTokenId, demandTokenId, {
+        supply: entry.allocatedSupply,
+        demand: entry.allocatedDemand,
+        tradeFee: entry.allocatedTradeFee,
+      })
+    );
   const summary = summarizeCauldronTrade(trades);
   if (!summary) return null;
   return { trades, summary };
+}
+
+function pickBetterTradePlan(
+  left: { trades: CauldronPoolTrade[]; summary: CauldronTradeSummary } | null,
+  right: { trades: CauldronPoolTrade[]; summary: CauldronTradeSummary } | null
+): { trades: CauldronPoolTrade[]; summary: CauldronTradeSummary } | null {
+  if (!left) return right;
+  if (!right) return left;
+  if (right.summary.demand > left.summary.demand) return right;
+  if (right.summary.demand < left.summary.demand) return left;
+  if (right.summary.tradeFee < left.summary.tradeFee) return right;
+  if (right.summary.tradeFee > left.summary.tradeFee) return left;
+  if (right.trades.length < left.trades.length) return right;
+  return left;
+}
+
+function normalizeSinglePoolTradePlan(
+  plan: { trade: CauldronPoolTrade; summary: CauldronTradeSummary } | null
+): { trades: CauldronPoolTrade[]; summary: CauldronTradeSummary } | null {
+  if (!plan) return null;
+  return {
+    trades: [plan.trade],
+    summary: plan.summary,
+  };
+}
+
+export function planAggregatedTradeForTargetSupply(
+  pools: CauldronPool[],
+  supplyTokenId: CauldronTokenId,
+  demandTokenId: CauldronTokenId,
+  supplyAmount: bigint,
+  chunkCount = 16
+): { trades: CauldronPoolTrade[]; summary: CauldronTradeSummary } | null {
+  if (supplyAmount <= 0n || pools.length === 0) return null;
+
+  let best = normalizeSinglePoolTradePlan(
+    planBestSinglePoolTradeForTargetSupply(
+      pools,
+      supplyTokenId,
+      demandTokenId,
+      supplyAmount
+    )
+  );
+
+  const candidateChunkCounts = Array.from(
+    new Set([1, 2, 4, 8, chunkCount, 16, 24, 32].filter((value) => value > 0))
+  );
+
+  for (const candidateChunkCount of candidateChunkCounts) {
+    best = pickBetterTradePlan(
+      best,
+      planAggregatedTradeForTargetSupplyWithChunkCount(
+        pools,
+        supplyTokenId,
+        demandTokenId,
+        supplyAmount,
+        candidateChunkCount
+      )
+    );
+  }
+
+  return best;
 }
 
 export async function fetchNormalizedCauldronPools(

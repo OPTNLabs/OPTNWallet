@@ -12,6 +12,7 @@ export type InfraUrlPools = {
   chaingraphUrls: string[];
   bcmrApiBaseUrls: string[];
   ipfsGateways: string[];
+  ipfsUploadRelayBases: string[];
 };
 
 const DEFAULT_INFRA_URL_POOLS: Record<Network, InfraUrlPools> = {
@@ -22,11 +23,18 @@ const DEFAULT_INFRA_URL_POOLS: Record<Network, InfraUrlPools> = {
       'electrum-chipnet.optnlabs.com',
     ],
     chaingraphUrls: ['https://gql.chaingraph.pat.mn/v1/graphql'],
-    bcmrApiBaseUrls: ['https://bcmr-chipnet.paytaca.com/api'],
+    bcmrApiBaseUrls: [
+      'https://bcmr.optnlabs.com/api',
+      'https://bcmr-chipnet.paytaca.com/api',
+    ],
     ipfsGateways: [
       'https://ipfs.optnlabs.com/ipfs',
       'https://ipfs.io/ipfs',
       'https://dweb.link/ipfs',
+    ],
+    ipfsUploadRelayBases: [
+      'https://upload.optnlabs.com',
+      'https://ipfs-api.optnlabs.com',
     ],
   },
 
@@ -37,11 +45,18 @@ const DEFAULT_INFRA_URL_POOLS: Record<Network, InfraUrlPools> = {
       'explorer.bch.ninja',
     ],
     chaingraphUrls: ['https://gql.chaingraph.pat.mn/v1/graphql'],
-    bcmrApiBaseUrls: ['https://bcmr.paytaca.com/api'],
+    bcmrApiBaseUrls: [
+      'https://bcmr.optnlabs.com/api',
+      'https://bcmr.paytaca.com/api',
+    ],
     ipfsGateways: [
       'https://ipfs.optnlabs.com/ipfs',
       'https://ipfs.io/ipfs',
       'https://dweb.link/ipfs',
+    ],
+    ipfsUploadRelayBases: [
+      'https://upload.optnlabs.com',
+      'https://ipfs-api.optnlabs.com',
     ],
   },
 };
@@ -116,6 +131,10 @@ function normalizeIpfsGateway(url: string): string {
   return normalized.endsWith('/ipfs') ? normalized : `${normalized}/ipfs`;
 }
 
+function normalizeIpfsUploadRelay(url: string): string {
+  return normalizeHttpUrl(url).replace(/\/+$/, '');
+}
+
 /**
  * One centralized endpoint source for all wallet infra connections.
  * Supports network-specific env overrides with CSV values.
@@ -139,6 +158,10 @@ export function getInfraUrlPools(network: Network): InfraUrlPools {
   const ipfsGateways = readEndpointList(network, 'VITE_IPFS_GATEWAYS').map(
     normalizeIpfsGateway
   );
+  const ipfsUploadRelayBases = readEndpointList(
+    network,
+    'VITE_IPFS_UPLOAD_RELAYS'
+  ).map(normalizeIpfsUploadRelay);
 
   return {
     electrumServers:
@@ -153,6 +176,10 @@ export function getInfraUrlPools(network: Network): InfraUrlPools {
       ipfsGateways.length > 0
         ? ipfsGateways
         : defaults.ipfsGateways.map(normalizeIpfsGateway),
+    ipfsUploadRelayBases:
+      ipfsUploadRelayBases.length > 0
+        ? ipfsUploadRelayBases
+        : defaults.ipfsUploadRelayBases.map(normalizeIpfsUploadRelay),
   };
 }
 

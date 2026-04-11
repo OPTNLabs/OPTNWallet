@@ -141,7 +141,9 @@ export default function MarketplaceAppHost() {
   const walletId = useSelector(
     (state: RootState) => state.wallet_id.currentWalletId
   );
-  const network = useSelector((state: RootState) => state.network.currentNetwork);
+  const network = useSelector(
+    (state: RootState) => state.network.currentNetwork
+  );
 
   const [loading, setLoading] = useState(true);
   const [resolved, setResolved] = useState<ResolvedApp | null>(null);
@@ -160,7 +162,10 @@ export default function MarketplaceAppHost() {
   );
   const promptOpenRef = useRef(false);
   const promptQueueRef = useRef<
-    Array<{ prompt: ConsentPrompt; resolve: (decision: PromptDecision) => void }>
+    Array<{
+      prompt: ConsentPrompt;
+      resolve: (decision: PromptDecision) => void;
+    }>
   >([]);
   const activeResolverRef = useRef<((decision: PromptDecision) => void) | null>(
     null
@@ -589,15 +594,15 @@ export default function MarketplaceAppHost() {
   return (
     <>
       <div className="mx-auto flex h-full min-h-0 w-full max-w-md flex-col overflow-hidden px-4">
-        <div className="flex-1 min-h-0 overflow-hidden">
-          {renderApp()}
-        </div>
+        <div className="flex-1 min-h-0 overflow-hidden">{renderApp()}</div>
       </div>
       {consentPrompt && (
         <div className="wallet-popup-backdrop">
           <div className="wallet-popup-panel max-w-lg">
             <div className="text-lg font-semibold">{consentPrompt.title}</div>
-            <div className="mt-2 text-sm wallet-muted">{consentPrompt.message}</div>
+            <div className="mt-2 text-sm wallet-muted">
+              {consentPrompt.message}
+            </div>
 
             {consentPrompt.mode === 'launch' &&
               Array.isArray(consentPrompt.capabilities) &&

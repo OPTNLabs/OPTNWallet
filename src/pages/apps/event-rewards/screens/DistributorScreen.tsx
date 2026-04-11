@@ -18,6 +18,7 @@ import {
   executeApprovedDistributionSend,
   type DistributionTxPreview,
 } from '../services/executeDistributionSend';
+import { useSmoothResetTransition } from '../../shared/useSmoothResetTransition';
 import type {
   DistributionJobRecord,
   DistributionRecipient,
@@ -274,6 +275,7 @@ const DistributorScreen: React.FC<DistributorScreenProps> = ({
   feeFundingSats,
   feeFundingUtxoCount,
 }) => {
+  const { contentClassName, runSmoothReset } = useSmoothResetTransition();
   const currentNetwork =
     sdk.wallet.getContext().network === 'chipnet' ? Network.CHIPNET : Network.MAINNET;
   const [recipients, setRecipients] = useState<DistributionRecipient[]>([]);
@@ -548,6 +550,14 @@ const DistributorScreen: React.FC<DistributorScreenProps> = ({
         .map((recipient) => recipient.id),
     [recipients, recipientSelection]
   );
+  const tokenImportedRecipientIds = useMemo(
+    () =>
+      recipients
+        .filter((recipient) => recipient.source === 'tokenindex')
+        .map((recipient) => recipient.id),
+    [recipients]
+  );
+  const tokenImportedRecipientCount = tokenImportedRecipientIds.length;
   const preparedJobs = useMemo(
     () => jobs.filter((job) => job.status === 'prepared'),
     [jobs]
@@ -668,6 +678,36 @@ const DistributorScreen: React.FC<DistributorScreenProps> = ({
     setImportText((prev) => (prev.trim() ? `${prev.trimEnd()}\n${next}` : next));
   };
 
+  const setRecipientSelectionForIds = (ids: string[], checked: boolean) => {
+    if (ids.length === 0) return;
+    setRecipientSelection((prev) => ({
+      ...prev,
+      ...Object.fromEntries(ids.map((id) => [id, checked])),
+    }));
+  };
+
+  const clearRecipientSelection = () => {
+    setRecipientSelection((prev) => {
+      if (Object.keys(prev).length === 0) return prev;
+      return Object.fromEntries(recipients.map((recipient) => [recipient.id, false]));
+    });
+  };
+
+  const removeRecipientsByIds = (ids: string[]) => {
+    if (ids.length === 0) return 0;
+    const idSet = new Set(ids);
+    setRecipients((prev) => prev.filter((recipient) => !idSet.has(recipient.id)));
+    setRecipientSelection((prev) =>
+      Object.fromEntries(
+        Object.entries(prev).filter(([recipientId]) => !idSet.has(recipientId))
+      )
+    );
+    return ids.length;
+  };
+
+  const clearImportedTokenRecipients = () =>
+    removeRecipientsByIds(tokenImportedRecipientIds);
+
   const scanRecipientQr = async () => {
     try {
       setScanBusy(true);
@@ -746,6 +786,22 @@ const DistributorScreen: React.FC<DistributorScreenProps> = ({
       cancelled = true;
     };
   }, [preparedJobs, preparedJobsPreviewKey, sdk, step]);
+
+  useEffect(() => {
+    if (!status) return;
+    const timeoutId = window.setTimeout(() => {
+      setStatus('');
+    }, 3200);
+    return () => window.clearTimeout(timeoutId);
+  }, [status]);
+
+  useEffect(() => {
+    if (!error) return;
+    const timeoutId = window.setTimeout(() => {
+      setError('');
+    }, 4200);
+    return () => window.clearTimeout(timeoutId);
+  }, [error]);
 
   useEffect(() => {
     if (typeof window === 'undefined') return;
@@ -858,6 +914,13 @@ const DistributorScreen: React.FC<DistributorScreenProps> = ({
     });
   };
 
+  const refreshWalletAfterSend = async () => {
+    const addresses = await sdk.wallet.listAddresses();
+    await Promise.allSettled(
+      addresses.map((entry) => sdk.utxos.refreshAndStore(entry.address))
+    );
+  };
+
   const loadTokenHolderBalances = async (
     category: string,
     options?: {
@@ -939,8 +1002,11 @@ const DistributorScreen: React.FC<DistributorScreenProps> = ({
       excludeAddresses = new Set(loadedExclude.keys());
     }
 
+    const manualRecipients = recipients.filter(
+      (recipient) => recipient.source !== 'tokenindex'
+    );
     const existingAddressKeys = new Set(
-      recipients.map((recipient) => normalizeAddressKey(recipient.address))
+      manualRecipients.map((recipient) => normalizeAddressKey(recipient.address))
     );
     const newRecipients: DistributionRecipient[] = [];
 
@@ -961,9 +1027,12 @@ const DistributorScreen: React.FC<DistributorScreenProps> = ({
       throw new Error('No new recipients matched the current token filter.');
     }
 
-    setRecipients((prev) => [...prev, ...newRecipients]);
+    const nextRecipients = [...manualRecipients, ...newRecipients];
+    setRecipients(nextRecipients);
     setRecipientSelection((prev) => ({
-      ...prev,
+      ...Object.fromEntries(
+        manualRecipients.map((recipient) => [recipient.id, Boolean(prev[recipient.id])])
+      ),
       ...Object.fromEntries(newRecipients.map((recipient) => [recipient.id, true])),
     }));
     setStatus(
@@ -1114,15 +1183,21 @@ const DistributorScreen: React.FC<DistributorScreenProps> = ({
   };
 
   return (
-    <div className="space-y-2 overflow-x-hidden">
-      {status ? (
-        <div className="wallet-success-panel wallet-success-appear rounded-2xl px-4 py-3 text-sm">
-          {status}
-        </div>
-      ) : null}
-      {error ? (
-        <div className="wallet-warning-panel rounded-2xl px-4 py-3 text-sm">
-          {error}
+    <div className={`space-y-2 overflow-x-hidden ${contentClassName}`}>
+      {status || error ? (
+        <div className="pointer-events-none fixed inset-x-0 top-4 z-[80] flex justify-center px-4">
+          <div className="w-full max-w-md space-y-2">
+            {status ? (
+              <div className="pointer-events-auto wallet-success-panel wallet-success-appear rounded-2xl px-4 py-3 text-sm shadow-lg backdrop-blur-sm">
+                {status}
+              </div>
+            ) : null}
+            {error ? (
+              <div className="pointer-events-auto wallet-warning-panel wallet-success-appear rounded-2xl px-4 py-3 text-sm shadow-lg backdrop-blur-sm">
+                {error}
+              </div>
+            ) : null}
+          </div>
         </div>
       ) : null}
 
@@ -1883,17 +1958,20 @@ const DistributorScreen: React.FC<DistributorScreenProps> = ({
                 },
                 preparedJobs
               );
+              await runSmoothReset(async () => {
+                await refreshWalletAfterSend();
+                resetAirdropFlow();
+              });
               setStatus(
                 result.broadcastState === 'submitted'
                   ? `Distribution submitted for ${preparedJobs.length} job${
                       preparedJobs.length === 1 ? '' : 's'
-                    }. Keep the txid and avoid sending again until it appears in history.`
+                    }. Returned to the start screen; keep the txid and avoid sending again until it appears in history.`
                   : `Sent ${preparedJobs.length} distribution job${
                       preparedJobs.length === 1 ? '' : 's'
-                    } in one transaction.`
+                    } in one transaction and returned to the start screen.`
               );
               setError('');
-              resetAirdropFlow();
             } catch (sendError) {
               setError(
                 sendError instanceof Error
@@ -1938,6 +2016,37 @@ const DistributorScreen: React.FC<DistributorScreenProps> = ({
                 Select who should receive this airdrop.
               </div>
             </div>
+            {recipients.length > 0 ? (
+              <div className="grid grid-cols-3 gap-2">
+                <button
+                  className="wallet-btn-secondary w-full"
+                  onClick={() => setRecipientSelectionForIds(recipients.map((recipient) => recipient.id), true)}
+                >
+                  Select All
+                </button>
+                <button
+                  className="wallet-btn-secondary w-full"
+                  onClick={clearRecipientSelection}
+                >
+                  Clear Checks
+                </button>
+                <button
+                  className="wallet-btn-secondary w-full"
+                  disabled={tokenImportedRecipientCount === 0}
+                  onClick={() => {
+                    const removedCount = clearImportedTokenRecipients();
+                    if (removedCount > 0) {
+                      setStatus(
+                        `Cleared ${removedCount} imported token holder${removedCount === 1 ? '' : 's'}.`
+                      );
+                      setError('');
+                    }
+                  }}
+                >
+                  Clear Imported
+                </button>
+              </div>
+            ) : null}
             <div className="space-y-2">
               {recipients.length === 0 ? (
                 <p className="text-sm wallet-muted">
@@ -2068,6 +2177,21 @@ const DistributorScreen: React.FC<DistributorScreenProps> = ({
                 }))
               }
             />
+            <button
+              className="wallet-btn-secondary w-full"
+              disabled={tokenImportedRecipientCount === 0}
+              onClick={() => {
+                const removedCount = clearImportedTokenRecipients();
+                if (removedCount > 0) {
+                  setStatus(
+                    `Cleared ${removedCount} imported token holder${removedCount === 1 ? '' : 's'}.`
+                  );
+                  setError('');
+                }
+              }}
+            >
+              Clear Previously Imported Holders
+            </button>
             <button
               className="wallet-btn-primary w-full"
               disabled={tokenImportBusy}

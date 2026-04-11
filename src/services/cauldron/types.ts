@@ -9,8 +9,8 @@ export type CauldronActivePoolRecord = {
   owner_pkh: string;
   owner_p2pkh_addr: string;
   token_id: string;
-  sats: number;
-  tokens: number;
+  sats: number | string | bigint;
+  tokens: number | string | bigint;
   txid: string;
   tx_pos: number;
   pool_id: string;
@@ -22,9 +22,9 @@ export type CauldronRostrumPoolRecord = {
   new_utxo_n?: number;
   new_utxo_txid?: string;
   pkh?: string;
-  sats?: number;
+  sats?: number | string | bigint;
   spent_utxo_hash?: string;
-  token_amount?: number;
+  token_amount?: number | string | bigint;
   token_id?: string;
 };
 
@@ -103,6 +103,17 @@ export type CauldronTradeSummary = {
   rateDenominator: bigint;
 };
 
+export type CauldronDirectionLiquidity = {
+  executablePoolCount: number;
+  maxSupply: bigint;
+  maxDemand: bigint;
+};
+
+export type CauldronMarketLiquidity = {
+  bchToToken: CauldronDirectionLiquidity;
+  tokenToBch: CauldronDirectionLiquidity;
+};
+
 export type CauldronUnlockingKind = 'trade' | 'withdraw';
 
 export type ParsedCauldronUnlockingBytecode = {
@@ -112,8 +123,10 @@ export type ParsedCauldronUnlockingBytecode = {
 
 export type CauldronPoolUtxoCandidate = Pick<
   UTXO,
-  'tx_hash' | 'tx_pos' | 'value' | 'amount' | 'token'
+  'tx_hash' | 'tx_pos' | 'token'
 > & {
+  value?: number | string | bigint;
+  amount?: number | string | bigint;
   lockingBytecode: Uint8Array;
 };
 

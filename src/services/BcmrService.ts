@@ -12,6 +12,7 @@ import { Filesystem, Directory, Encoding } from '@capacitor/filesystem';
 import {
   queryAuthHead,
   queryTransactionByHash,
+  stripChaingraphHexBytes,
 } from '../apis/ChaingraphManager/ChaingraphManager';
 import bcmrLocalJson from '../assets/bcmr-optn-local.json';
 import { ipfsFetch, resolveIpfsGatewayUrl } from '../utils/ipfs';
@@ -33,6 +34,7 @@ const REGISTRY_CACHE = new Map<string, IdentityRegistry>();
 const REGISTRY_INFLIGHT = new Map<string, Promise<IdentityRegistry>>();
 const REGISTRY_MISS_CACHE = new Map<string, number>();
 const REGISTRY_MISS_TTL_MS = 30 * 1000;
+const AUTHCHAIN_SEARCH_MAX_DEPTH = 32;
 
 export class BcmrRegistryNotFoundError extends Error {
   constructor(
@@ -94,12 +96,26 @@ export interface IdentityRegistry {
 }
 
 type ChaingraphOutput = {
+  locking_bytecode?: string;
   scriptPubKey?: { hex?: string };
 };
 
+type ChaingraphInput = {
+  outpoint_transaction_hash?: string;
+  outpoint_index?: number | string;
+};
+
 type ChaingraphTx = {
+  hash?: string;
+  inputs?: ChaingraphInput[];
   outputs?: ChaingraphOutput[];
 };
+
+function getChaingraphOutputHex(output: ChaingraphOutput): string {
+  return stripChaingraphHexBytes(
+    output.locking_bytecode ?? output.scriptPubKey?.hex ?? ''
+  );
+}
 
 type BcmrIndexerTokenResponse = {
   name?: string;
@@ -153,6 +169,142 @@ function dedupeUrls(urls: string[]): string[] {
   return out;
 }
 
+function getSvgMimeType(bytes: Uint8Array): string | null {
+  try {
+    const text = new TextDecoder().decode(bytes.slice(0, 512)).trimStart();
+    if (text.startsWith('<svg') || text.includes('<svg')) {
+      return 'image/svg+xml';
+    }
+    if (text.startsWith('<?xml') && text.includes('<svg')) {
+      return 'image/svg+xml';
+    }
+  } catch {
+    return null;
+  }
+  return null;
+}
+
+function detectImageMimeType(
+  bytes: Uint8Array,
+  contentType?: string | null
+): string {
+  const normalizedContentType = String(contentType ?? '')
+    .split(';', 1)[0]
+    .trim()
+    .toLowerCase();
+
+  if (normalizedContentType.startsWith('image/')) {
+    return normalizedContentType;
+  }
+
+  if (
+    bytes.length >= 12 &&
+    bytes[0] === 0x52 &&
+    bytes[1] === 0x49 &&
+    bytes[2] === 0x46 &&
+    bytes[3] === 0x46 &&
+    bytes[8] === 0x57 &&
+    bytes[9] === 0x45 &&
+    bytes[10] === 0x42 &&
+    bytes[11] === 0x50
+  ) {
+    return 'image/webp';
+  }
+
+  if (
+    bytes.length >= 8 &&
+    bytes[0] === 0x89 &&
+    bytes[1] === 0x50 &&
+    bytes[2] === 0x4e &&
+    bytes[3] === 0x47 &&
+    bytes[4] === 0x0d &&
+    bytes[5] === 0x0a &&
+    bytes[6] === 0x1a &&
+    bytes[7] === 0x0a
+  ) {
+    return 'image/png';
+  }
+
+  if (
+    bytes.length >= 3 &&
+    bytes[0] === 0xff &&
+    bytes[1] === 0xd8 &&
+    bytes[2] === 0xff
+  ) {
+    return 'image/jpeg';
+  }
+
+  if (
+    bytes.length >= 6 &&
+    bytes[0] === 0x47 &&
+    bytes[1] === 0x49 &&
+    bytes[2] === 0x46 &&
+    bytes[3] === 0x38 &&
+    (bytes[4] === 0x37 || bytes[4] === 0x39) &&
+    bytes[5] === 0x61
+  ) {
+    return 'image/gif';
+  }
+
+  if (bytes.length >= 2 && bytes[0] === 0x42 && bytes[1] === 0x4d) {
+    return 'image/bmp';
+  }
+
+  if (
+    bytes.length >= 4 &&
+    bytes[0] === 0x00 &&
+    bytes[1] === 0x00 &&
+    bytes[2] === 0x01 &&
+    bytes[3] === 0x00
+  ) {
+    return 'image/x-icon';
+  }
+
+  if (
+    bytes.length >= 12 &&
+    bytes[4] === 0x66 &&
+    bytes[5] === 0x74 &&
+    bytes[6] === 0x79 &&
+    bytes[7] === 0x70
+  ) {
+    const brand = new TextDecoder().decode(bytes.slice(8, 12)).toLowerCase();
+    if (brand === 'avif' || brand === 'avis') {
+      return 'image/avif';
+    }
+  }
+
+  return getSvgMimeType(bytes) ?? (normalizedContentType || 'image/*');
+}
+
+function encodeIconCachePayload(base64: string, contentType: string): string {
+  return JSON.stringify({ base64, contentType });
+}
+
+function decodeIconCachePayload(payload: string): { dataUri: string } {
+  try {
+    const parsed = JSON.parse(payload) as {
+      base64?: string;
+      contentType?: string;
+    };
+    if (
+      typeof parsed.base64 === 'string' &&
+      parsed.base64 &&
+      typeof parsed.contentType === 'string' &&
+      parsed.contentType
+    ) {
+      return {
+        dataUri: `data:${parsed.contentType};base64,${parsed.base64}`,
+      };
+    }
+  } catch {
+    // Backward compatibility with older raw-base64 cache entries.
+  }
+
+  return {
+    dataUri: `data:image/*;base64,${payload}`,
+  };
+}
+
 function normalizeHexId(value: string): string {
   return String(value ?? '')
     .trim()
@@ -164,6 +316,41 @@ function buildTokenLookupUrl(registryUrl: string, category: string): string | nu
   const match = registryUrl.match(/^(.*)\/registries\/[^/]+\/latest\/?$/i);
   if (!match) return null;
   return `${match[1]}/tokens/${normalizeHexId(category)}/`;
+}
+
+function isSyntheticTokenLookupRegistryUri(uri: string): boolean {
+  return /\/tokens\/[0-9a-f]{64}\/?$/i.test(String(uri ?? '').trim());
+}
+
+function findLatestSnapshotInHistory(
+  history: IdentityHistory | undefined
+): IdentitySnapshot | null {
+  if (!history) return null;
+  const revisions = Object.keys(history).sort().reverse();
+  if (revisions.length === 0) return null;
+  return history[revisions[0]] ?? null;
+}
+
+function findSnapshotForCategory(
+  category: string,
+  registry: MetadataRegistry
+): IdentitySnapshot | null {
+  const normalizedCategory = normalizeHexId(category);
+  if (!normalizedCategory || !hasIdentityHistory(registry)) return null;
+
+  let best: { revision: string; snapshot: IdentitySnapshot } | null = null;
+  for (const history of Object.values(registry.identities)) {
+    for (const [revision, snapshot] of Object.entries(history)) {
+      if (normalizeHexId(snapshot.token?.category || '') !== normalizedCategory) {
+        continue;
+      }
+      if (!best || revision > best.revision) {
+        best = { revision, snapshot };
+      }
+    }
+  }
+
+  return best?.snapshot ?? null;
 }
 
 export default class BcmrService {
@@ -249,14 +436,31 @@ export default class BcmrService {
     authbase: string,
     registry: MetadataRegistry = LOCAL_BCMR
   ): IdentitySnapshot {
-    const history = hasIdentityHistory(registry)
-      ? registry.identities[authbase]
-      : undefined;
-    if (!history) {
-      throw new Error(`No identity history for ${authbase}`);
+    const normalized = normalizeHexId(authbase);
+    const direct = hasIdentityHistory(registry)
+      ? findLatestSnapshotInHistory(registry.identities[normalized])
+      : null;
+    if (direct) {
+      return direct;
     }
-    const ts = Object.keys(history).sort().reverse();
-    return history[ts[0]];
+
+    const byCategory = findSnapshotForCategory(normalized, registry);
+    if (byCategory) {
+      return byCategory;
+    }
+
+    throw new Error(`No identity history for ${authbase}`);
+  }
+
+  public extractIdentityByCategory(
+    category: string,
+    registry: MetadataRegistry = LOCAL_BCMR
+  ): IdentitySnapshot {
+    const snapshot = findSnapshotForCategory(category, registry);
+    if (!snapshot) {
+      throw new Error(`No identity history for token category ${category}`);
+    }
+    return snapshot;
   }
 
   /**
@@ -314,13 +518,30 @@ export default class BcmrService {
     );
   }
 
+  private async storeRegistrySnapshots(
+    authbase: string,
+    registry: MetadataRegistry
+  ): Promise<void> {
+    if (!hasIdentityHistory(registry)) return;
+
+    const snapshots = Object.values(registry.identities)
+      .map((history) => findLatestSnapshotInHistory(history))
+      .filter((snapshot): snapshot is IdentitySnapshot => snapshot !== null);
+
+    await Promise.all(
+      snapshots.map((snapshot) => this.storeSnapshot(authbase, snapshot))
+    );
+  }
+
   public async resolveIdentityRegistry(
     categoryOrAuthbase: string
   ): Promise<IdentityRegistry> {
     const authbase = await this.getCategoryAuthbase(categoryOrAuthbase);
 
     const cached = REGISTRY_CACHE.get(authbase);
-    if (cached) return cached;
+    if (cached && !isSyntheticTokenLookupRegistryUri(cached.registryUri)) {
+      return cached;
+    }
     const missCachedAt = REGISTRY_MISS_CACHE.get(authbase);
     if (
       missCachedAt !== undefined &&
@@ -348,17 +569,55 @@ export default class BcmrService {
     authbase: string
   ): Promise<IdentityRegistry> {
     const cached = REGISTRY_CACHE.get(authbase);
-    if (cached) return cached;
+    if (cached) {
+      const refreshed = await this.resolveAuthChainRegistry(
+        authbase,
+        cached.registryUri
+      );
+      if (refreshed) {
+        REGISTRY_CACHE.set(authbase, refreshed);
+        return refreshed;
+      }
+      if (!isSyntheticTokenLookupRegistryUri(cached.registryUri)) {
+        return cached;
+      }
+      const provisionalRefresh = await this.resolveAuthChainRegistry(
+        authbase,
+        this.getDefaultRegistryUris(authbase)[0] || cached.registryUri
+      );
+      if (provisionalRefresh) {
+        REGISTRY_CACHE.set(authbase, provisionalRefresh);
+        return provisionalRefresh;
+      }
+      return cached;
+    }
 
     let diskEntry: IdentityRegistry | undefined;
     try {
       diskEntry = await this.loadIdentityRegistry(authbase);
+      const refreshed = await this.resolveAuthChainRegistry(
+        authbase,
+        diskEntry.registryUri
+      );
+      if (refreshed) {
+        REGISTRY_CACHE.set(authbase, refreshed);
+        return refreshed;
+      }
+      if (isSyntheticTokenLookupRegistryUri(diskEntry.registryUri)) {
+        const provisionalRefresh = await this.resolveAuthChainRegistry(
+          authbase,
+          this.getDefaultRegistryUris(authbase)[0] || diskEntry.registryUri
+        );
+        if (provisionalRefresh) {
+          REGISTRY_CACHE.set(authbase, provisionalRefresh);
+          return provisionalRefresh;
+        }
+      }
       mergeRegistry(diskEntry.registry);
       REGISTRY_CACHE.set(authbase, diskEntry);
 
       try {
-        const snapshot = this.extractIdentity(authbase, diskEntry.registry);
-        await this.storeSnapshot(authbase, snapshot);
+        await this.storeRegistrySnapshots(authbase, diskEntry.registry);
       } catch (err) {
         console.warn(
           `Failed to store snapshot for ${authbase} from disk:`,
@@ -396,8 +655,7 @@ export default class BcmrService {
     }
 
     try {
-      const snapshot = this.extractIdentity(authbase, fresh.registry);
-      await this.storeSnapshot(authbase, snapshot);
+      await this.storeRegistrySnapshots(authbase, fresh.registry);
     } catch (err) {
       // console.warn(`Failed to store snapshot for ${authbase} from fetch:`, err);
     }
@@ -441,31 +699,57 @@ export default class BcmrService {
 
   /**
    * 1) Ask Chaingraph for the authHead txid
-   * 2) Fetch that single transaction’s outputs
+   * 2) Walk backwards through candidate authchain spends until the latest BCMR publication
    */
   private async resolveAuthChain(authbase: string): Promise<ChaingraphTx[]> {
-    // 1) get the head of the authchain
     const authHeadData = await queryAuthHead(authbase);
-    const headHash =
+    const headHash = stripChaingraphHexBytes(
       authHeadData?.data?.transaction?.[0]?.authchains?.[0]?.authhead
-        ?.identity_output?.[0]?.transaction_hash;
+        ?.identity_output?.[0]?.transaction_hash
+    );
     if (!headHash) {
       throw new Error(`No authHead for ${authbase}`);
     }
 
-    // 2) fetch the full tx
-    const txResp = await queryTransactionByHash(headHash);
-    const tx = txResp?.data?.transaction?.[0] as ChaingraphTx | undefined;
-    if (!tx) {
-      throw new Error(`Chaingraph missing transaction ${headHash}`);
+    const chain: ChaingraphTx[] = [];
+    const seen = new Set<string>();
+    const queue: Array<{ txid: string; depth: number }> = [
+      { txid: headHash, depth: 0 },
+    ];
+
+    while (queue.length > 0) {
+      const current = queue.shift();
+      if (!current) break;
+      if (seen.has(current.txid) || current.depth > AUTHCHAIN_SEARCH_MAX_DEPTH) {
+        continue;
+      }
+      seen.add(current.txid);
+
+      const txResp = await queryTransactionByHash(current.txid);
+      const tx = txResp?.data?.transaction?.[0] as ChaingraphTx | undefined;
+      if (!tx) {
+        throw new Error(`Chaingraph missing transaction ${current.txid}`);
+      }
+      chain.push(tx);
+
+      const previousHashes = (tx.inputs || [])
+        .filter((input) => String(input.outpoint_index) === '0')
+        .map((input) => stripChaingraphHexBytes(input.outpoint_transaction_hash))
+        .filter(Boolean);
+
+      for (const previousHash of previousHashes) {
+        if (seen.has(previousHash)) continue;
+        queue.push({ txid: previousHash, depth: current.depth + 1 });
+      }
     }
-    return [tx];
+
+    return chain;
   }
 
   private findBcmrOutput(tx: ChaingraphTx): ChaingraphOutput | null {
     return (
       tx.outputs?.find((o) =>
-        String(o.scriptPubKey?.hex ?? '').startsWith('6a0442434d52')
+        getChaingraphOutputHex(o).startsWith('6a0442434d52')
       ) || null
     );
   }
@@ -522,20 +806,37 @@ export default class BcmrService {
   ): Promise<IdentityRegistry | null> {
     try {
       const chain = await this.resolveAuthChain(authbase);
-      let latest: ChaingraphOutput | null = null;
       for (const tx of chain) {
         const out = this.findBcmrOutput(tx);
-        if (out) latest = out;
+        if (!out) continue;
+
+        const { hash, uris } = this.parseBcmrOutput(
+          getChaingraphOutputHex(out)
+        );
+        const candidateUris = dedupeUrls([...uris, fallbackUri].filter(Boolean));
+
+        for (const uri of candidateUris) {
+          const resp = await ipfsFetch(uri);
+          if (!resp.ok) continue;
+
+          const body = await resp.text();
+          if (sha256.text(body) !== hash.toLowerCase()) {
+            continue;
+          }
+
+          let data: unknown;
+          try {
+            data = JSON.parse(body);
+          } catch {
+            continue;
+          }
+
+          const imported = importMetadataRegistry(data);
+          if (typeof imported === 'string') continue;
+          return this.commitIdentityRegistry(authbase, imported, uri);
+        }
       }
-      if (!latest) return null;
-      const { uris } = this.parseBcmrOutput(String(latest.scriptPubKey?.hex ?? ''));
-      const uri = uris[0] || fallbackUri;
-      const resp = await ipfsFetch(uri);
-      if (!resp.ok) throw new Error(`Failed ${uri}`);
-      const data = await resp.json();
-      const imported = importMetadataRegistry(data);
-      if (typeof imported === 'string') throw new Error(imported);
-      return this.commitIdentityRegistry(authbase, imported, uri);
+      return null;
     } catch {
       return null;
     }
@@ -573,10 +874,13 @@ export default class BcmrService {
    */
   public async resolveIcon(
     authbase: string,
-    nftCommitment?: string
+    nftCommitment?: string,
+    category?: string
   ): Promise<string | null> {
     // pick the right URI map
-    const snapshot = this.extractIdentity(authbase);
+    const snapshot = category
+      ? this.extractIdentityByCategory(category)
+      : this.extractIdentity(authbase);
     const uris = nftCommitment
       ? getNftUrisForCommitment(snapshot, nftCommitment)
       : snapshot.uris;
@@ -611,7 +915,10 @@ export default class BcmrService {
         directory: Directory.Cache,
         encoding: Encoding.UTF8,
       });
-      const dataUri = `data:;base64,${read.data}`;
+      if (typeof read.data !== 'string') {
+        throw new Error('Unexpected cached icon payload type.');
+      }
+      const dataUri = decodeIconCachePayload(read.data).dataUri;
       ICON_CACHE.set(filePath, dataUri);
       return dataUri;
     } catch {
@@ -642,7 +949,8 @@ export default class BcmrService {
     }
     const { binToBase64 } = await import('@bitauth/libauth');
     const b64 = binToBase64(buf);
-    const dataUri = `data:;base64,${b64}`;
+    const contentType = detectImageMimeType(buf, resp.headers.get('content-type'));
+    const dataUri = `data:${contentType};base64,${b64}`;
 
     // 4) write to filesystem cache for next time
     try {
@@ -650,7 +958,7 @@ export default class BcmrService {
         path: filePath,
         directory: Directory.Cache,
         encoding: Encoding.UTF8,
-        data: b64,
+        data: encodeIconCachePayload(b64, contentType),
       });
     } catch {
       // ignore write errors
@@ -676,6 +984,13 @@ export default class BcmrService {
     const uris = Array.isArray(uriOrUris) ? uriOrUris : [uriOrUris];
     const net: Network = store.getState().network.currentNetwork;
 
+    const onChain = await this.resolveAuthChainRegistry(authbase, uris[0] || '');
+    if (onChain) {
+      REGISTRY_CACHE.set(authbase, onChain);
+      REGISTRY_MISS_CACHE.delete(authbase);
+      return onChain;
+    }
+
     return runWithFailover(
       `bcmr:${net}:${authbase}`,
       uris,
@@ -683,6 +998,12 @@ export default class BcmrService {
         const resp = await ipfsFetch(uri);
         if (!resp.ok) {
           if (resp.status === 404) {
+            const onChain = await this.resolveAuthChainRegistry(authbase, uri);
+            if (onChain) {
+              REGISTRY_CACHE.set(authbase, onChain);
+              REGISTRY_MISS_CACHE.delete(authbase);
+              return onChain;
+            }
             const fallback = await this.fetchIndexerTokenFallback(authbase, uri);
             if (fallback) {
               REGISTRY_CACHE.set(authbase, fallback);
@@ -702,6 +1023,11 @@ export default class BcmrService {
 
         const imported = importMetadataRegistry(data);
         if (typeof imported === 'string') {
+          const onChain = await this.resolveAuthChainRegistry(authbase, uri);
+          if (onChain) {
+            REGISTRY_CACHE.set(authbase, onChain);
+            return onChain;
+          }
           const fallback = await this.fetchIndexerTokenFallback(authbase, uri);
           if (fallback) {
             REGISTRY_CACHE.set(authbase, fallback);
@@ -791,6 +1117,55 @@ export default class BcmrService {
     if (typeof imported === 'string') return null;
 
     return this.commitIdentityRegistry(normalizeHexId(authbase), imported, tokenUrl);
+  }
+
+  public async resolveCategorySpecificRegistry(
+    category: string
+  ): Promise<IdentityRegistry | null> {
+    const normalizedCategory = normalizeHexId(category);
+    if (!normalizedCategory) return null;
+
+    const uris = this.getDefaultRegistryUris(normalizedCategory);
+    try {
+      return await runWithFailover(
+        `bcmr-category:${normalizedCategory}`,
+        uris,
+        async (uri): Promise<IdentityRegistry> => {
+          const resp = await ipfsFetch(uri);
+          if (!resp.ok) {
+            if (resp.status === 404) {
+              const fallback = await this.fetchIndexerTokenFallback(
+                normalizedCategory,
+                uri
+              );
+              if (fallback) return fallback;
+            }
+            throw new Error(`Fetch failed: HTTP ${resp.status}`);
+          }
+
+          let data: unknown;
+          try {
+            data = await resp.json();
+          } catch {
+            throw new Error(`Invalid JSON response from ${uri}`);
+          }
+
+          const imported = importMetadataRegistry(data);
+          if (typeof imported === 'string') {
+            const fallback = await this.fetchIndexerTokenFallback(
+              normalizedCategory,
+              uri
+            );
+            if (fallback) return fallback;
+            throw new Error(imported);
+          }
+
+          return this.commitIdentityRegistry(normalizedCategory, imported, uri);
+        }
+      );
+    } catch {
+      return null;
+    }
   }
 
   private async backgroundRefresh(

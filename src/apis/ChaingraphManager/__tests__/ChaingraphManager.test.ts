@@ -29,6 +29,7 @@ describe('ChaingraphManager', () => {
       electrumServers: [],
       bcmrApiBaseUrls: [],
       ipfsGateways: [],
+      ipfsUploadRelayBases: [],
     });
 
     vi.stubGlobal('fetch', vi.fn(async () => ({
