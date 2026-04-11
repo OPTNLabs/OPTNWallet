@@ -9,6 +9,7 @@ import utxoReducer from './utxoSlice';
 import transactionReducer from './transactionSlice';
 import priceFeedReducer from './priceFeedSlice';
 import walletconnectReducer from './walletconnectSlice';
+import wizardconnectReducer from './wizardconnectSlice';
 import preferencesReducer from './preferencesSlice';
 import { persistStore, persistReducer } from 'redux-persist';
 import type { PersistMigrate, PersistedState } from 'redux-persist/es/types';
@@ -19,11 +20,55 @@ import notificationsReducer from './notificationsSlice';
 // defaults to localStorage for web
 import localForage from 'localforage'; // ✅ IndexedDB
 
-localForage.config({ name: 'optn-wallet', storeName: 'persist' });
+type AsyncStorageLike = {
+  getItem: (key: string) => Promise<string | null>;
+  setItem: (key: string, value: string) => Promise<string>;
+  removeItem: (key: string) => Promise<void>;
+};
+
+function createMemoryStorage(): AsyncStorageLike {
+  const data = new Map<string, string>();
+  return {
+    async getItem(key) {
+      return data.has(key) ? data.get(key)! : null;
+    },
+    async setItem(key, value) {
+      data.set(key, value);
+      return value;
+    },
+    async removeItem(key) {
+      data.delete(key);
+    },
+  };
+}
+
+function isTestEnvironment(): boolean {
+  try {
+    if (typeof process !== 'undefined') {
+      if (process.env.VITEST === 'true' || process.env.NODE_ENV === 'test') {
+        return true;
+      }
+    }
+  } catch {
+    // ignore
+  }
+
+  return (
+    typeof globalThis !== 'undefined' &&
+    '__vitest_worker__' in (globalThis as Record<string, unknown>)
+  );
+}
+
+const persistStorage: AsyncStorageLike = isTestEnvironment()
+  ? createMemoryStorage()
+  : (() => {
+      localForage.config({ name: 'optn-wallet', storeName: 'persist' });
+      return localForage;
+    })();
 
 const persistConfig = {
   key: 'root',
-  storage: localForage,
+  storage: persistStorage,
   whitelist: [
     'contract',
     'network',
@@ -56,6 +101,7 @@ const rootReducer = combineReducers({
   transactionBuilder: transactionBuilderReducer,
   priceFeed: priceFeedReducer,
   walletconnect: walletconnectReducer,
+  wizardconnect: wizardconnectReducer,
   notifications: notificationsReducer,
   preferences: preferencesReducer,
 });

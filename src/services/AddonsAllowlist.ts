@@ -19,6 +19,7 @@ const ALLOWED_ADDON_HTTP_DOMAINS = new Set<string>([
   'chaingraph.optnlabs.com',
   'gql.chaingraph.pat.mn',
   'events.optnlabs.com',
+  'fundme.cash',
   'tokenindex.optnlabs.com',
 ]);
 const KNOWN_ADDON_CAPABILITIES = new Set<AddonCapability>(ADDON_CAPABILITIES);
