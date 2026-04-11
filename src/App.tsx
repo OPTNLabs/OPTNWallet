@@ -18,16 +18,16 @@ import CampaignDetail from './pages/apps/fundme/CampaignDetail';
 import { usePrices } from './hooks/usePrices';
 import { SignTransactionModal } from './components/walletconnect/SignTransactionModal';
 import { SignMessageModal } from './components/walletconnect/SignMessageModal';
-import { useTheme } from './context/useTheme';
+import WizardSignTransactionModal from './components/wizardconnect/WizardSignTransactionModal';
 import {
   useLocalNotificationSetup,
-    useNotificationQueueReset,
-    useOutboundTransactionRecovery,
-    useScreenSecurity,
-    useWalletNetworkBootstrap,
-    useStatusBarSync,
+  useNotificationQueueReset,
+  useOutboundTransactionRecovery,
+  useWalletNetworkBootstrap,
+  useStatusBarSync,
   useUtxoQueueToOsNotifications,
   useWalletConnectInitialization,
+  useWizardConnectInitialization,
   useWorkerLifecycle,
 } from './app/useAppLifecycle';
 import UtxoNotificationCenter from './components/notifications/UtxoNotificationCenter';
@@ -38,15 +38,14 @@ import LandingPage from './pages/onboarding/LandingPage';
 
 function App() {
   usePrices();
-  const { mode } = useTheme();
   const dispatch = useDispatch<AppDispatch>();
   const walletId = useSelector(selectWalletId);
   const utxoQueue = useSelector((s: RootState) => s.notifications.queue);
   const hasWallet = useSelector(selectHasWallet);
 
   useWalletConnectInitialization(dispatch);
-  useStatusBarSync(mode);
-  useScreenSecurity();
+  useWizardConnectInitialization(walletId, dispatch);
+  useStatusBarSync();
   useLocalNotificationSetup();
   const notified = useUtxoQueueToOsNotifications(utxoQueue);
   useNotificationQueueReset(walletId, dispatch, notified);
@@ -68,12 +67,7 @@ function App() {
                 <Route path="/apps/:appId" element={<MarketplaceAppHost />} />
                 <Route
                   path="/apps/fundme"
-                  element={(
-                    <div className="container mx-auto p-4">
-                      <div className="text-xl font-semibold">FundMe</div>
-                      <div className="mt-2 wallet-muted">Coming soon.</div>
-                    </div>
-                  )}
+                  element={<Navigate to="/apps/optn.builtin.fundme:fundmeApp" replace />}
                 />
                 <Route path="/campaign/:id" element={<CampaignDetail />} />
                 <Route path="/receive" element={<Receive />} />
@@ -107,6 +101,7 @@ function App() {
         {/* 🔥 Always active modals */}
         <SignMessageModal />
         <SignTransactionModal />
+        <WizardSignTransactionModal />
         {/* 🔔 Always-on in-app UTXO popup (only when wallet exists) */}
         {hasWallet && <UtxoNotificationCenter />}
       </main>

@@ -150,6 +150,11 @@
     --wallet-nav-text: #ebfff4;
   }
 
+  html.native-contained {
+    --safe-top: 0px;
+    --safe-bottom: 0px;
+  }
+
   body {
     background-color: var(--wallet-bg);
     background-image: var(--wallet-bg-gradient);

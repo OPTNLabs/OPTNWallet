@@ -6,6 +6,7 @@ import React, {
   useState,
 } from 'react';
 import Draggable from 'react-draggable';
+import { createPortal } from 'react-dom';
 
 export const Badge: React.FC<{
   children: React.ReactNode;
@@ -240,6 +241,7 @@ export const ContainedSwipeConfirmModal: React.FC<{
   }, [open]);
 
   if (!open) return null;
+  if (typeof document === 'undefined') return null;
 
   const threshold = Math.max(0, maxX - 1);
   const progressRatio = Math.min(1, Math.max(0, dragX / Math.max(1, maxX)));
@@ -269,15 +271,23 @@ export const ContainedSwipeConfirmModal: React.FC<{
 
   const progress = Math.min(100, (dragX / Math.max(1, maxX)) * 100);
 
-  return (
+  return createPortal(
     <div className="fixed inset-0 z-[3000]">
       <div
         className="absolute inset-0 bg-black/28 backdrop-blur-[6px]"
         onClick={loading ? undefined : onCancel}
       />
 
-      <div className="relative mx-auto h-full w-full max-w-[430px] px-3 py-8 flex items-center">
-        <div className="w-full max-h-[84vh] rounded-[30px] wallet-popup-panel shadow-[0_24px_70px_rgba(0,0,0,0.3)] overflow-hidden flex flex-col">
+      <div className="relative mx-auto flex h-full w-full max-w-[430px] items-center px-3 py-4 sm:px-4 sm:py-8">
+        <div
+          className="wallet-popup-panel flex w-full flex-col overflow-hidden rounded-[28px] shadow-[0_24px_70px_rgba(0,0,0,0.3)]"
+          role="dialog"
+          aria-modal="true"
+          aria-label={title}
+          style={{
+            maxHeight: 'min(84vh, calc(100dvh - var(--safe-top) - var(--safe-bottom) - 24px))',
+          }}
+        >
           <div className="px-5 pt-3 pb-3 wallet-surface">
             <div className="mx-auto h-1.5 w-10 rounded-full wallet-surface-strong" />
 
@@ -317,7 +327,7 @@ export const ContainedSwipeConfirmModal: React.FC<{
           </div>
 
           {children ? (
-            <div className="px-4 pb-2 flex-1 overflow-y-auto overscroll-contain">
+            <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-4 pb-2">
               {children}
             </div>
           ) : null}
@@ -419,6 +429,7 @@ export const ContainedSwipeConfirmModal: React.FC<{
           </div>
         </div>
       </div>
-    </div>
+    </div>,
+    document.body
   );
 };

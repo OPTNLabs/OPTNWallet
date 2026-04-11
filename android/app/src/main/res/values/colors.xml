@@ -1,4 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
   <color name="app_window_background">#0D2A1F</color>
+  <color name="system_bar_background">#000000</color>
 </resources>
