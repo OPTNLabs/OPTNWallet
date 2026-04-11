@@ -1,6 +1,7 @@
 import DatabaseService from '../apis/DatabaseManager/DatabaseService';
 import TransactionManager from '../apis/TransactionManager/TransactionManager';
 import ElectrumService from './ElectrumService';
+import { isDeterministicBroadcastError } from '../utils/broadcastErrors';
 import OutboundTransactionTracker, {
   type OutboundTransactionRecord,
 } from './OutboundTransactionTracker';
@@ -71,7 +72,16 @@ export async function reconcileOutboundTransactions(
   if (active.length === 0) return [];
 
   await Promise.all(
-    active.map((record) =>
+    active
+      .filter((record) => isDeterministicBroadcastError(record.lastError))
+      .map((record) => OutboundTransactionTracker.remove(record.txid))
+  );
+
+  const retryableActive = await OutboundTransactionTracker.listActive(walletId);
+  if (retryableActive.length === 0) return [];
+
+  await Promise.all(
+    retryableActive.map((record) =>
       OutboundTransactionTracker.markStaleBroadcastingAsSubmitted(record.txid)
     )
   );
@@ -86,11 +96,11 @@ export async function reconcileOutboundTransactions(
   }
 
   const visibilityByTxid = await ElectrumService.getTransactionVisibilityMany(
-    active.map((record) => record.txid)
+    retryableActive.map((record) => record.txid)
   );
 
   await Promise.all(
-    active
+    retryableActive
       .filter((record) => visibilityByTxid[record.txid]?.seen)
       .map((record) => OutboundTransactionTracker.markState(record.txid, 'seen'))
   );

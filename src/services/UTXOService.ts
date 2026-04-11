@@ -20,7 +20,7 @@ function getPrefix(): string {
   }
 }
 
-async function enrichTokenMetadata(
+async function enrichCachedTokenMetadata(
   utxosByAddress: Record<string, UTXO[]>
 ): Promise<void> {
   const bcmrService = new BcmrService();
@@ -40,7 +40,6 @@ async function enrichTokenMetadata(
   const metadataResults = await Promise.all(
     categoryList.map(async (category) => {
       try {
-        await bcmrService.resolveIdentityRegistry(category);
         const metadata = await bcmrService.getSnapshot(category);
         return { category, metadata };
       } catch {
@@ -100,7 +99,7 @@ const UTXOService = {
         }
       }
 
-      await enrichTokenMetadata(utxosByAddress);
+      await enrichCachedTokenMetadata(utxosByAddress);
 
       const tokenAddresses = await addressManager.fetchTokenAddresses(
         walletId,

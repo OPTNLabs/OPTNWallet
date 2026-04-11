@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { normalizeWalletAddressCandidate } from '../helpers';
+import { normalizeWalletAddressCandidate, toWalletConnectAccount } from '../helpers';
 
 describe('walletconnect address normalization security', () => {
   const prefix = 'bitcoincash:';
@@ -26,5 +26,15 @@ describe('walletconnect address normalization security', () => {
         prefix
       )
     ).toBeNull();
+  });
+
+  it('builds CAIP-10 account strings without duplicating separators', () => {
+    expect(
+      toWalletConnectAccount(
+        'bitcoincash:qpm2qsznhks23z7629mms6s4cwef74vcwvy22gdx6a',
+        'bch:bitcoincash',
+        'bitcoincash'
+      )
+    ).toBe('bch:bitcoincash:qpm2qsznhks23z7629mms6s4cwef74vcwvy22gdx6a');
   });
 });

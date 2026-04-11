@@ -10,8 +10,8 @@
     <item name="android:windowDisablePreview">true</item>
 
     <!-- Only use framework-namespaced colors here (safe everywhere) -->
-    <item name="android:statusBarColor">@android:color/transparent</item>
-    <item name="android:navigationBarColor">@android:color/transparent</item>
+    <item name="android:statusBarColor">@color/system_bar_background</item>
+    <item name="android:navigationBarColor">@color/system_bar_background</item>
   </style>
 
   <!-- Android 12+ splash; hands off to AppTheme afterwards -->

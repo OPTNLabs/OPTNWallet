@@ -62,12 +62,9 @@ export async function buildApprovedNamespacesForCurrentWallet(
   if (!keys.length) {
     throw new Error('No keys available for current wallet');
   }
-  const accounts = keys.map((k) => {
-    const bare = k.address.startsWith(addressPrefix)
-      ? k.address.slice(addressPrefix.length)
-      : k.address;
-    return `${namespace}:${bare}`;
-  });
+  const accounts = keys.map((k) =>
+    toWalletConnectAccount(k.address, namespace, addressPrefix)
+  );
 
   return buildApprovedNamespaces({
     proposal: proposal.params,
@@ -80,6 +77,23 @@ export async function buildApprovedNamespacesForCurrentWallet(
       },
     },
   });
+}
+
+export function toWalletConnectAccount(
+  address: string,
+  namespace: string,
+  addressPrefix: string
+): string {
+  const normalizedPrefix = addressPrefix.endsWith(':')
+    ? addressPrefix
+    : `${addressPrefix}:`;
+  const bare = address.startsWith(normalizedPrefix)
+    ? address.slice(normalizedPrefix.length)
+    : address.includes(':')
+      ? address.split(':').pop() ?? address
+      : address;
+
+  return `${namespace}:${bare}`;
 }
 
 export function normalizeWalletAddressCandidate(
