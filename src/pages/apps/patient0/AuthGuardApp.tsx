@@ -18,6 +18,7 @@ import {
   queryUnspentOutputsByLockingBytecode,
   stripChaingraphHexBytes,
 } from '../../../apis/ChaingraphManager/ChaingraphManager';
+import { useSmoothResetTransition } from '../shared/useSmoothResetTransition';
 
 type Props = {
   manifest: AddonManifest;
@@ -178,6 +179,7 @@ export default function AuthGuardApp({
   sdk,
   loadWalletAddresses,
 }: Props) {
+  const { contentClassName, runSmoothReset } = useSmoothResetTransition();
   const [walletUtxos, setWalletUtxos] = useState<UTXO[]>([]);
   const [selected, setSelected] = useState<UTXO | null>(null);
 
@@ -253,10 +255,17 @@ export default function AuthGuardApp({
   // Wallet UTXO refresh
   // ---------------------------------------------------------------------------
 
-  const refreshWalletUtxos = useCallback(async () => {
+  const refreshWalletUtxos = useCallback(async (forceRefresh = false) => {
     setBusy(true);
     setBuildErr('');
     try {
+      if (forceRefresh) {
+        const walletAddresses = await sdk.wallet.listAddresses();
+        await Promise.allSettled(
+          walletAddresses.map((entry) => sdk.utxos.refreshAndStore(entry.address))
+        );
+      }
+
       const res = await sdk.utxos.listForWallet();
       const merged = mergeWalletUtxos(res);
       setWalletUtxos(merged);
@@ -280,6 +289,32 @@ export default function AuthGuardApp({
       setBusy(false);
     }
   }, [sdk]);
+
+  const resetAuthGuardComposer = useCallback(() => {
+    setSelected(null);
+    setGenesisUtxo(null);
+    setAuthHeadUtxo(null);
+    setAuthKeyUtxo(null);
+    setRecipient('');
+    setFtAmount('1');
+    setKeepGuarded(true);
+    setAuthKeyOwner('');
+    setStep0AStatus('');
+    setMintType('ft');
+    setMintTarget('authguard');
+    setMintTo('');
+    setMintFtAmount('1000000');
+    setMintNftCapability('none');
+    setMintNftCommitment('');
+    setMintAlsoAuthKey(false);
+    setStep0BStatus('');
+    setFeeUtxo(null);
+    setBuildHex('');
+    setBuildBytes(0);
+    setBuildErr('');
+    setAuthHeadCandidatesChain([]);
+    setAuthHeadStatus('');
+  }, []);
 
   // ---------------------------------------------------------------------------
   // tx helpers (build + broadcast inside wallet)
@@ -557,9 +592,9 @@ export default function AuthGuardApp({
             `tx1 ${tx1ResultLabel}: ${txid1}. Refreshing UTXOs…`
           );
 
+          await refreshWalletUtxos(true);
           const res1 = await sdk.utxos.listForWallet();
           const after1 = mergeWalletUtxos(res1);
-          setWalletUtxos(after1);
 
           genesis =
             after1.find(
@@ -649,24 +684,14 @@ export default function AuthGuardApp({
           : `AuthKey tx broadcasted: ${txid}. Refreshing UTXOs…`
       );
 
-      const res2 = await sdk.utxos.listForWallet();
-      const after2 = mergeWalletUtxos(res2);
-      setWalletUtxos(after2);
-
-      // Refresh selection
-      const k2 = after2.find((u) => {
-        if (!u.token) return false;
-        if (!tokenAmountIsZero(u.token)) return false;
-        if (!u.token.nft) return false;
-        if (u.token.nft.capability !== 'none') return false;
-        return (
-          normalizeCategory(u.token.category) === normalizeCategory(tokenIdHex)
-        );
+      await runSmoothReset(async () => {
+        await refreshWalletUtxos(true);
+        resetAuthGuardComposer();
       });
-      if (k2) setAuthKeyUtxo(k2);
-
       setStep0AStatus(
-        'Step 0A complete. AuthKey minted. (Note: no FT supply was created for this category.)'
+        sent.broadcastState === 'submitted'
+          ? `AuthKey submitted: ${txid}. Returned to the start screen.`
+          : `AuthKey minted: ${txid}. Returned to the start screen.`
       );
     } catch (e: any) {
       setBuildErr(e?.message ?? String(e));
@@ -857,39 +882,14 @@ export default function AuthGuardApp({
           : `Mint tx broadcasted: ${txid}. Refreshing UTXOs…`
       );
 
-      const res2 = await sdk.utxos.listForWallet();
-      const after2 = mergeWalletUtxos(res2);
-      setWalletUtxos(after2);
-
-      // If AuthKey minted here, attempt to auto-select it
-      if (mintAlsoAuthKey) {
-        const allow = await loadWalletAddresses();
-        const owner = (authKeyOwner || primary).trim();
-        if (owner && allow.has(owner)) {
-          const k2 = after2.find((u) => {
-            if (!u.token) return false;
-            if (!tokenAmountIsZero(u.token)) return false;
-            if (!u.token.nft) return false;
-            if (u.token.nft.capability !== 'none') return false;
-            return (
-              normalizeCategory(u.token.category) ===
-              normalizeCategory(tokenIdHex)
-            );
-          });
-          if (k2) setAuthKeyUtxo(k2);
-        }
-      }
-
-      // If minted to AuthGuard, you can now discover AuthHead via Chaingraph
-      setAuthHeadUtxo(null);
-      setAuthHeadCandidatesChain([]);
-
+      await runSmoothReset(async () => {
+        await refreshWalletUtxos(true);
+        resetAuthGuardComposer();
+      });
       setStep0BStatus(
         sent.broadcastState === 'submitted'
-          ? 'Mint submitted. Keep the txid as your reference and avoid sending it again.'
-          : mintTarget === 'authguard'
-            ? 'Mint complete. If you minted FT to AuthGuard, click “Load AuthHead (Chaingraph)” below.'
-            : 'Mint complete.'
+          ? `Mint submitted: ${txid}. Returned to the start screen.`
+          : `Mint complete: ${txid}. Returned to the start screen.`
       );
     } catch (e: any) {
       setBuildErr(e?.message ?? String(e));
@@ -1301,7 +1301,7 @@ export default function AuthGuardApp({
   // ---------------------------------------------------------------------------
 
   return (
-    <div className="border rounded-lg p-4 shadow-sm">
+    <div className={`border rounded-lg p-4 shadow-sm ${contentClassName}`}>
       <div className="text-sm text-gray-600 mb-2">
         <span className="font-semibold">Addon:</span> {manifest.id}{' '}
         <span className="mx-2">•</span>
@@ -1311,7 +1311,9 @@ export default function AuthGuardApp({
       <div className="flex gap-2 mb-4">
         <button
           disabled={busy}
-          onClick={refreshWalletUtxos}
+          onClick={() => {
+            void refreshWalletUtxos();
+          }}
           className="bg-blue-500 hover:bg-blue-600 disabled:opacity-50 text-white py-2 px-3 rounded"
         >
           Load Wallet UTXOs

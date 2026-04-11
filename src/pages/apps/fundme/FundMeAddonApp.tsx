@@ -476,7 +476,7 @@ const FundMeAddonApp: React.FC<FundMeAddonAppProps> = ({ sdk, app }) => {
 
         <div className="mt-2 grid grid-cols-[1fr_auto] items-center gap-3">
           <h1 className="text-2xl font-bold wallet-text-strong tracking-[-0.02em]">
-            {app.name}
+            {app.name} (Demo)
           </h1>
           <button
             type="button"
@@ -832,7 +832,8 @@ const FundMeAddonApp: React.FC<FundMeAddonAppProps> = ({ sdk, app }) => {
                     Create Transaction
                   </div>
                   <p className="mt-2 text-xs wallet-muted">
-                    The create flow UI is now in place. The transaction button is intentionally disabled for now.
+                    The create flow UI is now in place. The transaction button
+                    is intentionally disabled for now.
                   </p>
                   <button
                     type="button"
@@ -1001,7 +1002,9 @@ const FundMeAddonApp: React.FC<FundMeAddonAppProps> = ({ sdk, app }) => {
                               Donate
                             </div>
                             <p className="mt-2 text-xs wallet-muted">
-                              Donation transaction controls are visible here now. The action stays disabled until the native call path is reattached.
+                              Donation transaction controls are visible here
+                              now. The action stays disabled until the native
+                              call path is reattached.
                             </p>
                             <div className="mt-3 flex items-center gap-2">
                               <input

@@ -142,6 +142,62 @@ describe('TransactionManager', () => {
     expect(sendTransaction).toHaveBeenCalledTimes(2);
   });
 
+  it('sendTransaction returns a friendly duplicate-input error and clears tracker', async () => {
+    const sendTransaction = vi
+      .fn()
+      .mockRejectedValueOnce(new Error('bad-txns-inputs-duplicate (code 16)'));
+
+    mockedTxBuilderHelper.mockReturnValue({
+      sendTransaction,
+      buildTransaction: vi.fn(),
+    } as never);
+
+    const tm = TransactionManager();
+    const result = await tm.sendTransaction('01000000000100');
+
+    expect(result.txid).toBeNull();
+    expect(result.errorMessage).toContain('spend the same input more than once');
+    expect(mockedOutboundTracker.remove).toHaveBeenCalled();
+  });
+
+  it('sendTransaction returns a friendly script-verification error and clears tracker', async () => {
+    const sendTransaction = vi.fn().mockRejectedValueOnce(
+      new Error(
+        'mandatory-script-verify-flag-failed (Script evaluated without error but finished with a false/empty top stack element) (code 16)'
+      )
+    );
+
+    mockedTxBuilderHelper.mockReturnValue({
+      sendTransaction,
+      buildTransaction: vi.fn(),
+    } as never);
+
+    const tm = TransactionManager();
+    const result = await tm.sendTransaction('02000000000100');
+
+    expect(result.txid).toBeNull();
+    expect(result.errorMessage).toContain('rejected by contract rules');
+    expect(mockedOutboundTracker.remove).toHaveBeenCalled();
+  });
+
+  it('sendTransaction returns a friendly min-relay-fee error and clears tracker', async () => {
+    const sendTransaction = vi
+      .fn()
+      .mockRejectedValueOnce(new Error('min relay fee not met (code 66)'));
+
+    mockedTxBuilderHelper.mockReturnValue({
+      sendTransaction,
+      buildTransaction: vi.fn(),
+    } as never);
+
+    const tm = TransactionManager();
+    const result = await tm.sendTransaction('03000000000100');
+
+    expect(result.txid).toBeNull();
+    expect(result.errorMessage).toContain('insufficient fee');
+    expect(mockedOutboundTracker.remove).toHaveBeenCalled();
+  });
+
   it('addOutput builds token output from existing token UTXO and dispatches it', () => {
     const tm = TransactionManager();
 

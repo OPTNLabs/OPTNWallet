@@ -4,10 +4,10 @@ import {
   queryActiveMinting,
   querySupplyNFTs,
   queryAuthHead,
+  stripChaingraphHexBytes,
 } from '../apis/ChaingraphManager/ChaingraphManager';
 import { shortenTxHash } from '../utils/shortenHash';
 import { IdentitySnapshot } from '@bitauth/libauth';
-import { latin1ToHex } from '../utils/hex';
 import useSharedTokenMetadata from '../hooks/useSharedTokenMetadata';
 
 interface TokenQueryProps {
@@ -84,22 +84,24 @@ const TokenQuery: React.FC<TokenQueryProps> = ({
         const ahRaw =
           ahData?.data?.transaction?.[0]?.authchains?.[0]?.authhead
             ?.identity_output?.[0]?.transaction_hash;
-        const ahTx = ahRaw ? latin1ToHex(ahRaw) : null;
+        const ahTx = stripChaingraphHexBytes(ahRaw) || null;
         setAuthHead(ahTx);
       } catch {
         failedCoreQueries += 1;
       }
 
       try {
-        if (sharedTokenMetadata?.snapshot) {
+        if (sharedTokenMetadata?.status === 'ready' && sharedTokenMetadata.snapshot) {
           setSnapshot(sharedTokenMetadata.snapshot);
           setIconDataUri(sharedTokenMetadata.iconUri);
         } else if (
           !prefetchedSnapshot &&
           !prefetchedIconDataUri &&
-          sharedTokenMetadata === undefined
+          (!sharedTokenMetadata || sharedTokenMetadata.status === 'loading')
         ) {
           // Shared metadata is still loading; avoid flashing an error state.
+        } else if (sharedTokenMetadata?.status === 'error') {
+          throw new Error(sharedTokenMetadata.error || 'Failed to fetch BCMR metadata.');
         } else if (!prefetchedSnapshot) {
           throw new Error('Failed to fetch token data.');
         }

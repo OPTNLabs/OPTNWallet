@@ -28,7 +28,7 @@ const Layout = () => {
       <div
         className="flex-1 min-h-0 overflow-y-auto"
         style={{
-          paddingBottom: `calc(var(--navbar-height) + var(--safe-bottom))`,
+          paddingBottom: 'var(--navbar-height)',
         }}
       >
         {outboundTransactions.length > 0 && (
@@ -49,10 +49,7 @@ const Layout = () => {
         <Outlet />
       </div>
 
-      {/* Ensure the bar accounts for safe area */}
-      <div className="safe-area-bottom">
-        <BottomNavBar setNavBarHeight={setNavBarHeight} />
-      </div>
+      <BottomNavBar setNavBarHeight={setNavBarHeight} />
     </div>
   );
 };
