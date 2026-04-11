@@ -10,12 +10,14 @@ import {
   stopUTXOWorker,
 } from '../workers/UTXOWorkerService';
 import { initWalletConnect } from '../redux/walletconnectSlice';
+import { initWizardConnect } from '../redux/wizardconnectSlice';
 import { clearNotifications, UtxoNotification } from '../redux/notificationsSlice';
 import { AppDispatch } from '../redux/store';
 import { reconcileOutboundTransactions } from '../services/OutboundTransactionReconciler';
 import { runOutboundReconcile } from '../services/RefreshCoordinator';
 import { Network, setNetwork } from '../redux/networkSlice';
-import { setWalletNetwork } from '../redux/walletSlice';
+import { setWalletNetwork, setWalletType } from '../redux/walletSlice';
+import { WalletType } from '../types/wallet';
 import ScreenSecurity from '../plugins/ScreenSecurity';
 
 let utxoWorkerStarted = false;
@@ -24,6 +26,16 @@ export function useWalletConnectInitialization(dispatch: AppDispatch) {
   useEffect(() => {
     dispatch(initWalletConnect());
   }, [dispatch]);
+}
+
+export function useWizardConnectInitialization(
+  walletId: number | null,
+  dispatch: AppDispatch
+) {
+  useEffect(() => {
+    if (!walletId || walletId <= 0) return;
+    dispatch(initWizardConnect(walletId));
+  }, [dispatch, walletId]);
 }
 
 export function useWalletNetworkBootstrap(
@@ -55,6 +67,7 @@ export function useWalletNetworkBootstrap(
 
         if (!cancelled && resolvedNetwork) {
           dispatch(setWalletNetwork(resolvedNetwork));
+          dispatch(setWalletType(walletInfo?.walletType ?? WalletType.STANDARD));
           dispatch(setNetwork(resolvedNetwork));
         }
       } finally {
@@ -73,19 +86,19 @@ export function useWalletNetworkBootstrap(
   return ready;
 }
 
-export function useStatusBarSync(mode: string) {
+export function useStatusBarSync() {
   useEffect(() => {
     if (!Capacitor.isNativePlatform()) {
       return;
     }
 
-    const platform = Capacitor.getPlatform();
-    if (platform === 'android') {
-      StatusBar.setOverlaysWebView({ overlay: false });
+    if (Capacitor.getPlatform() === 'android') {
+      void StatusBar.setBackgroundColor({ color: '#000000' });
     }
 
-    StatusBar.setStyle({ style: mode === 'dark' ? Style.Light : Style.Dark });
-  }, [mode]);
+    void StatusBar.setOverlaysWebView({ overlay: false });
+    void StatusBar.setStyle({ style: Style.Light });
+  }, []);
 }
 
 export function useScreenSecurity() {

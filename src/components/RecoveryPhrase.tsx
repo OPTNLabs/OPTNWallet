@@ -1,10 +1,13 @@
 import { useState, useEffect } from 'react';
+import { useSelector } from 'react-redux';
 import WalletManager from '../apis/WalletManager/WalletManager';
 import DeviceIntegrityService from '../services/DeviceIntegrityService';
+import { selectWalletId } from '../redux/walletSlice';
 
 const RecoveryPhrase = () => {
   const [mnemonic, setMnemonic] = useState('');
   const [isRevealed, setIsRevealed] = useState<boolean>(false);
+  const walletId = useSelector(selectWalletId);
 
   useEffect(() => {
     return () => {
@@ -15,7 +18,6 @@ const RecoveryPhrase = () => {
   const handleReveal = async () => {
     await DeviceIntegrityService.assertDeviceIntegrity('recovery_phrase_reveal');
     const walletManager = WalletManager();
-    const walletId = await walletManager.walletExists();
     if (walletId) {
       const walletInfo = await walletManager.getWalletInfo(walletId);
       if (walletInfo && typeof walletInfo.mnemonic === 'string') {

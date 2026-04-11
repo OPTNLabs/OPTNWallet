@@ -18,6 +18,7 @@ import {
   executeApprovedDistributionSend,
   type DistributionTxPreview,
 } from '../services/executeDistributionSend';
+import { useSmoothResetTransition } from '../../shared/useSmoothResetTransition';
 import type {
   DistributionJobRecord,
   DistributionRecipient,
@@ -274,6 +275,7 @@ const DistributorScreen: React.FC<DistributorScreenProps> = ({
   feeFundingSats,
   feeFundingUtxoCount,
 }) => {
+  const { contentClassName, runSmoothReset } = useSmoothResetTransition();
   const currentNetwork =
     sdk.wallet.getContext().network === 'chipnet' ? Network.CHIPNET : Network.MAINNET;
   const [recipients, setRecipients] = useState<DistributionRecipient[]>([]);
@@ -548,6 +550,14 @@ const DistributorScreen: React.FC<DistributorScreenProps> = ({
         .map((recipient) => recipient.id),
     [recipients, recipientSelection]
   );
+  const tokenImportedRecipientIds = useMemo(
+    () =>
+      recipients
+        .filter((recipient) => recipient.source === 'tokenindex')
+        .map((recipient) => recipient.id),
+    [recipients]
+  );
+  const tokenImportedRecipientCount = tokenImportedRecipientIds.length;
   const preparedJobs = useMemo(
     () => jobs.filter((job) => job.status === 'prepared'),
     [jobs]
@@ -668,6 +678,36 @@ const DistributorScreen: React.FC<DistributorScreenProps> = ({
     setImportText((prev) => (prev.trim() ? `${prev.trimEnd()}\n${next}` : next));
   };
 
+  const setRecipientSelectionForIds = (ids: string[], checked: boolean) => {
+    if (ids.length === 0) return;
+    setRecipientSelection((prev) => ({
+      ...prev,
+      ...Object.fromEntries(ids.map((id) => [id, checked])),
+    }));
+  };
+
+  const clearRecipientSelection = () => {
+    setRecipientSelection((prev) => {
+      if (Object.keys(prev).length === 0) return prev;
+      return Object.fromEntries(recipients.map((recipient) => [recipient.id, false]));
+    });
+  };
+
+  const removeRecipientsByIds = (ids: string[]) => {
+    if (ids.length === 0) return 0;
+    const idSet = new Set(ids);
+    setRecipients((prev) => prev.filter((recipient) => !idSet.has(recipient.id)));
+    setRecipientSelection((prev) =>
+      Object.fromEntries(
+        Object.entries(prev).filter(([recipientId]) => !idSet.has(recipientId))
+      )
+    );
+    return ids.length;
+  };
+
+  const clearImportedTokenRecipients = () =>
+    removeRecipientsByIds(tokenImportedRecipientIds);
+
   const scanRecipientQr = async () => {
     try {
       setScanBusy(true);
@@ -746,6 +786,22 @@ const DistributorScreen: React.FC<DistributorScreenProps> = ({
       cancelled = true;
     };
   }, [preparedJobs, preparedJobsPreviewKey, sdk, step]);
+
+  useEffect(() => {
+    if (!status) return;
+    const timeoutId = window.setTimeout(() => {
+      setStatus('');
+    }, 3200);
+    return () => window.clearTimeout(timeoutId);
+  }, [status]);
+
+  useEffect(() => {
+    if (!error) return;
+    const timeoutId = window.setTimeout(() => {
+      setError('');
+    }, 4200);
+    return () => window.clearTimeout(timeoutId);
+  }, [error]);
 
   useEffect(() => {
     if (typeof window === 'undefined') return;
@@ -858,6 +914,13 @@ const DistributorScreen: React.FC<DistributorScreenProps> = ({
     });
   };
 
+  const refreshWalletAfterSend = async () => {
+    const addresses = await sdk.wallet.listAddresses();
+    await Promise.allSettled(
+      addresses.map((entry) => sdk.utxos.refreshAndStore(entry.address))
+    );
+  };
+
   const loadTokenHolderBalances = async (
     category: string,
     options?: {
@@ -939,8 +1002,11 @@ const DistributorScreen: React.FC<DistributorScreenProps> = ({
       excludeAddresses = new Set(loadedExclude.keys());
     }
 
+    const manualRecipients = recipients.filter(
+      (recipient) => recipient.source !== 'tokenindex'
+    );
     const existingAddressKeys = new Set(
-      recipients.map((recipient) => normalizeAddressKey(recipient.address))
+      manualRecipients.map((recipient) => normalizeAddressKey(recipient.address))
     );
     const newRecipients: DistributionRecipient[] = [];
 
@@ -961,9 +1027,12 @@ const DistributorScreen: React.FC<DistributorScreenProps> = ({
       throw new Error('No new recipients matched the current token filter.');
     }
 
-    setRecipients((prev) => [...prev, ...newRecipients]);
+    const nextRecipients = [...manualRecipients, ...newRecipients];
+    setRecipients(nextRecipients);
     setRecipientSelection((prev) => ({
-      ...prev,
+      ...Object.fromEntries(
+        manualRecipients.map((recipient) => [recipient.id, Boolean(prev[recipient.id])])
+      ),
       ...Object.fromEntries(newRecipients.map((recipient) => [recipient.id, true])),
     }));
     setStatus(
@@ -1114,419 +1183,492 @@ const DistributorScreen: React.FC<DistributorScreenProps> = ({
   };
 
   return (
-    <div className="space-y-2 overflow-x-hidden">
-      {status ? (
-        <div className="wallet-success-panel wallet-success-appear rounded-2xl px-4 py-3 text-sm">
-          {status}
+    <div className={`space-y-2 overflow-x-hidden ${contentClassName}`}>
+      {status || error ? (
+        <div className="pointer-events-none fixed inset-x-0 top-4 z-[80] flex justify-center px-4">
+          <div className="w-full max-w-md space-y-2">
+            {status ? (
+              <div className="pointer-events-auto wallet-success-panel wallet-success-appear rounded-2xl px-4 py-3 text-sm shadow-lg backdrop-blur-sm">
+                {status}
+              </div>
+            ) : null}
+            {error ? (
+              <div className="pointer-events-auto wallet-warning-panel wallet-success-appear rounded-2xl px-4 py-3 text-sm shadow-lg backdrop-blur-sm">
+                {error}
+              </div>
+            ) : null}
+          </div>
         </div>
-      ) : null}
-      {error ? (
-        <div className="wallet-warning-panel rounded-2xl px-4 py-3 text-sm">{error}</div>
       ) : null}
 
       <div className="px-1 text-xs font-medium wallet-text-strong">
         Step {step === 'recipients' ? '1' : step === 'asset' ? '2' : '3'} ·{' '}
-        {step === 'recipients' ? 'Recipients' : step === 'asset' ? 'Asset' : 'Send'}
+        {step === 'recipients'
+          ? 'Recipients'
+          : step === 'asset'
+            ? 'Asset'
+            : 'Send'}
       </div>
 
       {step === 'recipients' ? (
-      <SectionCard title="Recipients" className="p-4">
-        <div className="space-y-2.5">
-          <div className="grid grid-cols-2 gap-2">
-            <button
-              type="button"
-              className={`rounded-2xl border px-4 py-3 text-left transition ${
-                recipientSourceMode === 'manual'
-                  ? 'border-emerald-400 wallet-surface-strong'
-                  : 'border-white/10 bg-transparent'
-              }`}
-              onClick={() => setRecipientSourceMode('manual')}
-            >
-              <div className="text-sm font-semibold wallet-text-strong">Manual</div>
-              <div className="text-xs wallet-muted mt-1">Paste or scan addresses</div>
-            </button>
-            <button
-              type="button"
-              className={`rounded-2xl border px-4 py-3 text-left transition ${
-                recipientSourceMode === 'token'
-                  ? 'border-emerald-400 wallet-surface-strong'
-                  : 'border-white/10 bg-transparent'
-              }`}
-              onClick={() => setRecipientSourceMode('token')}
-            >
-              <div className="text-sm font-semibold wallet-text-strong">By Token</div>
-              <div className="text-xs wallet-muted mt-1">Import holders by category</div>
-            </button>
-          </div>
-          {recipientSourceMode === 'manual' ? (
-            <>
-              <textarea
-                className="wallet-input w-full"
-                rows={4}
-                placeholder="bchtest:...&#10;bchtest:...&#10;or label,address"
-                value={importText}
-                onChange={(event) => setImportText(event.target.value)}
-              />
-              <div className="grid grid-cols-3 gap-2">
-                <button
-                  className="wallet-btn-secondary w-full"
-                  onClick={() =>
-                    void (async () => {
-                      try {
-                        await pasteFromClipboard();
-                        setError('');
-                      } catch (err) {
-                        setError(err instanceof Error ? err.message : 'Failed to read clipboard.');
-                      }
-                    })()
-                  }
-                >
-                  Paste
-                </button>
-                <button
-                  className="wallet-btn-secondary w-full"
-                  disabled={scanBusy}
-                  onClick={() => void scanRecipientQr()}
-                >
-                  {scanBusy ? 'Scanning…' : 'Scan QR'}
-                </button>
-                <button
-                  className="wallet-btn-primary w-full"
-                  disabled={importRows.length === 0}
-                  onClick={() =>
-                    void (async () => {
-                      try {
-                        const newRecipients: DistributionRecipient[] = importRows.map((row) => ({
-                          id: makeLocalId('rcp'),
-                          workspace_id: workspace.id,
-                          label: row.label,
-                          address: row.address,
-                          notes: row.notes,
-                          source: row.source,
-                          created_at: new Date().toISOString(),
-                        }));
-                        setRecipients((prev) => [...prev, ...newRecipients]);
-                        setRecipientSelection((prev) => ({
-                          ...prev,
-                          ...Object.fromEntries(newRecipients.map((recipient) => [recipient.id, true])),
-                        }));
-                        setStatus(
-                          `Imported ${importRows.length} recipient${importRows.length === 1 ? '' : 's'}.`
-                        );
-                        setError('');
-                        setImportText('');
-                      } catch (err) {
-                        setError(err instanceof Error ? err.message : 'Failed to add recipients.');
-                      }
-                    })()
-                  }
-                >
-                  Add
-                </button>
-              </div>
-            </>
-          ) : (
-            <div className="wallet-surface-strong rounded-2xl px-4 py-3 space-y-3">
-              <div className="flex flex-wrap gap-2 text-xs">
-                <span className="wallet-surface rounded-full px-3 py-1 wallet-text-strong">
-                  {tokenImportDraft.includeCategory
-                    ? `Include ${shortenMiddle(tokenImportDraft.includeCategory, 8, 6)}`
-                    : 'No include token'}
-                </span>
-                {tokenImportDraft.excludeCategory ? (
-                  <span className="wallet-surface rounded-full px-3 py-1 wallet-muted">
-                    Exclude {shortenMiddle(tokenImportDraft.excludeCategory, 8, 6)}
-                  </span>
-                ) : null}
-              </div>
+        <SectionCard title="Recipients" className="p-4">
+          <div className="space-y-2.5">
+            <div className="grid grid-cols-2 gap-2">
               <button
-                className="wallet-btn-secondary w-full"
-                onClick={() => setShowTokenImportPopup(true)}
+                type="button"
+                className={`rounded-2xl border px-4 py-3 text-left transition ${
+                  recipientSourceMode === 'manual'
+                    ? 'border-emerald-400 wallet-surface-strong'
+                    : 'border-white/10 bg-transparent'
+                }`}
+                onClick={() => setRecipientSourceMode('manual')}
               >
-                Configure Token Import
+                <div className="text-sm font-semibold wallet-text-strong">
+                  Manual
+                </div>
+                <div className="text-xs wallet-muted mt-1">
+                  Paste or scan addresses
+                </div>
+              </button>
+              <button
+                type="button"
+                className={`rounded-2xl border px-4 py-3 text-left transition ${
+                  recipientSourceMode === 'token'
+                    ? 'border-emerald-400 wallet-surface-strong'
+                    : 'border-white/10 bg-transparent'
+                }`}
+                onClick={() => setRecipientSourceMode('token')}
+              >
+                <div className="text-sm font-semibold wallet-text-strong">
+                  By Token
+                </div>
+                <div className="text-xs wallet-muted mt-1">
+                  Import holders by category
+                </div>
               </button>
             </div>
-          )}
-          {recipients.length > 0 ? (
+            {recipientSourceMode === 'manual' ? (
+              <>
+                <textarea
+                  className="wallet-input w-full"
+                  rows={4}
+                  placeholder="bchtest:...&#10;bchtest:...&#10;bchtest:..."
+                  value={importText}
+                  onChange={(event) => setImportText(event.target.value)}
+                />
+                <div className="grid grid-cols-3 gap-2">
+                  <button
+                    className="wallet-btn-secondary w-full"
+                    onClick={() =>
+                      void (async () => {
+                        try {
+                          await pasteFromClipboard();
+                          setError('');
+                        } catch (err) {
+                          setError(
+                            err instanceof Error
+                              ? err.message
+                              : 'Failed to read clipboard.'
+                          );
+                        }
+                      })()
+                    }
+                  >
+                    Paste
+                  </button>
+                  <button
+                    className="wallet-btn-secondary w-full"
+                    disabled={scanBusy}
+                    onClick={() => void scanRecipientQr()}
+                  >
+                    {scanBusy ? 'Scanning…' : 'Scan QR'}
+                  </button>
+                  <button
+                    className="wallet-btn-primary w-full"
+                    disabled={importRows.length === 0}
+                    onClick={() =>
+                      void (async () => {
+                        try {
+                          const newRecipients: DistributionRecipient[] =
+                            importRows.map((row) => ({
+                              id: makeLocalId('rcp'),
+                              workspace_id: workspace.id,
+                              label: row.label,
+                              address: row.address,
+                              notes: row.notes,
+                              source: row.source,
+                              created_at: new Date().toISOString(),
+                            }));
+                          setRecipients((prev) => [...prev, ...newRecipients]);
+                          setRecipientSelection((prev) => ({
+                            ...prev,
+                            ...Object.fromEntries(
+                              newRecipients.map((recipient) => [
+                                recipient.id,
+                                true,
+                              ])
+                            ),
+                          }));
+                          setStatus(
+                            `Imported ${importRows.length} recipient${importRows.length === 1 ? '' : 's'}.`
+                          );
+                          setError('');
+                          setImportText('');
+                        } catch (err) {
+                          setError(
+                            err instanceof Error
+                              ? err.message
+                              : 'Failed to add recipients.'
+                          );
+                        }
+                      })()
+                    }
+                  >
+                    Add
+                  </button>
+                </div>
+              </>
+            ) : (
+              <div className="wallet-surface-strong rounded-2xl px-4 py-3 space-y-3">
+                <div className="flex flex-wrap gap-2 text-xs">
+                  <span className="wallet-surface rounded-full px-3 py-1 wallet-text-strong">
+                    {tokenImportDraft.includeCategory
+                      ? `Include ${shortenMiddle(tokenImportDraft.includeCategory, 8, 6)}`
+                      : 'No include token'}
+                  </span>
+                  {tokenImportDraft.excludeCategory ? (
+                    <span className="wallet-surface rounded-full px-3 py-1 wallet-muted">
+                      Exclude{' '}
+                      {shortenMiddle(tokenImportDraft.excludeCategory, 8, 6)}
+                    </span>
+                  ) : null}
+                </div>
+                <button
+                  className="wallet-btn-secondary w-full"
+                  onClick={() => setShowTokenImportPopup(true)}
+                >
+                  Configure Token Import
+                </button>
+              </div>
+            )}
+            {recipients.length > 0 ? (
+              <button
+                className="wallet-btn-secondary w-full"
+                onClick={() => setShowRecipientsPopup(true)}
+              >
+                {selectedRecipientCount} Selected · Edit
+              </button>
+            ) : null}
             <button
-              className="wallet-btn-secondary w-full"
-              onClick={() => setShowRecipientsPopup(true)}
+              className="wallet-btn-primary w-full"
+              disabled={selectedRecipientIds.length === 0}
+              onClick={() => setStep('asset')}
             >
-              {selectedRecipientCount} Selected · Edit
+              Continue to Asset
             </button>
-          ) : null}
-          <button
-            className="wallet-btn-primary w-full"
-            disabled={selectedRecipientIds.length === 0}
-            onClick={() => setStep('asset')}
-          >
-            Continue to Asset
-          </button>
-        </div>
-      </SectionCard>
+          </div>
+        </SectionCard>
       ) : null}
 
       {step === 'asset' ? (
-      <SectionCard title="Asset" className="p-4">
-        <div className="space-y-2.5">
-          <div className="wallet-surface-strong rounded-2xl px-4 py-3 space-y-3">
-            <div className="text-sm font-medium wallet-text-strong">What are you sending?</div>
-            <div className="grid grid-cols-2 gap-2">
-              <select
-                className="wallet-select"
-                value={distributionDraft.assetType}
-                onChange={(event) =>
-                  setDistributionDraft((prev) => ({
-                    ...prev,
-                    assetType: event.target.value === 'bch' ? 'bch' : 'token',
-                  }))
-                }
-              >
-                <option value="token">Token</option>
-                <option value="bch">BCH</option>
-              </select>
-              <input
-                className="wallet-input"
-                placeholder={distributionDraft.assetType === 'bch' ? 'Sats each' : 'Amount each'}
-                value={distributionDraft.amount}
-                onChange={(event) =>
-                  setDistributionDraft((prev) => ({ ...prev, amount: event.target.value }))
-                }
-              />
-            </div>
-            {distributionDraft.assetType === 'token' ? (
-              <select
-                className="wallet-select"
-                value={distributionDraft.tokenCategory}
-                onChange={(event) =>
-                  setDistributionDraft((prev) => ({
-                    ...prev,
-                    tokenCategory: event.target.value,
-                  }))
-                }
-              >
-                <option value="">Choose token from wallet</option>
-                {tokenOptions.map((token) => (
-                  <option key={token.category} value={token.category}>
-                    {token.label}
-                  </option>
-                ))}
-              </select>
-            ) : null}
-          </div>
-          <div className="wallet-surface-strong rounded-2xl px-4 py-3 space-y-3">
-            <div className="text-sm font-medium wallet-text-strong">How should payouts work?</div>
-            <div className="grid grid-cols-1 gap-2">
-            {[
-              {
-                mode: 'fixed' as AmountRuleMode,
-                title: 'Same for everyone',
-                description: 'One amount to all selected recipients.',
-              },
-              {
-                mode: 'has_token' as AmountRuleMode,
-                title: 'Only matching holders',
-                description: 'Only recipients holding another token get paid.',
-              },
-              {
-                mode: 'tiered_balance' as AmountRuleMode,
-                title: 'Balance tiers',
-                description: 'Use token balances to vary the payout.',
-              },
-            ].map((option) => {
-              const active = amountRuleDraft.mode === option.mode;
-              return (
-                <button
-                  key={option.mode}
-                  type="button"
-                  className={`text-left rounded-2xl border px-4 py-3 transition ${
-                    active
-                      ? 'border-emerald-400 wallet-surface-strong'
-                      : 'border-white/10 bg-transparent'
-                  }`}
-                  onClick={() =>
-                    setAmountRuleDraft((prev) => ({
+        <SectionCard title="Asset" className="p-4">
+          <div className="space-y-2.5">
+            <div className="wallet-surface-strong rounded-2xl px-4 py-3 space-y-3">
+              <div className="text-sm font-medium wallet-text-strong">
+                What are you sending?
+              </div>
+              <div className="grid grid-cols-2 gap-2">
+                <select
+                  className="wallet-select"
+                  value={distributionDraft.assetType}
+                  onChange={(event) =>
+                    setDistributionDraft((prev) => ({
                       ...prev,
-                      mode: option.mode,
+                      assetType: event.target.value === 'bch' ? 'bch' : 'token',
                     }))
                   }
                 >
-                  <div className="text-sm font-semibold wallet-text-strong">{option.title}</div>
-                  <div className="text-xs wallet-muted mt-1">{option.description}</div>
-                </button>
-              );
-            })}
-          </div>
-          <div className="flex flex-wrap gap-2 text-xs">
-            <span className="wallet-surface rounded-full px-3 py-1 wallet-text-strong">
-              {describeAmountRule(amountRuleDraft.mode)}
-            </span>
-            <span className="wallet-surface rounded-full px-3 py-1 wallet-muted">
-              {selectedRecipientCount} selected
-            </span>
-            {amountRuleDraft.mode === 'tiered_balance' ? (
-              <span className="wallet-surface rounded-full px-3 py-1 wallet-muted">
-                {activeTierCount} tiers
-              </span>
-            ) : null}
-            {amountRuleNeedsReference && amountRuleDraft.referenceCategory ? (
-              <span className="wallet-surface rounded-full px-3 py-1 wallet-muted">
-                Ref {shortenMiddle(amountRuleDraft.referenceCategory, 8, 6)}
-              </span>
-            ) : null}
-          </div>
-          {amountRuleDraft.mode !== 'fixed' ? (
-            <button
-              type="button"
-              className="wallet-btn-secondary w-full"
-              onClick={() => setShowPayoutRulePopup(true)}
-            >
-              Configure Payout Rule
-            </button>
-          ) : null}
-          </div>
-          {distributionDraft.assetType === 'token' && tokenOptions.length === 0 ? (
-            <div className="wallet-warning-panel rounded-2xl px-4 py-3 text-sm">
-              No wallet tokens available for token distribution.
-            </div>
-          ) : null}
-          {tokenBalanceInsufficient ? (
-            <div className="wallet-warning-panel rounded-2xl px-4 py-3 text-sm">
-              This batch needs {totalRequestedTokenAmount.toString()} CashTokens, but the
-              selected wallet token only has {selectedTokenBalance.toString()}.
-            </div>
-          ) : null}
-          {plainBchFundingInsufficient ? (
-            <div className="wallet-warning-panel rounded-2xl px-4 py-3 text-sm">
-              This wallet needs more plain BCH UTXOs to cover recipient sats and network
-              fees. Token UTXOs are not used to pay fees in this flow.
-            </div>
-          ) : null}
-          <button
-            className="wallet-btn-secondary w-full"
-            disabled={Boolean(prepareBlockedReason) || payoutPreviewBusy}
-            onClick={() =>
-              void (async () => {
-                try {
-                  setPayoutPreviewBusy(true);
-                  await previewResolvedPayouts();
-                  setError('');
-                } catch (err) {
-                  setError(
-                    err instanceof Error ? err.message : 'Failed to preview payouts.'
-                  );
-                } finally {
-                  setPayoutPreviewBusy(false);
-                }
-              })()
-            }
-          >
-            {payoutPreviewBusy ? 'Previewing…' : 'Preview Payouts'}
-          </button>
-          <button
-            className="wallet-btn-primary w-full"
-            disabled={Boolean(prepareBlockedReason)}
-            onClick={() =>
-              void (async () => {
-                try {
-                  const nextJobs = await resolvePreparedJobs();
-                  const totalPreparedAmount = nextJobs.reduce(
-                    (sum, job) => sum + BigInt(job.amount),
-                    0n
-                  );
-                  if (
-                    distributionDraft.assetType === 'token' &&
-                    totalPreparedAmount > selectedTokenBalance
-                  ) {
-                    throw new Error('Not enough CashTokens for the resolved batch.');
+                  <option value="token">Token</option>
+                  <option value="bch">BCH</option>
+                </select>
+                <input
+                  className="wallet-input"
+                  placeholder={
+                    distributionDraft.assetType === 'bch'
+                      ? 'Sats each'
+                      : 'Amount each'
                   }
-                  setJobs(nextJobs);
-                  setStatus(
-                    `Prepared ${nextJobs.length} recipient${nextJobs.length === 1 ? '' : 's'}.`
+                  value={distributionDraft.amount}
+                  onChange={(event) =>
+                    setDistributionDraft((prev) => ({
+                      ...prev,
+                      amount: event.target.value,
+                    }))
+                  }
+                />
+              </div>
+              {distributionDraft.assetType === 'token' ? (
+                <select
+                  className="wallet-select"
+                  value={distributionDraft.tokenCategory}
+                  onChange={(event) =>
+                    setDistributionDraft((prev) => ({
+                      ...prev,
+                      tokenCategory: event.target.value,
+                    }))
+                  }
+                >
+                  <option value="">Choose token from wallet</option>
+                  {tokenOptions.map((token) => (
+                    <option key={token.category} value={token.category}>
+                      {token.label}
+                    </option>
+                  ))}
+                </select>
+              ) : null}
+            </div>
+            <div className="wallet-surface-strong rounded-2xl px-4 py-3 space-y-3">
+              <div className="text-sm font-medium wallet-text-strong">
+                How should payouts work?
+              </div>
+              <div className="grid grid-cols-1 gap-2">
+                {[
+                  {
+                    mode: 'fixed' as AmountRuleMode,
+                    title: 'Same for everyone',
+                    description: 'One amount to all selected recipients.',
+                  },
+                  {
+                    mode: 'has_token' as AmountRuleMode,
+                    title: 'Only matching holders',
+                    description:
+                      'Only recipients holding another token get paid.',
+                  },
+                  {
+                    mode: 'tiered_balance' as AmountRuleMode,
+                    title: 'Balance tiers',
+                    description: 'Use token balances to vary the payout.',
+                  },
+                ].map((option) => {
+                  const active = amountRuleDraft.mode === option.mode;
+                  return (
+                    <button
+                      key={option.mode}
+                      type="button"
+                      className={`text-left rounded-2xl border px-4 py-3 transition ${
+                        active
+                          ? 'border-emerald-400 wallet-surface-strong'
+                          : 'border-white/10 bg-transparent'
+                      }`}
+                      onClick={() =>
+                        setAmountRuleDraft((prev) => ({
+                          ...prev,
+                          mode: option.mode,
+                        }))
+                      }
+                    >
+                      <div className="text-sm font-semibold wallet-text-strong">
+                        {option.title}
+                      </div>
+                      <div className="text-xs wallet-muted mt-1">
+                        {option.description}
+                      </div>
+                    </button>
                   );
-                  setError('');
-                  setStep('send');
-                } catch (err) {
-                  setError(err instanceof Error ? err.message : 'Failed to prepare jobs.');
-                }
-              })()
-            }
-          >
-            Continue to Send
-          </button>
-          {prepareBlockedReason ? (
-            <div className="text-xs wallet-muted text-center">{prepareBlockedReason}</div>
-          ) : null}
-          <button
-            className="wallet-btn-secondary w-full"
-            onClick={() => setStep('recipients')}
-          >
-            Back to Recipients
-          </button>
-        </div>
-      </SectionCard>
+                })}
+              </div>
+              <div className="flex flex-wrap gap-2 text-xs">
+                <span className="wallet-surface rounded-full px-3 py-1 wallet-text-strong">
+                  {describeAmountRule(amountRuleDraft.mode)}
+                </span>
+                <span className="wallet-surface rounded-full px-3 py-1 wallet-muted">
+                  {selectedRecipientCount} selected
+                </span>
+                {amountRuleDraft.mode === 'tiered_balance' ? (
+                  <span className="wallet-surface rounded-full px-3 py-1 wallet-muted">
+                    {activeTierCount} tiers
+                  </span>
+                ) : null}
+                {amountRuleNeedsReference &&
+                amountRuleDraft.referenceCategory ? (
+                  <span className="wallet-surface rounded-full px-3 py-1 wallet-muted">
+                    Ref {shortenMiddle(amountRuleDraft.referenceCategory, 8, 6)}
+                  </span>
+                ) : null}
+              </div>
+              {amountRuleDraft.mode !== 'fixed' ? (
+                <button
+                  type="button"
+                  className="wallet-btn-secondary w-full"
+                  onClick={() => setShowPayoutRulePopup(true)}
+                >
+                  Configure Payout Rule
+                </button>
+              ) : null}
+            </div>
+            {distributionDraft.assetType === 'token' &&
+            tokenOptions.length === 0 ? (
+              <div className="wallet-warning-panel rounded-2xl px-4 py-3 text-sm">
+                No wallet tokens available for token distribution.
+              </div>
+            ) : null}
+            {tokenBalanceInsufficient ? (
+              <div className="wallet-warning-panel rounded-2xl px-4 py-3 text-sm">
+                This batch needs {totalRequestedTokenAmount.toString()}{' '}
+                CashTokens, but the selected wallet token only has{' '}
+                {selectedTokenBalance.toString()}.
+              </div>
+            ) : null}
+            {plainBchFundingInsufficient ? (
+              <div className="wallet-warning-panel rounded-2xl px-4 py-3 text-sm">
+                This wallet needs more plain BCH UTXOs to cover recipient sats
+                and network fees. Token UTXOs are not used to pay fees in this
+                flow.
+              </div>
+            ) : null}
+            <button
+              className="wallet-btn-secondary w-full"
+              disabled={Boolean(prepareBlockedReason) || payoutPreviewBusy}
+              onClick={() =>
+                void (async () => {
+                  try {
+                    setPayoutPreviewBusy(true);
+                    await previewResolvedPayouts();
+                    setError('');
+                  } catch (err) {
+                    setError(
+                      err instanceof Error
+                        ? err.message
+                        : 'Failed to preview payouts.'
+                    );
+                  } finally {
+                    setPayoutPreviewBusy(false);
+                  }
+                })()
+              }
+            >
+              {payoutPreviewBusy ? 'Previewing…' : 'Preview Payouts'}
+            </button>
+            <button
+              className="wallet-btn-primary w-full"
+              disabled={Boolean(prepareBlockedReason)}
+              onClick={() =>
+                void (async () => {
+                  try {
+                    const nextJobs = await resolvePreparedJobs();
+                    const totalPreparedAmount = nextJobs.reduce(
+                      (sum, job) => sum + BigInt(job.amount),
+                      0n
+                    );
+                    if (
+                      distributionDraft.assetType === 'token' &&
+                      totalPreparedAmount > selectedTokenBalance
+                    ) {
+                      throw new Error(
+                        'Not enough CashTokens for the resolved batch.'
+                      );
+                    }
+                    setJobs(nextJobs);
+                    setStatus(
+                      `Prepared ${nextJobs.length} recipient${nextJobs.length === 1 ? '' : 's'}.`
+                    );
+                    setError('');
+                    setStep('send');
+                  } catch (err) {
+                    setError(
+                      err instanceof Error
+                        ? err.message
+                        : 'Failed to prepare jobs.'
+                    );
+                  }
+                })()
+              }
+            >
+              Continue to Send
+            </button>
+            {prepareBlockedReason ? (
+              <div className="text-xs wallet-muted text-center">
+                {prepareBlockedReason}
+              </div>
+            ) : null}
+            <button
+              className="wallet-btn-secondary w-full"
+              onClick={() => setStep('recipients')}
+            >
+              Back to Recipients
+            </button>
+          </div>
+        </SectionCard>
       ) : null}
 
       {step === 'send' ? (
-      <SectionCard title="Send" className="p-4">
-        <div className="space-y-2">
-          {txPreviewBusy ? (
-            <div className="wallet-surface-strong rounded-2xl px-4 py-3 text-sm wallet-muted">
-              Building transaction preview…
+        <SectionCard title="Send" className="p-4">
+          <div className="space-y-2">
+            {txPreviewBusy ? (
+              <div className="wallet-surface-strong rounded-2xl px-4 py-3 text-sm wallet-muted">
+                Building transaction preview…
+              </div>
+            ) : null}
+            {txPreviewError ? (
+              <div className="wallet-warning-panel rounded-2xl px-4 py-3 text-sm">
+                {txPreviewError}
+              </div>
+            ) : null}
+            <div className="text-sm wallet-muted">
+              {preparedJobs.length} recipients · total{' '}
+              {preparedJobs
+                .reduce((sum, job) => sum + BigInt(job.amount), 0n)
+                .toString()}{' '}
+              · {distributionDraft.assetType === 'token' ? 'Token' : 'BCH'}
+              {txPreview ? ` · fee ${txPreview.feeSats} sats` : ''}
             </div>
-          ) : null}
-          {txPreviewError ? (
-            <div className="wallet-warning-panel rounded-2xl px-4 py-3 text-sm">
-              {txPreviewError}
-            </div>
-          ) : null}
-          <div className="text-sm wallet-muted">
-            {preparedJobs.length} recipients · total{' '}
-            {preparedJobs.reduce((sum, job) => sum + BigInt(job.amount), 0n).toString()} ·{' '}
-            {distributionDraft.assetType === 'token' ? 'Token' : 'BCH'}
-            {txPreview ? ` · fee ${txPreview.feeSats} sats` : ''}
+            {jobs.length === 0 ? (
+              <p className="text-sm wallet-muted">No prepared jobs yet.</p>
+            ) : (
+              <>
+                {txPreview ? (
+                  <button
+                    className="wallet-btn-secondary w-full mb-2"
+                    onClick={() => setShowTxPreviewPopup(true)}
+                  >
+                    Review Transaction
+                  </button>
+                ) : null}
+                {preparedJobs.length > 0 ? (
+                  <button
+                    className="wallet-btn-primary w-full mb-2"
+                    disabled={txPreviewBusy || !!txPreviewError || !txPreview}
+                    onClick={() => setShowSendConfirm(true)}
+                  >
+                    Send Airdrop
+                  </button>
+                ) : null}
+              </>
+            )}
+            <button
+              className="wallet-btn-secondary w-full mt-2"
+              onClick={() => setStep('asset')}
+            >
+              Back to Asset
+            </button>
           </div>
-          {jobs.length === 0 ? (
-            <p className="text-sm wallet-muted">No prepared jobs yet.</p>
-          ) : (
-            <>
-              {txPreview ? (
-                <button
-                  className="wallet-btn-secondary w-full mb-2"
-                  onClick={() => setShowTxPreviewPopup(true)}
-                >
-                  Review Transaction
-                </button>
-              ) : null}
-              {preparedJobs.length > 0 ? (
-                <button
-                  className="wallet-btn-primary w-full mb-2"
-                  disabled={txPreviewBusy || !!txPreviewError || !txPreview}
-                  onClick={() => setShowSendConfirm(true)}
-                >
-                  Send Airdrop
-                </button>
-              ) : null}
-            </>
-          )}
-          <button
-            className="wallet-btn-secondary w-full mt-2"
-            onClick={() => setStep('asset')}
-          >
-            Back to Asset
-          </button>
-        </div>
-      </SectionCard>
+        </SectionCard>
       ) : null}
 
       {showTxPreviewPopup && txPreview ? (
-        <Popup closePopups={() => setShowTxPreviewPopup(false)} closeButtonText="Done">
+        <Popup
+          closePopups={() => setShowTxPreviewPopup(false)}
+          closeButtonText="Done"
+        >
           <div className="space-y-4">
             <div>
-              <div className="text-lg font-semibold wallet-text-strong">Transaction Review</div>
+              <div className="text-lg font-semibold wallet-text-strong">
+                Transaction Review
+              </div>
               <div className="text-sm wallet-muted">
-                {txPreview.inputs.length} inputs · {txPreview.finalOutputs.length} outputs ·{' '}
-                {txPreview.feeSats} sats fee
+                {txPreview.inputs.length} inputs ·{' '}
+                {txPreview.finalOutputs.length} outputs · {txPreview.feeSats}{' '}
+                sats fee
               </div>
             </div>
             <div className="wallet-surface-strong rounded-2xl px-4 py-3 text-sm space-y-2">
@@ -1555,7 +1697,8 @@ const DistributorScreen: React.FC<DistributorScreenProps> = ({
                     >
                       <div className="wallet-text-strong">
                         {output.token
-                          ? output.recipientAddress === txPreview.tokenChangeAddress
+                          ? output.recipientAddress ===
+                            txPreview.tokenChangeAddress
                             ? 'Token change'
                             : 'Token recipient'
                           : output.recipientAddress === txPreview.changeAddress
@@ -1566,12 +1709,16 @@ const DistributorScreen: React.FC<DistributorScreenProps> = ({
                       <div>{String(output.amount)} sats</div>
                       {output.token ? (
                         <div>
-                          {shortenMiddle(output.token.category, 12, 8)} · {String(output.token.amount)}
+                          {shortenMiddle(output.token.category, 12, 8)} ·{' '}
+                          {String(output.token.amount)}
                         </div>
                       ) : null}
                     </div>
                   ) : (
-                    <div key={`opreturn:${index}`} className="text-xs wallet-muted">
+                    <div
+                      key={`opreturn:${index}`}
+                      className="text-xs wallet-muted"
+                    >
                       OP_RETURN
                     </div>
                   )
@@ -1583,10 +1730,15 @@ const DistributorScreen: React.FC<DistributorScreenProps> = ({
       ) : null}
 
       {showPayoutRulePopup ? (
-        <Popup closePopups={() => setShowPayoutRulePopup(false)} closeButtonText="Done">
+        <Popup
+          closePopups={() => setShowPayoutRulePopup(false)}
+          closeButtonText="Done"
+        >
           <div className="space-y-4">
             <div>
-              <div className="text-lg font-semibold wallet-text-strong">Payout Rule</div>
+              <div className="text-lg font-semibold wallet-text-strong">
+                Payout Rule
+              </div>
               <div className="text-sm wallet-muted">
                 Configure how recipient amounts are decided.
               </div>
@@ -1612,7 +1764,10 @@ const DistributorScreen: React.FC<DistributorScreenProps> = ({
                   >
                     <option value="">Choose token</option>
                     {tokenOptions.map((token) => (
-                      <option key={`rule:${token.category}`} value={token.category}>
+                      <option
+                        key={`rule:${token.category}`}
+                        value={token.category}
+                      >
                         {token.label}
                       </option>
                     ))}
@@ -1637,7 +1792,9 @@ const DistributorScreen: React.FC<DistributorScreenProps> = ({
                     className="text-xs wallet-muted underline underline-offset-4"
                     onClick={() => setShowManualReferenceInput((prev) => !prev)}
                   >
-                    {showManualReferenceInput ? 'Use wallet token picker' : 'Paste category instead'}
+                    {showManualReferenceInput
+                      ? 'Use wallet token picker'
+                      : 'Paste category instead'}
                   </button>
                 ) : null}
               </div>
@@ -1645,7 +1802,9 @@ const DistributorScreen: React.FC<DistributorScreenProps> = ({
 
             {amountRuleDraft.mode === 'tiered_balance' ? (
               <div className="wallet-surface-strong rounded-2xl px-4 py-3 space-y-3">
-                <div className="text-sm font-medium wallet-text-strong">Payout tiers</div>
+                <div className="text-sm font-medium wallet-text-strong">
+                  Payout tiers
+                </div>
                 {amountRuleDraft.tiers.map((tier, index) => (
                   <div key={`popup-tier:${index}`} className="space-y-2">
                     <div className="text-xs uppercase tracking-wide wallet-muted">
@@ -1693,7 +1852,9 @@ const DistributorScreen: React.FC<DistributorScreenProps> = ({
                         onClick={() =>
                           setAmountRuleDraft((prev) => ({
                             ...prev,
-                            tiers: prev.tiers.filter((_, entryIndex) => entryIndex !== index),
+                            tiers: prev.tiers.filter(
+                              (_, entryIndex) => entryIndex !== index
+                            ),
                           }))
                         }
                       >
@@ -1721,10 +1882,15 @@ const DistributorScreen: React.FC<DistributorScreenProps> = ({
       ) : null}
 
       {showPayoutPreviewPopup ? (
-        <Popup closePopups={() => setShowPayoutPreviewPopup(false)} closeButtonText="Done">
+        <Popup
+          closePopups={() => setShowPayoutPreviewPopup(false)}
+          closeButtonText="Done"
+        >
           <div className="space-y-4">
             <div>
-              <div className="text-lg font-semibold wallet-text-strong">Payout Preview</div>
+              <div className="text-lg font-semibold wallet-text-strong">
+                Payout Preview
+              </div>
               <div className="text-sm wallet-muted">
                 {payoutPreviewRows.length} recipients qualify for this batch.
               </div>
@@ -1735,12 +1901,15 @@ const DistributorScreen: React.FC<DistributorScreenProps> = ({
                   key={`${row.recipientId}:${row.address}`}
                   className="wallet-surface-strong rounded-[18px] p-3"
                 >
-                  <div className="font-medium wallet-text-strong">{row.label}</div>
+                  <div className="font-medium wallet-text-strong">
+                    {row.label}
+                  </div>
                   <div className="mt-1 text-xs wallet-muted break-all">
                     {row.address}
                   </div>
                   <div className="mt-2 text-sm wallet-text-strong">
-                    {row.amount} {distributionDraft.assetType === 'token' ? 'token' : 'sats'}
+                    {row.amount}{' '}
+                    {distributionDraft.assetType === 'token' ? 'token' : 'sats'}
                   </div>
                 </div>
               ))}
@@ -1789,17 +1958,20 @@ const DistributorScreen: React.FC<DistributorScreenProps> = ({
                 },
                 preparedJobs
               );
+              await runSmoothReset(async () => {
+                await refreshWalletAfterSend();
+                resetAirdropFlow();
+              });
               setStatus(
                 result.broadcastState === 'submitted'
                   ? `Distribution submitted for ${preparedJobs.length} job${
                       preparedJobs.length === 1 ? '' : 's'
-                    }. Keep the txid and avoid sending again until it appears in history.`
+                    }. Returned to the start screen; keep the txid and avoid sending again until it appears in history.`
                   : `Sent ${preparedJobs.length} distribution job${
                       preparedJobs.length === 1 ? '' : 's'
-                    } in one transaction.`
+                    } in one transaction and returned to the start screen.`
               );
               setError('');
-              resetAirdropFlow();
             } catch (sendError) {
               setError(
                 sendError instanceof Error
@@ -1817,28 +1989,69 @@ const DistributorScreen: React.FC<DistributorScreenProps> = ({
           <div className="space-y-3">
             <div className="wallet-surface-strong rounded-2xl px-4 py-3 text-sm">
               {preparedJobs.length} recipients · total{' '}
-              {preparedJobs.reduce((sum, job) => sum + BigInt(job.amount), 0n).toString()} ·{' '}
-              {distributionDraft.assetType === 'token' ? 'Token' : 'BCH'}
+              {preparedJobs
+                .reduce((sum, job) => sum + BigInt(job.amount), 0n)
+                .toString()}{' '}
+              · {distributionDraft.assetType === 'token' ? 'Token' : 'BCH'}
             </div>
             <div className="wallet-surface-strong rounded-2xl px-4 py-3 text-sm">
-              {txPreview.inputs.length} inputs · {txPreview.finalOutputs.length} outputs
+              {txPreview.inputs.length} inputs · {txPreview.finalOutputs.length}{' '}
+              outputs
             </div>
           </div>
         ) : null}
       </ContainedSwipeConfirmModal>
 
       {showRecipientsPopup ? (
-        <Popup closePopups={() => setShowRecipientsPopup(false)} closeButtonText="Done">
+        <Popup
+          closePopups={() => setShowRecipientsPopup(false)}
+          closeButtonText="Done"
+        >
           <div className="space-y-4">
             <div>
-              <div className="text-lg font-semibold wallet-text-strong">Recipients</div>
+              <div className="text-lg font-semibold wallet-text-strong">
+                Recipients
+              </div>
               <div className="text-sm wallet-muted">
                 Select who should receive this airdrop.
               </div>
             </div>
+            {recipients.length > 0 ? (
+              <div className="grid grid-cols-3 gap-2">
+                <button
+                  className="wallet-btn-secondary w-full"
+                  onClick={() => setRecipientSelectionForIds(recipients.map((recipient) => recipient.id), true)}
+                >
+                  Select All
+                </button>
+                <button
+                  className="wallet-btn-secondary w-full"
+                  onClick={clearRecipientSelection}
+                >
+                  Clear Checks
+                </button>
+                <button
+                  className="wallet-btn-secondary w-full"
+                  disabled={tokenImportedRecipientCount === 0}
+                  onClick={() => {
+                    const removedCount = clearImportedTokenRecipients();
+                    if (removedCount > 0) {
+                      setStatus(
+                        `Cleared ${removedCount} imported token holder${removedCount === 1 ? '' : 's'}.`
+                      );
+                      setError('');
+                    }
+                  }}
+                >
+                  Clear Imported
+                </button>
+              </div>
+            ) : null}
             <div className="space-y-2">
               {recipients.length === 0 ? (
-                <p className="text-sm wallet-muted">No recipients loaded yet.</p>
+                <p className="text-sm wallet-muted">
+                  No recipients loaded yet.
+                </p>
               ) : (
                 recipients.map((recipient) => (
                   <label
@@ -1856,7 +2069,9 @@ const DistributorScreen: React.FC<DistributorScreenProps> = ({
                       }
                     />
                     <div className="min-w-0">
-                      <div className="font-medium wallet-text-strong">{recipient.label}</div>
+                      <div className="font-medium wallet-text-strong">
+                        {recipient.label}
+                      </div>
                       <div className="mt-1 text-xs wallet-muted break-all">
                         {recipient.address}
                       </div>
@@ -1870,10 +2085,15 @@ const DistributorScreen: React.FC<DistributorScreenProps> = ({
       ) : null}
 
       {showTokenImportPopup ? (
-        <Popup closePopups={() => setShowTokenImportPopup(false)} closeButtonText="Done">
+        <Popup
+          closePopups={() => setShowTokenImportPopup(false)}
+          closeButtonText="Done"
+        >
           <div className="space-y-4 min-w-0 overflow-x-hidden">
             <div>
-              <div className="text-lg font-semibold wallet-text-strong">Import by Token</div>
+              <div className="text-lg font-semibold wallet-text-strong">
+                Import by Token
+              </div>
               <div className="text-sm wallet-muted">
                 Add holders of one token, with an optional exclude token.
               </div>
@@ -1893,7 +2113,10 @@ const DistributorScreen: React.FC<DistributorScreenProps> = ({
                 >
                   <option value="">Use wallet token for include</option>
                   {tokenOptions.map((token) => (
-                    <option key={`include:${token.category}`} value={token.category}>
+                    <option
+                      key={`include:${token.category}`}
+                      value={token.category}
+                    >
                       {token.label}
                     </option>
                   ))}
@@ -1911,7 +2134,10 @@ const DistributorScreen: React.FC<DistributorScreenProps> = ({
                 >
                   <option value="">Use wallet token for exclude</option>
                   {tokenOptions.map((token) => (
-                    <option key={`exclude:${token.category}`} value={token.category}>
+                    <option
+                      key={`exclude:${token.category}`}
+                      value={token.category}
+                    >
                       {token.label}
                     </option>
                   ))}
@@ -1951,6 +2177,21 @@ const DistributorScreen: React.FC<DistributorScreenProps> = ({
                 }))
               }
             />
+            <button
+              className="wallet-btn-secondary w-full"
+              disabled={tokenImportedRecipientCount === 0}
+              onClick={() => {
+                const removedCount = clearImportedTokenRecipients();
+                if (removedCount > 0) {
+                  setStatus(
+                    `Cleared ${removedCount} imported token holder${removedCount === 1 ? '' : 's'}.`
+                  );
+                  setError('');
+                }
+              }}
+            >
+              Clear Previously Imported Holders
+            </button>
             <button
               className="wallet-btn-primary w-full"
               disabled={tokenImportBusy}

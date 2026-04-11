@@ -19,25 +19,76 @@ type AppCard = {
 
 const DEFAULT_ICON = '/assets/images/OPTNWelcome1.png';
 
-function isComingSoonApp(appId: string, appName: string): boolean {
+function normalizeAppKey(value: string): string {
+  return value.trim().toLowerCase();
+}
+
+function getAppSortPriority(app: Pick<AppCard, 'id' | 'name'>): number {
+  const normalizedId = normalizeAppKey(app.id);
+  const normalizedName = normalizeAppKey(app.name);
+
+  if (
+    normalizedId.endsWith(':mintcashtokenspocapp') ||
+    normalizedName === 'mint tokens'
+  ) {
+    return 0;
+  }
+
+  if (
+    normalizedId.endsWith(':eventrewardsapp') ||
+    normalizedId.endsWith(':airdropsapp') ||
+    normalizedName === 'airdrops'
+  ) {
+    return 1;
+  }
+
+  if (
+    normalizedId.endsWith(':cauldronswapapp') ||
+    normalizedName === 'cauldron'
+  ) {
+    return 2;
+  }
+
+  if (normalizedId.endsWith(':fundmeapp') || normalizedName === 'fundme') {
+    return 3;
+  }
+
+  return 10;
+}
+
+function getAppDescription(app: Pick<AppCard, 'id' | 'name' | 'description'>) {
+  const normalizedId = normalizeAppKey(app.id);
+  const normalizedName = normalizeAppKey(app.name);
+
+  if (
+    normalizedId.endsWith(':cauldronswapapp') ||
+    normalizedName === 'cauldron'
+  ) {
+    return 'Cauldron DEX Swap - BCH and Cashtokens';
+  }
+
+  if (normalizedId.endsWith(':fundmeapp') || normalizedName === 'fundme') {
+    return 'Coming Soon: BCH Decentralized Crowdfunding';
+  }
+
+  return app.description;
+}
+
+export function isComingSoonApp(appId: string, appName: string): boolean {
   const normalizedId = appId.toLowerCase();
   const normalizedName = appName.toLowerCase();
   return (
-    normalizedId === 'fundme' ||
     normalizedId.endsWith(':authguard') ||
-    normalizedName === 'authguard'
+    normalizedName === 'authguard' ||
+    normalizedId.endsWith(':fundmeapp') ||
+    normalizedName === 'fundme'
   );
 }
 
 function shouldHideApp(appId: string, appName: string): boolean {
   const normalizedId = appId.toLowerCase();
   const normalizedName = appName.toLowerCase();
-  return (
-    normalizedId === 'fundme' ||
-    normalizedId.endsWith(':authguard') ||
-    normalizedName === 'fundme' ||
-    normalizedName === 'authguard'
-  );
+  return normalizedId.endsWith(':authguard') || normalizedName === 'authguard';
 }
 
 const AppsView = () => {
@@ -62,16 +113,6 @@ const AppsView = () => {
 
         const out: AppCard[] = [];
 
-        // ✅ Keep FundMe as-is (do NOT break existing route)
-        out.push({
-          id: 'fundme',
-          name: 'FundMe',
-          icon: '/assets/images/fundme.png',
-          description: 'BCH Crowdfunding',
-          source: 'builtin',
-          disabled: true,
-        });
-
         // ✅ Add addon apps
         for (const m of manifests) {
           for (const a of (m.apps ?? []) as AddonAppDefinition[]) {
@@ -87,7 +128,16 @@ const AppsView = () => {
         }
 
         if (mounted) {
-          setCards(out.filter((app) => !shouldHideApp(app.id, app.name)));
+          setCards(
+            out
+              .filter((app) => !shouldHideApp(app.id, app.name))
+              .sort((left, right) => {
+                const priorityDelta =
+                  getAppSortPriority(left) - getAppSortPriority(right);
+                if (priorityDelta !== 0) return priorityDelta;
+                return left.name.localeCompare(right.name);
+              })
+          );
         }
       } catch (e: unknown) {
         if (mounted) {
@@ -105,10 +155,6 @@ const AppsView = () => {
     if (app.disabled) return;
 
     const appId = app.id;
-    if (appId === 'fundme') {
-      navigate('/apps/fundme');
-      return;
-    }
     // addon app => /apps/<addonId>:<appId>
     navigate(`/apps/${appId}`);
   };
@@ -159,7 +205,7 @@ const AppsView = () => {
                 />
                 <h3 className="font-semibold text-center">{app.name}</h3>
                 <p className="text-sm wallet-muted text-center">
-                  {app.disabled ? 'Coming soon' : app.description}
+                  {getAppDescription(app)}
                 </p>
               </div>
             </div>
