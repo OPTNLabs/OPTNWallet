@@ -1,4 +1,5 @@
 import localForage from 'localforage';
+import { isDeterministicBroadcastError } from '../utils/broadcastErrors';
 import { binToHex, hexToBin } from '../utils/hex';
 import { sha256 } from '../utils/hash';
 import type { UTXO } from '../types/types';
@@ -190,6 +191,7 @@ const OutboundTransactionTracker = {
   },
 
   canClear(record: OutboundTransactionRecord): boolean {
+    if (isDeterministicBroadcastError(record.lastError)) return true;
     if (record.state === 'submitted') return true;
     return this.canRelease(record);
   },
@@ -225,7 +227,9 @@ const OutboundTransactionTracker = {
 
   async listReservedOutpoints(walletId?: number | null): Promise<TrackedOutpoint[]> {
     const records = await this.listActive(walletId);
-    return records.flatMap((record) => record.spentOutpoints);
+    return records
+      .filter((record) => !isDeterministicBroadcastError(record.lastError))
+      .flatMap((record) => record.spentOutpoints);
   },
 };
 

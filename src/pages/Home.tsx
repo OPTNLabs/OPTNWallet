@@ -28,6 +28,7 @@ import EmptyState from '../components/ui/EmptyState';
 import { refreshUTXOWorkerSubscriptions } from '../workers/UTXOWorkerService';
 import { logError } from '../utils/errorHandling';
 import { runWalletUtxoRefresh } from '../services/RefreshCoordinator';
+import { Network } from '../redux/networkSlice';
 
 const USE_HOME_SUBS = false;
 
@@ -49,6 +50,10 @@ const Home: React.FC = () => {
   );
   const userBalance = useSelector(
     (state: RootState) => state.utxos.totalBalance
+  );
+
+  const currentNetwork = useSelector(
+    (state: RootState) => state.network.currentNetwork
   );
 
   // Local state
@@ -140,7 +145,11 @@ const Home: React.FC = () => {
 
   return (
     <div className="container mx-auto max-w-md p-4 pb-16 wallet-page">
-      <PageHeader title="Home" compact />
+      <PageHeader
+        title="Home"
+        subtitle={currentNetwork === Network.CHIPNET ? 'Chipnet' : ''}
+        compact
+      />
       <PriceFeed />
 
       <SectionCard className="mt-3">
