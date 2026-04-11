@@ -6,6 +6,7 @@ import AirdropsApp from './event-rewards/EventRewardsApp';
 import FundMeAddonApp from './fundme/FundMeAddonApp';
 import MintCashTokensPoCApp from './mint-cashtokens-poc/MintCashTokensPoCApp';
 import MemoCashReaderApp from './memo-cash-reader/MemoCashReaderApp';
+import CauldronSwapApp from './cauldron/CauldronSwapApp';
 
 type ResolvedAppLike = {
   manifest: AddonManifest;
@@ -56,6 +57,16 @@ export function renderDeclarativeScreen(params: {
     case 'fundmeApp':
       return (
         <FundMeAddonApp
+          app={resolved.app}
+          sdk={sdk}
+        />
+      );
+
+    case 'CauldronSwapApp':
+    case 'cauldronSwapApp':
+      return (
+        <CauldronSwapApp
+          manifest={resolved.manifest}
           app={resolved.app}
           sdk={sdk}
         />

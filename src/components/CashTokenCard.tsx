@@ -17,9 +17,12 @@ const CashTokenCard: React.FC<CashTokenCardProps> = ({
 }) => {
   const [showTokenQuery, setShowTokenQuery] = useState(false);
   const metadata = useSharedTokenMetadata([category])[category];
-  const iconUri = metadata?.iconUri ?? null;
-  const tokenName = metadata?.name || shortenTxHash(category);
-  const bcmrSnapshot = metadata?.snapshot ?? null;
+  const iconUri = metadata?.status === 'ready' ? metadata.iconUri : null;
+  const tokenName =
+    metadata?.status === 'ready' && metadata.name
+      ? metadata.name
+      : shortenTxHash(category);
+  const bcmrSnapshot = metadata?.status === 'ready' ? metadata.snapshot : null;
 
   const toggleTokenQueryPopup = () => setShowTokenQuery(!showTokenQuery);
 
@@ -34,7 +37,7 @@ const CashTokenCard: React.FC<CashTokenCardProps> = ({
 
   const rawAmount = totalAmount.toString();
   const effectiveDecimals =
-    typeof metadata?.decimals === 'number'
+    metadata?.status === 'ready' && typeof metadata.decimals === 'number'
       ? metadata.decimals
       : decimals;
   const displayAmount =
@@ -66,8 +69,20 @@ const CashTokenCard: React.FC<CashTokenCardProps> = ({
             <span className="text-base font-semibold truncate">
               {tokenName}
             </span>
-            <span className="text-xs wallet-muted truncate">
-              {shortenTxHash(category)}
+            <span
+              className={`text-xs truncate ${
+                metadata?.status === 'error'
+                  ? 'wallet-danger-text'
+                  : metadata?.status === 'loading'
+                    ? 'wallet-accent-text'
+                    : 'wallet-muted'
+              }`}
+            >
+              {metadata?.status === 'error'
+                ? 'BCMR unavailable'
+                : metadata?.status === 'loading'
+                  ? 'Loading BCMR...'
+                  : shortenTxHash(category)}
             </span>
           </div>
         </div>

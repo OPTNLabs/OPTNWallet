@@ -19,13 +19,11 @@ import { usePrices } from './hooks/usePrices';
 import { SignTransactionModal } from './components/walletconnect/SignTransactionModal';
 import { SignMessageModal } from './components/walletconnect/SignMessageModal';
 import WizardSignTransactionModal from './components/wizardconnect/WizardSignTransactionModal';
-import { useTheme } from './context/useTheme';
 import {
   useLocalNotificationSetup,
-    useNotificationQueueReset,
-    useOutboundTransactionRecovery,
-    useScreenSecurity,
-    useWalletNetworkBootstrap,
+  useNotificationQueueReset,
+  useOutboundTransactionRecovery,
+  useWalletNetworkBootstrap,
   useStatusBarSync,
   useUtxoQueueToOsNotifications,
   useWalletConnectInitialization,
@@ -40,7 +38,6 @@ import LandingPage from './pages/onboarding/LandingPage';
 
 function App() {
   usePrices();
-  const { mode } = useTheme();
   const dispatch = useDispatch<AppDispatch>();
   const walletId = useSelector(selectWalletId);
   const utxoQueue = useSelector((s: RootState) => s.notifications.queue);
@@ -48,8 +45,7 @@ function App() {
 
   useWalletConnectInitialization(dispatch);
   useWizardConnectInitialization(walletId, dispatch);
-  useStatusBarSync(mode);
-  useScreenSecurity();
+  useStatusBarSync();
   useLocalNotificationSetup();
   const notified = useUtxoQueueToOsNotifications(utxoQueue);
   useNotificationQueueReset(walletId, dispatch, notified);

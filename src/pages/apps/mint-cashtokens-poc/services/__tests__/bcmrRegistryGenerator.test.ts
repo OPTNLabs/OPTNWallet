@@ -82,4 +82,54 @@ describe('bcmrRegistryGenerator', () => {
       })
     ).toThrow('Authbase must be 64 hex characters.');
   });
+
+  it('merges prior identities into the next registry publication', () => {
+    const baseRegistry = {
+      $schema: 'https://cashtokens.org/bcmr-v2.schema.json',
+      version: { major: 0, minor: 0, patch: 4 },
+      latestRevision: '2026-01-01T00:00:00.000Z',
+      registryIdentity: 'a'.repeat(64),
+      identities: {
+        ['b'.repeat(64)]: {
+          '2026-01-01T00:00:00.000Z': {
+            name: 'Older Token',
+            description: 'Old description',
+            token: {
+              category: 'b'.repeat(64),
+              symbol: 'OLD',
+              decimals: 0,
+            },
+            uris: {
+              icon: 'ipfs://older-icon',
+            },
+          },
+        },
+      },
+    };
+
+    const json = generateBcmrRegistryJson({
+      authbase: 'a'.repeat(64),
+      tokenCategory: 'a'.repeat(64),
+      tokenName: 'Token A',
+      tokenDescription: 'Current description',
+      tokenSymbol: 'TKA',
+      tokenDecimals: 2,
+      iconUri: 'ipfs://bafyicon',
+      latestRevision: '2026-02-01T00:00:00.000Z',
+      baseRegistry,
+    });
+
+    const parsed = JSON.parse(json) as {
+      version: { patch: number };
+      identities: Record<string, Record<string, { name: string }>>;
+    };
+
+    expect(parsed.version.patch).toBe(5);
+    expect(
+      parsed.identities['b'.repeat(64)]['2026-01-01T00:00:00.000Z'].name
+    ).toBe('Older Token');
+    expect(
+      parsed.identities['a'.repeat(64)]['2026-02-01T00:00:00.000Z'].name
+    ).toBe('Token A');
+  });
 });

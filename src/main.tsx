@@ -4,6 +4,7 @@ import './polyfills/node-globals';
 
 import React from 'react';
 import ReactDOM from 'react-dom/client';
+import { Capacitor } from '@capacitor/core';
 import App from './App.tsx';
 import './index.css';
 import { installProductionConsoleGuards } from './utils/productionConsole';
@@ -16,6 +17,10 @@ import { ThemeProvider } from './context/ThemeContext';
 
 installProductionConsoleGuards();
 installBarcodeScannerUnhandledRejectionGuard();
+
+if (Capacitor.isNativePlatform()) {
+  document.documentElement.classList.add('native-contained');
+}
 
 ReactDOM.createRoot(document.getElementById('root')!).render(
   <React.StrictMode>
