@@ -29,6 +29,7 @@ export const createTables = (db: DatabaseRunner) => {
       mnemonic TEXT,
       passphrase TEXT,
       networkType TEXT,
+      walletType TEXT DEFAULT 'standard',
       balance INT
     );
   `);

@@ -3,19 +3,6 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { Network } from '../../../redux/networkSlice';
 import KeyGeneration from '../KeyGeneration';
 
-vi.mock('@bitauth/libauth', () => ({
-  deriveHdPath: vi.fn(),
-  secp256k1: {
-    derivePublicKeyCompressed: vi.fn(),
-  },
-  encodeCashAddress: vi.fn(),
-  deriveHdPrivateNodeFromSeed: vi.fn(),
-}));
-
-vi.mock('@cashscript/utils', () => ({
-  hash160: vi.fn(),
-}));
-
 vi.mock('bip39', () => ({
   default: {
     generateMnemonic: vi.fn(),
@@ -25,14 +12,12 @@ vi.mock('bip39', () => ({
   mnemonicToSeed: vi.fn(),
 }));
 
-import {
-  deriveHdPath,
-  secp256k1,
-  encodeCashAddress,
-  deriveHdPrivateNodeFromSeed,
-} from '@bitauth/libauth';
-import { hash160 } from '@cashscript/utils';
+vi.mock('../../../services/HdWalletService', () => ({
+  deriveBchKeyMaterial: vi.fn(),
+}));
+
 import * as bip39 from 'bip39';
+import { deriveBchKeyMaterial } from '../../../services/HdWalletService';
 
 describe('KeyGeneration', () => {
   beforeEach(() => {
@@ -47,47 +32,37 @@ describe('KeyGeneration', () => {
   });
 
   it('generateKeys derives addresses for mainnet', async () => {
-    vi.mocked(bip39.mnemonicToSeed).mockResolvedValue(Uint8Array.from([1, 2, 3]) as never);
-    vi.mocked(deriveHdPrivateNodeFromSeed).mockReturnValue({
-      privateKey: Uint8Array.from([9, 9, 9]),
-    } as never);
-    vi.mocked(deriveHdPath).mockReturnValue({
+    vi.mocked(deriveBchKeyMaterial).mockResolvedValue({
+      publicKey: Uint8Array.from([7, 7, 7]),
       privateKey: Uint8Array.from([8, 8, 8]),
-    } as never);
-    vi.mocked(secp256k1.derivePublicKeyCompressed).mockReturnValue(
-      Uint8Array.from([7, 7, 7]) as never
-    );
-    vi.mocked(hash160).mockReturnValue(Uint8Array.from([6, 6, 6]) as never);
-
-    vi.mocked(encodeCashAddress)
-      .mockReturnValueOnce({ address: 'bitcoincash:qmain' } as never)
-      .mockReturnValueOnce({ address: 'bitcoincash:ztoken' } as never);
+      publicKeyHash: Uint8Array.from([6, 6, 6]),
+      address: 'bitcoincash:qmain',
+      tokenAddress: 'bitcoincash:ztoken',
+    });
 
     const kg = KeyGeneration();
     const keys = await kg.generateKeys(Network.MAINNET, 'mn', 'pw', 0, 1, 2);
 
     expect(keys).toEqual({
-      alicePub: Uint8Array.from([7, 7, 7]),
-      alicePriv: Uint8Array.from([8, 8, 8]),
-      alicePkh: Uint8Array.from([6, 6, 6]),
-      aliceAddress: 'bitcoincash:qmain',
-      aliceTokenAddress: 'bitcoincash:ztoken',
+      publicKey: Uint8Array.from([7, 7, 7]),
+      privateKey: Uint8Array.from([8, 8, 8]),
+      publicKeyHash: Uint8Array.from([6, 6, 6]),
+      address: 'bitcoincash:qmain',
+      tokenAddress: 'bitcoincash:ztoken',
     });
 
-    expect(deriveHdPath).toHaveBeenCalled();
-    expect(encodeCashAddress).toHaveBeenCalledTimes(2);
+    expect(deriveBchKeyMaterial).toHaveBeenCalledWith(
+      Network.MAINNET,
+      'mn',
+      'pw',
+      0,
+      1,
+      2
+    );
   });
 
   it('generateKeys returns null if public key derivation fails', async () => {
-    vi.mocked(bip39.mnemonicToSeed).mockResolvedValue(Uint8Array.from([1, 2, 3]) as never);
-    vi.mocked(deriveHdPrivateNodeFromSeed).mockReturnValue({
-      privateKey: Uint8Array.from([9, 9, 9]),
-    } as never);
-    vi.mocked(deriveHdPath).mockReturnValue({
-      privateKey: Uint8Array.from([8, 8, 8]),
-    } as never);
-
-    vi.mocked(secp256k1.derivePublicKeyCompressed).mockReturnValue('error' as never);
+    vi.mocked(deriveBchKeyMaterial).mockResolvedValue(null);
 
     const kg = KeyGeneration();
     await expect(

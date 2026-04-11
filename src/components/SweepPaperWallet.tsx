@@ -27,6 +27,27 @@ interface SweepPaperWalletProps {
   setPaperWalletUTXOs: React.Dispatch<React.SetStateAction<UTXO[]>>;
 }
 
+const BASE58_WIF_PATTERN = /^[123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz]+$/;
+
+const extractWifCandidates = (value: string): string[] => {
+  const trimmed = value.trim();
+  const candidates = [trimmed];
+
+  const lastColonIndex = trimmed.lastIndexOf(':');
+  if (lastColonIndex !== -1) {
+    const suffix = trimmed.slice(lastColonIndex + 1).trim();
+    if (
+      suffix.length > 0 &&
+      suffix !== trimmed &&
+      BASE58_WIF_PATTERN.test(suffix)
+    ) {
+      candidates.push(suffix);
+    }
+  }
+
+  return [...new Set(candidates)];
+};
+
 const SweepPaperWallet: React.FC<SweepPaperWalletProps> = ({
   setPaperWalletUTXOs,
 }) => {
@@ -74,8 +95,24 @@ const SweepPaperWallet: React.FC<SweepPaperWalletProps> = ({
     // setCashAddress('');
 
     try {
-      // Decode the WIF key
-      const decoded = decodePrivateKeyWif(wif);
+      // Try the scanned payload as-is first, then fall back to
+      // stripping a QR label prefix like `bch_wif:`.
+      const decodedResult = extractWifCandidates(wif).reduce<ReturnType<
+        typeof decodePrivateKeyWif
+      > | null>((result, candidate) => {
+        if (result && typeof result !== 'string') {
+          return result;
+        }
+
+        const decodedCandidate = decodePrivateKeyWif(candidate);
+        if (typeof decodedCandidate !== 'string') {
+          return decodedCandidate;
+        }
+
+        return result ?? decodedCandidate;
+      }, null);
+
+      const decoded = decodedResult ?? decodePrivateKeyWif(wif);
 
       if (typeof decoded === 'string') {
         // It's an error message

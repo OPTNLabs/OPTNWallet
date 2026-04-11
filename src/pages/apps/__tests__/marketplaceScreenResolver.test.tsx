@@ -5,6 +5,7 @@ import type { AddonAppDefinition, AddonManifest } from '../../../types/addons';
 import { renderDeclarativeScreen } from '../marketplaceScreenResolver';
 import AirdropsApp from '../event-rewards/EventRewardsApp';
 import MintCashTokensPoCApp from '../mint-cashtokens-poc/MintCashTokensPoCApp';
+import CauldronSwapApp from '../cauldron/CauldronSwapApp';
 
 describe('marketplaceScreenResolver', () => {
   const manifest: AddonManifest = {
@@ -61,6 +62,20 @@ describe('marketplaceScreenResolver', () => {
     expect(isValidElement(rendered)).toBe(true);
     if (isValidElement(rendered)) {
       expect(rendered.type).toBe(AirdropsApp);
+    }
+  });
+
+  it('returns CauldronSwapApp element for cauldron screen ids', () => {
+    const rendered = renderDeclarativeScreen({
+      screenId: 'CauldronSwapApp',
+      resolved: { manifest, app },
+      sdk,
+      loadWalletAddresses: vi.fn().mockResolvedValue(new Set()),
+    });
+
+    expect(isValidElement(rendered)).toBe(true);
+    if (isValidElement(rendered)) {
+      expect(rendered.type).toBe(CauldronSwapApp);
     }
   });
 });

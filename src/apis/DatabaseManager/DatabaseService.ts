@@ -31,6 +31,21 @@ const migrations: Array<(db: Database) => Promise<void>> = [
   async (db) => {
     createTransactionDetailsTable(db);
   },
+  async (db) => {
+    const columns = new Set<string>();
+    const statement = db.prepare('PRAGMA table_info(wallets);');
+    while (statement.step()) {
+      const row = statement.getAsObject() as Record<string, unknown>;
+      if (typeof row.name === 'string') columns.add(row.name);
+    }
+    statement.free();
+
+    if (!columns.has('walletType')) {
+      db.run(
+        "ALTER TABLE wallets ADD COLUMN walletType TEXT DEFAULT 'standard';"
+      );
+    }
+  },
   // Add future migrations here as needed
 ];
 
