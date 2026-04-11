@@ -1,3 +1,5 @@
+// Legacy FundMe web-app detail screen kept for compatibility/reference.
+// Native addon flows should prefer FundMeAddonApp.tsx and addon SDK services.
 import React, { useEffect, useState } from 'react';
 import { useParams } from 'react-router-dom';
 //import { useBlockchainContext } from '../../components/Context/BlockchainContext';

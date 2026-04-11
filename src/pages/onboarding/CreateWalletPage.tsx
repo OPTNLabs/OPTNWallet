@@ -6,8 +6,9 @@ import DatabaseService from '../../apis/DatabaseManager/DatabaseService';
 import WalletManager from '../../apis/WalletManager/WalletManager';
 import { setNetwork } from '../../redux/networkSlice';
 import { selectCurrentNetwork } from '../../redux/selectors/networkSelectors';
-import { setWalletId, setWalletNetwork } from '../../redux/walletSlice';
+import { setWalletId, setWalletNetwork, setWalletType } from '../../redux/walletSlice';
 import KeyService from '../../services/KeyService';
+import { WalletType } from '../../types/wallet';
 import { ONBOARDING_WALLET_NAME } from './constants';
 import InfoTooltipIcon from './components/InfoTooltipIcon';
 import OnboardingCard from './components/OnboardingCard';
@@ -59,7 +60,8 @@ const CreateWalletPage = () => {
     try {
       const accountExists = await walletManager.checkAccount(
         mnemonicPhrase,
-        passphrase
+        passphrase,
+        { networkType: currentNetwork, walletType: WalletType.STANDARD }
       );
       if (accountExists) {
         console.error('Account already exists.');
@@ -71,11 +73,16 @@ const CreateWalletPage = () => {
         ONBOARDING_WALLET_NAME,
         mnemonicPhrase,
         passphrase,
-        currentNetwork
+        currentNetwork,
+        WalletType.STANDARD
       );
       if (!created) throw new Error('Failed to create wallet in the database.');
 
-      const walletID = await walletManager.setWalletId(mnemonicPhrase, passphrase);
+      const walletID = await walletManager.setWalletId(
+        mnemonicPhrase,
+        passphrase,
+        { networkType: currentNetwork, walletType: WalletType.STANDARD }
+      );
       if (walletID == null) throw new Error('Failed to resolve created wallet ID.');
 
       const walletInfo = await walletManager.getWalletInfo(walletID);
@@ -89,6 +96,7 @@ const CreateWalletPage = () => {
 
       dispatch(setWalletId(walletID));
       dispatch(setWalletNetwork(resolvedNetwork));
+      dispatch(setWalletType(walletInfo?.walletType ?? WalletType.STANDARD));
       dispatch(setNetwork(resolvedNetwork));
 
       navigate(`/home/${walletID}`);

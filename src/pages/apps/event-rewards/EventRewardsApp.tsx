@@ -24,7 +24,7 @@ const AirdropsApp: React.FC<AirdropsAppProps> = ({ sdk, app }) => {
   });
 
   return (
-    <div className="wallet-page mx-auto flex h-full max-w-md flex-col overflow-hidden px-4 pt-4 pb-4">
+    <div className="container mx-auto max-w-md h-full min-h-0 px-4 pt-4 pb-3 flex flex-col overflow-hidden wallet-page">
       <div className="flex-none">
         <div className="flex justify-center">
           <img
@@ -47,7 +47,7 @@ const AirdropsApp: React.FC<AirdropsAppProps> = ({ sdk, app }) => {
         </div>
       </div>
 
-      <div className="min-h-0 flex-1 overflow-y-auto overflow-x-hidden overscroll-contain touch-pan-y pt-4 pb-24">
+      <div className="min-h-0 flex-1 overflow-y-auto overflow-x-hidden overscroll-contain touch-pan-y pt-4 pr-1">
         <div className="space-y-4">
           {inventory.error ? (
             <div className="wallet-warning-panel rounded-2xl px-4 py-3 text-sm">
