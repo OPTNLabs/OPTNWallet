@@ -64,32 +64,31 @@ function getAppDescription(app: Pick<AppCard, 'id' | 'name' | 'description'>) {
     normalizedId.endsWith(':cauldronswapapp') ||
     normalizedName === 'cauldron'
   ) {
-    return 'Demo showcase: native BCH to token swaps via Cauldron pools';
+    return 'Cauldron DEX Swap - BCH and Cashtokens';
   }
 
   if (normalizedId.endsWith(':fundmeapp') || normalizedName === 'fundme') {
-    return 'Demo showcase: BCH crowdfunding flows inside OPTN Wallet';
+    return 'Coming Soon: BCH Decentralized Crowdfunding';
   }
 
   return app.description;
 }
 
-function isComingSoonApp(appId: string, appName: string): boolean {
+export function isComingSoonApp(appId: string, appName: string): boolean {
   const normalizedId = appId.toLowerCase();
   const normalizedName = appName.toLowerCase();
   return (
     normalizedId.endsWith(':authguard') ||
-    normalizedName === 'authguard'
+    normalizedName === 'authguard' ||
+    normalizedId.endsWith(':fundmeapp') ||
+    normalizedName === 'fundme'
   );
 }
 
 function shouldHideApp(appId: string, appName: string): boolean {
   const normalizedId = appId.toLowerCase();
   const normalizedName = appName.toLowerCase();
-  return (
-    normalizedId.endsWith(':authguard') ||
-    normalizedName === 'authguard'
-  );
+  return normalizedId.endsWith(':authguard') || normalizedName === 'authguard';
 }
 
 const AppsView = () => {
@@ -206,7 +205,7 @@ const AppsView = () => {
                 />
                 <h3 className="font-semibold text-center">{app.name}</h3>
                 <p className="text-sm wallet-muted text-center">
-                  {app.disabled ? 'Coming soon' : getAppDescription(app)}
+                  {getAppDescription(app)}
                 </p>
               </div>
             </div>
