@@ -86,19 +86,19 @@ export function useWalletNetworkBootstrap(
   return ready;
 }
 
-export function useStatusBarSync(mode: string) {
+export function useStatusBarSync() {
   useEffect(() => {
     if (!Capacitor.isNativePlatform()) {
       return;
     }
 
-    const platform = Capacitor.getPlatform();
-    if (platform === 'android') {
-      StatusBar.setOverlaysWebView({ overlay: false });
+    if (Capacitor.getPlatform() === 'android') {
+      void StatusBar.setBackgroundColor({ color: '#000000' });
     }
 
-    StatusBar.setStyle({ style: mode === 'dark' ? Style.Light : Style.Dark });
-  }, [mode]);
+    void StatusBar.setOverlaysWebView({ overlay: false });
+    void StatusBar.setStyle({ style: Style.Light });
+  }, []);
 }
 
 export function useScreenSecurity() {

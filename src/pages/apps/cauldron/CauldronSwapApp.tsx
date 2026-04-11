@@ -20,6 +20,7 @@ import {
   buildCauldronPoolDepositRequest,
   buildCauldronTradeRequest,
   buildCauldronPoolWithdrawRequest,
+  analyzeCauldronMarketLiquidity,
   detectCauldronWalletPoolPositions,
   fetchNormalizedCauldronPools,
   fetchNormalizedCauldronUserPools,
@@ -41,6 +42,20 @@ import {
   type NormalizedCauldronToken,
 } from '../../../services/cauldron';
 import type { UTXO } from '../../../types/types';
+import {
+  assertWalletInputsStillAvailable,
+  fetchCurrentQuotedPoolsFromChain,
+  fetchVisiblePoolsFromChain,
+  getPoolSelectionId,
+  resolveCurrentPoolForReview,
+} from './preflight';
+import {
+  selectFundingUtxosByToken,
+  selectLargestBchUtxos,
+  sumSpendableBchBalance,
+  sumSpendableTokenBalance,
+} from './funding';
+import { useSmoothResetTransition } from '../shared/useSmoothResetTransition';
 
 type CauldronSwapAppProps = {
   sdk: AddonSDK;
@@ -79,16 +94,14 @@ const SAFETY_MAX_ROUTE_POOLS = 4;
 const SAFETY_MAX_WALLET_INPUTS = 4;
 const SAFETY_HIGH_SLIPPAGE_BPS = 300n;
 const SAFETY_HIGH_FEE_BPS = 100n;
+const SAFETY_LOW_LIQUIDITY_BPS = 8000n;
+const CAULDRON_MESSAGE_AUTO_DISMISS_MS = 4200;
 
 function shortTokenId(tokenId: string): string {
   if (!tokenId) return '';
   return tokenId.length <= 12
     ? tokenId
     : `${tokenId.slice(0, 4)}...${tokenId.slice(-3)}`;
-}
-
-function getPoolSelectionId(pool: CauldronPool): string {
-  return pool.poolId ?? `${pool.txHash}:${pool.outputIndex}`;
 }
 
 function dedupePoolsBySelectionId(pools: CauldronPool[]): CauldronPool[] {
@@ -109,24 +122,15 @@ function dedupeWalletPoolPositions(
   return [...byId.values()];
 }
 
-function getUtxoOutpointKey(utxo: UTXO): string {
-  return `${utxo.tx_hash}:${utxo.tx_pos}`;
-}
-
-function assertWalletInputsStillAvailable(
-  currentWalletUtxos: UTXO[],
-  selectedInputs: UTXO[],
-  operationLabel: string
-) {
-  const currentOutpoints = new Set(currentWalletUtxos.map(getUtxoOutpointKey));
-  const missingInputs = selectedInputs.filter(
-    (utxo) => !currentOutpoints.has(getUtxoOutpointKey(utxo))
+function filterSuppressedWalletPoolPositions(
+  positions: CauldronWalletPoolPosition[],
+  suppressedPoolIds: string[]
+): CauldronWalletPoolPosition[] {
+  if (suppressedPoolIds.length === 0) return positions;
+  const suppressedPoolIdSet = new Set(suppressedPoolIds);
+  return positions.filter(
+    (position) => !suppressedPoolIdSet.has(getPoolSelectionId(position.pool))
   );
-  if (missingInputs.length > 0) {
-    throw new Error(
-      `${operationLabel} needs refreshed wallet inputs. One or more selected UTXOs are no longer spendable.`
-    );
-  }
 }
 
 function aggregatePoolTrades(poolTrades: CauldronPoolTrade[]): CauldronPoolTrade[] {
@@ -288,27 +292,6 @@ function sanitizeDecimalInput(
   }
 
   return sanitized;
-}
-
-function sumSpendableBchBalance(utxos: UTXO[]): bigint {
-  return utxos.reduce((total, utxo) => {
-    if (utxo.token) return total;
-    return total + parseSatoshis(utxo.amount ?? utxo.value ?? 0);
-  }, 0n);
-}
-
-function sumSpendableTokenBalance(utxos: UTXO[], tokenCategory: string): bigint {
-  const normalizedCategory = tokenCategory.trim().toLowerCase();
-  return utxos.reduce((total, utxo) => {
-    if (
-      utxo.token?.category?.trim().toLowerCase() !== normalizedCategory ||
-      utxo.token?.nft ||
-      utxo.token?.amount == null
-    ) {
-      return total;
-    }
-    return total + parseSatoshis(utxo.token.amount);
-  }, 0n);
 }
 
 function derivePoolTokenAmountFromSpotPrice(params: {
@@ -527,6 +510,13 @@ function estimateBps(part: bigint, total: bigint): bigint {
   return (part * 10_000n) / total;
 }
 
+function formatLiquidityUsageWarning(
+  label: string,
+  usedBps: bigint
+): string {
+  return `${label} is using about ${(Number(usedBps) / 100).toFixed(2)}% of the currently executable market depth. Liquidity may move before you can unwind this position.`;
+}
+
 function shortAddress(value: string): string {
   if (!value) return '';
   return value.length <= 18
@@ -600,57 +590,6 @@ function derivePoolHistoryStats(
     bchReserveChange: parseSatoshis(end.sats) - parseSatoshis(start.sats),
     tokenReserveChange: parseSatoshis(end.tokens) - parseSatoshis(start.tokens),
   };
-}
-
-function selectFundingUtxosByToken(
-  utxos: UTXO[],
-  tokenCategory: string,
-  requiredTokenAmount: bigint
-): {
-  selected: UTXO[];
-  totalAvailable: bigint;
-  candidateCount: number;
-} {
-  const normalizedCategory = tokenCategory.trim().toLowerCase();
-  const tokenUtxos = [...utxos]
-    .filter(
-      (utxo) =>
-        utxo.token?.category?.trim().toLowerCase() === normalizedCategory &&
-        !utxo.token?.nft &&
-        parseSatoshis(utxo.token?.amount) > 0n
-    )
-    .filter((utxo, index, array) => {
-      const outpoint = `${utxo.tx_hash}:${utxo.tx_pos}`;
-      return array.findIndex((candidate) => `${candidate.tx_hash}:${candidate.tx_pos}` === outpoint) === index;
-    })
-    .sort((a, b) =>
-      Number(parseSatoshis(b.token?.amount) - parseSatoshis(a.token?.amount))
-    );
-
-  const selected: UTXO[] = [];
-  let total = 0n;
-  const totalAvailable = tokenUtxos.reduce(
-    (sum, utxo) => sum + parseSatoshis(utxo.token?.amount),
-    0n
-  );
-  for (const utxo of tokenUtxos) {
-    selected.push(utxo);
-    total += parseSatoshis(utxo.token?.amount);
-    if (total >= requiredTokenAmount) break;
-  }
-  return {
-    selected: total >= requiredTokenAmount ? selected : [],
-    totalAvailable,
-    candidateCount: tokenUtxos.length,
-  };
-}
-
-function selectLargestBchUtxos(utxos: UTXO[]): UTXO[] {
-  return [...utxos]
-    .filter((utxo) => !utxo.token)
-    .sort((a, b) =>
-      Number((b.amount ?? b.value ?? 0) - (a.amount ?? a.value ?? 0))
-    );
 }
 
 async function buildTradeWithFunding(params: {
@@ -883,6 +822,9 @@ const CauldronSwapApp: React.FC<CauldronSwapAppProps> = ({ sdk, app }) => {
   const [pendingWalletPoolPositions, setPendingWalletPoolPositions] = useState<
     CauldronWalletPoolPosition[]
   >([]);
+  const [suppressedWalletPoolIds, setSuppressedWalletPoolIds] = useState<string[]>(
+    []
+  );
   const [selectedWalletPoolId, setSelectedWalletPoolId] = useState<
     string | null
   >(null);
@@ -896,7 +838,9 @@ const CauldronSwapApp: React.FC<CauldronSwapAppProps> = ({ sdk, app }) => {
   const [poolCreateBchAmount, setPoolCreateBchAmount] = useState('0.01');
   const [poolCreateTokenAmount, setPoolCreateTokenAmount] = useState('');
   const [poolTokenAmountAuto, setPoolTokenAmountAuto] = useState(true);
+  const [poolSyncAnchor, setPoolSyncAnchor] = useState<'bch' | 'token'>('bch');
   const [walletUtxos, setWalletUtxos] = useState<UTXO[]>([]);
+  const { contentClassName, runSmoothReset } = useSmoothResetTransition();
   const [, setApiStatus] = useState<{
     tokensLoaded: number;
     poolsLoaded: number;
@@ -905,7 +849,7 @@ const CauldronSwapApp: React.FC<CauldronSwapAppProps> = ({ sdk, app }) => {
     liveUpdatedAt: number | null;
   } | null>(null);
 
-  const feeRate = 1n;
+  const feeRate = 2n;
   const quoteActionsDisabled = false;
   const amountInputRef = useRef<HTMLInputElement | null>(null);
   const selectedToken = useMemo(
@@ -928,6 +872,17 @@ const CauldronSwapApp: React.FC<CauldronSwapAppProps> = ({ sdk, app }) => {
   const sharedMetadata = useSharedTokenMetadata(
     metadataCategories
   );
+
+  useEffect(() => {
+    if (!message) return undefined;
+
+    const timeoutId = window.setTimeout(() => {
+      setMessage((current) => (current === message ? null : current));
+    }, CAULDRON_MESSAGE_AUTO_DISMISS_MS);
+
+    return () => window.clearTimeout(timeoutId);
+  }, [message]);
+
   const filteredTokens = useMemo(() => {
     const query = tokenSearchQuery.trim();
     if (!query) return tokens;
@@ -1018,11 +973,18 @@ const CauldronSwapApp: React.FC<CauldronSwapAppProps> = ({ sdk, app }) => {
           walletUtxos.tokenUtxos
         );
         setWalletPoolPositions(
-          dedupeWalletPoolPositions([...detectedPositions, ...chainDetectedPositions])
+          filterSuppressedWalletPoolPositions(
+            dedupeWalletPoolPositions([
+              ...detectedPositions,
+              ...chainDetectedPositions,
+            ]),
+            suppressedWalletPoolIds
+          )
         );
         setPendingWalletPoolPositions((current) =>
           current.filter(
             (position) =>
+              !suppressedWalletPoolIds.includes(getPoolSelectionId(position.pool)) &&
               ![...detectedPositions, ...chainDetectedPositions].some(
                 (detected) =>
                   getPoolSelectionId(detected.pool) === getPoolSelectionId(position.pool)
@@ -1039,7 +1001,7 @@ const CauldronSwapApp: React.FC<CauldronSwapAppProps> = ({ sdk, app }) => {
     return () => {
       cancelled = true;
     };
-  }, [currentNetwork, sdk]);
+  }, [currentNetwork, sdk, suppressedWalletPoolIds]);
 
   useEffect(() => {
     let cancelled = false;
@@ -1256,23 +1218,30 @@ const CauldronSwapApp: React.FC<CauldronSwapAppProps> = ({ sdk, app }) => {
       dedupePoolsBySelectionId([
         ...(livePools.length > 0 ? livePools : pools),
         ...walletPoolPositions.map((position) => position.pool),
-        ...pendingWalletPoolPositions.map((position) => position.pool),
       ]).filter(
         (pool) => pool.output.tokenCategory === selectedTokenId
       ),
-    [livePools, pendingWalletPoolPositions, pools, selectedTokenId, walletPoolPositions]
+    [livePools, pools, selectedTokenId, walletPoolPositions]
   );
   const visibleWalletPoolPositions = useMemo(() => {
-    const combinedPositions = dedupeWalletPoolPositions([
-      ...walletPoolPositions,
-      ...pendingWalletPoolPositions,
-    ]);
+    const combinedPositions = filterSuppressedWalletPoolPositions(
+      dedupeWalletPoolPositions([
+        ...walletPoolPositions,
+        ...pendingWalletPoolPositions,
+      ]),
+      suppressedWalletPoolIds
+    );
     if (!selectedTokenId) return combinedPositions;
     const filtered = combinedPositions.filter(
       (position) => position.pool.output.tokenCategory === selectedTokenId
     );
     return filtered.length > 0 ? filtered : combinedPositions;
-  }, [pendingWalletPoolPositions, selectedTokenId, walletPoolPositions]);
+  }, [
+    pendingWalletPoolPositions,
+    selectedTokenId,
+    suppressedWalletPoolIds,
+    walletPoolPositions,
+  ]);
   const selectedWalletPoolPosition = useMemo(
     () =>
       visibleWalletPoolPositions.find(
@@ -1329,6 +1298,7 @@ const CauldronSwapApp: React.FC<CauldronSwapAppProps> = ({ sdk, app }) => {
 
   useEffect(() => {
     setPoolTokenAmountAuto(true);
+    setPoolSyncAnchor('bch');
   }, [selectedTokenId]);
 
   useEffect(() => {
@@ -1719,10 +1689,16 @@ const CauldronSwapApp: React.FC<CauldronSwapAppProps> = ({ sdk, app }) => {
 
   useEffect(() => {
     if (!poolTokenAmountAuto) return;
+    if (poolSyncAnchor === 'token') {
+      syncPoolFromTokenAmount(poolCreateTokenAmount);
+      return;
+    }
     syncPoolFromBchAmount(poolCreateBchAmount);
   }, [
     autoPoolTokenAmount,
     poolCreateBchAmount,
+    poolCreateTokenAmount,
+    poolSyncAnchor,
     poolTokenAmountAuto,
     selectedTokenSpotPriceSats,
   ]);
@@ -1851,23 +1827,6 @@ const CauldronSwapApp: React.FC<CauldronSwapAppProps> = ({ sdk, app }) => {
       maxTokenAmountAtomic: spendableTokenBalanceAtomic,
     });
     setPoolCreateTokenAmount(nextTokenAmount);
-
-    const nextTokenAtomic = parseDecimalToAtomic(nextTokenAmount, effectiveDecimals);
-    if (
-      nextTokenAtomic != null &&
-      nextTokenAtomic > 0n &&
-      nextTokenAtomic >= spendableTokenBalanceAtomic &&
-      spendableTokenBalanceAtomic > 0n
-    ) {
-      const adjustedBchAmount = derivePoolBchAmountFromSpotPrice({
-        tokenAmountAtomic: spendableTokenBalanceAtomic,
-        tokenSpotPriceSats: selectedTokenSpotPriceSats,
-        maxBchAmountSats: poolBchMaxInputSats,
-      });
-      if (adjustedBchAmount) {
-        setPoolCreateBchAmount(adjustedBchAmount);
-      }
-    }
   };
 
   const syncPoolFromTokenAmount = (nextTokenAmount: string) => {
@@ -1888,24 +1847,33 @@ const CauldronSwapApp: React.FC<CauldronSwapAppProps> = ({ sdk, app }) => {
       maxBchAmountSats: poolBchMaxInputSats,
     });
     setPoolCreateBchAmount(nextBchAmount);
+  };
 
-    const nextBchSats = parseBchInputToSats(nextBchAmount);
-    if (
-      nextBchSats != null &&
-      nextBchSats > 0n &&
-      nextBchSats >= poolBchMaxInputSats &&
-      poolBchMaxInputSats > 0n
-    ) {
-      const adjustedTokenAmount = derivePoolTokenAmountFromSpotPrice({
-        bchAmountSats: poolBchMaxInputSats,
-        tokenSpotPriceSats: selectedTokenSpotPriceSats,
-        decimals: effectiveDecimals,
-        maxTokenAmountAtomic: spendableTokenBalanceAtomic,
-      });
-      if (adjustedTokenAmount) {
-        setPoolCreateTokenAmount(adjustedTokenAmount);
-      }
-    }
+  const resetSwapComposer = () => {
+    setAmount(direction === 'bch_to_token' ? '0.001' : '1');
+    setQuote(null);
+    setReviewOpen(false);
+    setReviewWarningsAccepted(false);
+    setReviewRouteExpanded(false);
+  };
+
+  const resetPoolComposer = () => {
+    setPoolCreateBchAmount('0.01');
+    setPoolCreateTokenAmount('');
+    setPoolReview(null);
+    setSelectedWalletPoolId(null);
+    setPoolTokenAmountAuto(true);
+    setPoolSyncAnchor('bch');
+  };
+
+  const resetCauldronViewState = async (suppressedPoolIds = suppressedWalletPoolIds) => {
+    await refreshCauldronState(suppressedPoolIds);
+    resetSwapComposer();
+    resetPoolComposer();
+    setActiveView('swap');
+    setSelectedWalletPoolHistory(null);
+    setSelectedWalletPoolApy(null);
+    setTokenSearchQuery('');
   };
 
   const handleQuote = async () => {
@@ -1925,15 +1893,28 @@ const CauldronSwapApp: React.FC<CauldronSwapAppProps> = ({ sdk, app }) => {
         throw new Error('No active Cauldron pools were found for this token.');
       }
 
+      const { confirmedPools, missingVisiblePoolCount } =
+        await fetchVisiblePoolsFromChain({
+          sdk,
+          visiblePools: tokenPools,
+        });
+      if (confirmedPools.length === 0) {
+        throw new Error(
+          'No executable Cauldron pools are currently confirmed on chain for this token. Refresh and try again.'
+        );
+      }
+
       const planned = planAggregatedTradeForTargetSupply(
-        tokenPools,
+        confirmedPools,
         direction === 'bch_to_token' ? CAULDRON_NATIVE_BCH : selectedTokenId,
         direction === 'bch_to_token' ? selectedTokenId : CAULDRON_NATIVE_BCH,
         parsedAmount
       );
       if (!planned) {
         throw new Error(
-          'No Cauldron quote is currently available for that amount.'
+          missingVisiblePoolCount > 0
+            ? 'The visible Cauldron market changed on chain before this quote could be built. Refresh and try again.'
+            : 'No Cauldron quote is currently available for that amount.'
         );
       }
       const aggregatedTrades = aggregatePoolTrades(planned.trades);
@@ -1967,6 +1948,18 @@ const CauldronSwapApp: React.FC<CauldronSwapAppProps> = ({ sdk, app }) => {
 
       const slippage = BigInt(slippageBps || '0');
       const warnings: string[] = [];
+      const marketLiquidity = analyzeCauldronMarketLiquidity(
+        confirmedPools,
+        selectedTokenId
+      );
+      const currentDirectionLiquidity =
+        direction === 'bch_to_token'
+          ? marketLiquidity.bchToToken
+          : marketLiquidity.tokenToBch;
+      const reverseDirectionLiquidity =
+        direction === 'bch_to_token'
+          ? marketLiquidity.tokenToBch
+          : marketLiquidity.bchToToken;
       if (aggregatedTrades.length > SAFETY_MAX_ROUTE_POOLS) {
         warnings.push(
           `This route uses ${aggregatedTrades.length} pools, which is more complex than a typical swap.`
@@ -1992,6 +1985,81 @@ const CauldronSwapApp: React.FC<CauldronSwapAppProps> = ({ sdk, app }) => {
         warnings.push(
           `Estimated network fee is relatively high for this trade size (${(Number(feeBps) / 100).toFixed(2)}%).`
         );
+      }
+      const currentLiquidityUsageBps = estimateBps(
+        planned.summary.demand,
+        currentDirectionLiquidity.maxDemand
+      );
+      if (currentLiquidityUsageBps >= SAFETY_LOW_LIQUIDITY_BPS) {
+        warnings.push(
+          formatLiquidityUsageWarning(
+            direction === 'bch_to_token'
+              ? 'This buy'
+              : 'This sell',
+            currentLiquidityUsageBps
+          )
+        );
+      }
+      if (direction === 'bch_to_token') {
+        if (reverseDirectionLiquidity.maxSupply <= 0n) {
+          warnings.push(
+            `Current reverse liquidity is effectively unavailable. If you receive ${formatTokenDisplayAmount(
+              planned.summary.demand,
+              effectiveDecimals,
+              effectiveSymbol
+            )}, you may not be able to swap it back to BCH until more liquidity appears.`
+          );
+        } else if (planned.summary.demand > reverseDirectionLiquidity.maxSupply) {
+          warnings.push(
+            `Current reverse liquidity can only absorb about ${formatTokenDisplayAmount(
+              reverseDirectionLiquidity.maxSupply,
+              effectiveDecimals,
+              effectiveSymbol
+            )}. This quote would leave you with more ${effectiveSymbol} than the market can currently swap back to BCH.`
+          );
+        } else {
+          const reverseLiquidityUsageBps = estimateBps(
+            planned.summary.demand,
+            reverseDirectionLiquidity.maxSupply
+          );
+          if (reverseLiquidityUsageBps >= SAFETY_LOW_LIQUIDITY_BPS) {
+            warnings.push(
+              formatLiquidityUsageWarning(
+                `Selling back ${formatTokenDisplayAmount(
+                  planned.summary.demand,
+                  effectiveDecimals,
+                  effectiveSymbol
+                )}`,
+                reverseLiquidityUsageBps
+              )
+            );
+          }
+        }
+      } else {
+        if (reverseDirectionLiquidity.maxSupply <= 0n) {
+          warnings.push(
+            `Current BCH-to-${effectiveSymbol} liquidity is effectively unavailable. If you exit to BCH now, buying back later may not be possible until liquidity returns.`
+          );
+        } else if (planned.summary.demand > reverseDirectionLiquidity.maxSupply) {
+          warnings.push(
+            `Current BCH-to-${effectiveSymbol} liquidity can only absorb about ${formatCompactBchAmount(
+              reverseDirectionLiquidity.maxSupply
+            )}. The BCH from this quote would be larger than the market can currently route back into ${effectiveSymbol}.`
+          );
+        } else {
+          const reverseLiquidityUsageBps = estimateBps(
+            planned.summary.demand,
+            reverseDirectionLiquidity.maxSupply
+          );
+          if (reverseLiquidityUsageBps >= SAFETY_LOW_LIQUIDITY_BPS) {
+            warnings.push(
+              formatLiquidityUsageWarning(
+                `Buying back with ${formatCompactBchAmount(planned.summary.demand)}`,
+                reverseLiquidityUsageBps
+              )
+            );
+          }
+        }
       }
 
       setQuote({
@@ -2023,41 +2091,30 @@ const CauldronSwapApp: React.FC<CauldronSwapAppProps> = ({ sdk, app }) => {
       }
       assertSwapAmountWithinBalance(parsedAmount);
 
-      const refreshedPools = await fetchNormalizedCauldronPools(
-        currentNetwork,
-        undefined,
-        selectedTokenId
-      );
-      const refreshedRelevantPools = dedupePoolsBySelectionId([
-        ...refreshedPools,
-        ...livePools,
-        ...walletPoolPositions.map((position) => position.pool),
-        ...pendingWalletPoolPositions.map((position) => position.pool),
-      ]).filter((pool) => pool.output.tokenCategory === selectedTokenId);
+      const { resolvedPools: currentQuotedPools, missingQuotedPoolCount } =
+        await fetchCurrentQuotedPoolsFromChain({
+        sdk,
+        quotedPools: quote.trades.map((trade) => trade.pool),
+      });
+      if (missingQuotedPoolCount > 0) {
+        throw new Error(
+          'Cauldron quote expired because one or more reviewed pools changed on chain. Get a fresh quote before submitting.'
+        );
+      }
+
       const refreshedPlan = planAggregatedTradeForTargetSupply(
-        refreshedRelevantPools,
+        currentQuotedPools,
         direction === 'bch_to_token' ? CAULDRON_NATIVE_BCH : selectedTokenId,
         direction === 'bch_to_token' ? selectedTokenId : CAULDRON_NATIVE_BCH,
         parsedAmount
       );
-      const executablePlan =
-        refreshedPlan ??
-        planAggregatedTradeForTargetSupply(
-          tokenPools,
-          direction === 'bch_to_token' ? CAULDRON_NATIVE_BCH : selectedTokenId,
-          direction === 'bch_to_token' ? selectedTokenId : CAULDRON_NATIVE_BCH,
-          parsedAmount
-        );
-      if (!executablePlan) {
-        throw new Error('Cauldron quote expired. Refresh the market and try again.');
-      }
       if (!refreshedPlan) {
-        setMessage(
-          'Cauldron pools refreshed during review. OPTN rebuilt the route with the latest visible pools.'
+        throw new Error(
+          'Cauldron quote expired against the latest confirmed pool state. Refresh the quote and try again.'
         );
       }
-      const aggregatedTrades = aggregatePoolTrades(executablePlan.trades);
-      if (executablePlan.summary.demand < quote.minReceive) {
+      const aggregatedTrades = aggregatePoolTrades(refreshedPlan.trades);
+      if (refreshedPlan.summary.demand < quote.minReceive) {
         throw new Error('The refreshed quote fell below your slippage limit.');
       }
 
@@ -2084,8 +2141,8 @@ const CauldronSwapApp: React.FC<CauldronSwapAppProps> = ({ sdk, app }) => {
         feeRate,
         userPrompt:
           direction === 'bch_to_token'
-            ? `Cauldron swap ${formatBchAmount(executablePlan.summary.supply)} BCH -> ${effectiveSymbol}`
-            : `Cauldron swap ${formatTokenAmount(executablePlan.summary.supply, effectiveDecimals)} ${effectiveSymbol} -> BCH`,
+            ? `Cauldron swap ${formatBchAmount(refreshedPlan.summary.supply)} BCH -> ${effectiveSymbol}`
+            : `Cauldron swap ${formatTokenAmount(refreshedPlan.summary.supply, effectiveDecimals)} ${effectiveSymbol} -> BCH`,
       });
 
       const result = await signAndBroadcastCauldronTradeRequest(
@@ -2096,8 +2153,8 @@ const CauldronSwapApp: React.FC<CauldronSwapAppProps> = ({ sdk, app }) => {
           recipientSummary: effectiveName || selectedTokenId,
           amountSummary:
             direction === 'bch_to_token'
-              ? `${formatBchAmount(executablePlan.summary.supply)} BCH`
-              : `${formatTokenAmount(executablePlan.summary.supply, effectiveDecimals)} ${effectiveSymbol}`,
+              ? `${formatBchAmount(refreshedPlan.summary.supply)} BCH`
+              : `${formatTokenAmount(refreshedPlan.summary.supply, effectiveDecimals)} ${effectiveSymbol}`,
           userPrompt: built.signRequest.transaction.userPrompt ?? null,
         }
       );
@@ -2105,19 +2162,19 @@ const CauldronSwapApp: React.FC<CauldronSwapAppProps> = ({ sdk, app }) => {
         throw new Error(result.errorMessage);
       }
 
-      await refreshCauldronState();
-
-      setQuote({
-        trades: aggregatedTrades,
-        totalSupply: executablePlan.summary.supply,
-        totalDemand: executablePlan.summary.demand,
-        estimatedFeeSatoshis: built.estimatedFeeSatoshis,
-        minReceive: quote.minReceive,
-        built,
-        warnings: quote.warnings,
-      });
-      setMessage(`Swap submitted: ${result.txid}`);
+      await runSmoothReset(resetCauldronViewState);
+      setMessage(
+        result.broadcastState === 'submitted'
+          ? `Swap handoff pending visibility: ${result.txid}. Keep the txid and avoid sending it again until it appears in history.`
+          : `Swap broadcasted: ${result.txid}`
+      );
     } catch (error) {
+      await runSmoothReset(async () => {
+        resetSwapComposer();
+        setActiveView('swap');
+        setSelectedWalletPoolId(null);
+        setPoolReview(null);
+      });
       setMessage(
         error instanceof Error ? error.message : 'Cauldron swap failed'
       );
@@ -2136,7 +2193,9 @@ const CauldronSwapApp: React.FC<CauldronSwapAppProps> = ({ sdk, app }) => {
     setReviewOpen(true);
   };
 
-  const refreshCauldronState = async () => {
+  const refreshCauldronState = async (
+    suppressedPoolIds = suppressedWalletPoolIds
+  ) => {
     const addresses = await sdk.wallet.listAddresses();
     await Promise.allSettled(
       addresses.map((entry) => sdk.utxos.refreshAndStore(entry.address))
@@ -2195,11 +2254,15 @@ const CauldronSwapApp: React.FC<CauldronSwapAppProps> = ({ sdk, app }) => {
       walletUtxos.tokenUtxos
     );
     setWalletPoolPositions(
-      dedupeWalletPoolPositions([...detectedPositions, ...chainDetectedPositions])
+      filterSuppressedWalletPoolPositions(
+        dedupeWalletPoolPositions([...detectedPositions, ...chainDetectedPositions]),
+        suppressedPoolIds
+      )
     );
     setPendingWalletPoolPositions((current) =>
       current.filter(
         (position) =>
+          !suppressedPoolIds.includes(getPoolSelectionId(position.pool)) &&
           ![...detectedPositions, ...chainDetectedPositions].some(
             (detected) =>
               getPoolSelectionId(detected.pool) === getPoolSelectionId(position.pool)
@@ -2406,11 +2469,7 @@ const CauldronSwapApp: React.FC<CauldronSwapAppProps> = ({ sdk, app }) => {
           ])
         );
 
-        await refreshCauldronState();
-        setPoolCreateTokenAmount('');
-        setPoolCreateBchAmount('0.01');
-        setPoolReview(null);
-        setActiveView('pool');
+        await runSmoothReset(resetCauldronViewState);
         setMessage(`Pool submitted: ${result.txid}`);
         return;
       }
@@ -2432,11 +2491,10 @@ const CauldronSwapApp: React.FC<CauldronSwapAppProps> = ({ sdk, app }) => {
         );
       }
 
-      const currentPool =
-        visibleWalletPoolPositions.find(
-          (position) =>
-            getPoolSelectionId(position.pool) === getPoolSelectionId(poolReview.pool)
-        )?.pool ?? poolReview.pool;
+      const currentPool = resolveCurrentPoolForReview(
+        poolReview.pool,
+        visibleWalletPoolPositions
+      );
       const recipientAddress =
         addresses[0]?.tokenAddress || addresses[0]?.address || ownerAddress;
       const walletUtxos = await sdk.utxos.listForWallet();
@@ -2472,9 +2530,30 @@ const CauldronSwapApp: React.FC<CauldronSwapAppProps> = ({ sdk, app }) => {
         throw new Error(result.errorMessage);
       }
 
-      await refreshCauldronState();
-      setPoolReview(null);
+      const withdrawnPoolId = getPoolSelectionId(currentPool);
+      const nextSuppressedWalletPoolIds = suppressedWalletPoolIds.includes(
+        withdrawnPoolId
+      )
+        ? suppressedWalletPoolIds
+        : [withdrawnPoolId, ...suppressedWalletPoolIds];
+      setSuppressedWalletPoolIds(nextSuppressedWalletPoolIds);
+      setWalletPoolPositions((current) =>
+        current.filter(
+          (position) => getPoolSelectionId(position.pool) !== withdrawnPoolId
+        )
+      );
+      setPendingWalletPoolPositions((current) =>
+        current.filter(
+          (position) => getPoolSelectionId(position.pool) !== withdrawnPoolId
+        )
+      );
       setSelectedWalletPoolId(null);
+      setSelectedWalletPoolHistory(null);
+      setSelectedWalletPoolApy(null);
+
+      await runSmoothReset(() =>
+        resetCauldronViewState(nextSuppressedWalletPoolIds)
+      );
       setMessage(`Pool withdrawal submitted: ${result.txid}`);
     } catch (error) {
       setMessage(
@@ -2509,10 +2588,12 @@ const CauldronSwapApp: React.FC<CauldronSwapAppProps> = ({ sdk, app }) => {
         </div>
       </div>
 
-      <div className="flex min-h-0 flex-1 flex-col pt-3">
+      <div className={`flex min-h-0 flex-1 flex-col pt-3 ${contentClassName}`}>
         {message ? (
-          <div className="wallet-warning-panel flex-none rounded-2xl px-4 py-3 text-sm">
-            {message}
+          <div className="pointer-events-none absolute left-4 right-4 top-[6.5rem] z-20">
+            <div className="wallet-warning-panel rounded-2xl px-4 py-3 text-sm shadow-lg">
+              {message}
+            </div>
           </div>
         ) : null}
 
@@ -2910,6 +2991,7 @@ const CauldronSwapApp: React.FC<CauldronSwapAppProps> = ({ sdk, app }) => {
                             );
                           }
                           setPoolTokenAmountAuto(true);
+                          setPoolSyncAnchor('bch');
                           syncPoolFromBchAmount(nextAmount);
                         }}
                         placeholder="0.01"
@@ -2922,6 +3004,7 @@ const CauldronSwapApp: React.FC<CauldronSwapAppProps> = ({ sdk, app }) => {
                         type="button"
                         onClick={() => {
                           setPoolTokenAmountAuto(true);
+                          setPoolSyncAnchor('bch');
                           syncPoolFromBchAmount(
                             formatTokenAmount(poolBchMaxInputSats, 8)
                           );
@@ -2955,6 +3038,7 @@ const CauldronSwapApp: React.FC<CauldronSwapAppProps> = ({ sdk, app }) => {
                             );
                           }
                           setPoolTokenAmountAuto(true);
+                          setPoolSyncAnchor('token');
                           syncPoolFromTokenAmount(nextAmount);
                         }}
                         placeholder="0"
@@ -2967,6 +3051,7 @@ const CauldronSwapApp: React.FC<CauldronSwapAppProps> = ({ sdk, app }) => {
                         type="button"
                         onClick={() => {
                           setPoolTokenAmountAuto(true);
+                          setPoolSyncAnchor('token');
                           syncPoolFromTokenAmount(
                             formatTokenAmount(
                               spendableTokenBalanceAtomic,
@@ -3005,6 +3090,7 @@ const CauldronSwapApp: React.FC<CauldronSwapAppProps> = ({ sdk, app }) => {
                     type="button"
                     onClick={() => {
                       setPoolTokenAmountAuto(true);
+                      setPoolSyncAnchor('bch');
                       syncPoolFromBchAmount(poolCreateBchAmount);
                     }}
                     className="wallet-btn-secondary px-3 py-1.5 text-xs"

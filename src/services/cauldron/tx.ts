@@ -1,7 +1,10 @@
 import {
+  binToHex,
   bigIntToCompactUint,
   cashAddressToLockingBytecode,
   compactUintPrefixToLength,
+  createVirtualMachineBCH,
+  decodeTransaction,
   hexToBin,
   type Input,
   type Output,
@@ -78,6 +81,114 @@ export type BuiltCauldronPoolWithdrawRequest = {
   pool: CauldronPool;
 };
 
+// Keep Cauldron fee estimates conservative. Wallet P2PKH signatures can
+// serialize larger than the 65-byte Schnorr placeholders used in tests.
+const P2PKH_INPUT_SIZE_BYTES = 32 + 4 + 1 + (1 + 73 + 1 + 33) + 4;
+
+function maxBigInt(left: bigint, right: bigint) {
+  return left > right ? left : right;
+}
+
+export function calculateSignedTransactionFeeSatoshis(
+  signedTransactionHex: string,
+  sourceOutputs: Array<Input & Output & ContractInfo>
+) {
+  const decoded = decodeTransaction(hexToBin(signedTransactionHex));
+  if (typeof decoded === 'string') {
+    throw new Error(`Unable to decode signed Cauldron transaction: ${decoded}`);
+  }
+
+  const totalInputValue = sourceOutputs.reduce(
+    (sum, output) => sum + output.valueSatoshis,
+    0n
+  );
+  const totalOutputValue = decoded.outputs.reduce(
+    (sum, output) => sum + output.valueSatoshis,
+    0n
+  );
+  const actualFee = totalInputValue - totalOutputValue;
+
+  if (actualFee < 0n) {
+    throw new Error('Signed Cauldron transaction output value exceeds its inputs.');
+  }
+
+  return {
+    actualFeeSatoshis: actualFee,
+    transactionSizeBytes: BigInt(hexToBin(signedTransactionHex).length),
+  };
+}
+
+export function assertSignedTransactionFeeSufficiency(args: {
+  signedTransactionHex: string;
+  sourceOutputs: Array<Input & Output & ContractInfo>;
+  estimatedFeeSatoshis: bigint;
+  feeRateSatsPerByte?: bigint;
+  transactionLabel?: string;
+}) {
+  const {
+    signedTransactionHex,
+    sourceOutputs,
+    estimatedFeeSatoshis,
+    feeRateSatsPerByte = 1n,
+    transactionLabel = 'Cauldron transaction',
+  } = args;
+  const { actualFeeSatoshis, transactionSizeBytes } =
+    calculateSignedTransactionFeeSatoshis(signedTransactionHex, sourceOutputs);
+  const minimumRelayFeeSatoshis = transactionSizeBytes * feeRateSatsPerByte;
+  const requiredFeeSatoshis = maxBigInt(
+    estimatedFeeSatoshis,
+    minimumRelayFeeSatoshis
+  );
+
+  if (actualFeeSatoshis < requiredFeeSatoshis) {
+    throw new Error(
+      `${transactionLabel} fee is too low after signing. Required at least ${requiredFeeSatoshis} sats for ${transactionSizeBytes} bytes, but the signed transaction pays ${actualFeeSatoshis} sats.`
+    );
+  }
+}
+
+export function assertSignedTransactionCovenantValidity(args: {
+  signedTransactionHex: string;
+  sourceOutputs: Array<Input & Output & ContractInfo>;
+  transactionLabel?: string;
+}) {
+  const {
+    signedTransactionHex,
+    sourceOutputs,
+    transactionLabel = 'Cauldron transaction',
+  } = args;
+  const decoded = decodeTransaction(hexToBin(signedTransactionHex));
+  if (typeof decoded === 'string') {
+    throw new Error(
+      `Unable to decode signed ${transactionLabel} for covenant verification: ${decoded}`
+    );
+  }
+
+  const vm = createVirtualMachineBCH();
+  const result = vm.verify({
+    sourceOutputs,
+    transaction: decoded,
+  });
+  if (typeof result === 'string') {
+    const inputIndexMatch = result.match(/evaluating input index:?\s*(\d+)/i);
+    const inputIndex = inputIndexMatch ? Number(inputIndexMatch[1]) : null;
+    const failingSourceOutput =
+      inputIndex !== null ? sourceOutputs[inputIndex] : undefined;
+    const poolOutpointContext =
+      inputIndex !== null &&
+      Number.isInteger(inputIndex) &&
+      failingSourceOutput?.contract?.artifact?.contractName === 'CauldronPoolV0'
+        ? ` Failing pool outpoint ${binToHex(
+            failingSourceOutput.outpointTransactionHash
+          )}:${failingSourceOutput.outpointIndex}.`
+        : '';
+    const normalizedResult = /[.!?]$/.test(result) ? result : `${result}.`;
+    throw new Error(
+      `${transactionLabel} does not satisfy the on-chain covenant rules: ${normalizedResult}${poolOutpointContext}`
+    );
+  }
+}
+
 function toWalletPathName(changeIndex: number): WalletPathName {
   if (changeIndex === 0) return 'receive';
   if (changeIndex === 1) return 'change';
@@ -151,8 +262,7 @@ function estimateCauldronTradeTxSize(
     return sum + inputSize + outputSize;
   }, 0);
 
-  const p2pkhInputSize = 32 + 4 + 1 + (1 + 65 + 1 + 33) + 4;
-  const walletInputBytes = walletInputs.length * p2pkhInputSize;
+  const walletInputBytes = walletInputs.length * P2PKH_INPUT_SIZE_BYTES;
   const outputsBytes = settlementOutputs.reduce(
     (sum, output) => sum + outputSizeBytes(output),
     0
@@ -652,7 +762,7 @@ export function buildCauldronPoolDepositRequest(params: {
   let estimatedFeeSatoshis =
     BigInt(
       estimateFixedTransactionSize({
-        inputSizes: walletInputs.map(() => 32 + 4 + 1 + (1 + 65 + 1 + 33) + 4),
+        inputSizes: walletInputs.map(() => P2PKH_INPUT_SIZE_BYTES),
         outputs: settlementOutputs,
       })
     ) * feeRateSatsPerByte;
@@ -662,7 +772,7 @@ export function buildCauldronPoolDepositRequest(params: {
     const nextFee =
       BigInt(
         estimateFixedTransactionSize({
-          inputSizes: walletInputs.map(() => 32 + 4 + 1 + (1 + 65 + 1 + 33) + 4),
+          inputSizes: walletInputs.map(() => P2PKH_INPUT_SIZE_BYTES),
           outputs: settlementOutputs,
         })
       ) * feeRateSatsPerByte;
@@ -729,7 +839,7 @@ export function buildCauldronPoolWithdrawRequest(params: {
     1 +
     buildCauldronPoolV0WithdrawUnlockingBytecodePlaceholder(pool.parameters).length +
     4;
-  const ownerP2pkhInputSize = 32 + 4 + 1 + (1 + 65 + 1 + 33) + 4;
+  const ownerP2pkhInputSize = P2PKH_INPUT_SIZE_BYTES;
 
   const ownerToken = ownerInput.utxo.token;
   if (ownerToken) {
@@ -871,6 +981,17 @@ export async function signAndBroadcastCauldronTradeRequest(
   }
 ) {
   const signedTransaction = await signCauldronTradeRequest(walletId, built);
+  assertSignedTransactionFeeSufficiency({
+    signedTransactionHex: signedTransaction,
+    sourceOutputs: built.sourceOutputs,
+    estimatedFeeSatoshis: built.estimatedFeeSatoshis,
+    transactionLabel: 'Cauldron swap',
+  });
+  assertSignedTransactionCovenantValidity({
+    signedTransactionHex: signedTransaction,
+    sourceOutputs: built.sourceOutputs,
+    transactionLabel: 'Cauldron swap',
+  });
   return TransactionService.sendTransaction(
     signedTransaction,
     built.walletInputs.map((input) => input.utxo),
@@ -896,6 +1017,12 @@ export async function signAndBroadcastCauldronPoolDepositRequest(
 ) {
   const adapter = await OptnWizardWalletAdapter.create(walletId);
   const result = await adapter.signTransaction(built.signRequest);
+  assertSignedTransactionFeeSufficiency({
+    signedTransactionHex: result.signedTransaction,
+    sourceOutputs: built.sourceOutputs,
+    estimatedFeeSatoshis: built.estimatedFeeSatoshis,
+    transactionLabel: 'Cauldron pool creation',
+  });
   return TransactionService.sendTransaction(
     result.signedTransaction,
     built.walletInputs.map((input) => input.utxo),
@@ -921,6 +1048,17 @@ export async function signAndBroadcastCauldronPoolWithdrawRequest(
 ) {
   const adapter = await OptnWizardWalletAdapter.create(walletId);
   const result = await adapter.signTransaction(built.signRequest);
+  assertSignedTransactionFeeSufficiency({
+    signedTransactionHex: result.signedTransaction,
+    sourceOutputs: built.sourceOutputs,
+    estimatedFeeSatoshis: built.estimatedFeeSatoshis,
+    transactionLabel: 'Cauldron pool withdrawal',
+  });
+  assertSignedTransactionCovenantValidity({
+    signedTransactionHex: result.signedTransaction,
+    sourceOutputs: built.sourceOutputs,
+    transactionLabel: 'Cauldron pool withdrawal',
+  });
   return TransactionService.sendTransaction(
     result.signedTransaction,
     [built.ownerInput.utxo],

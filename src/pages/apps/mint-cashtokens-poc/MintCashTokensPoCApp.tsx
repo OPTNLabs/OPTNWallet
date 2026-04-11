@@ -24,9 +24,14 @@ import {
 import {
   IpfsUploadResult,
   uploadToIpfsRelay,
+  waitForIpfsAvailability,
 } from '../../../services/IpfsService';
 import type { AddonSDK } from '../../../services/AddonsSDK';
 import { copyToClipboard } from '../../../utils/clipboard';
+import { sha256 } from '../../../utils/hash';
+import BcmrService, {
+  isBcmrRegistryNotFoundError,
+} from '../../../services/BcmrService';
 
 import TxSummary from '../../../components/confirm/TxSummary';
 import {
@@ -53,6 +58,7 @@ import {
   mergeWalletUtxos,
   utxoKey,
 } from './utils';
+import { useSmoothResetTransition } from '../shared/useSmoothResetTransition';
 
 type MintCashTokensPoCAppProps = {
   sdk: AddonSDK;
@@ -85,6 +91,24 @@ type ConfirmState = {
   body: React.ReactNode;
 };
 
+type BcmrUploadPhase = 'idle' | 'uploading' | 'verifying' | 'ready' | 'error';
+
+type BcmrUploadStatus = {
+  phase: BcmrUploadPhase;
+  message: string;
+};
+
+type BcmrFormFingerprint = {
+  authbase: string;
+  tokenCategory: string;
+  tokenName: string;
+  tokenDescription: string;
+  tokenSymbol: string;
+  tokenDecimals: number;
+  iconUri: string;
+  webUri: string;
+};
+
 type FlowAction =
   | { type: 'set_loading'; value: boolean }
   | { type: 'set_txid'; value: string }
@@ -106,6 +130,11 @@ const initialConfirmState: ConfirmState = {
   subtitle: '',
   warning: null,
   body: null,
+};
+
+const IDLE_BCMR_UPLOAD_STATUS: BcmrUploadStatus = {
+  phase: 'idle',
+  message: '',
 };
 
 const EMPTY_BCMR_ERRORS: Partial<Record<BcmrFieldKey, string>> = {};
@@ -142,6 +171,7 @@ const MintCashTokensPoCApp: React.FC<MintCashTokensPoCAppProps> = ({ sdk }) => {
   const [changeAddress, setChangeAddress] = useState<string>('');
   const [flowState, dispatchFlow] = useReducer(flowReducer, initialFlowState);
   const { errorMessage, loading, status, txid } = flowState;
+  const bcmrService = useMemo(() => new BcmrService(), []);
 
   const [selectedRecipientCashAddrs, setSelectedRecipientCashAddrs] = useState<
     Set<string>
@@ -180,11 +210,18 @@ const MintCashTokensPoCApp: React.FC<MintCashTokensPoCAppProps> = ({ sdk }) => {
   const [bcmrImageFile, setBcmrImageFile] = useState<File | null>(null);
   const [bcmrImageUpload, setBcmrImageUpload] =
     useState<IpfsUploadResult | null>(null);
+  const [bcmrImageUploadStatus, setBcmrImageUploadStatus] =
+    useState<BcmrUploadStatus>(IDLE_BCMR_UPLOAD_STATUS);
   const [bcmrRegistryUpload, setBcmrRegistryUpload] =
     useState<IpfsUploadResult | null>(null);
+  const [bcmrRegistryUploadStatus, setBcmrRegistryUploadStatus] =
+    useState<BcmrUploadStatus>(IDLE_BCMR_UPLOAD_STATUS);
+  const [bcmrConfirmedFingerprint, setBcmrConfirmedFingerprint] =
+    useState<string>('');
   const [bcmrFieldErrors, setBcmrFieldErrors] = useState<
     Partial<Record<BcmrFieldKey, string>>
   >({});
+  const { contentClassName, runSmoothReset } = useSmoothResetTransition();
 
   const setErrorMessage = useCallback((value: string) => {
     dispatchFlow({ type: 'set_error', value });
@@ -333,14 +370,71 @@ const MintCashTokensPoCApp: React.FC<MintCashTokensPoCAppProps> = ({ sdk }) => {
   const bcmrAuthbase = bcmrSelectedCategories.length === 1 ? bcmrSelectedCategories[0] : '';
   const bcmrTokenCategory = bcmrAuthbase;
 
+  const bcmrFormFingerprint = useMemo(() => {
+    const parsedDecimals = Number.parseInt(bcmrTokenDecimals, 10);
+    const fingerprint: BcmrFormFingerprint = {
+      authbase: bcmrAuthbase.trim().toLowerCase(),
+      tokenCategory: bcmrTokenCategory.trim().toLowerCase(),
+      tokenName: bcmrTokenName.trim(),
+      tokenDescription: bcmrTokenDescription.trim(),
+      tokenSymbol: bcmrTokenSymbol.trim(),
+      tokenDecimals:
+        Number.isFinite(parsedDecimals) && parsedDecimals >= 0
+          ? parsedDecimals
+          : -1,
+      iconUri: bcmrIconUri.trim(),
+      webUri: bcmrWebUri.trim(),
+    };
+    return JSON.stringify(fingerprint);
+  }, [
+    bcmrAuthbase,
+    bcmrTokenCategory,
+    bcmrTokenName,
+    bcmrTokenDescription,
+    bcmrTokenSymbol,
+    bcmrTokenDecimals,
+    bcmrIconUri,
+    bcmrWebUri,
+  ]);
+
+  const bcmrRegistryIsCurrent =
+    bcmrRegistryUploadStatus.phase === 'ready' &&
+    bcmrRegistryJson.length > 0 &&
+    bcmrConfirmedFingerprint.length > 0 &&
+    bcmrConfirmedFingerprint === bcmrFormFingerprint;
+
+  const bcmrReadyForMint =
+    !bcmrEnabled ||
+    (bcmrRegistryIsCurrent &&
+      bcmrRegistryUpload !== null &&
+      bcmrUrisText.trim().length > 0);
+
+  const bcmrMintReadinessMessage = !bcmrEnabled
+    ? ''
+    : bcmrImageUploadStatus.phase === 'uploading' ||
+        bcmrRegistryUploadStatus.phase === 'uploading'
+      ? 'Uploading BCMR assets to IPFS...'
+      : bcmrImageUploadStatus.phase === 'verifying' ||
+          bcmrRegistryUploadStatus.phase === 'verifying'
+        ? 'Verifying BCMR assets on IPFS...'
+        : bcmrRegistryUploadStatus.phase === 'error'
+          ? bcmrRegistryUploadStatus.message || 'BCMR registry upload failed.'
+          : bcmrImageUploadStatus.phase === 'error'
+            ? bcmrImageUploadStatus.message || 'BCMR image upload failed.'
+            : bcmrRegistryUploadStatus.phase !== 'ready'
+              ? 'Confirm BCMR metadata before minting.'
+              : !bcmrRegistryIsCurrent
+                ? 'BCMR fields changed. Confirm BCMR again before minting.'
+                : 'BCMR metadata is ready for minting.';
+
   const bcmrPublication = useMemo<MintBcmrPublication | undefined>(() => {
-    if (!bcmrEnabled) return undefined;
+    if (!bcmrEnabled || !bcmrReadyForMint) return undefined;
     return {
       enabled: true,
       registryJson: bcmrRegistryJson,
       uris: parseUrisInput(bcmrUrisText),
     };
-  }, [bcmrEnabled, bcmrRegistryJson, bcmrUrisText]);
+  }, [bcmrEnabled, bcmrReadyForMint, bcmrRegistryJson, bcmrUrisText]);
 
   const bcmrPreview = useMemo(() => {
     if (!bcmrPublication?.enabled) return null;
@@ -558,6 +652,32 @@ const MintCashTokensPoCApp: React.FC<MintCashTokensPoCAppProps> = ({ sdk }) => {
     dispatchFlow({ type: 'reset_messages' });
   }, []);
 
+  const resetMintComposer = useCallback(() => {
+    setSelectedKeys(new Set());
+    setOutputDrafts([]);
+    setExpandedDraftId(null);
+    setBootstrapTxids([]);
+    setMountedSteps(new Set([1]));
+    setStep(1);
+    setSelectedRecipientCashAddrs(
+      addresses[0]?.address ? new Set([addresses[0].address]) : new Set()
+    );
+    draftSeq.current = 0;
+    setBcmrEnabled(false);
+    setBcmrRegistryJson('');
+    setBcmrUrisText('');
+    setBcmrTokenName('');
+    setBcmrTokenDescription('');
+    setBcmrTokenSymbol('');
+    setBcmrTokenDecimals('0');
+    setBcmrIconUri('');
+    setBcmrWebUri('');
+    setBcmrImageFile(null);
+    setBcmrImageUpload(null);
+    setBcmrRegistryUpload(null);
+    clearBcmrFieldErrors();
+  }, [addresses, clearBcmrFieldErrors]);
+
   const startBootstrapFlow = useCallback(async () => {
     resetFlowMessages();
 
@@ -620,25 +740,21 @@ const MintCashTokensPoCApp: React.FC<MintCashTokensPoCAppProps> = ({ sdk }) => {
                 sent?.errorMessage || 'Broadcast returned no txid.'
               );
 
-            setBootstrapTxids((prev) => [...prev, sentTxid]);
-            setTxid(sentTxid);
-
-            // Auto-select + config for quick continuation.
-            const k = `${sentTxid}:0`;
-            setSelectedKeys((prev) => new Set(prev).add(k));
-
             const submitted = sent.broadcastState === 'submitted';
+            closeConfirm();
+            await runSmoothReset(async () => {
+              await refreshWalletSnapshot(true);
+              resetMintComposer();
+            });
+            setTxid(sentTxid);
             setStatus(
               submitted
                 ? 'Category UTXO submitted. Keep the txid and avoid sending it again.'
-                : 'Category UTXO created. Ready to mint.'
+                : 'Category UTXO created. Returned to the start screen.'
             );
             showToast(
               submitted ? 'Category UTXO submitted' : 'Category UTXO created'
             );
-            setStep(2);
-            closeConfirm();
-            await refreshWalletSnapshot(true);
           } finally {
             setConfirmLoading(false);
           }
@@ -691,6 +807,23 @@ const MintCashTokensPoCApp: React.FC<MintCashTokensPoCAppProps> = ({ sdk }) => {
       setErrorMessage(validationError);
       return;
     }
+    if (bcmrEnabled) {
+      if (
+        bcmrImageUploadStatus.phase === 'uploading' ||
+        bcmrImageUploadStatus.phase === 'verifying' ||
+        bcmrRegistryUploadStatus.phase === 'uploading' ||
+        bcmrRegistryUploadStatus.phase === 'verifying'
+      ) {
+        setErrorMessage('Wait for the BCMR IPFS upload to finish before minting.');
+        return;
+      }
+      if (!bcmrReadyForMint) {
+        setErrorMessage(
+          'Confirm BCMR metadata and wait for IPFS verification before minting.'
+        );
+        return;
+      }
+    }
 
     setLoading(true);
     setStatus('Preparing transaction for review...');
@@ -729,16 +862,19 @@ const MintCashTokensPoCApp: React.FC<MintCashTokensPoCAppProps> = ({ sdk }) => {
             const sentTxid = sent?.txid ?? '';
             if (!sentTxid)
               throw new Error(sent?.errorMessage || 'Broadcast failed.');
-            setTxid(sentTxid);
             const submitted = sent.broadcastState === 'submitted';
+            closeConfirm();
+            await runSmoothReset(async () => {
+              await refreshWalletSnapshot(true);
+              resetMintComposer();
+            });
+            setTxid(sentTxid);
             setStatus(
               submitted
                 ? 'Mint transaction submitted. Keep the txid and avoid sending it again.'
-                : 'Mint successful.'
+                : 'Mint successful. Returned to the start screen.'
             );
-            closeConfirm();
             showToast(submitted ? 'Transaction submitted' : 'Broadcasted');
-            await refreshWalletSnapshot(true);
           } finally {
             setConfirmLoading(false);
           }
@@ -762,6 +898,10 @@ const MintCashTokensPoCApp: React.FC<MintCashTokensPoCAppProps> = ({ sdk }) => {
     activeOutputDrafts,
     selectedRecipientSet,
     selectedSourceKeySet,
+    bcmrEnabled,
+    bcmrImageUploadStatus.phase,
+    bcmrRegistryUploadStatus.phase,
+    bcmrReadyForMint,
     setErrorMessage,
     setLoading,
     setStatus,
@@ -818,16 +958,48 @@ const MintCashTokensPoCApp: React.FC<MintCashTokensPoCAppProps> = ({ sdk }) => {
       setBcmrFieldError('image', 'Select an image file first.');
       return;
     }
+    setBcmrImageUploadStatus({
+      phase: 'uploading',
+      message: 'Uploading image to IPFS...',
+    });
     setLoading(true);
     try {
       const result = await uploadToIpfsRelay(bcmrImageFile, {
         filename: bcmrImageFile.name,
       });
-      setBcmrImageUpload(result);
       const ipfsUri = `ipfs://${result.cid}`;
+      setBcmrImageUploadStatus({
+        phase: 'verifying',
+        message: 'Waiting for the image to be reachable from IPFS...',
+      });
+      await waitForIpfsAvailability(ipfsUri, {
+        timeoutMs: 45_000,
+        pollIntervalMs: 1_500,
+        validateResponse: async (response) => {
+          const contentType = response.headers.get('content-type') ?? '';
+          if (
+            contentType &&
+            !contentType.toLowerCase().startsWith('image/') &&
+            !contentType.toLowerCase().startsWith('application/octet-stream')
+          ) {
+            throw new Error(`Unexpected image content type: ${contentType}`);
+          }
+          await response.arrayBuffer();
+        },
+      });
+      setBcmrImageUpload(result);
       setBcmrIconUri(ipfsUri);
+      setBcmrConfirmedFingerprint('');
+      setBcmrImageUploadStatus({
+        phase: 'ready',
+        message: 'Image uploaded and verified on IPFS.',
+      });
       setStatus('Image uploaded to IPFS.');
     } catch (e: unknown) {
+      setBcmrImageUploadStatus({
+        phase: 'error',
+        message: getErrorMessage(e, 'Failed to upload image to IPFS.'),
+      });
       setBcmrFieldError(
         'image',
         getErrorMessage(e, 'Failed to upload image to IPFS.')
@@ -878,10 +1050,28 @@ const MintCashTokensPoCApp: React.FC<MintCashTokensPoCAppProps> = ({ sdk }) => {
     }
 
     clearBcmrFieldErrors();
+    setBcmrRegistryUpload(null);
+    setBcmrRegistryUploadStatus({
+      phase: 'uploading',
+      message: 'Uploading BCMR registry to IPFS...',
+    });
 
     setLoading(true);
     try {
       const json = generateBcmrRegistryJson({
+        baseRegistry: await (async () => {
+          try {
+            const existing = await bcmrService.resolveIdentityRegistry(
+              bcmrAuthbase
+            );
+            return existing.registry;
+          } catch (error) {
+            if (isBcmrRegistryNotFoundError(error)) {
+              return undefined;
+            }
+            throw error;
+          }
+        })(),
         authbase: bcmrAuthbase,
         tokenCategory: bcmrTokenCategory,
         tokenName: bcmrTokenName,
@@ -897,12 +1087,38 @@ const MintCashTokensPoCApp: React.FC<MintCashTokensPoCAppProps> = ({ sdk }) => {
       const result = await uploadToIpfsRelay(blob, {
         filename: 'bitcoin-cash-metadata-registry.json',
       });
-      setBcmrRegistryUpload(result);
       const ipfsUri = `ipfs://${result.cid}`;
+      setBcmrRegistryUploadStatus({
+        phase: 'verifying',
+        message: 'Waiting for the BCMR registry to be reachable from IPFS...',
+      });
+      const expectedHash = sha256.text(json);
+      await waitForIpfsAvailability(ipfsUri, {
+        timeoutMs: 45_000,
+        pollIntervalMs: 1_500,
+        validateResponse: async (response) => {
+          const body = await response.text();
+          if (sha256.text(body) !== expectedHash) {
+            throw new Error(
+              'Uploaded BCMR registry is reachable but does not match the expected content.'
+            );
+          }
+        },
+      });
+      setBcmrRegistryUpload(result);
       setBcmrUrisText(ipfsUri);
+      setBcmrConfirmedFingerprint(bcmrFormFingerprint);
+      setBcmrRegistryUploadStatus({
+        phase: 'ready',
+        message: 'BCMR registry uploaded and verified on IPFS.',
+      });
       setStatus('BCMR registry confirmed and uploaded to IPFS.');
     } catch (e: unknown) {
       const message = getErrorMessage(e, 'Failed to confirm BCMR metadata.');
+      setBcmrRegistryUploadStatus({
+        phase: 'error',
+        message,
+      });
       const field = mapBcmrErrorToField(message);
       setBcmrFieldError(field, message);
     } finally {
@@ -920,6 +1136,8 @@ const MintCashTokensPoCApp: React.FC<MintCashTokensPoCAppProps> = ({ sdk }) => {
     bcmrSelectedCategories.length,
     setLoading,
     bcmrTokenDescription,
+    bcmrFormFingerprint,
+    bcmrService,
     mapBcmrErrorToField,
     setStatus,
   ]);
@@ -955,7 +1173,7 @@ const MintCashTokensPoCApp: React.FC<MintCashTokensPoCAppProps> = ({ sdk }) => {
         ) : null}
       </div>
 
-      <div className="flex-1 min-h-0 overflow-y-auto overscroll-contain pt-4 pr-1">
+      <div className={`flex-1 min-h-0 overflow-y-auto overscroll-contain pt-4 pr-1 ${contentClassName}`}>
         <div className="space-y-6">
 
           {/* Stepper */}
@@ -1179,11 +1397,15 @@ const MintCashTokensPoCApp: React.FC<MintCashTokensPoCAppProps> = ({ sdk }) => {
                           </label>
                           <input
                             type="file"
-                            accept="image/*"
+                            accept=".png,.jpg,.jpeg,.gif,.webp,.svg,.avif,.bmp,.ico,image/png,image/jpeg,image/gif,image/webp,image/svg+xml,image/avif,image/bmp,image/x-icon"
                             className="wallet-input w-full"
-                            onChange={(e) =>
-                              setBcmrImageFile(e.target.files?.[0] ?? null)
-                            }
+                            onChange={(e) => {
+                              setBcmrImageFile(e.target.files?.[0] ?? null);
+                              setBcmrImageUpload(null);
+                              setBcmrImageUploadStatus(
+                                IDLE_BCMR_UPLOAD_STATUS
+                              );
+                            }}
                           />
                           <div className="flex gap-2">
                             <button
@@ -1192,9 +1414,26 @@ const MintCashTokensPoCApp: React.FC<MintCashTokensPoCAppProps> = ({ sdk }) => {
                               disabled={!bcmrImageFile || loading}
                               className="wallet-btn-secondary px-3 py-2 text-sm"
                             >
-                              Save image
+                              {bcmrImageUploadStatus.phase === 'uploading'
+                                ? 'Uploading image...'
+                                : bcmrImageUploadStatus.phase === 'verifying'
+                                  ? 'Verifying image...'
+                                  : 'Save image'}
                             </button>
                           </div>
+                          {bcmrImageUploadStatus.message ? (
+                            <p
+                              className={`text-xs ${
+                                bcmrImageUploadStatus.phase === 'error'
+                                  ? 'wallet-danger-text'
+                                  : bcmrImageUploadStatus.phase === 'ready'
+                                    ? 'wallet-accent-text'
+                                    : 'wallet-muted'
+                              }`}
+                            >
+                              {bcmrImageUploadStatus.message}
+                            </p>
+                          ) : null}
                           {bcmrImageUpload ? (
                             <div className="text-xs break-all">
                               Image CID: {bcmrImageUpload.cid}
@@ -1210,15 +1449,45 @@ const MintCashTokensPoCApp: React.FC<MintCashTokensPoCAppProps> = ({ sdk }) => {
                           <button
                             type="button"
                             onClick={handleConfirmBcmr}
-                            disabled={loading}
+                            disabled={
+                              loading ||
+                              bcmrImageUploadStatus.phase === 'uploading' ||
+                              bcmrImageUploadStatus.phase === 'verifying'
+                            }
                             className="wallet-btn-primary px-3 py-2 text-sm"
                           >
-                            {loading ? 'Confirming…' : 'Confirm BCMR'}
+                            {bcmrRegistryUploadStatus.phase === 'uploading'
+                              ? 'Uploading BCMR...'
+                              : bcmrRegistryUploadStatus.phase === 'verifying'
+                                ? 'Verifying BCMR...'
+                                : loading
+                                  ? 'Confirming...'
+                                  : 'Confirm BCMR'}
                           </button>
+                          {bcmrRegistryUploadStatus.message ? (
+                            <p
+                              className={`text-xs ${
+                                bcmrRegistryUploadStatus.phase === 'error'
+                                  ? 'wallet-danger-text'
+                                  : bcmrRegistryUploadStatus.phase === 'ready'
+                                    ? 'wallet-accent-text'
+                                    : 'wallet-muted'
+                              }`}
+                            >
+                              {bcmrRegistryUploadStatus.message}
+                            </p>
+                          ) : null}
                           {bcmrRegistryUpload ? (
                             <div className="text-xs break-all">
                               Registry URI: ipfs://{bcmrRegistryUpload.cid}
                             </div>
+                          ) : null}
+                          {bcmrRegistryUpload &&
+                          !bcmrRegistryIsCurrent ? (
+                            <p className="text-xs wallet-danger-text">
+                              BCMR fields changed after the last confirmation.
+                              Confirm BCMR again before minting.
+                            </p>
                           ) : null}
                           {bcmrFieldErrors.registry ? (
                             <p className="text-xs wallet-danger-text">
@@ -1247,7 +1516,8 @@ const MintCashTokensPoCApp: React.FC<MintCashTokensPoCAppProps> = ({ sdk }) => {
                           </div>
                         ) : (
                           <div className="text-xs wallet-danger-text">
-                            Confirm BCMR to enable BCMR OP_RETURN.
+                            Confirm BCMR and wait for IPFS verification to
+                            enable the BCMR OP_RETURN.
                           </div>
                         )}
                       </>
@@ -1323,6 +1593,21 @@ const MintCashTokensPoCApp: React.FC<MintCashTokensPoCAppProps> = ({ sdk }) => {
             </div>
           </div>
 
+          {step === 3 && bcmrEnabled ? (
+            <div
+              className={`mb-3 rounded-xl px-3 py-2 text-xs ${
+                bcmrReadyForMint
+                  ? 'wallet-surface-strong wallet-accent-text'
+                  : bcmrRegistryUploadStatus.phase === 'error' ||
+                      bcmrImageUploadStatus.phase === 'error'
+                    ? 'bg-red-50 dark:bg-red-950/40 text-red-800 dark:text-red-300'
+                    : 'wallet-surface-strong wallet-muted'
+              }`}
+            >
+              {bcmrMintReadinessMessage}
+            </div>
+          ) : null}
+
           <div className="grid grid-cols-2 gap-3">
             <button
               type="button"
@@ -1354,11 +1639,14 @@ const MintCashTokensPoCApp: React.FC<MintCashTokensPoCAppProps> = ({ sdk }) => {
                   loading ||
                   selectedCount === 0 ||
                   selectedRecipientCount === 0 ||
-                  activeOutputDrafts.length === 0
+                  activeOutputDrafts.length === 0 ||
+                  (bcmrEnabled && !bcmrReadyForMint)
                 }
                 className="wallet-btn-primary px-4 py-3 font-semibold disabled:opacity-50"
               >
-                {loading
+                {bcmrEnabled && !bcmrReadyForMint
+                  ? 'BCMR pending'
+                  : loading
                   ? 'Preparing…'
                   : `Review & mint (${activeOutputDrafts.length})`}
               </button>
