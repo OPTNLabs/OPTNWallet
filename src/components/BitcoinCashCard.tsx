@@ -7,6 +7,8 @@ import { SATSINBITCOIN } from '../utils/constants';
 
 interface Props {
   totalAmount: number; // in satoshis
+  quantumrootAmount?: number;
+  quantumrootVaultCount?: number;
 }
 
 enum DisplayMode {
@@ -14,7 +16,11 @@ enum DisplayMode {
   USD = 'USD',
 }
 
-const BitcoinCashCard: React.FC<Props> = ({ totalAmount }) => {
+const BitcoinCashCard: React.FC<Props> = ({
+  totalAmount,
+  quantumrootAmount = 0,
+  quantumrootVaultCount = 0,
+}) => {
   // New state shape: key is 'BCH-USD' → { price, ts, source }
   const bchQuote = useSelector(
     (state: RootState) => state.priceFeed['BCH-USD']
@@ -24,6 +30,7 @@ const BitcoinCashCard: React.FC<Props> = ({ totalAmount }) => {
 
   // conversions
   const totalBch = totalAmount / SATSINBITCOIN;
+  const quantumrootBch = quantumrootAmount / SATSINBITCOIN;
 
   // use numeric price, fall back to 0 if undefined
   const safeRate = bchQuote?.price ?? 0;
@@ -69,15 +76,12 @@ const BitcoinCashCard: React.FC<Props> = ({ totalAmount }) => {
         </div>
       </div>
 
-      {/* tiny status footer */}
-      {/* <div className="mt-2 text-xs wallet-muted">
-        {bchQuote
-          ? `Source: ${bchQuote.source} • Updated ${Math.max(
-              0,
-              Math.floor((Date.now() - bchQuote.ts) / 1000)
-            )}s ago`
-          : 'Fetching BCH price…'}
-      </div> */}
+      {quantumrootAmount > 0 && (
+        <div className="mt-3 text-xs wallet-muted">
+          Includes {quantumrootBch.toFixed(8)} BCH across {quantumrootVaultCount}{' '}
+          Quantumroot vault{quantumrootVaultCount === 1 ? '' : 's'}.
+        </div>
+      )}
     </div>
   );
 };

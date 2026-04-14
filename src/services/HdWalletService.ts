@@ -1,5 +1,6 @@
 import {
   encodeCashAddress,
+  encodeHdPrivateKey,
   decodeHdPublicKey,
   deriveHdPath,
   deriveHdPrivateNodeFromSeed,
@@ -276,6 +277,37 @@ export async function deriveHdPublicKeyAtPath(
 
     zeroize(derived.privateKey);
     return xpub.hdPublicKey;
+  } finally {
+    zeroize(seed);
+    zeroize(rootNode.privateKey);
+  }
+}
+
+export async function deriveHdPrivateKeyAtPath(
+  mnemonic: string,
+  passphrase: string,
+  network: Network,
+  path: string
+): Promise<string> {
+  const seed = Uint8Array.from(await bip39.mnemonicToSeed(mnemonic, passphrase));
+  const rootNode = deriveHdPrivateNodeFromSeed(seed, { assumeValidity: true });
+
+  try {
+    const derived = deriveHdPath(rootNode, path);
+    if (typeof derived === 'string') {
+      throw new Error(`Failed to derive HD private key at ${path}: ${derived}`);
+    }
+
+    const xprv = encodeHdPrivateKey({
+      network: getHdKeyNetwork(network),
+      node: derived,
+    });
+    if (typeof xprv === 'string') {
+      throw new Error(`Failed to encode HD private key for ${path}: ${xprv}`);
+    }
+
+    zeroize(derived.privateKey);
+    return xprv.hdPrivateKey;
   } finally {
     zeroize(seed);
     zeroize(rootNode.privateKey);

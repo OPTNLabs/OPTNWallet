@@ -46,6 +46,28 @@ const migrations: Array<(db: Database) => Promise<void>> = [
       );
     }
   },
+  async (db) => {
+    db.run(`
+      CREATE TABLE IF NOT EXISTS quantumroot_vaults (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        wallet_id INT NOT NULL,
+        account_index INT NOT NULL,
+        address_index INT NOT NULL,
+        receive_address VARCHAR(255) NOT NULL UNIQUE,
+        quantum_lock_address VARCHAR(255) NOT NULL UNIQUE,
+        receive_locking_bytecode TEXT NOT NULL,
+        quantum_lock_locking_bytecode TEXT NOT NULL,
+        quantum_public_key TEXT NOT NULL,
+        quantum_key_identifier TEXT NOT NULL,
+        vault_token_category TEXT NOT NULL,
+        online_quantum_signer INT NOT NULL DEFAULT 0,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        FOREIGN KEY(wallet_id) REFERENCES wallets(id),
+        UNIQUE(wallet_id, account_index, address_index)
+      );
+    `);
+  },
   // Add future migrations here as needed
 ];
 
