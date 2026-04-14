@@ -7,6 +7,7 @@ import { INTERVAL } from '../utils/constants';
 import { requestUTXORefreshFor } from './UTXOWorkerService';
 import ElectrumService from '../services/ElectrumService';
 import { planTransactionDetailRefresh } from '../services/transactionDetailSync';
+import QuantumrootTrackingService from '../services/QuantumrootTrackingService';
 
 let transactionInterval: NodeJS.Timeout | null = null;
 let transactionStartRetry: NodeJS.Timeout | null = null;
@@ -31,7 +32,10 @@ async function fetchAndStoreTransactionHistory() {
       return;
     }
 
-    const addresses = keyPairs.map((keyPair) => keyPair.address).filter(Boolean);
+    const addresses = [
+      ...keyPairs.map((keyPair) => keyPair.address).filter(Boolean),
+      ...(await QuantumrootTrackingService.listTrackedAddresses(currentWalletId)),
+    ];
     const historyByAddress =
       await transactionManager.fetchAndStoreTransactionHistories(
         currentWalletId,

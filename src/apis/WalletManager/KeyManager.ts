@@ -1,6 +1,6 @@
 import DatabaseService from '../DatabaseManager/DatabaseService';
 import AddressManager from '../AddressManager/AddressManager';
-import { Address } from '../../types/types';
+import { Address, QuantumrootVaultRecord } from '../../types/types';
 import { Network } from '../../redux/networkSlice';
 import { PREFIX } from '../../utils/constants';
 import { isArrayBufferLike, isString } from '../../utils/typeGuards';
@@ -10,6 +10,10 @@ import {
   type DerivedBchPublicAddress,
   type BchStandardBranchName,
 } from '../../services/HdWalletService';
+import {
+  deriveQuantumrootVault,
+  toQuantumrootVaultRecord,
+} from '../../services/QuantumrootService';
 import SecretCryptoService, {
   isEncryptedPayload,
 } from '../../services/SecretCryptoService';
@@ -33,7 +37,25 @@ export default function KeyManager() {
     retrieveKeys,
     createKeys,
     fetchAddressPrivateKey,
+    deriveQuantumrootVaultForWallet,
+    createQuantumrootVault,
+    configureQuantumrootVault,
+    retrieveQuantumrootVaults,
   };
+
+  function hasQuantumrootVaultDrift(
+    existing: QuantumrootVaultRecord,
+    next: QuantumrootVaultRecord
+  ) {
+    return (
+      existing.receive_address !== next.receive_address ||
+      existing.quantum_lock_address !== next.quantum_lock_address ||
+      existing.receive_locking_bytecode !== next.receive_locking_bytecode ||
+      existing.quantum_lock_locking_bytecode !== next.quantum_lock_locking_bytecode ||
+      existing.quantum_public_key !== next.quantum_public_key ||
+      existing.quantum_key_identifier !== next.quantum_key_identifier
+    );
+  }
 
   async function getWalletSeedMaterial(wallet_id: number) {
     await dbService.ensureDatabaseStarted();
@@ -103,6 +125,350 @@ export default function KeyManager() {
     }
 
     return derived;
+  }
+
+  async function deriveQuantumrootVaultForWallet(
+    wallet_id: number,
+    addressIndex: number,
+    accountNumber = 0,
+    onlineQuantumSigner: '0' | '1' = '0',
+    vaultTokenCategory = '00'.repeat(32)
+  ) {
+    const { mnemonic, passphrase, networkType } = await getWalletSeedMaterial(wallet_id);
+    return deriveQuantumrootVault(
+      networkType,
+      mnemonic,
+      passphrase,
+      accountNumber,
+      addressIndex,
+      onlineQuantumSigner,
+      vaultTokenCategory
+    );
+  }
+
+  async function createQuantumrootVault(
+    wallet_id: number,
+    addressIndex: number,
+    accountNumber = 0,
+    onlineQuantumSigner: 0 | 1 = 0,
+    vaultTokenCategory = '00'.repeat(32)
+  ): Promise<QuantumrootVaultRecord> {
+    await dbService.ensureDatabaseStarted();
+    const db = dbService.getDatabase();
+    if (db == null) {
+      throw new Error('Database is null');
+    }
+
+    const existingQuery = db.prepare(`
+      SELECT
+        id,
+        wallet_id,
+        account_index,
+        address_index,
+        receive_address,
+        quantum_lock_address,
+        receive_locking_bytecode,
+        quantum_lock_locking_bytecode,
+        quantum_public_key,
+        quantum_key_identifier,
+        vault_token_category,
+        online_quantum_signer,
+        created_at,
+        updated_at
+      FROM quantumroot_vaults
+      WHERE wallet_id = ? AND account_index = ? AND address_index = ?;
+    `);
+    const existing = existingQuery.getAsObject([
+      wallet_id,
+      accountNumber,
+      addressIndex,
+    ]) as Record<string, unknown>;
+    existingQuery.free();
+
+    if (existing && Object.keys(existing).length > 0 && existing.receive_address != null) {
+      const existingRecord = mapQuantumrootVaultRow(existing);
+      const derivedVault = await deriveQuantumrootVaultForWallet(
+        wallet_id,
+        addressIndex,
+        accountNumber,
+        existingRecord.online_quantum_signer === 1 ? '1' : '0',
+        existingRecord.vault_token_category
+      );
+      const nextRecord = toQuantumrootVaultRecord(
+        wallet_id,
+        accountNumber,
+        derivedVault,
+        existingRecord.online_quantum_signer,
+        existingRecord.vault_token_category
+      );
+
+      if (!hasQuantumrootVaultDrift(existingRecord, nextRecord)) {
+        return existingRecord;
+      }
+
+      return configureQuantumrootVault(
+        wallet_id,
+        addressIndex,
+        accountNumber,
+        existingRecord.online_quantum_signer,
+        existingRecord.vault_token_category
+      );
+    }
+
+    const vault = await deriveQuantumrootVaultForWallet(
+      wallet_id,
+      addressIndex,
+      accountNumber,
+      onlineQuantumSigner === 1 ? '1' : '0',
+      vaultTokenCategory
+    );
+    const record = toQuantumrootVaultRecord(
+      wallet_id,
+      accountNumber,
+      vault,
+      onlineQuantumSigner,
+      vaultTokenCategory
+    );
+
+    const insertQuery = db.prepare(`
+      INSERT INTO quantumroot_vaults (
+        wallet_id,
+        account_index,
+        address_index,
+        receive_address,
+        quantum_lock_address,
+        receive_locking_bytecode,
+        quantum_lock_locking_bytecode,
+        quantum_public_key,
+        quantum_key_identifier,
+        vault_token_category,
+        online_quantum_signer,
+        created_at,
+        updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+    `);
+    insertQuery.run([
+      record.wallet_id,
+      record.account_index,
+      record.address_index,
+      record.receive_address,
+      record.quantum_lock_address,
+      record.receive_locking_bytecode,
+      record.quantum_lock_locking_bytecode,
+      record.quantum_public_key,
+      record.quantum_key_identifier,
+      record.vault_token_category,
+      record.online_quantum_signer,
+      record.created_at,
+      record.updated_at,
+    ]);
+    insertQuery.free();
+
+    await dbService.flushDatabaseToFile();
+    return record;
+  }
+
+  async function configureQuantumrootVault(
+    wallet_id: number,
+    addressIndex: number,
+    accountNumber = 0,
+    onlineQuantumSigner: 0 | 1 = 0,
+    vaultTokenCategory = '00'.repeat(32)
+  ): Promise<QuantumrootVaultRecord> {
+    await dbService.ensureDatabaseStarted();
+    const db = dbService.getDatabase();
+    if (db == null) {
+      throw new Error('Database is null');
+    }
+
+    const existingQuery = db.prepare(`
+      SELECT
+        id,
+        wallet_id,
+        account_index,
+        address_index,
+        receive_address,
+        quantum_lock_address,
+        receive_locking_bytecode,
+        quantum_lock_locking_bytecode,
+        quantum_public_key,
+        quantum_key_identifier,
+        vault_token_category,
+        online_quantum_signer,
+        created_at,
+        updated_at
+      FROM quantumroot_vaults
+      WHERE wallet_id = ? AND account_index = ? AND address_index = ?;
+    `);
+    const existing = existingQuery.getAsObject([
+      wallet_id,
+      accountNumber,
+      addressIndex,
+    ]) as Record<string, unknown>;
+    existingQuery.free();
+
+    const normalizedSigner = onlineQuantumSigner === 1 ? 1 : 0;
+    const vault = await deriveQuantumrootVaultForWallet(
+      wallet_id,
+      addressIndex,
+      accountNumber,
+      normalizedSigner === 1 ? '1' : '0',
+      vaultTokenCategory
+    );
+    const record = toQuantumrootVaultRecord(
+      wallet_id,
+      accountNumber,
+      vault,
+      normalizedSigner,
+      vaultTokenCategory
+    );
+
+    if (existing && Object.keys(existing).length > 0 && existing.id != null) {
+      record.id = typeof existing.id === 'number' ? existing.id : Number(existing.id);
+      record.created_at =
+        typeof existing.created_at === 'string' && existing.created_at.length > 0
+          ? existing.created_at
+          : record.created_at;
+      record.updated_at = new Date().toISOString();
+
+      const updateQuery = db.prepare(`
+        UPDATE quantumroot_vaults
+        SET
+          receive_address = ?,
+          quantum_lock_address = ?,
+          receive_locking_bytecode = ?,
+          quantum_lock_locking_bytecode = ?,
+          quantum_public_key = ?,
+          quantum_key_identifier = ?,
+          vault_token_category = ?,
+          online_quantum_signer = ?,
+          updated_at = ?
+        WHERE id = ?;
+      `);
+      updateQuery.run([
+        record.receive_address,
+        record.quantum_lock_address,
+        record.receive_locking_bytecode,
+        record.quantum_lock_locking_bytecode,
+        record.quantum_public_key,
+        record.quantum_key_identifier,
+        record.vault_token_category,
+        record.online_quantum_signer,
+        record.updated_at,
+        record.id,
+      ]);
+      updateQuery.free();
+    } else {
+      const insertQuery = db.prepare(`
+        INSERT INTO quantumroot_vaults (
+          wallet_id,
+          account_index,
+          address_index,
+          receive_address,
+          quantum_lock_address,
+          receive_locking_bytecode,
+          quantum_lock_locking_bytecode,
+          quantum_public_key,
+          quantum_key_identifier,
+          vault_token_category,
+          online_quantum_signer,
+          created_at,
+          updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+      `);
+      insertQuery.run([
+        record.wallet_id,
+        record.account_index,
+        record.address_index,
+        record.receive_address,
+        record.quantum_lock_address,
+        record.receive_locking_bytecode,
+        record.quantum_lock_locking_bytecode,
+        record.quantum_public_key,
+        record.quantum_key_identifier,
+        record.vault_token_category,
+        record.online_quantum_signer,
+        record.created_at,
+        record.updated_at,
+      ]);
+      insertQuery.free();
+    }
+
+    await dbService.flushDatabaseToFile();
+    return record;
+  }
+
+  async function retrieveQuantumrootVaults(wallet_id: number): Promise<QuantumrootVaultRecord[]> {
+    await dbService.ensureDatabaseStarted();
+    const db = dbService.getDatabase();
+    if (db == null) {
+      throw new Error('Database is null');
+    }
+
+    const query = db.prepare(`
+      SELECT
+        id,
+        wallet_id,
+        account_index,
+        address_index,
+        receive_address,
+        quantum_lock_address,
+        receive_locking_bytecode,
+        quantum_lock_locking_bytecode,
+        quantum_public_key,
+        quantum_key_identifier,
+        vault_token_category,
+        online_quantum_signer,
+        created_at,
+        updated_at
+      FROM quantumroot_vaults
+      WHERE wallet_id = ?
+      ORDER BY account_index ASC, address_index ASC;
+    `);
+    query.bind([wallet_id]);
+
+    const records: QuantumrootVaultRecord[] = [];
+    while (query.step()) {
+      records.push(mapQuantumrootVaultRow(query.getAsObject() as Record<string, unknown>));
+    }
+    query.free();
+
+    const refreshedRecords = await Promise.all(
+      records.map(async (record) => {
+        try {
+        const derivedVault = await deriveQuantumrootVaultForWallet(
+          wallet_id,
+          record.address_index,
+          record.account_index,
+          record.online_quantum_signer === 1 ? '1' : '0',
+          record.vault_token_category
+        );
+        const nextRecord = toQuantumrootVaultRecord(
+          wallet_id,
+          record.account_index,
+          derivedVault,
+          record.online_quantum_signer,
+          record.vault_token_category
+        );
+
+        if (!hasQuantumrootVaultDrift(record, nextRecord)) {
+          return record;
+        }
+
+        return configureQuantumrootVault(
+          wallet_id,
+          record.address_index,
+          record.account_index,
+          record.online_quantum_signer,
+          record.vault_token_category
+        );
+        } catch (_error) {
+          return record;
+        }
+      })
+    );
+
+    return refreshedRecords;
   }
 
   // Function to retrieve keys from the database
@@ -329,5 +695,36 @@ export default function KeyManager() {
     }
 
     throw new Error(`Unsupported private key format for address: ${address}`);
+  }
+
+  function mapQuantumrootVaultRow(row: Record<string, unknown>): QuantumrootVaultRecord {
+    return {
+      id: typeof row.id === 'number' ? row.id : Number(row.id),
+      wallet_id:
+        typeof row.wallet_id === 'number' ? row.wallet_id : Number(row.wallet_id),
+      account_index:
+        typeof row.account_index === 'number'
+          ? row.account_index
+          : Number(row.account_index),
+      address_index:
+        typeof row.address_index === 'number'
+          ? row.address_index
+          : Number(row.address_index),
+      receive_address: toString(row.receive_address),
+      quantum_lock_address: toString(row.quantum_lock_address),
+      receive_locking_bytecode: toString(row.receive_locking_bytecode),
+      quantum_lock_locking_bytecode: toString(row.quantum_lock_locking_bytecode),
+      quantum_public_key: toString(row.quantum_public_key),
+      quantum_key_identifier: toString(row.quantum_key_identifier),
+      vault_token_category: toString(row.vault_token_category),
+      online_quantum_signer:
+        (typeof row.online_quantum_signer === 'number'
+          ? row.online_quantum_signer
+          : Number(row.online_quantum_signer)) === 1
+          ? 1
+          : 0,
+      created_at: toString(row.created_at),
+      updated_at: toString(row.updated_at),
+    };
   }
 }
