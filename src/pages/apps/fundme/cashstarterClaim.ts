@@ -145,7 +145,10 @@ async function cashstarterClaim({ electrumServer, usersAddress, contractCashStar
 
     const provider = new ElectrumNetworkProvider(Network.MAINNET);
     
-    const txDetails = await new TransactionBuilder({ provider })
+    const txDetails = await new TransactionBuilder({
+      provider,
+      maximumFeeSatoshis: 2000n,
+    })
       .addInput(claimContractUTXO, contractCashStarterClaim.unlock.claim(servicePKH, serviceFee))
       .addInput(campaignUTXO, contractCashStarter.unlock.externalFunction())
       .addInput(userUTXO, p2pkhUnlocker)
@@ -169,7 +172,6 @@ async function cashstarterClaim({ electrumServer, usersAddress, contractCashStar
         to: serviceAddress,
         amount: serviceFee,
       })
-      .setMaxFee(2000n)
 
       console.log('transaction pre-build: ');
       console.log(txDetails);

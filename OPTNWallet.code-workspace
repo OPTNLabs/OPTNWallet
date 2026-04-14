@@ -4,19 +4,28 @@
 		"path": "."
 	},
 	{
-		"path": "../riftenlabs/moria-contract"
+		"path": "../reference/oracle-contract"
 	},
 	{
-		"path": "../riftenlabs/rust-riftenlabs-defi"
+		"path": "../reference/vegabch"
 	},
 	{
-		"path": "../riftenlabs/cashlab"
+		"path": "../reference/cashlab"
 	},
 	{
-		"path": "../riftenlabs/riftenlabs-indexer"
+		"path": "../reference/selene-wallet"
 	},
 	{
-		"path": "../selene-wallet"
+		"path": "../reference/riftenlabs"
+	},
+	{
+		"path": "../reference/CashStarter"
+	},
+	{
+		"path": "../reference/quantumroot"
+	},
+	{
+		"path": "../covenant-ai"
 	}
 ],
   "settings": {

@@ -11,6 +11,7 @@ import {
   runOutboundReconcile,
   runWalletHistoryRefresh,
 } from '../../services/RefreshCoordinator';
+import QuantumrootTrackingService from '../../services/QuantumrootTrackingService';
 
 type UseTransactionHistoryFetchParams = {
   walletIdParam: string | undefined;
@@ -95,6 +96,12 @@ export function useTransactionHistoryFetch({
           }
         }
         addressesQuery.free();
+
+        const quantumrootAddresses =
+          await QuantumrootTrackingService.listTrackedAddresses(walletIdNum);
+        for (const address of quantumrootAddresses) {
+          addresses.push(address);
+        }
 
         const pending = addresses.filter((a) => !fetchedAddresses.has(a));
         const totalToScan = pending.length;

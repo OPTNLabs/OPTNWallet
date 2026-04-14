@@ -19,6 +19,7 @@ import { invalidateUTXOCache } from '../services/ElectrumService';
 import { logError, logWarn } from '../utils/errorHandling';
 import { UTXO } from '../types/types';
 import { runWalletUtxoRefresh } from '../services/RefreshCoordinator';
+import QuantumrootTrackingService from '../services/QuantumrootTrackingService';
 
 // --- Subscriptions state ---
 let started = false;
@@ -203,6 +204,22 @@ async function bootstrapAllUTXOs() {
     allUTXOs[keyPair.address] = fetchedWalletUTXOs[keyPair.address] ?? [];
   }
 
+  try {
+    const quantumrootAddresses =
+      await QuantumrootTrackingService.listTrackedAddresses(currentWalletId);
+    const fetchedQuantumrootUTXOs = await UTXOService.fetchAndStoreUTXOsMany(
+      currentWalletId,
+      quantumrootAddresses
+    );
+    for (const address of quantumrootAddresses) {
+      allUTXOs[address] = fetchedQuantumrootUTXOs[address] ?? [];
+    }
+  } catch (e) {
+    logError('UTXOWorker.bootstrapAllUTXOs.quantumroot', e, {
+      walletId: currentWalletId,
+    });
+  }
+
   // Contract instances
   try {
     const instances = await contractManager.fetchContractInstances();
@@ -257,8 +274,10 @@ async function establishSubscriptions() {
     const walletAddresses = (keyPairs || [])
       .map((k) => k.address)
       .filter(Boolean);
+    const quantumrootAddresses =
+      await QuantumrootTrackingService.listTrackedAddresses(currentWalletId);
 
-    for (const addr of walletAddresses) {
+    for (const addr of [...walletAddresses, ...quantumrootAddresses]) {
       if (subscribedAddresses.has(addr)) continue;
       subscribedAddresses.add(addr);
 

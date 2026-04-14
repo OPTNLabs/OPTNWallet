@@ -13,6 +13,7 @@ import EmptyState from '../components/ui/EmptyState';
 import StatusChip from '../components/ui/StatusChip';
 import DatabaseService from '../apis/DatabaseManager/DatabaseService';
 import TransactionDetailPopup from './transaction-history/TransactionDetailPopup';
+import QuantumrootTrackingService from '../services/QuantumrootTrackingService';
 
 const selectTransactions = createSelector(
   (state: RootState) => state.transactions.transactions,
@@ -93,6 +94,13 @@ const TransactionHistory: React.FC = () => {
         }
       }
       stmt.free();
+
+      const quantumrootAddresses = await QuantumrootTrackingService.listTrackedAddresses(
+        Number(wallet_id)
+      );
+      for (const address of quantumrootAddresses) {
+        next.add(address);
+      }
 
       if (!cancelled) {
         setWalletAddresses(next);

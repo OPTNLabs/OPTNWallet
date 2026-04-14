@@ -163,7 +163,7 @@ async function managerInitialize({ electrumServer, usersAddress, contractManager
   const endBlockInBigInt = BigInt(Number(endBlock));
 
   try {
-    transaction = contractManager?.functions.initialize(pubkeyhash, fundTargetInBigInt, endBlockInBigInt, servicePKH, serviceFee)                      
+    transaction = (contractManager as any)?.functions.initialize(pubkeyhash, fundTargetInBigInt, endBlockInBigInt, servicePKH, serviceFee)                      
       .from(contractUTXO)                                                        // contractUTXO utxo
       .fromP2PKH(userUTXO, userSig)                                              // feeUTXO
       .to(AddressTokensCashStarterManager, 1000n, masterNFTDetails)              // send output0 back to contractManager address with whatever satoshis the utxo already had

@@ -40,6 +40,12 @@ export type SendTransactionOptions = {
   userPrompt?: string | null;
 };
 
+export type BatchedTransactionRequest = {
+  rawTX: string;
+  spentInputs?: UTXO[];
+  options?: SendTransactionOptions;
+};
+
 /**
  * TransactionService encapsulates all transaction-related business logic.
  */
@@ -56,6 +62,50 @@ class TransactionService {
     // wallet and contract UTXO views converge even if Electrum lags briefly.
     requestUTXORefreshForMany(unique, 0);
     requestUTXORefreshForMany(unique, 1500);
+  }
+
+  private async enrichTrackedAttempt(
+    rawTX: string,
+    spentInputs?: UTXO[],
+    options?: SendTransactionOptions
+  ): Promise<void> {
+    const currentWalletId = store.getState().wallet_id.currentWalletId ?? null;
+    await OutboundTransactionTracker.trackAttempt({
+      rawTx: rawTX,
+      walletId: currentWalletId,
+      source: options?.source ?? 'wallet',
+      sourceLabel: options?.sourceLabel ?? null,
+      recipientSummary: options?.recipientSummary ?? null,
+      amountSummary: options?.amountSummary ?? null,
+      sessionTopic: options?.sessionTopic ?? null,
+      dappName: options?.dappName ?? null,
+      dappUrl: options?.dappUrl ?? null,
+      requestId: options?.requestId ?? null,
+      userPrompt: options?.userPrompt ?? null,
+      spentInputs,
+    });
+  }
+
+  private async collectRefreshAddresses(spentInputs?: UTXO[]): Promise<string[]> {
+    const currentWalletId = store.getState().wallet_id.currentWalletId ?? null;
+    const addrs = new Set<string>(
+      spentInputs?.map((u) => u.address).filter(Boolean) ?? []
+    );
+    if (currentWalletId) {
+      try {
+        const keyPairs = await KeyService.retrieveKeys(currentWalletId);
+        for (const key of keyPairs ?? []) {
+          if (key.address) addrs.add(key.address);
+        }
+      } catch (error) {
+        logError(
+          'TransactionService.collectRefreshAddresses.retrieveKeysAfterBroadcast',
+          error,
+          { walletId: currentWalletId }
+        );
+      }
+    }
+    return Array.from(addrs);
   }
 
   /**
@@ -327,20 +377,7 @@ class TransactionService {
     }
 
     if (res?.txid) {
-      await OutboundTransactionTracker.trackAttempt({
-        rawTx: rawTX,
-        walletId: currentWalletId,
-        source: options?.source ?? 'wallet',
-        sourceLabel: options?.sourceLabel ?? null,
-        recipientSummary: options?.recipientSummary ?? null,
-        amountSummary: options?.amountSummary ?? null,
-        sessionTopic: options?.sessionTopic ?? null,
-        dappName: options?.dappName ?? null,
-        dappUrl: options?.dappUrl ?? null,
-        requestId: options?.requestId ?? null,
-        userPrompt: options?.userPrompt ?? null,
-        spentInputs,
-      });
+      await this.enrichTrackedAttempt(rawTX, spentInputs, options);
     }
 
     // Refresh wallet addresses after any successful hand-off, but only
@@ -354,28 +391,85 @@ class TransactionService {
         optimisticRemoveSpentByOutpoints(outpoints);
       }
 
-      const addrs = new Set<string>(
-        spentInputs?.map((u) => u.address).filter(Boolean) ?? []
+      this.schedulePostBroadcastRefresh(
+        await this.collectRefreshAddresses(spentInputs)
       );
-      if (currentWalletId) {
-        try {
-          const keyPairs = await KeyService.retrieveKeys(currentWalletId);
-          for (const key of keyPairs ?? []) {
-            if (key.address) addrs.add(key.address);
-          }
-        } catch (error) {
-          logError(
-            'TransactionService.sendTransaction.retrieveKeysAfterBroadcast',
-            error,
-            { walletId: currentWalletId }
-          );
-        }
-      }
-
-      this.schedulePostBroadcastRefresh(Array.from(addrs));
     }
 
     return res;
+  }
+
+  async sendTransactionBatch(
+    requests: BatchedTransactionRequest[]
+  ): Promise<BroadcastResult[]> {
+    const currentWalletId = store.getState().wallet_id.currentWalletId ?? null;
+    const activeOutbound = currentWalletId
+      ? await OutboundTransactionTracker.listActive(currentWalletId)
+      : [];
+    const reserved = new Set(
+      activeOutbound.flatMap((record) =>
+        record.spentOutpoints.map((outpoint) => `${outpoint.tx_hash}:${outpoint.tx_pos}`)
+      )
+    );
+    const seenBatchOutpoints = new Set<string>();
+
+    for (const request of requests) {
+      for (const utxo of request.spentInputs ?? []) {
+        const outpointKey = `${utxo.tx_hash}:${utxo.tx_pos}`;
+        if (reserved.has(outpointKey) || seenBatchOutpoints.has(outpointKey)) {
+          return [
+            {
+              txid: null,
+              errorMessage:
+                'Another outgoing transaction is already using one of these UTXOs.',
+            },
+          ];
+        }
+        seenBatchOutpoints.add(outpointKey);
+      }
+    }
+
+    const results: BroadcastResult[] = [];
+    const refreshAddresses = new Set<string>();
+
+    for (const request of requests) {
+      const result = await this.transactionManager.sendTransaction(request.rawTX);
+      results.push(result);
+
+      const trackedTxid = deriveTrackedTxid(request.rawTX);
+      if (result?.errorMessage || !result?.txid) {
+        if (trackedTxid) {
+          await OutboundTransactionTracker.remove(trackedTxid);
+        }
+        break;
+      }
+
+      await this.enrichTrackedAttempt(
+        request.rawTX,
+        request.spentInputs,
+        request.options
+      );
+
+      if (request.spentInputs?.length && result.broadcastState === 'broadcasted') {
+        optimisticRemoveSpentByOutpoints(
+          request.spentInputs.map((u) => ({
+            tx_hash: u.tx_hash,
+            tx_pos: u.tx_pos,
+          }))
+        );
+      }
+
+      const addresses = await this.collectRefreshAddresses(request.spentInputs);
+      for (const address of addresses) {
+        refreshAddresses.add(address);
+      }
+    }
+
+    if (refreshAddresses.size > 0) {
+      this.schedulePostBroadcastRefresh(Array.from(refreshAddresses));
+    }
+
+    return results;
   }
 }
 
