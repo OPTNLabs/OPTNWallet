@@ -166,7 +166,7 @@ async function cashstarterPledge({ electrumServer, usersAddress, contractCashSta
 
     let transaction: any;
     try {
-      transaction = contractCashStarter?.functions.pledge(pledgeAmount)                      
+      transaction = (contractCashStarter as any)?.unlock.pledge(pledgeAmount)                      
         .from(campaignUTXO)                                                        // contractUTXO utxo
         .fromP2PKH(userUTXO, userSig)                                              // used for privtekey signing
         .to(AddressTokensCashStarter, newCampaignTotal, campaignNFTDetails)        // send output0 back to contracts address with pledge minus miner fee

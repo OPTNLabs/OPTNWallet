@@ -59,7 +59,7 @@ function Section({
         ) : (
           rows.map((row, index) => (
             <div
-              key={`${row.address}-${row.outputIndex ?? index}`}
+              key={`${title}-${row.address}-${row.outputIndex ?? 'na'}-${index}`}
               className="rounded-2xl border border-[var(--wallet-border)] p-3"
             >
               <div className="flex items-start justify-between gap-3">

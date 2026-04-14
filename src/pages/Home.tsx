@@ -29,6 +29,8 @@ import { refreshUTXOWorkerSubscriptions } from '../workers/UTXOWorkerService';
 import { logError } from '../utils/errorHandling';
 import { runWalletUtxoRefresh } from '../services/RefreshCoordinator';
 import { Network } from '../redux/networkSlice';
+import QuantumrootPortfolioService from '../services/QuantumrootPortfolioService';
+import QuantumrootTrackingService from '../services/QuantumrootTrackingService';
 
 const USE_HOME_SUBS = false;
 
@@ -66,6 +68,26 @@ const Home: React.FC = () => {
       fetchingUTXOsRedux,
     });
   const [showCashTokenPopup, setShowCashTokenPopup] = useState(false);
+  const [quantumrootBalance, setQuantumrootBalance] = useState(0);
+  const [quantumrootVaultCount, setQuantumrootVaultCount] = useState(0);
+
+  const refreshQuantumrootPortfolio = useCallback(async () => {
+    if (!currentWalletId) {
+      setQuantumrootBalance(0);
+      setQuantumrootVaultCount(0);
+      return;
+    }
+
+    try {
+      const summary = await QuantumrootPortfolioService.summarizeWallet(currentWalletId);
+      setQuantumrootBalance(summary.quantumrootBalanceSats);
+      setQuantumrootVaultCount(summary.vaultCount);
+    } catch (error) {
+      logError('Home.refreshQuantumrootPortfolio', error, {
+        walletId: currentWalletId,
+      });
+    }
+  }, [currentWalletId]);
 
   useHomeSubscriptions({
     enabled: USE_HOME_SUBS,
@@ -91,9 +113,18 @@ const Home: React.FC = () => {
           currentWalletId,
           keyPairs.map((keyPair) => keyPair.address)
         );
+        const quantumrootAddresses =
+          await QuantumrootTrackingService.listTrackedAddresses(currentWalletId);
+        const fetchedQuantumrootByAddress = await UTXOService.fetchAndStoreUTXOsMany(
+          currentWalletId,
+          quantumrootAddresses
+        );
 
         for (const keyPair of keyPairs) {
           allUTXOs[keyPair.address] = fetchedByAddress[keyPair.address] ?? [];
+        }
+        for (const address of quantumrootAddresses) {
+          allUTXOs[address] = fetchedQuantumrootByAddress[address] ?? [];
         }
 
         for (const [addr, list] of Object.entries(allUTXOs)) {
@@ -101,6 +132,7 @@ const Home: React.FC = () => {
         }
 
         dispatch(replaceAllUTXOs({ utxosByAddress: allUTXOs }));
+        await refreshQuantumrootPortfolio();
         dbService.scheduleDatabaseSave();
         dispatch(setInitialized(true));
         await refreshUTXOWorkerSubscriptions();
@@ -112,13 +144,24 @@ const Home: React.FC = () => {
     } finally {
       dispatch(setFetchingUTXOs(false));
     }
-  }, [currentWalletId, dbService, dispatch, fetchingUTXOsRedux, keyPairs]);
+  }, [
+    currentWalletId,
+    dbService,
+    dispatch,
+    fetchingUTXOsRedux,
+    keyPairs,
+    refreshQuantumrootPortfolio,
+  ]);
 
   useEffect(() => {
     if (keyPairs.length > 0 && currentWalletId) {
       void refreshUTXOWorkerSubscriptions();
     }
   }, [keyPairs, currentWalletId]);
+
+  useEffect(() => {
+    void refreshQuantumrootPortfolio();
+  }, [refreshQuantumrootPortfolio]);
 
   useHomeMetadataPreload({
     isInitialized: IsInitialized,
@@ -154,17 +197,25 @@ const Home: React.FC = () => {
 
       <SectionCard className="mt-3">
         <div className="flex flex-col items-center gap-3">
+          <div className="grid w-full max-w-md grid-cols-2 gap-3">
+            <button
+              className="wallet-btn-secondary w-full"
+              onClick={() => navigate('/contract')}
+            >
+              Contracts
+            </button>
+            <button
+              className="wallet-btn-primary w-full"
+              onClick={() => navigate('/apps')}
+            >
+              Apps
+            </button>
+          </div>
           <button
             className="wallet-btn-secondary w-full max-w-md"
-            onClick={() => navigate('/contract')}
+            onClick={() => navigate('/quantumroot')}
           >
-            Contracts
-          </button>
-          <button
-            className="wallet-btn-primary w-full max-w-md"
-            onClick={() => navigate('/apps')}
-          >
-            Apps
+            Quantumroot Vaults
           </button>
           <div className="grid w-full max-w-md grid-cols-10 gap-3">
             <button
@@ -192,7 +243,11 @@ const Home: React.FC = () => {
       </SectionCard>
 
       <div className="w-full max-w-md mx-auto mt-4 flex items-center justify-center">
-        <BitcoinCashCard totalAmount={displayBalance} />{' '}
+        <BitcoinCashCard
+          totalAmount={displayBalance}
+          quantumrootAmount={quantumrootBalance}
+          quantumrootVaultCount={quantumrootVaultCount}
+        />{' '}
       </div>
 
       <div className="w-full max-w-full mx-auto mt-4 flex justify-center">

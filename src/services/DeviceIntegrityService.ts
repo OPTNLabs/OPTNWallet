@@ -12,10 +12,10 @@ let cached: CachedAssessment | null = null;
 
 function shouldEnforceIntegrityChecks(): boolean {
   return (
+    import.meta.env.VITE_ENFORCE_DEVICE_INTEGRITY === 'true' &&
     import.meta.env.PROD &&
     Capacitor.isNativePlatform() &&
-    Capacitor.getPlatform() === 'android' &&
-    import.meta.env.VITE_ALLOW_INSECURE_DEVICE !== 'true'
+    Capacitor.getPlatform() === 'android'
   );
 }
 

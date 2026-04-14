@@ -10,8 +10,9 @@ import type {
 import { isArrayBufferLike, isString } from '../utils/typeGuards';
 import { SignedMessage } from '../utils/signed';
 import DeviceIntegrityService from './DeviceIntegrityService';
-import type { SignedMessageResponseI } from '../types/types';
+import type { QuantumrootVaultRecord, SignedMessageResponseI } from '../types/types';
 import { Network } from '../redux/networkSlice';
+import type { deriveQuantumrootVault } from './QuantumrootService';
 
 const KeyService = {
   async generateMnemonic() {
@@ -71,6 +72,56 @@ const KeyService = {
       changeNumber,
       addressNumber,
       resolvedNetwork
+    );
+  },
+
+  async createQuantumrootVault(
+    walletId: number,
+    addressIndex: number,
+    accountNumber = 0
+  ): Promise<QuantumrootVaultRecord> {
+    const keyManager = KeyManager();
+    return await keyManager.createQuantumrootVault(walletId, addressIndex, accountNumber);
+  },
+
+  async configureQuantumrootVault(
+    walletId: number,
+    addressIndex: number,
+    accountNumber = 0,
+    onlineQuantumSigner: 0 | 1 = 0,
+    vaultTokenCategory = '00'.repeat(32)
+  ): Promise<QuantumrootVaultRecord> {
+    const keyManager = KeyManager();
+    return await keyManager.configureQuantumrootVault(
+      walletId,
+      addressIndex,
+      accountNumber,
+      onlineQuantumSigner,
+      vaultTokenCategory
+    );
+  },
+
+  async retrieveQuantumrootVaults(
+    walletId: number
+  ): Promise<QuantumrootVaultRecord[]> {
+    const keyManager = KeyManager();
+    return await keyManager.retrieveQuantumrootVaults(walletId);
+  },
+
+  async deriveQuantumrootVault(
+    walletId: number,
+    addressIndex: number,
+    accountNumber = 0,
+    onlineQuantumSigner: '0' | '1' = '0',
+    vaultTokenCategory = '00'.repeat(32)
+  ): Promise<Awaited<ReturnType<typeof deriveQuantumrootVault>>> {
+    const keyManager = KeyManager();
+    return await keyManager.deriveQuantumrootVaultForWallet(
+      walletId,
+      addressIndex,
+      accountNumber,
+      onlineQuantumSigner,
+      vaultTokenCategory
     );
   },
 

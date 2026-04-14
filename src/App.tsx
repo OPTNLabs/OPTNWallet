@@ -5,6 +5,7 @@ import Settings from './pages/Settings';
 import Transaction from './pages/Transaction';
 import TransactionHistory from './pages/TransactionHistory';
 import Receive from './pages/Receive';
+import Quantumroot from './pages/Quantumroot';
 import SimpleSend from './pages/SimpleSend';
 import Outbox from './pages/Outbox';
 import { Routes, Route, Navigate } from 'react-router-dom';
@@ -71,6 +72,7 @@ function App() {
                 />
                 <Route path="/campaign/:id" element={<CampaignDetail />} />
                 <Route path="/receive" element={<Receive />} />
+                <Route path="/quantumroot" element={<Quantumroot />} />
                 <Route path="/send" element={<SimpleSend />} />
                 <Route path="/outbox" element={<Outbox />} />
                 <Route path="/transaction" element={<Transaction />} />

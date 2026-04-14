@@ -52,6 +52,10 @@ export default function WalletManager() {
       query.bind({ ':walletid': wallet_id });
       query.run();
 
+      query = db.prepare(`DELETE FROM quantumroot_vaults WHERE wallet_id = :walletid`);
+      query.bind({ ':walletid': wallet_id });
+      query.run();
+
       // Also delete from other tables as needed
       query = db.prepare(
         `DELETE FROM cashscript_artifacts WHERE id IN (SELECT artifact_id FROM cashscript_addresses WHERE wallet_id = :walletid)`

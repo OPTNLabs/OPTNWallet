@@ -157,6 +157,23 @@ export type Address = {
   prefix: string;
 };
 
+export type QuantumrootVaultRecord = {
+  id?: number;
+  wallet_id: number;
+  account_index: number;
+  address_index: number;
+  receive_address: string;
+  quantum_lock_address: string;
+  receive_locking_bytecode: string;
+  quantum_lock_locking_bytecode: string;
+  quantum_public_key: string;
+  quantum_key_identifier: string;
+  vault_token_category: string;
+  online_quantum_signer: 0 | 1;
+  created_at: string;
+  updated_at: string;
+};
+
 // BCMR Responses
 // NEW INCLUSION BELOW
 export interface BcmrTokenMetadata {
