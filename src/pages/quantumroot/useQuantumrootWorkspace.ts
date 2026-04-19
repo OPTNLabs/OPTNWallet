@@ -28,6 +28,7 @@ import type {
 
 type UseQuantumrootWorkspaceArgs = {
   currentWalletId: number | null;
+  workspaceEnabled?: boolean;
 };
 
 type UseQuantumrootWorkspaceResult = QuantumrootWorkspaceState & {
@@ -56,6 +57,7 @@ type UseQuantumrootWorkspaceResult = QuantumrootWorkspaceState & {
 
 export function useQuantumrootWorkspace({
   currentWalletId,
+  workspaceEnabled = true,
 }: UseQuantumrootWorkspaceArgs): UseQuantumrootWorkspaceResult {
   const [vaults, setVaults] = useState<QuantumrootVaultRecord[]>([]);
   const [walletKeys, setWalletKeys] = useState<WalletKey[]>([]);
@@ -66,6 +68,8 @@ export function useQuantumrootWorkspace({
     Record<number, QuantumrootTokenAwareness>
   >({});
   const [loading, setLoading] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [syncing, setSyncing] = useState(false);
   const [selectedVault, setSelectedVault] = useState<QuantumrootVaultRecord | null>(
     null
@@ -77,15 +81,26 @@ export function useQuantumrootWorkspace({
   const [savingConfiguration, setSavingConfiguration] = useState(false);
 
   const loadQuantumrootWorkspace = useCallback(async () => {
-    if (!currentWalletId) return;
+    if (!currentWalletId || !workspaceEnabled) {
+      setLoading(false);
+      setRefreshing(false);
+      setLoadError(null);
+      setVaults([]);
+      setWalletKeys([]);
+      setStatusesByIndex({});
+      setTokenAwarenessByIndex({});
+      return;
+    }
 
     setLoading(true);
+    setLoadError(null);
     try {
       const keys = (await KeyService.retrieveKeys(currentWalletId)) as WalletKey[];
       setWalletKeys(keys);
 
       const nextVaults = await KeyService.retrieveQuantumrootVaults(currentWalletId);
       setVaults(nextVaults);
+      setLoading(false);
 
       const allAddresses = Array.from(
         new Set(
@@ -96,6 +111,7 @@ export function useQuantumrootWorkspace({
         )
       ).filter(Boolean);
 
+      setRefreshing(true);
       const utxosByAddress =
         allAddresses.length > 0
           ? await UTXOService.fetchAndStoreUTXOsMany(currentWalletId, allAddresses)
@@ -136,17 +152,26 @@ export function useQuantumrootWorkspace({
           })
         ) as Record<number, QuantumrootTokenAwareness>
       );
+    } catch (error) {
+      console.error('Failed to load Quantumroot workspace:', error);
+      setLoadError((error as Error).message || 'Quantumroot workspace failed to load.');
     } finally {
       setLoading(false);
+      setRefreshing(false);
     }
-  }, [currentWalletId]);
+  }, [currentWalletId, workspaceEnabled]);
 
   useEffect(() => {
     void loadQuantumrootWorkspace();
   }, [loadQuantumrootWorkspace]);
 
   const handleSyncVaults = useCallback(async () => {
-    if (!currentWalletId) return;
+    if (!currentWalletId || !workspaceEnabled) {
+      await Toast.show({
+        text: 'Quantumroot mainnet preview is active until activation.',
+      });
+      return;
+    }
 
     setSyncing(true);
     try {
@@ -169,7 +194,7 @@ export function useQuantumrootWorkspace({
     } finally {
       setSyncing(false);
     }
-  }, [currentWalletId, loadQuantumrootWorkspace]);
+  }, [currentWalletId, loadQuantumrootWorkspace, workspaceEnabled]);
 
   const portfolio = useMemo(() => {
     const statuses = Object.values(statusesByIndex);
@@ -464,6 +489,8 @@ export function useQuantumrootWorkspace({
     statusesByIndex,
     tokenAwarenessByIndex,
     loading,
+    refreshing,
+    loadError,
     syncing,
     selectedVault,
     recoveringOutpoint,

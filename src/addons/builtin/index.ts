@@ -23,6 +23,7 @@ export const BUILTIN_ADDONS: AddonManifest[] = [
           'tx:add_output',
           'tx:build',
           'tx:broadcast',
+          'ui:confirm',
           'http:fetch_json',
         ],
       },
@@ -59,15 +60,35 @@ export const BUILTIN_ADDONS: AddonManifest[] = [
           'tx:add_output',
           'tx:build',
           'tx:broadcast',
+          'ui:confirm',
         ],
         config: {
           screen: 'MintCashTokensPoCApp',
         },
       },
       {
+        id: 'paperWalletSweepApp',
+        name: 'Paper Wallet',
+        description: 'Sweep BCH and CashTokens from scanned paper wallets',
+        iconUri: null,
+        kind: 'declarative',
+        requiredCapabilities: [
+          'wallet:context:read',
+          'wallet:addresses:read',
+          'utxo:wallet:read',
+          'tx:build',
+          'tx:broadcast',
+          'ui:confirm',
+        ],
+        config: {
+          screen: 'PaperWalletSweepApp',
+        },
+      },
+      {
         id: 'cauldronSwapApp',
         name: 'Cauldron',
-        description: 'Swap against Cauldron pools and manage owned liquidity positions',
+        description:
+          'Swap against Cauldron pools and manage owned liquidity positions',
         iconUri: '/assets/images/cauldron-header-logo.png',
         kind: 'declarative',
         requiredCapabilities: [
@@ -78,6 +99,7 @@ export const BUILTIN_ADDONS: AddonManifest[] = [
           'tx:add_output',
           'tx:build',
           'tx:broadcast',
+          'ui:confirm',
         ],
         config: {
           screen: 'CauldronSwapApp',

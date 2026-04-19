@@ -11,8 +11,8 @@ import {
   hash256,
   hexToBin,
   importWalletTemplate,
+  swapEndianness,
   walletTemplateToCompilerConfiguration,
-  walletTemplateToCompilerBCH,
 } from '@bitauth/libauth';
 import { compileScriptRaw } from '@bitauth/libauth/build/lib/language/resolve.js';
 
@@ -157,10 +157,6 @@ function createQuantumrootCompiler() {
   return createCompilerBCH(walletTemplateToCompilerConfiguration(quantumrootTemplate));
 }
 
-function createLegacyQuantumrootCompiler() {
-  return walletTemplateToCompilerBCH(quantumrootTemplate);
-}
-
 function createPatchedQuantumrootCompiler(vault: QuantumrootRecoveryVault) {
   return createCompilerBCH(
     walletTemplateToCompilerConfiguration(
@@ -202,7 +198,7 @@ function buildRecoveryCompilationData({
       online_quantum_signer: '0',
       quantum_spend_index: quantumSpendIndex,
       token_spend_index: tokenSpendIndex,
-      vault_token_category: vaultTokenCategory,
+      vault_token_category: formatVaultTokenCategoryForTemplate(vaultTokenCategory),
     },
     compilationContext: {
       inputIndex,
@@ -221,36 +217,18 @@ function encodeLeafSpendIndex(index: number) {
   return binToHex(bigIntToVmNumber(BigInt(index)));
 }
 
-function createDataPushInstruction(data: Uint8Array) {
-  if (data.length <= 75) {
-    return { opcode: data.length, data };
-  }
-  if (data.length <= 0xff) {
-    return { opcode: 0x4c, data };
-  }
-  if (data.length <= 0xffff) {
-    return { opcode: 0x4d, data };
-  }
-  return { opcode: 0x4e, data };
-}
-
-function instructionHasData(
-  instruction: ReturnType<typeof decodeAuthenticationInstructions>[number]
-): instruction is Extract<
-  ReturnType<typeof decodeAuthenticationInstructions>[number],
-  { data: Uint8Array }
-> {
-  return 'data' in instruction && instruction.data !== undefined;
-}
-
 function normalizeTokenCategory(category: string) {
   return category.trim().replace(/^0x/i, '').toLowerCase();
+}
+
+function formatVaultTokenCategoryForTemplate(category: string) {
+  return `0x${swapEndianness(normalizeTokenCategory(category))}`;
 }
 
 function toLibauthToken(token: NonNullable<UTXO['token']>) {
   return {
     amount: toBigIntSats(token.amount),
-    category: hexToBin(normalizeTokenCategory(token.category)),
+    category: hexToBin(swapEndianness(normalizeTokenCategory(token.category))),
     ...(token.nft
       ? {
           nft: {
@@ -295,7 +273,10 @@ function compileQuantumrootRawScript({
   scriptId:
     | 'quantum_lock'
     | 'quantum_lock_serialize_transaction'
-    | 'quantum_lock_verify_transaction_shape';
+    | 'quantum_lock_verify_transaction_shape'
+    | 'receive_address'
+    | 'receive_address_schnorr_spend'
+    | 'receive_address_token_spend';
 }) {
   const result = compileScriptRaw({
     configuration: compiler.configuration,
@@ -335,8 +316,21 @@ function verifyQuantumrootTransaction({
         finalState && 'stack' in finalState
           ? (finalState.stack as Uint8Array[]).map((item) => binToHex(item))
           : [];
+      const traceTail = trace.slice(-5).map((state) => {
+        const stack =
+          state && 'stack' in state
+            ? (state.stack as Uint8Array[]).map((item) => binToHex(item))
+            : [];
+        return JSON.stringify(
+          {
+            ...(state && typeof state === 'object' ? state : {}),
+            stack,
+          },
+          (_key, value) => (typeof value === 'bigint' ? value.toString() : value)
+        );
+      });
       throw new Error(
-        `Quantumroot recovery transaction verification failed at input ${inputIndex}: ${verification}; final stack: [${finalStackHex.join(', ')}]`
+        `Quantumroot recovery transaction verification failed at input ${inputIndex}: ${verification}; final stack: [${finalStackHex.join(', ')}]; trace tail: ${traceTail.join(' | ')}`
       );
     }
   }
@@ -466,70 +460,15 @@ function buildManualQuantumUnlockingBytecode({
 
 function buildManualTokenSpendUnlockingBytecode({
   compilationData,
-  vaultTokenCategory,
 }: {
   compilationData: Parameters<ReturnType<typeof createQuantumrootCompiler>['generateBytecode']>[0]['data'];
-  vaultTokenCategory: string;
 }) {
-  const compiler = createLegacyQuantumrootCompiler();
-  const generatedUnlock = compileQuantumrootUnlockingBytecode({
+  const compiler = createQuantumrootCompiler();
+  return compileQuantumrootUnlockingBytecode({
     compiler,
     compilationData,
     scriptId: 'token_spend',
   });
-  const unlockInstructions = decodeAuthenticationInstructions(generatedUnlock);
-  const dataInstructionIndexes: number[] = [];
-  unlockInstructions.forEach((instruction, index) => {
-    if (instructionHasData(instruction)) {
-      dataInstructionIndexes.push(index);
-    }
-  });
-
-  if (dataInstructionIndexes.length < 4) {
-    throw new Error('Quantumroot compiler produced an unexpected token_spend layout.');
-  }
-
-  const tokenLeafInstructionIndex =
-    dataInstructionIndexes[dataInstructionIndexes.length - 2];
-  const tokenLeafInstruction = unlockInstructions[tokenLeafInstructionIndex];
-  if (!instructionHasData(tokenLeafInstruction)) {
-    throw new Error('Quantumroot compiler produced an unexpected token_spend token-leaf instruction.');
-  }
-
-  const tokenLeafInstructions = decodeAuthenticationInstructions(tokenLeafInstruction.data);
-  const categoryInstructionIndex = tokenLeafInstructions.findIndex(
-    (instruction) => instructionHasData(instruction) && instruction.data.length === 64
-  );
-
-  if (categoryInstructionIndex === -1) {
-    throw new Error('Quantumroot compiler token leaf is missing the vault-token-category push.');
-  }
-
-  const correctedTokenLeaf = encodeAuthenticationInstructions(
-    tokenLeafInstructions.map((instruction, index) =>
-      index === categoryInstructionIndex
-        ? createDataPushInstruction(hexToBin(normalizeTokenCategory(vaultTokenCategory)))
-        : instruction
-    )
-  );
-
-  const siblingLeafHashInstruction = unlockInstructions[dataInstructionIndexes[dataInstructionIndexes.length - 3]];
-  const receiveAddressInstruction = unlockInstructions[dataInstructionIndexes[dataInstructionIndexes.length - 1]];
-  if (
-    !instructionHasData(siblingLeafHashInstruction) ||
-    !instructionHasData(receiveAddressInstruction)
-  ) {
-    throw new Error('Quantumroot compiler produced an unexpected token_spend sibling/receive layout.');
-  }
-
-  return encodeAuthenticationInstructions([
-    { opcode: 0x4f },
-    { opcode: 0x00 },
-    { opcode: 0x51 },
-    createDataPushInstruction(siblingLeafHashInstruction.data),
-    createDataPushInstruction(correctedTokenLeaf),
-    createDataPushInstruction(receiveAddressInstruction.data),
-  ]);
 }
 
 function compileQuantumrootRecoveryTransaction({
@@ -729,7 +668,7 @@ export function buildQuantumrootAuthorizedSpendTransaction({
       );
     }
 
-    const compiler = createLegacyQuantumrootCompiler();
+    const compiler = createQuantumrootCompiler();
     const sourceOutputs = [
       {
         lockingBytecode: vault.quantumLockLockingBytecode,
@@ -799,7 +738,6 @@ export function buildQuantumrootAuthorizedSpendTransaction({
     });
     const tokenUnlockingBytecode = buildManualTokenSpendUnlockingBytecode({
       compilationData: tokenCompilationData,
-      vaultTokenCategory: normalizedTokenCategory,
     });
 
     const finalInputs = baseInputs.map((input, inputIndex) => {

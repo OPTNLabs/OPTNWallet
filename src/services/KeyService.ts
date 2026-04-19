@@ -75,6 +75,22 @@ const KeyService = {
     );
   },
 
+  async bootstrapInitialAddressBatch(
+    walletId: number,
+    accountNumber = 0,
+    batchSize = 10
+  ): Promise<void> {
+    const existingKeys = await KeyService.retrieveKeys(walletId);
+    if (existingKeys.length > 0) {
+      return;
+    }
+
+    for (let index = 0; index < batchSize; index += 1) {
+      await KeyService.createKeys(walletId, accountNumber, 0, index);
+      await KeyService.createKeys(walletId, accountNumber, 1, index);
+    }
+  },
+
   async createQuantumrootVault(
     walletId: number,
     addressIndex: number,

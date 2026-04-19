@@ -27,6 +27,7 @@ describe('ChaingraphManager', () => {
     mockedGetInfraUrlPools.mockReturnValue({
       chaingraphUrls: ['https://chaingraph.example/graphql'],
       electrumServers: [],
+      bcmrNativeBaseUrls: [],
       bcmrApiBaseUrls: [],
       ipfsGateways: [],
       ipfsUploadRelayBases: [],

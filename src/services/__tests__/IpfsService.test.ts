@@ -14,15 +14,16 @@ vi.mock('../../redux/store', () => ({
 
 vi.mock('../../utils/servers/InfraUrls', async () => {
   const actual = await vi.importActual('../../utils/servers/InfraUrls');
-  return {
-    ...(actual as object),
-    getInfraUrlPools: vi.fn(() => ({
-      electrumServers: [],
-      chaingraphUrls: [],
-      bcmrApiBaseUrls: [],
-      ipfsGateways: ['https://ipfs.optnlabs.com/ipfs', 'https://ipfs.io/ipfs'],
-      ipfsUploadRelayBases: [
-        'https://upload.optnlabs.com',
+    return {
+      ...(actual as object),
+      getInfraUrlPools: vi.fn(() => ({
+        electrumServers: [],
+        chaingraphUrls: [],
+        bcmrNativeBaseUrls: [],
+        bcmrApiBaseUrls: [],
+        ipfsGateways: ['https://ipfs.optnlabs.com/ipfs', 'https://ipfs.io/ipfs'],
+        ipfsUploadRelayBases: [
+          'https://upload.optnlabs.com',
         'https://ipfs-api.optnlabs.com',
       ],
     })),
