@@ -21,6 +21,8 @@ export type QuantumrootWorkspaceState = {
   statusesByIndex: Record<number, VaultStatusView>;
   tokenAwarenessByIndex: Record<number, QuantumrootTokenAwareness>;
   loading: boolean;
+  refreshing: boolean;
+  loadError: string | null;
   syncing: boolean;
   selectedVault: QuantumrootVaultRecord | null;
   recoveringOutpoint: string | null;

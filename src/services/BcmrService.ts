@@ -26,6 +26,7 @@ import { store } from '../redux/store';
 import { Network } from '../redux/networkSlice';
 import {
   getBcmrLatestRegistryUrls,
+  getBcmrNativeTokenUrls,
   runWithFailover,
 } from '../utils/servers/InfraUrls';
 
@@ -129,6 +130,46 @@ type BcmrIndexerTokenResponse = {
   extensions?: Record<string, unknown>;
 };
 
+type TokenIndexBcmrSnapshot = {
+  name?: string;
+  description?: string;
+  token?: {
+    category?: string;
+    symbol?: string;
+    decimals?: number;
+  } & Record<string, unknown>;
+  uris?: Record<string, string>;
+};
+
+type TokenIndexBcmrResponse = {
+  category?: string;
+  name?: string;
+  description?: string;
+  symbol?: string;
+  decimals?: number;
+  latest_revision?: string;
+  updated_at?: string;
+  updated_height?: number;
+  uris?: Record<string, string | null>;
+  identity_snapshot?: TokenIndexBcmrSnapshot;
+  nft_types?: Record<string, unknown> | null;
+  bcmr?: {
+    category?: string;
+    name?: string;
+    description?: string;
+    symbol?: string;
+    decimals?: number;
+    latest_revision?: string;
+    uris?: Record<string, string | null>;
+    identity_snapshot?: TokenIndexBcmrSnapshot;
+    nft_types?: Record<string, unknown> | null;
+    registry?: {
+      validity_checks?: Record<string, unknown>;
+      source_url?: string;
+    };
+  };
+};
+
 type RegistryWithIdentity = MetadataRegistry & {
   registryIdentity?: string | Record<string, unknown>;
 };
@@ -167,6 +208,10 @@ function dedupeUrls(urls: string[]): string[] {
     out.push(url);
   }
   return out;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
 function getSvgMimeType(bytes: Uint8Array): string | null {
@@ -312,6 +357,10 @@ function normalizeHexId(value: string): string {
     .replace(/^0x/i, '');
 }
 
+function isTokenIndexNativeRegistryUri(uri: string): boolean {
+  return /\/v1\/token\/[0-9a-f]{64}\/bcmr\/?$/i.test(String(uri ?? '').trim());
+}
+
 function buildTokenLookupUrl(registryUrl: string, category: string): string | null {
   const match = registryUrl.match(/^(.*)\/registries\/[^/]+\/latest\/?$/i);
   if (!match) return null;
@@ -353,6 +402,94 @@ function findSnapshotForCategory(
   return best?.snapshot ?? null;
 }
 
+function normalizeTokenIndexSnapshot(
+  authbase: string,
+  payload: TokenIndexBcmrResponse
+): MetadataRegistry | null {
+  const rootSnapshot = payload.identity_snapshot ?? payload.bcmr?.identity_snapshot;
+  if (!rootSnapshot || !isRecord(rootSnapshot)) return null;
+
+  const rootToken = isRecord(rootSnapshot.token) ? rootSnapshot.token : {};
+  const payloadToken =
+    isRecord(payload.bcmr?.identity_snapshot?.token)
+      ? payload.bcmr?.identity_snapshot?.token
+      : {};
+
+  const payloadNfts = payload.nft_types ?? payload.bcmr?.nft_types;
+  const nftTypes =
+    isRecord(payloadNfts) && Object.keys(payloadNfts).length > 0
+      ? {
+          types: payloadNfts,
+        }
+      : undefined;
+
+  const category = normalizeHexId(
+    String(
+      rootToken.category ??
+        payload.category ??
+        payload.bcmr?.category ??
+        authbase
+    )
+  );
+  if (!category) return null;
+
+  const decimalsRaw = payload.decimals ?? rootToken.decimals ?? payloadToken.decimals;
+  const decimals = Number.isFinite(Number(decimalsRaw))
+    ? Math.max(0, Math.trunc(Number(decimalsRaw)))
+    : 0;
+
+  const symbol = String(
+    payload.symbol ?? rootToken.symbol ?? payloadToken.symbol ?? ''
+  ).trim();
+  const name = String(payload.name ?? rootSnapshot.name ?? '').trim() || category;
+  const description = String(
+    payload.description ?? rootSnapshot.description ?? ''
+  ).trim();
+  const latestRevision = String(
+    payload.latest_revision ??
+      payload.bcmr?.latest_revision ??
+      payload.updated_at ??
+      new Date().toISOString()
+  ).trim();
+
+  const snapshot: IdentitySnapshot = {
+    name,
+    description: description || undefined,
+    token: (() => {
+      const token = {
+        category,
+        symbol,
+        decimals,
+      } as IdentitySnapshot['token'];
+      if (nftTypes) {
+        (token as unknown as Record<string, unknown>).nfts = nftTypes;
+      }
+      return token;
+    })(),
+    uris: isRecord(rootSnapshot.uris)
+      ? (rootSnapshot.uris as Record<string, string>)
+      : isRecord(payload.uris)
+        ? (payload.uris as Record<string, string>)
+        : undefined,
+  };
+
+  const registry = {
+    $schema: 'https://cashtokens.org/bcmr-v2.schema.json',
+    version: { major: 0, minor: 0, patch: 0 },
+    latestRevision,
+    registryIdentity: normalizeHexId(authbase),
+    identities: {
+      [normalizeHexId(authbase)]: {
+        [latestRevision]: snapshot,
+      },
+    },
+  };
+
+  const imported = importMetadataRegistry(registry);
+  if (typeof imported === 'string') return null;
+  return imported;
+}
+
 export default class BcmrService {
   private readonly dbService = DatabaseService();
   private db = this.dbService.getDatabase();
@@ -382,6 +519,11 @@ export default class BcmrService {
   private getDefaultRegistryUris(authbase: string): string[] {
     const net: Network = store.getState().network.currentNetwork;
     return getBcmrLatestRegistryUrls(net, authbase);
+  }
+
+  private getDefaultNativeRegistryUris(category: string): string[] {
+    const net: Network = store.getState().network.currentNetwork;
+    return getBcmrNativeTokenUrls(net, category);
   }
 
   private async loadIdentityRegistry(
@@ -568,8 +710,20 @@ export default class BcmrService {
   private async resolveIdentityRegistryUncached(
     authbase: string
   ): Promise<IdentityRegistry> {
+    const nativeUris = this.getDefaultNativeRegistryUris(authbase);
     const cached = REGISTRY_CACHE.get(authbase);
     if (cached) {
+      if (!isTokenIndexNativeRegistryUri(cached.registryUri)) {
+        const nativeRefresh = await this.fetchTokenIndexNativeRegistry(
+          authbase,
+          nativeUris
+        );
+        if (nativeRefresh) {
+          REGISTRY_CACHE.set(authbase, nativeRefresh);
+          return nativeRefresh;
+        }
+      }
+
       const refreshed = await this.resolveAuthChainRegistry(
         authbase,
         cached.registryUri
@@ -581,9 +735,9 @@ export default class BcmrService {
       if (!isSyntheticTokenLookupRegistryUri(cached.registryUri)) {
         return cached;
       }
-      const provisionalRefresh = await this.resolveAuthChainRegistry(
+      const provisionalRefresh = await this.fetchTokenIndexNativeRegistry(
         authbase,
-        this.getDefaultRegistryUris(authbase)[0] || cached.registryUri
+        nativeUris
       );
       if (provisionalRefresh) {
         REGISTRY_CACHE.set(authbase, provisionalRefresh);
@@ -595,6 +749,16 @@ export default class BcmrService {
     let diskEntry: IdentityRegistry | undefined;
     try {
       diskEntry = await this.loadIdentityRegistry(authbase);
+      if (!isTokenIndexNativeRegistryUri(diskEntry.registryUri)) {
+        const nativeRefresh = await this.fetchTokenIndexNativeRegistry(
+          authbase,
+          nativeUris
+        );
+        if (nativeRefresh) {
+          REGISTRY_CACHE.set(authbase, nativeRefresh);
+          return nativeRefresh;
+        }
+      }
       const refreshed = await this.resolveAuthChainRegistry(
         authbase,
         diskEntry.registryUri
@@ -604,9 +768,9 @@ export default class BcmrService {
         return refreshed;
       }
       if (isSyntheticTokenLookupRegistryUri(diskEntry.registryUri)) {
-        const provisionalRefresh = await this.resolveAuthChainRegistry(
+        const provisionalRefresh = await this.fetchTokenIndexNativeRegistry(
           authbase,
-          this.getDefaultRegistryUris(authbase)[0] || diskEntry.registryUri
+          nativeUris
         );
         if (provisionalRefresh) {
           REGISTRY_CACHE.set(authbase, provisionalRefresh);
@@ -639,7 +803,14 @@ export default class BcmrService {
     const uris = this.getDefaultRegistryUris(authbase);
     let fresh: IdentityRegistry;
     try {
-      fresh = await this.fetchAndCommitRegistry(authbase, uris);
+      const native = await this.fetchTokenIndexNativeRegistry(authbase, nativeUris);
+      if (native) {
+        REGISTRY_CACHE.set(authbase, native);
+        REGISTRY_MISS_CACHE.delete(authbase);
+        fresh = native;
+      } else {
+        fresh = await this.fetchAndCommitRegistry(authbase, uris);
+      }
     } catch (err) {
       // If all indexer endpoints fail, try resolving directly from authchain BCMR OP_RETURN.
       const onChain = await this.resolveAuthChainRegistry(authbase, uris[0] || '');
@@ -661,6 +832,50 @@ export default class BcmrService {
     }
 
     return fresh;
+  }
+
+  private async fetchTokenIndexNativeRegistry(
+    authbase: string,
+    uriOrUris: string | string[]
+  ): Promise<IdentityRegistry | null> {
+    const uris = Array.isArray(uriOrUris) ? uriOrUris : [uriOrUris];
+    const net: Network = store.getState().network.currentNetwork;
+
+    try {
+      return await runWithFailover(
+        `bcmr-native:${net}:${authbase}`,
+        uris,
+        async (uri): Promise<IdentityRegistry> => {
+          const resp = await ipfsFetch(uri);
+          if (!resp.ok) {
+            throw new Error(`Fetch failed: HTTP ${resp.status}`);
+          }
+
+          let data: TokenIndexBcmrResponse;
+          try {
+            data = (await resp.json()) as TokenIndexBcmrResponse;
+          } catch {
+            throw new Error(`Invalid JSON response from ${uri}`);
+          }
+
+          const imported = normalizeTokenIndexSnapshot(authbase, data);
+          if (!imported) {
+            throw new Error(`Invalid tokenindex BCMR response from ${uri}`);
+          }
+
+          const committed = await this.commitIdentityRegistry(
+            normalizeHexId(authbase),
+            imported,
+            uri
+          );
+          REGISTRY_CACHE.set(authbase, committed);
+          REGISTRY_MISS_CACHE.delete(authbase);
+          return committed;
+        }
+      );
+    } catch {
+      return null;
+    }
   }
 
   public async getSnapshot(

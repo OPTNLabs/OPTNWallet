@@ -24,6 +24,7 @@ import {
   useLocalNotificationSetup,
   useNotificationQueueReset,
   useOutboundTransactionRecovery,
+  useElectrumConnectivityWatch,
   useWalletNetworkBootstrap,
   useStatusBarSync,
   useUtxoQueueToOsNotifications,
@@ -53,6 +54,7 @@ function App() {
   const walletNetworkReady = useWalletNetworkBootstrap(walletId, dispatch);
   useWorkerLifecycle(walletNetworkReady ? walletId : null);
   useOutboundTransactionRecovery(walletNetworkReady ? walletId : null);
+  useElectrumConnectivityWatch(walletNetworkReady ? walletId : null);
 
   return (
     <div className="app-shell">

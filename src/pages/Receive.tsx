@@ -1,5 +1,5 @@
 // src/pages/Receive.tsx
-import React, { useState, useEffect } from 'react';
+import React, { useEffect, useState } from 'react';
 import { useSelector } from 'react-redux';
 import { useNavigate } from 'react-router-dom';
 import { RootState } from '../redux/store';
@@ -16,19 +16,14 @@ import { Network } from '../redux/networkSlice';
 import PageHeader from '../components/ui/PageHeader';
 import SectionCard from '../components/ui/SectionCard';
 import EmptyState from '../components/ui/EmptyState';
-import { buildBip21Uri } from '../utils/bip21';
 import { zeroize } from '../utils/secureMemory';
-import type { QuantumrootVaultRecord, UTXO } from '../types/types';
+import type { QuantumrootVaultRecord } from '../types/types';
 import UTXOService from '../services/UTXOService';
 import {
-  bucketQuantumrootReceiveUtxos,
   summarizeQuantumrootVaultStatus,
   type QuantumrootVaultStatus,
 } from '../services/QuantumrootVaultStatusService';
-import TransactionService from '../services/TransactionService';
-import { buildQuantumrootRecoveryTransaction } from '../services/QuantumrootRecoveryService';
 import { getQuantumrootNetworkSupport } from '../services/QuantumrootNetworkSupportService';
-import { zeroizeQuantumrootArtifacts } from '../services/QuantumrootService';
 
 type QRCodeType = 'address' | 'pubKey' | 'pkh' | 'privkey';
 type ReceiveMode = 'standard' | 'quantumroot';
@@ -71,14 +66,13 @@ const Receive: React.FC = () => {
   const [selectedQuantumrootVault, setSelectedQuantumrootVault] =
     useState<QuantumrootVaultRecord | null>(null);
   const [loadingQuantumrootVault, setLoadingQuantumrootVault] = useState(false);
+  const [showQuantumrootStatusPopup, setShowQuantumrootStatusPopup] =
+    useState(false);
   const [quantumrootStatus, setQuantumrootStatus] = useState<QuantumrootVaultStatus | null>(
     null
   );
   const [loadingQuantumrootStatus, setLoadingQuantumrootStatus] = useState(false);
-  const [quantumrootReceiveUtxos, setQuantumrootReceiveUtxos] = useState<UTXO[]>([]);
-  const [recoveringQuantumrootOutpoint, setRecoveringQuantumrootOutpoint] = useState<
-    string | null
-  >(null);
+  const [qrCodeSize, setQrCodeSize] = useState(200);
 
   const currentWalletId = useSelector(
     (state: RootState) => state.wallet_id.currentWalletId
@@ -165,9 +159,8 @@ const Receive: React.FC = () => {
     setQrCodeType('address');
     setShowBip21Popup(false);
     setShowQuantumrootPopup(false);
+    setShowQuantumrootStatusPopup(false);
     setQuantumrootStatus(null);
-    setQuantumrootReceiveUtxos([]);
-    setRecoveringQuantumrootOutpoint(null);
     setBip21Amount('');
     setBip21Label('');
     setBip21Message('');
@@ -224,9 +217,7 @@ const Receive: React.FC = () => {
             selectedQuantumrootVault.quantum_lock_address
           ),
         ]);
-
         if (!cancelled) {
-          setQuantumrootReceiveUtxos(receiveUtxos);
           setQuantumrootStatus(
             summarizeQuantumrootVaultStatus(receiveUtxos, quantumLockUtxos)
           );
@@ -235,7 +226,6 @@ const Receive: React.FC = () => {
         console.error('Failed to load Quantumroot vault status:', error);
         if (!cancelled) {
           setQuantumrootStatus(null);
-          setQuantumrootReceiveUtxos([]);
         }
       } finally {
         if (!cancelled) {
@@ -250,6 +240,31 @@ const Receive: React.FC = () => {
       cancelled = true;
     };
   }, [currentWalletId, selectedQuantumrootVault]);
+
+  useEffect(() => {
+    const updateQrSize = () => {
+      const viewportHeight = window.visualViewport?.height ?? window.innerHeight;
+      const viewportWidth = window.visualViewport?.width ?? window.innerWidth;
+      const isQuantumroot = receiveMode === 'quantumroot';
+      const isSelected = !!selectedAddress;
+      const availableHeight = isSelected
+        ? isQuantumroot
+          ? viewportHeight * 0.34
+          : viewportHeight * 0.42
+        : viewportHeight * 0.22;
+      const availableWidth = viewportWidth * 0.68;
+      const nextSize = Math.floor(Math.min(availableHeight, availableWidth));
+      setQrCodeSize(Math.max(136, Math.min(200, nextSize)));
+    };
+
+    updateQrSize();
+    window.visualViewport?.addEventListener('resize', updateQrSize);
+    window.addEventListener('resize', updateQrSize);
+    return () => {
+      window.visualViewport?.removeEventListener('resize', updateQrSize);
+      window.removeEventListener('resize', updateQrSize);
+    };
+  }, [receiveMode, selectedAddress]);
 
   const handlePubKeyTabClick = () => {
     if (!ALLOW_PRIVATE_KEY_VIEW) {
@@ -300,49 +315,13 @@ const Receive: React.FC = () => {
     setBip21Amount(parts.length > 1 ? `${whole}.${decimal}` : whole);
   };
 
-  const buildReceiveBip21Uri = () => {
-    if (!selectedAddress) return '';
-    const parsedAmount = Number.parseFloat(bip21Amount);
-    const amount =
-      Number.isFinite(parsedAmount) && parsedAmount > 0
-        ? bip21Amount
-        : undefined;
-
-    return buildBip21Uri(selectedAddress, currentNetwork, {
-      amount,
-      label: bip21Label.trim() || undefined,
-      message: bip21Message.trim() || undefined,
-    });
-  };
-
-  const buildQuantumrootBip21Uri = () => {
-    const quantumrootAddress = selectedQuantumrootVault?.receive_address;
-    if (!quantumrootAddress) return '';
-
-    const parsedAmount = Number.parseFloat(bip21Amount);
-    const amount =
-      Number.isFinite(parsedAmount) && parsedAmount > 0
-        ? bip21Amount
-        : undefined;
-
-    return buildBip21Uri(quantumrootAddress, currentNetwork, {
-      amount,
-      label: bip21Label.trim() || undefined,
-      message: bip21Message.trim() || undefined,
-    });
-  };
-
   const activeAddress =
     receiveMode === 'quantumroot'
       ? selectedQuantumrootVault?.receive_address ?? ''
       : selectedAddress ?? '';
-  const activeReceiveUri =
-    receiveMode === 'quantumroot'
-      ? buildQuantumrootBip21Uri()
-      : buildReceiveBip21Uri();
   const activeQrPayload =
     qrCodeType === 'address'
-      ? activeReceiveUri
+      ? activeAddress
       : qrCodeType === 'pubKey'
         ? selectedPubKey || ''
         : qrCodeType === 'pkh'
@@ -356,10 +335,6 @@ const Receive: React.FC = () => {
         : qrCodeType === 'pkh'
           ? selectedPKH || ''
           : selectedPrivKey || '';
-  const formatQuantumrootBalance = (sats: number) =>
-    `${(sats / SATSINBITCOIN).toFixed(8).replace(/\.?0+$/, '') || '0'} BCH`;
-  const { recoverableReceiveUtxos: recoverableQuantumrootUtxos, unsupportedReceiveUtxos: unsupportedQuantumrootUtxos } =
-    bucketQuantumrootReceiveUtxos(quantumrootReceiveUtxos);
   const hasBip21Fields =
     !!bip21Amount.trim() || !!bip21Label.trim() || !!bip21Message.trim();
   const bip21Summary = [
@@ -373,95 +348,16 @@ const Receive: React.FC = () => {
   const keyPairsToDisplay =
     addressType === 'main' ? mainKeyPairs : changeKeyPairs;
 
-  const refreshSelectedQuantumrootStatus = async () => {
-    if (!currentWalletId || !selectedQuantumrootVault) return;
-
-    setLoadingQuantumrootStatus(true);
-    try {
-      const [receiveUtxos, quantumLockUtxos] = await Promise.all([
-        UTXOService.fetchAndStoreUTXOs(
-          currentWalletId,
-          selectedQuantumrootVault.receive_address
-        ),
-        UTXOService.fetchAndStoreUTXOs(
-          currentWalletId,
-          selectedQuantumrootVault.quantum_lock_address
-        ),
-      ]);
-      setQuantumrootReceiveUtxos(receiveUtxos);
-      setQuantumrootStatus(
-        summarizeQuantumrootVaultStatus(receiveUtxos, quantumLockUtxos)
-      );
-    } finally {
-      setLoadingQuantumrootStatus(false);
-    }
-  };
-
-  const handleRecoverQuantumrootUtxo = async (utxo: UTXO) => {
-    if (!currentWalletId || !selectedWalletKey || !selectedAddressPair) return;
-
-    const outpointKey = `${utxo.tx_hash}:${utxo.tx_pos}`;
-    setRecoveringQuantumrootOutpoint(outpointKey);
-
-    try {
-      const vault = await KeyService.deriveQuantumrootVault(
-        currentWalletId,
-        selectedWalletKey.addressIndex,
-        0
-      );
-
-      try {
-        const built = buildQuantumrootRecoveryTransaction({
-          destinationAddress: selectedAddressPair.address,
-          utxo,
-          vault,
-        });
-        const sent = await TransactionService.sendTransaction(
-          built.rawTransaction,
-          [utxo],
-          {
-            amountSummary: `${(Number(built.recoveryAmountSats) / SATSINBITCOIN).toFixed(8)} BCH`,
-            recipientSummary: selectedAddressPair.address,
-            source: 'quantumroot-recovery',
-            sourceLabel: 'Quantumroot Recovery',
-            userPrompt: 'Recover Quantumroot BCH to standard wallet address',
-          }
-        );
-
-        if (sent.errorMessage || !sent.txid) {
-          throw new Error(sent.errorMessage || 'Failed to broadcast recovery transaction.');
-        }
-
-        await Toast.show({
-          text: `Quantumroot recovery broadcast: ${shortenTxHash(sent.txid)}`,
-        });
-        await refreshSelectedQuantumrootStatus();
-      } finally {
-        zeroizeQuantumrootArtifacts(vault);
-      }
-    } catch (error) {
-      console.error('Quantumroot recovery failed:', error);
-      await Toast.show({
-        text: `Quantumroot recovery failed: ${(error as Error).message}`,
-      });
-    } finally {
-      setRecoveringQuantumrootOutpoint(null);
-    }
-  };
+  const formatQuantumrootBalance = (sats: number) =>
+    `${(sats / SATSINBITCOIN).toFixed(8).replace(/\.?0+$/, '') || '0'} BCH`;
+  const showStandardActions = receiveMode === 'standard';
+  const showQuantumrootActions = receiveMode === 'quantumroot';
 
   return (
-    <div className="container mx-auto max-w-md h-[calc(100dvh-var(--navbar-height)-var(--safe-bottom))] px-4 pt-4 pb-3 flex flex-col overflow-hidden wallet-page">
+    <div className="container mx-auto max-w-md h-[calc(100dvh-var(--navbar-height)-var(--safe-bottom))] px-4 pt-4 pb-[calc(var(--safe-bottom)+1rem)] flex flex-col overflow-hidden wallet-page">
       <PageHeader
         title="Receive"
         compact
-        titleAction={
-          <button
-            className="wallet-btn-secondary px-3 py-1.5 text-xs"
-            onClick={() => navigate('/quantumroot')}
-          >
-            Quantumroot
-          </button>
-        }
       />
 
       {!selectedAddress && (
@@ -540,9 +436,9 @@ const Receive: React.FC = () => {
                 >
                   Standard
                 </button>
-                <button
-                  className={`px-4 py-2 rounded-[14px] text-sm font-bold ${
-                    receiveMode === 'quantumroot'
+              <button
+                className={`px-4 py-2 rounded-[14px] text-sm font-bold ${
+                  receiveMode === 'quantumroot'
                       ? 'wallet-segment-active'
                       : 'wallet-segment-inactive'
                   }`}
@@ -566,10 +462,22 @@ const Receive: React.FC = () => {
                   recovery remain disabled until the May 15, 2026 network upgrade.
                 </p>
               )}
-              <QRCodeSVG
-                value={activeQrPayload}
-                size={200}
-              />
+              <div className="rounded-2xl bg-white p-1 shadow-sm border border-[rgba(0,0,0,0.08)]">
+                <QRCodeSVG
+                  value={activeQrPayload}
+                  size={qrCodeSize}
+                  bgColor="#ffffff"
+                  fgColor="#000000"
+                  level="H"
+                  marginSize={1}
+                  imageSettings={{
+                    src: '/assets/images/OPTNUIkeyline.png',
+                    height: 36,
+                    width: 36,
+                    excavate: true,
+                  }}
+                />
+              </div>
               <p
                 className="mt-4 p-2.5 wallet-surface-strong rounded-[14px] cursor-pointer hover:brightness-[0.97]"
                 onClick={() => handleCopy(activeQrPayload)}
@@ -610,129 +518,19 @@ const Receive: React.FC = () => {
                 </span>
               </div>
             )}
-            {receiveMode === 'quantumroot' && (
-              <SectionCard className="mt-3">
-                <div className="space-y-2">
-                  <div className="flex items-center justify-between gap-3">
-                    <h3 className="text-sm font-bold">Quantumroot Status</h3>
-                    {loadingQuantumrootStatus && (
-                      <span className="text-xs wallet-muted">Syncing…</span>
-                    )}
-                  </div>
-                  <p className="text-xs wallet-muted">
-                    Users can receive to this Quantumroot vault now. BCH-only
-                    receive UTXOs can also be recovered back to the selected
-                    standard wallet address below.
-                  </p>
-                  {quantumrootStatus ? (
-                    <div className="space-y-3 text-sm">
-                      <div className="grid grid-cols-2 gap-2">
-                        <div className="wallet-surface-strong rounded-[14px] p-3">
-                          <div className="text-[11px] font-semibold wallet-muted mb-1">
-                            Receive Balance
-                          </div>
-                          <div className="font-bold">
-                            {formatQuantumrootBalance(
-                              quantumrootStatus.receiveBalanceSats
-                            )}
-                          </div>
-                          <div className="text-[11px] wallet-muted mt-1">
-                            {quantumrootStatus.receiveUtxoCount} UTXOs
-                          </div>
-                        </div>
-                        <div className="wallet-surface-strong rounded-[14px] p-3">
-                          <div className="text-[11px] font-semibold wallet-muted mb-1">
-                            Quantum Lock
-                          </div>
-                          <div className="font-bold">
-                            {formatQuantumrootBalance(
-                              quantumrootStatus.quantumLockBalanceSats
-                            )}
-                          </div>
-                          <div className="text-[11px] wallet-muted mt-1">
-                            {quantumrootStatus.quantumLockUtxoCount} UTXOs
-                          </div>
-                        </div>
-                      </div>
-                      {recoverableQuantumrootUtxos.length > 0 && (
-                        <div className="space-y-2">
-                          <div className="text-[11px] font-semibold wallet-muted">
-                            Recoverable Receive UTXOs
-                          </div>
-                          {recoverableQuantumrootUtxos.map((utxo) => {
-                            const outpointKey = `${utxo.tx_hash}:${utxo.tx_pos}`;
-                            const isRecovering =
-                              recoveringQuantumrootOutpoint === outpointKey;
-                            return (
-                              <div
-                                key={outpointKey}
-                                className="wallet-surface-strong rounded-[14px] p-3"
-                              >
-                                <div className="flex items-start justify-between gap-3">
-                                  <div>
-                                    <div className="font-bold">
-                                      {formatQuantumrootBalance(
-                                        utxo.value ?? utxo.amount ?? 0
-                                      )}
-                                    </div>
-                                    <div className="text-[11px] wallet-muted mt-1">
-                                      {shortenTxHash(utxo.tx_hash)}:{utxo.tx_pos}
-                                    </div>
-                                    <div className="text-[11px] wallet-muted mt-1">
-                                      Recover to {shortenTxHash(selectedAddressPair?.address ?? '')}
-                                    </div>
-                                  </div>
-                                  <button
-                                    className="wallet-btn-primary px-3 py-2 text-xs"
-                                    disabled={isRecovering}
-                                    onClick={() => void handleRecoverQuantumrootUtxo(utxo)}
-                                  >
-                                    {isRecovering ? 'Recovering…' : 'Recover'}
-                                  </button>
-                                </div>
-                              </div>
-                            );
-                          })}
-                        </div>
-                      )}
-                      {unsupportedQuantumrootUtxos.length > 0 && (
-                        <p className="text-xs wallet-muted">
-                          Token-carrying Quantumroot receive UTXOs are detected,
-                          but this minimum recovery flow only supports BCH-only
-                          receive UTXOs.
-                        </p>
-                      )}
-                      {quantumrootStatus.quantumLockBalanceSats > 0 && (
-                        <p className="text-xs wallet-muted">
-                          Quantum Lock funds are visible, but Quantum Lock
-                          recovery is not included in this minimum release.
-                        </p>
-                      )}
-                    </div>
-                  ) : (
-                    !loadingQuantumrootStatus && (
-                      <p className="text-sm wallet-muted">
-                        No Quantumroot vault funds detected yet.
-                      </p>
-                    )
-                  )}
-                </div>
-              </SectionCard>
-            )}
-
             <div className="flex space-x-4 mt-4 w-full justify-center">
-              <button
-                className={`px-4 py-2 rounded-[14px] font-bold ${
-                  qrCodeType === 'address'
-                    ? 'wallet-segment-active'
-                    : 'wallet-segment-inactive'
-                }`}
-                onClick={() => setQrCodeType('address')}
-              >
-                Address
-              </button>
-              {receiveMode === 'standard' && (
+              {showStandardActions && (
                 <>
+                  <button
+                    className={`px-4 py-2 rounded-[14px] font-bold ${
+                      qrCodeType === 'address'
+                        ? 'wallet-segment-active'
+                        : 'wallet-segment-inactive'
+                    }`}
+                    onClick={() => setQrCodeType('address')}
+                  >
+                    Address
+                  </button>
                   <button
                     className={`px-4 py-2 rounded-[14px] font-bold ${
                       qrCodeType === 'pubKey'
@@ -755,7 +553,7 @@ const Receive: React.FC = () => {
                   </button>
                 </>
               )}
-              {receiveMode === 'standard' && isPrivKeyUnlocked && (
+              {showStandardActions && isPrivKeyUnlocked && (
                 <button
                   className={`px-4 py-2 rounded-[14px] font-bold ${
                     qrCodeType === 'privkey'
@@ -769,32 +567,37 @@ const Receive: React.FC = () => {
               )}
             </div>
               <div className="mt-2 min-h-[44px] w-full flex flex-col items-center justify-center gap-1">
-                {hasBip21Fields && (
+                {showStandardActions && hasBip21Fields && (
                   <p className="text-[11px] wallet-muted text-center px-2">
                   {bip21Summary}
                 </p>
               )}
               <div className="flex gap-2">
-                {qrCodeType === 'address' && (
+                {showStandardActions && qrCodeType === 'address' && (
                   <button
-                    className="px-3 py-1 rounded-[14px] text-xs font-semibold wallet-segment-inactive border border-[var(--wallet-border)]"
-                    onClick={() => setShowBip21Popup(true)}
+                    className="px-3 py-1 rounded-[14px] text-xs font-semibold wallet-segment-inactive border border-[var(--wallet-border)] opacity-50 cursor-not-allowed"
+                    onClick={() => undefined}
+                    disabled
                   >
                     BIP21
                   </button>
                 )}
-                <button
-                  className="px-3 py-1 rounded-[14px] text-xs font-semibold wallet-segment-inactive border border-[var(--wallet-border)]"
-                  onClick={() => setShowQuantumrootPopup(true)}
-                >
-                  Vault Details
-                </button>
-                <button
-                  className="px-3 py-1 rounded-[14px] text-xs font-semibold wallet-segment-inactive border border-[var(--wallet-border)]"
-                  onClick={() => navigate('/quantumroot')}
-                >
-                  Workspace
-                </button>
+                {showQuantumrootActions && (
+                  <>
+                    <button
+                      className="px-3 py-1 rounded-[14px] text-xs font-semibold wallet-segment-inactive border border-[var(--wallet-border)]"
+                      onClick={() => setShowQuantumrootPopup(true)}
+                    >
+                      Vault Details
+                    </button>
+                    <button
+                      className="px-3 py-1 rounded-[14px] text-xs font-semibold wallet-segment-inactive border border-[var(--wallet-border)]"
+                      onClick={() => navigate('/quantumroot')}
+                    >
+                      Workspace
+                    </button>
+                  </>
+                )}
               </div>
             </div>
             {ALLOW_PRIVATE_KEY_VIEW &&
@@ -818,8 +621,6 @@ const Receive: React.FC = () => {
                   setSelectedWalletKey(null);
                   setSelectedQuantumrootVault(null);
                   setQuantumrootStatus(null);
-                  setQuantumrootReceiveUtxos([]);
-                  setRecoveringQuantumrootOutpoint(null);
                   setPubKeyTapCount(0);
                   setIsPrivKeyUnlocked(false);
                   setReceiveMode('standard');
@@ -838,7 +639,92 @@ const Receive: React.FC = () => {
         )}
       </div>
 
-      {showBip21Popup && (
+      {showQuantumrootStatusPopup && (
+        <div
+          className="wallet-popup-backdrop"
+          onClick={() => setShowQuantumrootStatusPopup(false)}
+        >
+          <div
+            className="wallet-popup-panel w-full max-w-md"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between gap-3 mb-2">
+              <h3 className="text-lg font-bold">Quantumroot Status</h3>
+              {loadingQuantumrootStatus && (
+                <span className="text-xs wallet-muted">Syncing…</span>
+              )}
+            </div>
+            <p className="text-xs wallet-muted mb-3">
+              This view is read-only. It shows vault status and key receive data,
+              but no spending or recovery actions.
+            </p>
+            {quantumrootStatus ? (
+              <div className="space-y-3 text-sm max-h-[60vh] overflow-y-auto pr-1">
+                <div className="grid grid-cols-2 gap-2">
+                  <div className="wallet-surface-strong rounded-[14px] p-3">
+                    <div className="text-[11px] font-semibold wallet-muted mb-1">
+                      Receive Balance
+                    </div>
+                    <div className="font-bold">
+                      {formatQuantumrootBalance(
+                        quantumrootStatus.receiveBalanceSats
+                      )}
+                    </div>
+                    <div className="text-[11px] wallet-muted mt-1">
+                      {quantumrootStatus.receiveUtxoCount} UTXOs
+                    </div>
+                  </div>
+                  <div className="wallet-surface-strong rounded-[14px] p-3">
+                    <div className="text-[11px] font-semibold wallet-muted mb-1">
+                      Quantum Lock
+                    </div>
+                    <div className="font-bold">
+                      {formatQuantumrootBalance(
+                        quantumrootStatus.quantumLockBalanceSats
+                      )}
+                    </div>
+                    <div className="text-[11px] wallet-muted mt-1">
+                      {quantumrootStatus.quantumLockUtxoCount} UTXOs
+                    </div>
+                  </div>
+                </div>
+                <div className="wallet-surface-strong rounded-[14px] p-3">
+                  <div className="text-[11px] font-semibold wallet-muted mb-1">
+                    Receive Address
+                  </div>
+                  <div className="font-mono text-xs break-all">
+                    {selectedQuantumrootVault?.receive_address ?? 'Unavailable'}
+                  </div>
+                </div>
+                <div className="wallet-surface-strong rounded-[14px] p-3">
+                  <div className="text-[11px] font-semibold wallet-muted mb-1">
+                    Quantum Lock Address
+                  </div>
+                  <div className="font-mono text-xs break-all">
+                    {selectedQuantumrootVault?.quantum_lock_address ?? 'Unavailable'}
+                  </div>
+                </div>
+              </div>
+            ) : (
+              !loadingQuantumrootStatus && (
+                <p className="text-sm wallet-muted">
+                  No Quantumroot vault funds detected yet.
+                </p>
+              )
+            )}
+            <div className="mt-4 flex gap-2">
+              <button
+                className="wallet-btn-secondary flex-1"
+                onClick={() => setShowQuantumrootStatusPopup(false)}
+              >
+                Close
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {showBip21Popup && false && (
         <div
           className="wallet-popup-backdrop"
           onClick={() => setShowBip21Popup(false)}
@@ -932,6 +818,53 @@ const Receive: React.FC = () => {
             )}
             {selectedQuantumrootVault && (
               <div className="space-y-3 max-h-[60vh] overflow-y-auto">
+                <div className="wallet-surface-strong rounded-[14px] p-3">
+                  <div className="flex items-center justify-between gap-3 mb-2">
+                    <h4 className="text-sm font-bold">Quantumroot Status</h4>
+                    {loadingQuantumrootStatus && (
+                      <span className="text-xs wallet-muted">Syncing…</span>
+                    )}
+                  </div>
+                  <p className="text-xs wallet-muted mb-3">
+                    Read-only receive status for this vault. No spending or recovery is available from Receive.
+                  </p>
+                  {quantumrootStatus ? (
+                    <div className="grid grid-cols-2 gap-2 text-sm">
+                      <div className="wallet-surface-strong rounded-[14px] p-3">
+                        <div className="text-[11px] font-semibold wallet-muted mb-1">
+                          Receive Balance
+                        </div>
+                        <div className="font-bold">
+                          {formatQuantumrootBalance(
+                            quantumrootStatus.receiveBalanceSats
+                          )}
+                        </div>
+                        <div className="text-[11px] wallet-muted mt-1">
+                          {quantumrootStatus.receiveUtxoCount} UTXOs
+                        </div>
+                      </div>
+                      <div className="wallet-surface-strong rounded-[14px] p-3">
+                        <div className="text-[11px] font-semibold wallet-muted mb-1">
+                          Quantum Lock
+                        </div>
+                        <div className="font-bold">
+                          {formatQuantumrootBalance(
+                            quantumrootStatus.quantumLockBalanceSats
+                          )}
+                        </div>
+                        <div className="text-[11px] wallet-muted mt-1">
+                          {quantumrootStatus.quantumLockUtxoCount} UTXOs
+                        </div>
+                      </div>
+                    </div>
+                  ) : (
+                    !loadingQuantumrootStatus && (
+                      <p className="text-sm wallet-muted">
+                        No Quantumroot vault funds detected yet.
+                      </p>
+                    )
+                  )}
+                </div>
                 <div>
                   <label className="block text-xs font-semibold wallet-muted mb-1">
                     Receive Address

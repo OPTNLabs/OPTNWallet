@@ -26,6 +26,9 @@
 	},
 	{
 		"path": "../covenant-ai"
+	},
+	{
+		"path": "../reference/libauth"
 	}
 ],
   "settings": {

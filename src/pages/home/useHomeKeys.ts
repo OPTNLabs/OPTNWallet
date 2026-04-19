@@ -2,8 +2,6 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import KeyService from '../../services/KeyService';
 import { logError } from '../../utils/errorHandling';
 
-const BATCH_AMOUNT = 10;
-
 export type WalletKey = { address: string; addressIndex: number };
 
 type UseHomeKeysParams = {
@@ -21,12 +19,14 @@ export function useHomeKeys({ currentWalletId }: UseHomeKeysParams) {
       if (!currentWalletId || inflightIndexesRef.current.has(index)) return null;
 
       inflightIndexesRef.current.add(index);
+      batchGenerationRef.current = true;
+      setGeneratingKeys(true);
 
       try {
         const before = await KeyService.retrieveKeys(currentWalletId);
         const beforeSet = new Set(before.map((k) => k.address));
 
-        for (let i = 0; i < 2; i++) {
+        for (let i = 0; i < 2; i += 1) {
           await KeyService.createKeys(currentWalletId, 0, i, index);
         }
 
@@ -42,45 +42,32 @@ export function useHomeKeys({ currentWalletId }: UseHomeKeysParams) {
         });
       } finally {
         inflightIndexesRef.current.delete(index);
+        batchGenerationRef.current = false;
+        setGeneratingKeys(false);
       }
       return null;
     },
     [currentWalletId]
   );
 
-  const generateKeys = useCallback(async () => {
-    if (!currentWalletId || batchGenerationRef.current) return;
-
-    batchGenerationRef.current = true;
-    setGeneratingKeys(true);
-    try {
-      const existingKeys = await KeyService.retrieveKeys(currentWalletId);
-
-      if (existingKeys.length === 0) {
-        for (let i = 0; i < BATCH_AMOUNT; i++) {
-          await handleGenerateKeys(i);
-        }
-      } else {
-        setKeyPairs(existingKeys);
-      }
-    } finally {
-      batchGenerationRef.current = false;
-      setGeneratingKeys(false);
-    }
-  }, [currentWalletId, handleGenerateKeys]);
-
   useEffect(() => {
     if (!currentWalletId) return;
 
     const loadKeys = async () => {
-      const existingKeys = await KeyService.retrieveKeys(currentWalletId);
-      setKeyPairs(existingKeys);
-      if (existingKeys.length === 0) {
-        await generateKeys();
+      setGeneratingKeys(true);
+      try {
+        const existingKeys = await KeyService.retrieveKeys(currentWalletId);
+        setKeyPairs(existingKeys);
+      } catch (error) {
+        logError('Home.loadKeys', error, {
+          walletId: currentWalletId,
+        });
+      } finally {
+        setGeneratingKeys(false);
       }
     };
     void loadKeys();
-  }, [currentWalletId, generateKeys]);
+  }, [currentWalletId]);
 
   return {
     keyPairs,

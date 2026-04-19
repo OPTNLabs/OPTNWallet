@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import KeyManager from '../KeyManager';
 import DatabaseService from '../../DatabaseManager/DatabaseService';
 import SecretCryptoService from '../../../services/SecretCryptoService';
+import QuantumrootVaultCacheService from '../../../services/QuantumrootVaultCacheService';
 import {
   deriveBchChild,
   deriveBchStandardXpubs,
@@ -61,6 +62,15 @@ vi.mock('../../../services/QuantumrootService', () => ({
   ),
 }));
 
+vi.mock('../../../services/QuantumrootVaultCacheService', () => ({
+  default: {
+    list: vi.fn(() => []),
+    upsert: vi.fn(),
+    replace: vi.fn(),
+    clear: vi.fn(),
+  },
+}));
+
 type Row = Record<string, unknown>;
 
 function makeSelectStmt(rows: Row[]) {
@@ -76,10 +86,12 @@ function makeSelectStmt(rows: Row[]) {
 describe('KeyManager', () => {
   const mockedDatabaseService = vi.mocked(DatabaseService);
   const mockedSecretCryptoService = vi.mocked(SecretCryptoService);
+  const mockedVaultCache = vi.mocked(QuantumrootVaultCacheService);
 
   beforeEach(() => {
     vi.clearAllMocks();
     mockedSecretCryptoService.decryptText.mockImplementation(async (value: string) => value);
+    mockedVaultCache.list.mockReturnValue([]);
   });
 
   it('retrieveKeys decodes base64 key material', async () => {
@@ -102,6 +114,7 @@ describe('KeyManager', () => {
     mockedDatabaseService.mockReturnValue({
       ensureDatabaseStarted: vi.fn(async () => {}),
       getDatabase: vi.fn(() => db),
+      flushDatabaseToFile: vi.fn(async () => {}),
     } as never);
 
     const km = KeyManager();
@@ -128,6 +141,7 @@ describe('KeyManager', () => {
     mockedDatabaseService.mockReturnValue({
       ensureDatabaseStarted: vi.fn(async () => {}),
       getDatabase: vi.fn(() => db),
+      flushDatabaseToFile: vi.fn(async () => {}),
     } as never);
 
     const km = KeyManager();
@@ -153,6 +167,7 @@ describe('KeyManager', () => {
     mockedDatabaseService.mockReturnValue({
       ensureDatabaseStarted: vi.fn(async () => {}),
       getDatabase: vi.fn(() => db),
+      flushDatabaseToFile: vi.fn(async () => {}),
     } as never);
 
     const km = KeyManager();
@@ -174,6 +189,7 @@ describe('KeyManager', () => {
     mockedDatabaseService.mockReturnValue({
       ensureDatabaseStarted: vi.fn(async () => {}),
       getDatabase: vi.fn(() => db),
+      flushDatabaseToFile: vi.fn(async () => {}),
     } as never);
 
     mockedSecretCryptoService.decryptText
@@ -215,6 +231,7 @@ describe('KeyManager', () => {
     mockedDatabaseService.mockReturnValue({
       ensureDatabaseStarted: vi.fn(async () => {}),
       getDatabase: vi.fn(() => db),
+      flushDatabaseToFile: vi.fn(async () => {}),
     } as never);
 
     mockedSecretCryptoService.decryptText
@@ -266,6 +283,7 @@ describe('KeyManager', () => {
     mockedDatabaseService.mockReturnValue({
       ensureDatabaseStarted: vi.fn(async () => {}),
       getDatabase: vi.fn(() => db),
+      flushDatabaseToFile: vi.fn(async () => {}),
     } as never);
 
     mockedSecretCryptoService.decryptText
@@ -362,20 +380,8 @@ describe('KeyManager', () => {
       get: vi.fn(() => ['enc:mnemonic', 'enc:passphrase', Network.MAINNET]),
       free: vi.fn(),
     };
-    const existingVaultQuery = {
-      getAsObject: vi.fn(() => ({})),
-      free: vi.fn(),
-    };
-    const insertVaultQuery = {
-      run: vi.fn(),
-      free: vi.fn(),
-    };
     const db = {
-      prepare: vi
-        .fn()
-        .mockReturnValueOnce(existingVaultQuery)
-        .mockReturnValueOnce(walletLookup)
-        .mockReturnValueOnce(insertVaultQuery),
+      prepare: vi.fn(() => walletLookup),
     };
 
     const dbService = {
@@ -418,17 +424,15 @@ describe('KeyManager', () => {
       quantum_public_key: 'dd',
       quantum_key_identifier: 'aa',
     });
-    expect(insertVaultQuery.run).toHaveBeenCalledTimes(1);
-    expect(dbService.flushDatabaseToFile).toHaveBeenCalledTimes(1);
+    expect(mockedVaultCache.upsert).toHaveBeenCalledWith(7, record);
   });
 
   it('retrieveQuantumrootVaults returns stored dedicated vault records', async () => {
-    const stmt = makeSelectStmt([
+    mockedVaultCache.list.mockReturnValue([
       {
-        id: 1,
         wallet_id: 7,
         account_index: 0,
-        address_index: 2,
+        address_index: 0,
         receive_address: 'bitcoincash:preceive',
         quantum_lock_address: 'bitcoincash:pquantum',
         receive_locking_bytecode: 'aa11',
@@ -440,32 +444,75 @@ describe('KeyManager', () => {
         created_at: '2026-04-12T00:00:00.000Z',
         updated_at: '2026-04-12T00:00:00.000Z',
       },
+      {
+        wallet_id: 7,
+        account_index: 0,
+        address_index: 1,
+        receive_address: 'bitcoincash:backfilled-receive',
+        quantum_lock_address: 'bitcoincash:backfilled-lock',
+        receive_locking_bytecode: 'aa11',
+        quantum_lock_locking_bytecode: 'bb22',
+        quantum_public_key: 'cc33',
+        quantum_key_identifier: 'dd44',
+        vault_token_category: '00'.repeat(32),
+        online_quantum_signer: 0,
+        created_at: '2026-04-12T00:00:00.000Z',
+        updated_at: '2026-04-12T00:00:00.000Z',
+      },
+      {
+        wallet_id: 7,
+        account_index: 0,
+        address_index: 2,
+        receive_address: 'bitcoincash:backfilled-receive-2',
+        quantum_lock_address: 'bitcoincash:backfilled-lock-2',
+        receive_locking_bytecode: 'aa11',
+        quantum_lock_locking_bytecode: 'bb22',
+        quantum_public_key: 'cc33',
+        quantum_key_identifier: 'dd44',
+        vault_token_category: '00'.repeat(32),
+        online_quantum_signer: 0,
+        created_at: '2026-04-12T00:00:00.000Z',
+        updated_at: '2026-04-12T00:00:00.000Z',
+      },
     ]);
-    const db = { prepare: vi.fn(() => stmt) };
+    const walletLookupStmt = {
+      get: vi.fn(() => ['enc:mnemonic', 'enc:passphrase', Network.MAINNET]),
+      free: vi.fn(),
+    };
+    const db = {
+      prepare: vi.fn((sql: string) => {
+        if (sql.includes('FROM wallets WHERE id = ?')) {
+          return walletLookupStmt;
+        }
+        throw new Error(`Unexpected SQL: ${sql}`);
+      }),
+    };
     mockedDatabaseService.mockReturnValue({
       ensureDatabaseStarted: vi.fn(async () => {}),
       getDatabase: vi.fn(() => db),
+      flushDatabaseToFile: vi.fn(async () => {}),
     } as never);
+    vi.mocked(deriveQuantumrootVault).mockResolvedValue({
+      accountPath: "m/44'/145'/0'",
+      accountHdPrivateKey: 'xprv-account',
+      addressIndex: 1,
+      components: {} as never,
+      quantumKeyIdentifier: Uint8Array.from([0xaa]),
+      quantumSeed: Uint8Array.from([0xbb]),
+      quantumPrivateKey: [],
+      quantumPrivateKeyBytes: Uint8Array.from([0xcc]),
+      quantumPublicKey: Uint8Array.from([0xdd]),
+      receiveSchnorrPublicKey: Uint8Array.from([0xee]),
+      receiveAddress: 'bitcoincash:backfilled-receive',
+      receiveLockingBytecode: Uint8Array.from([0x11, 0x22]),
+      quantumLockAddress: 'bitcoincash:backfilled-lock',
+      quantumLockLockingBytecode: Uint8Array.from([0x33, 0x44]),
+    });
 
     const km = KeyManager();
-    await expect(km.retrieveQuantumrootVaults(7)).resolves.toEqual([
-      {
-        id: 1,
-        wallet_id: 7,
-        account_index: 0,
-        address_index: 2,
-        receive_address: 'bitcoincash:preceive',
-        quantum_lock_address: 'bitcoincash:pquantum',
-        receive_locking_bytecode: 'aa11',
-        quantum_lock_locking_bytecode: 'bb22',
-        quantum_public_key: 'cc33',
-        quantum_key_identifier: 'dd44',
-        vault_token_category: '00'.repeat(32),
-        online_quantum_signer: 0,
-        created_at: '2026-04-12T00:00:00.000Z',
-        updated_at: '2026-04-12T00:00:00.000Z',
-      },
-    ]);
+    const records = await km.retrieveQuantumrootVaults(7);
+    expect(records).toHaveLength(3);
+    expect(vi.mocked(deriveQuantumrootVault)).not.toHaveBeenCalled();
   });
 
   it('configureQuantumrootVault re-derives and updates a persisted vault with the configured token category', async () => {
@@ -473,23 +520,8 @@ describe('KeyManager', () => {
       get: vi.fn(() => ['enc:mnemonic', 'enc:passphrase', Network.CHIPNET]),
       free: vi.fn(),
     };
-    const existingVaultQuery = {
-      getAsObject: vi.fn(() => ({
-        id: 5,
-        created_at: '2026-04-12T00:00:00.000Z',
-      })),
-      free: vi.fn(),
-    };
-    const updateVaultQuery = {
-      run: vi.fn(),
-      free: vi.fn(),
-    };
     const db = {
-      prepare: vi
-        .fn()
-        .mockReturnValueOnce(existingVaultQuery)
-        .mockReturnValueOnce(walletLookup)
-        .mockReturnValueOnce(updateVaultQuery),
+      prepare: vi.fn(() => walletLookup),
     };
 
     const dbService = {
@@ -533,7 +565,6 @@ describe('KeyManager', () => {
     expect(record.quantum_lock_address).toBe('bchtest:configured-lock');
     expect(record.vault_token_category).toBe('22'.repeat(32));
     expect(record.online_quantum_signer).toBe(1);
-    expect(updateVaultQuery.run).toHaveBeenCalledTimes(1);
-    expect(dbService.flushDatabaseToFile).toHaveBeenCalledTimes(1);
+    expect(mockedVaultCache.upsert).toHaveBeenCalledWith(7, record);
   });
 });
