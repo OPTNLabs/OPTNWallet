@@ -7,6 +7,7 @@ import FundMeAddonApp from './fundme/FundMeAddonApp';
 import MintCashTokensPoCApp from './mint-cashtokens-poc/MintCashTokensPoCApp';
 import MemoCashReaderApp from './memo-cash-reader/MemoCashReaderApp';
 import CauldronSwapApp from './cauldron/CauldronSwapApp';
+import PaperWalletSweepApp from './paper-wallet-sweep/PaperWalletSweepApp';
 
 type ResolvedAppLike = {
   manifest: AddonManifest;
@@ -71,6 +72,10 @@ export function renderDeclarativeScreen(params: {
           sdk={sdk}
         />
       );
+
+    case 'PaperWalletSweepApp':
+    case 'paperWalletSweepApp':
+      return <PaperWalletSweepApp sdk={sdk} />;
 
     default:
       return null;

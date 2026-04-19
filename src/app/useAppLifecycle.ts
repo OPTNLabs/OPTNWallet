@@ -19,6 +19,7 @@ import { Network, setNetwork } from '../redux/networkSlice';
 import { setWalletNetwork, setWalletType } from '../redux/walletSlice';
 import { WalletType } from '../types/wallet';
 import ScreenSecurity from '../plugins/ScreenSecurity';
+import ElectrumServer from '../apis/ElectrumServer/ElectrumServer';
 
 let utxoWorkerStarted = false;
 
@@ -260,6 +261,51 @@ export function useOutboundTransactionRecovery(walletId: number | null) {
     }, 60_000);
 
     return () => {
+      window.removeEventListener('focus', handleVisible);
+      window.removeEventListener('online', handleOnline);
+      document.removeEventListener('visibilitychange', handleVisible);
+      window.clearInterval(interval);
+    };
+  }, [walletId]);
+}
+
+export function useElectrumConnectivityWatch(walletId: number | null) {
+  useEffect(() => {
+    if (!walletId || walletId <= 0) return;
+
+    const electrum = ElectrumServer();
+    let cancelled = false;
+
+    const refreshElectrum = async () => {
+      if (cancelled) return;
+      try {
+        await electrum.ensureFreshConnection();
+      } catch (error) {
+        console.warn('Electrum connectivity refresh failed:', error);
+      }
+    };
+
+    const handleVisible = () => {
+      if (document.visibilityState === 'visible') {
+        void refreshElectrum();
+      }
+    };
+    const handleOnline = () => {
+      void refreshElectrum();
+    };
+
+    void refreshElectrum();
+    window.addEventListener('focus', handleVisible);
+    window.addEventListener('online', handleOnline);
+    document.addEventListener('visibilitychange', handleVisible);
+    const interval = window.setInterval(() => {
+      if (document.visibilityState === 'visible') {
+        void refreshElectrum();
+      }
+    }, 2 * 60_000);
+
+    return () => {
+      cancelled = true;
       window.removeEventListener('focus', handleVisible);
       window.removeEventListener('online', handleOnline);
       document.removeEventListener('visibilitychange', handleVisible);

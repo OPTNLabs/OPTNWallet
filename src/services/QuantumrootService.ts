@@ -12,6 +12,7 @@ import {
   range,
   secp256k1,
   sha256,
+  swapEndianness,
   walletTemplateToCompilerBCH,
 } from '@bitauth/libauth';
 import { Network } from '../redux/networkSlice';
@@ -374,12 +375,13 @@ function compileQuantumrootScript(
   vaultTokenCategory: string,
   quantumPublicKey?: Uint8Array
 ): Uint8Array {
+  const normalizedVaultTokenCategory = vaultTokenCategory.trim().replace(/^0x/i, '').toLowerCase();
   const bytecodeVariables = {
     leaf_spend_index: '0',
     online_quantum_signer: onlineQuantumSigner,
     quantum_spend_index: '0',
     token_spend_index: '0',
-    vault_token_category: vaultTokenCategory,
+    vault_token_category: `0x${swapEndianness(normalizedVaultTokenCategory)}`,
   } as unknown as Record<string, Uint8Array>;
   const compiler =
     scriptId === 'quantum_lock' && quantumPublicKey

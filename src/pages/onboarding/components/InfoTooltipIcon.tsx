@@ -1,5 +1,3 @@
-import { Tooltip } from 'react-tooltip';
-
 type InfoTooltipIconProps = {
   id: string;
   content: string;
@@ -16,19 +14,12 @@ const InfoTooltipIcon = ({
   iconClassName = 'cursor-pointer wallet-accent-icon text-lg font-bold select-none',
   ariaLabel = 'More information',
 }: InfoTooltipIconProps) => {
-  return (
-    <>
-      <span
-        data-tooltip-id={id}
-        className={iconClassName}
-        aria-label={ariaLabel}
-        role="img"
-      >
-        ⓘ
-      </span>
-      <Tooltip id={id} place="top" className={className} content={content} />
-    </>
-  );
+  void id;
+  void content;
+  void className;
+  void iconClassName;
+  void ariaLabel;
+  return null;
 };
 
 export default InfoTooltipIcon;

@@ -25,6 +25,7 @@ import { useHomeMetadataPreload } from './home/useHomeMetadataPreload';
 import PageHeader from '../components/ui/PageHeader';
 import SectionCard from '../components/ui/SectionCard';
 import EmptyState from '../components/ui/EmptyState';
+import WalkthroughPanel from '../components/ui/WalkthroughPanel';
 import { refreshUTXOWorkerSubscriptions } from '../workers/UTXOWorkerService';
 import { logError } from '../utils/errorHandling';
 import { runWalletUtxoRefresh } from '../services/RefreshCoordinator';
@@ -33,6 +34,7 @@ import QuantumrootPortfolioService from '../services/QuantumrootPortfolioService
 import QuantumrootTrackingService from '../services/QuantumrootTrackingService';
 
 const USE_HOME_SUBS = false;
+const HOME_WALKTHROUGH_STORAGE_KEY = 'hasSeenHomeWalkthroughV2';
 
 const Home: React.FC = () => {
   const navigate = useNavigate();
@@ -68,6 +70,19 @@ const Home: React.FC = () => {
       fetchingUTXOsRedux,
     });
   const [showCashTokenPopup, setShowCashTokenPopup] = useState(false);
+  const [showOnboardingHint, setShowOnboardingHint] = useState(false);
+
+  useEffect(() => {
+    const hasSeenHint = localStorage.getItem(HOME_WALKTHROUGH_STORAGE_KEY);
+    if (!hasSeenHint) {
+      setShowOnboardingHint(true);
+    }
+  }, []);
+
+  const dismissOnboardingHint = () => {
+    setShowOnboardingHint(false);
+    localStorage.setItem(HOME_WALKTHROUGH_STORAGE_KEY, 'true');
+  };
   const [quantumrootBalance, setQuantumrootBalance] = useState(0);
   const [quantumrootVaultCount, setQuantumrootVaultCount] = useState(0);
 
@@ -79,7 +94,8 @@ const Home: React.FC = () => {
     }
 
     try {
-      const summary = await QuantumrootPortfolioService.summarizeWallet(currentWalletId);
+      const summary =
+        await QuantumrootPortfolioService.summarizeWallet(currentWalletId);
       setQuantumrootBalance(summary.quantumrootBalanceSats);
       setQuantumrootVaultCount(summary.vaultCount);
     } catch (error) {
@@ -114,11 +130,14 @@ const Home: React.FC = () => {
           keyPairs.map((keyPair) => keyPair.address)
         );
         const quantumrootAddresses =
-          await QuantumrootTrackingService.listTrackedAddresses(currentWalletId);
-        const fetchedQuantumrootByAddress = await UTXOService.fetchAndStoreUTXOsMany(
-          currentWalletId,
-          quantumrootAddresses
-        );
+          await QuantumrootTrackingService.listTrackedAddresses(
+            currentWalletId
+          );
+        const fetchedQuantumrootByAddress =
+          await UTXOService.fetchAndStoreUTXOsMany(
+            currentWalletId,
+            quantumrootAddresses
+          );
 
         for (const keyPair of keyPairs) {
           allUTXOs[keyPair.address] = fetchedByAddress[keyPair.address] ?? [];
@@ -187,12 +206,13 @@ const Home: React.FC = () => {
   }, [keyPairs]);
 
   return (
-    <div className="container mx-auto max-w-md p-4 pb-16 wallet-page">
+    <div className="container mx-auto max-w-md h-[calc(100dvh-var(--navbar-height)-var(--safe-bottom))] px-4 pt-4 pb-[calc(var(--safe-bottom)+1rem)] flex flex-col overflow-hidden wallet-page">
       <PageHeader
         title="Home"
         subtitle={currentNetwork === Network.CHIPNET ? 'Chipnet' : ''}
         compact
       />
+      <div className="flex-1 min-h-0 overflow-y-auto pr-1">
       <PriceFeed />
 
       <SectionCard className="mt-3">
@@ -247,7 +267,7 @@ const Home: React.FC = () => {
           totalAmount={displayBalance}
           quantumrootAmount={quantumrootBalance}
           quantumrootVaultCount={quantumrootVaultCount}
-        />{' '}
+        />
       </div>
 
       <div className="w-full max-w-full mx-auto mt-4 flex justify-center">
@@ -304,6 +324,42 @@ const Home: React.FC = () => {
             )}
           </div>
         </Popup>
+      )}
+
+      </div>
+
+      {showOnboardingHint && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+          <div className="w-full max-w-md mx-4">
+            <WalkthroughPanel
+              title="How your wallet works"
+              description="This home screen is your control center. Use it to create receiving addresses, refresh wallet data, and inspect balances before you send or receive funds."
+              steps={[
+                {
+                  title: 'New Address',
+                  description:
+                    'Creates a fresh receive address so you can share it without reusing older ones.',
+                },
+                {
+                  title: 'Sync',
+                  description:
+                    'Refreshes your wallet history, balances, and pending outgoing transactions.',
+                },
+                {
+                  title: 'Show CashTokens',
+                  description:
+                    'Opens a token summary so you can review fungible and non-fungible holdings.',
+                },
+              ]}
+            />
+            <button
+              onClick={dismissOnboardingHint}
+              className="wallet-btn-primary w-full mt-4"
+            >
+              Got it
+            </button>
+          </div>
+        </div>
       )}
     </div>
   );

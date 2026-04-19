@@ -343,7 +343,9 @@ const QuantumrootVaultPopup: React.FC<QuantumrootVaultPopupProps> = ({
         </div>
         {isPreviewOnly ? (
           <div className="text-xs wallet-muted">
-            Mainnet Quantumroot actions remain disabled until activation on {activationLabel}.
+            Mainnet Quantumroot uses the same UI as Chipnet, but the spend,
+            recovery, and token-configuration actions remain disabled until
+            activation on {activationLabel}.
           </div>
         ) : null}
         <div className="text-xs wallet-muted space-y-1">

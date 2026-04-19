@@ -5,3 +5,16 @@ export const shortenTxHash = (txHash: string, prefixLength: number = 0) => {
 
   return `${txHash.slice(0, visibleLength)}**********${txHash.slice(-5)}`;
 };
+
+export const shortenAddress = (address: string) => {
+  if (!address) return '';
+
+  // For BCH addresses, show prefix + first 8 + ... + last 8
+  const parts = address.split(':');
+  const prefix = parts.length > 1 ? `${parts[0]}:${parts[1].slice(0, 1)}` : '';
+  const addr = parts[parts.length - 1];
+
+  if (addr.length <= 20) return address; // No need to shorten short addresses
+
+  return `${prefix}${addr.slice(0, 8)}...${addr.slice(-8)}`;
+};

@@ -67,10 +67,8 @@ export default function SimpleSend() {
     fiatSummary,
 
     selectedForTx, // debug
-	  } = useSimpleSend();
-  const {
-    hasUnresolved,
-  } = useOutboundTransactions(walletId);
+  } = useSimpleSend();
+  const { hasUnresolved } = useOutboundTransactions(walletId);
 
   const isSending = mode === 'sending';
   const [reviewModalOpen, setReviewModalOpen] = useState(false);
@@ -139,14 +137,31 @@ export default function SimpleSend() {
   }, [mode]);
 
   const handleReviewClick = async () => {
+    navigator.vibrate?.(50); // Haptic feedback
     setPendingReviewFlow(true);
     await doReview();
   };
   const handleConfirmSend = () => {
+    navigator.vibrate?.(50); // Haptic feedback
     void doSend();
   };
 
+  const enhanceErrorMessage = (err: string) => {
+    if (err.toLowerCase().includes('invalid address')) {
+      return 'Invalid address—double-check for typos or try scanning a QR code.';
+    }
+    if (err.toLowerCase().includes('insufficient funds')) {
+      return 'Not enough funds. Check your balance or reduce the amount.';
+    }
+    if (err.toLowerCase().includes('network')) {
+      return 'Network error. Check your connection and try again.';
+    }
+    // Default to original
+    return err;
+  };
+
   const pageError = mode === 'error' ? error : null;
+  const enhancedError = pageError ? enhanceErrorMessage(pageError) : null;
 
   return (
     <div className="container mx-auto max-w-xl h-[calc(100dvh-var(--navbar-height)-var(--safe-bottom))] px-4 pt-4 pb-3 flex flex-col overflow-hidden wallet-page">
@@ -335,7 +350,8 @@ export default function SimpleSend() {
                       className={inputClass}
                     />
                     <div className="text-[11px] wallet-muted">
-                      Leave blank to send the first available NFT in this category.
+                      Leave blank to send the first available NFT in this
+                      category.
                     </div>
                   </div>
                 )}
@@ -354,9 +370,9 @@ export default function SimpleSend() {
       </div>
 
       {/* Error */}
-      {pageError && (
+      {enhancedError && (
         <div className="mt-3 p-3 rounded-2xl border wallet-danger-panel text-sm shadow-sm shrink-0">
-          {pageError}
+          {enhancedError}
         </div>
       )}
 

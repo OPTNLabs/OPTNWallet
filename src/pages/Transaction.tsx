@@ -402,12 +402,13 @@ const Transaction: React.FC = () => {
 
   return (
     <ErrorBoundary>
-      <div className="container mx-auto max-w-xl p-4 pb-16 overflow-x-hidden wallet-page">
+      <div className="container mx-auto max-w-xl h-[calc(100dvh-var(--navbar-height)-var(--safe-bottom))] px-4 pt-4 pb-[calc(var(--safe-bottom)+1rem)] flex flex-col overflow-hidden wallet-page">
         <PageHeader
           title="Custom Send"
           compact
         />
 
+        <div className="flex-1 min-h-0 overflow-y-auto pr-1">
         <SectionCard className="mb-3 wallet-step-card">
           <div className="flex items-center justify-between gap-3">
             <div className="wallet-kicker">Flow</div>
@@ -699,6 +700,7 @@ const Transaction: React.FC = () => {
             onFunctionSelect={onContractFunctionSelect}
           />
         )}
+        </div>
       </div>
     </ErrorBoundary>
   );

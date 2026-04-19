@@ -23,6 +23,10 @@ vi.mock('../OutboundTransactionTracker', () => ({
   deriveTrackedTxid: vi.fn((rawTx: string) => `tracked:${rawTx}`),
 }));
 
+vi.mock('../../apis/DatabaseManager/DatabaseService', () => ({
+  default: vi.fn(),
+}));
+
 vi.mock('../KeyService', () => ({
   default: {
     retrieveKeys: retrieveKeysMock,

@@ -7,6 +7,7 @@ import WalletManager from '../../apis/WalletManager/WalletManager';
 import { Network, setNetwork } from '../../redux/networkSlice';
 import { selectCurrentNetwork } from '../../redux/selectors/networkSelectors';
 import { setWalletId, setWalletNetwork, setWalletType } from '../../redux/walletSlice';
+import KeyService from '../../services/KeyService';
 import { ONBOARDING_WALLET_NAME } from './constants';
 import { WalletType } from '../../types/wallet';
 import InfoTooltipIcon from './components/InfoTooltipIcon';
@@ -166,6 +167,10 @@ const ImportWalletPage = () => {
           : walletInfo?.networkType === Network.CHIPNET
             ? Network.CHIPNET
             : currentNetwork;
+
+      void KeyService.bootstrapInitialAddressBatch(walletID, 0, 10).catch((error) => {
+        console.error('Failed to bootstrap initial addresses:', error);
+      });
 
       dispatch(setWalletId(walletID));
       dispatch(setWalletNetwork(resolvedNetwork));

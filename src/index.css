@@ -198,6 +198,13 @@
   .wallet-btn-primary:hover {
     background: var(--wallet-btn-primary-hover);
   }
+  .wallet-btn-primary.wallet-btn-primary-blue {
+    background: linear-gradient(180deg, #4b9fff 0%, #3184f0 55%, #1f67c8 100%);
+    border: 1px solid #4f89d6;
+  }
+  .wallet-btn-primary.wallet-btn-primary-blue:hover {
+    background: linear-gradient(180deg, #57a6ff 0%, #3a8af2 55%, #246ed0 100%);
+  }
   .wallet-btn-primary:active {
     transform: translateY(1px) scale(0.995);
   }
