@@ -1,7 +1,6 @@
 import { useState } from 'react';
 import { CapacitorBarcodeScannerTypeHint } from '@capacitor/barcode-scanner';
 import { Toast } from '@capacitor/toast';
-import { FaCamera } from 'react-icons/fa';
 import { useDispatch, useSelector } from 'react-redux';
 import type { AppDispatch, RootState } from '../../redux/store';
 import { initWizardConnect, wizardConnectPair } from '../../redux/wizardconnectSlice';
@@ -10,6 +9,7 @@ import {
   scanBarcodeSafely,
 } from '../../utils/barcodeScanner';
 import { toErrorMessage } from '../../utils/errorHandling';
+import ConnectionUriScanCard from '../connect/ConnectionUriScanCard';
 
 function isWizardUri(value: string): boolean {
   const normalized = value.trim().toLowerCase();
@@ -100,31 +100,18 @@ export default function WizardConnectionManager() {
   };
 
   return (
-    <div className="space-y-4 p-4 wallet-card">
-      <div className="flex flex-col space-y-2">
-        <label className="font-bold">Enter WizardConnect URI:</label>
-        <input
-          className="wallet-input"
-          placeholder="wiz://..."
-          value={uri}
-          onChange={(event) => setUri(event.target.value)}
-        />
-        <button
-          onClick={handleScan}
-          className="wallet-btn-primary py-2 px-4 flex items-center justify-center"
-          disabled={scanning || submitting}
-        >
-          <FaCamera className="mr-2" />
-          {scanning ? 'Scanning...' : 'Scan QR'}
-        </button>
-        <button
-          onClick={() => void requestConnect(uri)}
-          className="wallet-btn-primary"
-          disabled={submitting}
-        >
-          Connect
-        </button>
-      </div>
+    <div className="space-y-4">
+      <ConnectionUriScanCard
+        label="Enter WizardConnect URI:"
+        placeholder="wiz://..."
+        value={uri}
+        onChange={setUri}
+        onScan={handleScan}
+        onConnect={() => void requestConnect(uri)}
+        scanning={scanning}
+        submitting={submitting}
+        connectLabel="Connect"
+      />
 
       {pendingUri && (
         <div className="wallet-popup-backdrop">

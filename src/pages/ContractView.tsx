@@ -14,7 +14,7 @@ import { shortenTxHash } from '../utils/shortenHash';
 import { PREFIX } from '../utils/constants';
 import { Toast } from '@capacitor/toast';
 import Popup from '../components/transaction/Popup';
-import { Tooltip } from 'react-tooltip';
+import WalletTooltip from '../components/ui/WalletTooltip';
 import { logError, toErrorMessage } from '../utils/errorHandling';
 
 import {
@@ -475,7 +475,7 @@ const ContractView = () => {
                 ⓘ
               </span>
             </div>
-            <Tooltip
+            <WalletTooltip
               id="block-height"
               place="top"
               className="max-w-[80vw] whitespace-normal break-words text-sm leading-snug"
@@ -514,7 +514,7 @@ const ContractView = () => {
                       >
                         ⓘ
                       </span>
-                      <Tooltip
+                      <WalletTooltip
                         id={`datasig-tt-${index}`}
                         place="top"
                         className="max-w-[80vw] whitespace-normal break-words text-sm leading-snug"
@@ -606,7 +606,7 @@ const ContractView = () => {
                     >
                       ⓘ
                     </span>
-                    <Tooltip
+                    <WalletTooltip
                       id={`argtype-tt-${index}`}
                       place="top"
                       className="max-w-[80vw] whitespace-normal break-words text-sm leading-snug"

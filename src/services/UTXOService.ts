@@ -3,6 +3,8 @@ import ElectrumService from './ElectrumService';
 import UTXOManager from '../apis/UTXOManager/UTXOManager';
 import AddressManager from '../apis/AddressManager/AddressManager';
 import BcmrService from './BcmrService';
+import WalletDiscoveryService from './WalletDiscoveryService';
+import TransactionManager from '../apis/TransactionManager/TransactionManager';
 import { UTXO } from '../types/types';
 import { Network } from '../redux/networkSlice';
 import { store } from '../redux/store';
@@ -18,6 +20,25 @@ function getPrefix(): string {
   } catch {
     return 'bitcoincash';
   }
+}
+
+async function hasElectrumBatchUsage(
+  walletId: number,
+  batch: { address: string }[]
+): Promise<boolean> {
+  if (batch.length === 0) return false;
+
+  const addresses = batch.map((item) => item.address);
+  const [historiesByAddress, utxosByAddress] = await Promise.all([
+    TransactionManager().fetchAndStoreTransactionHistories(walletId, addresses),
+    ElectrumService.getUTXOsMany(addresses),
+  ]);
+
+  return batch.some((item) => {
+    const history = historiesByAddress[item.address];
+    const utxos = utxosByAddress[item.address];
+    return (Array.isArray(history) && history.length > 0) || (Array.isArray(utxos) && utxos.length > 0);
+  });
 }
 
 async function enrichCachedTokenMetadata(
@@ -83,6 +104,12 @@ const UTXOService = {
     addresses: string[]
   ): Promise<Record<string, UTXO[]>> {
     try {
+      const currentNetwork = store.getState().network.currentNetwork;
+      await WalletDiscoveryService.ensureInitialAddressBatches(
+        walletId,
+        currentNetwork,
+        hasElectrumBatchUsage
+      );
       const manager = await UTXOManager();
       const addressManager = AddressManager();
       const uniqueAddresses = Array.from(new Set(addresses.filter(Boolean)));

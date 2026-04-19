@@ -10,6 +10,7 @@ export type InfraUrls = {
 export type InfraUrlPools = {
   electrumServers: string[];
   chaingraphUrls: string[];
+  bcmrNativeBaseUrls: string[];
   bcmrApiBaseUrls: string[];
   ipfsGateways: string[];
   ipfsUploadRelayBases: string[];
@@ -23,6 +24,7 @@ const DEFAULT_INFRA_URL_POOLS: Record<Network, InfraUrlPools> = {
       'electrum-chipnet.optnlabs.com',
     ],
     chaingraphUrls: ['https://gql.chaingraph.pat.mn/v1/graphql'],
+    bcmrNativeBaseUrls: ['https://tokenindex.optnlabs.com/v1'],
     bcmrApiBaseUrls: [
       'https://bcmr.optnlabs.com/api',
       'https://bcmr-chipnet.paytaca.com/api',
@@ -45,10 +47,8 @@ const DEFAULT_INFRA_URL_POOLS: Record<Network, InfraUrlPools> = {
       'explorer.bch.ninja',
     ],
     chaingraphUrls: ['https://gql.chaingraph.pat.mn/v1/graphql'],
-    bcmrApiBaseUrls: [
-      'https://bcmr.optnlabs.com/api',
-      'https://bcmr.paytaca.com/api',
-    ],
+    bcmrNativeBaseUrls: ['https://tokenindex.optnlabs.com/v1'],
+    bcmrApiBaseUrls: ['https://bcmr.optnlabs.com/api', 'https://bcmr.paytaca.com/api'],
     ipfsGateways: [
       'https://ipfs.optnlabs.com/ipfs',
       'https://ipfs.io/ipfs',
@@ -126,6 +126,10 @@ function normalizeBcmrApiBaseUrl(url: string): string {
   return normalizeHttpUrl(url).replace(/\/+$/, '');
 }
 
+function normalizeBcmrNativeBaseUrl(url: string): string {
+  return normalizeHttpUrl(url).replace(/\/+$/, '');
+}
+
 function normalizeIpfsGateway(url: string): string {
   const normalized = normalizeHttpUrl(url).replace(/\/+$/, '');
   return normalized.endsWith('/ipfs') ? normalized : `${normalized}/ipfs`;
@@ -150,6 +154,11 @@ export function getInfraUrlPools(network: Network): InfraUrlPools {
     'VITE_CHAINGRAPH_URLS',
     'VITE_CHAINGRAPH_URL'
   ).map(normalizeHttpUrl);
+  const bcmrNativeBaseUrls = readEndpointList(
+    network,
+    'VITE_BCMR_NATIVE_BASE_URLS',
+    'VITE_BCMR_NATIVE_BASE_URL'
+  ).map(normalizeBcmrNativeBaseUrl);
   const bcmrApiBaseUrls = readEndpointList(
     network,
     'VITE_BCMR_API_BASE_URLS',
@@ -168,6 +177,10 @@ export function getInfraUrlPools(network: Network): InfraUrlPools {
       electrumServers.length > 0 ? electrumServers : defaults.electrumServers,
     chaingraphUrls:
       chaingraphUrls.length > 0 ? chaingraphUrls : defaults.chaingraphUrls,
+    bcmrNativeBaseUrls:
+      bcmrNativeBaseUrls.length > 0
+        ? bcmrNativeBaseUrls
+        : defaults.bcmrNativeBaseUrls.map(normalizeBcmrNativeBaseUrl),
     bcmrApiBaseUrls:
       bcmrApiBaseUrls.length > 0
         ? bcmrApiBaseUrls
@@ -241,7 +254,7 @@ export function getInfraUrls(network: Network): InfraUrls {
 }
 
 /**
- * Paytaca-compatible route shape used by your code:
+ * Legacy BCMR-compatible route shape used for bcmr-indexer fallback:
  *   /api/registries/:authbase/latest
  */
 export function getBcmrLatestRegistryUrl(
@@ -257,6 +270,14 @@ export function getBcmrLatestRegistryUrls(
 ): string[] {
   const { bcmrApiBaseUrls } = getInfraUrlPools(network);
   return bcmrApiBaseUrls.map((base) => `${base}/registries/${authbase}/latest`);
+}
+
+export function getBcmrNativeTokenUrls(
+  network: Network,
+  category: string
+): string[] {
+  const { bcmrNativeBaseUrls } = getInfraUrlPools(network);
+  return bcmrNativeBaseUrls.map((base) => `${base}/token/${category}/bcmr`);
 }
 
 export function getElectrumServers(network: Network): string[] {

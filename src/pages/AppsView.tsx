@@ -46,11 +46,18 @@ function getAppSortPriority(app: Pick<AppCard, 'id' | 'name'>): number {
     normalizedId.endsWith(':cauldronswapapp') ||
     normalizedName === 'cauldron'
   ) {
+    return 3;
+  }
+
+  if (
+    normalizedId.endsWith(':paperwalletsweepapp') ||
+    normalizedName === 'paper wallet'
+  ) {
     return 2;
   }
 
   if (normalizedId.endsWith(':fundmeapp') || normalizedName === 'fundme') {
-    return 3;
+    return 4;
   }
 
   return 10;
@@ -160,7 +167,7 @@ const AppsView = () => {
   };
 
   return (
-    <div className="container mx-auto p-4">
+    <div className="container mx-auto h-[calc(100dvh-var(--navbar-height)-var(--safe-bottom))] px-4 pt-4 pb-[calc(var(--safe-bottom)+1rem)] flex flex-col overflow-hidden">
       <div className="flex justify-center mt-4">
         <img
           src="/assets/images/OPTNWelcome1.png"
@@ -169,7 +176,7 @@ const AppsView = () => {
         />
       </div>
 
-      <div className="container mx-auto p-4">
+      <div className="flex-1 min-h-0 overflow-hidden px-0 pt-4">
         <div className="flex justify-between items-center mb-6">
           <h1 className="text-2xl font-bold">Apps</h1>
           <button
@@ -186,7 +193,8 @@ const AppsView = () => {
           </div>
         )}
 
-        <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
+        <div className="h-full min-h-0 overflow-y-auto pr-1 pb-2">
+          <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
           {cards.map((app) => (
             <div
               key={app.id}
@@ -210,6 +218,7 @@ const AppsView = () => {
               </div>
             </div>
           ))}
+          </div>
         </div>
       </div>
     </div>

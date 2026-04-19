@@ -23,6 +23,7 @@ describe('ipfsFetch', () => {
     mockedGetInfraUrlPools.mockReturnValue({
       electrumServers: [],
       chaingraphUrls: [],
+      bcmrNativeBaseUrls: [],
       bcmrApiBaseUrls: [],
       ipfsGateways: ['https://gw1.example/ipfs', 'https://gw2.example/ipfs'],
       ipfsUploadRelayBases: [],

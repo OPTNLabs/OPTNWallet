@@ -19,6 +19,7 @@ const REQUEST_TIMEOUT_MS = 12000;
 const BACKOFF_BASE_MS = 3000;
 const BACKOFF_MAX_MS = 60000;
 const WSS_PORT = 50004;
+const IDLE_RECONNECT_AFTER_MS = 5 * 60 * 1000;
 
 // Convenience alias for a typed Electrum client
 type ECClient = ElectrumClient<ElectrumClientEvents>;
@@ -34,6 +35,7 @@ let connectPromise: Promise<ECClient> | null = null;
 let serverIndex = 0;
 let backoffMs = BACKOFF_BASE_MS;
 let nextAllowedConnectTs = 0;
+let lastSuccessfulActivityTs = 0;
 
 // Make sure we only wire 'notification' once per client instance
 let notificationsWired = false;
@@ -79,6 +81,10 @@ function bumpBackoff() {
 function resetBackoff() {
   backoffMs = BACKOFF_BASE_MS;
   nextAllowedConnectTs = 0;
+}
+
+function markSuccessfulActivity() {
+  lastSuccessfulActivityTs = Date.now();
 }
 
 function subKey(method: string, params?: ElectrumParams): string {
@@ -281,6 +287,7 @@ export default function ElectrumServer() {
             electrum = client;
             serverIndex = servers.indexOf(host);
             resetBackoff();
+            markSuccessfulActivity();
 
             // Ensure notifications are wired and replay subs
             notificationsWired = false;
@@ -321,6 +328,29 @@ export default function ElectrumServer() {
     return false;
   }
 
+  async function ensureFreshConnection(): Promise<void> {
+    if (!electrum) {
+      await electrumConnect();
+      return;
+    }
+
+    const idleFor = Date.now() - lastSuccessfulActivityTs;
+    if (idleFor < IDLE_RECONNECT_AFTER_MS) return;
+
+    try {
+      const res = await withTimeout(
+        electrum.request('server.ping'),
+        REQUEST_TIMEOUT_MS,
+        'server.ping'
+      );
+      if (res instanceof Error) throw res;
+      markSuccessfulActivity();
+    } catch {
+      await electrumDisconnect();
+      await electrumConnect();
+    }
+  }
+
   async function request(
     method: string,
     ...params: ElectrumParams
@@ -333,6 +363,7 @@ export default function ElectrumServer() {
         `request(${method})`
       );
       if (res instanceof Error) throw res;
+      markSuccessfulActivity();
       return res;
     } catch (err) {
       const { servers } = getNetworkAndServers();
@@ -345,6 +376,7 @@ export default function ElectrumServer() {
         `request(${method})`
       );
       if (res instanceof Error) throw res;
+      markSuccessfulActivity();
       return res;
     }
   }
@@ -355,6 +387,7 @@ export default function ElectrumServer() {
     if (calls.length === 0) return [];
 
     await electrumConnect();
+    await ensureFreshConnection();
     try {
       return await withTimeout(
         sendBatch(electrum!, calls),
@@ -401,15 +434,17 @@ export default function ElectrumServer() {
     };
 
     try {
-      await doSubscribe();
-      activeSubs.set(key, { method, params });
-    } catch {
+    await doSubscribe();
+    activeSubs.set(key, { method, params });
+    markSuccessfulActivity();
+  } catch {
       const { servers } = getNetworkAndServers();
       const nextServer = getNextServer(servers, serverIndex);
       await electrumDisconnect();
       await electrumConnect(nextServer);
       await doSubscribe();
       activeSubs.set(key, { method, params });
+      markSuccessfulActivity();
     }
   }
 
@@ -450,6 +485,7 @@ export default function ElectrumServer() {
     electrumConnect,
     electrumReconnect,
     electrumDisconnect,
+    ensureFreshConnection,
     request,
     requestMany,
     subscribe,

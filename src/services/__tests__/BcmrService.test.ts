@@ -308,6 +308,71 @@ describe('BcmrService', () => {
     expect(result).toMatchObject({ registryUri: 'ipfs://authchain' });
   });
 
+  it('prefers tokenindexer v1 BCMR before legacy registry URLs', async () => {
+    const authbase =
+      'eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee';
+    const service = new BcmrService() as unknown as {
+      resolveIdentityRegistryUncached: (authbase: string) => Promise<unknown>;
+      loadIdentityRegistry: ReturnType<typeof vi.fn>;
+      fetchTokenIndexNativeRegistry: ReturnType<typeof vi.fn>;
+      fetchAndCommitRegistry: ReturnType<typeof vi.fn>;
+      resolveAuthChainRegistry: ReturnType<typeof vi.fn>;
+    };
+
+    service.loadIdentityRegistry = vi.fn().mockRejectedValue(new Error('missing'));
+    service.fetchTokenIndexNativeRegistry = vi
+      .fn()
+      .mockResolvedValue({
+        registryUri: `https://tokenindex.optnlabs.com/v1/token/${authbase}/bcmr`,
+        registry: {},
+      });
+    service.fetchAndCommitRegistry = vi.fn();
+    service.resolveAuthChainRegistry = vi.fn();
+
+    const result = await service.resolveIdentityRegistryUncached(authbase);
+
+    expect(service.fetchTokenIndexNativeRegistry).toHaveBeenCalledWith(authbase, [
+      `https://tokenindex.optnlabs.com/v1/token/${authbase}/bcmr`,
+    ]);
+    expect(service.fetchAndCommitRegistry).not.toHaveBeenCalled();
+    expect(service.resolveAuthChainRegistry).not.toHaveBeenCalled();
+    expect(result).toMatchObject({
+      registryUri: `https://tokenindex.optnlabs.com/v1/token/${authbase}/bcmr`,
+    });
+  });
+
+  it('falls back to legacy registry URLs when tokenindexer v1 is unavailable', async () => {
+    const authbase =
+      'ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff';
+    const service = new BcmrService() as unknown as {
+      resolveIdentityRegistryUncached: (authbase: string) => Promise<unknown>;
+      loadIdentityRegistry: ReturnType<typeof vi.fn>;
+      fetchTokenIndexNativeRegistry: ReturnType<typeof vi.fn>;
+      fetchAndCommitRegistry: ReturnType<typeof vi.fn>;
+    };
+
+    service.loadIdentityRegistry = vi.fn().mockRejectedValue(new Error('missing'));
+    service.fetchTokenIndexNativeRegistry = vi.fn().mockResolvedValue(null);
+    service.fetchAndCommitRegistry = vi.fn().mockResolvedValue({
+      registryUri: `https://bcmr.optnlabs.com/api/registries/${authbase}/latest`,
+      registry: {},
+    });
+
+    const result = await service.resolveIdentityRegistryUncached(authbase);
+
+    expect(service.fetchTokenIndexNativeRegistry).toHaveBeenCalled();
+    expect(service.fetchAndCommitRegistry).toHaveBeenCalledWith(
+      authbase,
+      [
+        `https://bcmr.optnlabs.com/api/registries/${authbase}/latest`,
+        `https://bcmr.paytaca.com/api/registries/${authbase}/latest`,
+      ]
+    );
+    expect(result).toMatchObject({
+      registryUri: `https://bcmr.optnlabs.com/api/registries/${authbase}/latest`,
+    });
+  });
+
   it('prefers authchain BCMR over a stale hosted latest registry', async () => {
     const authbase =
       'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';

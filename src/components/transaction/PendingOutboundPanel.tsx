@@ -3,6 +3,7 @@ import OutboundTransactionTracker, {
   type OutboundTransactionRecord,
 } from '../../services/OutboundTransactionTracker';
 import { Link } from 'react-router-dom';
+import WalletTooltip from '../ui/WalletTooltip';
 
 type PendingOutboundPanelProps = {
   records: OutboundTransactionRecord[];
@@ -46,7 +47,8 @@ export default function PendingOutboundPanel({
               : `${records.length} outgoing transactions still syncing`}
           </div>
           <div className="text-xs wallet-muted mt-1">
-            To prevent accidental repeats, new sends stay locked until these appear in your wallet history.
+            To prevent accidental repeats, new sends stay locked until these
+            appear in your wallet history.
           </div>
         </div>
         {onRefresh && (
@@ -76,10 +78,22 @@ export default function PendingOutboundPanel({
             className="rounded-xl border border-[var(--wallet-border)] px-3 py-2"
           >
             <div className="flex items-center justify-between gap-3">
-              <div className="font-mono text-sm wallet-text-strong">
+              <div
+                className="font-mono text-sm wallet-text-strong cursor-pointer"
+                data-tooltip-id={`txid-tooltip-${record.txid}`}
+                data-tooltip-content={record.txid}
+              >
                 {shortenTxHash(record.txid)}
               </div>
-              <div className="text-[11px] wallet-muted">{stateLabel(record)}</div>
+              <WalletTooltip
+                id={`txid-tooltip-${record.txid}`}
+                place="top"
+                clickable={true}
+                content={record.txid}
+              />
+              <div className="text-[11px] wallet-muted">
+                {stateLabel(record)}
+              </div>
             </div>
             {onRelease && OutboundTransactionTracker.canRelease(record) && (
               <div className="mt-2 flex justify-end">

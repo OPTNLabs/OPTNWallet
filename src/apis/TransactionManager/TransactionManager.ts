@@ -11,7 +11,7 @@ import {
 import DatabaseService from '../DatabaseManager/DatabaseService';
 import TransactionBuilderHelper from './TransactionBuilderHelper';
 import { DUST, TOKEN_OUTPUT_SATS } from '../../utils/constants';
-import { logError, toErrorMessage } from '../../utils/errorHandling';
+import { logError, logWarn, toErrorMessage } from '../../utils/errorHandling';
 import { classifyBroadcastFailure } from '../../utils/broadcastErrors';
 import { toTokenAwareCashAddress } from '../../utils/cashAddress';
 import { binToHex, hexToBin } from '../../utils/hex';
@@ -86,7 +86,11 @@ export default function TransactionManager() {
   ): Promise<TransactionHistoryItem[]> {
     const history = await ElectrumService.getTransactionHistory(address);
     if (!Array.isArray(history)) {
-      throw new Error('Invalid transaction history format');
+      logWarn('TransactionManager.fetchAndStoreTransactionHistory', 'Skipping non-array transaction history response', {
+        address,
+        walletId,
+      });
+      return [];
     }
 
     return storeTransactionHistory(walletId, address, history);
@@ -105,6 +109,19 @@ export default function TransactionManager() {
     for (const address of uniqueAddresses) {
       const history = histories[address];
       if (!Array.isArray(history)) {
+        if (history == null) {
+          stored[address] = undefined;
+          continue;
+        }
+
+        logWarn(
+          'TransactionManager.fetchAndStoreTransactionHistories',
+          'Skipping non-array transaction history response',
+          {
+            address,
+            walletId,
+          }
+        );
         continue;
       }
 

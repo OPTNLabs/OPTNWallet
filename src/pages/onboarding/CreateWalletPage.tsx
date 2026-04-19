@@ -94,6 +94,10 @@ const CreateWalletPage = () => {
         throw new Error('Failed to resolve wallet network.');
       }
 
+      void KeyService.bootstrapInitialAddressBatch(walletID, 0, 10).catch((error) => {
+        console.error('Failed to bootstrap initial addresses:', error);
+      });
+
       dispatch(setWalletId(walletID));
       dispatch(setWalletNetwork(resolvedNetwork));
       dispatch(setWalletType(walletInfo?.walletType ?? WalletType.STANDARD));
