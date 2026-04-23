@@ -1,8 +1,10 @@
-import { binToHex, hexToBin } from '@bitauth/libauth';
+import { binToHex, decodeTransaction, hexToBin } from '@bitauth/libauth';
 
 import { Network } from '../../redux/networkSlice';
+import KeyService from '../KeyService';
 import { parseSatoshis } from '../../utils/binary';
 import { derivePublicKeyHash } from '../../utils/derivePublicKeyHash';
+import { deriveBchAddressFromHdPublicKey } from '../HdWalletService';
 import { CauldronApiClient, type CauldronActivePoolRow } from './api';
 import {
   calcCauldronPairRate,
@@ -14,6 +16,7 @@ import {
 } from './math';
 import {
   buildCauldronPoolV0LockingBytecode,
+  extractCauldronPoolV0ParametersFromUnlockingBytecode,
   tryParseCauldronPoolFromUtxo,
 } from './script';
 import {
@@ -27,6 +30,7 @@ import {
   type CauldronWalletPoolPosition,
 } from './types';
 import type { UTXO } from '../../types/types';
+import type { OutboundTransactionRecord } from '../OutboundTransactionTracker';
 
 function asString(value: unknown): string {
   return typeof value === 'string' ? value.trim() : '';
@@ -37,6 +41,19 @@ function asHexBytes(value: unknown): Uint8Array | null {
   const hex = value.trim().toLowerCase().replace(/^0x/, '');
   if (!/^[0-9a-f]+$/.test(hex) || hex.length % 2 !== 0) return null;
   return hexToBin(hex);
+}
+
+function normalizeTokenCategory(value: unknown): string {
+  if (typeof value === 'string') return value.trim().toLowerCase();
+  if (value instanceof Uint8Array) return binToHex(value).toLowerCase();
+  if (Array.isArray(value)) {
+    try {
+      return binToHex(Uint8Array.from(value as number[])).toLowerCase();
+    } catch {
+      return '';
+    }
+  }
+  return '';
 }
 
 function findString(
@@ -131,6 +148,83 @@ export function normalizeCauldronPoolRow(
     ownerAddress: findString(row, ['owner_p2pkh_addr']) || null,
     poolId: findString(row, ['pool_id']) || null,
   };
+}
+
+export type CauldronWalletCreatedPoolCandidate = {
+  txHash: string;
+  outputIndex: number;
+  tokenCategory: string;
+};
+
+function getCandidateOutputKey(txHash: string, outputIndex: number): string {
+  return `${txHash}:${outputIndex}`;
+}
+
+export function collectWalletCreatedCauldronPoolCandidates(
+  records: Array<
+    Pick<OutboundTransactionRecord, 'txid' | 'rawTx' | 'spentOutpoints'>
+  >
+): CauldronWalletCreatedPoolCandidate[] {
+  const spentOutpointSet = new Set(
+    records.flatMap((record) =>
+      record.spentOutpoints.map(
+        (outpoint) => `${outpoint.tx_hash}:${outpoint.tx_pos}`
+      )
+    )
+  );
+  const candidates: CauldronWalletCreatedPoolCandidate[] = [];
+  for (const record of records) {
+    if (!record.rawTx) continue;
+    let decoded;
+    try {
+      decoded = decodeTransaction(hexToBin(record.rawTx));
+    } catch {
+      continue;
+    }
+    if (typeof decoded === 'string') continue;
+
+    const hasCauldronContractInput = decoded.inputs.some((input) => {
+      const unlockingBytecode = input.unlockingBytecode;
+      if (!(unlockingBytecode instanceof Uint8Array)) return false;
+      return (
+        extractCauldronPoolV0ParametersFromUnlockingBytecode(unlockingBytecode) !==
+        null
+      );
+    });
+    if (hasCauldronContractInput) continue;
+
+    decoded.outputs.forEach((output, outputIndex) => {
+      const lockingBytecode = output.lockingBytecode;
+      if (!(lockingBytecode instanceof Uint8Array) || lockingBytecode.length === 0) {
+        return;
+      }
+
+      const tokenCategory = normalizeTokenCategory(output.token?.category);
+      if (!tokenCategory) return;
+
+      const tokenAmount =
+        typeof output.token?.amount === 'bigint'
+          ? output.token.amount
+          : typeof output.token?.amount === 'number'
+            ? BigInt(Math.trunc(output.token.amount))
+            : typeof output.token?.amount === 'string' &&
+                output.token.amount.trim()
+              ? BigInt(output.token.amount)
+              : 0n;
+      if (tokenAmount <= 0n) return;
+      if (spentOutpointSet.has(getCandidateOutputKey(record.txid, outputIndex))) {
+        return;
+      }
+
+      candidates.push({
+        txHash: record.txid,
+        outputIndex,
+        tokenCategory,
+      });
+    });
+  }
+
+  return candidates;
 }
 
 export type NormalizedCauldronToken = {
@@ -380,7 +474,11 @@ function planAggregatedTradeForTargetSupplyWithChunkCount(
 ): { trades: CauldronPoolTrade[]; summary: CauldronTradeSummary } | null {
   if (supplyAmount <= 0n || pools.length === 0) return null;
 
-  const workingPools = pools.map((pool) => ({
+  const workingPools = rankCauldronPoolsBySpotPrice(
+    pools,
+    supplyTokenId,
+    demandTokenId
+  ).map((pool) => ({
     key: formatPoolOutpoint(pool),
     pool,
     allocatedSupply: 0n,
@@ -440,12 +538,20 @@ function planAggregatedTradeForTargetSupplyWithChunkCount(
     return best;
   };
 
+  const findBestFeasibleAllocation = (maxIncrement: bigint) => {
+    let increment = maxIncrement;
+    while (increment > 0n) {
+      const best = findBestPoolAllocation(increment);
+      if (best) return best;
+      increment /= 2n;
+    }
+    return null;
+  };
+
   for (let step = 0; step < chunkCount && remaining > 0n; step += 1) {
     const stepsLeft = BigInt(chunkCount - step);
     const chunk = remaining / stepsLeft > 0n ? remaining / stepsLeft : remaining;
-    const best = findBestPoolAllocation(chunk) ?? (chunk !== remaining
-      ? findBestPoolAllocation(remaining)
-      : null);
+    const best = findBestFeasibleAllocation(chunk);
 
     if (!best) {
       if (workingPools.every((entry) => entry.allocatedSupply === 0n)) return null;
@@ -462,7 +568,7 @@ function planAggregatedTradeForTargetSupplyWithChunkCount(
   }
 
   if (remaining > 0n) {
-    const bestFallback = findBestPoolAllocation(remaining);
+    const bestFallback = findBestFeasibleAllocation(remaining);
 
     if (!bestFallback) return null;
     workingPools[bestFallback.index] = {
@@ -511,6 +617,135 @@ function normalizeSinglePoolTradePlan(
   };
 }
 
+function planAggregatedTradeForTargetDemandWithChunkCount(
+  pools: CauldronPool[],
+  supplyTokenId: CauldronTokenId,
+  demandTokenId: CauldronTokenId,
+  demandAmount: bigint,
+  chunkCount = 16
+): { trades: CauldronPoolTrade[]; summary: CauldronTradeSummary } | null {
+  if (demandAmount <= 0n || pools.length === 0) return null;
+
+  const workingPools = rankCauldronPoolsBySpotPrice(
+    pools,
+    supplyTokenId,
+    demandTokenId
+  ).map((pool) => ({
+    key: formatPoolOutpoint(pool),
+    pool,
+    allocatedSupply: 0n,
+    allocatedDemand: 0n,
+    allocatedTradeFee: 0n,
+  }));
+  let remaining = demandAmount;
+
+  const findBestPoolAllocation = (increment: bigint) => {
+    let best:
+      | {
+          index: number;
+          trade: CauldronPoolTrade;
+          marginalSupply: bigint;
+          marginalTradeFee: bigint;
+        }
+      | null = null;
+
+    for (let i = 0; i < workingPools.length; i += 1) {
+      const current = workingPools[i];
+      let trade;
+      try {
+        const pair = createCauldronPoolPair(current.pool, supplyTokenId, demandTokenId);
+        trade = calcCauldronTradeWithTargetDemand(
+          pair,
+          current.allocatedDemand + increment
+        );
+      } catch {
+        continue;
+      }
+      if (!trade) continue;
+
+      const marginalSupply = trade.supply - current.allocatedSupply;
+      const marginalTradeFee = trade.tradeFee - current.allocatedTradeFee;
+      if (marginalSupply <= 0n || marginalTradeFee < 0n) continue;
+
+      const poolTrade = toCauldronPoolTrade(
+        current.pool,
+        supplyTokenId,
+        demandTokenId,
+        {
+          supply: trade.supply,
+          demand: trade.demand,
+          tradeFee: trade.tradeFee,
+        }
+      );
+
+      if (
+        !best ||
+        marginalSupply < best.marginalSupply ||
+        (marginalSupply === best.marginalSupply &&
+          marginalTradeFee < best.marginalTradeFee)
+      ) {
+        best = { index: i, trade: poolTrade, marginalSupply, marginalTradeFee };
+      }
+    }
+
+    return best;
+  };
+
+  const findBestFeasibleAllocation = (maxIncrement: bigint) => {
+    let increment = maxIncrement;
+    while (increment > 0n) {
+      const best = findBestPoolAllocation(increment);
+      if (best) return best;
+      increment /= 2n;
+    }
+    return null;
+  };
+
+  for (let step = 0; step < chunkCount && remaining > 0n; step += 1) {
+    const stepsLeft = BigInt(chunkCount - step);
+    const chunk = remaining / stepsLeft > 0n ? remaining / stepsLeft : remaining;
+    const best = findBestFeasibleAllocation(chunk);
+
+    if (!best) {
+      if (workingPools.every((entry) => entry.allocatedDemand === 0n)) return null;
+      break;
+    }
+
+    remaining -= best.trade.demand - workingPools[best.index]!.allocatedDemand;
+    workingPools[best.index] = {
+      ...workingPools[best.index],
+      allocatedSupply: best.trade.supply,
+      allocatedDemand: best.trade.demand,
+      allocatedTradeFee: best.trade.tradeFee,
+    };
+  }
+
+  if (remaining > 0n) {
+    const bestFallback = findBestFeasibleAllocation(remaining);
+
+    if (!bestFallback) return null;
+    workingPools[bestFallback.index] = {
+      ...workingPools[bestFallback.index],
+      allocatedSupply: bestFallback.trade.supply,
+      allocatedDemand: bestFallback.trade.demand,
+      allocatedTradeFee: bestFallback.trade.tradeFee,
+    };
+  }
+
+  const trades = workingPools
+    .filter((entry) => entry.allocatedDemand > 0n)
+    .map((entry) =>
+      toCauldronPoolTrade(entry.pool, supplyTokenId, demandTokenId, {
+        supply: entry.allocatedSupply,
+        demand: entry.allocatedDemand,
+        tradeFee: entry.allocatedTradeFee,
+      })
+    );
+  const summary = summarizeCauldronTrade(trades);
+  if (!summary) return null;
+  return { trades, summary };
+}
+
 export function planAggregatedTradeForTargetSupply(
   pools: CauldronPool[],
   supplyTokenId: CauldronTokenId,
@@ -549,6 +784,44 @@ export function planAggregatedTradeForTargetSupply(
   return best;
 }
 
+export function planAggregatedTradeForTargetDemand(
+  pools: CauldronPool[],
+  supplyTokenId: CauldronTokenId,
+  demandTokenId: CauldronTokenId,
+  demandAmount: bigint,
+  chunkCount = 16
+): { trades: CauldronPoolTrade[]; summary: CauldronTradeSummary } | null {
+  if (demandAmount <= 0n || pools.length === 0) return null;
+
+  let best = normalizeSinglePoolTradePlan(
+    planBestSinglePoolTradeForTargetDemand(
+      pools,
+      supplyTokenId,
+      demandTokenId,
+      demandAmount
+    )
+  );
+
+  const candidateChunkCounts = Array.from(
+    new Set([1, 2, 4, 8, chunkCount, 16, 24, 32].filter((value) => value > 0))
+  );
+
+  for (const candidateChunkCount of candidateChunkCounts) {
+    best = pickBetterTradePlan(
+      best,
+      planAggregatedTradeForTargetDemandWithChunkCount(
+        pools,
+        supplyTokenId,
+        demandTokenId,
+        demandAmount,
+        candidateChunkCount
+      )
+    );
+  }
+
+  return best;
+}
+
 export async function fetchNormalizedCauldronPools(
   network: Network,
   client = new CauldronApiClient(network),
@@ -568,6 +841,43 @@ function publicKeyHashHexFromAddress(address: string): string | null {
   } catch {
     return null;
   }
+}
+
+export async function fetchCauldronDerivedWalletAddresses(
+  walletId: number,
+  network: Network,
+  maxAddressIndex = 100,
+  maxAccountIndex = 4
+): Promise<Array<{ address: string; tokenAddress: string }>> {
+  const results: Array<{ address: string; tokenAddress: string }> = [];
+  for (let accountIndex = 0; accountIndex <= maxAccountIndex; accountIndex += 1) {
+    let xpubs;
+    try {
+      xpubs = await KeyService.getWalletXpubs(walletId, accountIndex);
+    } catch {
+      continue;
+    }
+
+    for (const branchName of ['receive', 'change', 'defi'] as const) {
+      const xpub = xpubs[branchName]?.trim();
+      if (!xpub) continue;
+
+      for (let index = 0; index < maxAddressIndex; index += 1) {
+        const derived = deriveBchAddressFromHdPublicKey(
+          network,
+          xpub,
+          BigInt(index)
+        );
+        if (!derived) continue;
+        results.push({
+          address: derived.address,
+          tokenAddress: derived.tokenAddress,
+        });
+      }
+    }
+  }
+
+  return results;
 }
 
 function dedupeCauldronPools(pools: CauldronPool[]): CauldronPool[] {
@@ -614,11 +924,13 @@ export async function fetchNormalizedCauldronUserPools(
 
   if (publicKeyHashes.length === 0) return [];
 
-  const results = await Promise.all(
-    publicKeyHashes.map(async (publicKeyHash) =>
-      client.listActivePools({ publicKeyHash })
+  const results = (
+    await Promise.allSettled(
+      publicKeyHashes.map((publicKeyHash) =>
+        client.listActivePools({ publicKeyHash })
+      )
     )
-  );
+  ).flatMap((result) => (result.status === 'fulfilled' ? [result.value] : []));
 
   return dedupeCauldronPools(
     results
