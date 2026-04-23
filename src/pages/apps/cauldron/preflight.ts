@@ -1,6 +1,7 @@
 import { binToHex, hexToBin } from '@bitauth/libauth';
 
 import type { AddonSDK } from '../../../services/AddonsSDK';
+import type { CauldronActivePoolRow } from '../../../services/cauldron';
 import type {
   CauldronPool,
   CauldronWalletPoolPosition,
@@ -10,6 +11,21 @@ import type { UTXO } from '../../../types/types';
 import { parseSatoshis } from '../../../utils/binary';
 
 type CauldronChainPoolSdk = Pick<AddonSDK, 'chain'>;
+
+type CachedChainQuery = {
+  expiresAt: number;
+  rows: CauldronActivePoolRow[];
+};
+
+const CHAIN_QUERY_CACHE_TTL_MS = 10_000;
+const chainQueryCacheByClient = new WeakMap<
+  CauldronChainPoolSdk['chain'],
+  Map<string, CachedChainQuery>
+>();
+const inFlightChainQueriesByClient = new WeakMap<
+  CauldronChainPoolSdk['chain'],
+  Map<string, Promise<CauldronActivePoolRow[]>>
+>();
 
 export function getUtxoOutpointKey(utxo: UTXO): string {
   return `${utxo.tx_hash}:${utxo.tx_pos}`;
@@ -49,6 +65,57 @@ function getChainRowLockingBytecode(
     row.locking_bytecode ?? row.lockingBytecode
   );
   return lockingBytecodeHex ? hexToBin(lockingBytecodeHex) : fallback;
+}
+
+async function queryPoolsForTokenId(
+  sdk: CauldronChainPoolSdk,
+  lockingBytecodeHex: string,
+  tokenId: string
+): Promise<CauldronActivePoolRow[]> {
+  const clientCache =
+    chainQueryCacheByClient.get(sdk.chain) ??
+    new Map<string, CachedChainQuery>();
+  if (!chainQueryCacheByClient.has(sdk.chain)) {
+    chainQueryCacheByClient.set(sdk.chain, clientCache);
+  }
+
+  const clientInFlight =
+    inFlightChainQueriesByClient.get(sdk.chain) ??
+    new Map<string, Promise<CauldronActivePoolRow[]>>();
+  if (!inFlightChainQueriesByClient.has(sdk.chain)) {
+    inFlightChainQueriesByClient.set(sdk.chain, clientInFlight);
+  }
+
+  const cacheKey = `${lockingBytecodeHex}:${tokenId}`;
+  const cached = clientCache.get(cacheKey);
+  if (cached && cached.expiresAt > Date.now()) {
+    return cached.rows;
+  }
+
+  const inFlight = clientInFlight.get(cacheKey);
+  if (inFlight) return inFlight;
+
+  const request = (async () => {
+    const response = await sdk.chain.queryUnspentByLockingBytecode(
+      lockingBytecodeHex,
+      tokenId
+    );
+    const rows = Array.isArray(response?.data?.output)
+      ? (response.data.output as CauldronActivePoolRow[])
+      : [];
+    clientCache.set(cacheKey, {
+      expiresAt: Date.now() + CHAIN_QUERY_CACHE_TTL_MS,
+      rows,
+    });
+    return rows;
+  })();
+
+  clientInFlight.set(cacheKey, request);
+  try {
+    return await request;
+  } finally {
+    clientInFlight.delete(cacheKey);
+  }
 }
 
 function rehydratePoolFromChainRow(
@@ -120,13 +187,11 @@ export async function fetchCurrentQuotedPoolsFromChain(args: {
     const outpointKey = getPoolOutpointKey(pool);
     if (resolvedByOutpoint.has(outpointKey)) continue;
 
-    const response = await sdk.chain.queryUnspentByLockingBytecode(
+    const rows = await queryPoolsForTokenId(
+      sdk,
       binToHex(pool.output.lockingBytecode),
       pool.output.tokenCategory
     );
-    const rows = Array.isArray(response?.data?.output)
-      ? (response.data.output as Array<Record<string, unknown>>)
-      : [];
     const exactRow = rows.find((row) => getChainRowOutpointKey(row) === outpointKey);
 
     if (!exactRow) {
@@ -164,13 +229,11 @@ export async function fetchVisiblePoolsFromChain(args: {
     const outpointKey = getPoolOutpointKey(pool);
     if (confirmedByOutpoint.has(outpointKey)) continue;
 
-    const response = await sdk.chain.queryUnspentByLockingBytecode(
+    const rows = await queryPoolsForTokenId(
+      sdk,
       binToHex(pool.output.lockingBytecode),
       pool.output.tokenCategory
     );
-    const rows = Array.isArray(response?.data?.output)
-      ? (response.data.output as Array<Record<string, unknown>>)
-      : [];
     const exactRow = rows.find((row) => getChainRowOutpointKey(row) === outpointKey);
 
     if (!exactRow) {
