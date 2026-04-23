@@ -13,6 +13,10 @@ import { initWalletConnect } from '../redux/walletconnectSlice';
 import { initWizardConnect } from '../redux/wizardconnectSlice';
 import { clearNotifications, UtxoNotification } from '../redux/notificationsSlice';
 import { AppDispatch } from '../redux/store';
+import {
+  clearServerNotifications,
+  enqueueServerNotification,
+} from '../redux/serverNotificationsSlice';
 import { reconcileOutboundTransactions } from '../services/OutboundTransactionReconciler';
 import { runOutboundReconcile } from '../services/RefreshCoordinator';
 import { Network, setNetwork } from '../redux/networkSlice';
@@ -20,6 +24,7 @@ import { setWalletNetwork, setWalletType } from '../redux/walletSlice';
 import { WalletType } from '../types/wallet';
 import ScreenSecurity from '../plugins/ScreenSecurity';
 import ElectrumServer from '../apis/ElectrumServer/ElectrumServer';
+import WalletBackendSyncService from '../services/WalletBackendSyncService';
 
 let utxoWorkerStarted = false;
 
@@ -190,6 +195,7 @@ export function useNotificationQueueReset(
   useEffect(() => {
     if (!walletId || walletId <= 0) {
       dispatch(clearNotifications());
+      dispatch(clearServerNotifications());
       notified.current.clear();
     }
   }, [walletId, dispatch, notified]);
@@ -312,4 +318,112 @@ export function useElectrumConnectivityWatch(walletId: number | null) {
       window.clearInterval(interval);
     };
   }, [walletId]);
+}
+
+export function useWalletBackendSync(walletId: number | null) {
+  const inFlight = useRef(false);
+
+  useEffect(() => {
+    if (!walletId || walletId <= 0) return;
+
+    let cancelled = false;
+
+    const syncBackend = async () => {
+      if (cancelled || inFlight.current) return;
+      inFlight.current = true;
+      try {
+        await WalletBackendSyncService.registerWallet(walletId);
+      } finally {
+        inFlight.current = false;
+      }
+    };
+
+    const handleVisible = () => {
+      if (document.visibilityState === 'visible') {
+        void syncBackend();
+      }
+    };
+    const handleOnline = () => {
+      void syncBackend();
+    };
+
+    void syncBackend();
+    window.addEventListener('focus', handleVisible);
+    window.addEventListener('online', handleOnline);
+    document.addEventListener('visibilitychange', handleVisible);
+    const interval = window.setInterval(() => {
+      if (document.visibilityState === 'visible') {
+        void syncBackend();
+      }
+    }, 10 * 60_000);
+
+    return () => {
+      cancelled = true;
+      window.removeEventListener('focus', handleVisible);
+      window.removeEventListener('online', handleOnline);
+      document.removeEventListener('visibilitychange', handleVisible);
+      window.clearInterval(interval);
+    };
+  }, [walletId]);
+}
+
+export function useServerNotificationPolling(
+  walletId: number | null,
+  dispatch: AppDispatch
+) {
+  const inFlight = useRef(false);
+
+  useEffect(() => {
+    if (!walletId || walletId <= 0) return;
+    if (!import.meta.env.DEV) return;
+
+    let cancelled = false;
+
+    const poll = async () => {
+      if (cancelled || inFlight.current) return;
+      inFlight.current = true;
+      try {
+        const notifications = await WalletBackendSyncService.listNotifications(walletId);
+        for (const notification of notifications) {
+          dispatch(
+            enqueueServerNotification({
+              id: notification.dedupe_key,
+              kind: notification.kind,
+              txid: notification.txid,
+              address: notification.address,
+              tokenCategory: notification.token_category,
+              blockHeight: notification.block_height,
+              createdAt: Date.now(),
+            })
+          );
+        }
+      } finally {
+        inFlight.current = false;
+      }
+    };
+
+    const handleVisible = () => {
+      if (document.visibilityState === 'visible') {
+        void poll();
+      }
+    };
+
+    void poll();
+    window.addEventListener('focus', handleVisible);
+    window.addEventListener('online', handleVisible);
+    document.addEventListener('visibilitychange', handleVisible);
+    const interval = window.setInterval(() => {
+      if (document.visibilityState === 'visible') {
+        void poll();
+      }
+    }, 60_000);
+
+    return () => {
+      cancelled = true;
+      window.removeEventListener('focus', handleVisible);
+      window.removeEventListener('online', handleVisible);
+      document.removeEventListener('visibilitychange', handleVisible);
+      window.clearInterval(interval);
+    };
+  }, [dispatch, walletId]);
 }

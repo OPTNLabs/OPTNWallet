@@ -26,13 +26,16 @@ import {
   useOutboundTransactionRecovery,
   useElectrumConnectivityWatch,
   useWalletNetworkBootstrap,
+  useServerNotificationPolling,
   useStatusBarSync,
   useUtxoQueueToOsNotifications,
   useWalletConnectInitialization,
   useWizardConnectInitialization,
   useWorkerLifecycle,
+  useWalletBackendSync,
 } from './app/useAppLifecycle';
 import UtxoNotificationCenter from './components/notifications/UtxoNotificationCenter';
+import ServerNotificationCenter from './components/notifications/ServerNotificationCenter';
 import MarketplaceAppHost from './pages/apps/MarketplaceAppHost';
 import CreateWalletPage from './pages/onboarding/CreateWalletPage';
 import ImportWalletPage from './pages/onboarding/ImportWalletPage';
@@ -55,6 +58,8 @@ function App() {
   useWorkerLifecycle(walletNetworkReady ? walletId : null);
   useOutboundTransactionRecovery(walletNetworkReady ? walletId : null);
   useElectrumConnectivityWatch(walletNetworkReady ? walletId : null);
+  useWalletBackendSync(walletNetworkReady ? walletId : null);
+  useServerNotificationPolling(walletNetworkReady ? walletId : null, dispatch);
 
   return (
     <div className="app-shell">
@@ -108,6 +113,7 @@ function App() {
         <WizardSignTransactionModal />
         {/* 🔔 Always-on in-app UTXO popup (only when wallet exists) */}
         {hasWallet && <UtxoNotificationCenter />}
+        {hasWallet && <ServerNotificationCenter />}
       </main>
     </div>
   );

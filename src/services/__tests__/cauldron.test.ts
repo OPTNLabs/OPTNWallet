@@ -38,6 +38,7 @@ import {
   calcCauldronPairRate,
   calcCauldronTradeFee,
   calcCauldronTradeWithTargetDemand,
+  calcCauldronTradeWithTargetSupply,
   createCauldronPoolPair,
   extractCauldronPoolV0ParametersFromUnlockingBytecode,
   formatPoolOutpoint,
@@ -45,6 +46,7 @@ import {
   normalizeCauldronPoolRow,
   normalizeCauldronTokenRow,
   detectCauldronWalletPoolPositions,
+  planAggregatedTradeForTargetDemand,
   planAggregatedTradeForTargetSupply,
   planBestSinglePoolTradeForTargetDemand,
   toCauldronPoolTrade,
@@ -524,6 +526,73 @@ describe('Cauldron service', () => {
     expect((aggregated?.summary.demand ?? 0n) > 0n).toBe(true);
   });
 
+  it('can aggregate a target-demand trade across multiple pools', () => {
+    const makePool = (txHashSeed: string, sats: bigint, tokens: bigint) => ({
+      version: '0' as const,
+      parameters: { withdrawPublicKeyHash: WITHDRAW_PKH },
+      txHash: txHashSeed.repeat(64).slice(0, 64),
+      outputIndex: 0,
+      output: {
+        amountSatoshis: sats,
+        tokenCategory:
+          'f6677f3d3805d70949b375d36e094ff0ec9ece2a2cb1fde6d8b0e90b368f1f63',
+        tokenAmount: tokens,
+        lockingBytecode: buildCauldronPoolV0LockingBytecode({
+          withdrawPublicKeyHash: WITHDRAW_PKH,
+        }),
+      },
+    });
+
+    const aggregated = planAggregatedTradeForTargetDemand(
+      [
+        makePool('3', 80_000n, 120_000_000n),
+        makePool('4', 120_000n, 140_000_000n),
+      ],
+      CAULDRON_NATIVE_BCH,
+      'f6677f3d3805d70949b375d36e094ff0ec9ece2a2cb1fde6d8b0e90b368f1f63',
+      200_000_000n
+    );
+
+    expect(aggregated).not.toBeNull();
+    expect((aggregated?.trades.length ?? 0) > 1).toBe(true);
+    expect((aggregated?.summary.demand ?? 0n) >= 200_000_000n).toBe(true);
+    expect((aggregated?.summary.supply ?? 0n) > 0n).toBe(true);
+  });
+
+  it('can aggregate a BCH-to-token exact-input trade across multiple pools', () => {
+    const tokenId =
+      'f6677f3d3805d70949b375d36e094ff0ec9ece2a2cb1fde6d8b0e90b368f1f63';
+    const makePool = (txHashSeed: string, sats: bigint, tokens: bigint) => ({
+      version: '0' as const,
+      parameters: { withdrawPublicKeyHash: WITHDRAW_PKH },
+      txHash: txHashSeed.repeat(64).slice(0, 64),
+      outputIndex: 0,
+      output: {
+        amountSatoshis: sats,
+        tokenCategory: tokenId,
+        tokenAmount: tokens,
+        lockingBytecode: buildCauldronPoolV0LockingBytecode({
+          withdrawPublicKeyHash: WITHDRAW_PKH,
+        }),
+      },
+    });
+
+    const aggregated = planAggregatedTradeForTargetSupply(
+      [
+        makePool('5', 80_000n, 120_000_000n),
+        makePool('6', 120_000n, 140_000_000n),
+      ],
+      CAULDRON_NATIVE_BCH,
+      tokenId,
+      10_000n
+    );
+
+    expect(aggregated).not.toBeNull();
+    expect(aggregated?.trades.length ?? 0).toBeGreaterThan(0);
+    expect((aggregated?.summary.supply ?? 0n) >= 10_000n).toBe(true);
+    expect((aggregated?.summary.demand ?? 0n) > 0n).toBe(true);
+  });
+
   it('analyzes executable liquidity in both directions for a token market', () => {
     const tokenId =
       'f6677f3d3805d70949b375d36e094ff0ec9ece2a2cb1fde6d8b0e90b368f1f63';
@@ -555,6 +624,79 @@ describe('Cauldron service', () => {
     expect(liquidity.tokenToBch.executablePoolCount).toBe(2);
     expect(liquidity.tokenToBch.maxSupply).toBeGreaterThan(0n);
     expect(liquidity.tokenToBch.maxDemand).toBeGreaterThan(0n);
+  });
+
+  it('plans a token-to-BCH direct route for a small executable amount', () => {
+    const tokenId =
+      'f6677f3d3805d70949b375d36e094ff0ec9ece2a2cb1fde6d8b0e90b368f1f63';
+    const pool = {
+      version: '0' as const,
+      parameters: { withdrawPublicKeyHash: WITHDRAW_PKH },
+      txHash: '5a'.repeat(32),
+      outputIndex: 0,
+      output: {
+        amountSatoshis: 1_118_498_378n,
+        tokenCategory: tokenId,
+        tokenAmount: 11n,
+        lockingBytecode: buildCauldronPoolV0LockingBytecode({
+          withdrawPublicKeyHash: WITHDRAW_PKH,
+        }),
+      },
+    };
+    const pair = createCauldronPoolPair(pool, tokenId, CAULDRON_NATIVE_BCH);
+    const trade = calcCauldronTradeWithTargetSupply(pair, 2n);
+
+    expect(trade).not.toBeNull();
+    expect(trade?.demand).toBeGreaterThan(0n);
+    expect(trade?.supply).toBe(2n);
+  });
+
+  it('accepts the smallest token-to-BCH exact-input amount that remains executable', () => {
+    const tokenId =
+      'f6677f3d3805d70949b375d36e094ff0ec9ece2a2cb1fde6d8b0e90b368f1f63';
+    const pool = {
+      version: '0' as const,
+      parameters: { withdrawPublicKeyHash: WITHDRAW_PKH },
+      txHash: '5b'.repeat(32),
+      outputIndex: 0,
+      output: {
+        amountSatoshis: 1_118_498_378n,
+        tokenCategory: tokenId,
+        tokenAmount: 11n,
+        lockingBytecode: buildCauldronPoolV0LockingBytecode({
+          withdrawPublicKeyHash: WITHDRAW_PKH,
+        }),
+      },
+    };
+    const pair = createCauldronPoolPair(pool, tokenId, CAULDRON_NATIVE_BCH);
+
+    expect(calcCauldronTradeWithTargetSupply(pair, 0n)).toBeNull();
+    expect(calcCauldronTradeWithTargetSupply(pair, 1n)).not.toBeNull();
+  });
+
+  it('plans a BCH-to-token exact-input trade for a live-style pool shape', () => {
+    const tokenId =
+      '3eecc5b229164ab65aee6c02f05eca50ae604d97c691593f52922bdaa5e8d195';
+    const pool = {
+      version: '0' as const,
+      parameters: { withdrawPublicKeyHash: WITHDRAW_PKH },
+      txHash: '6a'.repeat(32),
+      outputIndex: 0,
+      output: {
+        amountSatoshis: 215_539_243n,
+        tokenCategory: tokenId,
+        tokenAmount: 92_820n,
+        lockingBytecode: buildCauldronPoolV0LockingBytecode({
+          withdrawPublicKeyHash: WITHDRAW_PKH,
+        }),
+      },
+    };
+    const pair = createCauldronPoolPair(pool, CAULDRON_NATIVE_BCH, tokenId);
+    const trade = calcCauldronTradeWithTargetSupply(pair, 1_000_000n);
+
+    expect(trade).not.toBeNull();
+    expect(trade?.supply).toBe(1_000_000n);
+    expect(trade?.demand).toBeGreaterThan(0n);
   });
 
   it('builds a signed swap transaction that passes the Cauldron VM checks', () => {
