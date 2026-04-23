@@ -63,6 +63,23 @@ function formatBytes(bytes: number): string {
   return `${(bytes / (1024 * 1024)).toFixed(2)}MB`;
 }
 
+function createMultipartFile(
+  file: File | Blob,
+  filename: string
+): File | Blob {
+  if (typeof File === 'undefined') {
+    return file;
+  }
+
+  // Some mobile WebViews are more reliable when the multipart part is a File
+  // rather than a bare Blob, even if the source value already came from an
+  // <input type="file"> selection.
+  return new File([file], filename, {
+    type: file.type || 'application/octet-stream',
+    lastModified: Date.now(),
+  });
+}
+
 async function readResponseSnippet(response: Response): Promise<string> {
   try {
     const body = (await response.text()).trim();
@@ -149,7 +166,7 @@ export async function uploadToIpfsRelay(
     hasFileConstructor && file instanceof File && file.name
       ? file.name
       : opts?.filename ?? 'upload.bin';
-  formData.append('file', file, inferredName);
+  formData.append('file', createMultipartFile(file, inferredName), inferredName);
 
   const relayBases = getUploadRelayBases(opts?.relayBase);
 
@@ -157,39 +174,61 @@ export async function uploadToIpfsRelay(
     `ipfs-upload:${relayBases.join(',')}`,
     relayBases,
     async (relayBase) => {
-      const controller = new AbortController();
-      const timeoutHandle = setTimeout(() => controller.abort(), timeoutMs);
+      const doUpload = async (multipartFormData: FormData) => {
+        const controller = new AbortController();
+        const timeoutHandle = setTimeout(() => controller.abort(), timeoutMs);
+
+        try {
+          const { uploadUrl, responseParser } = buildUploadEndpoint(relayBase);
+          const response = await fetch(uploadUrl, {
+            method: 'POST',
+            body: multipartFormData,
+            signal: controller.signal,
+          });
+
+          if (!response.ok) {
+            const snippet = await readResponseSnippet(response);
+            const message = snippet
+              ? `IPFS upload failed: HTTP ${response.status} ${response.statusText}. ${snippet}`
+              : `IPFS upload failed: HTTP ${response.status} ${response.statusText}.`;
+            throw new Error(message);
+          }
+
+          const payload = await responseParser(response);
+          return parseUploadResponse(payload, gatewayBase);
+        } catch (error) {
+          if ((error as Error).name === 'AbortError') {
+            throw new Error(`IPFS upload timed out after ${timeoutMs}ms.`);
+          }
+          throw error;
+        } finally {
+          clearTimeout(timeoutHandle);
+        }
+      };
 
       try {
-        const { uploadUrl, responseParser } = buildUploadEndpoint(relayBase);
-        const response = await fetch(uploadUrl, {
-          method: 'POST',
-          body: formData,
-          signal: controller.signal,
-        });
-
-        if (!response.ok) {
-          const snippet = await readResponseSnippet(response);
-          const message = snippet
-            ? `IPFS upload failed: HTTP ${response.status} ${response.statusText}. ${snippet}`
-            : `IPFS upload failed: HTTP ${response.status} ${response.statusText}.`;
-          throw new Error(message);
-        }
-
-        const payload = await responseParser(response);
-        return parseUploadResponse(payload, gatewayBase);
+        return await doUpload(formData);
       } catch (error) {
-        if ((error as Error).name === 'AbortError') {
-          throw new Error(`IPFS upload timed out after ${timeoutMs}ms.`);
-        }
         if (error instanceof TypeError) {
-          throw new Error(
-            `IPFS upload failed before response (network/CORS). ${error.message}`
+          const retryFormData = new FormData();
+          retryFormData.append(
+            'file',
+            createMultipartFile(file, inferredName),
+            inferredName
           );
+
+          try {
+            return await doUpload(retryFormData);
+          } catch (retryError) {
+            if (retryError instanceof TypeError) {
+              throw new Error(
+                `IPFS upload failed before response (network/CORS). ${retryError.message}`
+              );
+            }
+            throw retryError;
+          }
         }
         throw error;
-      } finally {
-        clearTimeout(timeoutHandle);
       }
     }
   );

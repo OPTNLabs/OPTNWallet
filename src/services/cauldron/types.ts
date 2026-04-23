@@ -133,6 +133,7 @@ export type CauldronPoolUtxoCandidate = Pick<
 export type CauldronWalletPoolPosition = {
   pool: CauldronPool;
   ownerAddress: string | null;
+  historyPoolId?: string | null;
   matchingNftUtxos: UTXO[];
   hasMatchingTokenNft: boolean;
   detectionSource: 'owner_pkh' | 'pool_nft_commitment' | 'token_nft_hint';

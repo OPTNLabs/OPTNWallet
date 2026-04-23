@@ -5,7 +5,10 @@ import type {
   CauldronPool,
   CauldronWalletPoolPosition,
 } from '../../../../services/cauldron';
-import { buildCauldronPoolV0LockingBytecode } from '../../../../services/cauldron';
+import {
+  buildCauldronPoolV0LockingBytecode,
+  normalizeCauldronPoolRow,
+} from '../../../../services/cauldron';
 import type { UTXO } from '../../../../types/types';
 import {
   assertWalletInputsStillAvailable,
@@ -328,6 +331,41 @@ describe('cauldron preflight helpers', () => {
     expect(resolved.confirmedPools).toEqual([confirmedPool]);
   });
 
+  it('preserves pool history identifiers when normalizing active pool rows', () => {
+    const withdrawPublicKeyHash = new Uint8Array(20);
+    const reviewedPool = makePool({
+      txHash: '51'.repeat(32),
+      outputIndex: 4,
+      parameters: {
+        withdrawPublicKeyHash,
+      },
+      output: {
+        amountSatoshis: 2200n,
+        tokenCategory: 'aa'.repeat(32),
+        tokenAmount: 900n,
+        lockingBytecode: buildCauldronPoolV0LockingBytecode({
+          withdrawPublicKeyHash,
+        }),
+      },
+    });
+
+    const normalized = normalizeCauldronPoolRow({
+      txid: reviewedPool.txHash,
+      tx_pos: reviewedPool.outputIndex,
+      sats: Number(reviewedPool.output.amountSatoshis),
+      tokens: reviewedPool.output.tokenAmount.toString(),
+      token_id: reviewedPool.output.tokenCategory,
+      owner_pkh: '00'.repeat(20),
+      owner_p2pkh_addr: 'bitcoincash:qqqexample',
+      pool_id: 'pool-12345',
+      locking_bytecode: binToHex(reviewedPool.output.lockingBytecode),
+    });
+
+    expect(normalized?.poolId).toBe('pool-12345');
+    expect(normalized?.output.tokenCategory).toBe(reviewedPool.output.tokenCategory);
+    expect(normalized?.output.tokenAmount).toBe(reviewedPool.output.tokenAmount);
+  });
+
   it('rehydrates visible pools from exact chain row reserves before quoting', async () => {
     const withdrawPublicKeyHash = new Uint8Array(20);
     const reviewedPool = makePool({
@@ -374,6 +412,55 @@ describe('cauldron preflight helpers', () => {
     expect(resolved.confirmedPools).toHaveLength(1);
     expect(resolved.confirmedPools[0]?.output.amountSatoshis).toBe(2500n);
     expect(resolved.confirmedPools[0]?.output.tokenAmount).toBe(640n);
+  });
+
+  it('rehydrates visible pools when Chaingraph uses camelCase locking bytecode fields', async () => {
+    const withdrawPublicKeyHash = new Uint8Array(20);
+    const reviewedPool = makePool({
+      txHash: '41'.repeat(32),
+      outputIndex: 3,
+      parameters: {
+        withdrawPublicKeyHash,
+      },
+      output: {
+        amountSatoshis: 1900n,
+        tokenCategory: 'ff'.repeat(32),
+        tokenAmount: 800n,
+        lockingBytecode: buildCauldronPoolV0LockingBytecode({
+          withdrawPublicKeyHash,
+        }),
+      },
+    });
+
+    const sdk = {
+      chain: {
+        queryUnspentByLockingBytecode: async () => ({
+          data: {
+            output: [
+              {
+                txid: reviewedPool.txHash,
+                vout: reviewedPool.outputIndex,
+                value: '1900',
+                amount: '1900',
+                token_id: reviewedPool.output.tokenCategory,
+                tokenAmount: '800',
+                lockingBytecode: binToHex(reviewedPool.output.lockingBytecode),
+              },
+            ],
+          },
+        }),
+      },
+    };
+
+    const resolved = await fetchVisiblePoolsFromChain({
+      sdk: sdk as any,
+      visiblePools: [reviewedPool],
+    });
+
+    expect(resolved.missingVisiblePoolCount).toBe(0);
+    expect(resolved.confirmedPools).toHaveLength(1);
+    expect(resolved.confirmedPools[0]?.output.amountSatoshis).toBe(1900n);
+    expect(resolved.confirmedPools[0]?.output.tokenAmount).toBe(800n);
   });
 
   it('reports when no visible pools remain confirmed on chain', async () => {

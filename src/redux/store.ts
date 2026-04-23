@@ -15,6 +15,7 @@ import { persistStore, persistReducer } from 'redux-persist';
 import type { PersistMigrate, PersistedState } from 'redux-persist/es/types';
 
 import notificationsReducer from './notificationsSlice';
+import serverNotificationsReducer from './serverNotificationsSlice';
 
 // import storage from 'redux-persist/lib/storage'; 
 // defaults to localStorage for web
@@ -103,6 +104,7 @@ const rootReducer = combineReducers({
   walletconnect: walletconnectReducer,
   wizardconnect: wizardconnectReducer,
   notifications: notificationsReducer,
+  serverNotifications: serverNotificationsReducer,
   preferences: preferencesReducer,
 });
 

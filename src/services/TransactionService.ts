@@ -20,6 +20,7 @@ import { logError } from '../utils/errorHandling';
 import OutboundTransactionTracker, {
   deriveTrackedTxid,
 } from './OutboundTransactionTracker';
+import WalletBackendSyncService from './WalletBackendSyncService';
 
 export type BroadcastState = 'broadcasted' | 'submitted';
 export type BroadcastResult = {
@@ -378,6 +379,11 @@ class TransactionService {
 
     if (res?.txid) {
       await this.enrichTrackedAttempt(rawTX, spentInputs, options);
+      void WalletBackendSyncService.observeTransaction(
+        currentWalletId ?? 0,
+        res.txid,
+        rawTX
+      );
     }
 
     // Refresh wallet addresses after any successful hand-off, but only
@@ -448,6 +454,11 @@ class TransactionService {
         request.rawTX,
         request.spentInputs,
         request.options
+      );
+      void WalletBackendSyncService.observeTransaction(
+        currentWalletId ?? 0,
+        result.txid ?? '',
+        request.rawTX
       );
 
       if (request.spentInputs?.length && result.broadcastState === 'broadcasted') {
