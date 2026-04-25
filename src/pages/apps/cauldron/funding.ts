@@ -56,9 +56,14 @@ export function selectFundingUtxosByToken(
         ) === index
       );
     })
-    .sort((a, b) =>
-      Number(parseSatoshis(b.token?.amount) - parseSatoshis(a.token?.amount))
-    );
+    .sort((a, b) => {
+      const bchDiff = parseSatoshis(b.amount ?? b.value ?? 0) - parseSatoshis(a.amount ?? a.value ?? 0);
+      if (bchDiff !== 0n) {
+        return bchDiff > 0n ? 1 : -1;
+      }
+      const tokenDiff = parseSatoshis(b.token?.amount) - parseSatoshis(a.token?.amount);
+      return tokenDiff > 0n ? 1 : tokenDiff < 0n ? -1 : 0;
+    });
 
   const selected: UTXO[] = [];
   let total = 0n;
