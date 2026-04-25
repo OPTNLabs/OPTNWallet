@@ -9,6 +9,7 @@ import {
 import { shortenTxHash } from '../utils/shortenHash';
 import { IdentitySnapshot } from '@bitauth/libauth';
 import useSharedTokenMetadata from '../hooks/useSharedTokenMetadata';
+import { normalizeExternalUrl } from '../utils/externalUrl';
 
 interface TokenQueryProps {
   tokenId: string;
@@ -35,6 +36,9 @@ const TokenQuery: React.FC<TokenQueryProps> = ({
   const [error, setError] = useState<string | null>(null);
   const [bcmrError, setBcmrError] = useState<string | null>(null);
   const sharedTokenMetadata = useSharedTokenMetadata([tokenId])[tokenId];
+  const officialSiteUrl = snapshot?.uris?.web
+    ? normalizeExternalUrl(snapshot.uris.web)
+    : null;
 
   useEffect(() => {
     const fetchData = async () => {
@@ -156,10 +160,10 @@ const TokenQuery: React.FC<TokenQueryProps> = ({
               <p>Decimals: {snapshot.token.decimals}</p>
             )}
           </div>
-          {snapshot.uris?.web && (
+          {officialSiteUrl && (
             <p className="mt-2">
               <a
-                href={snapshot.uris.web}
+                href={officialSiteUrl}
                 target="_blank"
                 rel="noopener noreferrer"
                 className="wallet-link underline"

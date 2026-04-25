@@ -16,6 +16,7 @@ import useOutboundTransactions from '../../hooks/useOutboundTransactions';
 import { shortenAddress } from '../../utils/shortenHash';
 import WalletTooltip from '../ui/WalletTooltip';
 import { FiChevronDown, FiChevronUp } from 'react-icons/fi';
+import { normalizeExternalUrl } from '../../utils/externalUrl';
 
 export function SignTransactionModal() {
   const dispatch = useDispatch<AppDispatch>();
@@ -98,6 +99,7 @@ export function SignTransactionModal() {
   );
   const fee = totalInput - totalOutput;
   const broadcastLocked = shouldBroadcast && hasUnresolved;
+  const dappUrl = dappMetadata?.url ? normalizeExternalUrl(dappMetadata.url) : null;
 
   const handleSign = async () => {
     if (broadcastLocked) return;
@@ -125,14 +127,20 @@ export function SignTransactionModal() {
               </div>
               <div>
                 <strong>Domain:</strong>{' '}
-                <a
-                  href={dappMetadata.url}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="wallet-link underline"
-                >
-                  {dappMetadata.url}
-                </a>
+                {dappUrl ? (
+                  <a
+                    href={dappUrl}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="wallet-link underline"
+                  >
+                    {dappMetadata.url}
+                  </a>
+                ) : (
+                  <span className="wallet-muted break-all">
+                    {dappMetadata.url}
+                  </span>
+                )}
               </div>
             </div>
           )}

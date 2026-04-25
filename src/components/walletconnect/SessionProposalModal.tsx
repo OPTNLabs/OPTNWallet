@@ -3,6 +3,7 @@ import { useState } from 'react';
 import { useSelector, useDispatch } from 'react-redux';
 import { AppDispatch, RootState } from '../../redux/store';
 import { approveSessionProposal, rejectSessionProposal } from '../../redux/walletconnectSlice';
+import { normalizeExternalUrl } from '../../utils/externalUrl';
 
 function SessionProposalModal() {
   const dispatch = useDispatch<AppDispatch>();
@@ -11,6 +12,7 @@ function SessionProposalModal() {
   if (!proposal) return null; // No proposal → no modal
 
   const dappMetadata = proposal.params.proposer.metadata;
+  const dappUrl = normalizeExternalUrl(dappMetadata.url);
 
   const handleApprove = async () => {
     if (submitting) return;
@@ -49,14 +51,20 @@ function SessionProposalModal() {
         </div>
         <div className="text-center">
           <p className="font-semibold text-lg">{dappMetadata.name}</p>
-          <a
-            href={dappMetadata.url}
-            target="_blank"
-            rel="noreferrer"
-            className="wallet-link underline text-sm"
-          >
-            {dappMetadata.url}
-          </a>
+          {dappUrl ? (
+            <a
+              href={dappUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="wallet-link underline text-sm"
+            >
+              {dappMetadata.url}
+            </a>
+          ) : (
+            <span className="wallet-muted text-sm break-all">
+              {dappMetadata.url}
+            </span>
+          )}
           <p className="wallet-muted text-sm mt-2">{dappMetadata.description}</p>
         </div>
         <div className="flex justify-around mt-6">
