@@ -3,6 +3,7 @@ import React from 'react';
 import { useDispatch, useSelector } from 'react-redux';
 import { RootState, AppDispatch } from '../../redux/store';
 import { disconnectSession } from '../../redux/walletconnectSlice';
+import { normalizeExternalUrl } from '../../utils/externalUrl';
 
 interface Props {
   sessionTopic: string;
@@ -17,6 +18,7 @@ const SessionSettingsModal: React.FC<Props> = ({ sessionTopic, onClose }) => {
 
   if (!session) return null;
   const dappMeta = session.peer.metadata;
+  const dappUrl = normalizeExternalUrl(dappMeta.url);
 
   // Correct expiry timestamp conversion (assuming seconds)
   const timeZone = Intl.DateTimeFormat().resolvedOptions().timeZone;
@@ -49,14 +51,20 @@ const SessionSettingsModal: React.FC<Props> = ({ sessionTopic, onClose }) => {
           />
           <div className="flex-col text-center">
             <p className="font-bold text-xl">{dappMeta.name}</p>
-            <a
-              href={dappMeta.url}
-              target="_blank"
-              rel="noreferrer"
-              className="wallet-link underline text-sm"
-            >
-              {dappMeta.url}
-            </a>
+            {dappUrl ? (
+              <a
+                href={dappUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="wallet-link underline text-sm"
+              >
+                {dappMeta.url}
+              </a>
+            ) : (
+              <span className="wallet-muted text-sm break-all">
+                {dappMeta.url}
+              </span>
+            )}
             {/* Description */}
             <p className="wallet-muted mb-4">{dappMeta.description}</p>
 

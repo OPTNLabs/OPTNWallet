@@ -815,6 +815,61 @@ describe('Cauldron service', () => {
     expect(signed.transaction.outputs[0]?.token?.amount).toBe(13n);
   });
 
+  it('builds a BCH-to-token swap transaction without exceeding its inputs', () => {
+    const sampleTokenId =
+      '412064756d6d7920746f6b656e2069642c203132332031323320313233212121';
+    const zeroWithdrawPkh = new Uint8Array(20);
+    const pool = {
+      version: '0' as const,
+      parameters: { withdrawPublicKeyHash: zeroWithdrawPkh },
+      txHash: '43'.repeat(32),
+      outputIndex: 0,
+      output: {
+        amountSatoshis: 1_122_751_507n,
+        tokenCategory: sampleTokenId,
+        tokenAmount: 11n,
+        lockingBytecode: buildCauldronPoolV0LockingBytecode({
+          withdrawPublicKeyHash: zeroWithdrawPkh,
+        }),
+      },
+    };
+    const walletInput = createWalletInputFixture({
+      value: 2_500_000n,
+    });
+
+    const built = buildCauldronTradeRequest({
+      poolTrades: [
+        toCauldronPoolTrade(pool, CAULDRON_NATIVE_BCH, sampleTokenId, {
+          supply: 500_000n,
+          demand: 4n,
+          tradeFee: 1_501n,
+        }),
+      ],
+      walletInputs: [walletInput],
+      recipientAddress: TEST_CASHADDR,
+      changeAddress: TEST_CASHADDR,
+      feeRateSatsPerByte: 1n,
+    });
+
+    const signed = signRequestForTest({
+      signRequest: built.signRequest as any,
+      keyByInputIndex: new Map([[1, TEST_PRIVATE_KEY]]),
+    });
+
+    const totalInputValue = built.sourceOutputs.reduce(
+      (sum, output) => sum + output.valueSatoshis,
+      0n
+    );
+    const totalOutputValue = signed.transaction.outputs.reduce(
+      (sum, output) => sum + output.valueSatoshis,
+      0n
+    );
+
+    expect(totalOutputValue).toBeLessThanOrEqual(totalInputValue);
+    expect(signed.transaction.outputs[0]?.token?.amount).toBe(7n);
+    expect(signed.transaction.outputs[1]?.valueSatoshis).toBeGreaterThan(0n);
+  });
+
   it('keeps token-to-BCH swap fee estimates high enough for the signed transaction size', () => {
     const sampleTokenId =
       '412064756d6d7920746f6b656e2069642c203132332031323320313233212121';

@@ -117,4 +117,33 @@ describe('cauldron funding helpers', () => {
     expect(selectedTokens.totalAvailable).toBe(8n);
     expect(selectedBch).toEqual([plainBch]);
   });
+
+  it('prefers BCH-rich token funding utxos when token amounts tie', () => {
+    const lowBchToken = makeUtxo({
+      tx_hash: '09'.repeat(32),
+      token: {
+        category: 'cc'.repeat(32),
+        amount: 10n,
+      },
+      amount: 546,
+      value: 546,
+    });
+    const highBchToken = makeUtxo({
+      tx_hash: '0a'.repeat(32),
+      token: {
+        category: 'cc'.repeat(32),
+        amount: 10n,
+      },
+      amount: 1200,
+      value: 1200,
+    });
+
+    const selectedTokens = selectFundingUtxosByToken(
+      [lowBchToken, highBchToken],
+      'cc'.repeat(32),
+      10n
+    );
+
+    expect(selectedTokens.selected).toEqual([highBchToken]);
+  });
 });

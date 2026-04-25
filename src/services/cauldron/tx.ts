@@ -16,7 +16,8 @@ import KeyService from '../KeyService';
 import TransactionService from '../TransactionService';
 import { OptnWizardWalletAdapter } from '../wizardconnect/OptnWizardWalletAdapter';
 import { TOKEN_OUTPUT_SATS, DUST } from '../../utils/constants';
-import { parseSatoshis } from '../../utils/binary';
+import { ensureUint8Array, parseSatoshis } from '../../utils/binary';
+import { derivePublicKeyHash } from '../../utils/derivePublicKeyHash';
 import type { ContractInfo } from '../../types/wcInterfaces';
 import type { Token, UTXO } from '../../types/types';
 import {
@@ -226,6 +227,31 @@ function buildCauldronPoolContractInfo(withdrawPublicKeyHash: Uint8Array): Contr
   };
 }
 
+function normalizeWithdrawPublicKeyHash(
+  withdrawPublicKeyHash: Uint8Array | string | number[] | Record<string, unknown>,
+  fallbackOwnerAddress?: string | null,
+  fallbackOwnerPublicKeyHash?: string | null
+): Uint8Array {
+  const direct = ensureUint8Array(withdrawPublicKeyHash);
+  if (direct.length === 20) return direct;
+
+  if (fallbackOwnerAddress) {
+    try {
+      const derived = derivePublicKeyHash(fallbackOwnerAddress);
+      if (derived.length === 20) return derived;
+    } catch {
+      // fall through
+    }
+  }
+
+  if (fallbackOwnerPublicKeyHash) {
+    const ownerHash = ensureUint8Array(fallbackOwnerPublicKeyHash);
+    if (ownerHash.length === 20) return ownerHash;
+  }
+
+  return direct;
+}
+
 function outputSizeBytes(output: CauldronSettlementOutput): number {
   const lockingLength = output.lockingBytecode.length;
   const tokenLength = output.token
@@ -305,12 +331,20 @@ function buildCashAddressOutput(
 }
 
 function buildPoolSourceOutput(trade: CauldronPoolTrade): Input & Output & ContractInfo {
+  const withdrawPublicKeyHash = normalizeWithdrawPublicKeyHash(
+    trade.pool.parameters.withdrawPublicKeyHash,
+    trade.pool.ownerAddress,
+    trade.pool.ownerPublicKeyHash
+  );
   return {
     outpointIndex: trade.pool.outputIndex,
     outpointTransactionHash: hexToBin(trade.pool.txHash),
     sequenceNumber: 0,
     unlockingBytecode: buildCauldronPoolV0ExchangeUnlockingBytecode(
-      trade.pool.parameters
+      {
+        ...trade.pool.parameters,
+        withdrawPublicKeyHash,
+      }
     ),
     lockingBytecode: trade.pool.output.lockingBytecode,
     valueSatoshis: trade.pool.output.amountSatoshis,
@@ -318,7 +352,25 @@ function buildPoolSourceOutput(trade: CauldronPoolTrade): Input & Output & Contr
       amount: trade.pool.output.tokenAmount,
       category: hexToBin(trade.pool.output.tokenCategory),
     },
-    ...buildCauldronPoolContractInfo(trade.pool.parameters.withdrawPublicKeyHash),
+    ...buildCauldronPoolContractInfo(withdrawPublicKeyHash),
+  };
+}
+
+function normalizePoolTradeForTx(trade: CauldronPoolTrade): CauldronPoolTrade {
+  const withdrawPublicKeyHash = normalizeWithdrawPublicKeyHash(
+    trade.pool.parameters.withdrawPublicKeyHash,
+    trade.pool.ownerAddress,
+    trade.pool.ownerPublicKeyHash
+  );
+  return {
+    ...trade,
+    pool: {
+      ...trade.pool,
+      parameters: {
+        ...trade.pool.parameters,
+        withdrawPublicKeyHash,
+      },
+    },
   };
 }
 
@@ -374,7 +426,7 @@ function buildSettlementOutputs(args: {
       throw new Error('Insufficient token funding for Cauldron trade');
     }
 
-    let bchChange = totalWalletBch - feeSatoshis;
+    let bchChange = totalWalletBch - totalSupply - feeSatoshis;
     if (tokenChange > 0n) {
       if (!tokenChangeCategoryHex) {
         throw new Error('Missing token category for Cauldron token change output');
@@ -404,7 +456,8 @@ function buildSettlementOutputs(args: {
     })
   );
 
-  const bchChange = totalWalletBch - totalSupply - tokenOutputSatoshis - feeSatoshis;
+  let bchChange = totalWalletBch - totalSupply - feeSatoshis;
+  bchChange -= tokenOutputSatoshis;
   if (bchChange >= BigInt(DUST)) {
     outputs.push(buildCashAddressOutput(changeAddress, bchChange));
   } else if (bchChange < 0n) {
@@ -571,8 +624,9 @@ export function buildCauldronTradeRequest(params: {
       ? params.feeRateSatsPerByte
       : BigInt(params.feeRateSatsPerByte ?? 1);
   const tokenOutputSatoshis = params.tokenOutputSatoshis ?? BigInt(TOKEN_OUTPUT_SATS);
+  const normalizedPoolTrades = poolTrades.map(normalizePoolTradeForTx);
   const { supplyTokenId, demandTokenId, totalSupply, totalDemand } =
-    validateTradeDirection(poolTrades);
+    validateTradeDirection(normalizedPoolTrades);
 
   const {
     totalWalletBch,
@@ -610,21 +664,21 @@ export function buildCauldronTradeRequest(params: {
 
   let settlementOutputs = buildOutputsForFee(0n);
   let estimatedFeeSatoshis = BigInt(
-    estimateCauldronTradeTxSize(poolTrades, walletInputs, settlementOutputs)
+    estimateCauldronTradeTxSize(normalizedPoolTrades, walletInputs, settlementOutputs)
   ) * feeRateSatsPerByte;
 
   for (let i = 0; i < 3; i += 1) {
     settlementOutputs = buildOutputsForFee(estimatedFeeSatoshis);
     const nextFee =
       BigInt(
-        estimateCauldronTradeTxSize(poolTrades, walletInputs, settlementOutputs)
+        estimateCauldronTradeTxSize(normalizedPoolTrades, walletInputs, settlementOutputs)
       ) * feeRateSatsPerByte;
     if (nextFee === estimatedFeeSatoshis) break;
     estimatedFeeSatoshis = nextFee;
   }
 
   const sourceOutputs: Array<Input & Output & ContractInfo> = [
-    ...poolTrades.map((trade) => buildPoolSourceOutput(trade)),
+    ...normalizedPoolTrades.map((trade) => buildPoolSourceOutput(trade)),
     ...walletInputs.map((input) => buildWalletSourceOutput(input)),
   ];
 
@@ -632,7 +686,7 @@ export function buildCauldronTradeRequest(params: {
     version: 2,
     locktime: 0,
     inputs: [
-      ...poolTrades.map((trade) => ({
+      ...normalizedPoolTrades.map((trade) => ({
         outpointIndex: trade.pool.outputIndex,
         outpointTransactionHash: hexToBin(trade.pool.txHash),
         sequenceNumber: 0,
@@ -643,7 +697,7 @@ export function buildCauldronTradeRequest(params: {
       ...walletInputs.map((input) => buildWalletInput(input)),
     ],
     outputs: [
-      ...poolTrades.map((trade) => buildPoolOutput(trade)),
+      ...normalizedPoolTrades.map((trade) => buildPoolOutput(trade)),
       ...settlementOutputs,
     ],
   };
@@ -705,6 +759,10 @@ export function buildCauldronPoolDepositRequest(params: {
     typeof params.feeRateSatsPerByte === 'bigint'
       ? params.feeRateSatsPerByte
       : BigInt(params.feeRateSatsPerByte ?? 1);
+  const normalizedWithdrawPublicKeyHash = normalizeWithdrawPublicKeyHash(
+    withdrawPublicKeyHash,
+    ownerAddress
+  );
   if (tokenAmount <= 0n) {
     throw new Error('Cauldron pool token amount must be greater than zero');
   }
@@ -721,7 +779,9 @@ export function buildCauldronPoolDepositRequest(params: {
   }
 
   const poolOutput: CauldronSettlementOutput = {
-    lockingBytecode: buildCauldronPoolV0LockingBytecode({ withdrawPublicKeyHash }),
+    lockingBytecode: buildCauldronPoolV0LockingBytecode({
+      withdrawPublicKeyHash: normalizedWithdrawPublicKeyHash,
+    }),
     valueSatoshis: bchAmountSatoshis,
     token: {
       amount: tokenAmount,
@@ -808,7 +868,7 @@ export function buildCauldronPoolDepositRequest(params: {
     settlementOutputs,
     estimatedFeeSatoshis,
     walletInputs,
-    withdrawPublicKeyHash,
+    withdrawPublicKeyHash: normalizedWithdrawPublicKeyHash,
   };
 }
 
@@ -833,11 +893,23 @@ export function buildCauldronPoolWithdrawRequest(params: {
       ? params.feeRateSatsPerByte
       : BigInt(params.feeRateSatsPerByte ?? 1);
   const tokenOutputSatoshis = params.tokenOutputSatoshis ?? BigInt(TOKEN_OUTPUT_SATS);
+  const normalizedWithdrawPublicKeyHash = normalizeWithdrawPublicKeyHash(
+    pool.parameters.withdrawPublicKeyHash,
+    pool.ownerAddress,
+    pool.ownerPublicKeyHash
+  );
+  const normalizedPool: CauldronPool = {
+    ...pool,
+    parameters: {
+      ...pool.parameters,
+      withdrawPublicKeyHash: normalizedWithdrawPublicKeyHash,
+    },
+  };
   const poolWithdrawInputSize =
     32 +
     4 +
     1 +
-    buildCauldronPoolV0WithdrawUnlockingBytecodePlaceholder(pool.parameters).length +
+    buildCauldronPoolV0WithdrawUnlockingBytecodePlaceholder(normalizedPool.parameters).length +
     4;
   const ownerP2pkhInputSize = P2PKH_INPUT_SIZE_BYTES;
 
@@ -862,8 +934,8 @@ export function buildCauldronPoolWithdrawRequest(params: {
 
     const outputs: CauldronSettlementOutput[] = [
       buildCashAddressOutput(recipientAddress, recipientValue, {
-        amount: pool.output.tokenAmount,
-        categoryHex: pool.output.tokenCategory,
+        amount: normalizedPool.output.tokenAmount,
+        categoryHex: normalizedPool.output.tokenCategory,
       }),
     ];
 
@@ -910,10 +982,10 @@ export function buildCauldronPoolWithdrawRequest(params: {
       lockingBytecode: pool.output.lockingBytecode,
       valueSatoshis: pool.output.amountSatoshis,
       token: {
-        amount: pool.output.tokenAmount,
-        category: hexToBin(pool.output.tokenCategory),
+        amount: normalizedPool.output.tokenAmount,
+        category: hexToBin(normalizedPool.output.tokenCategory),
       },
-      ...buildCauldronPoolContractInfo(pool.parameters.withdrawPublicKeyHash),
+      ...buildCauldronPoolContractInfo(normalizedWithdrawPublicKeyHash),
     },
     buildWalletSourceOutput(ownerInput),
   ];
@@ -927,7 +999,7 @@ export function buildCauldronPoolWithdrawRequest(params: {
         outpointTransactionHash: hexToBin(pool.txHash),
         sequenceNumber: 0,
         unlockingBytecode: buildCauldronPoolV0WithdrawUnlockingBytecodePlaceholder(
-          pool.parameters
+          normalizedPool.parameters
         ),
       },
       buildWalletInput(ownerInput),

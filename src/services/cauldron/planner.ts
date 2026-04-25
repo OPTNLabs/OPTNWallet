@@ -106,6 +106,8 @@ export function normalizeCauldronPoolRow(
     'withdrawPublicKeyHash',
     'pkh',
     'owner_pkh',
+    'ownerPkh',
+    'ownerPublicKeyHash',
   ]);
   const lockingBytecode =
     findHex(row, ['locking_bytecode', 'lockingBytecode']) ??
@@ -846,8 +848,8 @@ function publicKeyHashHexFromAddress(address: string): string | null {
 export async function fetchCauldronDerivedWalletAddresses(
   walletId: number,
   network: Network,
-  maxAddressIndex = 100,
-  maxAccountIndex = 4
+  maxAddressIndex = 32,
+  maxAccountIndex = 2
 ): Promise<Array<{ address: string; tokenAddress: string }>> {
   const results: Array<{ address: string; tokenAddress: string }> = [];
   for (let accountIndex = 0; accountIndex <= maxAccountIndex; accountIndex += 1) {
