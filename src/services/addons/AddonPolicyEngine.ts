@@ -140,15 +140,24 @@ export function createAddonPolicyEngine(options: AddonPolicyEngineOptions) {
     run: () => Promise<T>
   ): Promise<T> {
     const ms = Math.max(1, timeoutMs);
+    let timer: ReturnType<typeof setTimeout> | undefined;
 
-    return await Promise.race([
-      run(),
-      new Promise<T>((_, reject) => {
-        setTimeout(() => {
-          reject(new Error(`Addon operation timed out: ${operation} (${ms}ms)`));
-        }, ms);
-      }),
-    ]);
+    try {
+      return await Promise.race([
+        run(),
+        new Promise<T>((_, reject) => {
+          timer = setTimeout(() => {
+            reject(
+              new Error(`Addon operation timed out: ${operation} (${ms}ms)`)
+            );
+          }, ms);
+        }),
+      ]);
+    } finally {
+      if (timer) {
+        clearTimeout(timer);
+      }
+    }
   }
 
   return {
