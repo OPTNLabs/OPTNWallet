@@ -9,6 +9,7 @@ import React, {
   useState,
 } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { useSelector } from 'react-redux';
 import { TOKEN_OUTPUT_SATS } from '../../../utils/constants';
 
 import {
@@ -26,7 +27,8 @@ import {
   uploadToIpfsRelay,
   waitForIpfsAvailability,
 } from '../../../services/IpfsService';
-import type { AddonSDK } from '../../../services/AddonsSDK';
+import TransactionService from '../../../services/TransactionService';
+import UTXOService from '../../../services/UTXOService';
 import { copyToClipboard } from '../../../utils/clipboard';
 import { sha256 } from '../../../utils/hash';
 import BcmrService, {
@@ -59,10 +61,7 @@ import {
   utxoKey,
 } from './utils';
 import { useSmoothResetTransition } from '../shared/useSmoothResetTransition';
-
-type MintCashTokensPoCAppProps = {
-  sdk: AddonSDK;
-};
+import { selectWalletId } from '../../../redux/walletSlice';
 
 type BcmrFieldKey =
   | 'tokenCategory'
@@ -162,9 +161,9 @@ function getErrorMessage(err: unknown, fallback: string): string {
   return fallback;
 }
 
-const MintCashTokensPoCApp: React.FC<MintCashTokensPoCAppProps> = ({ sdk }) => {
+const MintCashTokensPoCApp: React.FC = () => {
   const navigate = useNavigate();
-  const walletId = sdk.wallet.getContext().walletId;
+  const walletId = useSelector(selectWalletId);
 
   const [addresses, setAddresses] = useState<WalletAddressRecord[]>([]);
   const [flatUtxos, setFlatUtxos] = useState<MintAppUtxo[]>([]);
@@ -248,22 +247,32 @@ const MintCashTokensPoCApp: React.FC<MintCashTokensPoCAppProps> = ({ sdk }) => {
   }, []);
 
   const refreshWalletSnapshot = useCallback(async (forceRefresh = false) => {
-    const walletAddresses = await sdk.wallet.listAddresses();
+    if (!walletId) {
+      setAddresses([]);
+      setFlatUtxos([]);
+      setChangeAddress('');
+      return;
+    }
+
+    const walletSnapshot = await TransactionService.fetchAddressesAndUTXOs(
+      walletId
+    );
+    const walletAddresses = walletSnapshot.addresses;
 
     if (forceRefresh) {
       await Promise.all(
         walletAddresses.map((walletAddress) =>
-          sdk.utxos.refreshAndStore(walletAddress.address).catch(() => null)
+          UTXOService.fetchAndStoreUTXOs(walletId, walletAddress.address).catch(
+            () => null
+          )
         )
       );
     }
 
-    const utxoRes = await sdk.utxos.listForWallet();
-
     setAddresses(walletAddresses);
     setChangeAddress((prev) => prev || walletAddresses[0]?.address || '');
-    setFlatUtxos(mergeWalletUtxos(utxoRes));
-  }, [sdk]);
+    setFlatUtxos(mergeWalletUtxos(walletSnapshot));
+  }, [walletId]);
 
   useEffect(() => {
     let mounted = true;
@@ -710,7 +719,6 @@ const MintCashTokensPoCApp: React.FC<MintCashTokensPoCAppProps> = ({ sdk }) => {
     try {
       const fundingUtxos = [feeCandidates[0]];
       const { built, feePaid } = await buildBootstrapPreview({
-        sdk,
         fundingUtxos,
         toAddress: myAddress,
         changeAddress,
@@ -733,7 +741,9 @@ const MintCashTokensPoCApp: React.FC<MintCashTokensPoCAppProps> = ({ sdk }) => {
           setConfirmLoading(true);
           try {
             setStatus('Broadcasting Category UTXO creation...');
-            const sent = await sdk.tx.broadcast(built.hex);
+            const sent = await TransactionService.sendTransaction(
+              built.finalTransaction
+            );
             const sentTxid = sent?.txid ?? '';
             if (!sentTxid)
               throw new Error(
@@ -774,7 +784,6 @@ const MintCashTokensPoCApp: React.FC<MintCashTokensPoCAppProps> = ({ sdk }) => {
     orderedSelectedRecipients,
     addresses,
     flatUtxos,
-    sdk,
     setErrorMessage,
     setLoading,
     openConfirm,
@@ -830,7 +839,6 @@ const MintCashTokensPoCApp: React.FC<MintCashTokensPoCAppProps> = ({ sdk }) => {
 
     try {
       const { built, inputsForBuild, feePaid } = await buildMintPreview({
-        sdk,
         selectedUtxos,
         flatUtxos,
         activeOutputDrafts,
@@ -858,7 +866,9 @@ const MintCashTokensPoCApp: React.FC<MintCashTokensPoCAppProps> = ({ sdk }) => {
           setConfirmLoading(true);
           try {
             setStatus('Broadcasting mint transaction...');
-            const sent = await sdk.tx.broadcast(built.hex);
+            const sent = await TransactionService.sendTransaction(
+              built.finalTransaction
+            );
             const sentTxid = sent?.txid ?? '';
             if (!sentTxid)
               throw new Error(sent?.errorMessage || 'Broadcast failed.');
@@ -905,7 +915,6 @@ const MintCashTokensPoCApp: React.FC<MintCashTokensPoCAppProps> = ({ sdk }) => {
     setErrorMessage,
     setLoading,
     setStatus,
-    sdk,
     flatUtxos,
     sdkAddressBook,
     bcmrPublication,
