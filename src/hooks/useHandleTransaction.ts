@@ -100,7 +100,8 @@ const useHandleTransaction = (
           txOutputs,
           contractFunctionInputs,
           changeAddress,
-          selectedUtxos
+          selectedUtxos,
+          true
         );
 
       // await Toast.show({

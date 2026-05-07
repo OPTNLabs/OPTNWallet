@@ -10,6 +10,7 @@ import {
   stripHexPrefix,
   decodeLittleEndianNumber,
 } from './fundmeHelpers';
+import { fundMeApiUrl, getFundMeApiBaseUrl } from './fundmeApi';
 import type {
   ArchivedCampaign,
   ChainCampaign,
@@ -21,6 +22,17 @@ import type {
   CampaignRecord,
 } from './types';
 import { DEFAULT_BANNER } from './types';
+
+async function safeGetLatestBlock(
+  sdk: AddonSDK
+): Promise<number | null> {
+  try {
+    const latest = await sdk.chain.getLatestBlock();
+    return parseLatestBlockHeight(latest);
+  } catch {
+    return null;
+  }
+}
 
 type UseFundMeCampaignsResult = {
   walletAddress: string | null;
@@ -65,7 +77,7 @@ export function useFundMeCampaigns(sdk: AddonSDK): UseFundMeCampaignsResult {
       try {
         const context = sdk.wallet.getContext();
         const primaryAddress = await sdk.wallet.getPrimaryAddress();
-        const latest = await sdk.chain.getLatestBlock();
+        const latest = await safeGetLatestBlock(sdk);
 
         if (!mounted) return;
 
@@ -106,17 +118,17 @@ export function useFundMeCampaigns(sdk: AddonSDK): UseFundMeCampaignsResult {
 
         const lockingBytecodeHex = binToHex(lockingBytecodeResult.bytecode);
         const [latest, chainResponse, hostedListPayload] = await Promise.all([
-          sdk.chain.getLatestBlock(),
+          safeGetLatestBlock(sdk),
           sdk.chain.queryUnspentByLockingBytecode(
             lockingBytecodeHex,
             MasterCategoryID
           ),
-          sdk.http.fetchJson<unknown>('https://fundme.cash/get-campaignlist'),
+          sdk.http.fetchJson<unknown>(fundMeApiUrl('/get-campaignlist')),
         ]);
 
         if (!mounted) return;
 
-        const nextLatestBlock = parseLatestBlockHeight(latest);
+        const nextLatestBlock = latest;
         setLatestBlock(nextLatestBlock);
 
         const outputs = (chainResponse.data?.output ?? []) as FundMeChainOutput[];
@@ -140,7 +152,7 @@ export function useFundMeCampaigns(sdk: AddonSDK): UseFundMeCampaignsResult {
           uniqueIds.map(async (id) => {
             try {
               const payload = await sdk.http.fetchJson<ShortCampaignPayload>(
-                `https://fundme.cash/get-shortcampaign/${id}`
+                fundMeApiUrl(`/get-shortcampaign/${id}`)
               );
               hostedShorts.set(id, payload);
             } catch {
@@ -221,7 +233,7 @@ export function useFundMeCampaigns(sdk: AddonSDK): UseFundMeCampaignsResult {
 
     try {
       const detail = await sdk.http.fetchJson<FullCampaignPayload>(
-        `https://fundme.cash/get-campaign/${campaign.id}`
+        fundMeApiUrl(`/get-campaign/${campaign.id}`)
       );
 
       setDetailModal({
@@ -235,7 +247,7 @@ export function useFundMeCampaigns(sdk: AddonSDK): UseFundMeCampaignsResult {
         campaign,
         detail: null,
         loading: false,
-        error: 'Campaign metadata is not currently available from fundme.cash.',
+        error: `Campaign metadata is not currently available from ${getFundMeApiBaseUrl()}.`,
       });
     }
   };

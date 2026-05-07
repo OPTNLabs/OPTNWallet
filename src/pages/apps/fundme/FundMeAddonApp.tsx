@@ -7,6 +7,13 @@ import FundMeCreateView from './components/FundMeCreateView';
 import FundMeDetailModal from './components/FundMeDetailModal';
 import { useFundMeCampaigns } from './useFundMeCampaigns';
 import type { CampaignType, ViewMode } from './types';
+import {
+  cancelCampaign,
+  claimCampaign,
+  donateToCampaign,
+  refundPledge,
+  stopCampaign,
+} from './fundmeTransactions';
 
 type FundMeAddonAppProps = {
   sdk: AddonSDK;
@@ -18,6 +25,8 @@ const FundMeAddonApp: React.FC<FundMeAddonAppProps> = ({ sdk, app }) => {
   const [viewMode, setViewMode] = useState<ViewMode>('discover');
   const [campaignType, setCampaignType] = useState<CampaignType>('active');
   const [donationDraft, setDonationDraft] = useState<string>('');
+  const [actionBusy, setActionBusy] = useState(false);
+  const [actionStatus, setActionStatus] = useState<string | null>(null);
   const {
     walletAddress,
     network,
@@ -51,6 +60,19 @@ const FundMeAddonApp: React.FC<FundMeAddonAppProps> = ({ sdk, app }) => {
   const latestKnownBlockLabel = latestBlock
     ? latestBlock.toLocaleString()
     : 'Unavailable';
+
+  const runCampaignAction = async (action: () => Promise<{ txid: string | null }>) => {
+    setActionBusy(true);
+    setActionStatus(null);
+    try {
+      const result = await action();
+      setActionStatus(result.txid ? `Broadcast ${result.txid}` : 'Broadcast requested.');
+    } catch (error) {
+      setActionStatus(error instanceof Error ? error.message : String(error));
+    } finally {
+      setActionBusy(false);
+    }
+  };
 
   return (
     <div className="container mx-auto max-w-md h-[calc(100dvh-var(--navbar-height)-var(--safe-bottom))] px-4 pt-2 pb-3 flex flex-col overflow-hidden wallet-page">
@@ -133,6 +155,59 @@ const FundMeAddonApp: React.FC<FundMeAddonAppProps> = ({ sdk, app }) => {
         donationDraft={donationDraft}
         onClose={closeCampaignDetail}
         onDonationDraftChange={setDonationDraft}
+        actionBusy={actionBusy}
+        actionStatus={actionStatus}
+        onDonate={() =>
+          detailModal?.campaign && 'raisedSatoshis' in detailModal.campaign
+            ? void runCampaignAction(() =>
+                donateToCampaign({
+                  sdk,
+                  campaign: detailModal.campaign,
+                  amountBch: donationDraft,
+                })
+              )
+            : undefined
+        }
+        onRefund={() =>
+          detailModal?.campaign && 'raisedSatoshis' in detailModal.campaign
+            ? void runCampaignAction(() =>
+                refundPledge({
+                  sdk,
+                  campaign: detailModal.campaign,
+                })
+              )
+            : undefined
+        }
+        onClaim={() =>
+          detailModal?.campaign && 'raisedSatoshis' in detailModal.campaign
+            ? void runCampaignAction(() =>
+                claimCampaign({
+                  sdk,
+                  campaign: detailModal.campaign,
+                })
+              )
+            : undefined
+        }
+        onStop={() =>
+          detailModal?.campaign && 'raisedSatoshis' in detailModal.campaign
+            ? void runCampaignAction(() =>
+                stopCampaign({
+                  sdk,
+                  campaign: detailModal.campaign,
+                })
+              )
+            : undefined
+        }
+        onCancel={() =>
+          detailModal?.campaign && 'raisedSatoshis' in detailModal.campaign
+            ? void runCampaignAction(() =>
+                cancelCampaign({
+                  sdk,
+                  campaign: detailModal.campaign,
+                })
+              )
+            : undefined
+        }
       />
     </div>
   );

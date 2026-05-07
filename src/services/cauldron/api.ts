@@ -7,8 +7,12 @@ import type {
   CauldronTokenListItemCached,
 } from './types';
 
-export type CauldronActivePoolRow = CauldronActivePoolRecord | Record<string, unknown>;
-export type CauldronTokenRow = CauldronTokenListItemCached | Record<string, unknown>;
+export type CauldronActivePoolRow =
+  | CauldronActivePoolRecord
+  | Record<string, unknown>;
+export type CauldronTokenRow =
+  | CauldronTokenListItemCached
+  | Record<string, unknown>;
 
 async function fetchJson<T>(url: string, init?: RequestInit): Promise<T> {
   const response = await fetch(url, init);
@@ -34,27 +38,84 @@ async function fetchJson<T>(url: string, init?: RequestInit): Promise<T> {
   }
 }
 
+const CAULDRON_API_CACHE_TTL_MS = 5_000;
+const CAULDRON_API_CACHE_MAX_ENTRIES = 32;
+
+type CachedCauldronRequest = {
+  expiresAt: number;
+  promise: Promise<unknown>;
+};
+
+const cauldronRequestCache = new Map<string, CachedCauldronRequest>();
+
+function pruneCauldronApiCache(): void {
+  const now = Date.now();
+  for (const [key, entry] of cauldronRequestCache) {
+    if (entry.expiresAt <= now) {
+      cauldronRequestCache.delete(key);
+    }
+  }
+
+  while (cauldronRequestCache.size > CAULDRON_API_CACHE_MAX_ENTRIES) {
+    const oldestKey = cauldronRequestCache.keys().next().value;
+    if (typeof oldestKey !== 'string') break;
+    cauldronRequestCache.delete(oldestKey);
+  }
+}
+
+function fetchJsonCached<T>(key: string, url: string): Promise<T> {
+  const cached = cauldronRequestCache.get(key);
+  if (cached && cached.expiresAt > Date.now()) {
+    cauldronRequestCache.delete(key);
+    cauldronRequestCache.set(key, cached);
+    return cached.promise as Promise<T>;
+  }
+
+  let promise: Promise<T>;
+  promise = fetchJson<T>(url).catch((error) => {
+    const current = cauldronRequestCache.get(key);
+    if (current?.promise === promise) {
+      cauldronRequestCache.delete(key);
+    }
+    throw error;
+  });
+
+  cauldronRequestCache.set(key, {
+    expiresAt: Date.now() + CAULDRON_API_CACHE_TTL_MS,
+    promise,
+  });
+  pruneCauldronApiCache();
+  return promise;
+}
+
+export function clearCauldronApiCache(): void {
+  cauldronRequestCache.clear();
+}
+
 export class CauldronApiClient {
   constructor(
     readonly network: Network,
     readonly baseUrl = getCauldronApiBaseUrl(network)
   ) {}
 
-  async listActivePools(params: {
-    tokenId?: string;
-    publicKeyHash?: string;
-  } = {}): Promise<CauldronActivePoolRow[]> {
+  async listActivePools(
+    params: {
+      tokenId?: string;
+      publicKeyHash?: string;
+    } = {}
+  ): Promise<CauldronActivePoolRow[]> {
     const search = new URLSearchParams();
     if (params.tokenId) search.set('token', params.tokenId);
     if (params.publicKeyHash) search.set('pkh', params.publicKeyHash);
 
     if (!search.toString()) {
-      throw new Error('Cauldron active-pools lookup requires a token id or public key hash');
+      throw new Error(
+        'Cauldron active-pools lookup requires a token id or public key hash'
+      );
     }
 
-    const payload = await fetchJson<unknown>(
-      `${this.baseUrl}/pool/active?${search.toString()}`
-    );
+    const url = `${this.baseUrl}/pool/active?${search.toString()}`;
+    const payload = await fetchJsonCached<unknown>(url, url);
     if (Array.isArray(payload)) return payload as CauldronActivePoolRow[];
     if (payload && typeof payload === 'object') {
       const pools =
@@ -65,21 +126,22 @@ export class CauldronApiClient {
     throw new Error('Unexpected Cauldron active-pools response shape');
   }
 
-  async listCachedTokens(params: {
-    limit?: number;
-    offset?: number;
-    by?: 'score' | 'volume' | 'tvl' | 'name' | 'symbol';
-    order?: 'asc' | 'desc';
-  } = {}): Promise<CauldronTokenRow[]> {
+  async listCachedTokens(
+    params: {
+      limit?: number;
+      offset?: number;
+      by?: 'score' | 'volume' | 'tvl' | 'name' | 'symbol';
+      order?: 'asc' | 'desc';
+    } = {}
+  ): Promise<CauldronTokenRow[]> {
     const search = new URLSearchParams();
     search.set('limit', String(params.limit ?? 500));
     search.set('offset', String(params.offset ?? 0));
     search.set('by', params.by ?? 'score');
     search.set('order', params.order ?? 'desc');
 
-    const payload = await fetchJson<unknown>(
-      `${this.baseUrl}/tokens/list_cached?${search.toString()}`
-    );
+    const url = `${this.baseUrl}/tokens/list_cached?${search.toString()}`;
+    const payload = await fetchJsonCached<unknown>(url, url);
     if (Array.isArray(payload)) return payload as CauldronTokenRow[];
     if (payload && typeof payload === 'object') {
       const tokens = (payload as { tokens?: unknown }).tokens;
@@ -94,9 +156,8 @@ export class CauldronApiClient {
     const search = new URLSearchParams({
       ids: tokenIds.join(','),
     });
-    const payload = await fetchJson<unknown>(
-      `${this.baseUrl}/tokens/list_cached_by_ids?${search.toString()}`
-    );
+    const url = `${this.baseUrl}/tokens/list_cached_by_ids?${search.toString()}`;
+    const payload = await fetchJsonCached<unknown>(url, url);
     if (Array.isArray(payload)) return payload as CauldronTokenRow[];
     if (payload && typeof payload === 'object') {
       const tokens = (payload as { tokens?: unknown }).tokens;
@@ -106,9 +167,8 @@ export class CauldronApiClient {
   }
 
   async getCurrentPrice(tokenId: string): Promise<Record<string, unknown>> {
-    return fetchJson<Record<string, unknown>>(
-      `${this.baseUrl}/price/${encodeURIComponent(tokenId)}/current`
-    );
+    const url = `${this.baseUrl}/price/${encodeURIComponent(tokenId)}/current`;
+    return fetchJsonCached<Record<string, unknown>>(url, url);
   }
 
   async getPoolHistory(
@@ -120,11 +180,10 @@ export class CauldronApiClient {
       search.set('start', String(Math.trunc(startTimestamp)));
     }
 
-    return fetchJson<CauldronPoolHistoryResponse>(
-      `${this.baseUrl}/pool/history/${encodeURIComponent(poolId)}${
-        search.size > 0 ? `?${search.toString()}` : ''
-      }`
-    );
+    const url = `${this.baseUrl}/pool/history/${encodeURIComponent(poolId)}${
+      search.size > 0 ? `?${search.toString()}` : ''
+    }`;
+    return fetchJsonCached<CauldronPoolHistoryResponse>(url, url);
   }
 
   async getAggregatedApy(params: {
@@ -138,15 +197,20 @@ export class CauldronApiClient {
     if (params.tokenId) search.set('token', params.tokenId);
     if (params.publicKeyHash) search.set('pkh', params.publicKeyHash);
     if (params.poolId) search.set('pool', params.poolId);
-    if (typeof params.startTimestamp === 'number' && Number.isFinite(params.startTimestamp)) {
+    if (
+      typeof params.startTimestamp === 'number' &&
+      Number.isFinite(params.startTimestamp)
+    ) {
       search.set('start', String(Math.trunc(params.startTimestamp)));
     }
-    if (typeof params.endTimestamp === 'number' && Number.isFinite(params.endTimestamp)) {
+    if (
+      typeof params.endTimestamp === 'number' &&
+      Number.isFinite(params.endTimestamp)
+    ) {
       search.set('end', String(Math.trunc(params.endTimestamp)));
     }
 
-    return fetchJson<CauldronAggregatedApyResponse>(
-      `${this.baseUrl}/pool/aggregated_apy?${search.toString()}`
-    );
+    const url = `${this.baseUrl}/pool/aggregated_apy?${search.toString()}`;
+    return fetchJsonCached<CauldronAggregatedApyResponse>(url, url);
   }
 }

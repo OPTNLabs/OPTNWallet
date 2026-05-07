@@ -15,19 +15,33 @@ export const ThemeContext = createContext<ThemeContextValue | undefined>(
 );
 
 export const getInitialTheme = (): ThemeMode => {
-  const saved = localStorage.getItem(THEME_STORAGE_KEY);
-  if (saved === 'dark' || saved === 'light') {
-    return saved;
+  try {
+    const saved = localStorage.getItem(THEME_STORAGE_KEY);
+    if (saved === 'dark' || saved === 'light') {
+      return saved;
+    }
+  } catch {
+    // Ignore storage failures and fall back to runtime defaults.
   }
 
-  return window.matchMedia('(prefers-color-scheme: dark)').matches
-    ? 'dark'
-    : 'light';
+  if (
+    typeof window !== 'undefined' &&
+    typeof window.matchMedia === 'function' &&
+    window.matchMedia('(prefers-color-scheme: dark)').matches
+  ) {
+    return 'dark';
+  }
+
+  return 'light';
 };
 
 export const persistTheme = (mode: ThemeMode) => {
   const root = document.documentElement;
   root.classList.toggle('dark', mode === 'dark');
   root.setAttribute('data-theme', mode);
-  localStorage.setItem(THEME_STORAGE_KEY, mode);
+  try {
+    localStorage.setItem(THEME_STORAGE_KEY, mode);
+  } catch {
+    // Ignore storage failures and keep the runtime theme in memory.
+  }
 };

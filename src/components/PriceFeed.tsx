@@ -34,7 +34,11 @@ const fmtUSD = (n: number) =>
     maximumFractionDigits: 2,
   });
 
-const PriceFeed: React.FC = () => {
+type PriceFeedProps = {
+  compact?: boolean;
+};
+
+const PriceFeed: React.FC<PriceFeedProps> = ({ compact = false }) => {
   const prices = useSelector((s: RootState) => s.priceFeed);
 
   return (
@@ -64,19 +68,21 @@ const PriceFeed: React.FC = () => {
           //   : '—';
 
           return (
-            <div
-              key={symbol}
-              className="scrolling-price-item wallet-card px-6 py-12 rounded-lg shadow-lg grid grid-cols-[auto,1fr,auto] items-center gap-x-4 mx-4"
-            >
+          <div
+            key={symbol}
+            className={`scrolling-price-item wallet-card rounded-lg shadow-lg grid grid-cols-[auto,1fr,auto] items-center gap-x-4 mx-4 ${
+              compact ? 'px-4 py-4' : 'px-6 py-12'
+            }`}
+          >
               {getLogo(symbol)}
               <div className="flex flex-col">
-                <span className="font-semibold text-lg wallet-text-strong">
+                <span className={`${compact ? 'text-sm' : 'text-lg'} font-semibold wallet-text-strong`}>
                   {symbol}
                 </span>
                 <span className="wallet-muted text-xs">USD</span>
               </div>
               <div className="flex flex-col items-end font-bold">
-                <div className="wallet-text-strong text-xl">{display}</div>
+                <div className={`${compact ? 'text-base' : 'text-xl'} wallet-text-strong`}>{display}</div>
                 {/* <span className="wallet-muted text-xs">{meta}</span> */}
               </div>
             </div>

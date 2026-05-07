@@ -12,8 +12,7 @@ import { installProductionConsoleGuards } from './utils/productionConsole';
 import { installBarcodeScannerUnhandledRejectionGuard } from './utils/barcodeScanner';
 import { HashRouter } from 'react-router-dom';
 import { Provider } from 'react-redux';
-import { PersistGate } from 'redux-persist/integration/react';
-import { store, persistor } from './redux/store';
+import { store } from './redux/store';
 import { ThemeProvider } from './context/ThemeContext';
 
 installProductionConsoleGuards();
@@ -26,13 +25,11 @@ if (Capacitor.isNativePlatform()) {
 ReactDOM.createRoot(document.getElementById('root')!).render(
   <React.StrictMode>
     <Provider store={store}>
-      <PersistGate loading={null} persistor={persistor}>
-        <ThemeProvider>
-          <HashRouter>
-            <App />
-          </HashRouter>
-        </ThemeProvider>
-      </PersistGate>
+      <ThemeProvider>
+        <HashRouter>
+          <App />
+        </HashRouter>
+      </ThemeProvider>
     </Provider>
   </React.StrictMode>
 );

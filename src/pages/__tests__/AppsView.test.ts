@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { isComingSoonApp } from '../AppsView';
+import { isComingSoonApp } from '../apps/appsViewHelpers';
 
 describe('AppsView coming-soon selection rules', () => {
   it('marks FundMe addon cards as coming soon', () => {
