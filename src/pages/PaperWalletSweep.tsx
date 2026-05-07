@@ -8,22 +8,25 @@ import {
 } from '@bitauth/libauth';
 import { FaCamera, FaChevronRight } from 'react-icons/fa';
 import { CapacitorBarcodeScannerTypeHint } from '@capacitor/barcode-scanner';
-import ElectrumService from '../../../services/ElectrumService';
-import { PaperWalletSecretStore } from '../../../services/PaperWalletSecretStore';
-import { PREFIX } from '../../../utils/constants';
+import WalletScreen from '../components/ui/WalletScreen';
+import PageHeader from '../components/ui/PageHeader';
+import SectionCard from '../components/ui/SectionCard';
+import { RootState } from '../redux/store';
+import { PREFIX } from '../utils/constants';
 import {
   scanBarcodeSafely,
   getBarcodeScannerErrorMessage,
-} from '../../../utils/barcodeScanner';
-import type { UTXO } from '../../../types/types';
-import { buildPaperWalletSweepPlan } from './services/paperWalletSweepPlanner';
-import TransactionService from '../../../services/TransactionService';
-import { selectCurrentNetwork } from '../../../redux/selectors/networkSelectors';
-import { selectWalletId } from '../../../redux/walletSlice';
+} from '../utils/barcodeScanner';
+import type { TransactionOutput, UTXO } from '../types/types';
+import { buildPaperWalletSweepPlan } from './apps/paper-wallet-sweep/services/paperWalletSweepPlanner';
 import {
   Badge,
   ContainedSwipeConfirmModal,
-} from '../mint-cashtokens-poc/components/uiPrimitives';
+} from './apps/mint-cashtokens-poc/components/uiPrimitives';
+import TransactionService from '../services/TransactionService';
+import { logError } from '../utils/errorHandling';
+import { selectCurrentNetwork } from '../redux/selectors/networkSelectors';
+import ElectrumService from '../services/ElectrumService';
 
 const BASE58_WIF_PATTERN =
   /^[123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz]+$/;
@@ -72,10 +75,20 @@ function decodeScannedWif(wif: string) {
 
   return direct;
 }
-export default function PaperWalletSweepApp() {
+
+type SweepState = {
+  plan: Awaited<ReturnType<typeof buildPaperWalletSweepPlan>>;
+  builtHex: string;
+};
+
+export default function PaperWalletSweep() {
   const navigate = useNavigate();
-  const walletId = useSelector(selectWalletId);
-  const currentNetwork = useSelector(selectCurrentNetwork);
+  const currentWalletId = useSelector(
+    (state: RootState) => state.wallet_id.currentWalletId
+  );
+  const currentNetwork = useSelector((state: RootState) =>
+    selectCurrentNetwork(state)
+  );
   const [loading, setLoading] = useState(false);
   const [scannedAddress, setScannedAddress] = useState('');
   const [paperWalletUtxos, setPaperWalletUtxos] = useState<UTXO[]>([]);
@@ -83,25 +96,49 @@ export default function PaperWalletSweepApp() {
   const [broadcastTxid, setBroadcastTxid] = useState<string | null>(null);
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [confirmLoading, setConfirmLoading] = useState(false);
-  const [pendingSweep, setPendingSweep] = useState<null | {
-    plan: Awaited<ReturnType<typeof buildPaperWalletSweepPlan>>;
-    builtHex: string;
-  }>(null);
+  const [pendingSweep, setPendingSweep] = useState<SweepState | null>(null);
 
-  const networkPrefix = useMemo(() => {
-    return currentNetwork === 'mainnet' ? PREFIX.mainnet : PREFIX.chipnet;
-  }, [currentNetwork]);
-
+  const networkPrefix = useMemo(
+    () => (currentNetwork === 'mainnet' ? PREFIX.mainnet : PREFIX.chipnet),
+    [currentNetwork]
+  );
   const networkPrefixFallback = useMemo(
     () => (networkPrefix === PREFIX.mainnet ? PREFIX.chipnet : PREFIX.mainnet),
     [networkPrefix]
   );
 
+  const tokenGroups = useMemo(() => {
+    const groups = new Map<
+      string,
+      { count: number; amount: bigint; nft: boolean }
+    >();
+    for (const utxo of paperWalletUtxos) {
+      if (!utxo.token?.category) continue;
+      const current = groups.get(utxo.token.category) ?? {
+        count: 0,
+        amount: 0n,
+        nft: false,
+      };
+      const amt =
+        typeof utxo.token.amount === 'bigint'
+          ? utxo.token.amount
+          : BigInt(Math.trunc(Number(utxo.token.amount ?? 0) || 0));
+      groups.set(utxo.token.category, {
+        count: current.count + 1,
+        amount: current.amount + amt,
+        nft: current.nft || !!utxo.token.nft,
+      });
+    }
+    return [...groups.entries()].map(([category, value]) => ({
+      category,
+      ...value,
+    }));
+  }, [paperWalletUtxos]);
+
   const handleScan = async () => {
     try {
       setLoading(true);
       setError(null);
-      PaperWalletSecretStore.clear();
 
       const result = await scanBarcodeSafely({
         hint: CapacitorBarcodeScannerTypeHint.ALL,
@@ -129,14 +166,12 @@ export default function PaperWalletSweepApp() {
           throwErrors: true,
           tokenSupport: false,
         });
-        if (typeof addressResult === 'string') {
-          continue;
-        }
+        if (typeof addressResult === 'string') continue;
 
         const candidateAddress = addressResult.address;
-        const candidateUtxos = (
-          await ElectrumService.getUTXOs(candidateAddress)
-        ).filter((utxo) => !utxo.abi && !utxo.contractName);
+        const candidateUtxos = (await ElectrumService.getUTXOs(candidateAddress)).filter(
+          (utxo) => !utxo.abi && !utxo.contractName
+        );
         if (candidateUtxos.length > 0) {
           resolvedAddress = candidateAddress;
           utxos = candidateUtxos;
@@ -163,15 +198,7 @@ export default function PaperWalletSweepApp() {
         return;
       }
 
-      const marked = utxos.map((utxo) => {
-        PaperWalletSecretStore.set(utxo.tx_hash, utxo.tx_pos, privateKey);
-        return {
-          ...utxo,
-          isPaperWallet: true,
-          amount: utxo.value,
-        };
-      });
-      setPaperWalletUtxos(marked);
+      setPaperWalletUtxos(utxos.map((utxo) => ({ ...utxo, isPaperWallet: true })));
     } catch (err) {
       const message =
         err instanceof Error ? err.message : getBarcodeScannerErrorMessage(err);
@@ -183,6 +210,7 @@ export default function PaperWalletSweepApp() {
   };
 
   const handleSweep = async () => {
+    if (!currentWalletId) return;
     if (!scannedAddress || paperWalletUtxos.length === 0) {
       await Toast.show({ text: 'Scan a paper wallet before sweeping.' });
       return;
@@ -192,12 +220,8 @@ export default function PaperWalletSweepApp() {
       setLoading(true);
       setError(null);
 
-      if (!walletId) {
-        throw new Error('No active wallet is available.');
-      }
-
       const addressesResult = await TransactionService.fetchAddressesAndUTXOs(
-        walletId
+        currentWalletId
       );
       const destinationAddress = addressesResult.addresses[0]?.address;
       if (!destinationAddress) {
@@ -220,11 +244,12 @@ export default function PaperWalletSweepApp() {
       });
 
       const built = await TransactionService.buildTransaction(
-        plan.outputs,
+        plan.outputs as TransactionOutput[],
         null,
         destinationAddress,
         [...plan.paperWalletUtxos, ...plan.feeInputs]
       );
+
       if (built.errorMsg || !built.finalTransaction) {
         throw new Error(built.errorMsg || 'Failed to build sweep transaction.');
       }
@@ -235,6 +260,7 @@ export default function PaperWalletSweepApp() {
       const message = err instanceof Error ? err.message : String(err);
       setError(message);
       await Toast.show({ text: message });
+      logError('PaperWalletSweep.handleSweep', err, { walletId: currentWalletId });
     } finally {
       setLoading(false);
     }
@@ -266,64 +292,28 @@ export default function PaperWalletSweepApp() {
     }
   };
 
-  const tokenGroups = useMemo(() => {
-    const groups = new Map<
-      string,
-      { count: number; amount: bigint; nft: boolean }
-    >();
-    for (const utxo of paperWalletUtxos) {
-      if (!utxo.token?.category) continue;
-      const current = groups.get(utxo.token.category) ?? {
-        count: 0,
-        amount: 0n,
-        nft: false,
-      };
-      const amt =
-        typeof utxo.token.amount === 'bigint'
-          ? utxo.token.amount
-          : BigInt(Math.trunc(Number(utxo.token.amount ?? 0) || 0));
-      groups.set(utxo.token.category, {
-        count: current.count + 1,
-        amount: current.amount + amt,
-        nft: current.nft || !!utxo.token.nft,
-      });
-    }
-    return [...groups.entries()].map(([category, value]) => ({
-      category,
-      ...value,
-    }));
-  }, [paperWalletUtxos]);
-
   return (
-    <div className="container mx-auto max-w-md h-[calc(100dvh-var(--navbar-height)-var(--safe-bottom))] px-4 pt-2 pb-3 flex flex-col overflow-hidden wallet-page">
-      <div className="flex-none">
-        <div className="flex justify-center pt-1">
-          <img
-            src="/assets/images/OPTNWelcome1.png"
-            alt="OPTN"
-            className="h-auto w-full max-w-[260px] object-contain"
-          />
-        </div>
-        <div className="mt-4 flex items-center justify-between gap-4">
-          <h1 className="text-2xl font-bold wallet-text-strong tracking-[-0.02em]">
-            Paper Wallet
-          </h1>
-          <button
-            type="button"
-            onClick={() => navigate('/apps')}
-            className="wallet-btn-danger px-4 py-2"
-          >
-            Go Back
-          </button>
-        </div>
+    <WalletScreen maxWidthClassName="max-w-md" scrollable={false}>
+      <div className="flex h-full min-h-0 flex-col">
+        <PageHeader
+          title="Paper Wallet"
+          compact
+          titleAction={
+            <button
+              type="button"
+              onClick={() => navigate('/apps')}
+              className="wallet-btn-danger px-4 py-2"
+            >
+              Go Back
+            </button>
+          }
+        />
         <p className="mt-2 text-sm wallet-muted">
           Scan a WIF paper wallet and sweep BCH + CashTokens in one transaction.
         </p>
-      </div>
 
-      <div className="mt-4 min-h-0 flex-1 overflow-y-auto overflow-x-hidden overscroll-contain touch-pan-y pr-1">
-        <div className="space-y-4">
-          <div className="wallet-card p-4 rounded-2xl">
+        <div className="mt-4 min-h-0 flex-1 overflow-y-auto overscroll-contain pr-1 space-y-4">
+          <SectionCard className="p-4">
             <div className="flex items-center justify-between gap-3">
               <div className="flex-1">
                 <div className="text-sm wallet-muted">Paper wallet</div>
@@ -332,7 +322,7 @@ export default function PaperWalletSweepApp() {
                 </div>
               </div>
               <button
-                className="wallet-btn-primary px-4 py-2 flex items-center gap-2"
+                className="wallet-btn-primary flex items-center gap-2 px-4 py-2"
                 onClick={handleScan}
                 disabled={loading}
               >
@@ -342,7 +332,7 @@ export default function PaperWalletSweepApp() {
 
             <div className="mt-4 flex items-center gap-2">
               <button
-                className="wallet-btn-primary px-4 py-2 flex items-center gap-2"
+                className="wallet-btn-primary flex items-center gap-2 px-4 py-2"
                 onClick={handleSweep}
                 disabled={loading || paperWalletUtxos.length === 0}
               >
@@ -356,9 +346,9 @@ export default function PaperWalletSweepApp() {
             </div>
 
             {error && <div className="mt-3 wallet-danger-text">{error}</div>}
-          </div>
+          </SectionCard>
 
-          <div className="wallet-card p-4 rounded-2xl">
+          <SectionCard className="p-4">
             <div className="font-semibold mb-2 wallet-text-strong">
               Paper wallet UTXOs
             </div>
@@ -375,9 +365,9 @@ export default function PaperWalletSweepApp() {
                 </li>
               ))}
             </ul>
-          </div>
+          </SectionCard>
 
-          <div className="wallet-card p-4 rounded-2xl">
+          <SectionCard className="p-4">
             <div className="font-semibold mb-2 wallet-text-strong">
               Token groups
             </div>
@@ -395,9 +385,10 @@ export default function PaperWalletSweepApp() {
                 ))}
               </ul>
             )}
-          </div>
+          </SectionCard>
         </div>
       </div>
+
       <ContainedSwipeConfirmModal
         open={confirmOpen && !!pendingSweep}
         title="Confirm sweep"
@@ -443,6 +434,6 @@ export default function PaperWalletSweepApp() {
           </div>
         ) : null}
       </ContainedSwipeConfirmModal>
-    </div>
+    </WalletScreen>
   );
 }

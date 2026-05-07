@@ -23,6 +23,7 @@ export const BUILTIN_ADDONS: AddonManifest[] = [
           'tx:add_output',
           'tx:build',
           'tx:broadcast',
+          'contracts:derive',
           'ui:confirm',
           'http:fetch_json',
         ],
@@ -47,44 +48,6 @@ export const BUILTIN_ADDONS: AddonManifest[] = [
         },
       },
       {
-        id: 'mintCashTokensPoCApp',
-        name: 'Mint Tokens',
-        description: 'Create fungible or non-fungible tokens',
-        iconUri: null, // ✅ fall back to DEFAULT_ICON in AppsView
-        kind: 'declarative',
-        requiredCapabilities: [
-          'wallet:context:read',
-          'wallet:addresses:read',
-          'utxo:wallet:read',
-          'chain:query',
-          'tx:add_output',
-          'tx:build',
-          'tx:broadcast',
-          'ui:confirm',
-        ],
-        config: {
-          screen: 'MintCashTokensPoCApp',
-        },
-      },
-      {
-        id: 'paperWalletSweepApp',
-        name: 'Paper Wallet',
-        description: 'Sweep BCH and CashTokens from scanned paper wallets',
-        iconUri: null,
-        kind: 'declarative',
-        requiredCapabilities: [
-          'wallet:context:read',
-          'wallet:addresses:read',
-          'utxo:wallet:read',
-          'tx:build',
-          'tx:broadcast',
-          'ui:confirm',
-        ],
-        config: {
-          screen: 'PaperWalletSweepApp',
-        },
-      },
-      {
         id: 'cauldronSwapApp',
         name: 'Cauldron',
         description:
@@ -105,8 +68,39 @@ export const BUILTIN_ADDONS: AddonManifest[] = [
           screen: 'CauldronSwapApp',
         },
       },
+      {
+        id: 'paryonWorkspaceApp',
+        name: 'ParyonUSD',
+        description:
+          'Stablecoin dashboard with live mainnet verification and contract status',
+        iconUri: null,
+        kind: 'declarative',
+        requiredCapabilities: [
+          'wallet:context:read',
+          'wallet:addresses:read',
+          'utxo:wallet:read',
+          'chain:query',
+          'contracts:derive',
+          'tx:add_output',
+          'tx:build',
+          'tx:broadcast',
+          'ui:confirm',
+        ],
+        config: {
+          screen: 'ParyonWorkspaceApp',
+        },
+      },
     ],
-    contracts: [],
+    contracts: [
+      {
+        id: 'paryon-contract-bundle',
+        name: 'ParyonUSD Contract Bundle',
+        description:
+          'Compiled CashScript artifacts for the live ParyonUSD stablecoin system.',
+        cashscriptArtifact: {},
+        functions: [],
+      },
+    ],
 
     iconUri: null,
   },

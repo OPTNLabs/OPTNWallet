@@ -16,6 +16,7 @@ import { parseBip21Uri } from '../utils/bip21';
 import PageHeader from '../components/ui/PageHeader';
 import useOutboundTransactions from '../hooks/useOutboundTransactions';
 import { selectWalletId } from '../redux/walletSlice';
+import WalletScreen from '../components/ui/WalletScreen';
 
 function Label({ children }: { children: React.ReactNode }) {
   return (
@@ -164,31 +165,30 @@ export default function SimpleSend() {
   const enhancedError = pageError ? enhanceErrorMessage(pageError) : null;
 
   return (
-    <div className="container mx-auto max-w-xl h-[calc(100dvh-var(--navbar-height)-var(--safe-bottom))] px-4 pt-4 pb-3 flex flex-col overflow-hidden wallet-page">
-      <div className="shrink-0">
+    <WalletScreen maxWidthClassName="max-w-xl" scrollable={false}>
+      <div className="flex h-full min-h-0 flex-col gap-4">
         <PageHeader
           title="Simple Send"
           compact
           titleAction={
             <Link
-              to="/transaction"
+              to="/apps/optn.builtin.events:eventRewardsApp"
               className="wallet-btn-secondary px-3 py-2 text-sm"
-              title="Open advanced transaction builder"
+              title="Open Airdrops"
             >
-              Advanced
+              Airdrops
             </Link>
           }
         />
-      </div>
-      <div className="wallet-card wallet-signature-panel flex-1 min-h-0 overflow-hidden p-4">
+        <div className="wallet-card wallet-signature-panel flex-1 min-h-0 overflow-hidden p-3">
         <div className="flex h-full flex-col">
-          <div className="mb-4 wallet-section shrink-0">
+          <div className="mb-3 wallet-section shrink-0">
             <div className="wallet-kicker mb-1">Transfer mode</div>
             <Label>Asset</Label>
-            <div className="mt-3 grid grid-cols-3 gap-2">
+            <div className="mt-2 grid grid-cols-3 gap-2">
               <button
                 type="button"
-                className={`min-h-[46px] rounded-[18px] px-3 py-2 font-semibold border transition ${
+                className={`min-h-[42px] rounded-[16px] px-3 py-2 text-sm font-semibold border transition ${
                   assetType === 'bch'
                     ? 'wallet-segment-active border-[var(--wallet-accent)]'
                     : 'wallet-segment-inactive border-[var(--wallet-border)]'
@@ -199,7 +199,7 @@ export default function SimpleSend() {
               </button>
               <button
                 type="button"
-                className={`min-h-[46px] rounded-[18px] px-3 py-2 font-semibold border transition ${
+                className={`min-h-[42px] rounded-[16px] px-3 py-2 text-sm font-semibold border transition ${
                   assetType === 'ft'
                     ? 'wallet-segment-active border-[var(--wallet-accent)]'
                     : 'wallet-segment-inactive border-[var(--wallet-border)]'
@@ -210,7 +210,7 @@ export default function SimpleSend() {
               </button>
               <button
                 type="button"
-                className={`min-h-[46px] rounded-[18px] px-3 py-2 font-semibold border transition ${
+                className={`min-h-[42px] rounded-[16px] px-3 py-2 text-sm font-semibold border transition ${
                   assetType === 'nft'
                     ? 'wallet-segment-active border-[var(--wallet-accent)]'
                     : 'wallet-segment-inactive border-[var(--wallet-border)]'
@@ -222,11 +222,11 @@ export default function SimpleSend() {
             </div>
           </div>
 
-          <div className="flex-1 min-h-0 overflow-y-auto space-y-4 pr-1">
+          <div className="flex-1 min-h-0 overflow-y-auto space-y-3 pr-1">
             <div className="wallet-section">
               <div className="wallet-kicker mb-1">Destination</div>
               <Label>Recipient</Label>
-              <div className="mt-3 flex items-center gap-2">
+              <div className="mt-2 flex items-center gap-2">
                 <input
                   value={recipient}
                   onChange={(e) => setRecipient(e.target.value.trim())}
@@ -243,7 +243,7 @@ export default function SimpleSend() {
                   onClick={handleScanRecipient}
                   disabled={scanBusy}
                   title="Scan QR"
-                  className="wallet-btn-primary shrink-0 min-w-[46px] px-3"
+                  className="wallet-btn-primary shrink-0 min-w-[42px] px-3"
                 >
                   <FaCamera />
                 </button>
@@ -392,7 +392,7 @@ export default function SimpleSend() {
         </div>
       )}
 
-      <div className="mt-3 wallet-card p-3 shrink-0">
+      <div className="wallet-card mt-3 shrink-0 p-3 pb-[calc(var(--safe-bottom)+1rem)]">
         <div className="flex items-center gap-3">
           <button
             type="button"
@@ -440,6 +440,7 @@ export default function SimpleSend() {
           onConfirmSend={handleConfirmSend}
         />
       )}
-    </div>
+      </div>
+    </WalletScreen>
   );
 }
