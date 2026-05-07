@@ -12,6 +12,7 @@ import com.getcapacitor.BridgeActivity;
 import optn.wallet.app.security.DeviceIntegrityPlugin;
 import optn.wallet.app.security.ScreenSecurityPlugin;
 import optn.wallet.app.security.SecureKeyStorePlugin;
+import optn.wallet.app.update.PlayUpdatePlugin;
 
 public class MainActivity extends BridgeActivity {
   @Override
@@ -19,6 +20,7 @@ public class MainActivity extends BridgeActivity {
     registerPlugin(DeviceIntegrityPlugin.class);
     registerPlugin(ScreenSecurityPlugin.class);
     registerPlugin(SecureKeyStorePlugin.class);
+    registerPlugin(PlayUpdatePlugin.class);
     super.onCreate(savedInstanceState);
 
     // Keep the WebView inside the system bars instead of drawing underneath them.

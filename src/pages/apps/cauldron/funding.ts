@@ -1,3 +1,6 @@
+import { binToHex } from '@bitauth/libauth';
+
+import { derivePublicKeyHash } from '../../../utils/derivePublicKeyHash';
 import { parseSatoshis } from '../../../utils/binary';
 import type { UTXO } from '../../../types/types';
 
@@ -40,7 +43,7 @@ export function selectFundingUtxosByToken(
   candidateCount: number;
 } {
   const normalizedCategory = tokenCategory.trim().toLowerCase();
-  const tokenUtxos = [...utxos]
+  const sortedTokenUtxos = [...utxos]
     .filter((utxo) => isWalletFundingUtxo(utxo))
     .filter(
       (utxo) =>
@@ -48,22 +51,25 @@ export function selectFundingUtxosByToken(
         !utxo.token?.nft &&
         parseSatoshis(utxo.token?.amount) > 0n
     )
-    .filter((utxo, index, array) => {
-      const outpoint = `${utxo.tx_hash}:${utxo.tx_pos}`;
-      return (
-        array.findIndex(
-          (candidate) => `${candidate.tx_hash}:${candidate.tx_pos}` === outpoint
-        ) === index
-      );
-    })
     .sort((a, b) => {
-      const bchDiff = parseSatoshis(b.amount ?? b.value ?? 0) - parseSatoshis(a.amount ?? a.value ?? 0);
+      const bchDiff =
+        parseSatoshis(b.amount ?? b.value ?? 0) -
+        parseSatoshis(a.amount ?? a.value ?? 0);
       if (bchDiff !== 0n) {
         return bchDiff > 0n ? 1 : -1;
       }
-      const tokenDiff = parseSatoshis(b.token?.amount) - parseSatoshis(a.token?.amount);
+      const tokenDiff =
+        parseSatoshis(b.token?.amount) - parseSatoshis(a.token?.amount);
       return tokenDiff > 0n ? 1 : tokenDiff < 0n ? -1 : 0;
     });
+
+  const seenOutpoints = new Set<string>();
+  const tokenUtxos = sortedTokenUtxos.filter((utxo) => {
+    const outpoint = `${utxo.tx_hash}:${utxo.tx_pos}`;
+    if (seenOutpoints.has(outpoint)) return false;
+    seenOutpoints.add(outpoint);
+    return true;
+  });
 
   const selected: UTXO[] = [];
   let total = 0n;
@@ -86,7 +92,50 @@ export function selectFundingUtxosByToken(
 export function selectLargestBchUtxos(utxos: UTXO[]): UTXO[] {
   return [...utxos]
     .filter((utxo) => isWalletFundingUtxo(utxo) && !utxo.token)
-    .sort((a, b) =>
-      Number((b.amount ?? b.value ?? 0) - (a.amount ?? a.value ?? 0))
-    );
+    .sort((a, b) => {
+      const left = parseSatoshis(b.amount ?? b.value ?? 0);
+      const right = parseSatoshis(a.amount ?? a.value ?? 0);
+      if (left === right) return 0;
+      return left > right ? -1 : 1;
+    });
+}
+
+function tryResolvePublicKeyHashHex(address: string): string | null {
+  try {
+    return binToHex(derivePublicKeyHash(address)).toLowerCase();
+  } catch {
+    return null;
+  }
+}
+
+export function selectWalletBchFundingUtxo(
+  utxos: UTXO[],
+  ownerAddress: string
+): UTXO | null {
+  const normalizedOwnerAddress = ownerAddress.trim();
+  if (!normalizedOwnerAddress) return null;
+
+  const sortedBchUtxos = selectLargestBchUtxos(utxos);
+  const exactMatch = sortedBchUtxos.find(
+    (utxo) =>
+      utxo.address === normalizedOwnerAddress ||
+      utxo.tokenAddress === normalizedOwnerAddress
+  );
+  if (exactMatch) return exactMatch;
+
+  const ownerPublicKeyHashHex = tryResolvePublicKeyHashHex(
+    normalizedOwnerAddress
+  );
+  if (!ownerPublicKeyHashHex) return null;
+
+  return (
+    sortedBchUtxos.find((utxo) =>
+      [utxo.address, utxo.tokenAddress].some((candidateAddress) => {
+        if (!candidateAddress) return false;
+        return (
+          tryResolvePublicKeyHashHex(candidateAddress) === ownerPublicKeyHashHex
+        );
+      })
+    ) ?? null
+  );
 }

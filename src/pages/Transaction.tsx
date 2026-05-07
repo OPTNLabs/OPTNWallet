@@ -30,6 +30,7 @@ import PageHeader from '../components/ui/PageHeader';
 import SectionCard from '../components/ui/SectionCard';
 import { type BroadcastState } from '../services/TransactionService';
 import useOutboundTransactions from '../hooks/useOutboundTransactions';
+import WalletScreen from '../components/ui/WalletScreen';
 import {
   getLegacyDefaultChangeAddress,
   getPreferredBchChangeAddress,
@@ -402,14 +403,14 @@ const Transaction: React.FC = () => {
 
   return (
     <ErrorBoundary>
-      <div className="container mx-auto max-w-xl h-[calc(100dvh-var(--navbar-height)-var(--safe-bottom))] px-4 pt-4 pb-[calc(var(--safe-bottom)+1rem)] flex flex-col overflow-hidden wallet-page">
+      <WalletScreen maxWidthClassName="max-w-xl" scrollable={false}>
+        <div className="flex h-full min-h-0 flex-col gap-3">
         <PageHeader
           title="Custom Send"
           compact
         />
 
-        <div className="flex-1 min-h-0 overflow-y-auto pr-1">
-        <SectionCard className="mb-3 wallet-step-card">
+        <SectionCard className="mb-2 p-3 wallet-step-card">
           <div className="flex items-center justify-between gap-3">
             <div className="wallet-kicker">Flow</div>
             <details className="text-right">
@@ -422,7 +423,7 @@ const Transaction: React.FC = () => {
               </p>
             </details>
           </div>
-          <div className="mt-3 grid grid-cols-2 gap-2">
+          <div className="mt-2 grid grid-cols-2 gap-2">
             {stepStates.map((step, index) => (
               <button
                 key={step.label}
@@ -432,7 +433,7 @@ const Transaction: React.FC = () => {
                   if (canOpenStep(nextStep)) setActiveStep(nextStep);
                 }}
                 disabled={!canOpenStep((index + 1) as 1 | 2 | 3 | 4)}
-                className={`rounded-xl border px-3 py-2.5 ${
+                className={`rounded-xl border px-2.5 py-2 ${
                   activeStep === index + 1
                     ? 'ring-2 ring-[var(--wallet-focus-ring)]'
                     : ''
@@ -444,22 +445,24 @@ const Transaction: React.FC = () => {
                       : 'wallet-selectable-inactive'
                 } ${!canOpenStep((index + 1) as 1 | 2 | 3 | 4) ? 'opacity-60' : ''}`}
               >
-                <div className="text-xs font-semibold uppercase tracking-[0.12em] opacity-80">
+                <div className="text-[10px] font-semibold uppercase tracking-[0.12em] opacity-80">
                   Step {index + 1}
                 </div>
-                <div className="mt-1 text-sm font-semibold">{step.label}</div>
+                <div className="mt-1 text-xs font-semibold">{step.label}</div>
               </button>
             ))}
           </div>
         </SectionCard>
 
-        <SectionCard className="mb-4 wallet-step-card">
+        <SectionCard className="mb-3 p-3 wallet-step-card flex-1 min-h-0 overflow-hidden">
+          <div className="flex h-full min-h-0 flex-col">
+            <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain pr-1">
           {activeStep === 1 && (
             <>
-              <div className="mb-3 flex items-start justify-between gap-3">
+              <div className="mb-2 flex items-start justify-between gap-3">
                 <div>
                   <div className="wallet-kicker">Step 1</div>
-                  <h2 className="text-lg font-semibold wallet-text-strong">
+                  <h2 className="text-base font-semibold wallet-text-strong">
                     Choose source
                   </h2>
                 </div>
@@ -502,10 +505,10 @@ const Transaction: React.FC = () => {
 
           {activeStep === 2 && (
             <>
-              <div className="mb-3 flex items-start justify-between gap-3">
+              <div className="mb-2 flex items-start justify-between gap-3">
                 <div>
                   <div className="wallet-kicker">Step 2</div>
-                  <h2 className="text-lg font-semibold wallet-text-strong">
+                  <h2 className="text-base font-semibold wallet-text-strong">
                     Pick funds
                   </h2>
                 </div>
@@ -550,10 +553,10 @@ const Transaction: React.FC = () => {
 
           {activeStep === 3 && (
             <>
-              <div className="mb-3 flex items-start justify-between gap-3">
+              <div className="mb-2 flex items-start justify-between gap-3">
                 <div>
                   <div className="wallet-kicker">Step 3</div>
-                  <h2 className="text-lg font-semibold wallet-text-strong">
+                  <h2 className="text-base font-semibold wallet-text-strong">
                     Add recipients
                   </h2>
                 </div>
@@ -595,10 +598,10 @@ const Transaction: React.FC = () => {
 
           {activeStep === 4 && (
             <>
-              <div className="mb-3 flex items-start justify-between gap-3">
+              <div className="mb-2 flex items-start justify-between gap-3">
                 <div>
                   <div className="wallet-kicker">Step 4</div>
-                  <h2 className="text-lg font-semibold wallet-text-strong">
+                  <h2 className="text-base font-semibold wallet-text-strong">
                     Review and send
                   </h2>
                 </div>
@@ -612,7 +615,7 @@ const Transaction: React.FC = () => {
                 </details>
               </div>
 
-              <div className="space-y-2 mb-4">
+              <div className="space-y-2 mb-3">
                 <div className="wallet-stat-row">
                   <span className="text-sm wallet-muted">Sources chosen</span>
                   <span className="font-semibold wallet-text-strong">
@@ -656,6 +659,7 @@ const Transaction: React.FC = () => {
             </>
           )}
 
+            </div>
           <div className="mt-4 flex items-center justify-between gap-3 border-t border-[var(--wallet-border)] pt-3">
             <button
               type="button"
@@ -679,6 +683,7 @@ const Transaction: React.FC = () => {
               {activeStep === 4 ? 'Ready' : 'Next'}
             </button>
           </div>
+          </div>
         </SectionCard>
 
         <ErrorAndStatusPopups
@@ -701,7 +706,7 @@ const Transaction: React.FC = () => {
           />
         )}
         </div>
-      </div>
+      </WalletScreen>
     </ErrorBoundary>
   );
 };

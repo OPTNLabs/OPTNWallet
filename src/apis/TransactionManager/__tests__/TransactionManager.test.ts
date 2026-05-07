@@ -358,6 +358,52 @@ describe('TransactionManager', () => {
     ]);
   });
 
+  it('buildTransaction enables implicit fungible token burn when requested', async () => {
+    const buildTransaction = vi
+      .fn()
+      .mockResolvedValueOnce('00'.repeat(100))
+      .mockResolvedValueOnce('00'.repeat(100))
+      .mockResolvedValueOnce('00'.repeat(100));
+
+    mockedTxBuilderHelper.mockReturnValue({
+      buildTransaction,
+      sendTransaction: vi.fn(),
+    } as never);
+
+    const tm = TransactionManager();
+    const selectedUtxos: UTXO[] = [
+      {
+        address: 'bitcoincash:qsource',
+        height: 1,
+        tx_hash: 'f'.repeat(64),
+        tx_pos: 0,
+        value: 3000,
+        token: { category: 'cat1', amount: 10 },
+      },
+    ];
+
+    const outputs = [
+      {
+        recipientAddress: 'bitcoincash:qdest',
+        amount: 546,
+        token: { category: 'cat1', amount: 3n },
+      },
+    ];
+
+    const res = await tm.buildTransaction(
+      outputs,
+      null,
+      'bitcoincash:qchange',
+      selectedUtxos,
+      true
+    );
+
+    expect(res.errorMsg).toBe('');
+    expect(mockedTxBuilderHelper).toHaveBeenCalledWith({
+      allowImplicitFungibleTokenBurn: true,
+    });
+  });
+
   it('buildTransaction returns error when no inputs are selected', async () => {
     mockedTxBuilderHelper.mockReturnValue({
       buildTransaction: vi.fn(),

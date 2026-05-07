@@ -323,7 +323,8 @@ class TransactionService {
     outputs: TransactionOutput[],
     contractFunctionInputs: Record<string, unknown> | null,
     changeAddress: string,
-    selectedUtxos: UTXO[]
+    selectedUtxos: UTXO[],
+    allowImplicitFungibleTokenBurn = false
   ): Promise<{
     bytecodeSize: number;
     finalTransaction: string;
@@ -334,7 +335,8 @@ class TransactionService {
       outputs,
       contractFunctionInputs,
       changeAddress,
-      selectedUtxos
+      selectedUtxos,
+      allowImplicitFungibleTokenBurn
     );
   }
 

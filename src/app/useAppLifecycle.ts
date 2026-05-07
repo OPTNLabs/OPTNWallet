@@ -25,6 +25,9 @@ import { WalletType } from '../types/wallet';
 import ScreenSecurity from '../plugins/ScreenSecurity';
 import ElectrumServer from '../apis/ElectrumServer/ElectrumServer';
 import WalletBackendSyncService from '../services/WalletBackendSyncService';
+import PlayUpdateService from '../services/PlayUpdateService';
+import { Dialog } from '@capacitor/dialog';
+import { ROUTE_PATHS } from '../navigation/routes';
 
 let utxoWorkerStarted = false;
 
@@ -76,6 +79,8 @@ export function useWalletNetworkBootstrap(
           dispatch(setWalletType(walletInfo?.walletType ?? WalletType.STANDARD));
           dispatch(setNetwork(resolvedNetwork));
         }
+      } catch (error) {
+        console.warn('Wallet network bootstrap failed:', error);
       } finally {
         if (!cancelled) setReady(true);
       }
@@ -115,7 +120,12 @@ export function useScreenSecurity() {
       return;
     }
 
-    const onboardingRoutes = new Set(['/', '/landing', '/createwallet', '/importwallet']);
+    const onboardingRoutes = new Set([
+      ROUTE_PATHS.root,
+      ROUTE_PATHS.landing,
+      ROUTE_PATHS.createWallet,
+      ROUTE_PATHS.importWallet,
+    ]);
     const shouldEnableSecure = !onboardingRoutes.has(location.pathname);
 
     void ScreenSecurity.setSecure({ enabled: shouldEnableSecure }).catch((error) => {
@@ -126,6 +136,10 @@ export function useScreenSecurity() {
 
 export function useLocalNotificationSetup() {
   useEffect(() => {
+    if (!Capacitor.isNativePlatform()) {
+      return;
+    }
+
     (async () => {
       try {
         await LocalNotifications.requestPermissions();
@@ -149,6 +163,10 @@ export function useUtxoQueueToOsNotifications(queue: UtxoNotification[]) {
   const notified = useRef<Set<string>>(new Set());
 
   useEffect(() => {
+    if (!Capacitor.isNativePlatform()) {
+      return;
+    }
+
     (async () => {
       for (const n of queue) {
         if (typeof n.height === 'number' && n.height > 0) continue;
@@ -227,6 +245,54 @@ export function useWorkerLifecycle(walletId: number | null) {
       }
     };
   }, [hasWallet, location.pathname]);
+}
+
+export function useOptionalPlayUpdateCheck() {
+  const lastPromptedVersionRef = useRef<number>(0);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    const runCheck = async () => {
+      try {
+        const update = await PlayUpdateService.checkForOptionalUpdate();
+        if (cancelled || !update) return;
+
+        if (update.isDownloaded) {
+          await PlayUpdateService.completeOptionalUpdate();
+          return;
+        }
+
+        if (!update.available) return;
+        if (update.availableVersionCode <= lastPromptedVersionRef.current) return;
+
+        const result = await Dialog.confirm({
+          title: 'Update available',
+          message:
+            'A newer version of OPTN Wallet is available in Google Play. You can keep using this version or update now.',
+          okButtonTitle: 'Update now',
+          cancelButtonTitle: 'Later',
+        });
+
+        lastPromptedVersionRef.current = update.availableVersionCode;
+
+        if (!result.value) return;
+        await PlayUpdateService.startOptionalUpdate();
+      } catch (error) {
+        console.warn('Optional Play update check failed:', error);
+      }
+    };
+
+    void runCheck();
+    window.addEventListener('focus', runCheck);
+    document.addEventListener('visibilitychange', runCheck);
+
+    return () => {
+      cancelled = true;
+      window.removeEventListener('focus', runCheck);
+      document.removeEventListener('visibilitychange', runCheck);
+    };
+  }, []);
 }
 
 export function useOutboundTransactionRecovery(walletId: number | null) {

@@ -66,9 +66,7 @@ function normalizeBaseUrl(url: string): string {
 
 function getBackendBaseUrl(): string | null {
   const raw = readEnv(BACKEND_URL_KEY);
-  if (!raw) {
-    return import.meta.env.DEV ? 'http://127.0.0.1:8787' : null;
-  }
+  if (!raw) return null;
   const normalized = normalizeBaseUrl(raw);
   return normalized.length > 0 ? normalized : null;
 }

@@ -42,10 +42,14 @@ async function initializeWalletConnect(dispatch: AppDispatch) {
   if (!walletKitSingleton) {
     const projectId = import.meta.env.VITE_WC_PROJECT_ID;
     const core = new Core({ projectId });
+    const metadataUrl =
+      (typeof window !== 'undefined' && window.location?.origin) ||
+      import.meta.env.VITE_WC_METADATA_URL ||
+      'https://optnlabs.com';
     const metadata = {
       name: 'OPTN Wallet',
       description: 'OPTN WalletConnect Integration',
-      url: 'https://optnlabs.com',
+      url: metadataUrl,
       icons: ['https://optnlabs.com/logo.png'],
     };
 
