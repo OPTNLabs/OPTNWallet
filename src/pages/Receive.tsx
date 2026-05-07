@@ -1,7 +1,6 @@
 // src/pages/Receive.tsx
 import React, { useEffect, useState } from 'react';
 import { useSelector } from 'react-redux';
-import { useNavigate } from 'react-router-dom';
 import { RootState } from '../redux/store';
 import KeyService from '../services/KeyService';
 import { Toast } from '@capacitor/toast';
@@ -16,9 +15,13 @@ import { Network } from '../redux/networkSlice';
 import PageHeader from '../components/ui/PageHeader';
 import SectionCard from '../components/ui/SectionCard';
 import EmptyState from '../components/ui/EmptyState';
+import SectionHeader from '../components/ui/SectionHeader';
 import { zeroize } from '../utils/secureMemory';
+import WalletScreen from '../components/ui/WalletScreen';
+import Popup from '../components/transaction/Popup';
 import type { QuantumrootVaultRecord } from '../types/types';
 import UTXOService from '../services/UTXOService';
+import { logError } from '../utils/errorHandling';
 import {
   summarizeQuantumrootVaultStatus,
   type QuantumrootVaultStatus,
@@ -26,7 +29,6 @@ import {
 import { getQuantumrootNetworkSupport } from '../services/QuantumrootNetworkSupportService';
 
 type QRCodeType = 'address' | 'pubKey' | 'pkh' | 'privkey';
-type ReceiveMode = 'standard' | 'quantumroot';
 const PRIVKEY_UNLOCK_TAPS = 10;
 const ALLOW_PRIVATE_KEY_VIEW = import.meta.env.DEV;
 
@@ -40,7 +42,6 @@ type WalletKeyPair = {
 };
 
 const Receive: React.FC = () => {
-  const navigate = useNavigate();
   const [mainKeyPairs, setMainKeyPairs] = useState<WalletKeyPair[]>([]);
   const [changeKeyPairs, setChangeKeyPairs] = useState<WalletKeyPair[]>([]);
   const [selectedAddress, setSelectedAddress] = useState<string | null>(null);
@@ -57,15 +58,13 @@ const Receive: React.FC = () => {
   const [pubKeyTapCount, setPubKeyTapCount] = useState(0);
   const [isPrivKeyUnlocked, setIsPrivKeyUnlocked] = useState(false);
   const [showBip21Popup, setShowBip21Popup] = useState(false);
-  const [showQuantumrootPopup, setShowQuantumrootPopup] = useState(false);
-  const [receiveMode, setReceiveMode] = useState<ReceiveMode>('standard');
+  const [showAddressListPopup, setShowAddressListPopup] = useState(false);
   const [bip21Amount, setBip21Amount] = useState('');
   const [bip21Label, setBip21Label] = useState('');
   const [bip21Message, setBip21Message] = useState('');
   const [selectedWalletKey, setSelectedWalletKey] = useState<WalletKeyPair | null>(null);
   const [selectedQuantumrootVault, setSelectedQuantumrootVault] =
     useState<QuantumrootVaultRecord | null>(null);
-  const [loadingQuantumrootVault, setLoadingQuantumrootVault] = useState(false);
   const [showQuantumrootStatusPopup, setShowQuantumrootStatusPopup] =
     useState(false);
   const [quantumrootStatus, setQuantumrootStatus] = useState<QuantumrootVaultStatus | null>(
@@ -106,6 +105,18 @@ const Receive: React.FC = () => {
         if (mainKeys.length > 0 || changeKeys.length > 0) {
           setMainKeyPairs(mainKeys);
           setChangeKeyPairs(changeKeys);
+          const firstKey = mainKeys[0] ?? changeKeys[0] ?? null;
+          if (firstKey) {
+            setSelectedWalletKey(firstKey);
+            setSelectedAddressPair({
+              address: firstKey.address,
+              tokenAddress: firstKey.tokenAddress,
+            });
+            setSelectedAddress(firstKey.address);
+            setSelectedPubKey(hexString(firstKey.publicKey));
+            setSelectedPKH(hexString(firstKey.pubkeyHash));
+            setSelectedPrivKey(null);
+          }
         } else {
           console.error('No keys found for the current wallet');
         }
@@ -116,6 +127,46 @@ const Receive: React.FC = () => {
 
     fetchKeys();
   }, [currentWalletId]);
+
+  const handleInitializeReceiveAddresses = async () => {
+    if (!currentWalletId) return;
+
+    try {
+      console.log('[Receive] initializing receive addresses', {
+        walletId: currentWalletId,
+      });
+      await KeyService.bootstrapInitialAddressBatch(currentWalletId, 0, 10);
+      const existingKeys = (await KeyService.retrieveKeys(
+        currentWalletId
+      )) as WalletKeyPair[];
+      const mainKeys = existingKeys
+        .filter((key) => key.changeIndex === 0)
+        .sort((a, b) => a.addressIndex - b.addressIndex);
+      const changeKeys = existingKeys
+        .filter((key) => key.changeIndex === 1)
+        .sort((a, b) => a.addressIndex - b.addressIndex);
+      setMainKeyPairs(mainKeys);
+      setChangeKeyPairs(changeKeys);
+      if (mainKeys.length > 0) {
+        const primary = mainKeys[0];
+        setSelectedAddressPair({
+          address: primary.address,
+          tokenAddress: primary.tokenAddress,
+        });
+        setSelectedAddress(primary.address);
+        setSelectedPubKey(hexString(primary.publicKey));
+        setSelectedPKH(hexString(primary.pubkeyHash));
+      }
+      console.log('[Receive] initialization completed', {
+        mainKeys: mainKeys.length,
+        changeKeys: changeKeys.length,
+      });
+    } catch (error) {
+      logError('Receive.handleInitializeReceiveAddresses', error, {
+        walletId: currentWalletId,
+      });
+    }
+  };
 
   const handleAddressSelect = async (tokenAddress: string, address: string) => {
     const keys = (await KeyService.retrieveKeys(wallet_id)) as WalletKeyPair[];
@@ -155,10 +206,9 @@ const Receive: React.FC = () => {
     setSelectedPKH(pkh);
     setSelectedPrivKey(wif);
     setIsTokenAddress(false);
-    setReceiveMode('standard');
     setQrCodeType('address');
     setShowBip21Popup(false);
-    setShowQuantumrootPopup(false);
+    setShowAddressListPopup(false);
     setShowQuantumrootStatusPopup(false);
     setQuantumrootStatus(null);
     setBip21Amount('');
@@ -171,7 +221,6 @@ const Receive: React.FC = () => {
 
     let cancelled = false;
     const loadQuantumrootVault = async () => {
-      setLoadingQuantumrootVault(true);
       try {
         const vault = await KeyService.createQuantumrootVault(
           currentWalletId,
@@ -185,10 +234,6 @@ const Receive: React.FC = () => {
         console.error('Failed to derive Quantumroot vault:', error);
         if (!cancelled) {
           setSelectedQuantumrootVault(null);
-        }
-      } finally {
-        if (!cancelled) {
-          setLoadingQuantumrootVault(false);
         }
       }
     };
@@ -245,12 +290,9 @@ const Receive: React.FC = () => {
     const updateQrSize = () => {
       const viewportHeight = window.visualViewport?.height ?? window.innerHeight;
       const viewportWidth = window.visualViewport?.width ?? window.innerWidth;
-      const isQuantumroot = receiveMode === 'quantumroot';
       const isSelected = !!selectedAddress;
       const availableHeight = isSelected
-        ? isQuantumroot
-          ? viewportHeight * 0.34
-          : viewportHeight * 0.42
+        ? viewportHeight * 0.42
         : viewportHeight * 0.22;
       const availableWidth = viewportWidth * 0.68;
       const nextSize = Math.floor(Math.min(availableHeight, availableWidth));
@@ -264,7 +306,7 @@ const Receive: React.FC = () => {
       window.visualViewport?.removeEventListener('resize', updateQrSize);
       window.removeEventListener('resize', updateQrSize);
     };
-  }, [receiveMode, selectedAddress]);
+  }, [selectedAddress]);
 
   const handlePubKeyTabClick = () => {
     if (!ALLOW_PRIVATE_KEY_VIEW) {
@@ -297,13 +339,20 @@ const Receive: React.FC = () => {
   };
 
   const toggleAddressType = () => {
-    if (!selectedAddressPair) return;
+    const sourcePair = selectedAddressPair ?? primaryKeyPair;
+    if (!sourcePair) return;
     const nextIsTokenAddress = !isTokenAddress;
     setIsTokenAddress(nextIsTokenAddress);
+    if (!selectedAddressPair && primaryKeyPair) {
+      setSelectedAddressPair({
+        address: primaryKeyPair.address,
+        tokenAddress: primaryKeyPair.tokenAddress,
+      });
+    }
     setSelectedAddress(
       nextIsTokenAddress
-        ? selectedAddressPair.tokenAddress
-        : selectedAddressPair.address
+        ? sourcePair.tokenAddress
+        : sourcePair.address
     );
   };
 
@@ -315,13 +364,28 @@ const Receive: React.FC = () => {
     setBip21Amount(parts.length > 1 ? `${whole}.${decimal}` : whole);
   };
 
+  const keyPairsToDisplay =
+    addressType === 'main' ? mainKeyPairs : changeKeyPairs;
+  const primaryKeyPair = keyPairsToDisplay[0] ?? null;
+
   const activeAddress =
-    receiveMode === 'quantumroot'
-      ? selectedQuantumrootVault?.receive_address ?? ''
-      : selectedAddress ?? '';
+    selectedAddress ?? primaryKeyPair?.address ?? '';
+  const bip21Uri = (() => {
+    if (!activeAddress) return '';
+    const params = new URLSearchParams();
+    const amount = bip21Amount.trim();
+    const label = bip21Label.trim();
+    const message = bip21Message.trim();
+    if (amount) params.set('amount', amount);
+    if (label) params.set('label', label);
+    if (message) params.set('message', message);
+    const query = params.toString();
+    return query ? `bitcoincash:${activeAddress}?${query}` : `bitcoincash:${activeAddress}`;
+  })();
+  const addressPayload = showBip21Popup && bip21Uri ? bip21Uri : activeAddress;
   const activeQrPayload =
     qrCodeType === 'address'
-      ? activeAddress
+      ? addressPayload
       : qrCodeType === 'pubKey'
         ? selectedPubKey || ''
         : qrCodeType === 'pkh'
@@ -329,314 +393,330 @@ const Receive: React.FC = () => {
           : selectedPrivKey || '';
   const activeLabel =
     qrCodeType === 'address'
-      ? activeAddress
+      ? addressPayload
       : qrCodeType === 'pubKey'
-        ? selectedPubKey || ''
+        ? selectedPubKey || (primaryKeyPair ? hexString(primaryKeyPair.publicKey) : '')
         : qrCodeType === 'pkh'
-          ? selectedPKH || ''
+          ? selectedPKH || (primaryKeyPair ? hexString(primaryKeyPair.pubkeyHash) : '')
           : selectedPrivKey || '';
   const hasBip21Fields =
     !!bip21Amount.trim() || !!bip21Label.trim() || !!bip21Message.trim();
-  const bip21Summary = [
-    bip21Amount.trim() ? `Amt ${bip21Amount.trim()} BCH` : '',
-    bip21Label.trim() ? 'Label set' : '',
-    bip21Message.trim() ? 'Message set' : '',
-  ]
-    .filter(Boolean)
-    .join(' · ');
-
-  const keyPairsToDisplay =
-    addressType === 'main' ? mainKeyPairs : changeKeyPairs;
-
   const formatQuantumrootBalance = (sats: number) =>
     `${(sats / SATSINBITCOIN).toFixed(8).replace(/\.?0+$/, '') || '0'} BCH`;
-  const showStandardActions = receiveMode === 'standard';
-  const showQuantumrootActions = receiveMode === 'quantumroot';
+  const addressPrefixLength = PREFIX[currentNetwork]?.length ?? PREFIX.mainnet.length;
+  const hasReceiveKeys = mainKeyPairs.length > 0 || changeKeyPairs.length > 0;
+  const canShowQuantumrootStatus =
+    !!selectedQuantumrootVault && quantumrootNetworkSupport.canReceiveOnChain;
 
-  return (
-    <div className="container mx-auto max-w-md h-[calc(100dvh-var(--navbar-height)-var(--safe-bottom))] px-4 pt-4 pb-[calc(var(--safe-bottom)+1rem)] flex flex-col overflow-hidden wallet-page">
-      <PageHeader
-        title="Receive"
-        compact
-      />
+  useEffect(() => {
+    if (!import.meta.env.DEV) return;
 
-      {!selectedAddress && (
-        <SectionCard className="mb-3">
-          <div>
-            <div className="flex justify-center space-x-4 mb-4 w-full">
-              <button
-                className={`flex-1 min-w-[120px] px-4 py-2 font-bold rounded-[14px] text-center ${
-                  addressType === 'main'
-                    ? 'wallet-segment-active'
-                    : 'wallet-segment-inactive'
-                }`}
-                onClick={() => setAddressType('main')}
-              >
-                Main <br />
-                Addresses
-              </button>
-              <button
-                className={`flex-1 min-w-[120px] px-4 py-2 font-bold rounded-[14px] text-center ${
-                  addressType === 'change'
-                    ? 'wallet-segment-active'
-                    : 'wallet-segment-inactive'
-                }`}
-                onClick={() => setAddressType('change')}
-              >
-                Change <br />
-                Addresses
-              </button>
-            </div>
+    const onError = (event: ErrorEvent) => {
+      console.error('[Receive] window error', {
+        message: event.message,
+        filename: event.filename,
+        lineno: event.lineno,
+        colno: event.colno,
+        error: event.error,
+      });
+    };
+
+    const onUnhandledRejection = (event: PromiseRejectionEvent) => {
+      console.error('[Receive] unhandled rejection', event.reason);
+    };
+
+    window.addEventListener('error', onError);
+    window.addEventListener('unhandledrejection', onUnhandledRejection);
+
+    return () => {
+      window.removeEventListener('error', onError);
+      window.removeEventListener('unhandledrejection', onUnhandledRejection);
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!import.meta.env.DEV) return;
+    console.log('[Receive] state snapshot', {
+      currentWalletId,
+      currentNetwork,
+      addressType,
+      selectedAddress,
+      selectedAddressPair,
+      selectedWalletKey: selectedWalletKey ? selectedWalletKey.address : null,
+      mainKeyPairs: mainKeyPairs.length,
+      changeKeyPairs: changeKeyPairs.length,
+      primaryKeyPair: primaryKeyPair ? primaryKeyPair.address : null,
+      selectedQuantumrootVault: selectedQuantumrootVault?.receive_address ?? null,
+      quantumrootNetworkSupport,
+      canShowQuantumrootStatus,
+      activeAddress,
+      activeQrPayloadLength: activeQrPayload.length,
+      activeLabelLength: activeLabel.length,
+    });
+  }, [
+    activeAddress,
+    activeLabel,
+    activeQrPayload.length,
+    addressType,
+    changeKeyPairs.length,
+    currentNetwork,
+    currentWalletId,
+    mainKeyPairs.length,
+    canShowQuantumrootStatus,
+    quantumrootNetworkSupport,
+    selectedAddress,
+    selectedAddressPair,
+    selectedQuantumrootVault,
+    selectedWalletKey,
+    primaryKeyPair,
+  ]);
+
+  useEffect(() => {
+    if (!import.meta.env.DEV) return;
+    console.log('[Receive] render branch', {
+      hasSelectedAddress: !!selectedAddress,
+      keyPairsToDisplay: keyPairsToDisplay.length,
+      isTokenAddress,
+      qrCodeType,
+      showAddressListPopup,
+    });
+  }, [
+    isTokenAddress,
+    keyPairsToDisplay.length,
+    qrCodeType,
+    selectedAddress,
+    showAddressListPopup,
+  ]);
+
+  const renderAddressTypeToggle = () => {
+    return (
+      <div className="mt-3 flex items-center justify-center gap-2">
+        <span className={isTokenAddress ? 'wallet-muted' : 'wallet-text-strong'}>
+          Regular
+        </span>
+        <button
+          type="button"
+          onClick={toggleAddressType}
+          className={`relative flex h-6 w-12 items-center rounded-full border border-[var(--wallet-border)] transition-colors duration-300 ${
+            isTokenAddress ? 'bg-[var(--wallet-accent)]' : 'wallet-surface-strong'
+          }`}
+          aria-label="Toggle receive address type"
+        >
+          <span
+            className={`h-6 w-6 rounded-full shadow-md transition-transform duration-300 ${
+              isTokenAddress ? 'translate-x-6' : 'translate-x-0'
+            }`}
+            style={{ backgroundColor: 'var(--wallet-card-bg)' }}
+          />
+        </button>
+        <span className={isTokenAddress ? 'wallet-text-strong' : 'wallet-muted'}>
+          CashToken
+        </span>
+      </div>
+    );
+  };
+
+  const renderReceiveContent = () => {
+    if (!hasReceiveKeys) {
+      return (
+        <SectionCard className="p-4">
+          <SectionHeader
+            title="Receive addresses not ready"
+            subtitle="Prepare addresses to show your receive QR and address list."
+            compact
+          />
+          <div className="space-y-3">
+            <EmptyState message="This wallet does not have receive addresses loaded yet." />
+            <button
+              type="button"
+              className="wallet-btn-secondary w-full"
+              onClick={() => void handleInitializeReceiveAddresses()}
+            >
+              Prepare receive addresses
+            </button>
           </div>
         </SectionCard>
-      )}
+      );
+    }
 
-      <div className="flex flex-col items-center space-y-3 flex-1 min-h-0">
-        {!selectedAddress ? (
-          <div className="overflow-y-auto font-bold w-full flex-1 min-h-0 rounded-2xl p-1">
-            {keyPairsToDisplay.length === 0 ? (
-              <EmptyState message="No addresses found for this wallet." />
-            ) : (
-              keyPairsToDisplay.map((keyPair, index: number) => (
-                <div
-                  key={index}
-                  className="p-4 mb-3 wallet-card cursor-pointer hover:brightness-[0.98]"
-                  onClick={() =>
-                    handleAddressSelect(keyPair.tokenAddress, keyPair.address)
-                  }
-                >
-                  <p>
-                    {shortenTxHash(
-                      keyPair.address,
-                      PREFIX[currentNetwork].length
-                    )}
-                    <br />
-                    {getBchAddressPath(
-                      currentNetwork,
-                      0,
-                      keyPair.changeIndex,
-                      keyPair.addressIndex
-                    )}
-                  </p>
-                </div>
-              ))
-            )}
+    const qrSection = (
+      <SectionCard className="p-3">
+        <div className="flex flex-col items-center gap-3">
+          <div className="rounded-2xl border border-[rgba(0,0,0,0.08)] bg-white p-1 shadow-sm">
+            <QRCodeSVG
+              value={activeQrPayload}
+              size={qrCodeSize}
+              bgColor="#ffffff"
+              fgColor="#000000"
+              level="H"
+              marginSize={1}
+              imageSettings={{
+                src: '/assets/images/OPTNUIkeyline.png',
+                height: 36,
+                width: 36,
+                excavate: true,
+              }}
+            />
           </div>
-        ) : (
-          <div className="w-full flex flex-col flex-1 min-h-0">
-            <div className="flex flex-col items-center">
-              <div className="mb-3 flex gap-2">
-                <button
-                  className={`px-4 py-2 rounded-[14px] text-sm font-bold ${
-                    receiveMode === 'standard'
-                      ? 'wallet-segment-active'
-                      : 'wallet-segment-inactive'
-                  }`}
-                  onClick={() => setReceiveMode('standard')}
-                >
-                  Standard
-                </button>
-              <button
-                className={`px-4 py-2 rounded-[14px] text-sm font-bold ${
-                  receiveMode === 'quantumroot'
-                      ? 'wallet-segment-active'
-                      : 'wallet-segment-inactive'
-                  }`}
-                  onClick={() => {
-                    setReceiveMode('quantumroot');
-                    setQrCodeType('address');
-                    setIsTokenAddress(false);
-                  }}
-                  disabled={
-                    !selectedQuantumrootVault || !quantumrootNetworkSupport.canReceiveOnChain
-                  }
-                >
-                  {quantumrootNetworkSupport.isPreviewOnly
-                    ? 'Quantumroot Preview'
-                    : 'Quantumroot'}
-                </button>
-              </div>
-              {quantumrootNetworkSupport.isPreviewOnly && (
-                <p className="text-xs wallet-muted text-center px-4 mb-3">
-                  Quantumroot is visible on mainnet for preview, but receive and
-                  recovery remain disabled until the May 15, 2026 network upgrade.
-                </p>
-              )}
-              <div className="rounded-2xl bg-white p-1 shadow-sm border border-[rgba(0,0,0,0.08)]">
-                <QRCodeSVG
-                  value={activeQrPayload}
-                  size={qrCodeSize}
-                  bgColor="#ffffff"
-                  fgColor="#000000"
-                  level="H"
-                  marginSize={1}
-                  imageSettings={{
-                    src: '/assets/images/OPTNUIkeyline.png',
-                    height: 36,
-                    width: 36,
-                    excavate: true,
-                  }}
-                />
-              </div>
-              <p
-                className="mt-4 p-2.5 wallet-surface-strong rounded-[14px] cursor-pointer hover:brightness-[0.97]"
-                onClick={() => handleCopy(activeQrPayload)}
-              >
-                {shortenTxHash(activeLabel, PREFIX[currentNetwork].length)}
-              </p>
-            </div>
-            {qrCodeType === 'address' && receiveMode === 'standard' && (
-              <div className="mt-3 flex flex-row gap-2 items-center justify-center">
-                <span
-                  className={
-                    isTokenAddress ? 'wallet-muted' : 'wallet-text-strong'
-                  }
-                >
-                  Regular
-                </span>
-                <div
-                  onClick={toggleAddressType}
-                  className={`w-12 h-6 rounded-full flex items-center cursor-pointer relative transition-colors duration-300 border border-[var(--wallet-border)] ${
-                    isTokenAddress
-                      ? 'bg-[var(--wallet-accent)]'
-                      : 'wallet-surface-strong'
-                  }`}
-                >
-                  <div
-                    className={`w-6 h-6 rounded-full shadow-md transform transition-transform duration-300 ${
-                      isTokenAddress ? 'translate-x-6' : 'translate-x-0'
-                    }`}
-                    style={{ backgroundColor: 'var(--wallet-card-bg)' }}
-                  />
-                </div>
-                <span
-                  className={
-                    isTokenAddress ? 'wallet-text-strong' : 'wallet-muted'
-                  }
-                >
-                  CashToken
-                </span>
-              </div>
-            )}
-            <div className="flex space-x-4 mt-4 w-full justify-center">
-              {showStandardActions && (
-                <>
-                  <button
-                    className={`px-4 py-2 rounded-[14px] font-bold ${
-                      qrCodeType === 'address'
-                        ? 'wallet-segment-active'
-                        : 'wallet-segment-inactive'
-                    }`}
-                    onClick={() => setQrCodeType('address')}
-                  >
-                    Address
-                  </button>
-                  <button
-                    className={`px-4 py-2 rounded-[14px] font-bold ${
-                      qrCodeType === 'pubKey'
-                        ? 'wallet-segment-active'
-                        : 'wallet-segment-inactive'
-                    }`}
-                    onClick={handlePubKeyTabClick}
-                  >
-                    PubKey
-                  </button>
-                  <button
-                    className={`px-4 py-2 rounded-[14px] font-bold ${
-                      qrCodeType === 'pkh'
-                        ? 'wallet-segment-active'
-                        : 'wallet-segment-inactive'
-                    }`}
-                    onClick={() => setQrCodeType('pkh')}
-                  >
-                    PKH
-                  </button>
-                </>
-              )}
-              {showStandardActions && isPrivKeyUnlocked && (
-                <button
-                  className={`px-4 py-2 rounded-[14px] font-bold ${
-                    qrCodeType === 'privkey'
-                      ? 'wallet-segment-active'
-                      : 'wallet-segment-inactive'
-                  }`}
-                  onClick={() => setQrCodeType('privkey')}
-                >
-                  PrivKey
-                </button>
-              )}
-            </div>
-              <div className="mt-2 min-h-[44px] w-full flex flex-col items-center justify-center gap-1">
-                {showStandardActions && hasBip21Fields && (
-                  <p className="text-[11px] wallet-muted text-center px-2">
-                  {bip21Summary}
-                </p>
-              )}
-              <div className="flex gap-2">
-                {showStandardActions && qrCodeType === 'address' && (
-                  <button
-                    className="px-3 py-1 rounded-[14px] text-xs font-semibold wallet-segment-inactive border border-[var(--wallet-border)] opacity-50 cursor-not-allowed"
-                    onClick={() => undefined}
-                    disabled
-                  >
-                    BIP21
-                  </button>
-                )}
-                {showQuantumrootActions && (
-                  <>
-                    <button
-                      className="px-3 py-1 rounded-[14px] text-xs font-semibold wallet-segment-inactive border border-[var(--wallet-border)]"
-                      onClick={() => setShowQuantumrootPopup(true)}
-                    >
-                      Vault Details
-                    </button>
-                    <button
-                      className="px-3 py-1 rounded-[14px] text-xs font-semibold wallet-segment-inactive border border-[var(--wallet-border)]"
-                      onClick={() => navigate('/quantumroot')}
-                    >
-                      Workspace
-                    </button>
-                  </>
-                )}
-              </div>
-            </div>
-            {ALLOW_PRIVATE_KEY_VIEW &&
-              receiveMode === 'standard' &&
-              !isPrivKeyUnlocked &&
-              pubKeyTapCount >= 5 && (
-                <div className="wallet-surface-strong mt-2 px-4 py-2 rounded-[14px] text-sm font-bold">
-                  PrivKey unlock in {PRIVKEY_UNLOCK_TAPS - pubKeyTapCount} taps
-                </div>
-              )}
+          <button
+            type="button"
+            className="wallet-surface-strong rounded-[14px] p-2.5 hover:brightness-[0.97]"
+            onClick={() => handleCopy(activeQrPayload)}
+          >
+            {shortenTxHash(activeLabel, addressPrefixLength)}
+          </button>
+          <div className="flex flex-wrap items-center justify-center gap-2">
+            <button
+              type="button"
+              className={`wallet-btn-secondary px-3 py-1.5 text-xs ${
+                addressType === 'main' ? 'wallet-segment-active' : ''
+              }`}
+              onClick={() => setAddressType('main')}
+            >
+              Main
+            </button>
+            <button
+              type="button"
+              className={`wallet-btn-secondary px-3 py-1.5 text-xs ${
+                addressType === 'change' ? 'wallet-segment-active' : ''
+              }`}
+              onClick={() => setAddressType('change')}
+            >
+              Change
+            </button>
+            <button
+              type="button"
+              className={`wallet-btn-secondary px-3 py-1.5 text-xs ${
+                showBip21Popup ? 'wallet-segment-active' : ''
+              }`}
+              onClick={() => setShowBip21Popup(true)}
+            >
+              BIP21
+            </button>
+          </div>
+          {renderAddressTypeToggle()}
+        </div>
+      </SectionCard>
+    );
 
-            <div className="mt-auto pt-4">
-              <button
-                className="wallet-btn-secondary w-full text-xl font-bold"
-                onClick={() => {
-                  setSelectedAddress(null);
-                  setSelectedAddressPair(null);
-                  setSelectedPubKey(null);
-                  setSelectedPKH(null);
-                  setSelectedPrivKey(null);
-                  setSelectedWalletKey(null);
-                  setSelectedQuantumrootVault(null);
-                  setQuantumrootStatus(null);
-                  setPubKeyTapCount(0);
-                  setIsPrivKeyUnlocked(false);
-                  setReceiveMode('standard');
-                  setQrCodeType('address');
-                  setShowBip21Popup(false);
-                  setShowQuantumrootPopup(false);
-                  setBip21Amount('');
-                  setBip21Label('');
-                  setBip21Message('');
-                }}
-              >
-                Back
-              </button>
-            </div>
+    const addressBrowser = (
+      <SectionCard className="p-3">
+        <div className="flex items-center justify-between gap-3">
+          <SectionHeader
+            title="Show more addresses"
+            subtitle={`${keyPairsToDisplay.length} ${addressType} addresses`}
+            compact
+          />
+          <button
+            type="button"
+            className="wallet-btn-secondary px-3 py-1.5 text-xs"
+            onClick={() => setShowAddressListPopup(true)}
+          >
+            OPTN
+          </button>
+        </div>
+      </SectionCard>
+    );
+
+    const modeButtons = (
+      <SectionCard className="p-3">
+        <div className="flex flex-wrap justify-center gap-2">
+          <button
+            type="button"
+            className={`px-4 py-2 rounded-[14px] font-bold ${
+              qrCodeType === 'address'
+                ? 'wallet-segment-active'
+                : 'wallet-segment-inactive'
+            }`}
+            onClick={() => setQrCodeType('address')}
+          >
+            Address
+          </button>
+          <button
+            type="button"
+            className={`px-4 py-2 rounded-[14px] font-bold ${
+              qrCodeType === 'pubKey'
+                ? 'wallet-segment-active'
+                : 'wallet-segment-inactive'
+            }`}
+            onClick={handlePubKeyTabClick}
+          >
+            PubKey
+          </button>
+          <button
+            type="button"
+            className={`px-4 py-2 rounded-[14px] font-bold ${
+              qrCodeType === 'pkh'
+                ? 'wallet-segment-active'
+                : 'wallet-segment-inactive'
+            }`}
+            onClick={() => setQrCodeType('pkh')}
+          >
+            PKH
+          </button>
+        </div>
+        {isPrivKeyUnlocked && (
+          <div className="mt-2 flex flex-wrap justify-center gap-2">
+            <button
+              type="button"
+              className={`px-4 py-2 rounded-[14px] font-bold ${
+                qrCodeType === 'privkey'
+                  ? 'wallet-segment-active'
+                  : 'wallet-segment-inactive'
+              }`}
+              onClick={() => setQrCodeType('privkey')}
+            >
+              PrivKey
+            </button>
           </div>
         )}
+        {ALLOW_PRIVATE_KEY_VIEW &&
+          !isPrivKeyUnlocked &&
+          pubKeyTapCount >= 5 && (
+            <div className="wallet-surface-strong mt-2 rounded-[14px] px-4 py-2 text-sm font-bold">
+              PrivKey unlock in {PRIVKEY_UNLOCK_TAPS - pubKeyTapCount} taps
+            </div>
+          )}
+      </SectionCard>
+    );
+
+    return (
+      <div className="flex min-h-0 flex-1 flex-col gap-3 pb-[calc(var(--safe-bottom)+1rem)]">
+        {addressBrowser}
+        {qrSection}
+        {modeButtons}
+        {!selectedAddress && (
+          <SectionCard className="p-4">
+            <SectionHeader
+              title="Receive addresses not ready"
+              subtitle="Prepare addresses to show your receive QR and address list."
+              compact
+            />
+            <div className="mt-3 space-y-3">
+              <EmptyState message="This wallet does not have receive addresses loaded yet." />
+              <button
+                type="button"
+                className="wallet-btn-secondary w-full"
+                onClick={() => void handleInitializeReceiveAddresses()}
+              >
+                Prepare receive addresses
+              </button>
+            </div>
+          </SectionCard>
+        )}
+      </div>
+    );
+  };
+
+  return (
+    <WalletScreen maxWidthClassName="max-w-md">
+      <div className="flex min-h-0 flex-col gap-4">
+        <PageHeader
+          title="Receive"
+          compact
+        />
+
+        {renderReceiveContent()}
       </div>
 
       {showQuantumrootStatusPopup && (
@@ -648,21 +728,21 @@ const Receive: React.FC = () => {
             className="wallet-popup-panel w-full max-w-md"
             onClick={(e) => e.stopPropagation()}
           >
-            <div className="flex items-center justify-between gap-3 mb-2">
+            <div className="mb-2 flex items-center justify-between gap-3">
               <h3 className="text-lg font-bold">Quantumroot Status</h3>
               {loadingQuantumrootStatus && (
                 <span className="text-xs wallet-muted">Syncing…</span>
               )}
             </div>
-            <p className="text-xs wallet-muted mb-3">
+            <p className="mb-3 text-xs wallet-muted">
               This view is read-only. It shows vault status and key receive data,
               but no spending or recovery actions.
             </p>
             {quantumrootStatus ? (
-              <div className="space-y-3 text-sm max-h-[60vh] overflow-y-auto pr-1">
+              <div className="max-h-[60vh] space-y-3 overflow-y-auto pr-1 text-sm">
                 <div className="grid grid-cols-2 gap-2">
                   <div className="wallet-surface-strong rounded-[14px] p-3">
-                    <div className="text-[11px] font-semibold wallet-muted mb-1">
+                    <div className="mb-1 text-[11px] font-semibold wallet-muted">
                       Receive Balance
                     </div>
                     <div className="font-bold">
@@ -670,12 +750,12 @@ const Receive: React.FC = () => {
                         quantumrootStatus.receiveBalanceSats
                       )}
                     </div>
-                    <div className="text-[11px] wallet-muted mt-1">
+                    <div className="mt-1 text-[11px] wallet-muted">
                       {quantumrootStatus.receiveUtxoCount} UTXOs
                     </div>
                   </div>
                   <div className="wallet-surface-strong rounded-[14px] p-3">
-                    <div className="text-[11px] font-semibold wallet-muted mb-1">
+                    <div className="mb-1 text-[11px] font-semibold wallet-muted">
                       Quantum Lock
                     </div>
                     <div className="font-bold">
@@ -683,24 +763,24 @@ const Receive: React.FC = () => {
                         quantumrootStatus.quantumLockBalanceSats
                       )}
                     </div>
-                    <div className="text-[11px] wallet-muted mt-1">
+                    <div className="mt-1 text-[11px] wallet-muted">
                       {quantumrootStatus.quantumLockUtxoCount} UTXOs
                     </div>
                   </div>
                 </div>
                 <div className="wallet-surface-strong rounded-[14px] p-3">
-                  <div className="text-[11px] font-semibold wallet-muted mb-1">
+                  <div className="mb-1 text-[11px] font-semibold wallet-muted">
                     Receive Address
                   </div>
-                  <div className="font-mono text-xs break-all">
+                  <div className="break-all font-mono text-xs">
                     {selectedQuantumrootVault?.receive_address ?? 'Unavailable'}
                   </div>
                 </div>
                 <div className="wallet-surface-strong rounded-[14px] p-3">
-                  <div className="text-[11px] font-semibold wallet-muted mb-1">
+                  <div className="mb-1 text-[11px] font-semibold wallet-muted">
                     Quantum Lock Address
                   </div>
-                  <div className="font-mono text-xs break-all">
+                  <div className="break-all font-mono text-xs">
                     {selectedQuantumrootVault?.quantum_lock_address ?? 'Unavailable'}
                   </div>
                 </div>
@@ -714,6 +794,7 @@ const Receive: React.FC = () => {
             )}
             <div className="mt-4 flex gap-2">
               <button
+                type="button"
                 className="wallet-btn-secondary flex-1"
                 onClick={() => setShowQuantumrootStatusPopup(false)}
               >
@@ -724,52 +805,58 @@ const Receive: React.FC = () => {
         </div>
       )}
 
-      {showBip21Popup && false && (
-        <div
-          className="wallet-popup-backdrop"
-          onClick={() => setShowBip21Popup(false)}
-        >
-          <div
-            className="wallet-popup-panel w-full max-w-md"
-            onClick={(e) => e.stopPropagation()}
-          >
-            <h3 className="text-lg font-bold mb-3">BIP21 Options</h3>
-            <div className="space-y-3">
-              <div>
-                <label className="block text-xs font-semibold wallet-muted mb-1">
-                  Amount (BCH)
-                </label>
-                <input
-                  value={bip21Amount}
-                  onChange={(e) => handleBip21AmountChange(e.target.value)}
-                  inputMode="decimal"
-                  placeholder="Optional, e.g. 0.0105"
-                  className="w-full px-3 py-2 rounded-[14px] wallet-surface-strong border border-[var(--wallet-border)] outline-none"
-                />
-              </div>
-              <div>
-                <label className="block text-xs font-semibold wallet-muted mb-1">
-                  Label
-                </label>
-                <input
-                  value={bip21Label}
-                  onChange={(e) => setBip21Label(e.target.value)}
-                  placeholder="Optional"
-                  className="w-full px-3 py-2 rounded-[14px] wallet-surface-strong border border-[var(--wallet-border)] outline-none"
-                />
-              </div>
-              <div>
-                <label className="block text-xs font-semibold wallet-muted mb-1">
-                  Message
-                </label>
-                <input
-                  value={bip21Message}
-                  onChange={(e) => setBip21Message(e.target.value)}
-                  placeholder="Optional"
-                  className="w-full px-3 py-2 rounded-[14px] wallet-surface-strong border border-[var(--wallet-border)] outline-none"
-                />
-              </div>
+      {showBip21Popup && (
+        <Popup closePopups={() => setShowBip21Popup(false)} closeButtonText="Done">
+          <SectionHeader
+            title="BIP21 payment request"
+            subtitle="Encode amount, label, and message into the QR payload."
+            compact
+          />
+          <div className="mt-3 space-y-3">
+            <div>
+              <label className="mb-1 block text-xs font-semibold wallet-muted">
+                Amount (BCH)
+              </label>
+              <input
+                value={bip21Amount}
+                onChange={(e) => handleBip21AmountChange(e.target.value)}
+                inputMode="decimal"
+                placeholder="Optional, e.g. 0.0105"
+                className="w-full rounded-[14px] border border-[var(--wallet-border)] bg-transparent px-3 py-2 outline-none wallet-surface-strong"
+              />
+            </div>
+            <div>
+              <label className="mb-1 block text-xs font-semibold wallet-muted">
+                Label
+              </label>
+              <input
+                value={bip21Label}
+                onChange={(e) => setBip21Label(e.target.value)}
+                placeholder="Optional"
+                className="w-full rounded-[14px] border border-[var(--wallet-border)] bg-transparent px-3 py-2 outline-none wallet-surface-strong"
+              />
+            </div>
+            <div>
+              <label className="mb-1 block text-xs font-semibold wallet-muted">
+                Message
+              </label>
+              <input
+                value={bip21Message}
+                onChange={(e) => setBip21Message(e.target.value)}
+                placeholder="Optional"
+                className="w-full rounded-[14px] border border-[var(--wallet-border)] bg-transparent px-3 py-2 outline-none wallet-surface-strong"
+              />
+            </div>
+            <div className="flex items-center justify-between gap-2">
               <button
+                type="button"
+                className="wallet-btn-secondary px-3 py-1.5 text-xs"
+                onClick={() => void handleCopy(bip21Uri || activeAddress)}
+              >
+                Copy BIP21 URI
+              </button>
+              <button
+                type="button"
                 className="wallet-link text-xs underline"
                 onClick={() => {
                   setBip21Amount('');
@@ -777,160 +864,99 @@ const Receive: React.FC = () => {
                   setBip21Message('');
                 }}
               >
-                Clear BIP21 fields
+                Clear
               </button>
             </div>
-            <div className="mt-4 flex gap-2">
-              <button
-                className="wallet-btn-secondary flex-1"
-                onClick={() => setShowBip21Popup(false)}
-              >
-                Close
-              </button>
-            </div>
+            <p className="text-[11px] wallet-muted">
+              When enabled, the QR and copied payload use a BIP21-style
+              `bitcoincash:` URI so compatible wallets can autofill request details.
+            </p>
+            {hasBip21Fields && (
+              <p className="text-[11px] wallet-muted">
+                Request details are active and the QR is now encoding the BIP21 URI.
+              </p>
+            )}
           </div>
-        </div>
+        </Popup>
       )}
-      {showQuantumrootPopup && (
-        <div
-          className="wallet-popup-backdrop"
-          onClick={() => setShowQuantumrootPopup(false)}
+
+      {showAddressListPopup && (
+        <Popup
+          closePopups={() => setShowAddressListPopup(false)}
+          closeButtonText="Close"
         >
-          <div
-            className="wallet-popup-panel w-full max-w-md"
-            onClick={(e) => e.stopPropagation()}
-          >
-            <div className="flex items-center justify-between gap-3 mb-2">
-              <h3 className="text-lg font-bold">Quantumroot Vault</h3>
-              {loadingQuantumrootVault && (
-                <span className="text-xs wallet-muted">Deriving…</span>
-              )}
-            </div>
-            {selectedWalletKey && (
-              <p className="text-[11px] wallet-muted mb-3">
-                Dedicated vault for address index {selectedWalletKey.addressIndex}
-              </p>
-            )}
-            {!loadingQuantumrootVault && !selectedQuantumrootVault && (
-              <p className="text-sm wallet-muted">
-                Quantumroot vault unavailable for this address.
-              </p>
-            )}
-            {selectedQuantumrootVault && (
-              <div className="space-y-3 max-h-[60vh] overflow-y-auto">
-                <div className="wallet-surface-strong rounded-[14px] p-3">
-                  <div className="flex items-center justify-between gap-3 mb-2">
-                    <h4 className="text-sm font-bold">Quantumroot Status</h4>
-                    {loadingQuantumrootStatus && (
-                      <span className="text-xs wallet-muted">Syncing…</span>
-                    )}
-                  </div>
-                  <p className="text-xs wallet-muted mb-3">
-                    Read-only receive status for this vault. No spending or recovery is available from Receive.
-                  </p>
-                  {quantumrootStatus ? (
-                    <div className="grid grid-cols-2 gap-2 text-sm">
-                      <div className="wallet-surface-strong rounded-[14px] p-3">
-                        <div className="text-[11px] font-semibold wallet-muted mb-1">
-                          Receive Balance
-                        </div>
-                        <div className="font-bold">
-                          {formatQuantumrootBalance(
-                            quantumrootStatus.receiveBalanceSats
-                          )}
-                        </div>
-                        <div className="text-[11px] wallet-muted mt-1">
-                          {quantumrootStatus.receiveUtxoCount} UTXOs
-                        </div>
-                      </div>
-                      <div className="wallet-surface-strong rounded-[14px] p-3">
-                        <div className="text-[11px] font-semibold wallet-muted mb-1">
-                          Quantum Lock
-                        </div>
-                        <div className="font-bold">
-                          {formatQuantumrootBalance(
-                            quantumrootStatus.quantumLockBalanceSats
-                          )}
-                        </div>
-                        <div className="text-[11px] wallet-muted mt-1">
-                          {quantumrootStatus.quantumLockUtxoCount} UTXOs
-                        </div>
-                      </div>
-                    </div>
-                  ) : (
-                    !loadingQuantumrootStatus && (
-                      <p className="text-sm wallet-muted">
-                        No Quantumroot vault funds detected yet.
-                      </p>
-                    )
-                  )}
-                </div>
-                <div>
-                  <label className="block text-xs font-semibold wallet-muted mb-1">
-                    Receive Address
-                  </label>
-                  <button
-                    className="w-full text-left text-sm wallet-text-strong break-all"
-                    onClick={() =>
-                      handleCopy(selectedQuantumrootVault.receive_address ?? '')
-                    }
-                  >
-                    {selectedQuantumrootVault.receive_address ?? 'Unavailable'}
-                  </button>
-                </div>
-                <div>
-                  <label className="block text-xs font-semibold wallet-muted mb-1">
-                    Quantum Lock
-                  </label>
-                  <button
-                    className="w-full text-left text-sm wallet-text-strong break-all"
-                    onClick={() =>
-                      handleCopy(selectedQuantumrootVault.quantum_lock_address ?? '')
-                    }
-                  >
-                    {selectedQuantumrootVault.quantum_lock_address ?? 'Unavailable'}
-                  </button>
-                </div>
-                <div>
-                  <label className="block text-xs font-semibold wallet-muted mb-1">
-                    Quantum Public Key
-                  </label>
-                  <button
-                    className="w-full text-left text-xs wallet-text-strong break-all"
-                    onClick={() =>
-                      handleCopy(selectedQuantumrootVault.quantum_public_key ?? '')
-                    }
-                  >
-                    {selectedQuantumrootVault.quantum_public_key ?? 'Unavailable'}
-                  </button>
-                </div>
-                <div>
-                  <label className="block text-xs font-semibold wallet-muted mb-1">
-                    Key Identifier
-                  </label>
-                  <button
-                    className="w-full text-left text-xs wallet-text-strong break-all"
-                    onClick={() =>
-                      handleCopy(selectedQuantumrootVault.quantum_key_identifier ?? '')
-                    }
-                  >
-                    {selectedQuantumrootVault.quantum_key_identifier ?? 'Unavailable'}
-                  </button>
-                </div>
-              </div>
-            )}
-            <div className="mt-4 flex gap-2">
-              <button
-                className="wallet-btn-secondary flex-1"
-                onClick={() => setShowQuantumrootPopup(false)}
-              >
-                Close
-              </button>
-            </div>
+          <SectionHeader
+            title="See all addresses"
+            subtitle={`${keyPairsToDisplay.length} ${addressType} addresses`}
+            compact
+          />
+          <div className="mt-3 flex items-center justify-center gap-2">
+            <button
+              type="button"
+              className={`wallet-btn-secondary px-3 py-1.5 text-xs ${
+                addressType === 'main' ? 'wallet-segment-active' : ''
+              }`}
+              onClick={() => setAddressType('main')}
+            >
+              Main
+            </button>
+            <button
+              type="button"
+              className={`wallet-btn-secondary px-3 py-1.5 text-xs ${
+                addressType === 'change' ? 'wallet-segment-active' : ''
+              }`}
+              onClick={() => setAddressType('change')}
+            >
+              Change
+            </button>
           </div>
-        </div>
+          <div className="mt-3 max-h-[60vh] space-y-2 overflow-y-auto overscroll-contain pr-1">
+            {keyPairsToDisplay.length > 0 ? (
+              keyPairsToDisplay.map((keyPair, index: number) => {
+                const displayAddress = keyPair.address;
+                const path = getBchAddressPath(
+                  currentNetwork,
+                  0,
+                  keyPair.changeIndex,
+                  keyPair.addressIndex
+                );
+                return (
+                  <div
+                    key={`${keyPair.changeIndex}:${keyPair.addressIndex}`}
+                    className="wallet-card p-0 overflow-hidden"
+                  >
+                    <button
+                      type="button"
+                      className="w-full p-3 text-left"
+                      onClick={() => {
+                        void handleAddressSelect(keyPair.tokenAddress, displayAddress);
+                        setShowAddressListPopup(false);
+                      }}
+                    >
+                      <div className="flex items-start justify-between gap-3">
+                        <div className="min-w-0 flex-1">
+                          <div className="truncate text-sm font-semibold wallet-text-strong">
+                            {shortenTxHash(displayAddress, addressPrefixLength)}
+                          </div>
+                          <div className="mt-1 break-all text-xs wallet-muted">
+                            {path}
+                          </div>
+                        </div>
+                        <div className="shrink-0 text-[11px] font-semibold wallet-muted">
+                          #{index + 1}
+                        </div>
+                      </div>
+                    </button>
+                  </div>
+                );
+              })
+            ) : (
+              <EmptyState message="No addresses found in this branch yet." />
+            )}
+          </div>
+        </Popup>
       )}
-    </div>
+    </WalletScreen>
   );
 };
 
