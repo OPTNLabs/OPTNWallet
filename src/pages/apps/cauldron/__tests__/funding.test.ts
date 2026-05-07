@@ -1,3 +1,4 @@
+import { encodeCashAddress } from '@bitauth/libauth';
 import { describe, expect, it } from 'vitest';
 
 import type { UTXO } from '../../../../types/types';
@@ -5,6 +6,7 @@ import {
   isWalletFundingUtxo,
   selectFundingUtxosByToken,
   selectLargestBchUtxos,
+  selectWalletBchFundingUtxo,
   sumSpendableBchBalance,
   sumSpendableTokenBalance,
 } from '../funding';
@@ -41,7 +43,11 @@ describe('cauldron funding helpers', () => {
   });
 
   it('excludes contract-managed utxos from spendable balances', () => {
-    const plainBch = makeUtxo({ tx_hash: '01'.repeat(32), amount: 2000, value: 2000 });
+    const plainBch = makeUtxo({
+      tx_hash: '01'.repeat(32),
+      amount: 2000,
+      value: 2000,
+    });
     const contractBch = makeUtxo({
       tx_hash: '02'.repeat(32),
       amount: 5000,
@@ -68,10 +74,12 @@ describe('cauldron funding helpers', () => {
       contractName: 'Vault',
     });
 
-    expect(sumSpendableBchBalance([plainBch, contractBch, plainToken])).toBe(2000n);
-    expect(sumSpendableTokenBalance([plainToken, contractToken], 'aa'.repeat(32))).toBe(
-      7n
+    expect(sumSpendableBchBalance([plainBch, contractBch, plainToken])).toBe(
+      2000n
     );
+    expect(
+      sumSpendableTokenBalance([plainToken, contractToken], 'aa'.repeat(32))
+    ).toBe(7n);
   });
 
   it('does not select contract-managed token or bch utxos for pool funding', () => {
@@ -145,5 +153,35 @@ describe('cauldron funding helpers', () => {
     );
 
     expect(selectedTokens.selected).toEqual([highBchToken]);
+  });
+
+  it('matches pool owner BCH funding by public key hash across address variants', () => {
+    const publicKeyHash = Uint8Array.from([
+      0x01, 0x23, 0x45, 0x67, 0x89, 0xab, 0xcd, 0xef, 0x10, 0x32, 0x54, 0x76,
+      0x98, 0xba, 0xdc, 0xfe, 0x11, 0x22, 0x33, 0x44,
+    ]);
+    const standardAddress = encodeCashAddress({
+      payload: publicKeyHash,
+      prefix: 'bitcoincash',
+      type: 'p2pkh',
+    }).address;
+    const tokenAddress = encodeCashAddress({
+      payload: publicKeyHash,
+      prefix: 'bitcoincash',
+      type: 'p2pkhWithTokens',
+    }).address;
+    const selected = selectWalletBchFundingUtxo(
+      [
+        makeUtxo({
+          address: standardAddress,
+          tx_hash: '0b'.repeat(32),
+          amount: 25_000,
+          value: 25_000,
+        }),
+      ],
+      tokenAddress
+    );
+
+    expect(selected?.address).toBe(standardAddress);
   });
 });

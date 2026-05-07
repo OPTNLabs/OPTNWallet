@@ -2,6 +2,7 @@ import React from 'react';
 import { FaCamera } from 'react-icons/fa';
 import { UTXO } from '../../types/types';
 import { DUST } from '../../utils/constants';
+import TokenAvatar from '../ui/TokenAvatar';
 
 interface CashTokenViewProps {
   recipientAddress: string;
@@ -15,6 +16,11 @@ interface CashTokenViewProps {
   selectedUtxos: UTXO[];
   scanBarcode: () => void;
   handleAddOutput: () => void;
+  selectedTokenMetadata?: {
+    name?: string | null;
+    symbol?: string | null;
+    iconUri?: string | null;
+  } | null;
 }
 
 const CashTokenView: React.FC<CashTokenViewProps> = ({
@@ -29,9 +35,19 @@ const CashTokenView: React.FC<CashTokenViewProps> = ({
   selectedUtxos,
   scanBarcode,
   handleAddOutput,
+  selectedTokenMetadata = null,
 }) => {
+  const tokenName = selectedTokenMetadata?.name || 'CashToken';
+  const tokenSymbol = selectedTokenMetadata?.symbol || 'token';
   return (
     <>
+      <div className="mb-4 flex items-center gap-3">
+        <TokenAvatar iconUri={selectedTokenMetadata?.iconUri ?? null} name={tokenName} />
+        <div>
+          <div className="text-base font-semibold wallet-text-strong">{tokenName}</div>
+          <div className="text-sm wallet-muted">{tokenSymbol}</div>
+        </div>
+      </div>
       <label className="block font-medium mb-1">Recipient Address</label>
       <div className="flex items-center mb-2">
         <input

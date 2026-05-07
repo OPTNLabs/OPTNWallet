@@ -1,5 +1,5 @@
 import { binToHex } from '@bitauth/libauth';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import type {
   CauldronPool,
@@ -362,8 +362,12 @@ describe('cauldron preflight helpers', () => {
     });
 
     expect(normalized?.poolId).toBe('pool-12345');
-    expect(normalized?.output.tokenCategory).toBe(reviewedPool.output.tokenCategory);
-    expect(normalized?.output.tokenAmount).toBe(reviewedPool.output.tokenAmount);
+    expect(normalized?.output.tokenCategory).toBe(
+      reviewedPool.output.tokenCategory
+    );
+    expect(normalized?.output.tokenAmount).toBe(
+      reviewedPool.output.tokenAmount
+    );
   });
 
   it('rehydrates visible pools from exact chain row reserves before quoting', async () => {
@@ -486,5 +490,49 @@ describe('cauldron preflight helpers', () => {
 
     expect(resolved.missingVisiblePoolCount).toBe(1);
     expect(resolved.confirmedPools).toEqual([]);
+  });
+
+  it('deduplicates repeated pool lookups while confirming chain state', async () => {
+    const withdrawPublicKeyHash = new Uint8Array(20);
+    const confirmedPool = makePool({
+      txHash: '61'.repeat(32),
+      outputIndex: 7,
+      parameters: {
+        withdrawPublicKeyHash,
+      },
+      output: {
+        amountSatoshis: 2400n,
+        tokenCategory: 'ab'.repeat(32),
+        tokenAmount: 900n,
+        lockingBytecode: buildCauldronPoolV0LockingBytecode({
+          withdrawPublicKeyHash,
+        }),
+      },
+    });
+    const queryUnspentByLockingBytecode = vi.fn(async () => ({
+      data: {
+        output: [
+          {
+            transaction_hash: confirmedPool.txHash,
+            output_index: confirmedPool.outputIndex,
+          },
+        ],
+      },
+    }));
+
+    const sdk = {
+      chain: {
+        queryUnspentByLockingBytecode,
+      },
+    };
+
+    const resolved = await fetchVisiblePoolsFromChain({
+      sdk: sdk as any,
+      visiblePools: [confirmedPool, confirmedPool],
+    });
+
+    expect(queryUnspentByLockingBytecode).toHaveBeenCalledTimes(1);
+    expect(resolved.missingVisiblePoolCount).toBe(0);
+    expect(resolved.confirmedPools).toEqual([confirmedPool, confirmedPool]);
   });
 });

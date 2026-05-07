@@ -1,10 +1,10 @@
 // src/components/UTXOCard.tsx
 import React from 'react';
-import { FaBitcoin } from 'react-icons/fa';
 import { shortenTxHash } from '../utils/shortenHash';
 import { UTXO } from '../types/types';
 import { SATSINBITCOIN } from '../utils/constants';
 import useSharedTokenMetadata from '../hooks/useSharedTokenMetadata';
+import TokenAvatar from './ui/TokenAvatar';
 
 interface UTXOCardProps {
   utxos: UTXO[];
@@ -161,31 +161,20 @@ const UTXOCard: React.FC<UTXOCardProps> = ({ utxos, loading }) => {
             </div>
 
             <div className="flex flex-col items-center space-y-2">
-              {isToken && metadata ? (
-                <>
-                  {iconUri ? (
-                    <img
-                      src={iconUri}
-                      alt={tokenName}
-                      className="w-12 h-12 rounded"
-                    />
-                  ) : (
-                    <div className="w-12 h-12 wallet-surface-strong rounded flex items-center justify-center">
-                      <FaBitcoin className="wallet-accent-icon text-3xl" />
-                    </div>
-                  )}
-                  <span className="text-base font-medium text-center">
-                    {tokenName}
-                  </span>
-                </>
-              ) : (
-                <>
-                  <FaBitcoin className="wallet-accent-icon text-4xl" />
-                  <span className="text-base font-medium text-center">
-                    Bitcoin Cash
-                  </span>
-                </>
-              )}
+              <TokenAvatar
+                iconUri={isToken ? iconUri : null}
+                name={isToken ? tokenName : 'Bitcoin Cash'}
+                sizeClassName="h-12 w-12"
+                fallbackClassName={isToken ? 'text-[var(--wallet-accent-strong)]' : 'text-[var(--wallet-accent-strong)]'}
+              />
+              <div className="text-center">
+                <div className="text-base font-semibold wallet-text-strong">
+                  {isToken ? tokenName : 'Bitcoin Cash'}
+                </div>
+                {isToken ? (
+                  <div className="text-xs wallet-muted">{tokenSymbol}</div>
+                ) : null}
+              </div>
             </div>
           </div>
         );

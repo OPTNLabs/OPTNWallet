@@ -10,6 +10,10 @@ Technical documentation for contributors and third-party integrators.
   - Runtime shape, major modules, and where responsibilities live.
 - [Integration Guide](./integration-guide.md)
   - How to integrate a third-party product with OPTN Wallet.
+- [CashScript Contract Systems](./cashscript-contract-systems.md)
+  - BCH covenant design patterns, state-machine rules, and testing checklist.
+- [Custody Vault Design Notes](./custody-vault-design-notes.md)
+  - How OPTN Wallet treats open inbound deposits and locked outbound custody control.
 
 ## Addon-Specific Docs
 

@@ -14,6 +14,7 @@ import { shortenTxHash } from '../utils/shortenHash';
 import { getQuantumrootNetworkSupport } from '../services/QuantumrootNetworkSupportService';
 import QuantumrootVaultPopup from './quantumroot/QuantumrootVaultPopup';
 import { useQuantumrootWorkspace } from './quantumroot/useQuantumrootWorkspace';
+import WalletScreen from '../components/ui/WalletScreen';
 
 function formatBch(sats: number) {
   return `${(sats / SATSINBITCOIN).toFixed(8).replace(/\.?0+$/, '') || '0'} BCH`;
@@ -88,7 +89,7 @@ const Quantumroot: React.FC = () => {
   });
 
   return (
-    <div className="container mx-auto max-w-md h-[calc(100dvh-var(--navbar-height)-var(--safe-bottom))] px-4 pt-4 pb-[calc(var(--safe-bottom)+1rem)] flex flex-col overflow-hidden wallet-page">
+    <WalletScreen maxWidthClassName="max-w-md">
       <PageHeader
         title="Quantumroot"
         subtitle="Dedicated vault workspace"
@@ -257,7 +258,7 @@ const Quantumroot: React.FC = () => {
           void handleRecoverQuantumLockUtxo(utxo, destinationAddress)
         }
       />
-    </div>
+    </WalletScreen>
   );
 };
 
