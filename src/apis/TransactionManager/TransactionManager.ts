@@ -407,14 +407,17 @@ export default function TransactionManager() {
     outputs: TransactionOutput[],
     _contractFunctionInputs: Record<string, unknown> | null,
     changeAddress: string,
-    selectedUtxos: UTXO[]
+    selectedUtxos: UTXO[],
+    allowImplicitFungibleTokenBurn = false
   ): Promise<{
     bytecodeSize: number;
     finalTransaction: string;
     finalOutputs: TransactionOutput[] | null;
     errorMsg: string;
   }> => {
-    const txBuilder = TransactionBuilderHelper();
+    const txBuilder = TransactionBuilderHelper({
+      allowImplicitFungibleTokenBurn,
+    });
     const returnObj = {
       bytecodeSize: 0,
       finalTransaction: '',

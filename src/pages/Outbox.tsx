@@ -4,6 +4,7 @@ import { selectWalletId } from '../redux/walletSlice';
 import useOutboundTransactions from '../hooks/useOutboundTransactions';
 import EmptyState from '../components/ui/EmptyState';
 import { OUTBOUND_RELEASE_DELAY_MS } from '../services/OutboundTransactionTracker';
+import WalletScreen from '../components/ui/WalletScreen';
 
 function relativeAge(timestamp?: string | null): string {
   if (!timestamp) return 'just now';
@@ -29,7 +30,7 @@ export default function Outbox() {
   } = useOutboundTransactions(walletId);
 
   return (
-    <div className="container mx-auto max-w-md p-4 pb-16 wallet-page">
+    <WalletScreen maxWidthClassName="max-w-md" className="pt-4">
       <PageHeader title="Outbox" compact />
 
       <div className="wallet-card p-4 mt-3">
@@ -158,6 +159,6 @@ export default function Outbox() {
           </div>
         )}
       </div>
-    </div>
+    </WalletScreen>
   );
 }

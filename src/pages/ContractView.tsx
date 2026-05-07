@@ -39,6 +39,7 @@ import {
   getBarcodeScannerErrorMessage,
   scanBarcodeSafely,
 } from '../utils/barcodeScanner';
+import WalletScreen from '../components/ui/WalletScreen';
 
 interface ContractArg {
   name: string;
@@ -409,36 +410,127 @@ const ContractView = () => {
 
   if (error) {
     return (
-      <div className="container mx-auto max-w-md p-4 pb-16 wallet-page">
+      <WalletScreen maxWidthClassName="max-w-xl">
         <PageHeader title="Contracts" compact />
         <EmptyState message={`Error: ${error}`} />
-      </div>
+      </WalletScreen>
     );
   }
 
   const returnHome = () => navigate(`/home/${wallet_id}`);
 
   return (
-    <div className="container mx-auto max-w-xl p-4 pb-16 wallet-page">
+    <WalletScreen maxWidthClassName="max-w-xl">
       <PageHeader
         title="Contracts"
         compact
       />
+      <div className="space-y-4">
+        <SectionCard title="Create Contract" className="mb-4">
+          <div className="space-y-3">
+            <div className="wallet-surface-strong rounded-2xl p-3 text-sm wallet-muted">
+              <div className="font-semibold wallet-text-strong">How this works</div>
+              <div className="mt-2 grid gap-2">
+                <div>1. Pick a template</div>
+                <div>2. Fill constructor inputs</div>
+                <div>3. Create the contract</div>
+              </div>
+            </div>
+            <select
+              className="wallet-input w-full"
+              value={selectedContractFile}
+              onChange={(e) => setSelectedContractFile(e.target.value)}
+            >
+              <option value="">Select a contract</option>
+              {availableContracts.map((contract, index) => (
+                <option key={index} value={contract.fileName}>
+                  {contract.contractName}
+                </option>
+              ))}
+            </select>
+            {selectedContractFile && (
+              <div className="text-xs wallet-muted">
+                Selected template will open a guided input sheet for constructor arguments.
+              </div>
+            )}
+          </div>
+        </SectionCard>
 
-      <SectionCard title="Contract Templates" className="mb-4">
-        <select
-          className="wallet-input mb-4 w-full"
-          value={selectedContractFile}
-          onChange={(e) => setSelectedContractFile(e.target.value)}
-        >
-          <option value="">Select a contract</option>
-          {availableContracts.map((contract, index) => (
-            <option key={index} value={contract.fileName}>
-              {contract.contractName}
-            </option>
-          ))}
-        </select>
-      </SectionCard>
+        <SectionCard title="Instantiated Contracts" className="mb-4">
+          {contractInstances.length > 0 ? (
+            <div className="max-h-[28rem] overflow-y-auto pr-1">
+              <ul className="space-y-3">
+                {contractInstances.map((instance) => (
+                  <li key={instance.id} className="p-4 wallet-card">
+                    <div className="space-y-2">
+                      <div className="text-sm font-semibold wallet-text-strong">
+                        {instance.contract_name}
+                      </div>
+
+                      <button
+                        type="button"
+                        className="flex w-full items-center justify-between gap-3 text-left text-sm"
+                        onClick={() => handleCopyAddress(instance.address)}
+                      >
+                        <span className="wallet-muted">Address</span>
+                        <span className="truncate font-mono wallet-text-strong">
+                          {shortenTxHash(
+                            instance.address,
+                            PREFIX[currentNetwork].length
+                          )}
+                        </span>
+                      </button>
+
+                      <button
+                        type="button"
+                        className="flex w-full items-center justify-between gap-3 text-left text-sm"
+                        onClick={() => handleCopyAddress(instance.token_address)}
+                      >
+                        <span className="wallet-muted">Token address</span>
+                        <span className="truncate font-mono wallet-text-strong">
+                          {shortenTxHash(
+                            instance.token_address,
+                            PREFIX[currentNetwork].length
+                          )}
+                        </span>
+                      </button>
+
+                      <div className="text-sm">
+                        <span className="wallet-muted">Balance:</span>{' '}
+                        <span className="font-semibold wallet-text-strong">
+                          {instance.balance.toString()}
+                        </span>{' '}
+                        satoshis
+                      </div>
+                    </div>
+
+                    <div className="mt-3 grid grid-cols-2 gap-2">
+                      <button
+                        onClick={() => deleteContract(instance.id)}
+                        className="wallet-btn-danger"
+                      >
+                        Delete
+                      </button>
+                      <button
+                        onClick={() => updateContract(instance.address)}
+                        className="wallet-btn-primary"
+                      >
+                        Update
+                      </button>
+                    </div>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          ) : (
+            <EmptyState message="No contract instances yet." />
+          )}
+        </SectionCard>
+
+        <button onClick={returnHome} className="wallet-btn-danger w-full my-2">
+          Go Back
+        </button>
+      </div>
 
       {showConstructorArgsPopup && (
         <Popup
@@ -486,7 +578,7 @@ const ContractView = () => {
             </div>
           </div>
 
-          <div className="pr-1 mb-4 space-y-3">
+          <div className="max-h-[52vh] overflow-y-auto pr-1 mb-4 space-y-3">
             {constructorArgs.length === 0 && (
               <div
                 className="rounded-xl border p-3 text-sm wallet-muted"
@@ -704,71 +796,6 @@ const ContractView = () => {
         </Popup>
       )}
 
-      {contractInstances.length > 0 && (
-        <SectionCard title="Instantiated Contracts">
-          <div className="overflow-y-auto max-h-80 mb-4">
-            <ul>
-              {contractInstances.map((instance) => (
-                <li key={instance.id} className="mb-4 p-4 wallet-card">
-                  <div>
-                    <div className="mb-2 overflow-x-auto">
-                      <strong>Contract Name:</strong> {instance.contract_name}
-                    </div>
-
-                    <div
-                      className="mb-2 cursor-pointer flex items-center text-sm gap-2"
-                      onClick={() => handleCopyAddress(instance.address)}
-                    >
-                      <strong>Address:</strong>{' '}
-                      {shortenTxHash(
-                        instance.address,
-                        PREFIX[currentNetwork].length
-                      )}
-                    </div>
-
-                    <div
-                      className="mb-2 cursor-pointer flex items-center text-sm gap-2"
-                      onClick={() => handleCopyAddress(instance.token_address)}
-                    >
-                      <strong>Token Address:</strong>{' '}
-                      {shortenTxHash(
-                        instance.token_address,
-                        PREFIX[currentNetwork].length
-                      )}
-                    </div>
-
-                    <div className="mb-2 text-sm">
-                      <strong>Balance:</strong> {instance.balance.toString()}{' '}
-                      satoshis
-                    </div>
-                  </div>
-
-                  <div className="grid grid-cols-[auto,auto] justify-between">
-                    <button
-                      onClick={() => deleteContract(instance.id)}
-                      className="wallet-btn-danger my-2"
-                    >
-                      Delete
-                    </button>
-
-                    <button
-                      onClick={() => updateContract(instance.address)}
-                      className="wallet-btn-primary my-2 justify-self-end"
-                    >
-                      Update
-                    </button>
-                  </div>
-                </li>
-              ))}
-            </ul>
-          </div>
-        </SectionCard>
-      )}
-
-      <button onClick={returnHome} className="wallet-btn-danger w-full my-2">
-        Go Back
-      </button>
-
       {showAddressPopup && (
         <AddressSelectionPopup
           onSelect={handleAddressSelect}
@@ -785,7 +812,7 @@ const ContractView = () => {
           <p className="mb-4">{errorMessage}</p>
         </Popup>
       )}
-    </div>
+    </WalletScreen>
   );
 };
 

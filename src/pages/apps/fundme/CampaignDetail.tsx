@@ -777,7 +777,7 @@ const NFTItem: React.FC<{ utxo: Utxo }> = ({ utxo }) => {
 };
 
   return (
-    <div className="min-h-screen w-full bg-black text-gray-50">
+    <div className="h-[calc(100dvh-var(--navbar-height)-var(--safe-bottom))] w-full overflow-y-auto overscroll-contain touch-pan-y bg-black text-gray-50">
       {/* Welcome Image */}
       <div className="flex justify-center mt-4">
         <img
