@@ -5,7 +5,7 @@ interface ConsolidateUTXOsParams {
     electrumServer: ElectrumNetworkProvider | undefined;
     usersAddress: string;
     transactionBuilder: TransactionBuilder | undefined;
-    signTransaction: (options: any) => Promise<unknown>;
+    signTransaction: (options: { transaction: unknown; sourceOutputs: unknown[]; broadcast: boolean; userPrompt: string }) => Promise<unknown>;
     setError: (message: string) => void;
   }
 
@@ -84,12 +84,12 @@ async function consolidateUtxos({ electrumServer, usersAddress, transactionBuild
             broadcast: false,
             userPrompt: "Consolidate UTXOs"
         };
-        const signResult: any = await signTransaction(wcTransactionObj);
+        const signResult = await signTransaction(wcTransactionObj);
         return signResult;
 
     } catch (error) {
         console.log('tx build failed: ' + error);
     }
-};
+}
   
   export default consolidateUtxos;

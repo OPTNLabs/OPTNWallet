@@ -27,7 +27,8 @@ import { Buffer } from 'buffer';
 import { Toast } from '@capacitor/toast';
 import ElectrumServer from '../../../apis/ElectrumServer/ElectrumServer';
 import BCHLogo from './bch.png';
-import { useNavigate } from 'react-router-dom';
+import { useLocation, useNavigate } from 'react-router-dom';
+import { getReturnPath } from '../../../utils/navigation';
 
 interface Pledge {
   campaignID: string;
@@ -56,9 +57,11 @@ interface SignMessageParams {
   message: string;
   userPrompt?: string;
 }
-declare const walletConnectInstance: any;
-declare const connectedChain: any;
-declare const walletConnectSession: any;
+declare const walletConnectInstance: {
+  request: (args: { chainId: unknown; topic: string; request: unknown }) => Promise<unknown>;
+} | undefined;
+declare const connectedChain: string | undefined;
+declare const walletConnectSession: { topic: string } | undefined;
 
 const CampaignDetail: React.FC = () => {
   const { id } = useParams(); // Get the campaign ID from the URL
@@ -102,10 +105,16 @@ const CampaignDetail: React.FC = () => {
   const [urlAddress, setUrlAddress] = useState('');
   const MAX_CAMPAIGN_SIZE_MB = 25; // Maximum allowed size in MB
   const navigate = useNavigate();
+  const location = useLocation();
+  const backTarget = getReturnPath(location, '/apps');
 
   const [usersAddress, setUsersAddress] = useState('bitcoincash:qz500000000000000000000000000000000000000000000000000000000000000');
   // Create an instance of ElectrumServer
-  const electrumServer = ElectrumServer() as any;
+  const electrumServer = ElectrumServer() as {
+    getUtxos: (address: string) => Promise<Utxo[]>;
+    getBlockHeight: () => Promise<number>;
+    sendRawTransaction: (rawTx: string) => Promise<string>;
+  };
   void campaignMap;
   void setCampaignMap;
   void contractsOK;
@@ -144,7 +153,7 @@ const CampaignDetail: React.FC = () => {
     const satoshis = Math.round(bchAmount * 100_000_000); //Convert BCH to satoshis and round the result to avoid precision issues
     return BigInt(satoshis);                              //Convert the satoshis to bigint for precise integer arithmetic
   }
-  function toLittleEndianHex(value: any, byteCount: number) {
+  function toLittleEndianHex(value: string | number | bigint, byteCount: number) {
     let hex = (typeof value === 'bigint' ? value.toString(16) : Number(value).toString(16)); //Check number vs bigint and convert to hex accordingly
     hex = hex.padStart(byteCount * 2, '0'); // Pad with zeros to ensure correct byteCount
     return hex.match(/../g)?.reverse().join('') ?? '';  //Split into chunks of 2 (bytes), reverse (for little endian), and join back
@@ -218,7 +227,12 @@ const CampaignDetail: React.FC = () => {
 }
 void signMessage;
 
-async function signTransaction(options: any) {
+async function signTransaction(options: {
+  transaction: unknown;
+  sourceOutputs: unknown[];
+  broadcast: boolean;
+  userPrompt: string;
+}) {
   console.log('signing transaction...');
   try {
       if (walletConnectInstance) {
@@ -270,7 +284,7 @@ const handlePledge = async (name: string, message: string) => {
 
   if (electrumServer && usersAddress && campaignUTXO) {
     const campaignID = campaignUTXO.token?.nft?.commitment.substring(70, 80) ?? "0";
-    const pledgeID = campaignUTXO.token?.nft?.commitment.substring(62, 70) ?? "0";;
+    const pledgeID = campaignUTXO.token?.nft?.commitment.substring(62, 70) ?? '0';
     const pledgeAmount = convertStringToBigInt(stringPledgeAmount);
     console.log('Pledge details:', { campaignID, pledgeID, name, message, pledgeAmount });
 
@@ -585,9 +599,12 @@ async function handleConsolidateUtxos() {
       let response;
       try {   
         response = await axios.get(`https://fundme.cash/get-campaign/` + id);
-        const campaignInfo = response.data;
-        setCampaignInfo(campaignInfo);
-        const pledgeTotal = campaignInfo.pledges.reduce((sum: number, pledge: any) => sum + Number(pledge.amount), 0);
+        const currentCampaignInfo = response.data;
+        setCampaignInfo(currentCampaignInfo);
+        const pledgeTotal = currentCampaignInfo.pledges.reduce(
+          (sum: number, pledge: Pledge) => sum + Number(pledge.amount),
+          0
+        );
         setPledgeTotal(pledgeTotal);
         
       } catch (err) {
@@ -668,7 +685,7 @@ async function handleConsolidateUtxos() {
           }
 
         //else no UTXO was found but its campaignInfo was, campaign was claimed
-        } else if (!campaignUTXO && campaignInfo) {
+        } else if (!campaignUTXO && currentCampaignInfo) {
           setIsClaimed(true);
         }
 
@@ -677,7 +694,7 @@ async function handleConsolidateUtxos() {
     }
 
     getCampaign();
-  }, [id]);
+  }, [id, electrumServer]);
 
 // Get refund NFT's for listing so user can select one
 async function fetchReceiptNFTs() {
@@ -695,7 +712,7 @@ async function fetchReceiptNFTs() {
       console.error('Error fetching UTXOs:', error);
     }
   }
-};
+}
 
 ////////// Campaign owner posts an update //////////
 const handleSubmitUpdate = async () => {
@@ -777,7 +794,7 @@ const NFTItem: React.FC<{ utxo: Utxo }> = ({ utxo }) => {
 };
 
   return (
-    <div className="min-h-screen w-full bg-black text-gray-50">
+    <div className="h-[calc(100dvh-var(--navbar-height)-var(--safe-bottom))] w-full overflow-y-auto overscroll-contain touch-pan-y bg-black text-gray-50">
       {/* Welcome Image */}
       <div className="flex justify-center mt-4">
         <img
@@ -790,10 +807,10 @@ const NFTItem: React.FC<{ utxo: Utxo }> = ({ utxo }) => {
 
         <div className="flex justify-between items-center mb-6">
           <button
-            onClick={() => navigate('/apps')}
+            onClick={() => navigate(backTarget)}
             className="bg-red-500 hover:bg-red-600 text-white py-2 px-4 rounded z-20"
           >
-            Back to Apps
+            Back
           </button>
         </div>
 
@@ -1004,7 +1021,7 @@ const NFTItem: React.FC<{ utxo: Utxo }> = ({ utxo }) => {
                         )}
                         
                         {campaignInfo?.updates.length > 0 ? (
-                          campaignInfo?.updates.map((update: any) => (
+                          campaignInfo?.updates.map((update: Update) => (
                             <div key={update.number} className="bg-gray-800 rounded-lg p-4">
                               <div className="font-semibold mb-2">Update #{update.number}</div>
                               <div 
@@ -1245,7 +1262,7 @@ const NFTItem: React.FC<{ utxo: Utxo }> = ({ utxo }) => {
                     )}
                     
                     {campaignInfo?.updates.length > 0 ? (
-                      campaignInfo?.updates.map((update: any) => (
+                      campaignInfo?.updates.map((update: Update) => (
                         <div key={update.number} className="bg-gray-800 rounded-lg p-4 text-left">
                           <div className="font-semibold mb-2">Update #{update.number}</div>
                           <div 

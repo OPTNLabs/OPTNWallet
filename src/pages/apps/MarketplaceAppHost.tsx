@@ -1,12 +1,13 @@
 // src/pages/apps/MarketplaceAppHost.tsx
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { useParams, useNavigate } from 'react-router-dom';
+import { useParams, useNavigate, useLocation } from 'react-router-dom';
 import { useSelector } from 'react-redux';
 
-import { RootState } from '../../redux/store';
+import { RootState } from '../../state/store';
 import AddonsRegistry from '../../services/AddonsRegistry';
 import { getAddonGrantedCapabilities } from '../../services/AddonsAllowlist';
+import { resolveParyonWorkspaceSnapshot } from '../../services/paryon/ParyonService';
 import KeyService from '../../services/KeyService';
 
 import type {
@@ -16,10 +17,21 @@ import type {
 } from '../../types/addons';
 import { createAddonSDK, type AddonSDK } from '../../services/AddonsSDK';
 import { renderDeclarativeScreen } from './marketplaceScreenResolver';
+import { getReturnPath } from '../../utils/navigation';
+import { isComingSoonApp } from '../../features/apps/appsViewHelpers';
+import { Capacitor } from '@capacitor/core';
 
 type ResolvedApp = {
   manifest: AddonManifest;
   app: AddonAppDefinition;
+};
+
+type AddonAppConfig = {
+  screen?: string;
+};
+
+type AddonAppWithConfig = AddonAppDefinition & {
+  config?: AddonAppConfig | null;
 };
 
 type PromptDecision = 'allow-once' | 'allow-always' | 'deny';
@@ -116,7 +128,7 @@ function parseAppKey(appIdParam: string | undefined): {
 
 function getDeclarativeScreenId(app: AddonAppDefinition): string {
   // v1: map declarative apps by config.screen (preferred), else fall back to app.id
-  const cfg: any = (app as any)?.config ?? null;
+  const cfg = (app as AddonAppWithConfig).config ?? null;
   const screen = typeof cfg?.screen === 'string' ? cfg.screen.trim() : '';
   return screen || app.id;
 }
@@ -125,8 +137,11 @@ function isDisabledApp(app: AddonAppDefinition): boolean {
   const screenId = getDeclarativeScreenId(app).toLowerCase();
   const appId = app.id.toLowerCase();
   const appName = app.name.toLowerCase();
+  const isNativeRuntime = Capacitor.isNativePlatform();
+  const comingSoon = isComingSoonApp(app.id, app.name);
 
   return (
+    (comingSoon && isNativeRuntime) ||
     screenId === 'authguard' ||
     screenId === 'authguardapp' ||
     appId === 'authguard' ||
@@ -136,6 +151,8 @@ function isDisabledApp(app: AddonAppDefinition): boolean {
 
 export default function MarketplaceAppHost() {
   const navigate = useNavigate();
+  const location = useLocation();
+  const backTarget = getReturnPath(location, '/apps');
   const { appId: appIdParam } = useParams();
 
   const walletId = useSelector(
@@ -176,6 +193,32 @@ export default function MarketplaceAppHost() {
     () => (resolved ? isTrustedAddon(resolved.manifest) : false),
     [resolved]
   );
+  const paryonContractAddresses = useMemo(() => {
+    if (!resolved) return new Set<string>();
+    if (!resolved.app.id.toLowerCase().includes('paryonworkspaceapp')) {
+      return new Set<string>();
+    }
+
+    try {
+      const paryonSnapshot = resolveParyonWorkspaceSnapshot(network);
+      return new Set(
+        paryonSnapshot.contracts
+          .map((contract) => contract.address)
+          .filter((address) => !!address && address !== '(unresolved)')
+      );
+    } catch {
+      return new Set<string>();
+    }
+  }, [network, resolved]);
+  const allowedWalletAddresses = useMemo(() => {
+    if (!walletAddresses && paryonContractAddresses.size === 0) return null;
+
+    const next = new Set<string>(walletAddresses ?? []);
+    for (const address of paryonContractAddresses) {
+      next.add(address);
+    }
+    return next;
+  }, [paryonContractAddresses, walletAddresses]);
   const appConsentKey = useMemo(() => {
     if (!resolved || !walletId) return '';
     return `${walletId}:${resolved.manifest.id}:${resolved.app.id}`;
@@ -281,8 +324,8 @@ export default function MarketplaceAppHost() {
         }
 
         if (mounted) setResolved(found);
-      } catch (e: any) {
-        if (mounted) setError(e?.message ?? String(e));
+      } catch (e: unknown) {
+        if (mounted) setError(e instanceof Error ? e.message : String(e));
       } finally {
         if (mounted) setLoading(false);
       }
@@ -309,7 +352,9 @@ export default function MarketplaceAppHost() {
         }
         const keys = await KeyService.retrieveKeys(walletId);
         const set = new Set<string>(
-          keys.map((k: any) => k.address).filter(Boolean)
+          keys
+            .map((k: { address?: string | null }) => k.address)
+            .filter(Boolean)
         );
         if (mounted) setWalletAddresses(set);
       } catch {
@@ -383,9 +428,9 @@ export default function MarketplaceAppHost() {
         }
 
         setLaunchApproved(true);
-      } catch (e: any) {
+      } catch (e: unknown) {
         if (cancelled) return;
-        setError(e?.message ?? String(e));
+        setError(e instanceof Error ? e.message : String(e));
         setLaunchApproved(false);
       }
     })();
@@ -455,7 +500,7 @@ export default function MarketplaceAppHost() {
     return createAddonSDK(resolved.manifest, {
       walletId,
       network,
-      walletAddresses: walletAddresses ?? undefined,
+      walletAddresses: allowedWalletAddresses ?? undefined,
       allowedCapabilities: resolved.app.requiredCapabilities
         ? new Set(resolved.app.requiredCapabilities)
         : undefined,
@@ -466,7 +511,7 @@ export default function MarketplaceAppHost() {
     launchApproved,
     resolved,
     trustedAddon,
-    walletAddresses,
+    allowedWalletAddresses,
     walletId,
     network,
   ]);
@@ -476,9 +521,13 @@ export default function MarketplaceAppHost() {
     // if already loaded, reuse
     if (walletAddresses) return walletAddresses;
 
-    const keys = await KeyService.retrieveKeys(walletId);
-    return new Set<string>(keys.map((k: any) => k.address).filter(Boolean));
-  };
+        const keys = await KeyService.retrieveKeys(walletId);
+        return new Set<string>(
+          keys
+            .map((k: { address?: string | null }) => k.address)
+            .filter(Boolean)
+        );
+      };
 
   // Patient-0: map declarative app => local component
   const renderApp = () => {
@@ -488,7 +537,7 @@ export default function MarketplaceAppHost() {
       return (
         <div className="p-4">
           <div className="font-bold">Unsupported app kind:</div>
-          <pre className="text-sm">{String((resolved.app as any).kind)}</pre>
+          <pre className="text-sm">{String(resolved.app.kind)}</pre>
         </div>
       );
     }
@@ -542,10 +591,10 @@ export default function MarketplaceAppHost() {
         <div className="mt-2 text-sm text-gray-700">{error}</div>
 
         <button
-          onClick={() => navigate('/apps')}
+          onClick={() => navigate(backTarget)}
           className="mt-4 bg-blue-500 hover:bg-blue-600 text-white py-2 px-4 rounded"
         >
-          Back to Apps
+          Back
         </button>
       </div>
     );
@@ -571,10 +620,10 @@ export default function MarketplaceAppHost() {
         <div className="text-lg font-semibold">{resolved.app.name}</div>
         <div className="mt-2 wallet-muted">Coming soon.</div>
         <button
-          onClick={() => navigate('/apps')}
+          onClick={() => navigate(backTarget)}
           className="wallet-btn-secondary mt-4"
         >
-          Back to Apps
+          Back
         </button>
       </div>
     );
@@ -593,8 +642,10 @@ export default function MarketplaceAppHost() {
 
   return (
     <>
-      <div className="mx-auto flex h-full min-h-0 w-full max-w-md flex-col overflow-hidden px-4">
-        <div className="flex-1 min-h-0 overflow-hidden">{renderApp()}</div>
+      <div className="mx-auto flex h-full min-h-0 w-full max-w-md flex-col px-4">
+        <div className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden overscroll-contain touch-pan-y pr-1">
+          {renderApp()}
+        </div>
       </div>
       {consentPrompt && (
         <div className="wallet-popup-backdrop">

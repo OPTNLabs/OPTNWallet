@@ -1,12 +1,13 @@
 // src/workers/TransactionWorkerService.ts
 import KeyService from '../services/KeyService';
 import TransactionManager from '../apis/TransactionManager/TransactionManager';
-import { store } from '../redux/store';
-import { addTransactions } from '../redux/transactionSlice';
+import { store } from '../state/store';
+import { addTransactions } from '../state/slices/transactionSlice';
 import { INTERVAL } from '../utils/constants';
 import { requestUTXORefreshFor } from './UTXOWorkerService';
 import ElectrumService from '../services/ElectrumService';
 import { planTransactionDetailRefresh } from '../services/transactionDetailSync';
+import QuantumrootTrackingService from '../services/QuantumrootTrackingService';
 
 let transactionInterval: NodeJS.Timeout | null = null;
 let transactionStartRetry: NodeJS.Timeout | null = null;
@@ -31,7 +32,10 @@ async function fetchAndStoreTransactionHistory() {
       return;
     }
 
-    const addresses = keyPairs.map((keyPair) => keyPair.address).filter(Boolean);
+    const addresses = [
+      ...keyPairs.map((keyPair) => keyPair.address).filter(Boolean),
+      ...(await QuantumrootTrackingService.listTrackedAddresses(currentWalletId)),
+    ];
     const historyByAddress =
       await transactionManager.fetchAndStoreTransactionHistories(
         currentWalletId,

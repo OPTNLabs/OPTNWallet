@@ -1,4 +1,4 @@
-import { Network } from '../redux/networkSlice';
+import { Network } from '../state/slices/networkSlice';
 
 export enum WalletType {
   STANDARD = 'standard',

@@ -6,7 +6,12 @@ interface ManagerInitializeParams {
   electrumServer: ElectrumNetworkProvider | undefined;
   usersAddress: string;
   contractManager: Contract | undefined;
-  signTransaction: (options: any) => Promise<unknown>;
+  signTransaction: (options: {
+    transaction: unknown;
+    sourceOutputs: unknown[];
+    broadcast: boolean;
+    userPrompt: string;
+  }) => Promise<unknown>;
   pubkeyhash: string;
   fundTarget: string;
   endBlock: string;
@@ -19,6 +24,16 @@ interface TokenDetails {
       capability: 'none' | 'mutable' | 'minting';
       commitment: string;
   };
+}
+
+type UtxoToken = NonNullable<Utxo['token']>;
+type UtxoTokenWithNft = UtxoToken & { nft: NonNullable<UtxoToken['nft']> };
+
+function requireToken(utxo: Utxo, context: string): UtxoTokenWithNft {
+  if (!utxo.token?.nft) {
+    throw new Error(`Missing token data for ${context}`);
+  }
+  return utxo.token as UtxoTokenWithNft;
 }
 
 async function managerInitialize({ electrumServer, usersAddress, contractManager, signTransaction, pubkeyhash, fundTarget, endBlock, setError }: ManagerInitializeParams) {
@@ -54,10 +69,13 @@ async function managerInitialize({ electrumServer, usersAddress, contractManager
     console.log(contractUTXOs);
 
     //find masterNFT
-    const contractUTXO: Utxo = contractUTXOs.find(
+    const contractUTXO = contractUTXOs.find(
       utxo => utxo.token?.category === MasterCategoryID
       && utxo.token?.nft?.capability === 'minting'
-    )!; 
+    );
+    if (!contractUTXO) {
+      throw new Error('Unable to find manager contract UTXO');
+    }
     console.log('selected masterNFT UTXO: ');
     console.log(contractUTXO);
 
@@ -66,9 +84,9 @@ async function managerInitialize({ electrumServer, usersAddress, contractManager
     console.log('user UTXOs:');
     console.log(userUtxos);
     //Find pure BCH pledge UTXO
-    const userUTXO: any = userUtxos.find(
+    const userUTXO = userUtxos.find(
       utxo => utxo.satoshis >= (serviceFee + 2000n) && !utxo.token, //userUTXO needs at least serviceFee + 1000n for campaignUTXO + 1000n for miner fee
-    )!;
+    );
     console.log('selected pledge utxo: ');
     console.log(userUTXO);
 
@@ -78,11 +96,12 @@ async function managerInitialize({ electrumServer, usersAddress, contractManager
     }
 
     //get current campaignCounter and build new commitments for masterNFT and new campaignNFT
-    let newMasterCommitment: any;
-    let newCampaignCommitment: any;
+    let newMasterCommitment: string | undefined;
+    let newCampaignCommitment: string | undefined;
     let newCampaignID: number = 0;
     if (contractUTXO) {
-      const contractCommitment = contractUTXO.token?.nft?.commitment!;
+      const contractToken = requireToken(contractUTXO, 'contractUTXO');
+      const contractCommitment = contractToken.nft.commitment;
       console.log('existing masterNFT commitment (LE): ', contractCommitment);
       
       //Format of CashStarterManager's masterNFT commitment (this masterNFT's nftCommitment field):
@@ -105,7 +124,7 @@ async function managerInitialize({ electrumServer, usersAddress, contractManager
       const newCampaignIDHexLittleEndian = newCampaignIDHexBigEndian.match(/.{2}/g)?.reverse().join('') || '';
       console.log('newCampaign ID Hex (LE): ', newCampaignIDHexLittleEndian);
 
-      newMasterCommitment = newCampaignIDHexLittleEndian + bigEndianCommitment.substring(0, 70).match(/.{2}/g)?.reverse().join('');
+      newMasterCommitment = newCampaignIDHexLittleEndian + (bigEndianCommitment.substring(0, 70).match(/.{2}/g)?.reverse().join('') ?? '');
       console.log('new masterCommitment: ', newMasterCommitment);
 
       //Format of campaignNFT commitment field after initialize():
@@ -126,8 +145,8 @@ async function managerInitialize({ electrumServer, usersAddress, contractManager
       }
 
       const fundTargetHex = binToHex(bigIntToVmNumber(BigInt(fundTargetInSatoshis))); 
-      let padLength = 12 - fundTargetHex.length;
-      let paddedfundTargetHex = fundTargetHex + '0'.repeat(padLength);
+      const padLength = 12 - fundTargetHex.length;
+      const paddedfundTargetHex = fundTargetHex + '0'.repeat(padLength);
 
       const endBlockHex = toLittleEndianHexString(BigInt(endBlock), 4);
       const newCampaignIDHex = toLittleEndianHexString(BigInt(newCampaignID), 5);
@@ -137,33 +156,35 @@ async function managerInitialize({ electrumServer, usersAddress, contractManager
     }
 
     //##  Updated MasterNFT details (initialize() on Manager contract )
+    const contractToken = requireToken(contractUTXO, 'contractUTXO');
+
     const masterNFTDetails: TokenDetails = { 
-      amount: contractUTXO.token?.amount!,
-      category: contractUTXO.token?.category!,
+      amount: contractToken.amount,
+      category: contractToken.category,
       nft: {
-        capability: contractUTXO.token?.nft?.capability!,
-        commitment: newMasterCommitment! 
+        capability: contractToken.nft.capability,
+        commitment: newMasterCommitment ?? '' 
       }
     };
     //##  Updated CampaignNFT details (initialize() on Manager contract )
     const campaignNFTDetails: TokenDetails = {    // creating the NFT Manager will recreate
       amount: 0n,                                 // 0 fungible tokens
-      category: contractUTXO.token?.category!,    // txid of users input
+      category: contractToken.category,    // txid of users input
       nft: {
         capability: 'minting',                    // NFT's capability
-        commitment: newCampaignCommitment!        // NFT's nftCommitment field
+        commitment: newCampaignCommitment ?? ''        // NFT's nftCommitment field
       }
     };
 
     const userSig = new SignatureTemplate(Uint8Array.from(Array(32)));           // empty signature as placeholder for building process. walletconnect will replace sig later
 
-  let transaction: any;
+    let transaction: ReturnType<Contract['functions']['initialize']> | undefined;
   const fundTargetInSatoshis = Math.round(Number(fundTarget) * 100000000);
   const fundTargetInBigInt = BigInt(fundTargetInSatoshis);
   const endBlockInBigInt = BigInt(Number(endBlock));
 
   try {
-    transaction = contractManager?.functions.initialize(pubkeyhash, fundTargetInBigInt, endBlockInBigInt, servicePKH, serviceFee)                      
+      transaction = contractManager.functions.initialize(pubkeyhash, fundTargetInBigInt, endBlockInBigInt, servicePKH, serviceFee)                      
       .from(contractUTXO)                                                        // contractUTXO utxo
       .fromP2PKH(userUTXO, userSig)                                              // feeUTXO
       .to(AddressTokensCashStarterManager, 1000n, masterNFTDetails)              // send output0 back to contractManager address with whatever satoshis the utxo already had
@@ -197,7 +218,10 @@ async function managerInitialize({ electrumServer, usersAddress, contractManager
   }
 
     try {     // build the transaction we created
-      const rawTransactionHex = await transaction!.build();                                  
+      if (!transaction) {
+        throw new Error('Transaction build was not initialized');
+      }
+      const rawTransactionHex = await transaction.build();                                  
 
       // for walletconnect
       const decodedTransaction = decodeTransaction(hexToBin(rawTransactionHex));            
@@ -235,7 +259,7 @@ async function managerInitialize({ electrumServer, usersAddress, contractManager
       console.log(wcTransactionObj);
 
       //pass object to walletconnect for user to sign
-      const signResult: any = await signTransaction(wcTransactionObj);      
+      const signResult = await signTransaction(wcTransactionObj);      
 
       console.log('finished managerInitialize()');
       if (newCampaignID != 0) {

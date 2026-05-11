@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { Network } from '../../redux/networkSlice';
+import { Network } from '../../state/slices/networkSlice';
 import {
   deriveBchChild,
   deriveBchAddressFromHdPublicKey,

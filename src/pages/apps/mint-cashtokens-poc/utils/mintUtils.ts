@@ -53,11 +53,15 @@ export function sumOutputs(outputs: TransactionOutput[]): bigint {
 
 export function mergeWalletUtxos(res: unknown): MintAppUtxo[] {
   const walletRes = (res ?? {}) as {
+    utxos?: MintAppUtxo[];
     allUtxos?: MintAppUtxo[];
     tokenUtxos?: MintAppUtxo[];
     cashTokenUtxos?: MintAppUtxo[];
   };
 
+  const primary: MintAppUtxo[] = Array.isArray(walletRes.utxos)
+    ? walletRes.utxos
+    : [];
   const all: MintAppUtxo[] = Array.isArray(walletRes.allUtxos)
     ? walletRes.allUtxos
     : [];
@@ -67,7 +71,7 @@ export function mergeWalletUtxos(res: unknown): MintAppUtxo[] {
   const tok2: MintAppUtxo[] = Array.isArray(walletRes.cashTokenUtxos)
     ? walletRes.cashTokenUtxos
     : [];
-  const merged = [...all, ...tok, ...tok2];
+  const merged = [...primary, ...all, ...tok, ...tok2];
 
   const seen = new Set<string>();
   const out: MintAppUtxo[] = [];

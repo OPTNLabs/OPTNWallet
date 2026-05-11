@@ -1,7 +1,9 @@
 import { createTables } from '../../utils/schema/schema';
 import DatabaseService from '../DatabaseManager/DatabaseService';
-import { Network } from '../../redux/networkSlice';
+import { Network } from '../../state/slices/networkSlice';
 import SecretCryptoService from '../../services/SecretCryptoService';
+import QuantumrootVaultCacheService from '../../services/QuantumrootVaultCacheService';
+import WalletDiscoveryService from '../../services/WalletDiscoveryService';
 import { WalletLookup, WalletRecord, WalletType } from '../../types/wallet';
 
 // Helper function to safely cast SQL values to number
@@ -51,6 +53,12 @@ export default function WalletManager() {
       query = db.prepare(`DELETE FROM UTXOs WHERE wallet_id = :walletid`);
       query.bind({ ':walletid': wallet_id });
       query.run();
+
+      query = db.prepare(`DELETE FROM quantumroot_vaults WHERE wallet_id = :walletid`);
+      query.bind({ ':walletid': wallet_id });
+      query.run();
+      QuantumrootVaultCacheService.clear(wallet_id);
+      WalletDiscoveryService.clear(wallet_id);
 
       // Also delete from other tables as needed
       query = db.prepare(

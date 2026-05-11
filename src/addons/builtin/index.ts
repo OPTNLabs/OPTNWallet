@@ -1,11 +1,12 @@
 // src/addons/builtin/index.ts
 import type { AddonManifest } from '../../types/addons';
+import { shouldExposeDevOnlyApps } from '../../services/AddonsAllowlist';
 
 /**
  * Keep this list small. These are "shipped with the app" addons.
  * Marketplace-installed addons will be loaded later from storage.
  */
-export const BUILTIN_ADDONS: AddonManifest[] = [
+const BUILTIN_ADDONS_BASE: AddonManifest[] = [
   {
     id: 'optn.builtin.demo',
     name: 'OPTN Builtin Demo',
@@ -19,10 +20,13 @@ export const BUILTIN_ADDONS: AddonManifest[] = [
           'wallet:context:read',
           'wallet:addresses:read',
           'utxo:wallet:read',
+          'utxo:address:read',
           'chain:query',
           'tx:add_output',
           'tx:build',
           'tx:broadcast',
+          'contracts:derive',
+          'ui:confirm',
           'http:fetch_json',
         ],
       },
@@ -46,29 +50,11 @@ export const BUILTIN_ADDONS: AddonManifest[] = [
         },
       },
       {
-        id: 'mintCashTokensPoCApp',
-        name: 'Mint Tokens',
-        description: 'Create fungible or non-fungible tokens',
-        iconUri: null, // ✅ fall back to DEFAULT_ICON in AppsView
-        kind: 'declarative',
-        requiredCapabilities: [
-          'wallet:context:read',
-          'wallet:addresses:read',
-          'utxo:wallet:read',
-          'chain:query',
-          'tx:add_output',
-          'tx:build',
-          'tx:broadcast',
-        ],
-        config: {
-          screen: 'MintCashTokensPoCApp',
-        },
-      },
-      {
         id: 'cauldronSwapApp',
         name: 'Cauldron',
-        description: 'Swap against Cauldron pools and manage owned liquidity positions',
-        iconUri: '/assets/images/cauldron-header-logo.png',
+        description:
+          'Swap against Cauldron pools and manage owned liquidity positions',
+        iconUri: '/assets/images/cauldron.png',
         kind: 'declarative',
         requiredCapabilities: [
           'wallet:context:read',
@@ -78,15 +64,50 @@ export const BUILTIN_ADDONS: AddonManifest[] = [
           'tx:add_output',
           'tx:build',
           'tx:broadcast',
+          'ui:confirm',
         ],
         config: {
           screen: 'CauldronSwapApp',
         },
       },
+      {
+        id: 'paryonWorkspaceApp',
+        name: 'ParyonUSD',
+        description:
+          'Stablecoin dashboard with live mainnet verification and contract status',
+        iconUri: '/assets/images/paryonusd.png',
+        kind: 'declarative',
+        devOnly: true,
+        requiredCapabilities: [
+          'wallet:context:read',
+          'wallet:addresses:read',
+          'utxo:wallet:read',
+          'utxo:address:read',
+          'chain:query',
+          'contracts:derive',
+          'tx:add_output',
+          'tx:build',
+          'tx:broadcast',
+          'ui:confirm',
+        ],
+        config: {
+          screen: 'ParyonWorkspaceApp',
+        },
+      },
     ],
-    contracts: [],
+    contracts: [
+      {
+        id: 'paryon-contract-bundle',
+        name: 'ParyonUSD Contract Bundle',
+        description:
+          'Compiled CashScript artifacts for the live ParyonUSD stablecoin system.',
+        cashscriptArtifact: {},
+        functions: [],
+        devOnly: true,
+      },
+    ],
 
-    iconUri: null,
+    iconUri: '/assets/images/OPTNUIkeyline.png',
   },
   {
     id: 'optn.builtin.events',
@@ -170,6 +191,7 @@ export const BUILTIN_ADDONS: AddonManifest[] = [
         description: 'Demo showcase for BCH crowdfunding inside OPTN Wallet',
         iconUri: '/assets/images/fundme.png',
         kind: 'declarative',
+        devOnly: true,
         requiredCapabilities: [
           'wallet:context:read',
           'wallet:addresses:read',
@@ -188,3 +210,28 @@ export const BUILTIN_ADDONS: AddonManifest[] = [
   },
   // Future built-in addons can be added here. Keep in mind these will be shipped with the app, so they should be high-quality, low-maintenance, and showcase best practices for addon development.
 ];
+
+export function getBuiltinAddons(
+  exposeDevOnlyApps = shouldExposeDevOnlyApps()
+): AddonManifest[] {
+  return BUILTIN_ADDONS_BASE.map((manifest) => {
+    const apps = (manifest.apps ?? []).filter(
+      (app) => !app.devOnly || exposeDevOnlyApps
+    );
+    const contracts = manifest.contracts.filter(
+      (contract) => !contract.devOnly || exposeDevOnlyApps
+    );
+
+    if (!apps.length && !contracts.length) {
+      return null;
+    }
+
+    return {
+      ...manifest,
+      apps,
+      contracts,
+    } as AddonManifest;
+  }).filter((manifest): manifest is AddonManifest => Boolean(manifest));
+}
+
+export const BUILTIN_ADDONS: AddonManifest[] = getBuiltinAddons();

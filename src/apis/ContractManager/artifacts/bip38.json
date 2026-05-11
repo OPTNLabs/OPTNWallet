@@ -26,7 +26,6 @@
     }
   ],
   "bytecode": "OP_3 OP_ROLL OP_2 OP_PICK OP_CHECKDATASIGVERIFY OP_CHECKSIG",
-  "source": "pragma cashscript ^0.9.0;\n\ncontract Bip38(datasig userPWSig) {\n  function spend(pubkey ownerPk, sig ownerSig, bytes password) {\n    require(checkDataSig(userPWSig, password, ownerPk));\n    require(checkSig(ownerSig, ownerPk));\n  }\n}",
   "compiler": {
     "name": "cashc",
     "version": "0.9.3"

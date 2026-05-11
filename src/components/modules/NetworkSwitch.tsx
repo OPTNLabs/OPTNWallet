@@ -1,4 +1,4 @@
-import { Network } from '../../redux/networkSlice';
+import { Network } from '../../state/slices/networkSlice';
 
 const NetworkSwitch = ({ networkType, setNetworkType }) => {
   const handleToggle = () => {
