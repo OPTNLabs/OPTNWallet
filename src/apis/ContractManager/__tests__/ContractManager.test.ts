@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { Network } from '../../../redux/networkSlice';
+import { Network } from '../../../state/slices/networkSlice';
 import ContractManager from '../ContractManager';
 import DatabaseService from '../../DatabaseManager/DatabaseService';
 import AddonsRegistry from '../../../services/AddonsRegistry';
@@ -37,7 +37,7 @@ vi.mock('../../../services/KeyService', () => ({
   },
 }));
 
-vi.mock('../../../redux/store', () => ({
+vi.mock('../../../state/store', () => ({
   store: {
     getState: vi.fn(() => ({ network: { currentNetwork: Network.MAINNET } })),
   },
@@ -45,7 +45,7 @@ vi.mock('../../../redux/store', () => ({
 
 vi.mock('cashscript', () => {
   class MockElectrumNetworkProvider {
-    constructor(_network: string) {}
+    constructor() {}
   }
 
   class MockSignatureTemplate {
@@ -67,11 +67,7 @@ vi.mock('cashscript', () => {
     unlock = {
       claim: mockContractUnlockClaim,
     };
-    constructor(
-      _artifact: unknown,
-      _args: unknown[],
-      _opts: Record<string, unknown>
-    ) {}
+    constructor() {}
     async getBalance() {
       return 0n;
     }

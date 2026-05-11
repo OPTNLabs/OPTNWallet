@@ -11,7 +11,8 @@ export function outpointKey(txHash: string, txPos: number): string {
 }
 
 export default function useOutboundTransactions(
-  walletId: number | null | undefined
+  walletId: number | null | undefined,
+  enabled = true
 ) {
   const [records, setRecords] = useState<OutboundTransactionRecord[]>([]);
   const [reconciling, setReconciling] = useState(false);
@@ -61,12 +62,13 @@ export default function useOutboundTransactions(
   );
 
   useEffect(() => {
+    if (!enabled) return;
     void load();
     void refresh();
     return OutboundTransactionTracker.subscribe(() => {
       void load();
     });
-  }, [load, refresh]);
+  }, [enabled, load, refresh]);
 
   const reservedOutpointKeys = useMemo(
     () =>

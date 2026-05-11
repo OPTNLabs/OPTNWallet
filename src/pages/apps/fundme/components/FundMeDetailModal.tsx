@@ -11,6 +11,13 @@ type FundMeDetailModalProps = {
   donationDraft: string;
   onClose: () => void;
   onDonationDraftChange: (value: string) => void;
+  onDonate: () => void;
+  onRefund: () => void;
+  onClaim: () => void;
+  onStop: () => void;
+  onCancel: () => void;
+  actionBusy?: boolean;
+  actionStatus?: string | null;
 };
 
 const FundMeDetailModal: React.FC<FundMeDetailModalProps> = ({
@@ -19,6 +26,13 @@ const FundMeDetailModal: React.FC<FundMeDetailModalProps> = ({
   donationDraft,
   onClose,
   onDonationDraftChange,
+  onDonate,
+  onRefund,
+  onClaim,
+  onStop,
+  onCancel,
+  actionBusy,
+  actionStatus,
 }) => {
   if (!detailModal) return null;
 
@@ -153,8 +167,7 @@ const FundMeDetailModal: React.FC<FundMeDetailModalProps> = ({
                       Donate
                     </div>
                     <p className="mt-2 text-xs wallet-muted">
-                      Donation transaction controls are visible here now. The action
-                      stays disabled until the native call path is reattached.
+                      Use the native transaction path to pledge BCH into this campaign.
                     </p>
                     <div className="mt-3 flex items-center gap-2">
                       <input
@@ -167,14 +180,58 @@ const FundMeDetailModal: React.FC<FundMeDetailModalProps> = ({
                       />
                       <button
                         type="button"
-                        disabled
+                        disabled={actionBusy}
+                        onClick={onDonate}
                         className="rounded-2xl bg-[#31d89a]/40 px-4 py-3 text-sm font-semibold text-[#08261a]/70 cursor-not-allowed"
                       >
-                        Donate
+                        {actionBusy ? 'Working...' : 'Donate'}
                       </button>
                     </div>
                   </div>
                 ) : null}
+
+                <div className="rounded-2xl wallet-surface-strong border border-[var(--wallet-border)] p-3">
+                  <div className="text-xs font-semibold uppercase tracking-[0.12em] wallet-muted">
+                    Campaign Actions
+                  </div>
+                  <p className="mt-2 text-xs wallet-muted">
+                    {actionStatus || 'Refund, claim, stop, and cancel are available when your wallet and the campaign state allow them.'}
+                  </p>
+                  <div className="mt-3 grid grid-cols-2 gap-2">
+                    <button
+                      type="button"
+                      disabled={actionBusy}
+                      onClick={onRefund}
+                      className="rounded-2xl border border-[var(--wallet-border)] px-4 py-3 text-sm font-semibold wallet-text-strong"
+                    >
+                      Refund
+                    </button>
+                    <button
+                      type="button"
+                      disabled={actionBusy || !isChainCampaign(detailModal.campaign)}
+                      onClick={onClaim}
+                      className="rounded-2xl border border-[var(--wallet-border)] px-4 py-3 text-sm font-semibold wallet-text-strong"
+                    >
+                      Claim
+                    </button>
+                    <button
+                      type="button"
+                      disabled={actionBusy || !isChainCampaign(detailModal.campaign)}
+                      onClick={onStop}
+                      className="rounded-2xl border border-[var(--wallet-border)] px-4 py-3 text-sm font-semibold wallet-text-strong"
+                    >
+                      Stop
+                    </button>
+                    <button
+                      type="button"
+                      disabled={actionBusy || !isChainCampaign(detailModal.campaign)}
+                      onClick={onCancel}
+                      className="rounded-2xl border border-[var(--wallet-border)] px-4 py-3 text-sm font-semibold wallet-text-strong"
+                    >
+                      Cancel
+                    </button>
+                  </div>
+                </div>
               </>
             ) : null}
           </div>

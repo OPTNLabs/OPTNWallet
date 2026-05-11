@@ -10,19 +10,21 @@ type SourcesStepCardProps = {
   pendingCount: number;
   loading: boolean;
   canCreateSource: boolean;
+  showCreateSourceAction: boolean;
   onStartBootstrapFlow: () => void;
   onToggleSelect: (u: MintDisplayUtxo) => void;
   onCopyCategory: (categoryTxid: string) => void;
   onJumpToAmounts: () => void;
 };
 
-function SourcesStepCard({
+function SourcesStepCardImpl({
   displayGenesisUtxos,
   selectedKeys,
   selectedCount,
   pendingCount,
   loading,
   canCreateSource,
+  showCreateSourceAction,
   onStartBootstrapFlow,
   onToggleSelect,
   onCopyCategory,
@@ -69,13 +71,15 @@ function SourcesStepCard({
           </div>
         ) : (
           <>
-            <button
-              onClick={onStartBootstrapFlow}
-              disabled={loading || !canCreateSource}
-              className="w-full px-4 py-3 rounded-xl bg-emerald-600 text-white font-semibold text-base"
-            >
-              {loading ? 'Preparing…' : 'Create Candidate UTXO'}
-            </button>
+            {showCreateSourceAction ? (
+              <button
+                onClick={onStartBootstrapFlow}
+                disabled={loading || !canCreateSource}
+                className="w-full px-4 py-3 rounded-xl bg-emerald-600 text-white font-semibold text-base"
+              >
+                {loading ? 'Preparing…' : 'Create Candidate UTXO'}
+              </button>
+            ) : null}
 
             <div className="rounded-[16px] wallet-card shadow-[0_1px_0_rgba(0,0,0,0.08)] overflow-hidden">
               {displayGenesisUtxos.map((u) => {
@@ -140,4 +144,6 @@ function SourcesStepCard({
   );
 }
 
-export default memo(SourcesStepCard);
+const SourcesStepCard = memo(SourcesStepCardImpl);
+
+export default SourcesStepCard;

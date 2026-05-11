@@ -17,7 +17,8 @@ Legacy root scripts (`build.sh`, `releaseBuild.sh`) are deprecated and should no
 ## Core Build Scripts
 
 - `npm run android:prepare`
-  - Builds web assets and syncs Capacitor Android project.
+  - Builds web assets with Vite and syncs the Capacitor Android project.
+  - This release path does not run the full TypeScript compiler, so it stays usable even when unrelated typecheck errors exist elsewhere in the repo.
 
 - `npm run android:apk:dev`
   - Produces a debug APK.
@@ -36,6 +37,9 @@ Legacy root scripts (`build.sh`, `releaseBuild.sh`) are deprecated and should no
 
 - `npm run build:aab`
   - Alias for `npm run android:aab:prod`.
+
+- `npm run build:web`
+  - Produces the production web bundle only, without running the repo-wide TypeScript compile.
 
 ## iOS Prep Scripts
 

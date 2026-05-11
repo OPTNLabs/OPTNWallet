@@ -8,12 +8,18 @@ import {
 } from 'cashscript';
 import ContractManager from '../ContractManager/ContractManager';
 import { UTXO, TransactionOutput } from '../../types/types';
-import { store } from '../../redux/store';
+import { store } from '../../state/store';
 import KeyService from '../../services/KeyService';
 import { PaperWalletSecretStore } from '../../services/PaperWalletSecretStore';
 import { TOKEN_OUTPUT_SATS } from '../../utils/constants';
 
-export default function TransactionBuilderHelper() {
+type TransactionBuilderHelperOptions = {
+  allowImplicitFungibleTokenBurn?: boolean;
+};
+
+export default function TransactionBuilderHelper(
+  options: TransactionBuilderHelperOptions = {}
+) {
   const currentNetwork = store.getState().network.currentNetwork;
   const provider = new ElectrumNetworkProvider(currentNetwork);
   const contractManager = ContractManager();
@@ -217,7 +223,11 @@ export default function TransactionBuilderHelper() {
     // Preflight: fail early with clear errors for covenant ordering constraints
     validateAuthGuardShape(utxos, outputs);
 
-      const txBuilder = new TransactionBuilder({ provider });
+      const txBuilder = new TransactionBuilder({
+        provider,
+        allowImplicitFungibleTokenBurn:
+          options.allowImplicitFungibleTokenBurn ?? false,
+      });
       let needsLocktime = false;
 
       const unlockableUtxos = await Promise.all(
