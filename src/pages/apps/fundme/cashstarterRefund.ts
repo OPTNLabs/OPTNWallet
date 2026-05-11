@@ -9,8 +9,23 @@ interface CashStarterRefundParams {
   contractCashStarterRefund: Contract | undefined;
   campaignID: string;
   selectedNFT: Utxo;
-  signTransaction: (options: any) => Promise<unknown>;
+  signTransaction: (options: {
+    transaction: unknown;
+    sourceOutputs: unknown[];
+    broadcast: boolean;
+    userPrompt: string;
+  }) => Promise<unknown>;
   setError: (message: string) => void;
+}
+
+type UtxoToken = NonNullable<Utxo['token']>;
+type UtxoTokenWithNft = UtxoToken & { nft: NonNullable<UtxoToken['nft']> };
+
+function requireToken(utxo: Utxo, context: string): UtxoTokenWithNft {
+  if (!utxo.token?.nft) {
+    throw new Error(`Missing token data for ${context}`);
+  }
+  return utxo.token as UtxoTokenWithNft;
 }
 
 async function cashstarterRefund({ electrumServer, usersAddress, contractCashStarter, contractCashStarterRefund, campaignID, selectedNFT, signTransaction, setError }: CashStarterRefundParams) {
@@ -51,11 +66,14 @@ async function cashstarterRefund({ electrumServer, usersAddress, contractCashSta
     console.log(contractUTXOs);
 
     //Find campaignNFT
-    const contractUTXO: Utxo = contractUTXOs.find(
+    const contractUTXO = contractUTXOs.find(
       utxo => utxo.token?.category === MasterCategoryID
       && (utxo.token?.nft?.capability === 'minting' || utxo.token?.nft?.capability === 'mutable')
       && utxo.token?.nft?.commitment.substring(70,80) === campaignID,
-    )!;
+    );
+    if (!contractUTXO) {
+      throw new Error('Unable to find campaign contract UTXO for refund flow');
+    }
     console.log('selected campaignNFT UTXO: ');
     console.log(contractUTXO);
 
@@ -65,11 +83,14 @@ async function cashstarterRefund({ electrumServer, usersAddress, contractCashSta
     console.log(refundUTXOs);
 
     //Find refundNFT
-    const refundUTXO: Utxo = refundUTXOs.find(
+    const refundUTXO = refundUTXOs.find(
       utxo => utxo.token?.category === MasterCategoryID
       && utxo.token?.nft?.capability === 'minting'
       && utxo.token?.nft?.commitment.substring(70,80) === 'ffffffffff' //is the masterNFT,
-    )!;
+    );
+    if (!refundUTXO) {
+      throw new Error('Unable to find refund contract UTXO for refund flow');
+    }
     console.log('selected refundContract UTXO: ');
     console.log(refundUTXO);
 
@@ -97,7 +118,7 @@ async function cashstarterRefund({ electrumServer, usersAddress, contractCashSta
     const newCampaignTotal = contractUTXO.satoshis - refundSatoshis;
     const provider = new ElectrumNetworkProvider(Network.MAINNET);
 
-    let txDetails = await new TransactionBuilder({ provider });
+    const txDetails = await new TransactionBuilder({ provider });
     try {
       txDetails
         .addInput(refundUTXO, contractCashStarterRefund.unlock.refund())
@@ -107,11 +128,11 @@ async function cashstarterRefund({ electrumServer, usersAddress, contractCashSta
           to: AddressTokensCashStarterRefund,  
           amount: refundUTXO.satoshis,
             token: {
-              amount: refundUTXO.token?.amount!,  
-              category: refundUTXO.token?.category!,  
+              amount: refundToken.amount,  
+              category: refundToken.category,  
               nft: {
-                capability: refundUTXO.token?.nft?.capability!, 
-                commitment: refundUTXO.token?.nft?.commitment!  
+                capability: refundToken.nft.capability, 
+                commitment: refundToken.nft.commitment  
               }
             },
         })
@@ -121,11 +142,11 @@ async function cashstarterRefund({ electrumServer, usersAddress, contractCashSta
             to: AddressTokensCashStarter,  
             amount: newCampaignTotal,
               token: {
-                amount: contractUTXO.token?.amount!,  
-                category: contractUTXO.token?.category!,  
+                amount: contractToken.amount,  
+                category: contractToken.category,  
                 nft: {
-                  capability: contractUTXO.token?.nft?.capability!, 
-                  commitment: contractUTXO.token?.nft?.commitment!  
+                  capability: contractToken.nft.capability, 
+                  commitment: contractToken.nft.commitment  
                 }
               },
           })
@@ -164,15 +185,18 @@ async function cashstarterRefund({ electrumServer, usersAddress, contractCashSta
         alert("No suitable utxos found for minting. Try to consolidate your utxos!");
         throw ("No suitable utxos found for minting. Try to consolidate your utxos!");
       }
+      const refundToken = requireToken(refundUTXO, 'refundUTXO');
+      const contractToken = requireToken(contractUTXO, 'contractUTXO');
+      const selectedToken = requireToken(selectedNFT, 'selectedNFT');
       decodedTransaction.inputs[2].unlockingBytecode = Uint8Array.from([]);
       console.log('decodedTransaction: ');
       console.log(decodedTransaction);
 
       // construct new transaction object for SourceOutputs, for stringify & not to mutate current network provider 
-      const binTokenCategory = hexToBin(selectedNFT.token?.category!);
-      const refundBinCommitment = hexToBin(refundUTXO.token?.nft?.commitment!);
-      const campaignBinCommitment = hexToBin(contractUTXO.token?.nft?.commitment!);
-      const receiptBinCommitment = hexToBin(selectedNFT.token?.nft?.commitment!);
+      const binTokenCategory = hexToBin(selectedToken.category);
+      const refundBinCommitment = hexToBin(refundToken.nft.commitment);
+      const campaignBinCommitment = hexToBin(contractToken.nft.commitment);
+      const receiptBinCommitment = hexToBin(selectedToken.nft.commitment);
 
       const listSourceOutputs = [{
           ...decodedTransaction.inputs[0],
@@ -184,10 +208,10 @@ async function cashstarterRefund({ electrumServer, usersAddress, contractCashSta
             artifact: contractCashStarterRefund.artifact,
           },
           token: {
-            amount: refundUTXO?.token?.amount,
+            amount: refundToken.amount,
             category: binTokenCategory,
             nft: {
-              capability: refundUTXO.token?.nft?.capability!,    // NFT's capability
+              capability: refundToken.nft.capability,    // NFT's capability
               commitment: refundBinCommitment     // NFT's nftCommitment field
             }
           }
@@ -202,10 +226,10 @@ async function cashstarterRefund({ electrumServer, usersAddress, contractCashSta
             artifact: contractCashStarter.artifact,
           },
           token: {
-            amount: contractUTXO?.token?.amount,
+            amount: contractToken.amount,
             category: binTokenCategory,
             nft: {
-              capability: contractUTXO.token?.nft?.capability!,    // NFT's capability
+              capability: contractToken.nft.capability,    // NFT's capability
               commitment: campaignBinCommitment     // NFT's nftCommitment field
             }
           }
@@ -215,10 +239,10 @@ async function cashstarterRefund({ electrumServer, usersAddress, contractCashSta
           lockingBytecode: (cashAddressToLockingBytecode(usersAddress) as { bytecode: Uint8Array }).bytecode,
           valueSatoshis: BigInt(selectedNFT.satoshis),
           token: {
-            amount: selectedNFT?.token?.amount,
+            amount: selectedToken.amount,
             category: binTokenCategory,
             nft: {
-              capability: selectedNFT.token?.nft?.capability!,    // NFT's capability
+              capability: selectedToken.nft.capability,    // NFT's capability
               commitment: receiptBinCommitment     // NFT's nftCommitment field
             }
           }
@@ -238,7 +262,7 @@ async function cashstarterRefund({ electrumServer, usersAddress, contractCashSta
       console.log('Sent refund to your wallet for approval');
 
       //pass object to walletconnect for user to sign
-      const signResult: any = await signTransaction(wcTransactionObj);
+      const signResult = await signTransaction(wcTransactionObj);
 
       return signResult;
 

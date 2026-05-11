@@ -1,10 +1,11 @@
 import { useSelector, useDispatch } from 'react-redux';
-import { RootState, AppDispatch } from '../../redux/store';
+import { RootState, AppDispatch } from '../../state/store';
 import {
   respondWithMessageSignature,
   respondWithMessageError,
   clearPendingSignMsg,
-} from '../../redux/walletconnectSlice';
+} from '../../state/slices/walletconnectSlice';
+import { normalizeExternalUrl } from '../../utils/externalUrl';
 
 export function SignMessageModal() {
   const dispatch = useDispatch<AppDispatch>();
@@ -25,6 +26,7 @@ export function SignMessageModal() {
     : request?.params?.message || '';
 
   const dappMetadata = activeSessions?.[topic]?.peer?.metadata;
+  const dappUrl = dappMetadata?.url ? normalizeExternalUrl(dappMetadata.url) : null;
 
   const handleSign = async () => {
     await dispatch(respondWithMessageSignature(signMsgRequest));
@@ -48,14 +50,18 @@ export function SignMessageModal() {
             </div>
             <div>
               <strong>Domain:</strong>{' '}
-              <a
-                href={dappMetadata.url}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="wallet-link underline"
-              >
-                {dappMetadata.url}
-              </a>
+              {dappUrl ? (
+                <a
+                  href={dappUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="wallet-link underline"
+                >
+                  {dappMetadata.url}
+                </a>
+              ) : (
+                <span className="wallet-muted break-all">{dappMetadata.url}</span>
+              )}
             </div>
           </div>
         )}

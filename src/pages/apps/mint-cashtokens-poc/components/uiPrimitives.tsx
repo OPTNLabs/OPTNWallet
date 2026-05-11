@@ -172,6 +172,7 @@ export const ContainedSwipeConfirmModal: React.FC<{
   subtitle?: string;
   warning?: React.ReactNode;
   loading?: boolean;
+  canConfirm?: boolean;
   onCancel: () => void;
   onConfirm: () => void;
   children?: React.ReactNode;
@@ -181,6 +182,7 @@ export const ContainedSwipeConfirmModal: React.FC<{
   subtitle,
   warning,
   loading = false,
+  canConfirm = true,
   onCancel,
   onConfirm,
   children,
@@ -260,6 +262,11 @@ export const ContainedSwipeConfirmModal: React.FC<{
 
     const finalX = Math.min(Math.max(0, data.x), maxX);
     if (finalX >= threshold) {
+      if (!canConfirm) {
+        setDragX(0);
+        setSlideCompleted(false);
+        return;
+      }
       setDragX(maxX);
       setSlideCompleted(true);
       onConfirm();

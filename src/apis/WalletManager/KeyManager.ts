@@ -1,7 +1,7 @@
 import DatabaseService from '../DatabaseManager/DatabaseService';
 import AddressManager from '../AddressManager/AddressManager';
-import { Address } from '../../types/types';
-import { Network } from '../../redux/networkSlice';
+import { Address, QuantumrootVaultRecord } from '../../types/types';
+import { Network } from '../../state/slices/networkSlice';
 import { PREFIX } from '../../utils/constants';
 import { isArrayBufferLike, isString } from '../../utils/typeGuards';
 import {
@@ -10,6 +10,11 @@ import {
   type DerivedBchPublicAddress,
   type BchStandardBranchName,
 } from '../../services/HdWalletService';
+import {
+  deriveQuantumrootVault,
+  toQuantumrootVaultRecord,
+} from '../../services/QuantumrootService';
+import QuantumrootVaultCacheService from '../../services/QuantumrootVaultCacheService';
 import SecretCryptoService, {
   isEncryptedPayload,
 } from '../../services/SecretCryptoService';
@@ -23,6 +28,30 @@ function toCount(value: unknown): number {
   return typeof value === 'number' ? value : Number.parseInt(String(value), 10) || 0;
 }
 
+const textDecoder = new TextDecoder();
+
+async function decodePrivateKeyPayload(
+  value: unknown
+): Promise<Uint8Array | null> {
+  if (isArrayBufferLike(value)) {
+    const bytes = new Uint8Array(value);
+    const decoded = textDecoder.decode(bytes);
+    if (isEncryptedPayload(decoded)) {
+      return await SecretCryptoService.decryptBytes(decoded);
+    }
+    return bytes;
+  }
+
+  if (isString(value)) {
+    if (isEncryptedPayload(value)) {
+      return await SecretCryptoService.decryptBytes(value);
+    }
+    return Uint8Array.from(atob(value), (c) => c.charCodeAt(0));
+  }
+
+  return null;
+}
+
 export default function KeyManager() {
   const dbService = DatabaseService();
   const ManageAddress = AddressManager();
@@ -33,6 +62,10 @@ export default function KeyManager() {
     retrieveKeys,
     createKeys,
     fetchAddressPrivateKey,
+    deriveQuantumrootVaultForWallet,
+    createQuantumrootVault,
+    configureQuantumrootVault,
+    retrieveQuantumrootVaults,
   };
 
   async function getWalletSeedMaterial(wallet_id: number) {
@@ -103,6 +136,141 @@ export default function KeyManager() {
     }
 
     return derived;
+  }
+
+  async function deriveQuantumrootVaultForWallet(
+    wallet_id: number,
+    addressIndex: number,
+    accountNumber = 0,
+    onlineQuantumSigner: '0' | '1' = '0',
+    vaultTokenCategory = '00'.repeat(32)
+  ) {
+    const { mnemonic, passphrase, networkType } = await getWalletSeedMaterial(wallet_id);
+    return deriveQuantumrootVault(
+      networkType,
+      mnemonic,
+      passphrase,
+      accountNumber,
+      addressIndex,
+      onlineQuantumSigner,
+      vaultTokenCategory
+    );
+  }
+
+  async function createQuantumrootVault(
+    wallet_id: number,
+    addressIndex: number,
+    accountNumber = 0,
+    onlineQuantumSigner: 0 | 1 = 0,
+    vaultTokenCategory = '00'.repeat(32)
+  ): Promise<QuantumrootVaultRecord> {
+    await dbService.ensureDatabaseStarted();
+    const db = dbService.getDatabase();
+    if (db == null) {
+      throw new Error('Database is null');
+    }
+
+    const cached = QuantumrootVaultCacheService.list(wallet_id).find(
+      (record) =>
+        record.account_index === accountNumber &&
+        record.address_index === addressIndex
+    );
+    if (cached) {
+      return cached;
+    }
+
+    const vault = await deriveQuantumrootVaultForWallet(
+      wallet_id,
+      addressIndex,
+      accountNumber,
+      onlineQuantumSigner === 1 ? '1' : '0',
+      vaultTokenCategory
+    );
+    const record = toQuantumrootVaultRecord(
+      wallet_id,
+      accountNumber,
+      vault,
+      onlineQuantumSigner,
+      vaultTokenCategory
+    );
+
+    QuantumrootVaultCacheService.upsert(wallet_id, record);
+    return record;
+  }
+
+  async function configureQuantumrootVault(
+    wallet_id: number,
+    addressIndex: number,
+    accountNumber = 0,
+    onlineQuantumSigner: 0 | 1 = 0,
+    vaultTokenCategory = '00'.repeat(32)
+  ): Promise<QuantumrootVaultRecord> {
+    await dbService.ensureDatabaseStarted();
+    const db = dbService.getDatabase();
+    if (db == null) {
+      throw new Error('Database is null');
+    }
+
+    const normalizedSigner = onlineQuantumSigner === 1 ? 1 : 0;
+    const vault = await deriveQuantumrootVaultForWallet(
+      wallet_id,
+      addressIndex,
+      accountNumber,
+      normalizedSigner === 1 ? '1' : '0',
+      vaultTokenCategory
+    );
+    const record = toQuantumrootVaultRecord(
+      wallet_id,
+      accountNumber,
+      vault,
+      normalizedSigner,
+      vaultTokenCategory
+    );
+
+    QuantumrootVaultCacheService.upsert(wallet_id, record);
+    return record;
+  }
+
+  async function retrieveQuantumrootVaults(wallet_id: number): Promise<QuantumrootVaultRecord[]> {
+    const cached = QuantumrootVaultCacheService.list(wallet_id);
+    if (cached.length > 0) {
+      return cached;
+    }
+
+    await dbService.ensureDatabaseStarted();
+    const db = dbService.getDatabase();
+    if (db == null) {
+      throw new Error('Database is null');
+    }
+
+    const ensureVaultsFromKeysQuery = db.prepare(`
+      SELECT DISTINCT address_index
+      FROM keys
+      WHERE wallet_id = ?
+      ORDER BY address_index ASC;
+    `);
+    ensureVaultsFromKeysQuery.bind([wallet_id]);
+
+    const keyIndexes: number[] = [];
+    while (ensureVaultsFromKeysQuery.step()) {
+      const row = ensureVaultsFromKeysQuery.getAsObject() as Record<string, unknown>;
+      const addressIndex =
+        typeof row.address_index === 'number'
+          ? row.address_index
+          : Number(row.address_index);
+      if (Number.isFinite(addressIndex)) {
+        keyIndexes.push(addressIndex);
+      }
+    }
+    ensureVaultsFromKeysQuery.free();
+
+    const records: QuantumrootVaultRecord[] = [];
+    for (const addressIndex of keyIndexes) {
+      const record = await createQuantumrootVault(wallet_id, addressIndex, 0);
+      records.push(record);
+    }
+    QuantumrootVaultCacheService.replace(wallet_id, records);
+    return records;
   }
 
   // Function to retrieve keys from the database
@@ -313,21 +481,12 @@ export default function KeyManager() {
       throw new Error(`No private key found for address: ${address}`);
     }
 
-    // Support either a binary blob (preferred) or base64 string (legacy/alternate)
-    if (isArrayBufferLike(result[0])) {
-      return new Uint8Array(result[0]);
-    }
-    if (isString(result[0])) {
-      if (isEncryptedPayload(result[0])) {
-        const decrypted = await SecretCryptoService.decryptBytes(result[0]);
-        if (!decrypted) {
-          throw new Error(`Invalid encrypted private key for address: ${address}`);
-        }
-        return decrypted;
-      }
-      return Uint8Array.from(atob(result[0]), (c) => c.charCodeAt(0));
+    const decoded = await decodePrivateKeyPayload(result[0]);
+    if (decoded) {
+      return decoded;
     }
 
     throw new Error(`Unsupported private key format for address: ${address}`);
   }
+
 }

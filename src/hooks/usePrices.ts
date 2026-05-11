@@ -2,7 +2,7 @@
 import { useEffect } from 'react';
 import { useDispatch } from 'react-redux';
 import { getQuotesUSD, type BaseSymbol } from '../services/priceService';
-import { upsertPrices, type PriceDatum } from '../redux/priceFeedSlice';
+import { upsertPrices, type PriceDatum } from '../state/slices/priceFeedSlice';
 import { INTERVAL } from '../utils/constants';
 
 const BASES: BaseSymbol[] = ['BTC', 'BCH', 'ETH'];

@@ -1,6 +1,6 @@
 import DatabaseService from '../DatabaseManager/DatabaseService';
-// import { Network } from '../../redux/networkSlice';
-import { store } from '../../redux/store';
+// import { Network } from '../../state/slices/networkSlice';
+import { store } from '../../state/store';
 import { Token, UTXO } from '../../types/types';
 import { Database } from 'sql.js';
 import { logError } from '../../utils/errorHandling';

@@ -1,9 +1,11 @@
 import { useSelector } from 'react-redux';
+import { useNavigate } from 'react-router-dom';
 import PageHeader from '../components/ui/PageHeader';
-import { selectWalletId } from '../redux/walletSlice';
+import { selectWalletId } from '../state/slices/walletSlice';
 import useOutboundTransactions from '../hooks/useOutboundTransactions';
 import EmptyState from '../components/ui/EmptyState';
 import { OUTBOUND_RELEASE_DELAY_MS } from '../services/OutboundTransactionTracker';
+import WalletScreen from '../components/ui/WalletScreen';
 
 function relativeAge(timestamp?: string | null): string {
   if (!timestamp) return 'just now';
@@ -19,6 +21,7 @@ function relativeAge(timestamp?: string | null): string {
 }
 
 export default function Outbox() {
+  const navigate = useNavigate();
   const walletId = useSelector(selectWalletId);
   const {
     outboundTransactions,
@@ -29,7 +32,7 @@ export default function Outbox() {
   } = useOutboundTransactions(walletId);
 
   return (
-    <div className="container mx-auto max-w-md p-4 pb-16 wallet-page">
+    <WalletScreen maxWidthClassName="max-w-md" className="pt-4">
       <PageHeader title="Outbox" compact />
 
       <div className="wallet-card p-4 mt-3">
@@ -158,6 +161,16 @@ export default function Outbox() {
           </div>
         )}
       </div>
-    </div>
+
+      <div className="fixed bottom-[calc(var(--navbar-height)+var(--safe-bottom)+0.75rem)] left-1/2 z-40 w-[calc(100%-2rem)] max-w-md -translate-x-1/2 px-4">
+        <button
+          type="button"
+          onClick={() => navigate(-1)}
+          className="wallet-btn-danger w-full py-3 text-base font-semibold shadow-xl"
+        >
+          Back
+        </button>
+      </div>
+    </WalletScreen>
   );
 }

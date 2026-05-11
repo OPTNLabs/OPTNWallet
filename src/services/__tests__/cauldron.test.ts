@@ -38,6 +38,7 @@ import {
   calcCauldronPairRate,
   calcCauldronTradeFee,
   calcCauldronTradeWithTargetDemand,
+  calcCauldronTradeWithTargetSupply,
   createCauldronPoolPair,
   extractCauldronPoolV0ParametersFromUnlockingBytecode,
   formatPoolOutpoint,
@@ -45,6 +46,7 @@ import {
   normalizeCauldronPoolRow,
   normalizeCauldronTokenRow,
   detectCauldronWalletPoolPositions,
+  planAggregatedTradeForTargetDemand,
   planAggregatedTradeForTargetSupply,
   planBestSinglePoolTradeForTargetDemand,
   toCauldronPoolTrade,
@@ -63,11 +65,19 @@ const WITHDRAW_PKH = Uint8Array.from([
 const TEST_CASHADDR =
   'bitcoincash:qpm2qsznhks23z7629mms6s4cwef74vcwvy22gdx6a';
 
+type CauldronSignedTransactionRequest = {
+  inputPaths: Array<[number, string, number]>;
+  transaction: {
+    transaction: TransactionTemplateFixed<unknown>;
+    sourceOutputs: Array<Input & Output & ContractInfo>;
+  };
+};
+
 function signRequestForTest(args: {
   signRequest: {
     inputPaths: Array<[number, string, number]>;
     transaction: {
-      transaction: TransactionTemplateFixed<any>;
+      transaction: TransactionTemplateFixed<unknown>;
       sourceOutputs: Array<Input & Output & ContractInfo>;
     };
   };
@@ -524,6 +534,73 @@ describe('Cauldron service', () => {
     expect((aggregated?.summary.demand ?? 0n) > 0n).toBe(true);
   });
 
+  it('can aggregate a target-demand trade across multiple pools', () => {
+    const makePool = (txHashSeed: string, sats: bigint, tokens: bigint) => ({
+      version: '0' as const,
+      parameters: { withdrawPublicKeyHash: WITHDRAW_PKH },
+      txHash: txHashSeed.repeat(64).slice(0, 64),
+      outputIndex: 0,
+      output: {
+        amountSatoshis: sats,
+        tokenCategory:
+          'f6677f3d3805d70949b375d36e094ff0ec9ece2a2cb1fde6d8b0e90b368f1f63',
+        tokenAmount: tokens,
+        lockingBytecode: buildCauldronPoolV0LockingBytecode({
+          withdrawPublicKeyHash: WITHDRAW_PKH,
+        }),
+      },
+    });
+
+    const aggregated = planAggregatedTradeForTargetDemand(
+      [
+        makePool('3', 80_000n, 120_000_000n),
+        makePool('4', 120_000n, 140_000_000n),
+      ],
+      CAULDRON_NATIVE_BCH,
+      'f6677f3d3805d70949b375d36e094ff0ec9ece2a2cb1fde6d8b0e90b368f1f63',
+      200_000_000n
+    );
+
+    expect(aggregated).not.toBeNull();
+    expect((aggregated?.trades.length ?? 0) > 1).toBe(true);
+    expect((aggregated?.summary.demand ?? 0n) >= 200_000_000n).toBe(true);
+    expect((aggregated?.summary.supply ?? 0n) > 0n).toBe(true);
+  });
+
+  it('can aggregate a BCH-to-token exact-input trade across multiple pools', () => {
+    const tokenId =
+      'f6677f3d3805d70949b375d36e094ff0ec9ece2a2cb1fde6d8b0e90b368f1f63';
+    const makePool = (txHashSeed: string, sats: bigint, tokens: bigint) => ({
+      version: '0' as const,
+      parameters: { withdrawPublicKeyHash: WITHDRAW_PKH },
+      txHash: txHashSeed.repeat(64).slice(0, 64),
+      outputIndex: 0,
+      output: {
+        amountSatoshis: sats,
+        tokenCategory: tokenId,
+        tokenAmount: tokens,
+        lockingBytecode: buildCauldronPoolV0LockingBytecode({
+          withdrawPublicKeyHash: WITHDRAW_PKH,
+        }),
+      },
+    });
+
+    const aggregated = planAggregatedTradeForTargetSupply(
+      [
+        makePool('5', 80_000n, 120_000_000n),
+        makePool('6', 120_000n, 140_000_000n),
+      ],
+      CAULDRON_NATIVE_BCH,
+      tokenId,
+      10_000n
+    );
+
+    expect(aggregated).not.toBeNull();
+    expect(aggregated?.trades.length ?? 0).toBeGreaterThan(0);
+    expect((aggregated?.summary.supply ?? 0n) >= 10_000n).toBe(true);
+    expect((aggregated?.summary.demand ?? 0n) > 0n).toBe(true);
+  });
+
   it('analyzes executable liquidity in both directions for a token market', () => {
     const tokenId =
       'f6677f3d3805d70949b375d36e094ff0ec9ece2a2cb1fde6d8b0e90b368f1f63';
@@ -555,6 +632,79 @@ describe('Cauldron service', () => {
     expect(liquidity.tokenToBch.executablePoolCount).toBe(2);
     expect(liquidity.tokenToBch.maxSupply).toBeGreaterThan(0n);
     expect(liquidity.tokenToBch.maxDemand).toBeGreaterThan(0n);
+  });
+
+  it('plans a token-to-BCH direct route for a small executable amount', () => {
+    const tokenId =
+      'f6677f3d3805d70949b375d36e094ff0ec9ece2a2cb1fde6d8b0e90b368f1f63';
+    const pool = {
+      version: '0' as const,
+      parameters: { withdrawPublicKeyHash: WITHDRAW_PKH },
+      txHash: '5a'.repeat(32),
+      outputIndex: 0,
+      output: {
+        amountSatoshis: 1_118_498_378n,
+        tokenCategory: tokenId,
+        tokenAmount: 11n,
+        lockingBytecode: buildCauldronPoolV0LockingBytecode({
+          withdrawPublicKeyHash: WITHDRAW_PKH,
+        }),
+      },
+    };
+    const pair = createCauldronPoolPair(pool, tokenId, CAULDRON_NATIVE_BCH);
+    const trade = calcCauldronTradeWithTargetSupply(pair, 2n);
+
+    expect(trade).not.toBeNull();
+    expect(trade?.demand).toBeGreaterThan(0n);
+    expect(trade?.supply).toBe(2n);
+  });
+
+  it('accepts the smallest token-to-BCH exact-input amount that remains executable', () => {
+    const tokenId =
+      'f6677f3d3805d70949b375d36e094ff0ec9ece2a2cb1fde6d8b0e90b368f1f63';
+    const pool = {
+      version: '0' as const,
+      parameters: { withdrawPublicKeyHash: WITHDRAW_PKH },
+      txHash: '5b'.repeat(32),
+      outputIndex: 0,
+      output: {
+        amountSatoshis: 1_118_498_378n,
+        tokenCategory: tokenId,
+        tokenAmount: 11n,
+        lockingBytecode: buildCauldronPoolV0LockingBytecode({
+          withdrawPublicKeyHash: WITHDRAW_PKH,
+        }),
+      },
+    };
+    const pair = createCauldronPoolPair(pool, tokenId, CAULDRON_NATIVE_BCH);
+
+    expect(calcCauldronTradeWithTargetSupply(pair, 0n)).toBeNull();
+    expect(calcCauldronTradeWithTargetSupply(pair, 1n)).not.toBeNull();
+  });
+
+  it('plans a BCH-to-token exact-input trade for a live-style pool shape', () => {
+    const tokenId =
+      '3eecc5b229164ab65aee6c02f05eca50ae604d97c691593f52922bdaa5e8d195';
+    const pool = {
+      version: '0' as const,
+      parameters: { withdrawPublicKeyHash: WITHDRAW_PKH },
+      txHash: '6a'.repeat(32),
+      outputIndex: 0,
+      output: {
+        amountSatoshis: 215_539_243n,
+        tokenCategory: tokenId,
+        tokenAmount: 92_820n,
+        lockingBytecode: buildCauldronPoolV0LockingBytecode({
+          withdrawPublicKeyHash: WITHDRAW_PKH,
+        }),
+      },
+    };
+    const pair = createCauldronPoolPair(pool, CAULDRON_NATIVE_BCH, tokenId);
+    const trade = calcCauldronTradeWithTargetSupply(pair, 1_000_000n);
+
+    expect(trade).not.toBeNull();
+    expect(trade?.supply).toBe(1_000_000n);
+    expect(trade?.demand).toBeGreaterThan(0n);
   });
 
   it('builds a signed swap transaction that passes the Cauldron VM checks', () => {
@@ -602,7 +752,7 @@ describe('Cauldron service', () => {
     });
 
     const signed = signRequestForTest({
-      signRequest: built.signRequest as any,
+      signRequest: built.signRequest as CauldronSignedTransactionRequest,
       keyByInputIndex: new Map([[2, TEST_PRIVATE_KEY]]),
     });
 
@@ -661,7 +811,7 @@ describe('Cauldron service', () => {
     });
 
     const signed = signRequestForTest({
-      signRequest: built.signRequest as any,
+      signRequest: built.signRequest as CauldronSignedTransactionRequest,
       keyByInputIndex: new Map([
         [1, TEST_PRIVATE_KEY],
         [2, TEST_PRIVATE_KEY],
@@ -671,6 +821,61 @@ describe('Cauldron service', () => {
     expectVmAccepts(signed);
     expect(signed.transaction.outputs[0]?.valueSatoshis).toBe(946_936_390n);
     expect(signed.transaction.outputs[0]?.token?.amount).toBe(13n);
+  });
+
+  it('builds a BCH-to-token swap transaction without exceeding its inputs', () => {
+    const sampleTokenId =
+      '412064756d6d7920746f6b656e2069642c203132332031323320313233212121';
+    const zeroWithdrawPkh = new Uint8Array(20);
+    const pool = {
+      version: '0' as const,
+      parameters: { withdrawPublicKeyHash: zeroWithdrawPkh },
+      txHash: '43'.repeat(32),
+      outputIndex: 0,
+      output: {
+        amountSatoshis: 1_122_751_507n,
+        tokenCategory: sampleTokenId,
+        tokenAmount: 11n,
+        lockingBytecode: buildCauldronPoolV0LockingBytecode({
+          withdrawPublicKeyHash: zeroWithdrawPkh,
+        }),
+      },
+    };
+    const walletInput = createWalletInputFixture({
+      value: 2_500_000n,
+    });
+
+    const built = buildCauldronTradeRequest({
+      poolTrades: [
+        toCauldronPoolTrade(pool, CAULDRON_NATIVE_BCH, sampleTokenId, {
+          supply: 500_000n,
+          demand: 4n,
+          tradeFee: 1_501n,
+        }),
+      ],
+      walletInputs: [walletInput],
+      recipientAddress: TEST_CASHADDR,
+      changeAddress: TEST_CASHADDR,
+      feeRateSatsPerByte: 1n,
+    });
+
+    const signed = signRequestForTest({
+      signRequest: built.signRequest as CauldronSignedTransactionRequest,
+      keyByInputIndex: new Map([[1, TEST_PRIVATE_KEY]]),
+    });
+
+    const totalInputValue = built.sourceOutputs.reduce(
+      (sum, output) => sum + output.valueSatoshis,
+      0n
+    );
+    const totalOutputValue = signed.transaction.outputs.reduce(
+      (sum, output) => sum + output.valueSatoshis,
+      0n
+    );
+
+    expect(totalOutputValue).toBeLessThanOrEqual(totalInputValue);
+    expect(signed.transaction.outputs[0]?.token?.amount).toBe(7n);
+    expect(signed.transaction.outputs[1]?.valueSatoshis).toBeGreaterThan(0n);
   });
 
   it('keeps token-to-BCH swap fee estimates high enough for the signed transaction size', () => {
@@ -722,7 +927,7 @@ describe('Cauldron service', () => {
     });
 
     const signed = signRequestForTest({
-      signRequest: built.signRequest as any,
+      signRequest: built.signRequest as CauldronSignedTransactionRequest,
       keyByInputIndex: new Map([
         [1, TEST_PRIVATE_KEY],
         [2, TEST_PRIVATE_KEY],
@@ -777,7 +982,7 @@ describe('Cauldron service', () => {
     });
 
     const signed = signRequestForTest({
-      signRequest: built.signRequest as any,
+      signRequest: built.signRequest as CauldronSignedTransactionRequest,
       keyByInputIndex: new Map([[1, TEST_PRIVATE_KEY]]),
     });
     const signedHex = binToHex(encodeTransaction(signed.transaction));
@@ -826,7 +1031,7 @@ describe('Cauldron service', () => {
     });
 
     const signed = signRequestForTest({
-      signRequest: built.signRequest as any,
+      signRequest: built.signRequest as CauldronSignedTransactionRequest,
       keyByInputIndex: new Map([[1, TEST_PRIVATE_KEY]]),
     });
     signed.transaction.outputs[0] = {
@@ -888,7 +1093,7 @@ describe('Cauldron service', () => {
     });
 
     const signed = signRequestForTest({
-      signRequest: built.signRequest as any,
+      signRequest: built.signRequest as CauldronSignedTransactionRequest,
       keyByInputIndex: new Map([[1, TEST_PRIVATE_KEY]]),
     });
     const signedHex = binToHex(encodeTransaction(signed.transaction));
@@ -978,7 +1183,7 @@ describe('Cauldron service', () => {
     });
 
     const signed = signRequestForTest({
-      signRequest: built.signRequest as any,
+      signRequest: built.signRequest as CauldronSignedTransactionRequest,
       keyByInputIndex: new Map([
         [0, TEST_PRIVATE_KEY],
         [1, TEST_PRIVATE_KEY],
@@ -1043,7 +1248,7 @@ describe('Cauldron service', () => {
     });
 
     const signed = signRequestForTest({
-      signRequest: built.signRequest as any,
+      signRequest: built.signRequest as CauldronSignedTransactionRequest,
       keyByInputIndex: new Map([
         [0, TEST_PRIVATE_KEY],
         [1, TEST_PRIVATE_KEY],

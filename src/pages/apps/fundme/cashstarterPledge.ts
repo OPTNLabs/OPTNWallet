@@ -10,7 +10,12 @@ interface CashStarterPledgeParams {
   campaignID: string;
   pledgeID: string;
   pledgeAmount: bigint;
-  signTransaction: (options: any) => Promise<unknown>;
+  signTransaction: (options: {
+    transaction: unknown;
+    sourceOutputs: unknown[];
+    broadcast: boolean;
+    userPrompt: string;
+  }) => Promise<unknown>;
   setError: (message: string) => void;
   setGotConsolidateError: React.Dispatch<React.SetStateAction<boolean>>;
 }
@@ -21,6 +26,16 @@ interface TokenDetails {
       capability: 'none' | 'mutable' | 'minting';
       commitment: string;
   };
+}
+
+type UtxoToken = NonNullable<Utxo['token']>;
+type UtxoTokenWithNft = UtxoToken & { nft: NonNullable<UtxoToken['nft']> };
+
+function requireToken(utxo: Utxo, context: string): UtxoTokenWithNft {
+  if (!utxo.token?.nft) {
+    throw new Error(`Missing token data for ${context}`);
+  }
+  return utxo.token as UtxoTokenWithNft;
 }
 
 async function cashstarterPledge({ electrumServer, usersAddress, contractCashStarter, campaignID, pledgeID, pledgeAmount, signTransaction, setError, setGotConsolidateError }: CashStarterPledgeParams) {
@@ -61,10 +76,13 @@ async function cashstarterPledge({ electrumServer, usersAddress, contractCashSta
     console.log(cashStarterUTXOs);
 
     //Find campaignNFT
-    const campaignUTXO: Utxo = cashStarterUTXOs.find(
+    const campaignUTXO = cashStarterUTXOs.find(
       utxo => utxo.token?.category === MasterCategoryID
       && utxo.token?.nft?.commitment.substring(70,80) === campaignID,
-    )!;
+    );
+    if (!campaignUTXO) {
+      throw new Error('Unable to find campaign UTXO');
+    }
     console.log('selected campaignNFT UTXO: ');
     console.log(campaignUTXO);
     
@@ -75,9 +93,9 @@ async function cashstarterPledge({ electrumServer, usersAddress, contractCashSta
     console.log(userUtxos);
 
     //Find pure BCH pledge UTXO
-    const userUTXO: any = userUtxos.find(
+    const userUTXO = userUtxos.find(
       utxo => utxo.satoshis >= (pledgeAmount + 2000n) && !utxo.token,
-    )!;
+    );
     console.log('selected pledge utxo: ');
     console.log(userUTXO);
 
@@ -119,14 +137,15 @@ async function cashstarterPledge({ electrumServer, usersAddress, contractCashSta
     const finalPledgeID = toLittleEndianHexString(newPledgeID, 4);
     //const finalPledgeID = binToHex(bigIntToVmNumber(newPledgeID));
     console.log(finalPledgeID); 
-    const newCampaignCommitment = `${campaignUTXO.token?.nft?.commitment.substring(0, 62)}${finalPledgeID}${campaignID}`;
+    const campaignToken = requireToken(campaignUTXO, 'campaignUTXO');
+    const newCampaignCommitment = `${campaignToken.nft.commitment.substring(0, 62)}${finalPledgeID}${campaignID}`;
     console.log('new campaignCommitment: ', newCampaignCommitment);
 
     const campaignNFTDetails: TokenDetails = {     
-      amount: campaignUTXO.token?.amount!,  
-      category: campaignUTXO.token?.category!,  
+      amount: campaignToken.amount,  
+      category: campaignToken.category,  
       nft: {
-        capability: campaignUTXO.token?.nft?.capability!, 
+        capability: campaignToken.nft.capability, 
         commitment: newCampaignCommitment
       }
     };
@@ -142,8 +161,8 @@ async function cashstarterPledge({ electrumServer, usersAddress, contractCashSta
       //  C: campaignID - campaign identifier (max 1,099,511,627,774)
 
       const pledgeAmountHex = toLittleEndianHexString(pledgeAmount, 6);
-      const campaignID = campaignUTXO.token?.nft?.commitment.substring(70, 80);
-      const endBlock = campaignUTXO.token?.nft?.commitment.substring(52, 60);
+      const campaignID = campaignToken.nft.commitment.substring(70, 80);
+      const endBlock = campaignToken.nft.commitment.substring(52, 60);
 
       newPledgeCommitment = `${pledgeAmountHex}${'0'.repeat(42)}${endBlock}${finalPledgeID}${campaignID}`;
       console.log('new pledgeCommitment: ', newPledgeCommitment);
@@ -152,10 +171,10 @@ async function cashstarterPledge({ electrumServer, usersAddress, contractCashSta
     //##  Updated PledgeNFT details (pledge() on CashStarter contract)
     const pledgeNFTDetails: TokenDetails = {    // pledge receipt NFT
       amount: 0n,                               // 0 fungible tokens
-      category: campaignUTXO.token?.category!,  // child of campaignNFT
+      category: campaignToken.category,  // child of campaignNFT
       nft: {
         capability: 'none',                     // no capability to mint or change itself
-        commitment: newPledgeCommitment!        // contains pledged amount and campaignID it was for
+        commitment: newPledgeCommitment ?? ''        // contains pledged amount and campaignID it was for
       }
     };
 
@@ -164,9 +183,9 @@ async function cashstarterPledge({ electrumServer, usersAddress, contractCashSta
     const usersTokenAddress = String(toTokenAddress(usersAddress));
     const newCampaignTotal = campaignUTXO.satoshis + (pledgeAmount);
 
-    let transaction: any;
+    let transaction: ReturnType<Contract['unlock']['pledge']> | undefined;
     try {
-      transaction = contractCashStarter?.functions.pledge(pledgeAmount)                      
+      transaction = contractCashStarter.unlock.pledge(pledgeAmount)                      
         .from(campaignUTXO)                                                        // contractUTXO utxo
         .fromP2PKH(userUTXO, userSig)                                              // used for privtekey signing
         .to(AddressTokensCashStarter, newCampaignTotal, campaignNFTDetails)        // send output0 back to contracts address with pledge minus miner fee
@@ -201,6 +220,9 @@ async function cashstarterPledge({ electrumServer, usersAddress, contractCashSta
     console.log('transaction pre-build: ');
     console.log(transaction);
     try {                                                                        // build the transaction we created
+      if (!transaction) {
+        throw new Error('Transaction build was not initialized');
+      }
       const rawTransactionHex = await transaction.build();                                  
 
       //for walletconnect
@@ -241,7 +263,7 @@ async function cashstarterPledge({ electrumServer, usersAddress, contractCashSta
       console.log('Sent pledge to your wallet for approval');
       setError(`Sent pledge to your wallet for approval`);
 
-      const signResult: any = await signTransaction(wcTransactionObj);
+      const signResult = await signTransaction(wcTransactionObj);
 
       return signResult;    
 

@@ -1,7 +1,7 @@
 import { buildApprovedNamespaces } from '@walletconnect/utils';
 import { Toast } from '@capacitor/toast';
 import type { IWalletKit, WalletKitTypes } from '@reown/walletkit';
-import type { RootState } from '../store';
+import type { RootState } from '../../state/store';
 import KeyService from '../../services/KeyService';
 import { PREFIX } from '../../utils/constants';
 import { BCH_EVENTS, BCH_METHODS, CAIP2_BY_NETWORK } from './constants';

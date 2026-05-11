@@ -1,0 +1,224 @@
+import React, { useCallback, useMemo, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
+import { useDispatch, useSelector } from 'react-redux';
+import { FaArrowDown, FaArrowUp, FaBitcoin } from 'react-icons/fa';
+import { AppDispatch, RootState } from '../../state/store';
+import {
+  setFetchingUTXOs,
+  replaceAllUTXOs,
+  setInitialized,
+} from '../../state/slices/utxoSlice';
+import PageHeader from '../../components/ui/PageHeader';
+import SectionCard from '../../components/ui/SectionCard';
+import SectionHeader from '../../components/ui/SectionHeader';
+import ActionTile from '../../components/ui/ActionTile';
+import WalletScreen from '../../components/ui/WalletScreen';
+import PriceFeed from '../../components/PriceFeed';
+import DatabaseService from '../../apis/DatabaseManager/DatabaseService';
+import ElectrumService, { primeUTXOCache } from '../../services/ElectrumService';
+import UTXOService from '../../services/UTXOService';
+import { runWalletUtxoRefresh } from '../../services/RefreshCoordinator';
+import { refreshUTXOWorkerSubscriptions } from '../../workers/UTXOWorkerService';
+import { logError } from '../../utils/errorHandling';
+import { UTXO } from '../../types/types';
+import { Network } from '../../state/slices/networkSlice';
+import { SATSINBITCOIN } from '../../utils/constants';
+import SettingsRow from '../../components/ui/SettingsRow';
+import EmptyState from '../../components/ui/EmptyState';
+import { shortenTxHash } from '../../utils/shortenHash';
+
+const Home: React.FC = () => {
+  const navigate = useNavigate();
+  const dispatch = useDispatch<AppDispatch>();
+  const dbService = useMemo(() => DatabaseService(), []);
+
+  const currentWalletId = useSelector(
+    (state: RootState) => state.wallet_id.currentWalletId
+  );
+  const reduxUTXOs = useSelector((state: RootState) => state.utxos.utxos);
+  const fetchingUTXOsRedux = useSelector(
+    (state: RootState) => state.utxos.fetchingUTXOs
+  );
+  const totalBalance = useSelector((state: RootState) => state.utxos.totalBalance);
+  const transactions = useSelector(
+    (state: RootState) => state.transactions.transactions[currentWalletId]
+  );
+  const currentNetwork = useSelector(
+    (state: RootState) => state.network.currentNetwork
+  );
+  const bchUsdQuote = useSelector((state: RootState) => state.priceFeed['BCH-USD']?.price);
+  const [displayMode, setDisplayMode] = useState<'BCH' | 'USD'>('BCH');
+  const totalBch = totalBalance / SATSINBITCOIN;
+  const totalUsd = typeof bchUsdQuote === 'number' ? totalBch * bchUsdQuote : null;
+  const recentTransactions = useMemo(
+    () => (transactions ?? []).slice(-2).reverse(),
+    [transactions]
+  );
+
+  const handleRefresh = useCallback(async () => {
+    if (fetchingUTXOsRedux || !currentWalletId) return;
+
+    const allUTXOs: Record<string, UTXO[]> = {};
+    dispatch(setFetchingUTXOs(true));
+
+    try {
+      await runWalletUtxoRefresh(currentWalletId, async () => {
+        await ElectrumService.reconnect();
+        const addresses = Object.keys(reduxUTXOs);
+        const fetched = await UTXOService.fetchAndStoreUTXOsMany(currentWalletId, addresses);
+        for (const [address, list] of Object.entries(fetched)) {
+          allUTXOs[address] = list;
+          primeUTXOCache(address, list);
+        }
+        dispatch(replaceAllUTXOs({ utxosByAddress: allUTXOs }));
+        dbService.scheduleDatabaseSave();
+        dispatch(setInitialized(true));
+        await refreshUTXOWorkerSubscriptions();
+      });
+    } catch (error) {
+      logError('Home.handleRefresh', error, { walletId: currentWalletId });
+    } finally {
+      dispatch(setFetchingUTXOs(false));
+    }
+  }, [
+    currentWalletId,
+    dbService,
+    dispatch,
+    fetchingUTXOsRedux,
+    reduxUTXOs,
+  ]);
+
+  return (
+    <WalletScreen maxWidthClassName="max-w-md" scrollable={false}>
+      <div className="flex h-full min-h-0 flex-col gap-4">
+        <PageHeader
+          title="Home"
+          subtitle={currentNetwork === Network.CHIPNET ? 'Chipnet' : undefined}
+          compact
+        />
+
+        <div className="flex-1 min-h-0 overflow-y-auto overscroll-contain pr-1 space-y-4">
+          <SectionCard className="shrink-0 p-2.5">
+            <PriceFeed compact />
+          </SectionCard>
+
+          <SectionCard className="shrink-0 p-3">
+            <SectionHeader
+              title="Portfolio"
+              subtitle="Wallet overview"
+              compact
+              action={
+                <button
+                  type="button"
+                  onClick={handleRefresh}
+                  className="wallet-btn-secondary px-3 py-1.5 text-sm"
+                  disabled={fetchingUTXOsRedux}
+                >
+                  {fetchingUTXOsRedux ? 'Syncing…' : 'Sync'}
+                </button>
+              }
+            />
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <button
+                  type="button"
+                  onClick={() => setDisplayMode((mode) => (mode === 'BCH' ? 'USD' : 'BCH'))}
+                  className="text-left"
+                >
+                  <div className="text-2xl font-bold wallet-text-strong">
+                    {displayMode === 'BCH'
+                      ? `${totalBch.toFixed(8)} BCH`
+                      : totalUsd !== null
+                        ? `$${totalUsd.toFixed(2)} USD`
+                        : 'USD unavailable'}
+                  </div>
+                  <div className="text-xs wallet-muted">
+                    {displayMode === 'BCH'
+                      ? totalUsd !== null
+                        ? `$${totalUsd.toFixed(2)} USD`
+                        : 'USD price unavailable'
+                      : `${totalBch.toFixed(8)} BCH`}
+                  </div>
+                </button>
+              </div>
+              <button
+                type="button"
+                onClick={() => setDisplayMode((mode) => (mode === 'BCH' ? 'USD' : 'BCH'))}
+                className="flex h-14 w-14 items-center justify-center rounded-3xl bg-[color-mix(in_oklab,var(--wallet-accent-soft)_72%,transparent)] text-[var(--wallet-accent-strong)] transition hover:brightness-[1.04]"
+                aria-label="Toggle BCH and USD balance"
+              >
+                <FaBitcoin className="text-2xl" />
+              </button>
+            </div>
+          </SectionCard>
+
+          <SectionCard className="shrink-0 p-3">
+            <SectionHeader title="Quick Actions" compact />
+            <div className="grid grid-cols-2 gap-2.5">
+              <ActionTile
+                title="Receive"
+                icon={<FaArrowDown />}
+                compact
+                layout="horizontal"
+                onClick={() =>
+                  navigate('/receive', {
+                    state: { returnTo: `/home/${currentWalletId ?? ''}` },
+                  })
+                }
+              />
+              <ActionTile
+                title="Send"
+                icon={<FaArrowUp />}
+                compact
+                layout="horizontal"
+                onClick={() =>
+                  navigate('/send', {
+                    state: { returnTo: `/home/${currentWalletId ?? ''}` },
+                  })
+                }
+              />
+            </div>
+          </SectionCard>
+
+          <SectionCard className="shrink-0 p-3">
+            <SectionHeader
+              title="Recent Activity"
+              subtitle="Latest wallet activity"
+              compact
+              action={
+                <button
+                  className="wallet-link text-sm"
+                  onClick={() => navigate(`/transactions/${currentWalletId}`)}
+                >
+                  View all
+                </button>
+              }
+            />
+            <div className="space-y-2.5">
+              {recentTransactions.length > 0 ? (
+                recentTransactions.map((tx) => (
+                  <SettingsRow
+                    key={tx.tx_hash}
+                    title={shortenTxHash(tx.tx_hash)}
+                    description={tx.height > 0 ? `Block ${tx.height}` : 'Pending confirmation'}
+                    right={
+                      <span className="wallet-muted">
+                        {tx.height > 0 ? 'Confirmed' : 'Pending'}
+                      </span>
+                    }
+                    compact
+                    onClick={() => navigate(`/transactions/${currentWalletId}`)}
+                  />
+                ))
+              ) : (
+                <EmptyState message="No recent activity yet." />
+              )}
+            </div>
+          </SectionCard>
+        </div>
+      </div>
+    </WalletScreen>
+  );
+};
+
+export default Home;

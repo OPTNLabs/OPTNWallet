@@ -1,18 +1,16 @@
 // src/components/WcConnectionManager.tsx
 
 import React, { useState } from 'react';
-import {
-  CapacitorBarcodeScannerTypeHint,
-} from '@capacitor/barcode-scanner';
+import { CapacitorBarcodeScannerTypeHint } from '@capacitor/barcode-scanner';
 import { Toast } from '@capacitor/toast';
 import { useDispatch } from 'react-redux';
-import { AppDispatch } from '../redux/store';
-import { wcPair } from '../redux/walletconnectSlice';
-import { FaCamera } from 'react-icons/fa';
+import { AppDispatch } from '../state/store';
+import { wcPair } from '../state/slices/walletconnectSlice';
 import {
   getBarcodeScannerErrorMessage,
   scanBarcodeSafely,
 } from '../utils/barcodeScanner';
+import ConnectionUriScanCard from './connect/ConnectionUriScanCard';
 
 const WcConnectionManager: React.FC = () => {
   const dispatch = useDispatch<AppDispatch>();
@@ -77,33 +75,17 @@ const WcConnectionManager: React.FC = () => {
   };
 
   return (
-    <div className="space-y-4 p-4 wallet-card">
-      <div className="flex flex-col space-y-2">
-        <label className="font-bold">Enter WalletConnect URI:</label>
-        <input
-          className="wallet-input"
-          placeholder="wc:..."
-          value={uri}
-          onChange={(e) => setUri(e.target.value)}
-        />
-        <div className="flex flex-col items-center space-x-2">
-          <button
-            onClick={handleScan}
-            className="wallet-btn-primary py-2 px-4 flex items-center"
-            disabled={scanning}
-          >
-            <FaCamera className="mr-2" />
-            {scanning ? 'Scanning...' : 'Scan QR'}
-          </button>
-        </div>
-        <button
-          onClick={handleManualConnect}
-          className="wallet-btn-primary"
-        >
-          Connect
-        </button>
-      </div>
-    </div>
+    <ConnectionUriScanCard
+      label="Enter WalletConnect URI:"
+      placeholder="wc:..."
+      value={uri}
+      onChange={setUri}
+      onScan={handleScan}
+      onConnect={handleManualConnect}
+      scanning={scanning}
+      submitting={false}
+      connectLabel="Connect"
+    />
   );
 };
 
