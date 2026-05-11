@@ -8,7 +8,7 @@ export async function mapWithConcurrency<T, R>(
   let nextIndex = 0;
 
   const worker = async (): Promise<void> => {
-    while (true) {
+    while (nextIndex < items.length) {
       const index = nextIndex;
       nextIndex += 1;
       if (index >= items.length) return;

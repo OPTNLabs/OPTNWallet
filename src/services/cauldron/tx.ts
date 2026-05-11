@@ -682,7 +682,7 @@ export function buildCauldronTradeRequest(params: {
     ...walletInputs.map((input) => buildWalletSourceOutput(input)),
   ];
 
-  const transaction: TransactionTemplateFixed<any> = {
+  const transaction: TransactionTemplateFixed<unknown> = {
     version: 2,
     locktime: 0,
     inputs: [
@@ -841,7 +841,7 @@ export function buildCauldronPoolDepositRequest(params: {
   }
 
   const sourceOutputs = walletInputs.map((input) => buildWalletSourceOutput(input));
-  const transaction: TransactionTemplateFixed<any> = {
+  const transaction: TransactionTemplateFixed<unknown> = {
     version: 2,
     locktime: 0,
     inputs: walletInputs.map((input) => buildWalletInput(input)),
@@ -990,7 +990,7 @@ export function buildCauldronPoolWithdrawRequest(params: {
     buildWalletSourceOutput(ownerInput),
   ];
 
-  const transaction: TransactionTemplateFixed<any> = {
+  const transaction: TransactionTemplateFixed<unknown> = {
     version: 2,
     locktime: 0,
     inputs: [

@@ -8,8 +8,23 @@ interface CashStarterCancelParams {
   contractCashStarterCancel: Contract | undefined;
   campaignID: string;
   usersAddress: string;
-  signTransaction: (options: any) => Promise<unknown>;
+  signTransaction: (options: {
+    transaction: unknown;
+    sourceOutputs: unknown[];
+    broadcast: boolean;
+    userPrompt: string;
+  }) => Promise<unknown>;
   setError: (message: string) => void;
+}
+
+type UtxoToken = NonNullable<Utxo['token']>;
+type UtxoTokenWithNft = UtxoToken & { nft: NonNullable<UtxoToken['nft']> };
+
+function requireToken(utxo: Utxo, context: string): UtxoTokenWithNft {
+  if (!utxo.token?.nft) {
+    throw new Error(`Missing token data for ${context}`);
+  }
+  return utxo.token as UtxoTokenWithNft;
 }
 
 async function cashstarterCancel({ electrumServer, contractCashStarter, contractCashStarterCancel, campaignID, usersAddress, signTransaction, setError }: CashStarterCancelParams) {
@@ -34,10 +49,13 @@ async function cashstarterCancel({ electrumServer, contractCashStarter, contract
     console.log(cashStarterUTXOs);
 
     //Find campaignNFT
-    const campaignUTXO: Utxo = cashStarterUTXOs.find(
+    const campaignUTXO = cashStarterUTXOs.find(
       utxo => utxo.token?.category === MasterCategoryID
       && utxo.token?.nft?.commitment.substring(70,80) === campaignID,
-    )!;
+    );
+    if (!campaignUTXO) {
+      throw new Error('Unable to find campaign UTXO for cancel flow');
+    }
     console.log('selected campaignNFT UTXO: ');
     console.log(campaignUTXO);
 
@@ -48,10 +66,13 @@ async function cashstarterCancel({ electrumServer, contractCashStarter, contract
     console.log(cancelUTXOs);
 
     //Find failMinter minting NFT
-    const cancelUTXO: Utxo = cancelUTXOs.find(
+    const cancelUTXO = cancelUTXOs.find(
       utxo => utxo.token?.category === MasterCategoryID
       && utxo.token?.nft?.capability == 'minting',
-    )!;
+    );
+    if (!cancelUTXO) {
+      throw new Error('Unable to find cancel UTXO for cancel flow');
+    }
     console.log('selected cancelNFT UTXO: ');
     console.log(cancelUTXO);
 
@@ -62,10 +83,13 @@ async function cashstarterCancel({ electrumServer, contractCashStarter, contract
     console.log(userUTXOs);
 
     //Find user utxo that meets fee requirements
-    const userUTXO: Utxo = userUTXOs.find(
+    const userUTXO = userUTXOs.find(
       utxo => !utxo.token?.category   //does not have a category set
       && utxo.satoshis >= 1000n
-    )!;
+    );
+    if (!userUTXO) {
+      throw new Error('Unable to find fee-paying user UTXO for cancel flow');
+    }
     console.log('selected userUTXO: ');
     console.log(userUTXO);
 
@@ -93,11 +117,11 @@ async function cashstarterCancel({ electrumServer, contractCashStarter, contract
       to: AddressTokensCashStarterCancel,  
       amount: cancelUTXO.satoshis,
         token: {
-          amount: cancelUTXO.token?.amount!,  
-          category: cancelUTXO.token?.category!,  
+          amount: requireToken(cancelUTXO, 'cancelUTXO').amount,
+          category: requireToken(cancelUTXO, 'cancelUTXO').category,
           nft: {
-            capability: cancelUTXO.token?.nft?.capability!, 
-            commitment: cancelUTXO.token?.nft?.commitment!
+            capability: requireToken(cancelUTXO, 'cancelUTXO').nft.capability,
+            commitment: requireToken(cancelUTXO, 'cancelUTXO').nft.commitment
           }
         },
     })
@@ -107,11 +131,11 @@ async function cashstarterCancel({ electrumServer, contractCashStarter, contract
         to: AddressTokensCashStarter,  
         amount: campaignUTXO.satoshis - 1000n,
           token: {
-            amount: campaignUTXO.token?.amount!,  
-            category: campaignUTXO.token?.category!,  
+            amount: requireToken(campaignUTXO, 'campaignUTXO').amount,
+            category: requireToken(campaignUTXO, 'campaignUTXO').category,
             nft: {
               capability: 'mutable', 
-              commitment: campaignUTXO.token?.nft?.commitment!   
+              commitment: requireToken(campaignUTXO, 'campaignUTXO').nft.commitment
             }
           },
       })
@@ -134,14 +158,17 @@ async function cashstarterCancel({ electrumServer, contractCashStarter, contract
         throw ("No suitable utxos found for minting. Try to consolidate your utxos!");
       }
   
+      const cancelToken = requireToken(cancelUTXO, 'cancelUTXO');
+      const campaignToken = requireToken(campaignUTXO, 'campaignUTXO');
+
       decodedTransaction.inputs[2].unlockingBytecode = Uint8Array.from([]);         //reset users signature for input2
       console.log('decodedTransaction: ');
       console.log(decodedTransaction);
-  
+
       // construct new transaction object for SourceOutputs, for stringify & not to mutate current network provider 
-      const binTokenCategory = hexToBin(campaignUTXO.token?.category!);
-      const cancelBinCommitment = hexToBin(cancelUTXO.token?.nft?.commitment!);
-      const campaignBinCommitment = hexToBin(campaignUTXO.token?.nft?.commitment!);
+      const binTokenCategory = hexToBin(campaignToken.category);
+      const cancelBinCommitment = hexToBin(cancelToken.nft.commitment);
+      const campaignBinCommitment = hexToBin(campaignToken.nft.commitment);
       
       const listSourceOutputs = [{
         ...decodedTransaction.inputs[0],
@@ -153,10 +180,10 @@ async function cashstarterCancel({ electrumServer, contractCashStarter, contract
           artifact: contractCashStarterCancel.artifact,
         },
         token: {
-          amount: cancelUTXO?.token?.amount,
+          amount: cancelToken.amount,
           category: binTokenCategory,
           nft: {
-            capability: cancelUTXO.token?.nft?.capability!, 
+            capability: cancelToken.nft.capability, 
             commitment: cancelBinCommitment 
           }
         }
@@ -171,10 +198,10 @@ async function cashstarterCancel({ electrumServer, contractCashStarter, contract
           artifact: contractCashStarter.artifact,
         },
         token: {
-          amount: campaignUTXO?.token?.amount,
+          amount: campaignToken.amount,
           category: binTokenCategory,
           nft: {
-            capability: campaignUTXO.token?.nft?.capability!,
+            capability: campaignToken.nft.capability,
             commitment: campaignBinCommitment 
           }
         }
@@ -196,7 +223,7 @@ async function cashstarterCancel({ electrumServer, contractCashStarter, contract
       console.log('Sent cancel to your wallet for approval');
       setError(`Sent cancel to your wallet for approval`);
 
-      const signResult: any = await signTransaction(wcTransactionObj);
+      const signResult = await signTransaction(wcTransactionObj);
 
       console.log('finished cashstarterFail()');
       return signResult;

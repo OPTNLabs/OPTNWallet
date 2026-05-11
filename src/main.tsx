@@ -5,15 +5,15 @@ import './polyfills/node-globals';
 import React from 'react';
 import ReactDOM from 'react-dom/client';
 import { Capacitor } from '@capacitor/core';
-import App from './App.tsx';
+import App from './app/AppShell';
 import './index.css';
 import 'react-tooltip/dist/react-tooltip.css';
 import { installProductionConsoleGuards } from './utils/productionConsole';
 import { installBarcodeScannerUnhandledRejectionGuard } from './utils/barcodeScanner';
 import { HashRouter } from 'react-router-dom';
 import { Provider } from 'react-redux';
-import { store } from './redux/store';
-import { ThemeProvider } from './context/ThemeContext';
+import { store } from './state/store';
+import { ThemeProvider } from './app/theme/ThemeContext';
 
 installProductionConsoleGuards();
 installBarcodeScannerUnhandledRejectionGuard();

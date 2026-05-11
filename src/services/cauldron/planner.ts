@@ -1,6 +1,6 @@
 import { binToHex, decodeTransaction, hexToBin } from '@bitauth/libauth';
 
-import { Network } from '../../redux/networkSlice';
+import { Network } from '../../state/slices/networkSlice';
 import KeyService from '../KeyService';
 import { parseSatoshis } from '../../utils/binary';
 import { derivePublicKeyHash } from '../../utils/derivePublicKeyHash';

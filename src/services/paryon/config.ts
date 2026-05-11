@@ -1,5 +1,18 @@
 import type { ParyonDeploymentConfig, ParyonNetwork } from './types';
 
+export const PARYON_MAINNET_V1_TOKEN_IDS = {
+  paryonTokenId:
+    '2469acc5afa4b10cb5b5c04afb89c3a3ffd61c5da9c01e26d00951cae2a02544',
+  poolTokenId:
+    '7708645a7f30e97003573d9322202960a560a87527bef3666a30044a0dfdfa81',
+  redeemerTokenId:
+    '649b2d862f01a904addf9095ae64860a59071544ee4a3695f14cbbc75571f930',
+  loanKeyFactoryTokenId:
+    'f07165f2c3448ced3bf0b33f9048ceb7567a2c07adb60d8f11b301c42db97405',
+  oracleMigrationKeyTokenId:
+    '7776202e8f4eca51d5e634799c66c6a87076cc6efcc64c1322e7e880c71f6d30',
+} as const;
+
 export const PARYON_MAINNET_V1_GENESIS_TXIDS = {
   paryonTokenId:
     '9c938f53eb97e089c72c47e9e5cf5f68ad23fd5eb4cb579c5266f04bba4b4d62',
@@ -23,13 +36,13 @@ export const PARYON_MAINNET_V1_DEPLOYMENT: ParyonDeploymentConfig = {
   periodLengthBlocks: 144,
   timeLockRedemption: 12,
   tokenIds: {
-    paryonTokenId: PARYON_MAINNET_V1_GENESIS_TXIDS.paryonTokenId,
-    poolTokenId: PARYON_MAINNET_V1_GENESIS_TXIDS.poolTokenId,
-    redeemerTokenId: PARYON_MAINNET_V1_GENESIS_TXIDS.redeemerTokenId,
+    paryonTokenId: PARYON_MAINNET_V1_TOKEN_IDS.paryonTokenId,
+    poolTokenId: PARYON_MAINNET_V1_TOKEN_IDS.poolTokenId,
+    redeemerTokenId: PARYON_MAINNET_V1_TOKEN_IDS.redeemerTokenId,
     loanKeyFactoryTokenId:
-      PARYON_MAINNET_V1_GENESIS_TXIDS.loanKeyFactoryTokenId,
+      PARYON_MAINNET_V1_TOKEN_IDS.loanKeyFactoryTokenId,
     oracleMigrationKeyTokenId:
-      PARYON_MAINNET_V1_GENESIS_TXIDS.oracleMigrationKeyTokenId,
+      PARYON_MAINNET_V1_TOKEN_IDS.oracleMigrationKeyTokenId,
   },
 };
 

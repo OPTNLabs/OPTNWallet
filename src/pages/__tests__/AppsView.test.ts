@@ -8,6 +8,15 @@ describe('AppsView coming-soon selection rules', () => {
     );
   });
 
+  it('marks ParyonUSD addon cards as coming soon', () => {
+    expect(
+      isComingSoonApp(
+        'optn.builtin.demo:paryonWorkspaceApp',
+        'ParyonUSD'
+      )
+    ).toBe(true);
+  });
+
   it('does not mark active apps as coming soon', () => {
     expect(
       isComingSoonApp('optn.builtin.cauldron:cauldronSwapApp', 'Cauldron')

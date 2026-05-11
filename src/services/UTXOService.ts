@@ -6,8 +6,8 @@ import BcmrService from './BcmrService';
 import WalletDiscoveryService from './WalletDiscoveryService';
 import TransactionManager from '../apis/TransactionManager/TransactionManager';
 import { UTXO } from '../types/types';
-import { Network } from '../redux/networkSlice';
-import { store } from '../redux/store';
+import { Network } from '../state/slices/networkSlice';
+import { store } from '../state/store';
 import { normalizeTokenField } from '../utils/tokenNormalization';
 import { logError } from '../utils/errorHandling';
 

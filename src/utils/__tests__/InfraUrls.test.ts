@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import { getElectrumServers, getInfraUrlPools } from '../servers/InfraUrls';
-import { Network } from '../../redux/networkSlice';
+import { Network } from '../../state/slices/networkSlice';
 
 describe('InfraUrls', () => {
   it('prefers imaginary.cash electrum servers on mainnet', () => {

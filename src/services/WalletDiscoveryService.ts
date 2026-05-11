@@ -1,6 +1,6 @@
 import KeyService from './KeyService';
 import { logError } from '../utils/errorHandling';
-import { Network } from '../redux/networkSlice';
+import { Network } from '../state/slices/networkSlice';
 import { deriveBchAddressFromHdPublicKey } from './HdWalletService';
 
 const ADDRESS_BATCH_SIZE = 10;

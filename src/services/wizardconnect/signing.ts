@@ -22,7 +22,7 @@ import {
 import { DerivationPath } from '@wizardconnect/wallet';
 import type { SignTransactionRequest } from '@wizardconnect/core';
 import type { ContractInfo } from '../../types/wcInterfaces';
-import type { Network } from '../../redux/networkSlice';
+import type { Network } from '../../state/slices/networkSlice';
 import { PREFIX } from '../../utils/constants';
 import { ensureUint8Array } from '../../utils/binary';
 import { getPublicKeyCompressed } from '../../utils/hex';

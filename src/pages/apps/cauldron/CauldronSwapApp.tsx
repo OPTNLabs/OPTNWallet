@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useLocation, useNavigate } from 'react-router-dom';
 import { useSelector } from 'react-redux';
 import {
   binToHex,
@@ -9,9 +9,9 @@ import {
 
 import type { AddonSDK } from '../../../services/AddonsSDK';
 import type { AddonAppDefinition, AddonManifest } from '../../../types/addons';
-import type { Network } from '../../../redux/networkSlice';
-import { selectCurrentNetwork } from '../../../redux/selectors/networkSelectors';
-import type { RootState } from '../../../redux/store';
+import type { Network } from '../../../state/slices/networkSlice';
+import { selectCurrentNetwork } from '../../../state/selectors/networkSelectors';
+import type { RootState } from '../../../state/store';
 import KeyService from '../../../services/KeyService';
 import useSharedTokenMetadata from '../../../hooks/useSharedTokenMetadata';
 import { ensureUint8Array, parseSatoshis } from '../../../utils/binary';
@@ -67,6 +67,7 @@ import {
   resolveCurrentPoolForReview,
 } from './preflight';
 import { ContainedSwipeConfirmModal } from '../mint-cashtokens-poc/components/uiPrimitives';
+import { getReturnPath } from '../../../utils/navigation';
 import {
   selectFundingUtxosByToken,
   selectLargestBchUtxos,
@@ -80,6 +81,7 @@ import {
 } from './quoteSafety';
 import { useSmoothResetTransition } from '../shared/useSmoothResetTransition';
 import OutboundTransactionTracker from '../../../services/OutboundTransactionTracker';
+import { formatTimestamp, shortTokenId } from './cauldronHelpers';
 
 type CauldronSwapAppProps = {
   sdk: AddonSDK;
@@ -135,10 +137,6 @@ const CREATED_WALLET_POOL_TOKENS_STORAGE_PREFIX =
   'optn.cauldron.created-wallet-pool-tokens';
 const CREATED_WALLET_POOL_LOCKING_BYTECODES_STORAGE_PREFIX =
   'optn.cauldron.created-wallet-pool-locking-bytecodes';
-
-function shortTokenId(tokenId: string): string {
-  return shortenHash(tokenId, 4, 4);
-}
 
 function dedupePoolsBySelectionId(pools: CauldronPool[]): CauldronPool[] {
   const byId = new Map<string, CauldronPool>();
@@ -569,14 +567,6 @@ function findMinExecutableRouteAmount(params: {
   }
 
   return result ?? 0n;
-}
-
-function formatTimestamp(timestamp: number): string {
-  try {
-    return new Date(timestamp * 1000).toLocaleString();
-  } catch {
-    return String(timestamp);
-  }
 }
 
 function mergeTokenCatalog(
@@ -1544,6 +1534,8 @@ async function buildPoolWithdrawWithFunding(params: {
 
 const CauldronSwapApp: React.FC<CauldronSwapAppProps> = ({ sdk, app }) => {
   const navigate = useNavigate();
+  const location = useLocation();
+  const backTarget = getReturnPath(location, '/apps');
   const currentNetwork = useSelector((state: RootState) =>
     selectCurrentNetwork(state)
   );
@@ -1627,7 +1619,6 @@ const CauldronSwapApp: React.FC<CauldronSwapAppProps> = ({ sdk, app }) => {
     liveUpdatesEnabled: boolean;
     liveUpdatedAt: number | null;
   } | null>(null);
-  const [quoteClockTick, setQuoteClockTick] = useState(0);
   const pendingWalletPoolsStorageKey = useMemo(
     () => getPendingWalletPoolsStorageKey(String(currentNetwork)),
     [currentNetwork]
@@ -2035,7 +2026,17 @@ const CauldronSwapApp: React.FC<CauldronSwapAppProps> = ({ sdk, app }) => {
     return () => {
       cancelled = true;
     };
-  }, [currentNetwork, sdk, suppressedWalletPoolIds]);
+  }, [
+    apiClient,
+    currentNetwork,
+    createPoolLockingBytecode,
+    createWithdrawPublicKeyHash,
+    sdk,
+    selectedTokenId,
+    suppressedWalletPoolIds,
+    walletContext.walletId,
+    walletPoolPositions.length,
+  ]);
 
   useEffect(() => {
     let cancelled = false;
@@ -2143,7 +2144,7 @@ const CauldronSwapApp: React.FC<CauldronSwapAppProps> = ({ sdk, app }) => {
     return () => {
       cancelled = true;
     };
-  }, [currentNetwork, selectedTokenId]);
+  }, [apiClient, currentNetwork, selectedTokenId]);
 
   useEffect(() => {
     if (pools.length === 0 && walletPoolPositions.length === 0) return;
@@ -2203,7 +2204,7 @@ const CauldronSwapApp: React.FC<CauldronSwapAppProps> = ({ sdk, app }) => {
     return () => {
       cancelled = true;
     };
-  }, [currentNetwork, direction, selectedTokenId]);
+  }, [apiClient, currentNetwork, direction, selectedTokenId]);
 
   useEffect(() => {
     let cancelled = false;
@@ -2439,7 +2440,7 @@ const CauldronSwapApp: React.FC<CauldronSwapAppProps> = ({ sdk, app }) => {
     return () => {
       cancelled = true;
     };
-  }, [currentNetwork, selectedWalletPoolId, selectedWalletPoolPosition]);
+  }, [apiClient, currentNetwork, selectedWalletPoolId, selectedWalletPoolPosition]);
 
   const parsedAmount = useMemo(
     () =>
@@ -2803,15 +2804,6 @@ const CauldronSwapApp: React.FC<CauldronSwapAppProps> = ({ sdk, app }) => {
   const previewTradeCount =
     quote?.trades.length ?? previewPlan?.trades.length ?? 0;
   const previewedRouteRows = quote?.trades ?? [];
-  useEffect(() => {
-    if (!quote) return undefined;
-
-    const intervalId = setInterval(() => {
-      setQuoteClockTick((current) => current + 1);
-    }, 15000);
-
-    return () => clearInterval(intervalId);
-  }, [quote]);
   const quoteSafetyBanner = useMemo<CauldronQuoteSafetyBanner | null>(
     () =>
       buildCauldronQuoteSafetyBanner({
@@ -2830,7 +2822,6 @@ const CauldronSwapApp: React.FC<CauldronSwapAppProps> = ({ sdk, app }) => {
       apiStatus?.liveUpdatedAt,
       apiStatus?.liveUpdatesEnabled,
       quote,
-      quoteClockTick,
     ]
   );
   const quoteReviewWarnings =
@@ -2875,6 +2866,8 @@ const CauldronSwapApp: React.FC<CauldronSwapAppProps> = ({ sdk, app }) => {
     poolSyncAnchor,
     poolTokenAmountAuto,
     selectedTokenSpotPriceSats,
+    syncPoolFromBchAmount,
+    syncPoolFromTokenAmount,
   ]);
 
   const renderAssetBadge = (
@@ -2978,7 +2971,7 @@ const CauldronSwapApp: React.FC<CauldronSwapAppProps> = ({ sdk, app }) => {
     }
   };
 
-  const syncPoolFromBchAmount = (nextBchAmount: string) => {
+  const syncPoolFromBchAmount = useCallback((nextBchAmount: string) => {
     setPoolCreateBchAmount(nextBchAmount);
     if (!selectedTokenSpotPriceSats || !nextBchAmount.trim()) {
       return;
@@ -2997,9 +2990,9 @@ const CauldronSwapApp: React.FC<CauldronSwapAppProps> = ({ sdk, app }) => {
       maxTokenAmountAtomic: spendableTokenBalanceAtomic,
     });
     setPoolCreateTokenAmount(nextTokenAmount);
-  };
+  }, [effectiveDecimals, selectedTokenSpotPriceSats, spendableTokenBalanceAtomic]);
 
-  const syncPoolFromTokenAmount = (nextTokenAmount: string) => {
+  const syncPoolFromTokenAmount = useCallback((nextTokenAmount: string) => {
     setPoolCreateTokenAmount(nextTokenAmount);
     if (!selectedTokenSpotPriceSats || !nextTokenAmount.trim()) {
       return;
@@ -3020,7 +3013,7 @@ const CauldronSwapApp: React.FC<CauldronSwapAppProps> = ({ sdk, app }) => {
       maxBchAmountSats: poolBchMaxInputSats,
     });
     setPoolCreateBchAmount(nextBchAmount);
-  };
+  }, [effectiveDecimals, poolBchMaxInputSats, selectedTokenSpotPriceSats]);
 
   const handleQuote = async (): Promise<boolean> => {
     try {
@@ -4155,7 +4148,7 @@ const CauldronSwapApp: React.FC<CauldronSwapAppProps> = ({ sdk, app }) => {
           <img
             src="/assets/images/cauldron-header-logo.png"
             alt="Cauldron"
-            className="h-auto w-full max-w-[180px] object-contain"
+            className="h-auto w-full max-w-[220px] object-contain"
           />
         </div>
         <div className="mt-2 flex items-center justify-between gap-3">
@@ -4164,10 +4157,10 @@ const CauldronSwapApp: React.FC<CauldronSwapAppProps> = ({ sdk, app }) => {
           </h1>
           <button
             type="button"
-            onClick={() => navigate('/apps')}
+            onClick={() => navigate(backTarget)}
             className="wallet-btn-danger px-3 py-1.5 text-xs"
           >
-            Go Back
+            Back
           </button>
         </div>
       </div>

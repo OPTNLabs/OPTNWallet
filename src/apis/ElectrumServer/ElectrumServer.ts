@@ -9,9 +9,9 @@ import { ElectrumWebSocket } from '@electrum-cash/web-socket';
 import {
   getElectrumServers,
 } from '../../utils/servers/ElectrumServers';
-import { store } from '../../redux/store';
-import { selectCurrentNetwork } from '../../redux/selectors/networkSelectors';
-import { Network } from '../../redux/networkSlice';
+import { store } from '../../state/store';
+import { selectCurrentNetwork } from '../../state/selectors/networkSelectors';
+import { Network } from '../../state/slices/networkSlice';
 
 // ---------- Config ----------
 const CONNECT_TIMEOUT_MS = 8000;

@@ -2,16 +2,16 @@
 
 import { useState } from 'react';
 import { useSelector, useDispatch } from 'react-redux';
-import { RootState, AppDispatch } from '../../redux/store';
+import { RootState, AppDispatch } from '../../state/store';
 import {
   respondWithTxSignature,
   clearPendingSignTx,
   respondWithTxError,
-} from '../../redux/walletconnectSlice';
+} from '../../state/slices/walletconnectSlice';
 import { binToHex, lockingBytecodeToCashAddress } from '@bitauth/libauth';
 import { SATSINBITCOIN } from '../../utils/constants';
 import { ensureUint8Array, parseSatoshis } from '../../utils/binary';
-import { selectWalletId } from '../../redux/walletSlice';
+import { selectWalletId } from '../../state/slices/walletSlice';
 import useOutboundTransactions from '../../hooks/useOutboundTransactions';
 import { shortenAddress } from '../../utils/shortenHash';
 import WalletTooltip from '../ui/WalletTooltip';

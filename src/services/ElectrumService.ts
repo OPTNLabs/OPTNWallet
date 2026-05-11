@@ -13,24 +13,36 @@
 
 import ElectrumServer from '../apis/ElectrumServer/ElectrumServer';
 import { RequestResponse } from '@electrum-cash/network';
-import {
-  TransactionDetails,
-  TransactionDetailParticipant,
-  TransactionHistoryItem,
-  UTXO,
-} from '../types/types';
-import DatabaseService from '../apis/DatabaseManager/DatabaseService';
-import {
-  cashAddressToLockingBytecode,
-  lockingBytecodeToCashAddress,
-  sha256,
-} from '@bitauth/libauth';
-import { selectCurrentNetwork } from '../redux/selectors/networkSelectors';
-import { Network } from '../redux/networkSlice';
-import { store } from '../redux/store';
-import { binToHex, hexToBin } from '../utils/hex';
-import { normalizeTokenField } from '../utils/tokenNormalization';
+import { TransactionDetails, TransactionHistoryItem, UTXO } from '../types/types';
 import { logError, toErrorMessage } from '../utils/errorHandling';
+import {
+  TransactionVisibility,
+  addressToElectrumScripthash,
+  deriveFeeSats,
+  extractTimestamp,
+  isInvalidAddressError,
+  isStringResponse,
+  isTransactionHistoryArray,
+  isVerboseTransaction,
+  mapOutputParticipant,
+  mapUtxoRows,
+  toVisibilityFromResponse,
+} from './electrum/helpers';
+import {
+  persistTransactionDetails,
+  readTransactionDetailsFromDb,
+  resolveInputParticipants,
+} from './electrum/transaction';
+import {
+  clearBlockHeaderListeners,
+  registerAddressSubscription,
+  registerBlockHeaderListener,
+  registerDoubleSpendProofSubscription,
+  registerTransactionSubscription,
+  unregisterAddressSubscription,
+  unregisterDoubleSpendProofSubscription,
+  unregisterTransactionSubscription,
+} from './electrum/subscriptions';
 
 const inflightByAddr = new Map<string, Promise<UTXO[]>>();
 const cacheByAddr = new Map<string, { ts: number; data: UTXO[] }>();
@@ -53,13 +65,6 @@ const detailsCacheByTxid = new Map<
   { ts: number; data: TransactionDetails | null }
 >();
 const DETAILS_TTL_MS = 60000;
-type BlockHeaderCallback = (header: unknown) => void;
-const blockHeaderListeners = new Set<BlockHeaderCallback>();
-let latestBlockHeader: unknown = null;
-
-function getDbService() {
-  return DatabaseService();
-}
 
 export function primeUTXOCache(address: string, utxos: UTXO[]) {
   cacheByAddr.set(address, { ts: Date.now(), data: utxos });
@@ -83,106 +88,6 @@ export function invalidateUTXOCache(address?: string) {
   }
 }
 
-function isTransactionHistoryArray(
-  response: RequestResponse
-): response is TransactionHistoryItem[] {
-  return (
-    Array.isArray(response) &&
-    response.every(
-      (item) =>
-        !!item &&
-        typeof item === 'object' &&
-        'tx_hash' in item &&
-        'height' in item
-    )
-  );
-}
-
-function isStringResponse(response: RequestResponse): response is string {
-  return typeof response === 'string';
-}
-
-type ElectrumVin = {
-  txid?: unknown;
-  vout?: unknown;
-  coinbase?: unknown;
-};
-
-type ElectrumVout = {
-  value?: unknown;
-  n?: unknown;
-  scriptPubKey?: {
-    address?: unknown;
-    addresses?: unknown;
-    hex?: unknown;
-  };
-};
-
-type ElectrumVerboseTransaction = {
-  txid?: unknown;
-  confirmations?: unknown;
-  blocktime?: unknown;
-  time?: unknown;
-  height?: unknown;
-  fee?: unknown;
-  vin?: ElectrumVin[];
-  vout?: ElectrumVout[];
-};
-
-function isVerboseTransaction(
-  response: RequestResponse
-): response is ElectrumVerboseTransaction {
-  return !!response && typeof response === 'object' && !Array.isArray(response);
-}
-
-export type TransactionVisibility = {
-  seen: boolean;
-  confirmed: boolean;
-};
-
-function currentAddressPrefix(): 'bitcoincash' | 'bchtest' {
-  const network = selectCurrentNetwork(store.getState());
-  return network === Network.CHIPNET ? 'bchtest' : 'bitcoincash';
-}
-
-function toSats(value: unknown): number | undefined {
-  if (typeof value === 'number' && Number.isFinite(value)) {
-    return Math.round(value * 100_000_000);
-  }
-  if (typeof value === 'string' && value.trim()) {
-    const parsed = Number(value);
-    return Number.isFinite(parsed) ? Math.round(parsed * 100_000_000) : undefined;
-  }
-  return undefined;
-}
-
-function decodeAddressFromScriptHex(scriptHex: unknown): string | null {
-  if (typeof scriptHex !== 'string' || !scriptHex.trim()) return null;
-  try {
-    const result = lockingBytecodeToCashAddress({
-      bytecode: hexToBin(scriptHex),
-      prefix: currentAddressPrefix(),
-    });
-    return typeof result === 'string' ? result : result.address;
-  } catch {
-    return null;
-  }
-}
-
-function isInvalidAddressError(error: unknown): boolean {
-  return toErrorMessage(error).toLowerCase().includes('invalid address');
-}
-
-function addressToElectrumScripthash(address: string): string {
-  const lockingBytecode = cashAddressToLockingBytecode(address);
-  if (typeof lockingBytecode === 'string') {
-    throw new Error(`Invalid address: ${address}`);
-  }
-
-  const digest = sha256.hash(lockingBytecode.bytecode);
-  return binToHex(Uint8Array.from(digest).reverse());
-}
-
 async function requestWithAddressFallback(
   server: ReturnType<typeof ElectrumServer>,
   addressMethod: string,
@@ -202,355 +107,6 @@ async function requestWithAddressFallback(
   }
 }
 
-function extractOutputAddress(vout: ElectrumVout): string {
-  const script = vout.scriptPubKey;
-  if (typeof script?.address === 'string' && script.address.trim()) {
-    return script.address;
-  }
-
-  const addresses = Array.isArray(script?.addresses)
-    ? script.addresses.filter(
-        (entry): entry is string => typeof entry === 'string' && entry.trim().length > 0
-      )
-    : [];
-  if (addresses.length > 0) {
-    return addresses.join(', ');
-  }
-
-  return decodeAddressFromScriptHex(script?.hex) ?? 'Unknown / non-standard output';
-}
-
-function extractTimestamp(tx: ElectrumVerboseTransaction): string | undefined {
-  const candidate =
-    typeof tx.blocktime === 'number'
-      ? tx.blocktime
-      : typeof tx.time === 'number'
-        ? tx.time
-        : null;
-  return candidate != null ? new Date(candidate * 1000).toISOString() : undefined;
-}
-
-function mapOutputParticipant(vout: ElectrumVout): TransactionDetailParticipant {
-  return {
-    address: extractOutputAddress(vout),
-    amountSats: toSats(vout.value),
-    outputIndex:
-      typeof vout.n === 'number' && Number.isFinite(vout.n)
-        ? vout.n
-        : undefined,
-  };
-}
-
-function sumKnownSats(rows: TransactionDetailParticipant[]): number | undefined {
-  let total = 0;
-  for (const row of rows) {
-    if (row.amountSats == null || !Number.isFinite(row.amountSats)) {
-      return undefined;
-    }
-    total += row.amountSats;
-  }
-  return total;
-}
-
-function deriveFeeSats(
-  fee: unknown,
-  inputs: TransactionDetailParticipant[],
-  outputs: TransactionDetailParticipant[]
-): number | undefined {
-  const explicitFee = toSats(fee);
-  if (explicitFee != null) return explicitFee;
-
-  const totalInput = sumKnownSats(inputs);
-  const totalOutput = sumKnownSats(outputs);
-  if (totalInput == null || totalOutput == null) return undefined;
-
-  const derived = totalInput - totalOutput;
-  return derived >= 0 ? derived : undefined;
-}
-
-function currentWalletId(): number | null {
-  return store.getState().wallet_id.currentWalletId ?? null;
-}
-
-function normalizeParticipantRows(raw: unknown): TransactionDetailParticipant[] {
-  if (!Array.isArray(raw)) return [];
-  const rows: TransactionDetailParticipant[] = [];
-  for (const entry of raw) {
-    if (!entry || typeof entry !== 'object') continue;
-    const row = entry as Record<string, unknown>;
-    rows.push({
-      address: typeof row.address === 'string' ? row.address : 'Unknown',
-      amountSats:
-        typeof row.amountSats === 'number' && Number.isFinite(row.amountSats)
-          ? row.amountSats
-          : undefined,
-      outputIndex:
-        typeof row.outputIndex === 'number' && Number.isFinite(row.outputIndex)
-          ? row.outputIndex
-          : undefined,
-    });
-  }
-  return rows;
-}
-
-async function readTransactionDetailsFromDb(
-  txHash: string
-): Promise<TransactionDetails | null> {
-  const walletId = currentWalletId();
-  if (!walletId) return null;
-
-  const dbService = getDbService();
-  await dbService.ensureDatabaseStarted();
-  const db = dbService.getDatabase();
-  if (!db) return null;
-
-  const stmt = db.prepare(`
-    SELECT tx_hash, confirmations, height, fee_sats, timestamp, inputs_json, outputs_json
-    FROM transaction_details
-    WHERE wallet_id = ? AND tx_hash = ?
-    LIMIT 1;
-  `);
-
-  try {
-    stmt.bind([walletId, txHash]);
-    if (!stmt.step()) return null;
-
-    const row = stmt.getAsObject() as Record<string, unknown>;
-    const inputs = normalizeParticipantRows(
-      typeof row.inputs_json === 'string' ? JSON.parse(row.inputs_json) : []
-    );
-    const outputs = normalizeParticipantRows(
-      typeof row.outputs_json === 'string' ? JSON.parse(row.outputs_json) : []
-    );
-
-    return {
-      txid: typeof row.tx_hash === 'string' ? row.tx_hash : txHash,
-      confirmations: Number(row.confirmations ?? 0),
-      height:
-        row.height === null || row.height === undefined
-          ? undefined
-          : Number(row.height),
-      feeSats:
-        row.fee_sats === null || row.fee_sats === undefined
-          ? undefined
-          : Number(row.fee_sats),
-      timestamp:
-        typeof row.timestamp === 'string' && row.timestamp.trim()
-          ? row.timestamp
-          : undefined,
-      inputs,
-      outputs,
-    };
-  } catch (error) {
-    logError('ElectrumService.readTransactionDetailsFromDb', error, { txHash });
-    return null;
-  } finally {
-    stmt.free();
-  }
-}
-
-async function persistTransactionDetails(details: TransactionDetails): Promise<void> {
-  const walletId = currentWalletId();
-  if (!walletId) return;
-
-  const dbService = getDbService();
-  await dbService.ensureDatabaseStarted();
-  const db = dbService.getDatabase();
-  if (!db) return;
-
-  try {
-    const stmt = db.prepare(`
-      INSERT INTO transaction_details (
-        wallet_id, tx_hash, confirmations, height, fee_sats, timestamp,
-        inputs_json, outputs_json, updated_at
-      )
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-      ON CONFLICT(wallet_id, tx_hash) DO UPDATE SET
-        confirmations = excluded.confirmations,
-        height = excluded.height,
-        fee_sats = excluded.fee_sats,
-        timestamp = excluded.timestamp,
-        inputs_json = excluded.inputs_json,
-        outputs_json = excluded.outputs_json,
-        updated_at = excluded.updated_at
-    `);
-
-    stmt.run([
-      walletId,
-      details.txid,
-      details.confirmations,
-      details.height ?? null,
-      details.feeSats ?? null,
-      details.timestamp ?? '',
-      JSON.stringify(details.inputs),
-      JSON.stringify(details.outputs),
-      new Date().toISOString(),
-    ]);
-    stmt.free();
-    dbService.scheduleDatabaseSave();
-  } catch (error) {
-    logError('ElectrumService.persistTransactionDetails', error, {
-      txHash: details.txid,
-    });
-  }
-}
-
-async function fetchVerboseTransactions(
-  server: ReturnType<typeof ElectrumServer>,
-  txids: string[]
-): Promise<Record<string, ElectrumVerboseTransaction>> {
-  const uniqueTxids = Array.from(new Set(txids.filter(Boolean)));
-  if (uniqueTxids.length === 0) return {};
-
-  const responses = await server.requestMany(
-    uniqueTxids.map((txid) => ({
-      method: 'blockchain.transaction.get',
-      params: [txid, true],
-    }))
-  );
-
-  const resolved: Record<string, ElectrumVerboseTransaction> = {};
-  responses.forEach((response, index) => {
-    const txid = uniqueTxids[index];
-    if (response instanceof Error) return;
-    if (!isVerboseTransaction(response)) return;
-    resolved[txid] = response;
-  });
-  return resolved;
-}
-
-async function resolveInputParticipants(
-  server: ReturnType<typeof ElectrumServer>,
-  tx: ElectrumVerboseTransaction
-): Promise<TransactionDetailParticipant[]> {
-  const vin = Array.isArray(tx.vin) ? tx.vin : [];
-  const prevTxids = vin
-    .map((input) => (typeof input.txid === 'string' ? input.txid : ''))
-    .filter(Boolean);
-  const prevTxs = await fetchVerboseTransactions(server, prevTxids);
-
-  return vin.map((input) => {
-    if (typeof input.coinbase === 'string' && input.coinbase.length > 0) {
-      return { address: 'Coinbase' };
-    }
-
-    const prevTxid = typeof input.txid === 'string' ? input.txid : '';
-    const prevIndex =
-      typeof input.vout === 'number' && Number.isFinite(input.vout)
-        ? input.vout
-        : Number(input.vout ?? -1);
-    const prevTx = prevTxs[prevTxid];
-    const prevOut =
-      prevTx && Array.isArray(prevTx.vout) && prevIndex >= 0
-        ? prevTx.vout.find((output) => Number(output.n ?? -1) === prevIndex)
-        : undefined;
-
-    if (!prevOut) {
-      return {
-        address: prevTxid ? `Prevout ${prevTxid.slice(0, 10)}...:${prevIndex}` : 'Unknown input',
-      };
-    }
-
-    return {
-      address: extractOutputAddress(prevOut),
-      amountSats: toSats(prevOut.value),
-      outputIndex: prevIndex >= 0 ? prevIndex : undefined,
-    };
-  });
-}
-
-function mapUtxoRows(address: string, rows: Array<Record<string, unknown>>): UTXO[] {
-  return rows.map((u) => {
-    const token = normalizeTokenField(u.token ?? u.token_data);
-
-    const out: UTXO = {
-      address: typeof u.address === 'string' ? u.address : address,
-      height: Number(u.height ?? 0),
-      tx_hash: String(u.tx_hash),
-      tx_pos: Number(u.tx_pos),
-      value: Number(u.value ?? 0),
-      amount: Number(u.value ?? 0),
-      prefix: undefined,
-      token,
-      token_data: undefined,
-      id: `${u.tx_hash}:${u.tx_pos}`,
-    };
-    return out;
-  });
-}
-
-function toVisibilityFromResponse(response: RequestResponse): TransactionVisibility {
-  if (typeof response === 'string') {
-    return {
-      seen: response.length > 0,
-      confirmed: false,
-    };
-  }
-
-  if (response && typeof response === 'object') {
-    const record = response as { confirmations?: unknown; height?: unknown };
-    const confirmations = Number(record.confirmations ?? 0);
-    const height = Number(record.height ?? 0);
-    return {
-      seen: true,
-      confirmed: confirmations > 0 || height > 0,
-    };
-  }
-
-  throw new Error('Invalid transaction visibility response');
-}
-
-// ---------- Notification Routing ----------
-/**
- * Registry for active subscription callbacks.
- * Keys are RPC methods (e.g. blockchain.address.subscribe),
- * values are maps of subscription keys (address/txHash) to callbacks.
- */
-const subscriptionRegistry: Record<string, Map<string, (data: unknown) => void>> = {
-  'blockchain.address.subscribe': new Map(),
-  'blockchain.headers.subscribe': new Map(),
-  'blockchain.transaction.subscribe': new Map(),
-  'blockchain.transaction.dsproof.subscribe': new Map(),
-  // If later you add scripthash-based flow, just add:
-  // 'blockchain.scripthash.subscribe': new Map(),
-};
-
-let routerInstalled = false;
-
-/**
- * Sets up a single notification router via ElectrumServer.onNotification.
- * Ensures we only bind one listener no matter how many subscriptions exist.
- */
-async function ensureNotificationRouter() {
-  if (routerInstalled) return;
-
-  const { onNotification } = ElectrumServer();
-  onNotification((n) => {
-    const { method, params } = n; // n = { jsonrpc, method, params }
-    const registry = subscriptionRegistry[method];
-    if (!registry) return;
-
-    // Headers: params = [header]
-    if (method === 'blockchain.headers.subscribe') {
-      const header = params?.[0];
-      latestBlockHeader = header;
-      for (const cb of blockHeaderListeners) {
-        cb(header);
-      }
-      return;
-    }
-
-    // Address/Tx/DSP: params = [key, data]
-    const key = String(params?.[0] ?? '');
-    const data = params?.[1];
-    const cb = registry.get(key);
-    if (cb) cb(data);
-  });
-
-  routerInstalled = true;
-}
-
-// ---------- Service ----------
 const ElectrumService = {
   async reconnect(customServer?: string) {
     const server = ElectrumServer();
@@ -1118,14 +674,8 @@ const ElectrumService = {
 
   /** Subscribe to address status updates */
   async subscribeAddress(address: string, callback: (status: string) => void) {
-    const server = ElectrumServer();
     try {
-      const reg = subscriptionRegistry['blockchain.address.subscribe'];
-      if (!reg.has(address)) {
-        await server.subscribe('blockchain.address.subscribe', [address]);
-        await ensureNotificationRouter();
-      }
-      reg.set(address, callback);
+      await registerAddressSubscription(address, callback);
     } catch (error) {
       logError('ElectrumService.subscribeAddress', error, { address });
     }
@@ -1133,43 +683,26 @@ const ElectrumService = {
 
   /** Subscribe to block headers */
   async subscribeBlockHeaders(callback: (header: unknown) => void) {
-    const server = ElectrumServer();
     try {
-      const reg = subscriptionRegistry['blockchain.headers.subscribe'];
-      const shouldSubscribe = blockHeaderListeners.size === 0;
-      blockHeaderListeners.add(callback);
-      reg.set('tip', () => undefined);
-      if (shouldSubscribe) {
-        await server.subscribe('blockchain.headers.subscribe'); // no params
-        await ensureNotificationRouter();
-      }
-
-      if (latestBlockHeader !== null) {
-        callback(latestBlockHeader);
+      const latest = await registerBlockHeaderListener(callback);
+      if (latest !== null) {
+        callback(latest);
         return;
       }
 
-      const latest = await this.getLatestBlock();
-      if (latest !== null) {
-        latestBlockHeader = latest;
-        callback(latest);
+      const fetchedLatest = await this.getLatestBlock();
+      if (fetchedLatest !== null) {
+        callback(fetchedLatest);
       }
     } catch (error) {
-      blockHeaderListeners.delete(callback);
       logError('ElectrumService.subscribeBlockHeaders', error);
     }
   },
 
   /** Subscribe to a transaction’s confirmation updates */
   async subscribeTransaction(txHash: string, cb: (height: number) => void) {
-    const server = ElectrumServer();
     try {
-      const reg = subscriptionRegistry['blockchain.transaction.subscribe'];
-      if (!reg.has(txHash)) {
-        await server.subscribe('blockchain.transaction.subscribe', [txHash]);
-        await ensureNotificationRouter();
-      }
-      reg.set(txHash, cb);
+      await registerTransactionSubscription(txHash, cb);
     } catch (error) {
       logError('ElectrumService.subscribeTransaction', error, { txHash });
     }
@@ -1177,17 +710,8 @@ const ElectrumService = {
 
   /** Subscribe to double-spend proofs for a transaction */
   async subscribeDoubleSpendProof(txHash: string, cb: (ds: unknown) => void) {
-    const server = ElectrumServer();
     try {
-      const reg =
-        subscriptionRegistry['blockchain.transaction.dsproof.subscribe'];
-      if (!reg.has(txHash)) {
-        await server.subscribe('blockchain.transaction.dsproof.subscribe', [
-          txHash,
-        ]);
-        await ensureNotificationRouter();
-      }
-      reg.set(txHash, cb);
+      await registerDoubleSpendProofSubscription(txHash, cb);
     } catch (error) {
       logError('ElectrumService.subscribeDoubleSpendProof', error, { txHash });
     }
@@ -1195,10 +719,9 @@ const ElectrumService = {
 
   /** Unsubscribe from address updates */
   async unsubscribeAddress(address: string): Promise<boolean> {
-    const server = ElectrumServer();
     try {
-      await server.unsubscribe('blockchain.address.subscribe', [address]);
-      subscriptionRegistry['blockchain.address.subscribe'].delete(address);
+      await ElectrumServer().unsubscribe('blockchain.address.subscribe', [address]);
+      unregisterAddressSubscription(address);
       return true;
     } catch (error) {
       logError('ElectrumService.unsubscribeAddress', error, { address });
@@ -1208,19 +731,8 @@ const ElectrumService = {
 
   /** Unsubscribe from block headers */
   async unsubscribeBlockHeaders(callback?: (header: unknown) => void): Promise<boolean> {
-    const server = ElectrumServer();
     try {
-      if (callback) {
-        blockHeaderListeners.delete(callback);
-      } else {
-        blockHeaderListeners.clear();
-      }
-      if (blockHeaderListeners.size === 0) {
-        await server.unsubscribe('blockchain.headers.subscribe');
-        subscriptionRegistry['blockchain.headers.subscribe'].delete('tip');
-        latestBlockHeader = null;
-      }
-      return true;
+      return await clearBlockHeaderListeners(callback);
     } catch (error) {
       logError('ElectrumService.unsubscribeBlockHeaders', error);
       return false;
@@ -1229,10 +741,9 @@ const ElectrumService = {
 
   /** Unsubscribe from transaction updates */
   async unsubscribeTransaction(txHash: string): Promise<boolean> {
-    const server = ElectrumServer();
     try {
-      await server.unsubscribe('blockchain.transaction.subscribe', [txHash]);
-      subscriptionRegistry['blockchain.transaction.subscribe'].delete(txHash);
+      await ElectrumServer().unsubscribe('blockchain.transaction.subscribe', [txHash]);
+      unregisterTransactionSubscription(txHash);
       return true;
     } catch (error) {
       logError('ElectrumService.unsubscribeTransaction', error, { txHash });
@@ -1242,14 +753,11 @@ const ElectrumService = {
 
   /** Unsubscribe from double-spend proofs */
   async unsubscribeDoubleSpendProof(txHash: string): Promise<boolean> {
-    const server = ElectrumServer();
     try {
-      await server.unsubscribe('blockchain.transaction.dsproof.subscribe', [
+      await ElectrumServer().unsubscribe('blockchain.transaction.dsproof.subscribe', [
         txHash,
       ]);
-      subscriptionRegistry['blockchain.transaction.dsproof.subscribe'].delete(
-        txHash
-      );
+      unregisterDoubleSpendProofSubscription(txHash);
       return true;
     } catch (error) {
       logError('ElectrumService.unsubscribeDoubleSpendProof', error, { txHash });

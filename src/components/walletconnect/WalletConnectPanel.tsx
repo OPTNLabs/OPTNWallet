@@ -2,13 +2,13 @@
 // src/components/walletconnect/WalletConnectPanel.tsx
 import { useState, useCallback, useEffect } from 'react';
 import { useSelector, useDispatch } from 'react-redux';
-import { RootState, AppDispatch } from '../../redux/store';
+import { RootState, AppDispatch } from '../../state/store';
 
 import WcConnectionManager from '../WcConnectionManager';
 import SessionProposalModal from './SessionProposalModal';
 import { SessionList } from './SessionList';
 import SessionSettingsModal from './SessionSettingsModal';
-import { disconnectSession } from '../../redux/walletconnectSlice';
+import { disconnectSession } from '../../state/slices/walletconnectSlice';
 import { SignMessageModal } from './SignMessageModal';
 
 export default function WalletConnectPanel() {

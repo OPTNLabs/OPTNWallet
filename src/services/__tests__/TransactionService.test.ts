@@ -38,7 +38,7 @@ vi.mock('../../workers/UTXOWorkerService', () => ({
   requestUTXORefreshForMany: requestRefreshMock,
 }));
 
-vi.mock('../../redux/store', () => ({
+vi.mock('../../state/store', () => ({
   store: {
     getState: vi.fn(() => ({ wallet_id: { currentWalletId: 11 } })),
   },

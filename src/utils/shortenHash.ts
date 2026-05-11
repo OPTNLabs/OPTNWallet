@@ -8,12 +8,16 @@ export const shortenHash = (
   return `${value.slice(0, prefixLength)}...${value.slice(-suffixLength)}`;
 };
 
-export const shortenTxHash = (txHash: string, prefixLength: number = 0) => {
+export const shortenTxHash = (
+  txHash: string,
+  prefixLength: number = 0,
+  maskedLength: number = 10
+) => {
   if (!txHash) return '';
 
   const visibleLength = prefixLength + 6; // Length of prefix + 6 additional characters
 
-  return `${txHash.slice(0, visibleLength)}**********${txHash.slice(-5)}`;
+  return `${txHash.slice(0, visibleLength)}${'*'.repeat(maskedLength)}${txHash.slice(-5)}`;
 };
 
 export const shortenAddress = (address: string) => {
