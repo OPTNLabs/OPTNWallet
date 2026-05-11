@@ -1,13 +1,11 @@
 // src/components/WcConnectionManager.tsx
 
 import React, { useState } from 'react';
-import {
-  CapacitorBarcodeScannerTypeHint,
-} from '@capacitor/barcode-scanner';
+import { CapacitorBarcodeScannerTypeHint } from '@capacitor/barcode-scanner';
 import { Toast } from '@capacitor/toast';
 import { useDispatch } from 'react-redux';
-import { AppDispatch } from '../redux/store';
-import { wcPair } from '../redux/walletconnectSlice';
+import { AppDispatch } from '../state/store';
+import { wcPair } from '../state/slices/walletconnectSlice';
 import {
   getBarcodeScannerErrorMessage,
   scanBarcodeSafely,

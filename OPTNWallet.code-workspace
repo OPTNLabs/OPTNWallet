@@ -29,6 +29,15 @@
 	},
 	{
 		"path": "../reference/libauth"
+	},
+	{
+		"path": "../reference/cashscript"
+	},
+	{
+		"path": "../moriaLiquidationBot"
+	},
+	{
+		"path": "../server-optn-wallet"
 	}
 ],
   "settings": {

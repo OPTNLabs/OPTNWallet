@@ -1,6 +1,6 @@
 import { createTables } from '../../utils/schema/schema';
 import DatabaseService from '../DatabaseManager/DatabaseService';
-import { Network } from '../../redux/networkSlice';
+import { Network } from '../../state/slices/networkSlice';
 import SecretCryptoService from '../../services/SecretCryptoService';
 import QuantumrootVaultCacheService from '../../services/QuantumrootVaultCacheService';
 import WalletDiscoveryService from '../../services/WalletDiscoveryService';

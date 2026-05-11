@@ -84,6 +84,7 @@ describe('mint-cashtokens-poc/utils', () => {
     const unique = makeUtxo({ tx_hash: 'y'.repeat(64), tx_pos: 0, value: 2000 });
 
     const result = mergeWalletUtxos({
+      utxos: [shared],
       allUtxos: [shared],
       tokenUtxos: [shared],
       cashTokenUtxos: [unique],
@@ -94,6 +95,17 @@ describe('mint-cashtokens-poc/utils', () => {
       `${shared.tx_hash}:${shared.tx_pos}`,
       `${unique.tx_hash}:${unique.tx_pos}`,
     ]);
+  });
+
+  it('mergeWalletUtxos accepts the TransactionService snapshot shape', () => {
+    const genesis = makeUtxo({ tx_hash: 'g'.repeat(64), tx_pos: 0, value: 1500 });
+
+    const result = mergeWalletUtxos({
+      utxos: [genesis],
+      addresses: [{ address: genesis.address }],
+    });
+
+    expect(result).toEqual([genesis]);
   });
 
   it('filterActiveOutputDrafts keeps only drafts with selected recipient and source', () => {

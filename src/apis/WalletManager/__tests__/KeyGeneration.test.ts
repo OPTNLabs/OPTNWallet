@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { Network } from '../../../redux/networkSlice';
+import { Network } from '../../../state/slices/networkSlice';
 import KeyGeneration from '../KeyGeneration';
 
 vi.mock('bip39', () => ({

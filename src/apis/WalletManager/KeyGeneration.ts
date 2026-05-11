@@ -1,5 +1,5 @@
 import * as bip39 from 'bip39';
-import { Network } from '../../redux/networkSlice';
+import { Network } from '../../state/slices/networkSlice';
 import {
   deriveBchKeyMaterial,
   type DerivedBchKeyMaterial,

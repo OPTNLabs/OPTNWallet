@@ -1,1 +1,1 @@
-export * from './DebugPanel';
+export * from '../../../features/simple-send/components';

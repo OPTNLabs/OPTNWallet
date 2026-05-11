@@ -74,6 +74,11 @@ export interface AddonAppDefinition {
   name: string; // UI label
   description?: string;
   iconUri?: string | null;
+  /**
+   * When true, the host should only expose this app in browser dev builds.
+   * Packaged APK/AAB builds must hide it entirely.
+   */
+  devOnly?: boolean;
 
   /**
    * v1 hardening: data-only apps.
@@ -103,6 +108,11 @@ export interface AddonContractDefinition {
   id: string; // stable within addon
   name: string;
   description?: string;
+  /**
+   * When true, the host should only expose this contract in browser dev builds.
+   * Packaged APK/AAB builds must hide it entirely.
+   */
+  devOnly?: boolean;
 
   /**
    * CashScript artifact JSON for the contract.

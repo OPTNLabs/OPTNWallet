@@ -3,7 +3,8 @@
 import { useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useSelector } from 'react-redux';
-import { selectHasWallet, selectWalletId } from '../redux/walletSlice';
+import { selectHasWallet, selectWalletId } from '../state/slices/walletSlice';
+import { homeRoute, ROUTE_PATHS } from '../navigation/routes';
 
 const RootHandler = () => {
   const navigate = useNavigate();
@@ -12,10 +13,10 @@ const RootHandler = () => {
 
   useEffect(() => {
     if (hasWallet) {
-      navigate(`/home/${walletId}`, { replace: true });
+      navigate(homeRoute(walletId), { replace: true });
       return;
     }
-    navigate('/landing', { replace: true });
+    navigate(ROUTE_PATHS.landing, { replace: true });
   }, [hasWallet, navigate, walletId]);
 
   return null; // Render nothing since navigation handles redirection

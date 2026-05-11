@@ -3,9 +3,9 @@ import KeyService from '../services/KeyService';
 import { shortenTxHash } from '../utils/shortenHash';
 import { PREFIX } from '../utils/constants';
 import { useSelector } from 'react-redux';
-import { RootState } from '../redux/store';
-import { selectCurrentNetwork } from '../redux/selectors/networkSelectors';
-import { selectWalletId } from '../redux/walletSlice';
+import { RootState } from '../state/store';
+import { selectCurrentNetwork } from '../state/selectors/networkSelectors';
+import { selectWalletId } from '../state/slices/walletSlice';
 
 interface AddressSelectionPopupProps {
   onSelect: (address: string) => void;
@@ -58,7 +58,7 @@ const AddressSelectionPopup: React.FC<AddressSelectionPopupProps> = ({
     <div className="wallet-popup-backdrop z-[1300] p-3 sm:p-4">
       {/* Popup Container */}
       <div
-        className="wallet-popup-panel w-full max-w-md"
+        className="wallet-popup-panel flex w-full max-w-md flex-col overflow-hidden"
         style={{
           maxHeight:
             'calc(100dvh - var(--navbar-height) - var(--safe-bottom) - 0.75rem)',
@@ -68,7 +68,7 @@ const AddressSelectionPopup: React.FC<AddressSelectionPopupProps> = ({
           Select an Address
         </h2>
         {/* Scrollable address list */}
-        <div className="max-h-64 overflow-y-auto mb-4">
+        <div className="mb-4 max-h-64 overflow-y-auto overscroll-contain touch-pan-y pr-1">
           <ul>
             {addresses.map((addr) => (
               <li key={addr.id} className="mb-2">

@@ -64,7 +64,7 @@ vi.mock('../../ContractManager/ContractManager', () => ({
   })),
 }));
 
-vi.mock('../../../redux/store', () => ({
+vi.mock('../../../state/store', () => ({
   store: {
     getState: vi.fn(() => ({ network: { currentNetwork: 'mainnet' } })),
   },

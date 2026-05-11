@@ -1,7 +1,7 @@
 import DatabaseService from '../DatabaseManager/DatabaseService';
 import AddressManager from '../AddressManager/AddressManager';
 import { Address, QuantumrootVaultRecord } from '../../types/types';
-import { Network } from '../../redux/networkSlice';
+import { Network } from '../../state/slices/networkSlice';
 import { PREFIX } from '../../utils/constants';
 import { isArrayBufferLike, isString } from '../../utils/typeGuards';
 import {
@@ -26,6 +26,30 @@ function toString(value: unknown): string {
 
 function toCount(value: unknown): number {
   return typeof value === 'number' ? value : Number.parseInt(String(value), 10) || 0;
+}
+
+const textDecoder = new TextDecoder();
+
+async function decodePrivateKeyPayload(
+  value: unknown
+): Promise<Uint8Array | null> {
+  if (isArrayBufferLike(value)) {
+    const bytes = new Uint8Array(value);
+    const decoded = textDecoder.decode(bytes);
+    if (isEncryptedPayload(decoded)) {
+      return await SecretCryptoService.decryptBytes(decoded);
+    }
+    return bytes;
+  }
+
+  if (isString(value)) {
+    if (isEncryptedPayload(value)) {
+      return await SecretCryptoService.decryptBytes(value);
+    }
+    return Uint8Array.from(atob(value), (c) => c.charCodeAt(0));
+  }
+
+  return null;
 }
 
 export default function KeyManager() {
@@ -457,19 +481,9 @@ export default function KeyManager() {
       throw new Error(`No private key found for address: ${address}`);
     }
 
-    // Support either a binary blob (preferred) or base64 string (legacy/alternate)
-    if (isArrayBufferLike(result[0])) {
-      return new Uint8Array(result[0]);
-    }
-    if (isString(result[0])) {
-      if (isEncryptedPayload(result[0])) {
-        const decrypted = await SecretCryptoService.decryptBytes(result[0]);
-        if (!decrypted) {
-          throw new Error(`Invalid encrypted private key for address: ${address}`);
-        }
-        return decrypted;
-      }
-      return Uint8Array.from(atob(result[0]), (c) => c.charCodeAt(0));
+    const decoded = await decodePrivateKeyPayload(result[0]);
+    if (decoded) {
+      return decoded;
     }
 
     throw new Error(`Unsupported private key format for address: ${address}`);

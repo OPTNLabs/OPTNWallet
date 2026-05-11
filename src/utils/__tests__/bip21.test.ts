@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { buildBip21Uri, parseBip21Uri } from '../bip21';
-import { Network } from '../../redux/networkSlice';
+import { Network } from '../../state/slices/networkSlice';
 
 const VALID_CASHADDR =
   'bitcoincash:qrx6fypj230kpgvghmyje089sphvl4jnfqq4aduatz';

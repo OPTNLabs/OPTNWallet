@@ -224,3 +224,33 @@ describe('AddonsSDK tokenIndex', () => {
     vi.unstubAllGlobals();
   });
 });
+
+describe('AddonsSDK manifest validation', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('fails closed when created with an invalid manifest', () => {
+    expect(() =>
+      createAddonSDK(
+        {
+          id: 'bad.addon',
+          name: 'Bad Addon',
+          version: '1.0.0',
+          permissions: [
+            {
+              kind: 'http',
+              domains: ['example.com'],
+            },
+          ],
+          contracts: [],
+        },
+        {
+          walletId: 1,
+          network: 'mainnet',
+          appId: 'bad-addon-app',
+        }
+      )
+    ).toThrow('non-allowlisted domain');
+  });
+});

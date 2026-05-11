@@ -1,6 +1,6 @@
 // src/apis/ChaingraphManager/ChaingraphManager.ts
 
-import { store } from '../../redux/store';
+import { store } from '../../state/store';
 import {
   getInfraUrlPools,
   runWithFailover,

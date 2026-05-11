@@ -1,5 +1,5 @@
 import React, { useCallback, useMemo } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useLocation, useNavigate } from 'react-router-dom';
 import { useSelector } from 'react-redux';
 import { Toast } from '@capacitor/toast';
 
@@ -7,13 +7,15 @@ import PageHeader from '../components/ui/PageHeader';
 import SectionCard from '../components/ui/SectionCard';
 import EmptyState from '../components/ui/EmptyState';
 import Popup from '../components/transaction/Popup';
-import { RootState } from '../redux/store';
-import { selectCurrentNetwork } from '../redux/selectors/networkSelectors';
+import { RootState } from '../state/store';
+import { selectCurrentNetwork } from '../state/selectors/networkSelectors';
 import { SATSINBITCOIN } from '../utils/constants';
 import { shortenTxHash } from '../utils/shortenHash';
+import { getReturnPath } from '../utils/navigation';
 import { getQuantumrootNetworkSupport } from '../services/QuantumrootNetworkSupportService';
 import QuantumrootVaultPopup from './quantumroot/QuantumrootVaultPopup';
 import { useQuantumrootWorkspace } from './quantumroot/useQuantumrootWorkspace';
+import WalletScreen from '../components/ui/WalletScreen';
 
 function formatBch(sats: number) {
   return `${(sats / SATSINBITCOIN).toFixed(8).replace(/\.?0+$/, '') || '0'} BCH`;
@@ -35,10 +37,12 @@ const QUANTUMROOT_BCH_SPEND_ENABLED = true;
 
 const Quantumroot: React.FC = () => {
   const navigate = useNavigate();
+  const location = useLocation();
   const [showVaultsPopup, setShowVaultsPopup] = React.useState(false);
   const currentWalletId = useSelector(
     (state: RootState) => state.wallet_id.currentWalletId
   );
+  const returnTarget = getReturnPath(location, `/home/${currentWalletId}`);
   const currentNetwork = useSelector((state: RootState) =>
     selectCurrentNetwork(state)
   );
@@ -88,70 +92,83 @@ const Quantumroot: React.FC = () => {
   });
 
   return (
-    <div className="container mx-auto max-w-md h-[calc(100dvh-var(--navbar-height)-var(--safe-bottom))] px-4 pt-4 pb-[calc(var(--safe-bottom)+1rem)] flex flex-col overflow-hidden wallet-page">
-      <PageHeader
-        title="Quantumroot"
-        subtitle="Dedicated vault workspace"
-        compact
-      />
+    <WalletScreen maxWidthClassName="max-w-md">
+      <div className="flex h-full min-h-0 flex-col">
+        <div className="flex-1 min-h-0">
+          <PageHeader
+            title="Quantumroot"
+            subtitle="Dedicated vault workspace"
+            compact
+          />
 
-      <SectionCard className="mt-3">
-        <div className="wallet-surface-strong rounded-[14px] p-3 mb-3">
-          <div className="text-sm font-bold">
-            {networkSupport.isPreviewOnly
-              ? 'Quantumroot Mainnet Preview'
-              : 'Quantumroot Active Workspace'}
-          </div>
-          <div className="text-xs wallet-muted mt-1">
-            {networkSupport.isPreviewOnly
-              ? `Quantumroot is visible on mainnet ahead of activation. The layout stays available, but key actions remain disabled until ${formatActivationDate(networkSupport.activationAt)}.`
-              : 'Quantumroot is active on this network. Use the vault workspace below to manage receive addresses, sweeps, and recovery.'}
-          </div>
+          <SectionCard className="mt-3">
+            <div className="wallet-surface-strong rounded-[14px] p-3 mb-3">
+              <div className="text-sm font-bold">
+                {networkSupport.isPreviewOnly
+                  ? 'Quantumroot Mainnet Preview'
+                  : 'Quantumroot Active Workspace'}
+              </div>
+              <div className="text-xs wallet-muted mt-1">
+                {networkSupport.isPreviewOnly
+                  ? `Quantumroot is visible on mainnet ahead of activation. The layout stays available, but key actions remain disabled until ${formatActivationDate(networkSupport.activationAt)}.`
+                  : 'Quantumroot is active on this network. Use the vault workspace below to manage receive addresses, sweeps, and recovery.'}
+              </div>
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <div className="wallet-surface-strong rounded-[14px] p-3">
+                <div className="text-[11px] font-semibold wallet-muted mb-1">
+                  Tracked Balance
+                </div>
+                <div className="font-bold text-lg">
+                  {formatBch(portfolio.totalBalanceSats)}
+                </div>
+              </div>
+              <div className="wallet-surface-strong rounded-[14px] p-3">
+                <div className="text-[11px] font-semibold wallet-muted mb-1">
+                  Vaults
+                </div>
+                <div className="font-bold text-lg">{vaults.length}</div>
+                <div className="text-[11px] wallet-muted mt-1">
+                  {portfolio.fundedVaults} funded
+                </div>
+              </div>
+            </div>
+            <div className="mt-3 grid grid-cols-2 gap-3">
+              <button
+                className="wallet-btn-primary w-full"
+                onClick={() => void handleSyncVaults()}
+                disabled={syncing || loading}
+              >
+                {syncing ? 'Syncing Vaults…' : 'Sync Vaults'}
+              </button>
+              <button
+                className="wallet-btn-secondary w-full"
+                onClick={() => setShowVaultsPopup(true)}
+              >
+                Open Vaults
+              </button>
+            </div>
+            <div className="mt-3 text-xs wallet-muted space-y-1">
+              <p>
+                Live now: receive addresses, balance tracking, receive sweeps, Quantum
+                Lock BCH recovery.
+              </p>
+              <p>
+                In progress: token-authorized Quantumroot spends and token-aware recovery.
+              </p>
+            </div>
+          </SectionCard>
         </div>
-        <div className="grid grid-cols-2 gap-3">
-          <div className="wallet-surface-strong rounded-[14px] p-3">
-            <div className="text-[11px] font-semibold wallet-muted mb-1">
-              Tracked Balance
-            </div>
-            <div className="font-bold text-lg">
-              {formatBch(portfolio.totalBalanceSats)}
-            </div>
-          </div>
-          <div className="wallet-surface-strong rounded-[14px] p-3">
-            <div className="text-[11px] font-semibold wallet-muted mb-1">
-              Vaults
-            </div>
-            <div className="font-bold text-lg">{vaults.length}</div>
-            <div className="text-[11px] wallet-muted mt-1">
-              {portfolio.fundedVaults} funded
-            </div>
-          </div>
-        </div>
-        <div className="mt-3 grid grid-cols-2 gap-3">
+
+        <div className="mt-auto pb-2 pt-3">
           <button
-            className="wallet-btn-primary w-full"
-            onClick={() => void handleSyncVaults()}
-            disabled={syncing || loading}
+            className="wallet-btn-danger w-full"
+            onClick={() => navigate(returnTarget)}
           >
-            {syncing ? 'Syncing Vaults…' : 'Sync Vaults'}
-          </button>
-          <button
-            className="wallet-btn-secondary w-full"
-            onClick={() => setShowVaultsPopup(true)}
-          >
-            Open Vaults
+            Back
           </button>
         </div>
-        <div className="mt-3 text-xs wallet-muted space-y-1">
-          <p>
-            Live now: receive addresses, balance tracking, receive sweeps, Quantum
-            Lock BCH recovery.
-          </p>
-          <p>
-            In progress: token-authorized Quantumroot spends and token-aware recovery.
-          </p>
-        </div>
-      </SectionCard>
+      </div>
 
       {showVaultsPopup && (
         <Popup closePopups={() => setShowVaultsPopup(false)} closeButtonText="Close">
@@ -242,7 +259,7 @@ const Quantumroot: React.FC = () => {
         onClose={() => {
           setSelectedVault(null);
           setShowVaultsPopup(false);
-          navigate(`/home/${currentWalletId}`);
+          navigate(returnTarget);
         }}
         onCopy={(value) => void handleCopy(value)}
         onSpendAddressChange={setPendingSpendAddress}
@@ -257,7 +274,7 @@ const Quantumroot: React.FC = () => {
           void handleRecoverQuantumLockUtxo(utxo, destinationAddress)
         }
       />
-    </div>
+    </WalletScreen>
   );
 };
 
