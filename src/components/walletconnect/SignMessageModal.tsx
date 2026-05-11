@@ -1,10 +1,10 @@
 import { useSelector, useDispatch } from 'react-redux';
-import { RootState, AppDispatch } from '../../redux/store';
+import { RootState, AppDispatch } from '../../state/store';
 import {
   respondWithMessageSignature,
   respondWithMessageError,
   clearPendingSignMsg,
-} from '../../redux/walletconnectSlice';
+} from '../../state/slices/walletconnectSlice';
 import { normalizeExternalUrl } from '../../utils/externalUrl';
 
 export function SignMessageModal() {

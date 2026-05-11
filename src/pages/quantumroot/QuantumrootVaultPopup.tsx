@@ -315,7 +315,7 @@ const QuantumrootVaultPopup: React.FC<QuantumrootVaultPopupProps> = ({
               className="wallet-btn-secondary w-full"
               onClick={() => {
                 onClose();
-                navigate('/receive');
+                navigate('/receive', { state: { returnTo: '/quantumroot' } });
               }}
             >
               Open Receive Screen

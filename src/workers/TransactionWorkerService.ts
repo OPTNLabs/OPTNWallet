@@ -1,8 +1,8 @@
 // src/workers/TransactionWorkerService.ts
 import KeyService from '../services/KeyService';
 import TransactionManager from '../apis/TransactionManager/TransactionManager';
-import { store } from '../redux/store';
-import { addTransactions } from '../redux/transactionSlice';
+import { store } from '../state/store';
+import { addTransactions } from '../state/slices/transactionSlice';
 import { INTERVAL } from '../utils/constants';
 import { requestUTXORefreshFor } from './UTXOWorkerService';
 import ElectrumService from '../services/ElectrumService';

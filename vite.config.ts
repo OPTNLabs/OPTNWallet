@@ -8,6 +8,12 @@ import topLevelAwait from 'vite-plugin-top-level-await';
 import react from '@vitejs/plugin-react-swc';
 import { nodePolyfills } from 'vite-plugin-node-polyfills';
 
+type RollupWarning = {
+  code?: string;
+  id?: string;
+  message?: string;
+};
+
 export default defineConfig(({ mode }) => {
   const BROWSER_CONDITIONS = ['browser', 'module', 'import', 'default'];
 
@@ -60,7 +66,7 @@ export default defineConfig(({ mode }) => {
       rollupOptions: {
         // ✅ suppress only the specific warnings you’re seeing
         onwarn(warning, warn) {
-          const id = (warning as any)?.id ?? '';
+          const { id = '' } = warning as RollupWarning;
 
           // vm-browserify eval warning
           if (warning.code === 'EVAL' && String(id).includes('vm-browserify')) {
@@ -89,6 +95,18 @@ export default defineConfig(({ mode }) => {
       mimeTypes: {
         'application/wasm': ['wasm'],
         'application/json': ['map'],
+      },
+      watch: {
+        // Ignore generated trees and test-only directories so Vite does not
+        // exhaust inotify watchers during web dev.
+        ignored: [
+          '**/android/**',
+          '**/__tests__/**',
+          '**/*.test.*',
+          '**/*.spec.*',
+        ],
+        usePolling: process.platform === 'linux',
+        interval: 250,
       },
       fs: { allow: ['..'] },
     },

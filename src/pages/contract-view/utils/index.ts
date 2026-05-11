@@ -1,1 +1,1 @@
-export * from './contractUtils';
+export * from '../../../features/contract-view/utils';

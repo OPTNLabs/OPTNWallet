@@ -1,5 +1,5 @@
-import { store } from '../redux/store';
-import { selectCurrentNetwork } from '../redux/selectors/networkSelectors';
+import { store } from '../state/store';
+import { selectCurrentNetwork } from '../state/selectors/networkSelectors';
 import KeyManager from '../apis/WalletManager/KeyManager';
 import WalletManager from '../apis/WalletManager/WalletManager';
 import KeyGeneration from '../apis/WalletManager/KeyGeneration';
@@ -11,7 +11,7 @@ import { isArrayBufferLike, isString } from '../utils/typeGuards';
 import { SignedMessage } from '../utils/signed';
 import DeviceIntegrityService from './DeviceIntegrityService';
 import type { QuantumrootVaultRecord, SignedMessageResponseI } from '../types/types';
-import { Network } from '../redux/networkSlice';
+import { Network } from '../state/slices/networkSlice';
 import type { deriveQuantumrootVault } from './QuantumrootService';
 
 const KeyService = {

@@ -19,6 +19,7 @@ export interface UTXO {
   tx_hash: string;
   tx_pos: number;
   value: number;
+  satoshis?: bigint;
   amount?: number;
   prefix?: string; // Default to 'bchtest' for now
   token_data?: Token | null; // only used for fetching response from electrum server

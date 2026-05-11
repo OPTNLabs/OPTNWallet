@@ -1,5 +1,5 @@
 import { Capacitor } from '@capacitor/core';
-import DeviceIntegrity from '../plugins/DeviceIntegrity';
+import DeviceIntegrity from '../platform/plugins/DeviceIntegrity';
 
 type CachedAssessment = {
   ts: number;

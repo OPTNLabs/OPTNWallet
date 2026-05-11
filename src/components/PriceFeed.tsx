@@ -3,7 +3,7 @@ import React from 'react';
 import { useSelector } from 'react-redux';
 import Carousel from 'react-multi-carousel';
 import 'react-multi-carousel/lib/styles.css';
-import { RootState } from '../redux/store';
+import { RootState } from '../state/store';
 import { FaBitcoin, FaEthereum } from 'react-icons/fa';
 
 const responsive = {
@@ -71,18 +71,18 @@ const PriceFeed: React.FC<PriceFeedProps> = ({ compact = false }) => {
           <div
             key={symbol}
             className={`scrolling-price-item wallet-card rounded-lg shadow-lg grid grid-cols-[auto,1fr,auto] items-center gap-x-4 mx-4 ${
-              compact ? 'px-4 py-4' : 'px-6 py-12'
+              compact ? 'px-3 py-2.5' : 'px-6 py-12'
             }`}
           >
               {getLogo(symbol)}
               <div className="flex flex-col">
-                <span className={`${compact ? 'text-sm' : 'text-lg'} font-semibold wallet-text-strong`}>
+                <span className={`${compact ? 'text-xs' : 'text-lg'} font-semibold wallet-text-strong`}>
                   {symbol}
                 </span>
-                <span className="wallet-muted text-xs">USD</span>
+                <span className={`${compact ? 'text-[10px]' : 'text-xs'} wallet-muted`}>USD</span>
               </div>
               <div className="flex flex-col items-end font-bold">
-                <div className={`${compact ? 'text-base' : 'text-xl'} wallet-text-strong`}>{display}</div>
+                <div className={`${compact ? 'text-sm' : 'text-xl'} wallet-text-strong`}>{display}</div>
                 {/* <span className="wallet-muted text-xs">{meta}</span> */}
               </div>
             </div>

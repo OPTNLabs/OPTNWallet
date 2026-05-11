@@ -4,24 +4,30 @@ type ActionTileProps = {
   title: string;
   description?: string;
   icon?: React.ReactNode;
+  trailing?: React.ReactNode;
   onClick?: () => void;
   disabled?: boolean;
   className?: string;
   compact?: boolean;
   layout?: 'stacked' | 'horizontal';
+  descriptionLines?: number;
+  style?: React.CSSProperties;
 };
 
 const ActionTile: React.FC<ActionTileProps> = ({
   title,
   description,
   icon,
+  trailing,
   onClick,
   disabled = false,
   className = '',
   compact = false,
   layout = 'stacked',
+  descriptionLines,
+  style,
 }) => {
-  const classes = `wallet-card ${compact ? 'p-3' : 'p-4'} text-left transition ${
+  const classes = `wallet-card w-full ${compact ? 'p-3' : 'p-4'} text-left transition ${
     disabled ? 'cursor-not-allowed opacity-70' : 'cursor-pointer hover:brightness-[0.98]'
   } ${className}`.trim();
 
@@ -38,15 +44,30 @@ const ActionTile: React.FC<ActionTileProps> = ({
           </div>
         ) : null}
         <div className="min-w-0 flex-1">
-          <div className={`${compact ? 'text-sm' : 'font-semibold'} wallet-text-strong`}>
+          <div
+            className={`${compact ? 'text-sm' : 'font-semibold'} truncate wallet-text-strong`}
+          >
             {title}
           </div>
           {description ? (
-            <div className={`${compact ? 'text-xs' : 'text-sm'} wallet-muted`}>
+            <div
+              className={`${compact ? 'text-xs' : 'text-sm'} wallet-muted`}
+              style={
+                descriptionLines
+                  ? {
+                      display: '-webkit-box',
+                      WebkitBoxOrient: 'vertical',
+                      WebkitLineClamp: descriptionLines,
+                      overflow: 'hidden',
+                    }
+                  : undefined
+              }
+            >
               {description}
             </div>
           ) : null}
         </div>
+        {trailing ? <div className="shrink-0 self-start">{trailing}</div> : null}
       </div>
     ) : (
       <>
@@ -59,27 +80,44 @@ const ActionTile: React.FC<ActionTileProps> = ({
             {icon}
           </div>
         ) : null}
-        <div className={`${compact ? 'text-sm' : 'font-semibold'} wallet-text-strong`}>
+        <div className={`${compact ? 'text-sm' : 'font-semibold'} truncate wallet-text-strong`}>
           {title}
         </div>
         {description ? (
-          <div className={`${compact ? 'mt-0.5 text-xs' : 'mt-1 text-sm'} wallet-muted`}>
+          <div
+            className={`${compact ? 'mt-0.5 text-xs' : 'mt-1 text-sm'} wallet-muted`}
+            style={
+              descriptionLines
+                ? {
+                    display: '-webkit-box',
+                    WebkitBoxOrient: 'vertical',
+                    WebkitLineClamp: descriptionLines,
+                    overflow: 'hidden',
+                  }
+                : undefined
+            }
+          >
             {description}
           </div>
         ) : null}
+        {trailing ? <div className="mt-2">{trailing}</div> : null}
       </>
     )
   );
 
   if (onClick) {
     return (
-      <button type="button" className={classes} onClick={onClick} disabled={disabled}>
+      <button type="button" className={classes} style={style} onClick={onClick} disabled={disabled}>
         {content}
       </button>
     );
   }
 
-  return <div className={classes}>{content}</div>;
+  return (
+    <div className={classes} style={style}>
+      {content}
+    </div>
+  );
 };
 
 export default ActionTile;

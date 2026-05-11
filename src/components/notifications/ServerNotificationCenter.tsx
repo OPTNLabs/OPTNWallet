@@ -1,7 +1,7 @@
 import React, { useEffect } from 'react';
 import { useDispatch, useSelector } from 'react-redux';
-import type { RootState } from '../../redux/store';
-import { dequeueServerNotification } from '../../redux/serverNotificationsSlice';
+import type { RootState } from '../../state/store';
+import { dequeueServerNotification } from '../../state/slices/serverNotificationsSlice';
 
 const ToastItem: React.FC<{
   id: string;

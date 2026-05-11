@@ -5,7 +5,7 @@ import TransactionManager from '../TransactionManager';
 import DatabaseService from '../../DatabaseManager/DatabaseService';
 import ElectrumService from '../../../services/ElectrumService';
 import TransactionBuilderHelper from '../TransactionBuilderHelper';
-import { store } from '../../../redux/store';
+import { store } from '../../../state/store';
 import { TOKEN_OUTPUT_SATS } from '../../../utils/constants';
 import OutboundTransactionTracker from '../../../services/OutboundTransactionTracker';
 
@@ -38,7 +38,7 @@ vi.mock('../../../services/OutboundTransactionTracker', () => ({
   },
 }));
 
-vi.mock('../../../redux/store', () => ({
+vi.mock('../../../state/store', () => ({
   store: {
     dispatch: vi.fn(),
     getState: vi.fn(() => ({ wallet_id: { currentWalletId: 7 } })),

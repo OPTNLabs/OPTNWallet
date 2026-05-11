@@ -68,12 +68,12 @@ function protocolFeeAddressFromBytecode(
 ): string {
   const result = lockingBytecodeToCashAddress({
     bytecode: Uint8Array.from(Buffer.from(normalizeHex(bytecode), 'hex')),
-    networkPrefix: network === 'chipnet' ? 'bchtest' : 'bitcoincash',
+    prefix: network === 'chipnet' ? 'bchtest' : 'bitcoincash',
   });
   if (typeof result === 'string') {
     throw new Error(result);
   }
-  return result;
+  return result.address;
 }
 
 function parseParyonAmount(value: string): bigint {
@@ -347,12 +347,12 @@ export async function executeStakeLiquidity(args: {
     .from(functionUtxo)
     .fromP2PKH(tokenInput, signatureTemplate)
     .fromP2PKH(feeUtxo, signatureTemplate)
-    .to(contractNodeFromSnapshot(snapshot, 'StabilityPool').address, BigInt(poolUtxo.value), {
+    .to(contractNodeFromSnapshot(snapshot, 'StabilityPool').address, BigInt((poolUtxo as { value?: number | bigint }).value ?? 0), {
       amount: poolUtxo.token?.amount ?? 0n,
       category: snapshot.config.tokenIds.poolTokenId,
       nft: poolUtxo.token?.nft ?? { capability: 'minting', commitment: poolUtxo.token?.nft?.commitment ?? '' },
     })
-    .to(contractNodeFromSnapshot(snapshot, 'StabilityPoolSidecar').address, BigInt(sidecarUtxo.value), {
+    .to(contractNodeFromSnapshot(snapshot, 'StabilityPoolSidecar').address, BigInt((sidecarUtxo as { value?: number | bigint }).value ?? 0), {
       amount: updatedSidecarAmount,
       category: snapshot.config.tokenIds.paryonTokenId,
       nft: sidecarUtxo.token?.nft ?? { capability: 'none', commitment: sidecarUtxo.token?.nft?.commitment ?? '' },

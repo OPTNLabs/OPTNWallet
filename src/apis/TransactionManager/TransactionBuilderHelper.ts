@@ -8,7 +8,7 @@ import {
 } from 'cashscript';
 import ContractManager from '../ContractManager/ContractManager';
 import { UTXO, TransactionOutput } from '../../types/types';
-import { store } from '../../redux/store';
+import { store } from '../../state/store';
 import KeyService from '../../services/KeyService';
 import { PaperWalletSecretStore } from '../../services/PaperWalletSecretStore';
 import { TOKEN_OUTPUT_SATS } from '../../utils/constants';

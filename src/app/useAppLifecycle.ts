@@ -9,20 +9,20 @@ import {
   startUTXOWorker,
   stopUTXOWorker,
 } from '../workers/UTXOWorkerService';
-import { initWalletConnect } from '../redux/walletconnectSlice';
-import { initWizardConnect } from '../redux/wizardconnectSlice';
-import { clearNotifications, UtxoNotification } from '../redux/notificationsSlice';
-import { AppDispatch } from '../redux/store';
+import { initWalletConnect } from '../state/slices/walletconnectSlice';
+import { initWizardConnect } from '../state/slices/wizardconnectSlice';
+import { clearNotifications, UtxoNotification } from '../state/slices/notificationsSlice';
+import { AppDispatch } from '../state/store';
 import {
   clearServerNotifications,
   enqueueServerNotification,
-} from '../redux/serverNotificationsSlice';
+} from '../state/slices/serverNotificationsSlice';
 import { reconcileOutboundTransactions } from '../services/OutboundTransactionReconciler';
 import { runOutboundReconcile } from '../services/RefreshCoordinator';
-import { Network, setNetwork } from '../redux/networkSlice';
-import { setWalletNetwork, setWalletType } from '../redux/walletSlice';
+import { Network, setNetwork } from '../state/slices/networkSlice';
+import { setWalletNetwork, setWalletType } from '../state/slices/walletSlice';
 import { WalletType } from '../types/wallet';
-import ScreenSecurity from '../plugins/ScreenSecurity';
+import ScreenSecurity from '../platform/plugins/ScreenSecurity';
 import ElectrumServer from '../apis/ElectrumServer/ElectrumServer';
 import WalletBackendSyncService from '../services/WalletBackendSyncService';
 import PlayUpdateService from '../services/PlayUpdateService';
@@ -120,7 +120,7 @@ export function useScreenSecurity() {
       return;
     }
 
-    const onboardingRoutes = new Set([
+    const onboardingRoutes: Set<string> = new Set([
       ROUTE_PATHS.root,
       ROUTE_PATHS.landing,
       ROUTE_PATHS.createWallet,

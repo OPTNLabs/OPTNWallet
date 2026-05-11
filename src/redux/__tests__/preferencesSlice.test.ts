@@ -4,7 +4,7 @@ import reducer, {
   selectTooltipsEnabled,
   setEnableTooltips,
   toggleEnableTooltips,
-} from '../preferencesSlice';
+} from '../../state/slices/preferencesSlice';
 
 describe('preferencesSlice', () => {
   it('defaults tooltips to disabled', () => {

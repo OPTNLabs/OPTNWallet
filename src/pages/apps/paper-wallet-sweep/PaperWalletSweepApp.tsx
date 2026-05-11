@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useLocation, useNavigate } from 'react-router-dom';
 import { useSelector } from 'react-redux';
 import { Toast } from '@capacitor/toast';
 import {
@@ -18,12 +18,13 @@ import {
 import type { UTXO } from '../../../types/types';
 import { buildPaperWalletSweepPlan } from './services/paperWalletSweepPlanner';
 import TransactionService from '../../../services/TransactionService';
-import { selectCurrentNetwork } from '../../../redux/selectors/networkSelectors';
-import { selectWalletId } from '../../../redux/walletSlice';
+import { selectCurrentNetwork } from '../../../state/selectors/networkSelectors';
+import { selectWalletId } from '../../../state/slices/walletSlice';
 import {
   Badge,
   ContainedSwipeConfirmModal,
 } from '../mint-cashtokens-poc/components/uiPrimitives';
+import { getReturnPath } from '../../../utils/navigation';
 
 const BASE58_WIF_PATTERN =
   /^[123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz]+$/;
@@ -74,6 +75,8 @@ function decodeScannedWif(wif: string) {
 }
 export default function PaperWalletSweepApp() {
   const navigate = useNavigate();
+  const location = useLocation();
+  const backTarget = getReturnPath(location, '/apps');
   const walletId = useSelector(selectWalletId);
   const currentNetwork = useSelector(selectCurrentNetwork);
   const [loading, setLoading] = useState(false);
@@ -295,7 +298,7 @@ export default function PaperWalletSweepApp() {
   }, [paperWalletUtxos]);
 
   return (
-    <div className="container mx-auto max-w-md h-[calc(100dvh-var(--navbar-height)-var(--safe-bottom))] px-4 pt-2 pb-3 flex flex-col overflow-hidden wallet-page">
+    <div className="container mx-auto max-w-md h-[calc(100dvh-var(--navbar-height)-var(--safe-bottom))] px-4 pt-2 pb-[calc(var(--safe-bottom)+1rem)] flex flex-col overflow-hidden wallet-page">
       <div className="flex-none">
         <div className="flex justify-center pt-1">
           <img
@@ -308,13 +311,6 @@ export default function PaperWalletSweepApp() {
           <h1 className="text-2xl font-bold wallet-text-strong tracking-[-0.02em]">
             Paper Wallet
           </h1>
-          <button
-            type="button"
-            onClick={() => navigate('/apps')}
-            className="wallet-btn-danger px-4 py-2"
-          >
-            Go Back
-          </button>
         </div>
         <p className="mt-2 text-sm wallet-muted">
           Scan a WIF paper wallet and sweep BCH + CashTokens in one transaction.
@@ -397,6 +393,15 @@ export default function PaperWalletSweepApp() {
             )}
           </div>
         </div>
+      </div>
+      <div className="mt-auto flex-none pt-3">
+        <button
+          type="button"
+          onClick={() => navigate(backTarget)}
+          className="wallet-btn-danger w-full py-3 font-semibold"
+        >
+          Back
+        </button>
       </div>
       <ContainedSwipeConfirmModal
         open={confirmOpen && !!pendingSweep}

@@ -1,7 +1,7 @@
 import { cashAddressToLockingBytecode } from '@bitauth/libauth';
 import { describe, expect, it } from 'vitest';
 
-import { Network } from '../../redux/networkSlice';
+import { Network } from '../../state/slices/networkSlice';
 import {
   CAULDRON_NATIVE_BCH,
   CauldronApiClient,

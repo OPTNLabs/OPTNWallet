@@ -2,6 +2,7 @@ package optn.wallet.app.update;
 
 import android.app.Activity;
 import android.content.Intent;
+import android.content.IntentSender.SendIntentException;
 
 import androidx.annotation.NonNull;
 
@@ -53,15 +54,19 @@ public class PlayUpdatePlugin extends Plugin {
     AppUpdateManager manager = appUpdateManager();
     manager.getAppUpdateInfo()
       .addOnSuccessListener(info -> {
-        boolean started = manager.startUpdateFlowForResult(
-          info,
-          getActivity(),
-          AppUpdateOptions.newBuilder(AppUpdateType.FLEXIBLE).build(),
-          REQUEST_CODE_UPDATE_FLOW
-        );
-        JSObject result = new JSObject();
-        result.put("started", started);
-        call.resolve(result);
+        try {
+          boolean started = manager.startUpdateFlowForResult(
+            info,
+            getActivity(),
+            AppUpdateOptions.newBuilder(AppUpdateType.FLEXIBLE).build(),
+            REQUEST_CODE_UPDATE_FLOW
+          );
+          JSObject result = new JSObject();
+          result.put("started", started);
+          call.resolve(result);
+        } catch (SendIntentException error) {
+          call.reject("Failed to start update flow", error);
+        }
       })
       .addOnFailureListener(error -> call.reject("Failed to start update flow", error));
   }

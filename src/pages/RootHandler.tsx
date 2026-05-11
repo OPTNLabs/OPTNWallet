@@ -3,7 +3,7 @@
 import { useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useSelector } from 'react-redux';
-import { selectHasWallet, selectWalletId } from '../redux/walletSlice';
+import { selectHasWallet, selectWalletId } from '../state/slices/walletSlice';
 import { homeRoute, ROUTE_PATHS } from '../navigation/routes';
 
 const RootHandler = () => {

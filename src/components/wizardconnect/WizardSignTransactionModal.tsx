@@ -1,7 +1,7 @@
 import { useDispatch, useSelector } from 'react-redux';
 import { binToHex, lockingBytecodeToCashAddress } from '@bitauth/libauth';
-import type { AppDispatch, RootState } from '../../redux/store';
-import { approveWizardSignRequest, rejectWizardSignRequest } from '../../redux/wizardconnectSlice';
+import type { AppDispatch, RootState } from '../../state/store';
+import { approveWizardSignRequest, rejectWizardSignRequest } from '../../state/slices/wizardconnectSlice';
 import { ensureUint8Array, parseSatoshis } from '../../utils/binary';
 import { SATSINBITCOIN } from '../../utils/constants';
 

@@ -1,12 +1,14 @@
 import React, { useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useLocation, useNavigate } from 'react-router-dom';
 import type { AddonSDK } from '../../../services/AddonsSDK';
 import type { AddonAppDefinition } from '../../../types/addons';
+import { getReturnPath } from '../../../utils/navigation';
 import FundMeDiscoverView from './components/FundMeDiscoverView';
 import FundMeCreateView from './components/FundMeCreateView';
 import FundMeDetailModal from './components/FundMeDetailModal';
 import { useFundMeCampaigns } from './useFundMeCampaigns';
 import type { CampaignType, ViewMode } from './types';
+import { isChainCampaign } from './fundmeHelpers';
 import {
   cancelCampaign,
   claimCampaign,
@@ -22,6 +24,8 @@ type FundMeAddonAppProps = {
 
 const FundMeAddonApp: React.FC<FundMeAddonAppProps> = ({ sdk, app }) => {
   const navigate = useNavigate();
+  const location = useLocation();
+  const backTarget = getReturnPath(location, '/apps');
   const [viewMode, setViewMode] = useState<ViewMode>('discover');
   const [campaignType, setCampaignType] = useState<CampaignType>('active');
   const [donationDraft, setDonationDraft] = useState<string>('');
@@ -49,6 +53,10 @@ const FundMeAddonApp: React.FC<FundMeAddonAppProps> = ({ sdk, app }) => {
       : campaignType === 'stopped'
         ? stoppedCampaigns
         : archivedCampaigns;
+  const selectedChainCampaign =
+    detailModal?.campaign && isChainCampaign(detailModal.campaign)
+      ? detailModal.campaign
+      : null;
 
   const totalCampaignCount =
     activeCampaigns.length + stoppedCampaigns.length + archivedCampaigns.length;
@@ -91,10 +99,10 @@ const FundMeAddonApp: React.FC<FundMeAddonAppProps> = ({ sdk, app }) => {
           </h1>
           <button
             type="button"
-            onClick={() => navigate('/apps')}
+            onClick={() => navigate(backTarget)}
             className="wallet-btn-danger justify-self-end px-4 py-2"
           >
-            Go Back
+            Back
           </button>
         </div>
 
@@ -158,52 +166,52 @@ const FundMeAddonApp: React.FC<FundMeAddonAppProps> = ({ sdk, app }) => {
         actionBusy={actionBusy}
         actionStatus={actionStatus}
         onDonate={() =>
-          detailModal?.campaign && 'raisedSatoshis' in detailModal.campaign
+          selectedChainCampaign
             ? void runCampaignAction(() =>
                 donateToCampaign({
                   sdk,
-                  campaign: detailModal.campaign,
+                  campaign: selectedChainCampaign,
                   amountBch: donationDraft,
                 })
               )
             : undefined
         }
         onRefund={() =>
-          detailModal?.campaign && 'raisedSatoshis' in detailModal.campaign
+          selectedChainCampaign
             ? void runCampaignAction(() =>
                 refundPledge({
                   sdk,
-                  campaign: detailModal.campaign,
+                  campaign: selectedChainCampaign,
                 })
               )
             : undefined
         }
         onClaim={() =>
-          detailModal?.campaign && 'raisedSatoshis' in detailModal.campaign
+          selectedChainCampaign
             ? void runCampaignAction(() =>
                 claimCampaign({
                   sdk,
-                  campaign: detailModal.campaign,
+                  campaign: selectedChainCampaign,
                 })
               )
             : undefined
         }
         onStop={() =>
-          detailModal?.campaign && 'raisedSatoshis' in detailModal.campaign
+          selectedChainCampaign
             ? void runCampaignAction(() =>
                 stopCampaign({
                   sdk,
-                  campaign: detailModal.campaign,
+                  campaign: selectedChainCampaign,
                 })
               )
             : undefined
         }
         onCancel={() =>
-          detailModal?.campaign && 'raisedSatoshis' in detailModal.campaign
+          selectedChainCampaign
             ? void runCampaignAction(() =>
                 cancelCampaign({
                   sdk,
-                  campaign: detailModal.campaign,
+                  campaign: selectedChainCampaign,
                 })
               )
             : undefined

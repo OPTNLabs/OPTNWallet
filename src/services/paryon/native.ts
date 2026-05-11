@@ -23,11 +23,23 @@ type ChainOutputRow = {
   output_index?: number;
   value_satoshis?: number | string | null;
   token_category?: string | null;
-  fungible_token_amount?: string | number | null;
+  fungible_token_amount?: string | number | bigint | null;
   nonfungible_token_capability?: 'none' | 'mutable' | 'minting' | null;
   nonfungible_token_commitment?: string | null;
   locking_bytecode?: string | null;
 };
+
+function utxoToChainOutputRow(utxo: UTXO): ChainOutputRow {
+  return {
+    transaction_hash: utxo.tx_hash,
+    output_index: utxo.tx_pos,
+    value_satoshis: utxo.value ?? utxo.amount ?? 0,
+    token_category: utxo.token?.category ?? null,
+    fungible_token_amount: utxo.token?.amount ?? null,
+    nonfungible_token_capability: utxo.token?.nft?.capability ?? null,
+    nonfungible_token_commitment: utxo.token?.nft?.commitment ?? null,
+  };
+}
 
 export type ParyonWalletBalances = {
   bchSats: bigint;
@@ -56,6 +68,9 @@ export type ParyonLiveMarketState = {
   oraclePriceCentsPerBch: bigint | null;
   currentPeriod: number | null;
   currentEpoch: number | null;
+  chainHeight: number | null;
+  expectedPeriod: number | null;
+  periodDeltaPeriods: number | null;
   writeEnabled: boolean;
   verifiedMainnetV1: boolean;
 };
@@ -384,14 +399,7 @@ async function queryContractState(
     };
   }
 
-  try {
-    const response = await sdk.chain.queryUnspentByLockingBytecode(
-      contract.lockingBytecodeHex,
-      tokenId
-    );
-    const rows = Array.isArray(response?.data?.output)
-      ? (response.data.output as ChainOutputRow[])
-      : [];
+  const buildState = (rows: ChainOutputRow[], warnings: string[]): ParyonLiveContractState => {
     const preferredRow = rows[0] ?? null;
     const preferredOutpoint =
       preferredRow?.transaction_hash != null && preferredRow.output_index != null
@@ -417,16 +425,111 @@ async function queryContractState(
       preferredOutpoint,
       threadCount: rows.length,
       freshness: rows.length > 0 ? 'fresh' : 'stale',
-      warnings:
-        rows.length > 0
-          ? rows.length > 1
+      warnings,
+    };
+  };
+
+  const queryChainGraphRows = async (): Promise<ChainOutputRow[]> => {
+    const response = await sdk.chain.queryUnspentByLockingBytecode(
+      contract.lockingBytecodeHex,
+      tokenId
+    );
+    return Array.isArray(response?.data?.output)
+      ? (response.data.output as ChainOutputRow[])
+      : [];
+  };
+
+  const queryElectrumRows = async (): Promise<ChainOutputRow[]> => {
+    const utxos = await sdk.utxos.listForAddress(address);
+    return utxos
+      .filter((utxo) => normalizeHex(utxo.token?.category) === normalizeHex(tokenId))
+      .map(utxoToChainOutputRow)
+      .sort((a, b) => Number(toBigInt(b.value_satoshis ?? 0) - toBigInt(a.value_satoshis ?? 0)));
+  };
+
+  const queryElectrumRowsLoose = async (): Promise<ChainOutputRow[]> => {
+    const utxos = await sdk.utxos.listForAddress(address);
+    return utxos
+      .map(utxoToChainOutputRow)
+      .sort((a, b) => Number(toBigInt(b.value_satoshis ?? 0) - toBigInt(a.value_satoshis ?? 0)));
+  };
+
+  try {
+    const rows = await queryChainGraphRows();
+    if (rows.length > 0) {
+      const warnings =
+        rows.length > 1
+          ? [
+              `Multiple live outputs were discovered for ${name}; routing will prefer ${rows[0]?.transaction_hash ?? 'the first returned output'}.`,
+            ]
+          : [];
+      return buildState(rows, warnings);
+    }
+
+    try {
+      const fallbackRows = await queryElectrumRows();
+      if (fallbackRows.length > 0) {
+        const warnings =
+          fallbackRows.length > 1
             ? [
-                `Multiple live outputs were discovered for ${name}; routing will prefer ${preferredOutpoint ?? 'the first returned output'}.`,
+                `ChainGraph returned no live outputs for ${name}; Electrum address lookup discovered ${fallbackRows.length} live output(s).`,
               ]
-            : []
-          : ['No live contract outputs were discovered for this thread.'],
+            : ['ChainGraph returned no live outputs; Electrum address lookup succeeded.'];
+        return buildState(fallbackRows, warnings);
+      }
+    } catch {
+      // fall through to stale result below
+    }
+
+    try {
+      const fallbackRows = await queryElectrumRowsLoose();
+      if (fallbackRows.length > 0) {
+        return buildState(fallbackRows, [
+          'ChainGraph returned no live outputs for this thread; Electrum address lookup found contract outputs with a non-matching token category.',
+        ]);
+      }
+    } catch {
+      // fall through to stale result below
+    }
+
+    return {
+      name,
+      address,
+      tokenId,
+      resolved: true,
+      utxoCount: 0,
+      totalValueSats: 0n,
+      latestCommitment: null,
+      latestTokenAmount: null,
+      latestCapability: null,
+      preferredOutpoint: null,
+      threadCount: 0,
+      freshness: 'stale',
+      warnings: ['No live contract outputs were discovered for this thread.'],
     };
   } catch {
+    try {
+      const fallbackRows = await queryElectrumRows();
+      if (fallbackRows.length > 0) {
+        return buildState(fallbackRows, [
+          'ChainGraph lookup failed; Electrum address lookup discovered live output(s).',
+        ]);
+      }
+    } catch {
+      // fall through
+    }
+
+    try {
+      const fallbackRows = await queryElectrumRowsLoose();
+      if (fallbackRows.length > 0) {
+        return buildState(fallbackRows, [
+          'ChainGraph lookup failed; Electrum address lookup found contract outputs with a non-matching token category.',
+        ]);
+      }
+    } catch {
+      // fall through
+    }
+
     return {
       name,
       address,
