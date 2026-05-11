@@ -19,6 +19,7 @@ export interface UTXO {
   tx_hash: string;
   tx_pos: number;
   value: number;
+  satoshis?: bigint;
   amount?: number;
   prefix?: string; // Default to 'bchtest' for now
   token_data?: Token | null; // only used for fetching response from electrum server
@@ -155,6 +156,23 @@ export type Address = {
   hd_index: number;
   change_index: number;
   prefix: string;
+};
+
+export type QuantumrootVaultRecord = {
+  id?: number;
+  wallet_id: number;
+  account_index: number;
+  address_index: number;
+  receive_address: string;
+  quantum_lock_address: string;
+  receive_locking_bytecode: string;
+  quantum_lock_locking_bytecode: string;
+  quantum_public_key: string;
+  quantum_key_identifier: string;
+  vault_token_category: string;
+  online_quantum_signer: 0 | 1;
+  created_at: string;
+  updated_at: string;
 };
 
 // BCMR Responses

@@ -1,5 +1,5 @@
 import { Capacitor } from '@capacitor/core';
-import SecureKeyStore from '../plugins/SecureKeyStore';
+import SecureKeyStore from '../platform/plugins/SecureKeyStore';
 
 export const SECRET_ENC_PREFIX = 'enc:v1:';
 const FALLBACK_KEY_STORAGE = 'optn_wallet_fallback_key_v1';

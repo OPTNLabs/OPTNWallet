@@ -4,9 +4,10 @@ import type { AddonSDK } from '../../services/AddonsSDK';
 import AuthGuardApp from './patient0/AuthGuardApp';
 import AirdropsApp from './event-rewards/EventRewardsApp';
 import FundMeAddonApp from './fundme/FundMeAddonApp';
-import MintCashTokensPoCApp from './mint-cashtokens-poc/MintCashTokensPoCApp';
 import MemoCashReaderApp from './memo-cash-reader/MemoCashReaderApp';
 import CauldronSwapApp from './cauldron/CauldronSwapApp';
+import ParyonWorkspaceApp from './paryon/ParyonWorkspaceApp';
+import MintCashTokensPoCApp from './mint-cashtokens-poc/MintCashTokensPoCApp';
 
 type ResolvedAppLike = {
   manifest: AddonManifest;
@@ -34,10 +35,6 @@ export function renderDeclarativeScreen(params: {
         />
       );
 
-    case 'MintCashTokensPoCApp':
-    case 'mintCashTokensPoCApp':
-      return <MintCashTokensPoCApp sdk={sdk} />;
-
     case 'MemoCashReaderApp':
     case 'memoCashReaderApp':
       return <MemoCashReaderApp sdk={sdk} />;
@@ -62,6 +59,11 @@ export function renderDeclarativeScreen(params: {
         />
       );
 
+    case 'MintCashTokensPoCApp':
+    case 'mintCashTokensPoCApp':
+    case 'mint-cashtokens-poc':
+      return <MintCashTokensPoCApp />;
+
     case 'CauldronSwapApp':
     case 'cauldronSwapApp':
       return (
@@ -71,6 +73,10 @@ export function renderDeclarativeScreen(params: {
           sdk={sdk}
         />
       );
+
+    case 'ParyonWorkspaceApp':
+    case 'paryonWorkspaceApp':
+      return <ParyonWorkspaceApp sdk={sdk} app={resolved.app} />;
 
     default:
       return null;

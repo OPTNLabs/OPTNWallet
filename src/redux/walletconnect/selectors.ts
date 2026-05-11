@@ -1,4 +1,4 @@
-import type { RootState } from '../store';
+import type { RootState } from '../../state/store';
 
 export const selectWalletConnectState = (state: RootState) => state.walletconnect;
 export const selectWalletKit = (state: RootState) => state.walletconnect.web3wallet;

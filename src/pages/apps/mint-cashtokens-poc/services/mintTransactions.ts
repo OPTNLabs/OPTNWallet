@@ -1,4 +1,5 @@
-import type { AddonSDK } from '../../../../services/AddonsSDK';
+import TransactionManager from '../../../../apis/TransactionManager/TransactionManager';
+import TransactionService from '../../../../services/TransactionService';
 import type { TransactionOutput } from '../../../../types/types';
 import type {
   MintAppUtxo,
@@ -16,35 +17,40 @@ import {
   utxoValue,
 } from '../utils';
 
-type SdkBuildResult = Awaited<ReturnType<AddonSDK['tx']['build']>>;
+type BuildResult = Awaited<
+  ReturnType<typeof TransactionService.buildTransaction>
+> & {
+  bytes: number;
+  hex: string;
+};
 
 type BuildBootstrapPreviewParams = {
-  sdk: AddonSDK;
+  sdk?: unknown;
   fundingUtxos: MintAppUtxo[];
   toAddress: string;
   changeAddress: string;
 };
 
 export async function buildBootstrapPreview({
-  sdk,
   fundingUtxos,
   toAddress,
   changeAddress,
 }: BuildBootstrapPreviewParams): Promise<{
-  built: SdkBuildResult;
+  built: BuildResult;
   feePaid: bigint;
 }> {
   const outputs: TransactionOutput[] = [
     { recipientAddress: toAddress, amount: 1000n },
   ];
 
-  const built = await sdk.tx.build({
-    inputs: fundingUtxos,
+  const built = await TransactionService.buildTransaction(
     outputs,
+    null,
     changeAddress,
-  });
+    fundingUtxos
+  );
   if (built.errorMsg) throw new Error(built.errorMsg);
-  if (!built.finalOutputs || !built.hex) {
+  if (!built.finalOutputs || !built.finalTransaction) {
     throw new Error('Failed to build bootstrap transaction.');
   }
 
@@ -52,11 +58,18 @@ export async function buildBootstrapPreview({
   const totalOutput = sumOutputs(built.finalOutputs);
   const feePaid = totalInput - totalOutput;
 
-  return { built, feePaid };
+  return {
+    built: {
+      ...built,
+      bytes: built.bytecodeSize,
+      hex: built.finalTransaction,
+    },
+    feePaid,
+  };
 }
 
 type BuildMintPreviewParams = {
-  sdk: AddonSDK;
+  sdk?: unknown;
   selectedUtxos: MintAppUtxo[];
   flatUtxos: MintAppUtxo[];
   activeOutputDrafts: MintOutputDraft[];
@@ -69,7 +82,6 @@ type BuildMintPreviewParams = {
 const BCMR_IDENTITY_OUTPUT_SATS = 1000n;
 
 export async function buildMintPreview({
-  sdk,
   selectedUtxos,
   flatUtxos,
   activeOutputDrafts,
@@ -78,7 +90,7 @@ export async function buildMintPreview({
   tokenOutputSats,
   bcmrPublication,
 }: BuildMintPreviewParams): Promise<{
-  built: SdkBuildResult;
+  built: BuildResult;
   inputsForBuild: MintAppUtxo[];
   feePaid: bigint;
 }> {
@@ -97,9 +109,9 @@ export async function buildMintPreview({
     throw new Error('No non-genesis UTXOs available to fund transaction fees.');
   }
 
-  let feeInputs: MintAppUtxo[] = [];
+  const feeInputs: MintAppUtxo[] = [];
   let inputsForBuild: MintAppUtxo[] = [];
-  let built: SdkBuildResult | null = null;
+  let built: BuildResult | null = null;
 
   for (let i = 0; i < feeCandidates.length; i++) {
     feeInputs.push(feeCandidates[i]);
@@ -126,16 +138,16 @@ export async function buildMintPreview({
       const isNFT = d.config.mintType === 'NFT';
       const tokenAmount = isNFT ? 0n : toBigIntSafe(d.config.ftAmount);
 
-      const out = sdk.tx.addOutput({
-        recipientAddress: d.recipientCashAddr,
-        transferAmount: tokenOutputSats,
+      const out = TransactionManager().addOutput(
+        d.recipientCashAddr,
+        tokenOutputSats,
         tokenAmount,
-        selectedTokenCategory: category,
-        selectedUtxos: inputsForBuild,
-        addresses: sdkAddressBook,
-        nftCapability: isNFT ? d.config.nftCapability : undefined,
-        nftCommitment: isNFT ? d.config.nftCommitment : undefined,
-      });
+        category,
+        inputsForBuild,
+        sdkAddressBook,
+        isNFT ? d.config.nftCapability : undefined,
+        isNFT ? d.config.nftCommitment : undefined
+      );
 
       if (!out) {
         throw new Error(
@@ -149,18 +161,23 @@ export async function buildMintPreview({
       outputs.push(out);
     }
 
-    const attempt = await sdk.tx.build({
-      inputs: inputsForBuild,
+    const attempt = await TransactionService.buildTransaction(
       outputs,
+      null,
       changeAddress,
-    });
+      inputsForBuild
+    );
     if (!attempt.errorMsg) {
-      built = attempt;
+      built = {
+        ...attempt,
+        bytes: attempt.bytecodeSize,
+        hex: attempt.finalTransaction,
+      };
       break;
     }
   }
 
-  if (!built || built.errorMsg || !built.finalOutputs || !built.hex) {
+  if (!built || built.errorMsg || !built.finalOutputs || !built.finalTransaction) {
     throw new Error(built?.errorMsg || 'Failed to build mint transaction.');
   }
 
@@ -168,5 +185,13 @@ export async function buildMintPreview({
   const totalOutput = sumOutputs(built.finalOutputs);
   const feePaid = totalInput - totalOutput;
 
-  return { built, inputsForBuild, feePaid };
+  return {
+    built: {
+      ...built,
+      bytes: built.bytecodeSize,
+      hex: built.finalTransaction,
+    },
+    inputsForBuild,
+    feePaid,
+  };
 }

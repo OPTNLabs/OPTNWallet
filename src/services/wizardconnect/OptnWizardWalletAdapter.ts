@@ -2,7 +2,7 @@ import { DerivationPath, type WalletAdapter, type SignTransactionResult } from '
 import type { SignTransactionRequest } from '@wizardconnect/core';
 import WalletManager from '../../apis/WalletManager/WalletManager';
 import KeyService from '../KeyService';
-import { Network } from '../../redux/networkSlice';
+import { Network } from '../../state/slices/networkSlice';
 import {
   createDeterministicRuntimeRelayKey,
   derivePublicKeyFromXpub,

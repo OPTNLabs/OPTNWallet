@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react';
 import { useSelector } from 'react-redux';
 import WalletManager from '../apis/WalletManager/WalletManager';
 import DeviceIntegrityService from '../services/DeviceIntegrityService';
-import { selectWalletId } from '../redux/walletSlice';
+import { selectWalletId } from '../state/slices/walletSlice';
 
 const RecoveryPhrase = () => {
   const [mnemonic, setMnemonic] = useState('');

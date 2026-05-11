@@ -2,7 +2,7 @@ import { createAsyncThunk } from '@reduxjs/toolkit';
 import type { WalletKitTypes } from '@reown/walletkit';
 import { getSdkError } from '@walletconnect/utils';
 import { Toast } from '@capacitor/toast';
-import type { RootState } from '../store';
+import type { RootState } from '../../state/store';
 import KeyService from '../../services/KeyService';
 import { SignedMessage } from '../../utils/signed';
 import { signWalletConnectTransactionRequest } from './signing';
@@ -185,7 +185,10 @@ export const checkAndDisconnectExpiredSessions = createAsyncThunk(
 
     const currentTime = Math.floor(Date.now() / 1000);
     const expiredTopics = Object.entries(activeSessions)
-      .filter(([, session]) => session.expiry && currentTime >= session.expiry)
+      .filter(([, session]) => {
+        const expiry = (session as { expiry?: number }).expiry;
+        return typeof expiry === 'number' && currentTime >= expiry;
+      })
       .map(([topic]) => topic);
     await Promise.allSettled(
       expiredTopics.map((topic) => dispatch(disconnectSession(topic)))

@@ -3,6 +3,7 @@ import type { AddonCapability, AddonManifest } from '../types/addons';
 import {
   assertUrlAllowedForAddon,
   getAddonGrantedCapabilities,
+  validateAddonPermissions,
 } from './AddonsAllowlist';
 
 import ElectrumService from './ElectrumService';
@@ -18,6 +19,7 @@ import {
   createAddonPolicyEngine,
   type AddonPolicyAuditEvent,
 } from './addons/AddonPolicyEngine';
+import { validateAddonManifestAgainstSchema } from './addons/AddonManifestSchema';
 import { getAddonSDKInfo, type AddonSDKInfo } from './addons/SDKContract';
 
 import TransactionManager from '../apis/TransactionManager/TransactionManager';
@@ -240,6 +242,14 @@ export function createAddonSDK(
   manifest: AddonManifest,
   ctx: AddonSDKContext
 ): AddonSDK {
+  const schemaErrors = validateAddonManifestAgainstSchema(manifest);
+  if (schemaErrors.length) {
+    throw new Error(
+      `Addon "${manifest?.id ?? '(unknown)'}" failed schema checks: ${schemaErrors.join('; ')}`
+    );
+  }
+  validateAddonPermissions(manifest);
+
   const txMgr = TransactionManager();
   const bcmr = new BcmrService();
   const manifestCapabilities = getAddonGrantedCapabilities(manifest);
