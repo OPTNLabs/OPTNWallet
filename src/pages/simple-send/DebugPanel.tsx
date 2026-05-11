@@ -1,1 +1,1 @@
-export { DebugPanel } from './components/DebugPanel';
+export { default } from '../../features/simple-send/DebugPanel';

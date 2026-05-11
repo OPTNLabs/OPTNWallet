@@ -19,7 +19,7 @@ import {
 import { compileScriptRaw } from '@bitauth/libauth/build/lib/language/resolve.js';
 
 import quantumrootTemplateJson from '../../../../reference/quantumroot/quantumroot-schnorr-lm-ots-vault.json';
-import { Network } from '../../redux/networkSlice';
+import { Network } from '../../state/slices/networkSlice';
 import { deriveQuantumrootVault, zeroizeQuantumrootArtifacts } from '../QuantumrootService';
 import {
   buildQuantumrootAuthorizedSpendTransaction,
@@ -33,6 +33,8 @@ const TEST_MNEMONIC =
   'abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about';
 
 const importedQuantumrootTemplate = importWalletTemplate(quantumrootTemplateJson);
+type QuantumrootCompiler = ReturnType<typeof createCompilerBCH>;
+type QuantumrootCompilationData = Parameters<QuantumrootCompiler['generateBytecode']>[0]['data'];
 
 const toTemplateVaultTokenCategory = (category: string) =>
   `0x${swapEndianness(category.trim().replace(/^0x/i, '').toLowerCase())}`;
@@ -48,6 +50,10 @@ function instructionHasData(
   { data: Uint8Array }
 > {
   return 'data' in instruction && instruction.data !== undefined;
+}
+
+function getCompileErrors(result: { errors?: unknown }): unknown {
+  return result.errors;
 }
 
 describe('QuantumrootRecoveryService', () => {
@@ -150,14 +156,14 @@ describe('QuantumrootRecoveryService', () => {
               ],
             },
           },
-        } as any,
+        } as QuantumrootCompilationData,
         scriptId: 'receive_address',
       });
       expect(rawReceiveAddress.success).toBe(true);
       if (!rawReceiveAddress.success) {
         throw new Error(
           `Failed to compile raw receive_address redeem script: ${JSON.stringify(
-            (rawReceiveAddress as any).errors
+            getCompileErrors(rawReceiveAddress)
           )}`
         );
       }
@@ -802,7 +808,7 @@ describe('QuantumrootRecoveryService', () => {
             token_spend_index: '0',
             vault_token_category: toTemplateVaultTokenCategory('00'.repeat(32)),
           },
-        } as any,
+        } as QuantumrootCompilationData,
       });
 
       const newCompiler = createCompilerBCH(
@@ -822,7 +828,7 @@ describe('QuantumrootRecoveryService', () => {
             token_spend_index: '0',
             vault_token_category: '00'.repeat(32),
           },
-        } as any,
+        } as QuantumrootCompilationData,
       });
       expect(oldNested.success).toBe(true);
       expect(newNested.success).toBe(true);
@@ -916,7 +922,7 @@ describe('QuantumrootRecoveryService', () => {
             version: 2,
           },
         },
-      } as any;
+      } as QuantumrootCompilationData;
 
       const rawReceiveAddress = compileScriptRaw({
         configuration,
@@ -926,7 +932,7 @@ describe('QuantumrootRecoveryService', () => {
       if (!rawReceiveAddress.success) {
         throw new Error(
           `Failed to compile raw receive_address redeem script: ${JSON.stringify(
-            (rawReceiveAddress as any).errors
+            getCompileErrors(rawReceiveAddress)
           )}`
         );
       }
@@ -938,7 +944,7 @@ describe('QuantumrootRecoveryService', () => {
       if (!generatedUnlock.success) {
         throw new Error(
           `Failed to compile schnorr_spend unlock: ${JSON.stringify(
-            (generatedUnlock as any).errors
+            getCompileErrors(generatedUnlock)
           )}`
         );
       }
@@ -1039,7 +1045,7 @@ describe('QuantumrootRecoveryService', () => {
             version: 2,
           },
         },
-      } as any;
+      } as QuantumrootCompilationData;
 
       const rawTokenLeaf = compileScriptRaw({
         configuration,
@@ -1050,7 +1056,7 @@ describe('QuantumrootRecoveryService', () => {
       if (!rawTokenLeaf.success) {
         throw new Error(
           `Failed to compile raw receive_address_token_spend leaf: ${JSON.stringify(
-            (rawTokenLeaf as any).errors
+            getCompileErrors(rawTokenLeaf)
           )}`
         );
       }
@@ -1070,7 +1076,7 @@ describe('QuantumrootRecoveryService', () => {
       if (!prefixedTokenLeaf.success) {
         throw new Error(
           `Failed to compile prefixed receive_address_token_spend leaf: ${JSON.stringify(
-            (prefixedTokenLeaf as any).errors
+            getCompileErrors(prefixedTokenLeaf)
           )}`
         );
       }
@@ -1083,7 +1089,7 @@ describe('QuantumrootRecoveryService', () => {
       if (!generatedUnlock.success) {
         throw new Error(
           `Failed to compile token_spend unlock: ${JSON.stringify(
-            (generatedUnlock as any).errors
+            getCompileErrors(generatedUnlock)
           )}`
         );
       }
@@ -1113,7 +1119,7 @@ describe('QuantumrootRecoveryService', () => {
       if (!rawReceive.success) {
         throw new Error(
           `Failed to compile raw receive_address for token analysis: ${JSON.stringify(
-            (rawReceive as any).errors
+            getCompileErrors(rawReceive)
           )}`
         );
       }
@@ -1133,7 +1139,7 @@ describe('QuantumrootRecoveryService', () => {
       if (!rawSchnorrLeaf.success) {
         throw new Error(
           `Failed to compile raw receive_address_schnorr_spend for token analysis: ${JSON.stringify(
-            (rawSchnorrLeaf as any).errors
+            getCompileErrors(rawSchnorrLeaf)
           )}`
         );
       }
@@ -1153,7 +1159,7 @@ describe('QuantumrootRecoveryService', () => {
       if (!legacyRawTokenLeaf.success) {
         throw new Error(
           `Failed to compile legacy receive_address_token_spend leaf: ${JSON.stringify(
-            (legacyRawTokenLeaf as any).errors
+            getCompileErrors(legacyRawTokenLeaf)
           )}`
         );
       }
@@ -1235,7 +1241,7 @@ describe('QuantumrootRecoveryService', () => {
             version: 2,
           },
         },
-      } as any);
+      } as QuantumrootCompilationData);
 
       const prefixed = compileScriptRaw({
         configuration,
@@ -1398,7 +1404,7 @@ describe('QuantumrootRecoveryService', () => {
             ],
           },
         },
-      } as any;
+      } as QuantumrootCompilationData;
 
       assertSuccess(
         compiler.generateBytecode({
@@ -1416,7 +1422,7 @@ describe('QuantumrootRecoveryService', () => {
       if (!rawQuantumLockVerifyTransactionShape.success) {
         throw new Error(
           `Failed to compile raw quantum_lock_verify_transaction_shape: ${JSON.stringify(
-            (rawQuantumLockVerifyTransactionShape as any).errors
+            getCompileErrors(rawQuantumLockVerifyTransactionShape)
           )}`
         );
       }
@@ -1430,7 +1436,7 @@ describe('QuantumrootRecoveryService', () => {
       if (!compiledQuantumPublicKey.success) {
         throw new Error(
           `Failed to compile quantum_public_key: ${JSON.stringify(
-            (compiledQuantumPublicKey as any).errors
+            getCompileErrors(compiledQuantumPublicKey)
           )}`
         );
       }

@@ -109,7 +109,7 @@ export async function buildMintPreview({
     throw new Error('No non-genesis UTXOs available to fund transaction fees.');
   }
 
-  let feeInputs: MintAppUtxo[] = [];
+  const feeInputs: MintAppUtxo[] = [];
   let inputsForBuild: MintAppUtxo[] = [];
   let built: BuildResult | null = null;
 

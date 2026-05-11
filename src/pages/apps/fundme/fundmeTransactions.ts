@@ -3,11 +3,25 @@ import {
   cashAddressToLockingBytecode,
   decodeTransaction,
 } from '@bitauth/libauth';
-import { Contract, ElectrumNetworkProvider, Network, TransactionBuilder, Unlocker } from 'cashscript';
+import {
+  Contract,
+  ElectrumNetworkProvider,
+  Network,
+  TransactionBuilder,
+  Unlocker,
+  type Utxo,
+} from 'cashscript';
 
 import type { AddonSDK } from '../../../services/AddonsSDK';
 import type { ChainCampaign } from './types';
 import { FUNDME_CONTRACT_ARTIFACTS } from './contracts';
+import {
+  AddressTokensCashStarter,
+  AddressTokensCashStarterCancel,
+  AddressTokensCashStarterClaim,
+  AddressTokensCashStarterRefund,
+  AddressTokensCashStarterStop,
+} from './values';
 import { MasterCategoryID } from './values';
 
 type FundMeActionResult = {
@@ -51,7 +65,7 @@ function campaignUtxoMatches(campaignId: number) {
 }
 
 function makeContract(network: string | null | undefined, artifact: unknown) {
-  return new Contract(artifact as never, [], {
+  return new Contract(artifact as never, [] as never, {
     provider: toCashscriptProvider(network),
     addressType: 'p2sh32',
   });
@@ -185,7 +199,7 @@ export async function refundPledge(args: {
   const tx = await new TransactionBuilder({ provider: toCashscriptProvider(network) })
     .addInput(refundUtxo, (refundContract as any).unlock.refund())
     .addInput(campaignUtxo, (contract as any).unlock.externalFunction())
-    .addInput(pledge as any, p2pkhUnlocker)
+    .addInput(pledge as unknown as Utxo, p2pkhUnlocker)
     .addOutput({
       to: AddressTokensCashStarterRefund,
       amount: refundUtxo.satoshis,
@@ -295,7 +309,7 @@ export async function cancelCampaign(args: {
   const tx = await new TransactionBuilder({ provider: toCashscriptProvider(network) })
     .addInput(cancelUtxo, (cancelContract as any).unlock.cancel())
     .addInput(campaignUtxo, (contract as any).unlock.externalFunction())
-    .addInput(userUtxo, p2pkhUnlocker)
+    .addInput(userUtxo as unknown as Utxo, p2pkhUnlocker)
     .addOutput({
       to: AddressTokensCashStarterCancel,
       amount: cancelUtxo.satoshis,
@@ -348,7 +362,7 @@ export async function claimCampaign(args: {
   const tx = await new TransactionBuilder({ provider: toCashscriptProvider(network), maximumFeeSatoshis: 2000n })
     .addInput(claimUtxo, (claimContract as any).unlock.claim(servicePKH, serviceFee))
     .addInput(campaignUtxo, (contract as any).unlock.externalFunction())
-    .addInput(userUtxo, p2pkhUnlocker)
+    .addInput(userUtxo as unknown as Utxo, p2pkhUnlocker)
     .addOutput({
       to: AddressTokensCashStarterClaim,
       amount: claimUtxo.satoshis,

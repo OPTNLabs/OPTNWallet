@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useLocation, useNavigate } from 'react-router-dom';
 import { useSelector } from 'react-redux';
 import { Toast } from '@capacitor/toast';
 import {
@@ -11,7 +11,7 @@ import { CapacitorBarcodeScannerTypeHint } from '@capacitor/barcode-scanner';
 import WalletScreen from '../components/ui/WalletScreen';
 import PageHeader from '../components/ui/PageHeader';
 import SectionCard from '../components/ui/SectionCard';
-import { RootState } from '../redux/store';
+import { RootState } from '../state/store';
 import { PREFIX } from '../utils/constants';
 import {
   scanBarcodeSafely,
@@ -25,8 +25,9 @@ import {
 } from './apps/mint-cashtokens-poc/components/uiPrimitives';
 import TransactionService from '../services/TransactionService';
 import { logError } from '../utils/errorHandling';
-import { selectCurrentNetwork } from '../redux/selectors/networkSelectors';
+import { selectCurrentNetwork } from '../state/selectors/networkSelectors';
 import ElectrumService from '../services/ElectrumService';
+import { getReturnPath } from '../utils/navigation';
 
 const BASE58_WIF_PATTERN =
   /^[123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz]+$/;
@@ -83,6 +84,8 @@ type SweepState = {
 
 export default function PaperWalletSweep() {
   const navigate = useNavigate();
+  const location = useLocation();
+  const backTarget = getReturnPath(location, '/apps');
   const currentWalletId = useSelector(
     (state: RootState) => state.wallet_id.currentWalletId
   );
@@ -295,19 +298,7 @@ export default function PaperWalletSweep() {
   return (
     <WalletScreen maxWidthClassName="max-w-md" scrollable={false}>
       <div className="flex h-full min-h-0 flex-col">
-        <PageHeader
-          title="Paper Wallet"
-          compact
-          titleAction={
-            <button
-              type="button"
-              onClick={() => navigate('/apps')}
-              className="wallet-btn-danger px-4 py-2"
-            >
-              Go Back
-            </button>
-          }
-        />
+        <PageHeader title="Paper Wallet" compact />
         <p className="mt-2 text-sm wallet-muted">
           Scan a WIF paper wallet and sweep BCH + CashTokens in one transaction.
         </p>
@@ -386,6 +377,16 @@ export default function PaperWalletSweep() {
               </ul>
             )}
           </SectionCard>
+        </div>
+
+        <div className="mt-auto flex-none pt-3">
+          <button
+            type="button"
+            onClick={() => navigate(backTarget)}
+            className="wallet-btn-danger w-full py-3 font-semibold"
+          >
+            Back
+          </button>
         </div>
       </div>
 

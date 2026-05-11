@@ -1,5 +1,5 @@
 import { Capacitor } from '@capacitor/core';
-import PlayUpdate, { type PlayUpdateStatus } from '../plugins/PlayUpdate';
+import PlayUpdate, { type PlayUpdateStatus } from '../platform/plugins/PlayUpdate';
 
 const LAST_CHECK_KEY = 'optn_play_update_last_check_v1';
 const LAST_VERSION_KEY = 'optn_play_update_last_version_v1';

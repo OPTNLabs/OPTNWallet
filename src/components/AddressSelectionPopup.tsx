@@ -3,9 +3,9 @@ import KeyService from '../services/KeyService';
 import { shortenTxHash } from '../utils/shortenHash';
 import { PREFIX } from '../utils/constants';
 import { useSelector } from 'react-redux';
-import { RootState } from '../redux/store';
-import { selectCurrentNetwork } from '../redux/selectors/networkSelectors';
-import { selectWalletId } from '../redux/walletSlice';
+import { RootState } from '../state/store';
+import { selectCurrentNetwork } from '../state/selectors/networkSelectors';
+import { selectWalletId } from '../state/slices/walletSlice';
 
 interface AddressSelectionPopupProps {
   onSelect: (address: string) => void;

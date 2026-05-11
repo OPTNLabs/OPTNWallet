@@ -18,6 +18,16 @@ import {
   resolveCurrentPoolForReview,
 } from '../preflight';
 
+type ChaingraphSdk = {
+  chain: {
+    queryUnspentByLockingBytecode: () => Promise<{
+      data: {
+        output: unknown[];
+      };
+    }>;
+  };
+};
+
 function makeUtxo(overrides?: Partial<UTXO>): UTXO {
   return {
     address: 'bitcoincash:qpm2qsznhks23z7629mms6s4cwef74vcwvy22gdx6a',
@@ -182,7 +192,7 @@ describe('cauldron preflight helpers', () => {
       },
     });
 
-    const sdk = {
+    const sdk: ChaingraphSdk = {
       chain: {
         queryUnspentByLockingBytecode: async () => ({
           data: {
@@ -203,7 +213,7 @@ describe('cauldron preflight helpers', () => {
     };
 
     const resolved = await fetchCurrentQuotedPoolsFromChain({
-      sdk: sdk as any,
+      sdk,
       quotedPools: [reviewedPool],
     });
 
@@ -218,7 +228,7 @@ describe('cauldron preflight helpers', () => {
       outputIndex: 1,
     });
 
-    const sdk = {
+    const sdk: ChaingraphSdk = {
       chain: {
         queryUnspentByLockingBytecode: async () => ({
           data: {
@@ -229,7 +239,7 @@ describe('cauldron preflight helpers', () => {
     };
 
     const resolved = await fetchCurrentQuotedPoolsFromChain({
-      sdk: sdk as any,
+      sdk,
       quotedPools: [reviewedPool],
     });
 
@@ -265,7 +275,7 @@ describe('cauldron preflight helpers', () => {
       },
     });
 
-    const sdk = {
+    const sdk: ChaingraphSdk = {
       chain: {
         queryUnspentByLockingBytecode: async () => ({
           data: {
@@ -281,7 +291,7 @@ describe('cauldron preflight helpers', () => {
     };
 
     const resolved = await fetchVisiblePoolsFromChain({
-      sdk: sdk as any,
+      sdk,
       visiblePools: [confirmedPool, stalePool],
     });
 
@@ -307,7 +317,7 @@ describe('cauldron preflight helpers', () => {
       },
     });
 
-    const sdk = {
+    const sdk: ChaingraphSdk = {
       chain: {
         queryUnspentByLockingBytecode: async () => ({
           data: {
@@ -323,7 +333,7 @@ describe('cauldron preflight helpers', () => {
     };
 
     const resolved = await fetchVisiblePoolsFromChain({
-      sdk: sdk as any,
+      sdk,
       visiblePools: [confirmedPool],
     });
 
@@ -388,7 +398,7 @@ describe('cauldron preflight helpers', () => {
       },
     });
 
-    const sdk = {
+    const sdk: ChaingraphSdk = {
       chain: {
         queryUnspentByLockingBytecode: async () => ({
           data: {
@@ -408,7 +418,7 @@ describe('cauldron preflight helpers', () => {
     };
 
     const resolved = await fetchVisiblePoolsFromChain({
-      sdk: sdk as any,
+      sdk,
       visiblePools: [reviewedPool],
     });
 
@@ -436,7 +446,7 @@ describe('cauldron preflight helpers', () => {
       },
     });
 
-    const sdk = {
+    const sdk: ChaingraphSdk = {
       chain: {
         queryUnspentByLockingBytecode: async () => ({
           data: {
@@ -457,7 +467,7 @@ describe('cauldron preflight helpers', () => {
     };
 
     const resolved = await fetchVisiblePoolsFromChain({
-      sdk: sdk as any,
+      sdk,
       visiblePools: [reviewedPool],
     });
 
@@ -473,7 +483,7 @@ describe('cauldron preflight helpers', () => {
       outputIndex: 0,
     });
 
-    const sdk = {
+    const sdk: ChaingraphSdk = {
       chain: {
         queryUnspentByLockingBytecode: async () => ({
           data: {
@@ -484,7 +494,7 @@ describe('cauldron preflight helpers', () => {
     };
 
     const resolved = await fetchVisiblePoolsFromChain({
-      sdk: sdk as any,
+      sdk,
       visiblePools: [visiblePool],
     });
 
@@ -520,14 +530,14 @@ describe('cauldron preflight helpers', () => {
       },
     }));
 
-    const sdk = {
+    const sdk: ChaingraphSdk = {
       chain: {
         queryUnspentByLockingBytecode,
       },
     };
 
     const resolved = await fetchVisiblePoolsFromChain({
-      sdk: sdk as any,
+      sdk,
       visiblePools: [confirmedPool, confirmedPool],
     });
 

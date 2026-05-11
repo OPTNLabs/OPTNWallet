@@ -1,4 +1,4 @@
-import { store } from '../redux/store';
+import { store } from '../state/store';
 import { getInfraUrlPools, runWithFailover } from '../utils/servers/InfraUrls';
 
 export type IpfsUploadResult = {

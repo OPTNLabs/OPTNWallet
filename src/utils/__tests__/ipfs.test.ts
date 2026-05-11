@@ -3,7 +3,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { ipfsFetch, resolveIpfsGatewayUrl } from '../ipfs';
 import { getInfraUrlPools, runWithFailover } from '../servers/InfraUrls';
 
-vi.mock('../../redux/store', () => ({
+vi.mock('../../state/store', () => ({
   store: {
     getState: vi.fn(() => ({ network: { currentNetwork: 'mainnet' } })),
   },

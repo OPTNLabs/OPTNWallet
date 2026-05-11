@@ -19,7 +19,7 @@ import {
   lockingBytecodeToCashAddress,
 } from '@bitauth/libauth';
 import type { WalletKitTypes } from '@reown/walletkit';
-import type { RootState } from '../store';
+import type { RootState } from '../../state/store';
 import KeyService from '../../services/KeyService';
 import { parseExtendedJson } from '../../utils/parseExtendedJson';
 import type { ContractInfo } from '../../types/wcInterfaces';

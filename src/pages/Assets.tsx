@@ -2,7 +2,7 @@ import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useSelector } from 'react-redux';
 import { FaBitcoin } from 'react-icons/fa';
-import { RootState } from '../redux/store';
+import { RootState } from '../state/store';
 import PageHeader from '../components/ui/PageHeader';
 import SectionCard from '../components/ui/SectionCard';
 import SectionHeader from '../components/ui/SectionHeader';
@@ -10,18 +10,17 @@ import EmptyState from '../components/ui/EmptyState';
 import { SATSINBITCOIN } from '../utils/constants';
 import { shortenTxHash } from '../utils/shortenHash';
 import useSharedTokenMetadata from '../hooks/useSharedTokenMetadata';
-import { Network } from '../redux/networkSlice';
+import { Network } from '../state/slices/networkSlice';
 import TokenAvatar from '../components/ui/TokenAvatar';
 import Popup from '../components/transaction/Popup';
 import TokenQuery from '../components/TokenQuery';
 import { IdentitySnapshot } from '@bitauth/libauth';
 import WalletScreen from '../components/ui/WalletScreen';
-import QuantumrootPortfolioService from '../services/QuantumrootPortfolioService';
 import TransactionService from '../services/TransactionService';
-import { logError } from '../utils/errorHandling';
 import type { UTXO } from '../types/types';
 import useFetchWalletData from '../hooks/useFetchWalletData';
 import UTXOService from '../services/UTXOService';
+import { logError } from '../utils/errorHandling';
 
 type AssetTab = 'BCH' | 'Tokens' | 'NFTs';
 const isDev = import.meta.env.DEV;
@@ -44,12 +43,11 @@ const Assets: React.FC = () => {
   const navigate = useNavigate();
   const [tab, setTab] = useState<AssetTab>('BCH');
   const [selectedTokenCategory, setSelectedTokenCategory] = useState<string | null>(null);
-  const [quantumrootBalance, setQuantumrootBalance] = useState(0);
-  const [quantumrootVaultCount, setQuantumrootVaultCount] = useState(0);
   const currentWalletId = useSelector((state: RootState) => state.wallet_id.currentWalletId);
   const totalBalance = useSelector((state: RootState) => state.utxos.totalBalance);
-  const fetchingUTXOs = useSelector((state: RootState) => state.utxos.fetchingUTXOs);
   const currentNetwork = useSelector((state: RootState) => state.network.currentNetwork);
+  const bchUsdQuote = useSelector((state: RootState) => state.priceFeed['BCH-USD']?.price);
+  const [displayMode, setDisplayMode] = useState<'BCH' | 'USD'>('BCH');
   const [walletAddresses, setWalletAddresses] = useState<
     { address: string; tokenAddress: string }[]
   >([]);
@@ -59,26 +57,6 @@ const Assets: React.FC = () => {
   const [, setWalletError] = useState<string | null>(null);
   const [tokenUtxos, setTokenUtxos] = useState<UTXO[]>([]);
   const noopSetUtxos = useCallback(() => undefined, []);
-
-  const refreshQuantumrootPortfolio = useCallback(async () => {
-    if (!currentWalletId) {
-      setQuantumrootBalance(0);
-      setQuantumrootVaultCount(0);
-      return;
-    }
-
-    try {
-      const summary = await QuantumrootPortfolioService.summarizeWallet(currentWalletId);
-      setQuantumrootBalance(summary.quantumrootBalanceSats);
-      setQuantumrootVaultCount(summary.vaultCount);
-    } catch (error) {
-      logError('Assets.refreshQuantumrootPortfolio', error, { walletId: currentWalletId });
-    }
-  }, [currentWalletId]);
-
-  useEffect(() => {
-    void refreshQuantumrootPortfolio();
-  }, [refreshQuantumrootPortfolio]);
 
   useFetchWalletData(
     currentWalletId,
@@ -208,6 +186,8 @@ const Assets: React.FC = () => {
       ? '1 decimal'
       : `${normalizedDecimals} decimals`;
   }, []);
+  const totalBch = totalBalance / SATSINBITCOIN;
+  const totalUsd = typeof bchUsdQuote === 'number' ? totalBch * bchUsdQuote : null;
 
   useEffect(() => {
     if (!isDev) return;
@@ -251,29 +231,62 @@ const Assets: React.FC = () => {
           {tab === 'BCH' && (
             <div className="flex h-full min-h-0 flex-col gap-3">
               <SectionCard className="p-3">
-                <SectionHeader title="Bitcoin Cash" subtitle="Primary wallet balance" compact />
-                <div className="flex items-center justify-between gap-3">
-                  <div>
+              <SectionHeader title="Bitcoin Cash" subtitle="Primary wallet balance" compact />
+              <div className="flex items-center justify-between gap-3">
+                <div>
+                  <button
+                    type="button"
+                    onClick={() => setDisplayMode((mode) => (mode === 'BCH' ? 'USD' : 'BCH'))}
+                    className="text-left"
+                  >
                     <div className="text-2xl font-bold wallet-text-strong">
-                      {(totalBalance / SATSINBITCOIN).toFixed(8)} BCH
+                      {displayMode === 'BCH'
+                        ? `${totalBch.toFixed(8)} BCH`
+                        : totalUsd !== null
+                          ? `$${totalUsd.toFixed(2)} USD`
+                          : 'USD unavailable'}
                     </div>
                     <div className="text-xs wallet-muted">
-                      {fetchingUTXOs ? 'Refreshing balances…' : `${totalBalance.toLocaleString()} sats`}
+                      {displayMode === 'BCH'
+                        ? totalUsd !== null
+                          ? `$${totalUsd.toFixed(2)} USD`
+                          : 'USD price unavailable'
+                        : `${totalBch.toFixed(8)} BCH`}
                     </div>
+                  </button>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setDisplayMode((mode) => (mode === 'BCH' ? 'USD' : 'BCH'))}
+                  className="flex h-14 w-14 items-center justify-center rounded-3xl bg-[color-mix(in_oklab,var(--wallet-accent-soft)_72%,transparent)] text-[var(--wallet-accent-strong)] transition hover:brightness-[1.04]"
+                  aria-label="Toggle BCH and USD balance"
+                >
+                  <FaBitcoin className="text-2xl" />
+                </button>
+              </div>
+            </SectionCard>
+
+              <SectionCard className="p-3">
+                <SectionHeader
+                  title="CashToken holdings"
+                  subtitle="Quick view of your wallet inventory"
+                  compact
+                />
+                <div className="grid grid-cols-3 gap-2.5">
+                  <div className="wallet-card p-3 text-left">
+                    <div className="text-lg font-bold wallet-text-strong">{fungibleTokens.length}</div>
+                    <div className="text-xs wallet-muted">fungible</div>
                   </div>
-                  <div className="flex h-14 w-14 items-center justify-center rounded-3xl bg-[color-mix(in_oklab,var(--wallet-accent-soft)_72%,transparent)] text-[var(--wallet-accent-strong)]">
-                    <FaBitcoin className="text-2xl" />
+                  <div className="wallet-card p-3 text-left">
+                    <div className="text-lg font-bold wallet-text-strong">{nftTokens.length}</div>
+                    <div className="text-xs wallet-muted">NFTs</div>
+                  </div>
+                  <div className="wallet-card p-3 text-left">
+                    <div className="text-lg font-bold wallet-text-strong">{entries.length}</div>
+                    <div className="text-xs wallet-muted">categories</div>
                   </div>
                 </div>
               </SectionCard>
-              <div className="grid grid-cols-2 gap-2.5">
-                <button className="wallet-btn-primary py-2.5" onClick={() => navigate('/receive')}>
-                  Receive
-                </button>
-                <button className="wallet-btn-secondary py-2.5" onClick={() => navigate('/send')}>
-                  Send
-                </button>
-              </div>
             </div>
           )}
 
@@ -412,14 +425,12 @@ const Assets: React.FC = () => {
             <div className="flex items-center justify-between gap-3">
               <div>
                 <div className="text-sm font-semibold wallet-text-strong">
-                  {quantumrootVaultCount > 0
-                    ? `${quantumrootVaultCount} vault${quantumrootVaultCount === 1 ? '' : 's'} tracked`
-                    : 'No vaults tracked yet'}
+                  {currentNetwork === Network.CHIPNET
+                    ? 'Advanced vault workspace'
+                    : 'Vault workspace'}
                 </div>
                 <div className="text-xs wallet-muted">
-                  {quantumrootBalance > 0
-                    ? `${(quantumrootBalance / SATSINBITCOIN).toFixed(8)} BCH`
-                    : 'Receive and recovery tools for advanced vaults'}
+                  Receive and recovery tools for advanced vaults
                 </div>
               </div>
             </div>

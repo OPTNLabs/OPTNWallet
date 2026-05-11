@@ -2,14 +2,16 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import KeyManager from '../KeyManager';
 import DatabaseService from '../../DatabaseManager/DatabaseService';
-import SecretCryptoService from '../../../services/SecretCryptoService';
+import SecretCryptoService, {
+  isEncryptedPayload,
+} from '../../../services/SecretCryptoService';
 import QuantumrootVaultCacheService from '../../../services/QuantumrootVaultCacheService';
 import {
   deriveBchChild,
   deriveBchStandardXpubs,
 } from '../../../services/HdWalletService';
 import { deriveQuantumrootVault } from '../../../services/QuantumrootService';
-import { Network } from '../../../redux/networkSlice';
+import { Network } from '../../../state/slices/networkSlice';
 
 vi.mock('../../DatabaseManager/DatabaseService', () => ({
   default: vi.fn(),
@@ -41,7 +43,7 @@ vi.mock('../../../services/QuantumrootService', () => ({
     (
       walletId: number,
       accountIndex: number,
-      vault: any,
+      vault: { addressIndex: number; receiveAddress: string; quantumLockAddress: string },
       onlineQuantumSigner = 0,
       vaultTokenCategory = '00'.repeat(32)
     ) => ({
@@ -152,6 +154,37 @@ describe('KeyManager', () => {
     expect(
       Array.from((await km.fetchAddressPrivateKey('bitcoincash:q2')) || [])
     ).toEqual([6, 5, 4]);
+  });
+
+  it('fetchAddressPrivateKey decrypts encrypted binary payloads', async () => {
+    const encrypted = new TextEncoder().encode('enc:v1:Zm9vYmFy');
+    const fetchQuery = {
+      get: vi.fn(() => [encrypted]),
+      free: vi.fn(),
+    };
+
+    const db = {
+      prepare: vi.fn(() => fetchQuery),
+    };
+
+    mockedDatabaseService.mockReturnValue({
+      ensureDatabaseStarted: vi.fn(async () => {}),
+      getDatabase: vi.fn(() => db),
+      flushDatabaseToFile: vi.fn(async () => {}),
+    } as never);
+
+    vi.mocked(isEncryptedPayload).mockReturnValueOnce(true);
+    mockedSecretCryptoService.decryptBytes.mockResolvedValueOnce(
+      Uint8Array.from([1, 2, 3, 4])
+    );
+
+    const km = KeyManager();
+    expect(
+      Array.from((await km.fetchAddressPrivateKey('bitcoincash:q3')) || [])
+    ).toEqual([1, 2, 3, 4]);
+    expect(mockedSecretCryptoService.decryptBytes).toHaveBeenCalledWith(
+      'enc:v1:Zm9vYmFy'
+    );
   });
 
   it('fetchAddressPrivateKey throws when key is missing', async () => {

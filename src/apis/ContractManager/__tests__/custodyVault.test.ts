@@ -9,6 +9,7 @@ import {
 } from '@bitauth/libauth';
 import {
   Contract,
+  type Artifact,
   HashType,
   MockNetworkProvider,
   SignatureTemplate,
@@ -18,6 +19,11 @@ import { addressToLockScript } from 'cashscript/dist/utils.js';
 
 import CustodyVaultArtifact from '../artifacts/CustodyVault.json';
 
+const CUSTODY_VAULT_ARTIFACT = {
+  ...CustodyVaultArtifact,
+  source: 'test',
+} satisfies Artifact;
+
 const OWNER_PRIVATE_KEY = hexToBin('11'.repeat(32));
 const CUSTODIAN_PRIVATE_KEY = hexToBin('22'.repeat(32));
 const RECOVERY_PRIVATE_KEY = hexToBin('33'.repeat(32));
@@ -26,16 +32,24 @@ const FEE_SATS = 1_000n;
 const RECOVERY_TIMEOUT = 1_000n;
 const RELEASE_AT = 200n;
 
+function toUint8Array(value: string | Uint8Array): Uint8Array {
+  return typeof value === 'string' ? hexToBin(value) : value;
+}
+
+function toBin(value: string | Uint8Array): Uint8Array {
+  return typeof value === 'string' ? hexToBin(value) : value;
+}
+
 function createFixture() {
   const provider = new MockNetworkProvider();
-  const ownerPk = secp256k1.derivePublicKeyCompressed(OWNER_PRIVATE_KEY);
-  const custodianPk = secp256k1.derivePublicKeyCompressed(
+  const ownerPk = toBin(secp256k1.derivePublicKeyCompressed(OWNER_PRIVATE_KEY));
+  const custodianPk = toBin(secp256k1.derivePublicKeyCompressed(
     CUSTODIAN_PRIVATE_KEY
-  );
-  const recoveryPk = secp256k1.derivePublicKeyCompressed(RECOVERY_PRIVATE_KEY);
-  const ownerPkh = hash160(ownerPk);
-  const custodianPkh = hash160(custodianPk);
-  const recoveryPkh = hash160(recoveryPk);
+  ));
+  const recoveryPk = toBin(secp256k1.derivePublicKeyCompressed(RECOVERY_PRIVATE_KEY));
+  const ownerPkh = toUint8Array(hash160(ownerPk));
+  const custodianPkh = toUint8Array(hash160(custodianPk));
+  const recoveryPkh = toUint8Array(hash160(recoveryPk));
   const ownerLockingBytecode = privateKeyToP2pkhLockingBytecode({
     privateKey: OWNER_PRIVATE_KEY,
   });
@@ -49,7 +63,7 @@ function createFixture() {
   const ownerAddress = ownerAddressResult.address;
 
   const release = new Contract(
-    CustodyVaultArtifact,
+    CUSTODY_VAULT_ARTIFACT,
     [
       ownerPkh,
       custodianPkh,
@@ -65,7 +79,7 @@ function createFixture() {
   );
 
   const vault = new Contract(
-    CustodyVaultArtifact,
+    CUSTODY_VAULT_ARTIFACT,
     [
       ownerPkh,
       custodianPkh,
@@ -120,33 +134,33 @@ function createFixture() {
 describe('custody vault artifacts', () => {
   it('derive the same address for identical constructor params and different addresses for different release states', () => {
     const provider = new MockNetworkProvider();
-    const ownerPk = secp256k1.derivePublicKeyCompressed(OWNER_PRIVATE_KEY);
-    const ownerPkh = hash160(ownerPk);
-    const custodianPkh = hash160(
-      secp256k1.derivePublicKeyCompressed(CUSTODIAN_PRIVATE_KEY)
+    const ownerPk = toBin(secp256k1.derivePublicKeyCompressed(OWNER_PRIVATE_KEY));
+    const ownerPkh = toUint8Array(hash160(ownerPk));
+    const custodianPkh = toUint8Array(
+      hash160(toBin(secp256k1.derivePublicKeyCompressed(CUSTODIAN_PRIVATE_KEY)))
     );
-    const recoveryPkh = hash160(
-      secp256k1.derivePublicKeyCompressed(RECOVERY_PRIVATE_KEY)
+    const recoveryPkh = toUint8Array(
+      hash160(toBin(secp256k1.derivePublicKeyCompressed(RECOVERY_PRIVATE_KEY)))
     );
 
     const releaseA = new Contract(
-      CustodyVaultArtifact,
+      CUSTODY_VAULT_ARTIFACT,
       [ownerPkh, custodianPkh, recoveryPkh, RECOVERY_TIMEOUT, RELEASE_AT, new Uint8Array(0)],
       { provider, addressType: 'p2sh32' }
     );
     const releaseB = new Contract(
-      CustodyVaultArtifact,
+      CUSTODY_VAULT_ARTIFACT,
       [ownerPkh, custodianPkh, recoveryPkh, RECOVERY_TIMEOUT, RELEASE_AT, new Uint8Array(0)],
       { provider, addressType: 'p2sh32' }
     );
     const releaseC = new Contract(
-      CustodyVaultArtifact,
+      CUSTODY_VAULT_ARTIFACT,
       [ownerPkh, custodianPkh, recoveryPkh, RECOVERY_TIMEOUT, RELEASE_AT + 1n, new Uint8Array(0)],
       { provider, addressType: 'p2sh32' }
     );
 
     const activeA = new Contract(
-      CustodyVaultArtifact,
+      CUSTODY_VAULT_ARTIFACT,
       [
         ownerPkh,
         custodianPkh,
@@ -158,7 +172,7 @@ describe('custody vault artifacts', () => {
       { provider, addressType: 'p2sh32' }
     );
     const activeB = new Contract(
-      CustodyVaultArtifact,
+      CUSTODY_VAULT_ARTIFACT,
       [
         ownerPkh,
         custodianPkh,
@@ -614,8 +628,8 @@ describe('custody vault artifacts', () => {
 
   it('rejects release finalization before the timelock expires', async () => {
     const provider = new MockNetworkProvider();
-    const ownerPk = secp256k1.derivePublicKeyCompressed(OWNER_PRIVATE_KEY);
-    const ownerPkh = hash160(ownerPk);
+    const ownerPk = toBin(secp256k1.derivePublicKeyCompressed(OWNER_PRIVATE_KEY));
+    const ownerPkh = toUint8Array(hash160(ownerPk));
     const ownerLockingBytecode = privateKeyToP2pkhLockingBytecode({
       privateKey: OWNER_PRIVATE_KEY,
     });
@@ -631,7 +645,7 @@ describe('custody vault artifacts', () => {
     const ownerSig = new SignatureTemplate(OWNER_PRIVATE_KEY, HashType.SIGHASH_ALL);
 
     const release = new Contract(
-      CustodyVaultArtifact,
+      CUSTODY_VAULT_ARTIFACT,
       [ownerPkh, ownerPkh, ownerPkh, RECOVERY_TIMEOUT, RELEASE_AT, new Uint8Array(0)],
       { provider, addressType: 'p2sh32' }
     );

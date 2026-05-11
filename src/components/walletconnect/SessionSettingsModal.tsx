@@ -1,8 +1,8 @@
 // src/components/walletconnect/SessionSettingsModal.tsx
 import React from 'react';
 import { useDispatch, useSelector } from 'react-redux';
-import { RootState, AppDispatch } from '../../redux/store';
-import { disconnectSession } from '../../redux/walletconnectSlice';
+import { RootState, AppDispatch } from '../../state/store';
+import { disconnectSession } from '../../state/slices/walletconnectSlice';
 import { normalizeExternalUrl } from '../../utils/externalUrl';
 
 interface Props {

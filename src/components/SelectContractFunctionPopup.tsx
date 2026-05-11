@@ -7,8 +7,8 @@ import {
   setSelectedFunction,
   setInputs,
   setInputValues,
-} from '../redux/contractSlice';
-import { RootState, AppDispatch } from '../redux/store';
+} from '../state/slices/contractSlice';
+import { RootState, AppDispatch } from '../state/store';
 import { hexString } from '../utils/hex';
 import KeyService from '../services/KeyService';
 import { shortenTxHash } from '../utils/shortenHash';

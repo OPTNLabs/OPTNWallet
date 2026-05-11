@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { Network } from '../../redux/networkSlice';
+import { Network } from '../../state/slices/networkSlice';
 import { CauldronApiClient, clearCauldronApiCache } from '../cauldron/api';
 
 afterEach(() => {

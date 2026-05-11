@@ -5,16 +5,16 @@ import ElectrumService from '../services/ElectrumService';
 import ContractManager from '../apis/ContractManager/ContractManager';
 import TransactionManager from '../apis/TransactionManager/TransactionManager';
 import DatabaseService from '../apis/DatabaseManager/DatabaseService';
-import { store } from '../redux/store';
+import { store } from '../state/store';
 import {
   setUTXOs,
   setFetchingUTXOs,
   updateUTXOsForAddress,
   setInitialized,
   removeUTXOs,
-} from '../redux/utxoSlice';
-import { addTransactions } from '../redux/transactionSlice';
-import { enqueueNotification } from '../redux/notificationsSlice';
+} from '../state/slices/utxoSlice';
+import { addTransactions } from '../state/slices/transactionSlice';
+import { enqueueNotification } from '../state/slices/notificationsSlice';
 import { invalidateUTXOCache } from '../services/ElectrumService';
 import { logError, logWarn } from '../utils/errorHandling';
 import { UTXO } from '../types/types';

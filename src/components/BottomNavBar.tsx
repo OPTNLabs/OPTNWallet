@@ -1,6 +1,6 @@
 import { NavLink } from 'react-router-dom';
 import { useSelector } from 'react-redux';
-import { RootState } from '../redux/store';
+import { RootState } from '../state/store';
 import { useNavBarHeight } from './navigation/useNavBarHeight';
 
 interface BottomNavBarProps {

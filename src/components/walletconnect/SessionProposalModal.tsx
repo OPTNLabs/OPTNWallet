@@ -1,8 +1,8 @@
 // src/components/walletconnect/SessionProposalModal.tsx
 import { useState } from 'react';
 import { useSelector, useDispatch } from 'react-redux';
-import { AppDispatch, RootState } from '../../redux/store';
-import { approveSessionProposal, rejectSessionProposal } from '../../redux/walletconnectSlice';
+import { AppDispatch, RootState } from '../../state/store';
+import { approveSessionProposal, rejectSessionProposal } from '../../state/slices/walletconnectSlice';
 import { normalizeExternalUrl } from '../../utils/externalUrl';
 
 function SessionProposalModal() {

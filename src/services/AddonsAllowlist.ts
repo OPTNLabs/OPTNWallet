@@ -5,6 +5,7 @@ import {
   type AddonManifest,
   type AddonPermission,
 } from '../types/addons';
+import { Capacitor } from '@capacitor/core';
 
 /**
  * Global allowlist for addon HTTP calls.
@@ -24,8 +25,16 @@ const ALLOWED_ADDON_HTTP_DOMAINS = new Set<string>([
 ]);
 const KNOWN_ADDON_CAPABILITIES = new Set<AddonCapability>(ADDON_CAPABILITIES);
 
-function isDevRuntime() {
+export function isDevEnvironment(): boolean {
   return typeof import.meta !== 'undefined' && Boolean(import.meta.env?.DEV);
+}
+
+export function isNativeRuntime(): boolean {
+  return Capacitor.isNativePlatform();
+}
+
+export function shouldExposeDevOnlyApps(): boolean {
+  return isDevEnvironment() || isNativeRuntime();
 }
 
 function normalizeDomain(d: string): string {
@@ -176,7 +185,7 @@ export function assertUrlAllowedForAddon(
 
   const hostname = normalizeDomain(parsed.hostname);
   const isLocalDevUrl =
-    (options?.devMode ?? isDevRuntime()) &&
+    (options?.devMode ?? isDevEnvironment()) &&
     manifest.trustTier === 'internal' &&
     parsed.protocol === 'http:' &&
     (hostname === 'localhost' || hostname === '127.0.0.1');

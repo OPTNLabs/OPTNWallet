@@ -15,8 +15,8 @@ import ElectrumService from '../services/ElectrumService';
 import { UTXO } from '../types/types';
 import { PaperWalletSecretStore } from '../services/PaperWalletSecretStore';
 import { useSelector } from 'react-redux';
-import { RootState } from '../redux/store';
-import { selectCurrentNetwork } from '../redux/selectors/networkSelectors';
+import { RootState } from '../state/store';
+import { selectCurrentNetwork } from '../state/selectors/networkSelectors';
 import { PREFIX } from '../utils/constants';
 import {
   getBarcodeScannerErrorMessage,

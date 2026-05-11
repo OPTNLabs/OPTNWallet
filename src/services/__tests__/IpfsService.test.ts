@@ -6,7 +6,7 @@ import {
   waitForIpfsAvailability,
 } from '../IpfsService';
 
-vi.mock('../../redux/store', () => ({
+vi.mock('../../state/store', () => ({
   store: {
     getState: vi.fn(() => ({ network: { currentNetwork: 'mainnet' } })),
   },

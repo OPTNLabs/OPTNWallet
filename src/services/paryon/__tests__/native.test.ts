@@ -17,6 +17,9 @@ const liveMarket: ParyonLiveMarketState = {
   oraclePriceCentsPerBch: 50_000n,
   currentPeriod: 10,
   currentEpoch: 1,
+  chainHeight: 100,
+  expectedPeriod: 10,
+  periodDeltaPeriods: 0,
   writeEnabled: true,
   verifiedMainnetV1: true,
 };
@@ -306,5 +309,193 @@ describe('Paryon native workflow', () => {
     expect(snapshot.flowPlans.redemption.ready).toBe(true);
     expect(snapshot.flowPlans.operator.ready).toBe(true);
     expect(snapshot.systemHealth.canWrite).toBe(true);
+  });
+
+  it('falls back to Electrum address reads when ChainGraph misses a live verified contract', async () => {
+    const priceAddress = verifiedSnapshot.contractsByName.PriceContract.address;
+
+    const sdk = {
+      wallet: {
+        getContext: () => ({ walletId: 1, network: 'mainnet' }),
+      },
+      utxos: {
+        listForWallet: vi.fn().mockResolvedValue({
+          allUtxos: [],
+          tokenUtxos: [],
+        }),
+        listForAddress: vi.fn(async (address: string) => {
+          if (address === priceAddress) {
+            return [
+              {
+                tx_hash: 'price-electrum',
+                tx_pos: 0,
+                value: 1_000,
+                token: {
+                  category: verifiedSnapshot.config.tokenIds.paryonTokenId,
+                  amount: 0,
+                  nft: {
+                    capability: 'mutable',
+                    commitment: '00002710',
+                  },
+                },
+              },
+            ];
+          }
+
+          return [];
+        }),
+      },
+      chain: {
+        getLatestBlock: vi.fn().mockResolvedValue({
+          height:
+            verifiedSnapshot.config.startBlockHeight +
+            verifiedSnapshot.config.periodLengthBlocks * 10,
+        }),
+        queryUnspentByLockingBytecode: vi.fn(async (lockingBytecodeHex: string, tokenId: string) => {
+          if (
+            tokenId === verifiedSnapshot.config.tokenIds.paryonTokenId &&
+            lockingBytecodeHex === verifiedSnapshot.contractsByName.Borrowing.lockingBytecodeHex
+          ) {
+            return {
+              data: {
+                output: [
+                  {
+                    transaction_hash: 'borrowing',
+                    output_index: 0,
+                    value_satoshis: '1000',
+                    nonfungible_token_commitment: '00000000',
+                    fungible_token_amount: '0',
+                    nonfungible_token_capability: 'minting',
+                  },
+                ],
+              },
+            };
+          }
+
+          if (
+            tokenId === verifiedSnapshot.config.tokenIds.poolTokenId &&
+            lockingBytecodeHex === verifiedSnapshot.contractsByName.StabilityPool.lockingBytecodeHex
+          ) {
+            return {
+              data: {
+                output: [
+                  {
+                    transaction_hash: 'pool',
+                    output_index: 0,
+                    value_satoshis: '1000',
+                    nonfungible_token_commitment: '0000000a00000000000a000000000014',
+                    fungible_token_amount: '0',
+                    nonfungible_token_capability: 'minting',
+                  },
+                ],
+              },
+            };
+          }
+
+          if (
+            tokenId === verifiedSnapshot.config.tokenIds.redeemerTokenId &&
+            lockingBytecodeHex === verifiedSnapshot.contractsByName.Redeemer.lockingBytecodeHex
+          ) {
+            return {
+              data: {
+                output: [
+                  {
+                    transaction_hash: 'redeemer',
+                    output_index: 0,
+                    value_satoshis: '1000',
+                    nonfungible_token_commitment: '00000000',
+                    fungible_token_amount: '0',
+                    nonfungible_token_capability: 'minting',
+                  },
+                ],
+              },
+            };
+          }
+
+          if (
+            tokenId === verifiedSnapshot.config.tokenIds.loanKeyFactoryTokenId &&
+            lockingBytecodeHex === verifiedSnapshot.contractsByName.LoanKeyFactory.lockingBytecodeHex
+          ) {
+            return {
+              data: {
+                output: [
+                  {
+                    transaction_hash: 'loan-key-factory',
+                    output_index: 0,
+                    value_satoshis: '1000',
+                    nonfungible_token_commitment: '00000000',
+                    fungible_token_amount: '0',
+                    nonfungible_token_capability: 'minting',
+                  },
+                ],
+              },
+            };
+          }
+
+          return { data: { output: [] } };
+        }),
+      },
+    } as unknown as AddonSDK;
+
+    const snapshot = await loadParyonNativeSnapshot(sdk, verifiedSnapshot);
+
+    expect(sdk.utxos.listForAddress).toHaveBeenCalledWith(priceAddress);
+    expect(snapshot.liveContracts.PriceContract.resolved).toBe(true);
+    expect(snapshot.market.oraclePriceCentsPerBch).toBe(10_000n);
+    expect(snapshot.systemHealth.canWrite).toBe(true);
+  });
+
+  it('accepts verified contract outputs even when the token category does not match the expected category', async () => {
+    const priceAddress = verifiedSnapshot.contractsByName.PriceContract.address;
+    const randomCategory = 'deadbeef'.repeat(8);
+
+    const sdk = {
+      wallet: {
+        getContext: () => ({ walletId: 1, network: 'mainnet' }),
+      },
+      utxos: {
+        listForWallet: vi.fn().mockResolvedValue({
+          allUtxos: [],
+          tokenUtxos: [],
+        }),
+        listForAddress: vi.fn(async (address: string) => {
+          if (address === priceAddress) {
+            return [
+              {
+                tx_hash: 'price-electrum-mismatch',
+                tx_pos: 0,
+                value: 1_000,
+                token: {
+                  category: randomCategory,
+                  amount: 0,
+                  nft: {
+                    capability: 'mutable',
+                    commitment: '00002710',
+                  },
+                },
+              },
+            ];
+          }
+
+          return [];
+        }),
+      },
+      chain: {
+        getLatestBlock: vi.fn().mockResolvedValue({
+          height:
+            verifiedSnapshot.config.startBlockHeight +
+            verifiedSnapshot.config.periodLengthBlocks * 10,
+        }),
+        queryUnspentByLockingBytecode: vi.fn(async () => ({ data: { output: [] } })),
+      },
+    } as unknown as AddonSDK;
+
+    const snapshot = await loadParyonNativeSnapshot(sdk, verifiedSnapshot);
+
+    expect(snapshot.liveContracts.PriceContract.resolved).toBe(true);
+    expect(snapshot.market.oraclePriceCentsPerBch).toBe(10_000n);
+    expect(snapshot.liveContracts.PriceContract.warnings.join(' ')).toContain(
+      'non-matching token category'
+    );
   });
 });

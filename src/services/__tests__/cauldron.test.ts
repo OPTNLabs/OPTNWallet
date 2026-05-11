@@ -65,11 +65,19 @@ const WITHDRAW_PKH = Uint8Array.from([
 const TEST_CASHADDR =
   'bitcoincash:qpm2qsznhks23z7629mms6s4cwef74vcwvy22gdx6a';
 
+type CauldronSignedTransactionRequest = {
+  inputPaths: Array<[number, string, number]>;
+  transaction: {
+    transaction: TransactionTemplateFixed<unknown>;
+    sourceOutputs: Array<Input & Output & ContractInfo>;
+  };
+};
+
 function signRequestForTest(args: {
   signRequest: {
     inputPaths: Array<[number, string, number]>;
     transaction: {
-      transaction: TransactionTemplateFixed<any>;
+      transaction: TransactionTemplateFixed<unknown>;
       sourceOutputs: Array<Input & Output & ContractInfo>;
     };
   };
@@ -744,7 +752,7 @@ describe('Cauldron service', () => {
     });
 
     const signed = signRequestForTest({
-      signRequest: built.signRequest as any,
+      signRequest: built.signRequest as CauldronSignedTransactionRequest,
       keyByInputIndex: new Map([[2, TEST_PRIVATE_KEY]]),
     });
 
@@ -803,7 +811,7 @@ describe('Cauldron service', () => {
     });
 
     const signed = signRequestForTest({
-      signRequest: built.signRequest as any,
+      signRequest: built.signRequest as CauldronSignedTransactionRequest,
       keyByInputIndex: new Map([
         [1, TEST_PRIVATE_KEY],
         [2, TEST_PRIVATE_KEY],
@@ -852,7 +860,7 @@ describe('Cauldron service', () => {
     });
 
     const signed = signRequestForTest({
-      signRequest: built.signRequest as any,
+      signRequest: built.signRequest as CauldronSignedTransactionRequest,
       keyByInputIndex: new Map([[1, TEST_PRIVATE_KEY]]),
     });
 
@@ -919,7 +927,7 @@ describe('Cauldron service', () => {
     });
 
     const signed = signRequestForTest({
-      signRequest: built.signRequest as any,
+      signRequest: built.signRequest as CauldronSignedTransactionRequest,
       keyByInputIndex: new Map([
         [1, TEST_PRIVATE_KEY],
         [2, TEST_PRIVATE_KEY],
@@ -974,7 +982,7 @@ describe('Cauldron service', () => {
     });
 
     const signed = signRequestForTest({
-      signRequest: built.signRequest as any,
+      signRequest: built.signRequest as CauldronSignedTransactionRequest,
       keyByInputIndex: new Map([[1, TEST_PRIVATE_KEY]]),
     });
     const signedHex = binToHex(encodeTransaction(signed.transaction));
@@ -1023,7 +1031,7 @@ describe('Cauldron service', () => {
     });
 
     const signed = signRequestForTest({
-      signRequest: built.signRequest as any,
+      signRequest: built.signRequest as CauldronSignedTransactionRequest,
       keyByInputIndex: new Map([[1, TEST_PRIVATE_KEY]]),
     });
     signed.transaction.outputs[0] = {
@@ -1085,7 +1093,7 @@ describe('Cauldron service', () => {
     });
 
     const signed = signRequestForTest({
-      signRequest: built.signRequest as any,
+      signRequest: built.signRequest as CauldronSignedTransactionRequest,
       keyByInputIndex: new Map([[1, TEST_PRIVATE_KEY]]),
     });
     const signedHex = binToHex(encodeTransaction(signed.transaction));
@@ -1175,7 +1183,7 @@ describe('Cauldron service', () => {
     });
 
     const signed = signRequestForTest({
-      signRequest: built.signRequest as any,
+      signRequest: built.signRequest as CauldronSignedTransactionRequest,
       keyByInputIndex: new Map([
         [0, TEST_PRIVATE_KEY],
         [1, TEST_PRIVATE_KEY],
@@ -1240,7 +1248,7 @@ describe('Cauldron service', () => {
     });
 
     const signed = signRequestForTest({
-      signRequest: built.signRequest as any,
+      signRequest: built.signRequest as CauldronSignedTransactionRequest,
       keyByInputIndex: new Map([
         [0, TEST_PRIVATE_KEY],
         [1, TEST_PRIVATE_KEY],

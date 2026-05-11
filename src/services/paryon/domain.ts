@@ -17,13 +17,13 @@ import type {
   ParyonWorkspaceSnapshot,
 } from './types';
 
-export const PARYON_THREAD_TARGETS: ParyonContractBundleName[] = [
+export const PARYON_THREAD_TARGETS = [
   'PriceContract',
   'Borrowing',
   'StabilityPool',
   'Redeemer',
   'LoanKeyFactory',
-];
+] as const satisfies readonly ParyonContractBundleName[];
 
 type ParyonThreadTargetName = (typeof PARYON_THREAD_TARGETS)[number];
 

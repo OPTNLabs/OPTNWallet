@@ -8,8 +8,8 @@ import {
 } from 'cashscript';
 import DatabaseService from '../DatabaseManager/DatabaseService';
 import parseInputValue from '../../utils/parseInputValue';
-import { Network } from '../../redux/networkSlice';
-import { store } from '../../redux/store';
+import { Network } from '../../state/slices/networkSlice';
+import { store } from '../../state/store';
 import ElectrumService from '../../services/ElectrumService';
 import KeyService from '../../services/KeyService';
 import { UTXO } from '../../types/types';

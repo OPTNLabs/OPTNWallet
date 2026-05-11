@@ -64,7 +64,7 @@ export type ContractManagerApi = {
   createContract: (
     artifactName: string,
     constructorArgs: unknown[],
-    currentNetwork: import('../../redux/networkSlice').Network
+    currentNetwork: import('../../state/slices/networkSlice').Network
   ) => Promise<unknown>;
   saveContractArtifact: (artifact: ContractArtifact) => Promise<void>;
   getContractArtifact: (contractName: string) => Promise<ContractArtifact | null>;
