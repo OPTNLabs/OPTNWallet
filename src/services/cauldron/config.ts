@@ -1,4 +1,4 @@
-import { Network } from '../../redux/networkSlice';
+import { Network } from '../../state/slices/networkSlice';
 
 function env(name: string): string | undefined {
   const metaEnv =

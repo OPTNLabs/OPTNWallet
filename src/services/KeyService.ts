@@ -1,5 +1,5 @@
-import { store } from '../redux/store';
-import { selectCurrentNetwork } from '../redux/selectors/networkSelectors';
+import { store } from '../state/store';
+import { selectCurrentNetwork } from '../state/selectors/networkSelectors';
 import KeyManager from '../apis/WalletManager/KeyManager';
 import WalletManager from '../apis/WalletManager/WalletManager';
 import KeyGeneration from '../apis/WalletManager/KeyGeneration';
@@ -10,8 +10,9 @@ import type {
 import { isArrayBufferLike, isString } from '../utils/typeGuards';
 import { SignedMessage } from '../utils/signed';
 import DeviceIntegrityService from './DeviceIntegrityService';
-import type { SignedMessageResponseI } from '../types/types';
-import { Network } from '../redux/networkSlice';
+import type { QuantumrootVaultRecord, SignedMessageResponseI } from '../types/types';
+import { Network } from '../state/slices/networkSlice';
+import type { deriveQuantumrootVault } from './QuantumrootService';
 
 const KeyService = {
   async generateMnemonic() {
@@ -71,6 +72,72 @@ const KeyService = {
       changeNumber,
       addressNumber,
       resolvedNetwork
+    );
+  },
+
+  async bootstrapInitialAddressBatch(
+    walletId: number,
+    accountNumber = 0,
+    batchSize = 10
+  ): Promise<void> {
+    const existingKeys = await KeyService.retrieveKeys(walletId);
+    if (existingKeys.length > 0) {
+      return;
+    }
+
+    for (let index = 0; index < batchSize; index += 1) {
+      await KeyService.createKeys(walletId, accountNumber, 0, index);
+      await KeyService.createKeys(walletId, accountNumber, 1, index);
+    }
+  },
+
+  async createQuantumrootVault(
+    walletId: number,
+    addressIndex: number,
+    accountNumber = 0
+  ): Promise<QuantumrootVaultRecord> {
+    const keyManager = KeyManager();
+    return await keyManager.createQuantumrootVault(walletId, addressIndex, accountNumber);
+  },
+
+  async configureQuantumrootVault(
+    walletId: number,
+    addressIndex: number,
+    accountNumber = 0,
+    onlineQuantumSigner: 0 | 1 = 0,
+    vaultTokenCategory = '00'.repeat(32)
+  ): Promise<QuantumrootVaultRecord> {
+    const keyManager = KeyManager();
+    return await keyManager.configureQuantumrootVault(
+      walletId,
+      addressIndex,
+      accountNumber,
+      onlineQuantumSigner,
+      vaultTokenCategory
+    );
+  },
+
+  async retrieveQuantumrootVaults(
+    walletId: number
+  ): Promise<QuantumrootVaultRecord[]> {
+    const keyManager = KeyManager();
+    return await keyManager.retrieveQuantumrootVaults(walletId);
+  },
+
+  async deriveQuantumrootVault(
+    walletId: number,
+    addressIndex: number,
+    accountNumber = 0,
+    onlineQuantumSigner: '0' | '1' = '0',
+    vaultTokenCategory = '00'.repeat(32)
+  ): Promise<Awaited<ReturnType<typeof deriveQuantumrootVault>>> {
+    const keyManager = KeyManager();
+    return await keyManager.deriveQuantumrootVaultForWallet(
+      walletId,
+      addressIndex,
+      accountNumber,
+      onlineQuantumSigner,
+      vaultTokenCategory
     );
   },
 

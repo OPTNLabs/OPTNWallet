@@ -1,11 +1,12 @@
 import React, { useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useLocation, useNavigate } from 'react-router-dom';
 import type { AddonSDK } from '../../../services/AddonsSDK';
 import type { AddonAppDefinition, AddonManifest } from '../../../types/addons';
 import SectionCard from '../../../components/ui/SectionCard';
 import DistributorScreen from './screens/DistributorScreen';
 import { useAirdropWalletInventory } from './hooks/useEventWalletInventory';
 import type { AirdropWorkspace } from './types';
+import { getReturnPath } from '../../../utils/navigation';
 
 type AirdropsAppProps = {
   sdk: AddonSDK;
@@ -15,6 +16,8 @@ type AirdropsAppProps = {
 
 const AirdropsApp: React.FC<AirdropsAppProps> = ({ sdk, app }) => {
   const navigate = useNavigate();
+  const location = useLocation();
+  const backTarget = getReturnPath(location, '/apps');
   const inventory = useAirdropWalletInventory(sdk);
   const [workspace] = useState<AirdropWorkspace>({
     id: 'local-distributor',
@@ -39,10 +42,10 @@ const AirdropsApp: React.FC<AirdropsAppProps> = ({ sdk, app }) => {
           </h1>
           <button
             type="button"
-            onClick={() => navigate('/apps')}
+            onClick={() => navigate(backTarget)}
             className="wallet-btn-danger px-4 py-2"
           >
-            Go Back
+            Back
           </button>
         </div>
       </div>

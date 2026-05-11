@@ -5,7 +5,7 @@ import {
 } from '@electrum-cash/network';
 import { ElectrumWebSocket } from '@electrum-cash/web-socket';
 
-import { Network } from '../../redux/networkSlice';
+import { Network } from '../../state/slices/networkSlice';
 import { getCauldronRostrumServers } from './config';
 import type { CauldronActivePoolRow } from './api';
 

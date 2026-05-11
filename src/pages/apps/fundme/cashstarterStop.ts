@@ -9,6 +9,16 @@ interface CashStarterFailParams {
   campaignID: string;
 }
 
+type UtxoToken = NonNullable<Utxo['token']>;
+type UtxoTokenWithNft = UtxoToken & { nft: NonNullable<UtxoToken['nft']> };
+
+function requireToken(utxo: Utxo, context: string): UtxoTokenWithNft {
+  if (!utxo.token?.nft) {
+    throw new Error(`Missing token data for ${context}`);
+  }
+  return utxo.token as UtxoTokenWithNft;
+}
+
 async function cashstarterStop({ electrumServer, contractCashStarter, contractCashStarterStop, campaignID }: CashStarterFailParams) {
   
   if (electrumServer && contractCashStarter && contractCashStarterStop) {
@@ -28,10 +38,13 @@ async function cashstarterStop({ electrumServer, contractCashStarter, contractCa
     console.log(cashStarterUTXOs);
 
     //Find campaignNFT
-    const campaignUTXO: Utxo = cashStarterUTXOs.find(
+    const campaignUTXO = cashStarterUTXOs.find(
       utxo => utxo.token?.category === MasterCategoryID
       && utxo.token?.nft?.commitment.substring(70,80) === campaignID,
-    )!;
+    );
+    if (!campaignUTXO) {
+      throw new Error('Unable to find campaign UTXO for stop flow');
+    }
     console.log('selected campaignNFT UTXO: ');
     console.log(campaignUTXO);
 
@@ -42,28 +55,30 @@ async function cashstarterStop({ electrumServer, contractCashStarter, contractCa
     console.log(failMinterUTXOs);
 
     //Find failMinter minting NFT
-    const failMinterUTXO: Utxo = failMinterUTXOs.find(
+    const failMinterUTXO = failMinterUTXOs.find(
       utxo => utxo.token?.category === MasterCategoryID
       && utxo.token?.nft?.capability == 'minting',
-    )!; //'!' assumes will always be found
+    );
+    if (!failMinterUTXO) {
+      throw new Error('Unable to find fail minter UTXO for stop flow');
+    }
     console.log('selected failMinterNFT UTXO: ');
     console.log(failMinterUTXO);
 
     const provider = new ElectrumNetworkProvider(Network.MAINNET);
 
-    let txDetails;
-    txDetails = await new TransactionBuilder({ provider })
+    const txDetails = await new TransactionBuilder({ provider })
     .addInput(failMinterUTXO, contractCashStarterStop.unlock.stop())
     .addInput(campaignUTXO, contractCashStarter.unlock.externalFunction())
     .addOutput({
       to: AddressTokensCashStarterStop,  
       amount: failMinterUTXO.satoshis,
         token: {
-          amount: failMinterUTXO.token?.amount!,  
-          category: failMinterUTXO.token?.category!,  
+          amount: requireToken(failMinterUTXO, 'failMinterUTXO').amount,
+          category: requireToken(failMinterUTXO, 'failMinterUTXO').category,
           nft: {
-            capability: failMinterUTXO.token?.nft?.capability!, 
-            commitment: failMinterUTXO.token?.nft?.commitment!
+            capability: requireToken(failMinterUTXO, 'failMinterUTXO').nft.capability,
+            commitment: requireToken(failMinterUTXO, 'failMinterUTXO').nft.commitment
           }
         },
     })
@@ -71,14 +86,14 @@ async function cashstarterStop({ electrumServer, contractCashStarter, contractCa
 
     if (campaignUTXO.satoshis > 1000) {
       txDetails.addOutput({
-        to: AddressTokensCashStarter,  
-        amount: campaignUTXO.satoshis - 1000n,
+          to: AddressTokensCashStarter,  
+          amount: campaignUTXO.satoshis - 1000n,
           token: {
-            amount: campaignUTXO.token?.amount!,  
-            category: campaignUTXO.token?.category!,  
+            amount: requireToken(campaignUTXO, 'campaignUTXO').amount,
+            category: requireToken(campaignUTXO, 'campaignUTXO').category,
             nft: {
               capability: 'mutable', 
-              commitment: campaignUTXO.token?.nft?.commitment!   
+              commitment: requireToken(campaignUTXO, 'campaignUTXO').nft.commitment
             }
           },
       })

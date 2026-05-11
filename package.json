@@ -1,13 +1,17 @@
 {
   "name": "optn-wallet",
   "private": true,
-  "version": "1.6.0",
+  "version": "1.6.1",
   "type": "module",
   "scripts": {
     "dev": "vite --host",
     "test": "vitest run",
     "test:watch": "vitest",
+    "test:cauldron:live": "RUN_CAULDRON_LIVE=1 vitest run src/services/__tests__/cauldron.live.test.ts",
+    "test:cauldron:snapshot": "vitest run src/services/__tests__/cauldron.snapshot.test.ts src/pages/apps/cauldron/__tests__/quoteSafety.test.ts",
+    "cauldron:snapshot:generate": "node scripts/generate-cauldron-snapshot.mjs",
     "addons:validate": "vitest run src/services/addons/__tests__/BuiltinManifestValidation.test.ts",
+    "cashscript:compile": "node scripts/compile-cashscript-artifacts.mjs",
     "typecheck": "tsc -b",
     "typecheck:core": "tsc -p tsconfig.core.json --noEmit",
     "build": "tsc && vite build",
@@ -21,6 +25,7 @@
     "preview": "vite preview",
     "postinstall": "patch-package",
     "format": "prettier --write \"src/**/*.{js,jsx,ts,tsx,json,css,scss,md}\"",
+    "build:web": "vite build",
     "capacitor:init": "npx cap init",
     "capacitor:add:android": "npx cap add android",
     "capacitor:add:ios": "npx cap add ios",
@@ -31,8 +36,8 @@
     "capacitor:open:android": "npx cap open android",
     "capacitor:open:ios": "npx cap open ios",
     "serve": "npx serve -s dist",
-    "android:prepare": "dotenv -e .env -- npm run build && npm run capacitor:sync:android",
-    "android:apk:dev": "npm run android:prepare && cd android && ./gradlew assembleDebug",
+    "android:prepare": "dotenv -e .env -- npm run build:web && npm run capacitor:sync:android",
+    "android:apk:dev": "VITE_ENABLE_PRIVATE_KEY_VIEW=true npm run android:prepare && cd android && ./gradlew assembleDebug",
     "android:apk:dev:install": "npm run android:apk:dev && adb install -r android/app/build/outputs/apk/debug/app-debug.apk",
     "android:apk:prod": "dotenv -e .env -- bash -lc 'npm run android:prepare && cd android && ./gradlew assembleRelease'",
     "android:aab:prod": "dotenv -e .env -- bash -lc 'npm run android:prepare && cd android && ./gradlew bundleRelease'",
@@ -40,7 +45,7 @@
     "build:apk": "npm run android:apk:prod"
   },
   "dependencies": {
-    "@bitauth/libauth": "^3.0.0",
+    "@bitauth/libauth": "3.1.0-next.8",
     "@capacitor/android": "^7.0.0",
     "@capacitor/barcode-scanner": "^2.0.3",
     "@capacitor/camera": "^7.0.0",
@@ -53,7 +58,7 @@
     "@capacitor/splash-screen": "^7.0.0",
     "@capacitor/status-bar": "^7.0.3",
     "@capacitor/toast": "^7.0.0",
-    "@cashscript/utils": "^0.9.3",
+    "@cashscript/utils": "0.13.0-next.3",
     "@electrum-cash/network": "^4.1.3",
     "@electrum-cash/web-socket": "^1.0.0",
     "@reduxjs/toolkit": "^2.2.5",
@@ -68,8 +73,8 @@
     "axios": "^1.7.7",
     "bip39": "^3.1.0",
     "buffer": "^6.0.3",
-    "cashc": "^0.9.3",
-    "cashscript": "^0.11.2",
+    "cashc": "0.13.0-next.3",
+    "cashscript": "0.13.0-next.3",
     "decimal.js": "^10.4.3",
     "delay": "^6.0.0",
     "dotenv": "^16.4.7",
@@ -96,6 +101,9 @@
     "ts-node": "^10.9.2",
     "url": "^0.11.3",
     "vite-plugin-top-level-await": "^1.4.1"
+  },
+  "overrides": {
+    "@cashscript/utils": "0.13.0-next.3"
   },
   "devDependencies": {
     "@capacitor/assets": "^3.0.5",

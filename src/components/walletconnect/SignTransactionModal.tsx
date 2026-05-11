@@ -1,17 +1,22 @@
 // inside src/components/walletconnect/SignTransactionModal.tsx
 
+import { useState } from 'react';
 import { useSelector, useDispatch } from 'react-redux';
-import { RootState, AppDispatch } from '../../redux/store';
+import { RootState, AppDispatch } from '../../state/store';
 import {
   respondWithTxSignature,
   clearPendingSignTx,
   respondWithTxError,
-} from '../../redux/walletconnectSlice';
+} from '../../state/slices/walletconnectSlice';
 import { binToHex, lockingBytecodeToCashAddress } from '@bitauth/libauth';
 import { SATSINBITCOIN } from '../../utils/constants';
 import { ensureUint8Array, parseSatoshis } from '../../utils/binary';
-import { selectWalletId } from '../../redux/walletSlice';
+import { selectWalletId } from '../../state/slices/walletSlice';
 import useOutboundTransactions from '../../hooks/useOutboundTransactions';
+import { shortenAddress } from '../../utils/shortenHash';
+import WalletTooltip from '../ui/WalletTooltip';
+import { FiChevronDown, FiChevronUp } from 'react-icons/fi';
+import { normalizeExternalUrl } from '../../utils/externalUrl';
 
 export function SignTransactionModal() {
   const dispatch = useDispatch<AppDispatch>();
@@ -23,6 +28,9 @@ export function SignTransactionModal() {
     (state: RootState) => state.walletconnect.activeSessions
   );
   const { hasUnresolved } = useOutboundTransactions(walletId);
+
+  const [inputsExpanded, setInputsExpanded] = useState(false);
+  const [outputsExpanded, setOutputsExpanded] = useState(false);
 
   if (!signTxRequest) return null;
 
@@ -91,6 +99,7 @@ export function SignTransactionModal() {
   );
   const fee = totalInput - totalOutput;
   const broadcastLocked = shouldBroadcast && hasUnresolved;
+  const dappUrl = dappMetadata?.url ? normalizeExternalUrl(dappMetadata.url) : null;
 
   const handleSign = async () => {
     if (broadcastLocked) return;
@@ -118,14 +127,20 @@ export function SignTransactionModal() {
               </div>
               <div>
                 <strong>Domain:</strong>{' '}
-                <a
-                  href={dappMetadata.url}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="wallet-link underline"
-                >
-                  {dappMetadata.url}
-                </a>
+                {dappUrl ? (
+                  <a
+                    href={dappUrl}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="wallet-link underline"
+                  >
+                    {dappMetadata.url}
+                  </a>
+                ) : (
+                  <span className="wallet-muted break-all">
+                    {dappMetadata.url}
+                  </span>
+                )}
               </div>
             </div>
           )}
@@ -138,96 +153,146 @@ export function SignTransactionModal() {
 
           {broadcastLocked && (
             <div className="text-sm wallet-surface-strong border border-[var(--wallet-border)] rounded p-3 wallet-text-strong">
-              Another outgoing transaction is still syncing. To avoid duplicates while you are offline, this wallet
-              will only broadcast one unresolved transaction at a time.
+              Another outgoing transaction is still syncing. To avoid duplicates
+              while you are offline, this wallet will only broadcast one
+              unresolved transaction at a time.
             </div>
           )}
 
-          {inputs.map((_, i: number) => {
-            const source = sourceOutputs[i];
-            const txid = binToHex(
-              ensureUint8Array(source.outpointTransactionHash)
-            );
-            const value = parseSatoshis(source.valueSatoshis);
-            return (
-              <div key={i} className="ml-2">
-                <div>
-                  TXID: <span className="font-mono break-all">{txid}</span>
-                </div>
-                <div>Index: {source.outpointIndex}</div>
-                <div>{Number(value) / SATSINBITCOIN} BCH</div>
-              </div>
-            );
-          })}
-
-          {(outputs as TxOutput[]).map((output, i: number) => {
-            const value = parseSatoshis(output.valueSatoshis);
-            const lockingBytecode = ensureUint8Array(output.lockingBytecode);
-            const isOpReturn = lockingBytecode[0] === 0x6a;
-            const token = output.token;
-
-            if (isOpReturn) {
-              const parsed = parsePushData(lockingBytecode);
-              return (
-                <div key={i} className="ml-2 space-y-1 border-b border-[var(--wallet-border)] pb-2 text-sm">
-                  <strong>OP_RETURN Output</strong>
-                  {parsed.map((data, j) => (
-                    <div
-                      key={j}
-                      className="font-mono wallet-muted break-words"
-                    >
-                      {data}
-                    </div>
-                  ))}
-                </div>
-              );
-            }
-
-            const address = toCashAddress(lockingBytecode, 'bitcoincash');
-            return (
-              <div key={i} className="ml-2 border-b border-[var(--wallet-border)] pb-2 space-y-1">
-                <div>
-                  Address:{' '}
-                  <span className="font-mono wallet-link break-all">
-                    {address}
-                  </span>
-                </div>
-                <div>{Number(value) / SATSINBITCOIN} BCH</div>
-                {token && (
-                  <div className="text-sm wallet-surface-strong border border-[var(--wallet-border)] rounded p-2 space-y-1">
-                    <div>
-                      <strong>Token Category:</strong>{' '}
-                      <span className="font-mono break-all">
-                        {binToHex(ensureUint8Array(token.category))}
-                      </span>
-                    </div>
-                    {token.amount && (
+          <div className="space-y-2">
+            <button
+              type="button"
+              onClick={() => setInputsExpanded(!inputsExpanded)}
+              className="flex items-center gap-2 text-sm font-semibold wallet-text-strong"
+            >
+              {inputsExpanded ? <FiChevronUp /> : <FiChevronDown />}
+              Inputs ({inputs.length})
+            </button>
+            {inputsExpanded && (
+              <div className="space-y-1">
+                {inputs.map((_, i: number) => {
+                  const source = sourceOutputs[i];
+                  const txid = binToHex(
+                    ensureUint8Array(source.outpointTransactionHash)
+                  );
+                  const value = parseSatoshis(source.valueSatoshis);
+                  return (
+                    <div key={i} className="ml-2">
                       <div>
-                        <strong>Fungible Amount:</strong>{' '}
-                        {parseSatoshis(token.amount).toString()}
+                        TXID:{' '}
+                        <span className="font-mono break-all">{txid}</span>
                       </div>
-                    )}
-                    {token.nft && (
-                      <>
-                        <div>
-                          <strong>NFT Capability:</strong>{' '}
-                          {token.nft.capability}
-                        </div>
-                        {token.nft.commitment && (
+                      <div>Index: {source.outpointIndex}</div>
+                      <div>{Number(value) / SATSINBITCOIN} BCH</div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+
+          <div className="space-y-2">
+            <button
+              type="button"
+              onClick={() => setOutputsExpanded(!outputsExpanded)}
+              className="flex items-center gap-2 text-sm font-semibold wallet-text-strong"
+            >
+              {outputsExpanded ? <FiChevronUp /> : <FiChevronDown />}
+              Outputs ({outputs.length})
+            </button>
+            {outputsExpanded && (
+              <div className="space-y-1">
+                {(outputs as TxOutput[]).map((output, i: number) => {
+                  const value = parseSatoshis(output.valueSatoshis);
+                  const lockingBytecode = ensureUint8Array(
+                    output.lockingBytecode
+                  );
+                  const isOpReturn = lockingBytecode[0] === 0x6a;
+                  const token = output.token;
+
+                  if (isOpReturn) {
+                    const parsed = parsePushData(lockingBytecode);
+                    return (
+                      <div
+                        key={i}
+                        className="ml-2 space-y-1 border-b border-[var(--wallet-border)] pb-2 text-sm"
+                      >
+                        <strong>OP_RETURN Output</strong>
+                        {parsed.map((data, j) => (
+                          <div
+                            key={j}
+                            className="font-mono wallet-muted break-words"
+                          >
+                            {data}
+                          </div>
+                        ))}
+                      </div>
+                    );
+                  }
+
+                  const address = toCashAddress(lockingBytecode, 'bitcoincash');
+                  return (
+                    <div
+                      key={i}
+                      className="ml-2 border-b border-[var(--wallet-border)] pb-2 space-y-1"
+                    >
+                      <div>
+                        Address:{' '}
+                        <span
+                          className="font-mono wallet-link break-all cursor-pointer"
+                          data-tooltip-id={`address-tooltip-${i}`}
+                          data-tooltip-content={address}
+                        >
+                          {shortenAddress(address)}
+                        </span>
+                        <WalletTooltip
+                          id={`address-tooltip-${i}`}
+                          place="top"
+                          clickable={true}
+                          content={address}
+                        />
+                      </div>
+                      <div>{Number(value) / SATSINBITCOIN} BCH</div>
+                      {token && (
+                        <div className="text-sm wallet-surface-strong border border-[var(--wallet-border)] rounded p-2 space-y-1">
                           <div>
-                            <strong>NFT Commitment:</strong>{' '}
+                            <strong>Token Category:</strong>{' '}
                             <span className="font-mono break-all">
-                              {binToHex(ensureUint8Array(token.nft.commitment))}
+                              {binToHex(ensureUint8Array(token.category))}
                             </span>
                           </div>
-                        )}
-                      </>
-                    )}
-                  </div>
-                )}
+                          {token.amount && (
+                            <div>
+                              <strong>Fungible Amount:</strong>{' '}
+                              {parseSatoshis(token.amount).toString()}
+                            </div>
+                          )}
+                          {token.nft && (
+                            <>
+                              <div>
+                                <strong>NFT Capability:</strong>{' '}
+                                {token.nft.capability}
+                              </div>
+                              {token.nft.commitment && (
+                                <div>
+                                  <strong>NFT Commitment:</strong>{' '}
+                                  <span className="font-mono break-all">
+                                    {binToHex(
+                                      ensureUint8Array(token.nft.commitment)
+                                    )}
+                                  </span>
+                                </div>
+                              )}
+                            </>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
               </div>
-            );
-          })}
+            )}
+          </div>
 
           <div className="text-sm border-t border-[var(--wallet-border)] pt-2">
             <div>Total Input: {Number(totalInput) / SATSINBITCOIN} BCH</div>
@@ -252,10 +317,7 @@ export function SignTransactionModal() {
           >
             {broadcastLocked && shouldBroadcast ? 'Waiting for sync' : 'Sign'}
           </button>
-          <button
-            onClick={handleCancel}
-            className="wallet-btn-danger"
-          >
+          <button onClick={handleCancel} className="wallet-btn-danger">
             Cancel
           </button>
         </div>
