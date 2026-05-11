@@ -1,11 +1,24 @@
-import { describe, expect, it, vi } from 'vitest';
-import type { AddonSDK } from '../../../../services/AddonsSDK';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { MintAppUtxo, MintOutputDraft } from '../types';
 import {
   buildBootstrapPreview,
   buildMintPreview,
   validateMintRequest,
 } from '../services';
+
+const addOutputMock = vi.fn();
+const buildTransactionMock = vi.fn();
+
+vi.mock('../../../../apis/TransactionManager/TransactionManager', () => ({
+  default: () => ({
+    addOutput: addOutputMock,
+    buildTransaction: buildTransactionMock,
+    sendTransaction: vi.fn(),
+    fetchAndStoreTransactionHistory: vi.fn(),
+    fetchAndStoreTransactionHistories: vi.fn(),
+    getTxHex: vi.fn(),
+  }),
+}));
 
 const makeUtxo = (patch: Partial<MintAppUtxo> = {}): MintAppUtxo =>
   ({
@@ -32,6 +45,11 @@ const makeDraft = (patch: Partial<MintOutputDraft> = {}): MintOutputDraft => ({
 });
 
 describe('mint flow services', () => {
+  beforeEach(() => {
+    addOutputMock.mockReset();
+    buildTransactionMock.mockReset();
+  });
+
   it('validateMintRequest returns null for valid request', () => {
     const selected = makeUtxo({ tx_hash: 'g1', tx_pos: 0, token: null });
     const draft = makeDraft({ sourceKey: 'g1:0' });
@@ -50,20 +68,16 @@ describe('mint flow services', () => {
   });
 
   it('buildBootstrapPreview computes fee from sdk build result', async () => {
-    const sdk = {
-      tx: {
-        build: vi.fn().mockResolvedValue({
-          hex: '00aa',
-          bytes: 120,
-          finalOutputs: [{ recipientAddress: 'bitcoincash:qto', amount: 900n }],
-          errorMsg: '',
-        }),
-      },
-    } as unknown as AddonSDK;
+    buildTransactionMock.mockResolvedValue({
+      hex: '00aa',
+      bytecodeSize: 120,
+      finalTransaction: '00aa',
+      finalOutputs: [{ recipientAddress: 'bitcoincash:qto', amount: 900n }],
+      errorMsg: '',
+    });
 
     const funding = [makeUtxo({ value: 1000 })];
     const preview = await buildBootstrapPreview({
-      sdk,
       fundingUtxos: funding,
       toAddress: 'bitcoincash:qto',
       changeAddress: 'bitcoincash:qchange',
@@ -71,7 +85,7 @@ describe('mint flow services', () => {
 
     expect(preview.feePaid).toBe(100n);
     expect(preview.built.hex).toBe('00aa');
-    expect(sdk.tx.build).toHaveBeenCalledTimes(1);
+    expect(buildTransactionMock).toHaveBeenCalledTimes(1);
   });
 
   it('buildMintPreview retries fee candidates until build succeeds', async () => {
@@ -80,23 +94,24 @@ describe('mint flow services', () => {
     const fee2 = makeUtxo({ tx_hash: 'f2', tx_pos: 1, value: 200, token: null });
     const draft = makeDraft({ sourceKey: 'g1:0' });
 
-    const addOutput = vi.fn().mockReturnValue({
+    addOutputMock.mockReturnValue({
       recipientAddress: draft.recipientCashAddr,
       amount: 546n,
       token: { category: 'g1', amount: 1n },
     });
 
-    const build = vi
-      .fn()
+    buildTransactionMock
       .mockResolvedValueOnce({
         hex: '',
-        bytes: 0,
+        bytecodeSize: 0,
+        finalTransaction: '',
         finalOutputs: null,
         errorMsg: 'insufficient fee',
       })
       .mockResolvedValueOnce({
         hex: 'beef',
-        bytes: 250,
+        bytecodeSize: 250,
+        finalTransaction: 'beef',
         finalOutputs: [
           {
             recipientAddress: draft.recipientCashAddr,
@@ -108,12 +123,7 @@ describe('mint flow services', () => {
         errorMsg: '',
       });
 
-    const sdk = {
-      tx: { addOutput, build },
-    } as unknown as AddonSDK;
-
     const result = await buildMintPreview({
-      sdk,
       selectedUtxos: [genesis],
       flatUtxos: [genesis, fee1, fee2],
       activeOutputDrafts: [draft],
@@ -122,7 +132,7 @@ describe('mint flow services', () => {
       tokenOutputSats: 546,
     });
 
-    expect(build).toHaveBeenCalledTimes(2);
+    expect(buildTransactionMock).toHaveBeenCalledTimes(2);
     expect(result.built.hex).toBe('beef');
     expect(result.inputsForBuild.length).toBe(3);
     expect(result.feePaid >= 0n).toBe(true);
@@ -132,16 +142,16 @@ describe('mint flow services', () => {
     const genesis = makeUtxo({ tx_hash: 'g1', tx_pos: 0, token: null });
     const draft = makeDraft({ sourceKey: 'g1:0' });
 
-    const sdk = {
-      tx: {
-        addOutput: vi.fn(),
-        build: vi.fn(),
-      },
-    } as unknown as AddonSDK;
+    buildTransactionMock.mockResolvedValue({
+      hex: '',
+      bytecodeSize: 0,
+      finalTransaction: '',
+      finalOutputs: null,
+      errorMsg: 'build failed',
+    });
 
     await expect(
       buildMintPreview({
-        sdk,
         selectedUtxos: [genesis],
         flatUtxos: [genesis],
         activeOutputDrafts: [draft],
@@ -157,16 +167,10 @@ describe('mint flow services', () => {
     const fee = makeUtxo({ tx_hash: 'f1', tx_pos: 1, token: null });
     const draft = makeDraft({ sourceKey: 'g1:0' });
 
-    const sdk = {
-      tx: {
-        addOutput: vi.fn().mockReturnValue(undefined),
-        build: vi.fn(),
-      },
-    } as unknown as AddonSDK;
+    addOutputMock.mockReturnValue(undefined);
 
     await expect(
       buildMintPreview({
-        sdk,
         selectedUtxos: [genesis],
         flatUtxos: [genesis, fee],
         activeOutputDrafts: [draft],
@@ -182,25 +186,21 @@ describe('mint flow services', () => {
     const fee = makeUtxo({ tx_hash: 'f1', tx_pos: 1, token: null });
     const draft = makeDraft({ sourceKey: 'g1:0' });
 
-    const sdk = {
-      tx: {
-        addOutput: vi.fn().mockReturnValue({
-          recipientAddress: draft.recipientCashAddr,
-          amount: 546n,
-          token: { category: 'g1', amount: 1n },
-        }),
-        build: vi.fn().mockResolvedValue({
-          hex: '',
-          bytes: 0,
-          finalOutputs: null,
-          errorMsg: 'build failed',
-        }),
-      },
-    } as unknown as AddonSDK;
+    addOutputMock.mockReturnValue({
+      recipientAddress: draft.recipientCashAddr,
+      amount: 546n,
+      token: { category: 'g1', amount: 1n },
+    });
+    buildTransactionMock.mockResolvedValue({
+      hex: '',
+      bytecodeSize: 0,
+      finalTransaction: '',
+      finalOutputs: null,
+      errorMsg: 'build failed',
+    });
 
     await expect(
       buildMintPreview({
-        sdk,
         selectedUtxos: [genesis],
         flatUtxos: [genesis, fee],
         activeOutputDrafts: [draft],

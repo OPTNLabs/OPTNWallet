@@ -1,4 +1,4 @@
-import { Network } from '../redux/networkSlice';
+import { Network } from '../state/slices/networkSlice';
 
 // BCH upgrades activate network-wide on May 15; BCH upgrades conventionally
 // activate at 12:00 UTC, so we gate active mainnet Quantumroot flows from then.

@@ -2,10 +2,10 @@ import type {
   ParyonExecutionPlan,
   ParyonExecutionTarget,
   ParyonLiveMarketState,
-  ParyonNativeSnapshot,
   ParyonPositionRecord,
   ParyonWorkspaceSnapshot,
 } from './types';
+import type { ParyonNativeSnapshot } from './native';
 
 function selectRecord(
   records: ParyonPositionRecord[],

@@ -1,4 +1,4 @@
-import { Network } from '../../redux/networkSlice';
+import { Network } from '../../state/slices/networkSlice';
 import { getCauldronApiBaseUrl } from './config';
 import type {
   CauldronActivePoolRecord,
@@ -71,8 +71,7 @@ function fetchJsonCached<T>(key: string, url: string): Promise<T> {
     return cached.promise as Promise<T>;
   }
 
-  let promise: Promise<T>;
-  promise = fetchJson<T>(url).catch((error) => {
+  const promise: Promise<T> = fetchJson<T>(url).catch((error) => {
     const current = cauldronRequestCache.get(key);
     if (current?.promise === promise) {
       cauldronRequestCache.delete(key);

@@ -1,4 +1,5 @@
-import { useEffect, useMemo, useReducer, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { useLocation, useNavigate } from 'react-router-dom';
 
 import type { AddonSDK } from '../../../services/AddonsSDK';
 import type { AddonAppDefinition } from '../../../types/addons';
@@ -16,18 +17,18 @@ import {
   buildWalletHistoryLines,
   formatBchSats,
   formatPusdAtomic,
-  formatUsdCents,
   loadParyonNativeSnapshot,
-  paryonNativeViewReducer,
-  PARYON_NATIVE_VIEWS,
   shortHex,
   type ParyonNativeSnapshot,
-  type ParyonNativeView,
+  type ParyonActionPreview,
   type ParyonTransactionPlan,
 } from '../../../services/paryon/native';
 import type { ParyonLiveMarketState } from '../../../services/paryon/native';
 import type { ParyonExecutionPlan } from '../../../services/paryon/types';
 import { ContainedSwipeConfirmModal } from '../mint-cashtokens-poc/components/uiPrimitives';
+import { getReturnPath } from '../../../utils/navigation';
+import WalletScreen from '../../../components/ui/WalletScreen';
+import SegmentedSubnav from '../../../components/ui/SegmentedSubnav';
 
 type Props = {
   sdk: AddonSDK;
@@ -53,23 +54,20 @@ type ConfirmState = {
   action: 'borrow' | 'stake' | 'redeem' | null;
 };
 
-type SectionTarget = 'actions' | 'deployment' | 'system-map';
+type ParyonWorkspaceView = 'overview' | 'borrow' | 'stake' | 'redeem' | 'positions';
+
+type PositionTab = 'loans' | 'stakes' | 'redemptions';
 
 const DEFAULT_MARKET: ParyonLiveMarketState = {
   oraclePriceCentsPerBch: null,
   currentPeriod: null,
   currentEpoch: null,
+  chainHeight: null,
+  expectedPeriod: null,
+  periodDeltaPeriods: null,
   writeEnabled: false,
   verifiedMainnetV1: false,
 };
-
-function toCurrency(value: bigint | null): string {
-  return value == null ? '—' : formatUsdCents(value);
-}
-
-function toBch(value: bigint | null): string {
-  return value == null ? '—' : formatBchSats(value);
-}
 
 function stateTone(
   enabled: boolean | null,
@@ -80,11 +78,16 @@ function stateTone(
 }
 
 export default function ParyonWorkspaceApp({ sdk, app }: Props) {
+  const navigate = useNavigate();
+  const location = useLocation();
   const network = sdk.wallet.getContext().network;
+  const backTarget = getReturnPath(location, '/apps');
   const snapshot = useMemo(() => resolveParyonWorkspaceSnapshot(network), [network]);
   const readinessCopy = useMemo(() => buildParyonReadinessCopy(snapshot), [snapshot]);
 
-  const [view, dispatchView] = useReducer(paryonNativeViewReducer, 'dashboard' as ParyonNativeView);
+  const [view, setView] = useState<ParyonWorkspaceView>('overview');
+  const [positionTab, setPositionTab] = useState<PositionTab>('loans');
+  const [selectedPositionId, setSelectedPositionId] = useState<string | null>(null);
   const [nativeSnapshot, setNativeSnapshot] = useState<ParyonNativeSnapshot | null>(null);
   const [loadingNativeSnapshot, setLoadingNativeSnapshot] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -100,10 +103,7 @@ export default function ParyonWorkspaceApp({ sdk, app }: Props) {
     preview: null,
     action: null,
   });
-
-  const actionsRef = useRef<HTMLElement | null>(null);
-  const deploymentRef = useRef<HTMLElement | null>(null);
-  const contractsRef = useRef<HTMLElement | null>(null);
+  const lastDebugLogRef = useRef<string | null>(null);
 
   const writeEnabled = nativeSnapshot?.market.writeEnabled ?? false;
   const positionSummary = nativeSnapshot?.positionIndex.summary ?? {
@@ -114,8 +114,6 @@ export default function ParyonWorkspaceApp({ sdk, app }: Props) {
     system: 0,
     total: 0,
   };
-  const positionIndex = nativeSnapshot?.positionIndex ?? null;
-  const threadHealth = nativeSnapshot?.threadHealth ?? [];
   const flowPlans = nativeSnapshot?.flowPlans ?? null;
   const market = nativeSnapshot?.market ?? DEFAULT_MARKET;
   const executionPlans = useMemo(
@@ -168,6 +166,118 @@ export default function ParyonWorkspaceApp({ sdk, app }: Props) {
     () => buildWalletHistoryLines(nativeSnapshot?.walletUtxos ?? []),
     [nativeSnapshot?.walletUtxos]
   );
+  const writeWarning =
+    snapshot.readiness === 'missing-config'
+      ? 'Deployment config is missing. This workspace stays read-only until the required env values are set.'
+      : !snapshot.verifiedMainnetV1
+        ? 'Deployment inputs are present but do not match the verified live mainnet-v1 bundle.'
+        : loadingNativeSnapshot
+          ? 'Loading live contract threads and period state…'
+          : writeEnabled
+            ? 'Live mainnet-v1 is verified and the contract threads are healthy.'
+            : 'Live mainnet-v1 is verified, but one or more contract threads or the pool period are stale.';
+
+  const positionsForTab = useMemo(() => {
+    if (!nativeSnapshot?.positionIndex) return [];
+    switch (positionTab) {
+      case 'loans':
+        return nativeSnapshot.positionIndex.loans;
+      case 'stakes':
+        return nativeSnapshot.positionIndex.stabilityPool;
+      case 'redemptions':
+        return nativeSnapshot.positionIndex.redemptions;
+      default:
+        return [];
+    }
+  }, [nativeSnapshot?.positionIndex, positionTab]);
+
+  const selectedPosition = useMemo(() => {
+    if (positionsForTab.length === 0) return null;
+    if (selectedPositionId == null) return positionsForTab[0];
+    return positionsForTab.find((record) => record.positionId === selectedPositionId) ?? positionsForTab[0];
+  }, [positionsForTab, selectedPositionId]);
+
+  const positionLifecycleSummary = useMemo(
+    () =>
+      positionsForTab.reduce(
+        (summary, record) => {
+          if (record.state === 'live') summary.live += 1;
+          else if (record.state === 'pending') summary.pending += 1;
+          else if (record.state === 'locked') summary.locked += 1;
+          else summary.other += 1;
+          return summary;
+        },
+        { live: 0, pending: 0, locked: 0, other: 0 }
+      ),
+    [positionsForTab]
+  );
+  const protocolSnapshotItems = useMemo(() => {
+    const threadHealth = nativeSnapshot?.threadHealth ?? [];
+    const systemHealth = nativeSnapshot?.systemHealth ?? null;
+    const threadTotal = systemHealth
+      ? systemHealth.freshThreads + systemHealth.degradedThreads + systemHealth.staleThreads
+      : threadHealth.length;
+
+    return [
+      {
+        label: 'Oracle price',
+        value:
+          nativeSnapshot == null
+            ? 'Loading…'
+            : market.oraclePriceCentsPerBch != null
+              ? `$${(Number(market.oraclePriceCentsPerBch) / 100).toFixed(2)}`
+              : 'Unavailable',
+        sublabel:
+          market.oraclePriceCentsPerBch != null
+            ? 'Live BCH/USD oracle'
+            : 'Waiting for a fresh price thread',
+      },
+      {
+        label: 'Period',
+        value:
+          nativeSnapshot == null
+            ? 'Loading…'
+            : market.currentPeriod != null
+              ? `Period ${market.currentPeriod}`
+              : 'Unavailable',
+        sublabel:
+          market.currentEpoch != null
+            ? `Epoch ${market.currentEpoch}`
+            : 'Chain period not resolved',
+      },
+      {
+        label: 'Threads',
+        value:
+          nativeSnapshot == null
+            ? 'Loading…'
+            : `${systemHealth?.freshThreads ?? 0}/${threadTotal || 0} fresh`,
+        sublabel:
+          nativeSnapshot != null
+            ? `${systemHealth?.staleThreads ?? 0} stale, ${systemHealth?.degradedThreads ?? 0} degraded`
+            : 'Loading live contract threads',
+      },
+      {
+        label: 'Positions',
+        value:
+          nativeSnapshot == null ? 'Loading…' : String(nativeSnapshot.positionIndex.summary.total),
+        sublabel: 'Loans, stakes, and redemptions',
+      },
+    ];
+  }, [market, nativeSnapshot]);
+  const liveThreadItems = useMemo(
+    () =>
+      nativeSnapshot
+        ? Object.values(nativeSnapshot.liveContracts).map((contract) => ({
+            name: contract.name,
+            freshness: contract.freshness,
+            threadCount: contract.threadCount,
+            utxoCount: contract.utxoCount,
+            preferredOutpoint: contract.preferredOutpoint,
+            warnings: contract.warnings,
+          }))
+        : [],
+    [nativeSnapshot]
+  );
 
   useEffect(() => {
     let cancelled = false;
@@ -204,17 +314,96 @@ export default function ParyonWorkspaceApp({ sdk, app }: Props) {
     window.scrollTo({ top: 0, behavior: 'smooth' });
   }, [view]);
 
-  const scrollToSection = (target: SectionTarget) => {
-    const ref =
-      target === 'actions'
-        ? actionsRef.current
-        : target === 'deployment'
-          ? deploymentRef.current
-          : contractsRef.current;
-    ref?.scrollIntoView({ behavior: 'smooth', block: 'start' });
-  };
+  useEffect(() => {
+    if (positionsForTab.length === 0) {
+      setSelectedPositionId(null);
+      return;
+    }
+    if (!positionsForTab.some((record) => record.positionId === selectedPositionId)) {
+      setSelectedPositionId(positionsForTab[0].positionId);
+    }
+  }, [positionsForTab, selectedPositionId]);
 
-  const primaryActionTarget: SectionTarget = snapshot.primaryAction.targetSection;
+  useEffect(() => {
+    if (typeof window === 'undefined' || !import.meta.env.DEV) return;
+    const debugState = {
+      view,
+      positionTab,
+      readiness: snapshot.readiness,
+      verifiedMainnetV1: snapshot.verifiedMainnetV1,
+      deploymentProfile: snapshot.deploymentProfile,
+      network: snapshot.network,
+      contractCount: snapshot.contractCount,
+      loadError,
+      statusMessage,
+      writeEnabled,
+      writeWarning,
+      oraclePriceCentsPerBch: market.oraclePriceCentsPerBch?.toString() ?? null,
+      currentPeriod: market.currentPeriod,
+      currentEpoch: market.currentEpoch,
+      chainHeight: market.chainHeight,
+      expectedPeriod: market.expectedPeriod,
+      periodDeltaPeriods: market.periodDeltaPeriods,
+      systemHealth: nativeSnapshot?.systemHealth
+        ? {
+            chainHeight: nativeSnapshot.systemHealth.chainHeight,
+            expectedPeriod: nativeSnapshot.systemHealth.expectedPeriod,
+            periodDeltaPeriods: nativeSnapshot.systemHealth.periodDeltaPeriods,
+            canWrite: nativeSnapshot.systemHealth.canWrite,
+            freshThreads: nativeSnapshot.systemHealth.freshThreads,
+            degradedThreads: nativeSnapshot.systemHealth.degradedThreads,
+            staleThreads: nativeSnapshot.systemHealth.staleThreads,
+          }
+        : null,
+      liveContracts: nativeSnapshot
+        ? Object.fromEntries(
+            Object.entries(nativeSnapshot.liveContracts).map(([name, contract]) => [
+              name,
+              {
+                freshness: contract.freshness,
+                threadCount: contract.threadCount,
+                utxoCount: contract.utxoCount,
+                warnings: contract.warnings,
+                preferredOutpoint: contract.preferredOutpoint,
+              },
+            ])
+          )
+        : null,
+      positions: nativeSnapshot?.positionIndex?.summary ?? null,
+      selectedPosition: selectedPosition
+        ? {
+            positionId: selectedPosition.positionId,
+            kind: selectedPosition.kind,
+            state: selectedPosition.state,
+            warnings: selectedPosition.warnings,
+          }
+        : null,
+      flowPlans: flowPlans
+        ? {
+            loan: flowPlans.loan.ready,
+            pool: flowPlans.pool.ready,
+            redemption: flowPlans.redemption.ready,
+            operator: flowPlans.operator.ready,
+          }
+        : null,
+    };
+    const signature = JSON.stringify(debugState);
+    if (signature === lastDebugLogRef.current) return;
+    lastDebugLogRef.current = signature;
+    console.log('[Paryon] app state snapshot', signature);
+  }, [
+    flowPlans,
+    loadError,
+    market,
+    nativeSnapshot,
+    positionTab,
+    selectedPosition,
+    snapshot,
+    statusMessage,
+    view,
+    writeEnabled,
+    writeWarning,
+  ]);
 
   const openPreview = (preview: ParyonActionPreview) => {
     setConfirmState({
@@ -277,55 +466,24 @@ export default function ParyonWorkspaceApp({ sdk, app }: Props) {
     closePreview();
   };
 
-  const writeWarning =
-    snapshot.readiness === 'missing-config'
-      ? 'Deployment config is missing. This workspace stays read-only until the required env values are set.'
-      : !snapshot.verifiedMainnetV1
-        ? 'Deployment inputs are present but do not match the verified live mainnet-v1 bundle.'
-        : loadingNativeSnapshot
-          ? 'Loading live contract threads and period state…'
-          : writeEnabled
-          ? 'Live mainnet-v1 is verified and the contract threads are healthy.'
-          : 'Live mainnet-v1 is verified, but one or more contract threads or the pool period are stale.';
-
   const renderNav = () => (
-    <div className="sticky top-0 z-20 -mx-4 border-b border-white/6 bg-[#09070d]/92 px-4 py-3 backdrop-blur">
-      <div className="overflow-x-auto">
-        <div className="flex min-w-max gap-2">
-          {PARYON_NATIVE_VIEWS.map((item) => {
-            const active = item.view === view;
-            return (
-              <button
-                key={item.view}
-                type="button"
-                onClick={() => dispatchView({ type: 'navigate', view: item.view })}
-                className={[
-                  'rounded-full border px-4 py-2 text-left transition',
-                  active
-                    ? 'border-[#b35cff]/40 bg-[#2d183f] text-white shadow-[0_10px_30px_rgba(120,50,186,0.18)]'
-                    : 'border-white/10 bg-white/5 text-white/78 hover:bg-white/8',
-                ].join(' ')}
-              >
-                <div className="text-[0.72rem] font-semibold uppercase tracking-[0.22em]">
-                  {item.label}
-                </div>
-                <div className="mt-1 text-[0.72rem] leading-4 text-white/58">
-                  {item.description}
-                </div>
-              </button>
-            );
-          })}
-        </div>
-      </div>
-    </div>
+    <SegmentedSubnav
+      value={view}
+      onChange={setView}
+      className="sticky top-0 z-20 -mx-4 border-b border-white/6 bg-[#09070d]/92 px-4 py-3 backdrop-blur"
+      options={[
+        { value: 'overview', label: 'Overview' },
+        { value: 'borrow', label: 'Borrow' },
+        { value: 'stake', label: 'Stake' },
+        { value: 'redeem', label: 'Redeem' },
+        { value: 'positions', label: 'Positions' },
+      ]}
+    />
   );
 
-  const renderDashboard = () => (
+  const renderOverview = () => (
     <div className="space-y-4">
-      <section
-        data-section="overview"
-        className="rounded-[1.75rem] border border-white/10 bg-[radial-gradient(circle_at_top_left,rgba(171,92,255,0.24),transparent_30%),linear-gradient(180deg,#20172c_0%,#13101a_56%,#0c0a10_100%)] p-4 shadow-[0_20px_70px_rgba(0,0,0,0.42)]"
-      >
+      <section data-section="overview" className="rounded-[1.75rem] border border-white/10 bg-[radial-gradient(circle_at_top_left,rgba(171,92,255,0.24),transparent_30%),linear-gradient(180deg,#20172c_0%,#13101a_56%,#0c0a10_100%)] p-4 shadow-[0_20px_70px_rgba(0,0,0,0.42)]">
         <div className="flex items-start justify-between gap-3">
           <div className="min-w-0 flex-1">
             <div className="inline-flex items-center gap-2 rounded-full border border-[#ae64ff]/30 bg-[#241533]/90 px-3 py-1 text-[0.68rem] font-semibold uppercase tracking-[0.22em] text-[#ebddff]">
@@ -337,7 +495,7 @@ export default function ParyonWorkspaceApp({ sdk, app }: Props) {
             </h1>
             <p className="mt-2 max-w-sm text-sm leading-6 text-white/70">
               {snapshot.verifiedMainnetV1
-                ? 'A native BCH-backed stablecoin dashboard with borrow, stake, and redeem flows kept entirely inside OPTN Wallet.'
+                ? 'ParyonUSD actions inside OPTN Wallet: borrow BCH collateral, stake PUSD, redeem against live positions, and review tracked positions.'
                 : snapshot.verificationSummary}
             </p>
           </div>
@@ -362,27 +520,6 @@ export default function ParyonWorkspaceApp({ sdk, app }: Props) {
           </Badge>
           <Badge tone="neutral">{snapshot.contractCount} contracts bundled</Badge>
         </div>
-
-        <div className="mt-4 flex flex-col gap-2 sm:flex-row">
-          <button
-            type="button"
-            className="rounded-full bg-[#a43dfc] px-4 py-3 text-sm font-semibold text-white shadow-[0_10px_30px_rgba(147,61,255,0.35)] transition hover:bg-[#b451ff]"
-            onClick={() => scrollToSection(primaryActionTarget)}
-          >
-            {snapshot.primaryAction.label}
-          </button>
-          <button
-            type="button"
-            className="rounded-full border border-white/10 bg-white/5 px-4 py-3 text-sm font-semibold text-white/90 transition hover:bg-white/10"
-            onClick={() =>
-              writeEnabled
-                ? scrollToSection('system-map')
-                : scrollToSection('deployment')
-            }
-          >
-            {writeEnabled ? 'View production state' : 'View deployment details'}
-          </button>
-        </div>
       </section>
 
       {loadError ? (
@@ -395,14 +532,87 @@ export default function ParyonWorkspaceApp({ sdk, app }: Props) {
         <StatusBanner tone="positive">{statusMessage}</StatusBanner>
       ) : null}
 
-      <section
-        data-section="balances"
-        className="rounded-[1.75rem] border border-[#30d3ad]/20 bg-[linear-gradient(180deg,#0c9377_0%,#0b7e68_100%)] p-4 shadow-[0_18px_54px_rgba(0,0,0,0.26)]"
-      >
+      <StatusBanner tone={snapshot.verifiedMainnetV1 && writeEnabled ? 'positive' : 'warning'}>
+        {writeWarning}
+      </StatusBanner>
+
+      <section data-section="protocol-snapshot" className="rounded-[1.75rem] border border-white/10 bg-[rgba(27,24,35,0.96)] p-4 shadow-[0_18px_54px_rgba(0,0,0,0.28)]">
+        <div className="flex items-start justify-between gap-3">
+          <div>
+            <h2 className="text-lg font-semibold text-white">Protocol snapshot</h2>
+            <p className="mt-1 text-sm text-white/62">
+              Live ParyonUSD state surfaced separately from wallet balances.
+            </p>
+          </div>
+          <Badge tone={stateTone(nativeSnapshot?.systemHealth?.canWrite ?? false, 'warning')}>
+            {nativeSnapshot?.systemHealth?.canWrite ? 'Writable' : 'Read only'}
+          </Badge>
+        </div>
+
+        <div className="mt-3">
+          <StatGrid items={protocolSnapshotItems} />
+        </div>
+
+        <div className="mt-3 rounded-2xl border border-white/10 bg-black/10 px-3 py-2 text-xs leading-5 text-white/82">
+          {nativeSnapshot == null
+            ? 'Loading protocol state and contract threads…'
+            : market.oraclePriceCentsPerBch == null
+              ? 'Oracle price has not resolved yet, so borrow and redeem previews stay conservative.'
+              : `Oracle price and period state are available. ${nativeSnapshot.systemHealth.freshThreads} live threads indexed.`}
+        </div>
+
+        <div className="mt-4 space-y-2">
+          <div className="flex items-start justify-between gap-3">
+            <div>
+              <h3 className="text-sm font-semibold text-white">Live contract threads</h3>
+              <p className="mt-1 text-xs text-white/55">
+                Individual thread health for the verified deployment.
+              </p>
+            </div>
+            <Badge tone={stateTone((nativeSnapshot?.systemHealth?.freshThreads ?? 0) > 0, 'warning')}>
+              {nativeSnapshot?.systemHealth?.freshThreads ?? 0} fresh
+            </Badge>
+          </div>
+
+          <div className="grid grid-cols-1 gap-2">
+            {liveThreadItems.map((thread) => (
+              <div
+                key={thread.name}
+                className="rounded-2xl border border-white/10 bg-black/12 px-4 py-3"
+              >
+                <div className="flex items-start justify-between gap-3">
+                  <div>
+                    <div className="text-sm font-semibold text-white">{thread.name}</div>
+                    <div className="mt-1 text-xs text-white/55">
+                      {thread.threadCount} output{thread.threadCount === 1 ? '' : 's'} ·{' '}
+                      {thread.utxoCount} wallet UTXOs
+                    </div>
+                  </div>
+                  <Badge tone={thread.freshness === 'fresh' ? 'positive' : 'warning'}>
+                    {thread.freshness}
+                  </Badge>
+                </div>
+                {thread.preferredOutpoint ? (
+                  <div className="mt-2 break-all text-[0.72rem] leading-5 text-white/58">
+                    {thread.preferredOutpoint}
+                  </div>
+                ) : null}
+                {thread.warnings.length > 0 ? (
+                  <div className="mt-2 rounded-xl border border-[#ffb84d]/20 bg-[#5b2d0f]/70 px-3 py-2 text-xs leading-5 text-[#ffc76d]">
+                    {thread.warnings.join(' ')}
+                  </div>
+                ) : null}
+              </div>
+            ))}
+          </div>
+        </div>
+      </section>
+
+      <section data-section="balances" className="rounded-[1.75rem] border border-[#30d3ad]/20 bg-[linear-gradient(180deg,#0c9377_0%,#0b7e68_100%)] p-4 shadow-[0_18px_54px_rgba(0,0,0,0.26)]">
         <div className="flex items-start justify-between gap-3">
           <div>
             <div className="text-[0.72rem] font-semibold uppercase tracking-[0.22em] text-white/72">
-              OPTN Wallet
+              Overview
             </div>
             <div className="mt-1 text-xl font-bold text-white">Balances</div>
           </div>
@@ -411,7 +621,7 @@ export default function ParyonWorkspaceApp({ sdk, app }: Props) {
           </div>
         </div>
 
-        <div className="mt-3 grid grid-cols-2 gap-3">
+        <div className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2">
           <BalanceCard
             label="BCH"
             value={loadingNativeSnapshot ? 'Loading…' : formatBchSats(nativeSnapshot?.balances.bchSats ?? 0n)}
@@ -432,389 +642,200 @@ export default function ParyonWorkspaceApp({ sdk, app }: Props) {
         </div>
       </section>
 
-      <section
-        data-section="actions"
-        ref={actionsRef}
-        className="rounded-[1.75rem] border border-white/10 bg-[rgba(27,24,35,0.96)] p-4 shadow-[0_18px_54px_rgba(0,0,0,0.28)]"
-      >
+      <section data-section="actions" className="rounded-[1.75rem] border border-white/10 bg-[rgba(27,24,35,0.96)] p-4 shadow-[0_18px_54px_rgba(0,0,0,0.28)]">
         <div className="flex items-center justify-between gap-3">
           <div>
-            <h2 className="text-lg font-semibold text-white">Actions</h2>
+            <h2 className="text-lg font-semibold text-white">Primary actions</h2>
             <p className="mt-1 text-sm text-white/62">
-              {writeEnabled
-                ? 'Loan, stability pool, and redemption flows stay native, compact, and wallet-owned.'
-                : 'Stablecoin actions stay gated until deployment verification and live thread health pass.'}
+              Borrow, stake, redeem, or review positions from a single mobile surface.
             </p>
           </div>
           <Badge tone={writeEnabled ? 'positive' : 'warning'}>{writeEnabled ? 'Live' : 'Read only'}</Badge>
         </div>
 
-        {flowPlans ? (
-          <div className="mt-3 grid grid-cols-2 gap-2">
-            <CompactStatusRow label="Loan plan" value={flowPlans.loan.ready ? 'Ready' : 'Blocked'} />
-            <CompactStatusRow label="Pool plan" value={flowPlans.pool.ready ? 'Ready' : 'Blocked'} />
-            <CompactStatusRow
-              label="Redeem plan"
-              value={flowPlans.redemption.ready ? 'Ready' : 'Blocked'}
-            />
-            <CompactStatusRow
-              label="Operator"
-              value={flowPlans.operator.ready ? 'Ready' : 'Review'}
-            />
-          </div>
-        ) : null}
-
         <div className="mt-3 grid gap-3">
-          <LaunchCard
-            tone="borrow"
-            title="Loan"
-            description="Open or manage a PUSD loan against BCH collateral."
-            metricLabel="Min collateral"
-            metricValue={
-              borrowPreview.primaryMetricValue === 'Awaiting price'
-                ? 'Awaiting price'
-                : borrowPreview.primaryMetricValue
-            }
-            buttonLabel="Open Loan"
-            enabled={writeEnabled}
-            onClick={() => dispatchView({ type: 'navigate', view: 'borrow' })}
-          />
-          <LaunchCard
-            tone="stake"
-            title="Stability Pool"
-            description="Stake PUSD, then withdraw or claim through the epoch-aware pool."
-            metricLabel="Receipt epoch"
-            metricValue={stakePreview.primaryMetricValue}
-            buttonLabel="Open Pool"
-            enabled={writeEnabled}
-            onClick={() => dispatchView({ type: 'navigate', view: 'stake' })}
-          />
-          <LaunchCard
-            tone="redeem"
-            title="Redemption"
-            description="Redeem PUSD for BCH at the locked oracle price."
-            metricLabel="Estimated payout"
-            metricValue={redeemPreview.primaryMetricValue}
-            buttonLabel="Open Redemption"
-            enabled={writeEnabled}
-            onClick={() => dispatchView({ type: 'navigate', view: 'redeem' })}
-          />
-        </div>
-      </section>
-
-      <section
-        data-section="deployment"
-        ref={deploymentRef}
-        className="rounded-[1.75rem] border border-white/10 bg-[rgba(24,21,31,0.96)] p-4 shadow-[0_18px_54px_rgba(0,0,0,0.28)]"
-      >
-        <div className="flex items-start justify-between gap-3">
-          <div>
-            <h2 className="text-lg font-semibold text-white">Deployment</h2>
-            <p className="mt-1 text-sm leading-6 text-white/65">{snapshot.verificationSummary}</p>
-          </div>
-          <Badge tone={snapshot.verifiedMainnetV1 ? 'positive' : 'warning'}>
-            {snapshot.verifiedMainnetV1 ? 'Verified' : 'Check config'}
-          </Badge>
-        </div>
-
-        <div className="mt-3 rounded-2xl border border-[#ffb84d]/20 bg-[#5b2d0f]/70 px-4 py-3 text-sm leading-6 text-[#ffc76d]">
-          {writeWarning}
-        </div>
-
-        <div className="mt-3 grid gap-2 sm:grid-cols-2">
-          <InfoRow label="Oracle public key" value={shortHex(snapshot.config.oraclePublicKey)} />
-          <InfoRow
-            label="Protocol fee bytecode"
-            value={shortHex(snapshot.config.protocolFeeLockingBytecode)}
-          />
-          <InfoRow label="Start block" value={String(snapshot.config.startBlockHeight)} />
-          <InfoRow
-            label="Period length"
-            value={`${snapshot.config.periodLengthBlocks} blocks`}
-          />
-        </div>
-
-        <details
-          data-section="resources"
-          className="mt-3 rounded-[1.4rem] border border-white/10 bg-black/15 p-3"
-        >
-          <summary className="cursor-pointer list-none">
-            <div className="flex items-center justify-between gap-3">
-              <div>
-                <h3 className="text-sm font-semibold text-white">Token IDs</h3>
-                <p className="mt-1 text-xs text-white/55">Tap to inspect the verified bundle.</p>
-              </div>
-              <span className="text-[0.72rem] uppercase tracking-[0.2em] text-white/45">
-                Compact
-              </span>
+          <button
+            type="button"
+            className="rounded-[1.5rem] border border-[#b744ff]/18 bg-white/5 px-4 py-4 text-left transition hover:bg-white/10"
+            onClick={() => setView('borrow')}
+          >
+            <div className="text-base font-semibold text-white">Borrow</div>
+            <div className="mt-1 text-sm leading-6 text-white/68">
+              Open or manage a PUSD loan against BCH collateral.
             </div>
-          </summary>
-          <div className="mt-3 space-y-2">
-            {Object.entries(snapshot.config.tokenIds).map(([key, value]) => (
-              <div key={key} className="rounded-2xl border border-white/10 bg-white/5 px-3 py-2">
-                <div className="text-[0.68rem] uppercase tracking-[0.22em] text-white/55">
-                  {key}
-                </div>
-                <div className="mt-1 break-all text-sm text-white/90">{shortHex(value)}</div>
-              </div>
-            ))}
-          </div>
-        </details>
+            <div className="mt-3 text-xs uppercase tracking-[0.22em] text-white/52">
+              Min collateral: {borrowPreview.primaryMetricValue}
+            </div>
+          </button>
+          <button
+            type="button"
+            className="rounded-[1.5rem] border border-[#3a78ff]/18 bg-white/5 px-4 py-4 text-left transition hover:bg-white/10"
+            onClick={() => setView('stake')}
+          >
+            <div className="text-base font-semibold text-white">Stake</div>
+            <div className="mt-1 text-sm leading-6 text-white/68">
+              Deposit PUSD into the stability pool and track epoch-bound claims.
+            </div>
+            <div className="mt-3 text-xs uppercase tracking-[0.22em] text-white/52">
+              Receipt epoch: {stakePreview.primaryMetricValue}
+            </div>
+          </button>
+          <button
+            type="button"
+            className="rounded-[1.5rem] border border-[#9b4dff]/18 bg-white/5 px-4 py-4 text-left transition hover:bg-white/10"
+            onClick={() => setView('redeem')}
+          >
+            <div className="text-base font-semibold text-white">Redeem</div>
+            <div className="mt-1 text-sm leading-6 text-white/68">
+              Redeem PUSD for BCH at the live oracle price with 12-block finalization.
+            </div>
+            <div className="mt-3 text-xs uppercase tracking-[0.22em] text-white/52">
+              Estimated payout: {redeemPreview.primaryMetricValue}
+            </div>
+          </button>
+          <button
+            type="button"
+            className="rounded-[1.5rem] border border-white/10 bg-white/5 px-4 py-4 text-left transition hover:bg-white/10"
+            onClick={() => setView('positions')}
+          >
+            <div className="text-base font-semibold text-white">Positions</div>
+            <div className="mt-1 text-sm leading-6 text-white/68">
+              Review active loans, stake receipts, and redemption state.
+            </div>
+            <div className="mt-3 text-xs uppercase tracking-[0.22em] text-white/52">
+              {positionSummary.total} tracked positions
+            </div>
+          </button>
+        </div>
       </section>
 
-      <section
-        data-section="system-map"
-        ref={contractsRef}
-        className="rounded-[1.75rem] border border-white/10 bg-[rgba(24,21,31,0.96)] p-4 shadow-[0_18px_54px_rgba(0,0,0,0.28)]"
-      >
-        <div className="flex items-start justify-between gap-3">
+      <section data-section="safety" className="rounded-[1.75rem] border border-[#ffb84d]/20 bg-[rgba(36,25,15,0.96)] p-4 shadow-[0_18px_54px_rgba(0,0,0,0.28)]">
+        <div className="flex items-center justify-between gap-3">
           <div>
-            <h2 className="text-lg font-semibold text-white">Production state</h2>
-            <p className="mt-1 text-sm leading-6 text-white/65">
-              Indexed positions, routing health, and the live contract bundle.
+            <h2 className="text-lg font-semibold text-white">Safety rails</h2>
+            <p className="mt-1 text-sm leading-6 text-white/68">
+              Keep the protocol constraints visible before you open a position.
             </p>
           </div>
-          <Badge tone={writeEnabled ? 'positive' : 'warning'}>
-            {writeEnabled ? 'Write ready' : 'Read only'}
+          <Badge tone={snapshot.verifiedMainnetV1 && writeEnabled ? 'positive' : 'warning'}>
+            {writeEnabled ? 'Live rules' : 'Read only'}
           </Badge>
         </div>
 
-        <div className="mt-3 grid grid-cols-2 gap-2">
-          <CompactStatusRow label="Loans" value={String(positionSummary.loans)} />
-          <CompactStatusRow label="Stability pool" value={String(positionSummary.stabilityPool)} />
-          <CompactStatusRow label="Redemptions" value={String(positionSummary.redemptions)} />
-          <CompactStatusRow
-            label="Fresh threads"
-            value={`${nativeSnapshot?.systemHealth.freshThreads ?? 0}/${threadHealth.length || 5}`}
-          />
+        <div className="mt-3 grid gap-3">
+          <div className="rounded-[1.4rem] border border-white/10 bg-black/15 p-4">
+            <div className="text-sm font-semibold text-white">Borrow</div>
+            <div className="mt-2 text-sm leading-6 text-white/72">
+              Minimum collateral ratio is 110%. The borrow preview calculates liquidation price
+              from the live oracle, and lower rates sit earlier in redemption priority.
+            </div>
+          </div>
+          <div className="rounded-[1.4rem] border border-white/10 bg-black/15 p-4">
+            <div className="text-sm font-semibold text-white">Stake</div>
+            <div className="mt-2 text-sm leading-6 text-white/72">
+              Minimum stake amount is 100 PUSD. Stakes are locked until the next epoch boundary,
+              and BCH payouts are claimable after each epoch.
+            </div>
+          </div>
+          <div className="rounded-[1.4rem] border border-white/10 bg-black/15 p-4">
+            <div className="text-sm font-semibold text-white">Redeem</div>
+            <div className="mt-2 text-sm leading-6 text-white/72">
+              Minimum redemption amount is 100 PUSD. Redemptions finalize after 12 blocks and
+              should be treated as a delayed multi-step flow, not an instant swap.
+            </div>
+          </div>
         </div>
-
-        <div className="mt-2 grid grid-cols-2 gap-2">
-          <CompactStatusRow
-            label="Period delta"
-            value={
-              nativeSnapshot?.systemHealth.periodDeltaPeriods == null
-                ? 'Unknown'
-                : nativeSnapshot.systemHealth.periodDeltaPeriods === 0
-                  ? 'Synced'
-                  : `${nativeSnapshot.systemHealth.periodDeltaPeriods > 0 ? '+' : ''}${nativeSnapshot.systemHealth.periodDeltaPeriods}`
-            }
-          />
-          <CompactStatusRow
-            label="Positions"
-            value={String(positionIndex?.summary.total ?? positionSummary.total)}
-          />
-        </div>
-
-        <details className="mt-3 rounded-[1.4rem] border border-white/10 bg-black/15 p-3">
-          <summary className="cursor-pointer list-none">
-            <div className="flex items-center justify-between gap-3">
-              <div>
-                <h3 className="text-sm font-semibold text-white">Indexed positions</h3>
-                <p className="mt-1 text-xs text-white/55">Loan, pool, redemption, and authority bundles.</p>
-              </div>
-              <span className="text-[0.72rem] uppercase tracking-[0.2em] text-white/45">
-                {positionIndex?.summary.total ?? 0}
-              </span>
-            </div>
-          </summary>
-          <div className="mt-3 space-y-2">
-            {nativeSnapshot?.positionIndex ? (
-              (
-                [
-                  ...nativeSnapshot.positionIndex.loans,
-                  ...nativeSnapshot.positionIndex.stabilityPool,
-                  ...nativeSnapshot.positionIndex.redemptions,
-                  ...nativeSnapshot.positionIndex.authorities,
-                  ...nativeSnapshot.positionIndex.system,
-                ] as const
-              ).map((record) => (
-                <div key={record.positionId} className="rounded-2xl border border-white/10 bg-white/5 px-3 py-2.5">
-                  <div className="flex items-start justify-between gap-3">
-                    <div className="min-w-0">
-                      <div className="font-semibold text-white">{record.label}</div>
-                      <div className="mt-1 text-xs text-white/58">
-                        {record.kind} · {record.state} · {record.contractNames.join(', ')}
-                      </div>
-                    </div>
-                    <Badge tone={record.warnings.length > 0 ? 'warning' : 'neutral'}>
-                      {record.warnings.length > 0 ? 'Review' : 'Live'}
-                    </Badge>
-                  </div>
-                  <div className="mt-2 text-xs leading-5 text-white/70">
-                    {record.details.slice(0, 2).join(' · ')}
-                  </div>
-                  {record.warnings.length > 0 ? (
-                    <div className="mt-2 rounded-xl border border-[#ffb84d]/20 bg-[#5b2d0f]/70 px-3 py-2 text-xs leading-5 text-[#ffc76d]">
-                      {record.warnings.join(' ')}
-                    </div>
-                  ) : null}
-                </div>
-              ))
-            ) : (
-              <InfoPanel tone="neutral">Loading indexed positions…</InfoPanel>
-            )}
-          </div>
-        </details>
-
-        <details className="mt-3 rounded-[1.4rem] border border-white/10 bg-black/15 p-3">
-          <summary className="cursor-pointer list-none">
-            <div className="flex items-center justify-between gap-3">
-              <div>
-                <h3 className="text-sm font-semibold text-white">Thread routing</h3>
-                <p className="mt-1 text-xs text-white/55">Preferred live outputs and freshness warnings.</p>
-              </div>
-              <span className="text-[0.72rem] uppercase tracking-[0.2em] text-white/45">
-                {threadHealth.filter((thread) => thread.freshness === 'fresh').length}/{threadHealth.length || 5}
-              </span>
-            </div>
-          </summary>
-          <div className="mt-3 space-y-2">
-            {threadHealth.length > 0 ? (
-              threadHealth.map((thread) => (
-                <div key={thread.name} className="rounded-2xl border border-white/10 bg-white/5 px-3 py-2.5">
-                  <div className="flex items-start justify-between gap-3">
-                    <div>
-                      <div className="font-semibold text-white">{thread.name}</div>
-                      <div className="mt-1 text-xs text-white/58">
-                        {thread.threadCount} live outputs · {shortHex(thread.tokenId)}
-                      </div>
-                    </div>
-                    <Badge tone={thread.freshness === 'fresh' ? 'positive' : 'warning'}>
-                      {thread.freshness}
-                    </Badge>
-                  </div>
-                  <div className="mt-2 text-xs leading-5 text-white/70">
-                    Preferred outpoint: {thread.preferredOutpoint ?? 'unresolved'}
-                  </div>
-                  {thread.warnings.length > 0 ? (
-                    <div className="mt-2 rounded-xl border border-[#ffb84d]/20 bg-[#5b2d0f]/70 px-3 py-2 text-xs leading-5 text-[#ffc76d]">
-                      {thread.warnings.join(' ')}
-                    </div>
-                  ) : null}
-                </div>
-              ))
-            ) : (
-              <InfoPanel tone="neutral">Loading thread routing…</InfoPanel>
-            )}
-          </div>
-        </details>
-
-        <details className="mt-3 rounded-[1.4rem] border border-white/10 bg-black/15 p-3">
-          <summary className="cursor-pointer list-none">
-            <div className="flex items-center justify-between gap-3">
-              <div>
-                <h3 className="text-sm font-semibold text-white">Live contract bundle</h3>
-                <p className="mt-1 text-xs text-white/55">Core verified contracts bundled with the app.</p>
-              </div>
-              <span className="text-[0.72rem] uppercase tracking-[0.2em] text-white/45">
-                {snapshot.contractCount}
-              </span>
-            </div>
-          </summary>
-          <div className="mt-3 grid gap-2">
-            {PARYON_CORE_CONTRACTS.map((name) => {
-              const contract = snapshot.contractsByName[name];
-              return (
-                <div key={name} className="rounded-2xl border border-white/10 bg-white/5 px-3 py-2.5">
-                  <div className="flex items-start justify-between gap-3">
-                    <div>
-                      <div className="font-semibold text-white">{name}</div>
-                      <div className="mt-1 text-xs text-white/58">
-                        {contract.abiNames.length} callable entrypoints
-                      </div>
-                    </div>
-                    <Badge tone={contract.resolved ? 'positive' : 'warning'}>
-                      {contract.resolved ? 'resolved' : 'needs config'}
-                    </Badge>
-                  </div>
-                  <div className="mt-2 break-all font-mono text-[0.72rem] leading-5 text-white/68">
-                    {shortHex(contract.address)}
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-        </details>
-
-        <details className="mt-3 rounded-[1.4rem] border border-white/10 bg-black/15 p-3">
-          <summary className="cursor-pointer list-none">
-            <div className="flex items-center justify-between gap-3">
-              <div>
-                <h3 className="text-sm font-semibold text-white">Compiled bundle</h3>
-                <p className="mt-1 text-xs text-white/55">All compiled contracts are bundled.</p>
-              </div>
-              <span className="text-[0.72rem] uppercase tracking-[0.2em] text-white/45">
-                Preview
-              </span>
-            </div>
-          </summary>
-          <div className="mt-4 flex flex-wrap gap-2">
-            {snapshot.artifactNames.map((name) => (
-              <span
-                key={name}
-                className="rounded-full border border-white/10 bg-white/5 px-3 py-1 text-[0.72rem] font-medium text-white/78"
-              >
-                {name}
-              </span>
-            ))}
-          </div>
-        </details>
       </section>
 
-      <details
-        data-section="debug"
-        className="rounded-[1.75rem] border border-white/10 bg-[rgba(24,21,31,0.96)] p-4 shadow-[0_18px_54px_rgba(0,0,0,0.28)]"
-      >
+      <details data-section="protocol-details" className="rounded-[1.75rem] border border-white/10 bg-[rgba(24,21,31,0.96)] p-4 shadow-[0_18px_54px_rgba(0,0,0,0.28)]">
         <summary className="cursor-pointer list-none">
           <div className="flex items-start justify-between gap-3">
             <div>
-              <h2 className="text-lg font-semibold text-white">Operator debug</h2>
+              <h2 className="text-lg font-semibold text-white">Protocol details</h2>
               <p className="mt-1 text-sm leading-6 text-white/65">
-                Compact debug view for support and integration work.
+                Live deployment values, routing health, and contract bundle metadata.
               </p>
             </div>
             <span className="text-[0.72rem] uppercase tracking-[0.2em] text-white/45">
-              Hidden
+              Compact
             </span>
           </div>
         </summary>
-        <pre className="mt-4 overflow-auto rounded-3xl border border-white/10 bg-black/25 p-4 text-[0.72rem] leading-5 text-white/85">
-{JSON.stringify(
-  {
-    network: snapshot.network,
-    readiness: snapshot.readiness,
-    deploymentProfile: snapshot.deploymentProfile,
-    verifiedMainnetV1: snapshot.verifiedMainnetV1,
-    market: {
-      oraclePriceCentsPerBch: nativeSnapshot?.market.oraclePriceCentsPerBch?.toString() ?? '(loading)',
-      currentPeriod: nativeSnapshot?.market.currentPeriod ?? '(loading)',
-      currentEpoch: nativeSnapshot?.market.currentEpoch ?? '(loading)',
-      writeEnabled: nativeSnapshot?.market.writeEnabled ?? false,
-    },
-    walletBalances: nativeSnapshot
-      ? {
-          bchSats: nativeSnapshot.balances.bchSats.toString(),
-          pusdAtomic: nativeSnapshot.balances.pusdAtomic.toString(),
-          spendableUtxoCount: nativeSnapshot.balances.spendableUtxoCount,
-          tokenUtxoCount: nativeSnapshot.balances.tokenUtxoCount,
-        }
-      : '(loading)',
-    contractCounts: nativeSnapshot
-      ? {
-          price: nativeSnapshot.liveContracts.PriceContract.utxoCount,
-          borrowing: nativeSnapshot.liveContracts.Borrowing.utxoCount,
-          stabilityPool: nativeSnapshot.liveContracts.StabilityPool.utxoCount,
-          redeemer: nativeSnapshot.liveContracts.Redeemer.utxoCount,
-          loanKeyFactory: nativeSnapshot.liveContracts.LoanKeyFactory.utxoCount,
-        }
-      : '(loading)',
-  },
-  null,
-  2
-)}
-        </pre>
+
+        <div className="mt-4 space-y-3">
+          <div className="rounded-[1.6rem] border border-white/10 bg-white/5 p-4">
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <h3 className="text-sm font-semibold text-white">Deployment</h3>
+                <p className="mt-1 text-xs text-white/55">{snapshot.verificationSummary}</p>
+              </div>
+              <Badge tone={snapshot.verifiedMainnetV1 ? 'positive' : 'warning'}>
+                {snapshot.verifiedMainnetV1 ? 'Verified' : 'Check config'}
+              </Badge>
+            </div>
+            <div className="mt-3 rounded-2xl border border-[#ffb84d]/20 bg-[#5b2d0f]/70 px-4 py-3 text-sm leading-6 text-[#ffc76d]">
+              {!snapshot.verifiedMainnetV1
+                ? 'Live writes stay disabled until the verified bundle is matched.'
+                : loadingNativeSnapshot
+                  ? 'Loading live contract threads and period state…'
+                  : writeEnabled
+                    ? 'Live mainnet-v1 is verified and the contract threads are healthy.'
+                    : 'Live mainnet-v1 is verified, but one or more contract threads or the pool period are stale.'}
+            </div>
+          </div>
+
+          <div className="rounded-[1.6rem] border border-white/10 bg-white/5 p-4">
+            <h3 className="text-sm font-semibold text-white">Readiness</h3>
+            <div className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-2">
+              <CompactStatusRow label="Loan plan" value={flowPlans?.loan.ready ? 'Ready' : 'Blocked'} />
+              <CompactStatusRow label="Pool plan" value={flowPlans?.pool.ready ? 'Ready' : 'Blocked'} />
+              <CompactStatusRow
+                label="Redeem plan"
+                value={flowPlans?.redemption.ready ? 'Ready' : 'Blocked'}
+              />
+              <CompactStatusRow
+                label="Operator"
+                value={flowPlans?.operator.ready ? 'Ready' : 'Review'}
+              />
+            </div>
+          </div>
+
+          <div className="rounded-[1.6rem] border border-white/10 bg-white/5 p-4">
+            <h3 className="text-sm font-semibold text-white">Live bundle</h3>
+            <div className="mt-3 grid gap-2">
+              {PARYON_CORE_CONTRACTS.map((name) => {
+                const contract = snapshot.contractsByName[name];
+                return (
+                  <div key={name} className="rounded-2xl border border-white/10 bg-black/12 px-3 py-3">
+                    <div className="flex items-start justify-between gap-3">
+                      <div>
+                        <div className="font-semibold text-white">{name}</div>
+                        <div className="mt-1 text-xs text-white/58">
+                          {contract.abiNames.length} callable entrypoints
+                        </div>
+                      </div>
+                      <Badge tone={contract.resolved ? 'positive' : 'warning'}>
+                        {contract.resolved ? 'resolved' : 'needs config'}
+                      </Badge>
+                    </div>
+                    <div className="mt-2 break-all font-mono text-[0.72rem] leading-5 text-white/68">
+                      {shortHex(contract.address)}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        </div>
       </details>
+
+      <button
+        type="button"
+        className="wallet-btn-danger mt-2 w-full rounded-full px-4 py-3 text-sm font-semibold"
+        onClick={() => navigate(backTarget)}
+      >
+        Back
+      </button>
     </div>
   );
 
@@ -825,7 +846,7 @@ export default function ParyonWorkspaceApp({ sdk, app }: Props) {
       preview={borrowPreview}
       plan={executionPlans?.borrow ?? null}
       writeEnabled={writeEnabled}
-      onBack={() => dispatchView({ type: 'navigate', view: 'dashboard' })}
+      onBack={() => setView('overview')}
       onReview={() => openPreview(borrowPreview)}
       form={
         <div className="space-y-3">
@@ -855,7 +876,7 @@ export default function ParyonWorkspaceApp({ sdk, app }: Props) {
       preview={stakePreview}
       plan={executionPlans?.stake ?? null}
       writeEnabled={writeEnabled}
-      onBack={() => dispatchView({ type: 'navigate', view: 'dashboard' })}
+      onBack={() => setView('overview')}
       onReview={() => openPreview(stakePreview)}
       form={
         <Field
@@ -876,7 +897,7 @@ export default function ParyonWorkspaceApp({ sdk, app }: Props) {
       preview={redeemPreview}
       plan={executionPlans?.redeem ?? null}
       writeEnabled={writeEnabled}
-      onBack={() => dispatchView({ type: 'navigate', view: 'dashboard' })}
+      onBack={() => setView('overview')}
       onReview={() => openPreview(redeemPreview)}
       form={
         <Field
@@ -890,13 +911,24 @@ export default function ParyonWorkspaceApp({ sdk, app }: Props) {
     />
   );
 
-  const renderHistory = () => (
+  const renderPositions = () => (
     <ScreenShell
+      data-section="positions"
       title="Positions"
       subtitle="Wallet-linked loan, pool, and redemption state derived from native UTXO index."
-      onBack={() => dispatchView({ type: 'navigate', view: 'dashboard' })}
+      onBack={() => setView('overview')}
     >
       <div className="space-y-3">
+        <SegmentedSubnav
+          value={positionTab}
+          onChange={setPositionTab}
+          options={[
+            { value: 'loans', label: 'Loans' },
+            { value: 'stakes', label: 'Stakes' },
+            { value: 'redemptions', label: 'Redemptions' },
+          ]}
+        />
+
         <StatGrid
           items={[
             {
@@ -917,255 +949,162 @@ export default function ParyonWorkspaceApp({ sdk, app }: Props) {
           ]}
         />
 
+        {positionLifecycleSummary.pending > 0 || positionLifecycleSummary.locked > 0 ? (
+          <InfoPanel tone="warning">
+            {positionLifecycleSummary.pending > 0
+              ? `${positionLifecycleSummary.pending} pending position${
+                  positionLifecycleSummary.pending === 1 ? '' : 's'
+                } need follow-up or confirmation. `
+              : ''}
+            {positionLifecycleSummary.locked > 0
+              ? `${positionLifecycleSummary.locked} locked position${
+                  positionLifecycleSummary.locked === 1 ? '' : 's'
+                } are waiting on the next protocol boundary.`
+              : ''}
+          </InfoPanel>
+        ) : null}
+
         <div className="space-y-2">
-          {historyLines.length === 0 ? (
+          {positionsForTab.length === 0 ? (
             <InfoPanel tone="neutral">
-              No Paryon-linked wallet history is available yet. Open a borrow, stake, or redeem flow to populate the native history view.
+              {positionTab === 'loans'
+                ? 'No live loan positions are indexed yet.'
+                : positionTab === 'stakes'
+                  ? 'No live stability-pool positions are indexed yet.'
+                  : 'No live redemption positions are indexed yet.'}
             </InfoPanel>
           ) : (
-            historyLines.map((line) => (
-              <div key={line} className="rounded-2xl border border-white/10 bg-white/5 px-3 py-3 text-sm leading-6 text-white/86">
-                {line}
-              </div>
+            positionsForTab.map((record) => (
+              <button
+                key={record.positionId}
+                type="button"
+                className={`block w-full rounded-2xl border px-3 py-3 text-left transition ${
+                  selectedPosition?.positionId === record.positionId
+                    ? 'border-[var(--wallet-accent)] bg-white/10'
+                    : 'border-white/10 bg-white/5 hover:bg-white/10'
+                }`}
+                onClick={() => setSelectedPositionId(record.positionId)}
+              >
+                <div className="flex items-start justify-between gap-3">
+                  <div className="min-w-0">
+                    <div className="font-semibold text-white">{record.label}</div>
+                    <div className="mt-1 text-xs text-white/58">
+                      {record.kind} · {record.state} · {record.contractNames.join(', ')}
+                    </div>
+                  </div>
+                  <Badge tone={record.warnings.length > 0 ? 'warning' : 'neutral'}>
+                    {record.warnings.length > 0 ? 'Review' : 'Live'}
+                  </Badge>
+                </div>
+                <div className="mt-2 text-xs leading-5 text-white/70">
+                  {record.details.slice(0, 2).join(' · ')}
+                </div>
+                {record.warnings.length > 0 ? (
+                  <div className="mt-2 rounded-xl border border-[#ffb84d]/20 bg-[#5b2d0f]/70 px-3 py-2 text-xs leading-5 text-[#ffc76d]">
+                    {record.warnings.join(' ')}
+                  </div>
+                ) : null}
+              </button>
             ))
           )}
         </div>
-      </div>
-    </ScreenShell>
-  );
 
-  const renderStats = () => (
-    <ScreenShell
-      title="Operator"
-      subtitle="Thread health, routing, and production readiness from the live bundle."
-      onBack={() => dispatchView({ type: 'navigate', view: 'dashboard' })}
-    >
-      <div className="space-y-3">
-        <StatGrid
-          items={[
-            {
-              label: 'Oracle price',
-              value: toCurrency(market.oraclePriceCentsPerBch),
-              sublabel: 'USD per BCH from PriceContract',
-            },
-            {
-              label: 'Chain height',
-              value:
-                nativeSnapshot?.market.chainHeight != null
-                  ? String(nativeSnapshot.market.chainHeight)
-                  : '—',
-              sublabel: 'Latest live block height',
-            },
-            {
-              label: 'Current period',
-              value:
-                nativeSnapshot?.market.currentPeriod != null
-                  ? String(nativeSnapshot.market.currentPeriod)
-                  : '—',
-              sublabel: 'Period state derived from StabilityPool',
-            },
-            {
-              label: 'Expected period',
-              value:
-                nativeSnapshot?.market.expectedPeriod != null
-                  ? String(nativeSnapshot.market.expectedPeriod)
-                  : '—',
-              sublabel: 'Derived from chain height and deployment params',
-            },
-          ]}
-        />
+        {selectedPosition ? (
+          <section className="rounded-[1.5rem] border border-white/10 bg-white/5 p-4">
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <h3 className="text-sm font-semibold text-white">Selected position</h3>
+                <p className="mt-1 text-xs text-white/55">
+                  Drill-down snapshot for the currently selected loan, stake, or redemption.
+                </p>
+              </div>
+              <Badge tone={selectedPosition.state === 'live' ? 'positive' : 'warning'}>
+                {selectedPosition.state}
+              </Badge>
+            </div>
 
-        <StatGrid
-          items={[
-            {
-              label: 'Write mode',
-              value: writeEnabled ? 'Enabled' : 'Read only',
-              sublabel: writeEnabled ? 'Verified live mainnet-v1' : 'Fail-closed until verified',
-            },
-            {
-              label: 'Fresh threads',
-              value: nativeSnapshot?.systemHealth.freshThreads != null ? String(nativeSnapshot.systemHealth.freshThreads) : '—',
-              sublabel: 'Live contract threads routed cleanly',
-            },
-            {
-              label: 'Stale threads',
-              value: nativeSnapshot?.systemHealth.staleThreads != null ? String(nativeSnapshot.systemHealth.staleThreads) : '—',
-              sublabel: 'Threads requiring operator review',
-            },
-            {
-              label: 'Live positions',
-              value: nativeSnapshot?.positionIndex.summary.total != null
-                ? String(nativeSnapshot.positionIndex.summary.total)
-                : '—',
-              sublabel: 'Loan, pool, redemption, and authority bundles',
-            },
-          ]}
-        />
+            <div className="mt-3 grid gap-2 sm:grid-cols-2">
+              <CompactStatusRow label="Kind" value={selectedPosition.kind} />
+              <CompactStatusRow label="Value" value={`${selectedPosition.valueSats.toString()} sats`} />
+              <CompactStatusRow
+                label="Token amount"
+                value={
+                  selectedPosition.tokenAmountAtomic != null
+                    ? selectedPosition.tokenAmountAtomic.toString()
+                    : '—'
+                }
+              />
+              <CompactStatusRow label="Outputs" value={selectedPosition.outputIndexes.join(', ')} />
+            </div>
 
-        <section className="rounded-[1.6rem] border border-white/10 bg-white/5 p-4">
-          <h3 className="text-sm font-semibold text-white">Plan readiness</h3>
-          <div className="mt-3 grid grid-cols-2 gap-2">
-            <CompactStatusRow label="Loan plan" value={flowPlans?.loan.ready ? 'Ready' : 'Blocked'} />
-            <CompactStatusRow label="Pool plan" value={flowPlans?.pool.ready ? 'Ready' : 'Blocked'} />
-            <CompactStatusRow
-              label="Redeem plan"
-              value={flowPlans?.redemption.ready ? 'Ready' : 'Blocked'}
-            />
-            <CompactStatusRow
-              label="Operator"
-              value={flowPlans?.operator.ready ? 'Ready' : 'Review'}
-            />
-          </div>
-        </section>
+            <div className="mt-3 rounded-2xl border border-white/10 bg-black/12 p-3 text-sm leading-6 text-white/84">
+              {selectedPosition.details.map((line) => (
+                <div key={line}>{line}</div>
+              ))}
+            </div>
 
-        <section className="rounded-[1.6rem] border border-white/10 bg-white/5 p-4">
-          <h3 className="text-sm font-semibold text-white">Thread routing</h3>
+            {selectedPosition.warnings.length > 0 ? (
+              <div className="mt-3 rounded-2xl border border-[#ffb84d]/20 bg-[#5b2d0f]/70 px-4 py-3 text-sm leading-6 text-[#ffc76d]">
+                {selectedPosition.warnings.join(' ')}
+              </div>
+            ) : null}
+
+            <div className="mt-3 rounded-2xl border border-white/10 bg-black/12 px-4 py-3 text-sm leading-6 text-white/76">
+              Management paths are protocol-aware and shown here as reference only until the
+              specific detail actions are wired into the add-on flow.
+            </div>
+          </section>
+        ) : null}
+
+        <details className="rounded-[1.4rem] border border-white/10 bg-white/5 p-3">
+          <summary className="cursor-pointer list-none">
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <h3 className="text-sm font-semibold text-white">Wallet history</h3>
+                <p className="mt-1 text-xs text-white/55">Last wallet-linked Paryon outputs.</p>
+              </div>
+              <span className="text-[0.72rem] uppercase tracking-[0.2em] text-white/45">
+                {historyLines.length}
+              </span>
+            </div>
+          </summary>
           <div className="mt-3 space-y-2">
-            {threadHealth.length > 0 ? (
-              threadHealth.map((thread) => (
-                <div key={thread.name} className="rounded-2xl border border-white/10 bg-black/12 px-3 py-3">
-                  <div className="flex items-start justify-between gap-3">
-                    <div>
-                      <div className="font-semibold text-white">{thread.name}</div>
-                      <div className="mt-1 text-xs text-white/58">
-                        {thread.threadCount} live outputs · {shortHex(thread.tokenId)}
-                      </div>
-                    </div>
-                    <Badge tone={thread.freshness === 'fresh' ? 'positive' : 'warning'}>
-                      {thread.freshness}
-                    </Badge>
-                  </div>
-                  <div className="mt-2 text-xs leading-5 text-white/72">
-                    Preferred outpoint: {thread.preferredOutpoint ?? 'unresolved'}
-                  </div>
-                  {thread.warnings.length > 0 ? (
-                    <div className="mt-2 rounded-2xl border border-[#ffb84d]/20 bg-[#5b2d0f]/70 px-3 py-2 text-xs leading-5 text-[#ffc76d]">
-                      {thread.warnings.join(' ')}
-                    </div>
-                  ) : null}
+            {historyLines.length === 0 ? (
+              <InfoPanel tone="neutral">
+                Open a borrow, stake, or redeem flow to populate the history view.
+              </InfoPanel>
+            ) : (
+              historyLines.map((line) => (
+                <div key={line} className="rounded-2xl border border-white/10 bg-white/5 px-3 py-3 text-sm leading-6 text-white/86">
+                  {line}
                 </div>
               ))
-            ) : (
-              <InfoPanel tone="neutral">Loading live contract thread health…</InfoPanel>
             )}
           </div>
-        </section>
-
-        <section className="rounded-[1.6rem] border border-white/10 bg-white/5 p-4">
-          <h3 className="text-sm font-semibold text-white">Live contract outputs</h3>
-          <div className="mt-3 space-y-2">
-            {nativeSnapshot ? (
-              ([
-                ['PriceContract', nativeSnapshot.liveContracts.PriceContract],
-                ['Borrowing', nativeSnapshot.liveContracts.Borrowing],
-                ['StabilityPool', nativeSnapshot.liveContracts.StabilityPool],
-                ['Redeemer', nativeSnapshot.liveContracts.Redeemer],
-                ['LoanKeyFactory', nativeSnapshot.liveContracts.LoanKeyFactory],
-              ] as const).map(([name, contract]) => (
-                <div key={name} className="rounded-2xl border border-white/10 bg-black/12 px-3 py-3">
-                  <div className="flex items-start justify-between gap-3">
-                    <div>
-                      <div className="font-semibold text-white">{name}</div>
-                      <div className="mt-1 text-xs text-white/58">
-                        {contract.utxoCount} live outputs · {toBch(contract.totalValueSats)}
-                      </div>
-                    </div>
-                    <Badge tone={contract.resolved ? 'positive' : 'warning'}>
-                      {contract.resolved ? 'Live' : 'Query failed'}
-                    </Badge>
-                  </div>
-                  <div className="mt-2 break-all font-mono text-[0.72rem] leading-5 text-white/68">
-                    {shortHex(contract.address)}
-                  </div>
-                </div>
-              ))
-            ) : (
-              <InfoPanel tone="neutral">Loading live contract statistics…</InfoPanel>
-            )}
-          </div>
-        </section>
-      </div>
-    </ScreenShell>
-  );
-
-  const renderFaq = () => (
-    <ScreenShell
-      title="FAQ"
-      subtitle="Short answers for the live stablecoin wallet surface."
-      onBack={() => dispatchView({ type: 'navigate', view: 'dashboard' })}
-    >
-      <div className="space-y-3">
-        <FaqCard
-          q="Why does the wallet only write on mainnet-v1?"
-          a="The live deployment bundle is verified against the exact mainnet contract values. Anything else stays read-only and fail-closed."
-        />
-        <FaqCard
-          q="What happens if deployment config is missing?"
-          a="The wallet shows the missing fields and keeps borrow, stake, and redeem flows disabled until the deployment env is complete."
-        />
-        <FaqCard
-          q="Why is redeem delayed?"
-          a="Finalization uses a 12-block timelock to protect the redemption path and keep the contract logic consensus-safe."
-        />
-        <FaqCard
-          q="Is this app external-window based?"
-          a="No. The ParyonUSD experience is rendered natively inside the OPTN Wallet shell."
-        />
-      </div>
-    </ScreenShell>
-  );
-
-  const renderDocs = () => (
-    <ScreenShell
-      title="Docs"
-      subtitle="Native in-app protocol notes and contract summaries."
-      onBack={() => dispatchView({ type: 'navigate', view: 'dashboard' })}
-    >
-      <div className="space-y-3">
-        <DocsCard
-          title="Borrow"
-          body="A loan requires BCH collateral, the live oracle price, and the launch-phase collateral floor. The preview computes the 110% threshold before any native action is staged."
-        />
-        <DocsCard
-          title="Stake"
-          body="Staking PUSD enters the stability pool. Receipts unlock with the next epoch, and withdrawals settle pro-rata against the live pool state."
-        />
-        <DocsCard
-          title="Redeem"
-          body="Redemption locks in the oracle price plus the 0.5% fee, then finalizes under the 12-block timelock. The native preview shows the expected BCH payout."
-        />
-        <DocsCard
-          title="System map"
-          body="The wallet keeps the verified bundle visible: PriceContract, Borrowing, StabilityPool, Redeemer, LoanKeyFactory, and the helper contracts that make up the live system."
-        />
+        </details>
       </div>
     </ScreenShell>
   );
 
   const renderView = () => {
     switch (view) {
+      case 'overview':
+        return renderOverview();
       case 'borrow':
         return renderBorrow();
       case 'stake':
         return renderStake();
       case 'redeem':
         return renderRedeem();
-      case 'history':
-        return renderHistory();
-      case 'stats':
-        return renderStats();
-      case 'faq':
-        return renderFaq();
-      case 'docs':
-        return renderDocs();
-      case 'dashboard':
+      case 'positions':
+        return renderPositions();
       default:
-        return renderDashboard();
+        return renderOverview();
     }
   };
 
   return (
-    <div className="container mx-auto max-w-md px-4 pb-6 pt-4 text-white wallet-page sm:max-w-lg">
+    <WalletScreen maxWidthClassName="max-w-md" className="text-white">
       <div className="space-y-4">
         {renderNav()}
         {renderView()}
@@ -1215,7 +1154,7 @@ export default function ParyonWorkspaceApp({ sdk, app }: Props) {
           ) : null}
         </ContainedSwipeConfirmModal>
       ) : null}
-    </div>
+    </WalletScreen>
   );
 }
 
@@ -1289,17 +1228,6 @@ function BalanceCard({
   );
 }
 
-function InfoRow({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="rounded-2xl border border-white/10 bg-white/5 px-3 py-3">
-      <div className="text-[0.72rem] uppercase tracking-[0.22em] text-white/55">
-        {label}
-      </div>
-      <div className="mt-1 break-all text-sm leading-6 text-white/90">{value}</div>
-    </div>
-  );
-}
-
 function CompactStatusRow({
   label,
   value,
@@ -1313,75 +1241,6 @@ function CompactStatusRow({
         {label}
       </div>
       <div className="mt-1 text-sm font-semibold text-white">{value}</div>
-    </div>
-  );
-}
-
-function LaunchCard({
-  tone,
-  title,
-  description,
-  metricLabel,
-  metricValue,
-  buttonLabel,
-  onClick,
-  enabled,
-}: {
-  tone: 'borrow' | 'stake' | 'redeem';
-  title: string;
-  description: string;
-  metricLabel: string;
-  metricValue: string;
-  buttonLabel: string;
-  onClick: () => void;
-  enabled: boolean;
-}) {
-  const toneStyles = {
-    borrow: {
-      border: 'border-[#b744ff]/18',
-      accent: 'bg-[#b744ff]',
-      button: 'bg-[#c13cff] hover:bg-[#d04cff]',
-    },
-    stake: {
-      border: 'border-[#3a78ff]/18',
-      accent: 'bg-[#3a78ff]',
-      button: 'bg-[#3a78ff] hover:bg-[#4b88ff]',
-    },
-    redeem: {
-      border: 'border-[#9b4dff]/18',
-      accent: 'bg-[#9b4dff]',
-      button: 'bg-[#9b4dff] hover:bg-[#ad5fff]',
-    },
-  }[tone];
-
-  return (
-    <div className={`rounded-[1.5rem] border ${toneStyles.border} bg-white/5 p-4`}>
-      <div className="flex items-start gap-3">
-        <div className={`mt-1 h-3 w-3 shrink-0 rounded-full ${toneStyles.accent}`} />
-        <div className="min-w-0 flex-1">
-          <div className="text-base font-semibold text-white">{title}</div>
-          <p className="mt-2 text-sm leading-6 text-white/68">{description}</p>
-        </div>
-      </div>
-
-      <div className="mt-3 grid grid-cols-2 gap-3 rounded-2xl border border-white/10 bg-black/12 px-3 py-3">
-        <div>
-          <div className="text-[0.68rem] uppercase tracking-[0.22em] text-white/55">
-            {metricLabel}
-          </div>
-          <div className="mt-1 text-sm font-semibold text-white">{metricValue}</div>
-        </div>
-        <button
-          type="button"
-          className={`inline-flex items-center justify-center rounded-full px-4 py-3 text-sm font-semibold text-white transition ${
-            enabled ? toneStyles.button : 'bg-white/10 text-white/60'
-          }`}
-          onClick={onClick}
-          disabled={!enabled}
-        >
-          {buttonLabel}
-        </button>
-      </div>
     </div>
   );
 }
@@ -1500,11 +1359,13 @@ function ActionScreen({
 }
 
 function ScreenShell({
+  dataSection,
   title,
   subtitle,
   onBack,
   children,
 }: {
+  dataSection?: string;
   title: string;
   subtitle: string;
   onBack: () => void;
@@ -1512,11 +1373,14 @@ function ScreenShell({
 }) {
   return (
     <div className="space-y-4">
-      <section className="rounded-[2rem] border border-white/10 bg-[rgba(27,24,35,0.96)] p-5 shadow-[0_20px_60px_rgba(0,0,0,0.3)]">
+      <section
+        data-section={dataSection}
+        className="rounded-[2rem] border border-white/10 bg-[rgba(27,24,35,0.96)] p-5 shadow-[0_20px_60px_rgba(0,0,0,0.3)]"
+      >
         <div className="flex items-center justify-between gap-3">
           <div>
             <div className="text-[0.72rem] font-semibold uppercase tracking-[0.22em] text-white/55">
-              Native screen
+              Paryon workspace
             </div>
             <h2 className="mt-1 text-[1.9rem] font-extrabold tracking-[-0.06em] text-white">
               {title}
@@ -1527,7 +1391,7 @@ function ScreenShell({
             className="rounded-full border border-white/10 bg-white/5 px-4 py-3 text-sm font-semibold text-white/90 transition hover:bg-white/10"
             onClick={onBack}
           >
-            Dashboard
+            Overview
           </button>
         </div>
         <p className="mt-3 text-sm leading-6 text-white/65">{subtitle}</p>
@@ -1591,7 +1455,7 @@ function StatGrid({
   items: Array<{ label: string; value: string; sublabel: string }>;
 }) {
   return (
-    <div className="grid grid-cols-2 gap-3">
+    <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
       {items.map((item) => (
         <div key={item.label} className="rounded-2xl border border-white/10 bg-white/5 px-4 py-4">
           <div className="text-[0.7rem] font-semibold uppercase tracking-[0.22em] text-white/55">
@@ -1621,35 +1485,5 @@ function InfoPanel({
   }[tone];
   return (
     <div className={`rounded-2xl border px-4 py-3 text-sm leading-6 ${styles}`}>{children}</div>
-  );
-}
-
-function FaqCard({
-  q,
-  a,
-}: {
-  q: string;
-  a: string;
-}) {
-  return (
-    <div className="rounded-[1.6rem] border border-white/10 bg-white/5 p-4">
-      <div className="text-sm font-semibold text-white">{q}</div>
-      <div className="mt-2 text-sm leading-6 text-white/72">{a}</div>
-    </div>
-  );
-}
-
-function DocsCard({
-  title,
-  body,
-}: {
-  title: string;
-  body: string;
-}) {
-  return (
-    <div className="rounded-[1.6rem] border border-white/10 bg-white/5 p-4">
-      <div className="text-sm font-semibold text-white">{title}</div>
-      <div className="mt-2 text-sm leading-6 text-white/72">{body}</div>
-    </div>
   );
 }

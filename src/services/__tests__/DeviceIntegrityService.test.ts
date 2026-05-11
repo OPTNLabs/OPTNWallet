@@ -11,7 +11,7 @@ vi.mock('@capacitor/core', () => ({
   },
 }));
 
-vi.mock('../../plugins/DeviceIntegrity', () => ({
+vi.mock('../../platform/plugins/DeviceIntegrity', () => ({
   default: {
     assess: assessMock,
   },

@@ -1,4 +1,3 @@
-import React from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it, vi } from 'vitest';
 import SegmentedSubnav from '../SegmentedSubnav';
@@ -21,4 +20,3 @@ describe('SegmentedSubnav', () => {
     expect(html).toContain('wallet-segment-active');
   });
 });
-

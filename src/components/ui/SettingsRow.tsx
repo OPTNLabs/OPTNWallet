@@ -33,7 +33,7 @@ const SettingsRow: React.FC<SettingsRowProps> = ({
     </div>
   );
 
-  if (onClick) {
+  if (onClick || disabled) {
     return (
       <button
         type="button"

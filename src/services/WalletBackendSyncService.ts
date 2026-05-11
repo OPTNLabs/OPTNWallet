@@ -1,6 +1,6 @@
 import KeyService from './KeyService';
 import WalletManager from '../apis/WalletManager/WalletManager';
-import { Network } from '../redux/networkSlice';
+import { Network } from '../state/slices/networkSlice';
 import { WalletType } from '../types/wallet';
 
 type BackendRegistrationPayload = {

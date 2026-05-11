@@ -1,7 +1,7 @@
 import { useCallback } from 'react';
 import { useDispatch, useSelector } from 'react-redux';
-import type { AppDispatch, RootState } from '../../redux/store';
-import { disconnectWizardConnection } from '../../redux/wizardconnectSlice';
+import type { AppDispatch, RootState } from '../../state/store';
+import { disconnectWizardConnection } from '../../state/slices/wizardconnectSlice';
 import WizardConnectionManager from './WizardConnectionManager';
 
 export default function WizardConnectPanel() {

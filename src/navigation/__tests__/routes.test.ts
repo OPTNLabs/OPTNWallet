@@ -27,6 +27,7 @@ describe('route inventory', () => {
         target: '/apps/optn.builtin.fundme:fundmeApp',
       },
     ]);
+    expect(ROUTE_PATHS.paryon).toBe('/paryon');
   });
 
   it('builds canonical wallet-scoped paths from the shared helpers', () => {
@@ -34,4 +35,3 @@ describe('route inventory', () => {
     expect(transactionsRoute(42)).toBe('/transactions/42');
   });
 });
-

@@ -8,6 +8,7 @@ export const ROUTE_PATHS = {
   actions: '/actions',
   contract: '/contract',
   apps: '/apps',
+  paryon: '/paryon',
   appDetail: '/apps/:appId',
   fundmeLegacy: '/apps/fundme',
   campaignDetail: '/campaign/:id',
@@ -46,4 +47,3 @@ export function homeRoute(walletId: string | number | null | undefined) {
 export function transactionsRoute(walletId: string | number | null | undefined) {
   return `/transactions/${walletId ?? ''}`;
 }
-

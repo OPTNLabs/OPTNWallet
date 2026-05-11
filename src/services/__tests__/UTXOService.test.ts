@@ -42,7 +42,7 @@ vi.mock('../../apis/AddressManager/AddressManager', () => ({
   })),
 }));
 
-vi.mock('../../redux/store', () => ({
+vi.mock('../../state/store', () => ({
   store: {
     getState: vi.fn(() => ({
       network: { currentNetwork: 'mainnet' },

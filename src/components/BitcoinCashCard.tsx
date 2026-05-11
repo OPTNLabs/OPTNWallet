@@ -1,7 +1,7 @@
 // src/components/BitcoinCashCard.tsx
 import React, { useState } from 'react';
 import { useSelector } from 'react-redux';
-import { RootState } from '../redux/store';
+import { RootState } from '../state/store';
 import { FaBitcoin } from 'react-icons/fa';
 import { SATSINBITCOIN } from '../utils/constants';
 
