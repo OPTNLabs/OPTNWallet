@@ -2,6 +2,16 @@
 import { hexString } from './hex';
 
 export default function parseInputValue(value: unknown, type: string) {
+  const normalizeBytesValue = (input: unknown) => {
+    if (typeof input === 'string') {
+      return input.startsWith('0x') ? input.slice(2) : input;
+    }
+    if (input instanceof Uint8Array) {
+      return hexString(input);
+    }
+    throw new Error(`Unsupported type for ${type}: ${typeof input}`);
+  };
+
   switch (type) {
     case 'int':
       return BigInt(value as string | number | bigint | boolean);
@@ -10,16 +20,10 @@ export default function parseInputValue(value: unknown, type: string) {
     case 'string':
       return value;
     case 'bytes':
-      return value;
+      return normalizeBytesValue(value);
     case 'bytes20':
-      if (typeof value === 'string') {
-        // Ensure the string is a valid hex string
-        return value.startsWith('0x') ? value.slice(2) : value;
-      } else if (value instanceof Uint8Array) {
-        return hexString(value);
-      } else {
-        throw new Error(`Unsupported type for bytes20: ${typeof value}`);
-      }
+    case 'bytes32':
+      return normalizeBytesValue(value);
     case 'pubkey':
       return value;
     case 'sig':

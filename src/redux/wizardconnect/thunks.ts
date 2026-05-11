@@ -1,6 +1,6 @@
 import { createAsyncThunk } from '@reduxjs/toolkit';
 import { Toast } from '@capacitor/toast';
-import type { RootState } from '../store';
+import type { RootState } from '../../state/store';
 
 export const wizardConnectPair = createAsyncThunk(
   'wizardconnect/pair',

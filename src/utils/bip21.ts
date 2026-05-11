@@ -3,7 +3,7 @@ import {
   decodeBase58Address,
   decodeCashAddress,
 } from '@bitauth/libauth';
-import { Network } from '../redux/networkSlice';
+import { Network } from '../state/slices/networkSlice';
 
 const MAINNET_PREFIX = 'bitcoincash';
 const CHIPNET_PREFIX = 'bchtest';

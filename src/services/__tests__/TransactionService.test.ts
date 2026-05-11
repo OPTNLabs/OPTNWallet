@@ -23,6 +23,10 @@ vi.mock('../OutboundTransactionTracker', () => ({
   deriveTrackedTxid: vi.fn((rawTx: string) => `tracked:${rawTx}`),
 }));
 
+vi.mock('../../apis/DatabaseManager/DatabaseService', () => ({
+  default: vi.fn(),
+}));
+
 vi.mock('../KeyService', () => ({
   default: {
     retrieveKeys: retrieveKeysMock,
@@ -34,7 +38,7 @@ vi.mock('../../workers/UTXOWorkerService', () => ({
   requestUTXORefreshForMany: requestRefreshMock,
 }));
 
-vi.mock('../../redux/store', () => ({
+vi.mock('../../state/store', () => ({
   store: {
     getState: vi.fn(() => ({ wallet_id: { currentWalletId: 11 } })),
   },
