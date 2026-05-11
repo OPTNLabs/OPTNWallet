@@ -1,5 +1,6 @@
 import { useMemo, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useLocation, useNavigate } from 'react-router-dom';
+import { useSelector } from 'react-redux';
 import { Toast } from '@capacitor/toast';
 import {
   decodePrivateKeyWif,
@@ -7,7 +8,6 @@ import {
 } from '@bitauth/libauth';
 import { FaCamera, FaChevronRight } from 'react-icons/fa';
 import { CapacitorBarcodeScannerTypeHint } from '@capacitor/barcode-scanner';
-import type { AddonSDK } from '../../../services/AddonsSDK';
 import ElectrumService from '../../../services/ElectrumService';
 import { PaperWalletSecretStore } from '../../../services/PaperWalletSecretStore';
 import { PREFIX } from '../../../utils/constants';
@@ -17,10 +17,14 @@ import {
 } from '../../../utils/barcodeScanner';
 import type { UTXO } from '../../../types/types';
 import { buildPaperWalletSweepPlan } from './services/paperWalletSweepPlanner';
+import TransactionService from '../../../services/TransactionService';
+import { selectCurrentNetwork } from '../../../state/selectors/networkSelectors';
+import { selectWalletId } from '../../../state/slices/walletSlice';
 import {
   Badge,
   ContainedSwipeConfirmModal,
 } from '../mint-cashtokens-poc/components/uiPrimitives';
+import { getReturnPath } from '../../../utils/navigation';
 
 const BASE58_WIF_PATTERN =
   /^[123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz]+$/;
@@ -69,11 +73,12 @@ function decodeScannedWif(wif: string) {
 
   return direct;
 }
-
-type Props = { sdk: AddonSDK };
-
-export default function PaperWalletSweepApp({ sdk }: Props) {
+export default function PaperWalletSweepApp() {
   const navigate = useNavigate();
+  const location = useLocation();
+  const backTarget = getReturnPath(location, '/apps');
+  const walletId = useSelector(selectWalletId);
+  const currentNetwork = useSelector(selectCurrentNetwork);
   const [loading, setLoading] = useState(false);
   const [scannedAddress, setScannedAddress] = useState('');
   const [paperWalletUtxos, setPaperWalletUtxos] = useState<UTXO[]>([]);
@@ -87,9 +92,8 @@ export default function PaperWalletSweepApp({ sdk }: Props) {
   }>(null);
 
   const networkPrefix = useMemo(() => {
-    const network = sdk.wallet.getContext().network;
-    return network === 'mainnet' ? PREFIX.mainnet : PREFIX.chipnet;
-  }, [sdk]);
+    return currentNetwork === 'mainnet' ? PREFIX.mainnet : PREFIX.chipnet;
+  }, [currentNetwork]);
 
   const networkPrefixFallback = useMemo(
     () => (networkPrefix === PREFIX.mainnet ? PREFIX.chipnet : PREFIX.mainnet),
@@ -191,14 +195,19 @@ export default function PaperWalletSweepApp({ sdk }: Props) {
       setLoading(true);
       setError(null);
 
-      const addresses = await sdk.wallet.listAddresses();
-      const destinationAddress = addresses[0]?.address;
+      if (!walletId) {
+        throw new Error('No active wallet is available.');
+      }
+
+      const addressesResult = await TransactionService.fetchAddressesAndUTXOs(
+        walletId
+      );
+      const destinationAddress = addressesResult.addresses[0]?.address;
       if (!destinationAddress) {
         throw new Error('No destination wallet address is available.');
       }
 
-      const walletUtxos = await sdk.utxos.listForWallet();
-      const walletFeeUtxos = walletUtxos.allUtxos.filter(
+      const walletFeeUtxos = addressesResult.utxos.filter(
         (utxo) =>
           !utxo.token &&
           !utxo.isPaperWallet &&
@@ -213,16 +222,17 @@ export default function PaperWalletSweepApp({ sdk }: Props) {
         walletFeeUtxos,
       });
 
-      const built = await sdk.tx.build({
-        inputs: [...plan.paperWalletUtxos, ...plan.feeInputs],
-        outputs: plan.outputs,
-        changeAddress: destinationAddress,
-      });
-      if (built.errorMsg || !built.hex) {
+      const built = await TransactionService.buildTransaction(
+        plan.outputs,
+        null,
+        destinationAddress,
+        [...plan.paperWalletUtxos, ...plan.feeInputs]
+      );
+      if (built.errorMsg || !built.finalTransaction) {
         throw new Error(built.errorMsg || 'Failed to build sweep transaction.');
       }
 
-      setPendingSweep({ plan, builtHex: built.hex });
+      setPendingSweep({ plan, builtHex: built.finalTransaction });
       setConfirmOpen(true);
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
@@ -238,7 +248,9 @@ export default function PaperWalletSweepApp({ sdk }: Props) {
 
     try {
       setConfirmLoading(true);
-      const sent = await sdk.tx.broadcast(pendingSweep.builtHex);
+      const sent = await TransactionService.sendTransaction(
+        pendingSweep.builtHex
+      );
       if (sent.errorMessage) {
         throw new Error(sent.errorMessage);
       }
@@ -286,7 +298,7 @@ export default function PaperWalletSweepApp({ sdk }: Props) {
   }, [paperWalletUtxos]);
 
   return (
-    <div className="container mx-auto max-w-md h-[calc(100dvh-var(--navbar-height)-var(--safe-bottom))] px-4 pt-2 pb-3 flex flex-col overflow-hidden wallet-page">
+    <div className="container mx-auto max-w-md h-[calc(100dvh-var(--navbar-height)-var(--safe-bottom))] px-4 pt-2 pb-[calc(var(--safe-bottom)+1rem)] flex flex-col overflow-hidden wallet-page">
       <div className="flex-none">
         <div className="flex justify-center pt-1">
           <img
@@ -299,13 +311,6 @@ export default function PaperWalletSweepApp({ sdk }: Props) {
           <h1 className="text-2xl font-bold wallet-text-strong tracking-[-0.02em]">
             Paper Wallet
           </h1>
-          <button
-            type="button"
-            onClick={() => navigate('/apps')}
-            className="wallet-btn-danger px-4 py-2"
-          >
-            Go Back
-          </button>
         </div>
         <p className="mt-2 text-sm wallet-muted">
           Scan a WIF paper wallet and sweep BCH + CashTokens in one transaction.
@@ -388,6 +393,15 @@ export default function PaperWalletSweepApp({ sdk }: Props) {
             )}
           </div>
         </div>
+      </div>
+      <div className="mt-auto flex-none pt-3">
+        <button
+          type="button"
+          onClick={() => navigate(backTarget)}
+          className="wallet-btn-danger w-full py-3 font-semibold"
+        >
+          Back
+        </button>
       </div>
       <ContainedSwipeConfirmModal
         open={confirmOpen && !!pendingSweep}

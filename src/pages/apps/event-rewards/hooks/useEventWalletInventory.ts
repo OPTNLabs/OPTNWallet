@@ -12,6 +12,7 @@ type WalletInventoryState = {
 };
 
 export function useAirdropWalletInventory(sdk: AddonSDK) {
+  const [enabled, setEnabled] = useState(false);
   const [state, setState] = useState<WalletInventoryState>({
     loading: true,
     error: '',
@@ -22,6 +23,12 @@ export function useAirdropWalletInventory(sdk: AddonSDK) {
   });
 
   useEffect(() => {
+    const raf = window.requestAnimationFrame(() => setEnabled(true));
+    return () => window.cancelAnimationFrame(raf);
+  }, []);
+
+  useEffect(() => {
+    if (!enabled) return;
     let cancelled = false;
 
     void (async () => {
@@ -97,7 +104,7 @@ export function useAirdropWalletInventory(sdk: AddonSDK) {
     return () => {
       cancelled = true;
     };
-  }, [sdk]);
+  }, [enabled, sdk]);
 
   return state;
 }

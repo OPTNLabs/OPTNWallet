@@ -1,6 +1,6 @@
 // src/utils/servers/InfraUrls.ts
 
-import { Network } from '../../redux/networkSlice';
+import { Network } from '../../state/slices/networkSlice';
 
 export type InfraUrls = {
   chaingraphUrl: string; // full URL

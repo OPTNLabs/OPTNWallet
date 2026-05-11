@@ -7,7 +7,7 @@ import {
 } from '../ChaingraphManager';
 import { getInfraUrlPools, runWithFailover } from '../../../utils/servers/InfraUrls';
 
-vi.mock('../../../redux/store', () => ({
+vi.mock('../../../state/store', () => ({
   store: {
     getState: vi.fn(() => ({ network: { currentNetwork: 'mainnet' } })),
   },

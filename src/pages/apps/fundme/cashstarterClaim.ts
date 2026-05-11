@@ -9,18 +9,33 @@ interface CashStarterClaimParams {
   contractCashStarter: Contract | undefined;
   contractCashStarterClaim: Contract | undefined;
   campaignID: string;
-  signTransaction: (options: any) => Promise<unknown>;
+  signTransaction: (options: {
+    transaction: unknown;
+    sourceOutputs: unknown[];
+    broadcast: boolean;
+    userPrompt: string;
+  }) => Promise<unknown>;
   setError: (message: string) => void;
 }
 
-async function cashstarterClaim({ electrumServer, usersAddress, contractCashStarter, contractCashStarterClaim, campaignID, signTransaction, setError }: CashStarterClaimParams): Promise<any> {
+type UtxoToken = NonNullable<Utxo['token']>;
+type UtxoTokenWithNft = UtxoToken & { nft: NonNullable<UtxoToken['nft']> };
+
+function requireToken(utxo: Utxo, context: string): UtxoTokenWithNft {
+  if (!utxo.token?.nft) {
+    throw new Error(`Missing token data for ${context}`);
+  }
+  return utxo.token as UtxoTokenWithNft;
+}
+
+async function cashstarterClaim({ electrumServer, usersAddress, contractCashStarter, contractCashStarterClaim, campaignID, signTransaction, setError }: CashStarterClaimParams): Promise<unknown> {
   
   function LEtoBE(hexLE: string) {
     // Convert the hex string from little-endian to big-endian
     const hexBE = hexLE.match(/.{2}/g)?.reverse().join('') ?? '0';
     return hexBE;
   }
-  function hexToUint8Array(hexString: any) {
+  function hexToUint8Array(hexString: string) {
     const bytes = new Uint8Array(hexString.length / 2);
     for (let i = 0; i < bytes.length; i++) {
         bytes[i] = parseInt(hexString.substr(i * 2, 2), 16);
@@ -50,11 +65,14 @@ async function cashstarterClaim({ electrumServer, usersAddress, contractCashStar
     console.log(claimContractUTXOs);
 
     //Find manager's masterNFT
-    const claimContractUTXO: Utxo = claimContractUTXOs.find(
+    const claimContractUTXO = claimContractUTXOs.find(
       utxo => utxo.token?.category === MasterCategoryID
       && utxo.token?.nft?.capability === 'minting'
       && utxo.token.nft?.commitment.substring(70, 80) == 'ffffffffff' //is the masterNFT
-    )!;
+    );
+    if (!claimContractUTXO) {
+      throw new Error('Unable to find claim contract UTXO');
+    }
     console.log('selected claimContract masterNFT: ');
     console.log(claimContractUTXO);
 
@@ -65,10 +83,13 @@ async function cashstarterClaim({ electrumServer, usersAddress, contractCashStar
     console.log(cashStarterUTXOs);
 
     //Find campaignNFT
-    const campaignUTXO: Utxo = cashStarterUTXOs.find(
+    const campaignUTXO = cashStarterUTXOs.find(
       utxo => utxo.token?.category === MasterCategoryID
       && utxo.token?.nft?.commitment.substring(70,80) === campaignID,
-    )!;
+    );
+    if (!campaignUTXO) {
+      throw new Error('Unable to find campaign UTXO');
+    }
     console.log('selected cashStarter UTXO: ');
     console.log(campaignUTXO);
 
@@ -98,9 +119,10 @@ async function cashstarterClaim({ electrumServer, usersAddress, contractCashStar
 */
 
 //get payoutAddress
-    let payoutAddress: any;
+    let payoutAddress: string | undefined;
     if (campaignUTXO) {
-      const campaignCommitment = campaignUTXO.token?.nft?.commitment!;
+      const campaignToken = requireToken(campaignUTXO, 'campaignUTXO');
+      const campaignCommitment = campaignToken.nft.commitment;
       //  Format of mintingNFT (campaign) nftCommitment field after initialize():
       //    A(6b)        B(20b)        C(4b) D(5b) E(5b)
       //  ------|--------------------|----|-----|-----   (40bytes)
@@ -112,11 +134,15 @@ async function cashstarterClaim({ electrumServer, usersAddress, contractCashStar
 
       const payoutAddressLE = campaignCommitment.substring(12,52);
       const payoutAddressBE = LEtoBE(payoutAddressLE);
-      payoutAddress = (encodeCashAddress as any)(
+      const encoded = encodeCashAddress(
         'bitcoincash',
         'p2pkh',
         hexToUint8Array(payoutAddressBE)
       );
+      if (typeof encoded === 'string') {
+        throw new Error(`Failed to encode payout address: ${encoded}`);
+      }
+      payoutAddress = encoded.address;
       console.log('extracted payoutAddress: ', payoutAddress);
     }
 
@@ -145,6 +171,9 @@ async function cashstarterClaim({ electrumServer, usersAddress, contractCashStar
 
     const provider = new ElectrumNetworkProvider(Network.MAINNET);
     
+    const claimToken = requireToken(claimContractUTXO, 'claimContractUTXO');
+    const campaignToken = requireToken(campaignUTXO, 'campaignUTXO');
+
     const txDetails = await new TransactionBuilder({
       provider,
       maximumFeeSatoshis: 2000n,
@@ -156,11 +185,11 @@ async function cashstarterClaim({ electrumServer, usersAddress, contractCashStar
         to: contractCashStarterClaim.tokenAddress,  
         amount: claimContractUTXO.satoshis,
         token: {
-          amount: claimContractUTXO.token?.amount!,  
-          category: claimContractUTXO.token?.category!,  
+          amount: claimToken.amount,  
+          category: claimToken.category,  
           nft: {
-            capability: claimContractUTXO.token?.nft?.capability!, 
-            commitment: claimContractUTXO.token?.nft?.commitment!  
+            capability: claimToken.nft.capability, 
+            commitment: claimToken.nft.commitment  
           }
         },
       })
@@ -190,11 +219,11 @@ async function cashstarterClaim({ electrumServer, usersAddress, contractCashStar
       console.log(decodedTransaction);
 
       // construct new transaction object for SourceOutputs, for stringify & not to mutate current network provider 
-      const binTokenCategory = hexToBin(campaignUTXO.token?.category!);
-      const claimBinCommitment = hexToBin(claimContractUTXO.token?.nft?.commitment!);
-      const campaignBinCommitment = hexToBin(campaignUTXO.token?.nft?.commitment!);
+      const binTokenCategory = hexToBin(campaignToken.category);
+      const claimBinCommitment = hexToBin(claimToken.nft.commitment);
+      const campaignBinCommitment = hexToBin(campaignToken.nft.commitment);
 
-      const listSourceOutputs = [{
+    const listSourceOutputs = [{
         ...decodedTransaction.inputs[0],
         lockingBytecode: (cashAddressToLockingBytecode(contractCashStarterClaim.address) as { bytecode: Uint8Array }).bytecode,
         valueSatoshis: BigInt(claimContractUTXO.satoshis),
@@ -204,10 +233,10 @@ async function cashstarterClaim({ electrumServer, usersAddress, contractCashStar
           artifact: contractCashStarterClaim.artifact, 
         },
         token: {
-          amount: claimContractUTXO?.token?.amount,
+          amount: claimToken.amount,
           category: binTokenCategory,
           nft: {
-            capability: claimContractUTXO.token?.nft?.capability!,
+            capability: claimToken.nft.capability,
             commitment: claimBinCommitment
           }
         }
@@ -221,10 +250,10 @@ async function cashstarterClaim({ electrumServer, usersAddress, contractCashStar
           artifact: contractCashStarter.artifact,
         },
         token: {
-          amount: campaignUTXO?.token?.amount,
+          amount: campaignToken.amount,
           category: binTokenCategory,
           nft: {
-            capability: campaignUTXO.token?.nft?.capability!,
+            capability: campaignToken.nft.capability,
             commitment: campaignBinCommitment
           }
         }
@@ -247,7 +276,7 @@ async function cashstarterClaim({ electrumServer, usersAddress, contractCashStar
       setError(`Sent claim to your wallet for approval`);
 
       //pass object to walletconnect for user to sign
-      const signResult: any = await signTransaction(wcTransactionObj);
+      const signResult = await signTransaction(wcTransactionObj);
       return signResult;
 
     } catch (error) {

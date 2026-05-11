@@ -2,13 +2,13 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import UTXOManager from '../UTXOManager';
 import DatabaseService from '../../DatabaseManager/DatabaseService';
-import { store } from '../../../redux/store';
+import { store } from '../../../state/store';
 
 vi.mock('../../DatabaseManager/DatabaseService', () => ({
   default: vi.fn(),
 }));
 
-vi.mock('../../../redux/store', () => ({
+vi.mock('../../../state/store', () => ({
   store: {
     getState: vi.fn(),
   },

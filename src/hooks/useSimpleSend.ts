@@ -1,27 +1,17 @@
 // src/hooks/useSimpleSend.ts
 
-import {
-  Dispatch,
-  SetStateAction,
-  useCallback,
-  useEffect,
-  useMemo,
-  useState,
-} from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useSelector } from 'react-redux';
 
-import { RootState } from '../redux/store';
-import { selectWalletId } from '../redux/walletSlice';
-import useFetchWalletData from './useFetchWalletData';
+import { RootState } from '../state/store';
+import { selectWalletId } from '../state/slices/walletSlice';
+import useFetchWalletAddresses from './useFetchWalletAddresses';
 
-import {
-  ContractAddressRecord,
-  UTXO,
-} from '../types/types';
+import { UTXO } from '../types/types';
 import TransactionService, {
   type BroadcastState,
 } from '../services/TransactionService';
-import { selectCurrentNetwork } from '../redux/selectors/networkSelectors';
+import { selectCurrentNetwork } from '../state/selectors/networkSelectors';
 import { SATSINBITCOIN } from '../utils/constants';
 import UTXOService from '../services/UTXOService';
 import {
@@ -39,10 +29,6 @@ import {
   getPreferredBchChangeAddress,
 } from '../utils/changeAddressPreference';
 
-const noopSetContractAddresses: Dispatch<SetStateAction<ContractAddressRecord[]>> =
-  () => undefined;
-const noopSetUtxos: Dispatch<SetStateAction<UTXO[]>> = () => undefined;
-
 export default function useSimpleSend() {
   // Redux
   const prices = useSelector((s: RootState) => s.priceFeed);
@@ -59,18 +45,21 @@ export default function useSimpleSend() {
     useState<string>('');
   const [error, setError] = useState<string>('');
   const [assetType, setAssetType] = useState<AssetType>('bch');
+  const [hydrated, setHydrated] = useState(false);
+
+  useEffect(() => {
+    const raf = window.requestAnimationFrame(() => setHydrated(true));
+    return () => window.cancelAnimationFrame(raf);
+  }, []);
 
   const setErrorMessage = useCallback(
     (value: string | null) => setError(value ?? ''),
     []
   );
 
-  useFetchWalletData(
-    walletId,
+  useFetchWalletAddresses(
+    hydrated ? walletId : null,
     setAddresses,
-    noopSetContractAddresses,
-    noopSetUtxos,
-    noopSetUtxos,
     setDefaultChangeAddress,
     setErrorMessage
   );
@@ -79,6 +68,7 @@ export default function useSimpleSend() {
   const [dbUtxos, setDbUtxos] = useState<UTXO[]>([]);
   const [tokenUtxos, setTokenUtxos] = useState<UTXO[]>([]);
   useEffect(() => {
+    if (!hydrated) return;
     let cancelled = false;
     (async () => {
       if (!walletId) return;
@@ -92,7 +82,7 @@ export default function useSimpleSend() {
     return () => {
       cancelled = true;
     };
-  }, [walletId, addresses.length]);
+  }, [walletId, addresses.length, hydrated]);
 
   // BCH change address (P2PKH cashaddr as selected)
   const [selectedChangeAddress, setSelectedChangeAddressState] =
@@ -111,6 +101,7 @@ export default function useSimpleSend() {
   }, [walletId]);
 
   useEffect(() => {
+    if (!hydrated) return;
     let cancelled = false;
     (async () => {
       if (!walletId) {
@@ -138,9 +129,10 @@ export default function useSimpleSend() {
     return () => {
       cancelled = true;
     };
-  }, [walletId, addresses, preferInternalChangeForBch]);
+  }, [walletId, addresses, preferInternalChangeForBch, hydrated]);
 
   useEffect(() => {
+    if (!hydrated) return;
     if (hasManualChangeSelection) return;
 
     const legacyDefault =
@@ -161,11 +153,13 @@ export default function useSimpleSend() {
     preferInternalChangeForBch,
     preferredBchChangeAddress,
     selectedChangeAddress,
+    hydrated,
   ]);
 
   // Token-aware change address (for FT/NFT change outputs)
   const [tokenChangeAddress, setTokenChangeAddress] = useState<string>('');
   useEffect(() => {
+    if (!hydrated) return;
     let cancelled = false;
     (async () => {
       try {
@@ -187,7 +181,7 @@ export default function useSimpleSend() {
     return () => {
       cancelled = true;
     };
-  }, [walletId, selectedChangeAddress]);
+  }, [walletId, selectedChangeAddress, hydrated]);
 
   // Form – shared
   const [recipient, setRecipient] = useState<string>('');
@@ -471,7 +465,15 @@ export default function useSimpleSend() {
       setError(toErrorMessage(error, 'Failed to send transaction.'));
       setMode('error');
     }
-  }, [review, selectedForTx]);
+  }, [
+    amountBch,
+    amountToken,
+    assetType,
+    parsedRecipient.amountRaw,
+    review,
+    normalizedRecipient,
+    selectedForTx,
+  ]);
 
   // derive token metadata (categories with totals & NFT commitments)
   const categories = useMemo(() => {

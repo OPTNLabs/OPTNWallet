@@ -8,6 +8,7 @@ import type {
 } from '../types/addons';
 import {
   getAddonGrantedCapabilities,
+  shouldExposeDevOnlyApps,
   validateAddonPermissions,
 } from './AddonsAllowlist';
 import { validateAddonManifestAgainstSchema } from './addons/AddonManifestSchema';
@@ -162,7 +163,24 @@ export default function AddonsRegistry() {
       }
 
       seenAddonIds.add(m.id);
-      valid.push(m);
+
+      const exposeDevOnlyApps = shouldExposeDevOnlyApps();
+      const filteredApps = (m.apps ?? []).filter(
+        (app) => !app.devOnly || exposeDevOnlyApps
+      );
+      const filteredContracts = m.contracts.filter(
+        (contract) => !contract.devOnly || exposeDevOnlyApps
+      );
+
+      if (filteredApps.length === 0 && filteredContracts.length === 0) {
+        continue;
+      }
+
+      valid.push({
+        ...m,
+        apps: filteredApps,
+        contracts: filteredContracts,
+      });
     }
 
     manifests = valid;

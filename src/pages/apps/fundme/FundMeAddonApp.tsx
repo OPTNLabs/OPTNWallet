@@ -1,12 +1,21 @@
 import React, { useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useLocation, useNavigate } from 'react-router-dom';
 import type { AddonSDK } from '../../../services/AddonsSDK';
 import type { AddonAppDefinition } from '../../../types/addons';
+import { getReturnPath } from '../../../utils/navigation';
 import FundMeDiscoverView from './components/FundMeDiscoverView';
 import FundMeCreateView from './components/FundMeCreateView';
 import FundMeDetailModal from './components/FundMeDetailModal';
 import { useFundMeCampaigns } from './useFundMeCampaigns';
 import type { CampaignType, ViewMode } from './types';
+import { isChainCampaign } from './fundmeHelpers';
+import {
+  cancelCampaign,
+  claimCampaign,
+  donateToCampaign,
+  refundPledge,
+  stopCampaign,
+} from './fundmeTransactions';
 
 type FundMeAddonAppProps = {
   sdk: AddonSDK;
@@ -15,9 +24,13 @@ type FundMeAddonAppProps = {
 
 const FundMeAddonApp: React.FC<FundMeAddonAppProps> = ({ sdk, app }) => {
   const navigate = useNavigate();
+  const location = useLocation();
+  const backTarget = getReturnPath(location, '/apps');
   const [viewMode, setViewMode] = useState<ViewMode>('discover');
   const [campaignType, setCampaignType] = useState<CampaignType>('active');
   const [donationDraft, setDonationDraft] = useState<string>('');
+  const [actionBusy, setActionBusy] = useState(false);
+  const [actionStatus, setActionStatus] = useState<string | null>(null);
   const {
     walletAddress,
     network,
@@ -40,6 +53,10 @@ const FundMeAddonApp: React.FC<FundMeAddonAppProps> = ({ sdk, app }) => {
       : campaignType === 'stopped'
         ? stoppedCampaigns
         : archivedCampaigns;
+  const selectedChainCampaign =
+    detailModal?.campaign && isChainCampaign(detailModal.campaign)
+      ? detailModal.campaign
+      : null;
 
   const totalCampaignCount =
     activeCampaigns.length + stoppedCampaigns.length + archivedCampaigns.length;
@@ -51,6 +68,19 @@ const FundMeAddonApp: React.FC<FundMeAddonAppProps> = ({ sdk, app }) => {
   const latestKnownBlockLabel = latestBlock
     ? latestBlock.toLocaleString()
     : 'Unavailable';
+
+  const runCampaignAction = async (action: () => Promise<{ txid: string | null }>) => {
+    setActionBusy(true);
+    setActionStatus(null);
+    try {
+      const result = await action();
+      setActionStatus(result.txid ? `Broadcast ${result.txid}` : 'Broadcast requested.');
+    } catch (error) {
+      setActionStatus(error instanceof Error ? error.message : String(error));
+    } finally {
+      setActionBusy(false);
+    }
+  };
 
   return (
     <div className="container mx-auto max-w-md h-[calc(100dvh-var(--navbar-height)-var(--safe-bottom))] px-4 pt-2 pb-3 flex flex-col overflow-hidden wallet-page">
@@ -69,10 +99,10 @@ const FundMeAddonApp: React.FC<FundMeAddonAppProps> = ({ sdk, app }) => {
           </h1>
           <button
             type="button"
-            onClick={() => navigate('/apps')}
+            onClick={() => navigate(backTarget)}
             className="wallet-btn-danger justify-self-end px-4 py-2"
           >
-            Go Back
+            Back
           </button>
         </div>
 
@@ -133,6 +163,59 @@ const FundMeAddonApp: React.FC<FundMeAddonAppProps> = ({ sdk, app }) => {
         donationDraft={donationDraft}
         onClose={closeCampaignDetail}
         onDonationDraftChange={setDonationDraft}
+        actionBusy={actionBusy}
+        actionStatus={actionStatus}
+        onDonate={() =>
+          selectedChainCampaign
+            ? void runCampaignAction(() =>
+                donateToCampaign({
+                  sdk,
+                  campaign: selectedChainCampaign,
+                  amountBch: donationDraft,
+                })
+              )
+            : undefined
+        }
+        onRefund={() =>
+          selectedChainCampaign
+            ? void runCampaignAction(() =>
+                refundPledge({
+                  sdk,
+                  campaign: selectedChainCampaign,
+                })
+              )
+            : undefined
+        }
+        onClaim={() =>
+          selectedChainCampaign
+            ? void runCampaignAction(() =>
+                claimCampaign({
+                  sdk,
+                  campaign: selectedChainCampaign,
+                })
+              )
+            : undefined
+        }
+        onStop={() =>
+          selectedChainCampaign
+            ? void runCampaignAction(() =>
+                stopCampaign({
+                  sdk,
+                  campaign: selectedChainCampaign,
+                })
+              )
+            : undefined
+        }
+        onCancel={() =>
+          selectedChainCampaign
+            ? void runCampaignAction(() =>
+                cancelCampaign({
+                  sdk,
+                  campaign: selectedChainCampaign,
+                })
+              )
+            : undefined
+        }
       />
     </div>
   );

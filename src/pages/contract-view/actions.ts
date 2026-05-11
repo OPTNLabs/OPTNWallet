@@ -1,1 +1,1 @@
-export * from './services/actions';
+export * from '../../features/contract-view/actions';

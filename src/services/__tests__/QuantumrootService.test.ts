@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { binToHex, flattenBinArray, hash256, hexToBin } from '@bitauth/libauth';
 
-import { Network } from '../../redux/networkSlice';
+import { Network } from '../../state/slices/networkSlice';
 import {
   createQuantumrootMessageRandomizer,
   deriveQuantumrootKeyIdentifier,

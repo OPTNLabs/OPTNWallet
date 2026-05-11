@@ -15,7 +15,7 @@ import {
   swapEndianness,
   walletTemplateToCompilerBCH,
 } from '@bitauth/libauth';
-import { Network } from '../redux/networkSlice';
+import { Network } from '../state/slices/networkSlice';
 import {
   deriveHdPrivateKeyAtPath,
   derivePrivateKeyAtPath,
