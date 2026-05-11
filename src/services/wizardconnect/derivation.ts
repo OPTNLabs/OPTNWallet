@@ -1,5 +1,5 @@
 import { DerivationPath } from '@wizardconnect/wallet';
-import { Network } from '../../redux/networkSlice';
+import { Network } from '../../state/slices/networkSlice';
 import {
   createDeterministicRuntimePrivateKey,
   derivePrivateKeyAtPath,

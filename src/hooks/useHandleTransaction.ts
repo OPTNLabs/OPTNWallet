@@ -10,8 +10,8 @@ import { TransactionOutput, UTXO } from '../types/types';
 import {
   clearTransaction,
   setTxOutputs,
-} from '../redux/transactionBuilderSlice';
-import { resetContract } from '../redux/contractSlice';
+} from '../state/slices/transactionBuilderSlice';
+import { resetContract } from '../state/slices/contractSlice';
 import { logError, toErrorMessage } from '../utils/errorHandling';
 // import { optimisticRemoveSpentByOutpoints, requestUTXORefreshForMany } from '../workers/UTXOWorkerService';
 
@@ -100,7 +100,8 @@ const useHandleTransaction = (
           txOutputs,
           contractFunctionInputs,
           changeAddress,
-          selectedUtxos
+          selectedUtxos,
+          true
         );
 
       // await Toast.show({

@@ -6,7 +6,7 @@ dotenv.config();
 
 const config: CapacitorConfig = {
   appId: 'optn.wallet.app',
-  appName: 'optn-wallet',
+  appName: 'OPTN Wallet',
   webDir: 'dist',
   // bundledWebRuntime: false,
   plugins: {

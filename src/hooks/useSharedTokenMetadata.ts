@@ -170,13 +170,12 @@ export async function preloadTokenMetadata(categories: string[]): Promise<void> 
 }
 
 export default function useSharedTokenMetadata(categories: string[]) {
-  const categoriesKey = categories.join(',');
   const normalizedCategories = useMemo(
     () =>
       Array.from(
         new Set(categories.map((category) => String(category ?? '').trim()).filter(Boolean))
       ),
-    [categoriesKey]
+    [categories]
   );
   const [metadata, setMetadata] = useState<Record<string, SharedTokenMetadata>>(
     {}
