@@ -6,7 +6,7 @@ import {
   waitForIpfsAvailability,
 } from '../IpfsService';
 
-vi.mock('../../redux/store', () => ({
+vi.mock('../../state/store', () => ({
   store: {
     getState: vi.fn(() => ({ network: { currentNetwork: 'mainnet' } })),
   },
@@ -14,15 +14,16 @@ vi.mock('../../redux/store', () => ({
 
 vi.mock('../../utils/servers/InfraUrls', async () => {
   const actual = await vi.importActual('../../utils/servers/InfraUrls');
-  return {
-    ...(actual as object),
-    getInfraUrlPools: vi.fn(() => ({
-      electrumServers: [],
-      chaingraphUrls: [],
-      bcmrApiBaseUrls: [],
-      ipfsGateways: ['https://ipfs.optnlabs.com/ipfs', 'https://ipfs.io/ipfs'],
-      ipfsUploadRelayBases: [
-        'https://upload.optnlabs.com',
+    return {
+      ...(actual as object),
+      getInfraUrlPools: vi.fn(() => ({
+        electrumServers: [],
+        chaingraphUrls: [],
+        bcmrNativeBaseUrls: [],
+        bcmrApiBaseUrls: [],
+        ipfsGateways: ['https://ipfs.optnlabs.com/ipfs', 'https://ipfs.io/ipfs'],
+        ipfsUploadRelayBases: [
+          'https://upload.optnlabs.com',
         'https://ipfs-api.optnlabs.com',
       ],
     })),
@@ -87,7 +88,12 @@ describe('IpfsService', () => {
   it('uploadToIpfsRelay fails over to the IPFS API endpoint', async () => {
     const fetchMock = vi
       .fn()
-      .mockRejectedValueOnce(new TypeError('network down'))
+      .mockResolvedValueOnce(
+        new Response('relay unavailable', {
+          status: 503,
+          statusText: 'Service Unavailable',
+        })
+      )
       .mockResolvedValueOnce(
         new Response(
           JSON.stringify({
@@ -121,6 +127,36 @@ describe('IpfsService', () => {
       expect.objectContaining({ method: 'POST' })
     );
     expect(result.cid).toBe('bafyfallback');
+  });
+
+  it('uploadToIpfsRelay retries once after a transport TypeError', async () => {
+    const fetchMock = vi
+      .fn()
+      .mockRejectedValueOnce(new TypeError('request serialization failed'))
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            name: 'upload.bin',
+            cid: 'bafyretry',
+            size: '7',
+          }),
+          {
+            status: 200,
+            headers: { 'content-type': 'application/json' },
+          }
+        )
+      );
+    vi.stubGlobal('fetch', fetchMock);
+
+    const file = new Blob(['retry'], { type: 'text/plain' });
+    const result = await uploadToIpfsRelay(file, {
+      filename: 'retry.txt',
+      relayBase: 'https://upload.optnlabs.com',
+      gatewayBase: 'https://ipfs.optnlabs.com',
+    });
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(result.cid).toBe('bafyretry');
   });
 
   it('uploadToIpfsRelay surfaces HTTP status and response snippet on error', async () => {

@@ -1,7 +1,7 @@
 // src/components/TermsOfUse.tsx
 const TermsOfUse = () => {
   return (
-    <div className="overflow-y-auto h-4/5 mb-4">
+    <div className="overflow-y-auto h-full">
       <div className="p-4 rounded-lg space-y-4">
         <h3 className="font-bold">1. Acceptance of Terms</h3>
         <p>

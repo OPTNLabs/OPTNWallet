@@ -1,4 +1,4 @@
-import { Network } from '../../redux/networkSlice';
+import { Network } from '../../state/slices/networkSlice';
 import { getElectrumServers as getInfraElectrumServers } from './InfraUrls';
 
 // Backward-compatible exports (resolved once), plus a runtime getter.

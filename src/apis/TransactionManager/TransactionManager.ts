@@ -1,7 +1,7 @@
 // src/apis/TransactionManager/TransactionManager.ts
 
-import { store } from '../../redux/store';
-import { addTxOutput } from '../../redux/transactionBuilderSlice';
+import { store } from '../../state/store';
+import { addTxOutput } from '../../state/slices/transactionBuilderSlice';
 import ElectrumService from '../../services/ElectrumService';
 import {
   TransactionHistoryItem,
@@ -11,7 +11,7 @@ import {
 import DatabaseService from '../DatabaseManager/DatabaseService';
 import TransactionBuilderHelper from './TransactionBuilderHelper';
 import { DUST, TOKEN_OUTPUT_SATS } from '../../utils/constants';
-import { logError, toErrorMessage } from '../../utils/errorHandling';
+import { logError, logWarn, toErrorMessage } from '../../utils/errorHandling';
 import { classifyBroadcastFailure } from '../../utils/broadcastErrors';
 import { toTokenAwareCashAddress } from '../../utils/cashAddress';
 import { binToHex, hexToBin } from '../../utils/hex';
@@ -86,7 +86,11 @@ export default function TransactionManager() {
   ): Promise<TransactionHistoryItem[]> {
     const history = await ElectrumService.getTransactionHistory(address);
     if (!Array.isArray(history)) {
-      throw new Error('Invalid transaction history format');
+      logWarn('TransactionManager.fetchAndStoreTransactionHistory', 'Skipping non-array transaction history response', {
+        address,
+        walletId,
+      });
+      return [];
     }
 
     return storeTransactionHistory(walletId, address, history);
@@ -105,6 +109,19 @@ export default function TransactionManager() {
     for (const address of uniqueAddresses) {
       const history = histories[address];
       if (!Array.isArray(history)) {
+        if (history == null) {
+          stored[address] = undefined;
+          continue;
+        }
+
+        logWarn(
+          'TransactionManager.fetchAndStoreTransactionHistories',
+          'Skipping non-array transaction history response',
+          {
+            address,
+            walletId,
+          }
+        );
         continue;
       }
 
@@ -317,7 +334,7 @@ export default function TransactionManager() {
 
   function utxoSats(utxo: UTXO): bigint {
     const src = utxo as UTXO & { satoshis?: unknown };
-    const raw = src.satoshis ?? src.value ?? src.amount ?? 0;
+    const raw: unknown = src.satoshis ?? src.value ?? src.amount ?? 0;
 
     if (typeof raw === 'bigint') return raw;
     if (typeof raw === 'number') {
@@ -390,14 +407,17 @@ export default function TransactionManager() {
     outputs: TransactionOutput[],
     _contractFunctionInputs: Record<string, unknown> | null,
     changeAddress: string,
-    selectedUtxos: UTXO[]
+    selectedUtxos: UTXO[],
+    allowImplicitFungibleTokenBurn = false
   ): Promise<{
     bytecodeSize: number;
     finalTransaction: string;
     finalOutputs: TransactionOutput[] | null;
     errorMsg: string;
   }> => {
-    const txBuilder = TransactionBuilderHelper();
+    const txBuilder = TransactionBuilderHelper({
+      allowImplicitFungibleTokenBurn,
+    });
     const returnObj = {
       bytecodeSize: 0,
       finalTransaction: '',

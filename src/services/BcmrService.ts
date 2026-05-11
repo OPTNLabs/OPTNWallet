@@ -3,17 +3,11 @@ import {
   importMetadataRegistry,
   MetadataRegistry,
   IdentitySnapshot,
-  RegistryTimestampKeyedValues,
   IdentityHistory,
   // If you want base64 encoding later:
   // binToBase64,
 } from '@bitauth/libauth';
 import { Filesystem, Directory, Encoding } from '@capacitor/filesystem';
-import {
-  queryAuthHead,
-  queryTransactionByHash,
-  stripChaingraphHexBytes,
-} from '../apis/ChaingraphManager/ChaingraphManager';
 import bcmrLocalJson from '../assets/bcmr-optn-local.json';
 import { ipfsFetch, resolveIpfsGatewayUrl } from '../utils/ipfs';
 import DatabaseService from '../apis/DatabaseManager/DatabaseService';
@@ -22,19 +16,43 @@ import { DateTime } from 'luxon';
 import { Database } from 'sql.js';
 import { BcmrTokenMetadata } from '../types/types';
 
-import { store } from '../redux/store';
-import { Network } from '../redux/networkSlice';
+import { store } from '../state/store';
+import { Network } from '../state/slices/networkSlice';
 import {
   getBcmrLatestRegistryUrls,
+  getBcmrNativeTokenUrls,
   runWithFailover,
 } from '../utils/servers/InfraUrls';
+import {
+  buildTokenLookupUrl,
+  BcmrIndexerTokenResponse,
+  decodeIconCachePayload,
+  dedupeUrls,
+  detectImageMimeType,
+  encodeIconCachePayload,
+  findLatestSnapshotInHistory,
+  findSnapshotForCategory,
+  getChaingraphOutputHex,
+  getNftUrisForCommitment,
+  getRegistryIdentity,
+  hasIdentityHistory,
+  isSyntheticTokenLookupRegistryUri,
+  isTokenIndexNativeRegistryUri,
+  normalizeHexId,
+  normalizeTokenIndexSnapshot,
+  TokenIndexBcmrResponse,
+} from './bcmr';
+import {
+  findBcmrOutput,
+  parseBcmrOutput,
+  resolveAuthChain,
+} from './bcmr/authchain';
 
 const ICON_CACHE = new Map<string, string | null>();
 const REGISTRY_CACHE = new Map<string, IdentityRegistry>();
 const REGISTRY_INFLIGHT = new Map<string, Promise<IdentityRegistry>>();
 const REGISTRY_MISS_CACHE = new Map<string, number>();
 const REGISTRY_MISS_TTL_MS = 30 * 1000;
-const AUTHCHAIN_SEARCH_MAX_DEPTH = 32;
 
 export class BcmrRegistryNotFoundError extends Error {
   constructor(
@@ -95,264 +113,6 @@ export interface IdentityRegistry {
   lastFetch: string;
 }
 
-type ChaingraphOutput = {
-  locking_bytecode?: string;
-  scriptPubKey?: { hex?: string };
-};
-
-type ChaingraphInput = {
-  outpoint_transaction_hash?: string;
-  outpoint_index?: number | string;
-};
-
-type ChaingraphTx = {
-  hash?: string;
-  inputs?: ChaingraphInput[];
-  outputs?: ChaingraphOutput[];
-};
-
-function getChaingraphOutputHex(output: ChaingraphOutput): string {
-  return stripChaingraphHexBytes(
-    output.locking_bytecode ?? output.scriptPubKey?.hex ?? ''
-  );
-}
-
-type BcmrIndexerTokenResponse = {
-  name?: string;
-  description?: string;
-  uris?: Record<string, string>;
-  token?: {
-    category?: string;
-    symbol?: string;
-    decimals?: number;
-  };
-  extensions?: Record<string, unknown>;
-};
-
-type RegistryWithIdentity = MetadataRegistry & {
-  registryIdentity?: string | Record<string, unknown>;
-};
-
-function hasIdentityHistory(
-  registry: MetadataRegistry
-): registry is MetadataRegistry & {
-  identities: Record<string, RegistryTimestampKeyedValues<IdentitySnapshot>>;
-} {
-  return typeof registry === 'object' && registry !== null && !!registry.identities;
-}
-
-function getRegistryIdentity(registry: MetadataRegistry): string | undefined {
-  const maybe = registry as RegistryWithIdentity;
-  if (typeof maybe.registryIdentity !== 'string') return undefined;
-  const out = maybe.registryIdentity.toLowerCase();
-  return /^[0-9a-f]{64}$/.test(out) ? out : undefined;
-}
-
-function getNftUrisForCommitment(
-  snapshot: IdentitySnapshot,
-  nftCommitment: string
-): Record<string, string> | undefined {
-  const nfts = snapshot.token?.nfts as
-    | { types?: Record<string, { uris?: Record<string, string> }> }
-    | undefined;
-  return nfts?.types?.[nftCommitment]?.uris;
-}
-
-function dedupeUrls(urls: string[]): string[] {
-  const seen = new Set<string>();
-  const out: string[] = [];
-  for (const url of urls) {
-    if (!url || seen.has(url)) continue;
-    seen.add(url);
-    out.push(url);
-  }
-  return out;
-}
-
-function getSvgMimeType(bytes: Uint8Array): string | null {
-  try {
-    const text = new TextDecoder().decode(bytes.slice(0, 512)).trimStart();
-    if (text.startsWith('<svg') || text.includes('<svg')) {
-      return 'image/svg+xml';
-    }
-    if (text.startsWith('<?xml') && text.includes('<svg')) {
-      return 'image/svg+xml';
-    }
-  } catch {
-    return null;
-  }
-  return null;
-}
-
-function detectImageMimeType(
-  bytes: Uint8Array,
-  contentType?: string | null
-): string {
-  const normalizedContentType = String(contentType ?? '')
-    .split(';', 1)[0]
-    .trim()
-    .toLowerCase();
-
-  if (normalizedContentType.startsWith('image/')) {
-    return normalizedContentType;
-  }
-
-  if (
-    bytes.length >= 12 &&
-    bytes[0] === 0x52 &&
-    bytes[1] === 0x49 &&
-    bytes[2] === 0x46 &&
-    bytes[3] === 0x46 &&
-    bytes[8] === 0x57 &&
-    bytes[9] === 0x45 &&
-    bytes[10] === 0x42 &&
-    bytes[11] === 0x50
-  ) {
-    return 'image/webp';
-  }
-
-  if (
-    bytes.length >= 8 &&
-    bytes[0] === 0x89 &&
-    bytes[1] === 0x50 &&
-    bytes[2] === 0x4e &&
-    bytes[3] === 0x47 &&
-    bytes[4] === 0x0d &&
-    bytes[5] === 0x0a &&
-    bytes[6] === 0x1a &&
-    bytes[7] === 0x0a
-  ) {
-    return 'image/png';
-  }
-
-  if (
-    bytes.length >= 3 &&
-    bytes[0] === 0xff &&
-    bytes[1] === 0xd8 &&
-    bytes[2] === 0xff
-  ) {
-    return 'image/jpeg';
-  }
-
-  if (
-    bytes.length >= 6 &&
-    bytes[0] === 0x47 &&
-    bytes[1] === 0x49 &&
-    bytes[2] === 0x46 &&
-    bytes[3] === 0x38 &&
-    (bytes[4] === 0x37 || bytes[4] === 0x39) &&
-    bytes[5] === 0x61
-  ) {
-    return 'image/gif';
-  }
-
-  if (bytes.length >= 2 && bytes[0] === 0x42 && bytes[1] === 0x4d) {
-    return 'image/bmp';
-  }
-
-  if (
-    bytes.length >= 4 &&
-    bytes[0] === 0x00 &&
-    bytes[1] === 0x00 &&
-    bytes[2] === 0x01 &&
-    bytes[3] === 0x00
-  ) {
-    return 'image/x-icon';
-  }
-
-  if (
-    bytes.length >= 12 &&
-    bytes[4] === 0x66 &&
-    bytes[5] === 0x74 &&
-    bytes[6] === 0x79 &&
-    bytes[7] === 0x70
-  ) {
-    const brand = new TextDecoder().decode(bytes.slice(8, 12)).toLowerCase();
-    if (brand === 'avif' || brand === 'avis') {
-      return 'image/avif';
-    }
-  }
-
-  return getSvgMimeType(bytes) ?? (normalizedContentType || 'image/*');
-}
-
-function encodeIconCachePayload(base64: string, contentType: string): string {
-  return JSON.stringify({ base64, contentType });
-}
-
-function decodeIconCachePayload(payload: string): { dataUri: string } {
-  try {
-    const parsed = JSON.parse(payload) as {
-      base64?: string;
-      contentType?: string;
-    };
-    if (
-      typeof parsed.base64 === 'string' &&
-      parsed.base64 &&
-      typeof parsed.contentType === 'string' &&
-      parsed.contentType
-    ) {
-      return {
-        dataUri: `data:${parsed.contentType};base64,${parsed.base64}`,
-      };
-    }
-  } catch {
-    // Backward compatibility with older raw-base64 cache entries.
-  }
-
-  return {
-    dataUri: `data:image/*;base64,${payload}`,
-  };
-}
-
-function normalizeHexId(value: string): string {
-  return String(value ?? '')
-    .trim()
-    .toLowerCase()
-    .replace(/^0x/i, '');
-}
-
-function buildTokenLookupUrl(registryUrl: string, category: string): string | null {
-  const match = registryUrl.match(/^(.*)\/registries\/[^/]+\/latest\/?$/i);
-  if (!match) return null;
-  return `${match[1]}/tokens/${normalizeHexId(category)}/`;
-}
-
-function isSyntheticTokenLookupRegistryUri(uri: string): boolean {
-  return /\/tokens\/[0-9a-f]{64}\/?$/i.test(String(uri ?? '').trim());
-}
-
-function findLatestSnapshotInHistory(
-  history: IdentityHistory | undefined
-): IdentitySnapshot | null {
-  if (!history) return null;
-  const revisions = Object.keys(history).sort().reverse();
-  if (revisions.length === 0) return null;
-  return history[revisions[0]] ?? null;
-}
-
-function findSnapshotForCategory(
-  category: string,
-  registry: MetadataRegistry
-): IdentitySnapshot | null {
-  const normalizedCategory = normalizeHexId(category);
-  if (!normalizedCategory || !hasIdentityHistory(registry)) return null;
-
-  let best: { revision: string; snapshot: IdentitySnapshot } | null = null;
-  for (const history of Object.values(registry.identities)) {
-    for (const [revision, snapshot] of Object.entries(history)) {
-      if (normalizeHexId(snapshot.token?.category || '') !== normalizedCategory) {
-        continue;
-      }
-      if (!best || revision > best.revision) {
-        best = { revision, snapshot };
-      }
-    }
-  }
-
-  return best?.snapshot ?? null;
-}
-
 export default class BcmrService {
   private readonly dbService = DatabaseService();
   private db = this.dbService.getDatabase();
@@ -382,6 +142,11 @@ export default class BcmrService {
   private getDefaultRegistryUris(authbase: string): string[] {
     const net: Network = store.getState().network.currentNetwork;
     return getBcmrLatestRegistryUrls(net, authbase);
+  }
+
+  private getDefaultNativeRegistryUris(category: string): string[] {
+    const net: Network = store.getState().network.currentNetwork;
+    return getBcmrNativeTokenUrls(net, category);
   }
 
   private async loadIdentityRegistry(
@@ -568,8 +333,20 @@ export default class BcmrService {
   private async resolveIdentityRegistryUncached(
     authbase: string
   ): Promise<IdentityRegistry> {
+    const nativeUris = this.getDefaultNativeRegistryUris(authbase);
     const cached = REGISTRY_CACHE.get(authbase);
     if (cached) {
+      if (!isTokenIndexNativeRegistryUri(cached.registryUri)) {
+        const nativeRefresh = await this.fetchTokenIndexNativeRegistry(
+          authbase,
+          nativeUris
+        );
+        if (nativeRefresh) {
+          REGISTRY_CACHE.set(authbase, nativeRefresh);
+          return nativeRefresh;
+        }
+      }
+
       const refreshed = await this.resolveAuthChainRegistry(
         authbase,
         cached.registryUri
@@ -581,9 +358,9 @@ export default class BcmrService {
       if (!isSyntheticTokenLookupRegistryUri(cached.registryUri)) {
         return cached;
       }
-      const provisionalRefresh = await this.resolveAuthChainRegistry(
+      const provisionalRefresh = await this.fetchTokenIndexNativeRegistry(
         authbase,
-        this.getDefaultRegistryUris(authbase)[0] || cached.registryUri
+        nativeUris
       );
       if (provisionalRefresh) {
         REGISTRY_CACHE.set(authbase, provisionalRefresh);
@@ -595,6 +372,16 @@ export default class BcmrService {
     let diskEntry: IdentityRegistry | undefined;
     try {
       diskEntry = await this.loadIdentityRegistry(authbase);
+      if (!isTokenIndexNativeRegistryUri(diskEntry.registryUri)) {
+        const nativeRefresh = await this.fetchTokenIndexNativeRegistry(
+          authbase,
+          nativeUris
+        );
+        if (nativeRefresh) {
+          REGISTRY_CACHE.set(authbase, nativeRefresh);
+          return nativeRefresh;
+        }
+      }
       const refreshed = await this.resolveAuthChainRegistry(
         authbase,
         diskEntry.registryUri
@@ -604,9 +391,9 @@ export default class BcmrService {
         return refreshed;
       }
       if (isSyntheticTokenLookupRegistryUri(diskEntry.registryUri)) {
-        const provisionalRefresh = await this.resolveAuthChainRegistry(
+        const provisionalRefresh = await this.fetchTokenIndexNativeRegistry(
           authbase,
-          this.getDefaultRegistryUris(authbase)[0] || diskEntry.registryUri
+          nativeUris
         );
         if (provisionalRefresh) {
           REGISTRY_CACHE.set(authbase, provisionalRefresh);
@@ -639,7 +426,14 @@ export default class BcmrService {
     const uris = this.getDefaultRegistryUris(authbase);
     let fresh: IdentityRegistry;
     try {
-      fresh = await this.fetchAndCommitRegistry(authbase, uris);
+      const native = await this.fetchTokenIndexNativeRegistry(authbase, nativeUris);
+      if (native) {
+        REGISTRY_CACHE.set(authbase, native);
+        REGISTRY_MISS_CACHE.delete(authbase);
+        fresh = native;
+      } else {
+        fresh = await this.fetchAndCommitRegistry(authbase, uris);
+      }
     } catch (err) {
       // If all indexer endpoints fail, try resolving directly from authchain BCMR OP_RETURN.
       const onChain = await this.resolveAuthChainRegistry(authbase, uris[0] || '');
@@ -661,6 +455,50 @@ export default class BcmrService {
     }
 
     return fresh;
+  }
+
+  private async fetchTokenIndexNativeRegistry(
+    authbase: string,
+    uriOrUris: string | string[]
+  ): Promise<IdentityRegistry | null> {
+    const uris = Array.isArray(uriOrUris) ? uriOrUris : [uriOrUris];
+    const net: Network = store.getState().network.currentNetwork;
+
+    try {
+      return await runWithFailover(
+        `bcmr-native:${net}:${authbase}`,
+        uris,
+        async (uri): Promise<IdentityRegistry> => {
+          const resp = await ipfsFetch(uri);
+          if (!resp.ok) {
+            throw new Error(`Fetch failed: HTTP ${resp.status}`);
+          }
+
+          let data: TokenIndexBcmrResponse;
+          try {
+            data = (await resp.json()) as TokenIndexBcmrResponse;
+          } catch {
+            throw new Error(`Invalid JSON response from ${uri}`);
+          }
+
+          const imported = normalizeTokenIndexSnapshot(authbase, data);
+          if (!imported) {
+            throw new Error(`Invalid tokenindex BCMR response from ${uri}`);
+          }
+
+          const committed = await this.commitIdentityRegistry(
+            normalizeHexId(authbase),
+            imported,
+            uri
+          );
+          REGISTRY_CACHE.set(authbase, committed);
+          REGISTRY_MISS_CACHE.delete(authbase);
+          return committed;
+        }
+      );
+    } catch {
+      return null;
+    }
   }
 
   public async getSnapshot(
@@ -701,116 +539,17 @@ export default class BcmrService {
    * 1) Ask Chaingraph for the authHead txid
    * 2) Walk backwards through candidate authchain spends until the latest BCMR publication
    */
-  private async resolveAuthChain(authbase: string): Promise<ChaingraphTx[]> {
-    const authHeadData = await queryAuthHead(authbase);
-    const headHash = stripChaingraphHexBytes(
-      authHeadData?.data?.transaction?.[0]?.authchains?.[0]?.authhead
-        ?.identity_output?.[0]?.transaction_hash
-    );
-    if (!headHash) {
-      throw new Error(`No authHead for ${authbase}`);
-    }
-
-    const chain: ChaingraphTx[] = [];
-    const seen = new Set<string>();
-    const queue: Array<{ txid: string; depth: number }> = [
-      { txid: headHash, depth: 0 },
-    ];
-
-    while (queue.length > 0) {
-      const current = queue.shift();
-      if (!current) break;
-      if (seen.has(current.txid) || current.depth > AUTHCHAIN_SEARCH_MAX_DEPTH) {
-        continue;
-      }
-      seen.add(current.txid);
-
-      const txResp = await queryTransactionByHash(current.txid);
-      const tx = txResp?.data?.transaction?.[0] as ChaingraphTx | undefined;
-      if (!tx) {
-        throw new Error(`Chaingraph missing transaction ${current.txid}`);
-      }
-      chain.push(tx);
-
-      const previousHashes = (tx.inputs || [])
-        .filter((input) => String(input.outpoint_index) === '0')
-        .map((input) => stripChaingraphHexBytes(input.outpoint_transaction_hash))
-        .filter(Boolean);
-
-      for (const previousHash of previousHashes) {
-        if (seen.has(previousHash)) continue;
-        queue.push({ txid: previousHash, depth: current.depth + 1 });
-      }
-    }
-
-    return chain;
-  }
-
-  private findBcmrOutput(tx: ChaingraphTx): ChaingraphOutput | null {
-    return (
-      tx.outputs?.find((o) =>
-        getChaingraphOutputHex(o).startsWith('6a0442434d52')
-      ) || null
-    );
-  }
-
-  private parseBcmrOutput(voutHex: string): { hash: string; uris: string[] } {
-    let cursor = voutHex.indexOf('6a0442434d52');
-    if (cursor < 0) {
-      throw new Error('Not a BCMR OP_RETURN output.');
-    }
-    cursor += '6a0442434d52'.length;
-    const hashPush = voutHex.slice(cursor, cursor + 2);
-    if (hashPush !== '20') {
-      throw new Error('Invalid BCMR hash push opcode.');
-    }
-    cursor += 2; // OP_PUSHBYTES_32
-    const hash = voutHex.slice(cursor, cursor + 64);
-    if (!/^[0-9a-f]{64}$/i.test(hash)) {
-      throw new Error('Invalid BCMR hash payload.');
-    }
-    cursor += 64;
-    const uris: string[] = [];
-    while (cursor < voutHex.length) {
-      const pushOp = voutHex.slice(cursor, cursor + 2);
-      cursor += 2;
-      let len = 0;
-      if (pushOp === '4c') {
-        len = parseInt(voutHex.slice(cursor, cursor + 2), 16) * 2;
-        cursor += 2;
-      } else if (pushOp === '4d') {
-        const lo = parseInt(voutHex.slice(cursor, cursor + 2), 16);
-        const hi = parseInt(voutHex.slice(cursor + 2, cursor + 4), 16);
-        len = (lo + (hi << 8)) * 2;
-        cursor += 4;
-      } else if (pushOp === '4e') {
-        const b0 = parseInt(voutHex.slice(cursor, cursor + 2), 16);
-        const b1 = parseInt(voutHex.slice(cursor + 2, cursor + 4), 16);
-        const b2 = parseInt(voutHex.slice(cursor + 4, cursor + 6), 16);
-        const b3 = parseInt(voutHex.slice(cursor + 6, cursor + 8), 16);
-        len = (b0 + (b1 << 8) + (b2 << 16) + (b3 << 24)) * 2;
-        cursor += 8;
-      } else {
-        len = parseInt(pushOp, 16) * 2;
-      }
-      const uriHex = voutHex.slice(cursor, cursor + len);
-      cursor += len;
-      uris.push(Buffer.from(uriHex, 'hex').toString('utf8'));
-    }
-    return { hash, uris };
-  }
-
   private async resolveAuthChainRegistry(
     authbase: string,
     fallbackUri: string
   ): Promise<IdentityRegistry | null> {
     try {
-      const chain = await this.resolveAuthChain(authbase);
+      const chain = await resolveAuthChain(authbase);
       for (const tx of chain) {
-        const out = this.findBcmrOutput(tx);
+        const out = findBcmrOutput(tx);
         if (!out) continue;
 
-        const { hash, uris } = this.parseBcmrOutput(
+        const { hash, uris } = parseBcmrOutput(
           getChaingraphOutputHex(out)
         );
         const candidateUris = dedupeUrls([...uris, fallbackUri].filter(Boolean));

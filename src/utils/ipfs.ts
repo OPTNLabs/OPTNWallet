@@ -1,4 +1,4 @@
-import { store } from '../redux/store';
+import { store } from '../state/store';
 import { getInfraUrlPools, runWithFailover } from './servers/InfraUrls';
 
 const IPFS_GATEWAY_TIMEOUT_MS = 8000;

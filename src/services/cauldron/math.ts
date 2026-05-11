@@ -216,24 +216,75 @@ export function calcCauldronTradeWithTargetSupply(
   pair: CauldronPoolPair,
   supplyAmount: bigint
 ): CauldronTrade | null {
+  if (supplyAmount <= 0n) return null;
   const k = pair.reserveA * pair.reserveB;
-  const nextA = pair.reserveA + supplyAmount;
-  if (nextA <= pair.reserveA) return null;
-
-  let postBWithoutFee = ceilDiv(k, nextA);
+  let nextA: bigint;
   let nextB: bigint;
   let tradeFee: bigint;
 
   if (pair.feePaidInA) {
-    tradeFee = calcCauldronTradeFee(supplyAmount);
-    const effectiveA = nextA - tradeFee;
-    postBWithoutFee = ceilDiv(k, effectiveA);
-    nextB = postBWithoutFee;
+    const preA1 = pair.reserveA + supplyAmount - calcCauldronTradeFee(supplyAmount);
+    const b1 = ceilDiv(k, preA1);
+    const a1 = ceilDiv(k, b1);
+    if (a1 <= pair.reserveA || b1 >= pair.reserveB || b1 < pair.minReserveB) {
+      return null;
+    }
+
+    nextA = includeFeeForTarget(a1, pair.reserveA);
+    nextB = b1;
+    tradeFee = calcCauldronTradeFee(nextA - pair.reserveA);
+
+    assertTradeSanity({ pair, nextA, nextB, tradeFee, k });
+
+    const demand = pair.reserveB - nextB;
+    if (demand <= 0n) return null;
+
+    return {
+      supplyTokenId: CAULDRON_NATIVE_BCH,
+      demandTokenId: CAULDRON_NATIVE_BCH,
+      supply: supplyAmount,
+      demand,
+      tradeFee,
+    };
   } else {
+    const minimumDemand = 1n;
+    const maximumDemand = pair.reserveB - pair.minReserveB;
+    let left = minimumDemand;
+    let right = maximumDemand;
+    let best: CauldronTrade | null = null;
+
+    while (left <= right) {
+      const demand = (left + right) / 2n;
+      const candidate = calcCauldronTradeWithTargetDemand(pair, demand);
+      if (!candidate) {
+        right = demand - 1n;
+        continue;
+      }
+
+      if (candidate.supply === supplyAmount) {
+        return candidate;
+      }
+
+      if (candidate.supply < supplyAmount) {
+        best = candidate;
+        left = demand + 1n;
+      } else {
+        right = demand - 1n;
+      }
+    }
+
+    if (best) {
+      return best;
+    }
+
+    const postBWithoutFee = ceilDiv(k, pair.reserveA + supplyAmount);
     const adjusted = leaveFeeInPoolForMinTarget(postBWithoutFee, pair.reserveB);
     nextB = adjusted.value;
     tradeFee = adjusted.tradeFee;
   }
+
+  nextA = pair.reserveA + supplyAmount;
+  if (nextA <= pair.reserveA) return null;
 
   assertTradeSanity({ pair, nextA, nextB, tradeFee, k });
 

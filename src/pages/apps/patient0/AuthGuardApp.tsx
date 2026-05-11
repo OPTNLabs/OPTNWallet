@@ -10,8 +10,8 @@ import AUTHGUARD_ARTIFACT from '../../../apis/ContractManager/artifacts/AuthGuar
 import { DUST, TOKEN_OUTPUT_SATS } from '../../../utils/constants';
 
 import { Contract, ElectrumNetworkProvider } from 'cashscript';
-import { store } from '../../../redux/store';
-import { Network } from '../../../redux/networkSlice';
+import { store } from '../../../state/store';
+import { Network } from '../../../state/slices/networkSlice';
 import parseInputValue from '../../../utils/parseInputValue';
 
 import {
@@ -19,6 +19,33 @@ import {
   stripChaingraphHexBytes,
 } from '../../../apis/ChaingraphManager/ChaingraphManager';
 import { useSmoothResetTransition } from '../shared/useSmoothResetTransition';
+
+type AuthGuardArtifactInput = {
+  type: string;
+};
+
+type AuthGuardArtifact = {
+  constructorInputs?: AuthGuardArtifactInput[];
+  abi?: unknown[];
+};
+
+type AuthGuardContractShape = {
+  address: string;
+  tokenAddress?: string;
+  lockingBytecode?: string | Uint8Array | number[] | { bytecode?: Uint8Array };
+  lockingScript?: string | Uint8Array | number[] | { bytecode?: Uint8Array };
+  getLockingBytecode?: () => string | Uint8Array | number[] | { bytecode?: Uint8Array };
+  getLockingScript?: () => string | Uint8Array | number[] | { bytecode?: Uint8Array };
+};
+
+type AuthGuardToken = {
+  category: string;
+  amount: bigint;
+  nft?: {
+    capability: 'none' | 'mutable' | 'minting';
+    commitment: string;
+  };
+};
 
 type Props = {
   manifest: AddonManifest;
@@ -136,7 +163,7 @@ async function toCashTokenAddressBestEffort(
 
 function tokenAmountIsZero(t: Token | null | undefined): boolean {
   if (!t) return false;
-  return toBigIntSafe((t as any).amount ?? 0) === 0n;
+  return toBigIntSafe('amount' in t ? (t as { amount?: unknown }).amount ?? 0 : 0) === 0n;
 }
 
 function currentNetwork(): Network {
@@ -162,11 +189,16 @@ function bytesToHex(bytes: Uint8Array): string {
     .join('');
 }
 
-function mergeWalletUtxos(res: any): UTXO[] {
-  const all: UTXO[] = Array.isArray(res?.allUtxos) ? res.allUtxos : [];
-  const tok: UTXO[] = Array.isArray(res?.tokenUtxos) ? res.tokenUtxos : [];
-  const tok2: UTXO[] = Array.isArray(res?.cashTokenUtxos)
-    ? res.cashTokenUtxos
+function mergeWalletUtxos(res: unknown): UTXO[] {
+  const value = res as {
+    allUtxos?: UTXO[];
+    tokenUtxos?: UTXO[];
+    cashTokenUtxos?: UTXO[];
+  };
+  const all: UTXO[] = Array.isArray(value?.allUtxos) ? value.allUtxos : [];
+  const tok: UTXO[] = Array.isArray(value?.tokenUtxos) ? value.tokenUtxos : [];
+  const tok2: UTXO[] = Array.isArray(value?.cashTokenUtxos)
+    ? value.cashTokenUtxos
     : [];
   return uniqUtxos([...(all ?? []), ...(tok ?? []), ...(tok2 ?? [])]);
 }
@@ -235,7 +267,7 @@ export default function AuthGuardApp({
     }
 
     // Convenience: if user selected an AuthKey NFT, use its category
-    const cat = (authKeyUtxo as any)?.token?.category;
+    const cat = authKeyUtxo?.token?.category;
     if (typeof cat === 'string') {
       const hex = cat.trim().toLowerCase().replace(/^0x/i, '');
       if (/^[0-9a-f]{64}$/.test(hex)) return hex;
@@ -283,7 +315,7 @@ export default function AuthGuardApp({
         merged[0] ??
         null;
       setSelected(pick ?? null);
-    } catch (e: any) {
+    } catch (e: unknown) {
       setBuildErr(e?.message ?? String(e));
     } finally {
       setBusy(false);
@@ -320,125 +352,127 @@ export default function AuthGuardApp({
   // tx helpers (build + broadcast inside wallet)
   // ---------------------------------------------------------------------------
 
-  async function buildTx(
-    inputs: UTXO[],
-    outputs: TransactionOutput[],
-    changeAddress: string
-  ) {
-    const res = await sdk.tx.build({ inputs, outputs, changeAddress });
-    if (res.errorMsg) throw new Error(res.errorMsg);
-    if (!res.hex) throw new Error('build returned no hex');
-    return { hex: res.hex, bytes: res.bytes || 0 };
-  }
+  const buildTx = useCallback(
+    async (
+      inputs: UTXO[],
+      outputs: TransactionOutput[],
+      changeAddress: string
+    ) => {
+      const res = await sdk.tx.build({ inputs, outputs, changeAddress });
+      if (res.errorMsg) throw new Error(res.errorMsg);
+      if (!res.hex) throw new Error('build returned no hex');
+      return { hex: res.hex, bytes: res.bytes || 0 };
+    },
+    [sdk]
+  );
 
-  async function broadcastTx(hex: string) {
-    const res = await sdk.tx.broadcast(hex);
-    if (!res.txid || typeof res.txid !== 'string') {
-      throw new Error(
-        `Broadcast returned invalid txid: ${res.errorMessage ?? String(res.txid)}`
-      );
-    }
-    return {
-      txid: res.txid,
-      broadcastState: res.broadcastState,
-    };
-  }
+  const broadcastTx = useCallback(
+    async (hex: string) => {
+      const res = await sdk.tx.broadcast(hex);
+      if (!res.txid || typeof res.txid !== 'string') {
+        throw new Error(
+          `Broadcast returned invalid txid: ${res.errorMessage ?? String(res.txid)}`
+        );
+      }
+      return {
+        txid: res.txid,
+        broadcastState: res.broadcastState,
+      };
+    },
+    [sdk]
+  );
 
-  async function getPrimaryWalletAddress(): Promise<string> {
+  const getPrimaryWalletAddress = useCallback(async (): Promise<string> => {
     const allow = await loadWalletAddresses();
     const addr = [...allow][0];
     if (!addr) throw new Error('No wallet addresses found.');
     return addr;
-  }
+  }, [loadWalletAddresses]);
 
-  function findSuitableGenesisCandidate(
-    all: UTXO[],
-    addr: string
-  ): UTXO | null {
-    return (
+  const findSuitableGenesisCandidate = useCallback(
+    (all: UTXO[], addr: string): UTXO | null =>
       all.find(
         (u) =>
           u.address === addr &&
           !u.token &&
           u.tx_pos === 0 &&
           (u.value ?? 0) >= MIN_GENESIS_SATS
-      ) ?? null
-    );
-  }
+      ) ?? null,
+    [MIN_GENESIS_SATS]
+  );
 
-  function findAuthKeyForTokenId(
-    all: UTXO[],
-    tokenIdHex: string,
-    addr: string
-  ) {
-    const t = normalizeCategory(tokenIdHex);
-    return (
-      all.find((u) => {
-        if (u.address !== addr) return false;
-        if (!u.token) return false;
-        if (!tokenAmountIsZero(u.token)) return false; // NFT-only
-        if (!u.token.nft) return false;
-        if (u.token.nft.capability !== 'none') return false;
-        return normalizeCategory(u.token.category) === t;
-      }) ?? null
-    );
-  }
+  const findAuthKeyForTokenId = useCallback(
+    (all: UTXO[], tokenIdHex: string, addr: string) => {
+      const t = normalizeCategory(tokenIdHex);
+      return (
+        all.find((u) => {
+          if (u.address !== addr) return false;
+          if (!u.token) return false;
+          if (!tokenAmountIsZero(u.token)) return false; // NFT-only
+          if (!u.token.nft) return false;
+          if (u.token.nft.capability !== 'none') return false;
+          return normalizeCategory(u.token.category) === t;
+        }) ?? null
+      );
+    },
+    []
+  );
 
-  function deriveAuthGuardAddress(tokenIdHex: string): string {
+  const deriveAuthGuardAddress = useCallback((tokenIdHex: string): string => {
     const net = currentNetwork();
     const provider = new ElectrumNetworkProvider(net);
 
-    const ctorInputs = (AUTHGUARD_ARTIFACT as any)?.constructorInputs ?? [];
+    const ctorInputs = (AUTHGUARD_ARTIFACT as AuthGuardArtifact)?.constructorInputs ?? [];
     if (!Array.isArray(ctorInputs) || ctorInputs.length !== 1) {
       throw new Error('AuthGuard artifact constructorInputs unexpected shape.');
     }
 
     const parsedArg = parseInputValue(`0x${tokenIdHex}`, ctorInputs[0].type);
 
-    const c = new Contract(AUTHGUARD_ARTIFACT as any, [parsedArg], {
+    const c = new Contract(AUTHGUARD_ARTIFACT as AuthGuardArtifact, [parsedArg], {
       provider,
       addressType: 'p2sh32',
     });
 
     return c.address;
-  }
+  }, []);
 
-  function deriveAuthGuardTokenAddress(tokenIdHex: string): string {
+  const deriveAuthGuardTokenAddress = useCallback((tokenIdHex: string): string => {
     const net = currentNetwork();
     const provider = new ElectrumNetworkProvider(net);
 
-    const ctorInputs = (AUTHGUARD_ARTIFACT as any)?.constructorInputs ?? [];
+    const ctorInputs = (AUTHGUARD_ARTIFACT as AuthGuardArtifact)?.constructorInputs ?? [];
     if (!Array.isArray(ctorInputs) || ctorInputs.length !== 1) {
       throw new Error('AuthGuard artifact constructorInputs unexpected shape.');
     }
 
     const parsedArg = parseInputValue(`0x${tokenIdHex}`, ctorInputs[0].type);
 
-    const c: any = new Contract(AUTHGUARD_ARTIFACT as any, [parsedArg], {
+    const c = new Contract(AUTHGUARD_ARTIFACT as AuthGuardArtifact, [parsedArg], {
       provider,
       addressType: 'p2sh32',
-    });
+    }) as unknown as AuthGuardContractShape;
 
     const tokenAddr = String(c?.tokenAddress ?? '').trim();
     return tokenAddr || c.address;
-  }
+  }, []);
 
-  function deriveAuthGuardLockingBytecodeHex(tokenIdHex: string): string {
+  const deriveAuthGuardLockingBytecodeHex = useCallback((tokenIdHex: string): string => {
     const net = currentNetwork();
     const provider = new ElectrumNetworkProvider(net);
 
-    const ctorInputs = (AUTHGUARD_ARTIFACT as any)?.constructorInputs ?? [];
+    const ctorInputs = (AUTHGUARD_ARTIFACT as AuthGuardArtifact)?.constructorInputs ?? [];
     if (!Array.isArray(ctorInputs) || ctorInputs.length !== 1) {
       throw new Error('AuthGuard artifact constructorInputs unexpected shape.');
     }
 
     const parsedArg = parseInputValue(`0x${tokenIdHex}`, ctorInputs[0].type);
-    const c: any = new Contract(AUTHGUARD_ARTIFACT as any, [parsedArg], {
+    const c = new Contract(AUTHGUARD_ARTIFACT as AuthGuardArtifact, [parsedArg], {
       provider,
       addressType: 'p2sh32',
-    });
+    }) as unknown as AuthGuardContractShape;
 
-    const candidates: any[] = [
+    const candidates: Array<unknown> = [
       c.lockingBytecode,
       c.lockingScript,
       typeof c.getLockingBytecode === 'function'
@@ -460,7 +494,7 @@ export default function AuthGuardApp({
       return bytesToHex(first.bytecode);
 
     throw new Error('Could not normalize AuthGuard locking bytecode.');
-  }
+  }, []);
 
   const derivedAuthGuardAddress = useMemo(() => {
     try {
@@ -469,7 +503,7 @@ export default function AuthGuardApp({
     } catch {
       return '';
     }
-  }, [tokenId]);
+  }, [tokenId, deriveAuthGuardAddress]);
 
   const derivedAuthGuardTokenAddress = useMemo(() => {
     try {
@@ -478,7 +512,7 @@ export default function AuthGuardApp({
     } catch {
       return '';
     }
-  }, [tokenId]);
+  }, [tokenId, deriveAuthGuardTokenAddress]);
 
   const derivedAuthGuardLockingHex = useMemo(() => {
     try {
@@ -487,7 +521,7 @@ export default function AuthGuardApp({
     } catch {
       return '';
     }
-  }, [tokenId]);
+  }, [tokenId, deriveAuthGuardLockingBytecodeHex]);
 
   useEffect(() => {
     let mounted = true;
@@ -651,8 +685,8 @@ export default function AuthGuardApp({
           amount: Math.max(Number(TOKEN_OUTPUT_SATS), Number(DUST)),
           token: {
             category: tokenIdHex,
-            amount: 0n as any,
-            nft: { capability: 'none', commitment: '' as any },
+            amount: 0n,
+            nft: { capability: 'none', commitment: '' },
           },
         },
       ];
@@ -693,7 +727,7 @@ export default function AuthGuardApp({
           ? `AuthKey submitted: ${txid}. Returned to the start screen.`
           : `AuthKey minted: ${txid}. Returned to the start screen.`
       );
-    } catch (e: any) {
+    } catch (e: unknown) {
       setBuildErr(e?.message ?? String(e));
       setStep0AStatus('');
     } finally {
@@ -706,6 +740,14 @@ export default function AuthGuardApp({
     MIN_GENESIS_SATS,
     authKeyOwner,
     genesisUtxo,
+    buildTx,
+    broadcastTx,
+    getPrimaryWalletAddress,
+    refreshWalletUtxos,
+    resetAuthGuardComposer,
+    runSmoothReset,
+    findSuitableGenesisCandidate,
+    findAuthKeyForTokenId,
   ]);
 
   // ---------------------------------------------------------------------------
@@ -804,11 +846,11 @@ export default function AuthGuardApp({
           outputs.push({
             recipientAddress: ownerTokenAddr,
             amount: Math.max(Number(TOKEN_OUTPUT_SATS), Number(DUST)),
-            token: {
-              category: tokenIdHex,
-              amount: 0n as any,
-              nft: { capability: 'none', commitment: '' as any },
-            },
+              token: {
+                category: tokenIdHex,
+                amount: 0n,
+                nft: { capability: 'none', commitment: '' },
+              },
           });
         }
 
@@ -816,14 +858,14 @@ export default function AuthGuardApp({
         outputs.push({
           recipientAddress: mintRecipient,
           amount: Math.max(Number(TOKEN_OUTPUT_SATS), Number(DUST)),
-          token: { category: tokenIdHex, amount: amt as any },
+          token: { category: tokenIdHex, amount: amt },
         });
       } else {
         // NFT mint
         const commitment = validateHexEven(mintNftCommitment);
         const nft = {
           capability: mintNftCapability,
-          commitment: commitment as any,
+          commitment,
         };
 
         // (optional) AuthKey NFT output
@@ -831,11 +873,11 @@ export default function AuthGuardApp({
           outputs.push({
             recipientAddress: ownerTokenAddr,
             amount: Math.max(Number(TOKEN_OUTPUT_SATS), Number(DUST)),
-            token: {
-              category: tokenIdHex,
-              amount: 0n as any,
-              nft: { capability: 'none', commitment: '' as any },
-            },
+              token: {
+                category: tokenIdHex,
+                amount: 0n,
+                nft: { capability: 'none', commitment: '' },
+              },
           });
         }
 
@@ -844,8 +886,8 @@ export default function AuthGuardApp({
           amount: Math.max(Number(TOKEN_OUTPUT_SATS), Number(DUST)),
           token: {
             category: tokenIdHex,
-            amount: 0n as any,
-            nft: nft as any,
+            amount: 0n,
+            nft,
           },
         });
       }
@@ -891,7 +933,7 @@ export default function AuthGuardApp({
           ? `Mint submitted: ${txid}. Returned to the start screen.`
           : `Mint complete: ${txid}. Returned to the start screen.`
       );
-    } catch (e: any) {
+    } catch (e: unknown) {
       setBuildErr(e?.message ?? String(e));
       setStep0BStatus('');
     } finally {
@@ -911,6 +953,13 @@ export default function AuthGuardApp({
     mintAlsoAuthKey,
     authKeyOwner,
     authGuardTokenAddress,
+    deriveAuthGuardTokenAddress,
+    buildTx,
+    broadcastTx,
+    getPrimaryWalletAddress,
+    refreshWalletUtxos,
+    resetAuthGuardComposer,
+    runSmoothReset,
   ]);
 
   // ---------------------------------------------------------------------------
@@ -959,20 +1008,20 @@ export default function AuthGuardApp({
           ? stripChaingraphHexBytes(r.nonfungible_token_commitment)
           : '';
 
-        const token =
+        const token: AuthGuardToken | null =
           category && (ftAmt > 0n || cap)
-            ? ({
+            ? {
                 category,
                 amount: ftAmt,
                 ...(cap
                   ? {
                       nft: {
-                        capability: cap as any,
+                        capability: cap as 'none' | 'mutable' | 'minting',
                         commitment,
                       },
                     }
                   : {}),
-              } as any)
+              }
             : null;
 
         const out: UTXO = {
@@ -987,9 +1036,9 @@ export default function AuthGuardApp({
           amount: value,
           height: 0,
           prefix: undefined,
-          token: token as any,
+          token,
           contractName: 'AuthGuard',
-          abi: (AUTHGUARD_ARTIFACT as any).abi,
+          abi: (AUTHGUARD_ARTIFACT as AuthGuardArtifact).abi,
         };
 
         return out;
@@ -1006,11 +1055,18 @@ export default function AuthGuardApp({
         setAuthHeadStatus(`Found ${deduped.length} candidate(s).`);
         if (!authHeadUtxo) setAuthHeadUtxo(deduped[0]);
       }
-    } catch (e: any) {
+    } catch (e: unknown) {
       setAuthHeadStatus('');
       setBuildErr(e?.message ?? String(e));
     }
-  }, [tokenId, authHeadUtxo, authGuardCashAddress, authGuardTokenAddress]);
+  }, [
+    tokenId,
+    authHeadUtxo,
+    authGuardCashAddress,
+    authGuardTokenAddress,
+    deriveAuthGuardLockingBytecodeHex,
+    deriveAuthGuardTokenAddress,
+  ]);
 
   // ---------------------------------------------------------------------------
   // Existing smoke test
@@ -1044,7 +1100,7 @@ export default function AuthGuardApp({
 
       setBuildHex(res.hex || '');
       setBuildBytes(res.bytes || 0);
-    } catch (e: any) {
+    } catch (e: unknown) {
       setBuildErr(e?.message ?? String(e));
     } finally {
       setBusy(false);
@@ -1114,7 +1170,9 @@ export default function AuthGuardApp({
         );
       }
 
-      const headAmt = toBigIntSafe((headToken as any).amount ?? 0);
+      const headAmt = toBigIntSafe(
+        'amount' in headToken ? (headToken as { amount?: unknown }).amount ?? 0 : 0
+      );
       if (headAmt < sendAmt) {
         throw new Error(
           `Insufficient reserved supply at AuthHead. have=${headAmt.toString()} need=${sendAmt.toString()}`
@@ -1146,7 +1204,7 @@ export default function AuthGuardApp({
       const headInput: UTXO = {
         ...head,
         contractName: 'AuthGuard',
-        abi: (head as any).abi ?? (AUTHGUARD_ARTIFACT as any).abi,
+        abi: (head as { abi?: unknown[] }).abi ?? (AUTHGUARD_ARTIFACT as AuthGuardArtifact).abi,
         contractFunction: 'unlockWithNft',
         contractConstructorArgs: [`0x${tokenIdNorm}`],
         contractFunctionInputs: { keepGuarded },
@@ -1164,7 +1222,7 @@ export default function AuthGuardApp({
 
       setBuildHex(res.hex || '');
       setBuildBytes(res.bytes || 0);
-    } catch (e: any) {
+    } catch (e: unknown) {
       setBuildErr(e?.message ?? String(e));
     } finally {
       setBusy(false);
@@ -1205,9 +1263,16 @@ export default function AuthGuardApp({
 
     const walletMatches = walletUtxos.filter((u) => {
       const isTagged =
-        String((u as any).contractName ?? '').toLowerCase() === 'authguard' ||
-        (Array.isArray((u as any).abi) &&
-          (u as any).abi.some((f: any) => f?.name === 'unlockWithNft'));
+        String((u as { contractName?: string }).contractName ?? '').toLowerCase() ===
+          'authguard' ||
+        (Array.isArray((u as { abi?: unknown[] }).abi) &&
+          ((u as { abi?: unknown[] }).abi ?? []).some(
+            (f) =>
+              typeof f === 'object' &&
+              f !== null &&
+              'name' in f &&
+              (f as { name?: unknown }).name === 'unlockWithNft'
+          ));
 
       const tokenMatch =
         !!t && !!u.token?.category && normalizeCategory(u.token.category) === t;
@@ -1268,15 +1333,17 @@ export default function AuthGuardApp({
         ) : u.token ? (
           <div className="text-xs text-orange-700">
             Token UTXO (category: {String(u.token.category)}) amt:{' '}
-            {String((u.token as any).amount ?? '')}
+            {String(
+              'amount' in u.token ? (u.token as { amount?: unknown }).amount ?? '' : ''
+            )}
           </div>
         ) : (
           <div className="text-xs text-gray-500">Regular BCH UTXO</div>
         )}
 
-        {(u as any).contractName && (
+        {Boolean((u as { contractName?: string }).contractName) && (
           <div className="text-xs text-purple-700">
-            contract: {String((u as any).contractName)}
+            contract: {String((u as { contractName?: string }).contractName)}
           </div>
         )}
       </div>
@@ -1291,7 +1358,7 @@ export default function AuthGuardApp({
       normalizeTokenIdTxid(u.tx_hash);
       setGenesisUtxo(u);
       setBuildErr('');
-    } catch (e: any) {
+    } catch (e: unknown) {
       setBuildErr(e?.message ?? String(e));
     }
   }, []);
@@ -1444,7 +1511,9 @@ export default function AuthGuardApp({
                     className="mt-1 w-full border rounded p-2 text-sm"
                     value={mintNftCapability}
                     onChange={(e) =>
-                      setMintNftCapability(e.target.value as any)
+                    setMintNftCapability(
+                      e.target.value as 'none' | 'mutable' | 'minting'
+                    )
                     }
                   >
                     <option value="none">none</option>
@@ -1665,7 +1734,7 @@ export default function AuthGuardApp({
                       () => setAuthHeadUtxo(u),
                       u.token
                         ? `token.category=${String(u.token.category)} amt=${String(
-                            (u.token as any).amount ?? ''
+                            'amount' in u.token ? (u.token as { amount?: unknown }).amount ?? '' : ''
                           )}`
                         : 'no token'
                     )
