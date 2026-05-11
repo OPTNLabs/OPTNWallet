@@ -1,7 +1,7 @@
 // src/apis/TransactionManager/TransactionManager.ts
 
-import { store } from '../../redux/store';
-import { addTxOutput } from '../../redux/transactionBuilderSlice';
+import { store } from '../../state/store';
+import { addTxOutput } from '../../state/slices/transactionBuilderSlice';
 import ElectrumService from '../../services/ElectrumService';
 import {
   TransactionHistoryItem,
@@ -334,7 +334,7 @@ export default function TransactionManager() {
 
   function utxoSats(utxo: UTXO): bigint {
     const src = utxo as UTXO & { satoshis?: unknown };
-    const raw = src.satoshis ?? src.value ?? src.amount ?? 0;
+    const raw: unknown = src.satoshis ?? src.value ?? src.amount ?? 0;
 
     if (typeof raw === 'bigint') return raw;
     if (typeof raw === 'number') {
@@ -407,14 +407,17 @@ export default function TransactionManager() {
     outputs: TransactionOutput[],
     _contractFunctionInputs: Record<string, unknown> | null,
     changeAddress: string,
-    selectedUtxos: UTXO[]
+    selectedUtxos: UTXO[],
+    allowImplicitFungibleTokenBurn = false
   ): Promise<{
     bytecodeSize: number;
     finalTransaction: string;
     finalOutputs: TransactionOutput[] | null;
     errorMsg: string;
   }> => {
-    const txBuilder = TransactionBuilderHelper();
+    const txBuilder = TransactionBuilderHelper({
+      allowImplicitFungibleTokenBurn,
+    });
     const returnObj = {
       bytecodeSize: 0,
       finalTransaction: '',

@@ -5,6 +5,7 @@ import escrowArtifact from './artifacts/escrow.json';
 import escrowMS2Artifact from './artifacts/escrowMS2.json';
 import MSVault from './artifacts/MSVault.json';
 import AuthGuardArtifact from './artifacts/AuthGuard.json';
+import CustodyVaultArtifact from './artifacts/CustodyVault.json';
 import type { ContractArtifact } from './types';
 
 export function createBuiltinArtifactCache(): Record<string, ContractArtifact> {
@@ -16,5 +17,6 @@ export function createBuiltinArtifactCache(): Record<string, ContractArtifact> {
     bip38: bip38Artifact as ContractArtifact,
     msVault: MSVault as ContractArtifact,
     authguard: AuthGuardArtifact as ContractArtifact,
+    custody_vault: CustodyVaultArtifact as ContractArtifact,
   };
 }

@@ -1,5 +1,6 @@
 // src/components/walletconnect/SessionList.tsx
 import type { SessionTypes } from '@walletconnect/types';
+import { normalizeExternalUrl } from '../../utils/externalUrl';
 
 interface Props {
   activeSessions: Record<string, SessionTypes.Struct> | null;
@@ -20,6 +21,7 @@ export function SessionList({
     <div className="space-y-4 max-h-96 overflow-y-auto">
       {Object.entries(activeSessions).map(([topic, session]) => {
         const dappMeta = session.peer.metadata;
+        const dappUrl = normalizeExternalUrl(dappMeta.url);
         // console.log(dappMeta);
         return (
           <div
@@ -34,14 +36,20 @@ export function SessionList({
               />
               <div className="text-center">
                 <div className="font-bold text-xl">{dappMeta.name}</div>
-                <a
-                  href={dappMeta.url}
-                  target="_blank"
-                  rel="noreferrer"
-                  className="text-sm wallet-link underline"
-                >
-                  {dappMeta.url}
-                </a>
+                {dappUrl ? (
+                  <a
+                    href={dappUrl}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="text-sm wallet-link underline"
+                  >
+                    {dappMeta.url}
+                  </a>
+                ) : (
+                  <span className="text-sm wallet-muted break-all">
+                    {dappMeta.url}
+                  </span>
+                )}
                 <p className="wallet-muted text-sm mt-1">
                   {dappMeta.description}
                 </p>

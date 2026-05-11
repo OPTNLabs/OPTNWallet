@@ -12,7 +12,7 @@ type RecipientsStepCardProps = {
   onCopyAddress: (address: string) => void;
 };
 
-function RecipientsStepCard({
+function RecipientsStepCardImpl({
   addresses,
   selectedRecipientCashAddrs,
   recipientTokenAddressByCash,
@@ -34,7 +34,7 @@ function RecipientsStepCard({
       onToggle={() => {}}
     >
       <div className="space-y-3">
-        <div className="rounded-[16px] wallet-card shadow-[0_1px_0_rgba(0,0,0,0.08)] overflow-hidden max-h-[280px] overflow-y-auto">
+        <div className="rounded-[16px] wallet-card shadow-[0_1px_0_rgba(0,0,0,0.08)] overflow-hidden max-h-[220px] overflow-y-auto">
           {addresses.map((a) => {
             const checked = selectedRecipientCashAddrs.has(a.address);
             const tokenAddr = recipientTokenAddressByCash[a.address] || '';
@@ -88,4 +88,6 @@ function RecipientsStepCard({
   );
 }
 
-export default memo(RecipientsStepCard);
+const RecipientsStepCard = memo(RecipientsStepCardImpl);
+
+export default RecipientsStepCard;

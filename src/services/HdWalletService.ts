@@ -13,7 +13,7 @@ import {
 } from '@bitauth/libauth';
 import { hash160 } from '@cashscript/utils';
 import * as bip39 from 'bip39';
-import { Network } from '../redux/networkSlice';
+import { Network } from '../state/slices/networkSlice';
 import { COIN_TYPE } from '../utils/constants';
 import { zeroize } from '../utils/secureMemory';
 

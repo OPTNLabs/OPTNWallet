@@ -1,11 +1,14 @@
 import { binToHex } from '@bitauth/libauth';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import type {
   CauldronPool,
   CauldronWalletPoolPosition,
 } from '../../../../services/cauldron';
-import { buildCauldronPoolV0LockingBytecode } from '../../../../services/cauldron';
+import {
+  buildCauldronPoolV0LockingBytecode,
+  normalizeCauldronPoolRow,
+} from '../../../../services/cauldron';
 import type { UTXO } from '../../../../types/types';
 import {
   assertWalletInputsStillAvailable,
@@ -14,6 +17,16 @@ import {
   getPoolSelectionId,
   resolveCurrentPoolForReview,
 } from '../preflight';
+
+type ChaingraphSdk = {
+  chain: {
+    queryUnspentByLockingBytecode: () => Promise<{
+      data: {
+        output: unknown[];
+      };
+    }>;
+  };
+};
 
 function makeUtxo(overrides?: Partial<UTXO>): UTXO {
   return {
@@ -179,7 +192,7 @@ describe('cauldron preflight helpers', () => {
       },
     });
 
-    const sdk = {
+    const sdk: ChaingraphSdk = {
       chain: {
         queryUnspentByLockingBytecode: async () => ({
           data: {
@@ -200,7 +213,7 @@ describe('cauldron preflight helpers', () => {
     };
 
     const resolved = await fetchCurrentQuotedPoolsFromChain({
-      sdk: sdk as any,
+      sdk,
       quotedPools: [reviewedPool],
     });
 
@@ -215,7 +228,7 @@ describe('cauldron preflight helpers', () => {
       outputIndex: 1,
     });
 
-    const sdk = {
+    const sdk: ChaingraphSdk = {
       chain: {
         queryUnspentByLockingBytecode: async () => ({
           data: {
@@ -226,7 +239,7 @@ describe('cauldron preflight helpers', () => {
     };
 
     const resolved = await fetchCurrentQuotedPoolsFromChain({
-      sdk: sdk as any,
+      sdk,
       quotedPools: [reviewedPool],
     });
 
@@ -262,7 +275,7 @@ describe('cauldron preflight helpers', () => {
       },
     });
 
-    const sdk = {
+    const sdk: ChaingraphSdk = {
       chain: {
         queryUnspentByLockingBytecode: async () => ({
           data: {
@@ -278,7 +291,7 @@ describe('cauldron preflight helpers', () => {
     };
 
     const resolved = await fetchVisiblePoolsFromChain({
-      sdk: sdk as any,
+      sdk,
       visiblePools: [confirmedPool, stalePool],
     });
 
@@ -304,7 +317,7 @@ describe('cauldron preflight helpers', () => {
       },
     });
 
-    const sdk = {
+    const sdk: ChaingraphSdk = {
       chain: {
         queryUnspentByLockingBytecode: async () => ({
           data: {
@@ -320,12 +333,51 @@ describe('cauldron preflight helpers', () => {
     };
 
     const resolved = await fetchVisiblePoolsFromChain({
-      sdk: sdk as any,
+      sdk,
       visiblePools: [confirmedPool],
     });
 
     expect(resolved.missingVisiblePoolCount).toBe(0);
     expect(resolved.confirmedPools).toEqual([confirmedPool]);
+  });
+
+  it('preserves pool history identifiers when normalizing active pool rows', () => {
+    const withdrawPublicKeyHash = new Uint8Array(20);
+    const reviewedPool = makePool({
+      txHash: '51'.repeat(32),
+      outputIndex: 4,
+      parameters: {
+        withdrawPublicKeyHash,
+      },
+      output: {
+        amountSatoshis: 2200n,
+        tokenCategory: 'aa'.repeat(32),
+        tokenAmount: 900n,
+        lockingBytecode: buildCauldronPoolV0LockingBytecode({
+          withdrawPublicKeyHash,
+        }),
+      },
+    });
+
+    const normalized = normalizeCauldronPoolRow({
+      txid: reviewedPool.txHash,
+      tx_pos: reviewedPool.outputIndex,
+      sats: Number(reviewedPool.output.amountSatoshis),
+      tokens: reviewedPool.output.tokenAmount.toString(),
+      token_id: reviewedPool.output.tokenCategory,
+      owner_pkh: '00'.repeat(20),
+      owner_p2pkh_addr: 'bitcoincash:qqqexample',
+      pool_id: 'pool-12345',
+      locking_bytecode: binToHex(reviewedPool.output.lockingBytecode),
+    });
+
+    expect(normalized?.poolId).toBe('pool-12345');
+    expect(normalized?.output.tokenCategory).toBe(
+      reviewedPool.output.tokenCategory
+    );
+    expect(normalized?.output.tokenAmount).toBe(
+      reviewedPool.output.tokenAmount
+    );
   });
 
   it('rehydrates visible pools from exact chain row reserves before quoting', async () => {
@@ -346,7 +398,7 @@ describe('cauldron preflight helpers', () => {
       },
     });
 
-    const sdk = {
+    const sdk: ChaingraphSdk = {
       chain: {
         queryUnspentByLockingBytecode: async () => ({
           data: {
@@ -366,7 +418,7 @@ describe('cauldron preflight helpers', () => {
     };
 
     const resolved = await fetchVisiblePoolsFromChain({
-      sdk: sdk as any,
+      sdk,
       visiblePools: [reviewedPool],
     });
 
@@ -376,13 +428,62 @@ describe('cauldron preflight helpers', () => {
     expect(resolved.confirmedPools[0]?.output.tokenAmount).toBe(640n);
   });
 
+  it('rehydrates visible pools when Chaingraph uses camelCase locking bytecode fields', async () => {
+    const withdrawPublicKeyHash = new Uint8Array(20);
+    const reviewedPool = makePool({
+      txHash: '41'.repeat(32),
+      outputIndex: 3,
+      parameters: {
+        withdrawPublicKeyHash,
+      },
+      output: {
+        amountSatoshis: 1900n,
+        tokenCategory: 'ff'.repeat(32),
+        tokenAmount: 800n,
+        lockingBytecode: buildCauldronPoolV0LockingBytecode({
+          withdrawPublicKeyHash,
+        }),
+      },
+    });
+
+    const sdk: ChaingraphSdk = {
+      chain: {
+        queryUnspentByLockingBytecode: async () => ({
+          data: {
+            output: [
+              {
+                txid: reviewedPool.txHash,
+                vout: reviewedPool.outputIndex,
+                value: '1900',
+                amount: '1900',
+                token_id: reviewedPool.output.tokenCategory,
+                tokenAmount: '800',
+                lockingBytecode: binToHex(reviewedPool.output.lockingBytecode),
+              },
+            ],
+          },
+        }),
+      },
+    };
+
+    const resolved = await fetchVisiblePoolsFromChain({
+      sdk,
+      visiblePools: [reviewedPool],
+    });
+
+    expect(resolved.missingVisiblePoolCount).toBe(0);
+    expect(resolved.confirmedPools).toHaveLength(1);
+    expect(resolved.confirmedPools[0]?.output.amountSatoshis).toBe(1900n);
+    expect(resolved.confirmedPools[0]?.output.tokenAmount).toBe(800n);
+  });
+
   it('reports when no visible pools remain confirmed on chain', async () => {
     const visiblePool = makePool({
       txHash: '23'.repeat(32),
       outputIndex: 0,
     });
 
-    const sdk = {
+    const sdk: ChaingraphSdk = {
       chain: {
         queryUnspentByLockingBytecode: async () => ({
           data: {
@@ -393,11 +494,55 @@ describe('cauldron preflight helpers', () => {
     };
 
     const resolved = await fetchVisiblePoolsFromChain({
-      sdk: sdk as any,
+      sdk,
       visiblePools: [visiblePool],
     });
 
     expect(resolved.missingVisiblePoolCount).toBe(1);
     expect(resolved.confirmedPools).toEqual([]);
+  });
+
+  it('deduplicates repeated pool lookups while confirming chain state', async () => {
+    const withdrawPublicKeyHash = new Uint8Array(20);
+    const confirmedPool = makePool({
+      txHash: '61'.repeat(32),
+      outputIndex: 7,
+      parameters: {
+        withdrawPublicKeyHash,
+      },
+      output: {
+        amountSatoshis: 2400n,
+        tokenCategory: 'ab'.repeat(32),
+        tokenAmount: 900n,
+        lockingBytecode: buildCauldronPoolV0LockingBytecode({
+          withdrawPublicKeyHash,
+        }),
+      },
+    });
+    const queryUnspentByLockingBytecode = vi.fn(async () => ({
+      data: {
+        output: [
+          {
+            transaction_hash: confirmedPool.txHash,
+            output_index: confirmedPool.outputIndex,
+          },
+        ],
+      },
+    }));
+
+    const sdk: ChaingraphSdk = {
+      chain: {
+        queryUnspentByLockingBytecode,
+      },
+    };
+
+    const resolved = await fetchVisiblePoolsFromChain({
+      sdk,
+      visiblePools: [confirmedPool, confirmedPool],
+    });
+
+    expect(queryUnspentByLockingBytecode).toHaveBeenCalledTimes(1);
+    expect(resolved.missingVisiblePoolCount).toBe(0);
+    expect(resolved.confirmedPools).toEqual([confirmedPool, confirmedPool]);
   });
 });

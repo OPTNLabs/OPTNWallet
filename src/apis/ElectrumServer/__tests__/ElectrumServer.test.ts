@@ -71,13 +71,13 @@ async function loadServerWithMocks(
     ElectrumWebSocket: vi.fn(),
   }));
 
-  vi.doMock('../../../redux/store', () => ({
+  vi.doMock('../../../state/store', () => ({
     store: {
       getState: vi.fn(() => ({ network: { currentNetwork: 'mainnet' } })),
     },
   }));
 
-  vi.doMock('../../../redux/selectors/networkSelectors', () => ({
+  vi.doMock('../../../state/selectors/networkSelectors', () => ({
     selectCurrentNetwork: vi.fn(() => 'mainnet'),
   }));
 
@@ -110,13 +110,13 @@ async function loadServerWithMocksAndSpies(
     ElectrumWebSocket,
   }));
 
-  vi.doMock('../../../redux/store', () => ({
+  vi.doMock('../../../state/store', () => ({
     store: {
       getState: vi.fn(() => ({ network: { currentNetwork: 'mainnet' } })),
     },
   }));
 
-  vi.doMock('../../../redux/selectors/networkSelectors', () => ({
+  vi.doMock('../../../state/selectors/networkSelectors', () => ({
     selectCurrentNetwork: vi.fn(() => 'mainnet'),
   }));
 

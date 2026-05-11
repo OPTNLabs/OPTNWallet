@@ -22,17 +22,13 @@ const PageHeader: React.FC<PageHeaderProps> = ({
           className={`${compact ? 'w-1/2' : 'w-3/4'} h-auto opacity-95`}
         />
       </div>
-      <div className="text-center">
-        <div className="grid grid-cols-[1fr_auto_1fr] items-center gap-3">
-          <div aria-hidden="true" />
-          <h1 className="text-2xl font-bold wallet-text-strong tracking-[-0.02em] justify-self-center">
-            {title}
-          </h1>
-          <div className="justify-self-end">{titleAction}</div>
+      <div className="grid grid-cols-[1fr_auto_1fr] items-center gap-3">
+        <div aria-hidden="true" />
+        <div className="sr-only">
+          <h1>{title}</h1>
+          {subtitle ? <p>{subtitle}</p> : null}
         </div>
-        {subtitle ? (
-          <p className="mt-1 text-center text-sm wallet-muted">{subtitle}</p>
-        ) : null}
+        <div className="justify-self-end">{titleAction}</div>
       </div>
     </header>
   );

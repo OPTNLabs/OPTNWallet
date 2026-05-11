@@ -2,8 +2,8 @@ import { useState } from 'react';
 import { CapacitorBarcodeScannerTypeHint } from '@capacitor/barcode-scanner';
 import { Toast } from '@capacitor/toast';
 import { useDispatch, useSelector } from 'react-redux';
-import type { AppDispatch, RootState } from '../../redux/store';
-import { initWizardConnect, wizardConnectPair } from '../../redux/wizardconnectSlice';
+import type { AppDispatch, RootState } from '../../state/store';
+import { initWizardConnect, wizardConnectPair } from '../../state/slices/wizardconnectSlice';
 import {
   getBarcodeScannerErrorMessage,
   scanBarcodeSafely,
