@@ -1,11 +1,19 @@
 import { decodeCashAddress, encodeCashAddress } from '@bitauth/libauth';
 
+type DecodedCashAddress = {
+  prefix: string;
+  payload: Uint8Array;
+};
+
 function toTokenAddress(address: string) {
     console.log('toTokenAddress() called for address: ' + address);
-    const addressInfo: any  = (decodeCashAddress as any)(address);
-    const pkhPayoutBin = addressInfo.payload;
-    const prefix = addressInfo.prefix;
-    const tokenAddress = (encodeCashAddress as any)(
+    const addressInfo = decodeCashAddress(address);
+    if (typeof addressInfo === 'string') {
+      throw new Error(`Failed to decode CashAddress: ${addressInfo}`);
+    }
+
+    const { payload: pkhPayoutBin, prefix } = addressInfo as DecodedCashAddress;
+    const tokenAddress = encodeCashAddress(
       prefix,
       'p2pkhWithTokens',
       pkhPayoutBin

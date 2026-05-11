@@ -15,7 +15,7 @@ vi.mock('../../apis/DatabaseManager/DatabaseService', () => ({
   default: vi.fn(),
 }));
 
-vi.mock('../../redux/store', () => ({
+vi.mock('../../state/store', () => ({
   store: {
     getState: vi.fn(() => ({
       wallet_id: { currentWalletId: 7 },

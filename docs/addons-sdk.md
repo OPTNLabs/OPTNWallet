@@ -6,7 +6,7 @@ See also:
 - `addon-development-guide.md` for step-by-step addon authoring.
 
 ## Version
-- Current SDK version: `1.1.0`
+- Current SDK version: `1.3.0`
 - Contract source: `src/services/addons/SDKContract.ts`
 
 ## Capability Model

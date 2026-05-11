@@ -1,8 +1,8 @@
 // src/components/notifications/UtxoNotificationCenter.tsx
 import React, { useEffect } from 'react';
 import { useDispatch, useSelector } from 'react-redux';
-import type { RootState } from '../../redux/store';
-import { dequeueNotification } from '../../redux/notificationsSlice';
+import type { RootState } from '../../state/store';
+import { dequeueNotification } from '../../state/slices/notificationsSlice';
 
 const ToastItem: React.FC<{
   id: string;
