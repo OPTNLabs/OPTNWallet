@@ -78,6 +78,34 @@ export function getAppCategoryPriority(category: AppsViewCategory): number {
   return APP_CATEGORY_ORDER[category] ?? 99;
 }
 
+function compareAsciiCaseInsensitive(left: string, right: string): number {
+  const a = normalizeAppKey(left);
+  const b = normalizeAppKey(right);
+  if (a === b) return 0;
+  return a < b ? -1 : 1;
+}
+
+export function compareAppsForBrowse(
+  left: {
+    comingSoon?: boolean;
+    disabled?: boolean;
+    name: string;
+  },
+  right: {
+    comingSoon?: boolean;
+    disabled?: boolean;
+    name: string;
+  }
+): number {
+  if (left.comingSoon !== right.comingSoon) {
+    return left.comingSoon ? 1 : -1;
+  }
+  if (left.disabled !== right.disabled) {
+    return left.disabled ? 1 : -1;
+  }
+  return compareAsciiCaseInsensitive(left.name, right.name);
+}
+
 export function getAppDescription(app: {
   id: string;
   name: string;

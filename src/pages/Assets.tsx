@@ -174,9 +174,13 @@ const Assets: React.FC = () => {
 
     return Object.entries(tokenTotals);
   }, [tokenUtxos]);
+  const tokenCategories = useMemo(
+    () => entries.map(([category]) => category),
+    [entries]
+  );
   const fungibleTokens = entries.filter(([, value]) => value.amount > 0n);
   const nftTokens = entries.filter(([, value]) => value.nft);
-  const tokenMetadata = useSharedTokenMetadata(entries.map(([category]) => category));
+  const tokenMetadata = useSharedTokenMetadata(tokenCategories);
   const selectedTokenMetadata = selectedTokenCategory
     ? tokenMetadata[selectedTokenCategory]
     : null;
@@ -199,9 +203,9 @@ const Assets: React.FC = () => {
       groupedEntries: entries.length,
       fungibleTokens: fungibleTokens.length,
       nftTokens: nftTokens.length,
-      categories: entries.map(([category]) => category),
+      categories: tokenCategories,
     });
-  }, [currentWalletId, tab, walletAddresses.length, tokenUtxos.length, entries, fungibleTokens.length, nftTokens.length]);
+  }, [currentWalletId, tab, walletAddresses.length, tokenUtxos.length, entries, fungibleTokens.length, nftTokens.length, tokenCategories]);
 
   return (
     <WalletScreen maxWidthClassName="max-w-md" scrollable={false}>
