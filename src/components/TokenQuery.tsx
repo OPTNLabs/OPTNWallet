@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import {
   queryTotalSupplyFT,
   queryActiveMinting,
@@ -35,7 +35,8 @@ const TokenQuery: React.FC<TokenQueryProps> = ({
   const [loading, setLoading] = useState<boolean>(true);
   const [error, setError] = useState<string | null>(null);
   const [bcmrError, setBcmrError] = useState<string | null>(null);
-  const sharedTokenMetadata = useSharedTokenMetadata([tokenId])[tokenId];
+  const tokenCategories = useMemo(() => [tokenId], [tokenId]);
+  const sharedTokenMetadata = useSharedTokenMetadata(tokenCategories)[tokenId];
   const officialSiteUrl = snapshot?.uris?.web
     ? normalizeExternalUrl(snapshot.uris.web)
     : null;

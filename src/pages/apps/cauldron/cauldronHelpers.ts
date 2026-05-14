@@ -37,6 +37,27 @@ export function dedupeWalletPoolPositions(
   return [...byId.values()];
 }
 
+export function getWalletPoolDisplayKey(
+  position: CauldronWalletPoolPosition
+): string {
+  return (
+    position.pool.output.tokenCategory.trim().toLowerCase() ||
+    position.historyPoolId?.trim().toLowerCase() ||
+    getPoolSelectionId(position.pool)
+  );
+}
+
+export function dedupeWalletPoolPositionsForDisplay(
+  positions: CauldronWalletPoolPosition[]
+): CauldronWalletPoolPosition[] {
+  const byId = new Map<string, CauldronWalletPoolPosition>();
+  for (const position of positions) {
+    const key = getWalletPoolDisplayKey(position);
+    if (!byId.has(key)) byId.set(key, position);
+  }
+  return [...byId.values()];
+}
+
 export type PersistedPendingWalletPoolPosition = {
   pool: CauldronPool;
   ownerAddress: string | null;
@@ -125,10 +146,6 @@ function ensureUint8Array(value: unknown): Uint8Array {
   return new Uint8Array();
 }
 
-export function logCauldronPoolDev(stage: string, payload: Record<string, unknown>): void {
-  if (!import.meta.env.DEV) return;
-  console.debug(`[Cauldron:LP] ${stage}`, payload);
-}
 export function logCauldronTxPlan(stage: string, payload: Record<string, unknown>): void {
   if (!import.meta.env.DEV) return;
   console.debug(`[Cauldron:TX] ${stage}`, payload);
