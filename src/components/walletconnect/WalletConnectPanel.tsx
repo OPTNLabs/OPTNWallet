@@ -20,6 +20,8 @@ export default function WalletConnectPanel() {
 
   // Check for expired sessions when the component mounts or sessions change
   useEffect(() => {
+    if (!sessions) return;
+
     const now = Math.floor(Date.now() / 1000); // Current time in seconds
     const expiredTopics = Object.entries(sessions)
       .filter(([, session]) => session.expiry && now > session.expiry)
@@ -51,12 +53,22 @@ export default function WalletConnectPanel() {
       {/* Incoming proposal */}
       <SessionProposalModal />
 
-      {/* Active sessions list */}
-      <SessionList
-        activeSessions={sessions}
-        onDeleteSession={handleDelete}
-        onOpenSettings={handleOpen}
-      />
+      <div className="wallet-card p-4 space-y-3">
+        {!sessions || Object.keys(sessions).length === 0 ? (
+          <p className="wallet-muted text-sm">No active WalletConnect sessions yet.</p>
+        ) : (
+          <>
+            <h3 className="text-xl font-bold wallet-text-strong">
+              Active WalletConnect Sessions
+            </h3>
+            <SessionList
+              activeSessions={sessions}
+              onDeleteSession={handleDelete}
+              onOpenSettings={handleOpen}
+            />
+          </>
+        )}
+      </div>
 
       {/* Per-session settings */}
       {settingsTopic && (

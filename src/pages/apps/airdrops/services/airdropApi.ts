@@ -10,7 +10,7 @@ function normalizeBaseUrl(apiBaseUrl: string): string {
   return apiBaseUrl.replace(/\/+$/, '');
 }
 
-export function createDistributorApi(sdk: AddonSDK, apiBaseUrl: string) {
+export function createAirdropApi(sdk: AddonSDK, apiBaseUrl: string) {
   const baseUrl = normalizeBaseUrl(apiBaseUrl);
 
   return {

@@ -68,7 +68,7 @@ export function getAppSortPriority(app: { id: string; name: string }): number {
   if (normalizedId.endsWith(':paperwalletsweepapp') || normalizedName === 'paper wallet') return 1;
   if (normalizedId.endsWith(':mintcashtokenspocapp') || normalizedName === 'mint tokens') return 0;
   if (normalizedName.includes('paryonusd')) return 1;
-  if (normalizedId.endsWith(':eventrewardsapp') || normalizedName === 'airdrops') return 0;
+  if (normalizedId.endsWith(':airdropsapp') || normalizedName === 'airdrops') return 0;
   if (normalizedId.endsWith(':fundmeapp') || normalizedName === 'fundme') return 0;
   if (normalizedId.endsWith(':cauldronswapapp') || normalizedName === 'cauldron') return 1;
   return 10;

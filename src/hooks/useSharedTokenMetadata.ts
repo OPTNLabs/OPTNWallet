@@ -1,17 +1,14 @@
 import { useEffect, useMemo, useState } from 'react';
-import type { IdentitySnapshot } from '@bitauth/libauth';
+import { Capacitor } from '@capacitor/core';
 import BcmrService from '../services/BcmrService';
 import { resolveIpfsGatewayUrl } from '../utils/ipfs';
+import type {
+  BcmrSnapshot,
+  BcmrTokenMetadataState,
+  BcmrMetadataFreshness,
+} from '../types/bcmr';
 
-export type SharedTokenMetadata = {
-  status: 'loading' | 'ready' | 'error';
-  name: string;
-  symbol: string;
-  decimals: number;
-  iconUri: string | null;
-  snapshot: IdentitySnapshot | null;
-  error?: string;
-};
+export type SharedTokenMetadata = BcmrTokenMetadataState;
 
 const bcmr = new BcmrService();
 const metadataCache = new Map<string, SharedTokenMetadata>();
@@ -22,10 +19,35 @@ const metadataFailureCache = new Map<
 const inflightMetadata = new Map<string, Promise<SharedTokenMetadata | null>>();
 export const METADATA_FAILURE_TTL_MS = 5_000;
 
+function isWebRuntime(): boolean {
+  return Capacitor.getPlatform() === 'web';
+}
+
+function normalizeCategory(category: string): string {
+  return String(category ?? '').trim().toLowerCase();
+}
+
+function getBrowserOnlineState(): boolean | null {
+  if (typeof navigator === 'undefined') return null;
+  return navigator.onLine;
+}
+
 function buildSharedMetadata(
   category: string,
-  snapshot: IdentitySnapshot,
-  iconUri: string | null
+  snapshot: BcmrSnapshot,
+  iconUri: string | null,
+  overrides?: Partial<
+    Pick<
+      SharedTokenMetadata,
+      | 'status'
+      | 'freshness'
+      | 'error'
+      | 'isRefreshing'
+      | 'lastFetch'
+      | 'registryUri'
+      | 'registryHash'
+    >
+  >
 ): SharedTokenMetadata {
   const snapshotIcon = String(snapshot.uris?.icon ?? '').trim();
   const fallbackIconUri = snapshotIcon
@@ -40,23 +62,77 @@ function buildSharedMetadata(
     : null;
 
   return {
-    status: 'ready',
+    status: overrides?.status ?? 'ready',
+    freshness: overrides?.freshness ?? 'cached',
     name: snapshot.name || category,
     symbol: snapshot.token?.symbol || '',
     decimals: snapshot.token?.decimals ?? 0,
     iconUri: iconUri || fallbackIconUri,
     snapshot,
+    error: overrides?.error,
+    lastFetch: overrides?.lastFetch ?? snapshot.lastFetch ?? null,
+    registryUri: overrides?.registryUri ?? snapshot.registryUri ?? null,
+    registryHash: overrides?.registryHash ?? snapshot.registryHash ?? null,
+    isRefreshing: overrides?.isRefreshing ?? false,
   };
 }
 
-function getRecentFailure(category: string): SharedTokenMetadata | undefined {
+function buildLoadingMetadata(category: string): SharedTokenMetadata {
+  return {
+    status: 'loading',
+    freshness: 'unavailable',
+    name: category,
+    symbol: '',
+    decimals: 0,
+    iconUri: null,
+    snapshot: null,
+    isRefreshing: false,
+    lastFetch: null,
+    registryUri: null,
+    registryHash: null,
+  };
+}
+
+function buildErrorMetadata(
+  category: string,
+  error: unknown
+): SharedTokenMetadata {
+  return {
+    status: 'error',
+    freshness: 'unavailable',
+    name: category,
+    symbol: '',
+    decimals: 0,
+    iconUri: null,
+    snapshot: null,
+    error:
+      error instanceof Error ? error.message : 'Failed to load BCMR metadata.',
+    isRefreshing: false,
+    lastFetch: null,
+    registryUri: null,
+    registryHash: null,
+  };
+}
+
+function markRefreshing(metadata: SharedTokenMetadata): SharedTokenMetadata {
+  return {
+    ...metadata,
+    status: 'ready',
+    freshness: 'refreshing',
+    isRefreshing: true,
+    error: undefined,
+  };
+}
+
+function shouldRetryFailure(category: string): boolean {
   const failure = metadataFailureCache.get(category);
-  if (!failure) return undefined;
-  if (Date.now() - failure.ts > METADATA_FAILURE_TTL_MS) {
+  if (!failure) return false;
+  const age = Date.now() - failure.ts;
+  if (age >= METADATA_FAILURE_TTL_MS) {
     metadataFailureCache.delete(category);
-    return undefined;
+    return false;
   }
-  return failure.state;
+  return true;
 }
 
 function getFailureRetryDelayMs(category: string): number | undefined {
@@ -70,80 +146,156 @@ function getFailureRetryDelayMs(category: string): number | undefined {
   return METADATA_FAILURE_TTL_MS - age;
 }
 
-async function loadTokenMetadata(
-  category: string,
-  options?: { force?: boolean }
+async function loadCachedTokenMetadata(
+  category: string
 ): Promise<SharedTokenMetadata | null> {
-  const normalized = String(category ?? '').trim();
+  const normalized = normalizeCategory(category);
+  if (!normalized) return null;
+
+  const persistedSnapshot = await bcmr.getSnapshot(normalized);
+  if (!persistedSnapshot) return null;
+
+  let persistedIconUri: string | null = null;
+  if (!isWebRuntime()) {
+    try {
+      const persistedAuthbase = await bcmr.getCategoryAuthbase(normalized);
+      persistedIconUri = await bcmr.resolveIcon(
+        persistedAuthbase,
+        undefined,
+        normalized
+      );
+    } catch {
+      // Preserve the cached metadata even when icon hydration fails.
+    }
+  }
+
+  const persisted = buildSharedMetadata(
+    normalized,
+    persistedSnapshot,
+    persistedIconUri,
+    {
+      freshness: 'cached',
+      lastFetch: persistedSnapshot.lastFetch ?? null,
+      registryUri: persistedSnapshot.registryUri ?? null,
+      registryHash: persistedSnapshot.registryHash ?? null,
+      isRefreshing: false,
+    }
+  );
+  metadataCache.set(normalized, persisted);
+  metadataFailureCache.delete(normalized);
+  return persisted;
+}
+
+function buildUnavailableMetadata(category: string): SharedTokenMetadata {
+  return {
+    status: 'ready',
+    freshness: 'unavailable',
+    name: category,
+    symbol: '',
+    decimals: 0,
+    iconUri: null,
+    snapshot: null,
+    isRefreshing: false,
+    lastFetch: null,
+    registryUri: null,
+    registryHash: null,
+  };
+}
+
+async function loadFreshTokenMetadata(
+  category: string
+): Promise<SharedTokenMetadata> {
+  const normalized = normalizeCategory(category);
+  const previous = metadataCache.get(normalized);
+  const authbase = await bcmr.getCategoryAuthbase(normalized);
+  let registry = await bcmr.resolveIdentityRegistry(authbase);
+  let snapshot: BcmrSnapshot;
+
+  try {
+    snapshot = bcmr.extractIdentityByCategory(normalized, registry.registry);
+  } catch {
+    const fallbackRegistry = await bcmr.resolveCategorySpecificRegistry(
+      normalized
+    );
+    if (!fallbackRegistry) {
+      throw new Error(`No identity history for token category ${normalized}`);
+    }
+    registry = fallbackRegistry;
+    snapshot = bcmr.extractIdentityByCategory(normalized, registry.registry);
+  }
+
+  const iconUri = await bcmr.resolveIcon(authbase, undefined, normalized);
+  const freshness: BcmrMetadataFreshness =
+    previous?.lastFetch && registry.lastFetch === previous.lastFetch
+      ? previous.freshness === 'offline'
+        ? 'offline'
+        : 'cached'
+      : 'fresh';
+  const fresh = buildSharedMetadata(normalized, snapshot, iconUri, {
+    freshness,
+    lastFetch: registry.lastFetch,
+    registryUri: registry.registryUri,
+    registryHash: registry.registryHash,
+    isRefreshing: false,
+  });
+  metadataCache.set(normalized, fresh);
+  metadataFailureCache.delete(normalized);
+  return fresh;
+}
+
+async function resolveTokenMetadata(
+  category: string,
+  options?: { forceRefresh?: boolean }
+): Promise<SharedTokenMetadata | null> {
+  const normalized = normalizeCategory(category);
   if (!normalized) return null;
 
   const cached = metadataCache.get(normalized);
-  if (cached) return cached;
-  const recentFailure = options?.force ? undefined : getRecentFailure(normalized);
-  if (recentFailure) return recentFailure;
+  if (cached && !options?.forceRefresh) {
+    return cached;
+  }
+
+  if (!options?.forceRefresh && shouldRetryFailure(normalized)) {
+    return metadataFailureCache.get(normalized)?.state ?? null;
+  }
+
+  if (isWebRuntime()) {
+    const persisted = await loadCachedTokenMetadata(normalized);
+    return persisted ?? cached ?? buildUnavailableMetadata(normalized);
+  }
 
   const inflight = inflightMetadata.get(normalized);
   if (inflight) return inflight;
 
   const request = (async () => {
     try {
-      const persistedSnapshot = await bcmr.getSnapshot(normalized);
-      if (persistedSnapshot) {
-        let persistedIconUri: string | null = null;
-        try {
-          const persistedAuthbase = await bcmr.getCategoryAuthbase(normalized);
-          persistedIconUri = await bcmr.resolveIcon(
-            persistedAuthbase,
-            undefined,
-            normalized
-          );
-        } catch {
-          // Keep cached metadata fast-path even if icon refresh fails.
+      if (!options?.forceRefresh) {
+        const persisted = await loadCachedTokenMetadata(normalized);
+        if (persisted) {
+          return persisted;
         }
-
-        const persisted = buildSharedMetadata(
-          normalized,
-          persistedSnapshot,
-          persistedIconUri
-        );
-        metadataCache.set(normalized, persisted);
-        metadataFailureCache.delete(normalized);
-        return persisted;
       }
 
-      const authbase = await bcmr.getCategoryAuthbase(normalized);
-      let registry = await bcmr.resolveIdentityRegistry(authbase);
-      let snapshot: IdentitySnapshot;
-
-      try {
-        snapshot = bcmr.extractIdentityByCategory(normalized, registry.registry);
-      } catch (error) {
-        const fallbackRegistry = await bcmr.resolveCategorySpecificRegistry(
-          normalized
-        );
-        if (!fallbackRegistry) {
-          throw error;
-        }
-        registry = fallbackRegistry;
-        snapshot = bcmr.extractIdentityByCategory(normalized, registry.registry);
-      }
-
-      const iconUri = await bcmr.resolveIcon(authbase, undefined, normalized);
-      const shared = buildSharedMetadata(normalized, snapshot, iconUri);
-      metadataCache.set(normalized, shared);
-      metadataFailureCache.delete(normalized);
-      return shared;
+      return await loadFreshTokenMetadata(normalized);
     } catch (error) {
-      const failure: SharedTokenMetadata = {
-        status: 'error',
-        name: normalized,
-        symbol: '',
-        decimals: 0,
-        iconUri: null,
-        snapshot: null,
-        error:
-          error instanceof Error ? error.message : 'Failed to load BCMR metadata.',
-      };
+      const cachedState = metadataCache.get(normalized);
+      if (cachedState) {
+        const offline = getBrowserOnlineState() === false;
+        const fallback: SharedTokenMetadata = {
+          ...cachedState,
+          status: 'ready',
+          freshness: offline ? 'offline' : 'cached',
+          isRefreshing: false,
+          error:
+            error instanceof Error
+              ? error.message
+              : 'Failed to load BCMR metadata.',
+        };
+        metadataCache.set(normalized, fallback);
+        return fallback;
+      }
+
+      const failure = buildErrorMetadata(normalized, error);
       metadataFailureCache.set(normalized, { state: failure, ts: Date.now() });
       return failure;
     } finally {
@@ -158,47 +310,88 @@ async function loadTokenMetadata(
 export function getCachedTokenMetadata(
   category: string
 ): SharedTokenMetadata | undefined {
-  const normalized = String(category ?? '').trim();
-  return metadataCache.get(normalized) ?? getRecentFailure(normalized);
+  const normalized = normalizeCategory(category);
+  if (!normalized) return undefined;
+  return metadataCache.get(normalized) ?? metadataFailureCache.get(normalized)?.state;
 }
 
 export async function preloadTokenMetadata(categories: string[]): Promise<void> {
   const unique = Array.from(
-    new Set(categories.map((category) => String(category ?? '').trim()).filter(Boolean))
+    new Set(categories.map((category) => normalizeCategory(category)).filter(Boolean))
   );
-  await Promise.all(unique.map((category) => loadTokenMetadata(category)));
+
+  if (isWebRuntime()) {
+    await Promise.all(
+      unique.map(async (category) => {
+        await loadCachedTokenMetadata(category);
+      })
+    );
+    return;
+  }
+
+  await Promise.all(
+    unique.map(async (category) => {
+      await resolveTokenMetadata(category, { forceRefresh: true });
+    })
+  );
 }
 
 export default function useSharedTokenMetadata(categories: string[]) {
-  const categoriesKey = useMemo(
-    () =>
-      JSON.stringify(
-        categories.map((category) => String(category ?? '').trim()).filter(Boolean)
-      ),
-    [categories]
-  );
-  const normalizedCategories = useMemo(
-    () =>
-      Array.from(
-        new Set((JSON.parse(categoriesKey) as string[]).filter(Boolean))
-      ),
-    [categoriesKey]
-  );
+  const normalizedCategories = useMemo(() => {
+    const normalized = categories
+      .map((category) => normalizeCategory(category))
+      .filter(Boolean);
+    return Array.from(new Set(normalized));
+  }, [categories]);
+
   const [metadata, setMetadata] = useState<Record<string, SharedTokenMetadata>>(
     {}
   );
   const [retryNonce, setRetryNonce] = useState(0);
+  const [refreshNonce, setRefreshNonce] = useState(0);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+
+    const triggerRefresh = () => {
+      setRefreshNonce((value) => value + 1);
+    };
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'visible') {
+        triggerRefresh();
+      }
+    };
+
+    window.addEventListener('focus', triggerRefresh);
+    window.addEventListener('online', triggerRefresh);
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+
+    return () => {
+      window.removeEventListener('focus', triggerRefresh);
+      window.removeEventListener('online', triggerRefresh);
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+    };
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
     const next: Record<string, SharedTokenMetadata> = {};
-    const missing: string[] = [];
     let retryAfterMs: number | undefined;
+    let sawHardError = false;
+    let retryTimer: number | undefined;
+    const allowRemoteRefresh = !isWebRuntime();
 
     for (const category of normalizedCategories) {
-      const cached = metadataCache.get(category) ?? getRecentFailure(category);
+      const cached = getCachedTokenMetadata(category);
+
       if (cached) {
-        next[category] = cached;
+        const shouldRefresh =
+          allowRemoteRefresh &&
+          (refreshNonce > 0 ||
+            Boolean(cached.snapshot && cached.freshness !== 'fresh'));
+
+        next[category] = shouldRefresh ? markRefreshing(cached) : cached;
+
         if (cached.status === 'error') {
           const delay = getFailureRetryDelayMs(category);
           if (delay !== undefined) {
@@ -206,57 +399,65 @@ export default function useSharedTokenMetadata(categories: string[]) {
               retryAfterMs === undefined ? delay : Math.min(retryAfterMs, delay);
           }
         }
-      } else {
-        next[category] = {
-          status: 'loading',
-          name: category,
-          symbol: '',
-          decimals: 0,
-          iconUri: null,
-          snapshot: null,
-        };
-        missing.push(category);
+        continue;
       }
+
+      next[category] = buildLoadingMetadata(category);
     }
 
     if (Object.keys(next).length > 0) {
       setMetadata((prev) => ({ ...prev, ...next }));
     }
 
-    let retryTimer: number | undefined;
-    if (missing.length === 0) {
-      if (retryAfterMs !== undefined) {
-        retryTimer = window.setTimeout(() => {
-          setRetryNonce((value) => value + 1);
-        }, retryAfterMs);
-      }
-      return () => {
-        cancelled = true;
-        if (retryTimer !== undefined) {
-          window.clearTimeout(retryTimer);
-        }
-      };
-    }
-
     void (async () => {
-      const loaded = await Promise.all(
-        missing.map(async (category) => ({
-          category,
-          metadata: await loadTokenMetadata(category),
-        }))
+      await Promise.all(
+        normalizedCategories.map(async (category) => {
+          let resolved = getCachedTokenMetadata(category);
+
+          if (!resolved) {
+            resolved = await resolveTokenMetadata(category);
+          }
+
+          if (!resolved || cancelled) return;
+
+          setMetadata((prev) => ({ ...prev, [category]: resolved }));
+
+          const shouldRefresh =
+            allowRemoteRefresh &&
+            (refreshNonce > 0 ||
+              (retryNonce > 0 && !resolved.snapshot) ||
+              Boolean(resolved.snapshot && resolved.freshness !== 'fresh'));
+          if (!shouldRefresh) {
+            if (resolved.status === 'error' && !resolved.snapshot) {
+              sawHardError = true;
+            }
+            return;
+          }
+
+          setMetadata((prev) => ({
+            ...prev,
+            [category]: markRefreshing(resolved),
+          }));
+
+          const refreshed = await resolveTokenMetadata(category, {
+            forceRefresh: true,
+          });
+          if (!cancelled && refreshed) {
+            setMetadata((prev) => ({ ...prev, [category]: refreshed }));
+          }
+        })
       );
 
       if (cancelled) return;
 
-      const resolved: Record<string, SharedTokenMetadata> = {};
-      for (const item of loaded) {
-        if (item.metadata) {
-          resolved[item.category] = item.metadata;
-        }
+      if (retryAfterMs === undefined && sawHardError) {
+        retryAfterMs = METADATA_FAILURE_TTL_MS;
       }
 
-      if (Object.keys(resolved).length > 0) {
-        setMetadata((prev) => ({ ...prev, ...resolved }));
+      if (retryAfterMs !== undefined) {
+        retryTimer = window.setTimeout(() => {
+          setRetryNonce((value) => value + 1);
+        }, retryAfterMs);
       }
     })();
 
@@ -266,7 +467,7 @@ export default function useSharedTokenMetadata(categories: string[]) {
         window.clearTimeout(retryTimer);
       }
     };
-  }, [normalizedCategories, retryNonce]);
+  }, [normalizedCategories, refreshNonce, retryNonce]);
 
   return metadata;
 }

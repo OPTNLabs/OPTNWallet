@@ -95,6 +95,18 @@ const OutputSelection: React.FC<OutputSelectionProps> = ({
     ),
   ];
   const tokenMetadata = useTokenMetadata(categoriesFromSelected);
+  const selectedTokenUtxo = selectedTokenCategory
+    ? selectedUtxos.find((utxo) => utxo.token?.category === selectedTokenCategory) ??
+      null
+    : null;
+  const selectedTokenFallback = selectedTokenUtxo?.token?.BcmrTokenMetadata
+    ? {
+        name: selectedTokenUtxo.token.BcmrTokenMetadata.name,
+        symbol: selectedTokenUtxo.token.BcmrTokenMetadata.token.symbol,
+        decimals: selectedTokenUtxo.token.BcmrTokenMetadata.token.decimals,
+        iconUri: selectedTokenUtxo.token.BcmrTokenMetadata.uris.icon ?? null,
+      }
+    : null;
 
   useEffect(() => {
     if (showNFTCashToken) setTokenAmount(0);
@@ -398,6 +410,12 @@ const OutputSelection: React.FC<OutputSelectionProps> = ({
                   selectedUtxos={selectedUtxos}
                   scanBarcode={scanBarcode}
                   handleAddOutput={handleAddOutput}
+                  selectedTokenMetadata={
+                    selectedTokenCategory
+                      ? tokenMetadata[selectedTokenCategory] ?? null
+                      : null
+                  }
+                  selectedTokenFallback={selectedTokenFallback}
                 />
               )}
               {showNFTCashToken && (
@@ -413,6 +431,12 @@ const OutputSelection: React.FC<OutputSelectionProps> = ({
                   scanBarcode={scanBarcode}
                   handleAddOutput={handleAddOutput}
                   setShowNFTConfigPopup={setShowNFTConfigPopup}
+                  selectedTokenMetadata={
+                    selectedTokenCategory
+                      ? tokenMetadata[selectedTokenCategory] ?? null
+                      : null
+                  }
+                  selectedTokenFallback={selectedTokenFallback}
                 />
               )}
               {showOpReturn && (

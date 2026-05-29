@@ -3,8 +3,14 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { FaCamera } from 'react-icons/fa';
 import { TransactionOutput, UTXO } from '../../../types/types';
-import { shortenTxHash } from '../../../utils/shortenHash';
 import { DUST, SATSINBITCOIN } from '../../../utils/constants';
+import {
+  formatAtomicTokenAmount,
+  resolveTokenPresentation,
+} from '../../../utils/tokenPresentation';
+import type { TokenPresentationFallback } from '../../../utils/tokenPresentation';
+import type { BcmrTokenMetadataState } from '../../../types/bcmr';
+import TokenIdentityBadge from '../../../components/ui/TokenIdentityBadge';
 
 const FEE_RESERVE_SATS = 2000n;
 
@@ -18,10 +24,7 @@ interface RegularTxViewProps {
   setTokenAmount: (amount: number | bigint) => void; // ✅ fix: allow bigint too (matches OutputSelection)
   selectedTokenCategory: string;
   setSelectedTokenCategory: (category: string) => void;
-  tokenMetadata: Record<
-    string,
-    { name: string; symbol: string; decimals: number; iconUri: string | null }
-  >;
+  tokenMetadata: Record<string, BcmrTokenMetadataState>;
   selectedUtxos: UTXO[];
   scanBarcode: () => Promise<void>; // ✅ fix: matches OutputSelection's async scanBarcode
   handleAddOutput: () => Promise<void>; // ✅ fix: matches OutputSelection's async handleAddOutput
@@ -93,16 +96,30 @@ const RegularTxView: React.FC<RegularTxViewProps> = ({
     return totals;
   }, [selectedUtxos]);
 
-  const formatTokenAmount = (amount: bigint, decimals: number): string => {
-    if (decimals === 0) {
-      return amount.toString();
+  const tokenFallbackByCategory = useMemo(() => {
+    const byCategory = new Map<string, TokenPresentationFallback>();
+
+    for (const utxo of selectedUtxos) {
+      const category = utxo.token?.category;
+      const bcmr = utxo.token?.BcmrTokenMetadata;
+      if (!category || !bcmr || byCategory.has(category)) continue;
+      byCategory.set(category, {
+        name: bcmr.name,
+        symbol: bcmr.token.symbol,
+        decimals: bcmr.token.decimals,
+        iconUri: bcmr.uris?.icon ?? null,
+      });
     }
-    const amountStr = amount.toString();
-    const padded = amountStr.padStart(decimals + 1, '0');
-    const integerPart = padded.slice(0, -decimals) || '0';
-    const decimalPart = padded.slice(-decimals).padEnd(decimals, '0');
-    return `${integerPart}.${decimalPart}`;
-  };
+
+    return byCategory;
+  }, [selectedUtxos]);
+
+  const getTokenPresentation = (category: string) =>
+    resolveTokenPresentation(
+      category,
+      tokenMetadata[category],
+      tokenFallbackByCategory.get(category) ?? null
+    );
 
   useEffect(() => {
     if (selectedTokenCategory === 'none') {
@@ -141,7 +158,10 @@ const RegularTxView: React.FC<RegularTxViewProps> = ({
 
             if (BigInt(integerAmount) > maxTokenAmount) {
               console.warn('Token amount exceeds available balance');
-              const maxFormatted = formatTokenAmount(maxTokenAmount, decimals);
+              const maxFormatted = formatAtomicTokenAmount(
+                maxTokenAmount,
+                decimals
+              );
               setInputTokenAmount(maxFormatted);
               setTokenAmount(maxTokenAmount); // ✅ fix: pass bigint directly (no Number truncation)
             } else {
@@ -225,7 +245,7 @@ const RegularTxView: React.FC<RegularTxViewProps> = ({
           className="wallet-input w-full break-words whitespace-normal"
           min={Number(DUST) / 100_000_000}
           max={Number(remainingSpendable) / 100_000_000}
-        />
+            />
 
         <div className="mt-1 text-xs wallet-muted">
           Leaving a {Number(FEE_RESERVE_SATS)} sat fee reserve.
@@ -250,7 +270,7 @@ const RegularTxView: React.FC<RegularTxViewProps> = ({
                       tokenTotals[selectedTokenCategory] || BigInt(0);
                     const decimals =
                       tokenMetadata[selectedTokenCategory]?.decimals || 0;
-                    const formattedMax = formatTokenAmount(
+                    const formattedMax = formatAtomicTokenAmount(
                       maxTokenAmount,
                       decimals
                     );
@@ -260,7 +280,7 @@ const RegularTxView: React.FC<RegularTxViewProps> = ({
                   className="wallet-btn-primary px-3 py-1"
                 >
                   Max (
-                  {formatTokenAmount(
+                  {formatAtomicTokenAmount(
                     tokenTotals[selectedTokenCategory] || BigInt(0),
                     tokenMetadata[selectedTokenCategory]?.decimals || 0
                   )}
@@ -284,7 +304,7 @@ const RegularTxView: React.FC<RegularTxViewProps> = ({
               value={inputTokenAmount}
               onChange={handleInputTokenAmountChange}
               className="wallet-input w-full break-words whitespace-normal"
-              placeholder={`Enter amount (max ${formatTokenAmount(
+              placeholder={`Enter amount (max ${formatAtomicTokenAmount(
                 tokenTotals[selectedTokenCategory] || BigInt(0),
                 tokenMetadata[selectedTokenCategory]?.decimals || 0
               )})`}
@@ -302,35 +322,31 @@ const RegularTxView: React.FC<RegularTxViewProps> = ({
         >
           <option value="none">None</option>
           {categoriesFromSelected.map((category) => {
-            const meta = tokenMetadata[category];
+            const presentation = getTokenPresentation(category);
             return (
               <option key={category} value={category}>
-                {meta?.name ?? shortenTxHash(category)}
+                {presentation.primaryLabel}
               </option>
             );
           })}
         </select>
 
-        {selectedTokenCategory !== 'none' &&
-          tokenMetadata[selectedTokenCategory] && (
-            <div className="flex justify-between items-center mt-2">
-              <div className="flex items-center">
-                {tokenMetadata[selectedTokenCategory].iconUri && (
-                  <img
-                    src={tokenMetadata[selectedTokenCategory].iconUri}
-                    alt={tokenMetadata[selectedTokenCategory].name}
-                    className="w-6 h-6 rounded mr-2"
-                  />
-                )}
-                <span className="font-medium">
-                  {tokenMetadata[selectedTokenCategory].name}
+        {selectedTokenCategory !== 'none' && (
+          <div className="mt-2">
+            <TokenIdentityBadge
+              presentation={getTokenPresentation(selectedTokenCategory)}
+              detail={
+                <span className="text-sm font-medium wallet-muted">
+                  {isNft ? 'NFT' : 'FT'}
                 </span>
-              </div>
-              <span className="text-sm font-medium">
-                {isNft ? 'NFT' : 'FT'}
-              </span>
-            </div>
-          )}
+              }
+              avatarClassName="h-6 w-6 rounded"
+              primaryClassName="text-sm"
+              secondaryClassName="text-[11px]"
+              showStatus
+            />
+          </div>
+        )}
       </div>
 
       <div className="flex flex-col items-end justific-end mt-4">
