@@ -3,19 +3,9 @@ import useSharedTokenMetadata from '../../hooks/useSharedTokenMetadata';
 import { CategorySummary, TokenMetaMap } from './types';
 
 export function useTokenMetadata(categories: CategorySummary[]) {
-  const shared = useSharedTokenMetadata(categories.map((c) => c.category));
-  return useMemo(
-    () =>
-      Object.fromEntries(
-        Object.entries(shared).map(([category, meta]) => [
-          category,
-          {
-            name: meta.name,
-            symbol: meta.symbol,
-            decimals: meta.decimals,
-          },
-        ])
-      ) as TokenMetaMap,
-    [shared]
+  const categoryNames = useMemo(
+    () => categories.map((c) => c.category),
+    [categories]
   );
+  return useSharedTokenMetadata(categoryNames) as TokenMetaMap;
 }

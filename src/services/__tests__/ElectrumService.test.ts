@@ -129,6 +129,23 @@ describe('ElectrumService', () => {
     );
   });
 
+  it('getUTXOsMany omits addresses that fail without a usable response', async () => {
+    const server = {
+      requestMany: vi.fn(async () => [new Error('temporary failure')]),
+      subscribe: vi.fn(async () => {}),
+      unsubscribe: vi.fn(async () => {}),
+      onNotification: vi.fn(() => () => {}),
+    };
+
+    mockedElectrumServer.mockReturnValue(server as never);
+
+    const address = 'bitcoincash:qfail';
+    const result = await ElectrumService.getUTXOsMany([address]);
+
+    expect(result).not.toHaveProperty(address);
+    expect(server.requestMany).toHaveBeenCalledTimes(1);
+  });
+
   it('primeUTXOCache seeds cache used by getUTXOs', async () => {
     const server = {
       request: vi.fn(async () => []),

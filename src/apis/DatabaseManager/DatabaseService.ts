@@ -68,6 +68,25 @@ const migrations: Array<(db: Database) => Promise<void>> = [
       );
     `);
   },
+  async (db) => {
+    const columns = new Set<string>();
+    const statement = db.prepare('PRAGMA table_info(bcmr_metadata);');
+    while (statement.step()) {
+      const row = statement.getAsObject() as Record<string, unknown>;
+      if (typeof row.name === 'string') columns.add(row.name);
+    }
+    statement.free();
+
+    if (!columns.has('lastFetch')) {
+      db.run('ALTER TABLE bcmr_metadata ADD COLUMN lastFetch TEXT;');
+    }
+    if (!columns.has('registryUri')) {
+      db.run('ALTER TABLE bcmr_metadata ADD COLUMN registryUri TEXT;');
+    }
+    if (!columns.has('registryHash')) {
+      db.run('ALTER TABLE bcmr_metadata ADD COLUMN registryHash TEXT;');
+    }
+  },
   // Add future migrations here as needed
 ];
 

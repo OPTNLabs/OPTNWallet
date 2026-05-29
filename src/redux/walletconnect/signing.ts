@@ -17,6 +17,7 @@ import {
   hash256,
   secp256k1,
   lockingBytecodeToCashAddress,
+  stringify,
 } from '@bitauth/libauth';
 import type { WalletKitTypes } from '@reown/walletkit';
 import type { RootState } from '../../state/store';
@@ -45,7 +46,7 @@ export async function signWalletConnectTransactionRequest(
 }> {
   const { id, topic, params } = signTxRequest;
   const rawParams = params.request.params as unknown;
-  const request = parseExtendedJson(JSON.stringify(rawParams));
+  const request = parseExtendedJson(stringify(rawParams));
   const txDetails = request.transaction as TransactionCommon;
   const sourceOutputs = request.sourceOutputs as (Input & Output & ContractInfo)[];
   if (!txDetails || !sourceOutputs) {
@@ -55,8 +56,12 @@ export async function signWalletConnectTransactionRequest(
   const walletId = state.wallet_id.currentWalletId!;
   const keys = await KeyService.retrieveKeys(walletId);
   if (!keys.length) throw new Error('No key available');
-  const keyAddressSet = new Set(keys.map((k) => k.address));
   const networkPrefix = PREFIX[state.network.currentNetwork];
+  const keyAddressSet = new Set(
+    keys
+      .map((k) => normalizeWalletAddressCandidate(k.address, networkPrefix))
+      .filter((address): address is string => !!address)
+  );
   const rawRequestRecord =
     request && typeof request === 'object'
       ? (request as Record<string, unknown>)
@@ -95,10 +100,6 @@ export async function signWalletConnectTransactionRequest(
         if (typeof addressResult === 'string') return null;
         return addressResult.address;
       })();
-
-      if (sourceAddress && !keyAddressSet.has(sourceAddress)) {
-        throw new Error(`Refusing to sign non-wallet input: ${sourceAddress}`);
-      }
 
       const signerKey =
         sourceAddress && keyAddressSet.has(sourceAddress)

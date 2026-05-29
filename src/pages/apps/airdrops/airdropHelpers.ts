@@ -212,3 +212,28 @@ export function describeAmountRule(mode: AmountRuleMode) {
       return 'Same for everyone';
   }
 }
+
+export function hasAirdropTokenHoldings(asset: {
+  tokenBalance: string;
+  nftCommitments: string[];
+}) {
+  try {
+    return BigInt(asset.tokenBalance || '0') > 0n || asset.nftCommitments.length > 0;
+  } catch {
+    return asset.nftCommitments.length > 0;
+  }
+}
+
+export function normalizeTokenHolderBalance(args: {
+  ftBalance: string;
+  utxoCount: number;
+}) {
+  try {
+    const ftBalance = BigInt(args.ftBalance || '0');
+    if (ftBalance > 0n) return ftBalance;
+  } catch {
+    // Fall through to the NFT-aware presence check below.
+  }
+
+  return args.utxoCount > 0 ? 1n : 0n;
+}

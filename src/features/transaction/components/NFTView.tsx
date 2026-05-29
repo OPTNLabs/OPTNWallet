@@ -2,7 +2,12 @@ import React from 'react';
 import { FaCamera } from 'react-icons/fa';
 import { UTXO } from '../../../types/types';
 import { DUST } from '../../../utils/constants';
-import TokenAvatar from '../../../components/ui/TokenAvatar';
+import type { BcmrTokenMetadataState } from '../../../types/bcmr';
+import {
+  resolveTokenPresentation,
+} from '../../../utils/tokenPresentation';
+import type { TokenPresentationFallback } from '../../../utils/tokenPresentation';
+import TokenIdentityBadge from '../../../components/ui/TokenIdentityBadge';
 
 interface NFTViewProps {
   recipientAddress: string;
@@ -16,11 +21,8 @@ interface NFTViewProps {
   scanBarcode: () => void;
   handleAddOutput: () => void;
   setShowNFTConfigPopup: (value: boolean) => void;
-  selectedTokenMetadata?: {
-    name?: string | null;
-    symbol?: string | null;
-    iconUri?: string | null;
-  } | null;
+  selectedTokenMetadata?: BcmrTokenMetadataState | null;
+  selectedTokenFallback?: TokenPresentationFallback | null;
 }
 
 const NFTView: React.FC<NFTViewProps> = ({
@@ -36,16 +38,21 @@ const NFTView: React.FC<NFTViewProps> = ({
   handleAddOutput,
   setShowNFTConfigPopup,
   selectedTokenMetadata = null,
+  selectedTokenFallback = null,
 }) => {
-  const tokenName = selectedTokenMetadata?.name || 'Collectible';
+  const presentation = resolveTokenPresentation(
+    selectedTokenCategory || 'nft-token',
+    selectedTokenMetadata,
+    selectedTokenFallback ?? { name: 'Collectible', symbol: 'NFT' }
+  );
   return (
     <>
       <div className="mb-4 flex items-center gap-3">
-        <TokenAvatar iconUri={selectedTokenMetadata?.iconUri ?? null} name={tokenName} />
-        <div>
-          <div className="text-base font-semibold wallet-text-strong">{tokenName}</div>
-          <div className="text-sm wallet-muted">NFT</div>
-        </div>
+        <TokenIdentityBadge
+          presentation={presentation}
+          detail={<span className="text-sm font-medium wallet-muted">NFT</span>}
+          showStatus
+        />
       </div>
       <label className="block font-medium mb-1">Recipient Address</label>
       <div className="flex items-center mb-2">

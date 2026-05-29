@@ -5,6 +5,7 @@ import {
   getAddonGrantedCapabilities,
   validateAddonPermissions,
 } from './AddonsAllowlist';
+import { Capacitor, CapacitorHttp } from '@capacitor/core';
 
 import ElectrumService from './ElectrumService';
 import TransactionService, { type BroadcastResult } from './TransactionService';
@@ -21,6 +22,7 @@ import {
 } from './addons/AddonPolicyEngine';
 import { validateAddonManifestAgainstSchema } from './addons/AddonManifestSchema';
 import { getAddonSDKInfo, type AddonSDKInfo } from './addons/SDKContract';
+import type { BcmrSnapshot, BcmrTokenMetadataState } from '../types/bcmr';
 
 import TransactionManager from '../apis/TransactionManager/TransactionManager';
 
@@ -126,6 +128,9 @@ export type AddonSDK = {
 
   bcmr: {
     getTokenMetadata(category: string): Promise<BcmrTokenMetadata | null>;
+    getTokenMetadataState(
+      category: string
+    ): Promise<BcmrTokenMetadataState | null>;
   };
 
   tokenIndex: {
@@ -294,11 +299,123 @@ export function createAddonSDK(
     return await policy.withTimeout(operation, timeoutMs, run);
   };
 
+  async function fetchTokenIndexJson<T>(
+    url: string,
+    {
+      headers,
+      timeoutMs = 8000,
+    }: {
+      headers?: Record<string, string>;
+      timeoutMs?: number;
+    } = {}
+  ): Promise<T> {
+    const fetchJson = async (): Promise<T> => {
+      const ctrl = new AbortController();
+      const to = setTimeout(() => ctrl.abort(), timeoutMs);
+      try {
+        const response = await fetch(url, { headers, signal: ctrl.signal });
+        const text = await response.text();
+        if (!response.ok) {
+          throw new Error(`TokenIndex ${response.status}: ${text}`);
+        }
+        return JSON.parse(text) as T;
+      } finally {
+        clearTimeout(to);
+      }
+    };
+
+    const nativeHttpJson = async (): Promise<T> => {
+      const response = await CapacitorHttp.get({ url, headers });
+      return response.data as T;
+    };
+
+    try {
+      return await fetchJson();
+    } catch (fetchError) {
+      if (Capacitor.isNativePlatform()) {
+        try {
+          return await nativeHttpJson();
+        } catch {
+          throw fetchError;
+        }
+      }
+      throw fetchError;
+    }
+  }
+
+  const buildBcmrTokenMetadataState = (
+    snapshot: BcmrSnapshot,
+    iconUri: string | null,
+    freshness: BcmrTokenMetadataState['freshness'],
+    provenance?: Pick<
+      BcmrTokenMetadataState,
+      'lastFetch' | 'registryUri' | 'registryHash'
+    >
+  ): BcmrTokenMetadataState => ({
+    status: 'ready',
+    freshness,
+    name: snapshot.name,
+    symbol: snapshot.token?.symbol || '',
+    decimals: snapshot.token?.decimals ?? 0,
+    iconUri,
+    snapshot,
+    isRefreshing: false,
+    lastFetch: provenance?.lastFetch ?? snapshot.lastFetch ?? null,
+    registryUri: provenance?.registryUri ?? snapshot.registryUri ?? null,
+    registryHash: provenance?.registryHash ?? snapshot.registryHash ?? null,
+  });
+
   const getReservedOutpointKeys = async (): Promise<Set<string>> => {
     const reserved = await OutboundTransactionTracker.listReservedOutpoints(
       ctx.walletId
     );
     return new Set(reserved.map((outpoint) => outpointKey(outpoint)));
+  };
+
+  const resolveAddonBcmrMetadataState = async (
+    category: string
+  ): Promise<BcmrTokenMetadataState | null> => {
+    await authorizeCapability('bcmr:token:read');
+    const normalized = String(category ?? '').trim().toLowerCase();
+    if (!/^[0-9a-f]{64}$/.test(normalized)) {
+      throw new Error('Invalid token category');
+    }
+
+    return await withPolicyTimeout(
+      'bcmr.getTokenMetadataState',
+      20_000,
+      async () => {
+        const cached = await bcmr.getSnapshot(normalized);
+        if (cached) {
+          let iconUri: string | null = null;
+          try {
+            const authbase = await bcmr.getCategoryAuthbase(normalized);
+            iconUri = await bcmr.resolveIcon(authbase, undefined, normalized);
+          } catch {
+            // Preserve the cached metadata if icon hydration fails.
+          }
+
+          return buildBcmrTokenMetadataState(cached, iconUri, 'cached');
+        }
+
+        try {
+          const authbase = await bcmr.getCategoryAuthbase(normalized);
+          const registry = await bcmr.resolveIdentityRegistry(authbase);
+          const snapshot = bcmr.extractIdentityByCategory(
+            normalized,
+            registry.registry
+          );
+          const iconUri = await bcmr.resolveIcon(authbase, undefined, normalized);
+          return buildBcmrTokenMetadataState(snapshot, iconUri, 'fresh', {
+            lastFetch: registry.lastFetch,
+            registryUri: registry.registryUri,
+            registryHash: registry.registryHash,
+          });
+        } catch {
+          return null;
+        }
+      }
+    );
   };
 
   const filterReservedUtxos = async (utxos: UTXO[]): Promise<UTXO[]> => {
@@ -426,29 +543,12 @@ export function createAddonSDK(
 
     bcmr: {
       async getTokenMetadata(category: string) {
-        await authorizeCapability('bcmr:token:read');
-        const normalized = String(category ?? '').trim().toLowerCase();
-        if (!/^[0-9a-f]{64}$/.test(normalized)) {
-          throw new Error('Invalid token category');
-        }
+        const state = await resolveAddonBcmrMetadataState(category);
+        return (state?.snapshot as BcmrTokenMetadata | null) ?? null;
+      },
 
-        return await withPolicyTimeout(
-          'bcmr.getTokenMetadata',
-          20_000,
-          async () => {
-            let snapshot = await bcmr.getSnapshot(normalized);
-            if (snapshot) return snapshot;
-
-            try {
-              const authbase = await bcmr.getCategoryAuthbase(normalized);
-              await bcmr.resolveIdentityRegistry(authbase);
-              snapshot = await bcmr.getSnapshot(normalized);
-            } catch {
-              return null;
-            }
-            return snapshot;
-          }
-        );
+      async getTokenMetadataState(category: string) {
+        return await resolveAddonBcmrMetadataState(category);
       },
     },
 
@@ -477,19 +577,7 @@ export function createAddonSDK(
           'tokenIndex.listTokenHolders',
           20_000,
           async () => {
-            const response = await fetch(url.toString(), {
-              headers: {
-                Accept: 'application/json',
-              },
-            });
-
-            if (!response.ok) {
-              throw new Error(
-                `TokenIndex ${response.status}: ${await response.text()}`
-              );
-            }
-
-            return (await response.json()) as {
+            return await fetchTokenIndexJson<{
               holders: Array<{
                 locking_bytecode: string;
                 locking_address?: string | null;
@@ -498,7 +586,11 @@ export function createAddonSDK(
                 updated_height: number;
               }>;
               next_cursor?: string | null;
-            };
+            }>(url.toString(), {
+              headers: {
+                Accept: 'application/json',
+              },
+            });
           }
         );
       },

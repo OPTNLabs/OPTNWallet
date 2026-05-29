@@ -142,6 +142,7 @@ export type CauldronWalletPoolPosition = {
 export type CauldronPoolHistoryEntry = {
   sats: number;
   tokens: number;
+  token_amount?: number | string | bigint;
   timestamp: number;
   txid: string;
 };
