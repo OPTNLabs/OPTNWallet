@@ -13,5 +13,6 @@ describe('SDKContract', () => {
     expect(info.modules.length).toBeGreaterThan(0);
     expect(info.capabilities).toEqual(['tx:build']);
     expect(info.methods.signing).toContain('signMessage');
+    expect(info.methods.bcmr).toContain('getTokenMetadataState');
   });
 });

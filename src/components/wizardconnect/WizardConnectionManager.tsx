@@ -102,7 +102,7 @@ export default function WizardConnectionManager() {
   return (
     <div className="space-y-4">
       <ConnectionUriScanCard
-        label="Enter WizardConnect URI:"
+        label="Enter WizardConnect URI"
         placeholder="wiz://..."
         value={uri}
         onChange={setUri}
@@ -115,20 +115,20 @@ export default function WizardConnectionManager() {
 
       {pendingUri && (
         <div className="wallet-popup-backdrop">
-          <div className="wallet-popup-panel max-w-md w-full space-y-4">
+          <div className="wallet-popup-panel max-w-md w-full space-y-5">
             <h3 className="text-2xl font-bold text-center">Approve WizardConnect</h3>
-            <div className="text-center space-y-2">
+            <div className="text-center space-y-3">
               <p className="wallet-text-strong">
                 Connect this wallet to the following WizardConnect request?
               </p>
-              <div className="wallet-surface-strong border border-[var(--wallet-border)] rounded p-3 text-left">
-                <div className="text-xs uppercase tracking-wide wallet-muted mb-1">Connection URI</div>
-                <div className="font-mono text-sm break-all wallet-text-strong">
+              <div className="wallet-surface-strong border border-[var(--wallet-border)] rounded-2xl p-4 text-left">
+                <div className="text-[11px] uppercase tracking-[0.18em] wallet-muted mb-1">Connection URI</div>
+                <div className="font-mono text-sm break-all wallet-text-strong leading-relaxed">
                   {shortenWizardUri(pendingUri)}
                 </div>
               </div>
             </div>
-            <div className="flex justify-around pt-2">
+            <div className="flex justify-around gap-3 pt-1">
               <button
                 onClick={() => void connectToUri(pendingUri)}
                 className="wallet-btn-primary px-4 py-2"

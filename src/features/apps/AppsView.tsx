@@ -198,7 +198,7 @@ const AppsView = () => {
                   }
                   icon={
                     app.id === 'optn.builtin.cauldron:cauldronSwapApp' ||
-                    app.id === 'optn.builtin.events:eventRewardsApp' ||
+                    app.id === 'optn.builtin.events:airdropsApp' ||
                     app.id === 'optn.wallet.contracts' ||
                     app.id === 'optn.wallet.quantumroot' ||
                     app.id === 'optn.builtin.fundme:fundmeApp' ? (

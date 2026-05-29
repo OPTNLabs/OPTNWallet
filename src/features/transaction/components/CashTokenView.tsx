@@ -2,7 +2,12 @@ import React from 'react';
 import { FaCamera } from 'react-icons/fa';
 import { UTXO } from '../../../types/types';
 import { DUST } from '../../../utils/constants';
-import TokenAvatar from '../../../components/ui/TokenAvatar';
+import type { BcmrTokenMetadataState } from '../../../types/bcmr';
+import {
+  resolveTokenPresentation,
+} from '../../../utils/tokenPresentation';
+import type { TokenPresentationFallback } from '../../../utils/tokenPresentation';
+import TokenIdentityBadge from '../../../components/ui/TokenIdentityBadge';
 
 interface CashTokenViewProps {
   recipientAddress: string;
@@ -16,11 +21,8 @@ interface CashTokenViewProps {
   selectedUtxos: UTXO[];
   scanBarcode: () => void;
   handleAddOutput: () => void;
-  selectedTokenMetadata?: {
-    name?: string | null;
-    symbol?: string | null;
-    iconUri?: string | null;
-  } | null;
+  selectedTokenMetadata?: BcmrTokenMetadataState | null;
+  selectedTokenFallback?: TokenPresentationFallback | null;
 }
 
 const CashTokenView: React.FC<CashTokenViewProps> = ({
@@ -36,17 +38,21 @@ const CashTokenView: React.FC<CashTokenViewProps> = ({
   scanBarcode,
   handleAddOutput,
   selectedTokenMetadata = null,
+  selectedTokenFallback = null,
 }) => {
-  const tokenName = selectedTokenMetadata?.name || 'CashToken';
-  const tokenSymbol = selectedTokenMetadata?.symbol || 'token';
+  const presentation = resolveTokenPresentation(
+    selectedTokenCategory || 'cash-token',
+    selectedTokenMetadata,
+    selectedTokenFallback ?? { name: 'CashToken', symbol: 'token' }
+  );
   return (
     <>
       <div className="mb-4 flex items-center gap-3">
-        <TokenAvatar iconUri={selectedTokenMetadata?.iconUri ?? null} name={tokenName} />
-        <div>
-          <div className="text-base font-semibold wallet-text-strong">{tokenName}</div>
-          <div className="text-sm wallet-muted">{tokenSymbol}</div>
-        </div>
+        <TokenIdentityBadge
+          presentation={presentation}
+          detail={<span className="text-sm font-medium wallet-muted">FT</span>}
+          showStatus
+        />
       </div>
       <label className="block font-medium mb-1">Recipient Address</label>
       <div className="flex items-center mb-2">

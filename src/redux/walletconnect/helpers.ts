@@ -1,5 +1,4 @@
 import { buildApprovedNamespaces } from '@walletconnect/utils';
-import { Toast } from '@capacitor/toast';
 import type { IWalletKit, WalletKitTypes } from '@reown/walletkit';
 import type { RootState } from '../../state/store';
 import KeyService from '../../services/KeyService';
@@ -22,8 +21,11 @@ type SessionRequestResponder = {
 
 type WalletConnectListenerHandlers = {
   onProposal: (proposal: WalletKitTypes.SessionProposal) => void;
+  onProposalExpire: (proposalId: number) => void;
   onSessionUpdate: () => void;
   onSessionRequest: (sessionEvent: WalletKitTypes.SessionRequest) => void;
+  onSessionRequestExpire: (requestId: number) => void;
+  onSessionDelete: (topic: string) => void;
 };
 
 export function registerWalletConnectListeners(
@@ -31,10 +33,11 @@ export function registerWalletConnectListeners(
   handlers: WalletConnectListenerHandlers
 ) {
   web3wallet.on('session_proposal', async (proposal) => {
-    await Toast.show({
-      text: 'Session proposal from dApp! Check console or modal.',
-    });
     handlers.onProposal(proposal);
+  });
+
+  web3wallet.on('proposal_expire', (proposal) => {
+    handlers.onProposalExpire(proposal.id);
   });
 
   const sessionEmitter = web3wallet as IWalletKit & SessionUpdateEmitter;
@@ -42,8 +45,16 @@ export function registerWalletConnectListeners(
     handlers.onSessionUpdate();
   });
 
+  web3wallet.on('session_delete', (deletedSession) => {
+    handlers.onSessionDelete(deletedSession.topic);
+  });
+
   web3wallet.on('session_request', (sessionEvent) => {
     handlers.onSessionRequest(sessionEvent);
+  });
+
+  web3wallet.on('session_request_expire', (request) => {
+    handlers.onSessionRequestExpire(request.id);
   });
 }
 

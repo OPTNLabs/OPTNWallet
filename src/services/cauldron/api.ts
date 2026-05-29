@@ -3,6 +3,7 @@ import { getCauldronApiBaseUrl } from './config';
 import type {
   CauldronActivePoolRecord,
   CauldronAggregatedApyResponse,
+  CauldronPoolHistoryEntry,
   CauldronPoolHistoryResponse,
   CauldronTokenListItemCached,
 } from './types';
@@ -182,7 +183,40 @@ export class CauldronApiClient {
     const url = `${this.baseUrl}/pool/history/${encodeURIComponent(poolId)}${
       search.size > 0 ? `?${search.toString()}` : ''
     }`;
-    return fetchJsonCached<CauldronPoolHistoryResponse>(url, url);
+    const response = await fetchJsonCached<unknown>(url, url);
+    if (!response || typeof response !== 'object') {
+      throw new Error('Unexpected Cauldron pool-history response shape');
+    }
+
+    const rawHistory = (response as { history?: unknown }).history;
+    const normalizedHistory = Array.isArray(rawHistory)
+      ? rawHistory.flatMap((entry) => {
+          if (!entry || typeof entry !== 'object') return [];
+          const typedEntry = entry as Record<string, unknown>;
+          const tokens =
+            typedEntry.tokens ?? typedEntry.token_amount ?? typedEntry.amount_token;
+          if (tokens == null) return [];
+          return [
+            {
+              ...typedEntry,
+              sats: typedEntry.sats ?? typedEntry.value ?? typedEntry.value_satoshis ?? 0,
+              tokens,
+            } as CauldronPoolHistoryEntry,
+          ];
+        })
+      : [];
+
+    const tokenId = (response as { token_id?: unknown }).token_id;
+    const ownerPkh = (response as { owner_pkh?: unknown }).owner_pkh;
+    if (typeof tokenId !== 'string' || typeof ownerPkh !== 'string') {
+      throw new Error('Unexpected Cauldron pool-history response shape');
+    }
+
+    return {
+      history: normalizedHistory,
+      token_id: tokenId,
+      owner_pkh: ownerPkh,
+    };
   }
 
   async getAggregatedApy(params: {

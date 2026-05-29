@@ -4,7 +4,11 @@ import { shortenTxHash } from '../utils/shortenHash';
 import { UTXO } from '../types/types';
 import { SATSINBITCOIN } from '../utils/constants';
 import useSharedTokenMetadata from '../hooks/useSharedTokenMetadata';
-import TokenAvatar from './ui/TokenAvatar';
+import TokenIdentityBadge from './ui/TokenIdentityBadge';
+import {
+  formatAtomicTokenAmount,
+  resolveTokenPresentation,
+} from '../utils/tokenPresentation';
 
 interface UTXOCardProps {
   utxos: UTXO[];
@@ -34,32 +38,6 @@ function formatBchFromSats(
   if (!Number.isFinite(n)) return '0';
 
   return (n / SATSINBITCOIN).toFixed(8).replace(/\.?0+$/, '');
-}
-
-// Function to format token amounts based on decimals
-function formatTokenAmount(
-  amount: number | string | bigint,
-  decimals: number = 0
-): string {
-  if (decimals === 0) return amount.toString();
-
-  // bigint-safe formatting for tokens too (prevents precision loss)
-  if (typeof amount === 'bigint') {
-    const base = 10n ** BigInt(decimals);
-    const whole = amount / base;
-    const frac = amount % base;
-
-    let fracStr = frac.toString().padStart(decimals, '0');
-    fracStr = fracStr.replace(/0+$/, '');
-
-    return fracStr.length ? `${whole.toString()}.${fracStr}` : whole.toString();
-  }
-
-  const numAmount = typeof amount === 'string' ? Number(amount) : amount;
-  if (!Number.isFinite(numAmount)) return '0';
-
-  const divisor = Math.pow(10, decimals);
-  return (numAmount / divisor).toFixed(decimals).replace(/\.?0+$/, '');
 }
 
 const UTXOCard: React.FC<UTXOCardProps> = ({ utxos, loading }) => {
@@ -100,17 +78,12 @@ const UTXOCard: React.FC<UTXOCardProps> = ({ utxos, loading }) => {
         const metadata = tokenData?.BcmrTokenMetadata || null;
         const category = tokenData?.category || null;
         const sharedMeta = category ? tokenMetadata[category] : null;
-        const fallbackIconUri =
-          metadata?.uris && typeof metadata.uris.icon === 'string'
-            ? metadata.uris.icon
-            : null;
-        const iconUri = sharedMeta?.iconUri ?? fallbackIconUri ?? null;
-        const tokenName = sharedMeta?.name || metadata?.name || 'Unknown Token';
-        const tokenSymbol = sharedMeta?.symbol || metadata?.token.symbol || 'tokens';
-        const tokenDecimals =
-          typeof sharedMeta?.decimals === 'number'
-            ? sharedMeta.decimals
-            : (metadata?.token.decimals ?? 0);
+        const presentation = resolveTokenPresentation(category ?? '', sharedMeta, {
+          name: metadata?.name ?? null,
+          symbol: metadata?.token.symbol ?? null,
+          decimals: metadata?.token.decimals ?? null,
+          iconUri: metadata?.uris?.icon ?? null,
+        });
 
         // ✅ Contract UTXOs may not have `value`, but do have `amount`
         const sats = (utxo.value ?? utxo.amount) as
@@ -129,14 +102,14 @@ const UTXOCard: React.FC<UTXOCardProps> = ({ utxos, loading }) => {
                 <>
                   <p>
                     <strong>Amount:</strong>{' '}
-                    {formatTokenAmount(
+                    {formatAtomicTokenAmount(
                       tokenData!.amount,
-                      tokenDecimals
+                      presentation.decimals
                     )}{' '}
-                    {tokenSymbol}
+                    {presentation.symbol || 'tokens'}
                   </p>
                   <p>
-                    <strong>Name:</strong> {tokenName}
+                    <strong>Name:</strong> {presentation.primaryLabel}
                   </p>
                   <p>
                     {formatBchFromSats(sats)} <strong>BCH</strong>
@@ -161,20 +134,27 @@ const UTXOCard: React.FC<UTXOCardProps> = ({ utxos, loading }) => {
             </div>
 
             <div className="flex flex-col items-center space-y-2">
-              <TokenAvatar
-                iconUri={isToken ? iconUri : null}
-                name={isToken ? tokenName : 'Bitcoin Cash'}
-                sizeClassName="h-12 w-12"
-                fallbackClassName={isToken ? 'text-[var(--wallet-accent-strong)]' : 'text-[var(--wallet-accent-strong)]'}
-              />
-              <div className="text-center">
-                <div className="text-base font-semibold wallet-text-strong">
-                  {isToken ? tokenName : 'Bitcoin Cash'}
+              {isToken ? (
+                <TokenIdentityBadge
+                  presentation={presentation}
+                  className="w-full justify-center"
+                  avatarClassName="h-12 w-12"
+                  primaryClassName="text-center"
+                  secondaryClassName="justify-center"
+                  showStatus={false}
+                  detail={
+                    <span className="text-xs wallet-muted">
+                      {utxo.token?.nft ? 'NFT' : 'FT'}
+                    </span>
+                  }
+                />
+              ) : (
+                <div className="text-center">
+                  <div className="text-base font-semibold wallet-text-strong">
+                    Bitcoin Cash
+                  </div>
                 </div>
-                {isToken ? (
-                  <div className="text-xs wallet-muted">{tokenSymbol}</div>
-                ) : null}
-              </div>
+              )}
             </div>
           </div>
         );

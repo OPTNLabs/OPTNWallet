@@ -7,13 +7,17 @@ import {
   stripChaingraphHexBytes,
 } from '../apis/ChaingraphManager/ChaingraphManager';
 import { shortenTxHash } from '../utils/shortenHash';
-import { IdentitySnapshot } from '@bitauth/libauth';
 import useSharedTokenMetadata from '../hooks/useSharedTokenMetadata';
 import { normalizeExternalUrl } from '../utils/externalUrl';
+import TokenIdentityBadge from './ui/TokenIdentityBadge';
+import { resolveTokenPresentation } from '../utils/tokenPresentation';
+import {
+  type BcmrSnapshot,
+} from '../types/bcmr';
 
 interface TokenQueryProps {
   tokenId: string;
-  prefetchedSnapshot?: IdentitySnapshot | null;
+  prefetchedSnapshot?: BcmrSnapshot | null;
   prefetchedIconDataUri?: string | null;
 }
 
@@ -26,9 +30,7 @@ const TokenQuery: React.FC<TokenQueryProps> = ({
   const [activeMinting, setActiveMinting] = useState<boolean | null>(null);
   const [nftSupply, setNftSupply] = useState<number | null>(null);
   const [authHead, setAuthHead] = useState<string | null>(null);
-  const [snapshot, setSnapshot] = useState<IdentitySnapshot | null>(
-    prefetchedSnapshot
-  );
+  const [snapshot, setSnapshot] = useState<BcmrSnapshot | null>(prefetchedSnapshot);
   const [iconDataUri, setIconDataUri] = useState<string | null>(
     prefetchedIconDataUri
   );
@@ -37,6 +39,60 @@ const TokenQuery: React.FC<TokenQueryProps> = ({
   const [bcmrError, setBcmrError] = useState<string | null>(null);
   const tokenCategories = useMemo(() => [tokenId], [tokenId]);
   const sharedTokenMetadata = useSharedTokenMetadata(tokenCategories)[tokenId];
+  const displaySnapshot: BcmrSnapshot | null =
+    sharedTokenMetadata?.snapshot ?? prefetchedSnapshot ?? null;
+  const displayIconDataUri =
+    sharedTokenMetadata?.iconUri ?? prefetchedIconDataUri ?? null;
+  const displayTokenMetadata = displaySnapshot
+    ? {
+        ...(sharedTokenMetadata ?? {
+          status: 'ready' as const,
+          freshness: 'cached' as const,
+          name: displaySnapshot.name || tokenId,
+          symbol: displaySnapshot.token?.symbol || '',
+          decimals: displaySnapshot.token?.decimals ?? 0,
+          iconUri: displayIconDataUri,
+          snapshot: displaySnapshot,
+          isRefreshing: false,
+          lastFetch: displaySnapshot.lastFetch ?? null,
+          registryUri: displaySnapshot.registryUri ?? null,
+          registryHash: displaySnapshot.registryHash ?? null,
+        }),
+        status:
+          sharedTokenMetadata?.status === 'loading'
+            ? ('ready' as const)
+            : sharedTokenMetadata?.status ?? ('ready' as const),
+        freshness:
+          sharedTokenMetadata?.snapshot
+            ? sharedTokenMetadata.freshness
+            : sharedTokenMetadata?.status === 'loading'
+              ? ('refreshing' as const)
+              : sharedTokenMetadata?.status === 'error'
+                ? ('cached' as const)
+                : (sharedTokenMetadata?.freshness ?? ('cached' as const)),
+        name: displaySnapshot.name || tokenId,
+        symbol: displaySnapshot.token?.symbol || '',
+        decimals: displaySnapshot.token?.decimals ?? 0,
+        iconUri: displayIconDataUri,
+        snapshot: displaySnapshot,
+        error: sharedTokenMetadata?.error,
+        lastFetch: sharedTokenMetadata?.lastFetch ?? displaySnapshot.lastFetch ?? null,
+        registryUri:
+          sharedTokenMetadata?.registryUri ?? displaySnapshot.registryUri ?? null,
+        registryHash:
+          sharedTokenMetadata?.registryHash ?? displaySnapshot.registryHash ?? null,
+        isRefreshing:
+          sharedTokenMetadata?.isRefreshing ||
+          sharedTokenMetadata?.status === 'loading' ||
+          false,
+      }
+      : sharedTokenMetadata;
+  const presentation = resolveTokenPresentation(tokenId, displayTokenMetadata, {
+    name: displaySnapshot?.name ?? null,
+    symbol: displaySnapshot?.token?.symbol ?? null,
+    decimals: displaySnapshot?.token?.decimals ?? null,
+    iconUri: displayIconDataUri ?? null,
+  });
   const officialSiteUrl = snapshot?.uris?.web
     ? normalizeExternalUrl(snapshot.uris.web)
     : null;
@@ -46,8 +102,8 @@ const TokenQuery: React.FC<TokenQueryProps> = ({
       setLoading(true);
       setError(null);
       setBcmrError(null);
-      setSnapshot(prefetchedSnapshot ?? sharedTokenMetadata?.snapshot ?? null);
-      setIconDataUri(prefetchedIconDataUri ?? sharedTokenMetadata?.iconUri ?? null);
+      setSnapshot(displaySnapshot);
+      setIconDataUri(displayIconDataUri);
 
       let failedCoreQueries = 0;
 
@@ -96,24 +152,19 @@ const TokenQuery: React.FC<TokenQueryProps> = ({
       }
 
       try {
-        if (sharedTokenMetadata?.status === 'ready' && sharedTokenMetadata.snapshot) {
-          setSnapshot(sharedTokenMetadata.snapshot);
-          setIconDataUri(sharedTokenMetadata.iconUri);
-        } else if (
-          !prefetchedSnapshot &&
-          !prefetchedIconDataUri &&
-          (!sharedTokenMetadata || sharedTokenMetadata.status === 'loading')
-        ) {
+        if (!displaySnapshot && (!sharedTokenMetadata || sharedTokenMetadata.status === 'loading')) {
           // Shared metadata is still loading; avoid flashing an error state.
-        } else if (sharedTokenMetadata?.status === 'error') {
+        } else if (!displaySnapshot && sharedTokenMetadata?.status === 'error') {
           throw new Error(sharedTokenMetadata.error || 'Failed to fetch BCMR metadata.');
-        } else if (!prefetchedSnapshot) {
+        } else if (!displaySnapshot) {
           throw new Error('Failed to fetch token data.');
         }
       } catch (err: unknown) {
-        setBcmrError(
-          err instanceof Error ? err.message : 'Failed to fetch token data.'
-        );
+        if (!displaySnapshot) {
+          setBcmrError(
+            err instanceof Error ? err.message : 'Failed to fetch token data.'
+          );
+        }
       }
 
       if (failedCoreQueries >= 4) {
@@ -124,13 +175,31 @@ const TokenQuery: React.FC<TokenQueryProps> = ({
     };
 
     fetchData();
-  }, [tokenId, prefetchedSnapshot, prefetchedIconDataUri, sharedTokenMetadata]);
+  }, [
+    tokenId,
+    prefetchedSnapshot,
+    prefetchedIconDataUri,
+    sharedTokenMetadata,
+    displaySnapshot,
+    displayIconDataUri,
+  ]);
 
   if (loading && !snapshot) return <p className="wallet-muted">Loading token data…</p>;
 
   return (
     <div className="token-query space-y-4">
-      <h3 className="font-semibold wallet-text-strong">Token ID: {shortenTxHash(tokenId)}</h3>
+      <div className="space-y-2">
+        <div className="flex items-center justify-between gap-3">
+          <h3 className="font-semibold wallet-text-strong">
+            Token ID: {shortenTxHash(tokenId)}
+          </h3>
+        </div>
+        <TokenIdentityBadge
+          presentation={presentation}
+          className="rounded-2xl border border-[var(--wallet-border)] bg-[var(--wallet-surface-strong)] p-3"
+          avatarClassName="h-10 w-10"
+        />
+      </div>
       {error && <p className="wallet-danger-text">{error}</p>}
       <p>Total Supply: {totalSupply ?? 'Unavailable'}</p>
       <p>Active Minting: {activeMinting === null ? 'Unavailable' : activeMinting ? 'Yes' : 'No'}</p>
@@ -142,6 +211,11 @@ const TokenQuery: React.FC<TokenQueryProps> = ({
           BCMR metadata unavailable: {bcmrError}
         </p>
       )}
+      {presentation.statusLabel ? (
+        <p className="text-xs font-medium wallet-muted">
+          BCMR: {presentation.statusLabel}
+        </p>
+      ) : null}
 
       {snapshot && (
         <div className="bcmr-meta p-4 border rounded-lg wallet-card max-h-64 overflow-y-auto">
