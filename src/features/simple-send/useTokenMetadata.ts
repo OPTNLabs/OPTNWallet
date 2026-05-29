@@ -7,19 +7,5 @@ export function useTokenMetadata(categories: CategorySummary[]) {
     () => categories.map((c) => c.category),
     [categories]
   );
-  const shared = useSharedTokenMetadata(categoryNames);
-  return useMemo(
-    () =>
-      Object.fromEntries(
-        Object.entries(shared).map(([category, meta]) => [
-          category,
-          {
-            name: meta.name,
-            symbol: meta.symbol,
-            decimals: meta.decimals,
-          },
-        ])
-      ) as TokenMetaMap,
-    [shared]
-  );
+  return useSharedTokenMetadata(categoryNames) as TokenMetaMap;
 }

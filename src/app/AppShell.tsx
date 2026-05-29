@@ -30,12 +30,15 @@ import {
   useOutboundTransactionRecovery,
   useElectrumConnectivityWatch,
   useWalletNetworkBootstrap,
+  useNativeBcmrWarmup,
   useServerNotificationPolling,
   useOptionalPlayUpdateCheck,
   useStatusBarSync,
   useUtxoQueueToOsNotifications,
   useWalletConnectInitialization,
+  useWalletConnectSessionWatch,
   useWizardConnectInitialization,
+  useWizardConnectSessionWatch,
   useWorkerLifecycle,
   useWalletBackendSync,
 } from './useAppLifecycle';
@@ -64,11 +67,14 @@ function App() {
   const notified = useUtxoQueueToOsNotifications(utxoQueue);
   useNotificationQueueReset(walletId, dispatch, notified);
   const walletNetworkReady = useWalletNetworkBootstrap(walletId, dispatch);
+  useNativeBcmrWarmup(walletNetworkReady ? walletId : null);
   useWorkerLifecycle(walletNetworkReady ? walletId : null);
   useOutboundTransactionRecovery(walletNetworkReady ? walletId : null);
   useElectrumConnectivityWatch(walletNetworkReady ? walletId : null);
   useWalletBackendSync(walletNetworkReady ? walletId : null);
   useServerNotificationPolling(walletNetworkReady ? walletId : null, dispatch);
+  useWalletConnectSessionWatch(walletNetworkReady ? walletId : null, dispatch);
+  useWizardConnectSessionWatch(walletNetworkReady ? walletId : null, dispatch);
 
   return (
     <div className="app-shell">

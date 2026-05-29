@@ -5,6 +5,7 @@ import {
   respondWithMessageError,
   clearPendingSignMsg,
 } from '../../state/slices/walletconnectSlice';
+import { enqueueNotification } from '../../state/slices/notificationsSlice';
 import { normalizeExternalUrl } from '../../utils/externalUrl';
 
 export function SignMessageModal() {
@@ -29,13 +30,59 @@ export function SignMessageModal() {
   const dappUrl = dappMetadata?.url ? normalizeExternalUrl(dappMetadata.url) : null;
 
   const handleSign = async () => {
-    await dispatch(respondWithMessageSignature(signMsgRequest));
-    dispatch(clearPendingSignMsg());
+    try {
+      await dispatch(respondWithMessageSignature(signMsgRequest)).unwrap();
+      dispatch(
+        enqueueNotification({
+          id: `walletconnect:msg:signed:${topic}:${signMsgRequest.id}`,
+          kind: 'walletconnect',
+          title: 'WalletConnect message signed',
+          body: dappMetadata?.name
+            ? `Approved request from ${dappMetadata.name}.`
+            : 'Approved the WalletConnect message request.',
+          createdAt: Date.now(),
+        })
+      );
+      dispatch(clearPendingSignMsg());
+    } catch (error) {
+      console.error('[WalletConnect] Failed to sign message request', error);
+      dispatch(
+        enqueueNotification({
+          id: `walletconnect:msg:sign-error:${topic}:${signMsgRequest.id}`,
+          kind: 'walletconnect',
+          title: 'WalletConnect message failed',
+          body: 'Failed to sign WalletConnect message request.',
+          createdAt: Date.now(),
+        })
+      );
+    }
   };
 
   const handleCancel = async () => {
-    await dispatch(respondWithMessageError(signMsgRequest));
-    dispatch(clearPendingSignMsg());
+    try {
+      await dispatch(respondWithMessageError(signMsgRequest)).unwrap();
+      dispatch(
+        enqueueNotification({
+          id: `walletconnect:msg:rejected:${topic}:${signMsgRequest.id}`,
+          kind: 'walletconnect',
+          title: 'WalletConnect message rejected',
+          body: 'Rejected the WalletConnect message request.',
+          createdAt: Date.now(),
+        })
+      );
+      dispatch(clearPendingSignMsg());
+    } catch (error) {
+      console.error('[WalletConnect] Failed to reject message request', error);
+      dispatch(
+        enqueueNotification({
+          id: `walletconnect:msg:reject-error:${topic}:${signMsgRequest.id}`,
+          kind: 'walletconnect',
+          title: 'WalletConnect rejection failed',
+          body: 'Failed to reject WalletConnect message request.',
+          createdAt: Date.now(),
+        })
+      );
+    }
   };
 
   return (

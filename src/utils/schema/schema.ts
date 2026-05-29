@@ -198,6 +198,9 @@ export const createTables = (db: DatabaseRunner) => {
       nfts TEXT,
       uris TEXT,
       extensions TEXT,
+      lastFetch TEXT,
+      registryUri TEXT,
+      registryHash TEXT,
       FOREIGN KEY(category) REFERENCES bcmr_tokens(category)
     );
   `);

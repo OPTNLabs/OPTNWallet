@@ -29,7 +29,7 @@ export function useHomeMetadataPreload({
     let cancelled = false;
     const runPreload = async () => {
       const pendingCategories = categories.filter(
-        (category) => getCachedTokenMetadata(category)?.status !== 'ready'
+        (category) => getCachedTokenMetadata(category)?.freshness !== 'fresh'
       );
 
       if (pendingCategories.length === 0) {

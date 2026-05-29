@@ -43,35 +43,41 @@ const SessionSettingsModal: React.FC<Props> = ({ sessionTopic, onClose }) => {
         {/* <h2 className="text-2xl font-bold mb-4 text-center">Session Settings</h2> */}
 
         {/* DApp Details */}
-        <div className="flex items-center space-x-4 mb-4">
+        <div className="flex items-center gap-4 mb-4 min-w-0">
           <img
             src={dappMeta.icons[0]}
             alt="DApp Icon"
-            className="w-16 h-16 rounded-full"
+            className="h-16 w-16 shrink-0 rounded-full object-cover"
           />
-          <div className="flex-col text-center">
-            <p className="font-bold text-xl">{dappMeta.name}</p>
+          <div className="flex min-w-0 flex-col text-center md:text-left">
+            <p className="break-words font-bold text-lg sm:text-xl leading-tight">
+              {dappMeta.name}
+            </p>
             {dappUrl ? (
               <a
                 href={dappUrl}
                 target="_blank"
                 rel="noopener noreferrer"
-                className="wallet-link underline text-sm"
+                className="mt-1 block text-xs sm:text-sm wallet-link underline break-all leading-relaxed"
               >
                 {dappMeta.url}
               </a>
             ) : (
-              <span className="wallet-muted text-sm break-all">
+              <span className="mt-1 block text-xs sm:text-sm wallet-muted break-all leading-relaxed">
                 {dappMeta.url}
               </span>
             )}
             {/* Description */}
-            <p className="wallet-muted mb-4">{dappMeta.description}</p>
+            <p className="wallet-muted mt-2 text-xs sm:text-sm leading-relaxed break-words">
+              {dappMeta.description}
+            </p>
 
             {session.expiry && (
-              <div>
-                <p>Disconnects On</p>
-                <p>
+              <div className="mt-3 rounded border border-[var(--wallet-border)] bg-[var(--wallet-surface)] p-3 text-left">
+                <p className="text-[11px] uppercase tracking-wide wallet-muted">
+                  Disconnects On
+                </p>
+                <p className="wallet-text-strong text-sm sm:text-base">
                   {new Date(session.expiry * 1000).toLocaleString('en-US', {
                     timeZone,
                   })}
@@ -82,16 +88,16 @@ const SessionSettingsModal: React.FC<Props> = ({ sessionTopic, onClose }) => {
         </div>
 
         {/* Action Buttons */}
-        <div className="flex justify-between mt-4">
+        <div className="grid grid-cols-2 gap-3 mt-4">
           <button
             onClick={onClose}
-            className="wallet-btn-secondary"
+            className="wallet-btn-secondary px-3 py-2 text-sm sm:text-base"
           >
             Close
           </button>
           <button
             onClick={handleDisconnect}
-            className="wallet-btn-danger px-4 py-2"
+            className="wallet-btn-danger px-3 py-2 text-sm sm:text-base whitespace-nowrap"
           >
             Disconnect
           </button>
