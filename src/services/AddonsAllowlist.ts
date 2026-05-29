@@ -19,7 +19,6 @@ const ALLOWED_ADDON_HTTP_DOMAINS = new Set<string>([
   // 'bcmr.optnlabs.com',
   'chaingraph.optnlabs.com',
   'gql.chaingraph.pat.mn',
-  'events.optnlabs.com',
   'fundme.cash',
   'tokenindex.optnlabs.com',
 ]);

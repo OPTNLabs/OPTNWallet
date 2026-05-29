@@ -1,4 +1,5 @@
 import { createAsyncThunk, createSlice, PayloadAction } from '@reduxjs/toolkit';
+import { Toast } from '@capacitor/toast';
 import { WalletConnectionManager, type PendingSignRequest } from '@wizardconnect/wallet';
 
 import type { AppDispatch, RootState } from '../store';
@@ -27,6 +28,15 @@ function registerWizardListeners(manager: WalletConnectionManager, dispatch: App
 
   manager.on('connectionStatusChanged', () => {
     dispatch(setActiveConnections(manager.getConnections()));
+    const connections = manager.getConnections();
+    for (const [connectionId, connection] of Object.entries(connections)) {
+      if (
+        connection.status.status === 'disconnected' ||
+        connection.status.status === 'session_deleted'
+      ) {
+        dispatch(clearPendingSignRequestForConnection(connectionId));
+      }
+    }
   });
 
   manager.on('pendingSignRequest', (request) => {
@@ -117,6 +127,47 @@ export const respondToWizardConnectSignRequest = createAsyncThunk(
       result.signedTransaction
     );
     return { approved: true, connections: manager.getConnections() };
+  }
+);
+
+export const syncWizardConnections = createAsyncThunk(
+  'wizardconnect/syncConnections',
+  async (_, { getState, dispatch }) => {
+    const state = getState() as RootState;
+    const manager = state.wizardconnect.manager;
+    const previousConnections = state.wizardconnect.activeConnections;
+    if (!manager) return previousConnections ?? {};
+
+    const nextConnections = manager.getConnections();
+    const staleConnectionIds = Object.entries(previousConnections ?? {})
+      .filter(([connectionId, connection]) => {
+        const nextConnection = nextConnections[connectionId];
+        const previousStatus = String(connection.status.status);
+        if (!nextConnection) {
+          return (
+            previousStatus !== 'disconnected' &&
+            previousStatus !== 'session_deleted'
+          );
+        }
+        const nextStatus = String(nextConnection.status.status);
+        return (
+          (nextStatus === 'disconnected' || nextStatus === 'session_deleted') &&
+          previousStatus !== nextStatus
+        );
+      })
+      .map(([connectionId]) => connectionId);
+
+    for (const connectionId of staleConnectionIds) {
+      dispatch(clearPendingSignRequestForConnection(connectionId));
+    }
+
+    if (staleConnectionIds.length > 0) {
+      await Toast.show({
+        text: 'A WizardConnect session disconnected or expired on the dApp side.',
+      });
+    }
+
+    return nextConnections;
   }
 );
 
@@ -216,6 +267,13 @@ const wizardconnectSlice = createSlice({
     });
     builder.addCase(disconnectWizardConnection.rejected, (_, action) => {
       logError('wizardconnect.disconnect.rejected', action.error);
+    });
+
+    builder.addCase(syncWizardConnections.fulfilled, (state, action) => {
+      state.activeConnections = action.payload;
+    });
+    builder.addCase(syncWizardConnections.rejected, (_, action) => {
+      logError('wizardconnect.sync.rejected', action.error);
     });
 
     builder.addCase(disconnectAllWizardConnections.fulfilled, (state, action) => {

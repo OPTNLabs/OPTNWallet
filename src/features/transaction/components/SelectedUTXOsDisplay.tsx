@@ -9,6 +9,11 @@ import { Network } from '../../../state/slices/networkSlice';
 import { useSelector } from 'react-redux';
 import { RootState } from '../../../state/store';
 import useSharedTokenMetadata from '../../../hooks/useSharedTokenMetadata';
+import TokenIdentityBadge from '../../../components/ui/TokenIdentityBadge';
+import {
+  formatAtomicTokenAmount,
+  resolveTokenPresentation,
+} from '../../../utils/tokenPresentation';
 
 interface SelectedUTXOsDisplayProps {
   selectedUtxos: UTXO[];
@@ -47,44 +52,6 @@ function formatSatsToBchString(satsLike: bigint | number): string {
   const fracStr = frac.toString().padStart(8, '0').replace(/0+$/, '');
 
   return sign + whole.toString() + (fracStr ? `.${fracStr}` : '');
-}
-
-function pow10BigInt(decimals: number): bigint {
-  // decimals are typically small (0-18). Keep it simple.
-  let x = 1n;
-  for (let i = 0; i < decimals; i++) x *= 10n;
-  return x;
-}
-
-// Token amount formatter that supports number | bigint + decimals
-function formatTokenAmount(
-  amount: number | string | bigint,
-  decimals: number = 0
-): string {
-  if (decimals <= 0) return String(amount);
-
-  // Prefer bigint math when possible
-  if (typeof amount === 'bigint') {
-    const base = pow10BigInt(decimals);
-    const sign = amount < 0n ? '-' : '';
-    const abs = amount < 0n ? -amount : amount;
-
-    const whole = abs / base;
-    const frac = abs % base;
-
-    const fracStr = frac.toString().padStart(decimals, '0').replace(/0+$/, '');
-
-    return sign + whole.toString() + (fracStr ? `.${fracStr}` : '');
-  }
-
-  // Fallback to number formatting
-  const numAmount =
-    typeof amount === 'string' ? parseFloat(amount) : Number(amount);
-  if (!Number.isFinite(numAmount)) return '0';
-
-  const divisor = Math.pow(10, decimals);
-  const formatted = (numAmount / divisor).toFixed(decimals);
-  return formatted.replace(/\.?0+$/, '');
 }
 
 export default function SelectedUTXOsDisplay({
@@ -151,6 +118,20 @@ export default function SelectedUTXOsDisplay({
                 const isToken = !!utxo.token;
                 const cat = utxo.token?.category;
                 const meta = cat ? tokenMetadata[cat] : null;
+                const fallback = utxo.token?.BcmrTokenMetadata
+                  ? {
+                      name: utxo.token.BcmrTokenMetadata.name,
+                      symbol: utxo.token.BcmrTokenMetadata.token.symbol,
+                      decimals: utxo.token.BcmrTokenMetadata.token.decimals,
+                      iconUri:
+                        utxo.token.BcmrTokenMetadata.uris?.icon ?? null,
+                    }
+                  : null;
+                const presentation = resolveTokenPresentation(
+                  cat ?? '',
+                  meta,
+                  fallback
+                );
 
                 // BigInt-safe sats (handles contract UTXOs that may use bigint)
                 const sats = toBigIntSats(utxo.amount ?? utxo.value);
@@ -173,11 +154,11 @@ export default function SelectedUTXOsDisplay({
                     {isToken ? (
                       <span className="w-full">
                         Amount:{' '}
-                        {formatTokenAmount(
+                        {formatAtomicTokenAmount(
                           utxo.token!.amount,
-                          meta?.decimals || 0
+                          presentation.decimals
                         )}{' '}
-                        {meta?.symbol || 'tokens'}
+                        {presentation.symbol || 'tokens'}
                       </span>
                     ) : (
                       <>
@@ -204,22 +185,19 @@ export default function SelectedUTXOsDisplay({
 
                     {/* Token Metadata Preview */}
                     <div className="flex justify-between items-center mt-2">
-                      {meta ? (
-                        <>
-                          <div className="flex items-center">
-                            {meta.iconUri && (
-                              <img
-                                src={meta.iconUri}
-                                alt={meta.name}
-                                className="w-6 h-6 rounded mr-2"
-                              />
-                            )}
-                            <span className="font-medium">{meta.name}</span>
-                          </div>
-                          <span className="text-sm font-medium">
-                            {utxo.token?.nft ? 'NFT' : 'FT'}
-                          </span>
-                        </>
+                      {isToken ? (
+                        <TokenIdentityBadge
+                          presentation={presentation}
+                          className="w-full"
+                          avatarClassName="h-6 w-6"
+                          primaryClassName="text-sm"
+                          secondaryClassName="text-[11px]"
+                          detail={
+                            <span className="text-sm font-medium wallet-muted">
+                              {utxo.token?.nft ? 'NFT' : 'FT'}
+                            </span>
+                          }
+                        />
                       ) : (
                         <>
                           <div className="flex items-center">

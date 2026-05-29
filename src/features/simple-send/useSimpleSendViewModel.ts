@@ -1,6 +1,7 @@
 import { useCallback, useMemo } from 'react';
 import { shortenTxHash } from '../../utils/shortenHash';
 import { PREFIX } from '../../utils/constants';
+import { parseDecimalAmountToAtomic } from '../../hooks/simple-send/helpers';
 import {
   AssetType,
   CategorySummary,
@@ -23,6 +24,7 @@ type UseSimpleSendViewModelParams = {
   amountBch: string;
   selectedCategory: string;
   amountToken: string;
+  selectedTokenDecimals: number;
 };
 
 export function useSimpleSendViewModel({
@@ -36,6 +38,7 @@ export function useSimpleSendViewModel({
   amountBch,
   selectedCategory,
   amountToken,
+  selectedTokenDecimals,
 }: UseSimpleSendViewModelParams) {
   const displayTokenName = useCallback(
     (category: string) => displayNameFor(category, tokenMeta),
@@ -112,7 +115,10 @@ export function useSimpleSendViewModel({
 
   const canReview =
     (assetType === 'bch' && !!recipient && !!amountBch) ||
-    (assetType === 'ft' && !!recipient && !!selectedCategory && !!amountToken) ||
+    (assetType === 'ft' &&
+      !!recipient &&
+      !!selectedCategory &&
+      parseDecimalAmountToAtomic(amountToken, selectedTokenDecimals) > 0n) ||
     (assetType === 'nft' && !!recipient && !!selectedCategory);
 
   const inputClass =

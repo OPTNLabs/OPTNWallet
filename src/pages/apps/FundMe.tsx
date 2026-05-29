@@ -8,6 +8,10 @@ import { AddressCashStarter, MasterCategoryID } from './fundme/values';
 import SignClient from '@walletconnect/sign-client'
 import { WalletConnectModal } from '@walletconnect/modal';
 import { getReturnPath } from '../../utils/navigation';
+import {
+  getWalletConnectMetadataUrl,
+  getWalletConnectProjectId,
+} from '../../utils/walletconnectConfig';
 
 interface ElectrumUtxo {
   height: number;
@@ -82,6 +86,8 @@ const FundMeApp = () => {
     Map<number, ArchivedCampaign | null>
   >(new Map());
   const [campaignType, setCampaignType] = useState<string>('active');
+  const walletConnectProjectId = getWalletConnectProjectId();
+  const walletConnectMetadataUrl = getWalletConnectMetadataUrl();
   //connectedChain: network === 'mainnet' ? 'bch:bitcoincash' : 'bch:bchtest' 
 
   const hexToDecimal = (hex: string): number => {
@@ -122,7 +128,7 @@ const FundMeApp = () => {
 ////////// Prepare Wallet Connect Modal
 //////////////////////////////////////////////////
   const walletConnectModal = new WalletConnectModal({
-    projectId: '',
+    projectId: walletConnectProjectId,
     themeMode: 'dark',
     themeVariables: {
       '--wcm-background-color': '#20c997',
@@ -145,14 +151,14 @@ const FundMeApp = () => {
   //connection settings
   const signClient = async () => {
     return await SignClient.init({
-      projectId: '',
+      projectId: walletConnectProjectId,
       // optional parameters
       relayUrl: 'wss://relay.walletconnect.com',
       metadata: {
         name: 'OPTN Wallet',
         description: 'OPTN Wallet',
-        url: 'https://',
-        icons: ['https://.png']
+        url: walletConnectMetadataUrl,
+        icons: ['https://optnlabs.com/logo.png']
       }
     });
   } 

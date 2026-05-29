@@ -126,6 +126,18 @@ function parseAppKey(appIdParam: string | undefined): {
   return { appId: raw };
 }
 
+function normalizeAppIdAlias(appId: string): string {
+  const normalized = appId.trim();
+  if (!normalized) return normalized;
+  switch (normalized.toLowerCase()) {
+    case 'airdropsapp':
+    case 'eventrewardsapp':
+      return 'airdropsApp';
+    default:
+      return normalized;
+  }
+}
+
 function getDeclarativeScreenId(app: AddonAppDefinition): string {
   // v1: map declarative apps by config.screen (preferred), else fall back to app.id
   const cfg = (app as AddonAppWithConfig).config ?? null;
@@ -188,7 +200,13 @@ export default function MarketplaceAppHost() {
     null
   );
 
-  const parsed = useMemo(() => parseAppKey(appIdParam), [appIdParam]);
+  const parsed = useMemo(() => {
+    const key = parseAppKey(appIdParam);
+    return {
+      addonId: key.addonId,
+      appId: key.appId ? normalizeAppIdAlias(key.appId) : key.appId,
+    };
+  }, [appIdParam]);
   const trustedAddon = useMemo(
     () => (resolved ? isTrustedAddon(resolved.manifest) : false),
     [resolved]
