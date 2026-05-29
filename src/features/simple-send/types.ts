@@ -1,11 +1,9 @@
 import { TransactionOutput, UTXO } from '../../types/types';
+import type { BcmrTokenMetadataState } from '../../types/bcmr';
 
 export type AssetType = 'bch' | 'ft' | 'nft';
 
-export type TokenMetaMap = Record<
-  string,
-  { name: string; symbol: string; decimals: number }
->;
+export type TokenMetaMap = Record<string, BcmrTokenMetadataState>;
 
 export type CategorySummary = {
   category: string;

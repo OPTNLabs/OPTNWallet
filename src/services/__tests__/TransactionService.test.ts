@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const sendTransactionMock = vi.fn();
+const addOutputMock = vi.fn();
 const trackAttemptMock = vi.fn();
 const listActiveMock = vi.fn();
 const removeMock = vi.fn();
@@ -11,6 +12,7 @@ vi.mock('../../apis/TransactionManager/TransactionManager', () => ({
   default: () => ({
     sendTransaction: sendTransactionMock,
     buildTransaction: vi.fn(),
+    addOutput: addOutputMock,
   }),
 }));
 
@@ -65,5 +67,44 @@ describe('TransactionService.sendTransaction', () => {
     expect(trackAttemptMock).not.toHaveBeenCalled();
     expect(removeMock).toHaveBeenCalledWith('tracked:00aa');
     expect(requestRefreshMock).not.toHaveBeenCalled();
+  });
+});
+
+describe('TransactionService.addOutput', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('initializes the transaction manager before adding an output', async () => {
+    addOutputMock.mockReturnValue({
+      recipientAddress: 'bitcoincash:qrecipient',
+      amount: 1000,
+    });
+
+    const { default: TransactionService } = await import('../TransactionService');
+
+    const result = TransactionService.addOutput(
+      'bitcoincash:qrecipient',
+      1000,
+      0,
+      '',
+      [],
+      []
+    );
+
+    expect(result).toEqual({
+      recipientAddress: 'bitcoincash:qrecipient',
+      amount: 1000,
+    });
+    expect(addOutputMock).toHaveBeenCalledWith(
+      'bitcoincash:qrecipient',
+      1000,
+      0,
+      '',
+      [],
+      [],
+      undefined,
+      undefined
+    );
   });
 });

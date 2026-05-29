@@ -80,20 +80,56 @@ export const CREATED_WALLET_POOL_TOKENS_STORAGE_PREFIX = 'optn.cauldron.created-
 export const CREATED_WALLET_POOL_LOCKING_BYTECODES_STORAGE_PREFIX =
   'optn.cauldron.created-wallet-pool-locking-bytecodes';
 
-export function getPendingWalletPoolsStorageKey(network: string): string {
-  return `${PENDING_WALLET_POOLS_STORAGE_PREFIX}:${network}`;
+function appendWalletScope(network: string, walletId?: number | string): string {
+  return walletId === undefined || walletId === null
+    ? network
+    : `${network}:${walletId}`;
 }
-export function getWalletPoolsStorageKey(network: string): string {
-  return `${WALLET_POOLS_STORAGE_PREFIX}:${network}`;
+
+export function getPendingWalletPoolsStorageKey(
+  network: string,
+  walletId?: number | string
+): string {
+  return `${PENDING_WALLET_POOLS_STORAGE_PREFIX}:${appendWalletScope(
+    network,
+    walletId
+  )}`;
 }
-export function getCreatedWalletPoolsStorageKey(network: string): string {
-  return `${CREATED_WALLET_POOLS_STORAGE_PREFIX}:${network}`;
+export function getWalletPoolsStorageKey(
+  network: string,
+  walletId?: number | string
+): string {
+  return `${WALLET_POOLS_STORAGE_PREFIX}:${appendWalletScope(
+    network,
+    walletId
+  )}`;
 }
-export function getCreatedWalletPoolTokensStorageKey(network: string): string {
-  return `${CREATED_WALLET_POOL_TOKENS_STORAGE_PREFIX}:${network}`;
+export function getCreatedWalletPoolsStorageKey(
+  network: string,
+  walletId?: number | string
+): string {
+  return `${CREATED_WALLET_POOLS_STORAGE_PREFIX}:${appendWalletScope(
+    network,
+    walletId
+  )}`;
 }
-export function getCreatedWalletPoolLockingBytecodesStorageKey(network: string): string {
-  return `${CREATED_WALLET_POOL_LOCKING_BYTECODES_STORAGE_PREFIX}:${network}`;
+export function getCreatedWalletPoolTokensStorageKey(
+  network: string,
+  walletId?: number | string
+): string {
+  return `${CREATED_WALLET_POOL_TOKENS_STORAGE_PREFIX}:${appendWalletScope(
+    network,
+    walletId
+  )}`;
+}
+export function getCreatedWalletPoolLockingBytecodesStorageKey(
+  network: string,
+  walletId?: number | string
+): string {
+  return `${CREATED_WALLET_POOL_LOCKING_BYTECODES_STORAGE_PREFIX}:${appendWalletScope(
+    network,
+    walletId
+  )}`;
 }
 
 export function getCauldronPoolStorage(): Storage | null {
@@ -181,21 +217,38 @@ export function deserializePendingWalletPoolPositions(raw: string | null): Cauld
 export const serializeWalletPoolPositions = serializePendingWalletPoolPositions;
 export const deserializeWalletPoolPositions = deserializePendingWalletPoolPositions;
 
-export function loadCreatedWalletPoolPositions(network: string): CauldronWalletPoolPosition[] {
+export function loadCreatedWalletPoolPositions(
+  network: string,
+  walletId?: number | string
+): CauldronWalletPoolPosition[] {
   return dedupeWalletPoolPositions(
-    deserializeWalletPoolPositions(getCauldronPoolStorageItem(getCreatedWalletPoolsStorageKey(network)))
+    deserializeWalletPoolPositions(
+      getCauldronPoolStorageItem(
+        getCreatedWalletPoolsStorageKey(network, walletId)
+      )
+    )
   );
 }
 
-export function loadWalletPoolPositionsFromStorage(network: string): CauldronWalletPoolPosition[] {
+export function loadWalletPoolPositionsFromStorage(
+  network: string,
+  walletId?: number | string
+): CauldronWalletPoolPosition[] {
   return dedupeWalletPoolPositions(
-    deserializeWalletPoolPositions(getCauldronPoolStorageItem(getWalletPoolsStorageKey(network)))
+    deserializeWalletPoolPositions(
+      getCauldronPoolStorageItem(getWalletPoolsStorageKey(network, walletId))
+    )
   );
 }
 
-export function loadCreatedWalletPoolTokenCategories(network: string): string[] {
+export function loadCreatedWalletPoolTokenCategories(
+  network: string,
+  walletId?: number | string
+): string[] {
   const raw = deserializeFromStorage<unknown>(
-    getCauldronPoolStorageItem(getCreatedWalletPoolTokensStorageKey(network))
+    getCauldronPoolStorageItem(
+      getCreatedWalletPoolTokensStorageKey(network, walletId)
+    )
   );
   if (!Array.isArray(raw)) return [];
   return [...new Set(raw.map((tokenId) => (typeof tokenId === 'string' ? tokenId.toLowerCase() : '')).filter(Boolean))];
@@ -218,15 +271,24 @@ export function collectPoolTokenCategories(
   return [...new Set(entries.map((entry) => ('pool' in entry ? entry.pool.output.tokenCategory : entry.output.tokenCategory)).map((tokenId) => tokenId?.toLowerCase()).filter(Boolean))];
 }
 
-export function persistCreatedWalletPoolPositions(network: string, positions: CauldronWalletPoolPosition[]): void {
-  const storageKey = getCreatedWalletPoolsStorageKey(network);
+export function persistCreatedWalletPoolPositions(
+  network: string,
+  positions: CauldronWalletPoolPosition[],
+  walletId?: number | string
+): void {
+  const storageKey = getCreatedWalletPoolsStorageKey(network, walletId);
   if (positions.length === 0) return removeCauldronPoolStorageItem(storageKey);
   setCauldronPoolStorageItem(storageKey, serializeForStorage(serializeWalletPoolPositions(positions)));
 }
 
-export function loadCreatedWalletPoolLockingBytecodes(network: string): Uint8Array[] {
+export function loadCreatedWalletPoolLockingBytecodes(
+  network: string,
+  walletId?: number | string
+): Uint8Array[] {
   const raw = deserializeFromStorage<unknown>(
-    getCauldronPoolStorageItem(getCreatedWalletPoolLockingBytecodesStorageKey(network))
+    getCauldronPoolStorageItem(
+      getCreatedWalletPoolLockingBytecodesStorageKey(network, walletId)
+    )
   );
   if (!Array.isArray(raw)) return [];
   return [...new Set(raw.map((value) => (typeof value === 'string' ? value.toLowerCase().trim() : '')).filter(Boolean))].flatMap((hex) => {
@@ -238,23 +300,35 @@ export function loadCreatedWalletPoolLockingBytecodes(network: string): Uint8Arr
   });
 }
 
-export function persistCreatedWalletPoolTokenCategories(network: string, tokenIds: string[]): void {
-  const storageKey = getCreatedWalletPoolTokensStorageKey(network);
+export function persistCreatedWalletPoolTokenCategories(
+  network: string,
+  tokenIds: string[],
+  walletId?: number | string
+): void {
+  const storageKey = getCreatedWalletPoolTokensStorageKey(network, walletId);
   const normalized = [...new Set(tokenIds.map((tokenId) => tokenId.toLowerCase()))];
   if (normalized.length === 0) return removeCauldronPoolStorageItem(storageKey);
   setCauldronPoolStorageItem(storageKey, serializeForStorage(normalized));
 }
 
-export function persistCreatedWalletPoolLockingBytecodes(network: string, lockingBytecodes: Uint8Array[]): void {
-  const storageKey = getCreatedWalletPoolLockingBytecodesStorageKey(network);
+export function persistCreatedWalletPoolLockingBytecodes(
+  network: string,
+  lockingBytecodes: Uint8Array[],
+  walletId?: number | string
+): void {
+  const storageKey = getCreatedWalletPoolLockingBytecodesStorageKey(network, walletId);
   const normalized = [...new Set(lockingBytecodes.map((bytecode) => binToHex(bytecode).toLowerCase()))];
   if (normalized.length === 0) return removeCauldronPoolStorageItem(storageKey);
   setCauldronPoolStorageItem(storageKey, serializeForStorage(normalized));
 }
 
-export function removeCreatedWalletPoolPosition(network: string, poolId: string): void {
-  const storageKey = getCreatedWalletPoolsStorageKey(network);
-  const positions = loadCreatedWalletPoolPositions(network).filter((position) => getPoolSelectionId(position.pool) !== poolId);
+export function removeCreatedWalletPoolPosition(
+  network: string,
+  poolId: string,
+  walletId?: number | string
+): void {
+  const storageKey = getCreatedWalletPoolsStorageKey(network, walletId);
+  const positions = loadCreatedWalletPoolPositions(network, walletId).filter((position) => getPoolSelectionId(position.pool) !== poolId);
   if (positions.length === 0) return removeCauldronPoolStorageItem(storageKey);
   setCauldronPoolStorageItem(storageKey, serializeForStorage(serializeWalletPoolPositions(positions)));
 }

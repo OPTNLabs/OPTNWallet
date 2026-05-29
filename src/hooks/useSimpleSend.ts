@@ -20,7 +20,13 @@ import {
 } from '../services/CoinSelectionService';
 import AddressManager from '../apis/AddressManager/AddressManager';
 import { toErrorMessage } from '../utils/errorHandling';
-import { parseAmountToSats, validateRecipient } from './simple-send/helpers';
+import {
+  normalizeDecimalInput,
+  parseAmountToSats,
+  parseDecimalAmountToAtomic,
+  resolveTokenDecimalsByCategory,
+  validateRecipient,
+} from './simple-send/helpers';
 import { createSimpleSendPlanner } from './simple-send/planner';
 import { AssetType, ReviewState, SimpleSendMode } from './simple-send/types';
 import { parseBip21Uri } from '../utils/bip21';
@@ -186,16 +192,17 @@ export default function useSimpleSend() {
   // Form – shared
   const [recipient, setRecipient] = useState<string>('');
 
-  // Form – BCH
-  const [amountBch, setAmountBch] = useState<string>('');
-
   // Form – FT
   const [selectedCategory, setSelectedCategory] = useState<string>('');
-  const [amountToken, setAmountToken] = useState<string>(''); // integer string
+  const [amountTokenState, setAmountTokenState] = useState<string>('');
 
   // Form – NFT
   const [selectedNftCommitment, setSelectedNftCommitment] =
     useState<string>('');
+  const [amountDisplayMode, setAmountDisplayModeState] =
+    useState<'bch' | 'usd'>('bch');
+  const [amountBchState, setAmountBchState] = useState<string>('');
+  const [amountUsdState, setAmountUsdState] = useState<string>('');
 
   // Flow
   const [mode, setMode] = useState<SimpleSendMode>('idle');
@@ -212,7 +219,105 @@ export default function useSimpleSend() {
     ? parsedRecipient.normalizedAddress
     : recipient;
 
-  const priceUsd = Number(prices['BCH-USD'] || 0);
+  const bchUsdPrice = prices['BCH-USD']?.price ?? 0;
+
+  const formatUsdFromBch = useCallback(
+    (bchValue: string) => {
+      if (!bchUsdPrice) return '';
+      const sats = parseAmountToSats(bchValue);
+      if (sats <= 0) return '';
+      return ((sats / SATSINBITCOIN) * bchUsdPrice).toFixed(2);
+    },
+    [bchUsdPrice]
+  );
+
+  const formatBchFromUsd = useCallback(
+    (usdValue: string) => {
+      if (!bchUsdPrice) return '';
+      const usd = Number(usdValue);
+      if (!Number.isFinite(usd) || usd <= 0) return '';
+      const sats = Math.round((usd / bchUsdPrice) * SATSINBITCOIN);
+      if (sats <= 0) return '';
+      return (sats / SATSINBITCOIN).toFixed(8);
+    },
+    [bchUsdPrice]
+  );
+
+  const amountBch = amountBchState;
+  const amountUsd = amountUsdState;
+  const amountToken = amountTokenState;
+  const tokenDecimalsByCategory = useMemo(
+    () => resolveTokenDecimalsByCategory(tokenUtxos),
+    [tokenUtxos]
+  );
+  const selectedTokenDecimals = tokenDecimalsByCategory[selectedCategory] ?? 0;
+
+  const setAmountBch = useCallback(
+    (nextValue: string) => {
+      const normalized = normalizeDecimalInput(nextValue, 8);
+      setAmountBchState(normalized);
+      setAmountUsdState(formatUsdFromBch(normalized));
+    },
+    [formatUsdFromBch]
+  );
+
+  const setAmountUsd = useCallback(
+    (nextValue: string) => {
+      const normalized = normalizeDecimalInput(nextValue, 2);
+      setAmountUsdState(normalized);
+      setAmountBchState(formatBchFromUsd(normalized));
+    },
+    [formatBchFromUsd]
+  );
+
+  const setAmountToken = useCallback(
+    (nextValue: string) => {
+      setAmountTokenState(normalizeDecimalInput(nextValue, selectedTokenDecimals));
+    },
+    [selectedTokenDecimals]
+  );
+
+  useEffect(() => {
+    setAmountTokenState((current) =>
+      normalizeDecimalInput(current, selectedTokenDecimals)
+    );
+  }, [selectedTokenDecimals]);
+
+  const setAmountDisplayMode = useCallback(
+    (nextMode: 'bch' | 'usd') => {
+      setAmountDisplayModeState(nextMode);
+      if (nextMode === 'usd') {
+        setAmountUsdState(formatUsdFromBch(amountBch));
+      } else {
+        setAmountBchState(formatBchFromUsd(amountUsd));
+      }
+    },
+    [amountBch, amountUsd, formatBchFromUsd, formatUsdFromBch]
+  );
+
+  useEffect(() => {
+    if (!bchUsdPrice) return;
+
+    if (amountDisplayMode === 'bch') {
+      const nextUsd = formatUsdFromBch(amountBch);
+      if (nextUsd !== amountUsd) {
+        setAmountUsdState(nextUsd);
+      }
+      return;
+    }
+
+    const nextBch = formatBchFromUsd(amountUsd);
+    if (nextBch !== amountBch) {
+      setAmountBchState(nextBch);
+    }
+  }, [
+    amountBch,
+    amountDisplayMode,
+    amountUsd,
+    bchUsdPrice,
+    formatBchFromUsd,
+    formatUsdFromBch,
+  ]);
 
   const reset = useCallback(() => {
     setMode('idle');
@@ -222,11 +327,13 @@ export default function useSimpleSend() {
     setTxid('');
     setBroadcastState('broadcasted');
     setAssetType('bch');
-    setAmountBch('');
+    setAmountBchState('');
+    setAmountUsdState('');
+    setAmountDisplayModeState('bch');
     setSelectedCategory('');
     setAmountToken('');
     setSelectedNftCommitment('');
-  }, []);
+  }, [setAmountToken]);
 
   const planner = useMemo(
     () =>
@@ -304,7 +411,10 @@ export default function useSimpleSend() {
           setMode('error');
           return;
         }
-        const tokAmt = BigInt(amountToken || '0');
+        const tokAmt = parseDecimalAmountToAtomic(
+          amountToken,
+          selectedTokenDecimals
+        );
         if (tokAmt <= 0n) {
           setError('Enter a positive token amount.');
           setMode('error');
@@ -432,6 +542,7 @@ export default function useSimpleSend() {
     assetType,
     selectedCategory,
     amountToken,
+    selectedTokenDecimals,
     selectedNftCommitment,
     dbUtxos,
     tokenUtxos,
@@ -515,11 +626,11 @@ export default function useSimpleSend() {
     const totalBch = (review?.totalSats ?? 0) / SATSINBITCOIN;
 
     return {
-      amountUsd: priceUsd ? amountBchNum * priceUsd : 0,
-      feeUsd: priceUsd ? feeBch * priceUsd : 0,
-      totalUsd: priceUsd ? totalBch * priceUsd : 0,
+      amountUsd: bchUsdPrice ? amountBchNum * bchUsdPrice : 0,
+      feeUsd: bchUsdPrice ? feeBch * bchUsdPrice : 0,
+      totalUsd: bchUsdPrice ? totalBch * bchUsdPrice : 0,
     };
-  }, [amountBch, assetType, review, priceUsd]);
+  }, [amountBch, assetType, review, bchUsdPrice]);
 
   return {
     // form
@@ -533,12 +644,18 @@ export default function useSimpleSend() {
     // BCH
     amountBch,
     setAmountBch,
+    amountUsd,
+    setAmountUsd,
+    amountDisplayMode,
+    setAmountDisplayMode,
+    bchUsdPrice,
 
     // token
     selectedCategory,
     setSelectedCategory,
     amountToken,
     setAmountToken,
+    selectedTokenDecimals,
     selectedNftCommitment,
     setSelectedNftCommitment,
 

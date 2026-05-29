@@ -1,8 +1,11 @@
 import React, { useState } from 'react';
-import { FaBitcoin } from 'react-icons/fa';
-import { shortenTxHash } from '../utils/shortenHash';
 import TokenQuery from './TokenQuery';
 import useSharedTokenMetadata from '../hooks/useSharedTokenMetadata';
+import TokenIdentityBadge from './ui/TokenIdentityBadge';
+import {
+  formatAtomicTokenAmount,
+  resolveTokenPresentation,
+} from '../utils/tokenPresentation';
 
 interface CashTokenCardProps {
   category: string;
@@ -17,33 +20,15 @@ const CashTokenCard: React.FC<CashTokenCardProps> = ({
 }) => {
   const [showTokenQuery, setShowTokenQuery] = useState(false);
   const metadata = useSharedTokenMetadata([category])[category];
-  const iconUri = metadata?.status === 'ready' ? metadata.iconUri : null;
-  const tokenName =
-    metadata?.status === 'ready' && metadata.name
-      ? metadata.name
-      : shortenTxHash(category);
-  const bcmrSnapshot = metadata?.status === 'ready' ? metadata.snapshot : null;
+  const presentation = resolveTokenPresentation(category, metadata);
+  const bcmrSnapshot = metadata?.snapshot ?? null;
 
   const toggleTokenQueryPopup = () => setShowTokenQuery(!showTokenQuery);
 
-  const formatAmountWithDecimals = (amount: bigint, decimalPlaces: number): string => {
-    if (decimalPlaces <= 0) return amount.toString();
-    const amountStr = amount.toString();
-    const padded = amountStr.padStart(decimalPlaces + 1, '0');
-    const integerPart = padded.slice(0, -decimalPlaces) || '0';
-    const fractionalPart = padded.slice(-decimalPlaces).replace(/0+$/, '');
-    return fractionalPart ? `${integerPart}.${fractionalPart}` : integerPart;
-  };
-
-  const rawAmount = totalAmount.toString();
-  const effectiveDecimals =
-    metadata?.status === 'ready' && typeof metadata.decimals === 'number'
-      ? metadata.decimals
-      : decimals;
-  const displayAmount =
-    effectiveDecimals > 0
-      ? formatAmountWithDecimals(totalAmount, effectiveDecimals)
-      : rawAmount;
+  const displayAmount = formatAtomicTokenAmount(
+    totalAmount,
+    presentation.decimals ?? decimals
+  );
 
   return (
     <>
@@ -52,40 +37,13 @@ const CashTokenCard: React.FC<CashTokenCardProps> = ({
         className="wallet-card p-4 mb-4 flex items-center justify-between cursor-pointer hover:brightness-[0.98]"
         onClick={toggleTokenQueryPopup}
       >
-        <div className="flex items-center space-x-3 overflow-hidden">
-          {/* icon */}
-          <div className="w-8 h-8 wallet-surface-strong rounded flex items-center justify-center flex-shrink-0">
-            {iconUri ? (
-              <img
-                src={iconUri}
-                alt={tokenName}
-                className="w-full h-full rounded"
-              />
-            ) : (
-              <FaBitcoin className="wallet-accent-icon text-xl" />
-            )}
-          </div>
-          <div className="flex flex-col truncate">
-            <span className="text-base font-semibold truncate">
-              {tokenName}
-            </span>
-            <span
-              className={`text-xs truncate ${
-                metadata?.status === 'error'
-                  ? 'wallet-danger-text'
-                  : metadata?.status === 'loading'
-                    ? 'wallet-accent-text'
-                    : 'wallet-muted'
-              }`}
-            >
-              {metadata?.status === 'error'
-                ? 'BCMR unavailable'
-                : metadata?.status === 'loading'
-                  ? 'Loading BCMR...'
-                  : shortenTxHash(category)}
-            </span>
-          </div>
-        </div>
+        <TokenIdentityBadge
+          presentation={presentation}
+          className="min-w-0 flex-1"
+          avatarClassName="h-8 w-8"
+          primaryClassName="text-sm"
+          secondaryClassName="text-[11px]"
+        />
         <div className="text-right">
           <div className="text-sm font-medium wallet-text-strong">{displayAmount}</div>
         </div>
@@ -96,13 +54,13 @@ const CashTokenCard: React.FC<CashTokenCardProps> = ({
         <div className="wallet-popup-backdrop z-50 flex justify-end">
           <div className="wallet-popup-panel w-full rounded-t-xl p-4 max-h-[85vh] overflow-y-auto shadow-xl">
             <div className="text-center text-lg font-bold mb-4">
-              {tokenName} Details
+              {presentation.primaryLabel} Details
             </div>
             <div className="overflow-y-auto flex-grow mb-4">
               <TokenQuery
                 tokenId={category}
                 prefetchedSnapshot={bcmrSnapshot}
-                prefetchedIconDataUri={iconUri}
+                prefetchedIconDataUri={presentation.iconUri}
               />
             </div>
             <button

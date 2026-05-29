@@ -43,12 +43,18 @@ export default function SimpleSend() {
     // BCH
     amountBch,
     setAmountBch,
+    amountUsd,
+    setAmountUsd,
+    amountDisplayMode,
+    setAmountDisplayMode,
+    bchUsdPrice,
 
     // token fields
     selectedCategory,
     setSelectedCategory,
     amountToken,
     setAmountToken,
+    selectedTokenDecimals,
     selectedNftCommitment,
     setSelectedNftCommitment,
 
@@ -106,6 +112,7 @@ export default function SimpleSend() {
     amountBch,
     selectedCategory,
     amountToken,
+    selectedTokenDecimals,
   });
 
   const { scanBusy, handleScanRecipient } = useRecipientScanner({
@@ -231,7 +238,7 @@ export default function SimpleSend() {
                   Token
                 </button>
                 <Link
-                  to="/apps/optn.builtin.events:eventRewardsApp"
+                  to="/apps/optn.builtin.events:airdropsApp"
                   state={{ returnTo: '/send' }}
                   className="wallet-btn-secondary flex min-h-[42px] items-center justify-center rounded-[16px] px-3 py-2 text-sm font-semibold"
                   title="Open Airdrops"
@@ -243,7 +250,6 @@ export default function SimpleSend() {
 
             <div className="flex-1 min-h-0 overflow-y-auto space-y-3 pr-1">
               <div className="wallet-section">
-                <div className="wallet-kicker mb-1">Destination</div>
                 <Label>Recipient</Label>
                 <div className="mt-2 flex items-center gap-2">
                   <input
@@ -282,15 +288,61 @@ export default function SimpleSend() {
 
               {assetType === 'bch' && (
                 <div className="wallet-section">
-                  <div className="wallet-kicker">Value</div>
-                  <Label>Amount (BCH)</Label>
-                  <input
-                    value={amountBch}
-                    onChange={(e) => setAmountBch(e.target.value)}
-                    inputMode="decimal"
-                    placeholder="0.00000000"
-                    className={`${inputClass} mt-3`}
-                  />
+                  <div className="mt-2 grid grid-cols-[minmax(0,1fr)_auto] items-end gap-2">
+                    <div className="min-w-0">
+                      <Label>
+                        {amountDisplayMode === 'bch'
+                          ? 'Amount (BCH)'
+                          : 'Amount (USD)'}
+                      </Label>
+                      <input
+                        value={amountDisplayMode === 'bch' ? amountBch : amountUsd}
+                        onChange={(e) =>
+                          amountDisplayMode === 'bch'
+                            ? setAmountBch(e.target.value)
+                            : setAmountUsd(e.target.value)
+                        }
+                        inputMode="decimal"
+                        placeholder={
+                          amountDisplayMode === 'bch'
+                            ? '0.00000000 BCH'
+                            : '0.00 USD'
+                        }
+                        className={`${inputClass} mt-2`}
+                      />
+                    </div>
+                    <button
+                      type="button"
+                      className={`min-h-[42px] self-end rounded-[16px] border px-3 py-2 text-sm font-semibold transition ${
+                        amountDisplayMode === 'bch'
+                          ? 'wallet-segment-active border-[var(--wallet-accent)]'
+                          : 'wallet-segment-inactive border-[var(--wallet-border)]'
+                      }`}
+                      onClick={() =>
+                        setAmountDisplayMode(
+                          amountDisplayMode === 'bch' ? 'usd' : 'bch'
+                        )
+                      }
+                      aria-label={
+                        amountDisplayMode === 'bch'
+                          ? 'Switch amount input to USD'
+                          : 'Switch amount input to BCH'
+                      }
+                    >
+                      {amountDisplayMode === 'bch' ? 'USD' : 'BCH'}
+                    </button>
+                  </div>
+                  <div className="mt-2 text-xs wallet-muted">
+                    {bchUsdPrice > 0
+                      ? amountDisplayMode === 'bch'
+                        ? amountBch
+                          ? `~$${amountUsd || '0.00'} USD`
+                          : 'Enter a BCH amount to see the USD equivalent.'
+                        : amountUsd
+                          ? `~${amountBch || '0.00000000'} BCH`
+                          : 'Enter a USD amount to see the BCH equivalent.'
+                      : 'USD conversion is unavailable right now.'}
+                  </div>
                 </div>
               )}
 
@@ -321,16 +373,26 @@ export default function SimpleSend() {
                     </select>
                   </div>
                   <div className="flex flex-col gap-1">
-                    <Label>Token amount</Label>
+                    <Label>
+                      Token amount
+                      {selectedTokenDecimals > 0
+                        ? ` (${selectedTokenDecimals} decimal${selectedTokenDecimals === 1 ? '' : 's'})`
+                        : ' (integer)'}
+                    </Label>
                     <input
                       value={amountToken}
-                      onChange={(e) =>
-                        setAmountToken(e.target.value.replace(/\D/g, ''))
+                      onChange={(e) => setAmountToken(e.target.value)}
+                      inputMode="decimal"
+                      placeholder={
+                        selectedTokenDecimals > 0
+                          ? `0.${'0'.repeat(selectedTokenDecimals)}`
+                          : '0'
                       }
-                      inputMode="numeric"
-                      placeholder="e.g., 1000"
                       className={inputClass}
                     />
+                    <div className="text-[11px] wallet-muted">
+                      Parsed using BCMR metadata from the selected category.
+                    </div>
                   </div>
                 </div>
               )}
