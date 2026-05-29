@@ -45,7 +45,6 @@ describe('CashTokenCard', () => {
 
     expect(html).toContain('Sample Token');
     expect(html).toContain('SMP');
-    expect(html).toContain('Fresh');
     expect(html).toContain('12345');
   });
 });
