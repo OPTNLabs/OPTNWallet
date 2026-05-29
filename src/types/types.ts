@@ -189,6 +189,9 @@ export interface BcmrTokenMetadata {
   nfts?: Record<string, BcmrNftMetadata>;
   uris: Record<string, string>;
   extensions: BcmrExtensions;
+  lastFetch?: string | null;
+  registryUri?: string | null;
+  registryHash?: string | null;
 }
 
 export interface BcmrNftMetadata {

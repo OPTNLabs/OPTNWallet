@@ -1,8 +1,8 @@
-# OPTN Wallet Event Add-on Integration Plan
+# OPTN Wallet Airdrops Add-on Integration Plan
 
 ## Current Direction
 
-This document began from a wallet-first event model. The active MVP direction is now narrower:
+This document began from a wallet-first event model. The active MVP direction is now narrower and the built-in wallet addon is Airdrops:
 
 - organizer and attendee only
 - attendee registration can come from third-party platforms such as Luma
@@ -22,7 +22,7 @@ This plan assumes:
 
 ## 1. Wallet Integration Points
 
-The current OPTN Wallet structure already supports a built-in event addon.
+The current OPTN Wallet structure already supports a built-in Airdrops addon.
 
 Relevant files in `OPTNWallet`:
 
@@ -37,8 +37,8 @@ Relevant files in `OPTNWallet`:
 Add a new built-in declarative app, for example:
 
 - addon id: `optn.builtin.events`
-- app id: `eventRewardsApp`
-- screen id: `EventRewardsApp`
+- app id: `airdropsApp`
+- screen id: `AirdropsApp`
 
 This fits the existing host/resolver model and avoids needing a new addon runtime.
 
@@ -438,7 +438,7 @@ The attendee experience should stay inside the wallet add-on as much as possible
 
 ### Recommended event app flow
 
-1. User opens `EventRewardsApp`
+1. User opens `AirdropsApp`
 2. Wallet lists detected event passes from wallet holdings
 3. User selects an event
 4. User sees event details, active campaigns, collected rewards, and badges
@@ -480,7 +480,7 @@ using BCMR plus backend event metadata.
 ### Phase 2: Wallet attendee app
 
 - built-in addon registration
-- `EventRewardsApp` screen wiring
+- `AirdropsApp` screen wiring
 - my events list
 - event detail screen
 - scan claim flow
@@ -508,7 +508,7 @@ using BCMR plus backend event metadata.
 
 If the goal is the fastest coherent pilot:
 
-1. Add a built-in `EventRewardsApp` to OPTN Wallet
+1. Add a built-in `AirdropsApp` to OPTN Wallet
 2. Build one backend service with:
    - event metadata
    - QR claim validation
@@ -693,34 +693,34 @@ Files to update later:
 New screen entry:
 
 - addon id: `optn.builtin.events`
-- app id: `eventRewardsApp`
-- screen id: `EventRewardsApp`
+- app id: `airdropsApp`
+- screen id: `AirdropsApp`
 
 ### 14.2 Proposed wallet file layout
 
 Recommended structure:
 
-- `OPTNWallet/src/pages/apps/event-rewards/EventRewardsApp.tsx`
-- `OPTNWallet/src/pages/apps/event-rewards/screens/MyEventsScreen.tsx`
-- `OPTNWallet/src/pages/apps/event-rewards/screens/EventDetailScreen.tsx`
-- `OPTNWallet/src/pages/apps/event-rewards/screens/ScanClaimScreen.tsx`
-- `OPTNWallet/src/pages/apps/event-rewards/screens/RewardsScreen.tsx`
-- `OPTNWallet/src/pages/apps/event-rewards/components/EventCard.tsx`
-- `OPTNWallet/src/pages/apps/event-rewards/components/PassCard.tsx`
-- `OPTNWallet/src/pages/apps/event-rewards/components/CampaignCard.tsx`
-- `OPTNWallet/src/pages/apps/event-rewards/components/RewardList.tsx`
-- `OPTNWallet/src/pages/apps/event-rewards/components/ClaimResultBanner.tsx`
-- `OPTNWallet/src/pages/apps/event-rewards/hooks/useEventWalletInventory.ts`
-- `OPTNWallet/src/pages/apps/event-rewards/hooks/useEventClaims.ts`
-- `OPTNWallet/src/pages/apps/event-rewards/hooks/useEventAuth.ts`
-- `OPTNWallet/src/pages/apps/event-rewards/hooks/useEventMetadata.ts`
-- `OPTNWallet/src/pages/apps/event-rewards/services/eventApi.ts`
-- `OPTNWallet/src/pages/apps/event-rewards/services/claimQr.ts`
-- `OPTNWallet/src/pages/apps/event-rewards/types.ts`
+- `OPTNWallet/src/pages/apps/airdrops/AirdropsApp.tsx`
+- `OPTNWallet/src/pages/apps/airdrops/screens/MyEventsScreen.tsx`
+- `OPTNWallet/src/pages/apps/airdrops/screens/EventDetailScreen.tsx`
+- `OPTNWallet/src/pages/apps/airdrops/screens/ScanClaimScreen.tsx`
+- `OPTNWallet/src/pages/apps/airdrops/screens/RewardsScreen.tsx`
+- `OPTNWallet/src/pages/apps/airdrops/components/EventCard.tsx`
+- `OPTNWallet/src/pages/apps/airdrops/components/PassCard.tsx`
+- `OPTNWallet/src/pages/apps/airdrops/components/CampaignCard.tsx`
+- `OPTNWallet/src/pages/apps/airdrops/components/RewardList.tsx`
+- `OPTNWallet/src/pages/apps/airdrops/components/ClaimResultBanner.tsx`
+- `OPTNWallet/src/pages/apps/airdrops/hooks/useAirdropWalletInventory.ts`
+- `OPTNWallet/src/pages/apps/airdrops/hooks/useEventClaims.ts`
+- `OPTNWallet/src/pages/apps/airdrops/hooks/useEventAuth.ts`
+- `OPTNWallet/src/pages/apps/airdrops/hooks/useEventMetadata.ts`
+- `OPTNWallet/src/pages/apps/airdrops/services/eventApi.ts`
+- `OPTNWallet/src/pages/apps/airdrops/services/claimQr.ts`
+- `OPTNWallet/src/pages/apps/airdrops/types.ts`
 
 ### 14.3 Screen responsibilities
 
-#### `EventRewardsApp.tsx`
+#### `AirdropsApp.tsx`
 
 Responsibilities:
 

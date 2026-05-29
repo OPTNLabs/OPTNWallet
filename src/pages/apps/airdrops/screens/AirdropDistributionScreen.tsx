@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   CapacitorBarcodeScannerTypeHint,
 } from '@capacitor/barcode-scanner';
@@ -17,8 +17,9 @@ import {
   buildApprovedDistributionTransaction,
   executeApprovedDistributionSend,
   type DistributionTxPreview,
-} from '../services/executeDistributionSend';
+} from '../services/executeAirdropDistributionSend';
 import { useSmoothResetTransition } from '../../shared/useSmoothResetTransition';
+import useSharedTokenMetadata from '../../../../hooks/useSharedTokenMetadata';
 import type {
   DistributionJobRecord,
   DistributionRecipient,
@@ -28,15 +29,21 @@ import type {
 import {
   type AmountRuleMode,
   describeAmountRule,
+  hasAirdropTokenHoldings,
   normalizeAddressKey,
+  normalizeTokenHolderBalance,
   looksLikeAddress,
   parseRecipientText,
   shortenMiddle,
-} from '../distributorHelpers';
+} from '../airdropHelpers';
+import {
+  formatAtomicTokenAmount,
+  resolveTokenPresentation,
+} from '../../../../utils/tokenPresentation';
 
 type FlowStep = 'recipients' | 'asset' | 'send';
 
-type DistributorScreenProps = {
+type AirdropDistributionScreenProps = {
   sdk: AddonSDK;
   workspace: AirdropWorkspace;
   availableTokens: WalletAirdropAsset[];
@@ -46,7 +53,8 @@ type DistributorScreenProps = {
 
 type RecipientSourceMode = 'manual' | 'token';
 
-const DISTRIBUTOR_DRAFT_STORAGE_KEY = 'optn.distributor.localDraft.v1';
+const AIRDROP_DRAFT_STORAGE_KEY = 'optn.airdrops.localDraft.v1';
+const LEGACY_DISTRIBUTOR_DRAFT_STORAGE_KEY = 'optn.distributor.localDraft.v1';
 
 function makeLocalId(prefix: string) {
   if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
@@ -56,7 +64,7 @@ function makeLocalId(prefix: string) {
 }
 
 
-const DistributorScreen: React.FC<DistributorScreenProps> = ({
+const AirdropDistributionScreen: React.FC<AirdropDistributionScreenProps> = ({
   sdk,
   workspace,
   availableTokens,
@@ -74,9 +82,6 @@ const DistributorScreen: React.FC<DistributorScreenProps> = ({
   const [importText, setImportText] = useState('');
   const [recipientSourceMode, setRecipientSourceMode] = useState<RecipientSourceMode>('manual');
   const [scanBusy, setScanBusy] = useState(false);
-  const [tokenMetadata, setTokenMetadata] = useState<
-    Record<string, { name: string; symbol: string; decimals: number }>
-  >({});
   const [step, setStep] = useState<FlowStep>('recipients');
   const [txPreview, setTxPreview] = useState<DistributionTxPreview | null>(null);
   const [txPreviewBusy, setTxPreviewBusy] = useState(false);
@@ -116,143 +121,62 @@ const DistributorScreen: React.FC<DistributorScreenProps> = ({
   const [tokenImportDraft, setTokenImportDraft] = useState({
     includeCategory: '',
     excludeCategory: '',
-    limit: '200',
   });
+  const tokenCategories = useMemo(
+    () =>
+      Array.from(
+        new Set(
+          availableTokens
+            .filter(hasAirdropTokenHoldings)
+            .map((token) => token.category)
+        )
+      ),
+    [availableTokens]
+  );
+  const sharedTokenMetadata = useSharedTokenMetadata(tokenCategories);
+  const getTokenPresentation = useCallback(
+    (category: string) =>
+      resolveTokenPresentation(category, sharedTokenMetadata[category]),
+    [sharedTokenMetadata]
+  );
+  const formatTokenIdentityLabel = useCallback(
+    (category: string) => {
+      const presentation = getTokenPresentation(category);
+      return presentation.secondaryLabel
+        ? `${presentation.primaryLabel} (${presentation.secondaryLabel})`
+        : presentation.primaryLabel;
+    },
+    [getTokenPresentation]
+  );
 
   useEffect(() => {
     if (typeof window === 'undefined') return;
-
-    try {
-      const raw = window.localStorage.getItem(DISTRIBUTOR_DRAFT_STORAGE_KEY);
-      if (!raw) return;
-
-      const parsed = JSON.parse(raw) as {
-        workspaceId?: string;
-        recipients?: DistributionRecipient[];
-        jobs?: DistributionJobRecord[];
-        recipientSelection?: Record<string, boolean>;
-        importText?: string;
-        recipientSourceMode?: RecipientSourceMode;
-        step?: FlowStep;
-        distributionDraft?: {
-          assetType?: 'token' | 'bch';
-          tokenCategory?: string;
-          amount?: string;
-        };
-        amountRuleDraft?: {
-          mode?: AmountRuleMode;
-          referenceCategory?: string;
-          tiers?: Array<{ minBalance?: string; amount?: string }>;
-        };
-        tokenImportDraft?: {
-          includeCategory?: string;
-          excludeCategory?: string;
-          limit?: string;
-        };
-      };
-
-      if (parsed.workspaceId && parsed.workspaceId !== workspace.id) return;
-
-      if (Array.isArray(parsed.recipients)) {
-        setRecipients(parsed.recipients);
-      }
-      if (Array.isArray(parsed.jobs)) {
-        setJobs(parsed.jobs);
-      }
-      if (parsed.recipientSelection && typeof parsed.recipientSelection === 'object') {
-        setRecipientSelection(parsed.recipientSelection);
-      }
-      if (typeof parsed.importText === 'string') {
-        setImportText(parsed.importText);
-      }
-      if (
-        parsed.recipientSourceMode === 'manual' ||
-        parsed.recipientSourceMode === 'token'
-      ) {
-        setRecipientSourceMode(parsed.recipientSourceMode);
-      }
-      if (
-        parsed.step === 'recipients' ||
-        parsed.step === 'asset' ||
-        parsed.step === 'send'
-      ) {
-        setStep(parsed.step);
-      }
-      if (parsed.distributionDraft) {
-        setDistributionDraft((prev) => ({
-          assetType:
-            parsed.distributionDraft?.assetType === 'bch' ? 'bch' : prev.assetType,
-          tokenCategory:
-            typeof parsed.distributionDraft?.tokenCategory === 'string'
-              ? parsed.distributionDraft.tokenCategory
-              : prev.tokenCategory,
-          amount:
-            typeof parsed.distributionDraft?.amount === 'string'
-              ? parsed.distributionDraft.amount
-              : prev.amount,
-        }));
-      }
-      if (parsed.amountRuleDraft) {
-        setAmountRuleDraft((prev) => ({
-          mode:
-            parsed.amountRuleDraft?.mode === 'has_token' ||
-            parsed.amountRuleDraft?.mode === 'tiered_balance'
-              ? parsed.amountRuleDraft.mode
-              : 'fixed',
-          referenceCategory:
-            typeof parsed.amountRuleDraft?.referenceCategory === 'string'
-              ? parsed.amountRuleDraft.referenceCategory
-              : prev.referenceCategory,
-          tiers:
-            Array.isArray(parsed.amountRuleDraft?.tiers) &&
-            parsed.amountRuleDraft.tiers.length > 0
-              ? parsed.amountRuleDraft.tiers.map((tier) => ({
-                  minBalance: typeof tier?.minBalance === 'string' ? tier.minBalance : '1',
-                  amount: typeof tier?.amount === 'string' ? tier.amount : '1',
-                }))
-              : prev.tiers,
-        }));
-      }
-      if (parsed.tokenImportDraft) {
-        setTokenImportDraft((prev) => ({
-          includeCategory:
-            typeof parsed.tokenImportDraft?.includeCategory === 'string'
-              ? parsed.tokenImportDraft.includeCategory
-              : prev.includeCategory,
-          excludeCategory:
-            typeof parsed.tokenImportDraft?.excludeCategory === 'string'
-              ? parsed.tokenImportDraft.excludeCategory
-              : prev.excludeCategory,
-          limit:
-            typeof parsed.tokenImportDraft?.limit === 'string'
-              ? parsed.tokenImportDraft.limit
-              : prev.limit,
-        }));
-      }
-    } catch {
-      // Ignore invalid persisted drafts.
-    }
+    window.localStorage.removeItem(LEGACY_DISTRIBUTOR_DRAFT_STORAGE_KEY);
+    window.localStorage.removeItem(AIRDROP_DRAFT_STORAGE_KEY);
   }, [workspace.id]);
 
   const tokenOptions = useMemo(
     () =>
       availableTokens
-        .filter((token) => {
-          try {
-            return BigInt(token.tokenBalance || '0') > 0n;
-          } catch {
-            return false;
-          }
-        })
+        .filter(hasAirdropTokenHoldings)
         .map((token) => ({
           category: token.category,
-          label:
-            tokenMetadata[token.category]?.name ||
-            tokenMetadata[token.category]?.symbol
-              ? `${tokenMetadata[token.category]?.name || tokenMetadata[token.category]?.symbol} · ${token.tokenBalance}`
-              : `${shortenMiddle(token.category, 14, 10)} · ${token.tokenBalance}`,
+          label: (() => {
+            const presentation = getTokenPresentation(token.category);
+            const balance = formatAtomicTokenAmount(
+              token.tokenBalance,
+              presentation.decimals
+            );
+            const nftSuffix =
+              token.nftCommitments.length > 0
+                ? ` • NFTs: ${token.nftCommitments.length}`
+                : '';
+            return presentation.statusLabel
+              ? `${formatTokenIdentityLabel(token.category)} · ${balance}${nftSuffix} • ${presentation.statusLabel}`
+              : `${formatTokenIdentityLabel(token.category)} · ${balance}${nftSuffix}`;
+          })(),
         })),
-    [availableTokens, tokenMetadata]
+    [availableTokens, formatTokenIdentityLabel, getTokenPresentation]
   );
   const includePickerValue = tokenOptions.some(
     (token) => token.category === tokenImportDraft.includeCategory
@@ -268,6 +192,13 @@ const DistributorScreen: React.FC<DistributorScreenProps> = ({
   useEffect(() => {
     const defaultTokenCategory =
       workspace.default_token_category ||
+      availableTokens.find((token) => {
+        try {
+          return BigInt(token.tokenBalance || '0') > 0n;
+        } catch {
+          return false;
+        }
+      })?.category ||
       availableTokens[0]?.category ||
       '';
     setDistributionDraft({
@@ -276,60 +207,6 @@ const DistributorScreen: React.FC<DistributorScreenProps> = ({
       amount: workspace.default_amount || '1',
     });
   }, [workspace, availableTokens]);
-
-  useEffect(() => {
-    let cancelled = false;
-
-    void (async () => {
-      const categories = Array.from(
-        new Set(
-          availableTokens
-            .filter((token) => {
-              try {
-                return BigInt(token.tokenBalance || '0') > 0n;
-              } catch {
-                return false;
-              }
-            })
-            .map((token) => token.category)
-        )
-      );
-
-      if (categories.length === 0) return;
-
-      const nextEntries: Array<[string, { name: string; symbol: string; decimals: number }]> =
-        [];
-
-      for (const category of categories) {
-        if (tokenMetadata[category]) continue;
-        try {
-          const metadata = await sdk.bcmr.getTokenMetadata(category);
-          if (!metadata) continue;
-          nextEntries.push([
-            category,
-            {
-              name: metadata.name || '',
-              symbol: metadata.token?.symbol || '',
-              decimals: metadata.token?.decimals ?? 0,
-            },
-          ]);
-        } catch {
-          // ignore individual token metadata failures
-        }
-      }
-
-      if (!cancelled && nextEntries.length > 0) {
-        setTokenMetadata((prev) => ({
-          ...prev,
-          ...Object.fromEntries(nextEntries),
-        }));
-      }
-    })();
-
-    return () => {
-      cancelled = true;
-    };
-  }, [availableTokens, sdk, tokenMetadata]);
 
   const selectedRecipientIds = useMemo(
     () =>
@@ -591,76 +468,11 @@ const DistributorScreen: React.FC<DistributorScreenProps> = ({
     return () => window.clearTimeout(timeoutId);
   }, [error]);
 
-  useEffect(() => {
-    if (typeof window === 'undefined') return;
-
-    const hasDraft =
-      recipients.length > 0 ||
-      jobs.length > 0 ||
-      importText.trim().length > 0 ||
-      recipientSourceMode !== 'manual' ||
-      step !== 'recipients' ||
-      distributionDraft.amount !== (workspace.default_amount || '1') ||
-        distributionDraft.assetType !==
-        (workspace.default_asset_type === 'bch' ? 'bch' : 'token') ||
-      distributionDraft.tokenCategory !== (workspace.default_token_category || '') ||
-      amountRuleDraft.mode !== 'fixed' ||
-      amountRuleDraft.referenceCategory.trim().length > 0 ||
-      amountRuleDraft.tiers.some(
-        (tier, index) =>
-          tier.minBalance !== (index === 0 ? '1' : index === 1 ? '10' : '100') ||
-          tier.amount !==
-            (index === 0
-              ? workspace.default_amount || '1'
-              : index === 1
-                ? workspace.default_amount || '5'
-                : workspace.default_amount || '10')
-      ) ||
-      tokenImportDraft.includeCategory.trim().length > 0 ||
-      tokenImportDraft.excludeCategory.trim().length > 0 ||
-      tokenImportDraft.limit.trim() !== '200';
-
-    if (!hasDraft) {
-      window.localStorage.removeItem(DISTRIBUTOR_DRAFT_STORAGE_KEY);
-      return;
-    }
-
-    window.localStorage.setItem(
-      DISTRIBUTOR_DRAFT_STORAGE_KEY,
-      JSON.stringify({
-        workspaceId: workspace.id,
-        recipients,
-        jobs,
-        recipientSelection,
-        importText,
-        recipientSourceMode,
-        step,
-        distributionDraft,
-        amountRuleDraft,
-        tokenImportDraft,
-      })
-    );
-  }, [
-    amountRuleDraft,
-    distributionDraft,
-    importText,
-    jobs,
-    recipientSourceMode,
-    recipientSelection,
-    recipients,
-    step,
-    tokenImportDraft,
-    workspace.default_amount,
-    workspace.default_asset_type,
-    workspace.default_token_category,
-    workspace.id,
-  ]);
-
   const resetAirdropFlow = () => {
     const defaultTokenCategory =
       workspace.default_token_category || availableTokens[0]?.category || '';
     if (typeof window !== 'undefined') {
-      window.localStorage.removeItem(DISTRIBUTOR_DRAFT_STORAGE_KEY);
+      window.localStorage.removeItem(AIRDROP_DRAFT_STORAGE_KEY);
     }
     setRecipients([]);
     setJobs([]);
@@ -698,7 +510,6 @@ const DistributorScreen: React.FC<DistributorScreenProps> = ({
     setTokenImportDraft({
       includeCategory: '',
       excludeCategory: '',
-      limit: '200',
     });
   };
 
@@ -712,18 +523,18 @@ const DistributorScreen: React.FC<DistributorScreenProps> = ({
   const loadTokenHolderBalances = async (
     category: string,
     options?: {
-      maxResults?: number;
       targetAddressKeys?: Set<string>;
     }
   ) => {
     const results = new Map<string, { address: string; balance: bigint }>();
     let cursor: string | undefined;
-    const maxResults = options?.maxResults ?? 500;
+    const pageSize = 200;
+    let hasMore = true;
 
-    while (results.size < maxResults) {
+    while (hasMore) {
       const page = await sdk.tokenIndex.listTokenHolders({
         category,
-        limit: Math.min(200, maxResults - results.size),
+        limit: pageSize,
         cursor,
       });
 
@@ -740,7 +551,10 @@ const DistributorScreen: React.FC<DistributorScreenProps> = ({
         try {
           results.set(key, {
             address,
-            balance: BigInt(holder.ft_balance || '0'),
+            balance: normalizeTokenHolderBalance({
+              ftBalance: holder.ft_balance || '0',
+              utxoCount: holder.utxo_count || 0,
+            }),
           });
         } catch {
           // ignore malformed balances
@@ -753,7 +567,8 @@ const DistributorScreen: React.FC<DistributorScreenProps> = ({
       ) {
         break;
       }
-      if (!page.next_cursor) break;
+      hasMore = Boolean(page.next_cursor);
+      if (!hasMore) break;
       cursor = page.next_cursor ?? undefined;
     }
 
@@ -763,10 +578,6 @@ const DistributorScreen: React.FC<DistributorScreenProps> = ({
   const importTokenHolders = async () => {
     const includeCategory = tokenImportDraft.includeCategory.trim().toLowerCase();
     const excludeCategory = tokenImportDraft.excludeCategory.trim().toLowerCase();
-    const requestedLimit = Math.min(
-      Math.max(Number.parseInt(tokenImportDraft.limit, 10) || 200, 1),
-      500
-    );
 
     if (!/^[0-9a-f]{64}$/.test(includeCategory)) {
       throw new Error('Enter a valid include token category.');
@@ -775,18 +586,14 @@ const DistributorScreen: React.FC<DistributorScreenProps> = ({
       throw new Error('Exclude token category must be 64-character hex.');
     }
 
-    const includeAddresses = await loadTokenHolderBalances(includeCategory, {
-      maxResults: requestedLimit,
-    });
+    const includeAddresses = await loadTokenHolderBalances(includeCategory);
     if (includeAddresses.size === 0) {
       throw new Error('No token-holder addresses were returned for that category.');
     }
 
     let excludeAddresses = new Set<string>();
     if (excludeCategory) {
-      const loadedExclude = await loadTokenHolderBalances(excludeCategory, {
-        maxResults: requestedLimit,
-      });
+      const loadedExclude = await loadTokenHolderBalances(excludeCategory);
       excludeAddresses = new Set(loadedExclude.keys());
     }
 
@@ -805,7 +612,7 @@ const DistributorScreen: React.FC<DistributorScreenProps> = ({
         workspace_id: workspace.id,
         label: `Holder ${newRecipients.length + 1}`,
         address: holder.address,
-        notes: `Imported from ${shortenMiddle(includeCategory, 10, 8)}`,
+        notes: `Imported from ${formatTokenIdentityLabel(includeCategory)}`,
         source: 'tokenindex',
         created_at: new Date().toISOString(),
       });
@@ -875,7 +682,6 @@ const DistributorScreen: React.FC<DistributorScreenProps> = ({
       selectedRecipients.map((recipient) => normalizeAddressKey(recipient.address))
     );
     const balanceMap = await loadTokenHolderBalances(referenceCategory, {
-      maxResults: Math.max(selectedRecipients.length * 3, 200),
       targetAddressKeys: selectedAddressKeys,
     });
 
@@ -1121,13 +927,12 @@ const DistributorScreen: React.FC<DistributorScreenProps> = ({
                 <div className="flex flex-wrap gap-2 text-xs">
                   <span className="wallet-surface rounded-full px-3 py-1 wallet-text-strong">
                     {tokenImportDraft.includeCategory
-                      ? `Include ${shortenMiddle(tokenImportDraft.includeCategory, 8, 6)}`
+                      ? `Include ${formatTokenIdentityLabel(tokenImportDraft.includeCategory)}`
                       : 'No include token'}
                   </span>
                   {tokenImportDraft.excludeCategory ? (
                     <span className="wallet-surface rounded-full px-3 py-1 wallet-muted">
-                      Exclude{' '}
-                      {shortenMiddle(tokenImportDraft.excludeCategory, 8, 6)}
+                      Exclude {formatTokenIdentityLabel(tokenImportDraft.excludeCategory)}
                     </span>
                   ) : null}
                 </div>
@@ -1280,7 +1085,7 @@ const DistributorScreen: React.FC<DistributorScreenProps> = ({
                 {amountRuleNeedsReference &&
                 amountRuleDraft.referenceCategory ? (
                   <span className="wallet-surface rounded-full px-3 py-1 wallet-muted">
-                    Ref {shortenMiddle(amountRuleDraft.referenceCategory, 8, 6)}
+                    Ref {formatTokenIdentityLabel(amountRuleDraft.referenceCategory)}
                   </span>
                 ) : null}
               </div>
@@ -1468,7 +1273,10 @@ const DistributorScreen: React.FC<DistributorScreenProps> = ({
                     className="text-xs wallet-muted break-all"
                   >
                     {input.token
-                      ? `Token input · ${shortenMiddle(input.token.category, 12, 8)} · ${String(input.token.amount)}`
+                      ? `Token input · ${formatTokenIdentityLabel(input.token.category)} · ${formatAtomicTokenAmount(
+                          input.token.amount,
+                          getTokenPresentation(input.token.category).decimals
+                        )}`
                       : `BCH fee input · ${shortenMiddle(input.tx_hash, 12, 8)}:${input.tx_pos} · ${input.amount ?? input.value} sats`}
                   </div>
                 ))}
@@ -1497,8 +1305,11 @@ const DistributorScreen: React.FC<DistributorScreenProps> = ({
                       <div>{String(output.amount)} sats</div>
                       {output.token ? (
                         <div>
-                          {shortenMiddle(output.token.category, 12, 8)} ·{' '}
-                          {String(output.token.amount)}
+                          {formatTokenIdentityLabel(output.token.category)} ·{' '}
+                          {formatAtomicTokenAmount(
+                            output.token.amount,
+                            getTokenPresentation(output.token.category).decimals
+                          )}
                         </div>
                       ) : null}
                     </div>
@@ -1883,7 +1694,7 @@ const DistributorScreen: React.FC<DistributorScreenProps> = ({
                 Import by Token
               </div>
               <div className="text-sm wallet-muted">
-                Add holders of one token, with an optional exclude token.
+                Add holders of one token or NFT category, with an optional exclude token.
               </div>
             </div>
             {tokenOptions.length > 0 ? (
@@ -1954,17 +1765,6 @@ const DistributorScreen: React.FC<DistributorScreenProps> = ({
                 }))
               }
             />
-            <input
-              className="wallet-input w-full"
-              placeholder="Max holders"
-              value={tokenImportDraft.limit}
-              onChange={(event) =>
-                setTokenImportDraft((prev) => ({
-                  ...prev,
-                  limit: event.target.value,
-                }))
-              }
-            />
             <button
               className="wallet-btn-secondary w-full"
               disabled={tokenImportedRecipientCount === 0}
@@ -1987,6 +1787,7 @@ const DistributorScreen: React.FC<DistributorScreenProps> = ({
                 void (async () => {
                   try {
                     setTokenImportBusy(true);
+                    setStatus('Importing token holders...');
                     await importTokenHolders();
                   } catch (err) {
                     setError(
@@ -2000,7 +1801,17 @@ const DistributorScreen: React.FC<DistributorScreenProps> = ({
                 })()
               }
             >
-              {tokenImportBusy ? 'Importing…' : 'Import Holders'}
+              {tokenImportBusy ? (
+                <span className="inline-flex items-center justify-center gap-2">
+                  <span
+                    className="h-4 w-4 rounded-full border-2 border-current border-t-transparent animate-spin"
+                    aria-hidden="true"
+                  />
+                  <span>Importing holders…</span>
+                </span>
+              ) : (
+                'Import Holders'
+              )}
             </button>
           </div>
         </Popup>
@@ -2009,4 +1820,4 @@ const DistributorScreen: React.FC<DistributorScreenProps> = ({
   );
 };
 
-export default DistributorScreen;
+export default AirdropDistributionScreen;

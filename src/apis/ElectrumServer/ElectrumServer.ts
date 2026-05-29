@@ -20,6 +20,7 @@ const BACKOFF_BASE_MS = 3000;
 const BACKOFF_MAX_MS = 60000;
 const WSS_PORT = 50004;
 const IDLE_RECONNECT_AFTER_MS = 5 * 60 * 1000;
+const LAST_HEALTHY_SERVER_STORAGE_KEY = 'optn.electrum.last-healthy-server';
 
 // Convenience alias for a typed Electrum client
 type ECClient = ElectrumClient<ElectrumClientEvents>;
@@ -55,6 +56,30 @@ function getNetworkAndServers(): { network: Network; servers: string[] } {
   const network = selectCurrentNetwork(state);
   const servers = getElectrumServers(network);
   return { network, servers };
+}
+
+function getElectrumStorage(): Storage | null {
+  try {
+    return globalThis.localStorage ?? globalThis.sessionStorage ?? null;
+  } catch {
+    return null;
+  }
+}
+
+function getLastHealthyServer(): string | null {
+  try {
+    return getElectrumStorage()?.getItem(LAST_HEALTHY_SERVER_STORAGE_KEY) ?? null;
+  } catch {
+    return null;
+  }
+}
+
+function setLastHealthyServer(server: string): void {
+  try {
+    getElectrumStorage()?.setItem(LAST_HEALTHY_SERVER_STORAGE_KEY, server);
+  } catch {
+    /* ignore */
+  }
 }
 
 function withTimeout<T>(
@@ -112,6 +137,15 @@ function getNextServer(servers: string[], currentIdx: number): string | undefine
   const idx =
     currentIdx >= 0 && currentIdx < servers.length ? currentIdx : 0;
   return servers[(idx + 1) % servers.length];
+}
+
+function getPreferredServer(servers: string[]): string | undefined {
+  if (servers.length === 0) return undefined;
+  const lastHealthy = getLastHealthyServer();
+  if (lastHealthy && servers.includes(lastHealthy)) {
+    return lastHealthy;
+  }
+  return servers[0];
 }
 
 function buildBatchMessage(
@@ -255,6 +289,12 @@ export default function ElectrumServer() {
     if (customServer) {
       const idx = servers.indexOf(customServer);
       startIdx = idx >= 0 ? idx : serverIndex;
+    } else {
+      const preferred = getPreferredServer(servers);
+      if (preferred) {
+        const preferredIdx = servers.indexOf(preferred);
+        startIdx = preferredIdx >= 0 ? preferredIdx : serverIndex;
+      }
     }
     const tryOrder = [
       ...servers.slice(startIdx),
@@ -286,6 +326,7 @@ export default function ElectrumServer() {
             );
             electrum = client;
             serverIndex = servers.indexOf(host);
+            setLastHealthyServer(host);
             resetBackoff();
             markSuccessfulActivity();
 
@@ -369,7 +410,14 @@ export default function ElectrumServer() {
       const { servers } = getNetworkAndServers();
       const nextServer = getNextServer(servers, serverIndex);
       await electrumDisconnect();
-      await electrumConnect(nextServer); // may throw if backoff is active
+      try {
+        await electrumConnect(nextServer);
+      } catch {
+        throw err;
+      }
+      if (!electrum) {
+        throw err;
+      }
       const res = await withTimeout(
         electrum.request(method, ...params),
         REQUEST_TIMEOUT_MS,
@@ -394,11 +442,18 @@ export default function ElectrumServer() {
         REQUEST_TIMEOUT_MS,
         `requestMany(${calls.length})`
       );
-    } catch {
+    } catch (err) {
       const { servers } = getNetworkAndServers();
       const nextServer = getNextServer(servers, serverIndex);
       await electrumDisconnect();
-      await electrumConnect(nextServer);
+      try {
+        await electrumConnect(nextServer);
+      } catch {
+        throw err;
+      }
+      if (!electrum) {
+        throw err;
+      }
       return await withTimeout(
         sendBatch(electrum!, calls),
         REQUEST_TIMEOUT_MS,
@@ -434,14 +489,21 @@ export default function ElectrumServer() {
     };
 
     try {
-    await doSubscribe();
-    activeSubs.set(key, { method, params });
-    markSuccessfulActivity();
-  } catch {
+      await doSubscribe();
+      activeSubs.set(key, { method, params });
+      markSuccessfulActivity();
+    } catch (err) {
       const { servers } = getNetworkAndServers();
       const nextServer = getNextServer(servers, serverIndex);
       await electrumDisconnect();
-      await electrumConnect(nextServer);
+      try {
+        await electrumConnect(nextServer);
+      } catch {
+        throw err;
+      }
+      if (!electrum) {
+        throw err;
+      }
       await doSubscribe();
       activeSubs.set(key, { method, params });
       markSuccessfulActivity();
