@@ -302,7 +302,7 @@ class TransactionService {
     nftCapability?: undefined | 'none' | 'mutable' | 'minting',
     nftCommitment?: string
   ): TransactionOutput | undefined {
-    return this.transactionManager.addOutput(
+    return this.getTransactionManager().addOutput(
       recipientAddress,
       transferAmount,
       tokenAmount,

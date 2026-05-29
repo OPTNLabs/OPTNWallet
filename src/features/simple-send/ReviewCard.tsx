@@ -2,6 +2,7 @@ import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import Draggable from 'react-draggable';
 import { AssetType, ReviewState, SimpleSendInput, TokenMetaMap } from './types';
 import { formatFtAmount } from './utils';
+import { resolveTokenPresentation } from '../../utils/tokenPresentation';
 
 type ReviewCardProps = {
   open: boolean;
@@ -270,14 +271,15 @@ export function ReviewCard({
                     title={review.tokenChange.amount.toString()}
                   >
                     {(() => {
-                      const dec =
-                        tokenMeta[review.tokenChange!.category]?.decimals ?? 0;
+                      const presentation = resolveTokenPresentation(
+                        review.tokenChange!.category,
+                        tokenMeta[review.tokenChange!.category]
+                      );
                       const pretty = formatFtAmount(
                         review.tokenChange!.amount,
-                        dec
+                        presentation.decimals
                       );
-                      const name = displayNameFor(review.tokenChange!.category);
-                      return `${pretty} ${name}`;
+                      return `${pretty} ${presentation.primaryLabel}`;
                     })()}
                   </span>
                 </div>

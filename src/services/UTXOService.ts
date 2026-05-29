@@ -1,5 +1,7 @@
 // src/services/UTXOService.ts
+import { Capacitor } from '@capacitor/core';
 import ElectrumService from './ElectrumService';
+import DatabaseService from '../apis/DatabaseManager/DatabaseService';
 import UTXOManager from '../apis/UTXOManager/UTXOManager';
 import AddressManager from '../apis/AddressManager/AddressManager';
 import BcmrService from './BcmrService';
@@ -115,6 +117,10 @@ const UTXOService = {
       const uniqueAddresses = Array.from(new Set(addresses.filter(Boolean)));
       if (uniqueAddresses.length === 0) return {};
 
+      const existingSnapshot = await manager.fetchUTXOsFromDatabase(
+        uniqueAddresses.map((address) => ({ address })),
+        walletId
+      );
       const utxosByAddress = await ElectrumService.getUTXOsMany(uniqueAddresses);
       for (const fetchedUTXOs of Object.values(utxosByAddress)) {
         for (const u of fetchedUTXOs) {
@@ -136,7 +142,15 @@ const UTXOService = {
       const formattedByAddress: Record<string, UTXO[]> = {};
 
       for (const address of uniqueAddresses) {
-        const fetchedUTXOs = utxosByAddress[address] ?? [];
+        const fetchedUTXOs = utxosByAddress[address];
+        if (!fetchedUTXOs) {
+          formattedByAddress[address] = [
+            ...(existingSnapshot.utxosMap[address] ?? []),
+            ...(existingSnapshot.cashTokenUtxosMap[address] ?? []),
+          ];
+          continue;
+        }
+
         formattedByAddress[address] = fetchedUTXOs.map((utxo: UTXO) => ({
           id: `${utxo.tx_hash}:${utxo.tx_pos}`,
           tx_hash: utxo.tx_hash,
@@ -153,6 +167,13 @@ const UTXOService = {
       }
 
       await manager.replaceWalletAddressUTXOs(walletId, formattedByAddress);
+
+      const dbService = DatabaseService();
+      if (Capacitor.getPlatform() === 'web') {
+        await dbService.flushDatabaseToFile();
+      } else {
+        dbService.scheduleDatabaseSave();
+      }
 
       return formattedByAddress;
     } catch (error) {

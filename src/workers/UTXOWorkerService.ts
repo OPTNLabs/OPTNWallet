@@ -1,4 +1,5 @@
 // src/workers/UTXOWorkerService.ts
+import { Capacitor } from '@capacitor/core';
 import KeyService from '../services/KeyService';
 import UTXOService from '../services/UTXOService';
 import ElectrumService from '../services/ElectrumService';
@@ -20,6 +21,7 @@ import { logError, logWarn } from '../utils/errorHandling';
 import { UTXO } from '../types/types';
 import { runWalletUtxoRefresh } from '../services/RefreshCoordinator';
 import QuantumrootTrackingService from '../services/QuantumrootTrackingService';
+import { preloadTokenMetadata } from '../hooks/useSharedTokenMetadata';
 
 // --- Subscriptions state ---
 let started = false;
@@ -34,6 +36,17 @@ const transactionManager = TransactionManager();
 const dbService = DatabaseService();
 const inFlightRefreshes = new Map<string, Promise<void>>();
 const queuedRefreshes = new Set<string>();
+
+function collectTokenCategories(utxosByAddress: Record<string, UTXO[]>): string[] {
+  return Array.from(
+    new Set(
+      Object.values(utxosByAddress)
+        .flat()
+        .map((utxo) => utxo.token?.category)
+        .filter((category): category is string => Boolean(category))
+    )
+  );
+}
 
 function refreshAddressSoon(address: string, ms = 120) {
   const prev = refreshTimers.get(address);
@@ -176,7 +189,7 @@ async function refreshAddress(address: string) {
   await run;
 }
 
-async function bootstrapAllUTXOs() {
+export async function bootstrapAllUTXOs() {
   const state = store.getState();
   const currentWalletId = state.wallet_id.currentWalletId;
 
@@ -246,6 +259,22 @@ async function bootstrapAllUTXOs() {
   }
 
   store.dispatch(setUTXOs({ newUTXOs: allUTXOs }));
+
+  const tokenCategories = collectTokenCategories(allUTXOs);
+  if (tokenCategories.length > 0) {
+    if (Capacitor.getPlatform() === 'web') {
+      void preloadTokenMetadata(tokenCategories).catch((error) => {
+        logError('UTXOWorker.bootstrapAllUTXOs.preloadTokenMetadata', error, {
+          walletId: currentWalletId,
+          categoryCount: tokenCategories.length,
+        });
+      });
+    } else {
+      await preloadTokenMetadata(tokenCategories);
+    }
+  }
+
+  dbService.scheduleDatabaseSave();
   store.dispatch(setFetchingUTXOs(false));
   store.dispatch(setInitialized(true));
 }
