@@ -3,7 +3,7 @@ import {
   CapacitorBarcodeScannerOptions,
   CapacitorBarcodeScannerScanResult,
 } from '@capacitor/barcode-scanner';
-import { Capacitor } from '@capacitor/core';
+import { isWebPlatform } from './platform';
 
 let videoInputCheck: Promise<boolean> | null = null;
 
@@ -76,7 +76,7 @@ export function installBarcodeScannerUnhandledRejectionGuard() {
 }
 
 async function ensureCameraAvailableForWeb(): Promise<void> {
-  if (Capacitor.getPlatform() !== 'web') return;
+  if (!isWebPlatform()) return;
   if (typeof navigator === 'undefined' || !navigator.mediaDevices) {
     throw new NoCameraAvailableError();
   }

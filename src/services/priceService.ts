@@ -1,6 +1,6 @@
 // src/services/priceService.ts
-import { Capacitor } from '@capacitor/core';
 import { CapacitorHttp } from '@capacitor/core';
+import { isWebPlatform } from '../utils/platform';
 
 /** ===== Types ===== */
 export type BaseSymbol = 'BTC' | 'BCH' | 'ETH';
@@ -124,7 +124,7 @@ async function httpGetJSON(
   } catch (fetchError) {
     // Fall back to CapacitorHttp on native builds so a webview/CORS issue does
     // not completely block price loading.
-    if (Capacitor.getPlatform() !== 'web') {
+    if (!isWebPlatform()) {
       try {
         return await capacitorHttpJSON(full, { headers, timeoutMs });
       } catch {

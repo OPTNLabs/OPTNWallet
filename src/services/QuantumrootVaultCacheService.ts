@@ -1,4 +1,9 @@
 import type { QuantumrootVaultRecord } from '../types/types';
+import {
+  getLocalStorage,
+  readStorageItem,
+  writeStorageItem,
+} from '../utils/browserStorage';
 
 const STORAGE_KEY = 'optn_quantumroot_vault_cache_v1';
 
@@ -8,7 +13,7 @@ function readStorage(): Record<number, QuantumrootVaultRecord[]> {
   if (memoryCache) return memoryCache;
 
   try {
-    const raw = globalThis.localStorage?.getItem(STORAGE_KEY);
+    const raw = readStorageItem(getLocalStorage(), STORAGE_KEY);
     if (!raw) {
       memoryCache = {};
       return memoryCache;
@@ -27,11 +32,7 @@ function readStorage(): Record<number, QuantumrootVaultRecord[]> {
 
 function writeStorage(cache: Record<number, QuantumrootVaultRecord[]>): void {
   memoryCache = cache;
-  try {
-    globalThis.localStorage?.setItem(STORAGE_KEY, JSON.stringify(cache));
-  } catch {
-    // Best-effort persistence; memory cache still survives screen switches.
-  }
+  writeStorageItem(getLocalStorage(), STORAGE_KEY, JSON.stringify(cache));
 }
 
 function upsertVault(

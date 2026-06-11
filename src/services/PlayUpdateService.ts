@@ -1,24 +1,21 @@
-import { Capacitor } from '@capacitor/core';
 import PlayUpdate, { type PlayUpdateStatus } from '../platform/plugins/PlayUpdate';
+import {
+  getLocalStorage,
+  readStorageItem,
+  writeStorageItem,
+} from '../utils/browserStorage';
+import { isAndroidNativePlatform } from '../utils/platform';
 
 const LAST_CHECK_KEY = 'optn_play_update_last_check_v1';
 const LAST_VERSION_KEY = 'optn_play_update_last_version_v1';
 const CHECK_INTERVAL_MS = 12 * 60 * 60_000;
 
 function readStorage(key: string): string | null {
-  try {
-    return globalThis.localStorage?.getItem(key) ?? null;
-  } catch {
-    return null;
-  }
+  return readStorageItem(getLocalStorage(), key);
 }
 
 function writeStorage(key: string, value: string): void {
-  try {
-    globalThis.localStorage?.setItem(key, value);
-  } catch {
-    // best effort
-  }
+  writeStorageItem(getLocalStorage(), key, value);
 }
 
 function shouldCheckNow(): boolean {
@@ -37,7 +34,7 @@ function readLastVersion(): number {
 }
 
 async function checkForOptionalUpdate(): Promise<PlayUpdateStatus | null> {
-  if (!Capacitor.isNativePlatform() || Capacitor.getPlatform() !== 'android') return null;
+  if (!isAndroidNativePlatform()) return null;
   if (!shouldCheckNow()) return null;
 
   const result = await PlayUpdate.checkForUpdate();
@@ -46,13 +43,13 @@ async function checkForOptionalUpdate(): Promise<PlayUpdateStatus | null> {
 }
 
 async function startOptionalUpdate(): Promise<boolean> {
-  if (!Capacitor.isNativePlatform() || Capacitor.getPlatform() !== 'android') return false;
+  if (!isAndroidNativePlatform()) return false;
   const result = await PlayUpdate.startFlexibleUpdate();
   return !!result.started;
 }
 
 async function completeOptionalUpdate(): Promise<void> {
-  if (!Capacitor.isNativePlatform() || Capacitor.getPlatform() !== 'android') return;
+  if (!isAndroidNativePlatform()) return;
   await PlayUpdate.completeUpdate();
 }
 

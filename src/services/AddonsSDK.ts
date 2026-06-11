@@ -5,7 +5,8 @@ import {
   getAddonGrantedCapabilities,
   validateAddonPermissions,
 } from './AddonsAllowlist';
-import { Capacitor, CapacitorHttp } from '@capacitor/core';
+import { CapacitorHttp } from '@capacitor/core';
+import { isNativePlatform } from '../utils/platform';
 
 import ElectrumService from './ElectrumService';
 import TransactionService, { type BroadcastResult } from './TransactionService';
@@ -332,7 +333,7 @@ export function createAddonSDK(
     try {
       return await fetchJson();
     } catch (fetchError) {
-      if (Capacitor.isNativePlatform()) {
+      if (isNativePlatform()) {
         try {
           return await nativeHttpJson();
         } catch {
