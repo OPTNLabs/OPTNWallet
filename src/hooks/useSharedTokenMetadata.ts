@@ -243,7 +243,7 @@ async function loadFreshTokenMetadata(
   return fresh;
 }
 
-async function resolveTokenMetadata(
+export async function resolveTokenMetadata(
   category: string,
   options?: { forceRefresh?: boolean }
 ): Promise<SharedTokenMetadata | null> {
@@ -257,11 +257,6 @@ async function resolveTokenMetadata(
 
   if (!options?.forceRefresh && shouldRetryFailure(normalized)) {
     return metadataFailureCache.get(normalized)?.state ?? null;
-  }
-
-  if (isWebRuntime()) {
-    const persisted = await loadCachedTokenMetadata(normalized);
-    return persisted ?? cached ?? buildUnavailableMetadata(normalized);
   }
 
   const inflight = inflightMetadata.get(normalized);
@@ -343,6 +338,7 @@ export default function useSharedTokenMetadata(categories: string[]) {
       .filter(Boolean);
     return Array.from(new Set(normalized));
   }, [categories]);
+
   const [metadata, setMetadata] = useState<Record<string, SharedTokenMetadata>>(
     {}
   );
@@ -378,7 +374,8 @@ export default function useSharedTokenMetadata(categories: string[]) {
     let retryAfterMs: number | undefined;
     let sawHardError = false;
     let retryTimer: number | undefined;
-    const allowRemoteRefresh = !isWebRuntime();
+    // Browser mode still uses cache as a fast path, but it must not block live BCMR refreshes.
+    const allowRemoteRefresh = true;
 
     for (const category of normalizedCategories) {
       const cached = getCachedTokenMetadata(category);

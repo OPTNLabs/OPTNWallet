@@ -110,7 +110,6 @@ async function requestWithAddressFallback(
 const ElectrumService = {
   async reconnect(customServer?: string) {
     const server = ElectrumServer();
-    invalidateUTXOCache();
     await server.electrumReconnect(customServer);
   },
 

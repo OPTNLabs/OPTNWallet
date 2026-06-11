@@ -17,6 +17,7 @@ import {
   getPoolSelectionId,
   resolveCurrentPoolForReview,
 } from '../preflight';
+import { dedupeWalletPoolPositionsForDisplay } from '../cauldronHelpers';
 
 type ChaingraphSdk = {
   chain: {
@@ -378,6 +379,46 @@ describe('cauldron preflight helpers', () => {
     expect(normalized?.output.tokenAmount).toBe(
       reviewedPool.output.tokenAmount
     );
+  });
+
+  it('collapses visible wallet pool positions by token category', () => {
+    const first = makePosition(
+      makePool({
+        txHash: '61'.repeat(32),
+        outputIndex: 1,
+      })
+    );
+
+    const second = makePosition(
+      makePool({
+        txHash: '62'.repeat(32),
+        outputIndex: 2,
+      })
+    );
+
+    const distinct = makePosition(
+      makePool({
+        txHash: '63'.repeat(32),
+        outputIndex: 3,
+      })
+    );
+    distinct.pool = {
+      ...distinct.pool,
+      output: {
+        ...distinct.pool.output,
+        tokenCategory: 'cc'.repeat(32),
+      },
+    };
+
+    const deduped = dedupeWalletPoolPositionsForDisplay([
+      first,
+      second,
+      distinct,
+    ]);
+
+    expect(deduped).toHaveLength(2);
+    expect(deduped[0]).toBe(first);
+    expect(deduped[1]).toBe(distinct);
   });
 
   it('rehydrates visible pools from exact chain row reserves before quoting', async () => {

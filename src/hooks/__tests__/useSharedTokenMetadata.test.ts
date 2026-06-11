@@ -31,6 +31,7 @@ vi.mock('../../services/BcmrService', () => ({
 import {
   getCachedTokenMetadata,
   preloadTokenMetadata,
+  resolveTokenMetadata,
 } from '../useSharedTokenMetadata';
 
 describe('useSharedTokenMetadata web preload', () => {
@@ -77,6 +78,87 @@ describe('useSharedTokenMetadata web preload', () => {
       snapshot: {
         token: {
           symbol: 'ALPHA',
+        },
+      },
+    });
+  });
+
+  it('fetches live BCMR metadata in web runtime when no cached snapshot exists', async () => {
+    const category =
+      'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb';
+    const authbase = category;
+    const registry = {
+      registryUri: `https://bcmr.example/api/registries/${authbase}/latest`,
+      registryHash: 'registry-hash-beta',
+      lastFetch: '2026-06-11T00:00:00.000Z',
+      registry: {
+        identities: {
+          [authbase]: {
+            '2026-06-11T00:00:00.000Z': {
+              name: 'Beta Token',
+              description: 'Fetched live from BCMR',
+              token: {
+                category,
+                symbol: 'BETA',
+                decimals: 2,
+              },
+              uris: {
+                icon: 'ipfs://beta-icon',
+              },
+            },
+          },
+        },
+      },
+    };
+
+    bcmrInstance.getSnapshot.mockResolvedValueOnce(null);
+    bcmrInstance.getCategoryAuthbase.mockResolvedValueOnce(authbase);
+    bcmrInstance.resolveIdentityRegistry.mockResolvedValueOnce(registry);
+    bcmrInstance.extractIdentityByCategory.mockReturnValueOnce({
+      name: 'Beta Token',
+      description: 'Fetched live from BCMR',
+      token: {
+        category,
+        symbol: 'BETA',
+        decimals: 2,
+      },
+      uris: {
+        icon: 'ipfs://beta-icon',
+      },
+    });
+    bcmrInstance.resolveIcon.mockResolvedValueOnce(
+      'https://icons.example/beta.png'
+    );
+
+    const result = await resolveTokenMetadata(category);
+
+    expect(bcmrInstance.getSnapshot).toHaveBeenCalledWith(category);
+    expect(bcmrInstance.getCategoryAuthbase).toHaveBeenCalledWith(category);
+    expect(bcmrInstance.resolveIdentityRegistry).toHaveBeenCalledWith(authbase);
+    expect(bcmrInstance.extractIdentityByCategory).toHaveBeenCalledWith(
+      category,
+      registry.registry
+    );
+    expect(bcmrInstance.resolveIcon).toHaveBeenCalledWith(
+      authbase,
+      undefined,
+      category
+    );
+    expect(result).toMatchObject({
+      status: 'ready',
+      freshness: 'fresh',
+      name: 'Beta Token',
+      symbol: 'BETA',
+      decimals: 2,
+      iconUri: 'https://icons.example/beta.png',
+      registryUri: registry.registryUri,
+      registryHash: registry.registryHash,
+      snapshot: {
+        name: 'Beta Token',
+        token: {
+          category,
+          symbol: 'BETA',
+          decimals: 2,
         },
       },
     });
