@@ -3,10 +3,20 @@
 apply plugin: 'com.android.application'
 apply plugin: 'kotlin-android' 
 
-def releaseStoreFile = System.getenv("RELEASE_STORE_FILE")
-def releaseStorePassword = System.getenv("RELEASE_STORE_PASSWORD")
-def releaseKeyAlias = System.getenv("RELEASE_KEY_ALIAS")
-def releaseKeyPassword = System.getenv("RELEASE_KEY_PASSWORD")
+def readEnvValue = { String primaryName, String legacyName ->
+    def primaryValue = System.getenv(primaryName)
+    if (primaryValue && primaryValue.trim()) {
+        return primaryValue
+    }
+
+    def legacyValue = System.getenv(legacyName)
+    return legacyValue && legacyValue.trim() ? legacyValue : null
+}
+
+def releaseStoreFile = readEnvValue("KEYSTORE_PATH", "RELEASE_STORE_FILE")
+def releaseStorePassword = readEnvValue("KEYSTORE_PASS", "RELEASE_STORE_PASSWORD")
+def releaseKeyAlias = readEnvValue("KEYSTORE_ALIAS", "RELEASE_KEY_ALIAS")
+def releaseKeyPassword = readEnvValue("KEYSTORE_ALIAS_PASS", "RELEASE_KEY_PASSWORD")
 
 def hasReleaseSigningEnv = releaseStoreFile && releaseStorePassword && releaseKeyAlias && releaseKeyPassword
 def isReleaseTaskRequested = gradle.startParameter.taskNames.any { taskName ->
@@ -14,7 +24,7 @@ def isReleaseTaskRequested = gradle.startParameter.taskNames.any { taskName ->
 }
 
 if (isReleaseTaskRequested && !hasReleaseSigningEnv) {
-    throw new GradleException("Release signing env vars are required: RELEASE_STORE_FILE, RELEASE_STORE_PASSWORD, RELEASE_KEY_ALIAS, RELEASE_KEY_PASSWORD")
+    throw new GradleException("Release signing env vars are required: KEYSTORE_PATH, KEYSTORE_PASS, KEYSTORE_ALIAS, KEYSTORE_ALIAS_PASS")
 }
 
 android {

@@ -1,5 +1,5 @@
-import { Capacitor } from '@capacitor/core';
 import DeviceIntegrity from '../platform/plugins/DeviceIntegrity';
+import { isAndroidNativePlatform } from '../utils/platform';
 
 type CachedAssessment = {
   ts: number;
@@ -14,8 +14,7 @@ function shouldEnforceIntegrityChecks(): boolean {
   return (
     import.meta.env.VITE_ENFORCE_DEVICE_INTEGRITY === 'true' &&
     import.meta.env.PROD &&
-    Capacitor.isNativePlatform() &&
-    Capacitor.getPlatform() === 'android'
+    isAndroidNativePlatform()
   );
 }
 
