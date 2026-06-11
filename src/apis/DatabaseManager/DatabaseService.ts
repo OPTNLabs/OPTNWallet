@@ -15,7 +15,7 @@ import SecretCryptoService, {
 let db: Database | null = null;
 
 // ** Debounce state **
-let saveTimeout: number | null = null;
+let saveTimeout: ReturnType<typeof setTimeout> | null = null;
 let pendingSavePromise: Promise<void> | null = null;
 let resolvePendingSave: (() => void) | null = null;
 let firstQueuedSaveTs: number | null = null;
@@ -277,7 +277,7 @@ const queueSave = async (delayMs = SAVE_DEBOUNCE_MS): Promise<void> => {
   }
 
   if (saveTimeout !== null) {
-    clearTimeout(saveTimeout);
+    globalThis.clearTimeout(saveTimeout);
   }
 
   const queuedAt = firstQueuedSaveTs ?? now;
@@ -285,7 +285,7 @@ const queueSave = async (delayMs = SAVE_DEBOUNCE_MS): Promise<void> => {
   const remainingMaxDelay = Math.max(0, SAVE_MAX_DELAY_MS - elapsed);
   const waitMs = Math.min(delayMs, remainingMaxDelay);
 
-  saveTimeout = window.setTimeout(() => {
+  saveTimeout = globalThis.setTimeout(() => {
     void performQueuedSave();
   }, waitMs);
 
@@ -310,7 +310,7 @@ const flushDatabaseToFile = async (): Promise<void> => {
   if (!db) return;
 
   if (saveTimeout !== null) {
-    clearTimeout(saveTimeout);
+    globalThis.clearTimeout(saveTimeout);
     saveTimeout = null;
   }
 

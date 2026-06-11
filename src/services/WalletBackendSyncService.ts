@@ -2,6 +2,11 @@ import KeyService from './KeyService';
 import WalletManager from '../apis/WalletManager/WalletManager';
 import { Network } from '../state/slices/networkSlice';
 import { WalletType } from '../types/wallet';
+import {
+  getLocalStorage,
+  readStorageItem,
+  writeStorageItem,
+} from '../utils/browserStorage';
 
 type BackendRegistrationPayload = {
   account_id?: string;
@@ -97,19 +102,11 @@ async function sha256Hex(input: string): Promise<string> {
 }
 
 function readStorage(key: string): string | null {
-  try {
-    return globalThis.localStorage?.getItem(key) ?? null;
-  } catch {
-    return null;
-  }
+  return readStorageItem(getLocalStorage(), key);
 }
 
 function writeStorage(key: string, value: string): void {
-  try {
-    globalThis.localStorage?.setItem(key, value);
-  } catch {
-    // best effort
-  }
+  writeStorageItem(getLocalStorage(), key, value);
 }
 
 function getInstallationId(): string {

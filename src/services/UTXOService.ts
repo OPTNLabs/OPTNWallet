@@ -1,5 +1,5 @@
 // src/services/UTXOService.ts
-import { Capacitor } from '@capacitor/core';
+import { cashAddressToLockingBytecode, decodeTransaction } from '@bitauth/libauth';
 import ElectrumService from './ElectrumService';
 import DatabaseService from '../apis/DatabaseManager/DatabaseService';
 import UTXOManager from '../apis/UTXOManager/UTXOManager';
@@ -7,11 +7,14 @@ import AddressManager from '../apis/AddressManager/AddressManager';
 import BcmrService from './BcmrService';
 import WalletDiscoveryService from './WalletDiscoveryService';
 import TransactionManager from '../apis/TransactionManager/TransactionManager';
-import { UTXO } from '../types/types';
+import OutboundTransactionTracker from './OutboundTransactionTracker';
+import { Token, UTXO } from '../types/types';
 import { Network } from '../state/slices/networkSlice';
 import { store } from '../state/store';
 import { normalizeTokenField } from '../utils/tokenNormalization';
 import { logError } from '../utils/errorHandling';
+import { isWebPlatform } from '../utils/platform';
+import { binToHex, hexToBin } from '../utils/hex';
 
 function getPrefix(): string {
   try {
@@ -22,6 +25,91 @@ function getPrefix(): string {
   } catch {
     return 'bitcoincash';
   }
+}
+
+type DecodedTransaction = Exclude<ReturnType<typeof decodeTransaction>, string>;
+type DecodedOutput = DecodedTransaction['outputs'][number];
+
+function outpointKey(utxo: Pick<UTXO, 'tx_hash' | 'tx_pos'>): string {
+  return `${utxo.tx_hash}:${utxo.tx_pos}`;
+}
+
+function decodedOutputToToken(output: DecodedOutput): Token | null {
+  if (!output.token) return null;
+
+  const token: Token = {
+    amount: output.token.amount,
+    category: binToHex(output.token.category),
+  };
+
+  if (output.token.nft) {
+    token.nft = {
+      capability: output.token.nft.capability,
+      commitment: binToHex(output.token.nft.commitment),
+    };
+  }
+
+  return token;
+}
+
+function buildWalletBytecodeMap(addresses: string[]): Map<string, string> {
+  const bytecodeMap = new Map<string, string>();
+
+  for (const address of addresses) {
+    const decoded = cashAddressToLockingBytecode(address);
+    if (typeof decoded === 'string') continue;
+    bytecodeMap.set(binToHex(decoded.bytecode), address);
+  }
+
+  return bytecodeMap;
+}
+
+async function collectPendingOutboundTokenUtxos(
+  walletId: number,
+  addresses: string[]
+): Promise<UTXO[]> {
+  const activeRecords = await OutboundTransactionTracker.listActive(walletId);
+  if (activeRecords.length === 0 || addresses.length === 0) {
+    return [];
+  }
+
+  const walletBytecodes = buildWalletBytecodeMap(addresses);
+  if (walletBytecodes.size === 0) {
+    return [];
+  }
+
+  const pendingTokenUtxos: UTXO[] = [];
+
+  for (const record of activeRecords) {
+    if (record.state === 'broadcasting') continue;
+
+    const decoded = decodeTransaction(hexToBin(record.rawTx));
+    if (typeof decoded === 'string') continue;
+
+    decoded.outputs.forEach((output, outputIndex) => {
+      const lockingBytecodeHex = binToHex(output.lockingBytecode);
+      const address = walletBytecodes.get(lockingBytecodeHex);
+      if (!address) return;
+
+      const token = decodedOutputToToken(output);
+      if (!token) return;
+
+      pendingTokenUtxos.push({
+        id: `${record.txid}:${outputIndex}`,
+        tx_hash: record.txid,
+        tx_pos: outputIndex,
+        value: Number(output.valueSatoshis ?? 0n),
+        amount: Number(output.valueSatoshis ?? 0n),
+        address,
+        height: 0,
+        prefix: getPrefix(),
+        token,
+        wallet_id: walletId,
+      });
+    });
+  }
+
+  return pendingTokenUtxos;
 }
 
 async function hasElectrumBatchUsage(
@@ -90,6 +178,42 @@ async function enrichCachedTokenMetadata(
   }
 }
 
+function mergeKnownTokenData(
+  fetchedUtxos: UTXO[],
+  existingUtxos: UTXO[] = []
+): UTXO[] {
+  if (fetchedUtxos.length === 0 || existingUtxos.length === 0) {
+    return fetchedUtxos;
+  }
+
+  const existingByOutpoint = new Map(
+    existingUtxos.map((utxo) => [`${utxo.tx_hash}:${utxo.tx_pos}`, utxo] as const)
+  );
+
+  return fetchedUtxos.map((utxo) => {
+    const existing = existingByOutpoint.get(`${utxo.tx_hash}:${utxo.tx_pos}`);
+    if (!existing?.token) return utxo;
+
+    if (!utxo.token) {
+      return {
+        ...utxo,
+        token: existing.token,
+      };
+    }
+
+    return {
+      ...utxo,
+      token: {
+        ...existing.token,
+        ...utxo.token,
+        nft: utxo.token.nft ?? existing.token.nft,
+        BcmrTokenMetadata:
+          utxo.token.BcmrTokenMetadata ?? existing.token.BcmrTokenMetadata,
+      },
+    };
+  });
+}
+
 const UTXOService = {
   async fetchAndStoreUTXOs(walletId: number, address: string): Promise<UTXO[]> {
     try {
@@ -151,7 +275,13 @@ const UTXOService = {
           continue;
         }
 
-        formattedByAddress[address] = fetchedUTXOs.map((utxo: UTXO) => ({
+        const previousUtxos = [
+          ...(existingSnapshot.utxosMap[address] ?? []),
+          ...(existingSnapshot.cashTokenUtxosMap[address] ?? []),
+        ];
+        const mergedUTXOs = mergeKnownTokenData(fetchedUTXOs, previousUtxos);
+
+        formattedByAddress[address] = mergedUTXOs.map((utxo: UTXO) => ({
           id: `${utxo.tx_hash}:${utxo.tx_pos}`,
           tx_hash: utxo.tx_hash,
           tx_pos: utxo.tx_pos,
@@ -169,7 +299,7 @@ const UTXOService = {
       await manager.replaceWalletAddressUTXOs(walletId, formattedByAddress);
 
       const dbService = DatabaseService();
-      if (Capacitor.getPlatform() === 'web') {
+      if (isWebPlatform()) {
         await dbService.flushDatabaseToFile();
       } else {
         dbService.scheduleDatabaseSave();
@@ -214,9 +344,28 @@ const UTXOService = {
 
       const { utxosMap, cashTokenUtxosMap } =
         await manager.fetchUTXOsFromDatabase(addrs, walletId);
+      const allDbUtxos = Object.values(utxosMap).flat().filter((u) => !u.token);
+      const dbTokenUtxos = Object.values(cashTokenUtxosMap).flat();
+      const pendingTokenUtxos = await collectPendingOutboundTokenUtxos(
+        walletId,
+        addrs.map((entry) => entry.address)
+      );
 
-      const allUtxos = Object.values(utxosMap).flat().filter((u) => !u.token);
-      const tokenUtxos = Object.values(cashTokenUtxosMap).flat();
+      const pendingTokenOutpoints = new Set(
+        pendingTokenUtxos.map((utxo) => outpointKey(utxo))
+      );
+      const allUtxos = allDbUtxos.filter(
+        (utxo) => !pendingTokenOutpoints.has(outpointKey(utxo))
+      );
+      const tokenUtxos = [...dbTokenUtxos, ...pendingTokenUtxos].reduce<UTXO[]>(
+        (acc, utxo) => {
+          if (!acc.some((existing) => outpointKey(existing) === outpointKey(utxo))) {
+            acc.push(utxo);
+          }
+          return acc;
+        },
+        []
+      );
 
       return { allUtxos, tokenUtxos };
     } catch (e) {
