@@ -1,17 +1,19 @@
 import { Contract, Utxo, ElectrumNetworkProvider, SignatureTemplate } from 'cashscript';
 import { hexToBin, binToHex, bigIntToVmNumber, cashAddressToLockingBytecode, decodeTransaction } from '@bitauth/libauth';
 import { AddressCashStarter, AddressTokensCashStarter, AddressTokensCashStarterManager, MasterCategoryID } from './values'
+import type {
+  FundMeElectrumClient,
+  WalletConnectSignedTransaction,
+  WalletConnectTransactionRequest,
+} from './walletConnectTypes';
 
 interface ManagerInitializeParams {
-  electrumServer: ElectrumNetworkProvider | undefined;
+  electrumServer: FundMeElectrumClient | undefined;
   usersAddress: string;
   contractManager: Contract | undefined;
-  signTransaction: (options: {
-    transaction: unknown;
-    sourceOutputs: unknown[];
-    broadcast: boolean;
-    userPrompt: string;
-  }) => Promise<unknown>;
+  signTransaction: (
+    options: WalletConnectTransactionRequest
+  ) => Promise<WalletConnectSignedTransaction | undefined>;
   pubkeyhash: string;
   fundTarget: string;
   endBlock: string;
@@ -36,7 +38,7 @@ function requireToken(utxo: Utxo, context: string): UtxoTokenWithNft {
   return utxo.token as UtxoTokenWithNft;
 }
 
-async function managerInitialize({ electrumServer, usersAddress, contractManager, signTransaction, pubkeyhash, fundTarget, endBlock, setError }: ManagerInitializeParams) {
+async function managerInitialize({ electrumServer, usersAddress, contractManager, signTransaction, pubkeyhash, fundTarget, endBlock, setError }: ManagerInitializeParams): Promise<{ signResult: WalletConnectSignedTransaction | undefined; newCampaignID: number } | undefined> {
 
   function toLittleEndianHexString(number: bigint, byteCount: number) {
     let hex = number.toString(16);
