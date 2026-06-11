@@ -749,18 +749,35 @@ const MintCashTokensPoCApp: React.FC = () => {
 
             const submitted = sent.broadcastState === 'submitted';
             closeConfirm();
-            await runSmoothReset(async () => {
-              await refreshWalletSnapshot(true);
-              resetMintComposer();
-            });
             setTxid(sentTxid);
             setStatus(
               submitted
-                ? 'Category UTXO submitted. Keep the txid and avoid sending it again.'
-                : 'Category UTXO created. Returned to the start screen.'
+                ? 'Category UTXO submitted. Refreshing wallet data...'
+                : 'Category UTXO created. Refreshing wallet data...'
             );
             showToast(
               submitted ? 'Category UTXO submitted' : 'Category UTXO created'
+            );
+
+            let refreshFailed = false;
+            try {
+              await refreshWalletSnapshot(true);
+            } catch (refreshError) {
+              refreshFailed = true;
+              console.error(refreshError);
+            }
+
+            await runSmoothReset(async () => {
+              resetMintComposer();
+            });
+            setStatus(
+              refreshFailed
+                ? submitted
+                  ? 'Category UTXO submitted. Wallet refresh failed; keep the txid and refresh manually.'
+                  : 'Category UTXO created. Wallet refresh failed; refresh manually.'
+                : submitted
+                  ? 'Category UTXO submitted. Keep the txid and avoid sending it again.'
+                  : 'Category UTXO created. Returned to the start screen.'
             );
           } finally {
             setConfirmLoading(false);
@@ -875,17 +892,34 @@ const MintCashTokensPoCApp: React.FC = () => {
               throw new Error(sent?.errorMessage || 'Broadcast failed.');
             const submitted = sent.broadcastState === 'submitted';
             closeConfirm();
-            await runSmoothReset(async () => {
-              await refreshWalletSnapshot(true);
-              resetMintComposer();
-            });
             setTxid(sentTxid);
             setStatus(
               submitted
-                ? 'Mint transaction submitted. Keep the txid and avoid sending it again.'
-                : 'Mint successful. Returned to the start screen.'
+                ? 'Mint transaction submitted. Refreshing wallet data...'
+                : 'Mint successful. Refreshing wallet data...'
             );
             showToast(submitted ? 'Transaction submitted' : 'Broadcasted');
+
+            let refreshFailed = false;
+            try {
+              await refreshWalletSnapshot(true);
+            } catch (refreshError) {
+              refreshFailed = true;
+              console.error(refreshError);
+            }
+
+            await runSmoothReset(async () => {
+              resetMintComposer();
+            });
+            setStatus(
+              refreshFailed
+                ? submitted
+                  ? 'Mint transaction submitted. Wallet refresh failed; keep the txid and refresh manually.'
+                  : 'Mint successful. Wallet refresh failed; refresh manually.'
+                : submitted
+                  ? 'Mint transaction submitted. Keep the txid and avoid sending it again.'
+                  : 'Mint successful. Returned to the start screen.'
+            );
           } finally {
             setConfirmLoading(false);
           }

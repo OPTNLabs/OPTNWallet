@@ -2,7 +2,7 @@ import type { ReactNode } from 'react';
 import type { AddonAppDefinition, AddonManifest } from '../../types/addons';
 import type { AddonSDK } from '../../services/AddonsSDK';
 import AuthGuardApp from './patient0/AuthGuardApp';
-import AirdropsApp from './event-rewards/EventRewardsApp';
+import AirdropsApp from './airdrops/AirdropsApp';
 import FundMeAddonApp from './fundme/FundMeAddonApp';
 import MemoCashReaderApp from './memo-cash-reader/MemoCashReaderApp';
 import CauldronSwapApp from './cauldron/CauldronSwapApp';
@@ -39,9 +39,10 @@ export function renderDeclarativeScreen(params: {
     case 'memoCashReaderApp':
       return <MemoCashReaderApp sdk={sdk} />;
 
-    case 'EventRewardsApp':
     case 'AirdropsApp':
+    case 'EventRewardsApp':
     case 'eventRewardsApp':
+    case 'airdropsApp':
       return (
         <AirdropsApp
           manifest={resolved.manifest}

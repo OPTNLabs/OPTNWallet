@@ -2,6 +2,11 @@ import KeyService from './KeyService';
 import { logError } from '../utils/errorHandling';
 import { Network } from '../state/slices/networkSlice';
 import { deriveBchAddressFromHdPublicKey } from './HdWalletService';
+import {
+  getLocalStorage,
+  readStorageItem,
+  writeStorageItem,
+} from '../utils/browserStorage';
 
 const ADDRESS_BATCH_SIZE = 10;
 const MAX_BATCHES_PER_PASS = 3;
@@ -30,7 +35,7 @@ function stateKey(walletId: number): string {
 
 function readState(): WalletDiscoveryState {
   try {
-    const raw = globalThis.localStorage?.getItem(STORAGE_KEY);
+    const raw = readStorageItem(getLocalStorage(), STORAGE_KEY);
     if (!raw) return {};
     const parsed = JSON.parse(raw) as WalletDiscoveryState;
     return parsed && typeof parsed === 'object' ? parsed : {};
@@ -41,7 +46,7 @@ function readState(): WalletDiscoveryState {
 
 function writeState(state: WalletDiscoveryState): void {
   try {
-    globalThis.localStorage?.setItem(STORAGE_KEY, JSON.stringify(state));
+    writeStorageItem(getLocalStorage(), STORAGE_KEY, JSON.stringify(state));
   } catch {
     // best effort
   }

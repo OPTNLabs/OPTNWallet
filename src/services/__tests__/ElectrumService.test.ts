@@ -129,6 +129,23 @@ describe('ElectrumService', () => {
     );
   });
 
+  it('getUTXOsMany omits addresses that fail without a usable response', async () => {
+    const server = {
+      requestMany: vi.fn(async () => [new Error('temporary failure')]),
+      subscribe: vi.fn(async () => {}),
+      unsubscribe: vi.fn(async () => {}),
+      onNotification: vi.fn(() => () => {}),
+    };
+
+    mockedElectrumServer.mockReturnValue(server as never);
+
+    const address = 'bitcoincash:qfail';
+    const result = await ElectrumService.getUTXOsMany([address]);
+
+    expect(result).not.toHaveProperty(address);
+    expect(server.requestMany).toHaveBeenCalledTimes(1);
+  });
+
   it('primeUTXOCache seeds cache used by getUTXOs', async () => {
     const server = {
       request: vi.fn(async () => []),
@@ -151,6 +168,41 @@ describe('ElectrumService', () => {
 
     const res = await ElectrumService.getUTXOs('bitcoincash:qcached');
     expect(res).toHaveLength(1);
+    expect(server.request).not.toHaveBeenCalled();
+  });
+
+  it('reconnect preserves cached UTXOs so transient failures do not blank the UI', async () => {
+    const server = {
+      electrumReconnect: vi.fn(async () => undefined),
+      request: vi.fn(async () => []),
+      subscribe: vi.fn(async () => {}),
+      unsubscribe: vi.fn(async () => {}),
+      onNotification: vi.fn(() => () => {}),
+    };
+
+    mockedElectrumServer.mockReturnValue(server as never);
+
+    primeUTXOCache('bitcoincash:qstable', [
+      {
+        address: 'bitcoincash:qstable',
+        height: 0,
+        tx_hash: 'd'.repeat(64),
+        tx_pos: 2,
+        value: 1000,
+      },
+    ]);
+
+    await ElectrumService.reconnect();
+    const res = await ElectrumService.getUTXOs('bitcoincash:qstable');
+
+    expect(server.electrumReconnect).toHaveBeenCalledTimes(1);
+    expect(res).toHaveLength(1);
+    expect(res[0]).toMatchObject({
+      address: 'bitcoincash:qstable',
+      tx_hash: 'd'.repeat(64),
+      tx_pos: 2,
+      value: 1000,
+    });
     expect(server.request).not.toHaveBeenCalled();
   });
 

@@ -9,6 +9,11 @@ import { ElectrumWebSocket } from '@electrum-cash/web-socket';
 import {
   getElectrumServers,
 } from '../../utils/servers/ElectrumServers';
+import {
+  getPreferredStorage,
+  readStorageItem,
+  writeStorageItem,
+} from '../../utils/browserStorage';
 import { store } from '../../state/store';
 import { selectCurrentNetwork } from '../../state/selectors/networkSelectors';
 import { Network } from '../../state/slices/networkSlice';
@@ -20,6 +25,8 @@ const BACKOFF_BASE_MS = 3000;
 const BACKOFF_MAX_MS = 60000;
 const WSS_PORT = 50004;
 const IDLE_RECONNECT_AFTER_MS = 5 * 60 * 1000;
+const SERVER_FAILURE_COOLDOWN_MS = 15 * 60 * 1000;
+const LAST_HEALTHY_SERVER_STORAGE_KEY = 'optn.electrum.last-healthy-server';
 
 // Convenience alias for a typed Electrum client
 type ECClient = ElectrumClient<ElectrumClientEvents>;
@@ -36,6 +43,7 @@ let serverIndex = 0;
 let backoffMs = BACKOFF_BASE_MS;
 let nextAllowedConnectTs = 0;
 let lastSuccessfulActivityTs = 0;
+let currentServer: string | null = null;
 
 // Make sure we only wire 'notification' once per client instance
 let notificationsWired = false;
@@ -49,12 +57,40 @@ const notificationHandlers = new Set<NotificationHandler>();
 // We key by method + JSON.stringify(params)
 type SubEntry = { method: string; params?: ElectrumParams };
 const activeSubs = new Map<string, SubEntry>();
+const blockedServers = new Map<string, number>();
 
 function getNetworkAndServers(): { network: Network; servers: string[] } {
   const state = store.getState();
   const network = selectCurrentNetwork(state);
   const servers = getElectrumServers(network);
   return { network, servers };
+}
+
+function getLastHealthyServer(): string | null {
+  return readStorageItem(getPreferredStorage(), LAST_HEALTHY_SERVER_STORAGE_KEY);
+}
+
+function setLastHealthyServer(server: string): void {
+  writeStorageItem(getPreferredStorage(), LAST_HEALTHY_SERVER_STORAGE_KEY, server);
+}
+
+function getBlockedUntil(server: string): number | undefined {
+  const blockedUntil = blockedServers.get(server);
+  if (!blockedUntil) return undefined;
+  if (Date.now() >= blockedUntil) {
+    blockedServers.delete(server);
+    return undefined;
+  }
+  return blockedUntil;
+}
+
+function isServerBlocked(server: string): boolean {
+  return getBlockedUntil(server) !== undefined;
+}
+
+function markServerFailed(server?: string | null): void {
+  if (!server) return;
+  blockedServers.set(server, Date.now() + SERVER_FAILURE_COOLDOWN_MS);
 }
 
 function withTimeout<T>(
@@ -112,6 +148,34 @@ function getNextServer(servers: string[], currentIdx: number): string | undefine
   const idx =
     currentIdx >= 0 && currentIdx < servers.length ? currentIdx : 0;
   return servers[(idx + 1) % servers.length];
+}
+
+function getPreferredServer(servers: string[]): string | undefined {
+  if (servers.length === 0) return undefined;
+  const lastHealthy = getLastHealthyServer();
+  if (lastHealthy && servers.includes(lastHealthy) && !isServerBlocked(lastHealthy)) {
+    return lastHealthy;
+  }
+  const firstAvailable = servers.find((server) => !isServerBlocked(server));
+  return firstAvailable ?? servers[0];
+}
+
+function rotateFromIndex<T>(arr: T[], start: number): T[] {
+  if (!arr.length) return arr;
+  const idx = ((start % arr.length) + arr.length) % arr.length;
+  return [...arr.slice(idx), ...arr.slice(0, idx)];
+}
+
+function orderServersForConnection(
+  servers: string[],
+  startIdx: number
+): string[] {
+  const rotated = rotateFromIndex(servers, startIdx);
+  const available = rotated.filter((server) => !isServerBlocked(server));
+  if (available.length === 0) {
+    return rotated;
+  }
+  return [...available, ...rotated.filter((server) => isServerBlocked(server))];
 }
 
 function buildBatchMessage(
@@ -255,16 +319,23 @@ export default function ElectrumServer() {
     if (customServer) {
       const idx = servers.indexOf(customServer);
       startIdx = idx >= 0 ? idx : serverIndex;
+    } else {
+      const preferred = getPreferredServer(servers);
+      if (preferred) {
+        const preferredIdx = servers.indexOf(preferred);
+        startIdx = preferredIdx >= 0 ? preferredIdx : serverIndex;
+      }
     }
     const tryOrder = [
       ...servers.slice(startIdx),
       ...servers.slice(0, startIdx),
     ];
+    const orderedServers = orderServersForConnection(tryOrder, 0);
 
     connectPromise = (async () => {
       try {
-        for (let i = 0; i < tryOrder.length; i++) {
-          const host = tryOrder[i];
+        for (let i = 0; i < orderedServers.length; i++) {
+          const host = orderedServers[i];
           const { host: h, port, encrypted } = parseServerEntry(host, WSS_PORT);
           const socket = new ElectrumWebSocket(
             h,
@@ -285,7 +356,9 @@ export default function ElectrumServer() {
               `connect(${host})`
             );
             electrum = client;
+            currentServer = host;
             serverIndex = servers.indexOf(host);
+            setLastHealthyServer(host);
             resetBackoff();
             markSuccessfulActivity();
 
@@ -296,6 +369,7 @@ export default function ElectrumServer() {
 
             return electrum!;
           } catch {
+            markServerFailed(host);
             try {
               await client.disconnect(true);
             } catch {
@@ -322,6 +396,7 @@ export default function ElectrumServer() {
         /* ignore */
       }
       electrum = null;
+      currentServer = null;
       notificationsWired = false;
       return true;
     }
@@ -346,6 +421,7 @@ export default function ElectrumServer() {
       if (res instanceof Error) throw res;
       markSuccessfulActivity();
     } catch {
+      markServerFailed(currentServer ?? getLastHealthyServer());
       await electrumDisconnect();
       await electrumConnect();
     }
@@ -366,10 +442,18 @@ export default function ElectrumServer() {
       markSuccessfulActivity();
       return res;
     } catch (err) {
+      markServerFailed(currentServer ?? getLastHealthyServer());
       const { servers } = getNetworkAndServers();
       const nextServer = getNextServer(servers, serverIndex);
       await electrumDisconnect();
-      await electrumConnect(nextServer); // may throw if backoff is active
+      try {
+        await electrumConnect(nextServer);
+      } catch {
+        throw err;
+      }
+      if (!electrum) {
+        throw err;
+      }
       const res = await withTimeout(
         electrum.request(method, ...params),
         REQUEST_TIMEOUT_MS,
@@ -394,11 +478,19 @@ export default function ElectrumServer() {
         REQUEST_TIMEOUT_MS,
         `requestMany(${calls.length})`
       );
-    } catch {
+    } catch (err) {
+      markServerFailed(currentServer ?? getLastHealthyServer());
       const { servers } = getNetworkAndServers();
       const nextServer = getNextServer(servers, serverIndex);
       await electrumDisconnect();
-      await electrumConnect(nextServer);
+      try {
+        await electrumConnect(nextServer);
+      } catch {
+        throw err;
+      }
+      if (!electrum) {
+        throw err;
+      }
       return await withTimeout(
         sendBatch(electrum!, calls),
         REQUEST_TIMEOUT_MS,
@@ -434,14 +526,22 @@ export default function ElectrumServer() {
     };
 
     try {
-    await doSubscribe();
-    activeSubs.set(key, { method, params });
-    markSuccessfulActivity();
-  } catch {
+      await doSubscribe();
+      activeSubs.set(key, { method, params });
+      markSuccessfulActivity();
+    } catch (err) {
+      markServerFailed(currentServer ?? getLastHealthyServer());
       const { servers } = getNetworkAndServers();
       const nextServer = getNextServer(servers, serverIndex);
       await electrumDisconnect();
-      await electrumConnect(nextServer);
+      try {
+        await electrumConnect(nextServer);
+      } catch {
+        throw err;
+      }
+      if (!electrum) {
+        throw err;
+      }
       await doSubscribe();
       activeSubs.set(key, { method, params });
       markSuccessfulActivity();

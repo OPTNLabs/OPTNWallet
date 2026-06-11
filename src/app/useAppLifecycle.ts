@@ -10,8 +10,18 @@ import {
   stopUTXOWorker,
 } from '../workers/UTXOWorkerService';
 import { initWalletConnect } from '../state/slices/walletconnectSlice';
-import { initWizardConnect } from '../state/slices/wizardconnectSlice';
-import { clearNotifications, UtxoNotification } from '../state/slices/notificationsSlice';
+import {
+  initWizardConnect,
+  syncWizardConnections,
+} from '../state/slices/wizardconnectSlice';
+import {
+  checkAndDisconnectExpiredSessions,
+  syncWalletConnectSessions,
+} from '../state/slices/walletconnectSlice';
+import {
+  clearNotifications,
+  type AppNotification,
+} from '../state/slices/notificationsSlice';
 import { AppDispatch } from '../state/store';
 import {
   clearServerNotifications,
@@ -28,8 +38,10 @@ import WalletBackendSyncService from '../services/WalletBackendSyncService';
 import PlayUpdateService from '../services/PlayUpdateService';
 import { Dialog } from '@capacitor/dialog';
 import { ROUTE_PATHS } from '../navigation/routes';
+import BcmrService from '../services/BcmrService';
 
 let utxoWorkerStarted = false;
+let bcmrWarmupStarted = false;
 
 export function useWalletConnectInitialization(dispatch: AppDispatch) {
   useEffect(() => {
@@ -44,6 +56,109 @@ export function useWizardConnectInitialization(
   useEffect(() => {
     if (!walletId || walletId <= 0) return;
     dispatch(initWizardConnect(walletId));
+  }, [dispatch, walletId]);
+}
+
+export function useWalletConnectSessionWatch(
+  walletId: number | null,
+  dispatch: AppDispatch
+) {
+  const inFlight = useRef(false);
+
+  useEffect(() => {
+    if (!walletId || walletId <= 0) return;
+
+    let cancelled = false;
+
+    const reconcile = async () => {
+      if (cancelled || inFlight.current) return;
+      inFlight.current = true;
+      try {
+        await Promise.all([
+          dispatch(syncWalletConnectSessions()),
+          dispatch(checkAndDisconnectExpiredSessions()),
+        ]);
+      } finally {
+        inFlight.current = false;
+      }
+    };
+
+    const handleVisible = () => {
+      if (document.visibilityState === 'visible') {
+        void reconcile();
+      }
+    };
+    const handleOnline = () => {
+      void reconcile();
+    };
+
+    void reconcile();
+    window.addEventListener('focus', handleVisible);
+    window.addEventListener('online', handleOnline);
+    document.addEventListener('visibilitychange', handleVisible);
+    const interval = window.setInterval(() => {
+      if (document.visibilityState === 'visible') {
+        void reconcile();
+      }
+    }, 60_000);
+
+    return () => {
+      cancelled = true;
+      window.removeEventListener('focus', handleVisible);
+      window.removeEventListener('online', handleOnline);
+      document.removeEventListener('visibilitychange', handleVisible);
+      window.clearInterval(interval);
+    };
+  }, [dispatch, walletId]);
+}
+
+export function useWizardConnectSessionWatch(
+  walletId: number | null,
+  dispatch: AppDispatch
+) {
+  const inFlight = useRef(false);
+
+  useEffect(() => {
+    if (!walletId || walletId <= 0) return;
+
+    let cancelled = false;
+
+    const reconcile = async () => {
+      if (cancelled || inFlight.current) return;
+      inFlight.current = true;
+      try {
+        await dispatch(syncWizardConnections());
+      } finally {
+        inFlight.current = false;
+      }
+    };
+
+    const handleVisible = () => {
+      if (document.visibilityState === 'visible') {
+        void reconcile();
+      }
+    };
+    const handleOnline = () => {
+      void reconcile();
+    };
+
+    void reconcile();
+    window.addEventListener('focus', handleVisible);
+    window.addEventListener('online', handleOnline);
+    document.addEventListener('visibilitychange', handleVisible);
+    const interval = window.setInterval(() => {
+      if (document.visibilityState === 'visible') {
+        void reconcile();
+      }
+    }, 60_000);
+
+    return () => {
+      cancelled = true;
+      window.removeEventListener('focus', handleVisible);
+      window.removeEventListener('online', handleOnline);
+      document.removeEventListener('visibilitychange', handleVisible);
+      window.clearInterval(interval);
+    };
   }, [dispatch, walletId]);
 }
 
@@ -95,6 +210,22 @@ export function useWalletNetworkBootstrap(
   }, [dispatch, walletId]);
 
   return ready;
+}
+
+export function useNativeBcmrWarmup(walletId: number | null) {
+  useEffect(() => {
+    if (!Capacitor.isNativePlatform() || !walletId || walletId <= 0) {
+      return;
+    }
+
+    if (bcmrWarmupStarted) return;
+    bcmrWarmupStarted = true;
+
+    const service = new BcmrService();
+    void service.preloadMetadataRegistries().catch((error) => {
+      console.warn('BCMR warm-up failed:', error);
+    });
+  }, [walletId]);
 }
 
 export function useStatusBarSync() {
@@ -159,7 +290,7 @@ export function useLocalNotificationSetup() {
   }, []);
 }
 
-export function useUtxoQueueToOsNotifications(queue: UtxoNotification[]) {
+export function useUtxoQueueToOsNotifications(queue: AppNotification[]) {
   const notified = useRef<Set<string>>(new Set());
 
   useEffect(() => {
@@ -169,6 +300,7 @@ export function useUtxoQueueToOsNotifications(queue: UtxoNotification[]) {
 
     (async () => {
       for (const n of queue) {
+        if (n.kind !== 'utxo') continue;
         if (typeof n.height === 'number' && n.height > 0) continue;
         if (notified.current.has(n.id)) continue;
 

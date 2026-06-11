@@ -11,6 +11,7 @@ import TokenAvatar from '../../components/ui/TokenAvatar';
 import WalletScreen from '../../components/ui/WalletScreen';
 import {
   type AppsViewCategory,
+  compareAppsForBrowse,
   getAppCategory,
   getAppDescription,
   getAppIconFrame,
@@ -96,15 +97,7 @@ const AppsView = () => {
           setCards(
             out
               .filter((app) => !shouldHideApp(app.id, app.name))
-              .sort((left, right) => {
-                if (left.comingSoon !== right.comingSoon) {
-                  return left.comingSoon ? 1 : -1;
-                }
-                if (left.disabled !== right.disabled) {
-                  return left.disabled ? 1 : -1;
-                }
-                return left.name.localeCompare(right.name);
-              })
+              .sort(compareAppsForBrowse)
           );
         }
       } catch (e: unknown) {
@@ -205,7 +198,7 @@ const AppsView = () => {
                   }
                   icon={
                     app.id === 'optn.builtin.cauldron:cauldronSwapApp' ||
-                    app.id === 'optn.builtin.events:eventRewardsApp' ||
+                    app.id === 'optn.builtin.events:airdropsApp' ||
                     app.id === 'optn.wallet.contracts' ||
                     app.id === 'optn.wallet.quantumroot' ||
                     app.id === 'optn.builtin.fundme:fundmeApp' ? (

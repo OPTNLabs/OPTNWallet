@@ -68,7 +68,7 @@ export function getAppSortPriority(app: { id: string; name: string }): number {
   if (normalizedId.endsWith(':paperwalletsweepapp') || normalizedName === 'paper wallet') return 1;
   if (normalizedId.endsWith(':mintcashtokenspocapp') || normalizedName === 'mint tokens') return 0;
   if (normalizedName.includes('paryonusd')) return 1;
-  if (normalizedId.endsWith(':eventrewardsapp') || normalizedName === 'airdrops') return 0;
+  if (normalizedId.endsWith(':airdropsapp') || normalizedName === 'airdrops') return 0;
   if (normalizedId.endsWith(':fundmeapp') || normalizedName === 'fundme') return 0;
   if (normalizedId.endsWith(':cauldronswapapp') || normalizedName === 'cauldron') return 1;
   return 10;
@@ -76,6 +76,34 @@ export function getAppSortPriority(app: { id: string; name: string }): number {
 
 export function getAppCategoryPriority(category: AppsViewCategory): number {
   return APP_CATEGORY_ORDER[category] ?? 99;
+}
+
+function compareAsciiCaseInsensitive(left: string, right: string): number {
+  const a = normalizeAppKey(left);
+  const b = normalizeAppKey(right);
+  if (a === b) return 0;
+  return a < b ? -1 : 1;
+}
+
+export function compareAppsForBrowse(
+  left: {
+    comingSoon?: boolean;
+    disabled?: boolean;
+    name: string;
+  },
+  right: {
+    comingSoon?: boolean;
+    disabled?: boolean;
+    name: string;
+  }
+): number {
+  if (left.comingSoon !== right.comingSoon) {
+    return left.comingSoon ? 1 : -1;
+  }
+  if (left.disabled !== right.disabled) {
+    return left.disabled ? 1 : -1;
+  }
+  return compareAsciiCaseInsensitive(left.name, right.name);
 }
 
 export function getAppDescription(app: {

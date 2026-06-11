@@ -3,8 +3,8 @@ import { useLocation, useNavigate } from 'react-router-dom';
 import type { AddonSDK } from '../../../services/AddonsSDK';
 import type { AddonAppDefinition, AddonManifest } from '../../../types/addons';
 import SectionCard from '../../../components/ui/SectionCard';
-import DistributorScreen from './screens/DistributorScreen';
-import { useAirdropWalletInventory } from './hooks/useEventWalletInventory';
+import AirdropDistributionScreen from './screens/AirdropDistributionScreen';
+import { useAirdropWalletInventory } from './hooks/useAirdropWalletInventory';
 import type { AirdropWorkspace } from './types';
 import { getReturnPath } from '../../../utils/navigation';
 
@@ -67,7 +67,7 @@ const AirdropsApp: React.FC<AirdropsAppProps> = ({ sdk, app }) => {
           ) : null}
 
           {inventory.addresses[0]?.address ? (
-            <DistributorScreen
+            <AirdropDistributionScreen
               sdk={sdk}
               workspace={workspace}
               availableTokens={inventory.passes}

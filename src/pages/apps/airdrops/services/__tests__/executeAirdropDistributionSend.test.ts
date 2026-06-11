@@ -4,7 +4,7 @@ import type { AddonSDK } from '../../../../../services/AddonsSDK';
 import {
   buildApprovedDistributionTransaction,
   executeApprovedDistributionSend,
-} from '../executeDistributionSend';
+} from '../executeAirdropDistributionSend';
 import type { DistributionJobRecord } from '../../types';
 
 vi.mock('@bitauth/libauth', () => ({

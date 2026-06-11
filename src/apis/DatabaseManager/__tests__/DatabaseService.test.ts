@@ -1,5 +1,36 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+function createFakeDatabase(exportBytes: number[]) {
+  return class FakeDatabase {
+    version = 0;
+
+    prepare() {
+      return {
+        step: () => false,
+        getAsObject: () => ({}),
+        run: vi.fn(),
+        free: vi.fn(),
+      };
+    }
+
+    run(sql: string) {
+      const m = sql.match(/PRAGMA user_version = (\d+)/);
+      if (m) this.version = Number(m[1]);
+    }
+
+    exec(sql: string) {
+      if (sql.includes('PRAGMA user_version;')) {
+        return [{ values: [[this.version]] }];
+      }
+      return [];
+    }
+
+    export() {
+      return new Uint8Array(exportBytes);
+    }
+  };
+}
+
 describe('DatabaseService', () => {
   beforeEach(() => {
     vi.useFakeTimers();
@@ -44,25 +75,8 @@ describe('DatabaseService', () => {
       createTransactionDetailsTable,
     }));
 
-    class FakeDatabase {
-      version = 0;
-      run(sql: string) {
-        const m = sql.match(/PRAGMA user_version = (\d+)/);
-        if (m) this.version = Number(m[1]);
-      }
-      exec(sql: string) {
-        if (sql.includes('PRAGMA user_version;')) {
-          return [{ values: [[this.version]] }];
-        }
-        return [];
-      }
-      export() {
-        return new Uint8Array([1, 2, 3]);
-      }
-    }
-
     const initSqlJs = vi.fn(async () => ({
-      Database: FakeDatabase,
+      Database: createFakeDatabase([1, 2, 3]),
     }));
 
     vi.doMock('sql.js', () => ({
@@ -92,25 +106,8 @@ describe('DatabaseService', () => {
       createTransactionDetailsTable: vi.fn(),
     }));
 
-    class FakeDatabase {
-      version = 0;
-      run(sql: string) {
-        const m = sql.match(/PRAGMA user_version = (\d+)/);
-        if (m) this.version = Number(m[1]);
-      }
-      exec(sql: string) {
-        if (sql.includes('PRAGMA user_version;')) {
-          return [{ values: [[this.version]] }];
-        }
-        return [];
-      }
-      export() {
-        return new Uint8Array([9, 9, 9]);
-      }
-    }
-
     vi.doMock('sql.js', () => ({
-      default: vi.fn(async () => ({ Database: FakeDatabase })),
+      default: vi.fn(async () => ({ Database: createFakeDatabase([9, 9, 9]) })),
     }));
 
     const mod = await import('../DatabaseService');
@@ -142,25 +139,8 @@ describe('DatabaseService', () => {
       createTransactionDetailsTable: vi.fn(),
     }));
 
-    class FakeDatabase {
-      version = 0;
-      run(sql: string) {
-        const m = sql.match(/PRAGMA user_version = (\d+)/);
-        if (m) this.version = Number(m[1]);
-      }
-      exec(sql: string) {
-        if (sql.includes('PRAGMA user_version;')) {
-          return [{ values: [[this.version]] }];
-        }
-        return [];
-      }
-      export() {
-        return new Uint8Array([7, 7, 7]);
-      }
-    }
-
     vi.doMock('sql.js', () => ({
-      default: vi.fn(async () => ({ Database: FakeDatabase })),
+      default: vi.fn(async () => ({ Database: createFakeDatabase([7, 7, 7]) })),
     }));
 
     const mod = await import('../DatabaseService');
@@ -174,6 +154,39 @@ describe('DatabaseService', () => {
     expect(idbSet).toHaveBeenCalledTimes(1);
 
     await svc.flushDatabaseToFile();
+    expect(idbSet).toHaveBeenCalledTimes(2);
+  });
+
+  it('scheduleDatabaseSave works without a window global', async () => {
+    vi.unstubAllGlobals();
+    Reflect.deleteProperty(globalThis, 'window');
+
+    const idbGet = vi.fn(async () => null);
+    const idbSet = vi.fn(async () => {});
+
+    vi.doMock('idb-keyval', () => ({
+      get: idbGet,
+      set: idbSet,
+    }));
+
+    vi.doMock('../../../utils/schema/schema', () => ({
+      createTables: vi.fn(),
+      createTransactionDetailsTable: vi.fn(),
+    }));
+
+    vi.doMock('sql.js', () => ({
+      default: vi.fn(async () => ({ Database: createFakeDatabase([5, 5, 5]) })),
+    }));
+
+    const mod = await import('../DatabaseService');
+    const svc = mod.default();
+
+    await svc.startDatabase();
+    expect(idbSet).toHaveBeenCalledTimes(1);
+
+    svc.scheduleDatabaseSave();
+    await vi.advanceTimersByTimeAsync(500);
+
     expect(idbSet).toHaveBeenCalledTimes(2);
   });
 });
