@@ -2,19 +2,21 @@ import { Contract, Utxo, TransactionBuilder, ElectrumNetworkProvider, Network, U
 import { hexToBin, cashAddressToLockingBytecode, decodeTransaction, encodeCashAddress } from '@bitauth/libauth';
 import { AddressCashStarter, AddressCashStarterClaim, MasterCategoryID } from './values'
 import findUtxo from './findUtxo';
+import type {
+  FundMeElectrumClient,
+  WalletConnectSignedTransaction,
+  WalletConnectTransactionRequest,
+} from './walletConnectTypes';
 
 interface CashStarterClaimParams {
-  electrumServer: ElectrumNetworkProvider | undefined;
+  electrumServer: FundMeElectrumClient | undefined;
   usersAddress: string;
   contractCashStarter: Contract | undefined;
   contractCashStarterClaim: Contract | undefined;
   campaignID: string;
-  signTransaction: (options: {
-    transaction: unknown;
-    sourceOutputs: unknown[];
-    broadcast: boolean;
-    userPrompt: string;
-  }) => Promise<unknown>;
+  signTransaction: (
+    options: WalletConnectTransactionRequest
+  ) => Promise<WalletConnectSignedTransaction | undefined>;
   setError: (message: string) => void;
 }
 
@@ -28,7 +30,7 @@ function requireToken(utxo: Utxo, context: string): UtxoTokenWithNft {
   return utxo.token as UtxoTokenWithNft;
 }
 
-async function cashstarterClaim({ electrumServer, usersAddress, contractCashStarter, contractCashStarterClaim, campaignID, signTransaction, setError }: CashStarterClaimParams): Promise<unknown> {
+async function cashstarterClaim({ electrumServer, usersAddress, contractCashStarter, contractCashStarterClaim, campaignID, signTransaction, setError }: CashStarterClaimParams): Promise<WalletConnectSignedTransaction | undefined> {
   
   function LEtoBE(hexLE: string) {
     // Convert the hex string from little-endian to big-endian
@@ -134,15 +136,11 @@ async function cashstarterClaim({ electrumServer, usersAddress, contractCashStar
 
       const payoutAddressLE = campaignCommitment.substring(12,52);
       const payoutAddressBE = LEtoBE(payoutAddressLE);
-      const encoded = encodeCashAddress(
-        'bitcoincash',
-        'p2pkh',
-        hexToUint8Array(payoutAddressBE)
-      );
-      if (typeof encoded === 'string') {
-        throw new Error(`Failed to encode payout address: ${encoded}`);
-      }
-      payoutAddress = encoded.address;
+      payoutAddress = encodeCashAddress({
+        prefix: 'bitcoincash',
+        type: 'p2pkh',
+        payload: hexToUint8Array(payoutAddressBE),
+      }).address;
       console.log('extracted payoutAddress: ', payoutAddress);
     }
 
