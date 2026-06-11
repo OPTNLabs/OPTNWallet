@@ -95,13 +95,6 @@ const Assets: React.FC = () => {
         return;
       }
 
-      if (walletAddresses.length === 0) {
-        // Keep the last known token rows visible while the refreshed address
-        // list is still loading. Clearing here makes token holdings appear to
-        // disappear on every reload before the DB snapshot is restored.
-        return;
-      }
-
       try {
         await UTXOService.fetchAndStoreUTXOsMany(
           currentWalletId,
