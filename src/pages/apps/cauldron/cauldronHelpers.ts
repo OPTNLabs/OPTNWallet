@@ -690,7 +690,9 @@ export async function fetchWalletCreatedCauldronPools(
   const tokenIds = [...new Set(candidates.map((candidate) => candidate.tokenCategory))];
   const pools = new Map<string, CauldronPool>();
   const rowsByToken = await Promise.allSettled(
-    tokenIds.map((tokenId) => fetchNormalizedCauldronPools(network, apiClient, tokenId))
+    tokenIds.map((tokenId) =>
+      fetchNormalizedCauldronPools(network as Network, apiClient, tokenId)
+    )
   );
   for (const settled of rowsByToken) {
     if (settled.status !== 'fulfilled') continue;

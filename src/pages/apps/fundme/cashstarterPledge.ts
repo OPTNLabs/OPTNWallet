@@ -1,21 +1,23 @@
-import { Contract, Utxo, ElectrumNetworkProvider, SignatureTemplate } from 'cashscript';
+import { Contract, Utxo, SignatureTemplate } from 'cashscript';
 import { hexToBin, cashAddressToLockingBytecode, decodeTransaction } from '@bitauth/libauth';
 import { AddressCashStarter, AddressTokensCashStarter, MasterCategoryID } from './values'
 import toTokenAddress from "./toTokenAddress"
+import type {
+  FundMeElectrumClient,
+  WalletConnectSignedTransaction,
+  WalletConnectTransactionRequest,
+} from './walletConnectTypes';
 
 interface CashStarterPledgeParams {
-  electrumServer: ElectrumNetworkProvider | undefined;
+  electrumServer: FundMeElectrumClient | undefined;
   usersAddress: string;
   contractCashStarter: Contract | undefined;
   campaignID: string;
   pledgeID: string;
   pledgeAmount: bigint;
-  signTransaction: (options: {
-    transaction: unknown;
-    sourceOutputs: unknown[];
-    broadcast: boolean;
-    userPrompt: string;
-  }) => Promise<unknown>;
+  signTransaction: (
+    options: WalletConnectTransactionRequest
+  ) => Promise<WalletConnectSignedTransaction | undefined>;
   setError: (message: string) => void;
   setGotConsolidateError: React.Dispatch<React.SetStateAction<boolean>>;
 }
@@ -38,7 +40,7 @@ function requireToken(utxo: Utxo, context: string): UtxoTokenWithNft {
   return utxo.token as UtxoTokenWithNft;
 }
 
-async function cashstarterPledge({ electrumServer, usersAddress, contractCashStarter, campaignID, pledgeID, pledgeAmount, signTransaction, setError, setGotConsolidateError }: CashStarterPledgeParams) {
+async function cashstarterPledge({ electrumServer, usersAddress, contractCashStarter, campaignID, pledgeID, pledgeAmount, signTransaction, setError, setGotConsolidateError }: CashStarterPledgeParams): Promise<WalletConnectSignedTransaction | undefined> {
   
   function toLittleEndianHexString(number: bigint, byteCount: number) {
     let hex = number.toString(16);
@@ -183,9 +185,9 @@ async function cashstarterPledge({ electrumServer, usersAddress, contractCashSta
     const usersTokenAddress = String(toTokenAddress(usersAddress));
     const newCampaignTotal = campaignUTXO.satoshis + (pledgeAmount);
 
-    let transaction: ReturnType<Contract['unlock']['pledge']> | undefined;
+    let transaction: any;
     try {
-      transaction = contractCashStarter.unlock.pledge(pledgeAmount)                      
+      transaction = (contractCashStarter.unlock.pledge(pledgeAmount) as any)
         .from(campaignUTXO)                                                        // contractUTXO utxo
         .fromP2PKH(userUTXO, userSig)                                              // used for privtekey signing
         .to(AddressTokensCashStarter, newCampaignTotal, campaignNFTDetails)        // send output0 back to contracts address with pledge minus miner fee

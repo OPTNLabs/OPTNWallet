@@ -1,19 +1,21 @@
 import { Contract, Utxo, TransactionBuilder, ElectrumNetworkProvider, Network, Unlocker } from 'cashscript';
 import { hexToBin, cashAddressToLockingBytecode, decodeTransaction } from '@bitauth/libauth';
 import { AddressCashStarter, AddressTokensCashStarter, MasterCategoryID, AddressTokensCashStarterCancel } from './values'
+import type {
+  FundMeElectrumClient,
+  WalletConnectSignedTransaction,
+  WalletConnectTransactionRequest,
+} from './walletConnectTypes';
 
 interface CashStarterCancelParams {
-  electrumServer: ElectrumNetworkProvider | undefined;
+  electrumServer: FundMeElectrumClient | undefined;
   contractCashStarter: Contract | undefined;
   contractCashStarterCancel: Contract | undefined;
   campaignID: string;
   usersAddress: string;
-  signTransaction: (options: {
-    transaction: unknown;
-    sourceOutputs: unknown[];
-    broadcast: boolean;
-    userPrompt: string;
-  }) => Promise<unknown>;
+  signTransaction: (
+    options: WalletConnectTransactionRequest
+  ) => Promise<WalletConnectSignedTransaction | undefined>;
   setError: (message: string) => void;
 }
 
@@ -27,7 +29,7 @@ function requireToken(utxo: Utxo, context: string): UtxoTokenWithNft {
   return utxo.token as UtxoTokenWithNft;
 }
 
-async function cashstarterCancel({ electrumServer, contractCashStarter, contractCashStarterCancel, campaignID, usersAddress, signTransaction, setError }: CashStarterCancelParams) {
+async function cashstarterCancel({ electrumServer, contractCashStarter, contractCashStarterCancel, campaignID, usersAddress, signTransaction, setError }: CashStarterCancelParams): Promise<WalletConnectSignedTransaction | undefined> {
   
   if (electrumServer && contractCashStarter && contractCashStarterCancel) {
 
