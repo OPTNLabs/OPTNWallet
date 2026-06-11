@@ -15,6 +15,7 @@ import { sha256 } from '../utils/hash';
 import { DateTime } from 'luxon';
 import { Database } from 'sql.js';
 import { BcmrTokenMetadata } from '../types/types';
+import { isWebPlatform } from '../utils/platform';
 
 import { store } from '../state/store';
 import { Network } from '../state/slices/networkSlice';
@@ -236,7 +237,8 @@ export default class BcmrService {
    */
   private async storeSnapshot(
     authbase: string,
-    snapshot: IdentitySnapshot
+    snapshot: IdentitySnapshot,
+    registryInfo?: Pick<IdentityRegistry, 'registryHash' | 'registryUri' | 'lastFetch'>
   ): Promise<void> {
     const db = await this.getDb();
     const category = normalizeHexId(snapshot.token?.category || '');
@@ -257,11 +259,14 @@ export default class BcmrService {
     const extensions = snapshot.extensions
       ? JSON.stringify(snapshot.extensions)
       : null;
+    const lastFetch = registryInfo?.lastFetch ?? new Date().toISOString();
+    const registryUri = registryInfo?.registryUri ?? null;
+    const registryHash = registryInfo?.registryHash ?? null;
 
     const query = db.prepare(`
       INSERT OR REPLACE INTO bcmr_metadata (
-        category, name, description, decimals, symbol, is_nft, nfts, uris, extensions
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?);
+        category, name, description, decimals, symbol, is_nft, nfts, uris, extensions, lastFetch, registryUri, registryHash
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
     `);
     query.run([
       category,
@@ -273,6 +278,9 @@ export default class BcmrService {
       nfts,
       uris,
       extensions,
+      lastFetch,
+      registryUri,
+      registryHash,
     ]);
     query.free();
 
@@ -285,7 +293,8 @@ export default class BcmrService {
 
   private async storeRegistrySnapshots(
     authbase: string,
-    registry: MetadataRegistry
+    registry: MetadataRegistry,
+    registryInfo?: IdentityRegistry
   ): Promise<void> {
     if (!hasIdentityHistory(registry)) return;
 
@@ -294,7 +303,9 @@ export default class BcmrService {
       .filter((snapshot): snapshot is IdentitySnapshot => snapshot !== null);
 
     await Promise.all(
-      snapshots.map((snapshot) => this.storeSnapshot(authbase, snapshot))
+      snapshots.map((snapshot) =>
+        this.storeSnapshot(authbase, snapshot, registryInfo)
+      )
     );
   }
 
@@ -404,7 +415,11 @@ export default class BcmrService {
       REGISTRY_CACHE.set(authbase, diskEntry);
 
       try {
-        await this.storeRegistrySnapshots(authbase, diskEntry.registry);
+        await this.storeRegistrySnapshots(
+          authbase,
+          diskEntry.registry,
+          diskEntry
+        );
       } catch (err) {
         console.warn(
           `Failed to store snapshot for ${authbase} from disk:`,
@@ -449,7 +464,7 @@ export default class BcmrService {
     }
 
     try {
-      await this.storeRegistrySnapshots(authbase, fresh.registry);
+      await this.storeRegistrySnapshots(authbase, fresh.registry, fresh);
     } catch (err) {
       // console.warn(`Failed to store snapshot for ${authbase} from fetch:`, err);
     }
@@ -525,6 +540,9 @@ export default class BcmrService {
         extensions: row.extensions
           ? JSON.parse(row.extensions as string)
           : undefined,
+        lastFetch: (row.lastFetch as string | null) ?? null,
+        registryUri: (row.registryUri as string | null) ?? null,
+        registryHash: (row.registryHash as string | null) ?? null,
       };
     }
     query.free();
@@ -911,6 +929,10 @@ export default class BcmrService {
     authbase: string,
     uri: string
   ): Promise<void> {
+    if (isWebPlatform()) {
+      return;
+    }
+
     try {
       const uris = dedupeUrls([uri, ...this.getDefaultRegistryUris(authbase)]);
       await this.fetchAndCommitRegistry(authbase, uris);

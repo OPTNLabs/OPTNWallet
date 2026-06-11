@@ -1,6 +1,6 @@
 // src/services/priceService.ts
-import { Capacitor } from '@capacitor/core';
 import { CapacitorHttp } from '@capacitor/core';
+import { isWebPlatform } from '../utils/platform';
 
 /** ===== Types ===== */
 export type BaseSymbol = 'BTC' | 'BCH' | 'ETH';
@@ -43,10 +43,57 @@ const PRICE_SERVER_BASE = (
   'https://price.optnlabs.com'
 ).replace(/\/+$/, '');
 
-/** ===== Runtime detection ===== */
-const isWeb = Capacitor.getPlatform() === 'web';
-
 /** ===== HTTP helpers ===== */
+async function fetchJSON(
+  full: string,
+  {
+    headers,
+    timeoutMs = 8000,
+  }: {
+    headers?: Record<string, string>;
+    timeoutMs?: number;
+  } = {}
+): Promise<unknown> {
+  const ctrl = new AbortController();
+  const to = setTimeout(() => ctrl.abort(), timeoutMs);
+  try {
+    const res = await fetch(full, { headers, signal: ctrl.signal });
+    const json = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      const err = new Error(`HTTP ${res.status}`) as Error & {
+        status?: number;
+        body?: unknown;
+      };
+      err.status = res.status;
+      err.body = json;
+      throw err;
+    }
+    return json;
+  } finally {
+    clearTimeout(to);
+  }
+}
+
+async function capacitorHttpJSON(
+  full: string,
+  {
+    headers,
+    timeoutMs = 8000,
+  }: {
+    headers?: Record<string, string>;
+    timeoutMs?: number;
+  } = {}
+): Promise<unknown> {
+  return await Promise.race([
+    CapacitorHttp.get({ url: full, headers, params: undefined }).then(
+      (r) => r.data
+    ),
+    new Promise((_, rej) =>
+      setTimeout(() => rej(new Error('Timeout')), timeoutMs)
+    ),
+  ]);
+}
+
 async function httpGetJSON(
   url: string,
   {
@@ -70,36 +117,21 @@ async function httpGetJSON(
     : '';
   const full = url + qp;
 
-  if (!isWeb) {
-    // Native: CapacitorHttp + manual timeout race
-    return await Promise.race([
-      CapacitorHttp.get({ url: full, headers, params: undefined }).then(
-        (r) => r.data
-      ),
-      new Promise((_, rej) =>
-        setTimeout(() => rej(new Error('Timeout')), timeoutMs)
-      ),
-    ]);
-  }
-
-  // Web: fetch + AbortController
-  const ctrl = new AbortController();
-  const to = setTimeout(() => ctrl.abort(), timeoutMs);
   try {
-    const res = await fetch(full, { headers, signal: ctrl.signal });
-    const json = await res.json().catch(() => ({}));
-    if (!res.ok) {
-      const err = new Error(`HTTP ${res.status}`) as Error & {
-        status?: number;
-        body?: unknown;
-      };
-      err.status = res.status;
-      err.body = json;
-      throw err;
+    // Prefer the standard fetch path everywhere. The native webview can still
+    // use it once the API CORS allowlist includes the app origin.
+    return await fetchJSON(full, { headers, timeoutMs });
+  } catch (fetchError) {
+    // Fall back to CapacitorHttp on native builds so a webview/CORS issue does
+    // not completely block price loading.
+    if (!isWebPlatform()) {
+      try {
+        return await capacitorHttpJSON(full, { headers, timeoutMs });
+      } catch {
+        throw fetchError;
+      }
     }
-    return json;
-  } finally {
-    clearTimeout(to);
+    throw fetchError;
   }
 }
 

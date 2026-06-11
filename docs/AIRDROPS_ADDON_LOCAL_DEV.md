@@ -1,6 +1,6 @@
-# Event Addon Local Dev
+# Airdrops Addon Local Dev
 
-Use this setup when developing the event flows locally.
+Use this setup when developing the Airdrops flows locally.
 
 ## Services
 
@@ -24,15 +24,15 @@ npm run dev
 - backend: `http://127.0.0.1:8787`
 - wallet: `http://127.0.0.1:5173`
 
-## Event addon behavior in local dev
+## Airdrops addon behavior in local dev
 
-When OPTN Wallet runs under Vite dev mode, the built-in event addon defaults to:
+When OPTN Wallet runs under Vite dev mode, the built-in Airdrops addon defaults to:
 
 - `http://127.0.0.1:8787`
 
 No rebuild is required for this local backend target.
 
-You can still override the backend manually in the browser console:
+You can still override the backend manually in the browser console. The old `optn.eventRewards.apiBaseUrl` key is kept as a legacy compatibility alias:
 
 ```js
 localStorage.setItem('optn.eventRewards.apiBaseUrl', 'http://127.0.0.1:8787');

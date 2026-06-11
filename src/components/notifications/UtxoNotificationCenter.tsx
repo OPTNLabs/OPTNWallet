@@ -54,6 +54,18 @@ const UtxoNotificationCenter: React.FC = () => {
     >
       <div className="pointer-events-none flex max-h-[80vh] flex-col-reverse overflow-y-auto sm:items-end">
         {queue.map((n) => {
+          if (n.kind === 'walletconnect') {
+            return (
+              <ToastItem
+                key={n.id}
+                id={n.id}
+                title={n.title}
+                body={n.body}
+                onClose={onClose}
+              />
+            );
+          }
+
           const sats = n.value ?? 0;
           const pretty = new Intl.NumberFormat().format(sats);
           const shortAddr = `${n.address.slice(0, 8)}…${n.address.slice(-6)}`;

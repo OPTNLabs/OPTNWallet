@@ -1,9 +1,9 @@
 import { createAsyncThunk } from '@reduxjs/toolkit';
 import type { WalletKitTypes } from '@reown/walletkit';
 import { getSdkError } from '@walletconnect/utils';
-import { Toast } from '@capacitor/toast';
 import type { RootState } from '../../state/store';
 import KeyService from '../../services/KeyService';
+import { enqueueNotification } from '../../state/slices/notificationsSlice';
 import { SignedMessage } from '../../utils/signed';
 import { signWalletConnectTransactionRequest } from './signing';
 import {
@@ -43,8 +43,6 @@ export const rejectSessionProposal = createAsyncThunk(
     if (!walletKit || !proposal) {
       throw new Error('No walletKit or proposal to reject.');
     }
-    await Toast.show({ text: 'Rejecting session...' });
-
     await walletKit.rejectSession({
       id: proposal.id,
       reason: getSdkError('USER_REJECTED'),
@@ -60,7 +58,6 @@ export const wcPair = createAsyncThunk(
     const walletKit = state.walletconnect.web3wallet;
     if (!walletKit) throw new Error('WalletKit not ready');
     await walletKit.pair({ uri });
-    await Toast.show({ text: 'Paired. Waiting for proposal...' });
   }
 );
 
@@ -70,11 +67,68 @@ export const disconnectSession = createAsyncThunk(
     const state = getState() as RootState;
     const walletKit = state.walletconnect.web3wallet;
     if (!walletKit) throw new Error('WalletConnect not initialized');
-    await walletKit.disconnectSession({
-      topic,
-      reason: getSdkError('USER_DISCONNECTED'),
-    });
+
+    const activeSessions = state.walletconnect.activeSessions ?? {};
+    if (!activeSessions[topic]) {
+      return walletKit.getActiveSessions();
+    }
+
+    try {
+      await walletKit.disconnectSession({
+        topic,
+        reason: getSdkError('USER_DISCONNECTED'),
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      if (
+        message.includes('Missing or invalid. Record was recently deleted') ||
+        message.includes('session:')
+      ) {
+        return walletKit.getActiveSessions();
+      }
+      throw error;
+    }
     return walletKit.getActiveSessions();
+  }
+);
+
+export const syncWalletConnectSessions = createAsyncThunk(
+  'walletconnect/syncSessions',
+  async (_, { getState, dispatch }) => {
+    const state = getState() as RootState;
+    const walletKit = state.walletconnect.web3wallet;
+    const previousSessions = state.walletconnect.activeSessions ?? {};
+    if (!walletKit) return previousSessions;
+
+    const activeSessions = walletKit.getActiveSessions();
+    const staleTopics = Object.keys(previousSessions).filter(
+      (topic) => !activeSessions[topic]
+    );
+
+    for (const topic of staleTopics) {
+      const session = previousSessions[topic];
+      dispatch({
+        type: 'walletconnect/clearPendingSignMsgForTopic',
+        payload: topic,
+      });
+      dispatch({
+        type: 'walletconnect/clearPendingSignTxForTopic',
+        payload: topic,
+      });
+      dispatch(
+        enqueueNotification({
+          id: `walletconnect:session:sync:${topic}:${Date.now()}`,
+          kind: 'walletconnect',
+          title: 'WalletConnect session disconnected',
+          body: session?.peer?.metadata?.name
+            ? `Disconnected from ${session.peer.metadata.name}.`
+            : 'A WalletConnect session disconnected remotely or expired.',
+          createdAt: Date.now(),
+        })
+      );
+    }
+
+    return activeSessions;
   }
 );
 
