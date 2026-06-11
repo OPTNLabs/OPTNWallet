@@ -74,13 +74,6 @@ vi.mock('../../apis/DatabaseManager/DatabaseService', () => ({
   })),
 }));
 
-vi.mock('../../apis/DatabaseManager/DatabaseService', () => ({
-  default: vi.fn(() => ({
-    flushDatabaseToFile: flushDatabaseToFileMock,
-    scheduleDatabaseSave: scheduleDatabaseSaveMock,
-  })),
-}));
-
 vi.mock('../../apis/AddressManager/AddressManager', () => ({
   default: vi.fn(() => ({
     fetchTokenAddresses: fetchTokenAddressesMock,

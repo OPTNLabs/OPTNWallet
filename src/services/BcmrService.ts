@@ -7,7 +7,6 @@ import {
   // If you want base64 encoding later:
   // binToBase64,
 } from '@bitauth/libauth';
-import { Capacitor } from '@capacitor/core';
 import { Filesystem, Directory, Encoding } from '@capacitor/filesystem';
 import bcmrLocalJson from '../assets/bcmr-optn-local.json';
 import { ipfsFetch, resolveIpfsGatewayUrl } from '../utils/ipfs';
