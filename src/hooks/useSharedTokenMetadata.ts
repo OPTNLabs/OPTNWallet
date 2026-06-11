@@ -186,22 +186,6 @@ async function loadCachedTokenMetadata(
   return persisted;
 }
 
-function buildUnavailableMetadata(category: string): SharedTokenMetadata {
-  return {
-    status: 'ready',
-    freshness: 'unavailable',
-    name: category,
-    symbol: '',
-    decimals: 0,
-    iconUri: null,
-    snapshot: null,
-    isRefreshing: false,
-    lastFetch: null,
-    registryUri: null,
-    registryHash: null,
-  };
-}
-
 async function loadFreshTokenMetadata(
   category: string
 ): Promise<SharedTokenMetadata> {
