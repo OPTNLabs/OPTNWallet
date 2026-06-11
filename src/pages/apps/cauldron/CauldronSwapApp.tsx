@@ -3770,6 +3770,9 @@ const CauldronSwapApp: React.FC<CauldronSwapAppProps> = ({ sdk, app }) => {
         [...poolMap.values()],
         walletUtxos.tokenUtxos
       );
+      const liveUserPoolPositions = dedupeWalletPoolPositions(
+        userPools.map((pool) => poolToWalletPosition(pool))
+      );
       const createdPositions = dedupeWalletPoolPositions([
         ...walletCreatedPools.map((pool) => poolToWalletPosition(pool)),
         ...persistedCreatedPoolPositions,

@@ -26,7 +26,7 @@ type AuthGuardArtifactInput = {
 
 type AuthGuardArtifact = {
   constructorInputs?: AuthGuardArtifactInput[];
-  abi?: unknown[];
+  abi?: object[];
 };
 
 type AuthGuardContractShape = {
@@ -46,6 +46,8 @@ type AuthGuardToken = {
     commitment: string;
   };
 };
+
+const authGuardArtifact = AUTHGUARD_ARTIFACT as unknown as AuthGuardArtifact;
 
 type Props = {
   manifest: AddonManifest;
@@ -316,7 +318,7 @@ export default function AuthGuardApp({
         null;
       setSelected(pick ?? null);
     } catch (e: unknown) {
-      setBuildErr(e?.message ?? String(e));
+      setBuildErr(e instanceof Error ? e.message : String(e));
     } finally {
       setBusy(false);
     }
@@ -422,14 +424,14 @@ export default function AuthGuardApp({
     const net = currentNetwork();
     const provider = new ElectrumNetworkProvider(net);
 
-    const ctorInputs = (AUTHGUARD_ARTIFACT as AuthGuardArtifact)?.constructorInputs ?? [];
+    const ctorInputs = authGuardArtifact?.constructorInputs ?? [];
     if (!Array.isArray(ctorInputs) || ctorInputs.length !== 1) {
       throw new Error('AuthGuard artifact constructorInputs unexpected shape.');
     }
 
     const parsedArg = parseInputValue(`0x${tokenIdHex}`, ctorInputs[0].type);
 
-    const c = new Contract(AUTHGUARD_ARTIFACT as AuthGuardArtifact, [parsedArg], {
+    const c = new Contract(authGuardArtifact as any, [parsedArg], {
       provider,
       addressType: 'p2sh32',
     });
@@ -441,14 +443,14 @@ export default function AuthGuardApp({
     const net = currentNetwork();
     const provider = new ElectrumNetworkProvider(net);
 
-    const ctorInputs = (AUTHGUARD_ARTIFACT as AuthGuardArtifact)?.constructorInputs ?? [];
+    const ctorInputs = authGuardArtifact?.constructorInputs ?? [];
     if (!Array.isArray(ctorInputs) || ctorInputs.length !== 1) {
       throw new Error('AuthGuard artifact constructorInputs unexpected shape.');
     }
 
     const parsedArg = parseInputValue(`0x${tokenIdHex}`, ctorInputs[0].type);
 
-    const c = new Contract(AUTHGUARD_ARTIFACT as AuthGuardArtifact, [parsedArg], {
+    const c = new Contract(authGuardArtifact as any, [parsedArg], {
       provider,
       addressType: 'p2sh32',
     }) as unknown as AuthGuardContractShape;
@@ -461,18 +463,20 @@ export default function AuthGuardApp({
     const net = currentNetwork();
     const provider = new ElectrumNetworkProvider(net);
 
-    const ctorInputs = (AUTHGUARD_ARTIFACT as AuthGuardArtifact)?.constructorInputs ?? [];
+    const ctorInputs = authGuardArtifact?.constructorInputs ?? [];
     if (!Array.isArray(ctorInputs) || ctorInputs.length !== 1) {
       throw new Error('AuthGuard artifact constructorInputs unexpected shape.');
     }
 
     const parsedArg = parseInputValue(`0x${tokenIdHex}`, ctorInputs[0].type);
-    const c = new Contract(AUTHGUARD_ARTIFACT as AuthGuardArtifact, [parsedArg], {
+    const c = new Contract(authGuardArtifact as any, [parsedArg], {
       provider,
       addressType: 'p2sh32',
     }) as unknown as AuthGuardContractShape;
 
-    const candidates: Array<unknown> = [
+    const candidates: Array<
+      string | Uint8Array | number[] | { bytecode?: Uint8Array }
+    > = [
       c.lockingBytecode,
       c.lockingScript,
       typeof c.getLockingBytecode === 'function'
@@ -490,7 +494,12 @@ export default function AuthGuardApp({
     if (Array.isArray(first) && first.length && typeof first[0] === 'number') {
       return bytesToHex(Uint8Array.from(first));
     }
-    if (first?.bytecode instanceof Uint8Array)
+    if (
+      typeof first === 'object' &&
+      first !== null &&
+      'bytecode' in first &&
+      first.bytecode instanceof Uint8Array
+    )
       return bytesToHex(first.bytecode);
 
     throw new Error('Could not normalize AuthGuard locking bytecode.');
@@ -728,7 +737,7 @@ export default function AuthGuardApp({
           : `AuthKey minted: ${txid}. Returned to the start screen.`
       );
     } catch (e: unknown) {
-      setBuildErr(e?.message ?? String(e));
+      setBuildErr(e instanceof Error ? e.message : String(e));
       setStep0AStatus('');
     } finally {
       setBusy(false);
@@ -934,7 +943,7 @@ export default function AuthGuardApp({
           : `Mint complete: ${txid}. Returned to the start screen.`
       );
     } catch (e: unknown) {
-      setBuildErr(e?.message ?? String(e));
+      setBuildErr(e instanceof Error ? e.message : String(e));
       setStep0BStatus('');
     } finally {
       setBusy(false);
@@ -1038,7 +1047,7 @@ export default function AuthGuardApp({
           prefix: undefined,
           token,
           contractName: 'AuthGuard',
-          abi: (AUTHGUARD_ARTIFACT as AuthGuardArtifact).abi,
+          abi: authGuardArtifact.abi,
         };
 
         return out;
@@ -1057,7 +1066,7 @@ export default function AuthGuardApp({
       }
     } catch (e: unknown) {
       setAuthHeadStatus('');
-      setBuildErr(e?.message ?? String(e));
+      setBuildErr(e instanceof Error ? e.message : String(e));
     }
   }, [
     tokenId,
@@ -1101,7 +1110,7 @@ export default function AuthGuardApp({
       setBuildHex(res.hex || '');
       setBuildBytes(res.bytes || 0);
     } catch (e: unknown) {
-      setBuildErr(e?.message ?? String(e));
+      setBuildErr(e instanceof Error ? e.message : String(e));
     } finally {
       setBusy(false);
     }
@@ -1204,7 +1213,7 @@ export default function AuthGuardApp({
       const headInput: UTXO = {
         ...head,
         contractName: 'AuthGuard',
-        abi: (head as { abi?: unknown[] }).abi ?? (AUTHGUARD_ARTIFACT as AuthGuardArtifact).abi,
+        abi: (head as { abi?: object[] }).abi ?? authGuardArtifact.abi,
         contractFunction: 'unlockWithNft',
         contractConstructorArgs: [`0x${tokenIdNorm}`],
         contractFunctionInputs: { keepGuarded },
@@ -1223,7 +1232,7 @@ export default function AuthGuardApp({
       setBuildHex(res.hex || '');
       setBuildBytes(res.bytes || 0);
     } catch (e: unknown) {
-      setBuildErr(e?.message ?? String(e));
+      setBuildErr(e instanceof Error ? e.message : String(e));
     } finally {
       setBusy(false);
     }
@@ -1359,7 +1368,7 @@ export default function AuthGuardApp({
       setGenesisUtxo(u);
       setBuildErr('');
     } catch (e: unknown) {
-      setBuildErr(e?.message ?? String(e));
+      setBuildErr(e instanceof Error ? e.message : String(e));
     }
   }, []);
 
