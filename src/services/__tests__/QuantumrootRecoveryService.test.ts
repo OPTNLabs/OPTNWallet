@@ -33,8 +33,7 @@ const TEST_MNEMONIC =
   'abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about';
 
 const importedQuantumrootTemplate = importWalletTemplate(quantumrootTemplateJson);
-type QuantumrootCompiler = ReturnType<typeof createCompilerBCH>;
-type QuantumrootCompilationData = Parameters<QuantumrootCompiler['generateBytecode']>[0]['data'];
+type QuantumrootCompilationData = any;
 
 const toTemplateVaultTokenCategory = (category: string) =>
   `0x${swapEndianness(category.trim().replace(/^0x/i, '').toLowerCase())}`;
@@ -52,8 +51,8 @@ function instructionHasData(
   return 'data' in instruction && instruction.data !== undefined;
 }
 
-function getCompileErrors(result: { errors?: unknown }): unknown {
-  return result.errors;
+function getCompileErrors(result: unknown): unknown {
+  return (result as { errors?: unknown }).errors;
 }
 
 describe('QuantumrootRecoveryService', () => {

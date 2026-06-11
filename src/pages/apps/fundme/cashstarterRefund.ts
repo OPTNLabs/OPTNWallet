@@ -1,20 +1,22 @@
 import { Contract, Utxo, TransactionBuilder, ElectrumNetworkProvider, Network, Unlocker } from 'cashscript';
 import { hexToBin, cashAddressToLockingBytecode, decodeTransaction } from '@bitauth/libauth';
 import { AddressCashStarter, AddressTokensCashStarter, AddressCashStarterRefund, AddressTokensCashStarterRefund, MasterCategoryID } from './values'
+import type {
+  FundMeElectrumClient,
+  WalletConnectSignedTransaction,
+  WalletConnectTransactionRequest,
+} from './walletConnectTypes';
 
 interface CashStarterRefundParams {
-  electrumServer: ElectrumNetworkProvider | undefined;
+  electrumServer: FundMeElectrumClient | undefined;
   usersAddress: string;
   contractCashStarter: Contract | undefined;
   contractCashStarterRefund: Contract | undefined;
   campaignID: string;
   selectedNFT: Utxo;
-  signTransaction: (options: {
-    transaction: unknown;
-    sourceOutputs: unknown[];
-    broadcast: boolean;
-    userPrompt: string;
-  }) => Promise<unknown>;
+  signTransaction: (
+    options: WalletConnectTransactionRequest
+  ) => Promise<WalletConnectSignedTransaction | undefined>;
   setError: (message: string) => void;
 }
 
@@ -28,7 +30,7 @@ function requireToken(utxo: Utxo, context: string): UtxoTokenWithNft {
   return utxo.token as UtxoTokenWithNft;
 }
 
-async function cashstarterRefund({ electrumServer, usersAddress, contractCashStarter, contractCashStarterRefund, campaignID, selectedNFT, signTransaction, setError }: CashStarterRefundParams) {
+async function cashstarterRefund({ electrumServer, usersAddress, contractCashStarter, contractCashStarterRefund, campaignID, selectedNFT, signTransaction, setError }: CashStarterRefundParams): Promise<WalletConnectSignedTransaction | undefined> {
 
   function hexLEToBigInt(hexLE: string): bigint {
     // Convert the hex string from little-endian to big-endian
@@ -117,6 +119,8 @@ async function cashstarterRefund({ electrumServer, usersAddress, contractCashSta
     const refundSatoshis = hexLEToBigInt(selectedNFT.token?.nft?.commitment.substring(0,12) ?? "0");
     const newCampaignTotal = contractUTXO.satoshis - refundSatoshis;
     const provider = new ElectrumNetworkProvider(Network.MAINNET);
+    const refundToken = requireToken(refundUTXO, 'refundUTXO');
+    const contractToken = requireToken(contractUTXO, 'contractUTXO');
 
     const txDetails = await new TransactionBuilder({ provider });
     try {
@@ -185,8 +189,6 @@ async function cashstarterRefund({ electrumServer, usersAddress, contractCashSta
         alert("No suitable utxos found for minting. Try to consolidate your utxos!");
         throw ("No suitable utxos found for minting. Try to consolidate your utxos!");
       }
-      const refundToken = requireToken(refundUTXO, 'refundUTXO');
-      const contractToken = requireToken(contractUTXO, 'contractUTXO');
       const selectedToken = requireToken(selectedNFT, 'selectedNFT');
       decodedTransaction.inputs[2].unlockingBytecode = Uint8Array.from([]);
       console.log('decodedTransaction: ');
