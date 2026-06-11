@@ -1,15 +1,22 @@
 import { Unlocker, TransactionBuilder, ElectrumNetworkProvider, Network } from 'cashscript';
 import { hexToBin, cashAddressToLockingBytecode, decodeTransaction } from '@bitauth/libauth';
+import type {
+  FundMeElectrumClient,
+  WalletConnectSignedTransaction,
+  WalletConnectTransactionRequest,
+} from './walletConnectTypes';
 
 interface ConsolidateUTXOsParams {
-    electrumServer: ElectrumNetworkProvider | undefined;
+    electrumServer: FundMeElectrumClient | undefined;
     usersAddress: string;
     transactionBuilder: TransactionBuilder | undefined;
-    signTransaction: (options: { transaction: unknown; sourceOutputs: unknown[]; broadcast: boolean; userPrompt: string }) => Promise<unknown>;
+    signTransaction: (
+      options: WalletConnectTransactionRequest
+    ) => Promise<WalletConnectSignedTransaction | undefined>;
     setError: (message: string) => void;
   }
 
-async function consolidateUtxos({ electrumServer, usersAddress, transactionBuilder: _transactionBuilder, signTransaction, setError }: ConsolidateUTXOsParams) {
+async function consolidateUtxos({ electrumServer, usersAddress, transactionBuilder: _transactionBuilder, signTransaction, setError }: ConsolidateUTXOsParams): Promise<WalletConnectSignedTransaction | undefined> {
     void _transactionBuilder;
     const utxos = await electrumServer!.getUtxos(usersAddress);     // 1. Get UTXOs from user's address
     console.log('user utxos:');
