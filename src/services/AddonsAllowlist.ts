@@ -5,7 +5,7 @@ import {
   type AddonManifest,
   type AddonPermission,
 } from '../types/addons';
-import { Capacitor } from '@capacitor/core';
+import { isNativePlatform } from '../utils/platform';
 
 /**
  * Global allowlist for addon HTTP calls.
@@ -19,7 +19,6 @@ const ALLOWED_ADDON_HTTP_DOMAINS = new Set<string>([
   // 'bcmr.optnlabs.com',
   'chaingraph.optnlabs.com',
   'gql.chaingraph.pat.mn',
-  'events.optnlabs.com',
   'fundme.cash',
   'tokenindex.optnlabs.com',
 ]);
@@ -30,7 +29,7 @@ export function isDevEnvironment(): boolean {
 }
 
 export function isNativeRuntime(): boolean {
-  return Capacitor.isNativePlatform();
+  return isNativePlatform();
 }
 
 export function shouldExposeDevOnlyApps(): boolean {

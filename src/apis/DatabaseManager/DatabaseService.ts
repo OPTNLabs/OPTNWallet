@@ -15,7 +15,7 @@ import SecretCryptoService, {
 let db: Database | null = null;
 
 // ** Debounce state **
-let saveTimeout: number | null = null;
+let saveTimeout: ReturnType<typeof setTimeout> | null = null;
 let pendingSavePromise: Promise<void> | null = null;
 let resolvePendingSave: (() => void) | null = null;
 let firstQueuedSaveTs: number | null = null;
@@ -67,6 +67,25 @@ const migrations: Array<(db: Database) => Promise<void>> = [
         UNIQUE(wallet_id, account_index, address_index)
       );
     `);
+  },
+  async (db) => {
+    const columns = new Set<string>();
+    const statement = db.prepare('PRAGMA table_info(bcmr_metadata);');
+    while (statement.step()) {
+      const row = statement.getAsObject() as Record<string, unknown>;
+      if (typeof row.name === 'string') columns.add(row.name);
+    }
+    statement.free();
+
+    if (!columns.has('lastFetch')) {
+      db.run('ALTER TABLE bcmr_metadata ADD COLUMN lastFetch TEXT;');
+    }
+    if (!columns.has('registryUri')) {
+      db.run('ALTER TABLE bcmr_metadata ADD COLUMN registryUri TEXT;');
+    }
+    if (!columns.has('registryHash')) {
+      db.run('ALTER TABLE bcmr_metadata ADD COLUMN registryHash TEXT;');
+    }
   },
   // Add future migrations here as needed
 ];
@@ -258,7 +277,7 @@ const queueSave = async (delayMs = SAVE_DEBOUNCE_MS): Promise<void> => {
   }
 
   if (saveTimeout !== null) {
-    clearTimeout(saveTimeout);
+    globalThis.clearTimeout(saveTimeout);
   }
 
   const queuedAt = firstQueuedSaveTs ?? now;
@@ -266,7 +285,7 @@ const queueSave = async (delayMs = SAVE_DEBOUNCE_MS): Promise<void> => {
   const remainingMaxDelay = Math.max(0, SAVE_MAX_DELAY_MS - elapsed);
   const waitMs = Math.min(delayMs, remainingMaxDelay);
 
-  saveTimeout = window.setTimeout(() => {
+  saveTimeout = globalThis.setTimeout(() => {
     void performQueuedSave();
   }, waitMs);
 
@@ -291,7 +310,7 @@ const flushDatabaseToFile = async (): Promise<void> => {
   if (!db) return;
 
   if (saveTimeout !== null) {
-    clearTimeout(saveTimeout);
+    globalThis.clearTimeout(saveTimeout);
     saveTimeout = null;
   }
 

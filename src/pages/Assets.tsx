@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useSelector } from 'react-redux';
 import { FaBitcoin } from 'react-icons/fa';
@@ -8,42 +8,33 @@ import SectionCard from '../components/ui/SectionCard';
 import SectionHeader from '../components/ui/SectionHeader';
 import EmptyState from '../components/ui/EmptyState';
 import { SATSINBITCOIN } from '../utils/constants';
-import { shortenTxHash } from '../utils/shortenHash';
 import useSharedTokenMetadata from '../hooks/useSharedTokenMetadata';
 import { Network } from '../state/slices/networkSlice';
-import TokenAvatar from '../components/ui/TokenAvatar';
+import TokenIdentityBadge from '../components/ui/TokenIdentityBadge';
 import Popup from '../components/transaction/Popup';
 import TokenQuery from '../components/TokenQuery';
-import { IdentitySnapshot } from '@bitauth/libauth';
 import WalletScreen from '../components/ui/WalletScreen';
 import TransactionService from '../services/TransactionService';
 import type { UTXO } from '../types/types';
 import useFetchWalletData from '../hooks/useFetchWalletData';
 import UTXOService from '../services/UTXOService';
 import { logError } from '../utils/errorHandling';
+import type { TokenPresentationFallback } from '../utils/tokenPresentation';
+import { dedupeTokenUtxos, getStableTokenUtxos } from './assetsTokenInventory';
+import {
+  formatAtomicTokenAmount,
+  resolveTokenPresentation,
+} from '../utils/tokenPresentation';
 
 type AssetTab = 'BCH' | 'Tokens' | 'NFTs';
 const isDev = import.meta.env.DEV;
-
-function formatTokenAmount(amount: bigint, decimals: number): string {
-  if (decimals <= 0) return amount.toString();
-  const normalizedDecimals = Math.max(0, Math.trunc(decimals));
-  const divisor = 10n ** BigInt(normalizedDecimals);
-  const whole = amount / divisor;
-  const fraction = amount % divisor;
-  if (fraction === 0n) return whole.toString();
-  const fractionText = fraction
-    .toString()
-    .padStart(normalizedDecimals, '0')
-    .replace(/0+$/, '');
-  return fractionText ? `${whole.toString()}.${fractionText}` : whole.toString();
-}
 
 const Assets: React.FC = () => {
   const navigate = useNavigate();
   const [tab, setTab] = useState<AssetTab>('BCH');
   const [selectedTokenCategory, setSelectedTokenCategory] = useState<string | null>(null);
   const currentWalletId = useSelector((state: RootState) => state.wallet_id.currentWalletId);
+  const reduxUTXOs = useSelector((state: RootState) => state.utxos.utxos);
   const totalBalance = useSelector((state: RootState) => state.utxos.totalBalance);
   const currentNetwork = useSelector((state: RootState) => state.network.currentNetwork);
   const bchUsdQuote = useSelector((state: RootState) => state.priceFeed['BCH-USD']?.price);
@@ -55,27 +46,52 @@ const Assets: React.FC = () => {
   const [, setWalletContractUtxos] = useState<UTXO[]>([]);
   const [, setDefaultChangeAddress] = useState<string>('');
   const [, setWalletError] = useState<string | null>(null);
-  const [tokenUtxos, setTokenUtxos] = useState<UTXO[]>([]);
-  const noopSetUtxos = useCallback(() => undefined, []);
+  const [walletUtxos, setWalletUtxos] = useState<UTXO[]>([]);
+  const [refreshedTokenUtxos, setRefreshedTokenUtxos] = useState<UTXO[]>([]);
+  const reduxTokenUtxos = useMemo(
+    () => dedupeTokenUtxos(Object.values(reduxUTXOs).flat()),
+    [reduxUTXOs]
+  );
+  const walletTokenUtxos = useMemo(
+    () => dedupeTokenUtxos(walletUtxos),
+    [walletUtxos]
+  );
+  const tokenUtxos = useMemo(
+    () =>
+      currentWalletId
+        ? getStableTokenUtxos(
+            refreshedTokenUtxos,
+            walletTokenUtxos,
+            reduxTokenUtxos
+          )
+        : [],
+    [currentWalletId, refreshedTokenUtxos, walletTokenUtxos, reduxTokenUtxos]
+  );
 
   useFetchWalletData(
     currentWalletId,
     setWalletAddresses,
     setWalletContractAddresses,
-    noopSetUtxos,
+    setWalletUtxos,
     setWalletContractUtxos,
     setDefaultChangeAddress,
     setWalletError
   );
 
   useEffect(() => {
+    setRefreshedTokenUtxos([]);
+  }, [currentWalletId]);
+
+  useEffect(() => {
     let cancelled = false;
 
     async function loadNativeTokenInventory(): Promise<void> {
-      if (!currentWalletId || walletAddresses.length === 0) {
-        if (!cancelled) {
-          setTokenUtxos([]);
-        }
+      if (!currentWalletId) return;
+
+      if (walletAddresses.length === 0) {
+        // Keep the last known token rows visible while the refreshed address
+        // list is still loading. Clearing here makes token holdings appear to
+        // disappear on every reload before the DB snapshot is restored.
         return;
       }
 
@@ -119,27 +135,21 @@ const Assets: React.FC = () => {
         }
 
         if (cancelled) return;
-
-        const deduped = new Map<string, UTXO>();
-        for (const utxo of nextTokenUtxos) {
-          const category = utxo.token?.category;
-          if (!category) continue;
-          deduped.set(`${utxo.tx_hash}:${utxo.tx_pos}`, utxo);
-        }
-        setTokenUtxos(Array.from(deduped.values()));
+        setRefreshedTokenUtxos(dedupeTokenUtxos(nextTokenUtxos));
 
         if (isDev) {
           console.log('[Assets] grouped token rows', {
             walletId: currentWalletId,
-            groupedCount: deduped.size,
-            groupedCategories: Array.from(deduped.values()).map(
+            groupedCount: nextTokenUtxos.length,
+            groupedCategories: nextTokenUtxos.map(
               (utxo) => utxo.token?.category
             ),
           });
         }
       } catch (error) {
         logError('Assets.loadNativeTokenInventory', error, { walletId: currentWalletId });
-        if (!cancelled) setTokenUtxos([]);
+        // Preserve the previous token snapshot on fetch errors. The DB-backed
+        // state is still the safer source of truth than blanking the list.
       }
     }
 
@@ -174,18 +184,34 @@ const Assets: React.FC = () => {
 
     return Object.entries(tokenTotals);
   }, [tokenUtxos]);
+  const tokenCategories = useMemo(
+    () => entries.map(([category]) => category),
+    [entries]
+  );
   const fungibleTokens = entries.filter(([, value]) => value.amount > 0n);
   const nftTokens = entries.filter(([, value]) => value.nft);
-  const tokenMetadata = useSharedTokenMetadata(entries.map(([category]) => category));
+  const tokenMetadata = useSharedTokenMetadata(tokenCategories);
+  const tokenFallbackByCategory = useMemo(() => {
+    const byCategory = new Map<string, TokenPresentationFallback>();
+
+    for (const utxo of tokenUtxos) {
+      const category = utxo.token?.category;
+      const bcmr = utxo.token?.BcmrTokenMetadata;
+      if (!category || !bcmr || byCategory.has(category)) continue;
+
+      byCategory.set(category, {
+        name: bcmr.name,
+        symbol: bcmr.token.symbol,
+        decimals: bcmr.token.decimals,
+        iconUri: bcmr.uris?.icon ?? null,
+      });
+    }
+
+    return byCategory;
+  }, [tokenUtxos]);
   const selectedTokenMetadata = selectedTokenCategory
     ? tokenMetadata[selectedTokenCategory]
     : null;
-  const formatTokenDecimalsLabel = useCallback((decimals: number) => {
-    const normalizedDecimals = Math.max(0, Math.trunc(decimals));
-    return normalizedDecimals === 1
-      ? '1 decimal'
-      : `${normalizedDecimals} decimals`;
-  }, []);
   const totalBch = totalBalance / SATSINBITCOIN;
   const totalUsd = typeof bchUsdQuote === 'number' ? totalBch * bchUsdQuote : null;
 
@@ -199,9 +225,9 @@ const Assets: React.FC = () => {
       groupedEntries: entries.length,
       fungibleTokens: fungibleTokens.length,
       nftTokens: nftTokens.length,
-      categories: entries.map(([category]) => category),
+      categories: tokenCategories,
     });
-  }, [currentWalletId, tab, walletAddresses.length, tokenUtxos.length, entries, fungibleTokens.length, nftTokens.length]);
+  }, [currentWalletId, tab, walletAddresses.length, tokenUtxos.length, entries, fungibleTokens.length, nftTokens.length, tokenCategories]);
 
   return (
     <WalletScreen maxWidthClassName="max-w-md" scrollable={false}>
@@ -298,8 +324,15 @@ const Assets: React.FC = () => {
                   {fungibleTokens.length > 0 ? (
                     fungibleTokens.map(([category, value]) => {
                       const metadata = tokenMetadata[category];
-                      const decimals = value.decimals;
-                      const displayAmount = formatTokenAmount(value.amount, decimals);
+                      const presentation = resolveTokenPresentation(
+                        category,
+                        metadata,
+                        tokenFallbackByCategory.get(category) ?? null
+                      );
+                      const displayAmount = formatAtomicTokenAmount(
+                        value.amount,
+                        presentation.decimals
+                      );
                       return (
                         <button
                           key={category}
@@ -308,29 +341,23 @@ const Assets: React.FC = () => {
                           onClick={() => setSelectedTokenCategory(category)}
                         >
                           <div className="flex items-center gap-2.5">
-                            <TokenAvatar
-                              iconUri={metadata?.status === 'ready' ? metadata.iconUri : null}
-                              name={metadata?.status === 'ready' && metadata.name ? metadata.name : shortenTxHash(category)}
-                              sizeClassName="h-9 w-9"
+                            <TokenIdentityBadge
+                              presentation={presentation}
+                              className="flex-1"
+                              avatarClassName="h-9 w-9"
+                              primaryClassName="text-sm"
+                              secondaryClassName="text-xs"
+                              detail={
+                                <div className="shrink-0 text-right">
+                                  <div className="text-sm font-semibold wallet-text-strong">
+                                    {displayAmount}
+                                  </div>
+                                  <div className="text-xs wallet-muted">
+                                    {value.amount.toString()} units
+                                  </div>
+                                </div>
+                              }
                             />
-                            <div className="min-w-0 flex-1">
-                              <div className="truncate text-sm font-semibold wallet-text-strong">
-                                {metadata?.status === 'ready' && metadata.name ? metadata.name : shortenTxHash(category)}
-                              </div>
-                              <div className="truncate text-xs wallet-muted">
-                                {metadata?.status === 'ready' && metadata.symbol
-                                  ? `${metadata.symbol}${decimals > 0 ? ` • ${formatTokenDecimalsLabel(decimals)}` : ''}`
-                                  : `${shortenTxHash(category)}${decimals > 0 ? ` • ${formatTokenDecimalsLabel(decimals)}` : ''}`}
-                              </div>
-                            </div>
-                            <div className="shrink-0 text-right">
-                              <div className="text-sm font-semibold wallet-text-strong">
-                                {displayAmount}
-                              </div>
-                              <div className="text-xs wallet-muted">
-                                {value.amount.toString()} units
-                              </div>
-                            </div>
                           </div>
                         </button>
                       );
@@ -358,6 +385,11 @@ const Assets: React.FC = () => {
                   {nftTokens.length > 0 ? (
                     nftTokens.map(([category, value]) => {
                       const metadata = tokenMetadata[category];
+                      const presentation = resolveTokenPresentation(
+                        category,
+                        metadata,
+                        tokenFallbackByCategory.get(category) ?? null
+                      );
                       return (
                         <button
                           key={category}
@@ -366,27 +398,23 @@ const Assets: React.FC = () => {
                           onClick={() => setSelectedTokenCategory(category)}
                         >
                           <div className="flex items-center gap-2.5">
-                            <TokenAvatar
-                              iconUri={metadata?.status === 'ready' ? metadata.iconUri : null}
-                              name={metadata?.status === 'ready' && metadata.name ? metadata.name : shortenTxHash(category)}
-                              sizeClassName="h-9 w-9"
+                            <TokenIdentityBadge
+                              presentation={presentation}
+                              className="flex-1"
+                              avatarClassName="h-9 w-9"
+                              primaryClassName="text-sm"
+                              secondaryClassName="text-xs"
+                              detail={
+                                <div className="shrink-0 text-right">
+                                  <div className="text-sm font-semibold wallet-text-strong">
+                                    {value.amount.toString()}
+                                  </div>
+                                  <div className="text-xs wallet-muted">
+                                    collectibles
+                                  </div>
+                                </div>
+                              }
                             />
-                            <div className="min-w-0 flex-1">
-                              <div className="truncate text-sm font-semibold wallet-text-strong">
-                                {metadata?.status === 'ready' && metadata.name ? metadata.name : shortenTxHash(category)}
-                              </div>
-                              <div className="truncate text-xs wallet-muted">
-                                {metadata?.status === 'ready' && metadata.symbol
-                                  ? metadata.symbol
-                                  : 'NFT'}
-                              </div>
-                            </div>
-                            <div className="shrink-0 text-right">
-                              <div className="text-sm font-semibold wallet-text-strong">
-                                {value.amount.toString()}
-                              </div>
-                              <div className="text-xs wallet-muted">collectibles</div>
-                            </div>
                           </div>
                         </button>
                       );
@@ -443,11 +471,7 @@ const Assets: React.FC = () => {
           <div className="max-h-[75vh] overflow-y-auto pr-1">
             <TokenQuery
               tokenId={selectedTokenCategory}
-              prefetchedSnapshot={
-                selectedTokenMetadata?.status === 'ready'
-                  ? (selectedTokenMetadata.snapshot as IdentitySnapshot)
-                  : null
-              }
+              prefetchedSnapshot={selectedTokenMetadata?.snapshot ?? null}
               prefetchedIconDataUri={
                 selectedTokenMetadata?.status === 'ready'
                   ? selectedTokenMetadata.iconUri

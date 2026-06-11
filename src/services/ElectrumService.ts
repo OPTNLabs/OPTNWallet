@@ -110,7 +110,6 @@ async function requestWithAddressFallback(
 const ElectrumService = {
   async reconnect(customServer?: string) {
     const server = ElectrumServer();
-    invalidateUTXOCache();
     await server.electrumReconnect(customServer);
   },
 
@@ -219,7 +218,6 @@ const ElectrumService = {
             }
 
             logError('ElectrumService.getUTXOsMany', response, { address });
-            results[address] = cacheByAddr.get(address)?.data ?? [];
             return;
           }
 
@@ -233,7 +231,11 @@ const ElectrumService = {
             return;
           }
 
-          results[address] = cacheByAddr.get(address)?.data ?? [];
+          logError(
+            'ElectrumService.getUTXOsMany.nonArrayResponse',
+            new Error('Non-array Electrum response'),
+            { address, response }
+          );
         }));
       } finally {
         pending.forEach((address) => inflightByAddr.delete(address));
