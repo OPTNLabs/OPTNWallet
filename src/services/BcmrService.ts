@@ -7,7 +7,6 @@ import {
   // If you want base64 encoding later:
   // binToBase64,
 } from '@bitauth/libauth';
-import { Capacitor } from '@capacitor/core';
 import { Filesystem, Directory, Encoding } from '@capacitor/filesystem';
 import bcmrLocalJson from '../assets/bcmr-optn-local.json';
 import { ipfsFetch, resolveIpfsGatewayUrl } from '../utils/ipfs';
@@ -16,6 +15,7 @@ import { sha256 } from '../utils/hash';
 import { DateTime } from 'luxon';
 import { Database } from 'sql.js';
 import { BcmrTokenMetadata } from '../types/types';
+import { isWebPlatform } from '../utils/platform';
 
 import { store } from '../state/store';
 import { Network } from '../state/slices/networkSlice';
@@ -929,7 +929,7 @@ export default class BcmrService {
     authbase: string,
     uri: string
   ): Promise<void> {
-    if (Capacitor.getPlatform() === 'web') {
+    if (isWebPlatform()) {
       return;
     }
 
