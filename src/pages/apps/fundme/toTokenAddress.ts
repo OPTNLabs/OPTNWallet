@@ -13,11 +13,11 @@ function toTokenAddress(address: string) {
     }
 
     const { payload: pkhPayoutBin, prefix } = addressInfo as DecodedCashAddress;
-    const tokenAddress = encodeCashAddress(
-      prefix,
-      'p2pkhWithTokens',
-      pkhPayoutBin
-    );
+    const tokenAddress = encodeCashAddress({
+      prefix: prefix as 'bitcoincash' | 'bchtest' | 'bchreg',
+      type: 'p2pkhWithTokens',
+      payload: pkhPayoutBin,
+    }).address;
     console.log('toTokenAddress() converted to: ' + tokenAddress);
     return tokenAddress;
 }

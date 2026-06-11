@@ -29,6 +29,11 @@ import ElectrumServer from '../../../apis/ElectrumServer/ElectrumServer';
 import BCHLogo from './bch.png';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { getReturnPath } from '../../../utils/navigation';
+import type {
+  FundMeElectrumClient,
+  WalletConnectSignedTransaction,
+  WalletConnectTransactionRequest,
+} from './walletConnectTypes';
 
 interface Pledge {
   campaignID: string;
@@ -110,11 +115,7 @@ const CampaignDetail: React.FC = () => {
 
   const [usersAddress, setUsersAddress] = useState('bitcoincash:qz500000000000000000000000000000000000000000000000000000000000000');
   // Create an instance of ElectrumServer
-  const electrumServer = ElectrumServer() as {
-    getUtxos: (address: string) => Promise<Utxo[]>;
-    getBlockHeight: () => Promise<number>;
-    sendRawTransaction: (rawTx: string) => Promise<string>;
-  };
+  const electrumServer = ElectrumServer() as unknown as FundMeElectrumClient;
   void campaignMap;
   void setCampaignMap;
   void contractsOK;
@@ -204,13 +205,15 @@ const CampaignDetail: React.FC = () => {
     console.log('signing message...');
     try {
         if (walletConnectInstance) {
+        const topic = walletConnectSession?.topic;
+        if (!topic) return undefined;
         //const params = JSON.parse(stringify(options));
         
         console.log('wc params:');
         console.log(options);
         const result = await walletConnectInstance.request({
             chainId: connectedChain,
-            topic: walletConnectSession.topic,
+            topic,
             request: {
                 method: "bch_signMessage",
                 params: options,
@@ -218,7 +221,7 @@ const CampaignDetail: React.FC = () => {
         });
         console.log('signMessage result: ');
         console.log(result);
-        return result;
+        return typeof result === 'string' ? result : undefined;
         }
     } catch (error) {
         console.log('signMessage error: ' + error);
@@ -227,15 +230,14 @@ const CampaignDetail: React.FC = () => {
 }
 void signMessage;
 
-async function signTransaction(options: {
-  transaction: unknown;
-  sourceOutputs: unknown[];
-  broadcast: boolean;
-  userPrompt: string;
-}) {
+async function signTransaction(
+  options: WalletConnectTransactionRequest
+): Promise<WalletConnectSignedTransaction | undefined> {
   console.log('signing transaction...');
   try {
       if (walletConnectInstance) {
+      const topic = walletConnectSession?.topic;
+      if (!topic) return undefined;
       const params = JSON.parse(stringify(options));
       console.log('wc params:');
       console.log(params);
@@ -245,13 +247,13 @@ async function signTransaction(options: {
       });
       const result = await walletConnectInstance.request({
           chainId: connectedChain,
-          topic: walletConnectSession.topic,
+          topic,
           request: {
           method: "bch_signTransaction",
           params: params,
           },
       });
-      return result;
+      return result as WalletConnectSignedTransaction;
       }
   } catch (error) {
       console.log('signTransation error: ' + error);
@@ -523,6 +525,10 @@ async function handleConsolidateUtxos() {
 
   if (electrumServer && usersAddress && transactionBuilder) { 
     const signResult = await consolidateUTXOs({electrumServer, usersAddress, transactionBuilder, signTransaction, setError: (msg: string) => Toast.show({ text: msg }) });
+    if (!signResult) {
+      setTXPending(false);
+      return;
+    }
     const rawTx = signResult.signedTransaction; 
     console.log('signedTransaction from walletconnect: ');
     console.log(signResult);
@@ -597,11 +603,13 @@ async function handleConsolidateUtxos() {
 
       //fetch campaign metadata from server       
       let response;
+      let currentCampaignInfo: CampaignUtxo | undefined;
       try {   
         response = await axios.get(`https://fundme.cash/get-campaign/` + id);
-        const currentCampaignInfo = response.data;
-        setCampaignInfo(currentCampaignInfo);
-        const pledgeTotal = currentCampaignInfo.pledges.reduce(
+        const fetchedCampaignInfo = response.data as CampaignUtxo;
+        currentCampaignInfo = fetchedCampaignInfo;
+        setCampaignInfo(fetchedCampaignInfo);
+        const pledgeTotal = fetchedCampaignInfo.pledges.reduce(
           (sum: number, pledge: Pledge) => sum + Number(pledge.amount),
           0
         );

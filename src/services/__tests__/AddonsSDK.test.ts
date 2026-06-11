@@ -29,7 +29,8 @@ vi.mock('../BcmrService', () => ({
 }));
 
 vi.mock(import('@capacitor/core'), async (importOriginal) => {
-  const actual = await importOriginal<typeof import('@capacitor/core')>();
+  const actual =
+    (await importOriginal()) as typeof import('@capacitor/core');
   return {
     ...actual,
     Capacitor: {

@@ -1,9 +1,10 @@
 import { Contract, Utxo, TransactionBuilder, ElectrumNetworkProvider, Network } from 'cashscript';
 import { cashAddressToLockingBytecode } from '@bitauth/libauth';
 import { AddressCashStarter, AddressTokensCashStarter, MasterCategoryID, AddressTokensCashStarterStop } from './values'
+import type { FundMeElectrumClient } from './walletConnectTypes';
 
 interface CashStarterFailParams {
-  electrumServer: ElectrumNetworkProvider | undefined;
+  electrumServer: FundMeElectrumClient | undefined;
   contractCashStarter: Contract | undefined;
   contractCashStarterStop: Contract | undefined;
   campaignID: string;
