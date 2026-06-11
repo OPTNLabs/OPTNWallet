@@ -171,6 +171,41 @@ describe('ElectrumService', () => {
     expect(server.request).not.toHaveBeenCalled();
   });
 
+  it('reconnect preserves cached UTXOs so transient failures do not blank the UI', async () => {
+    const server = {
+      electrumReconnect: vi.fn(async () => undefined),
+      request: vi.fn(async () => []),
+      subscribe: vi.fn(async () => {}),
+      unsubscribe: vi.fn(async () => {}),
+      onNotification: vi.fn(() => () => {}),
+    };
+
+    mockedElectrumServer.mockReturnValue(server as never);
+
+    primeUTXOCache('bitcoincash:qstable', [
+      {
+        address: 'bitcoincash:qstable',
+        height: 0,
+        tx_hash: 'd'.repeat(64),
+        tx_pos: 2,
+        value: 1000,
+      },
+    ]);
+
+    await ElectrumService.reconnect();
+    const res = await ElectrumService.getUTXOs('bitcoincash:qstable');
+
+    expect(server.electrumReconnect).toHaveBeenCalledTimes(1);
+    expect(res).toHaveLength(1);
+    expect(res[0]).toMatchObject({
+      address: 'bitcoincash:qstable',
+      tx_hash: 'd'.repeat(64),
+      tx_pos: 2,
+      value: 1000,
+    });
+    expect(server.request).not.toHaveBeenCalled();
+  });
+
   it('getBalance returns confirmed + unconfirmed and falls back to 0', async () => {
     const server = {
       request: vi

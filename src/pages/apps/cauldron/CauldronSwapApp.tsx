@@ -1,10 +1,16 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, {
+  useCallback,
+  useDeferredValue,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { useSelector } from 'react-redux';
 import {
   binToHex,
   hexToBin,
-  lockingBytecodeToCashAddress,
 } from '@bitauth/libauth';
 
 import type { AddonSDK } from '../../../services/AddonsSDK';
@@ -86,7 +92,11 @@ import {
 } from './quoteSafety';
 import { useSmoothResetTransition } from '../shared/useSmoothResetTransition';
 import OutboundTransactionTracker from '../../../services/OutboundTransactionTracker';
-import { formatTimestamp, shortTokenId } from './cauldronHelpers';
+import {
+  formatTimestamp,
+  dedupeWalletPoolPositionsForDisplay,
+  shortTokenId,
+} from './cauldronHelpers';
 
 type CauldronSwapAppProps = {
   sdk: AddonSDK;
@@ -291,14 +301,6 @@ function setCauldronPoolStorageItem(key: string, value: string): void {
 
 function removeCauldronPoolStorageItem(key: string): void {
   getCauldronPoolStorage()?.removeItem(key);
-}
-
-function logCauldronPoolDev(
-  stage: string,
-  payload: Record<string, unknown>
-): void {
-  if (!import.meta.env.DEV) return;
-  console.debug(`[Cauldron:LP] ${stage}`, payload);
 }
 
 function logCauldronTxPlan(
@@ -1034,26 +1036,6 @@ function estimateBps(part: bigint, total: bigint): bigint {
 
 function formatLiquidityUsageWarning(label: string, usedBps: bigint): string {
   return `${label} is using about ${(Number(usedBps) / 100).toFixed(2)}% of the currently executable market depth. Liquidity may move before you can unwind this position.`;
-}
-
-function shortAddress(value: string): string {
-  if (!value) return '';
-  return value.length <= 18
-    ? value
-    : `${value.slice(0, 10)}...${value.slice(-6)}`;
-}
-
-function lockingBytecodeToDisplayAddress(
-  lockingBytecode: Uint8Array,
-  network: Network
-): string | null {
-  const result = lockingBytecodeToCashAddress({
-    bytecode: lockingBytecode,
-    prefix: network === 'chipnet' ? 'bchtest' : 'bitcoincash',
-    tokenSupport: false,
-  });
-  if (typeof result === 'string') return null;
-  return result.address;
 }
 
 function collectWalletPublicKeyHashes(
@@ -1816,6 +1798,10 @@ const CauldronSwapApp: React.FC<CauldronSwapAppProps> = ({ sdk, app }) => {
     () => tokens.find((token) => token.tokenId === selectedTokenId) ?? null,
     [tokens, selectedTokenId]
   );
+  const tokenById = useMemo(
+    () => new Map(tokens.map((token) => [token.tokenId, token] as const)),
+    [tokens]
+  );
 
   useEffect(() => {
     setSelectedTokenId('');
@@ -1838,10 +1824,6 @@ const CauldronSwapApp: React.FC<CauldronSwapAppProps> = ({ sdk, app }) => {
       walletAddresses[0]?.address || walletAddresses[0]?.tokenAddress || null,
     [walletAddresses]
   );
-  const createChangeAddress = useMemo(
-    () => walletAddresses[0]?.address || null,
-    [walletAddresses]
-  );
   const createWithdrawPublicKeyHash = useMemo(() => {
     if (!createOwnerAddress) return null;
     try {
@@ -1856,13 +1838,6 @@ const CauldronSwapApp: React.FC<CauldronSwapAppProps> = ({ sdk, app }) => {
       withdrawPublicKeyHash: createWithdrawPublicKeyHash,
     });
   }, [createWithdrawPublicKeyHash]);
-  const createPoolContractAddress = useMemo(() => {
-    if (!createPoolLockingBytecode) return null;
-    return lockingBytecodeToDisplayAddress(
-      createPoolLockingBytecode,
-      currentNetwork
-    );
-  }, [createPoolLockingBytecode, currentNetwork]);
   const metadataCategories = useMemo(
     () =>
       Array.from(
@@ -1890,8 +1865,9 @@ const CauldronSwapApp: React.FC<CauldronSwapAppProps> = ({ sdk, app }) => {
     return () => window.clearTimeout(timeoutId);
   }, [message]);
 
+  const deferredTokenSearchQuery = useDeferredValue(tokenSearchQuery);
   const filteredTokens = useMemo(() => {
-    const query = tokenSearchQuery.trim();
+    const query = deferredTokenSearchQuery.trim();
     if (!query) return tokens;
 
     return [...tokens]
@@ -1915,7 +1891,7 @@ const CauldronSwapApp: React.FC<CauldronSwapAppProps> = ({ sdk, app }) => {
         return left.symbol.localeCompare(right.symbol);
       })
       .map((entry) => entry.token);
-  }, [sharedMetadata, tokenSearchQuery, tokens]);
+  }, [deferredTokenSearchQuery, sharedMetadata, tokens]);
   const selectedMetadata = selectedTokenId
     ? sharedMetadata[selectedTokenId]
     : undefined;
@@ -2095,11 +2071,6 @@ const CauldronSwapApp: React.FC<CauldronSwapAppProps> = ({ sdk, app }) => {
           chainDetectedPoolCount: chainDetectedPositions.length,
           poolSeedCount: createdPoolTokenIds.length,
           bytecodeSeedCount: createdPoolLockingBytecodes.length,
-        });
-        setPoolRefreshTrace({
-          createdPoolTokenIds,
-          createdPoolLockingBytecodeCount: createdPoolLockingBytecodes.length,
-          chainDetectedPoolCount: chainDetectedPositions.length,
         });
         setWalletPoolPositions(
           filterSuppressedWalletPoolPositions(
@@ -2384,7 +2355,7 @@ const CauldronSwapApp: React.FC<CauldronSwapAppProps> = ({ sdk, app }) => {
     [livePools, pools, selectedTokenId]
   );
   const visibleWalletPoolPositions = useMemo(() => {
-    const dedupedWalletPools = dedupeWalletPoolPositions([
+    const dedupedWalletPools = dedupeWalletPoolPositionsForDisplay([
       ...walletPoolPositions,
       ...pendingWalletPoolPositions,
     ]);
@@ -2458,10 +2429,7 @@ const CauldronSwapApp: React.FC<CauldronSwapAppProps> = ({ sdk, app }) => {
   const effectiveDecimals =
     selectedTokenPresentation.decimals ?? selectedToken?.decimals ?? 0;
   const selectedPoolToken = selectedWalletPoolPosition
-    ? tokens.find(
-        (token) =>
-          token.tokenId === selectedWalletPoolPosition.pool.output.tokenCategory
-      ) ?? null
+    ? tokenById.get(selectedWalletPoolPosition.pool.output.tokenCategory) ?? null
     : null;
   const selectedPoolMetadata = selectedWalletPoolPosition
     ? sharedMetadata[selectedWalletPoolPosition.pool.output.tokenCategory]
@@ -3004,24 +2972,6 @@ const CauldronSwapApp: React.FC<CauldronSwapAppProps> = ({ sdk, app }) => {
         ? 'Set BCH and OPTN fills the token side.'
         : 'Use manual token input.';
 
-  useEffect(() => {
-    if (!poolTokenAmountAuto) return;
-    if (poolSyncAnchor === 'token') {
-      syncPoolFromTokenAmount(poolCreateTokenAmount);
-      return;
-    }
-    syncPoolFromBchAmount(poolCreateBchAmount);
-  }, [
-    autoPoolTokenAmount,
-    poolCreateBchAmount,
-    poolCreateTokenAmount,
-    poolSyncAnchor,
-    poolTokenAmountAuto,
-    selectedTokenSpotPriceSats,
-    syncPoolFromBchAmount,
-    syncPoolFromTokenAmount,
-  ]);
-
   const renderAssetBadge = (
     primaryLabel: string,
     secondaryLabel: string,
@@ -3163,6 +3113,24 @@ const CauldronSwapApp: React.FC<CauldronSwapAppProps> = ({ sdk, app }) => {
     });
     setPoolCreateBchAmount(nextBchAmount);
   }, [effectiveDecimals, poolBchMaxInputSats, selectedTokenSpotPriceSats]);
+
+  useEffect(() => {
+    if (!poolTokenAmountAuto) return;
+    if (poolSyncAnchor === 'token') {
+      syncPoolFromTokenAmount(poolCreateTokenAmount);
+      return;
+    }
+    syncPoolFromBchAmount(poolCreateBchAmount);
+  }, [
+    autoPoolTokenAmount,
+    poolCreateBchAmount,
+    poolCreateTokenAmount,
+    poolSyncAnchor,
+    poolTokenAmountAuto,
+    selectedTokenSpotPriceSats,
+    syncPoolFromBchAmount,
+    syncPoolFromTokenAmount,
+  ]);
 
   const handleQuote = async (): Promise<boolean> => {
     try {
@@ -4114,21 +4082,6 @@ const CauldronSwapApp: React.FC<CauldronSwapAppProps> = ({ sdk, app }) => {
           hasMatchingTokenNft: false,
           detectionSource: 'owner_pkh',
         };
-        logCauldronPoolDev('create-submitted', {
-          txid: result.txid,
-          storageKey: pendingWalletPoolsStorageKey,
-          ownerAddress,
-          tokenCategory: poolTokenCategory,
-          bchAmount: poolReview.bchAmount.toString(),
-          tokenAmount: poolReview.tokenAmount.toString(),
-          poolId: getPoolSelectionId(createdPool),
-          pendingBefore: pendingWalletPoolPositionsRef.current.map((position) =>
-            getPoolSelectionId(position.pool)
-          ),
-          visibleBefore: walletPoolPositions.map((position) =>
-            getPoolSelectionId(position.pool)
-          ),
-        });
         setPendingWalletPoolPositions((current) =>
           dedupeWalletPoolPositions([createdPosition, ...current])
         );
@@ -4314,7 +4267,7 @@ const CauldronSwapApp: React.FC<CauldronSwapAppProps> = ({ sdk, app }) => {
   };
 
   return (
-    <div className="container relative mx-auto flex h-full min-h-0 max-w-md flex-col overflow-hidden px-4 pb-2 pt-2 wallet-page">
+    <div className="container relative mx-auto flex h-[calc(100dvh-var(--navbar-height)-var(--safe-bottom))] min-h-0 max-w-md flex-col overflow-hidden px-4 pt-2 pb-[calc(var(--safe-bottom)+1rem)] wallet-page">
       <div className="flex-none">
         <div className="flex justify-center">
           <img
@@ -4748,58 +4701,6 @@ const CauldronSwapApp: React.FC<CauldronSwapAppProps> = ({ sdk, app }) => {
                   {renderTokenPickerTrigger()}
                 </label>
 
-                {import.meta.env.DEV ? (
-                  <div className="mt-4 rounded-2xl border border-dashed border-[var(--wallet-border)] px-3 py-3 text-xs leading-5 wallet-muted">
-                    <div className="text-[11px] uppercase tracking-[0.18em] wallet-muted opacity-70">
-                      DEV: Pool Setup Trace
-                    </div>
-                    <div className="mt-2 space-y-1.5">
-                      <div className="flex items-start justify-between gap-3">
-                        <span className="min-w-0 flex-1">Selected token</span>
-                        <span className="min-w-0 flex-1 text-right font-medium text-white">
-                          {selectedTokenId
-                            ? `${shortTokenId(selectedTokenId)} · ${selectedToken?.symbol || 'Unknown'}`
-                            : 'None'}
-                        </span>
-                      </div>
-                      <div className="flex items-start justify-between gap-3">
-                        <span className="min-w-0 flex-1">
-                          Owner / token recipient
-                        </span>
-                        <span className="min-w-0 flex-1 text-right font-medium text-white">
-                          {createOwnerAddress
-                            ? shortAddress(createOwnerAddress)
-                            : 'Unavailable'}
-                        </span>
-                      </div>
-                      <div className="flex items-start justify-between gap-3">
-                        <span className="min-w-0 flex-1">Change address</span>
-                        <span className="min-w-0 flex-1 text-right font-medium text-white">
-                          {createChangeAddress
-                            ? shortAddress(createChangeAddress)
-                            : 'Unavailable'}
-                        </span>
-                      </div>
-                      <div className="flex items-start justify-between gap-3">
-                        <span className="min-w-0 flex-1">Withdraw pkh</span>
-                        <span className="min-w-0 flex-1 text-right font-medium text-white">
-                          {createWithdrawPublicKeyHash
-                            ? shortTokenId(
-                                binToHex(createWithdrawPublicKeyHash)
-                              )
-                            : 'Unavailable'}
-                        </span>
-                      </div>
-                      <div className="flex items-start justify-between gap-3">
-                        <span className="min-w-0 flex-1">Pool contract</span>
-                        <span className="min-w-0 flex-1 text-right font-medium text-white">
-                          {createPoolContractAddress ?? 'Unavailable'}
-                        </span>
-                      </div>
-                    </div>
-                  </div>
-                ) : null}
-
                 <div className="mt-4 grid grid-cols-2 gap-3">
                   <label className="block">
                     <span className="mb-2 block text-xs font-semibold uppercase tracking-[0.2em] wallet-muted">
@@ -4949,11 +4850,8 @@ const CauldronSwapApp: React.FC<CauldronSwapAppProps> = ({ sdk, app }) => {
                         const poolMetadata =
                           sharedMetadata[position.pool.output.tokenCategory];
                         const poolToken =
-                          tokens.find(
-                            (token) =>
-                              token.tokenId ===
-                              position.pool.output.tokenCategory
-                          ) ?? null;
+                          tokenById.get(position.pool.output.tokenCategory) ??
+                          null;
                         const poolTokenSymbol =
                           poolMetadata?.symbol ??
                           poolToken?.symbol ??

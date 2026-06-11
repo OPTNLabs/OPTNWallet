@@ -11,6 +11,7 @@ import TokenAvatar from '../../components/ui/TokenAvatar';
 import WalletScreen from '../../components/ui/WalletScreen';
 import {
   type AppsViewCategory,
+  compareAppsForBrowse,
   getAppCategory,
   getAppDescription,
   getAppIconFrame,
@@ -96,15 +97,7 @@ const AppsView = () => {
           setCards(
             out
               .filter((app) => !shouldHideApp(app.id, app.name))
-              .sort((left, right) => {
-                if (left.comingSoon !== right.comingSoon) {
-                  return left.comingSoon ? 1 : -1;
-                }
-                if (left.disabled !== right.disabled) {
-                  return left.disabled ? 1 : -1;
-                }
-                return left.name.localeCompare(right.name);
-              })
+              .sort(compareAppsForBrowse)
           );
         }
       } catch (e: unknown) {

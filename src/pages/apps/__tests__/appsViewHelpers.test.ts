@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  compareAppsForBrowse,
   getAppCategory,
   getAppDescription,
   getAppIconFrame,
@@ -40,5 +41,25 @@ describe('appsViewHelpers', () => {
     expect(isComingSoonApp('optn.builtin.cauldron:cauldronSwapApp', 'Cauldron')).toBe(
       false
     );
+  });
+
+  it('sorts apps alphabetically with coming soon apps last regardless of locale', () => {
+    const ordered = [
+      { name: 'Quantumroot', comingSoon: false, disabled: false },
+      { name: 'Cauldron', comingSoon: false, disabled: false },
+      { name: 'ParyonUSD', comingSoon: true, disabled: true },
+      { name: 'FundMe', comingSoon: true, disabled: true },
+      { name: 'Contracts', comingSoon: false, disabled: false },
+      { name: 'Airdrops', comingSoon: false, disabled: false },
+    ].sort(compareAppsForBrowse);
+
+    expect(ordered.map((app) => app.name)).toEqual([
+      'Airdrops',
+      'Cauldron',
+      'Contracts',
+      'Quantumroot',
+      'FundMe',
+      'ParyonUSD',
+    ]);
   });
 });

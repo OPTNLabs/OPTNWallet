@@ -1,5 +1,10 @@
-import { Capacitor } from '@capacitor/core';
 import SecureKeyStore from '../platform/plugins/SecureKeyStore';
+import {
+  getLocalStorage,
+  readStorageItem,
+  writeStorageItem,
+} from '../utils/browserStorage';
+import { isAndroidNativePlatform } from '../utils/platform';
 
 export const SECRET_ENC_PREFIX = 'enc:v1:';
 const FALLBACK_KEY_STORAGE = 'optn_wallet_fallback_key_v1';
@@ -34,22 +39,14 @@ async function getFallbackKey(): Promise<CryptoKey> {
     throw new Error('WebCrypto is unavailable');
   }
 
-  let keyMaterialB64 = '';
-  try {
-    keyMaterialB64 = globalThis.localStorage?.getItem(FALLBACK_KEY_STORAGE) || '';
-  } catch {
-    keyMaterialB64 = '';
-  }
+  const storage = getLocalStorage();
+  let keyMaterialB64 = readStorageItem(storage, FALLBACK_KEY_STORAGE) || '';
 
   if (!keyMaterialB64) {
     const random = new Uint8Array(32);
     cryptoObj.getRandomValues(random);
     keyMaterialB64 = bytesToBase64(random);
-    try {
-      globalThis.localStorage?.setItem(FALLBACK_KEY_STORAGE, keyMaterialB64);
-    } catch {
-      // ignore storage write failures; key stays in memory for this session
-    }
+    writeStorageItem(storage, FALLBACK_KEY_STORAGE, keyMaterialB64);
   }
 
   fallbackCryptoKey = await cryptoObj.subtle.importKey(
@@ -94,7 +91,7 @@ async function decryptWithFallback(ciphertext: string): Promise<string> {
 }
 
 async function encryptRaw(plaintext: string): Promise<string> {
-  if (Capacitor.isNativePlatform() && Capacitor.getPlatform() === 'android') {
+  if (isAndroidNativePlatform()) {
     try {
       const { ciphertext } = await SecureKeyStore.encrypt({ plaintext });
       return ciphertext;
@@ -106,7 +103,7 @@ async function encryptRaw(plaintext: string): Promise<string> {
 }
 
 async function decryptRaw(ciphertext: string): Promise<string> {
-  if (Capacitor.isNativePlatform() && Capacitor.getPlatform() === 'android') {
+  if (isAndroidNativePlatform()) {
     try {
       const { plaintext } = await SecureKeyStore.decrypt({ ciphertext });
       return plaintext;
