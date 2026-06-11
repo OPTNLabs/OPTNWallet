@@ -285,4 +285,64 @@ describe('ElectrumServer', () => {
     expect(ElectrumWebSocket.mock.calls[0][0]).toBe('a.example');
     expect(ElectrumWebSocket.mock.calls[1][0]).toBe('b.example');
   });
+
+  it('request keeps the original error if reconnect also fails', async () => {
+    const first = makeMockClient();
+    const second = makeMockClient();
+    first.request.mockRejectedValueOnce(new Error('socket dropped'));
+    second.connect.mockRejectedValueOnce(new Error('reconnect failed'));
+
+    const server = await loadServerWithMocks(
+      [first, second],
+      ['wss://a.example:50004', 'wss://b.example:50004']
+    );
+
+    await expect(server.request('blockchain.headers.get_tip')).rejects.toThrow(
+      'socket dropped'
+    );
+    expect(second.request).not.toHaveBeenCalled();
+  });
+
+  it('skips explorer when it has recently failed and switches to imaginary.cash', async () => {
+    const first = makeMockClient();
+    const second = makeMockClient();
+    const third = makeMockClient();
+
+    first.request.mockRejectedValueOnce(new Error('socket dropped'));
+    second.request.mockResolvedValueOnce('recovered');
+
+    const storage = new Map<string, string>();
+    vi.stubGlobal('localStorage', {
+      getItem: (key: string) => storage.get(key) ?? null,
+      setItem: (key: string, value: string) => {
+        storage.set(key, value);
+      },
+      removeItem: (key: string) => {
+        storage.delete(key);
+      },
+    });
+
+    const { server, ElectrumWebSocket } = await loadServerWithMocksAndSpies(
+      [first, second, third],
+      [
+        'wss://explorer.bch.ninja:50004',
+        'wss://electrum.imaginary.cash:50004',
+        'wss://bch.imaginary.cash:50004',
+      ]
+    );
+
+    await expect(server.request('blockchain.headers.get_tip')).resolves.toBe(
+      'recovered'
+    );
+
+    storage.set(
+      'optn.electrum.last-healthy-server',
+      'wss://explorer.bch.ninja:50004'
+    );
+
+    await expect(server.electrumReconnect()).resolves.toBeDefined();
+
+    expect(ElectrumWebSocket).toHaveBeenCalledTimes(3);
+    expect(ElectrumWebSocket.mock.calls[2][0]).toBe('electrum.imaginary.cash');
+  });
 });

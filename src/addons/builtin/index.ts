@@ -132,12 +132,12 @@ const BUILTIN_ADDONS_BASE: AddonManifest[] = [
       },
       {
         kind: 'http',
-        domains: ['events.optnlabs.com', 'tokenindex.optnlabs.com'],
+        domains: ['tokenindex.optnlabs.com'],
       },
     ],
     apps: [
       {
-        id: 'eventRewardsApp',
+        id: 'airdropsApp',
         name: 'Airdrops',
         description: 'Batch distribute BCH and CashTokens',
         iconUri: null,
@@ -154,7 +154,6 @@ const BUILTIN_ADDONS_BASE: AddonManifest[] = [
         ],
         config: {
           screen: 'AirdropsApp',
-          apiBaseUrl: 'https://events.optnlabs.com',
         },
       },
     ],

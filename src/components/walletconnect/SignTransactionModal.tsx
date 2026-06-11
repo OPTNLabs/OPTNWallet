@@ -7,7 +7,9 @@ import {
   respondWithTxSignature,
   clearPendingSignTx,
   respondWithTxError,
+  syncWalletConnectSessions,
 } from '../../state/slices/walletconnectSlice';
+import { enqueueNotification } from '../../state/slices/notificationsSlice';
 import { binToHex, lockingBytecodeToCashAddress } from '@bitauth/libauth';
 import { SATSINBITCOIN } from '../../utils/constants';
 import { ensureUint8Array, parseSatoshis } from '../../utils/binary';
@@ -17,6 +19,19 @@ import { shortenAddress } from '../../utils/shortenHash';
 import WalletTooltip from '../ui/WalletTooltip';
 import { FiChevronDown, FiChevronUp } from 'react-icons/fi';
 import { normalizeExternalUrl } from '../../utils/externalUrl';
+import { toErrorMessage } from '../../utils/errorHandling';
+
+function isStaleWalletConnectError(error: unknown): boolean {
+  const message = toErrorMessage(error).toLowerCase();
+  return (
+    message.includes('session') &&
+    (message.includes('missing') ||
+      message.includes('deleted') ||
+      message.includes('expired') ||
+      message.includes('disconnected') ||
+      message.includes('not found'))
+  );
+}
 
 export function SignTransactionModal() {
   const dispatch = useDispatch<AppDispatch>();
@@ -103,13 +118,87 @@ export function SignTransactionModal() {
 
   const handleSign = async () => {
     if (broadcastLocked) return;
-    await dispatch(respondWithTxSignature(signTxRequest));
-    dispatch(clearPendingSignTx());
+    try {
+      await dispatch(respondWithTxSignature(signTxRequest)).unwrap();
+      dispatch(
+        enqueueNotification({
+          id: `walletconnect:tx:signed:${topic}:${signTxRequest.id}`,
+          kind: 'walletconnect',
+          title: 'WalletConnect transaction approved',
+          body: dappMetadata?.name
+            ? `Sent the transaction response to ${dappMetadata.name}.`
+            : 'Sent the WalletConnect transaction response.',
+          createdAt: Date.now(),
+        })
+      );
+      dispatch(clearPendingSignTx());
+    } catch (error) {
+      console.error('[WalletConnect] Failed to sign transaction request', error);
+      if (isStaleWalletConnectError(error)) {
+        void dispatch(syncWalletConnectSessions());
+        dispatch(clearPendingSignTx());
+        dispatch(
+          enqueueNotification({
+            id: `walletconnect:tx:stale:${topic}:${signTxRequest.id}`,
+            kind: 'walletconnect',
+            title: 'WalletConnect session disconnected',
+            body: 'The dApp disconnected before the transaction response could be delivered.',
+            createdAt: Date.now(),
+          })
+        );
+        return;
+      }
+      dispatch(
+        enqueueNotification({
+          id: `walletconnect:tx:sign-error:${topic}:${signTxRequest.id}`,
+          kind: 'walletconnect',
+          title: 'WalletConnect transaction failed',
+          body: `Failed to sign WalletConnect transaction request: ${toErrorMessage(error)}`,
+          createdAt: Date.now(),
+        })
+      );
+    }
   };
 
   const handleCancel = async () => {
-    await dispatch(respondWithTxError(signTxRequest));
-    dispatch(clearPendingSignTx());
+    try {
+      await dispatch(respondWithTxError(signTxRequest)).unwrap();
+      dispatch(
+        enqueueNotification({
+          id: `walletconnect:tx:rejected:${topic}:${signTxRequest.id}`,
+          kind: 'walletconnect',
+          title: 'WalletConnect transaction rejected',
+          body: 'Sent the rejection response to the dApp.',
+          createdAt: Date.now(),
+        })
+      );
+      dispatch(clearPendingSignTx());
+    } catch (error) {
+      console.error('[WalletConnect] Failed to reject transaction request', error);
+      if (isStaleWalletConnectError(error)) {
+        void dispatch(syncWalletConnectSessions());
+        dispatch(clearPendingSignTx());
+        dispatch(
+          enqueueNotification({
+            id: `walletconnect:tx:reject-stale:${topic}:${signTxRequest.id}`,
+            kind: 'walletconnect',
+            title: 'WalletConnect session disconnected',
+            body: 'The dApp disconnected before the rejection response could be delivered.',
+            createdAt: Date.now(),
+          })
+        );
+        return;
+      }
+      dispatch(
+        enqueueNotification({
+          id: `walletconnect:tx:reject-error:${topic}:${signTxRequest.id}`,
+          kind: 'walletconnect',
+          title: 'WalletConnect rejection failed',
+          body: `Failed to reject WalletConnect transaction request: ${toErrorMessage(error)}`,
+          createdAt: Date.now(),
+        })
+      );
+    }
   };
 
   return (

@@ -14,7 +14,7 @@ const internalManifest: AddonManifest = {
     },
     {
       kind: 'http',
-      domains: ['events.optnlabs.com'],
+      domains: ['tokenindex.optnlabs.com'],
     },
   ],
   contracts: [],
