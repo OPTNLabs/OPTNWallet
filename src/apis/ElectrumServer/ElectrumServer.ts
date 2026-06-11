@@ -9,6 +9,11 @@ import { ElectrumWebSocket } from '@electrum-cash/web-socket';
 import {
   getElectrumServers,
 } from '../../utils/servers/ElectrumServers';
+import {
+  getPreferredStorage,
+  readStorageItem,
+  writeStorageItem,
+} from '../../utils/browserStorage';
 import { store } from '../../state/store';
 import { selectCurrentNetwork } from '../../state/selectors/networkSelectors';
 import { Network } from '../../state/slices/networkSlice';
@@ -61,28 +66,12 @@ function getNetworkAndServers(): { network: Network; servers: string[] } {
   return { network, servers };
 }
 
-function getElectrumStorage(): Storage | null {
-  try {
-    return globalThis.localStorage ?? globalThis.sessionStorage ?? null;
-  } catch {
-    return null;
-  }
-}
-
 function getLastHealthyServer(): string | null {
-  try {
-    return getElectrumStorage()?.getItem(LAST_HEALTHY_SERVER_STORAGE_KEY) ?? null;
-  } catch {
-    return null;
-  }
+  return readStorageItem(getPreferredStorage(), LAST_HEALTHY_SERVER_STORAGE_KEY);
 }
 
 function setLastHealthyServer(server: string): void {
-  try {
-    getElectrumStorage()?.setItem(LAST_HEALTHY_SERVER_STORAGE_KEY, server);
-  } catch {
-    /* ignore */
-  }
+  writeStorageItem(getPreferredStorage(), LAST_HEALTHY_SERVER_STORAGE_KEY, server);
 }
 
 function getBlockedUntil(server: string): number | undefined {

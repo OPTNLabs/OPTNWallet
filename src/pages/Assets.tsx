@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useSelector } from 'react-redux';
 import { FaBitcoin } from 'react-icons/fa';
@@ -20,6 +20,7 @@ import useFetchWalletData from '../hooks/useFetchWalletData';
 import UTXOService from '../services/UTXOService';
 import { logError } from '../utils/errorHandling';
 import type { TokenPresentationFallback } from '../utils/tokenPresentation';
+import { dedupeTokenUtxos, getStableTokenUtxos } from './assetsTokenInventory';
 import {
   formatAtomicTokenAmount,
   resolveTokenPresentation,
@@ -33,6 +34,7 @@ const Assets: React.FC = () => {
   const [tab, setTab] = useState<AssetTab>('BCH');
   const [selectedTokenCategory, setSelectedTokenCategory] = useState<string | null>(null);
   const currentWalletId = useSelector((state: RootState) => state.wallet_id.currentWalletId);
+  const reduxUTXOs = useSelector((state: RootState) => state.utxos.utxos);
   const totalBalance = useSelector((state: RootState) => state.utxos.totalBalance);
   const currentNetwork = useSelector((state: RootState) => state.network.currentNetwork);
   const bchUsdQuote = useSelector((state: RootState) => state.priceFeed['BCH-USD']?.price);
@@ -44,29 +46,47 @@ const Assets: React.FC = () => {
   const [, setWalletContractUtxos] = useState<UTXO[]>([]);
   const [, setDefaultChangeAddress] = useState<string>('');
   const [, setWalletError] = useState<string | null>(null);
-  const [tokenUtxos, setTokenUtxos] = useState<UTXO[]>([]);
-  const noopSetUtxos = useCallback(() => undefined, []);
+  const [walletUtxos, setWalletUtxos] = useState<UTXO[]>([]);
+  const [refreshedTokenUtxos, setRefreshedTokenUtxos] = useState<UTXO[]>([]);
+  const reduxTokenUtxos = useMemo(
+    () => dedupeTokenUtxos(Object.values(reduxUTXOs).flat()),
+    [reduxUTXOs]
+  );
+  const walletTokenUtxos = useMemo(
+    () => dedupeTokenUtxos(walletUtxos),
+    [walletUtxos]
+  );
+  const tokenUtxos = useMemo(
+    () =>
+      currentWalletId
+        ? getStableTokenUtxos(
+            refreshedTokenUtxos,
+            walletTokenUtxos,
+            reduxTokenUtxos
+          )
+        : [],
+    [currentWalletId, refreshedTokenUtxos, walletTokenUtxos, reduxTokenUtxos]
+  );
 
   useFetchWalletData(
     currentWalletId,
     setWalletAddresses,
     setWalletContractAddresses,
-    noopSetUtxos,
+    setWalletUtxos,
     setWalletContractUtxos,
     setDefaultChangeAddress,
     setWalletError
   );
 
   useEffect(() => {
+    setRefreshedTokenUtxos([]);
+  }, [currentWalletId]);
+
+  useEffect(() => {
     let cancelled = false;
 
     async function loadNativeTokenInventory(): Promise<void> {
-      if (!currentWalletId) {
-        if (!cancelled) {
-          setTokenUtxos([]);
-        }
-        return;
-      }
+      if (!currentWalletId) return;
 
       if (walletAddresses.length === 0) {
         // Keep the last known token rows visible while the refreshed address
@@ -115,20 +135,13 @@ const Assets: React.FC = () => {
         }
 
         if (cancelled) return;
-
-        const deduped = new Map<string, UTXO>();
-        for (const utxo of nextTokenUtxos) {
-          const category = utxo.token?.category;
-          if (!category) continue;
-          deduped.set(`${utxo.tx_hash}:${utxo.tx_pos}`, utxo);
-        }
-        setTokenUtxos(Array.from(deduped.values()));
+        setRefreshedTokenUtxos(dedupeTokenUtxos(nextTokenUtxos));
 
         if (isDev) {
           console.log('[Assets] grouped token rows', {
             walletId: currentWalletId,
-            groupedCount: deduped.size,
-            groupedCategories: Array.from(deduped.values()).map(
+            groupedCount: nextTokenUtxos.length,
+            groupedCategories: nextTokenUtxos.map(
               (utxo) => utxo.token?.category
             ),
           });
