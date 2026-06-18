@@ -23,7 +23,7 @@ function getBasicActionIcon(title: string) {
       return <FaArrowDown />;
     case 'Scan QR':
       return <FaQrcode />;
-    case 'Mint Tokens':
+    case 'CashTokens':
       return <FaBitcoin />;
     default:
       return <FaPlus />;
@@ -113,7 +113,7 @@ const Actions: React.FC = () => {
                           void handleGenerateNewAddress();
                           return;
                         }
-                        if (action.title === 'Mint Tokens') {
+                        if (action.title === 'CashTokens') {
                           navigate('/mint-cashtokens-poc', {
                             state: { returnTo: '/actions' },
                           });

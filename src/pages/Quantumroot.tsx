@@ -77,10 +77,15 @@ const Quantumroot: React.FC = () => {
     portfolio,
     selectedVaultStatus,
     selectedVaultTokenAwareness,
+    quantumrootPlainNftFamilies,
+    quantumrootUiState,
+    tokenAwarenessByIndex,
     recoveryDestinationAddress,
     handleSyncVaults,
     handleSaveVaultConfiguration,
+    loadQuantumrootWorkspace,
     handleSpendUtxo,
+    handleAuthorizedSpendUtxo,
     handleSweepAllReceiveUtxos,
     handleRecoverQuantumLockUtxo,
     setSelectedVault,
@@ -89,6 +94,7 @@ const Quantumroot: React.FC = () => {
   } = useQuantumrootWorkspace({
     currentWalletId,
     workspaceEnabled: !networkSupport.isPreviewOnly,
+    isActiveNetwork: networkSupport.isActive,
   });
 
   return (
@@ -97,7 +103,7 @@ const Quantumroot: React.FC = () => {
         <div className="flex-1 min-h-0">
           <PageHeader
             title="Quantumroot"
-            subtitle="Dedicated vault workspace"
+            subtitle="Two spending lanes in one vault"
             compact
           />
 
@@ -111,7 +117,7 @@ const Quantumroot: React.FC = () => {
               <div className="text-xs wallet-muted mt-1">
                 {networkSupport.isPreviewOnly
                   ? `Quantumroot is visible on mainnet ahead of activation. The layout stays available, but key actions remain disabled until ${formatActivationDate(networkSupport.activationAt)}.`
-                  : 'Quantumroot is active on this network. Use the vault workspace below to manage receive addresses, sweeps, and recovery.'}
+                  : 'Quantumroot is active on this network. Use the vault workspace below to manage a normal spend lane and a quantum-safe recovery lane.'}
               </div>
             </div>
             <div className="grid grid-cols-2 gap-3">
@@ -150,11 +156,10 @@ const Quantumroot: React.FC = () => {
             </div>
             <div className="mt-3 text-xs wallet-muted space-y-1">
               <p>
-                Live now: receive addresses, balance tracking, receive sweeps, Quantum
-                Lock BCH recovery.
+                Live now: normal spending, balance tracking, and Quantum Lock BCH recovery.
               </p>
               <p>
-                In progress: token-authorized Quantumroot spends and token-aware recovery.
+                Guided now: choose one approval key, lock it in Quantum Lock, then spend the matching coin.
               </p>
             </div>
           </SectionCard>
@@ -202,6 +207,7 @@ const Quantumroot: React.FC = () => {
                   ) : null}
                   {vaults.map((vault) => {
                     const status = statusesByIndex[vault.address_index];
+                    const tokenAwareness = tokenAwarenessByIndex[vault.address_index];
                     return (
                       <button
                         key={`${vault.account_index}-${vault.address_index}`}
@@ -223,12 +229,13 @@ const Quantumroot: React.FC = () => {
                             </div>
                             <div className="text-[11px] wallet-muted mt-1">
                               {!status && refreshing
-                                ? 'Refreshing…'
-                                : (status?.recoverableReceiveUtxos.length ?? 0) > 0
-                                ? `${status?.recoverableReceiveUtxos.length ?? 0} recoverable`
-                                : status?.isFunded
-                                  ? 'Funded'
-                                  : 'Unfunded'}
+                                ? 'Checking balances…'
+                                : tokenAwareness?.readinessLabel ??
+                                  ((status?.recoverableReceiveUtxos.length ?? 0) > 0
+                                    ? `${status?.recoverableReceiveUtxos.length ?? 0} ready to recover`
+                                    : status?.isFunded
+                                      ? 'Funded'
+                                      : 'No funds yet')}
                             </div>
                           </div>
                         </div>
@@ -246,6 +253,8 @@ const Quantumroot: React.FC = () => {
         selectedVault={selectedVault}
         selectedVaultStatus={selectedVaultStatus}
         selectedVaultTokenAwareness={selectedVaultTokenAwareness}
+        quantumrootPlainNftFamilies={quantumrootPlainNftFamilies}
+        quantumrootUiState={quantumrootUiState}
         recoveryDestinationAddress={recoveryDestinationAddress}
         pendingSpendAddress={pendingSpendAddress}
         pendingTokenCategory={pendingTokenCategory}
@@ -267,8 +276,12 @@ const Quantumroot: React.FC = () => {
         onUseRecoveryDestination={() => setPendingSpendAddress(recoveryDestinationAddress ?? '')}
         onSweepAll={() => void handleSweepAllReceiveUtxos()}
         onSaveConfiguration={() => void handleSaveVaultConfiguration()}
+        onRefreshVault={() => void loadQuantumrootWorkspace()}
         onSpendUtxo={(utxo, destinationAddress) =>
           void handleSpendUtxo(utxo, destinationAddress)
+        }
+        onAuthorizedSpendUtxo={(utxo, destinationAddress) =>
+          void handleAuthorizedSpendUtxo(utxo, destinationAddress)
         }
         onRecoverQuantumLockUtxo={(utxo, destinationAddress) =>
           void handleRecoverQuantumLockUtxo(utxo, destinationAddress)

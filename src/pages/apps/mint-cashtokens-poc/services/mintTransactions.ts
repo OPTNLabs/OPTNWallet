@@ -16,6 +16,12 @@ import {
   utxoKey,
   utxoValue,
 } from '../utils';
+import {
+  getMintSourceCategory,
+  canMintFungibleFromSource,
+  isSelectableMintSource,
+  selectMintSourceUtxos,
+} from '../utils/sourceHelpers';
 
 type BuildResult = Awaited<
   ReturnType<typeof TransactionService.buildTransaction>
@@ -81,6 +87,17 @@ type BuildMintPreviewParams = {
 
 const BCMR_IDENTITY_OUTPUT_SATS = 1000n;
 
+function buildSelectedUtxosForSource(
+  source: MintAppUtxo,
+  inputsForBuild: MintAppUtxo[]
+): MintAppUtxo[] {
+  const sourceKey = utxoKey(source);
+  return [
+    source,
+    ...inputsForBuild.filter((candidate) => utxoKey(candidate) !== sourceKey),
+  ];
+}
+
 export async function buildMintPreview({
   selectedUtxos,
   flatUtxos,
@@ -94,19 +111,30 @@ export async function buildMintPreview({
   inputsForBuild: MintAppUtxo[];
   feePaid: bigint;
 }> {
-  const genesisInputs = selectedUtxos.filter((u) => u.tx_pos === 0 && !u.token);
-  if (genesisInputs.length === 0) {
+  if (selectedUtxos.length === 0) {
     throw new Error(
-      'No valid Candidate UTXO selected (requires vout=0, non-token).'
+      'No valid source UTXO selected (requires a genesis UTXO or minting authority NFT).'
+    );
+  }
+  if (selectedUtxos.some((source) => !isSelectableMintSource(source))) {
+    throw new Error(
+      'Only genesis UTXOs or minting authority NFTs can be used as mint sources.'
     );
   }
 
-  const genesisKeySet = new Set(genesisInputs.map((u) => utxoKey(u)));
-  const feeCandidates = selectFeeCandidates(flatUtxos, genesisKeySet);
-  const sourceByKey = new Map(genesisInputs.map((u) => [utxoKey(u), u]));
+  const sourceInputs = selectMintSourceUtxos(selectedUtxos);
+  if (sourceInputs.length === 0) {
+    throw new Error(
+      'No valid source UTXO selected (requires a genesis UTXO or minting authority NFT).'
+    );
+  }
+
+  const sourceKeySet = new Set(sourceInputs.map((u) => utxoKey(u)));
+  const feeCandidates = selectFeeCandidates(flatUtxos, sourceKeySet);
+  const sourceByKey = new Map(sourceInputs.map((u) => [utxoKey(u), u] as const));
 
   if (feeCandidates.length === 0) {
-    throw new Error('No non-genesis UTXOs available to fund transaction fees.');
+    throw new Error('No non-token fee UTXOs available to fund transaction fees.');
   }
 
   const feeInputs: MintAppUtxo[] = [];
@@ -115,7 +143,7 @@ export async function buildMintPreview({
 
   for (let i = 0; i < feeCandidates.length; i++) {
     feeInputs.push(feeCandidates[i]);
-    inputsForBuild = genesisInputs.concat(feeInputs);
+    inputsForBuild = sourceInputs.concat(feeInputs);
 
     const outputs: TransactionOutput[] = [];
     if (bcmrPublication?.enabled) {
@@ -134,16 +162,25 @@ export async function buildMintPreview({
     for (const d of activeOutputDrafts) {
       const src = sourceByKey.get(d.sourceKey);
       if (!src) continue;
-      const category = src.tx_hash;
+      if (d.config.mintType === 'FT' && !canMintFungibleFromSource(src)) {
+        throw new Error(
+          'Minting authority sources can only mint NFT outputs.'
+        );
+      }
+      const category = getMintSourceCategory(src);
       const isNFT = d.config.mintType === 'NFT';
       const tokenAmount = isNFT ? 0n : toBigIntSafe(d.config.ftAmount);
+      const selectedUtxosForOutput = buildSelectedUtxosForSource(
+        src,
+        inputsForBuild
+      );
 
       const out = TransactionManager().addOutput(
         d.recipientCashAddr,
         tokenOutputSats,
         tokenAmount,
         category,
-        inputsForBuild,
+        selectedUtxosForOutput,
         sdkAddressBook,
         isNFT ? d.config.nftCapability : undefined,
         isNFT ? d.config.nftCommitment : undefined
@@ -159,6 +196,38 @@ export async function buildMintPreview({
         );
       }
       outputs.push(out);
+    }
+
+    const retainedMintingAuthorities = new Set<string>();
+    for (const src of sourceInputs) {
+      if (src.token?.nft?.capability !== 'minting') continue;
+
+      const sourceKey = utxoKey(src);
+      if (retainedMintingAuthorities.has(sourceKey)) continue;
+      retainedMintingAuthorities.add(sourceKey);
+
+      // Preserve minting authority in a wallet-controlled successor output so
+      // the category can mint again after this transaction confirms.
+      const authorityOut = TransactionManager().addOutput(
+        src.address || changeAddress,
+        tokenOutputSats,
+        0n,
+        getMintSourceCategory(src),
+        buildSelectedUtxosForSource(src, inputsForBuild),
+        sdkAddressBook
+      );
+
+      if (!authorityOut) {
+        throw new Error(
+          `Failed retaining minting authority for ${shortHash(
+            getMintSourceCategory(src),
+            12,
+            0
+          )}`
+        );
+      }
+
+      outputs.push(authorityOut);
     }
 
     const attempt = await TransactionService.buildTransaction(

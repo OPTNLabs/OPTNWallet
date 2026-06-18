@@ -7,12 +7,14 @@ interface PopupProps {
   closePopups: () => void;
   children: React.ReactNode;
   closeButtonText?: string; // Optional prop for close button text
+  closeButtonClassName?: string;
 }
 
 const Popup: React.FC<PopupProps> = ({
   closePopups,
   children,
   closeButtonText = 'Close',
+  closeButtonClassName = 'wallet-btn-danger w-full my-2',
 }) => {
   const popup = (
     <div className="wallet-popup-backdrop z-[1200] p-3 sm:p-4">
@@ -30,7 +32,7 @@ const Popup: React.FC<PopupProps> = ({
           className="flex justify-center mt-4 pt-3 shrink-0"
           style={{ borderTop: '1px solid var(--wallet-border)' }}
         >
-          <button className="wallet-btn-danger w-full my-2" onClick={closePopups}>
+          <button className={closeButtonClassName} onClick={closePopups}>
             {closeButtonText}
           </button>
         </div>
