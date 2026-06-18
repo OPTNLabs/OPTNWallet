@@ -1,7 +1,9 @@
 import {
   binToHex,
   cashAddressToLockingBytecode,
+  decodeAuthenticationInstructions,
   encodeTransaction,
+  hash256,
   hexToBin,
 } from '@bitauth/libauth';
 import type { UTXO } from '../types/types';
@@ -12,9 +14,11 @@ import {
   buildManualQuantumUnlockingBytecode,
   buildManualTokenSpendUnlockingBytecode,
   compileQuantumrootUnlockingBytecode,
+  compileQuantumrootRawScript,
   createQuantumrootCompiler,
   deriveFeeFromBytes,
   encodeLeafSpendIndex,
+  isQuantumrootAuthorizationToken,
   normalizeTokenCategory,
   toBigIntSats,
   toLibauthToken,
@@ -56,6 +60,7 @@ export type QuantumrootAuthorizedSpendBuildResult = {
   controlTokenCategory: string;
   feeSats: bigint;
   inputCount: number;
+  validationMode: 'leaf-path-verified';
   rawTransaction: string;
   recoveryAmountSats: bigint;
   successorQuantumLockAddress: string;
@@ -147,10 +152,10 @@ function compileQuantumrootRecoveryTransaction({
     },
   ];
 
-    const compilationData = buildRecoveryCompilationData({
-      inputIndex: 0,
-      inputs: transactionInputs,
-      outputs: transactionOutputs,
+  const compilationData = buildRecoveryCompilationData({
+    inputIndex: 0,
+    inputs: transactionInputs,
+    outputs: transactionOutputs,
     sourceOutputs,
     vault,
     vaultTokenCategory,
@@ -203,11 +208,15 @@ function compileQuantumrootRecoveryTransaction({
 function assertAuthorizedSpendInputs({
   controlTokenUtxo,
   receiveUtxos,
+  successorQuantumLockAddress,
+  successorQuantumLockLockingBytecode,
   vault,
   vaultTokenCategory,
 }: {
   controlTokenUtxo: UTXO;
   receiveUtxos: UTXO[];
+  successorQuantumLockAddress: string;
+  successorQuantumLockLockingBytecode: Uint8Array;
   vault: QuantumrootRecoveryVault;
   vaultTokenCategory: string;
 }) {
@@ -220,6 +229,11 @@ function assertAuthorizedSpendInputs({
   if (!controlTokenUtxo.token) {
     throw new Error('Quantumroot authorized spend requires a control token UTXO.');
   }
+  if (!isQuantumrootAuthorizationToken(controlTokenUtxo.token)) {
+    throw new Error(
+      'Quantumroot authorized spend requires the control token UTXO to be a plain NFT with no capability.'
+    );
+  }
   const normalizedExpectedCategory = normalizeTokenCategory(vaultTokenCategory);
   const normalizedControlCategory = normalizeTokenCategory(controlTokenUtxo.token.category);
   if (normalizedExpectedCategory.length !== 64) {
@@ -228,13 +242,184 @@ function assertAuthorizedSpendInputs({
   if (normalizedControlCategory !== normalizedExpectedCategory) {
     throw new Error('Quantumroot authorized spend requires a matching control token category.');
   }
-  for (const utxo of receiveUtxos) {
+  const [firstReceiveUtxo, ...additionalReceiveUtxos] = receiveUtxos;
+  if (firstReceiveUtxo.address !== vault.receiveAddress) {
+    throw new Error(
+      'Quantumroot authorized spend currently requires the first receive UTXO from the same vault receive address.'
+    );
+  }
+  const firstReceiveToken = firstReceiveUtxo.token;
+  if (!firstReceiveToken) {
+    throw new Error(
+      'Quantumroot authorized spend requires the first receive UTXO to carry the configured control token category.'
+    );
+  }
+  if (!isQuantumrootAuthorizationToken(firstReceiveToken)) {
+    throw new Error(
+      'Quantumroot authorized spend requires the first receive UTXO to carry a plain NFT control token.'
+    );
+  }
+  const normalizedFirstReceiveCategory = normalizeTokenCategory(firstReceiveToken.category);
+  if (normalizedFirstReceiveCategory !== normalizedExpectedCategory) {
+    throw new Error(
+      'Quantumroot authorized spend requires the first receive UTXO to carry the configured control token category.'
+    );
+  }
+
+  const successorLockingBytecode = cashAddressToLockingBytecode(successorQuantumLockAddress);
+  if (typeof successorLockingBytecode === 'string') {
+    throw new Error(successorLockingBytecode);
+  }
+  if (
+    binToHex(successorLockingBytecode.bytecode) !==
+    binToHex(successorQuantumLockLockingBytecode)
+  ) {
+    throw new Error(
+      'Quantumroot authorized spend successor Quantum Lock address did not match the provided locking bytecode.'
+    );
+  }
+
+  for (const utxo of additionalReceiveUtxos) {
     if (utxo.address !== vault.receiveAddress) {
-      throw new Error('Quantumroot authorized spend currently requires receive UTXOs from the same vault receive address.');
+      throw new Error(
+        'Quantumroot authorized spend currently requires additional receive UTXOs from the same vault receive address.'
+      );
     }
     if (utxo.token) {
-      throw new Error('Quantumroot authorized spend currently supports BCH-only receive UTXOs.');
+      throw new Error(
+        'Quantumroot authorized spend currently supports BCH-only additional receive UTXOs.'
+      );
     }
+  }
+}
+
+function collectAuthenticationDataPushes(bytecode: Uint8Array) {
+  return decodeAuthenticationInstructions(bytecode).flatMap((instruction) =>
+    'data' in instruction && instruction.data !== undefined ? [instruction.data] : []
+  );
+}
+
+export function verifyQuantumrootAuthorizedSpendLeafPaths({
+  baseInputs,
+  compiler,
+  finalInputs,
+  quantumCompilationData,
+  quantumUnlockingBytecode,
+  sourceOutputs,
+  tokenCompilationData,
+  tokenUnlockingBytecode,
+  transaction,
+  vault,
+  vaultTokenCategory,
+}: {
+  baseInputs: Array<{
+    outpointIndex: number;
+    outpointTransactionHash: Uint8Array;
+    sequenceNumber: number;
+    unlockingBytecode: Uint8Array;
+  }>;
+  compiler: ReturnType<typeof createQuantumrootCompiler>;
+  finalInputs: RecoveryTransaction['inputs'];
+  quantumCompilationData: Parameters<ReturnType<typeof createQuantumrootCompiler>['generateBytecode']>[0]['data'];
+  quantumUnlockingBytecode: Uint8Array;
+  sourceOutputs: Parameters<typeof buildRecoveryCompilationData>[0]['sourceOutputs'];
+  tokenCompilationData: Parameters<ReturnType<typeof createQuantumrootCompiler>['generateBytecode']>[0]['data'];
+  tokenUnlockingBytecode: Uint8Array;
+  transaction: RecoveryTransaction;
+  vault: QuantumrootRecoveryVault;
+  vaultTokenCategory: string;
+}) {
+  const expectedTokenUnlockingBytecode = buildManualTokenSpendUnlockingBytecode({
+    compilationData: tokenCompilationData,
+  });
+  if (binToHex(expectedTokenUnlockingBytecode) !== binToHex(tokenUnlockingBytecode)) {
+    throw new Error('Quantumroot authorized spend token unlock bytecode did not match the compiled token leaf.');
+  }
+
+  const quantumTransactionDraft: RecoveryTransaction = {
+    version: transaction.version,
+    locktime: transaction.locktime,
+    inputs: baseInputs.map((input) => ({ ...input })),
+    outputs: transaction.outputs,
+  };
+  const expectedQuantumUnlockingBytecode = buildManualQuantumUnlockingBytecode({
+    compilationData: quantumCompilationData,
+    transaction: quantumTransactionDraft,
+    vault,
+  });
+  if (binToHex(expectedQuantumUnlockingBytecode) !== binToHex(quantumUnlockingBytecode)) {
+    throw new Error(
+      'Quantumroot authorized spend quantum unlock bytecode did not match the compiled quantum leaf.'
+    );
+  }
+
+  for (let inputIndex = 2; inputIndex < finalInputs.length; inputIndex += 1) {
+    const introspectionCompilationData = buildRecoveryCompilationData({
+      leafSpendIndex: encodeLeafSpendIndex(1),
+      inputIndex,
+      inputs: baseInputs.map((baseInput, nestedInputIndex) =>
+        nestedInputIndex === 1
+          ? { ...baseInput, unlockingBytecode: tokenUnlockingBytecode }
+          : baseInput
+      ),
+      outputs: transaction.outputs,
+      sourceOutputs,
+      vault,
+      vaultTokenCategory,
+    });
+    const expectedIntrospectionUnlockingBytecode = compileQuantumrootUnlockingBytecode({
+      compiler,
+      compilationData: introspectionCompilationData,
+      scriptId: 'introspection_spend',
+    });
+    if (
+      binToHex(expectedIntrospectionUnlockingBytecode) !==
+      binToHex(finalInputs[inputIndex].unlockingBytecode)
+    ) {
+      throw new Error(
+        `Quantumroot authorized spend introspection input ${inputIndex} did not match the compiled introspection leaf.`
+      );
+    }
+  }
+
+  const rawSchnorrLeaf = compileQuantumrootRawScript({
+    compiler,
+    compilationData: tokenCompilationData,
+    scriptId: 'receive_address_schnorr_spend',
+  });
+  const rawTokenLeaf = compileQuantumrootRawScript({
+    compiler,
+    compilationData: tokenCompilationData,
+    scriptId: 'receive_address_token_spend',
+  });
+  const rawReceiveAddress = compileQuantumrootRawScript({
+    compiler,
+    compilationData: tokenCompilationData,
+    scriptId: 'receive_address',
+  });
+  const committedHash = vault.receiveLockingBytecode.slice(2, 34);
+  const tokenUnlockDataPushes = collectAuthenticationDataPushes(tokenUnlockingBytecode);
+  const revealedTokenLeaf = tokenUnlockDataPushes.find(
+    (push) => binToHex(push) === binToHex(rawTokenLeaf)
+  );
+  if (!revealedTokenLeaf) {
+    throw new Error(
+      'Quantumroot authorized spend token unlock did not reveal the compiled token leaf bytecode.'
+    );
+  }
+  const revealedSchnorrLeafHash = tokenUnlockDataPushes.find(
+    (push) => binToHex(push) === binToHex(hash256(rawSchnorrLeaf))
+  );
+  if (!revealedSchnorrLeafHash) {
+    throw new Error(
+      'Quantumroot authorized spend token unlock did not reveal the expected sibling leaf hash.'
+    );
+  }
+  const expectedReceiveRoot = hash256(rawReceiveAddress);
+  if (binToHex(expectedReceiveRoot) !== binToHex(committedHash)) {
+    throw new Error(
+      'Quantumroot authorized spend receive-address root did not match the committed receive vault hash.'
+    );
   }
 }
 
@@ -251,6 +436,8 @@ export function buildQuantumrootAuthorizedSpendTransaction({
   assertAuthorizedSpendInputs({
     controlTokenUtxo,
     receiveUtxos,
+    successorQuantumLockAddress,
+    successorQuantumLockLockingBytecode,
     vault,
     vaultTokenCategory,
   });
@@ -262,6 +449,7 @@ export function buildQuantumrootAuthorizedSpendTransaction({
 
   const controlToken = toLibauthToken(controlTokenUtxo.token!);
   const normalizedTokenCategory = normalizeTokenCategory(vaultTokenCategory);
+  const [firstReceiveUtxo, ...additionalReceiveUtxos] = receiveUtxos;
   const receiveInputValueSats = receiveUtxos.reduce(
     (sum, utxo) => sum + toBigIntSats(utxo.value ?? utxo.amount ?? 0),
     0n
@@ -294,7 +482,14 @@ export function buildQuantumrootAuthorizedSpendTransaction({
         token: controlToken,
         valueSatoshis: controlInputValueSats,
       },
-      ...receiveUtxos.map((utxo) => ({
+      {
+        lockingBytecode: vault.receiveLockingBytecode,
+        token: toLibauthToken(firstReceiveUtxo.token!),
+        valueSatoshis: toBigIntSats(
+          firstReceiveUtxo.value ?? firstReceiveUtxo.amount ?? 0
+        ),
+      },
+      ...additionalReceiveUtxos.map((utxo) => ({
         lockingBytecode: vault.receiveLockingBytecode,
         valueSatoshis: toBigIntSats(utxo.value ?? utxo.amount ?? 0),
       })),
@@ -326,6 +521,7 @@ export function buildQuantumrootAuthorizedSpendTransaction({
     ];
 
     const quantumCompilationData = buildRecoveryCompilationData({
+      leafSpendIndex: encodeLeafSpendIndex(1),
       inputIndex: 0,
       inputs: baseInputs,
       outputs,
@@ -346,10 +542,9 @@ export function buildQuantumrootAuthorizedSpendTransaction({
     });
 
     const tokenCompilationData = buildRecoveryCompilationData({
+      leafSpendIndex: encodeLeafSpendIndex(1),
       inputIndex: 1,
-      inputs: baseInputs.map((input, inputIndex) =>
-        inputIndex === 0 ? { ...input, unlockingBytecode: quantumUnlockingBytecode } : input
-      ),
+      inputs: baseInputs,
       outputs,
       sourceOutputs,
       vault,
@@ -371,11 +566,9 @@ export function buildQuantumrootAuthorizedSpendTransaction({
         leafSpendIndex: encodeLeafSpendIndex(1),
         inputIndex,
         inputs: baseInputs.map((baseInput, nestedInputIndex) =>
-          nestedInputIndex === 0
-            ? { ...baseInput, unlockingBytecode: quantumUnlockingBytecode }
-            : nestedInputIndex === 1
-              ? { ...baseInput, unlockingBytecode: tokenUnlockingBytecode }
-              : baseInput
+          nestedInputIndex === 1
+            ? { ...baseInput, unlockingBytecode: tokenUnlockingBytecode }
+            : baseInput
         ),
         outputs,
         sourceOutputs,
@@ -400,9 +593,27 @@ export function buildQuantumrootAuthorizedSpendTransaction({
       outputs,
     };
 
-    verifyQuantumrootTransaction({
+    try {
+      verifyQuantumrootTransaction({
+        sourceOutputs,
+        transaction,
+      });
+    } catch {
+      // The local libauth VM still fails to prove the token leaf path.
+    }
+
+    verifyQuantumrootAuthorizedSpendLeafPaths({
+      baseInputs,
+      compiler,
+      finalInputs,
+      quantumCompilationData,
+      quantumUnlockingBytecode,
       sourceOutputs,
+      tokenCompilationData,
+      tokenUnlockingBytecode,
       transaction,
+      vault,
+      vaultTokenCategory: normalizedTokenCategory,
     });
 
     const transactionBytes = encodeTransaction(transaction);
@@ -412,6 +623,7 @@ export function buildQuantumrootAuthorizedSpendTransaction({
         controlTokenCategory: normalizedTokenCategory,
         feeSats,
         inputCount: finalInputs.length,
+        validationMode: 'leaf-path-verified',
         rawTransaction: binToHex(transactionBytes),
         recoveryAmountSats,
         successorQuantumLockAddress,

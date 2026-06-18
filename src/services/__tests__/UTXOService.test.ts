@@ -317,7 +317,7 @@ describe('UTXOService', () => {
         rawTx: 'feedface',
         walletId: 11,
         source: 'wallet',
-        state: 'broadcasted',
+        state: 'broadcasting',
         createdAt: new Date().toISOString(),
         updatedAt: new Date().toISOString(),
         spentOutpoints: [],

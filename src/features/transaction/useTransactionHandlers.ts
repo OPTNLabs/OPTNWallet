@@ -10,6 +10,7 @@ import TransactionService, {
 import { PaperWalletSecretStore } from '../../services/PaperWalletSecretStore';
 import KeyService from '../../services/KeyService';
 import { UTXO } from '../../types/types';
+import type { TokenCapability } from '../../services/cashtokens';
 import { toErrorMessage } from '../../utils/errorHandling';
 
 export type ContractAbiInput = { name: string; type: string };
@@ -26,7 +27,7 @@ type UseTransactionHandlersParams = {
   tokenAmount: number | bigint;
   selectedTokenCategory: string;
   addresses: { address: string; tokenAddress: string }[];
-  nftCapability?: 'none' | 'mutable' | 'minting';
+  nftCapability?: TokenCapability;
   nftCommitment?: string;
   handleSendTransaction: (
     rawTx: string,
@@ -57,9 +58,7 @@ type UseTransactionHandlersParams = {
     setTransferAmount: (value: number) => void;
     setTokenAmount: (value: number | bigint) => void;
     setSelectedTokenCategory: (value: string) => void;
-    setNftCapability: (
-      value: undefined | 'none' | 'mutable' | 'minting'
-    ) => void;
+    setNftCapability: (value: undefined | TokenCapability) => void;
     setNftCommitment: (value: undefined | string) => void;
   };
   popupSetters: {

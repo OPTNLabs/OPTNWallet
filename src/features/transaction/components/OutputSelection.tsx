@@ -15,6 +15,7 @@ import { useDispatch, useSelector } from 'react-redux';
 import { AppDispatch, RootState } from '../../../state/store';
 import { clearTransaction } from '../../../state/slices/transactionBuilderSlice';
 import { TransactionOutput, UTXO } from '../../../types/types';
+import type { TokenCapability } from '../../../services/cashtokens';
 import { shortenTxHash } from '../../../utils/shortenHash';
 import { Network } from '../../../state/slices/networkSlice';
 import { PREFIX, DUST, SATSINBITCOIN } from '../../../utils/constants';
@@ -44,8 +45,8 @@ interface OutputSelectionProps {
   setChangeAddress: (address: string) => void;
   txOutputs: TransactionOutput[];
   handleRemoveOutput: (index: number) => void;
-  nftCapability: undefined | 'none' | 'mutable' | 'minting';
-  setNftCapability: (value: undefined | 'none' | 'mutable' | 'minting') => void;
+  nftCapability: undefined | TokenCapability;
+  setNftCapability: (value: undefined | TokenCapability) => void;
   nftCommitment: undefined | string;
   setNftCommitment: (value: string) => void;
 }
