@@ -4,7 +4,6 @@ import {
   binToBase64,
   CashAddressType,
   encodeCashAddress,
-  hexToBin,
   instantiateSecp256k1,
   instantiateSha256,
   RecoveryId,
@@ -30,13 +29,42 @@ import { derivePrefix } from './derivePublicKeyHash';
  */
 // see    https://github.com/Electron-Cash/Electron-Cash/blob/49f9f672364f50053a026e4a5cb30e92db2d195d/electroncash/bitcoin.py#L524
 function message_magic(str: string) {
-  const length = utf8ToBin(str).length.toString(16);
+  const messageBytes = utf8ToBin(str);
   const payload = `\x18Bitcoin Signed Message:\n`;
   return new Uint8Array([
     ...utf8ToBin(payload),
-    ...hexToBin(length),
-    ...utf8ToBin(str),
+    ...encodeMessageLength(messageBytes.length),
+    ...messageBytes,
   ]);
+}
+
+/**
+ * encodeMessageLength - Encode the message length as a Bitcoin CompactSize
+ * varint, as required by the standard "Bitcoin Signed Message" framing.
+ *
+ * The previous `length.toString(16)` form was malformed for messages of 253
+ * bytes or more: it dropped the `0xfd` size marker and, for lengths whose hex
+ * is an odd number of characters, lost the final nibble. A 385-byte message
+ * was prefixed `18 01` instead of `fd 81 01`, so the signed preimage differed
+ * from every standards-compliant verifier and the signature failed to verify.
+ *
+ * @param {number} length   The message length in bytes.
+ * @returns the CompactSize-encoded length as a binary array.
+ */
+function encodeMessageLength(length: number): Uint8Array {
+  if (length < 0xfd) {
+    return Uint8Array.of(length);
+  }
+  if (length <= 0xffff) {
+    return Uint8Array.of(0xfd, length & 0xff, (length >> 8) & 0xff);
+  }
+  return Uint8Array.of(
+    0xfe,
+    length & 0xff,
+    (length >> 8) & 0xff,
+    (length >> 16) & 0xff,
+    (length >> 24) & 0xff
+  );
 }
 
 /**
