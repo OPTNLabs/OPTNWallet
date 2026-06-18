@@ -43,6 +43,7 @@ import type {
   UTXO,
   TransactionOutput,
 } from '../types/types';
+import type { TokenCapability } from './cashtokens';
 
 const toProviderNetwork = (
   network: string | null | undefined
@@ -167,7 +168,7 @@ export type AddonSDK = {
       selectedTokenCategory?: string;
       selectedUtxos?: UTXO[];
       addresses?: { address: string; tokenAddress?: string }[];
-      nftCapability?: undefined | 'none' | 'mutable' | 'minting';
+      nftCapability?: TokenCapability;
       nftCommitment?: string;
     }): TransactionOutput | undefined;
 

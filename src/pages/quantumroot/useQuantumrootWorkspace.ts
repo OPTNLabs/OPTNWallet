@@ -4,6 +4,10 @@ import { Toast } from '@capacitor/toast';
 import KeyService from '../../services/KeyService';
 import UTXOService from '../../services/UTXOService';
 import {
+  summarizeQuantumrootWalletTokenInventory,
+  type QuantumrootWalletTokenSummary,
+} from '../../services/QuantumrootWalletTokenInventoryService';
+import {
   bucketQuantumrootReceiveUtxos,
   summarizeQuantumrootVaultStatus,
 } from '../../services/QuantumrootVaultStatusService';
@@ -11,9 +15,11 @@ import {
   summarizeQuantumrootTokenAwareness,
   type QuantumrootTokenAwareness,
 } from '../../services/QuantumrootTokenAwarenessService';
+import { validateQuantumrootAuthorizedSpendAgainstFulcrum } from '../../services/QuantumrootFulcrumValidationService';
 import { shortenTxHash } from '../../utils/shortenHash';
 import TransactionService from '../../services/TransactionService';
 import {
+  buildQuantumrootAuthorizedSpendTransaction,
   buildQuantumrootAggregateRecoverySweepTransaction,
   buildQuantumrootQuantumLockRecoveryTransaction,
   buildQuantumrootRecoveryTransaction,
@@ -25,10 +31,39 @@ import type {
   VaultStatusView,
   WalletKey,
 } from './quantumrootTypes';
+import { deriveQuantumrootUiState } from './quantumrootUiState';
+
+function describeQuantumrootError(error: unknown) {
+  const message =
+    error instanceof Error
+      ? error.message
+      : typeof error === 'string'
+        ? error
+        : 'Unknown Quantumroot error.';
+
+  if (message.includes('fall below dust after fees')) {
+    return 'That coin is too small to spend after fees. Try a larger receive coin.';
+  }
+  if (message.includes('control token UTXO is not currently visible')) {
+    return 'Refresh the vault. The approval key is no longer visible on the chain.';
+  }
+  if (message.includes('control token category does not match')) {
+    return 'Refresh the vault. The selected approval key no longer matches the chain state.';
+  }
+  if (message.includes('destination output does not match the requested destination address')) {
+    return 'Check the destination address and try again.';
+  }
+  if (message.includes('Quantumroot authorized spend requires a matching control token category')) {
+    return 'The approval key does not match the selected key. Refresh and choose the correct one.';
+  }
+
+  return message;
+}
 
 type UseQuantumrootWorkspaceArgs = {
   currentWalletId: number | null;
   workspaceEnabled?: boolean;
+  isActiveNetwork?: boolean;
 };
 
 type UseQuantumrootWorkspaceResult = QuantumrootWorkspaceState & {
@@ -40,11 +75,16 @@ type UseQuantumrootWorkspaceResult = QuantumrootWorkspaceState & {
   };
   selectedVaultStatus: VaultStatusView | null;
   selectedVaultTokenAwareness: QuantumrootTokenAwareness | null;
+  walletTokenInventory: QuantumrootWalletTokenSummary[];
   recoveryDestinationAddress: string | null;
   loadQuantumrootWorkspace: () => Promise<void>;
   handleSyncVaults: () => Promise<void>;
   handleSaveVaultConfiguration: () => Promise<void>;
   handleSpendUtxo: (utxo: UTXO, destinationAddress: string) => Promise<void>;
+  handleAuthorizedSpendUtxo: (
+    utxo: UTXO,
+    destinationAddress: string
+  ) => Promise<void>;
   handleSweepAllReceiveUtxos: () => Promise<void>;
   handleRecoverQuantumLockUtxo: (
     utxo: UTXO,
@@ -58,9 +98,13 @@ type UseQuantumrootWorkspaceResult = QuantumrootWorkspaceState & {
 export function useQuantumrootWorkspace({
   currentWalletId,
   workspaceEnabled = true,
+  isActiveNetwork = true,
 }: UseQuantumrootWorkspaceArgs): UseQuantumrootWorkspaceResult {
   const [vaults, setVaults] = useState<QuantumrootVaultRecord[]>([]);
   const [walletKeys, setWalletKeys] = useState<WalletKey[]>([]);
+  const [walletTokenInventory, setWalletTokenInventory] = useState<
+    QuantumrootWalletTokenSummary[]
+  >([]);
   const [statusesByIndex, setStatusesByIndex] = useState<
     Record<number, VaultStatusView>
   >({});
@@ -87,6 +131,7 @@ export function useQuantumrootWorkspace({
       setLoadError(null);
       setVaults([]);
       setWalletKeys([]);
+      setWalletTokenInventory([]);
       setStatusesByIndex({});
       setTokenAwarenessByIndex({});
       return;
@@ -103,12 +148,13 @@ export function useQuantumrootWorkspace({
       setLoading(false);
 
       const allAddresses = Array.from(
-        new Set(
-          nextVaults.flatMap((vault) => [
+        new Set([
+          ...keys.map((key) => key.address),
+          ...nextVaults.flatMap((vault) => [
             vault.receive_address,
             vault.quantum_lock_address,
-          ])
-        )
+          ]),
+        ])
       ).filter(Boolean);
 
       setRefreshing(true);
@@ -116,6 +162,9 @@ export function useQuantumrootWorkspace({
         allAddresses.length > 0
           ? await UTXOService.fetchAndStoreUTXOsMany(currentWalletId, allAddresses)
           : {};
+      setWalletTokenInventory(
+        summarizeQuantumrootWalletTokenInventory(Object.values(utxosByAddress).flat())
+      );
 
       const nextStatuses = Object.fromEntries(
         nextVaults.map((vault) => {
@@ -240,8 +289,38 @@ export function useQuantumrootWorkspace({
     setPendingSpendAddress(recoveryDestinationAddress ?? '');
   }, [recoveryDestinationAddress, selectedVault]);
 
+  const quantumrootPlainNftFamilies = useMemo(
+    () => walletTokenInventory.filter((token) => token.plainNftUtxoCount > 0),
+    [walletTokenInventory]
+  );
+
+  const quantumrootUiState = useMemo(
+    () =>
+      deriveQuantumrootUiState({
+        plainNftFamilies: quantumrootPlainNftFamilies,
+        pendingTokenCategory,
+        pendingSpendAddress,
+        selectedVaultTokenAwareness,
+        isActiveNetwork,
+      }),
+    [
+      isActiveNetwork,
+      pendingSpendAddress,
+      pendingTokenCategory,
+      quantumrootPlainNftFamilies,
+      selectedVaultTokenAwareness,
+    ]
+  );
+
   const handleSaveVaultConfiguration = useCallback(async () => {
     if (!currentWalletId || !selectedVault) return;
+
+    if (quantumrootUiState.isStaleInventory) {
+      await Toast.show({
+        text: 'This approval key is no longer visible. Refresh the vault or choose another key.',
+      });
+      return;
+    }
 
     const normalized = pendingTokenCategory.trim().replace(/^0x/i, '').toLowerCase();
     if (!/^[0-9a-f]{64}$/.test(normalized)) {
@@ -265,12 +344,18 @@ export function useQuantumrootWorkspace({
     } catch (error) {
       console.error('Failed to configure Quantumroot vault:', error);
       await Toast.show({
-        text: `Failed to configure vault: ${(error as Error).message}`,
+        text: `Failed to configure vault: ${describeQuantumrootError(error)}`,
       });
     } finally {
       setSavingConfiguration(false);
     }
-  }, [currentWalletId, loadQuantumrootWorkspace, pendingTokenCategory, selectedVault]);
+  }, [
+    currentWalletId,
+    loadQuantumrootWorkspace,
+    pendingTokenCategory,
+    quantumrootUiState.isStaleInventory,
+    selectedVault,
+  ]);
 
   const handleSpendUtxo = useCallback(
     async (utxo: UTXO, destinationAddress: string) => {
@@ -328,14 +413,14 @@ export function useQuantumrootWorkspace({
         } finally {
           zeroizeQuantumrootArtifacts(vault);
         }
-      } catch (error) {
-        console.error('Quantumroot spend failed from workspace:', error);
-        await Toast.show({
-          text: `Quantumroot spend failed: ${(error as Error).message}`,
-        });
-      } finally {
-        setRecoveringOutpoint(null);
-      }
+    } catch (error) {
+      console.error('Quantumroot spend failed from workspace:', error);
+      await Toast.show({
+        text: `Quantumroot spend failed: ${describeQuantumrootError(error)}`,
+      });
+    } finally {
+      setRecoveringOutpoint(null);
+    }
     },
     [currentWalletId, loadQuantumrootWorkspace, selectedVault]
   );
@@ -400,7 +485,7 @@ export function useQuantumrootWorkspace({
     } catch (error) {
       console.error('Quantumroot sweep failed from workspace:', error);
       await Toast.show({
-        text: `Quantumroot sweep failed: ${(error as Error).message}`,
+        text: `Quantumroot sweep failed: ${describeQuantumrootError(error)}`,
       });
     } finally {
       setSweepingAll(false);
@@ -412,6 +497,132 @@ export function useQuantumrootWorkspace({
     selectedVault,
     selectedVaultStatus,
   ]);
+
+  const handleAuthorizedSpendUtxo = useCallback(
+    async (utxo: UTXO, destinationAddress: string) => {
+      if (!currentWalletId || !selectedVault || !selectedVaultTokenAwareness) {
+        await Toast.show({ text: 'Quantumroot vault unavailable.' });
+        return;
+      }
+
+      const normalizedDestination = destinationAddress.trim();
+      if (!normalizedDestination) {
+        await Toast.show({ text: 'Destination address is required.' });
+        return;
+      }
+
+      const controlTokenUtxo =
+        selectedVaultTokenAwareness.matchingControlTokenUtxos[0] ?? null;
+      if (!controlTokenUtxo) {
+        await Toast.show({
+          text: 'No matching Quantum Lock control token is available yet.',
+        });
+        return;
+      }
+
+      const receiveTokenUtxo =
+        selectedVaultTokenAwareness.matchingReceiveTokenUtxos.find(
+          (candidate) =>
+            candidate.tx_hash === utxo.tx_hash && candidate.tx_pos === utxo.tx_pos
+        ) ?? null;
+      if (!receiveTokenUtxo) {
+        await Toast.show({
+          text: 'That receive UTXO is not eligible for authorized spend.',
+        });
+        return;
+      }
+
+      const outpointKey = `${receiveTokenUtxo.tx_hash}:${receiveTokenUtxo.tx_pos}`;
+      setRecoveringOutpoint(outpointKey);
+
+      let vault: Awaited<ReturnType<typeof KeyService.deriveQuantumrootVault>> | null =
+        null;
+      let successorVault:
+        | Awaited<ReturnType<typeof KeyService.deriveQuantumrootVault>>
+        | null = null;
+
+      try {
+        vault = await KeyService.deriveQuantumrootVault(
+          currentWalletId,
+          selectedVault.address_index,
+          selectedVault.account_index,
+          selectedVault.online_quantum_signer === 1 ? '1' : '0',
+          selectedVault.vault_token_category
+        );
+        successorVault = await KeyService.deriveQuantumrootVault(
+          currentWalletId,
+          selectedVault.address_index + 1,
+          selectedVault.account_index,
+          selectedVault.online_quantum_signer === 1 ? '1' : '0',
+          selectedVault.vault_token_category
+        );
+
+        const built = buildQuantumrootAuthorizedSpendTransaction({
+          controlTokenUtxo,
+          destinationAddress: normalizedDestination,
+          receiveUtxos: [receiveTokenUtxo],
+          successorQuantumLockAddress: successorVault.quantumLockAddress,
+          successorQuantumLockLockingBytecode: successorVault.quantumLockLockingBytecode,
+          vault,
+          vaultTokenCategory: selectedVault.vault_token_category,
+        });
+
+        await validateQuantumrootAuthorizedSpendAgainstFulcrum({
+          controlTokenUtxo,
+          destinationAddress: normalizedDestination,
+          rawTransaction: built.rawTransaction,
+          receiveUtxos: [receiveTokenUtxo],
+          successorQuantumLockAddress: successorVault.quantumLockAddress,
+          successorQuantumLockLockingBytecode:
+            successorVault.quantumLockLockingBytecode,
+          vault,
+          vaultTokenCategory: selectedVault.vault_token_category,
+        });
+
+        const sent = await TransactionService.sendTransaction(
+          built.rawTransaction,
+          [controlTokenUtxo, receiveTokenUtxo],
+          {
+            source: 'quantumroot-authorized-spend',
+            sourceLabel: 'Quantumroot Authorized Spend',
+            recipientSummary: normalizedDestination,
+            amountSummary: built.recoveryAmountSats.toString(),
+            userPrompt: 'Spend token-authorized funds from a Quantumroot vault',
+          }
+        );
+
+        if (!sent.txid) {
+          throw new Error(
+            sent.errorMessage || 'Failed to broadcast Quantumroot authorized spend.'
+          );
+        }
+
+        await Toast.show({
+          text: `Quantumroot authorized spend broadcast: ${shortenTxHash(sent.txid)}`,
+        });
+        await loadQuantumrootWorkspace();
+    } catch (error) {
+      console.error('Quantumroot authorized spend failed from workspace:', error);
+      await Toast.show({
+        text: `Quantumroot authorized spend failed: ${describeQuantumrootError(error)}`,
+      });
+    } finally {
+      if (vault) {
+        zeroizeQuantumrootArtifacts(vault);
+        }
+        if (successorVault) {
+          zeroizeQuantumrootArtifacts(successorVault);
+        }
+        setRecoveringOutpoint(null);
+      }
+    },
+    [
+      currentWalletId,
+      loadQuantumrootWorkspace,
+      selectedVault,
+      selectedVaultTokenAwareness,
+    ]
+  );
 
   const handleRecoverQuantumLockUtxo = useCallback(
     async (utxo: UTXO, destinationAddress: string) => {
@@ -471,14 +682,14 @@ export function useQuantumrootWorkspace({
         } finally {
           zeroizeQuantumrootArtifacts(vault);
         }
-      } catch (error) {
-        console.error('Quantum Lock recovery failed from workspace:', error);
-        await Toast.show({
-          text: `Quantum Lock recovery failed: ${(error as Error).message}`,
-        });
-      } finally {
-        setRecoveringOutpoint(null);
-      }
+    } catch (error) {
+      console.error('Quantum Lock recovery failed from workspace:', error);
+      await Toast.show({
+        text: `Quantum Lock recovery failed: ${describeQuantumrootError(error)}`,
+      });
+    } finally {
+      setRecoveringOutpoint(null);
+    }
     },
     [currentWalletId, loadQuantumrootWorkspace, selectedVault]
   );
@@ -498,14 +709,18 @@ export function useQuantumrootWorkspace({
     pendingSpendAddress,
     pendingTokenCategory,
     savingConfiguration,
+    quantumrootPlainNftFamilies,
+    quantumrootUiState,
     portfolio,
     selectedVaultStatus,
     selectedVaultTokenAwareness,
+    walletTokenInventory,
     recoveryDestinationAddress,
     loadQuantumrootWorkspace,
     handleSyncVaults,
     handleSaveVaultConfiguration,
     handleSpendUtxo,
+    handleAuthorizedSpendUtxo,
     handleSweepAllReceiveUtxos,
     handleRecoverQuantumLockUtxo,
     setSelectedVault,

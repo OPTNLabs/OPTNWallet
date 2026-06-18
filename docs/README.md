@@ -14,6 +14,8 @@ Technical documentation for contributors and third-party integrators.
   - BCH covenant design patterns, state-machine rules, and testing checklist.
 - [Custody Vault Design Notes](./custody-vault-design-notes.md)
   - How OPTN Wallet treats open inbound deposits and locked outbound custody control.
+- [Quantumroot Flow Chart](./quantumroot-flow.md)
+  - Reference Quantumroot address structure, pre-quantum flow, post-quantum flow, and Quantum Lock cleanup.
 
 ## Addon-Specific Docs
 

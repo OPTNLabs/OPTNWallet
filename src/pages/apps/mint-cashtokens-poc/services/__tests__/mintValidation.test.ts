@@ -52,7 +52,7 @@ describe('validateMintRequest', () => {
       'Change address not ready.'
     );
     expect(validateMintRequest({ ...validParams(), selectedUtxos: [] })).toBe(
-      'Select at least one Candidate UTXO.'
+      'Select at least one source UTXO.'
     );
     expect(
       validateMintRequest({ ...validParams(), activeOutputDrafts: [] })
@@ -72,10 +72,91 @@ describe('validateMintRequest', () => {
         ...validParams(),
         selectedSourceKeySet: new Set<string>(),
       })
-    ).toBe('An output references an unselected Candidate UTXO.');
+    ).toBe('An output references an unselected source UTXO.');
   });
 
-  it('rejects non-positive FT amount and duplicated NFT category', () => {
+  it('rejects plain NFT sources and FT outputs from minting authorities', () => {
+    const plainSource: MintAppUtxo = {
+      ...baseUtxo,
+      tx_hash: 'p'.repeat(64),
+      tx_pos: 1,
+      token: {
+        category: 'p'.repeat(64),
+        amount: 0,
+        nft: { capability: 'none', commitment: 'seed' },
+      },
+    };
+    const mintingSource: MintAppUtxo = {
+      ...baseUtxo,
+      tx_hash: 'm'.repeat(64),
+      tx_pos: 2,
+      token: {
+        category: 'm'.repeat(64),
+        amount: 0,
+        nft: { capability: 'minting', commitment: 'seed' },
+      },
+    };
+
+    expect(
+      validateMintRequest({
+        ...validParams(),
+        selectedUtxos: [plainSource],
+        activeOutputDrafts: [
+          {
+            ...baseDraft,
+            sourceKey: `${plainSource.tx_hash}:${plainSource.tx_pos}`,
+          },
+        ],
+        selectedRecipientSet: new Set([baseDraft.recipientCashAddr]),
+        selectedSourceKeySet: new Set([
+          `${plainSource.tx_hash}:${plainSource.tx_pos}`,
+        ]),
+      })
+    ).toBe('Only genesis UTXOs or minting authority NFTs can be used as mint sources.');
+
+    expect(
+      validateMintRequest({
+        ...validParams(),
+        selectedUtxos: [mintingSource],
+        activeOutputDrafts: [
+          {
+            ...baseDraft,
+            sourceKey: `${mintingSource.tx_hash}:${mintingSource.tx_pos}`,
+          },
+        ],
+        selectedRecipientSet: new Set([baseDraft.recipientCashAddr]),
+        selectedSourceKeySet: new Set([
+          `${mintingSource.tx_hash}:${mintingSource.tx_pos}`,
+        ]),
+      })
+    ).toBe('Minting authority sources can only mint NFT outputs.');
+  });
+
+  it('rejects selected sources that do not have any output mapping', () => {
+    const extraSource: MintAppUtxo = {
+      ...baseUtxo,
+      tx_hash: 'f'.repeat(64),
+      tx_pos: 1,
+      token: {
+        category: 'f'.repeat(64),
+        amount: 0,
+        nft: { capability: 'minting', commitment: 'seed' },
+      },
+    };
+
+    expect(
+      validateMintRequest({
+        ...validParams(),
+        selectedUtxos: [baseUtxo, extraSource],
+        selectedSourceKeySet: new Set([
+          `${baseUtxo.tx_hash}:${baseUtxo.tx_pos}`,
+          `${extraSource.tx_hash}:${extraSource.tx_pos}`,
+        ]),
+      })
+    ).toBe('Each selected source UTXO needs at least one output mapping.');
+  });
+
+  it('rejects non-positive FT amount and allows multiple NFT outputs from genesis', () => {
     expect(
       validateMintRequest({
         ...validParams(),
@@ -88,7 +169,7 @@ describe('validateMintRequest', () => {
       })
     ).toContain('FT amount must be > 0');
 
-    const d2: MintOutputDraft = {
+    const nftDraftA: MintOutputDraft = {
       ...baseDraft,
       id: 'd2',
       config: {
@@ -98,13 +179,22 @@ describe('validateMintRequest', () => {
         nftCommitment: 'ab',
       },
     };
+    const nftDraftB: MintOutputDraft = {
+      ...baseDraft,
+      id: 'd3',
+      config: {
+        ...baseDraft.config,
+        mintType: 'NFT',
+        nftCapability: 'none',
+        nftCommitment: 'cd',
+      },
+    };
 
-    const err = validateMintRequest({
-      ...validParams(),
-      activeOutputDrafts: [baseDraft, d2],
-    });
-
-    expect(err).toContain('Category');
-    expect(err).toContain('must be FT');
+    expect(
+      validateMintRequest({
+        ...validParams(),
+        activeOutputDrafts: [nftDraftA, nftDraftB],
+      })
+    ).toBeNull();
   });
 });

@@ -18,7 +18,6 @@ import {
   buildMintPreview,
   parseUrisInput,
   selectFeeCandidates,
-  selectGenesisUtxos,
   validateMintRequest,
 } from './services';
 import {
@@ -58,8 +57,15 @@ import {
   asTxSummaryOutputs,
   filterActiveOutputDrafts,
   mergeWalletUtxos,
+  shortHash,
   utxoKey,
 } from './utils';
+import {
+  canMintFungibleFromSource,
+  getMintSourceCategory,
+  getMintSourceKind,
+  selectMintSourceUtxos,
+} from './utils/sourceHelpers';
 import { useSmoothResetTransition } from '../shared/useSmoothResetTransition';
 import { selectWalletId } from '../../../state/slices/walletSlice';
 
@@ -159,6 +165,19 @@ function getErrorMessage(err: unknown, fallback: string): string {
   if (err instanceof Error && err.message) return err.message;
   if (typeof err === 'string' && err.trim()) return err;
   return fallback;
+}
+
+function describeMintSourceKind(
+  utxo: MintDisplayUtxo
+): 'genesis source' | 'minting authority' | 'unsupported source' {
+  switch (getMintSourceKind(utxo)) {
+    case 'minting-nft':
+      return 'minting authority';
+    case 'genesis':
+      return 'genesis source';
+    default:
+      return 'unsupported source';
+  }
 }
 
 const MintCashTokensPoCApp: React.FC = () => {
@@ -322,11 +341,10 @@ const MintCashTokensPoCApp: React.FC = () => {
     setSelectedRecipientCashAddrs(new Set([first]));
   }, [addresses, selectedRecipientCashAddrs]);
 
-  const walletGenesisCandidates: MintAppUtxo[] = useMemo(
-    () => selectGenesisUtxos(flatUtxos),
+  const walletSourceCandidates: MintAppUtxo[] = useMemo(
+    () => selectMintSourceUtxos(flatUtxos),
     [flatUtxos]
   );
-  const hasGenesisCandidate = walletGenesisCandidates.length > 0;
 
   const primaryRecipientAddress = useMemo(
     () =>
@@ -351,8 +369,8 @@ const MintCashTokensPoCApp: React.FC = () => {
     );
   }, [bootstrapTxids, primaryRecipientAddress]);
 
-  const displayGenesisUtxos: MintDisplayUtxo[] = useMemo(() => {
-    const all = [...bootstrapGenesisUtxos, ...walletGenesisCandidates];
+  const displaySourceUtxos: MintDisplayUtxo[] = useMemo(() => {
+    const all = [...bootstrapGenesisUtxos, ...walletSourceCandidates];
     const seen = new Set<string>();
     const out: MintAppUtxo[] = [];
     for (const u of all) {
@@ -362,25 +380,35 @@ const MintCashTokensPoCApp: React.FC = () => {
       out.push(u);
     }
     return out;
-  }, [bootstrapGenesisUtxos, walletGenesisCandidates]);
+  }, [bootstrapGenesisUtxos, walletSourceCandidates]);
 
-  const displayGenesisUtxoByKey = useMemo(() => {
+  const displaySourceUtxoByKey = useMemo(() => {
     const out = new Map<string, MintDisplayUtxo>();
-    for (const u of displayGenesisUtxos) {
+    for (const u of displaySourceUtxos) {
       out.set(utxoKey(u), u);
     }
     return out;
-  }, [displayGenesisUtxos]);
+  }, [displaySourceUtxos]);
 
   const selectedUtxos: MintAppUtxo[] = useMemo(() => {
     if (selectedKeys.size === 0) return [];
     const out: MintAppUtxo[] = [];
     for (const key of selectedKeys) {
-      const utxo = displayGenesisUtxoByKey.get(key);
+      const utxo = displaySourceUtxoByKey.get(key);
       if (utxo) out.push(utxo);
     }
     return out;
-  }, [displayGenesisUtxoByKey, selectedKeys]);
+  }, [displaySourceUtxoByKey, selectedKeys]);
+
+  useEffect(() => {
+    setSelectedKeys((prev) => {
+      const next = new Set(
+        Array.from(prev).filter((key) => displaySourceUtxoByKey.has(key))
+      );
+      if (next.size === prev.size) return prev;
+      return next;
+    });
+  }, [displaySourceUtxoByKey]);
 
   const selectedCount = selectedUtxos.length;
   const pendingCount = bootstrapGenesisUtxos.length;
@@ -393,7 +421,10 @@ const MintCashTokensPoCApp: React.FC = () => {
   const selectedRecipientCount = orderedSelectedRecipients.length;
 
   const bcmrSelectedCategories = useMemo(
-    () => Array.from(new Set(selectedUtxos.map((utxo) => utxo.tx_hash))),
+    () =>
+      Array.from(
+        new Set(selectedUtxos.map((utxo) => getMintSourceCategory(utxo)))
+      ),
     [selectedUtxos]
   );
   const bcmrAuthbase =
@@ -449,6 +480,14 @@ const MintCashTokensPoCApp: React.FC = () => {
     };
   }, [bcmrEnabled, bcmrUploadsComplete, bcmrRegistryJson, bcmrUrisText]);
 
+  const selectedSourceBcmrMetadata = useMemo(() => {
+    for (const utxo of selectedUtxos) {
+      if (utxo.token?.BcmrTokenMetadata) return utxo.token.BcmrTokenMetadata;
+    }
+    return null;
+  }, [selectedUtxos]);
+  const selectedSourceHasExistingBcmr = !!selectedSourceBcmrMetadata;
+
   const recipientTokenAddressByCash = useMemo(() => {
     const out: Record<string, string> = {};
     for (const a of addresses) out[a.address] = a.tokenAddress;
@@ -499,12 +538,13 @@ const MintCashTokensPoCApp: React.FC = () => {
   );
 
   const openAddOutputDraftForm = useCallback(() => {
+    const initialSource = selectedUtxos[0] ?? null;
     setEditingOutputDraftId(null);
     setOutputFormRecipient(selectedRecipientCashAddrs.values().next().value || addresses[0]?.address || '');
-    setOutputFormSourceKey(
-      selectedUtxos[0] ? utxoKey(selectedUtxos[0]) : ''
+    setOutputFormSourceKey(initialSource ? utxoKey(initialSource) : '');
+    setOutputFormMintType(
+      initialSource && canMintFungibleFromSource(initialSource) ? 'FT' : 'NFT'
     );
-    setOutputFormMintType('FT');
     setOutputFormFtAmount('1');
     setOutputFormNftCapability('none');
     setOutputFormNftCommitment('');
@@ -524,6 +564,17 @@ const MintCashTokensPoCApp: React.FC = () => {
 
   const saveOutputDraftForm = useCallback(() => {
     if (!outputFormRecipient || !outputFormSourceKey) return;
+    const source = selectedUtxos.find(
+      (utxo) => utxoKey(utxo) === outputFormSourceKey
+    );
+    if (!source) {
+      setErrorMessage('Select a valid source UTXO first.');
+      return;
+    }
+    if (!canMintFungibleFromSource(source) && outputFormMintType === 'FT') {
+      setErrorMessage('Minting authority sources can only mint NFT outputs.');
+      return;
+    }
     const nextDraft = {
       recipientCashAddr: outputFormRecipient,
       sourceKey: outputFormSourceKey,
@@ -595,6 +646,25 @@ const MintCashTokensPoCApp: React.FC = () => {
     () => new Set(selectedKeys),
     [selectedKeys]
   );
+
+  const outputFormSource = useMemo(
+    () =>
+      selectedUtxos.find((utxo) => utxoKey(utxo) === outputFormSourceKey) ??
+      null,
+    [outputFormSourceKey, selectedUtxos]
+  );
+  const outputFormSourceKind = outputFormSource
+    ? getMintSourceKind(outputFormSource)
+    : null;
+  const outputFormAllowsFungible = outputFormSource
+    ? canMintFungibleFromSource(outputFormSource)
+    : false;
+
+  useEffect(() => {
+    if (!outputFormAllowsFungible && outputFormMintType === 'FT') {
+      setOutputFormMintType('NFT');
+    }
+  }, [outputFormAllowsFungible, outputFormMintType]);
 
   const canGoToStep = useCallback(
     (n: 1 | 2 | 3) => {
@@ -707,7 +777,7 @@ const MintCashTokensPoCApp: React.FC = () => {
     const feeCandidates = selectFeeCandidates(flatUtxos);
     if (feeCandidates.length === 0) {
       setErrorMessage(
-        'No fee UTXOs available. Need a non-token fee UTXO with vout != 0; Candidate UTXOs still must be vout = 0.'
+        'No fee UTXOs available. Need a non-token fee UTXO with vout != 0; category sources still begin as genesis vout = 0 UTXOs.'
       );
       return;
     }
@@ -722,7 +792,7 @@ const MintCashTokensPoCApp: React.FC = () => {
       });
 
       openConfirm({
-        title: 'Create Category UTXO',
+        title: 'Create Category Source',
         // subtitle: 'Creates one new vout=0 source with 1000 sats.',
         subtitle: '',
         warning: 'This will broadcast immediately after confirmation.',
@@ -737,7 +807,7 @@ const MintCashTokensPoCApp: React.FC = () => {
         onConfirm: async () => {
           setConfirmLoading(true);
           try {
-            setStatus('Broadcasting Category UTXO creation...');
+            setStatus('Broadcasting category source creation...');
             const sent = await TransactionService.sendTransaction(
               built.finalTransaction
             );
@@ -752,11 +822,11 @@ const MintCashTokensPoCApp: React.FC = () => {
             setTxid(sentTxid);
             setStatus(
               submitted
-                ? 'Category UTXO submitted. Refreshing wallet data...'
-                : 'Category UTXO created. Refreshing wallet data...'
+                ? 'Category source submitted. Refreshing wallet data...'
+                : 'Category source created. Refreshing wallet data...'
             );
             showToast(
-              submitted ? 'Category UTXO submitted' : 'Category UTXO created'
+              submitted ? 'Category source submitted' : 'Category source created'
             );
 
             let refreshFailed = false;
@@ -773,11 +843,11 @@ const MintCashTokensPoCApp: React.FC = () => {
             setStatus(
               refreshFailed
                 ? submitted
-                  ? 'Category UTXO submitted. Wallet refresh failed; keep the txid and refresh manually.'
-                  : 'Category UTXO created. Wallet refresh failed; refresh manually.'
+                  ? 'Category source submitted. Wallet refresh failed; keep the txid and refresh manually.'
+                  : 'Category source created. Wallet refresh failed; refresh manually.'
                 : submitted
-                  ? 'Category UTXO submitted. Keep the txid and avoid sending it again.'
-                  : 'Category UTXO created. Returned to the start screen.'
+                  ? 'Category source submitted. Keep the txid and avoid sending it again.'
+                  : 'Category source created. Returned to the start screen.'
             );
           } finally {
             setConfirmLoading(false);
@@ -813,7 +883,7 @@ const MintCashTokensPoCApp: React.FC = () => {
 
   /**
    * Build mint tx:
-   * - inputs: genesis (vout=0 selected) + fee utxos (vout!=0 && !token)
+   * - inputs: selected source UTXOs (genesis or minting authority NFT) + fee utxos (vout!=0 && !token)
    * - outputs: N token outputs + auto change
    * Enforce 1 sat/byte by builder.
    */
@@ -977,6 +1047,39 @@ const MintCashTokensPoCApp: React.FC = () => {
     [copyText]
   );
 
+  const openBcmrEditor = useCallback(
+    (prefillFromExisting: boolean) => {
+      const existing = prefillFromExisting
+        ? selectedSourceBcmrMetadata
+        : null;
+
+      setBcmrEnabled(true);
+      setBcmrRegistryJson('');
+      setBcmrUrisText(
+        existing
+          ? Object.values(existing.uris ?? {})
+              .filter(Boolean)
+              .join('\n')
+          : ''
+      );
+      setBcmrTokenName(existing?.name ?? '');
+      setBcmrTokenDescription(existing?.description ?? '');
+      setBcmrTokenSymbol(existing?.token?.symbol ?? '');
+      setBcmrTokenDecimals(String(existing?.token?.decimals ?? 0));
+      setBcmrIconUri(existing?.uris?.icon ?? '');
+      setBcmrWebUri(existing?.uris?.web ?? '');
+      setBcmrImageFile(null);
+      setBcmrImageUpload(null);
+      setBcmrImageUploadStatus(IDLE_BCMR_UPLOAD_STATUS);
+      setBcmrRegistryUpload(null);
+      setBcmrRegistryUploadStatus(IDLE_BCMR_UPLOAD_STATUS);
+      setBcmrConfirmedFingerprint('');
+      clearBcmrFieldErrors();
+      setShowBcmrPopup(true);
+    },
+    [clearBcmrFieldErrors, selectedSourceBcmrMetadata]
+  );
+
   const handleJumpToAmounts = useCallback(() => {
     setStep(3);
   }, []);
@@ -1067,7 +1170,7 @@ const MintCashTokensPoCApp: React.FC = () => {
 
     if (bcmrSelectedCategories.length !== 1) {
       nextErrors.general =
-        'BCMR publication requires exactly one selected genesis category.';
+        'BCMR publication requires exactly one selected token category.';
     } else if (!/^[0-9a-f]{64}$/i.test(bcmrAuthbase.trim())) {
       nextErrors.general = 'Authbase is not ready. Select a valid source UTXO.';
     }
@@ -1254,13 +1357,13 @@ const MintCashTokensPoCApp: React.FC = () => {
               >
                 {mountedSteps.has(1) ? (
                   <SourcesStepCard
-                    displayGenesisUtxos={displayGenesisUtxos}
+                    displaySourceUtxos={displaySourceUtxos}
                     selectedKeys={selectedKeys}
                     selectedCount={selectedCount}
                     pendingCount={pendingCount}
                     loading={loading}
                     canCreateSource={!!changeAddress}
-                    showCreateSourceAction={!hasGenesisCandidate}
+                    showCreateSourceAction={true}
                     onStartBootstrapFlow={startBootstrapFlow}
                     onToggleSelect={toggleSelect}
                     onCopyCategory={handleCopyCategory}
@@ -1290,15 +1393,28 @@ const MintCashTokensPoCApp: React.FC = () => {
                       <h3 className="text-base font-semibold">
                         Token Metadata
                       </h3>
+                      {selectedSourceHasExistingBcmr ? (
+                        <Badge tone="green">BCMR already present</Badge>
+                      ) : null}
+                    </div>
+                    <p className="text-sm wallet-muted">
+                      {selectedSourceHasExistingBcmr
+                        ? 'This mint source already has BCMR. You can mint now without publishing anything new.'
+                        : 'Optional: publish BCMR metadata if you want to describe this token family before minting.'}
+                    </p>
+                    <div className="flex items-center gap-2">
                       <button
                         type="button"
                         onClick={() => {
-                          setBcmrEnabled(true);
-                          setShowBcmrPopup(true);
+                          openBcmrEditor(selectedSourceHasExistingBcmr);
                         }}
                         className="wallet-btn-primary px-3 py-2 text-sm"
                       >
-                        {bcmrRegistryUpload ? 'Edit metadata' : 'Add metadata'}
+                        {selectedSourceHasExistingBcmr
+                          ? 'Replace metadata'
+                          : bcmrRegistryUpload
+                            ? 'Edit metadata'
+                            : 'Add metadata'}
                       </button>
                     </div>
                   </div>
@@ -1347,7 +1463,7 @@ const MintCashTokensPoCApp: React.FC = () => {
             <div className="min-w-0">
               <div className="text-sm font-semibold">
                 {step === 1
-                  ? 'Step 1: Category UTXO'
+                  ? 'Step 1: Source UTXOs'
                   : step === 2
                     ? 'Step 2: Recipients'
                     : `Step 3: Amounts (${activeOutputDrafts.length} outputs)`}
@@ -1462,11 +1578,20 @@ const MintCashTokensPoCApp: React.FC = () => {
 
               <div>
                 <label className="block text-sm font-semibold mb-1">
-                  Candidate UTXO
+                  Source UTXO
                 </label>
                 <select
                   value={outputFormSourceKey}
-                  onChange={(e) => setOutputFormSourceKey(e.target.value)}
+                  onChange={(e) => {
+                    const nextSourceKey = e.target.value;
+                    setOutputFormSourceKey(nextSourceKey);
+                    const nextSource = selectedUtxos.find(
+                      (utxo) => utxoKey(utxo) === nextSourceKey
+                    );
+                    if (nextSource && !canMintFungibleFromSource(nextSource)) {
+                      setOutputFormMintType('NFT');
+                    }
+                  }}
                   className="wallet-input p-4 w-full rounded-[16px] text-sm min-h-14"
                 >
                   <option value="" disabled>
@@ -1474,9 +1599,12 @@ const MintCashTokensPoCApp: React.FC = () => {
                   </option>
                   {selectedUtxos.map((u) => {
                     const key = utxoKey(u);
+                    const category = getMintSourceCategory(u);
                     return (
                       <option key={key} value={key}>
-                        {key}
+                        {`${shortHash(category, 12, 8)} • ${describeMintSourceKind(
+                          u
+                        )}`}
                       </option>
                     );
                   })}
@@ -1487,12 +1615,19 @@ const MintCashTokensPoCApp: React.FC = () => {
             <div className="grid grid-cols-2 gap-2">
               <button
                 type="button"
-                onClick={() => setOutputFormMintType('FT')}
+                onClick={() => {
+                  if (outputFormAllowsFungible) {
+                    setOutputFormMintType('FT');
+                  }
+                }}
                 className={
-                  outputFormMintType === 'FT'
+                  outputFormMintType === 'FT' && outputFormAllowsFungible
                     ? 'wallet-segment-active px-3 py-2 rounded-xl text-sm font-semibold'
-                    : 'wallet-segment-inactive px-3 py-2 rounded-xl text-sm font-semibold'
+                    : outputFormAllowsFungible
+                      ? 'wallet-segment-inactive px-3 py-2 rounded-xl text-sm font-semibold'
+                      : 'wallet-segment-inactive px-3 py-2 rounded-xl text-sm font-semibold opacity-50'
                 }
+                disabled={!outputFormAllowsFungible}
               >
                 FT
               </button>
@@ -1508,6 +1643,14 @@ const MintCashTokensPoCApp: React.FC = () => {
                 NFT
               </button>
             </div>
+
+            {outputFormSourceKind && !outputFormAllowsFungible ? (
+              <div className="rounded-2xl wallet-surface-strong border border-[var(--wallet-border)] p-3 text-sm wallet-muted">
+                {outputFormSourceKind === 'minting-nft'
+                  ? 'This source can only mint NFT outputs. Fungible outputs are only available from genesis UTXOs.'
+                  : 'This source is not eligible for fungible minting.'}
+              </div>
+            ) : null}
 
             {outputFormMintType === 'FT' ? (
               <div className="space-y-2">
@@ -1603,7 +1746,7 @@ const MintCashTokensPoCApp: React.FC = () => {
                 value={bcmrTokenCategory}
                 readOnly
                 className="wallet-input w-full font-mono text-xs opacity-80"
-                placeholder="Select one genesis UTXO to derive category"
+                placeholder="Select one mint source to derive category"
               />
               {bcmrFieldErrors.tokenCategory ? (
                 <p className="text-xs wallet-danger-text">

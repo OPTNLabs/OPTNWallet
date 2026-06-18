@@ -72,12 +72,12 @@ export const CardShell: React.FC<{
     <div className="wallet-card rounded-[20px] shadow-[0_6px_18px_rgba(0,0,0,0.06)] overflow-hidden">
       <button
         type="button"
-        className={`w-full px-5 py-4 flex items-start justify-between gap-3 ${
+        className={`w-full px-5 py-4 flex flex-col gap-3 text-left sm:flex-row sm:items-start sm:justify-between ${
           collapsible ? 'cursor-pointer' : 'cursor-default'
         }`}
         onClick={collapsible ? onToggle : undefined}
       >
-        <div className="min-w-0 text-left">
+        <div className="min-w-0 flex-1 text-left">
           <div className="flex items-center gap-2">
             <div className="text-base font-semibold">{title}</div>
           </div>
@@ -88,7 +88,7 @@ export const CardShell: React.FC<{
           ) : null}
         </div>
 
-        <div className="flex items-center gap-2 shrink-0">
+        <div className="flex flex-wrap items-center gap-2 sm:shrink-0">
           {right}
           {collapsible ? (
             <div className="wallet-muted text-sm font-bold w-5 text-right">

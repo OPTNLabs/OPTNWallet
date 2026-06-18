@@ -17,6 +17,10 @@ import { toTokenAwareCashAddress } from '../../utils/cashAddress';
 import { binToHex, hexToBin } from '../../utils/hex';
 import { sha256 } from '../../utils/hash';
 import {
+  validateNftCapabilityTransition,
+  type TokenCapability,
+} from '../../services/cashtokens';
+import {
   estimateAddP2PKHOutputBytes,
   formatMinRelayError,
   hasExplicitManualChangeOutput,
@@ -234,7 +238,7 @@ export default function TransactionManager() {
     selectedTokenCategory: string = '',
     selectedUtxos: UTXO[] = [],
     addresses: { address: string; tokenAddress?: string }[] = [],
-    nftCapability?: undefined | 'none' | 'mutable' | 'minting',
+    nftCapability?: TokenCapability,
     nftCommitment?: string,
     dispatchToStore = true
   ): TransactionOutput | undefined {
@@ -269,10 +273,28 @@ export default function TransactionManager() {
         };
 
         if (existingTokenUTXO.token.nft) {
+          const requestedCapability =
+            nftCapability ?? existingTokenUTXO.token.nft.capability;
+          const requestedCommitment =
+            nftCommitment ?? existingTokenUTXO.token.nft.commitment;
+          const transitionCheck = validateNftCapabilityTransition({
+            sourceCapability: existingTokenUTXO.token.nft.capability,
+            sourceCommitment: existingTokenUTXO.token.nft.commitment,
+            requestedCapability,
+            requestedCommitment,
+            outputCount: 1,
+          });
+          if (transitionCheck.ok === false) {
+            throw new Error(
+              'message' in transitionCheck
+                ? transitionCheck.message
+                : 'Capability validation failed.'
+            );
+          }
           newOutput.token.amount = 0;
           newOutput.token.nft = {
-            capability: existingTokenUTXO.token.nft.capability,
-            commitment: existingTokenUTXO.token.nft.commitment,
+            capability: requestedCapability,
+            commitment: requestedCommitment,
           };
         }
 
@@ -289,7 +311,8 @@ export default function TransactionManager() {
           newOutput.amount = TOKEN_OUTPUT_SATS;
         }
       } else if (genesisUtxo) {
-        const isNftGenesis = nftCapability && nftCommitment !== undefined;
+        const isNftGenesis =
+          nftCapability !== undefined && nftCommitment !== undefined;
 
         newOutput.token = {
           amount: isNftGenesis ? 0 : tokenAmount,

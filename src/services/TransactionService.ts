@@ -7,6 +7,7 @@ import {
   TransactionOutput,
   UTXO,
 } from '../types/types';
+import type { TokenCapability } from './cashtokens';
 import ContractManager from '../apis/ContractManager/ContractManager';
 import type { ContractInstanceRow } from '../apis/ContractManager/ContractManager';
 import TransactionManager from '../apis/TransactionManager/TransactionManager';
@@ -299,7 +300,7 @@ class TransactionService {
     selectedTokenCategory: string,
     selectedUtxos: UTXO[],
     addresses: { address: string; tokenAddress: string }[],
-    nftCapability?: undefined | 'none' | 'mutable' | 'minting',
+    nftCapability?: TokenCapability,
     nftCommitment?: string
   ): TransactionOutput | undefined {
     return this.getTransactionManager().addOutput(

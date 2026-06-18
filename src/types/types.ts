@@ -1,10 +1,12 @@
 // src/types/types.ts
 
+import type { TokenCapability } from '../services/cashtokens';
+
 export interface Token {
   amount: number | bigint;
   category: string;
   nft?: {
-    capability: 'none' | 'mutable' | 'minting';
+    capability: TokenCapability;
     commitment: string;
   };
   BcmrTokenMetadata?: BcmrTokenMetadata; // NEW INCLUSION
