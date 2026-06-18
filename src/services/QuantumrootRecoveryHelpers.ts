@@ -16,6 +16,7 @@ import { compileScriptRaw } from '@bitauth/libauth/build/lib/language/resolve.js
 
 import quantumrootTemplateJson from '../../../reference/quantumroot/quantumroot-schnorr-lm-ots-vault.json';
 import type { UTXO } from '../types/types';
+import { isPlainNftToken, type TokenCapability } from './cashtokens';
 import {
   getQuantumrootTemplateWithOverrides,
   signQuantumrootMessage,
@@ -42,7 +43,7 @@ type RecoveryOutput = {
     amount: bigint;
     category: Uint8Array;
     nft?: {
-      capability: 'none' | 'mutable' | 'minting';
+      capability: TokenCapability;
       commitment: Uint8Array;
     };
   };
@@ -120,6 +121,12 @@ export function toLibauthToken(token: NonNullable<UTXO['token']>) {
         }
       : {}),
   };
+}
+
+export function isQuantumrootAuthorizationToken(
+  token: NonNullable<UTXO['token']> | null | undefined
+) {
+  return isPlainNftToken(token);
 }
 
 export function buildRecoveryCompilationData({
@@ -230,9 +237,33 @@ export function verifyQuantumrootTransaction({
   sourceOutputs: RecoveryOutput[];
   transaction: RecoveryTransaction;
 }) {
+  return verifyQuantumrootTransactionInputs({
+    inputIndexes: transaction.inputs.map((_, inputIndex) => inputIndex),
+    sourceOutputs,
+    transaction,
+  });
+}
+
+export function verifyQuantumrootTransactionInputs({
+  inputIndexes,
+  sourceOutputs,
+  transaction,
+}: {
+  inputIndexes: number[];
+  sourceOutputs: RecoveryOutput[];
+  transaction: RecoveryTransaction;
+}) {
   const vm = createVirtualMachineBch2026();
 
-  for (let inputIndex = 0; inputIndex < transaction.inputs.length; inputIndex += 1) {
+  for (const inputIndex of Array.from(new Set(inputIndexes))) {
+    if (
+      !Number.isInteger(inputIndex) ||
+      inputIndex < 0 ||
+      inputIndex >= transaction.inputs.length
+    ) {
+      throw new Error(`Quantumroot verification requested invalid input index: ${inputIndex}`);
+    }
+
     const verificationProgram = {
       inputIndex,
       sourceOutputs,

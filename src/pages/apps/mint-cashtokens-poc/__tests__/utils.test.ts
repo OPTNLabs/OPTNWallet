@@ -122,35 +122,65 @@ describe('mint-cashtokens-poc/utils', () => {
     expect(filtered).toEqual([a]);
   });
 
-  it('validateCategoryReuseRules allows duplicated category only when all are FT', () => {
-    const categoryTxHash = 'b'.repeat(64);
-    const sourceByKey = new Map<string, UTXO>([
-      ['s1', makeUtxo({ tx_hash: categoryTxHash, tx_pos: 0 })],
-      ['s2', makeUtxo({ tx_hash: categoryTxHash, tx_pos: 1 })],
-    ]);
+  it('validateCategoryReuseRules allows multiple NFT outputs from a genesis source', () => {
+    const genesis = makeUtxo({ tx_hash: 'b'.repeat(64), tx_pos: 0, token: null });
+    const sourceByKey = new Map<string, UTXO>([['s1', genesis]]);
 
     const okResult = validateCategoryReuseRules(
       [
-        makeDraft({ id: '1', sourceKey: 's1', config: { ...makeDraft().config, mintType: 'FT' } }),
-        makeDraft({ id: '2', sourceKey: 's2', config: { ...makeDraft().config, mintType: 'FT' } }),
+        makeDraft({
+          id: '1',
+          sourceKey: 's1',
+          config: { ...makeDraft().config, mintType: 'NFT', nftCapability: 'none', nftCommitment: '01' },
+        }),
+        makeDraft({
+          id: '2',
+          sourceKey: 's1',
+          config: { ...makeDraft().config, mintType: 'NFT', nftCapability: 'none', nftCommitment: '02' },
+        }),
       ],
       sourceByKey
     );
 
     expect(okResult).toEqual({ ok: true });
+  });
+
+  it('validateCategoryReuseRules rejects duplicate NFT outputs from a plain NFT source', () => {
+    const sourceByKey = new Map<string, UTXO>([
+      [
+        's1',
+        makeUtxo({
+          tx_hash: 'c'.repeat(64),
+          tx_pos: 1,
+          token: {
+            category: 'c'.repeat(64),
+            amount: 0,
+            nft: { capability: 'none', commitment: 'seed' },
+          },
+        }),
+      ],
+    ]);
 
     const badResult = validateCategoryReuseRules(
       [
-        makeDraft({ id: '1', sourceKey: 's1', config: { ...makeDraft().config, mintType: 'FT' } }),
-        makeDraft({ id: '2', sourceKey: 's2', config: { ...makeDraft().config, mintType: 'NFT' } }),
+        makeDraft({
+          id: '1',
+          sourceKey: 's1',
+          config: { ...makeDraft().config, mintType: 'NFT', nftCapability: 'none', nftCommitment: 'seed' },
+        }),
+        makeDraft({
+          id: '2',
+          sourceKey: 's1',
+          config: { ...makeDraft().config, mintType: 'NFT', nftCapability: 'none', nftCommitment: 'seed' },
+        }),
       ],
       sourceByKey
     );
 
     expect(badResult.ok).toBe(false);
     if (!badResult.ok && 'message' in badResult) {
-      expect(badResult.message).toContain('Category');
-      expect(badResult.message).toContain('must be FT');
+      expect(badResult.message).toContain('plain NFT source');
+      expect(badResult.message).toContain('one NFT output');
     }
   });
 

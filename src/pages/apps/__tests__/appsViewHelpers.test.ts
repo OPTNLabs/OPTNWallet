@@ -13,7 +13,7 @@ describe('appsViewHelpers', () => {
   it('keeps the existing category routing rules', () => {
     expect(getAppCategory({ id: 'optn.wallet.contracts', name: 'Contracts' })).toBe('Wallet');
     expect(getAppCategory({ id: 'optn.builtin.paper-wallet-sweep:paperWalletSweepApp', name: 'Paper Wallet' })).toBe('Wallet');
-    expect(getAppCategory({ id: 'optn.builtin.mint:mintCashTokensPoCApp', name: 'Mint Tokens' })).toBe('Token');
+    expect(getAppCategory({ id: 'optn.builtin.mint:mintCashTokensPoCApp', name: 'CashTokens' })).toBe('Token');
     expect(getAppCategory({ id: 'optn.builtin.paryon:paryonWorkspaceApp', name: 'ParyonUSD' })).toBe('Token');
     expect(getAppCategory({ id: 'optn.builtin.events:airdropsApp', name: 'Airdrops' })).toBe('Utils');
     expect(getAppCategory({ id: 'optn.builtin.fundme:fundmeApp', name: 'FundMe' })).toBe('Advanced');

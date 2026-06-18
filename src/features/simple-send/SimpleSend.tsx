@@ -4,7 +4,7 @@ import React, { useEffect, useState } from 'react';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { useSelector } from 'react-redux';
 import useSimpleSend from '../../hooks/useSimpleSend';
-import { FaCamera } from 'react-icons/fa';
+import { FaCamera, FaQrcode, FaShieldAlt } from 'react-icons/fa';
 import { ReviewCard } from './ReviewCard';
 import { ChangeAddressSection } from './ChangeAddressSection';
 import { CategorySummary } from './types';
@@ -19,6 +19,17 @@ import { selectWalletId } from '../../state/slices/walletSlice';
 import WalletScreen from '../../components/ui/WalletScreen';
 import { getReturnPath } from '../../utils/navigation';
 
+type SimpleSendLocationState = {
+  amountBch?: string;
+  amountToken?: string;
+  assetType?: 'bch' | 'ft' | 'nft';
+  quantumrootFlow?: 'approval-token' | 'receive-coin';
+  recipient?: string;
+  returnTo?: string;
+  selectedCategory?: string;
+  selectedNftCommitment?: string;
+};
+
 function Label({ children }: { children: React.ReactNode }) {
   return (
     <label className="text-sm font-semibold wallet-text-strong">
@@ -30,6 +41,7 @@ function Label({ children }: { children: React.ReactNode }) {
 export default function SimpleSend() {
   const navigate = useNavigate();
   const location = useLocation();
+  const locationState = (location.state as SimpleSendLocationState | null) ?? null;
   const backTarget = getReturnPath(location, '/actions');
   const walletId = useSelector(selectWalletId);
   const {
@@ -179,6 +191,52 @@ export default function SimpleSend() {
 
   const pageError = mode === 'error' ? error : null;
   const enhancedError = pageError ? enhanceErrorMessage(pageError) : null;
+  useEffect(() => {
+    if (!locationState) return;
+
+    reset();
+
+    if (locationState.recipient !== undefined) {
+      setRecipient(locationState.recipient);
+    }
+    if (locationState.assetType !== undefined) {
+      setAssetType(locationState.assetType);
+    }
+    if (locationState.selectedCategory !== undefined) {
+      setSelectedCategory(locationState.selectedCategory);
+    }
+    if (locationState.amountBch !== undefined) {
+      setAmountBch(locationState.amountBch);
+    }
+    if (locationState.amountToken !== undefined) {
+      setAmountToken(locationState.amountToken);
+    }
+    if (locationState.selectedNftCommitment !== undefined) {
+      setSelectedNftCommitment(locationState.selectedNftCommitment);
+    }
+  }, [
+    location.key,
+    locationState,
+    reset,
+    setAmountBch,
+    setAmountToken,
+    setAssetType,
+    setRecipient,
+    setSelectedCategory,
+    setSelectedNftCommitment,
+  ]);
+
+  const quantumrootPrefillLabel =
+    locationState?.quantumrootFlow === 'approval-token'
+      ? 'approval key to Quantum Lock'
+      : locationState?.quantumrootFlow === 'receive-coin'
+        ? 'matching receive coin to the vault receive address'
+        : null;
+  const quantumrootPrefillHint =
+    locationState?.assetType === 'nft'
+      ? 'If there are multiple NFT entries, choose the one that matches the approval key.'
+      : 'Review the recipient and token category, then tap Review to build the transaction.';
+
   const renderTokenModeToggle = () => (
     <div className="mt-2 grid grid-cols-2 gap-2">
       <button
@@ -210,6 +268,30 @@ export default function SimpleSend() {
     <WalletScreen maxWidthClassName="max-w-xl" scrollable={false}>
       <div className="flex h-full min-h-0 flex-col gap-4">
         <PageHeader title="Simple Send" compact />
+        {quantumrootPrefillLabel ? (
+          <div className="wallet-surface-strong rounded-[18px] border border-[var(--wallet-border)] bg-[color-mix(in_oklab,var(--wallet-accent-soft)_26%,transparent)] p-3">
+            <div className="flex items-start gap-3">
+              <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl bg-[color-mix(in_oklab,var(--wallet-accent-soft)_72%,transparent)] text-[var(--wallet-accent-strong)]">
+                {locationState?.quantumrootFlow === 'approval-token' ? (
+                  <FaShieldAlt />
+                ) : (
+                  <FaQrcode />
+                )}
+              </div>
+              <div className="min-w-0">
+                <div className="text-xs uppercase tracking-[0.16em] wallet-muted">
+                  Quantumroot shortcut
+                </div>
+                <div className="mt-1 text-sm font-semibold wallet-text-strong">
+                  Prefilled to send the {quantumrootPrefillLabel}
+                </div>
+                <div className="text-[11px] wallet-muted">
+                  {quantumrootPrefillHint}
+                </div>
+              </div>
+            </div>
+          </div>
+        ) : null}
         <div className="wallet-card wallet-signature-panel flex-1 min-h-0 overflow-hidden p-3">
           <div className="flex h-full flex-col">
             <div className="mb-3 wallet-section shrink-0">

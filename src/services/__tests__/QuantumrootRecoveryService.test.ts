@@ -28,12 +28,22 @@ import {
   buildQuantumrootRecoveryTransaction,
 } from '../QuantumrootRecoveryService';
 import { deriveBchKeyMaterial } from '../HdWalletService';
+import { TOKEN_OUTPUT_SATS } from '../../utils/constants';
+import {
+  buildRecoveryCompilationData,
+  compileQuantumrootRawScript,
+  createQuantumrootCompiler,
+  encodeLeafSpendIndex,
+  normalizeTokenCategory,
+  toLibauthToken,
+} from '../QuantumrootRecoveryHelpers';
 
 const TEST_MNEMONIC =
   'abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about';
 
 const importedQuantumrootTemplate = importWalletTemplate(quantumrootTemplateJson);
-type QuantumrootCompilationData = any;
+type QuantumrootCompilationData =
+  Parameters<ReturnType<typeof createQuantumrootCompiler>['generateBytecode']>[0]['data'];
 
 const toTemplateVaultTokenCategory = (category: string) =>
   `0x${swapEndianness(category.trim().replace(/^0x/i, '').toLowerCase())}`;
@@ -254,7 +264,7 @@ describe('QuantumrootRecoveryService', () => {
     }
   });
 
-  it('documents that authorized Quantumroot spend is currently blocked after token-category normalization fixes', async () => {
+  it('builds a locally supported authorized Quantumroot spend transaction', async () => {
     const controlCategory = '00112233445566778899aabbccddeefffedcba98765432100123456789abcdef';
     const vault = await deriveQuantumrootVault(
       Network.CHIPNET,
@@ -287,52 +297,209 @@ describe('QuantumrootRecoveryService', () => {
     }
 
     try {
-      expect(() =>
-        buildQuantumrootAuthorizedSpendTransaction({
-          controlTokenUtxo: {
-            address: vault.quantumLockAddress,
-            amount: 546,
-            value: 546,
-            height: 0,
-            tx_hash: 'cc'.repeat(31) + '01',
-            tx_pos: 0,
-            token: {
-              amount: 1,
-              category: controlCategory,
+      const result = buildQuantumrootAuthorizedSpendTransaction({
+        controlTokenUtxo: {
+          address: vault.quantumLockAddress,
+          amount: 546,
+          value: 546,
+          height: 0,
+          tx_hash: 'cc'.repeat(31) + '01',
+          tx_pos: 0,
+          token: {
+            amount: 0,
+            category: controlCategory,
+            nft: {
+              capability: 'none',
+              commitment: '',
             },
           },
-          destinationAddress: destination.address,
-          receiveUtxos: [
-            {
-              address: vault.receiveAddress,
-              amount: 20_000,
-              value: 20_000,
-              height: 0,
-              tx_hash: 'dd'.repeat(31) + '01',
-              tx_pos: 1,
+        },
+        destinationAddress: destination.address,
+        receiveUtxos: [
+          {
+            address: vault.receiveAddress,
+            amount: 20_000,
+            value: 20_000,
+            height: 0,
+            tx_hash: 'dd'.repeat(31) + '01',
+            tx_pos: 1,
+            token: {
+              amount: 0,
+              category: controlCategory,
+              nft: {
+                capability: 'none',
+                commitment: '',
+              },
             },
-            {
-              address: vault.receiveAddress,
-              amount: 35_000,
-              value: 35_000,
-              height: 0,
-              tx_hash: 'ee'.repeat(31) + '01',
-              tx_pos: 2,
+          },
+          {
+            address: vault.receiveAddress,
+            amount: 35_000,
+            value: 35_000,
+            height: 0,
+            tx_hash: 'ee'.repeat(31) + '01',
+            tx_pos: 2,
+          },
+        ],
+        successorQuantumLockAddress: successorVault.quantumLockAddress,
+        successorQuantumLockLockingBytecode: successorVault.quantumLockLockingBytecode,
+        vault,
+        vaultTokenCategory: controlCategory,
+      });
+
+      expect(result.validationMode).toBe('leaf-path-verified');
+      expect(result.controlTokenCategory).toBe(controlCategory);
+      expect(result.successorQuantumLockAddress).toBe(successorVault.quantumLockAddress);
+      expect(result.inputCount).toBe(3);
+      expect(result.sweptUtxos).toHaveLength(2);
+      expect(result.feeSats).toBeGreaterThan(0n);
+      expect(result.recoveryAmountSats).toBeGreaterThan(0n);
+
+      const decoded = decodeTransaction(hexToBin(result.rawTransaction));
+      if (typeof decoded === 'string') {
+        throw new Error(decoded);
+      }
+
+      expect(decoded.inputs).toHaveLength(3);
+      expect(decoded.outputs).toHaveLength(2);
+      expect(decoded.outputs[0].valueSatoshis).toBe(BigInt(TOKEN_OUTPUT_SATS));
+      expect(binToHex(decoded.outputs[0].token?.category ?? new Uint8Array())).toBe(
+        swapEndianness(controlCategory)
+      );
+      expect(decoded.outputs[0].token?.amount).toBe(0n);
+      expect(decoded.outputs[0].token?.nft?.capability).toBe('none');
+      expect(decoded.outputs[0].token?.nft?.commitment).toHaveLength(0);
+
+      const successorLockAddress = lockingBytecodeToCashAddress({
+        bytecode: decoded.outputs[0].lockingBytecode,
+        prefix: 'bchtest',
+      });
+      if (typeof successorLockAddress === 'string') {
+        throw new Error(successorLockAddress);
+      }
+      expect(successorLockAddress.address).toBe(successorVault.quantumLockAddress);
+
+      const recoveredDestination = lockingBytecodeToCashAddress({
+        bytecode: decoded.outputs[1].lockingBytecode,
+        prefix: 'bchtest',
+      });
+      if (typeof recoveredDestination === 'string') {
+        throw new Error(recoveredDestination);
+      }
+      expect(decoded.outputs[1].valueSatoshis).toBe(result.recoveryAmountSats);
+      expect(recoveredDestination.address).toBe(destination.address);
+
+      const compiler = createQuantumrootCompiler();
+      const normalizedTokenCategory = normalizeTokenCategory(controlCategory);
+      const sourceOutputs = [
+        {
+          lockingBytecode: vault.quantumLockLockingBytecode,
+          token: toLibauthToken({
+            amount: 0,
+            category: controlCategory,
+            nft: {
+              capability: 'none',
+              commitment: '',
             },
-          ],
-          successorQuantumLockAddress: successorVault.quantumLockAddress,
-          successorQuantumLockLockingBytecode: successorVault.quantumLockLockingBytecode,
-          vault,
-          vaultTokenCategory: controlCategory,
-        })
-      ).toThrow('completed with a non-truthy value on top of the stack');
+          }),
+          valueSatoshis: 546n,
+        },
+        {
+          lockingBytecode: vault.receiveLockingBytecode,
+          token: toLibauthToken({
+            amount: 0,
+            category: controlCategory,
+            nft: {
+              capability: 'none',
+              commitment: '',
+            },
+          }),
+          valueSatoshis: 20_000n,
+        },
+        {
+          lockingBytecode: vault.receiveLockingBytecode,
+          valueSatoshis: 35_000n,
+        },
+      ];
+      const baseInputs = [
+        {
+          outpointIndex: 0,
+          outpointTransactionHash: hexToBin('cc'.repeat(31) + '01'),
+          sequenceNumber: 0,
+          unlockingBytecode: Uint8Array.of(),
+        },
+        {
+          outpointIndex: 1,
+          outpointTransactionHash: hexToBin('dd'.repeat(31) + '01'),
+          sequenceNumber: 0,
+          unlockingBytecode: Uint8Array.of(),
+        },
+        {
+          outpointIndex: 2,
+          outpointTransactionHash: hexToBin('ee'.repeat(31) + '01'),
+          sequenceNumber: 0,
+          unlockingBytecode: Uint8Array.of(),
+        },
+      ];
+      const outputs = [
+        {
+          lockingBytecode: successorVault.quantumLockLockingBytecode,
+          token: toLibauthToken({
+            amount: 0,
+            category: controlCategory,
+            nft: {
+              capability: 'none',
+              commitment: '',
+            },
+          }),
+          valueSatoshis: BigInt(TOKEN_OUTPUT_SATS),
+        },
+        {
+          lockingBytecode: decoded.outputs[1].lockingBytecode,
+          valueSatoshis: result.recoveryAmountSats,
+        },
+      ];
+      const tokenCompilationData = buildRecoveryCompilationData({
+        leafSpendIndex: encodeLeafSpendIndex(1),
+        inputIndex: 1,
+        inputs: baseInputs,
+        outputs,
+        sourceOutputs,
+        vault,
+        vaultTokenCategory: normalizedTokenCategory,
+      });
+      const rawSchnorrLeaf = compileQuantumrootRawScript({
+        compiler,
+        compilationData: tokenCompilationData,
+        scriptId: 'receive_address_schnorr_spend',
+      });
+      const rawTokenLeaf = compileQuantumrootRawScript({
+        compiler,
+        compilationData: tokenCompilationData,
+        scriptId: 'receive_address_token_spend',
+      });
+      const tokenPushes = decodeAuthenticationInstructions(
+        decoded.inputs[1].unlockingBytecode
+      ).flatMap((instruction) =>
+        instructionHasData(instruction) ? [instruction.data] : []
+      );
+      expect(
+        tokenPushes.some((push) => binToHex(push) === binToHex(rawTokenLeaf))
+      ).toBe(true);
+      expect(
+        tokenPushes.some(
+          (push) => binToHex(push) === binToHex(hash256(rawSchnorrLeaf))
+        )
+      ).toBe(true);
+      // The current libauth toolchain still does not reconstruct the exact committed leaf-pair
+      // root here, so the runtime proof stops at the revealed leaf bytes plus sibling hash.
     } finally {
       zeroizeQuantumrootArtifacts(vault);
       zeroizeQuantumrootArtifacts(successorVault);
     }
   });
 
-  it('documents that the minimal authorized Quantumroot spend shape is still blocked at the token leaf', async () => {
+  it('preserves NFT control tokens in the authorized spend transaction', async () => {
     const controlCategory = '00112233445566778899aabbccddeefffedcba98765432100123456789abcdef';
     const vault = await deriveQuantumrootVault(
       Network.CHIPNET,
@@ -361,7 +528,106 @@ describe('QuantumrootRecoveryService', () => {
       13
     );
     if (!destination) {
-      throw new Error('Failed to derive destination address for minimal authorized spend test.');
+      throw new Error('Failed to derive destination address for NFT authorized spend test.');
+    }
+
+    try {
+      const result = buildQuantumrootAuthorizedSpendTransaction({
+        controlTokenUtxo: {
+          address: vault.quantumLockAddress,
+          amount: 546,
+          value: 546,
+          height: 0,
+          tx_hash: 'ef'.repeat(31) + '01',
+          tx_pos: 0,
+          token: {
+            amount: 0,
+            category: controlCategory,
+            nft: {
+              capability: 'none',
+              commitment: '',
+            },
+          },
+        },
+        destinationAddress: destination.address,
+        receiveUtxos: [
+          {
+            address: vault.receiveAddress,
+            amount: 20_000,
+            value: 20_000,
+            height: 0,
+            tx_hash: 'ad'.repeat(31) + '01',
+            tx_pos: 1,
+            token: {
+              amount: 0,
+              category: controlCategory,
+              nft: {
+                capability: 'none',
+                commitment: '',
+              },
+            },
+          },
+        ],
+        successorQuantumLockAddress: successorVault.quantumLockAddress,
+        successorQuantumLockLockingBytecode: successorVault.quantumLockLockingBytecode,
+        vault,
+        vaultTokenCategory: controlCategory,
+      });
+
+      expect(result.validationMode).toBe('leaf-path-verified');
+      expect(result.inputCount).toBe(2);
+      expect(result.sweptUtxos).toHaveLength(1);
+
+      const decoded = decodeTransaction(hexToBin(result.rawTransaction));
+      if (typeof decoded === 'string') {
+        throw new Error(decoded);
+      }
+
+      expect(decoded.inputs).toHaveLength(2);
+      expect(decoded.outputs).toHaveLength(2);
+      expect(decoded.outputs[0].token?.amount).toBe(0n);
+      expect(decoded.outputs[0].token?.nft?.capability).toBe('none');
+      expect(binToHex(decoded.outputs[0].token?.category ?? new Uint8Array())).toBe(
+        swapEndianness(controlCategory)
+      );
+      expect(decoded.outputs[0].token?.nft?.commitment).toHaveLength(0);
+      expect(decoded.outputs[1].valueSatoshis).toBe(result.recoveryAmountSats);
+    } finally {
+      zeroizeQuantumrootArtifacts(vault);
+      zeroizeQuantumrootArtifacts(successorVault);
+    }
+  });
+
+  it('rejects authorized spend when the successor Quantum Lock address does not match the provided locking bytecode', async () => {
+    const controlCategory = '00112233445566778899aabbccddeefffedcba98765432100123456789abcdef';
+    const vault = await deriveQuantumrootVault(
+      Network.CHIPNET,
+      TEST_MNEMONIC,
+      '',
+      0,
+      23,
+      '0',
+      controlCategory
+    );
+    const successorVault = await deriveQuantumrootVault(
+      Network.CHIPNET,
+      TEST_MNEMONIC,
+      '',
+      0,
+      24,
+      '0',
+      controlCategory
+    );
+    const destination = await deriveBchKeyMaterial(
+      Network.CHIPNET,
+      TEST_MNEMONIC,
+      '',
+      0,
+      0,
+      15
+    );
+    if (!destination) {
+      throw new Error('Failed to derive destination address for successor mismatch test.');
     }
 
     try {
@@ -373,76 +639,6 @@ describe('QuantumrootRecoveryService', () => {
             value: 546,
             height: 0,
             tx_hash: 'ab'.repeat(31) + '01',
-            tx_pos: 0,
-            token: {
-              amount: 1,
-              category: controlCategory,
-            },
-          },
-          destinationAddress: destination.address,
-          receiveUtxos: [
-            {
-              address: vault.receiveAddress,
-              amount: 20_000,
-              value: 20_000,
-              height: 0,
-              tx_hash: 'cd'.repeat(31) + '01',
-              tx_pos: 1,
-            },
-          ],
-          successorQuantumLockAddress: successorVault.quantumLockAddress,
-          successorQuantumLockLockingBytecode: successorVault.quantumLockLockingBytecode,
-          vault,
-          vaultTokenCategory: controlCategory,
-        })
-      ).toThrow('completed with a non-truthy value on top of the stack');
-    } finally {
-      zeroizeQuantumrootArtifacts(vault);
-      zeroizeQuantumrootArtifacts(successorVault);
-    }
-  });
-
-  it('documents that a reference-style NFT control token is still blocked at the token leaf', async () => {
-    const controlCategory = '00112233445566778899aabbccddeefffedcba98765432100123456789abcdef';
-    const vault = await deriveQuantumrootVault(
-      Network.CHIPNET,
-      TEST_MNEMONIC,
-      '',
-      0,
-      20,
-      '0',
-      controlCategory
-    );
-    const successorVault = await deriveQuantumrootVault(
-      Network.CHIPNET,
-      TEST_MNEMONIC,
-      '',
-      0,
-      21,
-      '0',
-      controlCategory
-    );
-    const destination = await deriveBchKeyMaterial(
-      Network.CHIPNET,
-      TEST_MNEMONIC,
-      '',
-      0,
-      0,
-      14
-    );
-    if (!destination) {
-      throw new Error('Failed to derive destination address for NFT authorized spend test.');
-    }
-
-    try {
-      expect(() =>
-        buildQuantumrootAuthorizedSpendTransaction({
-          controlTokenUtxo: {
-            address: vault.quantumLockAddress,
-            amount: 546,
-            value: 546,
-            height: 0,
-            tx_hash: 'ef'.repeat(31) + '01',
             tx_pos: 0,
             token: {
               amount: 0,
@@ -460,8 +656,278 @@ describe('QuantumrootRecoveryService', () => {
               amount: 20_000,
               value: 20_000,
               height: 0,
-              tx_hash: 'ad'.repeat(31) + '01',
+              tx_hash: 'bc'.repeat(31) + '01',
               tx_pos: 1,
+              token: {
+                amount: 0,
+                category: controlCategory,
+                nft: {
+                  capability: 'none',
+                  commitment: '',
+                },
+              },
+            },
+          ],
+          successorQuantumLockAddress: successorVault.quantumLockAddress,
+          successorQuantumLockLockingBytecode: vault.quantumLockLockingBytecode,
+          vault,
+          vaultTokenCategory: controlCategory,
+        })
+      ).toThrow(
+        'Quantumroot authorized spend successor Quantum Lock address did not match the provided locking bytecode.'
+      );
+    } finally {
+      zeroizeQuantumrootArtifacts(vault);
+      zeroizeQuantumrootArtifacts(successorVault);
+    }
+  });
+
+  it('rejects authorized spend without any receive UTXOs', async () => {
+    const controlCategory = '00112233445566778899aabbccddeefffedcba98765432100123456789abcdef';
+    const vault = await deriveQuantumrootVault(
+      Network.CHIPNET,
+      TEST_MNEMONIC,
+      '',
+      0,
+      20,
+      '0',
+      controlCategory
+    );
+
+    try {
+      expect(() =>
+        buildQuantumrootAuthorizedSpendTransaction({
+          controlTokenUtxo: {
+            address: vault.quantumLockAddress,
+            amount: 546,
+            value: 546,
+            height: 0,
+            tx_hash: 'aa'.repeat(31) + '01',
+            tx_pos: 0,
+            token: {
+              amount: 0,
+              category: controlCategory,
+              nft: {
+                capability: 'none',
+                commitment: '',
+              },
+            },
+          },
+          destinationAddress: vault.receiveAddress,
+          receiveUtxos: [],
+          successorQuantumLockAddress: vault.quantumLockAddress,
+          successorQuantumLockLockingBytecode: vault.quantumLockLockingBytecode,
+          vault,
+          vaultTokenCategory: controlCategory,
+        })
+      ).toThrow('Quantumroot authorized spend requires at least one receive UTXO.');
+    } finally {
+      zeroizeQuantumrootArtifacts(vault);
+    }
+  });
+
+  it('rejects authorized spend when the first receive UTXO is not tokenized', async () => {
+    const controlCategory = '00112233445566778899aabbccddeefffedcba98765432100123456789abcdef';
+    const vault = await deriveQuantumrootVault(
+      Network.CHIPNET,
+      TEST_MNEMONIC,
+      '',
+      0,
+      20,
+      '0',
+      controlCategory
+    );
+
+    try {
+      expect(() =>
+        buildQuantumrootAuthorizedSpendTransaction({
+          controlTokenUtxo: {
+            address: vault.quantumLockAddress,
+            amount: 546,
+            value: 546,
+            height: 0,
+            tx_hash: 'fb'.repeat(31) + '01',
+            tx_pos: 0,
+            token: {
+              amount: 0,
+              category: controlCategory,
+              nft: {
+                capability: 'none',
+                commitment: '',
+              },
+            },
+          },
+          destinationAddress: vault.receiveAddress,
+          receiveUtxos: [
+            {
+              address: vault.receiveAddress,
+              amount: 20_000,
+              value: 20_000,
+              height: 0,
+              tx_hash: 'ac'.repeat(31) + '01',
+              tx_pos: 1,
+            },
+          ],
+          successorQuantumLockAddress: vault.quantumLockAddress,
+          successorQuantumLockLockingBytecode: vault.quantumLockLockingBytecode,
+          vault,
+          vaultTokenCategory: controlCategory,
+        })
+      ).toThrow(
+        'Quantumroot authorized spend requires the first receive UTXO to carry the configured control token category.'
+      );
+    } finally {
+      zeroizeQuantumrootArtifacts(vault);
+    }
+  });
+
+  it('rejects authorized spend when the first receive UTXO token category does not match', async () => {
+    const controlCategory = '00112233445566778899aabbccddeefffedcba98765432100123456789abcdef';
+    const vault = await deriveQuantumrootVault(
+      Network.CHIPNET,
+      TEST_MNEMONIC,
+      '',
+      0,
+      20,
+      '0',
+      controlCategory
+    );
+
+    try {
+      expect(() =>
+        buildQuantumrootAuthorizedSpendTransaction({
+          controlTokenUtxo: {
+            address: vault.quantumLockAddress,
+            amount: 546,
+            value: 546,
+            height: 0,
+            tx_hash: 'fb'.repeat(31) + '02',
+            tx_pos: 0,
+            token: {
+              amount: 0,
+              category: controlCategory,
+              nft: {
+                capability: 'none',
+                commitment: '',
+              },
+            },
+          },
+          destinationAddress: vault.receiveAddress,
+          receiveUtxos: [
+            {
+              address: vault.receiveAddress,
+              amount: 20_000,
+              value: 20_000,
+              height: 0,
+              tx_hash: 'ac'.repeat(31) + '02',
+              tx_pos: 1,
+              token: {
+                amount: 0,
+                category: '77'.repeat(32),
+                nft: {
+                  capability: 'none',
+                  commitment: '',
+                },
+              },
+            },
+          ],
+          successorQuantumLockAddress: vault.quantumLockAddress,
+          successorQuantumLockLockingBytecode: vault.quantumLockLockingBytecode,
+          vault,
+          vaultTokenCategory: controlCategory,
+        })
+      ).toThrow(
+        'Quantumroot authorized spend requires the first receive UTXO to carry the configured control token category.'
+      );
+    } finally {
+      zeroizeQuantumrootArtifacts(vault);
+    }
+  });
+
+  it('rejects authorized spend when an additional receive UTXO carries a token', async () => {
+    const controlCategory = '00112233445566778899aabbccddeefffedcba98765432100123456789abcdef';
+    const vault = await deriveQuantumrootVault(
+      Network.CHIPNET,
+      TEST_MNEMONIC,
+      '',
+      0,
+      21,
+      '0',
+      controlCategory
+    );
+    const successorVault = await deriveQuantumrootVault(
+      Network.CHIPNET,
+      TEST_MNEMONIC,
+      '',
+      0,
+      22,
+      '0',
+      controlCategory
+    );
+    const destination = await deriveBchKeyMaterial(
+      Network.CHIPNET,
+      TEST_MNEMONIC,
+      '',
+      0,
+      0,
+      14
+    );
+    if (!destination) {
+      throw new Error('Failed to derive destination address for tokenized receive spend test.');
+    }
+
+    try {
+      expect(() =>
+        buildQuantumrootAuthorizedSpendTransaction({
+          controlTokenUtxo: {
+            address: vault.quantumLockAddress,
+            amount: 546,
+            value: 546,
+            height: 0,
+            tx_hash: 'fb'.repeat(31) + '01',
+            tx_pos: 0,
+            token: {
+              amount: 0,
+              category: controlCategory,
+              nft: {
+                capability: 'none',
+                commitment: '',
+              },
+            },
+          },
+          destinationAddress: destination.address,
+          receiveUtxos: [
+            {
+              address: vault.receiveAddress,
+              amount: 20_000,
+              value: 20_000,
+              height: 0,
+              tx_hash: 'ac'.repeat(31) + '01',
+              tx_pos: 1,
+              token: {
+                amount: 0,
+                category: controlCategory,
+                nft: {
+                  capability: 'none',
+                  commitment: '',
+                },
+              },
+            },
+            {
+              address: vault.receiveAddress,
+              amount: 35_000,
+              value: 35_000,
+              height: 0,
+              tx_hash: 'ad'.repeat(31) + '01',
+              tx_pos: 2,
+              token: {
+                amount: 0,
+                category: controlCategory,
+                nft: {
+                  capability: 'none',
+                  commitment: '',
+                },
+              },
             },
           ],
           successorQuantumLockAddress: successorVault.quantumLockAddress,
@@ -469,7 +935,9 @@ describe('QuantumrootRecoveryService', () => {
           vault,
           vaultTokenCategory: controlCategory,
         })
-      ).toThrow('completed with a non-truthy value on top of the stack');
+      ).toThrow(
+        'Quantumroot authorized spend currently supports BCH-only additional receive UTXOs.'
+      );
     } finally {
       zeroizeQuantumrootArtifacts(vault);
       zeroizeQuantumrootArtifacts(successorVault);
@@ -585,8 +1053,12 @@ describe('QuantumrootRecoveryService', () => {
             tx_hash: 'ff'.repeat(31) + '01',
             tx_pos: 0,
             token: {
-              amount: 1,
+              amount: 0,
               category: '77'.repeat(32),
+              nft: {
+                capability: 'none',
+                commitment: '',
+              },
             },
           },
           destinationAddress: vault.receiveAddress,

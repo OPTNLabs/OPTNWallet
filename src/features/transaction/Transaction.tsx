@@ -23,6 +23,7 @@ import { selectCurrentNetwork } from '../../state/selectors/networkSelectors';
 import useFetchWalletData from '../../hooks/useFetchWalletData';
 import useHandleTransaction from '../../hooks/useHandleTransaction';
 import { selectWalletId } from '../../state/slices/walletSlice';
+import type { TokenCapability } from '../../services/cashtokens';
 import { useTransactionHandlers } from './useTransactionHandlers';
 import { useTransactionInit } from './useTransactionInit';
 import { useTransactionDerived } from './useTransactionDerived';
@@ -95,7 +96,7 @@ const Transaction: React.FC = () => {
     useState<boolean>(false);
 
   const [nftCapability, setNftCapability] = useState<
-    undefined | 'none' | 'mutable' | 'minting'
+    undefined | TokenCapability
   >(undefined);
   const [nftCommitment, setNftCommitment] = useState<undefined | string>(
     undefined

@@ -73,5 +73,7 @@ describe('PendingOutboundPanel', () => {
     expect(html).toContain('role="dialog"');
     expect(html).toContain('Outgoing transaction still syncing');
     expect(html).toContain('Dismiss');
+    expect(html).toContain('sm:flex-row');
+    expect(html).toContain('min-w-0 flex-1');
   });
 });

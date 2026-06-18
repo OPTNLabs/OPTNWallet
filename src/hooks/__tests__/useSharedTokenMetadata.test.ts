@@ -29,8 +29,10 @@ vi.mock('../../services/BcmrService', () => ({
 }));
 
 import {
+  buildSharedTokenCategoriesKey,
   getCachedTokenMetadata,
   preloadTokenMetadata,
+  normalizeSharedTokenCategories,
   resolveTokenMetadata,
 } from '../useSharedTokenMetadata';
 
@@ -162,5 +164,28 @@ describe('useSharedTokenMetadata web preload', () => {
         },
       },
     });
+  });
+
+  it('builds a stable category key from duplicate or reordered input', () => {
+    const first = buildSharedTokenCategoriesKey([
+      'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
+      'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+      'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+    ]);
+    const second = buildSharedTokenCategoriesKey([
+      'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+      'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
+    ]);
+
+    expect(first).toBe(second);
+    expect(normalizeSharedTokenCategories([
+      'BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB',
+      'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+      '',
+      'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+    ])).toEqual([
+      'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+      'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
+    ]);
   });
 });

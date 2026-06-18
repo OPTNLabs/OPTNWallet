@@ -26,8 +26,8 @@ export const BASIC_ACTIONS: ActionConfig[] = [
     to: '/receive?panel=addresses',
   },
   {
-    title: 'Mint Tokens',
-    description: 'Create new CashTokens',
+    title: 'CashTokens',
+    description: 'Manage token families',
     to: '/mint-cashtokens-poc',
   },
 ];
