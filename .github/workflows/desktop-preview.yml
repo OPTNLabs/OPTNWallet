@@ -1,0 +1,84 @@
+name: Desktop Preview
+
+# Mirrors android-preview.yml — builds on every push/PR to dev
+# Produces unsigned debug builds for all 3 desktop platforms
+
+on:
+  pull_request:
+    branches: [dev]
+    paths:
+      - 'src/**'
+      - 'public/**'
+      - 'src-tauri/**'
+      - 'vite.desktop.config.ts'
+      - 'package.json'
+      - '.github/workflows/desktop-preview.yml'
+  push:
+    branches: [dev]
+    paths:
+      - 'src/**'
+      - 'public/**'
+      - 'src-tauri/**'
+      - 'vite.desktop.config.ts'
+      - 'package.json'
+      - '.github/workflows/desktop-preview.yml'
+
+concurrency:
+  group: desktop-preview-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-desktop-preview:
+    name: Preview (${{ matrix.platform }})
+    timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: windows-latest
+            artifact-name: preview-windows
+          - platform: macos-latest
+            artifact-name: preview-macos
+          - platform: ubuntu-22.04
+            artifact-name: preview-linux
+
+    runs-on: ${{ matrix.platform }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Linux system dependencies
+        if: matrix.platform == 'ubuntu-22.04'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev libappindicator3-dev \
+            librsvg2-dev patchelf libssl-dev libgtk-3-dev
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Rust cache
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: './src-tauri -> target'
+
+      - name: Install npm dependencies
+        run: npm ci
+
+      - name: Build Tauri (debug)
+        run: npx tauri build --debug --config vite.desktop.config.ts
+
+      - name: Upload preview artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact-name }}
+          path: |
+            src-tauri/target/debug/bundle/**
+          retention-days: 14
+          if-no-files-found: warn
