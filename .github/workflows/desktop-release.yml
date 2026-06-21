@@ -188,4 +188,9 @@ jobs:
       - name: Attest build provenance
         uses: actions/attest-build-provenance@v1
         with:
-          subject-path: 'artifacts/**/*.{exe,dmg,AppImage}'
+          # @actions/glob does not expand brace patterns; list each glob on its own line.
+          # Matches the per-platform artifacts uploaded above (bundle-ext).
+          subject-path: |
+            artifacts/**/*.exe
+            artifacts/**/*.dmg
+            artifacts/**/*.AppImage
