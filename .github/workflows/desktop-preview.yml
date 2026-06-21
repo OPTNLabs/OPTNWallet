@@ -31,6 +31,10 @@ jobs:
   build-desktop-preview:
     name: Preview (${{ matrix.platform }})
     timeout-minutes: 40
+    env:
+      # macOS runners have less memory; the Vite frontend build (Tauri beforeBuildCommand)
+      # OOMs at Node's default heap. Raise it for all platforms (harmless on Windows/Linux).
+      NODE_OPTIONS: --max-old-space-size=4096
     strategy:
       fail-fast: false
       matrix:
