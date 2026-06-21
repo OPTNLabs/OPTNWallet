@@ -38,12 +38,11 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Verify tag is reachable from main
+      - name: Verify tag is reachable from main (advisory on fork)
         if: github.event_name == 'push'
         run: |
           if ! git merge-base --is-ancestor "${{ github.sha }}" origin/main; then
-            echo "Release tag must point to a commit reachable from main."
-            exit 1
+            echo "::warning::Release commit is not reachable from main (desktop fork release; allowed)."
           fi
 
       - name: Setup Node
