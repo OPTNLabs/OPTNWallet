@@ -2,6 +2,7 @@ export type ActionConfig = {
   title: string;
   description?: string;
   to: string;
+  badge?: string;
 };
 
 export const BASIC_ACTIONS: ActionConfig[] = [
@@ -37,6 +38,7 @@ export const ADVANCED_ACTIONS: ActionConfig[] = [
     title: 'Quantumroot',
     description: 'Quantum-ready vaults',
     to: '/quantumroot',
+    badge: 'Beta production',
   },
   {
     title: 'Transaction Builder',
