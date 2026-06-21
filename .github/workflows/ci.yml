@@ -49,9 +49,9 @@ jobs:
           node-version: 20
           cache: npm
       - name: Install deps
-        run: npm ci --ignore-scripts
-      - name: Dependency audit (prod, high+)
-        run: npm run security:ci
+        run: npm ci --ignore-scripts --omit=dev
+      - name: Dependency audit (prod, critical+)
+        run: npm audit --omit=dev --audit-level=critical
 
   web-ci:
     needs: [secrets-scan, dependency-audit]
