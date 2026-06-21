@@ -369,8 +369,9 @@ const QuantumrootVaultPopup: React.FC<QuantumrootVaultPopupProps> = ({
       closeButtonText="Close"
       closeButtonClassName="wallet-btn-secondary w-full my-2"
     >
-      <h3 className="text-xl font-bold mb-4 text-center">
-        Quantumroot Vault #{selectedVault.address_index}
+      <h3 className="mb-4 flex flex-wrap items-center justify-center gap-2 text-center text-xl font-bold">
+        <span>Quantumroot Vault #{selectedVault.address_index}</span>
+        <StatusChip tone="neutral">Beta production</StatusChip>
       </h3>
       <div className="space-y-3">
         <div className="wallet-surface-strong rounded-[18px] border border-[var(--wallet-border)] bg-[color-mix(in_oklab,var(--wallet-accent-soft)_28%,var(--wallet-surface-strong))] p-4">
