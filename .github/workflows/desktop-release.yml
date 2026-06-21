@@ -188,6 +188,10 @@ jobs:
             SHA256 checksums are attached to this release.
           releaseDraft: true
           prerelease: false
+          # Run the Tauri CLI via npx — the project has no "tauri" npm script,
+          # so tauri-action's default `npm run tauri` fails. npx works on the
+          # fork and upstream/main alike (no package.json change required).
+          tauriScript: npx tauri
           args: --target ${{ matrix.target }}
 
       - name: Upload bundle artifact
