@@ -5,7 +5,7 @@ on:
       - 'docs/**'
       - '**/*.md'
   push:
-    branches: [dev]
+    branches: [dev, ci-cd-prep]
     paths-ignore:
       - 'docs/**'
       - '**/*.md'
