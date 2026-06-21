@@ -69,7 +69,20 @@ export async function buildBootstrapPreview({
 }
 
 type BuildMintPreviewParams = {
-  sdk?: unknown;
+  sdk?: {
+    tx?: {
+      addOutput?: (
+        recipientAddress: string,
+        tokenOutputSats: number,
+        tokenAmount: bigint,
+        category: string,
+        inputsForBuild: MintAppUtxo[],
+        sdkAddressBook: WalletAddressRecord[],
+        nftCapability?: undefined | 'none' | 'mutable' | 'minting',
+        nftCommitment?: string
+      ) => TransactionOutput | undefined;
+    };
+  } | null;
   selectedUtxos: MintAppUtxo[];
   flatUtxos: MintAppUtxo[];
   activeOutputDrafts: MintOutputDraft[];
@@ -82,6 +95,7 @@ type BuildMintPreviewParams = {
 const BCMR_IDENTITY_OUTPUT_SATS = 1000n;
 
 export async function buildMintPreview({
+  sdk,
   selectedUtxos,
   flatUtxos,
   activeOutputDrafts,
@@ -112,6 +126,8 @@ export async function buildMintPreview({
   const feeInputs: MintAppUtxo[] = [];
   let inputsForBuild: MintAppUtxo[] = [];
   let built: BuildResult | null = null;
+  const addOutputFromSdk = sdk?.tx?.addOutput;
+  const addOutputFromManager = TransactionManager().addOutput;
 
   for (let i = 0; i < feeCandidates.length; i++) {
     feeInputs.push(feeCandidates[i]);
@@ -138,16 +154,27 @@ export async function buildMintPreview({
       const isNFT = d.config.mintType === 'NFT';
       const tokenAmount = isNFT ? 0n : toBigIntSafe(d.config.ftAmount);
 
-      const out = TransactionManager().addOutput(
-        d.recipientCashAddr,
-        tokenOutputSats,
-        tokenAmount,
-        category,
-        inputsForBuild,
-        sdkAddressBook,
-        isNFT ? d.config.nftCapability : undefined,
-        isNFT ? d.config.nftCommitment : undefined
-      );
+      const out = addOutputFromSdk
+        ? addOutputFromSdk(
+            d.recipientCashAddr,
+            tokenOutputSats,
+            tokenAmount,
+            category,
+            inputsForBuild,
+            sdkAddressBook,
+            isNFT ? d.config.nftCapability : undefined,
+            isNFT ? d.config.nftCommitment : undefined
+          )
+        : addOutputFromManager(
+            d.recipientCashAddr,
+            tokenOutputSats,
+            tokenAmount,
+            category,
+            inputsForBuild,
+            sdkAddressBook,
+            isNFT ? d.config.nftCapability : undefined,
+            isNFT ? d.config.nftCommitment : undefined
+          );
 
       if (!out) {
         throw new Error(
