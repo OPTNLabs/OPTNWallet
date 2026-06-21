@@ -82,7 +82,12 @@ export default defineConfig(({ mode }) => {
           warn(warning);
         },
         output: {
-          manualChunks: { 'sql-wasm': ['sql.js'] },
+          manualChunks(id) {
+            if (id.includes('node_modules/sql.js/')) {
+              return 'sql-wasm';
+            }
+            return undefined;
+          },
         },
       },
     },

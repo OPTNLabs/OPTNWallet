@@ -33,7 +33,11 @@ const TEST_MNEMONIC =
   'abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about';
 
 const importedQuantumrootTemplate = importWalletTemplate(quantumrootTemplateJson);
-type QuantumrootCompilationData = any;
+type QuantumrootCompilationData = Parameters<typeof compileScriptRaw>[0] extends {
+  data: infer Data;
+}
+  ? Data
+  : never;
 
 const toTemplateVaultTokenCategory = (category: string) =>
   `0x${swapEndianness(category.trim().replace(/^0x/i, '').toLowerCase())}`;

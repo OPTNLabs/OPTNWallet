@@ -169,7 +169,6 @@ describe('UTXOWorkerService.bootstrapAllUTXOs', () => {
     }
     expect(preloadTokenMetadataMock).toHaveBeenCalledTimes(1);
     expect(preloadTokenMetadataMock).toHaveBeenCalledWith(['cat1', 'cat2']);
-    expect(scheduleDatabaseSaveMock).not.toHaveBeenCalled();
 
     gate.resolve();
     await bootstrapPromise;

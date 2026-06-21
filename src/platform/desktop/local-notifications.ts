@@ -40,7 +40,9 @@ export const LocalNotifications = {
   registerActionTypes: async () => {},
   removeAllListeners: async () => {},
 
-  addListener: (_event: string, _handler: (data: unknown) => void) => {
+  addListener: (event: string, handler: (data: unknown) => void) => {
+    void event;
+    void handler;
     return Promise.resolve({ remove: async () => {} });
   },
 };
