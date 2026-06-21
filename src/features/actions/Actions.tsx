@@ -9,6 +9,7 @@ import SectionHeader from '../../components/ui/SectionHeader';
 import ActionTile from '../../components/ui/ActionTile';
 import SegmentedSubnav from '../../components/ui/SegmentedSubnav';
 import WalletScreen from '../../components/ui/WalletScreen';
+import StatusChip from '../../components/ui/StatusChip';
 import KeyService from '../../services/KeyService';
 import { logError } from '../../utils/errorHandling';
 import { ADVANCED_ACTIONS, BASIC_ACTIONS } from './actionsConfig';
@@ -163,6 +164,9 @@ const Actions: React.FC = () => {
                     description={action.description}
                     icon={getAdvancedActionIcon(action.title)}
                     layout="horizontal"
+                    trailing={
+                      action.badge ? <StatusChip>{action.badge}</StatusChip> : undefined
+                    }
                     onClick={() => {
                       const returnTo = '/actions';
                       if (action.to === '/quantumroot') {

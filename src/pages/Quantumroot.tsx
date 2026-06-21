@@ -6,6 +6,7 @@ import { Toast } from '@capacitor/toast';
 import PageHeader from '../components/ui/PageHeader';
 import SectionCard from '../components/ui/SectionCard';
 import EmptyState from '../components/ui/EmptyState';
+import StatusChip from '../components/ui/StatusChip';
 import Popup from '../components/transaction/Popup';
 import { RootState } from '../state/store';
 import { selectCurrentNetwork } from '../state/selectors/networkSelectors';
@@ -105,16 +106,21 @@ const Quantumroot: React.FC = () => {
             title="Quantumroot"
             subtitle="Two spending lanes in one vault"
             compact
+            titleAction={<StatusChip tone="neutral">Beta production</StatusChip>}
           />
 
           <SectionCard className="mt-3">
             <div className="wallet-surface-strong rounded-[14px] p-3 mb-3">
-              <div className="text-sm font-bold">
-                {networkSupport.isPreviewOnly
-                  ? 'Quantumroot Mainnet Preview'
-                  : 'Quantumroot Active Workspace'}
+              <div className="flex flex-wrap items-center gap-2 text-sm font-bold">
+                <span>Quantumroot Beta Production</span>
+                <StatusChip tone="neutral">Live preview</StatusChip>
               </div>
-              <div className="text-xs wallet-muted mt-1">
+              <div className="mt-1 text-xs wallet-muted">
+                {networkSupport.isPreviewOnly
+                  ? 'Mainnet preview stays visible before activation.'
+                  : 'Active workspace for the beta-production Quantumroot flow.'}
+              </div>
+              <div className="mt-1 text-xs wallet-muted">
                 {networkSupport.isPreviewOnly
                   ? `Quantumroot is visible on mainnet ahead of activation. The layout stays available, but key actions remain disabled until ${formatActivationDate(networkSupport.activationAt)}.`
                   : 'Quantumroot is active on this network. Use the vault workspace below to manage a normal spend lane and a quantum-safe recovery lane.'}
