@@ -1,0 +1,214 @@
+name: Desktop Release
+
+# Mirrors the structure of android-release.yml:
+# - Triggered by the same v*.*.* tags on main
+# - Same quality gates (lint, typecheck, test)
+# - Produces signed installers for Windows, macOS, Linux
+# - Creates a GitHub Release alongside the Android AAB release
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+  workflow_dispatch:
+
+concurrency:
+  group: desktop-release-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: write
+  id-token: write
+  attestations: write
+
+jobs:
+  # ─── Quality gate (mirrors android-release.yml) ────────────────────────────
+  quality-gate:
+    name: Quality Gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout (full history for tag reachability check)
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Verify tag is reachable from main
+        run: |
+          if ! git merge-base --is-ancestor "${{ github.sha }}" origin/main; then
+            echo "Release tag must point to a commit reachable from main."
+            exit 1
+          fi
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Lint
+        run: npm run lint:core
+
+      - name: Type check
+        run: npm run typecheck:core
+
+      - name: Unit tests
+        run: npm run test -- --run
+
+  # ─── Desktop builds (Windows, macOS, Linux) ────────────────────────────────
+  build-desktop:
+    name: Build Desktop (${{ matrix.platform }})
+    needs: quality-gate
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: windows-latest
+            target: x86_64-pc-windows-msvc
+            artifact-name: optn-wallet-windows
+            bundle-ext: '*.exe'
+
+          - platform: macos-latest
+            target: aarch64-apple-darwin
+            artifact-name: optn-wallet-macos-arm
+            bundle-ext: '*.dmg'
+
+          - platform: macos-13
+            target: x86_64-apple-darwin
+            artifact-name: optn-wallet-macos-x64
+            bundle-ext: '*.dmg'
+
+          - platform: ubuntu-22.04
+            target: x86_64-unknown-linux-gnu
+            artifact-name: optn-wallet-linux
+            bundle-ext: '*.AppImage'
+
+    runs-on: ${{ matrix.platform }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install Linux system dependencies
+        if: matrix.platform == 'ubuntu-22.04'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libappindicator3-dev \
+            librsvg2-dev \
+            patchelf \
+            libssl-dev \
+            libgtk-3-dev
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Rust cache
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: './src-tauri -> target'
+
+      - name: Install npm dependencies
+        run: npm ci
+
+      - name: Import macOS signing certificate
+        if: startsWith(matrix.platform, 'macos')
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
+        run: |
+          CERTIFICATE_PATH=$RUNNER_TEMP/certificate.p12
+          KEYCHAIN_PATH=$RUNNER_TEMP/app-signing.keychain-db
+          echo -n "$APPLE_CERTIFICATE" | base64 --decode -o "$CERTIFICATE_PATH"
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security import "$CERTIFICATE_PATH" -P "$APPLE_CERTIFICATE_PASSWORD" \
+            -A -t cert -f pkcs12 -k "$KEYCHAIN_PATH"
+          security list-keychain -d user -s "$KEYCHAIN_PATH"
+
+      - name: Build Tauri app
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # macOS notarization (optional — remove if not notarizing yet)
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_ID_PASSWORD: ${{ secrets.APPLE_ID_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          # Windows code signing (optional — remove if not signing yet)
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        with:
+          tagName: ${{ github.ref_name }}
+          releaseName: 'OPTN Wallet ${{ github.ref_name }}'
+          releaseBody: |
+            ## OPTN Wallet ${{ github.ref_name }}
+
+            ### Downloads
+            | Platform | File |
+            |---|---|
+            | Windows | `.exe` installer |
+            | macOS (Apple Silicon) | `.dmg` |
+            | macOS (Intel) | `.dmg` |
+            | Linux | `.AppImage` |
+            | Android | See [Android release](${{ github.server_url }}/${{ github.repository }}/releases) |
+
+            ### Checksums
+            SHA256 checksums are attached to this release.
+          releaseDraft: true
+          prerelease: false
+          args: --target ${{ matrix.target }} --config vite.desktop.config.ts
+
+      - name: Upload bundle artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact-name }}
+          path: |
+            src-tauri/target/${{ matrix.target }}/release/bundle/**/${{ matrix.bundle-ext }}
+          retention-days: 30
+          if-no-files-found: warn
+
+  # ─── Checksums + attestation (mirrors android-release.yml) ─────────────────
+  attest-and-checksum:
+    name: Attest & Checksum
+    needs: build-desktop
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts/
+
+      - name: Generate SHA256 checksums
+        run: |
+          find artifacts/ -type f \( -name "*.exe" -o -name "*.dmg" -o -name "*.AppImage" \) \
+            -exec sha256sum {} \; > checksums-desktop.txt
+          cat checksums-desktop.txt
+
+      - name: Upload checksums
+        uses: actions/upload-artifact@v4
+        with:
+          name: checksums-desktop
+          path: checksums-desktop.txt
+          retention-days: 30
+
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@v1
+        with:
+          subject-path: 'artifacts/**/*.{exe,dmg,AppImage}'
