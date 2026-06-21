@@ -4,7 +4,6 @@ import { dirname, resolve as resolvePath } from 'node:path';
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
 import { defineConfig } from 'vite';
-import topLevelAwait from 'vite-plugin-top-level-await';
 import react from '@vitejs/plugin-react-swc';
 import { nodePolyfills } from 'vite-plugin-node-polyfills';
 
@@ -21,10 +20,6 @@ export default defineConfig(({ mode }) => {
     base: mode === 'development' ? '/' : './',
     plugins: [
       react(),
-      topLevelAwait({
-        promiseExportName: '__tla',
-        promiseImportName: (i) => `__tla_${i}`,
-      }),
       nodePolyfills({
         protocolImports: true,
         globals: { process: true, Buffer: true },
