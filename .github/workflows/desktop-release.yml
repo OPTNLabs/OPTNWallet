@@ -52,10 +52,8 @@ jobs:
             artifact-name: optn-wallet-macos-arm
             bundle-ext: '*.dmg'
 
-          - platform: macos-13
-            target: x86_64-apple-darwin
-            artifact-name: optn-wallet-macos-x64
-            bundle-ext: '*.dmg'
+          # macos-13 (Intel) omitted: scarce runners stall the release. Apple
+          # Silicon covers modern Macs; re-add x86_64-apple-darwin if Intel is needed.
 
           - platform: ubuntu-22.04
             target: x86_64-unknown-linux-gnu
