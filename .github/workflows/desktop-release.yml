@@ -172,7 +172,7 @@ jobs:
             SHA256 checksums are attached to this release.
           releaseDraft: true
           prerelease: false
-          args: --target ${{ matrix.target }} --config vite.desktop.config.ts
+          args: --target ${{ matrix.target }} --config src-tauri/tauri.conf.json
 
       - name: Upload bundle artifact
         uses: actions/upload-artifact@v4
