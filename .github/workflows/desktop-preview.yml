@@ -72,7 +72,7 @@ jobs:
         run: npm ci
 
       - name: Build Tauri (debug)
-        run: npx tauri build --debug --config vite.desktop.config.ts
+        run: npx tauri build --debug --config src-tauri/tauri.conf.json
 
       - name: Upload preview artifact
         uses: actions/upload-artifact@v4
