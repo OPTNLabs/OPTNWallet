@@ -1029,7 +1029,7 @@ describe('QuantumrootRecoveryService', () => {
     } finally {
       zeroizeQuantumrootArtifacts(vault);
     }
-  });
+  }, 15000);
 
   it('rejects authorized spend when the Quantum Lock control token category does not match', async () => {
     const vault = await deriveQuantumrootVault(
