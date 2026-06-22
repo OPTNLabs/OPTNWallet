@@ -143,7 +143,7 @@ jobs:
 
             ### Checksums
             SHA256 checksums are attached to this release.
-          releaseDraft: true
+          releaseDraft: false
           prerelease: false
           # Run the Tauri CLI via npx — the project has no "tauri" npm script,
           # so tauri-action's default `npm run tauri` fails. npx works on the
