@@ -4,7 +4,6 @@ import { dirname, resolve as resolvePath } from 'node:path';
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
 import { defineConfig } from 'vite';
-import topLevelAwait from 'vite-plugin-top-level-await';
 import react from '@vitejs/plugin-react-swc';
 import { nodePolyfills } from 'vite-plugin-node-polyfills';
 
@@ -19,12 +18,12 @@ export default defineConfig(({ mode }) => {
 
   return {
     base: mode === 'development' ? '/' : './',
+    // Vite 8 / rolldown enforces stricter CommonJS interop, which makes some CJS
+    // default imports resolve to a namespace object → React "element type is invalid"
+    // (#130) → blank screen. Restore Rollup's permissive interop.
+    legacy: { inconsistentCjsInterop: true },
     plugins: [
       react(),
-      topLevelAwait({
-        promiseExportName: '__tla',
-        promiseImportName: (i) => `__tla_${i}`,
-      }),
       nodePolyfills({
         protocolImports: true,
         globals: { process: true, Buffer: true },
@@ -87,7 +86,7 @@ export default defineConfig(({ mode }) => {
           warn(warning);
         },
         output: {
-          manualChunks: { 'sql-wasm': ['sql.js'] },
+          manualChunks: (id) => (id.includes('sql.js') ? 'sql-wasm' : undefined),
         },
       },
     },
