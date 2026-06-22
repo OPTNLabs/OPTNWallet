@@ -87,7 +87,7 @@ jobs:
         run: npm run typecheck:core
 
       - name: Unit tests
-        run: npm run test -- --run
+        run: npm run test:core
 
       - name: Addon manifest validation
         run: npm run addons:validate
