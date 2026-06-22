@@ -4,11 +4,16 @@
 export const Capacitor = {
   isNativePlatform: () => false,
   getPlatform: () => 'web' as const,
-  isPluginAvailable: (_name: string) => false,
+  isPluginAvailable: (_name: string) => {
+    void _name;
+    return false;
+  },
   convertFileSrc: (path: string) => path,
 };
 
 export const registerPlugin = <T>(_name: string, _impl?: object): T => {
+  void _name;
+  void _impl;
   return {} as T;
 };
 
