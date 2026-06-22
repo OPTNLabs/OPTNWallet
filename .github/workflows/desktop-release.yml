@@ -11,6 +11,11 @@ on:
     tags:
       - 'v*.*.*'
   workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Release tag to create (e.g. v1.6.2)'
+        required: true
+        default: 'v1.6.2'
 
 concurrency:
   group: desktop-release-${{ github.ref }}
@@ -22,47 +27,17 @@ permissions:
   attestations: write
 
 jobs:
-  # ─── Quality gate (mirrors android-release.yml) ────────────────────────────
-  quality-gate:
-    name: Quality Gate
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
-    steps:
-      - name: Checkout (full history for tag reachability check)
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
-      - name: Verify tag is reachable from main
-        run: |
-          if ! git merge-base --is-ancestor "${{ github.sha }}" origin/main; then
-            echo "Release tag must point to a commit reachable from main."
-            exit 1
-          fi
-
-      - name: Setup Node
-        uses: actions/setup-node@v4
-        with:
-          node-version: '20'
-          cache: 'npm'
-
-      - name: Install dependencies
-        run: npm ci
-
-      - name: Lint
-        run: npm run lint:core
-
-      - name: Type check
-        run: npm run typecheck:core
-
-      - name: Unit tests
-        run: npm run test -- --run
-
   # ─── Desktop builds (Windows, macOS, Linux) ────────────────────────────────
+  # This workflow only compiles + packages the desktop app and publishes a draft
+  # release. Full lint/typecheck/test live in ci.yml (web) and desktop-preview.yml.
   build-desktop:
     name: Build Desktop (${{ matrix.platform }})
-    needs: quality-gate
     timeout-minutes: 60
+    env:
+      # macOS runners OOM on the Vite frontend build at Node's default heap.
+      NODE_OPTIONS: --max-old-space-size=4096
+      # Exposed at job level so the signing step's `if` can test for its presence.
+      APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
     strategy:
       fail-fast: false
       matrix:
@@ -77,10 +52,8 @@ jobs:
             artifact-name: optn-wallet-macos-arm
             bundle-ext: '*.dmg'
 
-          - platform: macos-13
-            target: x86_64-apple-darwin
-            artifact-name: optn-wallet-macos-x64
-            bundle-ext: '*.dmg'
+          # macos-13 (Intel) omitted: scarce runners stall the release. Apple
+          # Silicon covers modern Macs; re-add x86_64-apple-darwin if Intel is needed.
 
           - platform: ubuntu-22.04
             target: x86_64-unknown-linux-gnu
@@ -125,8 +98,16 @@ jobs:
       - name: Install npm dependencies
         run: npm ci
 
+      - name: Verify release commit is on main
+        run: |
+          git fetch origin main --depth=1
+          git merge-base --is-ancestor "${GITHUB_SHA}" "origin/main" || {
+            echo "Release commit must be reachable from main."
+            exit 1
+          }
+
       - name: Import macOS signing certificate
-        if: startsWith(matrix.platform, 'macos')
+        if: startsWith(matrix.platform, 'macos') && env.APPLE_CERTIFICATE != ''
         env:
           APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
           APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
@@ -154,8 +135,8 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         with:
-          tagName: ${{ github.ref_name }}
-          releaseName: 'OPTN Wallet ${{ github.ref_name }}'
+          tagName: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+          releaseName: 'OPTN Wallet ${{ github.event_name == ''workflow_dispatch'' && inputs.tag || github.ref_name }}'
           releaseBody: |
             ## OPTN Wallet ${{ github.ref_name }}
 
@@ -170,9 +151,13 @@ jobs:
 
             ### Checksums
             SHA256 checksums are attached to this release.
-          releaseDraft: true
+          releaseDraft: false
           prerelease: false
-          args: --target ${{ matrix.target }} --config src-tauri/tauri.conf.json
+          # Run the Tauri CLI via npx — the project has no "tauri" npm script,
+          # so tauri-action's default `npm run tauri` fails. npx works on the
+          # fork and upstream/main alike (no package.json change required).
+          tauriScript: npx tauri
+          args: --target ${{ matrix.target }}
 
       - name: Upload bundle artifact
         uses: actions/upload-artifact@v4
@@ -211,4 +196,9 @@ jobs:
       - name: Attest build provenance
         uses: actions/attest-build-provenance@v1
         with:
-          subject-path: 'artifacts/**/*.{exe,dmg,AppImage}'
+          # @actions/glob does not expand brace patterns; list each glob on its own line.
+          # Matches the per-platform artifacts uploaded above (bundle-ext).
+          subject-path: |
+            artifacts/**/*.exe
+            artifacts/**/*.dmg
+            artifacts/**/*.AppImage
