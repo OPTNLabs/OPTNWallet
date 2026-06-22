@@ -23,9 +23,20 @@ jobs:
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     steps:
+      - name: Check dependency-graph availability
+        id: dependency-graph
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          status="$(gh api repos/${{ github.repository }} --jq '.security_and_analysis.dependency_graph.status // "disabled"')"
+          echo "status=$status" >> "$GITHUB_OUTPUT"
       - uses: actions/checkout@v4
       - name: Dependency review
+        if: steps.dependency-graph.outputs.status == 'enabled'
         uses: actions/dependency-review-action@v4
+      - name: Skip dependency review
+        if: steps.dependency-graph.outputs.status != 'enabled'
+        run: echo "Dependency graph is disabled; skipping dependency review."
 
   secrets-scan:
     runs-on: ubuntu-latest
