@@ -98,6 +98,14 @@ jobs:
       - name: Install npm dependencies
         run: npm ci
 
+      - name: Verify release commit is on main
+        run: |
+          git fetch origin main --depth=1
+          git merge-base --is-ancestor "${GITHUB_SHA}" "origin/main" || {
+            echo "Release commit must be reachable from main."
+            exit 1
+          }
+
       - name: Import macOS signing certificate
         if: startsWith(matrix.platform, 'macos') && env.APPLE_CERTIFICATE != ''
         env:
