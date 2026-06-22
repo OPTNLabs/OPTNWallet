@@ -65,6 +65,7 @@
     "@reown/walletkit": "^1.2.3",
     "@tauri-apps/api": "^2.11.1",
     "@tauri-apps/plugin-fs": "^2.5.1",
+    "@tauri-apps/plugin-http": "^2.5.2",
     "@tauri-apps/plugin-notification": "^2.3.3",
     "@types/sql.js": "^1.4.9",
     "@walletconnect/core": "^2.19.2",

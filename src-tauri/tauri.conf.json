@@ -13,11 +13,14 @@
     "windows": [
       {
         "title": "OPTN Wallet",
-        "width": 420,
-        "height": 820,
+        "width": 460,
+        "height": 860,
         "minWidth": 380,
-        "minHeight": 700,
+        "minHeight": 640,
+        "maxWidth": 600,
+        "maxHeight": 2400,
         "resizable": true,
+        "maximizable": false,
         "fullscreen": false,
         "center": true
       }
