@@ -57,9 +57,41 @@ function stubMissingReferencesPlugin(): Plugin {
   };
 }
 
+// Disable responsive breakpoints for the desktop build.
+// The desktop UI is presented as a fixed-width centered column, so the mobile-first
+// base layout is always the correct one. Pushing every Tailwind min-width breakpoint
+// (sm/md/lg/xl/2xl) out of reach makes EVERY component (current and future) render its
+// mobile layout regardless of the actual window width — no per-component fixes, nothing
+// to forget. Operates on the final emitted CSS so it catches all generated breakpoints.
+function neutralizeBreakpointsPlugin(): Plugin {
+  return {
+    name: 'optn-neutralize-breakpoints',
+    apply: 'build',
+    generateBundle(_options, bundle) {
+      for (const fileName of Object.keys(bundle)) {
+        const chunk = bundle[fileName];
+        if (
+          fileName.endsWith('.css') &&
+          chunk.type === 'asset' &&
+          typeof chunk.source === 'string'
+        ) {
+          chunk.source = chunk.source.replace(
+            /min-width:\s*(640|768|1024|1280|1536)px/g,
+            'min-width:999999px'
+          );
+        }
+      }
+    },
+  };
+}
+
 // Desktop-specific config additions
 const desktopAdditions = defineConfig({
-  plugins: [injectDesktopStylesPlugin(), stubMissingReferencesPlugin()],
+  plugins: [
+    injectDesktopStylesPlugin(),
+    stubMissingReferencesPlugin(),
+    neutralizeBreakpointsPlugin(),
+  ],
   resolve: {
     alias: {
       // Capacitor shims — transparent replacements for all @capacitor/* packages.
