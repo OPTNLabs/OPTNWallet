@@ -6,10 +6,14 @@ import 'react-multi-carousel/lib/styles.css';
 import { RootState } from '../state/store';
 import { FaBitcoin, FaEthereum } from 'react-icons/fa';
 
+// Desktop renders the wallet as a fixed ~480px centered column at any window size, so the
+// price ticker should always show a single card (the look that fits the column). The
+// carousel keys off window width, so every breakpoint is set to 1 to stay consistent when
+// the window is enlarged/maximized.
 const responsive = {
-  superLargeDesktop: { breakpoint: { max: 4000, min: 3000 }, items: 5 },
-  desktop: { breakpoint: { max: 3000, min: 1024 }, items: 3 },
-  tablet: { breakpoint: { max: 1024, min: 464 }, items: 2 },
+  superLargeDesktop: { breakpoint: { max: 4000, min: 3000 }, items: 1 },
+  desktop: { breakpoint: { max: 3000, min: 1024 }, items: 1 },
+  tablet: { breakpoint: { max: 1024, min: 464 }, items: 1 },
   mobile: { breakpoint: { max: 464, min: 0 }, items: 1 },
 };
 
@@ -47,12 +51,12 @@ const PriceFeed: React.FC<PriceFeedProps> = ({ compact = false }) => {
         responsive={responsive}
         infinite
         autoPlay
-        autoPlaySpeed={2000}
+        autoPlaySpeed={7000}
         keyBoardControl
         transitionDuration={500}
         containerClass="carousel-container"
         itemClass="carousel-item-padding-40-px"
-        removeArrowOnDeviceType={['tablet', 'mobile']}
+        removeArrowOnDeviceType={[]}
         showDots={false}
       >
         {ASSETS.map((symbol) => {
