@@ -87,8 +87,28 @@ jobs:
           path: android/**/outputs/bundle/release/*.aab
           retention-days: 30
 
+      - name: Build Signed Release APK
+        env:
+          # app/build.gradle expects RELEASE_* envs
+          RELEASE_STORE_FILE: keystore.jks
+          RELEASE_STORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          RELEASE_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          RELEASE_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: npm run android:apk:prod
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: app-release-apk
+          path: android/**/outputs/apk/release/*.apk
+          retention-days: 30
+
       - name: Generate checksums
-        run: sha256sum android/**/outputs/bundle/release/*.aab > android/release-sha256.txt
+        run: |
+          {
+            sha256sum android/**/outputs/bundle/release/*.aab
+            sha256sum android/**/outputs/apk/release/*.apk
+          } > android/release-sha256.txt
 
       - name: Upload checksums
         uses: actions/upload-artifact@v4
@@ -100,7 +120,9 @@ jobs:
       - name: Attest release bundle provenance
         uses: actions/attest-build-provenance@v2
         with:
-          subject-path: android/**/outputs/bundle/release/*.aab
+          subject-path: |
+            android/**/outputs/bundle/release/*.aab
+            android/**/outputs/apk/release/*.apk
 
       - name: Create GitHub Release
         if: startsWith(github.ref, 'refs/tags/')
@@ -108,4 +130,5 @@ jobs:
         with:
           files: |
             android/**/outputs/bundle/release/*.aab
+            android/**/outputs/apk/release/*.apk
             android/release-sha256.txt
