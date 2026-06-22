@@ -106,10 +106,10 @@ jobs:
 
       - name: Generate checksums
         run: |
-          {
-            sha256sum android/**/outputs/bundle/release/*.aab
-            sha256sum android/**/outputs/apk/release/*.apk
-          } > android/release-sha256.txt
+          find android -type f \( \
+            -path '*/outputs/bundle/release/*.aab' -o \
+            -path '*/outputs/apk/release/*.apk' \
+          \) -exec sha256sum {} \; > android/release-sha256.txt
 
       - name: Upload checksums
         uses: actions/upload-artifact@v4
