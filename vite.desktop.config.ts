@@ -9,14 +9,20 @@ import { defineConfig, mergeConfig, type Plugin, type ConfigEnv, type UserConfig
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
-// Inject desktop.css into the build without touching main.tsx
+// Inject desktop.css and the HTTP bridge into the build without touching main.tsx.
+// The HTTP bridge is imported first so window.fetch is patched before any module
+// (e.g. the price feed) issues a request.
 function injectDesktopStylesPlugin(): Plugin {
   return {
     name: 'optn-inject-desktop-css',
     transform(code, id) {
       if (id.endsWith('src/main.tsx') || id.endsWith('src\\main.tsx')) {
         const cssPath = resolvePath(__dirname, 'src/platform/desktop/desktop.css');
-        return { code: `import ${JSON.stringify(cssPath)};\n` + code, map: null };
+        const httpBridgePath = resolvePath(__dirname, 'src/platform/desktop/http-bridge.ts');
+        const prelude =
+          `import ${JSON.stringify(httpBridgePath)};\n` +
+          `import ${JSON.stringify(cssPath)};\n`;
+        return { code: prelude + code, map: null };
       }
     },
   };
