@@ -1,7 +1,7 @@
 {
   "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
   "productName": "OPTNWallet",
-  "version": "1.6.2",
+  "version": "1.6.3",
   "identifier": "com.optilabs.wallet",
   "build": {
     "frontendDist": "../dist",
@@ -17,10 +17,8 @@
         "height": 860,
         "minWidth": 380,
         "minHeight": 640,
-        "maxWidth": 600,
-        "maxHeight": 2400,
         "resizable": true,
-        "maximizable": false,
+        "maximizable": true,
         "fullscreen": false,
         "center": true
       }
