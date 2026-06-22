@@ -41,6 +41,8 @@ export const LocalNotifications = {
   removeAllListeners: async () => {},
 
   addListener: (_event: string, _handler: (data: unknown) => void) => {
+    void _event;
+    void _handler;
     return Promise.resolve({ remove: async () => {} });
   },
 };
