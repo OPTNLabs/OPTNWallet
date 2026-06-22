@@ -99,6 +99,7 @@ jobs:
         run: npm ci
 
       - name: Verify release commit is on main
+        shell: bash
         run: |
           git fetch origin main --depth=1
           git merge-base --is-ancestor "${GITHUB_SHA}" "origin/main" || {
