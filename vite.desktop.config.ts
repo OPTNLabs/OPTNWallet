@@ -28,35 +28,6 @@ function injectDesktopStylesPlugin(): Plugin {
   };
 }
 
-// Stub the quantumroot JSON that hasn't been committed to the dev branch yet.
-// This prevents build errors — the Quantumroot feature itself is in-progress upstream.
-function stubMissingReferencesPlugin(): Plugin {
-  const QUANTUMROOT_STUB = JSON.stringify({
-    $schema: 'https://bitauth.com/schemas/authentication-template-v0.schema.json',
-    description: 'Quantumroot Schnorr LM-OTS Vault (dev stub)',
-    name: 'Quantumroot Schnorr LM-OTS Vault',
-    supported: ['BCH_2025_05'],
-    version: 0,
-    entities: {},
-    scripts: {},
-    scenarios: {},
-  });
-
-  return {
-    name: 'optn-stub-missing-references',
-    resolveId(id: string) {
-      if (id.includes('quantumroot-schnorr-lm-ots-vault')) {
-        return '\0virtual:quantumroot-stub';
-      }
-    },
-    load(id: string) {
-      if (id === '\0virtual:quantumroot-stub') {
-        return `export default ${QUANTUMROOT_STUB};`;
-      }
-    },
-  };
-}
-
 // Disable responsive breakpoints for the desktop build.
 // The desktop UI is presented as a fixed-width centered column, so the mobile-first
 // base layout is always the correct one. Pushing every Tailwind min-width breakpoint
@@ -89,7 +60,6 @@ function neutralizeBreakpointsPlugin(): Plugin {
 const desktopAdditions = defineConfig({
   plugins: [
     injectDesktopStylesPlugin(),
-    stubMissingReferencesPlugin(),
     neutralizeBreakpointsPlugin(),
   ],
   resolve: {
