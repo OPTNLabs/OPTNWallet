@@ -56,17 +56,18 @@ jobs:
         uses: gradle/actions/setup-gradle@v4
 
       # ---- Signing: map your GitHub secrets to the env your app/build.gradle expects ----
-      - name: Validate signing secrets
+      - name: Report signing secret availability
         env:
           KEYSTORE_B64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
           STORE_PASS: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
           KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
           KEY_PASS: ${{ secrets.ANDROID_KEY_PASSWORD }}
         run: |
-          test -n "$KEYSTORE_B64"
-          test -n "$STORE_PASS"
-          test -n "$KEY_ALIAS"
-          test -n "$KEY_PASS"
+          if [ -n "$KEYSTORE_B64" ] && [ -n "$STORE_PASS" ] && [ -n "$KEY_ALIAS" ] && [ -n "$KEY_PASS" ]; then
+            echo "Android signing secrets are present; building signed release artifacts."
+          else
+            echo "Android signing secrets are missing; building unsigned release artifacts."
+          fi
 
       - name: Prepare keystore file
         run: echo "${{ secrets.ANDROID_KEYSTORE_BASE64 }}" | base64 -d > android/keystore.jks
