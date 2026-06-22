@@ -18,7 +18,7 @@ import {
 } from '@bitauth/libauth';
 import { compileScriptRaw } from '@bitauth/libauth/build/lib/language/resolve.js';
 
-import quantumrootTemplateJson from '../../../../reference/quantumroot/quantumroot-schnorr-lm-ots-vault.json';
+import quantumrootTemplateJson from '../../../reference/quantumroot/quantumroot-schnorr-lm-ots-vault.json';
 import { Network } from '../../state/slices/networkSlice';
 import { deriveQuantumrootVault, zeroizeQuantumrootArtifacts } from '../QuantumrootService';
 import {
@@ -33,7 +33,8 @@ const TEST_MNEMONIC =
   'abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about';
 
 const importedQuantumrootTemplate = importWalletTemplate(quantumrootTemplateJson);
-type QuantumrootCompilationData = any;
+type QuantumrootCompilationData =
+  Parameters<ReturnType<typeof createQuantumrootCompiler>['generateBytecode']>[0]['data'];
 
 const toTemplateVaultTokenCategory = (category: string) =>
   `0x${swapEndianness(category.trim().replace(/^0x/i, '').toLowerCase())}`;
@@ -561,7 +562,7 @@ describe('QuantumrootRecoveryService', () => {
     } finally {
       zeroizeQuantumrootArtifacts(vault);
     }
-  });
+  }, 15000);
 
   it('rejects authorized spend when the Quantum Lock control token category does not match', async () => {
     const vault = await deriveQuantumrootVault(

@@ -1,5 +1,16 @@
 /* Desktop overrides — neutralizes mobile safe-area and touch-only styles */
 
+/* Option B (responsive desktop): present the mobile UI as a centered, fixed-width
+   column on a backdrop, so a wide/maximized window doesn't stretch the layout.
+   The bottom nav is in-flow inside .app-shell, so constraining .app-shell centers
+   it too — no transform/fixed-position hacks. The body keeps the themed gradient,
+   which shows as the backdrop on the sides. */
+.app-shell {
+  max-width: 480px;
+  margin-inline: auto;
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.05), 0 24px 70px rgba(0, 0, 0, 0.5);
+}
+
 :root {
   /* Remove iPhone notch safe areas */
   --safe-top: 0px;
