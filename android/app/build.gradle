@@ -24,7 +24,7 @@ def isReleaseTaskRequested = gradle.startParameter.taskNames.any { taskName ->
 }
 
 if (isReleaseTaskRequested && !hasReleaseSigningEnv) {
-    throw new GradleException("Release signing env vars are required: KEYSTORE_PATH, KEYSTORE_PASS, KEYSTORE_ALIAS, KEYSTORE_ALIAS_PASS")
+    logger.warn("Release signing env vars are missing; building unsigned release artifacts.")
 }
 
 android {
