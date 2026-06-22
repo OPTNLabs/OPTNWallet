@@ -4,25 +4,27 @@ on:
     branches: [dev]
     paths:
       - 'src/**'
+      - '!src/platform/desktop/**'
+      - '!src-tauri/**'
       - 'android/**'
       - 'public/**'
       - 'scripts/**'
-      - 'package.json'
-      - 'package-lock.json'
       - 'capacitor.config.ts'
-      - 'vite.config.*'
+      - 'vite.config.ts'
+      - 'reference/**'
       - '.github/workflows/android-preview.yml'
   push:
     branches: [dev]
     paths:
       - 'src/**'
+      - '!src/platform/desktop/**'
+      - '!src-tauri/**'
       - 'android/**'
       - 'public/**'
       - 'scripts/**'
-      - 'package.json'
-      - 'package-lock.json'
       - 'capacitor.config.ts'
-      - 'vite.config.*'
+      - 'vite.config.ts'
+      - 'reference/**'
       - '.github/workflows/android-preview.yml'
 
 permissions:

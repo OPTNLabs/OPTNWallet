@@ -22,7 +22,7 @@ import {
   getBchAccountPath,
 } from './HdWalletService';
 import { zeroize } from '../utils/secureMemory';
-import quantumrootTemplateJson from '../../../reference/quantumroot/quantumroot-schnorr-lm-ots-vault.json';
+import quantumrootTemplateJson from '../../reference/quantumroot/quantumroot-schnorr-lm-ots-vault.json';
 import type { QuantumrootVaultRecord } from '../types/types';
 
 export const QUANTUMROOT_VARIABLE_PATH = {

@@ -1,6 +1,12 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { setInitialized, setFetchingUTXOs, setUTXOs } from '../../state/slices/utxoSlice';
 
+vi.mock('@capacitor/core', () => ({
+  Capacitor: {
+    getPlatform: vi.fn(() => 'android'),
+  },
+}));
+
 const dispatchMock = vi.fn();
 const getStateMock = vi.fn();
 const retrieveKeysMock = vi.fn();

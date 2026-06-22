@@ -18,6 +18,10 @@ export default defineConfig(({ mode }) => {
 
   return {
     base: mode === 'development' ? '/' : './',
+    // Vite 8 / rolldown enforces stricter CommonJS interop, which makes some CJS
+    // default imports resolve to a namespace object → React "element type is invalid"
+    // (#130) → blank screen. Restore Rollup's permissive interop.
+    legacy: { inconsistentCjsInterop: true },
     plugins: [
       react(),
       nodePolyfills({
@@ -82,7 +86,7 @@ export default defineConfig(({ mode }) => {
           warn(warning);
         },
         output: {
-          manualChunks: { 'sql-wasm': ['sql.js'] },
+          manualChunks: (id) => (id.includes('sql.js') ? 'sql-wasm' : undefined),
         },
       },
     },

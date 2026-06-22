@@ -14,7 +14,7 @@ import {
 } from '@bitauth/libauth';
 import { compileScriptRaw } from '@bitauth/libauth/build/lib/language/resolve.js';
 
-import quantumrootTemplateJson from '../../../reference/quantumroot/quantumroot-schnorr-lm-ots-vault.json';
+import quantumrootTemplateJson from '../../reference/quantumroot/quantumroot-schnorr-lm-ots-vault.json';
 import type { UTXO } from '../types/types';
 import {
   getQuantumrootTemplateWithOverrides,
