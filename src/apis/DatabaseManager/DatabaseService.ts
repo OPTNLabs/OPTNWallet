@@ -13,6 +13,23 @@ import SecretCryptoService, {
 
 // Single shared DB handle
 let db: Database | null = null;
+// The initialised sql.js module, kept so realSaveDatabase can open the
+// currently-persisted bytes to count wallets (anti-clobber guard below).
+let sqlModule: Awaited<ReturnType<typeof initSqlJs>> | null = null;
+
+function countWallets(database: Database): number {
+  try {
+    const r = database.exec('SELECT COUNT(*) FROM wallets');
+    return Number(r?.[0]?.values?.[0]?.[0] ?? 0);
+  } catch {
+    return 0; // table not created yet
+  }
+}
+// In-flight start, so concurrent ensureDatabaseStarted() calls share ONE
+// startDatabase() instead of each loading a snapshot and racing to save it
+// back — that race silently dropped freshly-created wallets (a stale parallel
+// load would overwrite IndexedDB after a newer write).
+let startPromise: Promise<Database | null> | null = null;
 
 // ** Debounce state **
 let saveTimeout: ReturnType<typeof setTimeout> | null = null;
@@ -215,9 +232,42 @@ async function migrateSecretColumnsAtRest(): Promise<boolean> {
 /** Write into IndexedDB instead of localStorage */
 async function realSaveDatabase(): Promise<void> {
   if (!db) return;
-  const data = db.export(); // Uint8Array
-  await idbSet('OPTNDatabase', data); // Store raw bytes
-  // console.log('Persisted DB to IndexedDB');
+  const myWallets = countWallets(db);
+
+  // Anti-clobber guard. Multiple contexts share one IndexedDB blob (the main
+  // window AND the UTXO worker thread each hold their own sql.js instance). A
+  // context whose DB has NO wallets must never overwrite a persisted DB that
+  // DOES — otherwise creating a wallet in one context is silently wiped by the
+  // other's empty save. Only the (rare) 0-wallet save pays the peek cost.
+  if (myWallets === 0 && sqlModule) {
+    try {
+      const existing = await idbGet('OPTNDatabase');
+      const bytes =
+        existing instanceof Uint8Array
+          ? existing
+          : existing instanceof ArrayBuffer
+            ? new Uint8Array(existing)
+            : null;
+      if (bytes) {
+        const probe = new sqlModule.Database(bytes);
+        const existingWallets = countWallets(probe);
+        probe.close();
+        if (existingWallets > 0) {
+          console.warn(`[DB] skipped 0-wallet save; persisted DB has ${existingWallets} wallet(s)`);
+          return;
+        }
+      }
+    } catch {
+      // If we cannot verify, fall through to save rather than lose the write.
+    }
+  }
+
+  const data = db.export();
+  try {
+    await idbSet('OPTNDatabase', data);
+  } catch (err) {
+    console.error('[DB] idbSet FAILED — DB not persisted:', err);
+  }
 }
 
 function clearScheduledSaveState(): void {
@@ -243,6 +293,7 @@ const startDatabase = async (): Promise<Database | null> => {
   const SQLModule = await initSqlJs({
     locateFile: () => `/sql-wasm.wasm`,
   });
+  sqlModule = SQLModule;
   const saved = await idbGet('OPTNDatabase');
   const savedBytes =
     saved instanceof Uint8Array
@@ -275,9 +326,15 @@ const startDatabase = async (): Promise<Database | null> => {
 };
 
 const ensureDatabaseStarted = async (): Promise<void> => {
-  if (!db) {
-    await startDatabase();
+  if (db) return;
+  if (!startPromise) {
+    startPromise = startDatabase();
+    // Allow a retry if the very first start fails, but never run two at once.
+    startPromise.catch(() => {
+      startPromise = null;
+    });
   }
+  await startPromise;
 };
 
 const queueSave = async (delayMs = SAVE_DEBOUNCE_MS): Promise<void> => {
