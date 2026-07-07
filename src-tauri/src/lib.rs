@@ -1,3 +1,6 @@
+#[allow(dead_code)] // menu bar is built on the JS side now; kept for reference
+mod menu;
+
 // Desktop-only price fetch.
 //
 // The OPTN price server rejects (HTTP 500) any browser `Origin` header, and
@@ -20,20 +23,81 @@ async fn optn_price_fetch(url: String) -> Result<String, String> {
     Ok(body)
 }
 
+// Read/write a wallet file at a path the user explicitly picked via the OS
+// dialog. Done in Rust (unrestricted fs) so opening/exporting a .optn file from
+// anywhere on disk doesn't require a broad JS fs-capability scope. Constrained
+// to the .optn extension so these commands can't be repurposed to read/write
+// arbitrary files.
+fn ensure_optn_path(path: &str) -> Result<(), String> {
+    if std::path::Path::new(path)
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(|e| e.eq_ignore_ascii_case("optn"))
+        == Some(true)
+    {
+        Ok(())
+    } else {
+        Err("only .optn wallet files are allowed".into())
+    }
+}
+
+#[tauri::command]
+async fn read_wallet_file(path: String) -> Result<String, String> {
+    ensure_optn_path(&path)?;
+    std::fs::read_to_string(&path).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn write_wallet_file(path: String, contents: String) -> Result<(), String> {
+    ensure_optn_path(&path)?;
+    std::fs::write(&path, contents).map_err(|e| e.to_string())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_fs::init())
-        .invoke_handler(tauri::generate_handler![optn_price_fetch])
+        .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_keyring::init())
+        .plugin(tauri_plugin_biometry::init())
+        .invoke_handler(tauri::generate_handler![
+            optn_price_fetch,
+            read_wallet_file,
+            write_wallet_file
+        ])
         .setup(|app| {
-            if cfg!(debug_assertions) {
-                app.handle().plugin(
-                    tauri_plugin_log::Builder::default()
-                        .level(log::LevelFilter::Info)
-                        .build(),
-                )?;
-            }
+            let log_level = if cfg!(debug_assertions) {
+                log::LevelFilter::Debug
+            } else {
+                log::LevelFilter::Info
+            };
+            app.handle().plugin(
+                tauri_plugin_log::Builder::new()
+                    .level(log_level)
+                    // Stdout so the terminal shows logs during dev
+                    .target(tauri_plugin_log::Target::new(
+                        tauri_plugin_log::TargetKind::Stdout,
+                    ))
+                    // Rolling log file in the OS app-log directory:
+                    //   Windows: %APPDATA%\com.optilabs.wallet\logs\
+                    //   macOS:   ~/Library/Logs/com.optilabs.wallet/
+                    //   Linux:   ~/.local/share/com.optilabs.wallet/logs/
+                    .target(tauri_plugin_log::Target::new(
+                        tauri_plugin_log::TargetKind::LogDir {
+                            file_name: Some("optn-wallet".into()),
+                        },
+                    ))
+                    .max_file_size(5_000_000) // 5 MB per file
+                    .rotation_strategy(tauri_plugin_log::RotationStrategy::KeepAll)
+                    .timezone_strategy(tauri_plugin_log::TimezoneStrategy::UseLocal)
+                    .build(),
+            )?;
+            // Menu bar is built on the frontend in TypeScript
+            // (src/platform/desktop/useMenuBar.ts) so File → Open Wallet can list
+            // the actual saved wallets from the webview's WASM SQLite DB. The old
+            // static Rust menu is intentionally not attached — leaving it would
+            // flash a stale menu before the frontend replaces it via setAsAppMenu().
             Ok(())
         })
         .run(tauri::generate_context!())

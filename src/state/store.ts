@@ -15,6 +15,9 @@ import wizardconnectReducer from '../state/slices/wizardconnectSlice';
 import preferencesReducer from '../state/slices/preferencesSlice';
 import notificationsReducer from '../state/slices/notificationsSlice';
 import serverNotificationsReducer from '../state/slices/serverNotificationsSlice';
+import appLockReducer from '../state/slices/appLockSlice';
+import experimentalReducer from '../state/slices/experimentalSlice';
+import hardwareWalletReducer from '../state/slices/hardwareWalletSlice';
 
 type AsyncStorageLike = {
   getItem: (key: string) => Promise<string | null>;
@@ -65,7 +68,7 @@ const persistStorage: AsyncStorageLike = isTestEnvironment()
 const persistConfig = {
   key: 'root',
   storage: persistStorage,
-  whitelist: ['contract', 'network', 'transactionBuilder', 'preferences', 'wallet_id'],
+  whitelist: ['contract', 'network', 'transactionBuilder', 'preferences', 'wallet_id', 'appLock', 'experimental', 'hardwareWallet'],
   version: 2,
   migrate: (async (state: PersistedState) => {
     if (!state) return state;
@@ -91,6 +94,9 @@ const rootReducer = combineReducers({
   notifications: notificationsReducer,
   serverNotifications: serverNotificationsReducer,
   preferences: preferencesReducer,
+  appLock: appLockReducer,
+  experimental: experimentalReducer,
+  hardwareWallet: hardwareWalletReducer,
 });
 
 const persistedReducer = persistReducer(persistConfig, rootReducer);

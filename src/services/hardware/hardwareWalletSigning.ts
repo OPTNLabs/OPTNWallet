@@ -1,0 +1,211 @@
+/**
+ * Bridges WizardConnect SignTransactionRequest to hardware device signing calls.
+ * Supports: Trezor (connect-web v9), Ledger (webhid + hw-app-btc),
+ *           OneKey (hd-web-sdk), Keystone (air-gap QR via SDK).
+ * Private keys never enter the app — the device is the signing authority.
+ */
+
+import {
+  binToHex,
+  decodeTransaction,
+  hexToBin,
+  lockingBytecodeToCashAddress,
+} from '@bitauth/libauth';
+import type { SignTransactionRequest } from '@wizardconnect/core';
+import type { Input, Output } from '@bitauth/libauth';
+import type { ContractInfo } from '../../types/wcInterfaces';
+import { ensureUint8Array } from '../../utils/binary';
+import { PREFIX } from '../../utils/constants';
+import { Network } from '../../state/slices/networkSlice';
+import {
+  trezorSignTransaction,
+  pathToAddressN,
+  type TrezorInput,
+  type TrezorOutputExternal,
+} from './TrezorService';
+import {
+  ledgerSignTransaction,
+  type LedgerInput,
+  type LedgerOutput,
+} from './LedgerService';
+import {
+  oneKeySignTransaction,
+  pathToAddressN as oneKeyPathToAddressN,
+  type OneKeyInput,
+  type OneKeyOutput,
+} from './OneKeyService';
+
+type PathName = 'receive' | 'change' | 'defi';
+
+function pathNameToChangeIndex(pathName: PathName): number {
+  switch (pathName) {
+    case 'receive': return 0;
+    case 'change':  return 1;
+    case 'defi':    return 2;
+    default:        return 0;
+  }
+}
+
+function buildBip44Path(pathName: PathName, addressIndex: number): string {
+  const changeIndex = pathNameToChangeIndex(pathName);
+  return `m/44'/145'/0'/${changeIndex}/${addressIndex}`;
+}
+
+// Extract TXID in display (reversed) order from libauth's internal bytes
+function txidHex(hash: Uint8Array): string {
+  return binToHex(Uint8Array.from(hash).reverse());
+}
+
+export async function signWithTrezor(
+  request: SignTransactionRequest,
+  network: Network
+): Promise<string> {
+  const payload = request.transaction;
+  const txDetails =
+    typeof payload.transaction === 'string'
+      ? decodeTransaction(hexToBin(payload.transaction))
+      : payload.transaction;
+
+  if (!txDetails || typeof txDetails === 'string') {
+    throw new Error('Hardware wallet: invalid transaction payload');
+  }
+
+  const sourceOutputs = payload.sourceOutputs as (Input & Output & ContractInfo)[];
+  const inputPaths = new Map(
+    request.inputPaths.map(([index, path, addressIndex]) => [
+      index,
+      { path: path as PathName, addressIndex },
+    ])
+  );
+  const networkPrefix = PREFIX[network];
+
+  const trezorInputs: TrezorInput[] = txDetails.inputs.map((input, i) => {
+    const pathInfo = inputPaths.get(i);
+    const bip44 = pathInfo
+      ? buildBip44Path(pathInfo.path, pathInfo.addressIndex)
+      : "m/44'/145'/0'/0/0";
+    return {
+      address_n: pathToAddressN(bip44),
+      prev_hash: txidHex(ensureUint8Array(input.outpointTransactionHash)),
+      prev_index: input.outpointIndex,
+      amount: String(sourceOutputs[i]?.valueSatoshis ?? 0n),
+      script_type: 'SPENDADDRESS',
+    };
+  });
+
+  // All outputs are treated as external (recipient) since WizardConnect
+  // doesn't expose which output index is change via inputPaths
+  const trezorOutputs: TrezorOutputExternal[] = txDetails.outputs.map((output) => {
+    const lcb = ensureUint8Array(output.lockingBytecode);
+    const addressResult = lockingBytecodeToCashAddress({ prefix: networkPrefix, bytecode: lcb });
+    const address = typeof addressResult === 'string' ? addressResult : String(addressResult);
+    return { address, amount: String(output.valueSatoshis), script_type: 'PAYTOADDRESS' };
+  });
+
+  const result = await trezorSignTransaction(trezorInputs, trezorOutputs);
+  return result.serializedTx;
+}
+
+export async function signWithLedger(
+  request: SignTransactionRequest,
+  network: Network,
+  fetchRawTx: (txid: string) => Promise<string>
+): Promise<string> {
+  const payload = request.transaction;
+  const txDetails =
+    typeof payload.transaction === 'string'
+      ? decodeTransaction(hexToBin(payload.transaction))
+      : payload.transaction;
+
+  if (!txDetails || typeof txDetails === 'string') {
+    throw new Error('Hardware wallet: invalid transaction payload');
+  }
+
+  const inputPaths = new Map(
+    request.inputPaths.map(([index, path, addressIndex]) => [
+      index,
+      { path: path as PathName, addressIndex },
+    ])
+  );
+  const networkPrefix = PREFIX[network];
+
+  const ledgerInputs: LedgerInput[] = await Promise.all(
+    txDetails.inputs.map(async (input, i) => {
+      const pathInfo = inputPaths.get(i);
+      const bip44 = pathInfo
+        ? buildBip44Path(pathInfo.path, pathInfo.addressIndex)
+        : "m/44'/145'/0'/0/0";
+      const txid = txidHex(ensureUint8Array(input.outpointTransactionHash));
+      const prevTxHex = await fetchRawTx(txid);
+      return {
+        path: bip44.replace(/^m\//, ''),
+        prevTxHex,
+        prevIndex: input.outpointIndex,
+      };
+    })
+  );
+
+  const ledgerOutputs: LedgerOutput[] = txDetails.outputs.map((output) => {
+    const lcb = ensureUint8Array(output.lockingBytecode);
+    const addressResult = lockingBytecodeToCashAddress({ prefix: networkPrefix, bytecode: lcb });
+    return {
+      address: typeof addressResult === 'string' ? addressResult : String(addressResult),
+      amountSatoshis: output.valueSatoshis,
+    };
+  });
+
+  const result = await ledgerSignTransaction(ledgerInputs, ledgerOutputs);
+  return result.serializedTx;
+}
+
+/**
+ * OneKey signing — same structure as Trezor since they share the same
+ * Protobuf-based protocol. OneKey uses 'BCH' as the coin identifier.
+ */
+export async function signWithOneKey(
+  request: SignTransactionRequest,
+  network: Network
+): Promise<string> {
+  const payload = request.transaction;
+  const txDetails =
+    typeof payload.transaction === 'string'
+      ? decodeTransaction(hexToBin(payload.transaction))
+      : payload.transaction;
+
+  if (!txDetails || typeof txDetails === 'string') {
+    throw new Error('Hardware wallet: invalid transaction payload');
+  }
+
+  const sourceOutputs = payload.sourceOutputs as (Input & Output & ContractInfo)[];
+  const inputPaths = new Map(
+    request.inputPaths.map(([index, path, addressIndex]) => [
+      index,
+      { path: path as PathName, addressIndex },
+    ])
+  );
+  const networkPrefix = PREFIX[network];
+
+  const oneKeyInputs: OneKeyInput[] = txDetails.inputs.map((input, i) => {
+    const pathInfo = inputPaths.get(i);
+    const bip44 = pathInfo
+      ? buildBip44Path(pathInfo.path, pathInfo.addressIndex)
+      : "m/44'/145'/0'/0/0";
+    return {
+      address_n: oneKeyPathToAddressN(bip44),
+      prev_hash: txidHex(ensureUint8Array(input.outpointTransactionHash)),
+      prev_index: input.outpointIndex,
+      amount: String(sourceOutputs[i]?.valueSatoshis ?? 0n),
+      script_type: 'SPENDADDRESS',
+    };
+  });
+
+  const oneKeyOutputs: OneKeyOutput[] = txDetails.outputs.map((output) => {
+    const lcb = ensureUint8Array(output.lockingBytecode);
+    const addressResult = lockingBytecodeToCashAddress({ prefix: networkPrefix, bytecode: lcb });
+    const address = typeof addressResult === 'string' ? addressResult : String(addressResult);
+    return { address, amount: String(output.valueSatoshis), script_type: 'PAYTOADDRESS' };
+  });
+
+  const result = await oneKeySignTransaction(oneKeyInputs, oneKeyOutputs);
+  return result.serializedTx;
+}

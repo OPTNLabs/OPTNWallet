@@ -87,6 +87,22 @@ const migrations: Array<(db: Database) => Promise<void>> = [
       db.run('ALTER TABLE bcmr_metadata ADD COLUMN registryHash TEXT;');
     }
   },
+  async (db) => {
+    // Desktop-only per-wallet encryption key support (Electron Cash model: each
+    // wallet has its own password/key, not one shared app-wide key). Column is
+    // unused on mobile — NULL there, harmless.
+    const columns = new Set<string>();
+    const statement = db.prepare('PRAGMA table_info(wallets);');
+    while (statement.step()) {
+      const row = statement.getAsObject() as Record<string, unknown>;
+      if (typeof row.name === 'string') columns.add(row.name);
+    }
+    statement.free();
+
+    if (!columns.has('kdf_salt')) {
+      db.run('ALTER TABLE wallets ADD COLUMN kdf_salt TEXT;');
+    }
+  },
   // Add future migrations here as needed
 ];
 

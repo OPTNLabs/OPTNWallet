@@ -32,3 +32,6 @@ tsconfig.node.tsbuildinfo
 *.keystore
 *.jks
 android/key.properties
+
+# Assistant-internal tooling (not part of the app)
+.serena/
