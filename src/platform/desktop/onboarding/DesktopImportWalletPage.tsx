@@ -15,7 +15,6 @@ import { WalletType } from '../../../types/wallet';
 import InfoTooltipIcon from '../../../features/onboarding/components/InfoTooltipIcon';
 import OnboardingCard from '../../../features/onboarding/components/OnboardingCard';
 import OnboardingScreen from '../../../features/onboarding/components/OnboardingScreen';
-import NetworkSelector from '../../../features/onboarding/components/NetworkSelector';
 import { createWalletWithPassword } from '../DesktopWalletManager';
 
 type Step = 'words' | 'path' | 'name';
@@ -165,7 +164,6 @@ const DesktopImportWalletPage = () => {
     return (
       <OnboardingScreen>
         <OnboardingCard title="Import Wallet" maxWidthClassName="max-w-lg">
-          <NetworkSelector networkType={currentNetwork} centered />
           <div className="w-full mb-3">
             <div className="mb-2 flex items-center justify-center gap-2">
               <span className="wallet-text-strong font-bold text-xl">Recovery Phrase</span>

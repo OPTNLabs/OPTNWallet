@@ -12,7 +12,6 @@ import { Menu, Submenu, MenuItem, PredefinedMenuItem } from '@tauri-apps/api/men
 import { open as openDialog, save as saveDialog } from '@tauri-apps/plugin-dialog';
 import { invoke } from '@tauri-apps/api/core';
 import { appDataDir, join } from '@tauri-apps/api/path';
-import { WebviewWindow } from '@tauri-apps/api/webviewWindow';
 import { AppDispatch, RootState } from '../../state/store';
 import { selectWalletId, resetWallet } from '../../state/slices/walletSlice';
 import { useTheme } from '../../app/theme/useTheme';
@@ -36,21 +35,14 @@ async function walletsDir(): Promise<string | undefined> {
   }
 }
 
-// Electron Cash-style: open a brand-new, independent window that boots to the
-// wallet picker. Each Tauri window has its own JS context (its own in-RAM key
-// cache), so a wallet opened in one window is fully isolated from another.
-async function handleNewInstance() {
-  const label = `wallet-${Date.now()}`;
-  const win = new WebviewWindow(label, {
-    url: '/',
-    title: 'OPTN Wallet',
-    width: 460,
-    height: 860,
-    minWidth: 380,
-    minHeight: 640,
-    center: true,
-  });
-  win.once('tauri://error', (e) => console.error('[menu] new window failed:', e));
+// Go to the wallet picker to start a new/import/hardware wallet or open an
+// existing one. NOTE: this navigates WITHIN the current window rather than
+// opening a second OS window. Multiple windows each run their own in-memory
+// SQLite DB but share one IndexedDB blob, so a second window silently
+// overwrites the first's wallets — true multi-window needs per-wallet files
+// (the .optn files are the start of that) before it is safe to re-enable.
+function goToPicker(navigate: (p: string) => void) {
+  navigate(ROUTE_PATHS.landing);
 }
 
 async function handleOpenWalletFile(navigate: (p: string) => void) {
@@ -174,7 +166,7 @@ export function useMenuBar(): void {
             id: 'new_wallet',
             text: 'Import New Wallet',
             accelerator: 'CmdOrCtrl+N',
-            action: () => void handleNewInstance(),
+            action: () => goToPicker(navigate),
           }),
           openWalletSubmenu,
           await PredefinedMenuItem.new({ item: 'Separator' }),

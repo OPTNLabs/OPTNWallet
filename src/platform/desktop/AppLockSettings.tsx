@@ -51,7 +51,7 @@ export const AppLockSettings: React.FC = () => {
     void (async () => {
       const available = await isBiometricAvailable();
       setBiometricAvailable(available);
-      if (available) setBiometricLabel(await getBiometricLabel());
+      if (available) setBiometricLabel(getBiometricLabel());
       setBiometricEnabled(walletId > 0 ? await hasWalletBiometric(walletId) : false);
     })();
   }, [walletId]);
