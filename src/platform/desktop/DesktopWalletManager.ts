@@ -426,28 +426,14 @@ export async function isBiometricAvailable(): Promise<boolean> {
 }
 
 /**
- * Platform-correct biometric label straight from the OS via the biometry
- * plugin's reported type — no user-agent guessing. biometryType: 1 TouchID,
- * 2 FaceID, 3 Iris, 4 Windows Hello (Auto).
+ * Generic biometric label. The plugin's reported biometryType proved
+ * unreliable across platforms (e.g. it reported Touch ID on Windows), so we
+ * avoid claiming a specific method the OS may not actually be using. The OS
+ * prompt itself shows the real method (Windows Hello face/fingerprint/PIN,
+ * Touch ID, etc.).
  */
-export async function getBiometricLabel(): Promise<string> {
-  try {
-    const status = await bioCheckStatus();
-    switch (status.biometryType) {
-      case 1:
-        return 'Touch ID';
-      case 2:
-        return 'Face ID';
-      case 3:
-        return 'Iris';
-      case 4:
-        return 'Windows Hello';
-      default:
-        return 'Biometric unlock';
-    }
-  } catch {
-    return 'Biometric unlock';
-  }
+export function getBiometricLabel(): string {
+  return 'Biometric / PIN';
 }
 
 export async function hasWalletBiometric(walletId: number): Promise<boolean> {
