@@ -10,14 +10,19 @@ import { resetContract } from '../../state/slices/contractSlice';
 import { resetNetwork } from '../../state/slices/networkSlice';
 import { clearTransaction } from '../../state/slices/transactionBuilderSlice';
 import { selectCurrentNetwork } from '../../state/selectors/networkSelectors';
-import FaucetView from '../../components/FaucetView';
 import ContractDetails from '../../components/ContractDetails';
+import { NetworkSettings } from './NetworkSettings';
+import { ServerSettings } from './ServerSettings';
+import { ConsolePanel } from './ConsolePanel';
+import { ExperimentalSettings } from './ExperimentalSettings';
+import { CashFusionSettings } from './CashFusionSettings';
 import RecoveryPhrase from '../../components/RecoveryPhrase';
 import AboutView from '../../components/AboutView';
 import TermsOfUse from '../../components/TermsOfUse';
 import ContactUs from '../../components/ContactUs';
 import WalletConnectPanel from '../../components/walletconnect/WalletConnectPanel';
 import WizardConnectPanel from '../../components/wizardconnect/WizardConnectPanel';
+import { AppLockSettings } from '../../platform/desktop/AppLockSettings';
 import { disconnectAllWizardConnections } from '../../state/slices/wizardconnectSlice';
 import getElectrumAdapter from '../../services/ElectrumAdapter';
 import { useTheme } from '../../app/theme/useTheme';
@@ -95,8 +100,18 @@ const Settings: React.FC = () => {
         return <WalletConnectPanel />;
       case 'wizardconnect':
         return <WizardConnectPanel />;
+      case 'app-lock':
+        return <AppLockSettings />;
       case 'network':
-        return currentNetwork === 'chipnet' ? <FaucetView /> : null;
+        return <NetworkSettings />;
+      case 'server':
+        return <ServerSettings />;
+      case 'console':
+        return <ConsolePanel />;
+      case 'experimental':
+        return <ExperimentalSettings />;
+      case 'cashfusion':
+        return <CashFusionSettings />;
       default:
         return null;
     }
@@ -114,6 +129,16 @@ const Settings: React.FC = () => {
         return 'Contact Us';
       case 'contract':
         return 'Contract Info';
+      case 'app-lock':
+        return 'App Lock';
+      case 'server':
+        return 'Server';
+      case 'console':
+        return 'Console';
+      case 'experimental':
+        return 'Experimental Features';
+      case 'cashfusion':
+        return 'CashFusion';
       case 'walletconnect':
         return 'WalletConnect';
       case 'wizardconnect':
@@ -184,7 +209,11 @@ const Settings: React.FC = () => {
                           description={row.description}
                           compact
                           right={
-                            row.right ? (
+                            row.key === 'network' ? (
+                              <span className="text-xs font-semibold capitalize text-[var(--wallet-accent)]">
+                                {currentNetwork}
+                              </span>
+                            ) : row.right ? (
                               <span className="wallet-muted">{row.right}</span>
                             ) : undefined
                           }
@@ -225,17 +254,6 @@ const Settings: React.FC = () => {
                     </div>
                   </SectionCard>
 
-                  {currentNetwork === 'chipnet' ? (
-                    <SectionCard className="p-0">
-                      <SectionHeader title="Support" compact />
-                      <SettingsRow
-                        title="Faucet"
-                        description="Request test funds"
-                        compact
-                        onClick={() => setSelectedOption('network')}
-                      />
-                    </SectionCard>
-                  ) : null}
                 </div>
 
                 <button

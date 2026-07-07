@@ -9,7 +9,7 @@ const NetworkSwitch = ({ networkType, setNetworkType }) => {
 
   return (
     <div className="flex flex-row gap-2 items-center wallet-text-strong font-medium">
-      <span className="text-base">Testnet</span>
+      <span className="text-base">Chipnet</span>
       <button
         type="button"
         onClick={handleToggle}
@@ -18,7 +18,7 @@ const NetworkSwitch = ({ networkType, setNetworkType }) => {
             ? 'bg-[var(--wallet-accent)]'
             : 'wallet-surface-strong'
         }`}
-        aria-label={`Switch network. Current: ${networkType === Network.MAINNET ? 'Mainnet' : 'Testnet'}`}
+        aria-label={`Switch network. Current: ${networkType === Network.MAINNET ? 'Mainnet' : 'Chipnet'}`}
       >
         <div
           className={`w-6 h-6 rounded-full shadow-md transform transition-transform ${

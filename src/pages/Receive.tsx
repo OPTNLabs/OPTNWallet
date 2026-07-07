@@ -29,6 +29,7 @@ import {
 } from '../services/QuantumrootVaultStatusService';
 import { getQuantumrootNetworkSupport } from '../services/QuantumrootNetworkSupportService';
 import { getReturnPath } from '../utils/navigation';
+import { RpaReceiveCard } from '../features/rpa/RpaReceiveCard';
 
 type QRCodeType = 'address' | 'pubKey' | 'pkh' | 'privkey';
 const PRIVKEY_UNLOCK_TAPS = 10;
@@ -820,6 +821,7 @@ const Receive: React.FC = () => {
           className="min-h-0 flex-1 space-y-2.5 overflow-y-auto overscroll-contain pr-1 pb-0"
         >
           {addressBrowser}
+          <RpaReceiveCard walletId={currentWalletId} />
           <div
             ref={addressTypeToggleRef}
             className="flex min-h-[34px] items-center justify-center"
