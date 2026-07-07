@@ -234,12 +234,14 @@ async function realSaveDatabase(): Promise<void> {
   if (!db) return;
   const myWallets = countWallets(db);
 
-  // Anti-clobber guard. Multiple contexts share one IndexedDB blob (the main
-  // window AND the UTXO worker thread each hold their own sql.js instance). A
-  // context whose DB has NO wallets must never overwrite a persisted DB that
-  // DOES — otherwise creating a wallet in one context is silently wiped by the
-  // other's empty save. Only the (rare) 0-wallet save pays the peek cost.
-  if (myWallets === 0 && sqlModule) {
+  // Anti-clobber guard for the shared IndexedDB blob. Multiple sql.js contexts
+  // write to it: the main window, EACH extra window (Import New Wallet), and
+  // the UTXO worker thread — every one holds its own in-memory DB. A context
+  // must never overwrite the persisted DB with FEWER wallets than it already
+  // has, or a wallet created in one context is silently wiped by another
+  // context's staler save. (Peek cost is one small in-memory DB open per save;
+  // acceptable, and it is what makes multi-window safe.)
+  if (sqlModule) {
     try {
       const existing = await idbGet('OPTNDatabase');
       const bytes =
@@ -252,8 +254,8 @@ async function realSaveDatabase(): Promise<void> {
         const probe = new sqlModule.Database(bytes);
         const existingWallets = countWallets(probe);
         probe.close();
-        if (existingWallets > 0) {
-          console.warn(`[DB] skipped 0-wallet save; persisted DB has ${existingWallets} wallet(s)`);
+        if (myWallets < existingWallets) {
+          console.warn(`[DB] skipped save: this context has ${myWallets} wallet(s) but persisted has ${existingWallets} — refusing to clobber`);
           return;
         }
       }

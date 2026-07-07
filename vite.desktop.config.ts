@@ -178,5 +178,14 @@ export default defineConfig(async (env: ConfigEnv): Promise<UserConfig> => {
       ? await (originalConfigOrFn as (env: ConfigEnv) => UserConfig | Promise<UserConfig>)(env)
       : originalConfigOrFn;
 
-  return mergeConfig(baseConfig, desktopAdditions);
+  const merged = mergeConfig(baseConfig, desktopAdditions);
+
+  // The desktop bundle runs in Tauri's WebView2 (modern Chromium/Edge), not the
+  // old mobile WebViews the base es2020 target is pinned for. mergeConfig
+  // CONCATENATES the target arrays, so the conservative es2020/edge88 entries
+  // survive and make esbuild fail ("cannot transform destructuring to es2020").
+  // Hard-REPLACE the target with a single modern one — safe on desktop only.
+  merged.build = { ...(merged.build ?? {}), target: 'chrome110' };
+  merged.esbuild = { ...(merged.esbuild ?? {}), target: 'chrome110' };
+  return merged;
 });
