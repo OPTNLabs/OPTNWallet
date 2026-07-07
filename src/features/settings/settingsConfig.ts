@@ -8,7 +8,11 @@ export type SettingsPanelKey =
   | 'contract'
   | 'walletconnect'
   | 'wizardconnect'
-  | 'network';
+  | 'network'
+  | 'server'
+  | 'console'
+  | 'experimental'
+  | 'cashfusion';
 
 export type SettingsRowConfig = {
   key: SettingsPanelKey | string;
@@ -20,6 +24,13 @@ export type SettingsRowConfig = {
 };
 
 export const WALLET_ROWS: SettingsRowConfig[] = [
+  {
+    key: 'network',
+    title: 'Network',
+    description: 'Switch between Mainnet and Chipnet',
+    action: 'panel',
+    target: 'network',
+  },
   {
     key: 'recovery',
     title: 'Recovery Phrase',
@@ -37,9 +48,37 @@ export const WALLET_ROWS: SettingsRowConfig[] = [
   {
     key: 'app-lock',
     title: 'App Lock',
-    description: 'Coming soon',
-    action: 'noop',
-    right: '(Coming soon)',
+    description: 'Auto-lock · Change password',
+    action: 'panel',
+    target: 'app-lock',
+  },
+  {
+    key: 'server',
+    title: 'Server',
+    description: 'Auto-select or connect manually',
+    action: 'panel',
+    target: 'server',
+  },
+  {
+    key: 'console',
+    title: 'Console',
+    description: 'App log · Electrum RPC',
+    action: 'panel',
+    target: 'console',
+  },
+  {
+    key: 'experimental',
+    title: 'Experimental Features',
+    description: 'RPA · CashFusion',
+    action: 'panel',
+    target: 'experimental',
+  },
+  {
+    key: 'cashfusion',
+    title: 'CashFusion',
+    description: 'Privacy · Server config',
+    action: 'panel',
+    target: 'cashfusion',
   },
 ];
 
