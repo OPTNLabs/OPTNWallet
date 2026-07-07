@@ -5,10 +5,10 @@ import { FiExternalLink } from 'react-icons/fi'; // External link icon
 
 const FaucetView = () => {
   const faucetMethod = {
-    name: 'Testnet Faucet',
+    name: 'Chipnet Faucet',
     href: 'https://tbch.googol.cash/',
     icon: <FaDonate size={24} />,
-    tooltip: 'Get testnet BCH',
+    tooltip: 'Get Chipnet BCH',
   };
 
   return (
@@ -40,8 +40,8 @@ const FaucetView = () => {
         <div className="wallet-card p-4">
           <h3 className="text-xl font-bold mb-2">Instructions</h3>
           <ol className="list-decimal ml-6 space-y-2">
-            <li>Copy a BCH testnet address</li>
-            <li>Click the Testnet Faucet link</li>
+            <li>Copy a BCH Chipnet address</li>
+            <li>Click the Chipnet Faucet link</li>
             <li>Select "chipnet" in the NETWORK box</li>
             <li>Paste your address</li>
             <li>Answer the captcha question</li>
