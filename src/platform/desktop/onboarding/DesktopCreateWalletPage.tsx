@@ -15,7 +15,6 @@ import { setWalletId, setWalletNetwork, setWalletType } from '../../../state/sli
 import { WalletType } from '../../../types/wallet';
 import OnboardingCard from '../../../features/onboarding/components/OnboardingCard';
 import OnboardingScreen from '../../../features/onboarding/components/OnboardingScreen';
-import NetworkSelector from '../../../features/onboarding/components/NetworkSelector';
 import { createWalletWithPassword } from '../DesktopWalletManager';
 
 type Step = 'loading' | 'reveal' | 'confirm' | 'path' | 'name';
@@ -147,7 +146,6 @@ const DesktopCreateWalletPage = () => {
     return (
       <OnboardingScreen>
         <OnboardingCard title="Your Seed Phrase">
-          <NetworkSelector networkType={currentNetwork} />
           <p className="text-sm wallet-muted text-center mb-3">
             Write these 12 words down in order and keep them somewhere safe. Anyone with this
             phrase can spend your funds — never share it or store it digitally.

@@ -60,7 +60,7 @@ const DesktopLandingPage = () => {
     void (async () => {
       const available = await isBiometricAvailable();
       setBioAvailable(available);
-      if (available) setBioLabel(await getBiometricLabel());
+      if (available) setBioLabel(getBiometricLabel());
     })();
   }, []);
 
