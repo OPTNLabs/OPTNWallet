@@ -8,6 +8,7 @@ import {
   encodeTransaction,
   generateSigningSerializationBCH,
   generateTransaction,
+  cashAddressToLockingBytecode,
   hash160,
   hash256,
   hexToBin,
@@ -30,6 +31,7 @@ import {
   buildCauldronPoolV0LockingBytecode,
   buildCauldronPoolV0RedeemScript,
   buildCauldronPoolWithdrawRequest,
+  buildCauldronMerchantPaymentRequest,
   buildCauldronTradeRequest,
   assertSignedTransactionCovenantValidity,
   assertSignedTransactionFeeSufficiency,
@@ -56,6 +58,12 @@ import type { ContractInfo } from '../../types/wcInterfaces';
 
 const TEST_PRIVATE_KEY = hexToBin(
   '1111111111111111111111111111111111111111111111111111111111111111'
+);
+const MERCHANT_PRIVATE_KEY = hexToBin(
+  '2222222222222222222222222222222222222222222222222222222222222222'
+);
+const CHANGE_PRIVATE_KEY = hexToBin(
+  '3333333333333333333333333333333333333333333333333333333333333333'
 );
 
 const WITHDRAW_PKH = Uint8Array.from([
@@ -228,6 +236,29 @@ function createWalletInputFixture(options?: {
     pathName: 'receive' as const,
     addressIndex: 0,
   };
+}
+
+function createCashAddressFromPrivateKey(privateKey: Uint8Array): string {
+  const lockingBytecode = privateKeyToP2pkhLockingBytecode({
+    privateKey,
+    throwErrors: true,
+  });
+  const addressResult = lockingBytecodeToCashAddress({
+    prefix: 'bitcoincash',
+    bytecode: lockingBytecode,
+  });
+  if (typeof addressResult === 'string') {
+    throw new Error(addressResult);
+  }
+  return toCashAddress(addressResult);
+}
+
+function lockingBytecodeForAddress(address: string): Uint8Array {
+  const result = cashAddressToLockingBytecode(address);
+  if (typeof result === 'string') {
+    throw new Error(result);
+  }
+  return result.bytecode;
 }
 
 describe('Cauldron service', () => {
@@ -500,6 +531,65 @@ describe('Cauldron service', () => {
     expect(builtTransaction.inputs).toHaveLength(2);
     expect(builtTransaction.outputs.length >= 2).toBe(true);
     expect(built.estimatedFeeSatoshis > 0n).toBe(true);
+  });
+
+  it('builds a merchant payment request that pays the merchant in the requested token', () => {
+    const merchantAddress = createCashAddressFromPrivateKey(
+      MERCHANT_PRIVATE_KEY
+    );
+    const changeAddress = createCashAddressFromPrivateKey(CHANGE_PRIVATE_KEY);
+    const sampleTokenId =
+      '412064756d6d7920746f6b656e2069642c203132332031323320313233212121';
+    const pool = {
+      version: '0' as const,
+      parameters: { withdrawPublicKeyHash: WITHDRAW_PKH },
+      txHash: '43'.repeat(32),
+      outputIndex: 0,
+      output: {
+        amountSatoshis: 1_122_751_507n,
+        tokenCategory: sampleTokenId,
+        tokenAmount: 11n,
+        lockingBytecode: buildCauldronPoolV0LockingBytecode({
+          withdrawPublicKeyHash: WITHDRAW_PKH,
+        }),
+      },
+    };
+
+    const built = buildCauldronMerchantPaymentRequest({
+      poolTrades: [
+        toCauldronPoolTrade(pool, CAULDRON_NATIVE_BCH, sampleTokenId, {
+          supply: 500_000n,
+          demand: 4n,
+          tradeFee: 1_501n,
+        }),
+      ],
+      walletInputs: [
+        createWalletInputFixture({
+          value: 2_500_000n,
+        }),
+      ],
+      merchantAddress,
+      changeAddress,
+      feeRateSatsPerByte: 1n,
+    });
+
+    expect(built.paymentKind).toBe('merchant');
+    expect(built.signRequest.transaction.userPrompt).toBe(
+      'Merchant payment in stablecoins'
+    );
+    expect(
+      binToHex(
+        built.signRequest.transaction.transaction.outputs[1]!.lockingBytecode
+      )
+    ).toBe(binToHex(lockingBytecodeForAddress(merchantAddress)));
+    expect(built.signRequest.transaction.transaction.outputs[1]?.token?.amount).toBe(
+      4n
+    );
+    expect(
+      binToHex(
+        built.signRequest.transaction.transaction.outputs[2]!.lockingBytecode
+      )
+    ).toBe(binToHex(lockingBytecodeForAddress(changeAddress)));
   });
 
   it('can aggregate a target-supply trade across multiple pools', () => {

@@ -63,6 +63,10 @@ export type BuiltCauldronTradeRequest = {
   walletInputs: ResolvedCauldronFundingInput[];
 };
 
+export type BuiltCauldronMerchantPaymentRequest = BuiltCauldronTradeRequest & {
+  paymentKind: 'merchant';
+};
+
 export type BuiltCauldronPoolDepositRequest = {
   signRequest: SignTransactionRequest;
   sourceOutputs: Array<Input & Output & ContractInfo>;
@@ -732,6 +736,37 @@ export function buildCauldronTradeRequest(params: {
   };
 }
 
+export function buildCauldronMerchantPaymentRequest(params: {
+  poolTrades: CauldronPoolTrade[];
+  walletInputs: ResolvedCauldronFundingInput[];
+  merchantAddress: string;
+  changeAddress: string;
+  tokenChangeAddress?: string;
+  feeRateSatsPerByte?: bigint | number;
+  broadcast?: boolean;
+  userPrompt?: string;
+  sequence?: number;
+  tokenOutputSatoshis?: bigint;
+}): BuiltCauldronMerchantPaymentRequest {
+  const built = buildCauldronTradeRequest({
+    poolTrades: params.poolTrades,
+    walletInputs: params.walletInputs,
+    recipientAddress: params.merchantAddress,
+    changeAddress: params.changeAddress,
+    tokenChangeAddress: params.tokenChangeAddress,
+    feeRateSatsPerByte: params.feeRateSatsPerByte,
+    broadcast: params.broadcast,
+    userPrompt: params.userPrompt ?? 'Merchant payment in stablecoins',
+    sequence: params.sequence,
+    tokenOutputSatoshis: params.tokenOutputSatoshis,
+  });
+
+  return {
+    ...built,
+    paymentKind: 'merchant',
+  };
+}
+
 export function buildCauldronPoolDepositRequest(params: {
   walletInputs: ResolvedCauldronFundingInput[];
   withdrawPublicKeyHash: Uint8Array;
@@ -1075,6 +1110,24 @@ export async function signAndBroadcastCauldronTradeRequest(
       userPrompt: options?.userPrompt ?? built.signRequest.transaction.userPrompt ?? null,
     }
   );
+}
+
+export async function signAndBroadcastCauldronMerchantPaymentRequest(
+  walletId: number,
+  built: BuiltCauldronTradeRequest,
+  options?: {
+    sourceLabel?: string | null;
+    recipientSummary?: string | null;
+    amountSummary?: string | null;
+    userPrompt?: string | null;
+  }
+) {
+  return signAndBroadcastCauldronTradeRequest(walletId, built, {
+    sourceLabel: options?.sourceLabel ?? 'Cauldron Merchant Pay',
+    recipientSummary: options?.recipientSummary ?? null,
+    amountSummary: options?.amountSummary ?? null,
+    userPrompt: options?.userPrompt ?? built.signRequest.transaction.userPrompt ?? null,
+  });
 }
 
 export async function signAndBroadcastCauldronPoolDepositRequest(
