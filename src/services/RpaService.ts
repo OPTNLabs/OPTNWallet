@@ -1,6 +1,10 @@
 // BCH Reusable Payment Address (RPA) service.
 // Spec: https://github.com/imaginaryusername/Reusable_specs/blob/master/reusable_addresses.md
-// Reference: Electron Cash electroncash/rpa/paycode.py
+// Reference: Electron Cash electroncash/rpa/paycode.py, and the settled
+// derivation/encoding decisions from these two (unmerged but authoritative
+// as of this writing) Electron Cash PRs:
+//   https://github.com/Electron-Cash/Electron-Cash/pull/3226 — derivation path
+//   https://github.com/Electron-Cash/Electron-Cash/pull/3225 — compressed keys
 //
 // Protocol summary:
 //   - Recipient shares a static "paycode" (scan_pubkey + spend_pubkey, CashAddr encoded)
@@ -9,30 +13,50 @@
 //   - Recipient queries an RPA-capable Electrum server (Fulcrum-RPA) using their paycode prefix
 //   - For each matching tx, recipient checks if any output belongs to them via ECDH + CKD_pub
 //
-// Key paths (BIP47 hierarchy, matching WizardConnect spec):
-//   Scan  private/public: m/47'/145'/0'/1'/0
-//   Spend private/public: m/47'/145'/0'/0'/0
+// Key paths (PR #3226: "Consolidate RPA wallet into StandardWallet" — RPA no
+// longer has its own BIP47-style hardened tree; it rides on the wallet's
+// normal BIP44 account as a THIRD UNHARDENED CHAIN, sibling to receive(0)/
+// change(1) — see HdWalletService's BCH_STANDARD_BRANCH_INDEX.rpa = 3):
+//   Scan  private/public: m/44'/145'/0'/3/0
+//   Spend private/public: m/44'/145'/0'/3/1
+//
+// Keys are COMPRESSED (PR #3225 fixed an accidental uncompressed default
+// upstream; this implementation was already compressed-only).
+//
+// Paycode encoding is NOT standard CashAddr: standard cashaddr's version byte
+// packs size into 3 bits, capping payloads at 64 bytes — RPA's payload
+// (version+prefixBits+scanPubkey(33)+spendPubkey(33)+expiry ≈ 72+ bytes)
+// exceeds that. Electron Cash's cashaddr.py added encode_rpa/decode_rpa: same
+// bech32-style charset + polymod checksum, but with NO version/kind byte and
+// no payload-length cap. The encode/decode below independently implements the
+// same no-version-byte, uncapped-length approach.
 
 import {
-  deriveHdPrivateNodeFromSeed,
-  deriveHdPath,
-  deriveHdPublicNode,
   deriveHdPublicNodeChild,
   encodeCashAddress,
   sha256,
   secp256k1,
 } from '@bitauth/libauth';
 import { hash160 } from '@cashscript/utils';
-import * as bip39 from 'bip39';
 import * as ecc from 'tiny-secp256k1';
 import { Network } from '../state/slices/networkSlice';
-import { zeroize } from '../utils/secureMemory';
-import { derivePrivateKeyAtPath } from './HdWalletService';
+import {
+  derivePrivateKeyAtPath,
+  deriveHdPublicKeyAtPath,
+  getBchAddressPath,
+  getBchBranchPath,
+  BCH_STANDARD_BRANCH_INDEX,
+} from './HdWalletService';
 
 // ─── Key derivation paths ─────────────────────────────────────────────────────
 
-const SCAN_KEY_PATH  = "m/47'/145'/0'/1'/0";
-const SPEND_KEY_PATH = "m/47'/145'/0'/0'/0";
+function scanKeyPath(network: Network): string {
+  return getBchAddressPath(network, 0, BCH_STANDARD_BRANCH_INDEX.rpa, 0);
+}
+
+function spendKeyPath(network: Network): string {
+  return getBchAddressPath(network, 0, BCH_STANDARD_BRANCH_INDEX.rpa, 1);
+}
 
 // ─── Paycode constants ────────────────────────────────────────────────────────
 
@@ -176,9 +200,13 @@ export type DecodedPaycode = {
 };
 
 // Derive all four RPA key materials from a mnemonic.
-export async function deriveRpaKeys(mnemonic: string, passphrase: string): Promise<RpaKeys> {
-  const scanPrivkey = await derivePrivateKeyAtPath(mnemonic, passphrase, SCAN_KEY_PATH);
-  const spendPrivkey = await derivePrivateKeyAtPath(mnemonic, passphrase, SPEND_KEY_PATH);
+export async function deriveRpaKeys(
+  mnemonic: string,
+  passphrase: string,
+  network: Network,
+): Promise<RpaKeys> {
+  const scanPrivkey = await derivePrivateKeyAtPath(mnemonic, passphrase, scanKeyPath(network));
+  const spendPrivkey = await derivePrivateKeyAtPath(mnemonic, passphrase, spendKeyPath(network));
 
   const scanPub = secp256k1.derivePublicKeyCompressed(scanPrivkey);
   const spendPub = secp256k1.derivePublicKeyCompressed(spendPrivkey);
@@ -242,7 +270,7 @@ export async function deriveAndEncodePaycode(
   network: Network,
   prefixBits = RPA_PREFIX_BITS,
 ): Promise<string> {
-  const keys = await deriveRpaKeys(mnemonic, passphrase);
+  const keys = await deriveRpaKeys(mnemonic, passphrase, network);
   return encodePaycode(keys.scanPubkey, keys.spendPubkey, network, prefixBits);
 }
 
@@ -345,39 +373,22 @@ export async function deriveSpendingKey(
 }
 
 // ─── XPub gate derivation (for WizardConnect extension advertisement) ─────────
-// Returns xpubs at the hardened gate paths.
-// Safe to share: hardened derivation prevents walking up to the parent.
-export async function deriveRpaGateXpubs(
+//
+// PRIVACY NOTE (architecture change from the old BIP47-style scheme): under
+// the settled spec, scan(index 0) and spend(index 1) are UNHARDENED children
+// of ONE branch-3 xpub (m/44'/145'/account'/3), not two independently-gated
+// hardened subtrees. There is therefore only ONE xpub to advertise here, not
+// two. It remains safe to share on its own terms: branch 3 is a SIBLING of
+// receive(0)/change(1)/defi(7) under the account node, and CKD_pub can only
+// walk downward — holding this xpub lets a counterparty derive scan/spend
+// pubkeys but cannot be used to derive receive/change addresses or walk back
+// up to the account or seed.
+export async function deriveRpaGateXpub(
   mnemonic: string,
   passphrase: string,
-): Promise<{ spendGate: string; scanGate: string }> {
-  const { encodeHdPublicKey } = await import('@bitauth/libauth');
-
-  const seed = Uint8Array.from(await bip39.mnemonicToSeed(mnemonic, passphrase));
-  const rootNode = deriveHdPrivateNodeFromSeed(seed, { assumeValidity: true });
-
-  try {
-    const SPEND_GATE = "m/47'/145'/0'/0'";
-    const SCAN_GATE  = "m/47'/145'/0'/1'";
-
-    const spendGateNode = deriveHdPath(rootNode, SPEND_GATE);
-    const scanGateNode  = deriveHdPath(rootNode, SCAN_GATE);
-
-    if (typeof spendGateNode === 'string') throw new Error(`Spend gate failed: ${spendGateNode}`);
-    if (typeof scanGateNode === 'string') throw new Error(`Scan gate failed: ${scanGateNode}`);
-
-    const encodeXpub = (node: ReturnType<typeof deriveHdPublicNode>) => {
-      const r = encodeHdPublicKey({ network: 'mainnet', node });
-      if (typeof r === 'string') throw new Error(`xpub encode failed: ${r}`);
-      return r.hdPublicKey;
-    };
-
-    return {
-      spendGate: encodeXpub(deriveHdPublicNode(spendGateNode)),
-      scanGate:  encodeXpub(deriveHdPublicNode(scanGateNode)),
-    };
-  } finally {
-    zeroize(seed);
-    zeroize(rootNode.privateKey);
-  }
+  network: Network,
+): Promise<{ rpaXpub: string; rpaPath: string }> {
+  const rpaPath = getBchBranchPath(network, 0, BCH_STANDARD_BRANCH_INDEX.rpa);
+  const rpaXpub = await deriveHdPublicKeyAtPath(mnemonic, passphrase, network, rpaPath);
+  return { rpaXpub, rpaPath };
 }
