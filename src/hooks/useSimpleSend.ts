@@ -551,6 +551,30 @@ export default function useSimpleSend() {
     planner,
   ]);
 
+  // "Max": fills the BCH amount field with the full spendable balance minus
+  // network fee. Only fills the field — the user still reviews and confirms
+  // the send through the normal doReview/doSend flow, so no new send path is
+  // introduced. BCH-only (token/NFT "max" is a separate, per-category concept
+  // not covered here).
+  const doMax = useCallback(async () => {
+    if (assetType !== 'bch') return;
+    if (!validateRecipient(normalizedRecipient)) {
+      setError('Enter a valid destination address first.');
+      setMode('error');
+      return;
+    }
+    setError('');
+    const result = await planner.sweepAllBchUntilBuild(50);
+    if (!result.ok) {
+      setError('err' in result ? result.err : 'Unable to compute max amount.');
+      setMode('error');
+      return;
+    }
+    const maxSats = Number(result.finalOutputs[0]?.amount ?? 0);
+    setAmountBch((maxSats / SATSINBITCOIN).toFixed(8));
+    setAmountDisplayMode('bch');
+  }, [assetType, normalizedRecipient, planner, setAmountBch, setAmountDisplayMode]);
+
   const doSend = useCallback(async () => {
     if (!review?.rawTx) return;
     try {
@@ -682,6 +706,7 @@ export default function useSimpleSend() {
     reset,
     doReview,
     doSend,
+    doMax,
 
     // display
     fiatSummary,
