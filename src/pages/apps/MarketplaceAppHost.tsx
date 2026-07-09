@@ -18,7 +18,10 @@ import type {
 import { createAddonSDK, type AddonSDK } from '../../services/AddonsSDK';
 import { renderDeclarativeScreen } from './marketplaceScreenResolver';
 import { getReturnPath } from '../../utils/navigation';
-import { isComingSoonApp } from '../../features/apps/appsViewHelpers';
+import {
+  isComingSoonApp,
+  shouldHideApp,
+} from '../../features/apps/appsViewHelpers';
 import { Capacitor } from '@capacitor/core';
 
 type ResolvedApp = {
@@ -146,19 +149,10 @@ function getDeclarativeScreenId(app: AddonAppDefinition): string {
 }
 
 function isDisabledApp(app: AddonAppDefinition): boolean {
-  const screenId = getDeclarativeScreenId(app).toLowerCase();
-  const appId = app.id.toLowerCase();
-  const appName = app.name.toLowerCase();
   const isNativeRuntime = Capacitor.isNativePlatform();
   const comingSoon = isComingSoonApp(app.id, app.name);
 
-  return (
-    (comingSoon && isNativeRuntime) ||
-    screenId === 'authguard' ||
-    screenId === 'authguardapp' ||
-    appId === 'authguard' ||
-    appName === 'authguard'
-  );
+  return shouldHideApp(app.id, app.name) || (comingSoon && isNativeRuntime);
 }
 
 export default function MarketplaceAppHost() {
@@ -392,6 +386,11 @@ export default function MarketplaceAppHost() {
     (async () => {
       try {
         if (!resolved || !walletId) {
+          if (!cancelled) setLaunchApproved(false);
+          return;
+        }
+
+        if (isDisabledApp(resolved.app)) {
           if (!cancelled) setLaunchApproved(false);
           return;
         }

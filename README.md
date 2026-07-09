@@ -2,7 +2,7 @@
 
 OPTN Wallet is a Bitcoin Cash wallet focused on secure transaction flows, CashTokens support, and extensibility for external apps.
 
-This `README` is the high-level entrypoint. Technical implementation and integration details live in [`docs/`](./docs/README.md).
+Download on Google Play: [OPTN Wallet on Google Play](https://play.google.com/store/apps/details?id=optn.wallet.app)
 
 ## Documentation Map
 

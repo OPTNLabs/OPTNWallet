@@ -92,4 +92,15 @@ describe('marketplaceScreenResolver', () => {
       expect(rendered.type).toBe(CauldronSwapApp);
     }
   });
+
+  it('returns null for merchant pay screen ids', () => {
+    const rendered = renderDeclarativeScreen({
+      screenId: 'MerchantPayApp',
+      resolved: { manifest, app },
+      sdk,
+      loadWalletAddresses: vi.fn().mockResolvedValue(new Set()),
+    });
+
+    expect(rendered).toBeNull();
+  });
 });

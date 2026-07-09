@@ -29,9 +29,13 @@ import {
 } from '../services/QuantumrootVaultStatusService';
 import { getQuantumrootNetworkSupport } from '../services/QuantumrootNetworkSupportService';
 import { getReturnPath } from '../utils/navigation';
+import {
+  getPrivKeyUnlockToastMessage,
+  PRIVKEY_UNLOCK_TAPS,
+  shouldShowPrivKeyButton,
+} from './receivePrivKeyUnlock';
 
 type QRCodeType = 'address' | 'pubKey' | 'pkh' | 'privkey';
-const PRIVKEY_UNLOCK_TAPS = 10;
 const ALLOW_PRIVATE_KEY_VIEW = true;
 
 type WalletKeyPair = {
@@ -193,6 +197,14 @@ const Receive: React.FC = () => {
     fetchKeys();
   }, [currentWalletId, currentNetwork]);
 
+  useEffect(() => {
+    setPubKeyTapCount(0);
+    setIsPrivKeyUnlocked(false);
+    setPrivKeyUnlockToastVisible(false);
+    setPrivKeyUnlockToastMessage('');
+    setQrCodeType('address');
+  }, [currentWalletId, currentNetwork]);
+
   const handleInitializeReceiveAddresses = async () => {
     if (!currentWalletId) return;
 
@@ -259,6 +271,8 @@ const Receive: React.FC = () => {
     setSelectedPrivKey(wif);
     setIsTokenAddress(false);
     setQrCodeType('address');
+    setPrivKeyUnlockToastVisible(false);
+    setPrivKeyUnlockToastMessage('');
     setShowBip21Popup(false);
     setShowAddressListPopup(false);
     setShowQuantumrootStatusPopup(false);
@@ -404,15 +418,20 @@ const Receive: React.FC = () => {
       return;
     }
 
-    if (!isPrivKeyUnlocked) {
-      const nextTapCount = pubKeyTapCount + 1;
-      setPubKeyTapCount(nextTapCount);
+    if (isPrivKeyUnlocked) {
+      setQrCodeType('pubKey');
+      return;
+    }
 
-      if (nextTapCount >= PRIVKEY_UNLOCK_TAPS) {
-        setIsPrivKeyUnlocked(true);
-        setQrCodeType('privkey');
-        return;
-      }
+    const nextTapCount = Math.min(pubKeyTapCount + 1, PRIVKEY_UNLOCK_TAPS);
+    setPubKeyTapCount(nextTapCount);
+
+    if (nextTapCount >= PRIVKEY_UNLOCK_TAPS) {
+      setIsPrivKeyUnlocked(true);
+      setPrivKeyUnlockToastVisible(false);
+      setPrivKeyUnlockToastMessage('');
+      setQrCodeType('pubKey');
+      return;
     }
 
     setQrCodeType('pubKey');
@@ -504,6 +523,7 @@ const Receive: React.FC = () => {
   const formatQuantumrootBalance = (sats: number) =>
     `${(sats / SATSINBITCOIN).toFixed(8).replace(/\.?0+$/, '') || '0'} BCH`;
   const hasReceiveKeys = mainKeyPairs.length > 0 || changeKeyPairs.length > 0;
+  const showPrivKeyButton = shouldShowPrivKeyButton(isPrivKeyUnlocked);
   const canShowQuantumrootStatus =
     !!selectedQuantumrootVault && quantumrootNetworkSupport.canReceiveOnChain;
 
@@ -604,18 +624,18 @@ const Receive: React.FC = () => {
   useEffect(() => {
     if (!ALLOW_PRIVATE_KEY_VIEW || isPrivKeyUnlocked) {
       setPrivKeyUnlockToastVisible(false);
+      setPrivKeyUnlockToastMessage('');
       return;
     }
 
-    if (pubKeyTapCount < 5) {
+    const toastMessage = getPrivKeyUnlockToastMessage(pubKeyTapCount);
+    if (!toastMessage) {
       setPrivKeyUnlockToastVisible(false);
+      setPrivKeyUnlockToastMessage('');
       return;
     }
 
-    const remainingTaps = Math.max(0, PRIVKEY_UNLOCK_TAPS - pubKeyTapCount);
-    setPrivKeyUnlockToastMessage(
-      `PrivKey unlock in ${remainingTaps} tap${remainingTaps === 1 ? '' : 's'}`
-    );
+    setPrivKeyUnlockToastMessage(toastMessage);
     setPrivKeyUnlockToastVisible(true);
 
     const timer = window.setTimeout(() => {
@@ -794,18 +814,20 @@ const Receive: React.FC = () => {
           >
             PKH
           </button>
-          <button
-            ref={privkeyTabRef}
-            type="button"
-            className={`min-h-[38px] min-w-[82px] shrink-0 rounded-[14px] px-2 py-1.5 text-[12px] font-bold leading-none whitespace-nowrap ${
-              qrCodeType === 'privkey'
-                ? 'wallet-segment-active'
-                : 'wallet-segment-inactive'
-            }`}
-            onClick={() => setQrCodeType('privkey')}
-          >
-            PrivKey
-          </button>
+          {showPrivKeyButton ? (
+            <button
+              ref={privkeyTabRef}
+              type="button"
+              className={`min-h-[38px] min-w-[82px] shrink-0 rounded-[14px] px-2 py-1.5 text-[12px] font-bold leading-none whitespace-nowrap ${
+                qrCodeType === 'privkey'
+                  ? 'wallet-segment-active'
+                  : 'wallet-segment-inactive'
+              }`}
+              onClick={() => setQrCodeType('privkey')}
+            >
+              PrivKey
+            </button>
+          ) : null}
         </div>
       </SectionCard>
     );
