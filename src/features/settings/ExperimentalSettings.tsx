@@ -3,8 +3,10 @@ import { useDispatch, useSelector } from 'react-redux';
 import {
   selectRpaEnabled,
   selectCashFusionEnabled,
+  selectQuantumrootEnabled,
   setRpaEnabled,
   setCashFusionEnabled,
+  setQuantumrootEnabled,
 } from '../../state/slices/experimentalSlice';
 
 type FeatureToggleProps = {
@@ -56,6 +58,7 @@ export const ExperimentalSettings: React.FC = () => {
   const dispatch = useDispatch();
   const rpaEnabled = useSelector(selectRpaEnabled);
   const cashFusionEnabled = useSelector(selectCashFusionEnabled);
+  const quantumrootEnabled = useSelector(selectQuantumrootEnabled);
 
   return (
     <div className="flex flex-col gap-4">
@@ -67,6 +70,14 @@ export const ExperimentalSettings: React.FC = () => {
           — they may change or be incomplete in future updates.
         </p>
       </div>
+
+      <FeatureToggle
+        title="Quantumroot"
+        badge="Quantum-safe"
+        description="Quantumroot vaults protect funds with a quantum-resistant Schnorr LM-OTS scheme. Enabled by default. Turn off to hide Quantumroot from the wallet if you don't use it."
+        enabled={quantumrootEnabled}
+        onToggle={(v) => dispatch(setQuantumrootEnabled(v))}
+      />
 
       <FeatureToggle
         title="Reusable Payment Addresses (RPA)"

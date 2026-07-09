@@ -7,12 +7,15 @@ interface ExperimentalState {
   rpaEnabled: boolean;
   cashFusionEnabled: boolean;
   fusionServer: string;
+  quantumrootEnabled: boolean;
 }
 
 const initialState: ExperimentalState = {
   rpaEnabled: false,
   cashFusionEnabled: false,
   fusionServer: DEFAULT_FUSION_SERVER,
+  // Quantumroot ships enabled by default; the toggle lets users hide it.
+  quantumrootEnabled: true,
 };
 
 const experimentalSlice = createSlice({
@@ -28,11 +31,18 @@ const experimentalSlice = createSlice({
     setFusionServer(state, action: PayloadAction<string>) {
       state.fusionServer = action.payload;
     },
+    setQuantumrootEnabled(state, action: PayloadAction<boolean>) {
+      state.quantumrootEnabled = action.payload;
+    },
   },
 });
 
-export const { setRpaEnabled, setCashFusionEnabled, setFusionServer } = experimentalSlice.actions;
+export const { setRpaEnabled, setCashFusionEnabled, setFusionServer, setQuantumrootEnabled } =
+  experimentalSlice.actions;
 export const selectRpaEnabled = (state: RootState) => state.experimental.rpaEnabled;
 export const selectCashFusionEnabled = (state: RootState) => state.experimental.cashFusionEnabled;
 export const selectFusionServer = (state: RootState) => state.experimental.fusionServer;
+// Undefined (older persisted state) counts as enabled — Quantumroot is on by default.
+export const selectQuantumrootEnabled = (state: RootState) =>
+  state.experimental.quantumrootEnabled !== false;
 export default experimentalSlice.reducer;
