@@ -61,7 +61,7 @@ export const StealthBalanceCard: React.FC<StealthBalanceCardProps> = ({ walletId
       const passphrase = info.passphrase ?? '';
 
       // Derive scan + spend keys (we need scan privkey for ECDH and spend pubkey for address derivation)
-      const rpaKeys = await deriveRpaKeys(mnemonic, passphrase);
+      const rpaKeys = await deriveRpaKeys(mnemonic, passphrase, network);
       const paycode = await deriveAndEncodePaycode(mnemonic, passphrase, network, RPA_PREFIX_BITS);
 
       const adapter = getElectrumAdapter();

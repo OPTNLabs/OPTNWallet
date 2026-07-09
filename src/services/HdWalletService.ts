@@ -55,6 +55,13 @@ export const BCH_STANDARD_BRANCH_INDEX = {
   receive: 0,
   change: 1,
   defi: 7,
+  // Reusable Payment Addresses (RPA), per Electron Cash's settled derivation
+  // (github.com/Electron-Cash/Electron-Cash PR #3226): RPA rides on the
+  // wallet's normal BIP44 account as a third unhardened chain, sibling to
+  // receive(0)/change(1) — NOT a separate BIP47-style hardened tree.
+  // scan pubkey  = m/44'/coinType'/account'/3/0
+  // spend pubkey = m/44'/coinType'/account'/3/1
+  rpa: 3,
 } as const;
 
 export type BchStandardBranchName = keyof typeof BCH_STANDARD_BRANCH_INDEX;
@@ -246,6 +253,13 @@ export async function deriveBchStandardXpubs(
       passphrase,
       accountIndex,
       BCH_STANDARD_BRANCH_INDEX.defi
+    ),
+    rpa: await deriveBchXpubAtBranch(
+      network,
+      mnemonic,
+      passphrase,
+      accountIndex,
+      BCH_STANDARD_BRANCH_INDEX.rpa
     ),
   };
 }
