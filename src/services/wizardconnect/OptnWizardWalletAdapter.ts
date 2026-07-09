@@ -8,7 +8,7 @@ import {
   derivePublicKeyFromXpub,
 } from './derivation';
 import { signWizardConnectTransaction } from './signing';
-import { deriveRpaGateXpubs } from '../RpaService';
+import { deriveRpaGateXpub } from '../RpaService';
 import { store } from '../../state/store';
 import { signWithTrezor, signWithLedger, signWithOneKey } from '../hardware/hardwareWalletSigning';
 import getElectrumAdapter from '../ElectrumAdapter';
@@ -56,18 +56,21 @@ export class OptnWizardWalletAdapter implements WalletAdapter {
       [DerivationPath.Cauldron]: walletXpubs.defi,
     };
 
-    // Pre-derive RPA gate xpubs so getExtensions() can be synchronous.
+    // Pre-derive the RPA gate xpub so getExtensions() can be synchronous.
+    // Single branch-3 xpub (see RpaService.deriveRpaGateXpub for why there is
+    // only one, not a separate scan/spend gate pair): index 0 = scan pubkey,
+    // index 1 = spend pubkey, both derivable via ordinary unhardened CKD_pub.
     let rpaExtension: Record<string, unknown> = {};
     const state = store.getState() as unknown as { experimental?: { rpaEnabled?: boolean } };
     if (state.experimental?.rpaEnabled) {
       try {
-        const rpaXpubs = await deriveRpaGateXpubs(mnemonic, passphrase);
+        const { rpaXpub, rpaPath } = await deriveRpaGateXpub(mnemonic, passphrase, network);
         rpaExtension = {
-          rpa_bip47: {
-            spend_path: "m/47'/145'/0'/0'",
-            scan_path: "m/47'/145'/0'/1'",
-            spend_xpub: rpaXpubs.spendGate,
-            scan_xpub: rpaXpubs.scanGate,
+          rpa: {
+            path: rpaPath,
+            xpub: rpaXpub,
+            scan_index: 0,
+            spend_index: 1,
           },
         };
       } catch (err) {
