@@ -89,6 +89,7 @@ export const CapacitorBarcodeScanner = {
   scanBarcode: async (
     _options?: CapacitorBarcodeScannerOptions
   ): Promise<CapacitorBarcodeScannerScanResult> => {
+    void _options;
     const file = await openFilePicker();
     if (!file) {
       throw new Error('No file selected');
