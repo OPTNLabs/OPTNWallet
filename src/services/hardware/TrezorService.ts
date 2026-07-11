@@ -91,9 +91,15 @@ export async function trezorSignTransaction(
   outputs: TrezorOutput[]
 ): Promise<TrezorSignResult> {
   ensureInitialized();
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  // TrezorConnect's own types don't match this SDK version's actual accepted
+  // shape for BCH inputs/outputs — casting through `any` here, not the
+  // request object itself, so the disable comment sits on the exact lines it
+  // suppresses (a misplaced disable previously suppressed nothing and left
+  // these two casts flagged anyway).
   const result = await TrezorConnect.signTransaction({
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     inputs: inputs as any,
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     outputs: outputs as any,
     coin: BCH_COIN,
   });
