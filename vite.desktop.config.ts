@@ -82,6 +82,9 @@ const MODULE_SWAPS = new Map<string, string>([
   [srcPath('src/services/SecretCryptoService.ts'), srcPath('src/platform/desktop/SecretCryptoService.ts')],
   // Gates seed-phrase reveal behind the app-lock PIN prompt on desktop.
   [srcPath('src/services/DeviceIntegrityService.ts'), srcPath('src/platform/desktop/DeviceIntegrityService.ts')],
+  // Reads installed 'iframe-bundle' addon source from <AppData>/addons/ —
+  // desktop-only (no filesystem-drop UX equivalent on mobile yet).
+  [srcPath('src/services/addons/AddonInstallService.ts'), srcPath('src/platform/desktop/AddonInstallService.ts')],
   // Mounts DesktopSecurityGate + AppLockGate + menu-bar listener around the app.
   [srcPath('src/app/AppShell.tsx'), srcPath('src/platform/desktop/DesktopAppShell.tsx')],
   // Electron Cash-style onboarding: wallet picker, per-wallet passwords, seed
