@@ -25,8 +25,16 @@ export function usePrices() {
 
         if (!alive) return;
         dispatch(upsertPrices(payload));
-      } catch (_e) {
-        // optional: log or surface telemetry
+      } catch (e) {
+        // Bounded by fetchJSON's AbortController timeout (and, on desktop,
+        // http-bridge.ts's own race) — this always fires within a few
+        // seconds even if the price server never responds, rather than
+        // hanging silently forever. Logged so a persistently-unreachable
+        // price server is visible instead of just showing "Loading…" with
+        // no explanation of why.
+        if (alive) {
+          console.warn('[usePrices] price fetch failed:', e instanceof Error ? e.message : e);
+        }
       }
     }
 
