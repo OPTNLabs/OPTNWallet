@@ -14,7 +14,17 @@ async fn optn_price_fetch(url: String) -> Result<String, String> {
     if !url.starts_with("https://price.optnlabs.com/") {
         return Err("host not allowed".into());
     }
-    let resp = reqwest::get(&url).await.map_err(|e| e.to_string())?;
+    // A server that accepts the TCP/TLS connection and then never answers
+    // (observed in practice against this exact host) would otherwise hang
+    // this request indefinitely — reqwest has no default timeout. The JS
+    // side (http-bridge.ts) also races this call against its own timeout,
+    // but bounding it here too means a slow/dead server doesn't leave the
+    // Rust-side request running forever regardless of what the JS caller does.
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(8))
+        .build()
+        .map_err(|e| e.to_string())?;
+    let resp = client.get(&url).send().await.map_err(|e| e.to_string())?;
     let status = resp.status().as_u16();
     let body = resp.text().await.map_err(|e| e.to_string())?;
     if status != 200 {
