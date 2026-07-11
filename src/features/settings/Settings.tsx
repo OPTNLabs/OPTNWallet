@@ -16,6 +16,7 @@ import { ServerSettings } from './ServerSettings';
 import { ConsolePanel } from './ConsolePanel';
 import { ExperimentalSettings } from './ExperimentalSettings';
 import { CashFusionSettings } from './CashFusionSettings';
+import { AddonsSettings } from './AddonsSettings';
 import RecoveryPhrase from '../../components/RecoveryPhrase';
 import AboutView from '../../components/AboutView';
 import TermsOfUse from '../../components/TermsOfUse';
@@ -112,6 +113,8 @@ const Settings: React.FC = () => {
         return <ExperimentalSettings />;
       case 'cashfusion':
         return <CashFusionSettings />;
+      case 'addons':
+        return <AddonsSettings />;
       default:
         return null;
     }
@@ -139,6 +142,8 @@ const Settings: React.FC = () => {
         return 'Experimental Features';
       case 'cashfusion':
         return 'CashFusion';
+      case 'addons':
+        return 'Addons';
       case 'walletconnect':
         return 'WalletConnect';
       case 'wizardconnect':
