@@ -1,4 +1,40 @@
-# Browser extension (Firefox + Chrome): scope and the real constraint
+# Browser extension (Firefox + Chrome): what shipped, and the real constraint on the rest
+
+## Status: minimal viewer MVP shipped this session
+
+`vite.extension.config.ts` + `extension/manifest.{chrome,firefox}.json` +
+`popup.html` + `src/platform/extension/*` build a real, working popup-only
+extension for both browsers (`npm run build:extension:chrome` /
+`build:extension:firefox` — both verified with an actual `vite build`, not
+just configured and assumed). What it does:
+
+- Own password gate (`ExtensionSecurityGate.tsx` / `ExtensionKeyManager.ts`):
+  same PBKDF2(600k)/AES-GCM primitives as the desktop `EcKeyManager`, but the
+  salt/verify-token live in `localStorage` (scoped to the extension's own
+  origin) instead of an OS keychain, since there is no Tauri keychain bridge
+  inside a browser extension. Re-locks every time the popup is closed and
+  reopened — by construction, not as a fallback, since nothing survives
+  between popup opens anyway.
+- Reuses the real, unmodified upstream `AppShell`/`RootHandler`/onboarding —
+  first open walks through the normal create/import-wallet flow, same as a
+  fresh mobile install, because the extension's storage (IndexedDB,
+  localStorage) is a separate origin from the desktop app or any website tab.
+- **Deliberately has no background service worker.** The MV3
+  service-worker-eviction problem below (the one genuinely hard part) does
+  not apply to this MVP: the popup owns its own Electrum connection only for
+  as long as it stays open, same as a normal browser tab. There is nothing to
+  evict because nothing runs when the popup is closed.
+- **Sending has NOT been verified against the popup's lifecycle.** The
+  full app (including Send) is present since `AppShell` is reused unmodified
+  — this was a deliberate choice to avoid hacking a feature-gate into shared
+  upstream UI under time pressure — but only the unlock → view balance →
+  view receive-address path has been exercised this session. Keep the popup
+  open for the entire duration of a send until this has been verified in a
+  dedicated follow-up.
+- Icons reused from `src-tauri/icons/` (32/64/128), copied into
+  `public/extension-icons/` — no new artwork.
+
+## What's still not done (same constraint as before, now narrower)
 
 ## Confirmed state of this codebase (checked, not assumed)
 
@@ -51,14 +87,20 @@ one — flagging it rather than picking silently.
 
 ## Confirmed-fine parts (checked)
 
-- **sql.js WASM under extension CSP**: MV3's default CSP
-  (`script-src 'self'; object-src 'self'`) permits WebAssembly instantiation
-  from bundled extension resources without a special
-  `'wasm-unsafe-eval'` directive in Chrome's current implementation for
-  same-origin bundled `.wasm` (this differs from a REMOTE-hosted CSP
-  scenario) — the existing `sql-js-shim.ts` approach (serve the UMD build as
-  a bundled static asset, no network fetch) should port with no changes to
-  that shim itself.
+- **sql.js WASM under extension CSP**: confirmed by an actual build, not just
+  read about — the extension config does NOT need desktop's `sql-js-shim.ts`
+  swap at all. The base `vite.config.ts`'s existing `manualChunks` (isolates
+  sql.js into its own chunk) and `legacy.inconsistentCjsInterop` fixes
+  (already added project-wide for the Vite 8/rolldown migration) were enough
+  on their own; `npm run build:extension:chrome`/`:firefox` both produce a
+  working `sql-wasm.wasm` + loader in the output with no extra plugin. The
+  desktop shim exists for a Tauri-WebView2-specific quirk, not a general
+  rolldown/browser problem — good to know before reflexively copying it
+  again for some future build target.
+- Declared `'wasm-unsafe-eval'` explicitly in `content_security_policy.
+  extension_pages` for both manifests rather than relying on any implicit
+  default — this is what `tiny-secp256k1` (RpaService) needs to instantiate
+  its WASM module inside the popup.
 - **IndexedDB** is available in extension pages (popup, options page, side
   panel) and in MV3 service workers — this app's existing DB persistence
   layer doesn't need to change.
@@ -69,28 +111,32 @@ one — flagging it rather than picking silently.
   `browser.*` API naming difference — standard, low-risk dependency to add
   when this is actually built.
 
-## Recommended architecture (design only, not built this pass)
+## What's left (the genuinely hard part, still not built)
 
-1. New `vite.extension.config.ts`, parallel to `vite.desktop.config.ts`,
-   reusing the SAME module-swap-plugin pattern already proven there (swap in
-   extension-specific shims instead of desktop ones) — this is the one part
-   of the existing desktop work that generalizes directly.
-2. Manifest: popup (or Chrome side panel, Firefox sidebar) as the wallet UI;
-   background service worker owns the Electrum connection and re-establishes
-   it on every wake, leaning on the EXISTING reconnect/resubscribe logic
-   rather than building new logic for this.
-3. Explicitly re-verify the per-wallet key-in-RAM model's assumptions against
-   MV3's kill-on-inactivity behavior before reusing it as-is — this is the
-   one piece of this session's earlier desktop work that does NOT port
-   for free.
-4. Build order: get the popup rendering + IndexedDB/sql.js working first
-   (low risk, proves the build pipeline), THEN tackle the
-   persistent-connection/key-lifetime redesign (the actual hard part) as its
-   own follow-up, rather than both at once.
+The MVP above sidesteps MV3 ephemerality entirely by having no background
+component. The remaining work is exactly the part flagged as hard before:
+
+1. A background service worker owning a persistent Electrum connection
+   across popup opens/closes (so balance/history don't need a full resync
+   every time), re-establishing on every wake and leaning on the EXISTING
+   reconnect/resubscribe logic in `ElectrumServer`/`UTXOWorkerService`
+   rather than new logic.
+2. Verifying Send specifically within a popup-lifetime session (build a
+   transaction, broadcast, confirm the popup staying open for the duration
+   is actually sufficient — no code changes expected here, just testing).
+3. The product decision from above (re-prompt-every-open vs. Chrome-only
+   side-panel persistence vs. accept a shorter session) — still open, still
+   not picked silently.
+4. `webextension-polyfill` was not added — this MVP doesn't call any
+   `chrome.*`/`browser.*` extension API at all (no `chrome.storage`, no
+   messaging), so there was nothing to polyfill. Add it when 1–2 above
+   introduce actual extension-API usage.
 
 ## Recommendation
 
-This is a real, multi-day feature with one genuinely hard, non-obvious
-design problem (MV3 context ephemerality vs. this app's long-lived-key
-model) that deserves its own focused session rather than being bolted on
-alongside everything else already shipped today.
+The popup-only viewer (unlock, balance, receive address) is real and shipped
+in this PR. Persistent background sync + a verified Send path is still a
+multi-day item with the one genuinely hard, non-obvious design problem (MV3
+context ephemerality vs. this app's long-lived-key model) — worth its own
+focused follow-up rather than being rushed in alongside everything else in
+this PR.
