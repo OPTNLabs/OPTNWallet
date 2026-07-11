@@ -96,10 +96,25 @@ export default function AddonsRegistry() {
               `Addon "${m.id}" app "${a.id}" missing name`
             );
           }
-          if (a.kind !== 'declarative') {
+          if (a.kind !== 'declarative' && a.kind !== 'iframe-bundle') {
             throw new Error(
               `Addon "${m.id}" app "${a.id}" has unsupported kind`
             );
+          }
+          if (a.kind === 'iframe-bundle') {
+            if (typeof a.entryFile !== 'string' || !a.entryFile.trim()) {
+              throw new Error(
+                `Addon "${m.id}" app "${a.id}" (iframe-bundle) missing entryFile`
+              );
+            }
+            // No path traversal: entryFile must stay inside the addon's own
+            // install directory (see AddonInstall.ts for where that's enforced
+            // on disk; this is the manifest-shape half of the same guard).
+            if (a.entryFile.includes('..') || a.entryFile.startsWith('/')) {
+              throw new Error(
+                `Addon "${m.id}" app "${a.id}" has an unsafe entryFile path`
+              );
+            }
           }
 
           const requiredCapabilities = a.requiredCapabilities;
