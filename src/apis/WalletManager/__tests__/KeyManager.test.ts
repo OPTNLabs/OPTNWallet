@@ -233,6 +233,7 @@ describe('KeyManager', () => {
       receive: 'xpub-receive',
       change: 'xpub-change',
       defi: 'xpub-defi',
+      rpa: 'xpub-rpa',
     });
 
     const km = KeyManager();
@@ -240,6 +241,7 @@ describe('KeyManager', () => {
       receive: 'xpub-receive',
       change: 'xpub-change',
       defi: 'xpub-defi',
+      rpa: 'xpub-rpa',
     });
 
     expect(walletLookup.get).toHaveBeenCalledWith([7]);
@@ -277,6 +279,7 @@ describe('KeyManager', () => {
       receive: 'xpub-receive',
       change: 'xpub-change',
       defi: 'xpub-defi',
+      rpa: 'xpub-rpa',
     });
     vi.mocked(deriveBchChild).mockResolvedValue({
       publicKey: Uint8Array.from([1, 2, 3]),
