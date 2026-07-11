@@ -12,7 +12,8 @@ export type SettingsPanelKey =
   | 'server'
   | 'console'
   | 'experimental'
-  | 'cashfusion';
+  | 'cashfusion'
+  | 'addons';
 
 export type SettingsRowConfig = {
   key: SettingsPanelKey | string;
@@ -72,6 +73,13 @@ export const WALLET_ROWS: SettingsRowConfig[] = [
     description: 'RPA · CashFusion',
     action: 'panel',
     target: 'experimental',
+  },
+  {
+    key: 'addons',
+    title: 'Addons',
+    description: 'Install and manage third-party addons',
+    action: 'panel',
+    target: 'addons',
   },
   {
     key: 'cashfusion',
