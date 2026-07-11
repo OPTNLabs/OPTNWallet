@@ -59,7 +59,10 @@ async function initSqlJs(config?: InitSqlJsConfig): Promise<SqlJsStatic> {
   // (wrong WASM for the browser UMD) — we override it here regardless of caller config.
   const result = await window.initSqlJs({
     ...config,
-    locateFile: (_file: string) => '/sql-wasm-browser.wasm',
+    locateFile: (_file: string) => {
+      void _file;
+      return '/sql-wasm-browser.wasm';
+    },
   });
   console.log('[sql-js-shim] SQL module ready');
   return result;

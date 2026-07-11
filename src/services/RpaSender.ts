@@ -23,6 +23,9 @@ export async function sendToPaycode(
   _satoshis: number,
   _walletId: number,
 ): Promise<RpaSendResult> {
+  void _paycodeStr;
+  void _satoshis;
+  void _walletId;
   return {
     ok: false,
     error:
