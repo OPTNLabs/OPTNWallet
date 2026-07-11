@@ -17,6 +17,7 @@ import type {
 } from '../../types/addons';
 import { createAddonSDK, type AddonSDK } from '../../services/AddonsSDK';
 import { renderDeclarativeScreen } from './marketplaceScreenResolver';
+import AddonIframeHost from './AddonIframeHost';
 import { getReturnPath } from '../../utils/navigation';
 import { isComingSoonApp } from '../../features/apps/appsViewHelpers';
 import { Capacitor } from '@capacitor/core';
@@ -550,6 +551,16 @@ export default function MarketplaceAppHost() {
   // Patient-0: map declarative app => local component
   const renderApp = () => {
     if (!resolved || !sdk) return null;
+
+    if (resolved.app.kind === 'iframe-bundle') {
+      // The only place third-party (non-built-in) addon code executes — see
+      // AddonIframeHost.tsx for the sandboxed-iframe isolation model. `sdk`
+      // here is the SAME capability-gated object declarative apps use; this
+      // component never gives the addon anything beyond that.
+      return (
+        <AddonIframeHost manifest={resolved.manifest} app={resolved.app} sdk={sdk} />
+      );
+    }
 
     if (resolved.app.kind !== 'declarative') {
       return (
