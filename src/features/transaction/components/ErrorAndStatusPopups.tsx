@@ -1,8 +1,11 @@
 // src/components/transaction/ErrorAndStatusPopups.tsx
 
 import React, { useMemo } from 'react';
+import { useSelector } from 'react-redux';
 import Popup from './Popup';
 import { Network } from '../../../state/slices/networkSlice';
+import { selectExplorerChoice } from '../../../state/slices/preferencesSlice';
+import { buildTxUrl } from '../../../utils/servers/explorers';
 import {
   binToHex,
   decodeTransactionCommon,
@@ -39,6 +42,7 @@ const ErrorAndStatusPopups: React.FC<ErrorAndStatusPopupsProps> = ({
   broadcastState,
   closePopups,
 }) => {
+  const explorerChoice = useSelector(selectExplorerChoice);
   const toCashAddress = (
     bytecode: Uint8Array,
     prefix: 'bitcoincash' | 'bchtest' | 'bchreg'
@@ -251,11 +255,11 @@ const ErrorAndStatusPopups: React.FC<ErrorAndStatusPopupsProps> = ({
               </button>
             </div>
             <a
-              href={
-                currentNetwork === Network.CHIPNET
-                  ? `https://chipnet.chaingraph.cash/tx/${transactionId}`
-                  : `https://explorer.bch.ninja/tx/${transactionId}`
-              }
+              href={buildTxUrl(
+                explorerChoice,
+                currentNetwork === Network.CHIPNET ? Network.CHIPNET : Network.MAINNET,
+                transactionId
+              )}
               target="_blank"
               rel="noopener noreferrer"
               className="wallet-btn-primary py-2 px-4"
