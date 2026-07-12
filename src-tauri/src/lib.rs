@@ -1,6 +1,26 @@
 #[allow(dead_code)] // menu bar is built on the JS side now; kept for reference
 mod menu;
 
+pub mod fusion;
+
+// CashFusion server status (Phase 1).
+//
+// The fusion protocol is raw TCP+TLS with protobuf framing — a WebView cannot
+// speak it, so the client lives in Rust. This performs a real protocol
+// handshake (ClientHello -> ServerHello) and returns the server's actual fusion
+// parameters. It does NOT join a pool or run a fusion round; see
+// docs/cashfusion-implementation-scope.md for the phased plan.
+#[tauri::command]
+async fn fusion_server_status(
+    host: String,
+    port: u16,
+    use_ssl: bool,
+) -> Result<fusion::FusionServerStatus, String> {
+    // genesis_hash is optional in the protocol; omitting it lets a server that
+    // checks chain identity apply its own default rather than us asserting one.
+    fusion::server_status(&host, port, use_ssl, None).await
+}
+
 // Desktop-only price fetch.
 //
 // The OPTN price server rejects (HTTP 500) any browser `Origin` header, and
@@ -74,7 +94,8 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             optn_price_fetch,
             read_wallet_file,
-            write_wallet_file
+            write_wallet_file,
+            fusion_server_status
         ])
         .setup(|app| {
             let log_level = if cfg!(debug_assertions) {
