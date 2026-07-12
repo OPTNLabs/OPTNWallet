@@ -7,27 +7,34 @@
 // Fusion round participation (blind signatures, covert connections) is a
 // later phase — see docs/cashfusion-implementation-scope.md.
 
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { useDispatch, useSelector } from 'react-redux';
 import {
   selectCashFusionEnabled,
   selectFusionServer,
+  selectFusionServers,
+  selectTorEnabled,
+  selectTorAuto,
+  selectTorHost,
+  selectTorPortManual,
   setCashFusionEnabled,
   setFusionServer,
+  addFusionServer,
+  removeFusionServer,
+  setTorEnabled,
+  setTorAuto,
+  setTorPortManual,
 } from '../../state/slices/experimentalSlice';
 import {
   fetchFusionServerStatus,
+  detectTorPort,
   FUSION_SUPPORTED,
   type FusionServerStatus,
+  type TorConfig,
 } from '../../services/fusion/FusionStatusService';
 
 // Ports per Electron Cash's own conf.py default (fusion.servo.cash:8789, SSL).
 const DEFAULT_SERVER = 'fusion.servo.cash:8789';
-
-const KNOWN_SERVERS = [
-  { label: 'fusion.servo.cash (mainnet)', host: DEFAULT_SERVER },
-  { label: 'cashfusion.electroncash.dk (mainnet)', host: 'cashfusion.electroncash.dk:8789' },
-];
 
 type ConnStatus = 'idle' | 'testing' | 'ok' | 'fail';
 
@@ -36,22 +43,69 @@ function parseHostPort(hostPort: string): { host: string; port: number } {
   return { host, port: Number(port) || 8789 };
 }
 
+function isLocalHost(host: string): boolean {
+  return host === 'localhost' || host === '127.0.0.1' || host === '::1';
+}
+
 const satsToBch = (sats: number) => (sats / 1e8).toLocaleString(undefined, { maximumFractionDigits: 8 });
 
 export const CashFusionSettings: React.FC = () => {
   const dispatch = useDispatch();
   const enabled = useSelector(selectCashFusionEnabled);
   const savedServer = useSelector(selectFusionServer);
+  const servers = useSelector(selectFusionServers);
+  const torEnabled = useSelector(selectTorEnabled);
+  const torAuto = useSelector(selectTorAuto);
+  const torHost = useSelector(selectTorHost);
+  const torPortManual = useSelector(selectTorPortManual);
 
   const [serverInput, setServerInput] = useState(savedServer ?? DEFAULT_SERVER);
+  const [newServer, setNewServer] = useState('');
   const [connStatus, setConnStatus] = useState<ConnStatus>('idle');
   const [status, setStatus] = useState<FusionServerStatus | null>(null);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [showProtocolInfo, setShowProtocolInfo] = useState(false);
 
+  // Live Tor detection — null = not yet checked, -1 = not found, >0 = port.
+  const [torDetected, setTorDetected] = useState<number | null>(null);
+  const [torChecking, setTorChecking] = useState(false);
+
+  const refreshTor = React.useCallback(async () => {
+    if (!FUSION_SUPPORTED || !torEnabled) return;
+    setTorChecking(true);
+    try {
+      const port = await detectTorPort(torHost);
+      setTorDetected(port ?? -1);
+    } finally {
+      setTorChecking(false);
+    }
+  }, [torEnabled, torHost]);
+
+  useEffect(() => {
+    void refreshTor();
+  }, [refreshTor]);
+
+  // The SOCKS proxy to actually route through, or undefined for a direct
+  // connection. Direct is only valid for a localhost server (Electron Cash's
+  // one exemption) — for a remote server with no Tor, the Rust side refuses.
+  function resolveTor(host: string): TorConfig | undefined {
+    if (!torEnabled || isLocalHost(host)) return undefined;
+    const port = torAuto ? (torDetected && torDetected > 0 ? torDetected : undefined) : torPortManual;
+    if (!port) return undefined;
+    return { host: torHost, port };
+  }
+
   const handleSaveServer = () => {
     const trimmed = (serverInput ?? '').trim();
     if (trimmed) dispatch(setFusionServer(trimmed));
+  };
+
+  const handleAddServer = () => {
+    const trimmed = newServer.trim();
+    if (trimmed) {
+      dispatch(addFusionServer(trimmed));
+      setNewServer('');
+    }
   };
 
   const handleTest = async () => {
@@ -60,7 +114,7 @@ export const CashFusionSettings: React.FC = () => {
     setErrorMsg(null);
     const { host, port } = parseHostPort(serverInput ?? '');
     try {
-      const result = await fetchFusionServerStatus(host, port, true);
+      const result = await fetchFusionServerStatus(host, port, true, resolveTor(host));
       setStatus(result);
       setConnStatus('ok');
     } catch (err) {
@@ -75,6 +129,10 @@ export const CashFusionSettings: React.FC = () => {
     if (connStatus === 'fail') return <span className="text-[10px] text-red-400 font-semibold">Failed ✗</span>;
     return null;
   };
+
+  const selectedHost = parseHostPort(serverInput ?? '').host;
+  const torActive = torEnabled && !isLocalHost(selectedHost);
+  const torReady = torAuto ? torDetected !== null && torDetected > 0 : true;
 
   return (
     <div className="flex flex-col gap-4">
@@ -181,6 +239,23 @@ export const CashFusionSettings: React.FC = () => {
           </p>
         )}
 
+        {FUSION_SUPPORTED && torActive && !torReady && (
+          <p className="text-[10px] text-yellow-400/80 leading-relaxed">
+            This is a remote server, so Tor is required — but no Tor proxy was found. Start Tor and
+            press “Check Tor” above, or the query will be refused.
+          </p>
+        )}
+        {FUSION_SUPPORTED && !torActive && !isLocalHost(selectedHost) && (
+          <p className="text-[10px] text-yellow-400/80 leading-relaxed">
+            Tor is off. Remote fusion queries will be refused — enable Tor above, or use a localhost server.
+          </p>
+        )}
+        {FUSION_SUPPORTED && torActive && torReady && (
+          <p className="text-[10px] text-green-400/70 leading-relaxed">
+            Connecting via Tor{torAuto && torDetected ? ` (port ${torDetected})` : ''}.
+          </p>
+        )}
+
         {connStatus === 'fail' && errorMsg && (
           <p className="text-[10px] text-red-400/80 leading-relaxed">{errorMsg}</p>
         )}
@@ -212,26 +287,149 @@ export const CashFusionSettings: React.FC = () => {
         )}
       </div>
 
-      {/* Known servers */}
+      {/* Tor */}
+      <div className="rounded-xl border border-[var(--wallet-border)] bg-[var(--wallet-surface)] p-4 space-y-3">
+        <div className="flex items-center justify-between gap-3">
+          <div>
+            <p className="text-xs font-semibold wallet-text-strong">Route through Tor</p>
+            <p className="text-[10px] wallet-muted">Required for remote fusion servers</p>
+          </div>
+          <button
+            onClick={() => dispatch(setTorEnabled(!torEnabled))}
+            className={`relative inline-flex h-6 w-11 shrink-0 items-center rounded-full border transition-colors ${
+              torEnabled ? 'bg-[var(--wallet-accent)] border-[var(--wallet-accent)]' : 'wallet-surface-strong border-[var(--wallet-border)]'
+            }`}
+            aria-label={`${torEnabled ? 'Disable' : 'Enable'} Tor`}
+          >
+            <span className={`inline-block h-5 w-5 rounded-full bg-white shadow transition-transform ${torEnabled ? 'translate-x-5' : 'translate-x-0.5'}`} />
+          </button>
+        </div>
+
+        {torEnabled && (
+          <>
+            {/* Auto/manual port */}
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={() => dispatch(setTorAuto(true))}
+                className={`flex-1 rounded-lg border px-2 py-1.5 text-[10px] font-semibold transition-colors ${
+                  torAuto ? 'border-[var(--wallet-accent)]/50 bg-[var(--wallet-accent)]/10 text-[var(--wallet-accent)]' : 'border-[var(--wallet-border)] wallet-muted'
+                }`}
+              >
+                Auto-detect (9050 / 9150)
+              </button>
+              <button
+                type="button"
+                onClick={() => dispatch(setTorAuto(false))}
+                className={`flex-1 rounded-lg border px-2 py-1.5 text-[10px] font-semibold transition-colors ${
+                  !torAuto ? 'border-[var(--wallet-accent)]/50 bg-[var(--wallet-accent)]/10 text-[var(--wallet-accent)]' : 'border-[var(--wallet-border)] wallet-muted'
+                }`}
+              >
+                Manual port
+              </button>
+            </div>
+
+            {!torAuto && (
+              <input
+                type="number"
+                value={torPortManual}
+                onChange={(e) => dispatch(setTorPortManual(Number(e.target.value) || 9050))}
+                placeholder="9050"
+                className="w-full rounded-xl border border-[var(--wallet-border)] bg-[var(--wallet-surface-strong)] px-3 py-2 font-mono text-xs wallet-text-strong focus:outline-none focus:border-[var(--wallet-accent)]/60"
+              />
+            )}
+
+            {/* Live status */}
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={() => void refreshTor()}
+                disabled={torChecking || !FUSION_SUPPORTED}
+                className="rounded-lg border border-[var(--wallet-border)] bg-[var(--wallet-surface-strong)] px-2.5 py-1 text-[10px] font-semibold wallet-text-strong disabled:opacity-50"
+              >
+                {torChecking ? 'Checking…' : 'Check Tor'}
+              </button>
+              {!FUSION_SUPPORTED ? (
+                <span className="text-[10px] wallet-muted">Desktop only</span>
+              ) : torAuto && torDetected !== null ? (
+                torDetected > 0 ? (
+                  <span className="text-[10px] text-green-400 font-semibold">Tor found on port {torDetected} ✓</span>
+                ) : (
+                  <span className="text-[10px] text-red-400 font-semibold">No Tor proxy running ✗</span>
+                )
+              ) : (
+                <span className="text-[10px] wallet-muted">Using manual port {torPortManual}</span>
+              )}
+            </div>
+
+            {torAuto && torDetected === -1 && (
+              <p className="text-[10px] text-yellow-400/80 leading-relaxed">
+                Start Tor Browser (uses port 9150) or a system Tor daemon (9050), then check again.
+                Without Tor, remote fusion is blocked.
+              </p>
+            )}
+          </>
+        )}
+      </div>
+
+      {/* Server list */}
       <div className="rounded-xl border border-[var(--wallet-border)] bg-[var(--wallet-surface)] p-4 space-y-2">
-        <p className="text-xs font-semibold wallet-text-strong">Known Public Servers</p>
+        <p className="text-xs font-semibold wallet-text-strong">Fusion Servers</p>
         <div className="space-y-1.5">
-          {KNOWN_SERVERS.map((s) => (
-            <button
-              key={s.host}
-              type="button"
-              onClick={() => { setServerInput(s.host); setConnStatus('idle'); }}
-              className={`w-full rounded-lg border px-3 py-2 text-left transition-colors ${
-                (serverInput ?? '') === s.host
+          {servers.map((s) => (
+            <div
+              key={s}
+              className={`flex items-center gap-2 rounded-lg border px-3 py-2 transition-colors ${
+                (serverInput ?? '') === s
                   ? 'border-[var(--wallet-accent)]/50 bg-[var(--wallet-accent)]/10'
-                  : 'border-[var(--wallet-border)] bg-[var(--wallet-surface-strong)] hover:brightness-95'
+                  : 'border-[var(--wallet-border)] bg-[var(--wallet-surface-strong)]'
               }`}
             >
-              <p className="text-xs wallet-text-strong">{s.label}</p>
-              <p className="font-mono text-[10px] wallet-muted">{s.host}</p>
-            </button>
+              <button
+                type="button"
+                onClick={() => { setServerInput(s); dispatch(setFusionServer(s)); setConnStatus('idle'); }}
+                className="flex-1 text-left"
+              >
+                <p className="font-mono text-[11px] wallet-text-strong">{s}</p>
+              </button>
+              {servers.length > 1 && (
+                <button
+                  type="button"
+                  onClick={() => dispatch(removeFusionServer(s))}
+                  className="text-[10px] text-red-400/70 hover:text-red-400 px-1"
+                  aria-label={`Remove ${s}`}
+                >
+                  Remove
+                </button>
+              )}
+            </div>
           ))}
         </div>
+
+        {/* Add server */}
+        <div className="flex gap-2 pt-1">
+          <input
+            type="text"
+            value={newServer}
+            onChange={(e) => setNewServer(e.target.value)}
+            onKeyDown={(e) => { if (e.key === 'Enter') handleAddServer(); }}
+            placeholder="host:port (e.g. fusion.example.com:8789)"
+            className="flex-1 rounded-xl border border-[var(--wallet-border)] bg-[var(--wallet-surface-strong)] px-3 py-2 font-mono text-xs wallet-text-strong placeholder:wallet-muted focus:outline-none focus:border-[var(--wallet-accent)]/60"
+          />
+          <button
+            type="button"
+            onClick={handleAddServer}
+            disabled={!newServer.trim()}
+            className="rounded-xl border border-[var(--wallet-accent)]/40 px-3 py-2 text-xs font-semibold text-[var(--wallet-accent)] hover:bg-[var(--wallet-accent)]/5 disabled:opacity-40 transition-colors"
+          >
+            Add
+          </button>
+        </div>
+        <p className="text-[10px] wallet-muted leading-relaxed">
+          CashFusion intentionally has few public servers — a larger anonymity set on fewer servers
+          beats being spread thin. fusion.servo.cash is the only widely-run public one; add your own
+          or a community server above.
+        </p>
       </div>
 
       {/* Phase note */}

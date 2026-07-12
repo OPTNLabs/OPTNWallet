@@ -15,9 +15,17 @@ use app_lib::fusion;
 #[tokio::test]
 #[ignore = "requires network; hits a live third-party CashFusion server"]
 async fn handshake_against_the_public_default_server() {
-    let status = fusion::server_status("fusion.servo.cash", 8789, true, None)
-        .await
-        .expect("handshake with fusion.servo.cash failed");
+    // Direct (no Tor) — this test only reads public server params, touches no
+    // wallet or coins, so IP privacy is irrelevant here.
+    let status = fusion::server_status(
+        "fusion.servo.cash",
+        8789,
+        true,
+        fusion::Transport::Direct,
+        None,
+    )
+    .await
+    .expect("handshake with fusion.servo.cash failed");
 
     println!("ServerHello from fusion.servo.cash:8789 => {status:#?}");
 

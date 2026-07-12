@@ -42,3 +42,6 @@ prost = "0.13"
 tokio = { version = "1", features = ["net", "io-util", "time", "macros", "rt"] }
 tokio-rustls = { version = "0.26", features = ["ring"] }
 webpki-roots = "0.26"
+# Tor is reached as a SOCKS5 proxy (the same way Electron Cash does it) — we do
+# not bundle or supervise a Tor daemon.
+tokio-socks = "0.5"

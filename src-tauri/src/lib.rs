@@ -15,10 +15,46 @@ async fn fusion_server_status(
     host: String,
     port: u16,
     use_ssl: bool,
+    tor_host: Option<String>,
+    tor_port: Option<u16>,
 ) -> Result<fusion::FusionServerStatus, String> {
+    // Electron Cash's rule (plugin.py start_fusion), reproduced exactly: fusing
+    // against a REMOTE server without Tor defeats the protocol's own privacy
+    // guarantee — the server can re-link a player's covert connections by IP —
+    // so it refuses. A server on localhost is the one exemption: there is no
+    // network observer to hide from.
+    let transport = match (tor_host.as_deref(), tor_port) {
+        (Some(h), Some(p)) => fusion::Transport::Tor { host: h, port: p },
+        _ if fusion::is_local_server(&host) => fusion::Transport::Direct,
+        _ => {
+            return Err(
+                "No Tor proxy configured. CashFusion needs Tor for remote servers — \
+                 without it the server can link your coins together by IP address, \
+                 which is exactly what fusing is meant to prevent."
+                    .into(),
+            )
+        }
+    };
+
     // genesis_hash is optional in the protocol; omitting it lets a server that
     // checks chain identity apply its own default rather than us asserting one.
-    fusion::server_status(&host, port, use_ssl, None).await
+    fusion::server_status(&host, port, use_ssl, transport, None).await
+}
+
+/// Find a running Tor SOCKS proxy, mirroring Electron Cash's auto-detection
+/// (ports 9050 = daemon, 9150 = Tor Browser). Returns the port, or null if Tor
+/// isn't running. Verifies it's genuinely Tor, not just something listening.
+#[tauri::command]
+async fn fusion_tor_detect(host: Option<String>) -> Option<u16> {
+    let host = host.unwrap_or_else(|| fusion::tor::DEFAULT_TOR_HOST.to_string());
+    fusion::tor::scan_tor_port(&host).await
+}
+
+/// Check one specific host:port for a Tor proxy (used when the user pins a
+/// manual port rather than relying on auto-detection).
+#[tauri::command]
+async fn fusion_tor_check(host: String, port: u16) -> bool {
+    fusion::tor::is_tor_port(&host, port).await
 }
 
 // Desktop-only price fetch.
@@ -95,7 +131,9 @@ pub fn run() {
             optn_price_fetch,
             read_wallet_file,
             write_wallet_file,
-            fusion_server_status
+            fusion_server_status,
+            fusion_tor_detect,
+            fusion_tor_check
         ])
         .setup(|app| {
             let log_level = if cfg!(debug_assertions) {
