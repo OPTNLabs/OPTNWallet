@@ -17,6 +17,7 @@ import type { ContractInfo } from '../../types/wcInterfaces';
 import { ensureUint8Array } from '../../utils/binary';
 import { PREFIX } from '../../utils/constants';
 import { Network } from '../../state/slices/networkSlice';
+import { getBchAddressPath, BCH_STANDARD_BRANCH_INDEX } from '../HdWalletService';
 import {
   trezorSignTransaction,
   pathToAddressN,
@@ -37,18 +38,14 @@ import {
 
 type PathName = 'receive' | 'change' | 'defi';
 
-function pathNameToChangeIndex(pathName: PathName): number {
-  switch (pathName) {
-    case 'receive': return 0;
-    case 'change':  return 1;
-    case 'defi':    return 2;
-    default:        return 0;
-  }
-}
-
-function buildBip44Path(pathName: PathName, addressIndex: number): string {
-  const changeIndex = pathNameToChangeIndex(pathName);
-  return `m/44'/145'/0'/${changeIndex}/${addressIndex}`;
+// Sourced directly from BCH_STANDARD_BRANCH_INDEX (HdWalletService.ts) so this
+// can never drift from the canonical branch indices again — it previously
+// hardcoded 'defi' as branch 2 when the actual value is 7, which would have
+// derived the wrong signing key for any hardware-wallet request touching a
+// 'defi'-branch UTXO. Also now respects `network` for the coin type
+// (previously hardcoded 145' unconditionally, which is wrong on testnet).
+export function buildBip44Path(network: Network, pathName: PathName, addressIndex: number): string {
+  return getBchAddressPath(network, 0, BCH_STANDARD_BRANCH_INDEX[pathName], addressIndex);
 }
 
 // Extract TXID in display (reversed) order from libauth's internal bytes
@@ -82,8 +79,8 @@ export async function signWithTrezor(
   const trezorInputs: TrezorInput[] = txDetails.inputs.map((input, i) => {
     const pathInfo = inputPaths.get(i);
     const bip44 = pathInfo
-      ? buildBip44Path(pathInfo.path, pathInfo.addressIndex)
-      : "m/44'/145'/0'/0/0";
+      ? buildBip44Path(network, pathInfo.path, pathInfo.addressIndex)
+      : buildBip44Path(network, 'receive', 0);
     return {
       address_n: pathToAddressN(bip44),
       prev_hash: txidHex(ensureUint8Array(input.outpointTransactionHash)),
@@ -133,8 +130,8 @@ export async function signWithLedger(
     txDetails.inputs.map(async (input, i) => {
       const pathInfo = inputPaths.get(i);
       const bip44 = pathInfo
-        ? buildBip44Path(pathInfo.path, pathInfo.addressIndex)
-        : "m/44'/145'/0'/0/0";
+        ? buildBip44Path(network, pathInfo.path, pathInfo.addressIndex)
+        : buildBip44Path(network, 'receive', 0);
       const txid = txidHex(ensureUint8Array(input.outpointTransactionHash));
       const prevTxHex = await fetchRawTx(txid);
       return {
@@ -188,8 +185,8 @@ export async function signWithOneKey(
   const oneKeyInputs: OneKeyInput[] = txDetails.inputs.map((input, i) => {
     const pathInfo = inputPaths.get(i);
     const bip44 = pathInfo
-      ? buildBip44Path(pathInfo.path, pathInfo.addressIndex)
-      : "m/44'/145'/0'/0/0";
+      ? buildBip44Path(network, pathInfo.path, pathInfo.addressIndex)
+      : buildBip44Path(network, 'receive', 0);
     return {
       address_n: oneKeyPathToAddressN(bip44),
       prev_hash: txidHex(ensureUint8Array(input.outpointTransactionHash)),
