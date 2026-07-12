@@ -55,8 +55,8 @@ export const WALLET_ROWS: SettingsRowConfig[] = [
   },
   {
     key: 'server',
-    title: 'Server',
-    description: 'Auto-select or connect manually',
+    title: 'Servers',
+    description: 'Electrum · Block explorer · CashFusion · Tor',
     action: 'panel',
     target: 'server',
   },
@@ -81,13 +81,8 @@ export const WALLET_ROWS: SettingsRowConfig[] = [
     action: 'panel',
     target: 'addons',
   },
-  {
-    key: 'cashfusion',
-    title: 'CashFusion',
-    description: 'Privacy · Server config',
-    action: 'panel',
-    target: 'cashfusion',
-  },
+  // CashFusion + Tor now live inside the Servers panel (that panel manages
+  // everything network-related), so there is no separate CashFusion row.
 ];
 
 export const CONTRACT_ROWS: SettingsRowConfig[] = [
