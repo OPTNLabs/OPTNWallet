@@ -2,16 +2,18 @@
 // src/services/fusion/FusionStatusService.ts by vite.desktop.config.ts.
 //
 // Calls the Rust `fusion_server_status` command, which performs a real
-// CashFusion protocol handshake (ClientHello -> ServerHello) over TCP+TLS and
-// returns the server's actual fusion parameters. Read-only: it joins no pool
-// and signs nothing, so it cannot touch funds.
+// CashFusion protocol handshake (ClientHello -> ServerHello) over TCP+TLS —
+// optionally through a Tor SOCKS5 proxy — and returns the server's actual
+// fusion parameters. Read-only: it joins no pool and signs nothing.
 
 import { invoke } from '@tauri-apps/api/core';
-import type { FusionServerStatus } from '../../services/fusion/FusionStatusService';
+import type {
+  FusionServerStatus,
+  TorConfig,
+} from '../../services/fusion/FusionStatusService';
 
 export const FUSION_SUPPORTED = true;
 
-// Field names as emitted by serde from the Rust FusionServerStatus struct.
 type RawStatus = {
   tiers: number[];
   num_components: number;
@@ -24,9 +26,16 @@ type RawStatus = {
 export async function fetchFusionServerStatus(
   host: string,
   port: number,
-  useSsl: boolean
+  useSsl: boolean,
+  tor?: TorConfig
 ): Promise<FusionServerStatus> {
-  const raw = await invoke<RawStatus>('fusion_server_status', { host, port, useSsl });
+  const raw = await invoke<RawStatus>('fusion_server_status', {
+    host,
+    port,
+    useSsl,
+    torHost: tor?.host ?? null,
+    torPort: tor?.port ?? null,
+  });
   return {
     tiers: raw.tiers,
     numComponents: raw.num_components,
@@ -37,4 +46,14 @@ export async function fetchFusionServerStatus(
   };
 }
 
-export type { FusionServerStatus };
+/** Auto-detect a running Tor SOCKS proxy (ports 9050/9150). null if not found. */
+export async function detectTorPort(host?: string): Promise<number | null> {
+  return invoke<number | null>('fusion_tor_detect', { host: host ?? null });
+}
+
+/** Verify a specific host:port is genuinely a Tor proxy. */
+export async function checkTorPort(host: string, port: number): Promise<boolean> {
+  return invoke<boolean>('fusion_tor_check', { host, port });
+}
+
+export type { FusionServerStatus, TorConfig };

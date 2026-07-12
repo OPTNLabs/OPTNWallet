@@ -30,9 +30,26 @@ use tokio_rustls::rustls::pki_types::ServerName;
 use tokio_rustls::rustls::{ClientConfig, RootCertStore};
 use tokio_rustls::TlsConnector;
 
+pub mod tor;
+
 // Generated from proto/fusion.proto by build.rs (package `fusion`).
 pub mod pb {
     include!(concat!(env!("OUT_DIR"), "/fusion.rs"));
+}
+
+/// How to reach a fusion server: directly, or through a Tor SOCKS5 proxy.
+#[derive(Debug, Clone, Copy)]
+pub enum Transport<'a> {
+    Direct,
+    Tor { host: &'a str, port: u16 },
+}
+
+/// A server reachable without Tor. Electron Cash grants exactly one exemption
+/// from its Tor requirement — a server on localhost, where there is no network
+/// observer to hide from (plugin.py: "as a special exemption for the local
+/// fusion server, we don't use Tor").
+pub fn is_local_server(host: &str) -> bool {
+    matches!(host, "localhost" | "127.0.0.1" | "::1")
 }
 
 /// Frame magic — connection.py: `magic = bytes.fromhex("765be8b4e4396dcf")`.
@@ -145,16 +162,37 @@ where
 /// Connect to a CashFusion server, complete the hello handshake, and return the
 /// server's fusion parameters. Opens a fresh connection and closes it; holds no
 /// state and joins no pool.
+///
+/// When `transport` is `Tor`, the TCP leg is dialed through the SOCKS5 proxy and
+/// TLS is then negotiated *over* that tunnel — so the server sees the exit node,
+/// not the user, while certificate verification still applies end-to-end.
 pub async fn server_status(
     host: &str,
     port: u16,
     use_ssl: bool,
+    transport: Transport<'_>,
     genesis_hash: Option<Vec<u8>>,
 ) -> Result<FusionServerStatus, String> {
-    let tcp = tokio::time::timeout(CONNECT_TIMEOUT, TcpStream::connect((host, port)))
-        .await
-        .map_err(|_| format!("timed out connecting to {host}:{port}"))?
-        .map_err(|e| format!("could not connect to {host}:{port}: {e}"))?;
+    let tcp = match transport {
+        Transport::Direct => tokio::time::timeout(CONNECT_TIMEOUT, TcpStream::connect((host, port)))
+            .await
+            .map_err(|_| format!("timed out connecting to {host}:{port}"))?
+            .map_err(|e| format!("could not connect to {host}:{port}: {e}"))?,
+        Transport::Tor {
+            host: proxy_host,
+            port: proxy_port,
+        } => {
+            // A fresh isolation token gives this connection its own Tor circuit
+            // rather than sharing one with any other connection (see tor.rs).
+            let token = format!("optn-{}", fastrand_token());
+            tokio::time::timeout(
+                CONNECT_TIMEOUT,
+                tor::connect_via_tor(proxy_host, proxy_port, host, port, &token),
+            )
+            .await
+            .map_err(|_| format!("timed out connecting to {host}:{port} over Tor"))??
+        }
+    };
 
     if !use_ssl {
         let mut stream = tcp;
@@ -184,6 +222,23 @@ pub async fn server_status(
         .map_err(|e| format!("TLS handshake failed: {e}"))?;
 
     handshake(&mut stream, genesis_hash).await
+}
+
+/// Unique token per connection, for Tor stream isolation (see tor.rs). Only has
+/// to be *distinct* per connection, not unpredictable — Tor keys circuits off
+/// the SOCKS credentials, it doesn't treat them as a secret. A monotonic counter
+/// plus the clock gives that without pulling in an RNG dependency.
+fn fastrand_token() -> String {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    static COUNTER: AtomicU64 = AtomicU64::new(0);
+    let n = COUNTER.fetch_add(1, Ordering::Relaxed);
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    format!("{nanos:x}-{n:x}")
 }
 
 #[cfg(test)]
