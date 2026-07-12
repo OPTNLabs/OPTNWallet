@@ -18,10 +18,18 @@ export type InfraUrlPools = {
 
 const DEFAULT_INFRA_URL_POOLS: Record<Network, InfraUrlPools> = {
   [Network.CHIPNET]: {
+    // Seeded from Electron Cash's server list, but only the entries that were
+    // actually verified to accept a WebSocket (WSS) connection on port 50004 —
+    // this app connects over WSS, and most Fulcrum servers publish only a raw
+    // TCP-SSL port (50002) with no WSS listener, so seeding those unverified
+    // would just add dead endpoints to the failover pool. OPTN's own server is
+    // kept first (first-party infra) even though an external probe couldn't
+    // reach it (likely geo/temporary).
     electrumServers: [
-      'chipnet.bch.ninja',
-      'chipnet.imaginary.cash',
       'electrum-chipnet.optnlabs.com',
+      'chipnet.imaginary.cash',
+      'chipnet.bch.ninja',
+      'blackie.c3-soft.com',
     ],
     chaingraphUrls: ['https://gql.chaingraph.pat.mn/v1/graphql'],
     bcmrNativeBaseUrls: ['https://tokenindex.optnlabs.com/v1'],
@@ -41,10 +49,21 @@ const DEFAULT_INFRA_URL_POOLS: Record<Network, InfraUrlPools> = {
   },
 
   [Network.MAINNET]: {
+    // Seeded from Electron Cash's server list, filtered to only those verified
+    // to accept a WebSocket (WSS) connection on port 50004 — see the CHIPNET
+    // note above. Dropped the previous 'explorer.bch.ninja' default: it fails
+    // WSS with a certificate-hostname mismatch. Order is roughly most-reliable
+    // first; the failover logic skips any that are down at runtime anyway.
     electrumServers: [
       'electrum.imaginary.cash',
       'bch.imaginary.cash',
-      'explorer.bch.ninja',
+      'cashnode.bch.ninja',
+      'bch.loping.net',
+      'bch.soul-dev.com',
+      'blackie.c3-soft.com',
+      'electroncash.dk',
+      'fulcrum.criptolayer.net',
+      'fulcrum.jettscythe.xyz',
     ],
     chaingraphUrls: ['https://gql.chaingraph.pat.mn/v1/graphql'],
     bcmrNativeBaseUrls: ['https://tokenindex.optnlabs.com/v1'],
@@ -280,6 +299,32 @@ export function getBcmrNativeTokenUrls(
   return bcmrNativeBaseUrls.map((base) => `${base}/token/${category}/bcmr`);
 }
 
+// Servers that only expose the raw Electrum TCP-SSL port (50002) and have NO
+// WebSocket listener — verified by probing. Unreachable from the web/WSS build,
+// but the desktop build talks to them natively over TCP-SSL, so they are added
+// to the pool only there.
+const DESKTOP_ONLY_TCP_SERVERS: Record<Network, string[]> = {
+  [Network.MAINNET]: [
+    'bch0.kister.net',
+    'electron.jochen-hoenicke.de',
+    'electrs.bitcoinunlimited.info',
+    'bch.cyberbits.eu',
+    'fulcrum.aglauck.com',
+  ],
+  [Network.CHIPNET]: [],
+};
+
+function isDesktop(): boolean {
+  // Tauri injects this global into the webview; it is absent in a plain browser
+  // (and in the mobile Capacitor WebView), so it cleanly identifies the desktop
+  // build without needing a build-time flag.
+  return typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
+}
+
 export function getElectrumServers(network: Network): string[] {
-  return getInfraUrlPools(network).electrumServers;
+  const base = getInfraUrlPools(network).electrumServers;
+  if (isDesktop()) {
+    return dedupe([...base, ...DESKTOP_ONLY_TCP_SERVERS[network]]);
+  }
+  return base;
 }

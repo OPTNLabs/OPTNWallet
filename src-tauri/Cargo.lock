@@ -2677,6 +2677,7 @@ name = "optn-wallet-desktop"
 version = "1.6.2"
 dependencies = [
  "log",
+ "once_cell",
  "prost",
  "prost-build",
  "protox",

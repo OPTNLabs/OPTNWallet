@@ -158,6 +158,13 @@ const desktopAdditions = defineConfig({
       // bypassing Vite's module system entirely.
       'sql.js': resolvePath(__dirname, 'src/platform/desktop/sql-js-shim.ts'),
 
+      // Native TCP(+TLS) Electrum transport. The web build can only open
+      // WebSockets, but most Fulcrum servers expose only the raw TCP-SSL port
+      // (50002); this desktop replacement speaks that via a Rust command so the
+      // full server ecosystem is reachable. Same class/interface, so
+      // @electrum-cash/network is unchanged.
+      '@electrum-cash/web-socket': resolvePath(__dirname, 'src/platform/desktop/electrum-web-socket.ts'),
+
       // Capacitor shims — transparent replacements for all @capacitor/* packages.
       // When the upstream dev adds a new Capacitor plugin, add one line here.
       '@capacitor/core': resolvePath(__dirname, 'src/platform/desktop/capacitor-core.ts'),
