@@ -1,9 +1,17 @@
 import React, { useEffect, useState, useCallback } from 'react';
-import { useSelector } from 'react-redux';
+import { useSelector, useDispatch } from 'react-redux';
 import { selectCurrentNetwork } from '../../state/selectors/networkSelectors';
 import getElectrumAdapter from '../../services/ElectrumAdapter';
 import { getElectrumServers } from '../../utils/servers/ElectrumServers';
 import { readStorageItem, writeStorageItem, getPreferredStorage } from '../../utils/browserStorage';
+import {
+  selectExplorerId,
+  selectExplorerCustom,
+  setExplorerId,
+  setExplorerCustom,
+} from '../../state/slices/preferencesSlice';
+import { EXPLORER_PRESETS } from '../../utils/servers/explorers';
+import { CashFusionSettings } from './CashFusionSettings';
 
 const USER_SERVER_KEY = 'optn.electrum.user-server';
 const LAST_HEALTHY_KEY = 'optn.electrum.last-healthy-server';
@@ -21,8 +29,13 @@ function readLastHealthy(): string {
 }
 
 export const ServerSettings: React.FC = () => {
+  const dispatch = useDispatch();
   const currentNetwork = useSelector(selectCurrentNetwork);
   const defaultServers = getElectrumServers(currentNetwork);
+  const explorerId = useSelector(selectExplorerId);
+  const explorerCustom = useSelector(selectExplorerCustom);
+  const [customTx, setCustomTx] = useState(explorerCustom.tx);
+  const [customAddr, setCustomAddr] = useState(explorerCustom.address);
 
   const [autoMode, setAutoMode] = useState(true);
   const [customServer, setCustomServer] = useState('');
@@ -168,6 +181,58 @@ export const ServerSettings: React.FC = () => {
             </span>
           </button>
         ))}
+      </div>
+
+      {/* Block explorer */}
+      <div className="flex flex-col gap-2 border-t border-[var(--wallet-border)] pt-4">
+        <p className="text-xs font-semibold wallet-muted uppercase tracking-wide">Block explorer</p>
+        <p className="text-xs wallet-muted">Used for “open in explorer” links on transactions.</p>
+        <select
+          value={explorerId}
+          onChange={(e) => dispatch(setExplorerId(e.target.value))}
+          className="w-full rounded-xl border border-[var(--wallet-border)] bg-[var(--wallet-surface)] px-3 py-2 text-sm wallet-text-strong outline-none focus:ring-1 focus:ring-[var(--wallet-accent)]"
+        >
+          {EXPLORER_PRESETS.map((e) => (
+            <option key={e.id} value={e.id}>{e.label}</option>
+          ))}
+          <option value="custom">Custom…</option>
+        </select>
+
+        {explorerId === 'custom' && (
+          <div className="flex flex-col gap-2">
+            <input
+              type="text"
+              value={customTx}
+              onChange={(e) => setCustomTx(e.target.value)}
+              placeholder="Tx URL, e.g. https://example.com/tx/{txid}"
+              className="w-full rounded-xl border border-[var(--wallet-border)] bg-[var(--wallet-surface)] px-3 py-2 text-xs font-mono wallet-text-strong placeholder:wallet-muted outline-none focus:ring-1 focus:ring-[var(--wallet-accent)]"
+            />
+            <input
+              type="text"
+              value={customAddr}
+              onChange={(e) => setCustomAddr(e.target.value)}
+              placeholder="Address URL, e.g. https://example.com/address/{address}"
+              className="w-full rounded-xl border border-[var(--wallet-border)] bg-[var(--wallet-surface)] px-3 py-2 text-xs font-mono wallet-text-strong placeholder:wallet-muted outline-none focus:ring-1 focus:ring-[var(--wallet-accent)]"
+            />
+            <p className="text-[10px] wallet-muted">
+              Use <span className="font-mono">{'{txid}'}</span> and <span className="font-mono">{'{address}'}</span> as placeholders.
+            </p>
+            <button
+              onClick={() => dispatch(setExplorerCustom({ tx: customTx, address: customAddr }))}
+              disabled={!customTx.includes('{txid}')}
+              className="self-start rounded-xl border border-[var(--wallet-accent)]/40 px-3 py-1.5 text-xs font-semibold text-[var(--wallet-accent)] hover:bg-[var(--wallet-accent)]/5 disabled:opacity-40 transition-colors"
+            >
+              Save custom explorer
+            </button>
+          </div>
+        )}
+      </div>
+
+      {/* CashFusion (privacy) + Tor — grouped here so this one panel manages
+          everything network/server related. */}
+      <div className="flex flex-col gap-2 border-t border-[var(--wallet-border)] pt-4">
+        <p className="text-xs font-semibold wallet-muted uppercase tracking-wide">CashFusion &amp; Tor</p>
+        <CashFusionSettings />
       </div>
     </div>
   );
