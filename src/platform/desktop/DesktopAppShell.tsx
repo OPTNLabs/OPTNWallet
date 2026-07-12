@@ -7,7 +7,7 @@
 // asked when opening that wallet (DesktopWalletManager). "Lock" — manual via
 // the menu or by inactivity (AppLockGate) — wipes the in-RAM key and returns
 // to the picker.
-import React, { useEffect } from 'react';
+import React, { useEffect, useState } from 'react';
 import { useDispatch, useSelector } from 'react-redux';
 import AppShell from '../../app/AppShell';
 import { AppLockGate } from './AppLockGate';
@@ -19,6 +19,7 @@ const DesktopAppShell: React.FC = () => {
   useMenuBar();
   const dispatch = useDispatch();
   const walletId = useSelector(selectWalletId);
+  const [checkedStaleWalletOnce, setCheckedStaleWalletOnce] = useState(false);
 
   // Core invariant: a wallet is "open" ONLY while its key is in RAM. The key
   // cache is per-window and empty on every boot, so a walletId > 0 with no
@@ -32,7 +33,21 @@ const DesktopAppShell: React.FC = () => {
     if (walletId > 0 && !getCachedWalletKey()) {
       dispatch(resetWallet());
     }
+    setCheckedStaleWalletOnce(true);
   }, [walletId, dispatch]);
+
+  // Don't mount AppShell (and everything under it — including
+  // useAppLifecycle.ts's walletId>0-triggered hooks: WizardConnect init,
+  // getWalletInfo, etc.) until the invariant above has been checked at least
+  // once. React fires child effects before parent effects, so without this
+  // gate, a fresh boot with a stale persisted walletId lets those child hooks
+  // fire with the stale id and fail (harmless — nothing was ever actually
+  // unlocked) before resetWallet() above has a chance to correct it. That's
+  // the source of the "Error getting wallet info" / "Unable to load wallet
+  // mnemonic for WizardConnect" noise seen on every fresh app start.
+  if (!checkedStaleWalletOnce) {
+    return null;
+  }
 
   return (
     <>
