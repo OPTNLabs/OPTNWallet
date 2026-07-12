@@ -30,6 +30,7 @@
     "build:web": "vite build",
     "build:extension:chrome": "cross-env EXTENSION_TARGET=chrome vite build --config vite.extension.config.ts",
     "build:extension:firefox": "cross-env EXTENSION_TARGET=firefox vite build --config vite.extension.config.ts",
+    "test:e2e": "wdio run ./e2e/wdio.conf.ts",
     "capacitor:init": "npx cap init",
     "capacitor:add:android": "npx cap add android",
     "capacitor:add:ios": "npx cap add ios",
@@ -137,6 +138,10 @@
     "@typescript-eslint/parser": "^7.2.0",
     "@vitejs/plugin-react-swc": "^4.3.1",
     "@vitest/coverage-v8": "^3.2.4",
+    "@wdio/cli": "^9.29.1",
+    "@wdio/local-runner": "^9.29.1",
+    "@wdio/mocha-framework": "^9.29.1",
+    "@wdio/spec-reporter": "^9.29.1",
     "autoprefixer": "^10.4.19",
     "cross-env": "^10.1.0",
     "dotenv-cli": "^8.0.0",
@@ -146,6 +151,7 @@
     "eslint-plugin-react-hooks": "^4.6.0",
     "eslint-plugin-react-refresh": "^0.4.6",
     "jsqr": "^1.4.0",
+    "mocha": "^11.7.6",
     "patch-package": "^8.0.0",
     "postcss": "^8.5.15",
     "prettier": "^3.3.2",
@@ -155,7 +161,8 @@
     "vite-plugin-node-polyfills": "^0.28.0",
     "vite-plugin-top-level-await": "^1.6.0",
     "vite-plugin-wasm": "^3.6.0",
-    "vitest": "^3.2.4"
+    "vitest": "^3.2.4",
+    "webdriverio": "^9.29.1"
   },
   "packageManager": "yarn@1.22.22+sha512.a6b2f7906b721bba3d67d4aff083df04dad64c399707841b7acf00f6b133b7ac24255f2652fa22ae3534329dc6180534e98d17432037ff6fd140556e2bb3137e"
 }
