@@ -1,6 +1,11 @@
 // CashFusion server configuration and status panel.
-// Phase 1: server config + connection probe (UI).
-// Phase 2: automated fusion round participation (future — requires TCP protobuf).
+//
+// The "Query Server" button performs a REAL CashFusion protocol handshake
+// (ClientHello -> ServerHello) via the Rust client and shows the server's
+// actual fusion parameters. It joins no pool and signs nothing.
+//
+// Fusion round participation (blind signatures, covert connections) is a
+// later phase — see docs/cashfusion-implementation-scope.md.
 
 import React, { useState } from 'react';
 import { useDispatch, useSelector } from 'react-redux';
@@ -10,50 +15,38 @@ import {
   setCashFusionEnabled,
   setFusionServer,
 } from '../../state/slices/experimentalSlice';
+import {
+  fetchFusionServerStatus,
+  FUSION_SUPPORTED,
+  type FusionServerStatus,
+} from '../../services/fusion/FusionStatusService';
+
+// Ports per Electron Cash's own conf.py default (fusion.servo.cash:8789, SSL).
+const DEFAULT_SERVER = 'fusion.servo.cash:8789';
 
 const KNOWN_SERVERS = [
-  { label: 'cashfusion.electroncash.dk (mainnet)', host: 'cashfusion.electroncash.dk:8787' },
-  { label: 'fusion.servo.cash (mainnet)', host: 'fusion.servo.cash:8787' },
+  { label: 'fusion.servo.cash (mainnet)', host: DEFAULT_SERVER },
+  { label: 'cashfusion.electroncash.dk (mainnet)', host: 'cashfusion.electroncash.dk:8789' },
 ];
 
 type ConnStatus = 'idle' | 'testing' | 'ok' | 'fail';
 
-// Parse "host:port" into a WebSocket URL for the TCP probe.
-// CashFusion servers use TLS on port 8787 → wss://host:8787
-function toWssUrl(hostPort: string): string {
-  const trimmed = hostPort.trim();
-  if (trimmed.startsWith('ws://') || trimmed.startsWith('wss://')) return trimmed;
-  const [host, port = '8787'] = trimmed.split(':');
-  return `wss://${host}:${port}`;
+function parseHostPort(hostPort: string): { host: string; port: number } {
+  const [host, port = '8789'] = hostPort.trim().split(':');
+  return { host, port: Number(port) || 8789 };
 }
 
-async function probeServer(hostPort: string): Promise<boolean> {
-  const url = toWssUrl(hostPort);
-  return new Promise((resolve) => {
-    const timeout = setTimeout(() => {
-      ws.close();
-      resolve(false);
-    }, 6000);
-    const ws = new WebSocket(url);
-    ws.onopen = () => {
-      clearTimeout(timeout);
-      ws.close();
-      resolve(true);
-    };
-    ws.onerror = () => {
-      clearTimeout(timeout);
-      resolve(false);
-    };
-  });
-}
+const satsToBch = (sats: number) => (sats / 1e8).toLocaleString(undefined, { maximumFractionDigits: 8 });
 
 export const CashFusionSettings: React.FC = () => {
   const dispatch = useDispatch();
   const enabled = useSelector(selectCashFusionEnabled);
   const savedServer = useSelector(selectFusionServer);
 
-  const [serverInput, setServerInput] = useState(savedServer ?? 'cashfusion.electroncash.dk:8787');
+  const [serverInput, setServerInput] = useState(savedServer ?? DEFAULT_SERVER);
   const [connStatus, setConnStatus] = useState<ConnStatus>('idle');
+  const [status, setStatus] = useState<FusionServerStatus | null>(null);
+  const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [showProtocolInfo, setShowProtocolInfo] = useState(false);
 
   const handleSaveServer = () => {
@@ -63,14 +56,23 @@ export const CashFusionSettings: React.FC = () => {
 
   const handleTest = async () => {
     setConnStatus('testing');
-    const reachable = await probeServer(serverInput ?? '');
-    setConnStatus(reachable ? 'ok' : 'fail');
+    setStatus(null);
+    setErrorMsg(null);
+    const { host, port } = parseHostPort(serverInput ?? '');
+    try {
+      const result = await fetchFusionServerStatus(host, port, true);
+      setStatus(result);
+      setConnStatus('ok');
+    } catch (err) {
+      setErrorMsg(err instanceof Error ? err.message : String(err));
+      setConnStatus('fail');
+    }
   };
 
   const connStatusBadge = () => {
-    if (connStatus === 'testing') return <span className="text-[10px] wallet-muted animate-pulse">Probing…</span>;
-    if (connStatus === 'ok')   return <span className="text-[10px] text-green-400 font-semibold">Reachable ✓</span>;
-    if (connStatus === 'fail') return <span className="text-[10px] text-red-400 font-semibold">Unreachable ✗</span>;
+    if (connStatus === 'testing') return <span className="text-[10px] wallet-muted animate-pulse">Handshaking…</span>;
+    if (connStatus === 'ok')   return <span className="text-[10px] text-green-400 font-semibold">Handshake OK ✓</span>;
+    if (connStatus === 'fail') return <span className="text-[10px] text-red-400 font-semibold">Failed ✗</span>;
     return null;
   };
 
@@ -104,11 +106,12 @@ export const CashFusionSettings: React.FC = () => {
             <p><span className="wallet-text-strong">3. Covert submission.</span> Each participant independently submits the transaction via Tor or direct connection. The server assembles the final tx.</p>
             <p><span className="wallet-text-strong">4. Broadcast.</span> All participants broadcast the jointly constructed transaction.</p>
             <p className="text-yellow-400/80 mt-1">
-              ⚠ Full automatic fusion requires a background service and Tor for optimal privacy.
-              The complete protocol (blind signing, Tor, protobuf) is implemented in
-              Electron Cash's electroncash_plugins/fusion — that will be the reference
-              for our Phase 2 native implementation.
-              Manual server configuration and connection testing are available now.
+              ⚠ Steps 1–4 (joining a pool and actually fusing coins) are not implemented yet.
+              What works today: the wallet speaks the real CashFusion protocol to a server
+              and reads its live parameters. Fusing itself needs the blind-signature and
+              covert-connection layers, which are deliberately being built and reviewed
+              carefully rather than rushed — a subtle bug there could deanonymize the very
+              user it is meant to protect.
             </p>
           </div>
         )}
@@ -132,7 +135,8 @@ export const CashFusionSettings: React.FC = () => {
         </div>
         {enabled && (
           <p className="text-xs wallet-muted">
-            CashFusion is enabled. Configure your server below and test the connection.
+            Configure a server below and query it. Note this does not fuse coins yet —
+            see the phase note at the bottom.
           </p>
         )}
       </div>
@@ -162,19 +166,49 @@ export const CashFusionSettings: React.FC = () => {
           <button
             type="button"
             onClick={() => void handleTest()}
-            disabled={connStatus === 'testing' || !(serverInput ?? '').trim()}
+            disabled={connStatus === 'testing' || !FUSION_SUPPORTED || !(serverInput ?? '').trim()}
             className="rounded-xl border border-[var(--wallet-border)] bg-[var(--wallet-surface-strong)] px-3 py-1.5 text-xs font-semibold wallet-text-strong disabled:opacity-50 hover:brightness-95 transition-all"
           >
-            Test Connection
+            Query Server
           </button>
           {connStatusBadge()}
         </div>
 
-        {connStatus === 'fail' && (
-          <p className="text-[10px] text-red-400/80 leading-relaxed">
-            Could not reach the server. Check the host:port and make sure the server is running.
-            Note: this probe tests TCP reachability, not the CashFusion protocol handshake.
+        {!FUSION_SUPPORTED && (
+          <p className="text-[10px] wallet-muted leading-relaxed">
+            CashFusion needs a raw TCP connection, which a mobile/web browser cannot open.
+            Available in the desktop app.
           </p>
+        )}
+
+        {connStatus === 'fail' && errorMsg && (
+          <p className="text-[10px] text-red-400/80 leading-relaxed">{errorMsg}</p>
+        )}
+
+        {/* Real ServerHello data — proof the protocol handshake actually completed. */}
+        {status && (
+          <div className="rounded-lg border border-green-400/20 bg-green-400/5 px-3 py-2 space-y-1 text-[10px]">
+            <p className="font-semibold text-green-400">Server parameters (live)</p>
+            <div className="grid grid-cols-2 gap-x-3 gap-y-0.5 wallet-muted">
+              <span>Pool tiers</span>
+              <span className="wallet-text-strong">{status.tiers.length}</span>
+              <span>Components / player</span>
+              <span className="wallet-text-strong">{status.numComponents}</span>
+              <span>Component fee rate</span>
+              <span className="wallet-text-strong">{status.componentFeerate} sats/kB</span>
+              <span>Excess fee range</span>
+              <span className="wallet-text-strong">{status.minExcessFee}–{status.maxExcessFee} sats</span>
+            </div>
+            {status.tiers.length > 0 && (
+              <p className="wallet-muted pt-0.5">
+                Tiers: {status.tiers.slice(0, 4).map(satsToBch).join(', ')} BCH
+                {status.tiers.length > 4 && ` … +${status.tiers.length - 4} more`}
+              </p>
+            )}
+            {status.donationAddress && (
+              <p className="wallet-muted break-all pt-0.5">Donation: {status.donationAddress}</p>
+            )}
+          </div>
         )}
       </div>
 
@@ -203,8 +237,9 @@ export const CashFusionSettings: React.FC = () => {
       {/* Phase note */}
       <div className="rounded-xl border border-yellow-400/20 bg-yellow-400/5 px-3 py-2">
         <p className="text-[10px] text-yellow-400/80 leading-relaxed">
-          Phase 1: server config and connection testing.
-          Automatic fusion round participation is a planned future feature.
+          Phase 1 (now): real protocol handshake — the wallet talks to fusion servers and
+          reads their live parameters. Phase 2: joining pools and fusing coins.
+          Your coins are not being fused yet.
         </p>
       </div>
 
