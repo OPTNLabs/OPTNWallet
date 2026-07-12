@@ -2,6 +2,7 @@
 mod menu;
 
 pub mod fusion;
+pub mod electrum_tcp;
 
 // CashFusion server status (Phase 1).
 //
@@ -133,7 +134,10 @@ pub fn run() {
             write_wallet_file,
             fusion_server_status,
             fusion_tor_detect,
-            fusion_tor_check
+            fusion_tor_check,
+            electrum_tcp::electrum_tcp_connect,
+            electrum_tcp::electrum_tcp_send,
+            electrum_tcp::electrum_tcp_close
         ])
         .setup(|app| {
             let log_level = if cfg!(debug_assertions) {
