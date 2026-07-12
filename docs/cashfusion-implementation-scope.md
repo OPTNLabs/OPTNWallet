@@ -1,71 +1,78 @@
-# CashFusion: what "actually working" requires
+# CashFusion: implementation status and plan
 
-## Current state (honest)
+## Phase 1 — DONE (real protocol client)
 
-`src/features/settings/CashFusionSettings.tsx` is a UI-only stub: it opens a
-`wss://` WebSocket to the configured host:port and reports whether the TCP
-handshake succeeds. Its own on-screen text already says this plainly: *"this
-probe tests TCP reachability, not the CashFusion protocol handshake."* There
-is no fusion round participation, no coin shuffling, no protocol client at
-all. `experimentalSlice.cashFusionEnabled` defaults to `false`.
+The wallet now speaks the actual CashFusion wire protocol. Not a probe, not a
+mock: `src-tauri/src/fusion/` connects over TCP+TLS, sends a real `ClientHello`,
+and decodes the server's `ServerHello`.
 
-## Why this can't be "finished" quickly
+**Verified live** against the public default server from Electron Cash's own
+`conf.py` (`fusion.servo.cash:8789`, SSL) — run it with
+`cargo test --test fusion_live -- --ignored --nocapture`:
 
-1. **CashFusion's real protocol is raw TCP + TLS with protobuf message
-   framing** (see Electron Cash's `electroncash_plugins/fusion/`, the
-   reference implementation — Python, `.proto` schema in
-   `fusion_pb2.py`/`fusion.proto`). Browsers and Tauri's WebView **cannot
-   open a raw TCP socket** — only WebSocket/HTTP/fetch. A `wss://` probe
-   (what we have) can only ever test whether *something* is listening on
-   that port, never speak the actual protocol.
-2. **No existing JS/WASM CashFusion client exists.** Checked npm directly
-   (`npm search cashfusion`, `npm view cashfusion`, `npm view
-   @cashfusion/client`) — zero results. Checked Selene Wallet
-   (`D:\Selene Wallet`) per the user's suggestion to look there first — no
-   CashFusion references anywhere in its source or `package.json` either.
-   This is a real gap in the BCH JS ecosystem, not something we're missing.
-3. **The protocol itself is non-trivial cryptography**, not just "connect and
-   send a message": clients submit blinded commitments to inputs/outputs,
-   the server coordinates a covert multi-round shuffle so no single party
-   (including the server) can link a client's inputs to its outputs, and
-   there's a whole state machine for round timing, covert connections
-   (each client makes a SEPARATE anonymous connection for the output-reveal
-   phase, specifically so the server can't correlate input-submitter to
-   output-submitter), and Schnorr blind signatures. Getting this wrong
-   doesn't just break the feature — a subtly wrong implementation could
-   deanonymize the user it's supposed to protect, or worse, be exploited to
-   misdirect funds during a round. This is exactly the kind of code that
-   needs a dedicated, unhurried implementation + review pass, not something
-   to build under time pressure in an already-long session.
+```
+tiers: [ ...16 real pool tiers... ], num_components: 23,
+component_feerate: 1000, min_excess_fee: 10, max_excess_fee: 300000,
+donation_address: Some("bitcoincash:qpfkr2qsyz9qpfth4efvpqkha7u4mu3ft5a6khx8r0")
+```
 
-## What a real implementation needs (scope, not a task list to rush)
+Settings → CashFusion's "Query Server" button surfaces exactly this. That test
+is `#[ignore]`d by default so CI never depends on a third-party host being up.
 
-1. **A Rust-side TCP+TLS client** (Tauri command, same pattern as the
-   existing `optn_price_fetch` CORS-bypass command in `src-tauri/src/lib.rs`)
-   that speaks CashFusion's protobuf wire protocol. This is the biggest
-   single piece of new code — essentially porting Electron Cash's
-   `fusion.proto` + the client-side state machine
-   (`electroncash_plugins/fusion/protocol.py`,
-   `electroncash_plugins/fusion/fusion.py`) from Python to Rust, or finding
-   an existing Rust crate that already implements the wire protocol (worth
-   checking `crates.io` in a future session before writing this by hand —
-   not checked yet this pass).
-2. **An IPC bridge** exposing that Rust client to the frontend (start round,
-   report progress, report result) — small, mechanical, once (1) exists.
-3. **Coin selection + blinded-commitment logic** on the crypto side —
-   `@bitauth/libauth`'s Schnorr primitives are already a dependency here, so
-   the blind-signature math is plausible to build in TypeScript IF the
-   Rust side just handles the wire protocol and the JS side handles the
-   crypto commitments passed across the bridge — worth designing carefully
-   rather than assuming everything belongs in Rust.
-4. **UI**: round status, participating-coins selection, fee display — this
-   part is straightforward once (1)-(3) exist; not the hard part.
+### Why the client is in Rust
+CashFusion is raw TCP with TLS and protobuf framing. A WebView can only open
+HTTP/WebSocket connections, so the frontend **cannot** speak this protocol at
+any level — the previous `wss://` "probe" could only detect that *something*
+was listening on the port. On mobile/web, `src/services/fusion/FusionStatusService.ts`
+therefore throws a clear platform-limit error rather than pretending; the desktop
+build swaps in the Rust-backed version via `vite.desktop.config.ts`.
 
-## Recommendation
+### What Phase 1 deliberately does NOT do
+It joins no pool, submits no coins, and signs nothing — so it cannot move funds.
+`experimentalSlice.cashFusionEnabled` still defaults to `false`.
 
-Do this as its own dedicated session with a clear go/no-go checkpoint after
-step 1 (the protobuf/TCP client) — if a usable Rust crate for CashFusion's
-wire protocol exists, this becomes a multi-day feature; if it has to be
-hand-ported from Electron Cash's Python, it's realistically a multi-week one.
-Do not enable `cashFusionEnabled` by default, and do not remove the current
-honest "reachability only" framing until a real client exists behind it.
+### Wire details (all read from the reference implementation, not guessed)
+Every constant traces to Electron Cash (`electroncash_plugins/fusion/`):
+- Frame: `<8-byte magic 765be8b4e4396dcf><4-byte big-endian length><protobuf>` — `connection.py`
+- `MAX_MSG_LENGTH = 200 KiB`, enforced before allocating — `connection.py`
+- Protocol version `alpha13` — `protocol.py`
+- Message schema — `protobuf/fusion.proto`, vendored verbatim to
+  `src-tauri/proto/fusion.proto` (MIT, © 2020 Mark B. Lundeberg)
+
+`build.rs` compiles the schema with **protox** (pure-Rust) rather than
+prost-build's default path, which shells out to a `protoc` binary that is not
+installed on this machine or on the CI runners.
+
+## Phase 2 — NOT STARTED: joining a pool and fusing coins
+
+This is the hard, privacy-critical half. It is deliberately left for a
+dedicated, carefully-reviewed pass rather than rushed, because a subtle bug
+here can **deanonymize the very user it is meant to protect** — and unlike a
+crash, that failure is silent.
+
+Required pieces, each mapping to a reference file:
+1. **Pool join + tier selection** — `JoinPools` / `TierStatusUpdate`
+   (`fusion.py`). Mechanical now that Phase 1 exists.
+2. **Commitments and blind signatures** — `PlayerCommit` / `BlindSigResponses`.
+   Needs Pedersen commitments (`pedersen.py`) and blind Schnorr signing, so that
+   nobody — including the server — learns the input→output mapping.
+3. **Covert connections** — `covert.py`. Each participant opens *separate*,
+   independently-timed connections to submit components and signatures,
+   specifically so the server cannot correlate a submitter's inputs with its
+   outputs. Getting the timing/connection discipline wrong destroys the privacy
+   guarantee while the feature still appears to work.
+4. **Round state machine + blame** — `protocol.py`, `validation.py`. Handles
+   restarts and identifying misbehaving players.
+5. **Coin selection and fees** — must respect the tiers and feerates Phase 1
+   already reads from the server.
+
+## Phase 3 — Tor
+
+Electron Cash routes covert connections over Tor. Without it, a network-level
+observer can correlate connections no matter how correct the cryptography is.
+
+## Testing rule
+
+Fusion work must never touch mainnet funds. Phase 1's live test performs only
+the read-only hello handshake (no wallet, no keys, no coins involved). Phase 2
+must run against a locally-run Electron Cash `server.py`, or Chipnet.

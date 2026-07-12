@@ -14,6 +14,13 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 
 [build-dependencies]
 tauri-build = { version = "2.6.3", features = [] }
+# Compiles proto/fusion.proto (vendored from Electron Cash) into Rust types.
+# protox is a pure-Rust protobuf compiler — deliberately used instead of
+# prost-build's default path, which shells out to a `protoc` binary that is
+# NOT installed on this machine or on the CI runners. Keeping the toolchain
+# pure-Rust means `cargo build` just works everywhere with no extra setup.
+prost-build = "0.13"
+protox = "0.7"
 
 [dependencies]
 serde_json = "1.0"
@@ -27,3 +34,11 @@ tauri-plugin-dialog = "2"
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "charset"] }
 tauri-plugin-keyring = "0.1"
 tauri-plugin-biometry = "0.2"
+# CashFusion: the protocol is raw TCP+TLS with protobuf framing, which a
+# WebView cannot speak at all — hence a Rust-side client. rustls/tokio are
+# already in the tree transitively via reqwest and tauri; naming them here
+# just makes the direct dependency explicit.
+prost = "0.13"
+tokio = { version = "1", features = ["net", "io-util", "time", "macros", "rt"] }
+tokio-rustls = { version = "0.26", features = ["ring"] }
+webpki-roots = "0.26"

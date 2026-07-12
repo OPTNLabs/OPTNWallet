@@ -85,6 +85,9 @@ const MODULE_SWAPS = new Map<string, string>([
   // Reads installed 'iframe-bundle' addon source from <AppData>/addons/ —
   // desktop-only (no filesystem-drop UX equivalent on mobile yet).
   [srcPath('src/services/addons/AddonInstallService.ts'), srcPath('src/platform/desktop/AddonInstallService.ts')],
+  // CashFusion needs a raw TCP+TLS socket, which no WebView can open — the
+  // desktop version routes through a Rust command that speaks the real protocol.
+  [srcPath('src/services/fusion/FusionStatusService.ts'), srcPath('src/platform/desktop/FusionStatusService.ts')],
   // Mounts DesktopSecurityGate + AppLockGate + menu-bar listener around the app.
   [srcPath('src/app/AppShell.tsx'), srcPath('src/platform/desktop/DesktopAppShell.tsx')],
   // Electron Cash-style onboarding: wallet picker, per-wallet passwords, seed
