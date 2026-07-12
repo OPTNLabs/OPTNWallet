@@ -1,0 +1,290 @@
+// CashFusion client — Phase 1: connect + handshake + read server parameters.
+//
+// Why this lives in Rust rather than the frontend: CashFusion's wire protocol
+// is raw TCP with TLS and protobuf framing. A WebView can only open
+// HTTP/WebSocket connections, so it cannot speak this protocol at all. The
+// previous "CashFusion" UI could only probe whether *something* was listening
+// on the port (a wss:// handshake), never talk to it.
+//
+// Scope of Phase 1 (deliberately narrow — see docs/cashfusion-implementation-scope.md):
+//   connect -> TLS -> ClientHello -> ServerHello -> disconnect.
+// That reads the server's real fusion parameters (tiers, fee rates, component
+// limits). It does NOT join a pool or participate in a fusion round; the
+// round logic involves blind signatures and covert connections and is
+// intentionally left to later phases rather than rushed.
+//
+// Every wire-level constant here is taken from the reference implementation
+// (Electron Cash, electroncash_plugins/fusion/), not inferred:
+//   - frame format + magic:  connection.py  (`<8-byte magic><4-byte BE length><msg>`)
+//   - MAX_MSG_LENGTH:        connection.py  (200 KiB)
+//   - protocol version:      protocol.py    (VERSION = b'alpha13')
+//   - message shapes:        protobuf/fusion.proto (vendored, MIT, © 2020 Mark B. Lundeberg)
+
+use std::sync::Arc;
+use std::time::Duration;
+
+use prost::Message;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::net::TcpStream;
+use tokio_rustls::rustls::pki_types::ServerName;
+use tokio_rustls::rustls::{ClientConfig, RootCertStore};
+use tokio_rustls::TlsConnector;
+
+// Generated from proto/fusion.proto by build.rs (package `fusion`).
+pub mod pb {
+    include!(concat!(env!("OUT_DIR"), "/fusion.rs"));
+}
+
+/// Frame magic — connection.py: `magic = bytes.fromhex("765be8b4e4396dcf")`.
+const MAGIC: [u8; 8] = [0x76, 0x5b, 0xe8, 0xb4, 0xe4, 0x39, 0x6d, 0xcf];
+
+/// connection.py: `MAX_MSG_LENGTH = 200*1024`. Enforced on receive so a hostile
+/// or broken server cannot make us allocate an unbounded buffer.
+const MAX_MSG_LENGTH: u32 = 200 * 1024;
+
+/// protocol.py: `VERSION = b'alpha13'`. A server on a different protocol
+/// version rejects the ClientHello, which is the intended behavior.
+const VERSION: &[u8] = b"alpha13";
+
+const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
+const IO_TIMEOUT: Duration = Duration::from_secs(15);
+
+/// What Phase 1 can actually report: the server's real, protocol-level fusion
+/// parameters. Serialized straight to the frontend.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct FusionServerStatus {
+    pub tiers: Vec<u64>,
+    pub num_components: u32,
+    pub component_feerate: u64,
+    pub min_excess_fee: u64,
+    pub max_excess_fee: u64,
+    pub donation_address: Option<String>,
+}
+
+/// Write one framed message: magic ++ big-endian u32 length ++ payload.
+async fn send_frame<S>(stream: &mut S, payload: &[u8]) -> Result<(), String>
+where
+    S: AsyncWriteExt + Unpin,
+{
+    let mut frame = Vec::with_capacity(12 + payload.len());
+    frame.extend_from_slice(&MAGIC);
+    frame.extend_from_slice(&(payload.len() as u32).to_be_bytes());
+    frame.extend_from_slice(payload);
+
+    tokio::time::timeout(IO_TIMEOUT, stream.write_all(&frame))
+        .await
+        .map_err(|_| "timed out sending to fusion server".to_string())?
+        .map_err(|e| format!("send failed: {e}"))?;
+    Ok(())
+}
+
+/// Read one framed message, validating magic and length before allocating.
+async fn recv_frame<S>(stream: &mut S) -> Result<Vec<u8>, String>
+where
+    S: AsyncReadExt + Unpin,
+{
+    let mut header = [0u8; 12];
+    tokio::time::timeout(IO_TIMEOUT, stream.read_exact(&mut header))
+        .await
+        .map_err(|_| "timed out waiting for fusion server".to_string())?
+        .map_err(|e| format!("receive failed: {e}"))?;
+
+    if header[..8] != MAGIC {
+        return Err("bad magic in frame — not a CashFusion server".into());
+    }
+
+    let len = u32::from_be_bytes([header[8], header[9], header[10], header[11]]);
+    if len > MAX_MSG_LENGTH {
+        return Err(format!("frame too large: {len} > {MAX_MSG_LENGTH}"));
+    }
+
+    let mut payload = vec![0u8; len as usize];
+    tokio::time::timeout(IO_TIMEOUT, stream.read_exact(&mut payload))
+        .await
+        .map_err(|_| "timed out reading frame body".to_string())?
+        .map_err(|e| format!("receive failed: {e}"))?;
+    Ok(payload)
+}
+
+/// Run the Phase 1 handshake over an already-established stream.
+/// Split out from the connection setup so it can be tested against an
+/// in-memory duplex stream with no real network involved.
+async fn handshake<S>(stream: &mut S, genesis_hash: Option<Vec<u8>>) -> Result<FusionServerStatus, String>
+where
+    S: AsyncReadExt + AsyncWriteExt + Unpin,
+{
+    let hello = pb::ClientMessage {
+        msg: Some(pb::client_message::Msg::Clienthello(pb::ClientHello {
+            version: VERSION.to_vec(),
+            genesis_hash,
+        })),
+    };
+    send_frame(stream, &hello.encode_to_vec()).await?;
+
+    let raw = recv_frame(stream).await?;
+    let reply = pb::ServerMessage::decode(raw.as_slice())
+        .map_err(|e| format!("could not decode server message: {e}"))?;
+
+    match reply.msg {
+        Some(pb::server_message::Msg::Serverhello(h)) => Ok(FusionServerStatus {
+            tiers: h.tiers,
+            num_components: h.num_components,
+            component_feerate: h.component_feerate,
+            min_excess_fee: h.min_excess_fee,
+            max_excess_fee: h.max_excess_fee,
+            donation_address: h.donation_address,
+        }),
+        // The server reports version mismatches and the like through this.
+        Some(pb::server_message::Msg::Error(e)) => {
+            Err(format!("server rejected us: {}", e.message.unwrap_or_default()))
+        }
+        _ => Err("unexpected reply — expected ServerHello".into()),
+    }
+}
+
+/// Connect to a CashFusion server, complete the hello handshake, and return the
+/// server's fusion parameters. Opens a fresh connection and closes it; holds no
+/// state and joins no pool.
+pub async fn server_status(
+    host: &str,
+    port: u16,
+    use_ssl: bool,
+    genesis_hash: Option<Vec<u8>>,
+) -> Result<FusionServerStatus, String> {
+    let tcp = tokio::time::timeout(CONNECT_TIMEOUT, TcpStream::connect((host, port)))
+        .await
+        .map_err(|_| format!("timed out connecting to {host}:{port}"))?
+        .map_err(|e| format!("could not connect to {host}:{port}: {e}"))?;
+
+    if !use_ssl {
+        let mut stream = tcp;
+        return handshake(&mut stream, genesis_hash).await;
+    }
+
+    // rustls refuses to pick a crypto provider implicitly when more than one is
+    // compiled in (both ring and aws-lc-rs are reachable through this app's
+    // dependency tree), so name it explicitly rather than depend on feature
+    // resolution that could silently change as dependencies shift.
+    let roots = RootCertStore {
+        roots: webpki_roots::TLS_SERVER_ROOTS.to_vec(),
+    };
+    let config = ClientConfig::builder_with_provider(Arc::new(
+        tokio_rustls::rustls::crypto::ring::default_provider(),
+    ))
+    .with_safe_default_protocol_versions()
+    .map_err(|e| format!("TLS setup failed: {e}"))?
+    .with_root_certificates(roots)
+    .with_no_client_auth();
+    let server_name = ServerName::try_from(host.to_string())
+        .map_err(|_| format!("invalid server name: {host}"))?;
+
+    let mut stream = TlsConnector::from(Arc::new(config))
+        .connect(server_name, tcp)
+        .await
+        .map_err(|e| format!("TLS handshake failed: {e}"))?;
+
+    handshake(&mut stream, genesis_hash).await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn frame_header_matches_reference_format() {
+        // magic ++ 4-byte big-endian length. Guards the exact bytes on the wire
+        // against an accidental endianness or ordering change.
+        let payload = [0xAAu8; 3];
+        let mut expected = Vec::new();
+        expected.extend_from_slice(&MAGIC);
+        expected.extend_from_slice(&[0, 0, 0, 3]);
+        expected.extend_from_slice(&payload);
+
+        let (mut client, mut server) = tokio::io::duplex(64);
+        let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+        rt.block_on(async {
+            send_frame(&mut client, &payload).await.unwrap();
+            let mut got = vec![0u8; expected.len()];
+            tokio::io::AsyncReadExt::read_exact(&mut server, &mut got).await.unwrap();
+            assert_eq!(got, expected);
+        });
+    }
+
+    #[test]
+    fn rejects_a_frame_that_is_not_cashfusion() {
+        let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+        rt.block_on(async {
+            let (mut client, mut server) = tokio::io::duplex(64);
+            // Anything that isn't the magic must be refused rather than parsed.
+            let mut junk = vec![0u8; 12];
+            junk[..8].copy_from_slice(b"NOTFUSIO");
+            tokio::io::AsyncWriteExt::write_all(&mut server, &junk).await.unwrap();
+
+            let err = recv_frame(&mut client).await.unwrap_err();
+            assert!(err.contains("bad magic"), "unexpected error: {err}");
+        });
+    }
+
+    #[test]
+    fn handshake_round_trips_against_a_stub_server() {
+        // Drives the real client handshake against a stub speaking the real
+        // frame format, so the ClientHello encoding and ServerHello decoding
+        // are both exercised end to end without touching the network.
+        let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+        rt.block_on(async {
+            let (mut client, mut server) = tokio::io::duplex(4096);
+
+            let server_task = tokio::spawn(async move {
+                let raw = recv_frame(&mut server).await.unwrap();
+                let msg = pb::ClientMessage::decode(raw.as_slice()).unwrap();
+                match msg.msg {
+                    Some(pb::client_message::Msg::Clienthello(h)) => {
+                        assert_eq!(h.version, VERSION.to_vec());
+                    }
+                    _ => panic!("expected a ClientHello"),
+                }
+
+                let hello = pb::ServerMessage {
+                    msg: Some(pb::server_message::Msg::Serverhello(pb::ServerHello {
+                        tiers: vec![10_000, 100_000],
+                        num_components: 23,
+                        component_feerate: 1_000,
+                        min_excess_fee: 10,
+                        max_excess_fee: 10_000,
+                        donation_address: None,
+                    })),
+                };
+                send_frame(&mut server, &hello.encode_to_vec()).await.unwrap();
+            });
+
+            let status = handshake(&mut client, None).await.unwrap();
+            server_task.await.unwrap();
+
+            assert_eq!(status.tiers, vec![10_000, 100_000]);
+            assert_eq!(status.num_components, 23);
+            assert_eq!(status.component_feerate, 1_000);
+        });
+    }
+
+    #[test]
+    fn surfaces_a_server_error_reply() {
+        let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+        rt.block_on(async {
+            let (mut client, mut server) = tokio::io::duplex(4096);
+
+            let server_task = tokio::spawn(async move {
+                let _ = recv_frame(&mut server).await.unwrap();
+                let err = pb::ServerMessage {
+                    msg: Some(pb::server_message::Msg::Error(pb::Error {
+                        message: Some("incompatible version".to_string()),
+                    })),
+                };
+                send_frame(&mut server, &err.encode_to_vec()).await.unwrap();
+            });
+
+            let err = handshake(&mut client, None).await.unwrap_err();
+            server_task.await.unwrap();
+            assert!(err.contains("incompatible version"), "unexpected: {err}");
+        });
+    }
+}
