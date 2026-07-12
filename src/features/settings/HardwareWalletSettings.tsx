@@ -25,6 +25,9 @@ const DEVICES: {
   connectionType: 'usb-bridge' | 'usb-ble' | 'qr' | 'software';
   sdkNote: string;
   steps: string[];
+  /** Not wired to a real signing path yet — selectable in the UI but cannot
+   * connect or sign. See docs/keystone-hardware-wallet-scope.md. */
+  disabled?: boolean;
 }[] = [
   {
     type: 'none',
@@ -75,15 +78,11 @@ const DEVICES: {
   {
     type: 'keystone',
     label: 'Keystone',
-    subtitle: 'Air-gapped — QR code signing (USB-C is charge/firmware only)',
+    subtitle: 'Air-gapped QR signing — not yet supported',
     connectionType: 'qr',
     sdkNote: '@keystonehq/sdk + bc-ur-registry-btc',
-    steps: [
-      'No USB or Bluetooth for signing — Keystone is fully air-gapped',
-      'USB-C port is used for charging and firmware updates only',
-      'Open your BCH account on the Keystone device',
-      'When sending: scan the animated QR from the app → sign on Keystone → scan the result QR back',
-    ],
+    steps: [],
+    disabled: true,
   },
 ];
 
@@ -100,12 +99,18 @@ export const HardwareWalletSettings: React.FC = () => {
 
   const handleTypeSelect = (type: HardwareWalletType) => {
     if (type === hw.type) return;
+    if (DEVICES.find((d) => d.type === type)?.disabled) return;
     dispatch(setHardwareWalletType(type));
     setStatus('idle');
     setErrorMsg(null);
   };
 
   const handleConnect = async () => {
+    if (selected.disabled) {
+      setErrorMsg(`${selected.label} is not yet supported.`);
+      setStatus('error');
+      return;
+    }
     setStatus('connecting');
     setErrorMsg(null);
     try {
@@ -127,10 +132,9 @@ export const HardwareWalletSettings: React.FC = () => {
         const result = await oneKeyGetPublicKey(path);
         dispatch(setHardwareWalletConnected({ connected: true, xpub: result.xpub, label: result.label }));
         setStatus('connected');
-      } else if (hw.type === 'keystone') {
-        dispatch(setHardwareWalletConnected({ connected: true, label: 'Keystone' }));
-        setStatus('connected');
       }
+      // 'keystone' has no real signing path yet (see docs/keystone-hardware-wallet-scope.md)
+      // and is caught by the `selected.disabled` guard above before reaching here.
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       setErrorMsg(msg);
@@ -169,17 +173,27 @@ export const HardwareWalletSettings: React.FC = () => {
             <button
               key={device.type}
               onClick={() => handleTypeSelect(device.type)}
+              disabled={device.disabled}
               className="w-full text-left rounded-lg px-3 py-2.5 transition-colors"
               style={{
                 background: isSelected ? 'var(--wallet-primary-bg, rgba(99,102,241,0.12))' : 'var(--wallet-surface-2)',
                 border: `1px solid ${isSelected ? 'var(--wallet-primary, #6366f1)' : 'var(--wallet-border)'}`,
+                opacity: device.disabled ? 0.5 : 1,
+                cursor: device.disabled ? 'not-allowed' : 'pointer',
               }}
             >
               <div className="flex items-center justify-between">
                 <div className="space-y-0.5">
-                  <p className="text-sm font-medium" style={{ color: 'var(--wallet-text-primary)' }}>
-                    {device.label}
-                  </p>
+                  <div className="flex items-center gap-1.5">
+                    <p className="text-sm font-medium" style={{ color: 'var(--wallet-text-primary)' }}>
+                      {device.label}
+                    </p>
+                    {device.disabled && (
+                      <span className="text-[10px] px-1.5 py-0.5 rounded" style={{ background: 'var(--wallet-border)', color: 'var(--wallet-text-secondary)' }}>
+                        Coming soon
+                      </span>
+                    )}
+                  </div>
                   <p className="text-xs" style={{ color: 'var(--wallet-text-secondary)' }}>
                     {device.subtitle}
                   </p>
@@ -235,7 +249,15 @@ export const HardwareWalletSettings: React.FC = () => {
       )}
 
       {/* Setup section — shown when a hardware device is selected and not yet connected */}
-      {hw.type !== 'none' && !hw.connected && (
+      {hw.type !== 'none' && !hw.connected && selected.disabled && (
+        <div
+          className="rounded-lg p-3 text-sm"
+          style={{ background: 'var(--wallet-surface-2)', border: '1px solid var(--wallet-border)', color: 'var(--wallet-text-secondary)' }}
+        >
+          {selected.label} support isn't finished yet — it can't connect or sign in this build. Pick another device, or use the software wallet.
+        </div>
+      )}
+      {hw.type !== 'none' && !hw.connected && !selected.disabled && (
         <div className="space-y-3">
           {selected.steps.length > 0 && (
             <div className="rounded-lg p-3 text-sm space-y-1.5" style={{ background: 'var(--wallet-surface-2)', border: '1px solid var(--wallet-border)' }}>
@@ -337,7 +359,7 @@ export const HardwareWalletSettings: React.FC = () => {
         <p className="font-medium mb-1" style={{ color: 'var(--wallet-text-primary)' }}>How it works</p>
         {hw.type === 'keystone' ? (
           <p style={{ color: 'var(--wallet-text-secondary)' }}>
-            Keystone is fully air-gapped. When you send BCH, the wallet shows an animated QR code. Scan it with your Keystone, confirm the details on the device, then show the signed QR back. No USB, no Bluetooth — physically isolated from the internet.
+            Keystone's air-gapped QR signing isn't finished yet — the app can't build or read the QR codes it would need to in this build. Support is planned but not ready for real funds.
           </p>
         ) : (
           <p style={{ color: 'var(--wallet-text-secondary)' }}>
