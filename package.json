@@ -126,7 +126,9 @@
     "anymatch": {
       "picomatch": "^2.3.2"
     },
-    "ws": "^8.21.0"
+    "ws": "^8.21.0",
+    "axios": "^1.18.0",
+    "protobufjs": "^8.7.0"
   },
   "devDependencies": {
     "@capacitor/assets": "^3.0.5",
