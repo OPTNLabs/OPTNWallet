@@ -17,6 +17,7 @@ import TransportWebHID from '@ledgerhq/hw-transport-webhid';
 import TransportWebBLE from '@ledgerhq/hw-transport-web-ble';
 import Btc from '@ledgerhq/hw-app-btc';
 import type Transport from '@ledgerhq/hw-transport';
+import { cashAddressToLockingBytecode } from '@bitauth/libauth';
 
 export type LedgerTransportType = 'usb' | 'ble';
 
@@ -168,7 +169,13 @@ export async function ledgerSignTransaction(
 
 /**
  * Build Ledger's output script hex format.
- * Each output: 8-byte LE amount + varint length + P2PKH scriptPubKey bytes.
+ * Each output: 8-byte LE amount + varint length + scriptPubKey bytes.
+ *
+ * Decodes each address via @bitauth/libauth's cashAddressToLockingBytecode
+ * (already a project dependency, already used for the reverse direction in
+ * hardwareWalletSigning.ts) instead of a hand-rolled bech32 decode — the
+ * previous version stripped the last 8 groups and assumed they were a valid
+ * checksum without ever actually verifying it against the computed polymod.
  */
 function buildOutputScript(outputs: LedgerOutput[]): string {
   let result = '';
@@ -181,9 +188,11 @@ function buildOutputScript(outputs: LedgerOutput[]): string {
     view.setUint32(4, hi, true);
     result += bufToHex(new Uint8Array(amtBuf));
 
-    // P2PKH: OP_DUP OP_HASH160 <push 20> <20-byte hash> OP_EQUALVERIFY OP_CHECKSIG
-    const pkh = cashAddrToPubKeyHash(out.address);
-    const script = `76a914${pkh}88ac`;
+    const decoded = cashAddressToLockingBytecode(out.address);
+    if (typeof decoded === 'string') {
+      throw new Error(`Ledger: invalid recipient address: ${decoded}`);
+    }
+    const script = bufToHex(decoded.bytecode);
     result += (script.length / 2).toString(16).padStart(2, '0');
     result += script;
   }
@@ -194,37 +203,6 @@ function bufToHex(buf: Uint8Array): string {
   return Array.from(buf)
     .map((b) => b.toString(16).padStart(2, '0'))
     .join('');
-}
-
-/**
- * Decode a CashAddr P2PKH address to its 20-byte pubkey hash hex.
- * Handles optional prefix ("bitcoincash:", "bchtest:", etc.)
- */
-function cashAddrToPubKeyHash(address: string): string {
-  const noPrefix = address.includes(':') ? address.split(':')[1] : address;
-  const CHARSET = 'qpzry9x8gf2tvdw0s3jn54khce6mua7l';
-  const decoded: number[] = [];
-  for (const ch of noPrefix.toLowerCase()) {
-    const val = CHARSET.indexOf(ch);
-    if (val === -1) throw new Error(`Invalid CashAddr character: ${ch}`);
-    decoded.push(val);
-  }
-  // Strip 8 5-bit checksum groups from the end
-  const payload = decoded.slice(0, -8);
-  // Convert 5-bit groups to bytes; group[0] encodes version, skip it
-  const bytes: number[] = [];
-  let acc = 0;
-  let bits = 0;
-  for (let i = 1; i < payload.length; i++) {
-    acc = (acc << 5) | payload[i];
-    bits += 5;
-    while (bits >= 8) {
-      bits -= 8;
-      bytes.push((acc >> bits) & 0xff);
-    }
-  }
-  // bytes[0] = version byte, bytes[1..20] = 20-byte hash
-  return bufToHex(new Uint8Array(bytes.slice(1, 21)));
 }
 
 export async function ledgerDisconnect(): Promise<void> {
