@@ -24,7 +24,7 @@
       }
     ],
     "security": {
-      "csp": "default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; connect-src 'self' https://*.optnlabs.com https://app.cauldron.quest https://indexer.riften.net https://indexer-chipnet.riften.net https://cashtokens.org wss: ws:; img-src 'self' data: blob: https:; font-src 'self' data:; frame-src 'none'; object-src 'none'; base-uri 'self'"
+      "csp": "default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; connect-src 'self' ipc: http://ipc.localhost https://ipc.localhost https://*.optnlabs.com https://app.cauldron.quest https://indexer.riften.net https://indexer-chipnet.riften.net https://cashtokens.org wss: ws:; img-src 'self' data: blob: https:; font-src 'self' data:; frame-src 'none'; object-src 'none'; base-uri 'self'"
     }
   },
   "bundle": {
