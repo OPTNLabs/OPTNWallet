@@ -31,6 +31,7 @@ use tokio_rustls::rustls::{ClientConfig, RootCertStore};
 use tokio_rustls::TlsConnector;
 
 pub mod tor;
+pub mod tor_manager;
 
 // Generated from proto/fusion.proto by build.rs (package `fusion`).
 pub mod pb {
