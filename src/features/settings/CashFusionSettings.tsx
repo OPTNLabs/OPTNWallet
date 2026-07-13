@@ -25,6 +25,7 @@ import {
 import {
   fetchFusionServerStatus,
   detectTorPort,
+  integratedTorStatus,
   FUSION_SUPPORTED,
   type FusionServerStatus,
   type TorConfig,
@@ -70,6 +71,13 @@ export const CashFusionSettings: React.FC = () => {
 
   const refreshTor = React.useCallback(async () => {
     if (!FUSION_SUPPORTED || !torEnabled) return;
+    // Prefer the app's integrated Tor if it's running; otherwise fall back to
+    // an external Tor the user runs (9050/9150).
+    const managed = await integratedTorStatus();
+    if (managed.running && managed.bootstrap_percent >= 100 && managed.socks_port > 0) {
+      setTorDetected(managed.socks_port);
+      return;
+    }
     const port = await detectTorPort(torHost);
     setTorDetected(port ?? -1);
   }, [torEnabled, torHost]);
