@@ -89,9 +89,10 @@ export const CashFusionSettings: React.FC = () => {
   }
 
   const handleAddServer = () => {
-    const trimmed = newServer.trim();
-    if (trimmed) {
-      dispatch(addFusionServer(trimmed));
+    // Fusion servers have no labels — keep only the host:port token.
+    const target = newServer.trim().split(/\s+/)[0];
+    if (target) {
+      dispatch(addFusionServer(target));
       setNewServer('');
     }
   };
@@ -200,6 +201,10 @@ export const CashFusionSettings: React.FC = () => {
         )}
       </div>
 
+      {/* Fusion servers + phase note only show when CashFusion is enabled, so
+          disabling the toggle retracts the whole configuration. */}
+      {enabled && (
+        <>
       {/* Fusion servers — one unified list, like the Electrum pool. Click a row
           to select it, then Query. Your own servers can be removed. Tor config
           lives in its own panel above (TorSettings); the query uses that shared
@@ -357,6 +362,8 @@ export const CashFusionSettings: React.FC = () => {
           Your coins are not being fused yet.
         </p>
       </div>
+        </>
+      )}
 
     </div>
   );
