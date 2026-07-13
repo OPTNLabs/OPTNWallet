@@ -57,6 +57,7 @@ export const CashFusionSettings: React.FC = () => {
   const torPortManual = useSelector(selectTorPortManual);
 
   const [serverInput, setServerInput] = useState(savedServer ?? DEFAULT_SERVER);
+  const [fusionAuto, setFusionAuto] = useState(false);
   const [newServer, setNewServer] = useState('');
   const [connStatus, setConnStatus] = useState<ConnStatus>('idle');
   const [status, setStatus] = useState<FusionServerStatus | null>(null);
@@ -99,15 +100,28 @@ export const CashFusionSettings: React.FC = () => {
     setConnStatus('testing');
     setStatus(null);
     setErrorMsg(null);
-    const { host, port } = parseHostPort(serverInput ?? '');
-    try {
-      const result = await fetchFusionServerStatus(host, port, true, resolveTor(host));
-      setStatus(result);
-      setConnStatus('ok');
-    } catch (err) {
-      setErrorMsg(err instanceof Error ? err.message : String(err));
-      setConnStatus('fail');
+    // Auto tries each server in order and stops at the first that responds —
+    // the same failover the Electrum pool does. Manual queries only the
+    // selected server.
+    const targets = fusionAuto ? servers : [serverInput];
+    const errors: string[] = [];
+    for (const target of targets) {
+      const { host, port } = parseHostPort(target ?? '');
+      try {
+        const result = await fetchFusionServerStatus(host, port, true, resolveTor(host));
+        setStatus(result);
+        setConnStatus('ok');
+        if (fusionAuto) {
+          setServerInput(target);
+          dispatch(setFusionServer(target));
+        }
+        return;
+      } catch (err) {
+        errors.push(`${target}: ${err instanceof Error ? err.message : String(err)}`);
+      }
     }
+    setErrorMsg(fusionAuto ? `All servers failed — ${errors.join(' | ')}` : errors[0]);
+    setConnStatus('fail');
   };
 
   const connStatusBadge = () => {
@@ -194,23 +208,40 @@ export const CashFusionSettings: React.FC = () => {
         <p className="text-xs font-semibold wallet-text-strong">Fusion servers</p>
 
         <div className="flex flex-col gap-1.5">
+          {/* Auto — try each server until one responds (like the Electrum pool) */}
+          {servers.length > 1 && (
+            <button
+              type="button"
+              onClick={() => { setFusionAuto(true); setConnStatus('idle'); setStatus(null); }}
+              className={`rounded-xl border px-3 py-2 text-left text-xs font-semibold transition-colors ${
+                fusionAuto
+                  ? 'border-[var(--wallet-accent)] text-[var(--wallet-accent)] bg-[var(--wallet-accent)]/10'
+                  : 'border-[var(--wallet-border)] wallet-muted hover:wallet-text-strong'
+              }`}
+            >
+              <span className="flex items-center justify-between gap-2">
+                <span>Auto — try each until one responds</span>
+                {fusionAuto && <span className="text-[10px] whitespace-nowrap">● active</span>}
+              </span>
+            </button>
+          )}
           {servers.map((s) => (
             <div
               key={s}
               className={`flex items-center gap-2 rounded-xl border px-3 py-2 text-xs font-mono transition-colors ${
-                (serverInput ?? '') === s
+                !fusionAuto && (serverInput ?? '') === s
                   ? 'border-[var(--wallet-accent)] text-[var(--wallet-accent)] bg-[var(--wallet-accent)]/10'
                   : 'border-[var(--wallet-border)] wallet-muted hover:wallet-text-strong'
               }`}
             >
               <button
                 type="button"
-                onClick={() => { setServerInput(s); dispatch(setFusionServer(s)); setConnStatus('idle'); setStatus(null); }}
+                onClick={() => { setFusionAuto(false); setServerInput(s); dispatch(setFusionServer(s)); setConnStatus('idle'); setStatus(null); }}
                 className="flex-1 text-left break-all"
               >
                 <span className="flex items-center justify-between gap-2">
                   <span>{s}</span>
-                  {(serverInput ?? '') === s && <span className="text-[10px] font-semibold whitespace-nowrap">● selected</span>}
+                  {!fusionAuto && (serverInput ?? '') === s && <span className="text-[10px] font-semibold whitespace-nowrap">● selected</span>}
                 </span>
               </button>
               {servers.length > 1 && (
@@ -252,10 +283,10 @@ export const CashFusionSettings: React.FC = () => {
           <button
             type="button"
             onClick={() => void handleTest()}
-            disabled={connStatus === 'testing' || !FUSION_SUPPORTED || !(serverInput ?? '').trim()}
+            disabled={connStatus === 'testing' || !FUSION_SUPPORTED || (!fusionAuto && !(serverInput ?? '').trim())}
             className="rounded-xl border border-[var(--wallet-border)] bg-[var(--wallet-surface-strong)] px-3 py-1.5 text-xs font-semibold wallet-text-strong disabled:opacity-50 hover:brightness-95 transition-all"
           >
-            Query Server
+            {fusionAuto ? 'Query (Auto)' : 'Query Server'}
           </button>
           {connStatusBadge()}
         </div>
