@@ -43,3 +43,21 @@ export async function checkTorPort(_host: string, _port: number): Promise<boolea
   void _port;
   return false;
 }
+
+export type ManagedTorStatus = { running: boolean; bootstrap_percent: number; socks_port: number };
+
+// Integrated Tor is desktop-only (it spawns a real process). The shared default
+// reports it as unsupported/not-running.
+export const INTEGRATED_TOR_SUPPORTED = false;
+
+export async function startIntegratedTor(): Promise<number> {
+  throw new Error('Integrated Tor is only available in the desktop app.');
+}
+
+export async function stopIntegratedTor(): Promise<void> {
+  /* no-op */
+}
+
+export async function integratedTorStatus(): Promise<ManagedTorStatus> {
+  return { running: false, bootstrap_percent: 0, socks_port: 0 };
+}

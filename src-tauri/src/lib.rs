@@ -58,6 +58,73 @@ async fn fusion_tor_check(host: String, port: u16) -> bool {
     fusion::tor::is_tor_port(&host, port).await
 }
 
+// ── Integrated (app-managed) Tor ────────────────────────────────────────────
+//
+// SOCKS port for the app's own Tor — deliberately not 9050/9150 so it never
+// clashes with a Tor the user is already running.
+const INTEGRATED_TOR_SOCKS_PORT: u16 = 9251;
+
+/// Resolve where the tor binary + geoip data live: a dev override via
+/// OPTN_TOR_BIN, otherwise the bundled resource dir (resources/tor/).
+fn resolve_tor_paths(app: &tauri::AppHandle) -> Result<fusion::tor_manager::TorPaths, String> {
+    use tauri::Manager;
+    let data_dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| e.to_string())?
+        .join("tor-data");
+
+    if let Ok(bin) = std::env::var("OPTN_TOR_BIN") {
+        return Ok(fusion::tor_manager::TorPaths {
+            binary: std::path::PathBuf::from(bin),
+            data_dir,
+            geoip: std::env::var("OPTN_TOR_GEOIP").ok().map(std::path::PathBuf::from),
+            geoip6: std::env::var("OPTN_TOR_GEOIP6").ok().map(std::path::PathBuf::from),
+        });
+    }
+
+    let tor_dir = app.path().resource_dir().map_err(|e| e.to_string())?.join("tor");
+    let binary = tor_dir.join(if cfg!(windows) { "tor.exe" } else { "tor" });
+    let geoip = tor_dir.join("geoip");
+    let geoip6 = tor_dir.join("geoip6");
+    Ok(fusion::tor_manager::TorPaths {
+        binary,
+        data_dir,
+        geoip: geoip.exists().then_some(geoip),
+        geoip6: geoip6.exists().then_some(geoip6),
+    })
+}
+
+/// Start the integrated Tor and wait for it to bootstrap. Returns the SOCKS port.
+#[tauri::command]
+async fn tor_start(app: tauri::AppHandle) -> Result<u16, String> {
+    let paths = resolve_tor_paths(&app)?;
+    if !paths.binary.exists() && std::env::var("OPTN_TOR_BIN").is_err() {
+        return Err(format!(
+            "Tor binary not found at {} — this build does not bundle Tor yet.",
+            paths.binary.display()
+        ));
+    }
+    fusion::tor_manager::start(
+        paths,
+        INTEGRATED_TOR_SOCKS_PORT,
+        std::time::Duration::from_secs(120),
+    )
+    .await
+}
+
+/// Stop the integrated Tor.
+#[tauri::command]
+async fn tor_stop() -> Result<(), String> {
+    fusion::tor_manager::stop().await
+}
+
+/// Current integrated-Tor status (running / bootstrap % / SOCKS port).
+#[tauri::command]
+fn tor_status() -> fusion::tor_manager::TorStatus {
+    fusion::tor_manager::status()
+}
+
 // Desktop-only price fetch.
 //
 // The OPTN price server rejects (HTTP 500) any browser `Origin` header, and
@@ -135,6 +202,9 @@ pub fn run() {
             fusion_server_status,
             fusion_tor_detect,
             fusion_tor_check,
+            tor_start,
+            tor_stop,
+            tor_status,
             electrum_tcp::electrum_tcp_connect,
             electrum_tcp::electrum_tcp_send,
             electrum_tcp::electrum_tcp_close
