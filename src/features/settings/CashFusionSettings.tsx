@@ -87,11 +87,6 @@ export const CashFusionSettings: React.FC = () => {
     return { host: torHost, port };
   }
 
-  const handleSaveServer = () => {
-    const trimmed = (serverInput ?? '').trim();
-    if (trimmed) dispatch(setFusionServer(trimmed));
-  };
-
   const handleAddServer = () => {
     const trimmed = newServer.trim();
     if (trimmed) {
@@ -191,27 +186,68 @@ export const CashFusionSettings: React.FC = () => {
         )}
       </div>
 
-      {/* Server configuration */}
+      {/* Fusion servers — one unified list, like the Electrum pool. Click a row
+          to select it, then Query. Your own servers can be removed. Tor config
+          lives in its own panel above (TorSettings); the query uses that shared
+          Tor state via resolveTor(). */}
       <div className="rounded-xl border border-[var(--wallet-border)] bg-[var(--wallet-surface)] p-4 space-y-3">
-        <p className="text-xs font-semibold wallet-text-strong">Server</p>
+        <p className="text-xs font-semibold wallet-text-strong">Fusion servers</p>
 
-        <div className="flex gap-2">
-          <input
-            type="text"
-            value={serverInput}
-            onChange={(e) => { setServerInput(e.target.value); setConnStatus('idle'); }}
-            placeholder="host:port (e.g. cashfusion.electroncash.dk:8787)"
-            className="flex-1 rounded-xl border border-[var(--wallet-border)] bg-[var(--wallet-surface-strong)] px-3 py-2 font-mono text-xs wallet-text-strong placeholder:wallet-muted focus:outline-none focus:border-[var(--wallet-accent)]/60"
-          />
-          <button
-            type="button"
-            onClick={handleSaveServer}
-            className="rounded-xl border border-[var(--wallet-accent)]/40 px-3 py-2 text-xs font-semibold text-[var(--wallet-accent)] hover:bg-[var(--wallet-accent)]/5 transition-colors whitespace-nowrap"
-          >
-            Save
-          </button>
+        <div className="flex flex-col gap-1.5">
+          {servers.map((s) => (
+            <div
+              key={s}
+              className={`flex items-center gap-2 rounded-xl border px-3 py-2 text-xs font-mono transition-colors ${
+                (serverInput ?? '') === s
+                  ? 'border-[var(--wallet-accent)] text-[var(--wallet-accent)] bg-[var(--wallet-accent)]/10'
+                  : 'border-[var(--wallet-border)] wallet-muted hover:wallet-text-strong'
+              }`}
+            >
+              <button
+                type="button"
+                onClick={() => { setServerInput(s); dispatch(setFusionServer(s)); setConnStatus('idle'); setStatus(null); }}
+                className="flex-1 text-left break-all"
+              >
+                <span className="flex items-center justify-between gap-2">
+                  <span>{s}</span>
+                  {(serverInput ?? '') === s && <span className="text-[10px] font-semibold whitespace-nowrap">● selected</span>}
+                </span>
+              </button>
+              {servers.length > 1 && (
+                <button
+                  type="button"
+                  onClick={() => dispatch(removeFusionServer(s))}
+                  className="text-[10px] text-red-400/70 hover:text-red-400 px-1 shrink-0"
+                  aria-label={`Remove ${s}`}
+                >
+                  Remove
+                </button>
+              )}
+            </div>
+          ))}
+
+          {/* Add a fusion server */}
+          <div className="flex gap-2 pt-1">
+            <input
+              type="text"
+              value={newServer}
+              onChange={(e) => setNewServer(e.target.value)}
+              onKeyDown={(e) => { if (e.key === 'Enter') handleAddServer(); }}
+              placeholder="Add server — host:port (e.g. fusion.example.com:8789)"
+              className="flex-1 rounded-xl border border-[var(--wallet-border)] bg-[var(--wallet-surface)] px-3 py-2 font-mono text-xs wallet-text-strong placeholder:wallet-muted focus:outline-none focus:border-[var(--wallet-accent)]/60"
+            />
+            <button
+              type="button"
+              onClick={handleAddServer}
+              disabled={!newServer.trim()}
+              className="rounded-xl border border-[var(--wallet-accent)]/40 px-3 py-2 text-xs font-semibold text-[var(--wallet-accent)] hover:bg-[var(--wallet-accent)]/5 disabled:opacity-40 transition-colors"
+            >
+              Add
+            </button>
+          </div>
         </div>
 
+        {/* Query the selected server */}
         <div className="flex items-center gap-3">
           <button
             type="button"
@@ -230,16 +266,15 @@ export const CashFusionSettings: React.FC = () => {
             Available in the desktop app.
           </p>
         )}
-
         {FUSION_SUPPORTED && torActive && !torReady && (
           <p className="text-[10px] text-yellow-400/80 leading-relaxed">
-            This is a remote server, so Tor is required — but no Tor proxy was found. Start Tor and
-            press “Check Tor” above, or the query will be refused.
+            This is a remote server, so Tor is required — but no Tor proxy was found. Start Tor in the
+            Tor panel above, or the query will be refused.
           </p>
         )}
         {FUSION_SUPPORTED && !torActive && !isLocalHost(selectedHost) && (
           <p className="text-[10px] text-yellow-400/80 leading-relaxed">
-            Tor is off. Remote fusion queries will be refused — enable Tor above, or use a localhost server.
+            Tor is off. Remote fusion queries will be refused — enable Tor in the panel above, or use a localhost server.
           </p>
         )}
         {FUSION_SUPPORTED && torActive && torReady && (
@@ -247,7 +282,6 @@ export const CashFusionSettings: React.FC = () => {
             Connecting via Tor{torAuto && torDetected ? ` (port ${torDetected})` : ''}.
           </p>
         )}
-
         {connStatus === 'fail' && errorMsg && (
           <p className="text-[10px] text-red-400/80 leading-relaxed">{errorMsg}</p>
         )}
@@ -277,69 +311,10 @@ export const CashFusionSettings: React.FC = () => {
             )}
           </div>
         )}
-      </div>
 
-      {/* Tor configuration lives in its own panel directly below the server
-          pool (see TorSettings); the fusion query below uses that shared Tor
-          state via resolveTor(). */}
-
-      {/* Server list */}
-      <div className="rounded-xl border border-[var(--wallet-border)] bg-[var(--wallet-surface)] p-4 space-y-2">
-        <p className="text-xs font-semibold wallet-text-strong">Fusion Servers</p>
-        <div className="space-y-1.5">
-          {servers.map((s) => (
-            <div
-              key={s}
-              className={`flex items-center gap-2 rounded-lg border px-3 py-2 transition-colors ${
-                (serverInput ?? '') === s
-                  ? 'border-[var(--wallet-accent)]/50 bg-[var(--wallet-accent)]/10'
-                  : 'border-[var(--wallet-border)] bg-[var(--wallet-surface-strong)]'
-              }`}
-            >
-              <button
-                type="button"
-                onClick={() => { setServerInput(s); dispatch(setFusionServer(s)); setConnStatus('idle'); }}
-                className="flex-1 text-left"
-              >
-                <p className="font-mono text-[11px] wallet-text-strong">{s}</p>
-              </button>
-              {servers.length > 1 && (
-                <button
-                  type="button"
-                  onClick={() => dispatch(removeFusionServer(s))}
-                  className="text-[10px] text-red-400/70 hover:text-red-400 px-1"
-                  aria-label={`Remove ${s}`}
-                >
-                  Remove
-                </button>
-              )}
-            </div>
-          ))}
-        </div>
-
-        {/* Add server */}
-        <div className="flex gap-2 pt-1">
-          <input
-            type="text"
-            value={newServer}
-            onChange={(e) => setNewServer(e.target.value)}
-            onKeyDown={(e) => { if (e.key === 'Enter') handleAddServer(); }}
-            placeholder="host:port (e.g. fusion.example.com:8789)"
-            className="flex-1 rounded-xl border border-[var(--wallet-border)] bg-[var(--wallet-surface-strong)] px-3 py-2 font-mono text-xs wallet-text-strong placeholder:wallet-muted focus:outline-none focus:border-[var(--wallet-accent)]/60"
-          />
-          <button
-            type="button"
-            onClick={handleAddServer}
-            disabled={!newServer.trim()}
-            className="rounded-xl border border-[var(--wallet-accent)]/40 px-3 py-2 text-xs font-semibold text-[var(--wallet-accent)] hover:bg-[var(--wallet-accent)]/5 disabled:opacity-40 transition-colors"
-          >
-            Add
-          </button>
-        </div>
         <p className="text-[10px] wallet-muted leading-relaxed">
           CashFusion intentionally has few public servers — a larger anonymity set on fewer servers
-          beats being spread thin. fusion.servo.cash is the only widely-run public one; add your own
-          or a community server above.
+          beats being spread thin. Add your own or a community server above.
         </p>
       </div>
 
