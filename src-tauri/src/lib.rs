@@ -74,6 +74,9 @@ fn resolve_tor_paths(app: &tauri::AppHandle) -> Result<fusion::tor_manager::TorP
         .map_err(|e| e.to_string())?
         .join("tor-data");
 
+    let bin_name = if cfg!(windows) { "tor.exe" } else { "tor" };
+
+    // 1. Explicit override (dev / tests).
     if let Ok(bin) = std::env::var("OPTN_TOR_BIN") {
         return Ok(fusion::tor_manager::TorPaths {
             binary: std::path::PathBuf::from(bin),
@@ -83,12 +86,35 @@ fn resolve_tor_paths(app: &tauri::AppHandle) -> Result<fusion::tor_manager::TorP
         });
     }
 
-    // Resolve the bundled resources/tor dir (see tauri.conf.json bundle.resources).
+    // 2. Dev fallback: the binary staged into the source tree by
+    //    scripts/fetch-tor.mjs. `tauri dev` doesn't copy bundled resources, so
+    //    without this integrated Tor wouldn't work in dev. CARGO_MANIFEST_DIR is
+    //    baked at compile time and only resolves on the build machine, so this
+    //    is naturally inert in a packaged build.
+    #[cfg(debug_assertions)]
+    {
+        let dev_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("resources")
+            .join("tor");
+        let dev_bin = dev_dir.join(bin_name);
+        if dev_bin.exists() {
+            let geoip = dev_dir.join("geoip");
+            let geoip6 = dev_dir.join("geoip6");
+            return Ok(fusion::tor_manager::TorPaths {
+                binary: dev_bin,
+                data_dir,
+                geoip: geoip.exists().then_some(geoip),
+                geoip6: geoip6.exists().then_some(geoip6),
+            });
+        }
+    }
+
+    // 3. Bundled resource (see tauri.conf.json bundle.resources).
     let tor_dir = app
         .path()
         .resolve("resources/tor", tauri::path::BaseDirectory::Resource)
         .map_err(|e| e.to_string())?;
-    let binary = tor_dir.join(if cfg!(windows) { "tor.exe" } else { "tor" });
+    let binary = tor_dir.join(bin_name);
     let geoip = tor_dir.join("geoip");
     let geoip6 = tor_dir.join("geoip6");
     Ok(fusion::tor_manager::TorPaths {
