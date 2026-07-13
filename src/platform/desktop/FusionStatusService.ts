@@ -56,4 +56,23 @@ export async function checkTorPort(host: string, port: number): Promise<boolean>
   return invoke<boolean>('fusion_tor_check', { host, port });
 }
 
+export type ManagedTorStatus = { running: boolean; bootstrap_percent: number; socks_port: number };
+
+/** Start the app's integrated Tor and wait for bootstrap. Returns SOCKS port. */
+export async function startIntegratedTor(): Promise<number> {
+  return invoke<number>('tor_start');
+}
+
+/** Stop the app's integrated Tor. */
+export async function stopIntegratedTor(): Promise<void> {
+  await invoke('tor_stop');
+}
+
+/** Status of the app's integrated Tor. */
+export async function integratedTorStatus(): Promise<ManagedTorStatus> {
+  return invoke<ManagedTorStatus>('tor_status');
+}
+
+export const INTEGRATED_TOR_SUPPORTED = true;
+
 export type { FusionServerStatus, TorConfig };
