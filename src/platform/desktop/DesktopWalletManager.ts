@@ -466,11 +466,27 @@ export async function disableWalletBiometric(walletId: number): Promise<void> {
  * instead of a generic "cancelled or failed".
  */
 export async function unlockWalletWithBiometric(walletId: number): Promise<WalletRecord> {
-  const result = await bioGetData({
-    domain: BIO_DOMAIN,
-    name: bioName(walletId),
-    reason: 'Unlock OPTN Wallet',
-  });
+  let result: Awaited<ReturnType<typeof bioGetData>>;
+  try {
+    result = await bioGetData({
+      domain: BIO_DOMAIN,
+      name: bioName(walletId),
+      reason: 'Unlock OPTN Wallet',
+    });
+  } catch (err) {
+    // A stale enrollment (secret saved by an earlier build/credential, or after
+    // an OS re-key) fails to decrypt — Windows surfaces this as decryptionFailed
+    // / CRC (HRESULT 0x80070017). It is not recoverable by retrying; the user
+    // must re-save the secret. Translate the raw HRESULT into that instruction.
+    const raw = err instanceof Error ? err.message : String(err);
+    if (/decryptionFailed/i.test(raw) || raw.includes('0x80070017')) {
+      throw new Error(
+        'Saved biometric data is out of date and can no longer be decrypted. ' +
+          'Turn biometric unlock off and on again for this wallet to re-save it.'
+      );
+    }
+    throw err;
+  }
   if (!result.data) {
     throw new Error('No biometric secret was returned by the OS.');
   }
