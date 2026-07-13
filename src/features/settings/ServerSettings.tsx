@@ -11,7 +11,7 @@ import {
   setExplorerCustom,
 } from '../../state/slices/preferencesSlice';
 import { EXPLORER_PRESETS } from '../../utils/servers/explorers';
-import { getUserServers, addUserServer, removeUserServer, isValidServerEntry } from '../../utils/servers/userServers';
+import { getUserServers, addUserServer, removeUserServer, isValidServerEntry, getServerLabel } from '../../utils/servers/userServers';
 import { CashFusionSettings } from './CashFusionSettings';
 import { TorSettings } from './TorSettings';
 
@@ -116,6 +116,27 @@ export const ServerSettings: React.FC = () => {
     }
   };
 
+  // Connect directly to a server from the pool list (one click, no separate
+  // Connect button needed).
+  const connectToServer = async (server: string) => {
+    setAutoMode(false);
+    setCustomServer(server);
+    setConnecting(true);
+    setError('');
+    setStatus('');
+    try {
+      saveUserServer(server);
+      await getElectrumAdapter().reconnect(server);
+      refreshCurrent();
+      setStatus('Connected.');
+      setTimeout(() => setStatus(''), 3000);
+    } catch (err) {
+      setError(`Connection failed: ${err instanceof Error ? err.message : String(err)}`);
+    } finally {
+      setConnecting(false);
+    }
+  };
+
   return (
     <div className="flex flex-col gap-4">
 
@@ -181,73 +202,59 @@ export const ServerSettings: React.FC = () => {
         {connecting ? 'Connecting…' : 'Connect'}
       </button>
 
-      {/* Default server pool */}
+      {/* Server pool — seed servers + your own, in one list. Click a row to
+          connect to it; your own servers can also be removed. */}
       <div className="flex flex-col gap-1.5">
         <p className="text-xs font-semibold wallet-muted uppercase tracking-wide">
           {currentNetwork} server pool
         </p>
-        {defaultServers.map((srv) => (
-          <button
-            key={srv}
-            onClick={() => {
-              setAutoMode(false);
-              setCustomServer(srv);
-              setError('');
-            }}
-            className={`w-full rounded-xl border px-3 py-2 text-left text-xs font-mono transition-colors ${
-              currentServer === srv
-                ? 'border-[var(--wallet-accent)] text-[var(--wallet-accent)] bg-[var(--wallet-accent)]/10'
-                : 'border-[var(--wallet-border)] wallet-muted hover:wallet-text-strong'
-            }`}
-          >
-            <span className="flex items-center justify-between">
-              <span>{srv}</span>
-              {currentServer === srv && <span className="text-[10px] font-semibold">● active</span>}
-            </span>
-          </button>
-        ))}
-      </div>
+        {defaultServers.map((srv) => {
+          const isMine = userServers.includes(srv);
+          const label = isMine ? getServerLabel(currentNetwork, srv) : undefined;
+          return (
+            <div
+              key={srv}
+              className={`flex items-center gap-2 rounded-xl border px-3 py-2 text-xs font-mono transition-colors ${
+                currentServer === srv
+                  ? 'border-[var(--wallet-accent)] text-[var(--wallet-accent)] bg-[var(--wallet-accent)]/10'
+                  : 'border-[var(--wallet-border)] wallet-muted hover:wallet-text-strong'
+              }`}
+            >
+              <button
+                onClick={() => void connectToServer(srv)}
+                disabled={connecting}
+                className="flex-1 text-left disabled:opacity-60"
+                title="Connect to this server"
+              >
+                <span className="flex items-center justify-between gap-2">
+                  <span className="break-all">
+                    {label ? <span className="font-sans">{label}</span> : srv}
+                    {label && <span className="ml-1.5 opacity-50">{srv}</span>}
+                  </span>
+                  {currentServer === srv && <span className="text-[10px] font-semibold whitespace-nowrap">● active</span>}
+                </span>
+              </button>
+              {isMine && (
+                <button
+                  onClick={() => handleRemoveUserServer(srv)}
+                  className="text-[10px] text-red-400/70 hover:text-red-400 px-1 shrink-0"
+                  aria-label={`Remove ${srv}`}
+                >
+                  Remove
+                </button>
+              )}
+            </div>
+          );
+        })}
 
-      {/* Your servers (user-added, incl. a self-hosted Fulcrum on the LAN) */}
-      <div className="flex flex-col gap-1.5">
-        <p className="text-xs font-semibold wallet-muted uppercase tracking-wide">Your servers</p>
-        {userServers.length === 0 && (
-          <p className="text-[10px] wallet-muted">Add your own Electrum/Fulcrum server below — it's saved and used for auto-select too.</p>
-        )}
-        {userServers.map((srv) => (
-          <div
-            key={srv}
-            className={`flex items-center gap-2 rounded-xl border px-3 py-2 text-xs font-mono transition-colors ${
-              currentServer === srv
-                ? 'border-[var(--wallet-accent)] text-[var(--wallet-accent)] bg-[var(--wallet-accent)]/10'
-                : 'border-[var(--wallet-border)] wallet-muted'
-            }`}
-          >
-            <button
-              onClick={() => { setAutoMode(false); setCustomServer(srv); setError(''); }}
-              className="flex-1 text-left"
-            >
-              <span className="flex items-center justify-between">
-                <span>{srv}</span>
-                {currentServer === srv && <span className="text-[10px] font-semibold">● active</span>}
-              </span>
-            </button>
-            <button
-              onClick={() => handleRemoveUserServer(srv)}
-              className="text-[10px] text-red-400/70 hover:text-red-400 px-1"
-              aria-label={`Remove ${srv}`}
-            >
-              Remove
-            </button>
-          </div>
-        ))}
+        {/* Add your own Electrum/Fulcrum server (host:port or LAN IP) */}
         <div className="flex gap-2 pt-1">
           <input
             type="text"
             value={newServer}
             onChange={(e) => { setNewServer(e.target.value); setAddError(''); }}
             onKeyDown={(e) => { if (e.key === 'Enter') handleAddUserServer(); }}
-            placeholder="host:port or 192.168.0.129:50002"
+            placeholder="Add server — host:port, or 192.168.0.129:50002 My Fulcrum"
             className="flex-1 rounded-xl border border-[var(--wallet-border)] bg-[var(--wallet-surface)] px-3 py-2 text-xs font-mono wallet-text-strong placeholder:wallet-muted outline-none focus:ring-1 focus:ring-[var(--wallet-accent)]"
           />
           <button
