@@ -21,9 +21,6 @@ import {
   setFusionServer,
   addFusionServer,
   removeFusionServer,
-  setTorEnabled,
-  setTorAuto,
-  setTorPortManual,
 } from '../../state/slices/experimentalSlice';
 import {
   fetchFusionServerStatus,
@@ -66,19 +63,14 @@ export const CashFusionSettings: React.FC = () => {
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [showProtocolInfo, setShowProtocolInfo] = useState(false);
 
-  // Live Tor detection — null = not yet checked, -1 = not found, >0 = port.
+  // Tor port detected for the query below. The Tor config UI lives in
+  // TorSettings; here we just resolve the current proxy for resolveTor().
   const [torDetected, setTorDetected] = useState<number | null>(null);
-  const [torChecking, setTorChecking] = useState(false);
 
   const refreshTor = React.useCallback(async () => {
     if (!FUSION_SUPPORTED || !torEnabled) return;
-    setTorChecking(true);
-    try {
-      const port = await detectTorPort(torHost);
-      setTorDetected(port ?? -1);
-    } finally {
-      setTorChecking(false);
-    }
+    const port = await detectTorPort(torHost);
+    setTorDetected(port ?? -1);
   }, [torEnabled, torHost]);
 
   useEffect(() => {
@@ -287,90 +279,9 @@ export const CashFusionSettings: React.FC = () => {
         )}
       </div>
 
-      {/* Tor */}
-      <div className="rounded-xl border border-[var(--wallet-border)] bg-[var(--wallet-surface)] p-4 space-y-3">
-        <div className="flex items-center justify-between gap-3">
-          <div>
-            <p className="text-xs font-semibold wallet-text-strong">Route through Tor</p>
-            <p className="text-[10px] wallet-muted">Required for remote fusion servers</p>
-          </div>
-          <button
-            onClick={() => dispatch(setTorEnabled(!torEnabled))}
-            className={`relative inline-flex h-6 w-11 shrink-0 items-center rounded-full border transition-colors ${
-              torEnabled ? 'bg-[var(--wallet-accent)] border-[var(--wallet-accent)]' : 'wallet-surface-strong border-[var(--wallet-border)]'
-            }`}
-            aria-label={`${torEnabled ? 'Disable' : 'Enable'} Tor`}
-          >
-            <span className={`inline-block h-5 w-5 rounded-full bg-white shadow transition-transform ${torEnabled ? 'translate-x-5' : 'translate-x-0.5'}`} />
-          </button>
-        </div>
-
-        {torEnabled && (
-          <>
-            {/* Auto/manual port */}
-            <div className="flex items-center gap-2">
-              <button
-                type="button"
-                onClick={() => dispatch(setTorAuto(true))}
-                className={`flex-1 rounded-lg border px-2 py-1.5 text-[10px] font-semibold transition-colors ${
-                  torAuto ? 'border-[var(--wallet-accent)]/50 bg-[var(--wallet-accent)]/10 text-[var(--wallet-accent)]' : 'border-[var(--wallet-border)] wallet-muted'
-                }`}
-              >
-                Auto-detect (9050 / 9150)
-              </button>
-              <button
-                type="button"
-                onClick={() => dispatch(setTorAuto(false))}
-                className={`flex-1 rounded-lg border px-2 py-1.5 text-[10px] font-semibold transition-colors ${
-                  !torAuto ? 'border-[var(--wallet-accent)]/50 bg-[var(--wallet-accent)]/10 text-[var(--wallet-accent)]' : 'border-[var(--wallet-border)] wallet-muted'
-                }`}
-              >
-                Manual port
-              </button>
-            </div>
-
-            {!torAuto && (
-              <input
-                type="number"
-                value={torPortManual}
-                onChange={(e) => dispatch(setTorPortManual(Number(e.target.value) || 9050))}
-                placeholder="9050"
-                className="w-full rounded-xl border border-[var(--wallet-border)] bg-[var(--wallet-surface-strong)] px-3 py-2 font-mono text-xs wallet-text-strong focus:outline-none focus:border-[var(--wallet-accent)]/60"
-              />
-            )}
-
-            {/* Live status */}
-            <div className="flex items-center gap-2">
-              <button
-                type="button"
-                onClick={() => void refreshTor()}
-                disabled={torChecking || !FUSION_SUPPORTED}
-                className="rounded-lg border border-[var(--wallet-border)] bg-[var(--wallet-surface-strong)] px-2.5 py-1 text-[10px] font-semibold wallet-text-strong disabled:opacity-50"
-              >
-                {torChecking ? 'Checking…' : 'Check Tor'}
-              </button>
-              {!FUSION_SUPPORTED ? (
-                <span className="text-[10px] wallet-muted">Desktop only</span>
-              ) : torAuto && torDetected !== null ? (
-                torDetected > 0 ? (
-                  <span className="text-[10px] text-green-400 font-semibold">Tor found on port {torDetected} ✓</span>
-                ) : (
-                  <span className="text-[10px] text-red-400 font-semibold">No Tor proxy running ✗</span>
-                )
-              ) : (
-                <span className="text-[10px] wallet-muted">Using manual port {torPortManual}</span>
-              )}
-            </div>
-
-            {torAuto && torDetected === -1 && (
-              <p className="text-[10px] text-yellow-400/80 leading-relaxed">
-                Start Tor Browser (uses port 9150) or a system Tor daemon (9050), then check again.
-                Without Tor, remote fusion is blocked.
-              </p>
-            )}
-          </>
-        )}
-      </div>
+      {/* Tor configuration lives in its own panel directly below the server
+          pool (see TorSettings); the fusion query below uses that shared Tor
+          state via resolveTor(). */}
 
       {/* Server list */}
       <div className="rounded-xl border border-[var(--wallet-border)] bg-[var(--wallet-surface)] p-4 space-y-2">
