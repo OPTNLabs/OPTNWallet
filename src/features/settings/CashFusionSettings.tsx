@@ -89,11 +89,21 @@ export const CashFusionSettings: React.FC = () => {
   // The SOCKS proxy to actually route through, or undefined for a direct
   // connection. Direct is only valid for a localhost server (Electron Cash's
   // one exemption) — for a remote server with no Tor, the Rust side refuses.
-  function resolveTor(host: string): TorConfig | undefined {
+  // Resolve the Tor proxy to route through, checked LIVE at query time (not from
+  // stale mount-time state) so starting the integrated Tor and then querying
+  // works. Priority: integrated Tor (if running) -> external auto-detect ->
+  // manual port. Undefined = direct (only valid for a localhost server).
+  async function currentTorConfig(host: string): Promise<TorConfig | undefined> {
     if (!torEnabled || isLocalHost(host)) return undefined;
-    const port = torAuto ? (torDetected && torDetected > 0 ? torDetected : undefined) : torPortManual;
-    if (!port) return undefined;
-    return { host: torHost, port };
+    const managed = await integratedTorStatus();
+    if (managed.running && managed.bootstrap_percent >= 100 && managed.socks_port > 0) {
+      return { host: torHost, port: managed.socks_port };
+    }
+    if (torAuto) {
+      const port = await detectTorPort(torHost);
+      return port ? { host: torHost, port } : undefined;
+    }
+    return { host: torHost, port: torPortManual };
   }
 
   const handleAddServer = () => {
@@ -117,7 +127,8 @@ export const CashFusionSettings: React.FC = () => {
     for (const target of targets) {
       const { host, port } = parseHostPort(target ?? '');
       try {
-        const result = await fetchFusionServerStatus(host, port, true, resolveTor(host));
+        const torCfg = await currentTorConfig(host);
+        const result = await fetchFusionServerStatus(host, port, true, torCfg);
         setStatus(result);
         setConnStatus('ok');
         if (fusionAuto) {
