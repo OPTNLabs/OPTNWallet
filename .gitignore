@@ -37,3 +37,7 @@ android/key.properties
 
 # Assistant-internal tooling (not part of the app)
 .serena/
+
+# Tor binary fetched at build time (scripts/fetch-tor.mjs), not committed
+src-tauri/resources/tor/
+.tor-fetch-tmp/
