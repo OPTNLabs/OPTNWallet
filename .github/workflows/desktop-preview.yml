@@ -75,6 +75,9 @@ jobs:
       - name: Install npm dependencies
         run: npm ci
 
+      - name: Fetch bundled Tor (integrated CashFusion privacy)
+        run: node scripts/fetch-tor.mjs
+
       - name: Build Tauri (debug)
         run: npx tauri build --debug
 

@@ -83,7 +83,11 @@ fn resolve_tor_paths(app: &tauri::AppHandle) -> Result<fusion::tor_manager::TorP
         });
     }
 
-    let tor_dir = app.path().resource_dir().map_err(|e| e.to_string())?.join("tor");
+    // Resolve the bundled resources/tor dir (see tauri.conf.json bundle.resources).
+    let tor_dir = app
+        .path()
+        .resolve("resources/tor", tauri::path::BaseDirectory::Resource)
+        .map_err(|e| e.to_string())?;
     let binary = tor_dir.join(if cfg!(windows) { "tor.exe" } else { "tor" });
     let geoip = tor_dir.join("geoip");
     let geoip6 = tor_dir.join("geoip6");
