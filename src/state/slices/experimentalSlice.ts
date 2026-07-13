@@ -57,12 +57,20 @@ const experimentalSlice = createSlice({
     },
     addFusionServer(state, action: PayloadAction<string>) {
       const server = normalizeServer(action.payload);
+      // State persisted before fusionServers existed rehydrates without this
+      // array; initialise it so a push can't throw on it.
+      if (!Array.isArray(state.fusionServers)) {
+        state.fusionServers = state.fusionServer ? [state.fusionServer] : [DEFAULT_FUSION_SERVER];
+      }
       if (server && !state.fusionServers.includes(server)) {
         state.fusionServers.push(server);
       }
     },
     removeFusionServer(state, action: PayloadAction<string>) {
       const server = normalizeServer(action.payload);
+      if (!Array.isArray(state.fusionServers)) {
+        state.fusionServers = state.fusionServer ? [state.fusionServer] : [DEFAULT_FUSION_SERVER];
+      }
       state.fusionServers = state.fusionServers.filter((s) => s !== server);
       // Never leave the selected server pointing at something no longer in the list.
       if (state.fusionServer === server) {
