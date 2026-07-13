@@ -1,4 +1,5 @@
 import { createSlice, PayloadAction } from '@reduxjs/toolkit';
+import { createSelector } from 'reselect';
 import type { RootState } from '../store';
 
 // Electron Cash ships exactly one default fusion server (conf.py
@@ -111,13 +112,20 @@ export const selectCashFusionEnabled = (state: RootState) => state.experimental.
 export const selectFusionServer = (state: RootState) =>
   migrateDeadServer(state.experimental.fusionServer);
 // Older persisted state won't have the list — fall back to the single selected
-// server (migrated to the real default if it's the dead one).
-export const selectFusionServers = (state: RootState): string[] => {
-  const list = state.experimental.fusionServers;
-  const raw = list && list.length > 0 ? list : [state.experimental.fusionServer || DEFAULT_FUSION_SERVER];
-  // Migrate the dead host and dedupe.
-  return Array.from(new Set(raw.map(migrateDeadServer)));
-};
+// server (migrated to the real default if it's the dead one). Memoized with
+// createSelector so it returns a stable array reference; a selector that built
+// a fresh array on every call breaks React-Redux's useSyncExternalStore and
+// triggers an infinite render loop.
+export const selectFusionServers = createSelector(
+  [
+    (state: RootState) => state.experimental.fusionServers,
+    (state: RootState) => state.experimental.fusionServer,
+  ],
+  (list, single): string[] => {
+    const raw = list && list.length > 0 ? list : [single || DEFAULT_FUSION_SERVER];
+    return Array.from(new Set(raw.map(migrateDeadServer)));
+  }
+);
 export const selectTorEnabled = (state: RootState) => state.experimental.torEnabled !== false;
 export const selectTorAuto = (state: RootState) => state.experimental.torAuto !== false;
 export const selectTorHost = (state: RootState) => state.experimental.torHost ?? '127.0.0.1';
