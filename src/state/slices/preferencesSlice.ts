@@ -1,4 +1,5 @@
 import { createSlice, type PayloadAction } from '@reduxjs/toolkit';
+import { createSelector } from 'reselect';
 import type { RootState } from '../store';
 import { DEFAULT_EXPLORER_ID, type ExplorerChoice } from '../../utils/servers/explorers';
 
@@ -65,25 +66,33 @@ export const selectPreferInternalChangeForBch = (state: RootState) =>
 export const selectTooltipsEnabled = (state: RootState) =>
   state.preferences.enableTooltips;
 
-// Resolves persisted preference (older state has no explorer fields) into the
-// ExplorerChoice the URL builders take.
-export const selectExplorerChoice = (state: RootState): ExplorerChoice => {
-  const id = state.preferences.explorerId ?? DEFAULT_EXPLORER_ID;
-  if (id === 'custom') {
-    return {
-      kind: 'custom',
-      tx: state.preferences.explorerCustomTx || '',
-      address: state.preferences.explorerCustomAddress || '',
-    };
-  }
-  return { kind: 'preset', id };
-};
-
+// Memoized with createSelector so these return stable references. A selector
+// that builds a fresh object on every call breaks React-Redux's
+// useSyncExternalStore and can trigger an infinite render loop in any component
+// that reads it.
 export const selectExplorerId = (state: RootState) =>
   state.preferences.explorerId ?? DEFAULT_EXPLORER_ID;
-export const selectExplorerCustom = (state: RootState) => ({
-  tx: state.preferences.explorerCustomTx ?? '',
-  address: state.preferences.explorerCustomAddress ?? '',
-});
+
+// Resolves persisted preference (older state has no explorer fields) into the
+// ExplorerChoice the URL builders take.
+export const selectExplorerChoice = createSelector(
+  [
+    selectExplorerId,
+    (state: RootState) => state.preferences.explorerCustomTx,
+    (state: RootState) => state.preferences.explorerCustomAddress,
+  ],
+  (id, customTx, customAddress): ExplorerChoice =>
+    id === 'custom'
+      ? { kind: 'custom', tx: customTx || '', address: customAddress || '' }
+      : { kind: 'preset', id }
+);
+
+export const selectExplorerCustom = createSelector(
+  [
+    (state: RootState) => state.preferences.explorerCustomTx,
+    (state: RootState) => state.preferences.explorerCustomAddress,
+  ],
+  (tx, address) => ({ tx: tx ?? '', address: address ?? '' })
+);
 
 export default preferencesSlice.reducer;
