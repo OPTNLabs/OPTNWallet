@@ -20,6 +20,7 @@ import { EcKeyManager } from './EcKeyManager';
 import WalletManager from '../../apis/WalletManager/WalletManager';
 import { buildWalletFileContents } from './DesktopWalletManager';
 import { parseWalletFile, defaultWalletFileName } from './walletFile';
+import { openWalletPickerWindow } from './walletWindow';
 
 // Landing page listens for these.
 export const OPEN_WALLET_EVENT = 'optn:open-wallet'; // quick-open a saved DB wallet by id
@@ -35,14 +36,18 @@ async function walletsDir(): Promise<string | undefined> {
   }
 }
 
-// Go to the wallet picker to start a new/import/hardware wallet or open an
-// existing one. NOTE: this navigates WITHIN the current window rather than
-// opening a second OS window. Multiple windows each run their own in-memory
-// SQLite DB but share one IndexedDB blob, so a second window silently
-// overwrites the first's wallets — true multi-window needs per-wallet files
-// (the .optn files are the start of that) before it is safe to re-enable.
-function goToPicker(navigate: (p: string) => void) {
-  navigate(ROUTE_PATHS.landing);
+// Open the wallet picker to start a new/import/hardware wallet or open an
+// existing one. Preferred path: a second independent OS window
+// (openWalletPickerWindow) so two wallets can be open side by side; the shared
+// IndexedDB blob is guarded against cross-window clobber in DatabaseService.
+// Falls back to in-window navigation if window creation is unavailable/fails.
+async function openPicker(navigate: (p: string) => void) {
+  try {
+    await openWalletPickerWindow();
+  } catch (err) {
+    console.error('[menu] open new window failed, navigating in place:', err);
+    navigate(ROUTE_PATHS.landing);
+  }
 }
 
 async function handleOpenWalletFile(navigate: (p: string) => void) {
@@ -166,7 +171,7 @@ export function useMenuBar(): void {
             id: 'new_wallet',
             text: 'Import New Wallet',
             accelerator: 'CmdOrCtrl+N',
-            action: () => goToPicker(navigate),
+            action: () => void openPicker(navigate),
           }),
           openWalletSubmenu,
           await PredefinedMenuItem.new({ item: 'Separator' }),
