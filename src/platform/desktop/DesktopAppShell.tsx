@@ -23,15 +23,24 @@ const DesktopAppShell: React.FC = () => {
   const [rehydrated, setRehydrated] = useState(() => persistor.getState().bootstrapped);
   const [invariantChecked, setInvariantChecked] = useState(false);
 
-  // This app has no <PersistGate> — redux-persist rehydrates asynchronously
-  // in the background while the store starts at its default state, then the
-  // persisted walletId flips in later via a REHYDRATE action. A gate that
-  // only covers the first synchronous mount misses that later flip entirely.
+  // redux-persist rehydrates asynchronously; wait for it before reading the
+  // persisted walletId (below). The immediate re-check after subscribing closes
+  // a race where bootstrap completes between the initial read and the
+  // subscribe — under StrictMode's dev-only mount/unmount/remount that gap can
+  // otherwise be missed, leaving the app permanently blank. The timeout is a
+  // hard floor so the main render path can never hang on persistence.
   useEffect(() => {
     if (rehydrated) return;
-    return persistor.subscribe(() => {
-      if (persistor.getState().bootstrapped) setRehydrated(true);
+    const markReady = () => setRehydrated(true);
+    const unsubscribe = persistor.subscribe(() => {
+      if (persistor.getState().bootstrapped) markReady();
     });
+    if (persistor.getState().bootstrapped) markReady();
+    const fallback = setTimeout(markReady, 3000);
+    return () => {
+      unsubscribe();
+      clearTimeout(fallback);
+    };
   }, [rehydrated]);
 
   // Core invariant: a wallet is "open" ONLY while its key is in RAM. The key
