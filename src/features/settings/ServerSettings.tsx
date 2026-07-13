@@ -11,7 +11,9 @@ import {
   setExplorerCustom,
 } from '../../state/slices/preferencesSlice';
 import { EXPLORER_PRESETS } from '../../utils/servers/explorers';
+import { getUserServers, addUserServer, removeUserServer, isValidServerEntry } from '../../utils/servers/userServers';
 import { CashFusionSettings } from './CashFusionSettings';
+import { TorSettings } from './TorSettings';
 
 const USER_SERVER_KEY = 'optn.electrum.user-server';
 const LAST_HEALTHY_KEY = 'optn.electrum.last-healthy-server';
@@ -43,6 +45,29 @@ export const ServerSettings: React.FC = () => {
   const [connecting, setConnecting] = useState(false);
   const [status, setStatus] = useState('');
   const [error, setError] = useState('');
+
+  const [userServers, setUserServers] = useState<string[]>(() => getUserServers(currentNetwork));
+  const [newServer, setNewServer] = useState('');
+  const [addError, setAddError] = useState('');
+
+  useEffect(() => {
+    setUserServers(getUserServers(currentNetwork));
+  }, [currentNetwork]);
+
+  const handleAddUserServer = () => {
+    const entry = newServer.trim().replace(/^wss?:\/\//i, '');
+    if (!isValidServerEntry(entry)) {
+      setAddError('Enter a valid host:port (e.g. 192.168.0.129:50002).');
+      return;
+    }
+    setUserServers(addUserServer(currentNetwork, entry));
+    setNewServer('');
+    setAddError('');
+  };
+
+  const handleRemoveUserServer = (entry: string) => {
+    setUserServers(removeUserServer(currentNetwork, entry));
+  };
 
   // Refresh current server state
   const refreshCurrent = useCallback(() => {
@@ -182,6 +207,62 @@ export const ServerSettings: React.FC = () => {
           </button>
         ))}
       </div>
+
+      {/* Your servers (user-added, incl. a self-hosted Fulcrum on the LAN) */}
+      <div className="flex flex-col gap-1.5">
+        <p className="text-xs font-semibold wallet-muted uppercase tracking-wide">Your servers</p>
+        {userServers.length === 0 && (
+          <p className="text-[10px] wallet-muted">Add your own Electrum/Fulcrum server below — it's saved and used for auto-select too.</p>
+        )}
+        {userServers.map((srv) => (
+          <div
+            key={srv}
+            className={`flex items-center gap-2 rounded-xl border px-3 py-2 text-xs font-mono transition-colors ${
+              currentServer === srv
+                ? 'border-[var(--wallet-accent)] text-[var(--wallet-accent)] bg-[var(--wallet-accent)]/10'
+                : 'border-[var(--wallet-border)] wallet-muted'
+            }`}
+          >
+            <button
+              onClick={() => { setAutoMode(false); setCustomServer(srv); setError(''); }}
+              className="flex-1 text-left"
+            >
+              <span className="flex items-center justify-between">
+                <span>{srv}</span>
+                {currentServer === srv && <span className="text-[10px] font-semibold">● active</span>}
+              </span>
+            </button>
+            <button
+              onClick={() => handleRemoveUserServer(srv)}
+              className="text-[10px] text-red-400/70 hover:text-red-400 px-1"
+              aria-label={`Remove ${srv}`}
+            >
+              Remove
+            </button>
+          </div>
+        ))}
+        <div className="flex gap-2 pt-1">
+          <input
+            type="text"
+            value={newServer}
+            onChange={(e) => { setNewServer(e.target.value); setAddError(''); }}
+            onKeyDown={(e) => { if (e.key === 'Enter') handleAddUserServer(); }}
+            placeholder="host:port or 192.168.0.129:50002"
+            className="flex-1 rounded-xl border border-[var(--wallet-border)] bg-[var(--wallet-surface)] px-3 py-2 text-xs font-mono wallet-text-strong placeholder:wallet-muted outline-none focus:ring-1 focus:ring-[var(--wallet-accent)]"
+          />
+          <button
+            onClick={handleAddUserServer}
+            disabled={!newServer.trim()}
+            className="rounded-xl border border-[var(--wallet-accent)]/40 px-3 py-2 text-xs font-semibold text-[var(--wallet-accent)] hover:bg-[var(--wallet-accent)]/5 disabled:opacity-40 transition-colors"
+          >
+            Add
+          </button>
+        </div>
+        {addError && <p className="text-[10px] text-red-400">{addError}</p>}
+      </div>
+
+      {/* Tor — directly below the server pool */}
+      <TorSettings />
 
       {/* Block explorer */}
       <div className="flex flex-col gap-2 border-t border-[var(--wallet-border)] pt-4">

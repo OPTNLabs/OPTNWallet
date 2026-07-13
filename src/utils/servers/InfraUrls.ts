@@ -1,6 +1,7 @@
 // src/utils/servers/InfraUrls.ts
 
 import { Network } from '../../state/slices/networkSlice';
+import { getUserServers } from './userServers';
 
 export type InfraUrls = {
   chaingraphUrl: string; // full URL
@@ -323,8 +324,9 @@ function isDesktop(): boolean {
 
 export function getElectrumServers(network: Network): string[] {
   const base = getInfraUrlPools(network).electrumServers;
-  if (isDesktop()) {
-    return dedupe([...base, ...DESKTOP_ONLY_TCP_SERVERS[network]]);
-  }
-  return base;
+  // User-added servers come first so a self-hosted server is preferred by the
+  // auto/failover order.
+  const user = getUserServers(network);
+  const desktopTcp = isDesktop() ? DESKTOP_ONLY_TCP_SERVERS[network] : [];
+  return dedupe([...user, ...base, ...desktopTcp]);
 }
