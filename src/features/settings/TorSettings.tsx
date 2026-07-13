@@ -156,6 +156,11 @@ export const TorSettings: React.FC = () => {
             </div>
           )}
 
+          {/* External Tor is an alternative — hide it entirely while the
+              integrated Tor is running so its "no proxy" check can't contradict
+              the running integrated Tor above. */}
+          {!managed.running && (
+            <>
           <p className="text-[10px] wallet-muted">Or use a Tor you run yourself:</p>
           <div className="flex items-center gap-2">
             <button
@@ -212,10 +217,12 @@ export const TorSettings: React.FC = () => {
 
           {torAuto && torDetected === -1 && (
             <p className="text-[10px] text-yellow-400/80 leading-relaxed">
-              No Tor found. Start Tor Browser (port 9150) or a system Tor daemon (9050), then press
-              “Check Tor”. A bundled, auto-started Tor is planned so this works out of the box.
+              No external Tor found. Either press “Start integrated Tor” above (recommended), or
+              start Tor Browser (9150) / a system Tor daemon (9050) and press “Check Tor”.
               Without Tor, remote CashFusion is blocked.
             </p>
+          )}
+            </>
           )}
         </>
       )}
