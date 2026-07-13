@@ -459,20 +459,28 @@ export async function disableWalletBiometric(walletId: number): Promise<void> {
   }
 }
 
-/** Prompt biometric, retrieve the wallet password, and open the wallet. */
-export async function unlockWalletWithBiometric(walletId: number): Promise<WalletRecord | null> {
-  try {
-    const result = await bioGetData({
-      domain: BIO_DOMAIN,
-      name: bioName(walletId),
-      reason: 'Unlock OPTN Wallet',
-    });
-    if (!result.data) return null;
-    return await openWalletWithPassword(walletId, result.data);
-  } catch (err) {
-    console.warn('[DesktopWalletManager] biometric unlock failed/cancelled:', err);
-    return null;
+/**
+ * Prompt biometric, retrieve the wallet password, and open the wallet.
+ * Errors propagate to the caller so the UI can show the real reason (an OS
+ * prompt cancel/failure, or a stored password that no longer opens the wallet)
+ * instead of a generic "cancelled or failed".
+ */
+export async function unlockWalletWithBiometric(walletId: number): Promise<WalletRecord> {
+  const result = await bioGetData({
+    domain: BIO_DOMAIN,
+    name: bioName(walletId),
+    reason: 'Unlock OPTN Wallet',
+  });
+  if (!result.data) {
+    throw new Error('No biometric secret was returned by the OS.');
   }
+  const info = await openWalletWithPassword(walletId, result.data);
+  if (!info) {
+    throw new Error(
+      'The saved password no longer opens this wallet. Turn biometric off and on again to re-save it.'
+    );
+  }
+  return info;
 }
 
 /**

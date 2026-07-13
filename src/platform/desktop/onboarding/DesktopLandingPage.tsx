@@ -90,14 +90,11 @@ const DesktopLandingPage = () => {
     setError('');
     try {
       const info = await unlockWalletWithBiometric(id);
-      if (!info) {
-        setError('Biometric unlock was cancelled or failed.');
-        return;
-      }
       finishOpen(id, info);
     } catch (err) {
       console.error('[DesktopLandingPage] Biometric unlock failed:', err);
-      setError('Biometric unlock failed.');
+      const msg = err instanceof Error ? err.message : String(err);
+      setError(`Biometric unlock failed: ${msg}`);
     } finally {
       setBusy(false);
     }
