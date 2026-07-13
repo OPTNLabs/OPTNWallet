@@ -18,7 +18,15 @@ import {
   setTorAuto,
   setTorPortManual,
 } from '../../state/slices/experimentalSlice';
-import { detectTorPort, FUSION_SUPPORTED } from '../../services/fusion/FusionStatusService';
+import {
+  detectTorPort,
+  FUSION_SUPPORTED,
+  INTEGRATED_TOR_SUPPORTED,
+  startIntegratedTor,
+  stopIntegratedTor,
+  integratedTorStatus,
+  type ManagedTorStatus,
+} from '../../services/fusion/FusionStatusService';
 
 export const TorSettings: React.FC = () => {
   const dispatch = useDispatch();
@@ -31,6 +39,11 @@ export const TorSettings: React.FC = () => {
   const [torDetected, setTorDetected] = useState<number | null>(null);
   const [torChecking, setTorChecking] = useState(false);
 
+  // Integrated (app-managed) Tor.
+  const [managed, setManaged] = useState<ManagedTorStatus>({ running: false, bootstrap_percent: 0, socks_port: 0 });
+  const [torBusy, setTorBusy] = useState(false);
+  const [torError, setTorError] = useState<string | null>(null);
+
   const refreshTor = useCallback(async () => {
     if (!FUSION_SUPPORTED || !torEnabled) return;
     setTorChecking(true);
@@ -42,9 +55,49 @@ export const TorSettings: React.FC = () => {
     }
   }, [torEnabled, torHost]);
 
+  const refreshManaged = useCallback(async () => {
+    if (!INTEGRATED_TOR_SUPPORTED) return;
+    try {
+      setManaged(await integratedTorStatus());
+    } catch {
+      /* ignore */
+    }
+  }, []);
+
   useEffect(() => {
     void refreshTor();
-  }, [refreshTor]);
+    void refreshManaged();
+  }, [refreshTor, refreshManaged]);
+
+  // While integrated Tor is starting, poll its bootstrap progress.
+  useEffect(() => {
+    if (!torBusy) return;
+    const id = setInterval(() => void refreshManaged(), 1000);
+    return () => clearInterval(id);
+  }, [torBusy, refreshManaged]);
+
+  const handleStartIntegrated = async () => {
+    setTorBusy(true);
+    setTorError(null);
+    try {
+      await startIntegratedTor();
+      await refreshManaged();
+    } catch (err) {
+      setTorError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setTorBusy(false);
+    }
+  };
+
+  const handleStopIntegrated = async () => {
+    setTorBusy(true);
+    try {
+      await stopIntegratedTor();
+      await refreshManaged();
+    } finally {
+      setTorBusy(false);
+    }
+  };
 
   return (
     <div className="flex flex-col gap-3 border-t border-[var(--wallet-border)] pt-4">
@@ -66,6 +119,44 @@ export const TorSettings: React.FC = () => {
 
       {torEnabled && (
         <>
+          {/* Integrated Tor — the app runs its own Tor, no external setup needed. */}
+          {INTEGRATED_TOR_SUPPORTED && (
+            <div className="rounded-lg border border-[var(--wallet-border)] bg-[var(--wallet-surface-strong)] p-3 space-y-2">
+              <div className="flex items-center justify-between gap-2">
+                <div>
+                  <p className="text-[11px] font-semibold wallet-text-strong">Integrated Tor</p>
+                  <p className="text-[10px] wallet-muted">The app runs its own Tor — no Tor Browser needed</p>
+                </div>
+                {managed.running ? (
+                  <button
+                    type="button"
+                    onClick={() => void handleStopIntegrated()}
+                    disabled={torBusy}
+                    className="rounded-lg border border-red-400/40 px-2.5 py-1 text-[10px] font-semibold text-red-400 disabled:opacity-50"
+                  >
+                    Stop
+                  </button>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={() => void handleStartIntegrated()}
+                    disabled={torBusy}
+                    className="rounded-lg border border-[var(--wallet-accent)]/50 bg-[var(--wallet-accent)]/10 px-2.5 py-1 text-[10px] font-semibold text-[var(--wallet-accent)] disabled:opacity-50"
+                  >
+                    {torBusy ? 'Starting…' : 'Start integrated Tor'}
+                  </button>
+                )}
+              </div>
+              {managed.running ? (
+                <p className="text-[10px] text-green-400 font-semibold">Running on port {managed.socks_port} ✓</p>
+              ) : torBusy ? (
+                <p className="text-[10px] wallet-muted">Bootstrapping Tor… {managed.bootstrap_percent}%</p>
+              ) : null}
+              {torError && <p className="text-[10px] text-red-400/80 leading-relaxed">{torError}</p>}
+            </div>
+          )}
+
+          <p className="text-[10px] wallet-muted">Or use a Tor you run yourself:</p>
           <div className="flex items-center gap-2">
             <button
               type="button"
