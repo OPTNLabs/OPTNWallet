@@ -11,10 +11,16 @@ import {
   setExplorerCustom,
 } from '../../state/slices/preferencesSlice';
 import { EXPLORER_PRESETS } from '../../utils/servers/explorers';
-import { getUserServers, addUserServer, removeUserServer, isValidServerEntry, getServerLabel } from '../../utils/servers/userServers';
+import { getUserServers, addUserServer, removeUserServer, isValidServerEntry, getServerLabel, parseServerEntry } from '../../utils/servers/userServers';
+import { getUserNodes, addUserNode, removeUserNode } from '../../utils/servers/userNodes';
 import { CashFusionSettings } from './CashFusionSettings';
 import { TorSettings } from './TorSettings';
-import { Bip37NodeSettings } from './Bip37NodeSettings';
+import { Bip37NodeRow } from './Bip37NodeSettings';
+
+// BCH P2P default ports across networks — an entry on one of these is a BIP37
+// full node, anything else is an Electrum/Fulcrum server. Lets one "Add server"
+// field accept both, routed to the right transport automatically.
+const P2P_NODE_PORTS = new Set([8333, 48333, 18333, 28333, 38333, 18444]);
 
 const USER_SERVER_KEY = 'optn.electrum.user-server';
 const LAST_HEALTHY_KEY = 'optn.electrum.last-healthy-server';
@@ -48,11 +54,13 @@ export const ServerSettings: React.FC = () => {
   const [error, setError] = useState('');
 
   const [userServers, setUserServers] = useState<string[]>(() => getUserServers(currentNetwork));
+  const [nodes, setNodes] = useState<string[]>(() => getUserNodes(currentNetwork));
   const [newServer, setNewServer] = useState('');
   const [addError, setAddError] = useState('');
 
   useEffect(() => {
     setUserServers(getUserServers(currentNetwork));
+    setNodes(getUserNodes(currentNetwork));
   }, [currentNetwork]);
 
   const handleAddUserServer = () => {
@@ -61,13 +69,25 @@ export const ServerSettings: React.FC = () => {
       setAddError('Enter a valid host:port (e.g. 192.168.0.129:50002).');
       return;
     }
-    setUserServers(addUserServer(currentNetwork, entry));
+    // Auto-detect the transport by port: a BCH P2P port means a BIP37 full node,
+    // anything else is an Electrum/Fulcrum server. Both land in the one pool and
+    // the wallet uses each over the right protocol automatically.
+    const port = Number(parseServerEntry(entry).target.split(':')[1]);
+    if (P2P_NODE_PORTS.has(port)) {
+      setNodes(addUserNode(currentNetwork, entry));
+    } else {
+      setUserServers(addUserServer(currentNetwork, entry));
+    }
     setNewServer('');
     setAddError('');
   };
 
   const handleRemoveUserServer = (entry: string) => {
     setUserServers(removeUserServer(currentNetwork, entry));
+  };
+
+  const handleRemoveNode = (target: string) => {
+    setNodes(removeUserNode(currentNetwork, target));
   };
 
   // Refresh current server state
@@ -248,14 +268,27 @@ export const ServerSettings: React.FC = () => {
           );
         })}
 
-        {/* Add your own Electrum/Fulcrum server (host:port or LAN IP) */}
+        {/* BIP37 full nodes live in the SAME pool (different transport, chosen
+            automatically by port). Desktop-only; Bip37NodeRow returns nothing on
+            the web build. */}
+        {nodes.map((target) => (
+          <Bip37NodeRow
+            key={`node:${target}`}
+            target={target}
+            network={currentNetwork}
+            onRemove={handleRemoveNode}
+          />
+        ))}
+
+        {/* Add an Electrum/Fulcrum server OR a BIP37 node (LAN allowed). The
+            port decides which transport the wallet uses. */}
         <div className="flex gap-2 pt-1">
           <input
             type="text"
             value={newServer}
             onChange={(e) => { setNewServer(e.target.value); setAddError(''); }}
             onKeyDown={(e) => { if (e.key === 'Enter') handleAddUserServer(); }}
-            placeholder="Add server — host:port, or 192.168.0.129:50002 My Fulcrum"
+            placeholder="Add server — Fulcrum host:50002, or a node host:8333"
             className="flex-1 rounded-xl border border-[var(--wallet-border)] bg-[var(--wallet-surface)] px-3 py-2 text-xs font-mono wallet-text-strong placeholder:wallet-muted outline-none focus:ring-1 focus:ring-[var(--wallet-accent)]"
           />
           <button
@@ -271,9 +304,6 @@ export const ServerSettings: React.FC = () => {
 
       {/* Tor — directly below the server pool */}
       <TorSettings />
-
-      {/* BIP37 full nodes (SPV) — an alternative transport to Fulcrum servers */}
-      <Bip37NodeSettings />
 
       {/* Block explorer */}
       <div className="flex flex-col gap-2 border-t border-[var(--wallet-border)] pt-4">
