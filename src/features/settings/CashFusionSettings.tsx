@@ -57,7 +57,12 @@ export const CashFusionSettings: React.FC = () => {
   const torHost = useSelector(selectTorHost);
   const torPortManual = useSelector(selectTorPortManual);
 
-  const [serverInput, setServerInput] = useState(savedServer ?? DEFAULT_SERVER);
+  // Start from the saved server only if it belongs to the current network's
+  // pool; otherwise fall back to the network default (list head) so switching to
+  // Chipnet doesn't leave manual mode pointed at the mainnet fusion server.
+  const [serverInput, setServerInput] = useState(() =>
+    savedServer && servers.includes(savedServer) ? savedServer : servers[0] ?? DEFAULT_SERVER
+  );
   const [fusionAuto, setFusionAuto] = useState(false);
   const [newServer, setNewServer] = useState('');
   const [connStatus, setConnStatus] = useState<ConnStatus>('idle');

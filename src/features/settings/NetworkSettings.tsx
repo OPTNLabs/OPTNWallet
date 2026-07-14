@@ -2,7 +2,7 @@ import React, { useState } from 'react';
 import { useDispatch, useSelector } from 'react-redux';
 import { useNavigate } from 'react-router-dom';
 import { Network, setNetwork } from '../../state/slices/networkSlice';
-import { resetWallet, setWalletId, setWalletNetwork, setWalletType } from '../../state/slices/walletSlice';
+import { resetWallet, setWalletId, setWalletNetwork, setWalletType, selectWalletId } from '../../state/slices/walletSlice';
 import { resetUTXOs } from '../../state/slices/utxoSlice';
 import { resetTransactions } from '../../state/slices/transactionSlice';
 import { resetContract } from '../../state/slices/contractSlice';
@@ -11,7 +11,14 @@ import { selectCurrentNetwork } from '../../state/selectors/networkSelectors';
 import { AppDispatch } from '../../state/store';
 import { WalletType } from '../../types/wallet';
 import DatabaseService from '../../apis/DatabaseManager/DatabaseService';
+import ElectrumServer from '../../apis/ElectrumServer/ElectrumServer';
+import { invalidateUTXOCache } from '../../services/ElectrumService';
 import FaucetView from '../../components/FaucetView';
+
+// Tauri injects this global into the desktop WebView; absent in the mobile
+// Capacitor WebView and a plain browser. Same check InfraUrls.ts uses.
+const isDesktop = (): boolean =>
+  typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
 
 // To add a new network in future:
 //  1. Add its value to the Network enum in networkSlice.ts
@@ -65,14 +72,49 @@ export const NetworkSettings: React.FC = () => {
   const dispatch = useDispatch<AppDispatch>();
   const navigate = useNavigate();
   const currentNetwork = useSelector(selectCurrentNetwork);
+  const walletId = useSelector(selectWalletId);
   const [switching, setSwitching] = useState(false);
 
   const handleSwitch = async (target: Network) => {
     if (target === currentNetwork || switching) return;
     setSwitching(true);
 
+    // Drop the live Electrum connection and its caches before switching:
+    // ElectrumServer keeps a singleton bound to the OLD network's servers, so
+    // without this the wallet keeps showing the old network's balances/history
+    // even after currentNetwork flips. The next query reconnects against the
+    // now-current network's pool.
+    invalidateUTXOCache();
     try {
-      const existing = await findWalletForNetwork(target);
+      await ElectrumServer().electrumDisconnect();
+    } catch {
+      /* ignore */
+    }
+
+    try {
+      // Desktop: keep the user logged in. A wallet is bound to one network, so
+      // switching moves to the SAME seed's twin wallet on the target network,
+      // reusing the in-RAM key (no password prompt, no lock-out). Loaded via
+      // dynamic import so this Tauri-only module never enters the mobile bundle.
+      if (isDesktop() && walletId > 0) {
+        const { switchNetworkSameSeed } = await import(
+          '../../platform/desktop/DesktopWalletManager'
+        );
+        const twin = await switchNetworkSameSeed(walletId, target);
+        if (twin) {
+          dispatch(setNetwork(target));
+          dispatch(setWalletId(twin.walletId));
+          dispatch(setWalletNetwork(target));
+          dispatch(setWalletType(twin.walletType));
+          // A twin may have just been created — refresh the menu's wallet list.
+          window.dispatchEvent(new CustomEvent('optn:wallets-changed'));
+          navigate(`/home/${twin.walletId}`);
+          return;
+        }
+        // Fell through (legacy saltless wallet / no cached key): drop to picker.
+      }
+
+      const existing = isDesktop() ? null : await findWalletForNetwork(target);
 
       if (existing) {
         // Wallet already exists for this network — load it directly, no re-import

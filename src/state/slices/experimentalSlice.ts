@@ -8,6 +8,15 @@ import type { RootState } from '../store';
 // previously shipped does not resolve at all). Everything else is user-added.
 const DEFAULT_FUSION_SERVER = 'fusion.servo.cash:8789';
 
+// The default fusion server follows the active network: mainnet uses Electron
+// Cash's fusion.servo.cash:8789; Chipnet uses kalasti's chipnet.bch.ninja:8789.
+// Keyed by the Network enum's string values ('mainnet' | 'chipnet').
+const DEFAULT_FUSION_SERVERS: Record<string, string> = {
+  mainnet: DEFAULT_FUSION_SERVER,
+  chipnet: 'chipnet.bch.ninja:8789',
+};
+const KNOWN_DEFAULT_FUSION_SERVERS = new Set(Object.values(DEFAULT_FUSION_SERVERS));
+
 interface ExperimentalState {
   rpaEnabled: boolean;
   cashFusionEnabled: boolean;
@@ -128,10 +137,18 @@ export const selectFusionServers = createSelector(
   [
     (state: RootState) => state.experimental.fusionServers,
     (state: RootState) => state.experimental.fusionServer,
+    (state: RootState) => state.network.currentNetwork,
   ],
-  (list, single): string[] => {
-    const raw = list && list.length > 0 ? list : [single || DEFAULT_FUSION_SERVER];
-    return Array.from(new Set(raw.map(migrateDeadServer)));
+  (list, single, network): string[] => {
+    const networkDefault = DEFAULT_FUSION_SERVERS[network] ?? DEFAULT_FUSION_SERVER;
+    const persisted = (list && list.length > 0 ? list : [single || DEFAULT_FUSION_SERVER]).map(
+      migrateDeadServer
+    );
+    // The current network's default leads; genuine user additions (anything not
+    // a known network default) are preserved so they survive network switches,
+    // while the OTHER network's default is dropped from this network's pool.
+    const userAdded = persisted.filter((s) => !KNOWN_DEFAULT_FUSION_SERVERS.has(s));
+    return Array.from(new Set([networkDefault, ...userAdded]));
   }
 );
 export const selectTorEnabled = (state: RootState) => state.experimental.torEnabled !== false;
