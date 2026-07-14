@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import * as bip39 from 'bip39';
 import {
   assertSuccess,
   binToHex,
@@ -38,8 +39,8 @@ import {
   toLibauthToken,
 } from '../QuantumrootRecoveryHelpers';
 
-const TEST_MNEMONIC =
-  'abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about';
+// Deterministic zero-entropy BIP39 test vector (not a real seed).
+const TEST_MNEMONIC = bip39.entropyToMnemonic('0'.repeat(32));
 
 const importedQuantumrootTemplate = importWalletTemplate(quantumrootTemplateJson);
 type QuantumrootCompilationData =

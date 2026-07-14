@@ -57,9 +57,8 @@ export class OptnWizardWalletAdapter implements WalletAdapter {
     };
 
     // Pre-derive the RPA gate xpub so getExtensions() can be synchronous.
-    // Single branch-3 xpub (see RpaService.deriveRpaGateXpub for why there is
-    // only one, not a separate scan/spend gate pair): index 0 = scan pubkey,
-    // index 1 = spend pubkey, both derivable via ordinary unhardened CKD_pub.
+    // One branch-3 xpub (see RpaService.deriveRpaGateXpub): index 0 = scan
+    // pubkey, index 1 = spend pubkey, both derivable via unhardened CKD_pub.
     let rpaExtension: Record<string, unknown> = {};
     const state = store.getState() as unknown as { experimental?: { rpaEnabled?: boolean } };
     if (state.experimental?.rpaEnabled) {

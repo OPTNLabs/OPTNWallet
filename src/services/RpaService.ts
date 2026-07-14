@@ -1,10 +1,6 @@
 // BCH Reusable Payment Address (RPA) service.
 // Spec: https://github.com/imaginaryusername/Reusable_specs/blob/master/reusable_addresses.md
-// Reference: Electron Cash electroncash/rpa/paycode.py, and the settled
-// derivation/encoding decisions from these two (unmerged but authoritative
-// as of this writing) Electron Cash PRs:
-//   https://github.com/Electron-Cash/Electron-Cash/pull/3226 — derivation path
-//   https://github.com/Electron-Cash/Electron-Cash/pull/3225 — compressed keys
+// Reference: Electron Cash electroncash/rpa/paycode.py.
 //
 // Protocol summary:
 //   - Recipient shares a static "paycode" (scan_pubkey + spend_pubkey, CashAddr encoded)
@@ -13,15 +9,14 @@
 //   - Recipient queries an RPA-capable Electrum server (Fulcrum-RPA) using their paycode prefix
 //   - For each matching tx, recipient checks if any output belongs to them via ECDH + CKD_pub
 //
-// Key paths (PR #3226: "Consolidate RPA wallet into StandardWallet" — RPA no
-// longer has its own BIP47-style hardened tree; it rides on the wallet's
-// normal BIP44 account as a THIRD UNHARDENED CHAIN, sibling to receive(0)/
-// change(1) — see HdWalletService's BCH_STANDARD_BRANCH_INDEX.rpa = 3):
+// Key paths — RPA rides on the wallet's normal BIP44 account as a third
+// unhardened chain, sibling to receive(0)/change(1) (see HdWalletService's
+// BCH_STANDARD_BRANCH_INDEX.rpa = 3), matching the Electron Cash reference
+// implementation:
 //   Scan  private/public: m/44'/145'/0'/3/0
 //   Spend private/public: m/44'/145'/0'/3/1
 //
-// Keys are COMPRESSED (PR #3225 fixed an accidental uncompressed default
-// upstream; this implementation was already compressed-only).
+// Keys are compressed pubkeys.
 //
 // Paycode encoding is NOT standard CashAddr: standard cashaddr's version byte
 // packs size into 3 bits, capping payloads at 64 bytes — RPA's payload
@@ -374,15 +369,13 @@ export async function deriveSpendingKey(
 
 // ─── XPub gate derivation (for WizardConnect extension advertisement) ─────────
 //
-// PRIVACY NOTE (architecture change from the old BIP47-style scheme): under
-// the settled spec, scan(index 0) and spend(index 1) are UNHARDENED children
-// of ONE branch-3 xpub (m/44'/145'/account'/3), not two independently-gated
-// hardened subtrees. There is therefore only ONE xpub to advertise here, not
-// two. It remains safe to share on its own terms: branch 3 is a SIBLING of
+// Scan (index 0) and spend (index 1) are unhardened children of ONE branch-3
+// xpub (m/44'/145'/account'/3), so there is a single xpub to advertise here.
+// PRIVACY NOTE: safe to share on its own — branch 3 is a SIBLING of
 // receive(0)/change(1)/defi(7) under the account node, and CKD_pub can only
-// walk downward — holding this xpub lets a counterparty derive scan/spend
-// pubkeys but cannot be used to derive receive/change addresses or walk back
-// up to the account or seed.
+// walk downward, so holding this xpub lets a counterparty derive scan/spend
+// pubkeys but not receive/change addresses, and cannot walk back up to the
+// account or seed.
 export async function deriveRpaGateXpub(
   mnemonic: string,
   passphrase: string,
