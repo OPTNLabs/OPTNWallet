@@ -42,6 +42,10 @@ import {
   type SettingsRowConfig,
 } from './settingsConfig';
 
+// Tauri injects this global into the desktop WebView; absent on mobile/web.
+const isDesktop = (): boolean =>
+  typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
+
 const Settings: React.FC = () => {
   const navigate = useNavigate();
   const location = useLocation();
@@ -65,6 +69,33 @@ const Settings: React.FC = () => {
   }, [searchParams]);
 
   const handleLogout = async () => {
+    // On desktop this is a LOCK, not a wipe: clear the in-RAM key and return to
+    // the wallet picker, leaving EVERY saved wallet intact. The mobile flow
+    // below (deleteWallet + clearAllData) drops the whole wallet database, which
+    // on desktop's multi-wallet picker wiped all saved wallets on logout.
+    if (isDesktop()) {
+      try {
+        const { lock } = await import('../../platform/desktop/EcKeyManager');
+        lock();
+      } catch {
+        /* ignore */
+      }
+      dispatch(setWalletId(0));
+      dispatch(resetUTXOs());
+      dispatch(resetTransactions());
+      dispatch(resetWallet());
+      dispatch(resetContract());
+      dispatch(clearTransaction());
+      await dispatch(disconnectAllWizardConnections());
+      try {
+        await getElectrumAdapter().disconnect();
+      } catch (e) {
+        console.warn('[Settings] Electrum disconnect (on lock) warning:', e);
+      }
+      navigate('/');
+      return;
+    }
+
     const walletManager = WalletManager();
     await walletManager.deleteWallet(currentWalletId);
     await walletManager.clearAllData();
