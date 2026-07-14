@@ -14,6 +14,7 @@ import { EXPLORER_PRESETS } from '../../utils/servers/explorers';
 import { getUserServers, addUserServer, removeUserServer, isValidServerEntry, getServerLabel } from '../../utils/servers/userServers';
 import { CashFusionSettings } from './CashFusionSettings';
 import { TorSettings } from './TorSettings';
+import { Bip37NodeSettings } from './Bip37NodeSettings';
 
 const USER_SERVER_KEY = 'optn.electrum.user-server';
 const LAST_HEALTHY_KEY = 'optn.electrum.last-healthy-server';
@@ -270,6 +271,9 @@ export const ServerSettings: React.FC = () => {
 
       {/* Tor — directly below the server pool */}
       <TorSettings />
+
+      {/* BIP37 full nodes (SPV) — an alternative transport to Fulcrum servers */}
+      <Bip37NodeSettings />
 
       {/* Block explorer */}
       <div className="flex flex-col gap-2 border-t border-[var(--wallet-border)] pt-4">
