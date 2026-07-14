@@ -1,24 +1,12 @@
 import React, { useState } from 'react';
 import { useDispatch, useSelector } from 'react-redux';
-import { useNavigate } from 'react-router-dom';
 import { Network, setNetwork } from '../../state/slices/networkSlice';
-import { resetWallet, setWalletId, setWalletNetwork, setWalletType, selectWalletId } from '../../state/slices/walletSlice';
-import { resetUTXOs } from '../../state/slices/utxoSlice';
-import { resetTransactions } from '../../state/slices/transactionSlice';
-import { resetContract } from '../../state/slices/contractSlice';
-import { clearTransaction } from '../../state/slices/transactionBuilderSlice';
+import { setWalletNetwork, selectWalletId } from '../../state/slices/walletSlice';
 import { selectCurrentNetwork } from '../../state/selectors/networkSelectors';
 import { AppDispatch } from '../../state/store';
-import { WalletType } from '../../types/wallet';
-import DatabaseService from '../../apis/DatabaseManager/DatabaseService';
 import ElectrumServer from '../../apis/ElectrumServer/ElectrumServer';
 import { invalidateUTXOCache } from '../../services/ElectrumService';
 import FaucetView from '../../components/FaucetView';
-
-// Tauri injects this global into the desktop WebView; absent in the mobile
-// Capacitor WebView and a plain browser. Same check InfraUrls.ts uses.
-const isDesktop = (): boolean =>
-  typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
 
 // To add a new network in future:
 //  1. Add its value to the Network enum in networkSlice.ts
@@ -47,30 +35,8 @@ const SUPPORTED_NETWORKS: {
   },
 ];
 
-async function findWalletForNetwork(target: Network): Promise<{ id: number; walletType: WalletType } | null> {
-  const dbService = DatabaseService();
-  await dbService.ensureDatabaseStarted();
-  const db = dbService.getDatabase();
-  if (!db) return null;
-
-  try {
-    const query = db.prepare('SELECT id, walletType FROM wallets WHERE networkType = ? LIMIT 1');
-    query.bind([target]);
-    if (!query.step()) { query.free(); return null; }
-    const row = query.getAsObject() as { id: unknown; walletType: unknown };
-    query.free();
-    return {
-      id: Number(row.id),
-      walletType: row.walletType === WalletType.QUANTUMROOT ? WalletType.QUANTUMROOT : WalletType.STANDARD,
-    };
-  } catch {
-    return null;
-  }
-}
-
 export const NetworkSettings: React.FC = () => {
   const dispatch = useDispatch<AppDispatch>();
-  const navigate = useNavigate();
   const currentNetwork = useSelector(selectCurrentNetwork);
   const walletId = useSelector(selectWalletId);
   const [switching, setSwitching] = useState(false);
@@ -91,53 +57,14 @@ export const NetworkSettings: React.FC = () => {
       /* ignore */
     }
 
-    try {
-      // Desktop: keep the user logged in. A wallet is bound to one network, so
-      // switching moves to the SAME seed's twin wallet on the target network,
-      // reusing the in-RAM key (no password prompt, no lock-out). Loaded via
-      // dynamic import so this Tauri-only module never enters the mobile bundle.
-      if (isDesktop() && walletId > 0) {
-        const { switchNetworkSameSeed } = await import(
-          '../../platform/desktop/DesktopWalletManager'
-        );
-        const twin = await switchNetworkSameSeed(walletId, target);
-        if (twin) {
-          dispatch(setNetwork(target));
-          dispatch(setWalletId(twin.walletId));
-          dispatch(setWalletNetwork(target));
-          dispatch(setWalletType(twin.walletType));
-          // A twin may have just been created — refresh the menu's wallet list.
-          window.dispatchEvent(new CustomEvent('optn:wallets-changed'));
-          navigate(`/home/${twin.walletId}`);
-          return;
-        }
-        // Fell through (legacy saltless wallet / no cached key): drop to picker.
-      }
-
-      const existing = isDesktop() ? null : await findWalletForNetwork(target);
-
-      if (existing) {
-        // Wallet already exists for this network — load it directly, no re-import
-        dispatch(setNetwork(target));
-        dispatch(setWalletId(existing.id));
-        dispatch(setWalletNetwork(target));
-        dispatch(setWalletType(existing.walletType));
-        navigate(`/home/${existing.id}`);
-      } else {
-        // No wallet for this network yet — go to start screen to create/import one
-        dispatch(setNetwork(target));
-        dispatch(setWalletId(0));
-        dispatch(resetUTXOs());
-        dispatch(resetTransactions());
-        dispatch(resetWallet());
-        dispatch(resetContract());
-        dispatch(clearTransaction());
-        navigate('/');
-      }
-    } catch (err) {
-      console.error('[NetworkSettings] switch failed:', err);
-      setSwitching(false);
-    }
+    // Keep the SAME wallet open — a seed works on both networks (like Cashonize),
+    // so there are no duplicate wallets and no lock-out. Flip the network; the
+    // reconnect above points balance/history queries at the target network's
+    // servers. (Displayed addresses still carry the wallet's original-network
+    // prefix — re-encoding them per network is a separate follow-up.)
+    dispatch(setNetwork(target));
+    if (walletId > 0) dispatch(setWalletNetwork(target));
+    setSwitching(false);
   };
 
   const activeEntry = SUPPORTED_NETWORKS.find((n) => n.id === currentNetwork);
