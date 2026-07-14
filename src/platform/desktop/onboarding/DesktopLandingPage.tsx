@@ -8,6 +8,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { useDispatch, useSelector } from 'react-redux';
 import { Link, useNavigate } from 'react-router-dom';
 import WalletManager from '../../../apis/WalletManager/WalletManager';
+import DatabaseService from '../../../apis/DatabaseManager/DatabaseService';
 import { Network } from '../../../state/slices/networkSlice';
 import { setNetwork } from '../../../state/slices/networkSlice';
 import { setWalletId, setWalletNetwork, setWalletType } from '../../../state/slices/walletSlice';
@@ -43,6 +44,8 @@ const DesktopLandingPage = () => {
   const [bioAvailable, setBioAvailable] = useState(false);
   const [bioEnrolledId, setBioEnrolledId] = useState<number | null>(null);
   const [bioLabel, setBioLabel] = useState('Biometric unlock');
+  const [deletingId, setDeletingId] = useState<number | null>(null);
+  const [deleteBusy, setDeleteBusy] = useState(false);
 
   const navigate = useNavigate();
   const dispatch = useDispatch();
@@ -76,6 +79,25 @@ const DesktopLandingPage = () => {
       });
     }
   }, [bioAvailable]);
+
+  // Delete ONE wallet (e.g. a duplicate). Uses forceSaveDatabase so the removal
+  // persists past the multi-window anti-clobber guard; the wallet's .optn file
+  // is left on disk as a backup, so this is recoverable via Open Wallet File.
+  const handleDelete = async (id: number) => {
+    setDeleteBusy(true);
+    try {
+      await WalletManager().deleteWallet(id);
+      await DatabaseService().forceSaveDatabase();
+      const rows = await WalletManager().getAllWallets();
+      setWallets(rows as WalletRow[]);
+      setDeletingId(null);
+      window.dispatchEvent(new CustomEvent('optn:wallets-changed'));
+    } catch (err) {
+      console.error('[DesktopLandingPage] delete wallet failed:', err);
+    } finally {
+      setDeleteBusy(false);
+    }
+  };
 
   const finishOpen = (id: number, info: { networkType?: Network | null; walletType?: WalletType | null }) => {
     dispatch(setWalletId(id));
@@ -245,14 +267,48 @@ const DesktopLandingPage = () => {
                 <div className="flex items-center justify-between">
                   <div>
                     <p className="font-semibold wallet-text-strong">{w.wallet_name || `Wallet #${w.id}`}</p>
+                    <p className="text-[10px] wallet-muted">
+                      {w.networkType === Network.CHIPNET ? 'Chipnet' : 'Mainnet'} · #{w.id}
+                    </p>
                   </div>
-                  <button
-                    onClick={() => handleOpenClick(w.id)}
-                    className="wallet-btn-secondary px-4 py-1.5 text-sm"
-                  >
-                    Open
-                  </button>
+                  <div className="flex items-center gap-2">
+                    <button
+                      onClick={() => handleOpenClick(w.id)}
+                      className="wallet-btn-secondary px-4 py-1.5 text-sm"
+                    >
+                      Open
+                    </button>
+                    <button
+                      onClick={() => { setDeletingId(deletingId === w.id ? null : w.id); setOpeningId(null); }}
+                      className="text-xs text-red-400/60 hover:text-red-400 px-1.5 py-1"
+                      title="Delete this wallet"
+                      aria-label={`Delete ${w.wallet_name || `wallet ${w.id}`}`}
+                    >
+                      🗑
+                    </button>
+                  </div>
                 </div>
+
+                {deletingId === w.id && (
+                  <div className="mt-2 rounded-lg border border-red-400/30 bg-red-400/5 p-2.5 text-xs space-y-2">
+                    <p className="wallet-text-strong">
+                      Delete “{w.wallet_name || `Wallet #${w.id}`}” ({w.networkType === Network.CHIPNET ? 'Chipnet' : 'Mainnet'}, #{w.id})?
+                      Its saved <span className="font-mono">.optn</span> file is kept, so you can re-import it later.
+                    </p>
+                    <div className="flex gap-2">
+                      <button onClick={() => setDeletingId(null)} className="flex-1 wallet-btn-secondary py-1.5">
+                        Cancel
+                      </button>
+                      <button
+                        onClick={() => void handleDelete(w.id)}
+                        disabled={deleteBusy}
+                        className="flex-1 py-1.5 rounded-md bg-red-500/80 text-white font-semibold disabled:opacity-50"
+                      >
+                        {deleteBusy ? 'Deleting…' : 'Delete'}
+                      </button>
+                    </div>
+                  </div>
+                )}
 
                 {openingId === w.id && (
                   <div className="mt-3 space-y-2 border-t border-[var(--wallet-border)] pt-3">

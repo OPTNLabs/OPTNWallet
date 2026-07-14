@@ -230,7 +230,7 @@ async function migrateSecretColumnsAtRest(): Promise<boolean> {
 }
 
 /** Write into IndexedDB instead of localStorage */
-async function realSaveDatabase(): Promise<void> {
+async function realSaveDatabase(force = false): Promise<void> {
   if (!db) return;
   const myWallets = countWallets(db);
 
@@ -241,7 +241,10 @@ async function realSaveDatabase(): Promise<void> {
   // has, or a wallet created in one context is silently wiped by another
   // context's staler save. (Peek cost is one small in-memory DB open per save;
   // acceptable, and it is what makes multi-window safe.)
-  if (sqlModule) {
+  //
+  // `force` bypasses the guard for an INTENTIONAL wallet deletion, which
+  // legitimately reduces the count and must be allowed to persist.
+  if (!force && sqlModule) {
     try {
       const existing = await idbGet('OPTNDatabase');
       const bytes =
@@ -401,6 +404,13 @@ const flushDatabaseToFile = async (): Promise<void> => {
   }
 };
 
+// Persist immediately, bypassing the debounce AND the anti-clobber count guard.
+// For intentional wallet deletion, which reduces the wallet count on purpose.
+const forceSaveDatabase = async (): Promise<void> => {
+  await ensureDatabaseStarted();
+  await realSaveDatabase(true);
+};
+
 const getDatabase = (): Database | null => db;
 
 const clearDatabase = async (): Promise<void> => {
@@ -452,6 +462,7 @@ export default function DatabaseService() {
     saveDatabaseToFile,
     scheduleDatabaseSave,
     flushDatabaseToFile,
+    forceSaveDatabase,
     getDatabase,
     clearDatabase,
     resultToJSON,
