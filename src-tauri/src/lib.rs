@@ -3,6 +3,7 @@ mod menu;
 
 pub mod fusion;
 pub mod electrum_tcp;
+pub mod spv;
 
 // CashFusion server status (Phase 1).
 //
@@ -56,6 +57,28 @@ async fn fusion_tor_detect(host: Option<String>) -> Option<u16> {
 #[tauri::command]
 async fn fusion_tor_check(host: String, port: u16) -> bool {
     fusion::tor::is_tor_port(&host, port).await
+}
+
+// BIP37 SPV — Phase 1 node probe.
+//
+// A full node speaks the raw BCH P2P protocol, not Electrum, so — like fusion —
+// the client lives in Rust. This performs a real version/verack handshake and
+// reports the peer's parameters (user-agent, height, whether it serves BIP37).
+// It does not sync or track UTXOs; see the plan for later phases. tor_host/
+// tor_port route the connection through Tor (optional; LAN/localhost go direct).
+#[tauri::command]
+async fn bip37_node_probe(
+    host: String,
+    port: u16,
+    network: String,
+    tor_host: Option<String>,
+    tor_port: Option<u16>,
+) -> Result<spv::NodeProbe, String> {
+    let transport = match (tor_host.as_deref(), tor_port) {
+        (Some(h), Some(p)) => fusion::Transport::Tor { host: h, port: p },
+        _ => fusion::Transport::Direct,
+    };
+    spv::probe_node(&host, port, &network, transport).await
 }
 
 // ── Integrated (app-managed) Tor ────────────────────────────────────────────
@@ -232,6 +255,7 @@ pub fn run() {
             fusion_server_status,
             fusion_tor_detect,
             fusion_tor_check,
+            bip37_node_probe,
             tor_start,
             tor_stop,
             tor_status,
