@@ -30,7 +30,11 @@ const DEFAULT_INFRA_URL_POOLS: Record<Network, InfraUrlPools> = {
       'electrum-chipnet.optnlabs.com',
       'chipnet.imaginary.cash',
       'chipnet.bch.ninja',
-      'blackie.c3-soft.com',
+      // NOTE: blackie.c3-soft.com is deliberately NOT here. Its chipnet service
+      // is on a non-standard port, while the default 50002/50004 reaches its
+      // MAINNET Fulcrum — a bare host entry here would silently return mainnet
+      // UTXOs/history under the chipnet label. The three chipnet-specific hosts
+      // above serve chipnet on the standard ports.
     ],
     chaingraphUrls: ['https://gql.chaingraph.pat.mn/v1/graphql'],
     bcmrNativeBaseUrls: ['https://tokenindex.optnlabs.com/v1'],
