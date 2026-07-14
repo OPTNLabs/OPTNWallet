@@ -1,20 +1,22 @@
 import { describe, expect, it } from 'vitest';
+import * as bip39 from 'bip39';
 import { Network } from '../../state/slices/networkSlice';
 import { derivePrivateKeyAtPath } from '../HdWalletService';
 import { deriveRpaKeys, encodePaycode, decodePaycode } from '../RpaService';
 
-const TEST_MNEMONIC =
-  'abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about';
+// A fresh throwaway mnemonic generated per run — no seed phrase is hardcoded in
+// the repo. The tests below only compare derivations of this same mnemonic
+// (relative checks), so a random one works and nothing sensitive is committed.
+const TEST_MNEMONIC = bip39.generateMnemonic();
 const PASSPHRASE = '';
 
-// Settled derivation per Electron Cash PR #3226: RPA rides on the wallet's
-// normal BIP44 account as a third unhardened chain (3), sibling to
-// receive(0)/change(1) — NOT the old BIP47-style m/47'/145'/0'/... paths.
+// RPA rides on the wallet's normal BIP44 account as a third unhardened chain
+// (3), sibling to receive(0)/change(1), matching the Electron Cash reference.
 const EXPECTED_SCAN_PATH = "m/44'/145'/0'/3/0";
 const EXPECTED_SPEND_PATH = "m/44'/145'/0'/3/1";
 
 describe('RpaService', () => {
-  it('derives scan/spend keys at the settled m/44\'/145\'/0\'/3/{0,1} paths', async () => {
+  it('derives scan/spend keys at m/44\'/145\'/0\'/3/{0,1}', async () => {
     const [expectedScanPriv, expectedSpendPriv, keys] = await Promise.all([
       derivePrivateKeyAtPath(TEST_MNEMONIC, PASSPHRASE, EXPECTED_SCAN_PATH),
       derivePrivateKeyAtPath(TEST_MNEMONIC, PASSPHRASE, EXPECTED_SPEND_PATH),

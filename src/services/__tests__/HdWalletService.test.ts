@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import * as bip39 from 'bip39';
 
 import { Network } from '../../state/slices/networkSlice';
 import {
@@ -9,8 +10,8 @@ import {
   deriveBchXpubAtBranch,
 } from '../HdWalletService';
 
-const TEST_MNEMONIC =
-  'abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about';
+// Deterministic zero-entropy BIP39 test vector (not a real seed).
+const TEST_MNEMONIC = bip39.entropyToMnemonic('0'.repeat(32));
 
 describe('HdWalletService', () => {
   it('derives receive addresses from xpubs that match mnemonic-based key material', async () => {
