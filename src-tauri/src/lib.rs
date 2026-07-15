@@ -228,6 +228,23 @@ fn ensure_optn_path(path: &str) -> Result<(), String> {
     }
 }
 
+// Open an external URL in the user's default browser. A Tauri webview silently
+// blocks `target="_blank"` links, so faucet/explorer/etc. links never open; the
+// frontend intercepts those clicks and routes them here. Restricted to http(s).
+#[tauri::command]
+fn open_external(url: String) -> Result<(), String> {
+    if !(url.starts_with("https://") || url.starts_with("http://")) {
+        return Err("only http(s) URLs may be opened externally".into());
+    }
+    #[cfg(target_os = "windows")]
+    let spawn = std::process::Command::new("cmd").args(["/C", "start", "", &url]).spawn();
+    #[cfg(target_os = "macos")]
+    let spawn = std::process::Command::new("open").arg(&url).spawn();
+    #[cfg(all(unix, not(target_os = "macos")))]
+    let spawn = std::process::Command::new("xdg-open").arg(&url).spawn();
+    spawn.map(|_| ()).map_err(|e| format!("could not open browser: {e}"))
+}
+
 #[tauri::command]
 async fn read_wallet_file(path: String) -> Result<String, String> {
     ensure_optn_path(&path)?;
@@ -250,6 +267,7 @@ pub fn run() {
         .plugin(tauri_plugin_biometry::init())
         .invoke_handler(tauri::generate_handler![
             optn_price_fetch,
+            open_external,
             read_wallet_file,
             write_wallet_file,
             fusion_server_status,
