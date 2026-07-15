@@ -27,6 +27,8 @@ export const EXPLORER_PRESETS: ExplorerPreset[] = [
     tx: 'https://bchexplorer.cash/tx/{txid}',
     address: 'https://bchexplorer.cash/address/{address}',
     block: 'https://bchexplorer.cash/block/{block}',
+    chipnetTx: 'https://bchexplorer.cash/chipnet/tx/{txid}',
+    chipnetAddress: 'https://bchexplorer.cash/chipnet/address/{address}',
   },
   {
     id: 'bch-ninja',
