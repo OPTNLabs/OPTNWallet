@@ -21,6 +21,8 @@ use tokio::net::TcpStream;
 
 use crate::fusion::{tor, Transport};
 
+pub mod bloom;
+
 // We advertise a modern protocol version; nodes negotiate down as needed.
 const PROTOCOL_VERSION: i32 = 70015;
 /// BIP111 service bit: the peer will serve BIP37 bloom filters. `1 << 2`.
