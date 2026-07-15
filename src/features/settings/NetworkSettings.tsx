@@ -1,12 +1,17 @@
 import React, { useState } from 'react';
 import { useDispatch, useSelector } from 'react-redux';
+import { useNavigate } from 'react-router-dom';
 import { Network, setNetwork } from '../../state/slices/networkSlice';
-import { setWalletNetwork, selectWalletId } from '../../state/slices/walletSlice';
+import { setWalletId, setWalletNetwork, selectWalletId } from '../../state/slices/walletSlice';
 import { selectCurrentNetwork } from '../../state/selectors/networkSelectors';
+import { homeRoute } from '../../navigation/routes';
 import { AppDispatch } from '../../state/store';
 import ElectrumServer from '../../apis/ElectrumServer/ElectrumServer';
 import { invalidateUTXOCache } from '../../services/ElectrumService';
 import FaucetView from '../../components/FaucetView';
+
+const isDesktop = (): boolean =>
+  typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
 
 // To add a new network in future:
 //  1. Add its value to the Network enum in networkSlice.ts
@@ -37,6 +42,7 @@ const SUPPORTED_NETWORKS: {
 
 export const NetworkSettings: React.FC = () => {
   const dispatch = useDispatch<AppDispatch>();
+  const navigate = useNavigate();
   const currentNetwork = useSelector(selectCurrentNetwork);
   const walletId = useSelector(selectWalletId);
   const [switching, setSwitching] = useState(false);
@@ -57,13 +63,31 @@ export const NetworkSettings: React.FC = () => {
       /* ignore */
     }
 
-    // Keep the SAME wallet open — a seed works on both networks (like Cashonize),
-    // so there are no duplicate wallets and no lock-out. Flip the network; the
-    // reconnect above points balance/history queries at the target network's
-    // servers. (Displayed addresses still carry the wallet's original-network
-    // prefix — re-encoding them per network is a separate follow-up.)
+    // Cashonize model: a seed works on every network, so repoint the SAME
+    // wallet at the target network — regenerate its addresses under the new
+    // prefix, then reload the wallet view so balance / history / addresses /
+    // servers all reflect that network. One wallet per seed, no lock-out.
+    if (isDesktop() && walletId > 0) {
+      try {
+        const { switchWalletNetwork } = await import('../../platform/desktop/DesktopWalletManager');
+        await switchWalletNetwork(walletId, target);
+        dispatch(setNetwork(target));
+        dispatch(setWalletNetwork(target));
+        // Remount the wallet (walletId round-trip) so its keys + balance reload.
+        dispatch(setWalletId(0));
+        setTimeout(() => {
+          dispatch(setWalletId(walletId));
+          navigate(homeRoute(walletId));
+        }, 0);
+      } catch (err) {
+        console.error('[NetworkSettings] network switch failed:', err);
+      } finally {
+        setSwitching(false);
+      }
+      return;
+    }
+
     dispatch(setNetwork(target));
-    if (walletId > 0) dispatch(setWalletNetwork(target));
     setSwitching(false);
   };
 
@@ -109,6 +133,24 @@ export const NetworkSettings: React.FC = () => {
             </button>
           );
         })}
+
+        {['Testnet3', 'Testnet4', 'Regtest'].map((label) => (
+          <div
+            key={label}
+            className="w-full rounded-xl border border-[var(--wallet-border)] wallet-surface p-4 text-left opacity-50 cursor-not-allowed"
+            aria-disabled
+          >
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <span className="wallet-muted" aria-hidden>●</span>
+                <span className="font-semibold wallet-muted">{label}</span>
+              </div>
+              <span className="text-[10px] font-semibold wallet-muted uppercase tracking-wide">
+                Coming soon
+              </span>
+            </div>
+          </div>
+        ))}
       </div>
 
       {activeEntry?.showFaucet && (
