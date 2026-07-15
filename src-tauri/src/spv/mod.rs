@@ -299,9 +299,195 @@ fn nonce() -> u64 {
     nanos ^ (n.wrapping_mul(0x9e37_79b9_7f4a_7c15))
 }
 
+// ── Phase 2: block-header chain sync ─────────────────────────────────────────
+//
+// After the handshake, request block headers with `getheaders` and validate the
+// returned chain LINKS to our locator (each header's prev-block == the previous
+// header's hash). A node returns up to 2000 headers per `headers` message, so a
+// full sync-to-tip loops with an updated locator; Phase 2 proves one batch.
+// PoW-target verification is a later phase.
+
+/// Chain start hash (double-SHA256 of the genesis header, internal little-endian
+/// byte order — the form used on the wire and by header_hash). Used as the
+/// first getheaders locator. testnet4/chipnet/regtest are added when their sync
+/// lands; unknown networks fall back to mainnet's genesis.
+pub fn genesis_hash(network: &str) -> [u8; 32] {
+    match network {
+        "testnet" | "testnet3" => [
+            0x43, 0x49, 0x7f, 0xd7, 0xf8, 0x26, 0x95, 0x71, 0x08, 0xf4, 0xa3, 0x0f, 0xd9, 0xce, 0xc3,
+            0xae, 0xba, 0x79, 0x97, 0x20, 0x84, 0xe9, 0x0e, 0xad, 0x01, 0xea, 0x33, 0x09, 0x00, 0x00,
+            0x00, 0x00,
+        ],
+        _ => [
+            0x6f, 0xe2, 0x8c, 0x0a, 0xb6, 0xf1, 0xb3, 0x72, 0xc1, 0xa6, 0xa2, 0x46, 0xae, 0x63, 0xf7,
+            0x4f, 0x93, 0x1e, 0x83, 0x65, 0xe1, 0x5a, 0x08, 0x9c, 0x68, 0xd6, 0x19, 0x00, 0x00, 0x00,
+            0x00, 0x00,
+        ],
+    }
+}
+
+/// A validated block header: its hash + back-reference + timestamp + difficulty.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct HeaderInfo {
+    pub hash: String,      // big-endian hex (block-explorer display order)
+    pub prev_hash: String, // big-endian hex
+    pub time: u32,
+    pub bits: u32,
+}
+
+/// Reverse internal little-endian hash bytes into big-endian display hex.
+fn hex_be(hash_le: &[u8; 32]) -> String {
+    hash_le.iter().rev().map(|b| format!("{b:02x}")).collect()
+}
+
+fn build_getheaders_payload(locator: &[u8; 32]) -> Vec<u8> {
+    let mut p = Vec::with_capacity(4 + 1 + 32 + 32);
+    p.extend_from_slice(&PROTOCOL_VERSION.to_le_bytes());
+    write_varint(&mut p, 1); // one locator hash
+    p.extend_from_slice(locator);
+    p.extend_from_slice(&[0u8; 32]); // hash_stop = 0 → as many as possible
+    p
+}
+
+/// Parse a `headers` payload: varint count, then each entry = 80-byte header +
+/// varint tx_count (always 0 in a headers message). Returns the raw headers.
+fn parse_headers_payload(payload: &[u8]) -> Result<Vec<[u8; 80]>, String> {
+    let mut pos = 0usize;
+    let count = read_varint(payload, &mut pos)? as usize;
+    let mut out = Vec::with_capacity(count.min(4000));
+    for _ in 0..count {
+        let raw = take(payload, &mut pos, 80)?;
+        let mut hdr = [0u8; 80];
+        hdr.copy_from_slice(raw);
+        out.push(hdr);
+        let _txn = read_varint(payload, &mut pos)?; // 0 in a headers message
+    }
+    Ok(out)
+}
+
+/// Handshake, then request and validate one batch of headers after `locator`.
+/// Split from connection setup so it can be exercised over an in-memory duplex.
+async fn sync_headers_batch<S>(
+    stream: &mut S,
+    magic: [u8; 4],
+    locator: [u8; 32],
+) -> Result<Vec<HeaderInfo>, String>
+where
+    S: AsyncReadExt + AsyncWriteExt + Unpin,
+{
+    handshake(stream, magic).await?;
+    let msg = encode_message(magic, "getheaders", &build_getheaders_payload(&locator));
+    tokio::time::timeout(IO_TIMEOUT, stream.write_all(&msg))
+        .await
+        .map_err(|_| "timed out sending getheaders".to_string())?
+        .map_err(|e| format!("send failed: {e}"))?;
+
+    // Skip anything the node volunteers (verack/sendheaders/inv/…) until headers;
+    // answer pings so it doesn't drop us. Bounded so a chatty peer can't loop us.
+    let mut raws: Option<Vec<[u8; 80]>> = None;
+    for _ in 0..50 {
+        let (cmd, payload) = read_message(stream, magic).await?;
+        match cmd.as_str() {
+            "headers" => {
+                raws = Some(parse_headers_payload(&payload)?);
+                break;
+            }
+            "ping" => {
+                let _ = stream.write_all(&encode_message(magic, "pong", &payload)).await;
+            }
+            _ => continue,
+        }
+    }
+    let raws = raws.ok_or("node did not return headers")?;
+
+    // Validate linkage: the first header links to the locator, each subsequent
+    // header to the previous one.
+    let mut expected_prev = locator;
+    let mut out = Vec::with_capacity(raws.len());
+    for raw in &raws {
+        let mut prev = [0u8; 32];
+        prev.copy_from_slice(&raw[4..36]);
+        if prev != expected_prev {
+            return Err("header chain does not link to the locator/previous header".into());
+        }
+        let hash = double_sha256(raw);
+        out.push(HeaderInfo {
+            hash: hex_be(&hash),
+            prev_hash: hex_be(&prev),
+            time: u32::from_le_bytes([raw[68], raw[69], raw[70], raw[71]]),
+            bits: u32::from_le_bytes([raw[72], raw[73], raw[74], raw[75]]),
+        });
+        expected_prev = hash;
+    }
+    Ok(out)
+}
+
+/// Connect, handshake, and fetch one validated batch of headers after `locator`.
+pub async fn fetch_headers_after(
+    host: &str,
+    port: u16,
+    network: &str,
+    transport: Transport<'_>,
+    locator: [u8; 32],
+) -> Result<Vec<HeaderInfo>, String> {
+    let magic = params_for(network).magic;
+    let mut stream = match transport {
+        Transport::Direct => {
+            tokio::time::timeout(CONNECT_TIMEOUT, TcpStream::connect((host, port)))
+                .await
+                .map_err(|_| format!("timed out connecting to {host}:{port}"))?
+                .map_err(|e| format!("could not connect to {host}:{port}: {e}"))?
+        }
+        Transport::Tor { host: ph, port: pp } => {
+            let token = format!("optn-node-{}", nonce());
+            tokio::time::timeout(CONNECT_TIMEOUT, tor::connect_via_tor(ph, pp, host, port, &token))
+                .await
+                .map_err(|_| format!("timed out connecting to {host}:{port} over Tor"))??
+        }
+    };
+    sync_headers_batch(&mut stream, magic, locator).await
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn getheaders_payload_has_locator_and_zero_stop() {
+        let loc = [7u8; 32];
+        let p = build_getheaders_payload(&loc);
+        assert_eq!(p.len(), 4 + 1 + 32 + 32);
+        assert_eq!(p[4], 1); // one locator hash
+        assert_eq!(&p[5..37], &loc);
+        assert_eq!(&p[37..69], &[0u8; 32]); // hash_stop = 0
+    }
+
+    /// Live: sync the first header batch after genesis from a public mainnet
+    /// node and prove parse + chain linkage (block 1's hash is well-known).
+    ///   OPTN_NODE_HOST=seed.bch.loping.net cargo test -p optn-wallet-desktop \
+    ///     spv::tests::live_sync_first_headers_mainnet -- --ignored --nocapture
+    #[test]
+    #[ignore]
+    fn live_sync_first_headers_mainnet() {
+        let host = std::env::var("OPTN_NODE_HOST").unwrap_or_else(|_| "seed.bch.loping.net".to_string());
+        let port: u16 = std::env::var("OPTN_NODE_PORT").ok().and_then(|p| p.parse().ok()).unwrap_or(8333);
+        let rt = tokio::runtime::Builder::new_multi_thread().enable_all().build().unwrap();
+        rt.block_on(async {
+            let headers = fetch_headers_after(&host, port, "mainnet", Transport::Direct, genesis_hash("mainnet"))
+                .await
+                .expect("header sync failed");
+            println!(
+                "synced {} headers; block1={}",
+                headers.len(),
+                headers.first().map(|h| h.hash.as_str()).unwrap_or("-")
+            );
+            assert!(headers.len() > 1, "expected a batch of headers");
+            assert_eq!(
+                headers[0].hash,
+                "00000000839a8e6886ab5951d76f411475428afc90947ee320161bbf18eb6048"
+            );
+        });
+    }
 
     #[test]
     fn mainnet_magic_matches_bchn() {
