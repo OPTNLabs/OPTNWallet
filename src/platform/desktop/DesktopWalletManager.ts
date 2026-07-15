@@ -172,6 +172,33 @@ export async function createWalletWithPassword(
 }
 
 /**
+ * Switch an OPEN wallet to another network IN PLACE (Cashonize model): a seed
+ * works on every network, so the SAME wallet is repointed at `target` — its
+ * network is updated and its old-network-derived keys/addresses/UTXOs are
+ * dropped and regenerated under the new network's prefix. The caller then
+ * reloads the wallet view and reconnects to the target network's servers. No
+ * new wallet row is created; the picker still shows one wallet per seed.
+ */
+export async function switchWalletNetwork(walletId: number, target: Network): Promise<void> {
+  const dbService = DatabaseService();
+  await dbService.ensureDatabaseStarted();
+  const db = dbService.getDatabase();
+  if (!db || walletId <= 0) return;
+
+  db.run('UPDATE wallets SET networkType = ? WHERE id = ?', [target, walletId]);
+  db.run('DELETE FROM keys WHERE wallet_id = ?', [walletId]);
+  try { db.run('DELETE FROM addresses WHERE wallet_id = ?', [walletId]); } catch { /* optional table */ }
+  try { db.run('DELETE FROM UTXOs WHERE wallet_id = ?', [walletId]); } catch { /* optional table */ }
+  await dbService.forceSaveDatabase();
+
+  // Regenerate the initial address batch. KeyService reads the wallet's
+  // (now-updated) networkType, so these derive under `target`'s prefix.
+  const { default: KeyService } = await import('../../services/KeyService');
+  await KeyService.bootstrapInitialAddressBatch(walletId, 0, 10);
+  await dbService.forceSaveDatabase();
+}
+
+/**
  * Open an existing wallet: derive its key from `password` + its stored salt,
  * activate it, and return the decrypted wallet record. Returns null if the
  * password is wrong (decrypt fails) or the wallet doesn't exist.
