@@ -15,6 +15,7 @@ import { useMenuBar } from './useMenuBar';
 import { selectWalletId, resetWallet } from '../../state/slices/walletSlice';
 import { getCachedWalletKey } from './WalletKeyCache';
 import { persistor } from '../../state/store';
+import { invoke } from '@tauri-apps/api/core';
 
 const DesktopAppShell: React.FC = () => {
   useMenuBar();
@@ -58,6 +59,22 @@ const DesktopAppShell: React.FC = () => {
     }
     setInvariantChecked(true);
   }, [rehydrated, walletId, dispatch]);
+
+  // A Tauri webview silently blocks target="_blank" links, so faucet/explorer/
+  // external links never open. Intercept clicks on external http(s) links and
+  // open them in the user's default browser via the open_external command.
+  useEffect(() => {
+    const onClick = (e: MouseEvent) => {
+      const anchor = (e.target as HTMLElement | null)?.closest?.('a');
+      const href = anchor?.getAttribute('href');
+      if (href && /^https?:\/\//i.test(href)) {
+        e.preventDefault();
+        void invoke('open_external', { url: href }).catch(() => {});
+      }
+    };
+    document.addEventListener('click', onClick);
+    return () => document.removeEventListener('click', onClick);
+  }, []);
 
   // Don't mount AppShell (and everything under it — including
   // useAppLifecycle.ts's walletId>0-triggered hooks: WizardConnect init,
