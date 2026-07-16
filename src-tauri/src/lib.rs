@@ -81,6 +81,79 @@ async fn bip37_node_probe(
     spv::probe_node(&host, port, &network, transport).await
 }
 
+// Parse a 40-hex-char pubkey hash (hash160) into 20 bytes.
+fn parse_pkh(h: &str) -> Result<[u8; 20], String> {
+    if h.len() != 40 {
+        return Err("pubkey hash must be 40 hex chars".into());
+    }
+    let mut out = [0u8; 20];
+    for i in 0..20 {
+        out[i] = u8::from_str_radix(&h[i * 2..i * 2 + 2], 16)
+            .map_err(|_| "invalid pubkey-hash hex".to_string())?;
+    }
+    Ok(out)
+}
+
+// Parse a display (big-endian) block-hash hex into internal little-endian bytes.
+fn parse_block_hash(h: &str) -> Result<[u8; 32], String> {
+    if h.len() != 64 {
+        return Err("block hash must be 64 hex chars".into());
+    }
+    let mut out = [0u8; 32];
+    for i in 0..32 {
+        out[31 - i] = u8::from_str_radix(&h[i * 2..i * 2 + 2], 16)
+            .map_err(|_| "invalid block-hash hex".to_string())?;
+    }
+    Ok(out)
+}
+
+// Sync a batch of block headers from a node, starting after `locator` (a
+// display-hex block hash; empty/none = the network genesis). Returns validated
+// HeaderInfo; the caller loops with the last hash to walk toward the tip.
+#[tauri::command]
+async fn bip37_headers(
+    host: String,
+    port: u16,
+    network: String,
+    locator: Option<String>,
+    tor_host: Option<String>,
+    tor_port: Option<u16>,
+) -> Result<Vec<spv::HeaderInfo>, String> {
+    let start = match locator.as_deref().filter(|s| !s.is_empty()) {
+        Some(h) => parse_block_hash(h)?,
+        None => spv::genesis_hash(&network),
+    };
+    let transport = match (tor_host.as_deref(), tor_port) {
+        (Some(h), Some(p)) => fusion::Transport::Tor { host: h, port: p },
+        _ => fusion::Transport::Direct,
+    };
+    spv::fetch_headers_after(&host, port, &network, transport, start).await
+}
+
+// Scan the given blocks (display-hex hashes) for outputs/inputs touching the
+// wallet's `pubkey_hashes` (40-hex each), returning owned UTXOs + spent
+// outpoints. This is the trustless, direct-from-node path.
+#[tauri::command]
+async fn bip37_scan(
+    host: String,
+    port: u16,
+    network: String,
+    pubkey_hashes: Vec<String>,
+    block_hashes: Vec<String>,
+    tor_host: Option<String>,
+    tor_port: Option<u16>,
+) -> Result<spv::ScanResult, String> {
+    let watched: std::collections::HashSet<[u8; 20]> =
+        pubkey_hashes.iter().map(|h| parse_pkh(h)).collect::<Result<_, _>>()?;
+    let blocks: Vec<[u8; 32]> =
+        block_hashes.iter().map(|h| parse_block_hash(h)).collect::<Result<_, _>>()?;
+    let transport = match (tor_host.as_deref(), tor_port) {
+        (Some(h), Some(p)) => fusion::Transport::Tor { host: h, port: p },
+        _ => fusion::Transport::Direct,
+    };
+    spv::scan_blocks(&host, port, &network, transport, &blocks, &watched).await
+}
+
 // ── Integrated (app-managed) Tor ────────────────────────────────────────────
 //
 // SOCKS port for the app's own Tor — deliberately not 9050/9150 so it never
@@ -274,6 +347,8 @@ pub fn run() {
             fusion_tor_detect,
             fusion_tor_check,
             bip37_node_probe,
+            bip37_headers,
+            bip37_scan,
             tor_start,
             tor_stop,
             tor_status,
