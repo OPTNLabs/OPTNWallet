@@ -16,6 +16,12 @@ import { getUserNodes, addUserNode, removeUserNode } from '../../utils/servers/u
 import { CashFusionSettings } from './CashFusionSettings';
 import { TorSettings } from './TorSettings';
 import { Bip37NodeRow } from './Bip37NodeSettings';
+import {
+  getBackend,
+  setBackend,
+  BACKEND_CHANGED_EVENT,
+  type Backend,
+} from '../../platform/desktop/backendSelection';
 
 // BCH P2P default ports across networks — an entry on one of these is a BIP37
 // full node, anything else is an Electrum/Fulcrum server. Lets one "Add server"
@@ -61,6 +67,16 @@ export const ServerSettings: React.FC = () => {
   useEffect(() => {
     setUserServers(getUserServers(currentNetwork));
     setNodes(getUserNodes(currentNetwork));
+  }, [currentNetwork]);
+
+  // Exactly ONE backend serves the wallet: the pool (auto/failover), a pinned
+  // Electrum server, or a pinned BIP37 node. Reflect changes from the node rows.
+  const [backend, setBackendState] = useState<Backend>(() => getBackend(currentNetwork));
+  useEffect(() => {
+    const refresh = () => setBackendState(getBackend(currentNetwork));
+    refresh();
+    window.addEventListener(BACKEND_CHANGED_EVENT, refresh);
+    return () => window.removeEventListener(BACKEND_CHANGED_EVENT, refresh);
   }, [currentNetwork]);
 
   const handleAddUserServer = () => {
@@ -160,6 +176,38 @@ export const ServerSettings: React.FC = () => {
 
   return (
     <div className="flex flex-col gap-4">
+
+      {/* Which single backend serves this wallet */}
+      <div className="rounded-xl border border-[var(--wallet-border)] bg-[var(--wallet-surface)] p-3 flex items-center justify-between gap-3">
+        <div className="min-w-0">
+          <p className="text-xs font-semibold wallet-muted uppercase tracking-wide">Backend</p>
+          <p className="text-sm wallet-text-strong break-all">
+            {backend.kind === 'auto' ? (
+              'Auto — server pool, with failover'
+            ) : backend.kind === 'node' ? (
+              <>
+                Node <span className="font-mono opacity-70">{backend.target}</span>{' '}
+                <span className="text-[10px] text-[var(--wallet-accent)] font-semibold">trustless</span>
+              </>
+            ) : (
+              <>
+                Server <span className="font-mono opacity-70">{backend.target}</span>
+              </>
+            )}
+          </p>
+          <p className="text-[10px] wallet-muted">
+            Only this backend is used — pinning a node means Electrum servers aren&apos;t consulted.
+          </p>
+        </div>
+        {backend.kind !== 'auto' && (
+          <button
+            onClick={() => setBackend(currentNetwork, { kind: 'auto' })}
+            className="shrink-0 rounded-lg border border-[var(--wallet-border)] px-2.5 py-1 text-[10px] font-semibold wallet-text-strong hover:border-[var(--wallet-accent)]/60"
+          >
+            Use Auto
+          </button>
+        )}
+      </div>
 
       {/* Current connection */}
       <div className="rounded-xl border border-[var(--wallet-border)] bg-[var(--wallet-surface)] p-3 space-y-1">

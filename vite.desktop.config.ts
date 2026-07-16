@@ -88,6 +88,11 @@ const MODULE_SWAPS = new Map<string, string>([
   // CashFusion needs a raw TCP+TLS socket, which no WebView can open — the
   // desktop version routes through a Rust command that speaks the real protocol.
   [srcPath('src/services/fusion/FusionStatusService.ts'), srcPath('src/platform/desktop/FusionStatusService.ts')],
+  // Backend router: with a BIP37 node pinned, wallet data is served from a
+  // trustless node scan instead of Electrum (one backend at a time). The router
+  // imports the real ElectrumServer for the auto/server path — allowed because
+  // resolveId short-circuits when the replacement itself is the importer.
+  [srcPath('src/apis/ElectrumServer/ElectrumServer.ts'), srcPath('src/platform/desktop/ElectrumServerRouter.ts')],
   // Mounts DesktopSecurityGate + AppLockGate + menu-bar listener around the app.
   [srcPath('src/app/AppShell.tsx'), srcPath('src/platform/desktop/DesktopAppShell.tsx')],
   // Electron Cash-style onboarding: wallet picker, per-wallet passwords, seed
