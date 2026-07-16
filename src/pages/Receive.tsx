@@ -821,7 +821,6 @@ const Receive: React.FC = () => {
           className="min-h-0 flex-1 space-y-2.5 overflow-y-auto overscroll-contain pr-1 pb-0"
         >
           {addressBrowser}
-          <RpaReceiveCard walletId={currentWalletId} />
           <div
             ref={addressTypeToggleRef}
             className="flex min-h-[34px] items-center justify-center"
@@ -848,6 +847,8 @@ const Receive: React.FC = () => {
               </div>
             </SectionCard>
           )}
+          {/* RPA Paycode at the bottom of the receive list (UI preference). */}
+          <RpaReceiveCard walletId={currentWalletId} />
         </div>
 
         <div className="relative shrink-0 pt-3">
