@@ -648,6 +648,85 @@ pub async fn scan_blocks(
     Ok(result)
 }
 
+// ── Broadcast: announce a signed tx to the node over P2P ─────────────────────
+//
+// Standard relay handshake: send inv(MSG_TX, txid); the node replies getdata for
+// the tx if it wants it; we then send the raw `tx`. Returns the txid. A `reject`
+// (BIP61) reply surfaces as an error. This is the node write-path — the wallet's
+// broadcastTransaction when a node is the active backend.
+
+const MSG_TX: u32 = 1;
+
+fn build_inv_tx(txid_internal: &[u8; 32]) -> Vec<u8> {
+    let mut p = Vec::with_capacity(1 + 36);
+    write_varint(&mut p, 1);
+    p.extend_from_slice(&MSG_TX.to_le_bytes());
+    p.extend_from_slice(txid_internal);
+    p
+}
+
+pub async fn broadcast_tx(
+    host: &str,
+    port: u16,
+    network: &str,
+    transport: Transport<'_>,
+    tx_bytes: Vec<u8>,
+) -> Result<String, String> {
+    let magic = params_for(network).magic;
+    let txid_internal = double_sha256(&tx_bytes);
+    let txid_display: String = txid_internal.iter().rev().map(|b| format!("{b:02x}")).collect();
+
+    let mut stream = match transport {
+        Transport::Direct => {
+            tokio::time::timeout(CONNECT_TIMEOUT, TcpStream::connect((host, port)))
+                .await
+                .map_err(|_| format!("timed out connecting to {host}:{port}"))?
+                .map_err(|e| format!("could not connect to {host}:{port}: {e}"))?
+        }
+        Transport::Tor { host: ph, port: pp } => {
+            let token = format!("optn-node-{}", nonce());
+            tokio::time::timeout(CONNECT_TIMEOUT, tor::connect_via_tor(ph, pp, host, port, &token))
+                .await
+                .map_err(|_| format!("timed out connecting to {host}:{port} over Tor"))??
+        }
+    };
+
+    handshake(&mut stream, magic).await?;
+
+    let inv = encode_message(magic, "inv", &build_inv_tx(&txid_internal));
+    tokio::time::timeout(IO_TIMEOUT, stream.write_all(&inv))
+        .await
+        .map_err(|_| "timed out sending inv".to_string())?
+        .map_err(|e| format!("send failed: {e}"))?;
+
+    // Wait for the node to request the tx (getdata) or reject it.
+    for _ in 0..30 {
+        let (cmd, payload) = read_message(&mut stream, magic).await?;
+        match cmd.as_str() {
+            "getdata" => {
+                let txmsg = encode_message(magic, "tx", &tx_bytes);
+                tokio::time::timeout(IO_TIMEOUT, stream.write_all(&txmsg))
+                    .await
+                    .map_err(|_| "timed out sending tx".to_string())?
+                    .map_err(|e| format!("send failed: {e}"))?;
+                return Ok(txid_display);
+            }
+            "reject" => {
+                // BIP61 reject: <varstr message><1 ccode><varstr reason>...
+                let mut pos = 0usize;
+                let _msg_len = read_varint(&payload, &mut pos).ok();
+                return Err(format!("node rejected tx {txid_display}"));
+            }
+            "ping" => {
+                let _ = stream.write_all(&encode_message(magic, "pong", &payload)).await;
+            }
+            _ => continue,
+        }
+    }
+    // Node already had the tx (no getdata) — treat as accepted.
+    Ok(txid_display)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -719,6 +798,16 @@ mod tests {
         assert_eq!(p[4], 1); // one locator hash
         assert_eq!(&p[5..37], &loc);
         assert_eq!(&p[37..69], &[0u8; 32]); // hash_stop = 0
+    }
+
+    #[test]
+    fn inv_tx_payload_shape() {
+        let txid = [0xabu8; 32];
+        let p = build_inv_tx(&txid);
+        assert_eq!(p.len(), 1 + 4 + 32);
+        assert_eq!(p[0], 1); // one inventory entry
+        assert_eq!(&p[1..5], &MSG_TX.to_le_bytes()); // type = MSG_TX
+        assert_eq!(&p[5..37], &txid);
     }
 
     /// Live: sync the first header batch after genesis from a public mainnet
