@@ -3,6 +3,9 @@ import { useDispatch, useSelector } from 'react-redux';
 import { useNavigate } from 'react-router-dom';
 import { Network, setNetwork } from '../../state/slices/networkSlice';
 import { setWalletId, setWalletNetwork, selectWalletId } from '../../state/slices/walletSlice';
+import { resetUTXOs } from '../../state/slices/utxoSlice';
+import { resetTransactions } from '../../state/slices/transactionSlice';
+import { clearTransaction } from '../../state/slices/transactionBuilderSlice';
 import { selectCurrentNetwork } from '../../state/selectors/networkSelectors';
 import { homeRoute } from '../../navigation/routes';
 import { AppDispatch } from '../../state/store';
@@ -62,6 +65,12 @@ export const NetworkSettings: React.FC = () => {
     } catch {
       /* ignore */
     }
+    // Drop the OLD network's coins/history from redux too — the DB rows are
+    // rebuilt by switchWalletNetwork, but without this the home screen keeps
+    // rendering the previous network's UTXOs and balance.
+    dispatch(resetUTXOs());
+    dispatch(resetTransactions());
+    dispatch(clearTransaction());
 
     // Cashonize model: a seed works on every network, so repoint the SAME
     // wallet at the target network — regenerate its addresses under the new

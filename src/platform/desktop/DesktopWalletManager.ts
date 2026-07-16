@@ -197,9 +197,14 @@ export async function switchWalletNetwork(walletId: number, target: Network): Pr
   } catch { /* default 10 */ }
 
   db.run('UPDATE wallets SET networkType = ? WHERE id = ?', [target, walletId]);
+  // Everything below is derived from the OLD network and must not survive the
+  // switch: addresses carry the old prefix, and UTXOs/history belong to the
+  // other chain entirely (leaving them mixes mainnet txs into chipnet history).
   db.run('DELETE FROM keys WHERE wallet_id = ?', [walletId]);
   try { db.run('DELETE FROM addresses WHERE wallet_id = ?', [walletId]); } catch { /* optional table */ }
   try { db.run('DELETE FROM UTXOs WHERE wallet_id = ?', [walletId]); } catch { /* optional table */ }
+  try { db.run('DELETE FROM transactions WHERE wallet_id = ?', [walletId]); } catch { /* optional table */ }
+  try { db.run('DELETE FROM transaction_details WHERE wallet_id = ?', [walletId]); } catch { /* optional table */ }
   await dbService.forceSaveDatabase();
 
   // Regenerate the address batch. KeyService reads the wallet's (now-updated)
