@@ -14,6 +14,7 @@
 import { invoke } from '@tauri-apps/api/core';
 import { Network } from '../../state/slices/networkSlice';
 import KeyService from '../../services/KeyService';
+import { getBirthHeight } from './DesktopWalletManager';
 
 interface HeaderInfo {
   hash: string; // display (big-endian) hex
@@ -129,8 +130,18 @@ export async function nodeSync(
   }
 
   const allBlocks = await syncHeaders(host, port, network, opts?.fromHash);
-  const window = opts?.scanWindow ?? DEFAULT_SCAN_WINDOW;
-  const blockHashes = allBlocks.slice(-window);
+
+  // allBlocks[i] is the block at height i+1 (the walk starts AFTER genesis), so
+  // a wallet born at height H only needs blocks from index H-1 onward — it
+  // cannot hold coins from before it existed. Without a recorded birth height
+  // (older wallets, or a chain we just switched to) fall back to a recent
+  // window, since one merkleblock round-trip per block makes a full scan
+  // impractical.
+  const birth = await getBirthHeight(walletId);
+  const blockHashes =
+    birth && birth > 0
+      ? allBlocks.slice(Math.max(0, birth - 1))
+      : allBlocks.slice(-(opts?.scanWindow ?? DEFAULT_SCAN_WINDOW));
 
   const res = await invoke<ScanResult>('bip37_scan', {
     host,
