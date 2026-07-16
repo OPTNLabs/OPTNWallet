@@ -6,9 +6,12 @@
 // (a real version/verack handshake via bip37_node_probe) to confirm it's
 // reachable and serves BIP37, and remove it. Desktop-only (raw TCP).
 import React, { useState } from 'react';
+import { useSelector } from 'react-redux';
 import { invoke } from '@tauri-apps/api/core';
 import { Network } from '../../state/slices/networkSlice';
+import { selectWalletId } from '../../state/slices/walletSlice';
 import { getNodeLabel, parseNodeTarget } from '../../utils/servers/userNodes';
+import { nodeSync, type NodeSyncResult } from '../../platform/desktop/Bip37Backend';
 
 interface NodeProbe {
   user_agent: string;
@@ -24,12 +27,22 @@ type ProbeState =
   | { status: 'ok'; probe: NodeProbe }
   | { status: 'fail'; error: string };
 
+type SyncState =
+  | { status: 'idle' }
+  | { status: 'syncing' }
+  | { status: 'ok'; result: NodeSyncResult }
+  | { status: 'fail'; error: string };
+
+const satsToBch = (sats: number) => (sats / 1e8).toLocaleString(undefined, { maximumFractionDigits: 8 });
+
 export const Bip37NodeRow: React.FC<{
   target: string;
   network: Network;
   onRemove: (target: string) => void;
 }> = ({ target, network, onRemove }) => {
   const [state, setState] = useState<ProbeState>({ status: 'idle' });
+  const [sync, setSync] = useState<SyncState>({ status: 'idle' });
+  const walletId = useSelector(selectWalletId);
   const label = getNodeLabel(network, target);
 
   const probe = async () => {
@@ -40,6 +53,19 @@ export const Bip37NodeRow: React.FC<{
       setState({ status: 'ok', probe: result });
     } catch (err) {
       setState({ status: 'fail', error: err instanceof Error ? err.message : String(err) });
+    }
+  };
+
+  // Trustlessly derive this wallet's balance straight from the node: header sync
+  // + bloom-filter scan, every matched tx proven by its merkleblock.
+  const runSync = async () => {
+    const { host, port } = parseNodeTarget(target, network);
+    setSync({ status: 'syncing' });
+    try {
+      const result = await nodeSync(host, port, network, walletId);
+      setSync({ status: 'ok', result });
+    } catch (err) {
+      setSync({ status: 'fail', error: err instanceof Error ? err.message : String(err) });
     }
   };
 
@@ -60,6 +86,16 @@ export const Bip37NodeRow: React.FC<{
         >
           {state.status === 'probing' ? 'Probing…' : 'Probe'}
         </button>
+        {walletId > 0 && (
+          <button
+            onClick={() => void runSync()}
+            disabled={sync.status === 'syncing'}
+            title="Derive this wallet's balance directly from the node (trustless SPV)"
+            className="rounded-lg border border-[var(--wallet-border)] px-2 py-1 text-[10px] font-semibold wallet-text-strong hover:border-[var(--wallet-accent)]/60 disabled:opacity-50"
+          >
+            {sync.status === 'syncing' ? 'Syncing…' : 'Sync'}
+          </button>
+        )}
         <button
           onClick={() => onRemove(target)}
           className="text-[10px] text-red-400/70 hover:text-red-400 px-1 shrink-0"
@@ -82,6 +118,29 @@ export const Bip37NodeRow: React.FC<{
       )}
       {state.status === 'fail' && (
         <p className="mt-1.5 text-[10px] text-red-400/90 leading-relaxed break-all">{state.error}</p>
+      )}
+
+      {sync.status === 'syncing' && (
+        <p className="mt-1.5 text-[10px] wallet-muted animate-pulse">
+          Syncing headers + scanning blocks via the node…
+        </p>
+      )}
+      {sync.status === 'ok' && (
+        <div className="mt-1.5 space-y-0.5 text-[10px] wallet-muted">
+          <p className="text-green-400 font-semibold">
+            {satsToBch(sync.result.totalSats)} BCH from the node ✓
+          </p>
+          <p>
+            scanned {sync.result.scannedBlocks} blocks · {sync.result.byAddress.size} address(es) with
+            coins · watching {sync.result.watchedAddresses}
+          </p>
+          <p className="opacity-70 leading-relaxed">
+            Verified trustlessly: every matched tx proven by its block's merkle proof.
+          </p>
+        </div>
+      )}
+      {sync.status === 'fail' && (
+        <p className="mt-1.5 text-[10px] text-red-400/90 leading-relaxed break-all">{sync.error}</p>
       )}
     </div>
   );
