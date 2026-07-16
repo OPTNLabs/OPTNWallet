@@ -185,16 +185,27 @@ export async function switchWalletNetwork(walletId: number, target: Network): Pr
   const db = dbService.getDatabase();
   if (!db || walletId <= 0) return;
 
+  // Preserve address depth across the toggle: regenerate at least as many
+  // address indices as the wallet already had (each index = receive+change =
+  // 2 keys), so funds on a later address aren't hidden after switching back.
+  let indices = 10;
+  try {
+    const cnt = db.prepare('SELECT COUNT(*) AS c FROM keys WHERE wallet_id = ?');
+    cnt.bind([walletId]);
+    if (cnt.step()) indices = Math.max(10, Math.ceil(Number((cnt.getAsObject() as { c: unknown }).c ?? 0) / 2));
+    cnt.free();
+  } catch { /* default 10 */ }
+
   db.run('UPDATE wallets SET networkType = ? WHERE id = ?', [target, walletId]);
   db.run('DELETE FROM keys WHERE wallet_id = ?', [walletId]);
   try { db.run('DELETE FROM addresses WHERE wallet_id = ?', [walletId]); } catch { /* optional table */ }
   try { db.run('DELETE FROM UTXOs WHERE wallet_id = ?', [walletId]); } catch { /* optional table */ }
   await dbService.forceSaveDatabase();
 
-  // Regenerate the initial address batch. KeyService reads the wallet's
-  // (now-updated) networkType, so these derive under `target`'s prefix.
+  // Regenerate the address batch. KeyService reads the wallet's (now-updated)
+  // networkType, so these derive under `target`'s prefix.
   const { default: KeyService } = await import('../../services/KeyService');
-  await KeyService.bootstrapInitialAddressBatch(walletId, 0, 10);
+  await KeyService.bootstrapInitialAddressBatch(walletId, 0, indices);
   await dbService.forceSaveDatabase();
 }
 
