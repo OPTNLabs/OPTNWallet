@@ -23,6 +23,7 @@ use crate::fusion::{tor, Transport};
 
 pub mod bloom;
 pub mod merkleblock;
+pub mod tx;
 
 // We advertise a modern protocol version; nodes negotiate down as needed.
 const PROTOCOL_VERSION: i32 = 70015;
