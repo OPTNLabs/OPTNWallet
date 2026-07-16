@@ -451,9 +451,120 @@ pub async fn fetch_headers_after(
     sync_headers_batch(&mut stream, magic, locator).await
 }
 
+// ── Phase 3c: filterload + merkleblock download ──────────────────────────────
+//
+// Upload the wallet's bloom filter (filterload), then request a block as a
+// FILTERED block (getdata, inv type MSG_FILTERED_BLOCK=3). The node replies with
+// a `merkleblock` (verified by spv::merkleblock) plus a `tx` for each match.
+// Phase 3c wires the download + verification; extracting UTXOs from the matched
+// txs and driving a whole birth-height..tip scan is Phase 3d.
+
+const MSG_FILTERED_BLOCK: u32 = 3;
+
+fn build_getdata_filtered_block(block_hash: &[u8; 32]) -> Vec<u8> {
+    let mut p = Vec::with_capacity(1 + 36);
+    write_varint(&mut p, 1); // one inventory entry
+    p.extend_from_slice(&MSG_FILTERED_BLOCK.to_le_bytes());
+    p.extend_from_slice(block_hash);
+    p
+}
+
+/// Handshake, load `filter`, request `block_hash` as a merkleblock, and return
+/// the verified partial merkle tree (matched txids + validity).
+async fn request_filtered_block<S>(
+    stream: &mut S,
+    magic: [u8; 4],
+    block_hash: [u8; 32],
+    filter: &bloom::BloomFilter,
+) -> Result<merkleblock::MerkleBlock, String>
+where
+    S: AsyncReadExt + AsyncWriteExt + Unpin,
+{
+    handshake(stream, magic).await?;
+
+    let fl = encode_message(magic, "filterload", &filter.to_filterload_payload(bloom::BLOOM_UPDATE_ALL));
+    tokio::time::timeout(IO_TIMEOUT, stream.write_all(&fl))
+        .await
+        .map_err(|_| "timed out sending filterload".to_string())?
+        .map_err(|e| format!("send failed: {e}"))?;
+
+    let gd = encode_message(magic, "getdata", &build_getdata_filtered_block(&block_hash));
+    tokio::time::timeout(IO_TIMEOUT, stream.write_all(&gd))
+        .await
+        .map_err(|_| "timed out sending getdata".to_string())?
+        .map_err(|e| format!("send failed: {e}"))?;
+
+    // Wait for the merkleblock, answering pings and ignoring other messages
+    // (verack/sendheaders/inv/tx/…). Bounded so a peer can't loop us forever.
+    for _ in 0..100 {
+        let (cmd, payload) = read_message(stream, magic).await?;
+        match cmd.as_str() {
+            "merkleblock" => return merkleblock::parse_merkleblock(&payload),
+            "ping" => {
+                let _ = stream.write_all(&encode_message(magic, "pong", &payload)).await;
+            }
+            _ => continue,
+        }
+    }
+    Err("node did not return a merkleblock".into())
+}
+
+/// Connect, load a bloom filter, and fetch one block as a verified merkleblock.
+pub async fn scan_block(
+    host: &str,
+    port: u16,
+    network: &str,
+    transport: Transport<'_>,
+    block_hash: [u8; 32],
+    filter: &bloom::BloomFilter,
+) -> Result<merkleblock::MerkleBlock, String> {
+    let magic = params_for(network).magic;
+    let mut stream = match transport {
+        Transport::Direct => {
+            tokio::time::timeout(CONNECT_TIMEOUT, TcpStream::connect((host, port)))
+                .await
+                .map_err(|_| format!("timed out connecting to {host}:{port}"))?
+                .map_err(|e| format!("could not connect to {host}:{port}: {e}"))?
+        }
+        Transport::Tor { host: ph, port: pp } => {
+            let token = format!("optn-node-{}", nonce());
+            tokio::time::timeout(CONNECT_TIMEOUT, tor::connect_via_tor(ph, pp, host, port, &token))
+                .await
+                .map_err(|_| format!("timed out connecting to {host}:{port} over Tor"))??
+        }
+    };
+    request_filtered_block(&mut stream, magic, block_hash, filter).await
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Live: filterload + request block 1 as a merkleblock from a public node,
+    /// and verify the partial merkle tree against its header.
+    ///   OPTN_NODE_HOST=bch.imaginary.cash cargo test -p optn-wallet-desktop \
+    ///     spv::tests::live_filtered_block1_verifies -- --ignored --nocapture
+    #[test]
+    #[ignore]
+    fn live_filtered_block1_verifies() {
+        let host = std::env::var("OPTN_NODE_HOST").unwrap_or_else(|_| "bch.imaginary.cash".to_string());
+        let port: u16 = std::env::var("OPTN_NODE_PORT").ok().and_then(|p| p.parse().ok()).unwrap_or(8333);
+        // Block 1 hash: display (big-endian) -> internal (little-endian) for the inv.
+        let display = "00000000839a8e6886ab5951d76f411475428afc90947ee320161bbf18eb6048";
+        let mut h = [0u8; 32];
+        for i in 0..32 {
+            h[31 - i] = u8::from_str_radix(&display[i * 2..i * 2 + 2], 16).unwrap();
+        }
+        let filter = bloom::BloomFilter::new(1, 0.001, 0);
+        let rt = tokio::runtime::Builder::new_multi_thread().enable_all().build().unwrap();
+        rt.block_on(async {
+            let mb = scan_block(&host, port, "mainnet", Transport::Direct, h, &filter)
+                .await
+                .expect("merkleblock request failed");
+            println!("merkleblock valid={} matched={}", mb.valid, mb.matched_txids.len());
+            assert!(mb.valid, "merkleblock must verify against its header");
+        });
+    }
 
     #[test]
     fn getheaders_payload_has_locator_and_zero_stop() {
