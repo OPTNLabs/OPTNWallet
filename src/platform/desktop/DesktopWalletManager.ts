@@ -147,6 +147,12 @@ export async function createWalletWithPassword(
     return null;
   }
 
+  // Record the chain tip as this wallet's birth height: it cannot hold coins
+  // from before it existed, so a BIP37 node only has to scan birth..tip rather
+  // than the whole chain (one merkleblock round-trip per block). Best-effort —
+  // if the tip isn't known the node scan falls back to a recent window.
+  await recordBirthHeight(walletId);
+
   // Auto-mirror the wallet to a file in the default wallets folder (EC-style).
   // Encrypt under this wallet's own key so the file is safe at rest and can be
   // re-opened with the same password. Non-fatal: the DB row is the source of
@@ -169,6 +175,48 @@ export async function createWalletWithPassword(
   }
 
   return walletId;
+}
+
+/**
+ * Store the current chain tip as `walletId`'s birth height. Called on creation;
+ * a wallet can't have coins older than itself, so a BIP37 scan starts here.
+ * Best-effort: a failure just means the node scan uses its recent-window
+ * fallback instead of full history.
+ */
+async function recordBirthHeight(walletId: number): Promise<void> {
+  try {
+    const { default: ElectrumService } = await import('../../services/ElectrumService');
+    const tip = (await ElectrumService.getLatestBlock()) as { height?: unknown } | null;
+    const height = tip?.height;
+    if (typeof height !== 'number' || height <= 0) return;
+    const dbService = DatabaseService();
+    const db = dbService.getDatabase();
+    if (!db) return;
+    db.run('UPDATE wallets SET birth_height = ? WHERE id = ?', [height, walletId]);
+    await dbService.forceSaveDatabase();
+  } catch {
+    /* best effort */
+  }
+}
+
+/**
+ * The chain height when this wallet was created, or null if unknown (wallets
+ * made before birth-height tracking, or when the tip couldn't be read).
+ */
+export async function getBirthHeight(walletId: number): Promise<number | null> {
+  const dbService = DatabaseService();
+  await dbService.ensureDatabaseStarted();
+  const db = dbService.getDatabase();
+  if (!db) return null;
+  const q = db.prepare('SELECT birth_height FROM wallets WHERE id = ?');
+  q.bind([walletId]);
+  let height: number | null = null;
+  if (q.step()) {
+    const row = q.getAsObject() as { birth_height?: unknown };
+    height = typeof row.birth_height === 'number' && row.birth_height > 0 ? row.birth_height : null;
+  }
+  q.free();
+  return height;
 }
 
 /**
@@ -196,7 +244,10 @@ export async function switchWalletNetwork(walletId: number, target: Network): Pr
     cnt.free();
   } catch { /* default 10 */ }
 
-  db.run('UPDATE wallets SET networkType = ? WHERE id = ?', [target, walletId]);
+  // Birth height is a height on the OLD chain — meaningless on the new one, and
+  // wrong to reuse (heights differ per chain). Clear it: the node scan then uses
+  // its recent-window fallback until this wallet's birth on this chain is known.
+  db.run('UPDATE wallets SET networkType = ?, birth_height = NULL WHERE id = ?', [target, walletId]);
   // Everything below is derived from the OLD network and must not survive the
   // switch: addresses carry the old prefix, and UTXOs/history belong to the
   // other chain entirely (leaving them mixes mainnet txs into chipnet history).
