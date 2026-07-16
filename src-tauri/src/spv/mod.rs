@@ -537,6 +537,117 @@ pub async fn scan_block(
     request_filtered_block(&mut stream, magic, block_hash, filter).await
 }
 
+// ── Phase 3d driver: scan a block range into a UTXO delta ────────────────────
+//
+// Over ONE connection: filterload the wallet's scripts, then for each block send
+// getdata(filtered block), verify the merkleblock, read its matched `tx`
+// messages, and fold them through tx::match_tx. The caller applies the deltas to
+// a persistent UTXO/history index and advances its sync height.
+
+/// Owned output found while scanning: (txid display-hex, vout, value, pkh).
+pub type OwnedUtxo = (String, u32, u64, [u8; 20]);
+
+#[derive(Default, serde::Serialize)]
+pub struct ScanResult {
+    pub scanned_blocks: usize,
+    /// New outputs paying the wallet.
+    pub owned: Vec<OwnedUtxo>,
+    /// Outpoints spent by scanned txs: (prev-txid display-hex, prev-vout).
+    pub spent: Vec<(String, u32)>,
+}
+
+fn txid_hex(internal_le: &[u8; 32]) -> String {
+    internal_le.iter().rev().map(|b| format!("{b:02x}")).collect()
+}
+
+/// Scan `block_hashes` (internal LE) for outputs/inputs touching `watched`.
+pub async fn scan_blocks(
+    host: &str,
+    port: u16,
+    network: &str,
+    transport: Transport<'_>,
+    block_hashes: &[[u8; 32]],
+    watched: &std::collections::HashSet<[u8; 20]>,
+) -> Result<ScanResult, String> {
+    let magic = params_for(network).magic;
+    let mut stream = match transport {
+        Transport::Direct => {
+            tokio::time::timeout(CONNECT_TIMEOUT, TcpStream::connect((host, port)))
+                .await
+                .map_err(|_| format!("timed out connecting to {host}:{port}"))?
+                .map_err(|e| format!("could not connect to {host}:{port}: {e}"))?
+        }
+        Transport::Tor { host: ph, port: pp } => {
+            let token = format!("optn-node-{}", nonce());
+            tokio::time::timeout(CONNECT_TIMEOUT, tor::connect_via_tor(ph, pp, host, port, &token))
+                .await
+                .map_err(|_| format!("timed out connecting to {host}:{port} over Tor"))??
+        }
+    };
+
+    handshake(&mut stream, magic).await?;
+
+    // Filter over the watched pubkey-hashes (BLOOM_UPDATE_ALL). Extra capacity
+    // keeps the false-positive rate low; a random tweak avoids fingerprinting.
+    let mut filter = bloom::BloomFilter::new((watched.len().max(1)) * 2, 0.0001, nonce() as u32);
+    for h in watched {
+        filter.insert(h);
+    }
+    let fl = encode_message(magic, "filterload", &filter.to_filterload_payload(bloom::BLOOM_UPDATE_ALL));
+    tokio::time::timeout(IO_TIMEOUT, stream.write_all(&fl))
+        .await
+        .map_err(|_| "timed out sending filterload".to_string())?
+        .map_err(|e| format!("send failed: {e}"))?;
+
+    let mut result = ScanResult::default();
+    for block_hash in block_hashes {
+        let gd = encode_message(magic, "getdata", &build_getdata_filtered_block(block_hash));
+        tokio::time::timeout(IO_TIMEOUT, stream.write_all(&gd))
+            .await
+            .map_err(|_| "timed out sending getdata".to_string())?
+            .map_err(|e| format!("send failed: {e}"))?;
+
+        // Read the merkleblock, then exactly its matched-tx count of `tx`
+        // messages (some may be bloom false positives — match_tx filters those).
+        let mut expected: Option<usize> = None;
+        let mut got_txs = 0usize;
+        for _ in 0..1000 {
+            let (cmd, payload) = read_message(&mut stream, magic).await?;
+            match cmd.as_str() {
+                "merkleblock" => {
+                    let mb = merkleblock::parse_merkleblock(&payload)?;
+                    if !mb.valid {
+                        return Err("merkleblock failed verification during scan".into());
+                    }
+                    expected = Some(mb.matched_txids.len());
+                }
+                "tx" => {
+                    let t = tx::parse_tx(&payload)?;
+                    let m = tx::match_tx(&t, watched);
+                    for (vout, value, pkh) in m.owned_outputs {
+                        result.owned.push((txid_hex(&t.txid), vout, value, pkh));
+                    }
+                    for (prev, vout) in m.spent_outpoints {
+                        result.spent.push((txid_hex(&prev), vout));
+                    }
+                    got_txs += 1;
+                }
+                "ping" => {
+                    let _ = stream.write_all(&encode_message(magic, "pong", &payload)).await;
+                }
+                _ => {}
+            }
+            if let Some(n) = expected {
+                if got_txs >= n {
+                    break;
+                }
+            }
+        }
+        result.scanned_blocks += 1;
+    }
+    Ok(result)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -564,6 +675,39 @@ mod tests {
                 .expect("merkleblock request failed");
             println!("merkleblock valid={} matched={}", mb.valid, mb.matched_txids.len());
             assert!(mb.valid, "merkleblock must verify against its header");
+        });
+    }
+
+    /// Live: fetch the first block hashes, then scan 3 blocks with an empty
+    /// watch set — exercises filterload + per-block merkleblock verification in
+    /// the scan loop end to end. (Empty filter => 0 matched txs.)
+    #[test]
+    #[ignore]
+    fn live_scan_first_blocks_mainnet() {
+        let host = std::env::var("OPTN_NODE_HOST").unwrap_or_else(|_| "bch.imaginary.cash".to_string());
+        let port: u16 = std::env::var("OPTN_NODE_PORT").ok().and_then(|p| p.parse().ok()).unwrap_or(8333);
+        let rt = tokio::runtime::Builder::new_multi_thread().enable_all().build().unwrap();
+        rt.block_on(async {
+            let headers = fetch_headers_after(&host, port, "mainnet", Transport::Direct, genesis_hash("mainnet"))
+                .await
+                .unwrap();
+            let hashes: Vec<[u8; 32]> = headers
+                .iter()
+                .take(3)
+                .map(|h| {
+                    let mut b = [0u8; 32];
+                    for i in 0..32 {
+                        b[31 - i] = u8::from_str_radix(&h.hash[i * 2..i * 2 + 2], 16).unwrap();
+                    }
+                    b
+                })
+                .collect();
+            let watched = std::collections::HashSet::new();
+            let res = scan_blocks(&host, port, "mainnet", Transport::Direct, &hashes, &watched)
+                .await
+                .unwrap();
+            println!("scanned {} blocks, owned {}", res.scanned_blocks, res.owned.len());
+            assert_eq!(res.scanned_blocks, 3);
         });
     }
 
