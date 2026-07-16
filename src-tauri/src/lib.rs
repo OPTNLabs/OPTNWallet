@@ -154,6 +154,32 @@ async fn bip37_scan(
     spv::scan_blocks(&host, port, &network, transport, &blocks, &watched).await
 }
 
+// Broadcast a signed raw transaction (hex) to a node over P2P. Returns the txid.
+// The node write-path for a BIP37 backend.
+#[tauri::command]
+async fn bip37_broadcast(
+    host: String,
+    port: u16,
+    network: String,
+    tx_hex: String,
+    tor_host: Option<String>,
+    tor_port: Option<u16>,
+) -> Result<String, String> {
+    if tx_hex.len() % 2 != 0 || tx_hex.is_empty() {
+        return Err("transaction hex must be non-empty and even length".into());
+    }
+    let tx_bytes: Vec<u8> = (0..tx_hex.len())
+        .step_by(2)
+        .map(|i| u8::from_str_radix(&tx_hex[i..i + 2], 16))
+        .collect::<Result<_, _>>()
+        .map_err(|_| "invalid transaction hex".to_string())?;
+    let transport = match (tor_host.as_deref(), tor_port) {
+        (Some(h), Some(p)) => fusion::Transport::Tor { host: h, port: p },
+        _ => fusion::Transport::Direct,
+    };
+    spv::broadcast_tx(&host, port, &network, transport, tx_bytes).await
+}
+
 // ── Integrated (app-managed) Tor ────────────────────────────────────────────
 //
 // SOCKS port for the app's own Tor — deliberately not 9050/9150 so it never
@@ -349,6 +375,7 @@ pub fn run() {
             bip37_node_probe,
             bip37_headers,
             bip37_scan,
+            bip37_broadcast,
             tor_start,
             tor_stop,
             tor_status,
