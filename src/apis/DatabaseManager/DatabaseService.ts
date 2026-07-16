@@ -120,6 +120,24 @@ const migrations: Array<(db: Database) => Promise<void>> = [
       db.run('ALTER TABLE wallets ADD COLUMN kdf_salt TEXT;');
     }
   },
+  async (db) => {
+    // Birth height: the chain tip when this wallet was created. A BIP37 node
+    // scan costs one merkleblock round-trip PER BLOCK, so scanning the whole
+    // chain is impractical; knowing the wallet cannot have coins before its
+    // birth lets a node scan only birth..tip. NULL for wallets created before
+    // this column (and on mobile), where the scan falls back to a recent window.
+    const columns = new Set<string>();
+    const statement = db.prepare('PRAGMA table_info(wallets);');
+    while (statement.step()) {
+      const row = statement.getAsObject() as Record<string, unknown>;
+      if (typeof row.name === 'string') columns.add(row.name);
+    }
+    statement.free();
+
+    if (!columns.has('birth_height')) {
+      db.run('ALTER TABLE wallets ADD COLUMN birth_height INT;');
+    }
+  },
   // Add future migrations here as needed
 ];
 
