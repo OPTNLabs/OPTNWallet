@@ -317,6 +317,13 @@ fn nonce() -> u64 {
 /// lands; unknown networks fall back to mainnet's genesis.
 pub fn genesis_hash(network: &str) -> [u8; 32] {
     match network {
+        // testnet4 + chipnet share a genesis (chipnet forked from testnet4 later):
+        // 000000001dd410c49a788668ce26751718cc797474d3152a5fc073dd44fd9f7b
+        "chipnet" | "testnet4" => [
+            0x7b, 0x9f, 0xfd, 0x44, 0xdd, 0x73, 0xc0, 0x5f, 0x2a, 0x15, 0xd3, 0x74, 0x74, 0x79, 0xcc,
+            0x18, 0x17, 0x75, 0x26, 0xce, 0x68, 0x86, 0x78, 0x9a, 0xc4, 0x10, 0xd4, 0x1d, 0x00, 0x00,
+            0x00, 0x00,
+        ],
         "testnet" | "testnet3" => [
             0x43, 0x49, 0x7f, 0xd7, 0xf8, 0x26, 0x95, 0x71, 0x08, 0xf4, 0xa3, 0x0f, 0xd9, 0xce, 0xc3,
             0xae, 0xba, 0x79, 0x97, 0x20, 0x84, 0xe9, 0x0e, 0xad, 0x01, 0xea, 0x33, 0x09, 0x00, 0x00,
@@ -765,9 +772,10 @@ mod tests {
     fn live_scan_first_blocks_mainnet() {
         let host = std::env::var("OPTN_NODE_HOST").unwrap_or_else(|_| "bch.imaginary.cash".to_string());
         let port: u16 = std::env::var("OPTN_NODE_PORT").ok().and_then(|p| p.parse().ok()).unwrap_or(8333);
+        let network = std::env::var("OPTN_NODE_NETWORK").unwrap_or_else(|_| "mainnet".to_string());
         let rt = tokio::runtime::Builder::new_multi_thread().enable_all().build().unwrap();
         rt.block_on(async {
-            let headers = fetch_headers_after(&host, port, "mainnet", Transport::Direct, genesis_hash("mainnet"))
+            let headers = fetch_headers_after(&host, port, &network, Transport::Direct, genesis_hash(&network))
                 .await
                 .unwrap();
             let hashes: Vec<[u8; 32]> = headers
@@ -782,7 +790,7 @@ mod tests {
                 })
                 .collect();
             let watched = std::collections::HashSet::new();
-            let res = scan_blocks(&host, port, "mainnet", Transport::Direct, &hashes, &watched)
+            let res = scan_blocks(&host, port, &network, Transport::Direct, &hashes, &watched)
                 .await
                 .unwrap();
             println!("scanned {} blocks, owned {}", res.scanned_blocks, res.owned.len());
@@ -819,21 +827,27 @@ mod tests {
     fn live_sync_first_headers_mainnet() {
         let host = std::env::var("OPTN_NODE_HOST").unwrap_or_else(|_| "seed.bch.loping.net".to_string());
         let port: u16 = std::env::var("OPTN_NODE_PORT").ok().and_then(|p| p.parse().ok()).unwrap_or(8333);
+        let network = std::env::var("OPTN_NODE_NETWORK").unwrap_or_else(|_| "mainnet".to_string());
         let rt = tokio::runtime::Builder::new_multi_thread().enable_all().build().unwrap();
         rt.block_on(async {
-            let headers = fetch_headers_after(&host, port, "mainnet", Transport::Direct, genesis_hash("mainnet"))
+            let headers = fetch_headers_after(&host, port, &network, Transport::Direct, genesis_hash(&network))
                 .await
                 .expect("header sync failed");
             println!(
-                "synced {} headers; block1={}",
+                "synced {} headers on {}; first={}",
                 headers.len(),
+                network,
                 headers.first().map(|h| h.hash.as_str()).unwrap_or("-")
             );
             assert!(headers.len() > 1, "expected a batch of headers");
-            assert_eq!(
-                headers[0].hash,
-                "00000000839a8e6886ab5951d76f411475428afc90947ee320161bbf18eb6048"
-            );
+            // Chain linkage back to the genesis locator is validated inside
+            // fetch_headers_after; on mainnet also pin block 1's known hash.
+            if network == "mainnet" {
+                assert_eq!(
+                    headers[0].hash,
+                    "00000000839a8e6886ab5951d76f411475428afc90947ee320161bbf18eb6048"
+                );
+            }
         });
     }
 
@@ -938,9 +952,11 @@ mod tests {
     fn live_probe_mainnet_node() {
         let host = std::env::var("OPTN_NODE_HOST").unwrap_or_else(|_| "seed.bchd.cash".to_string());
         let port: u16 = std::env::var("OPTN_NODE_PORT").ok().and_then(|p| p.parse().ok()).unwrap_or(8333);
+        // Network magic must match the peer's chain, else it drops us (early eof).
+        let network = std::env::var("OPTN_NODE_NETWORK").unwrap_or_else(|_| "mainnet".to_string());
         let rt = tokio::runtime::Builder::new_multi_thread().enable_all().build().unwrap();
         rt.block_on(async {
-            let probe = probe_node(&host, port, "mainnet", Transport::Direct)
+            let probe = probe_node(&host, port, &network, Transport::Direct)
                 .await
                 .expect("handshake failed");
             println!(
