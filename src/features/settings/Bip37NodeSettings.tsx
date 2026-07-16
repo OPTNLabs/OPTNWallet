@@ -5,13 +5,18 @@
 // picks the right one automatically by port. This row lets the user Probe a node
 // (a real version/verack handshake via bip37_node_probe) to confirm it's
 // reachable and serves BIP37, and remove it. Desktop-only (raw TCP).
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { useSelector } from 'react-redux';
 import { invoke } from '@tauri-apps/api/core';
 import { Network } from '../../state/slices/networkSlice';
 import { selectWalletId } from '../../state/slices/walletSlice';
 import { getNodeLabel, parseNodeTarget } from '../../utils/servers/userNodes';
 import { nodeSync, type NodeSyncResult } from '../../platform/desktop/Bip37Backend';
+import {
+  getBackend,
+  setBackend,
+  BACKEND_CHANGED_EVENT,
+} from '../../platform/desktop/backendSelection';
 
 interface NodeProbe {
   user_agent: string;
@@ -45,6 +50,21 @@ export const Bip37NodeRow: React.FC<{
   const walletId = useSelector(selectWalletId);
   const label = getNodeLabel(network, target);
 
+  // Is THIS node the wallet's pinned backend? (Exactly one backend is live.)
+  const [isActive, setIsActive] = useState(() => {
+    const b = getBackend(network);
+    return b.kind === 'node' && b.target === target;
+  });
+  useEffect(() => {
+    const sync = () => {
+      const b = getBackend(network);
+      setIsActive(b.kind === 'node' && b.target === target);
+    };
+    sync();
+    window.addEventListener(BACKEND_CHANGED_EVENT, sync);
+    return () => window.removeEventListener(BACKEND_CHANGED_EVENT, sync);
+  }, [network, target]);
+
   const probe = async () => {
     const { host, port } = parseNodeTarget(target, network);
     setState({ status: 'probing' });
@@ -70,7 +90,13 @@ export const Bip37NodeRow: React.FC<{
   };
 
   return (
-    <div className="rounded-xl border border-[var(--wallet-border)] wallet-surface px-3 py-2 text-xs">
+    <div
+      className={`rounded-xl border px-3 py-2 text-xs ${
+        isActive
+          ? 'border-[var(--wallet-accent)] bg-[var(--wallet-accent)]/10'
+          : 'border-[var(--wallet-border)] wallet-surface'
+      }`}
+    >
       <div className="flex items-center gap-2">
         <span className="rounded-md border border-[var(--wallet-border)] px-1.5 py-0.5 text-[9px] font-semibold wallet-muted uppercase shrink-0">
           Node
@@ -79,6 +105,19 @@ export const Bip37NodeRow: React.FC<{
           {label ? <span className="font-sans">{label} </span> : null}
           <span className={label ? 'opacity-60' : ''}>{target}</span>
         </span>
+        {isActive ? (
+          <span className="text-[10px] font-semibold text-[var(--wallet-accent)] whitespace-nowrap">
+            ● in use
+          </span>
+        ) : (
+          <button
+            onClick={() => setBackend(network, { kind: 'node', target })}
+            title="Use ONLY this node for wallet data (trustless; Electrum servers are not consulted)"
+            className="rounded-lg border border-[var(--wallet-border)] px-2 py-1 text-[10px] font-semibold wallet-text-strong hover:border-[var(--wallet-accent)]/60"
+          >
+            Use
+          </button>
+        )}
         <button
           onClick={() => void probe()}
           disabled={state.status === 'probing'}
