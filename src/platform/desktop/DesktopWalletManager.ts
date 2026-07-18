@@ -249,13 +249,31 @@ export async function switchWalletNetwork(walletId: number, target: Network): Pr
   // its recent-window fallback until this wallet's birth on this chain is known.
   db.run('UPDATE wallets SET networkType = ?, birth_height = NULL WHERE id = ?', [target, walletId]);
   // Everything below is derived from the OLD network and must not survive the
-  // switch: addresses carry the old prefix, and UTXOs/history belong to the
-  // other chain entirely (leaving them mixes mainnet txs into chipnet history).
+  // switch. Upstream's reads (KeyManager.retrieveKeys, UTXOManager.*) are NOT
+  // network-scoped — they're only correct while the DB holds exactly one
+  // network's data — and those files are zero-touch, so we can't scope them.
+  // The invariant is therefore maintained here: after a switch the DB contains
+  // only the target network's rows. Nothing is lost permanently — histories and
+  // UTXOs live on-chain and re-sync from the new network's servers; switching
+  // back re-derives and re-fetches the other chain's data.
   db.run('DELETE FROM keys WHERE wallet_id = ?', [walletId]);
   try { db.run('DELETE FROM addresses WHERE wallet_id = ?', [walletId]); } catch { /* optional table */ }
   try { db.run('DELETE FROM UTXOs WHERE wallet_id = ?', [walletId]); } catch { /* optional table */ }
   try { db.run('DELETE FROM transactions WHERE wallet_id = ?', [walletId]); } catch { /* optional table */ }
   try { db.run('DELETE FROM transaction_details WHERE wallet_id = ?', [walletId]); } catch { /* optional table */ }
+  // Contract-derived addresses (P2SH32, "bitcoincash:p…"/"bchtest:p…") were the
+  // real leak: switchWalletNetwork used to skip these tables, so old-network
+  // quantumroot vaults and cashscript addresses lingered and kept getting
+  // subscribed on the new chain — the server rejects the wrong-prefix address
+  // and drops the connection, taking every valid query down with it. Clear them
+  // too so the single-network invariant actually holds.
+  try { db.run('DELETE FROM cashscript_addresses WHERE wallet_id = ?', [walletId]); } catch { /* optional table */ }
+  try { db.run('DELETE FROM quantumroot_vaults WHERE wallet_id = ?', [walletId]); } catch { /* optional table */ }
+  // instantiated_contracts has no wallet_id (global cache keyed by address), so
+  // scope by prefix: a contract address that isn't on the target network can't
+  // be valid there regardless of which wallet created it.
+  const targetPrefix = target === Network.MAINNET ? 'bitcoincash:' : 'bchtest:';
+  try { db.run("DELETE FROM instantiated_contracts WHERE address IS NOT NULL AND address NOT LIKE ?", [`${targetPrefix}%`]); } catch { /* optional table */ }
   await dbService.forceSaveDatabase();
 
   // Regenerate the address batch. KeyService reads the wallet's (now-updated)

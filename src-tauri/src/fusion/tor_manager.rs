@@ -22,6 +22,10 @@ static CHILD: Lazy<Mutex<Option<Child>>> = Lazy::new(|| Mutex::new(None));
 static BOOTSTRAP: AtomicU8 = AtomicU8::new(0);
 static RUNNING: AtomicBool = AtomicBool::new(false);
 static SOCKS_PORT: AtomicU16 = AtomicU16::new(0);
+/// True from the moment a tor process is spawned until its stdout closes (i.e.
+/// the process exits). Distinct from RUNNING (which is only set at 100%
+/// bootstrap): lets a waiter tell "still bootstrapping" from "process died".
+static SPAWNED: AtomicBool = AtomicBool::new(false);
 
 /// Where to find the tor binary and its geoip data.
 #[derive(Debug, Clone)]
@@ -57,72 +61,98 @@ pub async fn start(paths: TorPaths, socks_port: u16, bootstrap_timeout: Duration
         return Ok(SOCKS_PORT.load(Ordering::SeqCst));
     }
 
-    std::fs::create_dir_all(&paths.data_dir)
-        .map_err(|e| format!("could not create tor data dir: {e}"))?;
+    // Spawn exactly one tor process. The CHILD lock is the critical section:
+    // two concurrent starts (a double-click, a re-fired effect) must never
+    // launch rival tor processes — they share one DataDirectory, whose lock
+    // file only one process can hold, so the loser dies and NEITHER bootstraps.
+    // Whoever finds no live child spawns; everyone else falls through to wait.
+    {
+        let mut child_guard = CHILD.lock().await;
+        if child_guard.is_none() {
+            std::fs::create_dir_all(&paths.data_dir)
+                .map_err(|e| format!("could not create tor data dir: {e}"))?;
 
-    let mut cmd = Command::new(&paths.binary);
-    cmd.arg("--SocksPort")
-        .arg(socks_port.to_string())
-        .arg("--DataDirectory")
-        .arg(&paths.data_dir)
-        .arg("--ClientOnly")
-        .arg("1")
-        .arg("--Log")
-        .arg("notice stdout")
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .kill_on_drop(true);
-    if let Some(g) = &paths.geoip {
-        cmd.arg("--GeoIPFile").arg(g);
-    }
-    if let Some(g6) = &paths.geoip6 {
-        cmd.arg("--GeoIPv6File").arg(g6);
-    }
+            let mut cmd = Command::new(&paths.binary);
+            cmd.arg("--SocksPort")
+                .arg(socks_port.to_string())
+                .arg("--DataDirectory")
+                .arg(&paths.data_dir)
+                .arg("--ClientOnly")
+                .arg("1")
+                .arg("--Log")
+                .arg("notice stdout")
+                .stdout(Stdio::piped())
+                .stderr(Stdio::null())
+                .kill_on_drop(true);
+            if let Some(g) = &paths.geoip {
+                cmd.arg("--GeoIPFile").arg(g);
+            }
+            if let Some(g6) = &paths.geoip6 {
+                cmd.arg("--GeoIPv6File").arg(g6);
+            }
 
-    let mut child = cmd
-        .spawn()
-        .map_err(|e| format!("failed to start tor ({}): {e}", paths.binary.display()))?;
-    let stdout = child.stdout.take().ok_or("tor produced no stdout")?;
+            let mut child = cmd
+                .spawn()
+                .map_err(|e| format!("failed to start tor ({}): {e}", paths.binary.display()))?;
+            let stdout = child.stdout.take().ok_or("tor produced no stdout")?;
 
-    BOOTSTRAP.store(0, Ordering::SeqCst);
-    RUNNING.store(false, Ordering::SeqCst);
-    SOCKS_PORT.store(socks_port, Ordering::SeqCst);
+            BOOTSTRAP.store(0, Ordering::SeqCst);
+            RUNNING.store(false, Ordering::SeqCst);
+            SPAWNED.store(true, Ordering::SeqCst);
+            SOCKS_PORT.store(socks_port, Ordering::SeqCst);
 
-    // Drain tor's log in the background: track bootstrap and signal when done.
-    let (ready_tx, ready_rx) = tokio::sync::oneshot::channel::<()>();
-    tokio::spawn(async move {
-        let mut lines = BufReader::new(stdout).lines();
-        let mut ready_tx = Some(ready_tx);
-        while let Ok(Some(line)) = lines.next_line().await {
-            if let Some(pct) = parse_bootstrap(&line) {
-                BOOTSTRAP.store(pct, Ordering::SeqCst);
-                if pct >= 100 {
-                    RUNNING.store(true, Ordering::SeqCst);
-                    if let Some(tx) = ready_tx.take() {
-                        let _ = tx.send(());
+            // Drain tor's log in the background: track bootstrap % and flip
+            // RUNNING at 100%. When stdout closes the process has exited.
+            tokio::spawn(async move {
+                let mut lines = BufReader::new(stdout).lines();
+                while let Ok(Some(line)) = lines.next_line().await {
+                    if let Some(pct) = parse_bootstrap(&line) {
+                        BOOTSTRAP.store(pct, Ordering::SeqCst);
+                        if pct >= 100 {
+                            RUNNING.store(true, Ordering::SeqCst);
+                        }
                     }
                 }
-            }
-        }
-        // stdout closed => tor exited.
-        RUNNING.store(false, Ordering::SeqCst);
-    });
+                // stdout closed => tor exited.
+                RUNNING.store(false, Ordering::SeqCst);
+                SPAWNED.store(false, Ordering::SeqCst);
+            });
 
-    *CHILD.lock().await = Some(child);
-
-    match tokio::time::timeout(bootstrap_timeout, ready_rx).await {
-        Ok(Ok(())) => Ok(socks_port),
-        _ => {
-            // Bootstrap stalled — tear the process down so we don't leak it.
-            let _ = stop().await;
-            Err("tor did not finish bootstrapping in time".into())
+            *child_guard = Some(child);
         }
+    }
+
+    // Wait for bootstrap by polling the flags the log task maintains. On
+    // timeout we deliberately DO NOT kill tor: bootstrapping over a slow or
+    // filtered network can exceed the deadline, and killing throws away all
+    // progress (and the warmed consensus in the data dir) so the next attempt
+    // restarts from 0% — a loop that never completes. Leave it running; the
+    // UI polls tor_status and will see it reach 100%.
+    let deadline = tokio::time::Instant::now() + bootstrap_timeout;
+    loop {
+        if RUNNING.load(Ordering::SeqCst) {
+            return Ok(socks_port);
+        }
+        if !SPAWNED.load(Ordering::SeqCst) {
+            // The process exited before reaching 100% (bad binary, port clash,
+            // locked data dir). Clear the dead child so a retry can respawn.
+            *CHILD.lock().await = None;
+            return Err("tor exited before finishing bootstrap — check the tor binary and that the SOCKS port is free".into());
+        }
+        if tokio::time::Instant::now() >= deadline {
+            let pct = BOOTSTRAP.load(Ordering::SeqCst);
+            return Err(format!(
+                "tor still bootstrapping ({pct}%) — it's left running, open Tor status again in a moment"
+            ));
+        }
+        tokio::time::sleep(Duration::from_millis(250)).await;
     }
 }
 
 /// Stop the managed tor process, if any.
 pub async fn stop() -> Result<(), String> {
     RUNNING.store(false, Ordering::SeqCst);
+    SPAWNED.store(false, Ordering::SeqCst);
     BOOTSTRAP.store(0, Ordering::SeqCst);
     if let Some(mut child) = CHILD.lock().await.take() {
         let _ = child.kill().await;
