@@ -260,7 +260,10 @@ async fn tor_start(app: tauri::AppHandle) -> Result<u16, String> {
     fusion::tor_manager::start(
         paths,
         INTEGRATED_TOR_SOCKS_PORT,
-        std::time::Duration::from_secs(120),
+        // First bootstrap over a slow or filtered network can run past two
+        // minutes; on timeout tor is left running (not killed), so this is a
+        // patience bound, not a hard cap.
+        std::time::Duration::from_secs(180),
     )
     .await
 }
