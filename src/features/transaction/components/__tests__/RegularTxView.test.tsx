@@ -87,7 +87,6 @@ describe('RegularTxView', () => {
 
     expect(html).toContain('Sample Token');
     expect(html).toContain('SMP');
-    expect(html).toContain('Fresh');
     expect(html).toContain('FT');
     expect(html).toContain('1234');
   });

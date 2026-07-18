@@ -5,6 +5,9 @@
   },
   "include": ["src"],
   "exclude": [
-    "src/pages/apps/**"
+    "src/pages/apps/**",
+    "src/**/__tests__/**",
+    "src/**/*.test.*",
+    "src/**/*.spec.*"
   ]
 }
