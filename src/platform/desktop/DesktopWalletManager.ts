@@ -292,6 +292,53 @@ export async function switchWalletNetwork(walletId: number, target: Network): Pr
  * existed) skip re-derivation entirely and use whatever key is already
  * active — preserving today's behavior for those wallets.
  */
+/**
+ * Remove rows whose address belongs to a DIFFERENT network than `network`.
+ *
+ * switchWalletNetwork keeps the DB single-network going forward, but a wallet
+ * created/switched before that fix can still hold stale cross-network rows —
+ * most visibly old-network quantumroot vaults and cashscript contract addresses.
+ * Upstream reads (KeyManager/UTXOManager/QuantumrootTrackingService) are not
+ * network-scoped and are zero-touch, so those stale rows get gathered and sent,
+ * and the ElectrumServerRouter guard rejects each one: harmless but a flood of
+ * error-level log lines. Purging on open makes the guard a backstop, not the
+ * everyday path. A CashAddr names its network in its prefix, so the filter is
+ * exact and local.
+ */
+export async function purgeCrossNetworkData(walletId: number, network: Network): Promise<void> {
+  const dbService = DatabaseService();
+  await dbService.ensureDatabaseStarted();
+  const db = dbService.getDatabase();
+  if (!db || walletId <= 0) return;
+
+  const keep = network === Network.MAINNET ? 'bitcoincash:%' : 'bchtest:%';
+  let removed = 0;
+  const del = (sql: string, params: (string | number)[]) => {
+    try {
+      db.run(sql, params);
+      removed += db.getRowsModified();
+    } catch {
+      /* optional table / column */
+    }
+  };
+  del('DELETE FROM keys WHERE wallet_id = ? AND address IS NOT NULL AND address NOT LIKE ?', [walletId, keep]);
+  del('DELETE FROM addresses WHERE wallet_id = ? AND address IS NOT NULL AND address NOT LIKE ?', [walletId, keep]);
+  del('DELETE FROM UTXOs WHERE wallet_id = ? AND address IS NOT NULL AND address NOT LIKE ?', [walletId, keep]);
+  del('DELETE FROM cashscript_addresses WHERE wallet_id = ? AND address IS NOT NULL AND address NOT LIKE ?', [walletId, keep]);
+  del(
+    'DELETE FROM quantumroot_vaults WHERE wallet_id = ? AND (receive_address NOT LIKE ? OR quantum_lock_address NOT LIKE ?)',
+    [walletId, keep, keep]
+  );
+  del('DELETE FROM instantiated_contracts WHERE address IS NOT NULL AND address NOT LIKE ?', [keep]);
+
+  if (removed > 0) {
+    await dbService.forceSaveDatabase();
+    console.info(
+      `[DesktopWalletManager] purged ${removed} stale cross-network row(s) for wallet ${walletId} (now on ${network})`
+    );
+  }
+}
+
 export async function openWalletWithPassword(
   walletId: number,
   password: string
@@ -331,6 +378,16 @@ export async function openWalletWithPassword(
   }
 
   const info = await manager.getWalletInfo(walletId);
+  // Clean out any stale cross-network rows now that we know the wallet's
+  // network, so upstream's unscoped reads only ever see the active chain.
+  if (info) {
+    const net = info.networkType === Network.MAINNET ? Network.MAINNET : Network.CHIPNET;
+    try {
+      await purgeCrossNetworkData(walletId, net);
+    } catch (err) {
+      console.warn('[DesktopWalletManager] cross-network purge on open failed:', err);
+    }
+  }
   return info;
 }
 
