@@ -27,8 +27,49 @@ import { getBackend } from './backendSelection';
 import { nodeSync, nodeBroadcast, type NodeSyncResult } from './Bip37Backend';
 import { parseNodeTarget } from '../../utils/servers/userNodes';
 import { selectWalletId } from '../../state/slices/walletSlice';
+import { Network } from '../../state/slices/networkSlice';
 
 type ElectrumParams = RequestResponse[];
+
+/** Methods whose first param is a CashAddr. */
+const ADDRESS_METHOD_PREFIX = 'blockchain.address.';
+
+/**
+ * Reject an address that belongs to a different chain than the one we're on.
+ *
+ * Several wallet-scoped tables outlive a network switch (quantumroot_vaults,
+ * cashscript_addresses, instantiated_contracts are never cleared), and address
+ * discovery derives from the global redux network, which is reconciled with the
+ * wallet's own networkType only by an async effect. So a mainnet `bitcoincash:`
+ * address can reach a chipnet server.
+ *
+ * That is not a harmless miss. The server answers "Invalid address" and drops
+ * the socket, so every in-flight query for the addresses that ARE valid fails
+ * with "Connection lost" and the wallet renders empty on BOTH chains. And since
+ * subscribe() records the address in the resubscribe-on-reconnect registry, each
+ * reconnect re-sends it and re-breaks the fresh socket — the loop never settles.
+ *
+ * A CashAddr names its own network in its prefix, so this is decidable locally:
+ * keep the mismatch off the wire instead of letting the server hang up on us.
+ */
+function assertOnCurrentNetwork(
+  method: string,
+  params: ElectrumParams | undefined,
+  network: Network
+): void {
+  if (!method.startsWith(ADDRESS_METHOD_PREFIX)) return;
+  const address = String(params?.[0] ?? '');
+  const sep = address.indexOf(':');
+  if (sep <= 0) return; // prefixless — the server resolves it on its own network
+  const prefix = address.slice(0, sep).toLowerCase();
+  const expected = network === Network.MAINNET ? 'bitcoincash' : 'bchtest';
+  if (prefix !== expected) {
+    throw new Error(
+      `[network guard] ${address} is a ${prefix} address; wallet is on ${network} ` +
+        `(${expected}). Not sent — a cross-network address makes the server drop the connection.`
+    );
+  }
+}
 
 // Wallet-data methods a BIP37 node scan can answer.
 const UNSPENT_METHODS = new Set([
@@ -78,6 +119,7 @@ export default function ElectrumServer() {
 
   async function request(method: string, ...params: ElectrumParams): Promise<RequestResponse> {
     const network = selectCurrentNetwork(store.getState());
+    assertOnCurrentNetwork(method, params, network);
     const backend = getBackend(network);
 
     // Only a pinned node diverts wallet data; auto/server keep today's path.
@@ -120,18 +162,52 @@ export default function ElectrumServer() {
     calls: Array<{ method: string; params?: ElectrumParams }>
   ): Promise<Array<RequestResponse | Error>> {
     const network = selectCurrentNetwork(store.getState());
-    if (getBackend(network).kind !== 'node') return upstream.requestMany(calls);
-    // Serve the batch through the node path (one shared scan via the cache).
-    return Promise.all(
-      calls.map(async ({ method, params = [] }) => {
-        try {
-          return await request(method, ...params);
-        } catch (e) {
-          return e instanceof Error ? e : new Error(String(e));
-        }
-      })
-    );
+
+    // Drop cross-network addresses from the batch rather than letting one bad
+    // entry hang up the socket and take the whole batch down with it. Results
+    // stay index-aligned with `calls`: the offenders get an Error in place.
+    const results = new Array<RequestResponse | Error>(calls.length);
+    const forward: Array<{ method: string; params?: ElectrumParams }> = [];
+    const forwardIndex: number[] = [];
+    calls.forEach((call, i) => {
+      try {
+        assertOnCurrentNetwork(call.method, call.params, network);
+        forward.push(call);
+        forwardIndex.push(i);
+      } catch (e) {
+        results[i] = e instanceof Error ? e : new Error(String(e));
+      }
+    });
+
+    if (forward.length > 0) {
+      const answered =
+        getBackend(network).kind !== 'node'
+          ? await upstream.requestMany(forward)
+          : // Serve the batch through the node path (one shared scan via the cache).
+            await Promise.all(
+              forward.map(async ({ method, params = [] }) => {
+                try {
+                  return await request(method, ...params);
+                } catch (e) {
+                  return e instanceof Error ? e : new Error(String(e));
+                }
+              })
+            );
+      answered.forEach((r, j) => {
+        results[forwardIndex[j]] = r;
+      });
+    }
+
+    return results;
   }
 
-  return { ...upstream, request, requestMany };
+  // Guarded too, and this is the important one: an address that reaches
+  // upstream.subscribe() enters the resubscribe-on-reconnect registry, where it
+  // re-breaks every future socket long after the switch that produced it.
+  async function subscribe(method: string, params?: ElectrumParams): Promise<void> {
+    assertOnCurrentNetwork(method, params, selectCurrentNetwork(store.getState()));
+    return upstream.subscribe(method, params);
+  }
+
+  return { ...upstream, request, requestMany, subscribe };
 }

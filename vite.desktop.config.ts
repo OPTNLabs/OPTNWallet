@@ -93,6 +93,9 @@ const MODULE_SWAPS = new Map<string, string>([
   // imports the real ElectrumServer for the auto/server path — allowed because
   // resolveId short-circuits when the replacement itself is the importer.
   [srcPath('src/apis/ElectrumServer/ElectrumServer.ts'), srcPath('src/platform/desktop/ElectrumServerRouter.ts')],
+  // Balance card, network-aware unit: chipnet coins read "tBCH" (test coins),
+  // mainnet reads "BCH". Presentational swap only.
+  [srcPath('src/components/BitcoinCashCard.tsx'), srcPath('src/platform/desktop/DesktopBitcoinCashCard.tsx')],
   // Mounts DesktopSecurityGate + AppLockGate + menu-bar listener around the app.
   [srcPath('src/app/AppShell.tsx'), srcPath('src/platform/desktop/DesktopAppShell.tsx')],
   // Electron Cash-style onboarding: wallet picker, per-wallet passwords, seed
