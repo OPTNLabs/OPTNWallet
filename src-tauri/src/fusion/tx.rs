@@ -187,6 +187,56 @@ impl FusionTx {
     pub fn input_pubkey(&self, i: usize) -> Option<&[u8]> {
         self.inputs.get(i).map(|inp| inp.pubkey.as_slice())
     }
+
+    /// Serialize the fully-signed transaction. `input_sigs[i]` is the 64-byte
+    /// Schnorr signature for input i (the SIGHASH byte 0x41 is appended here, and
+    /// the P2PKH scriptSig `push(sig||0x41) push(pubkey)` is built).
+    pub fn serialize(&self, input_sigs: &[Vec<u8>]) -> Result<Vec<u8>, String> {
+        if input_sigs.len() != self.inputs.len() {
+            return Err("signature count != input count".into());
+        }
+        let mut tx = Vec::new();
+        tx.extend_from_slice(&1u32.to_le_bytes()); // version
+        varint(self.inputs.len() as u64, &mut tx);
+        for (inp, sig) in self.inputs.iter().zip(input_sigs) {
+            if sig.len() != 64 {
+                return Err("each input signature must be 64 bytes".into());
+            }
+            tx.extend_from_slice(&inp.prev_txid_wire);
+            tx.extend_from_slice(&inp.prev_index.to_le_bytes());
+            // scriptSig: push(sig || 0x41) then push(pubkey)
+            let mut script_sig = Vec::with_capacity(2 + 65 + inp.pubkey.len());
+            script_sig.push(65); // len(sig 64 + sighash byte 1)
+            script_sig.extend_from_slice(sig);
+            script_sig.push(0x41);
+            script_sig.push(inp.pubkey.len() as u8);
+            script_sig.extend_from_slice(&inp.pubkey);
+            varint(script_sig.len() as u64, &mut tx);
+            tx.extend_from_slice(&script_sig);
+            tx.extend_from_slice(&0xffff_ffffu32.to_le_bytes()); // sequence
+        }
+        varint(self.outputs.len() as u64, &mut tx);
+        for out in &self.outputs {
+            tx.extend_from_slice(&out.value.to_le_bytes());
+            varint(out.script.len() as u64, &mut tx);
+            tx.extend_from_slice(&out.script);
+        }
+        tx.extend_from_slice(&0u32.to_le_bytes()); // locktime
+        Ok(tx)
+    }
+
+    /// The txid (display hex, big-endian) of the fully-signed transaction.
+    pub fn txid(&self, input_sigs: &[Vec<u8>]) -> Result<String, String> {
+        let raw = self.serialize(input_sigs)?;
+        let mut h = dsha256(&raw);
+        h.reverse();
+        Ok(h.iter().map(|b| format!("{b:02x}")).collect())
+    }
+
+    /// Component index (into all_components) that input `i` came from.
+    pub fn input_component_index(&self, i: usize) -> Option<usize> {
+        self.input_component_idx.get(i).copied()
+    }
 }
 
 #[cfg(test)]
