@@ -124,6 +124,37 @@ pub fn verify(pubkey: &[u8], sig: &[u8; 64], msg32: &[u8; 32]) -> bool {
     rx == rbytes
 }
 
+/// Create a BCH Schnorr signature (64 bytes: R.x || s) over `msg32` with
+/// `privkey`. Uses a uniform CSPRNG nonce (unbiased, from OsRng — a biased nonce
+/// would leak the key over many signatures), and forces R to have a
+/// quadratic-residue y per the BCH convention so it verifies. The result is
+/// accepted by `verify` and by BCH consensus.
+///
+/// (The reference derives k deterministically via RFC6979; a uniform random k is
+/// equally valid and safe — consensus accepts any valid Schnorr signature — and
+/// avoids depending on libsecp256k1's exact nonce construction.)
+pub fn sign(privkey: Scalar, msg32: &[u8; 32]) -> [u8; 64] {
+    let pubkey_point = ProjectivePoint::GENERATOR * privkey;
+    let k0 = random_nonce();
+    let r_point = ProjectivePoint::GENERATOR * k0;
+    let (rx, ry) = affine_xy(&r_point);
+    // Force jacobi(R.y) = +1: only R.x travels, so the verifier reconstructs the
+    // R whose y is a QR; flip k if ours isn't.
+    let k = if y_is_quadratic_residue(&ry) { k0 } else { -k0 };
+    let e = challenge(&rx, &pubkey_point, msg32);
+    let s = k + e * privkey;
+
+    let mut sig = [0u8; 64];
+    sig[..32].copy_from_slice(&rx);
+    sig[32..].copy_from_slice(&s.to_bytes());
+    sig
+}
+
+/// The compressed pubkey for a private scalar (for building P2PKH scriptCode etc.).
+pub fn pubkey_compressed(privkey: Scalar) -> [u8; 33] {
+    compressed(&(ProjectivePoint::GENERATOR * privkey))
+}
+
 /// Requester side of the CashFusion blind Schnorr signature.
 ///
 /// Construct one per component with the server's `round_pubkey`, one of its
@@ -270,6 +301,20 @@ mod tests {
         let req = BlindSignatureRequest::new(&signer.pubkey(), &signer.r(), msg).unwrap();
         let bad_s = [0x11u8; 32];
         assert!(req.finalize(&bad_s, true).is_err());
+    }
+
+    #[test]
+    fn sign_produces_a_verifiable_bch_schnorr_signature() {
+        for _ in 0..25 {
+            let priv_k = random_nonce();
+            let pubkey = pubkey_compressed(priv_k);
+            let msg: [u8; 32] = Sha256::digest(b"an input sighash").into();
+            let sig = sign(priv_k, &msg);
+            assert!(verify(&pubkey, &sig, &msg), "own signature must verify");
+            // Wrong message must not verify.
+            let other: [u8; 32] = Sha256::digest(b"different").into();
+            assert!(!verify(&pubkey, &sig, &other));
+        }
     }
 
     #[test]
