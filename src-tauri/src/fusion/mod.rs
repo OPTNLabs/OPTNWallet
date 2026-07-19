@@ -34,6 +34,7 @@ pub mod components;
 pub mod pedersen;
 pub mod round;
 pub mod schnorr;
+pub mod session;
 pub mod tor;
 pub mod tor_manager;
 
