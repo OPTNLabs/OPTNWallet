@@ -30,6 +30,9 @@ import {
   type FusionServerStatus,
   type TorConfig,
 } from '../../services/fusion/FusionStatusService';
+import { runFusion } from '../../platform/desktop/FusionService';
+import type { RootState } from '../../state/store';
+import type { UTXO } from '../../types/types';
 
 // Ports per Electron Cash's own conf.py default (fusion.servo.cash:8789, SSL).
 const DEFAULT_SERVER = 'fusion.servo.cash:8789';
@@ -73,6 +76,51 @@ export const CashFusionSettings: React.FC = () => {
   // Tor port detected for the query below. The Tor config UI lives in
   // TorSettings; here we just resolve the current proxy for resolveTor().
   const [torDetected, setTorDetected] = useState<number | null>(null);
+
+  // "Fuse Now" (Phase 1.7): run a real fusion round with the wallet's coins.
+  const walletId = useSelector((s: RootState) => s.wallet_id.currentWalletId);
+  const currentNetwork = useSelector((s: RootState) => s.network.currentNetwork);
+  const reduxUtxos = useSelector((s: RootState) => s.utxos.utxos);
+  const [fuseState, setFuseState] = useState<'idle' | 'fusing' | 'done' | 'fail'>('idle');
+  const [fuseMsg, setFuseMsg] = useState<string | null>(null);
+
+  const handleFuseNow = async () => {
+    setFuseState('fusing');
+    setFuseMsg(null);
+    try {
+      const { host, port } = parseHostPort(serverInput);
+      const tor = await currentTorConfig(host);
+      // Need the server's parameters (tiers/fees/component count) to allocate.
+      const params = status ?? (await fetchFusionServerStatus(host, port, true, tor));
+      if (!status) setStatus(params);
+
+      const utxos = (Object.values(reduxUtxos).flat() as UTXO[]).filter((u) => !u.token);
+      if (utxos.length === 0) throw new Error('No spendable (non-token) UTXOs to fuse.');
+
+      const outcome = await runFusion({
+        walletId,
+        network: currentNetwork,
+        host,
+        port,
+        useSsl: true,
+        utxos,
+        params: {
+          tiers: params.tiers,
+          numComponents: params.numComponents,
+          componentFeerate: params.componentFeerate,
+          minExcessFee: params.minExcessFee,
+          maxExcessFee: params.maxExcessFee,
+        },
+        torHost: tor?.host ?? null,
+        torPort: tor?.port ?? null,
+      });
+      setFuseState(outcome.ok ? 'done' : 'fail');
+      setFuseMsg(outcome.ok ? `Fused ✓ — txid ${outcome.txid}` : outcome.message);
+    } catch (e) {
+      setFuseState('fail');
+      setFuseMsg(e instanceof Error ? e.message : String(e));
+    }
+  };
 
   const refreshTor = React.useCallback(async () => {
     if (!FUSION_SUPPORTED || !torEnabled) return;
@@ -368,6 +416,37 @@ export const CashFusionSettings: React.FC = () => {
             )}
             {status.donationAddress && (
               <p className="wallet-muted break-all pt-0.5">Donation: {status.donationAddress}</p>
+            )}
+          </div>
+        )}
+
+        {/* Fuse Now — runs a real fusion round with the wallet's coins. */}
+        {enabled && (
+          <div className="rounded-lg border border-[var(--wallet-border)] wallet-surface px-3 py-2 space-y-1.5">
+            <div className="flex items-center justify-between gap-2">
+              <div>
+                <p className="text-xs font-semibold wallet-text-strong">Fuse Now</p>
+                <p className="text-[10px] wallet-muted">
+                  Mixes your coins in a CoinJoin. Needs Tor + ≥2 players in a tier
+                  (run 2–3 wallet instances to test).
+                </p>
+              </div>
+              <button
+                onClick={() => void handleFuseNow()}
+                disabled={fuseState === 'fusing' || walletId <= 0}
+                className="rounded-lg border border-[var(--wallet-accent)]/50 px-3 py-1.5 text-xs font-semibold text-[var(--wallet-accent)] hover:bg-[var(--wallet-accent)]/5 disabled:opacity-50 whitespace-nowrap"
+              >
+                {fuseState === 'fusing' ? 'Fusing…' : 'Fuse Now'}
+              </button>
+            </div>
+            {fuseMsg && (
+              <p
+                className={`text-[10px] leading-relaxed break-all ${
+                  fuseState === 'done' ? 'text-green-400' : fuseState === 'fail' ? 'text-red-400/90' : 'wallet-muted'
+                }`}
+              >
+                {fuseMsg}
+              </p>
             )}
           </div>
         )}
