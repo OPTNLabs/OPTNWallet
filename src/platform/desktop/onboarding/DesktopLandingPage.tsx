@@ -25,6 +25,7 @@ import {
 import type { WalletFileV1 } from '../walletFile';
 import { selectHardwareWallet } from '../../../state/slices/hardwareWalletSlice';
 import { HardwareWalletSettings } from '../../../features/settings/HardwareWalletSettings';
+import { resolveBiometricEnrollment } from '../biometricEnrollment';
 
 interface WalletRow {
   id: number;
@@ -73,14 +74,26 @@ const DesktopLandingPage = () => {
     setOpeningId(id);
     setPassword('');
     setError('');
+  }, []);
+
+  // Availability resolves asynchronously after mount. Recheck the selected
+  // wallet when either value changes so a prompt opened one tick earlier does
+  // not permanently lose its already-enrolled biometric button. Ignore stale
+  // completions when the user selects another wallet while hasData is pending.
+  useEffect(() => {
+    let cancelled = false;
     setBioEnrolledId(null);
-    // Show the biometric button only if THIS wallet has an enrollment.
-    if (bioAvailable) {
-      void hasWalletBiometric(id).then((enrolled) => {
-        if (enrolled) setBioEnrolledId(id);
-      });
-    }
-  }, [bioAvailable]);
+    void resolveBiometricEnrollment(
+      openingId,
+      bioAvailable,
+      hasWalletBiometric
+    ).then((enrolledId) => {
+      if (!cancelled) setBioEnrolledId(enrolledId);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [bioAvailable, openingId]);
 
   // File -> Open Wallet routes here with the requested id in navigation state.
   // Unlike the old setTimeout + CustomEvent handoff, this survives the picker
