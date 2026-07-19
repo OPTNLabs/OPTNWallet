@@ -23,12 +23,15 @@ import SectionHeader from '../../components/ui/SectionHeader';
 import WalletScreen from '../../components/ui/WalletScreen';
 import PriceFeed from '../../components/PriceFeed';
 import DatabaseService from '../../apis/DatabaseManager/DatabaseService';
-import ElectrumService, { primeUTXOCache } from '../../services/ElectrumService';
-import UTXOService from '../../services/UTXOService';
+import ElectrumService from '../../services/ElectrumService';
 import { runWalletUtxoRefresh } from '../../services/RefreshCoordinator';
+import {
+  captureActiveWalletSession,
+  fetchActiveWalletUtxos,
+  isActiveWalletSession,
+} from '../../services/WalletUtxoRefreshService';
 import { refreshUTXOWorkerSubscriptions } from '../../workers/UTXOWorkerService';
 import { logError } from '../../utils/errorHandling';
-import { UTXO } from '../../types/types';
 import { Network } from '../../state/slices/networkSlice';
 import { SATSINBITCOIN } from '../../utils/constants';
 import SettingsRow from '../../components/ui/SettingsRow';
@@ -117,25 +120,23 @@ const Home: React.FC = () => {
 
   const handleRefresh = useCallback(async () => {
     if (fetchingUTXOsRedux || !currentWalletId) return;
+    const walletSession = captureActiveWalletSession(currentWalletId);
+    if (!walletSession) return;
 
-    const allUTXOs: Record<string, UTXO[]> = {};
     dispatch(setFetchingUTXOs(true));
 
     try {
       await runWalletUtxoRefresh(currentWalletId, async () => {
         await ElectrumService.reconnect();
-        const addresses = Object.keys(reduxUTXOs);
-        const fetched = await UTXOService.fetchAndStoreUTXOsMany(currentWalletId, addresses);
-        for (const [address, list] of Object.entries(fetched)) {
-          allUTXOs[address] = list;
-          primeUTXOCache(address, list);
-        }
-        dispatch(replaceAllUTXOs({ utxosByAddress: allUTXOs }));
+        if (!isActiveWalletSession(walletSession)) return;
+        const walletUtxos = await fetchActiveWalletUtxos(walletSession);
+        if (!walletUtxos) return;
+        dispatch(replaceAllUTXOs({ utxosByAddress: walletUtxos }));
         dbService.scheduleDatabaseSave();
         dispatch(setInitialized(true));
         const refreshedCategories = Array.from(
           new Set(
-            Object.values(allUTXOs)
+            Object.values(walletUtxos)
               .flat()
               .map((utxo) => utxo.token?.category)
               .filter((category): category is string => Boolean(category))
@@ -149,14 +150,15 @@ const Home: React.FC = () => {
     } catch (error) {
       logError('Home.handleRefresh', error, { walletId: currentWalletId });
     } finally {
-      dispatch(setFetchingUTXOs(false));
+      if (isActiveWalletSession(walletSession)) {
+        dispatch(setFetchingUTXOs(false));
+      }
     }
   }, [
     currentWalletId,
     dbService,
     dispatch,
     fetchingUTXOsRedux,
-    reduxUTXOs,
   ]);
 
   const handleScanQr = useCallback(async () => {

@@ -8,7 +8,7 @@ import TransactionManager from '../apis/TransactionManager/TransactionManager';
 import DatabaseService from '../apis/DatabaseManager/DatabaseService';
 import { store } from '../state/store';
 import {
-  setUTXOs,
+  replaceAllUTXOs,
   setFetchingUTXOs,
   updateUTXOsForAddress,
   setInitialized,
@@ -27,8 +27,20 @@ import { preloadTokenMetadata } from '../hooks/useSharedTokenMetadata';
 let started = false;
 let headerSubscribed = false;
 let utxoStartRetry: NodeJS.Timeout | null = null;
+let workerEpoch = 0;
+let desiredStarted = false;
+let lifecycleQueue: Promise<void> = Promise.resolve();
 
-const subscribedAddresses = new Set<string>();
+interface WorkerSession {
+  walletId: number;
+  generation: number;
+  epoch: number;
+}
+
+const subscribedAddresses = new Map<
+  string,
+  { walletId: number; generation: number }
+>();
 const contractAddressSet = new Set<string>();
 const refreshTimers = new Map<string, ReturnType<typeof setTimeout>>();
 const contractManager = ContractManager();
@@ -48,16 +60,55 @@ function collectTokenCategories(utxosByAddress: Record<string, UTXO[]>): string[
   );
 }
 
-function refreshAddressSoon(address: string, ms = 120) {
-  const prev = refreshTimers.get(address);
+function isCurrentWalletSession(walletId: number, generation: number): boolean {
+  const activeWallet = store.getState().wallet_id;
+  return (
+    activeWallet.currentWalletId === walletId &&
+    (activeWallet.sessionGeneration ?? 0) === generation
+  );
+}
+
+function isCurrentWorkerContext(session: WorkerSession): boolean {
+  return (
+    started &&
+    workerEpoch === session.epoch &&
+    isCurrentWalletSession(session.walletId, session.generation)
+  );
+}
+
+function captureWorkerSession(epoch = workerEpoch): WorkerSession | null {
+  const activeWallet = store.getState().wallet_id;
+  if (!activeWallet.currentWalletId) return null;
+  return {
+    walletId: activeWallet.currentWalletId,
+    generation: activeWallet.sessionGeneration ?? 0,
+    epoch,
+  };
+}
+
+function refreshContextKey(address: string, session: WorkerSession): string {
+  return `${session.epoch}:${session.generation}:${session.walletId}:${address}`;
+}
+
+function refreshAddressSoon(
+  address: string,
+  ms = 120,
+  session = captureWorkerSession()
+) {
+  if (!session || !isCurrentWorkerContext(session)) return;
+  const contextKey = refreshContextKey(address, session);
+  const prev = refreshTimers.get(contextKey);
   if (prev) clearTimeout(prev);
   const t = setTimeout(() => {
-    refreshAddress(address).catch((e) =>
-      logError('UTXOWorker.refreshAddressSoon', e, { address })
+    refreshAddress(address, session).catch((e) =>
+      logError('UTXOWorker.refreshAddressSoon', e, {
+        address,
+        walletId: session.walletId,
+      })
     );
-    refreshTimers.delete(address);
+    refreshTimers.delete(contextKey);
   }, ms);
-  refreshTimers.set(address, t);
+  refreshTimers.set(contextKey, t);
 }
 
 export function requestUTXORefreshFor(address: string, ms = 80) {
@@ -100,7 +151,12 @@ export function optimisticRemoveSpentByOutpoints(
   requestUTXORefreshForMany(touched, 0);
 }
 
-async function refreshWalletAddress(address: string, currentWalletId: number) {
+async function refreshWalletAddress(
+  address: string,
+  session: WorkerSession
+) {
+  if (!isCurrentWorkerContext(session)) return;
+  const currentWalletId = session.walletId;
   const prev = store.getState().utxos.utxos[address] ?? [];
   const prevSet = new Set(prev.map((u) => `${u.tx_hash}:${u.tx_pos}`));
 
@@ -108,6 +164,7 @@ async function refreshWalletAddress(address: string, currentWalletId: number) {
     currentWalletId,
     address
   );
+  if (!isCurrentWorkerContext(session)) return;
   if (updatedHistory.length > 0) {
     store.dispatch(
       addTransactions({
@@ -119,6 +176,7 @@ async function refreshWalletAddress(address: string, currentWalletId: number) {
 
   invalidateUTXOCache(address);
   const utxos = await UTXOService.fetchAndStoreUTXOs(currentWalletId, address);
+  if (!isCurrentWorkerContext(session)) return;
   store.dispatch(updateUTXOsForAddress({ address, utxos }));
 
   for (const u of utxos) {
@@ -143,9 +201,12 @@ async function refreshWalletAddress(address: string, currentWalletId: number) {
   }
 }
 
-async function performRefreshAddress(address: string) {
-  const state = store.getState();
-  const currentWalletId = state.wallet_id.currentWalletId;
+async function performRefreshAddress(
+  address: string,
+  session: WorkerSession
+) {
+  if (!isCurrentWorkerContext(session)) return;
+  const currentWalletId = session.walletId;
 
   // Contract addresses: update via ContractManager, skip popups
   if (contractAddressSet.has(address)) {
@@ -157,41 +218,55 @@ async function performRefreshAddress(address: string) {
     return;
   }
 
-  if (!currentWalletId) return;
-
   try {
-    await refreshWalletAddress(address, currentWalletId);
-    dbService.scheduleDatabaseSave();
+    await refreshWalletAddress(address, session);
+    if (isCurrentWorkerContext(session)) {
+      dbService.scheduleDatabaseSave();
+    }
   } catch (e) {
-    logError('UTXOWorker.refreshAddress.wallet', e, { address });
+    logError('UTXOWorker.refreshAddress.wallet', e, { address, walletId: currentWalletId });
   }
 }
 
-async function refreshAddress(address: string) {
-  const inflight = inFlightRefreshes.get(address);
+async function refreshAddress(address: string, session: WorkerSession) {
+  if (!isCurrentWorkerContext(session)) return;
+  const contextKey = refreshContextKey(address, session);
+  const inflight = inFlightRefreshes.get(contextKey);
   if (inflight) {
-    queuedRefreshes.add(address);
+    queuedRefreshes.add(contextKey);
     await inflight;
     return;
   }
 
   const run = (async () => {
     do {
-      queuedRefreshes.delete(address);
-      await performRefreshAddress(address);
-    } while (queuedRefreshes.has(address));
+      queuedRefreshes.delete(contextKey);
+      await performRefreshAddress(address, session);
+    } while (
+      queuedRefreshes.has(contextKey) &&
+      isCurrentWorkerContext(session)
+    );
   })().finally(() => {
-    inFlightRefreshes.delete(address);
-    queuedRefreshes.delete(address);
+    inFlightRefreshes.delete(contextKey);
+    queuedRefreshes.delete(contextKey);
   });
 
-  inFlightRefreshes.set(address, run);
+  inFlightRefreshes.set(contextKey, run);
   await run;
 }
 
-export async function bootstrapAllUTXOs() {
+export async function bootstrapAllUTXOs(expectedEpoch?: number) {
   const state = store.getState();
   const currentWalletId = state.wallet_id.currentWalletId;
+  const sessionGeneration = state.wallet_id.sessionGeneration ?? 0;
+  const bootstrapIsCurrent = () =>
+    isCurrentWalletSession(currentWalletId, sessionGeneration) &&
+    (expectedEpoch === undefined ||
+      isCurrentWorkerContext({
+        walletId: currentWalletId,
+        generation: sessionGeneration,
+        epoch: expectedEpoch,
+      }));
 
   if (!currentWalletId) {
     // Wallet not ready; just exit. Caller will retry.
@@ -199,6 +274,7 @@ export async function bootstrapAllUTXOs() {
   }
 
   const keyPairs = await KeyService.retrieveKeys(currentWalletId);
+  if (!bootstrapIsCurrent()) return;
   if (!keyPairs || keyPairs.length === 0) {
     // Keys not ready; just exit. Caller will retry.
     return;
@@ -213,6 +289,7 @@ export async function bootstrapAllUTXOs() {
     currentWalletId,
     keyPairs.map((keyPair) => keyPair.address)
   );
+  if (!bootstrapIsCurrent()) return;
   for (const keyPair of keyPairs) {
     allUTXOs[keyPair.address] = fetchedWalletUTXOs[keyPair.address] ?? [];
   }
@@ -220,10 +297,12 @@ export async function bootstrapAllUTXOs() {
   try {
     const quantumrootAddresses =
       await QuantumrootTrackingService.listTrackedAddresses(currentWalletId);
+    if (!bootstrapIsCurrent()) return;
     const fetchedQuantumrootUTXOs = await UTXOService.fetchAndStoreUTXOsMany(
       currentWalletId,
       quantumrootAddresses
     );
+    if (!bootstrapIsCurrent()) return;
     for (const address of quantumrootAddresses) {
       allUTXOs[address] = fetchedQuantumrootUTXOs[address] ?? [];
     }
@@ -232,6 +311,7 @@ export async function bootstrapAllUTXOs() {
       walletId: currentWalletId,
     });
   }
+  if (!bootstrapIsCurrent()) return;
 
   // Contract instances
   try {
@@ -257,8 +337,9 @@ export async function bootstrapAllUTXOs() {
   } catch (e) {
     logError('UTXOWorker.bootstrapAllUTXOs.contractInit', e);
   }
+  if (!bootstrapIsCurrent()) return;
 
-  store.dispatch(setUTXOs({ newUTXOs: allUTXOs }));
+  store.dispatch(replaceAllUTXOs({ utxosByAddress: allUTXOs }));
 
   const tokenCategories = collectTokenCategories(allUTXOs);
   if (tokenCategories.length > 0) {
@@ -273,20 +354,39 @@ export async function bootstrapAllUTXOs() {
       await preloadTokenMetadata(tokenCategories);
     }
   }
+  if (!bootstrapIsCurrent()) return;
 
   dbService.scheduleDatabaseSave();
   store.dispatch(setFetchingUTXOs(false));
   store.dispatch(setInitialized(true));
 }
 
-async function establishSubscriptions() {
+async function establishSubscriptions(session: WorkerSession) {
+  if (!isCurrentWorkerContext(session)) return;
+
   // Headers (once)
   if (!headerSubscribed) {
     try {
       await ElectrumService.subscribeBlockHeaders(async () => {
-        for (const addr of subscribedAddresses) refreshAddressSoon(addr, 250);
-        for (const addr of contractAddressSet) refreshAddressSoon(addr, 250);
+        const epoch = workerEpoch;
+        for (const [addr, owner] of subscribedAddresses) {
+          refreshAddressSoon(addr, 250, { ...owner, epoch });
+        }
+        const activeSession = captureWorkerSession(epoch);
+        for (const addr of contractAddressSet) {
+          refreshAddressSoon(addr, 250, activeSession);
+        }
       });
+      if (!isCurrentWorkerContext(session)) {
+        await ElectrumService.unsubscribeBlockHeaders().catch((error: unknown) =>
+          logWarn(
+            'UTXOWorker.establishSubscriptions.blockHeaders',
+            'Discarded a stale header subscription',
+            { error }
+          )
+        );
+        return;
+      }
       headerSubscribed = true;
     } catch (e) {
       logError('UTXOWorker.establishSubscriptions.blockHeaders', e);
@@ -295,28 +395,38 @@ async function establishSubscriptions() {
 
   // Wallet addresses
   try {
-    const { wallet_id } = store.getState();
-    const currentWalletId = wallet_id.currentWalletId;
-    if (!currentWalletId) return;
+    const currentWalletId = session.walletId;
 
     const keyPairs = await KeyService.retrieveKeys(currentWalletId);
+    if (!isCurrentWorkerContext(session)) return;
     const walletAddresses = (keyPairs || [])
       .map((k) => k.address)
       .filter(Boolean);
     const quantumrootAddresses =
       await QuantumrootTrackingService.listTrackedAddresses(currentWalletId);
+    if (!isCurrentWorkerContext(session)) return;
 
     for (const addr of [...walletAddresses, ...quantumrootAddresses]) {
-      if (subscribedAddresses.has(addr)) continue;
-      subscribedAddresses.add(addr);
+      const existingOwner = subscribedAddresses.get(addr);
+      if (
+        existingOwner?.walletId === session.walletId &&
+        existingOwner.generation === session.generation
+      ) {
+        continue;
+      }
+      subscribedAddresses.set(addr, {
+        walletId: session.walletId,
+        generation: session.generation,
+      });
 
       // Baseline fetch
-      refreshAddressSoon(addr, 0);
+      refreshAddressSoon(addr, 0, session);
 
       try {
         await ElectrumService.subscribeAddress(addr, async () => {
-          refreshAddressSoon(addr, 80);
+          refreshAddressSoon(addr, 80, session);
         });
+        if (!isCurrentWorkerContext(session)) return;
       } catch (e) {
         logError('UTXOWorker.establishSubscriptions.walletAddress', e, {
           address: addr,
@@ -330,14 +440,19 @@ async function establishSubscriptions() {
   // (Optional) contract addresses
   for (const addr of contractAddressSet) {
     if (subscribedAddresses.has(addr)) continue;
-    subscribedAddresses.add(addr);
+    if (!isCurrentWorkerContext(session)) return;
+    subscribedAddresses.set(addr, {
+      walletId: session.walletId,
+      generation: session.generation,
+    });
 
-    refreshAddressSoon(addr, 0);
+    refreshAddressSoon(addr, 0, session);
 
     try {
       await ElectrumService.subscribeAddress(addr, async () => {
-        refreshAddressSoon(addr, 80);
+        refreshAddressSoon(addr, 80, session);
       });
+      if (!isCurrentWorkerContext(session)) return;
     } catch (e) {
       logError('UTXOWorker.establishSubscriptions.contractAddress', e, {
         address: addr,
@@ -348,92 +463,117 @@ async function establishSubscriptions() {
 
 async function refreshUTXOWorkerSubscriptions() {
   if (!started) return;
+  const session = captureWorkerSession();
+  if (!session) return;
 
   try {
-    await establishSubscriptions();
+    await establishSubscriptions(session);
   } catch (e) {
     logError('UTXOWorker.refreshSubscriptions', e);
   }
 }
 
-async function startUTXOWorker() {
-  if (started) return;
-  started = true;
+function enqueueLifecycle(task: () => Promise<void>): Promise<void> {
+  const run = lifecycleQueue.then(task, task);
+  lifecycleQueue = run.catch((error) => {
+    logError('UTXOWorker.lifecycle', error);
+  });
+  return run;
+}
 
-  const tryStart = async () => {
-    // Wait until wallet & keys exist
-    const { wallet_id } = store.getState();
-    const currentWalletId = wallet_id.currentWalletId;
-    if (!currentWalletId) {
-      utxoStartRetry && clearTimeout(utxoStartRetry);
-      utxoStartRetry = setTimeout(tryStart, 500);
-      return;
-    }
-    const keys = await KeyService.retrieveKeys(currentWalletId);
-    if (!keys || keys.length === 0) {
-      utxoStartRetry && clearTimeout(utxoStartRetry);
-      utxoStartRetry = setTimeout(tryStart, 500);
-      return;
-    }
+function startUTXOWorker(): Promise<void> {
+  if (desiredStarted) return lifecycleQueue;
+  desiredStarted = true;
+  const epoch = ++workerEpoch;
 
-    // Ready: clear retry timer
+  return enqueueLifecycle(async () => {
+    if (!desiredStarted || epoch !== workerEpoch) return;
+    const session = captureWorkerSession(epoch);
+    if (!session) return;
+    started = true;
+
+    const tryStart = async (): Promise<void> => {
+      if (!isCurrentWorkerContext(session)) return;
+      const keys = await KeyService.retrieveKeys(session.walletId);
+      if (!isCurrentWorkerContext(session)) return;
+      if (!keys || keys.length === 0) {
+        if (utxoStartRetry) clearTimeout(utxoStartRetry);
+        utxoStartRetry = setTimeout(() => void tryStart(), 500);
+        return;
+      }
+
+      if (utxoStartRetry) {
+        clearTimeout(utxoStartRetry);
+        utxoStartRetry = null;
+      }
+
+      try {
+        await runWalletUtxoRefresh(session.walletId, async () => {
+          await bootstrapAllUTXOs(epoch);
+        });
+      } catch (e) {
+        logError('UTXOWorker.start.bootstrap', e);
+      }
+      if (!isCurrentWorkerContext(session)) return;
+
+      try {
+        await establishSubscriptions(session);
+      } catch (e) {
+        logError('UTXOWorker.start.subscriptions', e);
+      }
+    };
+
+    await tryStart();
+  });
+}
+
+function stopUTXOWorker(): Promise<void> {
+  if (!desiredStarted && !started) return lifecycleQueue;
+  desiredStarted = false;
+  workerEpoch += 1;
+
+  return enqueueLifecycle(async () => {
+    started = false;
+
     if (utxoStartRetry) {
       clearTimeout(utxoStartRetry);
       utxoStartRetry = null;
     }
 
-    try {
-      await runWalletUtxoRefresh(currentWalletId, async () => {
-        await bootstrapAllUTXOs();
-      });
-    } catch (e) {
-      logError('UTXOWorker.start.bootstrap', e);
-    }
+    for (const [, timer] of refreshTimers) clearTimeout(timer);
+    refreshTimers.clear();
+    queuedRefreshes.clear();
+    inFlightRefreshes.clear();
 
-    try {
-      await establishSubscriptions();
-    } catch (e) {
-      logError('UTXOWorker.start.subscriptions', e);
-    }
-  };
-
-  tryStart();
-}
-
-async function stopUTXOWorker() {
-  if (!started) return;
-  started = false;
-
-  if (utxoStartRetry) {
-    clearTimeout(utxoStartRetry);
-    utxoStartRetry = null;
-  }
-
-  for (const [, t] of refreshTimers) clearTimeout(t);
-  refreshTimers.clear();
-
-  await Promise.all(
-    [...subscribedAddresses].map((addr) =>
-      ElectrumService.unsubscribeAddress(addr).catch((error: unknown) =>
-        logWarn('UTXOWorker.stop.unsubscribeAddress', 'Failed to unsubscribe', {
-          address: addr,
-          error,
-        })
-      )
-    )
-  );
-  subscribedAddresses.clear();
-
-  if (headerSubscribed) {
-    try {
-      await ElectrumService.unsubscribeBlockHeaders();
-    } catch (e) {
-      logWarn('UTXOWorker.stop.unsubscribeBlockHeaders', 'Failed to unsubscribe block headers', {
-        error: e,
-      });
-    }
+    const addressesToUnsubscribe = [...subscribedAddresses.keys()];
+    subscribedAddresses.clear();
+    contractAddressSet.clear();
+    const unsubscribeHeaders = headerSubscribed;
     headerSubscribed = false;
-  }
+
+    await Promise.all(
+      addressesToUnsubscribe.map((addr) =>
+        ElectrumService.unsubscribeAddress(addr).catch((error: unknown) =>
+          logWarn('UTXOWorker.stop.unsubscribeAddress', 'Failed to unsubscribe', {
+            address: addr,
+            error,
+          })
+        )
+      )
+    );
+
+    if (unsubscribeHeaders) {
+      try {
+        await ElectrumService.unsubscribeBlockHeaders();
+      } catch (e) {
+        logWarn(
+          'UTXOWorker.stop.unsubscribeBlockHeaders',
+          'Failed to unsubscribe block headers',
+          { error: e }
+        );
+      }
+    }
+  });
 }
 
 export { startUTXOWorker, stopUTXOWorker, refreshUTXOWorkerSubscriptions };
