@@ -30,6 +30,7 @@ use tokio_rustls::rustls::pki_types::ServerName;
 use tokio_rustls::rustls::{ClientConfig, RootCertStore};
 use tokio_rustls::TlsConnector;
 
+pub mod pedersen;
 pub mod round;
 pub mod tor;
 pub mod tor_manager;
