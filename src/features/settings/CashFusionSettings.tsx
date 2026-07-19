@@ -433,8 +433,7 @@ export const CashFusionSettings: React.FC = () => {
               <div>
                 <p className="text-xs font-semibold wallet-text-strong">Fuse Now</p>
                 <p className="text-[10px] wallet-muted">
-                  Mixes your coins in a CoinJoin. Needs Tor + ≥2 players in a tier
-                  (run 2–3 wallet instances to test).
+                  Mixes your coins in a CoinJoin. Needs Tor + ≥2 players in a tier.
                 </p>
               </div>
               <button
