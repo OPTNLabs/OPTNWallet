@@ -45,7 +45,7 @@ fn y_is_quadratic_residue(y_be: &[u8]) -> bool {
 }
 
 /// Parse a serialized secp256k1 point (33-byte compressed or 65-byte uncompressed).
-fn parse_point(bytes: &[u8]) -> Result<ProjectivePoint, String> {
+pub(crate) fn parse_point(bytes: &[u8]) -> Result<ProjectivePoint, String> {
     let ep = EncodedPoint::from_bytes(bytes).map_err(|_| "point could not be parsed".to_string())?;
     Option::<AffinePoint>::from(AffinePoint::from_encoded_point(&ep))
         .map(ProjectivePoint::from)
