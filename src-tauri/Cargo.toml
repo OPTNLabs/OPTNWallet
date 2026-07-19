@@ -63,3 +63,6 @@ rand_core = { version = "0.6", features = ["getrandom"] }
 # over the field prime. num-bigint gives a clear, correct modpow for it (k256's
 # Scalar is mod the group order n, not the field prime p).
 num-bigint = "0.4"
+# hash160 = ripemd160(sha256(x)) for the P2PKH scriptCode when signing fusion
+# inputs (BIP143 sighash). RustCrypto ripemd, pairs with the sha2 above.
+ripemd = "0.1"

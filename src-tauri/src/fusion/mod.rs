@@ -36,6 +36,7 @@ pub mod pedersen;
 pub mod round;
 pub mod schnorr;
 pub mod session;
+pub mod tx;
 pub mod tor;
 pub mod tor_manager;
 
