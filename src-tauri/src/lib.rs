@@ -524,13 +524,20 @@ pub fn run() {
             };
             app.handle().plugin(
                 tauri_plugin_log::Builder::new()
-                    .level(log_level)
+                    // Builder defaults already include stdout + a LogDir using
+                    // productName (OPTNWallet.log). Clear them before adding the
+                    // two intentional sinks below, otherwise every entry is
+                    // duplicated into both OPTNWallet.log and optn-wallet.log.
+                    .clear_targets()
+                    .level(log::LevelFilter::Info)
+                    .level_for(tauri_plugin_log::WEBVIEW_TARGET, log_level)
+                    .level_for(env!("CARGO_CRATE_NAME"), log_level)
                     // Stdout so the terminal shows logs during dev
                     .target(tauri_plugin_log::Target::new(
                         tauri_plugin_log::TargetKind::Stdout,
                     ))
                     // Rolling log file in the OS app-log directory:
-                    //   Windows: %APPDATA%\com.optilabs.wallet\logs\
+                    //   Windows: %LOCALAPPDATA%\com.optilabs.wallet\logs\
                     //   macOS:   ~/Library/Logs/com.optilabs.wallet/
                     //   Linux:   ~/.local/share/com.optilabs.wallet/logs/
                     .target(tauri_plugin_log::Target::new(

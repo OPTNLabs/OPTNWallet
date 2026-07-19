@@ -6,7 +6,8 @@
 // Rebuilt whenever the wallet list or the open wallet changes, so Open Wallet
 // stays current and wallet-scoped items grey out on the picker.
 import { useEffect } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { flushSync } from 'react-dom';
+import { useNavigate, type NavigateFunction } from 'react-router-dom';
 import { useDispatch, useSelector } from 'react-redux';
 import { Menu, Submenu, MenuItem, PredefinedMenuItem } from '@tauri-apps/api/menu';
 import { open as openDialog, save as saveDialog } from '@tauri-apps/plugin-dialog';
@@ -27,6 +28,23 @@ export const OPEN_WALLET_EVENT = 'optn:open-wallet'; // quick-open a saved DB wa
 export const IMPORT_FILE_EVENT = 'optn:import-wallet-file'; // open a parsed .optn file
 // Fired after create/import/delete so the menu re-reads the wallet list.
 export const WALLETS_CHANGED_EVENT = 'optn:wallets-changed';
+
+/**
+ * Leave the currently open wallet before showing another wallet's password
+ * prompt. AppShell only exposes the picker routes while walletId is reset, and
+ * the old wallet key must not survive a same-window switch.
+ */
+export function openSavedWalletFromMenu(
+  walletId: number,
+  navigate: NavigateFunction,
+  dispatch: AppDispatch,
+  lock: () => void = EcKeyManager.lock,
+  flush: (callback: () => void) => void = flushSync
+): void {
+  lock();
+  flush(() => dispatch(resetWallet()));
+  navigate(ROUTE_PATHS.landing, { state: { openWalletId: walletId } });
+}
 
 async function walletsDir(): Promise<string | undefined> {
   try {
@@ -136,12 +154,7 @@ export function useMenuBar(): void {
           MenuItem.new({
             id: `open_wallet_${w.id}`,
             text: w.wallet_name || `Wallet #${w.id}`,
-            action: () => {
-              navigate(ROUTE_PATHS.landing);
-              setTimeout(() => {
-                window.dispatchEvent(new CustomEvent(OPEN_WALLET_EVENT, { detail: { id: w.id } }));
-              }, 50);
-            },
+            action: () => openSavedWalletFromMenu(w.id, navigate, dispatch),
           })
         )
       );

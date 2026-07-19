@@ -22,6 +22,7 @@ import { setCachedWalletKey, getCachedWalletKey, clearCachedWalletKey } from './
 import { verify as verifyGatePassphrase } from './EcKeyManager';
 import { SECRET_ENC_PREFIX } from './SecretCryptoService';
 import { autoSaveWalletFile, type WalletFileV1 } from './walletFile';
+import { log } from './logger';
 import {
   checkStatus as bioCheckStatus,
   setData as bioSetData,
@@ -234,6 +235,8 @@ export async function switchWalletNetwork(walletId: number, target: Network): Pr
   const db = dbService.getDatabase();
   if (!db || walletId <= 0) return;
 
+  await log.info('NetworkSwitch', `wallet=${walletId} target=${target} status=start`);
+
   // Preserve address depth across the toggle: regenerate at least as many
   // address indices as the wallet already had (each index = receive+change =
   // 2 keys), so funds on a later address aren't hidden after switching back.
@@ -289,6 +292,10 @@ export async function switchWalletNetwork(walletId: number, target: Network): Pr
   const { default: KeyService } = await import('../../services/KeyService');
   await KeyService.bootstrapInitialAddressBatch(walletId, 0, indices);
   await dbService.forceSaveDatabase();
+  await log.info(
+    'NetworkSwitch',
+    `wallet=${walletId} target=${target} cacheCleared=true addressIndices=${indices} status=complete`
+  );
 }
 
 /**
@@ -345,10 +352,11 @@ export async function purgeCrossNetworkData(walletId: number, network: Network):
 
   if (removed > 0) {
     await dbService.forceSaveDatabase();
-    console.info(
-      `[DesktopWalletManager] purged ${removed} stale cross-network row(s) for wallet ${walletId} (now on ${network})`
-    );
   }
+  await log.info(
+    'NetworkPurge',
+    `wallet=${walletId} target=${network} cacheCleared=true rowsRemoved=${removed} status=complete`
+  );
 }
 
 export async function openWalletWithPassword(

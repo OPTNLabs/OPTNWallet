@@ -5,12 +5,14 @@ import { WalletType } from '../../types/wallet';
 
 export interface WalletState {
   currentWalletId: number;
+  sessionGeneration: number;
   networkType: Network;
   walletType: WalletType;
 }
 
 const initialState: WalletState = {
   currentWalletId: 0,
+  sessionGeneration: 0,
   networkType: Network.CHIPNET,
   walletType: WalletType.STANDARD,
 };
@@ -21,9 +23,12 @@ const walletSlice = createSlice({
   reducers: {
     setWalletId: (state, action: PayloadAction<number>) => {
       state.currentWalletId = action.payload;
+      state.sessionGeneration = (state.sessionGeneration ?? 0) + 1;
     },
     resetWallet: (state) => {
+      const nextSessionGeneration = (state.sessionGeneration ?? 0) + 1;
       Object.assign(state, initialState);
+      state.sessionGeneration = nextSessionGeneration;
     },
     setWalletNetwork: (state, action: PayloadAction<Network>) => {
       state.networkType = action.payload;
