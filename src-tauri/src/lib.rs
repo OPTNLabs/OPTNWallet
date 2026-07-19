@@ -152,6 +152,7 @@ async fn fusion_run(
         output_scripts: scripts,
         output_values,
         transport,
+        timing: fusion::run::FusionTiming::default(),
     })
     .await
 }

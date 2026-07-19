@@ -148,7 +148,7 @@ mod tests {
         let base = calc_round_hash(&last, &pk, t, &commits, &comps);
         // Changing any input changes the hash.
         assert_ne!(base, calc_round_hash(&[8u8; 32], &pk, t, &commits, &comps));
-        assert_ne!(base, calc_round_hash(&last, &vec![0x03u8; 33], t, &commits, &comps));
+        assert_ne!(base, calc_round_hash(&last, &[0x03u8; 33], t, &commits, &comps));
         assert_ne!(base, calc_round_hash(&last, &pk, t + 1, &commits, &comps));
         // Reordering components changes it (order is committed).
         let comps_rev = vec![vec![8u8, 7], vec![9u8]];
