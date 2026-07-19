@@ -39,9 +39,15 @@ const DEFAULT_SERVER = 'fusion.servo.cash:8789';
 
 type ConnStatus = 'idle' | 'testing' | 'ok' | 'fail';
 
-function parseHostPort(hostPort: string): { host: string; port: number } {
-  const [host, port = '8789'] = hostPort.trim().split(':');
-  return { host, port: Number(port) || 8789 };
+function parseHostPort(hostPort: string): { host: string; port: number; ssl: boolean } {
+  const parts = hostPort.trim().split(':');
+  const host = parts[0];
+  const port = Number(parts[1]) || 8789;
+  // Same convention as the Electrum server pool: an optional ':t' suffix means
+  // plain TCP (no TLS); ':s' or no suffix means SSL. So a non-SSL/non-wss fusion
+  // server is just `host:port:t`.
+  const ssl = parts[2] !== 't';
+  return { host, port, ssl };
 }
 
 function isLocalHost(host: string): boolean {
@@ -88,10 +94,10 @@ export const CashFusionSettings: React.FC = () => {
     setFuseState('fusing');
     setFuseMsg(null);
     try {
-      const { host, port } = parseHostPort(serverInput);
+      const { host, port, ssl } = parseHostPort(serverInput);
       const tor = await currentTorConfig(host);
       // Need the server's parameters (tiers/fees/component count) to allocate.
-      const params = status ?? (await fetchFusionServerStatus(host, port, true, tor));
+      const params = status ?? (await fetchFusionServerStatus(host, port, ssl, tor));
       if (!status) setStatus(params);
 
       const utxos = (Object.values(reduxUtxos).flat() as UTXO[]).filter((u) => !u.token);
@@ -102,7 +108,7 @@ export const CashFusionSettings: React.FC = () => {
         network: currentNetwork,
         host,
         port,
-        useSsl: true,
+        useSsl: ssl,
         utxos,
         params: {
           tiers: params.tiers,
@@ -178,10 +184,10 @@ export const CashFusionSettings: React.FC = () => {
     const targets = fusionAuto ? servers : [serverInput];
     const errors: string[] = [];
     for (const target of targets) {
-      const { host, port } = parseHostPort(target ?? '');
+      const { host, port, ssl } = parseHostPort(target ?? '');
       try {
         const torCfg = await currentTorConfig(host);
-        const result = await fetchFusionServerStatus(host, port, true, torCfg);
+        const result = await fetchFusionServerStatus(host, port, ssl, torCfg);
         setStatus(result);
         setConnStatus('ok');
         if (fusionAuto) {
