@@ -15,6 +15,7 @@
 // (connection warmup, submit windows) will likely need tuning against a real
 // server. Every wire-level piece it CALLS is already tested (1.1–1.6).
 
+use std::collections::HashSet;
 use std::time::{Duration, Instant};
 
 use k256::elliptic_curve::PrimeField;
@@ -79,6 +80,9 @@ impl Default for FusionTiming {
 #[derive(serde::Serialize)]
 pub struct FusionOutcome {
     pub ok: bool,
+    /// The round engine only assembles and validates the signed transaction.
+    /// It does not independently observe network broadcast or wallet state.
+    pub broadcast_verified: bool,
     pub txid: Option<String>,
     pub tx_hex: Option<String>,
     pub message: String,
@@ -102,6 +106,146 @@ where
         .map_err(|e| format!("decode server message: {e}"))?
         .msg
         .ok_or_else(|| "empty server message".into())
+}
+
+fn display_txid_to_wire(txid: &str) -> Result<[u8; 32], String> {
+    if txid.len() != 64 {
+        return Err("prev_txid must be 32 bytes".into());
+    }
+
+    let mut bytes = [0u8; 32];
+    for (index, byte) in bytes.iter_mut().enumerate() {
+        let offset = index * 2;
+        *byte = u8::from_str_radix(&txid[offset..offset + 2], 16)
+            .map_err(|_| "bad prev_txid hex".to_string())?;
+    }
+    bytes.reverse();
+    Ok(bytes)
+}
+
+fn input_matches_component(
+    input: &FusionInputKey,
+    component: &pb::InputComponent,
+) -> Result<bool, String> {
+    Ok(component.prev_txid == display_txid_to_wire(&input.prev_txid)?
+        && component.prev_index == input.prev_index
+        && component.pubkey == input.pubkey
+        && component.amount == input.value)
+}
+
+/// Refuse to sign until the transaction assembled from the server's shared
+/// components includes every exact input and output this wallet committed to.
+/// This is intentionally independent of public-key matching: a matching key on
+/// a different outpoint or amount is not our input and must never be signed.
+fn verify_shared_transaction(
+    all_components: &[Vec<u8>],
+    inputs: &[FusionInputKey],
+    output_scripts: &[Vec<u8>],
+    output_values: &[u64],
+) -> Result<(), String> {
+    if output_scripts.len() != output_values.len() {
+        return Err("output script/value length mismatch".into());
+    }
+
+    let mut shared_inputs: Vec<pb::InputComponent> = Vec::new();
+    let mut shared_outputs: Vec<pb::OutputComponent> = Vec::new();
+    let mut seen_outpoints = HashSet::<([u8; 32], u32)>::new();
+    let mut total_input_value = 0u64;
+    let mut total_output_value = 0u64;
+
+    for (index, serialized) in all_components.iter().enumerate() {
+        let component = pb::Component::decode(serialized.as_slice())
+            .map_err(|error| format!("component {index} decode: {error}"))?;
+        match component.component {
+            Some(pb::component::Component::Input(input)) => {
+                let prev_txid: [u8; 32] = input
+                    .prev_txid
+                    .as_slice()
+                    .try_into()
+                    .map_err(|_| format!("component {index}: bad prevout length"))?;
+                if !seen_outpoints.insert((prev_txid, input.prev_index)) {
+                    return Err("shared transaction contains a duplicate input".into());
+                }
+                total_input_value = total_input_value
+                    .checked_add(input.amount)
+                    .ok_or("shared transaction input value overflow")?;
+                shared_inputs.push(input);
+            }
+            Some(pb::component::Component::Output(output)) => {
+                total_output_value = total_output_value
+                    .checked_add(output.amount)
+                    .ok_or("shared transaction output value overflow")?;
+                shared_outputs.push(output);
+            }
+            Some(pb::component::Component::Blank(_)) => {}
+            None => return Err(format!("component {index}: empty")),
+        }
+    }
+
+    if total_output_value > total_input_value {
+        return Err("shared transaction inflates value".into());
+    }
+
+    let mut matched_inputs = vec![false; shared_inputs.len()];
+    for input in inputs {
+        let mut matched = None;
+        for (index, shared) in shared_inputs.iter().enumerate() {
+            if !matched_inputs[index] && input_matches_component(input, shared)? {
+                matched = Some(index);
+                break;
+            }
+        }
+        let Some(index) = matched else {
+            return Err("shared transaction omits one of this wallet's inputs".into());
+        };
+        matched_inputs[index] = true;
+    }
+
+    let mut matched_outputs = vec![false; shared_outputs.len()];
+    for (script, value) in output_scripts.iter().zip(output_values) {
+        let mut matched = None;
+        for (index, shared) in shared_outputs.iter().enumerate() {
+            if !matched_outputs[index]
+                && shared.scriptpubkey == *script
+                && shared.amount == *value
+            {
+                matched = Some(index);
+                break;
+            }
+        }
+        let Some(index) = matched else {
+            return Err("shared transaction omits one of this wallet's outputs".into());
+        };
+        matched_outputs[index] = true;
+    }
+
+    Ok(())
+}
+
+/// A FusionResult is only usable if every server-relayed signature verifies
+/// against the exact shared transaction assembled above. Length checks alone
+/// would let a malicious or broken relay produce an unusable transaction while
+/// the wallet reported a completed round.
+fn verify_transaction_signatures(tx: &FusionTx, signatures: &[Vec<u8>]) -> Result<(), String> {
+    if signatures.len() != tx.num_inputs() {
+        return Err("server returned wrong number of signatures".into());
+    }
+
+    for (index, signature) in signatures.iter().enumerate() {
+        let signature: &[u8; 64] = signature
+            .as_slice()
+            .try_into()
+            .map_err(|_| "server relayed a bad-length signature".to_string())?;
+        let pubkey = tx
+            .input_pubkey(index)
+            .ok_or("transaction input is missing a public key")?;
+        let sighash = tx.sighash(index)?;
+        if !schnorr::verify(pubkey, signature, &sighash) {
+            return Err("server relayed an invalid transaction signature".into());
+        }
+    }
+
+    Ok(())
 }
 
 /// Run one full fusion round. Returns the assembled tx (hex + txid) on success;
@@ -148,6 +292,7 @@ pub async fn run_fusion(params: FusionRunParams<'_>) -> Result<FusionOutcome, St
             if remaining.is_zero() {
                 return Ok(FusionOutcome {
                     ok: false,
+                    broadcast_verified: false,
                     txid: None,
                     tx_hex: None,
                     message: "no other players joined this tier in time".into(),
@@ -281,10 +426,11 @@ pub async fn run_fusion(params: FusionRunParams<'_>) -> Result<FusionOutcome, St
     }
 
     if skip_signatures {
-        return Ok(FusionOutcome { ok: false, txid: None, tx_hex: None, message: "server skipped signatures (a component was rejected); round will restart".into() });
+        return Ok(FusionOutcome { ok: false, broadcast_verified: false, txid: None, tx_hex: None, message: "server skipped signatures (a component was rejected); round will restart".into() });
     }
 
-    // --- Build the tx and sign OUR inputs ---
+    // --- Verify the shared transaction, then sign ONLY our exact inputs ---
+    verify_shared_transaction(&all_components, &inputs, &output_scripts, &output_values)?;
     let ftx = FusionTx::from_components(&all_components, &session_hash)?;
     // For each tx input, if its component's pubkey is one of ours, sign it.
     let mut submit_sig_tasks = Vec::new();
@@ -293,11 +439,18 @@ pub async fn run_fusion(params: FusionRunParams<'_>) -> Result<FusionOutcome, St
         let comp = &all_components[cidx];
         // Is this our input? Match the component's pubkey to one of our inputs.
         let comp_msg = pb::Component::decode(comp.as_slice()).map_err(|e| format!("component decode: {e}"))?;
-        let inp_pubkey = match comp_msg.component {
-            Some(pb::component::Component::Input(inp)) => inp.pubkey,
+        let shared_input = match comp_msg.component {
+            Some(pb::component::Component::Input(inp)) => inp,
             _ => continue,
         };
-        let Some(inkey) = inputs.iter().find(|k| k.pubkey == inp_pubkey) else { continue };
+        let mut own_input = None;
+        for input in &inputs {
+            if input_matches_component(input, &shared_input)? {
+                own_input = Some(input);
+                break;
+            }
+        }
+        let Some(inkey) = own_input else { continue };
 
         let sighash = ftx.sighash(i)?;
         let sk = scalar_from_privkey(&inkey.privkey)?;
@@ -319,7 +472,7 @@ pub async fn run_fusion(params: FusionRunParams<'_>) -> Result<FusionOutcome, St
     let result = match recv_server(&mut main).await? {
         pb::server_message::Msg::Fusionresult(r) => r,
         pb::server_message::Msg::Restartround(_) => {
-            return Ok(FusionOutcome { ok: false, txid: None, tx_hex: None, message: "round restarted (a player misbehaved)".into() })
+            return Ok(FusionOutcome { ok: false, broadcast_verified: false, txid: None, tx_hex: None, message: "round restarted (a player misbehaved)".into() })
         }
         pb::server_message::Msg::Error(e) => {
             return Err(format!("server error at result: {}", e.message.unwrap_or_default()))
@@ -328,23 +481,22 @@ pub async fn run_fusion(params: FusionRunParams<'_>) -> Result<FusionOutcome, St
     };
 
     if !result.ok {
-        return Ok(FusionOutcome { ok: false, txid: None, tx_hex: None, message: "fusion failed; blame phase would follow".into() });
+        return Ok(FusionOutcome { ok: false, broadcast_verified: false, txid: None, tx_hex: None, message: "fusion failed; blame phase would follow".into() });
     }
 
     // Assemble the fully-signed tx from all players' signatures.
-    if result.txsignatures.len() != ftx.num_inputs() {
-        return Err("server returned wrong number of signatures".into());
-    }
     let sigs: Vec<Vec<u8>> = result.txsignatures;
-    for s in &sigs {
-        if s.len() != 64 {
-            return Err("server relayed a bad-length signature".into());
-        }
-    }
+    verify_transaction_signatures(&ftx, &sigs)?;
     let tx_hex = hexify(&ftx.serialize(&sigs)?);
     let txid = ftx.txid(&sigs)?;
 
-    Ok(FusionOutcome { ok: true, txid: Some(txid), tx_hex: Some(tx_hex), message: "fusion complete".into() })
+    Ok(FusionOutcome {
+        ok: true,
+        broadcast_verified: false,
+        txid: Some(txid),
+        tx_hex: Some(tx_hex),
+        message: "fully signed transaction assembled; broadcast is not independently verified".into(),
+    })
 }
 
 async fn sleep_until(t: Instant) {
@@ -361,12 +513,151 @@ mod tests {
     use crate::fusion::session::calc_round_hash as srv_round_hash;
     use crate::fusion::pedersen::random_nonce;
     use k256::ProjectivePoint;
+    use prost::Message;
     use tokio::net::TcpListener;
     use tokio::sync::mpsc;
 
     enum Covert {
         Component(Vec<u8>),
         Signature(u32, Vec<u8>),
+    }
+
+    fn test_input_key(
+        prev_txid: u8,
+        prev_index: u32,
+        pubkey: Vec<u8>,
+        value: u64,
+    ) -> FusionInputKey {
+        FusionInputKey {
+            prev_txid: format!("{prev_txid:02x}").repeat(32),
+            prev_index,
+            pubkey,
+            value,
+            privkey: [1u8; 32],
+        }
+    }
+
+    fn input_component(
+        prev_txid: u8,
+        prev_index: u32,
+        pubkey: Vec<u8>,
+        value: u64,
+    ) -> Vec<u8> {
+        pb::Component {
+            salt_commitment: vec![0u8; 32],
+            component: Some(pb::component::Component::Input(pb::InputComponent {
+                prev_txid: vec![prev_txid; 32],
+                prev_index,
+                pubkey,
+                amount: value,
+            })),
+        }
+        .encode_to_vec()
+    }
+
+    fn output_component(scriptpubkey: Vec<u8>, amount: u64) -> Vec<u8> {
+        pb::Component {
+            salt_commitment: vec![0u8; 32],
+            component: Some(pb::component::Component::Output(pb::OutputComponent {
+                scriptpubkey,
+                amount,
+            })),
+        }
+        .encode_to_vec()
+    }
+
+    #[test]
+    fn rejects_shared_transaction_missing_one_of_our_outputs() {
+        let pubkey = vec![0x02; 33];
+        let own_input = test_input_key(0xaa, 3, pubkey.clone(), 100_000);
+        let own_output = vec![0x76, 0xa9, 0x14, 0x07, 0x88, 0xac];
+        let shared = vec![
+            input_component(0xaa, 3, pubkey, 100_000),
+            output_component(vec![0x76, 0xa9, 0x14, 0x08, 0x88, 0xac], 90_000),
+        ];
+
+        let error = verify_shared_transaction(
+            &shared,
+            &[own_input],
+            &[own_output],
+            &[90_000],
+        )
+        .unwrap_err();
+
+        assert!(error.contains("omits one of this wallet's outputs"));
+    }
+
+    #[test]
+    fn rejects_shared_transaction_that_substitutes_our_outpoint() {
+        let pubkey = vec![0x02; 33];
+        let own_input = test_input_key(0xaa, 3, pubkey.clone(), 100_000);
+        let own_output = vec![0x76, 0xa9, 0x14, 0x07, 0x88, 0xac];
+        let shared = vec![
+            input_component(0xaa, 4, pubkey, 100_000),
+            output_component(own_output.clone(), 90_000),
+        ];
+
+        let error = verify_shared_transaction(
+            &shared,
+            &[own_input],
+            &[own_output],
+            &[90_000],
+        )
+        .unwrap_err();
+
+        assert!(error.contains("omits one of this wallet's inputs"));
+    }
+
+    #[test]
+    fn rejects_shared_transaction_that_creates_value_or_reuses_an_input() {
+        let pubkey = vec![0x02; 33];
+        let own_input = test_input_key(0xaa, 3, pubkey.clone(), 100_000);
+        let own_output = vec![0x76, 0xa9, 0x14, 0x07, 0x88, 0xac];
+        let inflated = vec![
+            input_component(0xaa, 3, pubkey.clone(), 100_000),
+            output_component(own_output.clone(), 90_000),
+            output_component(vec![0x76, 0xa9, 0x14, 0x08, 0x88, 0xac], 10_001),
+        ];
+        let duplicate = vec![
+            input_component(0xaa, 3, pubkey.clone(), 100_000),
+            input_component(0xaa, 3, pubkey, 100_000),
+            output_component(own_output.clone(), 90_000),
+        ];
+
+        let inflated_error = verify_shared_transaction(
+            &inflated,
+            &[own_input],
+            &[own_output.clone()],
+            &[90_000],
+        )
+        .unwrap_err();
+        let duplicate_error = verify_shared_transaction(
+            &duplicate,
+            &[test_input_key(0xaa, 3, vec![0x02; 33], 100_000)],
+            &[own_output],
+            &[90_000],
+        )
+        .unwrap_err();
+
+        assert!(inflated_error.contains("inflates value"));
+        assert!(duplicate_error.contains("duplicate input"));
+    }
+
+    #[test]
+    fn rejects_an_invalid_final_transaction_signature() {
+        let private_key = random_nonce();
+        let pubkey = schnorr::pubkey_compressed(private_key).to_vec();
+        let components = vec![
+            input_component(0xaa, 3, pubkey, 100_000),
+            output_component(vec![0x76, 0xa9, 0x14, 0x07, 0x88, 0xac], 90_000),
+        ];
+        let tx = FusionTx::from_components(&components, &[7u8; 32]).unwrap();
+        let valid_signature = schnorr::sign(private_key, &tx.sighash(0).unwrap()).to_vec();
+
+        verify_transaction_signatures(&tx, &[valid_signature]).unwrap();
+
+        let error = verify_transaction_signatures(&tx, &[vec![0u8; 64]]).unwrap_err();
+        assert!(error.contains("invalid transaction signature"));
     }
 
     // A minimal but complete mock CashFusion server for ONE player, over plain
@@ -587,6 +878,10 @@ mod tests {
             server.await.unwrap().expect("mock server ok");
 
             assert!(outcome.ok, "fusion should succeed: {}", outcome.message);
+            assert!(
+                !outcome.broadcast_verified,
+                "assembling a signed transaction is not proof that it reached the network"
+            );
             assert!(outcome.txid.is_some());
             let tx_hex = outcome.tx_hex.expect("tx hex");
             assert!(tx_hex.starts_with("01000000"), "version 1 tx");
