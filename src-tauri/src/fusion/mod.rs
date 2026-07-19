@@ -35,6 +35,7 @@ pub mod covert;
 pub mod encrypt;
 pub mod pedersen;
 pub mod round;
+pub mod run;
 pub mod schnorr;
 pub mod session;
 pub mod tx;

@@ -84,6 +84,78 @@ async fn fusion_join_status(
     .await
 }
 
+#[derive(serde::Deserialize)]
+struct FusionRunInputReq {
+    prev_txid: String,
+    prev_index: u32,
+    pubkey: String,
+    value: u64,
+    privkey: String,
+}
+
+/// Run a full CashFusion round (Phase 1.7): contribute `inputs` (each with the
+/// key to sign it) and fresh `outputs`, join `tier`, and fuse. Returns the
+/// assembled transaction on success. Same Tor requirement as the other fusion
+/// commands. A round only COMPLETES with >=2 players in the tier — run several
+/// wallet instances to fuse with yourself for testing. Private keys are used only
+/// to sign locally and are never logged or sent over the network.
+#[tauri::command]
+#[allow(clippy::too_many_arguments)] // command args map 1:1 to the JS invoke call
+async fn fusion_run(
+    host: String,
+    port: u16,
+    use_ssl: bool,
+    tier: u64,
+    inputs: Vec<FusionRunInputReq>,
+    output_scripts: Vec<String>,
+    output_values: Vec<u64>,
+    tor_host: Option<String>,
+    tor_port: Option<u16>,
+) -> Result<fusion::run::FusionOutcome, String> {
+    let transport = match (tor_host.as_deref(), tor_port) {
+        (Some(h), Some(p)) => fusion::Transport::Tor { host: h, port: p },
+        _ if fusion::is_local_server(&host) => fusion::Transport::Direct,
+        _ => {
+            return Err(
+                "CashFusion needs Tor for remote servers — without it the server \
+                 can link your coins together by IP address."
+                    .into(),
+            )
+        }
+    };
+
+    let mut keyed_inputs = Vec::with_capacity(inputs.len());
+    for i in inputs {
+        let pubkey = decode_hex(&i.pubkey)?;
+        let privkey: [u8; 32] = decode_hex(&i.privkey)?
+            .try_into()
+            .map_err(|_| "privkey must be 32 bytes".to_string())?;
+        keyed_inputs.push(fusion::run::FusionInputKey {
+            prev_txid: i.prev_txid,
+            prev_index: i.prev_index,
+            pubkey,
+            value: i.value,
+            privkey,
+        });
+    }
+    let mut scripts = Vec::with_capacity(output_scripts.len());
+    for s in &output_scripts {
+        scripts.push(decode_hex(s)?);
+    }
+
+    fusion::run::run_fusion(fusion::run::FusionRunParams {
+        host: &host,
+        port,
+        use_ssl,
+        tier,
+        inputs: keyed_inputs,
+        output_scripts: scripts,
+        output_values,
+        transport,
+    })
+    .await
+}
+
 /// Find a running Tor SOCKS proxy, mirroring Electron Cash's auto-detection
 /// (ports 9050 = daemon, 9150 = Tor Browser). Returns the port, or null if Tor
 /// isn't running. Verifies it's genuinely Tor, not just something listening.
@@ -123,6 +195,16 @@ async fn bip37_node_probe(
 }
 
 // Parse a 40-hex-char pubkey hash (hash160) into 20 bytes.
+fn decode_hex(h: &str) -> Result<Vec<u8>, String> {
+    if h.len() % 2 != 0 {
+        return Err("odd-length hex".into());
+    }
+    (0..h.len())
+        .step_by(2)
+        .map(|i| u8::from_str_radix(&h[i..i + 2], 16).map_err(|_| "invalid hex".to_string()))
+        .collect()
+}
+
 fn parse_pkh(h: &str) -> Result<[u8; 20], String> {
     if h.len() != 40 {
         return Err("pubkey hash must be 40 hex chars".into());
@@ -415,6 +497,7 @@ pub fn run() {
             write_wallet_file,
             fusion_server_status,
             fusion_join_status,
+            fusion_run,
             fusion_tor_detect,
             fusion_tor_check,
             bip37_node_probe,
