@@ -50,3 +50,12 @@ once_cell = "1"
 # BIP37 SPV: the BCH P2P protocol frames every message with a double-SHA256
 # checksum, and block/merkle work needs SHA-256 too. Pure-Rust RustCrypto impl.
 sha2 = "0.10"
+# CashFusion round crypto — Pedersen commitments (amount*H + nonce*G) and blind
+# Schnorr signatures need raw secp256k1 point/scalar arithmetic with a CUSTOM
+# generator H, which the Bitcoin-Core secp256k1 bindings don't expose. k256
+# (RustCrypto, pure Rust) does, and matches Electron Cash's scheme byte-for-byte.
+k256 = "0.13"
+# Secure randomness for one-time nonces/blinding factors (OsRng). NOT the
+# counter+clock token used for Tor circuit isolation — those must never be reused
+# for crypto secrets.
+rand_core = { version = "0.6", features = ["getrandom"] }
