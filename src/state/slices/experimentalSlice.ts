@@ -20,6 +20,12 @@ const KNOWN_DEFAULT_FUSION_SERVERS = new Set(Object.values(DEFAULT_FUSION_SERVER
 interface ExperimentalState {
   rpaEnabled: boolean;
   cashFusionEnabled: boolean;
+  // Automatic server-based fusion is opt-out once CashFusion is enabled. This
+  // is separate from the still-unimplemented P2P/Nostr transport below.
+  autoFuseEnabled: boolean;
+  // Stores the user's P2P preference only. No P2P round is started until the
+  // Nostr transport and its privacy checks are implemented.
+  p2pFusionEnabled: boolean;
   fusionServer: string;
   fusionServers: string[];
   // Tor is reached as a SOCKS5 proxy the user already runs — same model as
@@ -34,6 +40,8 @@ interface ExperimentalState {
 const initialState: ExperimentalState = {
   rpaEnabled: false,
   cashFusionEnabled: false,
+  autoFuseEnabled: true,
+  p2pFusionEnabled: false,
   fusionServer: DEFAULT_FUSION_SERVER,
   fusionServers: [DEFAULT_FUSION_SERVER],
   // On by default: CashFusion against a remote server without Tor lets the
@@ -46,6 +54,22 @@ const initialState: ExperimentalState = {
   // Quantumroot ships enabled by default; the toggle lets users hide it.
   quantumrootEnabled: true,
 };
+
+/**
+ * redux-persist restores old slice objects wholesale. Add fields introduced
+ * after an older wallet was saved without changing any explicit user choice.
+ */
+export function normalizeExperimentalPersistedState(
+  state: unknown
+): Record<string, unknown> | undefined {
+  if (!state || typeof state !== 'object' || Array.isArray(state)) return undefined;
+
+  return {
+    autoFuseEnabled: true,
+    p2pFusionEnabled: false,
+    ...(state as Record<string, unknown>),
+  };
+}
 
 function normalizeServer(raw: string): string {
   return raw.trim();
@@ -60,6 +84,12 @@ const experimentalSlice = createSlice({
     },
     setCashFusionEnabled(state, action: PayloadAction<boolean>) {
       state.cashFusionEnabled = action.payload;
+    },
+    setAutoFuseEnabled(state, action: PayloadAction<boolean>) {
+      state.autoFuseEnabled = action.payload;
+    },
+    setP2pFusionEnabled(state, action: PayloadAction<boolean>) {
+      state.p2pFusionEnabled = action.payload;
     },
     setFusionServer(state, action: PayloadAction<string>) {
       state.fusionServer = normalizeServer(action.payload);
@@ -107,6 +137,8 @@ const experimentalSlice = createSlice({
 export const {
   setRpaEnabled,
   setCashFusionEnabled,
+  setAutoFuseEnabled,
+  setP2pFusionEnabled,
   setFusionServer,
   addFusionServer,
   removeFusionServer,
@@ -126,6 +158,12 @@ function migrateDeadServer(server: string): string {
 
 export const selectRpaEnabled = (state: RootState) => state.experimental.rpaEnabled;
 export const selectCashFusionEnabled = (state: RootState) => state.experimental.cashFusionEnabled;
+// Missing fields mean the wallet was persisted before these controls existed.
+// Auto Fuse follows the requested opt-out default; P2P stays opt-in.
+export const selectAutoFuseEnabled = (state: RootState) =>
+  state.experimental.autoFuseEnabled !== false;
+export const selectP2pFusionEnabled = (state: RootState) =>
+  state.experimental.p2pFusionEnabled === true;
 export const selectFusionServer = (state: RootState) =>
   migrateDeadServer(state.experimental.fusionServer);
 // Older persisted state won't have the list — fall back to the single selected
