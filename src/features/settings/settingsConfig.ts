@@ -13,6 +13,7 @@ export type SettingsPanelKey =
   | 'console'
   | 'experimental'
   | 'cashfusion'
+  | 'nostr'
   | 'addons';
 
 export type SettingsRowConfig = {
@@ -52,6 +53,13 @@ export const WALLET_ROWS: SettingsRowConfig[] = [
     description: 'Auto-lock · Change password',
     action: 'panel',
     target: 'app-lock',
+  },
+  {
+    key: 'nostr',
+    title: 'Nostr & Chat',
+    description: 'Private messages · Identity · Relay pool',
+    action: 'panel',
+    target: 'nostr',
   },
   {
     key: 'server',
