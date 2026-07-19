@@ -53,7 +53,7 @@ fn parse_point(bytes: &[u8]) -> Result<ProjectivePoint, String> {
 }
 
 /// Reduce 32 big-endian bytes into a scalar mod the group order n.
-fn scalar_reduce(bytes: [u8; 32]) -> Scalar {
+pub(crate) fn scalar_reduce(bytes: [u8; 32]) -> Scalar {
     <Scalar as Reduce<U256>>::reduce_bytes(&bytes.into())
 }
 
@@ -67,11 +67,20 @@ fn affine_xy(point: &ProjectivePoint) -> ([u8; 32], [u8; 32]) {
     (x, y)
 }
 
-fn compressed(point: &ProjectivePoint) -> [u8; 33] {
+/// Compressed 33-byte encoding of a point.
+pub fn compressed(point: &ProjectivePoint) -> [u8; 33] {
     let ep = point.to_affine().to_encoded_point(true);
     let mut out = [0u8; 33];
     out.copy_from_slice(ep.as_bytes());
     out
+}
+
+/// A fresh secp256k1 keypair for a per-component communication key. Returns the
+/// private scalar (kept for decrypting blame proofs) and its compressed pubkey.
+pub fn gen_keypair() -> (Scalar, [u8; 33]) {
+    let k = random_nonce();
+    let pub_c = compressed(&(ProjectivePoint::GENERATOR * k));
+    (k, pub_c)
 }
 
 /// The BCH Schnorr challenge e = sha256(R.x || compressed(P) || msg32), mod n.

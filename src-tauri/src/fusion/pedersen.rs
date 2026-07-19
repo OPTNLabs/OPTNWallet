@@ -68,6 +68,39 @@ pub fn commit_bytes(amount: u64, nonce: &Scalar) -> [u8; 65] {
     encode_uncompressed(&commit_point(amount, nonce))
 }
 
+/// A Pedersen commitment with its nonce retained. The nonce is needed later for
+/// the blame `Proof` and for `pedersen_total_nonce` (the per-player Σ of nonces).
+pub struct Commitment {
+    pub nonce: Scalar,
+    pub p_uncompressed: [u8; 65],
+}
+
+/// Commit to a SIGNED amount with a fresh nonce, as the round does per component:
+/// an input commits `+value-fee`, an output `-value-fee`, a blank `0`, so the
+/// player's amounts sum to its excess fee. Mirrors Electron Cash `PEDERSEN.commit`.
+pub fn commit(amount: i64) -> Commitment {
+    let nonce = random_nonce();
+    let point = *H * scalar_from_i64(amount) + ProjectivePoint::GENERATOR * nonce;
+    Commitment { nonce, p_uncompressed: encode_uncompressed(&point) }
+}
+
+/// 32 cryptographically-random bytes — for salts and the round's random number.
+/// OS CSPRNG; never the counter+clock Tor-isolation token.
+pub fn random_32() -> [u8; 32] {
+    let mut b = [0u8; 32];
+    OsRng.fill_bytes(&mut b);
+    b
+}
+
+/// A signed integer as a scalar mod n: negatives map to `n - |amount|`.
+pub fn scalar_from_i64(v: i64) -> Scalar {
+    if v >= 0 {
+        Scalar::from(v as u64)
+    } else {
+        -Scalar::from(v.unsigned_abs())
+    }
+}
+
 /// A fresh, cryptographically-random blinding nonce (uniform mod the group
 /// order). One per component; never reuse. Sourced from the OS CSPRNG.
 pub fn random_nonce() -> Scalar {
@@ -138,7 +171,7 @@ mod tests {
         let n = random_nonce();
         let c = commit_point(0, &n);
         assert!(!bool::from(c.is_identity()));
-        assert_eq!(c, ProjectivePoint::GENERATOR * &n);
+        assert_eq!(c, ProjectivePoint::GENERATOR * n);
     }
 
     #[test]
