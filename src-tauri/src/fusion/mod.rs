@@ -24,14 +24,23 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use prost::Message;
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::net::TcpStream;
 use tokio_rustls::rustls::pki_types::ServerName;
 use tokio_rustls::rustls::{ClientConfig, RootCertStore};
 use tokio_rustls::TlsConnector;
 
+pub mod round;
 pub mod tor;
 pub mod tor_manager;
+
+/// A connected, framed transport to a fusion server — either a plain TCP stream
+/// or a TLS stream, over Direct or Tor. Boxed so `connect_stream` can return one
+/// type regardless of which leg was taken, and the round logic can be written
+/// against a single stream type.
+pub(crate) trait FusionIo: AsyncRead + AsyncWrite + Unpin + Send {}
+impl<T: AsyncRead + AsyncWrite + Unpin + Send> FusionIo for T {}
+pub(crate) type FusionStream = Box<dyn FusionIo>;
 
 // Generated from proto/fusion.proto by build.rs (package `fusion`).
 pub mod pb {
@@ -62,10 +71,10 @@ const MAX_MSG_LENGTH: u32 = 200 * 1024;
 
 /// protocol.py: `VERSION = b'alpha13'`. A server on a different protocol
 /// version rejects the ClientHello, which is the intended behavior.
-const VERSION: &[u8] = b"alpha13";
+pub(crate) const VERSION: &[u8] = b"alpha13";
 
-const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
-const IO_TIMEOUT: Duration = Duration::from_secs(15);
+pub(crate) const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
+pub(crate) const IO_TIMEOUT: Duration = Duration::from_secs(15);
 
 /// What Phase 1 can actually report: the server's real, protocol-level fusion
 /// parameters. Serialized straight to the frontend.
@@ -80,7 +89,7 @@ pub struct FusionServerStatus {
 }
 
 /// Write one framed message: magic ++ big-endian u32 length ++ payload.
-async fn send_frame<S>(stream: &mut S, payload: &[u8]) -> Result<(), String>
+pub(crate) async fn send_frame<S>(stream: &mut S, payload: &[u8]) -> Result<(), String>
 where
     S: AsyncWriteExt + Unpin,
 {
@@ -97,7 +106,7 @@ where
 }
 
 /// Read one framed message, validating magic and length before allocating.
-async fn recv_frame<S>(stream: &mut S) -> Result<Vec<u8>, String>
+pub(crate) async fn recv_frame<S>(stream: &mut S) -> Result<Vec<u8>, String>
 where
     S: AsyncReadExt + Unpin,
 {
@@ -174,6 +183,24 @@ pub async fn server_status(
     transport: Transport<'_>,
     genesis_hash: Option<Vec<u8>>,
 ) -> Result<FusionServerStatus, String> {
+    let mut stream = connect_stream(host, port, use_ssl, transport).await?;
+    handshake(&mut stream, genesis_hash).await
+}
+
+/// Open a connection to a fusion server and return a framed stream, taking the
+/// Direct or Tor leg and layering TLS on top when `use_ssl`. Shared by the
+/// status handshake and the fusion round (round.rs) so both dial identically.
+///
+/// Over Tor the TCP leg is dialed through the SOCKS5 proxy and TLS is negotiated
+/// *over* that tunnel — the server sees the exit node, not the user, while
+/// certificate verification still applies end-to-end. Each call gets a fresh Tor
+/// circuit (isolation token), which is exactly what the covert phase relies on.
+pub(crate) async fn connect_stream(
+    host: &str,
+    port: u16,
+    use_ssl: bool,
+    transport: Transport<'_>,
+) -> Result<FusionStream, String> {
     let tcp = match transport {
         Transport::Direct => tokio::time::timeout(CONNECT_TIMEOUT, TcpStream::connect((host, port)))
             .await
@@ -183,8 +210,6 @@ pub async fn server_status(
             host: proxy_host,
             port: proxy_port,
         } => {
-            // A fresh isolation token gives this connection its own Tor circuit
-            // rather than sharing one with any other connection (see tor.rs).
             let token = format!("optn-{}", fastrand_token());
             tokio::time::timeout(
                 CONNECT_TIMEOUT,
@@ -196,8 +221,7 @@ pub async fn server_status(
     };
 
     if !use_ssl {
-        let mut stream = tcp;
-        return handshake(&mut stream, genesis_hash).await;
+        return Ok(Box::new(tcp));
     }
 
     // rustls refuses to pick a crypto provider implicitly when more than one is
@@ -217,12 +241,12 @@ pub async fn server_status(
     let server_name = ServerName::try_from(host.to_string())
         .map_err(|_| format!("invalid server name: {host}"))?;
 
-    let mut stream = TlsConnector::from(Arc::new(config))
+    let stream = TlsConnector::from(Arc::new(config))
         .connect(server_name, tcp)
         .await
         .map_err(|e| format!("TLS handshake failed: {e}"))?;
 
-    handshake(&mut stream, genesis_hash).await
+    Ok(Box::new(stream))
 }
 
 /// Unique token per connection, for Tor stream isolation (see tor.rs). Only has
