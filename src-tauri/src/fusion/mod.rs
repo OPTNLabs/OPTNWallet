@@ -81,6 +81,18 @@ const MAX_MSG_LENGTH: u32 = 200 * 1024;
 /// version rejects the ClientHello, which is the intended behavior.
 pub(crate) const VERSION: &[u8] = b"alpha13";
 
+/// Transaction execution is deliberately disabled until the wallet can retain
+/// fresh outputs, reserve inputs, verify the full component/fee integrity, and
+/// keep signing and broadcast privacy inside native safety boundaries.
+pub(crate) const FUSION_EXECUTION_PAUSED_MESSAGE: &str =
+    "CashFusion execution is paused until wallet safety protections are complete.";
+
+/// Keep this deny-by-default switch in the native process so a renderer cannot
+/// bypass the disabled settings control by invoking the command directly.
+pub(crate) const fn fusion_execution_ready() -> bool {
+    false
+}
+
 pub(crate) const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 pub(crate) const IO_TIMEOUT: Duration = Duration::from_secs(15);
 
@@ -374,5 +386,11 @@ mod tests {
             server_task.await.unwrap();
             assert!(err.contains("incompatible version"), "unexpected: {err}");
         });
+    }
+
+    #[test]
+    fn execution_is_fail_closed_until_the_wallet_safety_work_is_complete() {
+        assert!(!fusion_execution_ready());
+        assert!(FUSION_EXECUTION_PAUSED_MESSAGE.contains("safety"));
     }
 }

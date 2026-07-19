@@ -112,6 +112,10 @@ async fn fusion_run(
     tor_host: Option<String>,
     tor_port: Option<u16>,
 ) -> Result<fusion::run::FusionOutcome, String> {
+    if !fusion::fusion_execution_ready() {
+        return Err(fusion::FUSION_EXECUTION_PAUSED_MESSAGE.into());
+    }
+
     let transport = match (tor_host.as_deref(), tor_port) {
         (Some(h), Some(p)) => fusion::Transport::Tor { host: h, port: p },
         _ if fusion::is_local_server(&host) => fusion::Transport::Direct,
