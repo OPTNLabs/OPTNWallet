@@ -1,7 +1,8 @@
 // Structured logger for OPTN Wallet Desktop.
-// Routes all console.* calls + explicit log calls to tauri-plugin-log,
-// which writes timestamped entries to a rotating log file on disk:
-//   Windows : %APPDATA%\com.optilabs.wallet\logs\optn-wallet.log
+// Routes explicit log calls to tauri-plugin-log, which writes timestamped
+// entries to a rotating log file on disk. attachConsole() mirrors those native
+// log events into DevTools; it does not persist arbitrary console.* calls.
+//   Windows : %LOCALAPPDATA%\com.optilabs.wallet\logs\optn-wallet.log
 //   macOS   : ~/Library/Logs/com.optilabs.wallet/optn-wallet.log
 //   Linux   : ~/.local/share/com.optilabs.wallet/logs/optn-wallet.log
 
@@ -13,12 +14,9 @@ import {
   attachConsole,
 } from '@tauri-apps/plugin-log';
 
-// Forward every console.* call to the Tauri log file automatically.
-// This means all existing [AppLock], [SecretCrypto], [Electrum] etc. logs
-// that already use console.log/warn/error are captured with zero changes.
 export async function initLogger(): Promise<void> {
   try {
-    // attachConsole pipes console.{log,info,warn,error,debug} → Tauri logger
+    // Show Rust and explicit plugin-log events in the WebView DevTools console.
     await attachConsole();
     info('[Logger] Desktop logger initialised — writing to log file');
   } catch (err) {

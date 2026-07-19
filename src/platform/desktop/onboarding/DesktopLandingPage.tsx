@@ -4,9 +4,9 @@
 // not a Settings bolt-on next to an already-imported seed).
 // Replaces src/features/onboarding/LandingPage.tsx via a Vite alias
 // (desktop builds only); the upstream mobile page is untouched.
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { useDispatch, useSelector } from 'react-redux';
-import { Link, useNavigate } from 'react-router-dom';
+import { Link, useLocation, useNavigate } from 'react-router-dom';
 import WalletManager from '../../../apis/WalletManager/WalletManager';
 import DatabaseService from '../../../apis/DatabaseManager/DatabaseService';
 import { Network } from '../../../state/slices/networkSlice';
@@ -46,8 +46,10 @@ const DesktopLandingPage = () => {
   const [bioLabel, setBioLabel] = useState('Biometric unlock');
   const [deletingId, setDeletingId] = useState<number | null>(null);
   const [deleteBusy, setDeleteBusy] = useState(false);
+  const handledOpenRequest = useRef<string | null>(null);
 
   const navigate = useNavigate();
+  const location = useLocation();
   const dispatch = useDispatch();
   const hw = useSelector(selectHardwareWallet);
 
@@ -79,6 +81,24 @@ const DesktopLandingPage = () => {
       });
     }
   }, [bioAvailable]);
+
+  // File -> Open Wallet routes here with the requested id in navigation state.
+  // Unlike the old setTimeout + CustomEvent handoff, this survives the picker
+  // mount boundary and cannot fire before its listener exists.
+  useEffect(() => {
+    const requestedId = (location.state as { openWalletId?: unknown } | null)
+      ?.openWalletId;
+    if (
+      typeof requestedId !== 'number' ||
+      !Number.isInteger(requestedId) ||
+      requestedId <= 0
+    ) {
+      return;
+    }
+    if (handledOpenRequest.current === location.key) return;
+    handledOpenRequest.current = location.key;
+    handleOpenClick(requestedId);
+  }, [handleOpenClick, location.key, location.state]);
 
   // Delete ONE wallet (e.g. a duplicate). Uses forceSaveDatabase so the removal
   // persists past the multi-window anti-clobber guard; the wallet's .optn file
