@@ -32,6 +32,7 @@ use tokio_rustls::TlsConnector;
 
 pub mod pedersen;
 pub mod round;
+pub mod schnorr;
 pub mod tor;
 pub mod tor_manager;
 

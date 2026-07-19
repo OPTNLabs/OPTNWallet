@@ -59,3 +59,7 @@ k256 = "0.13"
 # counter+clock token used for Tor circuit isolation — those must never be reused
 # for crypto secrets.
 rand_core = { version = "0.6", features = ["getrandom"] }
+# BCH Schnorr's Jacobi-symbol convention needs a Legendre test y^((p-1)/2) mod p
+# over the field prime. num-bigint gives a clear, correct modpow for it (k256's
+# Scalar is mod the group order n, not the field prime p).
+num-bigint = "0.4"
