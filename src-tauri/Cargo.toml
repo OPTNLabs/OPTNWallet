@@ -66,3 +66,8 @@ num-bigint = "0.4"
 # hash160 = ripemd160(sha256(x)) for the P2PKH scriptCode when signing fusion
 # inputs (BIP143 sighash). RustCrypto ripemd, pairs with the sha2 above.
 ripemd = "0.1"
+# CashFusion blame-phase ECIES: ephemeral ECDH -> sha256 key -> AES256-CBC(iv=0)
+# -> HMAC-SHA256 tag. RustCrypto aes/cbc/hmac, matching encrypt.py.
+aes = "0.8"
+cbc = { version = "0.1", features = ["alloc"] }
+hmac = "0.12"
