@@ -13,6 +13,7 @@
 
 import WalletManager from '../../apis/WalletManager/WalletManager';
 import DatabaseService from '../../apis/DatabaseManager/DatabaseService';
+import QuantumrootVaultCacheService from '../../services/QuantumrootVaultCacheService';
 import { Network } from '../../state/slices/networkSlice';
 import { WalletType } from '../../types/wallet';
 import type { WalletRecord } from '../../types/wallet';
@@ -274,6 +275,13 @@ export async function switchWalletNetwork(walletId: number, target: Network): Pr
   // be valid there regardless of which wallet created it.
   const targetPrefix = target === Network.MAINNET ? 'bitcoincash:' : 'bchtest:';
   try { db.run("DELETE FROM instantiated_contracts WHERE address IS NOT NULL AND address NOT LIKE ?", [`${targetPrefix}%`]); } catch { /* optional table */ }
+  // The vault cache is in memory and survives the DB deletes above — if we don't
+  // drop it, retrieveQuantumrootVaults keeps serving the OLD network's vault
+  // addresses (a non-empty cache short-circuits the DB read), which then get
+  // subscribed on the new chain. This is why toggling network alone never
+  // cleared them. Clearing the cache makes the next read re-derive under the
+  // now-updated networkType.
+  QuantumrootVaultCacheService.clear(walletId);
   await dbService.forceSaveDatabase();
 
   // Regenerate the address batch. KeyService reads the wallet's (now-updated)
@@ -330,6 +338,10 @@ export async function purgeCrossNetworkData(walletId: number, network: Network):
     [walletId, keep, keep]
   );
   del('DELETE FROM instantiated_contracts WHERE address IS NOT NULL AND address NOT LIKE ?', [keep]);
+
+  // Drop the in-memory vault cache too, or retrieveQuantumrootVaults keeps
+  // serving the cached cross-network addresses regardless of the DB purge.
+  QuantumrootVaultCacheService.clear(walletId);
 
   if (removed > 0) {
     await dbService.forceSaveDatabase();
