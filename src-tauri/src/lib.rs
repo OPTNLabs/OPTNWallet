@@ -43,6 +43,47 @@ async fn fusion_server_status(
     fusion::server_status(&host, port, use_ssl, transport, None).await
 }
 
+/// Join a fusion server's waiting pool for the given tiers and report live tier
+/// occupancy for up to `wait_secs`, returning early if the server signals a
+/// round is starting (FusionBegin). This is Phase 1 milestone 1.1 — it joins and
+/// observes only; it builds no components, commits nothing, and signs nothing.
+/// The same Tor requirement as fusion_server_status applies: a remote server
+/// over clearnet could link a player's covert connections by IP.
+#[tauri::command]
+async fn fusion_join_status(
+    host: String,
+    port: u16,
+    use_ssl: bool,
+    tiers: Vec<u64>,
+    wait_secs: u64,
+    tor_host: Option<String>,
+    tor_port: Option<u16>,
+) -> Result<fusion::round::FusionJoinResult, String> {
+    let transport = match (tor_host.as_deref(), tor_port) {
+        (Some(h), Some(p)) => fusion::Transport::Tor { host: h, port: p },
+        _ if fusion::is_local_server(&host) => fusion::Transport::Direct,
+        _ => {
+            return Err(
+                "No Tor proxy configured. CashFusion needs Tor for remote servers — \
+                 without it the server can link your coins together by IP address, \
+                 which is exactly what fusing is meant to prevent."
+                    .into(),
+            )
+        }
+    };
+
+    fusion::round::join_pool_status(
+        &host,
+        port,
+        use_ssl,
+        transport,
+        tiers,
+        None,
+        std::time::Duration::from_secs(wait_secs.clamp(1, 120)),
+    )
+    .await
+}
+
 /// Find a running Tor SOCKS proxy, mirroring Electron Cash's auto-detection
 /// (ports 9050 = daemon, 9150 = Tor Browser). Returns the port, or null if Tor
 /// isn't running. Verifies it's genuinely Tor, not just something listening.
@@ -373,6 +414,7 @@ pub fn run() {
             read_wallet_file,
             write_wallet_file,
             fusion_server_status,
+            fusion_join_status,
             fusion_tor_detect,
             fusion_tor_check,
             bip37_node_probe,
