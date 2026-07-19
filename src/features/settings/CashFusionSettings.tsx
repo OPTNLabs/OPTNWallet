@@ -35,6 +35,7 @@ import {
   type TorConfig,
 } from '../../services/fusion/FusionStatusService';
 import { CURRENT_FUSION_EXECUTION_READINESS } from '../../platform/desktop/FusionExecutionSafety';
+import { P2pFusionTransportPreview } from '../nostr/P2pFusionTransportPreview';
 
 // Ports per Electron Cash's own conf.py default (fusion.servo.cash:8789, SSL).
 const DEFAULT_SERVER = 'fusion.servo.cash:8789';
@@ -289,6 +290,7 @@ export const CashFusionSettings: React.FC = () => {
               Automatic and P2P spending remain paused until input reservation,
               tracked output addresses, and broadcast verification are in place.
             </p>
+            {p2pFusionEnabled && <P2pFusionTransportPreview />}
           </div>
           </div>
         )}
