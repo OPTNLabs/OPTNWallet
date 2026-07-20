@@ -1,19 +1,34 @@
 import React from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
+import { Provider } from 'react-redux';
+import { configureStore } from '@reduxjs/toolkit';
 import { describe, expect, it } from 'vitest';
 
 import { NostrSettings } from '../NostrSettings';
 import { P2pFusionTransportPreview } from '../P2pFusionTransportPreview';
 import { normalizeRelayDraft } from '../nostrRelayDraft';
+import experimentalReducer from '../../../state/slices/experimentalSlice';
 
-describe('Nostr UI skeleton safety', () => {
-  it('renders identity and relay controls as an explicit offline preview', () => {
-    const html = renderToStaticMarkup(<NostrSettings />);
+function renderWithStore(ui: React.ReactElement) {
+  const store = configureStore({
+    reducer: {
+      experimental: experimentalReducer,
+      wallet_id: (state = { currentWalletId: 0 }) => state,
+    },
+  });
+  return renderToStaticMarkup(<Provider store={store}>{ui}</Provider>);
+}
 
-    expect(html).toContain('NIP-17 private chat');
-    expect(html).toContain('UI preview');
-    expect(html).toContain('does not generate a Nostr key');
-    expect(html).toContain('never contacted');
+describe('Nostr UI safety', () => {
+  it('chat is off by default: shows the toggle, hides identity/relays until enabled', () => {
+    const html = renderWithStore(<NostrSettings />);
+
+    // The enable toggle is present…
+    expect(html).toContain('Nostr chat');
+    expect(html).toContain('End-to-end encrypted DMs');
+    // …but with chat off by default, the identity + relay controls are not rendered.
+    expect(html).not.toContain('Nostr identity');
+    expect(html).not.toContain('wss://');
   });
 
   it('renders P2P Fusion with a disabled start action', () => {

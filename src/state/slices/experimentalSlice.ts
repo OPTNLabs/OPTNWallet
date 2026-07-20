@@ -17,9 +17,21 @@ const DEFAULT_FUSION_SERVERS: Record<string, string> = {
 };
 const KNOWN_DEFAULT_FUSION_SERVERS = new Set(Object.values(DEFAULT_FUSION_SERVERS));
 
+// Starter Nostr relays for chat + the P2P-fusion transport. Plain WSS, opened
+// directly by the WebView. Users can add their own.
+const DEFAULT_NOSTR_RELAYS = [
+  'wss://relay.damus.io',
+  'wss://nos.lol',
+  'wss://relay.primal.net',
+  'wss://relay.nostr.band',
+];
+
 interface ExperimentalState {
   rpaEnabled: boolean;
   cashFusionEnabled: boolean;
+  // Nostr chat is an experimental feature, off by default like RPA/CashFusion.
+  nostrChatEnabled: boolean;
+  nostrRelays: string[];
   // Automatic server-based fusion is opt-out once CashFusion is enabled. This
   // is separate from the still-unimplemented P2P/Nostr transport below.
   autoFuseEnabled: boolean;
@@ -40,6 +52,8 @@ interface ExperimentalState {
 const initialState: ExperimentalState = {
   rpaEnabled: false,
   cashFusionEnabled: false,
+  nostrChatEnabled: false,
+  nostrRelays: DEFAULT_NOSTR_RELAYS,
   autoFuseEnabled: true,
   p2pFusionEnabled: false,
   fusionServer: DEFAULT_FUSION_SERVER,
@@ -84,6 +98,18 @@ const experimentalSlice = createSlice({
     },
     setCashFusionEnabled(state, action: PayloadAction<boolean>) {
       state.cashFusionEnabled = action.payload;
+    },
+    setNostrChatEnabled(state, action: PayloadAction<boolean>) {
+      state.nostrChatEnabled = action.payload;
+    },
+    addNostrRelay(state, action: PayloadAction<string>) {
+      const relay = action.payload.trim();
+      if (!Array.isArray(state.nostrRelays)) state.nostrRelays = [...DEFAULT_NOSTR_RELAYS];
+      if (relay && !state.nostrRelays.includes(relay)) state.nostrRelays.push(relay);
+    },
+    removeNostrRelay(state, action: PayloadAction<string>) {
+      if (!Array.isArray(state.nostrRelays)) state.nostrRelays = [...DEFAULT_NOSTR_RELAYS];
+      state.nostrRelays = state.nostrRelays.filter((r) => r !== action.payload.trim());
     },
     setAutoFuseEnabled(state, action: PayloadAction<boolean>) {
       state.autoFuseEnabled = action.payload;
@@ -137,6 +163,9 @@ const experimentalSlice = createSlice({
 export const {
   setRpaEnabled,
   setCashFusionEnabled,
+  setNostrChatEnabled,
+  addNostrRelay,
+  removeNostrRelay,
   setAutoFuseEnabled,
   setP2pFusionEnabled,
   setFusionServer,
@@ -158,6 +187,13 @@ function migrateDeadServer(server: string): string {
 
 export const selectRpaEnabled = (state: RootState) => state.experimental.rpaEnabled;
 export const selectCashFusionEnabled = (state: RootState) => state.experimental.cashFusionEnabled;
+export const selectNostrChatEnabled = (state: RootState) =>
+  state.experimental.nostrChatEnabled === true;
+export const selectNostrRelays = createSelector(
+  [(state: RootState) => state.experimental.nostrRelays],
+  (relays): string[] =>
+    relays && relays.length > 0 ? relays : [...DEFAULT_NOSTR_RELAYS]
+);
 // Missing fields mean the wallet was persisted before these controls existed.
 // Auto Fuse follows the requested opt-out default; P2P stays opt-in.
 export const selectAutoFuseEnabled = (state: RootState) =>
