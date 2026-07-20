@@ -18,8 +18,16 @@ import { Network } from '../../state/slices/networkSlice';
 import { WalletType } from '../../types/wallet';
 import type { WalletRecord } from '../../types/wallet';
 import { deriveKey, randomSalt, bytesToBase64, base64ToBytes, aesEncrypt, aesDecrypt } from './WalletCrypto';
-import { setCachedWalletKey, getCachedWalletKey, clearCachedWalletKey } from './WalletKeyCache';
-import { verify as verifyGatePassphrase } from './EcKeyManager';
+import {
+  setCachedWalletKey,
+  getCachedWalletKey,
+  getCachedWalletKeySnapshot,
+  clearCachedWalletKey,
+} from './WalletKeyCache';
+import {
+  unlock as unlockGatePassphrase,
+  verify as verifyGatePassphrase,
+} from './EcKeyManager';
 import { SECRET_ENC_PREFIX } from './SecretCryptoService';
 import { autoSaveWalletFile, type WalletFileV1 } from './walletFile';
 import { log } from './logger';
@@ -117,24 +125,35 @@ export async function createWalletWithPassword(
   // are encrypted under it, not the previously-active key. Snapshot the
   // previous key first: every failure exit below must restore it, or a failed
   // creation leaves a foreign key active while another wallet is open.
-  const previousKey = getCachedWalletKey();
+  const previousKey = getCachedWalletKeySnapshot();
   const restorePreviousKey = () => {
-    if (previousKey) setCachedWalletKey(previousKey);
+    if (previousKey) {
+      setCachedWalletKey(previousKey.key, previousKey.ownerWalletId);
+    }
     else clearCachedWalletKey();
   };
   setCachedWalletKey(key);
 
-  const created = await manager.createWallet(name, mnemonic, passphrase, network, walletType);
-  if (!created) {
-    restorePreviousKey();
-    return null;
-  }
+  let walletId: number | null;
+  try {
+    const created = await manager.createWallet(name, mnemonic, passphrase, network, walletType);
+    if (!created) {
+      restorePreviousKey();
+      return null;
+    }
 
-  const walletId = await findNewestWalletIdByName(name);
-  if (walletId == null) {
+    walletId = await findNewestWalletIdByName(name);
+    if (walletId == null) {
+      restorePreviousKey();
+      return null;
+    }
+  } catch (error) {
+    // `createWallet` and the ID lookup are both allowed to throw. Never leave
+    // their provisional, unowned key active in either case.
     restorePreviousKey();
-    return null;
+    throw error;
   }
+  setCachedWalletKey(key, walletId);
 
   try {
     await writeKdfSalt(walletId, salt);
@@ -364,6 +383,14 @@ export async function openWalletWithPassword(
   password: string
 ): Promise<WalletRecord | null> {
   const manager = WalletManager();
+  const previousKey = getCachedWalletKeySnapshot();
+  const restorePreviousKey = () => {
+    if (previousKey) {
+      setCachedWalletKey(previousKey.key, previousKey.ownerWalletId);
+    } else {
+      clearCachedWalletKey();
+    }
+  };
   const salt = await readKdfSalt(walletId);
 
   if (salt) {
@@ -384,29 +411,44 @@ export async function openWalletWithPassword(
     } catch {
       return null; // wrong password — previous cached key left untouched
     }
-    setCachedWalletKey(candidateKey);
+    setCachedWalletKey(candidateKey, walletId);
   } else {
     // Legacy wallet (no kdf_salt): its data is encrypted under the app-gate
     // key, so the honest check is the gate passphrase — without this, any
     // typed password would "succeed" as long as some key was cached.
-    const ok = await verifyGatePassphrase(password);
+    // `verify()` intentionally does not update the cache. Opening needs the
+    // actual gate-derived key, not whatever per-wallet key happened to be
+    // cached before the picker was shown, so use the verified unlock path.
+    const ok = await unlockGatePassphrase(password);
     if (!ok) return null;
-    if (!getCachedWalletKey()) {
+    const legacyKey = getCachedWalletKey();
+    if (!legacyKey) {
       console.warn('[DesktopWalletManager] Legacy wallet open refused: no key cached (gate locked?).');
       return null;
     }
+    // The shared legacy gate key is now committed to this active wallet
+    // session. It can be rebound only after another wallet's password check.
+    setCachedWalletKey(legacyKey, walletId);
   }
 
-  const info = await manager.getWalletInfo(walletId);
+  let info: WalletRecord | null;
+  try {
+    info = await manager.getWalletInfo(walletId);
+  } catch (error) {
+    restorePreviousKey();
+    throw error;
+  }
+  if (!info) {
+    restorePreviousKey();
+    return null;
+  }
   // Clean out any stale cross-network rows now that we know the wallet's
   // network, so upstream's unscoped reads only ever see the active chain.
-  if (info) {
-    const net = info.networkType === Network.MAINNET ? Network.MAINNET : Network.CHIPNET;
-    try {
-      await purgeCrossNetworkData(walletId, net);
-    } catch (err) {
-      console.warn('[DesktopWalletManager] cross-network purge on open failed:', err);
-    }
+  const net = info.networkType === Network.MAINNET ? Network.MAINNET : Network.CHIPNET;
+  try {
+    await purgeCrossNetworkData(walletId, net);
+  } catch (err) {
+    console.warn('[DesktopWalletManager] cross-network purge on open failed:', err);
   }
   return info;
 }
@@ -579,7 +621,7 @@ export async function changeWalletPassword(
   upd.free();
   await dbService.flushDatabaseToFile();
 
-  setCachedWalletKey(newKey);
+  setCachedWalletKey(newKey, walletId);
 
   // Refresh the wallet file so its copy matches the new password.
   await autoSaveWalletFile({

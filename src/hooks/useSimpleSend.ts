@@ -34,6 +34,7 @@ import {
   getLegacyDefaultChangeAddress,
   getPreferredBchChangeAddress,
 } from '../utils/changeAddressPreference';
+import { getRpaSendBlockReason } from '../services/RpaService';
 
 export default function useSimpleSend() {
   // Redux
@@ -359,6 +360,13 @@ export default function useSimpleSend() {
     try {
       setError('');
 
+      const rpaBlockReason = getRpaSendBlockReason(recipient, currentNetwork);
+      if (rpaBlockReason) {
+        setError(rpaBlockReason);
+        setMode('error');
+        return;
+      }
+
       if (!validateRecipient(normalizedRecipient)) {
         setError('Please enter a valid destination address.');
         setMode('error');
@@ -538,6 +546,8 @@ export default function useSimpleSend() {
     }
   }, [
     normalizedRecipient,
+    recipient,
+    currentNetwork,
     amountBch,
     assetType,
     selectedCategory,
@@ -558,6 +568,12 @@ export default function useSimpleSend() {
   // not covered here).
   const doMax = useCallback(async () => {
     if (assetType !== 'bch') return;
+    const rpaBlockReason = getRpaSendBlockReason(recipient, currentNetwork);
+    if (rpaBlockReason) {
+      setError(rpaBlockReason);
+      setMode('error');
+      return;
+    }
     if (!validateRecipient(normalizedRecipient)) {
       setError('Enter a valid destination address first.');
       setMode('error');
@@ -573,7 +589,15 @@ export default function useSimpleSend() {
     const maxSats = Number(result.finalOutputs[0]?.amount ?? 0);
     setAmountBch((maxSats / SATSINBITCOIN).toFixed(8));
     setAmountDisplayMode('bch');
-  }, [assetType, normalizedRecipient, planner, setAmountBch, setAmountDisplayMode]);
+  }, [
+    assetType,
+    recipient,
+    currentNetwork,
+    normalizedRecipient,
+    planner,
+    setAmountBch,
+    setAmountDisplayMode,
+  ]);
 
   const doSend = useCallback(async () => {
     if (!review?.rawTx) return;

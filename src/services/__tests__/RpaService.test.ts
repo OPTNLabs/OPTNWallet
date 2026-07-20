@@ -2,7 +2,12 @@ import { describe, expect, it } from 'vitest';
 import * as bip39 from 'bip39';
 import { Network } from '../../state/slices/networkSlice';
 import { derivePrivateKeyAtPath } from '../HdWalletService';
-import { deriveRpaKeys, encodePaycode, decodePaycode } from '../RpaService';
+import {
+  deriveRpaKeys,
+  encodePaycode,
+  decodePaycode,
+  getRpaSendBlockReason,
+} from '../RpaService';
 
 // A fresh throwaway mnemonic generated per run — no seed phrase is hardcoded in
 // the repo. The tests below only compare derivations of this same mnemonic
@@ -48,6 +53,29 @@ describe('RpaService', () => {
     );
     expect(Buffer.from(decoded!.spendPubkey).toString('hex')).toBe(
       Buffer.from(keys.spendPubkey).toString('hex')
+    );
+  });
+
+  it('rejects a paycode whose checksum was changed', async () => {
+    const keys = await deriveRpaKeys(TEST_MNEMONIC, PASSPHRASE, Network.MAINNET);
+    const paycode = encodePaycode(keys.scanPubkey, keys.spendPubkey, Network.MAINNET);
+    const replacement = paycode.endsWith('q') ? 'p' : 'q';
+
+    expect(decodePaycode(`${paycode.slice(0, -1)}${replacement}`)).toBeNull();
+  });
+
+  it('blocks RPA input before ordinary CashAddress transaction building', async () => {
+    const keys = await deriveRpaKeys(TEST_MNEMONIC, PASSPHRASE, Network.CHIPNET);
+    const paycode = encodePaycode(keys.scanPubkey, keys.spendPubkey, Network.CHIPNET);
+
+    expect(getRpaSendBlockReason('bchtest:qordinary', Network.CHIPNET)).toBeNull();
+    expect(getRpaSendBlockReason(paycode, Network.MAINNET)).toMatch(/Chipnet/i);
+    expect(getRpaSendBlockReason(paycode, Network.CHIPNET)).toMatch(
+      /not available yet/i
+    );
+    const replacement = paycode.endsWith('q') ? 'p' : 'q';
+    expect(getRpaSendBlockReason(`${paycode.slice(0, -1)}${replacement}`, Network.CHIPNET)).toMatch(
+      /invalid/i
     );
   });
 
