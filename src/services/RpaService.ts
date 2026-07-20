@@ -74,17 +74,27 @@ for (let i = 0; i < CASHADDR_CHARSET.length; i++) {
   CASHADDR_CHARSET_REV[CASHADDR_CHARSET[i]] = i;
 }
 
-function cashAddrPolymod(values: number[]): number {
-  const GEN = [0x98f2bc8e61, 0x79b76d99e2, 0xf33e5fb3c4, 0xae2eabe2a8, 0x1e4f43e470];
-  let c = 1;
+function cashAddrPolymod(values: number[]): bigint {
+  // CashAddr uses a 40-bit checksum. JavaScript's bitwise operators truncate
+  // to 32 bits, so this must stay in BigInt arithmetic throughout. The former
+  // Number implementation produced intermittently invalid paycodes depending
+  // on the payload's high checksum bits.
+  const GEN = [
+    0x98f2bc8e61n,
+    0x79b76d99e2n,
+    0xf33e5fb3c4n,
+    0xae2eabe2a8n,
+    0x1e4f43e470n,
+  ];
+  let c = 1n;
   for (const d of values) {
-    const high = Math.floor(c / 0x800000000); // top 5 bits of 40-bit value
-    c = ((c & 0x7ffffffff) * 32) ^ d;
+    const high = c >> 35n; // top 5 bits of the 40-bit value
+    c = ((c & 0x7ffffffffn) << 5n) ^ BigInt(d);
     for (let i = 0; i < 5; i++) {
-      if ((high >> i) & 1) c ^= GEN[i];
+      if (((high >> BigInt(i)) & 1n) === 1n) c ^= GEN[i];
     }
   }
-  return c ^ 1;
+  return c ^ 1n;
 }
 
 function prefixExpand(prefix: string): number[] {
@@ -130,9 +140,8 @@ function cashAddrEncode(prefix: string, kindByte: number, payload: Uint8Array): 
   const checksumInput = [...prefixExpand(prefix), ...data5, 0, 0, 0, 0, 0, 0, 0, 0];
   const mod = cashAddrPolymod(checksumInput);
   const checksum5: number[] = [];
-  const modBig = BigInt(mod);
   for (let i = 7; i >= 0; i--) {
-    checksum5.push(Number((modBig >> BigInt(5 * i)) & 31n));
+    checksum5.push(Number((mod >> BigInt(5 * i)) & 31n));
   }
 
   let body = '';
@@ -141,10 +150,17 @@ function cashAddrEncode(prefix: string, kindByte: number, payload: Uint8Array): 
 }
 
 function cashAddrDecode(addr: string): { prefix: string; kindByte: number; payload: Uint8Array } | null {
-  const colon = addr.indexOf(':');
+  const bareAddress = addr.trim().split('?')[0];
+  const hasLower = bareAddress !== bareAddress.toUpperCase();
+  const hasUpper = bareAddress !== bareAddress.toLowerCase();
+  if (hasLower && hasUpper) return null;
+
+  const normalized = bareAddress.toLowerCase();
+  const colon = normalized.indexOf(':');
   if (colon < 0) return null;
-  const prefix = addr.slice(0, colon);
-  const body = addr.slice(colon + 1).toLowerCase();
+  const prefix = normalized.slice(0, colon);
+  const body = normalized.slice(colon + 1);
+  if (!prefix || body.length <= 8) return null;
 
   const data5: number[] = [];
   for (const c of body) {
@@ -153,10 +169,22 @@ function cashAddrDecode(addr: string): { prefix: string; kindByte: number; paylo
     data5.push(v);
   }
 
+  // A paycode is not a normal CashAddress payload, but it uses the same
+  // prefix-expanded polymod checksum. Never accept a merely shape-correct
+  // string: one changed character must fail before any sender-side work.
+  if (cashAddrPolymod([...prefixExpand(prefix), ...data5]) !== 0n) return null;
+
   // Last 8 five-bit values are the checksum
   const payload5 = data5.slice(0, -8);
   const allBytes = fiveBitToBytes(payload5);
   if (allBytes.length < 1) return null;
+  const canonicalPayload5 = bytesToFiveBit(allBytes);
+  if (
+    canonicalPayload5.length !== payload5.length ||
+    canonicalPayload5.some((value, index) => value !== payload5[index])
+  ) {
+    return null;
+  }
 
   return { prefix, kindByte: allBytes[0], payload: allBytes.slice(1) };
 }
@@ -242,20 +270,74 @@ export function decodePaycode(paycodeStr: string): DecodedPaycode | null {
   try {
     const decoded = cashAddrDecode(paycodeStr);
     if (!decoded) return null;
-    if (decoded.payload.length < 72) return null;
+    if (decoded.payload.length !== 72) return null;
     if (decoded.kindByte !== 0x00) return null;
 
     const p = decoded.payload;
+    const isMainnetVersion = p[0] === 0x01 || p[0] === 0x02;
+    const isTestnetVersion = p[0] === 0x05 || p[0] === 0x06;
+    if (
+      !(
+        (decoded.prefix === PAYCODE_PREFIX_MAINNET && isMainnetVersion) ||
+        (decoded.prefix === PAYCODE_PREFIX_TESTNET && isTestnetVersion)
+      )
+    ) {
+      return null;
+    }
+    if (![0, 4, 8, 12, 16].includes(p[1])) return null;
+
+    const scanPubkey = new Uint8Array(p.slice(2, 35));
+    const spendPubkey = new Uint8Array(p.slice(35, 68));
+    if (!ecc.isPoint(scanPubkey) || !ecc.isPoint(spendPubkey)) return null;
+
     return {
       version:    p[0],
       prefixBits: p[1],
-      scanPubkey:  new Uint8Array(p.slice(2, 35)),
-      spendPubkey: new Uint8Array(p.slice(35, 68)),
+      scanPubkey,
+      spendPubkey,
       expiry: (p[68] | (p[69] << 8) | (p[70] << 16) | (p[71] << 24)) >>> 0,
     };
   } catch {
     return null;
   }
+}
+
+/**
+ * Return a user-facing reason why an RPA-looking recipient must not enter the
+ * ordinary CashAddress transaction builder. A complete sender implementation
+ * must choose a designated input, derive the shared secret from that input's
+ * private key and outpoint, and grind its signature nonce. Until that exact
+ * path exists, failing closed is safer than producing an invalid or
+ * privacy-degrading transaction.
+ */
+export function getRpaSendBlockReason(
+  recipient: string,
+  network: Network
+): string | null {
+  const bare = recipient.trim().split('?')[0].toLowerCase();
+  const looksLikePaycode =
+    bare.startsWith(`${PAYCODE_PREFIX_MAINNET}:`) ||
+    bare.startsWith(`${PAYCODE_PREFIX_TESTNET}:`);
+  if (!looksLikePaycode) return null;
+
+  const decoded = decodePaycode(recipient);
+  if (!decoded) {
+    return 'This reusable payment address (RPA) is invalid. No transaction was created.';
+  }
+
+  const paycodeNetwork =
+    decoded.version === 0x01 || decoded.version === 0x02
+      ? Network.MAINNET
+      : Network.CHIPNET;
+  if (paycodeNetwork !== network) {
+    const label = paycodeNetwork === Network.MAINNET ? 'Mainnet' : 'Chipnet';
+    return `This RPA paycode is for ${label}, not the wallet's active network. No transaction was created.`;
+  }
+
+  return (
+    'Sending to reusable payment addresses (RPA) is not available yet. ' +
+    'The required designated-input derivation and signature nonce grinding are not active, so no transaction was created.'
+  );
 }
 
 // Derive + encode paycode in one call (convenience wrapper).
