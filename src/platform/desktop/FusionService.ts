@@ -59,7 +59,7 @@ const feePerOutput = (feerate: number) => componentFee(9 + 25, feerate); // P2PK
  * Build the signed-input list from selected UTXOs. Looks up each UTXO's pubkey
  * (retrieveKeys) and private key (fetchAddressPrivateKey) by address.
  */
-async function gatherInputs(walletId: number, utxos: UTXO[]): Promise<FusionRunInput[]> {
+export async function gatherInputs(walletId: number, utxos: UTXO[]): Promise<FusionRunInput[]> {
   const keys = await KeyService.retrieveKeys(walletId);
   const byAddress = new Map(keys.map((k) => [k.address, k.publicKey]));
 
@@ -93,7 +93,7 @@ function scriptForAddress(address: string): string {
  * server's [min,max] bounds. Returns the output scriptpubkeys (hex) + values, or
  * throws if the selected inputs are too small to make even one tier output.
  */
-async function allocateOutputs(
+export async function allocateOutputs(
   walletId: number,
   network: Network,
   tier: number,
