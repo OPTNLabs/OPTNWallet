@@ -44,8 +44,13 @@ const P2P_PARAMS: FusionServerParams = {
 };
 
 const MIN_PARTICIPANTS = 2;
-const POOL_WAIT_MS = 180_000; // how long to wait for a tier pool to form
-const POOL_SETTLE_MS = 8_000; // extra wait after reaching the minimum, so sets agree
+// A fixed collection window: every peer announces immediately (below) and freezes
+// its participant set when the window closes, so wallets whose Fuse Now is pressed
+// within the window all freeze the SAME set — the coordinator and participants
+// then agree without a separate round_start negotiation. Clicks must fall inside
+// this window. ponytail: a coordinator-anchored round_start removes the timing
+// constraint entirely; add it when rounds run beyond a controlled test.
+const POOL_WINDOW_MS = 60_000;
 
 export interface P2pFusionOptions {
   walletId: number;
@@ -55,26 +60,22 @@ export interface P2pFusionOptions {
   onStatus?: (msg: string) => void;
 }
 
-/** Wait for a tier pool to reach the minimum size, then freeze the participant set. */
+/** Collect announcements for a fixed window, then freeze the participant set. */
 function waitForParticipants(
   myPubkey: string,
   getPeers: () => PoolAnnouncement[],
   onStatus?: (m: string) => void
 ): Promise<string[]> {
   return new Promise((resolve, reject) => {
-    const start = Date.now();
-    let reachedAt = 0;
+    const deadline = Date.now() + POOL_WINDOW_MS;
     const tick = () => {
       const set = new Set([myPubkey, ...getPeers().map((p) => p.pubkey)]);
-      onStatus?.(`Peers in pool: ${set.size} (need ${MIN_PARTICIPANTS})`);
-      if (set.size >= MIN_PARTICIPANTS) {
-        if (!reachedAt) reachedAt = Date.now();
-        // Let the set settle so every peer freezes the same participants.
-        if (Date.now() - reachedAt >= POOL_SETTLE_MS) return resolve([...set]);
-      }
-      if (Date.now() - start > POOL_WAIT_MS) {
-        if (set.size >= MIN_PARTICIPANTS) return resolve([...set]);
-        return reject(new Error(`No fusion pool formed for this tier (need ${MIN_PARTICIPANTS} peers).`));
+      const left = Math.max(0, Math.ceil((deadline - Date.now()) / 1000));
+      onStatus?.(`Peers in pool: ${set.size} (collecting ${left}s)`);
+      console.info('[p2p-fusion] pool size', set.size, 'window', left, 's');
+      if (Date.now() >= deadline) {
+        if (set.size >= MIN_PARTICIPANTS) return resolve([...set].sort());
+        return reject(new Error(`No fusion pool formed for this tier (need ${MIN_PARTICIPANTS}, saw ${set.size}).`));
       }
       setTimeout(tick, 2000);
     };
@@ -117,6 +118,8 @@ export async function runP2pFusion(opts: P2pFusionOptions): Promise<RoundResult>
   const jp = joinPool(pool, relays, round, tier, myInputs.length, myOutputs.length, (p) => {
     peers = p;
   });
+  jp.announceNow(); // announce immediately so the pool forms quickly for the test
+  console.info('[p2p-fusion] announced tier', tier, 'round pubkey', round.pubkey.slice(0, 8), 'relays', relays);
   status?.('Announced to the tier pool; waiting for peers…');
 
   try {
