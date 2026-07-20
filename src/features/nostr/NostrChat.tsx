@@ -1,210 +1,256 @@
-import React, { useMemo, useState } from 'react';
-import { useNavigate, useParams } from 'react-router-dom';
-import {
-  MdAdd,
-  MdArrowBack,
-  MdChatBubbleOutline,
-  MdLockOutline,
-  MdSearch,
-  MdSettings,
-} from 'react-icons/md';
+// Nostr chat — a working NIP-17 private-message client. Enter someone's npub,
+// see their profile (name + picture) if they've published one, and exchange
+// end-to-end encrypted DMs over the wallet's Nostr identity + relays.
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
+import { useSelector } from 'react-redux';
+import { MdArrowBack, MdContentCopy, MdSend } from 'react-icons/md';
 
 import PageHeader from '../../components/ui/PageHeader';
 import WalletScreen from '../../components/ui/WalletScreen';
+import type { RootState } from '../../state/store';
+import { selectNostrRelays } from '../../state/slices/experimentalSlice';
+import {
+  myIdentity,
+  sendDirectMessage,
+  subscribeMessages,
+  fetchProfile,
+  publishMyProfile,
+  toPubkeyHex,
+  type ChatMessage,
+  type NostrProfile,
+} from '../../platform/desktop/nostr/chat';
 
-const SETUP_CONVERSATION_ID = 'setup';
+const short = (s: string) => (s.length > 16 ? `${s.slice(0, 10)}…${s.slice(-6)}` : s);
 
-const StatusPill: React.FC<{ children: React.ReactNode }> = ({ children }) => (
-  <span className="rounded-full border border-yellow-400/30 bg-yellow-400/10 px-2 py-1 text-[10px] font-semibold text-yellow-400">
-    {children}
-  </span>
-);
-
-const SetupConversation: React.FC<{ onBack: () => void }> = ({ onBack }) => (
-  <section className="flex h-full min-h-0 flex-col">
-    <header className="flex items-center gap-3 border-b border-[var(--wallet-border)] px-4 py-3">
-      <button
-        type="button"
-        onClick={onBack}
-        className="rounded-full p-2 wallet-surface-strong wallet-text-strong md:hidden"
-        aria-label="Back to conversations"
-      >
-        <MdArrowBack aria-hidden="true" />
-      </button>
-      <div className="grid h-10 w-10 place-items-center rounded-full bg-[var(--wallet-accent)]/15 text-[var(--wallet-accent)]">
-        <MdLockOutline className="text-xl" aria-hidden="true" />
-      </div>
-      <div className="min-w-0 flex-1">
-        <h2 className="truncate text-sm font-bold wallet-text-strong">Private chat setup</h2>
-        <p className="truncate text-[11px] wallet-muted">Local onboarding · no relay connection</p>
-      </div>
-      <StatusPill>Preview</StatusPill>
-    </header>
-
-    <div className="min-h-0 flex-1 space-y-4 overflow-y-auto p-4">
-      <div className="mx-auto max-w-sm rounded-xl border border-[var(--wallet-border)] bg-[var(--wallet-surface)] p-3 text-center">
-        <p className="text-xs font-semibold wallet-text-strong">End-to-end private messaging</p>
-        <p className="mt-1 text-[11px] leading-relaxed wallet-muted">
-          This conversation shell is ready for NIP-17 gift-wrapped messages using
-          NIP-44 encryption and NIP-59 envelopes. Transport is intentionally off.
-        </p>
-      </div>
-
-      <div className="max-w-[82%] rounded-2xl rounded-tl-md border border-[var(--wallet-border)] bg-[var(--wallet-surface-strong)] px-3 py-2.5">
-        <p className="text-xs leading-relaxed wallet-text-strong">
-          First create a Nostr identity that is separate from your BCH spending keys.
-        </p>
-        <p className="mt-1 text-[9px] wallet-muted">Setup assistant · local only</p>
-      </div>
-
-      <div className="ml-auto max-w-[82%] rounded-2xl rounded-tr-md border border-[var(--wallet-accent)]/30 bg-[var(--wallet-accent)]/10 px-3 py-2.5">
-        <p className="text-xs leading-relaxed wallet-text-strong">
-          Then choose 1–3 private-message relays or add your own relay in Settings.
-        </p>
-        <p className="mt-1 text-right text-[9px] wallet-muted">Planned flow</p>
-      </div>
-
-      <div className="max-w-[82%] rounded-2xl rounded-tl-md border border-[var(--wallet-border)] bg-[var(--wallet-surface-strong)] px-3 py-2.5">
-        <p className="text-xs leading-relaxed wallet-text-strong">
-          Sending stays disabled until event verification, replay protection, relay
-          authentication, and encrypted delivery acknowledgements are implemented.
-        </p>
-        <p className="mt-1 text-[9px] wallet-muted">Safety gate</p>
-      </div>
-    </div>
-
-    <footer className="border-t border-[var(--wallet-border)] p-3">
-      <div className="flex items-center gap-2">
-        <input
-          type="text"
-          disabled
-          placeholder="Messaging transport is not active yet"
-          className="wallet-input min-w-0 flex-1 text-xs disabled:cursor-not-allowed disabled:opacity-60"
-          aria-label="Message composer unavailable"
-        />
-        <button
-          type="button"
-          disabled
-          className="rounded-xl bg-[var(--wallet-accent)] px-4 py-3 text-xs font-bold text-white disabled:cursor-not-allowed disabled:opacity-40"
-        >
-          Send
-        </button>
-      </div>
-      <p className="mt-2 text-center text-[9px] wallet-muted">
-        No key is generated, no relay is contacted, and no message leaves this device.
-      </p>
-    </footer>
-  </section>
+const Avatar: React.FC<{ url?: string; fallback: string }> = ({ url, fallback }) => (
+  <div className="grid h-9 w-9 shrink-0 place-items-center overflow-hidden rounded-full border border-[var(--wallet-border)] bg-[var(--wallet-surface)] text-xs font-bold wallet-muted">
+    {url ? <img src={url} alt="" className="h-full w-full object-cover" /> : fallback.slice(0, 2).toUpperCase()}
+  </div>
 );
 
 const NostrChat: React.FC = () => {
   const navigate = useNavigate();
-  const { conversationId } = useParams<{ conversationId?: string }>();
-  const [query, setQuery] = useState('');
-  const showConversation = conversationId === SETUP_CONVERSATION_ID;
-  const setupVisible = useMemo(
-    () => 'private chat setup'.includes(query.trim().toLowerCase()),
-    [query]
-  );
+  const walletId = useSelector((s: RootState) => s.wallet_id.currentWalletId);
+  const relays = useSelector(selectNostrRelays);
+
+  const [me, setMe] = useState<{ pubkey: string; npub: string } | null>(null);
+  const [recipient, setRecipient] = useState('');
+  const [peer, setPeer] = useState<string | null>(null);
+  const [peerProfile, setPeerProfile] = useState<NostrProfile | null>(null);
+  const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const [draft, setDraft] = useState('');
+  const [err, setErr] = useState<string | null>(null);
+  const [sending, setSending] = useState(false);
+
+  // Self profile editor.
+  const [showProfile, setShowProfile] = useState(false);
+  const [myName, setMyName] = useState('');
+  const [myPicture, setMyPicture] = useState('');
+  const [profileMsg, setProfileMsg] = useState<string | null>(null);
+
+  const bottomRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (walletId <= 0) return;
+    myIdentity(walletId).then(setMe).catch((e) => setErr(e instanceof Error ? e.message : String(e)));
+  }, [walletId]);
+
+  // One subscription for all my DMs; the thread view filters to the open peer.
+  useEffect(() => {
+    if (walletId <= 0) return;
+    const unsub = subscribeMessages(
+      walletId,
+      (m) =>
+        setMessages((prev) =>
+          prev.some((x) => x.id === m.id) ? prev : [...prev, m].sort((a, b) => a.at - b.at)
+        ),
+      relays
+    );
+    return unsub;
+  }, [walletId, relays]);
+
+  const thread = useMemo(() => {
+    if (!peer) return [];
+    return messages.filter((m) => m.from === peer || (m.mine && m.to.includes(peer)));
+  }, [messages, peer]);
+
+  useEffect(() => {
+    bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
+  }, [thread.length]);
+
+  const openConversation = useCallback(async () => {
+    setErr(null);
+    try {
+      const hex = toPubkeyHex(recipient);
+      setPeer(hex);
+      setPeerProfile({ pubkey: hex });
+      const p = await fetchProfile(hex, relays);
+      setPeerProfile(p);
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : String(e));
+    }
+  }, [recipient, relays]);
+
+  const send = useCallback(async () => {
+    if (!peer || !draft.trim() || walletId <= 0) return;
+    setSending(true);
+    setErr(null);
+    try {
+      await sendDirectMessage(walletId, peer, draft.trim(), relays);
+      setDraft('');
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : String(e));
+    } finally {
+      setSending(false);
+    }
+  }, [peer, draft, walletId, relays]);
+
+  const saveProfile = useCallback(async () => {
+    setProfileMsg(null);
+    try {
+      await publishMyProfile(walletId, { name: myName || undefined, picture: myPicture || undefined }, relays);
+      setProfileMsg('Profile published ✓');
+    } catch (e) {
+      setProfileMsg(e instanceof Error ? e.message : String(e));
+    }
+  }, [walletId, myName, myPicture, relays]);
+
+  const peerName = peerProfile?.name || (peer ? short(peer) : '');
 
   return (
-    <WalletScreen maxWidthClassName="max-w-5xl" scrollable={false}>
+    <WalletScreen maxWidthClassName="max-w-md" scrollable={false}>
       <div className="flex h-full min-h-0 flex-col gap-3">
-        <PageHeader title="Chat" compact />
-        <div className="flex items-center justify-between gap-3">
-          <div>
-            <h1 className="text-2xl font-bold tracking-tight wallet-text-strong">Chat</h1>
-            <p className="text-xs wallet-muted">Private Nostr messaging</p>
-          </div>
-          <button
-            type="button"
-            onClick={() => navigate('/settings?panel=nostr')}
-            className="flex items-center gap-2 rounded-xl border border-[var(--wallet-border)] px-3 py-2 text-xs font-semibold wallet-text-strong"
-          >
-            <MdSettings aria-hidden="true" />
-            Nostr setup
-          </button>
-        </div>
+        <PageHeader
+          title="Chat"
+          subtitle="Encrypted over Nostr"
+          titleAction={
+            <button onClick={() => navigate(-1)} aria-label="Back" className="wallet-icon-btn">
+              <MdArrowBack />
+            </button>
+          }
+          compact
+        />
 
-        <div className="wallet-card grid min-h-0 flex-1 overflow-hidden md:grid-cols-[minmax(240px,0.38fr)_minmax(0,1fr)]">
-          <aside className={`${showConversation ? 'hidden md:flex' : 'flex'} min-h-0 flex-col border-r border-[var(--wallet-border)]`}>
-            <div className="space-y-3 border-b border-[var(--wallet-border)] p-3">
-              <div className="flex items-center gap-2">
-                <label className="wallet-input flex min-w-0 flex-1 items-center gap-2 py-1.5">
-                  <MdSearch className="shrink-0 wallet-muted" aria-hidden="true" />
-                  <span className="sr-only">Search conversations</span>
-                  <input
-                    value={query}
-                    onChange={(event) => setQuery(event.target.value)}
-                    placeholder="Search conversations"
-                    className="min-w-0 flex-1 bg-transparent text-xs outline-none placeholder:wallet-muted"
-                  />
-                </label>
+        {/* My identity + profile */}
+        {me && (
+          <div className="rounded-xl border border-[var(--wallet-border)] wallet-surface px-3 py-2 space-y-2">
+            <div className="flex items-center justify-between gap-2">
+              <div className="min-w-0">
+                <p className="text-[10px] wallet-muted">Your npub</p>
+                <p className="truncate font-mono text-[11px] wallet-text-strong">{me.npub}</p>
+              </div>
+              <div className="flex items-center gap-1 shrink-0">
                 <button
-                  type="button"
-                  disabled
-                  className="grid h-11 w-11 place-items-center rounded-xl border border-[var(--wallet-border)] text-[var(--wallet-accent)] disabled:cursor-not-allowed disabled:opacity-45"
-                  aria-label="New chat unavailable"
-                  title="Available after Nostr identity and relay setup"
+                  onClick={() => void navigator.clipboard.writeText(me.npub)}
+                  className="wallet-icon-btn"
+                  aria-label="Copy npub"
                 >
-                  <MdAdd className="text-xl" aria-hidden="true" />
+                  <MdContentCopy />
+                </button>
+                <button
+                  onClick={() => setShowProfile((v) => !v)}
+                  className="rounded-lg border border-[var(--wallet-border)] px-2 py-1 text-[10px] font-semibold wallet-text-strong"
+                >
+                  Profile
                 </button>
               </div>
-              <div className="flex items-center justify-between">
-                <span className="text-[10px] font-semibold uppercase tracking-wider wallet-muted">Messages</span>
-                <StatusPill>Offline</StatusPill>
-              </div>
             </div>
-
-            <div className="min-h-0 flex-1 overflow-y-auto p-2">
-              {setupVisible ? (
-                <button
-                  type="button"
-                  onClick={() => navigate(`/chat/${SETUP_CONVERSATION_ID}`)}
-                  className={`flex w-full items-center gap-3 rounded-xl border p-3 text-left transition-colors ${
-                    showConversation
-                      ? 'border-[var(--wallet-accent)]/40 bg-[var(--wallet-accent)]/10'
-                      : 'border-transparent hover:bg-[var(--wallet-surface)]'
-                  }`}
-                >
-                  <div className="grid h-11 w-11 shrink-0 place-items-center rounded-full bg-[var(--wallet-accent)]/15 text-[var(--wallet-accent)]">
-                    <MdLockOutline className="text-xl" aria-hidden="true" />
-                  </div>
-                  <div className="min-w-0 flex-1">
-                    <div className="flex items-center justify-between gap-2">
-                      <span className="truncate text-sm font-semibold wallet-text-strong">Private chat setup</span>
-                      <span className="text-[9px] wallet-muted">Now</span>
-                    </div>
-                    <p className="truncate text-[11px] wallet-muted">Finish identity and relay setup</p>
-                  </div>
-                </button>
-              ) : (
-                <div className="grid h-full place-items-center p-6 text-center">
-                  <p className="text-xs wallet-muted">No matching conversations</p>
-                </div>
-              )}
-            </div>
-          </aside>
-
-          <main className={`${showConversation ? 'flex' : 'hidden md:flex'} min-h-0 flex-col`}>
-            {showConversation ? (
-              <SetupConversation onBack={() => navigate('/chat')} />
-            ) : (
-              <div className="grid h-full place-items-center p-8 text-center">
-                <div className="max-w-xs">
-                  <div className="mx-auto grid h-14 w-14 place-items-center rounded-2xl bg-[var(--wallet-accent)]/15 text-[var(--wallet-accent)]">
-                    <MdChatBubbleOutline className="text-3xl" aria-hidden="true" />
-                  </div>
-                  <h2 className="mt-4 text-base font-bold wallet-text-strong">Your private conversations</h2>
-                  <p className="mt-2 text-xs leading-relaxed wallet-muted">
-                    Select the setup conversation to preview the encrypted-chat flow.
-                    Real contacts and messages will appear here after activation.
-                  </p>
+            {showProfile && (
+              <div className="space-y-1.5 border-t border-[var(--wallet-border)] pt-2">
+                <input
+                  value={myName}
+                  onChange={(e) => setMyName(e.target.value)}
+                  placeholder="Display name"
+                  className="wallet-input w-full text-xs"
+                />
+                <input
+                  value={myPicture}
+                  onChange={(e) => setMyPicture(e.target.value)}
+                  placeholder="Picture URL (https://…)"
+                  className="wallet-input w-full text-xs"
+                />
+                <div className="flex items-center justify-between gap-2">
+                  <button onClick={() => void saveProfile()} className="wallet-btn-primary px-3 py-1 text-xs">
+                    Publish profile
+                  </button>
+                  {profileMsg && <span className="text-[10px] wallet-muted">{profileMsg}</span>}
                 </div>
               </div>
             )}
-          </main>
+          </div>
+        )}
+
+        {/* Recipient picker */}
+        <div className="flex items-center gap-2">
+          <input
+            value={recipient}
+            onChange={(e) => setRecipient(e.target.value)}
+            placeholder="Recipient npub…"
+            className="wallet-input flex-1 text-xs font-mono"
+            onKeyDown={(e) => e.key === 'Enter' && void openConversation()}
+          />
+          <button onClick={() => void openConversation()} className="wallet-btn-primary px-3 py-2 text-xs">
+            Open
+          </button>
         </div>
+
+        {err && <p className="text-[10px] text-red-400/90 break-all">{err}</p>}
+
+        {/* Conversation */}
+        {peer && (
+          <div className="flex min-h-0 flex-1 flex-col rounded-xl border border-[var(--wallet-border)] wallet-surface">
+            <div className="flex items-center gap-2 border-b border-[var(--wallet-border)] px-3 py-2">
+              <Avatar url={peerProfile?.picture} fallback={peerName} />
+              <div className="min-w-0">
+                <p className="truncate text-xs font-semibold wallet-text-strong">{peerName}</p>
+                {peerProfile?.nip05 && <p className="truncate text-[10px] wallet-muted">{peerProfile.nip05}</p>}
+              </div>
+            </div>
+
+            <div className="flex-1 min-h-0 space-y-1.5 overflow-y-auto p-3">
+              {thread.length === 0 ? (
+                <p className="text-center text-[10px] wallet-muted pt-6">
+                  No messages yet. Say hi — messages are end-to-end encrypted.
+                </p>
+              ) : (
+                thread.map((m) => (
+                  <div key={m.id} className={`flex ${m.mine ? 'justify-end' : 'justify-start'}`}>
+                    <div
+                      className={`max-w-[80%] rounded-2xl px-3 py-1.5 text-xs ${
+                        m.mine
+                          ? 'bg-[var(--wallet-accent)]/15 text-[var(--wallet-accent-strong)]'
+                          : 'wallet-card wallet-text-strong'
+                      }`}
+                    >
+                      {m.text}
+                    </div>
+                  </div>
+                ))
+              )}
+              <div ref={bottomRef} />
+            </div>
+
+            <div className="flex items-center gap-2 border-t border-[var(--wallet-border)] p-2">
+              <input
+                value={draft}
+                onChange={(e) => setDraft(e.target.value)}
+                placeholder="Message…"
+                className="wallet-input flex-1 text-xs"
+                onKeyDown={(e) => e.key === 'Enter' && void send()}
+                disabled={sending}
+              />
+              <button
+                onClick={() => void send()}
+                disabled={sending || !draft.trim()}
+                className="wallet-btn-primary grid h-9 w-9 place-items-center disabled:opacity-50"
+                aria-label="Send"
+              >
+                <MdSend />
+              </button>
+            </div>
+          </div>
+        )}
       </div>
     </WalletScreen>
   );
