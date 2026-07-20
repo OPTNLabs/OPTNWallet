@@ -13,7 +13,7 @@ import AppShell from '../../app/AppShell';
 import { AppLockGate } from './AppLockGate';
 import { useMenuBar } from './useMenuBar';
 import { selectWalletId, resetWallet } from '../../state/slices/walletSlice';
-import { getCachedWalletKey } from './WalletKeyCache';
+import { getCachedWalletKeyForWallet } from './WalletKeyCache';
 import { persistor } from '../../state/store';
 import { invoke } from '@tauri-apps/api/core';
 
@@ -23,6 +23,8 @@ const DesktopAppShell: React.FC = () => {
   const walletId = useSelector(selectWalletId);
   const [rehydrated, setRehydrated] = useState(() => persistor.getState().bootstrapped);
   const [invariantChecked, setInvariantChecked] = useState(false);
+  const hasValidWalletSession =
+    walletId <= 0 || getCachedWalletKeyForWallet(walletId) !== null;
 
   // redux-persist rehydrates asynchronously; wait for it before reading the
   // persisted walletId (below). The immediate re-check after subscribing closes
@@ -54,7 +56,7 @@ const DesktopAppShell: React.FC = () => {
   // dispatching setWalletId, so by the time walletId > 0 the key is present.
   useEffect(() => {
     if (!rehydrated) return;
-    if (walletId > 0 && !getCachedWalletKey()) {
+    if (walletId > 0 && !getCachedWalletKeyForWallet(walletId)) {
       dispatch(resetWallet());
     }
     setInvariantChecked(true);
@@ -85,7 +87,7 @@ const DesktopAppShell: React.FC = () => {
   // fail before this invariant could correct it — the source of the "Error
   // getting wallet info" / "Unable to load wallet mnemonic for WizardConnect"
   // noise seen on every fresh app start.
-  if (!rehydrated || !invariantChecked) {
+  if (!rehydrated || !invariantChecked || !hasValidWalletSession) {
     return null;
   }
 
