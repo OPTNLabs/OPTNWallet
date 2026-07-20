@@ -48,3 +48,21 @@ export const CURRENT_FUSION_EXECUTION_READINESS = buildFusionExecutionReadiness(
   torOnlyBroadcast: false,
   broadcastVerification: false,
 });
+
+/**
+ * Whether a fusion round may actually execute right now.
+ *
+ * On MAINNET this requires every safety guarantee above (currently none → always
+ * blocked): real funds must not be spent through an unreviewed path.
+ *
+ * On CHIPNET the coins are valueless test coins, so execution is allowed as an
+ * explicit TEST path — this is how the full protocol gets exercised end-to-end
+ * against a live server before the mainnet guarantees are built. Callers should
+ * surface that it is a test path, not a production feature.
+ *
+ * `network` is compared as a string ('chipnet') to avoid importing the redux
+ * enum into this dependency-free safety module.
+ */
+export function isFusionExecutionAllowed(network: string): boolean {
+  return network === 'chipnet' || CURRENT_FUSION_EXECUTION_READINESS.ready;
+}
