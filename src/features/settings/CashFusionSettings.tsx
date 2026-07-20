@@ -34,8 +34,15 @@ import {
   type FusionServerStatus,
   type TorConfig,
 } from '../../services/fusion/FusionStatusService';
-import { CURRENT_FUSION_EXECUTION_READINESS } from '../../platform/desktop/FusionExecutionSafety';
+import {
+  CURRENT_FUSION_EXECUTION_READINESS,
+  isFusionExecutionAllowed,
+} from '../../platform/desktop/FusionExecutionSafety';
 import { P2pFusionTransportPreview } from '../nostr/P2pFusionTransportPreview';
+import { runFusion } from '../../platform/desktop/FusionService';
+import { Network } from '../../state/slices/networkSlice';
+import type { RootState } from '../../state/store';
+import type { UTXO } from '../../types/types';
 
 // Ports per Electron Cash's own conf.py default (fusion.servo.cash:8789, SSL).
 const DEFAULT_SERVER = 'fusion.servo.cash:8789';
@@ -71,6 +78,14 @@ export const CashFusionSettings: React.FC = () => {
   const torAuto = useSelector(selectTorAuto);
   const torHost = useSelector(selectTorHost);
   const torPortManual = useSelector(selectTorPortManual);
+
+  // Fusion execution (chipnet test path). walletId/network/UTXOs drive Fuse Now.
+  const walletId = useSelector((s: RootState) => s.wallet_id.currentWalletId);
+  const currentNetwork = useSelector((s: RootState) => s.network.currentNetwork);
+  const reduxUtxos = useSelector((s: RootState) => s.utxos.utxos);
+  const executionAllowed = isFusionExecutionAllowed(currentNetwork);
+  const [fuseState, setFuseState] = useState<'idle' | 'fusing' | 'done' | 'fail'>('idle');
+  const [fuseMsg, setFuseMsg] = useState<string | null>(null);
 
   // Start from the saved server only if it belongs to the current network's
   // pool; otherwise fall back to the network default (list head) so switching to
@@ -132,6 +147,46 @@ export const CashFusionSettings: React.FC = () => {
     if (target) {
       dispatch(addFusionServer(target));
       setNewServer('');
+    }
+  };
+
+  // Run a real fusion round with the wallet's coins. Only reachable when
+  // execution is allowed (chipnet test path); mainnet stays gated by the safety
+  // requirements. A round completes only when enough players meet in a tier.
+  const handleFuseNow = async () => {
+    setFuseState('fusing');
+    setFuseMsg(null);
+    try {
+      const { host, port, ssl } = parseHostPort(serverInput ?? '');
+      const tor = await currentTorConfig(host);
+      const params = status ?? (await fetchFusionServerStatus(host, port, ssl, tor));
+      if (!status) setStatus(params);
+
+      const utxos = (Object.values(reduxUtxos).flat() as UTXO[]).filter((u) => !u.token);
+      if (utxos.length === 0) throw new Error('No spendable (non-token) UTXOs to fuse.');
+
+      const outcome = await runFusion({
+        walletId,
+        network: currentNetwork,
+        host,
+        port,
+        useSsl: ssl,
+        utxos,
+        params: {
+          tiers: params.tiers,
+          numComponents: params.numComponents,
+          componentFeerate: params.componentFeerate,
+          minExcessFee: params.minExcessFee,
+          maxExcessFee: params.maxExcessFee,
+        },
+        torHost: tor?.host ?? null,
+        torPort: tor?.port ?? null,
+      });
+      setFuseState(outcome.ok ? 'done' : 'fail');
+      setFuseMsg(outcome.ok ? `Fused ✓ — txid ${outcome.txid}` : outcome.message);
+    } catch (e) {
+      setFuseState('fail');
+      setFuseMsg(e instanceof Error ? e.message : String(e));
     }
   };
 
@@ -443,8 +498,44 @@ export const CashFusionSettings: React.FC = () => {
           </div>
         )}
 
-        {/* Fuse Now — runs a real fusion round with the wallet's coins. */}
-        {enabled && (
+        {/* Fusion execution: real on chipnet (test coins), paused on mainnet. */}
+        {enabled && executionAllowed && (
+          <div className="rounded-lg border border-[var(--wallet-accent)]/30 wallet-surface px-3 py-2 space-y-1.5">
+            <div className="flex items-center justify-between gap-2">
+              <div>
+                <p className="text-xs font-semibold wallet-text-strong">
+                  Fuse Now{currentNetwork === Network.CHIPNET ? ' (chipnet test)' : ''}
+                </p>
+                <p className="text-[10px] wallet-muted">
+                  Mixes your coins in a CoinJoin. Needs Tor + ≥2 players in a tier.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => void handleFuseNow()}
+                disabled={fuseState === 'fusing' || walletId <= 0}
+                className="rounded-lg border border-[var(--wallet-accent)]/50 px-3 py-1.5 text-xs font-semibold text-[var(--wallet-accent)] hover:bg-[var(--wallet-accent)]/5 disabled:opacity-50 whitespace-nowrap"
+              >
+                {fuseState === 'fusing' ? 'Fusing…' : 'Fuse Now'}
+              </button>
+            </div>
+            {currentNetwork === Network.CHIPNET && (
+              <p className="text-[10px] text-yellow-400/70 leading-relaxed">
+                Test path: mainnet stays paused until the wallet safety guarantees ship.
+              </p>
+            )}
+            {fuseMsg && (
+              <p
+                className={`text-[10px] leading-relaxed break-all ${
+                  fuseState === 'done' ? 'text-green-400' : fuseState === 'fail' ? 'text-red-400/90' : 'wallet-muted'
+                }`}
+              >
+                {fuseMsg}
+              </p>
+            )}
+          </div>
+        )}
+        {enabled && !executionAllowed && (
           <div className="rounded-lg border border-[var(--wallet-border)] wallet-surface px-3 py-2 space-y-1.5">
             <div className="flex items-center justify-between gap-2">
               <div>
@@ -456,7 +547,7 @@ export const CashFusionSettings: React.FC = () => {
               <button
                 type="button"
                 disabled
-                className="rounded-lg border border-[var(--wallet-accent)]/50 px-3 py-1.5 text-xs font-semibold text-[var(--wallet-accent)] hover:bg-[var(--wallet-accent)]/5 disabled:opacity-50 whitespace-nowrap"
+                className="rounded-lg border border-[var(--wallet-accent)]/50 px-3 py-1.5 text-xs font-semibold text-[var(--wallet-accent)] disabled:opacity-50 whitespace-nowrap"
               >
                 Execution paused
               </button>
