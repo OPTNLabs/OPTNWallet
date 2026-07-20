@@ -40,6 +40,7 @@ import {
 } from '../../platform/desktop/FusionExecutionSafety';
 import { P2pFusionTransportPreview } from '../nostr/P2pFusionTransportPreview';
 import { runFusion } from '../../platform/desktop/FusionService';
+import { runP2pFusion } from '../../platform/desktop/FusionP2pService';
 import { Network } from '../../state/slices/networkSlice';
 import type { RootState } from '../../state/store';
 import type { UTXO } from '../../types/types';
@@ -157,13 +158,26 @@ export const CashFusionSettings: React.FC = () => {
     setFuseState('fusing');
     setFuseMsg(null);
     try {
+      const utxos = (Object.values(reduxUtxos).flat() as UTXO[]).filter((u) => !u.token);
+      if (utxos.length === 0) throw new Error('No spendable (non-token) UTXOs to fuse.');
+
+      // P2P path: no server — meet peers on Nostr and run the round peer-to-peer.
+      if (p2pFusionEnabled) {
+        const result = await runP2pFusion({
+          walletId,
+          network: currentNetwork,
+          utxos,
+          onStatus: (m) => setFuseMsg(m),
+        });
+        setFuseState('done');
+        setFuseMsg(`Fused ✓ — txid ${result.txid}`);
+        return;
+      }
+
       const { host, port, ssl } = parseHostPort(serverInput ?? '');
       const tor = await currentTorConfig(host);
       const params = status ?? (await fetchFusionServerStatus(host, port, ssl, tor));
       if (!status) setStatus(params);
-
-      const utxos = (Object.values(reduxUtxos).flat() as UTXO[]).filter((u) => !u.token);
-      if (utxos.length === 0) throw new Error('No spendable (non-token) UTXOs to fuse.');
 
       const outcome = await runFusion({
         walletId,
