@@ -3,6 +3,7 @@ mod menu;
 
 pub mod fusion;
 pub mod electrum_tcp;
+pub mod nostr_tor;
 pub mod spv;
 
 // CashFusion server status (Phase 1).
@@ -514,7 +515,10 @@ pub fn run() {
             tor_status,
             electrum_tcp::electrum_tcp_connect,
             electrum_tcp::electrum_tcp_send,
-            electrum_tcp::electrum_tcp_close
+            electrum_tcp::electrum_tcp_close,
+            nostr_tor::nostr_tor_open,
+            nostr_tor::nostr_tor_send,
+            nostr_tor::nostr_tor_close
         ])
         .setup(|app| {
             let log_level = if cfg!(debug_assertions) {

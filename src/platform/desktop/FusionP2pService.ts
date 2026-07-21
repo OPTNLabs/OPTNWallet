@@ -16,8 +16,11 @@
 // the chipnet execution path (isFusionExecutionAllowed); mainnet remains blocked.
 
 import { SimplePool } from 'nostr-tools';
+// aliased: the `use*` name trips the react-hooks lint rule, but this is not a hook.
+import { useWebSocketImplementation as setNostrWebSocketImpl } from 'nostr-tools/pool';
 import { invoke } from '@tauri-apps/api/core';
 import { hexToBin } from '../../utils/hex';
+import { TorWebSocket, armTorRouting, disarmTorRouting } from './nostr/torWebSocket';
 import ElectrumService from '../../services/ElectrumService';
 import { Network } from '../../state/slices/networkSlice';
 import type { UTXO } from '../../types/types';
@@ -43,6 +46,9 @@ const P2P_PARAMS: FusionServerParams = {
   minExcessFee: 0,
   maxExcessFee: 20_000_000,
 };
+
+/** Whether the Tor WebSocket shim has been installed into nostr-tools yet. */
+let wsInstalled = false;
 
 const MIN_PARTICIPANTS = 2;
 // A fixed collection window: every peer announces immediately (below) and freezes
@@ -107,6 +113,15 @@ export async function runP2pFusion(opts: P2pFusionOptions): Promise<RoundResult>
   }
   const relays = opts.relays?.length ? opts.relays : DEFAULT_RELAYS;
   const status = opts.onStatus;
+
+  // Route every relay socket for this round through the Rust Tor->WSS bridge.
+  // Installed process-wide (idempotent) but only ACTIVE while armed, so chat's
+  // relays stay on native WebSockets.
+  if (!wsInstalled) {
+    setNostrWebSocketImpl(TorWebSocket);
+    wsInstalled = true;
+  }
+  armTorRouting({ host: opts.tor.host, port: opts.tor.port });
   status?.('Tor verified; routing relay traffic over Tor.');
 
   // 1. Gather my inputs (with signing keys) and allocate fresh-HD tier outputs.
@@ -161,5 +176,6 @@ export async function runP2pFusion(opts: P2pFusionOptions): Promise<RoundResult>
   } finally {
     jp.stop();
     pool.close(relays);
+    disarmTorRouting(); // chat relays revert to native WebSockets
   }
 }
