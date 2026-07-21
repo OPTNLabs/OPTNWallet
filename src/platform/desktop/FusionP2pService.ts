@@ -60,6 +60,16 @@ const MIN_PARTICIPANTS = 2;
 // constraint entirely; add it when rounds run beyond a controlled test.
 const POOL_WINDOW_MS = 60_000;
 
+/** Live round phases shown as a 1–5 stepper (00-Wallet style). Index 0 = idle. */
+export const P2P_PHASE_LABELS = [
+  'Idle',
+  'Announcing & finding peers',
+  'Registering inputs & outputs',
+  'Assembling & verifying',
+  'Signing',
+  'Broadcasting',
+] as const;
+
 export interface P2pFusionOptions {
   walletId: number;
   network: Network;
@@ -69,6 +79,8 @@ export interface P2pFusionOptions {
    *  closed without Tor, like classic CashFusion. */
   tor: { host: string; port: number } | null;
   onStatus?: (msg: string) => void;
+  /** Live phase 1–5 for the UI stepper (see P2P_PHASE_LABELS). */
+  onPhase?: (phase: number) => void;
 }
 
 /** Collect announcements for a fixed window, then freeze the participant set. */
@@ -151,6 +163,7 @@ export async function runP2pFusion(opts: P2pFusionOptions): Promise<RoundResult>
   });
   jp.announceNow(); // announce immediately so the pool forms quickly for the test
   console.info('[p2p-fusion] announced tier', tier, 'round pubkey', round.pubkey.slice(0, 8), 'relays', relays);
+  opts.onPhase?.(1); // announcing & finding peers
   status?.('Announced to the tier pool; waiting for peers…');
 
   try {
@@ -169,6 +182,7 @@ export async function runP2pFusion(opts: P2pFusionOptions): Promise<RoundResult>
         myContribution: { inputs: myInputs, outputs: myOutputs },
         keysByPubkey,
         broadcast: (txHex) => ElectrumService.broadcastTransaction(txHex),
+        onPhase: opts.onPhase,
       },
       transport
     );
