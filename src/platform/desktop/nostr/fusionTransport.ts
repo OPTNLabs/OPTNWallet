@@ -1,30 +1,37 @@
 // P2P CashFusion round transport over Nostr — Phase 4c. Binds the abstract
 // RoundTransport (fusionSession.ts) to real relays.
 //
-// Each round message is NIP-44 encrypted to the recipient's ephemeral round
-// pubkey and published as a kind-22231 event — a DEDICATED kind, distinct from
-// chat's gift-wrap (kind 1059), so fusion traffic never surfaces in the chat
-// inbox and vice-versa. The recipient subscribes to kind 22231 tagged to its
-// round pubkey and decrypts with (its round key ↔ the event author's key).
+// Round messages use STANDARD NIP-59 gift-wrap (kind 1059) — the same envelope as
+// private chat DMs — so on the wire a fusion message is indistinguishable from any
+// other encrypted DM. A custom kind would be a fingerprint ("this is a CashFusion
+// round"); the standard envelope is not. This matches 00-Wallet's scheme.
 //
-// Unlinkability: OUTPUT registrations are signed by a FRESH throwaway key per
-// message (not the round key), so neither the coordinator nor a relay can tie a
-// peer's outputs back to the inputs it registered under its round identity. In
-// production these output messages should also travel over a fresh Tor circuit
-// for IP-level unlinkability; that network-layer hardening (routing the relay
-// WSS through the app's Tor SOCKS proxy) is tracked separately — the crypto-layer
-// unlinkability (ephemeral keys + NIP-44) is implemented here.
+// Collision with chat is avoided at the ADDRESSING layer, not the kind: fusion
+// messages are gift-wrapped to a peer's EPHEMERAL round pubkey, while chat DMs go
+// to the wallet's real NIP-06 identity — so the subscriptions
+// ({kinds:[1059], #p:[roundKey]} vs {kinds:[1059], #p:[identityKey]}) never
+// overlap. Gift-wrap layers (NIP-59): outer 1059 = random one-time author +
+// scrambled timestamp (hides who/when); kind-13 seal = proves the real sender,
+// encrypted; kind-14 rumor = the JSON round message.
+//
+// Unlinkability: OUTPUT registrations are sealed by a FRESH throwaway key, so even
+// after the coordinator unwraps them it can't tie a peer's outputs to the inputs
+// it registered under its round key. In production these also ride a fresh Tor
+// circuit (torWebSocket).
 
-import { SimplePool, finalizeEvent, generateSecretKey, nip44, type Event } from 'nostr-tools';
-import { ROUND_MESSAGE_KIND } from './fusion';
+import { SimplePool, generateSecretKey, type Event } from 'nostr-tools';
+import { wrapEvent, unwrapEvent } from 'nostr-tools/nip17';
 import type { RoundMessage, RoundTransport } from './fusionSession';
+
+/** NIP-59 gift-wrap. Same kind as chat; disambiguated by the #p recipient. */
+export const GIFT_WRAP_KIND = 1059;
 
 export interface RoundKeys {
   secretKey: Uint8Array;
   pubkey: string; // hex
 }
 
-/** A RoundTransport that carries fusion round messages over Nostr relays. */
+/** A RoundTransport that carries fusion round messages as NIP-59 gift-wraps. */
 export function createNostrRoundTransport(
   pool: SimplePool,
   relays: string[],
@@ -32,29 +39,19 @@ export function createNostrRoundTransport(
 ): RoundTransport {
   return {
     send: async (toPubkey, msg) => {
-      // Outputs go from a throwaway key (unlinkable); all else from the round key.
+      // Outputs are sealed by a throwaway key (unlinkable); all else by the round key.
       const signer = msg.type === 'outputs' ? generateSecretKey() : round.secretKey;
-      const convKey = nip44.getConversationKey(signer, toPubkey);
-      const content = nip44.encrypt(JSON.stringify(msg), convKey);
-      const evt = finalizeEvent(
-        {
-          kind: ROUND_MESSAGE_KIND,
-          created_at: Math.floor(Date.now() / 1000),
-          tags: [['p', toPubkey]],
-          content,
-        },
-        signer
-      );
-      await Promise.allSettled(pool.publish(relays, evt));
+      const wrapped = wrapEvent(signer, { publicKey: toPubkey }, JSON.stringify(msg));
+      await Promise.allSettled(pool.publish(relays, wrapped as Event));
     },
 
     onMessage: (handler) => {
-      const sub = pool.subscribeMany(relays, { kinds: [ROUND_MESSAGE_KIND], '#p': [round.pubkey] }, {
+      const sub = pool.subscribeMany(relays, { kinds: [GIFT_WRAP_KIND], '#p': [round.pubkey] }, {
         onevent(evt: Event) {
           try {
-            const convKey = nip44.getConversationKey(round.secretKey, evt.pubkey);
-            const msg = JSON.parse(nip44.decrypt(evt.content, convKey)) as RoundMessage;
-            handler(evt.pubkey, msg);
+            const rumor = unwrapEvent(evt, round.secretKey);
+            const msg = JSON.parse(rumor.content) as RoundMessage;
+            handler(rumor.pubkey, msg);
           } catch {
             /* not addressed to us, or undecryptable — ignore */
           }
