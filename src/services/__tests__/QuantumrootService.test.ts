@@ -149,7 +149,7 @@ describe('QuantumrootService', () => {
 
   it('matches the component path helper directly', () => {
     expect(getQuantumrootComponentPath(Network.CHIPNET, 2, 'key', 13)).toBe(
-      "m/44'/1'/2'/1'/13"
+      "m/44'/145'/2'/1'/13"
     );
   });
 

@@ -7,6 +7,7 @@ import {
   encodePaycode,
   decodePaycode,
   getRpaSendBlockReason,
+  getRpaKeyPaths,
 } from '../RpaService';
 
 // A fresh throwaway mnemonic generated per run — no seed phrase is hardcoded in
@@ -21,6 +22,17 @@ const EXPECTED_SCAN_PATH = "m/44'/145'/0'/3/0";
 const EXPECTED_SPEND_PATH = "m/44'/145'/0'/3/1";
 
 describe('RpaService', () => {
+  it('exposes the canonical BCH-145 RPA paths for UI and protocol consumers', () => {
+    expect(getRpaKeyPaths(Network.MAINNET)).toEqual({
+      scan: EXPECTED_SCAN_PATH,
+      spend: EXPECTED_SPEND_PATH,
+    });
+    expect(getRpaKeyPaths(Network.CHIPNET)).toEqual({
+      scan: EXPECTED_SCAN_PATH,
+      spend: EXPECTED_SPEND_PATH,
+    });
+  });
+
   it('derives scan/spend keys at m/44\'/145\'/0\'/3/{0,1}', async () => {
     const [expectedScanPriv, expectedSpendPriv, keys] = await Promise.all([
       derivePrivateKeyAtPath(TEST_MNEMONIC, PASSPHRASE, EXPECTED_SCAN_PATH),
@@ -79,11 +91,14 @@ describe('RpaService', () => {
     );
   });
 
-  it('produces different keys for mainnet vs chipnet', async () => {
+  it('uses the same BCH-145 key path on mainnet and chipnet', async () => {
     const mainnet = await deriveRpaKeys(TEST_MNEMONIC, PASSPHRASE, Network.MAINNET);
     const chipnet = await deriveRpaKeys(TEST_MNEMONIC, PASSPHRASE, Network.CHIPNET);
-    expect(Buffer.from(mainnet.scanPubkey).toString('hex')).not.toBe(
+    expect(Buffer.from(mainnet.scanPubkey).toString('hex')).toBe(
       Buffer.from(chipnet.scanPubkey).toString('hex')
+    );
+    expect(Buffer.from(mainnet.spendPubkey).toString('hex')).toBe(
+      Buffer.from(chipnet.spendPubkey).toString('hex')
     );
   });
 });
