@@ -133,9 +133,17 @@ const NostrChat: React.FC = () => {
     return subscribeMessages(
       walletId,
       (m) =>
-        setMessages((prev) =>
-          prev.some((x) => x.id === m.id) ? prev : [...prev, m].sort((a, b) => a.at - b.at)
-        ),
+        setMessages((prev) => {
+          if (prev.some((x) => x.id === m.id)) return prev;
+          // Drop a self-copy that echoes an optimistic send we already show.
+          if (
+            m.mine &&
+            prev.some((x) => x.mine && x.text === m.text && x.to.join() === m.to.join() && Math.abs(x.at - m.at) < 300)
+          ) {
+            return prev;
+          }
+          return [...prev, m].sort((a, b) => a.at - b.at);
+        }),
       relays
     );
   }, [walletId, relays]);
@@ -194,18 +202,30 @@ const NostrChat: React.FC = () => {
   }, [recipient, relays, profiles]);
 
   const send = useCallback(async () => {
-    if (!activePeer || !draft.trim() || walletId <= 0) return;
+    if (!activePeer || !draft.trim() || walletId <= 0 || !me) return;
+    const text = draft.trim();
     setSending(true);
     setErr(null);
     try {
-      await sendDirectMessage(walletId, activePeer, draft.trim(), relays);
+      await sendDirectMessage(walletId, activePeer, text, relays);
+      // Show + persist my message immediately — don't wait for it to round-trip
+      // through a relay (which may not even echo a self-copy back).
+      const mine: ChatMessage = {
+        id: `local-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+        from: me.pubkey,
+        to: [activePeer],
+        text,
+        at: Math.floor(Date.now() / 1000),
+        mine: true,
+      };
+      setMessages((prev) => mergeById(prev, [mine]));
       setDraft('');
     } catch (e) {
       setErr(e instanceof Error ? e.message : String(e));
     } finally {
       setSending(false);
     }
-  }, [activePeer, draft, walletId, relays]);
+  }, [activePeer, draft, walletId, relays, me]);
 
   const onPickImage = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
