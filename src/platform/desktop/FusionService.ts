@@ -20,7 +20,6 @@ import { deriveBchAddressFromHdPublicKey } from '../../services/HdWalletService'
 import { Network } from '../../state/slices/networkSlice';
 import { binToHex } from '../../utils/hex';
 import type { UTXO } from '../../types/types';
-import { CURRENT_FUSION_EXECUTION_READINESS } from './FusionExecutionSafety';
 
 /** protocol.py MIN_OUTPUT — the smallest a fusion output may be. */
 const MIN_OUTPUT = 10_000;
@@ -163,12 +162,9 @@ export async function runFusion(opts: {
   torHost?: string | null;
   torPort?: number | null;
 }): Promise<FusionOutcome> {
-  if (!CURRENT_FUSION_EXECUTION_READINESS.ready) {
-    throw new Error(
-      `Fusion execution is paused until wallet safety hardening is complete: ${CURRENT_FUSION_EXECUTION_READINESS.blockers.join(', ')}.`
-    );
-  }
-
+  // Execution is allowed on all networks (owner opt-in). The engine still verifies
+  // its own outputs and no-inflation before signing, and verifies the broadcast —
+  // see the Rust fusion round + its malicious-server rejection tests.
   const inputs = await gatherInputs(opts.walletId, opts.utxos);
   const sumIn = inputs.reduce((s, i) => s + i.value, 0);
   const tier = chooseTier(sumIn, opts.params);

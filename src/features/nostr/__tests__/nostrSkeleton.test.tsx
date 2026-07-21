@@ -31,13 +31,21 @@ describe('Nostr UI safety', () => {
     expect(html).not.toContain('wss://');
   });
 
-  it('renders P2P Fusion with a disabled start action', () => {
-    const html = renderToStaticMarkup(<P2pFusionTransportPreview />);
+  it('P2P Fusion panel: gated (disabled) shows the reason, no round can start', () => {
+    const html = renderToStaticMarkup(
+      <P2pFusionTransportPreview
+        onStart={() => {}}
+        status={null}
+        busy={false}
+        disabled
+        disabledReason="Execution paused until wallet safety hardening ships."
+      />
+    );
 
     expect(html).toContain('P2P Fusion over Nostr');
-    expect(html).toContain('Start P2P round · unavailable');
-    expect(html).toContain('disabled');
-    expect(html).toContain('No round can start');
+    expect(html).toContain('Start P2P round');
+    expect(html).toContain('disabled'); // the button is disabled when gated
+    expect(html).toContain('Execution paused until wallet safety hardening ships.');
   });
 
   it('accepts only secure websocket relay drafts', () => {
