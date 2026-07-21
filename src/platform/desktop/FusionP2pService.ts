@@ -16,6 +16,7 @@
 // the chipnet execution path (isFusionExecutionAllowed); mainnet remains blocked.
 
 import { SimplePool } from 'nostr-tools';
+import { invoke } from '@tauri-apps/api/core';
 import { hexToBin } from '../../utils/hex';
 import ElectrumService from '../../services/ElectrumService';
 import { Network } from '../../state/slices/networkSlice';
@@ -57,6 +58,9 @@ export interface P2pFusionOptions {
   network: Network;
   utxos: UTXO[];
   relays?: string[];
+  /** Tor SOCKS proxy to route relay traffic through. REQUIRED — P2P fusion fails
+   *  closed without Tor, like classic CashFusion. */
+  tor: { host: string; port: number } | null;
   onStatus?: (msg: string) => void;
 }
 
@@ -91,8 +95,19 @@ export async function runP2pFusion(opts: P2pFusionOptions): Promise<RoundResult>
   if (!isFusionExecutionAllowed(opts.network)) {
     throw new Error('P2P fusion execution is paused on this network.');
   }
+  // Fail closed on Tor: P2P fusion must not touch a relay without Tor, so a peer's
+  // IP can't be correlated across its (round-key) inputs and (throwaway-key)
+  // outputs. Same requirement as classic CashFusion.
+  if (!opts.tor) {
+    throw new Error('Tor is required for P2P fusion — enable Tor in settings and wait for it to bootstrap.');
+  }
+  const torOk = await invoke<boolean>('fusion_tor_check', { host: opts.tor.host, port: opts.tor.port });
+  if (!torOk) {
+    throw new Error('Tor is not reachable — P2P fusion will not run without Tor.');
+  }
   const relays = opts.relays?.length ? opts.relays : DEFAULT_RELAYS;
   const status = opts.onStatus;
+  status?.('Tor verified; routing relay traffic over Tor.');
 
   // 1. Gather my inputs (with signing keys) and allocate fresh-HD tier outputs.
   const runInputs = await gatherInputs(opts.walletId, opts.utxos);
