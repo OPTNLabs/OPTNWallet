@@ -10,7 +10,6 @@
 import React, { useEffect, useState } from 'react';
 import { useDispatch, useSelector } from 'react-redux';
 import {
-  selectAutoFuseEnabled,
   selectCashFusionEnabled,
   selectFusionServer,
   selectFusionServers,
@@ -19,7 +18,6 @@ import {
   selectTorAuto,
   selectTorHost,
   selectTorPortManual,
-  setAutoFuseEnabled,
   setCashFusionEnabled,
   setFusionServer,
   addFusionServer,
@@ -68,7 +66,6 @@ const fusionExecutionReadiness = CURRENT_FUSION_EXECUTION_READINESS;
 // 'servers' = only the fusion-server list (rendered in the Servers panel).
 export const CashFusionSettings: React.FC<{ variant?: 'card' | 'servers' }> = ({ variant = 'card' }) => {
   const dispatch = useDispatch();
-  const autoFuseEnabled = useSelector(selectAutoFuseEnabled);
   const enabled = useSelector(selectCashFusionEnabled);
   const p2pFusionEnabled = useSelector(selectP2pFusionEnabled);
   const savedServer = useSelector(selectFusionServer);
@@ -324,26 +321,27 @@ export const CashFusionSettings: React.FC<{ variant?: 'card' | 'servers' }> = ({
           </p>
 
           <div className="rounded-lg border border-[var(--wallet-border)] px-3 py-2.5 space-y-3">
+            {/* Server and P2P are mutually exclusive (one on ⇒ other off). Whichever
+                is on auto-fuses on incoming/outgoing coins — no separate Auto Fuse. */}
             <div className="flex items-center justify-between gap-3">
               <div>
-                <p className="text-xs font-semibold wallet-text-strong">Auto Fuse</p>
+                <p className="text-xs font-semibold wallet-text-strong">Server Fusion</p>
                 <p className="text-[10px] wallet-muted leading-relaxed">
-                  Automatically queue eligible server-based fusion rounds when the
-                  wallet safety checks are ready. Enabled by default.
+                  Fuse via a CashFusion server (from the Servers card). Auto-fuses when on.
                 </p>
               </div>
               <button
                 type="button"
-                onClick={() => dispatch(setAutoFuseEnabled(!autoFuseEnabled))}
+                onClick={() => dispatch(setP2pFusionEnabled(false))}
                 className={`relative inline-flex h-5 w-9 shrink-0 items-center rounded-full border transition-colors ${
-                  autoFuseEnabled
+                  !p2pFusionEnabled
                     ? 'bg-[var(--wallet-accent)] border-[var(--wallet-accent)]'
                     : 'wallet-surface-strong border-[var(--wallet-border)]'
                 }`}
-                aria-label={`${autoFuseEnabled ? 'Disable' : 'Enable'} Auto Fuse`}
-                aria-pressed={autoFuseEnabled}
+                aria-label="Enable Server Fusion"
+                aria-pressed={!p2pFusionEnabled}
               >
-                <span className={`inline-block h-4 w-4 rounded-full bg-white shadow transition-transform ${autoFuseEnabled ? 'translate-x-4' : 'translate-x-0.5'}`} />
+                <span className={`inline-block h-4 w-4 rounded-full bg-white shadow transition-transform ${!p2pFusionEnabled ? 'translate-x-4' : 'translate-x-0.5'}`} />
               </button>
             </div>
 
@@ -351,19 +349,19 @@ export const CashFusionSettings: React.FC<{ variant?: 'card' | 'servers' }> = ({
               <div>
                 <p className="text-xs font-semibold wallet-text-strong">P2P Fusion</p>
                 <p className="text-[10px] wallet-muted leading-relaxed">
-                  Save your preference for Nostr-coordinated fusion. P2P rounds do
-                  not start until the relay transport and privacy checks are complete.
+                  Serverless — peers over Nostr + Tor. Auto-fuses when on. Turning this on
+                  turns Server Fusion off.
                 </p>
               </div>
               <button
                 type="button"
-                onClick={() => dispatch(setP2pFusionEnabled(!p2pFusionEnabled))}
+                onClick={() => dispatch(setP2pFusionEnabled(true))}
                 className={`relative inline-flex h-5 w-9 shrink-0 items-center rounded-full border transition-colors ${
                   p2pFusionEnabled
                     ? 'bg-[var(--wallet-accent)] border-[var(--wallet-accent)]'
                     : 'wallet-surface-strong border-[var(--wallet-border)]'
                 }`}
-                aria-label={`${p2pFusionEnabled ? 'Disable' : 'Enable'} P2P Fusion`}
+                aria-label="Enable P2P Fusion"
                 aria-pressed={p2pFusionEnabled}
               >
                 <span className={`inline-block h-4 w-4 rounded-full bg-white shadow transition-transform ${p2pFusionEnabled ? 'translate-x-4' : 'translate-x-0.5'}`} />
