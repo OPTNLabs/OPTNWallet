@@ -25,7 +25,7 @@ import { TorWebSocket, armTorRouting, disarmTorRouting } from './nostr/torWebSoc
 import ElectrumService from '../../services/ElectrumService';
 import { Network } from '../../state/slices/networkSlice';
 import type { UTXO } from '../../types/types';
-import { gatherInputs, allocateOutputs, chooseTier, type FusionServerParams } from './FusionService';
+import { gatherInputs, allocateOutputs, type FusionServerParams } from './FusionService';
 import { isFusionExecutionAllowed } from './FusionExecutionSafety';
 import { generateRoundIdentity, joinPool, type PoolAnnouncement } from './nostr/fusion';
 import { createNostrRoundTransport } from './nostr/fusionTransport';
@@ -140,7 +140,14 @@ export async function runP2pFusion(opts: P2pFusionOptions): Promise<RoundResult>
   // 1. Gather my inputs (with signing keys) and allocate fresh-HD tier outputs.
   const runInputs = await gatherInputs(opts.walletId, opts.utxos);
   const sumIn = runInputs.reduce((s, i) => s + i.value, 0);
-  const tier = chooseTier(sumIn, P2P_PARAMS);
+  // Pick the LARGEST affordable tier: k·tier then covers most of the balance so the
+  // leftover (excess) stays under one tier and within the fee bound. The smallest
+  // tier would leave a huge unallocatable excess for a large balance (the "excess
+  // not in [0, …]" error). Reserve ~1 tier for fees + change headroom.
+  const tier =
+    [...P2P_TIERS].sort((a, b) => b - a).find((t) => sumIn >= t * 2) ??
+    [...P2P_TIERS].sort((a, b) => b - a).find((t) => sumIn > t) ??
+    null;
   if (tier == null) throw new Error('Inputs too small for any P2P fusion tier.');
   status?.(`Chosen tier: ${tier} sats`);
   const alloc = await allocateOutputs(opts.walletId, opts.network, tier, runInputs, P2P_PARAMS);
