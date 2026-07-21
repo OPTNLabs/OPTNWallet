@@ -53,6 +53,13 @@ function spendKeyPath(network: Network): string {
   return getBchAddressPath(network, 0, BCH_STANDARD_BRANCH_INDEX.rpa, 1);
 }
 
+export function getRpaKeyPaths(network: Network): { scan: string; spend: string } {
+  return {
+    scan: scanKeyPath(network),
+    spend: spendKeyPath(network),
+  };
+}
+
 // ─── Paycode constants ────────────────────────────────────────────────────────
 
 // Prefix sizes (number of bits of scan_pubkey used as Electrum filter)
@@ -228,8 +235,9 @@ export async function deriveRpaKeys(
   passphrase: string,
   network: Network,
 ): Promise<RpaKeys> {
-  const scanPrivkey = await derivePrivateKeyAtPath(mnemonic, passphrase, scanKeyPath(network));
-  const spendPrivkey = await derivePrivateKeyAtPath(mnemonic, passphrase, spendKeyPath(network));
+  const paths = getRpaKeyPaths(network);
+  const scanPrivkey = await derivePrivateKeyAtPath(mnemonic, passphrase, paths.scan);
+  const spendPrivkey = await derivePrivateKeyAtPath(mnemonic, passphrase, paths.spend);
 
   const scanPub = secp256k1.derivePublicKeyCompressed(scanPrivkey);
   const spendPub = secp256k1.derivePublicKeyCompressed(spendPrivkey);

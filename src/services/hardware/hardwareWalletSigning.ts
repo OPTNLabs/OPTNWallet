@@ -42,8 +42,8 @@ type PathName = 'receive' | 'change' | 'defi';
 // can never drift from the canonical branch indices again — it previously
 // hardcoded 'defi' as branch 2 when the actual value is 7, which would have
 // derived the wrong signing key for any hardware-wallet request touching a
-// 'defi'-branch UTXO. Also now respects `network` for the coin type
-// (previously hardcoded 145' unconditionally, which is wrong on testnet).
+// 'defi'-branch UTXO. BCH coin type 145 is shared by mainnet and chipnet;
+// `network` still controls the extended-key and CashAddr encodings downstream.
 export function buildBip44Path(network: Network, pathName: PathName, addressIndex: number): string {
   return getBchAddressPath(network, 0, BCH_STANDARD_BRANCH_INDEX[pathName], addressIndex);
 }
