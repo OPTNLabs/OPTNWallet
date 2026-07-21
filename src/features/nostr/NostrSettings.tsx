@@ -1,6 +1,5 @@
-// Nostr chat settings (experimental). A toggle (off by default, like RPA and
-// CashFusion), the wallet's real Nostr identity, and the relay pool used for
-// chat + the P2P-fusion transport.
+// Default-on Nostr chat settings: the wallet's separate Nostr identity and the
+// relay pool used for chat plus the P2P-fusion transport.
 import React, { useCallback, useEffect, useState } from 'react';
 import { useDispatch, useSelector } from 'react-redux';
 import { MdAdd, MdKey, MdRefresh, MdRouter } from 'react-icons/md';
@@ -14,7 +13,10 @@ import {
   addNostrRelay,
   removeNostrRelay,
 } from '../../state/slices/experimentalSlice';
-import { myIdentity, checkRelayStatus } from '../../platform/desktop/nostr/chat';
+import {
+  myIdentity,
+  checkRelayStatus,
+} from '../../platform/desktop/nostr/chat';
 
 export const NostrSettings: React.FC = () => {
   const dispatch = useDispatch();
@@ -69,17 +71,21 @@ export const NostrSettings: React.FC = () => {
         <div>
           <p className="text-sm font-semibold wallet-text-strong">Nostr chat</p>
           <p className="mt-0.5 text-[11px] wallet-muted">
-            End-to-end encrypted DMs (NIP-17). Off by default.
+            End-to-end encrypted DMs using NIP-17.
           </p>
         </div>
         <button
           onClick={() => dispatch(setNostrChatEnabled(!enabled))}
           className={`relative inline-flex h-6 w-11 shrink-0 items-center rounded-full border transition-colors ${
-            enabled ? 'bg-[var(--wallet-accent)] border-[var(--wallet-accent)]' : 'wallet-surface-strong border-[var(--wallet-border)]'
+            enabled
+              ? 'bg-[var(--wallet-accent)] border-[var(--wallet-accent)]'
+              : 'wallet-surface-strong border-[var(--wallet-border)]'
           }`}
           aria-label={`${enabled ? 'Disable' : 'Enable'} Nostr chat`}
         >
-          <span className={`inline-block h-5 w-5 rounded-full bg-white shadow transition-transform ${enabled ? 'translate-x-5' : 'translate-x-0.5'}`} />
+          <span
+            className={`inline-block h-5 w-5 rounded-full bg-white shadow transition-transform ${enabled ? 'translate-x-5' : 'translate-x-0.5'}`}
+          />
         </button>
       </div>
 
@@ -92,9 +98,12 @@ export const NostrSettings: React.FC = () => {
                 <MdKey className="text-xl" aria-hidden="true" />
               </div>
               <div className="min-w-0 flex-1">
-                <p className="text-sm font-semibold wallet-text-strong">Nostr identity</p>
+                <p className="text-sm font-semibold wallet-text-strong">
+                  Nostr identity
+                </p>
                 <p className="mt-1 text-[11px] leading-relaxed wallet-muted">
-                  Derived from your seed via NIP-06 (a separate path) — your spending keys are never reused.
+                  Derived from your seed via NIP-06 (a separate path) — your
+                  spending keys are never reused.
                 </p>
                 <div className="mt-3 rounded-lg border border-[var(--wallet-border)] px-3 py-2 font-mono text-[10px] break-all wallet-text-strong">
                   {npub ?? idErr ?? 'Deriving…'}
@@ -106,11 +115,17 @@ export const NostrSettings: React.FC = () => {
           {/* Relays */}
           <section className="space-y-3 rounded-xl border border-[var(--wallet-border)] bg-[var(--wallet-surface)] p-4">
             <div className="flex items-start gap-3">
-              <MdRouter className="mt-0.5 shrink-0 text-xl text-[var(--wallet-accent)]" aria-hidden="true" />
+              <MdRouter
+                className="mt-0.5 shrink-0 text-xl text-[var(--wallet-accent)]"
+                aria-hidden="true"
+              />
               <div className="min-w-0 flex-1">
-                <p className="text-sm font-semibold wallet-text-strong">Relays</p>
+                <p className="text-sm font-semibold wallet-text-strong">
+                  Relays
+                </p>
                 <p className="mt-1 text-[11px] leading-relaxed wallet-muted">
-                  WSS relays used for chat and the P2P-fusion transport. Add your own or use the defaults.
+                  WSS relays used for chat and the P2P-fusion transport. Add
+                  your own or use the defaults.
                 </p>
               </div>
               <button
@@ -120,8 +135,13 @@ export const NostrSettings: React.FC = () => {
                 className="flex shrink-0 items-center gap-1 rounded-lg border border-[var(--wallet-border)] px-2 py-1 text-[10px] font-semibold wallet-text-strong disabled:opacity-50"
                 aria-label="Check relay status"
               >
-                <MdRefresh className={checking ? 'animate-spin' : ''} aria-hidden="true" />
-                {checking ? 'Checking…' : `${activeCount}/${relays.length} active`}
+                <MdRefresh
+                  className={checking ? 'animate-spin' : ''}
+                  aria-hidden="true"
+                />
+                {checking
+                  ? 'Checking…'
+                  : `${activeCount}/${relays.length} active`}
               </button>
             </div>
 
@@ -129,14 +149,29 @@ export const NostrSettings: React.FC = () => {
               {relays.map((url) => {
                 const online = relayStatus[url];
                 return (
-                  <div key={url} className="flex items-center justify-between gap-3 rounded-lg border border-[var(--wallet-border)] px-3 py-2">
+                  <div
+                    key={url}
+                    className="flex items-center justify-between gap-3 rounded-lg border border-[var(--wallet-border)] px-3 py-2"
+                  >
                     <span
                       className={`h-2 w-2 shrink-0 rounded-full ${
-                        online === undefined ? 'bg-[var(--wallet-border)]' : online ? 'bg-green-400' : 'bg-red-400/70'
+                        online === undefined
+                          ? 'bg-[var(--wallet-border)]'
+                          : online
+                            ? 'bg-green-400'
+                            : 'bg-red-400/70'
                       }`}
-                      title={online === undefined ? 'unknown' : online ? 'connected' : 'unreachable'}
+                      title={
+                        online === undefined
+                          ? 'unknown'
+                          : online
+                            ? 'connected'
+                            : 'unreachable'
+                      }
                     />
-                    <p className="min-w-0 flex-1 truncate font-mono text-[10px] wallet-text-strong">{url}</p>
+                    <p className="min-w-0 flex-1 truncate font-mono text-[10px] wallet-text-strong">
+                      {url}
+                    </p>
                     <button
                       onClick={() => dispatch(removeNostrRelay(url))}
                       className="shrink-0 px-1 text-[10px] text-red-400/70 hover:text-red-400"
@@ -168,14 +203,17 @@ export const NostrSettings: React.FC = () => {
                   Add
                 </button>
               </div>
-              {draftError ? <p className="mt-2 text-[10px] text-red-400">{draftError}</p> : null}
+              {draftError ? (
+                <p className="mt-2 text-[10px] text-red-400">{draftError}</p>
+              ) : null}
             </div>
           </section>
 
           <section className="rounded-xl border border-yellow-400/20 bg-yellow-400/5 px-3 py-2.5">
             <p className="text-[10px] leading-relaxed text-yellow-400/90">
-              Relay operators can still observe connection metadata, timing, and recipient tags.
-              Encrypted content is not the same as network anonymity.
+              Relay operators can still observe connection metadata, timing, and
+              recipient tags. Encrypted content is not the same as network
+              anonymity.
             </p>
           </section>
         </>
