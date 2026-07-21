@@ -402,7 +402,7 @@ export const ServerSettings: React.FC = () => {
           everything network/server related. */}
       <div className="flex flex-col gap-2 border-t border-[var(--wallet-border)] pt-4">
         <p className="text-xs font-semibold wallet-muted uppercase tracking-wide">CashFusion &amp; Tor</p>
-        <CashFusionSettings />
+        <CashFusionSettings variant="servers" />
       </div>
     </div>
   );

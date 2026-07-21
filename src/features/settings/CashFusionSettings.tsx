@@ -64,7 +64,9 @@ function isLocalHost(host: string): boolean {
 const satsToBch = (sats: number) => (sats / 1e8).toLocaleString(undefined, { maximumFractionDigits: 8 });
 const fusionExecutionReadiness = CURRENT_FUSION_EXECUTION_READINESS;
 
-export const CashFusionSettings: React.FC = () => {
+// variant 'card' = the CashFusion toggles + fuse actions (CashFusion app entry);
+// 'servers' = only the fusion-server list (rendered in the Servers panel).
+export const CashFusionSettings: React.FC<{ variant?: 'card' | 'servers' }> = ({ variant = 'card' }) => {
   const dispatch = useDispatch();
   const autoFuseEnabled = useSelector(selectAutoFuseEnabled);
   const enabled = useSelector(selectCashFusionEnabled);
@@ -258,6 +260,7 @@ export const CashFusionSettings: React.FC = () => {
   return (
     <div className="flex flex-col gap-4">
 
+      {variant === 'card' && (<>
       {/* Protocol summary */}
       <div className="rounded-xl border border-blue-400/20 bg-blue-400/5 p-3 space-y-1.5">
         <div className="flex items-center gap-2">
@@ -416,10 +419,11 @@ export const CashFusionSettings: React.FC = () => {
           </div>
         )}
       </div>
+      </>)}
 
-      {/* Fusion servers + phase note only show when CashFusion is enabled, so
-          disabling the toggle retracts the whole configuration. */}
-      {enabled && (
+      {/* Fusion server list — lives in the Servers panel (variant='servers'),
+          shown regardless of the enable toggle (which is on the CashFusion card). */}
+      {variant === 'servers' && (
         <>
       {/* Fusion servers — one unified list, like the Electrum pool. Click a row
           to select it, then Query. Your own servers can be removed. Tor config
@@ -570,16 +574,18 @@ export const CashFusionSettings: React.FC = () => {
           beats being spread thin. Add your own or a community server above.
         </p>
       </div>
-
-      {/* Experimental note */}
-      <div className="rounded-xl border border-yellow-400/20 bg-yellow-400/5 px-3 py-2">
-        <p className="text-[10px] text-yellow-400/80 leading-relaxed">
-          Experimental. Both the server path and P2P Fusion run real CoinJoins on any
-          network. Some wallet-hardening items are still pending (see the CashFusion card),
-          but each round verifies your own outputs before signing, so it fails safe.
-        </p>
-      </div>
         </>
+      )}
+
+      {/* Experimental note (CashFusion card only) */}
+      {variant === 'card' && enabled && (
+        <div className="rounded-xl border border-yellow-400/20 bg-yellow-400/5 px-3 py-2">
+          <p className="text-[10px] text-yellow-400/80 leading-relaxed">
+            Experimental. Both the server path and P2P Fusion run real CoinJoins on any
+            network. Some wallet-hardening items are still pending, but each round verifies
+            your own outputs before signing, so it fails safe.
+          </p>
+        </div>
       )}
 
     </div>
