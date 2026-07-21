@@ -218,6 +218,45 @@ export async function publishMyProfile(
 // are shown instantly, rather than reconstructed from relays every session.
 const CHAT_STORE_KEY = (pubkey: string) => `nostr-chat:${pubkey}`;
 
+/**
+ * Check which relays are reachable right now by opening a WebSocket to each.
+ * Returns a url→online map. Used to show live relay status and to auto-pick the
+ * relays that actually work.
+ */
+export function checkRelayStatus(
+  relays: string[],
+  timeoutMs = 4000
+): Promise<Record<string, boolean>> {
+  return Promise.all(
+    relays.map(
+      (url) =>
+        new Promise<[string, boolean]>((resolve) => {
+          let done = false;
+          let ws: WebSocket | null = null;
+          const finish = (ok: boolean) => {
+            if (done) return;
+            done = true;
+            try {
+              ws?.close();
+            } catch {
+              /* ignore */
+            }
+            resolve([url, ok]);
+          };
+          try {
+            ws = new WebSocket(url);
+          } catch {
+            resolve([url, false]);
+            return;
+          }
+          ws.onopen = () => finish(true);
+          ws.onerror = () => finish(false);
+          setTimeout(() => finish(false), timeoutMs);
+        })
+    )
+  ).then((entries) => Object.fromEntries(entries));
+}
+
 /** Load this identity's saved messages (contacts derive from them). */
 export async function loadStoredMessages(pubkey: string): Promise<ChatMessage[]> {
   try {
