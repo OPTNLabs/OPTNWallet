@@ -84,6 +84,7 @@ export const CashFusionSettings: React.FC = () => {
   const [fuseMsg, setFuseMsg] = useState<string | null>(null);
   const [p2pState, setP2pState] = useState<'idle' | 'fusing' | 'done' | 'fail'>('idle');
   const [p2pMsg, setP2pMsg] = useState<string | null>(null);
+  const [p2pPhase, setP2pPhase] = useState(0);
 
   // Start from the saved server only if it belongs to the current network's
   // pool; otherwise fall back to the network default (list head) so switching to
@@ -193,6 +194,7 @@ export const CashFusionSettings: React.FC = () => {
   const handleP2pFuse = async () => {
     setP2pState('fusing');
     setP2pMsg(null);
+    setP2pPhase(0);
     try {
       const utxos = (Object.values(reduxUtxos).flat() as UTXO[]).filter((u) => !u.token);
       if (utxos.length === 0) throw new Error('No spendable (non-token) UTXOs to fuse.');
@@ -203,6 +205,7 @@ export const CashFusionSettings: React.FC = () => {
         utxos,
         tor: tor ?? null,
         onStatus: (m) => setP2pMsg(m),
+        onPhase: (p) => setP2pPhase(p),
       });
       setP2pState('done');
       setP2pMsg(`Fused ✓ — txid ${result.txid}`);
@@ -403,6 +406,7 @@ export const CashFusionSettings: React.FC = () => {
               <P2pFusionTransportPreview
                 onStart={() => void handleP2pFuse()}
                 status={p2pMsg}
+                phase={p2pPhase}
                 busy={p2pState === 'fusing'}
                 disabled={walletId <= 0}
                 disabledReason={walletId <= 0 ? 'Open a wallet to run a P2P round.' : undefined}
