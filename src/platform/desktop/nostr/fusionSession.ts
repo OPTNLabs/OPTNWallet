@@ -47,6 +47,8 @@ export interface RoundParams {
   /** Broadcast the final raw tx, returning its txid. Coordinator only. */
   broadcast: (txHex: string) => Promise<string>;
   timeoutMs?: number;
+  /** Live round-phase updates (2=register, 3=assemble/verify, 4=sign, 5=broadcast). */
+  onPhase?: (phase: number) => void;
 }
 
 export interface RoundResult {
@@ -95,9 +97,12 @@ async function runParticipant(
       try {
         if (from !== coordinator || msg.session !== session) return;
         if (msg.type === 'assembled') {
+          params.onPhase?.(3); // assembling & verifying my stake
           const sigs = assembleVerifySign(params, msg.inputs, msg.outputs);
+          params.onPhase?.(4); // signing my inputs
           await transport.send(coordinator, { type: 'signature', session, sigs });
         } else if (msg.type === 'final') {
+          params.onPhase?.(5); // broadcast
           unsub();
           resolve({ txid: msg.txid, txHex: msg.txHex });
         }
@@ -109,6 +114,7 @@ async function runParticipant(
   });
 
   // Register inputs (pool identity) and outputs (fresh key/circuit in prod).
+  params.onPhase?.(2); // registering inputs + outputs
   await transport.send(coordinator, { type: 'inputs', session, inputs: params.myContribution.inputs });
   await transport.send(coordinator, { type: 'outputs', session, outputs: params.myContribution.outputs });
 
@@ -124,6 +130,7 @@ async function runCoordinator(params: RoundParams, transport: RoundTransport): P
   const outputPool: FusionOutputRef[] = [...params.myContribution.outputs];
   let outputMsgs = 1; // ours
   const sigsByOutpoint = new Map<string, InputSig>();
+  params.onPhase?.(2); // registering / collecting peers' inputs + outputs
 
   const done = new Promise<RoundResult>((resolve, reject) => {
     let assembled: { inputs: FusionInputRef[]; outputs: FusionOutputRef[] } | null = null;
@@ -134,8 +141,10 @@ async function runCoordinator(params: RoundParams, transport: RoundTransport): P
       const inputs = totalInputs();
       const outputs = outputPool;
       assembled = { inputs, outputs };
+      params.onPhase?.(3); // assembling & verifying
       // The coordinator must verify its OWN stake and sign its OWN inputs too.
       const mySigs = assembleVerifySign(params, inputs, outputs);
+      params.onPhase?.(4); // signing
       mySigs.forEach((s) => sigsByOutpoint.set(`${s.prevTxid}:${s.prevIndex}`, s));
       await Promise.all(others.map((p) => transport.send(p, { type: 'assembled', session, inputs, outputs })));
     };
@@ -154,6 +163,7 @@ async function runCoordinator(params: RoundParams, transport: RoundTransport): P
         } else if (msg.type === 'signature') {
           msg.sigs.forEach((s) => sigsByOutpoint.set(`${s.prevTxid}:${s.prevIndex}`, s));
           if (assembled && sigsByOutpoint.size >= assembled.inputs.length) {
+            params.onPhase?.(5); // broadcast
             const tx = assembleFusionTx([assembled]);
             const { txHex } = finalizeFusionTx(tx, [...sigsByOutpoint.values()]);
             const broadcastId = await params.broadcast(txHex);

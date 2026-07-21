@@ -36,6 +36,7 @@ describe('Nostr UI safety', () => {
       <P2pFusionTransportPreview
         onStart={() => {}}
         status={null}
+        phase={0}
         busy={false}
         disabled
         disabledReason="Execution paused until wallet safety hardening ships."
