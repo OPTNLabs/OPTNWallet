@@ -112,7 +112,15 @@ export async function sendDirectMessage(
   // wrapManyEvents prepends a self-addressed copy, so the sender's own messages
   // show up on their relays too.
   const wraps = wrapManyEvents(id.secretKey, [{ publicKey: recipientHex }], text);
-  await Promise.allSettled(wraps.flatMap((w) => getPool().publish(targets, w as Event)));
+  const results = await Promise.allSettled(wraps.flatMap((w) => getPool().publish(targets, w as Event)));
+  // Surface total failure (offline / all relays refused) instead of silently
+  // "sending" nothing — the usual cause of a message that never appears.
+  if (results.length > 0 && !results.some((r) => r.status === 'fulfilled')) {
+    const reason = results.find((r): r is PromiseRejectedResult => r.status === 'rejected');
+    throw new Error(
+      `No relay accepted the message${reason ? `: ${String(reason.reason)}` : ''}. Check your connection or relays.`
+    );
+  }
 }
 
 /** Advertise where WE read DMs (kind 10050), so peers' sends reach us. */
