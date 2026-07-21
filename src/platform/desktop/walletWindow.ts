@@ -14,10 +14,14 @@ export async function openWalletPickerWindow(): Promise<void> {
   const label = `wallet-${Date.now()}`;
   // Reuse the running window's origin/path so this works in dev (localhost:5173)
   // and in the packaged app (tauri.localhost) without special-casing either; the
-  // hash carries the route because the app uses HashRouter.
+  // hash carries the route because the app uses HashRouter. The ?instance query
+  // carries this window's storage-partition id (storagePartition.ts reads it) —
+  // it's in the URL rather than derived from the Tauri window label at runtime, so
+  // it's reliable at entry-prelude time and survives reloads (keeping each window
+  // on its OWN persisted wallet state).
   const base = `${window.location.origin}${window.location.pathname}`;
   const win = new WebviewWindow(label, {
-    url: `${base}#${ROUTE_PATHS.landing}`,
+    url: `${base}?instance=${encodeURIComponent(label)}#${ROUTE_PATHS.landing}`,
     title: 'OPTN Wallet',
     width: 460,
     height: 860,
