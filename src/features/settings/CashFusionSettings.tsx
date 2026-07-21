@@ -163,10 +163,14 @@ export const CashFusionSettings: React.FC = () => {
 
       // P2P path: no server — meet peers on Nostr and run the round peer-to-peer.
       if (p2pFusionEnabled) {
+        // Tor is mandatory for P2P fusion. Resolve the SOCKS proxy (non-local host
+        // forces resolution) and fail closed below if it isn't available.
+        const tor = await currentTorConfig('nostr-relay');
         const result = await runP2pFusion({
           walletId,
           network: currentNetwork,
           utxos,
+          tor: tor ?? null,
           onStatus: (m) => setFuseMsg(m),
         });
         setFuseState('done');
