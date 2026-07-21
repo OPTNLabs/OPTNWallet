@@ -12,6 +12,7 @@
 
 import { SimplePool, finalizeEvent, nip19, type Event } from 'nostr-tools';
 import { wrapManyEvents, unwrapEvent } from 'nostr-tools/nip17';
+import { get as idbGet, set as idbSet } from 'idb-keyval';
 import WalletManager from '../../../apis/WalletManager/WalletManager';
 import { deriveNostrIdentity, type NostrIdentity } from './identity';
 
@@ -209,4 +210,29 @@ export async function publishMyProfile(
     id.secretKey
   );
   await Promise.allSettled(getPool().publish(relays, evt));
+}
+
+// --- Local persistence (chat history saved in the wallet, Paytaca-style) ---
+// Keyed by the wallet's Nostr pubkey in the shared idb-keyval store (same store as
+// the wallet DB), so each wallet's conversations + contacts survive restarts and
+// are shown instantly, rather than reconstructed from relays every session.
+const CHAT_STORE_KEY = (pubkey: string) => `nostr-chat:${pubkey}`;
+
+/** Load this identity's saved messages (contacts derive from them). */
+export async function loadStoredMessages(pubkey: string): Promise<ChatMessage[]> {
+  try {
+    const stored = await idbGet(CHAT_STORE_KEY(pubkey));
+    return Array.isArray(stored) ? (stored as ChatMessage[]) : [];
+  } catch {
+    return [];
+  }
+}
+
+/** Persist this identity's messages (best-effort). */
+export async function storeMessages(pubkey: string, messages: ChatMessage[]): Promise<void> {
+  try {
+    await idbSet(CHAT_STORE_KEY(pubkey), messages);
+  } catch {
+    /* best-effort — a storage failure shouldn't break chat */
+  }
 }
