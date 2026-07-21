@@ -11,8 +11,7 @@ import {
   type TransactionCommon,
 } from '@bitauth/libauth';
 import { hash160 } from '@cashscript/utils';
-import { createNostrRoundTransport } from '../fusionTransport';
-import { ROUND_MESSAGE_KIND } from '../fusion';
+import { createNostrRoundTransport, GIFT_WRAP_KIND } from '../fusionTransport';
 import { runFusionRound, type RoundParams } from '../fusionSession';
 import { assembleFusionTx, type PeerContribution } from '../fusionRound';
 import { toLibauthTx } from '../fusionSign';
@@ -58,7 +57,7 @@ function roundId() {
 }
 
 describe('Nostr round transport', () => {
-  it('encrypts a message to the peer, on a dedicated kind, and round-trips', async () => {
+  it('gift-wraps a message (kind 1059) to the peer and round-trips', async () => {
     const relays = ['wss://fake'];
     const pool = new FakePool();
     const a = roundId();
@@ -74,9 +73,9 @@ describe('Nostr round transport', () => {
     expect(got).toHaveLength(1);
     expect(got[0].from).toBe(a.pubkey); // inputs are attributable to the round identity
     expect(got[0].type).toBe('inputs');
-    // The published event uses the dedicated fusion kind, not chat's gift-wrap.
-    // (verified indirectly: tb only subscribes to ROUND_MESSAGE_KIND and received it)
-    expect(ROUND_MESSAGE_KIND).toBe(22231);
+    // Standard NIP-59 gift-wrap — indistinguishable on the wire from a chat DM,
+    // not a custom fusion kind that would fingerprint the round.
+    expect(GIFT_WRAP_KIND).toBe(1059);
   });
 
   it('signs OUTPUT messages with a throwaway key (unlinkable from the round identity)', async () => {
