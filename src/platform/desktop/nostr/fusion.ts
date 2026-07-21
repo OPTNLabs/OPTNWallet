@@ -20,7 +20,9 @@ import { SimplePool, finalizeEvent, generateSecretKey, getPublicKey, type Event 
 
 /** Kind for the public pool-ready announcement (00-Wallet convention). */
 export const POOL_ANNOUNCE_KIND = 22230;
-/** Kind for gift-wrapped per-round peer messages (added with the round protocol). */
+/** 00-Wallet's NOSTR_KIND_JOINER, reserved. Round messages themselves ride
+ *  standard NIP-59 gift-wrap (kind 1059) — see fusionTransport.ts — so they're
+ *  indistinguishable on the wire from chat DMs rather than a fingerprintable kind. */
 export const ROUND_MESSAGE_KIND = 22231;
 
 /** Max random delay before announcing, so join timing can't fingerprint a peer. */
