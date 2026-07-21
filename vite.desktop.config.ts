@@ -29,7 +29,11 @@ function injectDesktopStylesPlugin(): Plugin {
         const cssPath = resolvePath(__dirname, 'src/platform/desktop/desktop.css');
         const httpBridgePath = resolvePath(__dirname, 'src/platform/desktop/http-bridge.ts');
         const loggerPath = resolvePath(__dirname, 'src/platform/desktop/logger.ts');
+        // Must run BEFORE state/store.ts configures localForage, so per-window
+        // storage partitioning is in place when the persist store is created.
+        const storagePartitionPath = resolvePath(__dirname, 'src/platform/desktop/storagePartition.ts');
         const prelude =
+          `import ${JSON.stringify(storagePartitionPath)};\n` +
           `import ${JSON.stringify(httpBridgePath)};\n` +
           `import ${JSON.stringify(cssPath)};\n` +
           `import { initLogger } from ${JSON.stringify(loggerPath)}; initLogger();\n`;
