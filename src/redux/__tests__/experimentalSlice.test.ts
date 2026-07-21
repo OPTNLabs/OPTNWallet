@@ -3,9 +3,11 @@ import { describe, expect, it } from 'vitest';
 import reducer, {
   normalizeExperimentalPersistedState,
   selectAutoFuseEnabled,
+  selectNostrChatEnabled,
   selectP2pFusionEnabled,
   setAutoFuseEnabled,
   setCashFusionEnabled,
+  setNostrChatEnabled,
   setP2pFusionEnabled,
 } from '../../state/slices/experimentalSlice';
 
@@ -16,7 +18,9 @@ describe('experimentalSlice CashFusion preferences', () => {
     expect(state.autoFuseEnabled).toBe(true);
     expect(state.p2pFusionEnabled).toBe(false);
     expect(selectAutoFuseEnabled({ experimental: state } as never)).toBe(true);
-    expect(selectP2pFusionEnabled({ experimental: state } as never)).toBe(false);
+    expect(selectP2pFusionEnabled({ experimental: state } as never)).toBe(
+      false
+    );
   });
 
   it('preserves an explicit Auto Fuse choice when CashFusion is later re-enabled', () => {
@@ -56,6 +60,41 @@ describe('experimentalSlice CashFusion preferences', () => {
     expect(restored).toMatchObject({
       autoFuseEnabled: false,
       p2pFusionEnabled: true,
+    });
+  });
+});
+
+describe('experimentalSlice Nostr chat preferences', () => {
+  it('defaults Nostr chat on', () => {
+    const state = reducer(undefined, { type: 'unknown' });
+
+    expect(state.nostrChatEnabled).toBe(true);
+    expect(selectNostrChatEnabled({ experimental: state } as never)).toBe(true);
+  });
+
+  it('migrates the old default-off value to on exactly once', () => {
+    const restored = normalizeExperimentalPersistedState({
+      nostrChatEnabled: false,
+    });
+
+    expect(restored).toMatchObject({
+      nostrChatEnabled: true,
+      nostrChatDefaultOnApplied: true,
+    });
+  });
+
+  it('preserves a later explicit opt-out after the default-on migration', () => {
+    let state = reducer(undefined, setNostrChatEnabled(false));
+    state = {
+      ...state,
+      nostrChatDefaultOnApplied: true,
+    };
+
+    const restored = normalizeExperimentalPersistedState(state);
+
+    expect(restored).toMatchObject({
+      nostrChatEnabled: false,
+      nostrChatDefaultOnApplied: true,
     });
   });
 });

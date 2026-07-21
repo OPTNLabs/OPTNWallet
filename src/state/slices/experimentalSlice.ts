@@ -15,7 +15,9 @@ const DEFAULT_FUSION_SERVERS: Record<string, string> = {
   mainnet: DEFAULT_FUSION_SERVER,
   chipnet: 'chipnet.bch.ninja:8789',
 };
-const KNOWN_DEFAULT_FUSION_SERVERS = new Set(Object.values(DEFAULT_FUSION_SERVERS));
+const KNOWN_DEFAULT_FUSION_SERVERS = new Set(
+  Object.values(DEFAULT_FUSION_SERVERS)
+);
 
 // Starter Nostr relays for chat + the P2P-fusion transport. Plain WSS, opened
 // directly by the WebView. Users can add their own.
@@ -29,8 +31,11 @@ const DEFAULT_NOSTR_RELAYS = [
 interface ExperimentalState {
   rpaEnabled: boolean;
   cashFusionEnabled: boolean;
-  // Nostr chat is an experimental feature, off by default like RPA/CashFusion.
   nostrChatEnabled: boolean;
+  // One-time migration marker: legacy persisted state stored the old default
+  // as `false`. Once migrated to the new default-on behavior, an explicit user
+  // opt-out must remain respected on later launches.
+  nostrChatDefaultOnApplied: boolean;
   nostrRelays: string[];
   // Automatic server-based fusion is opt-out once CashFusion is enabled. This
   // is separate from the still-unimplemented P2P/Nostr transport below.
@@ -52,7 +57,8 @@ interface ExperimentalState {
 const initialState: ExperimentalState = {
   rpaEnabled: false,
   cashFusionEnabled: false,
-  nostrChatEnabled: false,
+  nostrChatEnabled: true,
+  nostrChatDefaultOnApplied: true,
   nostrRelays: DEFAULT_NOSTR_RELAYS,
   autoFuseEnabled: true,
   p2pFusionEnabled: false,
@@ -76,12 +82,20 @@ const initialState: ExperimentalState = {
 export function normalizeExperimentalPersistedState(
   state: unknown
 ): Record<string, unknown> | undefined {
-  if (!state || typeof state !== 'object' || Array.isArray(state)) return undefined;
+  if (!state || typeof state !== 'object' || Array.isArray(state))
+    return undefined;
+
+  const persisted = state as Record<string, unknown>;
+  const defaultOnAlreadyApplied = persisted.nostrChatDefaultOnApplied === true;
 
   return {
     autoFuseEnabled: true,
     p2pFusionEnabled: false,
-    ...(state as Record<string, unknown>),
+    ...persisted,
+    nostrChatEnabled: defaultOnAlreadyApplied
+      ? persisted.nostrChatEnabled !== false
+      : true,
+    nostrChatDefaultOnApplied: true,
   };
 }
 
@@ -104,12 +118,17 @@ const experimentalSlice = createSlice({
     },
     addNostrRelay(state, action: PayloadAction<string>) {
       const relay = action.payload.trim();
-      if (!Array.isArray(state.nostrRelays)) state.nostrRelays = [...DEFAULT_NOSTR_RELAYS];
-      if (relay && !state.nostrRelays.includes(relay)) state.nostrRelays.push(relay);
+      if (!Array.isArray(state.nostrRelays))
+        state.nostrRelays = [...DEFAULT_NOSTR_RELAYS];
+      if (relay && !state.nostrRelays.includes(relay))
+        state.nostrRelays.push(relay);
     },
     removeNostrRelay(state, action: PayloadAction<string>) {
-      if (!Array.isArray(state.nostrRelays)) state.nostrRelays = [...DEFAULT_NOSTR_RELAYS];
-      state.nostrRelays = state.nostrRelays.filter((r) => r !== action.payload.trim());
+      if (!Array.isArray(state.nostrRelays))
+        state.nostrRelays = [...DEFAULT_NOSTR_RELAYS];
+      state.nostrRelays = state.nostrRelays.filter(
+        (r) => r !== action.payload.trim()
+      );
     },
     setAutoFuseEnabled(state, action: PayloadAction<boolean>) {
       state.autoFuseEnabled = action.payload;
@@ -125,7 +144,9 @@ const experimentalSlice = createSlice({
       // State persisted before fusionServers existed rehydrates without this
       // array; initialise it so a push can't throw on it.
       if (!Array.isArray(state.fusionServers)) {
-        state.fusionServers = state.fusionServer ? [state.fusionServer] : [DEFAULT_FUSION_SERVER];
+        state.fusionServers = state.fusionServer
+          ? [state.fusionServer]
+          : [DEFAULT_FUSION_SERVER];
       }
       if (server && !state.fusionServers.includes(server)) {
         state.fusionServers.push(server);
@@ -134,7 +155,9 @@ const experimentalSlice = createSlice({
     removeFusionServer(state, action: PayloadAction<string>) {
       const server = normalizeServer(action.payload);
       if (!Array.isArray(state.fusionServers)) {
-        state.fusionServers = state.fusionServer ? [state.fusionServer] : [DEFAULT_FUSION_SERVER];
+        state.fusionServers = state.fusionServer
+          ? [state.fusionServer]
+          : [DEFAULT_FUSION_SERVER];
       }
       state.fusionServers = state.fusionServers.filter((s) => s !== server);
       // Never leave the selected server pointing at something no longer in the list.
@@ -185,10 +208,12 @@ function migrateDeadServer(server: string): string {
   return server.startsWith(DEAD_FUSION_SERVER) ? DEFAULT_FUSION_SERVER : server;
 }
 
-export const selectRpaEnabled = (state: RootState) => state.experimental.rpaEnabled;
-export const selectCashFusionEnabled = (state: RootState) => state.experimental.cashFusionEnabled;
+export const selectRpaEnabled = (state: RootState) =>
+  state.experimental.rpaEnabled;
+export const selectCashFusionEnabled = (state: RootState) =>
+  state.experimental.cashFusionEnabled;
 export const selectNostrChatEnabled = (state: RootState) =>
-  state.experimental.nostrChatEnabled === true;
+  state.experimental.nostrChatEnabled !== false;
 export const selectNostrRelays = createSelector(
   [(state: RootState) => state.experimental.nostrRelays],
   (relays): string[] =>
@@ -214,21 +239,28 @@ export const selectFusionServers = createSelector(
     (state: RootState) => state.network.currentNetwork,
   ],
   (list, single, network): string[] => {
-    const networkDefault = DEFAULT_FUSION_SERVERS[network] ?? DEFAULT_FUSION_SERVER;
-    const persisted = (list && list.length > 0 ? list : [single || DEFAULT_FUSION_SERVER]).map(
-      migrateDeadServer
-    );
+    const networkDefault =
+      DEFAULT_FUSION_SERVERS[network] ?? DEFAULT_FUSION_SERVER;
+    const persisted = (
+      list && list.length > 0 ? list : [single || DEFAULT_FUSION_SERVER]
+    ).map(migrateDeadServer);
     // The current network's default leads; genuine user additions (anything not
     // a known network default) are preserved so they survive network switches,
     // while the OTHER network's default is dropped from this network's pool.
-    const userAdded = persisted.filter((s) => !KNOWN_DEFAULT_FUSION_SERVERS.has(s));
+    const userAdded = persisted.filter(
+      (s) => !KNOWN_DEFAULT_FUSION_SERVERS.has(s)
+    );
     return Array.from(new Set([networkDefault, ...userAdded]));
   }
 );
-export const selectTorEnabled = (state: RootState) => state.experimental.torEnabled !== false;
-export const selectTorAuto = (state: RootState) => state.experimental.torAuto !== false;
-export const selectTorHost = (state: RootState) => state.experimental.torHost ?? '127.0.0.1';
-export const selectTorPortManual = (state: RootState) => state.experimental.torPortManual ?? 9050;
+export const selectTorEnabled = (state: RootState) =>
+  state.experimental.torEnabled !== false;
+export const selectTorAuto = (state: RootState) =>
+  state.experimental.torAuto !== false;
+export const selectTorHost = (state: RootState) =>
+  state.experimental.torHost ?? '127.0.0.1';
+export const selectTorPortManual = (state: RootState) =>
+  state.experimental.torPortManual ?? 9050;
 // Undefined (older persisted state) counts as enabled — Quantumroot is on by default.
 export const selectQuantumrootEnabled = (state: RootState) =>
   state.experimental.quantumrootEnabled !== false;
