@@ -40,6 +40,10 @@ vi.mock('../../workers/UTXOWorkerService', () => ({
   requestUTXORefreshForMany: requestRefreshMock,
 }));
 
+vi.mock('../WalletBackendSyncService', () => ({
+  default: { observeTransaction: vi.fn() },
+}));
+
 vi.mock('../../state/store', () => ({
   store: {
     getState: vi.fn(() => ({ wallet_id: { currentWalletId: 11 } })),
@@ -67,6 +71,61 @@ describe('TransactionService.sendTransaction', () => {
     expect(trackAttemptMock).not.toHaveBeenCalled();
     expect(removeMock).toHaveBeenCalledWith('tracked:00aa');
     expect(requestRefreshMock).not.toHaveBeenCalled();
+  });
+
+  it('allows a new send when the syncing transaction reserved different inputs', async () => {
+    listActiveMock.mockResolvedValue([
+      {
+        txid: 'old',
+        spentOutpoints: [{ tx_hash: 'old-input', tx_pos: 0 }],
+      },
+    ]);
+    sendTransactionMock.mockResolvedValue({
+      txid: 'new-txid',
+      errorMessage: null,
+      broadcastState: 'broadcasted',
+    });
+
+    const { default: TransactionService } = await import('../TransactionService');
+    const result = await TransactionService.sendTransaction(
+      '00bb',
+      [
+        {
+          tx_hash: 'new-input',
+          tx_pos: 1,
+          address: 'bchtest:qnew',
+          value: 50_000,
+        } as never,
+      ]
+    );
+
+    expect(result.txid).toBe('new-txid');
+    expect(sendTransactionMock).toHaveBeenCalledWith('00bb');
+  });
+
+  it('keeps the send lock when the new transaction reuses a reserved input', async () => {
+    listActiveMock.mockResolvedValue([
+      {
+        txid: 'old',
+        spentOutpoints: [{ tx_hash: 'same-input', tx_pos: 2 }],
+      },
+    ]);
+
+    const { default: TransactionService } = await import('../TransactionService');
+    const result = await TransactionService.sendTransaction(
+      '00cc',
+      [
+        {
+          tx_hash: 'same-input',
+          tx_pos: 2,
+          address: 'bchtest:qsame',
+          value: 50_000,
+        } as never,
+      ]
+    );
+
+    expect(result.errorMessage).toContain('already using one of these UTXOs');
+    expect(sendTransactionMock).not.toHaveBeenCalled();
   });
 });
 
