@@ -1,40 +1,61 @@
 // Per-window storage partition — the core of the desktop multi-wallet (Electron
 // Cash-style) model. Each window keeps its OWN current-wallet selection and
 // preferences by giving redux-persist's localForage store a name unique to the
-// window, so opening a wallet in one window can't kick another window to landing.
+// window, so opening (or reloading) a wallet in one window can't reset another.
 //
-// The shared wallet DB (idb-keyval key 'OPTNDatabase') is deliberately NOT
-// partitioned: every window reads the same set of wallets — with
-// DatabaseService's anti-clobber guard — and simply opens a different one, exactly
-// like Electron Cash's one-process / many-windows model.
+// The instance id is taken from the window URL's `?instance=` query, which
+// openWalletPickerWindow stamps onto every extra window. Reading it from the URL
+// (not from the Tauri window label) makes it reliable at THIS point — the desktop
+// entry prelude, which runs before Tauri internals are guaranteed injected and
+// before state/store.ts configures localForage — and it survives reloads because
+// the URL persists. The resolved key is also cached in sessionStorage (per-window,
+// survives reload) so isolation holds even if the query is ever dropped.
 //
-// This module is loaded FIRST in the desktop entry prelude (vite.desktop.config)
-// so it patches localForage.config before state/store.ts configures the persist
-// store. The main window keeps the original 'persist' store name (so existing
-// state is preserved); every extra window gets 'persist-<label>'.
+// The primary window has no `?instance=` and keeps the legacy 'persist' store, so
+// an existing user's state is preserved untouched. The shared wallet DB
+// (idb-keyval 'OPTNDatabase') is deliberately NOT partitioned — every window reads
+// the same wallets (with DatabaseService's anti-clobber guard) and opens a
+// different one.
 
 import localForage from 'localforage';
-import { getCurrentWindow } from '@tauri-apps/api/window';
 
-function currentWindowLabel(): string {
+const PARTITION_CACHE_KEY = 'optn-storage-partition';
+
+/** Resolve this window's storage-partition suffix. '' = primary window. */
+function resolvePartition(): string {
+  // 1) Explicit id from the window URL (extra windows).
   try {
-    return getCurrentWindow().label || 'main';
+    const fromUrl = new URLSearchParams(window.location.search).get('instance');
+    if (fromUrl) {
+      try {
+        window.sessionStorage.setItem(PARTITION_CACHE_KEY, fromUrl);
+      } catch {
+        /* sessionStorage unavailable — the URL alone still isolates this window */
+      }
+      return fromUrl;
+    }
   } catch {
-    // Not in a Tauri window (tests/SSR) — behave like the primary window.
-    return 'main';
+    /* no window.location (tests/SSR) */
   }
+  // 2) Cached id (a reload where the query was somehow lost).
+  try {
+    const cached = window.sessionStorage.getItem(PARTITION_CACHE_KEY);
+    if (cached) return cached;
+  } catch {
+    /* ignore */
+  }
+  // 3) Primary window — legacy store, no suffix.
+  return '';
 }
 
-const label = currentWindowLabel();
+const partition = resolvePartition();
 
-// Only extra windows are namespaced; the primary window ('main') keeps 'persist'
-// so a user's existing persisted state survives this change untouched.
-if (label !== 'main') {
+if (partition) {
   type ConfigFn = (options?: { storeName?: string; [k: string]: unknown }) => unknown;
   const original = localForage.config.bind(localForage) as ConfigFn;
   const patched: ConfigFn = (options) => {
     if (options && typeof options.storeName === 'string') {
-      return original({ ...options, storeName: `${options.storeName}-${label}` });
+      return original({ ...options, storeName: `${options.storeName}-${partition}` });
     }
     return original(options);
   };
