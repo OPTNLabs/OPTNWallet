@@ -28,12 +28,20 @@ import {
   fetchProfile,
   publishMyProfile,
   publishMyDmRelays,
+  loadStoredMessages,
+  storeMessages,
   toPubkeyHex,
   type ChatMessage,
   type NostrProfile,
 } from '../../platform/desktop/nostr/chat';
 
 const short = (s: string) => (s.length > 16 ? `${s.slice(0, 10)}…${s.slice(-6)}` : s);
+
+/** Merge two message lists by id, sorted by time. */
+const mergeById = (a: ChatMessage[], b: ChatMessage[]): ChatMessage[] => {
+  const seen = new Set(a.map((m) => m.id));
+  return [...a, ...b.filter((m) => !seen.has(m.id))].sort((x, y) => x.at - y.at);
+};
 
 const Avatar: React.FC<{ url?: string; fallback: string; size?: number }> = ({ url, fallback, size = 44 }) => (
   <div
@@ -100,12 +108,24 @@ const NostrChat: React.FC = () => {
   useEffect(() => {
     if (walletId <= 0) return;
     myIdentity(walletId)
-      .then((id) => {
+      .then(async (id) => {
         setMe(id);
         void publishMyDmRelays(walletId, relays); // so peers' DMs reach us
+        // Hydrate saved history (contacts survive restarts) + my own profile so
+        // the name/picture I published are shown instead of an empty editor.
+        const stored = await loadStoredMessages(id.pubkey);
+        if (stored.length) setMessages((prev) => mergeById(prev, stored));
+        const mine = await fetchProfile(id.pubkey, relays);
+        if (mine.name) setMyName(mine.name);
+        if (mine.picture) setMyPicture(mine.picture);
       })
       .catch((e) => setErr(e instanceof Error ? e.message : String(e)));
   }, [walletId, relays]);
+
+  // Persist history locally whenever it grows (best-effort).
+  useEffect(() => {
+    if (me && messages.length) void storeMessages(me.pubkey, messages);
+  }, [me, messages]);
 
   // One subscription for all my DMs; the thread view filters to the open peer.
   useEffect(() => {
