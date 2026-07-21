@@ -8,7 +8,11 @@ import { QRCodeSVG } from 'qrcode.react';
 import { Toast } from '@capacitor/toast';
 import { selectRpaEnabled } from '../../state/slices/experimentalSlice';
 import { selectCurrentNetwork } from '../../state/selectors/networkSelectors';
-import { deriveAndEncodePaycode, RPA_PREFIX_BITS } from '../../services/RpaService';
+import {
+  deriveAndEncodePaycode,
+  getRpaKeyPaths,
+  RPA_PREFIX_BITS,
+} from '../../services/RpaService';
 import WalletManager from '../../apis/WalletManager/WalletManager';
 import { Network } from '../../state/slices/networkSlice';
 
@@ -68,6 +72,7 @@ export const RpaReceiveCard: React.FC<RpaReceiveCardProps> = ({ walletId }) => {
   };
 
   const networkLabel = network === Network.MAINNET ? 'mainnet' : 'chipnet';
+  const rpaKeyPaths = getRpaKeyPaths(network);
 
   return (
     <div className="rounded-xl border border-[var(--wallet-accent)]/30 bg-[var(--wallet-surface)] overflow-hidden">
@@ -153,8 +158,8 @@ export const RpaReceiveCard: React.FC<RpaReceiveCardProps> = ({ walletId }) => {
               <div className="rounded-xl border border-[var(--wallet-border)] bg-[var(--wallet-surface)] p-3 space-y-1">
                 <p className="text-[10px] font-semibold wallet-muted uppercase tracking-wide">Derivation paths</p>
                 <div className="font-mono text-[10px] wallet-muted space-y-0.5">
-                  <p>Scan key: <span className="wallet-text-strong">m/47'/145'/0'/1'/0</span></p>
-                  <p>Spend key: <span className="wallet-text-strong">m/47'/145'/0'/0'/0</span></p>
+                  <p>Scan key: <span className="wallet-text-strong">{rpaKeyPaths.scan}</span></p>
+                  <p>Spend key: <span className="wallet-text-strong">{rpaKeyPaths.spend}</span></p>
                 </div>
               </div>
             </>
