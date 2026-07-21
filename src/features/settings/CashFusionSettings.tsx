@@ -36,6 +36,10 @@ import { CURRENT_FUSION_EXECUTION_READINESS } from '../../platform/desktop/Fusio
 import { P2pFusionTransportPreview } from '../nostr/P2pFusionTransportPreview';
 import { runFusion } from '../../platform/desktop/FusionService';
 import { runP2pFusion } from '../../platform/desktop/FusionP2pService';
+import {
+  assertServerFusionSelected,
+  getFusionModeAvailability,
+} from '../../platform/desktop/FusionMode';
 import type { RootState } from '../../state/store';
 import type { UTXO } from '../../types/types';
 
@@ -84,6 +88,11 @@ export const CashFusionSettings: React.FC<{ variant?: 'card' | 'servers' }> = ({
   const [p2pState, setP2pState] = useState<'idle' | 'fusing' | 'done' | 'fail'>('idle');
   const [p2pMsg, setP2pMsg] = useState<string | null>(null);
   const [p2pPhase, setP2pPhase] = useState(0);
+  const serverMode = getFusionModeAvailability({
+    p2pFusionEnabled,
+    walletId,
+    serverBusy: fuseState === 'fusing',
+  });
 
   // Start from the saved server only if it belongs to the current network's
   // pool; otherwise fall back to the network default (list head) so switching to
@@ -152,9 +161,10 @@ export const CashFusionSettings: React.FC<{ variant?: 'card' | 'servers' }> = ({
   // execution is allowed (chipnet test path); mainnet stays gated by the safety
   // requirements. A round completes only when enough players meet in a tier.
   const handleFuseNow = async () => {
-    setFuseState('fusing');
     setFuseMsg(null);
     try {
+      assertServerFusionSelected(p2pFusionEnabled);
+      setFuseState('fusing');
       const utxos = (Object.values(reduxUtxos).flat() as UTXO[]).filter((u) => !u.token);
       if (utxos.length === 0) throw new Error('No spendable (non-token) UTXOs to fuse.');
 
@@ -376,7 +386,12 @@ export const CashFusionSettings: React.FC<{ variant?: 'card' | 'servers' }> = ({
             </p>
 
             {/* Server path — Fuse Now via the configured CashFusion server (Servers card). */}
-            <div className="flex items-center justify-between gap-2 rounded-lg border border-[var(--wallet-accent)]/30 wallet-surface px-3 py-2">
+            <div
+              aria-disabled={serverMode.serverDisabled}
+              className={`flex items-center justify-between gap-2 rounded-lg border border-[var(--wallet-accent)]/30 wallet-surface px-3 py-2 transition-opacity ${
+                serverMode.serverMuted ? 'opacity-40 grayscale' : ''
+              }`}
+            >
               <div>
                 <p className="text-xs font-semibold wallet-text-strong">Fuse Now using CashFusion server</p>
                 <p className="text-[10px] wallet-muted">
@@ -386,7 +401,7 @@ export const CashFusionSettings: React.FC<{ variant?: 'card' | 'servers' }> = ({
               <button
                 type="button"
                 onClick={() => void handleFuseNow()}
-                disabled={fuseState === 'fusing' || walletId <= 0}
+                disabled={serverMode.serverDisabled}
                 className="rounded-lg border border-[var(--wallet-accent)]/50 px-3 py-1.5 text-xs font-semibold text-[var(--wallet-accent)] hover:bg-[var(--wallet-accent)]/5 disabled:opacity-50 whitespace-nowrap"
               >
                 {fuseState === 'fusing' ? 'Fusing…' : 'Fuse Now'}
