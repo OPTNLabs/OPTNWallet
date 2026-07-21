@@ -13,7 +13,8 @@
 // calibrate — notably the fee/output allocation, which currently reuses the
 // server allocator and leans on the round safety gate (verifyFusionSafety) as the
 // backstop that refuses to sign an over/under-paid transaction. It stays gated to
-// the chipnet execution path (isFusionExecutionAllowed); mainnet remains blocked.
+// runs on all networks (isFusionExecutionAllowed → true, owner opt-in), with the
+// per-round verifyFusionSafety gate + mandatory Tor as the runtime fund safety.
 
 import { SimplePool } from 'nostr-tools';
 // aliased: the `use*` name trips the react-hooks lint rule, but this is not a hook.
@@ -94,12 +95,12 @@ function waitForParticipants(
 }
 
 /**
- * Run one P2P fusion round for the wallet's non-token UTXOs. Chipnet-only for
- * now (mainnet stays gated). Resolves with the broadcast txid.
+ * Run one P2P fusion round for the wallet's non-token UTXOs on any network.
+ * Resolves with the broadcast txid.
  */
 export async function runP2pFusion(opts: P2pFusionOptions): Promise<RoundResult> {
-  if (!isFusionExecutionAllowed(opts.network)) {
-    throw new Error('P2P fusion execution is paused on this network.');
+  if (!isFusionExecutionAllowed()) {
+    throw new Error('P2P fusion execution is paused.');
   }
   // Fail closed on Tor: P2P fusion must not touch a relay without Tor, so a peer's
   // IP can't be correlated across its (round-key) inputs and (throwaway-key)

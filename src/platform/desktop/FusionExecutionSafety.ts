@@ -50,19 +50,22 @@ export const CURRENT_FUSION_EXECUTION_READINESS = buildFusionExecutionReadiness(
 });
 
 /**
- * Whether a fusion round may actually execute right now.
+ * Whether a fusion round may execute. The wallet owner has opted to run CashFusion
+ * on ALL networks (not just chipnet), so this returns true everywhere.
  *
- * On MAINNET this requires every safety guarantee above (currently none → always
- * blocked): real funds must not be spent through an unreviewed path.
+ * The runtime fund-safety checks that ARE implemented still apply on every network
+ * and are what actually protect coins:
+ *   - per-round output-present / no-inflation / fee-bounds verification
+ *     (verifyFusionSafety) refuses to sign a transaction that would lose funds,
+ *   - Tor is mandatory (P2P fails closed without it),
+ *   - the server engine verifies its own outputs before signing and verifies the
+ *     broadcast.
  *
- * On CHIPNET the coins are valueless test coins, so execution is allowed as an
- * explicit TEST path — this is how the full protocol gets exercised end-to-end
- * against a live server before the mainnet guarantees are built. Callers should
- * surface that it is a test path, not a production feature.
- *
- * `network` is compared as a string ('chipnet') to avoid importing the redux
- * enum into this dependency-free safety module.
+ * CURRENT_FUSION_EXECUTION_READINESS.blockers still enumerates the hardening items
+ * not yet built (e.g. wallet-wide input reservation). Those are surfaced in the UI
+ * as an experimental warning rather than a hard block — an informed-consent gate,
+ * not a network gate.
  */
-export function isFusionExecutionAllowed(network: string): boolean {
-  return network === 'chipnet' || CURRENT_FUSION_EXECUTION_READINESS.ready;
+export function isFusionExecutionAllowed(): boolean {
+  return true;
 }
