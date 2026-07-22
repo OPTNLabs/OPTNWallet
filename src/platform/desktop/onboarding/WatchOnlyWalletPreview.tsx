@@ -5,6 +5,7 @@ import {
   deriveWatchOnlyAccountPreview,
   type WatchOnlyAccountPreview,
 } from './watchOnlyAccountPreview';
+import { CapacitorBarcodeScanner } from '../barcode-scanner';
 
 type WatchOnlyWalletPreviewProps = {
   onBack: () => void;
@@ -93,6 +94,26 @@ export const WatchOnlyWalletPreview: FC<WatchOnlyWalletPreviewProps> = ({
               className="wallet-input w-full resize-none rounded-md px-3 py-2 font-mono text-xs"
             />
           </label>
+          <button
+            type="button"
+            onClick={async () => {
+              try {
+                const { ScanResult } = await CapacitorBarcodeScanner.scanBarcode();
+                if (ScanResult) {
+                  setAccountXpub(ScanResult.trim());
+                  setPreview(null);
+                  setError('');
+                }
+              } catch (err) {
+                if (err instanceof Error && err.message !== 'No file selected') {
+                  setError(err.message);
+                }
+              }
+            }}
+            className="w-full rounded-md border border-[var(--wallet-border)] py-2 text-sm font-semibold wallet-text-strong"
+          >
+            Scan / upload QR
+          </button>
           <p className="text-[11px] leading-relaxed wallet-muted">
             Confirm that SeedCash exported this account at{' '}
             <span className="font-mono">
