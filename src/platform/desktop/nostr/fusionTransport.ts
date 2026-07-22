@@ -21,7 +21,10 @@
 
 import { SimplePool, generateSecretKey, type Event } from 'nostr-tools';
 import { wrapEvent, unwrapEvent } from 'nostr-tools/nip17';
-import type { RoundMessage, RoundTransport } from './fusionSession';
+import {
+  parseRoundMessage,
+  type RoundTransport,
+} from './fusionSession';
 
 /** NIP-59 gift-wrap. Same kind as chat; disambiguated by the #p recipient. */
 export const GIFT_WRAP_KIND = 1059;
@@ -35,14 +38,31 @@ export interface RoundKeys {
 export function createNostrRoundTransport(
   pool: SimplePool,
   relays: string[],
-  round: RoundKeys
+  round: RoundKeys,
+  outputPool: SimplePool = pool
 ): RoundTransport {
+  const protocolErrorHandlers = new Set<(from: string, error: Error) => void>();
   return {
     send: async (toPubkey, msg) => {
       // Outputs are sealed by a throwaway key (unlinkable); all else by the round key.
-      const signer = msg.type === 'outputs' ? generateSecretKey() : round.secretKey;
-      const wrapped = wrapEvent(signer, { publicKey: toPubkey }, JSON.stringify(msg));
-      await Promise.allSettled(pool.publish(relays, wrapped as Event));
+      const isAnonymousOutput = msg.type === 'outputs';
+      const signer = isAnonymousOutput ? generateSecretKey() : round.secretKey;
+      try {
+        const wrapped = wrapEvent(
+          signer,
+          { publicKey: toPubkey },
+          JSON.stringify(msg)
+        );
+        const publishingPool = isAnonymousOutput ? outputPool : pool;
+        const settled = await Promise.allSettled(
+          publishingPool.publish(relays, wrapped as Event)
+        );
+        if (!settled.some((result) => result.status === 'fulfilled')) {
+          throw new Error('No Nostr relay accepted the Fusion message.');
+        }
+      } finally {
+        if (isAnonymousOutput) signer.fill(0);
+      }
     },
 
     onMessage: (handler) => {
@@ -50,7 +70,14 @@ export function createNostrRoundTransport(
         onevent(evt: Event) {
           try {
             const rumor = unwrapEvent(evt, round.secretKey);
-            const msg = JSON.parse(rumor.content) as RoundMessage;
+            const msg = parseRoundMessage(rumor.content);
+            if (!msg) {
+              const error = new Error('Invalid or oversized Fusion round message.');
+              protocolErrorHandlers.forEach((notify) =>
+                notify(rumor.pubkey, error)
+              );
+              return;
+            }
             handler(rumor.pubkey, msg);
           } catch {
             /* not addressed to us, or undecryptable — ignore */
@@ -58,6 +85,11 @@ export function createNostrRoundTransport(
         },
       });
       return () => sub.close();
+    },
+
+    onProtocolError: (handler) => {
+      protocolErrorHandlers.add(handler);
+      return () => protocolErrorHandlers.delete(handler);
     },
   };
 }

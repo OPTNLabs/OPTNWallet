@@ -1,42 +1,61 @@
-// P2P CashFusion over Nostr — Phase 4, coordination foundation.
+// P2P CashFusion pool discovery over Nostr.
 //
-// Unlike server CashFusion (a central server does blind-signing + assembly),
-// P2P fusion has no server: peers find each other on Nostr, elect a coordinator
-// deterministically, and run the round over gift-wrapped messages. Privacy comes
-// from Tor + one-time ephemeral keys (the user's "tor is enough" decision), NOT
-// from blind signatures or a Pedersen amount-hiding scheme.
-//
-// This module is the transport/coordination layer:
-//   - a throwaway ephemeral identity per round (never the wallet's nostr key, so
-//     a pool announcement can't be linked to the user),
-//   - a public pool announcement (kind 22230) after a random anti-fingerprint
-//     delay, carrying only counts (how many inputs/outputs the peer brings),
-//   - pool discovery by subscription,
-//   - deterministic coordinator election (lowest ephemeral pubkey — no vote).
-// The round protocol itself (input/output registration, tx assembly, verify +
-// sign, broadcast) builds on top of this and is added next.
+// Discovery uses a fresh secp256k1 identity for every attempt (the 00-Wallet
+// scheme), never the wallet/chat identity. Public kind-22230 announcements are
+// scoped to one network and one wall-clock epoch. Their signature, tags,
+// timestamp, expiry, protocol version, tier list, and component counts are all
+// validated before a peer can enter a candidate set. This prevents a relay's
+// historical store from resurrecting dead round identities.
 
-import { SimplePool, finalizeEvent, generateSecretKey, getPublicKey, type Event } from 'nostr-tools';
+import {
+  SimplePool,
+  finalizeEvent,
+  generateSecretKey,
+  getPublicKey,
+  verifyEvent,
+  type Event,
+} from 'nostr-tools';
 
-/** Kind for the public pool-ready announcement (00-Wallet convention). */
+/** Public ready announcement. Kept compatible with the 00-Wallet convention. */
 export const POOL_ANNOUNCE_KIND = 22230;
-/** 00-Wallet's NOSTR_KIND_JOINER, reserved. Round messages themselves ride
- *  standard NIP-59 gift-wrap (kind 1059) — see fusionTransport.ts — so they're
- *  indistinguishable on the wire from chat DMs rather than a fingerprintable kind. */
+/** Reserved coordination kind. Private round traffic uses NIP-59 kind 1059. */
 export const ROUND_MESSAGE_KIND = 22231;
+export const FUSION_POOL_PROTOCOL = 1;
 
-/** Max random delay before announcing, so join timing can't fingerprint a peer. */
-export const MAX_ANNOUNCE_DELAY_MS = 180_000;
+/** Globally aligned windows remove the old per-client 60-second snapshot race. */
+export const POOL_EPOCH_SECONDS = 30;
+export const POOL_EPOCH_GRACE_SECONDS = 8;
+export const MAX_ANNOUNCE_DELAY_MS = 3_000;
+const REANNOUNCE_MS = 8_000;
+const MAX_FUTURE_SKEW_SECONDS = 5;
+const MAX_ANNOUNCEMENT_BYTES = 2_048;
+const MAX_TIERS = 16;
+const MAX_INPUTS = 100;
+const MAX_TOTAL_COMPONENTS = 100;
+const MAX_OUTPUTS_PER_PEER = 4;
 
-/** The pool tag for a tier, so peers only discover others fusing the same size. */
-export function poolTag(tier: number): string {
-  return `optn-fusion-${tier}`;
+export type FusionPoolNetwork = 'mainnet' | 'chipnet';
+
+export function poolEpoch(nowSeconds = Math.floor(Date.now() / 1000)): number {
+  return Math.floor(nowSeconds / POOL_EPOCH_SECONDS);
 }
 
-/** A one-time identity for a single fusion round. Discarded when the round ends. */
+export function poolEpochStart(epoch: number): number {
+  return epoch * POOL_EPOCH_SECONDS;
+}
+
+export function poolEpochEnd(epoch: number): number {
+  return poolEpochStart(epoch) + POOL_EPOCH_SECONDS;
+}
+
+/** One public pool per network+epoch; compatible tiers are carried in content. */
+export function poolTag(network: FusionPoolNetwork, epoch: number): string {
+  return `optn-fusion-v${FUSION_POOL_PROTOCOL}-${network}-${epoch}`;
+}
+
 export interface RoundIdentity {
   secretKey: Uint8Array;
-  pubkey: string; // hex
+  pubkey: string;
 }
 
 export function generateRoundIdentity(): RoundIdentity {
@@ -44,111 +63,317 @@ export function generateRoundIdentity(): RoundIdentity {
   return { secretKey, pubkey: getPublicKey(secretKey) };
 }
 
-/** What a peer advertises when it's ready to fuse (no amounts, just counts). */
 export interface PoolAnnouncement {
-  pubkey: string; // ephemeral round pubkey
-  tier: number;
+  pubkey: string;
+  network: FusionPoolNetwork;
+  epoch: number;
+  tiers: number[];
   numInputs: number;
-  numOutputs: number;
-  at: number; // unix seconds
+  at: number;
+  expiresAt: number;
 }
 
-/**
- * Publish this peer's readiness (kind 22230) for `tier`. Public and unsigned by
- * the wallet's identity — it's signed by the throwaway round key. Returns the
- * published event so the caller can track its own announcement.
- */
+export interface BuildPoolAnnouncementOptions {
+  network: FusionPoolNetwork;
+  epoch: number;
+  tiers: number[];
+  numInputs: number;
+  nowSeconds?: number;
+}
+
+function validTier(value: unknown): value is number {
+  return (
+    typeof value === 'number' &&
+    Number.isSafeInteger(value) &&
+    value >= 10_000 &&
+    value <= 21_000_000 * 100_000_000
+  );
+}
+
+function normalizeTiers(tiers: number[]): number[] {
+  return Array.from(new Set(tiers.filter(validTier))).sort((a, b) => a - b);
+}
+
 export function buildPoolAnnouncement(
   round: RoundIdentity,
-  tier: number,
-  numInputs: number,
-  numOutputs: number
+  options: BuildPoolAnnouncementOptions
 ): Event {
+  const now = options.nowSeconds ?? Math.floor(Date.now() / 1000);
+  const tiers = normalizeTiers(options.tiers);
+  if (tiers.length === 0 || tiers.length > MAX_TIERS) {
+    throw new Error('P2P Fusion announcement needs 1-16 valid tiers.');
+  }
+  if (
+    !Number.isSafeInteger(options.numInputs) ||
+    options.numInputs < 1 ||
+    options.numInputs > MAX_INPUTS
+  ) {
+    throw new Error('P2P Fusion announcement has an invalid input count.');
+  }
+  if (poolEpoch(now) !== options.epoch) {
+    throw new Error('P2P Fusion announcement timestamp is outside its epoch.');
+  }
+
+  const content = JSON.stringify({
+    protocol: FUSION_POOL_PROTOCOL,
+    network: options.network,
+    epoch: options.epoch,
+    tiers,
+    numInputs: options.numInputs,
+    expiresAt: poolEpochEnd(options.epoch) + POOL_EPOCH_GRACE_SECONDS,
+  });
+
   return finalizeEvent(
     {
       kind: POOL_ANNOUNCE_KIND,
-      created_at: Math.floor(Date.now() / 1000),
-      tags: [['t', poolTag(tier)]],
-      content: JSON.stringify({ tier, numInputs, numOutputs }),
+      created_at: now,
+      tags: [
+        ['t', poolTag(options.network, options.epoch)],
+        ['n', options.network],
+        ['e', String(options.epoch)],
+        ['v', String(FUSION_POOL_PROTOCOL)],
+      ],
+      content,
     },
     round.secretKey
   );
 }
 
-function parseAnnouncement(evt: Event): PoolAnnouncement | null {
+export interface ParsePoolAnnouncementScope {
+  network: FusionPoolNetwork;
+  epoch: number;
+  nowSeconds?: number;
+}
+
+function hasTag(evt: Event, name: string, value: string): boolean {
+  return evt.tags.some((tag) => tag[0] === name && tag[1] === value);
+}
+
+/** Validate before admitting a relay event to the active candidate set. */
+export function parsePoolAnnouncement(
+  evt: Event,
+  scope: ParsePoolAnnouncementScope
+): PoolAnnouncement | null {
+  const now = scope.nowSeconds ?? Math.floor(Date.now() / 1000);
+  // nostr-tools memoizes verification on the event object. Verify a clean copy
+  // so a mutated/reused object can never inherit a prior successful cache bit.
+  const eventForVerification: Event = {
+    id: evt.id,
+    pubkey: evt.pubkey,
+    created_at: evt.created_at,
+    kind: evt.kind,
+    tags: evt.tags.map((tag) => [...tag]),
+    content: evt.content,
+    sig: evt.sig,
+  };
+  if (
+    evt.kind !== POOL_ANNOUNCE_KIND ||
+    evt.content.length > MAX_ANNOUNCEMENT_BYTES ||
+    !verifyEvent(eventForVerification) ||
+    evt.created_at > now + MAX_FUTURE_SKEW_SECONDS ||
+    evt.created_at < poolEpochStart(scope.epoch) - MAX_FUTURE_SKEW_SECONDS ||
+    !hasTag(evt, 't', poolTag(scope.network, scope.epoch)) ||
+    !hasTag(evt, 'n', scope.network) ||
+    !hasTag(evt, 'e', String(scope.epoch)) ||
+    !hasTag(evt, 'v', String(FUSION_POOL_PROTOCOL))
+  ) {
+    return null;
+  }
+
   try {
-    const c = JSON.parse(evt.content) as { tier: number; numInputs: number; numOutputs: number };
-    if (typeof c.tier !== 'number') return null;
+    const content = JSON.parse(evt.content) as Record<string, unknown>;
+    const tiers = Array.isArray(content.tiers)
+      ? normalizeTiers(content.tiers as number[])
+      : [];
+    const expiresAt = Number(content.expiresAt);
+    const numInputs = Number(content.numInputs);
+    if (
+      content.protocol !== FUSION_POOL_PROTOCOL ||
+      content.network !== scope.network ||
+      content.epoch !== scope.epoch ||
+      tiers.length === 0 ||
+      tiers.length > MAX_TIERS ||
+      !Number.isSafeInteger(numInputs) ||
+      numInputs < 1 ||
+      numInputs > MAX_INPUTS ||
+      !Number.isSafeInteger(expiresAt) ||
+      expiresAt < now ||
+      expiresAt > poolEpochEnd(scope.epoch) + POOL_EPOCH_GRACE_SECONDS
+    ) {
+      return null;
+    }
     return {
       pubkey: evt.pubkey,
-      tier: c.tier,
-      numInputs: c.numInputs ?? 0,
-      numOutputs: c.numOutputs ?? 0,
+      network: scope.network,
+      epoch: scope.epoch,
+      tiers,
+      numInputs,
       at: evt.created_at,
+      expiresAt,
     };
   } catch {
     return null;
   }
 }
 
+export interface FusionGroupPeer {
+  pubkey: string;
+  tiers: number[];
+  numInputs: number;
+}
+
 /**
- * Announce readiness for `tier` after a random delay, and discover other peers
- * in the same pool. Calls `onPeer` for each announcement seen (including, later,
- * our own echoed back). Returns an object to stop and read the current peer set.
+ * Prefer the tier with the largest anonymity set; on equal-sized sets, prefer
+ * the larger tier. Participant order is canonical for coordinator election.
  */
+export function selectFusionGroup(
+  announcements: FusionGroupPeer[],
+  minParticipants: number,
+  maxParticipants: number
+): { tier: number; participants: string[] } | null {
+  const byPubkey = new Map<string, FusionGroupPeer>();
+  for (const peer of announcements) {
+    if (!peer.pubkey || byPubkey.has(peer.pubkey)) continue;
+    const tiers = normalizeTiers(peer.tiers);
+    if (
+      tiers.length === 0 ||
+      !Number.isSafeInteger(peer.numInputs) ||
+      peer.numInputs < 1 ||
+      peer.numInputs > MAX_INPUTS
+    ) {
+      continue;
+    }
+    byPubkey.set(peer.pubkey, { ...peer, tiers });
+  }
+  const peers = [...byPubkey.values()];
+  const tiers = Array.from(new Set(peers.flatMap((peer) => peer.tiers))).sort(
+    (a, b) => b - a
+  );
+  let best: { tier: number; participants: string[] } | null = null;
+  for (const tier of tiers) {
+    const compatible = peers
+      .filter((peer) => peer.tiers.includes(tier))
+      .sort((a, b) => a.pubkey.localeCompare(b.pubkey));
+    const participants: string[] = [];
+    let worstCaseComponents = 0;
+    for (const peer of compatible) {
+      if (participants.length >= Math.max(0, maxParticipants)) break;
+      const withPeer =
+        worstCaseComponents + peer.numInputs + MAX_OUTPUTS_PER_PEER;
+      if (withPeer > MAX_TOTAL_COMPONENTS) continue;
+      participants.push(peer.pubkey);
+      worstCaseComponents = withPeer;
+    }
+    if (participants.length < minParticipants) continue;
+    if (
+      !best ||
+      participants.length > best.participants.length ||
+      (participants.length === best.participants.length && tier > best.tier)
+    ) {
+      best = { tier, participants };
+    }
+  }
+  return best;
+}
+
+export async function publishEventAtLeastOnce(
+  pool: SimplePool,
+  relays: string[],
+  event: Event
+): Promise<void> {
+  if (relays.length === 0) throw new Error('No Nostr relays configured.');
+  const attempts = pool.publish(relays, event);
+  const settled = await Promise.allSettled(attempts);
+  if (!settled.some((result) => result.status === 'fulfilled')) {
+    const reason = settled.find((result) => result.status === 'rejected');
+    throw new Error(
+      `No Nostr relay accepted the Fusion message${
+        reason && reason.status === 'rejected' ? `: ${String(reason.reason)}` : '.'
+      }`
+    );
+  }
+}
+
+export interface JoinPoolOptions {
+  round: RoundIdentity;
+  network: FusionPoolNetwork;
+  epoch: number;
+  tiers: number[];
+  numInputs: number;
+  onPeer: (peers: PoolAnnouncement[]) => void;
+  onError?: (error: Error) => void;
+}
+
+/** Subscribe to exactly one fresh network epoch and periodically re-announce. */
 export function joinPool(
   pool: SimplePool,
   relays: string[],
-  round: RoundIdentity,
-  tier: number,
-  numInputs: number,
-  numOutputs: number,
-  onPeer: (peers: PoolAnnouncement[]) => void
-): { stop: () => void; announceNow: () => void } {
+  options: JoinPoolOptions
+): { stop: () => void; announceNow: () => Promise<void> } {
   const peers = new Map<string, PoolAnnouncement>();
-  let sub: { close: () => void } | null = null;
-  let announceTimer: ReturnType<typeof setTimeout> | null = null;
   let stopped = false;
-
-  sub = pool.subscribeMany(relays, { kinds: [POOL_ANNOUNCE_KIND], '#t': [poolTag(tier)] }, {
+  let announceTimer: ReturnType<typeof setTimeout> | null = null;
+  let repeatTimer: ReturnType<typeof setInterval> | null = null;
+  const filter = {
+    kinds: [POOL_ANNOUNCE_KIND],
+    '#t': [poolTag(options.network, options.epoch)],
+    since: poolEpochStart(options.epoch) - MAX_FUTURE_SKEW_SECONDS,
+    until: poolEpochEnd(options.epoch) + POOL_EPOCH_GRACE_SECONDS,
+  };
+  const sub = pool.subscribeMany(relays, filter, {
     onevent(evt: Event) {
-      const ann = parseAnnouncement(evt);
-      if (ann && ann.tier === tier) {
-        peers.set(ann.pubkey, ann);
-        onPeer([...peers.values()]);
-      }
+      const ann = parsePoolAnnouncement(evt, {
+        network: options.network,
+        epoch: options.epoch,
+      });
+      if (!ann) return;
+      peers.set(ann.pubkey, ann);
+      options.onPeer([...peers.values()]);
     },
   });
 
-  const announce = () => {
+  const announce = async () => {
     if (stopped) return;
-    const evt = buildPoolAnnouncement(round, tier, numInputs, numOutputs);
-    void Promise.allSettled(pool.publish(relays, evt));
+    const evt = buildPoolAnnouncement(options.round, {
+      network: options.network,
+      epoch: options.epoch,
+      tiers: options.tiers,
+      numInputs: options.numInputs,
+    });
+    await publishEventAtLeastOnce(pool, relays, evt);
   };
-  // Random anti-fingerprint delay before the first announce.
-  announceTimer = setTimeout(announce, Math.floor(Math.random() * MAX_ANNOUNCE_DELAY_MS));
+
+  announceTimer = setTimeout(() => {
+    void announce().catch((error: unknown) =>
+      options.onError?.(error instanceof Error ? error : new Error(String(error)))
+    );
+  }, Math.floor(Math.random() * MAX_ANNOUNCE_DELAY_MS));
+  repeatTimer = setInterval(() => {
+    void announce().catch((error: unknown) =>
+      options.onError?.(error instanceof Error ? error : new Error(String(error)))
+    );
+  }, REANNOUNCE_MS);
 
   return {
     stop: () => {
       stopped = true;
       if (announceTimer) clearTimeout(announceTimer);
-      sub?.close();
+      if (repeatTimer) clearInterval(repeatTimer);
+      sub.close();
     },
     announceNow: announce,
   };
 }
 
-/**
- * Deterministic coordinator: the lowest ephemeral pubkey (lexicographic). Every
- * peer that sees the same set computes the same coordinator with no vote, so
- * there's no leader-election round-trip and no trusted party choosing it.
- */
+/** Deterministic coordinator: lowest ephemeral pubkey. */
 export function electCoordinator(pubkeys: string[]): string | null {
   if (pubkeys.length === 0) return null;
-  return [...pubkeys].sort()[0];
+  return [...new Set(pubkeys)].sort()[0];
 }
 
-export function isCoordinator(round: RoundIdentity, peerPubkeys: string[]): boolean {
-  const all = Array.from(new Set([round.pubkey, ...peerPubkeys]));
-  return electCoordinator(all) === round.pubkey;
+export function isCoordinator(
+  round: RoundIdentity,
+  peerPubkeys: string[]
+): boolean {
+  return electCoordinator([round.pubkey, ...peerPubkeys]) === round.pubkey;
 }
