@@ -6,7 +6,7 @@
 // (desktop builds only); the upstream mobile page is untouched.
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useDispatch, useSelector } from 'react-redux';
-import { Link, useLocation, useNavigate } from 'react-router-dom';
+import { useLocation, useNavigate } from 'react-router-dom';
 import WalletManager from '../../../apis/WalletManager/WalletManager';
 import DatabaseService from '../../../apis/DatabaseManager/DatabaseService';
 import { Network } from '../../../state/slices/networkSlice';
@@ -26,6 +26,8 @@ import type { WalletFileV1 } from '../walletFile';
 import { selectHardwareWallet } from '../../../state/slices/hardwareWalletSlice';
 import { HardwareWalletSettings } from '../../../features/settings/HardwareWalletSettings';
 import { resolveBiometricEnrollment } from '../biometricEnrollment';
+import { DesktopWalletPickerActions } from './DesktopWalletPickerActions';
+import { WatchOnlyWalletPreview } from './WatchOnlyWalletPreview';
 
 interface WalletRow {
   id: number;
@@ -40,7 +42,7 @@ const DesktopLandingPage = () => {
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
-  const [view, setView] = useState<'list' | 'hardware'>('list');
+  const [view, setView] = useState<'list' | 'hardware' | 'watch-only'>('list');
   const [importFile, setImportFile] = useState<WalletFileV1 | null>(null);
   const [bioAvailable, setBioAvailable] = useState(false);
   const [bioEnrolledId, setBioEnrolledId] = useState<number | null>(null);
@@ -248,6 +250,10 @@ const DesktopLandingPage = () => {
     );
   }
 
+  if (view === 'watch-only') {
+    return <WatchOnlyWalletPreview onBack={() => setView('list')} />;
+  }
+
   return (
     <section className="min-h-[100dvh] wallet-surface flex flex-col items-center px-4 py-10">
       {importFile && (
@@ -378,21 +384,11 @@ const DesktopLandingPage = () => {
           </div>
         )}
 
-        <div className="space-y-2">
-          <p className="text-sm wallet-muted">{wallets && wallets.length > 0 ? 'Add another wallet' : 'Get started'}</p>
-          <Link to="/createwallet" className="wallet-btn-primary w-full block text-center py-3 font-bold">
-            Create New Wallet
-          </Link>
-          <Link to="/importwallet" className="wallet-btn-secondary w-full block text-center py-3 font-bold">
-            Import Wallet
-          </Link>
-          <button
-            onClick={() => setView('hardware')}
-            className="wallet-btn-secondary w-full text-center py-3 font-bold"
-          >
-            Connect Hardware Wallet
-          </button>
-        </div>
+        <DesktopWalletPickerActions
+          hasWallets={Boolean(wallets && wallets.length > 0)}
+          onHardware={() => setView('hardware')}
+          onWatchOnly={() => setView('watch-only')}
+        />
       </div>
     </section>
   );
