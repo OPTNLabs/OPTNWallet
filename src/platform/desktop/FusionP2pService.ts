@@ -39,7 +39,6 @@ const P2P_FEERATE = 1_000; // sats per 1000 bytes
 const P2P_TIERS = [10_000, 100_000, 1_000_000, 10_000_000];
 const MIN_PARTICIPANTS = 2;
 const MAX_PARTICIPANTS = 10;
-const MIN_EPOCH_LEAD_SECONDS = 8;
 const EPOCH_SETTLE_SECONDS = 2;
 const MAX_RELAYS = 8;
 let wsInstalled = false;
@@ -156,12 +155,13 @@ export async function runP2pFusion(opts: P2pFusionOptions): Promise<RoundResult>
 
     const network = toPoolNetwork(opts.network);
     const now = Math.floor(Date.now() / 1_000);
-    let epoch = poolEpoch(now);
-    if (poolEpochEnd(epoch) - now < MIN_EPOCH_LEAD_SECONDS) epoch += 1;
-    if (poolEpochStart(epoch) > now) {
-      status?.('Waiting for the next fresh Fusion pool epoch…');
-      await waitUntil(poolEpochStart(epoch) * 1_000, opts.signal);
-    }
+    // Always schedule the NEXT epoch. Every window clicked within the same ~30s
+    // bucket then targets the identical epoch and announces together — avoiding the
+    // boundary split (one window jumps ahead, another doesn't) that produced "no
+    // compatible P2P Fusion group". Peers just wait a few seconds for it to start.
+    const epoch = poolEpoch(now) + 1;
+    status?.('Waiting for the shared Fusion pool epoch (click all wallets within ~30s)…');
+    await waitUntil(poolEpochStart(epoch) * 1_000, opts.signal);
 
     round = generateRoundIdentity();
     let peers: PoolAnnouncement[] = [
