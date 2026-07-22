@@ -497,6 +497,15 @@ function runCoordinator(
     };
 
     const tryAssemble = async () => {
+      if (!settled && !assembled) {
+        // Diagnostic: shows registration progress so a phase-2 stall reveals which
+        // peer's inputs/outputs never arrived (e.g. "inputs 2/3 outputs 3/3").
+        console.info(
+          '[p2p-fusion coord] session', session.slice(0, 10),
+          'inputs', inputsByPeer.size, '/', params.participants.length,
+          'outputs', outputMessages, '/', params.participants.length
+        );
+      }
       if (
         settled ||
         assembling ||
