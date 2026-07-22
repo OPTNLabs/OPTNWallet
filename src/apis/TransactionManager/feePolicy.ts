@@ -1,5 +1,17 @@
 import { TransactionOutput } from '../../types/types';
 
+// A small buffer over the usual 1 sat/byte floor prevents otherwise-valid
+// transactions from being rejected when a backend's rolling mempool minimum
+// rises slightly above its configured relay floor.
+const RELAY_FEE_MILLISATS_PER_BYTE = 1_100n;
+
+export function relayFeeForBytes(bytes: number): bigint {
+  if (!Number.isSafeInteger(bytes) || bytes < 0) {
+    throw new Error('Transaction byte size must be a non-negative safe integer.');
+  }
+  return (BigInt(bytes) * RELAY_FEE_MILLISATS_PER_BYTE + 999n) / 1_000n;
+}
+
 export function estimateAddP2PKHOutputBytes(
   baseTxBytes: number,
   currentOutputsCount: number
@@ -37,7 +49,7 @@ export function formatMinRelayError(params: {
 }): string {
   const { paying, size, needAtLeast, shortBy, tip } = params;
   return [
-    'Min relay fee not met under 1 sat/byte policy.',
+    'Min relay fee not met under the wallet relay-margin policy.',
     `paying=${paying.toString()} sats`,
     `size=${size} bytes`,
     `need_at_least=${needAtLeast} sats`,

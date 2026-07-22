@@ -20,6 +20,7 @@ import {
   estimateAddP2PKHOutputBytes,
   formatMinRelayError,
   hasExplicitManualChangeOutput,
+  relayFeeForBytes,
   txBytesFromHex,
 } from './feePolicy';
 import OutboundTransactionTracker from '../../services/OutboundTransactionTracker';
@@ -398,7 +399,7 @@ export default function TransactionManager() {
    * Builds a transaction using the provided outputs, change address, and selected UTXOs.
    *
    * Baseline rules (Advanced Builder):
-   * - Fee policy: 1 sat/byte
+   * - Fee policy: 1.10 sat/byte, rounded up
    * - ALWAYS attempt to add a separate change output if changeAddress is provided.
    * - Only skip auto-change if an output is explicitly marked as manual change
    *   via (o as any)._manualChange === true (not by address equality).
@@ -453,7 +454,7 @@ export default function TransactionManager() {
         outputsNoChange
       );
       const bytesNoChange = txBytesFromHex(txNoChangeHex);
-      const feeNoChange = BigInt(bytesNoChange);
+      const feeNoChange = relayFeeForBytes(bytesNoChange);
 
       const outNoChangeTotal = sumOutputs(outputsNoChange);
       void (inputTotal - outNoChangeTotal - feeNoChange);
@@ -488,7 +489,7 @@ export default function TransactionManager() {
           void error;
         }
 
-        const feeWithChange = BigInt(bytesWithChange);
+        const feeWithChange = relayFeeForBytes(bytesWithChange);
         const remainder = inputTotal - outNoChangeTotal - feeWithChange;
 
         // Only add change if it is >= DUST
@@ -514,11 +515,12 @@ export default function TransactionManager() {
       const actualBytes = txBytesFromHex(finalHex);
       const outputsTotal = sumOutputs(plannedOutputs);
       const feePaid = inputTotal - outputsTotal;
+      const requiredActualFee = relayFeeForBytes(actualBytes);
 
-      if (feePaid < BigInt(actualBytes)) {
+      if (feePaid < requiredActualFee) {
         // Stabilizing retry: recompute change using actualBytes as fee
         if (changeAddress && !explicitManualChangeOutput) {
-          const feeActual = BigInt(actualBytes);
+          const feeActual = requiredActualFee;
           const remainder2 = inputTotal - outNoChangeTotal - feeActual;
 
           if (remainder2 >= BigInt(DUST)) {
@@ -537,14 +539,15 @@ export default function TransactionManager() {
             const bytesRetry = txBytesFromHex(finalHex);
             const outputsRetryTotal = sumOutputs(outputsRetry);
             const feePaidRetry = inputTotal - outputsRetryTotal;
+            const requiredRetryFee = relayFeeForBytes(bytesRetry);
 
-            if (feePaidRetry < BigInt(bytesRetry)) {
-              const shortBy = Number(BigInt(bytesRetry) - feePaidRetry);
+            if (feePaidRetry < requiredRetryFee) {
+              const shortBy = Number(requiredRetryFee - feePaidRetry);
               throw new Error(
                 formatMinRelayError({
                   paying: feePaidRetry,
                   size: bytesRetry,
-                  needAtLeast: bytesRetry,
+                  needAtLeast: Number(requiredRetryFee),
                   shortBy,
                 })
               );
@@ -558,12 +561,12 @@ export default function TransactionManager() {
           }
         }
 
-        const shortBy = Number(BigInt(actualBytes) - feePaid);
+        const shortBy = Number(requiredActualFee - feePaid);
         throw new Error(
           formatMinRelayError({
             paying: feePaid,
             size: actualBytes,
-            needAtLeast: actualBytes,
+            needAtLeast: Number(requiredActualFee),
             shortBy,
           })
         );
