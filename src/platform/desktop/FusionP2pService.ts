@@ -1,66 +1,49 @@
-// P2P CashFusion orchestration — Phase 4c. The peer-to-peer counterpart of
-// FusionService.ts: instead of a central server, peers meet on Nostr, elect a
-// coordinator, and run the (proven) fusion round over the Nostr transport.
+// P2P CashFusion orchestration over Nostr + Tor.
 //
-// This is the glue that binds the wallet to the proven engine:
-//   gatherInputs / allocateOutputs (shared with the server path) → a round
-//   identity → pool announce + discovery (nostr/fusion) → freeze participants →
-//   runFusionRound over the Nostr transport → broadcast via the wallet's Electrum
-//   backend.
-//
-// The engine underneath (assembly, safety gate, signing, choreography) is proven
-// offline; this orchestration needs a live chipnet round with real peers to
-// calibrate — notably the fee/output allocation, which currently reuses the
-// server allocator and leans on the round safety gate (verifyFusionSafety) as the
-// backstop that refuses to sign an over/under-paid transaction. It stays gated to
-// runs on all networks (isFusionExecutionAllowed → true, owner opt-in), with the
-// per-round verifyFusionSafety gate + mandatory Tor as the runtime fund safety.
+// A fresh 00-Wallet-style identity announces compatible tiers in a short,
+// network-scoped epoch. The elected coordinator then proposes one exact peer
+// set; every peer acknowledges before a random-session round_start is issued.
+// No input/output registration starts from an independently frozen local view.
 
 import { SimplePool } from 'nostr-tools';
-// aliased: the `use*` name trips the react-hooks lint rule, but this is not a hook.
 import { useWebSocketImplementation as setNostrWebSocketImpl } from 'nostr-tools/pool';
 import { invoke } from '@tauri-apps/api/core';
+
 import { hexToBin } from '../../utils/hex';
 import { TorWebSocket, armTorRouting, disarmTorRouting } from './nostr/torWebSocket';
 import ElectrumService from '../../services/ElectrumService';
 import { Network } from '../../state/slices/networkSlice';
 import type { UTXO } from '../../types/types';
-import { gatherInputs, allocateOutputs, type FusionServerParams } from './FusionService';
+import { createFreshFusionOutputScripts, gatherInputs } from './FusionService';
 import { isFusionExecutionAllowed } from './FusionExecutionSafety';
-import { generateRoundIdentity, joinPool, type PoolAnnouncement } from './nostr/fusion';
+import {
+  generateRoundIdentity,
+  joinPool,
+  poolEpoch,
+  poolEpochEnd,
+  poolEpochStart,
+  selectFusionGroup,
+  POOL_EPOCH_GRACE_SECONDS,
+  type FusionPoolNetwork,
+  type PoolAnnouncement,
+  type RoundIdentity,
+} from './nostr/fusion';
 import { createNostrRoundTransport } from './nostr/fusionTransport';
+import { negotiateFusionRound } from './nostr/fusionRendezvous';
 import { runFusionRound, type RoundResult } from './nostr/fusionSession';
 import type { FusionInputRef, FusionOutputRef } from './nostr/fusionRound';
+import { planP2pOutputValues } from './nostr/fusionP2pAllocation';
 import { DEFAULT_RELAYS } from './nostr/chat';
 
-/** Every peer must agree on the feerate so the assembled tx's fee is identical. */
-const P2P_FEERATE = 1000; // 1 sat/byte
+const P2P_FEERATE = 1_000; // sats per 1000 bytes
 const P2P_TIERS = [10_000, 100_000, 1_000_000, 10_000_000];
-// maxExcessFee is intentionally loose: the round's verifyFusionSafety gate (fee
-// within [min, 3×min]) is the real economic guard, so allocation never blocks a
-// round the gate would accept. ponytail: a change-output allocator that keeps the
-// leftover minimal is the calibration upgrade once live rounds confirm the math.
-const P2P_PARAMS: FusionServerParams = {
-  tiers: P2P_TIERS,
-  numComponents: 100,
-  componentFeerate: P2P_FEERATE,
-  minExcessFee: 0,
-  maxExcessFee: 20_000_000,
-};
-
-/** Whether the Tor WebSocket shim has been installed into nostr-tools yet. */
+const MIN_PARTICIPANTS = 2;
+const MAX_PARTICIPANTS = 10;
+const MIN_EPOCH_LEAD_SECONDS = 8;
+const EPOCH_SETTLE_SECONDS = 2;
+const MAX_RELAYS = 8;
 let wsInstalled = false;
 
-const MIN_PARTICIPANTS = 2;
-// A fixed collection window: every peer announces immediately (below) and freezes
-// its participant set when the window closes, so wallets whose Fuse Now is pressed
-// within the window all freeze the SAME set — the coordinator and participants
-// then agree without a separate round_start negotiation. Clicks must fall inside
-// this window. ponytail: a coordinator-anchored round_start removes the timing
-// constraint entirely; add it when rounds run beyond a controlled test.
-const POOL_WINDOW_MS = 60_000;
-
-/** Live round phases shown as a 1–5 stepper (00-Wallet style). Index 0 = idle. */
 export const P2P_PHASE_LABELS = [
   'Idle',
   'Announcing & finding peers',
@@ -75,120 +58,199 @@ export interface P2pFusionOptions {
   network: Network;
   utxos: UTXO[];
   relays?: string[];
-  /** Tor SOCKS proxy to route relay traffic through. REQUIRED — P2P fusion fails
-   *  closed without Tor, like classic CashFusion. */
   tor: { host: string; port: number } | null;
-  onStatus?: (msg: string) => void;
-  /** Live phase 1–5 for the UI stepper (see P2P_PHASE_LABELS). */
+  onStatus?: (message: string) => void;
   onPhase?: (phase: number) => void;
+  signal?: AbortSignal;
 }
 
-/** Collect announcements for a fixed window, then freeze the participant set. */
-function waitForParticipants(
-  myPubkey: string,
-  getPeers: () => PoolAnnouncement[],
-  onStatus?: (m: string) => void
-): Promise<string[]> {
+function toPoolNetwork(network: Network): FusionPoolNetwork {
+  return network === Network.MAINNET ? 'mainnet' : 'chipnet';
+}
+
+function validatedRelays(configured?: string[]): string[] {
+  const relays = Array.from(new Set((configured?.length ? configured : DEFAULT_RELAYS)))
+    .filter((relay) => relay.startsWith('wss://'))
+    .slice(0, MAX_RELAYS);
+  if (relays.length === 0) throw new Error('No secure Nostr relays configured.');
+  return relays;
+}
+
+function waitUntil(timestampMs: number, signal?: AbortSignal): Promise<void> {
+  if (signal?.aborted) return Promise.reject(new Error('fusion round cancelled'));
   return new Promise((resolve, reject) => {
-    const deadline = Date.now() + POOL_WINDOW_MS;
-    const tick = () => {
-      const set = new Set([myPubkey, ...getPeers().map((p) => p.pubkey)]);
-      const left = Math.max(0, Math.ceil((deadline - Date.now()) / 1000));
-      onStatus?.(`Peers in pool: ${set.size} (collecting ${left}s)`);
-      console.info('[p2p-fusion] pool size', set.size, 'window', left, 's');
-      if (Date.now() >= deadline) {
-        if (set.size >= MIN_PARTICIPANTS) return resolve([...set].sort());
-        return reject(new Error(`No fusion pool formed for this tier (need ${MIN_PARTICIPANTS}, saw ${set.size}).`));
-      }
-      setTimeout(tick, 2000);
+    const finish = () => {
+      signal?.removeEventListener('abort', cancel);
+      resolve();
     };
-    tick();
+    const timer = setTimeout(finish, Math.max(0, timestampMs - Date.now()));
+    const cancel = () => {
+      clearTimeout(timer);
+      signal?.removeEventListener('abort', cancel);
+      reject(new Error('fusion round cancelled'));
+    };
+    signal?.addEventListener('abort', cancel, { once: true });
   });
 }
 
-/**
- * Run one P2P fusion round for the wallet's non-token UTXOs on any network.
- * Resolves with the broadcast txid.
- */
-export async function runP2pFusion(opts: P2pFusionOptions): Promise<RoundResult> {
-  if (!isFusionExecutionAllowed()) {
-    throw new Error('P2P fusion execution is paused.');
+async function collectEpoch(
+  epoch: number,
+  getPeers: () => PoolAnnouncement[],
+  onStatus?: (message: string) => void,
+  signal?: AbortSignal
+): Promise<PoolAnnouncement[]> {
+  const deadline = (poolEpochEnd(epoch) + EPOCH_SETTLE_SECONDS) * 1_000;
+  while (Date.now() < deadline) {
+    if (signal?.aborted) throw new Error('fusion round cancelled');
+    const left = Math.max(0, Math.ceil((deadline - Date.now()) / 1_000));
+    onStatus?.(`Fresh peers: ${getPeers().length} (epoch closes in ${left}s)`);
+    await waitUntil(Math.min(deadline, Date.now() + 1_000), signal);
   }
-  // Fail closed on Tor: P2P fusion must not touch a relay without Tor, so a peer's
-  // IP can't be correlated across its (round-key) inputs and (throwaway-key)
-  // outputs. Same requirement as classic CashFusion.
-  if (!opts.tor) {
-    throw new Error('Tor is required for P2P fusion — enable Tor in settings and wait for it to bootstrap.');
-  }
-  const torOk = await invoke<boolean>('fusion_tor_check', { host: opts.tor.host, port: opts.tor.port });
-  if (!torOk) {
-    throw new Error('Tor is not reachable — P2P fusion will not run without Tor.');
-  }
-  const relays = opts.relays?.length ? opts.relays : DEFAULT_RELAYS;
-  const status = opts.onStatus;
+  const now = Math.floor(Date.now() / 1_000);
+  return getPeers().filter(
+    (peer) => peer.epoch === epoch && peer.expiresAt >= now
+  );
+}
 
-  // Route every relay socket for this round through the Rust Tor->WSS bridge.
-  // Installed process-wide (idempotent) but only ACTIVE while armed, so chat's
-  // relays stay on native WebSockets.
+function assertBroadcastTxid(value: string): string {
+  if (!/^[0-9a-f]{64}$/i.test(value)) {
+    throw new Error(`Fusion broadcast failed: ${value}`);
+  }
+  return value.toLowerCase();
+}
+
+/** Run one P2P round on the active BCH network. */
+export async function runP2pFusion(opts: P2pFusionOptions): Promise<RoundResult> {
+  if (!isFusionExecutionAllowed()) throw new Error('P2P fusion execution is paused.');
+  if (!opts.tor) {
+    throw new Error('Tor is required for P2P fusion — enable Tor and wait for bootstrap.');
+  }
+  if (opts.signal?.aborted) throw new Error('fusion round cancelled');
+
+  const torOk = await invoke<boolean>('fusion_tor_check', {
+    host: opts.tor.host,
+    port: opts.tor.port,
+  });
+  if (!torOk) throw new Error('Tor is not reachable — P2P fusion stopped.');
+
+  const relays = validatedRelays(opts.relays);
   if (!wsInstalled) {
     setNostrWebSocketImpl(TorWebSocket);
     wsInstalled = true;
   }
   armTorRouting({ host: opts.tor.host, port: opts.tor.port });
-  status?.('Tor verified; routing relay traffic over Tor.');
 
-  // 1. Gather my inputs (with signing keys) and allocate fresh-HD tier outputs.
-  const runInputs = await gatherInputs(opts.walletId, opts.utxos);
-  const sumIn = runInputs.reduce((s, i) => s + i.value, 0);
-  // Pick the LARGEST affordable tier: k·tier then covers most of the balance so the
-  // leftover (excess) stays under one tier and within the fee bound. The smallest
-  // tier would leave a huge unallocatable excess for a large balance (the "excess
-  // not in [0, …]" error). Reserve ~1 tier for fees + change headroom.
-  const tier =
-    [...P2P_TIERS].sort((a, b) => b - a).find((t) => sumIn >= t * 2) ??
-    [...P2P_TIERS].sort((a, b) => b - a).find((t) => sumIn > t) ??
-    null;
-  if (tier == null) throw new Error('Inputs too small for any P2P fusion tier.');
-  status?.(`Chosen tier: ${tier} sats`);
-  const alloc = await allocateOutputs(opts.walletId, opts.network, tier, runInputs, P2P_PARAMS);
-
-  const myInputs: FusionInputRef[] = runInputs.map((i) => ({
-    prevTxid: i.prev_txid,
-    prevIndex: i.prev_index,
-    value: i.value,
-    pubkey: i.pubkey,
-  }));
-  const keysByPubkey = new Map(runInputs.map((i) => [i.pubkey, hexToBin(i.privkey)]));
-  const myOutputs: FusionOutputRef[] = alloc.scripts.map((script, n) => ({ script, value: alloc.values[n] }));
-
-  // 2. Announce readiness on the tier pool and discover peers.
-  const round = generateRoundIdentity();
   const pool = new SimplePool();
-  let peers: PoolAnnouncement[] = [];
-  const jp = joinPool(pool, relays, round, tier, myInputs.length, myOutputs.length, (p) => {
-    peers = p;
-  });
-  jp.announceNow(); // announce immediately so the pool forms quickly for the test
-  console.info('[p2p-fusion] announced tier', tier, 'round pubkey', round.pubkey.slice(0, 8), 'relays', relays);
-  opts.onPhase?.(1); // announcing & finding peers
-  status?.('Announced to the tier pool; waiting for peers…');
+  // Output registrations get different relay sockets and Tor isolation streams.
+  const outputPool = new SimplePool();
+  let stopPool: (() => void) | null = null;
+  let round: RoundIdentity | null = null;
+  const status = opts.onStatus;
 
   try {
-    // 3. Freeze the participant set once the pool forms.
-    const participants = await waitForParticipants(round.pubkey, () => peers, status);
-    status?.(`Pool formed with ${participants.length} peers; running round…`);
+    status?.('Tor verified; preparing fresh pool identity.');
+    const runInputs = await gatherInputs(opts.walletId, opts.utxos);
+    const sumIn = runInputs.reduce((sum, input) => sum + input.value, 0);
+    const tiers = P2P_TIERS.filter((tier) => sumIn > tier + 1_000);
+    if (tiers.length === 0) throw new Error('Inputs too small for any P2P fusion tier.');
 
-    // 4. Run the proven round over the Nostr transport; coordinator broadcasts.
-    const transport = createNostrRoundTransport(pool, relays, round);
+    const network = toPoolNetwork(opts.network);
+    const now = Math.floor(Date.now() / 1_000);
+    let epoch = poolEpoch(now);
+    if (poolEpochEnd(epoch) - now < MIN_EPOCH_LEAD_SECONDS) epoch += 1;
+    if (poolEpochStart(epoch) > now) {
+      status?.('Waiting for the next fresh Fusion pool epoch…');
+      await waitUntil(poolEpochStart(epoch) * 1_000, opts.signal);
+    }
+
+    round = generateRoundIdentity();
+    let peers: PoolAnnouncement[] = [
+      {
+        pubkey: round.pubkey,
+        network,
+        epoch,
+        tiers,
+        numInputs: runInputs.length,
+        at: Math.floor(Date.now() / 1_000),
+        expiresAt: poolEpochEnd(epoch) + POOL_EPOCH_GRACE_SECONDS,
+      },
+    ];
+    const joined = joinPool(pool, relays, {
+      round,
+      network,
+      epoch,
+      tiers,
+      numInputs: runInputs.length,
+      onPeer: (received) => {
+        const merged = new Map(peers.map((peer) => [peer.pubkey, peer]));
+        received.forEach((peer) => merged.set(peer.pubkey, peer));
+        peers = [...merged.values()];
+      },
+      onError: (error) => status?.(error.message),
+    });
+    stopPool = joined.stop;
+    await joined.announceNow();
+    opts.onPhase?.(1);
+    status?.('Ephemeral kind-22230 announcement accepted; collecting peers…');
+
+    const fresh = await collectEpoch(epoch, () => peers, status, opts.signal);
+    joined.stop();
+    stopPool = null;
+    const group = selectFusionGroup(fresh, MIN_PARTICIPANTS, MAX_PARTICIPANTS);
+    if (!group || !group.participants.includes(round.pubkey)) {
+      throw new Error('No compatible P2P Fusion group formed in this epoch.');
+    }
+
+    const transport = createNostrRoundTransport(pool, relays, round, outputPool);
+    const negotiated = await negotiateFusionRound(
+      {
+        myPubkey: round.pubkey,
+        candidates: group.participants,
+        network,
+        tier: group.tier,
+        epoch,
+        signal: opts.signal,
+      },
+      transport
+    );
+    status?.(
+      `Round agreed with ${negotiated.participants.length} peers at ${negotiated.tier} sats.`
+    );
+
+    const myInputs: FusionInputRef[] = runInputs.map((input) => ({
+      prevTxid: input.prev_txid,
+      prevIndex: input.prev_index,
+      value: input.value,
+      pubkey: input.pubkey,
+    }));
+    const outputPlan = planP2pOutputValues({
+      inputs: myInputs,
+      participantCount: negotiated.participants.length,
+      feerate: P2P_FEERATE,
+    });
+    const outputScripts = await createFreshFusionOutputScripts(
+      opts.walletId,
+      opts.network,
+      outputPlan.values.length
+    );
+    const keysByPubkey = new Map(
+      runInputs.map((input) => [input.pubkey, hexToBin(input.privkey)])
+    );
+    const myOutputs: FusionOutputRef[] = outputScripts.map(
+      (script, index) => ({ script, value: outputPlan.values[index] })
+    );
+
     const result = await runFusionRound(
       {
         myPubkey: round.pubkey,
-        participants,
-        tier,
+        participants: negotiated.participants,
+        session: negotiated.session,
+        tier: negotiated.tier,
         feerate: P2P_FEERATE,
         myContribution: { inputs: myInputs, outputs: myOutputs },
         keysByPubkey,
-        broadcast: (txHex) => ElectrumService.broadcastTransaction(txHex),
+        broadcast: async (txHex) =>
+          assertBroadcastTxid(await ElectrumService.broadcastTransaction(txHex)),
         onPhase: opts.onPhase,
       },
       transport
@@ -196,8 +258,10 @@ export async function runP2pFusion(opts: P2pFusionOptions): Promise<RoundResult>
     status?.(`Fused ✓ — txid ${result.txid}`);
     return result;
   } finally {
-    jp.stop();
+    stopPool?.();
     pool.close(relays);
-    disarmTorRouting(); // chat relays revert to native WebSockets
+    outputPool.close(relays);
+    round?.secretKey.fill(0);
+    disarmTorRouting();
   }
 }

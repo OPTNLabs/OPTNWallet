@@ -13,6 +13,8 @@
 import {
   encodeLockingBytecodeP2pkh,
   encodeTransaction,
+  decodeTransaction,
+  createVirtualMachineBCH2023,
   generateSigningSerializationBCH,
   SigningSerializationFlag,
   secp256k1,
@@ -125,4 +127,79 @@ export function finalizeFusionTx(
   const raw = encodeTransaction(transaction);
   const txid = binToHex(hash256(raw).reverse());
   return { txHex: binToHex(raw), txid, transaction, sourceOutputs };
+}
+
+/**
+ * Verify the coordinator's final transaction byte-for-byte against the
+ * previously approved template, then execute every input in the BCH VM. This
+ * prevents a participant from accepting a different or partially signed final
+ * transaction after it has sent its own signatures.
+ */
+export function verifyFinalFusionTx(
+  approved: AssembledFusionTx,
+  txHex: string,
+  claimedTxid: string
+): { txid: string; transaction: TransactionCommon } {
+  if (
+    txHex.length === 0 ||
+    txHex.length > 2_000_000 ||
+    txHex.length % 2 !== 0 ||
+    !/^[0-9a-f]+$/i.test(txHex)
+  ) {
+    throw new Error('invalid final Fusion transaction encoding');
+  }
+  if (!/^[0-9a-f]{64}$/i.test(claimedTxid)) {
+    throw new Error('invalid final Fusion transaction id');
+  }
+
+  const raw = hexToBin(txHex);
+  const txid = binToHex(hash256(raw).reverse());
+  if (txid !== claimedTxid.toLowerCase()) {
+    throw new Error('final Fusion transaction id does not match its bytes');
+  }
+
+  const decoded = decodeTransaction(raw);
+  if (typeof decoded === 'string') {
+    throw new Error(`invalid final Fusion transaction: ${decoded}`);
+  }
+  const { transaction: expected, sourceOutputs } = toLibauthTx(approved);
+  if (
+    decoded.version !== expected.version ||
+    decoded.locktime !== expected.locktime ||
+    decoded.inputs.length !== expected.inputs.length ||
+    decoded.outputs.length !== expected.outputs.length
+  ) {
+    throw new Error('final Fusion transaction differs from approved template');
+  }
+
+  decoded.inputs.forEach((input, index) => {
+    const wanted = expected.inputs[index];
+    if (
+      binToHex(input.outpointTransactionHash) !==
+        binToHex(wanted.outpointTransactionHash) ||
+      input.outpointIndex !== wanted.outpointIndex ||
+      input.sequenceNumber !== wanted.sequenceNumber ||
+      input.unlockingBytecode.length === 0
+    ) {
+      throw new Error('final Fusion transaction input differs from approved template');
+    }
+  });
+  decoded.outputs.forEach((output, index) => {
+    const wanted = expected.outputs[index];
+    if (
+      output.valueSatoshis !== wanted.valueSatoshis ||
+      binToHex(output.lockingBytecode) !== binToHex(wanted.lockingBytecode)
+    ) {
+      throw new Error('final Fusion transaction output differs from approved template');
+    }
+  });
+
+  const vmResult = createVirtualMachineBCH2023().verify({
+    transaction: decoded,
+    sourceOutputs,
+  });
+  if (vmResult !== true) {
+    throw new Error(`final Fusion transaction failed BCH validation: ${vmResult}`);
+  }
+  return { txid, transaction: decoded };
 }
