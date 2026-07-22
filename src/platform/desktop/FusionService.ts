@@ -16,7 +16,6 @@
 import { invoke } from '@tauri-apps/api/core';
 import { cashAddressToLockingBytecode } from '@bitauth/libauth';
 import KeyService from '../../services/KeyService';
-import { deriveBchAddressFromHdPublicKey } from '../../services/HdWalletService';
 import { Network } from '../../state/slices/networkSlice';
 import { binToHex } from '../../utils/hex';
 import type { UTXO } from '../../types/types';
@@ -87,6 +86,56 @@ function scriptForAddress(address: string): string {
 }
 
 /**
+ * Reserve fresh receive indexes by creating their wallet keys, then read the
+ * persisted rows back before exposing any locking scripts to a Fusion round.
+ * A failed round intentionally leaves these indexes used so they are never
+ * silently recycled after having been shared with peers.
+ */
+export async function createFreshFusionOutputScripts(
+  walletId: number,
+  network: Network,
+  count: number
+): Promise<string[]> {
+  if (!Number.isSafeInteger(walletId) || walletId <= 0) {
+    throw new Error('invalid wallet id for Fusion outputs');
+  }
+  if (!Number.isSafeInteger(count) || count < 1 || count > 100) {
+    throw new Error('invalid Fusion output count');
+  }
+
+  const existing = (await KeyService.retrieveKeys(walletId)).filter(
+    (key) => Number(key.accountIndex) === 0 && Number(key.changeIndex) === 0
+  );
+  const startIndex = existing.reduce(
+    (maximum, key) => Math.max(maximum, Number(key.addressIndex) + 1),
+    0
+  );
+
+  for (let offset = 0; offset < count; offset += 1) {
+    await KeyService.createKeys(walletId, 0, 0, startIndex + offset);
+  }
+
+  const persisted = await KeyService.retrieveKeys(walletId);
+  const expectedPrefix = network === Network.MAINNET ? 'bitcoincash:' : 'bchtest:';
+  return Array.from({ length: count }, (_, offset) => {
+    const addressIndex = startIndex + offset;
+    const key = persisted.find(
+      (candidate) =>
+        Number(candidate.accountIndex) === 0 &&
+        Number(candidate.changeIndex) === 0 &&
+        Number(candidate.addressIndex) === addressIndex
+    );
+    if (!key) {
+      throw new Error(`Fusion output key ${addressIndex} was not persisted.`);
+    }
+    if (!key.address.toLowerCase().startsWith(expectedPrefix)) {
+      throw new Error('Fusion output key network does not match the active wallet.');
+    }
+    return scriptForAddress(key.address);
+  });
+}
+
+/**
  * Allocate the fusion outputs: `k` fresh HD addresses each holding exactly the
  * tier amount, `k` chosen so the leftover (the excess fee) stays within the
  * server's [min,max] bounds. Returns the output scriptpubkeys (hex) + values, or
@@ -121,20 +170,7 @@ export async function allocateOutputs(
     );
   }
 
-  // Derive k fresh HD receive addresses (branch 0) past the current gap.
-  const xpubs = await KeyService.getWalletXpubs(walletId, 0);
-  const receiveXpub = xpubs.receive;
-  if (!receiveXpub) throw new Error('no receive xpub');
-
-  const existing = (await KeyService.retrieveKeys(walletId)).filter((x) => x.changeIndex === 0);
-  const startIndex = existing.reduce((m, x) => Math.max(m, Number(x.addressIndex) + 1), 0);
-
-  const scripts: string[] = [];
-  for (let n = 0; n < k; n++) {
-    const derived = deriveBchAddressFromHdPublicKey(network, receiveXpub, BigInt(startIndex + n));
-    if (!derived) throw new Error('failed to derive fusion output address');
-    scripts.push(scriptForAddress(derived.address));
-  }
+  const scripts = await createFreshFusionOutputScripts(walletId, network, k);
   return { scripts, values: new Array(k).fill(tier) };
 }
 
