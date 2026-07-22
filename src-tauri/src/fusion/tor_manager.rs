@@ -69,6 +69,20 @@ pub async fn start(paths: TorPaths, socks_port: u16, bootstrap_timeout: Duration
     {
         let mut child_guard = CHILD.lock().await;
         if child_guard.is_none() {
+            // A tor from a previous (crashed or closed) app run may still hold this
+            // SOCKS port. Spawning a rival with the same port + DataDirectory would
+            // just fail to bind and exit ("port clash"), which is the usual cause of
+            // "tor exited before finishing bootstrap" after a restart. Instead adopt
+            // the existing listener and reuse it; the frontend's SOCKS check still
+            // gates real use, so a stuck leftover is caught before any fusion round.
+            let addr = std::net::SocketAddr::from(([127, 0, 0, 1], socks_port));
+            if std::net::TcpStream::connect_timeout(&addr, Duration::from_millis(500)).is_ok() {
+                SOCKS_PORT.store(socks_port, Ordering::SeqCst);
+                RUNNING.store(true, Ordering::SeqCst);
+                SPAWNED.store(true, Ordering::SeqCst);
+                return Ok(socks_port);
+            }
+
             std::fs::create_dir_all(&paths.data_dir)
                 .map_err(|e| format!("could not create tor data dir: {e}"))?;
 
