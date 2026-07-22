@@ -6,6 +6,7 @@ import {
   type WatchOnlyAccountPreview,
 } from './watchOnlyAccountPreview';
 import { CapacitorBarcodeScanner } from '../barcode-scanner';
+import { CameraQrScanner } from '../CameraQrScanner';
 
 type WatchOnlyWalletPreviewProps = {
   onBack: () => void;
@@ -17,6 +18,7 @@ export const WatchOnlyWalletPreview: FC<WatchOnlyWalletPreviewProps> = ({
   const [network, setNetwork] = useState(Network.MAINNET);
   const [accountXpub, setAccountXpub] = useState('');
   const [preview, setPreview] = useState<WatchOnlyAccountPreview | null>(null);
+  const [scanning, setScanning] = useState(false);
   const [error, setError] = useState('');
 
   const handlePreview = () => {
@@ -94,26 +96,46 @@ export const WatchOnlyWalletPreview: FC<WatchOnlyWalletPreviewProps> = ({
               className="wallet-input w-full resize-none rounded-md px-3 py-2 font-mono text-xs"
             />
           </label>
-          <button
-            type="button"
-            onClick={async () => {
-              try {
-                const { ScanResult } = await CapacitorBarcodeScanner.scanBarcode();
-                if (ScanResult) {
-                  setAccountXpub(ScanResult.trim());
-                  setPreview(null);
-                  setError('');
+          <div className="flex gap-2">
+            <button
+              type="button"
+              onClick={() => setScanning(true)}
+              className="flex-1 rounded-md border border-[var(--wallet-border)] py-2 text-sm font-semibold wallet-text-strong"
+            >
+              Scan (camera)
+            </button>
+            <button
+              type="button"
+              onClick={async () => {
+                try {
+                  const { ScanResult } = await CapacitorBarcodeScanner.scanBarcode();
+                  if (ScanResult) {
+                    setAccountXpub(ScanResult.trim());
+                    setPreview(null);
+                    setError('');
+                  }
+                } catch (err) {
+                  if (err instanceof Error && err.message !== 'No file selected') {
+                    setError(err.message);
+                  }
                 }
-              } catch (err) {
-                if (err instanceof Error && err.message !== 'No file selected') {
-                  setError(err.message);
-                }
-              }
-            }}
-            className="w-full rounded-md border border-[var(--wallet-border)] py-2 text-sm font-semibold wallet-text-strong"
-          >
-            Scan / upload QR
-          </button>
+              }}
+              className="flex-1 rounded-md border border-[var(--wallet-border)] py-2 text-sm font-semibold wallet-text-strong"
+            >
+              Upload QR
+            </button>
+          </div>
+          {scanning && (
+            <CameraQrScanner
+              onResult={(text) => {
+                setAccountXpub(text);
+                setPreview(null);
+                setError('');
+                setScanning(false);
+              }}
+              onClose={() => setScanning(false)}
+            />
+          )}
           <p className="text-[11px] leading-relaxed wallet-muted">
             Confirm that SeedCash exported this account at{' '}
             <span className="font-mono">
