@@ -7,7 +7,11 @@ import {
   hexToBin,
 } from '@bitauth/libauth';
 import { hash160 } from '@cashscript/utils';
-import { signMyInputs, finalizeFusionTx } from '../fusionSign';
+import {
+  signMyInputs,
+  finalizeFusionTx,
+  verifyFinalFusionTx,
+} from '../fusionSign';
 import { assembleFusionTx, verifyFusionSafety, type PeerContribution } from '../fusionRound';
 
 function keypair(seed: number): { priv: Uint8Array; pubHex: string } {
@@ -51,13 +55,18 @@ describe('P2P fusion signing produces a network-valid CoinJoin', () => {
     const sigs = signMyInputs(tx, keys);
     expect(sigs).toHaveLength(2);
 
-    const { transaction, sourceOutputs, txid } = finalizeFusionTx(tx, sigs);
+    const { transaction, sourceOutputs, txid, txHex } = finalizeFusionTx(tx, sigs);
     expect(txid).toMatch(/^[0-9a-f]{64}$/);
 
     // Gold standard: the BCH VM re-derives every sighash and runs each script.
     const vm = createVirtualMachineBCH2023();
     const result = vm.verify({ transaction, sourceOutputs });
     expect(result).toBe(true);
+
+    expect(verifyFinalFusionTx(tx, txHex, txid).txid).toBe(txid);
+    expect(() => verifyFinalFusionTx(tx, txHex, '00'.repeat(32))).toThrow(
+      /transaction id/i
+    );
   });
 
   it('only signs inputs whose key we hold (never touches others\' coins)', () => {

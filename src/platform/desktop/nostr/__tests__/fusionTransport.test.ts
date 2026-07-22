@@ -12,7 +12,11 @@ import {
 } from '@bitauth/libauth';
 import { hash160 } from '@cashscript/utils';
 import { createNostrRoundTransport, GIFT_WRAP_KIND } from '../fusionTransport';
-import { runFusionRound, type RoundParams } from '../fusionSession';
+import {
+  parseRoundMessage,
+  runFusionRound,
+  type RoundParams,
+} from '../fusionSession';
 import { assembleFusionTx, type PeerContribution } from '../fusionRound';
 import { toLibauthTx } from '../fusionSign';
 
@@ -27,6 +31,9 @@ class FakePool {
     const pTags = filter['#p'] as string[] | undefined;
     if (pTags && !e.tags.some((t) => t[0] === 'p' && pTags.includes(t[1]))) return false;
     return true;
+  }
+  get publishedCount(): number {
+    return this.events.length;
   }
   publish(_relays: string[], event: Event): Promise<string>[] {
     this.events.push(event);
@@ -57,6 +64,86 @@ function roundId() {
 }
 
 describe('Nostr round transport', () => {
+  it('rejects malformed or oversized round-message components before dispatch', () => {
+    expect(
+      parseRoundMessage(
+        JSON.stringify({ type: 'inputs', session: 'round', inputs: [{}] })
+      )
+    ).toBeNull();
+    expect(
+      parseRoundMessage(
+        JSON.stringify({
+          type: 'outputs',
+          session: 'round',
+          outputs: [{ script: '00'.repeat(10_001), value: 1 }],
+        })
+      )
+    ).toBeNull();
+    expect(
+      parseRoundMessage(
+        JSON.stringify({
+          type: 'outputs',
+          session: 'round',
+          outputs: [{ script: '00', value: 545 }],
+        })
+      )
+    ).toBeNull();
+    expect(
+      parseRoundMessage(
+        JSON.stringify({ type: 'abort', session: 'round', reason: 'cancelled' })
+      )
+    ).toEqual({ type: 'abort', session: 'round', reason: 'cancelled' });
+  });
+
+  it('fails send when every configured relay rejects the event', async () => {
+    const rejecting = {
+      publish: () => [Promise.reject(new Error('relay rejected'))],
+      subscribeMany: () => ({ close: () => undefined }),
+    } as unknown as SimplePool;
+    const sender = roundId();
+    const recipient = roundId();
+    const transport = createNostrRoundTransport(
+      rejecting,
+      ['wss://rejecting'],
+      sender
+    );
+
+    await expect(
+      transport.send(recipient.pubkey, {
+        type: 'abort',
+        session: 'round',
+        reason: 'test',
+      })
+    ).rejects.toThrow(/No Nostr relay accepted/i);
+  });
+
+  it('publishes anonymous outputs through the isolated output pool', async () => {
+    const controlPool = new FakePool();
+    const outputPool = new FakePool();
+    const sender = roundId();
+    const recipient = roundId();
+    const transport = createNostrRoundTransport(
+      asPool(controlPool),
+      ['wss://fake'],
+      sender,
+      asPool(outputPool)
+    );
+
+    await transport.send(recipient.pubkey, {
+      type: 'inputs',
+      session: 'round',
+      inputs: [],
+    });
+    await transport.send(recipient.pubkey, {
+      type: 'outputs',
+      session: 'round',
+      outputs: [{ script: '00', value: 546 }],
+    });
+
+    expect(controlPool.publishedCount).toBe(1);
+    expect(outputPool.publishedCount).toBe(1);
+  });
+
   it('gift-wraps a message (kind 1059) to the peer and round-trips', async () => {
     const relays = ['wss://fake'];
     const pool = new FakePool();
@@ -67,7 +154,18 @@ describe('Nostr round transport', () => {
 
     const got: Array<{ from: string; type: string }> = [];
     tb.onMessage((from, msg) => got.push({ from, type: msg.type }));
-    await ta.send(b.pubkey, { type: 'inputs', session: 's', inputs: [] });
+    await ta.send(b.pubkey, {
+      type: 'inputs',
+      session: 's',
+      inputs: [
+        {
+          prevTxid: 'ab'.repeat(32),
+          prevIndex: 0,
+          value: 10_000,
+          pubkey: `02${'11'.repeat(32)}`,
+        },
+      ],
+    });
     await new Promise((r) => setTimeout(r, 10));
 
     expect(got).toHaveLength(1);
@@ -87,7 +185,7 @@ describe('Nostr round transport', () => {
 
     let fromPubkey = '';
     tb.onMessage((from, msg) => { if (msg.type === 'outputs') fromPubkey = from; });
-    await ta.send(b.pubkey, { type: 'outputs', session: 's', outputs: [{ script: '00', value: 1 }] });
+    await ta.send(b.pubkey, { type: 'outputs', session: 's', outputs: [{ script: '00', value: 546 }] });
     await new Promise((r) => setTimeout(r, 10));
 
     expect(fromPubkey).not.toBe('');

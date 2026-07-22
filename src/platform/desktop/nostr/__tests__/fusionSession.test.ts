@@ -113,4 +113,167 @@ describe('P2P fusion round choreography (3 peers, in-memory)', () => {
     expect(decoded.inputs).toHaveLength(3);
     expect(decoded.outputs).toHaveLength(3);
   });
+
+  it('broadcasts an abort so duplicate inputs fail every peer promptly', async () => {
+    const peers = [1, 2].map((n) => {
+      const inKey = keypair(n * 10 + 1);
+      const outKey = keypair(n * 10 + 2);
+      const round = keypair(n * 10 + 3);
+      const contribution: PeerContribution = {
+        inputs: [
+          {
+            prevTxid: 'd'.repeat(64),
+            prevIndex: 0,
+            value: 100_000,
+            pubkey: inKey.pubHex,
+          },
+        ],
+        outputs: [{ script: p2pkhHex(outKey.pubHex), value: 99_600 }],
+      };
+      return { round, keys: new Map([[inKey.pubHex, inKey.priv]]), contribution };
+    });
+    const participants = peers.map((item) => item.round.pubHex);
+    const hub = new Hub();
+
+    const settled = await Promise.allSettled(
+      peers.map((item) =>
+        runFusionRound(
+          {
+            myPubkey: item.round.pubHex,
+            participants,
+            session: 'a'.repeat(64),
+            tier: 100_000,
+            feerate: 1_000,
+            myContribution: item.contribution,
+            keysByPubkey: item.keys,
+            broadcast: async () => {
+              throw new Error('must not broadcast');
+            },
+            timeoutMs: 250,
+          },
+          hub.transportFor(item.round.pubHex)
+        )
+      )
+    );
+
+    expect(settled).toHaveLength(2);
+    for (const result of settled) {
+      expect(result.status).toBe('rejected');
+      if (result.status === 'rejected') {
+        expect(String(result.reason)).toContain('duplicate input');
+      }
+    }
+  });
+
+  it('rejects a coordinator final message that was not the verified transaction', async () => {
+    const input = keypair(71);
+    const output = keypair(72);
+    const coordinator = '0'.repeat(64);
+    const participant = 'f'.repeat(64);
+    const session = 'b'.repeat(64);
+    const contribution: PeerContribution = {
+      inputs: [
+        {
+          prevTxid: 'e'.repeat(64),
+          prevIndex: 1,
+          value: 100_000,
+          pubkey: input.pubHex,
+        },
+      ],
+      outputs: [{ script: p2pkhHex(output.pubHex), value: 99_600 }],
+    };
+    let handler: Handler = () => undefined;
+    const transport: RoundTransport = {
+      send: async (_to, message) => {
+        if (message.type === 'outputs') {
+          queueMicrotask(() =>
+            handler(coordinator, {
+              type: 'assembled',
+              session,
+              inputs: contribution.inputs,
+              outputs: contribution.outputs,
+            })
+          );
+        }
+        if (message.type === 'signature') {
+          queueMicrotask(() =>
+            handler(coordinator, {
+              type: 'final',
+              session,
+              txid: '00'.repeat(32),
+              txHex: '00',
+            })
+          );
+        }
+      },
+      onMessage: (next) => {
+        handler = next;
+        return () => undefined;
+      },
+    };
+
+    await expect(
+      runFusionRound(
+        {
+          myPubkey: participant,
+          participants: [coordinator, participant],
+          session,
+          tier: 100_000,
+          feerate: 1_000,
+          myContribution: contribution,
+          keysByPubkey: new Map([[input.pubHex, input.priv]]),
+          broadcast: async () => {
+            throw new Error('participant must not broadcast');
+          },
+          timeoutMs: 1_000,
+        },
+        transport
+      )
+    ).rejects.toThrow(/final Fusion transaction/i);
+  });
+
+  it('fails immediately when the authenticated coordinator sends a malformed message', async () => {
+    const input = keypair(81);
+    const output = keypair(82);
+    const coordinator = '0'.repeat(64);
+    const participant = 'f'.repeat(64);
+    const contribution: PeerContribution = {
+      inputs: [
+        {
+          prevTxid: '9'.repeat(64),
+          prevIndex: 0,
+          value: 100_000,
+          pubkey: input.pubHex,
+        },
+      ],
+      outputs: [{ script: p2pkhHex(output.pubHex), value: 99_600 }],
+    };
+    const transport: RoundTransport = {
+      send: async () => undefined,
+      onMessage: () => () => undefined,
+      onProtocolError: (handler) => {
+        queueMicrotask(() =>
+          handler(coordinator, new Error('Invalid Fusion round message.'))
+        );
+        return () => undefined;
+      },
+    };
+
+    await expect(
+      runFusionRound(
+        {
+          myPubkey: participant,
+          participants: [coordinator, participant],
+          session: 'c'.repeat(64),
+          tier: 100_000,
+          feerate: 1_000,
+          myContribution: contribution,
+          keysByPubkey: new Map([[input.pubHex, input.priv]]),
+          broadcast: async () => '',
+          timeoutMs: 50,
+        },
+        transport
+      )
+    ).rejects.toThrow('Invalid Fusion round message');
+  });
 });
