@@ -106,6 +106,13 @@ const POOL_WAIT_MAX_MS = 75_000; // give up gathering after this
 // actually ACKed rather than waiting on every announced key.
 const RECENT_ACTIVE_SECONDS = 45;
 
+// Every Start click mints a fresh throwaway identity, and the announcement is a
+// STORED event the relay keeps replaying until it ages out. Without this, a retry
+// discovers its OWN abandoned key as a peer: the same wallet joins its own round
+// twice, contributes the same coins, and the round dies on "duplicate input".
+// A wallet must never fuse with itself.
+const myPastRoundKeys = new Set<string>();
+
 async function collectRolling(
   selfPubkey: string,
   getPeers: () => PoolAnnouncement[],
@@ -117,9 +124,11 @@ async function collectRolling(
   const maxWait = start + POOL_WAIT_MAX_MS;
   const fresh = () => {
     const nowSeconds = Math.floor(Date.now() / 1_000);
-    return getPeers().filter(
-      (peer) => peer.pubkey === selfPubkey || peer.at >= nowSeconds - RECENT_ACTIVE_SECONDS
-    );
+    return getPeers().filter((peer) => {
+      if (peer.pubkey === selfPubkey) return true;
+      if (myPastRoundKeys.has(peer.pubkey)) return false; // an earlier attempt of ours
+      return peer.at >= nowSeconds - RECENT_ACTIVE_SECONDS;
+    });
   };
   for (;;) {
     if (signal?.aborted) throw new Error('fusion round cancelled');
@@ -218,6 +227,7 @@ export async function runP2pFusion(opts: P2pFusionOptions): Promise<RoundResult>
     const epoch = poolEpoch(now);
 
     round = generateRoundIdentity();
+    myPastRoundKeys.add(round.pubkey);
     let peers: PoolAnnouncement[] = [
       {
         pubkey: round.pubkey,
