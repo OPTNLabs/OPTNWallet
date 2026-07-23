@@ -11,7 +11,7 @@ import { invoke } from '@tauri-apps/api/core';
 
 import { hexToBin } from '../../utils/hex';
 import { TorWebSocket, armTorRouting, disarmTorRouting } from './nostr/torWebSocket';
-import ElectrumService from '../../services/ElectrumService';
+import ElectrumService, { invalidateUTXOCache } from '../../services/ElectrumService';
 import { Network } from '../../state/slices/networkSlice';
 import type { UTXO } from '../../types/types';
 import { createFreshFusionOutputScripts, gatherInputs } from './FusionService';
@@ -100,7 +100,11 @@ const POOL_WAIT_MAX_MS = 75_000; // give up gathering after this
 // every ~8s while running a round; an abandoned attempt (a stale throwaway key from
 // an earlier click/retry) stops re-announcing and ages out — so the group is formed
 // from currently-live wallets, not accumulated dead announcements.
-const RECENT_ACTIVE_SECONDS = 18;
+// Must comfortably exceed REANNOUNCE_MS (12s) or live peers get filtered out as
+// "dead" between refreshes. Abandoned round keys still age out; they no longer
+// stall a round anyway, since the coordinator now starts with the peers that
+// actually ACKed rather than waiting on every announced key.
+const RECENT_ACTIVE_SECONDS = 45;
 
 async function collectRolling(
   selfPubkey: string,
@@ -124,16 +128,39 @@ async function collectRolling(
     if ((peers.length >= MIN_PARTICIPANTS && now >= minReady) || now >= maxWait) {
       return peers;
     }
-    const raw = getPeers().length; // ponytail: temp diagnostic — raw received vs fresh
     if (peers.length >= MIN_PARTICIPANTS) {
       const inSecs = Math.max(0, Math.ceil((minReady - now) / 1_000));
-      onStatus?.(`${peers.length} peers ready — starting in ${inSecs}s… (rx ${raw})`);
+      onStatus?.(`${peers.length} peers ready — starting in ${inSecs}s…`);
     } else {
       const secsLeft = Math.max(0, Math.ceil((maxWait - now) / 1_000));
-      onStatus?.(`Waiting for peers: ${peers.length} present (rx ${raw}, up to ${secsLeft}s)…`);
+      onStatus?.(`Waiting for peers: ${peers.length} present (up to ${secsLeft}s)…`);
     }
     await waitUntil(Math.min(maxWait, now + 1_500), signal);
   }
+}
+
+/**
+ * Re-check every candidate coin against the LIVE UTXO set immediately before the
+ * round. Fusion spends coins the UI cached in redux; if any were already spent
+ * (an earlier attempt, another send, or a cache left stale by an Electrum
+ * "Connection lost"), the assembled CoinJoin references a missing outpoint and
+ * the network rejects the entire broadcast with "Missing inputs" — after every
+ * peer has already signed and burned their fresh output addresses. Dropping dead
+ * coins here is far cheaper than failing a whole multi-party round at the end.
+ */
+async function onlyUnspent(utxos: UTXO[]): Promise<UTXO[]> {
+  const addresses = Array.from(
+    new Set(utxos.map((utxo) => utxo.address).filter(Boolean))
+  );
+  if (addresses.length === 0) return [];
+  addresses.forEach((address) => invalidateUTXOCache(address));
+  const live = await ElectrumService.getUTXOsMany(addresses);
+  const unspent = new Set(
+    Object.values(live)
+      .flat()
+      .map((utxo) => `${utxo.tx_hash}:${utxo.tx_pos}`)
+  );
+  return utxos.filter((utxo) => unspent.has(`${utxo.tx_hash}:${utxo.tx_pos}`));
 }
 
 function assertBroadcastTxid(value: string): string {
@@ -173,7 +200,13 @@ export async function runP2pFusion(opts: P2pFusionOptions): Promise<RoundResult>
 
   try {
     status?.('Tor verified; preparing fresh pool identity.');
-    const runInputs = await gatherInputs(opts.walletId, opts.utxos);
+    const spendable = await onlyUnspent(opts.utxos);
+    if (spendable.length === 0) {
+      throw new Error(
+        'No live unspent coins to fuse — the wallet list was stale. Sync and retry.'
+      );
+    }
+    const runInputs = await gatherInputs(opts.walletId, spendable);
     const sumIn = runInputs.reduce((sum, input) => sum + input.value, 0);
     const tiers = P2P_TIERS.filter((tier) => sumIn > tier + 1_000);
     if (tiers.length === 0) throw new Error('Inputs too small for any P2P fusion tier.');
