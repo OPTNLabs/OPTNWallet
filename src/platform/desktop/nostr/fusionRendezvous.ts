@@ -70,27 +70,57 @@ function asError(value: unknown): Error {
   return value instanceof Error ? value : new Error(String(value));
 }
 
-export function negotiateFusionRound(
+/** How many silent coordinators we drop before giving up on the round. */
+const MAX_COORDINATOR_FAILOVERS = 3;
+
+/**
+ * Election picks the lowest pubkey, but a pool announcement is a stored event a
+ * relay keeps replaying, so the "lowest" key can belong to a round nobody is
+ * running any more. Without failover every live peer waits on that ghost until
+ * the whole round times out ("round start timed out"). If the elected
+ * coordinator never proposes, drop it and re-elect among the peers that are
+ * left — one of which may now be us.
+ */
+export async function negotiateFusionRound(
   params: FusionRendezvousParams,
   transport: RoundTransport
 ): Promise<NegotiatedFusionRound> {
   if (!PUBKEY.test(params.myPubkey)) {
-    return Promise.reject(new Error('invalid local Fusion round pubkey'));
+    throw new Error('invalid local Fusion round pubkey');
   }
-  const candidates = canonicalParticipants([
-    params.myPubkey,
-    ...params.candidates,
-  ]);
-  if (candidates.length < 2) {
-    return Promise.reject(new Error('P2P Fusion needs at least two fresh peers.'));
+  let candidates = canonicalParticipants([params.myPubkey, ...params.candidates]);
+  const deadline =
+    Date.now() + (params.timeoutMs ?? DEFAULT_RENDEZVOUS_TIMEOUT_MS);
+
+  for (let attempt = 0; ; attempt += 1) {
+    if (candidates.length < 2) {
+      throw new Error('P2P Fusion needs at least two fresh peers.');
+    }
+    const coordinator = electCoordinator(candidates);
+    if (!coordinator) {
+      throw new Error('P2P Fusion coordinator election failed.');
+    }
+    const remaining = deadline - Date.now();
+    if (remaining <= 0) throw new Error('round start timed out');
+    const iAmCoordinator = coordinator === params.myPubkey;
+    // As a participant, spend only part of the budget waiting so a silent
+    // coordinator still leaves time to re-elect and finish.
+    const timeoutMs = iAmCoordinator
+      ? remaining
+      : Math.min(remaining, Math.max(2_000, Math.floor(remaining / 2)));
+    const attemptParams = { ...params, candidates, timeoutMs };
+
+    try {
+      return iAmCoordinator
+        ? await negotiateAsCoordinator(attemptParams, transport, candidates)
+        : await negotiateAsParticipant(attemptParams, transport, coordinator);
+    } catch (error) {
+      const silentCoordinator =
+        !iAmCoordinator && /round start timed out/.test(String(error));
+      if (!silentCoordinator || attempt >= MAX_COORDINATOR_FAILOVERS) throw error;
+      candidates = candidates.filter((pubkey) => pubkey !== coordinator);
+    }
   }
-  const coordinator = electCoordinator(candidates);
-  if (!coordinator) {
-    return Promise.reject(new Error('P2P Fusion coordinator election failed.'));
-  }
-  return coordinator === params.myPubkey
-    ? negotiateAsCoordinator(params, transport, candidates)
-    : negotiateAsParticipant(params, transport, coordinator);
 }
 
 function negotiateAsCoordinator(
@@ -107,6 +137,14 @@ function negotiateAsCoordinator(
   const settleMs =
     params.coordinatorSettleMs ??
     Math.min(5_000, Math.max(1_000, Math.floor(timeoutMs * 0.6)));
+  const proposal: RoundMessage = {
+    type: 'round_proposal',
+    session,
+    network: params.network,
+    tier: params.tier,
+    epoch: params.epoch,
+    participants,
+  };
 
   return new Promise((resolve, reject) => {
     let settled = false;
@@ -117,10 +155,21 @@ function negotiateAsCoordinator(
     let ownStartTimer: ReturnType<typeof setTimeout> | undefined;
     const acknowledgments = new Set<string>([params.myPubkey]);
     let unsubscribe: () => void = () => undefined;
+    // Keep re-offering the proposal until the round starts. A peer still waiting
+    // out a silent coordinator ignores proposals from higher keys, so it would
+    // miss a one-shot offer sent before it failed over — and over Tor a single
+    // dropped message would strand the round the same way.
+    const reproposeTimer = setInterval(() => {
+      if (settled || starting || yielded) return;
+      void Promise.all(
+        others.map((peer) => transport.send(peer, proposal))
+      ).catch(() => undefined);
+    }, 1_500);
 
     const cleanup = () => {
       if (timer) clearTimeout(timer);
       if (ownStartTimer) clearTimeout(ownStartTimer);
+      if (reproposeTimer) clearInterval(reproposeTimer);
       params.signal?.removeEventListener('abort', onAbort);
       unsubscribe();
     };
@@ -265,14 +314,6 @@ function negotiateAsCoordinator(
       startOwnRound();
     }, settleMs);
 
-    const proposal: RoundMessage = {
-      type: 'round_proposal',
-      session,
-      network: params.network,
-      tier: params.tier,
-      epoch: params.epoch,
-      participants,
-    };
     void Promise.all(others.map((peer) => transport.send(peer, proposal))).catch(
       (error: unknown) =>
         void finishError(
