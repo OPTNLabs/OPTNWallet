@@ -160,7 +160,7 @@ export async function runP2pFusion(opts: P2pFusionOptions): Promise<RoundResult>
     // boundary split (one window jumps ahead, another doesn't) that produced "no
     // compatible P2P Fusion group". Peers just wait a few seconds for it to start.
     const epoch = poolEpoch(now) + 1;
-    status?.('Waiting for the shared Fusion pool epoch (click all wallets within ~30s)…');
+    status?.('Waiting for the next Fusion pool round to start…');
     await waitUntil(poolEpochStart(epoch) * 1_000, opts.signal);
 
     round = generateRoundIdentity();
