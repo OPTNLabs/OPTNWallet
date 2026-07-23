@@ -32,7 +32,11 @@ export const FUSION_POOL_PROTOCOL = 1;
 export const POOL_EPOCH_SECONDS = 30;
 export const POOL_EPOCH_GRACE_SECONDS = 8;
 export const MAX_ANNOUNCE_DELAY_MS = 3_000;
-const REANNOUNCE_MS = 8_000;
+// The announcement is a stored replaceable event, so the relay keeps serving the
+// latest one to new subscribers — frequent re-announcing buys nothing and made
+// relays answer "rate-limited: you are noting too much". Refresh slowly, just
+// often enough to stay inside the peer-active window.
+const REANNOUNCE_MS = 12_000;
 const MAX_FUTURE_SKEW_SECONDS = 5;
 const MAX_ANNOUNCEMENT_BYTES = 2_048;
 const MAX_TIERS = 16;

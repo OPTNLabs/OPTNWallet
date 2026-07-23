@@ -16,12 +16,14 @@ import { get as idbGet, set as idbSet } from 'idb-keyval';
 import WalletManager from '../../../apis/WalletManager/WalletManager';
 import { deriveNostrIdentity, type NostrIdentity } from './identity';
 
-/** Sensible public relays as a starting set; users can add their own. */
+// Sensible public relays as a starting set; users can add their own.
+// relay.nostr.band was dropped: it refuses/never completes the WSS handshake
+// (ERR_CONNECTION_TIMED_OUT), and every fusion publish/subscribe stalled on it
+// before falling through to the working relays.
 export const DEFAULT_RELAYS = [
   'wss://relay.damus.io',
   'wss://nos.lol',
   'wss://relay.primal.net',
-  'wss://relay.nostr.band',
 ];
 
 const GIFT_WRAP = 1059;
