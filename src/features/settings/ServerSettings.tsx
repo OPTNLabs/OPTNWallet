@@ -9,6 +9,10 @@ import {
   selectExplorerCustom,
   setExplorerId,
   setExplorerCustom,
+  selectFeeMode,
+  selectCustomFeeSatPerByte,
+  setFeeMode,
+  setCustomFeeSatPerByte,
 } from '../../state/slices/preferencesSlice';
 import { EXPLORER_PRESETS } from '../../utils/servers/explorers';
 import { getUserServers, addUserServer, removeUserServer, isValidServerEntry, getServerLabel, parseServerEntry } from '../../utils/servers/userServers';
@@ -49,6 +53,8 @@ export const ServerSettings: React.FC = () => {
   const defaultServers = getElectrumServers(currentNetwork);
   const explorerId = useSelector(selectExplorerId);
   const explorerCustom = useSelector(selectExplorerCustom);
+  const feeMode = useSelector(selectFeeMode);
+  const customFeeSatPerByte = useSelector(selectCustomFeeSatPerByte);
   const [customTx, setCustomTx] = useState(explorerCustom.tx);
   const [customAddr, setCustomAddr] = useState(explorerCustom.address);
 
@@ -395,6 +401,51 @@ export const ServerSettings: React.FC = () => {
               Save custom explorer
             </button>
           </div>
+        )}
+      </div>
+
+      {/* Transaction fee */}
+      <div className="flex flex-col gap-2 border-t border-[var(--wallet-border)] pt-4">
+        <p className="text-xs font-semibold wallet-muted uppercase tracking-wide">Transaction fee</p>
+        <p className="text-xs wallet-muted">
+          Fee rate for new transactions. Automatic uses the network minimum (~1 sat/byte, Electron Cash default).
+        </p>
+        <div className="flex gap-2">
+          <button
+            type="button"
+            onClick={() => dispatch(setFeeMode('auto'))}
+            className={`flex-1 rounded-xl border px-3 py-2 text-sm font-semibold transition-colors ${
+              feeMode === 'auto'
+                ? 'border-[var(--wallet-accent)] text-[var(--wallet-accent)] bg-[var(--wallet-accent)]/10'
+                : 'border-[var(--wallet-border)] wallet-muted'
+            }`}
+          >
+            Automatic
+          </button>
+          <button
+            type="button"
+            onClick={() => dispatch(setFeeMode('custom'))}
+            className={`flex-1 rounded-xl border px-3 py-2 text-sm font-semibold transition-colors ${
+              feeMode === 'custom'
+                ? 'border-[var(--wallet-accent)] text-[var(--wallet-accent)] bg-[var(--wallet-accent)]/10'
+                : 'border-[var(--wallet-border)] wallet-muted'
+            }`}
+          >
+            Custom
+          </button>
+        </div>
+        {feeMode === 'custom' && (
+          <label className="flex items-center gap-2 text-sm wallet-text-strong">
+            <input
+              type="number"
+              min={1}
+              step={0.1}
+              value={customFeeSatPerByte}
+              onChange={(e) => dispatch(setCustomFeeSatPerByte(Number(e.target.value)))}
+              className="w-28 rounded-xl border border-[var(--wallet-border)] bg-[var(--wallet-surface)] px-3 py-2 text-sm wallet-text-strong outline-none focus:ring-1 focus:ring-[var(--wallet-accent)]"
+            />
+            <span className="text-xs wallet-muted">sat/byte — applies to your next transaction</span>
+          </label>
         )}
       </div>
 
