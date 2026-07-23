@@ -11,6 +11,10 @@ type PreferencesState = {
   explorerId: string;
   explorerCustomTx: string;
   explorerCustomAddress: string;
+  // Transaction fee: 'auto' uses the min relay fee; 'custom' pays the user's
+  // sat/byte (never below the relay minimum). Immediate effect on new txs.
+  feeMode: 'auto' | 'custom';
+  customFeeSatPerByte: number;
 };
 
 const initialState: PreferencesState = {
@@ -19,6 +23,8 @@ const initialState: PreferencesState = {
   explorerId: DEFAULT_EXPLORER_ID,
   explorerCustomTx: '',
   explorerCustomAddress: '',
+  feeMode: 'auto',
+  customFeeSatPerByte: 1.1,
 };
 
 const preferencesSlice = createSlice({
@@ -48,6 +54,13 @@ const preferencesSlice = createSlice({
       state.explorerCustomTx = action.payload.tx.trim();
       state.explorerCustomAddress = action.payload.address.trim();
     },
+    setFeeMode: (state, action: PayloadAction<'auto' | 'custom'>) => {
+      state.feeMode = action.payload;
+    },
+    setCustomFeeSatPerByte: (state, action: PayloadAction<number>) => {
+      const value = Number(action.payload);
+      state.customFeeSatPerByte = Number.isFinite(value) && value > 0 ? value : 1.1;
+    },
   },
 });
 
@@ -58,6 +71,8 @@ export const {
   toggleEnableTooltips,
   setExplorerId,
   setExplorerCustom,
+  setFeeMode,
+  setCustomFeeSatPerByte,
 } = preferencesSlice.actions;
 
 export const selectPreferInternalChangeForBch = (state: RootState) =>
@@ -94,5 +109,11 @@ export const selectExplorerCustom = createSelector(
   ],
   (tx, address) => ({ tx: tx ?? '', address: address ?? '' })
 );
+
+export const selectFeeMode = (state: RootState): 'auto' | 'custom' =>
+  state.preferences.feeMode ?? 'auto';
+
+export const selectCustomFeeSatPerByte = (state: RootState): number =>
+  state.preferences.customFeeSatPerByte ?? 1.1;
 
 export default preferencesSlice.reducer;
