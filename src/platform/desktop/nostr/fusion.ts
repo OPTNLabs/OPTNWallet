@@ -1,11 +1,11 @@
 // P2P CashFusion pool discovery over Nostr.
 //
 // Discovery uses a fresh secp256k1 identity for every attempt (the 00-Wallet
-// scheme), never the wallet/chat identity. Public kind-22230 announcements are
-// scoped to one network and one wall-clock epoch. Their signature, tags,
-// timestamp, expiry, protocol version, tier list, and component counts are all
-// validated before a peer can enter a candidate set. This prevents a relay's
-// historical store from resurrecting dead round identities.
+// scheme), never the wallet/chat identity. Public announcements are a REPLACEABLE
+// kind scoped to one network (rolling pool, no epoch bucket). Their signature,
+// tags, timestamp, freshness, protocol version, tier list, and component counts
+// are all validated before a peer enters a candidate set; the client-side
+// freshness window prevents a relay's store from resurrecting dead identities.
 
 import {
   SimplePool,
@@ -16,8 +16,14 @@ import {
   type Event,
 } from 'nostr-tools';
 
-/** Public ready announcement. Kept compatible with the 00-Wallet convention. */
-export const POOL_ANNOUNCE_KIND = 22230;
+// Public ready announcement. A NIP-01 REPLACEABLE kind (10000-19999): the relay
+// keeps only the latest event per throwaway pubkey and REPLAYS it to any new
+// subscriber via the `since` filter. Ephemeral kinds (20000-29999, e.g. the
+// 00-Wallet's 22230) are never stored or replayed, so a peer that connects to a
+// relay over Tor AFTER another peer's broadcast never sees it — discovery then
+// silently fails (rx stays at self). Replaceable + `since` makes a late-joining
+// Tor subscriber immediately learn everyone already waiting in the rolling pool.
+export const POOL_ANNOUNCE_KIND = 12230;
 /** Reserved coordination kind. Private round traffic uses NIP-59 kind 1059. */
 export const ROUND_MESSAGE_KIND = 22231;
 export const FUSION_POOL_PROTOCOL = 1;
