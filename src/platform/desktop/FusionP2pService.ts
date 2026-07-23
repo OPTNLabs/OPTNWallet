@@ -89,8 +89,8 @@ function waitUntil(timestampMs: number, signal?: AbortSignal): Promise<void> {
   });
 }
 
-const POOL_WAIT_MIN_MS = 30_000; // gather at least this long (00-Wallet POOL_WAIT_MIN)
-const POOL_WAIT_MAX_MS = 120_000; // give up gathering after this (POOL_WAIT_MAX)
+const POOL_WAIT_MIN_MS = 12_000; // short minimum gather so stragglers can still join
+const POOL_WAIT_MAX_MS = 75_000; // give up gathering after this
 
 // Rolling discovery: keep a running countdown and start the round as soon as enough
 // FRESH peers (by TTL) are present after the minimum gather, or when the max wait
@@ -100,7 +100,7 @@ const POOL_WAIT_MAX_MS = 120_000; // give up gathering after this (POOL_WAIT_MAX
 // every ~8s while running a round; an abandoned attempt (a stale throwaway key from
 // an earlier click/retry) stops re-announcing and ages out — so the group is formed
 // from currently-live wallets, not accumulated dead announcements.
-const RECENT_ACTIVE_SECONDS = 30;
+const RECENT_ACTIVE_SECONDS = 18;
 
 async function collectRolling(
   selfPubkey: string,
@@ -124,10 +124,13 @@ async function collectRolling(
     if ((peers.length >= MIN_PARTICIPANTS && now >= minReady) || now >= maxWait) {
       return peers;
     }
-    const secsLeft = Math.max(0, Math.ceil((maxWait - now) / 1_000));
-    onStatus?.(
-      `Fresh peers in pool: ${peers.length} — starts when ≥${MIN_PARTICIPANTS} present (up to ${secsLeft}s)`
-    );
+    if (peers.length >= MIN_PARTICIPANTS) {
+      const inSecs = Math.max(0, Math.ceil((minReady - now) / 1_000));
+      onStatus?.(`${peers.length} peers ready — starting in ${inSecs}s…`);
+    } else {
+      const secsLeft = Math.max(0, Math.ceil((maxWait - now) / 1_000));
+      onStatus?.(`Waiting for peers: ${peers.length} present (up to ${secsLeft}s)…`);
+    }
     await waitUntil(Math.min(maxWait, now + 1_500), signal);
   }
 }
