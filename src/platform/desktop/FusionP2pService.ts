@@ -165,35 +165,36 @@ async function collectRolling(
  * peer has already signed and burned their fresh output addresses. Dropping dead
  * coins here is far cheaper than failing a whole multi-party round at the end.
  */
-const UTXO_RECHECK_TIMEOUT_MS = 8_000;
+const UTXO_RECHECK_TIMEOUT_MS = 15_000;
 
 async function onlyUnspent(utxos: UTXO[]): Promise<UTXO[]> {
   const addresses = Array.from(
     new Set(utxos.map((utxo) => utxo.address).filter(Boolean))
   );
   if (addresses.length === 0) return [];
-  try {
-    addresses.forEach((address) => invalidateUTXOCache(address));
-    // Bounded: this runs before we announce, so a slow or disconnected Electrum
-    // would otherwise keep us out of the pool entirely. If the live check does
-    // not answer in time, go with what we have rather than never joining — the
-    // coordinator's duplicate check and the network still reject a bad round.
-    const live = await Promise.race([
-      ElectrumService.getUTXOsMany(addresses),
-      new Promise<null>((resolve) =>
-        setTimeout(() => resolve(null), UTXO_RECHECK_TIMEOUT_MS)
-      ),
-    ]);
-    if (!live) return utxos;
-    const unspent = new Set(
-      Object.values(live)
-        .flat()
-        .map((utxo) => `${utxo.tx_hash}:${utxo.tx_pos}`)
+  addresses.forEach((address) => invalidateUTXOCache(address));
+  // Bounded, but NOT best-effort: contributing a coin we could not verify wastes
+  // every participant's round (they all sign, then the network rejects the whole
+  // transaction with "Missing inputs"). Refusing to join costs only us, so an
+  // unreachable Electrum must fail the round rather than fall back to the
+  // wallet's cached list.
+  const live = await Promise.race([
+    ElectrumService.getUTXOsMany(addresses),
+    new Promise<null>((resolve) =>
+      setTimeout(() => resolve(null), UTXO_RECHECK_TIMEOUT_MS)
+    ),
+  ]);
+  if (!live) {
+    throw new Error(
+      'Could not confirm your coins are unspent (Electrum unreachable) — not risking the round.'
     );
-    return utxos.filter((utxo) => unspent.has(`${utxo.tx_hash}:${utxo.tx_pos}`));
-  } catch {
-    return utxos;
   }
+  const unspent = new Set(
+    Object.values(live)
+      .flat()
+      .map((utxo) => `${utxo.tx_hash}:${utxo.tx_pos}`)
+  );
+  return utxos.filter((utxo) => unspent.has(`${utxo.tx_hash}:${utxo.tx_pos}`));
 }
 
 function assertBroadcastTxid(value: string): string {
