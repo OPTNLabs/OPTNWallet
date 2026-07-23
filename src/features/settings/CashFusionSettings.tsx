@@ -594,9 +594,9 @@ export const CashFusionSettings: React.FC<{ variant?: 'card' | 'servers' }> = ({
       {variant === 'card' && enabled && (
         <div className="rounded-xl border border-yellow-400/20 bg-yellow-400/5 px-3 py-2">
           <p className="text-[10px] text-yellow-400/80 leading-relaxed">
-            Experimental. Both the server path and P2P Fusion run real CoinJoins on any
-            network. Some wallet-hardening items are still pending, but each round verifies
-            your own outputs before signing, so it fails safe.
+            Both the server path and P2P Fusion run real CoinJoins on any network. Some
+            wallet-hardening items are still pending, but each round verifies your own
+            outputs before signing, so it fails safe.
           </p>
         </div>
       )}
