@@ -100,11 +100,11 @@ const POOL_WAIT_MAX_MS = 75_000; // give up gathering after this
 // every ~8s while running a round; an abandoned attempt (a stale throwaway key from
 // an earlier click/retry) stops re-announcing and ages out — so the group is formed
 // from currently-live wallets, not accumulated dead announcements.
-// Must comfortably exceed REANNOUNCE_MS (12s) or live peers get filtered out as
-// "dead" between refreshes. Abandoned round keys still age out; they no longer
-// stall a round anyway, since the coordinator now starts with the peers that
-// actually ACKed rather than waiting on every announced key.
-const RECENT_ACTIVE_SECONDS = 45;
+// Tight enough that an abandoned round's STORED announcement stops counting as a
+// live peer quickly (a ghost peer can otherwise win coordinator election and
+// stall everyone), but comfortably above REANNOUNCE_MS (12s) so a live peer that
+// misses one refresh is not dropped.
+const RECENT_ACTIVE_SECONDS = 28;
 
 // Every Start click mints a fresh throwaway identity, and the announcement is a
 // STORED event the relay keeps replaying until it ages out. Without this, a retry

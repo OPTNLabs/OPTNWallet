@@ -149,6 +149,45 @@ describe('P2P Fusion coordinator-agreed round start', () => {
     expect(rb.participants).toEqual([a, b, c]);
   });
 
+  it(
+    're-elects when the lowest-pubkey coordinator is a ghost that never proposes',
+    async () => {
+      // `ghost` wins election but is an abandoned round's stored announcement, so
+      // it never proposes. Without failover every live peer waits on it until the
+      // whole round dies with "round start timed out".
+      const [ghost, b, c] = [peer(1), peer(2), peer(3)];
+      const hub = new Hub();
+      const common = {
+        network: 'chipnet' as const,
+        tier: 100_000,
+        epoch: 789,
+        timeoutMs: 6_000,
+        coordinatorSettleMs: 50,
+      };
+
+      const [rb, rc] = await Promise.all([
+        negotiateFusionRound(
+          {
+            ...common,
+            myPubkey: b,
+            candidates: [ghost, b, c],
+            sessionFactory: () => 'b'.repeat(64),
+          },
+          hub.transportFor(b)
+        ),
+        negotiateFusionRound(
+          { ...common, myPubkey: c, candidates: [ghost, b, c] },
+          hub.transportFor(c)
+        ),
+      ]);
+
+      expect([rb.coordinator, rc.coordinator]).toEqual([b, b]);
+      expect(rb.participants).toEqual([b, c]);
+      expect(rc.participants).toEqual([b, c]);
+    },
+    20_000
+  );
+
   it('aborts instead of entering registration when a proposed peer never acknowledges', async () => {
     const [a, missing] = [peer(1), peer(2)];
     const hub = new Hub();
