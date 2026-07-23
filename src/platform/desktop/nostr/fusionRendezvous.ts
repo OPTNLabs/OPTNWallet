@@ -18,6 +18,13 @@ export interface FusionRendezvousParams {
   timeoutMs?: number;
   /** Test seam; production allows a five-second lower-coordinator window. */
   coordinatorSettleMs?: number;
+  /**
+   * How long a participant waits for the elected coordinator's FIRST proposal
+   * before writing it off as a ghost. A live coordinator proposes immediately
+   * (and keeps re-offering), so this stays short — it is the failover trigger,
+   * not the round budget.
+   */
+  proposalTimeoutMs?: number;
   sessionFactory?: () => string;
   signal?: AbortSignal;
 }
@@ -71,7 +78,7 @@ function asError(value: unknown): Error {
 }
 
 /** How many silent coordinators we drop before giving up on the round. */
-const MAX_COORDINATOR_FAILOVERS = 3;
+const MAX_COORDINATOR_FAILOVERS = 8;
 
 /**
  * Election picks the lowest pubkey, but a pool announcement is a stored event a
@@ -103,12 +110,10 @@ export async function negotiateFusionRound(
     const remaining = deadline - Date.now();
     if (remaining <= 0) throw new Error('round start timed out');
     const iAmCoordinator = coordinator === params.myPubkey;
-    // As a participant, spend only part of the budget waiting so a silent
-    // coordinator still leaves time to re-elect and finish.
-    const timeoutMs = iAmCoordinator
-      ? remaining
-      : Math.min(remaining, Math.max(2_000, Math.floor(remaining / 2)));
-    const attemptParams = { ...params, candidates, timeoutMs };
+    // Participants get the whole remaining budget: the short proposal deadline
+    // inside negotiateAsParticipant is what detects a ghost and triggers
+    // failover, so there is no need to also slice the timeout here.
+    const attemptParams = { ...params, candidates, timeoutMs: remaining };
 
     try {
       return iAmCoordinator
@@ -337,6 +342,7 @@ function negotiateAsParticipant(
 
     const cleanup = () => {
       if (timer) clearTimeout(timer);
+      if (proposalTimer) clearTimeout(proposalTimer);
       params.signal?.removeEventListener('abort', onAbort);
       unsubscribe();
     };
@@ -403,9 +409,18 @@ function negotiateAsParticipant(
     });
 
     params.signal?.addEventListener('abort', onAbort, { once: true });
-    const timer = setTimeout(
-      () => fail(new Error('round start timed out')),
-      params.timeoutMs ?? DEFAULT_RENDEZVOUS_TIMEOUT_MS
+    const timeoutMs = params.timeoutMs ?? DEFAULT_RENDEZVOUS_TIMEOUT_MS;
+    const timer = setTimeout(() => fail(new Error('round start timed out')), timeoutMs);
+    // Ghost check: if the elected coordinator has not proposed at all by now it
+    // is an abandoned round's stored announcement. Give up on it quickly so the
+    // caller can re-elect, instead of burning the whole budget on a dead key.
+    // Once a proposal HAS arrived we stay for the full timeout, because the
+    // coordinator still has to finish its settle window before round_start.
+    const proposalTimer = setTimeout(
+      () => {
+        if (!accepted) fail(new Error('round start timed out'));
+      },
+      Math.min(params.proposalTimeoutMs ?? 3_500, timeoutMs)
     );
   });
 }
