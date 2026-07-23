@@ -157,19 +157,35 @@ async function collectRolling(
  * peer has already signed and burned their fresh output addresses. Dropping dead
  * coins here is far cheaper than failing a whole multi-party round at the end.
  */
+const UTXO_RECHECK_TIMEOUT_MS = 8_000;
+
 async function onlyUnspent(utxos: UTXO[]): Promise<UTXO[]> {
   const addresses = Array.from(
     new Set(utxos.map((utxo) => utxo.address).filter(Boolean))
   );
   if (addresses.length === 0) return [];
-  addresses.forEach((address) => invalidateUTXOCache(address));
-  const live = await ElectrumService.getUTXOsMany(addresses);
-  const unspent = new Set(
-    Object.values(live)
-      .flat()
-      .map((utxo) => `${utxo.tx_hash}:${utxo.tx_pos}`)
-  );
-  return utxos.filter((utxo) => unspent.has(`${utxo.tx_hash}:${utxo.tx_pos}`));
+  try {
+    addresses.forEach((address) => invalidateUTXOCache(address));
+    // Bounded: this runs before we announce, so a slow or disconnected Electrum
+    // would otherwise keep us out of the pool entirely. If the live check does
+    // not answer in time, go with what we have rather than never joining — the
+    // coordinator's duplicate check and the network still reject a bad round.
+    const live = await Promise.race([
+      ElectrumService.getUTXOsMany(addresses),
+      new Promise<null>((resolve) =>
+        setTimeout(() => resolve(null), UTXO_RECHECK_TIMEOUT_MS)
+      ),
+    ]);
+    if (!live) return utxos;
+    const unspent = new Set(
+      Object.values(live)
+        .flat()
+        .map((utxo) => `${utxo.tx_hash}:${utxo.tx_pos}`)
+    );
+    return utxos.filter((utxo) => unspent.has(`${utxo.tx_hash}:${utxo.tx_pos}`));
+  } catch {
+    return utxos;
+  }
 }
 
 function assertBroadcastTxid(value: string): string {
