@@ -124,12 +124,13 @@ async function collectRolling(
     if ((peers.length >= MIN_PARTICIPANTS && now >= minReady) || now >= maxWait) {
       return peers;
     }
+    const raw = getPeers().length; // ponytail: temp diagnostic — raw received vs fresh
     if (peers.length >= MIN_PARTICIPANTS) {
       const inSecs = Math.max(0, Math.ceil((minReady - now) / 1_000));
-      onStatus?.(`${peers.length} peers ready — starting in ${inSecs}s…`);
+      onStatus?.(`${peers.length} peers ready — starting in ${inSecs}s… (rx ${raw})`);
     } else {
       const secsLeft = Math.max(0, Math.ceil((maxWait - now) / 1_000));
-      onStatus?.(`Waiting for peers: ${peers.length} present (up to ${secsLeft}s)…`);
+      onStatus?.(`Waiting for peers: ${peers.length} present (rx ${raw}, up to ${secsLeft}s)…`);
     }
     await waitUntil(Math.min(maxWait, now + 1_500), signal);
   }
@@ -211,7 +212,7 @@ export async function runP2pFusion(opts: P2pFusionOptions): Promise<RoundResult>
     stopPool = joined.stop;
     await joined.announceNow();
     opts.onPhase?.(1);
-    status?.('Ephemeral kind-22230 announcement accepted; collecting peers…');
+    status?.('Pool announcement published; collecting peers…');
 
     const fresh = await collectRolling(round.pubkey, () => peers, status, opts.signal);
     joined.stop();
