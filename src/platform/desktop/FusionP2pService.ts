@@ -230,6 +230,7 @@ export async function runP2pFusion(opts: P2pFusionOptions): Promise<RoundResult>
   let stopPool: (() => void) | null = null;
   let round: RoundIdentity | null = null;
   let reservedForRound: string[] = [];
+  let withdrawFromPool: (() => Promise<void>) | null = null;
   const status = opts.onStatus;
 
   try {
@@ -293,6 +294,7 @@ export async function runP2pFusion(opts: P2pFusionOptions): Promise<RoundResult>
       onError: (error) => status?.(error.message),
     });
     stopPool = joined.stop;
+    withdrawFromPool = joined.withdraw;
     await joined.announceNow();
     opts.onPhase?.(1);
     status?.('Pool announcement published; collecting peers…');
@@ -372,6 +374,9 @@ export async function runP2pFusion(opts: P2pFusionOptions): Promise<RoundResult>
     // them (the live re-check keeps them out next time); a failed one must not
     // strand them. The stored TTL is only a backstop for a hard crash.
     releaseOutpoints(opts.walletId, reservedForRound);
+    // Retire this round key from the pool before tearing the sockets down, so the
+    // next attempt (ours or a peer's) does not see it as a live candidate.
+    await withdrawFromPool?.().catch(() => undefined);
     stopPool?.();
     pool.close(relays);
     outputPool.close(relays);
