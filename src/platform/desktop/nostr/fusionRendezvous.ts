@@ -107,11 +107,11 @@ function negotiateAsCoordinator(
   const settleMs =
     params.coordinatorSettleMs ??
     Math.min(5_000, Math.max(1_000, Math.floor(timeoutMs * 0.6)));
-  const coordinatorDecisionAt = Date.now() + settleMs;
 
   return new Promise((resolve, reject) => {
     let settled = false;
     let starting = false;
+    let settlePassed = false;
     let yielded: Extract<RoundMessage, { type: 'round_proposal' }> | null = null;
     let yieldedCoordinator: string | null = null;
     let ownStartTimer: ReturnType<typeof setTimeout> | undefined;
@@ -154,30 +154,35 @@ function negotiateAsCoordinator(
 
     const startOwnRound = () => {
       if (settled || yielded || starting) return;
+      // Final participant set = self + peers that actually ACKed (proven alive).
+      // Stale/dead round keys (from earlier clicks/retries) never ACK and are
+      // dropped here, so the round never waits on peers that aren't coming.
+      const finalParticipants = [...acknowledgments].sort();
+      if (finalParticipants.length < 2) {
+        return; // not enough ACKs yet — keep waiting (or yield to a lower coordinator)
+      }
       starting = true;
-      ownStartTimer = setTimeout(() => {
-        if (settled || yielded) return;
-        const start: RoundMessage = {
-          type: 'round_start',
-          session,
-          network: params.network,
-          tier: params.tier,
-          epoch: params.epoch,
-          participants,
-        };
-        void Promise.all(others.map((peer) => transport.send(peer, start)))
-          .then(() =>
-            finishSuccess({
-              session,
-              coordinator: params.myPubkey,
-              participants,
-              network: params.network,
-              tier: params.tier,
-              epoch: params.epoch,
-            })
-          )
-          .catch((error: unknown) => void finishError(asError(error)));
-      }, Math.max(0, coordinatorDecisionAt - Date.now()));
+      const finalOthers = finalParticipants.filter((peer) => peer !== params.myPubkey);
+      const start: RoundMessage = {
+        type: 'round_start',
+        session,
+        network: params.network,
+        tier: params.tier,
+        epoch: params.epoch,
+        participants: finalParticipants,
+      };
+      void Promise.all(finalOthers.map((peer) => transport.send(peer, start)))
+        .then(() =>
+          finishSuccess({
+            session,
+            coordinator: params.myPubkey,
+            participants: finalParticipants,
+            network: params.network,
+            tier: params.tier,
+            epoch: params.epoch,
+          })
+        )
+        .catch((error: unknown) => void finishError(asError(error)));
     };
 
     unsubscribe = transport.onMessage((from, message) => {
@@ -190,6 +195,7 @@ function negotiateAsCoordinator(
         yielded = message;
         yieldedCoordinator = from;
         if (ownStartTimer) clearTimeout(ownStartTimer);
+        ownStartTimer = undefined;
         const ack: RoundMessage = {
           type: 'round_ack',
           session: message.session,
@@ -218,7 +224,7 @@ function negotiateAsCoordinator(
         message.network === params.network &&
         message.tier === params.tier &&
         message.epoch === params.epoch &&
-        sameParticipants(message.participants, yielded.participants)
+        message.participants.includes(params.myPubkey)
       ) {
         finishSuccess({
           session: message.session,
@@ -242,7 +248,10 @@ function negotiateAsCoordinator(
         return;
       }
       acknowledgments.add(from);
-      if (acknowledgments.size === participants.length) startOwnRound();
+      // Start only after the settle window (so proposals have propagated and peers
+      // have yielded — starting the instant the last ACK lands races the peers'
+      // yield and can drop the round_start). Late ACKs after settle re-trigger.
+      if (settlePassed) startOwnRound();
     });
 
     params.signal?.addEventListener('abort', onAbort, { once: true });
@@ -250,6 +259,11 @@ function negotiateAsCoordinator(
       () => void finishError(new Error('round acknowledgments timed out')),
       timeoutMs
     );
+    // After the settle window, start with whoever ACKed (don't require ALL peers).
+    ownStartTimer = setTimeout(() => {
+      settlePassed = true;
+      startOwnRound();
+    }, settleMs);
 
     const proposal: RoundMessage = {
       type: 'round_proposal',
@@ -334,7 +348,7 @@ function negotiateAsParticipant(
         message.network === params.network &&
         message.tier === params.tier &&
         message.epoch === params.epoch &&
-        sameParticipants(message.participants, accepted.participants)
+        message.participants.includes(params.myPubkey)
       ) {
         succeed({
           session: message.session,
