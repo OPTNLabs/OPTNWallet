@@ -109,9 +109,15 @@ function normalizeTiers(tiers: number[]): number[] {
   return Array.from(new Set(tiers.filter(validTier))).sort((a, b) => a - b);
 }
 
+export interface BuildPoolAnnouncementOptionsWithdrawn
+  extends BuildPoolAnnouncementOptions {
+  /** Publish an already-expired announcement so peers drop us immediately. */
+  withdraw?: boolean;
+}
+
 export function buildPoolAnnouncement(
   round: RoundIdentity,
-  options: BuildPoolAnnouncementOptions
+  options: BuildPoolAnnouncementOptionsWithdrawn
 ): Event {
   const now = options.nowSeconds ?? Math.floor(Date.now() / 1000);
   const tiers = normalizeTiers(options.tiers);
@@ -131,7 +137,10 @@ export function buildPoolAnnouncement(
     epoch: options.epoch, // informational only (rolling pool no longer filters on it)
     tiers,
     numInputs: options.numInputs,
-    expiresAt: now + POOL_PEER_TTL_SECONDS,
+    // A withdrawal replaces our stored announcement with an expired one, so every
+    // peer's freshness check drops us at once instead of leaving a ghost that can
+    // win coordinator election and stall the next round.
+    expiresAt: options.withdraw ? now - 1 : now + POOL_PEER_TTL_SECONDS,
   });
 
   return finalizeEvent(
@@ -316,7 +325,11 @@ export function joinPool(
   pool: SimplePool,
   relays: string[],
   options: JoinPoolOptions
-): { stop: () => void; announceNow: () => Promise<void> } {
+): {
+  stop: () => void;
+  announceNow: () => Promise<void>;
+  withdraw: () => Promise<void>;
+} {
   const peers = new Map<string, PoolAnnouncement>();
   let stopped = false;
   let announceTimer: ReturnType<typeof setTimeout> | null = null;
@@ -368,6 +381,20 @@ export function joinPool(
       sub.close();
     },
     announceNow: announce,
+    /** Retire this round key from the pool so it never lingers as a ghost. */
+    withdraw: async () => {
+      stopped = true;
+      if (announceTimer) clearTimeout(announceTimer);
+      if (repeatTimer) clearInterval(repeatTimer);
+      const evt = buildPoolAnnouncement(options.round, {
+        network: options.network,
+        epoch: options.epoch,
+        tiers: options.tiers,
+        numInputs: options.numInputs,
+        withdraw: true,
+      });
+      await publishEventAtLeastOnce(pool, relays, evt).catch(() => undefined);
+    },
   };
 }
 
