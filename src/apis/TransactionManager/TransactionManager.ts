@@ -34,6 +34,22 @@ function deriveTxidFromRawTx(rawTX: string): string | null {
   }
 }
 
+// Fee for a tx of `bytes`: the min relay fee by default; in 'custom' mode the
+// user's sat/byte (never below the relay minimum). Read live from preferences so
+// changing the setting takes effect on the next transaction immediately.
+function requiredFeeForBytes(bytes: number): bigint {
+  const min = relayFeeForBytes(bytes);
+  const prefs = store.getState().preferences;
+  if (prefs?.feeMode === 'custom') {
+    const rate = Number(prefs.customFeeSatPerByte);
+    if (Number.isFinite(rate) && rate > 0) {
+      const custom = BigInt(Math.ceil(rate * bytes));
+      return custom > min ? custom : min;
+    }
+  }
+  return min;
+}
+
 export default function TransactionManager() {
   const dbService = DatabaseService();
 
@@ -454,7 +470,7 @@ export default function TransactionManager() {
         outputsNoChange
       );
       const bytesNoChange = txBytesFromHex(txNoChangeHex);
-      const feeNoChange = relayFeeForBytes(bytesNoChange);
+      const feeNoChange = requiredFeeForBytes(bytesNoChange);
 
       const outNoChangeTotal = sumOutputs(outputsNoChange);
       void (inputTotal - outNoChangeTotal - feeNoChange);
@@ -489,7 +505,7 @@ export default function TransactionManager() {
           void error;
         }
 
-        const feeWithChange = relayFeeForBytes(bytesWithChange);
+        const feeWithChange = requiredFeeForBytes(bytesWithChange);
         const remainder = inputTotal - outNoChangeTotal - feeWithChange;
 
         // Only add change if it is >= DUST
@@ -515,7 +531,7 @@ export default function TransactionManager() {
       const actualBytes = txBytesFromHex(finalHex);
       const outputsTotal = sumOutputs(plannedOutputs);
       const feePaid = inputTotal - outputsTotal;
-      const requiredActualFee = relayFeeForBytes(actualBytes);
+      const requiredActualFee = requiredFeeForBytes(actualBytes);
 
       if (feePaid < requiredActualFee) {
         // Stabilizing retry: recompute change using actualBytes as fee
@@ -539,7 +555,7 @@ export default function TransactionManager() {
             const bytesRetry = txBytesFromHex(finalHex);
             const outputsRetryTotal = sumOutputs(outputsRetry);
             const feePaidRetry = inputTotal - outputsRetryTotal;
-            const requiredRetryFee = relayFeeForBytes(bytesRetry);
+            const requiredRetryFee = requiredFeeForBytes(bytesRetry);
 
             if (feePaidRetry < requiredRetryFee) {
               const shortBy = Number(requiredRetryFee - feePaidRetry);
