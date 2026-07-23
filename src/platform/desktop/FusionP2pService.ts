@@ -20,10 +20,8 @@ import {
   generateRoundIdentity,
   joinPool,
   poolEpoch,
-  poolEpochEnd,
-  poolEpochStart,
   selectFusionGroup,
-  POOL_EPOCH_GRACE_SECONDS,
+  POOL_PEER_TTL_SECONDS,
   type FusionPoolNetwork,
   type PoolAnnouncement,
   type RoundIdentity,
@@ -39,7 +37,6 @@ const P2P_FEERATE = 1_000; // sats per 1000 bytes
 const P2P_TIERS = [10_000, 100_000, 1_000_000, 10_000_000];
 const MIN_PARTICIPANTS = 2;
 const MAX_PARTICIPANTS = 10;
-const EPOCH_SETTLE_SECONDS = 2;
 const MAX_RELAYS = 8;
 let wsInstalled = false;
 
@@ -92,23 +89,38 @@ function waitUntil(timestampMs: number, signal?: AbortSignal): Promise<void> {
   });
 }
 
-async function collectEpoch(
-  epoch: number,
+const POOL_WAIT_MIN_MS = 30_000; // gather at least this long (00-Wallet POOL_WAIT_MIN)
+const POOL_WAIT_MAX_MS = 120_000; // give up gathering after this (POOL_WAIT_MAX)
+
+// Rolling discovery: keep a running countdown and start the round as soon as enough
+// FRESH peers (by TTL) are present after the minimum gather, or when the max wait
+// elapses. No epoch bucket — peers who announced any time in the freshness window
+// count, so users across the globe don't need to click together.
+async function collectRolling(
   getPeers: () => PoolAnnouncement[],
   onStatus?: (message: string) => void,
   signal?: AbortSignal
 ): Promise<PoolAnnouncement[]> {
-  const deadline = (poolEpochEnd(epoch) + EPOCH_SETTLE_SECONDS) * 1_000;
-  while (Date.now() < deadline) {
+  const start = Date.now();
+  const minReady = start + POOL_WAIT_MIN_MS;
+  const maxWait = start + POOL_WAIT_MAX_MS;
+  const fresh = () => {
+    const nowSeconds = Math.floor(Date.now() / 1_000);
+    return getPeers().filter((peer) => peer.expiresAt >= nowSeconds);
+  };
+  for (;;) {
     if (signal?.aborted) throw new Error('fusion round cancelled');
-    const left = Math.max(0, Math.ceil((deadline - Date.now()) / 1_000));
-    onStatus?.(`Fresh peers: ${getPeers().length} (epoch closes in ${left}s)`);
-    await waitUntil(Math.min(deadline, Date.now() + 1_000), signal);
+    const peers = fresh();
+    const now = Date.now();
+    if ((peers.length >= MIN_PARTICIPANTS && now >= minReady) || now >= maxWait) {
+      return peers;
+    }
+    const secsLeft = Math.max(0, Math.ceil((maxWait - now) / 1_000));
+    onStatus?.(
+      `Fresh peers in pool: ${peers.length} — starts when ≥${MIN_PARTICIPANTS} present (up to ${secsLeft}s)`
+    );
+    await waitUntil(Math.min(maxWait, now + 1_500), signal);
   }
-  const now = Math.floor(Date.now() / 1_000);
-  return getPeers().filter(
-    (peer) => peer.epoch === epoch && peer.expiresAt >= now
-  );
 }
 
 function assertBroadcastTxid(value: string): string {
@@ -155,13 +167,9 @@ export async function runP2pFusion(opts: P2pFusionOptions): Promise<RoundResult>
 
     const network = toPoolNetwork(opts.network);
     const now = Math.floor(Date.now() / 1_000);
-    // Always schedule the NEXT epoch. Every window clicked within the same ~30s
-    // bucket then targets the identical epoch and announces together — avoiding the
-    // boundary split (one window jumps ahead, another doesn't) that produced "no
-    // compatible P2P Fusion group". Peers just wait a few seconds for it to start.
-    const epoch = poolEpoch(now) + 1;
-    status?.('Waiting for the next Fusion pool round to start…');
-    await waitUntil(poolEpochStart(epoch) * 1_000, opts.signal);
+    // Rolling network-wide pool (00-Wallet model): announce immediately and gather
+    // whoever is fresh; no epoch bucket to synchronize on. epoch is an info stamp.
+    const epoch = poolEpoch(now);
 
     round = generateRoundIdentity();
     let peers: PoolAnnouncement[] = [
@@ -171,8 +179,8 @@ export async function runP2pFusion(opts: P2pFusionOptions): Promise<RoundResult>
         epoch,
         tiers,
         numInputs: runInputs.length,
-        at: Math.floor(Date.now() / 1_000),
-        expiresAt: poolEpochEnd(epoch) + POOL_EPOCH_GRACE_SECONDS,
+        at: now,
+        expiresAt: now + POOL_PEER_TTL_SECONDS,
       },
     ];
     const joined = joinPool(pool, relays, {
@@ -193,7 +201,7 @@ export async function runP2pFusion(opts: P2pFusionOptions): Promise<RoundResult>
     opts.onPhase?.(1);
     status?.('Ephemeral kind-22230 announcement accepted; collecting peers…');
 
-    const fresh = await collectEpoch(epoch, () => peers, status, opts.signal);
+    const fresh = await collectRolling(() => peers, status, opts.signal);
     joined.stop();
     stopPool = null;
     const group = selectFusionGroup(fresh, MIN_PARTICIPANTS, MAX_PARTICIPANTS);
