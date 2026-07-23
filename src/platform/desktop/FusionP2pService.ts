@@ -96,7 +96,14 @@ const POOL_WAIT_MAX_MS = 120_000; // give up gathering after this (POOL_WAIT_MAX
 // FRESH peers (by TTL) are present after the minimum gather, or when the max wait
 // elapses. No epoch bucket — peers who announced any time in the freshness window
 // count, so users across the globe don't need to click together.
+// A peer is ACTIVE only if it re-announced within this window. Peers re-announce
+// every ~8s while running a round; an abandoned attempt (a stale throwaway key from
+// an earlier click/retry) stops re-announcing and ages out — so the group is formed
+// from currently-live wallets, not accumulated dead announcements.
+const RECENT_ACTIVE_SECONDS = 30;
+
 async function collectRolling(
+  selfPubkey: string,
   getPeers: () => PoolAnnouncement[],
   onStatus?: (message: string) => void,
   signal?: AbortSignal
@@ -106,7 +113,9 @@ async function collectRolling(
   const maxWait = start + POOL_WAIT_MAX_MS;
   const fresh = () => {
     const nowSeconds = Math.floor(Date.now() / 1_000);
-    return getPeers().filter((peer) => peer.expiresAt >= nowSeconds);
+    return getPeers().filter(
+      (peer) => peer.pubkey === selfPubkey || peer.at >= nowSeconds - RECENT_ACTIVE_SECONDS
+    );
   };
   for (;;) {
     if (signal?.aborted) throw new Error('fusion round cancelled');
@@ -201,7 +210,7 @@ export async function runP2pFusion(opts: P2pFusionOptions): Promise<RoundResult>
     opts.onPhase?.(1);
     status?.('Ephemeral kind-22230 announcement accepted; collecting peers…');
 
-    const fresh = await collectRolling(() => peers, status, opts.signal);
+    const fresh = await collectRolling(round.pubkey, () => peers, status, opts.signal);
     joined.stop();
     stopPool = null;
     const group = selectFusionGroup(fresh, MIN_PARTICIPANTS, MAX_PARTICIPANTS);
