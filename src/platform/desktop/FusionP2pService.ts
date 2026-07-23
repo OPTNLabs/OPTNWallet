@@ -12,6 +12,14 @@ import { invoke } from '@tauri-apps/api/core';
 import { hexToBin } from '../../utils/hex';
 import { TorWebSocket, armTorRouting, disarmTorRouting } from './nostr/torWebSocket';
 import ElectrumService, { invalidateUTXOCache } from '../../services/ElectrumService';
+import {
+  isOwnRoundKey,
+  outpointKey,
+  recordRoundKey,
+  releaseOutpoints,
+  reserveOutpoints,
+  reservedOutpoints,
+} from './fusionRoundState';
 import { Network } from '../../state/slices/networkSlice';
 import type { UTXO } from '../../types/types';
 import { createFreshFusionOutputScripts, gatherInputs } from './FusionService';
@@ -111,9 +119,8 @@ const RECENT_ACTIVE_SECONDS = 28;
 // discovers its OWN abandoned key as a peer: the same wallet joins its own round
 // twice, contributes the same coins, and the round dies on "duplicate input".
 // A wallet must never fuse with itself.
-const myPastRoundKeys = new Set<string>();
-
 async function collectRolling(
+  walletId: number,
   selfPubkey: string,
   getPeers: () => PoolAnnouncement[],
   onStatus?: (message: string) => void,
@@ -126,7 +133,8 @@ async function collectRolling(
     const nowSeconds = Math.floor(Date.now() / 1_000);
     return getPeers().filter((peer) => {
       if (peer.pubkey === selfPubkey) return true;
-      if (myPastRoundKeys.has(peer.pubkey)) return false; // an earlier attempt of ours
+      // An earlier attempt of THIS wallet — from any window, surviving reloads.
+      if (isOwnRoundKey(walletId, peer.pubkey)) return false;
       return peer.at >= nowSeconds - RECENT_ACTIVE_SECONDS;
     });
   };
@@ -221,16 +229,32 @@ export async function runP2pFusion(opts: P2pFusionOptions): Promise<RoundResult>
   const outputPool = new SimplePool();
   let stopPool: (() => void) | null = null;
   let round: RoundIdentity | null = null;
+  let reservedForRound: string[] = [];
   const status = opts.onStatus;
 
   try {
     status?.('Tor verified; preparing fresh pool identity.');
-    const spendable = await onlyUnspent(opts.utxos);
+    // Drop coins another round of this wallet is already spending. Without this,
+    // two rounds (two windows, or a retry overlapping its predecessor) pick the
+    // same UTXOs; the first to broadcast spends them and the second is rejected
+    // with "Missing inputs" only after every peer has signed.
+    const claimed = reservedOutpoints(opts.walletId);
+    const free = opts.utxos.filter(
+      (utxo) => !claimed.has(outpointKey(utxo.tx_hash, utxo.tx_pos))
+    );
+    if (free.length === 0) {
+      throw new Error('All coins are already committed to another fusion round.');
+    }
+    const spendable = await onlyUnspent(free);
     if (spendable.length === 0) {
       throw new Error(
         'No live unspent coins to fuse — the wallet list was stale. Sync and retry.'
       );
     }
+    reservedForRound = spendable.map((utxo) =>
+      outpointKey(utxo.tx_hash, utxo.tx_pos)
+    );
+    reserveOutpoints(opts.walletId, reservedForRound);
     const runInputs = await gatherInputs(opts.walletId, spendable);
     const sumIn = runInputs.reduce((sum, input) => sum + input.value, 0);
     const tiers = P2P_TIERS.filter((tier) => sumIn > tier + 1_000);
@@ -243,7 +267,7 @@ export async function runP2pFusion(opts: P2pFusionOptions): Promise<RoundResult>
     const epoch = poolEpoch(now);
 
     round = generateRoundIdentity();
-    myPastRoundKeys.add(round.pubkey);
+    recordRoundKey(opts.walletId, round.pubkey);
     let peers: PoolAnnouncement[] = [
       {
         pubkey: round.pubkey,
@@ -273,7 +297,13 @@ export async function runP2pFusion(opts: P2pFusionOptions): Promise<RoundResult>
     opts.onPhase?.(1);
     status?.('Pool announcement published; collecting peers…');
 
-    const fresh = await collectRolling(round.pubkey, () => peers, status, opts.signal);
+    const fresh = await collectRolling(
+      opts.walletId,
+      round.pubkey,
+      () => peers,
+      status,
+      opts.signal
+    );
     joined.stop();
     stopPool = null;
     const group = selectFusionGroup(fresh, MIN_PARTICIPANTS, MAX_PARTICIPANTS);
@@ -338,6 +368,10 @@ export async function runP2pFusion(opts: P2pFusionOptions): Promise<RoundResult>
     status?.(`Fused ✓ — txid ${result.txid}`);
     return result;
   } finally {
+    // Free the coins whatever happened. A successful round has already spent
+    // them (the live re-check keeps them out next time); a failed one must not
+    // strand them. The stored TTL is only a backstop for a hard crash.
+    releaseOutpoints(opts.walletId, reservedForRound);
     stopPool?.();
     pool.close(relays);
     outputPool.close(relays);
