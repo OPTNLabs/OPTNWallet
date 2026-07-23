@@ -48,10 +48,15 @@ export function poolEpochEnd(epoch: number): number {
   return poolEpochStart(epoch) + POOL_EPOCH_SECONDS;
 }
 
-/** One public pool per network+epoch; compatible tiers are carried in content. */
-export function poolTag(network: FusionPoolNetwork, epoch: number): string {
-  return `optn-fusion-v${FUSION_POOL_PROTOCOL}-${network}-${epoch}`;
+/** One public ROLLING pool per NETWORK (not per-epoch). Peers announcing at any
+ *  time within the freshness window discover each other — no synchronized clicks
+ *  (the 00-Wallet model). Compatible tiers are carried in content. */
+export function poolTag(network: FusionPoolNetwork): string {
+  return `optn-fusion-v${FUSION_POOL_PROTOCOL}-${network}`;
 }
+
+/** How long an announcement stays fresh/discoverable (rolling TTL, seconds). */
+export const POOL_PEER_TTL_SECONDS = 180;
 
 export interface RoundIdentity {
   secretKey: Uint8Array;
@@ -110,17 +115,13 @@ export function buildPoolAnnouncement(
   ) {
     throw new Error('P2P Fusion announcement has an invalid input count.');
   }
-  if (poolEpoch(now) !== options.epoch) {
-    throw new Error('P2P Fusion announcement timestamp is outside its epoch.');
-  }
-
   const content = JSON.stringify({
     protocol: FUSION_POOL_PROTOCOL,
     network: options.network,
-    epoch: options.epoch,
+    epoch: options.epoch, // informational only (rolling pool no longer filters on it)
     tiers,
     numInputs: options.numInputs,
-    expiresAt: poolEpochEnd(options.epoch) + POOL_EPOCH_GRACE_SECONDS,
+    expiresAt: now + POOL_PEER_TTL_SECONDS,
   });
 
   return finalizeEvent(
@@ -128,9 +129,8 @@ export function buildPoolAnnouncement(
       kind: POOL_ANNOUNCE_KIND,
       created_at: now,
       tags: [
-        ['t', poolTag(options.network, options.epoch)],
+        ['t', poolTag(options.network)],
         ['n', options.network],
-        ['e', String(options.epoch)],
         ['v', String(FUSION_POOL_PROTOCOL)],
       ],
       content,
@@ -171,10 +171,9 @@ export function parsePoolAnnouncement(
     evt.content.length > MAX_ANNOUNCEMENT_BYTES ||
     !verifyEvent(eventForVerification) ||
     evt.created_at > now + MAX_FUTURE_SKEW_SECONDS ||
-    evt.created_at < poolEpochStart(scope.epoch) - MAX_FUTURE_SKEW_SECONDS ||
-    !hasTag(evt, 't', poolTag(scope.network, scope.epoch)) ||
+    evt.created_at < now - POOL_PEER_TTL_SECONDS - MAX_FUTURE_SKEW_SECONDS ||
+    !hasTag(evt, 't', poolTag(scope.network)) ||
     !hasTag(evt, 'n', scope.network) ||
-    !hasTag(evt, 'e', String(scope.epoch)) ||
     !hasTag(evt, 'v', String(FUSION_POOL_PROTOCOL))
   ) {
     return null;
@@ -190,15 +189,13 @@ export function parsePoolAnnouncement(
     if (
       content.protocol !== FUSION_POOL_PROTOCOL ||
       content.network !== scope.network ||
-      content.epoch !== scope.epoch ||
       tiers.length === 0 ||
       tiers.length > MAX_TIERS ||
       !Number.isSafeInteger(numInputs) ||
       numInputs < 1 ||
       numInputs > MAX_INPUTS ||
       !Number.isSafeInteger(expiresAt) ||
-      expiresAt < now ||
-      expiresAt > poolEpochEnd(scope.epoch) + POOL_EPOCH_GRACE_SECONDS
+      expiresAt < now
     ) {
       return null;
     }
@@ -316,9 +313,8 @@ export function joinPool(
   let repeatTimer: ReturnType<typeof setInterval> | null = null;
   const filter = {
     kinds: [POOL_ANNOUNCE_KIND],
-    '#t': [poolTag(options.network, options.epoch)],
-    since: poolEpochStart(options.epoch) - MAX_FUTURE_SKEW_SECONDS,
-    until: poolEpochEnd(options.epoch) + POOL_EPOCH_GRACE_SECONDS,
+    '#t': [poolTag(options.network)],
+    since: Math.floor(Date.now() / 1000) - POOL_PEER_TTL_SECONDS,
   };
   const sub = pool.subscribeMany(relays, filter, {
     onevent(evt: Event) {

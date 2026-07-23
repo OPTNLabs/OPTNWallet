@@ -57,7 +57,6 @@ describe('P2P fusion coordination', () => {
     expect(evt.pubkey).toBe(round.pubkey); // signed by the throwaway key, not the wallet
     expect(evt.tags).toContainEqual(['t', poolTag('chipnet', epoch)]);
     expect(evt.tags).toContainEqual(['n', 'chipnet']);
-    expect(evt.tags).toContainEqual(['e', String(epoch)]);
     expect(verifyEvent(evt)).toBe(true);
     const c = JSON.parse(evt.content);
     expect(c).toMatchObject({
@@ -90,7 +89,7 @@ describe('P2P fusion coordination', () => {
     const scope = { network: 'chipnet' as const, epoch, nowSeconds: now };
 
     expect(
-      parsePoolAnnouncement(evt, { ...scope, nowSeconds: now + 120 })
+      parsePoolAnnouncement(evt, { ...scope, nowSeconds: now + 200 })
     ).toBeNull();
     expect(
       parsePoolAnnouncement(evt, { ...scope, nowSeconds: now - 120 })
