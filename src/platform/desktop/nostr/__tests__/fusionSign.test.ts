@@ -5,14 +5,20 @@ import {
   encodeLockingBytecodeP2pkh,
   binToHex,
   hexToBin,
+  encodeTransaction,
 } from '@bitauth/libauth';
 import { hash160 } from '@cashscript/utils';
 import {
   signMyInputs,
   finalizeFusionTx,
   verifyFinalFusionTx,
+  toLibauthTx,
 } from '../fusionSign';
-import { assembleFusionTx, verifyFusionSafety, type PeerContribution } from '../fusionRound';
+import {
+  assembleFusionTx,
+  verifyFusionSafety,
+  type PeerContribution,
+} from '../fusionRound';
 
 function keypair(seed: number): { priv: Uint8Array; pubHex: string } {
   const priv = new Uint8Array(32);
@@ -22,10 +28,11 @@ function keypair(seed: number): { priv: Uint8Array; pubHex: string } {
   return { priv, pubHex: binToHex(pub) };
 }
 
-const p2pkhHex = (pubHex: string) => binToHex(encodeLockingBytecodeP2pkh(hash160(hexToBin(pubHex))));
+const p2pkhHex = (pubHex: string) =>
+  binToHex(encodeLockingBytecodeP2pkh(hash160(hexToBin(pubHex))));
 
 describe('P2P fusion signing produces a network-valid CoinJoin', () => {
-  it('signs own inputs and the assembled tx passes libauth\'s consensus VM', () => {
+  it("signs own inputs and the assembled tx passes libauth's consensus VM", () => {
     // Two coins I control, fusing into two fresh 99k outputs (2k total fee).
     const a = keypair(11);
     const b = keypair(22);
@@ -35,8 +42,18 @@ describe('P2P fusion signing produces a network-valid CoinJoin', () => {
     const contributions: PeerContribution[] = [
       {
         inputs: [
-          { prevTxid: 'aa'.repeat(32), prevIndex: 0, value: 100_000, pubkey: a.pubHex },
-          { prevTxid: 'bb'.repeat(32), prevIndex: 1, value: 100_000, pubkey: b.pubHex },
+          {
+            prevTxid: 'aa'.repeat(32),
+            prevIndex: 0,
+            value: 100_000,
+            pubkey: a.pubHex,
+          },
+          {
+            prevTxid: 'bb'.repeat(32),
+            prevIndex: 1,
+            value: 100_000,
+            pubkey: b.pubHex,
+          },
         ],
         outputs: [
           { script: p2pkhHex(outA.pubHex), value: 99_800 },
@@ -55,7 +72,10 @@ describe('P2P fusion signing produces a network-valid CoinJoin', () => {
     const sigs = signMyInputs(tx, keys);
     expect(sigs).toHaveLength(2);
 
-    const { transaction, sourceOutputs, txid, txHex } = finalizeFusionTx(tx, sigs);
+    const { transaction, sourceOutputs, txid, txHex } = finalizeFusionTx(
+      tx,
+      sigs
+    );
     expect(txid).toMatch(/^[0-9a-f]{64}$/);
 
     // Gold standard: the BCH VM re-derives every sighash and runs each script.
@@ -69,15 +89,25 @@ describe('P2P fusion signing produces a network-valid CoinJoin', () => {
     );
   });
 
-  it('only signs inputs whose key we hold (never touches others\' coins)', () => {
+  it("only signs inputs whose key we hold (never touches others' coins)", () => {
     const mine = keypair(7);
     const theirs = keypair(8);
     const out = keypair(9);
     const tx = assembleFusionTx([
       {
         inputs: [
-          { prevTxid: '11'.repeat(32), prevIndex: 0, value: 60_000, pubkey: mine.pubHex },
-          { prevTxid: '22'.repeat(32), prevIndex: 0, value: 60_000, pubkey: theirs.pubHex },
+          {
+            prevTxid: '11'.repeat(32),
+            prevIndex: 0,
+            value: 60_000,
+            pubkey: mine.pubHex,
+          },
+          {
+            prevTxid: '22'.repeat(32),
+            prevIndex: 0,
+            value: 60_000,
+            pubkey: theirs.pubHex,
+          },
         ],
         outputs: [{ script: p2pkhHex(out.pubHex), value: 119_000 }],
       },
@@ -87,5 +117,30 @@ describe('P2P fusion signing produces a network-valid CoinJoin', () => {
     expect(sigs[0].prevTxid).toBe('11'.repeat(32));
     // Finalizing without every signature must fail closed, not broadcast a half-signed tx.
     expect(() => finalizeFusionTx(tx, sigs)).toThrow(/missing signature/);
+  });
+});
+
+describe('outpoint byte order', () => {
+  it('encodes the outpoint txid in little-endian, matching what a node looks up', () => {
+    // A real, confirmed chipnet txid in DISPLAY order — exactly what a wallet's
+    // UTXO list carries as `tx_hash` and what FusionInputRef.prevTxid holds.
+    const prevTxid =
+      '066cd4b897eee81301a2f8d78aa66126a96fb0ecaf5ba8239f8ed8aea7cfc76e';
+    const key = keypair(1);
+    const { transaction } = toLibauthTx({
+      inputs: [{ prevTxid, prevIndex: 0, value: 100_000, pubkey: key.pubHex }],
+      outputs: [{ script: p2pkhHex(key.pubHex), value: 99_000 }],
+    });
+
+    // Assert on the SERIALISED bytes, not the in-memory field. The field is
+    // display order by libauth's convention, so checking it would pass even when
+    // the serialised outpoint is reversed — which is the bug this guards.
+    const rawHex = binToHex(encodeTransaction(transaction));
+    const outpointInRaw = rawHex.slice(10, 74); // after version(4B) + input count(1B)
+    const expected = binToHex(hexToBin(prevTxid).slice().reverse());
+
+    expect(outpointInRaw).toBe(expected);
+    // And the double-reversed form (the regression) must NOT appear.
+    expect(outpointInRaw).not.toBe(prevTxid);
   });
 });

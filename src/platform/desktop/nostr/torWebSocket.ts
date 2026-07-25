@@ -16,6 +16,30 @@ import { listen, type UnlistenFn } from '@tauri-apps/api/event';
 
 const NativeWebSocket = globalThis.WebSocket;
 
+/** A Tor circuit + TLS + WS handshake is slow but not unbounded; past this the
+ *  circuit is wedged and retrying beats waiting. */
+const TOR_OPEN_TIMEOUT_MS = 45_000;
+
+function withTimeout<T>(
+  promise: Promise<T>,
+  ms: number,
+  message: string
+): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error(message)), ms);
+    promise.then(
+      (value) => {
+        clearTimeout(timer);
+        resolve(value);
+      },
+      (error: unknown) => {
+        clearTimeout(timer);
+        reject(error instanceof Error ? error : new Error(String(error)));
+      }
+    );
+  });
+}
+
 let armedSocks: { host: string; port: number } | null = null;
 
 /** Route Nostr relay traffic through this Tor SOCKS proxy until disarmed. */
@@ -54,17 +78,32 @@ export class TorWebSocket {
     void this.open(url, socks);
   }
 
-  private async open(url: string, socks: { host: string; port: number }): Promise<void> {
+  private async open(
+    url: string,
+    socks: { host: string; port: number }
+  ): Promise<void> {
     try {
-      const id = await invoke<number>('nostr_tor_open', {
-        url,
-        socksHost: socks.host,
-        socksPort: socks.port,
-      });
+      // `nostr_tor_open` builds a Tor circuit, then TLS, then the WS handshake.
+      // Any of those can stall indefinitely on a wedged circuit, and nothing
+      // downstream imposes a deadline: neither onopen nor onerror would ever
+      // fire, so nostr-tools' publish/subscribe promises never settle and a
+      // fusion round hangs forever at "preparing fresh pool identity" with no
+      // way out. Fail the socket instead so the caller sees a real error.
+      const id = await withTimeout(
+        invoke<number>('nostr_tor_open', {
+          url,
+          socksHost: socks.host,
+          socksPort: socks.port,
+        }),
+        TOR_OPEN_TIMEOUT_MS,
+        `Tor connection to ${url} timed out`
+      );
       this.id = id;
       // Subscribe before signalling open so no relay response is missed.
       this.unlisteners.push(
-        await listen<string>(`nostr-tor://msg/${id}`, (e) => this.onmessage?.({ data: e.payload })),
+        await listen<string>(`nostr-tor://msg/${id}`, (e) =>
+          this.onmessage?.({ data: e.payload })
+        ),
         await listen(`nostr-tor://closed/${id}`, () => {
           this.readyState = TorWebSocket.CLOSED;
           this.onclose?.({});
@@ -75,7 +114,9 @@ export class TorWebSocket {
       this.onopen?.({});
     } catch (err) {
       this.readyState = TorWebSocket.CLOSED;
-      this.onerror?.({ message: err instanceof Error ? err.message : String(err) });
+      this.onerror?.({
+        message: err instanceof Error ? err.message : String(err),
+      });
       this.onclose?.({});
     }
   }
