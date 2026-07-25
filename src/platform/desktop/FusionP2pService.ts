@@ -459,6 +459,11 @@ export async function runP2pFusion(
       spentInputs: spendable,
       source: 'p2p-fusion',
       sourceLabel: 'P2P Fusion',
+      // The scripts we allocated for ourselves this round. The completion layer
+      // resolves them to txid:index — a round shuffles its outputs so position
+      // carries no information, and guessing an index here would eventually
+      // credit a peer's coin to us.
+      ownedOutputScripts: outputScripts,
     });
     status?.(`Fused ✓ — txid ${result.txid}`);
     if (!completion.refreshed) {
