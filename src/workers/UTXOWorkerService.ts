@@ -20,6 +20,7 @@ import { invalidateUTXOCache } from '../services/ElectrumService';
 import { logError, logWarn } from '../utils/errorHandling';
 import { UTXO } from '../types/types';
 import { runWalletUtxoRefresh } from '../services/RefreshCoordinator';
+import { reconcileActiveWalletUtxos } from '../services/WalletUtxoRefreshService';
 import QuantumrootTrackingService from '../services/QuantumrootTrackingService';
 import { preloadTokenMetadata } from '../hooks/useSharedTokenMetadata';
 
@@ -48,6 +49,9 @@ const transactionManager = TransactionManager();
 const dbService = DatabaseService();
 const inFlightRefreshes = new Map<string, Promise<void>>();
 const queuedRefreshes = new Set<string>();
+const walletRefreshTimers = new Map<string, ReturnType<typeof setTimeout>>();
+const inFlightWalletRefreshes = new Map<string, Promise<void>>();
+const queuedWalletRefreshes = new Set<string>();
 
 function collectTokenCategories(
   utxosByAddress: Record<string, UTXO[]>
@@ -92,6 +96,10 @@ function refreshContextKey(address: string, session: WorkerSession): string {
   return `${session.epoch}:${session.generation}:${session.walletId}:${address}`;
 }
 
+function walletRefreshContextKey(session: WorkerSession): string {
+  return `${session.epoch}:${session.generation}:${session.walletId}`;
+}
+
 function refreshAddressSoon(
   address: string,
   ms = 120,
@@ -118,6 +126,38 @@ export function requestUTXORefreshFor(address: string, ms = 80) {
 }
 export function requestUTXORefreshForMany(addresses: string[], ms = 120) {
   for (const a of addresses) refreshAddressSoon(a, ms);
+}
+
+function refreshWalletSoon(
+  ms = 120,
+  session = captureWorkerSession()
+): void {
+  if (!session || !isCurrentWorkerContext(session)) return;
+  const contextKey = walletRefreshContextKey(session);
+  const previous = walletRefreshTimers.get(contextKey);
+  if (previous) clearTimeout(previous);
+
+  const timer = setTimeout(() => {
+    if (walletRefreshTimers.get(contextKey) === timer) {
+      walletRefreshTimers.delete(contextKey);
+    }
+    refreshWallet(session).catch((error) =>
+      logError('UTXOWorker.refreshWalletSoon', error, {
+        walletId: session.walletId,
+      })
+    );
+  }, ms);
+  walletRefreshTimers.set(contextKey, timer);
+}
+
+/**
+ * Coalesce a wallet-wide trigger into one batched Electrum refresh. History
+ * polling and new-block notifications can touch dozens of HD addresses at
+ * once; scheduling one address task for each would create a synchronized
+ * request storm in every open wallet window.
+ */
+export function requestWalletUTXORefresh(ms = 120): void {
+  refreshWalletSoon(ms);
 }
 
 export function optimisticRemoveSpentByOutpoints(
@@ -255,6 +295,47 @@ async function refreshAddress(address: string, session: WorkerSession) {
   await run;
 }
 
+async function performWalletRefresh(session: WorkerSession): Promise<boolean> {
+  if (!isCurrentWorkerContext(session)) return true;
+  const snapshot = await reconcileActiveWalletUtxos(session.walletId);
+  if (!isCurrentWorkerContext(session)) return true;
+  return snapshot !== null;
+}
+
+async function refreshWallet(session: WorkerSession): Promise<void> {
+  if (!isCurrentWorkerContext(session)) return;
+  const contextKey = walletRefreshContextKey(session);
+  const inflight = inFlightWalletRefreshes.get(contextKey);
+  if (inflight) {
+    queuedWalletRefreshes.add(contextKey);
+    await inflight;
+    return;
+  }
+
+  const run = (async () => {
+    do {
+      queuedWalletRefreshes.delete(contextKey);
+      const completed = await performWalletRefresh(session);
+      if (!completed && isCurrentWorkerContext(session)) {
+        // A different wallet-wide refresh may have just finished inside the
+        // coordinator's short cooldown. Preserve this trigger as one trailing
+        // batch instead of silently dropping it.
+        refreshWalletSoon(600, session);
+        return;
+      }
+    } while (
+      queuedWalletRefreshes.has(contextKey) &&
+      isCurrentWorkerContext(session)
+    );
+  })().finally(() => {
+    inFlightWalletRefreshes.delete(contextKey);
+    queuedWalletRefreshes.delete(contextKey);
+  });
+
+  inFlightWalletRefreshes.set(contextKey, run);
+  await run;
+}
+
 export async function bootstrapAllUTXOs(expectedEpoch?: number) {
   const state = store.getState();
   const currentWalletId = state.wallet_id.currentWalletId;
@@ -284,34 +365,33 @@ export async function bootstrapAllUTXOs(expectedEpoch?: number) {
 
   const allUTXOs: Record<string, UTXO[]> = {};
 
-  // Wallet addresses
-  const fetchedWalletUTXOs = await UTXOService.fetchAndStoreUTXOsMany(
-    currentWalletId,
-    keyPairs.map((keyPair) => keyPair.address)
-  );
-  if (!bootstrapIsCurrent()) return;
-  for (const keyPair of keyPairs) {
-    allUTXOs[keyPair.address] = fetchedWalletUTXOs[keyPair.address] ?? [];
-  }
-
+  // Wallet-owned and explicitly tracked addresses share one fresh Electrum
+  // batch. Bootstrap must not reuse the short UTXO cache: this run replaces the
+  // old per-address baseline scans after subscriptions are established.
+  const walletAddresses = keyPairs.map((keyPair) => keyPair.address);
+  let quantumrootAddresses: string[] = [];
   try {
-    const quantumrootAddresses =
+    quantumrootAddresses =
       await QuantumrootTrackingService.listTrackedAddresses(currentWalletId);
-    if (!bootstrapIsCurrent()) return;
-    const fetchedQuantumrootUTXOs = await UTXOService.fetchAndStoreUTXOsMany(
-      currentWalletId,
-      quantumrootAddresses
-    );
-    if (!bootstrapIsCurrent()) return;
-    for (const address of quantumrootAddresses) {
-      allUTXOs[address] = fetchedQuantumrootUTXOs[address] ?? [];
-    }
   } catch (e) {
     logError('UTXOWorker.bootstrapAllUTXOs.quantumroot', e, {
       walletId: currentWalletId,
     });
   }
   if (!bootstrapIsCurrent()) return;
+
+  const trackedAddresses = Array.from(
+    new Set([...walletAddresses, ...quantumrootAddresses].filter(Boolean))
+  );
+  for (const address of trackedAddresses) invalidateUTXOCache(address);
+  const fetchedWalletUTXOs = await UTXOService.fetchAndStoreUTXOsMany(
+    currentWalletId,
+    trackedAddresses
+  );
+  if (!bootstrapIsCurrent()) return;
+  for (const address of trackedAddresses) {
+    allUTXOs[address] = fetchedWalletUTXOs[address] ?? [];
+  }
 
   // Contract instances
   try {
@@ -367,16 +447,19 @@ async function establishSubscriptions(session: WorkerSession) {
   // Headers (once)
   if (!headerSubscribed) {
     try {
-      await ElectrumService.subscribeBlockHeaders(async () => {
-        const epoch = workerEpoch;
-        for (const [addr, owner] of subscribedAddresses) {
-          refreshAddressSoon(addr, 250, { ...owner, epoch });
-        }
-        const activeSession = captureWorkerSession(epoch);
-        for (const addr of contractAddressSet) {
-          refreshAddressSoon(addr, 250, activeSession);
-        }
-      });
+      await ElectrumService.subscribeBlockHeaders(
+        async () => {
+          const epoch = workerEpoch;
+          const activeSession = captureWorkerSession(epoch);
+          refreshWalletSoon(250, activeSession);
+          for (const addr of contractAddressSet) {
+            refreshAddressSoon(addr, 250, activeSession);
+          }
+        },
+        // A single wallet-wide catch-up runs after every address subscription
+        // is installed below, so replaying the current tip would only duplicate it.
+        { emitCurrent: false }
+      );
       if (!isCurrentWorkerContext(session)) {
         await ElectrumService.unsubscribeBlockHeaders().catch(
           (error: unknown) =>
@@ -407,6 +490,7 @@ async function establishSubscriptions(session: WorkerSession) {
       await QuantumrootTrackingService.listTrackedAddresses(currentWalletId);
     if (!isCurrentWorkerContext(session)) return;
 
+    let addedWalletSubscription = false;
     for (const addr of [...walletAddresses, ...quantumrootAddresses]) {
       const existingOwner = subscribedAddresses.get(addr);
       if (
@@ -419,9 +503,7 @@ async function establishSubscriptions(session: WorkerSession) {
         walletId: session.walletId,
         generation: session.generation,
       });
-
-      // Baseline fetch
-      refreshAddressSoon(addr, 0, session);
+      addedWalletSubscription = true;
 
       try {
         await ElectrumService.subscribeAddress(addr, async () => {
@@ -433,6 +515,9 @@ async function establishSubscriptions(session: WorkerSession) {
           address: addr,
         });
       }
+    }
+    if (addedWalletSubscription) {
+      refreshWalletSoon(120, session);
     }
   } catch (e) {
     logError('UTXOWorker.establishSubscriptions.walletInit', e);
@@ -518,6 +603,9 @@ function startUTXOWorker(): Promise<void> {
       if (!isCurrentWorkerContext(session)) return;
 
       try {
+        // bootstrapAllUTXOs already fetched every wallet address in one batch.
+        // One trailing batch after all subscriptions closes both the block and
+        // mempool race windows without restoring per-address baseline scans.
         await establishSubscriptions(session);
       } catch (e) {
         logError('UTXOWorker.start.subscriptions', e);
@@ -545,6 +633,10 @@ function stopUTXOWorker(): Promise<void> {
     refreshTimers.clear();
     queuedRefreshes.clear();
     inFlightRefreshes.clear();
+    for (const [, timer] of walletRefreshTimers) clearTimeout(timer);
+    walletRefreshTimers.clear();
+    queuedWalletRefreshes.clear();
+    inFlightWalletRefreshes.clear();
 
     const addressesToUnsubscribe = [...subscribedAddresses.keys()];
     subscribedAddresses.clear();

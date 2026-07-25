@@ -1,7 +1,10 @@
 import { store } from '../state/store';
 import { replaceAllUTXOs } from '../state/slices/utxoSlice';
 import type { UTXO } from '../types/types';
-import { primeUTXOCache } from './ElectrumService';
+import {
+  invalidateUTXOCache,
+  primeUTXOCache,
+} from './ElectrumService';
 import KeyService from './KeyService';
 import QuantumrootTrackingService from './QuantumrootTrackingService';
 import { runWalletUtxoRefresh } from './RefreshCoordinator';
@@ -57,6 +60,10 @@ export async function fetchActiveWalletUtxos(
       ].filter(Boolean)
     )
   );
+  // A wallet-wide reconciliation is triggered by new history, a block, or a
+  // completed broadcast. Reusing the short Electrum UTXO cache here could
+  // publish the exact stale snapshot that triggered the refresh.
+  for (const address of addresses) invalidateUTXOCache(address);
   const fetched = await UTXOService.fetchAndStoreUTXOsMany(walletId, addresses);
   if (!isActiveWalletSession(session)) return null;
 
@@ -78,9 +85,24 @@ export async function reconcileActiveWalletUtxos(
   const session = captureActiveWalletSession(walletId);
   if (!session) return null;
 
-  const snapshot = await runWalletUtxoRefresh(walletId, async () =>
-    fetchActiveWalletUtxos(session)
-  );
+  let executedThisRequest = false;
+  let snapshot: Record<string, UTXO[]> | null | undefined;
+  try {
+    snapshot = await runWalletUtxoRefresh(walletId, async () => {
+      executedThisRequest = true;
+      return fetchActiveWalletUtxos(session);
+    });
+  } catch (error) {
+    // A rejection from a task we did not start belongs to an older trigger.
+    // Preserve this newer trigger as a trailing retry; errors from our own
+    // fetch still propagate to the caller for normal logging.
+    if (!executedThisRequest) return null;
+    throw error;
+  }
+  // The coordinator may return an older in-flight task for this wallet. That
+  // result began before this trigger and cannot prove the new event is
+  // reflected. Returning null asks callers to preserve one trailing refresh.
+  if (!executedThisRequest) return null;
   if (!snapshot || !isActiveWalletSession(session)) return null;
 
   store.dispatch(replaceAllUTXOs({ utxosByAddress: snapshot }));
