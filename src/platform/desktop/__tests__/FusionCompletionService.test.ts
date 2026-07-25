@@ -51,7 +51,8 @@ describe('completeFusionBroadcast', () => {
         source: 'p2p-fusion',
         sourceLabel: 'P2P Fusion',
       })
-    ).resolves.toEqual({ tracked: true, refreshed: true });
+      // No ownedOutputScripts supplied, so no coin is ours to advance.
+    ).resolves.toEqual({ tracked: true, refreshed: true, depthRecorded: 0 });
 
     expect(recordBroadcastMock).toHaveBeenCalledWith({
       walletId: 5,
@@ -84,7 +85,7 @@ describe('completeFusionBroadcast', () => {
         source: 'server-fusion',
         sourceLabel: 'CashFusion',
       })
-    ).resolves.toEqual({ tracked: true, refreshed: true });
+    ).resolves.toEqual({ tracked: true, refreshed: true, depthRecorded: 0 });
 
     expect(observeTransactionMock).toHaveBeenCalledOnce();
     expect(refreshActiveWalletUtxosMock).toHaveBeenCalledWith(5);
