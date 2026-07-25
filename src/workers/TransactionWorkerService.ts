@@ -4,7 +4,7 @@ import TransactionManager from '../apis/TransactionManager/TransactionManager';
 import { store } from '../state/store';
 import { addTransactions } from '../state/slices/transactionSlice';
 import { INTERVAL } from '../utils/constants';
-import { requestUTXORefreshFor } from './UTXOWorkerService';
+import { requestWalletUTXORefresh } from './UTXOWorkerService';
 import ElectrumService from '../services/ElectrumService';
 import { planTransactionDetailRefresh } from '../services/transactionDetailSync';
 import QuantumrootTrackingService from '../services/QuantumrootTrackingService';
@@ -80,8 +80,8 @@ async function fetchAndStoreTransactionHistory() {
           })
         );
       }
-      requestUTXORefreshFor(address, 60);
     }
+    requestWalletUTXORefresh(60);
   } catch (error) {
     console.error('Error fetching and storing transaction history:', error);
   }

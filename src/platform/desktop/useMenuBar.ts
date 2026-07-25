@@ -10,11 +10,18 @@ import { flushSync } from 'react-dom';
 import { useNavigate, type NavigateFunction } from 'react-router-dom';
 import { useDispatch, useSelector } from 'react-redux';
 import { Menu, Submenu, MenuItem, PredefinedMenuItem } from '@tauri-apps/api/menu';
+import {
+  getAllWebviewWindows,
+  getCurrentWebviewWindow,
+} from '@tauri-apps/api/webviewWindow';
 import { open as openDialog, save as saveDialog } from '@tauri-apps/plugin-dialog';
 import { invoke } from '@tauri-apps/api/core';
 import { appDataDir, join } from '@tauri-apps/api/path';
-import { AppDispatch, RootState } from '../../state/store';
+import { AppDispatch, RootState, store } from '../../state/store';
 import { selectWalletId, resetWallet } from '../../state/slices/walletSlice';
+import type { UTXO } from '../../types/types';
+import { reconcileActiveWalletUtxos } from '../../services/WalletUtxoRefreshService';
+import { requestWalletUTXORefresh } from '../../workers/UTXOWorkerService';
 import { useTheme } from '../../app/theme/useTheme';
 import { ROUTE_PATHS, transactionsRoute } from '../../navigation/routes';
 import { EcKeyManager } from './EcKeyManager';
@@ -28,6 +35,137 @@ export const OPEN_WALLET_EVENT = 'optn:open-wallet'; // quick-open a saved DB wa
 export const IMPORT_FILE_EVENT = 'optn:import-wallet-file'; // open a parsed .optn file
 // Fired after create/import/delete so the menu re-reads the wallet list.
 export const WALLETS_CHANGED_EVENT = 'optn:wallets-changed';
+export const MENU_ACTION_EVENT = 'optn:menu-action';
+
+interface DesktopMenuLike<TWindow> {
+  setAsAppMenu: () => Promise<unknown>;
+  setAsWindowMenu: (window: TWindow) => Promise<unknown>;
+}
+
+interface MenuTargetWindow {
+  label: string;
+  isFocused: () => Promise<boolean>;
+  emit: (event: string, payload?: unknown) => Promise<void>;
+}
+
+export interface DesktopMenuActionHandlers {
+  openPicker: () => void | Promise<void>;
+  openWalletFile: () => void | Promise<void>;
+  openSavedWallet: (walletId: number) => void | Promise<void>;
+  lockWallet: () => void | Promise<void>;
+  receive: () => void | Promise<void>;
+  send: () => void | Promise<void>;
+  history: () => void | Promise<void>;
+  exportWallet: () => void | Promise<void>;
+  settings: () => void | Promise<void>;
+  toggleTheme: () => void | Promise<void>;
+  refreshWallet: () => void | Promise<void>;
+  showAbout: () => void | Promise<void>;
+}
+
+export async function attachDesktopMenu<TWindow>(
+  menu: DesktopMenuLike<TWindow>,
+  currentWindow: TWindow,
+  requiresAppMenu: boolean
+): Promise<'app' | 'window'> {
+  if (requiresAppMenu) {
+    await menu.setAsAppMenu();
+    return 'app';
+  }
+  await menu.setAsWindowMenu(currentWindow);
+  return 'window';
+}
+
+export async function routeMenuActionToFocusedWindow(
+  id: string,
+  windows: readonly MenuTargetWindow[],
+  originatingLabel?: string
+): Promise<string | null> {
+  if (originatingLabel !== undefined) {
+    const origin = windows.find(
+      (candidate) => candidate.label === originatingLabel
+    );
+    if (!origin) return null;
+    await origin.emit(MENU_ACTION_EVENT, { id });
+    return origin.label;
+  }
+
+  let focused: MenuTargetWindow | undefined;
+  for (const candidate of windows) {
+    try {
+      if (await candidate.isFocused()) {
+        focused = candidate;
+        break;
+      }
+    } catch {
+      // A closing window can disappear between enumeration and focus lookup.
+    }
+  }
+
+  if (!focused) return null;
+  await focused.emit(MENU_ACTION_EVENT, { id });
+  return focused.label;
+}
+
+export async function dispatchDesktopMenuAction(
+  id: string,
+  handlers: DesktopMenuActionHandlers
+): Promise<boolean> {
+  const savedWalletMatch = /^open_wallet_(\d+)$/.exec(id);
+  if (savedWalletMatch) {
+    const walletId = Number(savedWalletMatch[1]);
+    if (!Number.isSafeInteger(walletId) || walletId <= 0) return false;
+    await handlers.openSavedWallet(walletId);
+    return true;
+  }
+
+  const action = {
+    new_wallet: handlers.openPicker,
+    open_wallet_file: handlers.openWalletFile,
+    lock_wallet: handlers.lockWallet,
+    receive: handlers.receive,
+    send: handlers.send,
+    history: handlers.history,
+    export_wallet: handlers.exportWallet,
+    settings: handlers.settings,
+    toggle_theme: handlers.toggleTheme,
+    refresh_wallet: handlers.refreshWallet,
+    about: handlers.showAbout,
+  }[id];
+  if (!action) return false;
+
+  await action();
+  return true;
+}
+
+export async function refreshWalletFromMenu(
+  walletId: number,
+  reconcile: (
+    activeWalletId: number
+  ) => Promise<Record<string, UTXO[]> | null> = reconcileActiveWalletUtxos,
+  requestTrailing: (delayMs?: number) => void = requestWalletUTXORefresh,
+  getWalletSession: () => {
+    currentWalletId: number;
+    sessionGeneration?: number;
+  } = () => store.getState().wallet_id
+): Promise<boolean> {
+  if (!Number.isSafeInteger(walletId) || walletId <= 0) return false;
+  const initialSession = getWalletSession();
+  if (initialSession.currentWalletId !== walletId) return false;
+  const initialGeneration = initialSession.sessionGeneration ?? 0;
+  const snapshot = await reconcile(walletId);
+  if (snapshot) return true;
+
+  const currentSession = getWalletSession();
+  if (
+    currentSession.currentWalletId !== walletId ||
+    (currentSession.sessionGeneration ?? 0) !== initialGeneration
+  ) {
+    return false;
+  }
+  requestTrailing(0);
+  return false;
+}
 
 /**
  * Leave the currently open wallet before showing another wallet's password
@@ -68,7 +206,10 @@ async function openPicker(navigate: (p: string) => void) {
   }
 }
 
-async function handleOpenWalletFile(navigate: (p: string) => void) {
+async function handleOpenWalletFile(
+  navigate: (p: string) => void,
+  leaveCurrentWallet: () => void = () => undefined
+) {
   const picked = await openDialog({
     multiple: false,
     directory: false,
@@ -80,6 +221,7 @@ async function handleOpenWalletFile(navigate: (p: string) => void) {
   try {
     const text = await invoke<string>('read_wallet_file', { path: picked });
     const file = parseWalletFile(text);
+    leaveCurrentWallet();
     navigate(ROUTE_PATHS.landing);
     setTimeout(() => {
       window.dispatchEvent(new CustomEvent(IMPORT_FILE_EVENT, { detail: { file } }));
@@ -137,7 +279,84 @@ export function useMenuBar(): void {
 
   useEffect(() => {
     let disposed = false;
+    let unlistenMenuAction: (() => void) | undefined;
     const hasOpenWallet = walletId > 0;
+    const currentWindow = getCurrentWebviewWindow();
+    const requiresAppMenu = /Macintosh|Mac OS X/i.test(navigator.userAgent);
+    const walletActionEnabled = requiresAppMenu || hasOpenWallet;
+
+    const handlers: DesktopMenuActionHandlers = {
+      openPicker: () => openPicker(navigate),
+      openWalletFile: () =>
+        handleOpenWalletFile(navigate, () => {
+          EcKeyManager.lock();
+          flushSync(() => dispatch(resetWallet()));
+        }),
+      openSavedWallet: (savedWalletId) =>
+        openSavedWalletFromMenu(savedWalletId, navigate, dispatch),
+      lockWallet: () => {
+        if (!walletId) return;
+        EcKeyManager.lock();
+        dispatch(resetWallet());
+        navigate(ROUTE_PATHS.landing);
+      },
+      receive: () => {
+        if (walletId) navigate(ROUTE_PATHS.receive);
+      },
+      send: () => {
+        if (walletId) navigate(ROUTE_PATHS.send);
+      },
+      history: () => {
+        if (walletId) navigate(transactionsRoute(walletId));
+      },
+      exportWallet: () => (walletId ? handleExportWallet(walletId) : undefined),
+      settings: () => {
+        if (walletId) navigate(ROUTE_PATHS.settings);
+      },
+      toggleTheme: toggleMode,
+      refreshWallet: async () => {
+        if (walletId) await refreshWalletFromMenu(walletId);
+      },
+      showAbout: () => {
+        window.dispatchEvent(new CustomEvent('optn:show-about'));
+      },
+    };
+
+    const dispatchMenuAction = (id: string) => {
+      void dispatchDesktopMenuAction(id, handlers).catch((err) => {
+        console.error(`[menu] ${id} failed:`, err);
+      });
+    };
+
+    void currentWindow
+      .listen<{ id?: unknown }>(MENU_ACTION_EVENT, (event) => {
+        if (typeof event.payload?.id === 'string') {
+          dispatchMenuAction(event.payload.id);
+        }
+      })
+      .then((unlisten) => {
+        if (disposed) {
+          unlisten();
+        } else {
+          unlistenMenuAction = unlisten;
+        }
+      })
+      .catch((err) => {
+        console.error('[menu] could not register menu action listener:', err);
+      });
+
+    const routeAction = async (id: string) => {
+      await routeMenuActionToFocusedWindow(
+        id,
+        await getAllWebviewWindows(),
+        requiresAppMenu ? undefined : currentWindow.label
+      );
+    };
+    const menuAction = (id: string) => () => {
+      void routeAction(id).catch((err) => {
+        console.error(`[menu] could not route ${id}:`, err);
+      });
+    };
 
     const buildMenu = async () => {
       // Saved wallets for quick-open. Network is a runtime setting, not a fixed
@@ -154,7 +373,7 @@ export function useMenuBar(): void {
           MenuItem.new({
             id: `open_wallet_${w.id}`,
             text: w.wallet_name || `Wallet #${w.id}`,
-            action: () => openSavedWalletFromMenu(w.id, navigate, dispatch),
+            action: menuAction(`open_wallet_${w.id}`),
           })
         )
       );
@@ -164,7 +383,7 @@ export function useMenuBar(): void {
         await MenuItem.new({
           id: 'open_wallet_file',
           text: 'Open Wallet File…',
-          action: () => void handleOpenWalletFile(navigate),
+          action: menuAction('open_wallet_file'),
         }),
         await PredefinedMenuItem.new({ item: 'Separator' }),
         ...(quickOpenItems.length > 0
@@ -184,7 +403,7 @@ export function useMenuBar(): void {
             id: 'new_wallet',
             text: 'Import New Wallet',
             accelerator: 'CmdOrCtrl+N',
-            action: () => void openPicker(navigate),
+            action: menuAction('new_wallet'),
           }),
           openWalletSubmenu,
           await PredefinedMenuItem.new({ item: 'Separator' }),
@@ -192,12 +411,8 @@ export function useMenuBar(): void {
             id: 'lock_wallet',
             text: 'Lock Wallet',
             accelerator: 'CmdOrCtrl+L',
-            enabled: hasOpenWallet,
-            action: () => {
-              EcKeyManager.lock();
-              dispatch(resetWallet());
-              navigate(ROUTE_PATHS.landing);
-            },
+            enabled: walletActionEnabled,
+            action: menuAction('lock_wallet'),
           }),
           await PredefinedMenuItem.new({ item: 'Separator' }),
           await PredefinedMenuItem.new({ item: 'Quit', text: 'Quit' }),
@@ -210,34 +425,41 @@ export function useMenuBar(): void {
           await MenuItem.new({
             id: 'receive',
             text: 'Receive',
-            enabled: hasOpenWallet,
-            action: () => navigate(ROUTE_PATHS.receive),
+            enabled: walletActionEnabled,
+            action: menuAction('receive'),
           }),
           await MenuItem.new({
             id: 'send',
             text: 'Send',
-            enabled: hasOpenWallet,
-            action: () => navigate(ROUTE_PATHS.send),
+            enabled: walletActionEnabled,
+            action: menuAction('send'),
           }),
           await MenuItem.new({
             id: 'history',
             text: 'Transaction History',
-            enabled: hasOpenWallet,
-            action: () => navigate(transactionsRoute(walletId || undefined)),
+            enabled: walletActionEnabled,
+            action: menuAction('history'),
+          }),
+          await MenuItem.new({
+            id: 'refresh_wallet',
+            text: 'Refresh Wallet',
+            accelerator: 'CmdOrCtrl+R',
+            enabled: walletActionEnabled,
+            action: menuAction('refresh_wallet'),
           }),
           await PredefinedMenuItem.new({ item: 'Separator' }),
           await MenuItem.new({
             id: 'export_wallet',
             text: 'Export Wallet…',
-            enabled: hasOpenWallet,
-            action: () => void handleExportWallet(walletId),
+            enabled: walletActionEnabled,
+            action: menuAction('export_wallet'),
           }),
           await PredefinedMenuItem.new({ item: 'Separator' }),
           await MenuItem.new({
             id: 'settings',
             text: 'Settings',
-            enabled: hasOpenWallet,
-            action: () => navigate(ROUTE_PATHS.settings),
+            enabled: walletActionEnabled,
+            action: menuAction('settings'),
           }),
         ],
       });
@@ -245,12 +467,10 @@ export function useMenuBar(): void {
       const viewMenu = await Submenu.new({
         text: 'View',
         items: [
-          await MenuItem.new({ id: 'toggle_theme', text: 'Toggle Theme', action: () => toggleMode() }),
           await MenuItem.new({
-            id: 'reload',
-            text: 'Reload',
-            accelerator: 'CmdOrCtrl+R',
-            action: () => window.location.reload(),
+            id: 'toggle_theme',
+            text: 'Toggle Theme',
+            action: menuAction('toggle_theme'),
           }),
         ],
       });
@@ -261,14 +481,14 @@ export function useMenuBar(): void {
           await MenuItem.new({
             id: 'about',
             text: 'About OPTN Wallet',
-            action: () => window.dispatchEvent(new CustomEvent('optn:show-about')),
+            action: menuAction('about'),
           }),
         ],
       });
 
       const menu = await Menu.new({ items: [fileMenu, walletMenu, viewMenu, helpMenu] });
       if (disposed) return;
-      await menu.setAsAppMenu();
+      await attachDesktopMenu(menu, currentWindow, requiresAppMenu);
     };
 
     void buildMenu();
@@ -277,6 +497,7 @@ export function useMenuBar(): void {
     window.addEventListener(WALLETS_CHANGED_EVENT, rebuild);
     return () => {
       disposed = true;
+      unlistenMenuAction?.();
       window.removeEventListener(WALLETS_CHANGED_EVENT, rebuild);
     };
   }, [navigate, dispatch, walletId, toggleMode]);
