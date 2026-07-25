@@ -256,6 +256,9 @@ export async function runFusion(opts: {
       spentInputs: opts.utxos,
       source: 'server-fusion',
       sourceLabel: 'CashFusion server',
+      // Same allocation we handed the Rust engine, so server rounds get depth
+      // accounted identically to P2P rounds through the one shared path.
+      ownedOutputScripts: scripts,
     });
   }
   return outcome;
