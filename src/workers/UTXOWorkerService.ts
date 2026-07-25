@@ -49,7 +49,9 @@ const dbService = DatabaseService();
 const inFlightRefreshes = new Map<string, Promise<void>>();
 const queuedRefreshes = new Set<string>();
 
-function collectTokenCategories(utxosByAddress: Record<string, UTXO[]>): string[] {
+function collectTokenCategories(
+  utxosByAddress: Record<string, UTXO[]>
+): string[] {
   return Array.from(
     new Set(
       Object.values(utxosByAddress)
@@ -151,19 +153,17 @@ export function optimisticRemoveSpentByOutpoints(
   requestUTXORefreshForMany(touched, 0);
 }
 
-async function refreshWalletAddress(
-  address: string,
-  session: WorkerSession
-) {
+async function refreshWalletAddress(address: string, session: WorkerSession) {
   if (!isCurrentWorkerContext(session)) return;
   const currentWalletId = session.walletId;
   const prev = store.getState().utxos.utxos[address] ?? [];
   const prevSet = new Set(prev.map((u) => `${u.tx_hash}:${u.tx_pos}`));
 
-  const updatedHistory = await transactionManager.fetchAndStoreTransactionHistory(
-    currentWalletId,
-    address
-  );
+  const updatedHistory =
+    await transactionManager.fetchAndStoreTransactionHistory(
+      currentWalletId,
+      address
+    );
   if (!isCurrentWorkerContext(session)) return;
   if (updatedHistory.length > 0) {
     store.dispatch(
@@ -201,10 +201,7 @@ async function refreshWalletAddress(
   }
 }
 
-async function performRefreshAddress(
-  address: string,
-  session: WorkerSession
-) {
+async function performRefreshAddress(address: string, session: WorkerSession) {
   if (!isCurrentWorkerContext(session)) return;
   const currentWalletId = session.walletId;
 
@@ -221,10 +218,13 @@ async function performRefreshAddress(
   try {
     await refreshWalletAddress(address, session);
     if (isCurrentWorkerContext(session)) {
-      dbService.scheduleDatabaseSave();
+      dbService.scheduleDatabaseSave(currentWalletId);
     }
   } catch (e) {
-    logError('UTXOWorker.refreshAddress.wallet', e, { address, walletId: currentWalletId });
+    logError('UTXOWorker.refreshAddress.wallet', e, {
+      address,
+      walletId: currentWalletId,
+    });
   }
 }
 
@@ -356,7 +356,7 @@ export async function bootstrapAllUTXOs(expectedEpoch?: number) {
   }
   if (!bootstrapIsCurrent()) return;
 
-  dbService.scheduleDatabaseSave();
+  dbService.scheduleDatabaseSave(currentWalletId);
   store.dispatch(setFetchingUTXOs(false));
   store.dispatch(setInitialized(true));
 }
@@ -378,12 +378,13 @@ async function establishSubscriptions(session: WorkerSession) {
         }
       });
       if (!isCurrentWorkerContext(session)) {
-        await ElectrumService.unsubscribeBlockHeaders().catch((error: unknown) =>
-          logWarn(
-            'UTXOWorker.establishSubscriptions.blockHeaders',
-            'Discarded a stale header subscription',
-            { error }
-          )
+        await ElectrumService.unsubscribeBlockHeaders().catch(
+          (error: unknown) =>
+            logWarn(
+              'UTXOWorker.establishSubscriptions.blockHeaders',
+              'Discarded a stale header subscription',
+              { error }
+            )
         );
         return;
       }
@@ -554,10 +555,14 @@ function stopUTXOWorker(): Promise<void> {
     await Promise.all(
       addressesToUnsubscribe.map((addr) =>
         ElectrumService.unsubscribeAddress(addr).catch((error: unknown) =>
-          logWarn('UTXOWorker.stop.unsubscribeAddress', 'Failed to unsubscribe', {
-            address: addr,
-            error,
-          })
+          logWarn(
+            'UTXOWorker.stop.unsubscribeAddress',
+            'Failed to unsubscribe',
+            {
+              address: addr,
+              error,
+            }
+          )
         )
       )
     );

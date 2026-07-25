@@ -28,6 +28,8 @@ import {
 } from './fusionRoundState';
 import { Network } from '../../state/slices/networkSlice';
 import type { UTXO } from '../../types/types';
+import { reconcileActiveWalletUtxos } from '../../services/WalletUtxoRefreshService';
+import { completeFusionBroadcast } from './FusionCompletionService';
 import { createFreshFusionOutputScripts, gatherInputs } from './FusionService';
 import { isFusionExecutionAllowed } from './FusionExecutionSafety';
 import {
@@ -225,6 +227,37 @@ async function onlyUnspent(utxos: UTXO[]): Promise<UTXO[]> {
   return utxos.filter((utxo) => unspent.has(`${utxo.tx_hash}:${utxo.tx_pos}`));
 }
 
+export async function refreshAndVerifyP2pInputs(
+  walletId: number,
+  fallbackUtxos: UTXO[]
+): Promise<UTXO[]> {
+  const refreshed = await reconcileActiveWalletUtxos(walletId);
+  const candidates = refreshed
+    ? Object.values(refreshed)
+        .flat()
+        .filter((utxo) => !utxo.token)
+    : fallbackUtxos;
+  const claimed = reservedOutpoints(walletId);
+  const free = candidates.filter(
+    (utxo) => !claimed.has(outpointKey(utxo.tx_hash, utxo.tx_pos))
+  );
+  if (free.length === 0) {
+    throw new Error(
+      candidates.length === 0
+        ? 'No spendable (non-token) UTXOs to fuse.'
+        : 'All coins are already committed to another fusion round.'
+    );
+  }
+
+  const spendable = await onlyUnspent(free);
+  if (spendable.length === 0) {
+    throw new Error(
+      'No live unspent coins to fuse after refreshing the wallet.'
+    );
+  }
+  return spendable;
+}
+
 function assertBroadcastTxid(value: string): string {
   if (!/^[0-9a-f]{64}$/i.test(value)) {
     throw new Error(`Fusion broadcast failed: ${value}`);
@@ -268,26 +301,16 @@ export async function runP2pFusion(
   const status = opts.onStatus;
 
   try {
-    status?.('Tor verified; preparing fresh pool identity.');
+    status?.('Refreshing and verifying live wallet coins.');
     // Drop coins another round of this wallet is already spending. Without this,
     // two rounds (two windows, or a retry overlapping its predecessor) pick the
     // same UTXOs; the first to broadcast spends them and the second is rejected
     // with "Missing inputs" only after every peer has signed.
-    const claimed = reservedOutpoints(opts.walletId);
-    const free = opts.utxos.filter(
-      (utxo) => !claimed.has(outpointKey(utxo.tx_hash, utxo.tx_pos))
+    const spendable = await refreshAndVerifyP2pInputs(
+      opts.walletId,
+      opts.utxos
     );
-    if (free.length === 0) {
-      throw new Error(
-        'All coins are already committed to another fusion round.'
-      );
-    }
-    const spendable = await onlyUnspent(free);
-    if (spendable.length === 0) {
-      throw new Error(
-        'No live unspent coins to fuse — the wallet list was stale. Sync and retry.'
-      );
-    }
+    status?.('Tor verified; preparing fresh pool identity.');
     reservedForRound = spendable.map((utxo) =>
       outpointKey(utxo.tx_hash, utxo.tx_pos)
     );
@@ -429,7 +452,20 @@ export async function runP2pFusion(
       },
       transport
     );
+    const completion = await completeFusionBroadcast({
+      walletId: opts.walletId,
+      txid: result.txid,
+      txHex: result.txHex,
+      spentInputs: spendable,
+      source: 'p2p-fusion',
+      sourceLabel: 'P2P Fusion',
+    });
     status?.(`Fused ✓ — txid ${result.txid}`);
+    if (!completion.refreshed) {
+      status?.(
+        `Fused ✓ — txid ${result.txid}; wallet sync will retry automatically.`
+      );
+    }
     return result;
   } finally {
     // Free the coins whatever happened. A successful round has already spent

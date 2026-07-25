@@ -323,7 +323,12 @@ export default function WalletManager() {
       0,
     ]);
     createAccountQuery.free();
-    await dbService.flushDatabaseToFile();
+    const idResult = db.exec('SELECT last_insert_rowid()');
+    const localWalletId = toNumber(idResult?.[0]?.values?.[0]?.[0]);
+    if (!Number.isSafeInteger(localWalletId) || localWalletId <= 0) {
+      throw new Error('Unable to identify the newly-created wallet.');
+    }
+    await dbService.persistNewWalletToFile(localWalletId);
     return true;
   }
 
