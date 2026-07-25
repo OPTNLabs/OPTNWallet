@@ -31,7 +31,8 @@ import type { AssembledFusionTx } from './fusionRound';
 const SEQUENCE = 0xffffffff;
 const TX_VERSION = 2;
 /** SIGHASH_ALL | FORKID (0x41) — a standard BCH P2PKH spend, no SIGHASH_UTXOS. */
-const HASHTYPE = SigningSerializationFlag.allOutputs | SigningSerializationFlag.forkId;
+const HASHTYPE =
+  SigningSerializationFlag.allOutputs | SigningSerializationFlag.forkId;
 
 /** P2PKH locking script for a compressed pubkey (hex). */
 function p2pkhScript(pubkeyHex: string): Uint8Array {
@@ -58,8 +59,17 @@ export function toLibauthTx(tx: AssembledFusionTx): {
     version: TX_VERSION,
     locktime: 0,
     inputs: tx.inputs.map((i) => ({
-      // display (big-endian) txid → internal little-endian outpoint hash
-      outpointTransactionHash: hexToBin(i.prevTxid).reverse(),
+      // libauth's `outpointTransactionHash` is the txid in DISPLAY order —
+      // `encodeTransaction` performs the little-endian reversal itself when it
+      // serialises, and `decodeTransaction` reverses back. Reversing here as well
+      // double-reverses: the raw transaction then carries the txid in display
+      // order and every input points at an outpoint that has never existed, so
+      // the network rejects the whole CoinJoin with "Missing inputs" AFTER every
+      // peer has signed. Nothing local catches it — the VM validates scripts
+      // against sourceOutputs we supply ourselves and never checks that an
+      // outpoint exists, and an encode/decode round trip is symmetric, so unit
+      // tests with synthetic txids pass either way. Only a real node notices.
+      outpointTransactionHash: hexToBin(i.prevTxid),
       outpointIndex: i.prevIndex,
       sequenceNumber: SEQUENCE,
       unlockingBytecode: Uint8Array.of(),
@@ -91,7 +101,11 @@ export function signMyInputs(
   tx.inputs.forEach((inp, i) => {
     const priv = keysByPubkey.get(inp.pubkey);
     if (!priv) return;
-    const context: CompilationContextBCH = { inputIndex: i, sourceOutputs, transaction };
+    const context: CompilationContextBCH = {
+      inputIndex: i,
+      sourceOutputs,
+      transaction,
+    };
     const preimage = generateSigningSerializationBCH(context, {
       coveredBytecode: p2pkhScript(inp.pubkey),
       signingSerializationType: Uint8Array.of(HASHTYPE),
@@ -102,8 +116,17 @@ export function signMyInputs(
     const sigWithType = Uint8Array.from([...sig, HASHTYPE]); // 65 bytes
     const pub = hexToBin(inp.pubkey); // 33 bytes
     // scriptSig: OP_PUSH65 <sig+type> OP_PUSH33 <pubkey> (both single-byte pushdata)
-    const scriptSig = Uint8Array.from([sigWithType.length, ...sigWithType, pub.length, ...pub]);
-    sigs.push({ prevTxid: inp.prevTxid, prevIndex: inp.prevIndex, unlockingBytecode: binToHex(scriptSig) });
+    const scriptSig = Uint8Array.from([
+      sigWithType.length,
+      ...sigWithType,
+      pub.length,
+      ...pub,
+    ]);
+    sigs.push({
+      prevTxid: inp.prevTxid,
+      prevIndex: inp.prevIndex,
+      unlockingBytecode: binToHex(scriptSig),
+    });
   });
   return sigs;
 }
@@ -115,9 +138,16 @@ export function signMyInputs(
 export function finalizeFusionTx(
   tx: AssembledFusionTx,
   sigs: InputSig[]
-): { txHex: string; txid: string; transaction: TransactionCommon; sourceOutputs: Output[] } {
+): {
+  txHex: string;
+  txid: string;
+  transaction: TransactionCommon;
+  sourceOutputs: Output[];
+} {
   const { transaction, sourceOutputs } = toLibauthTx(tx);
-  const byOutpoint = new Map(sigs.map((s) => [`${s.prevTxid}:${s.prevIndex}`, s.unlockingBytecode]));
+  const byOutpoint = new Map(
+    sigs.map((s) => [`${s.prevTxid}:${s.prevIndex}`, s.unlockingBytecode])
+  );
   transaction.inputs.forEach((inp, i) => {
     const key = `${tx.inputs[i].prevTxid}:${tx.inputs[i].prevIndex}`;
     const u = byOutpoint.get(key);
@@ -181,7 +211,9 @@ export function verifyFinalFusionTx(
       input.sequenceNumber !== wanted.sequenceNumber ||
       input.unlockingBytecode.length === 0
     ) {
-      throw new Error('final Fusion transaction input differs from approved template');
+      throw new Error(
+        'final Fusion transaction input differs from approved template'
+      );
     }
   });
   decoded.outputs.forEach((output, index) => {
@@ -190,7 +222,9 @@ export function verifyFinalFusionTx(
       output.valueSatoshis !== wanted.valueSatoshis ||
       binToHex(output.lockingBytecode) !== binToHex(wanted.lockingBytecode)
     ) {
-      throw new Error('final Fusion transaction output differs from approved template');
+      throw new Error(
+        'final Fusion transaction output differs from approved template'
+      );
     }
   });
 
@@ -199,7 +233,9 @@ export function verifyFinalFusionTx(
     sourceOutputs,
   });
   if (vmResult !== true) {
-    throw new Error(`final Fusion transaction failed BCH validation: ${vmResult}`);
+    throw new Error(
+      `final Fusion transaction failed BCH validation: ${vmResult}`
+    );
   }
   return { txid, transaction: decoded };
 }

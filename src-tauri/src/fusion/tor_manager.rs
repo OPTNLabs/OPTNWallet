@@ -56,7 +56,11 @@ fn parse_bootstrap(line: &str) -> Option<u8> {
 /// Start tor and wait until it has bootstrapped (or the timeout elapses).
 /// Returns the SOCKS port it's listening on. Idempotent: if tor is already
 /// running, returns the existing port.
-pub async fn start(paths: TorPaths, socks_port: u16, bootstrap_timeout: Duration) -> Result<u16, String> {
+pub async fn start(
+    paths: TorPaths,
+    socks_port: u16,
+    bootstrap_timeout: Duration,
+) -> Result<u16, String> {
     if RUNNING.load(Ordering::SeqCst) {
         return Ok(SOCKS_PORT.load(Ordering::SeqCst));
     }
@@ -80,6 +84,18 @@ pub async fn start(paths: TorPaths, socks_port: u16, bootstrap_timeout: Duration
                 SOCKS_PORT.store(socks_port, Ordering::SeqCst);
                 RUNNING.store(true, Ordering::SeqCst);
                 SPAWNED.store(true, Ordering::SeqCst);
+                // BOOTSTRAP is only ever advanced by parsing a tor process's own
+                // stdout, which an ADOPTED tor does not give us — we never spawned
+                // it, so there is no log to read and the counter would sit at 0
+                // forever. Consumers gate on `bootstrap_percent >= 100`
+                // (CashFusionSettings.currentTorConfig), so leaving it at 0 makes
+                // the Tor panel report "Running ✓" from `running` while P2P fusion
+                // simultaneously refuses with "enable Tor and wait for bootstrap".
+                // A listener we can reach is treated as bootstrapped; that stays
+                // honest because adoption is deliberately optimistic and the real
+                // verification is fusion_tor_check, which runP2pFusion calls before
+                // every round and which fails closed on a stuck leftover.
+                BOOTSTRAP.store(100, Ordering::SeqCst);
                 return Ok(socks_port);
             }
 
