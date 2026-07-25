@@ -292,19 +292,42 @@ export function selectFusionGroup(
   return best;
 }
 
+/** A relay that accepts the socket but never answers OK must not stall a round. */
+const PUBLISH_TIMEOUT_MS = 30_000;
+
 export async function publishEventAtLeastOnce(
   pool: SimplePool,
   relays: string[],
   event: Event
 ): Promise<void> {
   if (relays.length === 0) throw new Error('No Nostr relays configured.');
-  const attempts = pool.publish(relays, event);
+  // Bound every relay attempt. `pool.publish` resolves per relay only when that
+  // relay answers OK, so a relay that opens the socket and then goes quiet leaves
+  // its promise pending forever — and Promise.allSettled waits for ALL of them,
+  // so one silent relay hangs the whole announce with no error and no way out.
+  // A timed-out attempt counts as a failure, not a success: if EVERY relay times
+  // out the announcement never landed and the round must fail loudly.
+  const attempts = pool
+    .publish(relays, event)
+    .map((attempt) =>
+      Promise.race([
+        attempt,
+        new Promise<never>((_, reject) =>
+          setTimeout(
+            () => reject(new Error('relay did not acknowledge in time')),
+            PUBLISH_TIMEOUT_MS
+          )
+        ),
+      ])
+    );
   const settled = await Promise.allSettled(attempts);
   if (!settled.some((result) => result.status === 'fulfilled')) {
     const reason = settled.find((result) => result.status === 'rejected');
     throw new Error(
       `No Nostr relay accepted the Fusion message${
-        reason && reason.status === 'rejected' ? `: ${String(reason.reason)}` : '.'
+        reason && reason.status === 'rejected'
+          ? `: ${String(reason.reason)}`
+          : '.'
       }`
     );
   }
@@ -362,14 +385,21 @@ export function joinPool(
     await publishEventAtLeastOnce(pool, relays, evt);
   };
 
-  announceTimer = setTimeout(() => {
-    void announce().catch((error: unknown) =>
-      options.onError?.(error instanceof Error ? error : new Error(String(error)))
-    );
-  }, Math.floor(Math.random() * MAX_ANNOUNCE_DELAY_MS));
+  announceTimer = setTimeout(
+    () => {
+      void announce().catch((error: unknown) =>
+        options.onError?.(
+          error instanceof Error ? error : new Error(String(error))
+        )
+      );
+    },
+    Math.floor(Math.random() * MAX_ANNOUNCE_DELAY_MS)
+  );
   repeatTimer = setInterval(() => {
     void announce().catch((error: unknown) =>
-      options.onError?.(error instanceof Error ? error : new Error(String(error)))
+      options.onError?.(
+        error instanceof Error ? error : new Error(String(error))
+      )
     );
   }, REANNOUNCE_MS);
 

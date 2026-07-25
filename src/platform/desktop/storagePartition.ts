@@ -11,11 +11,27 @@
 // the URL persists. The resolved key is also cached in sessionStorage (per-window,
 // survives reload) so isolation holds even if the query is ever dropped.
 //
-// The primary window has no `?instance=` and keeps the legacy 'persist' store, so
-// an existing user's state is preserved untouched. The shared wallet DB
-// (idb-keyval 'OPTNDatabase') is deliberately NOT partitioned — every window reads
-// the same wallets (with DatabaseService's anti-clobber guard) and opens a
+// The primary window has no `?instance=` and keeps the legacy 'optn-wallet'
+// database, so an existing user's state is preserved untouched. The shared wallet
+// DB (idb-keyval 'OPTNDatabase') is deliberately NOT partitioned — every window
+// reads the same wallets (with DatabaseService's anti-clobber guard) and opens a
 // different one.
+//
+// The partition MUST be applied to the localForage database `name`, never to the
+// `storeName`. In IndexedDB the version counter belongs to the DATABASE, not to
+// the object store, and localForage creates a missing store by reopening the
+// database at `version + 1` to get an `upgradeneeded` event. Partitioning by
+// storeName therefore pointed every window at the ONE 'optn-wallet' database and
+// made each new window bump a version counter they all shared: two windows opening
+// together both requested the same upgrade and the loser died with
+// "VersionError: The requested version (N) is less than the existing version (N+1)".
+// That is not recoverable — localForage only retries InvalidStateError and
+// NotFoundError, so a VersionError leaves the instance permanently rejected and
+// that window silently loses redux-persist (fusion toggles, preferences).
+// It also grew the shared database by one object store per window ever opened,
+// since openWalletPickerWindow mints a fresh `wallet-<timestamp>` partition.
+// Partitioning by database name gives each window its own database with its own
+// private version counter, so the race cannot happen.
 
 import localForage from 'localforage';
 
@@ -51,11 +67,14 @@ function resolvePartition(): string {
 const partition = resolvePartition();
 
 if (partition) {
-  type ConfigFn = (options?: { storeName?: string; [k: string]: unknown }) => unknown;
+  type ConfigFn = (options?: {
+    name?: string;
+    [k: string]: unknown;
+  }) => unknown;
   const original = localForage.config.bind(localForage) as ConfigFn;
   const patched: ConfigFn = (options) => {
-    if (options && typeof options.storeName === 'string') {
-      return original({ ...options, storeName: `${options.storeName}-${partition}` });
+    if (options && typeof options.name === 'string') {
+      return original({ ...options, name: `${options.name}-${partition}` });
     }
     return original(options);
   };
