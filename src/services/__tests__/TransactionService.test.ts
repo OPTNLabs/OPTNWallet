@@ -69,7 +69,7 @@ describe('TransactionService.sendTransaction', () => {
 
     expect(result.errorMessage).toContain('mandatory-script-verify-flag-failed');
     expect(trackAttemptMock).not.toHaveBeenCalled();
-    expect(removeMock).toHaveBeenCalledWith('tracked:00aa');
+    expect(removeMock).toHaveBeenCalledWith('tracked:00aa', 11);
     expect(requestRefreshMock).not.toHaveBeenCalled();
   });
 

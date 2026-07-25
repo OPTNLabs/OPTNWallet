@@ -3,10 +3,9 @@
 //
 // Each window has its own in-RAM wallet key (WalletKeyCache is per-JS-context)
 // and boots to the picker via DesktopAppShell's stale-walletId reset. Windows
-// share one IndexedDB origin; concurrent writes to the SQLite blob are guarded
-// against clobber in DatabaseService.realSaveDatabase (a context never persists
-// FEWER wallets than are already stored). The label must match the `wallet-*`
-// pattern allowed in capabilities/default.json.
+// share one IndexedDB origin; DatabaseService serializes writes across WebViews
+// and merges only the active wallet's rows into the latest shared snapshot. The
+// label must match the `wallet-*` pattern allowed in capabilities/default.json.
 import { WebviewWindow } from '@tauri-apps/api/webviewWindow';
 import { ROUTE_PATHS } from '../../navigation/routes';
 
@@ -34,7 +33,11 @@ export async function openWalletPickerWindow(): Promise<void> {
   await new Promise<void>((resolve, reject) => {
     void win.once('tauri://created', () => resolve());
     void win.once('tauri://error', (e) =>
-      reject(new Error(typeof e.payload === 'string' ? e.payload : 'window creation failed'))
+      reject(
+        new Error(
+          typeof e.payload === 'string' ? e.payload : 'window creation failed'
+        )
+      )
     );
   });
 }

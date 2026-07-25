@@ -40,13 +40,16 @@ export default function useOutboundTransactions(
       await runOutboundReconcile(walletId, () =>
         reconcileOutboundTransactions(walletId)
       );
-      const record = await OutboundTransactionTracker.getByTxid(txid);
+      const record = await OutboundTransactionTracker.getByTxid(
+        txid,
+        walletId
+      );
       if (!record) {
         await load();
         return true;
       }
       if (record.state === 'submitted') {
-        await OutboundTransactionTracker.remove(txid);
+        await OutboundTransactionTracker.remove(txid, walletId);
         await load();
         return true;
       }
@@ -54,7 +57,7 @@ export default function useOutboundTransactions(
         await load();
         return false;
       }
-      await OutboundTransactionTracker.remove(txid);
+      await OutboundTransactionTracker.remove(txid, walletId);
       await load();
       return true;
     },

@@ -115,14 +115,13 @@ const DesktopLandingPage = () => {
     handleOpenClick(requestedId);
   }, [handleOpenClick, location.key, location.state]);
 
-  // Delete ONE wallet (e.g. a duplicate). Uses forceSaveDatabase so the removal
-  // persists past the multi-window anti-clobber guard; the wallet's .optn file
-  // is left on disk as a backup, so this is recoverable via Open Wallet File.
+  // Delete ONE wallet (e.g. a duplicate) without replacing changes written by
+  // another open wallet window. Its .optn file remains a recoverable backup.
   const handleDelete = async (id: number) => {
     setDeleteBusy(true);
     try {
       await WalletManager().deleteWallet(id);
-      await DatabaseService().forceSaveDatabase();
+      await DatabaseService().deleteWalletFromFile(id);
       const rows = await WalletManager().getAllWallets();
       setWallets(rows as WalletRow[]);
       setDeletingId(null);

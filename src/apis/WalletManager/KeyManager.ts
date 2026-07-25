@@ -25,7 +25,9 @@ function toString(value: unknown): string {
 }
 
 function toCount(value: unknown): number {
-  return typeof value === 'number' ? value : Number.parseInt(String(value), 10) || 0;
+  return typeof value === 'number'
+    ? value
+    : Number.parseInt(String(value), 10) || 0;
 }
 
 const textDecoder = new TextDecoder();
@@ -79,9 +81,8 @@ export default function KeyManager() {
       `SELECT mnemonic, passphrase, networkType FROM wallets WHERE id = ?;`
     );
     const row =
-      (query.get([wallet_id]) as
-        | (string | number | undefined)[]
-        | undefined) ?? [];
+      (query.get([wallet_id]) as (string | number | undefined)[] | undefined) ??
+      [];
     query.free();
 
     const mnemonic = await SecretCryptoService.decryptText(toString(row[0]));
@@ -108,8 +109,14 @@ export default function KeyManager() {
     wallet_id: number,
     accountNumber = 0
   ): Promise<Record<BchStandardBranchName, string>> {
-    const { mnemonic, passphrase, networkType } = await getWalletSeedMaterial(wallet_id);
-    return deriveBchStandardXpubs(networkType, mnemonic, passphrase, accountNumber);
+    const { mnemonic, passphrase, networkType } =
+      await getWalletSeedMaterial(wallet_id);
+    return deriveBchStandardXpubs(
+      networkType,
+      mnemonic,
+      passphrase,
+      accountNumber
+    );
   }
 
   async function deriveAddressFromXpub(
@@ -145,7 +152,8 @@ export default function KeyManager() {
     onlineQuantumSigner: '0' | '1' = '0',
     vaultTokenCategory = '00'.repeat(32)
   ) {
-    const { mnemonic, passphrase, networkType } = await getWalletSeedMaterial(wallet_id);
+    const { mnemonic, passphrase, networkType } =
+      await getWalletSeedMaterial(wallet_id);
     return deriveQuantumrootVault(
       networkType,
       mnemonic,
@@ -231,7 +239,9 @@ export default function KeyManager() {
     return record;
   }
 
-  async function retrieveQuantumrootVaults(wallet_id: number): Promise<QuantumrootVaultRecord[]> {
+  async function retrieveQuantumrootVaults(
+    wallet_id: number
+  ): Promise<QuantumrootVaultRecord[]> {
     const cached = QuantumrootVaultCacheService.list(wallet_id);
     if (cached.length > 0) {
       return cached;
@@ -253,7 +263,10 @@ export default function KeyManager() {
 
     const keyIndexes: number[] = [];
     while (ensureVaultsFromKeysQuery.step()) {
-      const row = ensureVaultsFromKeysQuery.getAsObject() as Record<string, unknown>;
+      const row = ensureVaultsFromKeysQuery.getAsObject() as Record<
+        string,
+        unknown
+      >;
       const addressIndex =
         typeof row.address_index === 'number'
           ? row.address_index
@@ -383,10 +396,7 @@ export default function KeyManager() {
           WHERE address = ? OR token_address = ?
           LIMIT 1;
         `);
-        existingKeyDetailsQuery.bind([
-          keys.address,
-          keys.tokenAddress,
-        ]);
+        existingKeyDetailsQuery.bind([keys.address, keys.tokenAddress]);
 
         let existingWalletId: number | null = null;
         let existingAddress: string | null = null;
@@ -450,7 +460,7 @@ export default function KeyManager() {
       };
 
       await ManageAddress.registerAddress(newAddress);
-      await dbService.flushDatabaseToFile();
+      await dbService.flushDatabaseToFile(wallet_id);
       zeroize(keys.privateKey);
     } else {
       throw new Error('Failed to generate keys');
@@ -488,5 +498,4 @@ export default function KeyManager() {
 
     throw new Error(`Unsupported private key format for address: ${address}`);
   }
-
 }

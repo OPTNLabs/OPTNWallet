@@ -164,7 +164,7 @@ export default function TransactionManager() {
     const derivedTxid = deriveTxidFromRawTx(rawTX);
     const walletId = store.getState().wallet_id.currentWalletId ?? null;
     const priorAttempt = derivedTxid
-      ? await OutboundTransactionTracker.getByTxid(derivedTxid)
+      ? await OutboundTransactionTracker.getByTxid(derivedTxid, walletId)
       : null;
 
     if (
@@ -193,14 +193,20 @@ export default function TransactionManager() {
       await OutboundTransactionTracker.markState(
         derivedTxid,
         'broadcasting',
-        priorAttempt.lastError ?? null
+        priorAttempt.lastError ?? null,
+        walletId
       );
     }
 
     try {
       txid = await txBuilder.sendTransaction(rawTX);
       if (derivedTxid) {
-        await OutboundTransactionTracker.markState(derivedTxid, 'broadcasted');
+        await OutboundTransactionTracker.markState(
+          derivedTxid,
+          'broadcasted',
+          null,
+          walletId
+        );
       }
     } catch (error: unknown) {
       logError('TransactionManager.sendTransaction', error);
@@ -220,12 +226,13 @@ export default function TransactionManager() {
           )
             ? 'broadcasted'
             : 'submitted',
-          message
+          message,
+          walletId
         );
         txid = derivedTxid;
       } else {
         if (derivedTxid) {
-          await OutboundTransactionTracker.remove(derivedTxid);
+          await OutboundTransactionTracker.remove(derivedTxid, walletId);
         }
         errorMessage = classified.userMessage;
       }
@@ -236,8 +243,12 @@ export default function TransactionManager() {
       broadcastState:
         txid && !errorMessage
           ? derivedTxid &&
-            (await OutboundTransactionTracker.getByTxid(derivedTxid))?.state ===
-              'submitted'
+            (
+              await OutboundTransactionTracker.getByTxid(
+                derivedTxid,
+                walletId
+              )
+            )?.state === 'submitted'
             ? 'submitted'
             : 'broadcasted'
           : undefined,
