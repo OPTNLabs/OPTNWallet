@@ -5,7 +5,11 @@ const retrieveKeysMock = vi.fn();
 const listTrackedAddressesMock = vi.fn();
 const fetchAndStoreUTXOsManyMock = vi.fn();
 const primeUTXOCacheMock = vi.fn();
+const invalidateUTXOCacheMock = vi.fn();
 const dispatchMock = vi.fn();
+const runWalletUtxoRefreshMock = vi.fn(
+  async (_walletId: number, task: () => Promise<unknown>) => await task()
+);
 
 vi.mock('../../state/store', () => ({
   store: { getState: getStateMock, dispatch: dispatchMock },
@@ -25,12 +29,11 @@ vi.mock('../UTXOService', () => ({
 
 vi.mock('../ElectrumService', () => ({
   primeUTXOCache: primeUTXOCacheMock,
+  invalidateUTXOCache: invalidateUTXOCacheMock,
 }));
 
 vi.mock('../RefreshCoordinator', () => ({
-  runWalletUtxoRefresh: vi.fn(
-    async (_walletId: number, task: () => Promise<unknown>) => await task()
-  ),
+  runWalletUtxoRefresh: runWalletUtxoRefreshMock,
 }));
 
 function deferred<T>() {
@@ -53,6 +56,9 @@ describe('fetchActiveWalletUtxos', () => {
       'bchtest:qwallet6': [],
       'bchtest:pwallet6qr': [],
     });
+    runWalletUtxoRefreshMock.mockImplementation(
+      async (_walletId: number, task: () => Promise<unknown>) => await task()
+    );
   });
 
   it('fetches only addresses owned or tracked by the requested wallet', async () => {
@@ -73,6 +79,22 @@ describe('fetchActiveWalletUtxos', () => {
       'bchtest:qwallet6': [],
       'bchtest:pwallet6qr': [],
     });
+  });
+
+  it('invalidates every address before fetching a fresh wallet snapshot', async () => {
+    const { captureActiveWalletSession, fetchActiveWalletUtxos } = await import(
+      '../WalletUtxoRefreshService'
+    );
+
+    await fetchActiveWalletUtxos(captureActiveWalletSession(6)!);
+
+    expect(invalidateUTXOCacheMock.mock.calls).toEqual([
+      ['bchtest:qwallet6'],
+      ['bchtest:pwallet6qr'],
+    ]);
+    expect(
+      invalidateUTXOCacheMock.mock.invocationCallOrder.at(-1)
+    ).toBeLessThan(fetchAndStoreUTXOsManyMock.mock.invocationCallOrder[0]);
   });
 
   it('includes addresses recovered during the same discovery refresh', async () => {
@@ -145,5 +167,33 @@ describe('fetchActiveWalletUtxos', () => {
         },
       },
     });
+  });
+
+  it('rejects a joined older refresh so the caller can schedule a trailing fetch', async () => {
+    runWalletUtxoRefreshMock.mockResolvedValue({
+      'bchtest:qwallet6': [],
+    });
+    const { reconcileActiveWalletUtxos } = await import(
+      '../WalletUtxoRefreshService'
+    );
+
+    await expect(reconcileActiveWalletUtxos(6)).resolves.toBeNull();
+
+    expect(fetchAndStoreUTXOsManyMock).not.toHaveBeenCalled();
+    expect(dispatchMock).not.toHaveBeenCalled();
+  });
+
+  it('turns a rejected joined refresh into a trailing-refresh signal', async () => {
+    runWalletUtxoRefreshMock.mockRejectedValue(
+      new Error('older refresh failed')
+    );
+    const { reconcileActiveWalletUtxos } = await import(
+      '../WalletUtxoRefreshService'
+    );
+
+    await expect(reconcileActiveWalletUtxos(6)).resolves.toBeNull();
+
+    expect(fetchAndStoreUTXOsManyMock).not.toHaveBeenCalled();
+    expect(dispatchMock).not.toHaveBeenCalled();
   });
 });

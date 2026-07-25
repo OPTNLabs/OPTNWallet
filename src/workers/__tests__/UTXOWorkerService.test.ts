@@ -21,12 +21,14 @@ const listTrackedAddressesMock = vi.fn();
 const scheduleDatabaseSaveMock = vi.fn();
 const preloadTokenMetadataMock = vi.fn();
 const reconnectMock = vi.fn();
+const invalidateUTXOCacheMock = vi.fn();
 const subscribeBlockHeadersMock = vi.fn();
 const subscribeAddressMock = vi.fn();
 const unsubscribeAddressMock = vi.fn();
 const unsubscribeBlockHeadersMock = vi.fn();
 const fetchAndStoreTransactionHistoriesMock = vi.fn();
 const fetchAndStoreTransactionHistoryMock = vi.fn();
+const reconcileActiveWalletUtxosMock = vi.fn();
 const runWalletUtxoRefreshMock = vi.fn(async (_walletId: number, task: () => Promise<void>) =>
   task()
 );
@@ -62,7 +64,7 @@ vi.mock('../../services/ElectrumService', () => ({
     getUTXOsMany: vi.fn(),
     getUTXOs: vi.fn(),
   },
-  invalidateUTXOCache: vi.fn(),
+  invalidateUTXOCache: invalidateUTXOCacheMock,
 }));
 
 vi.mock('../../apis/ContractManager/ContractManager', () => ({
@@ -93,6 +95,10 @@ vi.mock('../../services/QuantumrootTrackingService', () => ({
 
 vi.mock('../../services/RefreshCoordinator', () => ({
   runWalletUtxoRefresh: runWalletUtxoRefreshMock,
+}));
+
+vi.mock('../../services/WalletUtxoRefreshService', () => ({
+  reconcileActiveWalletUtxos: reconcileActiveWalletUtxosMock,
 }));
 
 vi.mock('../../hooks/useSharedTokenMetadata', () => ({
@@ -127,6 +133,7 @@ describe('UTXOWorkerService.bootstrapAllUTXOs', () => {
     subscribeAddressMock.mockResolvedValue(undefined);
     unsubscribeAddressMock.mockResolvedValue(undefined);
     unsubscribeBlockHeadersMock.mockResolvedValue(undefined);
+    reconcileActiveWalletUtxosMock.mockResolvedValue({});
   });
 
   afterEach(async () => {
@@ -199,6 +206,33 @@ describe('UTXOWorkerService.bootstrapAllUTXOs', () => {
     expect(scheduleDatabaseSaveMock).toHaveBeenCalledTimes(1);
     expect(dispatchMock).toHaveBeenCalledWith(setFetchingUTXOs(false));
     expect(dispatchMock).toHaveBeenCalledWith(setInitialized(true));
+  });
+
+  it('invalidates wallet and tracked-address caches before bootstrap batches', async () => {
+    listTrackedAddressesMock.mockResolvedValue(['bchtest:qtracked']);
+    fetchAndStoreUTXOsManyMock.mockResolvedValue({
+      'bitcoincash:qaddr1': [],
+      'bchtest:qtracked': [],
+    });
+
+    const { bootstrapAllUTXOs } = await import('../UTXOWorkerService');
+    await bootstrapAllUTXOs();
+
+    expect(invalidateUTXOCacheMock.mock.calls).toEqual([
+      ['bitcoincash:qaddr1'],
+      ['bchtest:qtracked'],
+    ]);
+    expect(
+      invalidateUTXOCacheMock.mock.invocationCallOrder[0]
+    ).toBeLessThan(fetchAndStoreUTXOsManyMock.mock.invocationCallOrder[0]);
+    expect(
+      invalidateUTXOCacheMock.mock.invocationCallOrder[1]
+    ).toBeLessThan(fetchAndStoreUTXOsManyMock.mock.invocationCallOrder[0]);
+    expect(fetchAndStoreUTXOsManyMock).toHaveBeenCalledTimes(1);
+    expect(fetchAndStoreUTXOsManyMock).toHaveBeenCalledWith(42, [
+      'bitcoincash:qaddr1',
+      'bchtest:qtracked',
+    ]);
   });
 
   it('discards a completed bootstrap when another wallet became active', async () => {
@@ -274,5 +308,94 @@ describe('UTXOWorkerService.bootstrapAllUTXOs', () => {
     expect(unsubscribeAddressMock.mock.invocationCallOrder[0]).toBeLessThan(
       subscribeAddressMock.mock.invocationCallOrder[1]
     );
+  });
+
+  it('coalesces a block notification into one wallet-wide refresh', async () => {
+    vi.useFakeTimers();
+    try {
+      let onBlock: ((header: unknown) => void) | undefined;
+      subscribeBlockHeadersMock.mockImplementation(
+        async (callback: (header: unknown) => void) => {
+          onBlock = callback;
+        }
+      );
+      retrieveKeysMock.mockResolvedValue([
+        { address: 'bitcoincash:qaddr1' },
+        { address: 'bitcoincash:qaddr2' },
+        { address: 'bitcoincash:qaddr3' },
+      ]);
+      fetchAndStoreUTXOsManyMock.mockResolvedValue({
+        'bitcoincash:qaddr1': [],
+        'bitcoincash:qaddr2': [],
+        'bitcoincash:qaddr3': [],
+      });
+
+      const { startUTXOWorker } = await import('../UTXOWorkerService');
+      await startUTXOWorker();
+      expect(onBlock).toBeTypeOf('function');
+
+      onBlock?.({ height: 101 });
+      onBlock?.({ height: 102 });
+      onBlock?.({ height: 103 });
+      await vi.advanceTimersByTimeAsync(300);
+
+      expect(reconcileActiveWalletUtxosMock).toHaveBeenCalledTimes(1);
+      expect(reconcileActiveWalletUtxosMock).toHaveBeenCalledWith(42);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('runs one post-subscription catch-up without replaying the current tip', async () => {
+    vi.useFakeTimers();
+    try {
+      subscribeBlockHeadersMock.mockImplementation(
+        async (
+          callback: (header: unknown) => void,
+          options?: { emitCurrent?: boolean }
+        ) => {
+          if (options?.emitCurrent !== false) callback({ height: 100 });
+        }
+      );
+
+      const { startUTXOWorker } = await import('../UTXOWorkerService');
+      await startUTXOWorker();
+      await vi.advanceTimersByTimeAsync(300);
+
+      expect(reconcileActiveWalletUtxosMock).toHaveBeenCalledTimes(1);
+      expect(reconcileActiveWalletUtxosMock).toHaveBeenCalledWith(42);
+      expect(subscribeBlockHeadersMock).toHaveBeenCalledWith(
+        expect.any(Function),
+        { emitCurrent: false }
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('drops a queued wallet refresh after the active wallet session changes', async () => {
+    vi.useFakeTimers();
+    try {
+      let onBlock: ((header: unknown) => void) | undefined;
+      subscribeBlockHeadersMock.mockImplementation(
+        async (callback: (header: unknown) => void) => {
+          onBlock = callback;
+        }
+      );
+
+      const { startUTXOWorker } = await import('../UTXOWorkerService');
+      await startUTXOWorker();
+      onBlock?.({ height: 101 });
+
+      getStateMock.mockReturnValue({
+        wallet_id: { currentWalletId: 43, sessionGeneration: 2 },
+        network: { currentNetwork: 'MAINNET' },
+      });
+      await vi.advanceTimersByTimeAsync(300);
+
+      expect(reconcileActiveWalletUtxosMock).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
