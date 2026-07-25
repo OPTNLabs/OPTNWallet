@@ -28,6 +28,18 @@ const DEFAULT_NOSTR_RELAYS = [
   'wss://relay.nostr.band',
 ];
 
+/** Rounds a coin is fused before the engine stops picking it up. */
+export const DEFAULT_FUSE_DEPTH = 3;
+/** 1..10 — a bound, not a preference: each round costs a real fee. */
+export const MIN_FUSE_DEPTH = 1;
+export const MAX_FUSE_DEPTH = 10;
+
+export function clampFuseDepth(value: unknown): number {
+  const n = Math.trunc(Number(value));
+  if (!Number.isFinite(n)) return DEFAULT_FUSE_DEPTH;
+  return Math.min(MAX_FUSE_DEPTH, Math.max(MIN_FUSE_DEPTH, n));
+}
+
 interface ExperimentalState {
   rpaEnabled: boolean;
   cashFusionEnabled: boolean;
@@ -37,11 +49,16 @@ interface ExperimentalState {
   // opt-out must remain respected on later launches.
   nostrChatDefaultOnApplied: boolean;
   nostrRelays: string[];
-  // Automatic server-based fusion is opt-out once CashFusion is enabled. This
-  // is separate from the still-unimplemented P2P/Nostr transport below.
+  // ONE auto-fusion policy shared by both transports. Whichever Fusion mode is
+  // selected is the one the engine may run — the modes are mutually exclusive
+  // (getFusionModeAvailability), so a single flag cannot start two at once.
   autoFuseEnabled: boolean;
-  // Stores the user's P2P preference only. No P2P round is started until the
-  // Nostr transport and its privacy checks are implemented.
+  // Electron Cash's `cashfusion_fuse_depth`: how many times a coin may be fused
+  // before the engine leaves it alone. EC treats 0 as "keep fusing forever";
+  // we default to 3 so auto-fusion terminates on its own rather than spending
+  // fees indefinitely without the user asking.
+  fuseDepth: number;
+  // Which transport a round uses. Mutually exclusive with Server Fusion.
   p2pFusionEnabled: boolean;
   fusionServer: string;
   fusionServers: string[];
@@ -61,6 +78,7 @@ const initialState: ExperimentalState = {
   nostrChatDefaultOnApplied: true,
   nostrRelays: DEFAULT_NOSTR_RELAYS,
   autoFuseEnabled: true,
+  fuseDepth: DEFAULT_FUSE_DEPTH,
   p2pFusionEnabled: false,
   fusionServer: DEFAULT_FUSION_SERVER,
   fusionServers: [DEFAULT_FUSION_SERVER],
@@ -92,6 +110,12 @@ export function normalizeExperimentalPersistedState(
     autoFuseEnabled: true,
     p2pFusionEnabled: false,
     ...persisted,
+    // Spread first, then clamp: a wallet persisted before this field existed
+    // gets the default, and a persisted out-of-range value is pulled back into
+    // bounds rather than letting the engine loop on a 0 or negative depth.
+    fuseDepth: clampFuseDepth(
+      persisted.fuseDepth ?? DEFAULT_FUSE_DEPTH
+    ),
     nostrChatEnabled: defaultOnAlreadyApplied
       ? persisted.nostrChatEnabled !== false
       : true,
@@ -135,6 +159,12 @@ const experimentalSlice = createSlice({
     },
     setP2pFusionEnabled(state, action: PayloadAction<boolean>) {
       state.p2pFusionEnabled = action.payload;
+    },
+    setFuseDepth(state, action: PayloadAction<number>) {
+      // Clamp in the reducer, not the input handler: both Fusion cards write
+      // this same value, and the engine reads it in a loop — an unclamped 0
+      // would mean "never stop fusing".
+      state.fuseDepth = clampFuseDepth(action.payload);
     },
     setFusionServer(state, action: PayloadAction<string>) {
       state.fusionServer = normalizeServer(action.payload);
@@ -191,6 +221,7 @@ export const {
   removeNostrRelay,
   setAutoFuseEnabled,
   setP2pFusionEnabled,
+  setFuseDepth,
   setFusionServer,
   addFusionServer,
   removeFusionServer,
@@ -225,6 +256,9 @@ export const selectAutoFuseEnabled = (state: RootState) =>
   state.experimental.autoFuseEnabled !== false;
 export const selectP2pFusionEnabled = (state: RootState) =>
   state.experimental.p2pFusionEnabled === true;
+/** Shared by both Fusion cards, so the two controls can never disagree. */
+export const selectFuseDepth = (state: RootState) =>
+  clampFuseDepth(state.experimental.fuseDepth ?? DEFAULT_FUSE_DEPTH);
 export const selectFusionServer = (state: RootState) =>
   migrateDeadServer(state.experimental.fusionServer);
 // Older persisted state won't have the list — fall back to the single selected

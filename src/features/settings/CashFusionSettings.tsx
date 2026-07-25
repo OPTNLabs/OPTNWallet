@@ -34,6 +34,7 @@ import {
 } from '../../services/fusion/FusionStatusService';
 import { CURRENT_FUSION_EXECUTION_READINESS } from '../../platform/desktop/FusionExecutionSafety';
 import { P2pFusionTransportPreview } from '../nostr/P2pFusionTransportPreview';
+import { AutoFusionControls } from './AutoFusionControls';
 import { runFusion } from '../../platform/desktop/FusionService';
 import { runP2pFusion } from '../../platform/desktop/FusionP2pService';
 import {
@@ -376,6 +377,14 @@ export const CashFusionSettings: React.FC<{ variant?: 'card' | 'servers' }> = ({
               >
                 <span className={`inline-block h-4 w-4 rounded-full bg-white shadow transition-transform ${p2pFusionEnabled ? 'translate-x-4' : 'translate-x-0.5'}`} />
               </button>
+            </div>
+
+            {/* ONE auto-fusion policy for both transports, placed directly under
+                the mode chooser so it reads as governing whichever mode is on.
+                Duplicating it per card would let the two copies disagree, and the
+                disagreement would only surface when a round used the wrong bound. */}
+            <div className="border-t border-[var(--wallet-border)] pt-3">
+              <AutoFusionControls disabled={walletId <= 0} />
             </div>
 
             {/* Experimental notice — execution runs on ALL networks (owner opt-in).
