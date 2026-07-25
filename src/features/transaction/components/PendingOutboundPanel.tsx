@@ -64,12 +64,12 @@ export default function PendingOutboundPanel({
               className="text-sm font-semibold wallet-text-strong"
             >
               {records.length === 1
-                ? 'Outgoing transaction still syncing'
-                : `${records.length} outgoing transactions still syncing`}
+                ? 'Finalizing transaction'
+                : `Finalizing ${records.length} transactions`}
             </div>
             <div className="text-xs wallet-muted mt-1">
-              To prevent accidental repeats, new sends stay locked until these
-              appear in your wallet history.
+              Your wallet history will update automatically. This usually takes
+              a moment.
             </div>
           </div>
           {onRefresh && (

@@ -74,7 +74,9 @@ export async function reconcileOutboundTransactions(
   await Promise.all(
     active
       .filter((record) => isDeterministicBroadcastError(record.lastError))
-      .map((record) => OutboundTransactionTracker.remove(record.txid))
+      .map((record) =>
+        OutboundTransactionTracker.remove(record.txid, record.walletId)
+      )
   );
 
   const retryableActive = await OutboundTransactionTracker.listActive(walletId);
@@ -82,7 +84,10 @@ export async function reconcileOutboundTransactions(
 
   await Promise.all(
     retryableActive.map((record) =>
-      OutboundTransactionTracker.markStaleBroadcastingAsSubmitted(record.txid)
+      OutboundTransactionTracker.markStaleBroadcastingAsSubmitted(
+        record.txid,
+        record.walletId
+      )
     )
   );
 
@@ -102,7 +107,14 @@ export async function reconcileOutboundTransactions(
   await Promise.all(
     retryableActive
       .filter((record) => visibilityByTxid[record.txid]?.seen)
-      .map((record) => OutboundTransactionTracker.markState(record.txid, 'seen'))
+      .map((record) =>
+        OutboundTransactionTracker.markState(
+          record.txid,
+          'seen',
+          null,
+          record.walletId
+        )
+      )
   );
 
   const remaining = await OutboundTransactionTracker.listActive(walletId);
@@ -137,7 +149,14 @@ export async function reconcileOutboundTransactions(
   await Promise.all(
     afterRetry
       .filter((record) => seen.has(record.txid))
-      .map((record) => OutboundTransactionTracker.markState(record.txid, 'seen'))
+      .map((record) =>
+        OutboundTransactionTracker.markState(
+          record.txid,
+          'seen',
+          null,
+          record.walletId
+        )
+      )
   );
 
   return await OutboundTransactionTracker.listActive(walletId);
