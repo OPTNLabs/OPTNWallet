@@ -31,7 +31,10 @@ import SettingsRow from '../../components/ui/SettingsRow';
 import EmptyState from '../../components/ui/EmptyState';
 import { shortenTxHash } from '../../utils/shortenHash';
 import { preloadTokenMetadata } from '../../hooks/useSharedTokenMetadata';
-import { getBarcodeScannerErrorMessage, scanBarcodeSafely } from '../../utils/barcodeScanner';
+import {
+  getBarcodeScannerErrorMessage,
+  scanBarcodeSafely,
+} from '../../utils/barcodeScanner';
 import { classifyScannedQrPayload } from '../../utils/qrScan';
 
 type QuickActionButtonProps = {
@@ -56,9 +59,7 @@ function QuickActionButton({ title, icon, onClick }: QuickActionButtonProps) {
       <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl bg-[color-mix(in_oklab,var(--wallet-accent-soft)_70%,transparent)] text-[var(--wallet-accent-strong)]">
         {icon}
       </div>
-      <span className={getQuickActionTextClass(title)}>
-        {title}
-      </span>
+      <span className={getQuickActionTextClass(title)}>{title}</span>
     </button>
   );
 }
@@ -75,18 +76,23 @@ const Home: React.FC = () => {
   const fetchingUTXOsRedux = useSelector(
     (state: RootState) => state.utxos.fetchingUTXOs
   );
-  const totalBalance = useSelector((state: RootState) => state.utxos.totalBalance);
+  const totalBalance = useSelector(
+    (state: RootState) => state.utxos.totalBalance
+  );
   const transactions = useSelector(
     (state: RootState) => state.transactions.transactions[currentWalletId]
   );
   const currentNetwork = useSelector(
     (state: RootState) => state.network.currentNetwork
   );
-  const bchUsdQuote = useSelector((state: RootState) => state.priceFeed['BCH-USD']?.price);
+  const bchUsdQuote = useSelector(
+    (state: RootState) => state.priceFeed['BCH-USD']?.price
+  );
   const [displayMode, setDisplayMode] = useState<'BCH' | 'USD'>('BCH');
   const [scanBusy, setScanBusy] = useState(false);
   const totalBch = totalBalance / SATSINBITCOIN;
-  const totalUsd = typeof bchUsdQuote === 'number' ? totalBch * bchUsdQuote : null;
+  const totalUsd =
+    typeof bchUsdQuote === 'number' ? totalBch * bchUsdQuote : null;
   const recentTransactions = useMemo(
     () => (transactions ?? []).slice(-2).reverse(),
     [transactions]
@@ -123,7 +129,7 @@ const Home: React.FC = () => {
         const walletUtxos = await fetchActiveWalletUtxos(walletSession);
         if (!walletUtxos) return;
         dispatch(replaceAllUTXOs({ utxosByAddress: walletUtxos }));
-        dbService.scheduleDatabaseSave();
+        dbService.scheduleDatabaseSave(currentWalletId);
         dispatch(setInitialized(true));
         const refreshedCategories = Array.from(
           new Set(
@@ -145,12 +151,7 @@ const Home: React.FC = () => {
         dispatch(setFetchingUTXOs(false));
       }
     }
-  }, [
-    currentWalletId,
-    dbService,
-    dispatch,
-    fetchingUTXOsRedux,
-  ]);
+  }, [currentWalletId, dbService, dispatch, fetchingUTXOsRedux]);
 
   const handleScanQr = useCallback(async () => {
     if (scanBusy) return;
@@ -237,7 +238,9 @@ const Home: React.FC = () => {
               <div>
                 <button
                   type="button"
-                  onClick={() => setDisplayMode((mode) => (mode === 'BCH' ? 'USD' : 'BCH'))}
+                  onClick={() =>
+                    setDisplayMode((mode) => (mode === 'BCH' ? 'USD' : 'BCH'))
+                  }
                   className="text-left"
                 >
                   <div className="text-2xl font-bold wallet-text-strong">
@@ -258,7 +261,9 @@ const Home: React.FC = () => {
               </div>
               <button
                 type="button"
-                onClick={() => setDisplayMode((mode) => (mode === 'BCH' ? 'USD' : 'BCH'))}
+                onClick={() =>
+                  setDisplayMode((mode) => (mode === 'BCH' ? 'USD' : 'BCH'))
+                }
                 className="flex h-14 w-14 items-center justify-center rounded-3xl bg-[color-mix(in_oklab,var(--wallet-accent-soft)_72%,transparent)] text-[var(--wallet-accent-strong)] transition hover:brightness-[1.04]"
                 aria-label="Toggle BCH and USD balance"
               >
@@ -284,7 +289,9 @@ const Home: React.FC = () => {
                   <span className="text-sm font-semibold wallet-text-strong">
                     Scan QR
                   </span>
-                  <FaQrcode className={`text-base ${scanBusy ? 'animate-pulse' : ''}`} />
+                  <FaQrcode
+                    className={`text-base ${scanBusy ? 'animate-pulse' : ''}`}
+                  />
                 </button>
               }
             />
@@ -330,7 +337,11 @@ const Home: React.FC = () => {
                   <SettingsRow
                     key={tx.tx_hash}
                     title={shortenTxHash(tx.tx_hash)}
-                    description={tx.height > 0 ? `Block ${tx.height}` : 'Pending confirmation'}
+                    description={
+                      tx.height > 0
+                        ? `Block ${tx.height}`
+                        : 'Pending confirmation'
+                    }
                     right={
                       <span className="wallet-muted">
                         {tx.height > 0 ? 'Confirmed' : 'Pending'}

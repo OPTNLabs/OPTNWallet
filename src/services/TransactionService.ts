@@ -389,7 +389,10 @@ class TransactionService {
 
     if (res?.errorMessage || !res?.txid) {
       if (trackedTxid) {
-        await OutboundTransactionTracker.remove(trackedTxid);
+        await OutboundTransactionTracker.remove(
+          trackedTxid,
+          currentWalletId
+        );
       }
       return res;
     }
@@ -470,7 +473,10 @@ class TransactionService {
       const trackedTxid = deriveTrackedTxid(request.rawTX);
       if (result?.errorMessage || !result?.txid) {
         if (trackedTxid) {
-          await OutboundTransactionTracker.remove(trackedTxid);
+          await OutboundTransactionTracker.remove(
+            trackedTxid,
+            currentWalletId
+          );
         }
         break;
       }

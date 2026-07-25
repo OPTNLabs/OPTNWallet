@@ -64,7 +64,8 @@ describe('DesktopWalletManager network cleanup', () => {
     const dbService = {
       ensureDatabaseStarted: vi.fn(async () => {}),
       getDatabase: vi.fn(() => db),
-      forceSaveDatabase: vi.fn(async () => {}),
+      scheduleDatabaseSave: vi.fn(),
+      flushDatabaseToFile: vi.fn(async () => {}),
     };
     mockedDatabaseService.mockReturnValue(dbService as never);
 
@@ -94,7 +95,8 @@ describe('DesktopWalletManager network cleanup', () => {
     const dbService = {
       ensureDatabaseStarted: vi.fn(async () => {}),
       getDatabase: vi.fn(() => db),
-      forceSaveDatabase: vi.fn(async () => {}),
+      scheduleDatabaseSave: vi.fn(),
+      flushDatabaseToFile: vi.fn(async () => {}),
     };
     mockedDatabaseService.mockReturnValue(dbService as never);
 
@@ -102,7 +104,8 @@ describe('DesktopWalletManager network cleanup', () => {
 
     expect(mockedVaultCache.clear).toHaveBeenCalledOnce();
     expect(mockedVaultCache.clear).toHaveBeenCalledWith(7);
-    expect(dbService.forceSaveDatabase).not.toHaveBeenCalled();
+    expect(dbService.scheduleDatabaseSave).not.toHaveBeenCalled();
+    expect(dbService.flushDatabaseToFile).not.toHaveBeenCalled();
     expect(mockedLog.info).toHaveBeenCalledWith(
       'NetworkPurge',
       'wallet=7 target=chipnet cacheCleared=true rowsRemoved=0 status=complete'

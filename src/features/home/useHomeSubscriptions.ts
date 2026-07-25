@@ -57,19 +57,24 @@ export function useHomeSubscriptions({
           }
         }
         try {
-          DatabaseService().scheduleDatabaseSave();
+          DatabaseService().scheduleDatabaseSave(currentWalletId);
         } catch (error) {
           logError('Home.runHeaderRefresh.saveDatabase', error);
         }
         headerRefreshScheduled.current = false;
       }, 750);
     },
-    [dispatch]
+    [currentWalletId, dispatch]
   );
 
   useEffect(() => {
     if (!enabled) return;
-    if (!isInitialized || fetchingUTXOs || keyPairs.length === 0 || !currentWalletId) {
+    if (
+      !isInitialized ||
+      fetchingUTXOs ||
+      keyPairs.length === 0 ||
+      !currentWalletId
+    ) {
       return;
     }
     const addrs = keyPairs.map((k) => k.address).filter(Boolean);
@@ -77,7 +82,9 @@ export function useHomeSubscriptions({
     (async () => {
       try {
         if (!headersSubDone.current) {
-          await ElectrumService.subscribeBlockHeaders(() => runHeaderRefresh(addrs));
+          await ElectrumService.subscribeBlockHeaders(() =>
+            runHeaderRefresh(addrs)
+          );
           headersSubDone.current = true;
         }
       } catch (error) {
@@ -91,12 +98,15 @@ export function useHomeSubscriptions({
         subscribedAddresses.add(addr);
 
         const already =
-          Array.isArray(utxosRef.current?.[addr]) && utxosRef.current[addr].length > 0;
+          Array.isArray(utxosRef.current?.[addr]) &&
+          utxosRef.current[addr].length > 0;
         if (!already) {
           try {
             const baseline = await ElectrumService.getUTXOs(addr);
             if (baseline.length > 0) {
-              dispatch(updateUTXOsForAddress({ address: addr, utxos: baseline }));
+              dispatch(
+                updateUTXOsForAddress({ address: addr, utxos: baseline })
+              );
               const m = new Map(Object.entries(utxosRef.current));
               m.set(addr, baseline);
               utxosRef.current = Object.fromEntries(m.entries()) as Record<
@@ -118,7 +128,7 @@ export function useHomeSubscriptions({
 
               dispatch(updateUTXOsForAddress({ address: addr, utxos }));
               try {
-                DatabaseService().scheduleDatabaseSave();
+                DatabaseService().scheduleDatabaseSave(currentWalletId);
               } catch (error) {
                 logError('Home.subscribeAddress.saveDatabase', error, {
                   address: addr,

@@ -17,7 +17,14 @@ import QuantumrootVaultCacheService from '../../services/QuantumrootVaultCacheSe
 import { Network } from '../../state/slices/networkSlice';
 import { WalletType } from '../../types/wallet';
 import type { WalletRecord } from '../../types/wallet';
-import { deriveKey, randomSalt, bytesToBase64, base64ToBytes, aesEncrypt, aesDecrypt } from './WalletCrypto';
+import {
+  deriveKey,
+  randomSalt,
+  bytesToBase64,
+  base64ToBytes,
+  aesEncrypt,
+  aesDecrypt,
+} from './WalletCrypto';
 import {
   setCachedWalletKey,
   getCachedWalletKey,
@@ -53,7 +60,8 @@ async function readKdfSalt(walletId: number): Promise<Uint8Array | null> {
   let saltB64: string | null = null;
   if (query.step()) {
     const row = query.getAsObject() as Record<string, unknown>;
-    saltB64 = typeof row.kdf_salt === 'string' && row.kdf_salt ? row.kdf_salt : null;
+    saltB64 =
+      typeof row.kdf_salt === 'string' && row.kdf_salt ? row.kdf_salt : null;
   }
   query.free();
   return saltB64 ? base64ToBytes(saltB64) : null;
@@ -93,7 +101,7 @@ async function writeKdfSalt(walletId: number, salt: Uint8Array): Promise<void> {
   const query = db.prepare('UPDATE wallets SET kdf_salt = ? WHERE id = ?');
   query.run([bytesToBase64(salt), walletId]);
   query.free();
-  await dbService.flushDatabaseToFile();
+  await dbService.flushDatabaseToFile(walletId);
 }
 
 export interface CreateWalletWithPasswordArgs {
@@ -129,14 +137,19 @@ export async function createWalletWithPassword(
   const restorePreviousKey = () => {
     if (previousKey) {
       setCachedWalletKey(previousKey.key, previousKey.ownerWalletId);
-    }
-    else clearCachedWalletKey();
+    } else clearCachedWalletKey();
   };
   setCachedWalletKey(key);
 
   let walletId: number | null;
   try {
-    const created = await manager.createWallet(name, mnemonic, passphrase, network, walletType);
+    const created = await manager.createWallet(
+      name,
+      mnemonic,
+      passphrase,
+      network,
+      walletType
+    );
     if (!created) {
       restorePreviousKey();
       return null;
@@ -192,7 +205,10 @@ export async function createWalletWithPassword(
       kdfSalt: bytesToBase64(salt),
     });
   } catch (err) {
-    console.warn('[DesktopWalletManager] wallet file mirror failed (DB copy is fine):', err);
+    console.warn(
+      '[DesktopWalletManager] wallet file mirror failed (DB copy is fine):',
+      err
+    );
   }
 
   return walletId;
@@ -206,15 +222,22 @@ export async function createWalletWithPassword(
  */
 async function recordBirthHeight(walletId: number): Promise<void> {
   try {
-    const { default: ElectrumService } = await import('../../services/ElectrumService');
-    const tip = (await ElectrumService.getLatestBlock()) as { height?: unknown } | null;
+    const { default: ElectrumService } = await import(
+      '../../services/ElectrumService'
+    );
+    const tip = (await ElectrumService.getLatestBlock()) as {
+      height?: unknown;
+    } | null;
     const height = tip?.height;
     if (typeof height !== 'number' || height <= 0) return;
     const dbService = DatabaseService();
     const db = dbService.getDatabase();
     if (!db) return;
-    db.run('UPDATE wallets SET birth_height = ? WHERE id = ?', [height, walletId]);
-    await dbService.forceSaveDatabase();
+    db.run('UPDATE wallets SET birth_height = ? WHERE id = ?', [
+      height,
+      walletId,
+    ]);
+    await dbService.flushDatabaseToFile(walletId);
   } catch {
     /* best effort */
   }
@@ -234,7 +257,10 @@ export async function getBirthHeight(walletId: number): Promise<number | null> {
   let height: number | null = null;
   if (q.step()) {
     const row = q.getAsObject() as { birth_height?: unknown };
-    height = typeof row.birth_height === 'number' && row.birth_height > 0 ? row.birth_height : null;
+    height =
+      typeof row.birth_height === 'number' && row.birth_height > 0
+        ? row.birth_height
+        : null;
   }
   q.free();
   return height;
@@ -248,29 +274,46 @@ export async function getBirthHeight(walletId: number): Promise<number | null> {
  * reloads the wallet view and reconnects to the target network's servers. No
  * new wallet row is created; the picker still shows one wallet per seed.
  */
-export async function switchWalletNetwork(walletId: number, target: Network): Promise<void> {
+export async function switchWalletNetwork(
+  walletId: number,
+  target: Network
+): Promise<void> {
   const dbService = DatabaseService();
   await dbService.ensureDatabaseStarted();
   const db = dbService.getDatabase();
   if (!db || walletId <= 0) return;
 
-  await log.info('NetworkSwitch', `wallet=${walletId} target=${target} status=start`);
+  await log.info(
+    'NetworkSwitch',
+    `wallet=${walletId} target=${target} status=start`
+  );
 
   // Preserve address depth across the toggle: regenerate at least as many
   // address indices as the wallet already had (each index = receive+change =
   // 2 keys), so funds on a later address aren't hidden after switching back.
   let indices = 10;
   try {
-    const cnt = db.prepare('SELECT COUNT(*) AS c FROM keys WHERE wallet_id = ?');
+    const cnt = db.prepare(
+      'SELECT COUNT(*) AS c FROM keys WHERE wallet_id = ?'
+    );
     cnt.bind([walletId]);
-    if (cnt.step()) indices = Math.max(10, Math.ceil(Number((cnt.getAsObject() as { c: unknown }).c ?? 0) / 2));
+    if (cnt.step())
+      indices = Math.max(
+        10,
+        Math.ceil(Number((cnt.getAsObject() as { c: unknown }).c ?? 0) / 2)
+      );
     cnt.free();
-  } catch { /* default 10 */ }
+  } catch {
+    /* default 10 */
+  }
 
   // Birth height is a height on the OLD chain — meaningless on the new one, and
   // wrong to reuse (heights differ per chain). Clear it: the node scan then uses
   // its recent-window fallback until this wallet's birth on this chain is known.
-  db.run('UPDATE wallets SET networkType = ?, birth_height = NULL WHERE id = ?', [target, walletId]);
+  db.run(
+    'UPDATE wallets SET networkType = ?, birth_height = NULL WHERE id = ?',
+    [target, walletId]
+  );
   // Everything below is derived from the OLD network and must not survive the
   // switch. Upstream's reads (KeyManager.retrieveKeys, UTXOManager.*) are NOT
   // network-scoped — they're only correct while the DB holds exactly one
@@ -280,23 +323,54 @@ export async function switchWalletNetwork(walletId: number, target: Network): Pr
   // UTXOs live on-chain and re-sync from the new network's servers; switching
   // back re-derives and re-fetches the other chain's data.
   db.run('DELETE FROM keys WHERE wallet_id = ?', [walletId]);
-  try { db.run('DELETE FROM addresses WHERE wallet_id = ?', [walletId]); } catch { /* optional table */ }
-  try { db.run('DELETE FROM UTXOs WHERE wallet_id = ?', [walletId]); } catch { /* optional table */ }
-  try { db.run('DELETE FROM transactions WHERE wallet_id = ?', [walletId]); } catch { /* optional table */ }
-  try { db.run('DELETE FROM transaction_details WHERE wallet_id = ?', [walletId]); } catch { /* optional table */ }
+  try {
+    db.run('DELETE FROM addresses WHERE wallet_id = ?', [walletId]);
+  } catch {
+    /* optional table */
+  }
+  try {
+    db.run('DELETE FROM UTXOs WHERE wallet_id = ?', [walletId]);
+  } catch {
+    /* optional table */
+  }
+  try {
+    db.run('DELETE FROM transactions WHERE wallet_id = ?', [walletId]);
+  } catch {
+    /* optional table */
+  }
+  try {
+    db.run('DELETE FROM transaction_details WHERE wallet_id = ?', [walletId]);
+  } catch {
+    /* optional table */
+  }
   // Contract-derived addresses (P2SH32, "bitcoincash:p…"/"bchtest:p…") were the
   // real leak: switchWalletNetwork used to skip these tables, so old-network
   // quantumroot vaults and cashscript addresses lingered and kept getting
   // subscribed on the new chain — the server rejects the wrong-prefix address
   // and drops the connection, taking every valid query down with it. Clear them
   // too so the single-network invariant actually holds.
-  try { db.run('DELETE FROM cashscript_addresses WHERE wallet_id = ?', [walletId]); } catch { /* optional table */ }
-  try { db.run('DELETE FROM quantumroot_vaults WHERE wallet_id = ?', [walletId]); } catch { /* optional table */ }
+  try {
+    db.run('DELETE FROM cashscript_addresses WHERE wallet_id = ?', [walletId]);
+  } catch {
+    /* optional table */
+  }
+  try {
+    db.run('DELETE FROM quantumroot_vaults WHERE wallet_id = ?', [walletId]);
+  } catch {
+    /* optional table */
+  }
   // instantiated_contracts has no wallet_id (global cache keyed by address), so
   // scope by prefix: a contract address that isn't on the target network can't
   // be valid there regardless of which wallet created it.
   const targetPrefix = target === Network.MAINNET ? 'bitcoincash:' : 'bchtest:';
-  try { db.run("DELETE FROM instantiated_contracts WHERE address IS NOT NULL AND address NOT LIKE ?", [`${targetPrefix}%`]); } catch { /* optional table */ }
+  try {
+    db.run(
+      'DELETE FROM instantiated_contracts WHERE address IS NOT NULL AND address NOT LIKE ?',
+      [`${targetPrefix}%`]
+    );
+  } catch {
+    /* optional table */
+  }
   // The vault cache is in memory and survives the DB deletes above — if we don't
   // drop it, retrieveQuantumrootVaults keeps serving the OLD network's vault
   // addresses (a non-empty cache short-circuits the DB read), which then get
@@ -304,13 +378,15 @@ export async function switchWalletNetwork(walletId: number, target: Network): Pr
   // cleared them. Clearing the cache makes the next read re-derive under the
   // now-updated networkType.
   QuantumrootVaultCacheService.clear(walletId);
-  await dbService.forceSaveDatabase();
+  dbService.scheduleDatabaseSave();
+  await dbService.flushDatabaseToFile(walletId);
 
   // Regenerate the address batch. KeyService reads the wallet's (now-updated)
   // networkType, so these derive under `target`'s prefix.
   const { default: KeyService } = await import('../../services/KeyService');
   await KeyService.bootstrapInitialAddressBatch(walletId, 0, indices);
-  await dbService.forceSaveDatabase();
+  dbService.scheduleDatabaseSave();
+  await dbService.flushDatabaseToFile(walletId);
   await log.info(
     'NetworkSwitch',
     `wallet=${walletId} target=${target} cacheCleared=true addressIndices=${indices} status=complete`
@@ -339,7 +415,10 @@ export async function switchWalletNetwork(walletId: number, target: Network): Pr
  * everyday path. A CashAddr names its network in its prefix, so the filter is
  * exact and local.
  */
-export async function purgeCrossNetworkData(walletId: number, network: Network): Promise<void> {
+export async function purgeCrossNetworkData(
+  walletId: number,
+  network: Network
+): Promise<void> {
   const dbService = DatabaseService();
   await dbService.ensureDatabaseStarted();
   const db = dbService.getDatabase();
@@ -355,22 +434,38 @@ export async function purgeCrossNetworkData(walletId: number, network: Network):
       /* optional table / column */
     }
   };
-  del('DELETE FROM keys WHERE wallet_id = ? AND address IS NOT NULL AND address NOT LIKE ?', [walletId, keep]);
-  del('DELETE FROM addresses WHERE wallet_id = ? AND address IS NOT NULL AND address NOT LIKE ?', [walletId, keep]);
-  del('DELETE FROM UTXOs WHERE wallet_id = ? AND address IS NOT NULL AND address NOT LIKE ?', [walletId, keep]);
-  del('DELETE FROM cashscript_addresses WHERE wallet_id = ? AND address IS NOT NULL AND address NOT LIKE ?', [walletId, keep]);
+  del(
+    'DELETE FROM keys WHERE wallet_id = ? AND address IS NOT NULL AND address NOT LIKE ?',
+    [walletId, keep]
+  );
+  del(
+    'DELETE FROM addresses WHERE wallet_id = ? AND address IS NOT NULL AND address NOT LIKE ?',
+    [walletId, keep]
+  );
+  del(
+    'DELETE FROM UTXOs WHERE wallet_id = ? AND address IS NOT NULL AND address NOT LIKE ?',
+    [walletId, keep]
+  );
+  del(
+    'DELETE FROM cashscript_addresses WHERE wallet_id = ? AND address IS NOT NULL AND address NOT LIKE ?',
+    [walletId, keep]
+  );
   del(
     'DELETE FROM quantumroot_vaults WHERE wallet_id = ? AND (receive_address NOT LIKE ? OR quantum_lock_address NOT LIKE ?)',
     [walletId, keep, keep]
   );
-  del('DELETE FROM instantiated_contracts WHERE address IS NOT NULL AND address NOT LIKE ?', [keep]);
+  del(
+    'DELETE FROM instantiated_contracts WHERE address IS NOT NULL AND address NOT LIKE ?',
+    [keep]
+  );
 
   // Drop the in-memory vault cache too, or retrieveQuantumrootVaults keeps
   // serving the cached cross-network addresses regardless of the DB purge.
   QuantumrootVaultCacheService.clear(walletId);
 
   if (removed > 0) {
-    await dbService.forceSaveDatabase();
+    dbService.scheduleDatabaseSave();
+    await dbService.flushDatabaseToFile(walletId);
   }
   await log.info(
     'NetworkPurge',
@@ -403,11 +498,16 @@ export async function openWalletWithPassword(
     if (!mnemonicCiphertext?.startsWith(SECRET_ENC_PREFIX)) {
       // Salted wallet whose mnemonic is not in encrypted form — inconsistent
       // row (dev artifact). Refuse rather than guess.
-      console.warn(`[DesktopWalletManager] Wallet ${walletId} has kdf_salt but no encrypted mnemonic — refusing to open.`);
+      console.warn(
+        `[DesktopWalletManager] Wallet ${walletId} has kdf_salt but no encrypted mnemonic — refusing to open.`
+      );
       return null;
     }
     try {
-      await aesDecrypt(candidateKey, mnemonicCiphertext.slice(SECRET_ENC_PREFIX.length));
+      await aesDecrypt(
+        candidateKey,
+        mnemonicCiphertext.slice(SECRET_ENC_PREFIX.length)
+      );
     } catch {
       return null; // wrong password — previous cached key left untouched
     }
@@ -423,7 +523,9 @@ export async function openWalletWithPassword(
     if (!ok) return null;
     const legacyKey = getCachedWalletKey();
     if (!legacyKey) {
-      console.warn('[DesktopWalletManager] Legacy wallet open refused: no key cached (gate locked?).');
+      console.warn(
+        '[DesktopWalletManager] Legacy wallet open refused: no key cached (gate locked?).'
+      );
       return null;
     }
     // The shared legacy gate key is now committed to this active wallet
@@ -444,16 +546,22 @@ export async function openWalletWithPassword(
   }
   // Clean out any stale cross-network rows now that we know the wallet's
   // network, so upstream's unscoped reads only ever see the active chain.
-  const net = info.networkType === Network.MAINNET ? Network.MAINNET : Network.CHIPNET;
+  const net =
+    info.networkType === Network.MAINNET ? Network.MAINNET : Network.CHIPNET;
   try {
     await purgeCrossNetworkData(walletId, net);
   } catch (err) {
-    console.warn('[DesktopWalletManager] cross-network purge on open failed:', err);
+    console.warn(
+      '[DesktopWalletManager] cross-network purge on open failed:',
+      err
+    );
   }
   return info;
 }
 
-async function readMnemonicCiphertext(walletId: number): Promise<string | null> {
+async function readMnemonicCiphertext(
+  walletId: number
+): Promise<string | null> {
   const dbService = DatabaseService();
   await dbService.ensureDatabaseStarted();
   const db = dbService.getDatabase();
@@ -476,7 +584,9 @@ async function readMnemonicCiphertext(walletId: number): Promise<string | null> 
  * decrypted. Returns null if the wallet is missing or has no per-wallet salt
  * (legacy shared-key wallets aren't self-contained and can't be exported).
  */
-export async function buildWalletFileContents(walletId: number): Promise<string | null> {
+export async function buildWalletFileContents(
+  walletId: number
+): Promise<string | null> {
   const dbService = DatabaseService();
   await dbService.ensureDatabaseStarted();
   const db = dbService.getDatabase();
@@ -485,7 +595,9 @@ export async function buildWalletFileContents(walletId: number): Promise<string 
   const saltBytes = await readKdfSalt(walletId);
   if (!saltBytes) return null;
 
-  const query = db.prepare('SELECT wallet_name, mnemonic, passphrase, walletType FROM wallets WHERE id = ?');
+  const query = db.prepare(
+    'SELECT wallet_name, mnemonic, passphrase, walletType FROM wallets WHERE id = ?'
+  );
   query.bind([walletId]);
   let row: Record<string, unknown> | null = null;
   if (query.step()) row = query.getAsObject() as Record<string, unknown>;
@@ -495,10 +607,15 @@ export async function buildWalletFileContents(walletId: number): Promise<string 
   const { serializeWalletFile } = await import('./walletFile');
   return serializeWalletFile({
     sourceId: walletId,
-    name: typeof row.wallet_name === 'string' ? row.wallet_name : `Wallet ${walletId}`,
-    walletType: typeof row.walletType === 'string' ? row.walletType : 'standard',
+    name:
+      typeof row.wallet_name === 'string'
+        ? row.wallet_name
+        : `Wallet ${walletId}`,
+    walletType:
+      typeof row.walletType === 'string' ? row.walletType : 'standard',
     encryptedMnemonic: typeof row.mnemonic === 'string' ? row.mnemonic : '',
-    encryptedPassphrase: typeof row.passphrase === 'string' ? row.passphrase : '',
+    encryptedPassphrase:
+      typeof row.passphrase === 'string' ? row.passphrase : '',
     kdfSalt: bytesToBase64(saltBytes),
   });
 }
@@ -528,16 +645,24 @@ export async function importWalletFile(
   try {
     const salt = base64ToBytes(file.kdfSalt);
     const key = await deriveKey(password, salt);
-    mnemonic = await aesDecrypt(key, file.encryptedMnemonic.slice(SECRET_ENC_PREFIX.length));
+    mnemonic = await aesDecrypt(
+      key,
+      file.encryptedMnemonic.slice(SECRET_ENC_PREFIX.length)
+    );
     if (file.encryptedPassphrase.startsWith(SECRET_ENC_PREFIX)) {
-      passphrase = await aesDecrypt(key, file.encryptedPassphrase.slice(SECRET_ENC_PREFIX.length));
+      passphrase = await aesDecrypt(
+        key,
+        file.encryptedPassphrase.slice(SECRET_ENC_PREFIX.length)
+      );
     }
   } catch {
     return null; // wrong password or corrupt file
   }
 
   const walletType =
-    file.walletType === WalletType.QUANTUMROOT ? WalletType.QUANTUMROOT : WalletType.STANDARD;
+    file.walletType === WalletType.QUANTUMROOT
+      ? WalletType.QUANTUMROOT
+      : WalletType.STANDARD;
 
   const walletId = await createWalletWithPassword({
     name: file.name,
@@ -559,20 +684,31 @@ export async function walletHasOwnPassword(walletId: number): Promise<boolean> {
 
 async function readWalletRow(
   walletId: number
-): Promise<{ name: string; walletType: string; mnemonic: string; passphrase: string } | null> {
+): Promise<{
+  name: string;
+  walletType: string;
+  mnemonic: string;
+  passphrase: string;
+} | null> {
   const dbService = DatabaseService();
   await dbService.ensureDatabaseStarted();
   const db = dbService.getDatabase();
   if (!db) return null;
-  const q = db.prepare('SELECT wallet_name, walletType, mnemonic, passphrase FROM wallets WHERE id = ?');
+  const q = db.prepare(
+    'SELECT wallet_name, walletType, mnemonic, passphrase FROM wallets WHERE id = ?'
+  );
   q.bind([walletId]);
   let row: Record<string, unknown> | null = null;
   if (q.step()) row = q.getAsObject() as Record<string, unknown>;
   q.free();
   if (!row) return null;
   return {
-    name: typeof row.wallet_name === 'string' ? row.wallet_name : `Wallet ${walletId}`,
-    walletType: typeof row.walletType === 'string' ? row.walletType : 'standard',
+    name:
+      typeof row.wallet_name === 'string'
+        ? row.wallet_name
+        : `Wallet ${walletId}`,
+    walletType:
+      typeof row.walletType === 'string' ? row.walletType : 'standard',
     mnemonic: typeof row.mnemonic === 'string' ? row.mnemonic : '',
     passphrase: typeof row.passphrase === 'string' ? row.passphrase : '',
   };
@@ -599,9 +735,15 @@ export async function changeWalletPassword(
   let passphrase = '';
   try {
     const oldKey = await deriveKey(oldPassword, salt);
-    mnemonic = await aesDecrypt(oldKey, row.mnemonic.slice(SECRET_ENC_PREFIX.length));
+    mnemonic = await aesDecrypt(
+      oldKey,
+      row.mnemonic.slice(SECRET_ENC_PREFIX.length)
+    );
     if (row.passphrase.startsWith(SECRET_ENC_PREFIX)) {
-      passphrase = await aesDecrypt(oldKey, row.passphrase.slice(SECRET_ENC_PREFIX.length));
+      passphrase = await aesDecrypt(
+        oldKey,
+        row.passphrase.slice(SECRET_ENC_PREFIX.length)
+      );
     }
   } catch {
     return false; // wrong current password
@@ -611,15 +753,19 @@ export async function changeWalletPassword(
   const newSalt = randomSalt(32);
   const newKey = await deriveKey(newPassword, newSalt);
   const encMnemonic = `${SECRET_ENC_PREFIX}${await aesEncrypt(newKey, mnemonic)}`;
-  const encPassphrase = passphrase ? `${SECRET_ENC_PREFIX}${await aesEncrypt(newKey, passphrase)}` : '';
+  const encPassphrase = passphrase
+    ? `${SECRET_ENC_PREFIX}${await aesEncrypt(newKey, passphrase)}`
+    : '';
 
   const dbService = DatabaseService();
   const db = dbService.getDatabase();
   if (!db) return false;
-  const upd = db.prepare('UPDATE wallets SET mnemonic = ?, passphrase = ?, kdf_salt = ? WHERE id = ?');
+  const upd = db.prepare(
+    'UPDATE wallets SET mnemonic = ?, passphrase = ?, kdf_salt = ? WHERE id = ?'
+  );
   upd.run([encMnemonic, encPassphrase, bytesToBase64(newSalt), walletId]);
   upd.free();
-  await dbService.flushDatabaseToFile();
+  await dbService.flushDatabaseToFile(walletId);
 
   setCachedWalletKey(newKey, walletId);
 
@@ -636,7 +782,11 @@ export async function changeWalletPassword(
   // A biometric enrollment stored the OLD password — refresh it if present.
   try {
     if (await bioHasData({ domain: BIO_DOMAIN, name: bioName(walletId) })) {
-      await bioSetData({ domain: BIO_DOMAIN, name: bioName(walletId), data: newPassword });
+      await bioSetData({
+        domain: BIO_DOMAIN,
+        name: bioName(walletId),
+        data: newPassword,
+      });
     }
   } catch {
     /* biometric refresh is best-effort */
@@ -676,9 +826,16 @@ export async function hasWalletBiometric(walletId: number): Promise<boolean> {
 }
 
 /** Enroll biometric for a wallet after verifying its password. */
-export async function enableWalletBiometric(walletId: number, password: string): Promise<boolean> {
+export async function enableWalletBiometric(
+  walletId: number,
+  password: string
+): Promise<boolean> {
   if (!(await verifyWalletPassword(walletId, password))) return false;
-  await bioSetData({ domain: BIO_DOMAIN, name: bioName(walletId), data: password });
+  await bioSetData({
+    domain: BIO_DOMAIN,
+    name: bioName(walletId),
+    data: password,
+  });
   return true;
 }
 
@@ -696,7 +853,9 @@ export async function disableWalletBiometric(walletId: number): Promise<void> {
  * prompt cancel/failure, or a stored password that no longer opens the wallet)
  * instead of a generic "cancelled or failed".
  */
-export async function unlockWalletWithBiometric(walletId: number): Promise<WalletRecord> {
+export async function unlockWalletWithBiometric(
+  walletId: number
+): Promise<WalletRecord> {
   let result: Awaited<ReturnType<typeof bioGetData>>;
   try {
     result = await bioGetData({

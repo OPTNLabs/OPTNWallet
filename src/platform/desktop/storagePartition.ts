@@ -14,8 +14,8 @@
 // The primary window has no `?instance=` and keeps the legacy 'optn-wallet'
 // database, so an existing user's state is preserved untouched. The shared wallet
 // DB (idb-keyval 'OPTNDatabase') is deliberately NOT partitioned — every window
-// reads the same wallets (with DatabaseService's anti-clobber guard) and opens a
-// different one.
+// reads the same wallets; DatabaseService serializes and wallet-scope-merges
+// writes so one open wallet cannot replace another wallet's newer rows.
 //
 // The partition MUST be applied to the localForage database `name`, never to the
 // `storeName`. In IndexedDB the version counter belongs to the DATABASE, not to

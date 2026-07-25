@@ -19,6 +19,7 @@ import KeyService from '../../services/KeyService';
 import { Network } from '../../state/slices/networkSlice';
 import { binToHex } from '../../utils/hex';
 import type { UTXO } from '../../types/types';
+import { completeFusionBroadcast } from './FusionCompletionService';
 
 /** protocol.py MIN_OUTPUT — the smallest a fusion output may be. */
 const MIN_OUTPUT = 10_000;
@@ -49,7 +50,8 @@ export interface FusionOutcome {
 }
 
 // Match the Rust/Electron-Cash fee formulas exactly.
-const componentFee = (size: number, feerate: number) => Math.ceil((size * feerate) / 1000);
+const componentFee = (size: number, feerate: number) =>
+  Math.ceil((size * feerate) / 1000);
 const sizeOfInput = (pubkeyLen: number) => 108 + pubkeyLen;
 const feePerOutput = (feerate: number) => componentFee(9 + 25, feerate); // P2PKH output = 34
 
@@ -57,7 +59,10 @@ const feePerOutput = (feerate: number) => componentFee(9 + 25, feerate); // P2PK
  * Build the signed-input list from selected UTXOs. Looks up each UTXO's pubkey
  * (retrieveKeys) and private key (fetchAddressPrivateKey) by address.
  */
-export async function gatherInputs(walletId: number, utxos: UTXO[]): Promise<FusionRunInput[]> {
+export async function gatherInputs(
+  walletId: number,
+  utxos: UTXO[]
+): Promise<FusionRunInput[]> {
   const keys = await KeyService.retrieveKeys(walletId);
   const byAddress = new Map(keys.map((k) => [k.address, k.publicKey]));
 
@@ -116,7 +121,8 @@ export async function createFreshFusionOutputScripts(
   }
 
   const persisted = await KeyService.retrieveKeys(walletId);
-  const expectedPrefix = network === Network.MAINNET ? 'bitcoincash:' : 'bchtest:';
+  const expectedPrefix =
+    network === Network.MAINNET ? 'bitcoincash:' : 'bchtest:';
   return Array.from({ length: count }, (_, offset) => {
     const addressIndex = startIndex + offset;
     const key = persisted.find(
@@ -129,7 +135,9 @@ export async function createFreshFusionOutputScripts(
       throw new Error(`Fusion output key ${addressIndex} was not persisted.`);
     }
     if (!key.address.toLowerCase().startsWith(expectedPrefix)) {
-      throw new Error('Fusion output key network does not match the active wallet.');
+      throw new Error(
+        'Fusion output key network does not match the active wallet.'
+      );
     }
     return scriptForAddress(key.address);
   });
@@ -149,13 +157,20 @@ export async function allocateOutputs(
   params: FusionServerParams
 ): Promise<{ scripts: string[]; values: number[] }> {
   const sumIn = inputs.reduce((s, i) => s + i.value, 0);
-  const inputFees = inputs.reduce((s, i) => s + componentFee(sizeOfInput(i.pubkey.length / 2), params.componentFeerate), 0);
+  const inputFees = inputs.reduce(
+    (s, i) =>
+      s +
+      componentFee(sizeOfInput(i.pubkey.length / 2), params.componentFeerate),
+    0
+  );
   const outFee = feePerOutput(params.componentFeerate);
 
   const maxOutputs = Math.max(1, params.numComponents - inputs.length);
   // Each tier output costs (tier + its component fee); how many fit while
   // leaving at least min_excess_fee behind?
-  let k = Math.floor((sumIn - inputFees - params.minExcessFee) / (tier + outFee));
+  let k = Math.floor(
+    (sumIn - inputFees - params.minExcessFee) / (tier + outFee)
+  );
   k = Math.min(k, maxOutputs);
   if (k < 1) {
     throw new Error(
@@ -175,7 +190,10 @@ export async function allocateOutputs(
 }
 
 /** Pick the smallest tier the inputs can afford; null if none fit. */
-export function chooseTier(sumIn: number, params: FusionServerParams): number | null {
+export function chooseTier(
+  sumIn: number,
+  params: FusionServerParams
+): number | null {
   const outFee = feePerOutput(params.componentFeerate);
   const affordable = params.tiers
     .filter((t) => t >= MIN_OUTPUT && sumIn - params.minExcessFee - outFee >= t)
@@ -206,9 +224,15 @@ export async function runFusion(opts: {
   const tier = chooseTier(sumIn, opts.params);
   if (tier == null) throw new Error('inputs too small for any fusion tier');
 
-  const { scripts, values } = await allocateOutputs(opts.walletId, opts.network, tier, inputs, opts.params);
+  const { scripts, values } = await allocateOutputs(
+    opts.walletId,
+    opts.network,
+    tier,
+    inputs,
+    opts.params
+  );
 
-  return invoke<FusionOutcome>('fusion_run', {
+  const outcome = await invoke<FusionOutcome>('fusion_run', {
     host: opts.host,
     port: opts.port,
     useSsl: opts.useSsl,
@@ -219,4 +243,20 @@ export async function runFusion(opts: {
     torHost: opts.torPort ? opts.torHost ?? '127.0.0.1' : null,
     torPort: opts.torPort ?? null,
   });
+  if (
+    outcome.ok &&
+    outcome.broadcast_verified &&
+    outcome.txid &&
+    outcome.tx_hex
+  ) {
+    await completeFusionBroadcast({
+      walletId: opts.walletId,
+      txid: outcome.txid,
+      txHex: outcome.tx_hex,
+      spentInputs: opts.utxos,
+      source: 'server-fusion',
+      sourceLabel: 'CashFusion server',
+    });
+  }
+  return outcome;
 }

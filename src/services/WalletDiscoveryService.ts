@@ -9,8 +9,8 @@ import {
 } from '../utils/browserStorage';
 
 const ADDRESS_BATCH_SIZE = 10;
-const MAX_BATCHES_PER_PASS = 3;
-const GAP_LIMIT_BATCHES = 1;
+const MAX_BATCHES_PER_PASS = 8;
+const GAP_LIMIT_BATCHES = 3;
 const DISCOVERY_COOLDOWN_MS = 30_000;
 const STORAGE_KEY = 'optn_wallet_discovery_state_v1';
 
@@ -18,6 +18,8 @@ type DiscoveryState = {
   nextBatchStart: number;
   consecutiveUnusedBatches: number;
   lastDiscoveredAt: number;
+  knownKeyCount?: number;
+  highestKnownIndex?: number;
 };
 
 type WalletDiscoveryState = Record<string, DiscoveryState>;
@@ -25,9 +27,9 @@ type WalletDiscoveryState = Record<string, DiscoveryState>;
 type WalletBatchUsageChecker = (
   walletId: number,
   batch: { address: string; addressIndex: number; changeIndex: number }[]
-) => Promise<boolean>;
+) => Promise<string[]>;
 
-const inFlightByWallet = new Map<number, Promise<void>>();
+const inFlightByWallet = new Map<number, Promise<string[]>>();
 
 function stateKey(walletId: number): string {
   return String(walletId);
@@ -56,6 +58,22 @@ function getBatchStart(index: number): number {
   return Math.floor(index / ADDRESS_BATCH_SIZE) * ADDRESS_BATCH_SIZE;
 }
 
+function keyInventory(keys: Array<{ addressIndex: number }>): {
+  knownKeyCount: number;
+  highestKnownIndex: number;
+} {
+  return {
+    knownKeyCount: keys.length,
+    highestKnownIndex: keys.reduce(
+      (max, key) =>
+        Number.isFinite(key.addressIndex) && key.addressIndex > max
+          ? key.addressIndex
+          : max,
+      -1
+    ),
+  };
+}
+
 async function getCandidateBatch(
   walletId: number,
   network: Network,
@@ -63,7 +81,11 @@ async function getCandidateBatch(
   startIndex: number
 ): Promise<{ address: string; addressIndex: number; changeIndex: number }[]> {
   const xpubs = await KeyService.getWalletXpubs(walletId, accountIndex);
-  const batch: { address: string; addressIndex: number; changeIndex: number }[] = [];
+  const batch: {
+    address: string;
+    addressIndex: number;
+    changeIndex: number;
+  }[] = [];
 
   for (let offset = 0; offset < ADDRESS_BATCH_SIZE; offset += 1) {
     const addressIndex = startIndex + offset;
@@ -93,22 +115,19 @@ async function expandDiscovery(
   walletId: number,
   network: Network,
   batchHasUsage: WalletBatchUsageChecker
-): Promise<void> {
+): Promise<string[]> {
   const keys = await KeyService.retrieveKeys(walletId);
+  const knownAddresses = new Set(keys.map((key) => key.address));
+  const recoveredAddresses: string[] = [];
   const state = readState();
-  const walletState = state[stateKey(walletId)];
-  const highestKnownIndex = keys.reduce(
-    (max, key) =>
-      Number.isFinite(key.addressIndex) && key.addressIndex > max
-        ? key.addressIndex
-        : max,
-    -1
-  );
+  const { highestKnownIndex } = keyInventory(keys);
+  // The cursor is only a cooldown/status hint. Always restart from the highest
+  // key that is actually persisted: another wallet window may have overwritten
+  // a newer key row while leaving this window's old discovery cursor ahead.
   const nextBatchStart =
-    walletState?.nextBatchStart ??
-    (highestKnownIndex >= 0 ? getBatchStart(highestKnownIndex) : 0);
+    highestKnownIndex >= 0 ? getBatchStart(highestKnownIndex) : 0;
   let batchStart = nextBatchStart;
-  let consecutiveUnusedBatches = walletState?.consecutiveUnusedBatches ?? 0;
+  let consecutiveUnusedBatches = 0;
   let batchesProcessed = 0;
 
   while (batchesProcessed < MAX_BATCHES_PER_PASS) {
@@ -117,11 +136,28 @@ async function expandDiscovery(
       break;
     }
 
-    const used = await batchHasUsage(walletId, batch);
+    const usedAddresses = await batchHasUsage(walletId, batch);
+    const used = new Set(usedAddresses);
     batchesProcessed += 1;
     batchStart += ADDRESS_BATCH_SIZE;
 
-    if (used) {
+    if (used.size > 0) {
+      for (const candidate of batch) {
+        if (
+          !used.has(candidate.address) ||
+          knownAddresses.has(candidate.address)
+        ) {
+          continue;
+        }
+        await KeyService.createKeys(
+          walletId,
+          0,
+          candidate.changeIndex,
+          candidate.addressIndex
+        );
+        knownAddresses.add(candidate.address);
+        recoveredAddresses.push(candidate.address);
+      }
       consecutiveUnusedBatches = 0;
       continue;
     }
@@ -132,12 +168,19 @@ async function expandDiscovery(
     }
   }
 
+  const persistedInventory = keyInventory(
+    recoveredAddresses.length > 0
+      ? await KeyService.retrieveKeys(walletId)
+      : keys
+  );
   state[stateKey(walletId)] = {
     nextBatchStart: batchStart,
     consecutiveUnusedBatches,
     lastDiscoveredAt: Date.now(),
+    ...persistedInventory,
   };
   writeState(state);
+  return recoveredAddresses;
 }
 
 const WalletDiscoveryService = {
@@ -145,25 +188,37 @@ const WalletDiscoveryService = {
     walletId: number,
     network: Network,
     batchHasUsage: WalletBatchUsageChecker
-  ): Promise<void> {
+  ): Promise<string[]> {
     const inflight = inFlightByWallet.get(walletId);
     if (inflight) {
-      await inflight;
-      return;
+      return await inflight;
     }
 
     const state = readState()[stateKey(walletId)];
     if (state && Date.now() - state.lastDiscoveredAt < DISCOVERY_COOLDOWN_MS) {
-      return;
+      const currentInventory = keyInventory(
+        await KeyService.retrieveKeys(walletId)
+      );
+      if (
+        state.knownKeyCount === currentInventory.knownKeyCount &&
+        state.highestKnownIndex === currentInventory.highestKnownIndex
+      ) {
+        return [];
+      }
     }
 
-    const run = expandDiscovery(walletId, network, batchHasUsage).catch((error) => {
-      logError('WalletDiscoveryService.ensureInitialAddressBatches', error, { walletId });
-    });
+    const run = expandDiscovery(walletId, network, batchHasUsage).catch(
+      (error): string[] => {
+        logError('WalletDiscoveryService.ensureInitialAddressBatches', error, {
+          walletId,
+        });
+        return [];
+      }
+    );
 
     inFlightByWallet.set(walletId, run);
     try {
-      await run;
+      return await run;
     } finally {
       inFlightByWallet.delete(walletId);
     }
