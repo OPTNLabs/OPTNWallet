@@ -29,6 +29,11 @@ import WalletManager from '../../apis/WalletManager/WalletManager';
 import { buildWalletFileContents } from './DesktopWalletManager';
 import { parseWalletFile, defaultWalletFileName } from './walletFile';
 import { openWalletPickerWindow } from './walletWindow';
+import {
+  refreshWalletOpenClaim,
+  releaseWalletOpen,
+  OPEN_CLAIM_HEARTBEAT_MS,
+} from './walletOpenRegistry';
 
 // Landing page listens for these.
 export const OPEN_WALLET_EVENT = 'optn:open-wallet'; // quick-open a saved DB wallet by id
@@ -350,6 +355,11 @@ export function useMenuBar(): void {
         openSavedWalletFromMenu(savedWalletId, navigate, dispatch),
       lockWallet: () => {
         if (!walletId) return;
+        // Hand the wallet back before leaving it, so another window can open it
+        // immediately rather than waiting out the claim's TTL.
+        void releaseWalletOpen(walletId, currentWindow.label).catch(
+          () => undefined
+        );
         EcKeyManager.lock();
         dispatch(resetWallet());
         navigate(ROUTE_PATHS.landing);
@@ -399,6 +409,20 @@ export function useMenuBar(): void {
       dispatchMenuAction(id);
     };
     window.addEventListener('keydown', onKeyDown);
+
+    // Keep this window's claim on its wallet alive. A stopped heartbeat is how a
+    // crashed window releases: the claim simply ages out, instead of locking the
+    // wallet away until the app restarts.
+    let claimTimer: ReturnType<typeof setInterval> | undefined;
+    if (walletId > 0) {
+      const beat = () => {
+        void refreshWalletOpenClaim(walletId, currentWindow.label).catch(
+          () => undefined
+        );
+      };
+      beat();
+      claimTimer = setInterval(beat, OPEN_CLAIM_HEARTBEAT_MS);
+    }
 
     void currentWindow
       .listen<{ id?: unknown }>(MENU_ACTION_EVENT, (event) => {
@@ -572,6 +596,7 @@ export function useMenuBar(): void {
       unlistenMenuAction?.();
       window.removeEventListener(WALLETS_CHANGED_EVENT, rebuild);
       window.removeEventListener('keydown', onKeyDown);
+      if (claimTimer) clearInterval(claimTimer);
     };
   }, [navigate, dispatch, walletId, toggleMode]);
 }
