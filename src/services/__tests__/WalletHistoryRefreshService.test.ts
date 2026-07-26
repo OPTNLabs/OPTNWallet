@@ -117,4 +117,24 @@ describe('wallet history refresh service', () => {
     });
     expect(result.refreshed).toBe(false);
   });
+
+  it('publishes stored history BEFORE the network fetch, like Electron Cash', async () => {
+    // The rows were always in the transactions table; nothing read them into
+    // redux on open, so the list looked empty until a round trip finished. EC
+    // shows the wallet file's history immediately and lets the network update
+    // it. A wallet opened offline must still show what it knows.
+    const order: string[] = [];
+    const dispatchSpy = vi.fn(() => {
+      order.push('dispatch');
+    }) as never;
+    fetchAndStore.mockImplementation(async () => {
+      order.push('network');
+      return { addr1: [], addr2: [] };
+    });
+
+    await refreshWalletTransactionHistory({ walletId: 107, dispatch: dispatchSpy });
+
+    expect(order[0]).toBe('dispatch');
+    expect(order).toContain('network');
+  });
 });
