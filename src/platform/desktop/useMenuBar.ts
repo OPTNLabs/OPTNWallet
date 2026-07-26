@@ -424,6 +424,14 @@ export function useMenuBar(): void {
       claimTimer = setInterval(beat, OPEN_CLAIM_HEARTBEAT_MS);
     }
 
+    // Fast path for a cleanly closed window. Not sufficient on its own — the X
+    // button and a crash both skip this — which is why opening also checks
+    // whether the holding window still exists.
+    const releaseOnClose = () => {
+      if (walletId > 0) void releaseWalletOpen(walletId, currentWindow.label);
+    };
+    window.addEventListener('beforeunload', releaseOnClose);
+
     void currentWindow
       .listen<{ id?: unknown }>(MENU_ACTION_EVENT, (event) => {
         if (typeof event.payload?.id === 'string') {
@@ -597,6 +605,7 @@ export function useMenuBar(): void {
       window.removeEventListener(WALLETS_CHANGED_EVENT, rebuild);
       window.removeEventListener('keydown', onKeyDown);
       if (claimTimer) clearInterval(claimTimer);
+      window.removeEventListener('beforeunload', releaseOnClose);
     };
   }, [navigate, dispatch, walletId, toggleMode]);
 }

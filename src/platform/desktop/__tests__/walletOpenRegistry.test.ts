@@ -122,3 +122,40 @@ describe('single-window rule for an open wallet', () => {
     expect(await claimWalletOpen(5, 'window-a')).toBeNull();
   });
 });
+
+describe('a claim held by a window that no longer exists', () => {
+  beforeEach(() => {
+    (globalThis as { localStorage?: unknown }).localStorage = new MemoryStorage();
+    installLocks();
+  });
+
+  it('is taken over, because closing a window releases nothing', () => {
+    // Reported: "it says wallet 6 is already open although I closed it". The X
+    // button runs no handler we control and a crash runs none at all, so the
+    // claim survived its window and blocked reopening for the whole TTL.
+    return (async () => {
+      await claimWalletOpen(6, 'window-gone');
+      const taken = await claimWalletOpen(6, 'window-new', Date.now(), async () => false);
+      expect(taken).toBeNull();
+      expect(windowHoldingWallet(6)).toBe('window-new');
+    })();
+  });
+
+  it('still refuses when the holding window IS open', async () => {
+    await claimWalletOpen(6, 'window-a');
+    expect(
+      await claimWalletOpen(6, 'window-b', Date.now(), async () => true)
+    ).toBe('window-a');
+  });
+
+  it('keeps the claim when liveness cannot be determined', async () => {
+    // An unknown answer must not hand the wallet to a second window; the TTL
+    // remains the backstop.
+    await claimWalletOpen(6, 'window-a');
+    expect(
+      await claimWalletOpen(6, 'window-b', Date.now(), async () => {
+        throw new Error('cannot enumerate windows');
+      })
+    ).toBe('window-a');
+  });
+});
