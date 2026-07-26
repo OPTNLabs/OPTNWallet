@@ -132,6 +132,35 @@ export async function routeMenuActionToFocusedWindow(
   return null;
 }
 
+/**
+ * Menu action for a keyboard chord, or null when the chord is not ours.
+ *
+ * The registered menu accelerators never fire: the WebView claims these chords
+ * first (Ctrl+R is its reload, Ctrl+N its new window), so the keystroke is
+ * consumed before the native menu sees it. Matching here lets the app suppress
+ * the WebView default and run the real command — Ctrl+R must refresh the wallet,
+ * not reload the WebView, because a reload interrupts in-flight network and
+ * Fusion work.
+ *
+ * Modifier-exact on purpose: Ctrl+Shift+R and Ctrl+Alt+N are different chords and
+ * must fall through rather than be silently swallowed.
+ */
+export function menuActionForKeyboardEvent(event: {
+  key: string;
+  ctrlKey: boolean;
+  metaKey: boolean;
+  altKey: boolean;
+  shiftKey: boolean;
+}): string | null {
+  if (!(event.ctrlKey || event.metaKey)) return null;
+  if (event.altKey || event.shiftKey) return null;
+  return (
+    { n: 'new_wallet', l: 'lock_wallet', r: 'refresh_wallet' }[
+      event.key.toLowerCase()
+    ] ?? null
+  );
+}
+
 export async function dispatchDesktopMenuAction(
   id: string,
   handlers: DesktopMenuActionHandlers
@@ -353,6 +382,24 @@ export function useMenuBar(): void {
       });
     };
 
+    // The menu's own accelerators never fire, because the WebView claims these
+    // chords first: Ctrl+R is its built-in reload and Ctrl+N its new-window, so
+    // the keystroke is consumed before the native menu sees it. Ctrl+R was
+    // therefore reloading the whole WebView — the exact behaviour Refresh Wallet
+    // replaced, since a reload interrupts in-flight network and Fusion work.
+    //
+    // Handled here instead, and dispatched straight to this window rather than
+    // routed: a keystroke is delivered to the focused window by definition, so
+    // the window that received it IS the target.
+    const onKeyDown = (event: KeyboardEvent) => {
+      const id = menuActionForKeyboardEvent(event);
+      if (!id) return;
+      // Suppress the WebView default (reload / new window) before acting.
+      event.preventDefault();
+      dispatchMenuAction(id);
+    };
+    window.addEventListener('keydown', onKeyDown);
+
     void currentWindow
       .listen<{ id?: unknown }>(MENU_ACTION_EVENT, (event) => {
         if (typeof event.payload?.id === 'string') {
@@ -524,6 +571,7 @@ export function useMenuBar(): void {
       disposed = true;
       unlistenMenuAction?.();
       window.removeEventListener(WALLETS_CHANGED_EVENT, rebuild);
+      window.removeEventListener('keydown', onKeyDown);
     };
   }, [navigate, dispatch, walletId, toggleMode]);
 }
