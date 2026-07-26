@@ -114,6 +114,24 @@ export async function refreshWalletTransactionHistory(
 
     const previousStoredTransactions = loadStoredTransactions(db, walletId);
 
+    // Show what we already know BEFORE going to the network.
+    //
+    // The history is never lost — it lives in the `transactions` table — but
+    // nothing loaded it into redux when a wallet opened, so Recent Activity
+    // rendered empty until a network round trip finished. Electron Cash does not
+    // behave that way: the wallet file already holds the history, so it appears
+    // immediately and the network only updates it. Publishing the stored rows
+    // first gives the same feel, and a wallet opened offline still shows its
+    // history instead of looking wiped.
+    if (previousStoredTransactions.length > 0) {
+      dispatch(
+        setTransactions({
+          wallet_id: walletId,
+          transactions: previousStoredTransactions,
+        })
+      );
+    }
+
     const addressesQuery = db.prepare(`
       SELECT address FROM addresses WHERE wallet_id = ?;
     `);
