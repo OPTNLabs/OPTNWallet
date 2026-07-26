@@ -5,6 +5,7 @@ import { updateUTXOsForAddress } from '../../state/slices/utxoSlice';
 import { AppDispatch } from '../../state/store';
 import { UTXO } from '../../types/types';
 import { logError } from '../../utils/errorHandling';
+import { refreshWalletTransactionHistory } from '../../services/WalletHistoryRefreshService';
 
 type WalletKey = { address: string; addressIndex: number };
 
@@ -132,6 +133,21 @@ export function useHomeSubscriptions({
               } catch (error) {
                 logError('Home.subscribeAddress.saveDatabase', error, {
                   address: addr,
+                });
+              }
+              // Activity on this address means the transaction list changed too.
+              // Refreshing only UTXOs updated the balance while Recent Activity
+              // stayed stale until the user navigated away and back, which
+              // remounted the history hook. Coalesced by RefreshCoordinator, so a
+              // burst of address notifications collapses into one pass.
+              if (currentWalletId) {
+                void refreshWalletTransactionHistory({
+                  walletId: currentWalletId,
+                  dispatch,
+                }).catch((error) => {
+                  logError('Home.subscribeAddress.refreshHistory', error, {
+                    address: addr,
+                  });
                 });
               }
             } catch (error) {
