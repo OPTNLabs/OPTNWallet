@@ -195,6 +195,17 @@ const experimentalSlice = createSlice({
         state.fusionServer = state.fusionServers[0] ?? DEFAULT_FUSION_SERVER;
       }
     },
+    /** Replace the whole list — used when adopting the shared transport config
+     *  written by another window, where add/remove one-at-a-time would not
+     *  converge on the stored set. */
+    setFusionServers(state, action: PayloadAction<string[]>) {
+      if (action.payload.length > 0) state.fusionServers = action.payload;
+    },
+    setNostrRelays(state, action: PayloadAction<string[]>) {
+      // An empty pool leaves P2P fusion unable to find peers, which presents as
+      // "no peers" rather than as a broken setting.
+      if (action.payload.length > 0) state.nostrRelays = action.payload;
+    },
     setTorEnabled(state, action: PayloadAction<boolean>) {
       state.torEnabled = action.payload;
     },
@@ -225,6 +236,8 @@ export const {
   setFusionServer,
   addFusionServer,
   removeFusionServer,
+  setFusionServers,
+  setNostrRelays,
   setTorEnabled,
   setTorAuto,
   setTorHost,
