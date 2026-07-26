@@ -14,6 +14,7 @@ import { AppLockGate } from './AppLockGate';
 import { useMenuBar } from './useMenuBar';
 import { useAutoFusion } from './useAutoFusion';
 import { useWalletFusionPolicy } from './useWalletFusionPolicy';
+import { useTransportConfig } from './useTransportConfig';
 import { selectWalletId, resetWallet } from '../../state/slices/walletSlice';
 import { getCachedWalletKeyForWallet } from './WalletKeyCache';
 import { persistor } from '../../state/store';
@@ -27,6 +28,9 @@ const DesktopAppShell: React.FC = () => {
   // Fusion policy belongs to the wallet, not the window: loaded when a wallet
   // opens and written back on change, so it survives window close and restart.
   // Must run BEFORE the engine reads those values.
+  // Transport config describes how the PROCESS reaches the network, so it is
+  // shared by every window rather than per wallet or per window.
+  useTransportConfig();
   useWalletFusionPolicy();
   useAutoFusion();
   const dispatch = useDispatch();
