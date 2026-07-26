@@ -75,15 +75,15 @@ describe('desktop menu window isolation', () => {
       {
         label: 'wallet-5',
         isFocused: async () => false,
-        emit: async (event: string, payload: unknown) => {
-          emitted.push({ label: 'wallet-5', event, payload });
+        emitTo: async (target: string, event: string, payload: unknown) => {
+          emitted.push({ label: target, event, payload });
         },
       },
       {
         label: 'wallet-6',
         isFocused: async () => true,
-        emit: async (event: string, payload: unknown) => {
-          emitted.push({ label: 'wallet-6', event, payload });
+        emitTo: async (target: string, event: string, payload: unknown) => {
+          emitted.push({ label: target, event, payload });
         },
       },
     ];
@@ -109,8 +109,8 @@ describe('desktop menu window isolation', () => {
       {
         label: 'wallet-5',
         isFocused: async () => false,
-        emit: async () => {
-          emitted.push('wallet-5');
+        emitTo: async (target: string) => {
+          emitted.push(target);
         },
       },
       {
@@ -118,8 +118,8 @@ describe('desktop menu window isolation', () => {
         isFocused: async () => {
           throw new Error('focus unavailable');
         },
-        emit: async () => {
-          emitted.push('wallet-7');
+        emitTo: async (target: string) => {
+          emitted.push(target);
         },
       },
     ];
@@ -134,21 +134,26 @@ describe('desktop menu window isolation', () => {
     expect(emitted).toEqual(['wallet-7']);
   });
 
-  it('keeps a per-window menu action bound to its originating window', async () => {
+  it('prefers the FOCUSED window over a stale originating label', async () => {
+    // Observed in the running app: clicking Lock in the right-hand window locked
+    // the left-hand wallet. `originatingLabel` is captured by whichever window
+    // BUILT the menu, and the menu is rebuilt on wallet-state changes, so the
+    // menu on screen can carry another window's label. Focus reflects where the
+    // click actually happened; the builder's label does not.
     const emitted: string[] = [];
     const windows = [
       {
         label: 'wallet-5',
         isFocused: async () => true,
-        emit: async () => {
-          emitted.push('wallet-5');
+        emitTo: async (target: string) => {
+          emitted.push(target);
         },
       },
       {
         label: 'wallet-7',
         isFocused: async () => false,
-        emit: async () => {
-          emitted.push('wallet-7');
+        emitTo: async (target: string) => {
+          emitted.push(target);
         },
       },
     ];
@@ -159,24 +164,46 @@ describe('desktop menu window isolation', () => {
       'wallet-7'
     );
 
-    expect(target).toBe('wallet-7');
-    expect(emitted).toEqual(['wallet-7']);
+    expect(target).toBe('wallet-5');
+    expect(emitted).toEqual(['wallet-5']);
+  });
+
+  it('targets ONE window: a menu action must never reach the others', async () => {
+    // Regression: routing computed the correct window and then called
+    // window.emit(), which Tauri documents as "emits an event to ALL targets".
+    // Every window's listener ran the command, so Lock Wallet locked every open
+    // wallet. Asserting the requested TARGET (not merely that some emit fired)
+    // is what distinguishes routing from broadcasting.
+    const delivered: string[] = [];
+    const windows = ['wallet-5', 'wallet-6', 'wallet-7'].map((label) => ({
+      label,
+      isFocused: async () => false,
+      emitTo: async (target: string) => {
+        delivered.push(target);
+      },
+    }));
+
+    await routeMenuActionToFocusedWindow('lock_wallet', windows, 'wallet-6');
+
+    expect(delivered).toEqual(['wallet-6']);
+    expect(delivered).not.toContain('wallet-5');
+    expect(delivered).not.toContain('wallet-7');
   });
 
   it('fails closed for an app-menu action when no focused window is known', async () => {
-    const emit = vi.fn(async () => {});
+    const emitTo = vi.fn(async () => {});
     const windows = [
       {
         label: 'wallet-5',
         isFocused: async () => false,
-        emit,
+        emitTo,
       },
       {
         label: 'wallet-6',
         isFocused: async () => {
           throw new Error('focus unavailable');
         },
-        emit,
+        emitTo,
       },
     ];
 
@@ -186,7 +213,7 @@ describe('desktop menu window isolation', () => {
     );
 
     expect(target).toBeNull();
-    expect(emit).not.toHaveBeenCalled();
+    expect(emitTo).not.toHaveBeenCalled();
   });
 });
 
