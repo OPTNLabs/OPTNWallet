@@ -31,6 +31,8 @@ export function useHomeSubscriptions({
   dispatch,
 }: UseHomeSubscriptionsParams) {
   const headersSubDone = useRef(false);
+  /** Which wallet we have already loaded history for, so a re-render does not refetch. */
+  const historyLoadedForWallet = useRef<number | null>(null);
   const headerRefreshScheduled = useRef(false);
   const utxosRef = useRef(reduxUTXOs);
 
@@ -92,6 +94,25 @@ export function useHomeSubscriptions({
         logError('Home.subscribeBlockHeaders', error);
       }
     })();
+
+    // Load history once when the wallet opens.
+    //
+    // The address subscriptions below only fire when something CHANGES, so on a
+    // freshly opened wallet nothing requested history at all: Recent Activity
+    // rendered whatever redux happened to hold and stayed empty until the user
+    // opened the transactions page, which mounted the history hook. Home reads
+    // the same redux slice but mounts no such hook, so it has to ask itself.
+    if (historyLoadedForWallet.current !== currentWalletId) {
+      historyLoadedForWallet.current = currentWalletId;
+      void refreshWalletTransactionHistory({
+        walletId: currentWalletId,
+        dispatch,
+      }).catch((error) => {
+        logError('Home.initialHistoryRefresh', error, {
+          walletId: currentWalletId,
+        });
+      });
+    }
 
     (async () => {
       for (const addr of addrs) {

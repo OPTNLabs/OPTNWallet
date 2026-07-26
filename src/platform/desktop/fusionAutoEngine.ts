@@ -1,13 +1,19 @@
-// When may auto-fusion start a round on its own?
+// May auto-fusion start a round right now?
 //
-// This is deliberately a pure function with no timers, redux, or network in it.
-// Auto-fusion spends a real fee every time it fires, so the decision to fire is
-// the part that must be exhaustively testable — the surrounding hook is only a
-// clock. Anything that can be decided without I/O is decided here.
+// Policy only. Deliberately pure: no timers, redux, storage or network. The
+// decision to spend a fee is the part that must be exhaustively testable, and
+// the surrounding hook is only a clock.
 //
-// Electron Cash parity: fusion is per-coin bounded (`fuse_depth`), only the
-// selected transport may run, and a wallet with nothing left under the depth
-// limit simply stops rather than re-fusing finished coins forever.
+// Everything that needs authority lives in FusionRunnerService, not here:
+//
+//   - whether a round is already running  -> the cross-window lease
+//   - whether the fee cooldown has elapsed -> the atomic check-and-claim
+//   - whether any coin is still eligible   -> live reconciliation + fuse depth
+//
+// Those were briefly duplicated here as plain comparisons. That is worse than
+// useless for a fee decision: this module cannot see other windows, so a check
+// here would pass while the authoritative one refused, and the two would drift.
+// Ask once, in the place that can actually answer.
 
 export type FusionMode = 'p2p' | 'server';
 
@@ -20,15 +26,8 @@ export interface AutoFusionInputs {
   p2pFusionEnabled: boolean;
   /** 0 means no wallet is open. */
   walletId: number;
-  /** A round (auto or manual) is already in flight in this window. */
-  busy: boolean;
-  /** Coins still under the configured fuse depth. */
-  eligibleCoinCount: number;
   /** P2P cannot run without Tor; server fusion enforces its own policy. */
   torReady: boolean;
-  nowMs: number;
-  /** When this window last STARTED an automatic round. */
-  lastAttemptMs: number | null;
 }
 
 export type AutoFusionDecision =
@@ -36,17 +35,14 @@ export type AutoFusionDecision =
   | { run: true; mode: FusionMode };
 
 /**
- * Gap between automatic rounds.
+ * Gap between automatic attempts, enforced durably by
+ * `tryClaimAutoCooldown`.
  *
- * Long on purpose. A round already takes up to ~75s to gather peers, and every
- * attempt costs a fee whether or not it completes, so a tight loop would burn
- * money on a wallet that simply cannot find peers. This is a floor between
- * ATTEMPTS, not a schedule: nothing fires while a round is in flight.
+ * Long on purpose. Gathering peers alone can take 75s and every attempt costs a
+ * fee whether or not it completes, so a tight loop would drain a wallet that
+ * simply cannot find peers.
  */
 export const AUTO_FUSION_COOLDOWN_MS = 5 * 60_000;
-
-/** At least two participants are needed, so a single coin cannot fuse alone. */
-export const MIN_ELIGIBLE_COINS = 1;
 
 export function decideAutoFusion(input: AutoFusionInputs): AutoFusionDecision {
   if (!input.cashFusionEnabled) return { run: false, reason: 'CashFusion is off' };
@@ -54,21 +50,10 @@ export function decideAutoFusion(input: AutoFusionInputs): AutoFusionDecision {
   if (!Number.isInteger(input.walletId) || input.walletId <= 0) {
     return { run: false, reason: 'No wallet open' };
   }
-  // Checked before the cooldown: a long-running round must never be joined by a
-  // second one just because the cooldown happened to elapse while it ran.
-  if (input.busy) return { run: false, reason: 'A fusion round is already running' };
-  if (input.eligibleCoinCount < MIN_ELIGIBLE_COINS) {
-    return { run: false, reason: 'All coins have reached the fuse depth' };
-  }
-  if (input.lastAttemptMs !== null) {
-    const waited = input.nowMs - input.lastAttemptMs;
-    // A clock that jumped backwards must not unlock an immediate retry.
-    if (waited < AUTO_FUSION_COOLDOWN_MS) {
-      return { run: false, reason: 'Waiting for the auto-fusion cooldown' };
-    }
-  }
   if (input.p2pFusionEnabled) {
-    if (!input.torReady) return { run: false, reason: 'Tor is not ready for P2P fusion' };
+    if (!input.torReady) {
+      return { run: false, reason: 'Tor is not ready for P2P fusion' };
+    }
     return { run: true, mode: 'p2p' };
   }
   return { run: true, mode: 'server' };

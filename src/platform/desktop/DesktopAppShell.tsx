@@ -12,6 +12,7 @@ import { useDispatch, useSelector } from 'react-redux';
 import AppShell from '../../app/AppShell';
 import { AppLockGate } from './AppLockGate';
 import { useMenuBar } from './useMenuBar';
+import { useAutoFusion } from './useAutoFusion';
 import { selectWalletId, resetWallet } from '../../state/slices/walletSlice';
 import { getCachedWalletKeyForWallet } from './WalletKeyCache';
 import { persistor } from '../../state/store';
@@ -19,6 +20,10 @@ import { invoke } from '@tauri-apps/api/core';
 
 const DesktopAppShell: React.FC = () => {
   useMenuBar();
+  // App-wide, so automatic rounds do not require the CashFusion screen to be
+  // open. It gates itself on wallet/session state and refuses unless the durable
+  // cooldown and the cross-window lease both allow a round.
+  useAutoFusion();
   const dispatch = useDispatch();
   const walletId = useSelector(selectWalletId);
   const [rehydrated, setRehydrated] = useState(() => persistor.getState().bootstrapped);
