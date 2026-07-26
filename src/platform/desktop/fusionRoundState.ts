@@ -111,36 +111,3 @@ export function releaseOutpoints(walletId: number, outpoints: string[]): void {
 
 export const outpointKey = (txid: string, index: number): string =>
   `${txid}:${index}`;
-
-const AUTO_ATTEMPT_PREFIX = 'optn-fusion-auto-attempt-';
-/** Kept well beyond the engine's cooldown so the stamp outlives the window it
- *  bounds; the engine compares timestamps itself rather than relying on expiry. */
-const AUTO_ATTEMPT_TTL_MS = 24 * 60 * 60_000;
-
-/**
- * When this WALLET last started an automatic round, in any window.
- *
- * Deliberately not Redux: the auto-fusion cooldown is the only thing bounding how
- * often the engine spends a fee, and Redux state is per-window and dies on
- * reload. A stamp kept there would let a reload — or simply opening a second
- * window on the same wallet — start another paid round immediately, silently
- * removing the ceiling. localStorage is shared across windows and survives
- * reloads, which is exactly the scope a spending limit needs.
- */
-export function lastAutoAttemptAt(walletId: number): number | null {
-  const entries = read(`${AUTO_ATTEMPT_PREFIX}${walletId}`);
-  const at = entries.attempt;
-  return typeof at === 'number' && Number.isFinite(at) ? at : null;
-}
-
-/**
- * Claim the next automatic attempt for this wallet.
- *
- * Called BEFORE any network work, not after success: a round that dies halfway
- * still consumed the opportunity, and stamping only on success would let a
- * repeatedly-failing wallet retry in a tight loop, paying every time.
- */
-export function claimAutoAttempt(walletId: number, nowMs = Date.now()): void {
-  const storageKey = `${AUTO_ATTEMPT_PREFIX}${walletId}`;
-  write(storageKey, { attempt: nowMs }, AUTO_ATTEMPT_TTL_MS);
-}

@@ -14,6 +14,7 @@ import {
   selectFusionServer,
   selectFusionServers,
   selectP2pFusionEnabled,
+  selectFuseDepth,
   selectTorEnabled,
   selectTorAuto,
   selectTorHost,
@@ -35,6 +36,11 @@ import {
 import { CURRENT_FUSION_EXECUTION_READINESS } from '../../platform/desktop/FusionExecutionSafety';
 import { P2pFusionTransportPreview } from '../nostr/P2pFusionTransportPreview';
 import { AutoFusionControls } from './AutoFusionControls';
+import {
+  startFusionRound,
+  type FusionRunOutcome,
+} from '../../platform/desktop/FusionRunnerService';
+
 import { runFusion } from '../../platform/desktop/FusionService';
 import { runP2pFusion } from '../../platform/desktop/FusionP2pService';
 import {
@@ -42,9 +48,28 @@ import {
   getFusionModeAvailability,
 } from '../../platform/desktop/FusionMode';
 import type { RootState } from '../../state/store';
-import type { UTXO } from '../../types/types';
 
 // Ports per Electron Cash's own conf.py default (fusion.servo.cash:8789, SSL).
+/** Typed outcome -> user text, so no caller parses strings to learn what happened. */
+function describeFusionOutcome(outcome: FusionRunOutcome): string {
+  switch (outcome.status) {
+    case 'fused':
+      return `Fused ✓ — txid ${outcome.txid}`;
+    case 'busy':
+      return 'A fusion round is already running for this wallet.';
+    case 'waiting-for-wallet':
+      // Not an error: the wallet is mid-refresh. Falling back to the cached coin
+      // list here is exactly how a round ends up spending coins that are gone.
+      return 'Syncing wallet coins — try again in a moment.';
+    case 'no-eligible-coins':
+      return 'No coins are eligible to fuse right now.';
+    case 'cooldown':
+      return 'Waiting for the auto-fusion cooldown.';
+    case 'failed':
+      return outcome.message;
+  }
+}
+
 const DEFAULT_SERVER = 'fusion.servo.cash:8789';
 
 type ConnStatus = 'idle' | 'testing' | 'ok' | 'fail';
@@ -83,7 +108,9 @@ export const CashFusionSettings: React.FC<{ variant?: 'card' | 'servers' }> = ({
   // Fusion execution (chipnet test path). walletId/network/UTXOs drive Fuse Now.
   const walletId = useSelector((s: RootState) => s.wallet_id.currentWalletId);
   const currentNetwork = useSelector((s: RootState) => s.network.currentNetwork);
-  const reduxUtxos = useSelector((s: RootState) => s.utxos.utxos);
+  // Coin selection belongs to FusionRunnerService, which reconciles live UTXOs.
+  // Reading the redux list here is the stale-input path the runner exists to remove.
+  const fuseDepth = useSelector(selectFuseDepth);
   const [fuseState, setFuseState] = useState<'idle' | 'fusing' | 'done' | 'fail'>('idle');
   const [fuseMsg, setFuseMsg] = useState<string | null>(null);
   const [p2pState, setP2pState] = useState<'idle' | 'fusing' | 'done' | 'fail'>('idle');
@@ -166,33 +193,53 @@ export const CashFusionSettings: React.FC<{ variant?: 'card' | 'servers' }> = ({
     try {
       assertServerFusionSelected(p2pFusionEnabled);
       setFuseState('fusing');
-      const utxos = (Object.values(reduxUtxos).flat() as UTXO[]).filter((u) => !u.token);
-      if (utxos.length === 0) throw new Error('No spendable (non-token) UTXOs to fuse.');
 
-      const { host, port, ssl } = parseHostPort(serverInput ?? '');
-      const tor = await currentTorConfig(host);
-      const params = status ?? (await fetchFusionServerStatus(host, port, ssl, tor));
-      if (!status) setStatus(params);
-
-      const outcome = await runFusion({
+      // Coins come from startFusionRound's live reconciliation, never from the
+      // redux list — a stale list is what produced signed CoinJoins spending
+      // coins that were already gone. The server handshake happens INSIDE the
+      // runner callback so it runs under the round lease rather than before it.
+      const outcome = await startFusionRound({
         walletId,
         network: currentNetwork,
-        host,
-        port,
-        useSsl: ssl,
-        utxos,
-        params: {
-          tiers: params.tiers,
-          numComponents: params.numComponents,
-          componentFeerate: params.componentFeerate,
-          minExcessFee: params.minExcessFee,
-          maxExcessFee: params.maxExcessFee,
+        mode: 'server',
+        trigger: 'manual',
+        fuseDepth,
+        runners: {
+          runP2p: () => Promise.reject(new Error('P2P runner invoked in server mode')),
+          runServer: async (coins) => {
+            const { host, port, ssl } = parseHostPort(serverInput ?? '');
+            const tor = await currentTorConfig(host);
+            const params =
+              status ?? (await fetchFusionServerStatus(host, port, ssl, tor));
+            if (!status) setStatus(params);
+
+            const result = await runFusion({
+              walletId,
+              network: currentNetwork,
+              host,
+              port,
+              useSsl: ssl,
+              utxos: coins,
+              params: {
+                tiers: params.tiers,
+                numComponents: params.numComponents,
+                componentFeerate: params.componentFeerate,
+                minExcessFee: params.minExcessFee,
+                maxExcessFee: params.maxExcessFee,
+              },
+              torHost: tor?.host ?? null,
+              torPort: tor?.port ?? null,
+            });
+            if (!result.ok || !result.txid) {
+              throw new Error(result.message || 'Server fusion failed.');
+            }
+            return { txid: result.txid };
+          },
         },
-        torHost: tor?.host ?? null,
-        torPort: tor?.port ?? null,
       });
-      setFuseState(outcome.ok ? 'done' : 'fail');
-      setFuseMsg(outcome.ok ? `Fused ✓ — txid ${outcome.txid}` : outcome.message);
+
+      setFuseState(outcome.status === 'fused' ? 'done' : 'fail');
+      setFuseMsg(describeFusionOutcome(outcome));
     } catch (e) {
       setFuseState('fail');
       setFuseMsg(e instanceof Error ? e.message : String(e));
@@ -206,19 +253,29 @@ export const CashFusionSettings: React.FC<{ variant?: 'card' | 'servers' }> = ({
     setP2pMsg(null);
     setP2pPhase(0);
     try {
-      const utxos = (Object.values(reduxUtxos).flat() as UTXO[]).filter((u) => !u.token);
-      if (utxos.length === 0) throw new Error('No spendable (non-token) UTXOs to fuse.');
-      const tor = await currentTorConfig('nostr-relay');
-      const result = await runP2pFusion({
+      const outcome = await startFusionRound({
         walletId,
         network: currentNetwork,
-        utxos,
-        tor: tor ?? null,
-        onStatus: (m) => setP2pMsg(m),
-        onPhase: (p) => setP2pPhase(p),
+        mode: 'p2p',
+        trigger: 'manual',
+        fuseDepth,
+        runners: {
+          runServer: () => Promise.reject(new Error('Server runner invoked in P2P mode')),
+          runP2p: async (coins) => {
+            const tor = await currentTorConfig('nostr-relay');
+            return runP2pFusion({
+              walletId,
+              network: currentNetwork,
+              utxos: coins,
+              tor: tor ?? null,
+              onStatus: (m) => setP2pMsg(m),
+              onPhase: (p) => setP2pPhase(p),
+            });
+          },
+        },
       });
-      setP2pState('done');
-      setP2pMsg(`Fused ✓ — txid ${result.txid}`);
+      setP2pState(outcome.status === 'fused' ? 'done' : 'fail');
+      setP2pMsg(describeFusionOutcome(outcome));
     } catch (e) {
       setP2pState('fail');
       setP2pMsg(e instanceof Error ? e.message : String(e));
