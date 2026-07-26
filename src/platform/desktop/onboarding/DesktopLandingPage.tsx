@@ -11,6 +11,11 @@ import WalletManager from '../../../apis/WalletManager/WalletManager';
 import DatabaseService from '../../../apis/DatabaseManager/DatabaseService';
 import { Network } from '../../../state/slices/networkSlice';
 import { setNetwork } from '../../../state/slices/networkSlice';
+import {
+  getAllWebviewWindows,
+  getCurrentWebviewWindow,
+} from '@tauri-apps/api/webviewWindow';
+import { claimWalletOpen } from '../walletOpenRegistry';
 import { setWalletId, setWalletNetwork, setWalletType } from '../../../state/slices/walletSlice';
 import { WalletType } from '../../../types/wallet';
 import { homeRoute } from '../../../navigation/routes';
@@ -34,6 +39,24 @@ interface WalletRow {
   wallet_name: string;
   networkType: Network;
   walletType: WalletType;
+}
+
+/**
+ * Raise the window that already holds a wallet, EC's `bring_to_top()`.
+ *
+ * Best-effort: if that window has since closed, its claim ages out via the TTL
+ * and the next attempt succeeds. Failing to focus must never block the user.
+ */
+async function focusWalletWindow(label: string): Promise<void> {
+  try {
+    const windows = await getAllWebviewWindows();
+    const target = windows.find((candidate) => candidate.label === label);
+    if (!target) return;
+    await target.unminimize().catch(() => undefined);
+    await target.setFocus();
+  } catch {
+    /* focusing is a courtesy, not a precondition */
+  }
 }
 
 const DesktopLandingPage = () => {
@@ -212,6 +235,19 @@ const DesktopLandingPage = () => {
     setBusy(true);
     setError('');
     try {
+      // Electron Cash's single-window rule: a wallet already open elsewhere is
+      // raised, not loaded a second time. Checked BEFORE the password is used,
+      // so a duplicate open never derives a key or touches wallet state.
+      const heldBy = await claimWalletOpen(
+        openingId,
+        getCurrentWebviewWindow().label
+      );
+      if (heldBy) {
+        await focusWalletWindow(heldBy);
+        setError('That wallet is already open in another window.');
+        return;
+      }
+
       const info = await openWalletWithPassword(openingId, password);
       if (!info) {
         setError('Incorrect password.');

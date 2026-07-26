@@ -50,7 +50,7 @@ describe('single-window rule for an open wallet', () => {
   });
 
   it('lets the first window open a wallet', async () => {
-    expect(await claimWalletOpen(5, 'window-a')).toEqual({ ok: true });
+    expect(await claimWalletOpen(5, 'window-a')).toBeNull();
     expect(windowHoldingWallet(5)).toBe('window-a');
   });
 
@@ -58,29 +58,26 @@ describe('single-window rule for an open wallet', () => {
     await claimWalletOpen(5, 'window-a');
     // Electron Cash raises the existing window rather than loading the wallet
     // twice; the caller needs to know WHICH window to raise.
-    expect(await claimWalletOpen(5, 'window-b')).toEqual({
-      ok: false,
-      heldBy: 'window-a',
-    });
+    expect(await claimWalletOpen(5, 'window-b')).toBe('window-a');
   });
 
   it('still allows DIFFERENT wallets side by side', async () => {
     // The whole point of multi-window: two wallets at once is supported, the
     // same wallet twice is not.
-    expect(await claimWalletOpen(5, 'window-a')).toEqual({ ok: true });
-    expect(await claimWalletOpen(6, 'window-b')).toEqual({ ok: true });
+    expect(await claimWalletOpen(5, 'window-a')).toBeNull();
+    expect(await claimWalletOpen(6, 'window-b')).toBeNull();
   });
 
   it('lets the SAME window re-claim, so a reload does not lock the user out', async () => {
     await claimWalletOpen(5, 'window-a');
-    expect(await claimWalletOpen(5, 'window-a')).toEqual({ ok: true });
+    expect(await claimWalletOpen(5, 'window-a')).toBeNull();
   });
 
   it('frees the wallet when its window releases it', async () => {
     await claimWalletOpen(5, 'window-a');
     await releaseWalletOpen(5, 'window-a');
     expect(windowHoldingWallet(5)).toBeNull();
-    expect(await claimWalletOpen(5, 'window-b')).toEqual({ ok: true });
+    expect(await claimWalletOpen(5, 'window-b')).toBeNull();
   });
 
   it('ignores a release from a window that does not hold it', async () => {
@@ -93,7 +90,7 @@ describe('single-window rule for an open wallet', () => {
     const longAgo = Date.now() - (OPEN_CLAIM_TTL_MS + 1_000);
     await claimWalletOpen(5, 'window-a', longAgo);
     // A crashed window must not lock a wallet away permanently.
-    expect(await claimWalletOpen(5, 'window-b')).toEqual({ ok: true });
+    expect(await claimWalletOpen(5, 'window-b')).toBeNull();
   });
 
   it('keeps a live claim alive through its heartbeat', async () => {
@@ -103,7 +100,7 @@ describe('single-window rule for an open wallet', () => {
     // Still held a moment after the ORIGINAL claim would have expired.
     expect(
       await claimWalletOpen(5, 'window-b', t0 + OPEN_CLAIM_TTL_MS + 500)
-    ).toEqual({ ok: false, heldBy: 'window-a' });
+    ).toBe('window-a');
   });
 
   it('does not let a stale window steal a claim back by heartbeating', async () => {
@@ -122,6 +119,6 @@ describe('single-window rule for an open wallet', () => {
     vi.stubGlobal('navigator', {});
     // Unlike the fusion lease, this must NOT fail closed: refusing a round costs
     // a missed round, refusing to open a wallet makes the app unusable.
-    expect(await claimWalletOpen(5, 'window-a')).toEqual({ ok: true });
+    expect(await claimWalletOpen(5, 'window-a')).toBeNull();
   });
 });
