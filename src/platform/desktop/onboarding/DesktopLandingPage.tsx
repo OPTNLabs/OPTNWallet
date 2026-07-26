@@ -16,6 +16,7 @@ import {
   getCurrentWebviewWindow,
 } from '@tauri-apps/api/webviewWindow';
 import { claimWalletOpen } from '../walletOpenRegistry';
+import { clearWalletFusionPolicy } from '../walletFusionPolicy';
 import { setWalletId, setWalletNetwork, setWalletType } from '../../../state/slices/walletSlice';
 import { WalletType } from '../../../types/wallet';
 import { homeRoute } from '../../../navigation/routes';
@@ -145,6 +146,9 @@ const DesktopLandingPage = () => {
     try {
       await WalletManager().deleteWallet(id);
       await DatabaseService().deleteWalletFromFile(id);
+      // Wallet ids are reused, and fusion policy is keyed by id. Without this a
+      // brand new wallet could inherit a deleted one's auto-fuse setting.
+      clearWalletFusionPolicy(id);
       const rows = await WalletManager().getAllWallets();
       setWallets(rows as WalletRow[]);
       setDeletingId(null);
