@@ -4,6 +4,7 @@ import { ROUTE_PATHS } from '../../../navigation/routes';
 import { resetWallet } from '../../../state/slices/walletSlice';
 import {
   MENU_ACTION_EVENT,
+  menuActionForKeyboardEvent,
   attachDesktopMenu,
   dispatchDesktopMenuAction,
   openSavedWalletFromMenu,
@@ -336,5 +337,46 @@ describe('refreshWalletFromMenu', () => {
 
     expect(refreshed).toBe(false);
     expect(requestTrailing).not.toHaveBeenCalled();
+  });
+});
+
+describe('keyboard accelerators', () => {
+  const chord = (over: Partial<Parameters<typeof menuActionForKeyboardEvent>[0]>) =>
+    menuActionForKeyboardEvent({
+      key: 'r',
+      ctrlKey: true,
+      metaKey: false,
+      altKey: false,
+      shiftKey: false,
+      ...over,
+    });
+
+  it('maps the wallet chords the WebView would otherwise swallow', () => {
+    // Registered menu accelerators never fire: WebView2 claims Ctrl+R (reload)
+    // and Ctrl+N (new window) before the native menu sees them, so Ctrl+R was
+    // reloading the WebView instead of refreshing the wallet.
+    expect(chord({ key: 'r' })).toBe('refresh_wallet');
+    expect(chord({ key: 'n' })).toBe('new_wallet');
+    expect(chord({ key: 'l' })).toBe('lock_wallet');
+  });
+
+  it('accepts Cmd on macOS as well as Ctrl', () => {
+    expect(chord({ key: 'r', ctrlKey: false, metaKey: true })).toBe('refresh_wallet');
+  });
+
+  it('is case-insensitive, so caps lock does not break it', () => {
+    expect(chord({ key: 'R' })).toBe('refresh_wallet');
+  });
+
+  it('ignores a bare key with no modifier', () => {
+    expect(chord({ key: 'r', ctrlKey: false })).toBeNull();
+  });
+
+  it('leaves other chords alone rather than swallowing them', () => {
+    // Ctrl+Shift+R is a different chord; claiming it would break the browser
+    // hard-reload users expect while developing, and it is not our command.
+    expect(chord({ key: 'r', shiftKey: true })).toBeNull();
+    expect(chord({ key: 'n', altKey: true })).toBeNull();
+    expect(chord({ key: 'q' })).toBeNull();
   });
 });
