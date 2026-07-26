@@ -45,7 +45,17 @@ interface DesktopMenuLike<TWindow> {
 interface MenuTargetWindow {
   label: string;
   isFocused: () => Promise<boolean>;
-  emit: (event: string, payload?: unknown) => Promise<void>;
+  /**
+   * MUST be `emitTo`, never `emit`.
+   *
+   * Tauri's `emit` "emits an event to ALL targets" — calling it on a window
+   * object does not scope the event to that window. Routing the action to the
+   * right window and then broadcasting undoes the routing entirely: every
+   * window's listener runs the command, so Lock Wallet locked every open wallet
+   * and Export Wallet fired in all of them. `emitTo(label, ...)` is the only
+   * form that actually targets one window.
+   */
+  emitTo: (target: string, event: string, payload?: unknown) => Promise<void>;
 }
 
 export interface DesktopMenuActionHandlers {
@@ -81,15 +91,15 @@ export async function routeMenuActionToFocusedWindow(
   windows: readonly MenuTargetWindow[],
   originatingLabel?: string
 ): Promise<string | null> {
-  if (originatingLabel !== undefined) {
-    const origin = windows.find(
-      (candidate) => candidate.label === originatingLabel
-    );
-    if (!origin) return null;
-    await origin.emit(MENU_ACTION_EVENT, { id });
-    return origin.label;
-  }
-
+  // FOCUS FIRST, on every platform.
+  //
+  // `originatingLabel` is the label captured by the window that BUILT the menu,
+  // and trusting it sent actions to the wrong wallet: clicking Lock in the
+  // right-hand window locked the left-hand one. The menu is rebuilt whenever
+  // wallet state changes, and the last build wins for the whole app, so the menu
+  // you see in one window can carry another window's label. Focus does not have
+  // that problem — clicking a window's menu bar focuses that window — so it is
+  // the only signal that reflects where the click actually happened.
   let focused: MenuTargetWindow | undefined;
   for (const candidate of windows) {
     try {
@@ -102,9 +112,24 @@ export async function routeMenuActionToFocusedWindow(
     }
   }
 
-  if (!focused) return null;
-  await focused.emit(MENU_ACTION_EVENT, { id });
-  return focused.label;
+  if (focused) {
+    await focused.emitTo(focused.label, MENU_ACTION_EVENT, { id });
+    return focused.label;
+  }
+
+  // Only when focus is genuinely unknown do we fall back to the originating
+  // window, and only if it still exists. Never broadcast: a wallet action that
+  // cannot be attributed to one window must not run in all of them.
+  if (originatingLabel !== undefined) {
+    const origin = windows.find(
+      (candidate) => candidate.label === originatingLabel
+    );
+    if (!origin) return null;
+    await origin.emitTo(origin.label, MENU_ACTION_EVENT, { id });
+    return origin.label;
+  }
+
+  return null;
 }
 
 export async function dispatchDesktopMenuAction(
