@@ -13,6 +13,7 @@ import AppShell from '../../app/AppShell';
 import { AppLockGate } from './AppLockGate';
 import { useMenuBar } from './useMenuBar';
 import { useAutoFusion } from './useAutoFusion';
+import { useWalletFusionPolicy } from './useWalletFusionPolicy';
 import { selectWalletId, resetWallet } from '../../state/slices/walletSlice';
 import { getCachedWalletKeyForWallet } from './WalletKeyCache';
 import { persistor } from '../../state/store';
@@ -23,6 +24,10 @@ const DesktopAppShell: React.FC = () => {
   // App-wide, so automatic rounds do not require the CashFusion screen to be
   // open. It gates itself on wallet/session state and refuses unless the durable
   // cooldown and the cross-window lease both allow a round.
+  // Fusion policy belongs to the wallet, not the window: loaded when a wallet
+  // opens and written back on change, so it survives window close and restart.
+  // Must run BEFORE the engine reads those values.
+  useWalletFusionPolicy();
   useAutoFusion();
   const dispatch = useDispatch();
   const walletId = useSelector(selectWalletId);
