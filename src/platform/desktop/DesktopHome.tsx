@@ -32,6 +32,7 @@ import {
 } from '../../services/WalletUtxoRefreshService';
 import { refreshUTXOWorkerSubscriptions } from '../../workers/UTXOWorkerService';
 import { logError } from '../../utils/errorHandling';
+import { refreshWalletTransactionHistory } from '../../services/WalletHistoryRefreshService';
 import { Network } from '../../state/slices/networkSlice';
 import { SATSINBITCOIN } from '../../utils/constants';
 import SettingsRow from '../../components/ui/SettingsRow';
@@ -124,6 +125,24 @@ const Home: React.FC = () => {
     void preloadTokenMetadata(tokenCategories);
   }, [currentWalletId, tokenCategories]);
 
+  // Load this wallet's transaction history when it opens.
+  //
+  // Recent Activity renders `state.transactions`, which only the history fetch
+  // populates — and that fetch lived in a hook mounted by the transactions PAGE.
+  // This screen mounts no such hook, so the list stayed empty until the user
+  // opened that page, which is why "click View all" appeared to sync it. The
+  // service publishes the rows already stored in SQLite before going to the
+  // network, so the list fills immediately and then updates.
+  useEffect(() => {
+    if (!currentWalletId) return;
+    void refreshWalletTransactionHistory({
+      walletId: currentWalletId,
+      dispatch,
+    }).catch((error) => {
+      logError('DesktopHome.loadHistory', error, { walletId: currentWalletId });
+    });
+  }, [currentWalletId, dispatch]);
+
   const handleRefresh = useCallback(async () => {
     if (fetchingUTXOsRedux || !currentWalletId) return;
     const walletSession = captureActiveWalletSession(currentWalletId);
@@ -152,6 +171,12 @@ const Home: React.FC = () => {
           void preloadTokenMetadata(refreshedCategories);
         }
         await refreshUTXOWorkerSubscriptions();
+      });
+      // Sync means the whole wallet, not just its coins. Refreshing UTXOs alone
+      // moved the balance while Recent Activity stayed as it was.
+      await refreshWalletTransactionHistory({
+        walletId: currentWalletId,
+        dispatch,
       });
     } catch (error) {
       logError('Home.handleRefresh', error, { walletId: currentWalletId });
