@@ -8,7 +8,7 @@ vi.mock('../../../services/WalletUtxoRefreshService', () => ({
 import { startFusionRound, isFusionRunning } from '../FusionRunnerService';
 import { Network } from '../../../state/slices/networkSlice';
 import { clearFusionDepth, recordFusionRound } from '../fusionCoinDepth';
-import { lastAutoAttemptAt } from '../fusionRoundState';
+import { lastAutoAttemptAt } from '../fusionWalletLease';
 
 class MemoryStorage {
   private map = new Map<string, string>();
@@ -41,9 +41,24 @@ const base = () => ({
   runners: { runP2p, runServer },
 });
 
+function installLocks() {
+  const chains = new Map<string, Promise<unknown>>();
+  vi.stubGlobal('navigator', {
+    locks: {
+      request: <T>(name: string, fn: () => Promise<T>): Promise<T> => {
+        const prior = chains.get(name) ?? Promise.resolve();
+        const run = prior.then(() => fn());
+        chains.set(name, run.then(() => undefined, () => undefined));
+        return run;
+      },
+    },
+  });
+}
+
 describe('FusionRunnerService — one path for manual and automatic rounds', () => {
   beforeEach(() => {
     (globalThis as { localStorage?: unknown }).localStorage = new MemoryStorage();
+    installLocks();
     clearFusionDepth(3);
     reconcile.mockReset();
     runP2p.mockReset().mockResolvedValue({ txid: 'a'.repeat(64) });
@@ -118,8 +133,11 @@ describe('FusionRunnerService — one path for manual and automatic rounds', () 
     runP2p.mockReturnValue(new Promise((r) => { release = r; }));
 
     const first = startFusionRound(base());
-    await Promise.resolve();
-    await Promise.resolve();
+    // Taking the lease is now async (Web Lock + durable record), so drain
+    // microtasks until it is actually held rather than guessing a tick count.
+    for (let i = 0; i < 100 && !isFusionRunning(3); i += 1) {
+      await Promise.resolve();
+    }
     expect(isFusionRunning(3)).toBe(true);
 
     // A manual click landing mid-engine-round must not start a second one.

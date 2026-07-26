@@ -21,12 +21,17 @@ import { getLocalStorage } from '../../utils/browserStorage';
 
 const DEPTH_PREFIX = 'optn-fusion-coin-depth-';
 
-/** Backstop for entries a crashed round never cleaned up. Long, because a real
- *  coin can legitimately sit unspent for months and must keep its depth. */
-const DEPTH_TTL_MS = 180 * 24 * 60 * 60_000; // 180 days
-
-/** Hard cap so a pathological wallet cannot grow the entry unboundedly. */
-const MAX_ENTRIES = 5_000;
+// Deliberately NO age or size based pruning.
+//
+// An earlier version expired entries after 180 days and capped the map at 5000
+// entries. Both can forget a coin that is still unspent, and a forgotten coin
+// reads as depth 0 — so auto-fusion picks it up again and pays another fee for
+// mixing it already did. Age is a particularly bad proxy here: a coin can sit
+// untouched for years and is no less fused for it.
+//
+// The only safe eviction is proof that a coin is gone. `recordFusionRound` drops
+// the inputs a round consumed, and `pruneSpentDepth` drops anything absent from a
+// fresh wallet snapshot. Both are evidence of spending; neither is a guess.
 
 interface DepthEntry {
   /** Rounds this coin has already been through. */
@@ -68,20 +73,40 @@ function read(walletId: number): DepthMap {
 }
 
 function write(walletId: number, entries: DepthMap): void {
-  const cutoff = Date.now() - DEPTH_TTL_MS;
-  let live = Object.entries(entries).filter(([, entry]) => entry.at >= cutoff);
-  if (live.length > MAX_ENTRIES) {
-    // Keep the most recently touched — those are the coins still in play.
-    live = live.sort((a, b) => b[1].at - a[1].at).slice(0, MAX_ENTRIES);
-  }
+  // Written verbatim. Dropping an entry here would silently reset a live coin's
+  // depth to 0 and buy it another paid round.
   try {
-    getLocalStorage()?.setItem(
-      storageKeyFor(walletId),
-      JSON.stringify(Object.fromEntries(live))
-    );
+    getLocalStorage()?.setItem(storageKeyFor(walletId), JSON.stringify(entries));
   } catch {
     /* storage unavailable — depth simply is not remembered */
   }
+}
+
+/**
+ * Drop depth for coins a fresh wallet snapshot proves are gone.
+ *
+ * This is the ONLY bulk eviction, and it is evidence-based: `liveOutpoints` comes
+ * from a reconciled snapshot, so anything missing has genuinely been spent and
+ * can never come back. Call it after a refresh, never on a timer.
+ *
+ * A snapshot that is empty or unavailable must not be treated as "everything is
+ * spent" — the caller passes what the chain reported, and an empty set is
+ * rejected here rather than wiping the map.
+ */
+export function pruneSpentDepth(
+  walletId: number,
+  liveOutpoints: ReadonlySet<string>
+): void {
+  if (liveOutpoints.size === 0) return;
+  const entries = read(walletId);
+  let changed = false;
+  for (const outpoint of Object.keys(entries)) {
+    if (!liveOutpoints.has(outpoint)) {
+      delete entries[outpoint];
+      changed = true;
+    }
+  }
+  if (changed) write(walletId, entries);
 }
 
 /** Rounds this coin has been through. Unknown coins are fresh (0). */
