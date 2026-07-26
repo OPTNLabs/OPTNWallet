@@ -68,13 +68,11 @@ function writeClaims(claims: ClaimMap): void {
 const isLive = (claim: OpenClaim, nowMs: number) =>
   nowMs - claim.at < OPEN_CLAIM_TTL_MS;
 
-export type OpenClaimResult =
-  | { ok: true }
-  /** Another live window holds it; focus that one instead of opening a second. */
-  | { ok: false; heldBy: string };
-
 /**
- * Claim this wallet for `windowLabel`, or report which window already has it.
+ * Claim this wallet for `windowLabel`.
+ *
+ * Returns null on success, or the label of the window that already holds it —
+ * the caller needs that label to raise the right window rather than guess.
  *
  * Re-claiming from the same window succeeds: reloads and re-renders must not
  * lock a user out of the wallet they already have open.
@@ -88,14 +86,14 @@ export async function claimWalletOpen(
   walletId: number,
   windowLabel: string,
   nowMs = Date.now()
-): Promise<OpenClaimResult> {
-  if (!Number.isSafeInteger(walletId) || walletId <= 0) return { ok: true };
+): Promise<string | null> {
+  if (!Number.isSafeInteger(walletId) || walletId <= 0) return null;
 
-  const claim = (): OpenClaimResult => {
+  const claim = (): string | null => {
     const claims = readClaims();
     const held = claims[String(walletId)];
     if (held && held.windowLabel !== windowLabel && isLive(held, nowMs)) {
-      return { ok: false, heldBy: held.windowLabel };
+      return held.windowLabel;
     }
     claims[String(walletId)] = { windowLabel, at: nowMs };
     // Drop dead claims while we are already writing.
@@ -103,7 +101,7 @@ export async function claimWalletOpen(
       if (key !== String(walletId) && !isLive(value, nowMs)) delete claims[key];
     }
     writeClaims(claims);
-    return { ok: true };
+    return null;
   };
 
   const result = await withWalletLock(walletId, claim);
