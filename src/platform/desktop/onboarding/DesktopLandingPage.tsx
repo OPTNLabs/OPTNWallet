@@ -48,6 +48,18 @@ interface WalletRow {
  * Best-effort: if that window has since closed, its claim ages out via the TTL
  * and the next attempt succeeds. Failing to focus must never block the user.
  */
+/**
+ * Is a window with this label still open?
+ *
+ * Closing a window cannot be relied on to release its claim: the X button runs
+ * no handler we control, and a crash runs none at all. Without this check a
+ * wallet stayed "already open" in a window the user had just closed.
+ */
+async function isWalletWindowOpen(label: string): Promise<boolean> {
+  const windows = await getAllWebviewWindows();
+  return windows.some((candidate) => candidate.label === label);
+}
+
 async function focusWalletWindow(label: string): Promise<void> {
   try {
     const windows = await getAllWebviewWindows();
@@ -244,7 +256,9 @@ const DesktopLandingPage = () => {
       // so a duplicate open never derives a key or touches wallet state.
       const heldBy = await claimWalletOpen(
         openingId,
-        getCurrentWebviewWindow().label
+        getCurrentWebviewWindow().label,
+        Date.now(),
+        isWalletWindowOpen
       );
       if (heldBy) {
         await focusWalletWindow(heldBy);

@@ -85,14 +85,44 @@ const isLive = (claim: OpenClaim, nowMs: number) =>
 export async function claimWalletOpen(
   walletId: number,
   windowLabel: string,
-  nowMs = Date.now()
+  nowMs = Date.now(),
+  /**
+   * Does the window holding this claim still exist?
+   *
+   * Closing a window releases nothing — the X button runs no handler we can rely
+   * on, and a crash or kill runs none at all — so without this the claim lingers
+   * for its whole TTL and the user is told a wallet is open in a window they
+   * just closed. Existence is the truth; the TTL is only a backstop for the case
+   * where we cannot ask.
+   */
+  isWindowOpen?: (label: string) => Promise<boolean>
 ): Promise<string | null> {
   if (!Number.isSafeInteger(walletId) || walletId <= 0) return null;
+
+  // Asked BEFORE taking the lock: the probe is async and the critical section
+  // must stay synchronous so two windows cannot interleave inside it.
+  let holderIsGone = false;
+  if (isWindowOpen) {
+    const existing = readClaims()[String(walletId)];
+    if (existing && existing.windowLabel !== windowLabel) {
+      try {
+        holderIsGone = !(await isWindowOpen(existing.windowLabel));
+      } catch {
+        // Cannot tell — treat the claim as valid and let the TTL settle it.
+        holderIsGone = false;
+      }
+    }
+  }
 
   const claim = (): string | null => {
     const claims = readClaims();
     const held = claims[String(walletId)];
-    if (held && held.windowLabel !== windowLabel && isLive(held, nowMs)) {
+    if (
+      held &&
+      held.windowLabel !== windowLabel &&
+      isLive(held, nowMs) &&
+      !holderIsGone
+    ) {
       return held.windowLabel;
     }
     claims[String(walletId)] = { windowLabel, at: nowMs };
