@@ -1,9 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import {
-  AUTO_FUSION_COOLDOWN_MS,
-  decideAutoFusion,
-  type AutoFusionInputs,
-} from '../fusionAutoEngine';
+import { decideAutoFusion, type AutoFusionInputs } from '../fusionAutoEngine';
 
 /** A wallet that SHOULD fuse; each test negates exactly one thing. */
 const ready: AutoFusionInputs = {
@@ -11,14 +7,10 @@ const ready: AutoFusionInputs = {
   autoFuseEnabled: true,
   p2pFusionEnabled: true,
   walletId: 4,
-  busy: false,
-  eligibleCoinCount: 3,
   torReady: true,
-  nowMs: 10_000_000,
-  lastAttemptMs: null,
 };
 
-describe('auto-fusion decision', () => {
+describe('auto-fusion policy decision', () => {
   it('runs the selected P2P transport when everything is ready', () => {
     expect(decideAutoFusion(ready)).toEqual({ run: true, mode: 'p2p' });
   });
@@ -30,11 +22,10 @@ describe('auto-fusion decision', () => {
     });
   });
 
-  it('never runs both: the mode is a single choice', () => {
+  it('picks exactly one transport, never both', () => {
     const p2p = decideAutoFusion(ready);
     const server = decideAutoFusion({ ...ready, p2pFusionEnabled: false });
     expect(p2p).not.toEqual(server);
-    // Whatever it picks, it is exactly one transport.
     expect([p2p, server].every((d) => d.run && 'mode' in d)).toBe(true);
   });
 
@@ -42,16 +33,13 @@ describe('auto-fusion decision', () => {
     ['master switch off', { cashFusionEnabled: false }],
     ['auto-fusion policy off', { autoFuseEnabled: false }],
     ['no wallet open', { walletId: 0 }],
-    ['a round already running', { busy: true }],
-    ['every coin at the depth limit', { eligibleCoinCount: 0 }],
-  ])('refuses to spend a fee when %s', (_label, override) => {
-    const decision = decideAutoFusion({ ...ready, ...override });
-    expect(decision.run).toBe(false);
+    ['a negative wallet id', { walletId: -1 }],
+  ])('refuses to start when %s', (_label, override) => {
+    expect(decideAutoFusion({ ...ready, ...override }).run).toBe(false);
   });
 
   it('will not start P2P without Tor', () => {
-    const decision = decideAutoFusion({ ...ready, torReady: false });
-    expect(decision).toEqual({
+    expect(decideAutoFusion({ ...ready, torReady: false })).toEqual({
       run: false,
       reason: 'Tor is not ready for P2P fusion',
     });
@@ -63,34 +51,14 @@ describe('auto-fusion decision', () => {
     ).toEqual({ run: true, mode: 'server' });
   });
 
-  it('holds off until the cooldown has fully elapsed', () => {
-    const justBefore = {
-      ...ready,
-      lastAttemptMs: ready.nowMs - (AUTO_FUSION_COOLDOWN_MS - 1),
-    };
-    expect(decideAutoFusion(justBefore).run).toBe(false);
-
-    const justAfter = { ...ready, lastAttemptMs: ready.nowMs - AUTO_FUSION_COOLDOWN_MS };
-    expect(decideAutoFusion(justAfter)).toEqual({ run: true, mode: 'p2p' });
-  });
-
-  it('treats a backwards clock as "not yet", never as an instant retry', () => {
-    // lastAttempt in the future => negative elapsed. A naive `elapsed > cooldown`
-    // would be false here too, but a naive `Math.abs` would fire immediately.
-    const skewed = { ...ready, lastAttemptMs: ready.nowMs + 60_000 };
-    expect(decideAutoFusion(skewed).run).toBe(false);
-  });
-
-  it('checks busy BEFORE the cooldown, so a long round is never doubled up', () => {
-    // Cooldown long elapsed, but a round is still in flight from that attempt.
-    const longRound = {
-      ...ready,
-      busy: true,
-      lastAttemptMs: ready.nowMs - AUTO_FUSION_COOLDOWN_MS * 4,
-    };
-    expect(decideAutoFusion(longRound)).toEqual({
-      run: false,
-      reason: 'A fusion round is already running',
-    });
+  it('does not re-check what the runner owns authoritatively', () => {
+    // Busy, cooldown and coin eligibility are decided by the cross-window lease,
+    // the atomic cooldown claim and live reconciliation respectively. Copies here
+    // could not see other windows, so they would pass while the real check
+    // refused — a fee decision must have exactly one authority.
+    const inputKeys = Object.keys(ready);
+    expect(inputKeys).not.toContain('busy');
+    expect(inputKeys).not.toContain('lastAttemptMs');
+    expect(inputKeys).not.toContain('eligibleCoinCount');
   });
 });
