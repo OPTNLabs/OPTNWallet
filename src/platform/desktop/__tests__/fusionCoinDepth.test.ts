@@ -3,6 +3,7 @@ import {
   clearFusionDepth,
   coinDepth,
   coinsBelowDepth,
+  pruneSpentDepth,
   recordFusionRound,
 } from '../fusionCoinDepth';
 
@@ -101,5 +102,46 @@ describe('per-coin fuse depth', () => {
       3
     ).map((u) => u.tx_hash);
     expect(survivors).toEqual(['brandnew']);
+  });
+});
+
+describe('depth eviction is evidence-based, never age or size based', () => {
+  beforeEach(() => {
+    (globalThis as { localStorage?: unknown }).localStorage = new MemoryStorage();
+    clearFusionDepth(1);
+  });
+
+  it('keeps depth for a coin that has sat unspent for years', () => {
+    recordFusionRound(1, ['old:0'], ['ancient:0']);
+    // Nothing here may expire it. Forgetting reads as depth 0, and auto-fusion
+    // would pay again to redo mixing this coin already has.
+    expect(coinDepth(1, 'ancient:0')).toBe(1);
+    expect(coinsBelowDepth(1, [utxo('ancient')], 1)).toHaveLength(0);
+  });
+
+  it('survives a large number of tracked coins without evicting', () => {
+    for (let i = 0; i < 200; i += 1) {
+      recordFusionRound(1, [`in${i}:0`], [`out${i}:0`]);
+    }
+    // The oldest entry must still be there; a size cap would have dropped it.
+    expect(coinDepth(1, 'out0:0')).toBe(1);
+    expect(coinDepth(1, 'out199:0')).toBe(1);
+  });
+
+  it('drops only coins a fresh snapshot proves are spent', () => {
+    recordFusionRound(1, ['a:0'], ['still:0']);
+    recordFusionRound(1, ['b:0'], ['gone:0']);
+
+    pruneSpentDepth(1, new Set(['still:0']));
+
+    expect(coinDepth(1, 'still:0')).toBe(1);
+    expect(coinDepth(1, 'gone:0')).toBe(0);
+  });
+
+  it('refuses to wipe the map when the snapshot is empty or unavailable', () => {
+    recordFusionRound(1, ['a:0'], ['kept:0']);
+    // An empty snapshot means "we do not know", not "everything is spent".
+    pruneSpentDepth(1, new Set());
+    expect(coinDepth(1, 'kept:0')).toBe(1);
   });
 });

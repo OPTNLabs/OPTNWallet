@@ -16,8 +16,12 @@ import { reconcileActiveWalletUtxos } from '../../services/WalletUtxoRefreshServ
 import { Network } from '../../state/slices/networkSlice';
 import type { UTXO } from '../../types/types';
 import { coinsBelowDepth } from './fusionCoinDepth';
-import { claimAutoAttempt } from './fusionRoundState';
-import type { FusionMode } from './fusionAutoEngine';
+import {
+  acquireRoundLease,
+  releaseRoundLease,
+  tryClaimAutoCooldown,
+} from './fusionWalletLease';
+import { AUTO_FUSION_COOLDOWN_MS, type FusionMode } from './fusionAutoEngine';
 
 /** Structured, so callers never parse a human string to learn what happened. */
 export type FusionRunOutcome =
@@ -26,6 +30,9 @@ export type FusionRunOutcome =
   /** Wallet state is mid-refresh; not an error, and not a reason to use stale coins. */
   | { status: 'waiting-for-wallet' }
   | { status: 'no-eligible-coins' }
+  /** Automatic only: the durable fee cooldown has not elapsed, or could not be
+   *  claimed exclusively. Distinct from `busy` so callers can say which it was. */
+  | { status: 'cooldown' }
   | { status: 'failed'; mode: FusionMode; message: string };
 
 export interface StartFusionRoundOptions {
@@ -46,17 +53,18 @@ export interface StartFusionRoundOptions {
 }
 
 /**
- * One in-flight round per wallet, process-wide.
+ * Windows in which THIS context holds the lease, for cheap UI state only.
  *
- * Cross-window outpoint reservations (fusionRoundState) remain the defence
- * against two WINDOWS colliding; this guard is the cheaper one that stops a
- * manual click and an engine tick inside the SAME window from racing, which
- * reservations would only catch after both had already done network work.
+ * Exclusivity itself lives in `fusionWalletLease` (Web Lock + durable record),
+ * because a module-level Set is per WebView context: two windows on the same
+ * wallet each passed it and could both start a round. Outpoint reservations were
+ * the stated fallback, but server Fusion never honoured the P2P reservations, so
+ * that path had no protection at all.
  */
-const inFlight = new Set<number>();
+const heldLeases = new Map<number, string>();
 
 export function isFusionRunning(walletId: number): boolean {
-  return inFlight.has(walletId);
+  return heldLeases.has(walletId);
 }
 
 /**
@@ -89,18 +97,29 @@ export async function startFusionRound(
 ): Promise<FusionRunOutcome> {
   const { walletId, mode, trigger } = options;
   if (!Number.isInteger(walletId) || walletId <= 0) return { status: 'busy' };
-  if (inFlight.has(walletId)) return { status: 'busy' };
 
-  inFlight.add(walletId);
+  // Exclusivity first, across every window, covering both transports and both
+  // triggers. Null means another window holds it — or that we could not obtain a
+  // guarantee at all, in which case refusing is the only safe answer.
+  const lease = await acquireRoundLease(walletId);
+  if (lease === null) return { status: 'busy' };
+  heldLeases.set(walletId, lease);
+
   try {
+    // The cooldown is checked and claimed atomically BEFORE any network I/O.
+    // Reconciling first and claiming after leaves a window in which a second
+    // context passes the same check, and both then pay a fee. Fails closed.
+    if (trigger === 'auto') {
+      const claimed = await tryClaimAutoCooldown(
+        walletId,
+        AUTO_FUSION_COOLDOWN_MS
+      );
+      if (!claimed) return { status: 'cooldown' };
+    }
+
     const coins = await freshCoins(walletId, trigger, options.fuseDepth);
     if (coins === null) return { status: 'waiting-for-wallet' };
     if (coins.length === 0) return { status: 'no-eligible-coins' };
-
-    // Claim BEFORE the network work. A round that dies halfway still consumed
-    // the attempt; stamping only on success would let a failing wallet retry in
-    // a tight loop and pay each time.
-    if (trigger === 'auto') claimAutoAttempt(walletId);
 
     try {
       const result =
@@ -116,6 +135,9 @@ export async function startFusionRound(
       };
     }
   } finally {
-    inFlight.delete(walletId);
+    heldLeases.delete(walletId);
+    // Conditional, owner-only: a lease we already lost to TTL now belongs to
+    // another window, and clearing it would let a third start concurrently.
+    await releaseRoundLease(walletId, lease).catch(() => undefined);
   }
 }
