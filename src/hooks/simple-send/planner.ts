@@ -189,11 +189,57 @@ export function createSimpleSendPlanner({
     };
   }
 
+  // "Max" / sweep-all: unlike addBchOnlyUntilBuild (fixed OUTPUT amount, adds
+  // inputs until covered), this fixes the INPUT set to everything spendable
+  // and computes the output as inputs-minus-fee, so the whole balance moves
+  // in one send with no change output. Two-pass: fee is amount-independent
+  // (byte-size based), so a dust-placeholder probe build against the full
+  // input set yields the exact fee for the real (inputs, 1-output) shape.
+  async function sweepAllBchUntilBuild(maxInputs = 50): Promise<BchBuildResult> {
+    const feeUtxoPool = dbUtxos.filter((u) => !u.token);
+    if (feeUtxoPool.length === 0) {
+      return { ok: false, err: 'No spendable BCH UTXOs.' };
+    }
+
+    const confirmedPool = sortFeeUtxosPreferred(feeUtxoPool.filter(isConfirmed));
+    if (confirmedPool.length === 0) {
+      return { ok: false, err: 'No confirmed BCH UTXOs available to sweep yet.' };
+    }
+
+    const inputs = confirmedPool.slice(0, maxInputs);
+    const availableSats = sumInputsSats(inputs);
+
+    const probe = await tryBuild(inputs, [{ recipientAddress: recipient, amount: DUST }]);
+    if (!probe.ok) {
+      return { ok: false, err: 'err' in probe ? probe.err : 'Unable to estimate the sweep fee.' };
+    }
+
+    const maxSats = availableSats - probe.feeSats;
+    if (maxSats < DUST) {
+      return { ok: false, err: 'Not enough funds to cover the network fee.' };
+    }
+
+    const final = await tryBuild(inputs, [{ recipientAddress: recipient, amount: maxSats }]);
+    if (!final.ok) {
+      return { ok: false, err: 'err' in final ? final.err : 'Sweep build failed.' };
+    }
+
+    return {
+      ok: true,
+      inputs,
+      feeSats: final.feeSats,
+      totalSats: final.totalSats,
+      rawTx: final.rawTx,
+      finalOutputs: final.finalOutputs,
+    };
+  }
+
   return {
     makeTokenOutputForRecipientFT,
     makeTokenChangeOutputFT,
     makeTokenOutputForRecipientNFT,
     addBchInputsUntilBuild,
     addBchOnlyUntilBuild,
+    sweepAllBchUntilBuild,
   };
 }

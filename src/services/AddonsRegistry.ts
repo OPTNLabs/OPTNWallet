@@ -49,15 +49,41 @@ export default function AddonsRegistry() {
   async function init(): Promise<void> {
     if (initialized) return;
 
-    // v1: built-in only
     const { BUILTIN_ADDONS } = await import('../addons/builtin');
+
+    // User-installed 'iframe-bundle' addons (desktop only — see
+    // AddonInstallService.ts). Pre-filtered through the same manifest/
+    // permission checks the main loop below applies to everything, so a
+    // malformed hand-installed addon is skipped with a warning rather than
+    // throwing and taking down the WHOLE registry (which would also break
+    // built-in addons). Builtins get no such pre-filter — a broken builtin
+    // manifest is a real bug in this repo and should fail loudly.
+    const installedManifests: AddonManifest[] = [];
+    try {
+      const { loadInstalledAddonManifests } = await import('./addons/AddonInstallService');
+      const loaded = await loadInstalledAddonManifests();
+      for (const m of loaded) {
+        try {
+          if (!m?.id) continue;
+          validateManifestShape(m);
+          const schemaErrors = validateAddonManifestAgainstSchema(m);
+          if (schemaErrors.length) throw new Error(schemaErrors.join('; '));
+          validateAddonPermissions(m);
+          installedManifests.push(m);
+        } catch (err) {
+          console.warn(`[AddonsRegistry] Skipping invalid installed addon "${m?.id}":`, err);
+        }
+      }
+    } catch (err) {
+      console.warn('[AddonsRegistry] Failed to load installed addons:', err);
+    }
 
     // Validate + de-dupe
     const seenAddonIds = new Set<string>();
     const seenFullContractIds = new Set<string>();
     const valid: AddonManifest[] = [];
 
-    for (const m of BUILTIN_ADDONS) {
+    for (const m of [...BUILTIN_ADDONS, ...installedManifests]) {
       if (!m?.id) continue;
 
       validateManifestShape(m);
@@ -96,10 +122,25 @@ export default function AddonsRegistry() {
               `Addon "${m.id}" app "${a.id}" missing name`
             );
           }
-          if (a.kind !== 'declarative') {
+          if (a.kind !== 'declarative' && a.kind !== 'iframe-bundle') {
             throw new Error(
               `Addon "${m.id}" app "${a.id}" has unsupported kind`
             );
+          }
+          if (a.kind === 'iframe-bundle') {
+            if (typeof a.entryFile !== 'string' || !a.entryFile.trim()) {
+              throw new Error(
+                `Addon "${m.id}" app "${a.id}" (iframe-bundle) missing entryFile`
+              );
+            }
+            // No path traversal: entryFile must stay inside the addon's own
+            // install directory (see AddonInstall.ts for where that's enforced
+            // on disk; this is the manifest-shape half of the same guard).
+            if (a.entryFile.includes('..') || a.entryFile.startsWith('/')) {
+              throw new Error(
+                `Addon "${m.id}" app "${a.id}" has an unsafe entryFile path`
+              );
+            }
           }
 
           const requiredCapabilities = a.requiredCapabilities;

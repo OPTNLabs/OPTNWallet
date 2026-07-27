@@ -9,7 +9,7 @@ import AddressManager from '../../../apis/AddressManager/AddressManager';
 import AUTHGUARD_ARTIFACT from '../../../apis/ContractManager/artifacts/AuthGuard.json';
 import { DUST, TOKEN_OUTPUT_SATS } from '../../../utils/constants';
 
-import { Contract, ElectrumNetworkProvider } from 'cashscript';
+import { Contract, ElectrumNetworkProvider, type Artifact } from 'cashscript';
 import { store } from '../../../state/store';
 import { Network } from '../../../state/slices/networkSlice';
 import parseInputValue from '../../../utils/parseInputValue';
@@ -431,7 +431,7 @@ export default function AuthGuardApp({
 
     const parsedArg = parseInputValue(`0x${tokenIdHex}`, ctorInputs[0].type);
 
-    const c = new Contract(authGuardArtifact as any, [parsedArg], {
+    const c = new Contract(authGuardArtifact as unknown as Artifact, [parsedArg], {
       provider,
       addressType: 'p2sh32',
     });
@@ -450,7 +450,7 @@ export default function AuthGuardApp({
 
     const parsedArg = parseInputValue(`0x${tokenIdHex}`, ctorInputs[0].type);
 
-    const c = new Contract(authGuardArtifact as any, [parsedArg], {
+    const c = new Contract(authGuardArtifact as unknown as Artifact, [parsedArg], {
       provider,
       addressType: 'p2sh32',
     }) as unknown as AuthGuardContractShape;
@@ -469,7 +469,7 @@ export default function AuthGuardApp({
     }
 
     const parsedArg = parseInputValue(`0x${tokenIdHex}`, ctorInputs[0].type);
-    const c = new Contract(authGuardArtifact as any, [parsedArg], {
+    const c = new Contract(authGuardArtifact as unknown as Artifact, [parsedArg], {
       provider,
       addressType: 'p2sh32',
     }) as unknown as AuthGuardContractShape;

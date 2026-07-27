@@ -83,7 +83,8 @@ jobs:
             librsvg2-dev \
             patchelf \
             libssl-dev \
-            libgtk-3-dev
+            libgtk-3-dev \
+            libfuse2   # linuxdeploy/appimagetool need FUSE to build the .AppImage
 
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable
@@ -106,6 +107,9 @@ jobs:
             exit 1
           }
 
+      - name: Fetch bundled Tor (integrated CashFusion privacy)
+        run: node scripts/fetch-tor.mjs
+
       - name: Import macOS signing certificate
         if: startsWith(matrix.platform, 'macos') && env.APPLE_CERTIFICATE != ''
         env:
@@ -127,6 +131,11 @@ jobs:
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # GitHub-hosted runners have no FUSE, so linuxdeploy (itself an
+          # AppImage) can't mount and the AppImage bundle step fails. Make it and
+          # its plugins extract-and-run instead. Harmless on Windows/macOS.
+          APPIMAGE_EXTRACT_AND_RUN: 1
+          NO_STRIP: true
           # macOS notarization (optional — remove if not notarizing yet)
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_ID_PASSWORD: ${{ secrets.APPLE_ID_PASSWORD }}
