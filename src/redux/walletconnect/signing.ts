@@ -21,7 +21,9 @@ import {
 } from '@bitauth/libauth';
 import type { WalletKitTypes } from '@reown/walletkit';
 import type { RootState } from '../../state/store';
+import { Network } from '../../state/slices/networkSlice';
 import KeyService from '../../services/KeyService';
+import { getBchAddressPath } from '../../services/HdWalletService';
 import { parseExtendedJson } from '../../utils/parseExtendedJson';
 import type { ContractInfo } from '../../types/wcInterfaces';
 import { getPublicKeyCompressed } from '../../utils/hex';
@@ -72,6 +74,7 @@ export async function signWalletConnectTransactionRequest(
       sourceOutputs,
       addressToKey,
       networkPrefix,
+      network: state.network.currentNetwork,
       hwType: hwState.type as 'trezor' | 'ledger',
     });
     const rawBytes = hexToBin(signed);
@@ -243,12 +246,14 @@ async function signWalletConnectWithHardware({
   sourceOutputs,
   addressToKey,
   networkPrefix,
+  network,
   hwType,
 }: {
   txDetails: TransactionCommon;
   sourceOutputs: (Input & Output & ContractInfo)[];
   addressToKey: Map<string, KeyRecord>;
   networkPrefix: string;
+  network: Network;
   hwType: 'trezor' | 'ledger';
 }): Promise<string> {
   const typedPrefix = networkPrefix as unknown as CashAddrPrefix;
@@ -270,8 +275,8 @@ async function signWalletConnectWithHardware({
       const address = inputAddress(sourceOutputs[i]);
       const keyRecord = address ? addressToKey.get(address) : null;
       const bip44 = keyRecord
-        ? `m/44'/145'/0'/${keyRecord.changeIndex}/${keyRecord.addressIndex}`
-        : "m/44'/145'/0'/0/0";
+        ? getBchAddressPath(network, 0, keyRecord.changeIndex, keyRecord.addressIndex)
+        : getBchAddressPath(network, 0, 0, 0);
       return {
         address_n: pathToAddressN(bip44),
         prev_hash: binToHex(Uint8Array.from(inp.outpointTransactionHash).reverse()),
@@ -298,8 +303,8 @@ async function signWalletConnectWithHardware({
       const address = inputAddress(sourceOutputs[i]);
       const keyRecord = address ? addressToKey.get(address) : null;
       const bip44 = keyRecord
-        ? `44'/145'/0'/${keyRecord.changeIndex}/${keyRecord.addressIndex}`
-        : "44'/145'/0'/0/0";
+        ? getBchAddressPath(network, 0, keyRecord.changeIndex, keyRecord.addressIndex).replace(/^m\//, '')
+        : getBchAddressPath(network, 0, 0, 0).replace(/^m\//, '');
       const txid = binToHex(Uint8Array.from(inp.outpointTransactionHash).reverse());
       const prevTxHex = (await adapter.request('blockchain.transaction.get', txid, false)) as string;
       return { path: bip44, prevTxHex, prevIndex: inp.outpointIndex };
