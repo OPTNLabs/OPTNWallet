@@ -93,6 +93,23 @@ export const WALLET_ROWS: SettingsRowConfig[] = [
   // everything network-related), so there is no separate CashFusion row.
 ];
 
+const MOBILE_HIDDEN_WALLET_SETTING_KEYS = new Set([
+  'network',
+  'nostr',
+  'server',
+  'console',
+  'experimental',
+  'addons',
+]);
+
+export function getVisibleWalletRows(isDesktop: boolean): SettingsRowConfig[] {
+  if (isDesktop) return WALLET_ROWS;
+
+  return WALLET_ROWS.filter(
+    (row) => !MOBILE_HIDDEN_WALLET_SETTING_KEYS.has(row.key)
+  );
+}
+
 export const CONTRACT_ROWS: SettingsRowConfig[] = [
   {
     key: 'contract-info',

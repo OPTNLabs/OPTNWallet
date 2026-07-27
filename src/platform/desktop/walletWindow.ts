@@ -11,7 +11,7 @@ import { ROUTE_PATHS } from '../../navigation/routes';
 
 export async function openWalletPickerWindow(): Promise<void> {
   const label = `wallet-${Date.now()}`;
-  // Reuse the running window's origin/path so this works in dev (localhost:5173)
+  // Reuse the running window's origin/path so this works in development.
   // and in the packaged app (tauri.localhost) without special-casing either; the
   // hash carries the route because the app uses HashRouter. The ?instance query
   // carries this window's storage-partition id (storagePartition.ts reads it) —
