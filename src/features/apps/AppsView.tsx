@@ -15,10 +15,12 @@ import {
   getAppCategory,
   getAppDescription,
   getAppIconFrame,
+  isDesktopOnlyApp,
   isComingSoonApp,
   shouldHideApp,
 } from './appsViewHelpers';
 import { Capacitor } from '@capacitor/core';
+import { isDesktopPlatform } from '../../utils/platform';
 
 type AppCard = {
   id: string;
@@ -40,6 +42,7 @@ const AppsView = () => {
   const navigate = useNavigate();
   const devMode = import.meta.env.DEV;
   const isNativeRuntime = Capacitor.isNativePlatform();
+  const isDesktopRuntime = isDesktopPlatform();
   const [cards, setCards] = useState<AppCard[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [filter, setFilter] = useState<Filter>('All');
@@ -93,13 +96,16 @@ const AppsView = () => {
           category: 'Wallet',
         });
 
-        out.push({
+        const cashFusionApp: AppCard = {
           id: 'optn.wallet.cashfusion',
           name: 'CashFusion',
           icon: '/assets/images/OPTNUIkeyline2.png',
           description: 'Private CoinJoin — server or P2P over Nostr + Tor',
           category: 'Wallet',
-        });
+        };
+        if (isDesktopRuntime || !isDesktopOnlyApp(cashFusionApp.id)) {
+          out.push(cashFusionApp);
+        }
 
         if (mounted) {
           setCards(
@@ -118,7 +124,7 @@ const AppsView = () => {
     return () => {
       mounted = false;
     };
-  }, [devMode]);
+  }, [devMode, isDesktopRuntime]);
 
   const filteredCards = useMemo(
     () => (filter === 'All' ? cards : cards.filter((card) => card.category === filter)),

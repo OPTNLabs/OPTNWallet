@@ -18,25 +18,27 @@ const PASSPHRASE = '';
 
 // RPA rides on the wallet's normal BIP44 account as a third unhardened chain
 // (3), sibling to receive(0)/change(1), matching the Electron Cash reference.
-const EXPECTED_SCAN_PATH = "m/44'/145'/0'/3/0";
-const EXPECTED_SPEND_PATH = "m/44'/145'/0'/3/1";
+const EXPECTED_MAINNET_SCAN_PATH = "m/44'/145'/0'/3/0";
+const EXPECTED_MAINNET_SPEND_PATH = "m/44'/145'/0'/3/1";
+const EXPECTED_CHIPNET_SCAN_PATH = "m/44'/1'/0'/3/0";
+const EXPECTED_CHIPNET_SPEND_PATH = "m/44'/1'/0'/3/1";
 
 describe('RpaService', () => {
-  it('exposes the canonical BCH-145 RPA paths for UI and protocol consumers', () => {
+  it('exposes network-specific RPA paths for UI and protocol consumers', () => {
     expect(getRpaKeyPaths(Network.MAINNET)).toEqual({
-      scan: EXPECTED_SCAN_PATH,
-      spend: EXPECTED_SPEND_PATH,
+      scan: EXPECTED_MAINNET_SCAN_PATH,
+      spend: EXPECTED_MAINNET_SPEND_PATH,
     });
     expect(getRpaKeyPaths(Network.CHIPNET)).toEqual({
-      scan: EXPECTED_SCAN_PATH,
-      spend: EXPECTED_SPEND_PATH,
+      scan: EXPECTED_CHIPNET_SCAN_PATH,
+      spend: EXPECTED_CHIPNET_SPEND_PATH,
     });
   });
 
-  it('derives scan/spend keys at m/44\'/145\'/0\'/3/{0,1}', async () => {
+  it('derives mainnet scan/spend keys at m/44\'/145\'/0\'/3/{0,1}', async () => {
     const [expectedScanPriv, expectedSpendPriv, keys] = await Promise.all([
-      derivePrivateKeyAtPath(TEST_MNEMONIC, PASSPHRASE, EXPECTED_SCAN_PATH),
-      derivePrivateKeyAtPath(TEST_MNEMONIC, PASSPHRASE, EXPECTED_SPEND_PATH),
+      derivePrivateKeyAtPath(TEST_MNEMONIC, PASSPHRASE, EXPECTED_MAINNET_SCAN_PATH),
+      derivePrivateKeyAtPath(TEST_MNEMONIC, PASSPHRASE, EXPECTED_MAINNET_SPEND_PATH),
       deriveRpaKeys(TEST_MNEMONIC, PASSPHRASE, Network.MAINNET),
     ]);
 
@@ -91,13 +93,13 @@ describe('RpaService', () => {
     );
   });
 
-  it('uses the same BCH-145 key path on mainnet and chipnet', async () => {
+  it('uses different key paths on mainnet and chipnet', async () => {
     const mainnet = await deriveRpaKeys(TEST_MNEMONIC, PASSPHRASE, Network.MAINNET);
     const chipnet = await deriveRpaKeys(TEST_MNEMONIC, PASSPHRASE, Network.CHIPNET);
-    expect(Buffer.from(mainnet.scanPubkey).toString('hex')).toBe(
+    expect(Buffer.from(mainnet.scanPubkey).toString('hex')).not.toBe(
       Buffer.from(chipnet.scanPubkey).toString('hex')
     );
-    expect(Buffer.from(mainnet.spendPubkey).toString('hex')).toBe(
+    expect(Buffer.from(mainnet.spendPubkey).toString('hex')).not.toBe(
       Buffer.from(chipnet.spendPubkey).toString('hex')
     );
   });
