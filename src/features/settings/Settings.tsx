@@ -39,13 +39,10 @@ import { getReturnPath } from '../../utils/navigation';
 import {
   ABOUT_ROWS,
   CONTRACT_ROWS,
-  WALLET_ROWS,
+  getVisibleWalletRows,
   type SettingsRowConfig,
 } from './settingsConfig';
-
-// Tauri injects this global into the desktop WebView; absent on mobile/web.
-const isDesktop = (): boolean =>
-  typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
+import { isDesktopPlatform } from '../../utils/platform';
 
 const Settings: React.FC = () => {
   const navigate = useNavigate();
@@ -64,6 +61,8 @@ const Settings: React.FC = () => {
   const [isLogoutPopupOpen, setIsLogoutPopupOpen] = useState(false);
   const logoutNodeRef = useRef<HTMLDivElement | null>(null);
   const returnTarget = getReturnPath(location, '');
+  const desktop = isDesktopPlatform();
+  const visibleWalletRows = getVisibleWalletRows(desktop);
 
   useEffect(() => {
     setSelectedOption(searchParams.get('panel') ?? '');
@@ -74,7 +73,7 @@ const Settings: React.FC = () => {
     // the wallet picker, leaving EVERY saved wallet intact. The mobile flow
     // below (deleteWallet + clearAllData) drops the whole wallet database, which
     // on desktop's multi-wallet picker wiped all saved wallets on logout.
-    if (isDesktop()) {
+    if (desktop) {
       try {
         const { lock } = await import('../../platform/desktop/EcKeyManager');
         lock();
@@ -243,7 +242,7 @@ const Settings: React.FC = () => {
                   <SectionCard className="p-0">
                     <SectionHeader title="Wallet" compact />
                     <div className="space-y-3">
-                      {WALLET_ROWS.map((row) => (
+                      {visibleWalletRows.map((row) => (
                         <SettingsRow
                           key={row.key}
                           title={row.title}

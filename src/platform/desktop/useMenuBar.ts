@@ -10,9 +10,9 @@ import { flushSync } from 'react-dom';
 import { useNavigate, type NavigateFunction } from 'react-router-dom';
 import { useDispatch, useSelector } from 'react-redux';
 import { Menu, Submenu, MenuItem, PredefinedMenuItem } from '@tauri-apps/api/menu';
+import { listen as listenToEvent } from '@tauri-apps/api/event';
 import {
   getAllWebviewWindows,
-  getCurrentWebviewWindow,
 } from '@tauri-apps/api/webviewWindow';
 import { open as openDialog, save as saveDialog } from '@tauri-apps/plugin-dialog';
 import { invoke } from '@tauri-apps/api/core';
@@ -41,6 +41,16 @@ export const IMPORT_FILE_EVENT = 'optn:import-wallet-file'; // open a parsed .op
 // Fired after create/import/delete so the menu re-reads the wallet list.
 export const WALLETS_CHANGED_EVENT = 'optn:wallets-changed';
 export const MENU_ACTION_EVENT = 'optn:menu-action';
+
+function currentWebviewLabel(): string {
+  try {
+    const instance = new URL(window.location.href).searchParams.get('instance');
+    if (instance) return instance;
+  } catch {
+    // Tests and non-browser callers can omit location entirely.
+  }
+  return 'main';
+}
 
 interface DesktopMenuLike<TWindow> {
   setAsAppMenu: () => Promise<unknown>;
@@ -340,7 +350,10 @@ export function useMenuBar(): void {
     let disposed = false;
     let unlistenMenuAction: (() => void) | undefined;
     const hasOpenWallet = walletId > 0;
-    const currentWindow = getCurrentWebviewWindow();
+    // Tauri IPC is available in the Linux dev WebView before its metadata
+    // object is populated. The URL is already the source of truth for the
+    // per-window instance id, so derive the label without reading metadata.
+    const currentWindow = { label: currentWebviewLabel() };
     const requiresAppMenu = /Macintosh|Mac OS X/i.test(navigator.userAgent);
     const walletActionEnabled = requiresAppMenu || hasOpenWallet;
 
@@ -432,12 +445,15 @@ export function useMenuBar(): void {
     };
     window.addEventListener('beforeunload', releaseOnClose);
 
-    void currentWindow
-      .listen<{ id?: unknown }>(MENU_ACTION_EVENT, (event) => {
+    void listenToEvent<{ id?: unknown }>(
+      MENU_ACTION_EVENT,
+      (event) => {
         if (typeof event.payload?.id === 'string') {
           dispatchMenuAction(event.payload.id);
         }
-      })
+      },
+      { target: { kind: 'WebviewWindow', label: currentWindow.label } }
+    )
       .then((unlisten) => {
         if (disposed) {
           unlisten();

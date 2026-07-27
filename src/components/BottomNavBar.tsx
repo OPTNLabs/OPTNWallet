@@ -3,6 +3,7 @@ import { useSelector } from 'react-redux';
 import { RootState } from '../state/store';
 import { selectNostrChatEnabled } from '../state/slices/experimentalSlice';
 import { useNavBarHeight } from './navigation/useNavBarHeight';
+import { isDesktopPlatform } from '../utils/platform';
 
 interface BottomNavBarProps {
   setNavBarHeight: (height: number) => void;
@@ -13,6 +14,7 @@ const BottomNavBar: React.FC<BottomNavBarProps> = ({ setNavBarHeight }) => {
     (state: RootState) => state.wallet_id.currentWalletId
   );
   const chatEnabled = useSelector(selectNostrChatEnabled);
+  const showChat = isDesktopPlatform() && chatEnabled;
   const { navBarRef } = useNavBarHeight({ setNavBarHeight });
   const navItemClass = ({ isActive }: { isActive: boolean }) =>
     `wallet-nav-item ${isActive ? 'wallet-nav-item-active' : ''}`;
@@ -77,7 +79,7 @@ const BottomNavBar: React.FC<BottomNavBarProps> = ({ setNavBarHeight }) => {
           <span>Actions</span>
         </NavLink>
 
-        {chatEnabled && (
+        {showChat && (
           <NavLink to="/chat" className={navItemClass}>
             <svg width="24" height="24" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
               <path
