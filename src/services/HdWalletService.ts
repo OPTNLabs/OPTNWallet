@@ -55,12 +55,23 @@ export const BCH_STANDARD_BRANCH_INDEX = {
   receive: 0,
   change: 1,
   defi: 7,
+  // Reusable Payment Addresses (RPA): rides on the wallet's normal BIP44
+  // account as a third unhardened chain, sibling to receive(0)/change(1),
+  // matching the Electron Cash reference implementation.
+  // scan pubkey  = m/44'/coinType'/account'/3/0
+  // spend pubkey = m/44'/coinType'/account'/3/1
+  rpa: 3,
 } as const;
 
 export type BchStandardBranchName = keyof typeof BCH_STANDARD_BRANCH_INDEX;
 
 export function getBchCoinType(network: Network): number {
-  return network === Network.MAINNET ? COIN_TYPE.bitcoincash : COIN_TYPE.testnet;
+  // BIP44 coin type identifies the asset, not the chain environment. BCH uses
+  // 145 on mainnet and chipnet; chipnet changes HD-key/address encoding only.
+  return {
+    [Network.MAINNET]: COIN_TYPE.bitcoincash,
+    [Network.CHIPNET]: COIN_TYPE.bitcoincash,
+  }[network];
 }
 
 export function getHdKeyNetwork(network: Network): 'mainnet' | 'testnet' {
@@ -246,6 +257,13 @@ export async function deriveBchStandardXpubs(
       passphrase,
       accountIndex,
       BCH_STANDARD_BRANCH_INDEX.defi
+    ),
+    rpa: await deriveBchXpubAtBranch(
+      network,
+      mnemonic,
+      passphrase,
+      accountIndex,
+      BCH_STANDARD_BRANCH_INDEX.rpa
     ),
   };
 }

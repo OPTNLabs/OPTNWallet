@@ -1,9 +1,11 @@
 import type { QuantumrootVaultRecord, UTXO } from '../types/types';
+import { isPlainNftToken } from './cashtokens';
 
 export type QuantumrootTokenAwareness = {
   configuredTokenCategory: string | null;
   hasConfiguredTokenCategory: boolean;
   matchingControlTokenUtxos: UTXO[];
+  matchingReceiveTokenUtxos: UTXO[];
   unrelatedQuantumLockTokenUtxos: UTXO[];
   tokenizedReceiveUtxos: UTXO[];
   canAuthorizedSpend: boolean;
@@ -32,11 +34,20 @@ export function summarizeQuantumrootTokenAwareness(
     vault.vault_token_category
   );
 
-  const tokenizedReceiveUtxos = receiveUtxos.filter((utxo) => !!utxo.token);
-  const quantumLockTokenUtxos = quantumLockUtxos.filter((utxo) => !!utxo.token);
+  const tokenizedReceiveUtxos = receiveUtxos.filter((utxo) =>
+    isPlainNftToken(utxo.token)
+  );
+  const quantumLockTokenUtxos = quantumLockUtxos.filter((utxo) =>
+    isPlainNftToken(utxo.token)
+  );
 
   const matchingControlTokenUtxos = hasConfiguredTokenCategory
     ? quantumLockTokenUtxos.filter(
+        (utxo) => normalizeCategory(utxo.token?.category) === configuredTokenCategory
+      )
+    : [];
+  const matchingReceiveTokenUtxos = hasConfiguredTokenCategory
+    ? tokenizedReceiveUtxos.filter(
         (utxo) => normalizeCategory(utxo.token?.category) === configuredTokenCategory
       )
     : [];
@@ -46,18 +57,23 @@ export function summarizeQuantumrootTokenAwareness(
   );
 
   const canAuthorizedSpend =
-    hasConfiguredTokenCategory && matchingControlTokenUtxos.length > 0;
+    hasConfiguredTokenCategory &&
+    matchingControlTokenUtxos.length > 0 &&
+    matchingReceiveTokenUtxos.length > 0;
 
   const readinessLabel = !hasConfiguredTokenCategory
-    ? 'Control token category not configured'
+    ? 'Choose an approval key'
     : matchingControlTokenUtxos.length === 0
-      ? 'Configured, waiting for control token'
-      : 'Ready for token-authorized spend';
+      ? 'Waiting for the approval key'
+      : matchingReceiveTokenUtxos.length === 0
+        ? 'Waiting for the matching receive coin'
+        : 'Ready to spend';
 
   return {
     configuredTokenCategory,
     hasConfiguredTokenCategory,
     matchingControlTokenUtxos,
+    matchingReceiveTokenUtxos,
     unrelatedQuantumLockTokenUtxos,
     tokenizedReceiveUtxos,
     canAuthorizedSpend,

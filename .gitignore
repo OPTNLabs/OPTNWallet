@@ -10,6 +10,8 @@ lerna-debug.log*
 node_modules
 dist
 dist-ssr
+dist-extension-chrome
+dist-extension-firefox
 *.local
 vite.config.js
 vite.config.d.ts
@@ -32,3 +34,10 @@ tsconfig.node.tsbuildinfo
 *.keystore
 *.jks
 android/key.properties
+
+# Assistant-internal tooling (not part of the app)
+.serena/
+
+# Tor binary fetched at build time (scripts/fetch-tor.mjs), not committed
+src-tauri/resources/tor/
+.tor-fetch-tmp/

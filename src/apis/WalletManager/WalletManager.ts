@@ -20,8 +20,56 @@ export default function WalletManager() {
     deleteWallet,
     walletExists,
     getWalletInfo,
+    getAllWallets,
     clearAllData,
   };
+
+  // Lists wallets without decrypting mnemonic/passphrase — for a wallet
+  // picker/switcher UI. Desktop-only today (mobile has exactly one implicit
+  // wallet and no switcher UI), but this is a plain read with no encryption
+  // dependency, so it's safe to expose from the shared manager.
+  async function getAllWallets(): Promise<
+    Array<Pick<WalletRecord, 'id' | 'wallet_name' | 'networkType' | 'walletType'>>
+  > {
+    const dbService = DatabaseService();
+    await dbService.ensureDatabaseStarted();
+    const db = dbService.getDatabase();
+    if (!db) {
+      return [];
+    }
+
+    createTables(db);
+    try {
+      const query = db.prepare(
+        `SELECT id, wallet_name, networkType, walletType FROM wallets ORDER BY id ASC`
+      );
+      const rows: Array<Pick<WalletRecord, 'id' | 'wallet_name' | 'networkType' | 'walletType'>> = [];
+      while (query.step()) {
+        const row = query.getAsObject() as Record<string, unknown>;
+        const networkType =
+          row.networkType === Network.MAINNET
+            ? Network.MAINNET
+            : row.networkType === Network.CHIPNET
+              ? Network.CHIPNET
+              : Network.MAINNET;
+        const walletType =
+          row.walletType === WalletType.QUANTUMROOT
+            ? WalletType.QUANTUMROOT
+            : WalletType.STANDARD;
+        rows.push({
+          id: toNumber(row.id),
+          wallet_name: typeof row.wallet_name === 'string' ? row.wallet_name : '',
+          networkType,
+          walletType,
+        });
+      }
+      query.free();
+      return rows;
+    } catch (error) {
+      console.error('Error listing wallets:', error);
+      return [];
+    }
+  }
 
   async function clearAllData(): Promise<void> {
     const dbService = DatabaseService();
@@ -275,7 +323,12 @@ export default function WalletManager() {
       0,
     ]);
     createAccountQuery.free();
-    await dbService.flushDatabaseToFile();
+    const idResult = db.exec('SELECT last_insert_rowid()');
+    const localWalletId = toNumber(idResult?.[0]?.values?.[0]?.[0]);
+    if (!Number.isSafeInteger(localWalletId) || localWalletId <= 0) {
+      throw new Error('Unable to identify the newly-created wallet.');
+    }
+    await dbService.persistNewWalletToFile(localWalletId);
     return true;
   }
 

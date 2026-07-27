@@ -581,6 +581,14 @@ export default function ElectrumServer() {
     return () => notificationHandlers.delete(handler);
   }
 
+  function getCurrentServer(): string | null {
+    return currentServer;
+  }
+
+  function getServerList(): string[] {
+    return getNetworkAndServers().servers;
+  }
+
   return {
     electrumConnect,
     electrumReconnect,
@@ -591,5 +599,7 @@ export default function ElectrumServer() {
     subscribe,
     unsubscribe,
     onNotification,
+    getCurrentServer,
+    getServerList,
   };
 }

@@ -10,18 +10,68 @@ import { logError } from '../../utils/errorHandling';
 import SecretCryptoService, {
   isEncryptedPayload,
 } from '../../services/SecretCryptoService';
+import {
+  deleteWalletScope,
+  mergeGlobalChanges,
+  mergeWalletScope,
+  snapshotGlobalTables,
+  walletScopeFingerprint,
+  type GlobalTableSnapshot,
+} from './DatabaseMerge';
 
 // Single shared DB handle
 let db: Database | null = null;
+// The initialised sql.js module, kept so saves can merge into the latest
+// IndexedDB snapshot without replacing this window's live database handle.
+let sqlModule: Awaited<ReturnType<typeof initSqlJs>> | null = null;
+// In-flight start, so concurrent ensureDatabaseStarted() calls share ONE
+// startDatabase() instead of each loading a snapshot and racing to save it
+// back — that race silently dropped freshly-created wallets (a stale parallel
+// load would overwrite IndexedDB after a newer write).
+let startPromise: Promise<Database | null> | null = null;
 
 // ** Debounce state **
 let saveTimeout: ReturnType<typeof setTimeout> | null = null;
 let pendingSavePromise: Promise<void> | null = null;
 let resolvePendingSave: (() => void) | null = null;
+let rejectPendingSave: ((reason?: unknown) => void) | null = null;
 let firstQueuedSaveTs: number | null = null;
+let pendingGenericSave = false;
+const pendingWalletSaveIds = new Set<number>();
+let localSaveQueue: Promise<void> = Promise.resolve();
+let queuedSaveRun: Promise<void> | null = null;
+let globalBaseline: GlobalTableSnapshot = {};
+let walletBaselines = new Map<number, string>();
 
 const SAVE_DEBOUNCE_MS = 500;
 const SAVE_MAX_DELAY_MS = 3000;
+
+function isWalletId(value: unknown): value is number {
+  return Number.isSafeInteger(value) && Number(value) > 0;
+}
+
+async function withExclusiveSaveLock(task: () => Promise<void>): Promise<void> {
+  const lockManager = (
+    globalThis.navigator as
+      | (Navigator & {
+          locks?: {
+            request: (
+              name: string,
+              callback: () => Promise<void>
+            ) => Promise<void>;
+          };
+        })
+      | undefined
+  )?.locks;
+  if (lockManager?.request) {
+    await lockManager.request('optn-shared-wallet-database-v1', task);
+    return;
+  }
+
+  const run = localSaveQueue.then(task, task);
+  localSaveQueue = run.catch(() => undefined);
+  await run;
+}
 
 // ** Migrations Array **
 const migrations: Array<(db: Database) => Promise<void>> = [
@@ -87,8 +137,82 @@ const migrations: Array<(db: Database) => Promise<void>> = [
       db.run('ALTER TABLE bcmr_metadata ADD COLUMN registryHash TEXT;');
     }
   },
+  async (db) => {
+    // Desktop-only per-wallet encryption key support (Electron Cash model: each
+    // wallet has its own password/key, not one shared app-wide key). Column is
+    // unused on mobile — NULL there, harmless.
+    const columns = new Set<string>();
+    const statement = db.prepare('PRAGMA table_info(wallets);');
+    while (statement.step()) {
+      const row = statement.getAsObject() as Record<string, unknown>;
+      if (typeof row.name === 'string') columns.add(row.name);
+    }
+    statement.free();
+
+    if (!columns.has('kdf_salt')) {
+      db.run('ALTER TABLE wallets ADD COLUMN kdf_salt TEXT;');
+    }
+  },
+  async (db) => {
+    // Birth height: the chain tip when this wallet was created. A BIP37 node
+    // scan costs one merkleblock round-trip PER BLOCK, so scanning the whole
+    // chain is impractical; knowing the wallet cannot have coins before its
+    // birth lets a node scan only birth..tip. NULL for wallets created before
+    // this column (and on mobile), where the scan falls back to a recent window.
+    const columns = new Set<string>();
+    const statement = db.prepare('PRAGMA table_info(wallets);');
+    while (statement.step()) {
+      const row = statement.getAsObject() as Record<string, unknown>;
+      if (typeof row.name === 'string') columns.add(row.name);
+    }
+    statement.free();
+
+    if (!columns.has('birth_height')) {
+      db.run('ALTER TABLE wallets ADD COLUMN birth_height INT;');
+    }
+  },
   // Add future migrations here as needed
 ];
+
+function databaseVersion(database: Database): number {
+  const result = database.exec('PRAGMA user_version;');
+  return Number(result?.[0]?.values?.[0]?.[0] ?? 0);
+}
+
+async function applyPendingMigrations(database: Database): Promise<void> {
+  const currentVersion = databaseVersion(database);
+  for (let version = currentVersion + 1; version <= migrations.length; version++) {
+    await migrations[version - 1](database);
+    database.run(`PRAGMA user_version = ${version};`);
+  }
+}
+
+function walletIds(database: Database): number[] {
+  const ids: number[] = [];
+  const statement = database.prepare('SELECT id FROM wallets ORDER BY id');
+  while (statement.step()) {
+    const id = Number(statement.getAsObject().id);
+    if (isWalletId(id)) ids.push(id);
+  }
+  statement.free();
+  return ids;
+}
+
+function replaceWalletBaselines(database: Database): void {
+  walletBaselines = new Map(
+    walletIds(database).flatMap((walletId) => {
+      const fingerprint = walletScopeFingerprint(database, walletId);
+      return fingerprint ? [[walletId, fingerprint] as const] : [];
+    })
+  );
+}
+
+function nextAvailableWalletId(
+  latest: Database,
+  localDatabase: Database
+): number {
+  return Math.max(0, ...walletIds(latest), ...walletIds(localDatabase)) + 1;
+}
 
 function isArrayBufferLike(value: unknown): value is ArrayBuffer | Uint8Array {
   return value instanceof ArrayBuffer || value instanceof Uint8Array;
@@ -107,16 +231,20 @@ function decodeBase64ToBytes(base64: string): Uint8Array | null {
   }
 }
 
-async function migrateSecretColumnsAtRest(): Promise<boolean> {
-  if (!db) return false;
-  if (typeof (db as unknown as { prepare?: unknown }).prepare !== 'function') {
+async function migrateSecretColumnsAtRest(
+  database: Database | null = db
+): Promise<boolean> {
+  if (!database) return false;
+  if (
+    typeof (database as unknown as { prepare?: unknown }).prepare !== 'function'
+  ) {
     // Unit tests may provide minimal DB mocks without SQL prepare/iteration support.
     return false;
   }
   let changed = false;
 
   // wallets.mnemonic / wallets.passphrase
-  const walletRows = db.prepare(
+  const walletRows = database.prepare(
     'SELECT id, mnemonic, passphrase FROM wallets;'
   );
   const walletUpdates: Array<{
@@ -148,7 +276,7 @@ async function migrateSecretColumnsAtRest(): Promise<boolean> {
   walletRows.free();
 
   if (walletUpdates.length > 0) {
-    const updateWalletStmt = db.prepare(
+    const updateWalletStmt = database.prepare(
       'UPDATE wallets SET mnemonic = ?, passphrase = ? WHERE id = ?;'
     );
     for (const item of walletUpdates) {
@@ -158,7 +286,7 @@ async function migrateSecretColumnsAtRest(): Promise<boolean> {
   }
 
   // keys.private_key
-  const keyRows = db.prepare('SELECT id, private_key FROM keys;');
+  const keyRows = database.prepare('SELECT id, private_key FROM keys;');
   const keyUpdates: Array<{ id: number; privateKey: string }> = [];
 
   while (keyRows.step()) {
@@ -186,7 +314,9 @@ async function migrateSecretColumnsAtRest(): Promise<boolean> {
   keyRows.free();
 
   if (keyUpdates.length > 0) {
-    const updateKeyStmt = db.prepare('UPDATE keys SET private_key = ? WHERE id = ?;');
+    const updateKeyStmt = database.prepare(
+      'UPDATE keys SET private_key = ? WHERE id = ?;'
+    );
     for (const item of keyUpdates) {
       updateKeyStmt.run([item.privateKey, item.id]);
     }
@@ -196,37 +326,138 @@ async function migrateSecretColumnsAtRest(): Promise<boolean> {
   return changed;
 }
 
-/** Write into IndexedDB instead of localStorage */
-async function realSaveDatabase(): Promise<void> {
-  if (!db) return;
-  const data = db.export(); // Uint8Array
-  await idbSet('OPTNDatabase', data); // Store raw bytes
-  // console.log('Persisted DB to IndexedDB');
+/** Write into IndexedDB instead of localStorage. */
+async function realSaveDatabase(
+  force = false,
+  walletId?: number
+): Promise<void> {
+  await withExclusiveSaveLock(async () => {
+    if (!db) return;
+    const localDatabase = db;
+    const existing = await idbGet('OPTNDatabase');
+    const bytes =
+      existing instanceof Uint8Array
+        ? existing
+        : existing instanceof ArrayBuffer
+          ? new Uint8Array(existing)
+          : null;
+
+    if (bytes && sqlModule && (!force || isWalletId(walletId))) {
+      const latest = new sqlModule.Database(bytes);
+      try {
+        await applyPendingMigrations(latest);
+        await migrateSecretColumnsAtRest(latest);
+
+        if (isWalletId(walletId)) {
+          const baseline = walletBaselines.get(walletId) ?? null;
+          const latestFingerprint = walletScopeFingerprint(latest, walletId);
+          const localFingerprint = walletScopeFingerprint(
+            localDatabase,
+            walletId
+          );
+          if (
+            latestFingerprint !== baseline &&
+            latestFingerprint !== localFingerprint
+          ) {
+            throw new Error(
+              `Wallet ${walletId} changed in another window. Reopen it before saving again.`
+            );
+          }
+          if (latestFingerprint === localFingerprint && localFingerprint) {
+            walletBaselines.set(walletId, localFingerprint);
+            return;
+          }
+
+          mergeWalletScope(latest, localDatabase, walletId);
+        } else {
+          const nextGlobalBaseline = snapshotGlobalTables(localDatabase);
+          mergeGlobalChanges(latest, localDatabase, globalBaseline);
+          const merged = latest.export();
+          await idbSet('OPTNDatabase', merged);
+          globalBaseline = nextGlobalBaseline;
+          return;
+        }
+
+        const merged = latest.export();
+        await idbSet('OPTNDatabase', merged);
+        if (isWalletId(walletId)) {
+          const fingerprint = walletScopeFingerprint(latest, walletId);
+          if (fingerprint) walletBaselines.set(walletId, fingerprint);
+        }
+      } finally {
+        latest.close();
+      }
+      return;
+    }
+
+    await idbSet('OPTNDatabase', localDatabase.export());
+    globalBaseline = snapshotGlobalTables(localDatabase);
+    if (force) replaceWalletBaselines(localDatabase);
+  });
 }
 
 function clearScheduledSaveState(): void {
+  if (saveTimeout !== null) {
+    globalThis.clearTimeout(saveTimeout);
+  }
   pendingSavePromise = null;
   resolvePendingSave = null;
+  rejectPendingSave = null;
   saveTimeout = null;
   firstQueuedSaveTs = null;
+  pendingGenericSave = false;
+  pendingWalletSaveIds.clear();
 }
 
 async function performQueuedSave(): Promise<void> {
-  try {
-    await realSaveDatabase();
-  } catch (error) {
-    logError('DatabaseService.performQueuedSave', error);
-  } finally {
-    const resolve = resolvePendingSave;
-    clearScheduledSaveState();
-    resolve?.();
-  }
+  if (queuedSaveRun) return queuedSaveRun;
+
+  queuedSaveRun = (async () => {
+    let firstError: unknown = null;
+    try {
+      while (pendingGenericSave || pendingWalletSaveIds.size > 0) {
+        const walletIds = [...pendingWalletSaveIds];
+        const saveGeneric = pendingGenericSave;
+        pendingWalletSaveIds.clear();
+        pendingGenericSave = false;
+
+        for (const walletId of walletIds) {
+          try {
+            await realSaveDatabase(false, walletId);
+          } catch (error) {
+            firstError ??= error;
+            logError('DatabaseService.performQueuedSave', error, { walletId });
+          }
+        }
+        if (saveGeneric) {
+          try {
+            await realSaveDatabase();
+          } catch (error) {
+            firstError ??= error;
+            logError('DatabaseService.performQueuedSave', error, {
+              scope: 'global',
+            });
+          }
+        }
+      }
+    } finally {
+      const resolve = resolvePendingSave;
+      const reject = rejectPendingSave;
+      clearScheduledSaveState();
+      queuedSaveRun = null;
+      if (firstError) reject?.(firstError);
+      else resolve?.();
+    }
+  })();
+
+  return queuedSaveRun;
 }
 
 const startDatabase = async (): Promise<Database | null> => {
   const SQLModule = await initSqlJs({
     locateFile: () => `/sql-wasm.wasm`,
   });
+  sqlModule = SQLModule;
   const saved = await idbGet('OPTNDatabase');
   const savedBytes =
     saved instanceof Uint8Array
@@ -241,37 +472,46 @@ const startDatabase = async (): Promise<Database | null> => {
     db.run('PRAGMA user_version = 0;'); // New databases start at version 0
   }
 
-  // Apply migrations
-  const versionResult = db.exec('PRAGMA user_version;');
-  const currentVersion = versionResult[0].values[0][0] as number;
-  const targetVersion = migrations.length;
-
-  for (let v = currentVersion + 1; v <= targetVersion; v++) {
-    await migrations[v - 1](db);
-    db.run(`PRAGMA user_version = ${v};`);
-  }
-
-  // Save immediately after migrations to persist schema changes
+  await applyPendingMigrations(db);
   await migrateSecretColumnsAtRest();
+  globalBaseline = snapshotGlobalTables(db);
+  replaceWalletBaselines(db);
+  // Save immediately after migrations to persist schema and encrypted secrets.
   await realSaveDatabase();
 
   return db;
 };
 
 const ensureDatabaseStarted = async (): Promise<void> => {
-  if (!db) {
-    await startDatabase();
+  if (db) return;
+  if (!startPromise) {
+    startPromise = startDatabase();
+    // Allow a retry if the very first start fails, but never run two at once.
+    startPromise.catch(() => {
+      startPromise = null;
+    });
   }
+  await startPromise;
 };
 
-const queueSave = async (delayMs = SAVE_DEBOUNCE_MS): Promise<void> => {
+const queueSave = async (
+  delayMs = SAVE_DEBOUNCE_MS,
+  walletId?: number
+): Promise<void> => {
   await ensureDatabaseStarted();
   if (!db) return;
 
+  if (isWalletId(walletId)) {
+    pendingWalletSaveIds.add(walletId);
+  } else {
+    pendingGenericSave = true;
+  }
+
   const now = Date.now();
   if (!pendingSavePromise) {
-    pendingSavePromise = new Promise((resolve) => {
+    pendingSavePromise = new Promise((resolve, reject) => {
       resolvePendingSave = resolve;
+      rejectPendingSave = reject;
     });
     firstQueuedSaveTs = now;
   }
@@ -297,15 +537,17 @@ const queueSave = async (delayMs = SAVE_DEBOUNCE_MS): Promise<void> => {
  * coalescing multiple calls into one. Returns a promise that
  * resolves after the actual save finishes.
  */
-const saveDatabaseToFile = async (): Promise<void> => {
-  return queueSave(SAVE_DEBOUNCE_MS);
+const saveDatabaseToFile = async (walletId?: number): Promise<void> => {
+  return queueSave(SAVE_DEBOUNCE_MS, walletId);
 };
 
-const scheduleDatabaseSave = (): void => {
-  void queueSave(SAVE_DEBOUNCE_MS);
+const scheduleDatabaseSave = (walletId?: number): void => {
+  void queueSave(SAVE_DEBOUNCE_MS, walletId).catch((error) => {
+    logError('DatabaseService.scheduleDatabaseSave', error, { walletId });
+  });
 };
 
-const flushDatabaseToFile = async (): Promise<void> => {
+const flushDatabaseToFile = async (walletId?: number): Promise<void> => {
   await ensureDatabaseStarted();
   if (!db) return;
 
@@ -315,15 +557,130 @@ const flushDatabaseToFile = async (): Promise<void> => {
   }
 
   if (pendingSavePromise) {
-    await performQueuedSave();
+    const pending = pendingSavePromise;
+    if (isWalletId(walletId)) {
+      pendingWalletSaveIds.add(walletId);
+    } else {
+      pendingGenericSave = true;
+    }
+    void performQueuedSave();
+    await pending;
     return;
   }
 
   try {
-    await realSaveDatabase();
+    await realSaveDatabase(false, walletId);
   } catch (error) {
     logError('DatabaseService.flushDatabaseToFile', error);
+    throw error;
   }
+};
+
+// Persist immediately. A wallet id remains wallet-scoped; force without one is
+// reserved for intentional whole-database replacement (for example clear).
+const forceSaveDatabase = async (walletId?: number): Promise<void> => {
+  await ensureDatabaseStarted();
+  await realSaveDatabase(true, walletId);
+};
+
+/**
+ * Persist the wallet row immediately after it is inserted locally. If another
+ * window allocated the same SQLite id first, reassign this still-empty wallet
+ * row under the shared save lock before publishing it.
+ */
+const persistNewWalletToFile = async (
+  localWalletId: number
+): Promise<number> => {
+  if (!isWalletId(localWalletId)) {
+    throw new Error('Invalid newly-created wallet id.');
+  }
+  await ensureDatabaseStarted();
+  if (!db) throw new Error('Database is not available.');
+
+  let persistedWalletId = localWalletId;
+  await withExclusiveSaveLock(async () => {
+    if (!db) throw new Error('Database is not available.');
+    const localDatabase = db;
+    if (!walletScopeFingerprint(localDatabase, localWalletId)) {
+      throw new Error(`New wallet ${localWalletId} is missing locally.`);
+    }
+
+    const existing = await idbGet('OPTNDatabase');
+    const bytes =
+      existing instanceof Uint8Array
+        ? existing
+        : existing instanceof ArrayBuffer
+          ? new Uint8Array(existing)
+          : null;
+
+    if (bytes && sqlModule) {
+      const latest = new sqlModule.Database(bytes);
+      try {
+        await applyPendingMigrations(latest);
+        await migrateSecretColumnsAtRest(latest);
+        if (walletScopeFingerprint(latest, localWalletId)) {
+          if (walletBaselines.has(localWalletId)) {
+            throw new Error(
+              `Wallet ${localWalletId} already existed before this creation.`
+            );
+          }
+          persistedWalletId = nextAvailableWalletId(latest, localDatabase);
+          localDatabase.run('UPDATE wallets SET id = ? WHERE id = ?', [
+            persistedWalletId,
+            localWalletId,
+          ]);
+        }
+
+        mergeWalletScope(latest, localDatabase, persistedWalletId);
+        await idbSet('OPTNDatabase', latest.export());
+      } finally {
+        latest.close();
+      }
+    } else {
+      await idbSet('OPTNDatabase', localDatabase.export());
+    }
+
+    const fingerprint = walletScopeFingerprint(
+      localDatabase,
+      persistedWalletId
+    );
+    if (!fingerprint) {
+      throw new Error(
+        `New wallet ${persistedWalletId} disappeared before persistence.`
+      );
+    }
+    walletBaselines.set(persistedWalletId, fingerprint);
+  });
+
+  return persistedWalletId;
+};
+
+const deleteWalletFromFile = async (walletId: number): Promise<void> => {
+  if (!isWalletId(walletId)) {
+    throw new Error('Invalid wallet id for database deletion.');
+  }
+  await ensureDatabaseStarted();
+  await withExclusiveSaveLock(async () => {
+    const existing = await idbGet('OPTNDatabase');
+    const bytes =
+      existing instanceof Uint8Array
+        ? existing
+        : existing instanceof ArrayBuffer
+          ? new Uint8Array(existing)
+          : null;
+    if (!bytes || !sqlModule) return;
+
+    const latest = new sqlModule.Database(bytes);
+    try {
+      await applyPendingMigrations(latest);
+      await migrateSecretColumnsAtRest(latest);
+      deleteWalletScope(latest, walletId);
+      await idbSet('OPTNDatabase', latest.export());
+      walletBaselines.delete(walletId);
+    } finally {
+      latest.close();
+    }
+  });
 };
 
 const getDatabase = (): Database | null => db;
@@ -354,7 +711,7 @@ const clearDatabase = async (): Promise<void> => {
       db.run(`PRAGMA user_version = ${v};`);
     }
     // Save immediately
-    await realSaveDatabase();
+    await realSaveDatabase(true);
   }
 };
 
@@ -377,6 +734,9 @@ export default function DatabaseService() {
     saveDatabaseToFile,
     scheduleDatabaseSave,
     flushDatabaseToFile,
+    forceSaveDatabase,
+    persistNewWalletToFile,
+    deleteWalletFromFile,
     getDatabase,
     clearDatabase,
     resultToJSON,

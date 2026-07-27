@@ -12,6 +12,7 @@ import WalletScreen from '../../components/ui/WalletScreen';
 import KeyService from '../../services/KeyService';
 import { logError } from '../../utils/errorHandling';
 import { ADVANCED_ACTIONS, BASIC_ACTIONS } from './actionsConfig';
+import { selectQuantumrootEnabled } from '../../state/slices/experimentalSlice';
 
 type ActionsMode = 'basic' | 'advanced';
 
@@ -48,6 +49,12 @@ const Actions: React.FC = () => {
   const [mode, setMode] = useState<ActionsMode>('basic');
   const currentWalletId = useSelector(
     (state: RootState) => state.wallet_id.currentWalletId
+  );
+  const quantumrootEnabled = useSelector(selectQuantumrootEnabled);
+  // Quantumroot is on by default; hide its action when the user disables it in
+  // Experimental settings. Additive + backward-compatible (no effect when on).
+  const advancedActions = ADVANCED_ACTIONS.filter(
+    (a) => quantumrootEnabled || a.to !== '/quantumroot'
   );
 
   const handleGenerateNewAddress = async () => {
@@ -155,7 +162,7 @@ const Actions: React.FC = () => {
                 compact
               />
               <div className="space-y-2.5">
-                {ADVANCED_ACTIONS.map((action) => (
+                {advancedActions.map((action) => (
                   <ActionTile
                     key={action.title}
                     compact

@@ -93,6 +93,14 @@ const AppsView = () => {
           category: 'Wallet',
         });
 
+        out.push({
+          id: 'optn.wallet.cashfusion',
+          name: 'CashFusion',
+          icon: '/assets/images/OPTNUIkeyline2.png',
+          description: 'Private CoinJoin — server or P2P over Nostr + Tor',
+          category: 'Wallet',
+        });
+
         if (mounted) {
           setCards(
             out
@@ -185,6 +193,10 @@ const AppsView = () => {
                             navigate('/quantumroot', { state: { returnTo: '/apps' } });
                             return;
                           }
+                          if (app.id === 'optn.wallet.cashfusion') {
+                            navigate('/settings?panel=cashfusion', { state: { returnTo: '/apps' } });
+                            return;
+                          }
                           if (app.name.toLowerCase().includes('paryonusd')) {
                             navigate('/paryon', { state: { returnTo: '/apps' } });
                             return;
@@ -201,6 +213,7 @@ const AppsView = () => {
                     app.id === 'optn.builtin.events:airdropsApp' ||
                     app.id === 'optn.wallet.contracts' ||
                     app.id === 'optn.wallet.quantumroot' ||
+                    app.id === 'optn.wallet.cashfusion' ||
                     app.id === 'optn.builtin.fundme:fundmeApp' ? (
                       <div
                         className={`flex h-8 w-8 items-center justify-center overflow-hidden rounded-2xl border border-[var(--wallet-border)] bg-[color-mix(in_oklab,var(--wallet-surface-strong)_72%,transparent)] ${getAppIconFrame(app)}`}

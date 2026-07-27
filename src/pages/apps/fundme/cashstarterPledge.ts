@@ -185,8 +185,14 @@ async function cashstarterPledge({ electrumServer, usersAddress, contractCashSta
     const usersTokenAddress = String(toTokenAddress(usersAddress));
     const newCampaignTotal = campaignUTXO.satoshis + (pledgeAmount);
 
+    // cashscript's unlock-function return type doesn't expose the chained
+    // .from()/.fromP2PKH()/.to() builder methods used below in this SDK
+    // version — casting through `any` to preserve the existing chain rather
+    // than risk changing behavior by re-typing it under time pressure.
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     let transaction: any;
     try {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
       transaction = (contractCashStarter.unlock.pledge(pledgeAmount) as any)
         .from(campaignUTXO)                                                        // contractUTXO utxo
         .fromP2PKH(userUTXO, userSig)                                              // used for privtekey signing
