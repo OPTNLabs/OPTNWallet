@@ -239,6 +239,57 @@ describe('DatabaseService multi-window persistence', () => {
     result.close();
   });
 
+  it('rejects a stale save after another window changes an encrypted wallet secret', async () => {
+    const SQL = await initSqlJs();
+    const seed = new SQL.Database();
+    createTables(seed);
+    seed.run('ALTER TABLE wallets ADD COLUMN kdf_salt TEXT');
+    seed.run('ALTER TABLE wallets ADD COLUMN birth_height INT');
+    seed.run('PRAGMA user_version = 7');
+    seed.run(
+      `INSERT INTO wallets
+        (id, wallet_name, mnemonic, passphrase, networkType, walletType, balance)
+       VALUES
+        (1, 'wallet5', 'enc:v1:seed', '', 'chipnet', 'standard', 0)`
+    );
+    let persisted = seed.export();
+    seed.close();
+
+    vi.doMock('idb-keyval', () => ({
+      get: vi.fn(async () => new Uint8Array(persisted)),
+      set: vi.fn(async (_key: string, value: Uint8Array) => {
+        persisted = new Uint8Array(value);
+      }),
+    }));
+    vi.doMock('sql.js', () => ({
+      default: vi.fn(async () => SQL),
+    }));
+
+    const firstWindow = (await import('../DatabaseService')).default();
+    await firstWindow.startDatabase();
+    vi.resetModules();
+    const staleWindow = (await import('../DatabaseService')).default();
+    await staleWindow.startDatabase();
+
+    firstWindow
+      .getDatabase()!
+      .run("UPDATE wallets SET mnemonic = 'enc:v1:first-window-secret' WHERE id = 1");
+    await firstWindow.flushDatabaseToFile(1);
+
+    staleWindow
+      .getDatabase()!
+      .run("UPDATE wallets SET wallet_name = 'stale-window-name' WHERE id = 1");
+    await expect(staleWindow.flushDatabaseToFile(1)).rejects.toThrow(
+      'changed in another window'
+    );
+
+    const result = new SQL.Database(persisted);
+    expect(result.exec('SELECT mnemonic, wallet_name FROM wallets WHERE id = 1')[0].values).toEqual([
+      ['enc:v1:first-window-secret', 'wallet5'],
+    ]);
+    result.close();
+  });
+
   it('does not resurrect a wallet deleted by another window during a generic save', async () => {
     const SQL = await initSqlJs();
     const seed = new SQL.Database();
