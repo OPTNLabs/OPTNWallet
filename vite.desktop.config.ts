@@ -134,6 +134,9 @@ function desktopModuleSwapPlugin(): Plugin {
 
 // Desktop-specific config additions
 const desktopAdditions = defineConfig({
+  // A concurrent web Vite process must not invalidate desktop's optimized
+  // chunks (or vice versa).
+  cacheDir: resolvePath(__dirname, 'node_modules/.vite-desktop'),
   plugins: [
     desktopModuleSwapPlugin(),
     // tiny-secp256k1 (used by RpaService) loads its .wasm via the ESM-wasm-proposal

@@ -38,9 +38,17 @@ function tinySecp256k1SyncLoaderPlugin(): Plugin {
       if (!importer) return null;
       const resolved = await this.resolve(source, importer, { ...options, skipSelf: true });
       if (!resolved) return null;
-      const normalized = normalizePath(resolved.id);
-      if (!normalized.endsWith('tiny-secp256k1/lib/wasm_loader.browser.js')) return null;
-      if (normalizePath(importer) === targetPath) return null;
+      const normalized = normalizePath(resolved.id).split(/[?#]/, 1)[0];
+      const normalizedImporter = normalizePath(importer).split(/[?#]/, 1)[0];
+      const normalizedSource = normalizePath(source).split(/[?#]/, 1)[0];
+      const isTinySecpLoader =
+        normalized.endsWith('tiny-secp256k1/lib/wasm_loader.js') ||
+        normalized.endsWith('tiny-secp256k1/lib/wasm_loader.browser.js') ||
+        (normalizedImporter.endsWith('tiny-secp256k1/lib/index.js') &&
+          (normalizedSource === './wasm_loader.js' ||
+            normalizedSource === './wasm_loader.browser.js'));
+      if (!isTinySecpLoader) return null;
+      if (normalizedImporter === targetPath) return null;
       return targetPath;
     },
   };
@@ -51,6 +59,9 @@ export default defineConfig(({ mode }) => {
 
   return {
     base: mode === 'development' ? '/' : './',
+    // Keep the browser optimizer independent from the desktop/Tauri optimizer.
+    // Both dev servers may run at the same time during integration testing.
+    cacheDir: resolvePath(__dirname, 'node_modules/.vite-web'),
     // Vite 8 / rolldown enforces stricter CommonJS interop, which makes some CJS
     // default imports resolve to a namespace object → React "element type is invalid"
     // (#130) → blank screen. Restore Rollup's permissive interop.
@@ -85,6 +96,9 @@ export default defineConfig(({ mode }) => {
       exclude: [
         'vite-plugin-node-polyfills_shims_buffer.js',
         'react.js',
+        // Let tinySecp256k1SyncLoaderPlugin replace the browser WASM loader
+        // before Vite pre-bundles the package into an optimized dependency.
+        'tiny-secp256k1',
         '@cashscript_utils.js',
         'electrum-cash.js',
         '@bitauth_libauth.js',

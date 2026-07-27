@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { useDispatch, useSelector } from 'react-redux';
 import {
   selectHardwareWallet,
@@ -10,13 +10,14 @@ import {
   type HardwareWalletType,
   type LedgerTransport,
 } from '../../state/slices/hardwareWalletSlice';
+import { selectCurrentNetwork } from '../../state/selectors/networkSelectors';
+import { Network } from '../../state/slices/networkSlice';
+import { getBchAccountPath } from '../../services/HdWalletService';
 import { trezorGetPublicKey } from '../../services/hardware/TrezorService';
 import { ledgerGetPublicKey, ledgerDisconnect, setLedgerTransportType } from '../../services/hardware/LedgerService';
 import { oneKeyGetPublicKey } from '../../services/hardware/OneKeyService';
 
 type ConnectStatus = 'idle' | 'connecting' | 'connected' | 'error';
-
-const DEFAULT_PATH = "m/44'/145'/0'";
 
 const DEVICES: {
   type: HardwareWalletType;
@@ -89,11 +90,24 @@ const DEVICES: {
 export const HardwareWalletSettings: React.FC = () => {
   const dispatch = useDispatch();
   const hw = useSelector(selectHardwareWallet);
+  const currentNetwork = useSelector(selectCurrentNetwork);
+  const defaultPath = getBchAccountPath(currentNetwork);
 
   const [status, setStatus] = useState<ConnectStatus>(hw.connected ? 'connected' : 'idle');
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
-  const [pathInput, setPathInput] = useState(hw.derivationPath || DEFAULT_PATH);
+  const [pathInput, setPathInput] = useState(() => {
+    const persistedPath = hw.derivationPath;
+    const legacyMainnetDefault = getBchAccountPath(Network.MAINNET);
+    return persistedPath && persistedPath !== legacyMainnetDefault
+      ? persistedPath
+      : defaultPath;
+  });
   const [showAdvanced, setShowAdvanced] = useState(false);
+
+  useEffect(() => {
+    const legacyMainnetDefault = getBchAccountPath(Network.MAINNET);
+    setPathInput((path) => (path === legacyMainnetDefault ? defaultPath : path));
+  }, [defaultPath]);
 
   const selected = DEVICES.find((d) => d.type === hw.type) ?? DEVICES[0];
 
@@ -114,7 +128,7 @@ export const HardwareWalletSettings: React.FC = () => {
     setStatus('connecting');
     setErrorMsg(null);
     try {
-      const path = pathInput.trim() || DEFAULT_PATH;
+      const path = pathInput.trim() || defaultPath;
       dispatch(setDerivationPath(path));
 
       if (hw.type === 'trezor') {
@@ -319,7 +333,7 @@ export const HardwareWalletSettings: React.FC = () => {
                     className="wallet-input w-full text-sm font-mono"
                     value={pathInput}
                     onChange={(e) => setPathInput(e.target.value)}
-                    placeholder="m/44'/145'/0'"
+                    placeholder={defaultPath}
                   />
                 </div>
               )}

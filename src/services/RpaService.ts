@@ -13,8 +13,8 @@
 // unhardened chain, sibling to receive(0)/change(1) (see HdWalletService's
 // BCH_STANDARD_BRANCH_INDEX.rpa = 3), matching the Electron Cash reference
 // implementation:
-//   Scan  private/public: m/44'/145'/0'/3/0
-//   Spend private/public: m/44'/145'/0'/3/1
+//   Scan  private/public: m/44'/coinType'/0'/3/0
+//   Spend private/public: m/44'/coinType'/0'/3/1
 //
 // Keys are compressed pubkeys.
 //
@@ -460,7 +460,7 @@ export async function deriveSpendingKey(
 // ─── XPub gate derivation (for WizardConnect extension advertisement) ─────────
 //
 // Scan (index 0) and spend (index 1) are unhardened children of ONE branch-3
-// xpub (m/44'/145'/account'/3), so there is a single xpub to advertise here.
+// xpub (m/44'/coinType'/account'/3), so there is a single xpub to advertise here.
 // PRIVACY NOTE: safe to share on its own — branch 3 is a SIBLING of
 // receive(0)/change(1)/defi(7) under the account node, and CKD_pub can only
 // walk downward, so holding this xpub lets a counterparty derive scan/spend
