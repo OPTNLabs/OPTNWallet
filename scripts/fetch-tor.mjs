@@ -109,6 +109,17 @@ function sha256(buf) {
 async function main() {
   const target = process.argv[2] || inferTarget();
   const isWindows = target.startsWith('windows');
+  const torBin = isWindows ? 'tor.exe' : 'tor';
+  const markerPath = join(outDir, 'VERSION');
+  const stagedFiles = [torBin, 'geoip', 'geoip6', 'VERSION'].map((name) => join(outDir, name));
+  if (stagedFiles.every(existsSync)) {
+    const marker = readFileSync(markerPath, 'utf8').trim().split(/\s+/);
+    const stagedTarget = marker.slice(1).join(' ');
+    if (stagedTarget === target) {
+      console.log(`[fetch-tor] Tor already staged (${readFileSync(markerPath, 'utf8').trim()})`);
+      return;
+    }
+  }
   // Stage in the OS temp dir (not the repo) so an antivirus handle on the
   // extracted tor binary can't lock a repo-local directory.
   const tmpDir = mkdtempSync(join(tmpdir(), 'optn-tor-'));
@@ -145,7 +156,6 @@ async function main() {
   rmSync(outDir, { recursive: true, force: true });
   mkdirSync(outDir, { recursive: true });
 
-  const torBin = isWindows ? 'tor.exe' : 'tor';
   const srcBin = join(tmpDir, 'tor', torBin);
   if (!existsSync(srcBin)) throw new Error(`extracted bundle has no ${srcBin}`);
   copyFileSync(srcBin, join(outDir, torBin));

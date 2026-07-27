@@ -375,6 +375,11 @@ async function realSaveDatabase(
           const merged = latest.export();
           await idbSet('OPTNDatabase', merged);
           globalBaseline = nextGlobalBaseline;
+          // The latest snapshot may have normalized legacy encrypted secrets
+          // with fresh IVs. Baselines must describe what was actually
+          // persisted, otherwise the next wallet-scoped save can mistake a
+          // migration-only ciphertext difference for a concurrent edit.
+          replaceWalletBaselines(latest);
           return;
         }
 
