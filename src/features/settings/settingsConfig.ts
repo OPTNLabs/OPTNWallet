@@ -8,7 +8,13 @@ export type SettingsPanelKey =
   | 'contract'
   | 'walletconnect'
   | 'wizardconnect'
-  | 'network';
+  | 'network'
+  | 'server'
+  | 'console'
+  | 'experimental'
+  | 'cashfusion'
+  | 'nostr'
+  | 'addons';
 
 export type SettingsRowConfig = {
   key: SettingsPanelKey | string;
@@ -20,6 +26,13 @@ export type SettingsRowConfig = {
 };
 
 export const WALLET_ROWS: SettingsRowConfig[] = [
+  {
+    key: 'network',
+    title: 'Network',
+    description: 'Switch between Mainnet and Chipnet',
+    action: 'panel',
+    target: 'network',
+  },
   {
     key: 'recovery',
     title: 'Recovery Phrase',
@@ -37,10 +50,47 @@ export const WALLET_ROWS: SettingsRowConfig[] = [
   {
     key: 'app-lock',
     title: 'App Lock',
-    description: 'Coming soon',
-    action: 'noop',
-    right: '(Coming soon)',
+    description: 'Auto-lock · Change password',
+    action: 'panel',
+    target: 'app-lock',
   },
+  {
+    key: 'nostr',
+    title: 'Nostr & Chat',
+    description: 'Private messages · Identity · Relay pool',
+    action: 'panel',
+    target: 'nostr',
+  },
+  {
+    key: 'server',
+    title: 'Servers',
+    description: 'Electrum · Block explorer · CashFusion · Tor',
+    action: 'panel',
+    target: 'server',
+  },
+  {
+    key: 'console',
+    title: 'Console',
+    description: 'App log · Electrum RPC',
+    action: 'panel',
+    target: 'console',
+  },
+  {
+    key: 'experimental',
+    title: 'Experimental Features',
+    description: 'RPA · CashFusion',
+    action: 'panel',
+    target: 'experimental',
+  },
+  {
+    key: 'addons',
+    title: 'Addons',
+    description: 'Install and manage third-party addons',
+    action: 'panel',
+    target: 'addons',
+  },
+  // CashFusion + Tor now live inside the Servers panel (that panel manages
+  // everything network-related), so there is no separate CashFusion row.
 ];
 
 export const CONTRACT_ROWS: SettingsRowConfig[] = [

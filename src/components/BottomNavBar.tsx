@@ -1,6 +1,7 @@
 import { NavLink } from 'react-router-dom';
 import { useSelector } from 'react-redux';
 import { RootState } from '../state/store';
+import { selectNostrChatEnabled } from '../state/slices/experimentalSlice';
 import { useNavBarHeight } from './navigation/useNavBarHeight';
 
 interface BottomNavBarProps {
@@ -11,6 +12,7 @@ const BottomNavBar: React.FC<BottomNavBarProps> = ({ setNavBarHeight }) => {
   const walletId = useSelector(
     (state: RootState) => state.wallet_id.currentWalletId
   );
+  const chatEnabled = useSelector(selectNostrChatEnabled);
   const { navBarRef } = useNavBarHeight({ setNavBarHeight });
   const navItemClass = ({ isActive }: { isActive: boolean }) =>
     `wallet-nav-item ${isActive ? 'wallet-nav-item-active' : ''}`;
@@ -74,6 +76,22 @@ const BottomNavBar: React.FC<BottomNavBarProps> = ({ setNavBarHeight }) => {
           </svg>
           <span>Actions</span>
         </NavLink>
+
+        {chatEnabled && (
+          <NavLink to="/chat" className={navItemClass}>
+            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+              <path
+                d="M5 5.5C5 4.12 6.12 3 7.5 3h9C17.88 3 19 4.12 19 5.5v7c0 1.38-1.12 2.5-2.5 2.5H11l-4.5 4v-4C5.67 14.63 5 13.76 5 12.75V5.5Z"
+                stroke="currentColor"
+                strokeWidth="2"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              />
+              <path d="M8.5 7.5h7M8.5 11h4.5" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+            </svg>
+            <span>Chat</span>
+          </NavLink>
+        )}
 
         <NavLink to="/apps" className={navItemClass}>
           <svg width="24" height="24" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">

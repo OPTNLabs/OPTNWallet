@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import * as bip39 from 'bip39';
 
 import { Network } from '../../state/slices/networkSlice';
 import {
@@ -7,12 +8,20 @@ import {
   deriveBchKeyMaterial,
   deriveBchStandardXpubs,
   deriveBchXpubAtBranch,
+  getBchAccountPath,
+  getBchCoinType,
 } from '../HdWalletService';
 
-const TEST_MNEMONIC =
-  'abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about';
+// Deterministic zero-entropy BIP39 test vector (not a real seed).
+const TEST_MNEMONIC = bip39.entropyToMnemonic('0'.repeat(32));
 
 describe('HdWalletService', () => {
+  it('uses BCH coin type 145 on mainnet and chipnet', () => {
+    expect(getBchCoinType(Network.MAINNET)).toBe(145);
+    expect(getBchCoinType(Network.CHIPNET)).toBe(145);
+    expect(getBchAccountPath(Network.CHIPNET, 2)).toBe("m/44'/145'/2'");
+  });
+
   it('derives receive addresses from xpubs that match mnemonic-based key material', async () => {
     const receiveIndex = 4;
     const xpubs = await deriveBchStandardXpubs(

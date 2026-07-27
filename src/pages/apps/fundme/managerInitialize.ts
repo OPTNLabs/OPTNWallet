@@ -1,4 +1,4 @@
-import { Contract, Utxo, ElectrumNetworkProvider, SignatureTemplate } from 'cashscript';
+import { Contract, Utxo, SignatureTemplate } from 'cashscript';
 import { hexToBin, binToHex, bigIntToVmNumber, cashAddressToLockingBytecode, decodeTransaction } from '@bitauth/libauth';
 import { AddressCashStarter, AddressTokensCashStarter, AddressTokensCashStarterManager, MasterCategoryID } from './values'
 import type {

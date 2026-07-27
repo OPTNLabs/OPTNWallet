@@ -29,6 +29,7 @@ import {
 } from '../services/QuantumrootVaultStatusService';
 import { getQuantumrootNetworkSupport } from '../services/QuantumrootNetworkSupportService';
 import { getReturnPath } from '../utils/navigation';
+import { RpaReceiveCard } from '../features/rpa/RpaReceiveCard';
 
 type QRCodeType = 'address' | 'pubKey' | 'pkh' | 'privkey';
 const PRIVKEY_UNLOCK_TAPS = 10;
@@ -846,6 +847,8 @@ const Receive: React.FC = () => {
               </div>
             </SectionCard>
           )}
+          {/* RPA Paycode at the bottom of the receive list (UI preference). */}
+          <RpaReceiveCard walletId={currentWalletId} />
         </div>
 
         <div className="relative shrink-0 pt-3">

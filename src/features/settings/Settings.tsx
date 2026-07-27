@@ -10,14 +10,21 @@ import { resetContract } from '../../state/slices/contractSlice';
 import { resetNetwork } from '../../state/slices/networkSlice';
 import { clearTransaction } from '../../state/slices/transactionBuilderSlice';
 import { selectCurrentNetwork } from '../../state/selectors/networkSelectors';
-import FaucetView from '../../components/FaucetView';
 import ContractDetails from '../../components/ContractDetails';
+import { NetworkSettings } from './NetworkSettings';
+import { ServerSettings } from './ServerSettings';
+import { ConsolePanel } from './ConsolePanel';
+import { ExperimentalSettings } from './ExperimentalSettings';
+import { CashFusionSettings } from './CashFusionSettings';
+import { NostrSettings } from '../nostr/NostrSettings';
+import { AddonsSettings } from './AddonsSettings';
 import RecoveryPhrase from '../../components/RecoveryPhrase';
 import AboutView from '../../components/AboutView';
 import TermsOfUse from '../../components/TermsOfUse';
 import ContactUs from '../../components/ContactUs';
 import WalletConnectPanel from '../../components/walletconnect/WalletConnectPanel';
 import WizardConnectPanel from '../../components/wizardconnect/WizardConnectPanel';
+import { AppLockSettings } from '../../platform/desktop/AppLockSettings';
 import { disconnectAllWizardConnections } from '../../state/slices/wizardconnectSlice';
 import getElectrumAdapter from '../../services/ElectrumAdapter';
 import { useTheme } from '../../app/theme/useTheme';
@@ -35,6 +42,10 @@ import {
   WALLET_ROWS,
   type SettingsRowConfig,
 } from './settingsConfig';
+
+// Tauri injects this global into the desktop WebView; absent on mobile/web.
+const isDesktop = (): boolean =>
+  typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
 
 const Settings: React.FC = () => {
   const navigate = useNavigate();
@@ -59,6 +70,33 @@ const Settings: React.FC = () => {
   }, [searchParams]);
 
   const handleLogout = async () => {
+    // On desktop this is a LOCK, not a wipe: clear the in-RAM key and return to
+    // the wallet picker, leaving EVERY saved wallet intact. The mobile flow
+    // below (deleteWallet + clearAllData) drops the whole wallet database, which
+    // on desktop's multi-wallet picker wiped all saved wallets on logout.
+    if (isDesktop()) {
+      try {
+        const { lock } = await import('../../platform/desktop/EcKeyManager');
+        lock();
+      } catch {
+        /* ignore */
+      }
+      dispatch(setWalletId(0));
+      dispatch(resetUTXOs());
+      dispatch(resetTransactions());
+      dispatch(resetWallet());
+      dispatch(resetContract());
+      dispatch(clearTransaction());
+      await dispatch(disconnectAllWizardConnections());
+      try {
+        await getElectrumAdapter().disconnect();
+      } catch (e) {
+        console.warn('[Settings] Electrum disconnect (on lock) warning:', e);
+      }
+      navigate('/');
+      return;
+    }
+
     const walletManager = WalletManager();
     await walletManager.deleteWallet(currentWalletId);
     await walletManager.clearAllData();
@@ -95,8 +133,22 @@ const Settings: React.FC = () => {
         return <WalletConnectPanel />;
       case 'wizardconnect':
         return <WizardConnectPanel />;
+      case 'app-lock':
+        return <AppLockSettings />;
       case 'network':
-        return currentNetwork === 'chipnet' ? <FaucetView /> : null;
+        return <NetworkSettings />;
+      case 'server':
+        return <ServerSettings />;
+      case 'console':
+        return <ConsolePanel />;
+      case 'experimental':
+        return <ExperimentalSettings />;
+      case 'cashfusion':
+        return <CashFusionSettings />;
+      case 'nostr':
+        return <NostrSettings />;
+      case 'addons':
+        return <AddonsSettings />;
       default:
         return null;
     }
@@ -114,6 +166,20 @@ const Settings: React.FC = () => {
         return 'Contact Us';
       case 'contract':
         return 'Contract Info';
+      case 'app-lock':
+        return 'App Lock';
+      case 'server':
+        return 'Server';
+      case 'console':
+        return 'Console';
+      case 'experimental':
+        return 'Experimental Features';
+      case 'cashfusion':
+        return 'CashFusion';
+      case 'nostr':
+        return 'Nostr & Chat';
+      case 'addons':
+        return 'Addons';
       case 'walletconnect':
         return 'WalletConnect';
       case 'wizardconnect':
@@ -184,7 +250,11 @@ const Settings: React.FC = () => {
                           description={row.description}
                           compact
                           right={
-                            row.right ? (
+                            row.key === 'network' ? (
+                              <span className="text-xs font-semibold capitalize text-[var(--wallet-accent)]">
+                                {currentNetwork}
+                              </span>
+                            ) : row.right ? (
                               <span className="wallet-muted">{row.right}</span>
                             ) : undefined
                           }
@@ -225,17 +295,6 @@ const Settings: React.FC = () => {
                     </div>
                   </SectionCard>
 
-                  {currentNetwork === 'chipnet' ? (
-                    <SectionCard className="p-0">
-                      <SectionHeader title="Support" compact />
-                      <SettingsRow
-                        title="Faucet"
-                        description="Request test funds"
-                        compact
-                        onClick={() => setSelectedOption('network')}
-                      />
-                    </SectionCard>
-                  ) : null}
                 </div>
 
                 <button
