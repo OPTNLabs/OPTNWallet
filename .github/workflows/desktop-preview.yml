@@ -43,10 +43,17 @@ jobs:
         include:
           - platform: windows-latest
             artifact-name: preview-windows
+            bundle-args: ''
           - platform: macos-latest
             artifact-name: preview-macos
+            bundle-args: ''
+          # Linux: skip the AppImage bundle. linuxdeploy fails on GitHub runners
+          # (no FUSE; APPIMAGE_EXTRACT_AND_RUN didn't help either), and a debug
+          # preview only needs an installable — deb+rpm bundle fine. The release
+          # workflow still builds the AppImage (with libfuse2) for distribution.
           - platform: ubuntu-22.04
             artifact-name: preview-linux
+            bundle-args: '--bundles deb,rpm'
 
     runs-on: ${{ matrix.platform }}
     steps:
@@ -77,8 +84,13 @@ jobs:
       - name: Install npm dependencies
         run: npm ci
 
+      - name: Fetch bundled Tor (integrated CashFusion privacy)
+        run: node scripts/fetch-tor.mjs
+
       - name: Build Tauri (debug)
-        run: npx tauri build --debug
+        # bundle-args is empty on Windows/macOS and '--bundles deb,rpm' on Linux
+        # (skips the AppImage that linuxdeploy can't build on the runner).
+        run: npx tauri build --debug ${{ matrix.bundle-args }}
 
       - name: Upload preview artifact
         uses: actions/upload-artifact@v4

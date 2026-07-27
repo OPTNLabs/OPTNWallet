@@ -6,6 +6,7 @@ function createFakeDatabase(exportBytes: number[]) {
 
     prepare() {
       return {
+        bind: vi.fn(),
         step: () => false,
         getAsObject: () => ({}),
         run: vi.fn(),

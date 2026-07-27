@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import * as bip39 from 'bip39';
 import { binToHex, flattenBinArray, hash256, hexToBin } from '@bitauth/libauth';
 
 import { Network } from '../../state/slices/networkSlice';
@@ -19,8 +20,8 @@ import {
   zeroizeQuantumrootArtifacts,
 } from '../QuantumrootService';
 
-const TEST_MNEMONIC =
-  'abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about';
+// Deterministic zero-entropy BIP39 test vector (not a real seed).
+const TEST_MNEMONIC = bip39.entropyToMnemonic('0'.repeat(32));
 
 describe('QuantumrootService', () => {
   it('matches the published LM-OTS static vector', () => {
@@ -148,7 +149,7 @@ describe('QuantumrootService', () => {
 
   it('matches the component path helper directly', () => {
     expect(getQuantumrootComponentPath(Network.CHIPNET, 2, 'key', 13)).toBe(
-      "m/44'/1'/2'/1'/13"
+      "m/44'/145'/2'/1'/13"
     );
   });
 
