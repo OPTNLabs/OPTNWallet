@@ -66,11 +66,10 @@ export const BCH_STANDARD_BRANCH_INDEX = {
 export type BchStandardBranchName = keyof typeof BCH_STANDARD_BRANCH_INDEX;
 
 export function getBchCoinType(network: Network): number {
-  // BIP44 coin type identifies the asset, not the chain environment. BCH uses
-  // 145 on mainnet and chipnet; chipnet changes HD-key/address encoding only.
+  // BIP44 assigns coin type 145 to BCH mainnet and coin type 1 to testnets.
   return {
     [Network.MAINNET]: COIN_TYPE.bitcoincash,
-    [Network.CHIPNET]: COIN_TYPE.bitcoincash,
+    [Network.CHIPNET]: COIN_TYPE.testnet,
   }[network];
 }
 

@@ -201,9 +201,7 @@ export function walletScopeFingerprint(
   walletId: number
 ): string | null {
   if (!tableExists(database, 'wallets')) return null;
-  const walletColumns = tableColumns(database, 'wallets')
-    .filter((column) => column !== 'mnemonic' && column !== 'passphrase')
-    .sort();
+  const walletColumns = tableColumns(database, 'wallets').sort();
   const walletRows = readRows(
     database,
     'wallets',
@@ -223,11 +221,7 @@ export function walletScopeFingerprint(
   for (const table of WALLET_CHILD_TABLES) {
     if (!tableExists(database, table)) continue;
     const columns = tableColumns(database, table)
-      .filter(
-        (column) =>
-          column !== 'id' &&
-          !(table === 'keys' && column === 'private_key')
-      )
+      .filter((column) => column !== 'id')
       .sort();
     if (!columns.includes('wallet_id')) continue;
     const rows = readRows(
