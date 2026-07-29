@@ -2,6 +2,7 @@ export type ActionConfig = {
   title: string;
   description?: string;
   to: string;
+  badge?: string;
 };
 
 export const BASIC_ACTIONS: ActionConfig[] = [
@@ -26,8 +27,8 @@ export const BASIC_ACTIONS: ActionConfig[] = [
     to: '/receive?panel=addresses',
   },
   {
-    title: 'Mint Tokens',
-    description: 'Create new CashTokens',
+    title: 'CashTokens',
+    description: 'Manage token families',
     to: '/mint-cashtokens-poc',
   },
 ];
@@ -37,6 +38,7 @@ export const ADVANCED_ACTIONS: ActionConfig[] = [
     title: 'Quantumroot',
     description: 'Quantum-ready vaults',
     to: '/quantumroot',
+    badge: 'Beta production',
   },
   {
     title: 'Transaction Builder',

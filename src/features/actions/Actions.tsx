@@ -9,6 +9,7 @@ import SectionHeader from '../../components/ui/SectionHeader';
 import ActionTile from '../../components/ui/ActionTile';
 import SegmentedSubnav from '../../components/ui/SegmentedSubnav';
 import WalletScreen from '../../components/ui/WalletScreen';
+import StatusChip from '../../components/ui/StatusChip';
 import KeyService from '../../services/KeyService';
 import { logError } from '../../utils/errorHandling';
 import { ADVANCED_ACTIONS, BASIC_ACTIONS } from './actionsConfig';
@@ -24,7 +25,7 @@ function getBasicActionIcon(title: string) {
       return <FaArrowDown />;
     case 'Scan QR':
       return <FaQrcode />;
-    case 'Mint Tokens':
+    case 'CashTokens':
       return <FaBitcoin />;
     default:
       return <FaPlus />;
@@ -120,7 +121,7 @@ const Actions: React.FC = () => {
                           void handleGenerateNewAddress();
                           return;
                         }
-                        if (action.title === 'Mint Tokens') {
+                        if (action.title === 'CashTokens') {
                           navigate('/mint-cashtokens-poc', {
                             state: { returnTo: '/actions' },
                           });
@@ -170,6 +171,9 @@ const Actions: React.FC = () => {
                     description={action.description}
                     icon={getAdvancedActionIcon(action.title)}
                     layout="horizontal"
+                    trailing={
+                      action.badge ? <StatusChip>{action.badge}</StatusChip> : undefined
+                    }
                     onClick={() => {
                       const returnTo = '/actions';
                       if (action.to === '/quantumroot') {
