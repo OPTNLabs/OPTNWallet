@@ -92,8 +92,6 @@ async function collectPendingOutboundOwnedUtxos(
   const pendingOwnedUtxos: UTXO[] = [];
 
   for (const record of activeRecords) {
-    if (record.state === 'broadcasting') continue;
-
     const decoded = decodeTransaction(hexToBin(record.rawTx));
     if (typeof decoded === 'string') continue;
 

@@ -76,5 +76,7 @@ describe('PendingOutboundPanel', () => {
       'Your wallet history will update automatically. This usually takes a moment.'
     );
     expect(html).toContain('Dismiss');
+    expect(html).toContain('sm:flex-row');
+    expect(html).toContain('min-w-0 flex-1');
   });
 });

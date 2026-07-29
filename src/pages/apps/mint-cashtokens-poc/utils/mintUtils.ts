@@ -3,6 +3,10 @@ import type {
   TxSummaryInput,
   TxSummaryOutput,
 } from '../../../../components/confirm/TxSummary';
+import {
+  validateCapabilityAwareMintDrafts,
+  type CapabilityOutputDraft,
+} from '../../../../services/cashtokens';
 import type { MintAppUtxo, MintOutputDraft } from '../types';
 
 type UtxoValueShape = {
@@ -88,31 +92,26 @@ export function validateCategoryReuseRules(
   drafts: MintOutputDraft[],
   sourceByKey: Map<string, MintAppUtxo>
 ): { ok: true } | { ok: false; message: string } {
-  const byCategory = new Map<string, MintOutputDraft[]>();
+  const capabilityDrafts: CapabilityOutputDraft[] = drafts.map((draft) => ({
+    id: draft.id,
+    sourceKey: draft.sourceKey,
+    recipientAddress: draft.recipientCashAddr,
+    kind: draft.config.mintType === 'NFT' ? 'nft' : 'fungible',
+    fungibleAmount: draft.config.ftAmount,
+    nftCapability: draft.config.nftCapability,
+    nftCommitment: draft.config.nftCommitment,
+  }));
 
-  for (const d of drafts) {
-    const src = sourceByKey.get(d.sourceKey);
-    if (!src) continue;
+  const result = validateCapabilityAwareMintDrafts({
+    outputs: capabilityDrafts,
+    sourceByKey,
+  });
 
-    const category = String(src.tx_hash || '').trim();
-    if (!category) continue;
-
-    const list = byCategory.get(category) ?? [];
-    list.push(d);
-    byCategory.set(category, list);
-  }
-
-  for (const [category, list] of byCategory) {
-    if (list.length <= 1) continue;
-
-    const hasNftOutput = list.some((d) => d.config.mintType === 'NFT');
-    if (!hasNftOutput) continue;
-
+  if (result.ok === false) {
     return {
       ok: false,
       message:
-        `Category ${shortHash(category, 12, 8)} is used in multiple outputs. ` +
-        `When reusing a category across outputs, all outputs must be FT (NFT outputs cannot be duplicated).`,
+        'message' in result ? result.message : 'Capability validation failed.',
     };
   }
 

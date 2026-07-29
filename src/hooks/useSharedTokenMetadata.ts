@@ -146,6 +146,17 @@ function getFailureRetryDelayMs(category: string): number | undefined {
   return METADATA_FAILURE_TTL_MS - age;
 }
 
+export function normalizeSharedTokenCategories(categories: string[]): string[] {
+  const normalized = categories
+    .map((category) => normalizeCategory(category))
+    .filter(Boolean);
+  return Array.from(new Set(normalized)).sort();
+}
+
+export function buildSharedTokenCategoriesKey(categories: string[]): string {
+  return normalizeSharedTokenCategories(categories).join('\u0000');
+}
+
 async function loadCachedTokenMetadata(
   category: string
 ): Promise<SharedTokenMetadata | null> {
@@ -295,9 +306,7 @@ export function getCachedTokenMetadata(
 }
 
 export async function preloadTokenMetadata(categories: string[]): Promise<void> {
-  const unique = Array.from(
-    new Set(categories.map((category) => normalizeCategory(category)).filter(Boolean))
-  );
+  const unique = normalizeSharedTokenCategories(categories);
 
   if (isWebRuntime()) {
     await Promise.all(
@@ -316,12 +325,10 @@ export async function preloadTokenMetadata(categories: string[]): Promise<void> 
 }
 
 export default function useSharedTokenMetadata(categories: string[]) {
-  const normalizedCategories = useMemo(() => {
-    const normalized = categories
-      .map((category) => normalizeCategory(category))
-      .filter(Boolean);
-    return Array.from(new Set(normalized));
-  }, [categories]);
+  const normalizedCategoryKey = useMemo(
+    () => buildSharedTokenCategoriesKey(categories),
+    [categories]
+  );
 
   const [metadata, setMetadata] = useState<Record<string, SharedTokenMetadata>>(
     {}
@@ -361,7 +368,11 @@ export default function useSharedTokenMetadata(categories: string[]) {
     // Browser mode still uses cache as a fast path, but it must not block live BCMR refreshes.
     const allowRemoteRefresh = true;
 
-    for (const category of normalizedCategories) {
+    const categoriesToProcess = normalizedCategoryKey
+      ? normalizedCategoryKey.split('\u0000')
+      : [];
+
+    for (const category of categoriesToProcess) {
       const cached = getCachedTokenMetadata(category);
 
       if (cached) {
@@ -391,7 +402,7 @@ export default function useSharedTokenMetadata(categories: string[]) {
 
     void (async () => {
       await Promise.all(
-        normalizedCategories.map(async (category) => {
+        categoriesToProcess.map(async (category) => {
           let resolved = getCachedTokenMetadata(category);
 
           if (!resolved) {
@@ -447,7 +458,7 @@ export default function useSharedTokenMetadata(categories: string[]) {
         window.clearTimeout(retryTimer);
       }
     };
-  }, [normalizedCategories, refreshNonce, retryNonce]);
+  }, [normalizedCategoryKey, refreshNonce, retryNonce]);
 
   return metadata;
 }
