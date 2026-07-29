@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const { isNativePlatformMock, getPlatformMock } = vi.hoisted(() => ({
   isNativePlatformMock: vi.fn(),
@@ -14,6 +14,7 @@ vi.mock('@capacitor/core', () => ({
 
 import {
   isAndroidNativePlatform,
+  isDesktopPlatform,
   isNativePlatform,
   isWebPlatform,
 } from '../platform';
@@ -21,6 +22,18 @@ import {
 describe('platform', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it('recognizes the Tauri desktop WebView', () => {
+    vi.stubGlobal('window', {});
+    expect(isDesktopPlatform()).toBe(false);
+
+    vi.stubGlobal('window', { __TAURI_INTERNALS__: {} });
+    expect(isDesktopPlatform()).toBe(true);
   });
 
   it('reports web as non-native', () => {

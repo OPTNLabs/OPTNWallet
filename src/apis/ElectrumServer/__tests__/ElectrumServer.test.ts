@@ -286,6 +286,23 @@ describe('ElectrumServer', () => {
     expect(ElectrumWebSocket.mock.calls[1][0]).toBe('b.example');
   });
 
+  it('parses a bare host:port server entry as an encrypted websocket endpoint', async () => {
+    const client = makeMockClient();
+    const { server, ElectrumWebSocket } = await loadServerWithMocksAndSpies(
+      [client],
+      ['fulcrum.example:50004']
+    );
+
+    await expect(server.request('server.ping')).resolves.toBe('ok');
+
+    expect(ElectrumWebSocket).toHaveBeenCalledWith(
+      'fulcrum.example',
+      50004,
+      true,
+      expect.any(Number)
+    );
+  });
+
   it('request keeps the original error if reconnect also fails', async () => {
     const first = makeMockClient();
     const second = makeMockClient();

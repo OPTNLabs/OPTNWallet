@@ -1,187 +1,71 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
-import TransactionManager from '../../apis/TransactionManager/TransactionManager';
-import DatabaseService from '../../apis/DatabaseManager/DatabaseService';
-import { setTransactions } from '../../state/slices/transactionSlice';
+import { useCallback, useEffect, useState } from 'react';
 import { AppDispatch } from '../../state/store';
-import { TransactionHistoryItem } from '../../types/types';
-import ElectrumService from '../../services/ElectrumService';
-import { reconcileOutboundTransactions } from '../../services/OutboundTransactionReconciler';
-import { planTransactionDetailRefresh } from '../../services/transactionDetailSync';
-import {
-  runOutboundReconcile,
-  runWalletHistoryRefresh,
-} from '../../services/RefreshCoordinator';
-import QuantumrootTrackingService from '../../services/QuantumrootTrackingService';
+import { refreshWalletTransactionHistory } from '../../services/WalletHistoryRefreshService';
 
 type UseTransactionHistoryFetchParams = {
   walletIdParam: string | undefined;
   isInitialized: boolean;
   transactionCount: number;
+  sessionGeneration: number;
   dispatch: AppDispatch;
 };
 
-function toHistoryItem(row: Record<string, unknown>): TransactionHistoryItem {
-  return {
-    tx_hash: String(row.tx_hash ?? ''),
-    height: Number(row.height ?? 0),
-    timestamp:
-      row.timestamp === null || row.timestamp === undefined
-        ? undefined
-        : String(row.timestamp),
-    amount:
-      row.amount === null || row.amount === undefined
-        ? undefined
-        : (row.amount as string | number),
-  };
-}
-
-function loadStoredTransactions(
-  db: { prepare: (sql: string) => { bind: (params: [number]) => void; step: () => boolean; getAsObject: () => Record<string, unknown>; free: () => void } },
-  walletId: number
-) {
-  const storedTransactionsQuery = db.prepare(`
-    SELECT tx_hash, height, timestamp, amount
-    FROM transactions
-    WHERE wallet_id = ?;
-  `);
-  storedTransactionsQuery.bind([walletId]);
-  const storedTransactions: TransactionHistoryItem[] = [];
-  while (storedTransactionsQuery.step()) {
-    storedTransactions.push(
-      toHistoryItem(storedTransactionsQuery.getAsObject())
-    );
-  }
-  storedTransactionsQuery.free();
-  return storedTransactions;
-}
-
+/**
+ * History for the transactions page.
+ *
+ * The fetch itself lives in `WalletHistoryRefreshService` so the address
+ * subscription can run the identical code when a payment arrives — otherwise
+ * only a mounted history page could ever refresh history, which is why Recent
+ * Activity on Home went stale until the user navigated.
+ */
 export function useTransactionHistoryFetch({
   walletIdParam,
   isInitialized,
   transactionCount,
+  sessionGeneration,
   dispatch,
 }: UseTransactionHistoryFetchParams) {
   const [progress, setProgress] = useState(0);
   const [loading, setLoading] = useState(false);
-  const [fetchedAddresses, setFetchedAddresses] = useState<Set<string>>(new Set());
-  const dbService = useMemo(() => DatabaseService(), []);
+  const [fetchedAddresses, setFetchedAddresses] = useState<Set<string>>(
+    new Set()
+  );
 
-  const fetchTransactionHistory = useCallback(async () => {
-    if (!walletIdParam || loading) return;
-    const walletIdNum = parseInt(walletIdParam, 10);
-    if (Number.isNaN(walletIdNum)) return;
+  const fetchTransactionHistory = useCallback(
+    async (options?: { full?: boolean }) => {
+      if (!walletIdParam || loading) return;
+      const walletIdNum = parseInt(walletIdParam, 10);
+      if (Number.isNaN(walletIdNum)) return;
 
-    setLoading(true);
-    setProgress(0);
-
-    try {
-      await runWalletHistoryRefresh(walletIdNum, async () => {
-        await ElectrumService.reconnect();
-
-        await dbService.ensureDatabaseStarted();
-        const db = dbService.getDatabase();
-        if (!db) {
-          console.error('Database not started.');
-          return;
-        }
-        const previousStoredTransactions = loadStoredTransactions(db, walletIdNum);
-
-        const addressesQuery = db.prepare(`
-      SELECT address FROM addresses WHERE wallet_id = ?;
-    `);
-        addressesQuery.bind([walletIdParam]);
-
-        const addresses: string[] = [];
-        while (addressesQuery.step()) {
-          const result = addressesQuery.getAsObject();
-          if (typeof result.address === 'string') {
-            addresses.push(result.address);
-          }
-        }
-        addressesQuery.free();
-
-        const quantumrootAddresses =
-          await QuantumrootTrackingService.listTrackedAddresses(walletIdNum);
-        for (const address of quantumrootAddresses) {
-          addresses.push(address);
-        }
-
-        const pending = addresses.filter((a) => !fetchedAddresses.has(a));
-        const totalToScan = pending.length;
-
-        if (totalToScan === 0) {
-          setProgress(100);
-          return;
-        }
-
-        const transactionManager = TransactionManager();
-        const processedAddresses: string[] = [];
-        const historyByAddress =
-          await transactionManager.fetchAndStoreTransactionHistories(
-            walletIdNum,
-            pending
-          );
-
-        pending.forEach((address, index) => {
-          if (Array.isArray(historyByAddress[address])) {
-            processedAddresses.push(address);
-          }
-          setProgress(Math.round(((index + 1) / totalToScan) * 100));
+      setLoading(true);
+      setProgress(0);
+      try {
+        const { scannedAddresses } = await refreshWalletTransactionHistory({
+          walletId: walletIdNum,
+          dispatch,
+          sessionGeneration,
+          // The initial page load stays incremental. An explicit refresh is a
+          // FULL pass: a new payment lands on an address that has almost
+          // certainly been scanned already, so skipping scanned addresses would
+          // filter out the only one that changed.
+          skipAddresses: options?.full ? undefined : fetchedAddresses,
+          onProgress: setProgress,
         });
-
-        const liveDb = dbService.getDatabase();
-        if (!liveDb) {
-          console.error('Database not started after history fetch.');
-        } else {
-          const storedTransactions = loadStoredTransactions(liveDb, walletIdNum);
-          const refreshPlan = planTransactionDetailRefresh({
-            previous: previousStoredTransactions,
-            next: storedTransactions,
-          });
-
-          const txidsToWarm = refreshPlan.reorgDetected
-            ? storedTransactions.map((tx) => tx.tx_hash)
-            : refreshPlan.txidsToRefresh;
-
-          if (txidsToWarm.length > 0) {
-            void Promise.allSettled(
-              txidsToWarm.map((txid) =>
-                ElectrumService.getTransactionDetails(txid, {
-                  forceRefresh: refreshPlan.reorgDetected,
-                })
-              )
-            );
-          }
-
-          dispatch(
-            setTransactions({
-              wallet_id: walletIdNum,
-              transactions: storedTransactions,
-            })
-          );
-        }
-
-        if (processedAddresses.length > 0) {
-          setFetchedAddresses((prev) => {
-            const next = new Set(prev);
-            for (const address of processedAddresses) {
-              next.add(address);
-            }
+        if (scannedAddresses.length > 0) {
+          setFetchedAddresses((previous) => {
+            const next = new Set(previous);
+            for (const address of scannedAddresses) next.add(address);
             return next;
           });
         }
-
-        await runOutboundReconcile(walletIdNum, () =>
-          reconcileOutboundTransactions(walletIdNum)
-        );
-        setProgress(100);
-      });
-    } catch (e) {
-      console.error('Failed to fetch transaction history:', e);
-    } finally {
-      setLoading(false);
-    }
-  }, [walletIdParam, loading, dbService, fetchedAddresses, dispatch]);
+      } catch (error) {
+        console.error('Failed to fetch transaction history:', error);
+      } finally {
+        setLoading(false);
+      }
+    },
+    [walletIdParam, loading, fetchedAddresses, sessionGeneration, dispatch]
+  );
 
   useEffect(() => {
     if (isInitialized && transactionCount === 0 && !loading) {
@@ -192,6 +76,10 @@ export function useTransactionHistoryFetch({
   return {
     progress,
     loading,
-    fetchTransactionHistory,
+    /** Manual refresh: always a full pass, so it cannot no-op on a scanned set. */
+    fetchTransactionHistory: useCallback(
+      () => fetchTransactionHistory({ full: true }),
+      [fetchTransactionHistory]
+    ),
   };
 }

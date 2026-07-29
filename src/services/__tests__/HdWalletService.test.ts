@@ -1,18 +1,47 @@
 import { describe, expect, it } from 'vitest';
+import * as bip39 from 'bip39';
 
 import { Network } from '../../state/slices/networkSlice';
 import {
+  buildBchAccountPath,
   deriveBchChild,
   deriveBchAddressFromHdPublicKey,
   deriveBchKeyMaterial,
   deriveBchStandardXpubs,
   deriveBchXpubAtBranch,
+  getBchAccountPath,
+  getBchCoinType,
+  normalizeBchAccountPath,
+  parseBchAccountPath,
 } from '../HdWalletService';
 
-const TEST_MNEMONIC =
-  'abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about';
+// Deterministic zero-entropy BIP39 test vector (not a real seed).
+const TEST_MNEMONIC = bip39.entropyToMnemonic('0'.repeat(32));
 
 describe('HdWalletService', () => {
+  it('uses BCH mainnet coin type 145 and testnet coin type 1', () => {
+    expect(getBchCoinType(Network.MAINNET)).toBe(145);
+    expect(getBchCoinType(Network.CHIPNET)).toBe(1);
+    expect(getBchAccountPath(Network.CHIPNET, 2)).toBe("m/44'/1'/2'");
+  });
+
+  it('accepts only canonical BIP44 account paths', () => {
+    expect(normalizeBchAccountPath(" m/44'/1'/7' ")).toBe("m/44'/1'/7'");
+    expect(() => normalizeBchAccountPath("m/44'/1'/0'/0/0")).toThrow();
+    expect(() => normalizeBchAccountPath("m/49'/1'/0'")).toThrow();
+    expect(() => normalizeBchAccountPath("m/44'/2147483648'/0'")).toThrow();
+  });
+
+  it('round-trips editable BIP44 numeric components without exposing hardened markers', () => {
+    const parts = parseBchAccountPath("m/44'/1'/7'");
+
+    expect(parts).toEqual({ coinType: 1, accountIndex: 7 });
+    expect(buildBchAccountPath(parts)).toBe("m/44'/1'/7'");
+    expect(() =>
+      buildBchAccountPath({ coinType: 1, accountIndex: 2147483648 })
+    ).toThrow();
+  });
+
   it('derives receive addresses from xpubs that match mnemonic-based key material', async () => {
     const receiveIndex = 4;
     const xpubs = await deriveBchStandardXpubs(
