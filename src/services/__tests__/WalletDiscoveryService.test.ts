@@ -116,6 +116,17 @@ describe('WalletDiscoveryService', () => {
       batchHasUsage
     );
 
+    expect(batchHasUsage.mock.calls[0][1]).toHaveLength(20);
+    expect(batchHasUsage.mock.calls[0][1]).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ addressIndex: 0, changeIndex: 0 }),
+      ])
+    );
+    expect(
+      batchHasUsage.mock.calls[0][1].every(
+        (candidate: { changeIndex: number }) => candidate.changeIndex === 0
+      )
+    ).toBe(true);
     expect(createKeysMock).toHaveBeenCalledWith(5, 0, 0, 12);
   });
 

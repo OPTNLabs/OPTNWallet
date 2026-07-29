@@ -12,6 +12,7 @@ import {
 } from '../../state/slices/hardwareWalletSlice';
 import { selectCurrentNetwork } from '../../state/selectors/networkSelectors';
 import { Network } from '../../state/slices/networkSlice';
+import { selectWalletDerivationPath } from '../../state/slices/walletSlice';
 import { getBchAccountPath } from '../../services/HdWalletService';
 import { trezorGetPublicKey } from '../../services/hardware/TrezorService';
 import { ledgerGetPublicKey, ledgerDisconnect, setLedgerTransportType } from '../../services/hardware/LedgerService';
@@ -91,7 +92,8 @@ export const HardwareWalletSettings: React.FC = () => {
   const dispatch = useDispatch();
   const hw = useSelector(selectHardwareWallet);
   const currentNetwork = useSelector(selectCurrentNetwork);
-  const defaultPath = getBchAccountPath(currentNetwork);
+  const walletDerivationPath = useSelector(selectWalletDerivationPath);
+  const defaultPath = walletDerivationPath || getBchAccountPath(currentNetwork);
 
   const [status, setStatus] = useState<ConnectStatus>(hw.connected ? 'connected' : 'idle');
   const [errorMsg, setErrorMsg] = useState<string | null>(null);

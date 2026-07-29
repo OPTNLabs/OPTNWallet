@@ -30,7 +30,11 @@ import {
 import { reconcileOutboundTransactions } from '../services/OutboundTransactionReconciler';
 import { runOutboundReconcile } from '../services/RefreshCoordinator';
 import { Network, setNetwork } from '../state/slices/networkSlice';
-import { setWalletNetwork, setWalletType } from '../state/slices/walletSlice';
+import {
+  setWalletNetwork,
+  setWalletType,
+  setWalletDerivationPath,
+} from '../state/slices/walletSlice';
 import { WalletType } from '../types/wallet';
 import ScreenSecurity from '../platform/plugins/ScreenSecurity';
 import ElectrumServer from '../apis/ElectrumServer/ElectrumServer';
@@ -192,6 +196,17 @@ export function useWalletNetworkBootstrap(
         if (!cancelled && resolvedNetwork) {
           dispatch(setWalletNetwork(resolvedNetwork));
           dispatch(setWalletType(walletInfo?.walletType ?? WalletType.STANDARD));
+          if (walletInfo?.derivation_path) {
+            dispatch(
+              setWalletDerivationPath({
+                path: walletInfo.derivation_path,
+                source:
+                  walletInfo.derivation_path_source === 'custom'
+                    ? 'custom'
+                    : 'default',
+              })
+            );
+          }
           dispatch(setNetwork(resolvedNetwork));
         }
       } catch (error) {

@@ -70,6 +70,7 @@ export default function SimpleSend() {
     review,
     txid,
     broadcastState,
+    maxBusy,
 
     reset,
     doReview,
@@ -316,9 +317,10 @@ export default function SimpleSend() {
                       type="button"
                       className="wallet-segment-inactive min-h-[42px] self-end rounded-[16px] border border-[var(--wallet-border)] px-3 py-2 text-sm font-semibold transition"
                       onClick={() => void doMax()}
+                      disabled={isSending || maxBusy}
                       aria-label="Fill the full spendable balance minus network fee"
                     >
-                      Max
+                      {maxBusy ? '…' : 'Max'}
                     </button>
                     <button
                       type="button"
@@ -504,7 +506,7 @@ export default function SimpleSend() {
             <button
               type="button"
               onClick={reset}
-              disabled={isSending}
+              disabled={isSending || maxBusy}
               className="wallet-btn-secondary px-4"
               title="Clear form"
             >

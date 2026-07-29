@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { generateSecretKey, getPublicKey } from 'nostr-tools';
 import { wrapManyEvents, unwrapEvent } from 'nostr-tools/nip17';
 import { toPubkeyHex } from '../chat';
+import { deriveNostrIdentity } from '../identity';
 
 // Exercises the NIP-17 DM crypto the chat service uses, offline (no relays):
 // wrap a message from A to B, and confirm B (and only B) recovers it.
@@ -32,6 +33,48 @@ describe('nostr chat DM (NIP-17)', () => {
     // A's self-copy round-trips under A's key too.
     const forA = wraps.find((w) => w.tags.some((t) => t[0] === 'p' && t[1] === aPk))!;
     expect(unwrapEvent(forA, aSk).content).toBe('gm on chipnet');
+  });
+
+  it('mobile and desktop identities exchange NIP-17 DMs in both directions', async () => {
+    // These identities stand in for separate mobile and desktop wallet clients.
+    // Both clients use the same NIP-06 derivation path and NIP-17 wire format.
+    const mobile = await deriveNostrIdentity(
+      'abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about'
+    );
+    const desktop = await deriveNostrIdentity(
+      'legal winner thank year wave sausage worth useful legal winner thank yellow'
+    );
+
+    expect(toPubkeyHex(desktop.npub)).toBe(desktop.pubkey);
+    expect(toPubkeyHex(mobile.npub)).toBe(mobile.pubkey);
+
+    const mobileToDesktop = wrapManyEvents(
+      mobile.secretKey,
+      [{ publicKey: desktop.pubkey }],
+      'hello from mobile'
+    );
+    const desktopCopy = mobileToDesktop.find((event) =>
+      event.tags.some((tag) => tag[0] === 'p' && tag[1] === desktop.pubkey)
+    );
+    expect(desktopCopy).toBeDefined();
+    expect(unwrapEvent(desktopCopy!, desktop.secretKey)).toMatchObject({
+      content: 'hello from mobile',
+      pubkey: mobile.pubkey,
+    });
+
+    const desktopToMobile = wrapManyEvents(
+      desktop.secretKey,
+      [{ publicKey: mobile.pubkey }],
+      'hello from desktop'
+    );
+    const mobileCopy = desktopToMobile.find((event) =>
+      event.tags.some((tag) => tag[0] === 'p' && tag[1] === mobile.pubkey)
+    );
+    expect(mobileCopy).toBeDefined();
+    expect(unwrapEvent(mobileCopy!, mobile.secretKey)).toMatchObject({
+      content: 'hello from desktop',
+      pubkey: desktop.pubkey,
+    });
   });
 
   it('toPubkeyHex accepts npub and hex, rejects junk', () => {

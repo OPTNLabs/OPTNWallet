@@ -25,7 +25,6 @@ const DEFAULT_NOSTR_RELAYS = [
   'wss://relay.damus.io',
   'wss://nos.lol',
   'wss://relay.primal.net',
-  'wss://relay.nostr.band',
 ];
 
 /** Rounds a coin is fused before the engine stops picking it up. */

@@ -35,6 +35,8 @@ vi.mock('../../../services/SecretCryptoService', () => ({
 vi.mock('../../../services/HdWalletService', () => ({
   deriveBchChild: vi.fn(),
   deriveBchStandardXpubs: vi.fn(),
+  getBchAccountPath: vi.fn(() => "m/44'/145'/0'"),
+  normalizeBchAccountPath: vi.fn((path: string) => path),
 }));
 
 vi.mock('../../../services/QuantumrootService', () => ({
@@ -249,7 +251,8 @@ describe('KeyManager', () => {
       Network.MAINNET,
       'wallet mnemonic',
       'wallet passphrase',
-      2
+      2,
+      "m/44'/145'/0'"
     );
   });
 
@@ -357,7 +360,8 @@ describe('KeyManager', () => {
       0,
       7,
       '0',
-      '00'.repeat(32)
+      '00'.repeat(32),
+      "m/44'/145'/0'"
     );
   });
 
@@ -407,7 +411,8 @@ describe('KeyManager', () => {
       0,
       9,
       '1',
-      '11'.repeat(32)
+      '11'.repeat(32),
+      "m/44'/145'/0'"
     );
   });
 

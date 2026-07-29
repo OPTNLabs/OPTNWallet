@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { getVisibleWalletRows, WALLET_ROWS } from '../settingsConfig';
+import { Network } from '../../../state/slices/networkSlice';
 
 describe('settingsConfig', () => {
   it('exposes wallet settings including the pending tx lock screen link', () => {
@@ -13,21 +14,40 @@ describe('settingsConfig', () => {
     });
   });
 
-  it('hides desktop-only wallet settings rows outside the desktop runtime', () => {
-    const visibleKeys = getVisibleWalletRows(false).map((row) => row.key);
+  it('keeps network, server, and derivation controls available on mobile', () => {
+    const visibleKeys = getVisibleWalletRows(false, Network.MAINNET).map(
+      (row) => row.key
+    );
 
-    expect(visibleKeys).toEqual(['recovery', 'pending-outbox', 'app-lock']);
-    expect(visibleKeys).not.toEqual(expect.arrayContaining([
+    expect(visibleKeys).toEqual([
       'network',
+      'derivation',
+      'recovery',
+      'pending-outbox',
       'nostr',
       'server',
-      'console',
-      'experimental',
-      'addons',
-    ]));
+    ]);
+    expect(visibleKeys).not.toEqual(
+      expect.arrayContaining([
+        'faucet',
+        'app-lock',
+        'console',
+        'experimental',
+        'addons',
+      ])
+    );
+  });
+
+  it('shows the Chipnet faucet only for the active Chipnet network', () => {
+    expect(
+      getVisibleWalletRows(false, Network.MAINNET).map((row) => row.key)
+    ).not.toContain('faucet');
+    expect(
+      getVisibleWalletRows(false, Network.CHIPNET).map((row) => row.key)
+    ).toContain('faucet');
   });
 
   it('keeps all wallet settings rows in the desktop runtime', () => {
-    expect(getVisibleWalletRows(true)).toBe(WALLET_ROWS);
+    expect(getVisibleWalletRows(true, Network.CHIPNET)).toEqual(WALLET_ROWS);
   });
 });

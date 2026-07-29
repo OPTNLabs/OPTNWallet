@@ -81,6 +81,9 @@ const Home: React.FC = () => {
   const currentWalletId = useSelector(
     (state: RootState) => state.wallet_id.currentWalletId
   );
+  const sessionGeneration = useSelector(
+    (state: RootState) => state.wallet_id.sessionGeneration ?? 0
+  );
   const reduxUTXOs = useSelector((state: RootState) => state.utxos.utxos);
   const fetchingUTXOsRedux = useSelector(
     (state: RootState) => state.utxos.fetchingUTXOs
@@ -138,10 +141,11 @@ const Home: React.FC = () => {
     void refreshWalletTransactionHistory({
       walletId: currentWalletId,
       dispatch,
+      sessionGeneration,
     }).catch((error) => {
       logError('DesktopHome.loadHistory', error, { walletId: currentWalletId });
     });
-  }, [currentWalletId, dispatch]);
+  }, [currentWalletId, dispatch, sessionGeneration]);
 
   const handleRefresh = useCallback(async () => {
     if (fetchingUTXOsRedux || !currentWalletId) return;
@@ -177,6 +181,7 @@ const Home: React.FC = () => {
       await refreshWalletTransactionHistory({
         walletId: currentWalletId,
         dispatch,
+        sessionGeneration,
       });
     } catch (error) {
       logError('Home.handleRefresh', error, { walletId: currentWalletId });
@@ -185,7 +190,13 @@ const Home: React.FC = () => {
         dispatch(setFetchingUTXOs(false));
       }
     }
-  }, [currentWalletId, dbService, dispatch, fetchingUTXOsRedux]);
+  }, [
+    currentWalletId,
+    dbService,
+    dispatch,
+    fetchingUTXOsRedux,
+    sessionGeneration,
+  ]);
 
   const handleScanQr = useCallback(async () => {
     if (scanBusy) return;
