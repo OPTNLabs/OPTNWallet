@@ -40,8 +40,8 @@ import WalletScreen from '../../components/ui/WalletScreen';
 import { AppDispatch, RootState } from '../../state/store';
 import { getReturnPath } from '../../utils/navigation';
 import {
-  ABOUT_ROWS,
-  CONTRACT_ROWS,
+  SETTINGS_GROUPS,
+  getSettingsGroupRows,
   getVisibleWalletRows,
   type SettingsRowConfig,
 } from './settingsConfig';
@@ -71,6 +71,10 @@ const Settings: React.FC = () => {
   const logoutNodeRef = useRef<HTMLDivElement | null>(null);
   const returnTarget = getReturnPath(location, '');
   const visibleWalletRows = getVisibleWalletRows(desktop, currentNetwork);
+  const selectedGroup = selectedOption.startsWith('group:')
+    ? selectedOption.slice('group:'.length)
+    : null;
+  const groupConfig = SETTINGS_GROUPS.find((group) => group.key === selectedGroup);
 
   useEffect(() => {
     const panel = searchParams.get('panel') ?? '';
@@ -222,6 +226,30 @@ const Settings: React.FC = () => {
     }
   };
 
+  const renderRows = (rows: SettingsRowConfig[]) => (
+    <div className="space-y-3">
+      {rows.map((row) => (
+        <SettingsRow
+          key={row.key}
+          title={row.title}
+          description={row.description}
+          compact
+          right={
+            row.key === 'network' ? (
+              <span className="text-xs font-semibold capitalize text-[var(--wallet-accent)]">
+                {currentNetwork}
+              </span>
+            ) : row.right ? (
+              <span className="wallet-muted">{row.right}</span>
+            ) : undefined
+          }
+          disabled={row.action === 'noop'}
+          onClick={row.action === 'noop' ? undefined : () => handleRowClick(row)}
+        />
+      ))}
+    </div>
+  );
+
   return (
     <WalletScreen maxWidthClassName="max-w-md" scrollable={false}>
       <div className="flex h-full min-h-0 flex-col gap-4">
@@ -260,71 +288,19 @@ const Settings: React.FC = () => {
               <div className="flex h-full min-h-0 flex-col gap-4">
                 <div className="grid min-h-0 flex-1 grid-cols-1 gap-2.5 overflow-y-auto overscroll-contain pr-1">
                   <SectionCard className="p-0">
-                    <SectionHeader title="Wallet" compact />
-                    <div className="space-y-3">
-                      {visibleWalletRows.map((row) => (
-                        <SettingsRow
-                          key={row.key}
-                          title={row.title}
-                          description={row.description}
-                          compact
-                          right={
-                            row.key === 'network' ? (
-                              <span className="text-xs font-semibold capitalize text-[var(--wallet-accent)]">
-                                {currentNetwork}
-                              </span>
-                            ) : row.right ? (
-                              <span className="wallet-muted">{row.right}</span>
-                            ) : undefined
-                          }
-                          disabled={row.action === 'noop'}
-                          onClick={
-                            row.action === 'noop'
-                              ? undefined
-                              : () => handleRowClick(row)
-                          }
-                        />
-                      ))}
-                    </div>
+                    <SectionHeader title="Quick access" compact />
+                    {renderRows(visibleWalletRows)}
                   </SectionCard>
 
-                  <SectionCard className="p-0">
-                    <SectionHeader title="Contract Tools" compact />
-                    <div className="space-y-3">
-                      {CONTRACT_ROWS.map((row) => (
-                        <SettingsRow
-                          key={row.key}
-                          title={row.title}
-                          description={row.description}
-                          compact
-                          onClick={
-                            row.action === 'noop'
-                              ? undefined
-                              : () => handleRowClick(row)
-                          }
-                        />
-                      ))}
-                    </div>
-                  </SectionCard>
-
-                  <SectionCard className="p-0">
-                    <SectionHeader title="About" compact />
-                    <div className="space-y-3">
-                      {ABOUT_ROWS.map((row) => (
-                        <SettingsRow
-                          key={row.key}
-                          title={row.title}
-                          description={row.description}
-                          compact
-                          onClick={
-                            row.action === 'noop'
-                              ? undefined
-                              : () => handleRowClick(row)
-                          }
-                        />
-                      ))}
-                    </div>
-                  </SectionCard>
+                  {SETTINGS_GROUPS.map((group) => (
+                    <SettingsRow
+                      key={group.key}
+                      title={group.title}
+                      description={group.description}
+                      compact
+                      onClick={() => setSelectedOption(`group:${group.key}`)}
+                    />
+                  ))}
                 </div>
 
                 <button
@@ -342,10 +318,18 @@ const Settings: React.FC = () => {
                   <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain pr-1">
                     <div className="mb-4 flex items-center justify-between">
                       <h2 className="text-xl font-bold wallet-text-strong">
-                        {renderTitle()}
+                        {groupConfig?.title ?? renderTitle()}
                       </h2>
                     </div>
-                    {renderContent()}
+                    {groupConfig
+                      ? renderRows(
+                          getSettingsGroupRows(
+                            groupConfig.key,
+                            desktop,
+                            currentNetwork
+                          )
+                        )
+                      : renderContent()}
                   </div>
                 </div>
               </SectionCard>

@@ -163,6 +163,33 @@
 }
 
 @layer components {
+  .wallet-dialog-backdrop {
+    position: fixed;
+    inset: 0;
+    z-index: 1000;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 1.25rem;
+    background: rgba(0, 0, 0, 0.62);
+    backdrop-filter: blur(3px);
+  }
+
+  .wallet-dialog {
+    width: min(100%, 26rem);
+    border: 1px solid var(--wallet-border);
+    border-radius: 1rem;
+    padding: 1.25rem;
+    color: var(--wallet-text);
+    background: var(--wallet-card-bg);
+    box-shadow: 0 20px 50px rgba(0, 0, 0, 0.38);
+  }
+
+  .wallet-dialog-title { margin: 0; color: var(--wallet-text-strong); font-size: 1.1rem; font-weight: 700; }
+  .wallet-dialog-message { margin: 0.8rem 0 1.2rem; white-space: pre-line; line-height: 1.45; font-size: 0.9rem; }
+  .wallet-dialog-actions { display: flex; justify-content: flex-end; gap: 0.6rem; }
+  .wallet-dialog-button { min-width: 5rem; }
+
   .wallet-card {
     @apply rounded-2xl border;
     border-color: var(--wallet-border);
