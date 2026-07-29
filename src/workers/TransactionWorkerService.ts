@@ -4,7 +4,7 @@ import TransactionManager from '../apis/TransactionManager/TransactionManager';
 import { store } from '../state/store';
 import { addTransactions } from '../state/slices/transactionSlice';
 import { INTERVAL } from '../utils/constants';
-import { requestUTXORefreshFor } from './UTXOWorkerService';
+import { requestWalletUTXORefresh } from './UTXOWorkerService';
 import ElectrumService from '../services/ElectrumService';
 import { planTransactionDetailRefresh } from '../services/transactionDetailSync';
 import QuantumrootTrackingService from '../services/QuantumrootTrackingService';
@@ -15,6 +15,7 @@ let transactionStartRetry: NodeJS.Timeout | null = null;
 async function fetchAndStoreTransactionHistory() {
   const state = store.getState();
   const currentWalletId = state.wallet_id.currentWalletId;
+  const sessionGeneration = state.wallet_id.sessionGeneration ?? 0;
   const transactionManager = TransactionManager();
 
   if (!currentWalletId) {
@@ -39,7 +40,8 @@ async function fetchAndStoreTransactionHistory() {
     const historyByAddress =
       await transactionManager.fetchAndStoreTransactionHistories(
         currentWalletId,
-        addresses
+        addresses,
+        sessionGeneration
       );
 
     const mergedByHash = new Map(
@@ -71,17 +73,25 @@ async function fetchAndStoreTransactionHistory() {
     }
 
     for (const address of addresses) {
+      const activeWallet = store.getState().wallet_id;
+      if (
+        activeWallet.currentWalletId !== currentWalletId ||
+        (activeWallet.sessionGeneration ?? 0) !== sessionGeneration
+      ) {
+        return;
+      }
       const updatedHistory = historyByAddress[address] ?? [];
       if (updatedHistory.length > 0) {
         store.dispatch(
           addTransactions({
             wallet_id: currentWalletId,
             transactions: updatedHistory,
+            sessionGeneration,
           })
         );
       }
-      requestUTXORefreshFor(address, 60);
     }
+    requestWalletUTXORefresh(60);
   } catch (error) {
     console.error('Error fetching and storing transaction history:', error);
   }

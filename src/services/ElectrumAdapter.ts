@@ -8,6 +8,8 @@ export interface ElectrumAdapter {
   request(method: string, ...params: unknown[]): Promise<RequestResponse>;
   subscribe(method: string, params?: unknown[]): Promise<void>;
   unsubscribe(method: string, params?: unknown[]): Promise<void>;
+  getCurrentServer(): string | null;
+  getServerList(): string[];
 }
 
 export default function getElectrumAdapter(): ElectrumAdapter {
@@ -22,5 +24,7 @@ export default function getElectrumAdapter(): ElectrumAdapter {
       server.subscribe(method, params as never[] | undefined),
     unsubscribe: (method: string, params?: unknown[]) =>
       server.unsubscribe(method, params as never[] | undefined),
+    getCurrentServer: () => server.getCurrentServer(),
+    getServerList: () => server.getServerList(),
   };
 }

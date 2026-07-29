@@ -2,14 +2,24 @@
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
   "description": "OPTN Wallet desktop permissions",
-  "windows": ["main"],
+  "windows": ["main", "wallet-*"],
   "permissions": [
     "core:default",
+    "core:webview:allow-create-webview-window",
+    "core:window:allow-create",
+    "log:default",
     "notification:default",
     "fs:default",
     "fs:allow-appdata-read-recursive",
     "fs:allow-appdata-write-recursive",
     "fs:allow-appcache-read-recursive",
-    "fs:allow-appcache-write-recursive"
+    "fs:allow-appcache-write-recursive",
+    "dialog:default",
+    "dialog:allow-open",
+    "dialog:allow-save",
+    "keyring:allow-get-password",
+    "keyring:allow-set-password",
+    "keyring:allow-delete-password",
+    "biometry:default"
   ]
 }

@@ -5,11 +5,15 @@ export enum WalletType {
   QUANTUMROOT = 'quantumroot',
 }
 
+export type DerivationPathSource = 'default' | 'custom';
+
 export type WalletLookup = {
   mnemonic: string;
   passphrase: string;
   networkType?: Network;
   walletType?: WalletType;
+  derivationPath?: string;
+  derivationPathSource?: DerivationPathSource;
 };
 
 export type WalletRecord = {
@@ -20,4 +24,6 @@ export type WalletRecord = {
   networkType: Network | null;
   walletType: WalletType;
   balance: number | null;
+  derivation_path: string;
+  derivation_path_source: DerivationPathSource;
 };

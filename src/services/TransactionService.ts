@@ -361,15 +361,25 @@ class TransactionService {
     const activeOutbound = currentWalletId
       ? await OutboundTransactionTracker.listActive(currentWalletId)
       : [];
+    const requestedOutpoints = new Set(
+      (spentInputs ?? []).map((input) => `${input.tx_hash}:${input.tx_pos}`)
+    );
     const conflictingPending = activeOutbound.find(
-      (record) => !currentTxid || record.txid !== currentTxid
+      (record) =>
+        (!currentTxid || record.txid !== currentTxid) &&
+        (requestedOutpoints.size === 0 ||
+          record.spentOutpoints.some((outpoint) =>
+            requestedOutpoints.has(`${outpoint.tx_hash}:${outpoint.tx_pos}`)
+          ))
     );
 
     if (conflictingPending) {
       return {
         txid: null,
         errorMessage:
-          'Another outgoing transaction is still syncing. Wait for it to appear in history before sending a new one.',
+          requestedOutpoints.size > 0
+            ? 'Another outgoing transaction is already using one of these UTXOs.'
+            : 'Another outgoing transaction is still syncing. Wait for it to appear in history before sending a new one.',
       };
     }
 
@@ -380,7 +390,10 @@ class TransactionService {
 
     if (res?.errorMessage || !res?.txid) {
       if (trackedTxid) {
-        await OutboundTransactionTracker.remove(trackedTxid);
+        await OutboundTransactionTracker.remove(
+          trackedTxid,
+          currentWalletId
+        );
       }
       return res;
     }
@@ -461,7 +474,10 @@ class TransactionService {
       const trackedTxid = deriveTrackedTxid(request.rawTX);
       if (result?.errorMessage || !result?.txid) {
         if (trackedTxid) {
-          await OutboundTransactionTracker.remove(trackedTxid);
+          await OutboundTransactionTracker.remove(
+            trackedTxid,
+            currentWalletId
+          );
         }
         break;
       }
