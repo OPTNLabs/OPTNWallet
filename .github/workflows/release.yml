@@ -308,7 +308,7 @@ jobs:
             ### Downloads
             - Windows x64: `.exe` installer
             - macOS Apple Silicon: `.dmg`
-            - Linux x64: `.AppImage` and native packages when available
+            - Linux x64: native `.deb` and `.rpm` packages
             ${{ needs.android.outputs.signed == 'true' && '- Android: signed `.apk` for direct installation and `.aab` for Play distribution' || '- Android: not included yet; configure the permanent production keystore and rerun the release workflow' }}
 
             iOS is not included in this release. Build-from-source instructions are in [docs/build-and-release.md](https://github.com/${{ github.repository }}/blob/${{ env.RELEASE_TAG }}/docs/build-and-release.md).
