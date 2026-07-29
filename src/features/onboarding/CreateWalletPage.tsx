@@ -4,7 +4,7 @@ import { useDispatch, useSelector } from 'react-redux';
 import { useNavigate } from 'react-router-dom';
 import DatabaseService from '../../apis/DatabaseManager/DatabaseService';
 import WalletManager from '../../apis/WalletManager/WalletManager';
-import { setNetwork } from '../../state/slices/networkSlice';
+import { Network, setNetwork } from '../../state/slices/networkSlice';
 import { selectCurrentNetwork } from '../../state/selectors/networkSelectors';
 import {
   setWalletId,
@@ -18,9 +18,9 @@ import { ONBOARDING_WALLET_NAME } from './constants';
 import InfoTooltipIcon from './components/InfoTooltipIcon';
 import OnboardingCard from './components/OnboardingCard';
 import OnboardingScreen from './components/OnboardingScreen';
-import NetworkSelector from './components/NetworkSelector';
 import DerivationPathField from './components/DerivationPathField';
 import { getBchAccountPath, normalizeBchAccountPath } from '../../services/HdWalletService';
+import ElectrumServer from '../../apis/ElectrumServer/ElectrumServer';
 
 const CreateWalletPage = () => {
   const currentNetwork = useSelector(selectCurrentNetwork);
@@ -38,6 +38,10 @@ const CreateWalletPage = () => {
   const dispatch = useDispatch();
 
   useEffect(() => {
+    dispatch(setNetwork(Network.MAINNET));
+  }, [dispatch]);
+
+  useEffect(() => {
     if (!customDerivationPath) setDerivationPath(getBchAccountPath(currentNetwork));
   }, [currentNetwork, customDerivationPath]);
 
@@ -49,6 +53,14 @@ const CreateWalletPage = () => {
       try {
         const dbStarted = await dbService.startDatabase();
         if (!dbStarted) throw new Error('Failed to start the database.');
+
+        // Warm the connection while the user reviews the recovery phrase so
+        // the newly created wallet can begin discovery immediately.
+        try {
+          await ElectrumServer().ensureFreshConnection();
+        } catch (error) {
+          console.warn('[CreateWalletPage] Electrum warm-up failed:', error);
+        }
 
         const mnemonic = await KeyService.generateMnemonic();
         setMnemonicPhrase(mnemonic);
@@ -143,7 +155,6 @@ const CreateWalletPage = () => {
     <OnboardingScreen>
       <OnboardingCard title="Create Wallet">
         <div className="flex flex-col items-center min-h-[300px]">
-          <NetworkSelector networkType={currentNetwork} />
           <DerivationPathField
             network={currentNetwork}
             value={derivationPath}

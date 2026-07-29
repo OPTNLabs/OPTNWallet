@@ -18,9 +18,9 @@ import { WalletType } from '../../types/wallet';
 import InfoTooltipIcon from './components/InfoTooltipIcon';
 import OnboardingCard from './components/OnboardingCard';
 import OnboardingScreen from './components/OnboardingScreen';
-import NetworkSelector from './components/NetworkSelector';
 import DerivationPathField from './components/DerivationPathField';
 import { getBchAccountPath, normalizeBchAccountPath } from '../../services/HdWalletService';
+import ElectrumServer from '../../apis/ElectrumServer/ElectrumServer';
 
 const TOTAL_WORDS = 12;
 
@@ -43,6 +43,10 @@ const ImportWalletPage = () => {
   const dispatch = useDispatch();
 
   useEffect(() => {
+    dispatch(setNetwork(Network.MAINNET));
+  }, [dispatch]);
+
+  useEffect(() => {
     if (!customDerivationPath) setDerivationPath(getBchAccountPath(currentNetwork));
   }, [currentNetwork, customDerivationPath]);
 
@@ -54,6 +58,13 @@ const ImportWalletPage = () => {
       try {
         const dbStarted = await dbService.startDatabase();
         if (!dbStarted) throw new Error('Failed to start the database.');
+        // Warm the connection before import completes so the first wallet
+        // discovery does not inherit a stale socket from a prior session.
+        try {
+          await ElectrumServer().ensureFreshConnection();
+        } catch (error) {
+          console.warn('[ImportWalletPage] Electrum warm-up failed:', error);
+        }
       } catch (error) {
         console.error('Error initializing database:', error);
         await Toast.show({ text: 'Could not prepare wallet import on this device.' });
@@ -213,7 +224,6 @@ const ImportWalletPage = () => {
     <OnboardingScreen>
       <OnboardingCard title="Import Wallet" maxWidthClassName="max-w-lg">
         <div className="flex flex-col items-center min-h-[300px] w-full">
-          <NetworkSelector networkType={currentNetwork} centered />
           <DerivationPathField
             network={currentNetwork}
             value={derivationPath}
