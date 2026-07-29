@@ -11,7 +11,7 @@ import {
   getBchAccountPath,
   normalizeBchAccountPath,
 } from '../../../services/HdWalletService';
-import { setNetwork } from '../../../state/slices/networkSlice';
+import { Network, setNetwork } from '../../../state/slices/networkSlice';
 import { selectCurrentNetwork } from '../../../state/selectors/networkSelectors';
 import {
   setWalletId,
@@ -49,6 +49,10 @@ const DesktopImportWalletPage = () => {
   const dispatch = useDispatch();
   const [derivationPath, setDerivationPath] = useState(() => getBchAccountPath(currentNetwork));
   const [customDerivationPath, setCustomDerivationPath] = useState(false);
+
+  useEffect(() => {
+    dispatch(setNetwork(Network.MAINNET));
+  }, [dispatch]);
 
   useEffect(() => {
     if (!customDerivationPath) setDerivationPath(getBchAccountPath(currentNetwork));
@@ -237,9 +241,9 @@ const DesktopImportWalletPage = () => {
   if (step === 'path') {
     return (
       <OnboardingScreen>
-        <OnboardingCard title="Derivation Path">
+        <OnboardingCard title="Wallet Setup">
           <p className="text-sm wallet-muted text-center mb-3">
-            This wallet derives its addresses using the standard BIP44 path for Bitcoin Cash.
+            Choose the network and address path this wallet will use.
           </p>
           <DerivationPathField
             network={currentNetwork}

@@ -14,19 +14,12 @@ describe('settingsConfig', () => {
     });
   });
 
-  it('keeps network, server, and derivation controls available on mobile', () => {
+  it('keeps the common wallet controls on the mobile settings home', () => {
     const visibleKeys = getVisibleWalletRows(false, Network.MAINNET).map(
       (row) => row.key
     );
 
-    expect(visibleKeys).toEqual([
-      'network',
-      'derivation',
-      'recovery',
-      'pending-outbox',
-      'nostr',
-      'server',
-    ]);
+    expect(visibleKeys).toEqual(['network', 'pending-outbox']);
     expect(visibleKeys).not.toEqual(
       expect.arrayContaining([
         'faucet',
@@ -47,7 +40,11 @@ describe('settingsConfig', () => {
     ).toContain('faucet');
   });
 
-  it('keeps all wallet settings rows in the desktop runtime', () => {
-    expect(getVisibleWalletRows(true, Network.CHIPNET)).toEqual(WALLET_ROWS);
+  it('keeps common wallet controls on the desktop settings home', () => {
+    expect(getVisibleWalletRows(true, Network.CHIPNET).map((row) => row.key)).toEqual([
+      'network',
+      'faucet',
+      'pending-outbox',
+    ]);
   });
 });

@@ -2,6 +2,7 @@ import React from 'react';
 import { Network } from '../../../state/slices/networkSlice';
 import { getBchAccountPath } from '../../../services/HdWalletService';
 import Bip44AccountPathFields from '../../../components/Bip44AccountPathFields';
+import NetworkSelector from './NetworkSelector';
 
 type DerivationPathFieldProps = {
   network: Network;
@@ -28,11 +29,16 @@ export const DerivationPathField: React.FC<DerivationPathFieldProps> = ({
 
   return (
     <div className="w-full space-y-2 rounded-xl border border-[var(--wallet-border)] wallet-surface-strong p-3">
+      <div className="border-b border-[var(--wallet-border)] pb-3">
+        <p className="text-sm font-semibold wallet-text-strong">Wallet network</p>
+        <p className="text-xs wallet-muted mb-2">
+          Choose whether this wallet connects to live funds on Mainnet or test funds on Chipnet.
+        </p>
+        <NetworkSelector networkType={network} centered />
+      </div>
       <div className="flex items-center justify-between gap-3">
         <div>
-          <p className="text-sm font-semibold wallet-text-strong">
-            Derivation path
-          </p>
+          <p className="text-sm font-semibold wallet-text-strong">Address derivation</p>
           <p className="text-xs wallet-muted">
             BIP44 account path used to derive this wallet.
           </p>
