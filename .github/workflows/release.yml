@@ -32,7 +32,7 @@ jobs:
 
       - name: Verify release commit is on main
         run: |
-          git fetch origin main --depth=1
+          git fetch origin "refs/heads/main:refs/remotes/origin/main"
           git fetch origin "refs/tags/${RELEASE_TAG}:refs/tags/${RELEASE_TAG}"
           RELEASE_SHA="$(git rev-parse "${RELEASE_TAG}^{commit}")"
           git merge-base --is-ancestor "$RELEASE_SHA" origin/main || {
