@@ -5,6 +5,11 @@ import {
   utxoKey,
   validateCategoryReuseRules,
 } from '../utils';
+import {
+  canMintFungibleFromSource,
+  isSelectableMintSource,
+  selectMintSourceUtxos,
+} from '../utils/sourceHelpers';
 
 type ValidateMintRequestParams = {
   walletId: number | null | undefined;
@@ -33,18 +38,39 @@ export function validateMintRequest(
   if (selectedRecipientCount === 0)
     return 'Please select at least one recipient address.';
   if (!changeAddress) return 'Change address not ready.';
-  if (selectedUtxos.length === 0) {
-    return 'Select at least one Candidate UTXO.';
+  const invalidSelectedSource = selectedUtxos.find(
+    (utxo) => !isSelectableMintSource(utxo)
+  );
+  if (invalidSelectedSource) {
+    return 'Only genesis UTXOs or minting authority NFTs can be used as mint sources.';
+  }
+  const selectedSourceUtxos = selectMintSourceUtxos(selectedUtxos);
+  if (selectedSourceUtxos.length === 0) {
+    return 'Select at least one source UTXO.';
   }
   if (activeOutputDrafts.length === 0)
     return 'Add at least one output mapping in Amounts.';
+
+  const sourceByKeyForValidation = new Map(
+    selectedSourceUtxos.map((u) => [utxoKey(u), u] as const)
+  );
+  const selectedSourceKeys = new Set(selectedSourceKeySet);
+  for (const sourceKey of selectedSourceKeys) {
+    if (!activeOutputDrafts.some((draft) => draft.sourceKey === sourceKey)) {
+      return 'Each selected source UTXO needs at least one output mapping.';
+    }
+  }
 
   for (const d of activeOutputDrafts) {
     if (!selectedRecipientSet.has(d.recipientCashAddr)) {
       return 'An output references an unselected recipient.';
     }
     if (!selectedSourceKeySet.has(d.sourceKey)) {
-      return 'An output references an unselected Candidate UTXO.';
+      return 'An output references an unselected source UTXO.';
+    }
+    const source = sourceByKeyForValidation.get(d.sourceKey);
+    if (d.config.mintType === 'FT' && source && !canMintFungibleFromSource(source)) {
+      return 'Minting authority sources can only mint NFT outputs.';
     }
     if (d.config.mintType === 'FT') {
       const amt = toBigIntSafe(d.config.ftAmount);
@@ -58,11 +84,6 @@ export function validateMintRequest(
     }
   }
 
-  const sourceByKeyForValidation = new Map(
-    selectedUtxos
-      .filter((u) => u.tx_pos === 0 && !u.token)
-      .map((u) => [utxoKey(u), u] as const)
-  );
   const categoryRule = validateCategoryReuseRules(
     activeOutputDrafts,
     sourceByKeyForValidation

@@ -159,7 +159,9 @@ describe('mint flow services', () => {
         sdkAddressBook: [],
         tokenOutputSats: 546,
       })
-    ).rejects.toThrow('No non-genesis UTXOs available to fund transaction fees.');
+    ).rejects.toThrow(
+      'No non-token fee UTXOs available to fund transaction fees.'
+    );
   });
 
   it('buildMintPreview throws when addOutput fails for a draft', async () => {

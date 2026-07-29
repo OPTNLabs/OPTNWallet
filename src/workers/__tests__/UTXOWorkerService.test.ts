@@ -11,6 +11,12 @@ vi.mock('@capacitor/core', () => ({
   },
 }));
 
+vi.mock('@capacitor/core', () => ({
+  Capacitor: {
+    getPlatform: vi.fn(() => 'android'),
+  },
+}));
+
 const dispatchMock = vi.fn();
 const getStateMock = vi.fn();
 const retrieveKeysMock = vi.fn();
