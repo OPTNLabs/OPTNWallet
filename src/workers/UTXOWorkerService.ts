@@ -23,6 +23,7 @@ import { runWalletUtxoRefresh } from '../services/RefreshCoordinator';
 import { reconcileActiveWalletUtxos } from '../services/WalletUtxoRefreshService';
 import QuantumrootTrackingService from '../services/QuantumrootTrackingService';
 import { preloadTokenMetadata } from '../hooks/useSharedTokenMetadata';
+import { syncWalletSpecialActivities } from '../services/WalletSpecialActivityService';
 
 // --- Subscriptions state ---
 let started = false;
@@ -128,10 +129,7 @@ export function requestUTXORefreshForMany(addresses: string[], ms = 120) {
   for (const a of addresses) refreshAddressSoon(a, ms);
 }
 
-function refreshWalletSoon(
-  ms = 120,
-  session = captureWorkerSession()
-): void {
+function refreshWalletSoon(ms = 120, session = captureWorkerSession()): void {
   if (!session || !isCurrentWorkerContext(session)) return;
   const contextKey = walletRefreshContextKey(session);
   const previous = walletRefreshTimers.get(contextKey);
@@ -202,7 +200,8 @@ async function refreshWalletAddress(address: string, session: WorkerSession) {
   const updatedHistory =
     await transactionManager.fetchAndStoreTransactionHistory(
       currentWalletId,
-      address
+      address,
+      session.generation
     );
   if (!isCurrentWorkerContext(session)) return;
   if (updatedHistory.length > 0) {
@@ -210,6 +209,7 @@ async function refreshWalletAddress(address: string, session: WorkerSession) {
       addTransactions({
         wallet_id: currentWalletId,
         transactions: updatedHistory,
+        sessionGeneration: session.generation,
       })
     );
   }
@@ -389,8 +389,11 @@ export async function bootstrapAllUTXOs(expectedEpoch?: number) {
     trackedAddresses
   );
   if (!bootstrapIsCurrent()) return;
-  for (const address of trackedAddresses) {
-    allUTXOs[address] = fetchedWalletUTXOs[address] ?? [];
+  // Discovery may materialize addresses beyond the key set captured above.
+  // Publish every address returned by the fetch, not only the pre-discovery
+  // subscription list, so a restored wallet's first balance is complete.
+  for (const [address, utxos] of Object.entries(fetchedWalletUTXOs)) {
+    allUTXOs[address] = utxos;
   }
 
   // Contract instances
@@ -610,6 +613,21 @@ function startUTXOWorker(): Promise<void> {
       } catch (e) {
         logError('UTXOWorker.start.subscriptions', e);
       }
+
+      // The base receive/change UTXO snapshot is authoritative for ordinary
+      // wallet state. RPA and Cauldron scans are optional, potentially slow
+      // follow-up work; do not make wallet loading or network switching wait
+      // for their indexer/Electrum requests. The session guard prevents a
+      // scan from persisting records after this wallet/path has been replaced.
+      void syncWalletSpecialActivities({
+        walletId: session.walletId,
+        baseUtxos: Object.values(store.getState().utxos?.utxos ?? {}).flat(),
+        isCurrent: () => isCurrentWorkerContext(session),
+      }).catch((e) => {
+        logError('UTXOWorker.start.specialActivities', e, {
+          walletId: session.walletId,
+        });
+      });
     };
 
     await tryStart();

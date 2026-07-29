@@ -17,6 +17,7 @@ type UseHomeSubscriptionsParams = {
   fetchingUTXOs: boolean;
   keyPairs: WalletKey[];
   currentWalletId: number | null;
+  sessionGeneration: number;
   reduxUTXOs: Record<string, UTXO[]>;
   dispatch: AppDispatch;
 };
@@ -27,6 +28,7 @@ export function useHomeSubscriptions({
   fetchingUTXOs,
   keyPairs,
   currentWalletId,
+  sessionGeneration,
   reduxUTXOs,
   dispatch,
 }: UseHomeSubscriptionsParams) {
@@ -107,6 +109,7 @@ export function useHomeSubscriptions({
       void refreshWalletTransactionHistory({
         walletId: currentWalletId,
         dispatch,
+        sessionGeneration,
       }).catch((error) => {
         logError('Home.initialHistoryRefresh', error, {
           walletId: currentWalletId,
@@ -165,6 +168,7 @@ export function useHomeSubscriptions({
                 void refreshWalletTransactionHistory({
                   walletId: currentWalletId,
                   dispatch,
+                  sessionGeneration,
                 }).catch((error) => {
                   logError('Home.subscribeAddress.refreshHistory', error, {
                     address: addr,
@@ -188,6 +192,7 @@ export function useHomeSubscriptions({
     fetchingUTXOs,
     keyPairs,
     currentWalletId,
+    sessionGeneration,
     dispatch,
     runHeaderRefresh,
   ]);

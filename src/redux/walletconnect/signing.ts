@@ -75,6 +75,7 @@ export async function signWalletConnectTransactionRequest(
       addressToKey,
       networkPrefix,
       network: state.network.currentNetwork,
+      accountPath: state.wallet_id.derivationPath || undefined,
       hwType: hwState.type as 'trezor' | 'ledger',
     });
     const rawBytes = hexToBin(signed);
@@ -247,6 +248,7 @@ async function signWalletConnectWithHardware({
   addressToKey,
   networkPrefix,
   network,
+  accountPath,
   hwType,
 }: {
   txDetails: TransactionCommon;
@@ -254,6 +256,7 @@ async function signWalletConnectWithHardware({
   addressToKey: Map<string, KeyRecord>;
   networkPrefix: string;
   network: Network;
+  accountPath?: string;
   hwType: 'trezor' | 'ledger';
 }): Promise<string> {
   const typedPrefix = networkPrefix as unknown as CashAddrPrefix;
@@ -275,8 +278,8 @@ async function signWalletConnectWithHardware({
       const address = inputAddress(sourceOutputs[i]);
       const keyRecord = address ? addressToKey.get(address) : null;
       const bip44 = keyRecord
-        ? getBchAddressPath(network, 0, keyRecord.changeIndex, keyRecord.addressIndex)
-        : getBchAddressPath(network, 0, 0, 0);
+        ? getBchAddressPath(network, 0, keyRecord.changeIndex, keyRecord.addressIndex, accountPath)
+        : getBchAddressPath(network, 0, 0, 0, accountPath);
       return {
         address_n: pathToAddressN(bip44),
         prev_hash: binToHex(Uint8Array.from(inp.outpointTransactionHash).reverse()),
@@ -303,8 +306,8 @@ async function signWalletConnectWithHardware({
       const address = inputAddress(sourceOutputs[i]);
       const keyRecord = address ? addressToKey.get(address) : null;
       const bip44 = keyRecord
-        ? getBchAddressPath(network, 0, keyRecord.changeIndex, keyRecord.addressIndex).replace(/^m\//, '')
-        : getBchAddressPath(network, 0, 0, 0).replace(/^m\//, '');
+        ? getBchAddressPath(network, 0, keyRecord.changeIndex, keyRecord.addressIndex, accountPath).replace(/^m\//, '')
+        : getBchAddressPath(network, 0, 0, 0, accountPath).replace(/^m\//, '');
       const txid = binToHex(Uint8Array.from(inp.outpointTransactionHash).reverse());
       const prevTxHex = (await adapter.request('blockchain.transaction.get', txid, false)) as string;
       return { path: bip44, prevTxHex, prevIndex: inp.outpointIndex };

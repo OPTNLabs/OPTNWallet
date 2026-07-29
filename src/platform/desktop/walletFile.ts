@@ -38,6 +38,9 @@ export interface WalletFileV1 {
   encryptedPassphrase: string;
   /** base64 PBKDF2 salt used to derive this wallet's key. */
   kdfSalt: string;
+  /** Effective BIP44 account path. Optional for files created before path persistence. */
+  derivationPath?: string;
+  derivationPathSource?: 'default' | 'custom';
 }
 
 export function serializeWalletFile(w: Omit<WalletFileV1, 'format' | 'version'>): string {
@@ -67,6 +70,10 @@ export function parseWalletFile(text: string): WalletFileV1 {
     encryptedPassphrase:
       typeof parsed.encryptedPassphrase === 'string' ? parsed.encryptedPassphrase : '',
     kdfSalt: parsed.kdfSalt,
+    derivationPath:
+      typeof parsed.derivationPath === 'string' ? parsed.derivationPath : undefined,
+    derivationPathSource:
+      parsed.derivationPathSource === 'custom' ? 'custom' : 'default',
   };
 }
 

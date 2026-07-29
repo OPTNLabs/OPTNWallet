@@ -15,7 +15,7 @@ import WalletManager from '../../apis/WalletManager/WalletManager';
 import DatabaseService from '../../apis/DatabaseManager/DatabaseService';
 import QuantumrootVaultCacheService from '../../services/QuantumrootVaultCacheService';
 import { Network } from '../../state/slices/networkSlice';
-import { WalletType } from '../../types/wallet';
+import { WalletType, type DerivationPathSource } from '../../types/wallet';
 import type { WalletRecord } from '../../types/wallet';
 import {
   deriveKey,
@@ -36,7 +36,12 @@ import {
   verify as verifyGatePassphrase,
 } from './EcKeyManager';
 import { SECRET_ENC_PREFIX } from './SecretCryptoService';
-import { autoSaveWalletFile, type WalletFileV1 } from './walletFile';
+import { getBchAccountPath } from '../../services/HdWalletService';
+import {
+  autoSaveWalletFile,
+  parseWalletFile,
+  type WalletFileV1,
+} from './walletFile';
 import { log } from './logger';
 import {
   checkStatus as bioCheckStatus,
@@ -110,6 +115,8 @@ export interface CreateWalletWithPasswordArgs {
   passphrase: string;
   network: Network;
   walletType?: WalletType;
+  derivationPath?: string;
+  derivationPathSource?: DerivationPathSource;
   password: string;
 }
 
@@ -121,8 +128,18 @@ export interface CreateWalletWithPasswordArgs {
 export async function createWalletWithPassword(
   args: CreateWalletWithPasswordArgs
 ): Promise<number | null> {
-  const { name, mnemonic, passphrase, network, password } = args;
+  const {
+    name,
+    mnemonic,
+    passphrase,
+    network,
+    password,
+    derivationPath,
+    derivationPathSource,
+  } = args;
   const walletType = args.walletType ?? WalletType.STANDARD;
+  const resolvedDerivationPath = derivationPath ?? getBchAccountPath(network);
+  const resolvedDerivationPathSource = derivationPathSource ?? 'default';
   const manager = WalletManager();
 
   const salt = randomSalt(32);
@@ -148,7 +165,9 @@ export async function createWalletWithPassword(
       mnemonic,
       passphrase,
       network,
-      walletType
+      walletType,
+      resolvedDerivationPath,
+      resolvedDerivationPathSource
     );
     if (!created) {
       restorePreviousKey();
@@ -203,6 +222,8 @@ export async function createWalletWithPassword(
       encryptedMnemonic,
       encryptedPassphrase,
       kdfSalt: bytesToBase64(salt),
+      derivationPath: resolvedDerivationPath,
+      derivationPathSource: resolvedDerivationPathSource,
     });
   } catch (err) {
     console.warn(
@@ -291,7 +312,7 @@ export async function switchWalletNetwork(
   // Preserve address depth across the toggle: regenerate at least as many
   // address indices as the wallet already had (each index = receive+change =
   // 2 keys), so funds on a later address aren't hidden after switching back.
-  let indices = 10;
+  let indices = 20;
   try {
     const cnt = db.prepare(
       'SELECT COUNT(*) AS c FROM keys WHERE wallet_id = ?'
@@ -299,12 +320,12 @@ export async function switchWalletNetwork(
     cnt.bind([walletId]);
     if (cnt.step())
       indices = Math.max(
-        10,
+        20,
         Math.ceil(Number((cnt.getAsObject() as { c: unknown }).c ?? 0) / 2)
       );
     cnt.free();
   } catch {
-    /* default 10 */
+    /* default 20 */
   }
 
   // Birth height is a height on the OLD chain — meaningless on the new one, and
@@ -596,7 +617,7 @@ export async function buildWalletFileContents(
   if (!saltBytes) return null;
 
   const query = db.prepare(
-    'SELECT wallet_name, mnemonic, passphrase, walletType FROM wallets WHERE id = ?'
+    'SELECT wallet_name, mnemonic, passphrase, walletType, derivation_path, derivation_path_source FROM wallets WHERE id = ?'
   );
   query.bind([walletId]);
   let row: Record<string, unknown> | null = null;
@@ -617,13 +638,37 @@ export async function buildWalletFileContents(
     encryptedPassphrase:
       typeof row.passphrase === 'string' ? row.passphrase : '',
     kdfSalt: bytesToBase64(saltBytes),
+    derivationPath:
+      typeof row.derivation_path === 'string' ? row.derivation_path : undefined,
+    derivationPathSource:
+      row.derivation_path_source === 'custom' ? 'custom' : 'default',
   });
+}
+
+/** Refresh the default desktop wallet-file mirror after wallet configuration changes. */
+export async function refreshWalletFileMirror(walletId: number): Promise<void> {
+  const contents = await buildWalletFileContents(walletId);
+  if (!contents) return;
+  const parsed = parseWalletFile(contents);
+  const payload = {
+    sourceId: parsed.sourceId,
+    name: parsed.name,
+    walletType: parsed.walletType,
+    encryptedMnemonic: parsed.encryptedMnemonic,
+    encryptedPassphrase: parsed.encryptedPassphrase,
+    kdfSalt: parsed.kdfSalt,
+    derivationPath: parsed.derivationPath,
+    derivationPathSource: parsed.derivationPathSource,
+  };
+  await autoSaveWalletFile(payload);
 }
 
 export interface ImportWalletFileResult {
   walletId: number;
   network: Network;
   walletType: WalletType;
+  derivationPath?: string;
+  derivationPathSource?: DerivationPathSource;
 }
 
 /**
@@ -671,9 +716,17 @@ export async function importWalletFile(
     network,
     walletType,
     password,
+    derivationPath: file.derivationPath,
+    derivationPathSource: file.derivationPathSource,
   });
   if (walletId == null) return null;
-  return { walletId, network, walletType };
+  return {
+    walletId,
+    network,
+    walletType,
+    derivationPath: file.derivationPath,
+    derivationPathSource: file.derivationPathSource,
+  };
 }
 
 /** True if this wallet has its own independent password (not a legacy shared-key wallet). */
@@ -689,13 +742,15 @@ async function readWalletRow(
   walletType: string;
   mnemonic: string;
   passphrase: string;
+  derivationPath?: string;
+  derivationPathSource?: DerivationPathSource;
 } | null> {
   const dbService = DatabaseService();
   await dbService.ensureDatabaseStarted();
   const db = dbService.getDatabase();
   if (!db) return null;
   const q = db.prepare(
-    'SELECT wallet_name, walletType, mnemonic, passphrase FROM wallets WHERE id = ?'
+    'SELECT wallet_name, walletType, mnemonic, passphrase, derivation_path, derivation_path_source FROM wallets WHERE id = ?'
   );
   q.bind([walletId]);
   let row: Record<string, unknown> | null = null;
@@ -711,6 +766,10 @@ async function readWalletRow(
       typeof row.walletType === 'string' ? row.walletType : 'standard',
     mnemonic: typeof row.mnemonic === 'string' ? row.mnemonic : '',
     passphrase: typeof row.passphrase === 'string' ? row.passphrase : '',
+    derivationPath:
+      typeof row.derivation_path === 'string' ? row.derivation_path : undefined,
+    derivationPathSource:
+      row.derivation_path_source === 'custom' ? 'custom' : 'default',
   };
 }
 
@@ -777,6 +836,8 @@ export async function changeWalletPassword(
     encryptedMnemonic: encMnemonic,
     encryptedPassphrase: encPassphrase,
     kdfSalt: bytesToBase64(newSalt),
+    derivationPath: row.derivationPath,
+    derivationPathSource: row.derivationPathSource,
   });
 
   // A biometric enrollment stored the OLD password — refresh it if present.

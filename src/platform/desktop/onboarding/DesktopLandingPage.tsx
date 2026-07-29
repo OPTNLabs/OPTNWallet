@@ -17,7 +17,12 @@ import {
 } from '@tauri-apps/api/webviewWindow';
 import { claimWalletOpen } from '../walletOpenRegistry';
 import { clearWalletFusionPolicy } from '../walletFusionPolicy';
-import { setWalletId, setWalletNetwork, setWalletType } from '../../../state/slices/walletSlice';
+import {
+  setWalletId,
+  setWalletNetwork,
+  setWalletType,
+  setWalletDerivationPath,
+} from '../../../state/slices/walletSlice';
 import { WalletType } from '../../../types/wallet';
 import { homeRoute } from '../../../navigation/routes';
 import {
@@ -172,10 +177,23 @@ const DesktopLandingPage = () => {
     }
   };
 
-  const finishOpen = (id: number, info: { networkType?: Network | null; walletType?: WalletType | null }) => {
+  const finishOpen = (id: number, info: {
+    networkType?: Network | null;
+    walletType?: WalletType | null;
+    derivation_path?: string;
+    derivation_path_source?: 'default' | 'custom';
+  }) => {
     dispatch(setWalletId(id));
     dispatch(setWalletNetwork(info.networkType ?? Network.MAINNET));
     dispatch(setWalletType(info.walletType ?? WalletType.STANDARD));
+    if (info.derivation_path) {
+      dispatch(
+        setWalletDerivationPath({
+          path: info.derivation_path,
+          source: info.derivation_path_source === 'custom' ? 'custom' : 'default',
+        })
+      );
+    }
     dispatch(setNetwork(info.networkType ?? Network.MAINNET));
     navigate(homeRoute(id));
   };
@@ -234,6 +252,14 @@ const DesktopLandingPage = () => {
       dispatch(setWalletId(result.walletId));
       dispatch(setWalletNetwork(result.network));
       dispatch(setWalletType(result.walletType));
+      if (result.derivationPath) {
+        dispatch(
+          setWalletDerivationPath({
+            path: result.derivationPath,
+            source: result.derivationPathSource === 'custom' ? 'custom' : 'default',
+          })
+        );
+      }
       dispatch(setNetwork(result.network));
       window.dispatchEvent(new CustomEvent('optn:wallets-changed'));
       setImportFile(null);

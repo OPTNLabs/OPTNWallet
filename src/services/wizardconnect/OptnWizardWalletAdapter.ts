@@ -20,6 +20,7 @@ type WalletSnapshot = {
   mnemonic: string;
   passphrase: string;
   network: Network;
+  accountPath: string;
   xpubs: Record<DerivationPath, string>;
   rpaExtension: Record<string, unknown>;
 };
@@ -63,7 +64,12 @@ export class OptnWizardWalletAdapter implements WalletAdapter {
     const state = store.getState() as unknown as { experimental?: { rpaEnabled?: boolean } };
     if (state.experimental?.rpaEnabled) {
       try {
-        const { rpaXpub, rpaPath } = await deriveRpaGateXpub(mnemonic, passphrase, network);
+        const { rpaXpub, rpaPath } = await deriveRpaGateXpub(
+          mnemonic,
+          passphrase,
+          network,
+          walletInfo.derivation_path
+        );
         rpaExtension = {
           rpa: {
             path: rpaPath,
@@ -83,6 +89,7 @@ export class OptnWizardWalletAdapter implements WalletAdapter {
       mnemonic,
       passphrase,
       network,
+      accountPath: walletInfo.derivation_path,
       xpubs,
       rpaExtension,
     });
@@ -122,12 +129,20 @@ export class OptnWizardWalletAdapter implements WalletAdapter {
     const hw = state.hardwareWallet;
 
     if (hw?.connected && hw.type === 'trezor') {
-      const signedTransaction = await signWithTrezor(request, this.snapshot.network);
+      const signedTransaction = await signWithTrezor(
+        request,
+        this.snapshot.network,
+        this.snapshot.accountPath
+      );
       return { signedTransaction };
     }
 
     if (hw?.connected && hw.type === 'onekey') {
-      const signedTransaction = await signWithOneKey(request, this.snapshot.network);
+      const signedTransaction = await signWithOneKey(
+        request,
+        this.snapshot.network,
+        this.snapshot.accountPath
+      );
       return { signedTransaction };
     }
 
@@ -137,7 +152,12 @@ export class OptnWizardWalletAdapter implements WalletAdapter {
         const result = await adapter.request('blockchain.transaction.get', txid, false);
         return result as string;
       };
-      const signedTransaction = await signWithLedger(request, this.snapshot.network, fetchRawTx);
+      const signedTransaction = await signWithLedger(
+        request,
+        this.snapshot.network,
+        fetchRawTx,
+        this.snapshot.accountPath
+      );
       return { signedTransaction };
     }
 
@@ -153,6 +173,7 @@ export class OptnWizardWalletAdapter implements WalletAdapter {
       mnemonic: this.snapshot.mnemonic,
       passphrase: this.snapshot.passphrase,
       network: this.snapshot.network,
+      accountPath: this.snapshot.accountPath,
     });
 
     return { signedTransaction };

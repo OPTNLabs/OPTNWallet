@@ -7,6 +7,8 @@ import { isArrayBufferLike, isString } from '../../utils/typeGuards';
 import {
   deriveBchChild,
   deriveBchStandardXpubs,
+  getBchAccountPath,
+  normalizeBchAccountPath,
   type DerivedBchPublicAddress,
   type BchStandardBranchName,
 } from '../../services/HdWalletService';
@@ -78,7 +80,7 @@ export default function KeyManager() {
     }
 
     const query = db.prepare(
-      `SELECT mnemonic, passphrase, networkType FROM wallets WHERE id = ?;`
+      `SELECT mnemonic, passphrase, networkType, derivation_path FROM wallets WHERE id = ?;`
     );
     const row =
       (query.get([wallet_id]) as (string | number | undefined)[] | undefined) ??
@@ -98,10 +100,20 @@ export default function KeyManager() {
       throw new Error('Mnemonic or network not found for the given wallet id');
     }
 
+    let derivationPath = getBchAccountPath(networkType);
+    if (typeof row[3] === 'string') {
+      try {
+        derivationPath = normalizeBchAccountPath(row[3]);
+      } catch {
+        // Keep the network default for a legacy or partially migrated row.
+      }
+    }
+
     return {
       mnemonic,
       passphrase,
       networkType,
+      derivationPath,
     };
   }
 
@@ -109,13 +121,14 @@ export default function KeyManager() {
     wallet_id: number,
     accountNumber = 0
   ): Promise<Record<BchStandardBranchName, string>> {
-    const { mnemonic, passphrase, networkType } =
+    const { mnemonic, passphrase, networkType, derivationPath } =
       await getWalletSeedMaterial(wallet_id);
     return deriveBchStandardXpubs(
       networkType,
       mnemonic,
       passphrase,
-      accountNumber
+      accountNumber,
+      derivationPath
     );
   }
 
@@ -152,7 +165,7 @@ export default function KeyManager() {
     onlineQuantumSigner: '0' | '1' = '0',
     vaultTokenCategory = '00'.repeat(32)
   ) {
-    const { mnemonic, passphrase, networkType } =
+    const { mnemonic, passphrase, networkType, derivationPath } =
       await getWalletSeedMaterial(wallet_id);
     return deriveQuantumrootVault(
       networkType,
@@ -161,7 +174,8 @@ export default function KeyManager() {
       accountNumber,
       addressIndex,
       onlineQuantumSigner,
-      vaultTokenCategory
+      vaultTokenCategory,
+      derivationPath
     );
   }
 
@@ -359,7 +373,8 @@ export default function KeyManager() {
       throw new Error('Database is null');
     }
 
-    const { mnemonic, passphrase } = await getWalletSeedMaterial(wallet_id);
+    const { mnemonic, passphrase, derivationPath } =
+      await getWalletSeedMaterial(wallet_id);
 
     const keys = await deriveBchChild(
       networkType,
@@ -368,6 +383,7 @@ export default function KeyManager() {
         passphrase,
         accountIndex: accountNumber,
         branchIndex: changeNumber,
+        accountPath: derivationPath,
       },
       addressNumber
     );

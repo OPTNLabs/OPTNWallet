@@ -15,6 +15,7 @@ import {
 } from '../../services/RpaService';
 import WalletManager from '../../apis/WalletManager/WalletManager';
 import { Network } from '../../state/slices/networkSlice';
+import { selectWalletDerivationPath } from '../../state/slices/walletSlice';
 
 type RpaReceiveCardProps = {
   walletId: number;
@@ -23,6 +24,7 @@ type RpaReceiveCardProps = {
 export const RpaReceiveCard: React.FC<RpaReceiveCardProps> = ({ walletId }) => {
   const rpaEnabled = useSelector(selectRpaEnabled);
   const network = useSelector(selectCurrentNetwork);
+  const derivationPath = useSelector(selectWalletDerivationPath);
 
   const [paycode, setPaycode] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
@@ -47,6 +49,7 @@ export const RpaReceiveCard: React.FC<RpaReceiveCardProps> = ({ walletId }) => {
           info.passphrase ?? '',
           network,
           RPA_PREFIX_BITS,
+          derivationPath || undefined,
         );
         if (!cancelled) setPaycode(code);
       } catch (err) {
@@ -58,7 +61,7 @@ export const RpaReceiveCard: React.FC<RpaReceiveCardProps> = ({ walletId }) => {
 
     void derive();
     return () => { cancelled = true; };
-  }, [rpaEnabled, walletId, network]);
+  }, [rpaEnabled, walletId, network, derivationPath]);
 
   if (!rpaEnabled) return null;
 
@@ -72,7 +75,7 @@ export const RpaReceiveCard: React.FC<RpaReceiveCardProps> = ({ walletId }) => {
   };
 
   const networkLabel = network === Network.MAINNET ? 'mainnet' : 'chipnet';
-  const rpaKeyPaths = getRpaKeyPaths(network);
+  const rpaKeyPaths = getRpaKeyPaths(network, derivationPath || undefined);
 
   return (
     <div className="rounded-xl border border-[var(--wallet-accent)]/30 bg-[var(--wallet-surface)] overflow-hidden">

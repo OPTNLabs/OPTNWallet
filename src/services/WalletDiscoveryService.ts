@@ -8,9 +8,11 @@ import {
   writeStorageItem,
 } from '../utils/browserStorage';
 
-const ADDRESS_BATCH_SIZE = 10;
-const MAX_BATCHES_PER_PASS = 8;
-const GAP_LIMIT_BATCHES = 3;
+// BIP44's gap limit is measured on the external/receive chain. Keep the
+// network request at that same size so one discovery batch can prove a full
+// gap without probing change addresses as well.
+const ADDRESS_BATCH_SIZE = 20;
+const MAX_BATCHES_PER_PASS = 4;
 const DISCOVERY_COOLDOWN_MS = 30_000;
 const STORAGE_KEY = 'optn_wallet_discovery_state_v1';
 
@@ -75,37 +77,48 @@ function keyInventory(keys: Array<{ addressIndex: number }>): {
 }
 
 async function getCandidateBatch(
-  walletId: number,
   network: Network,
-  accountIndex: number,
-  startIndex: number
-): Promise<{ address: string; addressIndex: number; changeIndex: number }[]> {
-  const xpubs = await KeyService.getWalletXpubs(walletId, accountIndex);
+  startIndex: number,
+  xpubs: Awaited<ReturnType<typeof KeyService.getWalletXpubs>>
+): Promise<
+  {
+    address: string;
+    addressIndex: number;
+    changeIndex: number;
+    pairedChangeAddress: string | null;
+  }[]
+> {
   const batch: {
     address: string;
     addressIndex: number;
     changeIndex: number;
+    pairedChangeAddress: string | null;
   }[] = [];
 
   for (let offset = 0; offset < ADDRESS_BATCH_SIZE; offset += 1) {
     const addressIndex = startIndex + offset;
-    for (const [changeIndex, branchName] of [
-      [0, 'receive'],
-      [1, 'change'],
-    ] as const) {
-      const xpub = xpubs[branchName];
-      const derived = deriveBchAddressFromHdPublicKey(
-        network,
-        xpub,
-        BigInt(addressIndex)
-      );
-      if (!derived) continue;
-      batch.push({
-        address: derived.address,
-        addressIndex,
-        changeIndex,
-      });
-    }
+    const receive = deriveBchAddressFromHdPublicKey(
+      network,
+      xpubs.receive,
+      BigInt(addressIndex)
+    );
+    if (!receive) continue;
+
+    // Change is materialized only when its paired receive index is used. It
+    // remains part of the local key inventory, but is deliberately excluded
+    // from account-discovery RPCs: BIP44 discovers accounts from external
+    // chain history and treats change as an internal chain.
+    const change = deriveBchAddressFromHdPublicKey(
+      network,
+      xpubs.change,
+      BigInt(addressIndex)
+    );
+    batch.push({
+      address: receive.address,
+      addressIndex,
+      changeIndex: 0,
+      pairedChangeAddress: change?.address ?? null,
+    });
   }
 
   return batch;
@@ -119,6 +132,7 @@ async function expandDiscovery(
   const keys = await KeyService.retrieveKeys(walletId);
   const knownAddresses = new Set(keys.map((key) => key.address));
   const recoveredAddresses: string[] = [];
+  const xpubs = await KeyService.getWalletXpubs(walletId, 0);
   const state = readState();
   const { highestKnownIndex } = keyInventory(keys);
   // The cursor is only a cooldown/status hint. Always restart from the highest
@@ -131,7 +145,11 @@ async function expandDiscovery(
   let batchesProcessed = 0;
 
   while (batchesProcessed < MAX_BATCHES_PER_PASS) {
-    const batch = await getCandidateBatch(walletId, network, 0, batchStart);
+    const batch = await getCandidateBatch(
+      network,
+      batchStart,
+      xpubs
+    );
     if (batch.length === 0) {
       break;
     }
@@ -143,29 +161,33 @@ async function expandDiscovery(
 
     if (used.size > 0) {
       for (const candidate of batch) {
-        if (
-          !used.has(candidate.address) ||
-          knownAddresses.has(candidate.address)
-        ) {
+        if (!used.has(candidate.address)) {
           continue;
         }
-        await KeyService.createKeys(
-          walletId,
-          0,
-          candidate.changeIndex,
-          candidate.addressIndex
-        );
-        knownAddresses.add(candidate.address);
-        recoveredAddresses.push(candidate.address);
+
+        if (!knownAddresses.has(candidate.address)) {
+          await KeyService.createKeys(walletId, 0, 0, candidate.addressIndex);
+          knownAddresses.add(candidate.address);
+          recoveredAddresses.push(candidate.address);
+        }
+
+        if (
+          candidate.pairedChangeAddress &&
+          !knownAddresses.has(candidate.pairedChangeAddress)
+        ) {
+          await KeyService.createKeys(walletId, 0, 1, candidate.addressIndex);
+          knownAddresses.add(candidate.pairedChangeAddress);
+          recoveredAddresses.push(candidate.pairedChangeAddress);
+        }
       }
       consecutiveUnusedBatches = 0;
       continue;
     }
 
     consecutiveUnusedBatches += 1;
-    if (consecutiveUnusedBatches >= GAP_LIMIT_BATCHES) {
-      break;
-    }
+    // ADDRESS_BATCH_SIZE is the BIP44 gap limit. One completely unused
+    // external batch is enough to stop account discovery.
+    break;
   }
 
   const persistedInventory = keyInventory(
@@ -222,6 +244,12 @@ const WalletDiscoveryService = {
     } finally {
       inFlightByWallet.delete(walletId);
     }
+  },
+
+  async waitForIdle(walletId: number): Promise<void> {
+    const inflight = inFlightByWallet.get(walletId);
+    if (!inflight) return;
+    await inflight.catch(() => undefined);
   },
 
   clear(walletId?: number): void {
