@@ -849,7 +849,10 @@ export async function fetchCauldronDerivedWalletAddresses(
   walletId: number,
   network: Network,
   maxAddressIndex = 32,
-  maxAccountIndex = 2
+  // OPTN maintains one active BIP44 account path at a time. The account index
+  // is already part of the persisted wallet derivation path; probing sibling
+  // accounts here would reintroduce multi-path discovery after a reload.
+  maxAccountIndex = 0
 ): Promise<Array<{ address: string; tokenAddress: string }>> {
   const results: Array<{ address: string; tokenAddress: string }> = [];
   for (let accountIndex = 0; accountIndex <= maxAccountIndex; accountIndex += 1) {

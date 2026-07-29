@@ -9,7 +9,7 @@ type NetworkSelectorProps = {
 };
 
 const NETWORK_TOOLTIP_TEXT =
-  'Select the blockchain network your wallet will connect to (e.g., Mainnet or CHIPNET Testnet).';
+  'Select the blockchain network your wallet will connect to (e.g., Mainnet or Chipnet).';
 
 const NetworkSelector = ({
   networkType,

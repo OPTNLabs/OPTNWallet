@@ -24,6 +24,7 @@ import {
   estimateAddP2PKHOutputBytes,
   formatMinRelayError,
   hasExplicitManualChangeOutput,
+  relayFeeForBytes,
   txBytesFromHex,
 } from './feePolicy';
 import OutboundTransactionTracker from '../../services/OutboundTransactionTracker';
@@ -37,14 +38,44 @@ function deriveTxidFromRawTx(rawTX: string): string | null {
   }
 }
 
+function isCurrentWalletSession(
+  walletId: number,
+  sessionGeneration: number | undefined
+): boolean {
+  if (sessionGeneration === undefined) return true;
+  const activeWallet = store.getState().wallet_id;
+  return (
+    activeWallet.currentWalletId === walletId &&
+    (activeWallet.sessionGeneration ?? 0) === sessionGeneration
+  );
+}
+
+// Fee for a tx of `bytes`: the min relay fee by default; in 'custom' mode the
+// user's sat/byte (never below the relay minimum). Read live from preferences so
+// changing the setting takes effect on the next transaction immediately.
+function requiredFeeForBytes(bytes: number): bigint {
+  const min = relayFeeForBytes(bytes);
+  const prefs = store.getState().preferences;
+  if (prefs?.feeMode === 'custom') {
+    const rate = Number(prefs.customFeeSatPerByte);
+    if (Number.isFinite(rate) && rate > 0) {
+      const custom = BigInt(Math.ceil(rate * bytes));
+      return custom > min ? custom : min;
+    }
+  }
+  return min;
+}
+
 export default function TransactionManager() {
   const dbService = DatabaseService();
 
   function storeTransactionHistory(
     walletId: number,
     address: string,
-    history: TransactionHistoryItem[]
+    history: TransactionHistoryItem[],
+    sessionGeneration?: number
   ): TransactionHistoryItem[] {
+    if (!isCurrentWalletSession(walletId, sessionGeneration)) return [];
     const db = dbService.getDatabase();
     if (!db) {
       throw new Error('Could not get database');
@@ -86,9 +117,11 @@ export default function TransactionManager() {
 
   async function fetchAndStoreTransactionHistory(
     walletId: number,
-    address: string
+    address: string,
+    sessionGeneration?: number
   ): Promise<TransactionHistoryItem[]> {
     const history = await ElectrumService.getTransactionHistory(address);
+    if (!isCurrentWalletSession(walletId, sessionGeneration)) return [];
     if (!Array.isArray(history)) {
       logWarn('TransactionManager.fetchAndStoreTransactionHistory', 'Skipping non-array transaction history response', {
         address,
@@ -97,18 +130,21 @@ export default function TransactionManager() {
       return [];
     }
 
-    return storeTransactionHistory(walletId, address, history);
+    return storeTransactionHistory(walletId, address, history, sessionGeneration);
   }
 
   async function fetchAndStoreTransactionHistories(
     walletId: number,
-    addresses: string[]
+    addresses: string[],
+    sessionGeneration?: number
   ): Promise<Record<string, TransactionHistoryItem[] | undefined>> {
     const uniqueAddresses = Array.from(new Set(addresses.filter(Boolean)));
     const histories = await ElectrumService.getTransactionHistoryMany(
       uniqueAddresses
     );
     const stored: Record<string, TransactionHistoryItem[] | undefined> = {};
+
+    if (!isCurrentWalletSession(walletId, sessionGeneration)) return stored;
 
     for (const address of uniqueAddresses) {
       const history = histories[address];
@@ -130,7 +166,13 @@ export default function TransactionManager() {
       }
 
       try {
-        stored[address] = storeTransactionHistory(walletId, address, history);
+        if (!isCurrentWalletSession(walletId, sessionGeneration)) return stored;
+        stored[address] = storeTransactionHistory(
+          walletId,
+          address,
+          history,
+          sessionGeneration
+        );
       } catch (error) {
         logError('TransactionManager.fetchAndStoreTransactionHistories', error, {
           address,
@@ -151,7 +193,7 @@ export default function TransactionManager() {
     const derivedTxid = deriveTxidFromRawTx(rawTX);
     const walletId = store.getState().wallet_id.currentWalletId ?? null;
     const priorAttempt = derivedTxid
-      ? await OutboundTransactionTracker.getByTxid(derivedTxid)
+      ? await OutboundTransactionTracker.getByTxid(derivedTxid, walletId)
       : null;
 
     if (
@@ -180,14 +222,20 @@ export default function TransactionManager() {
       await OutboundTransactionTracker.markState(
         derivedTxid,
         'broadcasting',
-        priorAttempt.lastError ?? null
+        priorAttempt.lastError ?? null,
+        walletId
       );
     }
 
     try {
       txid = await txBuilder.sendTransaction(rawTX);
       if (derivedTxid) {
-        await OutboundTransactionTracker.markState(derivedTxid, 'broadcasted');
+        await OutboundTransactionTracker.markState(
+          derivedTxid,
+          'broadcasted',
+          null,
+          walletId
+        );
       }
     } catch (error: unknown) {
       logError('TransactionManager.sendTransaction', error);
@@ -207,12 +255,13 @@ export default function TransactionManager() {
           )
             ? 'broadcasted'
             : 'submitted',
-          message
+          message,
+          walletId
         );
         txid = derivedTxid;
       } else {
         if (derivedTxid) {
-          await OutboundTransactionTracker.remove(derivedTxid);
+          await OutboundTransactionTracker.remove(derivedTxid, walletId);
         }
         errorMessage = classified.userMessage;
       }
@@ -223,8 +272,12 @@ export default function TransactionManager() {
       broadcastState:
         txid && !errorMessage
           ? derivedTxid &&
-            (await OutboundTransactionTracker.getByTxid(derivedTxid))?.state ===
-              'submitted'
+            (
+              await OutboundTransactionTracker.getByTxid(
+                derivedTxid,
+                walletId
+              )
+            )?.state === 'submitted'
             ? 'submitted'
             : 'broadcasted'
           : undefined,
@@ -421,7 +474,7 @@ export default function TransactionManager() {
    * Builds a transaction using the provided outputs, change address, and selected UTXOs.
    *
    * Baseline rules (Advanced Builder):
-   * - Fee policy: 1 sat/byte
+   * - Fee policy: 1.10 sat/byte, rounded up
    * - ALWAYS attempt to add a separate change output if changeAddress is provided.
    * - Only skip auto-change if an output is explicitly marked as manual change
    *   via (o as any)._manualChange === true (not by address equality).
@@ -476,7 +529,7 @@ export default function TransactionManager() {
         outputsNoChange
       );
       const bytesNoChange = txBytesFromHex(txNoChangeHex);
-      const feeNoChange = BigInt(bytesNoChange);
+      const feeNoChange = requiredFeeForBytes(bytesNoChange);
 
       const outNoChangeTotal = sumOutputs(outputsNoChange);
       void (inputTotal - outNoChangeTotal - feeNoChange);
@@ -511,7 +564,7 @@ export default function TransactionManager() {
           void error;
         }
 
-        const feeWithChange = BigInt(bytesWithChange);
+        const feeWithChange = requiredFeeForBytes(bytesWithChange);
         const remainder = inputTotal - outNoChangeTotal - feeWithChange;
 
         // Only add change if it is >= DUST
@@ -537,11 +590,12 @@ export default function TransactionManager() {
       const actualBytes = txBytesFromHex(finalHex);
       const outputsTotal = sumOutputs(plannedOutputs);
       const feePaid = inputTotal - outputsTotal;
+      const requiredActualFee = requiredFeeForBytes(actualBytes);
 
-      if (feePaid < BigInt(actualBytes)) {
+      if (feePaid < requiredActualFee) {
         // Stabilizing retry: recompute change using actualBytes as fee
         if (changeAddress && !explicitManualChangeOutput) {
-          const feeActual = BigInt(actualBytes);
+          const feeActual = requiredActualFee;
           const remainder2 = inputTotal - outNoChangeTotal - feeActual;
 
           if (remainder2 >= BigInt(DUST)) {
@@ -560,14 +614,15 @@ export default function TransactionManager() {
             const bytesRetry = txBytesFromHex(finalHex);
             const outputsRetryTotal = sumOutputs(outputsRetry);
             const feePaidRetry = inputTotal - outputsRetryTotal;
+            const requiredRetryFee = requiredFeeForBytes(bytesRetry);
 
-            if (feePaidRetry < BigInt(bytesRetry)) {
-              const shortBy = Number(BigInt(bytesRetry) - feePaidRetry);
+            if (feePaidRetry < requiredRetryFee) {
+              const shortBy = Number(requiredRetryFee - feePaidRetry);
               throw new Error(
                 formatMinRelayError({
                   paying: feePaidRetry,
                   size: bytesRetry,
-                  needAtLeast: bytesRetry,
+                  needAtLeast: Number(requiredRetryFee),
                   shortBy,
                 })
               );
@@ -581,12 +636,12 @@ export default function TransactionManager() {
           }
         }
 
-        const shortBy = Number(BigInt(actualBytes) - feePaid);
+        const shortBy = Number(requiredActualFee - feePaid);
         throw new Error(
           formatMinRelayError({
             paying: feePaid,
             size: actualBytes,
-            needAtLeast: actualBytes,
+            needAtLeast: Number(requiredActualFee),
             shortBy,
           })
         );

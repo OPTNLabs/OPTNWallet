@@ -6,6 +6,8 @@ export const ROUTE_PATHS = {
   home: '/home/:wallet_id',
   assets: '/assets',
   actions: '/actions',
+  chat: '/chat',
+  chatConversation: '/chat/:conversationId',
   contract: '/contract',
   apps: '/apps',
   paryon: '/paryon',

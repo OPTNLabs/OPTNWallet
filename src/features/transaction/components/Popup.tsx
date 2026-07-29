@@ -6,7 +6,7 @@ import { createPortal } from 'react-dom';
 interface PopupProps {
   closePopups: () => void;
   children: React.ReactNode;
-  closeButtonText?: string; // Optional prop for close button text
+  closeButtonText?: string;
   closeButtonClassName?: string;
 }
 

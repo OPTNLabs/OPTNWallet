@@ -12,6 +12,12 @@ export function usePrices() {
 
   useEffect(() => {
     let alive = true;
+    // Only log on a state TRANSITION (first failure after success/startup,
+    // first success after a run of failures) rather than every interval
+    // tick — a persistently-down price server otherwise reprints the exact
+    // same warning every INTERVAL forever, which is noise once the cause is
+    // already known rather than new information.
+    let wasFailing = false;
 
     async function fetchAll() {
       try {
@@ -24,9 +30,20 @@ export function usePrices() {
         );
 
         if (!alive) return;
+        if (wasFailing) {
+          console.info('[usePrices] price fetch recovered');
+          wasFailing = false;
+        }
         dispatch(upsertPrices(payload));
-      } catch (_e) {
-        // optional: log or surface telemetry
+      } catch (e) {
+        // Bounded by fetchJSON's AbortController timeout (and, on desktop,
+        // http-bridge.ts's own race) — this always fires within a few
+        // seconds even if the price server never responds, rather than
+        // hanging silently forever.
+        if (alive && !wasFailing) {
+          console.warn('[usePrices] price fetch failed:', e instanceof Error ? e.message : e);
+          wasFailing = true;
+        }
       }
     }
 

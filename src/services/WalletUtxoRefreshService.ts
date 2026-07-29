@@ -1,0 +1,116 @@
+import { store } from '../state/store';
+import { replaceAllUTXOs } from '../state/slices/utxoSlice';
+import type { UTXO } from '../types/types';
+import {
+  invalidateUTXOCache,
+  primeUTXOCache,
+} from './ElectrumService';
+import KeyService from './KeyService';
+import QuantumrootTrackingService from './QuantumrootTrackingService';
+import { runWalletUtxoRefresh } from './RefreshCoordinator';
+import UTXOService from './UTXOService';
+
+export interface WalletSession {
+  walletId: number;
+  generation: number;
+}
+
+export function captureActiveWalletSession(
+  walletId: number
+): WalletSession | null {
+  const activeWallet = store.getState().wallet_id;
+  if (walletId <= 0 || activeWallet.currentWalletId !== walletId) return null;
+  return {
+    walletId,
+    generation: activeWallet.sessionGeneration ?? 0,
+  };
+}
+
+export function isActiveWalletSession(session: WalletSession): boolean {
+  const activeWallet = store.getState().wallet_id;
+  return (
+    session.walletId > 0 &&
+    activeWallet.currentWalletId === session.walletId &&
+    (activeWallet.sessionGeneration ?? 0) === session.generation
+  );
+}
+
+/**
+ * Fetch one complete wallet snapshot from addresses owned or explicitly tracked
+ * by that wallet. A stale caller gets `null` and must not update Redux.
+ */
+export async function fetchActiveWalletUtxos(
+  session: WalletSession
+): Promise<Record<string, UTXO[]> | null> {
+  if (!isActiveWalletSession(session)) return null;
+  const { walletId } = session;
+
+  const keyPairs = await KeyService.retrieveKeys(walletId);
+  if (!isActiveWalletSession(session)) return null;
+
+  const quantumrootAddresses =
+    await QuantumrootTrackingService.listTrackedAddresses(walletId);
+  if (!isActiveWalletSession(session)) return null;
+
+  const addresses = Array.from(
+    new Set(
+      [
+        ...(keyPairs ?? []).map((keyPair) => keyPair.address),
+        ...quantumrootAddresses,
+      ].filter(Boolean)
+    )
+  );
+  // A wallet-wide reconciliation is triggered by new history, a block, or a
+  // completed broadcast. Reusing the short Electrum UTXO cache here could
+  // publish the exact stale snapshot that triggered the refresh.
+  for (const address of addresses) invalidateUTXOCache(address);
+  const fetched = await UTXOService.fetchAndStoreUTXOsMany(walletId, addresses);
+  if (!isActiveWalletSession(session)) return null;
+
+  const snapshot: Record<string, UTXO[]> = {};
+  const snapshotAddresses = Array.from(
+    new Set([...addresses, ...Object.keys(fetched)])
+  );
+  for (const address of snapshotAddresses) {
+    const utxos = fetched[address] ?? [];
+    snapshot[address] = utxos;
+    primeUTXOCache(address, utxos);
+  }
+  return snapshot;
+}
+
+export async function reconcileActiveWalletUtxos(
+  walletId: number
+): Promise<Record<string, UTXO[]> | null> {
+  const session = captureActiveWalletSession(walletId);
+  if (!session) return null;
+
+  let executedThisRequest = false;
+  let snapshot: Record<string, UTXO[]> | null | undefined;
+  try {
+    snapshot = await runWalletUtxoRefresh(walletId, async () => {
+      executedThisRequest = true;
+      return fetchActiveWalletUtxos(session);
+    });
+  } catch (error) {
+    // A rejection from a task we did not start belongs to an older trigger.
+    // Preserve this newer trigger as a trailing retry; errors from our own
+    // fetch still propagate to the caller for normal logging.
+    if (!executedThisRequest) return null;
+    throw error;
+  }
+  // The coordinator may return an older in-flight task for this wallet. That
+  // result began before this trigger and cannot prove the new event is
+  // reflected. Returning null asks callers to preserve one trailing refresh.
+  if (!executedThisRequest) return null;
+  if (!snapshot || !isActiveWalletSession(session)) return null;
+
+  store.dispatch(replaceAllUTXOs({ utxosByAddress: snapshot }));
+  return snapshot;
+}
+
+export async function refreshActiveWalletUtxos(
+  walletId: number
+): Promise<boolean> {
+  return (await reconcileActiveWalletUtxos(walletId)) !== null;
+}

@@ -5,17 +5,19 @@ import BottomNavBar from './BottomNavBar';
 import { selectWalletId } from '../state/slices/walletSlice';
 import useOutboundTransactions from '../hooks/useOutboundTransactions';
 import PendingOutboundPanel from './transaction/PendingOutboundPanel';
+import WalletReconfigurationOverlay from './WalletReconfigurationOverlay';
+import type { RootState } from '../state/store';
 
 const Layout = () => {
   const [navBarHeight, setNavBarHeight] = useState(0);
-  const [isPendingOutboundPanelOpen, setIsPendingOutboundPanelOpen] = useState(true);
+  const [isPendingOutboundPanelOpen, setIsPendingOutboundPanelOpen] =
+    useState(true);
   const walletId = useSelector(selectWalletId);
-  const {
-    outboundTransactions,
-    reconciling,
-    refresh,
-    release,
-  } = useOutboundTransactions(walletId);
+  const walletOperationStatus = useSelector(
+    (state: RootState) => state.walletReconfiguration.status
+  );
+  const { outboundTransactions, reconciling, refresh, release } =
+    useOutboundTransactions(walletId);
 
   useEffect(() => {
     document.documentElement.style.setProperty(
@@ -46,10 +48,17 @@ const Layout = () => {
           compact
         />
       )}
-      <div className="flex-1 min-h-0 overflow-hidden">
+      <div
+        className="flex-1 min-h-0 overflow-hidden"
+        aria-busy={walletOperationStatus === 'running'}
+      >
         <Outlet />
       </div>
-      <BottomNavBar setNavBarHeight={setNavBarHeight} />
+      <BottomNavBar
+        setNavBarHeight={setNavBarHeight}
+        disabled={walletOperationStatus === 'running'}
+      />
+      <WalletReconfigurationOverlay />
     </div>
   );
 };

@@ -684,9 +684,13 @@ const ElectrumService = {
   },
 
   /** Subscribe to block headers */
-  async subscribeBlockHeaders(callback: (header: unknown) => void) {
+  async subscribeBlockHeaders(
+    callback: (header: unknown) => void,
+    options: { emitCurrent?: boolean } = {}
+  ) {
     try {
       const latest = await registerBlockHeaderListener(callback);
+      if (options.emitCurrent === false) return;
       if (latest !== null) {
         callback(latest);
         return;

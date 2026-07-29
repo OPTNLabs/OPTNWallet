@@ -55,6 +55,10 @@ type TrackAttemptArgs = {
   spentInputs?: UTXO[];
 };
 
+type RecordBroadcastArgs = TrackAttemptArgs & {
+  expectedTxid: string;
+};
+
 const STORAGE_PREFIX = 'outbound-tx:';
 const trackerStore = localForage.createInstance({
   name: 'optn-wallet',
@@ -72,7 +76,15 @@ function emitChange(): void {
   }
 }
 
-function storageKey(txid: string): string {
+function walletStorageId(walletId: number | null): string {
+  return walletId === null ? 'none' : String(walletId);
+}
+
+function storageKey(txid: string, walletId: number | null): string {
+  return `${STORAGE_PREFIX}${walletStorageId(walletId)}:${txid}`;
+}
+
+function legacyStorageKey(txid: string): string {
   return `${STORAGE_PREFIX}${txid}`;
 }
 
@@ -92,7 +104,7 @@ export function deriveTrackedTxid(rawTx: string): string | null {
 }
 
 async function saveRecord(record: OutboundTransactionRecord): Promise<void> {
-  await trackerStore.setItem(storageKey(record.txid), record);
+  await trackerStore.setItem(storageKey(record.txid, record.walletId), record);
   emitChange();
 }
 
@@ -104,24 +116,63 @@ const OutboundTransactionTracker = {
     };
   },
 
-  async getByTxid(txid: string): Promise<OutboundTransactionRecord | null> {
-    const record = await trackerStore.getItem<OutboundTransactionRecord>(
-      storageKey(txid)
+  async getByTxid(
+    txid: string,
+    walletId?: number | null
+  ): Promise<OutboundTransactionRecord | null> {
+    if (walletId !== undefined) {
+      const scoped = await trackerStore.getItem<OutboundTransactionRecord>(
+        storageKey(txid, walletId)
+      );
+      if (scoped) return scoped;
+
+      const legacy = await trackerStore.getItem<OutboundTransactionRecord>(
+        legacyStorageKey(txid)
+      );
+      if (legacy?.walletId === walletId) {
+        await saveRecord(legacy);
+        await trackerStore.removeItem(legacyStorageKey(txid));
+        return legacy;
+      }
+      return null;
+    }
+
+    const legacy = await trackerStore.getItem<OutboundTransactionRecord>(
+      legacyStorageKey(txid)
     );
-    return record ?? null;
+    if (legacy) return legacy;
+
+    let found: OutboundTransactionRecord | null = null;
+    await trackerStore.iterate<OutboundTransactionRecord, void>(
+      (value, key) => {
+        if (
+          !found &&
+          key.startsWith(STORAGE_PREFIX) &&
+          value?.txid === txid
+        ) {
+          found = value;
+        }
+      }
+    );
+    return found;
   },
 
-  async getByRawTx(rawTx: string): Promise<OutboundTransactionRecord | null> {
+  async getByRawTx(
+    rawTx: string,
+    walletId?: number | null
+  ): Promise<OutboundTransactionRecord | null> {
     const txid = deriveTrackedTxid(rawTx);
     if (!txid) return null;
-    return await this.getByTxid(txid);
+    return await this.getByTxid(txid, walletId);
   },
 
-  async trackAttempt(args: TrackAttemptArgs): Promise<OutboundTransactionRecord | null> {
+  async trackAttempt(
+    args: TrackAttemptArgs
+  ): Promise<OutboundTransactionRecord | null> {
     const txid = deriveTrackedTxid(args.rawTx);
     if (!txid) return null;
 
-    const existing = await this.getByTxid(txid);
+    const existing = await this.getByTxid(txid, args.walletId);
     const now = new Date().toISOString();
     const record: OutboundTransactionRecord = {
       txid,
@@ -144,22 +195,49 @@ const OutboundTransactionTracker = {
       createdAt: existing?.createdAt ?? now,
       updatedAt: now,
       lastCheckedAt: existing?.lastCheckedAt ?? null,
-      spentOutpoints:
-        existing?.spentOutpoints.length
-          ? existing.spentOutpoints
-          : toTrackedOutpoints(args.spentInputs),
+      spentOutpoints: existing?.spentOutpoints.length
+        ? existing.spentOutpoints
+        : toTrackedOutpoints(args.spentInputs),
       lastError: existing?.lastError ?? null,
     };
     await saveRecord(record);
     return record;
   },
 
+  async recordBroadcast(
+    args: RecordBroadcastArgs
+  ): Promise<OutboundTransactionRecord> {
+    const { expectedTxid, ...attempt } = args;
+    const derivedTxid = deriveTrackedTxid(attempt.rawTx);
+    if (!derivedTxid || derivedTxid !== expectedTxid.toLowerCase()) {
+      throw new Error(
+        'Broadcast transaction id does not match its raw transaction.'
+      );
+    }
+
+    const tracked = await this.trackAttempt(attempt);
+    if (!tracked) {
+      throw new Error('Unable to persist the broadcast transaction.');
+    }
+    const completed = await this.markState(
+      tracked.txid,
+      'broadcasted',
+      null,
+      tracked.walletId
+    );
+    if (!completed) {
+      throw new Error('Unable to mark the broadcast transaction as complete.');
+    }
+    return completed;
+  },
+
   async markState(
     txid: string,
     state: OutboundTransactionState,
-    lastError: string | null = null
+    lastError: string | null = null,
+    walletId?: number | null
   ): Promise<OutboundTransactionRecord | null> {
-    const existing = await this.getByTxid(txid);
+    const existing = await this.getByTxid(txid, walletId);
     if (!existing) return null;
     const next: OutboundTransactionRecord = {
       ...existing,
@@ -173,15 +251,21 @@ const OutboundTransactionTracker = {
   },
 
   async markStaleBroadcastingAsSubmitted(
-    txid: string
+    txid: string,
+    walletId?: number | null
   ): Promise<OutboundTransactionRecord | null> {
-    const existing = await this.getByTxid(txid);
+    const existing = await this.getByTxid(txid, walletId);
     if (!existing || existing.state !== 'broadcasting') return existing;
     const ageMs = Date.now() - Date.parse(existing.updatedAt);
     if (Number.isNaN(ageMs) || ageMs < OUTBOUND_BROADCASTING_STALE_MS) {
       return existing;
     }
-    return await this.markState(txid, 'submitted', existing.lastError ?? null);
+    return await this.markState(
+      txid,
+      'submitted',
+      existing.lastError ?? null,
+      existing.walletId
+    );
   },
 
   canRelease(record: OutboundTransactionRecord): boolean {
@@ -203,29 +287,63 @@ const OutboundTransactionTracker = {
     return !Number.isNaN(ageMs) && ageMs >= OUTBOUND_REBROADCAST_COOLDOWN_MS;
   },
 
-  async remove(txid: string): Promise<void> {
-    await trackerStore.removeItem(storageKey(txid));
+  async remove(txid: string, walletId?: number | null): Promise<void> {
+    if (walletId !== undefined) {
+      await trackerStore.removeItem(storageKey(txid, walletId));
+      const legacy = await trackerStore.getItem<OutboundTransactionRecord>(
+        legacyStorageKey(txid)
+      );
+      if (legacy?.walletId === walletId) {
+        await trackerStore.removeItem(legacyStorageKey(txid));
+      }
+      emitChange();
+      return;
+    }
+
+    const keys: string[] = [legacyStorageKey(txid)];
+    await trackerStore.iterate<OutboundTransactionRecord, void>(
+      (value, key) => {
+        if (key.startsWith(STORAGE_PREFIX) && value?.txid === txid) {
+          keys.push(key);
+        }
+      }
+    );
+    await Promise.all(
+      Array.from(new Set(keys)).map((key) => trackerStore.removeItem(key))
+    );
     emitChange();
   },
 
-  async listAll(walletId?: number | null): Promise<OutboundTransactionRecord[]> {
+  async listAll(
+    walletId?: number | null
+  ): Promise<OutboundTransactionRecord[]> {
     const records: OutboundTransactionRecord[] = [];
-    await trackerStore.iterate<OutboundTransactionRecord, void>((value, key) => {
-      if (!key.startsWith(STORAGE_PREFIX) || !value) return;
-      if (walletId !== undefined && walletId !== null && value.walletId !== walletId) {
-        return;
+    await trackerStore.iterate<OutboundTransactionRecord, void>(
+      (value, key) => {
+        if (!key.startsWith(STORAGE_PREFIX) || !value) return;
+        if (
+          walletId !== undefined &&
+          walletId !== null &&
+          value.walletId !== walletId
+        ) {
+          return;
+        }
+        records.push(value);
       }
-      records.push(value);
-    });
+    );
     return records.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
   },
 
-  async listActive(walletId?: number | null): Promise<OutboundTransactionRecord[]> {
+  async listActive(
+    walletId?: number | null
+  ): Promise<OutboundTransactionRecord[]> {
     const records = await this.listAll(walletId);
     return records.filter((record) => record.state !== 'seen');
   },
 
-  async listReservedOutpoints(walletId?: number | null): Promise<TrackedOutpoint[]> {
+  async listReservedOutpoints(
+    walletId?: number | null
+  ): Promise<TrackedOutpoint[]> {
     const records = await this.listActive(walletId);
     return records
       .filter((record) => !isDeterministicBroadcastError(record.lastError))

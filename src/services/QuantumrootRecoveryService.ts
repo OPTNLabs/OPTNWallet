@@ -190,7 +190,8 @@ function compileQuantumrootRecoveryTransaction({
           compilationData,
           scriptId: unlockingScriptId,
         });
-  transaction.inputs[0].unlockingBytecode = unlockingBytecode;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  transaction.inputs[0].unlockingBytecode = unlockingBytecode as any;
 
   verifyQuantumrootTransaction({
     sourceOutputs,

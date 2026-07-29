@@ -34,6 +34,7 @@ import {
   getLegacyDefaultChangeAddress,
   getPreferredBchChangeAddress,
 } from '../utils/changeAddressPreference';
+import { getRpaSendBlockReason } from '../services/RpaService';
 
 export default function useSimpleSend() {
   // Redux
@@ -52,6 +53,7 @@ export default function useSimpleSend() {
   const [error, setError] = useState<string>('');
   const [assetType, setAssetType] = useState<AssetType>('bch');
   const [hydrated, setHydrated] = useState(false);
+  const [maxBusy, setMaxBusy] = useState(false);
 
   useEffect(() => {
     const raf = window.requestAnimationFrame(() => setHydrated(true));
@@ -89,6 +91,32 @@ export default function useSimpleSend() {
       cancelled = true;
     };
   }, [walletId, addresses.length, hydrated]);
+
+  // The worker normally keeps the SQL.js snapshot current, but each Tauri
+  // process has its own in-memory database. Refresh the BCH addresses at the
+  // point of sending so Review/Max cannot select from a stale process-local
+  // snapshot when another wallet instance has just received or broadcast a
+  // transaction. The service also reconstructs pending owned outputs from the
+  // shared outbound tracker, so unconfirmed change remains spendable.
+  const refreshBchUtxos = useCallback(async (): Promise<UTXO[]> => {
+    if (!walletId) return [];
+
+    const walletAddresses = addresses
+      .map(({ address }) => address)
+      .filter(Boolean);
+    if (walletAddresses.length > 0) {
+      await UTXOService.fetchAndStoreUTXOsMany(walletId, walletAddresses, {
+        // Discovery belongs to the worker/bootstrap path. Spending should
+        // refresh the known address set without waiting on history probes.
+        discover: false,
+      });
+    }
+
+    const { allUtxos } = await UTXOService.fetchAllWalletUtxos(walletId);
+    const refreshed = (allUtxos ?? []).filter((utxo) => !utxo.token);
+    setDbUtxos(refreshed);
+    return refreshed;
+  }, [walletId, addresses]);
 
   // BCH change address (P2PKH cashaddr as selected)
   const [selectedChangeAddress, setSelectedChangeAddressState] =
@@ -359,6 +387,13 @@ export default function useSimpleSend() {
     try {
       setError('');
 
+      const rpaBlockReason = getRpaSendBlockReason(recipient, currentNetwork);
+      if (rpaBlockReason) {
+        setError(rpaBlockReason);
+        setMode('error');
+        return;
+      }
+
       if (!validateRecipient(normalizedRecipient)) {
         setError('Please enter a valid destination address.');
         setMode('error');
@@ -379,7 +414,16 @@ export default function useSimpleSend() {
           return;
         }
 
-        const attempt = await planner.addBchOnlyUntilBuild(targetSats, 50);
+        const freshDbUtxos = await refreshBchUtxos();
+        const freshPlanner = createSimpleSendPlanner({
+          recipient: normalizedRecipient,
+          selectedCategory,
+          amountToken,
+          tokenChangeAddress,
+          selectedChangeAddress,
+          dbUtxos: freshDbUtxos,
+        });
+        const attempt = await freshPlanner.addBchOnlyUntilBuild(targetSats, 50);
         if (!attempt.ok) {
           setError('err' in attempt ? attempt.err : 'Build failed.');
           setMode('error');
@@ -538,6 +582,8 @@ export default function useSimpleSend() {
     }
   }, [
     normalizedRecipient,
+    recipient,
+    currentNetwork,
     amountBch,
     assetType,
     selectedCategory,
@@ -549,6 +595,86 @@ export default function useSimpleSend() {
     selectedChangeAddress,
     parsedRecipient.amountRaw,
     planner,
+    refreshBchUtxos,
+    tokenChangeAddress,
+  ]);
+
+  // "Max": fills the BCH amount field with the full spendable balance minus
+  // network fee. Only fills the field — the user still reviews and confirms
+  // the send through the normal doReview/doSend flow, so no new send path is
+  // introduced. BCH-only (token/NFT "max" is a separate, per-category concept
+  // not covered here).
+  const doMax = useCallback(async () => {
+    if (assetType !== 'bch' || maxBusy) return;
+    const rpaBlockReason = getRpaSendBlockReason(recipient, currentNetwork);
+    if (rpaBlockReason) {
+      setError(rpaBlockReason);
+      setMode('error');
+      return;
+    }
+    if (!validateRecipient(normalizedRecipient)) {
+      setError('Enter a valid destination address first.');
+      setMode('error');
+      return;
+    }
+    if (!selectedChangeAddress) {
+      setError('Change address is still loading. Try again in a moment.');
+      setMode('error');
+      return;
+    }
+
+    setMaxBusy(true);
+    setError('');
+    try {
+      // The amount field is a preview. Use the already-loaded wallet snapshot
+      // so Max is responsive; doReview performs the authoritative refresh
+      // immediately before transaction construction.
+      const freshDbUtxos =
+        dbUtxos.length > 0 ? dbUtxos : await refreshBchUtxos();
+      const freshPlanner = createSimpleSendPlanner({
+        recipient: normalizedRecipient,
+        selectedCategory,
+        amountToken,
+        tokenChangeAddress,
+        selectedChangeAddress,
+        dbUtxos: freshDbUtxos,
+      });
+      const result = await freshPlanner.sweepAllBchUntilBuild(50);
+      if (!result.ok) {
+        setError(
+          'err' in result ? result.err : 'Unable to compute max amount.'
+        );
+        setMode('error');
+        return;
+      }
+      const maxSats = Number(result.finalOutputs[0]?.amount ?? 0);
+      if (!Number.isSafeInteger(maxSats) || maxSats <= 0) {
+        throw new Error('The wallet returned an invalid maximum spend amount.');
+      }
+      setAmountBch((maxSats / SATSINBITCOIN).toFixed(8));
+      // setAmountBch already synchronizes the USD mirror. Switching through
+      // setAmountDisplayMode here would convert from the stale USD state and
+      // overwrite the freshly calculated max amount.
+      setAmountDisplayModeState('bch');
+    } catch (error: unknown) {
+      setError(toErrorMessage(error, 'Unable to compute max amount.'));
+      setMode('error');
+    } finally {
+      setMaxBusy(false);
+    }
+  }, [
+    assetType,
+    maxBusy,
+    recipient,
+    currentNetwork,
+    normalizedRecipient,
+    amountToken,
+    selectedCategory,
+    tokenChangeAddress,
+    selectedChangeAddress,
+    dbUtxos,
+    refreshBchUtxos,
+    setAmountBch,
   ]);
 
   const doSend = useCallback(async () => {
@@ -677,11 +803,13 @@ export default function useSimpleSend() {
     review,
     txid,
     broadcastState,
+    maxBusy,
 
     // actions
     reset,
     doReview,
     doSend,
+    doMax,
 
     // display
     fiatSummary,

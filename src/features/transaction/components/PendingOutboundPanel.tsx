@@ -61,49 +61,45 @@ export default function PendingOutboundPanel({
           <div className="min-w-0 flex-1">
             <div
               id="pending-outbound-panel-title"
-              className="text-sm font-semibold leading-snug wallet-text-strong"
+              className="text-sm font-semibold wallet-text-strong"
             >
               {records.length === 1
-                ? 'Outgoing transaction still syncing'
-                : `${records.length} outgoing transactions still syncing`}
+                ? 'Finalizing transaction'
+                : `Finalizing ${records.length} transactions`}
             </div>
-            <div className="mt-1 text-xs leading-relaxed wallet-muted">
-              To prevent accidental repeats, new sends stay locked until these
-              appear in your wallet history.
+            <div className="text-xs wallet-muted mt-1">
+              Your wallet history will update automatically. This usually takes
+              a moment.
             </div>
           </div>
-          {(onRefresh || onClose) && (
-            <div className="flex flex-wrap items-center justify-end gap-2 sm:shrink-0">
-              {onRefresh && (
-                <Link
-                  to="/outbox"
-                  className="wallet-btn-secondary whitespace-nowrap px-3 py-1.5 text-xs"
-                >
-                  Outbox
-                </Link>
-              )}
-              {onRefresh && (
-                <button
-                  type="button"
-                  onClick={onRefresh}
-                  disabled={refreshing}
-                  className="wallet-btn-secondary whitespace-nowrap px-3 py-1.5 text-xs"
-                >
-                  {refreshing ? 'Syncing' : 'Sync'}
-                </button>
-              )}
-              {onClose && (
-                <button
-                  type="button"
-                  onClick={onClose}
-                  className="wallet-btn-secondary whitespace-nowrap px-3 py-1.5 text-xs"
-                  aria-label="Dismiss pending transactions popup"
-                  title="Dismiss"
-                >
-                  Dismiss
-                </button>
-              )}
+          {onRefresh && (
+            <div className="flex shrink-0 items-center gap-2">
+              <Link
+                to="/outbox"
+                className="wallet-btn-secondary px-3 py-1.5 text-xs"
+              >
+                Outbox
+              </Link>
+              <button
+                type="button"
+                onClick={onRefresh}
+                disabled={refreshing}
+                className="wallet-btn-secondary px-3 py-1.5 text-xs"
+              >
+                {refreshing ? 'Syncing' : 'Sync'}
+              </button>
             </div>
+          )}
+          {onClose && (
+            <button
+              type="button"
+              onClick={onClose}
+              className="wallet-btn-secondary px-3 py-1.5 text-xs"
+              aria-label="Dismiss pending transactions popup"
+              title="Dismiss"
+            >
+              Dismiss
+            </button>
           )}
         </div>
 

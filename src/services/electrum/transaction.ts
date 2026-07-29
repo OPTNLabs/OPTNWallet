@@ -2,7 +2,10 @@ import ElectrumServer from '../../apis/ElectrumServer/ElectrumServer';
 import DatabaseService from '../../apis/DatabaseManager/DatabaseService';
 import { store } from '../../state/store';
 import { logError } from '../../utils/errorHandling';
-import { TransactionDetailParticipant, TransactionDetails } from '../../types/types';
+import {
+  TransactionDetailParticipant,
+  TransactionDetails,
+} from '../../types/types';
 import {
   ElectrumVerboseTransaction,
   extractOutputAddress,
@@ -114,7 +117,7 @@ export async function persistTransactionDetails(
       new Date().toISOString(),
     ]);
     stmt.free();
-    dbService.scheduleDatabaseSave();
+    dbService.scheduleDatabaseSave(walletId);
   } catch (error) {
     logError('ElectrumService.persistTransactionDetails', error, {
       txHash: details.txid,
@@ -197,7 +200,9 @@ export async function resolveInputParticipants(
 
     if (!prevOut) {
       return {
-        address: prevTxid ? `Prevout ${prevTxid.slice(0, 10)}...:${prevIndex}` : 'Unknown input',
+        address: prevTxid
+          ? `Prevout ${prevTxid.slice(0, 10)}...:${prevIndex}`
+          : 'Unknown input',
       };
     }
 

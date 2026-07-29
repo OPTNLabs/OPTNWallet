@@ -5,6 +5,7 @@ import {
   getAppDescription,
   getAppIconFrame,
   getAppSortPriority,
+  isDesktopOnlyApp,
   isComingSoonApp,
   shouldHideApp,
 } from '../appsViewHelpers';
@@ -31,6 +32,11 @@ describe('appsViewHelpers', () => {
     expect(getAppIconFrame({ name: 'WalletConnect' })).toContain('bg-sky-500/15');
     expect(shouldHideApp('optn.builtin.demo:authguard', 'AuthGuard')).toBe(true);
     expect(shouldHideApp('optn.builtin.cauldron:cauldronSwapApp', 'Cauldron')).toBe(false);
+  });
+
+  it('marks CashFusion as desktop-only UI', () => {
+    expect(isDesktopOnlyApp('optn.wallet.cashfusion')).toBe(true);
+    expect(isDesktopOnlyApp('optn.wallet.contracts')).toBe(false);
   });
 
   it('only marks FundMe and ParyonUSD as coming soon outside dev mode', () => {

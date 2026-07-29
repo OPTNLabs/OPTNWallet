@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import * as bip39 from 'bip39';
 import { execFile } from 'node:child_process';
 
 import ElectrumService from '../ElectrumService';
@@ -24,8 +25,8 @@ vi.mock('node:child_process', () => ({
   execFile: vi.fn(),
 }));
 
-const TEST_MNEMONIC =
-  'abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about';
+// Deterministic zero-entropy BIP39 test vector (not a real seed).
+const TEST_MNEMONIC = bip39.entropyToMnemonic('0'.repeat(32));
 
 describe('QuantumrootChipnetConsensusValidationService', () => {
   const mockedElectrumService = vi.mocked(ElectrumService);

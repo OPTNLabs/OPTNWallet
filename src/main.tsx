@@ -14,6 +14,7 @@ import { HashRouter } from 'react-router-dom';
 import { Provider } from 'react-redux';
 import { store } from './state/store';
 import { ThemeProvider } from './app/theme/ThemeContext';
+import { WalletConfirmProvider } from './components/WalletConfirmDialog';
 
 installProductionConsoleGuards();
 installBarcodeScannerUnhandledRejectionGuard();
@@ -27,7 +28,7 @@ ReactDOM.createRoot(document.getElementById('root')!).render(
     <Provider store={store}>
       <ThemeProvider>
         <HashRouter>
-          <App />
+          <WalletConfirmProvider><App /></WalletConfirmProvider>
         </HashRouter>
       </ThemeProvider>
     </Provider>
