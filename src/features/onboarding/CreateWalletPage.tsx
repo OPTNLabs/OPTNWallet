@@ -4,29 +4,46 @@ import { useDispatch, useSelector } from 'react-redux';
 import { useNavigate } from 'react-router-dom';
 import DatabaseService from '../../apis/DatabaseManager/DatabaseService';
 import WalletManager from '../../apis/WalletManager/WalletManager';
-import { setNetwork } from '../../state/slices/networkSlice';
+import { Network, setNetwork } from '../../state/slices/networkSlice';
 import { selectCurrentNetwork } from '../../state/selectors/networkSelectors';
-import { setWalletId, setWalletNetwork, setWalletType } from '../../state/slices/walletSlice';
+import {
+  setWalletId,
+  setWalletNetwork,
+  setWalletType,
+  setWalletDerivationPath,
+} from '../../state/slices/walletSlice';
 import KeyService from '../../services/KeyService';
 import { WalletType } from '../../types/wallet';
 import { ONBOARDING_WALLET_NAME } from './constants';
 import InfoTooltipIcon from './components/InfoTooltipIcon';
 import OnboardingCard from './components/OnboardingCard';
 import OnboardingScreen from './components/OnboardingScreen';
-import NetworkSelector from './components/NetworkSelector';
+import DerivationPathField from './components/DerivationPathField';
+import { getBchAccountPath, normalizeBchAccountPath } from '../../services/HdWalletService';
+import ElectrumServer from '../../apis/ElectrumServer/ElectrumServer';
 
 const CreateWalletPage = () => {
+  const currentNetwork = useSelector(selectCurrentNetwork);
   const [mnemonicPhrase, setMnemonicPhrase] = useState('');
   const [passphrase] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [derivationPath, setDerivationPath] = useState(() => getBchAccountPath(currentNetwork));
+  const [customDerivationPath, setCustomDerivationPath] = useState(false);
 
   const dbService = useMemo(() => DatabaseService(), []);
   const walletManager = useMemo(() => WalletManager(), []);
   const hasInitialized = useRef(false);
 
   const navigate = useNavigate();
-  const currentNetwork = useSelector(selectCurrentNetwork);
   const dispatch = useDispatch();
+
+  useEffect(() => {
+    dispatch(setNetwork(Network.MAINNET));
+  }, [dispatch]);
+
+  useEffect(() => {
+    if (!customDerivationPath) setDerivationPath(getBchAccountPath(currentNetwork));
+  }, [currentNetwork, customDerivationPath]);
 
   useEffect(() => {
     const initDb = async () => {
@@ -36,6 +53,14 @@ const CreateWalletPage = () => {
       try {
         const dbStarted = await dbService.startDatabase();
         if (!dbStarted) throw new Error('Failed to start the database.');
+
+        // Warm the connection while the user reviews the recovery phrase so
+        // the newly created wallet can begin discovery immediately.
+        try {
+          await ElectrumServer().ensureFreshConnection();
+        } catch (error) {
+          console.warn('[CreateWalletPage] Electrum warm-up failed:', error);
+        }
 
         const mnemonic = await KeyService.generateMnemonic();
         setMnemonicPhrase(mnemonic);
@@ -58,6 +83,7 @@ const CreateWalletPage = () => {
     setIsSubmitting(true);
 
     try {
+      const normalizedDerivationPath = normalizeBchAccountPath(derivationPath);
       const accountExists = await walletManager.checkAccount(
         mnemonicPhrase,
         passphrase,
@@ -74,7 +100,9 @@ const CreateWalletPage = () => {
         mnemonicPhrase,
         passphrase,
         currentNetwork,
-        WalletType.STANDARD
+        WalletType.STANDARD,
+        normalizedDerivationPath,
+        customDerivationPath ? 'custom' : 'default'
       );
       if (!created) throw new Error('Failed to create wallet in the database.');
 
@@ -94,13 +122,21 @@ const CreateWalletPage = () => {
         throw new Error('Failed to resolve wallet network.');
       }
 
-      void KeyService.bootstrapInitialAddressBatch(walletID, 0, 10).catch((error) => {
-        console.error('Failed to bootstrap initial addresses:', error);
-      });
+      // Materialize one address pair so the worker can start immediately. It
+      // performs the full BIP44 discovery/gap-limit scan after navigation;
+      // waiting for all 40 key rows here makes wallet creation unnecessarily slow.
+      await KeyService.bootstrapInitialAddressBatch(walletID, 0, 1);
 
       dispatch(setWalletId(walletID));
       dispatch(setWalletNetwork(resolvedNetwork));
       dispatch(setWalletType(walletInfo?.walletType ?? WalletType.STANDARD));
+      dispatch(
+        setWalletDerivationPath({
+          path: walletInfo?.derivation_path ?? normalizedDerivationPath,
+          source:
+            walletInfo?.derivation_path_source === 'custom' ? 'custom' : 'default',
+        })
+      );
       dispatch(setNetwork(resolvedNetwork));
 
       navigate(`/home/${walletID}`);
@@ -119,7 +155,15 @@ const CreateWalletPage = () => {
     <OnboardingScreen>
       <OnboardingCard title="Create Wallet">
         <div className="flex flex-col items-center min-h-[300px]">
-          <NetworkSelector networkType={currentNetwork} />
+          <DerivationPathField
+            network={currentNetwork}
+            value={derivationPath}
+            custom={customDerivationPath}
+            onChange={(path, custom) => {
+              setDerivationPath(path);
+              setCustomDerivationPath(custom);
+            }}
+          />
 
           <div className="wallet-text-strong font-bold text-xl mb-2 flex items-center gap-2">
             <span>Generated Mnemonic:</span>

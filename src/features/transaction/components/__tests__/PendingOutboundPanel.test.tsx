@@ -71,7 +71,10 @@ describe('PendingOutboundPanel', () => {
     expect(html).toContain('wallet-popup-backdrop');
     expect(html).toContain('wallet-popup-panel');
     expect(html).toContain('role="dialog"');
-    expect(html).toContain('Outgoing transaction still syncing');
+    expect(html).toContain('Finalizing transaction');
+    expect(html).toContain(
+      'Your wallet history will update automatically. This usually takes a moment.'
+    );
     expect(html).toContain('Dismiss');
     expect(html).toContain('sm:flex-row');
     expect(html).toContain('min-w-0 flex-1');

@@ -7,6 +7,8 @@ import type {
 import type { UTXO } from '../../../../types/types';
 import RegularTxView from '../RegularTxView';
 
+const SAMPLE_TOKEN_CATEGORY = 'sample-token-category';
+
 function makeMetadata(): BcmrTokenMetadataState {
   return {
     status: 'ready',
@@ -18,7 +20,7 @@ function makeMetadata(): BcmrTokenMetadataState {
     snapshot: {
       name: 'Sample Token',
       token: {
-        category: '0123456789abcdef',
+        category: SAMPLE_TOKEN_CATEGORY,
         symbol: 'SMP',
         decimals: 2,
       },
@@ -34,7 +36,7 @@ function makeMetadata(): BcmrTokenMetadataState {
 describe('RegularTxView', () => {
   it('shows the same token identity in the selector and preview', () => {
     const tokenMetadata = {
-      '0123456789abcdef': makeMetadata(),
+      [SAMPLE_TOKEN_CATEGORY]: makeMetadata(),
     };
 
     const selectedUtxos = [
@@ -46,13 +48,13 @@ describe('RegularTxView', () => {
         value: 1000,
         amount: 1000,
         token: {
-          category: '0123456789abcdef',
+          category: SAMPLE_TOKEN_CATEGORY,
           amount: 123400n,
           BcmrTokenMetadata: {
             name: 'Sample Token',
             description: 'A sample token used in tests.',
             token: {
-              category: '0123456789abcdef',
+              category: SAMPLE_TOKEN_CATEGORY,
               symbol: 'SMP',
               decimals: 2,
             },
@@ -75,7 +77,7 @@ describe('RegularTxView', () => {
         categoriesFromSelected={['0123456789abcdef']}
         tokenAmount={0n}
         setTokenAmount={() => undefined}
-        selectedTokenCategory="0123456789abcdef"
+        selectedTokenCategory={SAMPLE_TOKEN_CATEGORY}
         setSelectedTokenCategory={() => undefined}
         tokenMetadata={tokenMetadata}
         selectedUtxos={selectedUtxos}

@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
+import * as bip39 from 'bip39';
 
 import ElectrumService from '../ElectrumService';
 import {
@@ -20,8 +21,8 @@ vi.mock('../ElectrumService', () => ({
 const RUN_LIVE_QUANTUMROOT = process.env.RUN_QUANTUMROOT_LIVE === '1';
 const liveDescribe = RUN_LIVE_QUANTUMROOT ? describe : describe.skip;
 
-const TEST_MNEMONIC =
-  'abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about';
+// Deterministic zero-entropy BIP39 test vector (not a real seed).
+const TEST_MNEMONIC = bip39.entropyToMnemonic('0'.repeat(32));
 
 liveDescribe('Quantumroot chipnet consensus smoke', () => {
   it('runs Fulcrum preflight first and then probes the local BCHN node over SSH', async () => {
