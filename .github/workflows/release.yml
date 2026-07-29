@@ -61,6 +61,8 @@ jobs:
       contents: read
       id-token: write
       attestations: write
+    outputs:
+      signed: ${{ steps.signing.outputs.available }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -88,22 +90,26 @@ jobs:
       - name: Enable Gradle cache
         uses: gradle/actions/setup-gradle@v4
 
-      - name: Validate signing secrets
+      - name: Detect signing credentials
+        id: signing
         env:
           KEYSTORE_B64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
           STORE_PASS: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
           KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
           KEY_PASS: ${{ secrets.ANDROID_KEY_PASSWORD }}
         run: |
-          test -n "$KEYSTORE_B64"
-          test -n "$STORE_PASS"
-          test -n "$KEY_ALIAS"
-          test -n "$KEY_PASS"
+          if [ -n "$KEYSTORE_B64" ] && [ -n "$STORE_PASS" ] && [ -n "$KEY_ALIAS" ] && [ -n "$KEY_PASS" ]; then
+            echo "available=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "available=false" >> "$GITHUB_OUTPUT"
+          fi
 
       - name: Prepare keystore file
+        if: steps.signing.outputs.available == 'true'
         run: echo "${{ secrets.ANDROID_KEYSTORE_BASE64 }}" | base64 -d > android/keystore.jks
 
       - name: Build signed APK and AAB
+        if: steps.signing.outputs.available == 'true'
         env:
           RELEASE_STORE_FILE: keystore.jks
           RELEASE_STORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
@@ -114,13 +120,32 @@ jobs:
           cd android
           ./gradlew assembleRelease bundleRelease
 
+      - name: Explain missing Android signing
+        if: steps.signing.outputs.available != 'true'
+        run: |
+          cat > android-release-status.txt <<'EOF'
+          Android binaries were not published for v1.7.0 because the permanent
+          Android release keystore is not configured in the GitHub production
+          environment. Configure ANDROID_KEYSTORE_BASE64, ANDROID_KEYSTORE_PASSWORD,
+          ANDROID_KEY_ALIAS, and ANDROID_KEY_PASSWORD, then rerun this workflow.
+          EOF
+
       - name: Upload Android release files
         uses: actions/upload-artifact@v4
+        if: steps.signing.outputs.available == 'true'
         with:
           name: android-release
           path: |
             android/**/outputs/apk/release/*.apk
             android/**/outputs/bundle/release/*.aab
+          retention-days: 30
+
+      - name: Upload Android signing status
+        uses: actions/upload-artifact@v4
+        if: steps.signing.outputs.available != 'true'
+        with:
+          name: android-release-status
+          path: android-release-status.txt
           retention-days: 30
 
   desktop:
@@ -234,9 +259,21 @@ jobs:
       - name: List release files
         run: find artifacts -type f -print | sort
 
+      - name: Assemble release files
+        run: |
+          mkdir -p release-files
+          find artifacts -type f \( \
+            -name '*.apk' -o -name '*.aab' -o -name '*.exe' -o -name '*.msi' \
+            -o -name '*.dmg' -o -name '*.AppImage' -o -name '*.deb' -o -name '*.rpm' \
+          \) -exec cp {} release-files/ \;
+          if [ -f artifacts/android-release-status/android-release-status.txt ]; then
+            cp artifacts/android-release-status/android-release-status.txt release-files/
+          fi
+          find release-files -type f -print | sort
+
       - name: Generate SHA256 checksums
         run: |
-          find artifacts -type f \( \
+          find release-files -type f \( \
             -name '*.apk' -o -name '*.aab' -o -name '*.exe' -o -name '*.msi' \
             -o -name '*.dmg' -o -name '*.AppImage' -o -name '*.deb' -o -name '*.rpm' \
           \) -print0 | sort -z | xargs -0 sha256sum > release-sha256.txt
@@ -247,14 +284,14 @@ jobs:
         uses: actions/attest-build-provenance@v2
         with:
           subject-path: |
-            artifacts/**/*.apk
-            artifacts/**/*.aab
-            artifacts/**/*.exe
-            artifacts/**/*.msi
-            artifacts/**/*.dmg
-            artifacts/**/*.AppImage
-            artifacts/**/*.deb
-            artifacts/**/*.rpm
+            release-files/*.apk
+            release-files/*.aab
+            release-files/*.exe
+            release-files/*.msi
+            release-files/*.dmg
+            release-files/*.AppImage
+            release-files/*.deb
+            release-files/*.rpm
 
       - name: Publish GitHub release
         uses: softprops/action-gh-release@v2
@@ -268,20 +305,13 @@ jobs:
             - Windows x64: `.exe` installer
             - macOS Apple Silicon: `.dmg`
             - Linux x64: `.AppImage` and native packages when available
-            - Android: signed `.apk` for direct installation and `.aab` for Play distribution
+            ${{ needs.android.outputs.signed == 'true' && '- Android: signed `.apk` for direct installation and `.aab` for Play distribution' || '- Android: not included yet; configure the permanent production keystore and rerun the release workflow' }}
 
             iOS is not included in this release. Build-from-source instructions are in [docs/build-and-release.md](https://github.com/${{ github.repository }}/blob/${{ env.RELEASE_TAG }}/docs/build-and-release.md).
 
             SHA256 checksums and build provenance attestations are attached.
           files: |
-            artifacts/**/*.apk
-            artifacts/**/*.aab
-            artifacts/**/*.exe
-            artifacts/**/*.msi
-            artifacts/**/*.dmg
-            artifacts/**/*.AppImage
-            artifacts/**/*.deb
-            artifacts/**/*.rpm
+            release-files/*
             release-sha256.txt
           fail_on_unmatched_files: true
           prerelease: false
