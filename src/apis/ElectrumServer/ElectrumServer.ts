@@ -140,6 +140,10 @@ function parseServerEntry(entry: string, defaultPort = WSS_PORT) {
     const encrypted = u.protocol === 'wss:';
     return { host, port, encrypted };
   }
+  const hostPort = entry.match(/^([^:]+):(\d{1,5})$/);
+  if (hostPort) {
+    return { host: hostPort[1], port: Number(hostPort[2]), encrypted: true };
+  }
   return { host: entry, port: defaultPort, encrypted: true }; // default to WSS
 }
 
@@ -581,6 +585,14 @@ export default function ElectrumServer() {
     return () => notificationHandlers.delete(handler);
   }
 
+  function getCurrentServer(): string | null {
+    return currentServer;
+  }
+
+  function getServerList(): string[] {
+    return getNetworkAndServers().servers;
+  }
+
   return {
     electrumConnect,
     electrumReconnect,
@@ -591,5 +603,7 @@ export default function ElectrumServer() {
     subscribe,
     unsubscribe,
     onNotification,
+    getCurrentServer,
+    getServerList,
   };
 }

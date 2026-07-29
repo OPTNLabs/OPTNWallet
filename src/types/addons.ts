@@ -83,8 +83,28 @@ export interface AddonAppDefinition {
   /**
    * v1 hardening: data-only apps.
    * The host renders a built-in generic UI based on this.
+   *
+   * 'declarative' — built-in only: manifest points at a screen name the HOST
+   * app already compiled in (see marketplaceScreenResolver.tsx). No third-
+   * party code ever executes; this is how the current built-ins work.
+   *
+   * 'iframe-bundle' — third-party installed addons. The addon's OWN JS
+   * (entryFile, relative to its install directory) runs inside a sandboxed
+   * <iframe sandbox="allow-scripts"> (deliberately WITHOUT allow-same-origin,
+   * so the iframe gets an opaque origin with no access to the wallet's
+   * storage/DOM/memory). It can only reach the SDK via postMessage, gated by
+   * AddonPolicyEngine exactly like a declarative app — see
+   * AddonIframeBridge.ts. This is the only "kind" that can come from a
+   * user-installed, non-reviewed source.
    */
-  kind: 'declarative';
+  kind: 'declarative' | 'iframe-bundle';
+
+  /**
+   * Required when kind === 'iframe-bundle': path to the addon's entry JS
+   * file, relative to its install directory (e.g. "bundle.js"). Ignored for
+   * 'declarative' apps.
+   */
+  entryFile?: string;
 
   /**
    * Optional: app-specific config blob (constraints, defaults, etc.)

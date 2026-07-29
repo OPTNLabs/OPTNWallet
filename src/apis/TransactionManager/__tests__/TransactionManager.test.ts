@@ -91,6 +91,28 @@ describe('TransactionManager', () => {
     expect(upsertStmt.free).toHaveBeenCalledTimes(1);
   });
 
+  it('does not persist a history result after the wallet session changes', async () => {
+    const history: TransactionHistoryItem[] = [
+      { tx_hash: 'c'.repeat(64), height: 1 },
+    ];
+    mockedElectrumService.getTransactionHistory.mockResolvedValue(history as never);
+    const getDatabase = vi.fn();
+    mockedDatabaseService.mockReturnValue({ getDatabase } as never);
+    mockedStore.getState.mockReturnValue({
+      wallet_id: { currentWalletId: 7, sessionGeneration: 2 },
+    } as never);
+
+    const tm = TransactionManager();
+    const result = await tm.fetchAndStoreTransactionHistory(
+      7,
+      'bitcoincash:q1',
+      1
+    );
+
+    expect(result).toEqual([]);
+    expect(getDatabase).not.toHaveBeenCalled();
+  });
+
   it('sendTransaction returns txid on success and errorMessage on failure', async () => {
     const sendTransaction = vi
       .fn()
@@ -305,7 +327,46 @@ describe('TransactionManager', () => {
     expect(res.finalOutputs).toHaveLength(2);
     expect(res.finalOutputs?.[1]).toMatchObject({
       recipientAddress: 'bitcoincash:qchange',
-      amount: 890,
+      amount: 879,
+    });
+  });
+
+  it('rebuilds change when the final signed transaction is larger than its estimate', async () => {
+    const buildTransaction = vi
+      .fn()
+      .mockResolvedValueOnce('00'.repeat(200)) // no-change estimate
+      .mockResolvedValueOnce('00'.repeat(219)) // placeholder estimate
+      .mockResolvedValueOnce('00'.repeat(233)) // final signed size grew
+      .mockResolvedValueOnce('00'.repeat(233)); // rebuilt with sufficient fee
+
+    mockedTxBuilderHelper.mockReturnValue({
+      buildTransaction,
+      sendTransaction: vi.fn(),
+    } as never);
+
+    const selectedUtxos: UTXO[] = [
+      {
+        address: 'bitcoincash:qsource',
+        height: 0,
+        tx_hash: '9'.repeat(64),
+        tx_pos: 0,
+        value: 2000,
+      },
+    ];
+
+    const res = await TransactionManager().buildTransaction(
+      [{ recipientAddress: 'bitcoincash:qdest', amount: 1000 }],
+      null,
+      'bitcoincash:qchange',
+      selectedUtxos
+    );
+
+    expect(buildTransaction).toHaveBeenCalledTimes(4);
+    expect(res.errorMsg).toBe('');
+    expect(res.bytecodeSize).toBe(233);
+    expect(res.finalOutputs?.[1]).toMatchObject({
+      recipientAddress: 'bitcoincash:qchange',
+      amount: 743,
     });
   });
 

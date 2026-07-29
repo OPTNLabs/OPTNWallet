@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import * as bip39 from 'bip39';
 
 import ElectrumService from '../ElectrumService';
 import {
@@ -16,8 +17,8 @@ vi.mock('../ElectrumService', () => ({
   },
 }));
 
-const TEST_MNEMONIC =
-  'abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about';
+// Deterministic zero-entropy BIP39 test vector (not a real seed).
+const TEST_MNEMONIC = bip39.entropyToMnemonic('0'.repeat(32));
 
 describe('QuantumrootFulcrumValidationService', () => {
   const mockedElectrumService = vi.mocked(ElectrumService);

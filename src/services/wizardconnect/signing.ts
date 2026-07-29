@@ -33,6 +33,7 @@ type WalletSeedMaterial = {
   mnemonic: string;
   passphrase: string;
   network: Network;
+  accountPath?: string;
 };
 
 function pathNameToDerivationPath(pathName: 'receive' | 'change' | 'defi'): DerivationPath {
@@ -109,7 +110,8 @@ export async function signWizardConnectTransaction(
         wallet.passphrase,
         wallet.network,
         pathNameToDerivationPath(pathInfo.path),
-        BigInt(pathInfo.addressIndex)
+        BigInt(pathInfo.addressIndex),
+        wallet.accountPath
       );
       usedKeys.add(signerKey);
 

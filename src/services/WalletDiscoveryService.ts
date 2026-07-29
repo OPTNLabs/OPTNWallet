@@ -8,9 +8,11 @@ import {
   writeStorageItem,
 } from '../utils/browserStorage';
 
-const ADDRESS_BATCH_SIZE = 10;
-const MAX_BATCHES_PER_PASS = 3;
-const GAP_LIMIT_BATCHES = 1;
+// BIP44's gap limit is measured on the external/receive chain. Keep the
+// network request at that same size so one discovery batch can prove a full
+// gap without probing change addresses as well.
+const ADDRESS_BATCH_SIZE = 20;
+const MAX_BATCHES_PER_PASS = 4;
 const DISCOVERY_COOLDOWN_MS = 30_000;
 const STORAGE_KEY = 'optn_wallet_discovery_state_v1';
 
@@ -18,6 +20,8 @@ type DiscoveryState = {
   nextBatchStart: number;
   consecutiveUnusedBatches: number;
   lastDiscoveredAt: number;
+  knownKeyCount?: number;
+  highestKnownIndex?: number;
 };
 
 type WalletDiscoveryState = Record<string, DiscoveryState>;
@@ -25,9 +29,9 @@ type WalletDiscoveryState = Record<string, DiscoveryState>;
 type WalletBatchUsageChecker = (
   walletId: number,
   batch: { address: string; addressIndex: number; changeIndex: number }[]
-) => Promise<boolean>;
+) => Promise<string[]>;
 
-const inFlightByWallet = new Map<number, Promise<void>>();
+const inFlightByWallet = new Map<number, Promise<string[]>>();
 
 function stateKey(walletId: number): string {
   return String(walletId);
@@ -56,34 +60,65 @@ function getBatchStart(index: number): number {
   return Math.floor(index / ADDRESS_BATCH_SIZE) * ADDRESS_BATCH_SIZE;
 }
 
+function keyInventory(keys: Array<{ addressIndex: number }>): {
+  knownKeyCount: number;
+  highestKnownIndex: number;
+} {
+  return {
+    knownKeyCount: keys.length,
+    highestKnownIndex: keys.reduce(
+      (max, key) =>
+        Number.isFinite(key.addressIndex) && key.addressIndex > max
+          ? key.addressIndex
+          : max,
+      -1
+    ),
+  };
+}
+
 async function getCandidateBatch(
-  walletId: number,
   network: Network,
-  accountIndex: number,
-  startIndex: number
-): Promise<{ address: string; addressIndex: number; changeIndex: number }[]> {
-  const xpubs = await KeyService.getWalletXpubs(walletId, accountIndex);
-  const batch: { address: string; addressIndex: number; changeIndex: number }[] = [];
+  startIndex: number,
+  xpubs: Awaited<ReturnType<typeof KeyService.getWalletXpubs>>
+): Promise<
+  {
+    address: string;
+    addressIndex: number;
+    changeIndex: number;
+    pairedChangeAddress: string | null;
+  }[]
+> {
+  const batch: {
+    address: string;
+    addressIndex: number;
+    changeIndex: number;
+    pairedChangeAddress: string | null;
+  }[] = [];
 
   for (let offset = 0; offset < ADDRESS_BATCH_SIZE; offset += 1) {
     const addressIndex = startIndex + offset;
-    for (const [changeIndex, branchName] of [
-      [0, 'receive'],
-      [1, 'change'],
-    ] as const) {
-      const xpub = xpubs[branchName];
-      const derived = deriveBchAddressFromHdPublicKey(
-        network,
-        xpub,
-        BigInt(addressIndex)
-      );
-      if (!derived) continue;
-      batch.push({
-        address: derived.address,
-        addressIndex,
-        changeIndex,
-      });
-    }
+    const receive = deriveBchAddressFromHdPublicKey(
+      network,
+      xpubs.receive,
+      BigInt(addressIndex)
+    );
+    if (!receive) continue;
+
+    // Change is materialized only when its paired receive index is used. It
+    // remains part of the local key inventory, but is deliberately excluded
+    // from account-discovery RPCs: BIP44 discovers accounts from external
+    // chain history and treats change as an internal chain.
+    const change = deriveBchAddressFromHdPublicKey(
+      network,
+      xpubs.change,
+      BigInt(addressIndex)
+    );
+    batch.push({
+      address: receive.address,
+      addressIndex,
+      changeIndex: 0,
+      pairedChangeAddress: change?.address ?? null,
+    });
   }
 
   return batch;
@@ -93,51 +128,81 @@ async function expandDiscovery(
   walletId: number,
   network: Network,
   batchHasUsage: WalletBatchUsageChecker
-): Promise<void> {
+): Promise<string[]> {
   const keys = await KeyService.retrieveKeys(walletId);
+  const knownAddresses = new Set(keys.map((key) => key.address));
+  const recoveredAddresses: string[] = [];
+  const xpubs = await KeyService.getWalletXpubs(walletId, 0);
   const state = readState();
-  const walletState = state[stateKey(walletId)];
-  const highestKnownIndex = keys.reduce(
-    (max, key) =>
-      Number.isFinite(key.addressIndex) && key.addressIndex > max
-        ? key.addressIndex
-        : max,
-    -1
-  );
+  const { highestKnownIndex } = keyInventory(keys);
+  // The cursor is only a cooldown/status hint. Always restart from the highest
+  // key that is actually persisted: another wallet window may have overwritten
+  // a newer key row while leaving this window's old discovery cursor ahead.
   const nextBatchStart =
-    walletState?.nextBatchStart ??
-    (highestKnownIndex >= 0 ? getBatchStart(highestKnownIndex) : 0);
+    highestKnownIndex >= 0 ? getBatchStart(highestKnownIndex) : 0;
   let batchStart = nextBatchStart;
-  let consecutiveUnusedBatches = walletState?.consecutiveUnusedBatches ?? 0;
+  let consecutiveUnusedBatches = 0;
   let batchesProcessed = 0;
 
   while (batchesProcessed < MAX_BATCHES_PER_PASS) {
-    const batch = await getCandidateBatch(walletId, network, 0, batchStart);
+    const batch = await getCandidateBatch(
+      network,
+      batchStart,
+      xpubs
+    );
     if (batch.length === 0) {
       break;
     }
 
-    const used = await batchHasUsage(walletId, batch);
+    const usedAddresses = await batchHasUsage(walletId, batch);
+    const used = new Set(usedAddresses);
     batchesProcessed += 1;
     batchStart += ADDRESS_BATCH_SIZE;
 
-    if (used) {
+    if (used.size > 0) {
+      for (const candidate of batch) {
+        if (!used.has(candidate.address)) {
+          continue;
+        }
+
+        if (!knownAddresses.has(candidate.address)) {
+          await KeyService.createKeys(walletId, 0, 0, candidate.addressIndex);
+          knownAddresses.add(candidate.address);
+          recoveredAddresses.push(candidate.address);
+        }
+
+        if (
+          candidate.pairedChangeAddress &&
+          !knownAddresses.has(candidate.pairedChangeAddress)
+        ) {
+          await KeyService.createKeys(walletId, 0, 1, candidate.addressIndex);
+          knownAddresses.add(candidate.pairedChangeAddress);
+          recoveredAddresses.push(candidate.pairedChangeAddress);
+        }
+      }
       consecutiveUnusedBatches = 0;
       continue;
     }
 
     consecutiveUnusedBatches += 1;
-    if (consecutiveUnusedBatches >= GAP_LIMIT_BATCHES) {
-      break;
-    }
+    // ADDRESS_BATCH_SIZE is the BIP44 gap limit. One completely unused
+    // external batch is enough to stop account discovery.
+    break;
   }
 
+  const persistedInventory = keyInventory(
+    recoveredAddresses.length > 0
+      ? await KeyService.retrieveKeys(walletId)
+      : keys
+  );
   state[stateKey(walletId)] = {
     nextBatchStart: batchStart,
     consecutiveUnusedBatches,
     lastDiscoveredAt: Date.now(),
+    ...persistedInventory,
   };
   writeState(state);
+  return recoveredAddresses;
 }
 
 const WalletDiscoveryService = {
@@ -145,28 +210,46 @@ const WalletDiscoveryService = {
     walletId: number,
     network: Network,
     batchHasUsage: WalletBatchUsageChecker
-  ): Promise<void> {
+  ): Promise<string[]> {
     const inflight = inFlightByWallet.get(walletId);
     if (inflight) {
-      await inflight;
-      return;
+      return await inflight;
     }
 
     const state = readState()[stateKey(walletId)];
     if (state && Date.now() - state.lastDiscoveredAt < DISCOVERY_COOLDOWN_MS) {
-      return;
+      const currentInventory = keyInventory(
+        await KeyService.retrieveKeys(walletId)
+      );
+      if (
+        state.knownKeyCount === currentInventory.knownKeyCount &&
+        state.highestKnownIndex === currentInventory.highestKnownIndex
+      ) {
+        return [];
+      }
     }
 
-    const run = expandDiscovery(walletId, network, batchHasUsage).catch((error) => {
-      logError('WalletDiscoveryService.ensureInitialAddressBatches', error, { walletId });
-    });
+    const run = expandDiscovery(walletId, network, batchHasUsage).catch(
+      (error): string[] => {
+        logError('WalletDiscoveryService.ensureInitialAddressBatches', error, {
+          walletId,
+        });
+        return [];
+      }
+    );
 
     inFlightByWallet.set(walletId, run);
     try {
-      await run;
+      return await run;
     } finally {
       inFlightByWallet.delete(walletId);
     }
+  },
+
+  async waitForIdle(walletId: number): Promise<void> {
+    const inflight = inFlightByWallet.get(walletId);
+    if (!inflight) return;
+    await inflight.catch(() => undefined);
   },
 
   clear(walletId?: number): void {

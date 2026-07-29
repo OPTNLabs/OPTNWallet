@@ -4,12 +4,18 @@ import { getElectrumServers, getInfraUrlPools } from '../servers/InfraUrls';
 import { Network } from '../../state/slices/networkSlice';
 
 describe('InfraUrls', () => {
-  it('prefers imaginary.cash electrum servers on mainnet', () => {
-    expect(getElectrumServers(Network.MAINNET)).toEqual([
-      'electrum.imaginary.cash',
-      'bch.imaginary.cash',
-      'explorer.bch.ninja',
-    ]);
+  it('seeds WSS-verified mainnet electrum servers, imaginary.cash first', () => {
+    // The list is the Electron Cash server set filtered to those that actually
+    // accept a WebSocket connection on 50004 (see InfraUrls.ts). In the test
+    // environment (no Tauri global) only the web/WSS list is returned.
+    const servers = getElectrumServers(Network.MAINNET);
+    expect(servers[0]).toBe('electrum.imaginary.cash');
+    expect(servers).toContain('bch.imaginary.cash');
+    // The old default explorer.bch.ninja was dropped — it fails WSS with a
+    // certificate-hostname mismatch.
+    expect(servers).not.toContain('explorer.bch.ninja');
+    // Desktop-only TCP-SSL servers must not leak into the web list.
+    expect(servers).not.toContain('bch0.kister.net');
   });
 
   it('prefers tokenindexer for BCMR and keeps bcmr-indexer as fallback', () => {

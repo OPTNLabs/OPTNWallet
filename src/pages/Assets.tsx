@@ -20,16 +20,13 @@ import useFetchWalletData from '../hooks/useFetchWalletData';
 import UTXOService from '../services/UTXOService';
 import { logError } from '../utils/errorHandling';
 import type { TokenPresentationFallback } from '../utils/tokenPresentation';
-import {
-  dedupeTokenUtxos,
-  getStableTokenUtxos,
-  summarizeNftInstances,
-} from './assetsTokenInventory';
+import { StealthBalanceCard } from '../features/rpa/StealthBalanceCard';
+import { CauldronActivityCard } from '../features/cauldron/CauldronActivityCard';
+import { dedupeTokenUtxos, getStableTokenUtxos } from './assetsTokenInventory';
 import {
   formatAtomicTokenAmount,
   resolveTokenPresentation,
 } from '../utils/tokenPresentation';
-import { shortenHash } from '../utils/shortenHash';
 
 type AssetTab = 'BCH' | 'Tokens' | 'NFTs';
 const isDev = import.meta.env.DEV;
@@ -71,10 +68,6 @@ const Assets: React.FC = () => {
           )
         : [],
     [currentWalletId, refreshedTokenUtxos, walletTokenUtxos, reduxTokenUtxos]
-  );
-  const nftInstances = useMemo(
-    () => summarizeNftInstances(tokenUtxos),
-    [tokenUtxos]
   );
 
   useFetchWalletData(
@@ -198,6 +191,7 @@ const Assets: React.FC = () => {
     [entries]
   );
   const fungibleTokens = entries.filter(([, value]) => value.amount > 0n);
+  const nftTokens = entries.filter(([, value]) => value.nft);
   const tokenMetadata = useSharedTokenMetadata(tokenCategories);
   const tokenFallbackByCategory = useMemo(() => {
     const byCategory = new Map<string, TokenPresentationFallback>();
@@ -232,21 +226,10 @@ const Assets: React.FC = () => {
       tokenUtxos: tokenUtxos.length,
       groupedEntries: entries.length,
       fungibleTokens: fungibleTokens.length,
-      nftInstances: nftInstances.length,
+      nftTokens: nftTokens.length,
       categories: tokenCategories,
     });
-  }, [currentWalletId, tab, walletAddresses.length, tokenUtxos.length, entries, fungibleTokens.length, nftInstances.length, tokenCategories]);
-
-  function describeNftCapability(capability: 'none' | 'mutable' | 'minting') {
-    switch (capability) {
-      case 'mutable':
-        return 'Mutable NFT';
-      case 'minting':
-        return 'Minting NFT';
-      default:
-        return 'Plain NFT';
-    }
-  }
+  }, [currentWalletId, tab, walletAddresses.length, tokenUtxos.length, entries, fungibleTokens.length, nftTokens.length, tokenCategories]);
 
   return (
     <WalletScreen maxWidthClassName="max-w-md" scrollable={false}>
@@ -311,6 +294,9 @@ const Assets: React.FC = () => {
               </div>
             </SectionCard>
 
+              <StealthBalanceCard walletId={currentWalletId} />
+              <CauldronActivityCard walletId={currentWalletId} />
+
               <SectionCard className="p-3">
                 <SectionHeader
                   title="CashToken holdings"
@@ -323,8 +309,8 @@ const Assets: React.FC = () => {
                     <div className="text-xs wallet-muted">fungible</div>
                   </div>
                   <div className="wallet-card p-3 text-left">
-                    <div className="text-lg font-bold wallet-text-strong">{nftInstances.length}</div>
-                    <div className="text-xs wallet-muted">NFT UTXOs</div>
+                    <div className="text-lg font-bold wallet-text-strong">{nftTokens.length}</div>
+                    <div className="text-xs wallet-muted">NFTs</div>
                   </div>
                   <div className="wallet-card p-3 text-left">
                     <div className="text-lg font-bold wallet-text-strong">{entries.length}</div>
@@ -391,7 +377,7 @@ const Assets: React.FC = () => {
                 className="wallet-btn-primary w-full py-2.5"
                 onClick={() => navigate('/mint-cashtokens-poc')}
               >
-                CashTokens
+                Mint Tokens
               </button>
             </div>
           )}
@@ -401,23 +387,20 @@ const Assets: React.FC = () => {
               <SectionCard className="min-h-0 flex-1 overflow-hidden p-3">
                 <SectionHeader title="NFTs" subtitle="Non-fungible holdings" compact />
                 <div className="h-full min-h-0 space-y-2.5 overflow-y-auto overscroll-contain pb-[calc(var(--safe-bottom)+1rem)] pr-1">
-                  {nftInstances.length > 0 ? (
-                    nftInstances.map((instance) => {
-                      const metadata = tokenMetadata[instance.category];
+                  {nftTokens.length > 0 ? (
+                    nftTokens.map(([category, value]) => {
+                      const metadata = tokenMetadata[category];
                       const presentation = resolveTokenPresentation(
-                        instance.category,
+                        category,
                         metadata,
-                        tokenFallbackByCategory.get(instance.category) ?? null
+                        tokenFallbackByCategory.get(category) ?? null
                       );
-                      const commitmentLabel = instance.commitment
-                        ? shortenHash(instance.commitment, 8, 6)
-                        : 'empty';
                       return (
                         <button
-                          key={instance.outpoint}
+                          key={category}
                           type="button"
                           className="wallet-card w-full p-2.5 text-left transition hover:brightness-[0.98]"
-                          onClick={() => setSelectedTokenCategory(instance.category)}
+                          onClick={() => setSelectedTokenCategory(category)}
                         >
                           <div className="flex items-center gap-2.5">
                             <TokenIdentityBadge
@@ -427,16 +410,12 @@ const Assets: React.FC = () => {
                               primaryClassName="text-sm"
                               secondaryClassName="text-xs"
                               detail={
-                                <div className="shrink-0 max-w-[10.5rem] text-right space-y-1">
-                                  <div className="text-xs font-semibold wallet-text-strong">
-                                    {describeNftCapability(instance.capability)}
+                                <div className="shrink-0 text-right">
+                                  <div className="text-sm font-semibold wallet-text-strong">
+                                    {value.amount.toString()}
                                   </div>
-                                  <div className="text-[11px] wallet-muted break-all">
-                                    Commitment {commitmentLabel}
-                                  </div>
-                                  <div className="text-[11px] wallet-muted break-all">
-                                    Outpoint {shortenHash(instance.txHash, 8, 6)}:
-                                    {instance.txPos}
+                                  <div className="text-xs wallet-muted">
+                                    collectibles
                                   </div>
                                 </div>
                               }
@@ -455,7 +434,7 @@ const Assets: React.FC = () => {
                 className="wallet-btn-primary w-full py-2.5"
                 onClick={() => navigate('/mint-cashtokens-poc')}
               >
-                CashTokens
+                Mint Tokens
               </button>
             </div>
           )}

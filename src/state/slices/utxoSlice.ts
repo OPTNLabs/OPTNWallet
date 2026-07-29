@@ -1,5 +1,6 @@
 import { createSlice, PayloadAction } from '@reduxjs/toolkit';
 import { UTXO } from '../../types/types';
+import { resetWallet, setWalletId } from './walletSlice';
 
 interface UTXOState {
   utxos: Record<string, UTXO[]>;
@@ -19,6 +20,10 @@ const utxoAmount = (utxo: UTXO): number => utxo.value ?? utxo.amount ?? 0;
 
 const sumAddressBalance = (utxos: UTXO[] | undefined): number =>
   (utxos ?? []).reduce((sum, utxo) => sum + utxoAmount(utxo), 0);
+
+const resetUtxoState = (state: UTXOState): void => {
+  Object.assign(state, initialState);
+};
 
 const utxoSlice = createSlice({
   name: 'utxos',
@@ -54,7 +59,7 @@ const utxoSlice = createSlice({
       state.initialized = action.payload;
     },
     resetUTXOs: (state) => {
-      Object.assign(state, initialState);
+      resetUtxoState(state);
     },
     removeUTXOs: (state, action: PayloadAction<{ address: string; utxosToRemove: UTXO[] }>) => {
       const { address, utxosToRemove } = action.payload;
@@ -68,6 +73,14 @@ const utxoSlice = createSlice({
       const nextBalance = sumAddressBalance(nextUtxos);
       state.totalBalance += nextBalance - prevBalance;
     },
+  },
+  extraReducers: (builder) => {
+    // UTXOs are wallet-scoped even though this slice is a single in-memory
+    // snapshot. Clear it at the action boundary before any newly opened wallet
+    // can render or bootstrap, including when the next wallet currently has no
+    // UTXOs of its own.
+    builder.addCase(setWalletId, resetUtxoState);
+    builder.addCase(resetWallet, resetUtxoState);
   },
 });
 

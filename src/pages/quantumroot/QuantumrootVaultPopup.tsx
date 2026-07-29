@@ -413,8 +413,17 @@ const QuantumrootVaultPopup: React.FC<QuantumrootVaultPopupProps> = ({
           ) : null}
         </div>
 
+        {/* sm:/xl: are VIEWPORT breakpoints, but this grid always renders
+            inside Popup's max-w-md (448px) panel — on a wide/maximized
+            desktop window they activated a 4-column layout squeezed into
+            that 448px box, overlapping the cards, while on mobile they
+            never triggered at all (narrower than sm: anyway). Using
+            auto-fit/minmax instead sizes columns off the ACTUAL rendered
+            container width, so it's correct on both a narrow phone
+            (1 column) and this capped popup on any desktop window size
+            (2 columns) without a mobile regression. */}
         {!isReadyState ? (
-          <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-4">
+          <div className="grid gap-2 [grid-template-columns:repeat(auto-fit,minmax(150px,1fr))]">
             {flowSteps.map((step) => (
               <QuantumrootGuideStep
                 key={step.step}
@@ -528,7 +537,9 @@ const QuantumrootVaultPopup: React.FC<QuantumrootVaultPopupProps> = ({
           </div>
         ) : null}
 
-        <div className="grid gap-3 md:grid-cols-2">
+        {/* Same container-width rationale as the flowSteps grid above: md: is
+            a viewport breakpoint, irrelevant to this always-max-w-md panel. */}
+        <div className="grid gap-3 [grid-template-columns:repeat(auto-fit,minmax(160px,1fr))]">
           <div className="wallet-surface-strong rounded-[18px] border border-[var(--wallet-border)] bg-[color-mix(in_oklab,var(--wallet-accent-soft)_24%,transparent)] p-4">
             <div className="flex items-start justify-between gap-3">
               <div className="flex items-start gap-3">

@@ -206,6 +206,29 @@ describe('ElectrumService', () => {
     expect(server.request).not.toHaveBeenCalled();
   });
 
+  it('can subscribe to future headers without replaying the current tip', async () => {
+    const server = {
+      request: vi.fn(async () => ({ height: 100 })),
+      subscribe: vi.fn(async () => {}),
+      unsubscribe: vi.fn(async () => {}),
+      onNotification: vi.fn(() => () => {}),
+    };
+    mockedElectrumServer.mockReturnValue(server as never);
+    const callback = vi.fn();
+
+    await ElectrumService.subscribeBlockHeaders(callback, {
+      emitCurrent: false,
+    });
+
+    expect(server.subscribe).toHaveBeenCalledWith(
+      'blockchain.headers.subscribe'
+    );
+    expect(server.request).not.toHaveBeenCalled();
+    expect(callback).not.toHaveBeenCalled();
+
+    await ElectrumService.unsubscribeBlockHeaders(callback);
+  });
+
   it('getBalance returns confirmed + unconfirmed and falls back to 0', async () => {
     const server = {
       request: vi
