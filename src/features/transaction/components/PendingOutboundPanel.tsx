@@ -57,8 +57,8 @@ export default function PendingOutboundPanel({
         aria-labelledby="pending-outbound-panel-title"
         onClick={(event) => event.stopPropagation()}
       >
-        <div className="flex items-start justify-between gap-3">
-          <div>
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+          <div className="min-w-0 flex-1">
             <div
               id="pending-outbound-panel-title"
               className="text-sm font-semibold wallet-text-strong"
