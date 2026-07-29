@@ -30,15 +30,20 @@ import {
 import { reconcileOutboundTransactions } from '../services/OutboundTransactionReconciler';
 import { runOutboundReconcile } from '../services/RefreshCoordinator';
 import { Network, setNetwork } from '../state/slices/networkSlice';
-import { setWalletNetwork, setWalletType } from '../state/slices/walletSlice';
+import {
+  setWalletNetwork,
+  setWalletType,
+  setWalletDerivationPath,
+} from '../state/slices/walletSlice';
 import { WalletType } from '../types/wallet';
 import ScreenSecurity from '../platform/plugins/ScreenSecurity';
 import ElectrumServer from '../apis/ElectrumServer/ElectrumServer';
 import WalletBackendSyncService from '../services/WalletBackendSyncService';
 import PlayUpdateService from '../services/PlayUpdateService';
-import { Dialog } from '@capacitor/dialog';
 import { ROUTE_PATHS } from '../navigation/routes';
 import BcmrService from '../services/BcmrService';
+import { useWalletConfirm } from '../components/WalletConfirmDialog';
+import { refreshWalletTransactionHistory } from '../services/WalletHistoryRefreshService';
 
 let utxoWorkerStarted = false;
 let bcmrWarmupStarted = false;
@@ -192,7 +197,32 @@ export function useWalletNetworkBootstrap(
         if (!cancelled && resolvedNetwork) {
           dispatch(setWalletNetwork(resolvedNetwork));
           dispatch(setWalletType(walletInfo?.walletType ?? WalletType.STANDARD));
+          if (walletInfo?.derivation_path) {
+            dispatch(
+              setWalletDerivationPath({
+                path: walletInfo.derivation_path,
+                source:
+                  walletInfo.derivation_path_source === 'custom'
+                    ? 'custom'
+                    : 'default',
+              })
+            );
+          }
           dispatch(setNetwork(resolvedNetwork));
+
+          // A logout closes the shared Electrum client. Re-establish it before
+          // starting the worker so wallet-open does not begin against a stale
+          // socket or wait for a later page-specific refresh to discover it.
+          await ElectrumServer().ensureFreshConnection();
+
+          // Load persisted history and perform the first network history scan
+          // during wallet bootstrap. Home/desktop screens still refresh on
+          // mount, but opening a wallet no longer depends on those screens to
+          // populate the transaction list.
+          await refreshWalletTransactionHistory({
+            walletId,
+            dispatch,
+          });
         }
       } catch (error) {
         console.warn('Wallet network bootstrap failed:', error);
@@ -381,6 +411,7 @@ export function useWorkerLifecycle(walletId: number | null) {
 
 export function useOptionalPlayUpdateCheck() {
   const lastPromptedVersionRef = useRef<number>(0);
+  const confirm = useWalletConfirm();
 
   useEffect(() => {
     let cancelled = false;
@@ -398,17 +429,13 @@ export function useOptionalPlayUpdateCheck() {
         if (!update.available) return;
         if (update.availableVersionCode <= lastPromptedVersionRef.current) return;
 
-        const result = await Dialog.confirm({
-          title: 'Update available',
-          message:
-            'A newer version of OPTN Wallet is available in Google Play. You can keep using this version or update now.',
-          okButtonTitle: 'Update now',
-          cancelButtonTitle: 'Later',
-        });
+        const shouldUpdate = await confirm(
+          'A newer version of OPTN Wallet is available in Google Play. You can keep using this version or update now.'
+        );
 
         lastPromptedVersionRef.current = update.availableVersionCode;
 
-        if (!result.value) return;
+        if (!shouldUpdate) return;
         await PlayUpdateService.startOptionalUpdate();
       } catch (error) {
         console.warn('Optional Play update check failed:', error);
@@ -424,7 +451,7 @@ export function useOptionalPlayUpdateCheck() {
       window.removeEventListener('focus', runCheck);
       document.removeEventListener('visibilitychange', runCheck);
     };
-  }, []);
+  }, [confirm]);
 }
 
 export function useOutboundTransactionRecovery(walletId: number | null) {

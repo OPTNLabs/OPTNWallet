@@ -10,6 +10,7 @@ const fetchUTXOsFromDatabaseMock = vi.fn();
 const flushDatabaseToFileMock = vi.fn();
 const scheduleDatabaseSaveMock = vi.fn();
 const listActiveMock = vi.fn();
+const listReservedOutpointsMock = vi.fn();
 const cashAddressToLockingBytecodeMock = vi.fn();
 const decodeTransactionMock = vi.fn();
 
@@ -22,6 +23,7 @@ vi.mock('../WalletDiscoveryService', () => ({
 vi.mock('../OutboundTransactionTracker', () => ({
   default: {
     listActive: listActiveMock,
+    listReservedOutpoints: listReservedOutpointsMock,
   },
 }));
 
@@ -92,7 +94,7 @@ vi.mock('../../state/store', () => ({
 describe('UTXOService', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    ensureInitialAddressBatchesMock.mockResolvedValue(undefined);
+    ensureInitialAddressBatchesMock.mockResolvedValue([]);
     getUTXOsManyMock.mockResolvedValue({});
     fetchTransactionHistoriesMock.mockResolvedValue({});
     fetchTokenAddressesMock.mockResolvedValue({});
@@ -104,6 +106,7 @@ describe('UTXOService', () => {
     flushDatabaseToFileMock.mockResolvedValue(undefined);
     scheduleDatabaseSaveMock.mockReset();
     listActiveMock.mockResolvedValue([]);
+    listReservedOutpointsMock.mockResolvedValue([]);
     cashAddressToLockingBytecodeMock.mockImplementation((address: string) => {
       if (address === 'bitcoincash:q1') {
         return { bytecode: new Uint8Array([0x51]) };
@@ -126,6 +129,177 @@ describe('UTXOService', () => {
       expect.any(Function)
     );
     expect(flushDatabaseToFileMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('can refresh known addresses without starting account discovery', async () => {
+    const { default: UTXOService } = await import('../UTXOService');
+
+    await UTXOService.fetchAndStoreUTXOsMany(
+      11,
+      ['bitcoincash:q1'],
+      { discover: false }
+    );
+
+    expect(ensureInitialAddressBatchesMock).not.toHaveBeenCalled();
+    expect(getUTXOsManyMock).toHaveBeenCalledWith(['bitcoincash:q1']);
+  });
+
+  it('uses one history batch for discovery before the wallet UTXO fetch', async () => {
+    ensureInitialAddressBatchesMock.mockImplementationOnce(
+      async (
+        _walletId: number,
+        _network: string,
+        checkUsage: (
+          walletId: number,
+          batch: { address: string }[]
+        ) => Promise<string[]>
+      ) =>
+        await checkUsage(11, [{ address: 'bitcoincash:q1' }])
+    );
+    fetchTransactionHistoriesMock.mockResolvedValue({
+      'bitcoincash:q1': [],
+    });
+    getUTXOsManyMock.mockResolvedValue({
+      'bitcoincash:q1': [],
+    });
+
+    const { default: UTXOService } = await import('../UTXOService');
+
+    await UTXOService.fetchAndStoreUTXOsMany(11, ['bitcoincash:q1']);
+
+    expect(fetchTransactionHistoriesMock).toHaveBeenCalledWith(11, [
+      'bitcoincash:q1',
+    ]);
+    expect(getUTXOsManyMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('fetches recovered HD addresses immediately after discovery', async () => {
+    ensureInitialAddressBatchesMock.mockResolvedValue(['bitcoincash:q2']);
+    getUTXOsManyMock.mockResolvedValue({
+      'bitcoincash:q1': [],
+      'bitcoincash:q2': [],
+    });
+
+    const { default: UTXOService } = await import('../UTXOService');
+
+    await UTXOService.fetchAndStoreUTXOsMany(11, ['bitcoincash:q1']);
+
+    expect(getUTXOsManyMock).toHaveBeenCalledWith([
+      'bitcoincash:q1',
+      'bitcoincash:q2',
+    ]);
+  });
+
+  it('keeps a broadcast Fusion BCH output visible until Electrum indexes it', async () => {
+    getUTXOsManyMock.mockResolvedValue({
+      'bitcoincash:q1': [],
+    });
+    listActiveMock.mockResolvedValue([
+      {
+        txid: 'fusiontx',
+        rawTx: '00',
+        walletId: 11,
+        source: 'p2p-fusion',
+        state: 'broadcasted',
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+        spentOutpoints: [],
+      },
+    ]);
+    decodeTransactionMock.mockReturnValue({
+      outputs: [
+        {
+          lockingBytecode: new Uint8Array([0x51]),
+          valueSatoshis: 125_000n,
+        },
+      ],
+    });
+
+    const { default: UTXOService } = await import('../UTXOService');
+
+    const result = await UTXOService.fetchAndStoreUTXOsMany(11, [
+      'bitcoincash:q1',
+    ]);
+
+    expect(result['bitcoincash:q1']).toEqual([
+      expect.objectContaining({
+        tx_hash: 'fusiontx',
+        tx_pos: 0,
+        value: 125_000,
+        address: 'bitcoincash:q1',
+        height: 0,
+        token: null,
+        wallet_id: 11,
+      }),
+    ]);
+    expect(replaceWalletAddressUTXOsMock).toHaveBeenCalledWith(
+      11,
+      expect.objectContaining({
+        'bitcoincash:q1': [
+          expect.objectContaining({
+            tx_hash: 'fusiontx',
+            tx_pos: 0,
+          }),
+        ],
+      })
+    );
+  });
+
+  it('hides tracked spent inputs while Electrum still reports the pre-Fusion snapshot', async () => {
+    getUTXOsManyMock.mockResolvedValue({
+      'bitcoincash:q1': [
+        {
+          tx_hash: 'old-input',
+          tx_pos: 2,
+          value: 200_000,
+          height: 100,
+        },
+      ],
+    });
+    listReservedOutpointsMock.mockResolvedValue([
+      { tx_hash: 'old-input', tx_pos: 2 },
+    ]);
+    listActiveMock.mockResolvedValue([
+      {
+        txid: 'fusiontx',
+        rawTx: '00',
+        walletId: 11,
+        source: 'p2p-fusion',
+        state: 'broadcasted',
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+        spentOutpoints: [{ tx_hash: 'old-input', tx_pos: 2 }],
+      },
+    ]);
+    decodeTransactionMock.mockReturnValue({
+      outputs: [
+        {
+          lockingBytecode: new Uint8Array([0x51]),
+          valueSatoshis: 125_000n,
+        },
+      ],
+    });
+
+    const { default: UTXOService } = await import('../UTXOService');
+    const result = await UTXOService.fetchAndStoreUTXOsMany(11, [
+      'bitcoincash:q1',
+    ]);
+
+    expect(result['bitcoincash:q1']).toEqual([
+      expect.objectContaining({
+        tx_hash: 'fusiontx',
+        tx_pos: 0,
+        value: 125_000,
+      }),
+    ]);
+    expect(replaceWalletAddressUTXOsMock).toHaveBeenCalledWith(11, {
+      'bitcoincash:q1': [
+        expect.objectContaining({
+          tx_hash: 'fusiontx',
+          tx_pos: 0,
+        }),
+      ],
+    });
   });
 
   it('preserves existing UTXOs when Electrum omits an address from a partial failure', async () => {

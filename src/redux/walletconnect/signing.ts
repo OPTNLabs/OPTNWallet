@@ -21,7 +21,9 @@ import {
 } from '@bitauth/libauth';
 import type { WalletKitTypes } from '@reown/walletkit';
 import type { RootState } from '../../state/store';
+import { Network } from '../../state/slices/networkSlice';
 import KeyService from '../../services/KeyService';
+import { getBchAddressPath } from '../../services/HdWalletService';
 import { parseExtendedJson } from '../../utils/parseExtendedJson';
 import type { ContractInfo } from '../../types/wcInterfaces';
 import { getPublicKeyCompressed } from '../../utils/hex';
@@ -30,6 +32,9 @@ import { ensureUint8Array } from '../../utils/binary';
 import { PREFIX } from '../../utils/constants';
 import { normalizeWalletAddressCandidate } from './helpers';
 import { zeroize } from '../../utils/secureMemory';
+import { trezorSignTransaction, pathToAddressN, type TrezorInput, type TrezorOutput } from '../../services/hardware/TrezorService';
+import { ledgerSignTransaction, type LedgerInput, type LedgerOutput } from '../../services/hardware/LedgerService';
+import getElectrumAdapter from '../../services/ElectrumAdapter';
 
 type SignedTxObject = {
   signedTransaction: string;
@@ -57,6 +62,26 @@ export async function signWalletConnectTransactionRequest(
   const keys = await KeyService.retrieveKeys(walletId);
   if (!keys.length) throw new Error('No key available');
   const networkPrefix = PREFIX[state.network.currentNetwork];
+
+  // Hardware wallet branch — device signs instead of software key
+  const hwState = (state as unknown as Record<string, unknown>).hardwareWallet as
+    | { type: string; connected: boolean }
+    | undefined;
+  if (hwState?.connected && (hwState.type === 'trezor' || hwState.type === 'ledger')) {
+    const addressToKey = new Map(keys.map((k) => [k.address, k]));
+    const signed = await signWalletConnectWithHardware({
+      txDetails,
+      sourceOutputs,
+      addressToKey,
+      networkPrefix,
+      network: state.network.currentNetwork,
+      accountPath: state.wallet_id.derivationPath || undefined,
+      hwType: hwState.type as 'trezor' | 'ledger',
+    });
+    const rawBytes = hexToBin(signed);
+    const signedTransactionHash = binToHex(sha256.hash(sha256.hash(rawBytes)).reverse());
+    return { id, topic, signedTxObject: { signedTransaction: signed, signedTransactionHash } };
+  }
   const keyAddressSet = new Set(
     keys
       .map((k) => normalizeWalletAddressCandidate(k.address, networkPrefix))
@@ -207,4 +232,93 @@ export async function signWalletConnectTransactionRequest(
       zeroize(key);
     }
   }
+}
+
+type KeyRecord = {
+  address: string;
+  changeIndex: number;
+  addressIndex: number;
+};
+
+type CashAddrPrefix = Parameters<typeof lockingBytecodeToCashAddress>[0]['prefix'];
+
+async function signWalletConnectWithHardware({
+  txDetails,
+  sourceOutputs,
+  addressToKey,
+  networkPrefix,
+  network,
+  accountPath,
+  hwType,
+}: {
+  txDetails: TransactionCommon;
+  sourceOutputs: (Input & Output & ContractInfo)[];
+  addressToKey: Map<string, KeyRecord>;
+  networkPrefix: string;
+  network: Network;
+  accountPath?: string;
+  hwType: 'trezor' | 'ledger';
+}): Promise<string> {
+  const typedPrefix = networkPrefix as unknown as CashAddrPrefix;
+
+  function lcbToAddress(locking: Uint8Array): string {
+    const r = lockingBytecodeToCashAddress({ prefix: typedPrefix, bytecode: locking });
+    return typeof r === 'string' ? r : (r as { address: string }).address;
+  }
+
+  function inputAddress(utxo: Input & Output & ContractInfo): string | null {
+    const typed = utxo as { address?: unknown; lockingBytecode?: unknown };
+    if (typeof typed.address === 'string') return typed.address;
+    if (!typed.lockingBytecode) return null;
+    return lcbToAddress(ensureUint8Array(typed.lockingBytecode));
+  }
+
+  if (hwType === 'trezor') {
+    const trezorInputs: TrezorInput[] = txDetails.inputs.map((inp, i) => {
+      const address = inputAddress(sourceOutputs[i]);
+      const keyRecord = address ? addressToKey.get(address) : null;
+      const bip44 = keyRecord
+        ? getBchAddressPath(network, 0, keyRecord.changeIndex, keyRecord.addressIndex, accountPath)
+        : getBchAddressPath(network, 0, 0, 0, accountPath);
+      return {
+        address_n: pathToAddressN(bip44),
+        prev_hash: binToHex(Uint8Array.from(inp.outpointTransactionHash).reverse()),
+        prev_index: inp.outpointIndex,
+        amount: String(sourceOutputs[i]?.valueSatoshis ?? 0n),
+        script_type: 'SPENDADDRESS',
+      };
+    });
+
+    const trezorOutputs: TrezorOutput[] = txDetails.outputs.map((out) => ({
+      address: lcbToAddress(ensureUint8Array(out.lockingBytecode)),
+      amount: String(out.valueSatoshis),
+      script_type: 'PAYTOADDRESS',
+    }));
+
+    const result = await trezorSignTransaction(trezorInputs, trezorOutputs);
+    return result.serializedTx;
+  }
+
+  // Ledger path
+  const adapter = getElectrumAdapter();
+  const ledgerInputs: LedgerInput[] = await Promise.all(
+    txDetails.inputs.map(async (inp, i) => {
+      const address = inputAddress(sourceOutputs[i]);
+      const keyRecord = address ? addressToKey.get(address) : null;
+      const bip44 = keyRecord
+        ? getBchAddressPath(network, 0, keyRecord.changeIndex, keyRecord.addressIndex, accountPath).replace(/^m\//, '')
+        : getBchAddressPath(network, 0, 0, 0, accountPath).replace(/^m\//, '');
+      const txid = binToHex(Uint8Array.from(inp.outpointTransactionHash).reverse());
+      const prevTxHex = (await adapter.request('blockchain.transaction.get', txid, false)) as string;
+      return { path: bip44, prevTxHex, prevIndex: inp.outpointIndex };
+    })
+  );
+
+  const ledgerOutputs: LedgerOutput[] = txDetails.outputs.map((out) => ({
+    address: lcbToAddress(ensureUint8Array(out.lockingBytecode)),
+    amountSatoshis: out.valueSatoshis,
+  }));
+
+  const result = await ledgerSignTransaction(ledgerInputs, ledgerOutputs);
+  return result.serializedTx;
 }

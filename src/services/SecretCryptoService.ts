@@ -10,6 +10,7 @@ export const SECRET_ENC_PREFIX = 'enc:v1:';
 const FALLBACK_KEY_STORAGE = 'optn_wallet_fallback_key_v1';
 
 let fallbackCryptoKey: CryptoKey | null = null;
+const FALLBACK_KEY_LOCK = 'optn-secret-fallback-key-v1';
 
 const textEncoder = new TextEncoder();
 const textDecoder = new TextDecoder();
@@ -31,9 +32,7 @@ function base64ToBytes(base64: string): Uint8Array {
   return bytes;
 }
 
-async function getFallbackKey(): Promise<CryptoKey> {
-  if (fallbackCryptoKey) return fallbackCryptoKey;
-
+async function loadFallbackKey(): Promise<CryptoKey> {
   const cryptoObj = globalThis.crypto;
   if (!cryptoObj?.subtle) {
     throw new Error('WebCrypto is unavailable');
@@ -49,14 +48,43 @@ async function getFallbackKey(): Promise<CryptoKey> {
     writeStorageItem(storage, FALLBACK_KEY_STORAGE, keyMaterialB64);
   }
 
-  fallbackCryptoKey = await cryptoObj.subtle.importKey(
+  return await cryptoObj.subtle.importKey(
     'raw',
     base64ToBytes(keyMaterialB64),
     { name: 'AES-GCM' },
     false,
     ['encrypt', 'decrypt']
   );
+}
 
+async function getFallbackKey(): Promise<CryptoKey> {
+  if (fallbackCryptoKey) return fallbackCryptoKey;
+
+  const lockManager = (
+    globalThis.navigator as
+      | (Navigator & {
+          locks?: {
+            request: <T>(
+              name: string,
+              callback: () => Promise<T>
+            ) => Promise<T>;
+          };
+        })
+      | undefined
+  )?.locks;
+  if (lockManager?.request) {
+    return await lockManager.request(FALLBACK_KEY_LOCK, async () => {
+      if (!fallbackCryptoKey) {
+        // Re-read storage only after this origin-wide lock is held. Otherwise
+        // two first-run wallet windows can generate different keys and persist
+        // ciphertext that only one of them can decrypt after restart.
+        fallbackCryptoKey = await loadFallbackKey();
+      }
+      return fallbackCryptoKey;
+    });
+  }
+
+  fallbackCryptoKey = await loadFallbackKey();
   return fallbackCryptoKey;
 }
 

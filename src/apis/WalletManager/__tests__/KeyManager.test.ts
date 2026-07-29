@@ -35,6 +35,8 @@ vi.mock('../../../services/SecretCryptoService', () => ({
 vi.mock('../../../services/HdWalletService', () => ({
   deriveBchChild: vi.fn(),
   deriveBchStandardXpubs: vi.fn(),
+  getBchAccountPath: vi.fn(() => "m/44'/145'/0'"),
+  normalizeBchAccountPath: vi.fn((path: string) => path),
 }));
 
 vi.mock('../../../services/QuantumrootService', () => ({
@@ -233,6 +235,7 @@ describe('KeyManager', () => {
       receive: 'xpub-receive',
       change: 'xpub-change',
       defi: 'xpub-defi',
+      rpa: 'xpub-rpa',
     });
 
     const km = KeyManager();
@@ -240,6 +243,7 @@ describe('KeyManager', () => {
       receive: 'xpub-receive',
       change: 'xpub-change',
       defi: 'xpub-defi',
+      rpa: 'xpub-rpa',
     });
 
     expect(walletLookup.get).toHaveBeenCalledWith([7]);
@@ -247,7 +251,8 @@ describe('KeyManager', () => {
       Network.MAINNET,
       'wallet mnemonic',
       'wallet passphrase',
-      2
+      2,
+      "m/44'/145'/0'"
     );
   });
 
@@ -277,6 +282,7 @@ describe('KeyManager', () => {
       receive: 'xpub-receive',
       change: 'xpub-change',
       defi: 'xpub-defi',
+      rpa: 'xpub-rpa',
     });
     vi.mocked(deriveBchChild).mockResolvedValue({
       publicKey: Uint8Array.from([1, 2, 3]),
@@ -354,7 +360,8 @@ describe('KeyManager', () => {
       0,
       7,
       '0',
-      '00'.repeat(32)
+      '00'.repeat(32),
+      "m/44'/145'/0'"
     );
   });
 
@@ -404,7 +411,8 @@ describe('KeyManager', () => {
       0,
       9,
       '1',
-      '11'.repeat(32)
+      '11'.repeat(32),
+      "m/44'/145'/0'"
     );
   });
 

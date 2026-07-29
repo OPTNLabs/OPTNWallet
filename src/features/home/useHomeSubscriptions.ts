@@ -5,6 +5,7 @@ import { updateUTXOsForAddress } from '../../state/slices/utxoSlice';
 import { AppDispatch } from '../../state/store';
 import { UTXO } from '../../types/types';
 import { logError } from '../../utils/errorHandling';
+import { refreshWalletTransactionHistory } from '../../services/WalletHistoryRefreshService';
 
 type WalletKey = { address: string; addressIndex: number };
 
@@ -16,6 +17,7 @@ type UseHomeSubscriptionsParams = {
   fetchingUTXOs: boolean;
   keyPairs: WalletKey[];
   currentWalletId: number | null;
+  sessionGeneration: number;
   reduxUTXOs: Record<string, UTXO[]>;
   dispatch: AppDispatch;
 };
@@ -26,10 +28,13 @@ export function useHomeSubscriptions({
   fetchingUTXOs,
   keyPairs,
   currentWalletId,
+  sessionGeneration,
   reduxUTXOs,
   dispatch,
 }: UseHomeSubscriptionsParams) {
   const headersSubDone = useRef(false);
+  /** Which wallet we have already loaded history for, so a re-render does not refetch. */
+  const historyLoadedForWallet = useRef<number | null>(null);
   const headerRefreshScheduled = useRef(false);
   const utxosRef = useRef(reduxUTXOs);
 
@@ -57,19 +62,24 @@ export function useHomeSubscriptions({
           }
         }
         try {
-          DatabaseService().scheduleDatabaseSave();
+          DatabaseService().scheduleDatabaseSave(currentWalletId);
         } catch (error) {
           logError('Home.runHeaderRefresh.saveDatabase', error);
         }
         headerRefreshScheduled.current = false;
       }, 750);
     },
-    [dispatch]
+    [currentWalletId, dispatch]
   );
 
   useEffect(() => {
     if (!enabled) return;
-    if (!isInitialized || fetchingUTXOs || keyPairs.length === 0 || !currentWalletId) {
+    if (
+      !isInitialized ||
+      fetchingUTXOs ||
+      keyPairs.length === 0 ||
+      !currentWalletId
+    ) {
       return;
     }
     const addrs = keyPairs.map((k) => k.address).filter(Boolean);
@@ -77,7 +87,9 @@ export function useHomeSubscriptions({
     (async () => {
       try {
         if (!headersSubDone.current) {
-          await ElectrumService.subscribeBlockHeaders(() => runHeaderRefresh(addrs));
+          await ElectrumService.subscribeBlockHeaders(() =>
+            runHeaderRefresh(addrs)
+          );
           headersSubDone.current = true;
         }
       } catch (error) {
@@ -85,18 +97,41 @@ export function useHomeSubscriptions({
       }
     })();
 
+    // Load history once when the wallet opens.
+    //
+    // The address subscriptions below only fire when something CHANGES, so on a
+    // freshly opened wallet nothing requested history at all: Recent Activity
+    // rendered whatever redux happened to hold and stayed empty until the user
+    // opened the transactions page, which mounted the history hook. Home reads
+    // the same redux slice but mounts no such hook, so it has to ask itself.
+    if (historyLoadedForWallet.current !== currentWalletId) {
+      historyLoadedForWallet.current = currentWalletId;
+      void refreshWalletTransactionHistory({
+        walletId: currentWalletId,
+        dispatch,
+        sessionGeneration,
+      }).catch((error) => {
+        logError('Home.initialHistoryRefresh', error, {
+          walletId: currentWalletId,
+        });
+      });
+    }
+
     (async () => {
       for (const addr of addrs) {
         if (subscribedAddresses.has(addr)) continue;
         subscribedAddresses.add(addr);
 
         const already =
-          Array.isArray(utxosRef.current?.[addr]) && utxosRef.current[addr].length > 0;
+          Array.isArray(utxosRef.current?.[addr]) &&
+          utxosRef.current[addr].length > 0;
         if (!already) {
           try {
             const baseline = await ElectrumService.getUTXOs(addr);
             if (baseline.length > 0) {
-              dispatch(updateUTXOsForAddress({ address: addr, utxos: baseline }));
+              dispatch(
+                updateUTXOsForAddress({ address: addr, utxos: baseline })
+              );
               const m = new Map(Object.entries(utxosRef.current));
               m.set(addr, baseline);
               utxosRef.current = Object.fromEntries(m.entries()) as Record<
@@ -118,10 +153,26 @@ export function useHomeSubscriptions({
 
               dispatch(updateUTXOsForAddress({ address: addr, utxos }));
               try {
-                DatabaseService().scheduleDatabaseSave();
+                DatabaseService().scheduleDatabaseSave(currentWalletId);
               } catch (error) {
                 logError('Home.subscribeAddress.saveDatabase', error, {
                   address: addr,
+                });
+              }
+              // Activity on this address means the transaction list changed too.
+              // Refreshing only UTXOs updated the balance while Recent Activity
+              // stayed stale until the user navigated away and back, which
+              // remounted the history hook. Coalesced by RefreshCoordinator, so a
+              // burst of address notifications collapses into one pass.
+              if (currentWalletId) {
+                void refreshWalletTransactionHistory({
+                  walletId: currentWalletId,
+                  dispatch,
+                  sessionGeneration,
+                }).catch((error) => {
+                  logError('Home.subscribeAddress.refreshHistory', error, {
+                    address: addr,
+                  });
                 });
               }
             } catch (error) {
@@ -141,6 +192,7 @@ export function useHomeSubscriptions({
     fetchingUTXOs,
     keyPairs,
     currentWalletId,
+    sessionGeneration,
     dispatch,
     runHeaderRefresh,
   ]);

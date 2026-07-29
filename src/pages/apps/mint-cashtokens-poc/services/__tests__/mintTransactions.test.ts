@@ -1,8 +1,18 @@
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { AddonSDK } from '../../../../../services/AddonsSDK';
 import type { MintAppUtxo, MintOutputDraft } from '../../types';
 import { buildBootstrapPreview, buildMintPreview } from '../mintTransactions';
+
+const { buildTransactionMock } = vi.hoisted(() => ({
+  buildTransactionMock: vi.fn(),
+}));
+
+vi.mock('../../../../../services/TransactionService', () => ({
+  default: {
+    buildTransaction: buildTransactionMock,
+  },
+}));
 
 function makeUtxo(patch: Partial<MintAppUtxo> = {}): MintAppUtxo {
   return {
@@ -32,7 +42,18 @@ function makeDraft(patch: Partial<MintOutputDraft> = {}): MintOutputDraft {
 }
 
 describe('mintTransactions', () => {
+  beforeEach(() => {
+    buildTransactionMock.mockReset();
+  });
+
   it('buildBootstrapPreview throws on build error and missing built fields', async () => {
+    buildTransactionMock.mockResolvedValueOnce({
+      errorMsg: 'boom',
+      finalOutputs: null,
+      finalTransaction: '',
+      bytecodeSize: 0,
+    });
+
     const sdkError = {
       tx: {
         build: vi.fn().mockResolvedValue({ errorMsg: 'boom', finalOutputs: null, hex: '' }),
@@ -47,6 +68,13 @@ describe('mintTransactions', () => {
         changeAddress: 'bitcoincash:qchange',
       })
     ).rejects.toThrow('boom');
+
+    buildTransactionMock.mockResolvedValueOnce({
+      errorMsg: '',
+      finalOutputs: null,
+      finalTransaction: '',
+      bytecodeSize: 0,
+    });
 
     const sdkMissing = {
       tx: {
@@ -65,6 +93,13 @@ describe('mintTransactions', () => {
   });
 
   it('buildBootstrapPreview computes fee from input-output delta', async () => {
+    buildTransactionMock.mockResolvedValueOnce({
+      errorMsg: '',
+      finalOutputs: [{ recipientAddress: 'bitcoincash:qto', amount: 800n }],
+      finalTransaction: 'beef',
+      bytecodeSize: 42,
+    });
+
     const sdk = {
       tx: {
         build: vi.fn().mockResolvedValue({
@@ -86,6 +121,13 @@ describe('mintTransactions', () => {
   });
 
   it('buildMintPreview errors when no genesis inputs or no successful build', async () => {
+    buildTransactionMock.mockResolvedValue({
+      errorMsg: 'still failing',
+      finalOutputs: null,
+      finalTransaction: '',
+      bytecodeSize: 0,
+    });
+
     const sdk = {
       tx: { addOutput: vi.fn(), build: vi.fn() },
     } as unknown as AddonSDK;
@@ -126,6 +168,16 @@ describe('mintTransactions', () => {
   });
 
   it('buildMintPreview passes NFT args and returns fee-paid', async () => {
+    buildTransactionMock.mockResolvedValueOnce({
+      errorMsg: '',
+      finalOutputs: [
+        { recipientAddress: 'bitcoincash:qrcp', amount: 546n },
+        { recipientAddress: 'bitcoincash:qchange', amount: 6000n },
+      ],
+      finalTransaction: 'c0de',
+      bytecodeSize: 123,
+    });
+
     const genesis = makeUtxo({ tx_hash: 'g'.repeat(64), tx_pos: 0, value: 5000, token: null });
     const fee = makeUtxo({ tx_hash: 'f'.repeat(64), tx_pos: 1, value: 2000, token: null });
 
@@ -167,17 +219,31 @@ describe('mintTransactions', () => {
     });
 
     expect(addOutput).toHaveBeenCalledWith(
-      expect.objectContaining({
-        tokenAmount: 0n,
-        nftCapability: 'mutable',
-        nftCommitment: 'abcd',
-      })
+      'bitcoincash:qrcp',
+      546,
+      0n,
+      genesis.tx_hash,
+      [genesis, fee],
+      [{ address: 'bitcoincash:qrcp', tokenAddress: 'simpleledger:qrcp' }],
+      'mutable',
+      'abcd'
     );
     expect(out.built.hex).toBe('c0de');
     expect(out.feePaid).toBe(454n);
   });
 
   it('buildMintPreview keeps a wallet-controlled output before BCMR OP_RETURN when enabled', async () => {
+    buildTransactionMock.mockResolvedValueOnce({
+      errorMsg: '',
+      finalOutputs: [
+        { recipientAddress: 'bitcoincash:qchange', amount: 1000n },
+        { opReturn: ['BCMR'] },
+        { recipientAddress: 'bitcoincash:qrcp', amount: 546n },
+      ],
+      finalTransaction: 'c0de',
+      bytecodeSize: 123,
+    });
+
     const genesis = makeUtxo({ tx_hash: 'g'.repeat(64), tx_pos: 0, value: 5000, token: null });
     const fee = makeUtxo({ tx_hash: 'f'.repeat(64), tx_pos: 1, value: 2000, token: null });
     const draft = makeDraft({ sourceKey: `${genesis.tx_hash}:0` });
@@ -215,13 +281,15 @@ describe('mintTransactions', () => {
       },
     });
 
-    const firstBuildArg = build.mock.calls[0]?.[0] as {
-      outputs: Array<{ recipientAddress?: string; amount?: bigint; opReturn?: string[] }>;
-    };
-    expect(firstBuildArg.outputs[0]).toEqual({
+    const firstBuildOutputs = buildTransactionMock.mock.calls[0]?.[0] as Array<{
+      recipientAddress?: string;
+      amount?: bigint;
+      opReturn?: string[];
+    }>;
+    expect(firstBuildOutputs[0]).toEqual({
       recipientAddress: 'bitcoincash:qchange',
       amount: 1000n,
     });
-    expect(firstBuildArg.outputs[1].opReturn?.[0]).toBe('BCMR');
+    expect(firstBuildOutputs[1].opReturn?.[0]).toBe('BCMR');
   });
 });

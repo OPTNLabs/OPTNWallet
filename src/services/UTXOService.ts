@@ -1,5 +1,8 @@
 // src/services/UTXOService.ts
-import { cashAddressToLockingBytecode, decodeTransaction } from '@bitauth/libauth';
+import {
+  cashAddressToLockingBytecode,
+  decodeTransaction,
+} from '@bitauth/libauth';
 import ElectrumService from './ElectrumService';
 import DatabaseService from '../apis/DatabaseManager/DatabaseService';
 import UTXOManager from '../apis/UTXOManager/UTXOManager';
@@ -34,6 +37,14 @@ function outpointKey(utxo: Pick<UTXO, 'tx_hash' | 'tx_pos'>): string {
   return `${utxo.tx_hash}:${utxo.tx_pos}`;
 }
 
+async function collectReservedOutboundOutpointKeys(
+  walletId: number
+): Promise<Set<string>> {
+  const reserved =
+    await OutboundTransactionTracker.listReservedOutpoints(walletId);
+  return new Set(reserved.map((outpoint) => outpointKey(outpoint)));
+}
+
 function decodedOutputToToken(output: DecodedOutput): Token | null {
   if (!output.token) return null;
 
@@ -64,7 +75,7 @@ function buildWalletBytecodeMap(addresses: string[]): Map<string, string> {
   return bytecodeMap;
 }
 
-async function collectPendingOutboundTokenUtxos(
+async function collectPendingOutboundOwnedUtxos(
   walletId: number,
   addresses: string[]
 ): Promise<UTXO[]> {
@@ -78,7 +89,7 @@ async function collectPendingOutboundTokenUtxos(
     return [];
   }
 
-  const pendingTokenUtxos: UTXO[] = [];
+  const pendingOwnedUtxos: UTXO[] = [];
 
   for (const record of activeRecords) {
     if (record.state === 'broadcasting') continue;
@@ -92,9 +103,7 @@ async function collectPendingOutboundTokenUtxos(
       if (!address) return;
 
       const token = decodedOutputToToken(output);
-      if (!token) return;
-
-      pendingTokenUtxos.push({
+      pendingOwnedUtxos.push({
         id: `${record.txid}:${outputIndex}`,
         tx_hash: record.txid,
         tx_pos: outputIndex,
@@ -109,26 +118,33 @@ async function collectPendingOutboundTokenUtxos(
     });
   }
 
-  return pendingTokenUtxos;
+  return pendingOwnedUtxos;
 }
 
 async function hasElectrumBatchUsage(
   walletId: number,
   batch: { address: string }[]
-): Promise<boolean> {
-  if (batch.length === 0) return false;
+): Promise<string[]> {
+  if (batch.length === 0) return [];
 
   const addresses = batch.map((item) => item.address);
-  const [historiesByAddress, utxosByAddress] = await Promise.all([
-    TransactionManager().fetchAndStoreTransactionHistories(walletId, addresses),
-    ElectrumService.getUTXOsMany(addresses),
-  ]);
+  // BIP44 discovery is based on transaction history, including mempool
+  // entries, not current balance. A history entry is sufficient proof that an
+  // address is used; the wallet-wide UTXO fetch immediately after discovery
+  // obtains the spendable outputs. Keeping this probe to one batched RPC avoids
+  // doubling node load for every gap-limit window.
+  const historiesByAddress =
+    await TransactionManager().fetchAndStoreTransactionHistories(
+      walletId,
+      addresses
+    );
 
-  return batch.some((item) => {
-    const history = historiesByAddress[item.address];
-    const utxos = utxosByAddress[item.address];
-    return (Array.isArray(history) && history.length > 0) || (Array.isArray(utxos) && utxos.length > 0);
-  });
+  return batch
+    .filter((item) => {
+      const history = historiesByAddress[item.address];
+      return Array.isArray(history) && history.length > 0;
+    })
+    .map((item) => item.address);
 }
 
 async function enrichCachedTokenMetadata(
@@ -146,7 +162,10 @@ async function enrichCachedTokenMetadata(
   if (uniqueCategories.size === 0) return;
 
   const categoryList = Array.from(uniqueCategories);
-  const metadataByCategory = new Map<string, Awaited<ReturnType<BcmrService['getSnapshot']>>>();
+  const metadataByCategory = new Map<
+    string,
+    Awaited<ReturnType<BcmrService['getSnapshot']>>
+  >();
 
   const metadataResults = await Promise.all(
     categoryList.map(async (category) => {
@@ -187,7 +206,9 @@ function mergeKnownTokenData(
   }
 
   const existingByOutpoint = new Map(
-    existingUtxos.map((utxo) => [`${utxo.tx_hash}:${utxo.tx_pos}`, utxo] as const)
+    existingUtxos.map(
+      (utxo) => [`${utxo.tx_hash}:${utxo.tx_pos}`, utxo] as const
+    )
   );
 
   return fetchedUtxos.map((utxo) => {
@@ -214,10 +235,21 @@ function mergeKnownTokenData(
   });
 }
 
+type UTXOFetchOptions = {
+  /**
+   * Account discovery is useful during worker/bootstrap refreshes, but send
+   * screens should only refresh addresses already owned by the wallet. A
+   * spending action must not block on a new BIP44 history scan.
+   */
+  discover?: boolean;
+};
+
 const UTXOService = {
   async fetchAndStoreUTXOs(walletId: number, address: string): Promise<UTXO[]> {
     try {
-      const results = await UTXOService.fetchAndStoreUTXOsMany(walletId, [address]);
+      const results = await UTXOService.fetchAndStoreUTXOsMany(walletId, [
+        address,
+      ]);
       return results[address] ?? [];
     } catch (error) {
       logError('UTXOService.fetchAndStoreUTXOs', error, { walletId, address });
@@ -227,25 +259,35 @@ const UTXOService = {
 
   async fetchAndStoreUTXOsMany(
     walletId: number,
-    addresses: string[]
+    addresses: string[],
+    options: UTXOFetchOptions = {}
   ): Promise<Record<string, UTXO[]>> {
     try {
       const currentNetwork = store.getState().network.currentNetwork;
-      await WalletDiscoveryService.ensureInitialAddressBatches(
-        walletId,
-        currentNetwork,
-        hasElectrumBatchUsage
-      );
+      const discoveredAddresses =
+        options.discover === false
+          ? []
+          : ((await WalletDiscoveryService.ensureInitialAddressBatches(
+              walletId,
+              currentNetwork,
+              hasElectrumBatchUsage
+            )) ?? []);
       const manager = await UTXOManager();
       const addressManager = AddressManager();
-      const uniqueAddresses = Array.from(new Set(addresses.filter(Boolean)));
+      const uniqueAddresses = Array.from(
+        new Set([
+          ...addresses.filter(Boolean),
+          ...discoveredAddresses.filter(Boolean),
+        ])
+      );
       if (uniqueAddresses.length === 0) return {};
 
       const existingSnapshot = await manager.fetchUTXOsFromDatabase(
         uniqueAddresses.map((address) => ({ address })),
         walletId
       );
-      const utxosByAddress = await ElectrumService.getUTXOsMany(uniqueAddresses);
+      const utxosByAddress =
+        await ElectrumService.getUTXOsMany(uniqueAddresses);
       for (const fetchedUTXOs of Object.values(utxosByAddress)) {
         for (const u of fetchedUTXOs) {
           const uAny = u as UTXO & { token_data?: unknown };
@@ -262,6 +304,8 @@ const UTXOService = {
         walletId,
         uniqueAddresses
       );
+      const reservedOutpoints =
+        await collectReservedOutboundOutpointKeys(walletId);
       const prefix = getPrefix();
       const formattedByAddress: Record<string, UTXO[]> = {};
 
@@ -271,7 +315,9 @@ const UTXOService = {
           formattedByAddress[address] = [
             ...(existingSnapshot.utxosMap[address] ?? []),
             ...(existingSnapshot.cashTokenUtxosMap[address] ?? []),
-          ];
+          ].filter(
+            (utxo) => !reservedOutpoints.has(outpointKey(utxo))
+          );
           continue;
         }
 
@@ -279,7 +325,10 @@ const UTXOService = {
           ...(existingSnapshot.utxosMap[address] ?? []),
           ...(existingSnapshot.cashTokenUtxosMap[address] ?? []),
         ];
-        const mergedUTXOs = mergeKnownTokenData(fetchedUTXOs, previousUtxos);
+        const mergedUTXOs = mergeKnownTokenData(
+          fetchedUTXOs,
+          previousUtxos
+        ).filter((utxo) => !reservedOutpoints.has(outpointKey(utxo)));
 
         formattedByAddress[address] = mergedUTXOs.map((utxo: UTXO) => ({
           id: `${utxo.tx_hash}:${utxo.tx_pos}`,
@@ -296,13 +345,27 @@ const UTXOService = {
         }));
       }
 
+      const pendingOwnedUtxos = await collectPendingOutboundOwnedUtxos(
+        walletId,
+        uniqueAddresses
+      );
+      for (const pending of pendingOwnedUtxos) {
+        if (reservedOutpoints.has(outpointKey(pending))) continue;
+        const existing = formattedByAddress[pending.address] ?? [];
+        if (
+          !existing.some((utxo) => outpointKey(utxo) === outpointKey(pending))
+        ) {
+          formattedByAddress[pending.address] = [...existing, pending];
+        }
+      }
+
       await manager.replaceWalletAddressUTXOs(walletId, formattedByAddress);
 
       const dbService = DatabaseService();
       if (isWebPlatform()) {
-        await dbService.flushDatabaseToFile();
+        await dbService.flushDatabaseToFile(walletId);
       } else {
-        dbService.scheduleDatabaseSave();
+        dbService.scheduleDatabaseSave(walletId);
       }
 
       return formattedByAddress;
@@ -344,22 +407,42 @@ const UTXOService = {
 
       const { utxosMap, cashTokenUtxosMap } =
         await manager.fetchUTXOsFromDatabase(addrs, walletId);
-      const allDbUtxos = Object.values(utxosMap).flat().filter((u) => !u.token);
-      const dbTokenUtxos = Object.values(cashTokenUtxosMap).flat();
-      const pendingTokenUtxos = await collectPendingOutboundTokenUtxos(
+      const reservedOutpoints =
+        await collectReservedOutboundOutpointKeys(walletId);
+      const allDbUtxos = Object.values(utxosMap)
+        .flat()
+        .filter(
+          (utxo) =>
+            !utxo.token && !reservedOutpoints.has(outpointKey(utxo))
+        );
+      const dbTokenUtxos = Object.values(cashTokenUtxosMap)
+        .flat()
+        .filter((utxo) => !reservedOutpoints.has(outpointKey(utxo)));
+      const pendingOwnedUtxos = await collectPendingOutboundOwnedUtxos(
         walletId,
         addrs.map((entry) => entry.address)
       );
+      const pendingTokenUtxos = pendingOwnedUtxos.filter(
+        (utxo) => utxo.token && !reservedOutpoints.has(outpointKey(utxo))
+      );
+      const pendingBchUtxos = pendingOwnedUtxos.filter(
+        (utxo) => !utxo.token && !reservedOutpoints.has(outpointKey(utxo))
+      );
 
-      const pendingTokenOutpoints = new Set(
-        pendingTokenUtxos.map((utxo) => outpointKey(utxo))
+      const pendingOutpoints = new Set(
+        pendingOwnedUtxos.map((utxo) => outpointKey(utxo))
       );
-      const allUtxos = allDbUtxos.filter(
-        (utxo) => !pendingTokenOutpoints.has(outpointKey(utxo))
-      );
+      const allUtxos = [
+        ...allDbUtxos.filter(
+          (utxo) => !pendingOutpoints.has(outpointKey(utxo))
+        ),
+        ...pendingBchUtxos,
+      ];
       const tokenUtxos = [...dbTokenUtxos, ...pendingTokenUtxos].reduce<UTXO[]>(
         (acc, utxo) => {
-          if (!acc.some((existing) => outpointKey(existing) === outpointKey(utxo))) {
+          if (
+            !acc.some((existing) => outpointKey(existing) === outpointKey(utxo))
+          ) {
             acc.push(utxo);
           }
           return acc;
