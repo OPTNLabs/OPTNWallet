@@ -8,13 +8,22 @@ import { useDispatch, useSelector } from 'react-redux';
 import { useNavigate } from 'react-router-dom';
 import DatabaseService from '../../../apis/DatabaseManager/DatabaseService';
 import KeyService from '../../../services/KeyService';
-import { getBchCoinType } from '../../../services/HdWalletService';
+import {
+  getBchAccountPath,
+  normalizeBchAccountPath,
+} from '../../../services/HdWalletService';
 import { setNetwork } from '../../../state/slices/networkSlice';
 import { selectCurrentNetwork } from '../../../state/selectors/networkSelectors';
-import { setWalletId, setWalletNetwork, setWalletType } from '../../../state/slices/walletSlice';
+import {
+  setWalletId,
+  setWalletNetwork,
+  setWalletType,
+  setWalletDerivationPath,
+} from '../../../state/slices/walletSlice';
 import { WalletType } from '../../../types/wallet';
 import OnboardingCard from '../../../features/onboarding/components/OnboardingCard';
 import OnboardingScreen from '../../../features/onboarding/components/OnboardingScreen';
+import DerivationPathField from '../../../features/onboarding/components/DerivationPathField';
 import { createWalletWithPassword } from '../DesktopWalletManager';
 
 type Step = 'loading' | 'reveal' | 'confirm' | 'path' | 'name';
@@ -47,6 +56,12 @@ const DesktopCreateWalletPage = () => {
   const navigate = useNavigate();
   const currentNetwork = useSelector(selectCurrentNetwork);
   const dispatch = useDispatch();
+  const [derivationPath, setDerivationPath] = useState(() => getBchAccountPath(currentNetwork));
+  const [customDerivationPath, setCustomDerivationPath] = useState(false);
+
+  useEffect(() => {
+    if (!customDerivationPath) setDerivationPath(getBchAccountPath(currentNetwork));
+  }, [currentNetwork, customDerivationPath]);
 
   useEffect(() => {
     if (hasInitialized.current) return;
@@ -99,12 +114,15 @@ const DesktopCreateWalletPage = () => {
     setNameError('');
     setIsSubmitting(true);
     try {
+      const normalizedDerivationPath = normalizeBchAccountPath(derivationPath);
       const walletId = await createWalletWithPassword({
         name: walletName.trim(),
         mnemonic,
         passphrase: '',
         network: currentNetwork,
         walletType: WalletType.STANDARD,
+        derivationPath: normalizedDerivationPath,
+        derivationPathSource: customDerivationPath ? 'custom' : 'default',
         password,
       });
       if (walletId == null) {
@@ -112,13 +130,20 @@ const DesktopCreateWalletPage = () => {
         return;
       }
 
-      void KeyService.bootstrapInitialAddressBatch(walletId, 0, 10).catch((error) => {
-        console.error('[DesktopCreateWalletPage] Failed to bootstrap initial addresses:', error);
-      });
+      // Materialize one address pair so the worker can start immediately. It
+      // performs the full BIP44 discovery/gap-limit scan after navigation;
+      // waiting for all 40 key rows here makes wallet creation unnecessarily slow.
+      await KeyService.bootstrapInitialAddressBatch(walletId, 0, 1);
 
       dispatch(setWalletId(walletId));
       dispatch(setWalletNetwork(currentNetwork));
       dispatch(setWalletType(WalletType.STANDARD));
+      dispatch(
+        setWalletDerivationPath({
+          path: normalizedDerivationPath,
+          source: customDerivationPath ? 'custom' : 'default',
+        })
+      );
       dispatch(setNetwork(currentNetwork));
       window.dispatchEvent(new CustomEvent('optn:wallets-changed'));
       navigate(`/home/${walletId}`);
@@ -129,8 +154,6 @@ const DesktopCreateWalletPage = () => {
       setIsSubmitting(false);
     }
   };
-
-  const derivationPath = `m/44'/${getBchCoinType(currentNetwork)}'/0'`;
 
   if (step === 'loading') {
     return (
@@ -227,9 +250,15 @@ const DesktopCreateWalletPage = () => {
           <p className="text-sm wallet-muted text-center mb-3">
             This wallet derives its addresses using the standard BIP44 path for Bitcoin Cash.
           </p>
-          <div className="mb-4 p-4 rounded-xl wallet-surface-strong border border-[var(--wallet-border)] text-center">
-            <code className="text-lg wallet-text-strong font-mono">{derivationPath}</code>
-          </div>
+          <DerivationPathField
+            network={currentNetwork}
+            value={derivationPath}
+            custom={customDerivationPath}
+            onChange={(path, custom) => {
+              setDerivationPath(path);
+              setCustomDerivationPath(custom);
+            }}
+          />
           <button onClick={() => setStep('name')} className="wallet-btn-primary w-full my-2 text-xl font-bold">
             Continue
           </button>

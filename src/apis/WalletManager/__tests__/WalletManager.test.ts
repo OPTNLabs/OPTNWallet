@@ -120,6 +120,8 @@ describe('WalletManager', () => {
       Network.MAINNET,
       WalletType.STANDARD,
       0,
+      "m/44'/145'/0'",
+      'default',
     ]);
     expect(dbService.persistNewWalletToFile).toHaveBeenCalledWith(7);
   });

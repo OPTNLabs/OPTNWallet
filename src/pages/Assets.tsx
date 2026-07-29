@@ -21,6 +21,7 @@ import UTXOService from '../services/UTXOService';
 import { logError } from '../utils/errorHandling';
 import type { TokenPresentationFallback } from '../utils/tokenPresentation';
 import { StealthBalanceCard } from '../features/rpa/StealthBalanceCard';
+import { CauldronActivityCard } from '../features/cauldron/CauldronActivityCard';
 import { dedupeTokenUtxos, getStableTokenUtxos } from './assetsTokenInventory';
 import {
   formatAtomicTokenAmount,
@@ -294,6 +295,7 @@ const Assets: React.FC = () => {
             </SectionCard>
 
               <StealthBalanceCard walletId={currentWalletId} />
+              <CauldronActivityCard walletId={currentWalletId} />
 
               <SectionCard className="p-3">
                 <SectionHeader

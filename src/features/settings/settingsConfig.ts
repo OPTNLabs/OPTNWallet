@@ -1,4 +1,5 @@
 import { ROUTE_PATHS } from '../../navigation/routes';
+import { Network } from '../../state/slices/networkSlice';
 
 export type SettingsPanelKey =
   | 'recovery'
@@ -9,6 +10,8 @@ export type SettingsPanelKey =
   | 'walletconnect'
   | 'wizardconnect'
   | 'network'
+  | 'faucet'
+  | 'derivation'
   | 'server'
   | 'console'
   | 'experimental'
@@ -32,6 +35,20 @@ export const WALLET_ROWS: SettingsRowConfig[] = [
     description: 'Switch between Mainnet and Chipnet',
     action: 'panel',
     target: 'network',
+  },
+  {
+    key: 'faucet',
+    title: 'Chipnet Faucet',
+    description: 'Get test BCH on Chipnet',
+    action: 'panel',
+    target: 'faucet',
+  },
+  {
+    key: 'derivation',
+    title: 'Derivation Path',
+    description: 'Customize and resync the active BIP44 path',
+    action: 'panel',
+    target: 'derivation',
   },
   {
     key: 'recovery',
@@ -64,7 +81,7 @@ export const WALLET_ROWS: SettingsRowConfig[] = [
   {
     key: 'server',
     title: 'Servers',
-    description: 'Electrum · Block explorer · CashFusion · Tor',
+    description: 'Electrum · Block explorer · Transaction fees',
     action: 'panel',
     target: 'server',
   },
@@ -94,18 +111,22 @@ export const WALLET_ROWS: SettingsRowConfig[] = [
 ];
 
 const MOBILE_HIDDEN_WALLET_SETTING_KEYS = new Set([
-  'network',
-  'nostr',
-  'server',
+  'app-lock',
   'console',
   'experimental',
   'addons',
 ]);
 
-export function getVisibleWalletRows(isDesktop: boolean): SettingsRowConfig[] {
-  if (isDesktop) return WALLET_ROWS;
+export function getVisibleWalletRows(
+  isDesktop: boolean,
+  currentNetwork: Network
+): SettingsRowConfig[] {
+  const networkRows = WALLET_ROWS.filter(
+    (row) => row.key !== 'faucet' || currentNetwork === Network.CHIPNET
+  );
+  if (isDesktop) return networkRows;
 
-  return WALLET_ROWS.filter(
+  return networkRows.filter(
     (row) => !MOBILE_HIDDEN_WALLET_SETTING_KEYS.has(row.key)
   );
 }

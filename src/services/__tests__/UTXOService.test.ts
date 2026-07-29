@@ -131,6 +131,48 @@ describe('UTXOService', () => {
     expect(flushDatabaseToFileMock).toHaveBeenCalledTimes(1);
   });
 
+  it('can refresh known addresses without starting account discovery', async () => {
+    const { default: UTXOService } = await import('../UTXOService');
+
+    await UTXOService.fetchAndStoreUTXOsMany(
+      11,
+      ['bitcoincash:q1'],
+      { discover: false }
+    );
+
+    expect(ensureInitialAddressBatchesMock).not.toHaveBeenCalled();
+    expect(getUTXOsManyMock).toHaveBeenCalledWith(['bitcoincash:q1']);
+  });
+
+  it('uses one history batch for discovery before the wallet UTXO fetch', async () => {
+    ensureInitialAddressBatchesMock.mockImplementationOnce(
+      async (
+        _walletId: number,
+        _network: string,
+        checkUsage: (
+          walletId: number,
+          batch: { address: string }[]
+        ) => Promise<string[]>
+      ) =>
+        await checkUsage(11, [{ address: 'bitcoincash:q1' }])
+    );
+    fetchTransactionHistoriesMock.mockResolvedValue({
+      'bitcoincash:q1': [],
+    });
+    getUTXOsManyMock.mockResolvedValue({
+      'bitcoincash:q1': [],
+    });
+
+    const { default: UTXOService } = await import('../UTXOService');
+
+    await UTXOService.fetchAndStoreUTXOsMany(11, ['bitcoincash:q1']);
+
+    expect(fetchTransactionHistoriesMock).toHaveBeenCalledWith(11, [
+      'bitcoincash:q1',
+    ]);
+    expect(getUTXOsManyMock).toHaveBeenCalledTimes(1);
+  });
+
   it('fetches recovered HD addresses immediately after discovery', async () => {
     ensureInitialAddressBatchesMock.mockResolvedValue(['bitcoincash:q2']);
     getUTXOsManyMock.mockResolvedValue({

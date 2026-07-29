@@ -17,15 +17,15 @@ import {
 import { EXPLORER_PRESETS } from '../../utils/servers/explorers';
 import { getUserServers, addUserServer, removeUserServer, isValidServerEntry, getServerLabel, parseServerEntry } from '../../utils/servers/userServers';
 import { getUserNodes, addUserNode, removeUserNode } from '../../utils/servers/userNodes';
-import { CashFusionSettings } from './CashFusionSettings';
-import { TorSettings } from './TorSettings';
 import { Bip37NodeRow } from './Bip37NodeSettings';
+import { ServerPrivacySettings } from './ServerPrivacySettings';
 import {
   getBackend,
   setBackend,
   BACKEND_CHANGED_EVENT,
   type Backend,
 } from '../../platform/desktop/backendSelection';
+import { isDesktopPlatform } from '../../utils/platform';
 
 // BCH P2P default ports across networks — an entry on one of these is a BIP37
 // full node, anything else is an Electrum/Fulcrum server. Lets one "Add server"
@@ -49,6 +49,7 @@ function readLastHealthy(): string {
 
 export const ServerSettings: React.FC = () => {
   const dispatch = useDispatch();
+  const desktop = isDesktopPlatform();
   const currentNetwork = useSelector(selectCurrentNetwork);
   const defaultServers = getElectrumServers(currentNetwork);
   const explorerId = useSelector(selectExplorerId);
@@ -85,6 +86,15 @@ export const ServerSettings: React.FC = () => {
     return () => window.removeEventListener(BACKEND_CHANGED_EVENT, refresh);
   }, [currentNetwork]);
 
+  useEffect(() => {
+    if (!desktop && backend.kind === 'node') {
+      setBackend(currentNetwork, { kind: 'auto' });
+    }
+  }, [backend, currentNetwork, desktop]);
+
+  const displayedBackend =
+    !desktop && backend.kind === 'node' ? { kind: 'auto' as const } : backend;
+
   const handleAddUserServer = () => {
     const entry = newServer.trim().replace(/^wss?:\/\//i, '');
     if (!isValidServerEntry(entry)) {
@@ -96,6 +106,12 @@ export const ServerSettings: React.FC = () => {
     // the wallet uses each over the right protocol automatically.
     const port = Number(parseServerEntry(entry).target.split(':')[1]);
     if (P2P_NODE_PORTS.has(port)) {
+      if (!desktop) {
+        setAddError(
+          'Raw BCH node connections are only available on desktop. Add an Electrum/Fulcrum WSS server instead.'
+        );
+        return;
+      }
       setNodes(addUserNode(currentNetwork, entry));
     } else {
       setUserServers(addUserServer(currentNetwork, entry));
@@ -188,16 +204,16 @@ export const ServerSettings: React.FC = () => {
         <div className="min-w-0">
           <p className="text-xs font-semibold wallet-muted uppercase tracking-wide">Backend</p>
           <p className="text-sm wallet-text-strong break-all">
-            {backend.kind === 'auto' ? (
+            {displayedBackend.kind === 'auto' ? (
               'Auto — server pool, with failover'
-            ) : backend.kind === 'node' ? (
+            ) : displayedBackend.kind === 'node' ? (
               <>
-                Node <span className="font-mono opacity-70">{backend.target}</span>{' '}
+                Node <span className="font-mono opacity-70">{displayedBackend.target}</span>{' '}
                 <span className="text-[10px] text-[var(--wallet-accent)] font-semibold">trustless</span>
               </>
             ) : (
               <>
-                Server <span className="font-mono opacity-70">{backend.target}</span>
+                Server <span className="font-mono opacity-70">{displayedBackend.target}</span>
               </>
             )}
           </p>
@@ -325,7 +341,7 @@ export const ServerSettings: React.FC = () => {
         {/* BIP37 full nodes live in the SAME pool (different transport, chosen
             automatically by port). Desktop-only; Bip37NodeRow returns nothing on
             the web build. */}
-        {nodes.map((target) => (
+        {desktop && nodes.map((target) => (
           <Bip37NodeRow
             key={`node:${target}`}
             target={target}
@@ -342,7 +358,11 @@ export const ServerSettings: React.FC = () => {
             value={newServer}
             onChange={(e) => { setNewServer(e.target.value); setAddError(''); }}
             onKeyDown={(e) => { if (e.key === 'Enter') handleAddUserServer(); }}
-            placeholder="Add server — Fulcrum host:50002, or a node host:8333"
+            placeholder={
+              desktop
+                ? 'Add server — Fulcrum host:50002, or a node host:8333'
+                : 'Add WSS server — host:50004'
+            }
             className="flex-1 rounded-xl border border-[var(--wallet-border)] bg-[var(--wallet-surface)] px-3 py-2 text-xs font-mono wallet-text-strong placeholder:wallet-muted outline-none focus:ring-1 focus:ring-[var(--wallet-accent)]"
           />
           <button
@@ -355,9 +375,6 @@ export const ServerSettings: React.FC = () => {
         </div>
         {addError && <p className="text-[10px] text-red-400">{addError}</p>}
       </div>
-
-      {/* Tor — directly below the server pool */}
-      <TorSettings />
 
       {/* Block explorer */}
       <div className="flex flex-col gap-2 border-t border-[var(--wallet-border)] pt-4">
@@ -449,12 +466,7 @@ export const ServerSettings: React.FC = () => {
         )}
       </div>
 
-      {/* CashFusion (privacy) + Tor — grouped here so this one panel manages
-          everything network/server related. */}
-      <div className="flex flex-col gap-2 border-t border-[var(--wallet-border)] pt-4">
-        <p className="text-xs font-semibold wallet-muted uppercase tracking-wide">CashFusion &amp; Tor</p>
-        <CashFusionSettings variant="servers" />
-      </div>
+      {desktop && <ServerPrivacySettings />}
     </div>
   );
 };

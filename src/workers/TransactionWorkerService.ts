@@ -15,6 +15,7 @@ let transactionStartRetry: NodeJS.Timeout | null = null;
 async function fetchAndStoreTransactionHistory() {
   const state = store.getState();
   const currentWalletId = state.wallet_id.currentWalletId;
+  const sessionGeneration = state.wallet_id.sessionGeneration ?? 0;
   const transactionManager = TransactionManager();
 
   if (!currentWalletId) {
@@ -39,7 +40,8 @@ async function fetchAndStoreTransactionHistory() {
     const historyByAddress =
       await transactionManager.fetchAndStoreTransactionHistories(
         currentWalletId,
-        addresses
+        addresses,
+        sessionGeneration
       );
 
     const mergedByHash = new Map(
@@ -71,12 +73,20 @@ async function fetchAndStoreTransactionHistory() {
     }
 
     for (const address of addresses) {
+      const activeWallet = store.getState().wallet_id;
+      if (
+        activeWallet.currentWalletId !== currentWalletId ||
+        (activeWallet.sessionGeneration ?? 0) !== sessionGeneration
+      ) {
+        return;
+      }
       const updatedHistory = historyByAddress[address] ?? [];
       if (updatedHistory.length > 0) {
         store.dispatch(
           addTransactions({
             wallet_id: currentWalletId,
             transactions: updatedHistory,
+            sessionGeneration,
           })
         );
       }

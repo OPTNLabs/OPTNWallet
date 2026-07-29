@@ -20,6 +20,7 @@ const updateContractUTXOsMock = vi.fn();
 const listTrackedAddressesMock = vi.fn();
 const scheduleDatabaseSaveMock = vi.fn();
 const preloadTokenMetadataMock = vi.fn();
+const syncWalletSpecialActivitiesMock = vi.fn();
 const reconnectMock = vi.fn();
 const invalidateUTXOCacheMock = vi.fn();
 const subscribeBlockHeadersMock = vi.fn();
@@ -29,8 +30,8 @@ const unsubscribeBlockHeadersMock = vi.fn();
 const fetchAndStoreTransactionHistoriesMock = vi.fn();
 const fetchAndStoreTransactionHistoryMock = vi.fn();
 const reconcileActiveWalletUtxosMock = vi.fn();
-const runWalletUtxoRefreshMock = vi.fn(async (_walletId: number, task: () => Promise<void>) =>
-  task()
+const runWalletUtxoRefreshMock = vi.fn(
+  async (_walletId: number, task: () => Promise<void>) => task()
 );
 
 vi.mock('../../state/store', () => ({
@@ -105,6 +106,10 @@ vi.mock('../../hooks/useSharedTokenMetadata', () => ({
   preloadTokenMetadata: preloadTokenMetadataMock,
 }));
 
+vi.mock('../../services/WalletSpecialActivityService', () => ({
+  syncWalletSpecialActivities: syncWalletSpecialActivitiesMock,
+}));
+
 function deferred<T>() {
   let resolve!: (value: T | PromiseLike<T>) => void;
   let reject!: (reason?: unknown) => void;
@@ -134,6 +139,7 @@ describe('UTXOWorkerService.bootstrapAllUTXOs', () => {
     unsubscribeAddressMock.mockResolvedValue(undefined);
     unsubscribeBlockHeadersMock.mockResolvedValue(undefined);
     reconcileActiveWalletUtxosMock.mockResolvedValue({});
+    syncWalletSpecialActivitiesMock.mockResolvedValue([]);
   });
 
   afterEach(async () => {
@@ -186,7 +192,11 @@ describe('UTXOWorkerService.bootstrapAllUTXOs', () => {
     const { bootstrapAllUTXOs } = await import('../UTXOWorkerService');
     const bootstrapPromise = bootstrapAllUTXOs();
 
-    for (let i = 0; i < 20 && preloadTokenMetadataMock.mock.calls.length === 0; i += 1) {
+    for (
+      let i = 0;
+      i < 20 && preloadTokenMetadataMock.mock.calls.length === 0;
+      i += 1
+    ) {
       await new Promise((resolve) => setTimeout(resolve, 0));
     }
     expect(preloadTokenMetadataMock).toHaveBeenCalledTimes(1);
@@ -221,17 +231,48 @@ describe('UTXOWorkerService.bootstrapAllUTXOs', () => {
       ['bitcoincash:qaddr1'],
       ['bchtest:qtracked'],
     ]);
-    expect(
-      invalidateUTXOCacheMock.mock.invocationCallOrder[0]
-    ).toBeLessThan(fetchAndStoreUTXOsManyMock.mock.invocationCallOrder[0]);
-    expect(
-      invalidateUTXOCacheMock.mock.invocationCallOrder[1]
-    ).toBeLessThan(fetchAndStoreUTXOsManyMock.mock.invocationCallOrder[0]);
+    expect(invalidateUTXOCacheMock.mock.invocationCallOrder[0]).toBeLessThan(
+      fetchAndStoreUTXOsManyMock.mock.invocationCallOrder[0]
+    );
+    expect(invalidateUTXOCacheMock.mock.invocationCallOrder[1]).toBeLessThan(
+      fetchAndStoreUTXOsManyMock.mock.invocationCallOrder[0]
+    );
     expect(fetchAndStoreUTXOsManyMock).toHaveBeenCalledTimes(1);
     expect(fetchAndStoreUTXOsManyMock).toHaveBeenCalledWith(42, [
       'bitcoincash:qaddr1',
       'bchtest:qtracked',
     ]);
+  });
+
+  it('publishes addresses materialized by discovery in the initial snapshot', async () => {
+    fetchAndStoreUTXOsManyMock.mockResolvedValue({
+      'bitcoincash:qaddr1': [],
+      'bitcoincash:qdiscovered': [
+        {
+          address: 'bitcoincash:qdiscovered',
+          tx_hash: 'discovered-tx',
+          tx_pos: 0,
+          value: 12_345,
+          height: 0,
+        },
+      ],
+    });
+
+    const { bootstrapAllUTXOs } = await import('../UTXOWorkerService');
+    await bootstrapAllUTXOs();
+
+    expect(dispatchMock).toHaveBeenCalledWith(
+      replaceAllUTXOs({
+        utxosByAddress: expect.objectContaining({
+          'bitcoincash:qdiscovered': [
+            expect.objectContaining({
+              tx_hash: 'discovered-tx',
+              value: 12_345,
+            }),
+          ],
+        }),
+      })
+    );
   });
 
   it('discards a completed bootstrap when another wallet became active', async () => {
@@ -241,7 +282,11 @@ describe('UTXOWorkerService.bootstrapAllUTXOs', () => {
     const { bootstrapAllUTXOs } = await import('../UTXOWorkerService');
     const bootstrapPromise = bootstrapAllUTXOs();
 
-    for (let i = 0; i < 20 && fetchAndStoreUTXOsManyMock.mock.calls.length === 0; i += 1) {
+    for (
+      let i = 0;
+      i < 20 && fetchAndStoreUTXOsManyMock.mock.calls.length === 0;
+      i += 1
+    ) {
       await new Promise((resolve) => setTimeout(resolve, 0));
     }
     expect(fetchAndStoreUTXOsManyMock).toHaveBeenCalledTimes(1);
@@ -253,9 +298,11 @@ describe('UTXOWorkerService.bootstrapAllUTXOs', () => {
     fetchGate.resolve({ 'bitcoincash:qaddr1': [] });
     await bootstrapPromise;
 
-    expect(dispatchMock.mock.calls.some(([action]) => action.type === replaceAllUTXOs.type)).toBe(
-      false
-    );
+    expect(
+      dispatchMock.mock.calls.some(
+        ([action]) => action.type === replaceAllUTXOs.type
+      )
+    ).toBe(false);
     expect(dispatchMock).not.toHaveBeenCalledWith(setFetchingUTXOs(false));
     expect(dispatchMock).not.toHaveBeenCalledWith(setInitialized(true));
     expect(scheduleDatabaseSaveMock).not.toHaveBeenCalled();
@@ -264,10 +311,16 @@ describe('UTXOWorkerService.bootstrapAllUTXOs', () => {
   it('does not establish subscriptions after a pending start is cancelled', async () => {
     const fetchGate = deferred<Record<string, never[]>>();
     fetchAndStoreUTXOsManyMock.mockReturnValueOnce(fetchGate.promise);
-    const { startUTXOWorker, stopUTXOWorker } = await import('../UTXOWorkerService');
+    const { startUTXOWorker, stopUTXOWorker } = await import(
+      '../UTXOWorkerService'
+    );
 
     const startPromise = startUTXOWorker();
-    for (let i = 0; i < 20 && fetchAndStoreUTXOsManyMock.mock.calls.length === 0; i += 1) {
+    for (
+      let i = 0;
+      i < 20 && fetchAndStoreUTXOsManyMock.mock.calls.length === 0;
+      i += 1
+    ) {
       await new Promise((resolve) => setTimeout(resolve, 0));
     }
     expect(fetchAndStoreUTXOsManyMock).toHaveBeenCalledTimes(1);
@@ -280,13 +333,49 @@ describe('UTXOWorkerService.bootstrapAllUTXOs', () => {
     expect(subscribeAddressMock).not.toHaveBeenCalled();
   });
 
+  it('does not wait for optional special activity scans before completing startup', async () => {
+    const specialActivityGate = deferred<never[]>();
+    syncWalletSpecialActivitiesMock.mockReturnValueOnce(
+      specialActivityGate.promise
+    );
+    fetchAndStoreUTXOsManyMock.mockResolvedValue({
+      'bitcoincash:qaddr1': [],
+    });
+
+    const { startUTXOWorker } = await import('../UTXOWorkerService');
+    let startCompleted = false;
+    const startPromise = startUTXOWorker().then(() => {
+      startCompleted = true;
+    });
+
+    for (
+      let i = 0;
+      i < 20 && syncWalletSpecialActivitiesMock.mock.calls.length === 0;
+      i += 1
+    ) {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    }
+    expect(syncWalletSpecialActivitiesMock).toHaveBeenCalledTimes(1);
+
+    for (let i = 0; i < 20 && !startCompleted; i += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    }
+    expect(startCompleted).toBe(true);
+    expect(subscribeBlockHeadersMock).toHaveBeenCalledTimes(1);
+
+    specialActivityGate.resolve([]);
+    await startPromise;
+  });
+
   it('finishes old teardown before starting a replacement worker', async () => {
     fetchAndStoreUTXOsManyMock.mockResolvedValue({
       'bitcoincash:qaddr1': [],
     });
     const unsubscribeGate = deferred<void>();
     unsubscribeAddressMock.mockReturnValueOnce(unsubscribeGate.promise);
-    const { startUTXOWorker, stopUTXOWorker } = await import('../UTXOWorkerService');
+    const { startUTXOWorker, stopUTXOWorker } = await import(
+      '../UTXOWorkerService'
+    );
 
     await startUTXOWorker();
     expect(subscribeAddressMock).toHaveBeenCalledTimes(1);

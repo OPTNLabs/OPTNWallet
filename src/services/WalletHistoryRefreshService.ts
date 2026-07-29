@@ -19,7 +19,10 @@ import type { TransactionHistoryItem } from '../types/types';
 import ElectrumService from './ElectrumService';
 import { reconcileOutboundTransactions } from './OutboundTransactionReconciler';
 import { planTransactionDetailRefresh } from './transactionDetailSync';
-import { runOutboundReconcile, runWalletHistoryRefresh } from './RefreshCoordinator';
+import {
+  runOutboundReconcile,
+  runWalletHistoryRefresh,
+} from './RefreshCoordinator';
 import QuantumrootTrackingService from './QuantumrootTrackingService';
 
 type SqlLikeDb = {
@@ -67,6 +70,8 @@ export function loadStoredTransactions(
 export interface RefreshWalletHistoryOptions {
   walletId: number;
   dispatch: AppDispatch;
+  /** Session generation captured before the async scan began. */
+  sessionGeneration?: number;
   /**
    * Addresses already scanned in this pass, skipped to keep an initial page load
    * incremental. Omit for a full refresh — which is what a NEW TRANSACTION
@@ -94,7 +99,13 @@ export interface RefreshWalletHistoryResult {
 export async function refreshWalletTransactionHistory(
   options: RefreshWalletHistoryOptions
 ): Promise<RefreshWalletHistoryResult> {
-  const { walletId, dispatch, skipAddresses, onProgress } = options;
+  const {
+    walletId,
+    dispatch,
+    sessionGeneration,
+    skipAddresses,
+    onProgress,
+  } = options;
   if (!Number.isSafeInteger(walletId) || walletId <= 0) {
     return { scannedAddresses: [], refreshed: false };
   }
@@ -128,6 +139,7 @@ export async function refreshWalletTransactionHistory(
         setTransactions({
           wallet_id: walletId,
           transactions: previousStoredTransactions,
+          sessionGeneration,
         })
       );
     }
@@ -158,10 +170,18 @@ export async function refreshWalletTransactionHistory(
       return;
     }
 
-    const historyByAddress = await TransactionManager().fetchAndStoreTransactionHistories(
-      walletId,
-      pending
-    );
+    const transactionManager = TransactionManager();
+    const historyByAddress =
+      sessionGeneration === undefined
+        ? await transactionManager.fetchAndStoreTransactionHistories(
+            walletId,
+            pending
+          )
+        : await transactionManager.fetchAndStoreTransactionHistories(
+            walletId,
+            pending,
+            sessionGeneration
+          );
 
     const processed: string[] = [];
     pending.forEach((address, index) => {
@@ -195,7 +215,11 @@ export async function refreshWalletTransactionHistory(
       }
 
       dispatch(
-        setTransactions({ wallet_id: walletId, transactions: storedTransactions })
+        setTransactions({
+          wallet_id: walletId,
+          transactions: storedTransactions,
+          sessionGeneration,
+        })
       );
       refreshed = true;
     }
