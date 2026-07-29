@@ -128,19 +128,21 @@ async function hasElectrumBatchUsage(
   if (batch.length === 0) return [];
 
   const addresses = batch.map((item) => item.address);
-  const [historiesByAddress, utxosByAddress] = await Promise.all([
-    TransactionManager().fetchAndStoreTransactionHistories(walletId, addresses),
-    ElectrumService.getUTXOsMany(addresses),
-  ]);
+  // BIP44 discovery is based on transaction history, including mempool
+  // entries, not current balance. A history entry is sufficient proof that an
+  // address is used; the wallet-wide UTXO fetch immediately after discovery
+  // obtains the spendable outputs. Keeping this probe to one batched RPC avoids
+  // doubling node load for every gap-limit window.
+  const historiesByAddress =
+    await TransactionManager().fetchAndStoreTransactionHistories(
+      walletId,
+      addresses
+    );
 
   return batch
     .filter((item) => {
       const history = historiesByAddress[item.address];
-      const utxos = utxosByAddress[item.address];
-      return (
-        (Array.isArray(history) && history.length > 0) ||
-        (Array.isArray(utxos) && utxos.length > 0)
-      );
+      return Array.isArray(history) && history.length > 0;
     })
     .map((item) => item.address);
 }
@@ -233,6 +235,15 @@ function mergeKnownTokenData(
   });
 }
 
+type UTXOFetchOptions = {
+  /**
+   * Account discovery is useful during worker/bootstrap refreshes, but send
+   * screens should only refresh addresses already owned by the wallet. A
+   * spending action must not block on a new BIP44 history scan.
+   */
+  discover?: boolean;
+};
+
 const UTXOService = {
   async fetchAndStoreUTXOs(walletId: number, address: string): Promise<UTXO[]> {
     try {
@@ -248,16 +259,19 @@ const UTXOService = {
 
   async fetchAndStoreUTXOsMany(
     walletId: number,
-    addresses: string[]
+    addresses: string[],
+    options: UTXOFetchOptions = {}
   ): Promise<Record<string, UTXO[]>> {
     try {
       const currentNetwork = store.getState().network.currentNetwork;
       const discoveredAddresses =
-        (await WalletDiscoveryService.ensureInitialAddressBatches(
-          walletId,
-          currentNetwork,
-          hasElectrumBatchUsage
-        )) ?? [];
+        options.discover === false
+          ? []
+          : ((await WalletDiscoveryService.ensureInitialAddressBatches(
+              walletId,
+              currentNetwork,
+              hasElectrumBatchUsage
+            )) ?? []);
       const manager = await UTXOManager();
       const addressManager = AddressManager();
       const uniqueAddresses = Array.from(

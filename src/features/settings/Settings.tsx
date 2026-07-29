@@ -7,11 +7,12 @@ import { resetWallet, setWalletId } from '../../state/slices/walletSlice';
 import { resetUTXOs } from '../../state/slices/utxoSlice';
 import { resetTransactions } from '../../state/slices/transactionSlice';
 import { resetContract } from '../../state/slices/contractSlice';
-import { resetNetwork } from '../../state/slices/networkSlice';
+import { Network, resetNetwork } from '../../state/slices/networkSlice';
 import { clearTransaction } from '../../state/slices/transactionBuilderSlice';
 import { selectCurrentNetwork } from '../../state/selectors/networkSelectors';
 import ContractDetails from '../../components/ContractDetails';
 import { NetworkSettings } from './NetworkSettings';
+import { DerivationPathSettings } from './DerivationPathSettings';
 import { ServerSettings } from './ServerSettings';
 import { ConsolePanel } from './ConsolePanel';
 import { ExperimentalSettings } from './ExperimentalSettings';
@@ -22,11 +23,13 @@ import RecoveryPhrase from '../../components/RecoveryPhrase';
 import AboutView from '../../components/AboutView';
 import TermsOfUse from '../../components/TermsOfUse';
 import ContactUs from '../../components/ContactUs';
+import FaucetView from '../../components/FaucetView';
 import WalletConnectPanel from '../../components/walletconnect/WalletConnectPanel';
 import WizardConnectPanel from '../../components/wizardconnect/WizardConnectPanel';
 import { AppLockSettings } from '../../platform/desktop/AppLockSettings';
 import { disconnectAllWizardConnections } from '../../state/slices/wizardconnectSlice';
 import getElectrumAdapter from '../../services/ElectrumAdapter';
+import { waitForWalletHistoryRefresh } from '../../services/RefreshCoordinator';
 import { useTheme } from '../../app/theme/useTheme';
 import PageHeader from '../../components/ui/PageHeader';
 import SectionCard from '../../components/ui/SectionCard';
@@ -56,19 +59,28 @@ const Settings: React.FC = () => {
   const currentNetwork = useSelector((state: RootState) =>
     selectCurrentNetwork(state)
   );
+  const desktop = isDesktopPlatform();
 
-  const [selectedOption, setSelectedOption] = useState(() => searchParams.get('panel') ?? '');
+  const [selectedOption, setSelectedOption] = useState(
+    () => {
+      const panel = searchParams.get('panel') ?? '';
+      return !desktop && panel === 'app-lock' ? '' : panel;
+    }
+  );
   const [isLogoutPopupOpen, setIsLogoutPopupOpen] = useState(false);
   const logoutNodeRef = useRef<HTMLDivElement | null>(null);
   const returnTarget = getReturnPath(location, '');
-  const desktop = isDesktopPlatform();
-  const visibleWalletRows = getVisibleWalletRows(desktop);
+  const visibleWalletRows = getVisibleWalletRows(desktop, currentNetwork);
 
   useEffect(() => {
-    setSelectedOption(searchParams.get('panel') ?? '');
-  }, [searchParams]);
+    const panel = searchParams.get('panel') ?? '';
+    setSelectedOption(!desktop && panel === 'app-lock' ? '' : panel);
+  }, [desktop, searchParams]);
 
   const handleLogout = async () => {
+    await waitForWalletHistoryRefresh(currentWalletId, {
+      resetCooldown: true,
+    });
     // On desktop this is a LOCK, not a wipe: clear the in-RAM key and return to
     // the wallet picker, leaving EVERY saved wallet intact. The mobile flow
     // below (deleteWallet + clearAllData) drops the whole wallet database, which
@@ -136,6 +148,10 @@ const Settings: React.FC = () => {
         return <AppLockSettings />;
       case 'network':
         return <NetworkSettings />;
+      case 'faucet':
+        return currentNetwork === Network.CHIPNET ? <FaucetView /> : null;
+      case 'derivation':
+        return <DerivationPathSettings />;
       case 'server':
         return <ServerSettings />;
       case 'console':
@@ -169,6 +185,8 @@ const Settings: React.FC = () => {
         return 'App Lock';
       case 'server':
         return 'Server';
+      case 'derivation':
+        return 'Derivation Path';
       case 'console':
         return 'Console';
       case 'experimental':
@@ -185,6 +203,8 @@ const Settings: React.FC = () => {
         return 'WizardConnect';
       case 'network':
         return 'Network';
+      case 'faucet':
+        return 'Chipnet Faucet';
       default:
         return '';
     }
@@ -258,7 +278,11 @@ const Settings: React.FC = () => {
                             ) : undefined
                           }
                           disabled={row.action === 'noop'}
-                          onClick={row.action === 'noop' ? undefined : () => handleRowClick(row)}
+                          onClick={
+                            row.action === 'noop'
+                              ? undefined
+                              : () => handleRowClick(row)
+                          }
                         />
                       ))}
                     </div>
@@ -273,7 +297,11 @@ const Settings: React.FC = () => {
                           title={row.title}
                           description={row.description}
                           compact
-                          onClick={row.action === 'noop' ? undefined : () => handleRowClick(row)}
+                          onClick={
+                            row.action === 'noop'
+                              ? undefined
+                              : () => handleRowClick(row)
+                          }
                         />
                       ))}
                     </div>
@@ -288,12 +316,15 @@ const Settings: React.FC = () => {
                           title={row.title}
                           description={row.description}
                           compact
-                          onClick={row.action === 'noop' ? undefined : () => handleRowClick(row)}
+                          onClick={
+                            row.action === 'noop'
+                              ? undefined
+                              : () => handleRowClick(row)
+                          }
                         />
                       ))}
                     </div>
                   </SectionCard>
-
                 </div>
 
                 <button
@@ -310,7 +341,9 @@ const Settings: React.FC = () => {
                 <div className="flex h-full min-h-0 flex-col">
                   <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain pr-1">
                     <div className="mb-4 flex items-center justify-between">
-                      <h2 className="text-xl font-bold wallet-text-strong">{renderTitle()}</h2>
+                      <h2 className="text-xl font-bold wallet-text-strong">
+                        {renderTitle()}
+                      </h2>
                     </div>
                     {renderContent()}
                   </div>

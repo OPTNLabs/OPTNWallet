@@ -103,9 +103,10 @@ export function getQuantumrootComponentPath(
   network: Network,
   accountIndex: number,
   component: QuantumrootVariableName,
-  addressIndex: number | bigint
+  addressIndex: number | bigint,
+  accountPath?: string
 ): string {
-  return `${getBchAccountPath(network, accountIndex)}/${QUANTUMROOT_VARIABLE_PATH[component]}/${addressIndex.toString()}`;
+  return `${getBchAccountPath(network, accountIndex, accountPath)}/${QUANTUMROOT_VARIABLE_PATH[component]}/${addressIndex.toString()}`;
 }
 
 function getCashAddressPrefix(network: Network) {
@@ -312,14 +313,15 @@ export async function deriveQuantumrootVaultArtifacts(
   mnemonic: string,
   passphrase: string,
   accountIndex: number,
-  addressIndex: number
+  addressIndex: number,
+  accountPath?: string
 ): Promise<QuantumrootVaultArtifacts> {
-  const accountPath = getBchAccountPath(network, accountIndex);
+  const resolvedAccountPath = getBchAccountPath(network, accountIndex, accountPath);
   const accountHdPrivateKey = await deriveHdPrivateKeyAtPath(
     mnemonic,
     passphrase,
     network,
-    accountPath
+    resolvedAccountPath
   );
   const componentNames = Object.keys(
     QUANTUMROOT_VARIABLE_PATH
@@ -327,7 +329,13 @@ export async function deriveQuantumrootVaultArtifacts(
   const components = {} as Record<QuantumrootVariableName, QuantumrootDerivedComponent>;
 
   for (const name of componentNames) {
-    const path = getQuantumrootComponentPath(network, accountIndex, name, addressIndex);
+    const path = getQuantumrootComponentPath(
+      network,
+      accountIndex,
+      name,
+      addressIndex,
+      resolvedAccountPath
+    );
     const privateKey = await derivePrivateKeyAtPath(mnemonic, passphrase, path);
     const publicKey = secp256k1.derivePublicKeyCompressed(privateKey);
 
@@ -354,7 +362,7 @@ export async function deriveQuantumrootVaultArtifacts(
     deriveQuantumrootLmOtsArtifacts(quantumSeed, quantumKeyIdentifier);
 
   return {
-    accountPath,
+    accountPath: resolvedAccountPath,
     addressIndex,
     accountHdPrivateKey,
     components,
@@ -464,14 +472,16 @@ export async function deriveQuantumrootVault(
   accountIndex: number,
   addressIndex: number,
   onlineQuantumSigner: '0' | '1' = '0',
-  vaultTokenCategory = '00'.repeat(32)
+  vaultTokenCategory = '00'.repeat(32),
+  accountPath?: string
 ) {
   const artifacts = await deriveQuantumrootVaultArtifacts(
     network,
     mnemonic,
     passphrase,
     accountIndex,
-    addressIndex
+    addressIndex,
+    accountPath
   );
   const compiled = deriveQuantumrootVaultCompilation(
     network,

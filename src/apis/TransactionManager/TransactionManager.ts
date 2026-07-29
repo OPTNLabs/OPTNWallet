@@ -34,6 +34,18 @@ function deriveTxidFromRawTx(rawTX: string): string | null {
   }
 }
 
+function isCurrentWalletSession(
+  walletId: number,
+  sessionGeneration: number | undefined
+): boolean {
+  if (sessionGeneration === undefined) return true;
+  const activeWallet = store.getState().wallet_id;
+  return (
+    activeWallet.currentWalletId === walletId &&
+    (activeWallet.sessionGeneration ?? 0) === sessionGeneration
+  );
+}
+
 // Fee for a tx of `bytes`: the min relay fee by default; in 'custom' mode the
 // user's sat/byte (never below the relay minimum). Read live from preferences so
 // changing the setting takes effect on the next transaction immediately.
@@ -56,8 +68,10 @@ export default function TransactionManager() {
   function storeTransactionHistory(
     walletId: number,
     address: string,
-    history: TransactionHistoryItem[]
+    history: TransactionHistoryItem[],
+    sessionGeneration?: number
   ): TransactionHistoryItem[] {
+    if (!isCurrentWalletSession(walletId, sessionGeneration)) return [];
     const db = dbService.getDatabase();
     if (!db) {
       throw new Error('Could not get database');
@@ -99,9 +113,11 @@ export default function TransactionManager() {
 
   async function fetchAndStoreTransactionHistory(
     walletId: number,
-    address: string
+    address: string,
+    sessionGeneration?: number
   ): Promise<TransactionHistoryItem[]> {
     const history = await ElectrumService.getTransactionHistory(address);
+    if (!isCurrentWalletSession(walletId, sessionGeneration)) return [];
     if (!Array.isArray(history)) {
       logWarn('TransactionManager.fetchAndStoreTransactionHistory', 'Skipping non-array transaction history response', {
         address,
@@ -110,18 +126,21 @@ export default function TransactionManager() {
       return [];
     }
 
-    return storeTransactionHistory(walletId, address, history);
+    return storeTransactionHistory(walletId, address, history, sessionGeneration);
   }
 
   async function fetchAndStoreTransactionHistories(
     walletId: number,
-    addresses: string[]
+    addresses: string[],
+    sessionGeneration?: number
   ): Promise<Record<string, TransactionHistoryItem[] | undefined>> {
     const uniqueAddresses = Array.from(new Set(addresses.filter(Boolean)));
     const histories = await ElectrumService.getTransactionHistoryMany(
       uniqueAddresses
     );
     const stored: Record<string, TransactionHistoryItem[] | undefined> = {};
+
+    if (!isCurrentWalletSession(walletId, sessionGeneration)) return stored;
 
     for (const address of uniqueAddresses) {
       const history = histories[address];
@@ -143,7 +162,13 @@ export default function TransactionManager() {
       }
 
       try {
-        stored[address] = storeTransactionHistory(walletId, address, history);
+        if (!isCurrentWalletSession(walletId, sessionGeneration)) return stored;
+        stored[address] = storeTransactionHistory(
+          walletId,
+          address,
+          history,
+          sessionGeneration
+        );
       } catch (error) {
         logError('TransactionManager.fetchAndStoreTransactionHistories', error, {
           address,

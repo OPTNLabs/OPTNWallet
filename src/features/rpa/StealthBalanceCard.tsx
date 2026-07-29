@@ -3,40 +3,26 @@
 // recipient's paycode as a prefix filter. No notification transactions —
 // BCH RPA hides detectability inside the sender's signature nonce.
 
-import React, { useCallback, useState } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import { useSelector } from 'react-redux';
 import { selectRpaEnabled } from '../../state/slices/experimentalSlice';
-import { selectCurrentNetwork } from '../../state/selectors/networkSelectors';
+import type { RootState } from '../../state/store';
 import {
-  deriveRpaKeys,
-  deriveAndEncodePaycode,
-  computeSharedSecret,
-  derivePaymentAddress,
-  RPA_PREFIX_BITS,
-} from '../../services/RpaService';
-import WalletManager from '../../apis/WalletManager/WalletManager';
-import getElectrumAdapter from '../../services/ElectrumAdapter';
+  loadStoredWalletSpecialActivities,
+  syncWalletSpecialActivities,
+  type RpaActivityPayload,
+} from '../../services/WalletSpecialActivityService';
 import { SATSINBITCOIN } from '../../utils/constants';
 
 type StealthBalanceCardProps = {
   walletId: number;
 };
 
-type RpaTxEntry = {
-  tx_hash: string;
-  height: number;
-};
-
-type UtxoEntry = {
-  tx_hash: string;
-  tx_pos: number;
-  value: number;
-  height: number;
-};
-
 export const StealthBalanceCard: React.FC<StealthBalanceCardProps> = ({ walletId }) => {
   const rpaEnabled = useSelector(selectRpaEnabled);
-  const network = useSelector(selectCurrentNetwork);
+  const storedActivity = useSelector(
+    (state: RootState) => state.walletSpecialActivity.byWallet[walletId]?.rpa ?? null
+  );
 
   const [stealthSats, setStealthSats] = useState<number>(0);
   const [matchCount, setMatchCount] = useState<number | null>(null);
@@ -44,6 +30,32 @@ export const StealthBalanceCard: React.FC<StealthBalanceCardProps> = ({ walletId
   const [syncError, setSyncError] = useState<string | null>(null);
   const [lastSynced, setLastSynced] = useState<string | null>(null);
   const [serverNote, setServerNote] = useState<string | null>(null);
+
+  const applyActivity = useCallback((activity: RpaActivityPayload, updatedAt?: string) => {
+    setStealthSats(activity.unspentSats);
+    setMatchCount(activity.detectedPaymentCount);
+    setLastSynced(updatedAt ? new Date(updatedAt).toLocaleTimeString() : null);
+    setServerNote(
+      activity.serverSupported
+        ? null
+        : activity.error ?? 'This server does not support RPA scanning.'
+    );
+  }, []);
+
+  useEffect(() => {
+    void loadStoredWalletSpecialActivities(walletId).catch((error) => {
+      console.warn('Failed to load stored RPA activity:', error);
+    });
+  }, [walletId]);
+
+  useEffect(() => {
+    if (
+      storedActivity?.activityType === 'rpa' &&
+      'unspentSats' in storedActivity.payload
+    ) {
+      applyActivity(storedActivity.payload, storedActivity.updatedAt);
+    }
+  }, [applyActivity, storedActivity]);
 
   const handleSync = useCallback(async () => {
     if (syncing) return;
@@ -53,96 +65,20 @@ export const StealthBalanceCard: React.FC<StealthBalanceCardProps> = ({ walletId
     setServerNote(null);
 
     try {
-      const walletManager = WalletManager();
-      const info = await walletManager.getWalletInfo(walletId);
-      if (!info?.mnemonic) throw new Error('Wallet not unlocked');
-
-      const mnemonic = info.mnemonic;
-      const passphrase = info.passphrase ?? '';
-
-      // Derive scan + spend keys (we need scan privkey for ECDH and spend pubkey for address derivation)
-      const rpaKeys = await deriveRpaKeys(mnemonic, passphrase, network);
-      const paycode = await deriveAndEncodePaycode(mnemonic, passphrase, network, RPA_PREFIX_BITS);
-
-      const adapter = getElectrumAdapter();
-
-      // Fulcrum-RPA exposes `rpa.getaddresshistory` — returns txs whose input hash prefix
-      // matches the scan pubkey embedded in the paycode.
-      let history: RpaTxEntry[];
-      try {
-        history = await adapter.request('rpa.getaddresshistory', paycode) as RpaTxEntry[];
-      } catch {
-        // Server doesn't support RPA scanning
-        setServerNote('This server does not support RPA scanning. Connect to a Fulcrum-RPA capable server (e.g. chipnet.bch.ninja on testnet).');
-        return;
+      const records = await syncWalletSpecialActivities({
+        walletId,
+        activityTypes: ['rpa'],
+      });
+      const activity = records[0];
+      if (activity?.activityType === 'rpa' && 'unspentSats' in activity.payload) {
+        applyActivity(activity.payload, activity.updatedAt);
       }
-
-      if (!Array.isArray(history) || history.length === 0) {
-        setMatchCount(0);
-        setStealthSats(0);
-        setLastSynced(new Date().toLocaleTimeString());
-        return;
-      }
-
-      // For each candidate tx, fetch the raw tx, extract the sender's input pubkey,
-      // compute the ECDH shared secret, derive the expected payment address,
-      // and check if any output sends to that address.
-      let totalSats = 0;
-      let confirmedMatches = 0;
-
-      await Promise.allSettled(
-        history.map(async ({ tx_hash }) => {
-          try {
-            type RawTx = { inputs: { prevout_hash: string; prevout_n: number; pubkeys?: string[] }[]; outputs: { address?: string; value: number }[] };
-            const tx = await adapter.request('blockchain.transaction.get', tx_hash, true) as RawTx;
-
-            for (const input of tx.inputs ?? []) {
-              const pubkeys = input.pubkeys ?? [];
-              for (const pubHex of pubkeys) {
-                if (!pubHex || pubHex.length !== 66) continue;
-                const senderPubkey = Uint8Array.from(Buffer.from(pubHex, 'hex'));
-
-                // Derive what payment address a sender with this pubkey would have sent to
-                const secret = computeSharedSecret(
-                  rpaKeys.scanPrivkey,
-                  senderPubkey,
-                  input.prevout_hash,
-                  input.prevout_n,
-                );
-                const expectedAddr = derivePaymentAddress(rpaKeys.spendPubkey, secret, network, 0);
-
-                // Check if any output matches
-                const matchingOutputs = (tx.outputs ?? []).filter(o => o.address === expectedAddr);
-                if (matchingOutputs.length > 0) {
-                  const sats = matchingOutputs.reduce((sum, o) => sum + (o.value ?? 0), 0);
-
-                  // Verify this UTXO is unspent
-                  const utxos = await adapter.request('blockchain.address.listunspent', expectedAddr) as UtxoEntry[];
-                  const matchingUtxos = utxos.filter(u => u.tx_hash === tx_hash);
-                  if (matchingUtxos.length > 0) {
-                    totalSats += matchingUtxos.reduce((s, u) => s + u.value, 0);
-                  } else {
-                    totalSats += sats; // already-spent output still counted in history
-                  }
-                  confirmedMatches++;
-                }
-              }
-            }
-          } catch {
-            // Skip unresolvable txs — don't block the whole scan
-          }
-        }),
-      );
-
-      setStealthSats(totalSats);
-      setMatchCount(confirmedMatches);
-      setLastSynced(new Date().toLocaleTimeString());
     } catch (err) {
       setSyncError(`Sync failed: ${err instanceof Error ? err.message : String(err)}`);
     } finally {
       setSyncing(false);
     }
-  }, [walletId, network, syncing]);
+  }, [applyActivity, syncing, walletId]);
 
   if (!rpaEnabled) return null;
 

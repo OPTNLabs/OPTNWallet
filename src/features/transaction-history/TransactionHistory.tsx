@@ -35,6 +35,9 @@ const TransactionHistory: React.FC = () => {
   const IsInitialized = useSelector(
     (state: RootState) => state.utxos.initialized
   );
+  const sessionGeneration = useSelector(
+    (state: RootState) => state.wallet_id.sessionGeneration ?? 0
+  );
 
   const currentNetwork = useSelector((state: RootState) =>
     selectCurrentNetwork(state)
@@ -50,6 +53,7 @@ const TransactionHistory: React.FC = () => {
       walletIdParam: wallet_id,
       isInitialized: IsInitialized,
       transactionCount: transactions.length,
+      sessionGeneration,
       dispatch,
     });
 

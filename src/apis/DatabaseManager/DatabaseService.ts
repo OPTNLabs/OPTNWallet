@@ -10,6 +10,8 @@ import { logError } from '../../utils/errorHandling';
 import SecretCryptoService, {
   isEncryptedPayload,
 } from '../../services/SecretCryptoService';
+import { getBchAccountPath } from '../../services/HdWalletService';
+import { Network } from '../../state/slices/networkSlice';
 import {
   deleteWalletScope,
   mergeGlobalChanges,
@@ -170,6 +172,58 @@ const migrations: Array<(db: Database) => Promise<void>> = [
     if (!columns.has('birth_height')) {
       db.run('ALTER TABLE wallets ADD COLUMN birth_height INT;');
     }
+  },
+  async (db) => {
+    const columns = new Set<string>();
+    const statement = db.prepare('PRAGMA table_info(wallets);');
+    while (statement.step()) {
+      const row = statement.getAsObject() as Record<string, unknown>;
+      if (typeof row.name === 'string') columns.add(row.name);
+    }
+    statement.free();
+
+    if (!columns.has('derivation_path')) {
+      db.run('ALTER TABLE wallets ADD COLUMN derivation_path TEXT;');
+    }
+    if (!columns.has('derivation_path_source')) {
+      db.run(
+        "ALTER TABLE wallets ADD COLUMN derivation_path_source TEXT DEFAULT 'default';"
+      );
+    }
+
+    // Materialize the legacy path before any wallet is opened. This preserves
+    // the path that the pre-customization code used for each wallet's network.
+    db.run(
+      `UPDATE wallets
+       SET derivation_path = CASE
+         WHEN networkType = ? THEN ?
+         ELSE ?
+       END,
+       derivation_path_source = ?
+       WHERE derivation_path IS NULL OR derivation_path = ''`,
+      [
+        Network.CHIPNET,
+        getBchAccountPath(Network.CHIPNET),
+        getBchAccountPath(Network.MAINNET),
+        'default',
+      ]
+    );
+  },
+  async (db) => {
+    db.run(`
+      CREATE TABLE IF NOT EXISTS wallet_special_activities (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        wallet_id INT NOT NULL,
+        activity_type TEXT NOT NULL,
+        network_type TEXT NOT NULL,
+        derivation_path TEXT NOT NULL,
+        status TEXT NOT NULL,
+        payload_json TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        FOREIGN KEY(wallet_id) REFERENCES wallets(id),
+        UNIQUE(wallet_id, activity_type)
+      );
+    `);
   },
   // Add future migrations here as needed
 ];

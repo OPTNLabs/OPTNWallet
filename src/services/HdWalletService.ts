@@ -38,6 +38,7 @@ export type BchSeedDerivationSource = {
   passphrase: string;
   accountIndex: number;
   branchIndex: number;
+  accountPath?: string;
 };
 
 export type BchXpubDerivationSource = {
@@ -73,40 +74,118 @@ export function getBchCoinType(network: Network): number {
   }[network];
 }
 
+export const MAX_BIP44_INDEX = 0x7fffffff;
+
+export type BchAccountPathParts = {
+  coinType: number;
+  accountIndex: number;
+};
+
+/**
+ * Validate and canonicalize the only custom path shape supported by OPTN:
+ * BIP44 account paths. Branch and address components are owned by the wallet
+ * implementation and must not be supplied by callers.
+ */
+export function normalizeBchAccountPath(path: string): string {
+  const match = /^m\/44'\/(\d+)'\/(\d+)'$/.exec(path.trim());
+  if (!match) {
+    throw new Error(
+      "Derivation path must match m/44'/coinType'/accountIndex'."
+    );
+  }
+
+  const coinType = Number(match[1]);
+  const accountIndex = Number(match[2]);
+  if (
+    !Number.isSafeInteger(coinType) ||
+    coinType < 0 ||
+    coinType > MAX_BIP44_INDEX ||
+    !Number.isSafeInteger(accountIndex) ||
+    accountIndex < 0 ||
+    accountIndex > MAX_BIP44_INDEX
+  ) {
+    throw new Error(
+      'Derivation path indexes must be hardened 31-bit integers.'
+    );
+  }
+
+  return `m/44'/${coinType}'/${accountIndex}'`;
+}
+
+export function parseBchAccountPath(path: string): BchAccountPathParts {
+  const normalized = normalizeBchAccountPath(path);
+  const match = /^m\/44'\/(\d+)'\/(\d+)'$/.exec(normalized);
+  if (!match) {
+    throw new Error(
+      "Derivation path must match m/44'/coinType'/accountIndex'."
+    );
+  }
+
+  return {
+    coinType: Number(match[1]),
+    accountIndex: Number(match[2]),
+  };
+}
+
+export function buildBchAccountPath(parts: BchAccountPathParts): string {
+  return normalizeBchAccountPath(
+    `m/44'/${parts.coinType}'/${parts.accountIndex}'`
+  );
+}
+
 export function getHdKeyNetwork(network: Network): 'mainnet' | 'testnet' {
   return network === Network.MAINNET ? 'mainnet' : 'testnet';
 }
 
 export function getBchAccountPath(
   network: Network,
-  accountIndex = 0
+  accountIndex = 0,
+  accountPath?: string
 ): string {
-  return `m/44'/${getBchCoinType(network)}'/${accountIndex}'`;
+  return accountPath
+    ? normalizeBchAccountPath(accountPath)
+    : `m/44'/${getBchCoinType(network)}'/${accountIndex}'`;
+}
+
+function resolveBchAccountPath(
+  network: Network,
+  accountIndex: number,
+  accountPath?: string
+): string {
+  return getBchAccountPath(network, accountIndex, accountPath);
 }
 
 export function getBchBranchPath(
   network: Network,
   accountIndex: number,
-  branchIndex: number
+  branchIndex: number,
+  accountPath?: string
 ): string {
-  return `${getBchAccountPath(network, accountIndex)}/${branchIndex}`;
+  return `${resolveBchAccountPath(network, accountIndex, accountPath)}/${branchIndex}`;
 }
 
 export function getBchStandardBranchPath(
   network: Network,
   accountIndex: number,
-  branchName: BchStandardBranchName
+  branchName: BchStandardBranchName,
+  accountPath?: string
 ): string {
-  return getBchBranchPath(network, accountIndex, BCH_STANDARD_BRANCH_INDEX[branchName]);
+  return getBchBranchPath(
+    network,
+    accountIndex,
+    BCH_STANDARD_BRANCH_INDEX[branchName],
+    accountPath
+  );
 }
 
 export function getBchAddressPath(
   network: Network,
   accountIndex: number,
   branchIndex: number,
-  addressIndex: number | bigint
+  addressIndex: number | bigint,
+  accountPath?: string
 ): string {
-  return `${getBchBranchPath(network, accountIndex, branchIndex)}/${addressIndex.toString()}`;
+  return `${getBchBranchPath(network, accountIndex, branchIndex, accountPath)}/${addressIndex.toString()}`;
 }
 
 export function deriveBchPublicAddress(
@@ -161,7 +240,8 @@ export async function deriveBchChild(
     network,
     source.accountIndex,
     source.branchIndex,
-    addressIndex
+    addressIndex,
+    source.accountPath
   );
   const privateKey = await derivePrivateKeyAtPath(
     source.mnemonic,
@@ -198,7 +278,8 @@ export async function deriveBchKeyMaterial(
   passphrase: string,
   accountIndex: number,
   branchIndex: number,
-  addressIndex: number
+  addressIndex: number,
+  accountPath?: string
 ): Promise<DerivedBchKeyMaterial | null> {
   const derived = await deriveBchChild(
     network,
@@ -207,6 +288,7 @@ export async function deriveBchKeyMaterial(
       passphrase,
       accountIndex,
       branchIndex,
+      accountPath,
     },
     addressIndex
   );
@@ -219,13 +301,14 @@ export async function deriveBchXpubAtBranch(
   mnemonic: string,
   passphrase: string,
   accountIndex: number,
-  branchIndex: number
+  branchIndex: number,
+  accountPath?: string
 ): Promise<string> {
   return deriveHdPublicKeyAtPath(
     mnemonic,
     passphrase,
     network,
-    getBchBranchPath(network, accountIndex, branchIndex)
+    getBchBranchPath(network, accountIndex, branchIndex, accountPath)
   );
 }
 
@@ -233,7 +316,8 @@ export async function deriveBchStandardXpubs(
   network: Network,
   mnemonic: string,
   passphrase: string,
-  accountIndex = 0
+  accountIndex = 0,
+  accountPath?: string
 ): Promise<Record<BchStandardBranchName, string>> {
   return {
     receive: await deriveBchXpubAtBranch(
@@ -241,28 +325,32 @@ export async function deriveBchStandardXpubs(
       mnemonic,
       passphrase,
       accountIndex,
-      BCH_STANDARD_BRANCH_INDEX.receive
+      BCH_STANDARD_BRANCH_INDEX.receive,
+      accountPath
     ),
     change: await deriveBchXpubAtBranch(
       network,
       mnemonic,
       passphrase,
       accountIndex,
-      BCH_STANDARD_BRANCH_INDEX.change
+      BCH_STANDARD_BRANCH_INDEX.change,
+      accountPath
     ),
     defi: await deriveBchXpubAtBranch(
       network,
       mnemonic,
       passphrase,
       accountIndex,
-      BCH_STANDARD_BRANCH_INDEX.defi
+      BCH_STANDARD_BRANCH_INDEX.defi,
+      accountPath
     ),
     rpa: await deriveBchXpubAtBranch(
       network,
       mnemonic,
       passphrase,
       accountIndex,
-      BCH_STANDARD_BRANCH_INDEX.rpa
+      BCH_STANDARD_BRANCH_INDEX.rpa,
+      accountPath
     ),
   };
 }
@@ -273,7 +361,9 @@ export async function deriveHdPublicKeyAtPath(
   network: Network,
   path: string
 ): Promise<string> {
-  const seed = Uint8Array.from(await bip39.mnemonicToSeed(mnemonic, passphrase));
+  const seed = Uint8Array.from(
+    await bip39.mnemonicToSeed(mnemonic, passphrase)
+  );
   const rootNode = deriveHdPrivateNodeFromSeed(seed, { assumeValidity: true });
 
   try {
@@ -306,7 +396,9 @@ export async function deriveHdPrivateKeyAtPath(
   network: Network,
   path: string
 ): Promise<string> {
-  const seed = Uint8Array.from(await bip39.mnemonicToSeed(mnemonic, passphrase));
+  const seed = Uint8Array.from(
+    await bip39.mnemonicToSeed(mnemonic, passphrase)
+  );
   const rootNode = deriveHdPrivateNodeFromSeed(seed, { assumeValidity: true });
 
   try {
@@ -336,7 +428,9 @@ export async function derivePrivateKeyAtPath(
   passphrase: string,
   path: string
 ): Promise<Uint8Array> {
-  const seed = Uint8Array.from(await bip39.mnemonicToSeed(mnemonic, passphrase));
+  const seed = Uint8Array.from(
+    await bip39.mnemonicToSeed(mnemonic, passphrase)
+  );
   const rootNode = deriveHdPrivateNodeFromSeed(seed, { assumeValidity: true });
 
   try {

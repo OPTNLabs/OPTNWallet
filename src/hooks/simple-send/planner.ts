@@ -32,6 +32,27 @@ export function createSimpleSendPlanner({
     });
   }
 
+  function outputSats(output: TransactionOutput): bigint {
+    if ('opReturn' in output && output.opReturn !== undefined) return 0n;
+
+    const rawAmount = output.amount;
+    const amount =
+      typeof rawAmount === 'bigint'
+        ? rawAmount
+        : Number.isFinite(rawAmount)
+          ? BigInt(Math.trunc(rawAmount))
+          : 0n;
+
+    if (output.token && amount < BigInt(TOKEN_OUTPUT_SATS)) {
+      return BigInt(TOKEN_OUTPUT_SATS);
+    }
+    return amount;
+  }
+
+  function sumOutputSats(outputs: TransactionOutput[]): bigint {
+    return outputs.reduce((sum, output) => sum + outputSats(output), 0n);
+  }
+
   async function tryBuild(
     inputs: UTXO[],
     outputs: TransactionOutput[]
@@ -45,21 +66,27 @@ export function createSimpleSendPlanner({
       );
       if (r.errorMsg) return { ok: false, err: r.errorMsg };
 
-      const feeSats = r.bytecodeSize;
-      const outputsTotal = outputs
-        .map((o) => Number(o.amount || 0))
-        .reduce((a, b) => a + b, 0);
-      const totalSats = outputsTotal + feeSats;
       const inputSum = sumInputsSats(inputs);
-      const changeSats = inputSum - totalSats;
+      const requestedOutputsTotal = sumOutputSats(outputs);
+      const finalOutputs = r.finalOutputs ?? outputs;
+      const finalOutputsTotal = sumOutputSats(finalOutputs);
+      const feeSats = BigInt(inputSum) - finalOutputsTotal;
+      if (feeSats < 0n) {
+        return {
+          ok: false,
+          err: 'Transaction outputs exceed the selected input value.',
+        };
+      }
+      const totalSats = requestedOutputsTotal + feeSats;
+      const changeSats = BigInt(inputSum) - totalSats;
 
       return {
         ok: true,
-        feeSats,
-        totalSats,
+        feeSats: Number(feeSats),
+        totalSats: Number(totalSats),
         rawTx: r.finalTransaction,
-        finalOutputs: r.finalOutputs ?? outputs,
-        changeSats,
+        finalOutputs,
+        changeSats: Number(changeSats),
         inputSum,
       };
     } catch (error: unknown) {
@@ -117,7 +144,9 @@ export function createSimpleSendPlanner({
       };
     }
 
-    const confirmedPool = sortFeeUtxosPreferred(feeUtxoPool.filter(isConfirmed));
+    const confirmedPool = sortFeeUtxosPreferred(
+      feeUtxoPool.filter(isConfirmed)
+    );
     const unconfirmedPool = sortFeeUtxosPreferred(
       feeUtxoPool.filter((u) => !isConfirmed(u))
     );
@@ -132,7 +161,10 @@ export function createSimpleSendPlanner({
       if (!res.ok && 'err' in res) lastErr = res.err;
     }
 
-    const combinedPool = sortLargestFirst([...confirmedPool, ...unconfirmedPool]);
+    const combinedPool = sortLargestFirst([
+      ...confirmedPool,
+      ...unconfirmedPool,
+    ]);
     for (let k = 1; k <= Math.min(maxInputs, combinedPool.length); k++) {
       const bchInputs = combinedPool.slice(0, k);
       const inputs = [...fixedTokenInputs, ...bchInputs] as UTXO[];
@@ -192,26 +224,36 @@ export function createSimpleSendPlanner({
   // "Max" / sweep-all: unlike addBchOnlyUntilBuild (fixed OUTPUT amount, adds
   // inputs until covered), this fixes the INPUT set to everything spendable
   // and computes the output as inputs-minus-fee, so the whole balance moves
-  // in one send with no change output. Two-pass: fee is amount-independent
-  // (byte-size based), so a dust-placeholder probe build against the full
-  // input set yields the exact fee for the real (inputs, 1-output) shape.
-  async function sweepAllBchUntilBuild(maxInputs = 50): Promise<BchBuildResult> {
+  // in one send with no change output. A dust-placeholder probe build against
+  // the full input set estimates the fee for the real (inputs, 1-output) shape.
+  async function sweepAllBchUntilBuild(
+    maxInputs = 50
+  ): Promise<BchBuildResult> {
     const feeUtxoPool = dbUtxos.filter((u) => !u.token);
     if (feeUtxoPool.length === 0) {
       return { ok: false, err: 'No spendable BCH UTXOs.' };
     }
 
-    const confirmedPool = sortFeeUtxosPreferred(feeUtxoPool.filter(isConfirmed));
-    if (confirmedPool.length === 0) {
-      return { ok: false, err: 'No confirmed BCH UTXOs available to sweep yet.' };
-    }
-
-    const inputs = confirmedPool.slice(0, maxInputs);
+    const confirmedPool = sortFeeUtxosPreferred(
+      feeUtxoPool.filter(isConfirmed)
+    );
+    const unconfirmedPool = sortFeeUtxosPreferred(
+      feeUtxoPool.filter((u) => !isConfirmed(u))
+    );
+    const inputs = sortLargestFirst([
+      ...confirmedPool,
+      ...unconfirmedPool,
+    ]).slice(0, maxInputs);
     const availableSats = sumInputsSats(inputs);
 
-    const probe = await tryBuild(inputs, [{ recipientAddress: recipient, amount: DUST }]);
+    const probe = await tryBuild(inputs, [
+      { recipientAddress: recipient, amount: DUST },
+    ]);
     if (!probe.ok) {
-      return { ok: false, err: 'err' in probe ? probe.err : 'Unable to estimate the sweep fee.' };
+      return {
+        ok: false,
+        err: 'err' in probe ? probe.err : 'Unable to estimate the sweep fee.',
+      };
     }
 
     const maxSats = availableSats - probe.feeSats;
@@ -219,9 +261,14 @@ export function createSimpleSendPlanner({
       return { ok: false, err: 'Not enough funds to cover the network fee.' };
     }
 
-    const final = await tryBuild(inputs, [{ recipientAddress: recipient, amount: maxSats }]);
+    const final = await tryBuild(inputs, [
+      { recipientAddress: recipient, amount: maxSats },
+    ]);
     if (!final.ok) {
-      return { ok: false, err: 'err' in final ? final.err : 'Sweep build failed.' };
+      return {
+        ok: false,
+        err: 'err' in final ? final.err : 'Sweep build failed.',
+      };
     }
 
     return {

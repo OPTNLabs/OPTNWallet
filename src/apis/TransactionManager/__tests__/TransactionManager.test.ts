@@ -91,6 +91,28 @@ describe('TransactionManager', () => {
     expect(upsertStmt.free).toHaveBeenCalledTimes(1);
   });
 
+  it('does not persist a history result after the wallet session changes', async () => {
+    const history: TransactionHistoryItem[] = [
+      { tx_hash: 'c'.repeat(64), height: 1 },
+    ];
+    mockedElectrumService.getTransactionHistory.mockResolvedValue(history as never);
+    const getDatabase = vi.fn();
+    mockedDatabaseService.mockReturnValue({ getDatabase } as never);
+    mockedStore.getState.mockReturnValue({
+      wallet_id: { currentWalletId: 7, sessionGeneration: 2 },
+    } as never);
+
+    const tm = TransactionManager();
+    const result = await tm.fetchAndStoreTransactionHistory(
+      7,
+      'bitcoincash:q1',
+      1
+    );
+
+    expect(result).toEqual([]);
+    expect(getDatabase).not.toHaveBeenCalled();
+  });
+
   it('sendTransaction returns txid on success and errorMessage on failure', async () => {
     const sendTransaction = vi
       .fn()

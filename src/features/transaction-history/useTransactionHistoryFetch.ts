@@ -6,6 +6,7 @@ type UseTransactionHistoryFetchParams = {
   walletIdParam: string | undefined;
   isInitialized: boolean;
   transactionCount: number;
+  sessionGeneration: number;
   dispatch: AppDispatch;
 };
 
@@ -21,6 +22,7 @@ export function useTransactionHistoryFetch({
   walletIdParam,
   isInitialized,
   transactionCount,
+  sessionGeneration,
   dispatch,
 }: UseTransactionHistoryFetchParams) {
   const [progress, setProgress] = useState(0);
@@ -41,6 +43,7 @@ export function useTransactionHistoryFetch({
         const { scannedAddresses } = await refreshWalletTransactionHistory({
           walletId: walletIdNum,
           dispatch,
+          sessionGeneration,
           // The initial page load stays incremental. An explicit refresh is a
           // FULL pass: a new payment lands on an address that has almost
           // certainly been scanned already, so skipping scanned addresses would
@@ -61,7 +64,7 @@ export function useTransactionHistoryFetch({
         setLoading(false);
       }
     },
-    [walletIdParam, loading, fetchedAddresses, dispatch]
+    [walletIdParam, loading, fetchedAddresses, sessionGeneration, dispatch]
   );
 
   useEffect(() => {

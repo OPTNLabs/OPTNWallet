@@ -20,6 +20,8 @@ import experimentalReducer, {
   normalizeExperimentalPersistedState,
 } from '../state/slices/experimentalSlice';
 import hardwareWalletReducer from '../state/slices/hardwareWalletSlice';
+import walletSpecialActivityReducer from '../state/slices/walletSpecialActivitySlice';
+import walletReconfigurationReducer from '../state/slices/walletReconfigurationSlice';
 
 type AsyncStorageLike = {
   getItem: (key: string) => Promise<string | null>;
@@ -70,7 +72,16 @@ const persistStorage: AsyncStorageLike = isTestEnvironment()
 const persistConfig = {
   key: 'root',
   storage: persistStorage,
-  whitelist: ['contract', 'network', 'transactionBuilder', 'preferences', 'wallet_id', 'appLock', 'experimental', 'hardwareWallet'],
+  whitelist: [
+    'contract',
+    'network',
+    'transactionBuilder',
+    'preferences',
+    'wallet_id',
+    'appLock',
+    'experimental',
+    'hardwareWallet',
+  ],
   version: 3,
   migrate: (async (state: PersistedState) => {
     if (!state) return state;
@@ -79,7 +90,9 @@ const persistConfig = {
     };
     delete sanitizedState.utxos;
     delete sanitizedState.transactions;
-    const experimental = normalizeExperimentalPersistedState(sanitizedState.experimental);
+    const experimental = normalizeExperimentalPersistedState(
+      sanitizedState.experimental
+    );
     if (experimental) {
       sanitizedState.experimental = experimental;
     }
@@ -103,6 +116,8 @@ const rootReducer = combineReducers({
   appLock: appLockReducer,
   experimental: experimentalReducer,
   hardwareWallet: hardwareWalletReducer,
+  walletSpecialActivity: walletSpecialActivityReducer,
+  walletReconfiguration: walletReconfigurationReducer,
 });
 
 const persistedReducer = persistReducer(persistConfig, rootReducer);

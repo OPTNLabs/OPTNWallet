@@ -76,14 +76,14 @@ describe('DesktopWalletManager network cleanup', () => {
     expect(mockedKeyService.bootstrapInitialAddressBatch).toHaveBeenCalledWith(
       6,
       0,
-      10
+      20
     );
     expect(mockedVaultCache.clear.mock.invocationCallOrder[0]).toBeLessThan(
       mockedKeyService.bootstrapInitialAddressBatch.mock.invocationCallOrder[0]
     );
     expect(mockedLog.info).toHaveBeenCalledWith(
       'NetworkSwitch',
-      'wallet=6 target=chipnet cacheCleared=true addressIndices=10 status=complete'
+      'wallet=6 target=chipnet cacheCleared=true addressIndices=20 status=complete'
     );
   });
 

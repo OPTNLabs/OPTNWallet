@@ -6,7 +6,12 @@ import DatabaseService from '../../apis/DatabaseManager/DatabaseService';
 import WalletManager from '../../apis/WalletManager/WalletManager';
 import { Network, setNetwork } from '../../state/slices/networkSlice';
 import { selectCurrentNetwork } from '../../state/selectors/networkSelectors';
-import { setWalletId, setWalletNetwork, setWalletType } from '../../state/slices/walletSlice';
+import {
+  setWalletId,
+  setWalletNetwork,
+  setWalletType,
+  setWalletDerivationPath,
+} from '../../state/slices/walletSlice';
 import KeyService from '../../services/KeyService';
 import { ONBOARDING_WALLET_NAME } from './constants';
 import { WalletType } from '../../types/wallet';
@@ -14,15 +19,20 @@ import InfoTooltipIcon from './components/InfoTooltipIcon';
 import OnboardingCard from './components/OnboardingCard';
 import OnboardingScreen from './components/OnboardingScreen';
 import NetworkSelector from './components/NetworkSelector';
+import DerivationPathField from './components/DerivationPathField';
+import { getBchAccountPath, normalizeBchAccountPath } from '../../services/HdWalletService';
 
 const TOTAL_WORDS = 12;
 
 const ImportWalletPage = () => {
+  const currentNetwork = useSelector(selectCurrentNetwork);
   const [recoveryWords, setRecoveryWords] = useState<string[]>(
     Array(TOTAL_WORDS).fill('')
   );
   const [passphrase] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [derivationPath, setDerivationPath] = useState(() => getBchAccountPath(currentNetwork));
+  const [customDerivationPath, setCustomDerivationPath] = useState(false);
 
   const dbService = useMemo(() => DatabaseService(), []);
   const walletManager = useMemo(() => WalletManager(), []);
@@ -30,8 +40,11 @@ const ImportWalletPage = () => {
   const inputsRef = useRef<Array<HTMLInputElement | null>>([]);
 
   const navigate = useNavigate();
-  const currentNetwork = useSelector(selectCurrentNetwork);
   const dispatch = useDispatch();
+
+  useEffect(() => {
+    if (!customDerivationPath) setDerivationPath(getBchAccountPath(currentNetwork));
+  }, [currentNetwork, customDerivationPath]);
 
   useEffect(() => {
     const initDb = async () => {
@@ -128,6 +141,7 @@ const ImportWalletPage = () => {
     setIsSubmitting(true);
 
     try {
+      const normalizedDerivationPath = normalizeBchAccountPath(derivationPath);
       const accountExists = await walletManager.checkAccount(
         recoveryPhrase,
         passphrase,
@@ -140,7 +154,9 @@ const ImportWalletPage = () => {
           recoveryPhrase,
           passphrase,
           currentNetwork,
-          WalletType.STANDARD
+          WalletType.STANDARD,
+          normalizedDerivationPath,
+          customDerivationPath ? 'custom' : 'default'
         );
         if (!created) {
           console.error('Failed to import account.');
@@ -168,13 +184,21 @@ const ImportWalletPage = () => {
             ? Network.CHIPNET
             : currentNetwork;
 
-      void KeyService.bootstrapInitialAddressBatch(walletID, 0, 10).catch((error) => {
-        console.error('Failed to bootstrap initial addresses:', error);
-      });
+      // Materialize one address pair so the worker can start immediately. It
+      // performs the full BIP44 discovery/gap-limit scan after navigation;
+      // waiting for all 40 key rows here makes import unnecessarily slow.
+      await KeyService.bootstrapInitialAddressBatch(walletID, 0, 1);
 
       dispatch(setWalletId(walletID));
       dispatch(setWalletNetwork(resolvedNetwork));
       dispatch(setWalletType(walletInfo?.walletType ?? WalletType.STANDARD));
+      dispatch(
+        setWalletDerivationPath({
+          path: walletInfo?.derivation_path ?? normalizedDerivationPath,
+          source:
+            walletInfo?.derivation_path_source === 'custom' ? 'custom' : 'default',
+        })
+      );
       dispatch(setNetwork(resolvedNetwork));
       navigate(`/home/${walletID}`);
     } catch (error) {
@@ -190,6 +214,15 @@ const ImportWalletPage = () => {
       <OnboardingCard title="Import Wallet" maxWidthClassName="max-w-lg">
         <div className="flex flex-col items-center min-h-[300px] w-full">
           <NetworkSelector networkType={currentNetwork} centered />
+          <DerivationPathField
+            network={currentNetwork}
+            value={derivationPath}
+            custom={customDerivationPath}
+            onChange={(path, custom) => {
+              setDerivationPath(path);
+              setCustomDerivationPath(custom);
+            }}
+          />
 
           <div className="w-full mb-3">
             <div className="mb-2 flex items-center justify-center gap-2">

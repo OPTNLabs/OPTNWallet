@@ -45,18 +45,21 @@ import {
 
 // ─── Key derivation paths ─────────────────────────────────────────────────────
 
-function scanKeyPath(network: Network): string {
-  return getBchAddressPath(network, 0, BCH_STANDARD_BRANCH_INDEX.rpa, 0);
+function scanKeyPath(network: Network, accountPath?: string): string {
+  return getBchAddressPath(network, 0, BCH_STANDARD_BRANCH_INDEX.rpa, 0, accountPath);
 }
 
-function spendKeyPath(network: Network): string {
-  return getBchAddressPath(network, 0, BCH_STANDARD_BRANCH_INDEX.rpa, 1);
+function spendKeyPath(network: Network, accountPath?: string): string {
+  return getBchAddressPath(network, 0, BCH_STANDARD_BRANCH_INDEX.rpa, 1, accountPath);
 }
 
-export function getRpaKeyPaths(network: Network): { scan: string; spend: string } {
+export function getRpaKeyPaths(
+  network: Network,
+  accountPath?: string
+): { scan: string; spend: string } {
   return {
-    scan: scanKeyPath(network),
-    spend: spendKeyPath(network),
+    scan: scanKeyPath(network, accountPath),
+    spend: spendKeyPath(network, accountPath),
   };
 }
 
@@ -234,8 +237,9 @@ export async function deriveRpaKeys(
   mnemonic: string,
   passphrase: string,
   network: Network,
+  accountPath?: string,
 ): Promise<RpaKeys> {
-  const paths = getRpaKeyPaths(network);
+  const paths = getRpaKeyPaths(network, accountPath);
   const scanPrivkey = await derivePrivateKeyAtPath(mnemonic, passphrase, paths.scan);
   const spendPrivkey = await derivePrivateKeyAtPath(mnemonic, passphrase, paths.spend);
 
@@ -354,8 +358,9 @@ export async function deriveAndEncodePaycode(
   passphrase: string,
   network: Network,
   prefixBits = RPA_PREFIX_BITS,
+  accountPath?: string,
 ): Promise<string> {
-  const keys = await deriveRpaKeys(mnemonic, passphrase, network);
+  const keys = await deriveRpaKeys(mnemonic, passphrase, network, accountPath);
   return encodePaycode(keys.scanPubkey, keys.spendPubkey, network, prefixBits);
 }
 
@@ -470,8 +475,14 @@ export async function deriveRpaGateXpub(
   mnemonic: string,
   passphrase: string,
   network: Network,
+  accountPath?: string,
 ): Promise<{ rpaXpub: string; rpaPath: string }> {
-  const rpaPath = getBchBranchPath(network, 0, BCH_STANDARD_BRANCH_INDEX.rpa);
+  const rpaPath = getBchBranchPath(
+    network,
+    0,
+    BCH_STANDARD_BRANCH_INDEX.rpa,
+    accountPath
+  );
   const rpaXpub = await deriveHdPublicKeyAtPath(mnemonic, passphrase, network, rpaPath);
   return { rpaXpub, rpaPath };
 }
