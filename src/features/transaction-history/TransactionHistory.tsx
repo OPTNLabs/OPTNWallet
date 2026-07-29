@@ -1,11 +1,12 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { useDispatch, useSelector } from 'react-redux';
 import { AppDispatch, RootState } from '../../state/store';
 import { useParams } from 'react-router-dom';
 import { createSelector } from 'reselect';
 import { shortenTxHash } from '../../utils/shortenHash';
 import { selectCurrentNetwork } from '../../state/selectors/networkSelectors';
-import { Network } from '../../state/slices/networkSlice';
+import { selectExplorerChoice } from '../../state/slices/preferencesSlice';
+import { buildTxUrl } from '../../utils/servers/explorers';
 import { useTransactionHistoryFetch } from './useTransactionHistoryFetch';
 import { useTransactionHistoryPagination } from './useTransactionHistoryPagination';
 import PageHeader from '../../components/ui/PageHeader';
@@ -34,6 +35,9 @@ const TransactionHistory: React.FC = () => {
   const IsInitialized = useSelector(
     (state: RootState) => state.utxos.initialized
   );
+  const sessionGeneration = useSelector(
+    (state: RootState) => state.wallet_id.sessionGeneration ?? 0
+  );
 
   const currentNetwork = useSelector((state: RootState) =>
     selectCurrentNetwork(state)
@@ -49,6 +53,7 @@ const TransactionHistory: React.FC = () => {
       walletIdParam: wallet_id,
       isInitialized: IsInitialized,
       transactionCount: transactions.length,
+      sessionGeneration,
       dispatch,
     });
 
@@ -67,13 +72,7 @@ const TransactionHistory: React.FC = () => {
     handleLastPage,
   } = useTransactionHistoryPagination({ transactions });
 
-  const explorerBase = useMemo(
-    () =>
-      currentNetwork === Network.CHIPNET
-        ? 'https://chipnet.bch.ninja/tx/'
-        : 'https://explorer.bch.ninja/tx/',
-    [currentNetwork]
-  );
+  const explorerChoice = useSelector(selectExplorerChoice);
 
   useEffect(() => {
     let cancelled = false;
@@ -242,7 +241,7 @@ const TransactionHistory: React.FC = () => {
           <TransactionDetailPopup
             txid={selectedTx.txid}
             txHeight={selectedTx.height}
-            explorerUrl={`${explorerBase}${selectedTx.txid}`}
+            explorerUrl={buildTxUrl(explorerChoice, currentNetwork, selectedTx.txid)}
             walletAddresses={walletAddresses}
             onClose={() => setSelectedTx(null)}
           />

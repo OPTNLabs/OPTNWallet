@@ -78,14 +78,16 @@ const KeyService = {
   async bootstrapInitialAddressBatch(
     walletId: number,
     accountNumber = 0,
-    batchSize = 10
+    batchSize = 20
   ): Promise<void> {
-    const existingKeys = await KeyService.retrieveKeys(walletId);
-    if (existingKeys.length > 0) {
-      return;
+    if (!Number.isSafeInteger(batchSize) || batchSize < 1) {
+      throw new Error('Initial address batch size must be a positive integer.');
     }
 
     for (let index = 0; index < batchSize; index += 1) {
+      // createKeys is idempotent for an already persisted key. Top up a
+      // partially initialized wallet instead of treating the first row as a
+      // complete bootstrap; this matters when a worker starts during restore.
       await KeyService.createKeys(walletId, accountNumber, 0, index);
       await KeyService.createKeys(walletId, accountNumber, 1, index);
     }

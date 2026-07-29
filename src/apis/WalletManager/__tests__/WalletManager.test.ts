@@ -69,7 +69,7 @@ describe('WalletManager', () => {
     const dbService = {
       ensureDatabaseStarted: vi.fn(async () => {}),
       getDatabase: vi.fn(() => db),
-      flushDatabaseToFile: vi.fn(async () => {}),
+      persistNewWalletToFile: vi.fn(async (walletId: number) => walletId),
     };
 
     mockedDatabaseService.mockImplementation(() => dbService as never);
@@ -79,7 +79,7 @@ describe('WalletManager', () => {
 
     expect(created).toBe(false);
     expect(insertStmt.run).not.toHaveBeenCalled();
-    expect(dbService.flushDatabaseToFile).not.toHaveBeenCalled();
+    expect(dbService.persistNewWalletToFile).not.toHaveBeenCalled();
   });
 
   it('createWallet inserts and persists when wallet does not exist', async () => {
@@ -98,12 +98,13 @@ describe('WalletManager', () => {
         .fn()
         .mockReturnValueOnce(existsStmt)
         .mockReturnValueOnce(insertStmt),
+      exec: vi.fn(() => [{ values: [[7]] }]),
     };
 
     const dbService = {
       ensureDatabaseStarted: vi.fn(async () => {}),
       getDatabase: vi.fn(() => db),
-      flushDatabaseToFile: vi.fn(async () => {}),
+      persistNewWalletToFile: vi.fn(async (walletId: number) => walletId),
     };
 
     mockedDatabaseService.mockImplementation(() => dbService as never);
@@ -119,8 +120,10 @@ describe('WalletManager', () => {
       Network.MAINNET,
       WalletType.STANDARD,
       0,
+      "m/44'/145'/0'",
+      'default',
     ]);
-    expect(dbService.flushDatabaseToFile).toHaveBeenCalledTimes(1);
+    expect(dbService.persistNewWalletToFile).toHaveBeenCalledWith(7);
   });
 
   it('setWalletId resolves wallet id as number', async () => {
@@ -208,12 +211,13 @@ describe('WalletManager', () => {
         .fn()
         .mockReturnValueOnce(existsStmt)
         .mockReturnValueOnce(insertStmt),
+      exec: vi.fn(() => [{ values: [[8]] }]),
     };
 
     const dbService = {
       ensureDatabaseStarted: vi.fn(async () => {}),
       getDatabase: vi.fn(() => db),
-      flushDatabaseToFile: vi.fn(async () => {}),
+      persistNewWalletToFile: vi.fn(async (walletId: number) => walletId),
     };
 
     mockedDatabaseService.mockImplementation(() => dbService as never);
@@ -246,12 +250,13 @@ describe('WalletManager', () => {
         .fn()
         .mockReturnValueOnce(existsStmt)
         .mockReturnValueOnce(insertStmt),
+      exec: vi.fn(() => [{ values: [[9]] }]),
     };
 
     const dbService = {
       ensureDatabaseStarted: vi.fn(async () => {}),
       getDatabase: vi.fn(() => db),
-      flushDatabaseToFile: vi.fn(async () => {}),
+      persistNewWalletToFile: vi.fn(async (walletId: number) => walletId),
     };
 
     mockedDatabaseService.mockImplementation(() => dbService as never);

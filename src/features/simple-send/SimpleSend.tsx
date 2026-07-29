@@ -70,10 +70,12 @@ export default function SimpleSend() {
     review,
     txid,
     broadcastState,
+    maxBusy,
 
     reset,
     doReview,
     doSend,
+    doMax,
 
     fiatSummary,
 
@@ -288,7 +290,7 @@ export default function SimpleSend() {
 
               {assetType === 'bch' && (
                 <div className="wallet-section">
-                  <div className="mt-2 grid grid-cols-[minmax(0,1fr)_auto] items-end gap-2">
+                  <div className="mt-2 grid grid-cols-[minmax(0,1fr)_auto_auto] items-end gap-2">
                     <div className="min-w-0">
                       <Label>
                         {amountDisplayMode === 'bch'
@@ -311,6 +313,15 @@ export default function SimpleSend() {
                         className={`${inputClass} mt-2`}
                       />
                     </div>
+                    <button
+                      type="button"
+                      className="wallet-segment-inactive min-h-[42px] self-end rounded-[16px] border border-[var(--wallet-border)] px-3 py-2 text-sm font-semibold transition"
+                      onClick={() => void doMax()}
+                      disabled={isSending || maxBusy}
+                      aria-label="Fill the full spendable balance minus network fee"
+                    >
+                      {maxBusy ? '…' : 'Max'}
+                    </button>
                     <button
                       type="button"
                       className={`min-h-[42px] self-end rounded-[16px] border px-3 py-2 text-sm font-semibold transition ${
@@ -495,7 +506,7 @@ export default function SimpleSend() {
             <button
               type="button"
               onClick={reset}
-              disabled={isSending}
+              disabled={isSending || maxBusy}
               className="wallet-btn-secondary px-4"
               title="Clear form"
             >

@@ -1,5 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { useSelector } from 'react-redux';
+import { MdChatBubbleOutline } from 'react-icons/md';
 import AddonsRegistry from '../../services/AddonsRegistry';
 import type { AddonAppDefinition, AddonManifest } from '../../types/addons';
 import PageHeader from '../../components/ui/PageHeader';
@@ -15,10 +17,13 @@ import {
   getAppCategory,
   getAppDescription,
   getAppIconFrame,
+  isDesktopOnlyApp,
   isComingSoonApp,
   shouldHideApp,
 } from './appsViewHelpers';
 import { Capacitor } from '@capacitor/core';
+import { isDesktopPlatform } from '../../utils/platform';
+import { selectNostrChatEnabled } from '../../state/slices/experimentalSlice';
 
 type AppCard = {
   id: string;
@@ -40,6 +45,8 @@ const AppsView = () => {
   const navigate = useNavigate();
   const devMode = import.meta.env.DEV;
   const isNativeRuntime = Capacitor.isNativePlatform();
+  const isDesktopRuntime = isDesktopPlatform();
+  const chatEnabled = useSelector(selectNostrChatEnabled);
   const [cards, setCards] = useState<AppCard[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [filter, setFilter] = useState<Filter>('All');
@@ -93,6 +100,27 @@ const AppsView = () => {
           category: 'Wallet',
         });
 
+        const cashFusionApp: AppCard = {
+          id: 'optn.wallet.cashfusion',
+          name: 'CashFusion',
+          icon: '/assets/images/OPTNUIkeyline2.png',
+          description: 'Private CoinJoin — server or P2P over Nostr + Tor',
+          category: 'Wallet',
+        };
+        if (isDesktopRuntime || !isDesktopOnlyApp(cashFusionApp.id)) {
+          out.push(cashFusionApp);
+        }
+
+        if (chatEnabled) {
+          out.push({
+            id: 'optn.wallet.nostr-chat',
+            name: 'Chat',
+            icon: DEFAULT_ICON,
+            description: 'Private end-to-end encrypted Nostr messaging',
+            category: 'Utils',
+          });
+        }
+
         if (mounted) {
           setCards(
             out
@@ -110,7 +138,7 @@ const AppsView = () => {
     return () => {
       mounted = false;
     };
-  }, [devMode]);
+  }, [chatEnabled, devMode, isDesktopRuntime]);
 
   const filteredCards = useMemo(
     () => (filter === 'All' ? cards : cards.filter((card) => card.category === filter)),
@@ -185,6 +213,14 @@ const AppsView = () => {
                             navigate('/quantumroot', { state: { returnTo: '/apps' } });
                             return;
                           }
+                          if (app.id === 'optn.wallet.cashfusion') {
+                            navigate('/settings?panel=cashfusion', { state: { returnTo: '/apps' } });
+                            return;
+                          }
+                          if (app.id === 'optn.wallet.nostr-chat') {
+                            navigate('/chat', { state: { returnTo: '/apps' } });
+                            return;
+                          }
                           if (app.name.toLowerCase().includes('paryonusd')) {
                             navigate('/paryon', { state: { returnTo: '/apps' } });
                             return;
@@ -201,15 +237,21 @@ const AppsView = () => {
                     app.id === 'optn.builtin.events:airdropsApp' ||
                     app.id === 'optn.wallet.contracts' ||
                     app.id === 'optn.wallet.quantumroot' ||
+                    app.id === 'optn.wallet.cashfusion' ||
+                    app.id === 'optn.wallet.nostr-chat' ||
                     app.id === 'optn.builtin.fundme:fundmeApp' ? (
                       <div
                         className={`flex h-8 w-8 items-center justify-center overflow-hidden rounded-2xl border border-[var(--wallet-border)] bg-[color-mix(in_oklab,var(--wallet-surface-strong)_72%,transparent)] ${getAppIconFrame(app)}`}
                       >
-                        <img
-                          src={app.icon}
-                          alt={app.name}
-                          className="h-full w-full object-contain p-1"
-                        />
+                        {app.id === 'optn.wallet.nostr-chat' ? (
+                          <MdChatBubbleOutline className="text-xl" aria-hidden="true" />
+                        ) : (
+                          <img
+                            src={app.icon}
+                            alt={app.name}
+                            className="h-full w-full object-contain p-1"
+                          />
+                        )}
                       </div>
                     ) : (
                       <div

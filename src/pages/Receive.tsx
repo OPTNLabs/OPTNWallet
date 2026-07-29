@@ -9,6 +9,7 @@ import { shortenTxHash } from '../utils/shortenHash';
 import { PREFIX, SATSINBITCOIN } from '../utils/constants';
 import { getBchAddressPath } from '../services/HdWalletService';
 import { selectCurrentNetwork } from '../state/selectors/networkSelectors';
+import { selectWalletDerivationPath } from '../state/slices/walletSlice';
 import { QRCodeSVG } from 'qrcode.react';
 import { hexString } from '../utils/hex';
 import { encodePrivateKeyWif } from '@bitauth/libauth';
@@ -29,6 +30,7 @@ import {
 } from '../services/QuantumrootVaultStatusService';
 import { getQuantumrootNetworkSupport } from '../services/QuantumrootNetworkSupportService';
 import { getReturnPath } from '../utils/navigation';
+import { RpaReceiveCard } from '../features/rpa/RpaReceiveCard';
 
 type QRCodeType = 'address' | 'pubKey' | 'pkh' | 'privkey';
 const PRIVKEY_UNLOCK_TAPS = 10;
@@ -143,6 +145,7 @@ const Receive: React.FC = () => {
   const currentNetwork = useSelector((state: RootState) =>
     selectCurrentNetwork(state)
   );
+  const derivationPath = useSelector(selectWalletDerivationPath);
   const quantumrootNetworkSupport = getQuantumrootNetworkSupport(currentNetwork);
   const wallet_id = useSelector(
     (state: RootState) => state.wallet_id.currentWalletId
@@ -200,7 +203,7 @@ const Receive: React.FC = () => {
       console.log('[Receive] initializing receive addresses', {
         walletId: currentWalletId,
       });
-      await KeyService.bootstrapInitialAddressBatch(currentWalletId, 0, 10);
+      await KeyService.bootstrapInitialAddressBatch(currentWalletId, 0, 20);
       const existingKeys = (await KeyService.retrieveKeys(
         currentWalletId
       )) as WalletKeyPair[];
@@ -846,6 +849,8 @@ const Receive: React.FC = () => {
               </div>
             </SectionCard>
           )}
+          {/* RPA Paycode at the bottom of the receive list (UI preference). */}
+          <RpaReceiveCard walletId={currentWalletId} />
         </div>
 
         <div className="relative shrink-0 pt-3">
@@ -1149,7 +1154,8 @@ const Receive: React.FC = () => {
                   currentNetwork,
                   0,
                   keyPair.changeIndex,
-                  keyPair.addressIndex
+                  keyPair.addressIndex,
+                  derivationPath || undefined
                 );
                 return (
                   <div

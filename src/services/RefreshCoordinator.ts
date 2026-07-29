@@ -5,6 +5,10 @@ const recentFinishedAtByKey = new Map<string, number>();
 
 const DEFAULT_COOLDOWN_MS = 1500;
 
+function taskKey(scope: string, walletId: number | null | undefined): string {
+  return `${scope}:${walletId ?? 0}`;
+}
+
 async function runWalletTask<T>(
   scope: string,
   walletId: number | null | undefined,
@@ -12,7 +16,7 @@ async function runWalletTask<T>(
   cooldownMs = DEFAULT_COOLDOWN_MS
 ): Promise<T> {
   const normalizedWalletId = walletId ?? 0;
-  const key = `${scope}:${normalizedWalletId}`;
+  const key = taskKey(scope, normalizedWalletId);
   const inflight = inFlightByKey.get(key) as Promise<T> | undefined;
   if (inflight) return inflight;
 
@@ -43,6 +47,21 @@ export function runWalletHistoryRefresh<T>(
   task: WalletTask<T>
 ): Promise<T> {
   return runWalletTask('history-refresh', walletId, task, 1000);
+}
+
+/**
+ * Wait for a history scan that started before a wallet boundary. The scan may
+ * still be writing transaction rows after its caller has been invalidated, so
+ * reconfiguration must let it finish before deleting the old wallet records.
+ */
+export async function waitForWalletHistoryRefresh(
+  walletId: number | null | undefined,
+  options: { resetCooldown?: boolean } = {}
+): Promise<void> {
+  const key = taskKey('history-refresh', walletId);
+  const inflight = inFlightByKey.get(key);
+  if (inflight) await inflight.catch(() => undefined);
+  if (options.resetCooldown) recentFinishedAtByKey.delete(key);
 }
 
 export function runWalletUtxoRefresh<T>(

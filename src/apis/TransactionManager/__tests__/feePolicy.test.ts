@@ -5,6 +5,7 @@ import {
   estimateAddP2PKHOutputBytes,
   formatMinRelayError,
   hasExplicitManualChangeOutput,
+  relayFeeForBytes,
   txBytesFromHex,
 } from '../feePolicy';
 
@@ -22,6 +23,11 @@ describe('feePolicy', () => {
     expect(txBytesFromHex('aabbcc')).toBe(3);
     expect(txBytesFromHex('abc')).toBe(1);
     expect(txBytesFromHex('')).toBe(0);
+  });
+
+  it('keeps a relay margin above the observed 219 < 233 rejection', () => {
+    expect(relayFeeForBytes(219)).toBe(241n);
+    expect(relayFeeForBytes(219)).toBeGreaterThan(233n);
   });
 
   it('hasExplicitManualChangeOutput only checks manual flag on non-OP_RETURN outputs', () => {
