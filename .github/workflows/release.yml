@@ -33,7 +33,8 @@ jobs:
       - name: Verify release commit is on main
         run: |
           git fetch origin main --depth=1
-          RELEASE_SHA="$(git rev-list -n 1 "refs/tags/${RELEASE_TAG}")"
+          git fetch origin "refs/tags/${RELEASE_TAG}:refs/tags/${RELEASE_TAG}"
+          RELEASE_SHA="$(git rev-parse "${RELEASE_TAG}^{commit}")"
           git merge-base --is-ancestor "$RELEASE_SHA" origin/main || {
             echo "Release tag must point to a commit reachable from main."
             exit 1
