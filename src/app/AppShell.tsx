@@ -49,8 +49,10 @@ import CreateWalletPage from '../pages/onboarding/CreateWalletPage';
 import ImportWalletPage from '../pages/onboarding/ImportWalletPage';
 import LandingPage from '../pages/onboarding/LandingPage';
 import { ROUTE_PATHS, homeRoute, transactionsRoute } from '../navigation/routes';
+import { NostrChatRoute } from '../features/nostr/NostrChatRoute';
 
 const SimpleSend = lazy(() => import('../features/simple-send/SimpleSend'));
+const NostrChat = lazy(() => import('../features/nostr/NostrChat'));
 
 function App() {
   usePrices();
@@ -88,6 +90,22 @@ function App() {
                   <Route path={ROUTE_PATHS.home} element={<Home />} />
                   <Route path={ROUTE_PATHS.assets} element={<Assets />} />
                   <Route path={ROUTE_PATHS.actions} element={<Actions />} />
+                  <Route
+                    path={ROUTE_PATHS.chat}
+                    element={
+                      <NostrChatRoute>
+                        <NostrChat />
+                      </NostrChatRoute>
+                    }
+                  />
+                  <Route
+                    path={ROUTE_PATHS.chatConversation}
+                    element={
+                      <NostrChatRoute>
+                        <NostrChat />
+                      </NostrChatRoute>
+                    }
+                  />
                   <Route path={ROUTE_PATHS.contract} element={<ContractView />} />
                   <Route path={ROUTE_PATHS.apps} element={<AppsView />} />
                   <Route path={ROUTE_PATHS.paryon} element={<Paryon />} />

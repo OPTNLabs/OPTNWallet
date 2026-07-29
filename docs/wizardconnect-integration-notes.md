@@ -142,7 +142,8 @@ Recommended path mapping from the docs:
 - `change` -> `m/44'/145'/0'/1`
 - `defi` -> `m/44'/145'/0'/7`
 
-For chipnet/testnet we should preserve our existing coin type behavior and confirm what the consuming dapps expect.
+These BCH paths use coin type `145` on both mainnet and chipnet. The selected
+network changes extended-key and CashAddr encoding, not the BIP44 BCH coin type.
 
 ## 4. Reuse existing signing logic carefully
 

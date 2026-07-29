@@ -29,6 +29,7 @@ import ElectrumServer from '../../../apis/ElectrumServer/ElectrumServer';
 import BCHLogo from './bch.png';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { getReturnPath } from '../../../utils/navigation';
+import { useWalletConfirm } from '../../../components/WalletConfirmDialog';
 import type {
   FundMeElectrumClient,
   WalletConnectSignedTransaction,
@@ -69,6 +70,7 @@ declare const connectedChain: string | undefined;
 declare const walletConnectSession: { topic: string } | undefined;
 
 const CampaignDetail: React.FC = () => {
+  const confirm = useWalletConfirm();
   const { id } = useParams(); // Get the campaign ID from the URL
   //const { walletConnectSession, walletConnectInstance, electrumServer, electrumCluster, usersAddress, connectedChain } = useBlockchainContext();
   const [campaignUTXO, setCampaignUTXO] = useState<Utxo>();
@@ -406,7 +408,7 @@ const handleCancel = async (campaignID: string) => {
       console.log(signResult);
 
       // Ask user for confirmation before broadcasting
-      if (window.confirm("Are you absolutely sure you want to cancel?")) {
+      if (await confirm("Are you absolutely sure you want to cancel?")) {
         // User clicked OK
         electrumServer.sendRawTransaction(rawTx).then((result: string) => {
           console.log('Broadcasted, txid: ' + result);

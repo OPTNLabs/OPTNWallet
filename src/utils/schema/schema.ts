@@ -30,7 +30,9 @@ export const createTables = (db: DatabaseRunner) => {
       passphrase TEXT,
       networkType TEXT,
       walletType TEXT DEFAULT 'standard',
-      balance INT
+      balance INT,
+      derivation_path TEXT,
+      derivation_path_source TEXT DEFAULT 'default'
     );
   `);
 
@@ -166,6 +168,21 @@ export const createTables = (db: DatabaseRunner) => {
       updated_at TEXT NOT NULL,
       FOREIGN KEY(wallet_id) REFERENCES wallets(id),
       UNIQUE(wallet_id, account_index, address_index)
+    );
+  `);
+
+  db.run(`
+    CREATE TABLE IF NOT EXISTS wallet_special_activities (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      wallet_id INT NOT NULL,
+      activity_type TEXT NOT NULL,
+      network_type TEXT NOT NULL,
+      derivation_path TEXT NOT NULL,
+      status TEXT NOT NULL,
+      payload_json TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      FOREIGN KEY(wallet_id) REFERENCES wallets(id),
+      UNIQUE(wallet_id, activity_type)
     );
   `);
 

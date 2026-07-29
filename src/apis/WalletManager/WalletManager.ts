@@ -5,6 +5,8 @@ import SecretCryptoService from '../../services/SecretCryptoService';
 import QuantumrootVaultCacheService from '../../services/QuantumrootVaultCacheService';
 import WalletDiscoveryService from '../../services/WalletDiscoveryService';
 import { WalletLookup, WalletRecord, WalletType } from '../../types/wallet';
+import { DerivationPathSource } from '../../types/wallet';
+import { getBchAccountPath, normalizeBchAccountPath } from '../../services/HdWalletService';
 
 // Helper function to safely cast SQL values to number
 function toNumber(value: unknown): number {
@@ -20,8 +22,56 @@ export default function WalletManager() {
     deleteWallet,
     walletExists,
     getWalletInfo,
+    getAllWallets,
     clearAllData,
   };
+
+  // Lists wallets without decrypting mnemonic/passphrase — for a wallet
+  // picker/switcher UI. Desktop-only today (mobile has exactly one implicit
+  // wallet and no switcher UI), but this is a plain read with no encryption
+  // dependency, so it's safe to expose from the shared manager.
+  async function getAllWallets(): Promise<
+    Array<Pick<WalletRecord, 'id' | 'wallet_name' | 'networkType' | 'walletType'>>
+  > {
+    const dbService = DatabaseService();
+    await dbService.ensureDatabaseStarted();
+    const db = dbService.getDatabase();
+    if (!db) {
+      return [];
+    }
+
+    createTables(db);
+    try {
+      const query = db.prepare(
+        `SELECT id, wallet_name, networkType, walletType FROM wallets ORDER BY id ASC`
+      );
+      const rows: Array<Pick<WalletRecord, 'id' | 'wallet_name' | 'networkType' | 'walletType'>> = [];
+      while (query.step()) {
+        const row = query.getAsObject() as Record<string, unknown>;
+        const networkType =
+          row.networkType === Network.MAINNET
+            ? Network.MAINNET
+            : row.networkType === Network.CHIPNET
+              ? Network.CHIPNET
+              : Network.MAINNET;
+        const walletType =
+          row.walletType === WalletType.QUANTUMROOT
+            ? WalletType.QUANTUMROOT
+            : WalletType.STANDARD;
+        rows.push({
+          id: toNumber(row.id),
+          wallet_name: typeof row.wallet_name === 'string' ? row.wallet_name : '',
+          networkType,
+          walletType,
+        });
+      }
+      query.free();
+      return rows;
+    } catch (error) {
+      console.error('Error listing wallets:', error);
+      return [];
+    }
+  }
 
   async function clearAllData(): Promise<void> {
     const dbService = DatabaseService();
@@ -51,6 +101,12 @@ export default function WalletManager() {
       query.run();
 
       query = db.prepare(`DELETE FROM UTXOs WHERE wallet_id = :walletid`);
+      query.bind({ ':walletid': wallet_id });
+      query.run();
+
+      query = db.prepare(
+        `DELETE FROM wallet_special_activities WHERE wallet_id = :walletid`
+      );
       query.bind({ ':walletid': wallet_id });
       query.run();
 
@@ -242,7 +298,9 @@ export default function WalletManager() {
     mnemonic: string,
     passphrase: string,
     networkType: Network,
-    walletType: WalletType = WalletType.STANDARD
+    walletType: WalletType = WalletType.STANDARD,
+    derivationPath = getBchAccountPath(networkType),
+    derivationPathSource: DerivationPathSource = 'default'
   ): Promise<boolean> {
     const dbService = DatabaseService();
     await dbService.ensureDatabaseStarted();
@@ -260,11 +318,13 @@ export default function WalletManager() {
       return false;
     }
 
+    const normalizedDerivationPath = normalizeBchAccountPath(derivationPath);
+
     const encryptedMnemonic = await SecretCryptoService.encryptText(mnemonic);
     const encryptedPassphrase =
       await SecretCryptoService.encryptText(passphrase);
     const createAccountQuery = db.prepare(
-      'INSERT INTO wallets (wallet_name, mnemonic, passphrase, networkType, walletType, balance) VALUES (?, ?, ?, ?, ?, ?);'
+      'INSERT INTO wallets (wallet_name, mnemonic, passphrase, networkType, walletType, balance, derivation_path, derivation_path_source) VALUES (?, ?, ?, ?, ?, ?, ?, ?);'
     );
     createAccountQuery.run([
       wallet_name,
@@ -273,9 +333,16 @@ export default function WalletManager() {
       networkType,
       walletType,
       0,
+      normalizedDerivationPath,
+      derivationPathSource,
     ]);
     createAccountQuery.free();
-    await dbService.flushDatabaseToFile();
+    const idResult = db.exec('SELECT last_insert_rowid()');
+    const localWalletId = toNumber(idResult?.[0]?.values?.[0]?.[0]);
+    if (!Number.isSafeInteger(localWalletId) || localWalletId <= 0) {
+      throw new Error('Unable to identify the newly-created wallet.');
+    }
+    await dbService.persistNewWalletToFile(localWalletId);
     return true;
   }
 
@@ -333,11 +400,24 @@ export default function WalletManager() {
         const walletType =
           rawWalletInfo.walletType === WalletType.QUANTUMROOT
             ? WalletType.QUANTUMROOT
-            : WalletType.STANDARD;
+              : WalletType.STANDARD;
+        const fallbackNetwork = networkType ?? Network.MAINNET;
+        let derivationPath = getBchAccountPath(fallbackNetwork);
+        if (typeof rawWalletInfo.derivation_path === 'string') {
+          try {
+            derivationPath = normalizeBchAccountPath(rawWalletInfo.derivation_path);
+          } catch {
+            // A legacy or malformed value is repaired to the network default.
+          }
+        }
+        const derivationPathSource: DerivationPathSource =
+          rawWalletInfo.derivation_path_source === 'custom' ? 'custom' : 'default';
         walletInfo = {
           ...rawWalletInfo,
           networkType,
           walletType,
+          derivation_path: derivationPath,
+          derivation_path_source: derivationPathSource,
         } as Record<string, unknown>;
         if (typeof walletInfo.mnemonic === 'string') {
           walletInfo.mnemonic = await SecretCryptoService.decryptText(
