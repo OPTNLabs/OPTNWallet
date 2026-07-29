@@ -19,6 +19,11 @@ export type SettingsPanelKey =
   | 'nostr'
   | 'addons';
 
+export type SettingsGroupKey =
+  | 'wallet'
+  | 'features'
+  | 'about';
+
 export type SettingsRowConfig = {
   key: SettingsPanelKey | string;
   title: string;
@@ -110,25 +115,68 @@ export const WALLET_ROWS: SettingsRowConfig[] = [
   // everything network-related), so there is no separate CashFusion row.
 ];
 
-const MOBILE_HIDDEN_WALLET_SETTING_KEYS = new Set([
-  'app-lock',
-  'console',
-  'experimental',
-  'addons',
-]);
+export const SETTINGS_GROUPS: Array<{
+  key: SettingsGroupKey;
+  title: string;
+  description: string;
+}> = [
+  {
+    key: 'wallet',
+    title: 'Wallet & security',
+    description: 'Recovery, derivation path, app lock, and wallet controls',
+  },
+  {
+    key: 'features',
+    title: 'Connections & features',
+    description: 'Servers, integrations, privacy features, and advanced tools',
+  },
+  {
+    key: 'about',
+    title: 'About & support',
+    description: 'Help, contact, terms, and app information',
+  },
+];
 
 export function getVisibleWalletRows(
-  isDesktop: boolean,
+  _isDesktop: boolean,
   currentNetwork: Network
 ): SettingsRowConfig[] {
   const networkRows = WALLET_ROWS.filter(
     (row) => row.key !== 'faucet' || currentNetwork === Network.CHIPNET
   );
-  if (isDesktop) return networkRows;
+  const commonKeys = new Set(['network', 'faucet', 'pending-outbox']);
+  return networkRows.filter((row) => commonKeys.has(String(row.key)));
+}
 
-  return networkRows.filter(
-    (row) => !MOBILE_HIDDEN_WALLET_SETTING_KEYS.has(row.key)
-  );
+export function getSettingsGroupRows(
+  group: SettingsGroupKey,
+  isDesktop: boolean,
+  currentNetwork: Network
+): SettingsRowConfig[] {
+  const rowsByGroup: Record<SettingsGroupKey, SettingsRowConfig[]> = {
+    wallet: WALLET_ROWS.filter((row) =>
+      ['recovery', 'derivation', 'app-lock'].includes(String(row.key))
+    ),
+    features: [
+      WALLET_ROWS.find((row) => row.key === 'server')!,
+      WALLET_ROWS.find((row) => row.key === 'nostr')!,
+      ...CONNECTION_ROWS,
+      WALLET_ROWS.find((row) => row.key === 'experimental')!,
+      ...CONTRACT_ROWS,
+      ...WALLET_ROWS.filter((row) =>
+        ['console', 'addons'].includes(String(row.key))
+      ),
+    ],
+    about: ABOUT_ROWS,
+  };
+
+  return rowsByGroup[group].filter((row) => {
+    if (row.key === 'faucet' && currentNetwork !== Network.CHIPNET) return false;
+    if (!isDesktop && ['app-lock', 'console', 'addons'].includes(String(row.key))) {
+      return false;
+    }
+    return true;
+  });
 }
 
 export const CONTRACT_ROWS: SettingsRowConfig[] = [

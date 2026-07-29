@@ -15,6 +15,7 @@ import {
   getDefaultPathForNetwork,
   reconfigureActiveWallet,
 } from '../../services/WalletReconfigurationService';
+import { useWalletConfirm } from '../../components/WalletConfirmDialog';
 
 export const DerivationPathSettings: React.FC = () => {
   const walletId = useSelector(selectWalletId);
@@ -27,6 +28,7 @@ export const DerivationPathSettings: React.FC = () => {
   const [saving, setSaving] = useState(false);
   const [pathValid, setPathValid] = useState(true);
   const [message, setMessage] = useState<string | null>(null);
+  const confirm = useWalletConfirm();
 
   useEffect(() => {
     setPathInput(storedPath || getBchAccountPath(network));
@@ -49,7 +51,7 @@ export const DerivationPathSettings: React.FC = () => {
       return;
     }
 
-    const confirmed = window.confirm(
+    const confirmed = await confirm(
       'Changing the derivation path clears the current address, history, and UTXO records. The wallet will then regenerate and resync only the new path. Continue?'
     );
     if (!confirmed) return;
