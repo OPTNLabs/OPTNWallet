@@ -1,7 +1,7 @@
 {
   "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
   "productName": "OPTNWallet",
-  "version": "1.6.2",
+  "version": "1.7.0",
   "identifier": "com.optilabs.wallet",
   "build": {
     "frontendDist": "../dist",
@@ -38,9 +38,7 @@
       "icons/icon.icns",
       "icons/icon.ico"
     ],
-    "resources": [
-      "resources/tor/*"
-    ]
+    "resources": ["resources/tor/*"]
   },
   "plugins": {
     "fs": {
