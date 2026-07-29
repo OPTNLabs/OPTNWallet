@@ -1,7 +1,8 @@
 import type { UTXO } from '../../../../types/types';
+import type { TokenCapability } from '../../../../services/cashtokens';
 
 export type MintType = 'FT' | 'NFT';
-export type NftCapability = 'none' | 'mutable' | 'minting';
+export type NftCapability = TokenCapability;
 
 export type MintConfig = {
   mintType: MintType;

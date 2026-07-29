@@ -2,9 +2,13 @@ import { memo } from 'react';
 import { Badge, CardShell } from './uiPrimitives';
 import type { MintDisplayUtxo } from '../types';
 import { shortHash, utxoKey, utxoValue } from '../utils';
+import {
+  getMintSourceCategory,
+  getMintSourceKind,
+} from '../utils/sourceHelpers';
 
 type SourcesStepCardProps = {
-  displayGenesisUtxos: MintDisplayUtxo[];
+  displaySourceUtxos: MintDisplayUtxo[];
   selectedKeys: ReadonlySet<string>;
   selectedCount: number;
   pendingCount: number;
@@ -13,12 +17,12 @@ type SourcesStepCardProps = {
   showCreateSourceAction: boolean;
   onStartBootstrapFlow: () => void;
   onToggleSelect: (u: MintDisplayUtxo) => void;
-  onCopyCategory: (categoryTxid: string) => void;
+  onCopyCategory: (category: string) => void;
   onJumpToAmounts: () => void;
 };
 
 function SourcesStepCardImpl({
-  displayGenesisUtxos,
+  displaySourceUtxos,
   selectedKeys,
   selectedCount,
   pendingCount,
@@ -30,15 +34,27 @@ function SourcesStepCardImpl({
   onCopyCategory,
   onJumpToAmounts,
 }: SourcesStepCardProps) {
-  const sourcesEmpty = displayGenesisUtxos.length === 0;
+  const sourcesEmpty = displaySourceUtxos.length === 0;
+
+  const describeSource = (u: MintDisplayUtxo): string => {
+    const kind = getMintSourceKind(u);
+    switch (kind) {
+      case 'minting-nft':
+        return 'minting authority';
+      case 'genesis':
+        return 'genesis source';
+      default:
+        return 'unsupported source';
+    }
+  };
 
   return (
     <CardShell
-      title="Candidate UTXO"
-      subtitle=""
+      title="Source UTXOs"
+      subtitle="Pick a genesis UTXO to create a category, or a minting NFT authority to mint additional CashTokens."
       right={
         <div className="flex items-center gap-2">
-          <Badge>{`UTXOs: ${displayGenesisUtxos.length}`}</Badge>
+          <Badge>{`Sources: ${displaySourceUtxos.length}`}</Badge>
           <Badge
             tone={selectedCount > 0 ? 'green' : 'gray'}
           >{`Selected: ${selectedCount}`}</Badge>
@@ -55,10 +71,11 @@ function SourcesStepCardImpl({
         {sourcesEmpty ? (
           <div className="rounded-2xl wallet-surface-strong border border-[var(--wallet-border)] p-5 space-y-3">
             <div className="text-base font-semibold wallet-text-strong">
-              No Candidate UTXOs yet
+              No mint sources yet
             </div>
             <div className="text-sm wallet-muted">
-              Create one to define a token category.
+              Create a genesis source to start a category, then mint additional
+              NFTs from a minting authority NFT.
             </div>
 
             <button
@@ -66,7 +83,7 @@ function SourcesStepCardImpl({
               disabled={loading || !canCreateSource}
               className="w-full px-4 py-3 rounded-xl bg-emerald-600 text-white font-semibold text-base"
             >
-              {loading ? 'Preparing…' : 'Create Candidate UTXO'}
+              {loading ? 'Preparing…' : 'Create category source'}
             </button>
           </div>
         ) : (
@@ -77,16 +94,18 @@ function SourcesStepCardImpl({
                 disabled={loading || !canCreateSource}
                 className="w-full px-4 py-3 rounded-xl bg-emerald-600 text-white font-semibold text-base"
               >
-                {loading ? 'Preparing…' : 'Create Candidate UTXO'}
+                {loading ? 'Preparing…' : 'Create category source'}
               </button>
             ) : null}
 
             <div className="rounded-[16px] wallet-card shadow-[0_1px_0_rgba(0,0,0,0.08)] overflow-hidden">
-              {displayGenesisUtxos.map((u) => {
+              {displaySourceUtxos.map((u) => {
                 const key = utxoKey(u);
                 const checked = selectedKeys.has(key);
                 const value = utxoValue(u);
                 const isBootstrap = u.__synthetic === 'bootstrap';
+                const category = getMintSourceCategory(u);
+                const kind = getMintSourceKind(u);
 
                 return (
                   <div
@@ -105,16 +124,17 @@ function SourcesStepCardImpl({
                     />
                     <button
                       type="button"
-                      onClick={() => onCopyCategory(u.tx_hash)}
+                      onClick={() => onCopyCategory(category)}
                       className="flex-1 min-w-0 text-left"
                     >
                       <div className="flex items-center gap-2">
                         <span className="inline-flex items-center px-3 py-1.5 rounded-full wallet-surface-strong wallet-text-strong text-[13px] font-semibold font-mono truncate">
-                          {shortHash(u.tx_hash, 12, 8)}
+                          {shortHash(category, 12, 8)}
                         </span>
-                        {isBootstrap ? (
-                          <Badge tone="blue">bootstrap</Badge>
-                        ) : null}
+                        <Badge tone={kind === 'genesis' ? 'green' : 'blue'}>
+                          {describeSource(u)}
+                        </Badge>
+                        {isBootstrap ? <Badge tone="amber">bootstrap</Badge> : null}
                       </div>
                       <div className="text-[12px] wallet-muted mt-1">
                         {value.toString()} sats • vout {u.tx_pos}

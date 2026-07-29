@@ -2,6 +2,7 @@ import { memo, useMemo } from 'react';
 import { Badge, CardShell } from './uiPrimitives';
 import type { MintAppUtxo, MintOutputDraft } from '../types';
 import { shortHash, utxoKey } from '../utils';
+import { getMintSourceCategory } from '../utils/sourceHelpers';
 
 type AmountsStepCardProps = {
   selectedUtxos: MintAppUtxo[];
@@ -23,6 +24,17 @@ function AmountsStepCardImpl({
     for (const u of selectedUtxos) out.set(utxoKey(u), u);
     return out;
   }, [selectedUtxos]);
+
+  const describeCapability = (capability: 'none' | 'mutable' | 'minting') => {
+    switch (capability) {
+      case 'mutable':
+        return 'mutable authority';
+      case 'minting':
+        return 'minting authority';
+      default:
+        return 'plain NFT';
+    }
+  };
 
   return (
     <CardShell
@@ -69,9 +81,10 @@ function AmountsStepCardImpl({
           {outputDrafts.map((d, idx) => {
             const source = selectedSourceByKey.get(d.sourceKey);
             if (!source) return null;
+            const sourceCategory = getMintSourceCategory(source);
             const collapsedLabel =
               d.config.mintType === 'NFT'
-                ? `NFT • ${d.config.nftCapability}`
+                ? `NFT • ${describeCapability(d.config.nftCapability)}`
                 : `FT • ${d.config.ftAmount || '0'}`;
 
             return (
@@ -97,7 +110,7 @@ function AmountsStepCardImpl({
                     </div>
                     <div className="mt-1 text-[12px] wallet-muted font-mono truncate">
                       {shortHash(d.recipientCashAddr, 14, 10)} ←{' '}
-                      {shortHash(source.tx_hash, 12, 8)} • {collapsedLabel}
+                      {shortHash(sourceCategory, 12, 8)} • {collapsedLabel}
                     </div>
                   </div>
                   <div className="wallet-muted font-bold text-lg">+</div>
