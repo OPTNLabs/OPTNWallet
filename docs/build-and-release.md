@@ -63,7 +63,7 @@ Legacy root scripts (`build.sh`, `releaseBuild.sh`) are deprecated and should no
   - Output: `src-tauri/target/release/bundle/`
 
 The v1.7.0 GitHub release publishes Windows x64 (`.exe`), macOS Apple Silicon
-(`.dmg`), and Linux x64 (`.AppImage`, plus native package formats when produced).
+(`.dmg`), and Linux x64 native packages (`.deb` and `.rpm`).
 Those release builds are unsigned unless the corresponding signing credentials
 are configured in GitHub Actions.
 
