@@ -274,7 +274,7 @@ jobs:
       - name: Fetch bundled Tor
         run: node scripts/fetch-tor.mjs ${{ matrix.tor-target }}
 
-      - name: Verify macOS release credentials
+      - name: Detect optional macOS signing credentials
         if: startsWith(matrix.platform, 'macos')
         shell: bash
         env:
@@ -285,6 +285,7 @@ jobs:
           APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: |
+          present=0
           missing=()
           for name in \
             APPLE_CERTIFICATE APPLE_CERTIFICATE_PASSWORD KEYCHAIN_PASSWORD \
@@ -292,15 +293,24 @@ jobs:
           do
             if [ -z "${!name}" ]; then
               missing+=("$name")
+            else
+              present=$((present + 1))
             fi
           done
-          if [ "${#missing[@]}" -ne 0 ]; then
-            printf '::error::Missing required macOS release secret: %s\n' "${missing[@]}"
+
+          if [ "$present" -eq 0 ]; then
+            echo "MACOS_SIGNING_AVAILABLE=false" >> "$GITHUB_ENV"
+            echo "APPLE_SIGNING_IDENTITY=-" >> "$GITHUB_ENV"
+            echo "::notice::Building an ad-hoc-signed, non-notarized macOS artifact without an Apple account."
+          elif [ "${#missing[@]}" -ne 0 ]; then
+            printf '::error::Partial macOS signing configuration; missing: %s\n' "${missing[@]}"
             exit 1
+          else
+            echo "MACOS_SIGNING_AVAILABLE=true" >> "$GITHUB_ENV"
           fi
 
       - name: Import macOS signing certificate
-        if: startsWith(matrix.platform, 'macos')
+        if: startsWith(matrix.platform, 'macos') && env.MACOS_SIGNING_AVAILABLE == 'true'
         shell: bash
         env:
           APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
@@ -338,7 +348,7 @@ jobs:
         run: npx tauri build --target ${{ matrix.target }} ${{ matrix.bundle-args }}
 
       - name: Build signed and notarized macOS bundles
-        if: startsWith(matrix.platform, 'macos')
+        if: startsWith(matrix.platform, 'macos') && env.MACOS_SIGNING_AVAILABLE == 'true'
         env:
           APPIMAGE_EXTRACT_AND_RUN: '1'
           NO_STRIP: 'true'
@@ -349,7 +359,16 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         run: npx tauri build --target ${{ matrix.target }} ${{ matrix.bundle-args }}
 
-      - name: Verify signed and notarized macOS bundle
+      - name: Build ad-hoc-signed macOS bundles without an Apple account
+        if: startsWith(matrix.platform, 'macos') && env.MACOS_SIGNING_AVAILABLE == 'false'
+        env:
+          APPIMAGE_EXTRACT_AND_RUN: '1'
+          NO_STRIP: 'true'
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: npx tauri build --target ${{ matrix.target }} ${{ matrix.bundle-args }}
+
+      - name: Verify macOS bundle
         if: startsWith(matrix.platform, 'macos')
         shell: bash
         run: |
@@ -360,11 +379,19 @@ jobs:
           test -n "$DMG_PATH"
 
           codesign --verify --deep --strict --verbose=2 "$APP_PATH"
-          spctl --assess --type execute --verbose=4 "$APP_PATH"
           hdiutil verify "$DMG_PATH"
-          spctl --assess --type open --context context:primary-signature --verbose=4 "$DMG_PATH"
-          xcrun stapler validate "$APP_PATH"
-          xcrun stapler validate "$DMG_PATH"
+
+          if [ "$MACOS_SIGNING_AVAILABLE" = 'true' ]; then
+            spctl --assess --type execute --verbose=4 "$APP_PATH"
+            spctl --assess --type open --context context:primary-signature --verbose=4 "$DMG_PATH"
+            xcrun stapler validate "$APP_PATH"
+            xcrun stapler validate "$DMG_PATH"
+          else
+            codesign -dv --verbose=4 "$APP_PATH" 2>&1 | grep -Fq 'Signature=adhoc'
+            ADHOC_DMG_PATH="${DMG_PATH%.dmg}-adhoc-not-notarized.dmg"
+            mv "$DMG_PATH" "$ADHOC_DMG_PATH"
+            DMG_PATH="$ADHOC_DMG_PATH"
+          fi
 
           APP_EXECUTABLE="$(find "$APP_PATH/Contents/MacOS" -maxdepth 1 -type f -perm -111 -print -quit)"
           TOR_EXECUTABLE="$(find "$APP_PATH/Contents/Resources" -type f -name tor -print -quit)"
@@ -495,6 +522,11 @@ jobs:
             - Linux x64: native `.deb` and `.rpm` packages
             - Chrome/Chromium and Firefox extension bundles: `.zip`
             ${{ needs.android.outputs.signed == 'true' && '- Android: signed `.apk` for direct installation and `.aab` for Play distribution' || '- Android: not included yet; configure the permanent production keystore and rerun the release workflow' }}
+
+            macOS artifacts whose filenames end in `-adhoc-not-notarized.dmg` were
+            built without an Apple account. They are integrity-checked and covered
+            by the attached checksums and provenance, but Gatekeeper may require the
+            user to explicitly approve the app because Apple has not notarized it.
 
             iOS is not included in this release. Build-from-source instructions are in [docs/build-and-release.md](https://github.com/${{ github.repository }}/blob/${{ env.RELEASE_TAG }}/docs/build-and-release.md).
 

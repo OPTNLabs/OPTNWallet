@@ -66,7 +66,7 @@ describe('release workflow', () => {
     expect(extensionShell).toContain('<AppShell viewerOnly />');
   });
 
-  it('ships signed and notarized native macOS bundles for Apple Silicon and Intel', () => {
+  it('ships native macOS bundles anonymously or signs and notarizes when credentials are available', () => {
     expect(workflow).toContain('platform: macos-latest');
     expect(workflow).toContain('target: aarch64-apple-darwin');
     expect(workflow).toContain('tor-target: macos-aarch64');
@@ -76,12 +76,19 @@ describe('release workflow', () => {
     expect(workflow).toContain('tor-target: macos-x86_64');
     expect(workflow).toContain('expected-arch: x86_64');
     expect(workflow).toContain('environment: production');
-    expect(workflow).toContain('Verify macOS release credentials');
+    expect(workflow).toContain('Detect optional macOS signing credentials');
+    expect(workflow).toContain('MACOS_SIGNING_AVAILABLE=false');
+    expect(workflow).toContain('APPLE_SIGNING_IDENTITY=-');
+    expect(workflow).toContain('adhoc-not-notarized');
+    expect(workflow).toContain('Build signed and notarized macOS bundles');
+    expect(workflow).toContain(
+      'Build ad-hoc-signed macOS bundles without an Apple account',
+    );
     expect(workflow).toContain('security set-key-partition-list');
     expect(workflow).toContain('APPLE_PASSWORD:');
     expect(workflow).not.toContain('APPLE_ID_PASSWORD:');
     expect(workflow).toContain('APPLE_SIGNING_IDENTITY=');
-    expect(workflow).toContain('Verify signed and notarized macOS bundle');
+    expect(workflow).toContain('Verify macOS bundle');
     expect(workflow).toContain('codesign --verify --deep --strict');
     expect(workflow).toContain('spctl --assess --type execute');
     expect(workflow).toContain('hdiutil verify');

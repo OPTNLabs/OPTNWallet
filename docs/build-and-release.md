@@ -66,8 +66,20 @@ Tagged GitHub releases publish Windows x64 (`.exe` and `.msi`), native macOS
 Apple Silicon and Intel (`.dmg`), Linux x64 (`.deb` and `.rpm`), and Chrome and
 Firefox extension bundles (`.zip`).
 
-macOS release jobs run in the GitHub `production` environment and fail closed
-unless all signing and notarization secrets are configured:
+macOS release jobs always produce native Apple Silicon and Intel DMGs. An Apple
+account is optional:
+
+- With none of the Apple secrets configured, Tauri uses the `-` ad-hoc signing
+  identity. The workflow verifies the app signature, DMG integrity, application
+  architecture, bundled Tor architecture, checksums, and build provenance. The
+  released filename ends in `-adhoc-not-notarized.dmg` so users are not misled
+  about its Gatekeeper status.
+- With all Apple secrets configured, the same build is Developer ID signed,
+  notarized, stapled, and assessed by Gatekeeper before publication.
+- A partial Apple secret set fails the build because it indicates a broken or
+  ambiguous release configuration.
+
+The optional signing and notarization secrets are:
 
 - `APPLE_CERTIFICATE`
 - `APPLE_CERTIFICATE_PASSWORD`
@@ -76,9 +88,10 @@ unless all signing and notarization secrets are configured:
 - `APPLE_PASSWORD`
 - `APPLE_TEAM_ID`
 
-The workflow verifies the imported Developer ID Application identity, code
-signature, Gatekeeper assessment, stapled notarization ticket, application
-architecture, and bundled Tor architecture before uploading either DMG.
+An ad-hoc-signed build does not require an Apple ID or paid developer account,
+but Apple has not notarized it. A quarantined internet download can therefore be
+blocked by Gatekeeper until the user explicitly approves it. Do not describe
+this as file corruption, and do not describe an ad-hoc artifact as notarized.
 
 The Tor version and each supported desktop archive's SHA-256 are pinned in
 `scripts/fetch-tor.mjs`. Downloads use the Tor Project archive, so updating Tor
