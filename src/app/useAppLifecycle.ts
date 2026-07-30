@@ -5,10 +5,7 @@ import { StatusBar, Style } from '@capacitor/status-bar';
 import { useLocation } from 'react-router-dom';
 import DatabaseService from '../apis/DatabaseManager/DatabaseService';
 import WalletManager from '../apis/WalletManager/WalletManager';
-import {
-  startUTXOWorker,
-  stopUTXOWorker,
-} from '../workers/UTXOWorkerService';
+import { startUTXOWorker, stopUTXOWorker } from '../workers/UTXOWorkerService';
 import { initWalletConnect } from '../state/slices/walletconnectSlice';
 import {
   initWizardConnect,
@@ -48,10 +45,14 @@ import { refreshWalletTransactionHistory } from '../services/WalletHistoryRefres
 let utxoWorkerStarted = false;
 let bcmrWarmupStarted = false;
 
-export function useWalletConnectInitialization(dispatch: AppDispatch) {
+export function useWalletConnectInitialization(
+  dispatch: AppDispatch,
+  enabled = true
+) {
   useEffect(() => {
+    if (!enabled) return;
     dispatch(initWalletConnect());
-  }, [dispatch]);
+  }, [dispatch, enabled]);
 }
 
 export function useWizardConnectInitialization(
@@ -196,7 +197,9 @@ export function useWalletNetworkBootstrap(
 
         if (!cancelled && resolvedNetwork) {
           dispatch(setWalletNetwork(resolvedNetwork));
-          dispatch(setWalletType(walletInfo?.walletType ?? WalletType.STANDARD));
+          dispatch(
+            setWalletType(walletInfo?.walletType ?? WalletType.STANDARD)
+          );
           if (walletInfo?.derivation_path) {
             dispatch(
               setWalletDerivationPath({
@@ -277,7 +280,10 @@ export function useScreenSecurity() {
   const location = useLocation();
 
   useEffect(() => {
-    if (!Capacitor.isNativePlatform() || Capacitor.getPlatform() !== 'android') {
+    if (
+      !Capacitor.isNativePlatform() ||
+      Capacitor.getPlatform() !== 'android'
+    ) {
       return;
     }
 
@@ -289,9 +295,11 @@ export function useScreenSecurity() {
     ]);
     const shouldEnableSecure = !onboardingRoutes.has(location.pathname);
 
-    void ScreenSecurity.setSecure({ enabled: shouldEnableSecure }).catch((error) => {
-      console.warn('Failed to update screen security state', error);
-    });
+    void ScreenSecurity.setSecure({ enabled: shouldEnableSecure }).catch(
+      (error) => {
+        console.warn('Failed to update screen security state', error);
+      }
+    );
   }, [location.pathname]);
 }
 
@@ -427,7 +435,8 @@ export function useOptionalPlayUpdateCheck() {
         }
 
         if (!update.available) return;
-        if (update.availableVersionCode <= lastPromptedVersionRef.current) return;
+        if (update.availableVersionCode <= lastPromptedVersionRef.current)
+          return;
 
         const shouldUpdate = await confirm(
           'A newer version of OPTN Wallet is available in Google Play. You can keep using this version or update now.'
@@ -608,7 +617,8 @@ export function useServerNotificationPolling(
       if (cancelled || inFlight.current) return;
       inFlight.current = true;
       try {
-        const notifications = await WalletBackendSyncService.listNotifications(walletId);
+        const notifications =
+          await WalletBackendSyncService.listNotifications(walletId);
         for (const notification of notifications) {
           dispatch(
             enqueueServerNotification({

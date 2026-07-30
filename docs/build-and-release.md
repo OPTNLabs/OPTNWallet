@@ -62,10 +62,45 @@ Legacy root scripts (`build.sh`, `releaseBuild.sh`) are deprecated and should no
   - Produces platform-native desktop bundles through Tauri.
   - Output: `src-tauri/target/release/bundle/`
 
-The v1.7.0 GitHub release publishes Windows x64 (`.exe`), macOS Apple Silicon
-(`.dmg`), and Linux x64 native packages (`.deb` and `.rpm`).
-Those release builds are unsigned unless the corresponding signing credentials
-are configured in GitHub Actions.
+Tagged GitHub releases publish Windows x64 (`.exe` and `.msi`), native macOS
+Apple Silicon and Intel (`.dmg`), Linux x64 (`.deb` and `.rpm`), and Chrome and
+Firefox extension bundles (`.zip`).
+
+macOS release jobs run in the GitHub `production` environment and fail closed
+unless all signing and notarization secrets are configured:
+
+- `APPLE_CERTIFICATE`
+- `APPLE_CERTIFICATE_PASSWORD`
+- `KEYCHAIN_PASSWORD`
+- `APPLE_ID`
+- `APPLE_PASSWORD`
+- `APPLE_TEAM_ID`
+
+The workflow verifies the imported Developer ID Application identity, code
+signature, Gatekeeper assessment, stapled notarization ticket, application
+architecture, and bundled Tor architecture before uploading either DMG.
+
+The Tor version and each supported desktop archive's SHA-256 are pinned in
+`scripts/fetch-tor.mjs`. Downloads use the Tor Project archive, so updating Tor
+requires a reviewed source change and release builds never select a new
+upstream version automatically.
+
+## Browser Extension Build Scripts
+
+- `npm run build:extension:chrome`
+
+  - Produces an unpacked Chrome/Chromium MV3 bundle in
+    `dist-extension-chrome/`.
+
+- `npm run build:extension:firefox`
+
+  - Produces an unpacked Firefox MV3 bundle in `dist-extension-firefox/`.
+
+The tagged release workflow archives both directories with `manifest.json` at
+the archive root, verifies that each manifest version matches the release tag,
+and includes both archives in checksums and provenance attestations. These are
+GitHub release bundles; publishing through browser stores and Firefox AMO
+signing remain separate store workflows.
 
 ## iOS Prep Scripts
 
