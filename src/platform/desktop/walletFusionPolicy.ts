@@ -28,7 +28,7 @@ export interface WalletFusionPolicy {
 export const DEFAULT_WALLET_FUSION_POLICY: WalletFusionPolicy = {
   cashFusionEnabled: false,
   autoFuseEnabled: true,
-  p2pFusionEnabled: false,
+  p2pFusionEnabled: true,
   fuseDepth: DEFAULT_FUSE_DEPTH,
 };
 
