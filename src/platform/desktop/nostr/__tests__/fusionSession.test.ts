@@ -31,15 +31,34 @@ type Handler = (from: string, msg: RoundMessage) => void;
 class Hub {
   private handlers = new Map<string, Handler[]>();
   private mailbox = new Map<string, Array<[string, RoundMessage]>>();
+  readonly sent: Array<{ from: string; to: string; message: RoundMessage }> = [];
+
+  constructor(
+    private readonly transform?: (
+      from: string,
+      to: string,
+      message: RoundMessage
+    ) => RoundMessage
+  ) {}
+
+  activeHandlerCount(): number {
+    return [...this.handlers.values()].reduce(
+      (count, handlers) => count + handlers.length,
+      0
+    );
+  }
+
   transportFor(me: string): RoundTransport {
     return {
       send: async (to, msg) => {
+        const message = this.transform?.(me, to, msg) ?? msg;
+        this.sent.push({ from: me, to, message });
         const hs = this.handlers.get(to);
         if (hs && hs.length) {
-          for (const h of hs) queueMicrotask(() => h(me, msg));
+          for (const h of hs) queueMicrotask(() => h(me, message));
         } else {
           const box = this.mailbox.get(to) ?? [];
-          box.push([me, msg]);
+          box.push([me, message]);
           this.mailbox.set(to, box);
         }
       },
@@ -52,6 +71,49 @@ class Hub {
       },
     };
   }
+}
+
+function makePeers(count = 2) {
+  return Array.from({ length: count }, (_, index) => {
+    const n = index + 1;
+    const inKey = keypair(n * 10 + 1);
+    const outKey = keypair(n * 10 + 2);
+    const round = keypair(n * 10 + 3);
+    const contribution: PeerContribution = {
+      inputs: [
+        {
+          prevTxid: `${n}${'a'.repeat(63)}`,
+          prevIndex: n,
+          value: 100_000,
+          pubkey: inKey.pubHex,
+        },
+      ],
+      outputs: [{ script: p2pkhHex(outKey.pubHex), value: 99_600 }],
+    };
+    return {
+      round,
+      keys: new Map([[inKey.pubHex, inKey.priv]]),
+      contribution,
+    };
+  });
+}
+
+function txidOf(txHex: string): string {
+  return binToHex(sha256.hash(sha256.hash(hexToBin(txHex))).reverse());
+}
+
+function deferred<T>(): {
+  promise: Promise<T>;
+  resolve: (value: T) => void;
+  reject: (reason: Error) => void;
+} {
+  let resolve!: (value: T) => void;
+  let reject!: (reason: Error) => void;
+  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise;
+    reject = rejectPromise;
+  });
+  return { promise, resolve, reject };
 }
 
 describe('P2P fusion round choreography (3 peers, in-memory)', () => {
@@ -112,6 +174,206 @@ describe('P2P fusion round choreography (3 peers, in-memory)', () => {
     // Sanity: 3 inputs + 3 outputs actually got fused together.
     expect(decoded.inputs).toHaveLength(3);
     expect(decoded.outputs).toHaveLength(3);
+    expect(hub.activeHandlerCount()).toBe(0);
+  });
+
+  it('coordinator VM-validates every peer signature before broadcast', async () => {
+    const peers = makePeers();
+    const participants = peers.map((peer) => peer.round.pubHex);
+    const coordinator = [...participants].sort()[0];
+    const hub = new Hub((from, to, message) => {
+      if (
+        to === coordinator &&
+        from !== coordinator &&
+        message.type === 'signature'
+      ) {
+        return {
+          ...message,
+          sigs: message.sigs.map((signature) => ({
+            ...signature,
+            unlockingBytecode: `00${signature.unlockingBytecode.slice(2)}`,
+          })),
+        };
+      }
+      return message;
+    });
+    let broadcasts = 0;
+
+    const settled = await Promise.allSettled(
+      peers.map((peer) =>
+        runFusionRound(
+          {
+            myPubkey: peer.round.pubHex,
+            participants,
+            tier: 100_000,
+            feerate: 1_000,
+            myContribution: peer.contribution,
+            keysByPubkey: peer.keys,
+            broadcast: async (txHex) => {
+              broadcasts += 1;
+              return txidOf(txHex);
+            },
+            timeoutMs: 1_000,
+          },
+          hub.transportFor(peer.round.pubHex)
+        )
+      )
+    );
+
+    expect(broadcasts).toBe(0);
+    expect(settled.every((result) => result.status === 'rejected')).toBe(true);
+    expect(
+      settled.some(
+        (result) =>
+          result.status === 'rejected' &&
+          /failed BCH validation/i.test(String(result.reason))
+      )
+    ).toBe(true);
+    expect(hub.activeHandlerCount()).toBe(0);
+  });
+
+  it('does not broadcast when cancellation wins immediately before broadcast', async () => {
+    const peers = makePeers();
+    const participants = peers.map((peer) => peer.round.pubHex);
+    const coordinator = [...participants].sort()[0];
+    const controller = new AbortController();
+    const hub = new Hub();
+    let broadcasts = 0;
+
+    const settled = await Promise.allSettled(
+      peers.map((peer) =>
+        runFusionRound(
+          {
+            myPubkey: peer.round.pubHex,
+            participants,
+            tier: 100_000,
+            feerate: 1_000,
+            myContribution: peer.contribution,
+            keysByPubkey: peer.keys,
+            broadcast: async (txHex) => {
+              broadcasts += 1;
+              return txidOf(txHex);
+            },
+            signal:
+              peer.round.pubHex === coordinator
+                ? controller.signal
+                : undefined,
+            onPhase:
+              peer.round.pubHex === coordinator
+                ? (phase) => {
+                    if (phase === 5) controller.abort();
+                  }
+                : undefined,
+            timeoutMs: 1_000,
+          },
+          hub.transportFor(peer.round.pubHex)
+        )
+      )
+    );
+
+    expect(broadcasts).toBe(0);
+    expect(settled.every((result) => result.status === 'rejected')).toBe(true);
+    expect(hub.activeHandlerCount()).toBe(0);
+  });
+
+  it('resolves a successful in-flight broadcast even if cancellation arrives', async () => {
+    const peers = makePeers();
+    const participants = peers.map((peer) => peer.round.pubHex);
+    const coordinator = [...participants].sort()[0];
+    const controller = new AbortController();
+    const pending = deferred<string>();
+    const hub = new Hub();
+    let broadcastHex = '';
+    let broadcastStarted!: () => void;
+    const started = new Promise<void>((resolve) => {
+      broadcastStarted = resolve;
+    });
+
+    const promises = peers.map((peer) =>
+      runFusionRound(
+        {
+          myPubkey: peer.round.pubHex,
+          participants,
+          tier: 100_000,
+          feerate: 1_000,
+          myContribution: peer.contribution,
+          keysByPubkey: peer.keys,
+          broadcast: async (txHex) => {
+            broadcastHex = txHex;
+            broadcastStarted();
+            return pending.promise;
+          },
+          signal:
+            peer.round.pubHex === coordinator ? controller.signal : undefined,
+          timeoutMs: 1_000,
+        },
+        hub.transportFor(peer.round.pubHex)
+      )
+    );
+
+    await started;
+    controller.abort();
+    pending.resolve(txidOf(broadcastHex));
+
+    const results = await Promise.all(promises);
+    expect(new Set(results.map((result) => result.txid)).size).toBe(1);
+    expect(hub.activeHandlerCount()).toBe(0);
+    expect(
+      hub.sent.some((entry) => entry.message.type === 'abort')
+    ).toBe(false);
+  });
+
+  it('rejects truthfully when an in-flight broadcast fails after cancellation', async () => {
+    const peers = makePeers();
+    const participants = peers.map((peer) => peer.round.pubHex);
+    const coordinator = [...participants].sort()[0];
+    const controller = new AbortController();
+    const pending = deferred<string>();
+    const hub = new Hub();
+    let broadcastStarted!: () => void;
+    const started = new Promise<void>((resolve) => {
+      broadcastStarted = resolve;
+    });
+
+    const settledPromise = Promise.allSettled(
+      peers.map((peer) =>
+        runFusionRound(
+          {
+            myPubkey: peer.round.pubHex,
+            participants,
+            tier: 100_000,
+            feerate: 1_000,
+            myContribution: peer.contribution,
+            keysByPubkey: peer.keys,
+            broadcast: async () => {
+              broadcastStarted();
+              return pending.promise;
+            },
+            signal:
+              peer.round.pubHex === coordinator
+                ? controller.signal
+                : undefined,
+            timeoutMs: 1_000,
+          },
+          hub.transportFor(peer.round.pubHex)
+        )
+      )
+    );
+
+    await started;
+    controller.abort();
+    pending.reject(new Error('broadcast rejected'));
+
+    const settled = await settledPromise;
+    expect(settled.every((result) => result.status === 'rejected')).toBe(true);
+    expect(
+      settled.some(
+        (result) =>
+          result.status === 'rejected' &&
+          /broadcast rejected/i.test(String(result.reason))
+      )
+    ).toBe(true);
+    expect(hub.activeHandlerCount()).toBe(0);
   });
 
   it('broadcasts an abort so duplicate inputs fail every peer promptly', async () => {
