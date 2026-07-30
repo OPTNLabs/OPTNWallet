@@ -36,10 +36,10 @@ jobs:
     timeout-minutes: 15
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Setup Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v7
         with:
           node-version: '20'
           cache: 'npm'
@@ -54,7 +54,7 @@ jobs:
         run: npm run build:extension:firefox
 
       - name: Upload Chrome extension artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: extension-chrome
           path: dist-extension-chrome/**
@@ -62,7 +62,7 @@ jobs:
           if-no-files-found: error
 
       - name: Upload Firefox extension artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: extension-firefox
           path: dist-extension-firefox/**

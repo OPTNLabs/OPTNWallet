@@ -25,7 +25,7 @@ jobs:
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           ref: ${{ env.RELEASE_TAG }}
           fetch-depth: 0
@@ -41,7 +41,7 @@ jobs:
           }
 
       - name: Setup Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v7
         with:
           node-version: '20'
           cache: npm
@@ -65,13 +65,13 @@ jobs:
     outputs:
       signed: ${{ steps.signing.outputs.available }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           ref: ${{ env.RELEASE_TAG }}
           fetch-depth: 0
 
       - name: Setup Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v7
         with:
           node-version: '20'
           cache: npm
@@ -132,7 +132,7 @@ jobs:
           EOF
 
       - name: Upload Android release files
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         if: steps.signing.outputs.available == 'true'
         with:
           name: android-release
@@ -142,7 +142,7 @@ jobs:
           retention-days: 30
 
       - name: Upload Android signing status
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         if: steps.signing.outputs.available != 'true'
         with:
           name: android-release-status
@@ -176,13 +176,13 @@ jobs:
       NODE_OPTIONS: --max-old-space-size=4096
       APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           ref: ${{ env.RELEASE_TAG }}
           fetch-depth: 0
 
       - name: Setup Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v7
         with:
           node-version: '20'
           cache: npm
@@ -239,7 +239,7 @@ jobs:
         run: npx tauri build --target ${{ matrix.target }} ${{ matrix.bundle-args }}
 
       - name: Upload desktop release files
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: ${{ matrix.artifact-name }}
           path: src-tauri/target/${{ matrix.target }}/release/bundle/**
@@ -256,7 +256,7 @@ jobs:
       attestations: write
     steps:
       - name: Download release files
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           path: artifacts
 
