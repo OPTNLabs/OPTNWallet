@@ -45,9 +45,12 @@ jobs:
         with:
           fetch-depth: 0
       - name: Gitleaks scan
-        uses: gitleaks/gitleaks-action@v2
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          docker run --rm \
+            -v "$GITHUB_WORKSPACE:/path:ro" \
+            -w /path \
+            ghcr.io/gitleaks/gitleaks@sha256:b5918eb91b8d2473cec722f066abb4352e4ffdc4ec9f4283ec143aba9ec9ebc \
+            git --redact --config .gitleaks.toml --log-opts="--all" .
 
   dependency-audit:
     runs-on: ubuntu-latest
