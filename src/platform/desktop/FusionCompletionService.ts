@@ -1,4 +1,5 @@
 import OutboundTransactionTracker from '../../services/OutboundTransactionTracker';
+import type { OutboundPrivacyRoute } from '../../services/OutboundTransactionTracker';
 import WalletBackendSyncService from '../../services/WalletBackendSyncService';
 import { refreshActiveWalletUtxos } from '../../services/WalletUtxoRefreshService';
 import type { UTXO } from '../../types/types';
@@ -13,6 +14,12 @@ export interface CompletedFusionBroadcast {
   spentInputs: UTXO[];
   source: 'p2p-fusion' | 'server-fusion';
   sourceLabel: string;
+  /**
+   * A Tor-only completion is already independently observed by the native
+   * relay path. Do not immediately expose its txid or raw transaction through
+   * the wallet's ordinary Electrum/backend refresh path.
+   */
+  privacyRoute?: OutboundPrivacyRoute;
   /**
    * Locking scripts (hex) of the outputs this round created FOR US.
    *
@@ -42,7 +49,7 @@ export function fusionCompletionWarning(
     return 'The balance refreshed, but the outbound tracking record could not be saved.';
   }
   if (!completion.refreshed) {
-    return 'The transaction is safely tracked; the live balance refresh will retry automatically.';
+    return 'The transaction is safely tracked; the balance will update on the next wallet sync.';
   }
   return undefined;
 }
@@ -59,6 +66,9 @@ export async function completeFusionBroadcast(
       spentInputs: completed.spentInputs,
       source: completed.source,
       sourceLabel: completed.sourceLabel,
+      ...(completed.privacyRoute
+        ? { privacyRoute: completed.privacyRoute }
+        : {}),
     });
     tracked = true;
   } catch (error) {
@@ -68,20 +78,23 @@ export async function completeFusionBroadcast(
     });
   }
 
-  void Promise.resolve()
-    .then(() =>
-      WalletBackendSyncService.observeTransaction(
-        completed.walletId,
-        completed.txid,
-        completed.txHex
+  const torOnly = completed.privacyRoute === 'tor-only';
+  if (!torOnly) {
+    void Promise.resolve()
+      .then(() =>
+        WalletBackendSyncService.observeTransaction(
+          completed.walletId,
+          completed.txid,
+          completed.txHex
+        )
       )
-    )
-    .catch((error) => {
-      logError('FusionCompletionService.observeTransaction', error, {
-        walletId: completed.walletId,
-        txid: completed.txid,
+      .catch((error) => {
+        logError('FusionCompletionService.observeTransaction', error, {
+          walletId: completed.walletId,
+          txid: completed.txid,
+        });
       });
-    });
+  }
 
   // Advance per-coin fuse depth. Reached only after a verified broadcast, so a
   // round that failed can never make its coins look more fused than they are.
@@ -112,13 +125,15 @@ export async function completeFusionBroadcast(
   }
 
   let refreshed = false;
-  try {
-    refreshed = await refreshActiveWalletUtxos(completed.walletId);
-  } catch (error) {
-    logError('FusionCompletionService.refreshActiveWalletUtxos', error, {
-      walletId: completed.walletId,
-      txid: completed.txid,
-    });
+  if (!torOnly) {
+    try {
+      refreshed = await refreshActiveWalletUtxos(completed.walletId);
+    } catch (error) {
+      logError('FusionCompletionService.refreshActiveWalletUtxos', error, {
+        walletId: completed.walletId,
+        txid: completed.txid,
+      });
+    }
   }
 
   return { tracked, refreshed, depthRecorded };

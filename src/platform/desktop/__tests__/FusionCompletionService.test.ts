@@ -128,4 +128,38 @@ describe('completeFusionBroadcast', () => {
       'Wallet tracking and the immediate balance refresh both failed. Sync the wallet before starting another send.'
     );
   });
+
+  it('keeps Tor-only server Fusion completion out of ordinary observation and refresh paths', async () => {
+    const { completeFusionBroadcast } = await import(
+      '../FusionCompletionService'
+    );
+
+    await expect(
+      completeFusionBroadcast({
+        walletId: 5,
+        txid: 'e'.repeat(64),
+        txHex: '00',
+        spentInputs: [],
+        source: 'server-fusion',
+        sourceLabel: 'CashFusion server',
+        privacyRoute: 'tor-only',
+      })
+    ).resolves.toEqual({
+      tracked: true,
+      refreshed: false,
+      depthRecorded: 0,
+    });
+
+    expect(recordBroadcastMock).toHaveBeenCalledWith({
+      walletId: 5,
+      rawTx: '00',
+      expectedTxid: 'e'.repeat(64),
+      spentInputs: [],
+      source: 'server-fusion',
+      sourceLabel: 'CashFusion server',
+      privacyRoute: 'tor-only',
+    });
+    expect(observeTransactionMock).not.toHaveBeenCalled();
+    expect(refreshActiveWalletUtxosMock).not.toHaveBeenCalled();
+  });
 });

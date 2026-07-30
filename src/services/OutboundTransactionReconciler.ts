@@ -91,21 +91,47 @@ export async function reconcileOutboundTransactions(
     )
   );
 
+  // A normal wallet sync may already have stored one of these transactions.
+  // Resolve that from the local database first; this is also the only automatic
+  // reconciliation allowed for Tor-only Fusion records.
+  const locallySeen = await listSeenTxids(
+    walletId,
+    retryableActive.map((record) => record.txid)
+  );
+  await Promise.all(
+    retryableActive
+      .filter((record) => locallySeen.has(record.txid))
+      .map((record) =>
+        OutboundTransactionTracker.markState(
+          record.txid,
+          'seen',
+          null,
+          record.walletId
+        )
+      )
+  );
+
+  const unresolved = await OutboundTransactionTracker.listActive(walletId);
+  const ordinary = unresolved.filter(
+    (record) => record.privacyRoute !== 'tor-only'
+  );
+  if (ordinary.length === 0) return unresolved;
+
   const addresses = await fetchWalletAddresses(walletId);
-  if (addresses.length === 0) return active;
+  if (addresses.length === 0) return unresolved;
 
   try {
     await ElectrumService.reconnect();
   } catch {
-    return active;
+    return unresolved;
   }
 
   const visibilityByTxid = await ElectrumService.getTransactionVisibilityMany(
-    retryableActive.map((record) => record.txid)
+    ordinary.map((record) => record.txid)
   );
 
   await Promise.all(
-    retryableActive
+    ordinary
       .filter((record) => visibilityByTxid[record.txid]?.seen)
       .map((record) =>
         OutboundTransactionTracker.markState(
@@ -118,11 +144,14 @@ export async function reconcileOutboundTransactions(
   );
 
   const remaining = await OutboundTransactionTracker.listActive(walletId);
-  if (remaining.length === 0) return [];
+  const ordinaryRemaining = remaining.filter(
+    (record) => record.privacyRoute !== 'tor-only'
+  );
+  if (ordinaryRemaining.length === 0) return remaining;
 
   const transactionManager = TransactionManager();
   await Promise.all(
-    remaining
+    ordinaryRemaining
       .filter((record) => OutboundTransactionTracker.shouldRebroadcast(record))
       .map((record) =>
         transactionManager.sendTransaction(record.rawTx).catch(() => null)

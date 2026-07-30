@@ -39,7 +39,7 @@ tauri-plugin-biometry = "0.2"
 # already in the tree transitively via reqwest and tauri; naming them here
 # just makes the direct dependency explicit.
 prost = "0.13"
-tokio = { version = "1", features = ["net", "io-util", "time", "macros", "rt", "process"] }
+tokio = { version = "1", features = ["net", "io-util", "time", "macros", "rt", "process", "sync"] }
 tokio-rustls = { version = "0.26", features = ["ring"] }
 webpki-roots = "0.26"
 # Tor is reached as a SOCKS5 proxy (the same way Electron Cash does it) — we do

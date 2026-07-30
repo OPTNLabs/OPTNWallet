@@ -11,6 +11,8 @@ export type OutboundTransactionState =
   | 'broadcasted'
   | 'seen';
 
+export type OutboundPrivacyRoute = 'default' | 'tor-only';
+
 export const OUTBOUND_BROADCASTING_STALE_MS = 90 * 1000;
 export const OUTBOUND_RELEASE_DELAY_MS = 20 * 60 * 1000;
 export const OUTBOUND_REBROADCAST_COOLDOWN_MS = 30 * 1000;
@@ -26,6 +28,12 @@ export type OutboundTransactionRecord = {
   walletId: number | null;
   source: string;
   sourceLabel?: string | null;
+  /**
+   * `tor-only` records must never be queried or rebroadcast through the normal
+   * Electrum/HTTP path. Optional for backwards compatibility with records saved
+   * before route metadata existed; an absent value means `default`.
+   */
+  privacyRoute?: OutboundPrivacyRoute;
   recipientSummary?: string | null;
   amountSummary?: string | null;
   sessionTopic?: string | null;
@@ -46,6 +54,7 @@ type TrackAttemptArgs = {
   walletId: number | null;
   source: string;
   sourceLabel?: string | null;
+  privacyRoute?: OutboundPrivacyRoute;
   recipientSummary?: string | null;
   amountSummary?: string | null;
   sessionTopic?: string | null;
@@ -277,6 +286,12 @@ const OutboundTransactionTracker = {
       walletId: args.walletId,
       source: existing?.source ?? args.source,
       sourceLabel: existing?.sourceLabel ?? args.sourceLabel ?? null,
+      ...(existing?.privacyRoute || args.privacyRoute
+        ? {
+            privacyRoute:
+              existing?.privacyRoute ?? args.privacyRoute ?? 'default',
+          }
+        : {}),
       recipientSummary:
         existing?.recipientSummary ?? args.recipientSummary ?? null,
       amountSummary: existing?.amountSummary ?? args.amountSummary ?? null,
@@ -378,6 +393,10 @@ const OutboundTransactionTracker = {
   },
 
   shouldRebroadcast(record: OutboundTransactionRecord): boolean {
+    // Tor-only transactions have their own native relay path. Sending one
+    // through the ordinary transaction manager would link the Fusion to the
+    // wallet's normal network identity.
+    if (record.privacyRoute === 'tor-only') return false;
     if (record.state !== 'submitted') return false;
     const baseline = record.lastCheckedAt ?? record.updatedAt;
     const ageMs = Date.now() - Date.parse(baseline);

@@ -1,8 +1,8 @@
 #[allow(dead_code)] // menu bar is built on the JS side now; kept for reference
 mod menu;
 
-pub mod fusion;
 pub mod electrum_tcp;
+pub mod fusion;
 pub mod nostr_tor;
 pub mod spv;
 
@@ -94,6 +94,32 @@ struct FusionRunInputReq {
     privkey: String,
 }
 
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct FusionExecutionStatus {
+    ready: bool,
+    message: Option<&'static str>,
+}
+
+#[tauri::command]
+fn fusion_execution_status() -> FusionExecutionStatus {
+    let ready = fusion::fusion_execution_ready();
+    FusionExecutionStatus {
+        ready,
+        message: (!ready).then_some(fusion::FUSION_EXECUTION_PAUSED_MESSAGE),
+    }
+}
+
+/// Reserve a bounded cancellation ID before the renderer derives signing keys
+/// or persists fresh output scripts.
+#[tauri::command]
+fn fusion_prepare_round(round_id: String) -> Result<(), String> {
+    if !fusion::fusion_execution_ready() {
+        return Err(fusion::FUSION_EXECUTION_PAUSED_MESSAGE.into());
+    }
+    fusion::round_cancel::prepare_round(&round_id)
+}
+
 /// Run a full CashFusion round (Phase 1.7): contribute `inputs` (each with the
 /// key to sign it) and fresh `outputs`, join `tier`, and fuse. Returns the
 /// assembled transaction on success. Same Tor requirement as the other fusion
@@ -103,19 +129,23 @@ struct FusionRunInputReq {
 #[tauri::command]
 #[allow(clippy::too_many_arguments)] // command args map 1:1 to the JS invoke call
 async fn fusion_run(
+    round_id: String,
     host: String,
     port: u16,
     use_ssl: bool,
-    tier: u64,
+    tier_plans: Vec<fusion::server_plan::FusionTierPlan>,
     inputs: Vec<FusionRunInputReq>,
     output_scripts: Vec<String>,
-    output_values: Vec<u64>,
     tor_host: Option<String>,
     tor_port: Option<u16>,
+    expected_hello: fusion::server_plan::ExpectedHello,
 ) -> Result<fusion::run::FusionOutcome, String> {
     if !fusion::fusion_execution_ready() {
         return Err(fusion::FUSION_EXECUTION_PAUSED_MESSAGE.into());
     }
+
+    let registration = fusion::round_cancel::acquire_round(&round_id)?;
+    let cancel = registration.flag();
 
     let transport = match (tor_host.as_deref(), tor_port) {
         (Some(h), Some(p)) => fusion::Transport::Tor { host: h, port: p },
@@ -148,17 +178,166 @@ async fn fusion_run(
         scripts.push(decode_hex(s)?);
     }
 
-    fusion::run::run_fusion(fusion::run::FusionRunParams {
+    let result = fusion::run::run_fusion(fusion::run::FusionRunParams {
         host: &host,
         port,
         use_ssl,
-        tier,
+        tier_plans,
         inputs: keyed_inputs,
         output_scripts: scripts,
-        output_values,
         transport,
         timing: fusion::run::FusionTiming::default(),
+        cancel,
+        expected_hello,
     })
+    .await;
+
+    drop(registration);
+    result
+}
+
+/// Cancel a running fusion round by its round_id. Idempotent — returns true
+/// if the round was found and cancelled, false if it was already gone.
+#[tauri::command]
+fn fusion_cancel_round(round_id: String) -> bool {
+    fusion::round_cancel::cancel_round(&round_id)
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum FusionRelayRoute {
+    Direct,
+    Tor,
+}
+
+const MAX_FUSION_RELAY_TX_BYTES: usize = 100_000;
+
+fn validate_fusion_relay_request(tx_hex: &str, network: &str) -> Result<(), String> {
+    if !matches!(network, "mainnet" | "chipnet") {
+        return Err("unsupported CashFusion relay network".into());
+    }
+    if tx_hex.is_empty() || tx_hex.len() % 2 != 0 {
+        return Err("transaction hex must be non-empty and even length".into());
+    }
+    if tx_hex.len() / 2 > MAX_FUSION_RELAY_TX_BYTES {
+        return Err("CashFusion relay transaction exceeds the size limit".into());
+    }
+    Ok(())
+}
+
+fn fusion_relay_is_local(host: &str) -> bool {
+    host.eq_ignore_ascii_case("localhost") || matches!(host, "127.0.0.1" | "::1")
+}
+
+fn fusion_relay_transport_policy(
+    relay_host: &str,
+    observer_host: &str,
+    tor_verified: bool,
+) -> Result<(FusionRelayRoute, FusionRelayRoute), String> {
+    let route = |host: &str| {
+        if fusion_relay_is_local(host) {
+            Ok(FusionRelayRoute::Direct)
+        } else if tor_verified {
+            Ok(FusionRelayRoute::Tor)
+        } else {
+            Err(
+                "CashFusion relay and observation require a verified Tor proxy for every remote peer"
+                    .to_string(),
+            )
+        }
+    };
+    Ok((route(relay_host)?, route(observer_host)?))
+}
+
+fn fusion_relay_endpoint_key(host: &str, port: u16) -> (String, u16) {
+    let normalized_host = if fusion_relay_is_local(host) {
+        "loopback".to_string()
+    } else {
+        host.trim_end_matches('.').to_ascii_lowercase()
+    };
+    (normalized_host, port)
+}
+
+fn fusion_relay_endpoints_are_distinct(
+    relay_host: &str,
+    relay_port: u16,
+    observer_host: &str,
+    observer_port: u16,
+) -> bool {
+    fusion_relay_endpoint_key(relay_host, relay_port)
+        != fusion_relay_endpoint_key(observer_host, observer_port)
+}
+
+/// Broadcast a server-assembled CashFusion transaction to one BCH peer, then
+/// require a separate peer to return the exact raw transaction by txid.
+///
+/// Remote peers are routed only through a proxy freshly verified as Tor at this
+/// API boundary. Loopback peers are the sole direct-connection exemption.
+#[tauri::command]
+#[allow(clippy::too_many_arguments)]
+async fn fusion_relay_broadcast_and_observe(
+    tx_hex: String,
+    network: String,
+    relay_host: String,
+    relay_port: u16,
+    observer_host: String,
+    observer_port: u16,
+    tor_host: Option<String>,
+    tor_port: Option<u16>,
+) -> Result<spv::FusionRelayObservation, String> {
+    if !fusion::fusion_execution_ready() {
+        return Err(fusion::FUSION_EXECUTION_PAUSED_MESSAGE.into());
+    }
+    if !fusion_relay_endpoints_are_distinct(&relay_host, relay_port, &observer_host, observer_port)
+    {
+        return Err("relay and observer endpoints must be distinct".into());
+    }
+
+    validate_fusion_relay_request(&tx_hex, &network)?;
+    let tx_bytes = decode_hex(&tx_hex).map_err(|_| "invalid transaction hex".to_string())?;
+
+    let any_remote = !fusion_relay_is_local(&relay_host) || !fusion_relay_is_local(&observer_host);
+    let tor_verified = if any_remote {
+        match (tor_host.as_deref(), tor_port) {
+            (Some(host), Some(port)) => fusion::tor::is_tor_port(host, port).await,
+            _ => false,
+        }
+    } else {
+        false
+    };
+    let (relay_route, observer_route) =
+        fusion_relay_transport_policy(&relay_host, &observer_host, tor_verified)?;
+
+    let verified_proxy = match (tor_host.as_deref(), tor_port) {
+        (Some(host), Some(port)) if tor_verified => Some((host, port)),
+        _ => None,
+    };
+    let relay_transport = match relay_route {
+        FusionRelayRoute::Direct => fusion::Transport::Direct,
+        FusionRelayRoute::Tor => {
+            let (host, port) =
+                verified_proxy.ok_or("verified Tor proxy details unavailable for remote relay")?;
+            fusion::Transport::Tor { host, port }
+        }
+    };
+    let observer_transport = match observer_route {
+        FusionRelayRoute::Direct => fusion::Transport::Direct,
+        FusionRelayRoute::Tor => {
+            let (host, port) = verified_proxy
+                .ok_or("verified Tor proxy details unavailable for remote observer")?;
+            fusion::Transport::Tor { host, port }
+        }
+    };
+
+    spv::relay_broadcast_and_observe(
+        &relay_host,
+        relay_port,
+        relay_transport,
+        &observer_host,
+        observer_port,
+        observer_transport,
+        &network,
+        tx_bytes,
+    )
     .await
 }
 
@@ -202,6 +381,9 @@ async fn bip37_node_probe(
 
 // Parse a 40-hex-char pubkey hash (hash160) into 20 bytes.
 fn decode_hex(h: &str) -> Result<Vec<u8>, String> {
+    if !h.is_ascii() {
+        return Err("invalid hex".into());
+    }
     if h.len() % 2 != 0 {
         return Err("odd-length hex".into());
     }
@@ -272,10 +454,14 @@ async fn bip37_scan(
     tor_host: Option<String>,
     tor_port: Option<u16>,
 ) -> Result<spv::ScanResult, String> {
-    let watched: std::collections::HashSet<[u8; 20]> =
-        pubkey_hashes.iter().map(|h| parse_pkh(h)).collect::<Result<_, _>>()?;
-    let blocks: Vec<[u8; 32]> =
-        block_hashes.iter().map(|h| parse_block_hash(h)).collect::<Result<_, _>>()?;
+    let watched: std::collections::HashSet<[u8; 20]> = pubkey_hashes
+        .iter()
+        .map(|h| parse_pkh(h))
+        .collect::<Result<_, _>>()?;
+    let blocks: Vec<[u8; 32]> = block_hashes
+        .iter()
+        .map(|h| parse_block_hash(h))
+        .collect::<Result<_, _>>()?;
     let transport = match (tor_host.as_deref(), tor_port) {
         (Some(h), Some(p)) => fusion::Transport::Tor { host: h, port: p },
         _ => fusion::Transport::Direct,
@@ -332,8 +518,12 @@ fn resolve_tor_paths(app: &tauri::AppHandle) -> Result<fusion::tor_manager::TorP
         return Ok(fusion::tor_manager::TorPaths {
             binary: std::path::PathBuf::from(bin),
             data_dir,
-            geoip: std::env::var("OPTN_TOR_GEOIP").ok().map(std::path::PathBuf::from),
-            geoip6: std::env::var("OPTN_TOR_GEOIP6").ok().map(std::path::PathBuf::from),
+            geoip: std::env::var("OPTN_TOR_GEOIP")
+                .ok()
+                .map(std::path::PathBuf::from),
+            geoip6: std::env::var("OPTN_TOR_GEOIP6")
+                .ok()
+                .map(std::path::PathBuf::from),
         });
     }
 
@@ -468,12 +658,16 @@ fn open_external(url: String) -> Result<(), String> {
         return Err("only http(s) URLs may be opened externally".into());
     }
     #[cfg(target_os = "windows")]
-    let spawn = std::process::Command::new("cmd").args(["/C", "start", "", &url]).spawn();
+    let spawn = std::process::Command::new("cmd")
+        .args(["/C", "start", "", &url])
+        .spawn();
     #[cfg(target_os = "macos")]
     let spawn = std::process::Command::new("open").arg(&url).spawn();
     #[cfg(all(unix, not(target_os = "macos")))]
     let spawn = std::process::Command::new("xdg-open").arg(&url).spawn();
-    spawn.map(|_| ()).map_err(|e| format!("could not open browser: {e}"))
+    spawn
+        .map(|_| ())
+        .map_err(|e| format!("could not open browser: {e}"))
 }
 
 #[tauri::command]
@@ -503,7 +697,11 @@ pub fn run() {
             write_wallet_file,
             fusion_server_status,
             fusion_join_status,
+            fusion_execution_status,
+            fusion_prepare_round,
             fusion_run,
+            fusion_cancel_round,
+            fusion_relay_broadcast_and_observe,
             fusion_tor_detect,
             fusion_tor_check,
             bip37_node_probe,
@@ -563,4 +761,84 @@ pub fn run() {
         })
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn fusion_relay_policy_allows_every_loopback_form_direct() {
+        let loopbacks = ["localhost", "127.0.0.1", "::1"];
+        for relay_host in loopbacks {
+            for observer_host in loopbacks {
+                assert_eq!(
+                    fusion_relay_transport_policy(relay_host, observer_host, false).unwrap(),
+                    (FusionRelayRoute::Direct, FusionRelayRoute::Direct)
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn fusion_relay_policy_rejects_any_remote_peer_without_verified_tor() {
+        for (relay_host, observer_host) in [
+            ("relay.example", "observer.example"),
+            ("localhost", "observer.example"),
+            ("relay.example", "::1"),
+        ] {
+            let err = fusion_relay_transport_policy(relay_host, observer_host, false).unwrap_err();
+            assert!(err.contains("verified Tor"), "unexpected error: {err}");
+        }
+    }
+
+    #[test]
+    fn fusion_relay_policy_routes_each_remote_peer_through_verified_tor() {
+        assert_eq!(
+            fusion_relay_transport_policy("localhost", "observer.example", true).unwrap(),
+            (FusionRelayRoute::Direct, FusionRelayRoute::Tor)
+        );
+        assert_eq!(
+            fusion_relay_transport_policy("relay.example", "observer.example", true).unwrap(),
+            (FusionRelayRoute::Tor, FusionRelayRoute::Tor)
+        );
+    }
+
+    #[test]
+    fn fusion_relay_endpoints_must_be_distinct() {
+        assert!(!fusion_relay_endpoints_are_distinct(
+            "relay.example",
+            8333,
+            "RELAY.EXAMPLE.",
+            8333
+        ));
+        assert!(!fusion_relay_endpoints_are_distinct(
+            "localhost",
+            8333,
+            "127.0.0.1",
+            8333
+        ));
+        assert!(fusion_relay_endpoints_are_distinct(
+            "relay.example",
+            8333,
+            "observer.example",
+            8333
+        ));
+    }
+
+    #[test]
+    fn fusion_relay_request_is_bounded_and_network_explicit() {
+        assert!(validate_fusion_relay_request("00", "mainnet").is_ok());
+        assert!(validate_fusion_relay_request("00", "chipnet").is_ok());
+        assert!(validate_fusion_relay_request("00", "unknown").is_err());
+        assert!(validate_fusion_relay_request("", "mainnet").is_err());
+        assert!(validate_fusion_relay_request("0", "mainnet").is_err());
+        assert!(
+            validate_fusion_relay_request(
+                &"00".repeat(MAX_FUSION_RELAY_TX_BYTES + 1),
+                "mainnet"
+            )
+            .is_err()
+        );
+    }
 }

@@ -153,6 +153,39 @@ describe('OutboundTransactionTracker Fusion completion', () => {
     );
   });
 
+  it('persists the Tor-only route on server Fusion records', async () => {
+    const { default: OutboundTransactionTracker } = await import(
+      '../OutboundTransactionTracker'
+    );
+    const txid =
+      '9a538906e6466ebd2617d321f71bc94e56056ce213d366773699e28158e00614';
+
+    const result = await OutboundTransactionTracker.recordBroadcast({
+      rawTx: '00',
+      expectedTxid: txid,
+      walletId: 5,
+      source: 'server-fusion',
+      sourceLabel: 'CashFusion server',
+      privacyRoute: 'tor-only',
+      spentInputs: [],
+    });
+
+    expect(result).toEqual(
+      expect.objectContaining({
+        source: 'server-fusion',
+        privacyRoute: 'tor-only',
+        state: 'broadcasted',
+      })
+    );
+    expect(
+      OutboundTransactionTracker.shouldRebroadcast({
+        ...result,
+        state: 'submitted',
+        lastCheckedAt: new Date(0).toISOString(),
+      })
+    ).toBe(false);
+  });
+
   it('durably reserves spent inputs when IndexedDB is temporarily unavailable', async () => {
     setItemMock.mockRejectedValue(new Error('IndexedDB unavailable'));
     const { default: OutboundTransactionTracker } = await import(

@@ -31,16 +31,19 @@ use tokio_rustls::rustls::{ClientConfig, RootCertStore};
 use tokio_rustls::TlsConnector;
 
 pub mod components;
+pub mod blame;
 pub mod covert;
 pub mod encrypt;
 pub mod pedersen;
 pub mod round;
+pub mod round_cancel;
 pub mod run;
 pub mod schnorr;
+pub mod server_plan;
 pub mod session;
-pub mod tx;
 pub mod tor;
 pub mod tor_manager;
+pub mod tx;
 
 /// A connected, framed transport to a fusion server — either a plain TCP stream
 /// or a TLS stream, over Direct or Tor. Boxed so `connect_stream` can return one
@@ -156,7 +159,10 @@ where
 /// Run the Phase 1 handshake over an already-established stream.
 /// Split out from the connection setup so it can be tested against an
 /// in-memory duplex stream with no real network involved.
-async fn handshake<S>(stream: &mut S, genesis_hash: Option<Vec<u8>>) -> Result<FusionServerStatus, String>
+async fn handshake<S>(
+    stream: &mut S,
+    genesis_hash: Option<Vec<u8>>,
+) -> Result<FusionServerStatus, String>
 where
     S: AsyncReadExt + AsyncWriteExt + Unpin,
 {
@@ -182,9 +188,10 @@ where
             donation_address: h.donation_address,
         }),
         // The server reports version mismatches and the like through this.
-        Some(pb::server_message::Msg::Error(e)) => {
-            Err(format!("server rejected us: {}", e.message.unwrap_or_default()))
-        }
+        Some(pb::server_message::Msg::Error(e)) => Err(format!(
+            "server rejected us: {}",
+            e.message.unwrap_or_default()
+        )),
         _ => Err("unexpected reply — expected ServerHello".into()),
     }
 }
@@ -222,10 +229,12 @@ pub(crate) async fn connect_stream(
     transport: Transport<'_>,
 ) -> Result<FusionStream, String> {
     let tcp = match transport {
-        Transport::Direct => tokio::time::timeout(CONNECT_TIMEOUT, TcpStream::connect((host, port)))
-            .await
-            .map_err(|_| format!("timed out connecting to {host}:{port}"))?
-            .map_err(|e| format!("could not connect to {host}:{port}: {e}"))?,
+        Transport::Direct => {
+            tokio::time::timeout(CONNECT_TIMEOUT, TcpStream::connect((host, port)))
+                .await
+                .map_err(|_| format!("timed out connecting to {host}:{port}"))?
+                .map_err(|e| format!("could not connect to {host}:{port}: {e}"))?
+        }
         Transport::Tor {
             host: proxy_host,
             port: proxy_port,
@@ -301,24 +310,34 @@ mod tests {
         expected.extend_from_slice(&payload);
 
         let (mut client, mut server) = tokio::io::duplex(64);
-        let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
         rt.block_on(async {
             send_frame(&mut client, &payload).await.unwrap();
             let mut got = vec![0u8; expected.len()];
-            tokio::io::AsyncReadExt::read_exact(&mut server, &mut got).await.unwrap();
+            tokio::io::AsyncReadExt::read_exact(&mut server, &mut got)
+                .await
+                .unwrap();
             assert_eq!(got, expected);
         });
     }
 
     #[test]
     fn rejects_a_frame_that_is_not_cashfusion() {
-        let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
         rt.block_on(async {
             let (mut client, mut server) = tokio::io::duplex(64);
             // Anything that isn't the magic must be refused rather than parsed.
             let mut junk = vec![0u8; 12];
             junk[..8].copy_from_slice(b"NOTFUSIO");
-            tokio::io::AsyncWriteExt::write_all(&mut server, &junk).await.unwrap();
+            tokio::io::AsyncWriteExt::write_all(&mut server, &junk)
+                .await
+                .unwrap();
 
             let err = recv_frame(&mut client).await.unwrap_err();
             assert!(err.contains("bad magic"), "unexpected error: {err}");
@@ -330,7 +349,10 @@ mod tests {
         // Drives the real client handshake against a stub speaking the real
         // frame format, so the ClientHello encoding and ServerHello decoding
         // are both exercised end to end without touching the network.
-        let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
         rt.block_on(async {
             let (mut client, mut server) = tokio::io::duplex(4096);
 
@@ -354,7 +376,9 @@ mod tests {
                         donation_address: None,
                     })),
                 };
-                send_frame(&mut server, &hello.encode_to_vec()).await.unwrap();
+                send_frame(&mut server, &hello.encode_to_vec())
+                    .await
+                    .unwrap();
             });
 
             let status = handshake(&mut client, None).await.unwrap();
@@ -368,7 +392,10 @@ mod tests {
 
     #[test]
     fn surfaces_a_server_error_reply() {
-        let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
         rt.block_on(async {
             let (mut client, mut server) = tokio::io::duplex(4096);
 

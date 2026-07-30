@@ -151,7 +151,11 @@ export async function startFusionRound(
         mode === 'p2p'
           ? await options.runners.runP2p(coins, options.signal)
           : await options.runners.runServer(coins, options.signal);
-      if (options.signal?.aborted) return { status: 'cancelled' };
+      // A runner only resolves after its irreversible broadcast/finalization
+      // path is complete. An AbortSignal can race with that resolution, but it
+      // cannot undo a transaction that may already be on the network. Trust the
+      // structured runner result here so the wallet always records a successful
+      // Fusion instead of misreporting it as cancelled.
       return {
         status: 'fused',
         mode,

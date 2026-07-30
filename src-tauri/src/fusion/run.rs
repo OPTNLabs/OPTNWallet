@@ -15,8 +15,9 @@
 // (connection warmup, submit windows) will likely need tuning against a real
 // server. Every wire-level piece it CALLS is already tested (1.1–1.6).
 
-use std::collections::HashSet;
-use std::time::{Duration, Instant};
+use std::collections::{HashMap, HashSet};
+use std::future::Future;
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use k256::elliptic_curve::PrimeField;
 use k256::Scalar;
@@ -24,8 +25,13 @@ use prost::Message;
 use tokio::io::AsyncRead;
 
 use super::components::{build_round_commit, FusionInput, FusionOutput};
-use super::covert::{build_covert_signature, CovertConnection};
+use super::covert::{build_covert_signature, CovertSchedule};
+use super::round_cancel::CancelFlag;
 use super::schnorr;
+use super::server_plan::{
+    validate_and_index_plans, validate_hello_match, validate_server_hello, ExpectedHello,
+    FusionTierPlan,
+};
 use super::session::{build_covert_component, calc_initial_hash, calc_round_hash};
 use super::tx::FusionTx;
 use super::{connect_stream, pb, recv_frame, send_frame, Transport, VERSION};
@@ -33,10 +39,16 @@ use super::{connect_stream, pb, recv_frame, send_frame, Transport, VERSION};
 // Timing relative to covert_T0 (StartRound receipt), from protocol.py.
 const T_START_COMPS: Duration = Duration::from_secs(5);
 const T_START_SIGS: Duration = Duration::from_secs(20);
+const T_END_COMPS: Duration = Duration::from_secs(15);
+const T_END_SIGS: Duration = Duration::from_secs(30);
+const T_EXPECTING_CONCLUSION: Duration = Duration::from_secs(35);
+const COVERT_CONNECT_WINDOW: Duration = Duration::from_secs(15);
+const COVERT_CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
+const COVERT_SUBMIT_WINDOW: Duration = Duration::from_secs(5);
+const COVERT_SUBMIT_TIMEOUT: Duration = Duration::from_secs(3);
+const COVERT_CONNECT_SPARES: usize = 6;
 /// How long to wait in the pool for a tier to reach its start threshold.
 const JOIN_WAIT: Duration = Duration::from_secs(120);
-/// Bound on waiting for StartRound after FusionBegin.
-const START_ROUND_WAIT: Duration = Duration::from_secs(30);
 
 /// One input the wallet contributes, with the key needed to sign it.
 pub struct FusionInputKey {
@@ -51,11 +63,10 @@ pub struct FusionRunParams<'a> {
     pub host: &'a str,
     pub port: u16,
     pub use_ssl: bool,
-    pub tier: u64,
+    pub tier_plans: Vec<FusionTierPlan>,
     pub inputs: Vec<FusionInputKey>,
-    /// Fresh output scriptpubkeys (HD/RPA) and their values (tier-sized minus fees).
+    /// Persisted fresh P2PKH scripts sized for the largest feasible tier plan.
     pub output_scripts: Vec<Vec<u8>>,
-    pub output_values: Vec<u64>,
     /// Transport for BOTH the main and covert connections. Must be Tor for a
     /// remote server (covert unlinkability depends on it).
     pub transport: Transport<'a>,
@@ -63,17 +74,43 @@ pub struct FusionRunParams<'a> {
     /// Defaults (via `FusionTiming::default`) match protocol.py (+5s / +20s);
     /// the integration test shrinks them so it doesn't wait 20 real seconds.
     pub timing: FusionTiming,
+    pub cancel: CancelFlag,
+    /// Required snapshot from the renderer's read-only status probe.
+    pub expected_hello: ExpectedHello,
 }
 
 /// Covert submission timing relative to covert_T0 (StartRound receipt).
 #[derive(Clone, Copy)]
 pub struct FusionTiming {
+    pub warmup_expected: Duration,
+    pub warmup_slop: Duration,
+    pub connect_window: Duration,
+    pub connect_timeout: Duration,
+    pub submit_window: Duration,
+    pub submit_timeout: Duration,
+    pub connect_spares: usize,
     pub comps_at: Duration,
+    pub comps_deadline: Duration,
     pub sigs_at: Duration,
+    pub sigs_deadline: Duration,
+    pub conclusion_at: Duration,
 }
 impl Default for FusionTiming {
     fn default() -> Self {
-        Self { comps_at: T_START_COMPS, sigs_at: T_START_SIGS }
+        Self {
+            warmup_expected: Duration::from_secs(30),
+            warmup_slop: Duration::from_secs(3),
+            connect_window: COVERT_CONNECT_WINDOW,
+            connect_timeout: COVERT_CONNECT_TIMEOUT,
+            submit_window: COVERT_SUBMIT_WINDOW,
+            submit_timeout: COVERT_SUBMIT_TIMEOUT,
+            connect_spares: COVERT_CONNECT_SPARES,
+            comps_at: T_START_COMPS,
+            comps_deadline: T_END_COMPS,
+            sigs_at: T_START_SIGS,
+            sigs_deadline: T_END_SIGS,
+            conclusion_at: T_EXPECTING_CONCLUSION,
+        }
     }
 }
 
@@ -108,6 +145,69 @@ where
         .ok_or_else(|| "empty server message".into())
 }
 
+async fn cancellable<T, F>(cancel: &CancelFlag, future: F) -> Result<T, String>
+where
+    F: Future<Output = Result<T, String>>,
+{
+    tokio::select! {
+        biased;
+        _ = cancel.cancelled() => Err("fusion round cancelled".into()),
+        result = future => result,
+    }
+}
+
+async fn recv_server_before<S>(
+    stream: &mut S,
+    cancel: &CancelFlag,
+    deadline: Instant,
+    label: &str,
+) -> Result<pb::server_message::Msg, String>
+where
+    S: AsyncRead + Unpin,
+{
+    let remaining = deadline.saturating_duration_since(Instant::now());
+    if remaining.is_zero() {
+        return Err(format!("timed out waiting for {label}"));
+    }
+    tokio::select! {
+        biased;
+        _ = cancel.cancelled() => Err("fusion round cancelled".into()),
+        result = tokio::time::timeout(remaining, recv_server(stream)) => {
+            result
+                .map_err(|_| format!("timed out waiting for {label}"))?
+        }
+    }
+}
+
+fn validate_server_time(server_time: u64) -> Result<(), String> {
+    let local = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_err(|_| "local system clock is before the Unix epoch")?
+        .as_secs();
+    if local.abs_diff(server_time) > 5 {
+        Err("CashFusion server clock differs by more than 5 seconds".into())
+    } else {
+        Ok(())
+    }
+}
+
+fn validate_warmup(
+    fusion_begin_at: Instant,
+    start_round_at: Instant,
+    timing: FusionTiming,
+) -> Result<(), String> {
+    let elapsed = start_round_at.saturating_duration_since(fusion_begin_at);
+    let minimum = timing.warmup_expected.saturating_sub(timing.warmup_slop);
+    let maximum = timing.warmup_expected.saturating_add(timing.warmup_slop);
+    if elapsed < minimum || elapsed > maximum {
+        Err(format!(
+            "CashFusion warmup timing is outside the privacy window ({elapsed:?})"
+        ))
+    } else {
+        Ok(())
+    }
+}
+
 fn display_txid_to_wire(txid: &str) -> Result<[u8; 32], String> {
     if txid.len() != 64 {
         return Err("prev_txid must be 32 bytes".into());
@@ -127,10 +227,12 @@ fn input_matches_component(
     input: &FusionInputKey,
     component: &pb::InputComponent,
 ) -> Result<bool, String> {
-    Ok(component.prev_txid == display_txid_to_wire(&input.prev_txid)?
-        && component.prev_index == input.prev_index
-        && component.pubkey == input.pubkey
-        && component.amount == input.value)
+    Ok(
+        component.prev_txid == display_txid_to_wire(&input.prev_txid)?
+            && component.prev_index == input.prev_index
+            && component.pubkey == input.pubkey
+            && component.amount == input.value,
+    )
 }
 
 /// Refuse to sign until the transaction assembled from the server's shared
@@ -205,9 +307,7 @@ fn verify_shared_transaction(
     for (script, value) in output_scripts.iter().zip(output_values) {
         let mut matched = None;
         for (index, shared) in shared_outputs.iter().enumerate() {
-            if !matched_outputs[index]
-                && shared.scriptpubkey == *script
-                && shared.amount == *value
+            if !matched_outputs[index] && shared.scriptpubkey == *script && shared.amount == *value
             {
                 matched = Some(index);
                 break;
@@ -220,6 +320,34 @@ fn verify_shared_transaction(
     }
 
     Ok(())
+}
+
+/// Return shared-index -> private slot for every item this wallet committed.
+/// Duplicate or missing material is rejected before any transaction signature
+/// is produced.
+fn map_owned_items(
+    owned: &[Vec<u8>],
+    shared: &[Vec<u8>],
+    label: &str,
+) -> Result<HashMap<usize, usize>, String> {
+    if shared.iter().collect::<HashSet<_>>().len() != shared.len() {
+        return Err(format!("shared {label} list contains duplicates"));
+    }
+
+    let mut used_shared = HashSet::new();
+    let mut mapping = HashMap::with_capacity(owned.len());
+    for (slot, item) in owned.iter().enumerate() {
+        let shared_index = shared
+            .iter()
+            .enumerate()
+            .find_map(|(index, candidate)| {
+                (!used_shared.contains(&index) && candidate == item).then_some(index)
+            })
+            .ok_or_else(|| format!("server omitted one of this wallet's {label}"))?;
+        used_shared.insert(shared_index);
+        mapping.insert(shared_index, slot);
+    }
+    Ok(mapping)
 }
 
 /// A FusionResult is only usable if every server-relayed signature verifies
@@ -252,16 +380,25 @@ fn verify_transaction_signatures(tx: &FusionTx, signatures: &[Vec<u8>]) -> Resul
 /// the server also broadcasts it. On a round restart/failure the outcome's `ok`
 /// is false with a message.
 pub async fn run_fusion(params: FusionRunParams<'_>) -> Result<FusionOutcome, String> {
-    let FusionRunParams { host, port, use_ssl, tier, inputs, output_scripts, output_values, transport, timing } = params;
+    let FusionRunParams {
+        host,
+        port,
+        use_ssl,
+        tier_plans,
+        inputs,
+        output_scripts: all_output_scripts,
+        transport,
+        timing,
+        cancel,
+        expected_hello,
+    } = params;
     if inputs.is_empty() {
         return Err("no inputs to fuse".into());
     }
-    if output_scripts.len() != output_values.len() {
-        return Err("output script/value length mismatch".into());
-    }
+    cancel.check()?;
 
     // --- Main connection: hello -> join ---
-    let mut main = connect_stream(host, port, use_ssl, transport).await?;
+    let mut main = cancellable(&cancel, connect_stream(host, port, use_ssl, transport)).await?;
 
     let hello = pb::ClientMessage {
         msg: Some(pb::client_message::Msg::Clienthello(pb::ClientHello {
@@ -269,23 +406,49 @@ pub async fn run_fusion(params: FusionRunParams<'_>) -> Result<FusionOutcome, St
             genesis_hash: None,
         })),
     };
-    send_frame(&mut main, &hello.encode_to_vec()).await?;
+    cancellable(&cancel, send_frame(&mut main, &hello.encode_to_vec())).await?;
 
-    let (num_components, feerate) = match recv_server(&mut main).await? {
-        pb::server_message::Msg::Serverhello(h) => (h.num_components as usize, h.component_feerate),
+    let live_hello = match cancellable(&cancel, recv_server(&mut main)).await? {
+        pb::server_message::Msg::Serverhello(h) => {
+            validate_server_hello(&h)?;
+            validate_hello_match(&h, &expected_hello)?;
+            h
+        }
         pb::server_message::Msg::Error(e) => {
-            return Err(format!("server rejected hello: {}", e.message.unwrap_or_default()))
+            return Err(format!(
+                "server rejected hello: {}",
+                e.message.unwrap_or_default()
+            ))
         }
         _ => return Err("expected ServerHello".into()),
     };
+    let input_pubkeys = inputs
+        .iter()
+        .map(|input| input.pubkey.clone())
+        .collect::<Vec<_>>();
+    let input_values = inputs.iter().map(|input| input.value).collect::<Vec<_>>();
+    let indexed_plans = validate_and_index_plans(
+        &live_hello,
+        &input_pubkeys,
+        &input_values,
+        &all_output_scripts,
+        &tier_plans,
+    )?;
+    let num_components = usize::try_from(live_hello.num_components)
+        .map_err(|_| "server component count does not fit this platform")?;
+    let feerate = live_hello.component_feerate;
+    let registered_tiers = indexed_plans.keys().copied().collect::<Vec<_>>();
 
     let join = pb::ClientMessage {
-        msg: Some(pb::client_message::Msg::Joinpools(pb::JoinPools { tiers: vec![tier], tags: vec![] })),
+        msg: Some(pb::client_message::Msg::Joinpools(pb::JoinPools {
+            tiers: registered_tiers,
+            tags: vec![],
+        })),
     };
-    send_frame(&mut main, &join.encode_to_vec()).await?;
+    cancellable(&cancel, send_frame(&mut main, &join.encode_to_vec())).await?;
 
-    // --- Wait for the tier to start (FusionBegin) ---
-    let begin = {
+    // --- Wait for one of the registered tiers to start (FusionBegin) ---
+    let (begin, fusion_begin_at) = {
         let deadline = Instant::now() + JOIN_WAIT;
         loop {
             let remaining = deadline.saturating_duration_since(Instant::now());
@@ -298,13 +461,23 @@ pub async fn run_fusion(params: FusionRunParams<'_>) -> Result<FusionOutcome, St
                     message: "no other players joined this tier in time".into(),
                 });
             }
-            match tokio::time::timeout(remaining, recv_server(&mut main)).await {
+            let message = tokio::select! {
+                biased;
+                _ = cancel.cancelled() => return Err("fusion round cancelled".into()),
+                result = tokio::time::timeout(remaining, recv_server(&mut main)) => result,
+            };
+            match message {
                 Err(_) => continue,
                 Ok(msg) => match msg? {
                     pb::server_message::Msg::Tierstatusupdate(_) => continue,
-                    pb::server_message::Msg::Fusionbegin(b) => break b,
+                    pb::server_message::Msg::Fusionbegin(b) => {
+                        break (b, Instant::now());
+                    }
                     pb::server_message::Msg::Error(e) => {
-                        return Err(format!("server error while queued: {}", e.message.unwrap_or_default()))
+                        return Err(format!(
+                            "server error while queued: {}",
+                            e.message.unwrap_or_default()
+                        ))
                     }
                     _ => continue,
                 },
@@ -312,26 +485,76 @@ pub async fn run_fusion(params: FusionRunParams<'_>) -> Result<FusionOutcome, St
         }
     };
 
-    let covert_domain = String::from_utf8_lossy(&begin.covert_domain).into_owned();
-    let covert_port = begin.covert_port as u16;
+    validate_server_time(begin.server_time)?;
+    let selected_plan = indexed_plans
+        .get(&begin.tier)
+        .cloned()
+        .ok_or_else(|| "server began a tier the wallet did not register".to_string())?;
+    let output_scripts = all_output_scripts[..selected_plan.output_values.len()].to_vec();
+    let output_values = selected_plan.output_values.clone();
+    let covert_domain = String::from_utf8(begin.covert_domain.clone())
+        .map_err(|_| "server returned a non-ASCII covert domain")?;
+    if !covert_domain.is_ascii() || covert_domain.is_empty() {
+        return Err("server returned an invalid covert domain".into());
+    }
+    let covert_port =
+        u16::try_from(begin.covert_port).map_err(|_| "server returned an invalid covert port")?;
+    if covert_port == 0 {
+        return Err("server returned an invalid covert port".into());
+    }
     let covert_ssl = begin.covert_ssl.unwrap_or(false);
-    let initial_hash =
-        calc_initial_hash(begin.tier, &begin.covert_domain, begin.covert_port, covert_ssl, begin.server_time);
+    let initial_hash = calc_initial_hash(
+        begin.tier,
+        &begin.covert_domain,
+        begin.covert_port,
+        covert_ssl,
+        begin.server_time,
+    );
+    let covert_schedule = CovertSchedule::start(
+        &covert_domain,
+        covert_port,
+        covert_ssl,
+        transport,
+        num_components,
+        timing.connect_spares,
+        fusion_begin_at,
+        timing.connect_window,
+        timing.submit_window,
+        timing.connect_timeout,
+        &cancel,
+    );
 
     // --- StartRound ---
-    let start = match tokio::time::timeout(START_ROUND_WAIT, recv_server(&mut main)).await {
+    let start_deadline =
+        fusion_begin_at + timing.warmup_expected + timing.warmup_slop + Duration::from_secs(1);
+    let start = match tokio::select! {
+        biased;
+        _ = cancel.cancelled() => return Err("fusion round cancelled".into()),
+        result = tokio::time::timeout(
+            start_deadline.saturating_duration_since(Instant::now()),
+            recv_server(&mut main),
+        ) => result,
+    } {
         Ok(m) => match m? {
             pb::server_message::Msg::Startround(s) => s,
             pb::server_message::Msg::Error(e) => {
-                return Err(format!("server error at start: {}", e.message.unwrap_or_default()))
+                return Err(format!(
+                    "server error at start: {}",
+                    e.message.unwrap_or_default()
+                ))
             }
             _ => return Err("expected StartRound".into()),
         },
         Err(_) => return Err("timed out waiting for StartRound".into()),
     };
     let covert_t0 = Instant::now();
+    validate_server_time(start.server_time)?;
+    validate_warmup(fusion_begin_at, covert_t0, timing)?;
     let round_pubkey = start.round_pubkey.clone();
     let round_time = start.server_time;
+
+    // Final cancellation point before committing keys and amounts.
+    cancel.check()?;
 
     // --- Build + send PlayerCommit ---
     let fusion_inputs: Vec<FusionInput> = inputs
@@ -346,8 +569,22 @@ pub async fn run_fusion(params: FusionRunParams<'_>) -> Result<FusionOutcome, St
     let fusion_outputs: Vec<FusionOutput> = output_scripts
         .iter()
         .zip(&output_values)
-        .map(|(s, v)| FusionOutput { scriptpubkey: s.clone(), value: *v })
+        .map(|(s, v)| FusionOutput {
+            scriptpubkey: s.clone(),
+            value: *v,
+        })
         .collect();
+
+    let rechecked_plans = validate_and_index_plans(
+        &live_hello,
+        &input_pubkeys,
+        &input_values,
+        &all_output_scripts,
+        &tier_plans,
+    )?;
+    if rechecked_plans.get(&begin.tier) != Some(&selected_plan) {
+        return Err("selected tier plan changed before PlayerCommit".into());
+    }
 
     let rc = build_round_commit(
         &fusion_inputs,
@@ -357,17 +594,33 @@ pub async fn run_fusion(params: FusionRunParams<'_>) -> Result<FusionOutcome, St
         &round_pubkey,
         &start.blind_nonce_points,
     )?;
+    if rc.excess_fee != selected_plan.excess_fee {
+        return Err("selected tier excess fee changed before PlayerCommit".into());
+    }
 
     let commit = pb::ClientMessage {
-        msg: Some(pb::client_message::Msg::Playercommit(rc.player_commit.clone())),
+        msg: Some(pb::client_message::Msg::Playercommit(
+            rc.player_commit.clone(),
+        )),
     };
-    send_frame(&mut main, &commit.encode_to_vec()).await?;
+    cancellable(&cancel, send_frame(&mut main, &commit.encode_to_vec())).await?;
 
     // --- BlindSigResponses -> finalize each into a component signature ---
-    let scalars = match recv_server(&mut main).await? {
+    let components_start = covert_t0 + timing.comps_at;
+    let scalars = match recv_server_before(
+        &mut main,
+        &cancel,
+        components_start,
+        "BlindSigResponses",
+    )
+    .await?
+    {
         pb::server_message::Msg::Blindsigresponses(r) => r.scalars,
         pb::server_message::Msg::Error(e) => {
-            return Err(format!("server error at blind sigs: {}", e.message.unwrap_or_default()))
+            return Err(format!(
+                "server error at blind sigs: {}",
+                e.message.unwrap_or_default()
+            ))
         }
         _ => return Err("expected BlindSigResponses".into()),
     };
@@ -376,71 +629,138 @@ pub async fn run_fusion(params: FusionRunParams<'_>) -> Result<FusionOutcome, St
     }
     let mut blind_sigs: Vec<[u8; 64]> = Vec::with_capacity(scalars.len());
     for (req, s) in rc.requests.iter().zip(&scalars) {
-        let sb: [u8; 32] = s.as_slice().try_into().map_err(|_| "blind sig scalar not 32 bytes")?;
+        let sb: [u8; 32] = s
+            .as_slice()
+            .try_into()
+            .map_err(|_| "blind sig scalar not 32 bytes")?;
         blind_sigs.push(req.finalize(&sb, true)?);
     }
 
-    // --- Covert component submission ---
-    // Open one covert connection per component (own Tor circuit), then submit.
-    let mut conns = Vec::with_capacity(rc.components_sorted.len());
-    for _ in 0..rc.components_sorted.len() {
-        conns.push(CovertConnection::open(&covert_domain, covert_port, covert_ssl, transport).await?);
-    }
-    sleep_until(covert_t0 + timing.comps_at).await;
-    let mut submit_tasks = Vec::new();
-    for ((conn, comp), sig) in conns.into_iter().zip(&rc.components_sorted).zip(&blind_sigs) {
-        let msg = build_covert_component(&round_pubkey, sig, comp);
-        submit_tasks.push(tokio::spawn(async move {
-            let mut conn = conn;
-            conn.submit(&msg).await
-        }));
-    }
-    for t in submit_tasks {
-        t.await.map_err(|e| format!("covert submit task: {e}"))??;
+    // Last low-impact cancellation point before component disclosure.
+    cancel.check()?;
+    let mut covert_pool = covert_schedule.finish(components_start, &cancel).await?;
+    if covert_pool.slot_count() != rc.components_sorted.len() {
+        return Err("covert slot count does not match the committed components".into());
     }
 
-    // --- AllCommitments then ShareCovertComponents ---
-    let all_commitments = match recv_server(&mut main).await? {
-        pb::server_message::Msg::Allcommitments(a) => a.initial_commitments,
-        pb::server_message::Msg::Error(e) => {
-            return Err(format!("server error at all-commitments: {}", e.message.unwrap_or_default()))
-        }
-        _ => return Err("expected AllCommitments".into()),
+    // --- Covert component submission ---
+    let component_messages = rc
+        .components_sorted
+        .iter()
+        .zip(&blind_sigs)
+        .map(|(component, signature)| {
+            Some(build_covert_component(&round_pubkey, signature, component))
+        })
+        .collect::<Vec<_>>();
+
+    // Download the shared material while the randomized covert submissions run.
+    let submit_components = covert_pool.submit_phase(
+        components_start,
+        covert_t0 + timing.comps_deadline,
+        timing.submit_timeout,
+        component_messages,
+        &cancel,
+    );
+    let receive_shared = async {
+        let shared_deadline = covert_t0 + timing.sigs_at;
+        let all_commitments = match recv_server_before(
+            &mut main,
+            &cancel,
+            shared_deadline,
+            "AllCommitments",
+        )
+        .await?
+        {
+            pb::server_message::Msg::Allcommitments(message) => message.initial_commitments,
+            pb::server_message::Msg::Error(error) => {
+                return Err(format!(
+                    "server error at all-commitments: {}",
+                    error.message.unwrap_or_default()
+                ))
+            }
+            _ => return Err("expected AllCommitments".into()),
+        };
+        let shared =
+            match recv_server_before(&mut main, &cancel, shared_deadline, "ShareCovertComponents")
+                .await?
+            {
+                pb::server_message::Msg::Sharecovertcomponents(message) => message,
+                pb::server_message::Msg::Error(error) => {
+                    return Err(format!(
+                        "server error at share-components: {}",
+                        error.message.unwrap_or_default()
+                    ))
+                }
+                _ => return Err("expected ShareCovertComponents".into()),
+            };
+        Ok::<_, String>((
+            all_commitments,
+            shared.components,
+            shared.session_hash,
+            shared.skip_signatures.unwrap_or(false),
+        ))
     };
-    let (all_components, declared_hash, skip_signatures) = match recv_server(&mut main).await? {
-        pb::server_message::Msg::Sharecovertcomponents(s) => {
-            (s.components, s.session_hash, s.skip_signatures.unwrap_or(false))
-        }
-        pb::server_message::Msg::Error(e) => {
-            return Err(format!("server error at share-components: {}", e.message.unwrap_or_default()))
-        }
-        _ => return Err("expected ShareCovertComponents".into()),
-    };
+    let ((), (all_commitments, all_components, declared_hash, skip_signatures)) =
+        tokio::try_join!(submit_components, receive_shared)?;
+
+    map_owned_items(
+        &rc.player_commit.initial_commitments,
+        &all_commitments,
+        "commitments",
+    )?;
 
     // --- Verify the session hash (anti-spy) ---
-    let session_hash = calc_round_hash(&initial_hash, &round_pubkey, round_time, &all_commitments, &all_components);
-    if let Some(declared) = declared_hash {
-        if declared != session_hash {
-            return Err("session hash mismatch — server told players different things".into());
-        }
+    let session_hash = calc_round_hash(
+        &initial_hash,
+        &round_pubkey,
+        round_time,
+        &all_commitments,
+        &all_components,
+    );
+    let declared =
+        declared_hash.ok_or_else(|| "server omitted the CashFusion session hash".to_string())?;
+    if declared.as_slice() != session_hash.as_slice() {
+        return Err("session hash mismatch — server told players different things".into());
     }
 
     if skip_signatures {
-        return Ok(FusionOutcome { ok: false, broadcast_verified: false, txid: None, tx_hex: None, message: "server skipped signatures (a component was rejected); round will restart".into() });
+        return Ok(FusionOutcome {
+            ok: false,
+            broadcast_verified: false,
+            txid: None,
+            tx_hex: None,
+            message: "server skipped signatures (a component was rejected); round will restart"
+                .into(),
+        });
+    }
+
+    cancel.check()?;
+    let signing_plans = validate_and_index_plans(
+        &live_hello,
+        &input_pubkeys,
+        &input_values,
+        &all_output_scripts,
+        &tier_plans,
+    )?;
+    if signing_plans.get(&begin.tier) != Some(&selected_plan) {
+        return Err("selected tier plan changed before signing".into());
     }
 
     // --- Verify the shared transaction, then sign ONLY our exact inputs ---
     verify_shared_transaction(&all_components, &inputs, &output_scripts, &output_values)?;
+    let own_component_slots =
+        map_owned_items(&rc.components_sorted, &all_components, "components")?;
     let ftx = FusionTx::from_components(&all_components, &session_hash)?;
-    // For each tx input, if its component's pubkey is one of ours, sign it.
-    let mut submit_sig_tasks = Vec::new();
-    for i in 0..ftx.num_inputs() {
-        let cidx = ftx.input_component_index(i).ok_or("missing component index")?;
-        let comp = &all_components[cidx];
-        // Is this our input? Match the component's pubkey to one of our inputs.
-        let comp_msg = pb::Component::decode(comp.as_slice()).map_err(|e| format!("component decode: {e}"))?;
-        let shared_input = match comp_msg.component {
-            Some(pb::component::Component::Input(inp)) => inp,
+    let mut signature_messages = vec![None; covert_pool.slot_count()];
+    let mut signed_inputs = 0usize;
+    for input_index in 0..ftx.num_inputs() {
+        let component_index = ftx
+            .input_component_index(input_index)
+            .ok_or("missing component index")?;
+        let component = pb::Component::decode(all_components[component_index].as_slice())
+            .map_err(|error| format!("component decode: {error}"))?;
+        let shared_input = match component.component {
+            Some(pb::component::Component::Input(input)) => input,
             _ => continue,
         };
         let mut own_input = None;
@@ -450,38 +770,84 @@ pub async fn run_fusion(params: FusionRunParams<'_>) -> Result<FusionOutcome, St
                 break;
             }
         }
-        let Some(inkey) = own_input else { continue };
+        let Some(input_key) = own_input else {
+            continue;
+        };
 
-        let sighash = ftx.sighash(i)?;
-        let sk = scalar_from_privkey(&inkey.privkey)?;
-        let sig = schnorr::sign(sk, &sighash);
-        let covert_msg = build_covert_signature(&round_pubkey, i as u32, &sig);
-        let conn = CovertConnection::open(&covert_domain, covert_port, covert_ssl, transport).await?;
-        submit_sig_tasks.push(tokio::spawn(async move {
-            let mut conn = conn;
-            conn.submit(&covert_msg).await
-        }));
+        let sighash = ftx.sighash(input_index)?;
+        let secret = scalar_from_privkey(&input_key.privkey)?;
+        let signature = schnorr::sign(secret, &sighash);
+        let slot = *own_component_slots
+            .get(&component_index)
+            .ok_or("wallet input is missing its covert component slot")?;
+        if signature_messages[slot].is_some() {
+            return Err("multiple transaction signatures mapped to one covert slot".into());
+        }
+        signature_messages[slot] = Some(build_covert_signature(
+            &round_pubkey,
+            input_index as u32,
+            &signature,
+        ));
+        signed_inputs += 1;
+    }
+    if signed_inputs != inputs.len() {
+        return Err("not every wallet input received a transaction signature".into());
     }
 
-    sleep_until(covert_t0 + timing.sigs_at).await;
-    for t in submit_sig_tasks {
-        t.await.map_err(|e| format!("covert sig task: {e}"))??;
+    let signatures_start = covert_t0 + timing.sigs_at;
+    if Instant::now() > signatures_start {
+        return Err("shared transaction verification missed the signature window".into());
     }
+    cancel.check()?;
+
+    // Point of no return: once a valid signature can reach the server, the
+    // transaction may be broadcast. Resolve the outcome even if the UI asks to
+    // cancel later, so wallet completion tracking cannot be skipped.
+    let irreversible = CancelFlag::new();
+    let submit_signatures = covert_pool.submit_phase(
+        signatures_start,
+        covert_t0 + timing.sigs_deadline,
+        timing.submit_timeout,
+        signature_messages,
+        &irreversible,
+    );
+    let receive_result = recv_server_before(
+        &mut main,
+        &irreversible,
+        covert_t0 + timing.conclusion_at,
+        "FusionResult",
+    );
+    let ((), result_message) = tokio::try_join!(submit_signatures, receive_result)?;
 
     // --- FusionResult ---
-    let result = match recv_server(&mut main).await? {
+    let result = match result_message {
         pb::server_message::Msg::Fusionresult(r) => r,
         pb::server_message::Msg::Restartround(_) => {
-            return Ok(FusionOutcome { ok: false, broadcast_verified: false, txid: None, tx_hex: None, message: "round restarted (a player misbehaved)".into() })
+            return Ok(FusionOutcome {
+                ok: false,
+                broadcast_verified: false,
+                txid: None,
+                tx_hex: None,
+                message: "round restarted (a player misbehaved)".into(),
+            })
         }
         pb::server_message::Msg::Error(e) => {
-            return Err(format!("server error at result: {}", e.message.unwrap_or_default()))
+            return Err(format!(
+                "server error at result: {}",
+                e.message.unwrap_or_default()
+            ))
         }
         _ => return Err("expected FusionResult".into()),
     };
 
     if !result.ok {
-        return Ok(FusionOutcome { ok: false, broadcast_verified: false, txid: None, tx_hex: None, message: "fusion failed; blame phase would follow".into() });
+        return Ok(FusionOutcome {
+            ok: false,
+            broadcast_verified: false,
+            txid: None,
+            tx_hex: None,
+            message: "fusion failed; blame phase would follow".into(),
+        });
     }
 
     // Assemble the fully-signed tx from all players' signatures.
@@ -495,23 +861,17 @@ pub async fn run_fusion(params: FusionRunParams<'_>) -> Result<FusionOutcome, St
         broadcast_verified: false,
         txid: Some(txid),
         tx_hex: Some(tx_hex),
-        message: "fully signed transaction assembled; broadcast is not independently verified".into(),
+        message: "fully signed transaction assembled; broadcast is not independently verified"
+            .into(),
     })
-}
-
-async fn sleep_until(t: Instant) {
-    let now = Instant::now();
-    if t > now {
-        tokio::time::sleep(t - now).await;
-    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::fusion::pedersen::random_nonce;
     use crate::fusion::schnorr::{self, compressed, scalar_reduce};
     use crate::fusion::session::calc_round_hash as srv_round_hash;
-    use crate::fusion::pedersen::random_nonce;
     use k256::ProjectivePoint;
     use prost::Message;
     use tokio::net::TcpListener;
@@ -537,12 +897,7 @@ mod tests {
         }
     }
 
-    fn input_component(
-        prev_txid: u8,
-        prev_index: u32,
-        pubkey: Vec<u8>,
-        value: u64,
-    ) -> Vec<u8> {
+    fn input_component(prev_txid: u8, prev_index: u32, pubkey: Vec<u8>, value: u64) -> Vec<u8> {
         pb::Component {
             salt_commitment: vec![0u8; 32],
             component: Some(pb::component::Component::Input(pb::InputComponent {
@@ -576,13 +931,8 @@ mod tests {
             output_component(vec![0x76, 0xa9, 0x14, 0x08, 0x88, 0xac], 90_000),
         ];
 
-        let error = verify_shared_transaction(
-            &shared,
-            &[own_input],
-            &[own_output],
-            &[90_000],
-        )
-        .unwrap_err();
+        let error =
+            verify_shared_transaction(&shared, &[own_input], &[own_output], &[90_000]).unwrap_err();
 
         assert!(error.contains("omits one of this wallet's outputs"));
     }
@@ -597,13 +947,8 @@ mod tests {
             output_component(own_output.clone(), 90_000),
         ];
 
-        let error = verify_shared_transaction(
-            &shared,
-            &[own_input],
-            &[own_output],
-            &[90_000],
-        )
-        .unwrap_err();
+        let error =
+            verify_shared_transaction(&shared, &[own_input], &[own_output], &[90_000]).unwrap_err();
 
         assert!(error.contains("omits one of this wallet's inputs"));
     }
@@ -624,13 +969,9 @@ mod tests {
             output_component(own_output.clone(), 90_000),
         ];
 
-        let inflated_error = verify_shared_transaction(
-            &inflated,
-            &[own_input],
-            &[own_output.clone()],
-            &[90_000],
-        )
-        .unwrap_err();
+        let inflated_error =
+            verify_shared_transaction(&inflated, &[own_input], &[own_output.clone()], &[90_000])
+                .unwrap_err();
         let duplicate_error = verify_shared_transaction(
             &duplicate,
             &[test_input_key(0xaa, 3, vec![0x02; 33], 100_000)],
@@ -675,32 +1016,56 @@ mod tests {
         let x = random_nonce(); // round private key
         let round_pubkey = compressed(&(ProjectivePoint::GENERATOR * x)).to_vec();
         let ks: Vec<_> = (0..num_components).map(|_| random_nonce()).collect();
-        let blind_nonce_points: Vec<Vec<u8>> =
-            ks.iter().map(|k| compressed(&(ProjectivePoint::GENERATOR * *k)).to_vec()).collect();
-        let server_time = 1_700_000_000u64;
+        let blind_nonce_points: Vec<Vec<u8>> = ks
+            .iter()
+            .map(|k| compressed(&(ProjectivePoint::GENERATOR * *k)).to_vec())
+            .collect();
+        let server_time = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
 
         // Covert collector: accept connections, read one CovertMessage each, ack OK,
         // and forward to the main task.
         let (tx, mut rx) = mpsc::channel::<Covert>(64);
         let covert_task = tokio::spawn(async move {
             loop {
-                let Ok((mut sock, _)) = covert_listener.accept().await else { break };
-                let raw = match recv_frame(&mut sock).await {
-                    Ok(r) => r,
-                    Err(_) => continue,
+                let Ok((mut sock, _)) = covert_listener.accept().await else {
+                    break;
                 };
-                let ok = pb::CovertResponse { msg: Some(pb::covert_response::Msg::Ok(pb::Ok {})) };
-                let _ = send_frame(&mut sock, &ok.encode_to_vec()).await;
-                let m = pb::CovertMessage::decode(raw.as_slice()).unwrap();
-                match m.msg {
-                    Some(pb::covert_message::Msg::Component(c)) => {
-                        if tx.send(Covert::Component(c.component)).await.is_err() { break }
+                let tx = tx.clone();
+                tokio::spawn(async move {
+                    loop {
+                        let raw = match recv_frame(&mut sock).await {
+                            Ok(raw) => raw,
+                            Err(_) => break,
+                        };
+                        let message = match pb::CovertMessage::decode(raw.as_slice()) {
+                            Ok(message) => message,
+                            Err(_) => break,
+                        };
+                        let observed = match message.msg {
+                            Some(pb::covert_message::Msg::Component(component)) => {
+                                Some(Covert::Component(component.component))
+                            }
+                            Some(pb::covert_message::Msg::Signature(signature)) => Some(
+                                Covert::Signature(signature.which_input, signature.txsignature),
+                            ),
+                            Some(pb::covert_message::Msg::Ping(_)) => None,
+                            None => break,
+                        };
+                        if let Some(observed) = observed {
+                            let ok = pb::CovertResponse {
+                                msg: Some(pb::covert_response::Msg::Ok(pb::Ok {})),
+                            };
+                            if send_frame(&mut sock, &ok.encode_to_vec()).await.is_err()
+                                || tx.send(observed).await.is_err()
+                            {
+                                break;
+                            }
+                        }
                     }
-                    Some(pb::covert_message::Msg::Signature(s)) => {
-                        if tx.send(Covert::Signature(s.which_input, s.txsignature)).await.is_err() { break }
-                    }
-                    _ => {}
-                }
+                });
             }
         });
 
@@ -714,14 +1079,19 @@ mod tests {
                 num_components: num_components as u32,
                 component_feerate: feerate,
                 min_excess_fee: 0,
-                max_excess_fee: 1_000_000,
+                max_excess_fee: 10_000,
                 donation_address: None,
             })),
         };
         send_frame(&mut main, &hello.encode_to_vec()).await?;
 
         // JoinPools -> FusionBegin
-        let _ = recv_frame(&mut main).await?;
+        let join = pb::ClientMessage::decode(recv_frame(&mut main).await?.as_slice())
+            .map_err(|error| format!("decode JoinPools: {error}"))?;
+        match join.msg {
+            Some(pb::client_message::Msg::Joinpools(join)) if join.tiers == vec![tier] => {}
+            _ => return Err("expected all feasible tiers in JoinPools".into()),
+        }
         let begin = pb::ServerMessage {
             msg: Some(pb::server_message::Msg::Fusionbegin(pb::FusionBegin {
                 tier,
@@ -758,15 +1128,19 @@ mod tests {
             scalars.push(s.to_bytes().to_vec());
         }
         let bsr = pb::ServerMessage {
-            msg: Some(pb::server_message::Msg::Blindsigresponses(pb::BlindSigResponses { scalars })),
+            msg: Some(pb::server_message::Msg::Blindsigresponses(
+                pb::BlindSigResponses { scalars },
+            )),
         };
         send_frame(&mut main, &bsr.encode_to_vec()).await?;
 
         // AllCommitments
         let ac = pb::ServerMessage {
-            msg: Some(pb::server_message::Msg::Allcommitments(pb::AllCommitments {
-                initial_commitments: all_commitments.clone(),
-            })),
+            msg: Some(pb::server_message::Msg::Allcommitments(
+                pb::AllCommitments {
+                    initial_commitments: all_commitments.clone(),
+                },
+            )),
         };
         send_frame(&mut main, &ac.encode_to_vec()).await?;
 
@@ -781,14 +1155,23 @@ mod tests {
         }
 
         // ShareCovertComponents with the session hash the client will recompute.
-        let initial_hash = calc_initial_hash(tier, b"127.0.0.1", covert_port as u32, false, server_time);
-        let session_hash = srv_round_hash(&initial_hash, &round_pubkey, server_time, &all_commitments, &all_components);
+        let initial_hash =
+            calc_initial_hash(tier, b"127.0.0.1", covert_port as u32, false, server_time);
+        let session_hash = srv_round_hash(
+            &initial_hash,
+            &round_pubkey,
+            server_time,
+            &all_commitments,
+            &all_components,
+        );
         let scc = pb::ServerMessage {
-            msg: Some(pb::server_message::Msg::Sharecovertcomponents(pb::ShareCovertComponents {
-                components: all_components.clone(),
-                skip_signatures: Some(false),
-                session_hash: Some(session_hash.to_vec()),
-            })),
+            msg: Some(pb::server_message::Msg::Sharecovertcomponents(
+                pb::ShareCovertComponents {
+                    components: all_components.clone(),
+                    skip_signatures: Some(false),
+                    session_hash: Some(session_hash.to_vec()),
+                },
+            )),
         };
         send_frame(&mut main, &scc.encode_to_vec()).await?;
 
@@ -826,18 +1209,28 @@ mod tests {
         // above, over non-SSL TCP. Passing means every stage lines up — hello,
         // join, blind-sig finalize, covert submit, session-hash match, tx build +
         // sign, and result assembly.
-        let rt = tokio::runtime::Builder::new_multi_thread().enable_all().build().unwrap();
+        let rt = tokio::runtime::Builder::new_multi_thread()
+            .enable_all()
+            .build()
+            .unwrap();
         rt.block_on(async {
             let main_l = TcpListener::bind("127.0.0.1:0").await.unwrap();
             let covert_l = TcpListener::bind("127.0.0.1:0").await.unwrap();
             let main_port = main_l.local_addr().unwrap().port();
             let covert_port = covert_l.local_addr().unwrap().port();
 
-            let num_components = 3usize; // 1 input + 1 output + 1 blank
+            let num_components = 17usize; // 1 input + 10 outputs + 6 blanks
             let feerate = 1000u64;
             let tier = 90_000u64;
 
-            let server = tokio::spawn(mock_server(main_l, covert_l, num_components, feerate, tier, covert_port));
+            let server = tokio::spawn(mock_server(
+                main_l,
+                covert_l,
+                num_components,
+                feerate,
+                tier,
+                covert_port,
+            ));
 
             // A real input key so the P2PKH scriptCode + signature are consistent.
             let priv_k = random_nonce();
@@ -845,36 +1238,64 @@ mod tests {
             let mut privkey = [0u8; 32];
             privkey.copy_from_slice(&priv_k.to_bytes());
 
-            // 1 output: a P2PKH script (tier-sized).
-            let out_script = {
-                let mut s = vec![0x76, 0xa9, 0x14];
-                s.extend_from_slice(&[7u8; 20]);
-                s.extend_from_slice(&[0x88, 0xac]);
-                s
-            };
+            let output_scripts = (0..10)
+                .map(|seed| {
+                    let mut script = vec![0x76, 0xa9, 0x14];
+                    script.extend_from_slice(&[seed; 20]);
+                    script.extend_from_slice(&[0x88, 0xac]);
+                    script
+                })
+                .collect::<Vec<_>>();
+            // 200,000 in - 141 input fee - 340 output fees - 10 excess.
+            let output_values = vec![
+                19_951, 19_951, 19_951, 19_951, 19_951, 19_951, 19_951, 19_951, 19_951, 19_950,
+            ];
 
             let params = FusionRunParams {
                 host: "127.0.0.1",
                 port: main_port,
                 use_ssl: false, // <-- plain TCP path
-                tier,
+                tier_plans: vec![FusionTierPlan {
+                    tier,
+                    output_values,
+                    excess_fee: 10,
+                }],
                 inputs: vec![FusionInputKey {
                     prev_txid: "cd".repeat(32),
                     prev_index: 0,
                     pubkey,
-                    value: 100_000,
+                    value: 200_000,
                     privkey,
                 }],
-                output_scripts: vec![out_script],
-                output_values: vec![90_000],
+                output_scripts,
                 transport: Transport::Direct,
                 timing: FusionTiming {
-                    comps_at: Duration::from_millis(50),
-                    sigs_at: Duration::from_millis(150),
+                    warmup_expected: Duration::ZERO,
+                    warmup_slop: Duration::from_millis(250),
+                    connect_window: Duration::ZERO,
+                    connect_timeout: Duration::from_secs(2),
+                    submit_window: Duration::from_millis(20),
+                    submit_timeout: Duration::from_millis(500),
+                    connect_spares: 2,
+                    comps_at: Duration::from_millis(200),
+                    comps_deadline: Duration::from_millis(700),
+                    sigs_at: Duration::from_millis(900),
+                    sigs_deadline: Duration::from_millis(1_400),
+                    conclusion_at: Duration::from_secs(2),
+                },
+                cancel: CancelFlag::new(),
+                expected_hello: ExpectedHello {
+                    tiers: vec![tier],
+                    num_components: num_components as u32,
+                    component_feerate: feerate,
+                    min_excess_fee: 0,
+                    max_excess_fee: 10_000,
                 },
             };
 
-            let outcome = run_fusion(params).await.expect("run_fusion should not error");
+            let outcome = run_fusion(params)
+                .await
+                .expect("run_fusion should not error");
             server.await.unwrap().expect("mock server ok");
 
             assert!(outcome.ok, "fusion should succeed: {}", outcome.message);
