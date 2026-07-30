@@ -439,9 +439,11 @@ export function joinPool(
         numInputs: options.numInputs,
         withdraw: true,
       });
-      await publishEventAtLeastOnce(pool, relays, evt, options.signal).catch(
-        () => undefined
-      );
+      // Cleanup must outlive the round signal. Wallet/network/mode changes abort
+      // that signal before `finally` runs; reusing it here would reject before
+      // `pool.publish` and leave this replaceable announcement discoverable as a
+      // ghost until its TTL expires.
+      await publishEventAtLeastOnce(pool, relays, evt).catch(() => undefined);
     },
   };
 }

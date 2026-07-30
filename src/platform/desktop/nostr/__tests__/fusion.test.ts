@@ -4,6 +4,7 @@ import {
   buildPoolAnnouncement,
   electCoordinator,
   isCoordinator,
+  joinPool,
   poolTag,
   poolEpoch,
   parsePoolAnnouncement,
@@ -42,7 +43,7 @@ describe('P2P fusion coordination', () => {
     if (lower.length) expect(isCoordinator(me, lower)).toBe(false);
   });
 
-  it('pool announcement is a fresh, network-scoped kind-22230 event', () => {
+  it('pool announcement is a fresh, network-scoped kind-12230 event', () => {
     const round = generateRoundIdentity();
     const now = 1_800_000_005;
     const epoch = poolEpoch(now);
@@ -126,5 +127,39 @@ describe('P2P fusion coordination', () => {
       tier: 100_000,
       participants: ['01', '02'],
     });
+  });
+
+  it('publishes an expired withdrawal even after the round signal is aborted', async () => {
+    const published: Array<{ content: string }> = [];
+    const pool = {
+      subscribeMany: () => ({ close: () => undefined }),
+      publish: (_relays: string[], event: { content: string }) => {
+        published.push(event);
+        return [Promise.resolve('accepted')];
+      },
+    };
+    const controller = new AbortController();
+    const round = generateRoundIdentity();
+    const joined = joinPool(
+      pool as never,
+      ['wss://relay.example'],
+      {
+        round,
+        network: 'chipnet',
+        epoch: 1,
+        tiers: [10_000],
+        numInputs: 1,
+        signal: controller.signal,
+        onPeer: () => undefined,
+      }
+    );
+
+    controller.abort();
+    await joined.withdraw();
+
+    expect(published).toHaveLength(1);
+    expect(JSON.parse(published[0].content).expiresAt).toBeLessThan(
+      Math.floor(Date.now() / 1_000)
+    );
   });
 });
