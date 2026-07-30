@@ -10,11 +10,7 @@ import { useWebSocketImplementation as setNostrWebSocketImpl } from 'nostr-tools
 import { invoke } from '@tauri-apps/api/core';
 
 import { hexToBin } from '../../utils/hex';
-import {
-  TorWebSocket,
-  armTorRouting,
-  disarmTorRouting,
-} from './nostr/torWebSocket';
+import { TorWebSocket, armTorRouting } from './nostr/torWebSocket';
 import ElectrumService, {
   invalidateUTXOCache,
 } from '../../services/ElectrumService';
@@ -29,7 +25,10 @@ import {
 import { Network } from '../../state/slices/networkSlice';
 import type { UTXO } from '../../types/types';
 import { reconcileActiveWalletUtxos } from '../../services/WalletUtxoRefreshService';
-import { completeFusionBroadcast } from './FusionCompletionService';
+import {
+  completeFusionBroadcast,
+  fusionCompletionWarning,
+} from './FusionCompletionService';
 import { createFreshFusionOutputScripts, gatherInputs } from './FusionService';
 import { isFusionExecutionAllowed } from './FusionExecutionSafety';
 import {
@@ -184,7 +183,11 @@ async function collectRolling(
  */
 const UTXO_RECHECK_TIMEOUT_MS = 15_000;
 
-async function onlyUnspent(utxos: UTXO[]): Promise<UTXO[]> {
+async function onlyUnspent(
+  utxos: UTXO[],
+  signal?: AbortSignal
+): Promise<UTXO[]> {
+  if (signal?.aborted) throw new Error('fusion round cancelled');
   const addresses = Array.from(
     new Set(utxos.map((utxo) => utxo.address).filter(Boolean))
   );
@@ -195,12 +198,25 @@ async function onlyUnspent(utxos: UTXO[]): Promise<UTXO[]> {
   // transaction with "Missing inputs"). Refusing to join costs only us, so an
   // unreachable Electrum must fail the round rather than fall back to the
   // wallet's cached list.
+  let timeout: ReturnType<typeof setTimeout> | null = null;
+  let abortListener: (() => void) | null = null;
   const live = await Promise.race([
     ElectrumService.getUTXOsMany(addresses),
-    new Promise<null>((resolve) =>
-      setTimeout(() => resolve(null), UTXO_RECHECK_TIMEOUT_MS)
-    ),
-  ]);
+    new Promise<null>((resolve) => {
+      timeout = setTimeout(() => resolve(null), UTXO_RECHECK_TIMEOUT_MS);
+    }),
+    new Promise<never>((_resolve, reject) => {
+      if (!signal) return;
+      abortListener = () => reject(new Error('fusion round cancelled'));
+      signal.addEventListener('abort', abortListener, { once: true });
+      if (signal.aborted) abortListener();
+    }),
+  ]).finally(() => {
+    if (timeout) clearTimeout(timeout);
+    if (abortListener) {
+      signal?.removeEventListener('abort', abortListener);
+    }
+  });
   if (!live) {
     throw new Error(
       'Could not confirm your coins are unspent (Electrum unreachable) — not risking the round.'
@@ -229,9 +245,12 @@ async function onlyUnspent(utxos: UTXO[]): Promise<UTXO[]> {
 
 export async function refreshAndVerifyP2pInputs(
   walletId: number,
-  fallbackUtxos: UTXO[]
+  fallbackUtxos: UTXO[],
+  signal?: AbortSignal
 ): Promise<UTXO[]> {
-  const refreshed = await reconcileActiveWalletUtxos(walletId);
+  if (signal?.aborted) throw new Error('fusion round cancelled');
+  const refreshed = await reconcileActiveWalletUtxos(walletId, signal);
+  if (signal?.aborted) throw new Error('fusion round cancelled');
   const candidates = refreshed
     ? Object.values(refreshed)
         .flat()
@@ -249,7 +268,7 @@ export async function refreshAndVerifyP2pInputs(
     );
   }
 
-  const spendable = await onlyUnspent(free);
+  const spendable = await onlyUnspent(free, signal);
   if (spendable.length === 0) {
     throw new Error(
       'No live unspent coins to fuse after refreshing the wallet.'
@@ -268,7 +287,7 @@ function assertBroadcastTxid(value: string): string {
 /** Run one P2P round on the active BCH network. */
 export async function runP2pFusion(
   opts: P2pFusionOptions
-): Promise<RoundResult> {
+): Promise<RoundResult & { warning?: string }> {
   if (!isFusionExecutionAllowed())
     throw new Error('P2P fusion execution is paused.');
   if (!opts.tor) {
@@ -282,6 +301,7 @@ export async function runP2pFusion(
     host: opts.tor.host,
     port: opts.tor.port,
   });
+  if (opts.signal?.aborted) throw new Error('fusion round cancelled');
   if (!torOk) throw new Error('Tor is not reachable — P2P fusion stopped.');
 
   const relays = validatedRelays(opts.relays);
@@ -289,11 +309,10 @@ export async function runP2pFusion(
     setNostrWebSocketImpl(TorWebSocket);
     wsInstalled = true;
   }
-  armTorRouting({ host: opts.tor.host, port: opts.tor.port });
-
   const pool = new SimplePool();
   // Output registrations get different relay sockets and Tor isolation streams.
   const outputPool = new SimplePool();
+  let releaseTorRouting: (() => void) | null = null;
   let stopPool: (() => void) | null = null;
   let round: RoundIdentity | null = null;
   let reservedForRound: string[] = [];
@@ -301,6 +320,10 @@ export async function runP2pFusion(
   const status = opts.onStatus;
 
   try {
+    releaseTorRouting = armTorRouting({
+      host: opts.tor.host,
+      port: opts.tor.port,
+    });
     status?.('Refreshing and verifying live wallet coins.');
     // Drop coins another round of this wallet is already spending. Without this,
     // two rounds (two windows, or a retry overlapping its predecessor) pick the
@@ -308,15 +331,30 @@ export async function runP2pFusion(
     // with "Missing inputs" only after every peer has signed.
     const spendable = await refreshAndVerifyP2pInputs(
       opts.walletId,
-      opts.utxos
+      opts.utxos,
+      opts.signal
     );
+    if (opts.signal?.aborted) throw new Error('fusion round cancelled');
     status?.('Tor verified; preparing fresh pool identity.');
     reservedForRound = spendable.map((utxo) =>
       outpointKey(utxo.tx_hash, utxo.tx_pos)
     );
     reserveOutpoints(opts.walletId, reservedForRound);
     const runInputs = await gatherInputs(opts.walletId, spendable);
+    if (opts.signal?.aborted) throw new Error('fusion round cancelled');
     const sumIn = runInputs.reduce((sum, input) => sum + input.value, 0);
+    // Refuse before announcing if this wallet cannot fund the allocator's
+    // minimum two outputs plus its measured fee. Recruiting peers into a round
+    // that is guaranteed to fail after rendezvous only creates ghost entries.
+    planP2pOutputValues({
+      inputs: runInputs.map((input) => ({
+        value: input.value,
+        pubkey: input.pubkey,
+      })),
+      participantCount: MIN_PARTICIPANTS,
+      feerate: P2P_FEERATE,
+      randomUnit: () => 0.5,
+    });
     const tiers = P2P_TIERS.filter((tier) => sumIn > tier + 1_000);
     if (tiers.length === 0)
       throw new Error('Inputs too small for any P2P fusion tier.');
@@ -346,6 +384,7 @@ export async function runP2pFusion(
       epoch,
       tiers,
       numInputs: runInputs.length,
+      signal: opts.signal,
       onPeer: (received) => {
         const merged = new Map(peers.map((peer) => [peer.pubkey, peer]));
         received.forEach((peer) => merged.set(peer.pubkey, peer));
@@ -377,7 +416,8 @@ export async function runP2pFusion(
       pool,
       relays,
       round,
-      outputPool
+      outputPool,
+      opts.signal
     );
     const negotiated = await negotiateFusionRound(
       {
@@ -427,6 +467,7 @@ export async function runP2pFusion(
         feerate: P2P_FEERATE,
         myContribution: { inputs: myInputs, outputs: myOutputs },
         keysByPubkey,
+        signal: opts.signal,
         broadcast: async (txHex) => {
           try {
             return assertBroadcastTxid(
@@ -436,7 +477,10 @@ export async function runP2pFusion(
             // A rejected CoinJoin does not identify which input became stale.
             // Re-check our own inputs so the user gets a useful, bounded verdict
             // without writing the raw transaction or wallet outpoints to logs.
-            const survivors = await onlyUnspent(spendable).catch(() => null);
+            const survivors = await onlyUnspent(
+              spendable,
+              opts.signal
+            ).catch(() => null);
             const verdict =
               survivors === null
                 ? 'could not re-check (Electrum unreachable)'
@@ -465,13 +509,13 @@ export async function runP2pFusion(
       // credit a peer's coin to us.
       ownedOutputScripts: outputScripts,
     });
-    status?.(`Fused ✓ — txid ${result.txid}`);
-    if (!completion.refreshed) {
-      status?.(
-        `Fused ✓ — txid ${result.txid}; wallet sync will retry automatically.`
-      );
-    }
-    return result;
+    const warning = fusionCompletionWarning(completion);
+    status?.(
+      warning
+        ? `Fused ✓ — txid ${result.txid}. ${warning}`
+        : `Fused ✓ — txid ${result.txid}`
+    );
+    return warning ? { ...result, warning } : result;
   } finally {
     // Free the coins whatever happened. A successful round has already spent
     // them (the live re-check keeps them out next time); a failed one must not
@@ -484,6 +528,6 @@ export async function runP2pFusion(
     pool.close(relays);
     outputPool.close(relays);
     round?.secretKey.fill(0);
-    disarmTorRouting();
+    releaseTorRouting?.();
   }
 }

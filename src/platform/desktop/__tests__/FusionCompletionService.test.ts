@@ -90,4 +90,42 @@ describe('completeFusionBroadcast', () => {
     expect(observeTransactionMock).toHaveBeenCalledOnce();
     expect(refreshActiveWalletUtxosMock).toHaveBeenCalledWith(5);
   });
+
+  it('reports tracker persistence failure without hiding the successful refresh', async () => {
+    recordBroadcastMock.mockRejectedValue(new Error('IndexedDB unavailable'));
+    const { completeFusionBroadcast, fusionCompletionWarning } = await import(
+      '../FusionCompletionService'
+    );
+
+    const completion = await completeFusionBroadcast({
+      walletId: 5,
+      txid: 'd'.repeat(64),
+      txHex: '00',
+      spentInputs: [],
+      source: 'p2p-fusion',
+      sourceLabel: 'P2P Fusion',
+    });
+
+    expect(completion).toEqual({
+      tracked: false,
+      refreshed: true,
+      depthRecorded: 0,
+    });
+    expect(fusionCompletionWarning(completion)).toBe(
+      'The balance refreshed, but the outbound tracking record could not be saved.'
+    );
+  });
+
+  it('distinguishes a fully healthy completion from a dual recovery failure', async () => {
+    const { fusionCompletionWarning } = await import(
+      '../FusionCompletionService'
+    );
+
+    expect(
+      fusionCompletionWarning({ tracked: true, refreshed: true })
+    ).toBeUndefined();
+    expect(fusionCompletionWarning({ tracked: false, refreshed: false })).toBe(
+      'Wallet tracking and the immediate balance refresh both failed. Sync the wallet before starting another send.'
+    );
+  });
 });

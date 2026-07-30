@@ -21,10 +21,8 @@
 
 import { SimplePool, generateSecretKey, type Event } from 'nostr-tools';
 import { wrapEvent, unwrapEvent } from 'nostr-tools/nip17';
-import {
-  parseRoundMessage,
-  type RoundTransport,
-} from './fusionSession';
+import { publishEventAtLeastOnce } from './fusion';
+import { parseRoundMessage, type RoundTransport } from './fusionSession';
 
 /** NIP-59 gift-wrap. Same kind as chat; disambiguated by the #p recipient. */
 export const GIFT_WRAP_KIND = 1059;
@@ -39,7 +37,8 @@ export function createNostrRoundTransport(
   pool: SimplePool,
   relays: string[],
   round: RoundKeys,
-  outputPool: SimplePool = pool
+  outputPool: SimplePool = pool,
+  signal?: AbortSignal
 ): RoundTransport {
   const protocolErrorHandlers = new Set<(from: string, error: Error) => void>();
   return {
@@ -54,36 +53,42 @@ export function createNostrRoundTransport(
           JSON.stringify(msg)
         );
         const publishingPool = isAnonymousOutput ? outputPool : pool;
-        const settled = await Promise.allSettled(
-          publishingPool.publish(relays, wrapped as Event)
+        await publishEventAtLeastOnce(
+          publishingPool,
+          relays,
+          wrapped as Event,
+          signal
         );
-        if (!settled.some((result) => result.status === 'fulfilled')) {
-          throw new Error('No Nostr relay accepted the Fusion message.');
-        }
       } finally {
         if (isAnonymousOutput) signer.fill(0);
       }
     },
 
     onMessage: (handler) => {
-      const sub = pool.subscribeMany(relays, { kinds: [GIFT_WRAP_KIND], '#p': [round.pubkey] }, {
-        onevent(evt: Event) {
-          try {
-            const rumor = unwrapEvent(evt, round.secretKey);
-            const msg = parseRoundMessage(rumor.content);
-            if (!msg) {
-              const error = new Error('Invalid or oversized Fusion round message.');
-              protocolErrorHandlers.forEach((notify) =>
-                notify(rumor.pubkey, error)
-              );
-              return;
+      const sub = pool.subscribeMany(
+        relays,
+        { kinds: [GIFT_WRAP_KIND], '#p': [round.pubkey] },
+        {
+          onevent(evt: Event) {
+            try {
+              const rumor = unwrapEvent(evt, round.secretKey);
+              const msg = parseRoundMessage(rumor.content);
+              if (!msg) {
+                const error = new Error(
+                  'Invalid or oversized Fusion round message.'
+                );
+                protocolErrorHandlers.forEach((notify) =>
+                  notify(rumor.pubkey, error)
+                );
+                return;
+              }
+              handler(rumor.pubkey, msg);
+            } catch {
+              /* not addressed to us, or undecryptable — ignore */
             }
-            handler(rumor.pubkey, msg);
-          } catch {
-            /* not addressed to us, or undecryptable — ignore */
-          }
-        },
-      });
+          },
+        }
+      );
       return () => sub.close();
     },
 
