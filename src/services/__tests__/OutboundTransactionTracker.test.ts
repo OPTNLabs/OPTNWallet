@@ -1,26 +1,57 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const records = new Map<string, unknown>();
+const getItemMock = vi.fn(async (key: string) => records.get(key) ?? null);
+const setItemMock = vi.fn(async (key: string, value: unknown) => {
+  records.set(key, value);
+  return value;
+});
+const removeItemMock = vi.fn(async (key: string) => {
+  records.delete(key);
+});
+const iterateMock = vi.fn(
+  async (callback: (value: unknown, key: string) => void): Promise<void> => {
+    for (const [key, value] of records) callback(value, key);
+  }
+);
 
 vi.mock('localforage', () => ({
   default: {
     createInstance: vi.fn(() => ({
-      getItem: vi.fn(async (key: string) => records.get(key) ?? null),
-      setItem: vi.fn(async (key: string, value: unknown) => {
-        records.set(key, value);
-        return value;
-      }),
-      removeItem: vi.fn(async (key: string) => {
-        records.delete(key);
-      }),
-      iterate: vi.fn(),
+      getItem: getItemMock,
+      setItem: setItemMock,
+      removeItem: removeItemMock,
+      iterate: iterateMock,
     })),
   },
 }));
 
+class MemoryStorage {
+  private map = new Map<string, string>();
+  getItem(key: string) {
+    return this.map.get(key) ?? null;
+  }
+  setItem(key: string, value: string) {
+    this.map.set(key, value);
+  }
+  removeItem(key: string) {
+    this.map.delete(key);
+  }
+}
+
 describe('OutboundTransactionTracker Fusion completion', () => {
   beforeEach(() => {
     records.clear();
+    (globalThis as { localStorage?: unknown }).localStorage =
+      new MemoryStorage();
+    getItemMock.mockClear();
+    setItemMock.mockClear();
+    setItemMock.mockImplementation(async (key: string, value: unknown) => {
+      records.set(key, value);
+      return value;
+    });
+    removeItemMock.mockClear();
+    iterateMock.mockClear();
   });
 
   it('atomically records a verified broadcast as broadcasted with its spent inputs', async () => {
@@ -120,5 +151,49 @@ describe('OutboundTransactionTracker Fusion completion', () => {
         spentOutpoints: [{ tx_hash: 'b'.repeat(64), tx_pos: 1 }],
       })
     );
+  });
+
+  it('durably reserves spent inputs when IndexedDB is temporarily unavailable', async () => {
+    setItemMock.mockRejectedValue(new Error('IndexedDB unavailable'));
+    const { default: OutboundTransactionTracker } = await import(
+      '../OutboundTransactionTracker'
+    );
+    const txid =
+      '9a538906e6466ebd2617d321f71bc94e56056ce213d366773699e28158e00614';
+
+    const result = await OutboundTransactionTracker.recordBroadcast({
+      rawTx: '00',
+      expectedTxid: txid,
+      walletId: 5,
+      source: 'p2p-fusion',
+      spentInputs: [
+        {
+          tx_hash: 'c'.repeat(64),
+          tx_pos: 2,
+          address: 'bchtest:qfallback',
+          value: 80_000,
+          height: 1,
+        },
+      ],
+    });
+
+    expect(result.state).toBe('broadcasted');
+    await expect(
+      OutboundTransactionTracker.getByTxid(txid, 5)
+    ).resolves.toEqual(result);
+    await expect(
+      OutboundTransactionTracker.listReservedOutpoints(5)
+    ).resolves.toEqual([{ tx_hash: 'c'.repeat(64), tx_pos: 2 }]);
+
+    // Recovery is self-healing: the next successful store access migrates the
+    // shadow record back into IndexedDB and keeps the same reservation.
+    setItemMock.mockImplementation(async (key: string, value: unknown) => {
+      records.set(key, value);
+      return value;
+    });
+    await expect(
+      OutboundTransactionTracker.listReservedOutpoints(5)
+    ).resolves.toEqual([{ tx_hash: 'c'.repeat(64), tx_pos: 2 }]);
+    expect(records.size).toBeGreaterThan(0);
   });
 });

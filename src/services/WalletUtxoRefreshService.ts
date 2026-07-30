@@ -1,14 +1,39 @@
 import { store } from '../state/store';
 import { replaceAllUTXOs } from '../state/slices/utxoSlice';
 import type { UTXO } from '../types/types';
-import {
-  invalidateUTXOCache,
-  primeUTXOCache,
-} from './ElectrumService';
+import { invalidateUTXOCache, primeUTXOCache } from './ElectrumService';
 import KeyService from './KeyService';
 import QuantumrootTrackingService from './QuantumrootTrackingService';
 import { runWalletUtxoRefresh } from './RefreshCoordinator';
 import UTXOService from './UTXOService';
+
+type WalletUtxoRefreshListener = (walletId: number) => void;
+const refreshListeners = new Set<WalletUtxoRefreshListener>();
+
+/**
+ * Notify app-wide consumers after a fresh wallet snapshot is committed.
+ *
+ * Auto-fusion uses this as its send/receive wake-up signal. The durable
+ * cooldown and wallet lease remain authoritative, so a burst of Electrum
+ * notifications cannot start duplicate paid rounds.
+ */
+export function subscribeWalletUtxoRefresh(
+  listener: WalletUtxoRefreshListener
+): () => void {
+  refreshListeners.add(listener);
+  return () => refreshListeners.delete(listener);
+}
+
+function emitWalletUtxoRefresh(walletId: number): void {
+  for (const listener of refreshListeners) {
+    try {
+      listener(walletId);
+    } catch {
+      // A UI wake-up listener must never turn a successful wallet sync into a
+      // failed sync for every other consumer.
+    }
+  }
+}
 
 export interface WalletSession {
   walletId: number;
@@ -40,17 +65,18 @@ export function isActiveWalletSession(session: WalletSession): boolean {
  * by that wallet. A stale caller gets `null` and must not update Redux.
  */
 export async function fetchActiveWalletUtxos(
-  session: WalletSession
+  session: WalletSession,
+  signal?: AbortSignal
 ): Promise<Record<string, UTXO[]> | null> {
-  if (!isActiveWalletSession(session)) return null;
+  if (signal?.aborted || !isActiveWalletSession(session)) return null;
   const { walletId } = session;
 
   const keyPairs = await KeyService.retrieveKeys(walletId);
-  if (!isActiveWalletSession(session)) return null;
+  if (signal?.aborted || !isActiveWalletSession(session)) return null;
 
   const quantumrootAddresses =
     await QuantumrootTrackingService.listTrackedAddresses(walletId);
-  if (!isActiveWalletSession(session)) return null;
+  if (signal?.aborted || !isActiveWalletSession(session)) return null;
 
   const addresses = Array.from(
     new Set(
@@ -65,7 +91,7 @@ export async function fetchActiveWalletUtxos(
   // publish the exact stale snapshot that triggered the refresh.
   for (const address of addresses) invalidateUTXOCache(address);
   const fetched = await UTXOService.fetchAndStoreUTXOsMany(walletId, addresses);
-  if (!isActiveWalletSession(session)) return null;
+  if (signal?.aborted || !isActiveWalletSession(session)) return null;
 
   const snapshot: Record<string, UTXO[]> = {};
   const snapshotAddresses = Array.from(
@@ -80,18 +106,42 @@ export async function fetchActiveWalletUtxos(
 }
 
 export async function reconcileActiveWalletUtxos(
-  walletId: number
+  walletId: number,
+  signal?: AbortSignal
 ): Promise<Record<string, UTXO[]> | null> {
+  if (signal?.aborted) return null;
   const session = captureActiveWalletSession(walletId);
   if (!session) return null;
 
   let executedThisRequest = false;
   let snapshot: Record<string, UTXO[]> | null | undefined;
   try {
-    snapshot = await runWalletUtxoRefresh(walletId, async () => {
+    const coordinated = runWalletUtxoRefresh(walletId, async () => {
       executedThisRequest = true;
-      return fetchActiveWalletUtxos(session);
+      return fetchActiveWalletUtxos(session, signal);
     });
+    snapshot = signal
+      ? await new Promise<Record<string, UTXO[]> | null>((resolve, reject) => {
+          let finished = false;
+          const finish = (
+            value: Record<string, UTXO[]> | null,
+            error?: unknown
+          ) => {
+            if (finished) return;
+            finished = true;
+            signal.removeEventListener('abort', onAbort);
+            if (error === undefined) resolve(value);
+            else reject(error);
+          };
+          const onAbort = () => finish(null);
+          signal.addEventListener('abort', onAbort, { once: true });
+          coordinated.then(
+            (value) => finish(value),
+            (error) => finish(null, error)
+          );
+          if (signal.aborted) onAbort();
+        })
+      : await coordinated;
   } catch (error) {
     // A rejection from a task we did not start belongs to an older trigger.
     // Preserve this newer trigger as a trailing retry; errors from our own
@@ -103,9 +153,11 @@ export async function reconcileActiveWalletUtxos(
   // result began before this trigger and cannot prove the new event is
   // reflected. Returning null asks callers to preserve one trailing refresh.
   if (!executedThisRequest) return null;
-  if (!snapshot || !isActiveWalletSession(session)) return null;
+  if (signal?.aborted || !snapshot || !isActiveWalletSession(session))
+    return null;
 
   store.dispatch(replaceAllUTXOs({ utxosByAddress: snapshot }));
+  emitWalletUtxoRefresh(walletId);
   return snapshot;
 }
 

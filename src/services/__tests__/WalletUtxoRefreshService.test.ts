@@ -115,9 +115,7 @@ describe('fetchActiveWalletUtxos', () => {
       '../WalletUtxoRefreshService'
     );
 
-    const result = await fetchActiveWalletUtxos(
-      captureActiveWalletSession(6)!
-    );
+    const result = await fetchActiveWalletUtxos(captureActiveWalletSession(6)!);
 
     expect(result).toHaveProperty('bchtest:qrecovered');
     expect(primeUTXOCacheMock).toHaveBeenCalledWith(
@@ -151,10 +149,38 @@ describe('fetchActiveWalletUtxos', () => {
     expect(primeUTXOCacheMock).not.toHaveBeenCalled();
   });
 
-  it('publishes a completed refresh to the active wallet state', async () => {
-    const { refreshActiveWalletUtxos } = await import(
+  it('returns promptly and never commits when an in-flight refresh is cancelled', async () => {
+    const fetchGate = deferred<Record<string, never[]>>();
+    fetchAndStoreUTXOsManyMock.mockReturnValue(fetchGate.promise);
+    const { reconcileActiveWalletUtxos } = await import(
       '../WalletUtxoRefreshService'
     );
+    const controller = new AbortController();
+
+    const refreshPromise = reconcileActiveWalletUtxos(6, controller.signal);
+    for (
+      let i = 0;
+      i < 20 && fetchAndStoreUTXOsManyMock.mock.calls.length === 0;
+      i += 1
+    ) {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    }
+    controller.abort();
+
+    await expect(refreshPromise).resolves.toBeNull();
+    expect(dispatchMock).not.toHaveBeenCalled();
+
+    fetchGate.resolve({ 'bchtest:qwallet6': [] });
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(dispatchMock).not.toHaveBeenCalled();
+  });
+
+  it('publishes a completed refresh to the active wallet state', async () => {
+    const { refreshActiveWalletUtxos, subscribeWalletUtxoRefresh } =
+      await import('../WalletUtxoRefreshService');
+    const listener = vi.fn();
+    const unsubscribe = subscribeWalletUtxoRefresh(listener);
 
     await expect(refreshActiveWalletUtxos(6)).resolves.toBe(true);
 
@@ -167,6 +193,11 @@ describe('fetchActiveWalletUtxos', () => {
         },
       },
     });
+    expect(listener).toHaveBeenCalledWith(6);
+
+    unsubscribe();
+    await refreshActiveWalletUtxos(6);
+    expect(listener).toHaveBeenCalledOnce();
   });
 
   it('rejects a joined older refresh so the caller can schedule a trailing fetch', async () => {

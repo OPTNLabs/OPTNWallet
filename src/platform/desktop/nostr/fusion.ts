@@ -298,29 +298,44 @@ const PUBLISH_TIMEOUT_MS = 30_000;
 export async function publishEventAtLeastOnce(
   pool: SimplePool,
   relays: string[],
-  event: Event
+  event: Event,
+  signal?: AbortSignal
 ): Promise<void> {
   if (relays.length === 0) throw new Error('No Nostr relays configured.');
+  if (signal?.aborted) throw new Error('fusion round cancelled');
   // Bound every relay attempt. `pool.publish` resolves per relay only when that
   // relay answers OK, so a relay that opens the socket and then goes quiet leaves
   // its promise pending forever — and Promise.allSettled waits for ALL of them,
   // so one silent relay hangs the whole announce with no error and no way out.
   // A timed-out attempt counts as a failure, not a success: if EVERY relay times
   // out the announcement never landed and the round must fail loudly.
-  const attempts = pool
-    .publish(relays, event)
-    .map((attempt) =>
-      Promise.race([
-        attempt,
-        new Promise<never>((_, reject) =>
-          setTimeout(
-            () => reject(new Error('relay did not acknowledge in time')),
-            PUBLISH_TIMEOUT_MS
-          )
-        ),
-      ])
-    );
+  const attempts = pool.publish(relays, event).map(
+    (attempt) =>
+      new Promise<void>((resolve, reject) => {
+        let finished = false;
+        const finish = (error?: unknown) => {
+          if (finished) return;
+          finished = true;
+          clearTimeout(timer);
+          signal?.removeEventListener('abort', onAbort);
+          if (error === undefined) resolve();
+          else reject(error);
+        };
+        const onAbort = () => finish(new Error('fusion round cancelled'));
+        const timer = setTimeout(
+          () => finish(new Error('relay did not acknowledge in time')),
+          PUBLISH_TIMEOUT_MS
+        );
+        signal?.addEventListener('abort', onAbort, { once: true });
+        attempt.then(
+          () => finish(),
+          (error) => finish(error)
+        );
+        if (signal?.aborted) onAbort();
+      })
+  );
   const settled = await Promise.allSettled(attempts);
+  if (signal?.aborted) throw new Error('fusion round cancelled');
   if (!settled.some((result) => result.status === 'fulfilled')) {
     const reason = settled.find((result) => result.status === 'rejected');
     throw new Error(
@@ -339,6 +354,7 @@ export interface JoinPoolOptions {
   epoch: number;
   tiers: number[];
   numInputs: number;
+  signal?: AbortSignal;
   onPeer: (peers: PoolAnnouncement[]) => void;
   onError?: (error: Error) => void;
 }
@@ -382,7 +398,7 @@ export function joinPool(
       tiers: options.tiers,
       numInputs: options.numInputs,
     });
-    await publishEventAtLeastOnce(pool, relays, evt);
+    await publishEventAtLeastOnce(pool, relays, evt, options.signal);
   };
 
   announceTimer = setTimeout(
@@ -423,7 +439,9 @@ export function joinPool(
         numInputs: options.numInputs,
         withdraw: true,
       });
-      await publishEventAtLeastOnce(pool, relays, evt).catch(() => undefined);
+      await publishEventAtLeastOnce(pool, relays, evt, options.signal).catch(
+        () => undefined
+      );
     },
   };
 }

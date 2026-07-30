@@ -26,6 +26,27 @@ export interface CompletedFusionBroadcast {
   ownedOutputScripts?: readonly string[];
 }
 
+export interface FusionCompletionState {
+  tracked: boolean;
+  refreshed: boolean;
+}
+
+/** Truthful post-broadcast status shared by both Fusion transports. */
+export function fusionCompletionWarning(
+  completion: FusionCompletionState
+): string | undefined {
+  if (!completion.tracked && !completion.refreshed) {
+    return 'Wallet tracking and the immediate balance refresh both failed. Sync the wallet before starting another send.';
+  }
+  if (!completion.tracked) {
+    return 'The balance refreshed, but the outbound tracking record could not be saved.';
+  }
+  if (!completion.refreshed) {
+    return 'The transaction is safely tracked; the live balance refresh will retry automatically.';
+  }
+  return undefined;
+}
+
 export async function completeFusionBroadcast(
   completed: CompletedFusionBroadcast
 ): Promise<{ tracked: boolean; refreshed: boolean; depthRecorded: number }> {

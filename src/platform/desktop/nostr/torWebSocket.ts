@@ -23,16 +23,28 @@ const TOR_OPEN_TIMEOUT_MS = 45_000;
 function withTimeout<T>(
   promise: Promise<T>,
   ms: number,
-  message: string
+  message: string,
+  onLateResolve?: (value: T) => void
 ): Promise<T> {
   return new Promise<T>((resolve, reject) => {
-    const timer = setTimeout(() => reject(new Error(message)), ms);
+    let finished = false;
+    const timer = setTimeout(() => {
+      finished = true;
+      reject(new Error(message));
+    }, ms);
     promise.then(
       (value) => {
+        if (finished) {
+          onLateResolve?.(value);
+          return;
+        }
+        finished = true;
         clearTimeout(timer);
         resolve(value);
       },
       (error: unknown) => {
+        if (finished) return;
+        finished = true;
         clearTimeout(timer);
         reject(error instanceof Error ? error : new Error(String(error)));
       }
@@ -41,13 +53,35 @@ function withTimeout<T>(
 }
 
 let armedSocks: { host: string; port: number } | null = null;
+let armedHolders = 0;
 
-/** Route Nostr relay traffic through this Tor SOCKS proxy until disarmed. */
-export function armTorRouting(socks: { host: string; port: number }): void {
+/**
+ * Route Nostr relay traffic through this Tor SOCKS proxy until this holder
+ * releases its token.
+ *
+ * A reference-counted token prevents one overlapping round from clearing the
+ * route while another still owns it. Different proxy settings cannot share one
+ * WebView-global WebSocket implementation, so that conflict fails closed.
+ */
+export function armTorRouting(socks: {
+  host: string;
+  port: number;
+}): () => void {
+  if (
+    armedSocks &&
+    (armedSocks.host !== socks.host || armedSocks.port !== socks.port)
+  ) {
+    throw new Error('A different Tor route is already active.');
+  }
   armedSocks = socks;
-}
-export function disarmTorRouting(): void {
-  armedSocks = null;
+  armedHolders += 1;
+  let released = false;
+  return () => {
+    if (released) return;
+    released = true;
+    armedHolders = Math.max(0, armedHolders - 1);
+    if (armedHolders === 0) armedSocks = null;
+  };
 }
 
 type Handler = ((ev: unknown) => void) | null;
@@ -67,6 +101,7 @@ export class TorWebSocket {
 
   private id: number | null = null;
   private unlisteners: UnlistenFn[] = [];
+  private closeRequested = false;
 
   constructor(url: string) {
     // Not in a fusion round → behave exactly like a normal WebSocket (chat, etc.).
@@ -96,24 +131,45 @@ export class TorWebSocket {
           socksPort: socks.port,
         }),
         TOR_OPEN_TIMEOUT_MS,
-        `Tor connection to ${url} timed out`
+        `Tor connection to ${url} timed out`,
+        (lateId) => {
+          void invoke('nostr_tor_close', { id: lateId });
+        }
       );
+      if (this.closeRequested) {
+        await invoke('nostr_tor_close', { id }).catch(() => undefined);
+        this.readyState = TorWebSocket.CLOSED;
+        return;
+      }
       this.id = id;
       // Subscribe before signalling open so no relay response is missed.
-      this.unlisteners.push(
-        await listen<string>(`nostr-tor://msg/${id}`, (e) =>
-          this.onmessage?.({ data: e.payload })
-        ),
-        await listen(`nostr-tor://closed/${id}`, () => {
-          this.readyState = TorWebSocket.CLOSED;
-          this.onclose?.({});
-          this.cleanup();
-        })
+      const messageUnlisten = await listen<string>(
+        `nostr-tor://msg/${id}`,
+        (e) => this.onmessage?.({ data: e.payload })
       );
+      const closedUnlisten = await listen(`nostr-tor://closed/${id}`, () => {
+        this.id = null;
+        this.readyState = TorWebSocket.CLOSED;
+        this.onclose?.({});
+        this.cleanup();
+      });
+      if (this.closeRequested) {
+        messageUnlisten();
+        closedUnlisten();
+        await invoke('nostr_tor_close', { id }).catch(() => undefined);
+        this.id = null;
+        this.readyState = TorWebSocket.CLOSED;
+        return;
+      }
+      this.unlisteners.push(messageUnlisten, closedUnlisten);
       this.readyState = TorWebSocket.OPEN;
       this.onopen?.({});
     } catch (err) {
       this.readyState = TorWebSocket.CLOSED;
+      if (this.closeRequested) {
+        this.cleanup();
+        return;
+      }
       this.onerror?.({
         message: err instanceof Error ? err.message : String(err),
       });
@@ -126,9 +182,16 @@ export class TorWebSocket {
   }
 
   close(): void {
+    if (this.closeRequested) return;
+    this.closeRequested = true;
     this.readyState = TorWebSocket.CLOSING;
-    if (this.id != null) void invoke('nostr_tor_close', { id: this.id });
+    if (this.id != null) {
+      const id = this.id;
+      this.id = null;
+      void invoke('nostr_tor_close', { id });
+    }
     this.cleanup();
+    this.readyState = TorWebSocket.CLOSED;
   }
 
   private cleanup(): void {

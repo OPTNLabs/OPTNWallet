@@ -25,11 +25,17 @@ import { AUTO_FUSION_COOLDOWN_MS, type FusionMode } from './fusionAutoEngine';
 
 /** Structured, so callers never parse a human string to learn what happened. */
 export type FusionRunOutcome =
-  | { status: 'fused'; mode: FusionMode; txid: string }
+  | {
+      status: 'fused';
+      mode: FusionMode;
+      txid: string;
+      warning?: string;
+    }
   | { status: 'busy' }
   /** Wallet state is mid-refresh; not an error, and not a reason to use stale coins. */
   | { status: 'waiting-for-wallet' }
   | { status: 'no-eligible-coins' }
+  | { status: 'cancelled' }
   /** Automatic only: the durable fee cooldown has not elapsed, or could not be
    *  claimed exclusively. Distinct from `busy` so callers can say which it was. */
   | { status: 'cooldown' }
@@ -47,8 +53,14 @@ export interface StartFusionRoundOptions {
   signal?: AbortSignal;
   /** Injected so this stays testable without the Tauri/Electrum stack. */
   runners: {
-    runP2p: (coins: UTXO[]) => Promise<{ txid: string }>;
-    runServer: (coins: UTXO[]) => Promise<{ txid: string }>;
+    runP2p: (
+      coins: UTXO[],
+      signal?: AbortSignal
+    ) => Promise<{ txid: string; warning?: string }>;
+    runServer: (
+      coins: UTXO[],
+      signal?: AbortSignal
+    ) => Promise<{ txid: string; warning?: string }>;
   };
 }
 
@@ -78,9 +90,10 @@ export function isFusionRunning(walletId: number): boolean {
 async function freshCoins(
   walletId: number,
   trigger: 'auto' | 'manual',
-  fuseDepth: number
+  fuseDepth: number,
+  signal?: AbortSignal
 ): Promise<UTXO[] | null> {
-  const snapshot = await reconcileActiveWalletUtxos(walletId);
+  const snapshot = await reconcileActiveWalletUtxos(walletId, signal);
   if (!snapshot) return null;
 
   const coins = Object.values(snapshot)
@@ -89,13 +102,16 @@ async function freshCoins(
 
   // Depth bounds automatic spending only. A user who clicks Fuse Now is making an
   // explicit choice and may re-fuse a coin that has already reached the limit.
-  return trigger === 'auto' ? coinsBelowDepth(walletId, coins, fuseDepth) : coins;
+  return trigger === 'auto'
+    ? coinsBelowDepth(walletId, coins, fuseDepth)
+    : coins;
 }
 
 export async function startFusionRound(
   options: StartFusionRoundOptions
 ): Promise<FusionRunOutcome> {
   const { walletId, mode, trigger } = options;
+  if (options.signal?.aborted) return { status: 'cancelled' };
   if (!Number.isInteger(walletId) || walletId <= 0) return { status: 'busy' };
 
   // Exclusivity first, across every window, covering both transports and both
@@ -106,9 +122,22 @@ export async function startFusionRound(
   heldLeases.set(walletId, lease);
 
   try {
-    // The cooldown is checked and claimed atomically BEFORE any network I/O.
-    // Reconciling first and claiming after leaves a window in which a second
-    // context passes the same check, and both then pay a fee. Fails closed.
+    if (options.signal?.aborted) return { status: 'cancelled' };
+
+    const coins = await freshCoins(
+      walletId,
+      trigger,
+      options.fuseDepth,
+      options.signal
+    );
+    if (options.signal?.aborted) return { status: 'cancelled' };
+    if (coins === null) return { status: 'waiting-for-wallet' };
+    if (coins.length === 0) return { status: 'no-eligible-coins' };
+
+    // Claim only when live eligible coins exist. The wallet-wide round lease is
+    // already held across reconciliation, so no second window can pass this
+    // point concurrently. Empty/refreshing wallets must not burn five minutes
+    // of cooldown before a newly received coin becomes spendable.
     if (trigger === 'auto') {
       const claimed = await tryClaimAutoCooldown(
         walletId,
@@ -117,17 +146,20 @@ export async function startFusionRound(
       if (!claimed) return { status: 'cooldown' };
     }
 
-    const coins = await freshCoins(walletId, trigger, options.fuseDepth);
-    if (coins === null) return { status: 'waiting-for-wallet' };
-    if (coins.length === 0) return { status: 'no-eligible-coins' };
-
     try {
       const result =
         mode === 'p2p'
-          ? await options.runners.runP2p(coins)
-          : await options.runners.runServer(coins);
-      return { status: 'fused', mode, txid: result.txid };
+          ? await options.runners.runP2p(coins, options.signal)
+          : await options.runners.runServer(coins, options.signal);
+      if (options.signal?.aborted) return { status: 'cancelled' };
+      return {
+        status: 'fused',
+        mode,
+        txid: result.txid,
+        ...(result.warning ? { warning: result.warning } : {}),
+      };
     } catch (error) {
+      if (options.signal?.aborted) return { status: 'cancelled' };
       return {
         status: 'failed',
         mode,
