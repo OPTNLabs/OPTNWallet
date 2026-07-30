@@ -17,7 +17,7 @@
     "typecheck:core": "tsc -p tsconfig.core.json --noEmit",
     "build": "npm run typecheck:core && vite build",
     "lint": "eslint . --ext ts,tsx --report-unused-disable-directives --max-warnings 0",
-    "lint:core": "eslint src --ext ts,tsx --ignore-pattern 'src/pages/apps/**' --report-unused-disable-directives --max-warnings 0",
+    "lint:core": "eslint src --ext ts,tsx --ignore-pattern \"src/pages/apps/**\" --report-unused-disable-directives --max-warnings 0",
     "ci:core": "npm run lint:core && npm run typecheck:core && npm run test:core && npm run build",
     "security:audit": "npm audit --omit=dev --audit-level=critical",
     "security:audit:all": "npm audit --audit-level=high",

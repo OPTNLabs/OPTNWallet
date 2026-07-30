@@ -64,7 +64,11 @@ function QuickActionButton({ title, icon, onClick }: QuickActionButtonProps) {
   );
 }
 
-const Home: React.FC = () => {
+type HomeProps = {
+  viewerOnly?: boolean;
+};
+
+const Home: React.FC<HomeProps> = ({ viewerOnly = false }) => {
   const navigate = useNavigate();
   const dispatch = useDispatch<AppDispatch>();
   const dbService = useMemo(() => DatabaseService(), []);
@@ -209,7 +213,15 @@ const Home: React.FC = () => {
       <div className="flex h-full min-h-0 flex-col gap-4">
         <PageHeader
           title="Home"
-          subtitle={currentNetwork === Network.CHIPNET ? 'Chipnet' : undefined}
+          subtitle={
+            viewerOnly
+              ? currentNetwork === Network.CHIPNET
+                ? 'Chipnet - Browser viewer'
+                : 'Browser viewer'
+              : currentNetwork === Network.CHIPNET
+                ? 'Chipnet'
+                : undefined
+          }
           compact
         />
 
@@ -278,21 +290,23 @@ const Home: React.FC = () => {
               compact
               className="items-center"
               action={
-                <button
-                  type="button"
-                  onClick={() => void handleScanQr()}
-                  disabled={scanBusy}
-                  className="wallet-card inline-flex h-10 items-center gap-2 rounded-xl border border-[var(--wallet-border)] bg-[color-mix(in_oklab,var(--wallet-accent-soft)_42%,transparent)] px-3 text-[var(--wallet-accent-strong)] transition hover:brightness-[1.03] disabled:cursor-not-allowed disabled:opacity-70 self-center"
-                  aria-label="Scan QR"
-                  title="Scan QR"
-                >
-                  <span className="text-sm font-semibold wallet-text-strong">
-                    Scan QR
-                  </span>
-                  <FaQrcode
-                    className={`text-base ${scanBusy ? 'animate-pulse' : ''}`}
-                  />
-                </button>
+                viewerOnly ? undefined : (
+                  <button
+                    type="button"
+                    onClick={() => void handleScanQr()}
+                    disabled={scanBusy}
+                    className="wallet-card inline-flex h-10 items-center gap-2 rounded-xl border border-[var(--wallet-border)] bg-[color-mix(in_oklab,var(--wallet-accent-soft)_42%,transparent)] px-3 text-[var(--wallet-accent-strong)] transition hover:brightness-[1.03] disabled:cursor-not-allowed disabled:opacity-70 self-center"
+                    aria-label="Scan QR"
+                    title="Scan QR"
+                  >
+                    <span className="text-sm font-semibold wallet-text-strong">
+                      Scan QR
+                    </span>
+                    <FaQrcode
+                      className={`text-base ${scanBusy ? 'animate-pulse' : ''}`}
+                    />
+                  </button>
+                )
               }
             />
             <div className="flex items-stretch gap-2.5">
@@ -305,15 +319,17 @@ const Home: React.FC = () => {
                   })
                 }
               />
-              <QuickActionButton
-                title="Send"
-                icon={<FaArrowUp />}
-                onClick={() =>
-                  navigate('/send', {
-                    state: { returnTo: `/home/${currentWalletId ?? ''}` },
-                  })
-                }
-              />
+              {!viewerOnly && (
+                <QuickActionButton
+                  title="Send"
+                  icon={<FaArrowUp />}
+                  onClick={() =>
+                    navigate('/send', {
+                      state: { returnTo: `/home/${currentWalletId ?? ''}` },
+                    })
+                  }
+                />
+              )}
             </div>
           </SectionCard>
 

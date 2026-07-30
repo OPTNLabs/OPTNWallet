@@ -31,15 +31,29 @@ import {
 type AssetTab = 'BCH' | 'Tokens' | 'NFTs';
 const isDev = import.meta.env.DEV;
 
-const Assets: React.FC = () => {
+type AssetsProps = {
+  viewerOnly?: boolean;
+};
+
+const Assets: React.FC<AssetsProps> = ({ viewerOnly = false }) => {
   const navigate = useNavigate();
   const [tab, setTab] = useState<AssetTab>('BCH');
-  const [selectedTokenCategory, setSelectedTokenCategory] = useState<string | null>(null);
-  const currentWalletId = useSelector((state: RootState) => state.wallet_id.currentWalletId);
+  const [selectedTokenCategory, setSelectedTokenCategory] = useState<
+    string | null
+  >(null);
+  const currentWalletId = useSelector(
+    (state: RootState) => state.wallet_id.currentWalletId
+  );
   const reduxUTXOs = useSelector((state: RootState) => state.utxos.utxos);
-  const totalBalance = useSelector((state: RootState) => state.utxos.totalBalance);
-  const currentNetwork = useSelector((state: RootState) => state.network.currentNetwork);
-  const bchUsdQuote = useSelector((state: RootState) => state.priceFeed['BCH-USD']?.price);
+  const totalBalance = useSelector(
+    (state: RootState) => state.utxos.totalBalance
+  );
+  const currentNetwork = useSelector(
+    (state: RootState) => state.network.currentNetwork
+  );
+  const bchUsdQuote = useSelector(
+    (state: RootState) => state.priceFeed['BCH-USD']?.price
+  );
   const [displayMode, setDisplayMode] = useState<'BCH' | 'USD'>('BCH');
   const [walletAddresses, setWalletAddresses] = useState<
     { address: string; tokenAddress: string }[]
@@ -102,7 +116,8 @@ const Assets: React.FC = () => {
           currentWalletId,
           walletAddresses.map((item) => item.address)
         );
-        const nativeWalletUtxos = await UTXOService.fetchAllWalletUtxos(currentWalletId);
+        const nativeWalletUtxos =
+          await UTXOService.fetchAllWalletUtxos(currentWalletId);
         let nextTokenUtxos = nativeWalletUtxos.tokenUtxos ?? [];
 
         if (isDev) {
@@ -119,10 +134,11 @@ const Assets: React.FC = () => {
         }
 
         if (nextTokenUtxos.length === 0) {
-          const fallbackSnapshot = await TransactionService.fetchAddressesAndUTXOs(
-            currentWalletId
+          const fallbackSnapshot =
+            await TransactionService.fetchAddressesAndUTXOs(currentWalletId);
+          nextTokenUtxos = (fallbackSnapshot.utxos ?? []).filter(
+            (utxo) => !!utxo.token
           );
-          nextTokenUtxos = (fallbackSnapshot.utxos ?? []).filter((utxo) => !!utxo.token);
 
           if (isDev) {
             console.log('[Assets] fallback inventory snapshot', {
@@ -149,7 +165,9 @@ const Assets: React.FC = () => {
           });
         }
       } catch (error) {
-        logError('Assets.loadNativeTokenInventory', error, { walletId: currentWalletId });
+        logError('Assets.loadNativeTokenInventory', error, {
+          walletId: currentWalletId,
+        });
         // Preserve the previous token snapshot on fetch errors. The DB-backed
         // state is still the safer source of truth than blanking the list.
       }
@@ -215,7 +233,8 @@ const Assets: React.FC = () => {
     ? tokenMetadata[selectedTokenCategory]
     : null;
   const totalBch = totalBalance / SATSINBITCOIN;
-  const totalUsd = typeof bchUsdQuote === 'number' ? totalBch * bchUsdQuote : null;
+  const totalUsd =
+    typeof bchUsdQuote === 'number' ? totalBch * bchUsdQuote : null;
 
   useEffect(() => {
     if (!isDev) return;
@@ -229,12 +248,25 @@ const Assets: React.FC = () => {
       nftTokens: nftTokens.length,
       categories: tokenCategories,
     });
-  }, [currentWalletId, tab, walletAddresses.length, tokenUtxos.length, entries, fungibleTokens.length, nftTokens.length, tokenCategories]);
+  }, [
+    currentWalletId,
+    tab,
+    walletAddresses.length,
+    tokenUtxos.length,
+    entries,
+    fungibleTokens.length,
+    nftTokens.length,
+    tokenCategories,
+  ]);
 
   return (
     <WalletScreen maxWidthClassName="max-w-md" scrollable={false}>
       <div className="flex h-full min-h-0 flex-col gap-3">
-        <PageHeader title="Assets" subtitle={currentNetwork === Network.CHIPNET ? 'Chipnet' : ''} compact />
+        <PageHeader
+          title="Assets"
+          subtitle={currentNetwork === Network.CHIPNET ? 'Chipnet' : ''}
+          compact
+        />
 
         <SectionCard className="shrink-0 p-3">
           <div className="grid grid-cols-3 gap-2">
@@ -259,43 +291,57 @@ const Assets: React.FC = () => {
           {tab === 'BCH' && (
             <div className="flex h-full min-h-0 flex-col gap-3">
               <SectionCard className="p-3">
-              <SectionHeader title="Bitcoin Cash" subtitle="Primary wallet balance" compact />
-              <div className="flex items-center justify-between gap-3">
-                <div>
+                <SectionHeader
+                  title="Bitcoin Cash"
+                  subtitle="Primary wallet balance"
+                  compact
+                />
+                <div className="flex items-center justify-between gap-3">
+                  <div>
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setDisplayMode((mode) =>
+                          mode === 'BCH' ? 'USD' : 'BCH'
+                        )
+                      }
+                      className="text-left"
+                    >
+                      <div className="text-2xl font-bold wallet-text-strong">
+                        {displayMode === 'BCH'
+                          ? `${totalBch.toFixed(8)} BCH`
+                          : totalUsd !== null
+                            ? `$${totalUsd.toFixed(2)} USD`
+                            : 'USD unavailable'}
+                      </div>
+                      <div className="text-xs wallet-muted">
+                        {displayMode === 'BCH'
+                          ? totalUsd !== null
+                            ? `$${totalUsd.toFixed(2)} USD`
+                            : 'USD price unavailable'
+                          : `${totalBch.toFixed(8)} BCH`}
+                      </div>
+                    </button>
+                  </div>
                   <button
                     type="button"
-                    onClick={() => setDisplayMode((mode) => (mode === 'BCH' ? 'USD' : 'BCH'))}
-                    className="text-left"
+                    onClick={() =>
+                      setDisplayMode((mode) => (mode === 'BCH' ? 'USD' : 'BCH'))
+                    }
+                    className="flex h-14 w-14 items-center justify-center rounded-3xl bg-[color-mix(in_oklab,var(--wallet-accent-soft)_72%,transparent)] text-[var(--wallet-accent-strong)] transition hover:brightness-[1.04]"
+                    aria-label="Toggle BCH and USD balance"
                   >
-                    <div className="text-2xl font-bold wallet-text-strong">
-                      {displayMode === 'BCH'
-                        ? `${totalBch.toFixed(8)} BCH`
-                        : totalUsd !== null
-                          ? `$${totalUsd.toFixed(2)} USD`
-                          : 'USD unavailable'}
-                    </div>
-                    <div className="text-xs wallet-muted">
-                      {displayMode === 'BCH'
-                        ? totalUsd !== null
-                          ? `$${totalUsd.toFixed(2)} USD`
-                          : 'USD price unavailable'
-                        : `${totalBch.toFixed(8)} BCH`}
-                    </div>
+                    <FaBitcoin className="text-2xl" />
                   </button>
                 </div>
-                <button
-                  type="button"
-                  onClick={() => setDisplayMode((mode) => (mode === 'BCH' ? 'USD' : 'BCH'))}
-                  className="flex h-14 w-14 items-center justify-center rounded-3xl bg-[color-mix(in_oklab,var(--wallet-accent-soft)_72%,transparent)] text-[var(--wallet-accent-strong)] transition hover:brightness-[1.04]"
-                  aria-label="Toggle BCH and USD balance"
-                >
-                  <FaBitcoin className="text-2xl" />
-                </button>
-              </div>
-            </SectionCard>
+              </SectionCard>
 
-              <StealthBalanceCard walletId={currentWalletId} />
-              <CauldronActivityCard walletId={currentWalletId} />
+              {!viewerOnly && (
+                <>
+                  <StealthBalanceCard walletId={currentWalletId} />
+                  <CauldronActivityCard walletId={currentWalletId} />
+                </>
+              )}
 
               <SectionCard className="p-3">
                 <SectionHeader
@@ -305,15 +351,21 @@ const Assets: React.FC = () => {
                 />
                 <div className="grid grid-cols-3 gap-2.5">
                   <div className="wallet-card p-3 text-left">
-                    <div className="text-lg font-bold wallet-text-strong">{fungibleTokens.length}</div>
+                    <div className="text-lg font-bold wallet-text-strong">
+                      {fungibleTokens.length}
+                    </div>
                     <div className="text-xs wallet-muted">fungible</div>
                   </div>
                   <div className="wallet-card p-3 text-left">
-                    <div className="text-lg font-bold wallet-text-strong">{nftTokens.length}</div>
+                    <div className="text-lg font-bold wallet-text-strong">
+                      {nftTokens.length}
+                    </div>
                     <div className="text-xs wallet-muted">NFTs</div>
                   </div>
                   <div className="wallet-card p-3 text-left">
-                    <div className="text-lg font-bold wallet-text-strong">{entries.length}</div>
+                    <div className="text-lg font-bold wallet-text-strong">
+                      {entries.length}
+                    </div>
                     <div className="text-xs wallet-muted">categories</div>
                   </div>
                 </div>
@@ -324,7 +376,11 @@ const Assets: React.FC = () => {
           {tab === 'Tokens' && (
             <div className="flex h-full min-h-0 flex-col gap-2.5">
               <SectionCard className="min-h-0 flex-1 overflow-hidden p-3">
-                <SectionHeader title="CashTokens" subtitle="Fungible token holdings" compact />
+                <SectionHeader
+                  title="CashTokens"
+                  subtitle="Fungible token holdings"
+                  compact
+                />
                 <div className="h-full min-h-0 space-y-2.5 overflow-y-auto overscroll-contain pb-[calc(var(--safe-bottom)+1rem)] pr-1">
                   {fungibleTokens.length > 0 ? (
                     fungibleTokens.map(([category, value]) => {
@@ -372,20 +428,26 @@ const Assets: React.FC = () => {
                   )}
                 </div>
               </SectionCard>
-              <button
-                type="button"
-                className="wallet-btn-primary w-full py-2.5"
-                onClick={() => navigate('/mint-cashtokens-poc')}
-              >
-                Mint Tokens
-              </button>
+              {!viewerOnly && (
+                <button
+                  type="button"
+                  className="wallet-btn-primary w-full py-2.5"
+                  onClick={() => navigate('/mint-cashtokens-poc')}
+                >
+                  Mint Tokens
+                </button>
+              )}
             </div>
           )}
 
           {tab === 'NFTs' && (
             <div className="flex h-full min-h-0 flex-col gap-2.5">
               <SectionCard className="min-h-0 flex-1 overflow-hidden p-3">
-                <SectionHeader title="NFTs" subtitle="Non-fungible holdings" compact />
+                <SectionHeader
+                  title="NFTs"
+                  subtitle="Non-fungible holdings"
+                  compact
+                />
                 <div className="h-full min-h-0 space-y-2.5 overflow-y-auto overscroll-contain pb-[calc(var(--safe-bottom)+1rem)] pr-1">
                   {nftTokens.length > 0 ? (
                     nftTokens.map(([category, value]) => {
@@ -429,18 +491,20 @@ const Assets: React.FC = () => {
                   )}
                 </div>
               </SectionCard>
-              <button
-                type="button"
-                className="wallet-btn-primary w-full py-2.5"
-                onClick={() => navigate('/mint-cashtokens-poc')}
-              >
-                Mint Tokens
-              </button>
+              {!viewerOnly && (
+                <button
+                  type="button"
+                  className="wallet-btn-primary w-full py-2.5"
+                  onClick={() => navigate('/mint-cashtokens-poc')}
+                >
+                  Mint Tokens
+                </button>
+              )}
             </div>
           )}
         </div>
 
-        {tab === 'BCH' && (
+        {!viewerOnly && tab === 'BCH' && (
           <SectionCard className="shrink-0 p-3">
             <SectionHeader
               title="Quantumroot"
@@ -469,7 +533,6 @@ const Assets: React.FC = () => {
             </div>
           </SectionCard>
         )}
-
       </div>
       {selectedTokenCategory && (
         <Popup closePopups={() => setSelectedTokenCategory(null)}>

@@ -8,7 +8,11 @@ import PendingOutboundPanel from './transaction/PendingOutboundPanel';
 import WalletReconfigurationOverlay from './WalletReconfigurationOverlay';
 import type { RootState } from '../state/store';
 
-const Layout = () => {
+type LayoutProps = {
+  viewerOnly?: boolean;
+};
+
+const Layout = ({ viewerOnly = false }: LayoutProps) => {
   const [navBarHeight, setNavBarHeight] = useState(0);
   const [isPendingOutboundPanelOpen, setIsPendingOutboundPanelOpen] =
     useState(true);
@@ -34,20 +38,22 @@ const Layout = () => {
 
   return (
     <div className="flex h-full min-h-0 flex-col overflow-hidden">
-      {outboundTransactions.length > 0 && isPendingOutboundPanelOpen && (
-        <PendingOutboundPanel
-          records={outboundTransactions}
-          refreshing={reconciling}
-          onRefresh={() => {
-            void refresh();
-          }}
-          onRelease={(txid) => {
-            void release(txid);
-          }}
-          onClose={() => setIsPendingOutboundPanelOpen(false)}
-          compact
-        />
-      )}
+      {!viewerOnly &&
+        outboundTransactions.length > 0 &&
+        isPendingOutboundPanelOpen && (
+          <PendingOutboundPanel
+            records={outboundTransactions}
+            refreshing={reconciling}
+            onRefresh={() => {
+              void refresh();
+            }}
+            onRelease={(txid) => {
+              void release(txid);
+            }}
+            onClose={() => setIsPendingOutboundPanelOpen(false)}
+            compact
+          />
+        )}
       <div
         className="flex-1 min-h-0 overflow-hidden"
         aria-busy={walletOperationStatus === 'running'}
@@ -57,8 +63,9 @@ const Layout = () => {
       <BottomNavBar
         setNavBarHeight={setNavBarHeight}
         disabled={walletOperationStatus === 'running'}
+        viewerOnly={viewerOnly}
       />
-      <WalletReconfigurationOverlay />
+      {!viewerOnly && <WalletReconfigurationOverlay />}
     </div>
   );
 };

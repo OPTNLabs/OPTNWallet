@@ -1,7 +1,7 @@
 name: Desktop Preview
 
 # Mirrors android-preview.yml — builds on every push/PR to dev
-# Produces unsigned debug builds for all 3 desktop platforms
+# Produces unsigned debug builds for every native desktop target
 
 on:
   pull_request:
@@ -11,6 +11,7 @@ on:
       - 'public/**'
       - 'src-tauri/**'
       - 'reference/**'
+      - 'scripts/fetch-tor.mjs'
       - 'vite.desktop.config.ts'
       - 'package.json'
       - '.github/workflows/desktop-preview.yml'
@@ -21,6 +22,7 @@ on:
       - 'public/**'
       - 'src-tauri/**'
       - 'reference/**'
+      - 'scripts/fetch-tor.mjs'
       - 'vite.desktop.config.ts'
       - 'package.json'
       - '.github/workflows/desktop-preview.yml'
@@ -42,25 +44,36 @@ jobs:
       matrix:
         include:
           - platform: windows-latest
+            target: x86_64-pc-windows-msvc
+            tor-target: windows-x86_64
             artifact-name: preview-windows
             bundle-args: ''
           - platform: macos-latest
-            artifact-name: preview-macos
+            target: aarch64-apple-darwin
+            tor-target: macos-aarch64
+            artifact-name: preview-macos-arm
+            bundle-args: ''
+          - platform: macos-15-intel
+            target: x86_64-apple-darwin
+            tor-target: macos-x86_64
+            artifact-name: preview-macos-intel
             bundle-args: ''
           # Linux: skip the AppImage bundle. linuxdeploy fails on GitHub runners
           # (no FUSE; APPIMAGE_EXTRACT_AND_RUN didn't help either), and a debug
           # preview only needs an installable — deb+rpm bundle fine. The release
           # workflow still builds the AppImage (with libfuse2) for distribution.
           - platform: ubuntu-22.04
+            target: x86_64-unknown-linux-gnu
+            tor-target: linux-x86_64
             artifact-name: preview-linux
             bundle-args: '--bundles deb,rpm'
 
     runs-on: ${{ matrix.platform }}
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       - name: Setup Node
-        uses: actions/setup-node@v7
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
         with:
           node-version: '20'
           cache: 'npm'
@@ -74,10 +87,12 @@ jobs:
             librsvg2-dev patchelf libssl-dev libgtk-3-dev
 
       - name: Install Rust stable
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
+        with:
+          targets: ${{ matrix.target }}
 
       - name: Rust cache
-        uses: swatinem/rust-cache@v2
+        uses: swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
         with:
           workspaces: './src-tauri -> target'
 
@@ -85,18 +100,18 @@ jobs:
         run: npm ci
 
       - name: Fetch bundled Tor (integrated CashFusion privacy)
-        run: node scripts/fetch-tor.mjs
+        run: node scripts/fetch-tor.mjs ${{ matrix.tor-target }}
 
       - name: Build Tauri (debug)
         # bundle-args is empty on Windows/macOS and '--bundles deb,rpm' on Linux
         # (skips the AppImage that linuxdeploy can't build on the runner).
-        run: npx tauri build --debug ${{ matrix.bundle-args }}
+        run: npx tauri build --debug --target ${{ matrix.target }} ${{ matrix.bundle-args }}
 
       - name: Upload preview artifact
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: ${{ matrix.artifact-name }}
           path: |
-            src-tauri/target/debug/bundle/**
+            src-tauri/target/${{ matrix.target }}/debug/bundle/**
           retention-days: 14
-          if-no-files-found: warn
+          if-no-files-found: error
