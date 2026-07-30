@@ -78,7 +78,17 @@ jobs:
           cache: npm
 
       - name: Install deps
-        run: npm ci
+        run: |
+          for attempt in 1 2 3; do
+            if npm ci; then
+              exit 0
+            fi
+            if [ "$attempt" -lt 3 ]; then
+              echo "npm ci attempt $attempt failed; retrying"
+              sleep $((attempt * 10))
+            fi
+          done
+          exit 1
 
       - name: Lint (Core)
         run: npm run lint:core
