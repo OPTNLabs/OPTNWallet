@@ -78,7 +78,7 @@ const initialState: ExperimentalState = {
   nostrRelays: DEFAULT_NOSTR_RELAYS,
   autoFuseEnabled: true,
   fuseDepth: DEFAULT_FUSE_DEPTH,
-  p2pFusionEnabled: false,
+  p2pFusionEnabled: true,
   fusionServer: DEFAULT_FUSION_SERVER,
   fusionServers: [DEFAULT_FUSION_SERVER],
   // On by default: CashFusion against a remote server without Tor lets the
@@ -107,7 +107,7 @@ export function normalizeExperimentalPersistedState(
 
   return {
     autoFuseEnabled: true,
-    p2pFusionEnabled: false,
+    p2pFusionEnabled: true,
     ...persisted,
     // Spread first, then clamp: a wallet persisted before this field existed
     // gets the default, and a persisted out-of-range value is pulled back into
@@ -263,7 +263,7 @@ export const selectNostrRelays = createSelector(
     relays && relays.length > 0 ? relays : [...DEFAULT_NOSTR_RELAYS]
 );
 // Missing fields mean the wallet was persisted before these controls existed.
-// Auto Fuse follows the requested opt-out default; P2P stays opt-in.
+// Preserve opt-out semantics for Auto Fuse and normalized booleans for the mode.
 export const selectAutoFuseEnabled = (state: RootState) =>
   state.experimental.autoFuseEnabled !== false;
 export const selectP2pFusionEnabled = (state: RootState) =>
