@@ -13,6 +13,7 @@ import type { ContractInstanceRow } from '../apis/ContractManager/ContractManage
 import TransactionManager from '../apis/TransactionManager/TransactionManager';
 import { store } from '../state/store';
 import { logError } from '../utils/errorHandling';
+import { reservedOutpoints as reservedFusionOutpoints } from '../platform/desktop/fusionRoundState';
 import OutboundTransactionTracker, {
   deriveTrackedTxid,
 } from './OutboundTransactionTracker';
@@ -364,6 +365,25 @@ class TransactionService {
     const requestedOutpoints = new Set(
       (spentInputs ?? []).map((input) => `${input.tx_hash}:${input.tx_pos}`)
     );
+    const fusionReserved = currentWalletId
+      ? reservedFusionOutpoints(currentWalletId)
+      : new Set<string>();
+    const conflictingFusionRound =
+      fusionReserved.size > 0 &&
+      (requestedOutpoints.size === 0 ||
+        [...requestedOutpoints].some((outpoint) =>
+          fusionReserved.has(outpoint)
+        ));
+    if (conflictingFusionRound) {
+      return {
+        txid: null,
+        errorMessage:
+          requestedOutpoints.size > 0
+            ? 'A Fusion round is already using one of these UTXOs.'
+            : 'A Fusion round is in progress. Wait for it to finish before sending.',
+      };
+    }
+
     const conflictingPending = activeOutbound.find(
       (record) =>
         (!currentTxid || record.txid !== currentTxid) &&
@@ -442,6 +462,11 @@ class TransactionService {
         record.spentOutpoints.map((outpoint) => `${outpoint.tx_hash}:${outpoint.tx_pos}`)
       )
     );
+    if (currentWalletId) {
+      for (const outpoint of reservedFusionOutpoints(currentWalletId)) {
+        reserved.add(outpoint);
+      }
+    }
     const seenBatchOutpoints = new Set<string>();
 
     for (const request of requests) {

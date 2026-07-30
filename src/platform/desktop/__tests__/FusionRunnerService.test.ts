@@ -274,4 +274,25 @@ describe('FusionRunnerService — one path for manual and automatic rounds', () 
 
     expect(runP2p).toHaveBeenCalledWith(expect.any(Array), controller.signal);
   });
+
+  it('reports a completed irreversible round even when abort races with runner resolution', async () => {
+    reconcile.mockResolvedValue({ addr: [coin('aa')] });
+    const controller = new AbortController();
+    runP2p.mockImplementation(async () => {
+      controller.abort();
+      return { txid: 'a'.repeat(64) };
+    });
+
+    await expect(
+      startFusionRound({
+        ...base(),
+        trigger: 'manual',
+        signal: controller.signal,
+      })
+    ).resolves.toEqual({
+      status: 'fused',
+      mode: 'p2p',
+      txid: 'a'.repeat(64),
+    });
+  });
 });
