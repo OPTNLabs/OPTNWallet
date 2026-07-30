@@ -8,8 +8,9 @@
 import { SimplePool } from 'nostr-tools';
 import { useWebSocketImplementation as setNostrWebSocketImpl } from 'nostr-tools/pool';
 import { invoke } from '@tauri-apps/api/core';
+import { hash256 } from '@bitauth/libauth';
 
-import { hexToBin } from '../../utils/hex';
+import { binToHex, hexToBin } from '../../utils/hex';
 import { TorWebSocket, armTorRouting } from './nostr/torWebSocket';
 import ElectrumService, {
   invalidateUTXOCache,
@@ -277,11 +278,74 @@ export async function refreshAndVerifyP2pInputs(
   return spendable;
 }
 
-function assertBroadcastTxid(value: string): string {
-  if (!/^[0-9a-f]{64}$/i.test(value)) {
-    throw new Error(`Fusion broadcast failed: ${value}`);
+const DEFINITIVE_BROADCAST_REJECTIONS = [
+  /missing inputs/i,
+  /mempool min fee not met/i,
+  /mandatory-script-verify-flag/i,
+  /non-mandatory-script-verify-flag/i,
+  /txn-mempool-conflict/i,
+  /bad-txns/i,
+  /dust/i,
+  /insufficient fee/i,
+  /fee .*too (?:high|low)/i,
+  /\bcode (?:-?25|-?26|64|66)\b/i,
+];
+
+export interface P2pBroadcastReceipt {
+  txid: string;
+  verified: boolean;
+  warning?: string;
+}
+
+/**
+ * Broadcast a VM-verified CoinJoin without turning an interrupted Electrum
+ * response into a false rejection. Once a node may have accepted the bytes,
+ * the wallet must track the locally derived txid so an automatic retry cannot
+ * accidentally reuse the same inputs.
+ */
+export async function broadcastP2pTransaction(
+  txHex: string,
+  dependencies: {
+    broadcast: (rawTx: string) => Promise<string>;
+    visibility: (
+      txid: string
+    ) => Promise<{ seen: boolean; confirmed: boolean }>;
+  } = {
+    broadcast: (rawTx) => ElectrumService.broadcastTransaction(rawTx),
+    visibility: (txid) => ElectrumService.getTransactionVisibility(txid),
   }
-  return value.toLowerCase();
+): Promise<P2pBroadcastReceipt> {
+  const expectedTxid = binToHex(hash256(hexToBin(txHex)).reverse());
+  let response: string;
+  try {
+    response = await dependencies.broadcast(txHex);
+  } catch (error) {
+    response = error instanceof Error ? error.message : String(error);
+  }
+
+  if (/^[0-9a-f]{64}$/i.test(response)) {
+    if (response.toLowerCase() === expectedTxid) {
+      return { txid: expectedTxid, verified: true };
+    }
+  } else if (
+    DEFINITIVE_BROADCAST_REJECTIONS.some((pattern) => pattern.test(response))
+  ) {
+    throw new Error(`Fusion broadcast rejected: ${response}`);
+  }
+
+  const visibility = await dependencies
+    .visibility(expectedTxid)
+    .catch(() => ({ seen: false, confirmed: false }));
+  if (visibility.seen) {
+    return { txid: expectedTxid, verified: true };
+  }
+
+  return {
+    txid: expectedTxid,
+    verified: false,
+    warning:
+      'The node response was interrupted, so broadcast status is not yet confirmed. The signed transaction is safely tracked while wallet sync verifies it.',
+  };
 }
 
 /** Run one P2P round on the active BCH network. */
@@ -458,6 +522,7 @@ export async function runP2pFusion(
       value: outputPlan.values[index],
     }));
 
+    let broadcastWarning: string | undefined;
     const result = await runFusionRound(
       {
         myPubkey: round.pubkey,
@@ -470,9 +535,9 @@ export async function runP2pFusion(
         signal: opts.signal,
         broadcast: async (txHex) => {
           try {
-            return assertBroadcastTxid(
-              await ElectrumService.broadcastTransaction(txHex)
-            );
+            const receipt = await broadcastP2pTransaction(txHex);
+            broadcastWarning = receipt.warning;
+            return receipt.txid;
           } catch (error) {
             // A rejected CoinJoin does not identify which input became stale.
             // Re-check our own inputs so the user gets a useful, bounded verdict
@@ -509,13 +574,15 @@ export async function runP2pFusion(
       // credit a peer's coin to us.
       ownedOutputScripts: outputScripts,
     });
-    const warning = fusionCompletionWarning(completion);
+    const warning = [broadcastWarning, fusionCompletionWarning(completion)]
+      .filter((message): message is string => Boolean(message))
+      .join(' ');
     status?.(
       warning
         ? `Fused ✓ — txid ${result.txid}. ${warning}`
         : `Fused ✓ — txid ${result.txid}`
     );
-    return warning ? { ...result, warning } : result;
+    return warning.length > 0 ? { ...result, warning } : result;
   } finally {
     // Free the coins whatever happened. A successful round has already spent
     // them (the live re-check keeps them out next time); a failed one must not

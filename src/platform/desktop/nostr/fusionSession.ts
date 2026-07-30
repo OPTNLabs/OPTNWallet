@@ -431,6 +431,7 @@ function runCoordinator(
       null;
     let assembling = false;
     let finalizing = false;
+    let broadcastStarted = false;
     let settled = false;
     let unsubscribe: () => void = () => undefined;
     let unsubscribeProtocolError: () => void = () => undefined;
@@ -441,8 +442,12 @@ function runCoordinator(
       unsubscribe();
       unsubscribeProtocolError();
     };
-    const fail = async (error: Error, notifyPeers: boolean) => {
-      if (settled) return;
+    const fail = async (
+      error: Error,
+      notifyPeers: boolean,
+      forceDuringBroadcast = false
+    ) => {
+      if (settled || (broadcastStarted && !forceDuringBroadcast)) return;
       settled = true;
       cleanup();
       if (notifyPeers) {
@@ -479,21 +484,38 @@ function runCoordinator(
       params.onPhase?.(5);
       const tx = assembleFusionTx([assembled]);
       const finalized = finalizeFusionTx(tx, [...signaturesByOutpoint.values()]);
+
+      // The coordinator is also a participant: execute every collected
+      // signature against the exact approved template before any network can
+      // see the transaction. Structural signature-set checks alone cannot
+      // detect a peer's malformed or invalid BCH signature.
+      verifyFinalFusionTx(tx, finalized.txHex, finalized.txid);
+
+      // Cancellation is authoritative until the irreversible broadcast call.
+      // Once that call starts, late cancellation, peer messages, and the round
+      // timer must not hide a successful submission from completion tracking.
+      if (settled || params.signal?.aborted) {
+        throw abortError('cancelled');
+      }
+      broadcastStarted = true;
       const broadcastId = (await params.broadcast(finalized.txHex)).toLowerCase();
       if (broadcastId !== finalized.txid) {
         throw new Error('broadcast returned a different transaction id');
       }
-      await Promise.all(
-        others.map((peer) =>
-          transport.send(peer, {
-            type: 'final',
-            session,
-            txid: finalized.txid,
-            txHex: finalized.txHex,
-          })
-        )
+
+      // Start every peer notification before resolving, but never turn a
+      // successfully broadcast transaction into a local failure just because a
+      // relay delivery failed. Each participant independently verifies `final`.
+      const notifications = others.map((peer) =>
+        transport.send(peer, {
+          type: 'final',
+          session,
+          txid: finalized.txid,
+          txHex: finalized.txHex,
+        })
       );
       succeed({ txid: finalized.txid, txHex: finalized.txHex });
+      await Promise.allSettled(notifications);
     };
 
     const tryAssemble = async () => {
@@ -591,7 +613,7 @@ function runCoordinator(
           signaturesByOutpoint.set(inputKey(signature), signature)
         );
         void tryFinalize().catch((error: unknown) =>
-          void fail(asError(error), true)
+          void fail(asError(error), true, true)
         );
       }
     });
