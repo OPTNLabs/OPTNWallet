@@ -107,7 +107,7 @@ jobs:
 
       - name: Prepare keystore file
         if: steps.signing.outputs.available == 'true'
-        run: echo "${{ secrets.ANDROID_KEYSTORE_BASE64 }}" | base64 -d > android/keystore.jks
+        run: echo "${{ secrets.ANDROID_KEYSTORE_BASE64 }}" | base64 -d > android/app/keystore.jks
 
       - name: Build signed APK and AAB
         if: steps.signing.outputs.available == 'true'
