@@ -5,8 +5,16 @@
 // something they can back up, copy between machines, and re-open — the way
 // Electron Cash keeps ~/.electron-cash/wallets/<name>.
 //
-// Default location: <AppData>/wallets/wallet-<id>.optn (auto-saved on create/
+// Default location: <AppData>/wallets/<name>.optn (auto-saved on create/
 // import). Export/Open-from-anywhere use the OS file dialog (see useMenuBar).
+//
+// The file is named after the WALLET, like Electron Cash. It used to be
+// `wallet-<id>-<name>.optn`, where the id was the database row — an internal
+// number that reads like a window number and means nothing to the person
+// looking at their backups. The id was doing real work, though: it kept two
+// wallets that share a name from overwriting each other's backup. That job is
+// now done by checking who actually owns the file, so the name can be just the
+// name.
 //
 // Security: the file carries the mnemonic ONLY in its already-encrypted form
 // (AES-256-GCM under the wallet's own PBKDF2 password key) plus the KDF salt.
@@ -18,6 +26,7 @@ import {
   readTextFile,
   mkdir,
   readDir,
+  remove,
   exists,
   BaseDirectory,
 } from '@tauri-apps/plugin-fs';
@@ -82,8 +91,25 @@ function safeName(name: string): string {
   return (name || 'wallet').replace(/[^a-zA-Z0-9-_]+/g, '_').slice(0, 40);
 }
 
-export function defaultWalletFileName(id: number, name: string): string {
-  return `wallet-${id}-${safeName(name)}.${WALLET_FILE_EXT}`;
+export function defaultWalletFileName(name: string): string {
+  return `${safeName(name)}.${WALLET_FILE_EXT}`;
+}
+
+/**
+ * Which wallet does this file belong to, or null if it is unreadable?
+ *
+ * Used to tell "my own backup, overwrite it" apart from "a different wallet
+ * that happens to share this name". Unreadable is deliberately NOT treated as
+ * unowned: clobbering a file we cannot parse could destroy someone's only copy
+ * of a wallet this build does not understand.
+ */
+async function ownerOf(relPath: string): Promise<number | null> {
+  try {
+    const text = await readTextFile(relPath, { baseDir: BaseDirectory.AppData });
+    return parseWalletFile(text).sourceId;
+  } catch {
+    return null;
+  }
 }
 
 /**
@@ -98,8 +124,32 @@ export async function autoSaveWalletFile(
     if (!(await exists(WALLETS_DIR, { baseDir: BaseDirectory.AppData }))) {
       await mkdir(WALLETS_DIR, { baseDir: BaseDirectory.AppData, recursive: true });
     }
-    const rel = `${WALLETS_DIR}/${defaultWalletFileName(w.sourceId, w.name)}`;
+    // Take <name>.optn if it is free or already ours; otherwise step to
+    // <name>_2, _3 ... so a second wallet sharing a name cannot overwrite the
+    // first one's backup. The suffix is only ever reached by a real collision,
+    // so the common case stays exactly the wallet's name.
+    let rel = `${WALLETS_DIR}/${defaultWalletFileName(w.name)}`;
+    for (let n = 2; n <= 50; n += 1) {
+      if (!(await exists(rel, { baseDir: BaseDirectory.AppData }))) break;
+      if ((await ownerOf(rel)) === w.sourceId) break;
+      rel = `${WALLETS_DIR}/${defaultWalletFileName(`${w.name}_${n}`)}`;
+    }
+
     await writeTextFile(rel, serializeWalletFile(w), { baseDir: BaseDirectory.AppData });
+
+    // A rename leaves the old file behind under the old name, so this wallet
+    // would have two backups and the stale one would silently rot. Drop any
+    // other file that claims the same wallet, keeping one file per wallet.
+    for (const other of await listWalletFiles()) {
+      if (other === rel) continue;
+      if ((await ownerOf(other)) === w.sourceId) {
+        try {
+          await remove(other, { baseDir: BaseDirectory.AppData });
+        } catch {
+          /* leaving a stale copy is safer than failing the save */
+        }
+      }
+    }
     return rel;
   } catch (err) {
     console.warn('[walletFile] auto-save failed (DB copy is unaffected):', err);
