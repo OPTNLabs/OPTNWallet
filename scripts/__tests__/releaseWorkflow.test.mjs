@@ -52,7 +52,15 @@ describe('release workflow', () => {
     expect(workflow).toContain('npm run build:extension:firefox');
     expect(workflow).toContain('OPTNWallet-${RELEASE_TAG}-chrome.zip');
     expect(workflow).toContain('OPTNWallet-${RELEASE_TAG}-firefox.zip');
-    expect(workflow).toMatch(/needs:\s*\[android,\s*desktop,\s*extension\]/);
+    // What matters is that publish waits for every builder, so a release can
+    // never be cut without the extension archives. Asserting the literal array
+    // instead made this fail the moment publish gained a `resolve` dependency,
+    // which is a change in the job graph, not a regression in what is shipped.
+    const publishNeeds =
+      workflow.match(/^ {2}publish:[\s\S]*?needs:\s*\[([^\]]+)\]/m)?.[1] ?? '';
+    for (const builder of ['android', 'desktop', 'extension']) {
+      expect(publishNeeds, 'publish job needs').toContain(builder);
+    }
     expect(workflow).toMatch(/-name '\*\.zip'/);
     expect(workflow).toMatch(/release-files\/\*\.zip/);
     expect(workflow).toContain('Verify expected release files');
