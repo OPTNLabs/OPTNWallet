@@ -160,7 +160,7 @@ describe('mint flow services', () => {
         tokenOutputSats: 546,
       })
     ).rejects.toThrow(
-      'No non-token fee UTXOs available to fund transaction fees.'
+      'No non-genesis UTXOs available to fund transaction fees.'
     );
   });
 
