@@ -17,6 +17,7 @@ import { getBchAccountPath } from '../../services/HdWalletService';
 import { trezorGetPublicKey } from '../../services/hardware/TrezorService';
 import { ledgerGetPublicKey, ledgerDisconnect, setLedgerTransportType } from '../../services/hardware/LedgerService';
 import { oneKeyGetPublicKey } from '../../services/hardware/OneKeyService';
+import { unsupportedReason } from '../../services/hardware/hardwareTransportSupport';
 
 type ConnectStatus = 'idle' | 'connecting' | 'connected' | 'error';
 
@@ -127,6 +128,17 @@ export const HardwareWalletSettings: React.FC = () => {
       setStatus('error');
       return;
     }
+    // Say what is actually missing before attempting a connection that cannot
+    // work. Ledger drives USB through WebHID, and WebView2 — what this desktop
+    // build runs on — does not implement WebHID at all, so `create()` fails
+    // with a generic error that reads like a bad cable or a locked device.
+    const blocked = unsupportedReason(hw.type);
+    if (blocked) {
+      setErrorMsg(blocked);
+      setStatus('error');
+      return;
+    }
+
     setStatus('connecting');
     setErrorMsg(null);
     try {
