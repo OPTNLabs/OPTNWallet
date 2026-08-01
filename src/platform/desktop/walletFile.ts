@@ -157,6 +157,48 @@ export async function autoSaveWalletFile(
   }
 }
 
+/**
+ * Rename legacy `wallet-<id>-<name>.optn` backups to `<name>.optn`.
+ *
+ * Naming the file after the wallet only changed what gets WRITTEN, and a
+ * backup is written on create, on config change and on password change —
+ * never on open. Without this, a wallet nobody has reconfigured keeps its old
+ * name forever, so the folder still shows `wallet-6-wallet_8.optn` and the fix
+ * looks like it did nothing.
+ *
+ * Each file is rewritten through the normal save path, so it picks up the same
+ * collision handling and the same one-file-per-wallet cleanup rather than a
+ * second, subtly different implementation of both.
+ *
+ * Returns how many files were renamed. Never throws: a backup that cannot be
+ * migrated is left exactly where it is.
+ */
+export async function migrateWalletFileNames(): Promise<number> {
+  let renamed = 0;
+  try {
+    for (const path of await listWalletFiles()) {
+      const currentName = path.slice(path.lastIndexOf('/') + 1);
+      try {
+        const parsed = parseWalletFile(
+          await readTextFile(path, { baseDir: BaseDirectory.AppData })
+        );
+        if (currentName === defaultWalletFileName(parsed.name)) continue;
+
+        const written = await autoSaveWalletFile(parsed);
+        // autoSaveWalletFile removes other files owned by this wallet, so a
+        // successful write has already deleted the legacy one.
+        if (written && written !== path) renamed += 1;
+      } catch {
+        // Unreadable or unparseable: leave it alone. It may be the only copy of
+        // a wallet this build does not understand.
+      }
+    }
+  } catch {
+    /* wallets folder unavailable */
+  }
+  return renamed;
+}
+
 /** List wallet files currently in the default wallets folder. */
 export async function listWalletFiles(): Promise<string[]> {
   try {

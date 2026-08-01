@@ -16,6 +16,7 @@ import { useAutoFusion } from './useAutoFusion';
 import { useWalletFusionPolicy } from './useWalletFusionPolicy';
 import { useTransportConfig } from './useTransportConfig';
 import { useWindowTitle } from './useWindowTitle';
+import { migrateWalletFileNames } from './walletFile';
 import { selectWalletId, resetWallet } from '../../state/slices/walletSlice';
 import { getCachedWalletKeyForWallet } from './WalletKeyCache';
 import { persistor } from '../../state/store';
@@ -37,6 +38,16 @@ const DesktopAppShell: React.FC = () => {
   // Which wallet this window holds, in the title bar — with several windows
   // open it is the only way to tell them apart without focusing each one.
   useWindowTitle();
+
+  // One-time tidy of backups still named `wallet-<id>-<name>.optn`. Renaming on
+  // write alone would never reach a wallet nobody reconfigures.
+  useEffect(() => {
+    void migrateWalletFileNames().then((renamed) => {
+      if (renamed > 0) {
+        console.info(`[walletFile] renamed ${renamed} legacy wallet backup(s)`);
+      }
+    });
+  }, []);
   const dispatch = useDispatch();
   const walletId = useSelector(selectWalletId);
   const [rehydrated, setRehydrated] = useState(() => persistor.getState().bootstrapped);
