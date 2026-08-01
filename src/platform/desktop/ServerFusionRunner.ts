@@ -102,6 +102,15 @@ export function parseFusionServerTarget(server: string): FusionServerTarget {
   };
 }
 
+export function serverFusionPrivacyDestination(
+  serverHost: string,
+  lookupHost: string
+): string {
+  return ['localhost', '127.0.0.1', '::1'].includes(serverHost)
+    ? lookupHost
+    : serverHost;
+}
+
 export function parseElectrumLookupEndpoint(
   server: string
 ): FusionElectrumEndpoint {
@@ -132,7 +141,9 @@ export function parseElectrumLookupEndpoint(
   return { host: match[1], port, useSsl: match[3] !== 't' };
 }
 
-function defaultInputLookupEndpoint(network: Network): FusionElectrumEndpoint {
+export function defaultInputLookupEndpoint(
+  network: Network
+): FusionElectrumEndpoint {
   const server = getElectrumServers(network)[0];
   if (!server) throw new Error('No Electrum server is configured.');
   return parseElectrumLookupEndpoint(server);

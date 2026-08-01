@@ -6,6 +6,48 @@ pub mod fusion;
 pub mod nostr_tor;
 pub mod spv;
 
+async fn verified_fusion_proxy<'a>(
+    destination_hosts: &[&str],
+    tor_host: Option<&'a str>,
+    tor_port: Option<u16>,
+) -> Result<Option<(&'a str, u16)>, String> {
+    if destination_hosts
+        .iter()
+        .all(|host| fusion::is_local_server(host))
+    {
+        return Ok(None);
+    }
+
+    let (host, port) = match (tor_host, tor_port) {
+        (Some(host), Some(port)) if !host.trim().is_empty() && port > 0 => (host, port),
+        (Some(_), None) | (None, Some(_)) => {
+            return Err("CashFusion Tor proxy configuration is incomplete".into())
+        }
+        _ => {
+            return Err(
+                "CashFusion needs a verified Tor proxy for every remote endpoint".into(),
+            )
+        }
+    };
+
+    if !fusion::tor::is_tor_port(host, port).await {
+        return Err("CashFusion refused an unverified Tor proxy".into());
+    }
+    Ok(Some((host, port)))
+}
+
+fn fusion_transport_for_host<'a>(
+    destination_host: &str,
+    verified_proxy: Option<(&'a str, u16)>,
+) -> Result<fusion::Transport<'a>, String> {
+    if fusion::is_local_server(destination_host) {
+        return Ok(fusion::Transport::Direct);
+    }
+    let (host, port) = verified_proxy
+        .ok_or_else(|| "CashFusion remote endpoint has no verified Tor route".to_string())?;
+    Ok(fusion::Transport::Tor { host, port })
+}
+
 // CashFusion server status (Phase 1).
 //
 // The fusion protocol is raw TCP+TLS with protobuf framing — a WebView cannot
@@ -26,21 +68,12 @@ async fn fusion_server_status(
     // guarantee — the server can re-link a player's covert connections by IP —
     // so it refuses. A server on localhost is the one exemption: there is no
     // network observer to hide from.
-    let transport = if fusion::is_local_server(&host) {
-        fusion::Transport::Direct
-    } else {
-        match (tor_host.as_deref(), tor_port) {
-        (Some(h), Some(p)) => fusion::Transport::Tor { host: h, port: p },
-        _ => {
-            return Err(
-                "No Tor proxy configured. CashFusion needs Tor for remote servers — \
-                 without it the server can link your coins together by IP address, \
-                 which is exactly what fusing is meant to prevent."
-                    .into(),
-            )
-        }
-        }
-    };
+    if host.trim().is_empty() || port == 0 {
+        return Err("CashFusion server endpoint is invalid".into());
+    }
+    let verified_proxy =
+        verified_fusion_proxy(&[host.as_str()], tor_host.as_deref(), tor_port).await?;
+    let transport = fusion_transport_for_host(&host, verified_proxy)?;
 
     // genesis_hash is optional in the protocol; omitting it lets a server that
     // checks chain identity apply its own default rather than us asserting one.
@@ -63,21 +96,12 @@ async fn fusion_join_status(
     tor_host: Option<String>,
     tor_port: Option<u16>,
 ) -> Result<fusion::round::FusionJoinResult, String> {
-    let transport = if fusion::is_local_server(&host) {
-        fusion::Transport::Direct
-    } else {
-        match (tor_host.as_deref(), tor_port) {
-        (Some(h), Some(p)) => fusion::Transport::Tor { host: h, port: p },
-        _ => {
-            return Err(
-                "No Tor proxy configured. CashFusion needs Tor for remote servers — \
-                 without it the server can link your coins together by IP address, \
-                 which is exactly what fusing is meant to prevent."
-                    .into(),
-            )
-        }
-        }
-    };
+    if host.trim().is_empty() || port == 0 {
+        return Err("CashFusion server endpoint is invalid".into());
+    }
+    let verified_proxy =
+        verified_fusion_proxy(&[host.as_str()], tor_host.as_deref(), tor_port).await?;
+    let transport = fusion_transport_for_host(&host, verified_proxy)?;
 
     fusion::round::join_pool_status(
         &host,
@@ -153,39 +177,25 @@ async fn fusion_run(
         return Err(fusion::FUSION_EXECUTION_PAUSED_MESSAGE.into());
     }
 
-    let registration = fusion::round_cancel::acquire_round(&round_id)?;
-    let cancel = registration.flag();
-
-    let transport = if fusion::is_local_server(&host) {
-        fusion::Transport::Direct
-    } else {
-        match (tor_host.as_deref(), tor_port) {
-        (Some(h), Some(p)) => fusion::Transport::Tor { host: h, port: p },
-        _ => {
-            return Err(
-                "CashFusion needs Tor for remote servers — without it the server \
-                 can link your coins together by IP address."
-                    .into(),
-            )
-        }
-        }
-    };
+    if host.trim().is_empty() || port == 0 {
+        return Err("CashFusion server endpoint is invalid".into());
+    }
     if lookup_host.trim().is_empty() || lookup_port == 0 {
         return Err("CashFusion peer-input lookup endpoint is invalid".into());
     }
-    let lookup_transport = if fusion::is_local_server(&lookup_host) {
-        fusion::Transport::Direct
-    } else {
-        match (tor_host.as_deref(), tor_port) {
-        (Some(h), Some(p)) => fusion::Transport::Tor { host: h, port: p },
-        _ => {
-            return Err(
-                "CashFusion peer-input verification needs Tor for remote Electrum servers."
-                    .into(),
-            )
-        }
-        }
-    };
+    let verified_proxy = verified_fusion_proxy(
+        &[host.as_str(), lookup_host.as_str()],
+        tor_host.as_deref(),
+        tor_port,
+    )
+    .await?;
+    let transport = fusion_transport_for_host(&host, verified_proxy)?;
+    let lookup_transport = fusion_transport_for_host(&lookup_host, verified_proxy)?;
+    let remote_transport = verified_proxy
+        .map(|(host, port)| fusion::Transport::Tor { host, port });
+
+    let registration = fusion::round_cancel::acquire_round(&round_id)?;
+    let cancel = registration.flag();
 
     let mut keyed_inputs = Vec::with_capacity(inputs.len());
     for i in inputs {
@@ -213,7 +223,8 @@ async fn fusion_run(
         tier_plans,
         inputs: keyed_inputs,
         output_scripts: scripts,
-        transport,
+        main_transport: transport,
+        remote_transport,
         lookup_endpoint: fusion::electrum_input::ElectrumEndpoint {
             host: lookup_host,
             port: lookup_port,
@@ -800,6 +811,27 @@ pub fn run() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn fusion_command_transport_requires_a_verified_proxy_for_remote_hosts() {
+        for host in ["localhost", "127.0.0.1", "::1"] {
+            assert!(matches!(
+                fusion_transport_for_host(host, None).unwrap(),
+                fusion::Transport::Direct
+            ));
+        }
+
+        assert!(fusion_transport_for_host("fusion.example", None)
+            .unwrap_err()
+            .contains("verified Tor"));
+        assert!(matches!(
+            fusion_transport_for_host("fusion.example", Some(("127.0.0.1", 9050))).unwrap(),
+            fusion::Transport::Tor {
+                host: "127.0.0.1",
+                port: 9050
+            }
+        ));
+    }
 
     #[test]
     fn fusion_relay_policy_allows_every_loopback_form_direct() {

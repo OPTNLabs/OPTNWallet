@@ -45,7 +45,9 @@ import {
 import { runP2pFusion } from '../../platform/desktop/FusionP2pService';
 import {
   buildServerRunner,
+  defaultInputLookupEndpoint,
   parseFusionServerTarget,
+  serverFusionPrivacyDestination,
 } from '../../platform/desktop/ServerFusionRunner';
 import { resolveFusionTransport } from '../../platform/desktop/FusionTorResolver';
 import {
@@ -247,12 +249,19 @@ export const CashFusionSettings: React.FC<{ variant?: 'card' | 'servers' }> = ({
           runServer: async (coins, signal) => {
             const target = parseFusionServerTarget(serverInput ?? '');
             const { host } = target;
-            const tor = await currentTorConfig(host);
+            const inputLookupEndpoint =
+              defaultInputLookupEndpoint(currentNetwork);
+            const privacyDestination = serverFusionPrivacyDestination(
+              host,
+              inputLookupEndpoint.host
+            );
+            const tor = await currentTorConfig(privacyDestination);
             return buildServerRunner({
               walletId,
               network: currentNetwork,
               ...target,
               tor: tor ?? null,
+              inputLookupEndpoint,
               onServerHello: (hello) =>
                 setStatus({
                   ...hello,

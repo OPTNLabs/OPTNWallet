@@ -34,7 +34,9 @@ import { startFusionRound } from './FusionRunnerService';
 import { runP2pFusion } from './FusionP2pService';
 import {
   buildServerRunner,
+  defaultInputLookupEndpoint,
   parseFusionServerTarget,
+  serverFusionPrivacyDestination,
 } from './ServerFusionRunner';
 
 /**
@@ -123,7 +125,12 @@ export function useAutoFusion(): void {
         if (!selectedServer) return;
         try {
           const target = parseFusionServerTarget(selectedServer);
-          const route = await resolveFusionTransport(target.host, {
+          const inputLookupEndpoint = defaultInputLookupEndpoint(network);
+          const privacyDestination = serverFusionPrivacyDestination(
+            target.host,
+            inputLookupEndpoint.host
+          );
+          const route = await resolveFusionTransport(privacyDestination, {
             enabled: torEnabled,
             auto: torAuto,
             host: torHost,
@@ -136,6 +143,7 @@ export function useAutoFusion(): void {
             network,
             ...target,
             tor: route.type === 'tor' ? route.tor : null,
+            inputLookupEndpoint,
           });
         } catch {
           torReady = false;
