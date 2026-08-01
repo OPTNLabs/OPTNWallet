@@ -21,7 +21,14 @@ vi.mock('../../../services/WalletUtxoRefreshService', () => ({
 }));
 
 describe('completeFusionBroadcast', () => {
-  beforeEach(() => {
+  beforeEach(async () => {
+    // completeFusionBroadcast dispatches observeTransaction fire-and-forget, so
+    // the previous test's call can still be pending here. Clearing the mocks
+    // first lets that stray call land inside THIS test and be counted against
+    // it — which is exactly how "expected once, got 2 times" appeared on a
+    // loaded machine while the file passed in isolation. Let the detached work
+    // settle before resetting the counters.
+    await new Promise((resolve) => setTimeout(resolve, 0));
     vi.clearAllMocks();
     recordBroadcastMock.mockResolvedValue({ state: 'broadcasted' });
     observeTransactionMock.mockResolvedValue(undefined);
