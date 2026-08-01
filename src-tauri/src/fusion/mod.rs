@@ -34,6 +34,7 @@ pub mod components;
 pub mod blame;
 pub mod covert;
 pub mod encrypt;
+pub mod electrum_input;
 pub mod pedersen;
 pub mod round;
 pub mod round_cancel;

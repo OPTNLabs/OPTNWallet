@@ -42,8 +42,11 @@ import {
   type FusionRunOutcome,
 } from '../../platform/desktop/FusionRunnerService';
 
-import { runFusion } from '../../platform/desktop/FusionService';
 import { runP2pFusion } from '../../platform/desktop/FusionP2pService';
+import {
+  buildServerRunner,
+  parseFusionServerTarget,
+} from '../../platform/desktop/ServerFusionRunner';
 import { resolveFusionTransport } from '../../platform/desktop/FusionTorResolver';
 import {
   assertServerFusionSelected,
@@ -79,21 +82,6 @@ function describeFusionOutcome(outcome: FusionRunOutcome): string {
 const DEFAULT_SERVER = 'fusion.servo.cash:8789';
 
 type ConnStatus = 'idle' | 'testing' | 'ok' | 'fail';
-
-function parseHostPort(hostPort: string): {
-  host: string;
-  port: number;
-  ssl: boolean;
-} {
-  const parts = hostPort.trim().split(':');
-  const host = parts[0];
-  const port = Number(parts[1]) || 8789;
-  // Same convention as the Electrum server pool: an optional ':t' suffix means
-  // plain TCP (no TLS); ':s' or no suffix means SSL. So a non-SSL/non-wss fusion
-  // server is just `host:port:t`.
-  const ssl = parts[2] !== 't';
-  return { host, port, ssl };
-}
 
 function isLocalHost(host: string): boolean {
   return host === 'localhost' || host === '127.0.0.1' || host === '::1';
@@ -256,34 +244,21 @@ export const CashFusionSettings: React.FC<{ variant?: 'card' | 'servers' }> = ({
         runners: {
           runP2p: () =>
             Promise.reject(new Error('P2P runner invoked in server mode')),
-          runServer: async (coins) => {
-            const { host, port, ssl } = parseHostPort(serverInput ?? '');
+          runServer: async (coins, signal) => {
+            const target = parseFusionServerTarget(serverInput ?? '');
+            const { host } = target;
             const tor = await currentTorConfig(host);
-            const params =
-              status ?? (await fetchFusionServerStatus(host, port, ssl, tor));
-            if (!status) setStatus(params);
-
-            const result = await runFusion({
+            return buildServerRunner({
               walletId,
               network: currentNetwork,
-              host,
-              port,
-              useSsl: ssl,
-              utxos: coins,
-              params: {
-                tiers: params.tiers,
-                numComponents: params.numComponents,
-                componentFeerate: params.componentFeerate,
-                minExcessFee: params.minExcessFee,
-                maxExcessFee: params.maxExcessFee,
-              },
-              torHost: tor?.host ?? null,
-              torPort: tor?.port ?? null,
-            });
-            if (!result.ok || !result.txid) {
-              throw new Error(result.message || 'Server fusion failed.');
-            }
-            return { txid: result.txid };
+              ...target,
+              tor: tor ?? null,
+              onServerHello: (hello) =>
+                setStatus({
+                  ...hello,
+                  donationAddress: hello.donationAddress ?? null,
+                }),
+            })(coins, signal);
           },
         },
       });
@@ -355,10 +330,15 @@ export const CashFusionSettings: React.FC<{ variant?: 'card' | 'servers' }> = ({
     const targets = fusionAuto ? servers : [serverInput];
     const errors: string[] = [];
     for (const target of targets) {
-      const { host, port, ssl } = parseHostPort(target ?? '');
       try {
+        const { host, port, useSsl } = parseFusionServerTarget(target ?? '');
         const torCfg = await currentTorConfig(host);
-        const result = await fetchFusionServerStatus(host, port, ssl, torCfg);
+        const result = await fetchFusionServerStatus(
+          host,
+          port,
+          useSsl,
+          torCfg
+        );
         setStatus(result);
         setConnStatus('ok');
         if (fusionAuto) {
@@ -398,7 +378,12 @@ export const CashFusionSettings: React.FC<{ variant?: 'card' | 'servers' }> = ({
     return null;
   };
 
-  const selectedHost = parseHostPort(serverInput ?? '').host;
+  let selectedHost = '';
+  try {
+    selectedHost = parseFusionServerTarget(serverInput ?? '').host;
+  } catch {
+    // Keep the settings screen usable while the user edits an incomplete host.
+  }
   const torActive = torEnabled && !isLocalHost(selectedHost);
   const torReady = torAuto ? torDetected !== null && torDetected > 0 : true;
 

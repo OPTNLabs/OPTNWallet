@@ -100,6 +100,7 @@ pub fn build_my_proofs_list(
     round_commit: &RoundCommit,
     all_commitments: &[Vec<u8>],
     my_commitment_indices: &[usize],
+    my_component_indices: &[usize],
 ) -> Result<pb::MyProofsList, BlameError> {
     let count = round_commit.player_commit.initial_commitments.len();
     if count == 0
@@ -107,6 +108,7 @@ pub fn build_my_proofs_list(
         || round_commit.proofs.len() != count
         || round_commit.communication_private_keys.len() != count
         || my_commitment_indices.len() != count
+        || my_component_indices.len() != count
     {
         return Err(BlameError::new(
             "inconsistent local commitment state counts",
@@ -138,6 +140,15 @@ pub fn build_my_proofs_list(
             ));
         }
     }
+    let mut owned_components = HashSet::with_capacity(count);
+    for &global_idx in my_component_indices {
+        if global_idx >= all_commitments.len() {
+            return Err(BlameError::new("owned component index out of range"));
+        }
+        if !owned_components.insert(global_idx) {
+            return Err(BlameError::new("duplicate owned component index"));
+        }
+    }
 
     let others: Vec<usize> = (0..all_commitments.len())
         .filter(|idx| !mine.contains(idx))
@@ -147,7 +158,7 @@ pub fn build_my_proofs_list(
     }
 
     let mut encrypted_proofs = Vec::with_capacity(count);
-    for (local_idx, (&global_idx, &(salt, nonce))) in my_commitment_indices
+    for (local_idx, (&global_component_idx, &(salt, nonce))) in my_component_indices
         .iter()
         .zip(&round_commit.proofs)
         .enumerate()
@@ -158,7 +169,7 @@ pub fn build_my_proofs_list(
         let destination: pb::InitialCommitment =
             strict_decode(&all_commitments[others[route]], "destination commitment")?;
         validate_commitment(&destination)?;
-        let component_idx = u32::try_from(global_idx)
+        let component_idx = u32::try_from(global_component_idx)
             .map_err(|_| BlameError::new("component index exceeds uint32"))?;
         let proof = pb::Proof {
             component_idx,
@@ -249,9 +260,6 @@ pub fn review_relayed_proofs(
     bad_components: &[u32],
     component_feerate: u64,
 ) -> Result<RelayedProofReview, BlameError> {
-    if all_commitments.len() != all_components.len() {
-        return Err(BlameError::new("commitment/component count mismatch"));
-    }
     validate_unique_commitments(all_commitments)?;
     validate_unique_blobs(all_components, "component")?;
     validate_bad_components(bad_components, all_components.len())?;
@@ -583,6 +591,7 @@ mod tests {
                 peer_commitment,
             ],
             &[0],
+            &[1],
         )
         .unwrap();
         assert_eq!(message.random_number, local.random_number);
@@ -593,7 +602,10 @@ mod tests {
         let plaintext =
             encrypt::decrypt(&message.encrypted_proofs[0], Scalar::from(13u64)).unwrap();
         let proof: pb::Proof = strict_decode(&plaintext, "test proof").unwrap();
-        assert_eq!(proof.component_idx, 0);
+        // Commitments and components are independently shuffled by the server.
+        // The revealed proof must identify the component mapping, not reuse the
+        // unrelated commitment index.
+        assert_eq!(proof.component_idx, 1);
         assert_eq!(proof.salt, local.proofs[0].0);
         assert_eq!(proof.pedersen_nonce, local.proofs[0].1);
     }
@@ -662,6 +674,10 @@ mod tests {
     fn valid_input_is_explicitly_returned_for_external_lookup() {
         let local = local_round_commit();
         let (peer_commitment, peer_component, mut proof) = peer_fixture(true);
+        // A failed round may legitimately have fewer submitted components than
+        // initial commitments; that is one reason the server enters blame.
+        let missing_peer_commitment =
+            local_round_commit().player_commit.initial_commitments[0].clone();
         proof.component_idx = 1;
         let encrypted = encrypt::encrypt(
             &proof.encode_to_vec(),
@@ -686,6 +702,7 @@ mod tests {
             &[
                 local.player_commit.initial_commitments[0].clone(),
                 peer_commitment,
+                missing_peer_commitment,
             ],
             &[local.components_sorted[0].clone(), peer_component],
             &[],
