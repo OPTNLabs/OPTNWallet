@@ -50,8 +50,13 @@ export function useWindowTitle(): void {
 
     void (async () => {
       try {
-        const version = await getVersion();
-        const base = `${APP_NAME} ${version}`;
+        // Version is decoration; the wallet name is the point. Fetched
+        // separately so a missing app permission costs the version number
+        // rather than the whole title — which is exactly how the first attempt
+        // at this failed: setTitle was not permitted, the throw was caught, and
+        // the title silently stayed "OPTN Wallet".
+        const version = await getVersion().catch(() => '');
+        const base = version ? `${APP_NAME} ${version}` : APP_NAME;
 
         if (!walletId) {
           if (current) await getCurrentWindow().setTitle(base);
@@ -68,8 +73,11 @@ export function useWindowTitle(): void {
           : base;
         await getCurrentWindow().setTitle(title);
       } catch (error) {
-        // A title is cosmetic; never let it break the window.
+        // A title is cosmetic; never let it break the window. Logged loudly
+        // enough to be findable, because a swallowed permission error here
+        // looks identical to "the feature was never wired up".
         logError('useWindowTitle', error, { walletId });
+        console.warn('[useWindowTitle] could not set the window title:', error);
       }
     })();
 
