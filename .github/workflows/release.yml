@@ -2,6 +2,13 @@ name: Publish Release
 
 on:
   push:
+    # Merging is the release trigger. Nothing here creates a tag by hand any
+    # more: main publishes a stable release, dev publishes a prerelease so every
+    # merge still produces downloadable binaries without filling the stable
+    # release list.
+    branches:
+      - main
+      - dev
     tags:
       - 'v*.*.*'
   workflow_dispatch:
@@ -11,26 +18,119 @@ on:
         required: true
         default: v1.7.0
 
-env:
-  RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
-
 concurrency:
   group: publish-release-${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
   cancel-in-progress: false
 
 jobs:
-  quality:
-    name: Release quality gate
+  # Decide what is being released, and create the tag when a merge is what
+  # triggered us.
+  #
+  # The tag has to be created inside this run rather than by a separate
+  # "tag on merge" workflow: GitHub deliberately does not start a workflow from
+  # a ref pushed with GITHUB_TOKEN, so a tag created elsewhere would sit there
+  # with nothing ever building it. That restriction is also what keeps this
+  # workflow from re-triggering itself when it pushes the tag below.
+  resolve:
+    name: Resolve release tag
     runs-on: ubuntu-latest
     permissions:
-      contents: read
+      contents: write
+    outputs:
+      tag: ${{ steps.tag.outputs.tag }}
+      # The package version WITHOUT any prerelease suffix. Kept separate from
+      # the tag because the extension job checks manifest.json against it, and
+      # manifest.json says 1.6.2 while a dev tag says v1.6.2-dev.481.
+      version: ${{ steps.tag.outputs.version }}
+      prerelease: ${{ steps.tag.outputs.prerelease }}
+      publish: ${{ steps.tag.outputs.publish }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
-          ref: ${{ env.RELEASE_TAG }}
           fetch-depth: 0
 
+      - name: Decide the tag
+        id: tag
+        env:
+          DISPATCH_TAG: ${{ inputs.tag }}
+        run: |
+          version="$(node -p "require('./package.json').version")"
+          publish=true
+
+          if [ "$GITHUB_EVENT_NAME" = 'workflow_dispatch' ]; then
+            tag="$DISPATCH_TAG"
+          elif [ "$GITHUB_REF_TYPE" = 'tag' ]; then
+            tag="$GITHUB_REF_NAME"
+          elif [ "$GITHUB_REF_NAME" = 'main' ]; then
+            tag="v${version}"
+          else
+            # Run number, not the SHA: it sorts, and it keeps every dev merge on
+            # its own tag so a merge never collides with the one before it.
+            tag="v${version}-${GITHUB_REF_NAME}.${GITHUB_RUN_NUMBER}"
+          fi
+
+          # Anything carrying a suffix is a prerelease. Derived from the tag so a
+          # hand-typed workflow_dispatch tag like v1.7.0-rc.1 is classified the
+          # same way an automatic one is.
+          case "$tag" in
+            *-*) prerelease=true ;;
+            *)   prerelease=false ;;
+          esac
+
+          # A stable tag that already exists means this merge carried no version
+          # bump. Re-releasing it would either fail on the existing tag or
+          # quietly replace published binaries, so stop instead — and say why,
+          # because a silently skipped release is its own bug report.
+          if [ "$GITHUB_REF_TYPE" != 'tag' ] && [ "$GITHUB_EVENT_NAME" != 'workflow_dispatch' ]; then
+            if git ls-remote --exit-code --tags origin "refs/tags/${tag}" >/dev/null 2>&1; then
+              publish=false
+              echo "::notice::${tag} already exists — bump the version in package.json to publish a new release."
+            fi
+          fi
+
+          {
+            echo "tag=$tag"
+            echo "version=$version"
+            echo "prerelease=$prerelease"
+            echo "publish=$publish"
+          } >> "$GITHUB_OUTPUT"
+          echo "Releasing $tag (prerelease=$prerelease, publish=$publish)"
+
+      - name: Create the tag
+        if: >-
+          steps.tag.outputs.publish == 'true' &&
+          github.ref_type != 'tag' &&
+          github.event_name != 'workflow_dispatch'
+        env:
+          TAG: ${{ steps.tag.outputs.tag }}
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email 'github-actions[bot]@users.noreply.github.com'
+          # Tag the exact commit that was merged, not whatever the branch tip
+          # has moved on to while this run was queued.
+          git tag -a "$TAG" -m "Release $TAG" "$GITHUB_SHA"
+          git push origin "refs/tags/${TAG}"
+
+  quality:
+    name: Release quality gate
+    needs: resolve
+    if: needs.resolve.outputs.publish == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    env:
+      RELEASE_TAG: ${{ needs.resolve.outputs.tag }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ needs.resolve.outputs.tag }}
+          fetch-depth: 0
+
+      # Only stable releases must come from main. A dev prerelease exists
+      # precisely to ship binaries from a branch that has not reached main yet,
+      # so applying this to it would reject every prerelease by definition.
       - name: Verify release commit is on main
+        if: needs.resolve.outputs.prerelease != 'true'
         run: |
           git fetch origin "refs/heads/main:refs/remotes/origin/main"
           git fetch origin "refs/tags/${RELEASE_TAG}:refs/tags/${RELEASE_TAG}"
@@ -54,7 +154,7 @@ jobs:
 
   android:
     name: Build Android release
-    needs: quality
+    needs: [resolve, quality]
     runs-on: ubuntu-latest
     timeout-minutes: 45
     environment: production
@@ -64,10 +164,12 @@ jobs:
       attestations: write
     outputs:
       signed: ${{ steps.signing.outputs.available }}
+    env:
+      RELEASE_TAG: ${{ needs.resolve.outputs.tag }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
-          ref: ${{ env.RELEASE_TAG }}
+          ref: ${{ needs.resolve.outputs.tag }}
           fetch-depth: 0
 
       - name: Setup Node
@@ -151,15 +253,18 @@ jobs:
 
   extension:
     name: Build browser extensions
-    needs: quality
+    needs: [resolve, quality]
     runs-on: ubuntu-latest
     timeout-minutes: 20
     permissions:
       contents: read
+    env:
+      RELEASE_TAG: ${{ needs.resolve.outputs.tag }}
+      RELEASE_VERSION: ${{ needs.resolve.outputs.version }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
-          ref: ${{ env.RELEASE_TAG }}
+          ref: ${{ needs.resolve.outputs.tag }}
           fetch-depth: 0
 
       - name: Setup Node
@@ -189,8 +294,11 @@ jobs:
           )
           unzip -t "OPTNWallet-${RELEASE_TAG}-chrome.zip"
           unzip -t "OPTNWallet-${RELEASE_TAG}-firefox.zip"
-          test "$(unzip -p "OPTNWallet-${RELEASE_TAG}-chrome.zip" manifest.json | jq -r .version)" = "${RELEASE_TAG#v}"
-          test "$(unzip -p "OPTNWallet-${RELEASE_TAG}-firefox.zip" manifest.json | jq -r .version)" = "${RELEASE_TAG#v}"
+          # Against the package version, not the tag: a prerelease tag carries a
+          # suffix (v1.6.2-dev.481) that manifest.json will never contain, so
+          # comparing with the tag would fail every prerelease.
+          test "$(unzip -p "OPTNWallet-${RELEASE_TAG}-chrome.zip" manifest.json | jq -r .version)" = "${RELEASE_VERSION}"
+          test "$(unzip -p "OPTNWallet-${RELEASE_TAG}-firefox.zip" manifest.json | jq -r .version)" = "${RELEASE_VERSION}"
 
       - name: Upload extension release files
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
@@ -204,7 +312,7 @@ jobs:
 
   desktop:
     name: Build desktop (${{ matrix.platform }})
-    needs: quality
+    needs: [resolve, quality]
     timeout-minutes: 60
     strategy:
       fail-fast: false
@@ -238,10 +346,11 @@ jobs:
       contents: read
     env:
       NODE_OPTIONS: --max-old-space-size=4096
+      RELEASE_TAG: ${{ needs.resolve.outputs.tag }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
-          ref: ${{ env.RELEASE_TAG }}
+          ref: ${{ needs.resolve.outputs.tag }}
           fetch-depth: 0
 
       - name: Setup Node
@@ -410,12 +519,14 @@ jobs:
 
   publish:
     name: Publish GitHub release
-    needs: [android, desktop, extension]
+    needs: [resolve, android, desktop, extension]
     runs-on: ubuntu-latest
     permissions:
       contents: write
       id-token: write
       attestations: write
+    env:
+      RELEASE_TAG: ${{ needs.resolve.outputs.tag }}
     steps:
       - name: Download release files
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
@@ -535,4 +646,4 @@ jobs:
             release-files/*
             release-sha256.txt
           fail_on_unmatched_files: true
-          prerelease: false
+          prerelease: ${{ needs.resolve.outputs.prerelease == 'true' }}
