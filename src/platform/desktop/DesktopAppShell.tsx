@@ -15,6 +15,7 @@ import { useMenuBar } from './useMenuBar';
 import { useAutoFusion } from './useAutoFusion';
 import { useWalletFusionPolicy } from './useWalletFusionPolicy';
 import { useTransportConfig } from './useTransportConfig';
+import { useWindowTitle } from './useWindowTitle';
 import { selectWalletId, resetWallet } from '../../state/slices/walletSlice';
 import { getCachedWalletKeyForWallet } from './WalletKeyCache';
 import { persistor } from '../../state/store';
@@ -33,6 +34,9 @@ const DesktopAppShell: React.FC = () => {
   useTransportConfig();
   useWalletFusionPolicy();
   useAutoFusion();
+  // Which wallet this window holds, in the title bar — with several windows
+  // open it is the only way to tell them apart without focusing each one.
+  useWindowTitle();
   const dispatch = useDispatch();
   const walletId = useSelector(selectWalletId);
   const [rehydrated, setRehydrated] = useState(() => persistor.getState().bootstrapped);

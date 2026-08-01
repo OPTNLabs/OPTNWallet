@@ -320,7 +320,7 @@ async function handleExportWallet(walletId: number) {
     }
   })();
   const dir = await walletsDir();
-  const suggested = defaultWalletFileName(walletId, name);
+  const suggested = defaultWalletFileName(name);
   const dest = await saveDialog({
     title: 'Export Wallet',
     defaultPath: dir ? await join(dir, suggested) : suggested,

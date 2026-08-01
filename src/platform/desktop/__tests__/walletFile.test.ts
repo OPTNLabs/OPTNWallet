@@ -55,6 +55,14 @@ describe('walletFile serialize/parse round-trip', () => {
   });
 
   it('sanitizes the wallet name into a safe filename', () => {
-    expect(defaultWalletFileName(1, 'My/Wallet: Test!')).toBe('wallet-1-My_Wallet_Test_.optn');
+    expect(defaultWalletFileName('My/Wallet: Test!')).toBe('My_Wallet_Test_.optn');
+  });
+
+  it('names the file after the wallet, with no internal id in it', () => {
+    // `wallet-6-wallet_8.optn` read like a window number to the person looking
+    // at their own backups. The database row id is ours, not theirs.
+    const fileName = defaultWalletFileName('wallet_8');
+    expect(fileName).toBe('wallet_8.optn');
+    expect(fileName).not.toMatch(/^wallet-\d+-/);
   });
 });

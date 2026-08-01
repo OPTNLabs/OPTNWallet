@@ -57,7 +57,14 @@ vi.mock('../../state/store', () => ({
 }));
 
 describe('TransactionService.sendTransaction', () => {
-  beforeEach(() => {
+  beforeEach(async () => {
+    // sendTransaction kicks off tracker and refresh work without awaiting it, so
+    // the previous test's calls can still be in flight. Clearing the mocks first
+    // lets a stray call land inside THIS test, and the assertions here are
+    // negative — not.toHaveBeenCalled() — so a late arrival fails a test that
+    // never triggered it. Red only under parallel load, green in isolation.
+    // Let the detached work settle before resetting the counters.
+    await new Promise((resolve) => setTimeout(resolve, 0));
     vi.clearAllMocks();
     listActiveMock.mockResolvedValue([]);
     retrieveKeysMock.mockResolvedValue([]);
