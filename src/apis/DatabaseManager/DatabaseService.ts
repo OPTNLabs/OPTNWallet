@@ -10,7 +10,12 @@ import { logError } from '../../utils/errorHandling';
 import SecretCryptoService, {
   isEncryptedPayload,
 } from '../../services/SecretCryptoService';
-import { getBchAccountPath } from '../../services/HdWalletService';
+/**
+ * The BIP44 account paths this app used before derivation paths became
+ * configurable. Frozen here on purpose — see the migration below.
+ */
+const LEGACY_CHIPNET_ACCOUNT_PATH = "m/44'/1'/0'";
+const LEGACY_MAINNET_ACCOUNT_PATH = "m/44'/145'/0'";
 import { Network } from '../../state/slices/networkSlice';
 import {
   deleteWalletScope,
@@ -203,8 +208,14 @@ const migrations: Array<(db: Database) => Promise<void>> = [
        WHERE derivation_path IS NULL OR derivation_path = ''`,
       [
         Network.CHIPNET,
-        getBchAccountPath(Network.CHIPNET),
-        getBchAccountPath(Network.MAINNET),
+        // Literals, NOT getBchAccountPath(). This migration exists to record
+        // the path a wallet was ALREADY using, so it has to keep saying what
+        // the old code said. Asking the current default would rewrite history
+        // the moment that default changes — and it since has, for chipnet —
+        // silently re-deriving every address of any wallet that had not been
+        // migrated yet.
+        LEGACY_CHIPNET_ACCOUNT_PATH,
+        LEGACY_MAINNET_ACCOUNT_PATH,
         'default',
       ]
     );
