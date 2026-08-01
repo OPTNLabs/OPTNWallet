@@ -9,6 +9,11 @@ vi.mock('../FusionService', () => ({
     mockCreateFreshScripts(...a),
 }));
 
+const mockFetchFusionStatus = vi.fn();
+vi.mock('../../../services/fusion/FusionStatusService', () => ({
+  fetchFusionServerStatus: (...a: unknown[]) => mockFetchFusionStatus(...a),
+}));
+
 // --- Mock Tauri invoke ---
 const mockInvoke = vi.fn();
 vi.mock('@tauri-apps/api/core', () => ({
@@ -46,6 +51,8 @@ import {
   randomOutputsForTier,
   allocateAllFeasibleTiers,
   buildServerRunner,
+  parseElectrumLookupEndpoint,
+  parseFusionServerTarget,
   type ServerHelloSnapshot,
 } from '../ServerFusionRunner';
 import { Network } from '../../../state/slices/networkSlice';
@@ -54,6 +61,38 @@ import { Network } from '../../../state/slices/networkSlice';
 const MAX_COMPONENT_FEERATE = 5000;
 const MAX_EXCESS_FEE = 10_000;
 const MAX_COMPONENTS = 40;
+
+describe('server endpoint parsing', () => {
+  it('parses CashFusion TLS/plain targets and rejects ambiguous input', () => {
+    expect(parseFusionServerTarget('fusion.example:8789')).toEqual({
+      host: 'fusion.example',
+      port: 8789,
+      useSsl: true,
+    });
+    expect(parseFusionServerTarget('localhost:8788:t')).toEqual({
+      host: 'localhost',
+      port: 8788,
+      useSsl: false,
+    });
+    expect(() => parseFusionServerTarget('')).toThrow('invalid');
+    expect(() => parseFusionServerTarget('host:70000')).toThrow('invalid');
+  });
+
+  it('maps WSS Electrum endpoints onto native TCP ports', () => {
+    expect(
+      parseElectrumLookupEndpoint('wss://electrum.example:50004')
+    ).toEqual({
+      host: 'electrum.example',
+      port: 50002,
+      useSsl: true,
+    });
+    expect(parseElectrumLookupEndpoint('electrum.example')).toEqual({
+      host: 'electrum.example',
+      port: 50002,
+      useSsl: true,
+    });
+  });
+});
 
 const installNativeMocks = (fusionOutcome?: unknown) => {
   const txid =
@@ -234,6 +273,7 @@ describe('buildServerRunner — shared runner for manual and auto', () => {
     mockReservedOutpoints.mockReturnValue(new Set());
     mockReserveOutpoints.mockReset();
     mockReleaseOutpoints.mockReset();
+    mockFetchFusionStatus.mockReset();
   });
 
   // Deterministic rng that produces values making ~6 outputs at tier 10k.
@@ -468,7 +508,65 @@ describe('buildServerRunner — shared runner for manual and auto', () => {
 
     expect(mockInvoke).toHaveBeenCalledWith(
       'fusion_run',
-      expect.objectContaining({ expectedHello: hello })
+      expect.objectContaining({
+        expectedHello: hello,
+        lookupHost: 'electrum-chipnet.optnlabs.com',
+        lookupPort: 50002,
+        lookupUseSsl: true,
+      })
+    );
+  });
+
+  it('fetches a fresh ServerHello inside every unpinned round attempt', async () => {
+    const hello = {
+      ...makeHello({ tiers: [10_000] }),
+      donationAddress: null,
+    };
+    const onServerHello = vi.fn();
+    const runner = makeConfig({
+      expectedHello: undefined,
+      onServerHello,
+      inputLookupEndpoint: {
+        host: 'lookup.example',
+        port: 51002,
+        useSsl: true,
+      },
+    });
+    mockFetchFusionStatus.mockResolvedValue(hello);
+    mockGatherInputs.mockResolvedValue(makeInputs());
+    mockCreateFreshScripts.mockResolvedValue(
+      Array(20).fill('76a914' + '00'.repeat(20) + '88ac')
+    );
+    installNativeMocks({
+      ok: true,
+      broadcast_verified: true,
+      txid: 'ce'.repeat(32),
+      tx_hex: '01000000',
+      message: 'ok',
+    });
+    mockCompleteFusionBroadcast.mockResolvedValue({
+      tracked: true,
+      refreshed: true,
+      depthRecorded: 1,
+    });
+
+    await runner(makeCoins());
+
+    expect(mockFetchFusionStatus).toHaveBeenCalledWith(
+      '127.0.0.1',
+      8787,
+      false,
+      undefined
+    );
+    expect(onServerHello).toHaveBeenCalledWith(hello);
+    expect(mockInvoke).toHaveBeenCalledWith(
+      'fusion_run',
+      expect.objectContaining({
+        expectedHello: hello,
+        lookupHost: 'lookup.example',
+        lookupPort: 51002,
+        lookupUseSsl: true,
+      })
     );
   });
 

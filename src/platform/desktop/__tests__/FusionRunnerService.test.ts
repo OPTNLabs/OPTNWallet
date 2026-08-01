@@ -295,4 +295,26 @@ describe('FusionRunnerService — one path for manual and automatic rounds', () 
       txid: 'a'.repeat(64),
     });
   });
+
+  it('preserves a post-signature failure even when abort races with the error', async () => {
+    reconcile.mockResolvedValue({ addr: [coin('aa')] });
+    const controller = new AbortController();
+    runServer.mockImplementation(async () => {
+      controller.abort();
+      throw new Error('relay observation timed out after signing');
+    });
+
+    await expect(
+      startFusionRound({
+        ...base(),
+        mode: 'server',
+        trigger: 'manual',
+        signal: controller.signal,
+      })
+    ).resolves.toEqual({
+      status: 'failed',
+      mode: 'server',
+      message: 'relay observation timed out after signing',
+    });
+  });
 });

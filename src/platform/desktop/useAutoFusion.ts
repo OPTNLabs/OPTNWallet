@@ -16,6 +16,8 @@ import {
   selectAutoFuseEnabled,
   selectCashFusionEnabled,
   selectFuseDepth,
+  selectFusionServer,
+  selectFusionServers,
   selectNostrRelays,
   selectP2pFusionEnabled,
   selectTorAuto,
@@ -30,6 +32,10 @@ import { resolveFusionTransport } from './FusionTorResolver';
 import { decideAutoFusion } from './fusionAutoEngine';
 import { startFusionRound } from './FusionRunnerService';
 import { runP2pFusion } from './FusionP2pService';
+import {
+  buildServerRunner,
+  parseFusionServerTarget,
+} from './ServerFusionRunner';
 
 /**
  * How often the engine re-asks whether it may run.
@@ -45,6 +51,8 @@ export function useAutoFusion(): void {
   const cashFusionEnabled = useSelector(selectCashFusionEnabled);
   const autoFuseEnabled = useSelector(selectAutoFuseEnabled);
   const p2pFusionEnabled = useSelector(selectP2pFusionEnabled);
+  const savedFusionServer = useSelector(selectFusionServer);
+  const fusionServers = useSelector(selectFusionServers);
   const fuseDepth = useSelector(selectFuseDepth);
   const torEnabled = useSelector(selectTorEnabled);
   const torAuto = useSelector(selectTorAuto);
@@ -76,6 +84,8 @@ export function useAutoFusion(): void {
     torHost,
     torPortManual,
     nostrRelays,
+    savedFusionServer,
+    fusionServers,
   ]);
 
   const tick = useCallback(async () => {
@@ -89,6 +99,7 @@ export function useAutoFusion(): void {
       // may instead run Tor Browser/daemon or select a verified manual proxy.
       let torReady = false;
       let p2pTor: { host: string; port: number } | null = null;
+      let serverRunner: ReturnType<typeof buildServerRunner> | null = null;
       if (p2pFusionEnabled) {
         try {
           const route = await resolveFusionTransport('nostr-relay', {
@@ -105,9 +116,30 @@ export function useAutoFusion(): void {
           torReady = false;
         }
       } else {
-        // Server auto-fusion remains fail-closed until the shared server runner
-        // is implemented; keep its future Tor requirement explicit.
-        torReady = torEnabled;
+        const selectedServer =
+          savedFusionServer && fusionServers.includes(savedFusionServer)
+            ? savedFusionServer
+            : fusionServers[0];
+        if (!selectedServer) return;
+        try {
+          const target = parseFusionServerTarget(selectedServer);
+          const route = await resolveFusionTransport(target.host, {
+            enabled: torEnabled,
+            auto: torAuto,
+            host: torHost,
+            manualPort: torPortManual,
+          });
+          if (route.type === 'unavailable') return;
+          torReady = true;
+          serverRunner = buildServerRunner({
+            walletId,
+            network,
+            ...target,
+            tor: route.type === 'tor' ? route.tor : null,
+          });
+        } catch {
+          torReady = false;
+        }
       }
 
       const decision = decideAutoFusion({
@@ -118,10 +150,6 @@ export function useAutoFusion(): void {
         torReady,
       });
       if (!decision.run || controller.signal.aborted) return;
-      // The shared server runner is the next checkpoint. Do not enter the
-      // authoritative runner (and therefore do not consume its fee cooldown)
-      // until that transport can actually execute.
-      if (decision.mode === 'server') return;
 
       // The wallet may have been switched or locked while Tor was queried.
       if (session !== sessionRef.current) return;
@@ -149,15 +177,12 @@ export function useAutoFusion(): void {
               signal,
             });
           },
-          // Server fusion needs a handshake, tier choice and output allocation
-          // that only the settings screen currently assembles. Until that is
-          // extracted, an automatic SERVER round is refused rather than run with
-          // guessed parameters — refusing costs a missed round, guessing spends a
-          // fee on a round that cannot complete.
-          runServer: () =>
-            Promise.reject(
-              new Error('Automatic server fusion is not wired up yet.')
-            ),
+          runServer:
+            serverRunner ??
+            (() =>
+              Promise.reject(
+                new Error('No verified server Fusion route is available.')
+              )),
         },
       });
 
@@ -192,6 +217,8 @@ export function useAutoFusion(): void {
     torHost,
     torPortManual,
     nostrRelays,
+    savedFusionServer,
+    fusionServers,
     walletId,
     network,
   ]);

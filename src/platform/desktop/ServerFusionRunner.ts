@@ -11,8 +11,12 @@
 import { invoke } from '@tauri-apps/api/core';
 
 import OutboundTransactionTracker from '../../services/OutboundTransactionTracker';
+import {
+  fetchFusionServerStatus,
+} from '../../services/fusion/FusionStatusService';
 import { Network } from '../../state/slices/networkSlice';
 import type { UTXO } from '../../types/types';
+import { getElectrumServers } from '../../utils/servers/InfraUrls';
 import {
   gatherInputs,
   createFreshFusionOutputScripts,
@@ -50,6 +54,7 @@ export interface ServerHelloSnapshot {
   componentFeerate: number;
   minExcessFee: number;
   maxExcessFee: number;
+  donationAddress?: string | null;
 }
 
 interface FusionExecutionStatus {
@@ -68,6 +73,69 @@ interface FusionRelayEndpoints {
   relayPort: number;
   observerHost: string;
   observerPort: number;
+}
+
+export interface FusionElectrumEndpoint {
+  host: string;
+  port: number;
+  useSsl: boolean;
+}
+
+export interface FusionServerTarget {
+  host: string;
+  port: number;
+  useSsl: boolean;
+}
+
+export function parseFusionServerTarget(server: string): FusionServerTarget {
+  const token = server.trim().split(/\s+/)[0] ?? '';
+  const match = /^([^:\s]+)(?::(\d+))?(?::([st]))?$/.exec(token);
+  if (!match) throw new Error('CashFusion server address is invalid.');
+  const port = match[2] === undefined ? 8789 : Number(match[2]);
+  if (!match[1] || !Number.isInteger(port) || port < 1 || port > 65_535) {
+    throw new Error('CashFusion server address is invalid.');
+  }
+  return {
+    host: match[1],
+    port,
+    useSsl: match[3] !== 't',
+  };
+}
+
+export function parseElectrumLookupEndpoint(
+  server: string
+): FusionElectrumEndpoint {
+  const token = server.trim().split(/\s+/)[0] ?? '';
+  if (!token) throw new Error('No Electrum server is configured.');
+  if (/^wss?:\/\//i.test(token)) {
+    const url = new URL(token);
+    const secure = url.protocol.toLowerCase() === 'wss:';
+    const requestedPort = Number(url.port || (secure ? 50004 : 50003));
+    const port =
+      requestedPort === 50004
+        ? 50002
+        : requestedPort === 50003
+          ? 50001
+          : requestedPort;
+    if (!url.hostname || !Number.isInteger(port) || port < 1 || port > 65_535) {
+      throw new Error('Electrum server address is invalid.');
+    }
+    return { host: url.hostname, port, useSsl: secure };
+  }
+
+  const match = /^([^:\s]+)(?::(\d+))?(?::([st]))?$/.exec(token);
+  if (!match) throw new Error('Electrum server address is invalid.');
+  const port = match[2] === undefined ? 50002 : Number(match[2]);
+  if (!match[1] || !Number.isInteger(port) || port < 1 || port > 65_535) {
+    throw new Error('Electrum server address is invalid.');
+  }
+  return { host: match[1], port, useSsl: match[3] !== 't' };
+}
+
+function defaultInputLookupEndpoint(network: Network): FusionElectrumEndpoint {
+  const server = getElectrumServers(network)[0];
+  if (!server) throw new Error('No Electrum server is configured.');
+  return parseElectrumLookupEndpoint(server);
 }
 
 function defaultRelayEndpoints(network: Network): FusionRelayEndpoints {
@@ -298,11 +366,15 @@ export function allocateAllFeasibleTiers(
 export interface ServerRunnerConfig {
   walletId: number;
   network: Network;
-  expectedHello: ServerHelloSnapshot;
   host: string;
   port: number;
   useSsl: boolean;
   tor: { host: string; port: number } | null;
+  /** Tests may pin a snapshot; production callers omit this so every attempt
+   * performs a fresh handshake while holding the wallet-wide round lease. */
+  expectedHello?: ServerHelloSnapshot;
+  onServerHello?: (hello: ServerHelloSnapshot) => void;
+  inputLookupEndpoint?: FusionElectrumEndpoint;
   relayEndpoints?: FusionRelayEndpoints;
   /** Injected for deterministic tests; defaults to crypto.getRandomValues. */
   _testRng?: () => number;
@@ -340,12 +412,24 @@ export function buildServerRunner(
   config: ServerRunnerConfig
 ): (coins: UTXO[], signal?: AbortSignal) => Promise<{ txid: string; warning?: string }> {
   // Validate up front — no keys are derived if the hello is bad
-  validateServerHello(config.expectedHello);
+  if (config.expectedHello) validateServerHello(config.expectedHello);
 
   return async (coins, signal) => {
     if (signal?.aborted) throw new Error('fusion round cancelled');
 
     await requireNativeExecutionReady();
+    if (signal?.aborted) throw new Error('fusion round cancelled');
+
+    const expectedHello =
+      config.expectedHello ??
+      (await fetchFusionServerStatus(
+        config.host,
+        config.port,
+        config.useSsl,
+        config.tor ?? undefined
+      ));
+    validateServerHello(expectedHello);
+    config.onServerHello?.(expectedHello);
     if (signal?.aborted) throw new Error('fusion round cancelled');
 
     const roundId = createRoundId();
@@ -393,7 +477,7 @@ export function buildServerRunner(
         (() =>
           crypto.getRandomValues(new Uint32Array(1))[0] / 0x100000000);
       const plans = allocateAllFeasibleTiers(
-        config.expectedHello,
+        expectedHello,
         sumIn,
         inputPubkeys,
         rng
@@ -423,6 +507,9 @@ export function buildServerRunner(
       // disclosed signatures. Keep the temporary lock unless a definitive
       // failure is returned or the durable outbound tracker takes over.
       retainTemporaryReservation = true;
+      const lookupEndpoint =
+        config.inputLookupEndpoint ??
+        defaultInputLookupEndpoint(config.network);
       const outcome = await invoke<FusionOutcome>('fusion_run', {
         roundId,
         host: config.host,
@@ -431,9 +518,12 @@ export function buildServerRunner(
         tierPlans,
         inputs,
         outputScripts: allScripts,
+        lookupHost: lookupEndpoint.host,
+        lookupPort: lookupEndpoint.port,
+        lookupUseSsl: lookupEndpoint.useSsl,
         torHost: config.tor?.host ?? null,
         torPort: config.tor?.port ?? null,
-        expectedHello: config.expectedHello,
+        expectedHello,
       });
       runSettled = true;
 

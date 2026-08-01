@@ -75,6 +75,15 @@ export interface StartFusionRoundOptions {
  */
 const heldLeases = new Map<number, string>();
 
+function isCancellationError(error: unknown): boolean {
+  if (error instanceof Error) {
+    return (
+      error.name === 'AbortError' || error.message === 'fusion round cancelled'
+    );
+  }
+  return error === 'fusion round cancelled';
+}
+
 export function isFusionRunning(walletId: number): boolean {
   return heldLeases.has(walletId);
 }
@@ -163,7 +172,12 @@ export async function startFusionRound(
         ...(result.warning ? { warning: result.warning } : {}),
       };
     } catch (error) {
-      if (options.signal?.aborted) return { status: 'cancelled' };
+      // The signal alone is insufficient here: it can race with a relay or
+      // observation error after signatures have escaped. Only an explicit
+      // transport cancellation is safely reported as cancelled.
+      if (options.signal?.aborted && isCancellationError(error)) {
+        return { status: 'cancelled' };
+      }
       return {
         status: 'failed',
         mode,
