@@ -53,6 +53,7 @@ import {
   buildServerRunner,
   parseElectrumLookupEndpoint,
   parseFusionServerTarget,
+  serverFusionPrivacyDestination,
   type ServerHelloSnapshot,
 } from '../ServerFusionRunner';
 import { Network } from '../../../state/slices/networkSlice';
@@ -91,6 +92,15 @@ describe('server endpoint parsing', () => {
       port: 50002,
       useSsl: true,
     });
+  });
+
+  it('still resolves Tor for a remote lookup behind a local Fusion server', () => {
+    expect(
+      serverFusionPrivacyDestination('localhost', 'electrum.example')
+    ).toBe('electrum.example');
+    expect(
+      serverFusionPrivacyDestination('fusion.example', 'electrum.example')
+    ).toBe('fusion.example');
   });
 });
 

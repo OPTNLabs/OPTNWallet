@@ -36,7 +36,7 @@ use super::server_plan::{
 };
 use super::session::{build_covert_component, calc_initial_hash, calc_round_hash};
 use super::tx::FusionTx;
-use super::{connect_stream, pb, recv_frame, send_frame, Transport, VERSION};
+use super::{connect_stream, is_local_server, pb, recv_frame, send_frame, Transport, VERSION};
 
 // Timing relative to covert_T0 (StartRound receipt), from protocol.py.
 const T_START_COMPS: Duration = Duration::from_secs(5);
@@ -44,6 +44,8 @@ const T_START_SIGS: Duration = Duration::from_secs(20);
 const T_END_COMPS: Duration = Duration::from_secs(15);
 const T_END_SIGS: Duration = Duration::from_secs(30);
 const T_EXPECTING_CONCLUSION: Duration = Duration::from_secs(35);
+const T_START_CLOSE: Duration = Duration::from_secs(45);
+const T_START_CLOSE_BLAME: Duration = Duration::from_secs(80);
 const COVERT_CONNECT_WINDOW: Duration = Duration::from_secs(15);
 const COVERT_CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
 const COVERT_SUBMIT_WINDOW: Duration = Duration::from_secs(5);
@@ -72,9 +74,12 @@ pub struct FusionRunParams<'a> {
     pub inputs: Vec<FusionInputKey>,
     /// Persisted fresh P2PKH scripts sized for the largest feasible tier plan.
     pub output_scripts: Vec<Vec<u8>>,
-    /// Transport for BOTH the main and covert connections. Must be Tor for a
-    /// remote server (covert unlinkability depends on it).
-    pub transport: Transport<'a>,
+    /// Route for the user-selected main Fusion server.
+    pub main_transport: Transport<'a>,
+    /// Positively verified Tor route for any remote server-provided endpoint.
+    /// A local main server may still announce a remote covert endpoint, so the
+    /// main connection's localhost exemption cannot be reused for that route.
+    pub remote_transport: Option<Transport<'a>>,
     /// Wallet-configured Electrum endpoint used only to validate peer inputs
     /// during blame. It is never supplied by the Fusion server.
     pub lookup_endpoint: ElectrumEndpoint,
@@ -143,6 +148,20 @@ fn scalar_from_privkey(b: &[u8; 32]) -> Result<Scalar, String> {
 
 fn hexify(bytes: &[u8]) -> String {
     bytes.iter().map(|b| format!("{b:02x}")).collect()
+}
+
+fn select_covert_transport<'a>(
+    main_host: &str,
+    covert_host: &str,
+    remote_transport: Option<Transport<'a>>,
+) -> Result<Transport<'a>, String> {
+    if is_local_server(main_host) && is_local_server(covert_host) {
+        return Ok(Transport::Direct);
+    }
+    match remote_transport {
+        Some(route @ Transport::Tor { .. }) => Ok(route),
+        _ => Err("CashFusion covert endpoint requires a verified Tor route".into()),
+    }
 }
 
 async fn recv_server<S>(stream: &mut S) -> Result<pb::server_message::Msg, String>
@@ -526,7 +545,8 @@ pub async fn run_fusion(params: FusionRunParams<'_>) -> Result<FusionOutcome, St
         tier_plans,
         inputs,
         output_scripts: all_output_scripts,
-        transport,
+        main_transport,
+        remote_transport,
         lookup_endpoint,
         lookup_transport,
         timing,
@@ -539,7 +559,11 @@ pub async fn run_fusion(params: FusionRunParams<'_>) -> Result<FusionOutcome, St
     cancel.check()?;
 
     // --- Main connection: hello -> join ---
-    let mut main = cancellable(&cancel, connect_stream(host, port, use_ssl, transport)).await?;
+    let mut main = cancellable(
+        &cancel,
+        connect_stream(host, port, use_ssl, main_transport),
+    )
+    .await?;
 
     let hello = pb::ClientMessage {
         msg: Some(pb::client_message::Msg::Clienthello(pb::ClientHello {
@@ -652,11 +676,12 @@ pub async fn run_fusion(params: FusionRunParams<'_>) -> Result<FusionOutcome, St
         begin.server_time,
     );
     let mut last_hash = initial_hash;
+    let covert_transport = select_covert_transport(host, &covert_domain, remote_transport)?;
     let covert_schedule = CovertSchedule::start(
         &covert_domain,
         covert_port,
         covert_ssl,
-        transport,
+        covert_transport,
         num_components,
         timing.connect_spares,
         fusion_begin_at,
@@ -799,6 +824,7 @@ pub async fn run_fusion(params: FusionRunParams<'_>) -> Result<FusionOutcome, St
     let pool = covert_pool
         .as_mut()
         .ok_or_else(|| "covert connection pool is unavailable".to_string())?;
+    pool.set_close_start(covert_t0 + T_START_CLOSE);
     if pool.slot_count() != rc.components_sorted.len() {
         return Err("covert slot count does not match the committed components".into());
     }
@@ -813,19 +839,26 @@ pub async fn run_fusion(params: FusionRunParams<'_>) -> Result<FusionOutcome, St
         })
         .collect::<Vec<_>>();
 
+    // From the first covert component onward, leaving early would reveal which
+    // connections belong to this wallet and can also strand the other players.
+    // Match Electron Cash's point-of-no-return behavior: finish this attempt
+    // (including blame/restart) even if the UI asks to cancel. The original
+    // cancellation flag is observed again before the next round commits.
+    let round_irreversible = CancelFlag::new();
+
     // Download the shared material while the randomized covert submissions run.
     let submit_components = pool.submit_phase(
         components_start,
         covert_t0 + timing.comps_deadline,
         timing.submit_timeout,
         component_messages,
-        &cancel,
+        &round_irreversible,
     );
     let receive_shared = async {
         let shared_deadline = covert_t0 + timing.sigs_at;
         let all_commitments = match recv_server_before(
             &mut main,
-            &cancel,
+            &round_irreversible,
             shared_deadline,
             "AllCommitments",
         )
@@ -841,8 +874,13 @@ pub async fn run_fusion(params: FusionRunParams<'_>) -> Result<FusionOutcome, St
             _ => return Err("expected AllCommitments".into()),
         };
         let shared =
-            match recv_server_before(&mut main, &cancel, shared_deadline, "ShareCovertComponents")
-                .await?
+            match recv_server_before(
+                &mut main,
+                &round_irreversible,
+                shared_deadline,
+                "ShareCovertComponents",
+            )
+            .await?
             {
                 pb::server_message::Msg::Sharecovertcomponents(message) => message,
                 pb::server_message::Msg::Error(error) => {
@@ -901,9 +939,10 @@ pub async fn run_fusion(params: FusionRunParams<'_>) -> Result<FusionOutcome, St
     last_hash = session_hash;
 
     if skip_signatures {
+        pool.set_close_start(covert_t0 + T_START_CLOSE_BLAME);
         run_blame_phase(
             &mut main,
-            &cancel,
+            &round_irreversible,
             &rc,
             &all_commitments,
             &all_components,
@@ -918,7 +957,6 @@ pub async fn run_fusion(params: FusionRunParams<'_>) -> Result<FusionOutcome, St
         continue;
     }
 
-    cancel.check()?;
     let signing_plans = validate_and_index_plans(
         &live_hello,
         &input_pubkeys,
@@ -980,22 +1018,18 @@ pub async fn run_fusion(params: FusionRunParams<'_>) -> Result<FusionOutcome, St
     if Instant::now() > signatures_start {
         return Err("shared transaction verification missed the signature window".into());
     }
-    cancel.check()?;
-
-    // Point of no return: once a valid signature can reach the server, the
-    // transaction may be broadcast. Resolve the outcome even if the UI asks to
-    // cancel later, so wallet completion tracking cannot be skipped.
-    let irreversible = CancelFlag::new();
+    // Component disclosure was already the privacy point of no return. Resolve
+    // the signature and result phases under the same non-cancellable attempt.
     let submit_signatures = pool.submit_phase(
         signatures_start,
         covert_t0 + timing.sigs_deadline,
         timing.submit_timeout,
         signature_messages,
-        &irreversible,
+        &round_irreversible,
     );
     let receive_result = recv_server_before(
         &mut main,
-        &irreversible,
+        &round_irreversible,
         covert_t0 + timing.conclusion_at,
         "FusionResult",
     );
@@ -1024,9 +1058,10 @@ pub async fn run_fusion(params: FusionRunParams<'_>) -> Result<FusionOutcome, St
         {
             return Err("server identified one of this wallet's valid components as bad".into());
         }
+        pool.set_close_start(covert_t0 + T_START_CLOSE_BLAME);
         run_blame_phase(
             &mut main,
-            &cancel,
+            &round_irreversible,
             &rc,
             &all_commitments,
             &all_components,
@@ -1073,6 +1108,42 @@ mod tests {
     enum Covert {
         Component(usize, Vec<u8>),
         Signature(u32, Vec<u8>),
+    }
+
+    #[test]
+    fn a_server_supplied_remote_covert_endpoint_never_inherits_local_direct_access() {
+        assert!(matches!(
+            select_covert_transport("localhost", "127.0.0.1", None).unwrap(),
+            Transport::Direct
+        ));
+        assert!(select_covert_transport("localhost", "covert.example", None).is_err());
+        assert!(matches!(
+            select_covert_transport(
+                "localhost",
+                "covert.example",
+                Some(Transport::Tor {
+                    host: "127.0.0.1",
+                    port: 9050,
+                }),
+            )
+            .unwrap(),
+            Transport::Tor {
+                host: "127.0.0.1",
+                port: 9050
+            }
+        ));
+        assert!(matches!(
+            select_covert_transport(
+                "fusion.example",
+                "localhost",
+                Some(Transport::Tor {
+                    host: "127.0.0.1",
+                    port: 9050,
+                }),
+            )
+            .unwrap(),
+            Transport::Tor { .. }
+        ));
     }
 
     fn test_input_key(
@@ -1205,6 +1276,7 @@ mod tests {
         tier: u64,
         covert_port: u16,
         restart_once: bool,
+        cancel_after_components: Option<CancelFlag>,
     ) -> Result<String, String> {
         let server_time = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -1383,6 +1455,9 @@ mod tests {
                     None => return Err("covert channel closed early".into()),
                 }
             }
+            if let Some(cancel) = &cancel_after_components {
+                cancel.cancel();
+            }
             if component_connections.len() != num_components {
                 return Err("components did not use one distinct covert socket per slot".into());
             }
@@ -1476,7 +1551,7 @@ mod tests {
     }
 
     #[test]
-    fn full_round_against_a_mock_server_over_plain_tcp() {
+    fn cancellation_after_component_disclosure_still_finishes_the_round() {
         // End-to-end: run_fusion drives a complete round against the mock server
         // above, over non-SSL TCP. Passing means every stage lines up — hello,
         // join, blind-sig finalize, covert submit, session-hash match, tx build +
@@ -1494,16 +1569,6 @@ mod tests {
             let num_components = 17usize; // 1 input + 10 outputs + 6 blanks
             let feerate = 1000u64;
             let tier = 90_000u64;
-
-            let server = tokio::spawn(mock_server(
-                main_l,
-                covert_l,
-                num_components,
-                feerate,
-                tier,
-                covert_port,
-                false,
-            ));
 
             // A real input key so the P2PKH scriptCode + signature are consistent.
             let priv_k = random_nonce();
@@ -1524,6 +1589,18 @@ mod tests {
                 19_951, 19_951, 19_951, 19_951, 19_951, 19_951, 19_951, 19_951, 19_951, 19_950,
             ];
 
+            let cancel = CancelFlag::new();
+            let server = tokio::spawn(mock_server(
+                main_l,
+                covert_l,
+                num_components,
+                feerate,
+                tier,
+                covert_port,
+                false,
+                Some(cancel.clone()),
+            ));
+
             let params = FusionRunParams {
                 host: "127.0.0.1",
                 port: main_port,
@@ -1541,7 +1618,8 @@ mod tests {
                     privkey,
                 }],
                 output_scripts,
-                transport: Transport::Direct,
+                main_transport: Transport::Direct,
+                remote_transport: None,
                 lookup_endpoint: ElectrumEndpoint {
                     host: "127.0.0.1".into(),
                     port: 1,
@@ -1562,7 +1640,7 @@ mod tests {
                     sigs_deadline: Duration::from_millis(1_400),
                     conclusion_at: Duration::from_secs(2),
                 },
-                cancel: CancelFlag::new(),
+                cancel,
                 expected_hello: ExpectedHello {
                     tiers: vec![tier],
                     num_components: num_components as u32,
@@ -1613,6 +1691,7 @@ mod tests {
                 tier,
                 covert_port,
                 true,
+                None,
             ));
 
             let priv_k = random_nonce();
@@ -1648,7 +1727,8 @@ mod tests {
                     privkey,
                 }],
                 output_scripts,
-                transport: Transport::Direct,
+                main_transport: Transport::Direct,
+                remote_transport: None,
                 lookup_endpoint: ElectrumEndpoint {
                     host: "127.0.0.1".into(),
                     port: 1,

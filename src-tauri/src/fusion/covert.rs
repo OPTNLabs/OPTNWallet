@@ -22,7 +22,7 @@ use std::time::{Duration, Instant};
 use futures_util::future::join_all;
 use prost::Message;
 use rand_core::{OsRng, RngCore};
-use tokio::io::{AsyncRead, AsyncWrite};
+use tokio::io::{AsyncRead, AsyncWrite, AsyncWriteExt};
 use tokio::task::JoinHandle;
 
 use super::round_cancel::CancelFlag;
@@ -56,6 +56,10 @@ impl CovertConnection {
     /// OK response.
     pub async fn submit(&mut self, covert_message: &[u8]) -> Result<(), String> {
         submit_on(&mut self.stream, covert_message).await
+    }
+
+    async fn close(mut self) {
+        let _ = self.stream.shutdown().await;
     }
 }
 
@@ -201,6 +205,8 @@ impl CovertSchedule {
         Ok(CovertPool {
             slots: channels,
             spares,
+            retired: Vec::new(),
+            close_start: Instant::now(),
         })
     }
 }
@@ -219,6 +225,8 @@ impl Drop for CovertSchedule {
 pub struct CovertPool {
     slots: Vec<CovertChannel>,
     spares: Vec<CovertChannel>,
+    retired: Vec<CovertChannel>,
+    close_start: Instant,
 }
 
 struct ActionResult {
@@ -232,6 +240,13 @@ struct ActionResult {
 impl CovertPool {
     pub fn slot_count(&self) -> usize {
         self.slots.len()
+    }
+
+    /// Set the protocol-relative beginning of the randomized close window.
+    /// Each channel retains its own action delay, so close timing cannot group
+    /// this wallet's otherwise unlinkable covert connections.
+    pub fn set_close_start(&mut self, close_start: Instant) {
+        self.close_start = close_start;
     }
 
     /// Submit one message per component slot. `None` sends a keepalive so slots
@@ -250,6 +265,11 @@ impl CovertPool {
         }
         if Instant::now() > phase_start {
             return Err("covert submission phase started too slowly".into());
+        }
+
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            return Err("covert submission deadline elapsed".into());
         }
 
         let slot_count = self.slots.len();
@@ -278,24 +298,20 @@ impl CovertPool {
             ));
         }
 
-        let remaining = deadline.saturating_duration_since(Instant::now());
-        if remaining.is_zero() {
-            return Err("covert submission deadline elapsed".into());
-        }
-        let results = tokio::select! {
-            biased;
-            _ = cancel.cancelled() => return Err("fusion round cancelled".into()),
-            result = tokio::time::timeout(remaining, join_all(actions)) => {
-                result.map_err(|_| "covert submission deadline elapsed".to_string())?
-            }
-        };
+        // Every scheduled operation has its own bounded timeout. Do not wrap
+        // the group in a cancelling timeout: cancelling join_all would drop all
+        // live sockets at once and reveal that they belong to one participant.
+        let results = join_all(actions).await;
 
         let mut slot_results = Vec::with_capacity(slot_count);
         let mut usable_spares = Vec::new();
+        let mut retired_channels = std::mem::take(&mut self.retired);
         for result in results {
             if result.is_spare {
                 if result.result.is_ok() {
                     usable_spares.push(result.channel);
+                } else {
+                    retired_channels.push(result.channel);
                 }
             } else {
                 slot_results.push(result);
@@ -304,6 +320,7 @@ impl CovertPool {
         slot_results.sort_by_key(|result| result.index);
 
         let mut restored_slots = Vec::with_capacity(slot_count);
+        let mut phase_error = None;
         for result in slot_results {
             if result.result.is_ok() {
                 restored_slots.push(result.channel);
@@ -330,7 +347,10 @@ impl CovertPool {
                             replacement = Some(spare);
                             break;
                         }
-                        Err(error) => last_error = error,
+                        Err(error) => {
+                            last_error = error;
+                            retired_channels.push(spare);
+                        }
                     }
                 } else {
                     replacement = Some(spare);
@@ -338,14 +358,44 @@ impl CovertPool {
                 }
             }
 
-            restored_slots.push(replacement.ok_or_else(|| {
-                format!("covert connections failed and no spare remained: {last_error}")
-            })?);
+            if let Some(replacement) = replacement {
+                retired_channels.push(result.channel);
+                restored_slots.push(replacement);
+            } else {
+                restored_slots.push(result.channel);
+                phase_error.get_or_insert_with(|| {
+                    format!("covert connections failed and no spare remained: {last_error}")
+                });
+            }
         }
 
         self.slots = restored_slots;
         self.spares = usable_spares;
-        Ok(())
+        self.retired = retired_channels;
+        match phase_error {
+            Some(error) => Err(error),
+            None => Ok(()),
+        }
+    }
+}
+
+impl Drop for CovertPool {
+    fn drop(&mut self) {
+        let close_start = self.close_start;
+        let mut channels = std::mem::take(&mut self.slots);
+        channels.extend(std::mem::take(&mut self.spares));
+        channels.extend(std::mem::take(&mut self.retired));
+
+        let Ok(runtime) = tokio::runtime::Handle::try_current() else {
+            return;
+        };
+        for channel in channels {
+            let close_at = close_start + channel.action_delay;
+            runtime.spawn(async move {
+                tokio::time::sleep_until(close_at.into()).await;
+                channel.connection.close().await;
+            });
+        }
     }
 }
 
