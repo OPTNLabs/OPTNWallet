@@ -281,6 +281,22 @@ const migrations: Array<(db: Database) => Promise<void>> = [
       [CHIPNET_ACCOUNT_PATH, Network.CHIPNET, LEGACY_CHIPNET_ACCOUNT_PATH]
     );
   },
+  async (db) => {
+    // Watch-only wallets keep an account xPub instead of a mnemonic. Addresses
+    // are derived from it, so it has to survive a restart — without it the
+    // wallet cannot regenerate its own addresses and looks empty.
+    const columns = new Set<string>();
+    const statement = db.prepare('PRAGMA table_info(wallets);');
+    while (statement.step()) {
+      const row = statement.getAsObject() as Record<string, unknown>;
+      if (typeof row.name === 'string') columns.add(row.name);
+    }
+    statement.free();
+
+    if (!columns.has('account_xpub')) {
+      db.run('ALTER TABLE wallets ADD COLUMN account_xpub TEXT;');
+    }
+  },
 ];
 
 function databaseVersion(database: Database): number {

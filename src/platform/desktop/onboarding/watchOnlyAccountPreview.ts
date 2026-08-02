@@ -26,6 +26,21 @@ export type WatchOnlyAccountPreview = {
   change: PublicAddressPreview;
 };
 
+/**
+ * Branch-level xPub for receive (0) or change (1).
+ *
+ * Exported because persisting a watch-only wallet derives a whole gap range per
+ * branch, not just the preview's first address, and re-deriving the branch key
+ * per address would repeat the validation on every call.
+ */
+export function watchOnlyBranchXpub(
+  accountXpub: string,
+  network: Network,
+  branchIndex: 0 | 1
+): string {
+  return deriveBranchXpub(accountXpub, network, branchIndex);
+}
+
 function deriveBranchXpub(
   accountXpub: string,
   network: Network,
