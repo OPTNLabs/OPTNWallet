@@ -47,26 +47,18 @@ jobs:
             target: x86_64-pc-windows-msvc
             tor-target: windows-x86_64
             artifact-name: preview-windows
-            bundle-args: ''
           - platform: macos-latest
             target: aarch64-apple-darwin
             tor-target: macos-aarch64
             artifact-name: preview-macos-arm
-            bundle-args: ''
           - platform: macos-15-intel
             target: x86_64-apple-darwin
             tor-target: macos-x86_64
             artifact-name: preview-macos-intel
-            bundle-args: ''
-          # Linux: skip the AppImage bundle. linuxdeploy fails on GitHub runners
-          # (no FUSE; APPIMAGE_EXTRACT_AND_RUN didn't help either), and a debug
-          # preview only needs an installable — deb+rpm bundle fine. The release
-          # workflow still builds the AppImage (with libfuse2) for distribution.
           - platform: ubuntu-22.04
             target: x86_64-unknown-linux-gnu
             tor-target: linux-x86_64
             artifact-name: preview-linux
-            bundle-args: '--bundles deb,rpm'
 
     runs-on: ${{ matrix.platform }}
     steps:
@@ -84,7 +76,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y \
             libwebkit2gtk-4.1-dev libappindicator3-dev \
-            librsvg2-dev patchelf libssl-dev libgtk-3-dev
+            librsvg2-dev patchelf libssl-dev libgtk-3-dev libfuse2
 
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
@@ -103,9 +95,15 @@ jobs:
         run: node scripts/fetch-tor.mjs ${{ matrix.tor-target }}
 
       - name: Build Tauri (debug)
-        # bundle-args is empty on Windows/macOS and '--bundles deb,rpm' on Linux
-        # (skips the AppImage that linuxdeploy can't build on the runner).
-        run: npx tauri build --debug --target ${{ matrix.target }} ${{ matrix.bundle-args }}
+        # No --bundles: tauri.conf.json already says targets "all", and a preview
+        # that skipped a format would stop being a preview of what ships. Linux
+        # builds the AppImage here too, which is the only place the linuxdeploy
+        # step gets exercised before a release depends on it. libfuse2 above is
+        # what makes that work on the runner.
+        env:
+          APPIMAGE_EXTRACT_AND_RUN: '1'
+          NO_STRIP: 'true'
+        run: npx tauri build --debug --target ${{ matrix.target }}
 
       - name: Upload preview artifact
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
