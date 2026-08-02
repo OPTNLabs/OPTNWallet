@@ -355,7 +355,48 @@ async function applyPendingMigrations(database: Database): Promise<boolean> {
     database.run(`PRAGMA user_version = ${version};`);
     changed = true;
   }
+  logWalletDerivationState(database);
   return changed;
+}
+
+/**
+ * One line per wallet: which chain, which path, and how many addresses exist.
+ *
+ * A wallet showing a zero balance is ambiguous — it looks identical whether the
+ * coins are spent, the path is wrong, or the address set was cleared and never
+ * rebuilt. Diagnosing that by guessing costs hours and, when the guess is a
+ * migration, can move the wallet further from its coins. This makes the state
+ * answerable from the log.
+ *
+ * Deliberately no addresses, xpubs or names — an id, a network, a path and a
+ * count identify nothing about the owner and are safe to paste into a report.
+ */
+function logWalletDerivationState(database: Database): void {
+  try {
+    const statement = database.prepare(
+      `SELECT w.id                AS id,
+              w.networkType       AS network,
+              w.walletType        AS type,
+              w.derivation_path   AS path,
+              w.derivation_path_source AS source,
+              (SELECT COUNT(*) FROM keys k WHERE k.wallet_id = w.id) AS addresses
+         FROM wallets w ORDER BY w.id`
+    );
+    const rows: string[] = [];
+    while (statement.step()) {
+      const r = statement.getAsObject() as Record<string, unknown>;
+      rows.push(
+        `#${r.id} ${r.network} ${r.type ?? 'standard'} ${r.path ?? '(none)'} ` +
+          `(${r.source ?? '?'}) addresses=${r.addresses}`
+      );
+    }
+    statement.free();
+    if (rows.length > 0) {
+      console.info(`[wallets] derivation state:\n  ${rows.join('\n  ')}`);
+    }
+  } catch (error) {
+    logError('DatabaseService.logWalletDerivationState', error);
+  }
 }
 
 function walletIds(database: Database): number[] {
