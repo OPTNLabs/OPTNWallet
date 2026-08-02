@@ -6,7 +6,7 @@ import {
   createTransactionDetailsTable,
 } from '../../utils/schema/schema';
 import { get as idbGet, set as idbSet } from 'idb-keyval';
-import { logError } from '../../utils/errorHandling';
+import { logError, logWarn } from '../../utils/errorHandling';
 import SecretCryptoService, {
   SECRET_ENC_PREFIX,
   isEncryptedPayload,
@@ -392,7 +392,9 @@ function logWalletDerivationState(database: Database): void {
     }
     statement.free();
     if (rows.length > 0) {
-      console.info(`[wallets] derivation state:\n  ${rows.join('\n  ')}`);
+      // logWarn, not console.info: only warnings and errors reach the app log,
+      // and a diagnostic nobody can read is not a diagnostic.
+      logWarn('DatabaseService.walletDerivationState', rows.join(' | '));
     }
   } catch (error) {
     logError('DatabaseService.logWalletDerivationState', error);
