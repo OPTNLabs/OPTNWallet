@@ -672,3 +672,65 @@ describe('fusion server scheme defaults', () => {
     expect(parseFusionServerTarget('fusion.servo.cash:8789:t').useSsl).toBe(false);
   });
 });
+
+describe('tier pinning', () => {
+  const hello = {
+    tiers: [10_000, 100_000, 1_000_000, 10_000_000],
+    numComponents: 23,
+    componentFeerate: 1000,
+    minExcessFee: 10,
+    maxExcessFee: 300_000,
+  };
+  // Deterministic RNG: allocation consumes randomness for the fuzz fee and the
+  // output draw, so a fixed sequence keeps these assertions stable.
+  const rng = () => 0.5;
+  // Ten DISTINCT pubkeys. Electron Cash requires MIN_TX_COMPONENTS (11)
+  // components, and minOutputs = 11 - numDistinctInputs — so with only two
+  // inputs a wallet must produce nine outputs, which no tier satisfies here.
+  // This is the real constraint, not a test artifact.
+  const pubkeys = Array.from({ length: 10 }, (_, i) =>
+    Uint8Array.from([0x02, ...new Array(32).fill(i + 1)])
+  );
+
+  it('registers whatever tiers the coins happen to afford', () => {
+    // Note how FEW qualify: the feasible band is a narrow function of sumIn and
+    // input count, and the fuzz fee moves it between runs. That narrowness is
+    // exactly why two wallets rarely land in the same pool by chance, and why
+    // pinning exists.
+    const all = allocateAllFeasibleTiers(hello, 5_000_000, pubkeys, rng);
+    expect(all.size).toBeGreaterThanOrEqual(1);
+  });
+
+  it('registers only the pinned tier', () => {
+    // The point: two wallets with different amounts otherwise land in
+    // different pools and wait forever with nothing on screen saying why.
+    const all = allocateAllFeasibleTiers(hello, 5_000_000, pubkeys, rng);
+    const target = [...all.keys()][0];
+
+    const pinned = allocateAllFeasibleTiers(hello, 5_000_000, pubkeys, rng, [
+      target,
+    ]);
+    expect([...pinned.keys()]).toEqual([target]);
+  });
+
+  it('returns nothing for a tier the wallet cannot fund', () => {
+    // Must be empty rather than silently falling back to every tier, which
+    // would reintroduce the problem pinning exists to solve.
+    const pinned = allocateAllFeasibleTiers(hello, 5_000_000, pubkeys, rng, [
+      10_000_000,
+    ]);
+    expect(pinned.size).toBe(0);
+  });
+
+  it('ignores a tier the server does not advertise', () => {
+    expect(
+      allocateAllFeasibleTiers(hello, 5_000_000, pubkeys, rng, [777]).size
+    ).toBe(0);
+  });
+
+  it('treats an empty pin list as no preference', () => {
+    const all = allocateAllFeasibleTiers(hello, 5_000_000, pubkeys, rng);
+    const empty = allocateAllFeasibleTiers(hello, 5_000_000, pubkeys, rng, []);
+    expect([...empty.keys()]).toEqual([...all.keys()]);
+  });
+});
