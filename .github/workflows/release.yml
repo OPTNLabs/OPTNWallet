@@ -339,7 +339,7 @@ jobs:
             target: x86_64-unknown-linux-gnu
             tor-target: linux-x86_64
             artifact-name: desktop-linux
-            bundle-args: '--bundles deb,rpm'
+            bundle-args: '--bundles deb,rpm,appimage'
     runs-on: ${{ matrix.platform }}
     environment: production
     permissions:
@@ -556,6 +556,7 @@ jobs:
           require_asset artifacts/desktop-macos-intel '*.dmg' 'macOS Intel DMG'
           require_asset artifacts/desktop-linux '*.deb' 'Linux DEB package'
           require_asset artifacts/desktop-linux '*.rpm' 'Linux RPM package'
+          require_asset artifacts/desktop-linux '*.AppImage' 'Linux AppImage'
           require_asset artifacts/browser-extensions '*.zip' 'browser extension archive'
           test -f "artifacts/browser-extensions/OPTNWallet-${RELEASE_TAG}-chrome.zip"
           test -f "artifacts/browser-extensions/OPTNWallet-${RELEASE_TAG}-firefox.zip"
@@ -630,7 +631,7 @@ jobs:
             - Windows x64: `.exe` and `.msi` installers
             - macOS Apple Silicon: `.dmg`
             - macOS Intel: `.dmg`
-            - Linux x64: native `.deb` and `.rpm` packages
+            - Linux x64: native `.deb` and `.rpm` packages, plus a portable `.AppImage`
             - Chrome/Chromium and Firefox extension bundles: `.zip`
             ${{ needs.android.outputs.signed == 'true' && '- Android: signed `.apk` for direct installation and `.aab` for Play distribution' || '- Android: not included yet; configure the permanent production keystore and rerun the release workflow' }}
 
