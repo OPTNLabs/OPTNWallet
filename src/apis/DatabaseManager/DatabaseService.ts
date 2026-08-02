@@ -308,7 +308,29 @@ const migrations: Array<(db: Database) => Promise<void>> = [
     // a correction written in place, and would stay pointed at the wrong path
     // forever.
     //
-    // Same restore, for installs that already applied the 145 move.
+    // Order matters. The addresses are dropped FIRST, while the wallets can
+    // still be identified by the 145 path the bad migration gave them. Doing it
+    // after the UPDATE would mean selecting on the restored path, which also
+    // matches wallets that were always on it and were never touched here —
+    // throwing away addresses that were perfectly correct.
+    //
+    // Dropping them is necessary, not just tidy: the path alone does not move
+    // the balance. The keys table still holds addresses derived under 145 and
+    // the scan reads THOSE, so the wallet would sit at zero with a correct
+    // path, which is the most confusing state of all. Addresses are
+    // deterministic from seed and path, so they regenerate on open — the same
+    // thing the reconfigure flow does when a user changes the path by hand.
+    db.run(
+      `DELETE FROM keys
+        WHERE wallet_id IN (
+          SELECT id FROM wallets
+           WHERE networkType = ?
+             AND derivation_path_source = 'default'
+             AND derivation_path = ?
+        )`,
+      [Network.CHIPNET, CHIPNET_ACCOUNT_PATH]
+    );
+
     db.run(
       `UPDATE wallets
           SET derivation_path = ?
