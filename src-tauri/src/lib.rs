@@ -282,8 +282,14 @@ fn fusion_prepare_round(round_id: String) -> Result<(), String> {
 /// to sign locally and are never logged or sent over the network.
 #[tauri::command]
 #[allow(clippy::too_many_arguments)] // command args map 1:1 to the JS invoke call
+/// `wallet_tag` is a stable per-wallet token (the wallet id is enough). It is
+/// hashed with a per-process salt into the self-fusion pool tag, so the server
+/// can refuse to place this wallet in one fusion twice without learning
+/// anything that survives a restart.
+#[allow(clippy::too_many_arguments)]
 async fn fusion_run(
     round_id: String,
+    wallet_tag: String,
     host: String,
     port: u16,
     use_ssl: bool,
@@ -366,6 +372,10 @@ async fn fusion_run(
         timing: fusion::run::FusionTiming::default(),
         cancel,
         expected_hello,
+        wallet_tag_seed: wallet_tag.into_bytes(),
+        // Electron Cash's default (conf.py:51 SelfFusePlayers = 1): never place
+        // this wallet in a fusion with itself.
+        self_fuse_limit: 1,
     })
     .await;
 

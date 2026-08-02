@@ -581,6 +581,11 @@ export function buildServerRunner(
         defaultInputLookupEndpoint(config.network);
       const outcome = await invoke<FusionOutcome>('fusion_run', {
         roundId,
+        // Stable per wallet, deliberately NOT per round: the server uses it to
+        // refuse putting the same wallet in one fusion twice. Hashed native-side
+        // with a per-process salt, so it is not a pseudonym that outlives the
+        // process.
+        walletTag: String(config.walletId),
         host: config.host,
         port: config.port,
         useSsl: config.useSsl,
