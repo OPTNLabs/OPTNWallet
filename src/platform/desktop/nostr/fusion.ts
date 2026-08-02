@@ -448,10 +448,67 @@ export function joinPool(
   };
 }
 
-/** Deterministic coordinator: lowest ephemeral pubkey. */
+/**
+ * Deterministic coordinator, bound to the candidate set.
+ *
+ * The old rule was "lowest ephemeral pubkey wins", which is free to grind: a
+ * key is a random 32 bytes, so an attacker generates them offline until it
+ * holds one starting in zeros and then wins essentially every election it
+ * enters, forever, at no cost per round.
+ *
+ * Now the winner is the lowest H(all candidate pubkeys, sorted || candidate),
+ * so a key's rank depends on WHO ELSE is in the round. A precomputed key has no
+ * standing advantage, and grinding has to happen after the set is known — that
+ * is, inside the round's gather window, against a target that changes when any
+ * other participant joins or leaves.
+ *
+ * Be precise about what this does and does not buy:
+ *   - It removes the free, permanent advantage of an offline-ground key.
+ *   - It does NOT stop an attacker who controls many identities from winning
+ *     more often. That is Sybil resistance, a different property, and nothing
+ *     here provides it. An attacker with N of M identities still coordinates
+ *     roughly N/M of rounds, which is the honest baseline.
+ */
 export function electCoordinator(pubkeys: string[]): string | null {
-  if (pubkeys.length === 0) return null;
-  return [...new Set(pubkeys)].sort()[0];
+  const candidates = [...new Set(pubkeys)].filter((key) => key.length > 0);
+  if (candidates.length === 0) return null;
+  if (candidates.length === 1) return candidates[0];
+
+  // Sorted, so every participant derives the identical commitment from the same
+  // set regardless of the order their relays delivered the announcements in.
+  const commitment = [...candidates].sort().join('|');
+
+  let winner = candidates[0];
+  let best = electionTicket(commitment, winner);
+  for (const candidate of candidates.slice(1)) {
+    const ticket = electionTicket(commitment, candidate);
+    // Tie-break on the pubkey itself so the result is total and identical
+    // everywhere; a tie needs a full hash collision, so this is a formality.
+    if (ticket < best || (ticket === best && candidate < winner)) {
+      best = ticket;
+      winner = candidate;
+    }
+  }
+  return winner;
+}
+
+/** FNV-1a over the set commitment and one candidate, as a fixed-width hex. */
+function electionTicket(commitment: string, candidate: string): string {
+  // A non-cryptographic hash is adequate here and deliberately chosen over
+  // pulling in async WebCrypto: election must stay a synchronous pure function
+  // that every peer can recompute identically. Its job is to scramble rank
+  // relative to the set, not to resist preimage attacks — an attacker who can
+  // invert this still has to do the work inside the round window, which is the
+  // property being bought.
+  const input = `${commitment}#${candidate}`;
+  let h1 = 0x811c9dc5;
+  let h2 = 0x01000193;
+  for (let i = 0; i < input.length; i += 1) {
+    const c = input.charCodeAt(i);
+    h1 = Math.imul(h1 ^ c, 0x01000193) >>> 0;
+    h2 = Math.imul(h2 ^ (c + i), 0x85ebca6b) >>> 0;
+  }
+  return h1.toString(16).padStart(8, '0') + h2.toString(16).padStart(8, '0');
 }
 
 export function isCoordinator(
