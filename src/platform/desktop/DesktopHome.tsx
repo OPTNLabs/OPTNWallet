@@ -156,7 +156,7 @@ const Home: React.FC = () => {
 
     try {
       await runWalletUtxoRefresh(currentWalletId, async () => {
-        await ElectrumService.reconnect();
+        await ElectrumService.ensureFreshConnection();
         if (!isActiveWalletSession(walletSession)) return;
         const walletUtxos = await fetchActiveWalletUtxos(walletSession);
         if (!walletUtxos) return;

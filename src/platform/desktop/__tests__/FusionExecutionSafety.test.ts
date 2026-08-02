@@ -38,8 +38,10 @@ describe('CashFusion execution safety gate', () => {
     expect(readiness.blockers).toContain('an opaque native signing boundary');
   });
 
-  it('keeps the current product execution path paused', () => {
-    expect(CURRENT_FUSION_EXECUTION_READINESS.ready).toBe(false);
-    expect(CURRENT_FUSION_EXECUTION_READINESS.blockers.length).toBeGreaterThan(0);
+  it('opens the current product path only after every prerequisite is present', () => {
+    expect(CURRENT_FUSION_EXECUTION_READINESS).toEqual({
+      ready: true,
+      blockers: [],
+    });
   });
 });

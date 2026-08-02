@@ -153,6 +153,15 @@ describe('validateServerHello — EC limits', () => {
     expect(() => validateServerHello(makeHello())).not.toThrow();
   });
 
+  it('accepts the reference Electron Cash server\'s 72 E12 tiers', () => {
+    const factors = [10, 12, 15, 18, 22, 27, 33, 39, 47, 56, 68, 82];
+    const tiers = [10_000, 100_000, 1_000_000, 10_000_000, 100_000_000, 1_000_000_000]
+      .flatMap((base) => factors.map((factor) => (base * factor) / 10));
+
+    expect(tiers).toHaveLength(72);
+    expect(() => validateServerHello(makeHello({ tiers }))).not.toThrow();
+  });
+
   it('rejects excessive component feerate (> MAX_COMPONENT_FEERATE=5000)', () => {
     expect(() =>
       validateServerHello(makeHello({ componentFeerate: MAX_COMPONENT_FEERATE + 1 }))
@@ -527,7 +536,7 @@ describe('buildServerRunner — shared runner for manual and auto', () => {
     );
   });
 
-  it('fetches a fresh ServerHello inside every unpinned round attempt', async () => {
+  it('requests a live ServerHello for an unpinned round attempt', async () => {
     const hello = {
       ...makeHello({ tiers: [10_000] }),
       donationAddress: null,

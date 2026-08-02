@@ -193,7 +193,10 @@ describe('fetchActiveWalletUtxos', () => {
         },
       },
     });
-    expect(listener).toHaveBeenCalledWith(6);
+    expect(listener).toHaveBeenCalledWith(6, {
+      'bchtest:qwallet6': [],
+      'bchtest:pwallet6qr': [],
+    });
 
     unsubscribe();
     await refreshActiveWalletUtxos(6);

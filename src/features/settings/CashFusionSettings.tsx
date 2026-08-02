@@ -4,8 +4,8 @@
 // (ClientHello -> ServerHello) via the Rust client and shows the server's
 // actual fusion parameters. It joins no pool and signs nothing.
 //
-// Fusion round participation (blind signatures, covert connections) is a
-// later phase — see docs/cashfusion-implementation-scope.md.
+// Server and P2P rounds share the wallet-level reservation, completion, and
+// automatic-fusion policy while keeping their transports isolated.
 
 import React, { useEffect, useState } from 'react';
 import { useDispatch, useSelector } from 'react-redux';
@@ -34,11 +34,13 @@ import {
   type FusionServerStatus,
   type TorConfig,
 } from '../../services/fusion/FusionStatusService';
-import { CURRENT_FUSION_EXECUTION_READINESS } from '../../platform/desktop/FusionExecutionSafety';
 import { P2pFusionTransportPreview } from '../nostr/P2pFusionTransportPreview';
 import { AutoFusionControls } from './AutoFusionControls';
 import {
+  getFusionActivity,
   startFusionRound,
+  subscribeFusionActivity,
+  type FusionActivity,
   type FusionRunOutcome,
 } from '../../platform/desktop/FusionRunnerService';
 
@@ -91,7 +93,6 @@ function isLocalHost(host: string): boolean {
 
 const satsToBch = (sats: number) =>
   (sats / 1e8).toLocaleString(undefined, { maximumFractionDigits: 8 });
-const fusionExecutionReadiness = CURRENT_FUSION_EXECUTION_READINESS;
 
 // variant 'card' = the CashFusion toggles + fuse actions (CashFusion app entry);
 // 'servers' = only the fusion-server list (rendered in the Servers panel).
@@ -109,7 +110,7 @@ export const CashFusionSettings: React.FC<{ variant?: 'card' | 'servers' }> = ({
   const torPortManual = useSelector(selectTorPortManual);
   const nostrRelays = useSelector(selectNostrRelays);
 
-  // Fusion execution (chipnet test path). walletId/network/UTXOs drive Fuse Now.
+  // walletId/network drive live coin reconciliation before every round.
   const walletId = useSelector((s: RootState) => s.wallet_id.currentWalletId);
   const currentNetwork = useSelector(
     (s: RootState) => s.network.currentNetwork
@@ -126,11 +127,20 @@ export const CashFusionSettings: React.FC<{ variant?: 'card' | 'servers' }> = ({
   );
   const [p2pMsg, setP2pMsg] = useState<string | null>(null);
   const [p2pPhase, setP2pPhase] = useState(0);
-  const p2pControllerRef = React.useRef<AbortController | null>(null);
+  const [fusionActivity, setFusionActivity] = useState<FusionActivity | null>(
+    () => getFusionActivity(walletId)
+  );
+  const activeFusion =
+    fusionActivity?.walletId === walletId ? fusionActivity : null;
+  const serverFusing =
+    activeFusion?.mode === 'server' || fuseState === 'fusing';
+  const p2pFusing =
+    activeFusion?.mode === 'p2p' || p2pState === 'fusing';
+  const anyFusing = Boolean(activeFusion) || serverFusing || p2pFusing;
   const serverMode = getFusionModeAvailability({
     p2pFusionEnabled,
     walletId,
-    serverBusy: fuseState === 'fusing',
+    serverBusy: anyFusing,
   });
 
   // Start from the saved server only if it belongs to the current network's
@@ -174,22 +184,8 @@ export const CashFusionSettings: React.FC<{ variant?: 'card' | 'servers' }> = ({
   }, [refreshTor]);
 
   useEffect(
-    () => () => {
-      p2pControllerRef.current?.abort();
-      p2pControllerRef.current = null;
-    },
-    [
-      walletId,
-      currentNetwork,
-      enabled,
-      p2pFusionEnabled,
-      fuseDepth,
-      torEnabled,
-      torAuto,
-      torHost,
-      torPortManual,
-      nostrRelays,
-    ]
+    () => subscribeFusionActivity(walletId, setFusionActivity),
+    [walletId]
   );
 
   // The SOCKS proxy to actually route through, or undefined for a direct
@@ -283,9 +279,6 @@ export const CashFusionSettings: React.FC<{ variant?: 'card' | 'servers' }> = ({
   // P2P fusion: no server — meet peers on Nostr over Tor and run the round P2P.
   // Tor is mandatory (resolve the SOCKS proxy; runP2pFusion fails closed without).
   const handleP2pFuse = async () => {
-    p2pControllerRef.current?.abort();
-    const controller = new AbortController();
-    p2pControllerRef.current = controller;
     setP2pState('fusing');
     setP2pMsg(null);
     setP2pPhase(0);
@@ -296,7 +289,6 @@ export const CashFusionSettings: React.FC<{ variant?: 'card' | 'servers' }> = ({
         mode: 'p2p',
         trigger: 'manual',
         fuseDepth,
-        signal: controller.signal,
         runners: {
           runServer: () =>
             Promise.reject(new Error('Server runner invoked in P2P mode')),
@@ -315,17 +307,11 @@ export const CashFusionSettings: React.FC<{ variant?: 'card' | 'servers' }> = ({
           },
         },
       });
-      if (controller.signal.aborted) return;
       setP2pState(outcome.status === 'fused' ? 'done' : 'fail');
       setP2pMsg(describeFusionOutcome(outcome));
     } catch (e) {
-      if (controller.signal.aborted) return;
       setP2pState('fail');
       setP2pMsg(e instanceof Error ? e.message : String(e));
-    } finally {
-      if (p2pControllerRef.current === controller) {
-        p2pControllerRef.current = null;
-      }
     }
   };
 
@@ -443,15 +429,14 @@ export const CashFusionSettings: React.FC<{ variant?: 'card' | 'servers' }> = ({
                   <span className="wallet-text-strong">4. Broadcast.</span> All
                   participants broadcast the jointly constructed transaction.
                 </p>
-                <p className="text-yellow-400/80 mt-1">
+                <p className="wallet-muted mt-1">
                   Steps 1–4 run end-to-end (server path): the wallet joins a
                   pool, exchanges blind signatures, submits over Tor, and
                   broadcasts the assembled CoinJoin. P2P Fusion runs the same
                   round without a server — peers meet on Nostr over Tor.
-                  Experimental: some wallet-hardening items (e.g. input
-                  reservation) are still pending, so treat it as such — but your
-                  own outputs are verified before signing, so a bad round fails
-                  safe rather than losing funds.
+                  Before signing, the wallet verifies value conservation, fees,
+                  and its fresh outputs. Remote Fusion, lookup, and broadcast
+                  traffic use native, verified Tor routes.
                 </p>
               </div>
             )}
@@ -465,11 +450,12 @@ export const CashFusionSettings: React.FC<{ variant?: 'card' | 'servers' }> = ({
               </span>
               <button
                 onClick={() => dispatch(setCashFusionEnabled(!enabled))}
+                disabled={anyFusing}
                 className={`relative inline-flex h-6 w-11 shrink-0 items-center rounded-full border transition-colors ${
                   enabled
                     ? 'bg-[var(--wallet-accent)] border-[var(--wallet-accent)]'
                     : 'wallet-surface-strong border-[var(--wallet-border)]'
-                }`}
+                } disabled:cursor-not-allowed disabled:opacity-50`}
                 aria-label={`${enabled ? 'Disable' : 'Enable'} CashFusion`}
               >
                 <span
@@ -505,11 +491,12 @@ export const CashFusionSettings: React.FC<{ variant?: 'card' | 'servers' }> = ({
                     <button
                       type="button"
                       onClick={() => dispatch(setP2pFusionEnabled(false))}
+                      disabled={anyFusing}
                       className={`relative inline-flex h-5 w-9 shrink-0 items-center rounded-full border transition-colors ${
                         !p2pFusionEnabled
                           ? 'bg-[var(--wallet-accent)] border-[var(--wallet-accent)]'
                           : 'wallet-surface-strong border-[var(--wallet-border)]'
-                      }`}
+                      } disabled:cursor-not-allowed disabled:opacity-50`}
                       aria-label="Enable Server Fusion"
                       aria-pressed={!p2pFusionEnabled}
                     >
@@ -532,11 +519,12 @@ export const CashFusionSettings: React.FC<{ variant?: 'card' | 'servers' }> = ({
                     <button
                       type="button"
                       onClick={() => dispatch(setP2pFusionEnabled(true))}
+                      disabled={anyFusing}
                       className={`relative inline-flex h-5 w-9 shrink-0 items-center rounded-full border transition-colors ${
                         p2pFusionEnabled
                           ? 'bg-[var(--wallet-accent)] border-[var(--wallet-accent)]'
                           : 'wallet-surface-strong border-[var(--wallet-border)]'
-                      }`}
+                      } disabled:cursor-not-allowed disabled:opacity-50`}
                       aria-label="Enable P2P Fusion"
                       aria-pressed={p2pFusionEnabled}
                     >
@@ -551,16 +539,8 @@ export const CashFusionSettings: React.FC<{ variant?: 'card' | 'servers' }> = ({
                 Duplicating it per card would let the two copies disagree, and the
                 disagreement would only surface when a round used the wrong bound. */}
                   <div className="border-t border-[var(--wallet-border)] pt-3">
-                    <AutoFusionControls disabled={walletId <= 0} />
+                    <AutoFusionControls disabled={walletId <= 0 || anyFusing} />
                   </div>
-
-                  {/* Experimental notice — execution runs on ALL networks (owner opt-in).
-                These hardening items are still pending; you're informed, not blocked.
-                Your own outputs are verified before signing on every network. */}
-                  <p className="text-[10px] text-yellow-400/80 leading-relaxed">
-                    Experimental — still pending:{' '}
-                    {fusionExecutionReadiness.blockers.join(', ')}.
-                  </p>
 
                   {/* Server path — Fuse Now via the configured CashFusion server (Servers card). */}
                   <div
@@ -584,7 +564,7 @@ export const CashFusionSettings: React.FC<{ variant?: 'card' | 'servers' }> = ({
                       disabled={serverMode.serverDisabled}
                       className="rounded-lg border border-[var(--wallet-accent)]/50 px-3 py-1.5 text-xs font-semibold text-[var(--wallet-accent)] hover:bg-[var(--wallet-accent)]/5 disabled:opacity-50 whitespace-nowrap"
                     >
-                      {fuseState === 'fusing' ? 'Fusing…' : 'Fuse Now'}
+                      {serverFusing ? 'Fusing…' : 'Fuse Now'}
                     </button>
                   </div>
                   {fuseMsg && (
@@ -607,8 +587,8 @@ export const CashFusionSettings: React.FC<{ variant?: 'card' | 'servers' }> = ({
                       onStart={() => void handleP2pFuse()}
                       status={p2pMsg}
                       phase={p2pPhase}
-                      busy={p2pState === 'fusing'}
-                      disabled={walletId <= 0}
+                      busy={p2pFusing}
+                      disabled={walletId <= 0 || anyFusing}
                       disabledReason={
                         walletId <= 0
                           ? 'Open a wallet to run a P2P round.'
@@ -824,13 +804,13 @@ export const CashFusionSettings: React.FC<{ variant?: 'card' | 'servers' }> = ({
         </>
       )}
 
-      {/* Experimental note (CashFusion card only) */}
+      {/* Shared safety summary (CashFusion card only). */}
       {variant === 'card' && enabled && (
-        <div className="rounded-xl border border-yellow-400/20 bg-yellow-400/5 px-3 py-2">
-          <p className="text-[10px] text-yellow-400/80 leading-relaxed">
-            Both the server path and P2P Fusion run real CoinJoins on any
-            network. Some wallet-hardening items are still pending, but each
-            round verifies your own outputs before signing, so it fails safe.
+        <div className="rounded-xl border border-[var(--wallet-border)] wallet-surface px-3 py-2">
+          <p className="text-[10px] wallet-muted leading-relaxed">
+            Server and P2P Fusion share the same automatic-fusion policy. Each
+            round reserves its inputs and verifies value, fees, and your fresh
+            outputs before signing.
           </p>
         </div>
       )}

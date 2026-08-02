@@ -65,6 +65,12 @@ const detailsCacheByTxid = new Map<
   { ts: number; data: TransactionDetails | null }
 >();
 const DETAILS_TTL_MS = 60000;
+const ELECTRUM_BATCH_SIZE = 50;
+
+type ElectrumBatchCall = {
+  method: string;
+  params?: RequestResponse[];
+};
 
 export function primeUTXOCache(address: string, utxos: UTXO[]) {
   cacheByAddr.set(address, { ts: Date.now(), data: utxos });
@@ -107,10 +113,26 @@ async function requestWithAddressFallback(
   }
 }
 
+async function requestManyInChunks(
+  server: ReturnType<typeof ElectrumServer>,
+  calls: ElectrumBatchCall[]
+): Promise<Array<RequestResponse | Error>> {
+  const responses: Array<RequestResponse | Error> = [];
+  for (let start = 0; start < calls.length; start += ELECTRUM_BATCH_SIZE) {
+    const chunk = calls.slice(start, start + ELECTRUM_BATCH_SIZE);
+    responses.push(...(await server.requestMany(chunk)));
+  }
+  return responses;
+}
+
 const ElectrumService = {
   async reconnect(customServer?: string) {
     const server = ElectrumServer();
     await server.electrumReconnect(customServer);
+  },
+
+  async ensureFreshConnection() {
+    await ElectrumServer().ensureFreshConnection();
   },
 
   /** Fetch UTXOs for an address */
@@ -191,7 +213,7 @@ const ElectrumService = {
 
     const batchPromise = (async () => {
       try {
-        const batchResults = await server.requestMany(pendingCalls);
+        const batchResults = await requestManyInChunks(server, pendingCalls);
         await Promise.all(batchResults.map(async (response, index) => {
           const address = pending[index];
           if (response instanceof Error) {
@@ -368,7 +390,7 @@ const ElectrumService = {
 
     const batchPromise = (async () => {
       try {
-        const batchResults = await server.requestMany(pendingCalls);
+        const batchResults = await requestManyInChunks(server, pendingCalls);
         await Promise.all(batchResults.map(async (response, index) => {
           const address = pending[index];
           if (response instanceof Error) {
@@ -517,7 +539,7 @@ const ElectrumService = {
 
     const batchPromise = (async () => {
       try {
-        const batchResults = await server.requestMany(pendingCalls);
+        const batchResults = await requestManyInChunks(server, pendingCalls);
         batchResults.forEach((response, index) => {
           const txHash = pending[index];
 

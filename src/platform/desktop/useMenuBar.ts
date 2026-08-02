@@ -5,7 +5,7 @@
 //
 // Rebuilt whenever the wallet list or the open wallet changes, so Open Wallet
 // stays current and wallet-scoped items grey out on the picker.
-import { useEffect } from 'react';
+import { useEffect, useRef } from 'react';
 import { flushSync } from 'react-dom';
 import { useNavigate, type NavigateFunction } from 'react-router-dom';
 import { useDispatch, useSelector } from 'react-redux';
@@ -236,18 +236,33 @@ export async function refreshWalletFromMenu(
   return false;
 }
 
+export function walletClaimToRelease(
+  previousWalletId: number,
+  currentWalletId: number
+): number | null {
+  return previousWalletId > 0 && previousWalletId !== currentWalletId
+    ? previousWalletId
+    : null;
+}
+
 /**
  * Leave the currently open wallet before showing another wallet's password
  * prompt. AppShell only exposes the picker routes while walletId is reset, and
  * the old wallet key must not survive a same-window switch.
  */
-export function openSavedWalletFromMenu(
+export async function openSavedWalletFromMenu(
   walletId: number,
   navigate: NavigateFunction,
   dispatch: AppDispatch,
   lock: () => void = EcKeyManager.lock,
-  flush: (callback: () => void) => void = flushSync
-): void {
+  flush: (callback: () => void) => void = flushSync,
+  currentWalletId = 0,
+  windowLabel = currentWebviewLabel(),
+  release: typeof releaseWalletOpen = releaseWalletOpen
+): Promise<void> {
+  if (currentWalletId > 0) {
+    await release(currentWalletId, windowLabel);
+  }
   lock();
   flush(() => dispatch(resetWallet()));
   navigate(ROUTE_PATHS.landing, { state: { openWalletId: walletId } });
@@ -277,7 +292,7 @@ async function openPicker(navigate: (p: string) => void) {
 
 async function handleOpenWalletFile(
   navigate: (p: string) => void,
-  leaveCurrentWallet: () => void = () => undefined
+  leaveCurrentWallet: () => void | Promise<void> = () => undefined
 ) {
   const picked = await openDialog({
     multiple: false,
@@ -290,7 +305,7 @@ async function handleOpenWalletFile(
   try {
     const text = await invoke<string>('read_wallet_file', { path: picked });
     const file = parseWalletFile(text);
-    leaveCurrentWallet();
+    await leaveCurrentWallet();
     navigate(ROUTE_PATHS.landing);
     setTimeout(() => {
       window.dispatchEvent(new CustomEvent(IMPORT_FILE_EVENT, { detail: { file } }));
@@ -344,6 +359,7 @@ export function useMenuBar(): void {
   const navigate = useNavigate();
   const dispatch = useDispatch<AppDispatch>();
   const walletId = useSelector((s: RootState) => selectWalletId(s));
+  const previousWalletId = useRef(0);
   const { toggleMode } = useTheme();
 
   useEffect(() => {
@@ -360,17 +376,28 @@ export function useMenuBar(): void {
     const handlers: DesktopMenuActionHandlers = {
       openPicker: () => openPicker(navigate),
       openWalletFile: () =>
-        handleOpenWalletFile(navigate, () => {
+        handleOpenWalletFile(navigate, async () => {
+          if (walletId > 0) {
+            await releaseWalletOpen(walletId, currentWindow.label);
+          }
           EcKeyManager.lock();
           flushSync(() => dispatch(resetWallet()));
         }),
       openSavedWallet: (savedWalletId) =>
-        openSavedWalletFromMenu(savedWalletId, navigate, dispatch),
-      lockWallet: () => {
+        openSavedWalletFromMenu(
+          savedWalletId,
+          navigate,
+          dispatch,
+          EcKeyManager.lock,
+          flushSync,
+          walletId,
+          currentWindow.label
+        ),
+      lockWallet: async () => {
         if (!walletId) return;
         // Hand the wallet back before leaving it, so another window can open it
         // immediately rather than waiting out the claim's TTL.
-        void releaseWalletOpen(walletId, currentWindow.label).catch(
+        await releaseWalletOpen(walletId, currentWindow.label).catch(
           () => undefined
         );
         EcKeyManager.lock();
@@ -624,4 +651,18 @@ export function useMenuBar(): void {
       window.removeEventListener('beforeunload', releaseOnClose);
     };
   }, [navigate, dispatch, walletId, toggleMode]);
+
+  // Release only on an actual wallet-id transition. Effect cleanup is unsafe:
+  // React StrictMode deliberately replays mount effects and would release a
+  // claim while the wallet was still open.
+  useEffect(() => {
+    const walletToRelease = walletClaimToRelease(
+      previousWalletId.current,
+      walletId
+    );
+    previousWalletId.current = walletId;
+    if (walletToRelease === null) return;
+    const windowLabel = currentWebviewLabel();
+    void releaseWalletOpen(walletToRelease, windowLabel).catch(() => undefined);
+  }, [walletId]);
 }

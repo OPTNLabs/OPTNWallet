@@ -26,10 +26,17 @@ import {
   selectTorPortManual,
 } from '../../state/slices/experimentalSlice';
 import type { RootState } from '../../state/store';
-import { subscribeWalletUtxoRefresh } from '../../services/WalletUtxoRefreshService';
+import {
+  subscribeWalletUtxoRefresh,
+  type WalletUtxoSnapshot,
+} from '../../services/WalletUtxoRefreshService';
 import { logError } from '../../utils/errorHandling';
 import { resolveFusionTransport } from './FusionTorResolver';
-import { decideAutoFusion } from './fusionAutoEngine';
+import {
+  AUTO_FUSION_COOLDOWN_MS,
+  decideAutoFusion,
+} from './fusionAutoEngine';
+import { isAutoCooldownReady } from './fusionWalletLease';
 import { startFusionRound } from './FusionRunnerService';
 import { runP2pFusion } from './FusionP2pService';
 import {
@@ -42,12 +49,12 @@ import {
 /**
  * How often the engine re-asks whether it may run.
  *
- * This is only a poll; the real spacing between paid attempts is the durable
- * cooldown inside the runner. Waking often is cheap because a refused decision
- * costs nothing, while waking rarely would leave a freshly received coin
- * unfused for no reason.
+ * This is only a recovery poll; committed UTXO refreshes wake the engine
+ * immediately. Keep the blind fallback aligned with the durable cooldown so an
+ * idle or empty wallet does not perform a full Electrum reconciliation every
+ * minute in every open window.
  */
-const ENGINE_TICK_MS = 60_000;
+const ENGINE_TICK_MS = AUTO_FUSION_COOLDOWN_MS;
 
 export function useAutoFusion(): void {
   const cashFusionEnabled = useSelector(selectCashFusionEnabled);
@@ -90,8 +97,12 @@ export function useAutoFusion(): void {
     fusionServers,
   ]);
 
-  const tick = useCallback(async () => {
+  const tick = useCallback(async (freshSnapshot?: WalletUtxoSnapshot) => {
     if (activeControllerRef.current) return;
+    // The recovery poll must be almost free during the durable cooldown: do
+    // not probe or start Tor until another automatic attempt is actually due.
+    // startFusionRound repeats this advisory check and atomically claims later.
+    if (!isAutoCooldownReady(walletId, AUTO_FUSION_COOLDOWN_MS)) return;
     const controller = new AbortController();
     activeControllerRef.current = controller;
     try {
@@ -168,6 +179,7 @@ export function useAutoFusion(): void {
         mode: decision.mode,
         trigger: 'auto',
         fuseDepth,
+        freshSnapshot,
         signal: controller.signal,
         runners: {
           runP2p: async (coins, signal) => {
@@ -235,9 +247,9 @@ export function useAutoFusion(): void {
     if (!cashFusionEnabled || !autoFuseEnabled || walletId <= 0) return;
     let disposed = false;
 
-    const run = () => {
+    const run = (freshSnapshot?: WalletUtxoSnapshot) => {
       if (disposed) return;
-      void tick().catch((error) => {
+      void tick(freshSnapshot).catch((error) => {
         logError('AutoFusion.tick', error, { walletId });
       });
     };
@@ -246,8 +258,8 @@ export function useAutoFusion(): void {
     // wallet has committed a fresh UTXO snapshot; the interval is only a
     // backstop for missed send/receive notifications.
     const unsubscribeRefresh = subscribeWalletUtxoRefresh(
-      (refreshedWalletId) => {
-        if (refreshedWalletId === walletId) run();
+      (refreshedWalletId, snapshot) => {
+        if (refreshedWalletId === walletId) run(snapshot);
       }
     );
     const timer = setInterval(run, ENGINE_TICK_MS);

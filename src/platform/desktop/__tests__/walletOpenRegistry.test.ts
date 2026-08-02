@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   claimWalletOpen,
+  runExclusiveWalletOpen,
   refreshWalletOpenClaim,
   releaseWalletOpen,
   windowHoldingWallet,
@@ -120,6 +121,39 @@ describe('single-window rule for an open wallet', () => {
     // Unlike the fusion lease, this must NOT fail closed: refusing a round costs
     // a missed round, refusing to open a wallet makes the app unusable.
     expect(await claimWalletOpen(5, 'window-a')).toBeNull();
+  });
+
+  it('releases a claim when password verification rejects the open', async () => {
+    await expect(
+      runExclusiveWalletOpen(5, 'window-a', async () => null)
+    ).resolves.toEqual({ status: 'rejected' });
+
+    expect(windowHoldingWallet(5)).toBeNull();
+    expect(await claimWalletOpen(5, 'window-b')).toBeNull();
+  });
+
+  it('releases a claim when wallet opening throws', async () => {
+    await expect(
+      runExclusiveWalletOpen(5, 'window-a', async () => {
+        throw new Error('database failed');
+      })
+    ).rejects.toThrow('database failed');
+
+    expect(windowHoldingWallet(5)).toBeNull();
+  });
+
+  it('keeps a successful biometric or password claim until the wallet closes', async () => {
+    await expect(
+      runExclusiveWalletOpen(5, 'window-a', async () => ({ unlocked: true }))
+    ).resolves.toEqual({
+      status: 'opened',
+      value: { unlocked: true },
+    });
+
+    expect(windowHoldingWallet(5)).toBe('window-a');
+    await expect(
+      runExclusiveWalletOpen(5, 'window-b', async () => ({ unlocked: true }))
+    ).resolves.toEqual({ status: 'held', windowLabel: 'window-a' });
   });
 });
 

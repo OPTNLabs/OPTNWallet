@@ -16,7 +16,7 @@ import DatabaseService from '../../apis/DatabaseManager/DatabaseService';
 import QuantumrootVaultCacheService from '../../services/QuantumrootVaultCacheService';
 import { Network } from '../../state/slices/networkSlice';
 import { WalletType, type DerivationPathSource } from '../../types/wallet';
-import type { WalletRecord } from '../../types/wallet';
+import type { WalletMetadata } from '../../types/wallet';
 import {
   deriveKey,
   randomSalt,
@@ -53,6 +53,7 @@ import {
 
 const BIO_DOMAIN = 'com.optilabs.wallet';
 const bioName = (walletId: number) => `optn-wallet-bio-${walletId}`;
+const NETWORK_CLEANUP_VERSION = 1;
 
 async function readKdfSalt(walletId: number): Promise<Uint8Array | null> {
   const dbService = DatabaseService();
@@ -380,18 +381,9 @@ export async function switchWalletNetwork(
   } catch {
     /* optional table */
   }
-  // instantiated_contracts has no wallet_id (global cache keyed by address), so
-  // scope by prefix: a contract address that isn't on the target network can't
-  // be valid there regardless of which wallet created it.
-  const targetPrefix = target === Network.MAINNET ? 'bitcoincash:' : 'bchtest:';
-  try {
-    db.run(
-      'DELETE FROM instantiated_contracts WHERE address IS NOT NULL AND address NOT LIKE ?',
-      [`${targetPrefix}%`]
-    );
-  } catch {
-    /* optional table */
-  }
+  // instantiated_contracts is a global cache shared by every wallet. Never
+  // delete another wallet's entries during a single-wallet network switch;
+  // the worker scopes contract reads through cashscript_addresses instead.
   // The vault cache is in memory and survives the DB deletes above — if we don't
   // drop it, retrieveQuantumrootVaults keeps serving the OLD network's vault
   // addresses (a non-empty cache short-circuits the DB read), which then get
@@ -445,15 +437,39 @@ export async function purgeCrossNetworkData(
   const db = dbService.getDatabase();
   if (!db || walletId <= 0) return;
 
+  // This is a legacy repair, not normal wallet-open work. Once it has run for
+  // the wallet's current network, only the in-memory cache needs clearing.
+  // A network switch changes the stored network and therefore naturally makes
+  // the marker stale, without another state store or timer.
+  try {
+    const marker = db.prepare(
+      `SELECT network_cleanup_version, network_cleanup_network
+       FROM wallets WHERE id = ?`
+    );
+    marker.bind([walletId]);
+    const current = marker.step()
+      ? (marker.getAsObject() as Record<string, unknown>)
+      : null;
+    marker.free();
+    if (
+      Number(current?.network_cleanup_version ?? 0) >=
+        NETWORK_CLEANUP_VERSION &&
+      current?.network_cleanup_network === network
+    ) {
+      QuantumrootVaultCacheService.clear(walletId);
+      return;
+    }
+  } catch {
+    // The migration may not exist in an unusual test/legacy database yet.
+    // Run the safety cleanup and let the marker write below surface only if the
+    // database genuinely cannot support the current schema.
+  }
+
   const keep = network === Network.MAINNET ? 'bitcoincash:%' : 'bchtest:%';
   let removed = 0;
   const del = (sql: string, params: (string | number)[]) => {
-    try {
-      db.run(sql, params);
-      removed += db.getRowsModified();
-    } catch {
-      /* optional table / column */
-    }
+    db.run(sql, params);
+    removed += db.getRowsModified();
   };
   del(
     'DELETE FROM keys WHERE wallet_id = ? AND address IS NOT NULL AND address NOT LIKE ?',
@@ -475,19 +491,23 @@ export async function purgeCrossNetworkData(
     'DELETE FROM quantumroot_vaults WHERE wallet_id = ? AND (receive_address NOT LIKE ? OR quantum_lock_address NOT LIKE ?)',
     [walletId, keep, keep]
   );
-  del(
-    'DELETE FROM instantiated_contracts WHERE address IS NOT NULL AND address NOT LIKE ?',
-    [keep]
-  );
+  // instantiated_contracts is global. The active-wallet association table was
+  // cleaned above; deleting the global row here could damage another wallet.
 
   // Drop the in-memory vault cache too, or retrieveQuantumrootVaults keeps
   // serving the cached cross-network addresses regardless of the DB purge.
   QuantumrootVaultCacheService.clear(walletId);
 
-  if (removed > 0) {
-    dbService.scheduleDatabaseSave();
-    await dbService.flushDatabaseToFile(walletId);
-  }
+  db.run(
+    `UPDATE wallets
+       SET network_cleanup_version = ?, network_cleanup_network = ?
+       WHERE id = ?`,
+    [NETWORK_CLEANUP_VERSION, network, walletId]
+  );
+  // Persist the marker even when the repair found nothing. Otherwise the zero-
+  // row case—the common case in the logs—would still repeat on every unlock.
+  dbService.scheduleDatabaseSave();
+  await dbService.flushDatabaseToFile(walletId);
   await log.info(
     'NetworkPurge',
     `wallet=${walletId} target=${network} cacheCleared=true rowsRemoved=${removed} status=complete`
@@ -497,7 +517,7 @@ export async function purgeCrossNetworkData(
 export async function openWalletWithPassword(
   walletId: number,
   password: string
-): Promise<WalletRecord | null> {
+): Promise<WalletMetadata | null> {
   const manager = WalletManager();
   const previousKey = getCachedWalletKeySnapshot();
   const restorePreviousKey = () => {
@@ -554,9 +574,9 @@ export async function openWalletWithPassword(
     setCachedWalletKey(legacyKey, walletId);
   }
 
-  let info: WalletRecord | null;
+  let info: WalletMetadata | null;
   try {
-    info = await manager.getWalletInfo(walletId);
+    info = await manager.getWalletMetadata(walletId);
   } catch (error) {
     restorePreviousKey();
     throw error;
@@ -916,7 +936,7 @@ export async function disableWalletBiometric(walletId: number): Promise<void> {
  */
 export async function unlockWalletWithBiometric(
   walletId: number
-): Promise<WalletRecord> {
+): Promise<WalletMetadata> {
   let result: Awaited<ReturnType<typeof bioGetData>>;
   try {
     result = await bioGetData({

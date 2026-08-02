@@ -15,7 +15,9 @@ pub const MAX_COMPONENTS: usize = 40;
 pub const MAX_FEE: u64 = 45_000;
 pub const MIN_TX_COMPONENTS: usize = 11;
 pub const MIN_OUTPUT: u64 = 10_000;
-const MAX_TIERS: usize = 64;
+// Electron Cash's reference server advertises 6 decades x 12 E12 values = 72
+// tiers. Bound hostile replies while leaving headroom for compatible servers.
+const MAX_TIERS: usize = 128;
 
 #[derive(Clone, Debug, PartialEq, Eq, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -266,6 +268,28 @@ mod tests {
         assert!(validate_server_hello(&duplicate)
             .unwrap_err()
             .contains("duplicate tiers"));
+    }
+
+    #[test]
+    fn hello_accepts_the_reference_servers_72_e12_tiers() {
+        let factors = [10_u64, 12, 15, 18, 22, 27, 33, 39, 47, 56, 68, 82];
+        let bases = [
+            10_000_u64,
+            100_000,
+            1_000_000,
+            10_000_000,
+            100_000_000,
+            1_000_000_000,
+        ];
+        let tiers = bases
+            .into_iter()
+            .flat_map(|base| factors.map(|factor| base * factor / 10))
+            .collect::<Vec<_>>();
+        assert_eq!(tiers.len(), 72);
+
+        let mut reference = hello();
+        reference.tiers = tiers;
+        validate_server_hello(&reference).unwrap();
     }
 
     #[test]

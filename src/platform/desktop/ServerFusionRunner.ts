@@ -32,6 +32,7 @@ import {
   reserveOutpoints,
   reservedOutpoints,
 } from './fusionRoundState';
+import { isLocalFusionDestination } from './FusionTorResolver';
 
 // ── EC protocol constants (fusion.py) ─────────────────────────────────────
 const MAX_COMPONENT_FEERATE = 5000;
@@ -40,6 +41,10 @@ const MAX_COMPONENTS = 40;
 const MAX_FEE = 45_000;
 const MIN_TX_COMPONENTS = 11;
 const MIN_OUTPUT = 10_000;
+// Electron Cash's reference server advertises 6 decades x 12 E12 values = 72
+// tiers. Keep a bounded margin above that rather than rejecting the reference
+// implementation itself.
+const MAX_SERVER_TIERS = 128;
 
 // ── Fee formulas (util.py) ────────────────────────────────────────────────
 const componentFee = (size: number, feerate: number) =>
@@ -106,7 +111,7 @@ export function serverFusionPrivacyDestination(
   serverHost: string,
   lookupHost: string
 ): string {
-  return ['localhost', '127.0.0.1', '::1'].includes(serverHost)
+  return isLocalFusionDestination(serverHost)
     ? lookupHost
     : serverHost;
 }
@@ -177,7 +182,7 @@ export function validateServerHello(hello: ServerHelloSnapshot): void {
   if (
     !Array.isArray(hello.tiers) ||
     hello.tiers.length === 0 ||
-    hello.tiers.length > 64 ||
+    hello.tiers.length > MAX_SERVER_TIERS ||
     hello.tiers.some(
       (tier) => !Number.isSafeInteger(tier) || tier < MIN_OUTPUT
     ) ||
@@ -381,8 +386,8 @@ export interface ServerRunnerConfig {
   port: number;
   useSsl: boolean;
   tor: { host: string; port: number } | null;
-  /** Tests may pin a snapshot; production callers omit this so every attempt
-   * performs a fresh handshake while holding the wallet-wide round lease. */
+  /** Tests may pin a snapshot; production callers omit this so the native
+   * process performs a live handshake (coalesced briefly across windows). */
   expectedHello?: ServerHelloSnapshot;
   onServerHello?: (hello: ServerHelloSnapshot) => void;
   inputLookupEndpoint?: FusionElectrumEndpoint;

@@ -3,6 +3,9 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 const fetchAndStore = vi.fn();
 const ensureDatabaseStarted = vi.fn(async () => {});
 const getDatabase = vi.fn();
+const { reconnect } = vi.hoisted(() => ({
+  reconnect: vi.fn(async () => {}),
+}));
 
 vi.mock('../../apis/TransactionManager/TransactionManager', () => ({
   default: () => ({ fetchAndStoreTransactionHistories: fetchAndStore }),
@@ -12,7 +15,7 @@ vi.mock('../../apis/DatabaseManager/DatabaseService', () => ({
 }));
 vi.mock('../ElectrumService', () => ({
   default: {
-    reconnect: vi.fn(async () => {}),
+    reconnect,
     getTransactionDetails: vi.fn(async () => ({})),
   },
 }));
@@ -65,6 +68,17 @@ describe('wallet history refresh service', () => {
     });
     expect(fetchAndStore).toHaveBeenCalledWith(101, ['addr1', 'addr2']);
     expect(result.refreshed).toBe(true);
+  });
+
+  it('does not tear down a healthy Electrum connection before scanning history', async () => {
+    const result = await refreshWalletTransactionHistory({
+      walletId: 108,
+      dispatch,
+    });
+
+    expect(result.refreshed).toBe(true);
+    expect(fetchAndStore).toHaveBeenCalledWith(108, ['addr1', 'addr2']);
+    expect(reconnect).not.toHaveBeenCalled();
   });
 
   it('honours a skip set for an incremental first load', async () => {

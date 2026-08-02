@@ -68,7 +68,7 @@ export const P2pFusionTransportPreview: React.FC<P2pFusionPanelProps> = ({
       disabled={disabled || busy}
       className="w-full rounded-xl border border-violet-400/40 px-3 py-2 text-xs font-semibold text-violet-400 hover:bg-violet-400/5 disabled:cursor-not-allowed disabled:opacity-50"
     >
-      {busy ? 'Running P2P round…' : 'Start P2P round'}
+      {busy ? 'Fusing…' : 'Start P2P round'}
     </button>
 
     {disabled && disabledReason ? (

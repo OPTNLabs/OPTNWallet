@@ -115,7 +115,6 @@ export async function refreshWalletTransactionHistory(
   let refreshed = false;
 
   await runWalletHistoryRefresh(walletId, async () => {
-    await ElectrumService.reconnect();
     await dbService.ensureDatabaseStarted();
     const db = dbService.getDatabase() as SqlLikeDb | null;
     if (!db) {

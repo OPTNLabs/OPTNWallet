@@ -146,6 +146,29 @@ describe('ElectrumService', () => {
     expect(server.requestMany).toHaveBeenCalledTimes(1);
   });
 
+  it('splits a large wallet UTXO scan into bounded Electrum batches', async () => {
+    const server = {
+      requestMany: vi.fn(async (calls: unknown[]) => calls.map(() => [])),
+      subscribe: vi.fn(async () => {}),
+      unsubscribe: vi.fn(async () => {}),
+      onNotification: vi.fn(() => () => {}),
+    };
+    mockedElectrumServer.mockReturnValue(server as never);
+    const addresses = Array.from(
+      { length: 117 },
+      (_, index) => `bitcoincash:qbatch${index}`
+    );
+
+    const result = await ElectrumService.getUTXOsMany(addresses);
+
+    expect(server.requestMany.mock.calls.map(([calls]) => calls.length)).toEqual([
+      50,
+      50,
+      17,
+    ]);
+    expect(Object.keys(result)).toHaveLength(117);
+  });
+
   it('primeUTXOCache seeds cache used by getUTXOs', async () => {
     const server = {
       request: vi.fn(async () => []),
@@ -204,6 +227,19 @@ describe('ElectrumService', () => {
       value: 1000,
     });
     expect(server.request).not.toHaveBeenCalled();
+  });
+
+  it('refreshes through the current healthy connection without forcing a disconnect', async () => {
+    const server = {
+      ensureFreshConnection: vi.fn(async () => undefined),
+      electrumReconnect: vi.fn(async () => undefined),
+    };
+    mockedElectrumServer.mockReturnValue(server as never);
+
+    await ElectrumService.ensureFreshConnection();
+
+    expect(server.ensureFreshConnection).toHaveBeenCalledOnce();
+    expect(server.electrumReconnect).not.toHaveBeenCalled();
   });
 
   it('can subscribe to future headers without replaying the current tip', async () => {
@@ -331,6 +367,30 @@ describe('ElectrumService', () => {
     expect(server.requestMany).toHaveBeenCalledTimes(1);
     expect(result['bitcoincash:q1']).toEqual([{ tx_hash: 'abc', height: 10 }]);
     expect(result['bitcoincash:q2']).toEqual([{ tx_hash: 'def', height: 12 }]);
+  });
+
+  it('splits a large wallet history scan into bounded Electrum batches', async () => {
+    const server = {
+      request: vi.fn(async () => []),
+      requestMany: vi.fn(async (calls: unknown[]) => calls.map(() => [])),
+      subscribe: vi.fn(async () => {}),
+      unsubscribe: vi.fn(async () => {}),
+      onNotification: vi.fn(() => () => {}),
+    };
+    mockedElectrumServer.mockReturnValue(server as never);
+    const addresses = Array.from(
+      { length: 117 },
+      (_, index) => `bitcoincash:qhistory${index}`
+    );
+
+    const result = await ElectrumService.getTransactionHistoryMany(addresses);
+
+    expect(server.requestMany.mock.calls.map(([calls]) => calls.length)).toEqual([
+      50,
+      50,
+      17,
+    ]);
+    expect(Object.keys(result)).toHaveLength(117);
   });
 
   it('getTransactionVisibility detects seen and missing transactions', async () => {

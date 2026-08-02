@@ -23,7 +23,8 @@ use prost::Message;
 use tokio::io::{AsyncRead, AsyncWrite};
 
 use super::{
-    connect_stream, recv_frame, send_frame, pb, FusionServerStatus, Transport, VERSION,
+    connect_stream, recv_frame, recv_frame_unbounded, send_frame, pb,
+    FusionServerStatus, Transport, VERSION,
 };
 
 /// Live status of one fusion tier (a tier is the per-player output size in sats).
@@ -131,7 +132,12 @@ where
             return Ok(FusionJoinResult { server, tiers: latest, began: None });
         }
 
-        let frame = match tokio::time::timeout(remaining, recv_frame(stream)).await {
+        let frame = match tokio::time::timeout(
+            remaining,
+            recv_frame_unbounded(stream),
+        )
+        .await
+        {
             Err(_) => return Ok(FusionJoinResult { server, tiers: latest, began: None }),
             Ok(r) => r?,
         };

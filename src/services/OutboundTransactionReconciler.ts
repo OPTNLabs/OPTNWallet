@@ -120,12 +120,6 @@ export async function reconcileOutboundTransactions(
   const addresses = await fetchWalletAddresses(walletId);
   if (addresses.length === 0) return unresolved;
 
-  try {
-    await ElectrumService.reconnect();
-  } catch {
-    return unresolved;
-  }
-
   const visibilityByTxid = await ElectrumService.getTransactionVisibilityMany(
     ordinary.map((record) => record.txid)
   );

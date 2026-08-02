@@ -7,7 +7,13 @@ import QuantumrootTrackingService from './QuantumrootTrackingService';
 import { runWalletUtxoRefresh } from './RefreshCoordinator';
 import UTXOService from './UTXOService';
 
-type WalletUtxoRefreshListener = (walletId: number) => void;
+export type WalletUtxoSnapshot = Readonly<
+  Record<string, readonly UTXO[]>
+>;
+type WalletUtxoRefreshListener = (
+  walletId: number,
+  snapshot: WalletUtxoSnapshot
+) => void;
 const refreshListeners = new Set<WalletUtxoRefreshListener>();
 
 /**
@@ -24,10 +30,13 @@ export function subscribeWalletUtxoRefresh(
   return () => refreshListeners.delete(listener);
 }
 
-function emitWalletUtxoRefresh(walletId: number): void {
+function emitWalletUtxoRefresh(
+  walletId: number,
+  snapshot: WalletUtxoSnapshot
+): void {
   for (const listener of refreshListeners) {
     try {
-      listener(walletId);
+      listener(walletId, snapshot);
     } catch {
       // A UI wake-up listener must never turn a successful wallet sync into a
       // failed sync for every other consumer.
@@ -157,7 +166,7 @@ export async function reconcileActiveWalletUtxos(
     return null;
 
   store.dispatch(replaceAllUTXOs({ utxosByAddress: snapshot }));
-  emitWalletUtxoRefresh(walletId);
+  emitWalletUtxoRefresh(walletId, snapshot);
   return snapshot;
 }
 

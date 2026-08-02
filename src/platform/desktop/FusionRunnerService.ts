@@ -7,17 +7,21 @@
 // of that would drift. The automatic path is the one nobody is watching when it
 // spends a fee, so it is the worst possible place for a silent divergence.
 //
-// Coin freshness is this service's job, never the caller's: the round's inputs
-// come from `reconcileActiveWalletUtxos`, never from the Redux UI list. Trusting
-// that list is what produced signed CoinJoins referencing coins that were already
-// gone.
+// Coin freshness is this service's job, never the screen's: inputs come either
+// from a live reconciliation or from the committed snapshot that just woke the
+// automatic engine, never from the Redux UI list. Trusting that list is what
+// produced signed CoinJoins referencing coins that were already gone.
 
-import { reconcileActiveWalletUtxos } from '../../services/WalletUtxoRefreshService';
+import {
+  reconcileActiveWalletUtxos,
+  type WalletUtxoSnapshot,
+} from '../../services/WalletUtxoRefreshService';
 import { Network } from '../../state/slices/networkSlice';
 import type { UTXO } from '../../types/types';
 import { coinsBelowDepth } from './fusionCoinDepth';
 import {
   acquireRoundLease,
+  isAutoCooldownReady,
   releaseRoundLease,
   tryClaimAutoCooldown,
 } from './fusionWalletLease';
@@ -48,6 +52,8 @@ export interface StartFusionRoundOptions {
   /** Automatic rounds respect fuse depth; a manual round may re-fuse deliberately. */
   trigger: 'auto' | 'manual';
   fuseDepth: number;
+  /** Snapshot supplied only by WalletUtxoRefreshService's post-commit event. */
+  freshSnapshot?: WalletUtxoSnapshot;
   onStatus?: (message: string) => void;
   onPhase?: (phase: number) => void;
   signal?: AbortSignal;
@@ -75,6 +81,62 @@ export interface StartFusionRoundOptions {
  */
 const heldLeases = new Map<number, string>();
 
+/**
+ * UI-visible lifecycle for a round owned by this wallet WebView.
+ *
+ * This deliberately lives beside the round lease instead of in a screen
+ * component. Settings pages can unmount while a round is gathering peers or
+ * signing; navigation must not make the round disappear or cancel it.
+ */
+export interface FusionActivity {
+  walletId: number;
+  mode: FusionMode;
+  trigger: 'auto' | 'manual';
+  startedAt: number;
+}
+
+type FusionActivityListener = (activity: FusionActivity | null) => void;
+
+const fusionActivities = new Map<
+  number,
+  { lease: string; activity: FusionActivity }
+>();
+const fusionActivityListeners = new Map<
+  number,
+  Set<FusionActivityListener>
+>();
+
+function emitFusionActivity(walletId: number): void {
+  const activity = getFusionActivity(walletId);
+  for (const listener of fusionActivityListeners.get(walletId) ?? []) {
+    try {
+      listener(activity);
+    } catch {
+      // A view subscriber must never be able to interrupt a financial action.
+    }
+  }
+}
+
+export function getFusionActivity(walletId: number): FusionActivity | null {
+  return fusionActivities.get(walletId)?.activity ?? null;
+}
+
+export function subscribeFusionActivity(
+  walletId: number,
+  listener: FusionActivityListener
+): () => void {
+  const listeners =
+    fusionActivityListeners.get(walletId) ?? new Set<FusionActivityListener>();
+  listeners.add(listener);
+  fusionActivityListeners.set(walletId, listeners);
+  listener(getFusionActivity(walletId));
+
+  return () => {
+    listeners.delete(listener);
+    if (listeners.size === 0) fusionActivityListeners.delete(walletId);
+  };
+}
+
 function isCancellationError(error: unknown): boolean {
   if (error instanceof Error) {
     return (
@@ -100,9 +162,11 @@ async function freshCoins(
   walletId: number,
   trigger: 'auto' | 'manual',
   fuseDepth: number,
+  freshSnapshot?: WalletUtxoSnapshot,
   signal?: AbortSignal
 ): Promise<UTXO[] | null> {
-  const snapshot = await reconcileActiveWalletUtxos(walletId, signal);
+  const snapshot =
+    freshSnapshot ?? (await reconcileActiveWalletUtxos(walletId, signal));
   if (!snapshot) return null;
 
   const coins = Object.values(snapshot)
@@ -123,12 +187,32 @@ export async function startFusionRound(
   if (options.signal?.aborted) return { status: 'cancelled' };
   if (!Number.isInteger(walletId) || walletId <= 0) return { status: 'busy' };
 
+  // Most automatic ticks happen during the durable cooldown. Reject those
+  // before Web Locks, UI activity, or Electrum work. This is advisory only:
+  // the atomic claim below remains the final spending gate.
+  if (
+    trigger === 'auto' &&
+    !isAutoCooldownReady(walletId, AUTO_FUSION_COOLDOWN_MS)
+  ) {
+    return { status: 'cooldown' };
+  }
+
   // Exclusivity first, across every window, covering both transports and both
   // triggers. Null means another window holds it — or that we could not obtain a
   // guarantee at all, in which case refusing is the only safe answer.
   const lease = await acquireRoundLease(walletId);
   if (lease === null) return { status: 'busy' };
   heldLeases.set(walletId, lease);
+  fusionActivities.set(walletId, {
+    lease,
+    activity: {
+      walletId,
+      mode,
+      trigger,
+      startedAt: Date.now(),
+    },
+  });
+  emitFusionActivity(walletId);
 
   try {
     if (options.signal?.aborted) return { status: 'cancelled' };
@@ -137,6 +221,7 @@ export async function startFusionRound(
       walletId,
       trigger,
       options.fuseDepth,
+      options.freshSnapshot,
       options.signal
     );
     if (options.signal?.aborted) return { status: 'cancelled' };
@@ -186,6 +271,10 @@ export async function startFusionRound(
     }
   } finally {
     heldLeases.delete(walletId);
+    if (fusionActivities.get(walletId)?.lease === lease) {
+      fusionActivities.delete(walletId);
+      emitFusionActivity(walletId);
+    }
     // Conditional, owner-only: a lease we already lost to TTL now belongs to
     // another window, and clearing it would let a third start concurrently.
     await releaseRoundLease(walletId, lease).catch(() => undefined);

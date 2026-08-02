@@ -36,7 +36,10 @@ use super::server_plan::{
 };
 use super::session::{build_covert_component, calc_initial_hash, calc_round_hash};
 use super::tx::FusionTx;
-use super::{connect_stream, is_local_server, pb, recv_frame, send_frame, Transport, VERSION};
+use super::{
+    connect_stream, is_local_server, pb, recv_frame, recv_frame_unbounded, send_frame,
+    Transport, VERSION,
+};
 
 // Timing relative to covert_T0 (StartRound receipt), from protocol.py.
 const T_START_COMPS: Duration = Duration::from_secs(5);
@@ -175,6 +178,17 @@ where
         .ok_or_else(|| "empty server message".into())
 }
 
+async fn recv_server_unbounded<S>(stream: &mut S) -> Result<pb::server_message::Msg, String>
+where
+    S: AsyncRead + Unpin,
+{
+    let raw = recv_frame_unbounded(stream).await?;
+    pb::ServerMessage::decode(raw.as_slice())
+        .map_err(|e| format!("decode server message: {e}"))?
+        .msg
+        .ok_or_else(|| "empty server message".into())
+}
+
 async fn cancellable<T, F>(cancel: &CancelFlag, future: F) -> Result<T, String>
 where
     F: Future<Output = Result<T, String>>,
@@ -202,7 +216,7 @@ where
     tokio::select! {
         biased;
         _ = cancel.cancelled() => Err("fusion round cancelled".into()),
-        result = tokio::time::timeout(remaining, recv_server(stream)) => {
+        result = tokio::time::timeout(remaining, recv_server_unbounded(stream)) => {
             result
                 .map_err(|_| format!("timed out waiting for {label}"))?
         }
@@ -559,11 +573,13 @@ pub async fn run_fusion(params: FusionRunParams<'_>) -> Result<FusionOutcome, St
     cancel.check()?;
 
     // --- Main connection: hello -> join ---
+    log::info!("[FusionTrace] native connecting main channel");
     let mut main = cancellable(
         &cancel,
         connect_stream(host, port, use_ssl, main_transport),
     )
     .await?;
+    log::info!("[FusionTrace] native main channel connected");
 
     let hello = pb::ClientMessage {
         msg: Some(pb::client_message::Msg::Clienthello(pb::ClientHello {
@@ -587,6 +603,11 @@ pub async fn run_fusion(params: FusionRunParams<'_>) -> Result<FusionOutcome, St
         }
         _ => return Err("expected ServerHello".into()),
     };
+    log::info!(
+        "[FusionTrace] native ServerHello matched tiers={} components={}",
+        live_hello.tiers.len(),
+        live_hello.num_components
+    );
     let input_pubkeys = inputs
         .iter()
         .map(|input| input.pubkey.clone())
@@ -611,10 +632,15 @@ pub async fn run_fusion(params: FusionRunParams<'_>) -> Result<FusionOutcome, St
         })),
     };
     cancellable(&cancel, send_frame(&mut main, &join.encode_to_vec())).await?;
+    log::info!(
+        "[FusionTrace] native JoinPools sent registered_tiers={}",
+        indexed_plans.len()
+    );
 
     // --- Wait for one of the registered tiers to start (FusionBegin) ---
     let (begin, fusion_begin_at) = {
         let deadline = Instant::now() + JOIN_WAIT;
+        let mut queue_updates = 0usize;
         loop {
             let remaining = deadline.saturating_duration_since(Instant::now());
             if remaining.is_zero() {
@@ -629,13 +655,40 @@ pub async fn run_fusion(params: FusionRunParams<'_>) -> Result<FusionOutcome, St
             let message = tokio::select! {
                 biased;
                 _ = cancel.cancelled() => return Err("fusion round cancelled".into()),
-                result = tokio::time::timeout(remaining, recv_server(&mut main)) => result,
+                result = tokio::time::timeout(
+                    remaining,
+                    recv_server_unbounded(&mut main),
+                ) => result,
             };
             match message {
                 Err(_) => continue,
                 Ok(msg) => match msg? {
-                    pb::server_message::Msg::Tierstatusupdate(_) => continue,
+                    pb::server_message::Msg::Tierstatusupdate(update) => {
+                        queue_updates += 1;
+                        if queue_updates == 1 || queue_updates % 5 == 0 {
+                            let occupied = update
+                                .statuses
+                                .values()
+                                .filter(|status| status.players.unwrap_or(0) > 1)
+                                .count();
+                            let max_players = update
+                                .statuses
+                                .values()
+                                .map(|status| status.players.unwrap_or(0))
+                                .max()
+                                .unwrap_or(0);
+                            log::info!(
+                                "[FusionTrace] native queue update={} statuses={} occupied={} max_players={}",
+                                queue_updates,
+                                update.statuses.len(),
+                                occupied,
+                                max_players
+                            );
+                        }
+                        continue;
+                    }
                     pb::server_message::Msg::Fusionbegin(b) => {
+                        log::info!("[FusionTrace] native FusionBegin tier={}", b.tier);
                         break (b, Instant::now());
                     }
                     pb::server_message::Msg::Error(e) => {
@@ -706,7 +759,7 @@ pub async fn run_fusion(params: FusionRunParams<'_>) -> Result<FusionOutcome, St
         _ = cancel.cancelled() => return Err("fusion round cancelled".into()),
         result = tokio::time::timeout(
             start_deadline.saturating_duration_since(Instant::now()),
-            recv_server(&mut main),
+            recv_server_unbounded(&mut main),
         ) => result,
     } {
         Ok(m) => match m? {
@@ -721,6 +774,7 @@ pub async fn run_fusion(params: FusionRunParams<'_>) -> Result<FusionOutcome, St
         },
         Err(_) => return Err("timed out waiting for StartRound".into()),
     };
+    log::info!("[FusionTrace] native StartRound received");
     let covert_t0 = Instant::now();
     validate_server_time(start.server_time)?;
     if first_round {

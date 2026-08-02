@@ -5,7 +5,13 @@ vi.mock('../../../services/WalletUtxoRefreshService', () => ({
   reconcileActiveWalletUtxos: (...a: unknown[]) => reconcile(...a),
 }));
 
-import { startFusionRound, isFusionRunning } from '../FusionRunnerService';
+import {
+  getFusionActivity,
+  isFusionRunning,
+  startFusionRound,
+  subscribeFusionActivity,
+  type FusionActivity,
+} from '../FusionRunnerService';
 import { Network } from '../../../state/slices/networkSlice';
 import { clearFusionDepth, recordFusionRound } from '../fusionCoinDepth';
 import { lastAutoAttemptAt } from '../fusionWalletLease';
@@ -98,6 +104,19 @@ describe('FusionRunnerService — one path for manual and automatic rounds', () 
     });
   });
 
+  it('reuses the fresh snapshot that woke the automatic engine', async () => {
+    const snapshot = { addr: [coin('aa')] };
+
+    const result = await startFusionRound({
+      ...base(),
+      freshSnapshot: snapshot,
+    });
+
+    expect(reconcile).not.toHaveBeenCalled();
+    expect(runP2p).toHaveBeenCalledWith(snapshot.addr, undefined);
+    expect(result.status).toBe('fused');
+  });
+
   it('treats a null refresh as "waiting for wallet", not as "no coins"', async () => {
     // null means this trigger joined an in-progress refresh or the session
     // changed. Starting a round here is exactly the stale-coin bug.
@@ -168,6 +187,19 @@ describe('FusionRunnerService — one path for manual and automatic rounds', () 
     expect(lastAutoAttemptAt(3)).not.toBeNull();
   });
 
+  it('does not rescan the wallet while an automatic cooldown is active', async () => {
+    reconcile.mockResolvedValue({ addr: [coin('aa')] });
+
+    await startFusionRound(base());
+    reconcile.mockClear();
+
+    await expect(startFusionRound(base())).resolves.toEqual({
+      status: 'cooldown',
+    });
+    expect(reconcile).not.toHaveBeenCalled();
+    expect(runP2p).toHaveBeenCalledOnce();
+  });
+
   it('does not claim the cooldown for manual rounds', async () => {
     reconcile.mockResolvedValue({ addr: [coin('aa')] });
     await startFusionRound({ ...base(), trigger: 'manual' });
@@ -200,6 +232,47 @@ describe('FusionRunnerService — one path for manual and automatic rounds', () 
     await first;
     expect(isFusionRunning(3)).toBe(false);
   });
+
+  it.each(['p2p', 'server'] as const)(
+    'publishes persistent wallet activity for a %s round until it settles',
+    async (mode) => {
+      reconcile.mockResolvedValue({ addr: [coin('aa')] });
+      const transport = deferred<{ txid: string }>();
+      if (mode === 'p2p') {
+        runP2p.mockReturnValue(transport.promise);
+      } else {
+        runServer.mockReturnValue(transport.promise);
+      }
+
+      const events: Array<FusionActivity | null> = [];
+      const unsubscribe = subscribeFusionActivity(3, (activity) => {
+        events.push(activity);
+      });
+
+      const round = startFusionRound({
+        ...base(),
+        mode,
+        trigger: 'manual',
+      });
+      for (let i = 0; i < 100 && !getFusionActivity(3); i += 1) {
+        await Promise.resolve();
+      }
+
+      expect(getFusionActivity(3)).toMatchObject({
+        walletId: 3,
+        mode,
+        trigger: 'manual',
+      });
+      expect(events.at(-1)).toMatchObject({ mode, trigger: 'manual' });
+
+      transport.resolve({ txid: 'c'.repeat(64) });
+      await round;
+
+      expect(getFusionActivity(3)).toBeNull();
+      expect(events.at(-1)).toBeNull();
+      unsubscribe();
+    }
+  );
 
   it('routes server mode to the server runner', async () => {
     reconcile.mockResolvedValue({ addr: [coin('aa')] });
