@@ -97,7 +97,7 @@ pub struct FusionRunParams<'a> {
     pub remote_transport: Option<Transport<'a>>,
     /// Wallet-configured Electrum endpoint used only to validate peer inputs
     /// during blame. It is never supplied by the Fusion server.
-    pub lookup_endpoint: ElectrumEndpoint,
+    pub lookup_endpoints: Vec<ElectrumEndpoint>,
     /// Independent privacy policy for the lookup endpoint. Remote lookups must
     /// use Tor even when the Fusion server itself is local.
     pub lookup_transport: Transport<'a>,
@@ -459,6 +459,33 @@ fn global_indices_in_local_order(
 }
 
 #[allow(clippy::too_many_arguments)]
+/// Verify one peer input against the first Electrum server that can answer.
+///
+/// Blame must never rest on unavailable evidence, so a lookup failure aborts
+/// the round instead of accusing the peer. With a single hard-coded server that
+/// makes one unreachable host fatal to every round: observed against chipnet,
+/// where the first configured server timed out over Tor while the other two
+/// answered — pools formed, reached StartRound, and died there every time.
+///
+/// A definitive answer, match or mismatch, is returned as soon as any server
+/// gives one; only infrastructure failures move on to the next.
+async fn verify_input_anywhere(
+    endpoints: &[ElectrumEndpoint],
+    transport: Transport<'_>,
+    input: &pb::InputComponent,
+) -> Result<InputLookup, String> {
+    let mut last_error = String::from("no Electrum server is configured for input lookup");
+    for endpoint in endpoints {
+        match electrum_input::verify_input(endpoint, transport, input).await {
+            Ok(found) => return Ok(found),
+            Err(error) => {
+                last_error = format!("{}:{}: {error}", endpoint.host, endpoint.port);
+            }
+        }
+    }
+    Err(last_error)
+}
+
 async fn run_blame_phase<S>(
     main: &mut S,
     cancel: &CancelFlag,
@@ -469,7 +496,7 @@ async fn run_blame_phase<S>(
     my_component_indices: &[usize],
     bad_components: &[u32],
     component_feerate: u64,
-    lookup_endpoint: &ElectrumEndpoint,
+    lookup_endpoints: &[ElectrumEndpoint],
     lookup_transport: Transport<'_>,
 ) -> Result<(), String>
 where
@@ -516,12 +543,7 @@ where
     .map_err(|error| format!("could not validate relayed blame proofs: {error}"))?;
 
     for required in &review.inputs_requiring_blockchain_lookup {
-        match electrum_input::verify_input(
-            lookup_endpoint,
-            lookup_transport,
-            &required.input,
-        )
-        .await
+        match verify_input_anywhere(lookup_endpoints, lookup_transport, &required.input).await
         {
             Ok(InputLookup::Match) => {}
             Ok(InputLookup::Mismatch(reason)) => {
@@ -602,7 +624,7 @@ pub async fn run_fusion(params: FusionRunParams<'_>) -> Result<FusionOutcome, St
         output_scripts: all_output_scripts,
         main_transport,
         remote_transport,
-        lookup_endpoint,
+        lookup_endpoints,
         lookup_transport,
         timing,
         cancel,
@@ -1102,7 +1124,7 @@ pub async fn run_fusion(params: FusionRunParams<'_>) -> Result<FusionOutcome, St
             &my_component_indices,
             &[],
             feerate,
-            &lookup_endpoint,
+            &lookup_endpoints,
             lookup_transport,
         )
         .await?;
@@ -1221,7 +1243,7 @@ pub async fn run_fusion(params: FusionRunParams<'_>) -> Result<FusionOutcome, St
             &my_component_indices,
             &result.bad_components,
             feerate,
-            &lookup_endpoint,
+            &lookup_endpoints,
             lookup_transport,
         )
         .await?;
@@ -1789,11 +1811,11 @@ mod tests {
                 output_scripts,
                 main_transport: Transport::Direct,
                 remote_transport: None,
-                lookup_endpoint: ElectrumEndpoint {
+                lookup_endpoints: vec![ElectrumEndpoint {
                     host: "127.0.0.1".into(),
                     port: 1,
                     use_ssl: false,
-                },
+                }],
                 lookup_transport: Transport::Direct,
                 timing: FusionTiming {
                     warmup_expected: Duration::ZERO,
@@ -1900,11 +1922,11 @@ mod tests {
                 output_scripts,
                 main_transport: Transport::Direct,
                 remote_transport: None,
-                lookup_endpoint: ElectrumEndpoint {
+                lookup_endpoints: vec![ElectrumEndpoint {
                     host: "127.0.0.1".into(),
                     port: 1,
                     use_ssl: false,
-                },
+                }],
                 lookup_transport: Transport::Direct,
                 timing: FusionTiming {
                     warmup_expected: Duration::ZERO,

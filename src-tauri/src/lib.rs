@@ -239,6 +239,15 @@ async fn fusion_join_status(
     .await
 }
 
+/// One Electrum server the renderer offers for peer-input verification.
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct FusionLookupEndpointReq {
+    host: String,
+    port: u16,
+    use_ssl: bool,
+}
+
 #[derive(serde::Deserialize)]
 struct FusionRunInputReq {
     prev_txid: String,
@@ -299,6 +308,7 @@ async fn fusion_run(
     lookup_host: String,
     lookup_port: u16,
     lookup_use_ssl: bool,
+    lookup_fallbacks: Vec<FusionLookupEndpointReq>,
     tor_host: Option<String>,
     tor_port: Option<u16>,
     expected_hello: fusion::server_plan::ExpectedHello,
@@ -363,11 +373,23 @@ async fn fusion_run(
         output_scripts: scripts,
         main_transport: transport,
         remote_transport,
-        lookup_endpoint: fusion::electrum_input::ElectrumEndpoint {
+        // Every configured Electrum server, primary first, not just one. A
+        // single unreachable host otherwise makes peer inputs unverifiable —
+        // and since missing evidence must never become an accusation, that
+        // aborts every round rather than blaming anyone.
+        lookup_endpoints: std::iter::once(fusion::electrum_input::ElectrumEndpoint {
             host: lookup_host,
             port: lookup_port,
             use_ssl: lookup_use_ssl,
-        },
+        })
+        .chain(lookup_fallbacks.into_iter().map(|endpoint| {
+            fusion::electrum_input::ElectrumEndpoint {
+                host: endpoint.host,
+                port: endpoint.port,
+                use_ssl: endpoint.use_ssl,
+            }
+        }))
+        .collect(),
         lookup_transport,
         timing: fusion::run::FusionTiming::default(),
         cancel,
