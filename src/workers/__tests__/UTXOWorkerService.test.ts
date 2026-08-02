@@ -211,6 +211,8 @@ describe('UTXOWorkerService.bootstrapAllUTXOs', () => {
     gate.resolve();
     await bootstrapPromise;
 
+    expect(fetchContractInstancesMock).toHaveBeenCalledWith(42);
+
     expect(dispatchMock).toHaveBeenCalledWith(
       replaceAllUTXOs({
         utxosByAddress: expect.objectContaining({
@@ -279,6 +281,26 @@ describe('UTXOWorkerService.bootstrapAllUTXOs', () => {
         }),
       })
     );
+  });
+
+  it('clears the syncing state without erasing balances when the wallet batch fails', async () => {
+    fetchAndStoreUTXOsManyMock.mockRejectedValue(
+      new Error('all Electrum servers unavailable')
+    );
+    const { bootstrapAllUTXOs } = await import('../UTXOWorkerService');
+
+    await expect(bootstrapAllUTXOs()).rejects.toThrow(
+      'all Electrum servers unavailable'
+    );
+
+    expect(dispatchMock).toHaveBeenCalledWith(setFetchingUTXOs(true));
+    expect(dispatchMock).toHaveBeenCalledWith(setFetchingUTXOs(false));
+    expect(
+      dispatchMock.mock.calls.some(
+        ([action]) => action.type === replaceAllUTXOs.type
+      )
+    ).toBe(false);
+    expect(dispatchMock).not.toHaveBeenCalledWith(setInitialized(true));
   });
 
   it('discards a completed bootstrap when another wallet became active', async () => {

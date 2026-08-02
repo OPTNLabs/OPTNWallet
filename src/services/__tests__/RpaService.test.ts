@@ -20,8 +20,8 @@ const PASSPHRASE = '';
 // (3), sibling to receive(0)/change(1), matching the Electron Cash reference.
 const EXPECTED_MAINNET_SCAN_PATH = "m/44'/145'/0'/3/0";
 const EXPECTED_MAINNET_SPEND_PATH = "m/44'/145'/0'/3/1";
-const EXPECTED_CHIPNET_SCAN_PATH = "m/44'/145'/0'/3/0";
-const EXPECTED_CHIPNET_SPEND_PATH = "m/44'/145'/0'/3/1";
+const EXPECTED_CHIPNET_SCAN_PATH = "m/44'/1'/0'/3/0";
+const EXPECTED_CHIPNET_SPEND_PATH = "m/44'/1'/0'/3/1";
 
 describe('RpaService', () => {
   it('exposes network-specific RPA paths for UI and protocol consumers', () => {
@@ -93,25 +93,14 @@ describe('RpaService', () => {
     );
   });
 
-  it('derives the SAME RPA keys on mainnet and chipnet, and that is intended', () => {
-    // This test used to assert the opposite. Chipnet now shares mainnet's coin
-    // type (145) so a seed restores to the same addresses on both, which is the
-    // whole point of the change — but it also means these keys coincide.
-    //
-    // Recorded rather than quietly dropped, because it IS a real consequence:
-    // an RPA scan key seen on chipnet is the same key used on mainnet. The
-    // networks stay distinguishable by address prefix, not by key material.
-    // Anyone who wants them cryptographically separated has to give chipnet its
-    // own account path, not rely on the coin type.
-    return (async () => {
-      const mainnet = await deriveRpaKeys(TEST_MNEMONIC, PASSPHRASE, Network.MAINNET);
-      const chipnet = await deriveRpaKeys(TEST_MNEMONIC, PASSPHRASE, Network.CHIPNET);
-      expect(Buffer.from(chipnet.scanPubkey).toString('hex')).toBe(
-        Buffer.from(mainnet.scanPubkey).toString('hex')
-      );
-      expect(Buffer.from(chipnet.spendPubkey).toString('hex')).toBe(
-        Buffer.from(mainnet.spendPubkey).toString('hex')
-      );
-    })();
+  it('uses different key paths on mainnet and chipnet', async () => {
+    const mainnet = await deriveRpaKeys(TEST_MNEMONIC, PASSPHRASE, Network.MAINNET);
+    const chipnet = await deriveRpaKeys(TEST_MNEMONIC, PASSPHRASE, Network.CHIPNET);
+    expect(Buffer.from(mainnet.scanPubkey).toString('hex')).not.toBe(
+      Buffer.from(chipnet.scanPubkey).toString('hex')
+    );
+    expect(Buffer.from(mainnet.spendPubkey).toString('hex')).not.toBe(
+      Buffer.from(chipnet.spendPubkey).toString('hex')
+    );
   });
 });

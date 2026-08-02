@@ -8,7 +8,6 @@ import { useNavigate } from 'react-router-dom';
 import DatabaseService from '../../../apis/DatabaseManager/DatabaseService';
 import KeyService from '../../../services/KeyService';
 import {
-  getBchAccountPath,
   normalizeBchAccountPath,
 } from '../../../services/HdWalletService';
 import { Network, setNetwork } from '../../../state/slices/networkSlice';
@@ -25,6 +24,7 @@ import OnboardingCard from '../../../features/onboarding/components/OnboardingCa
 import OnboardingScreen from '../../../features/onboarding/components/OnboardingScreen';
 import DerivationPathField from '../../../features/onboarding/components/DerivationPathField';
 import { createWalletWithPassword } from '../DesktopWalletManager';
+import { defaultDesktopAccountPath } from '../desktopDerivationDefaults';
 
 type Step = 'words' | 'path' | 'name';
 
@@ -47,7 +47,9 @@ const DesktopImportWalletPage = () => {
   const navigate = useNavigate();
   const currentNetwork = useSelector(selectCurrentNetwork);
   const dispatch = useDispatch();
-  const [derivationPath, setDerivationPath] = useState(() => getBchAccountPath(currentNetwork));
+  const [derivationPath, setDerivationPath] = useState(() =>
+    defaultDesktopAccountPath(currentNetwork)
+  );
   const [customDerivationPath, setCustomDerivationPath] = useState(false);
 
   useEffect(() => {
@@ -55,7 +57,8 @@ const DesktopImportWalletPage = () => {
   }, [dispatch]);
 
   useEffect(() => {
-    if (!customDerivationPath) setDerivationPath(getBchAccountPath(currentNetwork));
+    if (!customDerivationPath)
+      setDerivationPath(defaultDesktopAccountPath(currentNetwork));
   }, [currentNetwork, customDerivationPath]);
 
   useEffect(() => {

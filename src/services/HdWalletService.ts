@@ -67,18 +67,10 @@ export const BCH_STANDARD_BRANCH_INDEX = {
 export type BchStandardBranchName = keyof typeof BCH_STANDARD_BRANCH_INDEX;
 
 export function getBchCoinType(network: Network): number {
-  // BIP44 assigns coin type 145 to BCH and 1 to test networks, and we used to
-  // follow that literally on chipnet. In practice the BCH tooling people
-  // actually test with — and the seeds they move between chipnet and mainnet —
-  // stays on 145, so coin type 1 meant the same seed showed different addresses
-  // here than everywhere else, which reads as a wallet that lost its coins.
-  //
-  // This is the default for NEW wallets only. Existing wallets carry their own
-  // derivation_path and are unaffected; see the frozen legacy constants in
-  // DatabaseService's backfill migration.
+  // BIP44 assigns coin type 145 to BCH mainnet and coin type 1 to testnets.
   return {
     [Network.MAINNET]: COIN_TYPE.bitcoincash,
-    [Network.CHIPNET]: COIN_TYPE.bitcoincash,
+    [Network.CHIPNET]: COIN_TYPE.testnet,
   }[network];
 }
 
