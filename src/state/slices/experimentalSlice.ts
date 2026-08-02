@@ -11,10 +11,27 @@ const DEFAULT_FUSION_SERVER = 'fusion.servo.cash:8789';
 // The default fusion server follows the active network: mainnet uses Electron
 // Cash's fusion.servo.cash:8789; Chipnet uses kalasti's chipnet.bch.ninja:8789.
 // Keyed by the Network enum's string values ('mainnet' | 'chipnet').
+// chipnet.bch.ninja:8789 was the chipnet default and is DOWN — a TCP connect
+// times out, both directly and over Tor, which surfaced as "timed out
+// connecting to chipnet.bch.ninja:8789 over Tor" and looked like a Tor fault
+// rather than a dead host. There is no public chipnet fusion server that
+// answers today, so the default points at a local Electron Cash `server.py`,
+// which is also what the project's own testing rule requires: fusion work must
+// never touch mainnet funds, and Phase 2 must run against a local server or
+// chipnet.
+//
+// Run one with:  python run_fusion_server.py 8787   (see docs)
+// Loopback needs no Tor — that is Electron Cash's one exemption, and ours.
 const DEFAULT_FUSION_SERVERS: Record<string, string> = {
   mainnet: DEFAULT_FUSION_SERVER,
-  chipnet: 'chipnet.bch.ninja:8789',
+  chipnet: '127.0.0.1:8787',
 };
+
+/** Offered in the UI as alternatives; the chipnet one is currently unreachable. */
+export const KNOWN_CHIPNET_FUSION_SERVERS = [
+  '127.0.0.1:8787',
+  'chipnet.bch.ninja:8789',
+];
 const KNOWN_DEFAULT_FUSION_SERVERS = new Set(
   Object.values(DEFAULT_FUSION_SERVERS)
 );
