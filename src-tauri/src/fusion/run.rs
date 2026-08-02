@@ -96,6 +96,12 @@ pub struct FusionRunParams<'a> {
     pub cancel: CancelFlag,
     /// Required snapshot from the renderer's read-only status probe.
     pub expected_hello: ExpectedHello,
+    /// Stable per-wallet identity used ONLY to build the self-fusion pool tag.
+    /// Never sent as-is; see `self_fusion_tag`.
+    pub wallet_tag_seed: Vec<u8>,
+    /// How many players carrying this wallet's tag the server may put in one
+    /// fusion. Electron Cash defaults to 1, i.e. never fuse with yourself.
+    pub self_fuse_limit: u32,
 }
 
 /// Covert submission timing relative to covert_T0 (StartRound receipt).
@@ -147,6 +153,29 @@ pub struct FusionOutcome {
 fn scalar_from_privkey(b: &[u8; 32]) -> Result<Scalar, String> {
     Option::<Scalar>::from(Scalar::from_repr((*b).into()))
         .ok_or_else(|| "invalid private key (>= curve order)".into())
+}
+
+/// Per-process salt for the self-fusion tag.
+///
+/// Electron Cash regenerates its tag seed each run so the tag a server sees
+/// cannot be correlated across restarts. Keeping that property matters: a
+/// stable tag would be a persistent pseudonym handed to every server the
+/// wallet ever fuses with, which is precisely the long-term identifier fusion
+/// exists to avoid.
+static TAG_SALT: once_cell::sync::Lazy<[u8; 32]> = once_cell::sync::Lazy::new(|| {
+    let mut salt = [0u8; 32];
+    rand_core::RngCore::fill_bytes(&mut rand_core::OsRng, &mut salt);
+    salt
+});
+
+/// 20-byte pool tag for this wallet, matching Electron Cash's
+/// `sha256(tag_seed + wallet_name)[:20]` (fusion.py:334).
+fn self_fusion_tag(wallet_seed: &[u8]) -> Vec<u8> {
+    use sha2::{Digest, Sha256};
+    let mut hasher = Sha256::new();
+    hasher.update(TAG_SALT.as_slice());
+    hasher.update(wallet_seed);
+    hasher.finalize()[..20].to_vec()
 }
 
 fn hexify(bytes: &[u8]) -> String {
@@ -566,6 +595,8 @@ pub async fn run_fusion(params: FusionRunParams<'_>) -> Result<FusionOutcome, St
         timing,
         cancel,
         expected_hello,
+        wallet_tag_seed,
+        self_fuse_limit,
     } = params;
     if inputs.is_empty() {
         return Err("no inputs to fuse".into());
@@ -625,10 +656,24 @@ pub async fn run_fusion(params: FusionRunParams<'_>) -> Result<FusionOutcome, St
     let feerate = live_hello.component_feerate;
     let registered_tiers = indexed_plans.keys().copied().collect::<Vec<_>>();
 
+    // Self-fusion protection. Without a tag the server will happily place the
+    // same wallet in a fusion twice, and fusing with yourself produces a
+    // transaction that looks mixed while mixing nothing — the worst outcome,
+    // because it is indistinguishable from success.
+    //
+    // Electron Cash: `PoolTag(id=sha256(tag_seed + wallet_name)[:20], limit=
+    // self_fuse_players)` with limit defaulting to 1 (fusion.py:661-669,
+    // conf.py:51). The seed is per-process there, so the tag cannot be
+    // correlated across restarts; the same property is preserved here by
+    // hashing a per-process salt with the caller's wallet seed.
     let join = pb::ClientMessage {
         msg: Some(pb::client_message::Msg::Joinpools(pb::JoinPools {
             tiers: registered_tiers,
-            tags: vec![],
+            tags: vec![pb::join_pools::PoolTag {
+                id: self_fusion_tag(&wallet_tag_seed),
+                limit: self_fuse_limit.clamp(1, 5),
+                no_ip: None,
+            }],
         })),
     };
     cancellable(&cancel, send_frame(&mut main, &join.encode_to_vec())).await?;
@@ -1165,6 +1210,21 @@ mod tests {
     }
 
     #[test]
+    fn self_fusion_tag_is_stable_per_wallet_and_opaque() {
+        // Same wallet, same tag: this is what lets the server refuse to put one
+        // wallet in a fusion twice.
+        assert_eq!(self_fusion_tag(b"7"), self_fusion_tag(b"7"));
+        // Different wallets must not collide, or one wallet's limit would
+        // suppress another's participation.
+        assert_ne!(self_fusion_tag(b"7"), self_fusion_tag(b"8"));
+        // Electron Cash sends 20 bytes (fusion.py:334); the field allows up to
+        // 20 and a longer value would be rejected outright.
+        assert_eq!(self_fusion_tag(b"7").len(), 20);
+        // The wallet id must not be recoverable from what the server sees.
+        assert!(!self_fusion_tag(b"7").starts_with(b"7"));
+    }
+
+    #[test]
     fn a_server_supplied_remote_covert_endpoint_never_inherits_local_direct_access() {
         assert!(matches!(
             select_covert_transport("localhost", "127.0.0.1", None).unwrap(),
@@ -1656,6 +1716,8 @@ mod tests {
             ));
 
             let params = FusionRunParams {
+                wallet_tag_seed: b"test-wallet".to_vec(),
+                self_fuse_limit: 1,
                 host: "127.0.0.1",
                 port: main_port,
                 use_ssl: false, // <-- plain TCP path
@@ -1762,6 +1824,8 @@ mod tests {
                 .collect::<Vec<_>>();
 
             let outcome = run_fusion(FusionRunParams {
+                wallet_tag_seed: b"test-wallet".to_vec(),
+                self_fuse_limit: 1,
                 host: "127.0.0.1",
                 port: main_port,
                 use_ssl: false,
