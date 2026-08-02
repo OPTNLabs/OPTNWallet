@@ -92,11 +92,11 @@ export function useAutoFusion(): void {
   /** Bumped whenever the wallet session changes, to strand stale completions. */
   const sessionRef = useRef(0);
   const activeControllerRef = useRef<AbortController | null>(null);
-  useEffect(() => {
-    sessionRef.current += 1;
-    activeControllerRef.current?.abort();
-    activeControllerRef.current = null;
-  }, [
+  // What these settings ARE, not which objects they happen to be. `nostrRelays`
+  // and `fusionServers` are arrays rebuilt on most renders, so keying the abort
+  // below on identity cancelled live rounds whenever anything re-rendered —
+  // while the settings themselves had not changed at all.
+  const sessionKey = JSON.stringify([
     walletId,
     network,
     cashFusionEnabled,
@@ -110,6 +110,11 @@ export function useAutoFusion(): void {
     savedFusionServer,
     fusionServers,
   ]);
+  useEffect(() => {
+    sessionRef.current += 1;
+    activeControllerRef.current?.abort();
+    activeControllerRef.current = null;
+  }, [sessionKey]);
 
   const tick = useCallback(async (freshSnapshot?: WalletUtxoSnapshot) => {
     if (activeControllerRef.current) return;
@@ -282,12 +287,23 @@ export function useAutoFusion(): void {
       void run();
       timer = setTimeout(tick, nextEngineTickMs());
     }, nextEngineTickMs());
+    // Stop SCHEDULING, but deliberately leave any in-flight round alone.
+    //
+    // This effect re-runs whenever `tick` changes identity, and `tick` depends
+    // on `nostrRelays` and `fusionServers` — arrays that are new objects on most
+    // renders. Aborting here therefore cancelled rounds for no reason at all: a
+    // round waits up to 120s in the join pool, and any render in that window
+    // killed it. Observed live — three wallets had just met in tier 3,900,000
+    // and reached StartRound when a re-render cancelled the other two, and the
+    // survivor died with "too few remaining live players".
+    //
+    // A round that genuinely must stop — the wallet closed, the network changed,
+    // fusion was switched off — is aborted by the session effect above, which
+    // keys on exactly those things.
     return () => {
       disposed = true;
       unsubscribeRefresh();
       clearTimeout(timer);
-      activeControllerRef.current?.abort();
-      activeControllerRef.current = null;
     };
   }, [cashFusionEnabled, autoFuseEnabled, walletId, tick]);
 }
