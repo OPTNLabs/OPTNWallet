@@ -8,6 +8,7 @@ import {
 import { get as idbGet, set as idbSet } from 'idb-keyval';
 import { logError } from '../../utils/errorHandling';
 import SecretCryptoService, {
+  SECRET_ENC_PREFIX,
   isEncryptedPayload,
 } from '../../services/SecretCryptoService';
 /**
@@ -15,6 +16,7 @@ import SecretCryptoService, {
  * configurable. Frozen here on purpose — see the migration below.
  */
 const LEGACY_CHIPNET_ACCOUNT_PATH = "m/44'/1'/0'";
+const CHIPNET_ACCOUNT_PATH = "m/44'/145'/0'";
 const LEGACY_MAINNET_ACCOUNT_PATH = "m/44'/145'/0'";
 import { Network } from '../../state/slices/networkSlice';
 import {
@@ -236,7 +238,49 @@ const migrations: Array<(db: Database) => Promise<void>> = [
       );
     `);
   },
+  async (db) => {
+    // The desktop wallet used to scan six derived-data tables on every unlock
+    // to repair rows left behind by an old network-switch bug. Record that the
+    // one-time repair has run for this wallet/network so normal unlocks do not
+    // repeat a migration forever. Mobile ignores these nullable columns.
+    const columns = new Set<string>();
+    const statement = db.prepare('PRAGMA table_info(wallets);');
+    while (statement.step()) {
+      const row = statement.getAsObject() as Record<string, unknown>;
+      if (typeof row.name === 'string') columns.add(row.name);
+    }
+    statement.free();
+
+    if (!columns.has('network_cleanup_version')) {
+      db.run(
+        'ALTER TABLE wallets ADD COLUMN network_cleanup_version INT DEFAULT 0;'
+      );
+    }
+    if (!columns.has('network_cleanup_network')) {
+      db.run('ALTER TABLE wallets ADD COLUMN network_cleanup_network TEXT;');
+    }
+  },
   // Add future migrations here as needed
+  async (db) => {
+    // Move chipnet wallets onto BCH coin type 145.
+    //
+    // The earlier backfill pinned them to m/44'/1'/0' to stop addresses moving
+    // under anyone. That was the wrong assumption for real users: BCH tooling
+    // funds chipnet at 145, so wallets were left scanning a path that never
+    // held their coins and reported an empty balance after a clean scan.
+    //
+    // Only rows whose path we chose ourselves are touched —
+    // derivation_path_source = 'default'. A path the user set explicitly is
+    // theirs and is never rewritten, and mainnet is untouched.
+    db.run(
+      `UPDATE wallets
+          SET derivation_path = ?
+        WHERE networkType = ?
+          AND derivation_path_source = 'default'
+          AND derivation_path = ?`,
+      [CHIPNET_ACCOUNT_PATH, Network.CHIPNET, LEGACY_CHIPNET_ACCOUNT_PATH]
+    );
+  },
 ];
 
 function databaseVersion(database: Database): number {
@@ -244,12 +288,15 @@ function databaseVersion(database: Database): number {
   return Number(result?.[0]?.values?.[0]?.[0] ?? 0);
 }
 
-async function applyPendingMigrations(database: Database): Promise<void> {
+async function applyPendingMigrations(database: Database): Promise<boolean> {
   const currentVersion = databaseVersion(database);
+  let changed = false;
   for (let version = currentVersion + 1; version <= migrations.length; version++) {
     await migrations[version - 1](database);
     database.run(`PRAGMA user_version = ${version};`);
+    changed = true;
   }
+  return changed;
 }
 
 function walletIds(database: Database): number[] {
@@ -310,8 +357,12 @@ async function migrateSecretColumnsAtRest(
 
   // wallets.mnemonic / wallets.passphrase
   const walletRows = database.prepare(
-    'SELECT id, mnemonic, passphrase FROM wallets;'
+    `SELECT id, mnemonic, passphrase FROM wallets
+      WHERE (typeof(mnemonic) = 'text' AND mnemonic <> '' AND mnemonic NOT LIKE ?)
+         OR (typeof(passphrase) = 'text' AND passphrase <> '' AND passphrase NOT LIKE ?);`
   );
+  const encryptedPattern = `${SECRET_ENC_PREFIX}%`;
+  walletRows.bind([encryptedPattern, encryptedPattern]);
   const walletUpdates: Array<{
     id: number;
     mnemonic: string;
@@ -351,7 +402,15 @@ async function migrateSecretColumnsAtRest(
   }
 
   // keys.private_key
-  const keyRows = database.prepare('SELECT id, private_key FROM keys;');
+  const keyRows = database.prepare(
+    `SELECT id, private_key FROM keys
+      WHERE private_key IS NOT NULL
+        AND (
+          typeof(private_key) <> 'text'
+          OR (private_key <> '' AND private_key NOT LIKE ?)
+        );`
+  );
+  keyRows.bind([encryptedPattern]);
   const keyUpdates: Array<{ id: number; privateKey: string }> = [];
 
   while (keyRows.step()) {
@@ -542,12 +601,17 @@ const startDatabase = async (): Promise<Database | null> => {
     db.run('PRAGMA user_version = 0;'); // New databases start at version 0
   }
 
-  await applyPendingMigrations(db);
-  await migrateSecretColumnsAtRest();
+  const schemaChanged = await applyPendingMigrations(db);
+  const secretsChanged = await migrateSecretColumnsAtRest();
   globalBaseline = snapshotGlobalTables(db);
   replaceWalletBaselines(db);
-  // Save immediately after migrations to persist schema and encrypted secrets.
-  await realSaveDatabase();
+  // Starting another wallet window must be read-only when the persisted
+  // database is already current. Re-exporting and rewriting the whole shared
+  // snapshot here serialized every window behind the save lock and visibly
+  // blocked wallet listing/unlock.
+  if (!savedBytes || schemaChanged || secretsChanged) {
+    await realSaveDatabase();
+  }
 
   return db;
 };
