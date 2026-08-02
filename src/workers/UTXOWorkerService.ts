@@ -363,6 +363,8 @@ export async function bootstrapAllUTXOs(expectedEpoch?: number) {
 
   store.dispatch(setFetchingUTXOs(true));
 
+  try {
+
   const allUTXOs: Record<string, UTXO[]> = {};
 
   // Wallet-owned and explicitly tracked addresses share one fresh Electrum
@@ -398,7 +400,11 @@ export async function bootstrapAllUTXOs(expectedEpoch?: number) {
 
   // Contract instances
   try {
-    const instances = await contractManager.fetchContractInstances();
+    // The contract cache is global, but this worker owns exactly one wallet.
+    // Scanning every wallet's contracts in every window caused cross-wallet
+    // Electrum floods and made ordinary balances appear to hang.
+    const instances =
+      await contractManager.fetchContractInstances(currentWalletId);
     const contractAddresses = instances.map((i) => i.address);
     const contractResults = await Promise.allSettled(
       contractAddresses.map(async (address) => {
@@ -440,8 +446,15 @@ export async function bootstrapAllUTXOs(expectedEpoch?: number) {
   if (!bootstrapIsCurrent()) return;
 
   dbService.scheduleDatabaseSave(currentWalletId);
-  store.dispatch(setFetchingUTXOs(false));
   store.dispatch(setInitialized(true));
+  } finally {
+    // A failed Electrum batch is not an empty wallet, but it also must not
+    // strand the Home screen in a permanent "Syncing" state. Only clear the
+    // flag for the session that started this bootstrap.
+    if (bootstrapIsCurrent()) {
+      store.dispatch(setFetchingUTXOs(false));
+    }
+  }
 }
 
 async function establishSubscriptions(session: WorkerSession) {
