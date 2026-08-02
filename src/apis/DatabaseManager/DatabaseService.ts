@@ -562,6 +562,50 @@ async function performQueuedSave(): Promise<void> {
   return queuedSaveRun;
 }
 
+/**
+ * Re-read the shared database from disk and rebase this window's save
+ * baselines on it. Safe only while no wallet is open.
+ *
+ * A window keeps ONE sql.js `Database` for its entire life — `startDatabase`
+ * loads it once and nothing ever reloads it. Locking or closing a wallet wipes
+ * the keys and the redux state but leaves those rows, and the baselines taken
+ * from them, in place. The moment another window writes that wallet, this
+ * window's copy is stale in a way it cannot detect.
+ *
+ * Reopening the wallet then fails the concurrent-edit check in
+ * `realSaveDatabase` *permanently*, because neither side of that comparison is
+ * ever refreshed: on-disk differs from both our baseline and our local rows, so
+ * every save is refused with "changed in another window" — including the UTXO
+ * write. The wallet reports a successful sync and shows no balance, and only
+ * restarting the app clears it.
+ *
+ * Adopting the on-disk copy wholesale is correct here precisely because no
+ * wallet is open: there is nothing unsaved to lose, and disk is by definition
+ * at least as new as what we held.
+ */
+const resyncDatabaseFromDisk = async (): Promise<void> => {
+  const SQLModule = sqlModule;
+  if (!SQLModule) return;
+
+  const saved = await idbGet('OPTNDatabase');
+  const savedBytes =
+    saved instanceof Uint8Array
+      ? saved
+      : saved instanceof ArrayBuffer
+        ? new Uint8Array(saved)
+        : null;
+  if (!savedBytes) return;
+
+  // Under the save lock: swapping `db` out from under an in-flight save would
+  // export a half-replaced database.
+  await withExclusiveSaveLock(async () => {
+    db?.close();
+    db = new SQLModule.Database(savedBytes);
+    globalBaseline = snapshotGlobalTables(db);
+    replaceWalletBaselines(db);
+  });
+};
+
 const startDatabase = async (): Promise<Database | null> => {
   const SQLModule = await initSqlJs({
     locateFile: () => `/sql-wasm.wasm`,
@@ -845,6 +889,7 @@ export default function DatabaseService() {
   return {
     startDatabase,
     ensureDatabaseStarted,
+    resyncDatabaseFromDisk,
     saveDatabaseToFile,
     scheduleDatabaseSave,
     flushDatabaseToFile,
