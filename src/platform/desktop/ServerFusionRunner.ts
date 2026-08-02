@@ -312,11 +312,25 @@ export interface TierPlan {
  * tier → allocation plan. The caller picks one after FusionBegin tells
  * which tier was selected.
  */
+/**
+ * Restrict planning to specific tiers.
+ *
+ * A wallet registers for every tier its coins can fund, and which tiers those
+ * are depends on `sumIn` and the input count — plus a random fuzz fee, so the
+ * set is not even stable for identical coins. Two wallets therefore land in
+ * different pools and wait forever without ever being told why: observed live
+ * as `registered_tiers=6` and `registered_tiers=4` with `max_players=1`.
+ *
+ * That is correct behaviour on a busy server, where a large pool absorbs the
+ * variance. It makes a two-party test a coin flip. Pinning a tier turns "run it
+ * repeatedly and hope" into a decision.
+ */
 export function allocateAllFeasibleTiers(
   hello: ServerHelloSnapshot,
   sumIn: number,
   inputPubkeys: Uint8Array[],
-  rng: () => number
+  rng: () => number,
+  onlyTiers?: readonly number[]
 ): Map<number, TierPlan> {
   const numInputs = inputPubkeys.length;
   if (
@@ -352,7 +366,15 @@ export function allocateAllFeasibleTiers(
 
   const result = new Map<number, TierPlan>();
 
+  // Intersected with what the server advertises, so a pinned tier the server
+  // does not offer yields an empty plan set and a clear refusal upstream —
+  // rather than silently registering for everything and reintroducing the
+  // problem this exists to solve.
+  const wanted =
+    onlyTiers && onlyTiers.length > 0 ? new Set(onlyTiers) : null;
+
   for (const scale of hello.tiers) {
+    if (wanted && !wanted.has(scale)) continue;
     // Fuzz fee: tier / 1_000_000 (EC: scale // 1000000)
     const fuzzFeeMax = Math.floor(scale / 1_000_000);
     const fuzzFeeMaxReduced = Math.min(
@@ -405,6 +427,16 @@ export interface ServerRunnerConfig {
   onServerHello?: (hello: ServerHelloSnapshot) => void;
   inputLookupEndpoint?: FusionElectrumEndpoint;
   relayEndpoints?: FusionRelayEndpoints;
+  /**
+   * Register for these tiers only, instead of every tier the coins can fund.
+   *
+   * Two wallets each register for whichever tiers their amounts happen to
+   * allow — a set that is not even stable across runs, because a random fuzz
+   * fee feeds the calculation. They queue in different pools and wait, with
+   * nothing on screen explaining why. Pinning the same tier in both makes them
+   * meet deliberately rather than by luck.
+   */
+  onlyTiers?: readonly number[];
   /** Injected for deterministic tests; defaults to crypto.getRandomValues. */
   _testRng?: () => number;
 }
@@ -509,10 +541,18 @@ export function buildServerRunner(
         expectedHello,
         sumIn,
         inputPubkeys,
-        rng
+        rng,
+        config.onlyTiers
       );
       if (plans.size === 0) {
-        throw new Error('Selected inputs cannot afford any fusion tier.');
+        // Distinguish the two causes. "Cannot afford any tier" sends someone
+        // looking for more coins; if they pinned a tier the wallet cannot fund,
+        // the answer is a different tier, and saying so saves the hunt.
+        throw new Error(
+          config.onlyTiers && config.onlyTiers.length > 0
+            ? `Selected inputs cannot fund the requested tier(s): ${config.onlyTiers.join(', ')} sats.`
+            : 'Selected inputs cannot afford any fusion tier.'
+        );
       }
 
       let maxOutputCount = 0;
