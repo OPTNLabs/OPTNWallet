@@ -262,23 +262,28 @@ const migrations: Array<(db: Database) => Promise<void>> = [
   },
   // Add future migrations here as needed
   async (db) => {
-    // Move chipnet wallets onto BCH coin type 145.
+    // UNDO of the previous migration in this file's history.
     //
-    // The earlier backfill pinned them to m/44'/1'/0' to stop addresses moving
-    // under anyone. That was the wrong assumption for real users: BCH tooling
-    // funds chipnet at 145, so wallets were left scanning a path that never
-    // held their coins and reported an empty balance after a clean scan.
+    // That migration moved chipnet wallets from m/44'/1'/0' to 145 on the
+    // assumption they were funded at 145. They were not: wallets that had been
+    // working all session reported zero immediately afterwards, because this
+    // app funded them under its old default of coin type 1 and the coins are
+    // still there. Moving the wallet moved where it looked, not where the money
+    // is.
     //
-    // Only rows whose path we chose ourselves are touched —
-    // derivation_path_source = 'default'. A path the user set explicitly is
-    // theirs and is never rewritten, and mainnet is untouched.
+    // Restores the path for rows this app chose itself. A path the user set
+    // explicitly is never touched, and mainnet is never involved.
+    //
+    // The general problem — a wallet funded under some other tool's path — is
+    // not solved by picking a different constant. It is solved by looking:
+    // see DerivationPathDiscovery.
     db.run(
       `UPDATE wallets
           SET derivation_path = ?
         WHERE networkType = ?
           AND derivation_path_source = 'default'
           AND derivation_path = ?`,
-      [CHIPNET_ACCOUNT_PATH, Network.CHIPNET, LEGACY_CHIPNET_ACCOUNT_PATH]
+      [LEGACY_CHIPNET_ACCOUNT_PATH, Network.CHIPNET, CHIPNET_ACCOUNT_PATH]
     );
   },
   async (db) => {
@@ -296,6 +301,22 @@ const migrations: Array<(db: Database) => Promise<void>> = [
     if (!columns.has('account_xpub')) {
       db.run('ALTER TABLE wallets ADD COLUMN account_xpub TEXT;');
     }
+  },
+  async (db) => {
+    // Appended, not edited into the migration above, because migrations are
+    // recorded by index: a database that already ran that one would never see
+    // a correction written in place, and would stay pointed at the wrong path
+    // forever.
+    //
+    // Same restore, for installs that already applied the 145 move.
+    db.run(
+      `UPDATE wallets
+          SET derivation_path = ?
+        WHERE networkType = ?
+          AND derivation_path_source = 'default'
+          AND derivation_path = ?`,
+      [LEGACY_CHIPNET_ACCOUNT_PATH, Network.CHIPNET, CHIPNET_ACCOUNT_PATH]
+    );
   },
 ];
 
