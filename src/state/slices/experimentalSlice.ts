@@ -313,7 +313,12 @@ export const selectFusionServers = createSelector(
     const userAdded = persisted.filter(
       (s) => !KNOWN_DEFAULT_FUSION_SERVERS.has(s)
     );
-    return Array.from(new Set([networkDefault, ...userAdded]));
+    // Offer the other servers we know about for this network, so switching to
+    // one is a selection rather than retyping a host from memory. Listed after
+    // the default and before user additions; the Set keeps order and dedupes.
+    const alsoKnown =
+      network === 'chipnet' ? KNOWN_CHIPNET_FUSION_SERVERS : [];
+    return Array.from(new Set([networkDefault, ...alsoKnown, ...userAdded]));
   }
 );
 export const selectTorEnabled = (state: RootState) =>
