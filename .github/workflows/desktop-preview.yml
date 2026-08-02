@@ -97,13 +97,16 @@ jobs:
       - name: Build Tauri (debug)
         # No --bundles: tauri.conf.json already says targets "all", and a preview
         # that skipped a format would stop being a preview of what ships. Linux
-        # builds the AppImage here too, which is the only place the linuxdeploy
-        # step gets exercised before a release depends on it. libfuse2 above is
-        # what makes that work on the runner.
+        # builds the AppImage here too, which is the only place linuxdeploy runs
+        # before release.yml gates a release on the resulting file.
+        #
+        # --verbose because the AppImage bundler swallows linuxdeploy's stderr:
+        # a failure prints `failed to run linuxdeploy` and nothing else, which
+        # is not enough to fix anything. Drop it once the AppImage builds green.
         env:
           APPIMAGE_EXTRACT_AND_RUN: '1'
           NO_STRIP: 'true'
-        run: npx tauri build --debug --target ${{ matrix.target }}
+        run: npx tauri build --debug --target ${{ matrix.target }} --verbose
 
       - name: Upload preview artifact
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
