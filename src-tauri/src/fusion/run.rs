@@ -59,6 +59,18 @@ const JOIN_WAIT: Duration = Duration::from_secs(120);
 const BLAME_PROOFS_WAIT: Duration = Duration::from_secs(6);
 const BLAME_RESTART_WAIT: Duration = Duration::from_secs(16);
 const RESTARTED_ROUND_WAIT: Duration = Duration::from_secs(15);
+/// Ceiling on rounds within one pool session.
+///
+/// A DELIBERATE DIVERGENCE from Electron Cash, which loops `while True`
+/// (fusion.py:467) and relies purely on receive timeouts. That is fine against
+/// an honest server: a restart only happens after a blame phase, and a real
+/// fusion completes in one or two. It leaves a hostile server free to hold a
+/// client — and its reserved coins — indefinitely by restarting forever, each
+/// iteration costing it nothing and costing us RESTARTED_ROUND_WAIT.
+///
+/// Set high enough that honest operation cannot reach it, so a wallet that hits
+/// this has met a server behaving in a way no round legitimately requires.
+const MAX_ROUNDS_PER_SESSION: usize = 25;
 
 /// One input the wallet contributes, with the key needed to sign it.
 pub struct FusionInputKey {
@@ -791,8 +803,21 @@ pub async fn run_fusion(params: FusionRunParams<'_>) -> Result<FusionOutcome, St
     let mut pending_covert_schedule = Some(covert_schedule);
     let mut covert_pool: Option<CovertPool> = None;
     let mut first_round = true;
+    let mut rounds_run = 0usize;
 
     loop {
+    rounds_run += 1;
+    if rounds_run > MAX_ROUNDS_PER_SESSION {
+        return Ok(FusionOutcome {
+            ok: false,
+            broadcast_verified: false,
+            txid: None,
+            tx_hex: None,
+            message: format!(
+                "fusion server restarted the round {MAX_ROUNDS_PER_SESSION} times without completing"
+            ),
+        });
+    }
     // --- StartRound (repeated on the same main/covert connections after blame) ---
     let start_deadline = if first_round {
         fusion_begin_at + timing.warmup_expected + timing.warmup_slop + Duration::from_secs(1)
