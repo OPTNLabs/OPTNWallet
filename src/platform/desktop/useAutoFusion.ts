@@ -54,7 +54,21 @@ import {
  * idle or empty wallet does not perform a full Electrum reconciliation every
  * minute in every open window.
  */
-const ENGINE_TICK_MS = AUTO_FUSION_COOLDOWN_MS;
+// Electron Cash spaces automatic fusions by a RANDOM interval, not a fixed one
+// (plugin.py: AUTOFUSE_RECENT_TOR_LIMIT_LOWER = 60, ..._UPPER = 120). A fixed
+// period is a timing fingerprint: a passive observer watching relay or Tor
+// traffic sees rounds begin on a predictable cadence and can group them, which
+// is the correlation fusing exists to break. Matching their bounds.
+const ENGINE_TICK_MIN_MS = 60_000;
+const ENGINE_TICK_MAX_MS = 120_000;
+
+/** A fresh interval for each tick, so the cadence never settles into a pattern. */
+function nextEngineTickMs(): number {
+  return (
+    ENGINE_TICK_MIN_MS +
+    Math.floor(Math.random() * (ENGINE_TICK_MAX_MS - ENGINE_TICK_MIN_MS + 1))
+  );
+}
 
 export function useAutoFusion(): void {
   const cashFusionEnabled = useSelector(selectCashFusionEnabled);
@@ -262,11 +276,16 @@ export function useAutoFusion(): void {
         if (refreshedWalletId === walletId) run(snapshot);
       }
     );
-    const timer = setInterval(run, ENGINE_TICK_MS);
+    // setTimeout, re-armed each time, rather than setInterval: a fixed interval
+    // cannot be re-randomised between ticks.
+    let timer = setTimeout(function tick() {
+      void run();
+      timer = setTimeout(tick, nextEngineTickMs());
+    }, nextEngineTickMs());
     return () => {
       disposed = true;
       unsubscribeRefresh();
-      clearInterval(timer);
+      clearTimeout(timer);
       activeControllerRef.current?.abort();
       activeControllerRef.current = null;
     };
