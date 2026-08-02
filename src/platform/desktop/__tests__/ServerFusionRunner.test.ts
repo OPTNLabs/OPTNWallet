@@ -648,3 +648,27 @@ describe('buildServerRunner — shared runner for manual and auto', () => {
     );
   });
 });
+
+describe('fusion server scheme defaults', () => {
+  it('uses plain TCP for a local server, because server.py has no TLS', () => {
+    // Defaulting loopback to SSL produced "TLS handshake failed: tls handshake
+    // eof" against a perfectly healthy local Electron Cash server, which reads
+    // as a broken server rather than as us speaking the wrong protocol at it.
+    expect(parseFusionServerTarget('127.0.0.1:8787')).toEqual({
+      host: '127.0.0.1',
+      port: 8787,
+      useSsl: false,
+    });
+    expect(parseFusionServerTarget('localhost:8787').useSsl).toBe(false);
+  });
+
+  it('still defaults a remote server to SSL', () => {
+    // Sending fusion traffic to the internet in the clear is the worse mistake.
+    expect(parseFusionServerTarget('fusion.servo.cash:8789').useSsl).toBe(true);
+  });
+
+  it('lets an explicit suffix override both defaults', () => {
+    expect(parseFusionServerTarget('127.0.0.1:8787:s').useSsl).toBe(true);
+    expect(parseFusionServerTarget('fusion.servo.cash:8789:t').useSsl).toBe(false);
+  });
+});

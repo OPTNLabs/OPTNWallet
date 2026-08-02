@@ -100,10 +100,23 @@ export function parseFusionServerTarget(server: string): FusionServerTarget {
   if (!match[1] || !Number.isInteger(port) || port < 1 || port > 65_535) {
     throw new Error('CashFusion server address is invalid.');
   }
+  const host = match[1];
+  const explicitScheme = match[3];
   return {
-    host: match[1],
+    host,
     port,
-    useSsl: match[3] !== 't',
+    // Electron Cash's server.py speaks PLAIN TCP — it has no TLS of its own;
+    // the public servers are fronted by something else that terminates it. So
+    // defaulting every address to SSL made a local server unreachable, and the
+    // failure was "TLS handshake failed: tls handshake eof", which reads as a
+    // broken server rather than as us speaking the wrong protocol at it.
+    //
+    // A remote server still defaults to SSL, because sending fusion traffic to
+    // the internet in the clear is the worse mistake. An explicit `:s` or `:t`
+    // suffix always wins over both defaults.
+    useSsl: explicitScheme
+      ? explicitScheme === 's'
+      : !isLocalFusionDestination(host),
   };
 }
 
