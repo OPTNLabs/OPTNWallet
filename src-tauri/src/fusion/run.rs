@@ -698,15 +698,30 @@ pub async fn run_fusion(params: FusionRunParams<'_>) -> Result<FusionOutcome, St
     let (begin, fusion_begin_at) = {
         let deadline = Instant::now() + JOIN_WAIT;
         let mut queue_updates = 0usize;
+        // Best pool state seen while waiting, so a timeout can say WHY nobody
+        // joined instead of only that nobody did. Waiting alone in a tier and
+        // waiting in a tier that is filling look identical from the outside,
+        // and telling them apart is the difference between "add coins on the
+        // other wallet" and "keep waiting".
+        let mut best_tier: Option<(u64, u32, u32)> = None;
         loop {
             let remaining = deadline.saturating_duration_since(Instant::now());
             if remaining.is_zero() {
+                let detail = match best_tier {
+                    Some((tier, players, min_players)) => format!(
+                        "best tier {tier} sats had {players}/{min_players} players"
+                    ),
+                    None => "the server never reported pool status".to_string(),
+                };
                 return Ok(FusionOutcome {
                     ok: false,
                     broadcast_verified: false,
                     txid: None,
                     tx_hex: None,
-                    message: "no other players joined this tier in time".into(),
+                    message: format!(
+                        "no other players joined in time ({detail}); registered {} tier(s)",
+                        indexed_plans.len()
+                    ),
                 });
             }
             let message = tokio::select! {
@@ -722,6 +737,19 @@ pub async fn run_fusion(params: FusionRunParams<'_>) -> Result<FusionOutcome, St
                 Ok(msg) => match msg? {
                     pb::server_message::Msg::Tierstatusupdate(update) => {
                         queue_updates += 1;
+                        // Track the fullest tier by players, then by how close
+                        // it is to starting.
+                        for (tier, status) in &update.statuses {
+                            let players = status.players.unwrap_or(0);
+                            let min_players = status.min_players.unwrap_or(0);
+                            let better = match best_tier {
+                                None => true,
+                                Some((_, best_players, _)) => players > best_players,
+                            };
+                            if better {
+                                best_tier = Some((*tier, players, min_players));
+                            }
+                        }
                         if queue_updates == 1 || queue_updates % 5 == 0 {
                             let occupied = update
                                 .statuses
