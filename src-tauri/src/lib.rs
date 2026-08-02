@@ -48,6 +48,112 @@ fn fusion_transport_for_host<'a>(
     Ok(fusion::Transport::Tor { host, port })
 }
 
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+struct FusionStatusCacheKey {
+    host: String,
+    port: u16,
+    use_ssl: bool,
+    tor_host: Option<String>,
+    tor_port: Option<u16>,
+}
+
+#[derive(Clone)]
+struct FusionStatusCacheEntry {
+    recorded_at: std::time::Instant,
+    result: Result<fusion::FusionServerStatus, String>,
+}
+
+type FusionStatusCacheSlot =
+    std::sync::Arc<tokio::sync::Mutex<Option<FusionStatusCacheEntry>>>;
+
+static FUSION_STATUS_CACHE: once_cell::sync::Lazy<
+    std::sync::Mutex<
+        std::collections::HashMap<FusionStatusCacheKey, FusionStatusCacheSlot>,
+    >,
+> = once_cell::sync::Lazy::new(|| {
+    std::sync::Mutex::new(std::collections::HashMap::new())
+});
+
+const FUSION_STATUS_SUCCESS_TTL: std::time::Duration =
+    std::time::Duration::from_secs(30);
+const FUSION_STATUS_FAILURE_TTL: std::time::Duration =
+    std::time::Duration::from_secs(15);
+
+fn fusion_status_cache_slot(key: &FusionStatusCacheKey) -> FusionStatusCacheSlot {
+    let mut slots = FUSION_STATUS_CACHE
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    // The renderer controls the configured endpoint, so keep this process-wide
+    // cache bounded even if a user repeatedly edits the server field.
+    if slots.len() >= 64 && !slots.contains_key(key) {
+        slots.clear();
+    }
+    slots
+        .entry(key.clone())
+        .or_insert_with(|| std::sync::Arc::new(tokio::sync::Mutex::new(None)))
+        .clone()
+}
+
+async fn shared_fusion_server_status<F, Fut>(
+    key: FusionStatusCacheKey,
+    fetch: F,
+) -> Result<fusion::FusionServerStatus, String>
+where
+    F: FnOnce() -> Fut,
+    Fut: std::future::Future<Output = Result<fusion::FusionServerStatus, String>>,
+{
+    let slot = fusion_status_cache_slot(&key);
+    let mut entry = slot.lock().await;
+    let now = std::time::Instant::now();
+    if let Some(cached) = entry.as_ref() {
+        let ttl = if cached.result.is_ok() {
+            FUSION_STATUS_SUCCESS_TTL
+        } else {
+            FUSION_STATUS_FAILURE_TTL
+        };
+        if now.saturating_duration_since(cached.recorded_at) < ttl {
+            return cached.result.clone();
+        }
+    }
+
+    // Hold only this endpoint's async lock during the probe. Other endpoints
+    // remain independent, while every wallet window targeting this server
+    // shares one in-flight handshake and its bounded result.
+    let result = fetch().await;
+    *entry = Some(FusionStatusCacheEntry {
+        recorded_at: std::time::Instant::now(),
+        result: result.clone(),
+    });
+    result
+}
+
+async fn fetch_fusion_server_status(
+    host: &str,
+    port: u16,
+    use_ssl: bool,
+    tor_host: Option<&str>,
+    tor_port: Option<u16>,
+) -> Result<fusion::FusionServerStatus, String> {
+    log::info!(
+        "[FusionTrace] status start host={} port={} ssl={}",
+        host,
+        port,
+        use_ssl
+    );
+    let verified_proxy = verified_fusion_proxy(&[host], tor_host, tor_port).await?;
+    let transport = fusion_transport_for_host(host, verified_proxy)?;
+    let result = fusion::server_status(host, port, use_ssl, transport, None).await;
+    match &result {
+        Ok(status) => log::info!(
+            "[FusionTrace] status ok tiers={} components={}",
+            status.tiers.len(),
+            status.num_components
+        ),
+        Err(error) => log::warn!("[FusionTrace] status failed: {error}"),
+    }
+    result
+}
+
 // CashFusion server status (Phase 1).
 //
 // The fusion protocol is raw TCP+TLS with protobuf framing — a WebView cannot
@@ -71,13 +177,31 @@ async fn fusion_server_status(
     if host.trim().is_empty() || port == 0 {
         return Err("CashFusion server endpoint is invalid".into());
     }
-    let verified_proxy =
-        verified_fusion_proxy(&[host.as_str()], tor_host.as_deref(), tor_port).await?;
-    let transport = fusion_transport_for_host(&host, verified_proxy)?;
 
-    // genesis_hash is optional in the protocol; omitting it lets a server that
-    // checks chain identity apply its own default rather than us asserting one.
-    fusion::server_status(&host, port, use_ssl, transport, None).await
+    let key = FusionStatusCacheKey {
+        host: host.trim().trim_end_matches('.').to_ascii_lowercase(),
+        port,
+        use_ssl,
+        tor_host: tor_host
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(|value| value.trim_end_matches('.').to_ascii_lowercase()),
+        tor_port,
+    };
+    // All WebViews share the native process. Coalescing here prevents four
+    // wallet windows from opening four identical Tor handshakes at once. The
+    // short failure TTL still lets a manual retry observe a repaired server.
+    shared_fusion_server_status(key, || {
+        fetch_fusion_server_status(
+            &host,
+            port,
+            use_ssl,
+            tor_host.as_deref(),
+            tor_port,
+        )
+    })
+    .await
 }
 
 /// Join a fusion server's waiting pool for the given tiers and report live tier
@@ -173,6 +297,14 @@ async fn fusion_run(
     tor_port: Option<u16>,
     expected_hello: fusion::server_plan::ExpectedHello,
 ) -> Result<fusion::run::FusionOutcome, String> {
+    log::info!(
+        "[FusionTrace] round start id={} host={} port={} plans={} inputs={}",
+        round_id,
+        host,
+        port,
+        tier_plans.len(),
+        inputs.len()
+    );
     if !fusion::fusion_execution_ready() {
         return Err(fusion::FUSION_EXECUTION_PAUSED_MESSAGE.into());
     }
@@ -236,6 +368,16 @@ async fn fusion_run(
         expected_hello,
     })
     .await;
+
+    match &result {
+        Ok(outcome) => log::info!(
+            "[FusionTrace] round settled id={} ok={} message={}",
+            round_id,
+            outcome.ok,
+            outcome.message
+        ),
+        Err(error) => log::warn!("[FusionTrace] round failed id={round_id}: {error}"),
+    }
 
     drop(registration);
     result
@@ -811,6 +953,78 @@ pub fn run() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn test_fusion_status() -> fusion::FusionServerStatus {
+        fusion::FusionServerStatus {
+            tiers: vec![10_000],
+            num_components: 17,
+            component_feerate: 1_000,
+            min_excess_fee: 10,
+            max_excess_fee: 1_000,
+            donation_address: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn automatic_status_probe_is_shared_across_wallet_windows() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        let key = FusionStatusCacheKey {
+            host: "coalesce-test.invalid".into(),
+            port: 8789,
+            use_ssl: true,
+            tor_host: Some("127.0.0.1".into()),
+            tor_port: Some(9050),
+        };
+        let calls = std::sync::Arc::new(AtomicUsize::new(0));
+
+        let first_calls = calls.clone();
+        let first = shared_fusion_server_status(key.clone(), move || async move {
+            first_calls.fetch_add(1, Ordering::SeqCst);
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+            Ok(test_fusion_status())
+        });
+        let second_calls = calls.clone();
+        let second = shared_fusion_server_status(key, move || async move {
+            second_calls.fetch_add(1, Ordering::SeqCst);
+            Ok(test_fusion_status())
+        });
+
+        let (first_result, second_result) = tokio::join!(first, second);
+        assert_eq!(first_result.unwrap().tiers, vec![10_000]);
+        assert_eq!(second_result.unwrap().tiers, vec![10_000]);
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn automatic_status_failure_uses_shared_backoff() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        let key = FusionStatusCacheKey {
+            host: "failure-backoff-test.invalid".into(),
+            port: 8789,
+            use_ssl: true,
+            tor_host: Some("127.0.0.1".into()),
+            tor_port: Some(9050),
+        };
+        let calls = std::sync::Arc::new(AtomicUsize::new(0));
+        let first_calls = calls.clone();
+        let first = shared_fusion_server_status(key.clone(), move || async move {
+            first_calls.fetch_add(1, Ordering::SeqCst);
+            Err("server unavailable".to_string())
+        })
+        .await;
+        assert_eq!(first.unwrap_err(), "server unavailable");
+
+        let second_calls = calls.clone();
+        let second = shared_fusion_server_status(key, move || async move {
+            second_calls.fetch_add(1, Ordering::SeqCst);
+            Ok(test_fusion_status())
+        })
+        .await;
+        assert_eq!(second.unwrap_err(), "server unavailable");
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+    }
 
     #[test]
     fn fusion_command_transport_requires_a_verified_proxy_for_remote_hosts() {

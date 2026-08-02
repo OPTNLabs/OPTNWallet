@@ -15,7 +15,7 @@ import {
   getAllWebviewWindows,
   getCurrentWebviewWindow,
 } from '@tauri-apps/api/webviewWindow';
-import { claimWalletOpen } from '../walletOpenRegistry';
+import { runExclusiveWalletOpen } from '../walletOpenRegistry';
 import { clearWalletFusionPolicy } from '../walletFusionPolicy';
 import {
   setWalletId,
@@ -202,8 +202,22 @@ const DesktopLandingPage = () => {
     setBusy(true);
     setError('');
     try {
-      const info = await unlockWalletWithBiometric(id);
-      finishOpen(id, info);
+      const attempt = await runExclusiveWalletOpen(
+        id,
+        getCurrentWebviewWindow().label,
+        () => unlockWalletWithBiometric(id),
+        isWalletWindowOpen
+      );
+      if (attempt.status === 'held') {
+        await focusWalletWindow(attempt.windowLabel);
+        setError('That wallet is already open in another window.');
+        return;
+      }
+      if (attempt.status === 'rejected') {
+        setError('Biometric unlock was not accepted.');
+        return;
+      }
+      finishOpen(id, attempt.value);
     } catch (err) {
       console.error('[DesktopLandingPage] Biometric unlock failed:', err);
       const msg = err instanceof Error ? err.message : String(err);
@@ -280,24 +294,22 @@ const DesktopLandingPage = () => {
       // Electron Cash's single-window rule: a wallet already open elsewhere is
       // raised, not loaded a second time. Checked BEFORE the password is used,
       // so a duplicate open never derives a key or touches wallet state.
-      const heldBy = await claimWalletOpen(
+      const attempt = await runExclusiveWalletOpen(
         openingId,
         getCurrentWebviewWindow().label,
-        Date.now(),
+        () => openWalletWithPassword(openingId, password),
         isWalletWindowOpen
       );
-      if (heldBy) {
-        await focusWalletWindow(heldBy);
+      if (attempt.status === 'held') {
+        await focusWalletWindow(attempt.windowLabel);
         setError('That wallet is already open in another window.');
         return;
       }
-
-      const info = await openWalletWithPassword(openingId, password);
-      if (!info) {
+      if (attempt.status === 'rejected') {
         setError('Incorrect password.');
         return;
       }
-      finishOpen(openingId, info);
+      finishOpen(openingId, attempt.value);
     } catch (err) {
       console.error('[DesktopLandingPage] Open wallet failed:', err);
       setError('Could not open this wallet. Please try again.');
@@ -384,9 +396,9 @@ const DesktopLandingPage = () => {
               <div key={w.id} className="wallet-card p-3">
                 <div className="flex items-center justify-between">
                   <div>
-                    <p className="font-semibold wallet-text-strong">{w.wallet_name || `Wallet #${w.id}`}</p>
+                    <p className="font-semibold wallet-text-strong">{w.wallet_name || 'Unnamed wallet'}</p>
                     <p className="text-[10px] wallet-muted">
-                      {w.networkType === Network.CHIPNET ? 'Chipnet' : 'Mainnet'} · #{w.id}
+                      {w.networkType === Network.CHIPNET ? 'Chipnet' : 'Mainnet'}
                     </p>
                   </div>
                   <div className="flex items-center gap-2">
@@ -400,7 +412,7 @@ const DesktopLandingPage = () => {
                       onClick={() => { setDeletingId(deletingId === w.id ? null : w.id); setOpeningId(null); }}
                       className="text-xs text-red-400/60 hover:text-red-400 px-1.5 py-1"
                       title="Delete this wallet"
-                      aria-label={`Delete ${w.wallet_name || `wallet ${w.id}`}`}
+                      aria-label={`Delete ${w.wallet_name || 'unnamed wallet'}`}
                     >
                       🗑
                     </button>
@@ -410,7 +422,7 @@ const DesktopLandingPage = () => {
                 {deletingId === w.id && (
                   <div className="mt-2 rounded-lg border border-red-400/30 bg-red-400/5 p-2.5 text-xs space-y-2">
                     <p className="wallet-text-strong">
-                      Delete “{w.wallet_name || `Wallet #${w.id}`}” ({w.networkType === Network.CHIPNET ? 'Chipnet' : 'Mainnet'}, #{w.id})?
+                      Delete “{w.wallet_name || 'Unnamed wallet'}” ({w.networkType === Network.CHIPNET ? 'Chipnet' : 'Mainnet'})?
                       Its saved <span className="font-mono">.optn</span> file is kept, so you can re-import it later.
                     </p>
                     <div className="flex gap-2">

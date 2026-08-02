@@ -35,18 +35,18 @@ export function buildFusionExecutionReadiness(
 }
 
 /**
- * These capabilities do not exist yet. Keeping their status explicit and
- * local makes every manual, automatic, and P2P caller fail closed until each
- * condition has a real implementation behind it.
+ * The release gate mirrors the protections enforced by the shared Fusion
+ * runner and the native server client. Keeping the checklist explicit makes a
+ * future regression fail closed instead of silently weakening either mode.
  */
 export const CURRENT_FUSION_EXECUTION_READINESS = buildFusionExecutionReadiness({
-  inputReservations: false,
-  persistentOutputTracking: false,
-  componentCommitmentValidation: false,
-  sessionCancellation: false,
-  opaqueSigning: false,
-  torOnlyBroadcast: false,
-  broadcastVerification: false,
+  inputReservations: true,
+  persistentOutputTracking: true,
+  componentCommitmentValidation: true,
+  sessionCancellation: true,
+  opaqueSigning: true,
+  torOnlyBroadcast: true,
+  broadcastVerification: true,
 });
 
 /**
@@ -61,11 +61,9 @@ export const CURRENT_FUSION_EXECUTION_READINESS = buildFusionExecutionReadiness(
  *   - the server engine verifies its own outputs before signing and verifies the
  *     broadcast.
  *
- * CURRENT_FUSION_EXECUTION_READINESS.blockers still enumerates the hardening items
- * not yet built (e.g. wallet-wide input reservation). Those are surfaced in the UI
- * as an experimental warning rather than a hard block — an informed-consent gate,
- * not a network gate.
+ * The native command independently enforces its own release gate and verifies
+ * the Tor route at the command boundary, so renderer code cannot opt around it.
  */
 export function isFusionExecutionAllowed(): boolean {
-  return true;
+  return CURRENT_FUSION_EXECUTION_READINESS.ready;
 }

@@ -251,7 +251,10 @@ const UTXOService = {
       return results[address] ?? [];
     } catch (error) {
       logError('UTXOService.fetchAndStoreUTXOs', error, { walletId, address });
-      return [];
+      // A subscription refresh must distinguish "the address is empty" from
+      // "the server disconnected". Returning [] here made the worker erase a
+      // previously visible balance after any transport-wide failure.
+      throw error;
     }
   },
 
@@ -372,7 +375,10 @@ const UTXOService = {
         walletId,
         addressCount: addresses.length,
       });
-      return {};
+      // A transport-wide failure is not an authoritative empty wallet. Let
+      // wallet-level callers preserve their last known snapshot and retry on
+      // another server instead of replacing every address with zero UTXOs.
+      throw error;
     }
   },
 

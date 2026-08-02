@@ -381,20 +381,40 @@ impl CovertPool {
 
 impl Drop for CovertPool {
     fn drop(&mut self) {
-        let close_start = self.close_start;
+        // If a slow/blame round outlived the protocol close window, start a
+        // fresh spread now. Sleeping every channel until an already-past
+        // instant would collapse all closures into one identifying event.
+        let close_start = self.close_start.max(Instant::now());
         let mut channels = std::mem::take(&mut self.slots);
         channels.extend(std::mem::take(&mut self.spares));
         channels.extend(std::mem::take(&mut self.retired));
 
-        let Ok(runtime) = tokio::runtime::Handle::try_current() else {
-            return;
-        };
-        for channel in channels {
-            let close_at = close_start + channel.action_delay;
-            runtime.spawn(async move {
-                tokio::time::sleep_until(close_at.into()).await;
-                channel.connection.close().await;
-            });
+        match tokio::runtime::Handle::try_current() {
+            Ok(runtime) => {
+                for channel in channels {
+                    let close_at = close_start + channel.action_delay;
+                    runtime.spawn(async move {
+                        tokio::time::sleep_until(close_at.into()).await;
+                        channel.connection.close().await;
+                    });
+                }
+            }
+            Err(_) => {
+                // A pool normally drops inside Tauri's Tokio runtime. Keep the
+                // same privacy property in unusual test/shutdown contexts by
+                // moving the sockets to one detached close scheduler.
+                let _ = std::thread::Builder::new()
+                    .name("cashfusion-covert-close".into())
+                    .spawn(move || {
+                        channels.sort_by_key(|channel| channel.action_delay);
+                        for channel in channels {
+                            let delay = (close_start + channel.action_delay)
+                                .saturating_duration_since(Instant::now());
+                            std::thread::sleep(delay);
+                            drop(channel);
+                        }
+                    });
+            }
         }
     }
 }

@@ -2,7 +2,34 @@ import React from 'react';
 import { configureStore } from '@reduxjs/toolkit';
 import { Provider } from 'react-redux';
 import { renderToStaticMarkup } from 'react-dom/server';
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+
+const activityState = vi.hoisted(() => ({
+  current: null as null | {
+    walletId: number;
+    mode: 'p2p' | 'server';
+    trigger: 'manual';
+    startedAt: number;
+  },
+}));
+
+vi.mock('../../../platform/desktop/FusionRunnerService', async (importOriginal) => {
+  const actual =
+    await importOriginal<
+      typeof import('../../../platform/desktop/FusionRunnerService')
+    >();
+  return {
+    ...actual,
+    getFusionActivity: () => activityState.current,
+    subscribeFusionActivity: (
+      _walletId: number,
+      listener: (activity: typeof activityState.current) => void
+    ) => {
+      listener(activityState.current);
+      return () => undefined;
+    },
+  };
+});
 
 import { CashFusionSettings } from '../CashFusionSettings';
 import experimentalReducer, {
@@ -11,6 +38,10 @@ import experimentalReducer, {
 } from '../../../state/slices/experimentalSlice';
 
 describe('CashFusion settings mode enforcement', () => {
+  afterEach(() => {
+    activityState.current = null;
+  });
+
   it('mutes and disables the server Fuse Now card in P2P mode', () => {
     const store = configureStore({
       reducer: {
@@ -37,4 +68,36 @@ describe('CashFusion settings mode enforcement', () => {
     expect(serverCard).toContain('disabled=""');
     expect(serverCard).toContain('Fuse Now using CashFusion server');
   });
+
+  it.each(['server', 'p2p'] as const)(
+    'restores a disabled Fusing control when returning to a running %s round',
+    (mode) => {
+      const store = configureStore({
+        reducer: {
+          experimental: experimentalReducer,
+          wallet_id: (state = { currentWalletId: 7 }) => state,
+          network: (state = { currentNetwork: 'chipnet' }) => state,
+          utxos: (state = { utxos: {} }) => state,
+        },
+      });
+      store.dispatch(setCashFusionEnabled(true));
+      store.dispatch(setP2pFusionEnabled(mode === 'p2p'));
+      activityState.current = {
+        walletId: 7,
+        mode,
+        trigger: 'manual',
+        startedAt: 1,
+      };
+
+      const html = renderToStaticMarkup(
+        <Provider store={store}>
+          <CashFusionSettings />
+        </Provider>
+      );
+
+      expect(html).toContain('Fusing…');
+      expect(html).toContain('disabled=""');
+      expect(html).not.toContain('Running P2P round…');
+    }
+  );
 });

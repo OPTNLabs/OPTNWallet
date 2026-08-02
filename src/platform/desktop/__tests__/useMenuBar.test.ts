@@ -9,30 +9,51 @@ import {
   dispatchDesktopMenuAction,
   openSavedWalletFromMenu,
   refreshWalletFromMenu,
+  walletClaimToRelease,
   routeMenuActionToFocusedWindow,
 } from '../useMenuBar';
 
+describe('wallet ownership lifecycle', () => {
+  it('keeps the claim through a StrictMode effect replay', () => {
+    expect(walletClaimToRelease(5, 5)).toBeNull();
+  });
+
+  it('releases only when this window actually leaves the wallet', () => {
+    expect(walletClaimToRelease(5, 0)).toBe(5);
+    expect(walletClaimToRelease(5, 6)).toBe(5);
+    expect(walletClaimToRelease(0, 6)).toBeNull();
+  });
+});
+
 describe('openSavedWalletFromMenu', () => {
-  it('locks the current wallet before resetting state and routing to wallet 5', () => {
+  it('releases and locks the current wallet before routing to wallet 5', async () => {
     const lock = vi.fn();
     const dispatch = vi.fn();
     const navigate = vi.fn();
     const flush = vi.fn((callback: () => void) => callback());
+    const release = vi.fn(async () => undefined);
 
-    openSavedWalletFromMenu(
+    await openSavedWalletFromMenu(
       5,
       navigate as never,
       dispatch as never,
       lock,
-      flush
+      flush,
+      4,
+      'wallet-window-a',
+      release
     );
 
+    expect(release).toHaveBeenCalledWith(4, 'wallet-window-a');
     expect(lock).toHaveBeenCalledOnce();
     expect(flush).toHaveBeenCalledOnce();
     expect(dispatch).toHaveBeenCalledWith(resetWallet());
     expect(navigate).toHaveBeenCalledWith(ROUTE_PATHS.landing, {
       state: { openWalletId: 5 },
     });
+    expect(release.mock.invocationCallOrder[0]).toBeLessThan(
+      lock.mock.invocationCallOrder[0]
+    );
     expect(lock.mock.invocationCallOrder[0]).toBeLessThan(
       dispatch.mock.invocationCallOrder[0]
     );

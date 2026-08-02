@@ -54,6 +54,13 @@ const torOnlyRecord = {
   spentOutpoints: [],
 };
 
+const ordinaryRecord = {
+  ...torOnlyRecord,
+  txid: 'b'.repeat(64),
+  source: 'send' as const,
+  privacyRoute: 'standard' as const,
+};
+
 describe('OutboundTransactionReconciler privacy routes', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -114,5 +121,39 @@ describe('OutboundTransactionReconciler privacy routes', () => {
     );
     expect(reconnectMock).not.toHaveBeenCalled();
     expect(sendTransactionMock).not.toHaveBeenCalled();
+  });
+
+  it('checks an ordinary transaction without tearing down the shared Electrum connection', async () => {
+    let active = [ordinaryRecord];
+    listActiveMock.mockImplementation(async () => active);
+    visibilityMock.mockResolvedValue({
+      [ordinaryRecord.txid]: { seen: true, confirmed: false },
+    });
+    markStateMock.mockImplementation(async () => {
+      active = [];
+      return { ...ordinaryRecord, state: 'seen' };
+    });
+    prepareMock.mockImplementation((sql: string) => {
+      const isKeysQuery = sql.includes('FROM keys');
+      let stepped = false;
+      return {
+        bind: vi.fn(),
+        step: vi.fn(() => {
+          if (!isKeysQuery || stepped) return false;
+          stepped = true;
+          return true;
+        }),
+        getAsObject: vi.fn(() => ({ address: 'bitcoincash:qtest' })),
+        free: vi.fn(),
+      };
+    });
+
+    const { reconcileOutboundTransactions } = await import(
+      '../OutboundTransactionReconciler'
+    );
+
+    await expect(reconcileOutboundTransactions(5)).resolves.toEqual([]);
+    expect(visibilityMock).toHaveBeenCalledWith([ordinaryRecord.txid]);
+    expect(reconnectMock).not.toHaveBeenCalled();
   });
 });

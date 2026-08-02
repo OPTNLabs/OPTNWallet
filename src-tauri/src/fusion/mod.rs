@@ -85,16 +85,17 @@ const MAX_MSG_LENGTH: u32 = 200 * 1024;
 /// version rejects the ClientHello, which is the intended behavior.
 pub(crate) const VERSION: &[u8] = b"alpha13";
 
-/// Transaction execution is deliberately disabled until the wallet can retain
-/// fresh outputs, reserve inputs, verify the full component/fee integrity, and
-/// keep signing and broadcast privacy inside native safety boundaries.
+/// Native execution remains guarded here so a renderer cannot bypass the
+/// wallet's safety boundary. The required reservation, output tracking,
+/// integrity validation, cancellation, signing, Tor routing, and post-broadcast
+/// verification protections are now implemented.
 pub(crate) const FUSION_EXECUTION_PAUSED_MESSAGE: &str =
     "CashFusion execution is paused until wallet safety protections are complete.";
 
 /// Keep this deny-by-default switch in the native process so a renderer cannot
 /// bypass the disabled settings control by invoking the command directly.
 pub(crate) const fn fusion_execution_ready() -> bool {
-    false
+    true
 }
 
 pub(crate) const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
@@ -134,10 +135,36 @@ pub(crate) async fn recv_frame<S>(stream: &mut S) -> Result<Vec<u8>, String>
 where
     S: AsyncReadExt + Unpin,
 {
-    let mut header = [0u8; 12];
-    tokio::time::timeout(IO_TIMEOUT, stream.read_exact(&mut header))
+    recv_frame_with_timeout(stream, IO_TIMEOUT).await
+}
+
+/// Read one framed message with the wait window required by the current
+/// protocol phase. CashFusion deliberately pauses for about 30 seconds between
+/// `FusionBegin` and `StartRound`, so the short handshake timeout cannot be
+/// reused for that phase.
+pub(crate) async fn recv_frame_with_timeout<S>(
+    stream: &mut S,
+    wait: Duration,
+) -> Result<Vec<u8>, String>
+where
+    S: AsyncReadExt + Unpin,
+{
+    tokio::time::timeout(wait, recv_frame_unbounded(stream))
         .await
         .map_err(|_| "timed out waiting for fusion server".to_string())?
+}
+
+/// Read a frame without imposing the handshake timeout. Long-lived protocol
+/// phases wrap this in one authoritative phase deadline and cancellation
+/// select, covering both header and body without a hidden shorter timer.
+pub(crate) async fn recv_frame_unbounded<S>(stream: &mut S) -> Result<Vec<u8>, String>
+where
+    S: AsyncReadExt + Unpin,
+{
+    let mut header = [0u8; 12];
+    stream
+        .read_exact(&mut header)
+        .await
         .map_err(|e| format!("receive failed: {e}"))?;
 
     if header[..8] != MAGIC {
@@ -150,9 +177,9 @@ where
     }
 
     let mut payload = vec![0u8; len as usize];
-    tokio::time::timeout(IO_TIMEOUT, stream.read_exact(&mut payload))
+    stream
+        .read_exact(&mut payload)
         .await
-        .map_err(|_| "timed out reading frame body".to_string())?
         .map_err(|e| format!("receive failed: {e}"))?;
     Ok(payload)
 }
@@ -346,6 +373,29 @@ mod tests {
     }
 
     #[test]
+    fn frame_receive_can_use_a_protocol_specific_wait_window() {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        rt.block_on(async {
+            let (mut client, mut server) = tokio::io::duplex(64);
+            tokio::spawn(async move {
+                tokio::time::sleep(Duration::from_millis(25)).await;
+                send_frame(&mut server, b"after-warmup").await.unwrap();
+            });
+
+            let frame = recv_frame_with_timeout(
+                &mut client,
+                Duration::from_millis(100),
+            )
+            .await
+            .unwrap();
+            assert_eq!(frame, b"after-warmup");
+        });
+    }
+
+    #[test]
     fn handshake_round_trips_against_a_stub_server() {
         // Drives the real client handshake against a stub speaking the real
         // frame format, so the ClientHello encoding and ServerHello decoding
@@ -417,8 +467,8 @@ mod tests {
     }
 
     #[test]
-    fn execution_is_fail_closed_until_the_wallet_safety_work_is_complete() {
-        assert!(!fusion_execution_ready());
+    fn execution_gate_opens_after_the_wallet_safety_work_is_complete() {
+        assert!(fusion_execution_ready());
         assert!(FUSION_EXECUTION_PAUSED_MESSAGE.contains("safety"));
     }
 }

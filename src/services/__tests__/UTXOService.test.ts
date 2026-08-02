@@ -538,5 +538,21 @@ describe('UTXOService', () => {
     );
     expect(result.allUtxos).toEqual([]);
     expect(decodeTransactionMock).toHaveBeenCalledWith(expect.any(Uint8Array));
+    });
   });
-});
+
+  it('rejects a total Electrum failure instead of publishing an empty wallet', async () => {
+    getUTXOsManyMock.mockRejectedValue(new Error('Connection lost'));
+    const { default: UTXOService } = await import('../UTXOService');
+
+    await expect(
+      UTXOService.fetchAndStoreUTXOsMany(11, ['bitcoincash:q1'])
+    ).rejects.toThrow('Connection lost');
+    await expect(
+      UTXOService.fetchAndStoreUTXOs(11, 'bitcoincash:q1')
+    ).rejects.toThrow('Connection lost');
+
+    expect(replaceWalletAddressUTXOsMock).not.toHaveBeenCalled();
+    expect(flushDatabaseToFileMock).not.toHaveBeenCalled();
+    expect(scheduleDatabaseSaveMock).not.toHaveBeenCalled();
+  });

@@ -161,3 +161,18 @@ export function lastAutoAttemptAt(walletId: number): number | null {
   const record = readJson<{ attempt: number }>(`${COOLDOWN_PREFIX}${walletId}`);
   return typeof record?.attempt === 'number' ? record.attempt : null;
 }
+
+/**
+ * Cheap advisory check used before expensive wallet/network reconciliation.
+ * The atomic claim below remains authoritative before a round may spend fees.
+ */
+export function isAutoCooldownReady(
+  walletId: number,
+  cooldownMs: number,
+  nowMs = Date.now()
+): boolean {
+  const last = lastAutoAttemptAt(walletId);
+  if (last === null) return true;
+  const elapsed = nowMs - last;
+  return elapsed >= 0 && elapsed >= cooldownMs;
+}
