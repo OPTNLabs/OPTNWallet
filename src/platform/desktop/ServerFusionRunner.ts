@@ -167,6 +167,34 @@ export function defaultInputLookupEndpoint(
   return parseElectrumLookupEndpoint(server);
 }
 
+/**
+ * Every configured Electrum server, in preference order, for verifying peer
+ * inputs during blame.
+ *
+ * Verifying against one fixed server means one unreachable host makes every
+ * peer's coin unverifiable — and because absent evidence must never be turned
+ * into an accusation, the round is abandoned instead. Chipnet showed exactly
+ * that: the first configured server timed out over Tor while the other two
+ * answered, so every round reached StartRound and died there.
+ */
+export function inputLookupEndpoints(
+  network: Network,
+  preferred?: FusionElectrumEndpoint
+): FusionElectrumEndpoint[] {
+  const configured = getElectrumServers(network).map(parseElectrumLookupEndpoint);
+  const ordered = preferred ? [preferred, ...configured] : configured;
+  if (ordered.length === 0) {
+    throw new Error('No Electrum server is configured.');
+  }
+  const seen = new Set<string>();
+  return ordered.filter((endpoint) => {
+    const key = `${endpoint.host}:${endpoint.port}:${endpoint.useSsl}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
 function defaultRelayEndpoints(network: Network): FusionRelayEndpoints {
   if (network === Network.CHIPNET) {
     return {
@@ -576,9 +604,11 @@ export function buildServerRunner(
       // disclosed signatures. Keep the temporary lock unless a definitive
       // failure is returned or the durable outbound tracker takes over.
       retainTemporaryReservation = true;
-      const lookupEndpoint =
-        config.inputLookupEndpoint ??
-        defaultInputLookupEndpoint(config.network);
+      const lookupChain = inputLookupEndpoints(
+        config.network,
+        config.inputLookupEndpoint
+      );
+      const [lookupEndpoint, ...lookupFallbacks] = lookupChain;
       const outcome = await invoke<FusionOutcome>('fusion_run', {
         roundId,
         // Stable per wallet, deliberately NOT per round: the server uses it to
@@ -595,6 +625,7 @@ export function buildServerRunner(
         lookupHost: lookupEndpoint.host,
         lookupPort: lookupEndpoint.port,
         lookupUseSsl: lookupEndpoint.useSsl,
+        lookupFallbacks,
         torHost: config.tor?.host ?? null,
         torPort: config.tor?.port ?? null,
         expectedHello,
