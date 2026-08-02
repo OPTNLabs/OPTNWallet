@@ -6,7 +6,7 @@ import {
   createTransactionDetailsTable,
 } from '../../utils/schema/schema';
 import { get as idbGet, set as idbSet } from 'idb-keyval';
-import { logError, logWarn } from '../../utils/errorHandling';
+import { logError } from '../../utils/errorHandling';
 import SecretCryptoService, {
   SECRET_ENC_PREFIX,
   isEncryptedPayload,
@@ -16,7 +16,6 @@ import SecretCryptoService, {
  * configurable. Frozen here on purpose — see the migration below.
  */
 const LEGACY_CHIPNET_ACCOUNT_PATH = "m/44'/1'/0'";
-const CHIPNET_ACCOUNT_PATH = "m/44'/145'/0'";
 const LEGACY_MAINNET_ACCOUNT_PATH = "m/44'/145'/0'";
 import { Network } from '../../state/slices/networkSlice';
 import {
@@ -261,85 +260,6 @@ const migrations: Array<(db: Database) => Promise<void>> = [
     }
   },
   // Add future migrations here as needed
-  async (db) => {
-    // UNDO of the previous migration in this file's history.
-    //
-    // That migration moved chipnet wallets from m/44'/1'/0' to 145 on the
-    // assumption they were funded at 145. They were not: wallets that had been
-    // working all session reported zero immediately afterwards, because this
-    // app funded them under its old default of coin type 1 and the coins are
-    // still there. Moving the wallet moved where it looked, not where the money
-    // is.
-    //
-    // Restores the path for rows this app chose itself. A path the user set
-    // explicitly is never touched, and mainnet is never involved.
-    //
-    // The general problem — a wallet funded under some other tool's path — is
-    // not solved by picking a different constant. It is solved by looking:
-    // see DerivationPathDiscovery.
-    db.run(
-      `UPDATE wallets
-          SET derivation_path = ?
-        WHERE networkType = ?
-          AND derivation_path_source = 'default'
-          AND derivation_path = ?`,
-      [LEGACY_CHIPNET_ACCOUNT_PATH, Network.CHIPNET, CHIPNET_ACCOUNT_PATH]
-    );
-  },
-  async (db) => {
-    // Watch-only wallets keep an account xPub instead of a mnemonic. Addresses
-    // are derived from it, so it has to survive a restart — without it the
-    // wallet cannot regenerate its own addresses and looks empty.
-    const columns = new Set<string>();
-    const statement = db.prepare('PRAGMA table_info(wallets);');
-    while (statement.step()) {
-      const row = statement.getAsObject() as Record<string, unknown>;
-      if (typeof row.name === 'string') columns.add(row.name);
-    }
-    statement.free();
-
-    if (!columns.has('account_xpub')) {
-      db.run('ALTER TABLE wallets ADD COLUMN account_xpub TEXT;');
-    }
-  },
-  async (db) => {
-    // Appended, not edited into the migration above, because migrations are
-    // recorded by index: a database that already ran that one would never see
-    // a correction written in place, and would stay pointed at the wrong path
-    // forever.
-    //
-    // Order matters. The addresses are dropped FIRST, while the wallets can
-    // still be identified by the 145 path the bad migration gave them. Doing it
-    // after the UPDATE would mean selecting on the restored path, which also
-    // matches wallets that were always on it and were never touched here —
-    // throwing away addresses that were perfectly correct.
-    //
-    // Dropping them is necessary, not just tidy: the path alone does not move
-    // the balance. The keys table still holds addresses derived under 145 and
-    // the scan reads THOSE, so the wallet would sit at zero with a correct
-    // path, which is the most confusing state of all. Addresses are
-    // deterministic from seed and path, so they regenerate on open — the same
-    // thing the reconfigure flow does when a user changes the path by hand.
-    db.run(
-      `DELETE FROM keys
-        WHERE wallet_id IN (
-          SELECT id FROM wallets
-           WHERE networkType = ?
-             AND derivation_path_source = 'default'
-             AND derivation_path = ?
-        )`,
-      [Network.CHIPNET, CHIPNET_ACCOUNT_PATH]
-    );
-
-    db.run(
-      `UPDATE wallets
-          SET derivation_path = ?
-        WHERE networkType = ?
-          AND derivation_path_source = 'default'
-          AND derivation_path = ?`,
-      [LEGACY_CHIPNET_ACCOUNT_PATH, Network.CHIPNET, CHIPNET_ACCOUNT_PATH]
-    );
-  },
 ];
 
 function databaseVersion(database: Database): number {
@@ -355,51 +275,9 @@ async function applyPendingMigrations(database: Database): Promise<boolean> {
     database.run(`PRAGMA user_version = ${version};`);
     changed = true;
   }
-  logWalletDerivationState(database);
   return changed;
 }
 
-/**
- * One line per wallet: which chain, which path, and how many addresses exist.
- *
- * A wallet showing a zero balance is ambiguous — it looks identical whether the
- * coins are spent, the path is wrong, or the address set was cleared and never
- * rebuilt. Diagnosing that by guessing costs hours and, when the guess is a
- * migration, can move the wallet further from its coins. This makes the state
- * answerable from the log.
- *
- * Deliberately no addresses, xpubs or names — an id, a network, a path and a
- * count identify nothing about the owner and are safe to paste into a report.
- */
-function logWalletDerivationState(database: Database): void {
-  try {
-    const statement = database.prepare(
-      `SELECT w.id                AS id,
-              w.networkType       AS network,
-              w.walletType        AS type,
-              w.derivation_path   AS path,
-              w.derivation_path_source AS source,
-              (SELECT COUNT(*) FROM keys k WHERE k.wallet_id = w.id) AS addresses
-         FROM wallets w ORDER BY w.id`
-    );
-    const rows: string[] = [];
-    while (statement.step()) {
-      const r = statement.getAsObject() as Record<string, unknown>;
-      rows.push(
-        `#${r.id} ${r.network} ${r.type ?? 'standard'} ${r.path ?? '(none)'} ` +
-          `(${r.source ?? '?'}) addresses=${r.addresses}`
-      );
-    }
-    statement.free();
-    if (rows.length > 0) {
-      // logWarn, not console.info: only warnings and errors reach the app log,
-      // and a diagnostic nobody can read is not a diagnostic.
-      logWarn('DatabaseService.walletDerivationState', rows.join(' | '));
-    }
-  } catch (error) {
-    logError('DatabaseService.logWalletDerivationState', error);
-  }
-}
 
 function walletIds(database: Database): number[] {
   const ids: number[] = [];

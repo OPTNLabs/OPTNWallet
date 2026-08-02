@@ -3,19 +3,6 @@ import { Network } from '../state/slices/networkSlice';
 export enum WalletType {
   STANDARD = 'standard',
   QUANTUMROOT = 'quantumroot',
-  /**
-   * Public keys only — an account xPub, no mnemonic and no private keys.
-   *
-   * It can watch balances and build transactions, but every signature comes
-   * from an external device. Anything that assumes a wallet can sign must check
-   * for this rather than discovering it when signing returns nothing.
-   */
-  WATCH_ONLY = 'watch-only',
-}
-
-/** Can this wallet produce a signature on its own? */
-export function canSignLocally(walletType: string | null | undefined): boolean {
-  return walletType !== WalletType.WATCH_ONLY;
 }
 
 export type DerivationPathSource = 'default' | 'custom';

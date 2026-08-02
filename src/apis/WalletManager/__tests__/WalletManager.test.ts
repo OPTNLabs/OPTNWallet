@@ -4,6 +4,7 @@ import { Network } from '../../../state/slices/networkSlice';
 import WalletManager from '../WalletManager';
 import DatabaseService from '../../DatabaseManager/DatabaseService';
 import { WalletType } from '../../../types/wallet';
+import SecretCryptoService from '../../../services/SecretCryptoService';
 
 vi.mock('../../DatabaseManager/DatabaseService', () => ({
   default: vi.fn(),
@@ -46,6 +47,39 @@ describe('WalletManager', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+  });
+
+  it('reads wallet-open metadata without decrypting the mnemonic or passphrase', async () => {
+    const metadataStmt = makeStmt([
+      {
+        id: 7,
+        wallet_name: 'wallet7',
+        networkType: Network.CHIPNET,
+        walletType: WalletType.STANDARD,
+        balance: 123,
+        derivation_path: "m/44'/145'/0'",
+        derivation_path_source: 'default',
+      },
+    ]);
+    const db = { prepare: vi.fn(() => metadataStmt) };
+    mockedDatabaseService.mockImplementation(
+      () =>
+        ({
+          ensureDatabaseStarted: vi.fn(async () => {}),
+          getDatabase: vi.fn(() => db),
+        }) as never
+    );
+
+    const metadata = await WalletManager().getWalletMetadata(7);
+
+    expect(metadata).toMatchObject({
+      id: 7,
+      wallet_name: 'wallet7',
+      networkType: Network.CHIPNET,
+      derivation_path: "m/44'/145'/0'",
+    });
+    expect(db.prepare).toHaveBeenCalledWith(expect.not.stringContaining('mnemonic'));
+    expect(vi.mocked(SecretCryptoService).decryptText).not.toHaveBeenCalled();
   });
 
   it('createWallet returns false if wallet already exists', async () => {

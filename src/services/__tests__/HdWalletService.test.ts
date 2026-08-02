@@ -19,14 +19,10 @@ import {
 const TEST_MNEMONIC = bip39.entropyToMnemonic('0'.repeat(32));
 
 describe('HdWalletService', () => {
-  it('uses BCH coin type 145 on chipnet too, not the BIP44 testnet type', () => {
-    // Deliberate divergence from BIP44's "1 means test network". The BCH
-    // tooling people actually test against stays on 145 for chipnet, so coin
-    // type 1 made the same seed show different addresses here than everywhere
-    // else — which presents as a wallet that lost its coins.
+  it('uses BCH mainnet coin type 145 and testnet coin type 1', () => {
     expect(getBchCoinType(Network.MAINNET)).toBe(145);
-    expect(getBchCoinType(Network.CHIPNET)).toBe(145);
-    expect(getBchAccountPath(Network.CHIPNET, 2)).toBe("m/44'/145'/2'");
+    expect(getBchCoinType(Network.CHIPNET)).toBe(1);
+    expect(getBchAccountPath(Network.CHIPNET, 2)).toBe("m/44'/1'/2'");
   });
 
   it('accepts only canonical BIP44 account paths', () => {

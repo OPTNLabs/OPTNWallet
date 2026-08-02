@@ -269,6 +269,28 @@ async function sendBatch(
   return await Promise.all(resolvers);
 }
 
+function throwIfBatchTransportFailed(
+  results: Array<RequestResponse | Error>
+): void {
+  if (results.length === 0) return;
+  const allTransportFailures = results.every((result) => {
+    if (!(result instanceof Error)) return false;
+    const message = result.message.toLowerCase();
+    return (
+      message.includes('connection lost') ||
+      message.includes('not connected') ||
+      message.includes('socket') ||
+      message.includes('closed') ||
+      message.includes('timed out') ||
+      message.includes('network error') ||
+      message.includes('econn')
+    );
+  });
+  if (allTransportFailures) {
+    throw results[0];
+  }
+}
+
 async function wireNotificationsOnce(client: ECClient) {
   if (notificationsWired) return;
   client.on('notification', (msg: Notification) => {
@@ -477,11 +499,13 @@ export default function ElectrumServer() {
     await electrumConnect();
     await ensureFreshConnection();
     try {
-      return await withTimeout(
+      const results = await withTimeout(
         sendBatch(electrum!, calls),
         REQUEST_TIMEOUT_MS,
         `requestMany(${calls.length})`
       );
+      throwIfBatchTransportFailed(results);
+      return results;
     } catch (err) {
       markServerFailed(currentServer ?? getLastHealthyServer());
       const { servers } = getNetworkAndServers();
@@ -495,11 +519,13 @@ export default function ElectrumServer() {
       if (!electrum) {
         throw err;
       }
-      return await withTimeout(
+      const results = await withTimeout(
         sendBatch(electrum!, calls),
         REQUEST_TIMEOUT_MS,
         `requestMany(${calls.length})`
       );
+      throwIfBatchTransportFailed(results);
+      return results;
     }
   }
 

@@ -158,6 +158,34 @@ describe('ElectrumServer', () => {
     expect(results).toEqual(['batched-1', 'batched-2']);
   });
 
+  it('requestMany rotates servers when every batch entry reports a lost connection', async () => {
+    const first = makeMockClient();
+    const second = makeMockClient();
+    first.connection.send.mockImplementationOnce((message: string) => {
+      const parsed = JSON.parse(message) as Array<{ id: number }>;
+      queueMicrotask(() => {
+        for (const { id } of parsed) {
+          first.requestResolvers[id]?.(new Error('Connection lost'));
+          delete first.requestResolvers[id];
+        }
+      });
+      return true;
+    });
+    const server = await loadServerWithMocks(
+      [first, second],
+      ['wss://stale.example:50004', 'wss://healthy.example:50004']
+    );
+
+    const results = await server.requestMany([
+      { method: 'blockchain.address.listunspent', params: ['bitcoincash:q1'] },
+      { method: 'blockchain.address.listunspent', params: ['bitcoincash:q2'] },
+    ]);
+
+    expect(results).toEqual(['batched-1', 'batched-2']);
+    expect(first.disconnect).toHaveBeenCalledWith(true);
+    expect(second.connection.send).toHaveBeenCalledTimes(1);
+  });
+
   it('subscribe and unsubscribe manage address subscriptions', async () => {
     const client = makeMockClient();
     const server = await loadServerWithMocks([client]);

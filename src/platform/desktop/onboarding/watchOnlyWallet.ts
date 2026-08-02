@@ -12,7 +12,7 @@
 
 import DatabaseService from '../../../apis/DatabaseManager/DatabaseService';
 import { Network } from '../../../state/slices/networkSlice';
-import { WalletType } from '../../../types/wallet';
+
 import {
   deriveBchAddressFromHdPublicKey,
   getBchAccountPath,
@@ -21,6 +21,21 @@ import {
   deriveWatchOnlyAccountPreview,
   watchOnlyBranchXpub,
 } from './watchOnlyAccountPreview';
+import { ensureDesktopWalletColumns } from '../desktopSchema';
+
+/**
+ * Wallet type string for a watch-only wallet.
+ *
+ * Declared here rather than added to the shared WalletType enum on purpose:
+ * that file is the original author's, and this desktop feature must not force a
+ * change into it. The column is TEXT, so a new value costs nothing upstream.
+ */
+export const WATCH_ONLY_WALLET_TYPE = 'watch-only';
+
+/** Can this wallet produce a signature on its own? */
+export function canSignLocally(walletType: string | null | undefined): boolean {
+  return walletType !== WATCH_ONLY_WALLET_TYPE;
+}
 
 /**
  * Addresses derived per branch at creation.
@@ -36,6 +51,14 @@ export interface CreateWatchOnlyWalletArgs {
   /** Account-level xPub, exported at m/44'/145'/account'. */
   accountXpub: string;
   network: Network;
+  /**
+   * Account path this xPub was exported at, e.g. m/44'/145'/0'.
+   *
+   * Editable for the same reason it is on a standard wallet: the device that
+   * produced the xPub chose the path, and a wallet that cannot be told which
+   * one shows an empty balance with no way to correct it.
+   */
+  accountPath?: string;
   gapLimit?: number;
 }
 
@@ -55,6 +78,10 @@ export async function createWatchOnlyWallet(
   const accountXpub = args.accountXpub.trim();
   const gapLimit = args.gapLimit ?? WATCH_ONLY_GAP_LIMIT;
 
+  // account_xpub is a desktop-only column, added here rather than in the
+  // shared migration list.
+  await ensureDesktopWalletColumns();
+
   const dbService = DatabaseService();
   await dbService.ensureDatabaseStarted();
   const db = dbService.getDatabase();
@@ -70,8 +97,8 @@ export async function createWatchOnlyWallet(
     insertWallet.run([
       name,
       args.network,
-      WalletType.WATCH_ONLY,
-      preview.accountPath || getBchAccountPath(args.network),
+      WATCH_ONLY_WALLET_TYPE,
+      args.accountPath ?? preview.accountPath ?? getBchAccountPath(args.network),
       accountXpub,
     ]);
   } finally {
@@ -145,7 +172,7 @@ export async function watchOnlyAccountXpub(
     'SELECT account_xpub FROM wallets WHERE id = ? AND walletType = ?'
   );
   try {
-    query.bind([walletId, WalletType.WATCH_ONLY]);
+    query.bind([walletId, WATCH_ONLY_WALLET_TYPE]);
     if (!query.step()) return null;
     const row = query.getAsObject() as Record<string, unknown>;
     return typeof row.account_xpub === 'string' && row.account_xpub
