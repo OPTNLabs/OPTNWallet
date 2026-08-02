@@ -42,10 +42,38 @@ const DesktopAppShell: React.FC = () => {
   // One-time tidy of backups still named `wallet-<id>-<name>.optn`. Renaming on
   // write alone would never reach a wallet nobody reconfigures.
   useEffect(() => {
-    void migrateWalletFileNames().then((renamed) => {
-      if (renamed > 0) {
-        console.info(`[walletFile] renamed ${renamed} legacy wallet backup(s)`);
-      }
+    // Once per install, never again, and never on the path the user is waiting
+    // on. Renaming is O(n^2) in file reads — each rewrite re-lists the folder
+    // and reads every other file to check ownership — so with a folder of
+    // wallets it is hundreds of IPC round-trips. Running that at shell mount
+    // made unlocking feel slow, which is a regression, not the cost of the KDF.
+    const DONE_KEY = 'optn-wallet-file-names-migrated';
+    try {
+      if (window.localStorage.getItem(DONE_KEY) === '1') return;
+    } catch {
+      // Storage unavailable: skip rather than risk running this every launch.
+      return;
+    }
+
+    // Deferred off the critical path: the wallet list and unlock do not depend
+    // on backup filenames, so this can happen after the window is interactive.
+    const idle =
+      (window as unknown as { requestIdleCallback?: (cb: () => void) => number })
+        .requestIdleCallback ?? ((cb: () => void) => window.setTimeout(cb, 3000));
+
+    idle(() => {
+      void migrateWalletFileNames()
+        .then((renamed) => {
+          try {
+            window.localStorage.setItem(DONE_KEY, '1');
+          } catch {
+            /* best effort */
+          }
+          if (renamed > 0) {
+            console.info(`[walletFile] renamed ${renamed} legacy wallet backup(s)`);
+          }
+        })
+        .catch(() => undefined);
     });
   }, []);
   const dispatch = useDispatch();
