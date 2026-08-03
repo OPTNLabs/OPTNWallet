@@ -281,6 +281,32 @@ submitted which components.
 - Never leave the wallet
 - Used only for signing own inputs via BCH Schnorr
 
+### Spending Re-Auth Gate (Desktop)
+
+When auto-lock is set to "Never" (0), the wallet re-prompts for the password
+before any spending operation (`fetchAddressPrivateKey` with `spending: true`).
+This matches Electron Cash's `@protected` decorator model: the password gates
+the signing path, not just the unlock.
+
+**Scope:**
+- Spending: manual sends (TransactionBuilderHelper, useTransactionHandlers,
+  WalletConnect signing, AddonsSDK `signatureTemplateForAddress`)
+- Exempt: auto-fusion (user consented), address derivation, balance checks,
+  message signing
+
+**Cache:** After a successful spend auth, subsequent spend ops within 10 minutes
+pass without re-prompting. The timer resets on each successful auth. This covers
+batched signing (multi-input transactions) and rapid sequential sends. After the
+window expires, the next spend re-prompts.
+
+**Why 10 minutes:** Long enough for batched operations and rapid sequential
+sends. Short enough that an attacker cannot chain sends after the user walks
+away for an extended period. The cache is cleared on wallet lock.
+
+**Not active for other auto-lock settings:** When auto-lock is set to 1/5/15/30/60/120/240 min, the
+inactivity timer handles session protection. The spending re-auth gate is
+redundant in those cases and would only add friction.
+
 ### Tor Identity
 
 - Fresh Tor circuit per session (integrated Tor generates new circuits)

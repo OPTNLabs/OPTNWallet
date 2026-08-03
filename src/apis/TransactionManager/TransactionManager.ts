@@ -669,7 +669,7 @@ export default function TransactionManager() {
   async function fetchPrivateKey(address: string): Promise<Uint8Array | null> {
     return await (
       await import('../../services/KeyService')
-    ).default.fetchAddressPrivateKey(address);
+    ).default.fetchAddressPrivateKey(address, true);
   }
 
   return {
