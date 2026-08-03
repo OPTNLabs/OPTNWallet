@@ -112,6 +112,18 @@ export async function acquireRoundLease(
   return result.ran ? result.value : null;
 }
 
+/**
+ * Is a fusion round in flight for this wallet, in ANY window?
+ *
+ * Read-only — it must never take or refresh the lease, only observe it. The TTL
+ * bounds the answer, so a window that died mid-round stops reporting a live
+ * round rather than pinning this to `true` forever.
+ */
+export function roundLeaseIsLive(walletId: number, nowMs = Date.now()): boolean {
+  const held = readJson<LeaseRecord>(`${LEASE_PREFIX}${walletId}`);
+  return held !== null && nowMs - held.at < LEASE_TTL_MS;
+}
+
 /** Release only if we still hold it: a lease we already lost to TTL now belongs
  *  to another window, and clearing it would let a third start concurrently. */
 export async function releaseRoundLease(

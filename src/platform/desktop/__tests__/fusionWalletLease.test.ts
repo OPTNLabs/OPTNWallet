@@ -4,6 +4,7 @@ import {
   releaseRoundLease,
   tryClaimAutoCooldown,
   lastAutoAttemptAt,
+  roundLeaseIsLive,
 } from '../fusionWalletLease';
 
 class MemoryStorage {
@@ -143,5 +144,43 @@ describe('atomic auto-fusion cooldown claim', () => {
     const t0 = 1_000_000;
     expect(await tryClaimAutoCooldown(7, COOLDOWN, t0)).toBe(true);
     expect(await tryClaimAutoCooldown(8, COOLDOWN, t0)).toBe(true);
+  });
+});
+
+describe('roundLeaseIsLive', () => {
+  // Auto-lock consults this before wiping the key. Locking mid-round kills the
+  // round for every peer waiting on our components, not only for us.
+  const TTL_MS = 10 * 60_000;
+
+  it('reports a round held by any window', async () => {
+    const owner = await acquireRoundLease(77, 1_000);
+    expect(owner).not.toBeNull();
+    expect(roundLeaseIsLive(77, 1_000)).toBe(true);
+  });
+
+  it('reports nothing when no round is running', () => {
+    expect(roundLeaseIsLive(78, 1_000)).toBe(false);
+  });
+
+  it('stops reporting once the lease is released', async () => {
+    const owner = await acquireRoundLease(79, 1_000);
+    await releaseRoundLease(79, owner as string);
+    expect(roundLeaseIsLive(79, 1_000)).toBe(false);
+  });
+
+  it('expires with the TTL, so a dead window cannot defer the lock forever', async () => {
+    await acquireRoundLease(80, 1_000);
+    expect(roundLeaseIsLive(80, 1_000 + TTL_MS - 1)).toBe(true);
+    expect(roundLeaseIsLive(80, 1_000 + TTL_MS)).toBe(false);
+  });
+
+  it('does not take or refresh the lease merely by observing it', async () => {
+    // A probe that stamped the record would keep the wallet unlockable forever
+    // and would also steal the lease from the window actually running the round.
+    expect(roundLeaseIsLive(81, 1_000)).toBe(false);
+    const owner = await acquireRoundLease(81, 2_000);
+    expect(owner).not.toBeNull();
+    roundLeaseIsLive(81, 2_500);
+    expect(roundLeaseIsLive(81, 2_000 + TTL_MS)).toBe(false);
   });
 });
