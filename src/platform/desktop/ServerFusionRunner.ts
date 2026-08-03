@@ -678,14 +678,34 @@ export function buildServerRunner(
           torPort: config.tor?.port ?? null,
         }
       );
-      if (
-        !observation.relaySubmitted ||
-        !observation.observerSeen ||
-        observation.txid.toLowerCase() !== outcome.txid.toLowerCase()
-      ) {
-        throw new Error(
-          'The Fusion transaction was not independently observed after relay.'
-        );
+      const observedByPeer =
+        observation.relaySubmitted &&
+        observation.observerSeen &&
+        observation.txid.toLowerCase() === outcome.txid.toLowerCase();
+
+      // Relay-and-observe only proves anything when WE announce first. Here the
+      // Fusion server broadcasts before we do, so nodes already hold the
+      // transaction and will not re-announce it — the echo never arrives and a
+      // round that succeeded is reported as failed. Asking whether the network
+      // has the transaction answers the real question, whoever announced it.
+      //
+      // Still attempted first: if the server's broadcast failed, our relay is
+      // the backup that gets the transaction out at all.
+      if (!observedByPeer) {
+        const known = await invoke<boolean>('fusion_transaction_is_known', {
+          txid: outcome.txid,
+          lookupHost: lookupEndpoint.host,
+          lookupPort: lookupEndpoint.port,
+          lookupUseSsl: lookupEndpoint.useSsl,
+          lookupFallbacks,
+          torHost: config.tor?.host ?? null,
+          torPort: config.tor?.port ?? null,
+        }).catch(() => false);
+        if (!known) {
+          throw new Error(
+            'The Fusion transaction was not independently observed after relay.'
+          );
+        }
       }
 
       const completion = await completeFusionBroadcast({
