@@ -23,24 +23,30 @@ describe('P2P fusion coordination', () => {
     expect(a.pubkey).toMatch(/^[0-9a-f]{64}$/);
   });
 
-  it('coordinator election is deterministic (lowest pubkey), order-independent', () => {
+  // NOTE: these two once asserted "lowest pubkey wins". That rule was removed
+  // because a 32-byte key is free to grind offline — pin it again and you pin
+  // the vulnerability. What survives is the property the round actually needs:
+  // every peer derives the SAME coordinator from the same set. The adversarial
+  // properties of the replacement live in coordinatorElection.test.ts.
+  it('coordinator election is deterministic and order-independent', () => {
     const keys = ['ff00', 'aa11', '0099', 'bb22'];
-    expect(electCoordinator(keys)).toBe('0099');
-    expect(electCoordinator([...keys].reverse())).toBe('0099');
     expect(electCoordinator([])).toBeNull();
-    // Every peer computing over the same set agrees on the coordinator.
+    // The winner is one of the candidates, and never depends on arrival order.
     const shuffles = [keys, [...keys].reverse(), [keys[2], keys[0], keys[3], keys[1]]];
     const winners = new Set(shuffles.map((s) => electCoordinator(s)));
     expect(winners.size).toBe(1);
+    expect(keys).toContain(electCoordinator(keys));
   });
 
   it('isCoordinator includes our own key in the set', () => {
     const me = generateRoundIdentity();
-    // We win only if our pubkey is the lowest among all.
-    const lower = 'a'.repeat(64) < me.pubkey ? ['a'.repeat(64)] : [];
-    const higher = ['f'.repeat(64)];
-    expect(isCoordinator(me, higher)).toBe(me.pubkey < 'f'.repeat(64));
-    if (lower.length) expect(isCoordinator(me, lower)).toBe(false);
+    const peers = ['a'.repeat(64), 'f'.repeat(64)];
+    // The point of the test: our own key must be a candidate, so the answer
+    // matches the election run over the full set rather than over peers alone.
+    expect(isCoordinator(me, peers)).toBe(
+      electCoordinator([me.pubkey, ...peers]) === me.pubkey
+    );
+    expect(isCoordinator(me, [])).toBe(true);
   });
 
   it('pool announcement is a fresh, network-scoped kind-12230 event', () => {
