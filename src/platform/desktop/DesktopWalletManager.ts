@@ -26,10 +26,10 @@ import {
   aesDecrypt,
 } from './WalletCrypto';
 import {
-  setCachedWalletKey,
-  getCachedWalletKey,
-  getCachedWalletKeySnapshot,
-  clearCachedWalletKey,
+  setCachedPassword,
+  getCachedPasswordSnapshot,
+  clearCachedPassword,
+  isCached,
 } from './WalletKeyCache';
 import {
   unlock as unlockGatePassphrase,
@@ -144,20 +144,20 @@ export async function createWalletWithPassword(
   const manager = WalletManager();
 
   const salt = randomSalt(32);
-  const key = await deriveKey(password, salt);
 
-  // Activate this wallet's key BEFORE createWallet's internal
+  // Activate this wallet's credentials BEFORE createWallet's internal
   // SecretCryptoService.encryptText() calls run, so the mnemonic/passphrase
-  // are encrypted under it, not the previously-active key. Snapshot the
-  // previous key first: every failure exit below must restore it, or a failed
-  // creation leaves a foreign key active while another wallet is open.
-  const previousKey = getCachedWalletKeySnapshot();
-  const restorePreviousKey = () => {
-    if (previousKey) {
-      setCachedWalletKey(previousKey.key, previousKey.ownerWalletId);
-    } else clearCachedWalletKey();
+  // are encrypted under it, not the previously-active credentials. Snapshot
+  // the previous credentials first: every failure exit below must restore
+  // them, or a failed creation leaves foreign credentials active while
+  // another wallet is open.
+  const previousSnapshot = getCachedPasswordSnapshot();
+  const restorePrevious = () => {
+    if (previousSnapshot) {
+      setCachedPassword(previousSnapshot.password, previousSnapshot.salt, previousSnapshot.ownerWalletId);
+    } else clearCachedPassword();
   };
-  setCachedWalletKey(key);
+  setCachedPassword(password, salt);
 
   let walletId: number | null;
   try {
@@ -171,22 +171,22 @@ export async function createWalletWithPassword(
       resolvedDerivationPathSource
     );
     if (!created) {
-      restorePreviousKey();
+      restorePrevious();
       return null;
     }
 
     walletId = await findNewestWalletIdByName(name);
     if (walletId == null) {
-      restorePreviousKey();
+      restorePrevious();
       return null;
     }
   } catch (error) {
     // `createWallet` and the ID lookup are both allowed to throw. Never leave
-    // their provisional, unowned key active in either case.
-    restorePreviousKey();
+    // their provisional, unowned credentials active in either case.
+    restorePrevious();
     throw error;
   }
-  setCachedWalletKey(key, walletId);
+  setCachedPassword(password, salt, walletId);
 
   try {
     await writeKdfSalt(walletId, salt);
@@ -197,7 +197,7 @@ export async function createWalletWithPassword(
       `[DesktopWalletManager] CRITICAL: wallet ${walletId} was created but its kdf_salt could not be written — it will not be openable. Delete and recreate it.`,
       err
     );
-    restorePreviousKey();
+    restorePrevious();
     return null;
   }
 
@@ -212,9 +212,10 @@ export async function createWalletWithPassword(
   // re-opened with the same password. Non-fatal: the DB row is the source of
   // truth, so a failed file write must not fail creation.
   try {
-    const encryptedMnemonic = `${SECRET_ENC_PREFIX}${await aesEncrypt(key, mnemonic)}`;
+    const fileKey = await deriveKey(password, salt);
+    const encryptedMnemonic = `${SECRET_ENC_PREFIX}${await aesEncrypt(fileKey, mnemonic)}`;
     const encryptedPassphrase = passphrase
-      ? `${SECRET_ENC_PREFIX}${await aesEncrypt(key, passphrase)}`
+      ? `${SECRET_ENC_PREFIX}${await aesEncrypt(fileKey, passphrase)}`
       : '';
     await autoSaveWalletFile({
       sourceId: walletId,
@@ -519,26 +520,23 @@ export async function openWalletWithPassword(
   password: string
 ): Promise<WalletMetadata | null> {
   const manager = WalletManager();
-  const previousKey = getCachedWalletKeySnapshot();
-  const restorePreviousKey = () => {
-    if (previousKey) {
-      setCachedWalletKey(previousKey.key, previousKey.ownerWalletId);
+  const previousSnapshot = getCachedPasswordSnapshot();
+  const restorePrevious = () => {
+    if (previousSnapshot) {
+      setCachedPassword(previousSnapshot.password, previousSnapshot.salt, previousSnapshot.ownerWalletId);
     } else {
-      clearCachedWalletKey();
+      clearCachedPassword();
     }
   };
   const salt = await readKdfSalt(walletId);
 
   if (salt) {
-    // Verify-then-commit: prove the candidate key decrypts this wallet's own
-    // mnemonic BEFORE touching the shared key cache. Activating an unverified
-    // key would clobber the currently-open wallet's key on a mere typo —
-    // any encrypt that ran afterwards would corrupt that wallet's data.
+    // Verify-then-commit: prove the candidate password decrypts this wallet's
+    // own mnemonic BEFORE touching the shared cache. Activating unverified
+    // credentials would clobber the currently-open wallet's data on a mere typo.
     const candidateKey = await deriveKey(password, salt);
     const mnemonicCiphertext = await readMnemonicCiphertext(walletId);
     if (!mnemonicCiphertext?.startsWith(SECRET_ENC_PREFIX)) {
-      // Salted wallet whose mnemonic is not in encrypted form — inconsistent
-      // row (dev artifact). Refuse rather than guess.
       console.warn(
         `[DesktopWalletManager] Wallet ${walletId} has kdf_salt but no encrypted mnemonic — refusing to open.`
       );
@@ -550,39 +548,44 @@ export async function openWalletWithPassword(
         mnemonicCiphertext.slice(SECRET_ENC_PREFIX.length)
       );
     } catch {
-      return null; // wrong password — previous cached key left untouched
+      return null; // wrong password — previous cached credentials left untouched
     }
-    setCachedWalletKey(candidateKey, walletId);
+    setCachedPassword(password, salt, walletId);
   } else {
     // Legacy wallet (no kdf_salt): its data is encrypted under the app-gate
     // key, so the honest check is the gate passphrase — without this, any
-    // typed password would "succeed" as long as some key was cached.
+    // typed password would "succeed" as long as some credentials were cached.
     // `verify()` intentionally does not update the cache. Opening needs the
-    // actual gate-derived key, not whatever per-wallet key happened to be
-    // cached before the picker was shown, so use the verified unlock path.
+    // actual gate-derived credentials, not whatever per-wallet credentials
+    // happened to be cached before the picker was shown, so use the verified
+    // unlock path.
     const ok = await unlockGatePassphrase(password);
     if (!ok) return null;
-    const legacyKey = getCachedWalletKey();
-    if (!legacyKey) {
+    if (!isCached()) {
       console.warn(
-        '[DesktopWalletManager] Legacy wallet open refused: no key cached (gate locked?).'
+        '[DesktopWalletManager] Legacy wallet open refused: no credentials cached (gate locked?).'
       );
       return null;
     }
-    // The shared legacy gate key is now committed to this active wallet
-    // session. It can be rebound only after another wallet's password check.
-    setCachedWalletKey(legacyKey, walletId);
+    // The shared legacy gate credentials are now committed to this active wallet
+    // session. They can be rebound only after another wallet's password check.
+    // readKdfSalt returns null for legacy wallets, so we re-derive the salt
+    // from the keychain (unlockGatePassphrase already cached password + salt).
+    const legacySaltB64 = await readKdfSalt(walletId);
+    if (legacySaltB64) {
+      setCachedPassword(password, legacySaltB64, walletId);
+    }
   }
 
   let info: WalletMetadata | null;
   try {
     info = await manager.getWalletMetadata(walletId);
   } catch (error) {
-    restorePreviousKey();
+    restorePrevious();
     throw error;
   }
   if (!info) {
-    restorePreviousKey();
+    restorePrevious();
     return null;
   }
   // Clean out any stale cross-network rows now that we know the wallet's
@@ -846,7 +849,7 @@ export async function changeWalletPassword(
   upd.free();
   await dbService.flushDatabaseToFile(walletId);
 
-  setCachedWalletKey(newKey, walletId);
+  setCachedPassword(newPassword, newSalt, walletId);
 
   // Refresh the wallet file so its copy matches the new password.
   await autoSaveWalletFile({

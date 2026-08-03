@@ -281,6 +281,30 @@ submitted which components.
 - Never leave the wallet
 - Used only for signing own inputs via BCH Schnorr
 
+### Ciphertext Key Model (Desktop + Extension)
+
+The wallet uses a ciphertext model for key management. The derived CryptoKey
+**never persists in RAM**. Instead:
+
+1. The user's password + KDF salt are cached in `WalletKeyCache`
+2. On each encrypt/decrypt or signing operation, the CryptoKey is re-derived
+   via PBKDF2 (600k iterations, SHA-256), used, and immediately discarded
+3. The key exists only for the duration of the operation (ms), not between
+   operations
+
+**Desktop:** The salt is stored in the OS keychain (Windows Hello / macOS
+Keychain). An attacker with RAM access gets the password but cannot derive
+the key without the salt from the keychain — two separate storage layers
+must be compromised.
+
+**Browser Extension:** The salt is in localStorage (extension-scoped origin).
+The ciphertext model still helps: the key is ephemeral, so an attacker dumping
+RAM between operations gets only ciphertext + password, not a usable key.
+
+**Performance trade-off:** PBKDF2 runs on each crypto operation. This adds
+~200-500ms per encrypt/decrypt call. The security benefit (ephemeral key)
+outweighs the cost for a wallet application.
+
 ### Spending Re-Auth Gate (Desktop)
 
 When auto-lock is set to "Never" (0), the wallet re-prompts for the password

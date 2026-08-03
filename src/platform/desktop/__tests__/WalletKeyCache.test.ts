@@ -1,30 +1,54 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 
 import {
-  clearCachedWalletKey,
-  getCachedWalletKey,
-  getCachedWalletKeyForWallet,
-  getCachedWalletKeySnapshot,
-  setCachedWalletKey,
+  clearCachedPassword,
+  getCachedOwnerWalletId,
+  getCachedPasswordSnapshot,
+  isCached,
+  setCachedPassword,
 } from '../WalletKeyCache';
 
 describe('WalletKeyCache wallet ownership', () => {
-  beforeEach(() => clearCachedWalletKey());
+  beforeEach(() => clearCachedPassword());
 
-  it('does not treat an unbound gate key as an opened wallet key', () => {
-    const key = {} as CryptoKey;
-    setCachedWalletKey(key);
-
-    expect(getCachedWalletKey()).toBe(key);
-    expect(getCachedWalletKeyForWallet(5)).toBeNull();
+  it('reports uncached state when empty', () => {
+    expect(isCached()).toBe(false);
+    expect(getCachedOwnerWalletId()).toBeNull();
+    expect(getCachedPasswordSnapshot()).toBeNull();
   });
 
-  it('returns a wallet key only for its exact owner id', () => {
-    const key = {} as CryptoKey;
-    setCachedWalletKey(key, 5);
+  it('caches credentials without a wallet id (gate/provisional)', () => {
+    const salt = new Uint8Array([1, 2, 3]);
+    setCachedPassword('pass', salt);
 
-    expect(getCachedWalletKeyForWallet(5)).toBe(key);
-    expect(getCachedWalletKeyForWallet(4)).toBeNull();
-    expect(getCachedWalletKeySnapshot()).toEqual({ key, ownerWalletId: 5 });
+    expect(isCached()).toBe(true);
+    expect(getCachedOwnerWalletId()).toBeNull();
+    expect(getCachedPasswordSnapshot()).toEqual({
+      password: 'pass',
+      salt,
+      ownerWalletId: null,
+    });
+  });
+
+  it('caches credentials bound to a specific wallet id', () => {
+    const salt = new Uint8Array([4, 5, 6]);
+    setCachedPassword('pass2', salt, 5);
+
+    expect(isCached()).toBe(true);
+    expect(getCachedOwnerWalletId()).toBe(5);
+    expect(getCachedPasswordSnapshot()).toEqual({
+      password: 'pass2',
+      salt,
+      ownerWalletId: 5,
+    });
+  });
+
+  it('clears all cached state', () => {
+    setCachedPassword('pass', new Uint8Array([1]), 3);
+    clearCachedPassword();
+
+    expect(isCached()).toBe(false);
+    expect(getCachedOwnerWalletId()).toBeNull();
+    expect(getCachedPasswordSnapshot()).toBeNull();
   });
 });
