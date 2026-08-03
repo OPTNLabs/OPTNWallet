@@ -48,6 +48,38 @@ function sameParticipants(a: string[], b: string[]): boolean {
   return a.length === b.length && a.every((pubkey, index) => pubkey === b[index]);
 }
 
+/**
+ * Does `from`'s proposal outrank the round we are currently holding?
+ *
+ * Partial relay views mean two peers can each legitimately coordinate their own
+ * candidate set, and the round splits unless both answer this identically. Both
+ * hold both participant lists by the time they ask, so both derive the same
+ * union and run the same election over it — that is what makes it converge.
+ *
+ * Neither reference implementation solves this. Electron Cash has no election
+ * at all (a known server coordinates, conf.py:166). 00-Wallet takes the lowest
+ * pubkey and, when two views disagree, simply waits for a round_start that
+ * never comes (landing/views/fusion.ts:345).
+ *
+ * Ranking by participant COUNT was the tempting alternative — it yields bigger
+ * rounds and nobody is dropped. It is rejected because the count is self-
+ * reported: padding your claimed candidate list is free, which would re-open
+ * the grinding vector that binding the election to the candidate set closed.
+ * Whoever coordinates learns the input→output mapping, so that is not a cost
+ * worth paying for a larger round.
+ */
+function outranks(
+  from: string,
+  theirParticipants: string[],
+  mineParticipants: string[]
+): boolean {
+  const union = canonicalParticipants([
+    ...mineParticipants,
+    ...theirParticipants,
+  ]);
+  return electCoordinator(union) === from;
+}
+
 function validProposal(
   message: RoundMessage,
   from: string,
@@ -65,7 +97,13 @@ function validProposal(
     participants.length === message.participants.length &&
     sameParticipants(participants, message.participants) &&
     participants.includes(params.myPubkey) &&
-    participants[0] === from
+    // Ask the election who may propose. This once read `participants[0] === from`,
+    // which was the same answer only while the coordinator was the lowest pubkey.
+    // Once election became set-bound the two disagreed, and a proposal from the
+    // real coordinator was rejected as malformed by every participant — the round
+    // then died as "round start timed out" and failover dropped the one peer that
+    // was actually coordinating.
+    electCoordinator(participants) === from
   );
 }
 
@@ -81,9 +119,9 @@ function asError(value: unknown): Error {
 const MAX_COORDINATOR_FAILOVERS = 8;
 
 /**
- * Election picks the lowest pubkey, but a pool announcement is a stored event a
- * relay keeps replaying, so the "lowest" key can belong to a round nobody is
- * running any more. Without failover every live peer waits on that ghost until
+ * A pool announcement is a stored event a relay keeps replaying, so the elected
+ * key can belong to a round nobody is running any more. Without failover every
+ * live peer waits on that ghost until
  * the whole round times out ("round start timed out"). If the elected
  * coordinator never proposes, drop it and re-elect among the peers that are
  * left — one of which may now be us.
@@ -161,9 +199,9 @@ function negotiateAsCoordinator(
     const acknowledgments = new Set<string>([params.myPubkey]);
     let unsubscribe: () => void = () => undefined;
     // Keep re-offering the proposal until the round starts. A peer still waiting
-    // out a silent coordinator ignores proposals from higher keys, so it would
-    // miss a one-shot offer sent before it failed over — and over Tor a single
-    // dropped message would strand the round the same way.
+    // out a silent coordinator ignores proposals that do not outrank it, so it
+    // would miss a one-shot offer sent before it failed over — and over Tor a
+    // single dropped message would strand the round the same way.
     const reproposeTimer = setInterval(() => {
       if (settled || starting || yielded) return;
       void Promise.all(
@@ -243,8 +281,10 @@ function negotiateAsCoordinator(
       if (settled) return;
       if (
         validProposal(message, from, params) &&
-        from < params.myPubkey &&
-        (!yieldedCoordinator || from < yieldedCoordinator)
+        from !== yieldedCoordinator &&
+        // Beats the round we are running, and any round we already yielded to.
+        outranks(from, message.participants, participants) &&
+        (!yielded || outranks(from, message.participants, yielded.participants))
       ) {
         yielded = message;
         yieldedCoordinator = from;
@@ -371,8 +411,22 @@ function negotiateAsParticipant(
         return;
       }
       if (validProposal(message, from, params)) {
-        if (from > expectedCoordinator && !acceptedCoordinator) return;
-        if (acceptedCoordinator && from >= acceptedCoordinator) return;
+        // Same ranking the coordinator side applies, from the other direction:
+        // take a proposal only if it beats the round we are already waiting on.
+        if (from === acceptedCoordinator) return;
+        if (
+          !acceptedCoordinator &&
+          from !== expectedCoordinator &&
+          !outranks(from, message.participants, params.candidates)
+        ) {
+          return;
+        }
+        if (
+          accepted &&
+          !outranks(from, message.participants, accepted.participants)
+        ) {
+          return;
+        }
         accepted = message;
         acceptedCoordinator = from;
         const ack: RoundMessage = {
