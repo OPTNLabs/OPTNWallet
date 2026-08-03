@@ -19,6 +19,7 @@ import { hash160 } from '@cashscript/utils';
 import { createNostrRoundTransport, GIFT_WRAP_KIND } from '../fusionTransport';
 import {
   parseRoundMessage,
+  messageBinding,
   runFusionRound,
   type RoundParams,
 } from '../fusionSession';
@@ -110,9 +111,9 @@ describe('Nostr round transport', () => {
     ).toBeNull();
     expect(
       parseRoundMessage(
-        JSON.stringify({ type: 'abort', session: 'round', reason: 'cancelled' })
+        JSON.stringify({ ...messageBinding(), type: 'abort', session: 'round', reason: 'cancelled' })
       )
-    ).toEqual({ type: 'abort', session: 'round', reason: 'cancelled' });
+    ).toEqual(expect.objectContaining({ type: 'abort', session: 'round', reason: 'cancelled' }));
   });
 
   it('fails send when every configured relay rejects the event', async () => {
@@ -130,6 +131,7 @@ describe('Nostr round transport', () => {
 
     await expect(
       transport.send(recipient.pubkey, {
+        ...messageBinding(),
         type: 'abort',
         session: 'round',
         reason: 'test',
@@ -158,6 +160,7 @@ describe('Nostr round transport', () => {
       let settled = false;
       void transport
         .send(recipient.pubkey, {
+          ...messageBinding(),
           type: 'abort',
           session: 'round',
           reason: 'test',
@@ -191,6 +194,7 @@ describe('Nostr round transport', () => {
     );
 
     const sending = transport.send(recipient.pubkey, {
+      ...messageBinding(),
       type: 'abort',
       session: 'round',
       reason: 'test',
@@ -213,11 +217,13 @@ describe('Nostr round transport', () => {
     );
 
     await transport.send(recipient.pubkey, {
+      ...messageBinding(),
       type: 'inputs',
       session: 'round',
       inputs: [],
     });
     await transport.send(recipient.pubkey, {
+      ...messageBinding(),
       type: 'outputs',
       session: 'round',
       outputs: [{ script: '00', value: 546 }],
@@ -238,6 +244,7 @@ describe('Nostr round transport', () => {
     const got: Array<{ from: string; type: string }> = [];
     tb.onMessage((from, msg) => got.push({ from, type: msg.type }));
     await ta.send(b.pubkey, {
+      ...messageBinding(),
       type: 'inputs',
       session: 's',
       inputs: [
@@ -271,6 +278,7 @@ describe('Nostr round transport', () => {
       if (msg.type === 'outputs') fromPubkey = from;
     });
     await ta.send(b.pubkey, {
+      ...messageBinding(),
       type: 'outputs',
       session: 's',
       outputs: [{ script: '00', value: 546 }],
@@ -324,6 +332,7 @@ describe('Nostr round transport', () => {
           keysByPubkey: p.keys,
           broadcast,
           timeoutMs: 5000,
+          jitterMs: [0, 0],
         };
         return runFusionRound(
           params,

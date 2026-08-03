@@ -2,7 +2,7 @@ import { generateSecretKey } from 'nostr-tools';
 
 import { binToHex } from '../../../utils/hex';
 import { electCoordinator, type FusionPoolNetwork } from './fusion';
-import type { RoundMessage, RoundTransport } from './fusionSession';
+import { messageBinding, type RoundMessage, type RoundTransport } from './fusionSession';
 
 const MAX_PARTICIPANTS = 20;
 const DEFAULT_RENDEZVOUS_TIMEOUT_MS = 20_000;
@@ -180,14 +180,15 @@ function negotiateAsCoordinator(
   const settleMs =
     params.coordinatorSettleMs ??
     Math.min(5_000, Math.max(1_000, Math.floor(timeoutMs * 0.6)));
-  const proposal: RoundMessage = {
+  const makeProposal = (): RoundMessage => ({
+    ...messageBinding(),
     type: 'round_proposal',
     session,
     network: params.network,
     tier: params.tier,
     epoch: params.epoch,
     participants,
-  };
+  });
 
   return new Promise((resolve, reject) => {
     let settled = false;
@@ -205,7 +206,7 @@ function negotiateAsCoordinator(
     const reproposeTimer = setInterval(() => {
       if (settled || starting || yielded) return;
       void Promise.all(
-        others.map((peer) => transport.send(peer, proposal))
+        others.map((peer) => transport.send(peer, makeProposal()))
       ).catch(() => undefined);
     }, 1_500);
 
@@ -224,6 +225,7 @@ function negotiateAsCoordinator(
         const activeSession = yielded?.session ?? session;
         const targets = yieldedCoordinator ? [yieldedCoordinator] : others;
         const abort: RoundMessage = {
+          ...messageBinding(),
           type: 'abort',
           session: activeSession,
           reason: error.message.slice(0, 240),
@@ -256,6 +258,7 @@ function negotiateAsCoordinator(
       starting = true;
       const finalOthers = finalParticipants.filter((peer) => peer !== params.myPubkey);
       const start: RoundMessage = {
+        ...messageBinding(),
         type: 'round_start',
         session,
         network: params.network,
@@ -291,6 +294,7 @@ function negotiateAsCoordinator(
         if (ownStartTimer) clearTimeout(ownStartTimer);
         ownStartTimer = undefined;
         const ack: RoundMessage = {
+          ...messageBinding(),
           type: 'round_ack',
           session: message.session,
           network: params.network,
@@ -359,7 +363,7 @@ function negotiateAsCoordinator(
       startOwnRound();
     }, settleMs);
 
-    void Promise.all(others.map((peer) => transport.send(peer, proposal))).catch(
+    void Promise.all(others.map((peer) => transport.send(peer, makeProposal()))).catch(
       (error: unknown) =>
         void finishError(
           error instanceof Error ? error : new Error(String(error))
@@ -430,6 +434,7 @@ function negotiateAsParticipant(
         accepted = message;
         acceptedCoordinator = from;
         const ack: RoundMessage = {
+          ...messageBinding(),
           type: 'round_ack',
           session: message.session,
           network: params.network,

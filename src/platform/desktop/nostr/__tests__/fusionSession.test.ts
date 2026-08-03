@@ -10,7 +10,7 @@ import {
   type TransactionCommon,
 } from '@bitauth/libauth';
 import { hash160 } from '@cashscript/utils';
-import { runFusionRound, type RoundMessage, type RoundTransport, type RoundParams } from '../fusionSession';
+import { runFusionRound, messageBinding, type RoundMessage, type RoundTransport, type RoundParams } from '../fusionSession';
 import { assembleFusionTx, type PeerContribution } from '../fusionRound';
 import { electCoordinator } from '../fusion';
 import { toLibauthTx } from '../fusionSign';
@@ -163,6 +163,7 @@ describe('P2P fusion round choreography (3 peers, in-memory)', () => {
           keysByPubkey: p.keys,
           broadcast,
           timeoutMs: 5000,
+          jitterMs: [0, 0],
         };
         return runFusionRound(params, hub.transportFor(p.round.pubHex));
       })
@@ -226,6 +227,7 @@ describe('P2P fusion round choreography (3 peers, in-memory)', () => {
               return txidOf(txHex);
             },
             timeoutMs: 1_000,
+            jitterMs: [0, 0],
           },
           hub.transportFor(peer.round.pubHex)
         )
@@ -277,6 +279,7 @@ describe('P2P fusion round choreography (3 peers, in-memory)', () => {
                   }
                 : undefined,
             timeoutMs: 1_000,
+            jitterMs: [0, 0],
           },
           hub.transportFor(peer.round.pubHex)
         )
@@ -318,6 +321,7 @@ describe('P2P fusion round choreography (3 peers, in-memory)', () => {
           signal:
             peer.round.pubHex === coordinator ? controller.signal : undefined,
           timeoutMs: 1_000,
+          jitterMs: [0, 0],
         },
         hub.transportFor(peer.round.pubHex)
       )
@@ -366,6 +370,7 @@ describe('P2P fusion round choreography (3 peers, in-memory)', () => {
                 ? controller.signal
                 : undefined,
             timeoutMs: 1_000,
+            jitterMs: [0, 0],
           },
           hub.transportFor(peer.round.pubHex)
         )
@@ -424,6 +429,7 @@ describe('P2P fusion round choreography (3 peers, in-memory)', () => {
               throw new Error('must not broadcast');
             },
             timeoutMs: 250,
+            jitterMs: [0, 0],
           },
           hub.transportFor(item.round.pubHex)
         )
@@ -465,6 +471,7 @@ describe('P2P fusion round choreography (3 peers, in-memory)', () => {
         if (message.type === 'outputs') {
           queueMicrotask(() =>
             handler(coordinator, {
+              ...messageBinding(),
               type: 'assembled',
               session,
               inputs: contribution.inputs,
@@ -475,6 +482,7 @@ describe('P2P fusion round choreography (3 peers, in-memory)', () => {
         if (message.type === 'signature') {
           queueMicrotask(() =>
             handler(coordinator, {
+              ...messageBinding(),
               type: 'final',
               session,
               txid: '00'.repeat(32),
@@ -503,6 +511,7 @@ describe('P2P fusion round choreography (3 peers, in-memory)', () => {
             throw new Error('participant must not broadcast');
           },
           timeoutMs: 1_000,
+          jitterMs: [0, 0],
         },
         transport
       )
@@ -548,6 +557,7 @@ describe('P2P fusion round choreography (3 peers, in-memory)', () => {
           keysByPubkey: new Map([[input.pubHex, input.priv]]),
           broadcast: async () => '',
           timeoutMs: 50,
+          jitterMs: [0, 0],
         },
         transport
       )
