@@ -139,6 +139,7 @@ export function useAutoFusion(): void {
             auto: torAuto,
             host: torHost,
             manualPort: torPortManual,
+            autoStartIntegrated: true,
           });
           if (route.type === 'tor') {
             torReady = true;
@@ -165,6 +166,7 @@ export function useAutoFusion(): void {
             auto: torAuto,
             host: torHost,
             manualPort: torPortManual,
+            autoStartIntegrated: true,
           });
           if (route.type === 'unavailable') return;
           torReady = true;
