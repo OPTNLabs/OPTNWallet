@@ -203,6 +203,7 @@ export const CashFusionSettings: React.FC<{ variant?: 'card' | 'servers' }> = ({
       auto: torAuto,
       host: torHost,
       manualPort: torPortManual,
+      autoStartIntegrated: true,
     });
     if (route.type === 'direct') return undefined;
     if (route.type === 'unavailable') {
