@@ -1,4 +1,4 @@
-// EcKeyManager — Electron Cash-style passphrase-derived encryption key.
+// OptnKeyManager — Electron Cash-style passphrase-derived encryption key.
 //
 // Ciphertext model:
 //   PBKDF2(passphrase, salt, 600_000, SHA-256) → AES-256-GCM key
@@ -56,7 +56,7 @@ export async function setup(passphrase: string): Promise<void> {
   await setPassword(SERVICE, SALT_ACCOUNT, bytesToBase64(salt));
   await setPassword(SERVICE, VERIFY_ACCOUNT, verifyToken);
   setCachedPassword(passphrase, salt);
-  console.log('[EcKeyManager] Passphrase setup complete — password + salt cached in RAM');
+  console.log('[OptnKeyManager] Passphrase setup complete — password + salt cached in RAM');
 }
 
 /**
@@ -75,7 +75,7 @@ export async function unlock(passphrase: string): Promise<boolean> {
     if (decrypted !== VERIFY_PLAINTEXT) return false;
 
     setCachedPassword(passphrase, salt);
-    console.log('[EcKeyManager] Unlocked — password + salt cached in RAM');
+    console.log('[OptnKeyManager] Unlocked — password + salt cached in RAM');
     return true;
   } catch {
     return false;
@@ -114,13 +114,13 @@ export async function changePassword(newPassphrase: string): Promise<void> {
   await setPassword(SERVICE, SALT_ACCOUNT, bytesToBase64(newSalt));
   await setPassword(SERVICE, VERIFY_ACCOUNT, verifyToken);
   setCachedPassword(newPassphrase, newSalt);
-  console.log('[EcKeyManager] Password changed — new password + salt cached in RAM');
+  console.log('[OptnKeyManager] Password changed — new password + salt cached in RAM');
 }
 
 /** Clear the in-memory credentials. The app will show the lock screen. */
 export function lock(): void {
   clearCachedPassword();
-  console.log('[EcKeyManager] Locked — password + salt wiped from RAM');
+  console.log('[OptnKeyManager] Locked — password + salt wiped from RAM');
 }
 
 /**
@@ -132,7 +132,7 @@ export async function reset(): Promise<void> {
   try { await deletePassword(SERVICE, SALT_ACCOUNT); } catch { /* already gone */ }
   try { await deletePassword(SERVICE, VERIFY_ACCOUNT); } catch { /* already gone */ }
   try { await removeData({ domain: BIO_DOMAIN, name: BIO_NAME }); } catch { /* already gone */ }
-  console.log('[EcKeyManager] Reset — keychain entries removed');
+  console.log('[OptnKeyManager] Reset — keychain entries removed');
 }
 
 // ── Biometric unlock (Windows Hello / Touch ID) ─────────────────────────────
@@ -163,7 +163,7 @@ export async function hasBiometricEnrolled(): Promise<boolean> {
 /** Store the passphrase behind the OS biometric prompt (Windows Hello / Touch ID). */
 export async function enableBiometric(passphrase: string): Promise<void> {
   await setData({ domain: BIO_DOMAIN, name: BIO_NAME, data: passphrase });
-  console.log('[EcKeyManager] Biometric unlock enabled');
+  console.log('[OptnKeyManager] Biometric unlock enabled');
 }
 
 /**
@@ -180,7 +180,7 @@ export async function unlockWithBiometric(): Promise<boolean> {
     if (!result.data) return false;
     return await unlock(result.data);
   } catch (err) {
-    console.warn('[EcKeyManager] Biometric unlock failed or cancelled:', err);
+    console.warn('[OptnKeyManager] Biometric unlock failed or cancelled:', err);
     return false;
   }
 }
@@ -192,7 +192,7 @@ export async function disableBiometric(): Promise<void> {
   } catch {
     // already gone
   }
-  console.log('[EcKeyManager] Biometric unlock disabled');
+  console.log('[OptnKeyManager] Biometric unlock disabled');
 }
 
 /**
@@ -210,7 +210,7 @@ export function getBiometricLabel(): string {
   return 'Biometric unlock';
 }
 
-export const EcKeyManager = {
+export const OptnKeyManager = {
   hasSetup,
   isUnlocked,
   setup,
@@ -226,4 +226,4 @@ export const EcKeyManager = {
   disableBiometric,
   getBiometricLabel,
 };
-export default EcKeyManager;
+export default OptnKeyManager;

@@ -34,7 +34,7 @@ import {
 import {
   unlock as unlockGatePassphrase,
   verify as verifyGatePassphrase,
-} from './EcKeyManager';
+} from './OptnKeyManager';
 import { SECRET_ENC_PREFIX } from './SecretCryptoService';
 import { getBchAccountPath } from '../../services/HdWalletService';
 import {

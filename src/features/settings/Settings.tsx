@@ -91,7 +91,7 @@ const Settings: React.FC = () => {
     // on desktop's multi-wallet picker wiped all saved wallets on logout.
     if (desktop) {
       try {
-        const { lock } = await import('../../platform/desktop/EcKeyManager');
+        const { lock } = await import('../../platform/desktop/OptnKeyManager');
         lock();
       } catch {
         /* ignore */
