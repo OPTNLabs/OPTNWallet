@@ -64,7 +64,7 @@ export function clearCachedPassword(): void {
  * have been updated.
  */
 export function setCachedWalletKey(
-  _key: CryptoKey, // eslint-disable-line @typescript-eslint/no-unused-vars
+  _key: CryptoKey,
   _ownerWalletId: number | null = null // eslint-disable-line @typescript-eslint/no-unused-vars
 ): void {
   console.warn('[WalletKeyCache] setCachedWalletKey is deprecated — migrate to setCachedPassword');
