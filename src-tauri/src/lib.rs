@@ -489,6 +489,69 @@ fn fusion_relay_endpoints_are_distinct(
 /// Broadcast a server-assembled CashFusion transaction to one BCH peer, then
 /// require a separate peer to return the exact raw transaction by txid.
 ///
+/// Does the network already have this transaction?
+///
+/// Relay-and-observe proves a broadcast by watching a SECOND node echo the
+/// transaction back, which only works when we are the first to announce it. In
+/// a server-coordinated fusion the CashFusion server broadcasts first, so by the
+/// time we relay, nodes already hold the transaction and do not re-announce it —
+/// and a good, already-accepted fusion looks like a failure.
+///
+/// Asking an Electrum server whether the transaction exists tests what actually
+/// matters, regardless of who announced it. Every configured server is tried,
+/// and only "no server could answer" is an error — an unreachable Electrum must
+/// never be mistaken for a missing transaction.
+#[tauri::command]
+#[allow(clippy::too_many_arguments)]
+async fn fusion_transaction_is_known(
+    txid: String,
+    lookup_host: String,
+    lookup_port: u16,
+    lookup_use_ssl: bool,
+    lookup_fallbacks: Vec<FusionLookupEndpointReq>,
+    tor_host: Option<String>,
+    tor_port: Option<u16>,
+) -> Result<bool, String> {
+    let endpoints: Vec<fusion::electrum_input::ElectrumEndpoint> =
+        std::iter::once(fusion::electrum_input::ElectrumEndpoint {
+            host: lookup_host,
+            port: lookup_port,
+            use_ssl: lookup_use_ssl,
+        })
+        .chain(lookup_fallbacks.into_iter().map(|endpoint| {
+            fusion::electrum_input::ElectrumEndpoint {
+                host: endpoint.host,
+                port: endpoint.port,
+                use_ssl: endpoint.use_ssl,
+            }
+        }))
+        .collect();
+
+    let hosts: Vec<&str> = endpoints.iter().map(|e| e.host.as_str()).collect();
+    let verified_proxy = verified_fusion_proxy(&hosts, tor_host.as_deref(), tor_port).await?;
+
+    let mut last_error = String::from("no Electrum server could answer");
+    for endpoint in &endpoints {
+        let transport = match fusion_transport_for_host(&endpoint.host, verified_proxy) {
+            Ok(transport) => transport,
+            Err(error) => {
+                last_error = error;
+                continue;
+            }
+        };
+        match fusion::electrum_input::transaction_is_known(endpoint, transport, &txid).await {
+            // A server that HAS it settles the question. A server that does not
+            // may simply be behind, so keep asking the others.
+            Ok(true) => return Ok(true),
+            Ok(false) => {
+                last_error = format!("{}:{} does not have it", endpoint.host, endpoint.port)
+            }
+            Err(error) => last_error = format!("{}:{}: {error}", endpoint.host, endpoint.port),
+        }
+    }
+    Err(last_error)
+}
+
 /// Remote peers are routed only through a proxy freshly verified as Tor at this
 /// API boundary. Loopback peers are the sole direct-connection exemption.
 #[tauri::command]
@@ -921,6 +984,7 @@ pub fn run() {
             fusion_run,
             fusion_cancel_round,
             fusion_relay_broadcast_and_observe,
+            fusion_transaction_is_known,
             fusion_tor_detect,
             fusion_tor_check,
             bip37_node_probe,

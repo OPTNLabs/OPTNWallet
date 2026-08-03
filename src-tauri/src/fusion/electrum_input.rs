@@ -145,6 +145,85 @@ where
     parse_response(&response, input)
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct TransactionGetResponse {
+    #[serde(default)]
+    #[allow(dead_code)]
+    jsonrpc: RpcMember<String>,
+    id: u64,
+    #[serde(default)]
+    result: RpcMember<String>,
+    #[serde(default)]
+    error: RpcMember<RpcError>,
+}
+
+/// Does this Electrum server know the transaction?
+///
+/// `Ok(false)` means the server answered and does not have it. An unreachable or
+/// malfunctioning server is an `Err`, never `Ok(false)`: telling someone their
+/// fusion was not broadcast because a lookup failed is worse than saying
+/// nothing, and from the outside the two look identical.
+///
+/// The round engine only ever assembles and validates the transaction — the
+/// broadcast is somebody else's. Without this, a round that was assembled
+/// perfectly and then rejected by the network (say, for paying under the
+/// minimum relay fee) reports success to the user and leaves the evidence
+/// only in the server's log.
+pub async fn transaction_is_known(
+    endpoint: &ElectrumEndpoint,
+    transport: Transport<'_>,
+    txid: &str,
+) -> Result<bool, String> {
+    if txid.len() != 64 || !txid.bytes().all(|b| b.is_ascii_hexdigit()) {
+        return Err("not a transaction id".into());
+    }
+    tokio::time::timeout(REQUEST_TIMEOUT, async {
+        let mut stream =
+            connect_stream(&endpoint.host, endpoint.port, endpoint.use_ssl, transport).await?;
+        let mut request = serde_json::to_vec(&ListUnspentRequest {
+            id: REQUEST_ID,
+            method: "blockchain.transaction.get",
+            params: [txid],
+        })
+        .map_err(|e| format!("could not encode Electrum request: {e}"))?;
+        request.push(b'\n');
+        stream
+            .write_all(&request)
+            .await
+            .map_err(|e| format!("Electrum request write failed: {e}"))?;
+
+        let mut response = Vec::new();
+        let mut limited = BufReader::new(&mut stream).take((MAX_RESPONSE_BYTES + 1) as u64);
+        limited
+            .read_until(b'\n', &mut response)
+            .await
+            .map_err(|e| format!("Electrum response read failed: {e}"))?;
+        if response.len() > MAX_RESPONSE_BYTES {
+            return Err(format!(
+                "Electrum response too large (maximum {MAX_RESPONSE_BYTES} bytes)"
+            ));
+        }
+        if response.last() != Some(&b'\n') {
+            return Err("Electrum response ended before newline".into());
+        }
+
+        let parsed: TransactionGetResponse = serde_json::from_slice(&response)
+            .map_err(|e| format!("invalid Electrum JSON-RPC response: {e}"))?;
+        if parsed.id != REQUEST_ID {
+            return Err("Electrum response id did not match the request".into());
+        }
+        match (parsed.result, parsed.error) {
+            // "no such transaction" is an answer, not a failure.
+            (_, RpcMember::Present(_)) => Ok(false),
+            (RpcMember::Present(hex), _) if !hex.is_empty() => Ok(true),
+            _ => Err("Electrum returned neither a transaction nor an error".into()),
+        }
+    })
+    .await
+    .map_err(|_| "Electrum broadcast confirmation timed out".to_string())?
+}
+
 fn parse_response(response: &[u8], input: &pb::InputComponent) -> Result<InputLookup, String> {
     let response: ListUnspentResponse = serde_json::from_slice(response)
         .map_err(|e| format!("invalid Electrum JSON-RPC response: {e}"))?;
