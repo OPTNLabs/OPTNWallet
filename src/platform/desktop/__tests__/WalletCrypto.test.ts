@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { deriveKey, aesEncrypt, aesDecrypt, randomSalt } from '../WalletCrypto';
 
-// These primitives back BOTH the app-level gate (EcKeyManager) and every
+// These primitives back BOTH the app-level gate (OptnKeyManager) and every
 // per-wallet password (DesktopWalletManager.createWalletWithPassword /
 // openWalletWithPassword) -- the actual cross-wallet isolation property
 // ("wallet A's password can't decrypt wallet B's data") is a direct

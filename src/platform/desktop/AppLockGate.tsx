@@ -5,7 +5,7 @@
 //      key and navigates back to the wallet picker. There is no app-level lock
 //      screen: reopening the wallet asks that wallet's own password.
 //   2. optn:integrity-check events — gated seed-phrase reveal: shows passphrase confirm modal,
-//      calls EcKeyManager.verify() without updating the cached key (verify-only path).
+//      calls OptnKeyManager.verify() without updating the cached key (verify-only path).
 
 import React, { useEffect, useRef, useCallback, useState } from 'react';
 import { useSelector, useDispatch } from 'react-redux';
@@ -14,7 +14,7 @@ import { selectAutoLockMinutes } from '../../state/slices/appLockSlice';
 import { selectWalletId, resetWallet } from '../../state/slices/walletSlice';
 import { ROUTE_PATHS } from '../../navigation/routes';
 import { resyncAfterWalletClosed } from './walletSessionRelease';
-import { EcKeyManager } from './EcKeyManager';
+import { OptnKeyManager } from './OptnKeyManager';
 import { verifyWalletPassword } from './DesktopWalletManager';
 import {
   INTEGRITY_EVENT,
@@ -51,7 +51,7 @@ export const AppLockGate: React.FC = () => {
     if (timerRef.current) clearTimeout(timerRef.current);
     timerRef.current = setTimeout(() => {
       console.log(`[AppLock] No activity for ${autoLockMinutes} min — closing wallet`);
-      EcKeyManager.lock();
+      OptnKeyManager.lock();
       dispatch(resetWallet());
       navigate(ROUTE_PATHS.landing);
       resyncAfterWalletClosed('AppLock');

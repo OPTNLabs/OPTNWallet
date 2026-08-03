@@ -17,7 +17,7 @@ import {
   unlockApp,
   setPassphraseConfigured,
 } from '../../state/slices/appLockSlice';
-import { EcKeyManager } from './EcKeyManager';
+import { OptnKeyManager } from './OptnKeyManager';
 
 type GateState = 'loading' | 'setup' | 'locked' | 'ready';
 
@@ -44,11 +44,11 @@ export const DesktopSecurityGate: React.FC<Props> = ({ children }) => {
     initialised.current = true;
 
     void (async () => {
-      if (EcKeyManager.isUnlocked()) {
+      if (OptnKeyManager.isUnlocked()) {
         setGateState('ready');
         return;
       }
-      const setup = await EcKeyManager.hasSetup();
+      const setup = await OptnKeyManager.hasSetup();
       if (setup) {
         setGateState('locked');
       } else {
@@ -63,8 +63,8 @@ export const DesktopSecurityGate: React.FC<Props> = ({ children }) => {
     let cancelled = false;
     void (async () => {
       const [available, enrolled] = await Promise.all([
-        EcKeyManager.isBiometricAvailable(),
-        EcKeyManager.hasBiometricEnrolled(),
+        OptnKeyManager.isBiometricAvailable(),
+        OptnKeyManager.hasBiometricEnrolled(),
       ]);
       if (!cancelled) setBiometricOffered(available && enrolled);
     })();
@@ -77,7 +77,7 @@ export const DesktopSecurityGate: React.FC<Props> = ({ children }) => {
     setBiometricBusy(true);
     setError('');
     try {
-      const ok = await EcKeyManager.unlockWithBiometric();
+      const ok = await OptnKeyManager.unlockWithBiometric();
       if (ok) {
         dispatch(unlockApp());
         setGateState('ready');
@@ -96,7 +96,7 @@ export const DesktopSecurityGate: React.FC<Props> = ({ children }) => {
   // When Redux signals a lock (inactivity), transition to locked state.
   useEffect(() => {
     if (isLockedRedux && gateState === 'ready') {
-      EcKeyManager.lock();
+      OptnKeyManager.lock();
       setGateState('locked');
       setPassphrase('');
       setPassphraseConfirm('');
@@ -115,7 +115,7 @@ export const DesktopSecurityGate: React.FC<Props> = ({ children }) => {
     setBusy(true);
     setError('');
     try {
-      await EcKeyManager.setup(passphrase);
+      await OptnKeyManager.setup(passphrase);
       dispatch(setPassphraseConfigured(true));
       dispatch(unlockApp());
       setGateState('ready');
@@ -136,7 +136,7 @@ export const DesktopSecurityGate: React.FC<Props> = ({ children }) => {
     setBusy(true);
     setError('');
     try {
-      const ok = await EcKeyManager.unlock(passphrase);
+      const ok = await OptnKeyManager.unlock(passphrase);
       if (ok) {
         dispatch(unlockApp());
         setGateState('ready');
@@ -232,7 +232,7 @@ export const DesktopSecurityGate: React.FC<Props> = ({ children }) => {
               className="w-full flex items-center justify-center gap-2 rounded-xl border border-[var(--wallet-border)] py-3 text-sm font-medium wallet-text-strong disabled:opacity-50"
             >
               <span className="text-lg">👆</span>
-              <span>{biometricBusy ? 'Authenticating…' : `Use ${EcKeyManager.getBiometricLabel()}`}</span>
+              <span>{biometricBusy ? 'Authenticating…' : `Use ${OptnKeyManager.getBiometricLabel()}`}</span>
             </button>
           )}
 

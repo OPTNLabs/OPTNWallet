@@ -3,7 +3,7 @@ import type { RootState } from '../store';
 
 type AppLockState = {
   autoLockMinutes: number; // 0 = never, 1, 5, 15, 30
-  hasPassphraseSet: boolean; // true once EcKeyManager.setup() completes
+  hasPassphraseSet: boolean; // true once OptnKeyManager.setup() completes
   isLocked: boolean; // runtime signal — set by inactivity timer; DesktopSecurityGate also guards startup
 };
 

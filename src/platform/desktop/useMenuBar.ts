@@ -25,7 +25,7 @@ import { reconcileActiveWalletUtxos } from '../../services/WalletUtxoRefreshServ
 import { requestWalletUTXORefresh } from '../../workers/UTXOWorkerService';
 import { useTheme } from '../../app/theme/useTheme';
 import { ROUTE_PATHS, transactionsRoute } from '../../navigation/routes';
-import { EcKeyManager } from './EcKeyManager';
+import { OptnKeyManager } from './OptnKeyManager';
 import WalletManager from '../../apis/WalletManager/WalletManager';
 import { buildWalletFileContents } from './DesktopWalletManager';
 import { parseWalletFile, defaultWalletFileName } from './walletFile';
@@ -255,7 +255,7 @@ export async function openSavedWalletFromMenu(
   walletId: number,
   navigate: NavigateFunction,
   dispatch: AppDispatch,
-  lock: () => void = EcKeyManager.lock,
+  lock: () => void = OptnKeyManager.lock,
   flush: (callback: () => void) => void = flushSync,
   currentWalletId = 0,
   windowLabel = currentWebviewLabel(),
@@ -384,7 +384,7 @@ export function useMenuBar(): void {
           if (walletId > 0) {
             await releaseWalletOpen(walletId, currentWindow.label);
           }
-          EcKeyManager.lock();
+          OptnKeyManager.lock();
           flushSync(() => dispatch(resetWallet()));
           resyncAfterWalletClosed('MenuBar.openWalletFile');
         }),
@@ -393,7 +393,7 @@ export function useMenuBar(): void {
           savedWalletId,
           navigate,
           dispatch,
-          EcKeyManager.lock,
+          OptnKeyManager.lock,
           flushSync,
           walletId,
           currentWindow.label
@@ -405,7 +405,7 @@ export function useMenuBar(): void {
         await releaseWalletOpen(walletId, currentWindow.label).catch(
           () => undefined
         );
-        EcKeyManager.lock();
+        OptnKeyManager.lock();
         dispatch(resetWallet());
         navigate(ROUTE_PATHS.landing);
         resyncAfterWalletClosed('MenuBar.lockWallet');

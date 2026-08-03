@@ -1,5 +1,5 @@
 // Shared PBKDF2 + AES-256-GCM primitives used by both:
-//   - EcKeyManager (the app-level gate password)
+//   - OptnKeyManager (the app-level gate password)
 //   - the per-wallet key derivation in WalletManager.ts (each wallet's own password)
 // Factored out so both use identical, single-audited crypto — not two parallel
 // implementations that could silently drift apart.

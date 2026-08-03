@@ -1,6 +1,6 @@
 // Browser-extension-only passphrase-derived key manager.
 //
-// Same PBKDF2(600k)/AES-GCM primitives as the desktop EcKeyManager, but the
+// Same PBKDF2(600k)/AES-GCM primitives as the desktop OptnKeyManager, but the
 // per-install salt + verify token live in localStorage instead of an OS
 // keychain — there is no Tauri keychain bridge inside a browser extension's
 // popup page. localStorage here is scoped to the extension's own origin

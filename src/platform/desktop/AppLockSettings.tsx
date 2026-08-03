@@ -5,7 +5,7 @@ import { AppDispatch } from '../../state/store';
 import { selectAutoLockMinutes, setAutoLockMinutes } from '../../state/slices/appLockSlice';
 import { selectWalletId, resetWallet } from '../../state/slices/walletSlice';
 import { ROUTE_PATHS } from '../../navigation/routes';
-import { EcKeyManager } from './EcKeyManager';
+import { OptnKeyManager } from './OptnKeyManager';
 import {
   changeWalletPassword,
   isBiometricAvailable,
@@ -110,7 +110,7 @@ export const AppLockSettings: React.FC = () => {
 
   const handleLockNow = () => {
     // Close this wallet: wipe its key, clear the open-wallet id, return to picker.
-    EcKeyManager.lock();
+    OptnKeyManager.lock();
     dispatch(resetWallet());
     navigate(ROUTE_PATHS.landing);
   };

@@ -9,7 +9,7 @@ extension for both browsers (`npm run build:extension:chrome` /
 just configured and assumed). What it does:
 
 - Own password gate (`ExtensionSecurityGate.tsx` / `ExtensionKeyManager.ts`):
-  same PBKDF2(600k)/AES-GCM primitives as the desktop `EcKeyManager`, but the
+  same PBKDF2(600k)/AES-GCM primitives as the desktop `OptnKeyManager`, but the
   salt/verify-token live in `localStorage` (scoped to the extension's own
   origin) instead of an OS keychain, since there is no Tauri keychain bridge
   inside a browser extension. Re-locks every time the popup is closed and
