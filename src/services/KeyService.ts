@@ -143,9 +143,18 @@ const KeyService = {
     );
   },
 
-  // Consolidate the private key fetching and type handling here
-  async fetchAddressPrivateKey(address: string): Promise<Uint8Array | null> {
-    await DeviceIntegrityService.assertDeviceIntegrity('fetchAddressPrivateKey');
+  // Consolidate the private key fetching and type handling here.
+  // When `spending` is true, the desktop shim re-prompts for the wallet
+  // password (like EC's @protected decorator). Auto-fusion callers leave
+  // this false so they are never interrupted.
+  async fetchAddressPrivateKey(
+    address: string,
+    spending = false
+  ): Promise<Uint8Array | null> {
+    const scope = spending
+      ? 'fetchAddressPrivateKey_spend'
+      : 'fetchAddressPrivateKey';
+    await DeviceIntegrityService.assertDeviceIntegrity(scope);
     const keyManager = KeyManager();
     const privateKeyData = await keyManager.fetchAddressPrivateKey(address);
 

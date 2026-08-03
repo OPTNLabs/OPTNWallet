@@ -42,6 +42,7 @@ export const AppLockGate: React.FC = () => {
   const [integrityPassphrase, setIntegrityPassphrase] = useState('');
   const [integrityError, setIntegrityError] = useState('');
   const [integrityChecking, setIntegrityChecking] = useState(false);
+  const [integrityScope, setIntegrityScope] = useState<string | null>(null);
 
   // ── Inactivity auto-lock ──────────────────────────────────────────────────
 
@@ -72,7 +73,9 @@ export const AppLockGate: React.FC = () => {
   // ── Integrity check event listener ────────────────────────────────────────
 
   useEffect(() => {
-    const handler = () => {
+    const handler = (e: Event) => {
+      const detail = (e as CustomEvent).detail as { scope?: string } | undefined;
+      setIntegrityScope(detail?.scope ?? null);
       setIntegrityPassphrase('');
       setIntegrityError('');
       setIntegrityVisible(true);
@@ -92,6 +95,7 @@ export const AppLockGate: React.FC = () => {
         : false;
       if (ok) {
         setIntegrityVisible(false);
+        setIntegrityScope(null);
         resolveIntegrityCheck();
       } else {
         setIntegrityError('Incorrect passphrase. Try again.');
@@ -108,12 +112,15 @@ export const AppLockGate: React.FC = () => {
     setIntegrityVisible(false);
     setIntegrityPassphrase('');
     setIntegrityError('');
+    setIntegrityScope(null);
     rejectIntegrityCheck('Cancelled by user');
   }, []);
 
   // ── Render ────────────────────────────────────────────────────────────────
 
   if (!integrityVisible) return null;
+
+  const isSpendScope = integrityScope === 'fetchAddressPrivateKey_spend';
 
   return (
     <div
@@ -128,7 +135,9 @@ export const AppLockGate: React.FC = () => {
           <div className="text-2xl">🔐</div>
           <h3 className="font-bold text-lg wallet-text-strong">Confirm password</h3>
           <p className="text-sm wallet-muted">
-            Enter your password to reveal the backup phrase.
+            {isSpendScope
+              ? 'Enter your password to confirm this transaction.'
+              : 'Enter your password to reveal the backup phrase.'}
           </p>
         </div>
 

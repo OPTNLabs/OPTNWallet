@@ -1,45 +1,73 @@
 // Desktop shim for src/services/DeviceIntegrityService.ts
 //
-// EC model: a wallet is opened with its own password, whose derived key stays
-// in RAM for the session. Routine operations that use that key (deriving a
-// receive address, signing) must NOT re-prompt — the wallet is already
-// unlocked, so re-entering the password adds no security, only friction (this
-// was why "Receive" kept asking for a password).
+// Security model (EC-compatible):
+// - Read-only ops (address derivation, balance): no prompt
+// - Spending ops (signing a send tx): re-prompt password ONLY when auto-lock is
+//   "Never" (0) — otherwise the inactivity timer handles session protection
+// - Secret reveal (recovery phrase): always re-prompt password
+// - Auto-fusion: no prompt (password cached in session, user consented)
 //
-// The password is re-confirmed ONLY for scopes that EXPORT the secret itself
-// to the screen — i.e. revealing the recovery phrase. AppLockGate listens for
-// INTEGRITY_EVENT, renders the modal, and calls resolveIntegrityCheck /
-// rejectIntegrityCheck.
+// After a successful spend auth, subsequent spend ops are cached for 10 min so
+// rapid multi-input or batched signing doesn't re-prompt on each call. The
+// timer resets on each successful auth — if the user is actively spending, the
+// window stays open. Once it expires, the next spend re-prompts for the wallet
+// password.
+
+import { store } from '../../state/store';
+import { selectAutoLockMinutes } from '../../state/slices/appLockSlice';
 
 export const INTEGRITY_EVENT = 'optn:integrity-check';
 
-// Scopes that reveal the raw secret to the user and therefore re-confirm the
-// wallet password. Everything else (fetchAddressPrivateKey, signMessageForAddress,
-// …) is a routine op on the already-open wallet and passes without a prompt.
 const REVEAL_SCOPES = new Set<string>(['recovery_phrase_reveal']);
+const SPEND_SCOPES = new Set<string>(['fetchAddressPrivateKey_spend']);
+
+const SPEND_AUTH_TTL_MS = 600_000;
 
 let _resolve: (() => void) | null = null;
 let _reject: ((err: Error) => void) | null = null;
+let _lastSpendAuthAt = 0;
+let _pendingScope: string | null = null;
 
-/** Called by the passphrase confirmation modal on success. */
 export function resolveIntegrityCheck(): void {
   _resolve?.();
   _resolve = _reject = null;
+  if (_pendingScope && SPEND_SCOPES.has(_pendingScope)) {
+    _lastSpendAuthAt = Date.now();
+  }
+  _pendingScope = null;
 }
 
-/** Called by the passphrase confirmation modal on cancel or wrong passphrase. */
 export function rejectIntegrityCheck(reason = 'Passphrase verification failed'): void {
   _reject?.(new Error(reason));
   _resolve = _reject = null;
+  _pendingScope = null;
+}
+
+export function clearSpendAuthCache(): void {
+  _lastSpendAuthAt = 0;
 }
 
 async function assertDeviceIntegrity(scope: string): Promise<void> {
-  // Routine operations on the already-open wallet pass silently.
-  if (!REVEAL_SCOPES.has(scope)) return;
+  if (REVEAL_SCOPES.has(scope)) {
+    return promptPassphrase();
+  }
+
+  if (SPEND_SCOPES.has(scope)) {
+    const autoLock = selectAutoLockMinutes(store.getState());
+    if (autoLock !== 0) return;
+    if (Date.now() - _lastSpendAuthAt < SPEND_AUTH_TTL_MS) return;
+    return promptPassphrase(scope);
+  }
+}
+
+async function promptPassphrase(scope?: string): Promise<void> {
+  _pendingScope = scope ?? null;
   return new Promise<void>((resolve, reject) => {
     _resolve = resolve;
     _reject = reject;
-    window.dispatchEvent(new CustomEvent(INTEGRITY_EVENT, { detail: { scope } }));
+    window.dispatchEvent(
+      new CustomEvent(INTEGRITY_EVENT, { detail: { scope: scope ?? 'integrity' } })
+    );
   });
 }
 
