@@ -16,47 +16,73 @@ import {
   type InputSig,
 } from './fusionSign';
 import { electCoordinator } from './fusion';
+import { ROUND_MSG_VERSION } from './fusionRound';
+
+/** Bind every round message to the protocol version, a unique nonce, and a
+ *  timestamp. This prevents replay across rounds, cross-round message
+ *  injection, and stale-message attacks. */
+interface MessageBinding {
+  version: number;
+  nonce: string;
+  timestamp: number;
+}
 
 export type RoundMessage =
-  | {
+  | ({
       type: 'round_proposal';
       session: string;
       network: 'mainnet' | 'chipnet';
       tier: number;
       epoch: number;
       participants: string[];
-    }
-  | {
+    } & MessageBinding)
+  | ({
       type: 'round_ack';
       session: string;
       network: 'mainnet' | 'chipnet';
       tier: number;
       epoch: number;
-    }
-  | {
+    } & MessageBinding)
+  | ({
       type: 'round_start';
       session: string;
       network: 'mainnet' | 'chipnet';
       tier: number;
       epoch: number;
       participants: string[];
-    }
-  | { type: 'abort'; session: string; reason: string }
-  | { type: 'inputs'; session: string; inputs: FusionInputRef[] }
-  | { type: 'outputs'; session: string; outputs: FusionOutputRef[] }
-  | {
+    } & MessageBinding)
+  | ({ type: 'abort'; session: string; reason: string } & MessageBinding)
+  | ({ type: 'inputs'; session: string; inputs: FusionInputRef[] } & MessageBinding)
+  | ({ type: 'outputs'; session: string; outputs: FusionOutputRef[] } & MessageBinding)
+  | ({ type: 'components_ready'; session: string } & MessageBinding)
+  | ({
       type: 'assembled';
       session: string;
       inputs: FusionInputRef[];
       outputs: FusionOutputRef[];
-    }
-  | { type: 'signature'; session: string; sigs: InputSig[] }
-  | { type: 'final'; session: string; txid: string; txHex: string };
+    } & MessageBinding)
+  | ({ type: 'signature'; session: string; sigs: InputSig[] } & MessageBinding)
+  | ({ type: 'final'; session: string; txid: string; txHex: string } & MessageBinding);
 
 export interface RoundTransport {
   send(toPubkey: string, msg: RoundMessage): Promise<void>;
   onMessage(handler: (from: string, msg: RoundMessage) => void): () => void;
   onProtocolError?: (handler: (from: string, error: Error) => void) => () => void;
+}
+
+/** Secure random in [0, 1) for jitter calculations. */
+function secureRandomUnit(): number {
+  if (!globalThis.crypto?.getRandomValues) return Math.random();
+  const words = new Uint32Array(2);
+  globalThis.crypto.getRandomValues(words);
+  const high21 = words[0] & 0x1fffff;
+  return (high21 * 0x1_0000_0000 + words[1]) / 0x20_0000_0000_0000;
+}
+
+/** Wait a random duration between minMs and maxMs. */
+function jitterDelay(minMs: number, maxMs: number): Promise<void> {
+  const delay = minMs + secureRandomUnit() * (maxMs - minMs);
+  return new Promise((resolve) => setTimeout(resolve, delay));
 }
 
 const MAX_ROUND_MESSAGE_CHARS = 64 * 1024;
@@ -66,7 +92,9 @@ const MAX_SCRIPT_HEX_CHARS = 20_000;
 const MAX_TX_HEX_CHARS = 200_000;
 const MAX_MONEY = 21_000_000 * 100_000_000;
 const HEX_64 = /^[0-9a-f]{64}$/i;
+const HEX_32 = /^[0-9a-f]{32}$/i;
 const COMPRESSED_PUBKEY = /^(02|03)[0-9a-f]{64}$/i;
+const MAX_MESSAGE_AGE_SECONDS = 300; // 5 minutes
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -83,6 +111,32 @@ function isSafeIntegerIn(value: unknown, minimum: number, maximum: number): valu
 
 function validSession(value: unknown): value is string {
   return typeof value === 'string' && /^[\x20-\x7e]{1,128}$/.test(value);
+}
+
+/** Generate a cryptographically random 16-byte hex nonce for message binding. */
+export function generateNonce(): string {
+  const bytes = new Uint8Array(16);
+  globalThis.crypto.getRandomValues(bytes);
+  return Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('');
+}
+
+/** Create the binding fields for a round message. */
+export function messageBinding(): MessageBinding {
+  return {
+    version: ROUND_MSG_VERSION,
+    nonce: generateNonce(),
+    timestamp: Math.floor(Date.now() / 1000),
+  };
+}
+
+function validBinding(value: unknown): value is MessageBinding {
+  if (!isRecord(value)) return false;
+  if (value.version !== ROUND_MSG_VERSION) return false;
+  if (typeof value.nonce !== 'string' || !HEX_32.test(value.nonce)) return false;
+  if (!isSafeIntegerIn(value.timestamp, 0, Number.MAX_SAFE_INTEGER)) return false;
+  const age = Math.floor(Date.now() / 1000) - (value.timestamp as number);
+  if (age < -30 || age > MAX_MESSAGE_AGE_SECONDS) return false; // 30s clock skew tolerance
+  return true;
 }
 
 function validParticipants(value: unknown): boolean {
@@ -151,6 +205,7 @@ export function parseRoundMessage(content: string): RoundMessage | null {
   try {
     const message: unknown = JSON.parse(content);
     if (!isRecord(message) || !validSession(message.session)) return null;
+    if (!validBinding(message)) return null;
     switch (message.type) {
       case 'round_proposal':
       case 'round_start':
@@ -180,6 +235,9 @@ export function parseRoundMessage(content: string): RoundMessage | null {
         ) {
           return null;
         }
+        break;
+      case 'components_ready':
+        // No additional fields beyond session + binding.
         break;
       case 'inputs':
         if (!validArray(message.inputs, validInput)) return null;
@@ -235,6 +293,8 @@ export interface RoundParams {
   signal?: AbortSignal;
   /** Live round-phase updates (2=register, 3=verify, 4=sign, 5=broadcast). */
   onPhase?: (phase: number) => void;
+  /** Test seam: override jitter range [minMs, maxMs] per component send. */
+  jitterMs?: [number, number];
 }
 
 export interface RoundResult {
@@ -307,6 +367,7 @@ function runParticipant(
       null;
     let unsubscribe: () => void = () => undefined;
     let unsubscribeProtocolError: () => void = () => undefined;
+    const seenNonces = new Set<string>();
 
     const cleanup = () => {
       if (timer) clearTimeout(timer);
@@ -321,6 +382,7 @@ function runParticipant(
       if (notifyCoordinator) {
         await Promise.allSettled([
           transport.send(coordinator, {
+            ...messageBinding(),
             type: 'abort',
             session,
             reason: error.message.slice(0, 240),
@@ -341,6 +403,8 @@ function runParticipant(
 
     unsubscribe = transport.onMessage((from, message) => {
       if (settled || from !== coordinator || message.session !== session) return;
+      if (seenNonces.has(message.nonce)) return;
+      seenNonces.add(message.nonce);
       if (message.type === 'abort') {
         void fail(abortError(message.reason), false);
         return;
@@ -361,6 +425,7 @@ function runParticipant(
           params.onPhase?.(4);
           void transport
             .send(coordinator, {
+              ...messageBinding(),
               type: 'signature',
               session,
               sigs: signatures,
@@ -379,6 +444,15 @@ function runParticipant(
         try {
           verifyFinalFusionTx(approved, message.txHex, message.txid);
           params.onPhase?.(5);
+          // Broadcast liveness: every participant broadcasts after verification,
+          // not just the coordinator. If the coordinator's broadcast failed or
+          // its connection dropped, any peer can save the round. The broadcast
+          // is idempotent (same txid = same result on the network).
+          // Random jitter prevents a race where all participants broadcast
+          // simultaneously, which would be wasteful but not harmful.
+          void jitterDelay(2_000, 8_000)
+            .then(() => params.broadcast(message.txHex))
+            .catch(() => undefined); // broadcast failure is non-fatal for the participant
           succeed({ txid: message.txid.toLowerCase(), txHex: message.txHex });
         } catch (error) {
           void fail(asError(error), true);
@@ -397,15 +471,36 @@ function runParticipant(
     );
     params.onPhase?.(2);
     void (async () => {
+      // Per-component submission: each input is sent individually with jitter
+      // to prevent a post-hoc analyst from linking components by timing.
+      // Each send goes through a fresh Tor circuit (the transport isolates
+      // per-message via throwaway keys and pool separation).
+      const [jMin, jMax] = params.jitterMs ?? [200, 2000];
+      for (const input of params.myContribution.inputs) {
+        await transport.send(coordinator, {
+          ...messageBinding(),
+          type: 'inputs',
+          session,
+          inputs: [input],
+        });
+        await jitterDelay(jMin, jMax);
+      }
+      // Outputs are also sent individually with jitter, each through an
+      // anonymous throwaway key (unlinkable from inputs).
+      for (const output of params.myContribution.outputs) {
+        await transport.send(coordinator, {
+          ...messageBinding(),
+          type: 'outputs',
+          session,
+          outputs: [output],
+        });
+        await jitterDelay(jMin, jMax);
+      }
+      // Signal that all components have been submitted.
       await transport.send(coordinator, {
-        type: 'inputs',
+        ...messageBinding(),
+        type: 'components_ready',
         session,
-        inputs: params.myContribution.inputs,
-      });
-      await transport.send(coordinator, {
-        type: 'outputs',
-        session,
-        outputs: params.myContribution.outputs,
       });
     })().catch((error: unknown) => void fail(asError(error), true));
   });
@@ -423,9 +518,10 @@ function runCoordinator(
       [params.myPubkey, params.myContribution.inputs],
     ]);
     const outputPool: FusionOutputRef[] = [...params.myContribution.outputs];
-    const outputSenders = new Set<string>();
     const signaturesByOutpoint = new Map<string, InputSig>();
     const signedPeers = new Set<string>();
+    const seenNonces = new Set<string>();
+    const readyPeers = new Set<string>([params.myPubkey]); // coordinator is always ready
     let outputMessages = 1;
     let assembled: { inputs: FusionInputRef[]; outputs: FusionOutputRef[] } | null =
       null;
@@ -452,6 +548,7 @@ function runCoordinator(
       cleanup();
       if (notifyPeers) {
         const message: RoundMessage = {
+          ...messageBinding(),
           type: 'abort',
           session,
           reason: error.message.slice(0, 240),
@@ -508,6 +605,7 @@ function runCoordinator(
       // relay delivery failed. Each participant independently verifies `final`.
       const notifications = others.map((peer) =>
         transport.send(peer, {
+          ...messageBinding(),
           type: 'final',
           session,
           txid: finalized.txid,
@@ -525,15 +623,15 @@ function runCoordinator(
         console.info(
           '[p2p-fusion coord] session', session.slice(0, 10),
           'inputs', inputsByPeer.size, '/', params.participants.length,
-          'outputs', outputMessages, '/', params.participants.length
+          'outputs', outputMessages, '/', params.participants.length,
+          'ready', readyPeers.size, '/', params.participants.length
         );
       }
       if (
         settled ||
         assembling ||
         assembled ||
-        inputsByPeer.size !== params.participants.length ||
-        outputMessages !== params.participants.length
+        readyPeers.size !== params.participants.length
       ) {
         return;
       }
@@ -553,6 +651,7 @@ function runCoordinator(
       await Promise.all(
         others.map((peer) =>
           transport.send(peer, {
+            ...messageBinding(),
             type: 'assembled',
             session,
             inputs: assembled!.inputs,
@@ -565,25 +664,39 @@ function runCoordinator(
 
     unsubscribe = transport.onMessage((from, message) => {
       if (settled || message.session !== session) return;
+      if (seenNonces.has(message.nonce)) return;
+      seenNonces.add(message.nonce);
+      if (message.type === 'components_ready' && others.includes(from)) {
+        readyPeers.add(from);
+        void tryAssemble().catch((error: unknown) =>
+          void fail(asError(error), true)
+        );
+        return;
+      }
       if (message.type === 'abort' && others.includes(from)) {
         void fail(abortError(message.reason), true);
         return;
       }
       if (message.type === 'inputs' && others.includes(from)) {
-        if (!inputsByPeer.has(from)) inputsByPeer.set(from, message.inputs);
+        // Per-component: accumulate individual inputs from each peer.
+        const existing = inputsByPeer.get(from);
+        if (existing) {
+          existing.push(...message.inputs);
+        } else {
+          inputsByPeer.set(from, [...message.inputs]);
+        }
         void tryAssemble().catch((error: unknown) =>
           void fail(asError(error), true)
         );
         return;
       }
       if (message.type === 'outputs') {
-        if (
-          outputMessages >= params.participants.length ||
-          outputSenders.has(from)
-        ) {
+        if (outputMessages >= params.participants.length) {
           return;
         }
-        outputSenders.add(from);
+        // Per-component: accumulate individual outputs from each peer.
+        // Output senders are not tracked — duplicates are harmless since
+        // verifyFusionSafety rejects duplicate outpoints.
         outputPool.push(...message.outputs);
         outputMessages += 1;
         void tryAssemble().catch((error: unknown) =>
