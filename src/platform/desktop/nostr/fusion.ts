@@ -65,8 +65,12 @@ export function poolTag(network: FusionPoolNetwork): string {
   return `optn-fusion-v${FUSION_POOL_PROTOCOL}-${network}`;
 }
 
-/** How long an announcement stays fresh/discoverable (rolling TTL, seconds). */
-export const POOL_PEER_TTL_SECONDS = 180;
+/** How long an announcement stays fresh/discoverable (rolling TTL, seconds).
+ *  Must be slightly longer than the rendezvous timeout (20 s) so peers
+ *  discover each other, but short enough that stale announcements from
+ *  finished rounds do not linger. 180 s was 9× the round window and
+ *  caused "needs at least two fresh peers" failures. */
+export const POOL_PEER_TTL_SECONDS = 30;
 
 export interface RoundIdentity {
   secretKey: Uint8Array;
