@@ -52,6 +52,7 @@ import {
   allocateAllFeasibleTiers,
   buildServerRunner,
   parseElectrumLookupEndpoint,
+  inputLookupEndpoints,
   parseFusionServerTarget,
   serverFusionPrivacyDestination,
   type ServerHelloSnapshot,
@@ -354,6 +355,82 @@ describe('buildServerRunner — shared runner for manual and auto', () => {
 
     await expect(runner(makeCoins())).rejects.toThrow('unavailable');
     expect(mockCompleteFusionBroadcast).not.toHaveBeenCalled();
+  });
+
+  // Relay-and-observe only proves anything when WE announce first. In a
+  // server-coordinated round the Fusion server broadcasts before we relay, so
+  // nodes already hold the transaction and never re-announce it. Treating the
+  // missing echo as failure marked genuinely-confirmed fusions as failed —
+  // observed against a transaction that was on chain at the time.
+  const runObservationCase = async (
+    observerSeen: boolean,
+    known: boolean | Error
+  ) => {
+    const runner = makeConfig({ tor: { host: '127.0.0.1', port: 9050 } });
+    const txid = 'bc'.repeat(32);
+    mockGatherInputs.mockResolvedValue(makeInputs());
+    mockCreateFreshScripts.mockResolvedValue(
+      Array(20).fill('76a914' + '00'.repeat(20) + '88ac')
+    );
+    mockTrackAttempt.mockResolvedValue({ txid });
+    mockCompleteFusionBroadcast.mockResolvedValue({
+      tracked: true,
+      refreshed: false,
+      depthRecorded: 1,
+    });
+    mockInvoke.mockImplementation((command: string) => {
+      if (command === 'fusion_execution_status') {
+        return Promise.resolve({ ready: true, message: null });
+      }
+      if (command === 'fusion_prepare_round' || command === 'fusion_cancel_round') {
+        return Promise.resolve();
+      }
+      if (command === 'fusion_run') {
+        return Promise.resolve({
+          ok: true,
+          broadcast_verified: false,
+          txid,
+          tx_hex: '01000000',
+          message: 'assembled',
+        });
+      }
+      if (command === 'fusion_relay_broadcast_and_observe') {
+        return Promise.resolve({ txid, relaySubmitted: true, observerSeen });
+      }
+      if (command === 'fusion_transaction_is_known') {
+        return known instanceof Error
+          ? Promise.reject(known)
+          : Promise.resolve(known);
+      }
+      return Promise.reject(new Error(`unexpected command ${command}`));
+    });
+    return { runner, txid };
+  };
+
+  it('accepts a round the network already has, even when no peer echoed it', async () => {
+    const { runner, txid } = await runObservationCase(false, true);
+    await expect(runner(makeCoins())).resolves.toEqual({ txid });
+    expect(mockCompleteFusionBroadcast).toHaveBeenCalled();
+  });
+
+  it('still fails when no peer echoed it and no server has it', async () => {
+    const { runner } = await runObservationCase(false, false);
+    await expect(runner(makeCoins())).rejects.toThrow(
+      'not independently observed'
+    );
+  });
+
+  it('does not accept a round because the confirmation lookup itself failed', async () => {
+    // An unreachable Electrum says nothing about whether the transaction exists.
+    // Treating that as confirmation would report success for a fusion that may
+    // never have been broadcast at all.
+    const { runner } = await runObservationCase(
+      false,
+      new Error('Electrum unreachable')
+    );
+    await expect(runner(makeCoins())).rejects.toThrow(
+      'not independently observed'
+    );
   });
 
   it('persists an assembled transaction before Tor relay and requires independent observation', async () => {
@@ -732,5 +809,34 @@ describe('tier pinning', () => {
     const all = allocateAllFeasibleTiers(hello, 5_000_000, pubkeys, rng);
     const empty = allocateAllFeasibleTiers(hello, 5_000_000, pubkeys, rng, []);
     expect([...empty.keys()]).toEqual([...all.keys()]);
+  });
+});
+
+describe('input lookup endpoints', () => {
+  // Peer-input verification used to dial one fixed server. When chipnet's first
+  // configured server stopped answering over Tor, every round reached
+  // StartRound and aborted — a lookup failure cannot be blamed on the peer, so
+  // the only safe move is to abandon the round. Offering the rest as fallbacks
+  // is what keeps one dead host from being fatal.
+  it('offers more than one server so a single dead host is survivable', () => {
+    const endpoints = inputLookupEndpoints(Network.CHIPNET);
+    expect(endpoints.length).toBeGreaterThan(1);
+  });
+
+  it('tries the caller-preferred server first', () => {
+    const preferred = { host: 'my-own-node.example', port: 50002, useSsl: true };
+    const endpoints = inputLookupEndpoints(Network.CHIPNET, preferred);
+    expect(endpoints[0]).toEqual(preferred);
+    expect(endpoints.length).toBeGreaterThan(1);
+  });
+
+  it('does not retry the same server twice', () => {
+    const configured = inputLookupEndpoints(Network.CHIPNET);
+    // Preferring a server that is already configured must not duplicate it:
+    // retrying an unreachable host costs another full timeout for nothing.
+    const endpoints = inputLookupEndpoints(Network.CHIPNET, configured[1]);
+    const keys = endpoints.map((e) => `${e.host}:${e.port}:${e.useSsl}`);
+    expect(new Set(keys).size).toBe(keys.length);
+    expect(endpoints[0]).toEqual(configured[1]);
   });
 });
