@@ -14,7 +14,6 @@ import { selectAutoLockMinutes } from '../../state/slices/appLockSlice';
 import { selectWalletId, resetWallet } from '../../state/slices/walletSlice';
 import { ROUTE_PATHS } from '../../navigation/routes';
 import { resyncAfterWalletClosed } from './walletSessionRelease';
-import { roundLeaseIsLive } from './fusionWalletLease';
 import { EcKeyManager } from './EcKeyManager';
 import { verifyWalletPassword } from './DesktopWalletManager';
 import {
@@ -24,11 +23,6 @@ import {
 } from './DeviceIntegrityService';
 
 const ACTIVITY_EVENTS = ['mousemove', 'mousedown', 'keydown', 'touchstart', 'scroll'] as const;
-
-// How soon to re-check after deferring the lock for an in-flight fusion round.
-// Short enough that the wallet still locks promptly once the round ends —
-// deferring is a delay, not an exemption.
-const ROUND_IN_FLIGHT_RECHECK_MS = 30_000;
 
 export const AppLockGate: React.FC = () => {
   const navigate = useNavigate();
@@ -51,30 +45,17 @@ export const AppLockGate: React.FC = () => {
 
   // ── Inactivity auto-lock ──────────────────────────────────────────────────
 
-  const resetTimer = useCallback(
-    (delayMs = autoLockMinutes * 60 * 1000) => {
-      if (!shouldAutoLock) return;
-      if (timerRef.current) clearTimeout(timerRef.current);
-      timerRef.current = setTimeout(() => {
-        // Never lock out from under a fusion round. Locking mid-round wipes the
-        // key the round still needs, so the round dies — and in a P2P round it
-        // dies for every peer waiting on our components, not just for us. The
-        // user is idle by definition here, so nothing is lost by waiting; the
-        // lease has a TTL, so a window that died mid-round cannot defer this
-        // forever.
-        if (walletId && roundLeaseIsLive(walletId)) {
-          resetTimer(ROUND_IN_FLIGHT_RECHECK_MS);
-          return;
-        }
-        console.log(`[AppLock] No activity for ${autoLockMinutes} min — closing wallet`);
-        EcKeyManager.lock();
-        dispatch(resetWallet());
-        navigate(ROUTE_PATHS.landing);
-        resyncAfterWalletClosed('AppLock');
-      }, delayMs);
-    },
-    [shouldAutoLock, autoLockMinutes, navigate, dispatch, walletId]
-  );
+  const resetTimer = useCallback(() => {
+    if (!shouldAutoLock) return;
+    if (timerRef.current) clearTimeout(timerRef.current);
+    timerRef.current = setTimeout(() => {
+      console.log(`[AppLock] No activity for ${autoLockMinutes} min — closing wallet`);
+      EcKeyManager.lock();
+      dispatch(resetWallet());
+      navigate(ROUTE_PATHS.landing);
+      resyncAfterWalletClosed('AppLock');
+    }, autoLockMinutes * 60 * 1000);
+  }, [shouldAutoLock, autoLockMinutes, navigate, dispatch]);
 
   useEffect(() => {
     if (shouldAutoLock) resetTimer();
