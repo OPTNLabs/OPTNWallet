@@ -14,6 +14,7 @@ import {
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  readdirSync,
   realpathSync,
   rmSync,
   writeFileSync,
@@ -140,11 +141,22 @@ async function main() {
   rmSync(outDir, { recursive: true, force: true });
   mkdirSync(outDir, { recursive: true });
 
-  const sourceBinary = join(temporaryDirectory, 'tor', torBinary);
+  const sourceDirectory = join(temporaryDirectory, 'tor');
+  const sourceBinary = join(sourceDirectory, torBinary);
   if (!existsSync(sourceBinary)) {
     throw new Error(`extracted bundle has no ${sourceBinary}`);
   }
-  copyFileSync(sourceBinary, join(outDir, torBinary));
+  // Stage the whole directory, not just the executable. The Expert Bundle
+  // ships the libraries tor links against beside it, and copying the binary
+  // alone left them behind: on Linux that produced a tor needing
+  // libevent-2.1.so.7 from the host, which failed the AppImage build outright
+  // (linuxdeploy resolves every ELF in the AppDir) and would have left deb and
+  // rpm users depending on whatever tor their distribution happened to have.
+  const staged = readdirSync(sourceDirectory);
+  for (const name of staged) {
+    copyFileSync(join(sourceDirectory, name), join(outDir, name));
+  }
+  console.log(`[fetch-tor] staged from bundle: ${staged.join(', ')}`);
   copyFileSync(
     join(temporaryDirectory, 'data', 'geoip'),
     join(outDir, 'geoip'),
