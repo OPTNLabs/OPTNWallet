@@ -1,5 +1,6 @@
 // src/components/UTXOCard.tsx
 import React from 'react';
+import { useSelector } from 'react-redux';
 import { shortenTxHash } from '../utils/shortenHash';
 import { UTXO } from '../types/types';
 import { SATSINBITCOIN } from '../utils/constants';
@@ -9,6 +10,8 @@ import {
   formatAtomicTokenAmount,
   resolveTokenPresentation,
 } from '../utils/tokenPresentation';
+import { coinDepth } from '../platform/desktop/fusionCoinDepth';
+import { selectWalletId } from '../state/slices/walletSlice';
 
 interface UTXOCardProps {
   utxos: UTXO[];
@@ -41,6 +44,7 @@ function formatBchFromSats(
 }
 
 const UTXOCard: React.FC<UTXOCardProps> = ({ utxos, loading }) => {
+  const walletId = useSelector(selectWalletId);
   const tokenMetadata = useSharedTokenMetadata(
     utxos
       .map((u) => u.token?.category)
@@ -119,6 +123,11 @@ const UTXOCard: React.FC<UTXOCardProps> = ({ utxos, loading }) => {
                 <>
                   <p>
                     {formatBchFromSats(sats)} <strong>BCH</strong>
+                    {walletId > 0 && coinDepth(walletId, `${utxo.tx_hash}:${utxo.tx_pos}`) > 0 && (
+                      <span className="ml-2 text-xs bg-emerald-500/20 text-emerald-400 px-1.5 py-0.5 rounded">
+                        Fused
+                      </span>
+                    )}
                   </p>
                   <p>
                     <strong>Tx Hash:</strong> {shortenTxHash(utxo.tx_hash)}
