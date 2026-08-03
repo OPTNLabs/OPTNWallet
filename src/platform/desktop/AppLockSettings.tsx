@@ -15,12 +15,17 @@ import {
   getBiometricLabel,
 } from './DesktopWalletManager';
 
+// A CashFusion round takes minutes and dies with the key when the wallet
+// locks, so the shorter choices are unusable while fusing. That is the user's
+// trade to make explicitly, not something to work around by quietly deferring
+// the lock — a locked wallet has to be locked.
 const AUTO_LOCK_OPTIONS = [
   { label: 'Never', value: 0 },
   { label: '1 minute', value: 1 },
   { label: '5 minutes', value: 5 },
   { label: '15 minutes', value: 15 },
   { label: '30 minutes', value: 30 },
+  { label: '1 hour', value: 60 },
 ];
 
 export const AppLockSettings: React.FC = () => {
