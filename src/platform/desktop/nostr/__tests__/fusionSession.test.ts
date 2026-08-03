@@ -12,7 +12,19 @@ import {
 import { hash160 } from '@cashscript/utils';
 import { runFusionRound, type RoundMessage, type RoundTransport, type RoundParams } from '../fusionSession';
 import { assembleFusionTx, type PeerContribution } from '../fusionRound';
+import { electCoordinator } from '../fusion';
 import { toLibauthTx } from '../fusionSign';
+
+/** Ask the real election who coordinates. Never restate the rule here: it is
+ *  bound to the candidate set (fusion.ts), so a test that assumes "lowest
+ *  pubkey wins" aims its fault injection at a peer that isn't coordinating and
+ *  quietly proves nothing — which is exactly what happened when the election
+ *  stopped being grindable. */
+function coordinatorOf(participants: string[]): string {
+  const elected = electCoordinator(participants);
+  if (!elected) throw new Error('no coordinator elected for this round');
+  return elected;
+}
 
 function keypair(seed: number): { priv: Uint8Array; pubHex: string } {
   const priv = new Uint8Array(32);
@@ -180,7 +192,7 @@ describe('P2P fusion round choreography (3 peers, in-memory)', () => {
   it('coordinator VM-validates every peer signature before broadcast', async () => {
     const peers = makePeers();
     const participants = peers.map((peer) => peer.round.pubHex);
-    const coordinator = [...participants].sort()[0];
+    const coordinator = coordinatorOf(participants);
     const hub = new Hub((from, to, message) => {
       if (
         to === coordinator &&
@@ -235,7 +247,7 @@ describe('P2P fusion round choreography (3 peers, in-memory)', () => {
   it('does not broadcast when cancellation wins immediately before broadcast', async () => {
     const peers = makePeers();
     const participants = peers.map((peer) => peer.round.pubHex);
-    const coordinator = [...participants].sort()[0];
+    const coordinator = coordinatorOf(participants);
     const controller = new AbortController();
     const hub = new Hub();
     let broadcasts = 0;
@@ -279,7 +291,7 @@ describe('P2P fusion round choreography (3 peers, in-memory)', () => {
   it('resolves a successful in-flight broadcast even if cancellation arrives', async () => {
     const peers = makePeers();
     const participants = peers.map((peer) => peer.round.pubHex);
-    const coordinator = [...participants].sort()[0];
+    const coordinator = coordinatorOf(participants);
     const controller = new AbortController();
     const pending = deferred<string>();
     const hub = new Hub();
@@ -326,7 +338,7 @@ describe('P2P fusion round choreography (3 peers, in-memory)', () => {
   it('rejects truthfully when an in-flight broadcast fails after cancellation', async () => {
     const peers = makePeers();
     const participants = peers.map((peer) => peer.round.pubHex);
-    const coordinator = [...participants].sort()[0];
+    const coordinator = coordinatorOf(participants);
     const controller = new AbortController();
     const pending = deferred<string>();
     const hub = new Hub();
@@ -430,8 +442,11 @@ describe('P2P fusion round choreography (3 peers, in-memory)', () => {
   it('rejects a coordinator final message that was not the verified transaction', async () => {
     const input = keypair(71);
     const output = keypair(72);
-    const coordinator = '0'.repeat(64);
-    const participant = 'f'.repeat(64);
+    // Roles come from the election, not from pubkey order: this test only
+    // works while `myPubkey` is the one NOT coordinating, or it runs the
+    // coordinator path and simply times out waiting for a peer.
+    const coordinator = coordinatorOf(['0'.repeat(64), 'f'.repeat(64)]);
+    const participant = coordinator === '0'.repeat(64) ? 'f'.repeat(64) : '0'.repeat(64);
     const session = 'b'.repeat(64);
     const contribution: PeerContribution = {
       inputs: [
