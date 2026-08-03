@@ -59,6 +59,22 @@ export function getTorArtifact(target) {
   };
 }
 
+/**
+ * Names of the plain files in an extracted bundle directory.
+ *
+ * Subdirectories are skipped: the bundle carries a pluggable_transports/
+ * directory of censorship-circumvention proxies that nothing here launches, so
+ * staging it would only add weight to every installer. Copying it is also not
+ * merely wasteful — copyFileSync throws on a directory (EISDIR on Linux,
+ * ENOTSUP on macOS), which took out all four desktop builds when this staged
+ * the directory listing unfiltered.
+ */
+export function bundleFileNames(directory) {
+  return readdirSync(directory, { withFileTypes: true })
+    .filter((entry) => entry.isFile())
+    .map((entry) => entry.name);
+}
+
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const repoRoot = join(__dirname, '..');
 const outDir = join(repoRoot, 'src-tauri', 'resources', 'tor');
@@ -152,7 +168,7 @@ async function main() {
   // libevent-2.1.so.7 from the host, which failed the AppImage build outright
   // (linuxdeploy resolves every ELF in the AppDir) and would have left deb and
   // rpm users depending on whatever tor their distribution happened to have.
-  const staged = readdirSync(sourceDirectory);
+  const staged = bundleFileNames(sourceDirectory);
   for (const name of staged) {
     copyFileSync(join(sourceDirectory, name), join(outDir, name));
   }
