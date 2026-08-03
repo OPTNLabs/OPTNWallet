@@ -13,8 +13,7 @@ import { useNavigate } from 'react-router-dom';
 import { selectAutoLockMinutes } from '../../state/slices/appLockSlice';
 import { selectWalletId, resetWallet } from '../../state/slices/walletSlice';
 import { ROUTE_PATHS } from '../../navigation/routes';
-import DatabaseService from '../../apis/DatabaseManager/DatabaseService';
-import { logError } from '../../utils/errorHandling';
+import { resyncAfterWalletClosed } from './walletSessionRelease';
 import { EcKeyManager } from './EcKeyManager';
 import { verifyWalletPassword } from './DesktopWalletManager';
 import {
@@ -54,18 +53,7 @@ export const AppLockGate: React.FC = () => {
       EcKeyManager.lock();
       dispatch(resetWallet());
       navigate(ROUTE_PATHS.landing);
-      // Locking wipes the key and the redux state, but this window's sql.js
-      // database and its save baselines are loaded once at startup and would
-      // otherwise survive untouched. Another window is free to write while we
-      // sit locked, and reopening a wallet on our stale copy makes every
-      // subsequent save fail the concurrent-edit check — permanently, since
-      // nothing refreshes either side of it. The UTXO write is one of those
-      // saves, so the wallet syncs and shows no balance until a restart.
-      //
-      // Safe here precisely because no wallet is open any more.
-      void DatabaseService()
-        .resyncDatabaseFromDisk()
-        .catch((error) => logError('AppLock.resyncDatabase', error));
+      resyncAfterWalletClosed('AppLock');
     }, autoLockMinutes * 60 * 1000);
   }, [shouldAutoLock, autoLockMinutes, navigate, dispatch]);
 

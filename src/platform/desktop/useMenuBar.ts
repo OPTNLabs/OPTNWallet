@@ -11,6 +11,7 @@ import { useNavigate, type NavigateFunction } from 'react-router-dom';
 import { useDispatch, useSelector } from 'react-redux';
 import { Menu, Submenu, MenuItem, PredefinedMenuItem } from '@tauri-apps/api/menu';
 import { listen as listenToEvent } from '@tauri-apps/api/event';
+import { resyncAfterWalletClosed } from './walletSessionRelease';
 import {
   getAllWebviewWindows,
 } from '@tauri-apps/api/webviewWindow';
@@ -265,6 +266,9 @@ export async function openSavedWalletFromMenu(
   }
   lock();
   flush(() => dispatch(resetWallet()));
+  // Switching wallets in place leaves the same stale database behind that a
+  // lock would, so the wallet being opened next must not inherit it.
+  resyncAfterWalletClosed('MenuBar.openSavedWallet');
   navigate(ROUTE_PATHS.landing, { state: { openWalletId: walletId } });
 }
 
@@ -382,6 +386,7 @@ export function useMenuBar(): void {
           }
           EcKeyManager.lock();
           flushSync(() => dispatch(resetWallet()));
+          resyncAfterWalletClosed('MenuBar.openWalletFile');
         }),
       openSavedWallet: (savedWalletId) =>
         openSavedWalletFromMenu(
@@ -403,6 +408,7 @@ export function useMenuBar(): void {
         EcKeyManager.lock();
         dispatch(resetWallet());
         navigate(ROUTE_PATHS.landing);
+        resyncAfterWalletClosed('MenuBar.lockWallet');
       },
       receive: () => {
         if (walletId) navigate(ROUTE_PATHS.receive);
