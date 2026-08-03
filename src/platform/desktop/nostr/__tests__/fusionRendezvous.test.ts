@@ -2,6 +2,17 @@ import { describe, expect, it } from 'vitest';
 
 import type { RoundMessage, RoundTransport } from '../fusionSession';
 import { negotiateFusionRound } from '../fusionRendezvous';
+import { electCoordinator } from '../fusion';
+
+/** Roles come from the real election, never from pubkey order. Restating the
+ *  rule here is what made this whole file green-but-meaningless once: peers
+ *  were handed roles the election did not agree with, so the negotiation under
+ *  test never ran the path the test was named after. */
+function coordinatorOf(peers: string[]): string {
+  const elected = electCoordinator(peers);
+  if (!elected) throw new Error('no coordinator elected for this set');
+  return elected;
+}
 
 type Handler = (from: string, message: RoundMessage) => void;
 
@@ -63,7 +74,11 @@ const peer = (n: number) => n.toString(16).padStart(64, '0');
 
 describe('P2P Fusion coordinator-agreed round start', () => {
   it('converges on the coordinator participant set despite a partial relay view', async () => {
-    const [a, b, c] = [peer(1), peer(2), peer(3)];
+    const all = [peer(1), peer(2), peer(3)].sort();
+    // The elected coordinator holds the full view; one of the others is missing
+    // a peer entirely, which is what a partial relay view looks like.
+    const lead = coordinatorOf(all);
+    const [partial, full] = all.filter((pubkey) => pubkey !== lead);
     const hub = new Hub();
     const common = {
       network: 'chipnet' as const,
@@ -73,39 +88,45 @@ describe('P2P Fusion coordinator-agreed round start', () => {
       coordinatorSettleMs: 10,
     };
 
-    const [ra, rb, rc] = await Promise.all([
+    const [rLead, rPartial, rFull] = await Promise.all([
       negotiateFusionRound(
         {
           ...common,
-          myPubkey: a,
-          candidates: [a, b, c],
+          myPubkey: lead,
+          candidates: all,
           sessionFactory: () => 'f'.repeat(64),
         },
-        hub.transportFor(a)
+        hub.transportFor(lead)
       ),
       negotiateFusionRound(
-        { ...common, myPubkey: b, candidates: [a, b] },
-        hub.transportFor(b)
+        { ...common, myPubkey: partial, candidates: [lead, partial] },
+        hub.transportFor(partial)
       ),
       negotiateFusionRound(
-        { ...common, myPubkey: c, candidates: [a, b, c] },
-        hub.transportFor(c)
+        { ...common, myPubkey: full, candidates: all },
+        hub.transportFor(full)
       ),
     ]);
 
-    expect(new Set([ra.session, rb.session, rc.session])).toEqual(
-      new Set(['f'.repeat(64)])
-    );
-    expect(ra.participants).toEqual([a, b, c]);
-    expect(rb.participants).toEqual([a, b, c]);
-    expect(rc.participants).toEqual([a, b, c]);
-    expect(ra.coordinator).toBe(a);
+    // The peer that could only see two of us still ends up in the round of three.
+    expect(
+      new Set([rLead.session, rPartial.session, rFull.session])
+    ).toEqual(new Set(['f'.repeat(64)]));
+    expect(rLead.participants).toEqual(all);
+    expect(rPartial.participants).toEqual(all);
+    expect(rFull.participants).toEqual(all);
+    expect(rLead.coordinator).toBe(lead);
+    expect(rPartial.coordinator).toBe(lead);
   });
 
-  it('yields to a lower valid coordinator that was absent from the local relay view', async () => {
-    const [a, b, c] = [peer(1), peer(2), peer(3)];
+  it('yields to a better coordinator that was absent from the local relay view', async () => {
+    const all = [peer(1), peer(2), peer(3)].sort();
+    // The two peers that can see each other but NOT the eventual coordinator
+    // start their own round; the coordinator's proposal lands late and wins.
+    const lead = coordinatorOf(all);
+    const [x, y] = all.filter((pubkey) => pubkey !== lead);
     const hub = new Hub((from, _to, message) =>
-      from === a && message.type === 'round_proposal' ? 900 : 0
+      from === lead && message.type === 'round_proposal' ? 900 : 0
     );
     const common = {
       network: 'chipnet' as const,
@@ -115,47 +136,56 @@ describe('P2P Fusion coordinator-agreed round start', () => {
       coordinatorSettleMs: 1_200,
     };
 
-    const [ra, rb, rc] = await Promise.all([
+    const [rLead, rx, ry] = await Promise.all([
       negotiateFusionRound(
         {
           ...common,
-          myPubkey: a,
-          candidates: [a, b, c],
+          myPubkey: lead,
+          candidates: all,
           sessionFactory: () => 'a'.repeat(64),
         },
-        hub.transportFor(a)
+        hub.transportFor(lead)
       ),
       negotiateFusionRound(
         {
           ...common,
-          myPubkey: b,
-          candidates: [b, c],
+          myPubkey: x,
+          candidates: [x, y],
           sessionFactory: () => 'b'.repeat(64),
         },
-        hub.transportFor(b)
+        hub.transportFor(x)
       ),
       negotiateFusionRound(
-        { ...common, myPubkey: c, candidates: [b, c] },
-        hub.transportFor(c)
+        { ...common, myPubkey: y, candidates: [x, y] },
+        hub.transportFor(y)
       ),
     ]);
 
-    expect([ra, rb, rc].map((round) => round.coordinator)).toEqual([a, a, a]);
-    expect([ra, rb, rc].map((round) => round.session)).toEqual([
+    // Both abandon the round they had already started for the better one.
+    expect([rLead, rx, ry].map((round) => round.coordinator)).toEqual([
+      lead,
+      lead,
+      lead,
+    ]);
+    expect([rLead, rx, ry].map((round) => round.session)).toEqual([
       'a'.repeat(64),
       'a'.repeat(64),
       'a'.repeat(64),
     ]);
-    expect(rb.participants).toEqual([a, b, c]);
+    expect(rx.participants).toEqual(all);
   });
 
   it(
-    're-elects when the lowest-pubkey coordinator is a ghost that never proposes',
+    're-elects when the elected coordinator is a ghost that never proposes',
     async () => {
-      // `ghost` wins election but is an abandoned round's stored announcement, so
-      // it never proposes. Without failover every live peer waits on it until the
-      // whole round dies with "round start timed out".
-      const [ghost, b, c] = [peer(1), peer(2), peer(3)];
+      // The ghost must be the peer the election actually picks, or no failover
+      // happens and this test passes without exercising anything. It stands for
+      // an abandoned round's stored announcement: still elected, never present.
+      const all = [peer(1), peer(2), peer(3)].sort();
+      const ghost = coordinatorOf(all);
+      const live = all.filter((pubkey) => pubkey !== ghost);
+      const survivor = coordinatorOf(live); // who takes over once the ghost is dropped
+      const other = live.find((pubkey) => pubkey !== survivor) as string;
       const hub = new Hub();
       const common = {
         network: 'chipnet' as const,
@@ -165,45 +195,51 @@ describe('P2P Fusion coordinator-agreed round start', () => {
         coordinatorSettleMs: 50,
       };
 
-      const [rb, rc] = await Promise.all([
+      const [rSurvivor, rOther] = await Promise.all([
         negotiateFusionRound(
           {
             ...common,
-            myPubkey: b,
-            candidates: [ghost, b, c],
+            myPubkey: survivor,
+            candidates: all,
             sessionFactory: () => 'b'.repeat(64),
           },
-          hub.transportFor(b)
+          hub.transportFor(survivor)
         ),
         negotiateFusionRound(
-          { ...common, myPubkey: c, candidates: [ghost, b, c] },
-          hub.transportFor(c)
+          { ...common, myPubkey: other, candidates: all },
+          hub.transportFor(other)
         ),
       ]);
 
-      expect([rb.coordinator, rc.coordinator]).toEqual([b, b]);
-      expect(rb.participants).toEqual([b, c]);
-      expect(rc.participants).toEqual([b, c]);
+      expect([rSurvivor.coordinator, rOther.coordinator]).toEqual([
+        survivor,
+        survivor,
+      ]);
+      expect(rSurvivor.participants).toEqual(live);
+      expect(rOther.participants).toEqual(live);
     },
     20_000
   );
 
   it('aborts instead of entering registration when a proposed peer never acknowledges', async () => {
-    const [a, missing] = [peer(1), peer(2)];
+    // We must be the one coordinating, or we sit waiting for a proposal and the
+    // failure under test (nobody ACKs our own proposal) never happens.
+    const pair = [peer(1), peer(2)].sort();
+    const lead = coordinatorOf(pair);
     const hub = new Hub();
 
     await expect(
       negotiateFusionRound(
         {
-          myPubkey: a,
-          candidates: [a, missing],
+          myPubkey: lead,
+          candidates: pair,
           network: 'chipnet',
           tier: 10_000,
           epoch: 123,
           timeoutMs: 30,
           sessionFactory: () => 'e'.repeat(64),
         },
-        hub.transportFor(a)
+        hub.transportFor(lead)
       )
     ).rejects.toThrow('round acknowledgments timed out');
 
