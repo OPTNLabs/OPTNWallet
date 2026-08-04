@@ -17,6 +17,7 @@ import TransactionDetailPopup from './TransactionDetailPopup';
 import QuantumrootTrackingService from '../../services/QuantumrootTrackingService';
 import WalletScreen from '../../components/ui/WalletScreen';
 import type { TransactionHistoryItem } from '../../types/types';
+import { isFusionTransaction } from '../../platform/desktop/fusionCoinDepth';
 
 const EMPTY_TRANSACTIONS: TransactionHistoryItem[] = [];
 
@@ -163,7 +164,13 @@ const TransactionHistory: React.FC = () => {
             <EmptyState message="No transactions available yet." />
           ) : (
             <ul className="h-full space-y-3 overflow-y-auto overscroll-contain pr-1">
-              {paginatedTransactions.map((tx, id) => (
+              {paginatedTransactions.map((tx, id) => {
+                const walletIdNum = Number(wallet_id);
+                const fused =
+                  Number.isFinite(walletIdNum) &&
+                  walletIdNum > 0 &&
+                  isFusionTransaction(walletIdNum, tx.tx_hash);
+                return (
                 <li key={id + tx.tx_hash}>
                   <button
                     type="button"
@@ -177,6 +184,11 @@ const TransactionHistory: React.FC = () => {
                         </div>
                         <div className="font-mono text-sm break-all wallet-text-strong">
                           {shortenTxHash(tx.tx_hash)}
+                          {fused && (
+                            <span className="ml-2 align-middle text-[10px] font-semibold bg-emerald-500/20 text-emerald-400 px-1.5 py-0.5 rounded">
+                              Fused
+                            </span>
+                          )}
                         </div>
                       </div>
                       {tx.height > 0 ? (
@@ -198,7 +210,8 @@ const TransactionHistory: React.FC = () => {
                     </div>
                   </button>
                 </li>
-              ))}
+                );
+              })}
             </ul>
           )}
         </div>

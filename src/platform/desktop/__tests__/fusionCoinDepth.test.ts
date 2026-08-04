@@ -3,8 +3,10 @@ import {
   clearFusionDepth,
   coinDepth,
   coinsBelowDepth,
+  isFusionTransaction,
   pruneSpentDepth,
   recordFusionRound,
+  recordFusionTxid,
 } from '../fusionCoinDepth';
 
 const utxo = (txid: string, pos = 0) => ({ tx_hash: txid, tx_pos: pos });
@@ -83,6 +85,16 @@ describe('per-coin fuse depth', () => {
     // The input was consumed by the round and can never reappear.
     expect(coinDepth(1, 'spent:0')).toBe(0);
     expect(coinDepth(1, 'made:0')).toBe(1);
+  });
+
+  it('remembers fusion txids for history labels after outputs are spent', () => {
+    const txid = 'ab'.repeat(32);
+    expect(isFusionTransaction(1, txid)).toBe(false);
+    recordFusionTxid(1, txid);
+    expect(isFusionTransaction(1, txid)).toBe(true);
+    // Depth outpoints still mark the creating tx while unspent.
+    recordFusionRound(1, ['in:0'], [`${txid}:0`]);
+    expect(isFusionTransaction(1, txid)).toBe(true);
   });
 
   it('keeps wallets isolated from each other', () => {

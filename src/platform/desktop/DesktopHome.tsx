@@ -38,6 +38,7 @@ import { SATSINBITCOIN } from '../../utils/constants';
 import SettingsRow from '../../components/ui/SettingsRow';
 import EmptyState from '../../components/ui/EmptyState';
 import { shortenTxHash } from '../../utils/shortenHash';
+import { isFusionTransaction } from './fusionCoinDepth';
 import { preloadTokenMetadata } from '../../hooks/useSharedTokenMetadata';
 import {
   getBarcodeScannerErrorMessage,
@@ -186,9 +187,9 @@ const Home: React.FC = () => {
     } catch (error) {
       logError('Home.handleRefresh', error, { walletId: currentWalletId });
     } finally {
-      if (isActiveWalletSession(walletSession)) {
-        dispatch(setFetchingUTXOs(false));
-      }
+      // Always clear Syncing for this click — even if the wallet session was
+      // cancelled mid-flight (HMR / lock). Leaving the flag true freezes the button.
+      dispatch(setFetchingUTXOs(false));
     }
   }, [
     currentWalletId,
@@ -378,7 +379,11 @@ const Home: React.FC = () => {
             />
             <div className="space-y-2.5">
               {recentTransactions.length > 0 ? (
-                recentTransactions.map((tx) => (
+                recentTransactions.map((tx) => {
+                  const fused =
+                    !!currentWalletId &&
+                    isFusionTransaction(currentWalletId, tx.tx_hash);
+                  return (
                   <SettingsRow
                     key={tx.tx_hash}
                     title={shortenTxHash(tx.tx_hash)}
@@ -388,14 +393,22 @@ const Home: React.FC = () => {
                         : 'Pending confirmation'
                     }
                     right={
-                      <span className="wallet-muted">
-                        {tx.height > 0 ? 'Confirmed' : 'Pending'}
+                      <span className="flex items-center gap-1.5">
+                        {fused && (
+                          <span className="text-[10px] font-semibold bg-emerald-500/20 text-emerald-400 px-1.5 py-0.5 rounded">
+                            Fused
+                          </span>
+                        )}
+                        <span className="wallet-muted">
+                          {tx.height > 0 ? 'Confirmed' : 'Pending'}
+                        </span>
                       </span>
                     }
                     compact
                     onClick={() => navigate(`/transactions/${currentWalletId}`)}
                   />
-                ))
+                  );
+                })
               ) : (
                 <EmptyState message="No recent activity yet." />
               )}
