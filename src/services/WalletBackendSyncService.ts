@@ -7,6 +7,7 @@ import {
   readStorageItem,
   writeStorageItem,
 } from '../utils/browserStorage';
+import { toArrayBufferBytes } from '../utils/arrayBuffer';
 
 type BackendRegistrationPayload = {
   account_id?: string;
@@ -87,7 +88,10 @@ function randomId(): string {
 async function sha256Hex(input: string): Promise<string> {
   const bytes = new TextEncoder().encode(input);
   if (typeof crypto !== 'undefined' && crypto.subtle) {
-    const digest = await crypto.subtle.digest('SHA-256', bytes);
+    const digest = await crypto.subtle.digest(
+      'SHA-256',
+      toArrayBufferBytes(bytes)
+    );
     return Array.from(new Uint8Array(digest))
       .map((b) => b.toString(16).padStart(2, '0'))
       .join('');
@@ -122,7 +126,9 @@ async function getAccountId(
   receiveXpub: string,
   changeXpub: string
 ): Promise<string> {
-  const fingerprint = await sha256Hex(`${network}:${receiveXpub}:${changeXpub}`);
+  const fingerprint = await sha256Hex(
+    `${network}:${receiveXpub}:${changeXpub}`
+  );
   return `acct_${fingerprint.slice(0, 24)}`;
 }
 
@@ -130,11 +136,17 @@ function getNetworkLabel(network: Network): 'mainnet' | 'chipnet' {
   return network === Network.MAINNET ? 'mainnet' : 'chipnet';
 }
 
-function getAccountStorageKey(network: Network, receiveXpub: string, changeXpub: string): string {
+function getAccountStorageKey(
+  network: Network,
+  receiveXpub: string,
+  changeXpub: string
+): string {
   return `${ACCOUNT_ID_KEY_PREFIX}${network}:${receiveXpub.slice(0, 16)}:${changeXpub.slice(0, 16)}`;
 }
 
-async function buildRegistrationPayload(walletId: number): Promise<BackendRegistrationPayload | null> {
+async function buildRegistrationPayload(
+  walletId: number
+): Promise<BackendRegistrationPayload | null> {
   const walletManager = WalletManager();
   const walletInfo = await walletManager.getWalletInfo(walletId);
   if (!walletInfo) {
@@ -142,7 +154,9 @@ async function buildRegistrationPayload(walletId: number): Promise<BackendRegist
   }
 
   const network =
-    walletInfo.networkType === Network.MAINNET ? Network.MAINNET : Network.CHIPNET;
+    walletInfo.networkType === Network.MAINNET
+      ? Network.MAINNET
+      : Network.CHIPNET;
   const xpubs = await KeyService.getWalletXpubs(walletId, 0);
   const receiveXpub = xpubs.receive;
   const changeXpub = xpubs.change;
@@ -153,7 +167,8 @@ async function buildRegistrationPayload(walletId: number): Promise<BackendRegist
   const installationId = getInstallationId();
   const storageKey = getAccountStorageKey(network, receiveXpub, changeXpub);
   const storedAccountId = readStorage(storageKey) || undefined;
-  const accountId = storedAccountId || (await getAccountId(network, receiveXpub, changeXpub));
+  const accountId =
+    storedAccountId || (await getAccountId(network, receiveXpub, changeXpub));
 
   return {
     account_id: accountId,
@@ -186,7 +201,10 @@ async function buildContext(walletId: number): Promise<{
   };
 }
 
-async function postJson(url: string, body: unknown): Promise<BackendRegistrationResponse> {
+async function postJson(
+  url: string,
+  body: unknown
+): Promise<BackendRegistrationResponse> {
   const response = await fetch(url, {
     method: 'POST',
     headers: {
@@ -196,7 +214,9 @@ async function postJson(url: string, body: unknown): Promise<BackendRegistration
   });
 
   if (!response.ok) {
-    throw new Error(`Backend registration failed with status ${response.status}`);
+    throw new Error(
+      `Backend registration failed with status ${response.status}`
+    );
   }
 
   return (await response.json()) as BackendRegistrationResponse;
@@ -238,7 +258,9 @@ async function pingHealth(url: string): Promise<void> {
   });
 
   if (!response.ok) {
-    throw new Error(`Backend health check failed with status ${response.status}`);
+    throw new Error(
+      `Backend health check failed with status ${response.status}`
+    );
   }
 }
 
@@ -283,7 +305,10 @@ const WalletBackendSyncService = {
     try {
       const context = await buildContext(walletId);
       if (!context || !context.accountId) return [];
-      const response = await getJson<{ ok?: boolean; notifications?: BackendNotification[] }>(
+      const response = await getJson<{
+        ok?: boolean;
+        notifications?: BackendNotification[];
+      }>(
         `${context.baseUrl}/wallets/${encodeURIComponent(context.accountId)}/${encodeURIComponent(context.installationId)}/notifications?limit=20`
       );
       return response.notifications ?? [];
@@ -292,7 +317,11 @@ const WalletBackendSyncService = {
     }
   },
 
-  async observeTransaction(walletId: number, txid: string, rawTx: string): Promise<void> {
+  async observeTransaction(
+    walletId: number,
+    txid: string,
+    rawTx: string
+  ): Promise<void> {
     try {
       const context = await buildContext(walletId);
       if (!context || !context.accountId) return;

@@ -5,7 +5,7 @@ on:
       - 'docs/**'
       - '**/*.md'
   push:
-    branches: [dev]
+    branches: [main, staging, dev]
     paths-ignore:
       - 'docs/**'
       - '**/*.md'
@@ -67,6 +67,9 @@ jobs:
       - name: Dependency audit (prod, critical+)
         run: npm audit --omit=dev --audit-level=critical
 
+      - name: Dependency policy
+        run: npm run deps:check
+
   web-ci:
     needs: [secrets-scan, dependency-audit]
     runs-on: ubuntu-latest
@@ -93,20 +96,11 @@ jobs:
           done
           exit 1
 
-      - name: Lint (Core)
-        run: npm run lint:core
+      - name: Maintained verification
+        run: npm run verify
 
-      - name: Typecheck (Core)
-        run: npm run typecheck:core
-
-      - name: Unit tests
-        run: npm run test:core
-
-      - name: Addon manifest validation
-        run: npm run addons:validate
-
-      - name: Build web (sanity)
-        run: npm run build
+      - name: Security regression tests
+        run: npm run security:test
 
       - name: Upload web dist
         if: github.event_name == 'push' && always()

@@ -4,6 +4,7 @@ import React, { useState } from 'react';
 import { UTXO } from '../../../types/types';
 import UTXOCard from '../../../components/UTXOCard';
 import Popup from './Popup';
+import { useI18n } from '../../../i18n/useI18n';
 
 interface UTXOSelectionProps {
   // selectedAddresses: string[];
@@ -42,6 +43,7 @@ const UTXOSelection: React.FC<UTXOSelectionProps> = ({
   setShowPaperWalletUTXOsPopup,
   closePopups,
 }) => {
+  const { t } = useI18n();
   // State for selected view in Regular UTXOs popup
   const [regularView, setRegularView] = useState<'Wallet' | 'Contract'>(
     'Wallet'
@@ -77,7 +79,9 @@ const UTXOSelection: React.FC<UTXOSelectionProps> = ({
       <div className="space-y-4">
         {fungibleUtxos.length > 0 && (
           <div>
-            <h6 className="font-semibold mb-2">Fungible Tokens</h6>
+            <h6 className="font-semibold mb-2">
+              {t('builder.fungibleTokens')}
+            </h6>
             {fungibleUtxos.map((utxo) => (
               <button
                 key={utxo.id}
@@ -98,7 +102,9 @@ const UTXOSelection: React.FC<UTXOSelectionProps> = ({
         )}
         {nonFungibleUtxos.length > 0 && (
           <div>
-            <h6 className="font-semibold mb-2">Non-Fungible Tokens</h6>
+            <h6 className="font-semibold mb-2">
+              {t('builder.nonFungibleTokens')}
+            </h6>
             {nonFungibleUtxos.map((utxo) => (
               <button
                 key={utxo.id}
@@ -131,13 +137,13 @@ const UTXOSelection: React.FC<UTXOSelectionProps> = ({
             className="wallet-btn-primary text-sm font-bold mb-2"
             onClick={() => setShowRegularUTXOsPopup(true)}
           >
-            BCH funds
+            {t('builder.bchFunds')}
           </button>
         )}
         {showRegularUTXOsPopup && (
           <Popup closePopups={closePopups}>
             <h4 className="text-md font-semibold text-center mb-4">
-              BCH funds
+              {t('builder.bchFunds')}
             </h4>
             <div className="flex justify-between mb-4">
               <button
@@ -148,7 +154,7 @@ const UTXOSelection: React.FC<UTXOSelectionProps> = ({
                 }`}
                 onClick={() => setRegularView('Wallet')}
               >
-                Wallet
+                {t('builder.wallet')}
               </button>
               <button
                 className={`py-2 px-4 rounded ${
@@ -158,14 +164,14 @@ const UTXOSelection: React.FC<UTXOSelectionProps> = ({
                 }`}
                 onClick={() => setRegularView('Contract')}
               >
-                Contract
+                {t('builder.contract')}
               </button>
             </div>
             <div className="overflow-y-auto max-h-80 space-y-4">
               {regularView === 'Wallet' && (
                 <div>
                   <h5 className="font-semibold flex flex-col items-center mb-2">
-                    Wallet funds
+                    {t('builder.walletFunds')}
                   </h5>
                   {filteredRegularUTXOs.map((utxo) => (
                     <button
@@ -189,7 +195,7 @@ const UTXOSelection: React.FC<UTXOSelectionProps> = ({
               {regularView === 'Contract' && (
                 <div>
                   <h5 className="font-semibold flex flex-col items-center mb-2">
-                    Contract funds
+                    {t('builder.contractFunds')}
                   </h5>
                   {contractRegularUTXOs.map((utxo) => (
                     <button
@@ -223,13 +229,13 @@ const UTXOSelection: React.FC<UTXOSelectionProps> = ({
             className="wallet-btn-primary text-sm font-bold mb-2"
             onClick={() => setShowCashTokenUTXOsPopup(true)}
           >
-            Tokens & collectibles
+            {t('builder.tokensCollectibles')}
           </button>
         )}
         {showCashTokenUTXOsPopup && (
           <Popup closePopups={closePopups}>
             <h4 className="text-md font-semibold text-center mb-4">
-              Tokens & collectibles
+              {t('builder.tokensCollectibles')}
             </h4>
             <div className="flex justify-between mb-4">
               <button
@@ -240,7 +246,7 @@ const UTXOSelection: React.FC<UTXOSelectionProps> = ({
                 }`}
                 onClick={() => setCashTokenView('Wallet')}
               >
-                Wallet
+                {t('builder.wallet')}
               </button>
               <button
                 className={`py-2 px-4 rounded ${
@@ -250,14 +256,14 @@ const UTXOSelection: React.FC<UTXOSelectionProps> = ({
                 }`}
                 onClick={() => setCashTokenView('Contract')}
               >
-                Contract
+                {t('builder.contract')}
               </button>
             </div>
             <div className="overflow-y-auto max-h-80 space-y-4">
               {cashTokenView === 'Wallet' && (
                 <div>
                   <h5 className="font-semibold flex flex-col items-center mb-2">
-                    Wallet assets
+                    {t('builder.walletAssets')}
                   </h5>
                   <TokenSection
                     utxos={filteredCashTokenUTXOs}
@@ -269,7 +275,7 @@ const UTXOSelection: React.FC<UTXOSelectionProps> = ({
               {cashTokenView === 'Contract' && (
                 <div>
                   <h5 className="font-semibold flex flex-col items-center mb-2">
-                    Contract assets
+                    {t('builder.contractAssets')}
                   </h5>
                   <TokenSection
                     utxos={contractCashTokenUTXOs}
@@ -290,12 +296,14 @@ const UTXOSelection: React.FC<UTXOSelectionProps> = ({
             className="wallet-btn-primary font-bold text-sm mb-2 mr-2"
             onClick={() => setShowPaperWalletUTXOsPopup(true)}
           >
-            Paper Wallet
+            {t('builder.paperWallet')}
           </button>
         )}
         {showPaperWalletUTXOsPopup && (
           <Popup closePopups={closePopups}>
-            <h4 className="text-md font-semibold mb-4">Paper Wallet UTXOs</h4>
+            <h4 className="text-md font-semibold mb-4">
+              {t('builder.paperWalletUtxos')}
+            </h4>
             <div className="overflow-y-auto max-h-80">
               {paperWalletUTXOs.map((utxo) => (
                 <button

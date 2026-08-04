@@ -62,7 +62,9 @@ export function useHomeSubscriptions({
           }
         }
         try {
-          DatabaseService().scheduleDatabaseSave(currentWalletId);
+          if (currentWalletId !== null) {
+            DatabaseService().scheduleDatabaseSave(currentWalletId);
+          }
         } catch (error) {
           logError('Home.runHeaderRefresh.saveDatabase', error);
         }

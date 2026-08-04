@@ -10,6 +10,8 @@ import walletReconfigurationReducer, {
   setWalletReconfigurationStage,
 } from '../../state/slices/walletReconfigurationSlice';
 import WalletReconfigurationOverlay from '../WalletReconfigurationOverlay';
+import preferencesReducer from '../../state/slices/preferencesSlice';
+import { I18nProvider } from '../../i18n/I18nProvider';
 
 function renderOverlay(
   operation: 'running' | 'error',
@@ -27,14 +29,19 @@ function renderOverlay(
   configure(store);
   return renderToStaticMarkup(
     <Provider store={store}>
-      <WalletReconfigurationOverlay />
+      <I18nProvider>
+        <WalletReconfigurationOverlay />
+      </I18nProvider>
     </Provider>
   );
 }
 
 function createStore() {
   return configureStore({
-    reducer: { walletReconfiguration: walletReconfigurationReducer },
+    reducer: {
+      walletReconfiguration: walletReconfigurationReducer,
+      preferences: preferencesReducer,
+    },
   });
 }
 

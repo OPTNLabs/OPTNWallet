@@ -4,6 +4,7 @@
 // surfaces an error and the caller's "Upload" path remains available.
 import React, { useEffect, useRef, useState } from 'react';
 import jsQR from 'jsqr';
+import { useI18n } from '../../i18n/useI18n';
 
 interface Props {
   onResult: (text: string) => void;
@@ -11,6 +12,7 @@ interface Props {
 }
 
 export const CameraQrScanner: React.FC<Props> = ({ onResult, onClose }) => {
+  const { t } = useI18n();
   const videoRef = useRef<HTMLVideoElement>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -23,7 +25,13 @@ export const CameraQrScanner: React.FC<Props> = ({ onResult, onClose }) => {
 
     const tick = () => {
       const video = videoRef.current;
-      if (!cancelled && video && video.readyState >= 2 && ctx && video.videoWidth) {
+      if (
+        !cancelled &&
+        video &&
+        video.readyState >= 2 &&
+        ctx &&
+        video.videoWidth
+      ) {
         canvas.width = video.videoWidth;
         canvas.height = video.videoHeight;
         ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
@@ -48,7 +56,11 @@ export const CameraQrScanner: React.FC<Props> = ({ onResult, onClose }) => {
           raf = requestAnimationFrame(tick);
         }
       } catch (err) {
-        setError(err instanceof Error ? err.message : 'Camera unavailable');
+        setError(
+          err instanceof Error
+            ? err.message
+            : t('camera.unavailable', { error: '' })
+        );
       }
     })();
 
@@ -57,7 +69,7 @@ export const CameraQrScanner: React.FC<Props> = ({ onResult, onClose }) => {
       cancelAnimationFrame(raf);
       stream?.getTracks().forEach((track) => track.stop());
     };
-  }, [onResult]);
+  }, [onResult, t]);
 
   return (
     <div
@@ -68,18 +80,27 @@ export const CameraQrScanner: React.FC<Props> = ({ onResult, onClose }) => {
         className="w-full max-w-sm space-y-3 rounded-xl border border-[var(--wallet-border)] bg-[var(--wallet-surface)] p-4"
         onClick={(event) => event.stopPropagation()}
       >
-        <p className="text-sm font-semibold wallet-text-strong">Scan QR with camera</p>
+        <p className="text-sm font-semibold wallet-text-strong">
+          {t('camera.scan')}
+        </p>
         {error ? (
-          <p className="text-xs text-red-400">Camera unavailable: {error}. Use Upload instead.</p>
+          <p className="text-xs text-red-400">
+            {t('camera.unavailable', { error })}
+          </p>
         ) : (
-          <video ref={videoRef} playsInline muted className="aspect-square w-full rounded-lg bg-black object-cover" />
+          <video
+            ref={videoRef}
+            playsInline
+            muted
+            className="aspect-square w-full rounded-lg bg-black object-cover"
+          />
         )}
         <button
           type="button"
           onClick={onClose}
           className="w-full rounded-md border border-[var(--wallet-border)] py-2 text-sm font-semibold wallet-text-strong"
         >
-          Cancel
+          {t('camera.cancel')}
         </button>
       </div>
     </div>

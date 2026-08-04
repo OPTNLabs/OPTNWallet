@@ -20,6 +20,7 @@ import { PREFIX, SATSINBITCOIN } from '../../../utils/constants';
 import { shortenTxHash } from '../../../utils/shortenHash';
 import { ensureUint8Array } from '../../../utils/binary';
 import { type BroadcastState } from '../../../services/TransactionService';
+import { useI18n } from '../../../i18n/useI18n';
 
 interface ErrorAndStatusPopupsProps {
   showRawTxPopup: boolean;
@@ -42,7 +43,12 @@ const ErrorAndStatusPopups: React.FC<ErrorAndStatusPopupsProps> = ({
   broadcastState,
   closePopups,
 }) => {
+  const { t } = useI18n();
   const explorerChoice = useSelector(selectExplorerChoice);
+  const prefixLength =
+    currentNetwork === Network.MAINNET
+      ? PREFIX.mainnet.length
+      : PREFIX.chipnet.length;
   const toCashAddress = (
     bytecode: Uint8Array,
     prefix: 'bitcoincash' | 'bchtest' | 'bchreg'
@@ -93,7 +99,7 @@ const ErrorAndStatusPopups: React.FC<ErrorAndStatusPopupsProps> = ({
       {showRawTxPopup && (
         <Popup closePopups={closePopups}>
           <h3 className="text-lg font-semibold flex flex-col items-center mb-2">
-            Raw Transaction Details
+            {t('builder.rawTransactionDetails')}
           </h3>
           {decodedTx ? (
             <div className="text-sm max-h-[60vh] overflow-y-auto">
@@ -105,11 +111,13 @@ const ErrorAndStatusPopups: React.FC<ErrorAndStatusPopupsProps> = ({
               </p> */}
 
               <div className="mt-2">
-                <strong className="flex flex-col items-center">Inputs</strong>
+                <strong className="flex flex-col items-center">
+                  {t('builder.inputs')}
+                </strong>
                 {decodedTx.inputs.map((input, idx) => (
                   <div key={idx} className="ml-4 mt-1">
                     <p>
-                      • txid:{' '}
+                      • {t('txDetails.txid')}:{' '}
                       {shortenTxHash(
                         Buffer.from(input.outpointTransactionHash)
                           .reverse()
@@ -117,14 +125,18 @@ const ErrorAndStatusPopups: React.FC<ErrorAndStatusPopupsProps> = ({
                         // PREFIX[currentNetwork].length
                       )}
                     </p>
-                    <p>• index: {input.outpointIndex}</p>
+                    <p>
+                      • {t('txDetails.index')}: {input.outpointIndex}
+                    </p>
                     {/* <p>• sequence: {input.sequenceNumber}</p> */}
                   </div>
                 ))}
               </div>
 
               <div className="mt-2">
-                <strong className="flex flex-col items-center">Outputs</strong>
+                <strong className="flex flex-col items-center">
+                  {t('builder.outputs')}
+                </strong>
                 {decodedTx.outputs.map((output, idx) => {
                   const value = output.valueSatoshis;
                   const lockingBytecode = ensureUint8Array(
@@ -138,12 +150,14 @@ const ErrorAndStatusPopups: React.FC<ErrorAndStatusPopupsProps> = ({
                       key={idx}
                       className="ml-4 mt-2 border-b pb-2 space-y-1 text-sm"
                     >
-                      <p>• {Number(value) / SATSINBITCOIN} BCH</p>
+                      <p>
+                        • {Number(value) / SATSINBITCOIN} {t('txDetails.bch')}
+                      </p>
 
                       {isOpReturn ? (
                         <>
                           <p className="font-semibold wallet-muted">
-                            OP_RETURN Output:
+                            {t('builder.opReturnOutput')}:
                           </p>
                           {parsePushData(lockingBytecode).map((entry, i) => (
                             <p
@@ -157,7 +171,7 @@ const ErrorAndStatusPopups: React.FC<ErrorAndStatusPopupsProps> = ({
                       ) : (
                         <>
                           <p>
-                            • Address:{' '}
+                            • {t('builder.address')}:{' '}
                             <span className="font-mono wallet-link break-all">
                               {shortenTxHash(
                                 toCashAddress(
@@ -166,7 +180,7 @@ const ErrorAndStatusPopups: React.FC<ErrorAndStatusPopupsProps> = ({
                                     ? 'bitcoincash'
                                     : 'bchtest'
                                 ),
-                                PREFIX[currentNetwork].length
+                                prefixLength
                               )}
                             </span>
                           </p>
@@ -176,14 +190,14 @@ const ErrorAndStatusPopups: React.FC<ErrorAndStatusPopupsProps> = ({
                       {token && (
                         <div className="wallet-surface-strong border border-[var(--wallet-border)] rounded p-2 mt-2 space-y-1 text-xs">
                           <div>
-                            <strong>Token Category:</strong>{' '}
+                            <strong>{t('builder.tokenCategoryLabel')}:</strong>{' '}
                             <span className="font-mono break-all">
                               {binToHex(ensureUint8Array(token.category))}
                             </span>
                           </div>
-                          {token.amount && (
+                          {token.amount !== undefined && (
                             <div>
-                              <strong>Fungible Amount:</strong>{' '}
+                              <strong>{t('builder.fungibleAmount')}:</strong>{' '}
                               {typeof token.amount === 'bigint'
                                 ? token.amount.toString()
                                 : BigInt(token.amount).toString()}
@@ -192,12 +206,12 @@ const ErrorAndStatusPopups: React.FC<ErrorAndStatusPopupsProps> = ({
                           {token.nft && (
                             <>
                               <div>
-                                <strong>NFT Capability:</strong>{' '}
+                                <strong>{t('builder.nftCapability')}:</strong>{' '}
                                 {token.nft.capability}
                               </div>
                               {token.nft.commitment && (
                                 <div>
-                                  <strong>NFT Commitment:</strong>{' '}
+                                  <strong>{t('builder.nftCommitment')}:</strong>{' '}
                                   <span className="font-mono break-all">
                                     {binToHex(
                                       ensureUint8Array(token.nft.commitment)
@@ -217,7 +231,7 @@ const ErrorAndStatusPopups: React.FC<ErrorAndStatusPopupsProps> = ({
           ) : (
             <>
               <p className="text-sm mb-2 wallet-danger-text">
-                Unable to decode transaction. Showing raw hex:
+                {t('builder.decodeFailed')}
               </p>
               <textarea
                 readOnly
@@ -235,21 +249,21 @@ const ErrorAndStatusPopups: React.FC<ErrorAndStatusPopupsProps> = ({
             <div className="wallet-accent-icon text-4xl mb-4">✅</div>
             <h3 className="text-xl font-bold mb-2">
               {broadcastState === 'submitted'
-                ? 'Transaction Submitted'
-                : 'Transaction Successful'}
+                ? t('builder.transactionSubmitted')
+                : t('builder.transactionSuccessful')}
             </h3>
             <p className="text-center mb-4">
               {broadcastState === 'submitted'
-                ? 'Your transaction has been submitted. Use this txid as the reference and avoid sending it again.'
-                : 'Your transaction has been broadcasted successfully!'}
+                ? t('builder.transactionSubmittedDescription')
+                : t('builder.broadcastedSuccess')}
             </p>
             <div className="flex items-center mb-4">
-              <strong className="mr-2">TX ID:</strong>
+              <strong className="mr-2">{t('builder.txId')}:</strong>
               <span className="font-mono">{shortenTxHash(transactionId)}</span>
               <button
                 onClick={() => navigator.clipboard.writeText(transactionId)}
                 className="wallet-btn-secondary ml-2 px-2 py-1"
-                title="Copy to clipboard"
+                title={t('builder.copyToClipboard')}
               >
                 📋
               </button>
@@ -257,25 +271,27 @@ const ErrorAndStatusPopups: React.FC<ErrorAndStatusPopupsProps> = ({
             <a
               href={buildTxUrl(
                 explorerChoice,
-                currentNetwork === Network.CHIPNET ? Network.CHIPNET : Network.MAINNET,
+                currentNetwork === Network.CHIPNET
+                  ? Network.CHIPNET
+                  : Network.MAINNET,
                 transactionId
               )}
               target="_blank"
               rel="noopener noreferrer"
               className="wallet-btn-primary py-2 px-4"
             >
-              View on Explorer
+              {t('builder.viewExplorer')}
             </a>
           </div>
         </Popup>
       )}
 
       {errorMessage && (
-        <Popup closePopups={closePopups} closeButtonText="Close">
+        <Popup closePopups={closePopups} closeButtonText={t('builder.close')}>
           <div className="flex flex-col items-center p-6">
             <div className="wallet-danger-text text-4xl mb-4">⚠️</div>
             <h3 className="text-2xl font-bold wallet-text-strong mb-3">
-              Transaction Error
+              {t('builder.transactionError')}
             </h3>
             <p className="wallet-muted text-center text-sm mb-6">
               {errorMessage}
@@ -284,7 +300,7 @@ const ErrorAndStatusPopups: React.FC<ErrorAndStatusPopupsProps> = ({
               onClick={closePopups}
               className="wallet-btn-danger py-2 px-6"
             >
-              Try Again
+              {t('builder.tryAgain')}
             </button>
           </div>
         </Popup>

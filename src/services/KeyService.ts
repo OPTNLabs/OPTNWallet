@@ -10,14 +10,18 @@ import type {
 import { isArrayBufferLike, isString } from '../utils/typeGuards';
 import { SignedMessage } from '../utils/signed';
 import DeviceIntegrityService from './DeviceIntegrityService';
-import type { QuantumrootVaultRecord, SignedMessageResponseI } from '../types/types';
+import type {
+  QuantumrootVaultRecord,
+  SignedMessageResponseI,
+} from '../types/types';
 import { Network } from '../state/slices/networkSlice';
 import type { deriveQuantumrootVault } from './QuantumrootService';
+import type { Bip39Language } from './Bip39Service';
 
 const KeyService = {
-  async generateMnemonic() {
+  async generateMnemonic(language?: Bip39Language) {
     const keyGen = KeyGeneration();
-    return await keyGen.generateMnemonic();
+    return await keyGen.generateMnemonic(language);
   },
 
   async retrieveKeys(walletId: number) {
@@ -99,7 +103,11 @@ const KeyService = {
     accountNumber = 0
   ): Promise<QuantumrootVaultRecord> {
     const keyManager = KeyManager();
-    return await keyManager.createQuantumrootVault(walletId, addressIndex, accountNumber);
+    return await keyManager.createQuantumrootVault(
+      walletId,
+      addressIndex,
+      accountNumber
+    );
   },
 
   async configureQuantumrootVault(
@@ -145,7 +153,9 @@ const KeyService = {
 
   // Consolidate the private key fetching and type handling here
   async fetchAddressPrivateKey(address: string): Promise<Uint8Array | null> {
-    await DeviceIntegrityService.assertDeviceIntegrity('fetchAddressPrivateKey');
+    await DeviceIntegrityService.assertDeviceIntegrity(
+      'fetchAddressPrivateKey'
+    );
     const keyManager = KeyManager();
     const privateKeyData = await keyManager.fetchAddressPrivateKey(address);
 

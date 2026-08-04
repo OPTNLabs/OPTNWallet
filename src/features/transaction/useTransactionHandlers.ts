@@ -167,6 +167,10 @@ export function useTransactionHandlers({
           setShowPopup(true);
           setTempUtxos(utxo);
           setCurrentContractABI(utxo.abi);
+          if (!constructorArgs?.artifact?.source) {
+            setErrorMessage('Contract artifact source is unavailable.');
+            return;
+          }
           setCurrentContractSource(constructorArgs.artifact.source);
           setSelectedContractAddresses((prev) => [...prev, utxo.address]);
           return;

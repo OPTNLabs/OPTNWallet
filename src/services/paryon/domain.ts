@@ -235,17 +235,22 @@ function groupContractUtxos(utxos: UTXO[]): GroupedPosition[] {
     group.outputIndexes.push(outpointIndex(utxo));
     group.valueSats += toBigInt(utxo.value ?? utxo.amount ?? 0);
 
-    const category = utxo.token?.category?.trim();
-    if (category) {
-      group.tokenCategories.push(category);
-      const tokenAmount = toBigInt(utxo.token.amount ?? 0);
-      group.tokenAmountAtomic =
-        group.tokenAmountAtomic == null ? tokenAmount : group.tokenAmountAtomic + tokenAmount;
-    }
+    const token = utxo.token;
+    if (token) {
+      const category = token.category.trim();
+      if (category) {
+        group.tokenCategories.push(category);
+        const tokenAmount = toBigInt(token.amount ?? 0);
+        group.tokenAmountAtomic =
+          group.tokenAmountAtomic == null
+            ? tokenAmount
+            : group.tokenAmountAtomic + tokenAmount;
+      }
 
-    const capability = utxo.token?.nft?.capability ?? null;
-    if (capabilityRank(capability) > capabilityRank(group.capability)) {
-      group.capability = capability;
+      const capability = token.nft?.capability ?? null;
+      if (capabilityRank(capability) > capabilityRank(group.capability)) {
+        group.capability = capability;
+      }
     }
 
     groups.set(utxo.tx_hash, group);

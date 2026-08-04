@@ -44,7 +44,7 @@ export function useHomeMetadataPreload({
       setMetadataPreloaded(true);
     };
 
-    let timeoutId: number | undefined;
+    let timeoutId: ReturnType<typeof setTimeout> | undefined;
     let idleId: number | undefined;
     const browserWindow = typeof window !== 'undefined' ? window : undefined;
     if (browserWindow && 'requestIdleCallback' in browserWindow) {
@@ -52,12 +52,12 @@ export function useHomeMetadataPreload({
         void runPreload();
       });
     } else {
-      timeoutId = browserWindow?.setTimeout(() => {
+      timeoutId = globalThis.setTimeout(() => {
         void runPreload();
       }, 0);
     }
 
-    const retryTimer = browserWindow?.setTimeout(() => {
+    const retryTimer: ReturnType<typeof setTimeout> = globalThis.setTimeout(() => {
       if (!cancelled) {
         setRetryNonce((value) => value + 1);
       }
@@ -73,10 +73,10 @@ export function useHomeMetadataPreload({
         browserWindow.cancelIdleCallback(idleId);
       }
       if (timeoutId !== undefined && browserWindow) {
-        browserWindow.clearTimeout(timeoutId);
+        globalThis.clearTimeout(timeoutId);
       }
       if (retryTimer !== undefined && browserWindow) {
-        browserWindow.clearTimeout(retryTimer);
+        globalThis.clearTimeout(retryTimer);
       }
     };
   }, [categories, categoriesKey, isInitialized, retryNonce]);

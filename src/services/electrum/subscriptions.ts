@@ -49,7 +49,9 @@ export async function registerAddressSubscription(
     await ElectrumServer().subscribe('blockchain.address.subscribe', [address]);
     await ensureNotificationRouter();
   }
-  reg.set(address, callback);
+  reg.set(address, (data) => {
+    if (typeof data === 'string') callback(data);
+  });
   return true;
 }
 
@@ -62,7 +64,9 @@ export async function registerTransactionSubscription(
     await ElectrumServer().subscribe('blockchain.transaction.subscribe', [txHash]);
     await ensureNotificationRouter();
   }
-  reg.set(txHash, callback);
+  reg.set(txHash, (data) => {
+    if (typeof data === 'number') callback(data);
+  });
   return true;
 }
 

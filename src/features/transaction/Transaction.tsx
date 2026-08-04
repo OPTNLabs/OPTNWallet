@@ -36,10 +36,12 @@ import {
   getLegacyDefaultChangeAddress,
   getPreferredBchChangeAddress,
 } from '../../utils/changeAddressPreference';
+import { useI18n } from '../../i18n/useI18n';
 
 const noopSetUtxos: Dispatch<SetStateAction<UTXO[]>> = () => undefined;
 
 const Transaction: React.FC = () => {
+  const { t } = useI18n();
   // Removed local walletId state
   const [addresses, setAddresses] = useState<
     { address: string; tokenAddress: string }[]
@@ -130,10 +132,8 @@ const Transaction: React.FC = () => {
   );
 
   const walletId = useSelector(selectWalletId);
-  const {
-    hasUnresolved,
-    reservedOutpointKeys,
-  } = useOutboundTransactions(walletId);
+  const { hasUnresolved, reservedOutpointKeys } =
+    useOutboundTransactions(walletId);
   useTransactionInit(dispatch);
 
   const resetTransactionViewState = useCallback(() => {
@@ -302,17 +302,24 @@ const Transaction: React.FC = () => {
 
       if (!preferInternalChangeForBch || hasTokenOutputs) {
         if (!cancelled) {
-          setPreferredBchChangeAddress(getLegacyDefaultChangeAddress(addresses));
+          setPreferredBchChangeAddress(
+            getLegacyDefaultChangeAddress(addresses)
+          );
         }
         return;
       }
 
       try {
-        const preferred = await getPreferredBchChangeAddress(walletId, addresses);
+        const preferred = await getPreferredBchChangeAddress(
+          walletId,
+          addresses
+        );
         if (!cancelled) setPreferredBchChangeAddress(preferred);
       } catch {
         if (!cancelled) {
-          setPreferredBchChangeAddress(getLegacyDefaultChangeAddress(addresses));
+          setPreferredBchChangeAddress(
+            getLegacyDefaultChangeAddress(addresses)
+          );
         }
       }
     })();
@@ -352,11 +359,11 @@ const Transaction: React.FC = () => {
 
   const stepStates = [
     {
-      label: 'Choose a source',
+      label: t('builder.chooseSource'),
       state: hasSourceSelection ? 'done' : 'current',
     },
     {
-      label: 'Pick funds',
+      label: t('builder.pickFunds'),
       state: hasInputSelection
         ? 'done'
         : hasSourceSelection
@@ -364,16 +371,12 @@ const Transaction: React.FC = () => {
           : 'upcoming',
     },
     {
-      label: 'Add recipients',
+      label: t('builder.addRecipients'),
       state: hasOutputs ? 'done' : hasInputSelection ? 'current' : 'upcoming',
     },
     {
-      label: 'Review and send',
-      state: hasBuiltTransaction
-        ? 'done'
-        : hasOutputs
-          ? 'current'
-          : 'upcoming',
+      label: t('builder.reviewAndSend'),
+      state: hasBuiltTransaction ? 'done' : hasOutputs ? 'current' : 'upcoming',
     },
   ] as const;
 
@@ -406,306 +409,329 @@ const Transaction: React.FC = () => {
     <ErrorBoundary>
       <WalletScreen maxWidthClassName="max-w-xl" scrollable={false}>
         <div className="flex h-full min-h-0 flex-col gap-3">
-        <PageHeader
-          title="Custom Send"
-          compact
-        />
+          <PageHeader title={t('builder.customSend')} compact />
 
-        <SectionCard className="mb-2 p-3 wallet-step-card">
-          <div className="flex items-center justify-between gap-3">
-            <div className="wallet-kicker">Flow</div>
-            <details className="text-right">
-              <summary className="cursor-pointer text-xs wallet-muted list-none">
-                How this works
-              </summary>
-              <p className="mt-2 max-w-[220px] text-xs wallet-muted">
-                Pick a source, choose funds, add recipients, then preview the
-                final transaction before sending.
-              </p>
-            </details>
-          </div>
-          <div className="mt-2 grid grid-cols-2 gap-2">
-            {stepStates.map((step, index) => (
-              <button
-                key={step.label}
-                type="button"
-                onClick={() => {
-                  const nextStep = (index + 1) as 1 | 2 | 3 | 4;
-                  if (canOpenStep(nextStep)) setActiveStep(nextStep);
-                }}
-                disabled={!canOpenStep((index + 1) as 1 | 2 | 3 | 4)}
-                className={`rounded-xl border px-2.5 py-2 ${
-                  activeStep === index + 1
-                    ? 'ring-2 ring-[var(--wallet-focus-ring)]'
-                    : ''
-                } ${
-                  step.state === 'done'
-                    ? 'wallet-success-panel'
-                    : step.state === 'current'
-                      ? 'wallet-selectable-active'
-                      : 'wallet-selectable-inactive'
-                } ${!canOpenStep((index + 1) as 1 | 2 | 3 | 4) ? 'opacity-60' : ''}`}
-              >
-                <div className="text-[10px] font-semibold uppercase tracking-[0.12em] opacity-80">
-                  Step {index + 1}
-                </div>
-                <div className="mt-1 text-xs font-semibold">{step.label}</div>
-              </button>
-            ))}
-          </div>
-        </SectionCard>
-
-        <SectionCard className="mb-3 p-3 wallet-step-card flex-1 min-h-0 overflow-hidden">
-          <div className="flex h-full min-h-0 flex-col">
-            <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain pr-1">
-          {activeStep === 1 && (
-            <>
-              <div className="mb-2 flex items-start justify-between gap-3">
-                <div>
-                  <div className="wallet-kicker">Step 1</div>
-                  <h2 className="text-base font-semibold wallet-text-strong">
-                    Choose source
-                  </h2>
-                </div>
-                <details>
-                  <summary className="cursor-pointer text-xs wallet-muted list-none">
-                    Help
-                  </summary>
-                  <p className="mt-2 max-w-[180px] text-xs wallet-muted">
-                    Pick wallet addresses for normal sends, or contracts for script
-                    spends.
-                  </p>
-                </details>
-              </div>
-              <div className="flex flex-wrap gap-2 mb-2">
-                <span className="wallet-chip">
-                  {selectedAddresses.length} wallet source
-                  {selectedAddresses.length === 1 ? '' : 's'}
-                </span>
-                <span className="wallet-chip">
-                  {selectedContractAddresses.length} contract source
-                  {selectedContractAddresses.length === 1 ? '' : 's'}
-                </span>
-              </div>
-              <div className="flex flex-wrap gap-2 justify-center">
-                <AddressSelection
-                  addresses={addresses}
-                  selectedUtxos={selectedUtxos}
-                  selectedAddresses={selectedAddresses}
-                  contractAddresses={contractAddresses}
-                  selectedContractAddresses={selectedContractAddresses}
-                  setSelectedContractAddresses={setSelectedContractAddresses}
-                  selectedContractABIs={selectedContractABIs}
-                  setSelectedContractABIs={setSelectedContractABIs}
-                  setSelectedAddresses={setSelectedAddresses}
-                  setPaperWalletUTXOs={setPaperWalletUTXOs}
-                />
-              </div>
-            </>
-          )}
-
-          {activeStep === 2 && (
-            <>
-              <div className="mb-2 flex items-start justify-between gap-3">
-                <div>
-                  <div className="wallet-kicker">Step 2</div>
-                  <h2 className="text-base font-semibold wallet-text-strong">
-                    Pick funds
-                  </h2>
-                </div>
-                <details>
-                  <summary className="cursor-pointer text-xs wallet-muted list-none">
-                    Help
-                  </summary>
-                  <p className="mt-2 max-w-[180px] text-xs wallet-muted">
-                    Select the BCH, tokens, or collectibles that will fund this
-                    transaction.
-                  </p>
-                </details>
-              </div>
-              <UTXOSelection
-                filteredRegularUTXOs={filteredRegularUTXOs}
-                filteredCashTokenUTXOs={filteredCashTokenUTXOs}
-                filteredContractUTXOs={filteredContractUTXOs}
-                selectedUtxos={selectedUtxos}
-                handleUtxoClick={handleUtxoClick}
-                showRegularUTXOsPopup={showRegularUTXOsPopup}
-                setShowRegularUTXOsPopup={setShowRegularUTXOsPopup}
-                showCashTokenUTXOsPopup={showCashTokenUTXOsPopup}
-                setShowCashTokenUTXOsPopup={setShowCashTokenUTXOsPopup}
-                showContractUTXOsPopup={showContractUTXOsPopup}
-                setShowContractUTXOsPopup={setShowContractUTXOsPopup}
-                paperWalletUTXOs={paperWalletUTXOs}
-                showPaperWalletUTXOsPopup={showPaperWalletUTXOsPopup}
-                setShowPaperWalletUTXOsPopup={setShowPaperWalletUTXOsPopup}
-                closePopups={closePopups}
-              />
-
-              <SelectedUTXOsDisplay
-                selectedUtxos={selectedUtxos}
-                selectedAddresses={selectedAddresses}
-                selectedContractAddresses={selectedContractAddresses}
-                totalSelectedUtxoAmount={totalSelectedUtxoAmount}
-                handleUtxoClick={handleUtxoClick}
-                currentNetwork={currentNetwork}
-              />
-            </>
-          )}
-
-          {activeStep === 3 && (
-            <>
-              <div className="mb-2 flex items-start justify-between gap-3">
-                <div>
-                  <div className="wallet-kicker">Step 3</div>
-                  <h2 className="text-base font-semibold wallet-text-strong">
-                    Add recipients
-                  </h2>
-                </div>
-                <details>
-                  <summary className="cursor-pointer text-xs wallet-muted list-none">
-                    Help
-                  </summary>
-                  <p className="mt-2 max-w-[180px] text-xs wallet-muted">
-                    Add BCH recipients, token transfers, collectibles, or an
-                    optional message output.
-                  </p>
-                </details>
-              </div>
-
-              <OutputSelection
-                txOutputs={txOutputs}
-                handleRemoveOutput={handleRemoveOutput}
-                currentNetwork={currentNetwork}
-                recipientAddress={recipientAddress}
-                setRecipientAddress={setRecipientAddress}
-                transferAmount={transferAmount}
-                setTransferAmount={setTransferAmount}
-                tokenAmount={tokenAmount}
-                setTokenAmount={setTokenAmount}
-                utxos={utxos.concat(contractUTXOs)}
-                selectedUtxos={selectedUtxos}
-                selectedTokenCategory={selectedTokenCategory}
-                setSelectedTokenCategory={setSelectedTokenCategory}
-                addOutput={handleAddOutput}
-                changeAddress={changeAddress}
-                setChangeAddress={setChangeAddressWithOverride}
-                nftCapability={nftCapability}
-                setNftCapability={setNftCapability}
-                nftCommitment={nftCommitment}
-                setNftCommitment={setNftCommitment}
-              />
-            </>
-          )}
-
-          {activeStep === 4 && (
-            <>
-              <div className="mb-2 flex items-start justify-between gap-3">
-                <div>
-                  <div className="wallet-kicker">Step 4</div>
-                  <h2 className="text-base font-semibold wallet-text-strong">
-                    Review and send
-                  </h2>
-                </div>
-                <details>
-                  <summary className="cursor-pointer text-xs wallet-muted list-none">
-                    Help
-                  </summary>
-                  <p className="mt-2 max-w-[180px] text-xs wallet-muted">
-                    Preview first, then send only when the summary looks right.
-                  </p>
-                </details>
-              </div>
-
-              <div className="space-y-2 mb-3">
-                <div className="wallet-stat-row">
-                  <span className="text-sm wallet-muted">Sources chosen</span>
-                  <span className="font-semibold wallet-text-strong">
-                    {selectedAddresses.length + selectedContractAddresses.length}
-                  </span>
-                </div>
-                <div className="wallet-stat-row">
-                  <span className="text-sm wallet-muted">Funds selected</span>
-                  <span className="font-semibold wallet-text-strong">
-                    {selectedUtxos.length}
-                  </span>
-                </div>
-                <div className="wallet-stat-row">
-                  <span className="text-sm wallet-muted">Recipients added</span>
-                  <span className="font-semibold wallet-text-strong">
-                    {txOutputs.length}
-                  </span>
-                </div>
-                {showFee && (
-                  <div className="wallet-stat-row">
-                    <span className="text-sm wallet-muted">Estimated network fee</span>
-                    <div className="text-right">
-                      <div className="font-semibold wallet-text-strong">
-                        {feeBch.toFixed(8)} BCH
-                      </div>
-                      <div className="text-xs wallet-muted">{feeUsdLabel}</div>
-                    </div>
+          <SectionCard className="mb-2 p-3 wallet-step-card">
+            <div className="flex items-center justify-between gap-3">
+              <div className="wallet-kicker">{t('builder.flow')}</div>
+              <details className="text-right">
+                <summary className="cursor-pointer text-xs wallet-muted list-none">
+                  {t('builder.howWorks')}
+                </summary>
+                <p className="mt-2 max-w-[220px] text-xs wallet-muted">
+                  {t('builder.flowDescription')}
+                </p>
+              </details>
+            </div>
+            <div className="mt-2 grid grid-cols-2 gap-2">
+              {stepStates.map((step, index) => (
+                <button
+                  key={step.label}
+                  type="button"
+                  onClick={() => {
+                    const nextStep = (index + 1) as 1 | 2 | 3 | 4;
+                    if (canOpenStep(nextStep)) setActiveStep(nextStep);
+                  }}
+                  disabled={!canOpenStep((index + 1) as 1 | 2 | 3 | 4)}
+                  className={`rounded-xl border px-2.5 py-2 ${
+                    activeStep === index + 1
+                      ? 'ring-2 ring-[var(--wallet-focus-ring)]'
+                      : ''
+                  } ${
+                    step.state === 'done'
+                      ? 'wallet-success-panel'
+                      : step.state === 'current'
+                        ? 'wallet-selectable-active'
+                        : 'wallet-selectable-inactive'
+                  } ${!canOpenStep((index + 1) as 1 | 2 | 3 | 4) ? 'opacity-60' : ''}`}
+                >
+                  <div className="text-[10px] font-semibold uppercase tracking-[0.12em] opacity-80">
+                    {t('builder.step', { number: index + 1 })}
                   </div>
+                  <div className="mt-1 text-xs font-semibold">{step.label}</div>
+                </button>
+              ))}
+            </div>
+          </SectionCard>
+
+          <SectionCard className="mb-3 p-3 wallet-step-card flex-1 min-h-0 overflow-hidden">
+            <div className="flex h-full min-h-0 flex-col">
+              <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain pr-1">
+                {activeStep === 1 && (
+                  <>
+                    <div className="mb-2 flex items-start justify-between gap-3">
+                      <div>
+                        <div className="wallet-kicker">
+                          {t('builder.step', { number: 1 })}
+                        </div>
+                        <h2 className="text-base font-semibold wallet-text-strong">
+                          {t('builder.chooseSourceHelp')}
+                        </h2>
+                      </div>
+                      <details>
+                        <summary className="cursor-pointer text-xs wallet-muted list-none">
+                          {t('builder.help')}
+                        </summary>
+                        <p className="mt-2 max-w-[180px] text-xs wallet-muted">
+                          {t('builder.chooseSourceDescription')}
+                        </p>
+                      </details>
+                    </div>
+                    <div className="flex flex-wrap gap-2 mb-2">
+                      <span className="wallet-chip">
+                        {t(
+                          selectedAddresses.length === 1
+                            ? 'builder.walletSourceSingular'
+                            : 'builder.walletSourcePlural',
+                          { count: selectedAddresses.length }
+                        )}
+                      </span>
+                      <span className="wallet-chip">
+                        {t(
+                          selectedContractAddresses.length === 1
+                            ? 'builder.contractSourceSingular'
+                            : 'builder.contractSourcePlural',
+                          { count: selectedContractAddresses.length }
+                        )}
+                      </span>
+                    </div>
+                    <div className="flex flex-wrap gap-2 justify-center">
+                      <AddressSelection
+                        addresses={addresses}
+                        selectedUtxos={selectedUtxos}
+                        selectedAddresses={selectedAddresses}
+                        contractAddresses={contractAddresses}
+                        selectedContractAddresses={selectedContractAddresses}
+                        setSelectedContractAddresses={
+                          setSelectedContractAddresses
+                        }
+                        selectedContractABIs={selectedContractABIs}
+                        setSelectedContractABIs={setSelectedContractABIs}
+                        setSelectedAddresses={setSelectedAddresses}
+                        setPaperWalletUTXOs={setPaperWalletUTXOs}
+                      />
+                    </div>
+                  </>
+                )}
+
+                {activeStep === 2 && (
+                  <>
+                    <div className="mb-2 flex items-start justify-between gap-3">
+                      <div>
+                        <div className="wallet-kicker">
+                          {t('builder.step', { number: 2 })}
+                        </div>
+                        <h2 className="text-base font-semibold wallet-text-strong">
+                          {t('builder.pickFunds')}
+                        </h2>
+                      </div>
+                      <details>
+                        <summary className="cursor-pointer text-xs wallet-muted list-none">
+                          {t('builder.help')}
+                        </summary>
+                        <p className="mt-2 max-w-[180px] text-xs wallet-muted">
+                          {t('builder.pickFundsDescription')}
+                        </p>
+                      </details>
+                    </div>
+                    <UTXOSelection
+                      filteredRegularUTXOs={filteredRegularUTXOs}
+                      filteredCashTokenUTXOs={filteredCashTokenUTXOs}
+                      filteredContractUTXOs={filteredContractUTXOs}
+                      selectedUtxos={selectedUtxos}
+                      handleUtxoClick={handleUtxoClick}
+                      showRegularUTXOsPopup={showRegularUTXOsPopup}
+                      setShowRegularUTXOsPopup={setShowRegularUTXOsPopup}
+                      showCashTokenUTXOsPopup={showCashTokenUTXOsPopup}
+                      setShowCashTokenUTXOsPopup={setShowCashTokenUTXOsPopup}
+                      showContractUTXOsPopup={showContractUTXOsPopup}
+                      setShowContractUTXOsPopup={setShowContractUTXOsPopup}
+                      paperWalletUTXOs={paperWalletUTXOs}
+                      showPaperWalletUTXOsPopup={showPaperWalletUTXOsPopup}
+                      setShowPaperWalletUTXOsPopup={
+                        setShowPaperWalletUTXOsPopup
+                      }
+                      closePopups={closePopups}
+                    />
+
+                    <SelectedUTXOsDisplay
+                      selectedUtxos={selectedUtxos}
+                      selectedAddresses={selectedAddresses}
+                      selectedContractAddresses={selectedContractAddresses}
+                      totalSelectedUtxoAmount={totalSelectedUtxoAmount}
+                      handleUtxoClick={handleUtxoClick}
+                      currentNetwork={currentNetwork}
+                    />
+                  </>
+                )}
+
+                {activeStep === 3 && (
+                  <>
+                    <div className="mb-2 flex items-start justify-between gap-3">
+                      <div>
+                        <div className="wallet-kicker">
+                          {t('builder.step', { number: 3 })}
+                        </div>
+                        <h2 className="text-base font-semibold wallet-text-strong">
+                          {t('builder.addRecipients')}
+                        </h2>
+                      </div>
+                      <details>
+                        <summary className="cursor-pointer text-xs wallet-muted list-none">
+                          {t('builder.help')}
+                        </summary>
+                        <p className="mt-2 max-w-[180px] text-xs wallet-muted">
+                          {t('builder.addRecipientsDescription')}
+                        </p>
+                      </details>
+                    </div>
+
+                    <OutputSelection
+                      txOutputs={txOutputs}
+                      handleRemoveOutput={handleRemoveOutput}
+                      currentNetwork={currentNetwork}
+                      recipientAddress={recipientAddress}
+                      setRecipientAddress={setRecipientAddress}
+                      transferAmount={transferAmount}
+                      setTransferAmount={setTransferAmount}
+                      tokenAmount={tokenAmount}
+                      setTokenAmount={setTokenAmount}
+                      utxos={utxos.concat(contractUTXOs)}
+                      selectedUtxos={selectedUtxos}
+                      selectedTokenCategory={selectedTokenCategory}
+                      setSelectedTokenCategory={setSelectedTokenCategory}
+                      addOutput={handleAddOutput}
+                      changeAddress={changeAddress}
+                      setChangeAddress={setChangeAddressWithOverride}
+                      nftCapability={nftCapability}
+                      setNftCapability={setNftCapability}
+                      nftCommitment={nftCommitment}
+                      setNftCommitment={setNftCommitment}
+                    />
+                  </>
+                )}
+
+                {activeStep === 4 && (
+                  <>
+                    <div className="mb-2 flex items-start justify-between gap-3">
+                      <div>
+                        <div className="wallet-kicker">
+                          {t('builder.step', { number: 4 })}
+                        </div>
+                        <h2 className="text-base font-semibold wallet-text-strong">
+                          {t('builder.reviewAndSend')}
+                        </h2>
+                      </div>
+                      <details>
+                        <summary className="cursor-pointer text-xs wallet-muted list-none">
+                          {t('builder.help')}
+                        </summary>
+                        <p className="mt-2 max-w-[180px] text-xs wallet-muted">
+                          {t('builder.reviewAndSendDescription')}
+                        </p>
+                      </details>
+                    </div>
+
+                    <div className="space-y-2 mb-3">
+                      <div className="wallet-stat-row">
+                        <span className="text-sm wallet-muted">
+                          {t('builder.sourcesChosen')}
+                        </span>
+                        <span className="font-semibold wallet-text-strong">
+                          {selectedAddresses.length +
+                            selectedContractAddresses.length}
+                        </span>
+                      </div>
+                      <div className="wallet-stat-row">
+                        <span className="text-sm wallet-muted">
+                          {t('builder.fundsSelected')}
+                        </span>
+                        <span className="font-semibold wallet-text-strong">
+                          {selectedUtxos.length}
+                        </span>
+                      </div>
+                      <div className="wallet-stat-row">
+                        <span className="text-sm wallet-muted">
+                          {t('builder.recipientsAdded')}
+                        </span>
+                        <span className="font-semibold wallet-text-strong">
+                          {txOutputs.length}
+                        </span>
+                      </div>
+                      {showFee && (
+                        <div className="wallet-stat-row">
+                          <span className="text-sm wallet-muted">
+                            {t('builder.estimatedNetworkFee')}
+                          </span>
+                          <div className="text-right">
+                            <div className="font-semibold wallet-text-strong">
+                              {feeBch.toFixed(8)} BCH
+                            </div>
+                            <div className="text-xs wallet-muted">
+                              {feeUsdLabel}
+                            </div>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+
+                    <TransactionActions
+                      loading={loading}
+                      buildTransaction={buildTransaction}
+                      sendTransaction={handleSend}
+                      rawTX={rawTX}
+                      txOutputs={txOutputs}
+                      selectedUtxos={selectedUtxos}
+                      sendingLocked={hasUnresolved}
+                    />
+                  </>
                 )}
               </div>
-
-              <TransactionActions
-                loading={loading}
-                buildTransaction={buildTransaction}
-                sendTransaction={handleSend}
-                rawTX={rawTX}
-                txOutputs={txOutputs}
-                selectedUtxos={selectedUtxos}
-                sendingLocked={hasUnresolved}
-              />
-            </>
-          )}
-
+              <div className="mt-4 flex items-center justify-between gap-3 border-t border-[var(--wallet-border)] pt-3">
+                <button
+                  type="button"
+                  onClick={goToPreviousStep}
+                  disabled={activeStep === 1}
+                  className="wallet-btn-secondary flex-1"
+                >
+                  {t('builder.back')}
+                </button>
+                <button
+                  type="button"
+                  onClick={goToNextStep}
+                  disabled={
+                    (activeStep === 1 && !hasSourceSelection) ||
+                    (activeStep === 2 && !hasInputSelection) ||
+                    (activeStep === 3 && !hasOutputs) ||
+                    activeStep === 4
+                  }
+                  className="wallet-btn-primary flex-1"
+                >
+                  {activeStep === 4 ? t('builder.ready') : t('builder.next')}
+                </button>
+              </div>
             </div>
-          <div className="mt-4 flex items-center justify-between gap-3 border-t border-[var(--wallet-border)] pt-3">
-            <button
-              type="button"
-              onClick={goToPreviousStep}
-              disabled={activeStep === 1}
-              className="wallet-btn-secondary flex-1"
-            >
-              Back
-            </button>
-            <button
-              type="button"
-              onClick={goToNextStep}
-              disabled={
-                (activeStep === 1 && !hasSourceSelection) ||
-                (activeStep === 2 && !hasInputSelection) ||
-                (activeStep === 3 && !hasOutputs) ||
-                activeStep === 4
-              }
-              className="wallet-btn-primary flex-1"
-            >
-              {activeStep === 4 ? 'Ready' : 'Next'}
-            </button>
-          </div>
-          </div>
-        </SectionCard>
+          </SectionCard>
 
-        <ErrorAndStatusPopups
-          showRawTxPopup={showRawTxPopup}
-          showTxIdPopup={showTxIdPopup}
-          rawTX={rawTX}
-          transactionId={transactionId}
-          errorMessage={errorMessage}
-          currentNetwork={currentNetwork}
-          broadcastState={broadcastState}
-          closePopups={closePopups}
-        />
-
-        {showPopup && currentContractABI.length > 0 && (
-          <SelectContractFunctionPopup
-            currentContractSource={currentContractSource}
-            contractABI={currentContractABI}
-            onClose={() => setShowPopup(false)}
-            onFunctionSelect={onContractFunctionSelect}
+          <ErrorAndStatusPopups
+            showRawTxPopup={showRawTxPopup}
+            showTxIdPopup={showTxIdPopup}
+            rawTX={rawTX}
+            transactionId={transactionId}
+            errorMessage={errorMessage}
+            currentNetwork={currentNetwork}
+            broadcastState={broadcastState}
+            closePopups={closePopups}
           />
-        )}
+
+          {showPopup && currentContractABI.length > 0 && (
+            <SelectContractFunctionPopup
+              currentContractSource={currentContractSource}
+              contractABI={currentContractABI}
+              onClose={() => setShowPopup(false)}
+              onFunctionSelect={onContractFunctionSelect}
+            />
+          )}
         </div>
       </WalletScreen>
     </ErrorBoundary>

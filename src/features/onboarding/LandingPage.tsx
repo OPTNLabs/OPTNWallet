@@ -5,6 +5,8 @@ import { ONBOARDING_WELCOME_IMAGE } from './constants';
 import WalkthroughPanel from '../../components/ui/WalkthroughPanel';
 import Popup from '../../components/transaction/Popup';
 import { MdSunny, MdModeNight } from 'react-icons/md';
+import { useI18n } from '../../i18n/useI18n';
+import LanguagePicker from '../../components/LanguagePicker';
 
 const ThemeModeSwitch = () => {
   const { mode, toggleMode } = useTheme();
@@ -38,6 +40,7 @@ const ThemeModeSwitch = () => {
 
 const LandingPage = () => {
   const [showHelp, setShowHelp] = useState(false);
+  const { t } = useI18n();
 
   return (
     <section className="min-h-[100dvh] wallet-surface flex flex-col justify-center items-center px-4 relative">
@@ -45,7 +48,7 @@ const LandingPage = () => {
 
       <div className="absolute top-0 left-0 right-0 z-10 px-4 pt-[calc(var(--safe-top)+1.15rem)]">
         <div className="mx-auto grid w-full max-w-6xl grid-cols-[1fr_auto_1fr] items-center">
-          <div />
+          <LanguagePicker />
           <ThemeModeSwitch />
           <div className="justify-self-end">
             <button
@@ -53,7 +56,7 @@ const LandingPage = () => {
               onClick={() => setShowHelp(true)}
               className="wallet-chip shrink-0"
             >
-              Help
+              {t('app.help')}
             </button>
           </div>
         </div>
@@ -78,23 +81,26 @@ const LandingPage = () => {
               to="/createwallet"
               className="wallet-btn-primary py-3 px-10 rounded-lg mx-2 my-2 shadow-md"
             >
-              Create Wallet
+              {t('onboarding.createWallet')}
             </Link>
             <Link
               to="/importwallet"
               className="wallet-btn-secondary py-3 px-10 rounded-lg mx-2 my-2 shadow-md"
             >
-              Import Wallet
+              {t('onboarding.importWallet')}
             </Link>
           </div>
         </div>
       </main>
 
       {showHelp && (
-        <Popup closePopups={() => setShowHelp(false)} closeButtonText="Close help">
+        <Popup
+          closePopups={() => setShowHelp(false)}
+          closeButtonText="Close help"
+        >
           <WalkthroughPanel
-            title="Getting started"
-            description="Use this screen to create a wallet for the first time or restore one you already have. Pick the network first, then continue into the wallet."
+            title={t('onboarding.helpTitle')}
+            description={t('onboarding.helpDescription')}
             steps={[
               {
                 title: 'Create Wallet',

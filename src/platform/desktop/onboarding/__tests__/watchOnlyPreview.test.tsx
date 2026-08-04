@@ -1,5 +1,6 @@
 import { renderToStaticMarkup } from 'react-dom/server';
 import { StaticRouter } from 'react-router-dom/server';
+import { Provider } from 'react-redux';
 import { describe, expect, it } from 'vitest';
 import * as bip39 from 'bip39';
 
@@ -12,19 +13,25 @@ import {
 import { DesktopWalletPickerActions } from '../DesktopWalletPickerActions';
 import { WatchOnlyWalletPreview } from '../WatchOnlyWalletPreview';
 import { deriveWatchOnlyAccountPreview } from '../watchOnlyAccountPreview';
+import { I18nProvider } from '../../../../i18n/I18nProvider';
+import { store } from '../../../../state/store';
 
 const TEST_MNEMONIC = bip39.entropyToMnemonic('0'.repeat(32));
 
 describe('desktop watch-only preview', () => {
   it('exposes Create Watch-Only Wallet as a wallet-picker action', () => {
     const html = renderToStaticMarkup(
-      <StaticRouter location="/">
-        <DesktopWalletPickerActions
-          hasWallets
-          onHardware={() => undefined}
-          onWatchOnly={() => undefined}
-        />
-      </StaticRouter>
+      <Provider store={store}>
+        <I18nProvider>
+          <StaticRouter location="/">
+            <DesktopWalletPickerActions
+              hasWallets
+              onHardware={() => undefined}
+              onWatchOnly={() => undefined}
+            />
+          </StaticRouter>
+        </I18nProvider>
+      </Provider>
     );
 
     expect(html).toContain('Add another wallet');
@@ -82,7 +89,11 @@ describe('desktop watch-only preview', () => {
 
   it('labels the screen as a preview and does not claim save, sign, or broadcast support', () => {
     const html = renderToStaticMarkup(
-      <WatchOnlyWalletPreview onBack={() => undefined} />
+      <Provider store={store}>
+        <I18nProvider>
+          <WatchOnlyWalletPreview onBack={() => undefined} />
+        </I18nProvider>
+      </Provider>
     );
 
     expect(html).toContain('Watch-Only Wallet Preview');

@@ -3,13 +3,17 @@ import { CapacitorBarcodeScannerTypeHint } from '@capacitor/barcode-scanner';
 import { Toast } from '@capacitor/toast';
 import { useDispatch, useSelector } from 'react-redux';
 import type { AppDispatch, RootState } from '../../state/store';
-import { initWizardConnect, wizardConnectPair } from '../../state/slices/wizardconnectSlice';
+import {
+  initWizardConnect,
+  wizardConnectPair,
+} from '../../state/slices/wizardconnectSlice';
 import {
   getBarcodeScannerErrorMessage,
   scanBarcodeSafely,
 } from '../../utils/barcodeScanner';
 import { toErrorMessage } from '../../utils/errorHandling';
 import ConnectionUriScanCard from '../connect/ConnectionUriScanCard';
+import { useI18n } from '../../i18n/useI18n';
 
 function isWizardUri(value: string): boolean {
   const normalized = value.trim().toLowerCase();
@@ -23,8 +27,13 @@ function shortenWizardUri(uri: string): string {
 
 export default function WizardConnectionManager() {
   const dispatch = useDispatch<AppDispatch>();
-  const walletId = useSelector((state: RootState) => state.wallet_id.currentWalletId);
-  const manager = useSelector((state: RootState) => state.wizardconnect.manager);
+  const { t } = useI18n();
+  const walletId = useSelector(
+    (state: RootState) => state.wallet_id.currentWalletId
+  );
+  const manager = useSelector(
+    (state: RootState) => state.wizardconnect.manager
+  );
   const [uri, setUri] = useState('');
   const [scanning, setScanning] = useState(false);
   const [submitting, setSubmitting] = useState(false);
@@ -33,7 +42,7 @@ export default function WizardConnectionManager() {
   const connectToUri = async (value: string) => {
     const nextUri = value.trim();
     if (!isWizardUri(nextUri)) {
-      await Toast.show({ text: 'Please provide a valid WizardConnect URI' });
+      await Toast.show({ text: t('wizard.validUri') });
       return;
     }
 
@@ -42,7 +51,7 @@ export default function WizardConnectionManager() {
 
     try {
       if (!walletId || walletId <= 0) {
-        throw new Error('No active wallet is available for WizardConnect');
+        throw new Error(t('wizard.noWallet'));
       }
 
       if (!manager) {
@@ -50,12 +59,14 @@ export default function WizardConnectionManager() {
       }
 
       await dispatch(wizardConnectPair(nextUri)).unwrap();
-      await Toast.show({ text: 'WizardConnect pairing started.' });
+      await Toast.show({ text: t('wizard.pairingStarted') });
       setUri('');
       setPendingUri(null);
     } catch (error) {
       console.error('[WizardConnectionManager] Error pairing:', error);
-      await Toast.show({ text: `Error: ${toErrorMessage(error)}` });
+      await Toast.show({
+        text: t('wizard.errorPrefix', { message: toErrorMessage(error) }),
+      });
     } finally {
       setSubmitting(false);
     }
@@ -64,7 +75,7 @@ export default function WizardConnectionManager() {
   const requestConnect = async (value: string) => {
     const nextUri = value.trim();
     if (!isWizardUri(nextUri)) {
-      await Toast.show({ text: 'Please provide a valid WizardConnect URI' });
+      await Toast.show({ text: t('wizard.validUri') });
       return;
     }
 
@@ -81,19 +92,21 @@ export default function WizardConnectionManager() {
 
       const scanned = result?.ScanResult?.trim() ?? '';
       if (!scanned) {
-        await Toast.show({ text: 'No QR code detected. Try again.' });
+        await Toast.show({ text: t('wizard.noQr') });
         return;
       }
 
       if (!isWizardUri(scanned)) {
-        await Toast.show({ text: 'Not a valid WizardConnect QR code' });
+        await Toast.show({ text: t('wizard.invalidQr') });
         return;
       }
 
       setPendingUri(scanned);
     } catch (error) {
       console.error('[WizardConnectionManager] Scan error:', error);
-      await Toast.show({ text: getBarcodeScannerErrorMessage(error) });
+      await Toast.show({
+        text: `${t('wizard.scanFailed')} ${getBarcodeScannerErrorMessage(error)}`,
+      });
     } finally {
       setScanning(false);
     }
@@ -102,7 +115,7 @@ export default function WizardConnectionManager() {
   return (
     <div className="space-y-4">
       <ConnectionUriScanCard
-        label="Enter WizardConnect URI"
+        label={t('wizard.enterUri')}
         placeholder="wiz://..."
         value={uri}
         onChange={setUri}
@@ -110,19 +123,23 @@ export default function WizardConnectionManager() {
         onConnect={() => void requestConnect(uri)}
         scanning={scanning}
         submitting={submitting}
-        connectLabel="Connect"
+        connectLabel={t('wizard.connect')}
       />
 
       {pendingUri && (
         <div className="wallet-popup-backdrop">
           <div className="wallet-popup-panel max-w-md w-full space-y-5">
-            <h3 className="text-2xl font-bold text-center">Approve WizardConnect</h3>
+            <h3 className="text-2xl font-bold text-center">
+              {t('wizard.approve')}
+            </h3>
             <div className="text-center space-y-3">
               <p className="wallet-text-strong">
-                Connect this wallet to the following WizardConnect request?
+                {t('wizard.connectQuestion')}
               </p>
               <div className="wallet-surface-strong border border-[var(--wallet-border)] rounded-2xl p-4 text-left">
-                <div className="text-[11px] uppercase tracking-[0.18em] wallet-muted mb-1">Connection URI</div>
+                <div className="text-[11px] uppercase tracking-[0.18em] wallet-muted mb-1">
+                  {t('wizard.connectionUri')}
+                </div>
                 <div className="font-mono text-sm break-all wallet-text-strong leading-relaxed">
                   {shortenWizardUri(pendingUri)}
                 </div>
@@ -134,14 +151,14 @@ export default function WizardConnectionManager() {
                 className="wallet-btn-primary px-4 py-2"
                 disabled={submitting}
               >
-                {submitting ? 'Connecting...' : 'Approve'}
+                {submitting ? t('wizard.connecting') : t('wizard.approve')}
               </button>
               <button
                 onClick={() => setPendingUri(null)}
                 className="wallet-btn-danger px-4 py-2"
                 disabled={submitting}
               >
-                Cancel
+                {t('wizard.cancel')}
               </button>
             </div>
           </div>

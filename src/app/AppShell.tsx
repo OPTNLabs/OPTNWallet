@@ -50,6 +50,7 @@ import ImportWalletPage from '../pages/onboarding/ImportWalletPage';
 import LandingPage from '../pages/onboarding/LandingPage';
 import { ROUTE_PATHS, homeRoute, transactionsRoute } from '../navigation/routes';
 import { NostrChatRoute } from '../features/nostr/NostrChatRoute';
+import QrSigningDemo from '../pages/QrSigningDemo';
 
 const SimpleSend = lazy(() => import('../features/simple-send/SimpleSend'));
 const NostrChat = lazy(() => import('../features/nostr/NostrChat'));
@@ -126,6 +127,7 @@ function App() {
                   <Route path="/mint-cashtokens-poc" element={<MintCashTokensPoC />} />
                   <Route path="/paper-wallet-sweep" element={<PaperWalletSweep />} />
                   <Route path={ROUTE_PATHS.transactionBuilder} element={<Transaction />} />
+                  <Route path={ROUTE_PATHS.qrSigningDemo} element={<QrSigningDemo />} />
                   <Route path={ROUTE_PATHS.transactions} element={<TransactionHistory />} />
                   <Route path={ROUTE_PATHS.settings} element={<Settings />} />
                 </Route>

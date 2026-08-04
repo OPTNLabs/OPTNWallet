@@ -3,21 +3,16 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { Network } from '../../../state/slices/networkSlice';
 import KeyGeneration from '../KeyGeneration';
 
-vi.mock('bip39', () => ({
-  default: {
-    generateMnemonic: vi.fn(),
-    mnemonicToSeed: vi.fn(),
-  },
-  generateMnemonic: vi.fn(),
-  mnemonicToSeed: vi.fn(),
-}));
-
 vi.mock('../../../services/HdWalletService', () => ({
   deriveBchKeyMaterial: vi.fn(),
 }));
 
-import * as bip39 from 'bip39';
+vi.mock('../../../services/Bip39Service', () => ({
+  generateBip39Mnemonic: vi.fn(),
+}));
+
 import { deriveBchKeyMaterial } from '../../../services/HdWalletService';
+import { generateBip39Mnemonic } from '../../../services/Bip39Service';
 
 describe('KeyGeneration', () => {
   beforeEach(() => {
@@ -25,10 +20,11 @@ describe('KeyGeneration', () => {
   });
 
   it('generateMnemonic returns bip39 mnemonic', async () => {
-    vi.mocked(bip39.generateMnemonic).mockReturnValue('test mnemonic');
+    vi.mocked(generateBip39Mnemonic).mockReturnValue('test mnemonic');
 
     const kg = KeyGeneration();
     await expect(kg.generateMnemonic()).resolves.toBe('test mnemonic');
+    expect(generateBip39Mnemonic).toHaveBeenCalledWith('english');
   });
 
   it('generateKeys derives addresses for mainnet', async () => {

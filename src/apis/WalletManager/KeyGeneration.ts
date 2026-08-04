@@ -1,9 +1,12 @@
-import * as bip39 from 'bip39';
 import { Network } from '../../state/slices/networkSlice';
 import {
   deriveBchKeyMaterial,
   type DerivedBchKeyMaterial,
 } from '../../services/HdWalletService';
+import {
+  generateBip39Mnemonic,
+  type Bip39Language,
+} from '../../services/Bip39Service';
 
 export default function KeyGeneration() {
   return {
@@ -11,9 +14,10 @@ export default function KeyGeneration() {
     generateKeys,
   };
 
-  async function generateMnemonic(): Promise<string> {
-    const mnemonic = bip39.generateMnemonic();
-    // console.log('Generated mnemonic:', mnemonic);
+  async function generateMnemonic(
+    language: Bip39Language = 'english'
+  ): Promise<string> {
+    const mnemonic = generateBip39Mnemonic(language);
     return mnemonic;
   }
 

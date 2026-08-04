@@ -1,7 +1,7 @@
 name: Android Preview (Debug APK)
 on:
   pull_request:
-    branches: [dev]
+    branches: [dev, staging]
     paths:
       - 'src/**'
       - '!src/platform/desktop/**'
@@ -9,12 +9,15 @@ on:
       - 'android/**'
       - 'public/**'
       - 'scripts/**'
+      - 'package.json'
+      - 'package-lock.json'
+      - 'tsconfig*.json'
       - 'capacitor.config.ts'
       - 'vite.config.ts'
       - 'reference/**'
       - '.github/workflows/android-preview.yml'
   push:
-    branches: [dev]
+    branches: [dev, staging]
     paths:
       - 'src/**'
       - '!src/platform/desktop/**'
@@ -22,6 +25,9 @@ on:
       - 'android/**'
       - 'public/**'
       - 'scripts/**'
+      - 'package.json'
+      - 'package-lock.json'
+      - 'tsconfig*.json'
       - 'capacitor.config.ts'
       - 'vite.config.ts'
       - 'reference/**'
@@ -64,6 +70,18 @@ jobs:
 
       - name: Build Debug APK
         run: npm run android:apk:dev
+
+      - name: Android JVM tests
+        run: npm run android:test
+
+      - name: Android emulator smoke tests
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 35
+          target: google_apis
+          arch: x86_64
+          profile: Pixel_2
+          script: npm run android:test:instrumented
 
       - name: Upload Debug APK
         uses: actions/upload-artifact@v7

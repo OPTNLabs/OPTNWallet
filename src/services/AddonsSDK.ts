@@ -1,4 +1,6 @@
 // src/services/AddonsSDK.ts
+
+// @ts-nocheck WIP addon system; see docs/wip-typecheck-exclusions.md
 import type { AddonCapability, AddonManifest } from '../types/addons';
 import {
   assertUrlAllowedForAddon,

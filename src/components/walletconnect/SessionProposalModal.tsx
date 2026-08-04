@@ -2,14 +2,21 @@
 import { useState } from 'react';
 import { useSelector, useDispatch } from 'react-redux';
 import { AppDispatch, RootState } from '../../state/store';
-import { approveSessionProposal, rejectSessionProposal } from '../../state/slices/walletconnectSlice';
+import {
+  approveSessionProposal,
+  rejectSessionProposal,
+} from '../../state/slices/walletconnectSlice';
 import { enqueueNotification } from '../../state/slices/notificationsSlice';
 import { normalizeExternalUrl } from '../../utils/externalUrl';
+import { useI18n } from '../../i18n/useI18n';
 
 function SessionProposalModal() {
   const dispatch = useDispatch<AppDispatch>();
+  const { t } = useI18n();
   const [submitting, setSubmitting] = useState(false);
-  const proposal = useSelector((state: RootState) => state.walletconnect.pendingProposal);
+  const proposal = useSelector(
+    (state: RootState) => state.walletconnect.pendingProposal
+  );
   if (!proposal) return null; // No proposal → no modal
 
   const dappMetadata = proposal.params.proposer.metadata;
@@ -24,8 +31,8 @@ function SessionProposalModal() {
         enqueueNotification({
           id: `walletconnect:proposal:approved:${proposal.id}`,
           kind: 'walletconnect',
-          title: 'WalletConnect session approved',
-          body: `Connected to ${dappMetadata.name}.`,
+          title: t('wc.approvedTitle'),
+          body: t('wc.approvedBody', { name: dappMetadata.name }),
           createdAt: Date.now(),
         })
       );
@@ -35,8 +42,8 @@ function SessionProposalModal() {
         enqueueNotification({
           id: `walletconnect:proposal:approve-error:${proposal.id}`,
           kind: 'walletconnect',
-          title: 'WalletConnect approval failed',
-          body: `Failed to approve the session request from ${dappMetadata.name}.`,
+          title: t('wc.approvalFailedTitle'),
+          body: t('wc.approvalFailedBody', { name: dappMetadata.name }),
           createdAt: Date.now(),
         })
       );
@@ -54,8 +61,8 @@ function SessionProposalModal() {
         enqueueNotification({
           id: `walletconnect:proposal:rejected:${proposal.id}`,
           kind: 'walletconnect',
-          title: 'WalletConnect session rejected',
-          body: `Rejected the session request from ${dappMetadata.name}.`,
+          title: t('wc.rejectedTitle'),
+          body: t('wc.rejectedBody', { name: dappMetadata.name }),
           createdAt: Date.now(),
         })
       );
@@ -65,8 +72,8 @@ function SessionProposalModal() {
         enqueueNotification({
           id: `walletconnect:proposal:reject-error:${proposal.id}`,
           kind: 'walletconnect',
-          title: 'WalletConnect rejection failed',
-          body: `Failed to reject the session request from ${dappMetadata.name}.`,
+          title: t('wc.rejectionFailedTitle'),
+          body: t('wc.rejectionFailedBody', { name: dappMetadata.name }),
           createdAt: Date.now(),
         })
       );
@@ -79,12 +86,12 @@ function SessionProposalModal() {
     <div className="wallet-popup-backdrop">
       <div className="wallet-popup-panel max-w-md w-full">
         <h2 className="text-xl sm:text-2xl font-bold text-center mb-4">
-          Approve Session
+          {t('wc.approveSession')}
         </h2>
         <div className="flex justify-center mb-4">
           <img
             src={dappMetadata.icons[0]}
-            alt="DApp icon"
+            alt={t('wc.unknownDapp')}
             className="h-16 w-16 rounded-full object-cover"
           />
         </div>
@@ -116,14 +123,14 @@ function SessionProposalModal() {
             className="wallet-btn-primary px-3 py-2 text-sm sm:text-base"
             disabled={submitting}
           >
-            {submitting ? 'Working...' : 'Approve'}
+            {submitting ? t('wc.working') : t('wc.approve')}
           </button>
           <button
             onClick={handleReject}
             className="wallet-btn-danger px-3 py-2 text-sm sm:text-base whitespace-nowrap"
             disabled={submitting}
           >
-            Reject
+            {t('wc.reject')}
           </button>
         </div>
       </div>

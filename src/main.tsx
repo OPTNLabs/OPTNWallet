@@ -15,6 +15,7 @@ import { Provider } from 'react-redux';
 import { store } from './state/store';
 import { ThemeProvider } from './app/theme/ThemeContext';
 import { WalletConfirmProvider } from './components/WalletConfirmDialog';
+import { I18nProvider } from './i18n/I18nProvider';
 
 installProductionConsoleGuards();
 installBarcodeScannerUnhandledRejectionGuard();
@@ -26,11 +27,15 @@ if (Capacitor.isNativePlatform()) {
 ReactDOM.createRoot(document.getElementById('root')!).render(
   <React.StrictMode>
     <Provider store={store}>
-      <ThemeProvider>
-        <HashRouter>
-          <WalletConfirmProvider><App /></WalletConfirmProvider>
-        </HashRouter>
-      </ThemeProvider>
+      <I18nProvider>
+        <ThemeProvider>
+          <HashRouter>
+            <WalletConfirmProvider>
+              <App />
+            </WalletConfirmProvider>
+          </HashRouter>
+        </ThemeProvider>
+      </I18nProvider>
     </Provider>
   </React.StrictMode>
 );

@@ -1,4 +1,5 @@
 import React from 'react';
+import { useI18n } from '../../../i18n/useI18n';
 
 interface OpReturnViewProps {
   opReturnText: string;
@@ -11,13 +12,17 @@ const OpReturnView: React.FC<OpReturnViewProps> = ({
   setOpReturnText,
   addOpReturnOutput,
 }) => {
+  const { t } = useI18n();
+
   return (
     <>
-      <label className="block font-medium mb-1">OP_RETURN Data</label>
+      <label className="block font-medium mb-1">
+        {t('builder.opReturnData')}
+      </label>
       <textarea
         value={opReturnText}
         onChange={(e) => setOpReturnText(e.target.value)}
-        placeholder="Enter space-separated ASCII words"
+        placeholder={t('builder.opReturnPlaceholder')}
         className="wallet-input p-2 w-full break-words whitespace-normal h-32"
       />
       <div className="flex justify-end mt-4">
@@ -25,7 +30,7 @@ const OpReturnView: React.FC<OpReturnViewProps> = ({
           onClick={addOpReturnOutput}
           className="wallet-btn-primary font-bold py-2 px-4"
         >
-          Add OP_RETURN Output
+          {t('builder.addOpReturnOutput')}
         </button>
       </div>
     </>

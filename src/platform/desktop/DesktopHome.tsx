@@ -1,10 +1,7 @@
 // Desktop Home — swapped in for src/features/home/Home.tsx (vite.desktop.config.ts).
 //
-// FAITHFUL COPY of upstream Home.tsx. The ONLY behavioural change is the balance
-// unit label: it reads `unit` (BCH on mainnet, tBCH on chipnet/testnet) via the
-// shared `unitFor` instead of a hardcoded "BCH", so test coins aren't mislabelled
-// as mainnet value. When upstream Home.tsx changes, re-copy this file and reapply
-// the three marked spots (import, `const unit`, the two `${unit}` strings).
+// Desktop-specific copy of upstream Home.tsx. It keeps the desktop-only balance
+// unit behavior while sharing the same translation keys as the mobile screen.
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useDispatch, useSelector } from 'react-redux';
@@ -44,7 +41,9 @@ import {
   scanBarcodeSafely,
 } from '../../utils/barcodeScanner';
 import { classifyScannedQrPayload } from '../../utils/qrScan';
-import { unitFor } from './unitLabel'; // ← desktop-only: per-network unit label
+import { unitFor } from './unitLabel';
+import { useI18n } from '../../i18n/useI18n';
+import { formatNumber } from '../../i18n/format';
 
 type QuickActionButtonProps = {
   title: string;
@@ -75,6 +74,7 @@ function QuickActionButton({ title, icon, onClick }: QuickActionButtonProps) {
 
 const Home: React.FC = () => {
   const navigate = useNavigate();
+  const { locale, t } = useI18n();
   const dispatch = useDispatch<AppDispatch>();
   const dbService = useMemo(() => DatabaseService(), []);
 
@@ -97,7 +97,7 @@ const Home: React.FC = () => {
   const currentNetwork = useSelector(
     (state: RootState) => state.network.currentNetwork
   );
-  const unit = unitFor(currentNetwork); // ← desktop-only: BCH / tBCH
+  const unit = unitFor(currentNetwork);
   const bchUsdQuote = useSelector(
     (state: RootState) => state.priceFeed['BCH-USD']?.price
   );
@@ -106,6 +106,17 @@ const Home: React.FC = () => {
   const totalBch = totalBalance / SATSINBITCOIN;
   const totalUsd =
     typeof bchUsdQuote === 'number' ? totalBch * bchUsdQuote : null;
+  const formattedBch = formatNumber(totalBch, locale, {
+    minimumFractionDigits: 8,
+    maximumFractionDigits: 8,
+  });
+  const formattedUsd =
+    totalUsd !== null
+      ? formatNumber(totalUsd, locale, {
+          minimumFractionDigits: 2,
+          maximumFractionDigits: 2,
+        })
+      : null;
   const recentTransactions = useMemo(
     () => (transactions ?? []).slice(-2).reverse(),
     [transactions]
@@ -210,7 +221,7 @@ const Home: React.FC = () => {
 
       const scanned = result?.ScanResult?.trim();
       if (!scanned) {
-        await Toast.show({ text: 'No QR code detected. Try again.' });
+        await Toast.show({ text: t('home.noQrCode') });
         return;
       }
 
@@ -239,7 +250,7 @@ const Home: React.FC = () => {
       }
 
       await Toast.show({
-        text: 'QR scanned, but it was not a supported wallet payload.',
+        text: t('home.unsupportedQr'),
       });
     } catch (error) {
       await Toast.show({ text: getBarcodeScannerErrorMessage(error) });
@@ -247,14 +258,16 @@ const Home: React.FC = () => {
     } finally {
       setScanBusy(false);
     }
-  }, [currentNetwork, currentWalletId, navigate, scanBusy]);
+  }, [currentNetwork, currentWalletId, navigate, scanBusy, t]);
 
   return (
     <WalletScreen maxWidthClassName="max-w-md" scrollable={false}>
       <div className="flex h-full min-h-0 flex-col gap-4">
         <PageHeader
-          title="Home"
-          subtitle={currentNetwork === Network.CHIPNET ? 'Chipnet' : undefined}
+          title={t('home.title')}
+          subtitle={
+            currentNetwork === Network.CHIPNET ? t('assets.chipnet') : undefined
+          }
           compact
         />
 
@@ -265,8 +278,8 @@ const Home: React.FC = () => {
 
           <SectionCard className="shrink-0 p-3">
             <SectionHeader
-              title="Portfolio"
-              subtitle="Wallet overview"
+              title={t('home.portfolio')}
+              subtitle={t('home.walletOverview')}
               compact
               action={
                 <button
@@ -275,7 +288,7 @@ const Home: React.FC = () => {
                   className="wallet-btn-secondary px-3 py-1.5 text-sm"
                   disabled={fetchingUTXOsRedux}
                 >
-                  {fetchingUTXOsRedux ? 'Syncing…' : 'Sync'}
+                  {fetchingUTXOsRedux ? t('home.syncing') : t('home.sync')}
                 </button>
               }
             />
@@ -290,17 +303,17 @@ const Home: React.FC = () => {
                 >
                   <div className="text-2xl font-bold wallet-text-strong">
                     {displayMode === 'BCH'
-                      ? `${totalBch.toFixed(8)} ${unit}`
-                      : totalUsd !== null
-                        ? `$${totalUsd.toFixed(2)} USD`
-                        : 'USD unavailable'}
+                      ? `${formattedBch} ${unit}`
+                      : formattedUsd !== null
+                        ? `$${formattedUsd} USD`
+                        : t('home.usdUnavailable')}
                   </div>
                   <div className="text-xs wallet-muted">
                     {displayMode === 'BCH'
                       ? totalUsd !== null
-                        ? `$${totalUsd.toFixed(2)} USD`
-                        : 'USD price unavailable'
-                      : `${totalBch.toFixed(8)} ${unit}`}
+                        ? `$${formattedUsd} USD`
+                        : t('home.usdPriceUnavailable')
+                      : `${formattedBch} ${unit}`}
                   </div>
                 </button>
               </div>
@@ -310,7 +323,7 @@ const Home: React.FC = () => {
                   setDisplayMode((mode) => (mode === 'BCH' ? 'USD' : 'BCH'))
                 }
                 className="flex h-14 w-14 items-center justify-center rounded-3xl bg-[color-mix(in_oklab,var(--wallet-accent-soft)_72%,transparent)] text-[var(--wallet-accent-strong)] transition hover:brightness-[1.04]"
-                aria-label={`Toggle ${unit} and USD balance`}
+                aria-label={t('home.toggleBalance')}
               >
                 <FaBitcoin className="text-2xl" />
               </button>
@@ -319,7 +332,7 @@ const Home: React.FC = () => {
 
           <SectionCard className="shrink-0 p-3">
             <SectionHeader
-              title="Quick Actions"
+              title={t('home.quickActions')}
               compact
               className="items-center"
               action={
@@ -328,11 +341,11 @@ const Home: React.FC = () => {
                   onClick={() => void handleScanQr()}
                   disabled={scanBusy}
                   className="wallet-card inline-flex h-10 items-center gap-2 rounded-xl border border-[var(--wallet-border)] bg-[color-mix(in_oklab,var(--wallet-accent-soft)_42%,transparent)] px-3 text-[var(--wallet-accent-strong)] transition hover:brightness-[1.03] disabled:cursor-not-allowed disabled:opacity-70 self-center"
-                  aria-label="Scan QR"
-                  title="Scan QR"
+                  aria-label={t('home.scanQr')}
+                  title={t('home.scanQr')}
                 >
                   <span className="text-sm font-semibold wallet-text-strong">
-                    Scan QR
+                    {t('home.scanQr')}
                   </span>
                   <FaQrcode
                     className={`text-base ${scanBusy ? 'animate-pulse' : ''}`}
@@ -342,7 +355,7 @@ const Home: React.FC = () => {
             />
             <div className="flex items-stretch gap-2.5">
               <QuickActionButton
-                title="Receive"
+                title={t('home.receive')}
                 icon={<FaArrowDown />}
                 onClick={() =>
                   navigate('/receive', {
@@ -351,7 +364,7 @@ const Home: React.FC = () => {
                 }
               />
               <QuickActionButton
-                title="Send"
+                title={t('home.send')}
                 icon={<FaArrowUp />}
                 onClick={() =>
                   navigate('/send', {
@@ -364,15 +377,15 @@ const Home: React.FC = () => {
 
           <SectionCard className="shrink-0 p-3">
             <SectionHeader
-              title="Recent Activity"
-              subtitle="Latest wallet activity"
+              title={t('home.recentActivity')}
+              subtitle={t('home.latestActivity')}
               compact
               action={
                 <button
                   className="wallet-link text-sm"
                   onClick={() => navigate(`/transactions/${currentWalletId}`)}
                 >
-                  View all
+                  {t('home.viewAll')}
                 </button>
               }
             />
@@ -384,12 +397,14 @@ const Home: React.FC = () => {
                     title={shortenTxHash(tx.tx_hash)}
                     description={
                       tx.height > 0
-                        ? `Block ${tx.height}`
-                        : 'Pending confirmation'
+                        ? `${t('home.block')} ${tx.height}`
+                        : t('home.pendingConfirmation')
                     }
                     right={
                       <span className="wallet-muted">
-                        {tx.height > 0 ? 'Confirmed' : 'Pending'}
+                        {tx.height > 0
+                          ? t('home.confirmed')
+                          : t('home.pending')}
                       </span>
                     }
                     compact
@@ -397,7 +412,7 @@ const Home: React.FC = () => {
                   />
                 ))
               ) : (
-                <EmptyState message="No recent activity yet." />
+                <EmptyState message={t('home.noRecentActivity')} />
               )}
             </div>
           </SectionCard>

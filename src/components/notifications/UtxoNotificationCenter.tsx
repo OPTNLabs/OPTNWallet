@@ -3,6 +3,8 @@ import React, { useEffect } from 'react';
 import { useDispatch, useSelector } from 'react-redux';
 import type { RootState } from '../../state/store';
 import { dequeueNotification } from '../../state/slices/notificationsSlice';
+import { useI18n } from '../../i18n/useI18n';
+import { formatNumber } from '../../i18n/format';
 
 const ToastItem: React.FC<{
   id: string;
@@ -11,6 +13,7 @@ const ToastItem: React.FC<{
   onClose: (id: string) => void;
   duration?: number;
 }> = ({ id, title, body, onClose, duration = 6000 }) => {
+  const { t } = useI18n();
   useEffect(() => {
     const t = setTimeout(() => onClose(id), duration);
     return () => clearTimeout(t);
@@ -25,14 +28,16 @@ const ToastItem: React.FC<{
       <div className="flex items-start gap-3">
         <div className="mt-1 h-2.5 w-2.5 shrink-0 rounded-full wallet-accent-icon" />
         <div className="flex-1">
-          <div className="text-sm font-semibold wallet-text-strong">{title}</div>
+          <div className="text-sm font-semibold wallet-text-strong">
+            {title}
+          </div>
           <div className="mt-0.5 text-sm wallet-muted">{body}</div>
         </div>
         <button
           onClick={() => onClose(id)}
           className="ml-2 rounded-full p-1 wallet-muted hover:brightness-95"
-          aria-label="Dismiss"
-          title="Dismiss"
+          aria-label={t('notifications.dismiss')}
+          title={t('notifications.dismiss')}
         >
           ✕
         </button>
@@ -43,6 +48,7 @@ const ToastItem: React.FC<{
 
 const UtxoNotificationCenter: React.FC = () => {
   const dispatch = useDispatch();
+  const { t, locale } = useI18n();
   const queue = useSelector((s: RootState) => s.notifications.queue);
 
   const onClose = (id: string) => dispatch(dequeueNotification({ id }));
@@ -67,7 +73,6 @@ const UtxoNotificationCenter: React.FC = () => {
           }
 
           const sats = n.value ?? 0;
-          const pretty = new Intl.NumberFormat().format(sats);
           const shortAddr = `${n.address.slice(0, 8)}…${n.address.slice(-6)}`;
           const shortTx = `${n.txid.slice(0, 6)}…${n.txid.slice(-6)}`;
 
@@ -75,8 +80,12 @@ const UtxoNotificationCenter: React.FC = () => {
             <ToastItem
               key={n.id}
               id={n.id}
-              title="Funds received"
-              body={`${pretty} sats to ${shortAddr} • ${shortTx}`}
+              title={t('notifications.fundsReceived')}
+              body={t('notifications.fundsReceivedBody', {
+                amount: formatNumber(sats, locale),
+                address: shortAddr,
+                txid: shortTx,
+              })}
               onClose={onClose}
             />
           );

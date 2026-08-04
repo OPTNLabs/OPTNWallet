@@ -19,15 +19,22 @@ import InfoTooltipIcon from './components/InfoTooltipIcon';
 import OnboardingCard from './components/OnboardingCard';
 import OnboardingScreen from './components/OnboardingScreen';
 import DerivationPathField from './components/DerivationPathField';
-import { getBchAccountPath, normalizeBchAccountPath } from '../../services/HdWalletService';
+import {
+  getBchAccountPath,
+  normalizeBchAccountPath,
+} from '../../services/HdWalletService';
 import ElectrumServer from '../../apis/ElectrumServer/ElectrumServer';
+import { useI18n } from '../../i18n/useI18n';
+import { getBip39LanguageForLocale } from '../../services/Bip39Service';
 
 const CreateWalletPage = () => {
   const currentNetwork = useSelector(selectCurrentNetwork);
   const [mnemonicPhrase, setMnemonicPhrase] = useState('');
   const [passphrase] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
-  const [derivationPath, setDerivationPath] = useState(() => getBchAccountPath(currentNetwork));
+  const [derivationPath, setDerivationPath] = useState(() =>
+    getBchAccountPath(currentNetwork)
+  );
   const [customDerivationPath, setCustomDerivationPath] = useState(false);
 
   const dbService = useMemo(() => DatabaseService(), []);
@@ -36,13 +43,15 @@ const CreateWalletPage = () => {
 
   const navigate = useNavigate();
   const dispatch = useDispatch();
+  const { locale, t } = useI18n();
 
   useEffect(() => {
     dispatch(setNetwork(Network.MAINNET));
   }, [dispatch]);
 
   useEffect(() => {
-    if (!customDerivationPath) setDerivationPath(getBchAccountPath(currentNetwork));
+    if (!customDerivationPath)
+      setDerivationPath(getBchAccountPath(currentNetwork));
   }, [currentNetwork, customDerivationPath]);
 
   useEffect(() => {
@@ -62,20 +71,26 @@ const CreateWalletPage = () => {
           console.warn('[CreateWalletPage] Electrum warm-up failed:', error);
         }
 
-        const mnemonic = await KeyService.generateMnemonic();
+        const mnemonic = await KeyService.generateMnemonic(
+          getBip39LanguageForLocale(locale)
+        );
         setMnemonicPhrase(mnemonic);
       } catch (error) {
         console.error('Error initializing wallet creation:', error);
-        await Toast.show({ text: 'Could not prepare wallet creation on this device.' });
+        await Toast.show({
+          text: t('onboarding.databasePreparationFailed'),
+        });
       }
     };
 
     void initDb();
-  }, [dbService]);
+  }, [dbService, locale, t]);
 
   const handleCreateAccount = async () => {
     if (!mnemonicPhrase.trim()) {
-      await Toast.show({ text: 'Mnemonic is still loading. Please wait a moment.' });
+      await Toast.show({
+        text: t('onboarding.mnemonicLoading'),
+      });
       return;
     }
 
@@ -91,7 +106,9 @@ const CreateWalletPage = () => {
       );
       if (accountExists) {
         console.error('Account already exists.');
-        await Toast.show({ text: 'This wallet is already available on this device.' });
+        await Toast.show({
+          text: t('onboarding.walletAlreadyAvailable'),
+        });
         return;
       }
 
@@ -111,7 +128,8 @@ const CreateWalletPage = () => {
         passphrase,
         { networkType: currentNetwork, walletType: WalletType.STANDARD }
       );
-      if (walletID == null) throw new Error('Failed to resolve created wallet ID.');
+      if (walletID == null)
+        throw new Error('Failed to resolve created wallet ID.');
 
       const walletInfo = await walletManager.getWalletInfo(walletID);
       const resolvedNetwork =
@@ -134,7 +152,9 @@ const CreateWalletPage = () => {
         setWalletDerivationPath({
           path: walletInfo?.derivation_path ?? normalizedDerivationPath,
           source:
-            walletInfo?.derivation_path_source === 'custom' ? 'custom' : 'default',
+            walletInfo?.derivation_path_source === 'custom'
+              ? 'custom'
+              : 'default',
         })
       );
       dispatch(setNetwork(resolvedNetwork));
@@ -142,7 +162,7 @@ const CreateWalletPage = () => {
       navigate(`/home/${walletID}`);
     } catch (error) {
       console.error('Error creating account:', error);
-      await Toast.show({ text: 'Wallet creation failed on this device.' });
+      await Toast.show({ text: t('onboarding.creationFailed') });
     } finally {
       setIsSubmitting(false);
     }
@@ -153,7 +173,7 @@ const CreateWalletPage = () => {
 
   return (
     <OnboardingScreen>
-      <OnboardingCard title="Create Wallet">
+      <OnboardingCard title={t('onboarding.createWallet')}>
         <div className="flex flex-col items-center min-h-[300px]">
           <DerivationPathField
             network={currentNetwork}
@@ -166,10 +186,10 @@ const CreateWalletPage = () => {
           />
 
           <div className="wallet-text-strong font-bold text-xl mb-2 flex items-center gap-2">
-            <span>Generated Mnemonic:</span>
+            <span>{t('onboarding.generatedMnemonic')}</span>
             <InfoTooltipIcon
               id="mnemonic-tooltip"
-              content="Your mnemonic (seed phrase) is the master key to your wallet. Store it securely and never share it; anyone with it can access your funds."
+              content={t('onboarding.mnemonicWarning')}
               ariaLabel="Mnemonic information"
             />
           </div>
@@ -179,25 +199,34 @@ const CreateWalletPage = () => {
               <div>
                 {mnemonicWords.slice(0, halfLength).map((word, index) => (
                   <div key={index} className="flex items-center mb-2">
-                    <span className="w-8 wallet-text-strong font-semibold">{index + 1}.</span>
-                    <span className="wallet-text-strong font-semibold">{word}</span>
+                    <span className="w-8 wallet-text-strong font-semibold">
+                      {index + 1}.
+                    </span>
+                    <span className="wallet-text-strong font-semibold">
+                      {word}
+                    </span>
                   </div>
                 ))}
               </div>
               <div>
                 {mnemonicWords.slice(halfLength).map((word, index) => (
-                  <div key={index + halfLength} className="flex items-center mb-2">
+                  <div
+                    key={index + halfLength}
+                    className="flex items-center mb-2"
+                  >
                     <span className="w-8 wallet-text-strong font-semibold">
                       {index + halfLength + 1}.
                     </span>
-                    <span className="wallet-text-strong font-semibold">{word}</span>
+                    <span className="wallet-text-strong font-semibold">
+                      {word}
+                    </span>
                   </div>
                 ))}
               </div>
             </div>
           ) : (
             <div className="text-center mb-4 p-3 rounded-xl wallet-surface-strong border border-[var(--wallet-border)] wallet-text-strong">
-              Generating...
+              {t('onboarding.generatingSeed')}
             </div>
           )}
         </div>
@@ -207,13 +236,15 @@ const CreateWalletPage = () => {
           disabled={!mnemonicPhrase.trim() || isSubmitting}
           className="wallet-btn-primary w-full my-2 text-xl font-bold"
         >
-          {isSubmitting ? 'Creating Wallet...' : 'Create Wallet'}
+          {isSubmitting
+            ? t('onboarding.creating')
+            : t('onboarding.createWallet')}
         </button>
         <button
           onClick={() => navigate('/')}
           className="wallet-btn-danger w-full my-2 text-xl font-bold"
         >
-          Back
+          {t('onboarding.back')}
         </button>
       </OnboardingCard>
     </OnboardingScreen>

@@ -6,6 +6,8 @@ import type {
 } from '../../../../types/bcmr';
 import type { UTXO } from '../../../../types/types';
 import RegularTxView from '../RegularTxView';
+import { I18nContext } from '../../../../i18n/I18nContext';
+import { translations } from '../../../../i18n/resources';
 
 const SAMPLE_TOKEN_CATEGORY = 'sample-token-category';
 
@@ -69,22 +71,30 @@ describe('RegularTxView', () => {
     ];
 
     const html = renderToStaticMarkup(
-      <RegularTxView
-        recipientAddress="bitcoincash:qpm2qsznhks23z7629mms6s4cwef74vcwvy22gdx6a"
-        setRecipientAddress={() => undefined}
-        transferAmount={1000}
-        setTransferAmount={() => undefined}
-        categoriesFromSelected={['0123456789abcdef']}
-        tokenAmount={0n}
-        setTokenAmount={() => undefined}
-        selectedTokenCategory={SAMPLE_TOKEN_CATEGORY}
-        setSelectedTokenCategory={() => undefined}
-        tokenMetadata={tokenMetadata}
-        selectedUtxos={selectedUtxos}
-        scanBarcode={async () => undefined}
-        handleAddOutput={async () => undefined}
-        txOutputs={[]}
-      />
+      <I18nContext.Provider
+        value={{
+          locale: 'en',
+          setLocale: () => undefined,
+          t: (key) => translations.en[key],
+        }}
+      >
+        <RegularTxView
+          recipientAddress="bitcoincash:qpm2qsznhks23z7629mms6s4cwef74vcwvy22gdx6a"
+          setRecipientAddress={() => undefined}
+          transferAmount={1000}
+          setTransferAmount={() => undefined}
+          categoriesFromSelected={['0123456789abcdef']}
+          tokenAmount={0n}
+          setTokenAmount={() => undefined}
+          selectedTokenCategory={SAMPLE_TOKEN_CATEGORY}
+          setSelectedTokenCategory={() => undefined}
+          tokenMetadata={tokenMetadata}
+          selectedUtxos={selectedUtxos}
+          scanBarcode={async () => undefined}
+          handleAddOutput={async () => undefined}
+          txOutputs={[]}
+        />
+      </I18nContext.Provider>
     );
 
     expect(html).toContain('Sample Token');

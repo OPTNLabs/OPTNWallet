@@ -3,7 +3,11 @@ import { useSelector, useDispatch } from 'react-redux';
 import { selectCurrentNetwork } from '../../state/selectors/networkSelectors';
 import getElectrumAdapter from '../../services/ElectrumAdapter';
 import { getElectrumServers } from '../../utils/servers/ElectrumServers';
-import { readStorageItem, writeStorageItem, getPreferredStorage } from '../../utils/browserStorage';
+import {
+  readStorageItem,
+  writeStorageItem,
+  getPreferredStorage,
+} from '../../utils/browserStorage';
 import {
   selectExplorerId,
   selectExplorerCustom,
@@ -15,8 +19,19 @@ import {
   setCustomFeeSatPerByte,
 } from '../../state/slices/preferencesSlice';
 import { EXPLORER_PRESETS } from '../../utils/servers/explorers';
-import { getUserServers, addUserServer, removeUserServer, isValidServerEntry, getServerLabel, parseServerEntry } from '../../utils/servers/userServers';
-import { getUserNodes, addUserNode, removeUserNode } from '../../utils/servers/userNodes';
+import {
+  getUserServers,
+  addUserServer,
+  removeUserServer,
+  isValidServerEntry,
+  getServerLabel,
+  parseServerEntry,
+} from '../../utils/servers/userServers';
+import {
+  getUserNodes,
+  addUserNode,
+  removeUserNode,
+} from '../../utils/servers/userNodes';
 import { Bip37NodeRow } from './Bip37NodeSettings';
 import { ServerPrivacySettings } from './ServerPrivacySettings';
 import {
@@ -26,6 +41,7 @@ import {
   type Backend,
 } from '../../platform/desktop/backendSelection';
 import { isDesktopPlatform } from '../../utils/platform';
+import { useI18n } from '../../i18n/useI18n';
 
 // BCH P2P default ports across networks — an entry on one of these is a BIP37
 // full node, anything else is an Electrum/Fulcrum server. Lets one "Add server"
@@ -49,6 +65,7 @@ function readLastHealthy(): string {
 
 export const ServerSettings: React.FC = () => {
   const dispatch = useDispatch();
+  const { t } = useI18n();
   const desktop = isDesktopPlatform();
   const currentNetwork = useSelector(selectCurrentNetwork);
   const defaultServers = getElectrumServers(currentNetwork);
@@ -66,8 +83,12 @@ export const ServerSettings: React.FC = () => {
   const [status, setStatus] = useState('');
   const [error, setError] = useState('');
 
-  const [userServers, setUserServers] = useState<string[]>(() => getUserServers(currentNetwork));
-  const [nodes, setNodes] = useState<string[]>(() => getUserNodes(currentNetwork));
+  const [userServers, setUserServers] = useState<string[]>(() =>
+    getUserServers(currentNetwork)
+  );
+  const [nodes, setNodes] = useState<string[]>(() =>
+    getUserNodes(currentNetwork)
+  );
   const [newServer, setNewServer] = useState('');
   const [addError, setAddError] = useState('');
 
@@ -78,7 +99,9 @@ export const ServerSettings: React.FC = () => {
 
   // Exactly ONE backend serves the wallet: the pool (auto/failover), a pinned
   // Electrum server, or a pinned BIP37 node. Reflect changes from the node rows.
-  const [backend, setBackendState] = useState<Backend>(() => getBackend(currentNetwork));
+  const [backend, setBackendState] = useState<Backend>(() =>
+    getBackend(currentNetwork)
+  );
   useEffect(() => {
     const refresh = () => setBackendState(getBackend(currentNetwork));
     refresh();
@@ -98,7 +121,7 @@ export const ServerSettings: React.FC = () => {
   const handleAddUserServer = () => {
     const entry = newServer.trim().replace(/^wss?:\/\//i, '');
     if (!isValidServerEntry(entry)) {
-      setAddError('Enter a valid host:port (e.g. 192.168.0.129:50002).');
+      setAddError(t('server.invalidHost'));
       return;
     }
     // Auto-detect the transport by port: a BCH P2P port means a BIP37 full node,
@@ -107,9 +130,7 @@ export const ServerSettings: React.FC = () => {
     const port = Number(parseServerEntry(entry).target.split(':')[1]);
     if (P2P_NODE_PORTS.has(port)) {
       if (!desktop) {
-        setAddError(
-          'Raw BCH node connections are only available on desktop. Add an Electrum/Fulcrum WSS server instead.'
-        );
+        setAddError(t('server.rawNodeMobileError'));
         return;
       }
       setNodes(addUserNode(currentNetwork, entry));
@@ -157,10 +178,12 @@ export const ServerSettings: React.FC = () => {
       }
       await adapter.reconnect(target);
       refreshCurrent();
-      setStatus('Connected.');
+      setStatus(t('server.connected'));
       setTimeout(() => setStatus(''), 3000);
     } catch (err) {
-      setError(`Connection failed: ${err instanceof Error ? err.message : String(err)}`);
+      setError(
+        `${t('server.connectionFailed')}: ${err instanceof Error ? err.message : String(err)}`
+      );
     } finally {
       setConnecting(false);
     }
@@ -187,10 +210,12 @@ export const ServerSettings: React.FC = () => {
       saveUserServer(server);
       await getElectrumAdapter().reconnect(server);
       refreshCurrent();
-      setStatus('Connected.');
+      setStatus(t('server.connected'));
       setTimeout(() => setStatus(''), 3000);
     } catch (err) {
-      setError(`Connection failed: ${err instanceof Error ? err.message : String(err)}`);
+      setError(
+        `${t('server.connectionFailed')}: ${err instanceof Error ? err.message : String(err)}`
+      );
     } finally {
       setConnecting(false);
     }
@@ -198,44 +223,57 @@ export const ServerSettings: React.FC = () => {
 
   return (
     <div className="flex flex-col gap-4">
-
       {/* Which single backend serves this wallet */}
       <div className="rounded-xl border border-[var(--wallet-border)] bg-[var(--wallet-surface)] p-3 flex items-center justify-between gap-3">
         <div className="min-w-0">
-          <p className="text-xs font-semibold wallet-muted uppercase tracking-wide">Backend</p>
+          <p className="text-xs font-semibold wallet-muted uppercase tracking-wide">
+            {t('server.backend')}
+          </p>
           <p className="text-sm wallet-text-strong break-all">
             {displayedBackend.kind === 'auto' ? (
-              'Auto — server pool, with failover'
+              t('server.autoBackend')
             ) : displayedBackend.kind === 'node' ? (
               <>
-                Node <span className="font-mono opacity-70">{displayedBackend.target}</span>{' '}
-                <span className="text-[10px] text-[var(--wallet-accent)] font-semibold">trustless</span>
+                {t('server.node')}{' '}
+                <span className="font-mono opacity-70">
+                  {displayedBackend.target}
+                </span>{' '}
+                <span className="text-[10px] text-[var(--wallet-accent)] font-semibold">
+                  {t('server.trustless')}
+                </span>
               </>
             ) : (
               <>
-                Server <span className="font-mono opacity-70">{displayedBackend.target}</span>
+                {t('server.server')}{' '}
+                <span className="font-mono opacity-70">
+                  {displayedBackend.target}
+                </span>
               </>
             )}
           </p>
-          <p className="text-[10px] wallet-muted">
-            Only this backend is used — pinning a node means Electrum servers aren&apos;t consulted.
-          </p>
+          <p className="text-[10px] wallet-muted">{t('server.onlyBackend')}</p>
         </div>
         {backend.kind !== 'auto' && (
           <button
             onClick={() => setBackend(currentNetwork, { kind: 'auto' })}
             className="shrink-0 rounded-lg border border-[var(--wallet-border)] px-2.5 py-1 text-[10px] font-semibold wallet-text-strong hover:border-[var(--wallet-accent)]/60"
           >
-            Use Auto
+            {t('server.useAuto')}
           </button>
         )}
       </div>
 
       {/* Current connection */}
       <div className="rounded-xl border border-[var(--wallet-border)] bg-[var(--wallet-surface)] p-3 space-y-1">
-        <p className="text-xs font-semibold wallet-muted uppercase tracking-wide">Connected server</p>
+        <p className="text-xs font-semibold wallet-muted uppercase tracking-wide">
+          {t('server.connectedServer')}
+        </p>
         <p className="text-sm font-mono wallet-text-strong break-all">
-          {currentServer ?? <span className="wallet-muted italic">Not connected</span>}
+          {currentServer ?? (
+            <span className="wallet-muted italic">
+              {t('server.notConnected')}
+            </span>
+          )}
         </p>
       </div>
 
@@ -249,7 +287,7 @@ export const ServerSettings: React.FC = () => {
               : 'border-[var(--wallet-border)] wallet-muted'
           }`}
         >
-          Auto
+          {t('server.auto')}
         </button>
         <button
           onClick={() => handleAutoToggle(false)}
@@ -259,7 +297,7 @@ export const ServerSettings: React.FC = () => {
               : 'border-[var(--wallet-border)] wallet-muted'
           }`}
         >
-          Manual
+          {t('server.manual')}
         </button>
       </div>
 
@@ -269,15 +307,17 @@ export const ServerSettings: React.FC = () => {
           <input
             type="text"
             value={customServer}
-            onChange={(e) => { setCustomServer(e.target.value); setError(''); }}
-            placeholder="host, host:50004, or wss://host:50004"
+            onChange={(e) => {
+              setCustomServer(e.target.value);
+              setError('');
+            }}
+            placeholder={t('server.serverInputPlaceholder')}
             className="w-full rounded-xl border border-[var(--wallet-border)] bg-[var(--wallet-surface)] px-3 py-2 text-sm font-mono wallet-text-strong placeholder:wallet-muted outline-none focus:ring-1 focus:ring-[var(--wallet-accent)]"
-            onKeyDown={(e) => { if (e.key === 'Enter') void handleConnect(); }}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') void handleConnect();
+            }}
           />
-          <p className="text-xs wallet-muted">
-            Default port: 50004 (WSS). Use <span className="font-mono">wss://</span> prefix to force WSS,
-            or <span className="font-mono">ws://</span> for unencrypted.
-          </p>
+          <p className="text-xs wallet-muted">{t('server.defaultPortHint')}</p>
         </div>
       )}
 
@@ -290,18 +330,20 @@ export const ServerSettings: React.FC = () => {
         className="w-full rounded-xl py-2.5 text-sm font-semibold text-white disabled:opacity-50"
         style={{ background: 'var(--wallet-accent, #6366f1)' }}
       >
-        {connecting ? 'Connecting…' : 'Connect'}
+        {connecting ? t('server.connecting') : t('server.connect')}
       </button>
 
       {/* Server pool — seed servers + your own, in one list. Click a row to
           connect to it; your own servers can also be removed. */}
       <div className="flex flex-col gap-1.5">
         <p className="text-xs font-semibold wallet-muted uppercase tracking-wide">
-          {currentNetwork} server pool
+          {t('server.pool', { network: currentNetwork })}
         </p>
         {defaultServers.map((srv) => {
           const isMine = userServers.includes(srv);
-          const label = isMine ? getServerLabel(currentNetwork, srv) : undefined;
+          const label = isMine
+            ? getServerLabel(currentNetwork, srv)
+            : undefined;
           return (
             <div
               key={srv}
@@ -315,23 +357,27 @@ export const ServerSettings: React.FC = () => {
                 onClick={() => void connectToServer(srv)}
                 disabled={connecting}
                 className="flex-1 text-left disabled:opacity-60"
-                title="Connect to this server"
+                title={t('server.connectTitle')}
               >
                 <span className="flex items-center justify-between gap-2">
                   <span className="break-all">
                     {label ? <span className="font-sans">{label}</span> : srv}
                     {label && <span className="ml-1.5 opacity-50">{srv}</span>}
                   </span>
-                  {currentServer === srv && <span className="text-[10px] font-semibold whitespace-nowrap">● active</span>}
+                  {currentServer === srv && (
+                    <span className="text-[10px] font-semibold whitespace-nowrap">
+                      {t('server.active')}
+                    </span>
+                  )}
                 </span>
               </button>
               {isMine && (
                 <button
                   onClick={() => handleRemoveUserServer(srv)}
                   className="text-[10px] text-red-400/70 hover:text-red-400 px-1 shrink-0"
-                  aria-label={`Remove ${srv}`}
+                  aria-label={`${t('server.remove')} ${srv}`}
                 >
-                  Remove
+                  {t('server.remove')}
                 </button>
               )}
             </div>
@@ -341,14 +387,15 @@ export const ServerSettings: React.FC = () => {
         {/* BIP37 full nodes live in the SAME pool (different transport, chosen
             automatically by port). Desktop-only; Bip37NodeRow returns nothing on
             the web build. */}
-        {desktop && nodes.map((target) => (
-          <Bip37NodeRow
-            key={`node:${target}`}
-            target={target}
-            network={currentNetwork}
-            onRemove={handleRemoveNode}
-          />
-        ))}
+        {desktop &&
+          nodes.map((target) => (
+            <Bip37NodeRow
+              key={`node:${target}`}
+              target={target}
+              network={currentNetwork}
+              onRemove={handleRemoveNode}
+            />
+          ))}
 
         {/* Add an Electrum/Fulcrum server OR a BIP37 node (LAN allowed). The
             port decides which transport the wallet uses. */}
@@ -356,12 +403,17 @@ export const ServerSettings: React.FC = () => {
           <input
             type="text"
             value={newServer}
-            onChange={(e) => { setNewServer(e.target.value); setAddError(''); }}
-            onKeyDown={(e) => { if (e.key === 'Enter') handleAddUserServer(); }}
+            onChange={(e) => {
+              setNewServer(e.target.value);
+              setAddError('');
+            }}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') handleAddUserServer();
+            }}
             placeholder={
               desktop
-                ? 'Add server — Fulcrum host:50002, or a node host:8333'
-                : 'Add WSS server — host:50004'
+                ? t('server.addDesktopPlaceholder')
+                : t('server.addMobilePlaceholder')
             }
             className="flex-1 rounded-xl border border-[var(--wallet-border)] bg-[var(--wallet-surface)] px-3 py-2 text-xs font-mono wallet-text-strong placeholder:wallet-muted outline-none focus:ring-1 focus:ring-[var(--wallet-accent)]"
           />
@@ -370,7 +422,7 @@ export const ServerSettings: React.FC = () => {
             disabled={!newServer.trim()}
             className="rounded-xl border border-[var(--wallet-accent)]/40 px-3 py-2 text-xs font-semibold text-[var(--wallet-accent)] hover:bg-[var(--wallet-accent)]/5 disabled:opacity-40 transition-colors"
           >
-            Add
+            {t('server.add')}
           </button>
         </div>
         {addError && <p className="text-[10px] text-red-400">{addError}</p>}
@@ -378,17 +430,23 @@ export const ServerSettings: React.FC = () => {
 
       {/* Block explorer */}
       <div className="flex flex-col gap-2 border-t border-[var(--wallet-border)] pt-4">
-        <p className="text-xs font-semibold wallet-muted uppercase tracking-wide">Block explorer</p>
-        <p className="text-xs wallet-muted">Used for “open in explorer” links on transactions.</p>
+        <p className="text-xs font-semibold wallet-muted uppercase tracking-wide">
+          {t('server.blockExplorer')}
+        </p>
+        <p className="text-xs wallet-muted">
+          {t('server.explorerDescription')}
+        </p>
         <select
           value={explorerId}
           onChange={(e) => dispatch(setExplorerId(e.target.value))}
           className="w-full rounded-xl border border-[var(--wallet-border)] bg-[var(--wallet-surface)] px-3 py-2 text-sm wallet-text-strong outline-none focus:ring-1 focus:ring-[var(--wallet-accent)]"
         >
           {EXPLORER_PRESETS.map((e) => (
-            <option key={e.id} value={e.id}>{e.label}</option>
+            <option key={e.id} value={e.id}>
+              {e.label}
+            </option>
           ))}
-          <option value="custom">Custom…</option>
+          <option value="custom">{t('server.custom')}</option>
         </select>
 
         {explorerId === 'custom' && (
@@ -397,25 +455,29 @@ export const ServerSettings: React.FC = () => {
               type="text"
               value={customTx}
               onChange={(e) => setCustomTx(e.target.value)}
-              placeholder="Tx URL, e.g. https://example.com/tx/{txid}"
+              placeholder={t('server.txUrlPlaceholder')}
               className="w-full rounded-xl border border-[var(--wallet-border)] bg-[var(--wallet-surface)] px-3 py-2 text-xs font-mono wallet-text-strong placeholder:wallet-muted outline-none focus:ring-1 focus:ring-[var(--wallet-accent)]"
             />
             <input
               type="text"
               value={customAddr}
               onChange={(e) => setCustomAddr(e.target.value)}
-              placeholder="Address URL, e.g. https://example.com/address/{address}"
+              placeholder={t('server.addressUrlPlaceholder')}
               className="w-full rounded-xl border border-[var(--wallet-border)] bg-[var(--wallet-surface)] px-3 py-2 text-xs font-mono wallet-text-strong placeholder:wallet-muted outline-none focus:ring-1 focus:ring-[var(--wallet-accent)]"
             />
             <p className="text-[10px] wallet-muted">
-              Use <span className="font-mono">{'{txid}'}</span> and <span className="font-mono">{'{address}'}</span> as placeholders.
+              {t('server.placeholderHelp')}
             </p>
             <button
-              onClick={() => dispatch(setExplorerCustom({ tx: customTx, address: customAddr }))}
+              onClick={() =>
+                dispatch(
+                  setExplorerCustom({ tx: customTx, address: customAddr })
+                )
+              }
               disabled={!customTx.includes('{txid}')}
               className="self-start rounded-xl border border-[var(--wallet-accent)]/40 px-3 py-1.5 text-xs font-semibold text-[var(--wallet-accent)] hover:bg-[var(--wallet-accent)]/5 disabled:opacity-40 transition-colors"
             >
-              Save custom explorer
+              {t('server.saveCustom')}
             </button>
           </div>
         )}
@@ -423,10 +485,10 @@ export const ServerSettings: React.FC = () => {
 
       {/* Transaction fee */}
       <div className="flex flex-col gap-2 border-t border-[var(--wallet-border)] pt-4">
-        <p className="text-xs font-semibold wallet-muted uppercase tracking-wide">Transaction fee</p>
-        <p className="text-xs wallet-muted">
-          Fee rate for new transactions. Automatic uses the network minimum (~1 sat/byte, Electron Cash default).
+        <p className="text-xs font-semibold wallet-muted uppercase tracking-wide">
+          {t('server.transactionFee')}
         </p>
+        <p className="text-xs wallet-muted">{t('server.feeDescription')}</p>
         <div className="flex gap-2">
           <button
             type="button"
@@ -437,7 +499,7 @@ export const ServerSettings: React.FC = () => {
                 : 'border-[var(--wallet-border)] wallet-muted'
             }`}
           >
-            Automatic
+            {t('server.automatic')}
           </button>
           <button
             type="button"
@@ -448,7 +510,7 @@ export const ServerSettings: React.FC = () => {
                 : 'border-[var(--wallet-border)] wallet-muted'
             }`}
           >
-            Custom
+            {t('server.customFee')}
           </button>
         </div>
         {feeMode === 'custom' && (
@@ -458,10 +520,12 @@ export const ServerSettings: React.FC = () => {
               min={1}
               step={0.1}
               value={customFeeSatPerByte}
-              onChange={(e) => dispatch(setCustomFeeSatPerByte(Number(e.target.value)))}
+              onChange={(e) =>
+                dispatch(setCustomFeeSatPerByte(Number(e.target.value)))
+              }
               className="w-28 rounded-xl border border-[var(--wallet-border)] bg-[var(--wallet-surface)] px-3 py-2 text-sm wallet-text-strong outline-none focus:ring-1 focus:ring-[var(--wallet-accent)]"
             />
-            <span className="text-xs wallet-muted">sat/byte — applies to your next transaction</span>
+            <span className="text-xs wallet-muted">{t('server.feeUnit')}</span>
           </label>
         )}
       </div>

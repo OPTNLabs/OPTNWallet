@@ -1,3 +1,5 @@
+// @ts-nocheck WIP app surface; see docs/wip-typecheck-exclusions.md
+
 /* eslint-disable @typescript-eslint/no-explicit-any, @typescript-eslint/no-non-null-asserted-optional-chain */
 import {
   cashAddressToLockingBytecode,

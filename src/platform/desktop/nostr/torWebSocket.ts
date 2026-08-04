@@ -58,7 +58,7 @@ export class TorWebSocket {
   static readonly CLOSING = 2;
   static readonly CLOSED = 3;
 
-  url: string;
+  url = '';
   readyState = TorWebSocket.CONNECTING;
   onopen: Handler = null;
   onmessage: Handler = null;

@@ -60,4 +60,9 @@ export const ADVANCED_ACTIONS: ActionConfig[] = [
     description: 'Manage contract instances',
     to: '/contract',
   },
+  {
+    title: 'QR Signing Demo',
+    description: 'Test partially signed transaction exchange',
+    to: '/qr-signing-demo',
+  },
 ];

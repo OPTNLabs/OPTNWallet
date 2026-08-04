@@ -3,14 +3,19 @@ import { useSelector } from 'react-redux';
 
 import type { RootState } from '../../state/store';
 import { SATSINBITCOIN } from '../../utils/constants';
+import { useI18n } from '../../i18n/useI18n';
 
 type CauldronActivityCardProps = {
   walletId: number;
 };
 
-export const CauldronActivityCard: React.FC<CauldronActivityCardProps> = ({ walletId }) => {
+export const CauldronActivityCard: React.FC<CauldronActivityCardProps> = ({
+  walletId,
+}) => {
+  const { t } = useI18n();
   const activity = useSelector(
-    (state: RootState) => state.walletSpecialActivity.byWallet[walletId]?.cauldron ?? null
+    (state: RootState) =>
+      state.walletSpecialActivity.byWallet[walletId]?.cauldron ?? null
   );
 
   if (
@@ -30,14 +35,18 @@ export const CauldronActivityCard: React.FC<CauldronActivityCardProps> = ({ wall
     return null;
   }
   const totalBch = Number(totalSats) / SATSINBITCOIN;
-  const tokenCount = Object.keys(activity.payload.tokenAmountsByCategory).length;
+  const tokenCount = Object.keys(
+    activity.payload.tokenAmountsByCategory
+  ).length;
 
   return (
     <div className="rounded-xl border border-[var(--wallet-accent)]/20 bg-[var(--wallet-surface)] p-4 space-y-2">
       <div className="flex items-center justify-between gap-3">
         <div>
           <div className="flex items-center gap-2">
-            <span className="text-sm font-semibold wallet-text-strong">Cauldron positions</span>
+            <span className="text-sm font-semibold wallet-text-strong">
+              {t('cauldron.positions')}
+            </span>
             <span className="rounded-full border border-[var(--wallet-accent)]/30 bg-[var(--wallet-accent)]/10 px-1.5 py-0.5 text-[9px] font-bold text-[var(--wallet-accent)] uppercase tracking-wide">
               DeFi
             </span>
@@ -47,12 +56,16 @@ export const CauldronActivityCard: React.FC<CauldronActivityCardProps> = ({ wall
           </div>
         </div>
         <div className="text-right text-xs wallet-muted">
-          <div>{activity.payload.positionCount} active</div>
-          <div>{tokenCount} token categories</div>
+          <div>
+            {activity.payload.positionCount} {t('cauldron.active')}
+          </div>
+          <div>
+            {tokenCount} {t('cauldron.tokenCategories')}
+          </div>
         </div>
       </div>
       <p className="text-[10px] wallet-muted leading-relaxed">
-        Detected from the active wallet receive/change/DeFi address set through the Cauldron indexer.
+        {t('cauldron.description')}
       </p>
     </div>
   );

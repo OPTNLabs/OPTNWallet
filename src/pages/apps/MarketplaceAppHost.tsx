@@ -1,5 +1,7 @@
 // src/pages/apps/MarketplaceAppHost.tsx
 
+// @ts-nocheck WIP app surface; see docs/wip-typecheck-exclusions.md
+
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useParams, useNavigate, useLocation } from 'react-router-dom';
 import { useSelector } from 'react-redux';

@@ -1,9 +1,7 @@
 // src/components/SweepPaperWallet.tsx
 
 import React, { useState } from 'react';
-import {
-  CapacitorBarcodeScannerTypeHint,
-} from '@capacitor/barcode-scanner';
+import { CapacitorBarcodeScannerTypeHint } from '@capacitor/barcode-scanner';
 import { Toast } from '@capacitor/toast';
 import {
   decodePrivateKeyWif,
@@ -22,12 +20,14 @@ import {
   getBarcodeScannerErrorMessage,
   scanBarcodeSafely,
 } from '../utils/barcodeScanner';
+import { useI18n } from '../i18n/useI18n';
 
 interface SweepPaperWalletProps {
   setPaperWalletUTXOs: React.Dispatch<React.SetStateAction<UTXO[]>>;
 }
 
-const BASE58_WIF_PATTERN = /^[123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz]+$/;
+const BASE58_WIF_PATTERN =
+  /^[123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz]+$/;
 
 const extractWifCandidates = (value: string): string[] => {
   const trimmed = value.trim();
@@ -51,6 +51,7 @@ const extractWifCandidates = (value: string): string[] => {
 const SweepPaperWallet: React.FC<SweepPaperWalletProps> = ({
   setPaperWalletUTXOs,
 }) => {
+  const { t } = useI18n();
   // State variables
   // const [wifKey, setWifKey] = useState<string>('');
   // const [cashAddress, setCashAddress] = useState<string>('');
@@ -76,7 +77,7 @@ const SweepPaperWallet: React.FC<SweepPaperWalletProps> = ({
         await processWifKey(scannedWif);
       } else {
         await Toast.show({
-          text: 'No QR code detected. Please try again.',
+          text: t('paper.noQrCode'),
         });
       }
     } catch (err) {
@@ -118,7 +119,7 @@ const SweepPaperWallet: React.FC<SweepPaperWalletProps> = ({
         // It's an error message
         setError(decoded);
         await Toast.show({
-          text: `Decoding Error: ${decoded}`,
+          text: `${t('paper.decodingError')}: ${decoded}`,
         });
         setLoading(false);
         return;
@@ -138,7 +139,7 @@ const SweepPaperWallet: React.FC<SweepPaperWalletProps> = ({
         // It's an error message
         setError(addressResult);
         await Toast.show({
-          text: `Address Conversion Error: ${addressResult}`,
+          text: `${t('paper.addressConversionError')}: ${addressResult}`,
         });
         setLoading(false);
         return;
@@ -157,7 +158,7 @@ const SweepPaperWallet: React.FC<SweepPaperWalletProps> = ({
 
       if (fetchedUtxos.length === 0) {
         await Toast.show({
-          text: 'No UTXOs found for this address.',
+          text: t('paper.noUtxos'),
         });
       } else {
         // Register key in-memory per outpoint, and mark UTXOs as paper wallet UTXOs
@@ -179,9 +180,9 @@ const SweepPaperWallet: React.FC<SweepPaperWalletProps> = ({
       }
     } catch (err) {
       console.error('Processing Error:', err);
-      setError('An unexpected error occurred.');
+      setError(t('paper.unexpected'));
       await Toast.show({
-        text: 'An unexpected error occurred. Please try again.',
+        text: t('paper.unexpectedTryAgain'),
       });
     } finally {
       setLoading(false);
@@ -195,7 +196,7 @@ const SweepPaperWallet: React.FC<SweepPaperWalletProps> = ({
         className="wallet-btn-primary font-bold py-2 px-4 flex items-center flex-1"
         disabled={loading}
       >
-        <FaCamera className="mr-2" /> Scan
+        <FaCamera className="mr-2" /> {t('paper.scan')}
       </button>
       {/* Error Message */}
       {error && (

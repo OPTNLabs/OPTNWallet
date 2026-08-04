@@ -2,13 +2,15 @@
 
 import { FaDonate } from 'react-icons/fa'; // Icon representing the faucet
 import { FiExternalLink } from 'react-icons/fi'; // External link icon
+import { useI18n } from '../i18n/useI18n';
 
 const FaucetView = () => {
+  const { t } = useI18n();
   const faucetMethod = {
-    name: 'Chipnet Faucet',
+    name: t('faucet.name'),
     href: 'https://tbch.googol.cash/',
     icon: <FaDonate size={24} />,
-    tooltip: 'Get Chipnet BCH',
+    tooltip: t('faucet.tooltip'),
   };
 
   return (
@@ -38,14 +40,14 @@ const FaucetView = () => {
 
         {/* Instructions Section */}
         <div className="wallet-card p-4">
-          <h3 className="text-xl font-bold mb-2">Instructions</h3>
+          <h3 className="text-xl font-bold mb-2">{t('faucet.instructions')}</h3>
           <ol className="list-decimal ml-6 space-y-2">
-            <li>Copy a BCH Chipnet address</li>
-            <li>Click the Chipnet Faucet link</li>
-            <li>Select "chipnet" in the NETWORK box</li>
-            <li>Paste your address</li>
-            <li>Answer the captcha question</li>
-            <li>Press "Get Coins"</li>
+            <li>{t('faucet.copyAddress')}</li>
+            <li>{t('faucet.clickLink')}</li>
+            <li>{t('faucet.selectNetwork')}</li>
+            <li>{t('faucet.pasteAddress')}</li>
+            <li>{t('faucet.captcha')}</li>
+            <li>{t('faucet.getCoins')}</li>
           </ol>
         </div>
       </div>

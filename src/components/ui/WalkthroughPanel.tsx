@@ -1,4 +1,5 @@
 import React from 'react';
+import { useI18n } from '../../i18n/useI18n';
 
 type WalkthroughStep = {
   title: string;
@@ -20,14 +21,17 @@ const WalkthroughPanel: React.FC<WalkthroughPanelProps> = ({
   className = '',
   numbered = true,
 }) => {
+  const { t } = useI18n();
   return (
     <section
       className={`wallet-section max-h-[60vh] overflow-y-auto pr-1 ${className}`.trim()}
     >
       <div className="flex items-start justify-between gap-3">
         <div>
-          <div className="wallet-kicker mb-1">Walkthrough</div>
-          <h2 className="text-base font-semibold wallet-text-strong">{title}</h2>
+          <div className="wallet-kicker mb-1">{t('walkthrough.label')}</div>
+          <h2 className="text-base font-semibold wallet-text-strong">
+            {title}
+          </h2>
         </div>
       </div>
 
@@ -50,8 +54,12 @@ const WalkthroughPanel: React.FC<WalkthroughPanelProps> = ({
                 <div className="mt-2 h-2.5 w-2.5 shrink-0 rounded-full bg-[var(--wallet-accent)]" />
               )}
               <div>
-                <div className="font-semibold wallet-text-strong">{step.title}</div>
-                <div className="mt-1 text-sm wallet-muted">{step.description}</div>
+                <div className="font-semibold wallet-text-strong">
+                  {step.title}
+                </div>
+                <div className="mt-1 text-sm wallet-muted">
+                  {step.description}
+                </div>
               </div>
             </div>
           </li>

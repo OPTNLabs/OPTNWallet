@@ -9,6 +9,7 @@ import { selectCurrentNetwork } from '../../../state/selectors/networkSelectors'
 import { PREFIX } from '../../../utils/constants';
 import { UTXO } from '../../../types/types';
 import SweepPaperWallet from '../../../components/SweepPaperWallet';
+import { useI18n } from '../../../i18n/useI18n';
 // import { Network } from 'cashscript';
 
 interface AddressSelectionProps {
@@ -41,6 +42,7 @@ const AddressSelection: React.FC<AddressSelectionProps> = ({
   setSelectedAddresses,
   setPaperWalletUTXOs,
 }) => {
+  const { t } = useI18n();
   const [showWalletAddressesPopup, setShowWalletAddressesPopup] =
     useState(false); // State for wallet addresses popup
   const [showContractAddressesPopup, setShowContractAddressesPopup] =
@@ -99,14 +101,14 @@ const AddressSelection: React.FC<AddressSelectionProps> = ({
         className="wallet-btn-primary flex-1"
         onClick={() => setShowWalletAddressesPopup(true)}
       >
-        Wallet funds
+        {t('builder.walletFunds')}
       </button>
 
       <button
         className="wallet-btn-primary flex-1"
         onClick={() => setShowContractAddressesPopup(true)}
       >
-        Contracts
+        {t('builder.contracts')}
       </button>
 
       <SweepPaperWallet setPaperWalletUTXOs={setPaperWalletUTXOs} />
@@ -115,18 +117,18 @@ const AddressSelection: React.FC<AddressSelectionProps> = ({
         selectedContractAddresses.length === 0 &&
         selectedUtxos.length === 0 && (
           <div className="text-sm wallet-muted">
-            Select a source to continue.
+            {t('builder.selectSource')}
           </div>
         )}
 
       {showWalletAddressesPopup && (
         <Popup closePopups={closePopups}>
           <h4 className="text-md font-semibold text-center mb-4">
-            Wallet sources
+            {t('builder.walletSources')}
           </h4>
           <div className="overflow-y-auto max-h-80">
             {addresses.length === 0 ? (
-              <p>No wallet addresses available.</p>
+              <p>{t('builder.noWalletAddresses')}</p>
             ) : (
               addresses.map((addressObj) => {
                 const isSelected = selectedAddresses.includes(
@@ -146,14 +148,14 @@ const AddressSelection: React.FC<AddressSelectionProps> = ({
                   >
                     <div className="flex flex-col">
                       <span className="font-medium">
-                        BCH address:{' '}
+                        {t('builder.bchAddress')}:{' '}
                         {shortenTxHash(
                           addressObj.address,
                           PREFIX[currentNetwork].length
                         )}
                       </span>
                       <span className="text-sm wallet-muted">
-                        Token address:{' '}
+                        {t('builder.tokenAddress')}:{' '}
                         {shortenTxHash(
                           addressObj.tokenAddress,
                           PREFIX[currentNetwork].length
@@ -171,11 +173,11 @@ const AddressSelection: React.FC<AddressSelectionProps> = ({
       {showContractAddressesPopup && (
         <Popup closePopups={closePopups}>
           <h4 className="text-md font-semibold text-center mb-4">
-            Contract sources
+            {t('builder.contractSources')}
           </h4>
           <div className="overflow-y-auto max-h-80">
             {contractAddresses.length === 0 ? (
-              <p>No contract addresses available.</p>
+              <p>{t('builder.noContractAddresses')}</p>
             ) : (
               contractAddresses.map((contractObj) => {
                 const isSelected =
@@ -207,7 +209,7 @@ const AddressSelection: React.FC<AddressSelectionProps> = ({
                         {contractObj.contractName}
                       </span>
                       <span className="text-sm wallet-muted">
-                        Contract address:{' '}
+                        {t('builder.contractAddress')}:{' '}
                         {shortenTxHash(
                           contractObj.address,
                           PREFIX[currentNetwork].length

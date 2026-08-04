@@ -4,6 +4,8 @@ import { useDispatch, useSelector } from 'react-redux';
 import { RootState, AppDispatch } from '../../state/store';
 import { disconnectSession } from '../../state/slices/walletconnectSlice';
 import { normalizeExternalUrl } from '../../utils/externalUrl';
+import { useI18n } from '../../i18n/useI18n';
+import { formatDate } from '../../i18n/format';
 
 interface Props {
   sessionTopic: string;
@@ -12,6 +14,7 @@ interface Props {
 
 const SessionSettingsModal: React.FC<Props> = ({ sessionTopic, onClose }) => {
   const dispatch = useDispatch<AppDispatch>();
+  const { locale, t } = useI18n();
   const session = useSelector(
     (state: RootState) => state.walletconnect.activeSessions?.[sessionTopic]
   );
@@ -46,7 +49,7 @@ const SessionSettingsModal: React.FC<Props> = ({ sessionTopic, onClose }) => {
         <div className="flex items-center gap-4 mb-4 min-w-0">
           <img
             src={dappMeta.icons[0]}
-            alt="DApp Icon"
+            alt={t('wc.unknownDapp')}
             className="h-16 w-16 shrink-0 rounded-full object-cover"
           />
           <div className="flex min-w-0 flex-col text-center md:text-left">
@@ -75,10 +78,12 @@ const SessionSettingsModal: React.FC<Props> = ({ sessionTopic, onClose }) => {
             {session.expiry && (
               <div className="mt-3 rounded border border-[var(--wallet-border)] bg-[var(--wallet-surface)] p-3 text-left">
                 <p className="text-[11px] uppercase tracking-wide wallet-muted">
-                  Disconnects On
+                  {t('wc.disconnectsOn')}
                 </p>
                 <p className="wallet-text-strong text-sm sm:text-base">
-                  {new Date(session.expiry * 1000).toLocaleString('en-US', {
+                  {formatDate(new Date(session.expiry * 1000), locale, {
+                    dateStyle: 'medium',
+                    timeStyle: 'short',
                     timeZone,
                   })}
                 </p>
@@ -93,13 +98,13 @@ const SessionSettingsModal: React.FC<Props> = ({ sessionTopic, onClose }) => {
             onClick={onClose}
             className="wallet-btn-secondary px-3 py-2 text-sm sm:text-base"
           >
-            Close
+            {t('wc.close')}
           </button>
           <button
             onClick={handleDisconnect}
             className="wallet-btn-danger px-3 py-2 text-sm sm:text-base whitespace-nowrap"
           >
-            Disconnect
+            {t('wc.disconnect')}
           </button>
         </div>
       </div>

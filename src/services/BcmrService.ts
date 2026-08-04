@@ -662,7 +662,7 @@ export default class BcmrService {
 
     // 1) in-memory cache
     if (ICON_CACHE.has(filePath)) {
-      return ICON_CACHE.get(filePath);
+      return ICON_CACHE.get(filePath) ?? null;
     }
 
     // 2) try reading from filesystem cache

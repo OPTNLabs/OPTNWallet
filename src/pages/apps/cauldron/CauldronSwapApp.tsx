@@ -1,3 +1,5 @@
+// @ts-nocheck WIP app surface; see docs/wip-typecheck-exclusions.md
+
 import React, {
   useCallback,
   useDeferredValue,

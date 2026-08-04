@@ -271,10 +271,17 @@ async function sendBatch(
 
 async function wireNotificationsOnce(client: ECClient) {
   if (notificationsWired) return;
-  client.on('notification', (msg: Notification) => {
+  client.on('notification', (msg) => {
+    const notification: Notification = {
+      jsonrpc: '2.0',
+      method: String((msg as { method?: unknown }).method ?? ''),
+      params: Array.isArray((msg as { params?: unknown }).params)
+        ? ((msg as { params: unknown[] }).params as ElectrumParams)
+        : [],
+    };
     for (const h of notificationHandlers) {
       try {
-        h(msg);
+        h(notification);
       } catch {
         // isolate handler errors
       }
@@ -437,8 +444,10 @@ export default function ElectrumServer() {
   ): Promise<RequestResponse> {
     await electrumConnect();
     try {
+      const client = electrum;
+      if (!client) throw new Error('Electrum client is not connected.');
       const res = await withTimeout(
-        electrum.request(method, ...params),
+        client.request(method, ...params),
         REQUEST_TIMEOUT_MS,
         `request(${method})`
       );
@@ -560,13 +569,15 @@ export default function ElectrumServer() {
    */
   async function unsubscribe(method: string, params?: ElectrumParams): Promise<void> {
     await electrumConnect();
+    const client = electrum;
+    if (!client) throw new Error('Electrum client is not connected.');
     const key = subKey(method, params);
     activeSubs.delete(key);
 
     if (method === 'blockchain.address.subscribe') {
       try {
         // Some servers support this Electrum Cash extension; ignore failures.
-        await electrum.request(
+        await client.request(
           'blockchain.address.unsubscribe',
           ...(params ?? [])
         );

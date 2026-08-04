@@ -2,6 +2,7 @@ import React, { useEffect } from 'react';
 import { useDispatch, useSelector } from 'react-redux';
 import type { RootState } from '../../state/store';
 import { dequeueServerNotification } from '../../state/slices/serverNotificationsSlice';
+import { useI18n } from '../../i18n/useI18n';
 
 const ToastItem: React.FC<{
   id: string;
@@ -10,6 +11,7 @@ const ToastItem: React.FC<{
   onClose: (id: string) => void;
   duration?: number;
 }> = ({ id, title, body, onClose, duration = 8000 }) => {
+  const { t } = useI18n();
   useEffect(() => {
     const timer = window.setTimeout(() => onClose(id), duration);
     return () => window.clearTimeout(timer);
@@ -24,14 +26,16 @@ const ToastItem: React.FC<{
       <div className="flex items-start gap-3">
         <div className="mt-1 h-2.5 w-2.5 shrink-0 rounded-full wallet-accent-icon" />
         <div className="flex-1">
-          <div className="text-sm font-semibold wallet-text-strong">{title}</div>
+          <div className="text-sm font-semibold wallet-text-strong">
+            {title}
+          </div>
           <div className="mt-0.5 text-sm wallet-muted">{body}</div>
         </div>
         <button
           onClick={() => onClose(id)}
           className="ml-2 rounded-full p-1 wallet-muted hover:brightness-95"
-          aria-label="Dismiss"
-          title="Dismiss"
+          aria-label={t('notifications.dismiss')}
+          title={t('notifications.dismiss')}
         >
           ✕
         </button>
@@ -42,6 +46,7 @@ const ToastItem: React.FC<{
 
 const ServerNotificationCenter: React.FC = () => {
   const dispatch = useDispatch();
+  const { t } = useI18n();
   const queue = useSelector((s: RootState) => s.serverNotifications.queue);
 
   const onClose = (id: string) => dispatch(dequeueServerNotification({ id }));
@@ -53,13 +58,13 @@ const ServerNotificationCenter: React.FC = () => {
           const shortTx = `${n.txid.slice(0, 6)}…${n.txid.slice(-6)}`;
           const shortAddr = n.address
             ? `${n.address.slice(0, 8)}…${n.address.slice(-6)}`
-            : 'unknown address';
+            : t('notifications.unknownAddress');
           const title =
             n.kind === 'transaction_confirmed'
-              ? 'Transaction confirmed'
+              ? t('notifications.transactionConfirmed')
               : n.kind === 'incoming_token'
-                ? 'Incoming token'
-                : 'Incoming BCH';
+                ? t('notifications.incomingToken')
+                : t('notifications.incomingBch');
           const body = `${shortTx} • ${shortAddr}`;
           return (
             <ToastItem

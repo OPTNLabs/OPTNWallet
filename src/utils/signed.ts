@@ -114,6 +114,11 @@ export class SignedMessage implements SignedMessageI {
       ...[31 + rs.recoveryId],
       ...rs.signature,
     ]);
+    const encodedMessageHash = binToBase64(messageHash);
+    if (!encodedMessageHash) {
+      throw new Error('Unable to encode message hash.');
+    }
+
     return {
       raw: {
         ecdsa: binToBase64(rs.signature),
@@ -123,7 +128,7 @@ export class SignedMessage implements SignedMessageI {
       details: {
         recoveryId: rs.recoveryId,
         compressed: true,
-        messageHash: binToBase64(messageHash),
+        messageHash: encodedMessageHash,
       },
       signature: binToBase64(electronEncoding),
     };
@@ -156,7 +161,8 @@ export class SignedMessage implements SignedMessageI {
     let signatureValid = false;
     let keyMatch = false;
     let pkhMatch = false;
-    let pkh, signatureType;
+    let pkh: Uint8Array | undefined;
+    let signatureType = 'na';
 
     if (sig.length === 65) {
       const rawSig = sig.length === 65 ? sig.slice(1) : sig;
@@ -211,12 +217,17 @@ export class SignedMessage implements SignedMessageI {
       }
     }
 
+    const encodedMessageHash = binToBase64(messageHash);
+    if (!encodedMessageHash) {
+      throw new Error('Unable to encode message hash.');
+    }
+
     return {
       valid: signatureValid && (keyMatch || pkhMatch),
       details: {
         signatureValid: signatureValid,
         signatureType: signatureType,
-        messageHash: binToBase64(messageHash),
+        messageHash: encodedMessageHash,
         publicKeyHashMatch: pkhMatch,
         publicKeyMatch: keyMatch,
       },

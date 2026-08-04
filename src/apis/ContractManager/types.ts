@@ -55,6 +55,7 @@ export type ContractInstanceRow = {
   token_address: string;
   abi: AbiFunction[];
   artifact: ContractArtifact;
+  balance: bigint;
   utxos: ContractInstanceUtxo[];
   unlock: Record<string, unknown> | null;
   [key: string]: unknown;

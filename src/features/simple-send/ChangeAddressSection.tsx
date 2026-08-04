@@ -1,3 +1,5 @@
+import { useI18n } from '../../i18n/useI18n';
+
 type ChangeAddressSectionProps = {
   selectedChangeAddress: string;
   setSelectedChangeAddress: (address: string) => void;
@@ -13,14 +15,18 @@ export function ChangeAddressSection({
   addresses,
   mask,
 }: ChangeAddressSectionProps) {
+  const { t } = useI18n();
+
   return (
     <div className="rounded-2xl border border-[var(--wallet-border)] wallet-surface-strong px-3 py-3">
       <div className="mb-2 flex items-center justify-between gap-3">
         <label className="text-sm font-semibold wallet-text-strong">
-          Change address
+          {t('send.changeAddress')}
         </label>
         <span className="text-[11px] wallet-muted font-mono">
-          {selectedChangeAddress ? mask(selectedChangeAddress) : 'Loading...'}
+          {selectedChangeAddress
+            ? mask(selectedChangeAddress)
+            : t('send.loading')}
         </span>
       </div>
       <div className="relative">
@@ -31,7 +37,7 @@ export function ChangeAddressSection({
         >
           {!addresses.length && (
             <option value="" disabled>
-              Loading…
+              {t('send.loading')}
             </option>
           )}
           {addresses.map((addressRow) => (

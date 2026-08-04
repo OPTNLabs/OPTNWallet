@@ -1,9 +1,14 @@
 import { createSlice, type PayloadAction } from '@reduxjs/toolkit';
 import { createSelector } from 'reselect';
 import type { RootState } from '../store';
-import { DEFAULT_EXPLORER_ID, type ExplorerChoice } from '../../utils/servers/explorers';
+import {
+  DEFAULT_EXPLORER_ID,
+  type ExplorerChoice,
+} from '../../utils/servers/explorers';
+import type { SupportedLocale } from '../../i18n/types';
 
 type PreferencesState = {
+  locale: SupportedLocale;
   preferInternalChangeForBch: boolean;
   enableTooltips: boolean;
   // Block explorer used for "open in explorer" links. A preset id, or 'custom'
@@ -18,6 +23,7 @@ type PreferencesState = {
 };
 
 const initialState: PreferencesState = {
+  locale: 'en',
   preferInternalChangeForBch: false,
   enableTooltips: false,
   explorerId: DEFAULT_EXPLORER_ID,
@@ -31,6 +37,9 @@ const preferencesSlice = createSlice({
   name: 'preferences',
   initialState,
   reducers: {
+    setLocale: (state, action: PayloadAction<SupportedLocale>) => {
+      state.locale = action.payload;
+    },
     setPreferInternalChangeForBch: (state, action: { payload: boolean }) => {
       state.preferInternalChangeForBch = action.payload;
     },
@@ -59,12 +68,14 @@ const preferencesSlice = createSlice({
     },
     setCustomFeeSatPerByte: (state, action: PayloadAction<number>) => {
       const value = Number(action.payload);
-      state.customFeeSatPerByte = Number.isFinite(value) && value > 0 ? value : 1.1;
+      state.customFeeSatPerByte =
+        Number.isFinite(value) && value > 0 ? value : 1.1;
     },
   },
 });
 
 export const {
+  setLocale,
   setPreferInternalChangeForBch,
   togglePreferInternalChangeForBch,
   setEnableTooltips,
@@ -74,6 +85,9 @@ export const {
   setFeeMode,
   setCustomFeeSatPerByte,
 } = preferencesSlice.actions;
+
+export const selectLocale = (state: RootState): SupportedLocale =>
+  state.preferences.locale ?? 'en';
 
 export const selectPreferInternalChangeForBch = (state: RootState) =>
   state.preferences.preferInternalChangeForBch;

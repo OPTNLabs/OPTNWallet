@@ -4,19 +4,18 @@ import React, { useState } from 'react';
 import { CapacitorBarcodeScannerTypeHint } from '@capacitor/barcode-scanner';
 import { useDispatch } from 'react-redux';
 import { AppDispatch } from '../state/store';
-import {
-  initWalletConnect,
-  wcPair,
-} from '../state/slices/walletconnectSlice';
+import { initWalletConnect, wcPair } from '../state/slices/walletconnectSlice';
 import { enqueueNotification } from '../state/slices/notificationsSlice';
 import {
   getBarcodeScannerErrorMessage,
   scanBarcodeSafely,
 } from '../utils/barcodeScanner';
 import ConnectionUriScanCard from './connect/ConnectionUriScanCard';
+import { useI18n } from '../i18n/useI18n';
 
 const WcConnectionManager: React.FC = () => {
   const dispatch = useDispatch<AppDispatch>();
+  const { t } = useI18n();
   const [scanning, setScanning] = useState<boolean>(false);
   const [uri, setUri] = useState('');
 
@@ -29,7 +28,7 @@ const WcConnectionManager: React.FC = () => {
           id: `walletconnect:manual:invalid:${Date.now()}`,
           kind: 'walletconnect',
           title: 'WalletConnect',
-          body: 'Please provide a valid WalletConnect URI.',
+          body: t('wc.validUri'),
           createdAt: Date.now(),
         })
       );
@@ -45,7 +44,7 @@ const WcConnectionManager: React.FC = () => {
           id: `walletconnect:manual:success:${Date.now()}`,
           kind: 'walletconnect',
           title: 'WalletConnect paired',
-          body: 'The WalletConnect session is now waiting for the dApp request.',
+          body: t('wc.pairingStarted'),
           createdAt: Date.now(),
         })
       );
@@ -86,7 +85,7 @@ const WcConnectionManager: React.FC = () => {
               id: `walletconnect:qr:success:${Date.now()}`,
               kind: 'walletconnect',
               title: 'WalletConnect paired',
-              body: 'WalletConnect pairing successful via QR.',
+              body: t('wc.pairingSuccessful'),
               createdAt: Date.now(),
             })
           );
@@ -100,7 +99,7 @@ const WcConnectionManager: React.FC = () => {
               id: `walletconnect:qr:invalid:${Date.now()}`,
               kind: 'walletconnect',
               title: 'WalletConnect',
-              body: 'Not a valid WalletConnect URI.',
+              body: t('wc.invalidQr'),
               createdAt: Date.now(),
             })
           );
@@ -111,7 +110,7 @@ const WcConnectionManager: React.FC = () => {
             id: `walletconnect:qr:none:${Date.now()}`,
             kind: 'walletconnect',
             title: 'WalletConnect',
-            body: 'No QR code detected. Try again.',
+            body: t('wc.noQr'),
             createdAt: Date.now(),
           })
         );
@@ -122,7 +121,7 @@ const WcConnectionManager: React.FC = () => {
         enqueueNotification({
           id: `walletconnect:qr:error:${Date.now()}`,
           kind: 'walletconnect',
-          title: 'WalletConnect scan failed',
+          title: t('wc.scanFailed'),
           body: getBarcodeScannerErrorMessage(err),
           createdAt: Date.now(),
         })
@@ -135,7 +134,7 @@ const WcConnectionManager: React.FC = () => {
 
   return (
     <ConnectionUriScanCard
-      label="Enter WalletConnect URI:"
+      label={t('wc.enterUri')}
       placeholder="wc:..."
       value={uri}
       onChange={setUri}
@@ -143,7 +142,7 @@ const WcConnectionManager: React.FC = () => {
       onConnect={handleManualConnect}
       scanning={scanning}
       submitting={false}
-      connectLabel="Connect"
+      connectLabel={t('wc.connect')}
     />
   );
 };

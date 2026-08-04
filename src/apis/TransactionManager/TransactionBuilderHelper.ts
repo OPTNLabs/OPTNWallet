@@ -265,10 +265,10 @@ export default function TransactionBuilderHelper(
               );
             }
           } else {
-            signingKey = await KeyService.fetchAddressPrivateKey(
+            const fetchedKey = await KeyService.fetchAddressPrivateKey(
               processedUtxo.address
             );
-            if (!signingKey || signingKey.length === 0) {
+            if (!fetchedKey || fetchedKey.length === 0) {
               throw new Error(
                 [
                   'Private key not found for selected input address.',
@@ -281,6 +281,7 @@ export default function TransactionBuilderHelper(
                 ].join(' ')
               );
             }
+            signingKey = fetchedKey;
           }
 
           const signatureTemplate = new SignatureTemplate(

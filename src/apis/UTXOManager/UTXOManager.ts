@@ -50,6 +50,9 @@ export default function UTXOManager() {
       `);
 
       for (const utxo of utxos) {
+        if (utxo.wallet_id === undefined) {
+          throw new Error(`UTXO ${utxo.tx_hash}:${utxo.tx_pos} has no wallet id.`);
+        }
         insertQuery.run([
           utxo.wallet_id,
           utxo.address,
@@ -308,6 +311,9 @@ export default function UTXOManager() {
         }
 
         for (const utxo of nextUtxos) {
+          if (utxo.wallet_id === undefined) {
+            throw new Error(`UTXO ${utxo.tx_hash}:${utxo.tx_pos} has no wallet id.`);
+          }
           insertStmt.run([
             utxo.wallet_id,
             utxo.address,

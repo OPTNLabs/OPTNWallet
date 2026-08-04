@@ -1,4 +1,5 @@
 import React from 'react';
+import { useI18n } from '../../../i18n/useI18n';
 
 interface TransactionTypeSelectorProps {
   showRegularTx: boolean;
@@ -27,13 +28,15 @@ const TransactionTypeSelector: React.FC<TransactionTypeSelectorProps> = ({
   resetFormValues,
   setPopupTitle,
 }) => {
+  const { t } = useI18n();
+
   return (
     <div className="mb-2 flex flex-wrap gap-2">
       <button
         onClick={() => {
           resetFormValues();
           setShowRegularTx(true);
-          setPopupTitle('Send BCH');
+          setPopupTitle(t('builder.sendBch'));
         }}
         className={`font-bold py-1 px-2 rounded border ${
           showRegularTx
@@ -41,13 +44,13 @@ const TransactionTypeSelector: React.FC<TransactionTypeSelectorProps> = ({
             : 'wallet-segment-inactive border-[var(--wallet-border)]'
         }`}
       >
-        Send BCH
+        {t('builder.sendBch')}
       </button>
       <button
         onClick={() => {
           resetFormValues();
           setShowOpReturn(true);
-          setPopupTitle('Attach message');
+          setPopupTitle(t('builder.attachMessage'));
         }}
         className={`font-bold py-1 px-2 rounded border ${
           showOpReturn
@@ -55,7 +58,7 @@ const TransactionTypeSelector: React.FC<TransactionTypeSelectorProps> = ({
             : 'wallet-segment-inactive border-[var(--wallet-border)]'
         }`}
       >
-        Attach message
+        {t('builder.attachMessage')}
       </button>
       {hasGenesisUtxoSelected && (
         <>
@@ -63,7 +66,7 @@ const TransactionTypeSelector: React.FC<TransactionTypeSelectorProps> = ({
             onClick={() => {
               resetFormValues();
               setShowCashToken(true);
-              setPopupTitle('Create token');
+              setPopupTitle(t('builder.createToken'));
             }}
             className={`font-bold py-1 px-2 rounded border ${
               showCashToken
@@ -71,13 +74,13 @@ const TransactionTypeSelector: React.FC<TransactionTypeSelectorProps> = ({
                 : 'wallet-segment-inactive border-[var(--wallet-border)]'
             }`}
           >
-            Create token
+            {t('builder.createToken')}
           </button>
           <button
             onClick={() => {
               resetFormValues();
               setShowNFTCashToken(true);
-              setPopupTitle('Create collectible');
+              setPopupTitle(t('builder.createCollectible'));
             }}
             className={`font-bold py-1 px-2 rounded border ${
               showNFTCashToken
@@ -85,7 +88,7 @@ const TransactionTypeSelector: React.FC<TransactionTypeSelectorProps> = ({
                 : 'wallet-segment-inactive border-[var(--wallet-border)]'
             }`}
           >
-            Create collectible
+            {t('builder.createCollectible')}
           </button>
         </>
       )}

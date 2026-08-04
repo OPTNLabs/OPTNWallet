@@ -3,9 +3,7 @@ import React, {
   useEffect,
   // useMemo
 } from 'react';
-import {
-  CapacitorBarcodeScannerTypeHint,
-} from '@capacitor/barcode-scanner';
+import { CapacitorBarcodeScannerTypeHint } from '@capacitor/barcode-scanner';
 import { Toast } from '@capacitor/toast';
 import {
   getBarcodeScannerErrorMessage,
@@ -27,6 +25,7 @@ import NFTView from './NFTView';
 import NFTConfigPopup from './NFTConfigPopup';
 import OpReturnView from './OpReturnView';
 import useTokenMetadata from '../../../hooks/useTokenMetadata';
+import { useI18n } from '../../../i18n/useI18n';
 
 interface OutputSelectionProps {
   recipientAddress: string;
@@ -48,7 +47,7 @@ interface OutputSelectionProps {
   nftCapability: undefined | TokenCapability;
   setNftCapability: (value: undefined | TokenCapability) => void;
   nftCommitment: undefined | string;
-  setNftCommitment: (value: string) => void;
+  setNftCommitment: (value: undefined | string) => void;
 }
 
 const OutputSelection: React.FC<OutputSelectionProps> = ({
@@ -73,6 +72,7 @@ const OutputSelection: React.FC<OutputSelectionProps> = ({
   setNftCommitment,
 }) => {
   const dispatch: AppDispatch = useDispatch();
+  const { t } = useI18n();
 
   const [showPopup, setShowPopup] = useState(false);
   const [showAddOutputPopup, setShowAddOutputPopup] = useState(false);
@@ -81,24 +81,29 @@ const OutputSelection: React.FC<OutputSelectionProps> = ({
   const [showNFTCashToken, setShowNFTCashToken] = useState(false);
   const [showOpReturn, setShowOpReturn] = useState(false);
   const [showNFTConfigPopup, setShowNFTConfigPopup] = useState(false);
-  const [popupTitle, setPopupTitle] = useState('Add Output');
+  const [popupTitle, setPopupTitle] = useState(() => t('builder.addOutput'));
   const [opReturnText, setOpReturnText] = useState('');
 
   const prices = useSelector((s: RootState) => s.priceFeed);
   const bchUsd = prices['BCH-USD']?.price ?? 0;
+  const prefixLength =
+    currentNetwork === Network.MAINNET
+      ? PREFIX.mainnet.length
+      : PREFIX.chipnet.length;
 
   const hasGenesisUtxoSelected = selectedUtxos.some(
     (utxo) => !utxo.token && utxo.tx_pos === 0
   );
   const categoriesFromSelected = [
     ...new Set(
-      selectedUtxos.filter((u) => u.token).map((u) => u.token.category)
+      selectedUtxos.flatMap((u) => (u.token ? [u.token.category] : []))
     ),
   ];
   const tokenMetadata = useTokenMetadata(categoriesFromSelected);
   const selectedTokenUtxo = selectedTokenCategory
-    ? selectedUtxos.find((utxo) => utxo.token?.category === selectedTokenCategory) ??
-      null
+    ? selectedUtxos.find(
+        (utxo) => utxo.token?.category === selectedTokenCategory
+      ) ?? null
     : null;
   const selectedTokenFallback = selectedTokenUtxo?.token?.BcmrTokenMetadata
     ? {
@@ -126,7 +131,7 @@ const OutputSelection: React.FC<OutputSelectionProps> = ({
     setShowNFTCashToken(false);
     setShowOpReturn(false);
     setShowNFTConfigPopup(false);
-    setPopupTitle('Add Output');
+    setPopupTitle(t('builder.addOutput'));
     setRecipientAddress('');
     setTransferAmount(0);
     setTokenAmount(0n);
@@ -166,7 +171,7 @@ const OutputSelection: React.FC<OutputSelectionProps> = ({
         hint: CapacitorBarcodeScannerTypeHint.ALL,
       });
       if (result && result.ScanResult) setRecipientAddress(result.ScanResult);
-      else await Toast.show({ text: 'No QR code detected. Please try again.' });
+      else await Toast.show({ text: t('builder.noQrCode') });
     } catch (error) {
       console.error('Barcode scan error:', error);
       await Toast.show({
@@ -177,7 +182,9 @@ const OutputSelection: React.FC<OutputSelectionProps> = ({
 
   const handleAddOutput = async () => {
     if (transferAmount < DUST) {
-      await Toast.show({ text: `Transfer amount must be at least ${DUST}.` });
+      await Toast.show({
+        text: t('builder.transferMinimum', { count: DUST }),
+      });
       return;
     }
     addOutput();
@@ -189,7 +196,7 @@ const OutputSelection: React.FC<OutputSelectionProps> = ({
       .map((s) => s.trim())
       .filter((s) => s.length > 0);
     if (opReturnArray.length === 0) {
-      await Toast.show({ text: 'OP_RETURN data cannot be empty.' });
+      await Toast.show({ text: t('builder.opReturnEmpty') });
       return;
     }
     const encoder = new TextEncoder();
@@ -215,20 +222,22 @@ const OutputSelection: React.FC<OutputSelectionProps> = ({
         {txOutputs.length > 0 && (
           <div className="flex justify-between items-center mb-4">
             <div>
-              <h3 className="text-lg font-semibold mb-1">Recipients</h3>
+              <h3 className="text-lg font-semibold mb-1">
+                {t('builder.recipients')}
+              </h3>
             </div>
             <button
               onClick={togglePopup}
               className="wallet-btn-primary py-1 px-2"
             >
-              Review recipients
+              {t('builder.reviewRecipients')}
             </button>
           </div>
         )}
         {showPopup && (
           <Popup closePopups={() => setShowPopup(false)}>
             {txOutputs.length === 0 ? (
-              <p className="wallet-muted">No outputs added yet.</p>
+              <p className="wallet-muted">{t('builder.noOutputs')}</p>
             ) : (
               <div className="max-h-[50vh] overflow-y-auto">
                 <h3 className="text-lg font-semibold text-center mb-4">
@@ -243,19 +252,23 @@ const OutputSelection: React.FC<OutputSelectionProps> = ({
                       {/* <span className="font-medium">Recipient:</span> */}
                       <span>
                         {shortenTxHash(
-                          output.recipientAddress,
-                          PREFIX[currentNetwork].length
+                          output.recipientAddress ?? '',
+                          prefixLength
                         )}
                       </span>
                     </div>
                     <div className="flex justify-between w-full">
-                      <span className="font-medium">Amount:</span>
+                      <span className="font-medium">
+                        {t('builder.amount')}:
+                      </span>
                       <span>{Number(output.amount) / SATSINBITCOIN} BCH</span>
                     </div>
                     {output.token && (
                       <>
                         <div className="flex justify-between w-full">
-                          <span className="font-medium">Token:</span>
+                          <span className="font-medium">
+                            {t('builder.token')}:
+                          </span>
                           <span>
                             {output.token.amount
                               ? output.token.amount.toString()
@@ -263,17 +276,23 @@ const OutputSelection: React.FC<OutputSelectionProps> = ({
                           </span>
                         </div>
                         <div className="flex justify-between w-full">
-                          <span className="font-medium">Category:</span>
+                          <span className="font-medium">
+                            {t('builder.category')}:
+                          </span>
                           <span>{output.token.category}</span>
                         </div>
                         {output.token.nft && (
                           <>
                             <div className="flex justify-between w-full">
-                              <span className="font-medium">Capability:</span>
+                              <span className="font-medium">
+                                {t('builder.capability')}:
+                              </span>
                               <span>{output.token.nft.capability}</span>
                             </div>
                             <div className="flex justify-between w-full">
-                              <span className="font-medium">Commitment:</span>
+                              <span className="font-medium">
+                                {t('builder.commitment')}:
+                              </span>
                               <span>{output.token.nft.commitment}</span>
                             </div>
                           </>
@@ -287,7 +306,7 @@ const OutputSelection: React.FC<OutputSelectionProps> = ({
                       }}
                       className="wallet-btn-danger py-1 px-2"
                     >
-                      Remove
+                      {t('builder.remove')}
                     </button>
                   </div>
                 ))}
@@ -301,7 +320,7 @@ const OutputSelection: React.FC<OutputSelectionProps> = ({
                 }}
                 className="wallet-btn-danger py-1 px-2"
               >
-                Remove all recipients
+                {t('builder.removeAllRecipients')}
               </button>
             </div>
           </Popup>
@@ -311,7 +330,12 @@ const OutputSelection: React.FC<OutputSelectionProps> = ({
             {txOutputs.length > 0 ? (
               <h3 className="flex flex-col">
                 <span>
-                  {`${txOutputs.length} Recipient${txOutputs.length === 1 ? '' : 's'} - ${
+                  {`${t(
+                    txOutputs.length === 1
+                      ? 'builder.recipient'
+                      : 'builder.recipientCount',
+                    { count: txOutputs.length }
+                  )} - ${
                     txOutputs.reduce(
                       (sum, utxo) => sum + Number(utxo.amount),
                       0
@@ -329,7 +353,7 @@ const OutputSelection: React.FC<OutputSelectionProps> = ({
               </h3>
             ) : (
               <div className="font-bold flex flex-col text-xl">
-                Add your first recipient
+                {t('builder.addFirstRecipient')}
               </div>
             )}
             {txOutputs.length <= 10 && (
@@ -338,12 +362,12 @@ const OutputSelection: React.FC<OutputSelectionProps> = ({
                   onClick={() => {
                     resetFormValues();
                     setShowRegularTx(true);
-                    setPopupTitle('Add a recipient');
+                    setPopupTitle(t('builder.addRecipient'));
                     setShowAddOutputPopup(true);
                   }}
                   className="wallet-btn-primary"
                 >
-                  Add recipient
+                  {t('builder.addRecipient')}
                 </button>
               </div>
             )}
@@ -352,12 +376,12 @@ const OutputSelection: React.FC<OutputSelectionProps> = ({
         {selectedUtxos.length > 0 && (
           <div className="mb-6">
             <h3 className="text-lg font-semibold mb-2">
-              Return leftover funds to
+              {t('builder.returnLeftover')}
             </h3>
             <input
               type="text"
               value={changeAddress}
-              placeholder="Wallet address for leftover BCH"
+              placeholder={t('builder.leftoverBchPlaceholder')}
               onChange={(e) => setChangeAddress(e.target.value)}
               className="wallet-input mb-2 w-full break-words whitespace-normal"
             />
@@ -452,8 +476,8 @@ const OutputSelection: React.FC<OutputSelectionProps> = ({
                 setShow={setShowNFTConfigPopup}
                 nftCapability={nftCapability}
                 setNftCapability={setNftCapability}
-                nftCommitment={nftCommitment}
-                setNftCommitment={setNftCommitment}
+                nftCommitment={nftCommitment ?? ''}
+                setNftCommitment={(value) => setNftCommitment(value)}
               />
             </div>
           </Popup>

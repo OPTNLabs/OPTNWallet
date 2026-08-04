@@ -25,8 +25,19 @@ export const AUTHCHAIN_SEARCH_MAX_DEPTH = 32;
 
 export async function resolveAuthChain(authbase: string): Promise<ChaingraphTx[]> {
   const authHeadData = await queryAuthHead(authbase);
+  const authHead = authHeadData as {
+    data?: {
+      transaction?: Array<{
+        authchains?: Array<{
+          authhead?: {
+            identity_output?: Array<{ transaction_hash?: unknown }>;
+          };
+        }>;
+      }>;
+    };
+  };
   const headHash = stripChaingraphHexBytes(
-    authHeadData?.data?.transaction?.[0]?.authchains?.[0]?.authhead
+    authHead.data?.transaction?.[0]?.authchains?.[0]?.authhead
       ?.identity_output?.[0]?.transaction_hash
   );
   if (!headHash) {
@@ -47,8 +58,10 @@ export async function resolveAuthChain(authbase: string): Promise<ChaingraphTx[]
     }
     seen.add(current.txid);
 
-    const txResp = await queryTransactionByHash(current.txid);
-    const tx = txResp?.data?.transaction?.[0] as ChaingraphTx | undefined;
+    const txResp = (await queryTransactionByHash(current.txid)) as {
+      data?: { transaction?: unknown[] };
+    };
+    const tx = txResp.data?.transaction?.[0] as ChaingraphTx | undefined;
     if (!tx) {
       throw new Error(`Chaingraph missing transaction ${current.txid}`);
     }

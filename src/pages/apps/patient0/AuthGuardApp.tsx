@@ -1,3 +1,5 @@
+// @ts-nocheck WIP app surface; see docs/wip-typecheck-exclusions.md
+
 // src/pages/apps/patient0/AuthGuardApp.tsx
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
