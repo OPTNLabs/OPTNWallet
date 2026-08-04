@@ -8,6 +8,11 @@ Technical documentation for contributors and third-party integrators.
   - Commands for Android APK/AAB builds and iOS Capacitor preparation.
 - [Wallet Architecture](./wallet-architecture.md)
   - Runtime shape, major modules, and where responsibilities live.
+- [P2P CashFusion Protocol](./p2p-cashfusion-protocol.md)
+  - Exact mechanism of the peer-to-peer CashFusion path (discovery, election,
+    blind credentials, onion outputs, assembly, signing). Not the root README.
+- [P2P CashFusion Threat Model](./THREAT_MODEL.md)
+  - Adversary classes for the P2P fusion design.
 - [Integration Guide](./integration-guide.md)
   - How to integrate a third-party product with OPTN Wallet.
 - [CashScript Contract Systems](./cashscript-contract-systems.md)

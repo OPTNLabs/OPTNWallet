@@ -1,5 +1,10 @@
 # CashFusion: implementation status and plan
 
+> **P2P path (exact mechanism):** see
+> [p2p-cashfusion-protocol.md](./p2p-cashfusion-protocol.md) — discovery,
+> election, blind credentials, onion outputs, assembly, and how it differs from
+> the server client below. Keep that doc updated when the wire format changes.
+
 ## Phase 1 — DONE (real protocol client)
 
 The wallet now speaks the actual CashFusion wire protocol. Not a probe, not a
