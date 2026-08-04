@@ -279,7 +279,7 @@ const ContractView = () => {
       return;
     }
     try {
-      const privKey = await KeyService.fetchAddressPrivateKey(address);
+      const privKey = await KeyService.fetchAddressPrivateKey(address, 'spend');
       const signer = new DataSigner(privKey);
       const message = signer.createMessage(data);
       const signature = signer.signMessage(message);

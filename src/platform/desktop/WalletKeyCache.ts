@@ -18,6 +18,18 @@ export type CachedPasswordSnapshot = Readonly<{
 
 let _cached: CachedPasswordSnapshot | null = null;
 
+// Bumped on every unlock and every wipe. Anything derived from an unlock —
+// a passed re-auth, for instance — can pin the epoch it was granted under and
+// find out later that its session is gone. That makes "still authorised?" a
+// question about the current session rather than about wall-clock time, so a
+// lock/unlock cycle or a switch to another wallet invalidates it for free.
+let _unlockEpoch = 0;
+
+/** Identifies the current unlock session. Changes on every unlock and lock. */
+export function getUnlockEpoch(): number {
+  return _unlockEpoch;
+}
+
 /**
  * Cache wallet credentials so the derived key can be re-derived on demand.
  */
@@ -27,6 +39,7 @@ export function setCachedPassword(
   ownerWalletId: number | null = null
 ): void {
   _cached = { password, salt, ownerWalletId };
+  _unlockEpoch += 1;
 }
 
 /**
@@ -53,6 +66,7 @@ export function getCachedPasswordSnapshot(): CachedPasswordSnapshot | null {
 
 export function clearCachedPassword(): void {
   _cached = null;
+  _unlockEpoch += 1;
   console.log('[WalletKeyCache] Password + salt wiped from memory');
 }
 

@@ -42,7 +42,12 @@ export async function gatherInputs(
     if (!publicKey) {
       throw new Error(`No key for UTXO address ${utxo.address}`);
     }
-    const privateKey = await KeyService.fetchAddressPrivateKey(utxo.address);
+    // 'background': auto-fusion runs unattended and a prompt mid-round would
+    // kill it. The user consented when they enabled fusion.
+    const privateKey = await KeyService.fetchAddressPrivateKey(
+      utxo.address,
+      'background'
+    );
     if (!privateKey) {
       throw new Error(`No private key for ${utxo.address}`);
     }
