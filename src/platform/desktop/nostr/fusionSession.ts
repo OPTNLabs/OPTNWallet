@@ -87,6 +87,42 @@ function jitterDelay(minMs: number, maxMs: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, delay));
 }
 
+/**
+ * Uniform integer in [0, maxExclusive) from the CSPRNG. Rejection-sampled: the
+ * ragged tail past the last whole multiple is discarded rather than folded
+ * back with `%`, which would quietly favour the low indices.
+ */
+function secureRandomInt(maxExclusive: number): number {
+  if (maxExclusive <= 1) return 0;
+  const rng = globalThis.crypto;
+  if (!rng?.getRandomValues) return Math.floor(Math.random() * maxExclusive);
+  const limit = Math.floor(0x1_0000_0000 / maxExclusive) * maxExclusive;
+  const word = new Uint32Array(1);
+  let value = 0;
+  do {
+    rng.getRandomValues(word);
+    value = word[0];
+  } while (value >= limit);
+  return value % maxExclusive;
+}
+
+/**
+ * Fisher-Yates over the CSPRNG, in place.
+ *
+ * This shuffle IS the mix-net's privacy. Layered encryption only hides which
+ * peer sent which output for as long as the permutation at each hop is
+ * unguessable — an adversary who can reproduce it can walk the peeling order
+ * straight back to the sender, and the layers bought nothing. `Math.random()`
+ * is xorshift128+ and its internal state is recoverable from its own output, so
+ * it has no business here.
+ */
+function secureShuffle<T>(items: T[]): void {
+  for (let i = items.length - 1; i > 0; i--) {
+    const j = secureRandomInt(i + 1);
+    [items[i], items[j]] = [items[j], items[i]];
+  }
+}
+
 const MAX_ROUND_MESSAGE_CHARS = 64 * 1024;
 const MAX_PARTICIPANTS = 20;
 const MAX_COMPONENTS = 100;
@@ -449,11 +485,8 @@ function runParticipant(
           peeled.push(inner);
         }
 
-        // Shuffle (Fisher-Yates) — this is the mix-net shuffle
-        for (let i = peeled.length - 1; i > 0; i--) {
-          const j = Math.floor(Math.random() * (i + 1));
-          [peeled[i], peeled[j]] = [peeled[j], peeled[i]];
-        }
+        // The mix-net shuffle. Must come from the CSPRNG — see secureShuffle.
+        secureShuffle(peeled);
 
         const nextIdx = myIdx + 1;
 

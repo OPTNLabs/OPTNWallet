@@ -38,6 +38,8 @@ import {
   poolEpoch,
   selectFusionGroup,
   POOL_PEER_TTL_SECONDS,
+  MIN_PARTICIPANTS,
+  MAX_PARTICIPANTS,
   type FusionPoolNetwork,
   type PoolAnnouncement,
   type RoundIdentity,
@@ -51,8 +53,10 @@ import { DEFAULT_RELAYS } from './nostr/chat';
 
 const P2P_FEERATE = 1_000; // sats per 1000 bytes
 const P2P_TIERS = [10_000, 100_000, 1_000_000, 10_000_000];
-const MIN_PARTICIPANTS = 2;
-const MAX_PARTICIPANTS = 10;
+// Participant bounds live in nostr/fusion.ts so the pool, the rendezvous and
+// this service cannot disagree. They did: this file capped a round at 10 while
+// the rendezvous truncated the candidate list to 6, so four peers could be
+// admitted here and then silently dropped downstream.
 const MAX_RELAYS = 8;
 let wsInstalled = false;
 
