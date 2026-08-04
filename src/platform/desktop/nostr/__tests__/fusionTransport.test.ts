@@ -220,7 +220,15 @@ describe('Nostr round transport', () => {
       ...messageBinding(),
       type: 'inputs',
       session: 'round',
-      inputs: [],
+      inputs: [
+        {
+          prevTxid: 'ab'.repeat(32),
+          prevIndex: 0,
+          value: 10_000,
+          pubkey: `02${'11'.repeat(32)}`,
+        },
+      ],
+      credentialSigs: ['aa'.repeat(64)],
     });
     await transport.send(recipient.pubkey, {
       ...messageBinding(),
@@ -255,6 +263,7 @@ describe('Nostr round transport', () => {
           pubkey: `02${'11'.repeat(32)}`,
         },
       ],
+      credentialSigs: ['bb'.repeat(64)],
     });
     await new Promise((r) => setTimeout(r, 10));
 

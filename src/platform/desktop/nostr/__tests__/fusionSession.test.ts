@@ -542,9 +542,26 @@ describe('P2P fusion round choreography (3 peers, in-memory)', () => {
       ],
       outputs: [{ script: p2pkhHex(output.pubHex), value: 99_600 }],
     };
+    // Mock coordinator must also play the credential issuer, or the
+    // participant never leaves the wait-for-params gate.
+    const { BlindIssuer } = await import('../fusionBlindSchnorr');
+    const issuer = BlindIssuer.create(32);
     let handler: Handler = () => undefined;
     const transport: RoundTransport = {
       send: async (_to, message) => {
+        if (message.type === 'credential_request') {
+          queueMicrotask(() =>
+            handler(coordinator, {
+              ...messageBinding(),
+              type: 'credential_response',
+              session,
+              responses: message.requests.map((r) => ({
+                index: r.index,
+                s: issuer.signHex(r.index, r.e),
+              })),
+            })
+          );
+        }
         if (message.type === 'outputs') {
           queueMicrotask(() =>
             handler(coordinator, {
@@ -570,6 +587,15 @@ describe('P2P fusion round choreography (3 peers, in-memory)', () => {
       },
       onMessage: (next) => {
         handler = next;
+        queueMicrotask(() =>
+          handler(coordinator, {
+            ...messageBinding(),
+            type: 'credential_params',
+            session,
+            roundPubkey: issuer.pubkeyHex,
+            blindNoncePoints: issuer.rPointsHex,
+          })
+        );
         return () => undefined;
       },
     };
