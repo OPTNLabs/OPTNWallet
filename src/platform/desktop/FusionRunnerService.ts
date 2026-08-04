@@ -150,6 +150,19 @@ export function isFusionRunning(walletId: number): boolean {
   return heldLeases.has(walletId);
 }
 
+// Unconfirmed coins are deliberately eligible here, which is a considered
+// divergence from Electron Cash rather than an oversight. EC excludes them
+// unconditionally (`plugin.py:145` — `if c['height'] <= 0: good = False`), but
+// that rule predates BCH's reliable 0-conf and its relaxed limits on chained
+// unconfirmed spends. Calin's position is that fusing unconfirmed is the better
+// design and that EC should move the same way, so OPTN does it now.
+//
+// The trade accepted by that choice: a fusion spending an unconfirmed parent
+// does not outlive it, so if the parent is ever evicted or replaced the signed
+// CoinJoin becomes unspendable and the round is wasted for every peer in it.
+// On BCH that is a rare case, and waiting for confirmation costs liquidity in
+// every round — which is its own privacy cost, since smaller pools mix worse.
+
 /**
  * Live, spendable, non-token coins for this wallet.
  *
@@ -171,7 +184,12 @@ async function freshCoins(
 
   const coins = Object.values(snapshot)
     .flat()
-    .filter((coin): coin is UTXO => Boolean(coin) && !coin.token);
+    .filter(
+      // Both token fields: `token` is our normalised shape, `token_data` is what
+      // comes straight off Electrum. A coin carrying either must never be fused
+      // — that would burn the CashToken.
+      (coin): coin is UTXO => Boolean(coin) && !coin.token && !coin.token_data
+    );
 
   // Depth bounds automatic spending only. A user who clicks Fuse Now is making an
   // explicit choice and may re-fuse a coin that has already reached the limit.
