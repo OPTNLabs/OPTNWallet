@@ -731,7 +731,7 @@ export default function ContractManager(): ContractManagerApi {
             const addr = v.slice('sigaddr:'.length).trim();
             if (!addr) throw new Error(`Invalid sigaddr for '${input.name}'.`);
 
-            const pk = await KeyService.fetchAddressPrivateKey(addr);
+            const pk = await KeyService.fetchAddressPrivateKey(addr, 'spend');
             if (!pk || pk.length === 0) {
               throw new Error(`Private key not found for sigaddr '${addr}'.`);
             }

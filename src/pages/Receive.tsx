@@ -52,7 +52,11 @@ async function fetchAddressWif(
   if (!ALLOW_PRIVATE_KEY_VIEW) return null;
   let privateKey: Uint8Array | null = null;
   try {
-    privateKey = await KeyService.fetchAddressPrivateKey(address);
+    // 'reveal': this hands the raw key to the user as WIF. Electron Cash gates
+    // the equivalent (show_private_key / export_privkeys_dialog) behind
+    // @protected, so it re-prompts for the wallet password. The tap-count
+    // unlock below is discoverability, not authentication.
+    privateKey = await KeyService.fetchAddressPrivateKey(address, 'reveal');
     if (!privateKey) return null;
     return encodePrivateKeyWif(
       privateKey,
