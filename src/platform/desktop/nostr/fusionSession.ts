@@ -17,6 +17,7 @@ import {
 } from './fusionSign';
 import { electCoordinator } from './fusion';
 import { ROUND_MSG_VERSION } from './fusionRound';
+import { onionWrap, onionPeel, onionUnpad, isEccAvailable } from './onionCrypto';
 
 /** Bind every round message to the protocol version, a unique nonce, and a
  *  timestamp. This prevents replay across rounds, cross-round message
@@ -54,6 +55,7 @@ export type RoundMessage =
   | ({ type: 'abort'; session: string; reason: string } & MessageBinding)
   | ({ type: 'inputs'; session: string; inputs: FusionInputRef[] } & MessageBinding)
   | ({ type: 'outputs'; session: string; outputs: FusionOutputRef[] } & MessageBinding)
+  | ({ type: 'onion_output'; session: string; onion: string; mixOrder: string[] } & MessageBinding)
   | ({ type: 'components_ready'; session: string } & MessageBinding)
   | ({
       type: 'assembled';
@@ -245,6 +247,15 @@ export function parseRoundMessage(content: string): RoundMessage | null {
       case 'outputs':
         if (!validArray(message.outputs, validOutput)) return null;
         break;
+      case 'onion_output':
+        if (
+          typeof message.onion !== 'string' ||
+          message.onion.length < 1 ||
+          !validParticipants(message.mixOrder)
+        ) {
+          return null;
+        }
+        break;
       case 'assembled':
         if (
           !validArray(message.inputs, validInput) ||
@@ -291,10 +302,14 @@ export interface RoundParams {
   broadcast: (txHex: string) => Promise<string>;
   timeoutMs?: number;
   signal?: AbortSignal;
-  /** Live round-phase updates (2=register, 3=verify, 4=sign, 5=broadcast). */
+  /** Live round-phase updates (2=register, 3=onion, 4=sign, 5=broadcast). */
   onPhase?: (phase: number) => void;
   /** Test seam: override jitter range [minMs, maxMs] per component send. */
   jitterMs?: [number, number];
+  /** Mix order for onion-wrapped outputs (sorted by pubkey). */
+  mixOrder?: string[];
+  /** Enable onion mix-net for output privacy. Default: true. */
+  onionEnabled?: boolean;
 }
 
 export interface RoundResult {
@@ -359,6 +374,11 @@ function runParticipant(
   coordinator: string
 ): Promise<RoundResult> {
   const session = params.session ?? sessionId(params.participants, params.tier);
+  // Mix-net peers: all participants EXCEPT the coordinator. The coordinator
+  // is the assembler and receives final revealed outputs — it does not peel.
+  const mixOrder = params.mixOrder ??
+    [...params.participants].filter((p) => p !== coordinator).sort();
+  const myIdx = mixOrder.indexOf(params.myPubkey);
 
   return new Promise((resolve, reject) => {
     let settled = false;
@@ -368,6 +388,9 @@ function runParticipant(
     let unsubscribe: () => void = () => undefined;
     let unsubscribeProtocolError: () => void = () => undefined;
     const seenNonces = new Set<string>();
+    // Onion mix-net state: collect onions from other peers
+    const collectedOnions: string[] = [];
+    const expectedOnionCount = params.participants.length;
 
     const cleanup = () => {
       if (timer) clearTimeout(timer);
@@ -401,10 +424,97 @@ function runParticipant(
       void fail(abortError('cancelled'), true);
     };
 
+    // Handle onion message: collect, peel, shuffle, forward
+    const handleOnionMessage = async (_from: string, message: Extract<RoundMessage, { type: 'onion_output' }>) => {
+      if (settled) return;
+
+      // Store the onion blob
+      collectedOnions.push(message.onion);
+
+      // Wait for all onions before processing
+      if (collectedOnions.length < expectedOnionCount) return;
+
+      try {
+        // Get this peer's private key for peeling
+        const myPriv = params.keysByPubkey.get(params.myPubkey);
+        if (!myPriv) {
+          throw new Error('private key not found for onion peeling');
+        }
+
+        // Peel one layer from each onion
+        const peeled: Uint8Array[] = [];
+        for (const onionB64 of collectedOnions) {
+          const blob = Uint8Array.from(atob(onionB64), c => c.charCodeAt(0));
+          const inner = await onionPeel(blob, myPriv);
+          peeled.push(inner);
+        }
+
+        // Shuffle (Fisher-Yates) — this is the mix-net shuffle
+        for (let i = peeled.length - 1; i > 0; i--) {
+          const j = Math.floor(Math.random() * (i + 1));
+          [peeled[i], peeled[j]] = [peeled[j], peeled[i]];
+        }
+
+        const nextIdx = myIdx + 1;
+
+        if (nextIdx >= mixOrder.length) {
+          // LAST PEELER — reveal plaintext outputs to coordinator only.
+          // Coordinator assembles the tx; participants wait for 'assembled'.
+          const revealedOutputs: FusionOutputRef[] = [];
+          for (const inner of peeled) {
+            const { addr, value } = onionUnpad(inner);
+            revealedOutputs.push({ script: addr, value });
+          }
+
+          await transport.send(coordinator, {
+            ...messageBinding(),
+            type: 'outputs',
+            session,
+            outputs: revealedOutputs,
+          });
+        } else {
+          // NOT last peeler — forward peeled onions to next peeler
+          const nextPeeler = mixOrder[nextIdx];
+          collectedOnions.length = 0; // Reset for next round
+          for (const inner of peeled) {
+            const innerB64 = btoa(String.fromCharCode(...inner));
+            await transport.send(nextPeeler, {
+              ...messageBinding(),
+              type: 'onion_output',
+              session,
+              onion: innerB64,
+              mixOrder,
+            });
+          }
+        }
+      } catch (error) {
+        // If onion peeling fails (e.g., WASM not loaded in test env),
+        // broadcast an abort so the round fails gracefully
+        throw new Error(`onion peeling failed: ${error}`);
+      }
+    };
+
     unsubscribe = transport.onMessage((from, message) => {
-      if (settled || from !== coordinator || message.session !== session) return;
+      if (settled) return;
+      if (message.session !== session) return;
       if (seenNonces.has(message.nonce)) return;
       seenNonces.add(message.nonce);
+
+      // Handle onion messages from peers in the mix-net (includes coordinator's own onions)
+      if (message.type === 'onion_output' && params.participants.includes(from)) {
+        void handleOnionMessage(from, message).catch((error: unknown) =>
+          void fail(asError(error), true)
+        );
+        return;
+      }
+
+      // Handle revealed outputs from last peeler — sent directly to coordinator.
+      if (message.type === 'outputs' && from !== coordinator) {
+        return;
+      }
+
+      // Only coordinator messages below
+      if (from !== coordinator) return;
       if (message.type === 'abort') {
         void fail(abortError(message.reason), false);
         return;
@@ -416,13 +526,13 @@ function runParticipant(
           approved = assembleFusionTx([
             { inputs: message.inputs, outputs: message.outputs },
           ]);
-          params.onPhase?.(3);
+          params.onPhase?.(5);
           const signatures = assembleVerifySign(
             params,
             approved.inputs,
             approved.outputs
           );
-          params.onPhase?.(4);
+          params.onPhase?.(6);
           void transport
             .send(coordinator, {
               ...messageBinding(),
@@ -443,7 +553,7 @@ function runParticipant(
         }
         try {
           verifyFinalFusionTx(approved, message.txHex, message.txid);
-          params.onPhase?.(5);
+          params.onPhase?.(7);
           // Broadcast liveness: every participant broadcasts after verification,
           // not just the coordinator. If the coordinator's broadcast failed or
           // its connection dropped, any peer can save the round. The broadcast
@@ -471,10 +581,7 @@ function runParticipant(
     );
     params.onPhase?.(2);
     void (async () => {
-      // Per-component submission: each input is sent individually with jitter
-      // to prevent a post-hoc analyst from linking components by timing.
-      // Each send goes through a fresh Tor circuit (the transport isolates
-      // per-message via throwaway keys and pool separation).
+      // Phase 2: send inputs to coordinator
       const [jMin, jMax] = params.jitterMs ?? [200, 2000];
       for (const input of params.myContribution.inputs) {
         await transport.send(coordinator, {
@@ -485,16 +592,48 @@ function runParticipant(
         });
         await jitterDelay(jMin, jMax);
       }
-      // Outputs are also sent individually with jitter, each through an
-      // anonymous throwaway key (unlinkable from inputs).
-      for (const output of params.myContribution.outputs) {
-        await transport.send(coordinator, {
-          ...messageBinding(),
-          type: 'outputs',
-          session,
-          outputs: [output],
-        });
-        await jitterDelay(jMin, jMax);
+      // Phase 3: outputs.
+      //
+      // When the onion layer is on it is a privacy guarantee, not a nicety, so
+      // a failure here fails the round rather than quietly reverting to
+      // plaintext. The old code caught everything and fell back silently: an
+      // observer would see the privacy layer vanish mid-round while the user
+      // was told nothing. Loud is the only safe direction here.
+      //
+      // Note this uses the outer `mixOrder`, which excludes the coordinator —
+      // it assembles, it does not peel. A local shadow used to rebuild the list
+      // from `participants` unfiltered, so the wrapper added a layer addressed
+      // to the coordinator that nobody in the peel chain could remove.
+      if (params.onionEnabled === true) {
+        if (!isEccAvailable()) {
+          throw new Error(
+            'onion mix-net enabled but secp256k1 is unavailable in this environment'
+          );
+        }
+        for (const output of params.myContribution.outputs) {
+          const payload = `${output.script}|${output.value}`;
+          const onion = await onionWrap(payload, mixOrder);
+          const onionB64 = btoa(String.fromCharCode(...onion));
+          await transport.send(mixOrder[0], {
+            ...messageBinding(),
+            type: 'onion_output',
+            session,
+            onion: onionB64,
+            mixOrder,
+          });
+          await jitterDelay(jMin, jMax);
+        }
+      } else {
+        // Direct mode: send outputs to coordinator
+        for (const output of params.myContribution.outputs) {
+          await transport.send(coordinator, {
+            ...messageBinding(),
+            type: 'outputs',
+            session,
+            outputs: [output],
+          });
+          await jitterDelay(jMin, jMax);
+        }
       }
       // Signal that all components have been submitted.
       await transport.send(coordinator, {
@@ -512,17 +651,23 @@ function runCoordinator(
 ): Promise<RoundResult> {
   const session = params.session ?? sessionId(params.participants, params.tier);
   const others = params.participants.filter((peer) => peer !== params.myPubkey);
+  // Mix-net peers: all participants EXCEPT the coordinator.
+  const mixOrder = params.mixOrder ??
+    [...params.participants].filter((p) => p !== params.myPubkey).sort();
 
   return new Promise((resolve, reject) => {
     const inputsByPeer = new Map<string, FusionInputRef[]>([
       [params.myPubkey, params.myContribution.inputs],
     ]);
-    const outputPool: FusionOutputRef[] = [...params.myContribution.outputs];
+    const useOnionForOutputs = params.onionEnabled === true;
+    const outputPool: FusionOutputRef[] = useOnionForOutputs
+      ? [] // outputs arrive via onion reveal chain
+      : [...params.myContribution.outputs]; // direct mode: pre-load
     const signaturesByOutpoint = new Map<string, InputSig>();
     const signedPeers = new Set<string>();
     const seenNonces = new Set<string>();
     const readyPeers = new Set<string>([params.myPubkey]); // coordinator is always ready
-    let outputMessages = 1;
+    let outputMessages = useOnionForOutputs ? 0 : 1;
     let assembled: { inputs: FusionInputRef[]; outputs: FusionOutputRef[] } | null =
       null;
     let assembling = false;
@@ -618,15 +763,17 @@ function runCoordinator(
 
     const tryAssemble = async () => {
       if (!settled && !assembled) {
-        // Diagnostic: shows registration progress so a phase-2 stall reveals which
-        // peer's inputs/outputs never arrived (e.g. "inputs 2/3 outputs 3/3").
         console.info(
           '[p2p-fusion coord] session', session.slice(0, 10),
           'inputs', inputsByPeer.size, '/', params.participants.length,
-          'outputs', outputMessages, '/', params.participants.length,
+          'outputs', outputPool.length,
           'ready', readyPeers.size, '/', params.participants.length
         );
       }
+      // Wait for all peers to be ready AND outputs to be in the pool
+      // before assembling. In onion mode, outputs arrive via the reveal chain
+      // (async, multi-hop) so the pool may still be empty when components_ready
+      // fires.
       if (
         settled ||
         assembling ||
@@ -635,16 +782,20 @@ function runCoordinator(
       ) {
         return;
       }
+      // Wait for at least one output to be present (onion reveal or direct).
+      if (outputPool.length === 0) {
+        return;
+      }
       assembling = true;
       const inputs = [...inputsByPeer.values()].flat();
       assembled = assembleFusionTx([{ inputs, outputs: outputPool }]);
-      params.onPhase?.(3);
+      params.onPhase?.(5);
       const ownSignatures = assembleVerifySign(
         params,
         assembled.inputs,
         assembled.outputs
       );
-      params.onPhase?.(4);
+      params.onPhase?.(6);
       ownSignatures.forEach((signature) =>
         signaturesByOutpoint.set(inputKey(signature), signature)
       );
@@ -741,5 +892,26 @@ function runCoordinator(
       params.timeoutMs ?? DEFAULT_TIMEOUT
     );
     params.onPhase?.(2);
+    // Phase 3: coordinator sends its own outputs through the onion chain
+    // (same as participants — everyone wraps and sends to mixOrder[0]).
+    (async () => {
+      if (!useOnionForOutputs) return;
+      const jMin = params.jitterMs?.[0] ?? 200;
+      const jMax = params.jitterMs?.[1] ?? 2_000;
+      for (const output of params.myContribution.outputs) {
+        const payload = `${output.script}|${output.value}`;
+        const onion = await onionWrap(payload, mixOrder);
+        const onionB64 = btoa(String.fromCharCode(...onion));
+        const firstPeeler = mixOrder[0];
+        await transport.send(firstPeeler, {
+          ...messageBinding(),
+          type: 'onion_output',
+          session,
+          onion: onionB64,
+          mixOrder,
+        });
+        await jitterDelay(jMin, jMax);
+      }
+    })().catch((error: unknown) => void fail(asError(error), true));
   });
 }

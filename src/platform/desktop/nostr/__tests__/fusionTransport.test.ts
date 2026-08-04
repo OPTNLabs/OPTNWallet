@@ -310,7 +310,7 @@ describe('Nostr round transport', () => {
       };
       return {
         round,
-        keys: new Map([[inKey.pubHex, inKey.priv]]),
+        keys: new Map([[inKey.pubHex, inKey.priv], [round.pubHex, round.priv]]),
         contribution,
       };
     });

@@ -517,6 +517,11 @@ export async function runP2pFusion(
     const keysByPubkey = new Map(
       runInputs.map((input) => [input.pubkey, hexToBin(input.privkey)])
     );
+    // The onion peeler looks its key up by `myPubkey`, which is the Nostr round
+    // identity — not one of the BCH input pubkeys above. Without this entry the
+    // peel throws "private key not found for onion peeling" and the round dies.
+    // The tests already supplied it; production never did.
+    keysByPubkey.set(round.pubkey, round.secretKey);
     const myOutputs: FusionOutputRef[] = outputScripts.map((script, index) => ({
       script,
       value: outputPlan.values[index],
@@ -532,6 +537,12 @@ export async function runP2pFusion(
         feerate: P2P_FEERATE,
         myContribution: { inputs: myInputs, outputs: myOutputs },
         keysByPubkey,
+        // Route outputs through the peer mix-net. Without this the coordinator
+        // sees, in one message, exactly which outputs belong to which peer —
+        // the message boundary is itself the grouping, so a fresh signing key
+        // does not help. Costs no extra infrastructure: the peers are the mix
+        // and the existing Nostr relays are the transport.
+        onionEnabled: true,
         signal: opts.signal,
         broadcast: async (txHex) => {
           try {

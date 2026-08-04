@@ -44,6 +44,14 @@ const MAX_INPUTS = 100;
 const MAX_TOTAL_COMPONENTS = 100;
 const MAX_OUTPUTS_PER_PEER = 4;
 
+// ─── Gathering model: 6 peers OR timeout with 2+ ───────────────────────
+/** Maximum participants per round (onion mix-net cap). */
+export const MAX_PARTICIPANTS = 6;
+/** Minimum participants to start a round (must have at least 2). */
+export const MIN_PARTICIPANTS = 2;
+/** How long to wait for peers to gather before starting with whoever we have. */
+export const GATHER_TIMEOUT_MS = 30_000;
+
 export type FusionPoolNetwork = 'mainnet' | 'chipnet';
 
 export function poolEpoch(nowSeconds = Math.floor(Date.now() / 1000)): number {

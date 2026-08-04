@@ -104,7 +104,10 @@ function makePeers(count = 2) {
     };
     return {
       round,
-      keys: new Map([[inKey.pubHex, inKey.priv]]),
+      keys: new Map([
+        [inKey.pubHex, inKey.priv],
+        [round.pubHex, round.priv], // needed for onion peeling
+      ]),
       contribution,
     };
   });
@@ -139,7 +142,7 @@ describe('P2P fusion round choreography (3 peers, in-memory)', () => {
         inputs: [{ prevTxid: `${n}${'a'.repeat(63)}`, prevIndex: n, value: 100_000, pubkey: inKey.pubHex }],
         outputs: [{ script: p2pkhHex(outKey.pubHex), value: 99_600 }],
       };
-      return { round, keys: new Map([[inKey.pubHex, inKey.priv]]), contribution };
+      return { round, keys: new Map([[inKey.pubHex, inKey.priv], [round.pubHex, round.priv]]), contribution };
     });
 
     const participants = peers.map((p) => p.round.pubHex);
@@ -187,6 +190,77 @@ describe('P2P fusion round choreography (3 peers, in-memory)', () => {
     // Sanity: 3 inputs + 3 outputs actually got fused together.
     expect(decoded.inputs).toHaveLength(3);
     expect(decoded.outputs).toHaveLength(3);
+    expect(hub.activeHandlerCount()).toBe(0);
+  });
+
+  it('routes outputs through the onion mix-net and still lands a VM-valid CoinJoin', async () => {
+    // Same round as above, but with the mix-net on. Until this existed the whole
+    // peel/shuffle/forward path was unexercised — `onionEnabled` was never set
+    // by any test or by production, so none of it had ever run.
+    const peers = [1, 2, 3].map((n) => {
+      const inKey = keypair(n * 10 + 1);
+      const outKey = keypair(n * 10 + 2);
+      const round = keypair(n * 10 + 3);
+      const contribution: PeerContribution = {
+        inputs: [{ prevTxid: `${n}${'a'.repeat(63)}`, prevIndex: n, value: 100_000, pubkey: inKey.pubHex }],
+        outputs: [{ script: p2pkhHex(outKey.pubHex), value: 99_600 }],
+      };
+      return { round, keys: new Map([[inKey.pubHex, inKey.priv], [round.pubHex, round.priv]]), contribution };
+    });
+
+    const participants = peers.map((p) => p.round.pubHex);
+    const coordinator = coordinatorOf(participants);
+    const hub = new Hub();
+    let broadcasts = 0;
+    const broadcast = async (txHex: string): Promise<string> => {
+      broadcasts += 1;
+      return txidOf(txHex);
+    };
+
+    const results = await Promise.all(
+      peers.map((p) =>
+        runFusionRound(
+          {
+            myPubkey: p.round.pubHex,
+            participants,
+            tier: 100_000,
+            feerate: 1000,
+            myContribution: p.contribution,
+            keysByPubkey: p.keys,
+            broadcast,
+            timeoutMs: 5000,
+            jitterMs: [0, 0],
+            onionEnabled: true,
+          },
+          hub.transportFor(p.round.pubHex)
+        )
+      )
+    );
+
+    // The mix-net actually carried the outputs — not a silent fall back to
+    // plaintext, which is how this used to pass without running at all.
+    const onionSends = hub.sent.filter((m) => m.message.type === 'onion_output');
+    expect(onionSends.length).toBeGreaterThan(0);
+
+    // The coordinator assembles, it does not peel: it must never appear in a
+    // mix order.
+    for (const send of onionSends) {
+      const { mixOrder } = send.message as { mixOrder: string[] };
+      expect(mixOrder).not.toContain(coordinator);
+    }
+
+    // And the round still converges on one VM-valid transaction.
+    expect(new Set(results.map((r) => r.txid)).size).toBe(1);
+    expect(broadcasts).toBe(1);
+
+    const decodedOnion = decodeTransaction(hexToBin(results[0].txHex)) as TransactionCommon;
+    const { sourceOutputs: onionSources } = toLibauthTx(
+      assembleFusionTx(peers.map((p) => p.contribution))
+    );
+    const onionVm = createVirtualMachineBCH2023();
+    expect(onionVm.verify({ transaction: decodedOnion, sourceOutputs: onionSources })).toBe(true);
+    expect(decodedOnion.inputs).toHaveLength(3);
+    expect(decodedOnion.outputs).toHaveLength(3);
     expect(hub.activeHandlerCount()).toBe(0);
   });
 
@@ -377,6 +451,9 @@ describe('P2P fusion round choreography (3 peers, in-memory)', () => {
       )
     );
 
+    // `started` is the promise; `broadcastStarted` is its resolver. Awaiting the
+    // resolver is a no-op, so this raced ahead and aborted before the broadcast
+    // was ever in flight — the very state the test claims to exercise.
     await started;
     controller.abort();
     pending.reject(new Error('broadcast rejected'));
@@ -409,7 +486,7 @@ describe('P2P fusion round choreography (3 peers, in-memory)', () => {
         ],
         outputs: [{ script: p2pkhHex(outKey.pubHex), value: 99_600 }],
       };
-      return { round, keys: new Map([[inKey.pubHex, inKey.priv]]), contribution };
+      return { round, keys: new Map([[inKey.pubHex, inKey.priv], [round.pubHex, round.priv]]), contribution };
     });
     const participants = peers.map((item) => item.round.pubHex);
     const hub = new Hub();
