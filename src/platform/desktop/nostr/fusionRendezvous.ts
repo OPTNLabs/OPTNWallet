@@ -4,8 +4,8 @@ import { binToHex } from '../../../utils/hex';
 import { electCoordinator, type FusionPoolNetwork } from './fusion';
 import { messageBinding, type RoundMessage, type RoundTransport } from './fusionSession';
 
-const MAX_PARTICIPANTS = 20;
-const DEFAULT_RENDEZVOUS_TIMEOUT_MS = 20_000;
+const MAX_PARTICIPANTS = 6;
+const DEFAULT_RENDEZVOUS_TIMEOUT_MS = 6_000;
 const PUBKEY = /^[0-9a-f]{64}$/;
 const SESSION = /^[0-9a-f]{64}$/;
 
