@@ -449,6 +449,7 @@ check_required_results() {
   local required=(deps-check format-check typecheck-core addons-validate security-test)
 
   REQUIRED_FAILURE=0
+  DOCTOR_FAILURE=0
   status="$(result_status after doctor)"
   [[ "$status" -eq 0 ]] || DOCTOR_FAILURE=1
   for check in "${required[@]}"; do
