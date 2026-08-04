@@ -225,45 +225,112 @@ impl BlindSignatureRequest {
     }
 }
 
+/// Production blind-signature **issuer** (the CashFusion server role, and the
+/// elected P2P coordinator role).
+///
+/// Holds a long-lived round private key `x` and a pool of one-shot nonces `k_i`.
+/// Each `R_i = k_i·G` is published once; signing a blinded challenge at index `i`
+/// **consumes** `k_i`. Reusing a nonce across two different challenges would leak
+/// `x` (classic Schnorr nonce reuse), so the second call at the same index is a
+/// hard error — not a silent re-sign.
+///
+/// Mirrors Electron Cash `schnorr.BlindSigner`, with the one-shot invariant made
+/// explicit for the P2P case where the issuer is a peer rather than a dedicated
+/// server process.
+pub struct BlindIssuer {
+    x: Scalar,
+    /// `Some(k)` while unused; `None` after the slot is consumed or if never
+    /// allocated. Index is stable for the life of the issuer.
+    nonces: Vec<Option<Scalar>>,
+}
+
+impl BlindIssuer {
+    /// Create an issuer with `num_nonces` fresh one-shot slots. Callers must
+    /// size this to every component that will need a credential this round
+    /// (e.g. participants × max-components-per-peer).
+    pub fn new(num_nonces: usize) -> Result<Self, String> {
+        if num_nonces == 0 {
+            return Err("BlindIssuer needs at least one nonce slot".into());
+        }
+        if num_nonces > 1024 {
+            return Err("BlindIssuer refuses more than 1024 nonce slots".into());
+        }
+        Ok(Self {
+            x: random_nonce(),
+            nonces: (0..num_nonces).map(|_| Some(random_nonce())).collect(),
+        })
+    }
+
+    /// Compressed round pubkey `P = x·G` — published in StartRound / credential_params.
+    pub fn pubkey(&self) -> [u8; 33] {
+        compressed(&(ProjectivePoint::GENERATOR * self.x))
+    }
+
+    /// Compressed nonce point `R_i = k_i·G` for an unused slot. Errors if the
+    /// index is out of range or the slot was already consumed (there is no `k`
+    /// left to re-derive R from).
+    pub fn r_point(&self, index: usize) -> Result<[u8; 33], String> {
+        let k = self
+            .nonces
+            .get(index)
+            .and_then(|slot| slot.as_ref())
+            .ok_or_else(|| format!("blind nonce slot {index} is missing or already used"))?;
+        Ok(compressed(&(ProjectivePoint::GENERATOR * k)))
+    }
+
+    /// All currently-unused R points, in slot order. Consumed slots are omitted
+    /// from the list only if you filter — this returns `None` at consumed indices
+    /// so callers that publish the full vector once at round start can keep
+    /// stable indexing.
+    pub fn r_points(&self) -> Vec<Option<[u8; 33]>> {
+        self.nonces
+            .iter()
+            .map(|slot| {
+                slot.as_ref()
+                    .map(|k| compressed(&(ProjectivePoint::GENERATOR * k)))
+            })
+            .collect()
+    }
+
+    /// Number of slots this issuer was created with (used + unused).
+    pub fn capacity(&self) -> usize {
+        self.nonces.len()
+    }
+
+    /// Sign a blinded challenge `e` at `index`, consuming that slot.
+    /// Returns the 32-byte scalar `s = k + e·x`. A second call at the same
+    /// index fails — never reuses `k`.
+    pub fn sign(&mut self, index: usize, e_bytes: &[u8; 32]) -> Result<[u8; 32], String> {
+        if index >= self.nonces.len() {
+            return Err(format!("blind nonce index {index} out of range"));
+        }
+        let k = self.nonces[index]
+            .take()
+            .ok_or_else(|| format!("blind nonce slot {index} already used"))?;
+        let e = scalar_reduce(*e_bytes);
+        let s = k + e * self.x;
+        Ok(s.to_bytes().into())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use k256::elliptic_curve::group::GroupEncoding;
 
-    /// Minimal signer side, mirroring electroncash schnorr.BlindSigner, for the
-    /// round-trip test: holds x (priv), k (nonce); R = k*G; s = k + e*x.
-    struct Signer {
-        x: Scalar,
-        k: Scalar,
-    }
-    impl Signer {
-        fn new() -> Self {
-            Self { x: random_nonce(), k: random_nonce() }
-        }
-        fn pubkey(&self) -> [u8; 33] {
-            compressed(&(ProjectivePoint::GENERATOR * self.x))
-        }
-        fn r(&self) -> [u8; 33] {
-            compressed(&(ProjectivePoint::GENERATOR * self.k))
-        }
-        fn sign(&self, ebytes: &[u8; 32]) -> [u8; 32] {
-            let e = scalar_reduce(*ebytes);
-            (self.k + e * self.x).to_bytes().into()
-        }
-    }
-
     #[test]
     fn blind_round_trip_produces_a_valid_bch_schnorr_signature() {
-        // Full flow: request -> signer -> finalize -> verify. If this passes, our
+        // Full flow: request -> issuer -> finalize -> verify. If this passes, our
         // blinding math and BCH-Schnorr verify agree with the reference.
         for _ in 0..25 {
-            let signer = Signer::new();
-            let pubkey = signer.pubkey();
+            let mut issuer = BlindIssuer::new(1).unwrap();
+            let pubkey = issuer.pubkey();
+            let r = issuer.r_point(0).unwrap();
             let msg: [u8; 32] = Sha256::digest(b"a fusion component").into();
 
-            let req = BlindSignatureRequest::new(&pubkey, &signer.r(), msg).unwrap();
+            let req = BlindSignatureRequest::new(&pubkey, &r, msg).unwrap();
             let e = req.request();
-            let s = signer.sign(&e);
+            let s = issuer.sign(0, &e).unwrap();
             // finalize with check=true internally verifies; also verify explicitly.
             let sig = req.finalize(&s, true).unwrap();
             assert!(verify(&pubkey, &sig, &msg), "unblinded sig must verify");
@@ -272,35 +339,66 @@ mod tests {
 
     #[test]
     fn unblinding_is_unlinkable_signer_never_sees_the_output() {
-        // The signer sees (R, e); the world sees (R'.x, s'). They must differ, or
+        // The issuer sees (R, e); the world sees (R'.x, s'). They must differ, or
         // there'd be no blinding. (Sanity check, not a formal unlinkability proof.)
-        let signer = Signer::new();
+        let mut issuer = BlindIssuer::new(1).unwrap();
+        let r = issuer.r_point(0).unwrap();
         let msg: [u8; 32] = Sha256::digest(b"component").into();
-        let req = BlindSignatureRequest::new(&signer.pubkey(), &signer.r(), msg).unwrap();
-        let sig = req.finalize(&signer.sign(&req.request()), true).unwrap();
-        // R'.x (first 32 of sig) should not equal the signer's R.x.
-        let signer_rx = &signer.r()[1..];
+        let req = BlindSignatureRequest::new(&issuer.pubkey(), &r, msg).unwrap();
+        let sig = req.finalize(&issuer.sign(0, &req.request()).unwrap(), true).unwrap();
+        // R'.x (first 32 of sig) should not equal the issuer's R.x.
+        let signer_rx = &r[1..];
         assert_ne!(&sig[..32], signer_rx);
     }
 
     #[test]
     fn verify_rejects_a_tampered_signature() {
-        let signer = Signer::new();
+        let mut issuer = BlindIssuer::new(1).unwrap();
+        let r = issuer.r_point(0).unwrap();
         let msg: [u8; 32] = Sha256::digest(b"pay 1000").into();
-        let req = BlindSignatureRequest::new(&signer.pubkey(), &signer.r(), msg).unwrap();
-        let mut sig = req.finalize(&signer.sign(&req.request()), true).unwrap();
+        let req = BlindSignatureRequest::new(&issuer.pubkey(), &r, msg).unwrap();
+        let mut sig = req
+            .finalize(&issuer.sign(0, &req.request()).unwrap(), true)
+            .unwrap();
         sig[40] ^= 0x01; // flip a bit in s
-        assert!(!verify(&signer.pubkey(), &sig, &msg));
+        assert!(!verify(&issuer.pubkey(), &sig, &msg));
     }
 
     #[test]
     fn finalize_check_catches_a_cheating_signer() {
-        // A signer that returns garbage s must be caught by finalize(check=true).
-        let signer = Signer::new();
+        // An issuer that returns garbage s must be caught by finalize(check=true).
+        let issuer = BlindIssuer::new(1).unwrap();
+        let r = issuer.r_point(0).unwrap();
         let msg: [u8; 32] = Sha256::digest(b"c").into();
-        let req = BlindSignatureRequest::new(&signer.pubkey(), &signer.r(), msg).unwrap();
+        let req = BlindSignatureRequest::new(&issuer.pubkey(), &r, msg).unwrap();
         let bad_s = [0x11u8; 32];
         assert!(req.finalize(&bad_s, true).is_err());
+    }
+
+    #[test]
+    fn issuer_refuses_to_reuse_a_nonce_slot() {
+        // Nonce reuse leaks x. The second sign at the same index must hard-fail.
+        let mut issuer = BlindIssuer::new(2).unwrap();
+        let e1 = [0x01u8; 32];
+        let e2 = [0x02u8; 32];
+        assert!(issuer.sign(0, &e1).is_ok());
+        let err = issuer.sign(0, &e2).unwrap_err();
+        assert!(
+            err.contains("already used"),
+            "expected already-used error, got: {err}"
+        );
+        // A different slot still works.
+        assert!(issuer.sign(1, &e2).is_ok());
+        // And that slot is then spent too.
+        assert!(issuer.sign(1, &e1).unwrap_err().contains("already used"));
+    }
+
+    #[test]
+    fn issuer_r_point_disappears_after_sign() {
+        let mut issuer = BlindIssuer::new(1).unwrap();
+        assert!(issuer.r_point(0).is_ok());
+        issuer.sign(0, &[0x03u8; 32]).unwrap();
+        assert!(issuer.r_point(0).unwrap_err().contains("already used"));
     }
 
     #[test]

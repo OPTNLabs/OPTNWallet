@@ -1,6 +1,14 @@
 // P2P CashFusion round choreography. The coordinator orders components but is
 // never trusted with custody: every participant verifies the complete template
 // before signing only its own inputs.
+//
+// Credential phase (protocol v2): the elected coordinator is the blind-Schnorr
+// *issuer* for the round — same role the fusion server plays in classic
+// CashFusion. No extra infrastructure: peers request credentials over public
+// Nostr, the coordinator signs with one-shot nonces, and every input must carry
+// a valid unblinded credential before the CoinJoin is assembled. Pedersen
+// commitments travel with the credential request so the coordinator can check
+// each peer's amount balance without seeing individual component values early.
 
 import {
   assembleFusionTx,
@@ -18,6 +26,21 @@ import {
 import { electCoordinator } from './fusion';
 import { ROUND_MSG_VERSION } from './fusionRound';
 import { onionWrap, onionPeel, onionUnpad, isEccAvailable } from './onionCrypto';
+import {
+  BlindIssuer,
+  BlindSignatureRequest,
+  CREDENTIAL_SLOTS_PER_PEER,
+  inputCredentialMessageHash,
+  inputCredentialMessageHashHex,
+  peerCredentialSlotBase,
+  totalCredentialSlots,
+  verifyBchSchnorrHex,
+} from './fusionBlindSchnorr';
+import {
+  pedersenBalanceHolds,
+  pedersenCommit,
+  sumNoncesHex,
+} from './fusionPedersen';
 
 /** Bind every round message to the protocol version, a unique nonce, and a
  *  timestamp. This prevents replay across rounds, cross-round message
@@ -53,7 +76,39 @@ export type RoundMessage =
       participants: string[];
     } & MessageBinding)
   | ({ type: 'abort'; session: string; reason: string } & MessageBinding)
-  | ({ type: 'inputs'; session: string; inputs: FusionInputRef[] } & MessageBinding)
+  | ({
+      type: 'credential_params';
+      session: string;
+      /** Compressed round pubkey P = x·G (hex). */
+      roundPubkey: string;
+      /** Compressed R_i = k_i·G points (hex), one-shot slots. */
+      blindNoncePoints: string[];
+    } & MessageBinding)
+  | ({
+      type: 'credential_request';
+      session: string;
+      /** Blinded challenges e, each bound to a nonce slot index. */
+      requests: Array<{ index: number; e: string }>;
+      /** Uncompressed Pedersen amount commitments (65-byte hex each). */
+      amountCommitments: string[];
+      /** Σ component nonces mod n (32-byte hex). */
+      pedersenTotalNonce: string;
+      /** Player excess fee the commitments must sum to. */
+      excessFee: number;
+    } & MessageBinding)
+  | ({
+      type: 'credential_response';
+      session: string;
+      /** Issuer scalars s, same order as the request. */
+      responses: Array<{ index: number; s: string }>;
+    } & MessageBinding)
+  | ({
+      type: 'inputs';
+      session: string;
+      inputs: FusionInputRef[];
+      /** Unblinded 64-byte BCH Schnorr credentials (hex), parallel to inputs. */
+      credentialSigs: string[];
+    } & MessageBinding)
   | ({ type: 'outputs'; session: string; outputs: FusionOutputRef[] } & MessageBinding)
   | ({ type: 'onion_output'; session: string; onion: string; mixOrder: string[] } & MessageBinding)
   | ({ type: 'components_ready'; session: string } & MessageBinding)
@@ -199,6 +254,113 @@ function validInput(value: unknown): boolean {
   );
 }
 
+const HEX_64_STRICT = /^[0-9a-f]{64}$/i;
+const HEX_128 = /^[0-9a-f]{128}$/i;
+const HEX_66 = /^(02|03)[0-9a-f]{64}$/i;
+const HEX_130 = /^04[0-9a-f]{128}$/i;
+
+function validCredentialRequestSlot(value: unknown): boolean {
+  return (
+    isRecord(value) &&
+    isSafeIntegerIn(value.index, 0, 1023) &&
+    typeof value.e === 'string' &&
+    HEX_64_STRICT.test(value.e)
+  );
+}
+
+function validCredentialResponseSlot(value: unknown): boolean {
+  return (
+    isRecord(value) &&
+    isSafeIntegerIn(value.index, 0, 1023) &&
+    typeof value.s === 'string' &&
+    HEX_64_STRICT.test(value.s)
+  );
+}
+
+/** Component fees matching Electron Cash / fusionRound sizing (sats/kB). */
+function componentFeeSats(sizeBytes: number, feerate: number): number {
+  return Math.ceil((sizeBytes * feerate) / 1000);
+}
+
+/**
+ * Build Pedersen commitments for a peer's full contribution (inputs + outputs)
+ * and the excess fee the coordinator will check. Amounts are signed EC-style:
+ * input → +value−fee, output → −value−fee.
+ */
+function buildPlayerPedersen(
+  contribution: PeerContribution,
+  feerate: number
+): {
+  amountCommitments: string[];
+  pedersenTotalNonce: string;
+  excessFee: number;
+} {
+  const commitments: string[] = [];
+  const nonces: string[] = [];
+  let excess = 0;
+  for (const input of contribution.inputs) {
+    const fee = componentFeeSats(108 + input.pubkey.length / 2, feerate);
+    const amount = input.value - fee;
+    excess += amount;
+    const c = pedersenCommit(amount);
+    commitments.push(c.commitmentHex);
+    nonces.push(c.nonceHex);
+  }
+  for (const output of contribution.outputs) {
+    const fee = componentFeeSats(9 + output.script.length / 2, feerate);
+    const amount = -(output.value + fee);
+    excess += amount;
+    const c = pedersenCommit(amount);
+    commitments.push(c.commitmentHex);
+    nonces.push(c.nonceHex);
+  }
+  if (excess < 0) {
+    throw new Error('pedersen excess fee is negative — outputs+fees exceed inputs');
+  }
+  return {
+    amountCommitments: commitments,
+    pedersenTotalNonce: sumNoncesHex(nonces),
+    excessFee: excess,
+  };
+}
+
+/** Create blind requests for every input, using the peer's reserved nonce slots. */
+function buildInputCredentialRequests(
+  contribution: PeerContribution,
+  participants: string[],
+  myPubkey: string,
+  roundPubkey: string,
+  blindNoncePoints: string[]
+): {
+  requests: Array<{ index: number; e: string }>;
+  pending: BlindSignatureRequest[];
+  indices: number[];
+} {
+  const base = peerCredentialSlotBase(participants, myPubkey);
+  if (contribution.inputs.length > CREDENTIAL_SLOTS_PER_PEER) {
+    throw new Error(
+      `too many inputs for credential slots (${contribution.inputs.length} > ${CREDENTIAL_SLOTS_PER_PEER})`
+    );
+  }
+  const requests: Array<{ index: number; e: string }> = [];
+  const pending: BlindSignatureRequest[] = [];
+  const indices: number[] = [];
+  contribution.inputs.forEach((input, i) => {
+    const index = base + i;
+    const r = blindNoncePoints[index];
+    if (!r) throw new Error(`missing blind nonce point at slot ${index}`);
+    const req = BlindSignatureRequest.create(
+      roundPubkey,
+      r,
+      inputCredentialMessageHash(input)
+    );
+    requests.push({ index, e: req.requestHex() });
+    pending.push(req);
+    indices.push(index);
+  });
+  return { requests, pending, indices };
+}
+
 function validOutput(value: unknown): boolean {
   return (
     isRecord(value) &&
@@ -277,8 +439,61 @@ export function parseRoundMessage(content: string): RoundMessage | null {
       case 'components_ready':
         // No additional fields beyond session + binding.
         break;
+      case 'credential_params':
+        if (
+          typeof message.roundPubkey !== 'string' ||
+          !HEX_66.test(message.roundPubkey) ||
+          !Array.isArray(message.blindNoncePoints) ||
+          message.blindNoncePoints.length < 2 ||
+          message.blindNoncePoints.length > 1024 ||
+          !message.blindNoncePoints.every(
+            (p) => typeof p === 'string' && HEX_66.test(p)
+          )
+        ) {
+          return null;
+        }
+        break;
+      case 'credential_request':
+        if (
+          !Array.isArray(message.requests) ||
+          message.requests.length < 1 ||
+          message.requests.length > MAX_COMPONENTS ||
+          !message.requests.every(validCredentialRequestSlot) ||
+          !Array.isArray(message.amountCommitments) ||
+          message.amountCommitments.length < 1 ||
+          message.amountCommitments.length > MAX_COMPONENTS ||
+          !message.amountCommitments.every(
+            (c) => typeof c === 'string' && HEX_130.test(c)
+          ) ||
+          typeof message.pedersenTotalNonce !== 'string' ||
+          !HEX_64_STRICT.test(message.pedersenTotalNonce) ||
+          !isSafeIntegerIn(message.excessFee, 0, MAX_MONEY)
+        ) {
+          return null;
+        }
+        break;
+      case 'credential_response':
+        if (
+          !Array.isArray(message.responses) ||
+          message.responses.length < 1 ||
+          message.responses.length > MAX_COMPONENTS ||
+          !message.responses.every(validCredentialResponseSlot)
+        ) {
+          return null;
+        }
+        break;
       case 'inputs':
         if (!validArray(message.inputs, validInput)) return null;
+        if (
+          !Array.isArray(message.credentialSigs) ||
+          message.credentialSigs.length !==
+            (message.inputs as unknown[]).length ||
+          !message.credentialSigs.every(
+            (s) => typeof s === 'string' && HEX_128.test(s)
+          )
+        ) {
+          return null;
+        }
         break;
       case 'outputs':
         if (!validArray(message.outputs, validOutput)) return null;
@@ -428,6 +643,31 @@ function runParticipant(
     const collectedOnions: string[] = [];
     const expectedOnionCount = params.participants.length;
 
+    // Credential phase state — resolved when the coordinator issues parameters
+    // and when our blind responses arrive.
+    let resolveCredParams:
+      | ((v: { roundPubkey: string; blindNoncePoints: string[] }) => void)
+      | null = null;
+    const credParamsPromise = new Promise<{
+      roundPubkey: string;
+      blindNoncePoints: string[];
+    }>((res) => {
+      resolveCredParams = res;
+    });
+    let resolveCredResponse:
+      | ((v: Array<{ index: number; s: string }>) => void)
+      | null = null;
+    let credResponsePromise: Promise<Array<{ index: number; s: string }>> | null =
+      null;
+    const waitCredResponse = () => {
+      if (!credResponsePromise) {
+        credResponsePromise = new Promise((res) => {
+          resolveCredResponse = res;
+        });
+      }
+      return credResponsePromise;
+    };
+
     const cleanup = () => {
       if (timer) clearTimeout(timer);
       params.signal?.removeEventListener('abort', onCancel);
@@ -552,6 +792,19 @@ function runParticipant(
         void fail(abortError(message.reason), false);
         return;
       }
+      if (message.type === 'credential_params') {
+        resolveCredParams?.({
+          roundPubkey: message.roundPubkey,
+          blindNoncePoints: message.blindNoncePoints,
+        });
+        resolveCredParams = null;
+        return;
+      }
+      if (message.type === 'credential_response') {
+        resolveCredResponse?.(message.responses);
+        resolveCredResponse = null;
+        return;
+      }
       if (message.type === 'assembled') {
         if (signed) return;
         signed = true;
@@ -614,14 +867,46 @@ function runParticipant(
     );
     params.onPhase?.(2);
     void (async () => {
-      // Phase 2: send inputs to coordinator
       const [jMin, jMax] = params.jitterMs ?? [200, 2000];
-      for (const input of params.myContribution.inputs) {
+
+      // Phase 1.5: wait for issuer params, request blind credentials, unblind.
+      const { roundPubkey, blindNoncePoints } = await credParamsPromise;
+      const pedersen = buildPlayerPedersen(params.myContribution, params.feerate);
+      const { requests, pending } = buildInputCredentialRequests(
+        params.myContribution,
+        params.participants,
+        params.myPubkey,
+        roundPubkey,
+        blindNoncePoints
+      );
+      const responseWait = waitCredResponse();
+      await transport.send(coordinator, {
+        ...messageBinding(),
+        type: 'credential_request',
+        session,
+        requests,
+        amountCommitments: pedersen.amountCommitments,
+        pedersenTotalNonce: pedersen.pedersenTotalNonce,
+        excessFee: pedersen.excessFee,
+      });
+      const responses = await responseWait;
+      const byIndex = new Map(responses.map((r) => [r.index, r.s]));
+      const credentialSigs: string[] = [];
+      for (let i = 0; i < pending.length; i++) {
+        const index = requests[i].index;
+        const s = byIndex.get(index);
+        if (!s) throw new Error(`missing credential response for slot ${index}`);
+        credentialSigs.push(pending[i].finalizeHex(s, true));
+      }
+
+      // Phase 2: send inputs (with credentials) to coordinator
+      for (let i = 0; i < params.myContribution.inputs.length; i++) {
         await transport.send(coordinator, {
           ...messageBinding(),
           type: 'inputs',
           session,
-          inputs: [input],
+          inputs: [params.myContribution.inputs[i]],
+          credentialSigs: [credentialSigs[i]],
         });
         await jitterDelay(jMin, jMax);
       }
@@ -688,10 +973,55 @@ function runCoordinator(
   const mixOrder = params.mixOrder ??
     [...params.participants].filter((p) => p !== params.myPubkey).sort();
 
+  // Coordinator is the blind-Schnorr issuer for this round (server role, peer-hosted).
+  let issuer: BlindIssuer;
+  let selfIssueOk = true;
+  let selfIssueError: Error | null = null;
+  try {
+    issuer = BlindIssuer.create(totalCredentialSlots(params.participants.length));
+    // Self-issue credentials for the coordinator's own inputs so every CoinJoin
+    // input is covered by a one-shot nonce from this round's issuer.
+    const selfBuilt = buildInputCredentialRequests(
+      params.myContribution,
+      params.participants,
+      params.myPubkey,
+      issuer.pubkeyHex,
+      issuer.rPointsHex
+    );
+    for (let i = 0; i < selfBuilt.pending.length; i++) {
+      const index = selfBuilt.requests[i].index;
+      const s = issuer.signHex(index, selfBuilt.requests[i].e);
+      selfBuilt.pending[i].finalizeHex(s, true);
+    }
+    const selfPedersen = buildPlayerPedersen(params.myContribution, params.feerate);
+    if (
+      !pedersenBalanceHolds(
+        selfPedersen.amountCommitments,
+        selfPedersen.excessFee,
+        selfPedersen.pedersenTotalNonce
+      )
+    ) {
+      throw new Error('coordinator pedersen self-check failed');
+    }
+  } catch (error) {
+    selfIssueOk = false;
+    selfIssueError = asError(error);
+    issuer = null as unknown as BlindIssuer;
+  }
+
   return new Promise((resolve, reject) => {
+    if (!selfIssueOk) {
+      reject(selfIssueError ?? new Error('coordinator issuer setup failed'));
+      return;
+    }
+
     const inputsByPeer = new Map<string, FusionInputRef[]>([
       [params.myPubkey, params.myContribution.inputs],
     ]);
+    // Track that coordinator inputs already carry verified credentials.
+    const credentialedInputs = new Set<string>(
+      params.myContribution.inputs.map(inputKey)
+    );
     const useOnionForOutputs = params.onionEnabled === true;
     const outputPool: FusionOutputRef[] = useOnionForOutputs
       ? [] // outputs arrive via onion reveal chain
@@ -700,6 +1030,7 @@ function runCoordinator(
     const signedPeers = new Set<string>();
     const seenNonces = new Set<string>();
     const readyPeers = new Set<string>([params.myPubkey]); // coordinator is always ready
+    const credentialedPeers = new Set<string>([params.myPubkey]);
     let outputMessages = useOnionForOutputs ? 0 : 1;
     let assembled: { inputs: FusionInputRef[]; outputs: FusionOutputRef[] } | null =
       null;
@@ -743,6 +1074,58 @@ function runCoordinator(
     };
     const onCancel = () => {
       void fail(abortError('cancelled'), true);
+    };
+
+    /** Issue blind scalars for a peer after Pedersen balance check. */
+    const handleCredentialRequest = async (
+      from: string,
+      message: Extract<RoundMessage, { type: 'credential_request' }>
+    ) => {
+      if (credentialedPeers.has(from)) {
+        throw new Error(`duplicate credential request from ${from}`);
+      }
+      if (
+        !pedersenBalanceHolds(
+          message.amountCommitments,
+          message.excessFee,
+          message.pedersenTotalNonce
+        )
+      ) {
+        throw new Error(`pedersen balance check failed for ${from}`);
+      }
+      // Slots must lie in this peer's reserved range.
+      const base = peerCredentialSlotBase(params.participants, from);
+      const responses: Array<{ index: number; s: string }> = [];
+      for (const req of message.requests) {
+        if (req.index < base || req.index >= base + CREDENTIAL_SLOTS_PER_PEER) {
+          throw new Error(`credential slot ${req.index} outside peer range`);
+        }
+        responses.push({ index: req.index, s: issuer.signHex(req.index, req.e) });
+      }
+      credentialedPeers.add(from);
+      await transport.send(from, {
+        ...messageBinding(),
+        type: 'credential_response',
+        session,
+        responses,
+      });
+    };
+
+    /** Accept inputs only when every credential verifies under the round pubkey. */
+    const acceptInputs = (from: string, inputs: FusionInputRef[], sigs: string[]) => {
+      if (inputs.length !== sigs.length) {
+        throw new Error('input/credential count mismatch');
+      }
+      for (let i = 0; i < inputs.length; i++) {
+        const msgHex = inputCredentialMessageHashHex(inputs[i]);
+        if (!verifyBchSchnorrHex(issuer.pubkeyHex, sigs[i], msgHex)) {
+          throw new Error(`invalid input credential from ${from}`);
+        }
+        credentialedInputs.add(inputKey(inputs[i]));
+      }
+      const existing = inputsByPeer.get(from);
+      if (existing) existing.push(...inputs);
+      else inputsByPeer.set(from, [...inputs]);
     };
 
     const tryFinalize = async () => {
@@ -819,8 +1202,12 @@ function runCoordinator(
       if (outputPool.length === 0) {
         return;
       }
-      assembling = true;
       const inputs = [...inputsByPeer.values()].flat();
+      // Refuse to assemble until every input carries a verified blind credential.
+      if (inputs.some((input) => !credentialedInputs.has(inputKey(input)))) {
+        return;
+      }
+      assembling = true;
       assembled = assembleFusionTx([{ inputs, outputs: outputPool }]);
       params.onPhase?.(5);
       const ownSignatures = assembleVerifySign(
@@ -850,6 +1237,12 @@ function runCoordinator(
       if (settled || message.session !== session) return;
       if (seenNonces.has(message.nonce)) return;
       seenNonces.add(message.nonce);
+      if (message.type === 'credential_request' && others.includes(from)) {
+        void handleCredentialRequest(from, message).catch((error: unknown) =>
+          void fail(asError(error), true)
+        );
+        return;
+      }
       if (message.type === 'components_ready' && others.includes(from)) {
         readyPeers.add(from);
         void tryAssemble().catch((error: unknown) =>
@@ -862,12 +1255,11 @@ function runCoordinator(
         return;
       }
       if (message.type === 'inputs' && others.includes(from)) {
-        // Per-component: accumulate individual inputs from each peer.
-        const existing = inputsByPeer.get(from);
-        if (existing) {
-          existing.push(...message.inputs);
-        } else {
-          inputsByPeer.set(from, [...message.inputs]);
+        try {
+          acceptInputs(from, message.inputs, message.credentialSigs);
+        } catch (error) {
+          void fail(asError(error), true);
+          return;
         }
         void tryAssemble().catch((error: unknown) =>
           void fail(asError(error), true)
@@ -925,9 +1317,19 @@ function runCoordinator(
       params.timeoutMs ?? DEFAULT_TIMEOUT
     );
     params.onPhase?.(2);
-    // Phase 3: coordinator sends its own outputs through the onion chain
-    // (same as participants — everyone wraps and sends to mixOrder[0]).
-    (async () => {
+
+    // Publish issuer params first so peers can request credentials. Then
+    // (onion mode) send our own outputs through the mix-net.
+    void (async () => {
+      const paramsMsg: RoundMessage = {
+        ...messageBinding(),
+        type: 'credential_params',
+        session,
+        roundPubkey: issuer.pubkeyHex,
+        blindNoncePoints: issuer.rPointsHex,
+      };
+      await Promise.all(others.map((peer) => transport.send(peer, paramsMsg)));
+
       if (!useOnionForOutputs) return;
       const jMin = params.jitterMs?.[0] ?? 200;
       const jMax = params.jitterMs?.[1] ?? 2_000;
