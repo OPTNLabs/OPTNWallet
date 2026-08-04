@@ -5,6 +5,7 @@ import {
   writeStorageItem,
 } from '../utils/browserStorage';
 import { isAndroidNativePlatform } from '../utils/platform';
+import { toArrayBufferBytes } from '../utils/arrayBuffer';
 
 export const SECRET_ENC_PREFIX = 'enc:v1:';
 const FALLBACK_KEY_STORAGE = 'optn_wallet_fallback_key_v1';
@@ -50,7 +51,7 @@ async function loadFallbackKey(): Promise<CryptoKey> {
 
   return await cryptoObj.subtle.importKey(
     'raw',
-    base64ToBytes(keyMaterialB64),
+    toArrayBufferBytes(base64ToBytes(keyMaterialB64)),
     { name: 'AES-GCM' },
     false,
     ['encrypt', 'decrypt']
@@ -94,9 +95,9 @@ async function encryptWithFallback(plaintext: string): Promise<string> {
   const iv = cryptoObj.getRandomValues(new Uint8Array(12));
   const encoded = textEncoder.encode(plaintext);
   const cipher = await cryptoObj.subtle.encrypt(
-    { name: 'AES-GCM', iv },
+    { name: 'AES-GCM', iv: toArrayBufferBytes(iv) },
     key,
-    encoded
+    toArrayBufferBytes(encoded)
   );
   const merged = new Uint8Array(iv.length + cipher.byteLength);
   merged.set(iv, 0);
@@ -111,9 +112,9 @@ async function decryptWithFallback(ciphertext: string): Promise<string> {
   const iv = merged.slice(0, 12);
   const data = merged.slice(12);
   const plain = await cryptoObj.subtle.decrypt(
-    { name: 'AES-GCM', iv },
+    { name: 'AES-GCM', iv: toArrayBufferBytes(iv) },
     key,
-    data
+    toArrayBufferBytes(data)
   );
   return textDecoder.decode(plain);
 }
@@ -124,7 +125,10 @@ async function encryptRaw(plaintext: string): Promise<string> {
       const { ciphertext } = await SecureKeyStore.encrypt({ plaintext });
       return ciphertext;
     } catch (error) {
-      console.warn('SecureKeyStore.encrypt failed, falling back to WebCrypto', error);
+      console.warn(
+        'SecureKeyStore.encrypt failed, falling back to WebCrypto',
+        error
+      );
     }
   }
   return await encryptWithFallback(plaintext);
@@ -136,7 +140,10 @@ async function decryptRaw(ciphertext: string): Promise<string> {
       const { plaintext } = await SecureKeyStore.decrypt({ ciphertext });
       return plaintext;
     } catch (error) {
-      console.warn('SecureKeyStore.decrypt failed, falling back to WebCrypto', error);
+      console.warn(
+        'SecureKeyStore.decrypt failed, falling back to WebCrypto',
+        error
+      );
     }
   }
   return await decryptWithFallback(ciphertext);
@@ -156,7 +163,9 @@ async function encryptText(plaintext: string): Promise<string> {
 async function decryptText(ciphertextOrPlaintext: string): Promise<string> {
   if (!ciphertextOrPlaintext) return '';
   if (!isEncryptedPayload(ciphertextOrPlaintext)) return ciphertextOrPlaintext;
-  return await decryptRaw(ciphertextOrPlaintext.slice(SECRET_ENC_PREFIX.length));
+  return await decryptRaw(
+    ciphertextOrPlaintext.slice(SECRET_ENC_PREFIX.length)
+  );
 }
 
 async function encryptBytes(data: Uint8Array): Promise<string> {

@@ -11,6 +11,7 @@ import {
 import type { TokenPresentationFallback } from '../../../utils/tokenPresentation';
 import type { BcmrTokenMetadataState } from '../../../types/bcmr';
 import TokenIdentityBadge from '../../../components/ui/TokenIdentityBadge';
+import { useI18n } from '../../../i18n/useI18n';
 
 const FEE_RESERVE_SATS = 2000n;
 
@@ -47,6 +48,7 @@ const RegularTxView: React.FC<RegularTxViewProps> = ({
   handleAddOutput,
   txOutputs,
 }) => {
+  const { t } = useI18n();
   const [inputTokenAmount, setInputTokenAmount] = useState<string>('');
 
   const isNft =
@@ -181,7 +183,9 @@ const RegularTxView: React.FC<RegularTxViewProps> = ({
   return (
     <>
       <div className="mb-2">
-        <label className="block font-medium mb-1">Recipient Address</label>
+        <label className="block font-medium mb-1">
+          {t('builder.recipientAddress')}
+        </label>
         <div className="flex items-center">
           <input
             type="text"
@@ -192,7 +196,7 @@ const RegularTxView: React.FC<RegularTxViewProps> = ({
           <button
             onClick={() => void scanBarcode()} // ✅ avoid unhandled promise
             className="ml-2 wallet-btn-primary p-2"
-            title="Scan QR Code"
+            title={t('builder.scanQrCode')}
           >
             <FaCamera />
           </button>
@@ -201,7 +205,7 @@ const RegularTxView: React.FC<RegularTxViewProps> = ({
 
       <div className="mb-4">
         <div className="flex items-center justify-between mb-1">
-          <label className="font-medium">Amount to send</label>
+          <label className="font-medium">{t('builder.amountToSend')}</label>
           <div className="flex space-x-2">
             <button
               onClick={() => setTransferAmount(Number(remainingSpendable))}
@@ -213,11 +217,11 @@ const RegularTxView: React.FC<RegularTxViewProps> = ({
               }`}
               title={
                 remainingSpendable === 0n
-                  ? 'No spendable balance after fee reserve'
-                  : 'Set to maximum spendable (leaves 2000 sats for fees)'
+                  ? t('builder.noSpendableBalance')
+                  : t('builder.maxSpendable')
               }
             >
-              Max{' '}
+              {t('builder.max')}{' '}
               <span className="text-sm">
                 {Number(remainingSpendable) / SATSINBITCOIN}
               </span>{' '}
@@ -245,10 +249,10 @@ const RegularTxView: React.FC<RegularTxViewProps> = ({
           className="wallet-input w-full break-words whitespace-normal"
           min={Number(DUST) / 100_000_000}
           max={Number(remainingSpendable) / 100_000_000}
-            />
+        />
 
         <div className="mt-1 text-xs wallet-muted">
-          Leaving a {Number(FEE_RESERVE_SATS)} sat fee reserve.
+          {t('builder.feeReserve', { count: Number(FEE_RESERVE_SATS) })}
         </div>
       </div>
 
@@ -256,7 +260,7 @@ const RegularTxView: React.FC<RegularTxViewProps> = ({
         <div className="mb-4">
           <div className="flex items-center justify-between mb-1">
             <label className="font-medium">
-              Token Amount{' '}
+              {t('builder.tokenAmount')}{' '}
               {tokenMetadata[selectedTokenCategory]
                 ? `(${tokenMetadata[selectedTokenCategory].symbol})`
                 : ''}
@@ -279,7 +283,7 @@ const RegularTxView: React.FC<RegularTxViewProps> = ({
                   }}
                   className="wallet-btn-primary px-3 py-1"
                 >
-                  Max (
+                  {t('builder.max')} (
                   {formatAtomicTokenAmount(
                     tokenTotals[selectedTokenCategory] || BigInt(0),
                     tokenMetadata[selectedTokenCategory]?.decimals || 0
@@ -304,23 +308,27 @@ const RegularTxView: React.FC<RegularTxViewProps> = ({
               value={inputTokenAmount}
               onChange={handleInputTokenAmountChange}
               className="wallet-input w-full break-words whitespace-normal"
-              placeholder={`Enter amount (max ${formatAtomicTokenAmount(
-                tokenTotals[selectedTokenCategory] || BigInt(0),
-                tokenMetadata[selectedTokenCategory]?.decimals || 0
-              )})`}
+              placeholder={t('builder.enterTokenAmount', {
+                amount: formatAtomicTokenAmount(
+                  tokenTotals[selectedTokenCategory] || BigInt(0),
+                  tokenMetadata[selectedTokenCategory]?.decimals || 0
+                ),
+              })}
             />
           )}
         </div>
       )}
 
       <div className="mb-2">
-        <label className="block font-medium mb-1">Token Category</label>
+        <label className="block font-medium mb-1">
+          {t('builder.tokenCategory')}
+        </label>
         <select
           value={selectedTokenCategory}
           onChange={(e) => setSelectedTokenCategory(e.target.value)}
           className="wallet-input w-full break-words whitespace-normal"
         >
-          <option value="none">None</option>
+          <option value="none">{t('builder.none')}</option>
           {categoriesFromSelected.map((category) => {
             const presentation = getTokenPresentation(category);
             return (
@@ -354,7 +362,7 @@ const RegularTxView: React.FC<RegularTxViewProps> = ({
           onClick={() => void handleAddOutput()} // ✅ avoid unhandled promise
           className="wallet-btn-primary"
         >
-          Add Output
+          {t('builder.addOutput')}
         </button>
       </div>
     </>

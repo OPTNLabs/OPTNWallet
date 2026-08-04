@@ -16,12 +16,14 @@ import {
 import WalletManager from '../../apis/WalletManager/WalletManager';
 import { Network } from '../../state/slices/networkSlice';
 import { selectWalletDerivationPath } from '../../state/slices/walletSlice';
+import { useI18n } from '../../i18n/useI18n';
 
 type RpaReceiveCardProps = {
   walletId: number;
 };
 
 export const RpaReceiveCard: React.FC<RpaReceiveCardProps> = ({ walletId }) => {
+  const { t } = useI18n();
   const rpaEnabled = useSelector(selectRpaEnabled);
   const network = useSelector(selectCurrentNetwork);
   const derivationPath = useSelector(selectWalletDerivationPath);
@@ -42,39 +44,42 @@ export const RpaReceiveCard: React.FC<RpaReceiveCardProps> = ({ walletId }) => {
       try {
         const walletManager = WalletManager();
         const info = await walletManager.getWalletInfo(walletId);
-        if (!info?.mnemonic) throw new Error('Wallet not available');
+        if (!info?.mnemonic) throw new Error(t('rpa.walletUnavailable'));
 
         const code = await deriveAndEncodePaycode(
           info.mnemonic,
           info.passphrase ?? '',
           network,
           RPA_PREFIX_BITS,
-          derivationPath || undefined,
+          derivationPath || undefined
         );
         if (!cancelled) setPaycode(code);
       } catch (err) {
-        if (!cancelled) setError('Paycode derivation failed. Unlock your wallet and try again.');
+        if (!cancelled) setError(t('rpa.derivationFailed'));
       } finally {
         if (!cancelled) setLoading(false);
       }
     };
 
     void derive();
-    return () => { cancelled = true; };
-  }, [rpaEnabled, walletId, network, derivationPath]);
+    return () => {
+      cancelled = true;
+    };
+  }, [rpaEnabled, walletId, network, derivationPath, t]);
 
   if (!rpaEnabled) return null;
 
   const handleCopy = async (text: string) => {
     try {
       await navigator.clipboard.writeText(text);
-      await Toast.show({ text: 'Paycode copied!' });
+      await Toast.show({ text: t('rpa.copySuccess') });
     } catch {
-      await Toast.show({ text: 'Copy failed.' });
+      await Toast.show({ text: t('rpa.copyFailed') });
     }
   };
 
-  const networkLabel = network === Network.MAINNET ? 'mainnet' : 'chipnet';
+  const networkLabel =
+    network === Network.MAINNET ? t('network.mainnet') : t('network.chipnet');
   const rpaKeyPaths = getRpaKeyPaths(network, derivationPath || undefined);
 
   return (
@@ -85,7 +90,9 @@ export const RpaReceiveCard: React.FC<RpaReceiveCardProps> = ({ walletId }) => {
         onClick={() => setExpanded((v) => !v)}
       >
         <div className="flex items-center gap-2">
-          <span className="text-sm font-semibold wallet-text-strong">RPA Paycode</span>
+          <span className="text-sm font-semibold wallet-text-strong">
+            {t('rpa.title')}
+          </span>
           <span className="rounded-full border border-[var(--wallet-accent)]/40 bg-[var(--wallet-accent)]/10 px-2 py-0.5 text-[10px] font-bold text-[var(--wallet-accent)] uppercase tracking-wide">
             BCH RPA
           </span>
@@ -99,12 +106,12 @@ export const RpaReceiveCard: React.FC<RpaReceiveCardProps> = ({ walletId }) => {
       {expanded && (
         <div className="border-t border-[var(--wallet-border)] px-4 pb-4 pt-3 space-y-4">
           {loading && (
-            <p className="text-xs wallet-muted text-center py-2">Deriving paycode…</p>
+            <p className="text-xs wallet-muted text-center py-2">
+              {t('rpa.deriving')}
+            </p>
           )}
 
-          {error && (
-            <p className="text-xs text-red-400">{error}</p>
-          )}
+          {error && <p className="text-xs text-red-400">{error}</p>}
 
           {paycode && (
             <>
@@ -121,15 +128,14 @@ export const RpaReceiveCard: React.FC<RpaReceiveCardProps> = ({ walletId }) => {
                   />
                 </div>
                 <p className="text-[10px] wallet-muted text-center max-w-[240px] leading-relaxed">
-                  Share this paycode with senders. Each payment creates a unique stealth address —
-                  no link between payments on-chain.
+                  {t('rpa.shareDescription')}
                 </p>
               </div>
 
               {/* Paycode string */}
               <div className="space-y-1">
                 <p className="text-[10px] font-semibold wallet-muted uppercase tracking-wide">
-                  Paycode
+                  {t('rpa.paycode')}
                 </p>
                 <button
                   type="button"
@@ -142,27 +148,44 @@ export const RpaReceiveCard: React.FC<RpaReceiveCardProps> = ({ walletId }) => {
 
               {/* Protocol info */}
               <div className="rounded-xl border border-[var(--wallet-border)] bg-[var(--wallet-surface)] p-3 space-y-1.5">
-                <p className="text-[10px] font-semibold wallet-muted uppercase tracking-wide">How it works</p>
+                <p className="text-[10px] font-semibold wallet-muted uppercase tracking-wide">
+                  {t('rpa.howWorks')}
+                </p>
                 <div className="text-[10px] wallet-muted space-y-1 leading-relaxed">
                   <p>
-                    <span className="wallet-text-strong">No notification tx.</span>{' '}
-                    The sender grinds their signature nonce until the input hash prefix
-                    matches your scan key — detectability is embedded in the signature itself.
+                    <span className="wallet-text-strong">
+                      {t('rpa.noNotification')}
+                    </span>{' '}
+                    {t('rpa.noNotificationText')}
                   </p>
                   <p>
-                    <span className="wallet-text-strong">Prefix filter:</span>{' '}
-                    {RPA_PREFIX_BITS} bits → 1/{Math.pow(2, RPA_PREFIX_BITS)} false-positive rate
-                    when scanning the Fulcrum-RPA server.
+                    <span className="wallet-text-strong">
+                      {t('rpa.prefixFilter')}:
+                    </span>{' '}
+                    {RPA_PREFIX_BITS} bits → 1/{Math.pow(2, RPA_PREFIX_BITS)}{' '}
+                    false-positive rate when scanning the Fulcrum-RPA server.
                   </p>
                 </div>
               </div>
 
               {/* Key paths */}
               <div className="rounded-xl border border-[var(--wallet-border)] bg-[var(--wallet-surface)] p-3 space-y-1">
-                <p className="text-[10px] font-semibold wallet-muted uppercase tracking-wide">Derivation paths</p>
+                <p className="text-[10px] font-semibold wallet-muted uppercase tracking-wide">
+                  {t('rpa.derivationPaths')}
+                </p>
                 <div className="font-mono text-[10px] wallet-muted space-y-0.5">
-                  <p>Scan key: <span className="wallet-text-strong">{rpaKeyPaths.scan}</span></p>
-                  <p>Spend key: <span className="wallet-text-strong">{rpaKeyPaths.spend}</span></p>
+                  <p>
+                    {t('rpa.scanKey')}:{' '}
+                    <span className="wallet-text-strong">
+                      {rpaKeyPaths.scan}
+                    </span>
+                  </p>
+                  <p>
+                    {t('rpa.spendKey')}:{' '}
+                    <span className="wallet-text-strong">
+                      {rpaKeyPaths.spend}
+                    </span>
+                  </p>
                 </div>
               </div>
             </>

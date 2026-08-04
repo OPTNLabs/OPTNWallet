@@ -23,13 +23,28 @@ Legacy root scripts (`build.sh`, `releaseBuild.sh`) are deprecated and should no
 
 - `npm run android:prepare`
 
-  - Builds web assets with Vite and syncs the Capacitor Android project.
-  - This release path does not run the full TypeScript compiler, so it stays usable even when unrelated typecheck errors exist elsewhere in the repo.
+  - Runs the strict maintained TypeScript check, builds web assets with Vite,
+    and syncs the Capacitor Android project.
 
 - `npm run android:apk:dev`
 
   - Produces a debug APK.
+  - Keeps the private-key view disabled by default.
   - Output: `android/app/build/outputs/apk/debug/app-debug.apk`
+  - This local path has been verified on the development environment.
+
+- `npm run android:apk:dev:private-key-view`
+
+  - Explicitly opts into the controlled development-only private-key view.
+  - Never use this path for release or shared preview artifacts.
+
+- `npm run android:test`
+
+  - Runs Android JVM unit tests.
+
+- `npm run android:test:instrumented`
+
+  - Runs Android emulator/device smoke tests through `adb`.
 
 - `npm run android:apk:dev:install`
 
@@ -62,10 +77,27 @@ Legacy root scripts (`build.sh`, `releaseBuild.sh`) are deprecated and should no
   - Produces platform-native desktop bundles through Tauri.
   - Output: `src-tauri/target/release/bundle/`
 
-The v1.7.0 GitHub release publishes Windows x64 (`.exe`), macOS Apple Silicon
-(`.dmg`), and Linux x64 native packages (`.deb` and `.rpm`).
+The GitHub release publishes Windows x64 (`.exe`), macOS Apple Silicon and
+Intel (`.dmg`), and Linux x64 (`.AppImage`, `.deb`, and `.rpm`).
 Those release builds are unsigned unless the corresponding signing credentials
 are configured in GitHub Actions.
+
+## Google Play release
+
+The Android release job produces a signed AAB when the production environment
+contains the permanent Android signing secrets. To upload it to Google Play:
+
+1. Create or select the `optn.wallet.app` application in Google Play Console.
+2. Create a Play Developer API service account, grant it release access in Play
+   Console, and store the JSON key as the protected GitHub environment secret
+   `GOOGLE_PLAY_SERVICE_ACCOUNT_JSON`.
+3. Manually dispatch `Publish Release` for the release tag, enable
+   `publish_to_google_play`, and choose the track. The default track is
+   `internal`; use `production` only after Play review requirements are met.
+
+The upload is intentionally opt-in. A normal tag release still builds and
+publishes the AAB as a GitHub release artifact without automatically publishing
+to users.
 
 ## iOS Prep Scripts
 

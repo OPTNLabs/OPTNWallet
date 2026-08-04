@@ -6,6 +6,7 @@ import type {
   TransactionDetailParticipant,
 } from '../../types/types';
 import ElectrumService from '../../services/ElectrumService';
+import { useI18n } from '../../i18n/useI18n';
 
 type Props = {
   txid: string;
@@ -17,15 +18,18 @@ type Props = {
 
 const SATS_PER_BCH = 100_000_000;
 
-function formatSats(amountSats?: number): string {
-  if (amountSats == null || !Number.isFinite(amountSats)) return 'Unknown';
+function formatSats(amountSats?: number, unknown = 'Unknown'): string {
+  if (amountSats == null || !Number.isFinite(amountSats)) return unknown;
   return `${(amountSats / SATS_PER_BCH).toFixed(8).replace(/\.?0+$/, '')} BCH`;
 }
 
-function formatTimestamp(timestamp?: string): string {
-  if (!timestamp) return 'Unavailable';
+function formatTimestamp(
+  timestamp?: string,
+  unavailable = 'Unavailable'
+): string {
+  if (!timestamp) return unavailable;
   const date = new Date(timestamp);
-  if (Number.isNaN(date.getTime())) return 'Unavailable';
+  if (Number.isNaN(date.getTime())) return unavailable;
   return date.toLocaleString();
 }
 
@@ -46,6 +50,8 @@ function Section({
   title: string;
   rows: TransactionDetailParticipant[];
 }) {
+  const { t } = useI18n();
+
   return (
     <section className="wallet-card p-4">
       <div className="flex items-center justify-between gap-2 mb-3">
@@ -55,7 +61,7 @@ function Section({
 
       <div className="space-y-3">
         {rows.length === 0 ? (
-          <div className="text-sm wallet-muted">No data available.</div>
+          <div className="text-sm wallet-muted">{t('history.noData')}</div>
         ) : (
           rows.map((row, index) => (
             <div
@@ -74,11 +80,13 @@ function Section({
                   ) : null}
                 </div>
                 {row.isWalletAddress ? (
-                  <StatusChip tone="neutral">Your wallet</StatusChip>
+                  <StatusChip tone="neutral">
+                    {t('history.yourWallet')}
+                  </StatusChip>
                 ) : null}
               </div>
               <div className="text-sm mt-2 wallet-text-strong">
-                {formatSats(row.amountSats)}
+                {formatSats(row.amountSats, t('history.unknown'))}
               </div>
             </div>
           ))
@@ -95,6 +103,7 @@ export default function TransactionDetailPopup({
   walletAddresses,
   onClose,
 }: Props) {
+  const { t } = useI18n();
   const [details, setDetails] = useState<TransactionDetails | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -109,17 +118,12 @@ export default function TransactionDetailPopup({
         const next = await ElectrumService.getTransactionDetails(txid);
         if (!cancelled) {
           setDetails(next);
-          if (!next)
-            setError(
-              'Transaction details are not available from Electrum right now.'
-            );
+          if (!next) setError(t('history.detailsUnavailable'));
         }
       } catch (err) {
         if (!cancelled) {
           setError(
-            err instanceof Error
-              ? err.message
-              : 'Failed to load transaction details.'
+            err instanceof Error ? err.message : t('history.loadDetailsFailed')
           );
         }
       } finally {
@@ -131,7 +135,7 @@ export default function TransactionDetailPopup({
     return () => {
       cancelled = true;
     };
-  }, [txid]);
+  }, [t, txid]);
 
   const markedInputs = useMemo(
     () => markWalletParticipants(details?.inputs ?? [], walletAddresses),
@@ -143,10 +147,12 @@ export default function TransactionDetailPopup({
   );
 
   return (
-    <Popup closePopups={onClose} closeButtonText="Close details">
+    <Popup closePopups={onClose} closeButtonText={t('history.closeDetails')}>
       <div className="space-y-4 p-1">
         <div>
-          <div className="text-xs wallet-muted mb-1">Transaction</div>
+          <div className="text-xs wallet-muted mb-1">
+            {t('history.transaction')}
+          </div>
           <div className="font-mono text-sm break-all wallet-text-strong">
             {txid}
           </div>
@@ -155,37 +161,44 @@ export default function TransactionDetailPopup({
         <section className="wallet-card p-4">
           <div className="flex items-start justify-between gap-3">
             <div>
-              <div className="text-xs wallet-muted mb-1">Status</div>
+              <div className="text-xs wallet-muted mb-1">
+                {t('history.status')}
+              </div>
               <div className="text-sm wallet-text-strong">
                 {details?.confirmations || txHeight > 0
-                  ? `${details?.confirmations ?? 1} confirmation${(details?.confirmations ?? 1) === 1 ? '' : 's'}`
-                  : 'Pending'}
+                  ? t('history.confirmations', {
+                      count: details?.confirmations ?? 1,
+                    })
+                  : t('history.pending')}
               </div>
             </div>
             {details?.confirmations || txHeight > 0 ? (
-              <StatusChip tone="success">Confirmed</StatusChip>
+              <StatusChip tone="success">{t('history.confirmed')}</StatusChip>
             ) : (
-              <StatusChip tone="warning">Pending</StatusChip>
+              <StatusChip tone="warning">{t('history.pending')}</StatusChip>
             )}
           </div>
 
           <div className="grid grid-cols-2 gap-3 mt-4 text-sm">
             <div>
-              <div className="text-xs wallet-muted">Block</div>
+              <div className="text-xs wallet-muted">{t('history.block')}</div>
               <div className="wallet-text-strong">
-                {details?.height ?? (txHeight > 0 ? txHeight : 'Unconfirmed')}
+                {details?.height ??
+                  (txHeight > 0 ? txHeight : t('history.unconfirmed'))}
               </div>
             </div>
             <div>
-              <div className="text-xs wallet-muted">Fee</div>
+              <div className="text-xs wallet-muted">{t('history.fee')}</div>
               <div className="wallet-text-strong">
-                {formatSats(details?.feeSats)}
+                {formatSats(details?.feeSats, t('history.unknown'))}
               </div>
             </div>
             <div className="col-span-2">
-              <div className="text-xs wallet-muted">Timestamp</div>
+              <div className="text-xs wallet-muted">
+                {t('history.timestamp')}
+              </div>
               <div className="wallet-text-strong">
-                {formatTimestamp(details?.timestamp)}
+                {formatTimestamp(details?.timestamp, t('history.unavailable'))}
               </div>
             </div>
             <div className="col-span-2">
@@ -195,7 +208,7 @@ export default function TransactionDetailPopup({
                 rel="noopener noreferrer"
                 className="text-sm underline wallet-text-strong"
               >
-                Open in explorer
+                {t('history.openExplorer')}
               </a>
             </div>
           </div>
@@ -203,14 +216,14 @@ export default function TransactionDetailPopup({
 
         {loading ? (
           <div className="wallet-card p-4 text-sm wallet-muted">
-            Loading transaction details…
+            {t('history.loadingDetails')}
           </div>
         ) : error ? (
           <div className="wallet-card p-4 text-sm wallet-muted">{error}</div>
         ) : (
           <>
-            <Section title="Senders" rows={markedInputs} />
-            <Section title="Recipients" rows={markedOutputs} />
+            <Section title={t('history.senders')} rows={markedInputs} />
+            <Section title={t('history.recipients')} rows={markedOutputs} />
           </>
         )}
       </div>

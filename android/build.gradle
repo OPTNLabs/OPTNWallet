@@ -15,6 +15,15 @@ buildscript {
 apply from: "variables.gradle"
 
 allprojects {
+    configurations.configureEach {
+        resolutionStrategy.eachDependency { dependency ->
+            if (dependency.requested.group == 'org.jetbrains.kotlin' &&
+                dependency.requested.name.startsWith('kotlin-stdlib')) {
+                dependency.useVersion '2.0.0'
+            }
+        }
+    }
+
     repositories {
         google()
         mavenCentral()

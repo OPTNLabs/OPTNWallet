@@ -204,14 +204,14 @@ export function collectWalletCreatedCauldronPoolCandidates(
       const tokenCategory = normalizeTokenCategory(output.token?.category);
       if (!tokenCategory) return;
 
+      const rawTokenAmount: unknown = output.token?.amount;
       const tokenAmount =
-        typeof output.token?.amount === 'bigint'
-          ? output.token.amount
-          : typeof output.token?.amount === 'number'
-            ? BigInt(Math.trunc(output.token.amount))
-            : typeof output.token?.amount === 'string' &&
-                output.token.amount.trim()
-              ? BigInt(output.token.amount)
+        typeof rawTokenAmount === 'bigint'
+          ? rawTokenAmount
+          : typeof rawTokenAmount === 'number'
+            ? BigInt(Math.trunc(rawTokenAmount))
+            : typeof rawTokenAmount === 'string' && rawTokenAmount.trim()
+              ? BigInt(rawTokenAmount)
               : 0n;
       if (tokenAmount <= 0n) return;
       if (spentOutpointSet.has(getCandidateOutputKey(record.txid, outputIndex))) {

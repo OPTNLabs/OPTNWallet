@@ -183,11 +183,12 @@ async function enrichCachedTokenMetadata(
   for (const utxos of Object.values(utxosByAddress)) {
     for (const utxo of utxos) {
       const category = utxo.token?.category;
-      if (!category) continue;
+      const token = utxo.token;
+      if (!token || !category) continue;
       const metadata = metadataByCategory.get(category);
       if (metadata) {
         utxo.token = {
-          ...utxo.token,
+          ...token,
           BcmrTokenMetadata: metadata,
         };
       }

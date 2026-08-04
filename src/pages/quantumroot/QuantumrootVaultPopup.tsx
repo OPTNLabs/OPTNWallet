@@ -625,11 +625,11 @@ const QuantumrootVaultPopup: React.FC<QuantumrootVaultPopupProps> = ({
                 </div>
               </div>
               <StatusChip tone="warning">
-                {selectedVaultTokenAwareness.unrelatedQuantumLockTokenUtxos.length} locked
+                {selectedVaultTokenAwareness?.unrelatedQuantumLockTokenUtxos.length ?? 0} locked
               </StatusChip>
             </div>
             <div className="mt-3 space-y-2">
-              {selectedVaultTokenAwareness.unrelatedQuantumLockTokenUtxos.map((utxo) => {
+              {selectedVaultTokenAwareness?.unrelatedQuantumLockTokenUtxos.map((utxo) => {
                 const tokenMetadata = walletTokenMetadata[utxo.token?.category ?? ''] ?? null;
                 const presentation = resolveTokenPresentation(
                   utxo.token?.category ?? '',

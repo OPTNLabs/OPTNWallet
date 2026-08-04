@@ -1,16 +1,24 @@
 import { createAsyncThunk, createSlice, PayloadAction } from '@reduxjs/toolkit';
 import { Toast } from '@capacitor/toast';
-import { WalletConnectionManager, type PendingSignRequest } from '@wizardconnect/wallet';
+import {
+  WalletConnectionManager,
+  type PendingSignRequest,
+} from '@wizardconnect/wallet';
 
 import type { AppDispatch, RootState } from '../store';
+import { selectLocale } from './preferencesSlice';
 import { logError } from '../../utils/errorHandling';
+import { translate } from '../../i18n/translate';
 import { OptnWizardWalletAdapter } from '../../services/wizardconnect/OptnWizardWalletAdapter';
 import {
   disconnectAllWizardConnections,
   disconnectWizardConnection,
   wizardConnectPair,
 } from '../../redux/wizardconnect/thunks';
-import { initialState, type ActiveWizardConnections } from '../../redux/wizardconnect/types';
+import {
+  initialState,
+  type ActiveWizardConnections,
+} from '../../redux/wizardconnect/types';
 
 let wizardManagerSingleton: WalletConnectionManager | null = null;
 let wizardAdapterSingleton: OptnWizardWalletAdapter | null = null;
@@ -21,7 +29,10 @@ let wizardInitPromise: Promise<{
 }> | null = null;
 let wizardListenersBoundWalletId: number | null = null;
 
-function registerWizardListeners(manager: WalletConnectionManager, dispatch: AppDispatch) {
+function registerWizardListeners(
+  manager: WalletConnectionManager,
+  dispatch: AppDispatch
+) {
   manager.on('connectionsChanged', () => {
     dispatch(setActiveConnections(manager.getConnections()));
   });
@@ -54,7 +65,10 @@ function registerWizardListeners(manager: WalletConnectionManager, dispatch: App
   });
 }
 
-async function initializeWizardConnect(walletId: number, dispatch: AppDispatch) {
+async function initializeWizardConnect(
+  walletId: number,
+  dispatch: AppDispatch
+) {
   if (wizardManagerSingleton && wizardListenersBoundWalletId === walletId) {
     return {
       manager: wizardManagerSingleton,
@@ -83,7 +97,10 @@ export const initWizardConnect = createAsyncThunk(
   'wizardconnect/init',
   async (walletId: number, { dispatch }) => {
     if (!wizardInitPromise) {
-      wizardInitPromise = initializeWizardConnect(walletId, dispatch as AppDispatch).finally(() => {
+      wizardInitPromise = initializeWizardConnect(
+        walletId,
+        dispatch as AppDispatch
+      ).finally(() => {
         wizardInitPromise = null;
       });
     }
@@ -120,7 +137,9 @@ export const respondToWizardConnectSignRequest = createAsyncThunk(
       return { approved: false, connections: manager.getConnections() };
     }
 
-    const result = await wizardAdapterSingleton.signTransaction(pending.request);
+    const result = await wizardAdapterSingleton.signTransaction(
+      pending.request
+    );
     await manager.sendSignResponse(
       args.connectionId,
       args.sequence,
@@ -163,7 +182,10 @@ export const syncWizardConnections = createAsyncThunk(
 
     if (staleConnectionIds.length > 0) {
       await Toast.show({
-        text: 'A WizardConnect session disconnected or expired on the dApp side.',
+        text: translate(
+          selectLocale(state),
+          'wizard.sessionDisconnectedOrExpired'
+        ),
       });
     }
 
@@ -219,7 +241,8 @@ const wizardconnectSlice = createSlice({
       state,
       action: PayloadAction<PendingSignRequest>
     ) => {
-      state.pendingSignRequest = action.payload as typeof state.pendingSignRequest;
+      state.pendingSignRequest =
+        action.payload as typeof state.pendingSignRequest;
     },
     clearPendingSignRequest: (state) => {
       state.pendingSignRequest = null;
@@ -276,10 +299,13 @@ const wizardconnectSlice = createSlice({
       logError('wizardconnect.sync.rejected', action.error);
     });
 
-    builder.addCase(disconnectAllWizardConnections.fulfilled, (state, action) => {
-      state.activeConnections = action.payload;
-      state.pendingSignRequest = null;
-    });
+    builder.addCase(
+      disconnectAllWizardConnections.fulfilled,
+      (state, action) => {
+        state.activeConnections = action.payload;
+        state.pendingSignRequest = null;
+      }
+    );
     builder.addCase(disconnectAllWizardConnections.rejected, (_, action) => {
       logError('wizardconnect.disconnectAll.rejected', action.error);
     });

@@ -1,6 +1,8 @@
 import { createAsyncThunk } from '@reduxjs/toolkit';
 import { Toast } from '@capacitor/toast';
 import type { RootState } from '../../state/store';
+import { selectLocale } from '../../state/slices/preferencesSlice';
+import { translate } from '../../i18n/translate';
 
 export const wizardConnectPair = createAsyncThunk(
   'wizardconnect/pair',
@@ -9,7 +11,9 @@ export const wizardConnectPair = createAsyncThunk(
     const manager = state.wizardconnect.manager;
     if (!manager) throw new Error('WizardConnect not initialized');
     const connectionId = manager.connect(uri);
-    await Toast.show({ text: 'WizardConnect pairing started.' });
+    await Toast.show({
+      text: translate(selectLocale(state), 'wizard.pairingStarted'),
+    });
     return {
       connectionId,
       connections: manager.getConnections(),

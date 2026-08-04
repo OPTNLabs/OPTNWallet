@@ -17,6 +17,7 @@ dist-extension-firefox
 vite.config.js
 vite.config.d.ts
 tsconfig.node.tsbuildinfo
+tsconfig.tsbuildinfo
 
 # Editor directories and files
 .vscode/*
@@ -30,6 +31,7 @@ tsconfig.node.tsbuildinfo
 *.sw?
 .env
 .env.*
+!.env.example
 
 # Android signing material (never commit)
 *.keystore

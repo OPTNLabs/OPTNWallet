@@ -1,16 +1,19 @@
 # Desktop E2E testing (WebdriverIO + tauri-driver)
 
-## Status: real harness, one verified smoke test
+## Status: real harness, launch smoke verified; onboarding spec added
 
 `npm run test:e2e` runs a genuine WebdriverIO E2E test against the actual
 built Tauri binary — confirmed passing (not simulated, not assumed) by
 launching the real app and asserting the landing screen's `<h1>OPTN
-Wallet</h1>` is visible via a live WebDriver session.
+Wallet</h1>` is visible via a live WebDriver session. The suite now also
+includes coverage for the watch-only onboarding preview, its empty xPub
+validation, and return navigation to the wallet picker.
 
 This is the officially-recommended Tauri E2E path per
 [v2.tauri.app/develop/tests/webdriver](https://v2.tauri.app/develop/tests/webdriver/)
 and [webdriver.io/docs/desktop-testing/tauri](https://webdriver.io/docs/desktop-testing/tauri).
 Two setups exist:
+
 - **`@wdio/tauri-service`** (embedded driver) — needs a new Rust dependency
   (`tauri-plugin-wdio-webdriver`) added to `src-tauri/Cargo.toml` and
   registered in `src-tauri/src/lib.rs`. Not used here — adding a new Rust
@@ -50,28 +53,27 @@ export TAURI_E2E_NATIVE_DRIVER_PATH="/path/to/msedgedriver.exe"  # Windows only
 npm run test:e2e
 ```
 
+The create → lock → reopen lifecycle is intentionally mutation-gated. Its
+runner creates a temporary desktop data profile, removes Snap GTK environment
+variables when needed, and deletes the profile after the run:
+
+```sh
+npm run test:e2e:lifecycle
+```
+
 On Linux, `TAURI_E2E_NATIVE_DRIVER_PATH` isn't needed — `tauri-driver`
 launches `WebKitWebDriver` itself if it's on `PATH`.
 
 ## What's covered vs. what's next
 
-- **Covered**: the harness itself — app launch, WebDriver session,
-  DOM query against the real rendered app. This is the hard, one-time
-  infrastructure problem; it's solved and proven.
-- **Not yet covered**: the actual create-wallet → lock → reopen flow. That's
-  a multi-step wizard (generate a seed phrase, read it back off the DOM,
-  type specific words back to confirm, then set a password) — real
-  automation, but a bigger single piece of work than "prove the harness
-  works." Natural next spec now that the pipeline is real and verified:
-  1. `e2e/specs/create-wallet.spec.ts` — walk the seed reveal/confirm/name
-     steps in `DesktopCreateWalletPage.tsx`, landing on the wallet home.
-  2. `e2e/specs/lock-reopen.spec.ts` — trigger a lock (idle timeout or a
-     menu action), return to `DesktopLandingPage.tsx`'s picker, unlock with
-     the same password.
-  3. Biometric unlock is out of scope for WebDriver automation — it's a
-     native OS dialog outside the webview and generally can't be driven by
-     WebDriver at all; that one stays a manual test regardless of how much
-     E2E infrastructure exists.
+- **Verified**: app launch, WebDriver session, and DOM queries against the
+  real rendered app.
+- **Added**: watch-only preview navigation, client-side validation, return
+  navigation to the wallet picker, and the opt-in create → lock → reopen
+  lifecycle with wrong-password coverage.
+- Biometric unlock is out of scope for WebDriver automation — it's a native OS
+  dialog outside the webview and generally can't be driven by WebDriver; that
+  one stays a manual test.
 
 ## CI
 

@@ -1,6 +1,7 @@
 import React from 'react';
 import Popup from './Popup';
 import type { TokenCapability } from '../../../services/cashtokens';
+import { useI18n } from '../../../i18n/useI18n';
 
 interface NFTConfigPopupProps {
   show: boolean;
@@ -19,13 +20,16 @@ const NFTConfigPopup: React.FC<NFTConfigPopupProps> = ({
   nftCommitment,
   setNftCommitment,
 }) => {
+  const { t } = useI18n();
   if (!show) return null;
   return (
     <Popup closePopups={() => setShow(false)}>
       <div className="p-4">
-        <h3 className="text-lg font-semibold mb-2">NFT Configuration</h3>
+        <h3 className="text-lg font-semibold mb-2">{t('nftConfig.title')}</h3>
         <div className="mb-2">
-          <label className="block font-medium mb-1">NFT Capability</label>
+          <label className="block font-medium mb-1">
+            {t('nftConfig.capability')}
+          </label>
           <select
             value={nftCapability}
             onChange={(e) =>
@@ -38,18 +42,26 @@ const NFTConfigPopup: React.FC<NFTConfigPopupProps> = ({
             <option value="minting">minting</option>
           </select>
           <div className="mt-2 text-xs wallet-muted space-y-1">
-            <p><strong>none</strong>: one immutable NFT, best for approvals or receipts.</p>
-            <p><strong>mutable</strong>: one NFT that may update its commitment when spent.</p>
-            <p><strong>minting</strong>: one NFT authority that can create multiple next NFTs.</p>
+            <p>
+              <strong>none</strong>: {t('nftConfig.noneDescription')}
+            </p>
+            <p>
+              <strong>mutable</strong>: {t('nftConfig.mutableDescription')}
+            </p>
+            <p>
+              <strong>minting</strong>: {t('nftConfig.mintingDescription')}
+            </p>
           </div>
         </div>
         <div className="mb-2">
-          <label className="block font-medium mb-1">NFT Commitment</label>
+          <label className="block font-medium mb-1">
+            {t('nftConfig.commitment')}
+          </label>
           <input
             type="text"
             value={nftCommitment}
             onChange={(e) => setNftCommitment(e.target.value)}
-            placeholder="Up to 40 bytes"
+            placeholder={t('nftConfig.placeholder')}
             className="wallet-input p-2 w-full break-words whitespace-normal"
           />
         </div>
@@ -57,7 +69,7 @@ const NFTConfigPopup: React.FC<NFTConfigPopupProps> = ({
           onClick={() => setShow(false)}
           className="wallet-btn-primary font-bold py-1 px-3"
         >
-          Done
+          {t('nftConfig.done')}
         </button>
       </div>
     </Popup>

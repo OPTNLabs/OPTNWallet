@@ -3,6 +3,7 @@
 
 import React, { useEffect, useRef, useState, useCallback } from 'react';
 import getElectrumAdapter from '../../services/ElectrumAdapter';
+import { useI18n } from '../../i18n/useI18n';
 
 type LogLevel = 'log' | 'info' | 'warn' | 'error';
 
@@ -24,18 +25,23 @@ const globalLogs: LogEntry[] = [];
 const logListeners = new Set<() => void>();
 
 function installLogInterceptor() {
-  if ((window as unknown as Record<string, unknown>).__optn_console_installed) return;
-  (window as unknown as Record<string, unknown>).__optn_console_installed = true;
+  if ((window as unknown as Record<string, unknown>).__optn_console_installed)
+    return;
+  (window as unknown as Record<string, unknown>).__optn_console_installed =
+    true;
 
   (['log', 'info', 'warn', 'error'] as LogLevel[]).forEach((level) => {
     const orig = console[level].bind(console);
     console[level] = (...args: unknown[]) => {
       orig(...args);
-      const text = args.map((a) => (typeof a === 'string' ? a : JSON.stringify(a))).join(' ');
+      const text = args
+        .map((a) => (typeof a === 'string' ? a : JSON.stringify(a)))
+        .join(' ');
       const now = new Date();
       const ts = `${now.getHours().toString().padStart(2, '0')}:${now.getMinutes().toString().padStart(2, '0')}:${now.getSeconds().toString().padStart(2, '0')}`;
       globalLogs.push({ id: _logId++, ts, level, text });
-      if (globalLogs.length > 500) globalLogs.splice(0, globalLogs.length - 500);
+      if (globalLogs.length > 500)
+        globalLogs.splice(0, globalLogs.length - 500);
       logListeners.forEach((fn) => fn());
     };
   });
@@ -51,6 +57,7 @@ const levelColor: Record<LogLevel, string> = {
 };
 
 export const ConsolePanel: React.FC = () => {
+  const { t } = useI18n();
   const [logs, setLogs] = useState<LogEntry[]>([...globalLogs]);
   const [rpcHistory, setRpcHistory] = useState<RpcEntry[]>([]);
   const [rpcInput, setRpcInput] = useState('');
@@ -64,7 +71,9 @@ export const ConsolePanel: React.FC = () => {
   useEffect(() => {
     const cb = () => setLogs([...globalLogs]);
     logListeners.add(cb);
-    return () => { logListeners.delete(cb); };
+    return () => {
+      logListeners.delete(cb);
+    };
   }, []);
 
   useEffect(() => {
@@ -76,11 +85,17 @@ export const ConsolePanel: React.FC = () => {
   }, [rpcHistory]);
 
   // Parse "method param1 param2 ..." — params can be JSON values
-  const parseRpcInput = (raw: string): { method: string; params: unknown[] } => {
+  const parseRpcInput = (
+    raw: string
+  ): { method: string; params: unknown[] } => {
     const parts = raw.trim().split(/\s+/);
     const method = parts[0];
     const params = parts.slice(1).map((p) => {
-      try { return JSON.parse(p); } catch { return p; }
+      try {
+        return JSON.parse(p);
+      } catch {
+        return p;
+      }
     });
     return { method, params };
   };
@@ -91,36 +106,53 @@ export const ConsolePanel: React.FC = () => {
     setSending(true);
     const { method, params } = parseRpcInput(raw);
     const sentId = _logId++;
-    setRpcHistory((h) => [...h, { id: sentId, direction: 'sent', text: `→ ${method}(${params.map((p) => JSON.stringify(p)).join(', ')})` }]);
+    setRpcHistory((h) => [
+      ...h,
+      {
+        id: sentId,
+        direction: 'sent',
+        text: `→ ${method}(${params.map((p) => JSON.stringify(p)).join(', ')})`,
+      },
+    ]);
     try {
       const adapter = getElectrumAdapter();
       const result = await adapter.request(method, ...params);
-      setRpcHistory((h) => [...h, { id: _logId++, direction: 'received', text: JSON.stringify(result, null, 2) }]);
+      setRpcHistory((h) => [
+        ...h,
+        {
+          id: _logId++,
+          direction: 'received',
+          text: JSON.stringify(result, null, 2),
+        },
+      ]);
     } catch (err) {
-      setRpcHistory((h) => [...h, { id: _logId++, direction: 'error', text: String(err) }]);
+      setRpcHistory((h) => [
+        ...h,
+        { id: _logId++, direction: 'error', text: String(err) },
+      ]);
     } finally {
       setSending(false);
     }
   }, [rpcInput, sending]);
 
-  const filteredLogs = filterLevel === 'all' ? logs : logs.filter((l) => l.level === filterLevel);
+  const filteredLogs =
+    filterLevel === 'all' ? logs : logs.filter((l) => l.level === filterLevel);
 
   return (
     <div className="flex flex-col gap-3 h-full min-h-0">
-
       {/* Tab bar */}
       <div className="flex gap-2">
-        {(['log', 'rpc'] as const).map((t) => (
+        {(['log', 'rpc'] as const).map((tabName) => (
           <button
-            key={t}
-            onClick={() => setTab(t)}
+            key={tabName}
+            onClick={() => setTab(tabName)}
             className={`flex-1 rounded-xl border py-1.5 text-xs font-semibold uppercase tracking-wide transition-colors ${
-              tab === t
+              tab === tabName
                 ? 'border-[var(--wallet-accent)] text-[var(--wallet-accent)] bg-[var(--wallet-accent)]/10'
                 : 'border-[var(--wallet-border)] wallet-muted'
             }`}
           >
-            {t === 'log' ? 'App Log' : 'Electrum RPC'}
+            {tabName === 'log' ? t('console.appLog') : t('console.rpc')}
           </button>
         ))}
       </div>
@@ -143,25 +175,32 @@ export const ConsolePanel: React.FC = () => {
               </button>
             ))}
             <button
-              onClick={() => { globalLogs.length = 0; setLogs([]); }}
+              onClick={() => {
+                globalLogs.length = 0;
+                setLogs([]);
+              }}
               className="ml-auto rounded-lg border border-[var(--wallet-border)] px-2 py-0.5 text-[10px] wallet-muted hover:text-red-400"
             >
-              Clear
+              {t('console.clear')}
             </button>
           </div>
 
           {/* Log output */}
           <div className="flex-1 min-h-0 overflow-y-auto rounded-xl border border-[var(--wallet-border)] bg-black/30 p-3 font-mono text-[11px] leading-relaxed space-y-0.5">
             {filteredLogs.length === 0 && (
-              <p className="wallet-muted italic">No log entries yet.</p>
+              <p className="wallet-muted italic">{t('console.noEntries')}</p>
             )}
             {filteredLogs.map((entry) => (
               <div key={entry.id} className="flex gap-2">
                 <span className="wallet-muted shrink-0">{entry.ts}</span>
-                <span className={`shrink-0 uppercase text-[9px] font-bold w-8 ${levelColor[entry.level]}`}>
+                <span
+                  className={`shrink-0 uppercase text-[9px] font-bold w-8 ${levelColor[entry.level]}`}
+                >
                   {entry.level}
                 </span>
-                <span className="wallet-text-strong break-all">{entry.text}</span>
+                <span className="wallet-text-strong break-all">
+                  {entry.text}
+                </span>
               </div>
             ))}
             <div ref={logEndRef} />
@@ -174,9 +213,7 @@ export const ConsolePanel: React.FC = () => {
           {/* RPC output */}
           <div className="flex-1 min-h-0 overflow-y-auto rounded-xl border border-[var(--wallet-border)] bg-black/30 p-3 font-mono text-[11px] leading-relaxed space-y-1">
             <p className="wallet-muted text-[10px] mb-2">
-              Type: <span className="wallet-text-strong">method param1 param2</span>
-              &nbsp;— e.g. <span className="wallet-text-strong">server.version</span> or&nbsp;
-              <span className="wallet-text-strong">blockchain.headers.subscribe</span>
+              {t('console.typeHint')}
             </p>
             {rpcHistory.map((entry) => (
               <div
@@ -201,8 +238,10 @@ export const ConsolePanel: React.FC = () => {
               type="text"
               value={rpcInput}
               onChange={(e) => setRpcInput(e.target.value)}
-              onKeyDown={(e) => { if (e.key === 'Enter') void handleSendRpc(); }}
-              placeholder="method [params…]"
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') void handleSendRpc();
+              }}
+              placeholder={t('console.placeholder')}
               className="flex-1 rounded-xl border border-[var(--wallet-border)] bg-[var(--wallet-surface)] px-3 py-2 text-xs font-mono wallet-text-strong placeholder:wallet-muted outline-none focus:ring-1 focus:ring-[var(--wallet-accent)]"
               disabled={sending}
             />
@@ -212,7 +251,7 @@ export const ConsolePanel: React.FC = () => {
               className="rounded-xl px-4 py-2 text-xs font-semibold text-white disabled:opacity-50"
               style={{ background: 'var(--wallet-accent, #6366f1)' }}
             >
-              {sending ? '…' : 'Send'}
+              {sending ? t('console.sending') : t('console.send')}
             </button>
           </div>
         </>

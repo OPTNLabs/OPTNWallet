@@ -1,4 +1,5 @@
 import { FaCamera } from 'react-icons/fa';
+import { useI18n } from '../../i18n/useI18n';
 
 type ConnectionUriScanCardProps = {
   label: string;
@@ -23,6 +24,7 @@ export default function ConnectionUriScanCard({
   submitting = false,
   connectLabel = 'Connect',
 }: ConnectionUriScanCardProps) {
+  const { t } = useI18n();
   return (
     <div className="wallet-card p-4 space-y-3">
       <label className="font-bold">{label}</label>
@@ -37,8 +39,8 @@ export default function ConnectionUriScanCard({
           onClick={onScan}
           className="inline-flex h-12 w-12 items-center justify-center rounded-[14px] wallet-btn-primary p-0"
           disabled={scanning || submitting}
-          aria-label="Scan QR"
-          title="Scan QR"
+          aria-label={t('qr.scan')}
+          title={t('qr.scan')}
         >
           <FaCamera className="text-base" />
         </button>
@@ -48,7 +50,7 @@ export default function ConnectionUriScanCard({
         className="wallet-btn-primary w-full"
         disabled={submitting}
       >
-        {scanning ? 'Scanning...' : connectLabel}
+        {scanning ? t('qr.scanning') : connectLabel}
       </button>
     </div>
   );
