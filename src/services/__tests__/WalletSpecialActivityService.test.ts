@@ -170,6 +170,30 @@ describe('WalletSpecialActivityService', () => {
     expect(result.payload.unspentSats).toBe(0);
   });
 
+  it('maps ordinary Electrum "Unsupported request: rpa.getaddresshistory" to a clear note', async () => {
+    const adapter = {
+      request: vi.fn(async (method: string) => {
+        if (method === 'rpa.getaddresshistory') {
+          throw new Error('Unsupported request: rpa.getaddresshistory');
+        }
+        throw new Error(`Unexpected method: ${method}`);
+      }),
+    };
+
+    const result = await scanRpaActivity({
+      mnemonic: 'test mnemonic',
+      passphrase: '',
+      network: Network.CHIPNET,
+      accountPath: "m/44'/1'/0'",
+      adapter,
+    });
+
+    expect(result.status).toBe('unavailable');
+    expect(result.payload.serverSupported).toBe(false);
+    expect(result.payload.error).toMatch(/Fulcrum-RPA/i);
+    expect(result.payload.error).not.toMatch(/^Unsupported request:/);
+  });
+
   it('queries Cauldron using the active wallet branches and summarizes pool balances', async () => {
     const pool = {
       version: '0' as const,

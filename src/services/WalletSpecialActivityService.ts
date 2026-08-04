@@ -130,8 +130,27 @@ function toNonEmptyString(value: unknown): string | null {
   return normalized ? normalized : null;
 }
 
+/**
+ * Turn Electrum/network failures into short user-facing copy.
+ *
+ * `rpa.getaddresshistory` is **not** standard ElectrumX — only Fulcrum builds
+ * with the RPA plugin answer it. Ordinary chipnet/mainnet servers reply
+ * "Unsupported request: rpa.getaddresshistory", which is accurate protocol
+ * text but useless in the Assets card.
+ */
 function normalizeActivityError(error: unknown): string {
   const message = toErrorMessage(error).trim();
+  const lower = message.toLowerCase();
+  if (
+    lower.includes('rpa.getaddresshistory') ||
+    (lower.includes('unsupported request') && lower.includes('rpa')) ||
+    lower.includes('method not found') && lower.includes('rpa')
+  ) {
+    return (
+      'This Electrum server does not support RPA scanning. ' +
+      'Connect to a Fulcrum-RPA server (or turn off Experimental → RPA).'
+    );
+  }
   return message.length > 240 ? `${message.slice(0, 237)}...` : message;
 }
 
