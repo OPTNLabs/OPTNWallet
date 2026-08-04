@@ -8,6 +8,8 @@ set -Eeuo pipefail
 SCRIPT_NAME="$(basename "$0")"
 BUILD_REQUESTED=0
 TASK_ARG=""
+TASK_NAME=""
+TASK_SLUG=""
 REPO_ROOT=""
 TASK_PATH=""
 TASK_RELATIVE=""
@@ -22,7 +24,11 @@ DIFF_STAT_PATH=""
 CHANGED_FILES_PATH=""
 NPMRC_PATH=""
 CODEX_FINAL_MESSAGE_PATH=""
+CODEX_FINAL_MESSAGE_TEMP_PATH=""
 CODEX_EVENTS_PATH=""
+IGNORED_BEFORE_PATH=""
+IGNORED_AFTER_PATH=""
+NEW_IGNORED_PATH=""
 CODEX_BIN=""
 LOCAL_CODEX_HOME=""
 RUNTIME_HOME=""
@@ -34,7 +40,8 @@ FORBIDDEN_PATH=0
 SENSITIVE_SCOPE=0
 REMOTE_REMAINS=0
 SECRET_TERM_WARNING=0
-REQUIRED_FAILURE=0
+REQUIRED_FAILURE=125
+DOCTOR_FAILURE=125
 
 usage() {
   printf 'Usage: %s [--build] <task-file>\n' "$SCRIPT_NAME" >&2
@@ -106,7 +113,7 @@ resolve_task_path() {
 
 validate_task_file() {
   local heading
-  local headings=(Task Scope Constraints Validation Completion)
+  local headings=(Task Scope "Out of scope" "Acceptance criteria" Validation Constraints)
 
   for heading in "${headings[@]}"; do
     grep -Fqx "# $heading" "$TASK_PATH" || fail "task file is missing the '# $heading' heading"
@@ -123,23 +130,34 @@ check_source_preflight() {
     printf '%s\n' "$status" >&2
     fail "checkpoint the source repository before running an automated task"
   fi
+  printf 'Starting commit: %s\n' "$START_COMMIT"
+  printf 'Task file: %s\n' "$TASK_RELATIVE"
 }
 
 create_run_directory() {
   local tmp_root="${TMPDIR:-/tmp}"
+  local timestamp
 
-  RUN_DIR="$(mktemp -d "$tmp_root/optn-codex-task.XXXXXX")" || fail "unable to create an isolated run directory"
+  TASK_NAME="$(basename "$TASK_RELATIVE")"
+  TASK_NAME="${TASK_NAME%.md}"
+  TASK_SLUG="$(printf '%s' "$TASK_NAME" | tr -c '[:alnum:]_.-' '-')"
+  timestamp="$(date -u +%Y%m%dT%H%M%SZ)"
+  RUN_DIR="$(mktemp -d "$tmp_root/optn-codex-task-${TASK_SLUG}-${timestamp}.XXXXXX")" || fail "unable to create an isolated run directory"
   chmod 700 "$RUN_DIR"
   WORKDIR="$RUN_DIR/repository"
   LOG_DIR="$RUN_DIR/logs"
   RESULTS_FILE="$RUN_DIR/validation-results.tsv"
-  REPORT_PATH="$RUN_DIR/agent-report.md"
+  REPORT_PATH="$WORKDIR/agent-report.md"
   PATCH_PATH="$RUN_DIR/agent.patch"
   DIFF_STAT_PATH="$RUN_DIR/agent-diff-stat.txt"
   CHANGED_FILES_PATH="$RUN_DIR/agent-changed-files.txt"
   NPMRC_PATH="$RUN_DIR/npmrc"
-  CODEX_FINAL_MESSAGE_PATH="$RUN_DIR/codex-final-message.md"
+  CODEX_FINAL_MESSAGE_PATH="$WORKDIR/codex-final-message.md"
+  CODEX_FINAL_MESSAGE_TEMP_PATH="$RUN_DIR/codex-final-message.md"
   CODEX_EVENTS_PATH="$RUN_DIR/codex-events.jsonl"
+  IGNORED_BEFORE_PATH="$RUN_DIR/ignored-before.txt"
+  IGNORED_AFTER_PATH="$RUN_DIR/ignored-after.txt"
+  NEW_IGNORED_PATH="$RUN_DIR/new-ignored.txt"
   RUNTIME_HOME="$RUN_DIR/home"
 
   mkdir -p "$LOG_DIR" "$RUNTIME_HOME" "$RUN_DIR/config" "$RUN_DIR/tmp"
@@ -162,6 +180,7 @@ clone_repository() {
   done < <(git -C "$WORKDIR" remote)
 
   [[ -z "$(git -C "$WORKDIR" remote)" ]] || fail "isolated repository still has a Git remote"
+  [[ -z "$(git -C "$WORKDIR" status --porcelain=v1 --untracked-files=all)" ]] || fail "isolated repository did not start clean"
   [[ -f "$WORKDIR/$TASK_RELATIVE" ]] || fail "task file is not present at the starting commit: $TASK_RELATIVE"
 }
 
@@ -209,6 +228,7 @@ run_check() {
 run_validation_set() {
   local phase=$1
 
+  run_check "$phase" doctor npm run doctor
   run_check "$phase" deps-check npm run deps:check
   run_check "$phase" format-check npm run format:check
   run_check "$phase" typecheck-core npm run typecheck:core
@@ -229,6 +249,27 @@ result_status() {
   awk -F '\t' -v expected_phase="$phase" -v expected_name="$name" \
     '$1 == expected_phase && $2 == expected_name { print $3; found = 1 } END { if (!found) print 125 }' \
     "$RESULTS_FILE" | tail -n 1
+}
+
+result_log() {
+  local phase=$1
+  local name=$2
+
+  awk -F '\t' -v expected_phase="$phase" -v expected_name="$name" \
+    '$1 == expected_phase && $2 == expected_name { print $4; found = 1 } END { if (!found) print "" }' \
+    "$RESULTS_FILE" | tail -n 1
+}
+
+log_mentions_changed_path() {
+  local log_file=$1
+  local path
+
+  [[ -f "$log_file" ]] || return 1
+  while IFS= read -r path; do
+    [[ -n "$path" ]] || continue
+    grep -Fq -- "$path" "$log_file" && return 0
+  done < "$RUN_DIR/all-changed-paths.txt"
+  return 1
 }
 
 write_codex_prompt() {
@@ -269,18 +310,48 @@ run_codex() {
   CODEX_STATUS=$status
 }
 
+preserve_codex_message() {
+  if [[ -f "$CODEX_FINAL_MESSAGE_PATH" ]]; then
+    mv -- "$CODEX_FINAL_MESSAGE_PATH" "$CODEX_FINAL_MESSAGE_TEMP_PATH"
+  fi
+  CODEX_FINAL_MESSAGE_PATH="$CODEX_FINAL_MESSAGE_TEMP_PATH"
+}
+
+snapshot_ignored_paths() {
+  local destination=$1
+
+  git -C "$WORKDIR" status --short --ignored --untracked-files=all \
+    | awk '/^!! /{sub(/^!! /, ""); print}' \
+    | sort -u > "$destination"
+}
+
 collect_changed_paths() {
+  : > "$NEW_IGNORED_PATH"
+  if [[ -f "$IGNORED_BEFORE_PATH" ]]; then
+    snapshot_ignored_paths "$IGNORED_AFTER_PATH"
+    comm -13 "$IGNORED_BEFORE_PATH" "$IGNORED_AFTER_PATH" > "$NEW_IGNORED_PATH"
+  fi
   {
     git -C "$WORKDIR" diff --name-only "$START_COMMIT" --
     git -C "$WORKDIR" ls-files --others --exclude-standard
+    cat "$NEW_IGNORED_PATH"
   } | sort -u > "$RUN_DIR/all-changed-paths.txt"
 
-  git -C "$WORKDIR" status --short --untracked-files=all > "$CHANGED_FILES_PATH"
+  {
+    git -C "$WORKDIR" status --short --untracked-files=all
+    if [[ -s "$NEW_IGNORED_PATH" ]]; then
+      sed 's/^/!! /' "$NEW_IGNORED_PATH"
+    fi
+  } > "$CHANGED_FILES_PATH"
   {
     git -C "$WORKDIR" diff --stat "$START_COMMIT" --
     if [[ -s "$RUN_DIR/all-changed-paths.txt" ]]; then
       printf '\nUntracked files:\n'
       git -C "$WORKDIR" ls-files --others --exclude-standard
+      if [[ -s "$NEW_IGNORED_PATH" ]]; then
+        printf '\nNew ignored paths:\n'
+        cat "$NEW_IGNORED_PATH"
+      fi
     fi
   } > "$DIFF_STAT_PATH"
 }
@@ -361,12 +432,25 @@ write_patch() {
   done < <(git -C "$WORKDIR" ls-files --others --exclude-standard)
 }
 
+copy_outputs_to_workdir() {
+  mkdir -p "$WORKDIR/logs"
+  cp -a "$LOG_DIR/." "$WORKDIR/logs/"
+  cp -- "$PATCH_PATH" "$WORKDIR/agent.patch"
+  cp -- "$DIFF_STAT_PATH" "$WORKDIR/agent-diff-stat.txt"
+  cp -- "$CHANGED_FILES_PATH" "$WORKDIR/agent-changed-files.txt"
+  if [[ -f "$CODEX_FINAL_MESSAGE_PATH" ]]; then
+    cp -- "$CODEX_FINAL_MESSAGE_PATH" "$WORKDIR/codex-final-message.md"
+  fi
+}
+
 check_required_results() {
   local check
   local status
   local required=(deps-check format-check typecheck-core addons-validate security-test)
 
   REQUIRED_FAILURE=0
+  status="$(result_status after doctor)"
+  [[ "$status" -eq 0 ]] || DOCTOR_FAILURE=1
   for check in "${required[@]}"; do
     status="$(result_status after "$check")"
     [[ "$status" -eq 0 ]] || REQUIRED_FAILURE=1
@@ -377,22 +461,24 @@ write_report() {
   local check
   local baseline_status
   local final_status
+  local log_file
   local required=(deps-check format-check typecheck-core addons-validate security-test)
   local diagnostic=(lint-core test-core test-ui)
 
   {
     printf '%s\n\n' '# Codex task report'
-    printf '%s\n' "- Task file: `$TASK_RELATIVE`"
-    printf '%s\n' "- Starting commit: `$START_COMMIT`"
-    printf '%s\n' "- Isolated working directory: `$WORKDIR`"
-    printf '%s\n' "- Codex CLI exit status: `$CODEX_STATUS`"
-    printf '%s\n' "- Dependency installation exit status: `$INSTALL_STATUS`"
-    printf '%s\n' "- Unexpected commit created: `$UNEXPECTED_COMMIT`"
-    printf '%s\n' "- Git remote configured after run: `$REMOTE_REMAINS`"
-    printf '%s\n' "- Forbidden path changed: `$FORBIDDEN_PATH`"
-    printf '%s\n' "- Sensitive-scope change requires review: `$SENSITIVE_SCOPE`"
-    printf '%s\n' "- Secret-related term warning: `$SECRET_TERM_WARNING`"
-    printf '%s\n' "- Source repository modified by wrapper: `no`"
+    printf '%s\n' "- Task file: \`$TASK_RELATIVE\`"
+    printf '%s\n' "- Starting commit: \`$START_COMMIT\`"
+    printf '%s\n' "- Isolated working directory: \`$WORKDIR\`"
+    printf '%s\n' "- Codex CLI exit status: \`$CODEX_STATUS\`"
+    printf '%s\n' "- Dependency installation exit status: \`$INSTALL_STATUS\`"
+    printf '%s\n' "- Unexpected commit created: \`$UNEXPECTED_COMMIT\`"
+    printf '%s\n' "- Git remote configured after run: \`$REMOTE_REMAINS\`"
+    printf '%s\n' "- Forbidden path changed: \`$FORBIDDEN_PATH\`"
+    printf '%s\n' "- Sensitive-scope change requires review: \`$SENSITIVE_SCOPE\`"
+    printf '%s\n' "- Secret-related term warning: \`$SECRET_TERM_WARNING\`"
+    printf '%s\n' "- Environment doctor gate failure: \`$DOCTOR_FAILURE\`"
+    printf '%s\n' "- Source repository modified by wrapper: \`no\`"
     printf '%s\n\n' 'Nothing from this isolated run was applied to the source repository.'
 
     printf '%s\n\n' '## Codex final message'
@@ -419,8 +505,9 @@ write_report() {
     printf '%s\n\n' '## Validation commands'
     while IFS=$'\t' read -r phase check final_status log_file; do
       [[ "$phase" == 'after' ]] || continue
-      printf '%s\n' "- `npm run ${check//-/:}`: exit `$final_status` (log: `$log_file`)"
+      printf '%s\n' "- \`npm run ${check//-/:}\`: exit \`$final_status\` (log: \`$WORKDIR/logs/$(basename "$log_file")\`)"
     done < "$RESULTS_FILE"
+    printf '%s\n' "- Dependency installation: exit \`$INSTALL_STATUS\` (log: \`$WORKDIR/logs/bootstrap-npm-ci.log\`)"
 
     printf '%s\n\n' '## Required currently-green checks'
     printf '%s\n' '- `deps:check`' '- `format:check`' '- `typecheck:core`' '- `addons:validate`' '- `security:test`'
@@ -438,7 +525,12 @@ write_report() {
       if [[ "$baseline_status" -ne 0 && "$final_status" -ne 0 ]]; then
         printf '%s\n' "- ${check//-/:}: baseline=$baseline_status, after=$final_status (known baseline failure persists)"
       elif [[ "$baseline_status" -eq 0 && "$final_status" -ne 0 ]]; then
-        printf '%s\n' "- ${check//-/:}: baseline=$baseline_status, after=$final_status (new failure; review required)"
+        log_file="$(result_log after "$check")"
+        if log_mentions_changed_path "$log_file"; then
+          printf '%s\n' "- ${check//-/:}: baseline=$baseline_status, after=$final_status (new failure mentions a touched file; review required)"
+        else
+          printf '%s\n' "- ${check//-/:}: baseline=$baseline_status, after=$final_status (new failure does not mention a touched file; review required)"
+        fi
       elif [[ "$baseline_status" -ne 0 && "$final_status" -eq 0 ]]; then
         printf '%s\n' "- ${check//-/:}: baseline=$baseline_status, after=$final_status (baseline failure fixed)"
       else
@@ -448,15 +540,16 @@ write_report() {
     printf '%s\n' '- Diagnostic failures do not alone determine the version-one exit status.'
 
     printf '%s\n\n' '## Safety-policy findings'
-    printf '%s\n' "- Required check failure: `$REQUIRED_FAILURE`"
-    printf '%s\n' "- Forbidden path finding: `$FORBIDDEN_PATH`"
-    printf '%s\n' "- Sensitive-scope finding: `$SENSITIVE_SCOPE`"
-    printf '%s\n' "- Unexpected commit finding: `$UNEXPECTED_COMMIT`"
-    printf '%s\n' "- Remote configuration finding: `$REMOTE_REMAINS`"
-    printf '%s\n' "- Secret-related term review warning: `$SECRET_TERM_WARNING`"
+    printf '%s\n' "- Environment doctor gate failure: \`$DOCTOR_FAILURE\`"
+    printf '%s\n' "- Required check failure: \`$REQUIRED_FAILURE\`"
+    printf '%s\n' "- Forbidden path finding: \`$FORBIDDEN_PATH\`"
+    printf '%s\n' "- Sensitive-scope finding: \`$SENSITIVE_SCOPE\`"
+    printf '%s\n' "- Unexpected commit finding: \`$UNEXPECTED_COMMIT\`"
+    printf '%s\n' "- Remote configuration finding: \`$REMOTE_REMAINS\`"
+    printf '%s\n' "- Secret-related term review warning: \`$SECRET_TERM_WARNING\`"
 
     printf '%s\n\n' '## Manual review'
-    printf '%s\n' "Review `$PATCH_PATH` and the logs before applying anything. Confirm the changed files, test output, security implications, and task scope manually. This wrapper did not stage, commit, or apply changes to the source repository."
+    printf '%s\n' "Review \`$WORKDIR/agent.patch\` and the logs before applying anything. Confirm the changed files, test output, security implications, and task scope manually. This wrapper did not stage, commit, or apply changes to the source repository."
   } > "$REPORT_PATH"
 }
 
@@ -479,38 +572,43 @@ main() {
   run_check bootstrap npm-ci npm ci
   INSTALL_STATUS="$LAST_CHECK_STATUS"
   if [[ "$INSTALL_STATUS" -ne 0 ]]; then
+    preserve_codex_message
     collect_changed_paths
     write_patch
     inspect_safety
+    copy_outputs_to_workdir
     write_report
     printf '%s\n' 'Overall result: dependency installation failed.' >&2
-    printf '%s\n' "Isolated repository: $WORKDIR" "Report: $REPORT_PATH" "Patch: $PATCH_PATH" "Changed files: $CHANGED_FILES_PATH" >&2
+    printf '%s\n' "Isolated repository: $WORKDIR" "Report: $REPORT_PATH" "Patch: $WORKDIR/agent.patch" "Changed files: $WORKDIR/agent-changed-files.txt" >&2
     printf '%s\n' 'Review the isolated artifacts manually; the source repository was not modified.' >&2
     exit 1
   fi
 
   run_validation_set baseline
+  snapshot_ignored_paths "$IGNORED_BEFORE_PATH"
   run_codex
+  preserve_codex_message
   run_validation_set after
   collect_changed_paths
   write_patch
   inspect_safety
   check_required_results
+  copy_outputs_to_workdir
   write_report
 
   [[ "$CODEX_STATUS" -eq 0 ]] || overall_status=1
+  [[ "$DOCTOR_FAILURE" -eq 0 ]] || overall_status=1
   [[ "$REQUIRED_FAILURE" -eq 0 ]] || overall_status=1
   [[ "$FORBIDDEN_PATH" -eq 0 ]] || overall_status=1
-  [[ "$SENSITIVE_SCOPE" -eq 0 ]] || overall_status=1
   [[ "$UNEXPECTED_COMMIT" -eq 0 ]] || overall_status=1
   [[ "$REMOTE_REMAINS" -eq 0 ]] || overall_status=1
 
   if [[ "$overall_status" -eq 0 ]]; then
-    printf '%s\n' 'Overall result: passed required checks and safety review.'
+    printf '%s\n' 'Overall result: passed required gates and safety review; see diagnostic results.'
   else
     printf '%s\n' 'Overall result: review required; one or more required checks or safety policies failed.' >&2
   fi
-  printf '%s\n' "Isolated repository: $WORKDIR" "Report: $REPORT_PATH" "Patch: $PATCH_PATH" "Changed files: $CHANGED_FILES_PATH"
+  printf '%s\n' "Isolated repository: $WORKDIR" "Report: $REPORT_PATH" "Patch: $WORKDIR/agent.patch" "Changed files: $WORKDIR/agent-changed-files.txt"
   printf '%s\n' 'Review the patch manually. The source repository was not modified by this wrapper.'
   exit "$overall_status"
 }

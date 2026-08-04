@@ -7,21 +7,30 @@ Fix the missing test providers in `src/components/__tests__/Bip44AccountPathFiel
 - Update only the failing test setup and its directly related test helpers.
 - Keep the production component and wallet behavior unchanged.
 
-# Constraints
+# Out of scope
 
-- Do not modify dependency manifests, lockfiles, workflows, `.env` files,
-  wallet files, signing code, transaction construction, or generated output.
-- Do not run live-network tests, native builds, signing, broadcasting, or other
-  external-infrastructure flows.
-- Do not commit, push, tag, merge, publish, release, or deploy.
+- Key handling, seeds, signing, wallet files, and recovery phrases.
+- WalletConnect session data, transactions, CashTokens, contracts, and
+  CashScript artifacts.
+- Android, Tauri, iOS, desktop application-data directories, and native code.
+- External services, production credentials, and live-network tests.
+
+# Acceptance criteria
+
+- The focused test passes with the required providers present.
+- Production behavior and the component under test remain unchanged.
+- No unrelated files are modified.
 
 # Validation
 
 - Run the focused test for `Bip44AccountPathFields`.
 - Report the focused test result and any additional checks that were run.
 
-# Completion
+# Constraints
 
-- Explain the root cause briefly.
-- List changed files.
-- Leave the isolated working tree uncommitted for human review.
+- Do not modify dependency manifests, lockfiles, workflows, `.env` files,
+  keystores, signing code, transaction construction, or generated output.
+- Do not run native builds, signing, broadcasting, or other external-
+  infrastructure flows.
+- Do not commit, push, tag, merge, publish, release, deploy, or create a pull
+  request.
