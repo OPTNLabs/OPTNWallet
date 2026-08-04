@@ -79,6 +79,17 @@ export function clearSpendAuthCache(): void {
   _lastSpendAuthEpoch = -1;
 }
 
+/**
+ * Call right after a successful wallet unlock (password verified at open).
+ * Starts the 10-minute Never-mode spend window so the first Send does not
+ * re-prompt immediately after login — the open password already proved it.
+ * Timer auto-lock modes ignore this (they never re-prompt on spend).
+ */
+export function markSpendAuthFromUnlock(): void {
+  _lastSpendAuthAt = Date.now();
+  _lastSpendAuthEpoch = getUnlockEpoch();
+}
+
 /** True if a previous spend auth is still good for the current unlock session. */
 function spendAuthStillValid(): boolean {
   if (_lastSpendAuthEpoch !== getUnlockEpoch()) return false;

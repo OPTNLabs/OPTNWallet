@@ -4,7 +4,7 @@ import WalletBackendSyncService from '../../services/WalletBackendSyncService';
 import { refreshActiveWalletUtxos } from '../../services/WalletUtxoRefreshService';
 import type { UTXO } from '../../types/types';
 import { logError } from '../../utils/errorHandling';
-import { recordFusionRound } from './fusionCoinDepth';
+import { recordFusionRound, recordFusionTxid } from './fusionCoinDepth';
 import { ownedOutpointsOf, spentOutpointsOf } from './fusionDepthRecorder';
 
 export interface CompletedFusionBroadcast {
@@ -115,7 +115,11 @@ export async function completeFusionBroadcast(
         spentOutpointsOf(completed.spentInputs),
         created
       );
+      recordFusionTxid(completed.walletId, completed.txid);
       depthRecorded = created.length;
+    } else if (completed.txid) {
+      // Still mark the CoinJoin itself for history even if we could not map outputs.
+      recordFusionTxid(completed.walletId, completed.txid);
     }
   } catch (error) {
     logError('FusionCompletionService.recordFusionDepth', error, {

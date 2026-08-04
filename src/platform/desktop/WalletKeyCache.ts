@@ -60,6 +60,26 @@ export function getCachedOwnerWalletId(): number | null {
   return _cached?.ownerWalletId ?? null;
 }
 
+/**
+ * Sync session check used by the desktop shell: is this wallet allowed to stay
+ * open given what is currently in RAM?
+ *
+ * - No cache → not open.
+ * - `ownerWalletId === null` → shared/legacy gate credentials (valid for the
+ *   wallet that just unlocked them; shell treats any positive walletId as ok
+ *   once open, because openWalletWithPassword only runs after verify).
+ * - `ownerWalletId === walletId` → this wallet's own session.
+ *
+ * This is NOT a CryptoKey. After the ciphertext-model migration the derived
+ * key is never held in RAM; callers that only need a presence check must use
+ * this (or `isCached`) instead of the deprecated `getCachedWalletKey*` stubs.
+ */
+export function hasCachedCredentialsForWallet(walletId: number): boolean {
+  if (!_cached) return false;
+  if (_cached.ownerWalletId == null) return true;
+  return _cached.ownerWalletId === walletId;
+}
+
 export function getCachedPasswordSnapshot(): CachedPasswordSnapshot | null {
   return _cached ? { ..._cached } : null;
 }
@@ -68,6 +88,14 @@ export function clearCachedPassword(): void {
   _cached = null;
   _unlockEpoch += 1;
   console.log('[WalletKeyCache] Password + salt wiped from memory');
+  // Void Never-mode spend window (epoch mismatch also covers this; explicit
+  // clear avoids any race with a mid-flight send).
+  try {
+    // Lazy require avoided circular import at module load in tests.
+    void import('./DeviceIntegrityService').then((m) => m.clearSpendAuthCache());
+  } catch {
+    /* optional */
+  }
 }
 
 // ── Backward-compat wrappers (deprecated — prefer setCachedPassword / deriveCachedKey) ──
@@ -93,10 +121,15 @@ export function getCachedWalletKey(): CryptoKey | null {
 }
 
 /**
- * @deprecated Use deriveCachedKey() + getCachedOwnerWalletId() instead.
+ * @deprecated Use hasCachedCredentialsForWallet() / deriveCachedKey().
+ * CryptoKeys are not cached; this always returns null. Presence checks must
+ * use hasCachedCredentialsForWallet — the desktop shell was broken when it
+ * still treated "null key" as "not unlocked".
  */
-export function getCachedWalletKeyForWallet(_walletId: number): CryptoKey | null { // eslint-disable-line @typescript-eslint/no-unused-vars
-  console.warn('[WalletKeyCache] getCachedWalletKeyForWallet is deprecated');
+export function getCachedWalletKeyForWallet(_walletId: number): CryptoKey | null {
+  console.warn(
+    '[WalletKeyCache] getCachedWalletKeyForWallet is deprecated — use hasCachedCredentialsForWallet'
+  );
   return null;
 }
 

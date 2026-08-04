@@ -18,7 +18,7 @@ import { useTransportConfig } from './useTransportConfig';
 import { useWindowTitle } from './useWindowTitle';
 import { migrateWalletFileNames } from './walletFile';
 import { selectWalletId, resetWallet } from '../../state/slices/walletSlice';
-import { getCachedWalletKeyForWallet } from './WalletKeyCache';
+import { hasCachedCredentialsForWallet } from './WalletKeyCache';
 import { persistor } from '../../state/store';
 import { invoke } from '@tauri-apps/api/core';
 
@@ -80,8 +80,12 @@ const DesktopAppShell: React.FC = () => {
   const walletId = useSelector(selectWalletId);
   const [rehydrated, setRehydrated] = useState(() => persistor.getState().bootstrapped);
   const [invariantChecked, setInvariantChecked] = useState(false);
+  // After the ciphertext-model migration, credentials are password+salt in RAM
+  // — not a cached CryptoKey. The old getCachedWalletKeyForWallet() always
+  // returned null, which made this shell treat every successful unlock as
+  // "stale session" and wipe the wallet (blank screen / bounce to picker).
   const hasValidWalletSession =
-    walletId <= 0 || getCachedWalletKeyForWallet(walletId) !== null;
+    walletId <= 0 || hasCachedCredentialsForWallet(walletId);
 
   // redux-persist rehydrates asynchronously; wait for it before reading the
   // persisted walletId (below). The immediate re-check after subscribing closes
@@ -103,17 +107,16 @@ const DesktopAppShell: React.FC = () => {
     };
   }, [rehydrated]);
 
-  // Core invariant: a wallet is "open" ONLY while its key is in RAM. The key
-  // cache is per-window and empty on every boot, so a walletId > 0 with no
-  // cached key is stale — it comes from persisted state rehydrating (normal
-  // restart) or from another window opening a wallet (windows share the same
-  // IndexedDB origin). Only runs once rehydration has actually finished, so
-  // walletId here is the real final persisted value, not a transient default.
-  // Safe against real opens: openWalletWithPassword caches the key BEFORE
-  // dispatching setWalletId, so by the time walletId > 0 the key is present.
+  // Core invariant: a wallet is "open" ONLY while its credentials are in RAM.
+  // The password/salt cache is per-window and empty on every boot, so a
+  // walletId > 0 with no credentials is stale — from persisted rehydration
+  // (normal restart) or another window opening a wallet (shared IndexedDB).
+  // Only runs once rehydration has finished. Safe against real opens:
+  // openWalletWithPassword caches password+salt BEFORE setWalletId, so by the
+  // time walletId > 0 the credentials are present.
   useEffect(() => {
     if (!rehydrated) return;
-    if (walletId > 0 && !getCachedWalletKeyForWallet(walletId)) {
+    if (walletId > 0 && !hasCachedCredentialsForWallet(walletId)) {
       dispatch(resetWallet());
     }
     setInvariantChecked(true);

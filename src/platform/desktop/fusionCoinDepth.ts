@@ -20,6 +20,9 @@
 import { getLocalStorage } from '../../utils/browserStorage';
 
 const DEPTH_PREFIX = 'optn-fusion-coin-depth-';
+/** Wallet-local set of CoinJoin txids — for Home / history "Fused" labels after
+ *  coins are spent (depth map prunes spent outpoints). */
+const TXID_PREFIX = 'optn-fusion-txids-';
 
 // Deliberately NO age or size based pruning.
 //
@@ -114,6 +117,52 @@ export function coinDepth(walletId: number, outpoint: string): number {
   return read(walletId)[outpoint]?.d ?? 0;
 }
 
+function readFusionTxids(walletId: number): Set<string> {
+  try {
+    const raw = getLocalStorage()?.getItem(`${TXID_PREFIX}${walletId}`);
+    if (!raw) return new Set();
+    const parsed: unknown = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return new Set();
+    return new Set(
+      parsed.filter((t): t is string => typeof t === 'string' && t.length === 64)
+    );
+  } catch {
+    return new Set();
+  }
+}
+
+function writeFusionTxids(walletId: number, txids: Set<string>): void {
+  try {
+    getLocalStorage()?.setItem(
+      `${TXID_PREFIX}${walletId}`,
+      JSON.stringify([...txids])
+    );
+  } catch {
+    /* ignore */
+  }
+}
+
+/** True if this wallet recorded `txid` as a completed CashFusion CoinJoin. */
+export function isFusionTransaction(walletId: number, txid: string): boolean {
+  const normalized = txid.trim().toLowerCase();
+  if (!normalized) return false;
+  if (readFusionTxids(walletId).has(normalized)) return true;
+  // Also true if any live depth entry was created by this tx (unspent outputs).
+  const prefix = `${normalized}:`;
+  return Object.keys(read(walletId)).some(
+    (outpoint) => outpoint.toLowerCase().startsWith(prefix)
+  );
+}
+
+/** Remember a CoinJoin txid for history/home badges (wallet-local only). */
+export function recordFusionTxid(walletId: number, txid: string): void {
+  const normalized = txid.trim().toLowerCase();
+  if (normalized.length !== 64) return;
+  const set = readFusionTxids(walletId);
+  set.add(normalized);
+  writeFusionTxids(walletId, set);
+}
+
 /**
  * Record the result of one completed fusion: the coins it spent are gone, and
  * the coins it created are one round deeper than the SHALLOWEST coin consumed.
@@ -176,6 +225,7 @@ export function coinsBelowDepth<T extends { tx_hash: string; tx_pos: number }>(
 export function clearFusionDepth(walletId: number): void {
   try {
     getLocalStorage()?.removeItem(storageKeyFor(walletId));
+    getLocalStorage()?.removeItem(`${TXID_PREFIX}${walletId}`);
   } catch {
     /* nothing to clear */
   }

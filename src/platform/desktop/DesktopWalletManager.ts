@@ -35,6 +35,7 @@ import {
   unlock as unlockGatePassphrase,
   verify as verifyGatePassphrase,
 } from './OptnKeyManager';
+import { markSpendAuthFromUnlock } from './DeviceIntegrityService';
 import { SECRET_ENC_PREFIX } from './SecretCryptoService';
 import { getBchAccountPath } from '../../services/HdWalletService';
 import {
@@ -576,6 +577,10 @@ export async function openWalletWithPassword(
       setCachedPassword(password, legacySaltB64, walletId);
     }
   }
+
+  // Never-mode: opening the wallet with the password starts the 10-minute
+  // spend-auth window so Send does not re-prompt right after login.
+  markSpendAuthFromUnlock();
 
   let info: WalletMetadata | null;
   try {
