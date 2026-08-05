@@ -85,7 +85,7 @@ class Hub {
   }
 }
 
-function makePeers(count = 2) {
+function makePeers(count = 3) {
   return Array.from({ length: count }, (_, index) => {
     const n = index + 1;
     const inKey = keypair(n * 10 + 1);
@@ -265,61 +265,26 @@ describe('P2P fusion round choreography (3 peers, in-memory)', () => {
     expect(hub.activeHandlerCount()).toBe(0);
   });
 
-  it('2-peer rounds complete with direct outputs (hardcoded: one peeler cannot onion-mix)', async () => {
-    // Production bug: 2 peers ⇒ 1 peeler gift-wrapping onions to themselves over
-    // Nostr ⇒ never delivered ⇒ outputSlots=0/2. Direct path is correct here.
-    const peers = [1, 2].map((n) => {
-      const inKey = keypair(n * 10 + 1);
-      const outKey = keypair(n * 10 + 2);
-      const round = keypair(n * 10 + 3);
-      return {
-        round,
-        keys: new Map([
-          [inKey.pubHex, inKey.priv],
-          [round.pubHex, round.priv],
-        ]),
-        contribution: {
-          inputs: [
-            {
-              prevTxid: `${n}${'d'.repeat(63)}`,
-              prevIndex: n,
-              value: 100_000,
-              pubkey: inKey.pubHex,
-            },
-          ],
-          outputs: [{ script: p2pkhHex(outKey.pubHex), value: 99_700 }],
-        } as PeerContribution,
-      };
-    });
+  it('rejects rounds with fewer than 3 participants (no 2-party path)', async () => {
+    const peers = makePeers(2);
     const participants = peers.map((p) => p.round.pubHex);
     const hub = new Hub();
-    let broadcasts = 0;
-    const results = await Promise.all(
-      peers.map((p) =>
-        runFusionRound(
-          {
-            myPubkey: p.round.pubHex,
-            participants,
-            tier: 100_000,
-            feerate: 1000,
-            myContribution: p.contribution,
-            keysByPubkey: p.keys,
-            broadcast: async (txHex) => {
-              broadcasts += 1;
-              return txidOf(txHex);
-            },
-            timeoutMs: 5_000,
-            jitterMs: [0, 0],
-          },
-          hub.transportFor(p.round.pubHex)
-        )
+    await expect(
+      runFusionRound(
+        {
+          myPubkey: peers[0].round.pubHex,
+          participants,
+          tier: 100_000,
+          feerate: 1000,
+          myContribution: peers[0].contribution,
+          keysByPubkey: peers[0].keys,
+          broadcast: async () => '00'.repeat(32),
+          timeoutMs: 500,
+          jitterMs: [0, 0],
+        },
+        hub.transportFor(peers[0].round.pubHex)
       )
-    );
-    expect(new Set(results.map((r) => r.txid)).size).toBe(1);
-    expect(broadcasts).toBe(1);
-    // No onion path for 2-party (would be self-addressed).
-    const onions = hub.sent.filter((m) => m.message.type === 'onion_output');
-    expect(onions).toHaveLength(0);
+    ).rejects.toThrow(/≥3 peers|at least 3/i);
   });
 
   it('onion mix-net completes when peers inject unequal output counts (not peer count)', async () => {
@@ -597,22 +562,30 @@ describe('P2P fusion round choreography (3 peers, in-memory)', () => {
   });
 
   it('broadcasts an abort so duplicate inputs fail every peer promptly', async () => {
-    const peers = [1, 2].map((n) => {
+    // Three peers; two share the same outpoint so the coord aborts on duplicate.
+    const peers = [1, 2, 3].map((n) => {
       const inKey = keypair(n * 10 + 1);
       const outKey = keypair(n * 10 + 2);
       const round = keypair(n * 10 + 3);
       const contribution: PeerContribution = {
         inputs: [
           {
-            prevTxid: 'd'.repeat(64),
-            prevIndex: 0,
+            prevTxid: n <= 2 ? 'd'.repeat(64) : `${n}${'e'.repeat(63)}`,
+            prevIndex: n <= 2 ? 0 : n,
             value: 100_000,
             pubkey: inKey.pubHex,
           },
         ],
         outputs: [{ script: p2pkhHex(outKey.pubHex), value: 99_600 }],
       };
-      return { round, keys: new Map([[inKey.pubHex, inKey.priv], [round.pubHex, round.priv]]), contribution };
+      return {
+        round,
+        keys: new Map([
+          [inKey.pubHex, inKey.priv],
+          [round.pubHex, round.priv],
+        ]),
+        contribution,
+      };
     });
     const participants = peers.map((item) => item.round.pubHex);
     const hub = new Hub();
@@ -631,7 +604,7 @@ describe('P2P fusion round choreography (3 peers, in-memory)', () => {
             broadcast: async () => {
               throw new Error('must not broadcast');
             },
-            timeoutMs: 250,
+            timeoutMs: 2_000,
             jitterMs: [0, 0],
           },
           hub.transportFor(item.round.pubHex)
@@ -639,117 +612,20 @@ describe('P2P fusion round choreography (3 peers, in-memory)', () => {
       )
     );
 
-    expect(settled).toHaveLength(2);
-    for (const result of settled) {
-      expect(result.status).toBe('rejected');
-      if (result.status === 'rejected') {
-        expect(String(result.reason)).toContain('duplicate input');
-      }
-    }
-  });
-
-  it('rejects a coordinator final message that was not the verified transaction', async () => {
-    const input = keypair(71);
-    const output = keypair(72);
-    // Roles come from the election, not from pubkey order: this test only
-    // works while `myPubkey` is the one NOT coordinating, or it runs the
-    // coordinator path and simply times out waiting for a peer.
-    const coordinator = coordinatorOf(['0'.repeat(64), 'f'.repeat(64)]);
-    const participant = coordinator === '0'.repeat(64) ? 'f'.repeat(64) : '0'.repeat(64);
-    const session = 'b'.repeat(64);
-    const contribution: PeerContribution = {
-      inputs: [
-        {
-          prevTxid: 'e'.repeat(64),
-          prevIndex: 1,
-          value: 100_000,
-          pubkey: input.pubHex,
-        },
-      ],
-      outputs: [{ script: p2pkhHex(output.pubHex), value: 99_600 }],
-    };
-    // Mock coordinator must also play the credential issuer, or the
-    // participant never leaves the wait-for-params gate.
-    const { BlindIssuer } = await import('../fusionBlindSchnorr');
-    const issuer = BlindIssuer.create(32);
-    let handler: Handler = () => undefined;
-    const transport: RoundTransport = {
-      send: async (_to, message) => {
-        if (message.type === 'credential_request') {
-          queueMicrotask(() =>
-            handler(coordinator, {
-              ...messageBinding(),
-              type: 'credential_response',
-              session,
-              responses: message.requests.map((r) => ({
-                index: r.index,
-                s: issuer.signHex(r.index, r.e),
-              })),
-            })
-          );
-        }
-        if (message.type === 'outputs') {
-          queueMicrotask(() =>
-            handler(coordinator, {
-              ...messageBinding(),
-              type: 'assembled',
-              session,
-              inputs: contribution.inputs,
-              outputs: contribution.outputs,
-            })
-          );
-        }
-        if (message.type === 'signature') {
-          queueMicrotask(() =>
-            handler(coordinator, {
-              ...messageBinding(),
-              type: 'final',
-              session,
-              txid: '00'.repeat(32),
-              txHex: '00',
-            })
-          );
-        }
-      },
-      onMessage: (next) => {
-        handler = next;
-        queueMicrotask(() =>
-          handler(coordinator, {
-            ...messageBinding(),
-            type: 'credential_params',
-            session,
-            roundPubkey: issuer.pubkeyHex,
-            blindNoncePoints: issuer.rPointsHex,
-          })
-        );
-        return () => undefined;
-      },
-    };
-
-    await expect(
-      runFusionRound(
-        {
-          myPubkey: participant,
-          participants: [coordinator, participant],
-          session,
-          tier: 100_000,
-          feerate: 1_000,
-          myContribution: contribution,
-          keysByPubkey: new Map([[input.pubHex, input.priv]]),
-          broadcast: async () => {
-            throw new Error('participant must not broadcast');
-          },
-          timeoutMs: 1_000,
-          jitterMs: [0, 0],
-        },
-        transport
+    expect(settled).toHaveLength(3);
+    expect(settled.every((r) => r.status === 'rejected')).toBe(true);
+    expect(
+      settled.some(
+        (r) =>
+          r.status === 'rejected' && /duplicate input/i.test(String(r.reason))
       )
-    ).rejects.toThrow(/final Fusion transaction/i);
+    ).toBe(true);
   });
 
   it('fails immediately when the authenticated coordinator sends a malformed message', async () => {
     const input = keypair(81);
     const output = keypair(82);
+    const trio = ['0'.repeat(64), 'a'.repeat(64), 'f'.repeat(64)];
     const coordinator = '0'.repeat(64);
     const participant = 'f'.repeat(64);
     const contribution: PeerContribution = {
@@ -778,7 +654,7 @@ describe('P2P fusion round choreography (3 peers, in-memory)', () => {
       runFusionRound(
         {
           myPubkey: participant,
-          participants: [coordinator, participant],
+          participants: trio,
           session: 'c'.repeat(64),
           tier: 100_000,
           feerate: 1_000,

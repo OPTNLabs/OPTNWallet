@@ -113,7 +113,7 @@ export const P2P_CREDENTIAL_WAIT_MS = SERVER_COMPS_END_MS;
  * After all peers mark ready, how long coord waits for output pool.
  * Live onion path filled in ~10s; 25s leaves Tor headroom under 80s body.
  */
-export const P2P_MISSING_OUTPUTS_DIRECT_MS = SERVER_COMPS_END_MS;
+/** After all peers ready, wait for onion reveal batch. */
 export const P2P_MISSING_OUTPUTS_ONION_MS = 25_000;
 
 /**

@@ -872,8 +872,7 @@ export async function runP2pFusion(
         feerate: P2P_FEERATE,
         myContribution: { inputs: myInputs, outputs: myOutputs },
         keysByPubkey,
-        // Onion is hardcoded essential when ≥3 peers (see mustUseOnionMix) —
-        // not an onionEnabled true/false option.
+        // Onion is always on (rounds are ≥3 peers; no 2-party / direct path).
         // ≤ server T_START_CLOSE_BLAME; tight jitter so inject fits comps window.
         timeoutMs: P2P_ROUND_TIMEOUT_MS,
         jitterMs: P2P_COMPONENT_JITTER_MS,

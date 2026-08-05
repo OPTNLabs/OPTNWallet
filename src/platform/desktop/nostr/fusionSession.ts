@@ -28,7 +28,6 @@ import { ROUND_MSG_VERSION } from './fusionRound';
 import {
   P2P_ASSEMBLED_RESEND_MS,
   P2P_CREDENTIAL_WAIT_MS,
-  P2P_MISSING_OUTPUTS_DIRECT_MS,
   P2P_MISSING_OUTPUTS_ONION_MS,
   P2P_ONION_DECLARE_RESEND_MS,
   P2P_ROUND_TIMEOUT_MS,
@@ -585,19 +584,8 @@ export interface RoundParams {
   mixOrder?: string[];
 }
 
-/**
- * Onion mix-net is essential privacy for P2P rounds — not a toggle.
- * Hard rule: ≥2 peelers (i.e. ≥3 participants) always use onion. Exactly 2
- * participants only have one peeler, which cannot mix (self-addressed Nostr
- * gift-wraps do not deliver), so those rounds use direct throwaway outputs.
- */
-export function mustUseOnionMix(mixOrderLength: number): boolean {
-  return mixOrderLength >= 2;
-}
-
 /** Bound silent waits — caps from fusionTiming (server protocol.py). */
 const CREDENTIAL_WAIT_MS = P2P_CREDENTIAL_WAIT_MS;
-const MISSING_OUTPUTS_DIRECT_MS = P2P_MISSING_OUTPUTS_DIRECT_MS;
 const MISSING_OUTPUTS_ONION_MS = P2P_MISSING_OUTPUTS_ONION_MS;
 /** Re-send onion_declare so Tor-dropped declares cannot freeze the peel forever. */
 const ONION_DECLARE_RESEND_MS = P2P_ONION_DECLARE_RESEND_MS;
@@ -661,9 +649,13 @@ export function runFusionRound(
   transport: RoundTransport
 ): Promise<RoundResult> {
   const participants = [...new Set(params.participants)];
-  // Production gather enforces ≥3; unit tests may still exercise 2-party direct.
-  if (participants.length < 2 || !participants.includes(params.myPubkey)) {
-    return Promise.reject(new Error('invalid Fusion participant set'));
+  // CashFusion-style floor: ≥3 peers, onion always (no 2-party / direct path).
+  if (participants.length < 3 || !participants.includes(params.myPubkey)) {
+    return Promise.reject(
+      new Error(
+        'invalid Fusion participant set (need ≥3 peers for onion P2P fusion)'
+      )
+    );
   }
   const coordinator = electCoordinator(participants);
   if (!coordinator) {
@@ -1103,77 +1095,63 @@ function runParticipant(
         });
         await jitterDelay(jMin, jMax);
       }
-      // Phase 3: outputs.
-      //
-      // Onion needs ≥2 peelers (3+ wallets). With only 2 peers, mixOrder has
-      // length 1: the lone peeler would gift-wrap onions to *themselves* over
-      // Nostr — relays often never echo self-addressed kind-1059, so the hop
-      // waits forever → "outputs never arrived (outputSlots=0/2…)". One peeler
-      // also provides no mix privacy, so direct throwaway outputs are correct.
-      //
-      // Note mixOrder excludes the coordinator — it assembles, it does not peel.
-      if (mustUseOnionMix(mixOrder.length)) {
-        if (!isEccAvailable()) {
-          throw new Error(
-            'onion mix-net enabled but secp256k1 is unavailable in this environment'
-          );
-        }
-        const myOutputs = params.myContribution.outputs;
-        // Self is a peeler; don't wait for our own gift-wrap echo.
-        declaredOnionCounts.set(params.myPubkey, myOutputs.length);
-        const sendDeclare = async () => {
-          // Fresh binding each time so nonce dedup does not drop re-sends.
-          const declare: RoundMessage = {
-            ...messageBinding(),
-            type: 'onion_declare',
-            session,
-            outputCount: myOutputs.length,
-          };
-          await Promise.all(
-            mixOrder
-              .filter((peeler) => peeler !== params.myPubkey)
-              .map((peeler) => transport.send(peeler, declare))
-          );
-        };
-        await sendDeclare();
-        // Tor often drops one gift-wrap; peel waits on sum(declares) forever.
-        declareResendTimer = setInterval(() => {
-          if (settled || onionBatchDone) return;
-          void sendDeclare().catch(() => undefined);
-        }, ONION_DECLARE_RESEND_MS);
-        const firstPeeler = mixOrder[0];
-        // One onion per output (80-byte pad cannot batch scripts).
-        for (const output of myOutputs) {
-          const payload = `${output.script}|${output.value}`;
-          const onion = await onionWrap(payload, mixOrder);
-          const onionB64 = btoa(String.fromCharCode(...onion));
-          const onionMsg = {
-            ...messageBinding(),
-            type: 'onion_output' as const,
-            session,
-            onion: onionB64,
-            mixOrder,
-          };
-          if (firstPeeler === params.myPubkey) {
-            // Never rely on Nostr delivering a gift-wrap to ourselves.
-            handleOnionMessage(params.myPubkey, onionMsg);
-          } else {
-            await transport.send(firstPeeler, onionMsg);
-          }
-          await jitterDelay(jMin, jMax);
-        }
-      } else {
-        // Direct (or 2-party): one message with ALL outputs under throwaway key.
-        await transport.send(coordinator, {
-          ...messageBinding(),
-          type: 'outputs',
-          session,
-          outputs: params.myContribution.outputs,
-        });
+      // Phase 3: onion outputs (always — rounds are ≥3 peers, ≥2 peelers).
+      // mixOrder excludes the coordinator (assembles, does not peel).
+      if (mixOrder.length < 2) {
+        throw new Error(
+          'onion mix-net requires ≥2 peelers (need ≥3 participants)'
+        );
       }
-      // Signal that inputs (and onion inject / direct outputs) left this peer.
-      // In onion mode the coordinator still waits for the last peeler's reveal
-      // before assemble — ready ≠ pool filled.
+      if (!isEccAvailable()) {
+        throw new Error(
+          'onion mix-net requires secp256k1 (unavailable in this environment)'
+        );
+      }
+      const myOutputs = params.myContribution.outputs;
+      // Self is a peeler; don't wait for our own gift-wrap echo.
+      declaredOnionCounts.set(params.myPubkey, myOutputs.length);
+      const sendDeclare = async () => {
+        // Fresh binding each time so nonce dedup does not drop re-sends.
+        const declare: RoundMessage = {
+          ...messageBinding(),
+          type: 'onion_declare',
+          session,
+          outputCount: myOutputs.length,
+        };
+        await Promise.all(
+          mixOrder
+            .filter((peeler) => peeler !== params.myPubkey)
+            .map((peeler) => transport.send(peeler, declare))
+        );
+      };
+      await sendDeclare();
+      // Tor often drops one gift-wrap; peel waits on sum(declares) forever.
+      declareResendTimer = setInterval(() => {
+        if (settled || onionBatchDone) return;
+        void sendDeclare().catch(() => undefined);
+      }, ONION_DECLARE_RESEND_MS);
+      const firstPeeler = mixOrder[0];
+      // One onion per output (80-byte pad cannot batch scripts).
+      for (const output of myOutputs) {
+        const payload = `${output.script}|${output.value}`;
+        const onion = await onionWrap(payload, mixOrder);
+        const onionB64 = btoa(String.fromCharCode(...onion));
+        const onionMsg = {
+          ...messageBinding(),
+          type: 'onion_output' as const,
+          session,
+          onion: onionB64,
+          mixOrder,
+        };
+        if (firstPeeler === params.myPubkey) {
+          // Never rely on Nostr delivering a gift-wrap to ourselves.
+          handleOnionMessage(params.myPubkey, onionMsg);
+        } else {
+          await transport.send(firstPeeler, onionMsg);
+        }
+        await jitterDelay(jMin, jMax);
+      }
+      // Ready after inject; coordinator still waits for last peeler's reveal.
       await transport.send(coordinator, {
         ...messageBinding(),
         type: 'components_ready',
@@ -1242,32 +1220,15 @@ function runCoordinator(
     const credentialedInputs = new Set<string>(
       params.myContribution.inputs.map(inputKey)
     );
-    // Onion is mandatory whenever the mix has ≥2 peelers (hardcoded, not a flag).
-    const useOnionForOutputs = mustUseOnionMix(mixOrder.length);
-    // Direct mode (v1.7.0): pre-load coordinator outputs so the pool is never
-    // empty while peers register. Onion mode starts empty and fills on reveal.
-    if (
-      !useOnionForOutputs &&
-      params.myContribution.outputs.length === 0
-    ) {
+    if (mixOrder.length < 2) {
       return Promise.reject(
-        new Error('coordinator has no fusion outputs to register')
+        new Error('onion mix-net requires ≥2 peelers (need ≥3 participants)')
       );
     }
-    // Output registry.
-    //
-    // Direct-mode OUTPUT messages are gift-wrapped under a throwaway key
-    // (fusionTransport.ts) so the coordinator cannot link them to a peer's
-    // round identity. That means `from` on an outputs message is almost never
-    // in `participants` — requiring participants.includes(from) silently
-    // dropped every peer's outputs (user log: peersWithOutputs=1/3, pool=4
-    // where 4 = coordinator-only preload). Anonymous batches are counted
-    // separately; attributed maps still work for in-memory tests / onion.
+    // Output registry: pool fills when the last peeler reveals (anonymous
+    // gift-wraps — `from` is not a round identity). No direct-mode preload.
     const outputsByPeer = new Map<string, FusionOutputRef[]>();
     const anonymousOutputBatches: FusionOutputRef[][] = [];
-    if (!useOnionForOutputs) {
-      outputsByPeer.set(params.myPubkey, [...params.myContribution.outputs]);
-    }
     const outputPool = (): FusionOutputRef[] => [
       ...[...outputsByPeer.values()].flat(),
       ...anonymousOutputBatches.flat(),
@@ -1283,12 +1244,8 @@ function runCoordinator(
     const signaturesByOutpoint = new Map<string, InputSig>();
     const signedPeers = new Set<string>();
     const seenNonces = new Set<string>();
-    // Onion mode: do NOT mark the coordinator ready until its own onions are
-    // injected. Self-ready at t=0 + peer ready after inject started a 25s
-    // missing-outputs clock while the coordinator was still publishing blobs.
-    const readyPeers = new Set<string>(
-      useOnionForOutputs ? [] : [params.myPubkey]
-    );
+    // Do NOT mark the coordinator ready until its own onions are injected.
+    const readyPeers = new Set<string>();
     const credentialedPeers = new Set<string>([params.myPubkey]);
     let assembled: { inputs: FusionInputRef[]; outputs: FusionOutputRef[] } | null =
       null;
@@ -1479,35 +1436,12 @@ function runCoordinator(
     };
 
     const outputsReady = (): boolean => {
-      const pool = outputPool();
-      if (pool.length === 0) return false;
-      if (useOnionForOutputs) {
-        // Onion reveal is one multi-output batch (anonymous or attributed).
-        return pool.length > 0;
-      }
-      // Prefer full attribution (in-memory tests). Production anonymous path:
-      // coordinator preloads self + one batch per other peer.
-      if (
-        params.participants.every(
-          (peer) => (outputsByPeer.get(peer)?.length ?? 0) > 0
-        )
-      ) {
-        return true;
-      }
-      const coordHas = (outputsByPeer.get(params.myPubkey)?.length ?? 0) > 0;
-      return (
-        coordHas && anonymousOutputBatches.length >= others.length
-      );
+      // Onion reveal: one multi-output batch is enough to assemble.
+      return outputPool().length > 0;
     };
 
     const armMissingOutputsWatch = () => {
       if (missingOutputsTimer || settled || assembled) return;
-      // User console: ready 3/3 peersWithOutputs=1/3 pool=4 — outputs gift-wrap
-      // used throwaway keys and were dropped. Fail with slot counts — but give
-      // onion multi-hop Tor enough time (25s was too short for 3 peelers).
-      const waitMs = useOnionForOutputs
-        ? MISSING_OUTPUTS_ONION_MS
-        : MISSING_OUTPUTS_DIRECT_MS;
       missingOutputsTimer = setTimeout(() => {
         if (settled || assembled) return;
         if (
@@ -1521,15 +1455,13 @@ function runCoordinator(
                 `never arrived (outputSlots=${outputSlotsFilled()}/` +
                 `${params.participants.length}, anonBatches=` +
                 `${anonymousOutputBatches.length}, pool=${outputPool().length}, ` +
-                `onion=${useOnionForOutputs ? 'on' : 'off'}, peelers=${peelers}). ` +
-                (useOnionForOutputs
-                  ? 'Onion peel stalled (missing declare or hop blob).'
-                  : 'Direct output gift-wraps never reached the coordinator (Tor/relay).')
+                `onion=on, peelers=${peelers}). ` +
+                'Onion peel stalled (missing declare or hop blob).'
             ),
             true
           );
         }
-      }, waitMs);
+      }, MISSING_OUTPUTS_ONION_MS);
     };
 
     const tryAssemble = async () => {
@@ -1696,39 +1628,19 @@ function runCoordinator(
             o.value > 0
         );
         if (valid.length === 0) return;
-        // Production gift-wrap seals outputs under a throwaway key, so `from`
-        // is NOT in participants. Still accept those batches. Attributed path
-        // keeps working for tests / any non-anonymous sender.
+        // Last peeler reveals under a throwaway key (`from` ∉ participants).
         if (params.participants.includes(from)) {
-          if (useOnionForOutputs) {
-            outputsByPeer.set(from, valid);
-          } else {
-            const existing = outputsByPeer.get(from) ?? [];
-            const seen = new Set(
-              existing.map((o) => `${o.value}:${o.script}`)
-            );
-            for (const o of valid) {
-              const k = `${o.value}:${o.script}`;
-              if (!seen.has(k)) {
-                existing.push(o);
-                seen.add(k);
-              }
-            }
-            outputsByPeer.set(from, existing);
-          }
-        } else {
-          // Cap anonymous batches so one peer cannot flood the pool forever.
-          if (anonymousOutputBatches.length < others.length + 2) {
-            anonymousOutputBatches.push(valid);
-            console.info(
-              '[p2p-fusion coord] anonymous output batch',
-              valid.length,
-              'outputs; batches',
-              anonymousOutputBatches.length,
-              '/',
-              others.length
-            );
-          }
+          outputsByPeer.set(from, valid);
+        } else if (anonymousOutputBatches.length < others.length + 2) {
+          anonymousOutputBatches.push(valid);
+          console.info(
+            '[p2p-fusion coord] onion reveal batch',
+            valid.length,
+            'outputs; batches',
+            anonymousOutputBatches.length,
+            '/',
+            others.length
+          );
         }
         void tryAssemble().catch((error: unknown) =>
           void fail(asError(error), true)
@@ -1799,13 +1711,7 @@ function runCoordinator(
         `Coordinator: waiting for ${others.length} peer(s) to register inputs…`
       );
 
-      if (!useOnionForOutputs) {
-        readyPeers.add(params.myPubkey);
-        void tryAssemble().catch((error: unknown) =>
-          void fail(asError(error), true)
-        );
-        return;
-      }
+      // Always inject coordinator outputs through the onion mix-net.
       const jMin = params.jitterMs?.[0] ?? 200;
       const jMax = params.jitterMs?.[1] ?? 2_000;
       const myOutputs = params.myContribution.outputs;
@@ -1838,7 +1744,7 @@ function runCoordinator(
         });
         await jitterDelay(jMin, jMax);
       }
-      // Now count as ready so "all ready" cannot start before our blobs exist.
+      // Ready only after our onions exist so the missing-outputs watch is fair.
       readyPeers.add(params.myPubkey);
       if (readyPeers.size === params.participants.length) {
         armMissingOutputsWatch();

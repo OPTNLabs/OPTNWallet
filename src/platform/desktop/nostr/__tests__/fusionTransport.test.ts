@@ -298,11 +298,11 @@ describe('Nostr round transport', () => {
     expect(fromPubkey).not.toBe(a.pubkey); // NOT the round key → can't be linked to its inputs
   });
 
-  it('drives a full 2-peer round to a VM-valid CoinJoin over the transport', async () => {
+  it('drives a full 3-peer onion round to a VM-valid CoinJoin over the transport', async () => {
     const pool = new FakePool();
     const relays = ['wss://fake'];
 
-    const peers = [1, 2].map((n) => {
+    const peers = [1, 2, 3].map((n) => {
       const inKey = kp(n * 10 + 1);
       const outKey = kp(n * 10 + 2);
       const round = roundId();
@@ -315,11 +315,14 @@ describe('Nostr round transport', () => {
             pubkey: inKey.pubHex,
           },
         ],
-        outputs: [{ script: p2pkhHex(outKey.pubHex), value: 99_700 }],
+        outputs: [{ script: p2pkhHex(outKey.pubHex), value: 99_600 }],
       };
       return {
         round,
-        keys: new Map([[inKey.pubHex, inKey.priv], [round.pubHex, round.priv]]),
+        keys: new Map([
+          [inKey.pubHex, inKey.priv],
+          [round.pubkey, round.secretKey], // round identity peels onion layers
+        ]),
         contribution,
       };
     });
@@ -337,12 +340,10 @@ describe('Nostr round transport', () => {
           participants,
           tier: 100_000,
           feerate: 1000,
-          // Integration test of gift-wrap transport; peel onion is covered in
-          // fusionSession onion test with full peer keys.
           myContribution: p.contribution,
           keysByPubkey: p.keys,
           broadcast,
-          timeoutMs: 5000,
+          timeoutMs: 8_000,
           jitterMs: [0, 0],
         };
         return runFusionRound(
@@ -367,7 +368,7 @@ describe('Nostr round transport', () => {
         sourceOutputs,
       })
     ).toBe(true);
-    expect(decoded.inputs).toHaveLength(2);
-    expect(decoded.outputs).toHaveLength(2);
+    expect(decoded.inputs).toHaveLength(3);
+    expect(decoded.outputs).toHaveLength(3);
   });
 });
