@@ -23,8 +23,11 @@
 6. **Zero-touch:** ledger tables only via `desktopSchema` (not shared `schema.ts`).  
 7. **Evidence before “fixed”:** for a wallet, Electrum listunspent sum ≈ Redux  
    `totalBalance` ≈ ledger unspent sum ≈ SQL `UTXOs` sum.  
-8. **Missing listunspent key ≠ empty `[]`.** RPC fail omits the address; empty  
-   array only when the server said zero coins (apply spend on dirty).
+8. **Missing listunspent key ≠ empty `[]`.** RPC fail omits the address.  
+9. **Never apply empty listunspent → ledger without `force`.** Empty-without-force  
+   was poisoning `external:` txi → fake low balance (even when SQL prior looked  
+   empty after a half-healed pass). Real spends: Manual Sync force, or  
+   EC raw-tx → `ledger_txi`.
 
 ## Goal
 
