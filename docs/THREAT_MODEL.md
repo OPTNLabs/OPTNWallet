@@ -4,6 +4,11 @@ This document covers the threat model for OPTN Wallet's P2P CashFusion
 implementation, including protocol-level threats, Tor transport, and key
 management. It is written for auditors, contributors, and future maintainers.
 
+**Privacy component map (names and roles):** see
+[p2p-cashfusion-privacy-layers.md](./p2p-cashfusion-privacy-layers.md) for the
+PR #12 committed stack: **Tor**, **NIP-59 gift-wrap**, **Pedersen**,
+**blind Schnorr credentials**, and **output onion** (peer peel chain — *not* Tor).
+
 ## Adversary Classes
 
 ### A1: Malicious Coordinator
@@ -39,41 +44,65 @@ given round. The coordinator:
 A peer participating in the same round but acting dishonestly.
 
 **What a malicious peer learns:**
-- The assembled template (all inputs and outputs in plaintext)
-- Its own blind signatures
-- Blame proofs routed to it during the blame phase
+- After assembly: the full template (all inputs and outputs in plaintext)
+- Its own blind credentials
+- If it is a peeler hop: onion batches it is allowed to peel (see A2b)
 
 **What a malicious peer cannot do:**
 - Sign other participants' inputs
 - Extract private keys from the signing process
-- Determine which inputs belong to which participant (inputs are sorted
-  by txid:index, not by origin)
+- Reliably map which peer *contributed* which **output** when **output onion**
+  is on and at least one hop is honest (each hop shuffles before forward)
+- Map inputs to origin peer from assembly order alone (inputs sorted by
+  `txid:index`, not by submitter)
 
 **Mitigation:**
-- Each participant submits components independently with 200–2000 ms jitter
-- Inputs are sorted by `(txid, index)` before assembly — origin is hidden
+- **Output onion** (`onionEnabled: true`): peel → CSPRNG shuffle → forward
+  (`onionCrypto.ts` / `fusionSession.ts`)
+- Each participant submits with 200–2000 ms jitter
+- Inputs sorted by `(txid, index)` before assembly
 - Duplicate input detection prevents a wallet meeting itself in a pool
+
+### A2b: Intermediate output-onion peeler
+
+**Not Tor.** This is the peer peel chain for **outputs only**.
+
+**What an intermediate peeler learns:**
+- Ciphertext (or after its peel, inner layers) for the batch it handles
+- Timing of when blobs arrive at that hop
+
+**What it cannot do (if ≥1 honest hop shuffled):**
+- Point at a peer and say “that output is yours” from batch order alone
+
+**What the last peeler learns:**
+- Full plaintext **output list** after the final peel (then sends it to the
+  coordinator). Unlinkability, not secrecy from the last hop — see
+  `onionCrypto.ts` header comment.
+
+**Infrastructure:** none beyond peers already in the round.
 
 ### A3: Nostr Relay Operator
 
 The relay stores pool announcements (replaceable kind 12230 events) and
-routes P2P messages between participants.
+routes gift-wrapped P2P events between participants.
 
 **What the relay learns:**
-- Pool announcements (pubkey, network, tiers, numInputs)
-- All P2P messages (proposals, ACKs, starts, inputs, outputs, signatures)
-- IP addresses of connecting participants
+- Pool announcements (ephemeral pubkey, network, tiers, numInputs) — public metadata
+- Encrypted gift-wrap envelopes (kind 1059) for round traffic — **not** plaintext
+  proposals / inputs / outputs / signatures when NIP-59 is used correctly
+- Clearnet IP of the connecting client **unless** the client uses Tor
 
 **What the relay cannot do:**
-- Read messages content if Tor is used (IPs are hidden)
-- Modify messages in transit (Nostr event signatures are verified)
-- Correlate announcements across rounds (fresh identity per attempt)
+- Read gift-wrapped round bodies (NIP-59)
+- See the wallet’s clearnet IP when Tor is required (P2P fail-closed)
+- Modify events in transit without failing Nostr signature checks
+- Link rounds via a stable identity (fresh secp256k1 keypair per attempt)
 
 **Mitigation:**
-- All remote traffic routes through Tor
-- Fresh secp256k1 keypair per fusion attempt — unlinkable across rounds
-- REPLACEABLE event kind: relay keeps only the latest event per pubkey
-- Pool announcement TTL is 30 seconds — stale events are discarded
+- **NIP-59 gift-wrap** for round messages (`fusionTransport.ts`)
+- **Tor** for all remote P2P sockets (mandatory)
+- Fresh identity per fusion attempt
+- REPLACEABLE announce kind; short TTL on pool announcements
 
 ### A4: Network Observer / Chain Analyst
 
@@ -115,6 +144,8 @@ If the integrated Tor binary or system Tor is compromised.
   SOCKS5 port
 
 ## Cryptographic Primitives
+
+Layer roles (what each is *for*): [p2p-cashfusion-privacy-layers.md](./p2p-cashfusion-privacy-layers.md).
 
 ### BCH Schnorr Signatures
 
@@ -168,6 +199,22 @@ discrete log vs G.
 
 **Nonce generation:** Rejection-sampled from OS CSPRNG, explicitly rejects
 zero (a zero nonce would expose `amount*H` directly).
+
+### Output onion (peer peel chain — not Tor)
+
+**Used for:** Contributor→output unlinkability among **peers** during the
+output collection phase (`onionEnabled: true` production default).
+
+**Implementation:** `src/platform/desktop/nostr/onionCrypto.ts`, peel/forward
+in `fusionSession.ts`.
+
+**Property:** Each hop peels one ECDH+AES-GCM layer, shuffles the batch with
+CSPRNG Fisher–Yates, and forwards. One honest hop breaks order-based linking.
+The last peeler *does* see all outputs in plaintext; the coordinator sees them
+for assembly (classic fusion-server class of visibility).
+
+**Not used for:** IP privacy (that is Tor), relay content privacy (that is
+NIP-59), or credential issuance (that is Pedersen + blind Schnorr).
 
 ### ECDH Encryption (Blame Proofs)
 
@@ -382,6 +429,8 @@ analyzing output value patterns.
 | Blinding unlinkability is informal | Acknowledged | Test verifies `R'.x ≠ R.x`; formal proof is future work |
 | FNV-1a for election | Accepted | Non-cryptographic hash; adequate for set-bound election inside round window |
 | Built-in Tor as fallback | Accepted | Reduces privacy if system Tor unavailable; system Tor preferred |
+| Output onion last peeler sees all outputs | Accepted | Unlinkability via shuffle hops, not secrecy from final hop / coordinator |
+| Coordinator learns full template | Accepted | Same class as classic fusion server; every peer still verifies before signing |
 
 ## References
 

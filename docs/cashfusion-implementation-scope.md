@@ -1,9 +1,11 @@
 # CashFusion: implementation status and plan
 
-> **P2P path (exact mechanism):** see
-> [p2p-cashfusion-protocol.md](./p2p-cashfusion-protocol.md) — discovery,
-> election, blind credentials, onion outputs, assembly, and how it differs from
-> the server client below. Keep that doc updated when the wire format changes.
+> **P2P path:** privacy layer map (Tor / NIP-59 / Pedersen / blind Schnorr /
+> **output onion** — and why “onion ≠ Tor”) is
+> [p2p-cashfusion-privacy-layers.md](./p2p-cashfusion-privacy-layers.md).
+> Exact wire mechanism is
+> [p2p-cashfusion-protocol.md](./p2p-cashfusion-protocol.md). Keep both updated
+> when defaults or wire format change.
 
 ## Phase 1 — DONE (real protocol client)
 
