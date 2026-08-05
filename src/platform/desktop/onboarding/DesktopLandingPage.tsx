@@ -86,6 +86,8 @@ const DesktopLandingPage = () => {
   const [busy, setBusy] = useState(false);
   const [view, setView] = useState<'list' | 'hardware' | 'watch-only'>('list');
   const [importFile, setImportFile] = useState<WalletFileV1 | null>(null);
+  /** Optional encrypted .optn-cold companion from multi-select open. */
+  const [importColdText, setImportColdText] = useState<string | null>(null);
   const [bioAvailable, setBioAvailable] = useState(false);
   const [bioEnrolledId, setBioEnrolledId] = useState<number | null>(null);
   const [bioLabel, setBioLabel] = useState('Biometric unlock');
@@ -309,13 +311,18 @@ const DesktopLandingPage = () => {
     return () => window.removeEventListener('optn:open-wallet', onMenuOpen);
   }, [handleOpenClick]);
 
-  // File → Open Wallet ▸ Open Wallet File… picked a .optn on disk; ask for its
-  // password and import it into this app (a new DB row + its own auto-saved file).
+  // File → Open Wallet Pack…: .optn keystore and optional .optn-cold data.
   useEffect(() => {
     const onImportFile = (e: Event) => {
-      const file = (e as CustomEvent<{ file: WalletFileV1 }>).detail?.file;
+      const detail = (
+        e as CustomEvent<{ file: WalletFileV1; coldArchiveText?: string | null }>
+      ).detail;
+      const file = detail?.file;
       if (file) {
         setImportFile(file);
+        setImportColdText(
+          typeof detail.coldArchiveText === 'string' ? detail.coldArchiveText : null
+        );
         setPassword('');
         setError('');
       }
@@ -334,6 +341,29 @@ const DesktopLandingPage = () => {
         setError('Incorrect password for this wallet file.');
         return;
       }
+      if (importColdText) {
+        try {
+          const { importColdDataIntoOpenWallet } = await import(
+            '../WalletPackService'
+          );
+          await importColdDataIntoOpenWallet(
+            result.walletId,
+            importColdText,
+            password
+          );
+        } catch (coldErr) {
+          console.error(
+            '[DesktopLandingPage] Cold data import after keystore failed:',
+            coldErr
+          );
+          // Keys still imported — surface soft warning.
+          setError(
+            coldErr instanceof Error
+              ? `Wallet keys imported, but data file failed: ${coldErr.message}`
+              : 'Wallet keys imported, but data file failed.'
+          );
+        }
+      }
       dispatch(setWalletId(result.walletId));
       dispatch(setWalletNetwork(result.network));
       dispatch(setWalletType(result.walletType));
@@ -348,6 +378,7 @@ const DesktopLandingPage = () => {
       dispatch(setNetwork(result.network));
       window.dispatchEvent(new CustomEvent('optn:wallets-changed'));
       setImportFile(null);
+      setImportColdText(null);
       navigate(homeRoute(result.walletId));
     } catch (err) {
       console.error('[DesktopLandingPage] Import wallet file failed:', err);

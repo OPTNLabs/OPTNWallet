@@ -37,16 +37,21 @@ listunspent → format → replaceWalletAddressUTXOs (SQL) → return map → Re
 | Fusion depth / round metadata | Existing (`fusionCoinDepth`) + UTXO “Fused ×N” |
 | Labels on UTXO/tx | **Slice 1 done** — `coin_labels` + `CoinLabelService` |
 | Labels export CSV | **Slice 1** — `exportCoinLabelsCsv` |
-| Encrypted cold archive export/import | **Slice 2** — Settings + Wallet menu; password AES-GCM |
+| Wallet pack (2 files) | **Done** — Export Wallet writes both; Open Wallet Pack multi-select |
 | Tx graph (in→out) | Planned |
+| Contacts (Paytaca-style) | Schema reserved later inside `.optn-cold` |
 
-### Encrypted cold archive (slice 2)
+### Wallet pack (keystore + data)
 
-- On-disk format: `optn-cold-archive-enc-v1` (ciphertext + wallet `kdf_salt`)  
-- Password: same wallet unlock password (PBKDF2 + AES-GCM via `WalletCrypto`)  
-- Import: labels + fusion depth only (HOT balance still from network)  
-- Plaintext `optn-cold-archive-v1` files are rejected for import  
-- Menu: **Wallet → Export Cold Archive…** / **Import Cold Archive…**
+| File | Contents | Encryption |
+|------|----------|------------|
+| `<name>.optn` | Keystore / encrypted seed | Wallet password (existing) |
+| `<name>.optn-cold` | Addresses, UTXOs (BCH+FT/NFT), history, labels, fusion; future contacts | Same password + `kdf_salt` |
+
+- **Export:** Wallet → Export Wallet… → password → Save `.optn` → `.optn-cold` written beside it  
+- **Import:** File → Open Wallet Pack… → **Ctrl-click both files** → password once  
+- **Data-only:** open wallet, select only `.optn-cold`  
+- Import data restores labels + fusion (HOT coins still from network listunspent)
 | Archive compaction (old spent txs) | Planned |
 | Optional raw-tx ancestry (power user) | Later — still not balance boss |
 

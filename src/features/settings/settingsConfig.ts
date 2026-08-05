@@ -81,8 +81,8 @@ export const WALLET_ROWS: SettingsRowConfig[] = [
   },
   {
     key: 'export-archive',
-    title: 'Cold archive',
-    description: 'Encrypted export/import of labels, history, fusion (no seed)',
+    title: 'Wallet pack export',
+    description: 'Export/import .optn + .optn-cold (keys + encrypted data)',
     action: 'panel',
     target: 'export-archive',
   },
