@@ -37,8 +37,8 @@ listunspent → format → replaceWalletAddressUTXOs (SQL) → return map → Re
 | Fusion depth / round metadata | Existing (`fusionCoinDepth`) + UTXO “Fused ×N” |
 | Labels on UTXO/tx | **Slice 1 done** — `coin_labels` + `CoinLabelService` |
 | Labels export CSV | **Slice 1** — `exportCoinLabelsCsv` |
+| Full cold archive JSON | **Slice 2** — Settings → Export cold archive |
 | Tx graph (in→out) | Planned |
-| Full export history + fusion log | Planned |
 | Archive compaction (old spent txs) | Planned |
 | Optional raw-tx ancestry (power user) | Later — still not balance boss |
 

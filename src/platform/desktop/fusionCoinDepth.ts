@@ -117,6 +117,17 @@ export function coinDepth(walletId: number, outpoint: string): number {
   return read(walletId)[outpoint]?.d ?? 0;
 }
 
+/** Snapshot for COLD export (no secrets). */
+export function exportFusionDepthState(walletId: number): {
+  coinDepth: Record<string, { d: number; at: number }>;
+  fusionTxids: string[];
+} {
+  return {
+    coinDepth: read(walletId),
+    fusionTxids: [...readFusionTxids(walletId)],
+  };
+}
+
 function readFusionTxids(walletId: number): Set<string> {
   try {
     const raw = getLocalStorage()?.getItem(`${TXID_PREFIX}${walletId}`);

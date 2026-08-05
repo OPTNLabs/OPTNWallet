@@ -66,9 +66,16 @@ describe('settingsConfig', () => {
     ).map((row) => row.key);
 
     expect(desktopWallet).toEqual(
-      expect.arrayContaining(['recovery', 'derivation', 'app-lock', 'rebuild-wallet'])
+      expect.arrayContaining([
+        'recovery',
+        'derivation',
+        'app-lock',
+        'export-archive',
+        'rebuild-wallet',
+      ])
     );
     expect(mobileWallet).not.toContain('rebuild-wallet');
+    expect(mobileWallet).not.toContain('export-archive');
     expect(mobileWallet).not.toContain('app-lock');
   });
 
