@@ -555,12 +555,47 @@ export interface RoundParams {
   signal?: AbortSignal;
   /** Live round-phase updates (2=register, 3=onion, 4=sign, 5=broadcast). */
   onPhase?: (phase: number) => void;
+  /** Human-readable progress (credential wait, etc.). */
+  onStatus?: (message: string) => void;
   /** Test seam: override jitter range [minMs, maxMs] per component send. */
   jitterMs?: [number, number];
   /** Mix order for onion-wrapped outputs (sorted by pubkey). */
   mixOrder?: string[];
   /** Enable onion mix-net for output privacy. Default: true. */
   onionEnabled?: boolean;
+}
+
+/** Bound silent waits so phase-2 does not look hung for the full 120s. */
+const CREDENTIAL_WAIT_MS = 45_000;
+
+function waitWithTimeout<T>(
+  promise: Promise<T>,
+  ms: number,
+  label: string
+): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(
+      () =>
+        reject(
+          new Error(
+            `${label} (after ${Math.round(ms / 1000)}s). ` +
+              'Usually means other wallets never joined this round — ' +
+              'they saw a different peer set over Tor.'
+          )
+        ),
+      ms
+    );
+    promise.then(
+      (value) => {
+        clearTimeout(timer);
+        resolve(value);
+      },
+      (error: unknown) => {
+        clearTimeout(timer);
+        reject(error instanceof Error ? error : new Error(String(error)));
+      }
+    );
+  });
 }
 
 export interface RoundResult {
@@ -870,7 +905,17 @@ function runParticipant(
       const [jMin, jMax] = params.jitterMs ?? [200, 2000];
 
       // Phase 1.5: wait for issuer params, request blind credentials, unblind.
-      const { roundPubkey, blindNoncePoints } = await credParamsPromise;
+      // Without a bound, asymmetric discovery left participants stuck here for
+      // the full 120s ("Registering inputs & outputs…") while the coordinator
+      // wallet never entered the same round.
+      params.onStatus?.(
+        'Waiting for coordinator credentials (other wallets must have agreed)…'
+      );
+      const { roundPubkey, blindNoncePoints } = await waitWithTimeout(
+        credParamsPromise,
+        CREDENTIAL_WAIT_MS,
+        'Timed out waiting for coordinator credentials'
+      );
       const pedersen = buildPlayerPedersen(params.myContribution, params.feerate);
       const { requests, pending } = buildInputCredentialRequests(
         params.myContribution,
@@ -880,6 +925,7 @@ function runParticipant(
         blindNoncePoints
       );
       const responseWait = waitCredResponse();
+      params.onStatus?.('Requesting blind credentials from coordinator…');
       await transport.send(coordinator, {
         ...messageBinding(),
         type: 'credential_request',
@@ -889,7 +935,11 @@ function runParticipant(
         pedersenTotalNonce: pedersen.pedersenTotalNonce,
         excessFee: pedersen.excessFee,
       });
-      const responses = await responseWait;
+      const responses = await waitWithTimeout(
+        responseWait,
+        CREDENTIAL_WAIT_MS,
+        'Timed out waiting for credential response'
+      );
       const byIndex = new Map(responses.map((r) => [r.index, r.s]));
       const credentialSigs: string[] = [];
       for (let i = 0; i < pending.length; i++) {
@@ -900,6 +950,9 @@ function runParticipant(
       }
 
       // Phase 2: send inputs (with credentials) to coordinator
+      params.onStatus?.(
+        `Registering ${params.myContribution.inputs.length} input(s)…`
+      );
       for (let i = 0; i < params.myContribution.inputs.length; i++) {
         await transport.send(coordinator, {
           ...messageBinding(),
@@ -1317,6 +1370,9 @@ function runCoordinator(
       params.timeoutMs ?? DEFAULT_TIMEOUT
     );
     params.onPhase?.(2);
+    params.onStatus?.(
+      `Coordinator: publishing credentials to ${others.length} peer(s)…`
+    );
 
     // Publish issuer params first so peers can request credentials. Then
     // (onion mode) send our own outputs through the mix-net.
@@ -1329,6 +1385,9 @@ function runCoordinator(
         blindNoncePoints: issuer.rPointsHex,
       };
       await Promise.all(others.map((peer) => transport.send(peer, paramsMsg)));
+      params.onStatus?.(
+        `Coordinator: waiting for ${others.length} peer(s) to register inputs…`
+      );
 
       if (!useOnionForOutputs) return;
       const jMin = params.jitterMs?.[0] ?? 200;
