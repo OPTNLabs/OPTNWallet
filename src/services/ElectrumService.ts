@@ -362,6 +362,59 @@ const ElectrumService = {
     }
   },
 
+  /**
+   * Fetch raw transaction hex (verbose=false). Used by the Option A ledger to
+   * materialize full txi/txo from the wire format.
+   */
+  async getRawTransaction(txHash: string): Promise<string | null> {
+    const server = ElectrumServer();
+    try {
+      const response = await server.request(
+        'blockchain.transaction.get',
+        txHash,
+        false
+      );
+      if (isStringResponse(response) && response.length > 0) {
+        return response;
+      }
+      return null;
+    } catch (error) {
+      logError('ElectrumService.getRawTransaction', error, { txHash });
+      return null;
+    }
+  },
+
+  /** Batch raw-tx hex fetch. Returns only successfully resolved txids. */
+  async getRawTransactionMany(
+    txHashes: string[]
+  ): Promise<Record<string, string>> {
+    const unique = Array.from(new Set(txHashes.filter(Boolean)));
+    if (unique.length === 0) return {};
+
+    const server = ElectrumServer();
+    const results: Record<string, string> = {};
+    try {
+      const responses = await server.requestMany(
+        unique.map((txid) => ({
+          method: 'blockchain.transaction.get',
+          params: [txid, false],
+        }))
+      );
+      responses.forEach((response, index) => {
+        const txid = unique[index];
+        if (response instanceof Error) return;
+        if (isStringResponse(response) && response.length > 0) {
+          results[txid] = response;
+        }
+      });
+    } catch (error) {
+      logError('ElectrumService.getRawTransactionMany', error, {
+        count: unique.length,
+      });
+    }
+    return results;
+  },
+
   /** Fetch transaction history for an address */
   async getTransactionHistory(
     address: string
