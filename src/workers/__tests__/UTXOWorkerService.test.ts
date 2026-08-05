@@ -69,6 +69,7 @@ vi.mock('../../services/UTXOService', () => ({
 vi.mock('../../services/ElectrumService', () => ({
   default: {
     reconnect: reconnectMock,
+    ensureFreshConnection: vi.fn(async () => undefined),
     subscribeBlockHeaders: subscribeBlockHeadersMock,
     subscribeAddress: subscribeAddressMock,
     subscribeAddressesBulk: subscribeAddressesBulkMock,
@@ -76,8 +77,31 @@ vi.mock('../../services/ElectrumService', () => ({
     unsubscribeBlockHeaders: unsubscribeBlockHeadersMock,
     getUTXOsMany: vi.fn(),
     getUTXOs: vi.fn(),
+    getAddressState: vi.fn(async () => null),
   },
   invalidateUTXOCache: invalidateUTXOCacheMock,
+}));
+
+// Open paints from EC ledger (txo − txi). Tests keep ledger empty so bootstrap
+// falls through to SQL then network mocks.
+vi.mock('../../platform/desktop/WalletLedgerService', () => ({
+  clearSyntheticExternalSpends: vi.fn(async () => 0),
+  rebuildUtxosFromLedger: vi.fn(async () => 0),
+  listUnspentFromLedger: vi.fn(async () => ({
+    byAddress: {},
+    totalSats: 0,
+    count: 0,
+  })),
+  addressHistoryIsFresh: vi.fn(async () => false),
+  partitionAddressesByStatus: vi.fn(async (_w: number, addrs: string[]) => ({
+    dirty: addrs,
+    clean: [],
+    probed: 0,
+  })),
+}));
+
+vi.mock('../../platform/desktop/desktopSchema', () => ({
+  ensureDesktopLedgerTables: vi.fn(async () => undefined),
 }));
 
 vi.mock('../../apis/ContractManager/ContractManager', () => ({
@@ -492,7 +516,7 @@ describe('UTXOWorkerService.bootstrapAllUTXOs', () => {
       await startUTXOWorker();
       await vi.advanceTimersByTimeAsync(300);
 
-      // Bootstrap force-listunspent is enough; a second non-force reconcile
+      // Open paints ledger + status-delta; a trailing wallet-wide reconcile
       // after subscribe was overwriting a good balance with a bad one.
       expect(reconcileActiveWalletUtxosMock).not.toHaveBeenCalled();
       expect(subscribeBlockHeadersMock).toHaveBeenCalledWith(

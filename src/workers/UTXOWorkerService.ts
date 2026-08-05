@@ -237,11 +237,9 @@ async function refreshWalletAddress(address: string, session: WorkerSession) {
   invalidateUTXOCache(address);
   const utxos = await UTXOService.fetchAndStoreUTXOs(currentWalletId, address);
   if (!isCurrentWorkerContext(session)) return;
-  // Never publish empty over non-empty from a background address tick
-  // (flips balance right→wrong after Manual Sync / open force pass).
-  if (utxos.length === 0 && prev.length > 0) {
-    return;
-  }
+  // Ledger projection is authority (EC). Status gate already skipped clean
+  // addresses; empty here means dirty+listunspent=[] (real spend) or ledger
+  // has no unspents — publish it. Failed listunspent throws / keeps prior.
   store.dispatch(updateUTXOsForAddress({ address, utxos }));
 
   for (const u of utxos) {
@@ -443,54 +441,97 @@ export async function bootstrapAllUTXOs(expectedEpoch?: number) {
     );
     for (const address of trackedAddresses) invalidateUTXOCache(address);
 
-    // Disk paint is best-effort for snappy open, but a known-corrupt SQL
-    // snapshot (sticky external: / failed listunspent empties) must not be the
-    // first thing the user sees if we are about to force-listunspent anyway.
-    // Still paint when we have coins; skip painting an empty/near-empty cache
-    // so the UI does not flash the "wrong" zero/low value before network.
+    // ── Open tier (EC + Selene) ──────────────────────────────────────────
+    // Design: open = disk + status delta. Manual Sync = clear statuses + force.
+    // Electron Cash: balance = txi/txo (ledger unspents), not a parallel
+    // listunspent Redux boss. Selene: status unchanged → no-op (no listunspent).
+    //
+    // Previous force:true on every open re-listunspent every address and
+    // re-introduced right→wrong flips after a good paint (and made open as
+    // heavy as Manual Sync). Heal sticky synthetic spends, paint from ledger,
+    // then network only for dirty addresses (status-hash gate inside fetch).
     try {
-      const cached = await UTXOService.fetchUTXOsFromDatabase(
-        trackedAddresses.map((address) => ({ address }))
-      );
+      const ledger = await import('../platform/desktop/WalletLedgerService');
+      await ledger.clearSyntheticExternalSpends(currentWalletId);
+      // Sync SQL cache to ledger after clearing sticky external: spends so the
+      // disk paint matches EC unspent set (txo − txi).
+      await ledger.rebuildUtxosFromLedger(currentWalletId);
+      const { byAddress, totalSats } =
+        await ledger.listUnspentFromLedger(currentWalletId);
       if (!bootstrapIsCurrent()) return;
-      const cachedByAddress: Record<string, UTXO[]> = {};
-      for (const [address, utxos] of Object.entries(cached.utxosMap)) {
-        cachedByAddress[address] = utxos;
-      }
-      for (const [address, utxos] of Object.entries(cached.cashTokenUtxosMap)) {
-        cachedByAddress[address] = [
-          ...(cachedByAddress[address] ?? []),
-          ...utxos,
-        ];
-      }
-      const cachedSats = Object.values(cachedByAddress)
-        .flat()
-        .reduce((s, u) => s + (u.value ?? u.amount ?? 0), 0);
-      if (
-        Object.keys(cachedByAddress).length > 0 &&
-        cachedSats > 0
-      ) {
-        store.dispatch(replaceAllUTXOs({ utxosByAddress: cachedByAddress }));
+      if (totalSats > 0 && Object.keys(byAddress).length > 0) {
+        store.dispatch(replaceAllUTXOs({ utxosByAddress: byAddress }));
+      } else {
+        // First open / empty ledger: fall back to SQL UTXOs table if any.
+        const cached = await UTXOService.fetchUTXOsFromDatabase(
+          trackedAddresses.map((address) => ({ address }))
+        );
+        if (!bootstrapIsCurrent()) return;
+        const cachedByAddress: Record<string, UTXO[]> = {};
+        for (const [address, utxos] of Object.entries(cached.utxosMap)) {
+          cachedByAddress[address] = utxos;
+        }
+        for (const [address, utxos] of Object.entries(
+          cached.cashTokenUtxosMap
+        )) {
+          cachedByAddress[address] = [
+            ...(cachedByAddress[address] ?? []),
+            ...utxos,
+          ];
+        }
+        const cachedSats = Object.values(cachedByAddress)
+          .flat()
+          .reduce((s, u) => s + (u.value ?? u.amount ?? 0), 0);
+        if (Object.keys(cachedByAddress).length > 0 && cachedSats > 0) {
+          store.dispatch(replaceAllUTXOs({ utxosByAddress: cachedByAddress }));
+        }
       }
     } catch (error) {
-      // DB snapshot is best-effort; the network fetch below is authoritative.
-      logError('UTXOWorker.bootstrapAllUTXOs.dbSnapshot', error, {
+      // Ledger optional; SQL snapshot is best-effort before network delta.
+      logError('UTXOWorker.bootstrapAllUTXOs.diskPaint', error, {
         walletId: currentWalletId,
       });
+      try {
+        const cached = await UTXOService.fetchUTXOsFromDatabase(
+          trackedAddresses.map((address) => ({ address }))
+        );
+        if (!bootstrapIsCurrent()) return;
+        const cachedByAddress: Record<string, UTXO[]> = {};
+        for (const [address, utxos] of Object.entries(cached.utxosMap)) {
+          cachedByAddress[address] = utxos;
+        }
+        for (const [address, utxos] of Object.entries(
+          cached.cashTokenUtxosMap
+        )) {
+          cachedByAddress[address] = [
+            ...(cachedByAddress[address] ?? []),
+            ...utxos,
+          ];
+        }
+        const cachedSats = Object.values(cachedByAddress)
+          .flat()
+          .reduce((s, u) => s + (u.value ?? u.amount ?? 0), 0);
+        if (Object.keys(cachedByAddress).length > 0 && cachedSats > 0) {
+          store.dispatch(replaceAllUTXOs({ utxosByAddress: cachedByAddress }));
+        }
+      } catch (sqlError) {
+        logError('UTXOWorker.bootstrapAllUTXOs.dbSnapshot', sqlError, {
+          walletId: currentWalletId,
+        });
+      }
     }
     report(20);
 
     const fetchStart = performance.now();
-    // Open bootstrap must listunspent like Manual Sync (force), not trust a
-    // status gate that can skip addresses whose SQL was corrupted while
-    // history status stayed "clean". Paint-from-disk already happened above;
-    // this pass is the network authority for the open.
+    // Status-delta only (force: false). fetchAndStoreUTXOsMany status-hash gate
+    // skips clean addresses; dirties include no-local-status + status mismatch
+    // + empty-cache-with-non-empty-history heal. Wallet-wide return is ledger.
     const fetchedWalletUTXOs = await UTXOService.fetchAndStoreUTXOsMany(
       currentWalletId,
       trackedAddresses,
       {
         discover: false,
-        force: true,
+        force: false,
         onProgress: (done, total) => {
           if (total <= 0) return;
           const pct = 20 + Math.round(50 * (done / total));
@@ -651,7 +692,8 @@ async function establishSubscriptions(session: WorkerSession) {
       }
     }
 
-    // No trailing refreshWalletSoon: bootstrap already force-listunspent.
+    // No trailing refreshWalletSoon: open already painted ledger + delta.
+    // A second non-force reconcile here was overwriting a good balance.
   } catch (e) {
     logError('UTXOWorker.establishSubscriptions.walletInit', e);
   }

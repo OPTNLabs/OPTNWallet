@@ -555,15 +555,17 @@ const UTXOService = {
         }
       }
 
-      // Only write SQL for addresses we actually touched this pass until the
-      // wallet-wide ledger rebuild replaces the whole cache (EC path below).
-      await manager.replaceWalletAddressUTXOs(walletId, formattedByAddress);
-
       // ── Option A hybrid (EC + Selene) ───────────────────────────────────
-      // Electron Cash: balance comes from txi/txo (ledger), not a second boss.
-      //   listunspent for dirty → applyAddressUtxoSnapshot → rebuild cache
-      //   → Redux = full ledger unspent map (listUnspentFromLedger).
-      // Selene: single-address path never full-wallet rebuilds.
+      // Electron Cash: balance = get_addr_utxo from txi/txo (ledger unspents).
+      //   Dirty listunspent → applyAddressUtxoSnapshot → rebuild cache
+      //   → Redux ALWAYS from ledger projection (never a parallel listunspent
+      //   boss that can diverge).
+      // Selene: status unchanged → no-op (gate above); single-address notify
+      //   never full-wallet rebuilds SQL, but still returns ledger coins for
+      //   that address only.
+      //
+      // SQL UTXOs are written ONLY after ledger projection (below) so a
+      // refuse-empty formatted map cannot re-poison the cache ahead of txi/txo.
       const walletWidePass =
         options.force === true || uniqueAddresses.length > 1;
       try {
@@ -577,53 +579,68 @@ const UTXOService = {
         } = await import('../platform/desktop/WalletLedgerService');
         await ensureDesktopLedgerTables();
 
-        // Apply only addresses with a successful network result that we did
-        // not refuse (empty-over-nonempty without force stays off this set).
-        const applyAddrs = Object.keys(utxosByAddress).filter((address) => {
-          const net = utxosByAddress[address] ?? [];
-          const prior =
-            (existingSnapshot.utxosMap[address]?.length ?? 0) +
-            (existingSnapshot.cashTokenUtxosMap[address]?.length ?? 0);
-          if (net.length === 0 && prior > 0 && options.force !== true) {
-            return false;
-          }
-          return true;
-        });
+        // Apply every address with a successful listunspent key (including
+        // empty []). Missing key = RPC fail — never treat as zero coins.
+        // Status-hash gate already limited this set to dirty addresses (or
+        // force). Empty on a dirty address is a real spend (Selene scanUtxos
+        // discard+register; EC would see the spend via history/txi).
+        const applyAddrs = Object.keys(utxosByAddress);
         for (const address of applyAddrs) {
-          const list = formattedByAddress[address] ?? [];
+          // Use network result, not the "refuse empty" formatted fallback —
+          // applying prior coins as if they were remote would never mark spends.
+          const list = (utxosByAddress[address] ?? []).map((utxo: UTXO) => ({
+            tx_hash: utxo.tx_hash,
+            tx_pos: utxo.tx_pos,
+            value: utxo.value ?? utxo.amount ?? 0,
+            height: utxo.height,
+            token: utxo.token,
+            prefix: utxo.prefix,
+            tokenAddress: (utxo as UTXO & { tokenAddress?: string })
+              .tokenAddress,
+          }));
+          // Prefer token-merged rows when we have them (same outpoints).
+          const merged = formattedByAddress[address];
+          const toApply =
+            merged &&
+            merged.length === list.length &&
+            list.length > 0
+              ? merged.map((u) => ({
+                  tx_hash: u.tx_hash,
+                  tx_pos: u.tx_pos,
+                  value: u.value ?? u.amount ?? 0,
+                  height: u.height,
+                  token: u.token,
+                  prefix: u.prefix,
+                  tokenAddress: u.tokenAddress,
+                }))
+              : list;
           await applyAddressUtxoSnapshot(walletId, {
             address,
-            utxos: list.map((u) => ({
-              tx_hash: u.tx_hash,
-              tx_pos: u.tx_pos,
-              value: u.value ?? u.amount ?? 0,
-              height: u.height,
-              token: u.token,
-              prefix: u.prefix,
-              tokenAddress: u.tokenAddress,
-            })),
+            utxos: toApply,
           });
         }
 
+        const { byAddress: ledgerByAddress } =
+          await listUnspentFromLedger(walletId);
+
         if (walletWidePass) {
           await rebuildUtxosFromLedger(walletId);
-          const { byAddress } = await listUnspentFromLedger(walletId);
           // Pending outbound (0-conf fusion/send) still layered for UI, like EC
           // showing unconfirmed without inventing permanent ledger rows.
           for (const pending of await collectPendingOutboundOwnedUtxos(
             walletId,
-            Object.keys(byAddress).length
-              ? Object.keys(byAddress)
+            Object.keys(ledgerByAddress).length
+              ? Object.keys(ledgerByAddress)
               : uniqueAddresses
           )) {
             if (reservedOutpoints.has(outpointKey(pending))) continue;
-            const existing = byAddress[pending.address] ?? [];
+            const existing = ledgerByAddress[pending.address] ?? [];
             if (
               !existing.some(
                 (utxo) => outpointKey(utxo) === outpointKey(pending)
               )
             ) {
-              byAddress[pending.address] = [...existing, pending];
+              ledgerByAddress[pending.address] = [...existing, pending];
             }
           }
           const dbService = DatabaseService();
@@ -633,32 +650,60 @@ const UTXOService = {
             dbService.scheduleDatabaseSave(walletId);
           }
           if (uniqueAddresses.length >= 20) {
-            const totalSats = Object.values(byAddress)
+            const totalSats = Object.values(ledgerByAddress)
               .flat()
               .reduce((s, u) => s + (u.value ?? u.amount ?? 0), 0);
             console.info('[UTXOService] ledger balance (EC source of truth)', {
               walletId,
-              addresses: Object.keys(byAddress).length,
-              coins: Object.values(byAddress).flat().length,
+              addresses: Object.keys(ledgerByAddress).length,
+              coins: Object.values(ledgerByAddress).flat().length,
               totalSats,
             });
           }
-          return byAddress;
+          return ledgerByAddress;
         }
+
+        // Single-address (Selene notify): coins from ledger for that address
+        // only — never return the raw listunspent map as a second boss.
+        const singleOut: Record<string, UTXO[]> = {};
+        for (const address of uniqueAddresses) {
+          singleOut[address] = ledgerByAddress[address] ?? [];
+        }
+        for (const pending of await collectPendingOutboundOwnedUtxos(
+          walletId,
+          uniqueAddresses
+        )) {
+          if (reservedOutpoints.has(outpointKey(pending))) continue;
+          const existing = singleOut[pending.address] ?? [];
+          if (
+            !existing.some((utxo) => outpointKey(utxo) === outpointKey(pending))
+          ) {
+            singleOut[pending.address] = [...existing, pending];
+          }
+        }
+        // Per-address SQL cache only (no full-wallet DELETE rebuild).
+        await manager.replaceWalletAddressUTXOs(walletId, singleOut);
+        const dbService = DatabaseService();
+        if (isWebPlatform()) {
+          await dbService.flushDatabaseToFile(walletId);
+        } else {
+          dbService.scheduleDatabaseSave(walletId);
+        }
+        return singleOut;
       } catch (ledgerError) {
         logError('UTXOService.fetchAndStoreUTXOsMany.ledger', ledgerError, {
           walletId,
         });
       }
 
+      // Ledger unavailable: fall back to formatted network/SQL map.
+      await manager.replaceWalletAddressUTXOs(walletId, formattedByAddress);
       const dbService = DatabaseService();
       if (isWebPlatform()) {
         await dbService.flushDatabaseToFile(walletId);
       } else {
         dbService.scheduleDatabaseSave(walletId);
       }
-
-      // Single-address (Selene notify): return that address only.
       return formattedByAddress;
     } catch (error) {
       logError('UTXOService.fetchAndStoreUTXOsMany', error, {

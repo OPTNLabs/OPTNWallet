@@ -14,13 +14,17 @@
 2. **Balance source of truth = ledger unspents** (EC: `txo − txi`), never a parallel  
    listunspent-only Redux boss that can diverge from the ledger.  
 3. **listunspent** updates the ledger for dirty addresses, then SQL cache is rebuilt  
-   from the ledger; UI for wallet-wide passes uses **full ledger projection**.  
+   from the ledger; UI for wallet-wide **and** single-address passes uses  
+   **ledger projection** (single-addr = that address’s ledger coins only).  
 4. **Selene notify rule:** if address status unchanged → **no-op** (no history/listunspent).  
-5. **Three tiers:** open = disk + status delta · Manual Sync = clear statuses + force ·  
-   Rebuild = wipe chain data, keep seed.  
+5. **Three tiers:** open = disk (ledger) + status delta · Manual Sync = clear statuses  
+   + force · Rebuild = wipe chain data, keep seed.  
+   **Open must NOT `force: true` listunspent** (that was a regression path).  
 6. **Zero-touch:** ledger tables only via `desktopSchema` (not shared `schema.ts`).  
 7. **Evidence before “fixed”:** for a wallet, Electrum listunspent sum ≈ Redux  
-   `totalBalance` ≈ ledger unspent sum ≈ SQL `UTXOs` sum.
+   `totalBalance` ≈ ledger unspent sum ≈ SQL `UTXOs` sum.  
+8. **Missing listunspent key ≠ empty `[]`.** RPC fail omits the address; empty  
+   array only when the server said zero coins (apply spend on dirty).
 
 ## Goal
 
