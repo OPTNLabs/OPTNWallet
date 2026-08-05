@@ -18,7 +18,7 @@ import {
 } from '../../services/WalletUtxoRefreshService';
 import { Network } from '../../state/slices/networkSlice';
 import type { UTXO } from '../../types/types';
-import { coinsBelowDepth } from './fusionCoinDepth';
+import { coinsBelowDepth, fuseDepthEligibility } from './fusionCoinDepth';
 import {
   acquireRoundLease,
   forceClearRoundLease,
@@ -49,7 +49,7 @@ export type FusionRunOutcome =
   | { status: 'busy' }
   /** Wallet state is mid-refresh; not an error, and not a reason to use stale coins. */
   | { status: 'waiting-for-wallet' }
-  | { status: 'no-eligible-coins' }
+  | { status: 'no-eligible-coins'; detail?: string }
   | { status: 'cancelled' }
   /** Automatic only: the durable fee cooldown has not elapsed, or could not be
    *  claimed exclusively. Distinct from `busy` so callers can say which it was. */
@@ -390,13 +390,15 @@ export async function startFusionRound(
         message: outcome.message,
       });
     } else if (outcome.status === 'no-eligible-coins') {
+      // Not a hard failure for auto: often every coin already hit fuse depth.
       setFusionLastResult(walletId, {
         mode,
         trigger,
-        ok: false,
+        ok: true,
         message:
           trigger === 'auto'
-            ? 'Auto-fuse: no coins below rounds-per-coin depth (or no BCH coins).'
+            ? (outcome.detail ??
+              'Auto: nothing to fuse — all BCH coins already meet rounds-per-coin depth (or no BCH coins). Manual Start can still re-fuse.')
             : 'No eligible coins to fuse.',
       });
     } else if (outcome.status === 'busy') {
@@ -429,7 +431,31 @@ export async function startFusionRound(
     );
     if (options.signal?.aborted) return finish({ status: 'cancelled' });
     if (coins === null) return finish({ status: 'waiting-for-wallet' });
-    if (coins.length === 0) return finish({ status: 'no-eligible-coins' });
+    if (coins.length === 0) {
+      // Build a precise Auto message from the full non-token set (before depth filter).
+      const snapshot =
+        options.freshSnapshot ??
+        (await import('../../services/WalletUtxoRefreshService')
+          .then((m) => m.reconcileActiveWalletUtxosForSpend(walletId, options.signal))
+          .catch(() => null));
+      const allNonToken = snapshot
+        ? Object.values(snapshot)
+            .flat()
+            .filter((c) => c && !c.token && !c.token_data)
+        : [];
+      const elig = fuseDepthEligibility(
+        walletId,
+        allNonToken,
+        options.fuseDepth
+      );
+      const detail =
+        elig.total === 0
+          ? 'Auto: no BCH coins to fuse (wallet empty of non-token UTXOs).'
+          : `Auto: all ${elig.total} coin(s) already at depth ≥ ${elig.maxDepth} ` +
+            `(rounds-per-coin). Privacy target met — Auto will idle until you receive ` +
+            `new coins or raise Rounds per coin. Manual Start can still re-fuse.`;
+      return finish({ status: 'no-eligible-coins', detail });
+    }
 
     // Claim only when live eligible coins exist.
     if (trigger === 'auto') {
