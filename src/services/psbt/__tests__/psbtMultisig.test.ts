@@ -445,10 +445,59 @@ describe('watch-only multisig send flow', () => {
     );
   });
 
+  it('writes the change output back to the same multisig policy', () => {
+    const result = buildWatchOnlyPsbt({
+      inputs: [MULTISIG_INPUT_SPEC],
+      recipient: recipientAddress,
+      amountSats: 100_000n,
+      changeAddress,
+      accountPath: ACCOUNT_PATH,
+      masterFingerprint: fingerprints[0],
+      changeRedeemScriptHex: binToHex(redeemScript),
+      changeDerivations: publicKeys.map((publicKey, index) => ({
+        publicKeyHex: binToHex(publicKey),
+        masterFingerprintHex: binToHex(fingerprints[index]),
+        derivationPath: keyPaths[index],
+      })),
+    });
+    const parsed = decodePsbt(result.psbtBytes);
+    const change = parsed.outputs.find((output) => output.redeemScript);
+    expect(change).toBeDefined();
+    expect(binToHex(change!.redeemScript!)).toBe(binToHex(redeemScript));
+    expect(binToHex(change!.lockingBytecode!)).toBe(binToHex(p2shLocking));
+    expect(change!.derivations).toHaveLength(3);
+    expect(change!.derivations.map((d) => binToHex(d.publicKey))).toEqual(
+      publicKeys.map(binToHex)
+    );
+  });
+
+  it('rejects a cosigner fingerprint that is not 4 bytes', () => {
+    expect(() =>
+      buildWatchOnlyPsbt({
+        inputs: [
+          {
+            ...MULTISIG_INPUT_SPEC,
+            cosignerDerivations: [
+              {
+                publicKeyHex: binToHex(publicKeys[0]),
+                masterFingerprintHex: 'aabb',
+                derivationPath: keyPaths[0],
+              },
+            ],
+          },
+        ],
+        recipient: recipientAddress,
+        amountSats: 100_000n,
+        changeAddress,
+        accountPath: ACCOUNT_PATH,
+        masterFingerprint: fingerprints[0],
+      })
+    ).toThrow(/fingerprint must be 4 bytes/i);
+  });
+
   it('reports partially-signed until the threshold is met', () => {
     const proposal = buildMultisigProposal(100_000n);
-    const sourceOutputs = SOURCE_OUTPUTS;
-    const sigA = signInput(proposal.rawUnsignedHex, sourceOutputs, 0, 0, redeemScript);
+    const sigA = signInput(proposal.rawUnsignedHex, SOURCE_OUTPUTS, 0, 0, redeemScript);
     const oneOfTwo = wrapWithSignatures(proposal, [{ keyIndex: 0, signature: sigA }]);
 
     const result = inspectImportedPsbt(oneOfTwo, {
