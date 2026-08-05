@@ -73,6 +73,35 @@ class Hub {
 const peer = (n: number) => n.toString(16).padStart(64, '0');
 
 describe('P2P Fusion coordinator-agreed round start', () => {
+  it('still agrees when peers froze different pool epochs (gather spans epoch boundary)', async () => {
+    // Rolling pool freezes epoch at Start; a 45s gather often crosses a 30s
+    // bucket. Requiring epoch equality rejected every proposal → "Could not
+    // agree on a round (4 in your view)".
+    const all = [peer(1), peer(2), peer(3)].sort();
+    const lead = coordinatorOf(all);
+    const hub = new Hub();
+    const results = await Promise.all(
+      all.map((pubkey, index) =>
+        negotiateFusionRound(
+          {
+            myPubkey: pubkey,
+            candidates: all,
+            network: 'chipnet',
+            tier: 10_000,
+            epoch: 100 + index, // deliberately different
+            timeoutMs: 2_000,
+            coordinatorSettleMs: 20,
+            proposalTimeoutMs: 1_500,
+            sessionFactory: () => 'a'.repeat(64),
+          },
+          hub.transportFor(pubkey)
+        )
+      )
+    );
+    expect(new Set(results.map((r) => r.session)).size).toBe(1);
+    expect(results.every((r) => r.coordinator === lead)).toBe(true);
+  });
+
   it('converges on the coordinator participant set despite a partial relay view', async () => {
     const all = [peer(1), peer(2), peer(3)].sort();
     // The elected coordinator holds the full view; one of the others is missing
@@ -191,24 +220,33 @@ describe('P2P Fusion coordinator-agreed round start', () => {
         network: 'chipnet' as const,
         tier: 100_000,
         epoch: 789,
-        timeoutMs: 6_000,
-        coordinatorSettleMs: 50,
+        timeoutMs: 10_000,
+        coordinatorSettleMs: 40,
+        // Fail over the ghost quickly; production default is 15s for Tor lag.
+        // Must exceed coordinator repropose interval (800ms) after failover.
+        proposalTimeoutMs: 1_200,
       };
 
+      // Stagger so the survivor finishes ghost-failover and is already proposing
+      // before the other peer fails over (avoids mutual "silent coordinator" drop).
+      const survivorRound = negotiateFusionRound(
+        {
+          ...common,
+          myPubkey: survivor,
+          candidates: all,
+          sessionFactory: () => 'b'.repeat(64),
+        },
+        hub.transportFor(survivor)
+      );
+      await new Promise((resolve) => setTimeout(resolve, 700));
+      const otherRound = negotiateFusionRound(
+        { ...common, myPubkey: other, candidates: all },
+        hub.transportFor(other)
+      );
+
       const [rSurvivor, rOther] = await Promise.all([
-        negotiateFusionRound(
-          {
-            ...common,
-            myPubkey: survivor,
-            candidates: all,
-            sessionFactory: () => 'b'.repeat(64),
-          },
-          hub.transportFor(survivor)
-        ),
-        negotiateFusionRound(
-          { ...common, myPubkey: other, candidates: all },
-          hub.transportFor(other)
-        ),
+        survivorRound,
+        otherRound,
       ]);
 
       expect([rSurvivor.coordinator, rOther.coordinator]).toEqual([
