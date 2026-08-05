@@ -61,6 +61,7 @@ import {
   P2P_COMPONENT_JITTER_MS,
   P2P_GATHER_MAX_MS,
   P2P_GATHER_MIN_MS,
+  P2P_PEAK_GRACE_MS,
   P2P_PEER_SET_STABLE_MS,
   P2P_PROPOSAL_TIMEOUT_MS,
   P2P_RENDEZVOUS_MS,
@@ -172,6 +173,10 @@ async function collectRolling(
   /** Peak soft / strict sizes this gather — used to avoid locking 2-of-4 early. */
   let peakSoft = 0;
   let peakStrict = 0;
+  /** Last time live strict count was still at its peak (for grace after drop). */
+  let lastAtPeakMs = start;
+  /** Last time soft ≤ strict (soft lag grace). */
+  let lastSoftCaughtUpMs = start;
   const ghostKey = (pubkey: string) =>
     isOwnRoundKey(walletId, pubkey) || isRetiredRoundKey(pubkey);
   /** Soft filter while waiting (shows approximate count). */
@@ -215,6 +220,14 @@ async function collectRolling(
     const now = Date.now();
     peakSoft = Math.max(peakSoft, soft.length);
     peakStrict = Math.max(peakStrict, peers.length);
+    // Refresh peak clock only while we still SEE the peak size. When others
+    // leave/fuse, this freezes and peak-grace can expire.
+    if (peakStrict > 0 && peers.length >= peakStrict) {
+      lastAtPeakMs = now;
+    }
+    if (soft.length <= peers.length) {
+      lastSoftCaughtUpMs = now;
+    }
     // Stability on the STRICT set so ghost drop does not count as "stable 6".
     const fp = fingerprint(peers);
     if (fp !== lastFingerprint) {
@@ -228,35 +241,50 @@ async function collectRolling(
         peers.map((p) => p.pubkey.slice(0, 8)).join(', ') || '(none)'
       );
     }
-    // Alone or under-count: re-shout often so a lagging Tor peer (wallet 5) still finds us.
+    // Alone or under-count: re-shout often so a lagging Tor peer still finds us.
     if (
-      peers.length < Math.max(4, peakSoft) &&
+      peers.length < Math.max(3, peakSoft, peakStrict) &&
       announceNow &&
-      now - lastAnnounceBoost > 4_000
+      now - lastAnnounceBoost > 3_000
     ) {
       lastAnnounceBoost = now;
       void announceNow().catch(() => undefined);
     }
     const pastMin = now >= minReady;
     const setStable = pastMin && now - stableSince >= PEER_SET_STABLE_MS;
-    // Do not lock a 2–3 subset early when:
-    //   • soft still shows more keys than lockStrict (Tor re-announce lag), or
-    //   • this gather once had 4+ strict actives (wallet 5 dropped mid-gather).
-    // Ghost soft spikes alone must not force maxWait — use peakStrict for "had 4".
-    // True 2-wallet worlds never peakStrict≥4 and soft==lock after ghosts age out.
-    const expectMore =
-      soft.length > peers.length ||
-      (peakStrict >= 4 && peers.length < 4);
-    const smallSetReady =
-      peers.length >= MIN_PARTICIPANTS &&
-      peers.length < 4 &&
+    const peakGraceLeft = Math.max(
+      0,
+      P2P_PEAK_GRACE_MS - (now - lastAtPeakMs)
+    );
+    const peakGraceExpired = peakGraceLeft === 0;
+    // Soft lag / peak drop only block EARLY lock for a short grace. Forever
+    // "peak 4/4 now 2" was a hang: others already Registered without us.
+    const expectMoreFromSoft =
+      soft.length > peers.length &&
+      now - lastSoftCaughtUpMs < P2P_PEAK_GRACE_MS;
+    const lostFromPeak = peakStrict > peers.length && peakStrict >= 3;
+    const expectMoreFromPeak = lostFromPeak && !peakGraceExpired;
+    const expectMore = expectMoreFromSoft || expectMoreFromPeak;
+    // Policy (≤ server JOIN_WAIT):
+    //   • 4+: lock when stable and not mid-grace lag
+    //   • 3:  stable + hold, unless expectMore
+    //   • 2:  if we never saw 3+ → wait until maxWait (room for a 3rd);
+    //         if we HAD 3+ and they left (grace expired) → lock the pair now
+    //         (user: stuck "peak 4/4" with 2 left while others already fused)
+    const trioReady =
+      peers.length === 3 &&
       setStable &&
       now >= start + SMALL_SET_HOLD_MS &&
       !expectMore;
+    const pairAfterAbandonedPeak =
+      peers.length === 2 &&
+      setStable &&
+      peakStrict >= 3 &&
+      peakGraceExpired;
     const canLock =
       peers.length >= 4
-        ? setStable
-        : smallSetReady;
+        ? setStable && !expectMore
+        : trioReady || pairAfterAbandonedPeak;
     if (canLock || now >= maxWait) {
       onStatus?.(
         `Gather done: ${peers.length} active wallet(s) ` +
@@ -271,27 +299,42 @@ async function collectRolling(
         : soft.length > 1
           ? ` [soft ${soft.length}…]`
           : '';
+    const secsLeft = Math.max(0, Math.ceil((maxWait - now) / 1_000));
     if (peers.length < 2) {
-      const secsLeft = Math.max(0, Math.ceil((maxWait - now) / 1_000));
       const aloneHint =
         now - start > 12_000
-          ? ' Others may already be Registering — Cancel + Start ALL together.'
+          ? ' Still shouting — if others already fused, Cancel + Start ALL together.'
           : soft.length > 1 || peakSoft > 1
             ? ' Dropping ghosts; waiting for re-announces…'
             : ' Waiting for other wallets (Tor)…';
       onStatus?.(
         `Only you confirmed active${keyHint} (up to ${secsLeft}s).${aloneHint}`
       );
+    } else if (peers.length === 2) {
+      if (lostFromPeak && !peakGraceExpired) {
+        onStatus?.(
+          `2 active${keyHint} — peak was ${peakStrict}; waiting ${Math.ceil(peakGraceLeft / 1000)}s ` +
+            `for dropouts, then fuse as a pair if they stay gone…`
+        );
+      } else if (peakStrict >= 3 && peakGraceExpired) {
+        onStatus?.(
+          `2 active${keyHint} — peak ${peakStrict} left; locking pair shortly…`
+        );
+      } else {
+        onStatus?.(
+          `2 active${keyHint} — holding pair for a 3rd wallet (${secsLeft}s left; ` +
+            `true 2-wallet rounds start when this timer ends)…`
+        );
+      }
     } else if (peers.length >= MIN_PARTICIPANTS && pastMin) {
       const needStable = Math.max(
         0,
         Math.ceil((PEER_SET_STABLE_MS - (now - stableSince)) / 1_000)
       );
-      const holdNote =
-        peers.length < 4
-          ? expectMore
-            ? ` waiting for lagged peer (peak ${peakStrict}/${peakSoft})`
-            : ` hold ${Math.max(0, Math.ceil((start + SMALL_SET_HOLD_MS - now) / 1000))}s for more`
+      const holdNote = expectMore
+        ? ` waiting up to ${Math.ceil(peakGraceLeft / 1000)}s for peak ${peakStrict}`
+        : peers.length === 3
+          ? ` hold ${Math.max(0, Math.ceil((start + SMALL_SET_HOLD_MS - now) / 1000))}s for a 4th`
           : '';
       onStatus?.(
         `${peers.length} active${keyHint} — ${needStable}s stable${holdNote}…`
@@ -302,7 +345,6 @@ async function collectRolling(
         `${peers.length} active wallet(s)${keyHint} — min gather ${inSecs}s…`
       );
     } else {
-      const secsLeft = Math.max(0, Math.ceil((maxWait - now) / 1_000));
       onStatus?.(
         `Waiting: ${peers.length} active${keyHint} (up to ${secsLeft}s)…`
       );
