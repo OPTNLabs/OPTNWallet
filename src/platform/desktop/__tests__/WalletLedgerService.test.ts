@@ -17,6 +17,12 @@ describe('computeHistoryStatusHash', () => {
     expect(historyStatusesMatch(EMPTY_HISTORY_STATUS, null)).toBe(true);
   });
 
+  it('exports listUnspentFromLedger as EC balance source of truth', async () => {
+    const mod = await import('../WalletLedgerService');
+    expect(typeof mod.listUnspentFromLedger).toBe('function');
+    expect(typeof mod.rebuildUtxosFromLedger).toBe('function');
+  });
+
   it('is stable for the same history list', () => {
     const hist = [
       { tx_hash: 'aa'.repeat(32), height: 100 },

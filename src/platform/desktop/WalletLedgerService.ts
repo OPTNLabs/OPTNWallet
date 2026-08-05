@@ -495,17 +495,22 @@ export async function clearSyntheticExternalSpends(
 }
 
 /**
- * Rebuild the UTXOs cache table from unspent ledger_txo rows.
- * Ledger wins — this is the divergence fix.
+ * Electron Cash style: unspent coins = ledger_txo whose outpoint is not in
+ * ledger_txi (same idea as get_addr_utxo / get_addr_balance from txi+txo).
+ * This is the balance source of truth — not a parallel listunspent Redux boss.
  */
-export async function rebuildUtxosFromLedger(walletId: number): Promise<number> {
+export async function listUnspentFromLedger(
+  walletId: number
+): Promise<{ byAddress: Record<string, UTXO[]>; totalSats: number; count: number }> {
   await ensureDesktopLedgerTables();
   const dbService = DatabaseService();
   await dbService.ensureDatabaseStarted();
   const db = dbService.getDatabase();
-  if (!db) return 0;
+  const byAddress: Record<string, UTXO[]> = {};
+  let totalSats = 0;
+  let count = 0;
+  if (!db) return { byAddress, totalSats, count };
 
-  const utxos: UTXO[] = [];
   try {
     const q = db.prepare(`
       SELECT t.tx_hash, t.tx_pos, t.address, t.value, t.height, t.token, t.prefix
@@ -528,9 +533,10 @@ export async function rebuildUtxosFromLedger(walletId: number): Promise<number> 
         }
       }
       const value = Number(row.value) || 0;
-      utxos.push({
+      const address = String(row.address);
+      const utxo: UTXO = {
         wallet_id: walletId,
-        address: String(row.address),
+        address,
         height: Number(row.height) || 0,
         tx_hash: String(row.tx_hash),
         tx_pos: Number(row.tx_pos),
@@ -538,25 +544,36 @@ export async function rebuildUtxosFromLedger(walletId: number): Promise<number> 
         amount: value,
         prefix: typeof row.prefix === 'string' ? row.prefix : undefined,
         token,
-      });
+      };
+      if (!byAddress[address]) byAddress[address] = [];
+      byAddress[address].push(utxo);
+      totalSats += value;
+      count += 1;
     }
     q.free();
   } catch (error) {
-    logError('WalletLedgerService.rebuildUtxosFromLedger.read', error, {
-      walletId,
-    });
-    return 0;
+    logError('WalletLedgerService.listUnspentFromLedger', error, { walletId });
   }
+  return { byAddress, totalSats, count };
+}
+
+/**
+ * Rebuild the SQL UTXOs cache from ledger unspents (EC: ledger wins).
+ * Returns coin count written.
+ */
+export async function rebuildUtxosFromLedger(walletId: number): Promise<number> {
+  const { byAddress, count } = await listUnspentFromLedger(walletId);
+  const utxos = Object.values(byAddress).flat();
 
   try {
-    const mgr = UTXOManager();
-    // Replace entire wallet UTXO cache with ledger projection
+    const dbService = DatabaseService();
     await dbService.ensureDatabaseStarted();
     const d = dbService.getDatabase();
     if (d) {
       d.run(`DELETE FROM UTXOs WHERE wallet_id = ?`, [walletId]);
     }
     if (utxos.length > 0) {
+      const mgr = UTXOManager();
       await mgr.storeUTXOs(utxos);
     }
   } catch (error) {
@@ -564,7 +581,7 @@ export async function rebuildUtxosFromLedger(walletId: number): Promise<number> 
       walletId,
     });
   }
-  return utxos.length;
+  return count;
 }
 
 /**
