@@ -36,8 +36,6 @@ export const AppLockSettings: React.FC = () => {
 
   const [status, setStatus] = useState('');
   const [error, setError] = useState('');
-  const [rebuildBusy, setRebuildBusy] = useState(false);
-  const [rebuildMsg, setRebuildMsg] = useState('');
 
   // Password change form
   const [oldPass, setOldPass] = useState('');
@@ -113,36 +111,6 @@ export const AppLockSettings: React.FC = () => {
     OptnKeyManager.lock();
     dispatch(resetWallet());
     navigate(ROUTE_PATHS.landing);
-  };
-
-  const handleRebuildWallet = async () => {
-    if (!walletId || rebuildBusy) return;
-    const ok = window.confirm(
-      'Rebuild this wallet from the network?\n\n' +
-        'This wipes local UTXOs, history, and ledger data, then re-downloads everything. ' +
-        'Your seed and keys are kept. Prefer Home → Sync first for ordinary updates.\n\n' +
-        'Continue?'
-    );
-    if (!ok) return;
-    setRebuildBusy(true);
-    setRebuildMsg('Starting rebuild…');
-    try {
-      const { rebuildActiveWallet } = await import('./WalletRebuildService');
-      const result = await rebuildActiveWallet((msg, pct) => {
-        setRebuildMsg(pct != null ? `${msg} (${pct}%)` : msg);
-      });
-      if (result.ok) {
-        setRebuildMsg('Rebuild complete.');
-        setTimeout(() => setRebuildMsg(''), 5000);
-      } else {
-        setRebuildMsg(result.error);
-      }
-    } catch (err) {
-      console.error('[AppLockSettings] Rebuild failed:', err);
-      setRebuildMsg(err instanceof Error ? err.message : 'Rebuild failed.');
-    } finally {
-      setRebuildBusy(false);
-    }
   };
 
   const handleChangePassword = async (e: React.FormEvent) => {
@@ -305,29 +273,6 @@ export const AppLockSettings: React.FC = () => {
             </button>
           ))}
         </div>
-      </div>
-
-      {/* Rebuild Wallet — nuclear chain-data wipe + full resync (not Manual Sync) */}
-      <div className="rounded-xl border border-red-500/40 bg-[var(--wallet-surface)] p-4 space-y-2">
-        <p className="text-sm font-semibold wallet-text-strong">Rebuild Wallet</p>
-        <p className="text-xs wallet-muted">
-          Last resort if balances or history look corrupted. Wipes local chain data
-          (UTXOs, history, ledger) and re-downloads from Electrum. Keeps your seed and
-          keys. Requires network. Prefer Home → Sync first for ordinary updates.
-        </p>
-        {rebuildMsg && (
-          <p className={`text-xs ${rebuildBusy ? 'wallet-muted' : rebuildMsg.startsWith('Rebuild complete') ? 'text-green-400' : 'text-red-400'}`}>
-            {rebuildMsg}
-          </p>
-        )}
-        <button
-          type="button"
-          disabled={rebuildBusy || !walletId}
-          onClick={() => void handleRebuildWallet()}
-          className="w-full rounded-xl border border-red-500/70 py-2.5 text-sm font-semibold text-red-400 hover:opacity-80 disabled:opacity-50"
-        >
-          {rebuildBusy ? 'Rebuilding…' : 'Rebuild Wallet from network'}
-        </button>
       </div>
 
       {/* Lock Now */}

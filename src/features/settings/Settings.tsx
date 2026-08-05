@@ -27,6 +27,7 @@ import FaucetView from '../../components/FaucetView';
 import WalletConnectPanel from '../../components/walletconnect/WalletConnectPanel';
 import WizardConnectPanel from '../../components/wizardconnect/WizardConnectPanel';
 import { AppLockSettings } from '../../platform/desktop/AppLockSettings';
+import { RebuildWalletSettings } from '../../platform/desktop/RebuildWalletSettings';
 import { disconnectAllWizardConnections } from '../../state/slices/wizardconnectSlice';
 import getElectrumAdapter from '../../services/ElectrumAdapter';
 import { waitForWalletHistoryRefresh } from '../../services/RefreshCoordinator';
@@ -150,6 +151,8 @@ const Settings: React.FC = () => {
         return <WizardConnectPanel />;
       case 'app-lock':
         return <AppLockSettings />;
+      case 'rebuild-wallet':
+        return desktop ? <RebuildWalletSettings /> : null;
       case 'network':
         return <NetworkSettings />;
       case 'faucet':
@@ -187,6 +190,8 @@ const Settings: React.FC = () => {
         return 'Contract Info';
       case 'app-lock':
         return 'App Lock';
+      case 'rebuild-wallet':
+        return 'Rebuild Wallet';
       case 'server':
         return 'Server';
       case 'derivation':

@@ -45,7 +45,7 @@ status = sha256( "txid:height:" for each history item, ordered as server list )
 
 - **Open / auto:** load SQL → paint UI → for each address, compare local status to server; only re-fetch dirty addresses (history **and** listunspent).
 - **Manual Sync:** clear statuses + `force: true` listunspent; re-scan addresses + history + UTXOs — **no wipe**.
-- **Rebuild Wallet (Settings):** wipe ledger + UTXO cache + history + genesis meta; keep keys/seed; full network rebuild. Rare.
+- **Rebuild Wallet (Settings → Wallet & security → Rebuild Wallet):** wipe ledger + UTXO cache + history + genesis meta; keep keys/seed; full network rebuild. Rare.
 
 ## Three tiers
 
