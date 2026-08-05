@@ -442,39 +442,14 @@ export async function bootstrapAllUTXOs(expectedEpoch?: number) {
     for (const address of trackedAddresses) invalidateUTXOCache(address);
 
     // ── Open (HOT / OPTN 1.7.0) ─────────────────────────────────────────
-    // Paint SQL UTXOs (spendable set), then network listunspent. Manual Sync
-    // = clear statuses + force. Balance boss is always HOT SQL, never ledger.
-    try {
-      const cached = await UTXOService.fetchUTXOsFromDatabase(
-        trackedAddresses.map((address) => ({ address }))
-      );
-      if (!bootstrapIsCurrent()) return;
-      const cachedByAddress: Record<string, UTXO[]> = {};
-      for (const [address, utxos] of Object.entries(cached.utxosMap)) {
-        cachedByAddress[address] = utxos;
-      }
-      for (const [address, utxos] of Object.entries(cached.cashTokenUtxosMap)) {
-        cachedByAddress[address] = [
-          ...(cachedByAddress[address] ?? []),
-          ...utxos,
-        ];
-      }
-      const cachedSats = Object.values(cachedByAddress)
-        .flat()
-        .reduce((s, u) => s + (u.value ?? u.amount ?? 0), 0);
-      if (Object.keys(cachedByAddress).length > 0 && cachedSats > 0) {
-        store.dispatch(replaceAllUTXOs({ utxosByAddress: cachedByAddress }));
-      }
-    } catch (error) {
-      logError('UTXOWorker.bootstrapAllUTXOs.dbSnapshot', error, {
-        walletId: currentWalletId,
-      });
-    }
+    // Do NOT paint SQL into Redux before listunspent. That caused a brief
+    // "fake balance" flash (stale disk → correct network) on wallets like 7.
+    // Progress bar covers the wait; balance appears from one authoritative pass.
     report(20);
 
     const fetchStart = performance.now();
-    // force:true on open once: full listunspent of known addresses (HOT heal).
-    // Background ticks use status gate (non-force).
+    // force:true on open: full listunspent of known addresses (HOT).
+    // Per-address subscription ticks still use addressHistoryIsFresh (worker).
     const fetchedWalletUTXOs = await UTXOService.fetchAndStoreUTXOsMany(
       currentWalletId,
       trackedAddresses,
