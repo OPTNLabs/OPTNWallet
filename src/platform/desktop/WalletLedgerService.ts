@@ -87,20 +87,11 @@ function buildWalletBytecodeMap(addresses: Iterable<string>): Map<string, string
   return map;
 }
 
-/**
- * Local marker for "this address has been scanned and has no history".
- * Electrum returns `null` for unused scripthashes; we store this non-null
- * sentinel so the status-hash gate can treat empty addresses as clean and
- * skip re-listunspent. (Returning null here used to leave every gap address
- * permanently dirty → console spam + useless network work.)
- */
-export const EMPTY_HISTORY_STATUS = '';
-
 /** EC / Selene style: sha256 of "txid:height:" for each history item. */
 export function computeHistoryStatusHash(
   history: Array<{ tx_hash: string; height: number }>
-): string {
-  if (!history.length) return EMPTY_HISTORY_STATUS;
+): string | null {
+  if (!history.length) return null;
   let status = '';
   for (const item of history) {
     const h = Number(item.height) || 0;
@@ -108,22 +99,6 @@ export function computeHistoryStatusHash(
   }
   const digest = sha256.hash(new TextEncoder().encode(status));
   return hexFromHash(digest);
-}
-
-/** True when local status matches Electrum scripthash status (null = empty). */
-export function historyStatusesMatch(
-  local: string,
-  remote: string | null
-): boolean {
-  if (local === remote) return true;
-  // Electrum unused → null; we persist EMPTY_HISTORY_STATUS for empty history.
-  if (
-    local === EMPTY_HISTORY_STATUS &&
-    (remote === null || remote === '')
-  ) {
-    return true;
-  }
-  return false;
 }
 
 export type AddressUtxoSnapshot = {
@@ -249,7 +224,7 @@ export async function setAddressHistoryStatus(
   walletId: number,
   address: string,
   history: Array<{ tx_hash: string; height: number }>
-): Promise<string> {
+): Promise<string | null> {
   await ensureDesktopLedgerTables();
   const status = computeHistoryStatusHash(history);
   const dbService = DatabaseService();
@@ -258,7 +233,6 @@ export async function setAddressHistoryStatus(
   if (!db) return status;
 
   try {
-    // Always persist — including EMPTY_HISTORY_STATUS for scanned-empty addrs.
     db.run(
       `INSERT INTO address_sync_status (wallet_id, address, history_status, updated_at)
        VALUES (?, ?, ?, ?)
@@ -325,19 +299,21 @@ export async function getAddressHistoryStatusMap(
   const db = dbService.getDatabase();
   if (!db) return map;
   try {
-    // Include empty-string statuses (scanned-empty addresses). Exclude only
-    // true SQL NULL (never written / unknown).
     const q = db.prepare(
       `SELECT address, history_status FROM address_sync_status
-       WHERE wallet_id = ? AND history_status IS NOT NULL`
+       WHERE wallet_id = ? AND history_status IS NOT NULL AND history_status != ''`
     );
     q.bind([walletId]);
     while (q.step()) {
       const row = q.getAsObject() as {
         address?: string;
-        history_status?: string | null;
+        history_status?: string;
       };
-      if (typeof row.address === 'string' && typeof row.history_status === 'string') {
+      if (
+        typeof row.address === 'string' &&
+        typeof row.history_status === 'string' &&
+        row.history_status
+      ) {
         map.set(row.address, row.history_status);
       }
     }
@@ -410,13 +386,13 @@ export async function partitionAddressesByStatus(
   const clean: string[] = [];
   for (const address of maybeClean) {
     const local = localMap.get(address);
-    // Missing key = per-address probe failure — keep dirty (do not treat as empty).
-    if (local == null || !(address in remoteByAddress)) {
-      dirty.push(address);
-      continue;
-    }
     const remote = remoteByAddress[address];
-    if (historyStatusesMatch(local, remote)) {
+    if (
+      local != null &&
+      remote != null &&
+      remote !== '' &&
+      local === remote
+    ) {
       clean.push(address);
     } else {
       dirty.push(address);

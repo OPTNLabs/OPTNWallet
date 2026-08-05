@@ -5,26 +5,11 @@ import {
   lockingBytecodeToCashAddress,
 } from '@bitauth/libauth';
 import { binToHex, hexToBin } from '../../../utils/hex';
-import {
-  computeHistoryStatusHash,
-  EMPTY_HISTORY_STATUS,
-  historyStatusesMatch,
-} from '../WalletLedgerService';
+import { computeHistoryStatusHash } from '../WalletLedgerService';
 
 describe('computeHistoryStatusHash', () => {
-  it('returns empty-history sentinel for empty history (not null)', () => {
-    // null used to leave gap addresses permanently dirty in the status gate.
-    expect(computeHistoryStatusHash([])).toBe(EMPTY_HISTORY_STATUS);
-    expect(computeHistoryStatusHash([])).toBe('');
-  });
-
-  it('matches Electrum null status for empty local history', () => {
-    expect(historyStatusesMatch(EMPTY_HISTORY_STATUS, null)).toBe(true);
-    expect(historyStatusesMatch(EMPTY_HISTORY_STATUS, '')).toBe(true);
-    expect(historyStatusesMatch(EMPTY_HISTORY_STATUS, 'abcd')).toBe(false);
-    expect(
-      historyStatusesMatch('aa'.repeat(32), 'aa'.repeat(32))
-    ).toBe(true);
+  it('returns null for empty history', () => {
+    expect(computeHistoryStatusHash([])).toBeNull();
   });
 
   it('is stable for the same history list', () => {
