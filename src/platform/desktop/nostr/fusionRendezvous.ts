@@ -5,7 +5,10 @@ import { electCoordinator, type FusionPoolNetwork } from './fusion';
 import { messageBinding, type RoundMessage, type RoundTransport } from './fusionSession';
 
 const MAX_PARTICIPANTS = 6;
-const DEFAULT_RENDEZVOUS_TIMEOUT_MS = 6_000;
+// Long enough for Tor relay round-trips (each peer ack can take a second or
+// more), short enough that a round with no live peers fails fast instead of
+// holding the wallet lease.
+const DEFAULT_RENDEZVOUS_TIMEOUT_MS = 15_000;
 const PUBKEY = /^[0-9a-f]{64}$/;
 const SESSION = /^[0-9a-f]{64}$/;
 

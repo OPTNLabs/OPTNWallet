@@ -132,6 +132,42 @@ export async function releaseRoundLease(
 }
 
 /**
+ * Drop the durable round lease for this wallet regardless of owner.
+ *
+ * Use for recovery when a round died without `releaseRoundLease` (HMR, crash,
+ * killed process) and the 10-minute TTL has not elapsed yet — the UI shows
+ * "already running" while nothing is actually fusing. Do not call this while a
+ * real round is live in another window of the same wallet.
+ */
+export async function forceClearRoundLease(walletId: number): Promise<void> {
+  const key = `${LEASE_PREFIX}${walletId}`;
+  const result = await withWalletLock(walletId, () => {
+    try {
+      getLocalStorage()?.removeItem(key);
+    } catch {
+      /* storage unavailable */
+    }
+  });
+  if (!result.ran) {
+    // No Web Lock API: still try a best-effort remove (single-window recovery).
+    try {
+      getLocalStorage()?.removeItem(key);
+    } catch {
+      /* ignore */
+    }
+  }
+}
+
+/** Read-only: whether a non-expired durable lease is recorded for this wallet. */
+export function hasLiveRoundLease(
+  walletId: number,
+  nowMs = Date.now()
+): boolean {
+  const held = readJson<LeaseRecord>(`${LEASE_PREFIX}${walletId}`);
+  return !!(held && nowMs - held.at < LEASE_TTL_MS);
+}
+
+/**
  * Atomically decide whether an automatic round may start, and claim the slot in
  * the same critical section.
  *

@@ -47,6 +47,7 @@ import {
 import { createNostrRoundTransport } from './nostr/fusionTransport';
 import { negotiateFusionRound } from './nostr/fusionRendezvous';
 import { runFusionRound, type RoundResult } from './nostr/fusionSession';
+import { CREDENTIAL_SLOTS_PER_PEER } from './nostr/fusionBlindSchnorr';
 import type { FusionInputRef, FusionOutputRef } from './nostr/fusionRound';
 import { planP2pOutputValues } from './nostr/fusionP2pAllocation';
 import { DEFAULT_RELAYS } from './nostr/chat';
@@ -187,6 +188,20 @@ async function collectRolling(
  * coins here is far cheaper than failing a whole multi-party round at the end.
  */
 const UTXO_RECHECK_TIMEOUT_MS = 15_000;
+
+/**
+ * A peer may contribute at most CREDENTIAL_SLOTS_PER_PEER inputs to one round —
+ * the blind-Schnorr issuer allocates exactly that many nonce slots per peer
+ * (fusionBlindSchnorr.ts). Passing every wallet coin exceeded the slots and
+ * every round aborted at credential-build with "too many inputs for credential
+ * slots". Prefer the largest coins so the round still reaches a meaningful tier;
+ * the remainder stays eligible for later rounds.
+ */
+function selectFusionInputs(utxos: UTXO[]): UTXO[] {
+  return [...utxos]
+    .sort((a, b) => (b.value ?? 0) - (a.value ?? 0))
+    .slice(0, CREDENTIAL_SLOTS_PER_PEER);
+}
 
 async function onlyUnspent(
   utxos: UTXO[],
@@ -397,10 +412,8 @@ export async function runP2pFusion(
     // two rounds (two windows, or a retry overlapping its predecessor) pick the
     // same UTXOs; the first to broadcast spends them and the second is rejected
     // with "Missing inputs" only after every peer has signed.
-    const spendable = await refreshAndVerifyP2pInputs(
-      opts.walletId,
-      opts.utxos,
-      opts.signal
+    const spendable = selectFusionInputs(
+      await refreshAndVerifyP2pInputs(opts.walletId, opts.utxos, opts.signal)
     );
     if (opts.signal?.aborted) throw new Error('fusion round cancelled');
     status?.('Tor verified; preparing fresh pool identity.');
