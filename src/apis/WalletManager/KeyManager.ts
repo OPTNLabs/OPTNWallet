@@ -261,42 +261,70 @@ export default function KeyManager() {
       return cached;
     }
 
+    // IMPORTANT: do NOT backfill by deriving a vault for every HD address_index
+    // in `keys`. That path re-ran heavy Quantumroot crypto for every receive
+    // index on every cold open (empty cache / new window), which froze Home
+    // sync at 5% for tens of seconds on ordinary wallets that never used
+    // Quantumroot. Only return vaults that were explicitly created/configured.
     await dbService.ensureDatabaseStarted();
     const db = dbService.getDatabase();
     if (db == null) {
       throw new Error('Database is null');
     }
 
-    const ensureVaultsFromKeysQuery = db.prepare(`
-      SELECT DISTINCT address_index
-      FROM keys
-      WHERE wallet_id = ?
-      ORDER BY address_index ASC;
-    `);
-    ensureVaultsFromKeysQuery.bind([wallet_id]);
-
-    const keyIndexes: number[] = [];
-    while (ensureVaultsFromKeysQuery.step()) {
-      const row = ensureVaultsFromKeysQuery.getAsObject() as Record<
-        string,
-        unknown
-      >;
-      const addressIndex =
-        typeof row.address_index === 'number'
-          ? row.address_index
-          : Number(row.address_index);
-      if (Number.isFinite(addressIndex)) {
-        keyIndexes.push(addressIndex);
-      }
-    }
-    ensureVaultsFromKeysQuery.free();
-
     const records: QuantumrootVaultRecord[] = [];
-    for (const addressIndex of keyIndexes) {
-      const record = await createQuantumrootVault(wallet_id, addressIndex, 0);
-      records.push(record);
+    try {
+      const query = db.prepare(`
+        SELECT
+          id,
+          wallet_id,
+          account_index,
+          address_index,
+          receive_address,
+          quantum_lock_address,
+          receive_locking_bytecode,
+          quantum_lock_locking_bytecode,
+          quantum_public_key,
+          quantum_key_identifier,
+          vault_token_category,
+          online_quantum_signer,
+          created_at,
+          updated_at
+        FROM quantumroot_vaults
+        WHERE wallet_id = ?
+        ORDER BY account_index ASC, address_index ASC;
+      `);
+      query.bind([wallet_id]);
+      while (query.step()) {
+        const row = query.getAsObject() as Record<string, unknown>;
+        const onlineSigner = Number(row.online_quantum_signer);
+        records.push({
+          id: typeof row.id === 'number' ? row.id : Number(row.id) || undefined,
+          wallet_id: Number(row.wallet_id),
+          account_index: Number(row.account_index),
+          address_index: Number(row.address_index),
+          receive_address: String(row.receive_address ?? ''),
+          quantum_lock_address: String(row.quantum_lock_address ?? ''),
+          receive_locking_bytecode: String(row.receive_locking_bytecode ?? ''),
+          quantum_lock_locking_bytecode: String(
+            row.quantum_lock_locking_bytecode ?? ''
+          ),
+          quantum_public_key: String(row.quantum_public_key ?? ''),
+          quantum_key_identifier: String(row.quantum_key_identifier ?? ''),
+          vault_token_category: String(row.vault_token_category ?? ''),
+          online_quantum_signer: onlineSigner === 1 ? 1 : 0,
+          created_at: String(row.created_at ?? ''),
+          updated_at: String(row.updated_at ?? ''),
+        });
+      }
+      query.free();
+    } catch {
+      // Table missing on a pre-migration DB — treat as no vaults.
     }
-    QuantumrootVaultCacheService.replace(wallet_id, records);
+
+    if (records.length > 0) {
+      QuantumrootVaultCacheService.replace(wallet_id, records);
+    }
     return records;
   }
 

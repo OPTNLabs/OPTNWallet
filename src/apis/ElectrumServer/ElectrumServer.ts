@@ -19,8 +19,12 @@ import { selectCurrentNetwork } from '../../state/selectors/networkSelectors';
 import { Network } from '../../state/slices/networkSlice';
 
 // ---------- Config ----------
-const CONNECT_TIMEOUT_MS = 8000;
+// Keep connect attempts short: walking a long server list at 8s each made cold
+// sync look stuck for ~1 minute before the first UTXO batch ran.
+const CONNECT_TIMEOUT_MS = 4000;
 const REQUEST_TIMEOUT_MS = 12000;
+/** Cap how many hosts we try in one connect round before failing over later. */
+const MAX_CONNECT_HOSTS_PER_ROUND = 3;
 const BACKOFF_BASE_MS = 3000;
 const BACKOFF_MAX_MS = 60000;
 const WSS_PORT = 50004;
@@ -374,8 +378,9 @@ export default function ElectrumServer() {
 
     connectPromise = (async () => {
       try {
-        for (let i = 0; i < orderedServers.length; i++) {
-          const host = orderedServers[i];
+        const hostsThisRound = orderedServers.slice(0, MAX_CONNECT_HOSTS_PER_ROUND);
+        for (let i = 0; i < hostsThisRound.length; i++) {
+          const host = hostsThisRound[i];
           const { host: h, port, encrypted } = parseServerEntry(host, WSS_PORT);
           const socket = new ElectrumWebSocket(
             h,
@@ -418,6 +423,14 @@ export default function ElectrumServer() {
               /* ignore */
             }
             // try next host
+          }
+        }
+        // Advance the rotation so the next connect round tries different hosts.
+        if (orderedServers.length > 0) {
+          const lastTried = hostsThisRound[hostsThisRound.length - 1];
+          const lastIdx = servers.indexOf(lastTried);
+          if (lastIdx >= 0) {
+            serverIndex = (lastIdx + 1) % servers.length;
           }
         }
         bumpBackoff();
