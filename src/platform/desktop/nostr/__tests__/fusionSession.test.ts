@@ -162,7 +162,6 @@ describe('P2P fusion round choreography (3 peers, in-memory)', () => {
           participants,
           tier: 100_000,
           feerate: 1000,
-          onionEnabled: false,
           myContribution: p.contribution,
           keysByPubkey: p.keys,
           broadcast,
@@ -196,7 +195,7 @@ describe('P2P fusion round choreography (3 peers, in-memory)', () => {
 
   it('routes outputs through the onion mix-net and still lands a VM-valid CoinJoin', async () => {
     // Same round as above, but with the mix-net on. Until this existed the whole
-    // peel/shuffle/forward path was unexercised — `onionEnabled` was never set
+    // peel/shuffle/forward path — onion is hardcoded essential for 3+ peers
     // by any test or by production, so none of it had ever run.
     const peers = [1, 2, 3].map((n) => {
       const inKey = keypair(n * 10 + 1);
@@ -231,7 +230,6 @@ describe('P2P fusion round choreography (3 peers, in-memory)', () => {
             broadcast,
             timeoutMs: 5000,
             jitterMs: [0, 0],
-            onionEnabled: true,
           },
           hub.transportFor(p.round.pubHex)
         )
@@ -267,7 +265,7 @@ describe('P2P fusion round choreography (3 peers, in-memory)', () => {
     expect(hub.activeHandlerCount()).toBe(0);
   });
 
-  it('2-peer rounds complete with onionEnabled (falls back to direct — no self-peel)', async () => {
+  it('2-peer rounds complete with direct outputs (hardcoded: one peeler cannot onion-mix)', async () => {
     // Production bug: 2 peers ⇒ 1 peeler gift-wrapping onions to themselves over
     // Nostr ⇒ never delivered ⇒ outputSlots=0/2. Direct path is correct here.
     const peers = [1, 2].map((n) => {
@@ -312,7 +310,6 @@ describe('P2P fusion round choreography (3 peers, in-memory)', () => {
             },
             timeoutMs: 5_000,
             jitterMs: [0, 0],
-            onionEnabled: true,
           },
           hub.transportFor(p.round.pubHex)
         )
@@ -380,7 +377,6 @@ describe('P2P fusion round choreography (3 peers, in-memory)', () => {
             },
             timeoutMs: 8_000,
             jitterMs: [0, 0],
-            onionEnabled: true,
           },
           hub.transportFor(p.round.pubHex)
         )
@@ -424,7 +420,6 @@ describe('P2P fusion round choreography (3 peers, in-memory)', () => {
             participants,
             tier: 100_000,
             feerate: 1_000,
-            onionEnabled: false,
             myContribution: peer.contribution,
             keysByPubkey: peer.keys,
             broadcast: async (txHex) => {
@@ -467,7 +462,6 @@ describe('P2P fusion round choreography (3 peers, in-memory)', () => {
             participants,
             tier: 100_000,
             feerate: 1_000,
-            onionEnabled: false,
             myContribution: peer.contribution,
             keysByPubkey: peer.keys,
             broadcast: async (txHex) => {
@@ -517,7 +511,6 @@ describe('P2P fusion round choreography (3 peers, in-memory)', () => {
           participants,
           tier: 100_000,
           feerate: 1_000,
-          onionEnabled: false,
           myContribution: peer.contribution,
           keysByPubkey: peer.keys,
           broadcast: async (txHex) => {
@@ -566,7 +559,6 @@ describe('P2P fusion round choreography (3 peers, in-memory)', () => {
             participants,
             tier: 100_000,
             feerate: 1_000,
-            onionEnabled: false,
             myContribution: peer.contribution,
             keysByPubkey: peer.keys,
             broadcast: async () => {
@@ -634,7 +626,6 @@ describe('P2P fusion round choreography (3 peers, in-memory)', () => {
             session: 'a'.repeat(64),
             tier: 100_000,
             feerate: 1_000,
-            onionEnabled: false,
             myContribution: item.contribution,
             keysByPubkey: item.keys,
             broadcast: async () => {
@@ -743,7 +734,6 @@ describe('P2P fusion round choreography (3 peers, in-memory)', () => {
           session,
           tier: 100_000,
           feerate: 1_000,
-          onionEnabled: false,
           myContribution: contribution,
           keysByPubkey: new Map([[input.pubHex, input.priv]]),
           broadcast: async () => {
@@ -792,7 +782,6 @@ describe('P2P fusion round choreography (3 peers, in-memory)', () => {
           session: 'c'.repeat(64),
           tier: 100_000,
           feerate: 1_000,
-          onionEnabled: false,
           myContribution: contribution,
           keysByPubkey: new Map([[input.pubHex, input.priv]]),
           broadcast: async () => '',
