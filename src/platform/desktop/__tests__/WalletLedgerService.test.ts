@@ -5,11 +5,16 @@ import {
   lockingBytecodeToCashAddress,
 } from '@bitauth/libauth';
 import { binToHex, hexToBin } from '../../../utils/hex';
-import { computeHistoryStatusHash } from '../WalletLedgerService';
+import {
+  computeHistoryStatusHash,
+  EMPTY_HISTORY_STATUS,
+  historyStatusesMatch,
+} from '../WalletLedgerService';
 
 describe('computeHistoryStatusHash', () => {
-  it('returns null for empty history', () => {
-    expect(computeHistoryStatusHash([])).toBeNull();
+  it('returns empty-history sentinel for empty history (not null)', () => {
+    expect(computeHistoryStatusHash([])).toBe(EMPTY_HISTORY_STATUS);
+    expect(historyStatusesMatch(EMPTY_HISTORY_STATUS, null)).toBe(true);
   });
 
   it('is stable for the same history list', () => {
