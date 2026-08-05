@@ -361,10 +361,8 @@ const ElectrumService = {
       return results;
     })();
 
-    // CRITICAL: never resolve missing keys to []. That poisoned later joiners
-    // into applying empty listunspent → synthetic external: spends → balance
-    // looked correct after Manual Sync then collapsed minutes later on the
-    // next block / subscription refresh (wallet 5).
+    // CRITICAL: never resolve missing keys to []. Empty means "server said
+    // zero coins"; missing key means "RPC failed — keep prior HOT UTXOs".
     for (const address of pending) {
       const p = batchPromise.then((resolved) => {
         if (Object.prototype.hasOwnProperty.call(resolved, address)) {

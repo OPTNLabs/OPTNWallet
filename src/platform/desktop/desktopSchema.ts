@@ -28,8 +28,11 @@ let ensured = false;
 let ledgerEnsured = false;
 
 /**
- * Option A hybrid ledger tables (desktop). Idempotent CREATE IF NOT EXISTS.
- * Not in shared schema.ts so mobile upstream stays untouched.
+ * Desktop HOT helpers only: address history status for the listunspent gate.
+ * Idempotent CREATE IF NOT EXISTS. Not in shared schema.ts (zero-touch).
+ *
+ * Legacy Option-A tables (ledger_txo/txi/…) are no longer created. Rebuild
+ * still DELETEs them if present so old poisoned DBs clean up.
  */
 export async function ensureDesktopLedgerTables(): Promise<void> {
   if (ledgerEnsured) return;
@@ -46,60 +49,6 @@ export async function ensureDesktopLedgerTables(): Promise<void> {
         history_status TEXT,
         updated_at TEXT NOT NULL,
         PRIMARY KEY (wallet_id, address)
-      );
-    `);
-
-    db.run(`
-      CREATE TABLE IF NOT EXISTS ledger_transactions (
-        wallet_id INT NOT NULL,
-        tx_hash TEXT NOT NULL,
-        height INT NOT NULL DEFAULT 0,
-        raw_hex TEXT,
-        updated_at TEXT NOT NULL,
-        PRIMARY KEY (wallet_id, tx_hash)
-      );
-    `);
-
-    db.run(`
-      CREATE TABLE IF NOT EXISTS ledger_txo (
-        wallet_id INT NOT NULL,
-        tx_hash TEXT NOT NULL,
-        tx_pos INT NOT NULL,
-        address TEXT NOT NULL,
-        value INT NOT NULL,
-        height INT NOT NULL DEFAULT 0,
-        token TEXT,
-        prefix TEXT,
-        PRIMARY KEY (wallet_id, tx_hash, tx_pos)
-      );
-    `);
-
-    db.run(`
-      CREATE TABLE IF NOT EXISTS ledger_txi (
-        wallet_id INT NOT NULL,
-        spent_by_tx TEXT NOT NULL,
-        prevout_hash TEXT NOT NULL,
-        prevout_n INT NOT NULL,
-        address TEXT,
-        value INT,
-        PRIMARY KEY (wallet_id, prevout_hash, prevout_n)
-      );
-    `);
-
-    db.run(
-      `CREATE INDEX IF NOT EXISTS idx_ledger_txo_addr ON ledger_txo(wallet_id, address);`
-    );
-    db.run(
-      `CREATE INDEX IF NOT EXISTS idx_ledger_txi_spent ON ledger_txi(wallet_id, spent_by_tx);`
-    );
-
-    // Wallet-level scan window (first known positive height + tip).
-    db.run(`
-      CREATE TABLE IF NOT EXISTS wallet_ledger_meta (
-        wallet_id INT PRIMARY KEY,
-        genesis_height INT,
-        tip_height INT,
-        updated_at TEXT NOT NULL
       );
     `);
 

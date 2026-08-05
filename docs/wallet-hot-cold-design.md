@@ -40,11 +40,15 @@ listunspent → format → replaceWalletAddressUTXOs (SQL) → return map → Re
 | Archive compaction (old spent txs) | Planned |
 | Optional raw-tx ancestry (power user) | Later — still not balance boss |
 
-## What we rejected
+## What we rejected (and removed from code)
 
 - Ledger as Redux balance boss (dual truth → wallet 5 fake balance)  
-- Synthetic `external:` spends from partial listunspent on background  
-- Mixing EC txi/txo + Selene UTXO replace into a third hybrid for HOT
+- Synthetic `external:` spends / `applyAddressUtxoSnapshot`  
+- `listUnspentFromLedger` / `rebuildUtxosFromLedger` for HOT  
+- Background raw-tx apply that rewrote UTXOs from incomplete ledger  
+- Creating `ledger_txo` / `ledger_txi` tables for balance  
+
+**Kept (good):** address_sync_status gate, send-time `verifyOutpointsStillUnspent`, Rebuild wipe of old tables if present.
 
 ## Evidence of “fixed” for HOT
 

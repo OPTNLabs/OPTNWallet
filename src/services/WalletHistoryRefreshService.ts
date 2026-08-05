@@ -268,28 +268,6 @@ export async function refreshWalletTransactionHistory(
       refreshed = true;
     }
 
-    // Option A raw-tx → txi/txo: never block Sync/open on this. Fetching dozens
-    // of raw hexes held the history-refresh lock and froze Manual Sync at 55%
-    // for minutes while the user waited on a joined background pass.
-    const pendingSnapshot = [...pending];
-    void (async () => {
-      try {
-        const ledger = await import('../platform/desktop/WalletLedgerService');
-        const addrSet = await ledger.loadWalletAddressSet(walletId);
-        for (const a of pendingSnapshot) addrSet.add(a);
-        const { applied } = await ledger.fetchAndApplyMissingTransactions(
-          walletId,
-          addrSet,
-          { limit: 24 }
-        );
-        if (applied > 0) {
-          await ledger.rebuildUtxosFromLedger(walletId);
-        }
-      } catch {
-        /* ledger optional */
-      }
-    })();
-
     await runOutboundReconcile(walletId, () =>
       reconcileOutboundTransactions(walletId)
     );

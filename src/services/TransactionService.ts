@@ -403,10 +403,7 @@ class TransactionService {
       };
     }
 
-    // Send-time live outpoint check (Option A): durable UTXO cache is not
-    // trust-forever. If a selected coin was spent elsewhere, refuse before
-    // broadcasting so the user gets a clear refresh message instead of a
-    // node-level "missing inputs" error.
+    // Send-time live outpoint check: HOT SQL cache is not trust-forever.
     if (spentInputs && spentInputs.length > 0) {
       try {
         const { verifyOutpointsStillUnspent } = await import(
@@ -449,26 +446,6 @@ class TransactionService {
         res.txid,
         rawTX
       );
-
-      // Apply the just-broadcast raw hex into the ledger immediately so txi/txo
-      // match before the next listunspent round-trip.
-      if (currentWalletId && rawTX) {
-        void import('../platform/desktop/WalletLedgerService')
-          .then(async (ledger) => {
-            const addresses = await ledger.loadWalletAddressSet(currentWalletId);
-            await ledger.applyRawTransaction(
-              currentWalletId,
-              res.txid!,
-              0,
-              rawTX,
-              addresses
-            );
-            await ledger.rebuildUtxosFromLedger(currentWalletId);
-          })
-          .catch(() => {
-            /* optional */
-          });
-      }
     }
 
     // Refresh wallet addresses after any successful hand-off, but only
