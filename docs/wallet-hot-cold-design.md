@@ -34,12 +34,20 @@ listunspent → format → replaceWalletAddressUTXOs (SQL) → return map → Re
 | Feature | Status |
 |---------|--------|
 | Transaction history UI | Existing |
-| Fusion depth / round metadata | Partial (existing services) |
-| Labels on UTXO/tx | Planned |
+| Fusion depth / round metadata | Existing (`fusionCoinDepth`) + UTXO “Fused ×N” |
+| Labels on UTXO/tx | **Slice 1 done** — `coin_labels` + `CoinLabelService` |
+| Labels export CSV | **Slice 1** — `exportCoinLabelsCsv` |
 | Tx graph (in→out) | Planned |
-| Export history + labels + fusion log | Planned |
+| Full export history + fusion log | Planned |
 | Archive compaction (old spent txs) | Planned |
 | Optional raw-tx ancestry (power user) | Later — still not balance boss |
+
+### Coin labels (slice 1)
+
+- Table: `coin_labels` (desktop schema only; zero-touch)  
+- Kinds: `outpoint` (`txid:pos`), `txid`, `address`  
+- UI: UTXO card + transaction detail “Edit” label  
+- **Never** used by listunspent / balance / send selection
 
 ## What we rejected (and removed from code)
 

@@ -1,5 +1,5 @@
 // src/components/UTXOCard.tsx
-import React from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import { useSelector } from 'react-redux';
 import { shortenTxHash } from '../utils/shortenHash';
 import { UTXO } from '../types/types';
@@ -11,6 +11,11 @@ import {
   resolveTokenPresentation,
 } from '../utils/tokenPresentation';
 import { coinDepth } from '../platform/desktop/fusionCoinDepth';
+import {
+  getCoinLabel,
+  outpointKey,
+  setCoinLabel,
+} from '../platform/desktop/CoinLabelService';
 import { selectWalletId } from '../state/slices/walletSlice';
 
 interface UTXOCardProps {
@@ -45,10 +50,54 @@ function formatBchFromSats(
 
 const UTXOCard: React.FC<UTXOCardProps> = ({ utxos, loading }) => {
   const walletId = useSelector(selectWalletId);
+  const [labels, setLabels] = useState<Record<string, string>>({});
   const tokenMetadata = useSharedTokenMetadata(
     utxos
       .map((u) => u.token?.category)
       .filter((category): category is string => Boolean(category))
+  );
+
+  useEffect(() => {
+    if (walletId <= 0 || utxos.length === 0) {
+      setLabels({});
+      return;
+    }
+    let cancelled = false;
+    void (async () => {
+      const next: Record<string, string> = {};
+      await Promise.all(
+        utxos.map(async (u) => {
+          const key = outpointKey(u.tx_hash, u.tx_pos);
+          const label = await getCoinLabel(walletId, 'outpoint', key);
+          if (label) next[key] = label;
+        })
+      );
+      if (!cancelled) setLabels(next);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [walletId, utxos]);
+
+  const editLabel = useCallback(
+    async (txHash: string, txPos: number, current: string | undefined) => {
+      if (walletId <= 0) return;
+      const key = outpointKey(txHash, txPos);
+      const next = window.prompt(
+        'Label this coin (empty to clear). Personal note only — not used for balance.',
+        current ?? ''
+      );
+      if (next === null) return;
+      await setCoinLabel(walletId, 'outpoint', key, next);
+      setLabels((prev) => {
+        const copy = { ...prev };
+        const cleaned = next.trim();
+        if (cleaned) copy[key] = cleaned.slice(0, 200);
+        else delete copy[key];
+        return copy;
+      });
+    },
+    [walletId]
   );
 
   if (loading) {
@@ -95,6 +144,9 @@ const UTXOCard: React.FC<UTXOCardProps> = ({ utxos, loading }) => {
           | string
           | bigint
           | undefined;
+        const okey = outpointKey(utxo.tx_hash, utxo.tx_pos);
+        const depth = walletId > 0 ? coinDepth(walletId, okey) : 0;
+        const coinLabel = labels[okey];
 
         return (
           <div
@@ -123,9 +175,9 @@ const UTXOCard: React.FC<UTXOCardProps> = ({ utxos, loading }) => {
                 <>
                   <p>
                     {formatBchFromSats(sats)} <strong>BCH</strong>
-                    {walletId > 0 && coinDepth(walletId, `${utxo.tx_hash}:${utxo.tx_pos}`) > 0 && (
+                    {depth > 0 && (
                       <span className="ml-2 text-xs bg-emerald-500/20 text-emerald-400 px-1.5 py-0.5 rounded">
-                        Fused
+                        Fused ×{depth}
                       </span>
                     )}
                   </p>
@@ -139,6 +191,25 @@ const UTXOCard: React.FC<UTXOCardProps> = ({ utxos, loading }) => {
                     <strong>Height:</strong> {utxo.height}
                   </p>
                 </>
+              )}
+              {walletId > 0 && (
+                <p className="flex flex-wrap items-center gap-2">
+                  <strong>Label:</strong>{' '}
+                  <span className="wallet-text-strong">
+                    {coinLabel || (
+                      <span className="wallet-muted italic">none</span>
+                    )}
+                  </span>
+                  <button
+                    type="button"
+                    className="text-xs underline wallet-muted hover:wallet-text-strong"
+                    onClick={() =>
+                      void editLabel(utxo.tx_hash, utxo.tx_pos, coinLabel)
+                    }
+                  >
+                    Edit
+                  </button>
+                </p>
               )}
             </div>
 

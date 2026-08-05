@@ -52,6 +52,21 @@ export async function ensureDesktopLedgerTables(): Promise<void> {
       );
     `);
 
+    // COLD: user labels for coins/txs/addresses — never used for balance.
+    db.run(`
+      CREATE TABLE IF NOT EXISTS coin_labels (
+        wallet_id INT NOT NULL,
+        kind TEXT NOT NULL,
+        ref_key TEXT NOT NULL,
+        label TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        PRIMARY KEY (wallet_id, kind, ref_key)
+      );
+    `);
+    db.run(
+      `CREATE INDEX IF NOT EXISTS idx_coin_labels_wallet ON coin_labels(wallet_id);`
+    );
+
     ledgerEnsured = true;
   } catch (error) {
     logError('desktopSchema.ensureDesktopLedgerTables', error);
