@@ -1,7 +1,26 @@
 # OPTN Wallet Ledger & Sync Design (Option A hybrid)
 
-**Status:** adopted 2026-08-05 (PR #12 worktree); E2E complete 2026-08-05  
-**References:** Electron Cash `txi`/`txo` + status hash; Selene `addresses.state` + Rebuild Wallet.
+**Status:** adopted 2026-08-05 (PR #12 worktree); reaffirmed after balance regression analysis  
+**References (read their code — do not invent):**
+
+- Electron Cash: `D:\OPTN wallet work\electron-cash\electroncash\wallet.py`  
+  (`get_addr_io` / `get_addr_utxo` / `get_addr_balance` / `receive_history_callback`)
+- Selene: `D:\Selene Wallet\src\redux\sync.ts` (`syncAddressState` effect)  
+  + `src\kernel\bch\ElectrumService.ts`
+
+## Locked decisions (user)
+
+1. **Option A hybrid** — EC ledger + Selene status/rebuild, not a third invented model.  
+2. **Balance source of truth = ledger unspents** (EC: `txo − txi`), never a parallel  
+   listunspent-only Redux boss that can diverge from the ledger.  
+3. **listunspent** updates the ledger for dirty addresses, then SQL cache is rebuilt  
+   from the ledger; UI for wallet-wide passes uses **full ledger projection**.  
+4. **Selene notify rule:** if address status unchanged → **no-op** (no history/listunspent).  
+5. **Three tiers:** open = disk + status delta · Manual Sync = clear statuses + force ·  
+   Rebuild = wipe chain data, keep seed.  
+6. **Zero-touch:** ledger tables only via `desktopSchema` (not shared `schema.ts`).  
+7. **Evidence before “fixed”:** for a wallet, Electrum listunspent sum ≈ Redux  
+   `totalBalance` ≈ ledger unspent sum ≈ SQL `UTXOs` sum.
 
 ## Goal
 
@@ -67,7 +86,7 @@ Apply network results into the ledger (and/or address UTXO replace under the sam
 
 ### Address snapshot rules (listunspent → ledger)
 
-For each address in a fetch pass:
+For each **dirty** address in a wallet-wide fetch pass:
 
 1. `applyAddressUtxoSnapshot` upserts remote unspents into `ledger_txo`.  
 2. Outpoints that were unspent locally but **missing** from remote get a synthetic  
@@ -75,9 +94,11 @@ For each address in a fetch pass:
 3. Outpoints present on remote that still have only an `external:%` spend row must  
    **clear that synthetic txi** (coin is unspent again). Never clear real spend rows  
    from known wallet txs.  
-4. `rebuildUtxosFromLedger` rewrites the SQL `UTXOs` cache from unspent `ledger_txo`.  
-5. Redux for that pass is the **listunspent merge just applied**, not a selective  
-   re-read of the projection (selective non-empty overwrite mixed two bosses).
+4. `rebuildUtxosFromLedger` rewrites SQL `UTXOs` from unspent `ledger_txo`.  
+5. **Wallet-wide Redux payload** = `listUnspentFromLedger` (full wallet), same as EC  
+   deriving coins from txi/txo — not a partial listunspent map for only dirty addrs.  
+6. **Single-address (Selene notify):** apply that address only; do **not** full-wallet  
+   rebuild; return that address’s coins only.
 
 ## Send-time safety
 
