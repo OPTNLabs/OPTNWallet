@@ -4,6 +4,7 @@ import {
   buildPoolAnnouncement,
   electCoordinator,
   isCoordinator,
+  isLivePoolAnnouncement,
   joinPool,
   poolTag,
   poolEpoch,
@@ -11,6 +12,7 @@ import {
   selectFusionGroup,
   FUSION_POOL_PROTOCOL,
   POOL_ANNOUNCE_KIND,
+  POOL_REANNOUNCE_SECONDS,
 } from '../fusion';
 import { verifyEvent } from 'nostr-tools';
 
@@ -133,6 +135,49 @@ describe('P2P fusion coordination', () => {
       tier: 100_000,
       participants: ['01', '02'],
     });
+  });
+
+  it('drops abandoned Start ghosts after one re-announce cycle (4 wallets ≠ 7 peers)', () => {
+    const self = 'aa'.repeat(32);
+    const live = 'bb'.repeat(32);
+    const ghost = 'cc'.repeat(32);
+    const gatherStart = 1_800_000_000;
+    // 8s into gather: past re-announce + lag window
+    const now = gatherStart + POOL_REANNOUNCE_SECONDS + 2;
+    const base = {
+      nowSeconds: now,
+      gatherStartSeconds: gatherStart,
+      selfPubkey: self,
+      isGhostKey: () => false,
+    };
+
+    expect(
+      isLivePoolAnnouncement(
+        { pubkey: self, at: gatherStart - 30, expiresAt: now + 60 },
+        base
+      )
+    ).toBe(true);
+    // Live peer re-announced during this gather.
+    expect(
+      isLivePoolAnnouncement(
+        { pubkey: live, at: gatherStart + 1, expiresAt: now + 60 },
+        base
+      )
+    ).toBe(true);
+    // Abandoned Start key: last announce was before gather, never re-published.
+    expect(
+      isLivePoolAnnouncement(
+        { pubkey: ghost, at: gatherStart - 5, expiresAt: now + 160 },
+        base
+      )
+    ).toBe(false);
+    // Explicit ghost list (own / retired).
+    expect(
+      isLivePoolAnnouncement(
+        { pubkey: live, at: gatherStart + 1, expiresAt: now + 60 },
+        { ...base, isGhostKey: (pk) => pk === live }
+      )
+    ).toBe(false);
   });
 
   it('publishes an expired withdrawal even after the round signal is aborted', async () => {

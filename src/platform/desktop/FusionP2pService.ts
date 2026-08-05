@@ -36,6 +36,7 @@ import { createFreshFusionOutputScripts, gatherInputs } from './FusionService';
 import { isFusionExecutionAllowed } from './FusionExecutionSafety';
 import {
   generateRoundIdentity,
+  isLivePoolAnnouncement,
   joinPool,
   poolEpoch,
   selectFusionGroup,
@@ -129,15 +130,15 @@ const POOL_WAIT_MAX_MS = 90_000;
 const PEER_SET_STABLE_MS = 12_000;
 /** Only 2 live peers: hold longer so a 3rd/4th wallet can join the pool. */
 const PAIR_HOLD_MS = 45_000;
-// Live window: just over 2 re-announce cycles (REANNOUNCE_MS=6s) + Tor lag.
-// Wider windows re-count abandoned Start keys as "7 live peers" with 4 wallets.
-const RECENT_ACTIVE_SECONDS = 14;
-
 // Every Start click mints a fresh throwaway identity, and the announcement is a
 // STORED event the relay keeps replaying until it ages out. Without this, a retry
 // discovers its OWN abandoned key as a peer: the same wallet joins its own round
 // twice, contributes the same coins, and the round dies on "duplicate input".
 // A wallet must never fuse with itself.
+//
+// Live filter = re-announce proof-of-life (see isLivePoolAnnouncement). A plain
+// "created_at within 14–24s" window still counted abandoned Start keys right
+// after a restart (user: 4 wallets, "7 live peers").
 async function collectRolling(
   walletId: number,
   selfPubkey: string,
@@ -146,23 +147,23 @@ async function collectRolling(
   signal?: AbortSignal
 ): Promise<PoolAnnouncement[]> {
   const start = Date.now();
+  const gatherStartSeconds = Math.floor(start / 1_000);
   const minReady = start + POOL_WAIT_MIN_MS;
   const maxWait = start + POOL_WAIT_MAX_MS;
   let lastFingerprint = '';
   let stableSince = start;
+  let lastLoggedFp = '';
   const fresh = () => {
     const nowSeconds = Math.floor(Date.now() / 1_000);
-    return getPeers().filter((peer) => {
-      if (peer.pubkey === selfPubkey) return true;
-      // An earlier attempt of THIS wallet — from any window, surviving reloads.
-      if (isOwnRoundKey(walletId, peer.pubkey)) return false;
-      // Any wallet that finished/withdrew — shared ghost list (cross-window).
-      if (isRetiredRoundKey(peer.pubkey)) return false;
-      // Prefer recently re-announced keys (live gatherers re-publish every 6s).
-      if (peer.at < nowSeconds - RECENT_ACTIVE_SECONDS) return false;
-      if (peer.expiresAt < nowSeconds) return false;
-      return true;
-    });
+    return getPeers().filter((peer) =>
+      isLivePoolAnnouncement(peer, {
+        nowSeconds,
+        gatherStartSeconds,
+        selfPubkey,
+        isGhostKey: (pubkey) =>
+          isOwnRoundKey(walletId, pubkey) || isRetiredRoundKey(pubkey),
+      })
+    );
   };
   const fingerprint = (peers: PoolAnnouncement[]) =>
     peers
@@ -178,6 +179,13 @@ async function collectRolling(
       lastFingerprint = fp;
       stableSince = now;
     }
+    if (fp !== lastLoggedFp) {
+      lastLoggedFp = fp;
+      console.info(
+        `[p2p-fusion] live set (${peers.length}):`,
+        peers.map((p) => p.pubkey.slice(0, 8)).join(', ') || '(none)'
+      );
+    }
     const pastMin = now >= minReady;
     const setStable = pastMin && now - stableSince >= PEER_SET_STABLE_MS;
     // Prefer 3+ peer sets once stable. A lone pair must wait longer (or maxWait)
@@ -190,7 +198,7 @@ async function collectRolling(
           now >= start + PAIR_HOLD_MS;
     if (canLock || now >= maxWait) {
       onStatus?.(
-        `Gather done: ${peers.length} live announcement(s) ` +
+        `Gather done: ${peers.length} live wallet(s) ` +
           `(stable=${canLock}, held ${Math.round((now - start) / 1000)}s).`
       );
       return peers;
@@ -205,18 +213,18 @@ async function collectRolling(
           ? ` pair-hold ${Math.max(0, Math.ceil((start + PAIR_HOLD_MS - now) / 1000))}s`
           : '';
       onStatus?.(
-        `${peers.length} live announcement(s) — wait ${needStable}s for set to stabilize` +
+        `${peers.length} live wallet(s) — wait ${needStable}s for set to stabilize` +
           `${pairNote}…`
       );
     } else if (peers.length >= MIN_PARTICIPANTS) {
       const inSecs = Math.max(0, Math.ceil((minReady - now) / 1_000));
       onStatus?.(
-        `${peers.length} live announcement(s) — min gather ${inSecs}s…`
+        `${peers.length} live wallet(s) — min gather ${inSecs}s…`
       );
     } else {
       const secsLeft = Math.max(0, Math.ceil((maxWait - now) / 1_000));
       onStatus?.(
-        `Waiting for peers: ${peers.length} live announcement(s) (up to ${secsLeft}s)…`
+        `Waiting for peers: ${peers.length} live wallet(s) (up to ${secsLeft}s)…`
       );
     }
     await waitUntil(Math.min(maxWait, now + 1_500), signal);
@@ -514,9 +522,18 @@ export async function runP2pFusion(
       numInputs: runInputs.length,
       signal: opts.signal,
       onPeer: (received) => {
-        const merged = new Map(peers.map((peer) => [peer.pubkey, peer]));
-        received.forEach((peer) => merged.set(peer.pubkey, peer));
-        peers = [...merged.values()];
+        // REPLACE, do not union. The old merge kept every key ever seen for the
+        // whole gather even after joinPool dropped retired/stale ghosts — that
+        // alone produced "7 live" with 4 wallets after a few Start retries.
+        const byKey = new Map(received.map((peer) => [peer.pubkey, peer]));
+        const self = peers.find((peer) => peer.pubkey === round!.pubkey);
+        if (self && !byKey.has(round!.pubkey)) {
+          byKey.set(round!.pubkey, {
+            ...self,
+            at: Math.floor(Date.now() / 1_000),
+          });
+        }
+        peers = [...byKey.values()];
       },
       onError: (error) => status?.(error.message),
     });
@@ -541,13 +558,13 @@ export async function runP2pFusion(
       joined.stop();
       stopPool = null;
       throw new Error(
-        `No P2P peers found (only ${fresh.length} announcement(s); need ≥2 wallets ` +
+        `No P2P peers found (only ${fresh.length} live wallet(s); need ≥2 wallets ` +
           `on ${network} with Tor + P2P on, starting around the same time). ` +
           `Open a second chipnet wallet and Start P2P on both.`
       );
     }
     status?.(
-      `Local view: ${fresh.length} live announcement(s) → proposing ` +
+      `Local view: ${fresh.length} live wallet(s) → proposing ` +
         `${group.participants.length} at ${group.tier} sats. ` +
         `Agreeing with peers (if one wallet is late, the others may fuse without it)…`
     );
