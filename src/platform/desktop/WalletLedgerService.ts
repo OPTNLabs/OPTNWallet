@@ -424,16 +424,21 @@ export async function partitionAddressesByStatus(
       walletId,
       count: maybeClean.length,
     });
-    // Probe failed — treat as dirty so we still refresh rather than skip forever.
-    return { dirty: unique, clean: [], probed: 0 };
+    // Soft-fail (Option A): keep addresses that already have a local status as
+    // clean. Marking ALL dirty after "Connection lost" storms listunspent into
+    // Electrum reconnect backoff and flashes fake/failed balance. Never-scanned
+    // addresses (in `dirty` already) still re-fetch when the socket recovers.
+    return { dirty, clean: maybeClean, probed: 0 };
   }
 
   const clean: string[] = [];
   for (const address of maybeClean) {
     const local = localMap.get(address);
-    // Missing key = probe failure — keep dirty (do not treat as unused).
+    // Missing key = per-address probe failure (or whole-batch drop). Soft-fail:
+    // trust local status rather than dirtying 300+ addresses into a dead socket.
     if (local == null || !(address in remoteByAddress)) {
-      dirty.push(address);
+      if (local != null) clean.push(address);
+      else dirty.push(address);
       continue;
     }
     if (historyStatusesMatch(local, remoteByAddress[address])) {

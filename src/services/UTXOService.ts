@@ -365,19 +365,50 @@ const UTXOService = {
       if (addressesToFetch.length === 0) {
         // force with empty dirty set should not happen; keep progress complete.
         options.onProgress?.(uniqueAddresses.length, uniqueAddresses.length);
-      } else if (options.onProgress) {
-        // Map listunspent progress over dirty addresses only, but report against
-        // total wallet size so skipped clean addresses still advance the bar.
-        const dirtyTotal = addressesToFetch.length;
-        const skipped = uniqueAddresses.length - dirtyTotal;
-        utxosByAddress = await ElectrumService.getUTXOsMany(
-          addressesToFetch,
-          (done, _total) => {
-            options.onProgress?.(skipped + done, uniqueAddresses.length);
-          }
-        );
       } else {
-        utxosByAddress = await ElectrumService.getUTXOsMany(addressesToFetch);
+        try {
+          if (options.onProgress) {
+            // Map listunspent progress over dirty addresses only, but report against
+            // total wallet size so skipped clean addresses still advance the bar.
+            const dirtyTotal = addressesToFetch.length;
+            const skipped = uniqueAddresses.length - dirtyTotal;
+            utxosByAddress = await ElectrumService.getUTXOsMany(
+              addressesToFetch,
+              (done, _total) => {
+                options.onProgress?.(skipped + done, uniqueAddresses.length);
+              }
+            );
+          } else {
+            utxosByAddress = await ElectrumService.getUTXOsMany(addressesToFetch);
+          }
+        } catch (fetchError) {
+          // Soft-fail on transport/backoff: keep last SQL snapshot so balance
+          // does not wipe when Electrum is reconnecting (user saw
+          // "reconnect backoff" right after a healthy open).
+          const msg =
+            fetchError instanceof Error ? fetchError.message : String(fetchError);
+          if (
+            /backoff|connection lost|not connected|timeout|ECONN/i.test(msg)
+          ) {
+            logError('UTXOService.fetchAndStoreUTXOsMany.softFail', fetchError, {
+              walletId,
+              addressCount: addressesToFetch.length,
+            });
+            options.onProgress?.(
+              uniqueAddresses.length,
+              uniqueAddresses.length
+            );
+            const fromDb: Record<string, UTXO[]> = {};
+            for (const address of uniqueAddresses) {
+              fromDb[address] = [
+                ...(existingSnapshot.utxosMap[address] ?? []),
+                ...(existingSnapshot.cashTokenUtxosMap[address] ?? []),
+              ];
+            }
+            return fromDb;
+          }
+          throw fetchError;
+        }
       }
       // Log only real network work (or multi-address batches).
       if (uniqueAddresses.length > 1 && addressesToFetch.length > 0) {
