@@ -48,10 +48,21 @@ export const SERVER_SESSION_CEILING_MS =
 export const P2P_GATHER_MAX_MS = SERVER_JOIN_WAIT_MS;
 /** Min gather before locking a stable full set (under JOIN_WAIT). */
 export const P2P_GATHER_MIN_MS = 30_000;
-/** Hold 2–3 peer sets so a late Tor peer can still join (under JOIN_WAIT). */
+/**
+ * Extra hold for a stable 3-set so a 4th can still join (under JOIN_WAIT).
+ * Pairs (2-set) are never locked early — only at P2P_GATHER_MAX_MS — so a
+ * Tor-lagged 3rd wallet is not left on "Only you confirmed active".
+ */
 export const P2P_SMALL_SET_HOLD_MS = 60_000;
 /** Unchanged membership before lock. */
 export const P2P_PEER_SET_STABLE_MS = 12_000;
+/**
+ * After the live set drops below its peak (others fused / left), only wait this
+ * long for them to reappear. Forever-peak (e.g. peak 4/4, now 2) used to block
+ * lock until JOIN_WAIT ended with "waiting for lagged peer" forever-feeling.
+ * ≤ T_END_SIGS so we stay inside server-scale budgets.
+ */
+export const P2P_PEAK_GRACE_MS = SERVER_SIGS_END_MS;
 
 /**
  * Rendezvous (propose/ACK/start). Capped by normal server close window so
