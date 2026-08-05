@@ -22,6 +22,7 @@ import { planTransactionDetailRefresh } from './transactionDetailSync';
 import {
   runOutboundReconcile,
   runWalletHistoryRefresh,
+  runWalletHistoryRefreshExclusive,
 } from './RefreshCoordinator';
 import QuantumrootTrackingService from './QuantumrootTrackingService';
 
@@ -80,6 +81,12 @@ export interface RefreshWalletHistoryOptions {
    * that changed and refresh nothing.
    */
   skipAddresses?: ReadonlySet<string>;
+  /**
+   * User-initiated (Manual Sync / Rebuild). Does not join a background history
+   * pass (those freeze the bar at 55% with no onProgress). Skips the status-hash
+   * gate so every known address is re-fetched.
+   */
+  force?: boolean;
   onProgress?: (percent: number) => void;
 }
 
@@ -104,6 +111,7 @@ export async function refreshWalletTransactionHistory(
     dispatch,
     sessionGeneration,
     skipAddresses,
+    force = false,
     onProgress,
   } = options;
   if (!Number.isSafeInteger(walletId) || walletId <= 0) {
@@ -114,7 +122,7 @@ export async function refreshWalletTransactionHistory(
   let scannedAddresses: string[] = [];
   let refreshed = false;
 
-  await runWalletHistoryRefresh(walletId, async () => {
+  const runBody = async () => {
     await dbService.ensureDatabaseStarted();
     const db = dbService.getDatabase() as SqlLikeDb | null;
     if (!db) {
@@ -175,22 +183,25 @@ export async function refreshWalletTransactionHistory(
     onProgress?.(5);
 
     // Status-hash delta (EC/Selene): skip addresses whose local history status
-    // already matches the Electrum address state. Addresses with no local
-    // status are dirty without a network probe (Manual Sync clears them first —
-    // probing all addresses there froze the bar while learning nothing).
+    // already matches the Electrum address state. Force / Manual Sync skips the
+    // gate entirely (statuses were cleared or user wants a full recheck).
     let toFetch = pending;
-    try {
-      const ledger = await import('../platform/desktop/WalletLedgerService');
-      const partition = await ledger.partitionAddressesByStatus(
-        walletId,
-        pending
-      );
-      toFetch = partition.dirty;
-      onProgress?.(
-        5 + Math.round(20 * (1 - toFetch.length / Math.max(pending.length, 1)))
-      );
-    } catch {
-      toFetch = pending;
+    if (!force) {
+      try {
+        const ledger = await import('../platform/desktop/WalletLedgerService');
+        const partition = await ledger.partitionAddressesByStatus(
+          walletId,
+          pending
+        );
+        toFetch = partition.dirty;
+        onProgress?.(
+          5 + Math.round(20 * (1 - toFetch.length / Math.max(pending.length, 1)))
+        );
+      } catch {
+        toFetch = pending;
+      }
+    } else {
+      onProgress?.(10);
     }
 
     const transactionManager = TransactionManager();
@@ -257,30 +268,41 @@ export async function refreshWalletTransactionHistory(
       refreshed = true;
     }
 
-    // Option A: materialize full txi/txo from raw hex for txs we only have
-    // as history stubs. Bounded so open stays snappy; remaining catch up later.
-    try {
-      const ledger = await import('../platform/desktop/WalletLedgerService');
-      const addresses = await ledger.loadWalletAddressSet(walletId);
-      // Include quantumroot / subscription addresses from this pass
-      for (const a of pending) addresses.add(a);
-      const { applied } = await ledger.fetchAndApplyMissingTransactions(
-        walletId,
-        addresses,
-        { limit: 80 }
-      );
-      if (applied > 0) {
-        await ledger.rebuildUtxosFromLedger(walletId);
+    // Option A raw-tx → txi/txo: never block Sync/open on this. Fetching dozens
+    // of raw hexes held the history-refresh lock and froze Manual Sync at 55%
+    // for minutes while the user waited on a joined background pass.
+    const pendingSnapshot = [...pending];
+    void (async () => {
+      try {
+        const ledger = await import('../platform/desktop/WalletLedgerService');
+        const addrSet = await ledger.loadWalletAddressSet(walletId);
+        for (const a of pendingSnapshot) addrSet.add(a);
+        const { applied } = await ledger.fetchAndApplyMissingTransactions(
+          walletId,
+          addrSet,
+          { limit: 24 }
+        );
+        if (applied > 0) {
+          await ledger.rebuildUtxosFromLedger(walletId);
+        }
+      } catch {
+        /* ledger optional */
       }
-    } catch {
-      /* ledger optional */
-    }
+    })();
 
     await runOutboundReconcile(walletId, () =>
       reconcileOutboundTransactions(walletId)
     );
     onProgress?.(100);
-  });
+  };
+
+  if (force) {
+    // Manual Sync: exclusive pass with our onProgress (see coordinator).
+    onProgress?.(2);
+    await runWalletHistoryRefreshExclusive(walletId, runBody);
+  } else {
+    await runWalletHistoryRefresh(walletId, runBody);
+  }
 
   return { scannedAddresses, refreshed };
 }

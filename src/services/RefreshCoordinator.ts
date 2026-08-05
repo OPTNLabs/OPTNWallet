@@ -58,10 +58,28 @@ export async function waitForWalletHistoryRefresh(
   walletId: number | null | undefined,
   options: { resetCooldown?: boolean } = {}
 ): Promise<void> {
-  const key = taskKey('history-refresh', walletId);
-  const inflight = inFlightByKey.get(key);
-  if (inflight) await inflight.catch(() => undefined);
-  if (options.resetCooldown) recentFinishedAtByKey.delete(key);
+  // Background auto-refresh and user Manual Sync use separate scopes so a
+  // user force never joins a silent background pass (55% freeze).
+  for (const scope of ['history-refresh', 'history-refresh-user'] as const) {
+    const key = taskKey(scope, walletId);
+    const inflight = inFlightByKey.get(key);
+    if (inflight) await inflight.catch(() => undefined);
+    if (options.resetCooldown) recentFinishedAtByKey.delete(key);
+  }
+}
+
+/**
+ * User-initiated history refresh (Manual Sync / Rebuild).
+ *
+ * Separate scope from background `history-refresh` so we never join a silent
+ * open/subscription pass (no onProgress → bar stuck at 55% for minutes) and
+ * so we always run after statuses were cleared for a true force recheck.
+ */
+export async function runWalletHistoryRefreshExclusive<T>(
+  walletId: number | null | undefined,
+  task: WalletTask<T>
+): Promise<T> {
+  return runWalletTask('history-refresh-user', walletId, task, 0);
 }
 
 export function runWalletUtxoRefresh<T>(
