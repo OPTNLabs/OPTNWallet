@@ -16,11 +16,21 @@ import { QRCodeSVG } from 'qrcode.react';
 
 import WalletScreen from '../../components/ui/WalletScreen';
 import { selectWalletId } from '../../state/slices/walletSlice';
+import type { RootState } from '../../state/store';
 import type { UTXO } from '../../types/types';
 import KeyService from '../../services/KeyService';
 import UTXOService from '../../services/UTXOService';
 import TransactionService from '../../services/TransactionService';
 import WalletManager from '../../apis/WalletManager/WalletManager';
+import useSharedTokenMetadata from '../../hooks/useSharedTokenMetadata';
+import {
+  buildNftCardModels,
+  summarizeNftInstances,
+  type NftCardMetadata,
+  type NftCardModel,
+} from '../../pages/assetsTokenInventory';
+import { resolveParyonNftParseInfo } from '../../services/paryon/nftRegistry';
+import type { NftParseInfo } from '../../services/nftParsing/nftParsing';
 
 import {
   buildWatchOnlyPsbt,
@@ -121,6 +131,52 @@ export const WatchOnlySend: FC = () => {
     const fromReturnTo = locationState?.returnTo?.split('/').pop();
     return fromReturnTo ? Number(fromReturnTo) : null;
   }, [walletId, locationState]);
+
+  const currentNetwork = useSelector(
+    (state: RootState) => state.network.currentNetwork
+  );
+
+  const nftCategories = useMemo(() => {
+    const categories = new Set<string>();
+    for (const input of inputs) {
+      const category = input.utxo.token?.category;
+      if (input.utxo.token?.nft && category) categories.add(category);
+    }
+    return Array.from(categories);
+  }, [inputs]);
+
+  const tokenMetadata = useSharedTokenMetadata(nftCategories);
+
+  const nftCardsByOutpoint = useMemo(() => {
+    const instances = summarizeNftInstances(inputs.map((input) => input.utxo));
+    if (instances.length === 0) return new Map<string, NftCardModel>();
+
+    const metadataByCategory: Record<string, NftCardMetadata> = {};
+    for (const instance of instances) {
+      const metadata = tokenMetadata[instance.category];
+      if (metadata && !metadataByCategory[instance.category]) {
+        metadataByCategory[instance.category] = {
+          symbol: metadata.symbol ?? '',
+          nfts: metadata.snapshot?.token?.nfts,
+        };
+      }
+    }
+
+    const familyParseInfoByCategory: Record<string, NftParseInfo> = {};
+    for (const instance of instances) {
+      if (metadataByCategory[instance.category]?.nfts) continue;
+      const info = resolveParyonNftParseInfo(currentNetwork, instance.category);
+      if (info) familyParseInfoByCategory[instance.category] = info;
+    }
+
+    return new Map(
+      buildNftCardModels(
+        instances,
+        metadataByCategory,
+        familyParseInfoByCategory
+      ).map((card) => [card.outpoint, card])
+    );
+  }, [inputs, tokenMetadata, currentNetwork]);
 
   useEffect(() => {
     let cancelled = false;
@@ -451,6 +507,31 @@ export const WatchOnlySend: FC = () => {
                               {input.branchIndex === 1 ? 'change' : 'receive'}#
                               {input.addressIndex}
                             </span>
+                            {(() => {
+                              const card = nftCardsByOutpoint.get(key);
+                              if (!card) return null;
+                              return (
+                                <span className="mt-1 block rounded border border-[var(--wallet-border)] bg-black/20 px-1.5 py-1">
+                                  <span className="block truncate text-[11px] font-semibold wallet-text-strong">
+                                    {card.primaryLabel}
+                                  </span>
+                                  {card.fields.length > 0 ? (
+                                    <span className="block truncate text-[10px] wallet-muted">
+                                      {card.fields
+                                        .slice(0, 3)
+                                        .map(
+                                          (field) =>
+                                            `${field.name ?? field.fieldId ?? 'field'}: ${
+                                              field.parsedValue?.formatted ??
+                                              field.value
+                                            }`
+                                        )
+                                        .join(' · ')}
+                                    </span>
+                                  ) : null}
+                                </span>
+                              );
+                            })()}
                           </span>
                         </label>
                       );
