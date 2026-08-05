@@ -2,6 +2,8 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const reconcile = vi.fn();
 vi.mock('../../../services/WalletUtxoRefreshService', () => ({
+  // Fusion uses the exclusive spend path so background joins cannot soft-fail.
+  reconcileActiveWalletUtxosForSpend: (...a: unknown[]) => reconcile(...a),
   reconcileActiveWalletUtxos: (...a: unknown[]) => reconcile(...a),
 }));
 

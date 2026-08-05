@@ -43,8 +43,11 @@ export function createNostrRoundTransport(
   const protocolErrorHandlers = new Set<(from: string, error: Error) => void>();
   return {
     send: async (toPubkey, msg) => {
-      // Outputs are sealed by a throwaway key (unlinkable); all else by the round key.
-      const isAnonymousOutput = msg.type === 'outputs';
+      // Outputs (plain or onion) are sealed by a throwaway key so the recipient
+      // cannot tie them to our round identity. onion_output was previously
+      // signed with the round key, undoing the unlinkability onion bought.
+      const isAnonymousOutput =
+        msg.type === 'outputs' || msg.type === 'onion_output';
       const signer = isAnonymousOutput ? generateSecretKey() : round.secretKey;
       try {
         const wrapped = wrapEvent(

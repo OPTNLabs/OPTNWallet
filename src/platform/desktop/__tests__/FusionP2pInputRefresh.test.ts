@@ -17,6 +17,7 @@ vi.mock('../../../services/ElectrumService', () => ({
 }));
 
 vi.mock('../../../services/WalletUtxoRefreshService', () => ({
+  reconcileActiveWalletUtxosForSpend: reconcileActiveWalletUtxosMock,
   reconcileActiveWalletUtxos: reconcileActiveWalletUtxosMock,
 }));
 
