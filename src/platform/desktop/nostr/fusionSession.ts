@@ -661,6 +661,7 @@ export function runFusionRound(
   transport: RoundTransport
 ): Promise<RoundResult> {
   const participants = [...new Set(params.participants)];
+  // Production gather enforces ≥3; unit tests may still exercise 2-party direct.
   if (participants.length < 2 || !participants.includes(params.myPubkey)) {
     return Promise.reject(new Error('invalid Fusion participant set'));
   }
