@@ -491,7 +491,11 @@ export async function runP2pFusion(
     stopPool = null;
     const group = selectFusionGroup(fresh, MIN_PARTICIPANTS, MAX_PARTICIPANTS);
     if (!group || !group.participants.includes(round.pubkey)) {
-      throw new Error('No compatible P2P Fusion group formed in this epoch.');
+      throw new Error(
+        `No P2P peers found (only ${fresh.length} announcement(s); need ≥2 wallets ` +
+          `on ${network} with Tor + P2P on, starting around the same time). ` +
+          `Open a second chipnet wallet and Start P2P on both.`
+      );
     }
 
     const transport = createNostrRoundTransport(

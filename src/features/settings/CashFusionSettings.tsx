@@ -69,9 +69,9 @@ function describeFusionOutcome(outcome: FusionRunOutcome): string {
         : `Fused ✓ — txid ${outcome.txid}`;
     case 'busy':
       return (
-        'A fusion lock is held for this wallet (another window, or a stuck ' +
-        'attempt after crash/reload). If nothing is fusing, wait ~90s or use ' +
-        '“Clear stuck fusion” below.'
+        'Fusion lock held. If the button is grey and nothing is running, tap ' +
+        '“Clear stuck fusion lock” then Start again. (Live rounds in another ' +
+        'window of this same wallet also block.)'
       );
     case 'waiting-for-wallet':
       // Not an error: the wallet is mid-refresh. Falling back to the cached coin

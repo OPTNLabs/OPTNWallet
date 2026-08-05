@@ -38,9 +38,9 @@ export const LEASE_TTL_MS = 4 * 60_000;
  * acquire reclaims the lock. This is what fixes "already running" with a grey
  * idle UI after a stuck attempt.
  */
-export const LEASE_STALE_MS = 90_000;
+export const LEASE_STALE_MS = 45_000;
 /** How often the holding window must refresh the durable lease. */
-export const LEASE_HEARTBEAT_MS = 20_000;
+export const LEASE_HEARTBEAT_MS = 12_000;
 
 interface LeaseRecord {
   owner: string;
@@ -209,47 +209,94 @@ export function hasLiveRoundLease(
 }
 
 /**
- * Atomically decide whether an automatic round may start, and claim the slot in
- * the same critical section.
- *
- * Check and claim must not be separable. Checking, doing network I/O, then
- * claiming lets a second window pass the check during that I/O window and pay a
- * second fee. Returns false — fail closed — when exclusivity is unavailable.
+ * Cooldown record: when the next auto attempt is allowed (`nextAllowedAt`).
+ * Legacy records only had `{ attempt }` (last start time) — treat those as
+ * nextAllowedAt = attempt + 90s so we do not keep a 5‑minute death-sentence
+ * from failed P2P "no peers" stamps.
+ */
+type CooldownRecord = {
+  nextAllowedAt?: number;
+  /** @deprecated legacy last-start stamp */
+  attempt?: number;
+};
+
+function readNextAllowedAt(walletId: number): number | null {
+  const record = readJson<CooldownRecord>(`${COOLDOWN_PREFIX}${walletId}`);
+  if (!record) return null;
+  if (typeof record.nextAllowedAt === 'number' && Number.isFinite(record.nextAllowedAt)) {
+    return record.nextAllowedAt;
+  }
+  // Legacy: failed rounds stamped `attempt=now` then enforced 5 min. Cap the
+  // residual wait at 90s so autofuse recovers after upgrades.
+  if (typeof record.attempt === 'number' && Number.isFinite(record.attempt)) {
+    return record.attempt + 90_000;
+  }
+  return null;
+}
+
+/**
+ * Atomically decide whether an automatic round may start.
+ * Reserves a short mutual-exclusion window so two windows do not both start;
+ * the final nextAllowedAt is set after the outcome (success vs failure).
  */
 export async function tryClaimAutoCooldown(
   walletId: number,
-  cooldownMs: number,
+  _cooldownMs: number,
   nowMs = Date.now()
 ): Promise<boolean> {
   const key = `${COOLDOWN_PREFIX}${walletId}`;
   const result = await withWalletLock(walletId, () => {
-    const previous = readJson<{ attempt: number }>(key);
-    const last = typeof previous?.attempt === 'number' ? previous.attempt : null;
-    // A clock that moved backwards must read as "not yet", never as "elapsed".
-    if (last !== null && nowMs - last < cooldownMs) return false;
-    writeJson(key, { attempt: nowMs });
+    const next = readNextAllowedAt(walletId);
+    if (next !== null && nowMs < next) return false;
+    // Soft hold: block other windows for 90s until outcome stamps the real wait.
+    writeJson(key, { nextAllowedAt: nowMs + 90_000, attempt: nowMs });
     return true;
   });
   return result.ran ? result.value : false;
 }
 
+/** After a successful paid fuse — full spacing. */
+export async function stampAutoSuccess(
+  walletId: number,
+  cooldownMs: number,
+  nowMs = Date.now()
+): Promise<void> {
+  const key = `${COOLDOWN_PREFIX}${walletId}`;
+  await withWalletLock(walletId, () => {
+    writeJson(key, { nextAllowedAt: nowMs + cooldownMs, attempt: nowMs });
+  });
+}
+
+/** After a failed auto attempt (no fee spent) — short retry backoff. */
+export async function stampAutoFailure(
+  walletId: number,
+  backoffMs: number,
+  nowMs = Date.now()
+): Promise<void> {
+  const key = `${COOLDOWN_PREFIX}${walletId}`;
+  await withWalletLock(walletId, () => {
+    writeJson(key, { nextAllowedAt: nowMs + backoffMs, attempt: nowMs });
+  });
+}
+
 /** Read-only view, for status text. Never gates spending on its own. */
 export function lastAutoAttemptAt(walletId: number): number | null {
-  const record = readJson<{ attempt: number }>(`${COOLDOWN_PREFIX}${walletId}`);
-  return typeof record?.attempt === 'number' ? record.attempt : null;
+  const record = readJson<CooldownRecord>(`${COOLDOWN_PREFIX}${walletId}`);
+  if (!record) return null;
+  if (typeof record.attempt === 'number') return record.attempt;
+  if (typeof record.nextAllowedAt === 'number') return record.nextAllowedAt;
+  return null;
 }
 
 /**
  * Cheap advisory check used before expensive wallet/network reconciliation.
- * The atomic claim below remains authoritative before a round may spend fees.
  */
 export function isAutoCooldownReady(
   walletId: number,
-  cooldownMs: number,
+  _cooldownMs: number,
   nowMs = Date.now()
 ): boolean {
-  const last = lastAutoAttemptAt(walletId);
-  if (last === null) return true;
-  const elapsed = nowMs - last;
-  return elapsed >= 0 && elapsed >= cooldownMs;
+  const next = readNextAllowedAt(walletId);
+  if (next === null) return true;
+  return nowMs >= next;
 }

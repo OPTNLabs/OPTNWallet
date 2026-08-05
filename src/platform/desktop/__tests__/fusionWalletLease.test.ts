@@ -133,9 +133,11 @@ describe('atomic auto-fusion cooldown claim', () => {
     expect([a, b].filter(Boolean)).toHaveLength(1);
   });
 
-  it('refuses again until the cooldown has fully elapsed', async () => {
+  it('refuses again until nextAllowedAt elapses', async () => {
+    const { stampAutoSuccess } = await import('../fusionWalletLease');
     const t0 = 1_000_000;
     expect(await tryClaimAutoCooldown(7, COOLDOWN, t0)).toBe(true);
+    await stampAutoSuccess(7, COOLDOWN, t0);
     expect(await tryClaimAutoCooldown(7, COOLDOWN, t0 + COOLDOWN - 1)).toBe(false);
     expect(await tryClaimAutoCooldown(7, COOLDOWN, t0 + COOLDOWN)).toBe(true);
   });
@@ -149,7 +151,7 @@ describe('atomic auto-fusion cooldown claim', () => {
   it('claims durably, so a reload cannot reset the fee ceiling', async () => {
     const t0 = 1_000_000;
     await tryClaimAutoCooldown(7, COOLDOWN, t0);
-    // Same storage, brand new "window": the stamp must still be visible.
+    // Same storage, brand new "window": the soft hold must still be visible.
     installLocks();
     expect(await tryClaimAutoCooldown(7, COOLDOWN, t0 + 1_000)).toBe(false);
     expect(lastAutoAttemptAt(7)).toBe(t0);
@@ -159,5 +161,15 @@ describe('atomic auto-fusion cooldown claim', () => {
     const t0 = 1_000_000;
     expect(await tryClaimAutoCooldown(7, COOLDOWN, t0)).toBe(true);
     expect(await tryClaimAutoCooldown(8, COOLDOWN, t0)).toBe(true);
+  });
+
+  it('short failure backoff does not enforce the full 5-minute gap', async () => {
+    const { stampAutoFailure, isAutoCooldownReady } = await import(
+      '../fusionWalletLease'
+    );
+    const t0 = 1_000_000;
+    await stampAutoFailure(7, 90_000, t0);
+    expect(isAutoCooldownReady(7, COOLDOWN, t0 + 90_000)).toBe(true);
+    expect(isAutoCooldownReady(7, COOLDOWN, t0 + 89_000)).toBe(false);
   });
 });

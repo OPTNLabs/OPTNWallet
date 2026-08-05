@@ -116,6 +116,36 @@ export async function resolveFusionTransport(
         tor: { host: settings.host, port: managed.socks_port },
       };
     }
+    // Integrated Tor is mid-bootstrap: wait rather than falling through to
+    // "unavailable" (that made P2P look permanently broken while Tor was
+    // still coming up).
+    if (
+      managed.socks_port > 0 &&
+      managed.bootstrap_percent > 0 &&
+      managed.bootstrap_percent < 100
+    ) {
+      try {
+        const socksPort = await startIntegratedTor();
+        if (
+          Number.isInteger(socksPort) &&
+          socksPort > 0 &&
+          socksPort <= 65_535
+        ) {
+          return {
+            type: 'tor',
+            tor: { host: settings.host, port: socksPort },
+          };
+        }
+      } catch (error) {
+        return {
+          type: 'unavailable',
+          reason:
+            error instanceof Error
+              ? error.message
+              : 'Tor is still bootstrapping — try again in a moment.',
+        };
+      }
+    }
   } catch {
     // The integrated process is optional. Continue to the configured external
     // Tor route instead of turning one status-query failure into a privacy
@@ -136,13 +166,20 @@ export async function resolveFusionTransport(
         if (Number.isInteger(socksPort) && socksPort > 0 && socksPort <= 65_535) {
           return { type: 'tor', tor: { host: settings.host, port: socksPort } };
         }
-      } catch {
-        // Integrated Tor failed to start — fall through to unavailable.
+      } catch (error) {
+        return {
+          type: 'unavailable',
+          reason:
+            error instanceof Error
+              ? error.message
+              : 'Could not start integrated Tor.',
+        };
       }
     }
     return {
       type: 'unavailable',
-      reason: 'No verified Tor proxy was detected on ports 9050 or 9150.',
+      reason:
+        'No Tor proxy ready (integrated bootstrap unfinished, and ports 9050/9150 empty).',
     };
   }
 
