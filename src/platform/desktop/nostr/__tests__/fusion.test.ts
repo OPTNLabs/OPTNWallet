@@ -64,8 +64,13 @@ describe('P2P fusion coordination', () => {
     });
     expect(evt.kind).toBe(POOL_ANNOUNCE_KIND);
     expect(evt.pubkey).toBe(round.pubkey); // signed by the throwaway key, not the wallet
-    expect(evt.tags).toContainEqual(['t', poolTag('chipnet', epoch)]);
+    expect(evt.tags).toContainEqual(['t', poolTag('chipnet')]);
     expect(evt.tags).toContainEqual(['n', 'chipnet']);
+    // NIP-40 so relays can drop us after TTL (content expiresAt alone is not enough).
+    expect(evt.tags).toContainEqual([
+      'expiration',
+      String(now + 180),
+    ]);
     expect(verifyEvent(evt)).toBe(true);
     const c = JSON.parse(evt.content);
     expect(c).toMatchObject({
