@@ -175,32 +175,17 @@ export async function refreshWalletTransactionHistory(
     onProgress?.(5);
 
     // Status-hash delta (EC/Selene): skip addresses whose local history status
-    // already matches the Electrum address state. Manual Sync clears statuses
-    // first so every address is re-fetched.
+    // already matches the Electrum address state. Addresses with no local
+    // status are dirty without a network probe (Manual Sync clears them first —
+    // probing all addresses there froze the bar while learning nothing).
     let toFetch = pending;
     try {
-      const Electrum = (await import('./ElectrumService')).default;
       const ledger = await import('../platform/desktop/WalletLedgerService');
-      const dirty: string[] = [];
-      const batchSize = 20;
-      for (let i = 0; i < pending.length; i += batchSize) {
-        const chunk = pending.slice(i, i + batchSize);
-        const states = await Promise.all(
-          chunk.map(async (address) => {
-            const remote = await Electrum.getAddressState(address);
-            const fresh = await ledger.addressHistoryIsFresh(
-              walletId,
-              address,
-              remote
-            );
-            return { address, fresh };
-          })
-        );
-        for (const s of states) {
-          if (!s.fresh) dirty.push(s.address);
-        }
-      }
-      toFetch = dirty;
+      const partition = await ledger.partitionAddressesByStatus(
+        walletId,
+        pending
+      );
+      toFetch = partition.dirty;
       onProgress?.(
         5 + Math.round(20 * (1 - toFetch.length / Math.max(pending.length, 1)))
       );
