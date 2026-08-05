@@ -975,7 +975,7 @@ function runParticipant(
       // it assembles, it does not peel. A local shadow used to rebuild the list
       // from `participants` unfiltered, so the wrapper added a layer addressed
       // to the coordinator that nobody in the peel chain could remove.
-      if (params.onionEnabled === true) {
+      if (params.onionEnabled !== false) {
         if (!isEccAvailable()) {
           throw new Error(
             'onion mix-net enabled but secp256k1 is unavailable in this environment'
@@ -1075,7 +1075,9 @@ function runCoordinator(
     const credentialedInputs = new Set<string>(
       params.myContribution.inputs.map(inputKey)
     );
-    const useOnionForOutputs = params.onionEnabled === true;
+    // Default ON: omitting the flag must not silently fall back to plaintext
+    // outputs. Only an explicit `onionEnabled: false` (tests) turns it off.
+    const useOnionForOutputs = params.onionEnabled !== false;
     // Direct mode (v1.7.0): pre-load coordinator outputs so the pool is never
     // empty while peers register. Onion mode starts empty and fills on reveal.
     if (
