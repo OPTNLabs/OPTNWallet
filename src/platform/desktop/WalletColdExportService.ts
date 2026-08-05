@@ -185,15 +185,20 @@ export function coldArchiveToJson(archive: ColdArchiveExport): string {
   return `${JSON.stringify(archive, null, 2)}\n`;
 }
 
-/** Trigger a browser/Tauri download of the archive JSON. */
+export function defaultColdArchiveFileName(archive: ColdArchiveExport): string {
+  return `optn-cold-archive-wallet${archive.walletId}-${archive.exportedAt.slice(0, 10)}.json`;
+}
+
+/**
+ * Browser fallback (non-Tauri): anchor download. In WebView2 this often does
+ * nothing visible — prefer saveColdArchiveWithDialog on desktop.
+ */
 export function downloadColdArchiveJson(
   archive: ColdArchiveExport,
   filename?: string
 ): void {
   const json = coldArchiveToJson(archive);
-  const name =
-    filename ??
-    `optn-cold-archive-wallet${archive.walletId}-${archive.exportedAt.slice(0, 10)}.json`;
+  const name = filename ?? defaultColdArchiveFileName(archive);
   const blob = new Blob([json], { type: 'application/json;charset=utf-8' });
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
@@ -206,10 +211,47 @@ export function downloadColdArchiveJson(
   URL.revokeObjectURL(url);
 }
 
+/**
+ * Desktop: native Save dialog + write to the path the user picks.
+ * Returns the full path, or null if cancelled.
+ */
+export async function saveColdArchiveWithDialog(
+  archive: ColdArchiveExport
+): Promise<string | null> {
+  const { save: saveDialog } = await import('@tauri-apps/plugin-dialog');
+  const { writeTextFile } = await import('@tauri-apps/plugin-fs');
+  const suggested = defaultColdArchiveFileName(archive);
+  const dest = await saveDialog({
+    title: 'Save cold archive',
+    defaultPath: suggested,
+    filters: [{ name: 'JSON archive', extensions: ['json'] }],
+  });
+  if (typeof dest !== 'string' || !dest) return null;
+  await writeTextFile(dest, coldArchiveToJson(archive));
+  return dest;
+}
+
+export type ColdExportResult = {
+  archive: ColdArchiveExport;
+  /** Full filesystem path when saved via dialog; null if cancelled / browser-only. */
+  savedPath: string | null;
+};
+
+/**
+ * Build archive and save it. On Tauri desktop: Save As dialog.
+ * Fallback: browser download (may be invisible in some WebViews).
+ */
 export async function exportAndDownloadColdArchive(
   walletId: number
-): Promise<ColdArchiveExport> {
+): Promise<ColdExportResult> {
   const archive = await buildColdArchive(walletId);
-  downloadColdArchiveJson(archive);
-  return archive;
+  try {
+    const savedPath = await saveColdArchiveWithDialog(archive);
+    return { archive, savedPath };
+  } catch (error) {
+    // Not running under Tauri, or dialog/fs unavailable.
+    logError('WalletColdExportService.saveDialog', error, { walletId });
+    downloadColdArchiveJson(archive);
+    return { archive, savedPath: null };
+  }
 }
