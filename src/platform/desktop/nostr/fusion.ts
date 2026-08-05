@@ -201,16 +201,19 @@ export function buildPoolAnnouncement(
   ) {
     throw new Error('P2P Fusion announcement has an invalid input count.');
   }
+  // Withdrawal: already-expired so peers drop us. Live: discoverable for TTL.
+  // Content + NIP-40 tag (relays that honor expiration can delete; clients that
+  // only read content still drop via parsePoolAnnouncement). Without the tag,
+  // abandoned Start keys stay on the relay forever (Claude: replaceable is per
+  // pubkey, and each Start mints a new key → no replacement, only accumulation).
+  const expiresAt = options.withdraw ? now - 1 : now + POOL_PEER_TTL_SECONDS;
   const content = JSON.stringify({
     protocol: FUSION_POOL_PROTOCOL,
     network: options.network,
     epoch: options.epoch, // informational only (rolling pool no longer filters on it)
     tiers,
     numInputs: options.numInputs,
-    // A withdrawal replaces our stored announcement with an expired one, so every
-    // peer's freshness check drops us at once instead of leaving a ghost that can
-    // win coordinator election and stall the next round.
-    expiresAt: options.withdraw ? now - 1 : now + POOL_PEER_TTL_SECONDS,
+    expiresAt,
   });
 
   return finalizeEvent(
@@ -221,6 +224,8 @@ export function buildPoolAnnouncement(
         ['t', poolTag(options.network)],
         ['n', options.network],
         ['v', String(FUSION_POOL_PROTOCOL)],
+        // NIP-40 — unix seconds as string
+        ['expiration', String(expiresAt)],
       ],
       content,
     },

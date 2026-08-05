@@ -16,6 +16,7 @@ import ElectrumService, {
   invalidateUTXOCache,
 } from '../../services/ElectrumService';
 import {
+  clearOutpointReservations,
   isOwnRoundKey,
   isRetiredRoundKey,
   outpointKey,
@@ -518,6 +519,10 @@ export async function runP2pFusion(
     // Kill orphan re-announce loops from a prior Start / Vite HMR in THIS window
     // before minting a new throwaway identity (ghost peer overcount).
     invalidateJoinPoolAnnouncers();
+    // Second Start after a successful/failed round: any stranded input locks
+    // from a crashed finally would make free coins look "all committed".
+    // A live concurrent lease should not leave us here (runner is exclusive).
+    clearOutpointReservations(opts.walletId);
     round = generateRoundIdentity();
     recordRoundKey(opts.walletId, round.pubkey);
     let peers: PoolAnnouncement[] = [
