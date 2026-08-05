@@ -31,12 +31,6 @@ vi.mock('../../platform/desktop/WalletLedgerService', () => ({
     clean: [],
     probed: 0,
   })),
-  loadWalletAddressSet: vi.fn(async () => new Set<string>()),
-  fetchAndApplyMissingTransactions: vi.fn(async () => ({
-    fetched: 0,
-    applied: 0,
-  })),
-  rebuildUtxosFromLedger: vi.fn(async () => 0),
 }));
 
 import { refreshWalletTransactionHistory } from '../WalletHistoryRefreshService';

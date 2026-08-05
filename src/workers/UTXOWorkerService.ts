@@ -473,9 +473,8 @@ export async function bootstrapAllUTXOs(expectedEpoch?: number) {
     report(20);
 
     const fetchStart = performance.now();
-    // force:true on open once: re-listunspent every known address so a wallet
-    // previously poisoned by ledger/external: heals without requiring the user
-    // to discover Manual Sync. Status gate still applies on background ticks.
+    // force:true on open once: full listunspent of known addresses (HOT heal).
+    // Background ticks use status gate (non-force).
     const fetchedWalletUTXOs = await UTXOService.fetchAndStoreUTXOsMany(
       currentWalletId,
       trackedAddresses,
