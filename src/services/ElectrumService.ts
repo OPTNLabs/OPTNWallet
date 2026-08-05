@@ -239,14 +239,27 @@ const ElectrumService = {
       });
     }
 
-    if (pendingCalls.length === 0) return results;
+    const cachedCount = uniqueAddresses.length - pending.length;
+    if (cachedCount > 0) {
+      onProgress?.(cachedCount, uniqueAddresses.length);
+    }
+    if (pendingCalls.length === 0) {
+      onProgress?.(uniqueAddresses.length, uniqueAddresses.length);
+      return results;
+    }
+
+    // Fire 0-progress immediately so callers (manual Sync) do not sit on a
+    // frozen phase marker while the first Electrum batch is in flight.
+    onProgress?.(cachedCount, uniqueAddresses.length);
 
     const batchPromise = (async () => {
       try {
         const batchResults = await requestManyInChunks(
           server,
           pendingCalls,
-          onProgress
+          (done) => {
+            onProgress?.(cachedCount + done, uniqueAddresses.length);
+          }
         );
         await Promise.all(batchResults.map(async (response, index) => {
           const address = pending[index];

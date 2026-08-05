@@ -294,6 +294,10 @@ const UTXOService = {
       );
       if (uniqueAddresses.length === 0) return {};
 
+      // Mark entry into the UTXO network phase immediately (manual Sync was
+      // stuck on a phase marker until the first Electrum chunk completed).
+      options.onProgress?.(0, uniqueAddresses.length);
+
       const existingSnapshot = await manager.fetchUTXOsFromDatabase(
         uniqueAddresses.map((address) => ({ address })),
         walletId

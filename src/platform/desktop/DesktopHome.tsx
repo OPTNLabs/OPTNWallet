@@ -25,13 +25,11 @@ import WalletScreen from '../../components/ui/WalletScreen';
 import PriceFeed from '../../components/PriceFeed';
 import DatabaseService from '../../apis/DatabaseManager/DatabaseService';
 import ElectrumService from '../../services/ElectrumService';
-import { runWalletUtxoRefresh } from '../../services/RefreshCoordinator';
 import {
   captureActiveWalletSession,
   fetchActiveWalletUtxos,
   isActiveWalletSession,
 } from '../../services/WalletUtxoRefreshService';
-import { refreshUTXOWorkerSubscriptions } from '../../workers/UTXOWorkerService';
 import { logError } from '../../utils/errorHandling';
 import { refreshWalletTransactionHistory } from '../../services/WalletHistoryRefreshService';
 import { Network } from '../../state/slices/networkSlice';
@@ -187,27 +185,35 @@ const Home: React.FC = () => {
     try {
       // Same network path as open-bootstrap for balances: scripthash batches,
       // no second BIP44 rediscovery (open already expanded the key set).
-      // History still runs so Recent Activity updates — that was the missing
-      // piece on open-only balance refresh, but it must not re-do discovery.
+      //
+      // Do NOT use runWalletUtxoRefresh here. That coordinator joins any
+      // in-flight background reconcile (subscriptions / block tip), which has
+      // no onProgress and often still runs discovery — so the UI froze at 8%
+      // for a minute while we waited on someone else's task. Manual Sync is
+      // user-initiated: run our own fast path only.
+      reportSyncProgress(5);
       await ElectrumService.ensureFreshConnection();
       if (!isActiveWalletSession(walletSession)) return;
-      reportSyncProgress(8);
+      reportSyncProgress(10);
 
-      await runWalletUtxoRefresh(currentWalletId, async () => {
-        if (!isActiveWalletSession(walletSession)) return;
-        const walletUtxos = await fetchActiveWalletUtxos(
-          walletSession,
-          undefined,
-          {
-            discover: false,
-            onProgress: (done, total) => {
-              if (total <= 0) return;
-              // 8–55% = UTXO batches
-              reportSyncProgress(8 + Math.round(47 * (done / total)));
-            },
-          }
-        );
-        if (!walletUtxos) return;
+      if (!isActiveWalletSession(walletSession)) return;
+      const walletUtxos = await fetchActiveWalletUtxos(
+        walletSession,
+        undefined,
+        {
+          discover: false,
+          onProgress: (done, total) => {
+            if (total <= 0) {
+              reportSyncProgress(12);
+              return;
+            }
+            // 12–55% = UTXO batches (include 0/N so the bar moves before the
+            // first Electrum chunk returns).
+            reportSyncProgress(12 + Math.round(43 * (done / total)));
+          },
+        }
+      );
+      if (walletUtxos) {
         dispatch(replaceAllUTXOs({ utxosByAddress: walletUtxos }));
         dbService.scheduleDatabaseSave(currentWalletId);
         dispatch(setInitialized(true));
@@ -222,10 +228,7 @@ const Home: React.FC = () => {
         if (refreshedCategories.length > 0) {
           void preloadTokenMetadata(refreshedCategories);
         }
-        // Subscriptions already established on open; a full re-subscribe was
-        // another multi-second tax on every manual Sync click.
-        void refreshUTXOWorkerSubscriptions();
-      });
+      }
       reportSyncProgress(55);
 
       // Sync means the whole wallet, not just its coins. Refreshing UTXOs alone
