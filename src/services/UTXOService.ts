@@ -311,6 +311,22 @@ const UTXOService = {
       // stuck on a phase marker until the first Electrum chunk completed).
       options.onProgress?.(0, uniqueAddresses.length);
 
+      const walletWide = uniqueAddresses.length > 1 || options.force === true;
+
+      // Heal sticky external: spends BEFORE reading the SQL snapshot / status
+      // gate. History status can stay "clean" while UTXOs were wiped by a bad
+      // rebuild (wallet 5). Clearing synthetic txi + projecting ledger restores
+      // coins without waiting for Manual Sync / Rebuild.
+      if (walletWide) {
+        try {
+          const ledger = await import('../platform/desktop/WalletLedgerService');
+          await ledger.clearSyntheticExternalSpends(walletId);
+          await ledger.rebuildUtxosFromLedger(walletId);
+        } catch {
+          /* ledger optional */
+        }
+      }
+
       const existingSnapshot = await manager.fetchUTXOsFromDatabase(
         uniqueAddresses.map((address) => ({ address })),
         walletId
@@ -328,17 +344,30 @@ const UTXOService = {
             walletId,
             uniqueAddresses
           );
-          addressesToFetch = partition.dirty;
-          // Intentionally no per-tick console.info. Single-address clean ticks
-          // used to flood DevTools (total:1 clean:1). Log only large dirty batches.
+          addressesToFetch = [...partition.dirty];
+          // History status clean but SQL empty + non-empty history status =
+          // corrupted cache (status didn't change when we falsely spent coins).
+          // Force listunspent for those addresses.
+          const statusMap = await ledger.getAddressHistoryStatusMap(walletId);
+          for (const address of partition.clean) {
+            const n =
+              (existingSnapshot.utxosMap[address]?.length ?? 0) +
+              (existingSnapshot.cashTokenUtxosMap[address]?.length ?? 0);
+            if (n > 0) continue;
+            const st = statusMap.get(address);
+            if (st != null && st !== ledger.EMPTY_HISTORY_STATUS) {
+              addressesToFetch.push(address);
+            }
+          }
+          addressesToFetch = Array.from(new Set(addressesToFetch));
           if (
             uniqueAddresses.length >= 20 &&
-            partition.dirty.length > 0
+            addressesToFetch.length > 0
           ) {
             console.info('[UTXOService] status-hash gate', {
               total: uniqueAddresses.length,
-              dirty: partition.dirty.length,
-              clean: partition.clean.length,
+              dirty: addressesToFetch.length,
+              clean: uniqueAddresses.length - addressesToFetch.length,
               probed: partition.probed,
             });
           }
