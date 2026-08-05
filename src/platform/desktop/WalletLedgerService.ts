@@ -136,21 +136,36 @@ export type AddressUtxoSnapshot = {
   }>;
 };
 
+export type ApplyAddressUtxoSnapshotOptions = {
+  /**
+   * When true (Manual Sync / force only): local unspents missing from remote
+   * are marked spent via synthetic `external:` txi.
+   *
+   * When false (open / background / subscription): only upsert remote coins
+   * and clear sticky external: when a coin reappears. Never invent spends.
+   * Partial or empty listunspent on non-force was the wallet-5 re-corrupt path
+   * (good Manual Sync → minutes later fake low).
+   */
+  allowMarkSyntheticSpends?: boolean;
+};
+
 /**
  * Apply a listunspent snapshot for one address into the ledger.
- * Design (Option A): network listunspent is the authority for this address's
- * unspent set for this pass.
- * - Registers each unspent as ledger_txo
- * - Marks local coins for this address that vanished as spent (synthetic
- *   `external:` txi) so rebuildUtxosFromLedger matches the network set
- * - CRITICAL: if a prior pass wrote `external:` spends and listunspent now
- *   shows those outpoints again, CLEAR those synthetic txi rows. Without
- *   this, coins stay "spent" in the ledger forever → fake low / missing
- *   balance after a bad empty snapshot or race.
+ *
+ * Always:
+ * - Registers each remote unspent as ledger_txo
+ * - Clears synthetic `external:` txi when remote shows the outpoint again
+ *
+ * Only when `allowMarkSyntheticSpends` (force/Manual Sync):
+ * - Marks local unspents missing from remote as `external:` spent
+ *
+ * Background must not mark spends: Electrum can return a partial set; EC
+ * records spends from raw txs, not from incomplete listunspent diffs.
  */
 export async function applyAddressUtxoSnapshot(
   walletId: number,
-  snapshot: AddressUtxoSnapshot
+  snapshot: AddressUtxoSnapshot,
+  options: ApplyAddressUtxoSnapshotOptions = {}
 ): Promise<void> {
   await ensureDesktopLedgerTables();
   const dbService = DatabaseService();
@@ -159,6 +174,7 @@ export async function applyAddressUtxoSnapshot(
   if (!db) return;
 
   const { address, utxos } = snapshot;
+  const allowMarkSyntheticSpends = options.allowMarkSyntheticSpends === true;
   const remoteKeys = new Set(
     utxos.map((u) => `${u.tx_hash}:${u.tx_pos}`)
   );
@@ -230,23 +246,36 @@ export async function applyAddressUtxoSnapshot(
     }
     clearExternalSpend.free();
 
-    // External spend (or spent in another wallet copy): mark gone outpoints spent
-    const insertTxi = db.prepare(`
-      INSERT OR IGNORE INTO ledger_txi
-        (wallet_id, spent_by_tx, prevout_hash, prevout_n, address, value)
-      VALUES (?, ?, ?, ?, ?, ?)
-    `);
-    for (const spent of toSpend) {
-      insertTxi.run([
-        walletId,
-        `external:${spent.tx_hash}:${spent.tx_pos}`,
-        spent.tx_hash,
-        spent.tx_pos,
-        address,
-        spent.value,
-      ]);
+    // Synthetic spends: Manual Sync / force only. Background partial listunspent
+    // was marking real coins external: → fake low after a good Manual Sync.
+    if (allowMarkSyntheticSpends && toSpend.length > 0) {
+      const insertTxi = db.prepare(`
+        INSERT OR IGNORE INTO ledger_txi
+          (wallet_id, spent_by_tx, prevout_hash, prevout_n, address, value)
+        VALUES (?, ?, ?, ?, ?, ?)
+      `);
+      for (const spent of toSpend) {
+        insertTxi.run([
+          walletId,
+          `external:${spent.tx_hash}:${spent.tx_pos}`,
+          spent.tx_hash,
+          spent.tx_pos,
+          address,
+          spent.value,
+        ]);
+      }
+      insertTxi.free();
+    } else if (toSpend.length > 0 && !allowMarkSyntheticSpends) {
+      console.info(
+        '[WalletLedger] skip synthetic external spends (non-force)',
+        {
+          walletId,
+          address,
+          missingFromRemote: toSpend.length,
+          remoteCount: utxos.length,
+        }
+      );
     }
-    insertTxi.free();
 
     db.exec('COMMIT');
   } catch (error) {
