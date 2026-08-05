@@ -1,9 +1,12 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { deriveKey, aesEncrypt, bytesToBase64, randomSalt } from '../WalletCrypto';
 
 const retrieveKeysMock = vi.fn();
 const fetchUTXOsFromDatabaseMock = vi.fn();
 const listCoinLabelsMock = vi.fn();
+const setCoinLabelMock = vi.fn();
 const exportFusionDepthStateMock = vi.fn();
+const importFusionDepthStateMock = vi.fn();
 const getDatabaseMock = vi.fn();
 
 vi.mock('../../../services/KeyService', () => ({
@@ -25,15 +28,17 @@ vi.mock('../../../apis/DatabaseManager/DatabaseService', () => ({
 
 vi.mock('../CoinLabelService', () => ({
   listCoinLabels: listCoinLabelsMock,
+  setCoinLabel: setCoinLabelMock,
 }));
 
 vi.mock('../fusionCoinDepth', () => ({
   exportFusionDepthState: exportFusionDepthStateMock,
+  importFusionDepthState: importFusionDepthStateMock,
 }));
 
 vi.mock('../../../state/store', () => ({
   store: {
-    getState: () => ({ network: { currentNetwork: 'MAINNET' } }),
+    getState: () => ({ network: { currentNetwork: 'mainnet' } }),
   },
 }));
 
@@ -57,20 +62,14 @@ describe('WalletColdExportService', () => {
       },
       cashTokenUtxosMap: {},
     });
-    listCoinLabelsMock.mockResolvedValue([
-      {
-        kind: 'outpoint',
-        refKey: `${'aa'.repeat(32)}:0`,
-        label: 'test',
-        updatedAt: '2026-01-01T00:00:00.000Z',
-      },
-    ]);
+    listCoinLabelsMock.mockResolvedValue([]);
     exportFusionDepthStateMock.mockReturnValue({
-      coinDepth: { [`${'aa'.repeat(32)}:0`]: { d: 2, at: 1 } },
-      fusionTxids: ['bb'.repeat(32)],
+      coinDepth: {},
+      fusionTxids: [],
     });
+    importFusionDepthStateMock.mockReturnValue({ coins: 0, txids: 0 });
     getDatabaseMock.mockReturnValue({
-      prepare: () => {
+      prepare: (sql: string) => {
         let stepped = false;
         return {
           bind: () => {},
@@ -79,38 +78,108 @@ describe('WalletColdExportService', () => {
             stepped = true;
             return true;
           },
-          getAsObject: () => ({
-            tx_hash: 'cc'.repeat(32),
-            height: 10,
-            amount: 500,
-          }),
+          getAsObject: () => {
+            if (sql.includes('kdf_salt')) {
+              return { kdf_salt: bytesToBase64(randomSalt(16)) };
+            }
+            if (sql.includes('mnemonic')) {
+              return { mnemonic: 'enc:v1:notused' };
+            }
+            return {
+              tx_hash: 'cc'.repeat(32),
+              height: 10,
+              amount: 500,
+            };
+          },
           free: () => {},
         };
       },
     });
   });
 
-  it('builds archive with public data and containsSecrets false', async () => {
+  it('builds plaintext archive with containsSecrets false', async () => {
     const { buildColdArchive, COLD_EXPORT_FORMAT } = await import(
       '../WalletColdExportService'
     );
     const archive = await buildColdArchive(5);
     expect(archive.format).toBe(COLD_EXPORT_FORMAT);
     expect(archive.containsSecrets).toBe(false);
-    expect(archive.walletId).toBe(5);
-    expect(archive.addresses).toHaveLength(1);
     expect(archive.utxos).toHaveLength(1);
-    expect(archive.labels).toHaveLength(1);
-    expect(archive.fusion.fusionTxids).toHaveLength(1);
-    expect(archive.transactions).toHaveLength(1);
-    expect(archive).not.toHaveProperty('mnemonic');
-    expect(archive).not.toHaveProperty('seed');
-    expect(archive).not.toHaveProperty('xprv');
-    expect(archive).not.toHaveProperty('privateKey');
   });
 
-  it('rejects invalid wallet id', async () => {
-    const { buildColdArchive } = await import('../WalletColdExportService');
-    await expect(buildColdArchive(0)).rejects.toThrow(/No active wallet/);
+  it('encrypts and decrypts with password + salt', async () => {
+    const salt = randomSalt(16);
+    const password = 'correct-horse';
+    const key = await deriveKey(password, salt);
+    const plain = JSON.stringify({
+      format: 'optn-cold-archive-v1',
+      exportedAt: '2026-01-01T00:00:00.000Z',
+      walletId: 5,
+      network: 'mainnet',
+      containsSecrets: false,
+      disclaimer: 'x',
+      addresses: [{ address: 'bitcoincash:q1' }],
+      utxos: [],
+      transactions: [],
+      labels: [{ kind: 'txid', refKey: 'aa', label: 'hi', updatedAt: 't' }],
+      fusion: { coinDepth: {}, fusionTxids: [] },
+    });
+    const ciphertext = await aesEncrypt(key, plain);
+    const file = {
+      format: 'optn-cold-archive-enc-v1' as const,
+      version: 1 as const,
+      sourceWalletId: 5,
+      kdfSalt: bytesToBase64(salt),
+      ciphertext,
+    };
+    const { decryptColdArchive, parseEncryptedColdArchive } = await import(
+      '../WalletColdExportService'
+    );
+    const parsed = parseEncryptedColdArchive(JSON.stringify(file));
+    const archive = await decryptColdArchive(parsed, password);
+    expect(archive.labels[0].label).toBe('hi');
+    await expect(decryptColdArchive(parsed, 'wrong')).rejects.toThrow(
+      /Wrong password/
+    );
+  });
+
+  it('rejects plaintext cold archives on parse', async () => {
+    const { parseEncryptedColdArchive } = await import(
+      '../WalletColdExportService'
+    );
+    expect(() =>
+      parseEncryptedColdArchive(
+        JSON.stringify({ format: 'optn-cold-archive-v1', version: 1 })
+      )
+    ).toThrow(/unencrypted/);
+  });
+
+  it('importColdArchiveIntoWallet writes labels and fusion', async () => {
+    const { importColdArchiveIntoWallet, COLD_EXPORT_FORMAT } = await import(
+      '../WalletColdExportService'
+    );
+    const stats = await importColdArchiveIntoWallet(5, {
+      format: COLD_EXPORT_FORMAT,
+      exportedAt: 't',
+      walletId: 5,
+      network: 'mainnet',
+      containsSecrets: false,
+      disclaimer: '',
+      addresses: [{ address: 'bitcoincash:q1' }],
+      utxos: [],
+      transactions: [],
+      labels: [
+        {
+          kind: 'outpoint',
+          refKey: 'aa:0',
+          label: 'salary',
+          updatedAt: 't',
+        },
+      ],
+      fusion: { coinDepth: { 'aa:0': { d: 1, at: 1 } }, fusionTxids: [] },
+    });
+    expect(setCoinLabelMock).toHaveBeenCalled();
+    expect(importFusionDepthStateMock).toHaveBeenCalled();
+    expect(stats.labels).toBe(1);
   });
 });

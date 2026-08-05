@@ -1,10 +1,10 @@
-// COLD archive export — public wallet memory for decades of tracking.
+// Encrypted COLD archive — wallet memory protected by wallet password.
 //
-// Includes: addresses, current UTXOs, history, labels, fusion depth.
-// NEVER includes: seed, mnemonic, private keys, xprv, passwords.
+// On-disk file is AES-GCM under the same PBKDF2 password + kdf_salt as the
+// wallet row (WalletCrypto). Plaintext JSON is never written to disk.
 //
-// This is NOT a full wallet backup for recovery. Recovery still needs the
-// Recovery Phrase panel. This file restores *story*, not keys.
+// Import restores labels + fusion depth only (never overwrites HOT balance).
+// Seed stays in Export Wallet (.optn) / Recovery Phrase.
 // See docs/wallet-hot-cold-design.md
 
 import DatabaseService from '../../apis/DatabaseManager/DatabaseService';
@@ -13,17 +13,32 @@ import KeyService from '../../services/KeyService';
 import { Network } from '../../state/slices/networkSlice';
 import { store } from '../../state/store';
 import { logError } from '../../utils/errorHandling';
-import { listCoinLabels } from './CoinLabelService';
-import { exportFusionDepthState } from './fusionCoinDepth';
+import {
+  listCoinLabels,
+  setCoinLabel,
+  type CoinLabelKind,
+} from './CoinLabelService';
+import {
+  exportFusionDepthState,
+  importFusionDepthState,
+} from './fusionCoinDepth';
+import {
+  aesDecrypt,
+  aesEncrypt,
+  base64ToBytes,
+  bytesToBase64,
+  deriveKey,
+} from './WalletCrypto';
+import { SECRET_ENC_PREFIX } from './SecretCryptoService';
 
 export const COLD_EXPORT_FORMAT = 'optn-cold-archive-v1' as const;
+export const COLD_EXPORT_ENC_FORMAT = 'optn-cold-archive-enc-v1' as const;
 
 export type ColdArchiveExport = {
   format: typeof COLD_EXPORT_FORMAT;
   exportedAt: string;
   walletId: number;
   network: string;
-  /** Explicit so no one mistakes this for a seed backup. */
   containsSecrets: false;
   disclaimer: string;
   addresses: Array<{
@@ -32,7 +47,6 @@ export type ColdArchiveExport = {
     addressIndex?: number | null;
     changeIndex?: number | null;
   }>;
-  /** Current HOT spendable coins (chain-public data). */
   utxos: Array<{
     address: string;
     tx_hash: string;
@@ -58,6 +72,15 @@ export type ColdArchiveExport = {
   };
 };
 
+/** On-disk encrypted envelope (password-protected). */
+export type ColdArchiveEncryptedFile = {
+  format: typeof COLD_EXPORT_ENC_FORMAT;
+  version: 1;
+  sourceWalletId: number;
+  kdfSalt: string;
+  ciphertext: string;
+};
+
 function networkName(): string {
   try {
     const n = store.getState().network.currentNetwork;
@@ -66,6 +89,57 @@ function networkName(): string {
     return 'mainnet';
   } catch {
     return 'unknown';
+  }
+}
+
+async function readWalletKdfSalt(walletId: number): Promise<Uint8Array | null> {
+  const dbService = DatabaseService();
+  await dbService.ensureDatabaseStarted();
+  const db = dbService.getDatabase();
+  if (!db) return null;
+  const query = db.prepare('SELECT kdf_salt FROM wallets WHERE id = ?');
+  query.bind([walletId]);
+  let saltB64: string | null = null;
+  if (query.step()) {
+    const row = query.getAsObject() as Record<string, unknown>;
+    saltB64 =
+      typeof row.kdf_salt === 'string' && row.kdf_salt ? row.kdf_salt : null;
+  }
+  query.free();
+  return saltB64 ? base64ToBytes(saltB64) : null;
+}
+
+async function readEncryptedMnemonic(walletId: number): Promise<string | null> {
+  const dbService = DatabaseService();
+  await dbService.ensureDatabaseStarted();
+  const db = dbService.getDatabase();
+  if (!db) return null;
+  const query = db.prepare('SELECT mnemonic FROM wallets WHERE id = ?');
+  query.bind([walletId]);
+  let mnemonic: string | null = null;
+  if (query.step()) {
+    const row = query.getAsObject() as Record<string, unknown>;
+    mnemonic = typeof row.mnemonic === 'string' ? row.mnemonic : null;
+  }
+  query.free();
+  return mnemonic;
+}
+
+/** Verify password against this wallet's encrypted mnemonic (same as open). */
+export async function verifyWalletPassword(
+  walletId: number,
+  password: string
+): Promise<boolean> {
+  if (!password || walletId <= 0) return false;
+  const salt = await readWalletKdfSalt(walletId);
+  const encMnemonic = await readEncryptedMnemonic(walletId);
+  if (!salt || !encMnemonic?.startsWith(SECRET_ENC_PREFIX)) return false;
+  try {
+    const key = await deriveKey(password, salt);
+    await aesDecrypt(key, encMnemonic.slice(SECRET_ENC_PREFIX.length));
+    return true;
+  } catch {
+    return false;
   }
 }
 
@@ -104,9 +178,7 @@ async function loadTransactionRows(
   return out;
 }
 
-/**
- * Build a full COLD archive JSON object (no secrets).
- */
+/** Build plaintext archive in memory only (never write this to disk). */
 export async function buildColdArchive(
   walletId: number
 ): Promise<ColdArchiveExport> {
@@ -160,9 +232,6 @@ export async function buildColdArchive(
     updatedAt: r.updatedAt,
   }));
 
-  const fusion = exportFusionDepthState(walletId);
-  const transactions = await loadTransactionRows(walletId);
-
   return {
     format: COLD_EXPORT_FORMAT,
     exportedAt: new Date().toISOString(),
@@ -170,88 +239,223 @@ export async function buildColdArchive(
     network: networkName(),
     containsSecrets: false,
     disclaimer:
-      'OPTN cold archive: public chain memory, labels, and fusion depth only. ' +
-      'Does NOT include seed phrase, private keys, or passwords. ' +
-      'To recover spending ability, use Settings → Recovery Phrase separately.',
+      'OPTN cold archive (inner payload): chain memory, labels, fusion depth. ' +
+      'Does NOT include seed phrase. On disk this payload is password-encrypted.',
     addresses,
     utxos,
-    transactions,
+    transactions: await loadTransactionRows(walletId),
     labels,
-    fusion,
+    fusion: exportFusionDepthState(walletId),
   };
 }
 
-export function coldArchiveToJson(archive: ColdArchiveExport): string {
-  return `${JSON.stringify(archive, null, 2)}\n`;
+export function defaultColdArchiveFileName(
+  walletId: number,
+  exportedAt?: string
+): string {
+  const day = (exportedAt ?? new Date().toISOString()).slice(0, 10);
+  return `optn-cold-archive-wallet${walletId}-${day}.optn-cold`;
 }
 
-export function defaultColdArchiveFileName(archive: ColdArchiveExport): string {
-  return `optn-cold-archive-wallet${archive.walletId}-${archive.exportedAt.slice(0, 10)}.json`;
+/** Encrypt plaintext archive with wallet password + wallet kdf salt. */
+export async function encryptColdArchive(
+  walletId: number,
+  password: string,
+  archive?: ColdArchiveExport
+): Promise<ColdArchiveEncryptedFile> {
+  const salt = await readWalletKdfSalt(walletId);
+  if (!salt) {
+    throw new Error(
+      'This wallet has no password encryption salt — cannot protect the archive.'
+    );
+  }
+  const ok = await verifyWalletPassword(walletId, password);
+  if (!ok) {
+    throw new Error('Wrong wallet password.');
+  }
+  const key = await deriveKey(password, salt);
+  const payload = archive ?? (await buildColdArchive(walletId));
+  const ciphertext = await aesEncrypt(key, JSON.stringify(payload));
+  return {
+    format: COLD_EXPORT_ENC_FORMAT,
+    version: 1,
+    sourceWalletId: walletId,
+    kdfSalt: bytesToBase64(salt),
+    ciphertext,
+  };
+}
+
+export function serializeEncryptedColdArchive(
+  file: ColdArchiveEncryptedFile
+): string {
+  return `${JSON.stringify(file, null, 2)}\n`;
+}
+
+export function parseEncryptedColdArchive(
+  text: string
+): ColdArchiveEncryptedFile {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    throw new Error('File is not valid JSON.');
+  }
+  const o = parsed as Partial<ColdArchiveEncryptedFile>;
+  if (o.format === COLD_EXPORT_FORMAT) {
+    throw new Error(
+      'This is an old unencrypted cold archive. Re-export with a password from a current build.'
+    );
+  }
+  if (o.format !== COLD_EXPORT_ENC_FORMAT || o.version !== 1) {
+    throw new Error('Not a valid OPTN encrypted cold archive.');
+  }
+  if (
+    typeof o.sourceWalletId !== 'number' ||
+    typeof o.kdfSalt !== 'string' ||
+    typeof o.ciphertext !== 'string'
+  ) {
+    throw new Error('Encrypted cold archive is missing required fields.');
+  }
+  return {
+    format: COLD_EXPORT_ENC_FORMAT,
+    version: 1,
+    sourceWalletId: o.sourceWalletId,
+    kdfSalt: o.kdfSalt,
+    ciphertext: o.ciphertext,
+  };
+}
+
+export async function decryptColdArchive(
+  file: ColdArchiveEncryptedFile,
+  password: string
+): Promise<ColdArchiveExport> {
+  const salt = base64ToBytes(file.kdfSalt);
+  const key = await deriveKey(password, salt);
+  let plain: string;
+  try {
+    plain = await aesDecrypt(key, file.ciphertext);
+  } catch {
+    throw new Error('Wrong password or corrupted archive.');
+  }
+  const archive = JSON.parse(plain) as ColdArchiveExport;
+  if (archive.format !== COLD_EXPORT_FORMAT) {
+    throw new Error('Decrypted payload is not a cold archive.');
+  }
+  return archive;
 }
 
 /**
- * Browser fallback (non-Tauri): anchor download. In WebView2 this often does
- * nothing visible — prefer saveColdArchiveWithDialog on desktop.
+ * Import COLD data into the active wallet. Does not change HOT balance/UTXOs.
+ * Restores labels + fusion depth (merge).
  */
-export function downloadColdArchiveJson(
+export async function importColdArchiveIntoWallet(
+  walletId: number,
   archive: ColdArchiveExport,
-  filename?: string
-): void {
-  const json = coldArchiveToJson(archive);
-  const name = filename ?? defaultColdArchiveFileName(archive);
-  const blob = new Blob([json], { type: 'application/json;charset=utf-8' });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  a.href = url;
-  a.download = name;
-  a.rel = 'noopener';
-  document.body.appendChild(a);
-  a.click();
-  a.remove();
-  URL.revokeObjectURL(url);
+  options?: { requireAddressOverlap?: boolean }
+): Promise<{ labels: number; fusionCoins: number; fusionTxids: number }> {
+  if (walletId <= 0) throw new Error('No active wallet');
+
+  if (options?.requireAddressOverlap !== false) {
+    const keys = (await KeyService.retrieveKeys(walletId)) ?? [];
+    const mine = new Set(keys.map((k) => k.address).filter(Boolean));
+    const overlap = (archive.addresses ?? []).some((a) => mine.has(a.address));
+    if (mine.size > 0 && (archive.addresses?.length ?? 0) > 0 && !overlap) {
+      throw new Error(
+        'Archive addresses do not match this wallet. Open the correct wallet first.'
+      );
+    }
+  }
+
+  let labels = 0;
+  for (const row of archive.labels ?? []) {
+    const kind = row.kind as CoinLabelKind;
+    if (kind !== 'outpoint' && kind !== 'txid' && kind !== 'address') continue;
+    if (!row.refKey || !row.label) continue;
+    await setCoinLabel(walletId, kind, row.refKey, row.label);
+    labels += 1;
+  }
+
+  const fusion = importFusionDepthState(walletId, archive.fusion ?? {
+    coinDepth: {},
+    fusionTxids: [],
+  });
+
+  return {
+    labels,
+    fusionCoins: fusion.coins,
+    fusionTxids: fusion.txids,
+  };
 }
 
-/**
- * Desktop: native Save dialog + write to the path the user picks.
- * Returns the full path, or null if cancelled.
- */
-export async function saveColdArchiveWithDialog(
-  archive: ColdArchiveExport
+export async function saveEncryptedColdArchiveWithDialog(
+  file: ColdArchiveEncryptedFile,
+  suggestedName: string
 ): Promise<string | null> {
   const { save: saveDialog } = await import('@tauri-apps/plugin-dialog');
   const { writeTextFile } = await import('@tauri-apps/plugin-fs');
-  const suggested = defaultColdArchiveFileName(archive);
   const dest = await saveDialog({
-    title: 'Save cold archive',
-    defaultPath: suggested,
-    filters: [{ name: 'JSON archive', extensions: ['json'] }],
+    title: 'Save encrypted cold archive',
+    defaultPath: suggestedName,
+    filters: [
+      { name: 'OPTN cold archive', extensions: ['optn-cold', 'json'] },
+    ],
   });
   if (typeof dest !== 'string' || !dest) return null;
-  await writeTextFile(dest, coldArchiveToJson(archive));
+  await writeTextFile(dest, serializeEncryptedColdArchive(file));
   return dest;
 }
 
+export async function pickAndReadColdArchiveFile(): Promise<string | null> {
+  const { open: openDialog } = await import('@tauri-apps/plugin-dialog');
+  const { readTextFile } = await import('@tauri-apps/plugin-fs');
+  const picked = await openDialog({
+    multiple: false,
+    directory: false,
+    title: 'Open encrypted cold archive',
+    filters: [
+      { name: 'OPTN cold archive', extensions: ['optn-cold', 'json'] },
+    ],
+  });
+  if (typeof picked !== 'string') return null;
+  return readTextFile(picked);
+}
+
 export type ColdExportResult = {
-  archive: ColdArchiveExport;
-  /** Full filesystem path when saved via dialog; null if cancelled / browser-only. */
   savedPath: string | null;
+  archive: ColdArchiveExport;
 };
 
-/**
- * Build archive and save it. On Tauri desktop: Save As dialog.
- * Fallback: browser download (may be invisible in some WebViews).
- */
-export async function exportAndDownloadColdArchive(
-  walletId: number
+/** Password-encrypt, Save As dialog. */
+export async function exportEncryptedColdArchive(
+  walletId: number,
+  password: string
 ): Promise<ColdExportResult> {
   const archive = await buildColdArchive(walletId);
-  try {
-    const savedPath = await saveColdArchiveWithDialog(archive);
-    return { archive, savedPath };
-  } catch (error) {
-    // Not running under Tauri, or dialog/fs unavailable.
-    logError('WalletColdExportService.saveDialog', error, { walletId });
-    downloadColdArchiveJson(archive);
-    return { archive, savedPath: null };
+  const enc = await encryptColdArchive(walletId, password, archive);
+  const savedPath = await saveEncryptedColdArchiveWithDialog(
+    enc,
+    defaultColdArchiveFileName(walletId, archive.exportedAt)
+  );
+  return { archive, savedPath };
+}
+
+/** Open file, password-decrypt, import labels + fusion into active wallet. */
+export async function importEncryptedColdArchiveFromFile(
+  walletId: number,
+  password: string,
+  fileText?: string
+): Promise<{
+  labels: number;
+  fusionCoins: number;
+  fusionTxids: number;
+  sourceWalletId: number;
+}> {
+  const text = fileText ?? (await pickAndReadColdArchiveFile());
+  if (text == null) {
+    throw new Error('Import cancelled.');
   }
+  const enc = parseEncryptedColdArchive(text);
+  const archive = await decryptColdArchive(enc, password);
+  const stats = await importColdArchiveIntoWallet(walletId, archive);
+  return { ...stats, sourceWalletId: enc.sourceWalletId };
 }

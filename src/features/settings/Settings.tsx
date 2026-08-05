@@ -194,7 +194,7 @@ const Settings: React.FC = () => {
       case 'app-lock':
         return 'App Lock';
       case 'export-archive':
-        return 'Export cold archive';
+        return 'Cold archive';
       case 'rebuild-wallet':
         return 'Rebuild Wallet';
       case 'server':

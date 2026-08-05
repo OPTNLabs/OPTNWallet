@@ -1,5 +1,5 @@
-// Settings → Wallet & security → Export archive
-// COLD memory export only — never seed/keys.
+// Settings → Wallet & security → Export / import cold archive
+// Encrypted with wallet password. No seed in the file.
 
 import React, { useState } from 'react';
 import { useSelector } from 'react-redux';
@@ -13,24 +13,34 @@ export const ExportColdArchiveSettings: React.FC = () => {
 
   const handleExport = async () => {
     if (!walletId || busy) return;
+    const password = window.prompt(
+      'Enter this wallet’s password to encrypt the cold archive.\n' +
+        '(Same password you use to unlock the wallet. The file is not usable without it.)'
+    );
+    if (password === null) return;
+    if (!password) {
+      setMsg('Password required to encrypt the archive.');
+      return;
+    }
     setBusy(true);
-    setMsg('Building archive…');
+    setMsg('Encrypting and saving…');
     try {
-      const { exportAndDownloadColdArchive } = await import(
+      const { exportEncryptedColdArchive } = await import(
         './WalletColdExportService'
       );
-      const { archive, savedPath } = await exportAndDownloadColdArchive(walletId);
+      const { archive, savedPath } = await exportEncryptedColdArchive(
+        walletId,
+        password
+      );
       if (savedPath) {
         setMsg(
-          `Saved to:\n${savedPath}\n\n` +
+          `Saved encrypted archive to:\n${savedPath}\n\n` +
             `${archive.utxos.length} coins · ${archive.transactions.length} txs · ` +
-            `${archive.labels.length} labels · ${archive.addresses.length} addresses. ` +
-            `No seed or private keys.`
+            `${archive.labels.length} labels · ${archive.addresses.length} addresses.\n` +
+            `Encrypted with wallet password. No seed inside.`
         );
       } else {
-        setMsg(
-          'No file was saved (Save dialog cancelled). Try again and choose Desktop or Documents.'
-        );
+        setMsg('Save cancelled.');
       }
     } catch (err) {
       logError('ExportColdArchiveSettings.export', err, { walletId });
@@ -40,42 +50,80 @@ export const ExportColdArchiveSettings: React.FC = () => {
     }
   };
 
+  const handleImport = async () => {
+    if (!walletId || busy) return;
+    const password = window.prompt(
+      'Enter the password used to encrypt this cold archive\n' +
+        '(usually this wallet’s unlock password).'
+    );
+    if (password === null) return;
+    if (!password) {
+      setMsg('Password required to decrypt the archive.');
+      return;
+    }
+    setBusy(true);
+    setMsg('Opening archive…');
+    try {
+      const { importEncryptedColdArchiveFromFile } = await import(
+        './WalletColdExportService'
+      );
+      const stats = await importEncryptedColdArchiveFromFile(
+        walletId,
+        password
+      );
+      setMsg(
+        `Imported into this wallet:\n` +
+          `· ${stats.labels} labels\n` +
+          `· ${stats.fusionCoins} fusion depth entries\n` +
+          `· ${stats.fusionTxids} fusion txids\n` +
+          `Balance/coins still come from the network (HOT) — not from the file.`
+      );
+    } catch (err) {
+      const text = err instanceof Error ? err.message : 'Import failed.';
+      if (text.includes('cancelled')) {
+        setMsg('Import cancelled.');
+      } else {
+        logError('ExportColdArchiveSettings.import', err, { walletId });
+        setMsg(text);
+      }
+    } finally {
+      setBusy(false);
+    }
+  };
+
   return (
     <div className="space-y-4">
       <div className="rounded-xl border border-[var(--wallet-border)] bg-[var(--wallet-surface)] p-4 space-y-2">
         <p className="text-sm font-semibold wallet-text-strong">
-          Export cold archive
+          Cold archive (encrypted)
         </p>
         <p className="text-xs wallet-muted">
-          Downloads a JSON file with this wallet&apos;s long-term memory:
-          addresses, current coins, transaction history, labels, and fusion
-          depth. Use it to keep a 40-year trail of where coins came from.
+          Backup and restore long-term memory: addresses snapshot, coins
+          snapshot, history, labels, and fusion depth. The file is encrypted
+          with <span className="wallet-text-strong">this wallet&apos;s password</span>{' '}
+          (same PBKDF2 + AES-GCM family as the wallet file).
         </p>
         <p className="text-xs wallet-muted">
-          <span className="wallet-text-strong">Does not include</span> your
-          recovery phrase, private keys, or passwords. That stays under{' '}
-          <span className="wallet-text-strong">Recovery Phrase</span> — export
-          the seed separately if you need a full spend-recovery backup.
+          <span className="wallet-text-strong">Not included:</span> recovery
+          phrase / private keys. For spending keys use{' '}
+          <span className="wallet-text-strong">Export Wallet</span> or{' '}
+          <span className="wallet-text-strong">Recovery Phrase</span>.
         </p>
-        <ul className="text-xs wallet-muted list-disc pl-4 space-y-1">
-          <li>Receive / change addresses (public)</li>
-          <li>Current UTXOs (outpoints + amounts)</li>
-          <li>Transaction history rows</li>
-          <li>Coin / tx labels</li>
-          <li>CashFusion depth map + fusion txids</li>
-        </ul>
+        <p className="text-xs wallet-muted">
+          Import restores labels and fusion depth only — it never overwrites
+          your live balance from the file.
+        </p>
         {msg && (
           <p
             className={`text-xs whitespace-pre-wrap break-all ${
               busy
                 ? 'wallet-muted'
-                : msg.startsWith('Saved to:')
+                : msg.startsWith('Saved encrypted') || msg.startsWith('Imported')
                   ? 'text-green-400'
-                  : msg.startsWith('Export cancelled')
+                  : msg.startsWith('Save cancelled') ||
+                      msg.startsWith('Import cancelled')
                     ? 'wallet-muted'
-                    : msg.includes('failed') || msg.includes('Error')
-                      ? 'text-red-400'
-                      : 'wallet-muted'
+                    : 'text-red-400'
             }`}
           >
             {msg}
@@ -87,7 +135,15 @@ export const ExportColdArchiveSettings: React.FC = () => {
           onClick={() => void handleExport()}
           className="w-full rounded-xl border border-[var(--wallet-border)] py-2.5 text-sm font-semibold wallet-text-strong hover:opacity-80 disabled:opacity-50"
         >
-          {busy ? 'Exporting…' : 'Save cold archive (choose folder)'}
+          {busy ? 'Working…' : 'Export encrypted cold archive…'}
+        </button>
+        <button
+          type="button"
+          disabled={busy || !walletId}
+          onClick={() => void handleImport()}
+          className="w-full rounded-xl border border-[var(--wallet-border)] py-2.5 text-sm font-semibold wallet-text-strong hover:opacity-80 disabled:opacity-50"
+        >
+          {busy ? 'Working…' : 'Import encrypted cold archive…'}
         </button>
       </div>
     </div>
