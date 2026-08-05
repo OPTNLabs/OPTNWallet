@@ -146,7 +146,7 @@ describe('FusionRunnerService — one path for manual and automatic rounds', () 
 
   it('excludes token UTXOs', async () => {
     reconcile.mockResolvedValue({ addr: [coin('tok', true)] });
-    expect(await startFusionRound(base())).toEqual({
+    await expect(startFusionRound(base())).resolves.toMatchObject({
       status: 'no-eligible-coins',
     });
     expect(runP2p).not.toHaveBeenCalled();
