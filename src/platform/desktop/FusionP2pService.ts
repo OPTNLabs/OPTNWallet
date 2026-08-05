@@ -293,6 +293,21 @@ async function collectRolling(
       peers.length >= 4
         ? setStable && !expectMore
         : trioReady || pairAfterAbandonedPeak;
+    // Live: w4 kept shouting ~100s after w1+w6 fused (peak 3 → alone).
+    // Once we HAD peers and peak-grace expired with only self left, stop —
+    // they are not coming back this gather; full JOIN_WAIT is wasted budget.
+    if (
+      peers.length < MIN_PARTICIPANTS &&
+      peakStrict >= 2 &&
+      peakGraceExpired &&
+      now - start >= P2P_PEAK_GRACE_MS
+    ) {
+      throw new Error(
+        `No peers left (peak was ${peakStrict}, now only you). ` +
+          `Others already fused or left the pool — Cancel is automatic; ` +
+          `Start ALL wallets together for the next round.`
+      );
+    }
     if (canLock || now >= maxWait) {
       onStatus?.(
         `Gather done: ${peers.length} active wallet(s) ` +
@@ -309,14 +324,16 @@ async function collectRolling(
           : '';
     const secsLeft = Math.max(0, Math.ceil((maxWait - now) / 1_000));
     if (peers.length < 2) {
-      const aloneHint =
-        now - start > 12_000
-          ? ' Still shouting — if others already fused, Cancel + Start ALL together.'
-          : soft.length > 1 || peakSoft > 1
-            ? ' Dropping ghosts; waiting for re-announces…'
-            : ' Waiting for other wallets (Tor)…';
+      const aloneAfterOthers =
+        peakStrict >= 2 && peakGraceLeft > 0
+          ? ` Peers left (peak ${peakStrict}); giving up in ${Math.ceil(peakGraceLeft / 1000)}s if no one returns…`
+          : now - start > 12_000
+            ? ' Still shouting — if others already fused, Cancel + Start ALL together.'
+            : soft.length > 1 || peakSoft > 1
+              ? ' Dropping ghosts; waiting for re-announces…'
+              : ' Waiting for other wallets (Tor)…';
       onStatus?.(
-        `Only you confirmed active${keyHint} (up to ${secsLeft}s).${aloneHint}`
+        `Only you confirmed active${keyHint} (up to ${secsLeft}s).${aloneAfterOthers}`
       );
     } else if (peers.length === 2) {
       if (lostFromPeak && !peakGraceExpired) {
