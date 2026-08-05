@@ -82,22 +82,16 @@ vi.mock('../../services/ElectrumService', () => ({
   invalidateUTXOCache: invalidateUTXOCacheMock,
 }));
 
-// Open paints from EC ledger (txo − txi). Tests keep ledger empty so bootstrap
-// falls through to SQL then network mocks.
+// HOT path: status gate helpers (optional). Balance is SQL/listunspent, not ledger.
 vi.mock('../../platform/desktop/WalletLedgerService', () => ({
-  clearSyntheticExternalSpends: vi.fn(async () => 0),
-  rebuildUtxosFromLedger: vi.fn(async () => 0),
-  listUnspentFromLedger: vi.fn(async () => ({
-    byAddress: {},
-    totalSats: 0,
-    count: 0,
-  })),
   addressHistoryIsFresh: vi.fn(async () => false),
   partitionAddressesByStatus: vi.fn(async (_w: number, addrs: string[]) => ({
     dirty: addrs,
     clean: [],
     probed: 0,
   })),
+  getAddressHistoryStatusMap: vi.fn(async () => new Map()),
+  EMPTY_HISTORY_STATUS: '',
 }));
 
 vi.mock('../../platform/desktop/desktopSchema', () => ({
@@ -516,8 +510,8 @@ describe('UTXOWorkerService.bootstrapAllUTXOs', () => {
       await startUTXOWorker();
       await vi.advanceTimersByTimeAsync(300);
 
-      // Open paints ledger + status-delta; a trailing wallet-wide reconcile
-      // after subscribe was overwriting a good balance with a bad one.
+      // Open force-listunspents HOT once; no trailing wallet-wide reconcile
+      // after subscribe (that overwrote a good balance).
       expect(reconcileActiveWalletUtxosMock).not.toHaveBeenCalled();
       expect(subscribeBlockHeadersMock).toHaveBeenCalledWith(
         expect.any(Function),

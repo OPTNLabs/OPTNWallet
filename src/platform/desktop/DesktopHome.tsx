@@ -197,12 +197,10 @@ const Home: React.FC = () => {
       reportSyncProgress(5);
       try {
         const ledger = await import('./WalletLedgerService');
-        // Design: Manual Sync clears status hashes then force rechecks.
+        // Manual Sync: clear status hashes then force listunspent all (HOT).
         await ledger.clearAddressStatuses(currentWalletId);
-        // Heal sticky external: spends left by bad empty snapshots (wallet 5).
-        await ledger.clearSyntheticExternalSpends(currentWalletId);
       } catch {
-        /* optional on non-desktop */
+        /* optional — status table may not exist */
       }
       // Best-effort socket; do not block forever on resubscribe.
       try {

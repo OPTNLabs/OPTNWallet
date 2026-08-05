@@ -1,38 +1,24 @@
-# OPTN Wallet Ledger & Sync Design (Option A hybrid)
+# OPTN Wallet Ledger & Sync Design (historical Option A notes)
 
-**Status:** adopted 2026-08-05 (PR #12 worktree); reaffirmed after balance regression analysis  
-**References (read their code — do not invent):**
+**Status:** SUPERSEDED for **balance** — use `wallet-hot-cold-design.md`.  
+Ledger tables may remain for future **COLD** archive only.
 
-- Electron Cash: `D:\OPTN wallet work\electron-cash\electroncash\wallet.py`  
-  (`get_addr_io` / `get_addr_utxo` / `get_addr_balance` / `receive_history_callback`)
-- Selene: `D:\Selene Wallet\src\redux\sync.ts` (`syncAddressState` effect)  
-  + `src\kernel\bch\ElectrumService.ts`
+**Balance law (current):** HOT = SQL `UTXOs` from Electrum listunspent (OPTN 1.7.0 style).  
+**Not** ledger txi/txo as Redux boss.
 
-## Locked decisions (user)
+## Locked decisions (current)
 
-1. **Option A hybrid** — EC ledger + Selene status/rebuild, not a third invented model.  
-2. **Balance source of truth = ledger unspents** (EC: `txo − txi`), never a parallel  
-   listunspent-only Redux boss that can diverge from the ledger.  
-3. **listunspent** updates the ledger for dirty addresses, then SQL cache is rebuilt  
-   from the ledger; UI for wallet-wide **and** single-address passes uses  
-   **ledger projection** (single-addr = that address’s ledger coins only).  
-4. **Selene notify rule:** if address status unchanged → **no-op** (no history/listunspent).  
-5. **Three tiers:** open = disk (ledger) + status delta · Manual Sync = clear statuses  
-   + force · Rebuild = wipe chain data, keep seed.  
-   **Open must NOT `force: true` listunspent** (that was a regression path).  
-6. **Zero-touch:** ledger tables only via `desktopSchema` (not shared `schema.ts`).  
-7. **Evidence before “fixed”:** for a wallet, Electrum listunspent sum ≈ Redux  
-   `totalBalance` ≈ ledger unspent sum ≈ SQL `UTXOs` sum.  
-8. **Missing listunspent key ≠ empty `[]`.** RPC fail omits the address.  
-9. **Never apply empty listunspent → ledger without `force`.**  
-10. **Never mark synthetic `external:` spends without `force`.** Partial non-empty  
-    listunspent was still wiping coins. Real spends: Manual Sync force, or  
-    EC raw-tx → `ledger_txi`.
+1. **ONE truth for spendable money = HOT (SQL UTXOs).**  
+2. **COLD** = history / labels / fusion depth / export — never overrides HOT.  
+3. Status gate only skips network; returns SQL.  
+4. Manual Sync = clear statuses + force listunspent.  
+5. Open = paint SQL + force listunspent once (heal).  
+6. Missing listunspent key ≠ empty `[]`.  
+7. Zero-touch desktop tables via `desktopSchema`.
 
-## Goal
+## Goal (updated)
 
-One durable **ledger** is the source of truth for coins and history.  
-The SQL `UTXOs` table is a **materialized cache** rebuilt from the ledger.  
+HOT stays correct and small. COLD holds decades of story.  
 Live Electrum checks still guard **sends**.
 
 ## Ledger (source of truth)

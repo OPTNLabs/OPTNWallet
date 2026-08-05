@@ -1,0 +1,62 @@
+# OPTN Hot / Cold Wallet Design
+
+**Status:** adopted 2026-08-05 (PR #12 worktree)  
+**Base:** OPTN Labs 1.7.0 spendable-coin path  
+**Goal:** one truth for money + decades of depth without dual-boss balance bugs
+
+## Law (one source of truth for money)
+
+| Question | Store | Name |
+|----------|--------|------|
+| What can I spend? | SQL `UTXOs` via Electrum `listunspent` | **HOT** |
+| UI balance / send / fusion coin pick | Same HOT map in Redux | **HOT** |
+| History, labels, fusion depth, export | Separate tables / future archive | **COLD** |
+
+**HOT never reads ledger txi/txo for balance.**  
+**COLD never overrides HOT.**
+
+## HOT path (implemented)
+
+```
+listunspent → format → replaceWalletAddressUTXOs (SQL) → return map → Redux
+```
+
+- Missing Electrum key ≠ empty (keep prior SQL).  
+- Empty listunspent without `force` keeps prior (no wipe on flaky empty).  
+- Soft-fail on connection lost → keep SQL.  
+- Optional status-hash gate: skip network when history status unchanged → return SQL.  
+- Manual Sync: clear address statuses + `force: true`.  
+- Open bootstrap: paint SQL, then `force: true` listunspent once (heal).
+
+## COLD path (product roadmap — not balance)
+
+| Feature | Status |
+|---------|--------|
+| Transaction history UI | Existing |
+| Fusion depth / round metadata | Partial (existing services) |
+| Labels on UTXO/tx | Planned |
+| Tx graph (in→out) | Planned |
+| Export history + labels + fusion log | Planned |
+| Archive compaction (old spent txs) | Planned |
+| Optional raw-tx ancestry (power user) | Later — still not balance boss |
+
+## What we rejected
+
+- Ledger as Redux balance boss (dual truth → wallet 5 fake balance)  
+- Synthetic `external:` spends from partial listunspent on background  
+- Mixing EC txi/txo + Selene UTXO replace into a third hybrid for HOT
+
+## Evidence of “fixed” for HOT
+
+For a wallet after Manual Sync + wait:
+
+1. Home balance stable  
+2. Reopen → same  
+3. Idle 5–10 min → same  
+4. Console may show `[UTXOService] HOT balance (SQL UTXOs)` — not ledger boss  
+
+## Safe testing
+
+- Prefer **chipnet** for new wallets / funds  
+- Never log seeds or mainnet test spam  
+- Wallet 5: Manual Sync once after upgrade, then wait  
