@@ -257,9 +257,14 @@ type UTXOFetchOptions = {
 const UTXOService = {
   async fetchAndStoreUTXOs(walletId: number, address: string): Promise<UTXO[]> {
     try {
-      const results = await UTXOService.fetchAndStoreUTXOsMany(walletId, [
-        address,
-      ]);
+      // Single-address path is subscription / notification driven — never re-run
+      // BIP44 discovery here (that flooded the console with hundreds of
+      // "discovery took … discovered:0" lines per tick).
+      const results = await UTXOService.fetchAndStoreUTXOsMany(
+        walletId,
+        [address],
+        { discover: false }
+      );
       return results[address] ?? [];
     } catch (error) {
       logError('UTXOService.fetchAndStoreUTXOs', error, { walletId, address });
@@ -286,10 +291,13 @@ const UTXOService = {
               currentNetwork,
               hasElectrumBatchUsage
             )) ?? []);
-      console.info('[UTXOService] discovery took', {
-        ms: Math.round(performance.now() - tDiscovery),
-        discovered: discoveredAddresses.length,
-      });
+      // Log discovery only when we actually ran it (not the per-address hot path).
+      if (options.discover !== false) {
+        console.info('[UTXOService] discovery took', {
+          ms: Math.round(performance.now() - tDiscovery),
+          discovered: discoveredAddresses.length,
+        });
+      }
       const manager = await UTXOManager();
       const addressManager = AddressManager();
       const uniqueAddresses = Array.from(
@@ -322,12 +330,16 @@ const UTXOService = {
             uniqueAddresses
           );
           addressesToFetch = partition.dirty;
-          console.info('[UTXOService] status-hash gate', {
-            total: uniqueAddresses.length,
-            dirty: partition.dirty.length,
-            clean: partition.clean.length,
-            probed: partition.probed,
-          });
+          // Batch summary only — per-address refresh used to spam hundreds of
+          // identical "total:1 dirty:1 probed:0" lines into the console.
+          if (uniqueAddresses.length > 1 || partition.clean.length > 0) {
+            console.info('[UTXOService] status-hash gate', {
+              total: uniqueAddresses.length,
+              dirty: partition.dirty.length,
+              clean: partition.clean.length,
+              probed: partition.probed,
+            });
+          }
         } catch {
           addressesToFetch = uniqueAddresses;
         }
@@ -353,11 +365,13 @@ const UTXOService = {
       } else {
         utxosByAddress = await ElectrumService.getUTXOsMany(addressesToFetch);
       }
-      console.info('[UTXOService] getUTXOsMany took', {
-        ms: Math.round(performance.now() - tFetch),
-        addresses: addressesToFetch.length,
-        skippedClean: uniqueAddresses.length - addressesToFetch.length,
-      });
+      if (uniqueAddresses.length > 1 || addressesToFetch.length > 0) {
+        console.info('[UTXOService] getUTXOsMany took', {
+          ms: Math.round(performance.now() - tFetch),
+          addresses: addressesToFetch.length,
+          skippedClean: uniqueAddresses.length - addressesToFetch.length,
+        });
+      }
       for (const fetchedUTXOs of Object.values(utxosByAddress)) {
         for (const u of fetchedUTXOs) {
           const uAny = u as UTXO & { token_data?: unknown };

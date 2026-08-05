@@ -192,19 +192,19 @@ const ElectrumService = {
       const batchResults = await requestManyInChunks(server, calls);
       batchResults.forEach((response, index) => {
         const address = pending[index];
+        // Leave the key absent on hard failure so the ledger gate does not
+        // confuse "unused (null status)" with "probe failed".
         if (response instanceof Error) {
-          results[address] = null;
           return;
         }
+        // Electrum: unused scripthash → null; used → 64-char hex status string.
         results[address] = typeof response === 'string' ? response : null;
       });
     } catch (error) {
       logError('ElectrumService.getAddressStateMany', error, {
         count: unique.length,
       });
-      for (const address of pending) {
-        if (!(address in results)) results[address] = null;
-      }
+      // Whole batch failed — leave keys absent (gate treats as dirty).
     }
     return results;
   },
