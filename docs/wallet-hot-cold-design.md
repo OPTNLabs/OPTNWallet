@@ -22,12 +22,12 @@ listunspent → format → replaceWalletAddressUTXOs (SQL) → return map → Re
 ```
 
 - Missing Electrum key ≠ empty (keep prior SQL).  
-- Empty listunspent without `force` keeps prior (no wipe on flaky empty).  
 - Soft-fail on connection lost → keep SQL.  
-- **No status-hash skip on wallet-wide UTXO fetch** (that re-served poisoned SQL).  
+- **No status-hash skip on wallet-wide UTXO fetch.**  
 - Invalidate Electrum short TTL cache before each wallet-wide fetch.  
-- Manual Sync / open: `force` listunspent all known addresses.  
-- Trust authoritative empty listunspent; missing RPC key still keeps prior.
+- Trust authoritative empty listunspent; missing RPC key still keeps prior.  
+- **Open does not paint SQL into Redux first** (avoids wrong→right flash).  
+- Dual-boss ledger APIs **removed** (not just unused).
 
 ## COLD path (product roadmap — not balance)
 

@@ -77,8 +77,8 @@ export type FetchActiveWalletUtxosOptions = {
    */
   discover?: boolean;
   /**
-   * Bypass the ledger status-hash gate and listunspent every address.
-   * Manual Sync uses this after clearing address statuses.
+   * Full wallet pass flag (open / Manual Sync). HOT always listunspents every
+   * address in the call; force remains for API compatibility.
    */
   force?: boolean;
   onProgress?: (completedCount: number, totalCount: number) => void;
