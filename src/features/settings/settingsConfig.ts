@@ -19,7 +19,8 @@ export type SettingsPanelKey =
   | 'nostr'
   | 'addons'
   | 'app-lock'
-  | 'rebuild-wallet';
+  | 'rebuild-wallet'
+  | 'export-archive';
 
 export type SettingsGroupKey =
   | 'wallet'
@@ -77,6 +78,13 @@ export const WALLET_ROWS: SettingsRowConfig[] = [
     description: 'Auto-lock · Change password',
     action: 'panel',
     target: 'app-lock',
+  },
+  {
+    key: 'export-archive',
+    title: 'Export cold archive',
+    description: 'Addresses, coins, history, labels, fusion depth (no seed)',
+    action: 'panel',
+    target: 'export-archive',
   },
   {
     key: 'rebuild-wallet',
@@ -164,9 +172,13 @@ export function getSettingsGroupRows(
 ): SettingsRowConfig[] {
   const rowsByGroup: Record<SettingsGroupKey, SettingsRowConfig[]> = {
     wallet: WALLET_ROWS.filter((row) =>
-      ['recovery', 'derivation', 'app-lock', 'rebuild-wallet'].includes(
-        String(row.key)
-      )
+      [
+        'recovery',
+        'derivation',
+        'app-lock',
+        'export-archive',
+        'rebuild-wallet',
+      ].includes(String(row.key))
     ),
     features: [
       WALLET_ROWS.find((row) => row.key === 'server')!,
@@ -185,7 +197,13 @@ export function getSettingsGroupRows(
     if (row.key === 'faucet' && currentNetwork !== Network.CHIPNET) return false;
     if (
       !isDesktop &&
-      ['app-lock', 'rebuild-wallet', 'console', 'addons'].includes(String(row.key))
+      [
+        'app-lock',
+        'rebuild-wallet',
+        'export-archive',
+        'console',
+        'addons',
+      ].includes(String(row.key))
     ) {
       return false;
     }

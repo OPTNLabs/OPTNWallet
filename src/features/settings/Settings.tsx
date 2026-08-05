@@ -27,6 +27,7 @@ import WalletConnectPanel from '../../components/walletconnect/WalletConnectPane
 import WizardConnectPanel from '../../components/wizardconnect/WizardConnectPanel';
 import { AppLockSettings } from '../../platform/desktop/AppLockSettings';
 import { RebuildWalletSettings } from '../../platform/desktop/RebuildWalletSettings';
+import { ExportColdArchiveSettings } from '../../platform/desktop/ExportColdArchiveSettings';
 import { disconnectAllWizardConnections } from '../../state/slices/wizardconnectSlice';
 import getElectrumAdapter from '../../services/ElectrumAdapter';
 import { waitForWalletHistoryRefresh } from '../../services/RefreshCoordinator';
@@ -151,6 +152,8 @@ const Settings: React.FC = () => {
         return <WizardConnectPanel />;
       case 'app-lock':
         return <AppLockSettings />;
+      case 'export-archive':
+        return desktop ? <ExportColdArchiveSettings /> : null;
       case 'rebuild-wallet':
         return desktop ? <RebuildWalletSettings /> : null;
       case 'network':
@@ -190,6 +193,8 @@ const Settings: React.FC = () => {
         return 'About';
       case 'app-lock':
         return 'App Lock';
+      case 'export-archive':
+        return 'Export cold archive';
       case 'rebuild-wallet':
         return 'Rebuild Wallet';
       case 'server':
