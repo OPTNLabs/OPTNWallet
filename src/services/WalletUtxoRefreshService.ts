@@ -69,16 +69,28 @@ export function isActiveWalletSession(session: WalletSession): boolean {
   );
 }
 
+export type FetchActiveWalletUtxosOptions = {
+  /**
+   * When false, skip BIP44 gap-limit rediscovery and only refresh known
+   * addresses. Manual Home "Sync" uses this after open already ran discovery —
+   * re-running discovery + history was the "slow old path".
+   */
+  discover?: boolean;
+  onProgress?: (completedCount: number, totalCount: number) => void;
+};
+
 /**
  * Fetch one complete wallet snapshot from addresses owned or explicitly tracked
  * by that wallet. A stale caller gets `null` and must not update Redux.
  */
 export async function fetchActiveWalletUtxos(
   session: WalletSession,
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  options: FetchActiveWalletUtxosOptions = {}
 ): Promise<Record<string, UTXO[]> | null> {
   if (signal?.aborted || !isActiveWalletSession(session)) return null;
   const { walletId } = session;
+  const discover = options.discover !== false;
 
   const keyPairs = await KeyService.retrieveKeys(walletId);
   if (signal?.aborted || !isActiveWalletSession(session)) return null;
@@ -99,7 +111,10 @@ export async function fetchActiveWalletUtxos(
   // completed broadcast. Reusing the short Electrum UTXO cache here could
   // publish the exact stale snapshot that triggered the refresh.
   for (const address of addresses) invalidateUTXOCache(address);
-  const fetched = await UTXOService.fetchAndStoreUTXOsMany(walletId, addresses);
+  const fetched = await UTXOService.fetchAndStoreUTXOsMany(walletId, addresses, {
+    discover,
+    onProgress: options.onProgress,
+  });
   if (signal?.aborted || !isActiveWalletSession(session)) return null;
 
   const snapshot: Record<string, UTXO[]> = {};
