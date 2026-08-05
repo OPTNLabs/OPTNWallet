@@ -1,7 +1,11 @@
 import { generateSecretKey } from 'nostr-tools';
 
 import { binToHex } from '../../../utils/hex';
-import { electCoordinator, type FusionPoolNetwork } from './fusion';
+import {
+  electCoordinator,
+  MIN_PARTICIPANTS,
+  type FusionPoolNetwork,
+} from './fusion';
 import { messageBinding, type RoundMessage, type RoundTransport } from './fusionSession';
 
 const MAX_PARTICIPANTS = 6;
@@ -109,7 +113,8 @@ function validProposal(
     // Epoch is informational on the rolling pool. Gather spans 30–90s and the
     // 30s epoch bucket often flips mid-gather; requiring equality rejected every
     // honest proposal when wallets started a few seconds apart.
-    participants.length >= 2 &&
+    // ≥ MIN_PARTICIPANTS (3): onion mix needs ≥2 peelers; no 2-party proposals.
+    participants.length >= MIN_PARTICIPANTS &&
     participants.length === message.participants.length &&
     sameParticipants(participants, message.participants) &&
     participants.includes(params.myPubkey) &&

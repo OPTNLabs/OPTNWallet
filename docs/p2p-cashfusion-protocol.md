@@ -296,16 +296,14 @@ Coordinator **refuses** any input whose credential does not verify under the
 round pubkey for that input’s domain-separated hash. Assembly cannot proceed
 until every accepted input is in the credentialed set.
 
-**Outputs**
+**Outputs (onion only — no direct/2-party path)**
 
-- **Direct mode** (`onionEnabled !== true`): `outputs` messages to the
-  coordinator (plaintext contribution list).
-- **Onion mode** (`onionEnabled === true`, production default in
-  `FusionP2pService`): each output is onion-wrapped through
-  `mixOrder = sort(participants \ {coordinator})` (coordinator **assembles**,
-  does **not** peel). Each hop peels one ECDH+AES-GCM layer, **CSPRNG**
-  Fisher–Yates shuffles the batch, and forwards. Last peeler reveals plaintext
-  outputs only to the coordinator.
+Every output is onion-wrapped through
+`mixOrder = sort(participants \ {coordinator})` (coordinator **assembles**,
+does **not** peel). Each hop peels one ECDH+AES-GCM layer, **CSPRNG**
+Fisher–Yates shuffles the batch, and forwards. Last peeler reveals plaintext
+outputs only to the coordinator. Rounds require ≥`MIN_PARTICIPANTS` (3) so
+there are always ≥2 peelers.
 
 Onion crypto: `onionCrypto.ts` (00-Wallet-compatible pad size 80, tiny-secp256k1
 ECDH). Failure is **loud** — no silent fallback to plaintext.
@@ -430,7 +428,7 @@ sets, money bounds. Invalid messages surface as protocol errors.
 
 P2P intentionally **does not** require running or trusting a long-lived fusion
 daemon. It **does** require at least one honest **output-onion** peel hop for
-peer-level output unlinkability when `onionEnabled` is on, and treats the
+peer-level output unlinkability (onion is always on), and treats the
 coordinator like a classic server for template visibility. Output onion needs
 **no extra servers** — only the peers already in the round.
 

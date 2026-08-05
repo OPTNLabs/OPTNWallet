@@ -57,7 +57,7 @@ A peer participating in the same round but acting dishonestly.
   `txid:index`, not by submitter)
 
 **Mitigation:**
-- **Output onion** (`onionEnabled: true`): peel → CSPRNG shuffle → forward
+- **Output onion** (always on): peel → CSPRNG shuffle → forward
   (`onionCrypto.ts` / `fusionSession.ts`)
 - Each participant submits with 200–2000 ms jitter
 - Inputs sorted by `(txid, index)` before assembly
@@ -203,7 +203,7 @@ zero (a zero nonce would expose `amount*H` directly).
 ### Output onion (peer peel chain — not Tor)
 
 **Used for:** Contributor→output unlinkability among **peers** during the
-output collection phase (`onionEnabled: true` production default).
+output collection phase (always on; no direct path).
 
 **Implementation:** `src/platform/desktop/nostr/onionCrypto.ts`, peel/forward
 in `fusionSession.ts`.
