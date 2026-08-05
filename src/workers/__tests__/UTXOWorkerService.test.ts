@@ -476,7 +476,7 @@ describe('UTXOWorkerService.bootstrapAllUTXOs', () => {
     }
   });
 
-  it('runs one post-subscription catch-up without replaying the current tip', async () => {
+  it('subscribes without a trailing wallet-wide catch-up (avoids right→wrong flip)', async () => {
     vi.useFakeTimers();
     try {
       subscribeBlockHeadersMock.mockImplementation(
@@ -492,8 +492,9 @@ describe('UTXOWorkerService.bootstrapAllUTXOs', () => {
       await startUTXOWorker();
       await vi.advanceTimersByTimeAsync(300);
 
-      expect(reconcileActiveWalletUtxosMock).toHaveBeenCalledTimes(1);
-      expect(reconcileActiveWalletUtxosMock).toHaveBeenCalledWith(42);
+      // Bootstrap force-listunspent is enough; a second non-force reconcile
+      // after subscribe was overwriting a good balance with a bad one.
+      expect(reconcileActiveWalletUtxosMock).not.toHaveBeenCalled();
       expect(subscribeBlockHeadersMock).toHaveBeenCalledWith(
         expect.any(Function),
         { emitCurrent: false }
