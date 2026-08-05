@@ -583,7 +583,7 @@ export async function runP2pFusion(
       })
     );
     if (opts.signal?.aborted) throw new Error('fusion round cancelled');
-    status?.('Tor verified; preparing fresh pool identity.');
+    status?.('Tor verified; publishing pool identity…');
     // Order matters: clear stranded locks from a crashed prior round FIRST, then
     // claim THIS round's coins. Previously clearOutpointReservations ran after
     // reserveOutpoints and wiped the live reservation (coins looked free while
@@ -597,16 +597,23 @@ export async function runP2pFusion(
       outpointKey(utxo.tx_hash, utxo.tx_pos)
     );
     reserveOutpoints(opts.walletId, reservedForRound);
-    const runInputs = await gatherInputs(opts.walletId, spendable);
-    if (opts.signal?.aborted) throw new Error('fusion round cancelled');
-    const sumIn = runInputs.reduce((sum, input) => sum + input.value, 0);
-    // Refuse before announcing if this wallet cannot fund the allocator's
-    // minimum two outputs plus its measured fee. Recruiting peers into a round
-    // that is guaranteed to fail after rendezvous only creates ghost entries.
+
+    // Announce BEFORE gatherInputs. Fetching privkeys (IPC per coin) can take
+    // many seconds on a lagging wallet — while that ran, others already locked
+    // "4 active" and entered Propose/ACK without the slow one (wallet 5/8).
+    // Pool discovery only needs sum + tier list + input count; keys load in
+    // parallel with collectRolling.
+    const sumIn = spendable.reduce(
+      (sum, utxo) => sum + (utxo.value ?? Number(utxo.amount ?? 0)),
+      0
+    );
+    // Provisional compressed pubkeys (same byte length as real) so the fee
+    // refuse-check matches production sizing without waiting on KeyService.
+    const provisionalPubkey = `02${'11'.repeat(32)}`;
     planP2pOutputValues({
-      inputs: runInputs.map((input) => ({
-        value: input.value,
-        pubkey: input.pubkey,
+      inputs: spendable.map((utxo) => ({
+        value: utxo.value ?? Number(utxo.amount ?? 0),
+        pubkey: provisionalPubkey,
       })),
       participantCount: MIN_PARTICIPANTS,
       feerate: P2P_FEERATE,
@@ -615,6 +622,7 @@ export async function runP2pFusion(
     const tiers = P2P_TIERS.filter((tier) => sumIn > tier + 1_000);
     if (tiers.length === 0)
       throw new Error('Inputs too small for any P2P fusion tier.');
+    const numInputs = spendable.length;
 
     const network = toPoolNetwork(opts.network);
     const now = Math.floor(Date.now() / 1_000);
@@ -630,7 +638,7 @@ export async function runP2pFusion(
         network,
         epoch,
         tiers,
-        numInputs: runInputs.length,
+        numInputs,
         at: now,
         seenAt: now,
         expiresAt: now + POOL_PEER_TTL_SECONDS,
@@ -641,7 +649,7 @@ export async function runP2pFusion(
       network,
       epoch,
       tiers,
-      numInputs: runInputs.length,
+      numInputs,
       signal: opts.signal,
       onPeer: (received) => {
         // REPLACE, do not union. The old merge kept every key ever seen for the
@@ -665,16 +673,44 @@ export async function runP2pFusion(
     withdrawFromPool = joined.withdraw;
     await joined.announceNow();
     opts.onPhase?.(1);
-    status?.('Pool announcement published; collecting peers…');
-
-    const fresh = await collectRolling(
-      opts.walletId,
-      round.pubkey,
-      () => peers,
-      status,
-      opts.signal,
-      () => joined.announceNow()
+    status?.(
+      'Pool announcement published; collecting peers (loading signing keys in background)…'
     );
+
+    // Abort gather if peer collect cancels (and vice versa) so a slow key load
+    // does not outlive a cancelled round.
+    const prepAbort = new AbortController();
+    const forwardAbort = () => prepAbort.abort();
+    opts.signal?.addEventListener('abort', forwardAbort, { once: true });
+    if (opts.signal?.aborted) prepAbort.abort();
+    let runInputs: Awaited<ReturnType<typeof gatherInputs>>;
+    let fresh: PoolAnnouncement[];
+    try {
+      const keysPromise = gatherInputs(opts.walletId, spendable).catch(
+        (error) => {
+          prepAbort.abort();
+          throw error;
+        }
+      );
+      const peersPromise = collectRolling(
+        opts.walletId,
+        round.pubkey,
+        () => peers,
+        status,
+        prepAbort.signal,
+        () => joined.announceNow()
+      ).catch((error) => {
+        prepAbort.abort();
+        throw error;
+      });
+      [runInputs, fresh] = await Promise.all([keysPromise, peersPromise]);
+    } finally {
+      opts.signal?.removeEventListener('abort', forwardAbort);
+    }
+    if (opts.signal?.aborted) throw new Error('fusion round cancelled');
+    if (runInputs.length === 0) {
+      throw new Error('No signing keys for fusion inputs.');
+    }
     // Keep re-announcing through negotiate so late wallets still see us.
     // (Stopping here was one cause of "only 1 announcement" on other windows.)
     const group = selectFusionGroup(fresh, MIN_PARTICIPANTS, MAX_PARTICIPANTS);
