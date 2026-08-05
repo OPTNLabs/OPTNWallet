@@ -47,6 +47,7 @@ vi.mock('../ElectrumService', () => ({
   default: {
     getUTXOsMany: getUTXOsManyMock,
   },
+  invalidateUTXOCache: vi.fn(),
 }));
 
 vi.mock('../BcmrService', () => ({
@@ -141,7 +142,10 @@ describe('UTXOService', () => {
     );
 
     expect(ensureInitialAddressBatchesMock).not.toHaveBeenCalled();
-    expect(getUTXOsManyMock).toHaveBeenCalledWith(['bitcoincash:q1']);
+    expect(getUTXOsManyMock).toHaveBeenCalledWith(
+      ['bitcoincash:q1'],
+      undefined
+    );
   });
 
   it('uses one history batch for discovery before the wallet UTXO fetch', async () => {
@@ -184,10 +188,10 @@ describe('UTXOService', () => {
 
     await UTXOService.fetchAndStoreUTXOsMany(11, ['bitcoincash:q1']);
 
-    expect(getUTXOsManyMock).toHaveBeenCalledWith([
-      'bitcoincash:q1',
-      'bitcoincash:q2',
-    ]);
+    expect(getUTXOsManyMock).toHaveBeenCalledWith(
+      ['bitcoincash:q1', 'bitcoincash:q2'],
+      undefined
+    );
   });
 
   it('keeps a broadcast Fusion BCH output visible until Electrum indexes it', async () => {

@@ -240,10 +240,15 @@ const ElectrumService = {
           address,
           res
         );
-        return cacheByAddr.get(address)?.data ?? [];
+        // Prefer short TTL cache over inventing empty (empty wiped balances).
+        const cachedFail = cacheByAddr.get(address);
+        if (cachedFail) return cachedFail.data;
+        throw new Error('listunspent non-array response');
       } catch (e) {
         logError('ElectrumService.getUTXOs', e, { address });
-        return cacheByAddr.get(address)?.data ?? [];
+        const cachedFail = cacheByAddr.get(address);
+        if (cachedFail) return cachedFail.data;
+        throw e instanceof Error ? e : new Error(String(e));
       } finally {
         inflightByAddr.delete(address);
       }
