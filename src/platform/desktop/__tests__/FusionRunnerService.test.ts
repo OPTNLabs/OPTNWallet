@@ -115,7 +115,14 @@ describe('FusionRunnerService — one path for manual and automatic rounds', () 
     });
 
     expect(reconcile).not.toHaveBeenCalled();
-    expect(runP2p).toHaveBeenCalledWith(snapshot.addr, undefined);
+    expect(runP2p).toHaveBeenCalledWith(
+      snapshot.addr,
+      undefined,
+      expect.objectContaining({
+        onStatus: expect.any(Function),
+        onPhase: expect.any(Function),
+      })
+    );
     expect(result.status).toBe('fused');
   });
 
@@ -347,7 +354,14 @@ describe('FusionRunnerService — one path for manual and automatic rounds', () 
       signal: controller.signal,
     });
 
-    expect(runP2p).toHaveBeenCalledWith(expect.any(Array), controller.signal);
+    expect(runP2p).toHaveBeenCalledWith(
+      expect.any(Array),
+      controller.signal,
+      expect.objectContaining({
+        onStatus: expect.any(Function),
+        onPhase: expect.any(Function),
+      })
+    );
   });
 
   it('reports a completed irreversible round even when abort races with runner resolution', async () => {

@@ -37,7 +37,10 @@ import {
   decideAutoFusion,
 } from './fusionAutoEngine';
 import { isAutoCooldownReady } from './fusionWalletLease';
-import { startFusionRound } from './FusionRunnerService';
+import {
+  reportFusionProgress,
+  startFusionRound,
+} from './FusionRunnerService';
 import { runP2pFusion } from './FusionP2pService';
 import {
   buildServerRunner,
@@ -203,7 +206,7 @@ export function useAutoFusion(): void {
         freshSnapshot,
         signal: controller.signal,
         runners: {
-          runP2p: async (coins, signal) => {
+          runP2p: async (coins, signal, progress) => {
             if (!p2pTor) {
               throw new Error(
                 'No verified Tor route is available for P2P Fusion.'
@@ -216,14 +219,25 @@ export function useAutoFusion(): void {
               relays: nostrRelays,
               tor: p2pTor,
               signal,
+              onStatus: (m) => {
+                reportFusionProgress(walletId, { status: m });
+                progress?.onStatus?.(m);
+              },
+              onPhase: (p) => {
+                reportFusionProgress(walletId, { phase: p });
+                progress?.onPhase?.(p);
+              },
             });
           },
-          runServer:
-            serverRunner ??
-            (() =>
-              Promise.reject(
-                new Error('No verified server Fusion route is available.')
-              )),
+          runServer: async (coins, signal, progress) => {
+            if (!serverRunner) {
+              throw new Error(
+                'No verified server Fusion route is available.'
+              );
+            }
+            progress?.onStatus?.('Auto-fuse (server): contacting fusion server…');
+            return serverRunner(coins, signal);
+          },
         },
       });
 

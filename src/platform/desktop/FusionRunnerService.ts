@@ -71,11 +71,13 @@ export interface StartFusionRoundOptions {
   runners: {
     runP2p: (
       coins: UTXO[],
-      signal?: AbortSignal
+      signal?: AbortSignal,
+      progress?: { onStatus?: (m: string) => void; onPhase?: (p: number) => void }
     ) => Promise<{ txid: string; warning?: string }>;
     runServer: (
       coins: UTXO[],
-      signal?: AbortSignal
+      signal?: AbortSignal,
+      progress?: { onStatus?: (m: string) => void; onPhase?: (p: number) => void }
     ) => Promise<{ txid: string; warning?: string }>;
   };
 }
@@ -103,7 +105,23 @@ export interface FusionActivity {
   mode: FusionMode;
   trigger: 'auto' | 'manual';
   startedAt: number;
+  /** Live phase 0–5 (P2P stepper / server labels). */
+  phase?: number;
+  /** Latest status line for CashFusion UI / shell (auto + manual). */
+  status?: string | null;
 }
+
+/** Last finished auto/manual outcome so the panel shows why fuse failed after idle. */
+export interface FusionLastResult {
+  walletId: number;
+  mode: FusionMode;
+  trigger: 'auto' | 'manual';
+  ok: boolean;
+  message: string;
+  at: number;
+}
+
+const lastResults = new Map<number, FusionLastResult>();
 
 type FusionActivityListener = (activity: FusionActivity | null) => void;
 
@@ -137,6 +155,39 @@ export function getFusionActivity(walletId: number): FusionActivity | null {
     return null;
   }
   return fusionActivities.get(walletId)?.activity ?? null;
+}
+
+/** Push phase/status into the live activity (auto-fuse and manual share this). */
+export function reportFusionProgress(
+  walletId: number,
+  update: { phase?: number; status?: string | null }
+): void {
+  const entry = fusionActivities.get(walletId);
+  if (!entry || !heldLeases.has(walletId)) return;
+  entry.activity = {
+    ...entry.activity,
+    ...(update.phase !== undefined ? { phase: update.phase } : {}),
+    ...(update.status !== undefined ? { status: update.status } : {}),
+  };
+  fusionActivities.set(walletId, entry);
+  emitFusionActivity(walletId);
+}
+
+export function getFusionLastResult(walletId: number): FusionLastResult | null {
+  return lastResults.get(walletId) ?? null;
+}
+
+export function setFusionLastResult(
+  walletId: number,
+  result: Omit<FusionLastResult, 'walletId' | 'at'>
+): void {
+  lastResults.set(walletId, {
+    ...result,
+    walletId,
+    at: Date.now(),
+  });
+  // Notify listeners so the CashFusion panel can show auto failure without a round.
+  emitFusionActivity(walletId);
 }
 
 export function subscribeFusionActivity(
@@ -291,18 +342,80 @@ export async function startFusionRound(
       mode,
       trigger,
       startedAt: Date.now(),
+      phase: 1,
+      status:
+        trigger === 'auto'
+          ? 'Auto-fuse: preparing…'
+          : 'Starting fusion…',
     },
   });
   emitFusionActivity(walletId);
+
+  const pushProgress = (update: { phase?: number; status?: string | null }) => {
+    reportFusionProgress(walletId, update);
+    if (update.status !== undefined && update.status !== null) {
+      options.onStatus?.(update.status);
+    }
+    if (update.phase !== undefined) {
+      options.onPhase?.(update.phase);
+    }
+  };
 
   // Keep the durable lease fresh so other windows see a live holder, not a ghost.
   const heartbeat = setInterval(() => {
     void touchRoundLease(walletId, lease).catch(() => undefined);
   }, LEASE_HEARTBEAT_MS);
 
-  try {
-    if (options.signal?.aborted) return { status: 'cancelled' };
+  const finish = (outcome: FusionRunOutcome): FusionRunOutcome => {
+    // Persist a readable last result so CashFusion still shows auto failures
+    // after the live lease is released.
+    if (outcome.status === 'fused') {
+      setFusionLastResult(walletId, {
+        mode,
+        trigger,
+        ok: true,
+        message: outcome.warning
+          ? `Fused ✓ — ${outcome.txid}. ${outcome.warning}`
+          : `Fused ✓ — ${outcome.txid}`,
+      });
+    } else if (outcome.status === 'failed') {
+      setFusionLastResult(walletId, {
+        mode,
+        trigger,
+        ok: false,
+        message: outcome.message,
+      });
+    } else if (outcome.status === 'no-eligible-coins') {
+      setFusionLastResult(walletId, {
+        mode,
+        trigger,
+        ok: false,
+        message:
+          trigger === 'auto'
+            ? 'Auto-fuse: no coins below rounds-per-coin depth (or no BCH coins).'
+            : 'No eligible coins to fuse.',
+      });
+    } else if (outcome.status === 'busy') {
+      setFusionLastResult(walletId, {
+        mode,
+        trigger,
+        ok: false,
+        message: 'Fusion busy (another window or round holds the lock).',
+      });
+    }
+    return outcome;
+  };
 
+  try {
+    if (options.signal?.aborted) return finish({ status: 'cancelled' });
+
+    pushProgress({
+      phase: 1,
+      status:
+        trigger === 'auto'
+          ? 'Auto-fuse: refreshing coins…'
+          : 'Refreshing coins…',
+    });
     const coins = await freshCoins(
       walletId,
       trigger,
@@ -310,9 +423,9 @@ export async function startFusionRound(
       options.freshSnapshot,
       options.signal
     );
-    if (options.signal?.aborted) return { status: 'cancelled' };
-    if (coins === null) return { status: 'waiting-for-wallet' };
-    if (coins.length === 0) return { status: 'no-eligible-coins' };
+    if (options.signal?.aborted) return finish({ status: 'cancelled' });
+    if (coins === null) return finish({ status: 'waiting-for-wallet' });
+    if (coins.length === 0) return finish({ status: 'no-eligible-coins' });
 
     // Claim only when live eligible coins exist.
     if (trigger === 'auto') {
@@ -320,26 +433,42 @@ export async function startFusionRound(
         walletId,
         AUTO_FUSION_COOLDOWN_MS
       );
-      if (!claimed) return { status: 'cooldown' };
+      if (!claimed) return finish({ status: 'cooldown' });
     }
 
     try {
+      pushProgress({
+        phase: 1,
+        status:
+          trigger === 'auto'
+            ? `Auto-fuse (${mode}): ${coins.length} coin(s) — finding peers…`
+            : `Using ${coins.length} coin(s)…`,
+      });
+      // Expose progress hooks to runners that wire into runP2pFusion/server.
+      const progressHooks = {
+        onStatus: (message: string) => pushProgress({ status: message }),
+        onPhase: (phase: number) => pushProgress({ phase }),
+      };
       const result =
         mode === 'p2p'
-          ? await options.runners.runP2p(coins, options.signal)
-          : await options.runners.runServer(coins, options.signal);
+          ? await options.runners.runP2p(coins, options.signal, progressHooks)
+          : await options.runners.runServer(
+              coins,
+              options.signal,
+              progressHooks
+            );
       // Paid success → long spacing. Failures use a short retry (below).
       if (trigger === 'auto') {
         await stampAutoSuccess(walletId, AUTO_FUSION_COOLDOWN_MS).catch(
           () => undefined
         );
       }
-      return {
+      return finish({
         status: 'fused',
         mode,
         txid: result.txid,
         ...(result.warning ? { warning: result.warning } : {}),
-      };
+      });
     } catch (error) {
       if (options.signal?.aborted && isCancellationError(error)) {
         if (trigger === 'auto') {
@@ -347,7 +476,7 @@ export async function startFusionRound(
             () => undefined
           );
         }
-        return { status: 'cancelled' };
+        return finish({ status: 'cancelled' });
       }
       if (trigger === 'auto') {
         // No peers / Tor / etc. — do NOT silence autofuse for 5 minutes.
@@ -355,11 +484,11 @@ export async function startFusionRound(
           () => undefined
         );
       }
-      return {
+      return finish({
         status: 'failed',
         mode,
         message: error instanceof Error ? error.message : String(error),
-      };
+      });
     }
   } finally {
     clearInterval(heartbeat);
