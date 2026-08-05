@@ -5,7 +5,7 @@
 // shared `unitFor` instead of a hardcoded "BCH", so test coins aren't mislabelled
 // as mainnet value. When upstream Home.tsx changes, re-copy this file and reapply
 // the three marked spots (import, `const unit`, the two `${unit}` strings).
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useDispatch, useSelector } from 'react-redux';
 import { FaArrowDown, FaArrowUp, FaBitcoin, FaQrcode } from 'react-icons/fa';
@@ -14,6 +14,7 @@ import { Toast } from '@capacitor/toast';
 import { AppDispatch, RootState } from '../../state/store';
 import {
   setFetchingUTXOs,
+  setSyncingProgress,
   replaceAllUTXOs,
   setInitialized,
 } from '../../state/slices/utxoSlice';
@@ -89,6 +90,9 @@ const Home: React.FC = () => {
   const fetchingUTXOsRedux = useSelector(
     (state: RootState) => state.utxos.fetchingUTXOs
   );
+  const syncingProgress = useSelector(
+    (state: RootState) => state.utxos.syncingProgress
+  );
   const totalBalance = useSelector(
     (state: RootState) => state.utxos.totalBalance
   );
@@ -104,6 +108,76 @@ const Home: React.FC = () => {
   );
   const [displayMode, setDisplayMode] = useState<'BCH' | 'USD'>('BCH');
   const [scanBusy, setScanBusy] = useState(false);
+  const [syncEtaSec, setSyncEtaSec] = useState<number | null>(null);
+  const [syncElapsedSec, setSyncElapsedSec] = useState(0);
+
+  // Wall-clock ticker while a sync is in flight. The long UTXO/header network
+  // batch is one atomic round-trip that cannot sub-divide its progress, so the
+  // % bar alone would sit frozen for seconds during it. A live elapsed counter
+  // is the honest indicator that the scan is actually progressing.
+  useEffect(() => {
+    if (!fetchingUTXOsRedux) {
+      setSyncElapsedSec(0);
+      return;
+    }
+    const startTs = Date.now();
+    const interval = setInterval(() => {
+      setSyncElapsedSec(Math.floor((Date.now() - startTs) / 1000));
+    }, 500);
+    return () => clearInterval(interval);
+  }, [fetchingUTXOsRedux]);
+  // Rate-based ETA, not "elapsed/percent from t0": progress restarts at a lower
+  // value when one phase (worker bootstrap) hands off to the next (history pass),
+  // so a single monotonic clock overstates remaining time. We instead track rate
+  // of progress (percent per second) with an EMA, and forget the rate whenever
+  // progress jumps backward (a new phase began).
+  const rateRef = useRef<number | null>(null);
+  const lastProgressRef = useRef<number | null>(null);
+  const lastRateTsRef = useRef<number | null>(null);
+
+  useEffect(() => {
+    if (!fetchingUTXOsRedux || syncingProgress === null) {
+      if (!fetchingUTXOsRedux) {
+        rateRef.current = null;
+        lastProgressRef.current = null;
+        lastRateTsRef.current = null;
+        setSyncEtaSec(null);
+      }
+      return;
+    }
+    const now = Date.now();
+    const lastP = lastProgressRef.current;
+    const lastTs = lastRateTsRef.current;
+
+    if (syncingProgress >= 100) {
+      setSyncEtaSec(0);
+    } else if (
+      lastP !== null &&
+      lastTs !== null &&
+      syncingProgress > lastP &&
+      now > lastTs
+    ) {
+      const dtSec = (now - lastTs) / 1000;
+      const instRate = (syncingProgress - lastP) / dtSec;
+      // Damped moving average of %/s; refuse absurd instantaneous jumps.
+      const clamped = Math.min(200, Math.max(0.1, instRate));
+      const ema =
+        rateRef.current === null
+          ? clamped
+          : rateRef.current * 0.7 + clamped * 0.3;
+      rateRef.current = ema;
+      setSyncEtaSec(
+        Math.max(0, Math.ceil((100 - syncingProgress) / ema))
+      );
+    } else if (lastP !== null && syncingProgress < lastP) {
+      // New phase: forget the old rate so the estimate re-learns from scratch.
+      rateRef.current = null;
+      setSyncEtaSec(null);
+    }
+
+    lastProgressRef.current = syncingProgress;
+    lastRateTsRef.current = now;
+  }, [fetchingUTXOsRedux, syncingProgress]);
   const totalBch = totalBalance / SATSINBITCOIN;
   const totalUsd =
     typeof bchUsdQuote === 'number' ? totalBch * bchUsdQuote : null;
@@ -122,6 +196,14 @@ const Home: React.FC = () => {
         )
       ),
     [reduxUTXOs]
+  );
+
+  // Feed per-address history progress into the shared store field so the Home
+  // progress bar (rendered under the Sync button) moves for the whole sync —
+  // both the worker bootstrap phases and this history pass.
+  const reportSyncProgress = useCallback(
+    (percent: number) => dispatch(setSyncingProgress(percent)),
+    [dispatch]
   );
 
   useEffect(() => {
@@ -183,6 +265,7 @@ const Home: React.FC = () => {
         walletId: currentWalletId,
         dispatch,
         sessionGeneration,
+        onProgress: reportSyncProgress,
       });
     } catch (error) {
       logError('Home.handleRefresh', error, { walletId: currentWalletId });
@@ -190,6 +273,7 @@ const Home: React.FC = () => {
       // Always clear Syncing for this click — even if the wallet session was
       // cancelled mid-flight (HMR / lock). Leaving the flag true freezes the button.
       dispatch(setFetchingUTXOs(false));
+      dispatch(setSyncingProgress(null));
     }
   }, [
     currentWalletId,
@@ -270,14 +354,34 @@ const Home: React.FC = () => {
               subtitle="Wallet overview"
               compact
               action={
-                <button
-                  type="button"
-                  onClick={handleRefresh}
-                  className="wallet-btn-secondary px-3 py-1.5 text-sm"
-                  disabled={fetchingUTXOsRedux}
-                >
-                  {fetchingUTXOsRedux ? 'Syncing…' : 'Sync'}
-                </button>
+                <div className="flex flex-col items-end gap-1">
+                  <button
+                    type="button"
+                    onClick={handleRefresh}
+                    className="wallet-btn-secondary px-3 py-1.5 text-sm"
+                    disabled={fetchingUTXOsRedux}
+                  >
+                    {fetchingUTXOsRedux ? 'Syncing…' : 'Sync'}
+                  </button>
+                  {(fetchingUTXOsRedux && syncingProgress !== null) && (
+                    <div className="flex items-center gap-1.5 text-xs wallet-muted">
+                      <div className="h-1 w-16 overflow-hidden rounded-full bg-[color-mix(in_oklab,var(--wallet-accent-soft)_45%,transparent)]">
+                        <div
+                          className="h-full rounded-full bg-[var(--wallet-accent-strong)] transition-[width] duration-300"
+                          style={{ width: `${syncingProgress}%` }}
+                        />
+                      </div>
+                      <span className="whitespace-nowrap">
+                        {syncingProgress}%{syncElapsedSec > 0 ? ` · ${syncElapsedSec}s` : ''}
+                        {syncEtaSec !== null && syncEtaSec > 0
+                          ? ` · ~${Math.max(1, syncEtaSec)}s left`
+                          : syncEtaSec === 0
+                            ? ' · done'
+                            : '…'}
+                      </span>
+                    </div>
+                  )}
+                </div>
               }
             />
             <div className="flex items-center justify-between gap-3">

@@ -53,6 +53,32 @@ export async function registerAddressSubscription(
   return true;
 }
 
+/**
+ * Bulk-register address subscriptions in a single batched round-trip.
+ * Returns the list of addresses that were newly subscribed.
+ */
+export async function registerAddressSubscriptionsBulk(
+  addresses: string[],
+  callback: (status: string) => void
+): Promise<string[]> {
+  if (addresses.length === 0) return [];
+
+  const reg = subscriptionRegistry['blockchain.address.subscribe'];
+  const fresh = addresses.filter((addr) => !reg.has(addr));
+  if (fresh.length === 0) return [];
+
+  await ensureNotificationRouter();
+  await ElectrumServer().subscribeMany(
+    'blockchain.address.subscribe',
+    fresh.map((addr) => [addr])
+  );
+
+  for (const addr of fresh) {
+    reg.set(addr, callback);
+  }
+  return fresh;
+}
+
 export async function registerTransactionSubscription(
   txHash: string,
   callback: (height: number) => void

@@ -10,6 +10,7 @@ import { store } from '../state/store';
 import {
   replaceAllUTXOs,
   setFetchingUTXOs,
+  setSyncingProgress,
   updateUTXOsForAddress,
   setInitialized,
   removeUTXOs,
@@ -370,8 +371,12 @@ export async function bootstrapAllUTXOs(expectedEpoch?: number) {
   // the previous "only if still current" finally left Home on Syncing forever.
   const myFetch = ++fetchingOwner;
   store.dispatch(setFetchingUTXOs(true));
+  // Progress sweeps upward across distinct phases so the Home bar visibly moves
+  // even while a single batched network call is in flight (it cannot sub-divide).
+  const report = (percent: number) => store.dispatch(setSyncingProgress(percent));
 
   try {
+    report(5);
     const allUTXOs: Record<string, UTXO[]> = {};
 
     // Wallet-owned and explicitly tracked addresses share one fresh Electrum
@@ -389,15 +394,64 @@ export async function bootstrapAllUTXOs(expectedEpoch?: number) {
     }
     if (!bootstrapIsCurrent()) return;
 
+    report(10);
     const trackedAddresses = Array.from(
       new Set([...walletAddresses, ...quantumrootAddresses].filter(Boolean))
     );
     for (const address of trackedAddresses) invalidateUTXOCache(address);
+
+    // Instant balance: publish the last-known DB snapshot BEFORE any network
+    // round-trip, exactly like Electron Cash shows the wallet file first and
+    // syncs in the background. Without this the Home balance waits for the
+    // (single, batched) Electrum call, which reads as "stuck syncing" on open.
+    try {
+      const cached = await UTXOService.fetchUTXOsFromDatabase(
+        trackedAddresses.map((address) => ({ address }))
+      );
+      if (!bootstrapIsCurrent()) return;
+      const cachedByAddress: Record<string, UTXO[]> = {};
+      for (const [address, utxos] of Object.entries(cached.utxosMap)) {
+        cachedByAddress[address] = utxos;
+      }
+      for (const [address, utxos] of Object.entries(cached.cashTokenUtxosMap)) {
+        cachedByAddress[address] = [
+          ...(cachedByAddress[address] ?? []),
+          ...utxos,
+        ];
+      }
+      if (Object.keys(cachedByAddress).length > 0) {
+        store.dispatch(replaceAllUTXOs({ utxosByAddress: cachedByAddress }));
+      }
+    } catch (error) {
+      // DB snapshot is best-effort; the network fetch below is authoritative.
+      logError('UTXOWorker.bootstrapAllUTXOs.dbSnapshot', error, {
+        walletId: currentWalletId,
+      });
+    }
+    report(20);
+
+    const fetchStart = performance.now();
     const fetchedWalletUTXOs = await UTXOService.fetchAndStoreUTXOsMany(
       currentWalletId,
-      trackedAddresses
+      trackedAddresses,
+      // Drive the 20→70 window with real per-batch completion so the bar moves
+      // continuously during the network fetch instead of freezing at 20% while
+      // the ETA extrapolates a wildly optimistic "seconds left".
+      {
+        onProgress: (done, total) => {
+          if (total <= 0) return;
+          const pct = 20 + Math.round(50 * (done / total));
+          store.dispatch(setSyncingProgress(Math.min(pct, 69)));
+        },
+      }
     );
+    console.info('[UTXOWorker] fetchAndStoreUTXOsMany took', {
+      ms: Math.round(performance.now() - fetchStart),
+      addresses: trackedAddresses.length,
+      addressCount: Object.keys(fetchedWalletUTXOs).length,
+    });
     if (!bootstrapIsCurrent()) return;
+    report(70);
     // Discovery may materialize addresses beyond the key set captured above.
     // Publish every address returned by the fetch, not only the pre-discovery
     // subscription list, so a restored wallet's first balance is complete.
@@ -434,6 +488,7 @@ export async function bootstrapAllUTXOs(expectedEpoch?: number) {
       logError('UTXOWorker.bootstrapAllUTXOs.contractInit', e);
     }
     if (!bootstrapIsCurrent()) return;
+    report(85);
 
     store.dispatch(replaceAllUTXOs({ utxosByAddress: allUTXOs }));
 
@@ -460,6 +515,7 @@ export async function bootstrapAllUTXOs(expectedEpoch?: number) {
     // a successor bootstrap.
     if (myFetch === fetchingOwner) {
       store.dispatch(setFetchingUTXOs(false));
+      store.dispatch(setSyncingProgress(null));
     }
   }
 }
@@ -513,33 +569,36 @@ async function establishSubscriptions(session: WorkerSession) {
       await QuantumrootTrackingService.listTrackedAddresses(currentWalletId);
     if (!isCurrentWorkerContext(session)) return;
 
-    let addedWalletSubscription = false;
-    for (const addr of [...walletAddresses, ...quantumrootAddresses]) {
-      const existingOwner = subscribedAddresses.get(addr);
-      if (
-        existingOwner?.walletId === session.walletId &&
-        existingOwner.generation === session.generation
-      ) {
-        continue;
-      }
-      subscribedAddresses.set(addr, {
-        walletId: session.walletId,
-        generation: session.generation,
-      });
-      addedWalletSubscription = true;
+    const allAddresses = [...walletAddresses, ...quantumrootAddresses];
 
-      try {
-        await ElectrumService.subscribeAddress(addr, async () => {
+    const toSubscribe = allAddresses.filter(
+      (addr) =>
+        !(
+          subscribedAddresses.has(addr) &&
+          subscribedAddresses.get(addr)?.walletId === session.walletId &&
+          subscribedAddresses.get(addr)?.generation === session.generation
+        )
+    );
+
+    if (toSubscribe.length > 0) {
+      // Bulk-subscribe all fresh addresses in a single batched round-trip
+      // instead of one RPC per address (sequential awaits were a top sync cost
+      // for wallets with many derived keys).
+      await ElectrumService.subscribeAddressesBulk(toSubscribe, () => {
+        for (const addr of toSubscribe) {
           refreshAddressSoon(addr, 80, session);
-        });
-        if (!isCurrentWorkerContext(session)) return;
-      } catch (e) {
-        logError('UTXOWorker.establishSubscriptions.walletAddress', e, {
-          address: addr,
+        }
+      });
+      if (!isCurrentWorkerContext(session)) return;
+      for (const addr of toSubscribe) {
+        subscribedAddresses.set(addr, {
+          walletId: session.walletId,
+          generation: session.generation,
         });
       }
     }
-    if (addedWalletSubscription) {
+
+    if (toSubscribe.length > 0) {
       refreshWalletSoon(120, session);
     }
   } catch (e) {

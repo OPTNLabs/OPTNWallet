@@ -36,6 +36,7 @@ import {
 import {
   clearBlockHeaderListeners,
   registerAddressSubscription,
+  registerAddressSubscriptionsBulk,
   registerBlockHeaderListener,
   registerDoubleSpendProofSubscription,
   registerTransactionSubscription,
@@ -65,7 +66,7 @@ const detailsCacheByTxid = new Map<
   { ts: number; data: TransactionDetails | null }
 >();
 const DETAILS_TTL_MS = 60000;
-const ELECTRUM_BATCH_SIZE = 50;
+const ELECTRUM_BATCH_SIZE = 250;
 
 type ElectrumBatchCall = {
   method: string;
@@ -115,14 +116,26 @@ async function requestWithAddressFallback(
 
 async function requestManyInChunks(
   server: ReturnType<typeof ElectrumServer>,
-  calls: ElectrumBatchCall[]
+  calls: ElectrumBatchCall[],
+  onProgress?: (completedCount: number, totalCount: number) => void
 ): Promise<Array<RequestResponse | Error>> {
-  const responses: Array<RequestResponse | Error> = [];
+  if (calls.length === 0) return [];
+  const chunks: ElectrumBatchCall[][] = [];
   for (let start = 0; start < calls.length; start += ELECTRUM_BATCH_SIZE) {
-    const chunk = calls.slice(start, start + ELECTRUM_BATCH_SIZE);
-    responses.push(...(await server.requestMany(chunk)));
+    chunks.push(calls.slice(start, start + ELECTRUM_BATCH_SIZE));
   }
-  return responses;
+  // Parallel chunks; accumulate completed under the single-threaded event loop
+  // so the UI progress bar advances 0→total instead of re-reporting each chunk's size.
+  let completed = 0;
+  const settled = await Promise.all(
+    chunks.map(async (chunk) => {
+      const results = await server.requestMany(chunk);
+      completed += chunk.length;
+      onProgress?.(completed, calls.length);
+      return results;
+    })
+  );
+  return settled.flat();
 }
 
 const ElectrumService = {
@@ -181,7 +194,10 @@ const ElectrumService = {
     return p;
   },
 
-  async getUTXOsMany(addresses: string[]): Promise<Record<string, UTXO[]>> {
+  async getUTXOsMany(
+    addresses: string[],
+    onProgress?: (completedCount: number, totalCount: number) => void
+  ): Promise<Record<string, UTXO[]>> {
     const server = ElectrumServer();
     const uniqueAddresses = Array.from(new Set(addresses.filter(Boolean)));
     const results: Record<string, UTXO[]> = {};
@@ -189,6 +205,10 @@ const ElectrumService = {
     const pendingCalls: Array<{ method: string; params: RequestResponse[] }> = [];
     const now = Date.now();
 
+    // Prefer scripthash.* directly: `blockchain.address.*` is not implemented by
+    // many ElectrumX/Fulcrum nodes (verified live: it returns {} or "Invalid
+    // address"), which forced a serial fallback per address. Converting to
+    // scripthash upfront is valid on every server and batches cleanly.
     for (const address of uniqueAddresses) {
       const cached = cacheByAddr.get(address);
       if (cached && now - cached.ts < UTXO_TTL_MS) {
@@ -202,10 +222,20 @@ const ElectrumService = {
         continue;
       }
 
+      let scriptHash: string | null = null;
+      try {
+        scriptHash = addressToElectrumScripthash(address);
+      } catch {
+        scriptHash = null;
+      }
+      if (!scriptHash) {
+        continue;
+      }
+
       pending.push(address);
       pendingCalls.push({
-        method: 'blockchain.address.listunspent',
-        params: [address],
+        method: 'blockchain.scripthash.listunspent',
+        params: [scriptHash],
       });
     }
 
@@ -213,32 +243,14 @@ const ElectrumService = {
 
     const batchPromise = (async () => {
       try {
-        const batchResults = await requestManyInChunks(server, pendingCalls);
+        const batchResults = await requestManyInChunks(
+          server,
+          pendingCalls,
+          onProgress
+        );
         await Promise.all(batchResults.map(async (response, index) => {
           const address = pending[index];
           if (response instanceof Error) {
-            if (isInvalidAddressError(response)) {
-              try {
-                const fallbackResponse = await requestWithAddressFallback(
-                  server,
-                  'blockchain.address.listunspent',
-                  'blockchain.scripthash.listunspent',
-                  address
-                );
-                if (Array.isArray(fallbackResponse)) {
-                  const utxos = mapUtxoRows(
-                    address,
-                    fallbackResponse as Array<Record<string, unknown>>
-                  );
-                  cacheByAddr.set(address, { ts: Date.now(), data: utxos });
-                  results[address] = utxos;
-                  return;
-                }
-              } catch (fallbackError) {
-                logError('ElectrumService.getUTXOsMany', fallbackError, { address });
-              }
-            }
-
             logError('ElectrumService.getUTXOsMany', response, { address });
             return;
           }
@@ -379,10 +391,18 @@ const ElectrumService = {
         continue;
       }
 
+      let scriptHash: string | null = null;
+      try {
+        scriptHash = addressToElectrumScripthash(address);
+      } catch {
+        scriptHash = null;
+      }
+      if (!scriptHash) continue;
+
       pending.push(address);
       pendingCalls.push({
-        method: 'blockchain.address.get_history',
-        params: [address],
+        method: 'blockchain.scripthash.get_history',
+        params: [scriptHash],
       });
     }
 
@@ -394,29 +414,6 @@ const ElectrumService = {
         await Promise.all(batchResults.map(async (response, index) => {
           const address = pending[index];
           if (response instanceof Error) {
-            if (isInvalidAddressError(response)) {
-              try {
-                const fallbackResponse = await requestWithAddressFallback(
-                  server,
-                  'blockchain.address.get_history',
-                  'blockchain.scripthash.get_history',
-                  address
-                );
-                if (isTransactionHistoryArray(fallbackResponse)) {
-                  historyCacheByAddr.set(address, {
-                    ts: Date.now(),
-                    data: fallbackResponse,
-                  });
-                  results[address] = fallbackResponse;
-                  return;
-                }
-              } catch (fallbackError) {
-                logError('ElectrumService.getTransactionHistoryMany', fallbackError, {
-                  address,
-                });
-              }
-            }
-
             logError('ElectrumService.getTransactionHistoryMany', response, {
               address,
             });
@@ -702,6 +699,20 @@ const ElectrumService = {
       await registerAddressSubscription(address, callback);
     } catch (error) {
       logError('ElectrumService.subscribeAddress', error, { address });
+    }
+  },
+
+  /** Bulk-subscribe addresses in one batched round-trip */
+  async subscribeAddressesBulk(
+    addresses: string[],
+    callback: (status: string) => void
+  ) {
+    try {
+      await registerAddressSubscriptionsBulk(addresses, callback);
+    } catch (error) {
+      logError('ElectrumService.subscribeAddressesBulk', error, {
+        addressCount: addresses.length,
+      });
     }
   },
 

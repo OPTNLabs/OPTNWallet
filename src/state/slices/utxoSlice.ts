@@ -7,6 +7,8 @@ interface UTXOState {
   totalBalance: number;
   fetchingUTXOs: boolean;
   initialized: boolean;
+  /** 0-100 sync progress, or null when no sync is in flight. */
+  syncingProgress: number | null;
 }
 
 const initialState: UTXOState = {
@@ -14,6 +16,7 @@ const initialState: UTXOState = {
   totalBalance: 0,
   fetchingUTXOs: false,
   initialized: false,
+  syncingProgress: null,
 };
 
 const utxoAmount = (utxo: UTXO): number => utxo.value ?? utxo.amount ?? 0;
@@ -55,6 +58,12 @@ const utxoSlice = createSlice({
     setFetchingUTXOs: (state, action: PayloadAction<boolean>) => {
       state.fetchingUTXOs = action.payload;
     },
+    setSyncingProgress: (state, action: PayloadAction<number | null>) => {
+      state.syncingProgress =
+        action.payload === null
+          ? null
+          : Math.max(0, Math.min(100, action.payload));
+    },
     setInitialized: (state, action: PayloadAction<boolean>) => {
       state.initialized = action.payload;
     },
@@ -91,6 +100,7 @@ export const {
   updateUTXOsForAddress,
   removeUTXOs,
   setFetchingUTXOs,
+  setSyncingProgress,
   setInitialized,
 } = utxoSlice.actions;
 
