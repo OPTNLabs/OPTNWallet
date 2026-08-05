@@ -74,6 +74,20 @@ describe('CashFusion settings mode enforcement', () => {
   });
 
   it('greys Start P2P when every coin is reserved by another round', async () => {
+    class MemoryStorage {
+      private map = new Map<string, string>();
+      getItem(key: string): string | null {
+        return this.map.has(key) ? (this.map.get(key) as string) : null;
+      }
+      setItem(key: string, value: string): void {
+        this.map.set(key, value);
+      }
+      removeItem(key: string): void {
+        this.map.delete(key);
+      }
+    }
+    (globalThis as { localStorage?: unknown }).localStorage = new MemoryStorage();
+
     const { reserveOutpoints, outpointKey, clearOutpointReservations } =
       await import('../../../platform/desktop/fusionRoundState');
     const tx = 'ab'.repeat(32);
@@ -115,8 +129,9 @@ describe('CashFusion settings mode enforcement', () => {
     expect(html).toContain(
       'All coins are reserved by another fusion round'
     );
-    // Button itself is disabled.
-    expect(html).toMatch(/disabled=""[^>]*>[\s\S]*Start P2P round/);
+    expect(html).toMatch(
+      /disabled="" class="w-full rounded-xl border border-violet[^"]*">Start P2P round/
+    );
     clearOutpointReservations(7);
   });
 
