@@ -133,12 +133,14 @@ export function isLivePoolAnnouncement(
   if (peer.at < opts.nowSeconds - POOL_LIVE_ACTIVE_SECONDS) return false;
 
   const elapsed = opts.nowSeconds - opts.gatherStartSeconds;
-  // After one re-announce + small lag: require proof of life during THIS gather.
-  if (elapsed >= POOL_REANNOUNCE_SECONDS + 2) {
+  // After one re-announce cycle: only keys that published during THIS gather.
+  // Orphan HMR/cancel loops keep re-publishing old keys — those still pass
+  // "recent" checks; this bound drops anything that never touched this attempt.
+  if (elapsed >= POOL_REANNOUNCE_SECONDS + 1) {
     return peer.at >= opts.gatherStartSeconds - 1;
   }
-  // Early window: only near-now announcements (not 14–24s-old ghosts).
-  return peer.at >= opts.gatherStartSeconds - POOL_REANNOUNCE_SECONDS;
+  // Early window (~6s): only very fresh announces (not abandoned Start keys).
+  return peer.at >= opts.gatherStartSeconds - 3;
 }
 
 export interface BuildPoolAnnouncementOptions {
@@ -412,6 +414,26 @@ export interface JoinPoolOptions {
   onError?: (error: Error) => void;
 }
 
+/**
+ * Survives Vite HMR. Abandoned Start / hot-reload left setInterval re-announce
+ * loops publishing dead throwaway keys → other wallets saw 6–7 "live" with 4
+ * real windows. Bumping the epoch makes every old loop no-op and self-clear.
+ */
+const JOIN_POOL_EPOCH_KEY = '__optn_p2p_join_pool_epoch__';
+
+function joinPoolEpoch(): number {
+  const g = globalThis as unknown as Record<string, number>;
+  return g[JOIN_POOL_EPOCH_KEY] ?? 0;
+}
+
+/** Invalidate every joinPool re-announce loop in this JS realm (this window). */
+export function invalidateJoinPoolAnnouncers(): number {
+  const g = globalThis as unknown as Record<string, number>;
+  const next = joinPoolEpoch() + 1;
+  g[JOIN_POOL_EPOCH_KEY] = next;
+  return next;
+}
+
 /** Subscribe to exactly one fresh network epoch and periodically re-announce. */
 export function joinPool(
   pool: SimplePool,
@@ -422,10 +444,23 @@ export function joinPool(
   announceNow: () => Promise<void>;
   withdraw: () => Promise<void>;
 } {
+  // Capture epoch after any prior invalidate so only THIS pool may announce.
+  const myEpoch = joinPoolEpoch();
   const peers = new Map<string, PoolAnnouncement>();
   let stopped = false;
   let announceTimer: ReturnType<typeof setTimeout> | null = null;
   let repeatTimer: ReturnType<typeof setInterval> | null = null;
+  const stillMine = () => !stopped && joinPoolEpoch() === myEpoch;
+  const teardownTimers = () => {
+    if (announceTimer) {
+      clearTimeout(announceTimer);
+      announceTimer = null;
+    }
+    if (repeatTimer) {
+      clearInterval(repeatTimer);
+      repeatTimer = null;
+    }
+  };
   // Pull only near-live replaceables. A 180s `since` rehydrated every abandoned
   // Start key from the last 3 minutes and inflated the gather count.
   const subscribeSince =
@@ -436,6 +471,7 @@ export function joinPool(
     since: subscribeSince,
   };
   const emitPeers = () => {
+    if (!stillMine()) return;
     const now = Math.floor(Date.now() / 1000);
     // Drop expired / retired / stale ghosts so callers that REPLACE their list
     // from this emit never re-accumulate abandoned Start keys.
@@ -453,6 +489,7 @@ export function joinPool(
 
   const sub = pool.subscribeMany(relays, filter, {
     onevent(evt: Event) {
+      if (!stillMine()) return;
       if (isRetiredRoundKey(evt.pubkey)) return;
       const ann = parsePoolAnnouncement(evt, {
         network: options.network,
@@ -486,7 +523,10 @@ export function joinPool(
   });
 
   const announce = async () => {
-    if (stopped) return;
+    if (!stillMine()) {
+      teardownTimers();
+      return;
+    }
     const evt = buildPoolAnnouncement(options.round, {
       network: options.network,
       epoch: options.epoch,
@@ -507,6 +547,10 @@ export function joinPool(
     Math.floor(Math.random() * MAX_ANNOUNCE_DELAY_MS)
   );
   repeatTimer = setInterval(() => {
+    if (!stillMine()) {
+      teardownTimers();
+      return;
+    }
     // Prune stale/retired keys even when no new events arrive (ghosts age out).
     emitPeers();
     void announce().catch((error: unknown) =>
@@ -519,16 +563,14 @@ export function joinPool(
   return {
     stop: () => {
       stopped = true;
-      if (announceTimer) clearTimeout(announceTimer);
-      if (repeatTimer) clearInterval(repeatTimer);
+      teardownTimers();
       sub.close();
     },
     announceNow: announce,
     /** Retire this round key from the pool so it never lingers as a ghost. */
     withdraw: async () => {
       stopped = true;
-      if (announceTimer) clearTimeout(announceTimer);
-      if (repeatTimer) clearInterval(repeatTimer);
+      teardownTimers();
       // Shared ghost list first so every window's next filter pass drops us
       // even if the expired replaceable is slow over Tor.
       retireRoundKey(options.round.pubkey);
@@ -544,6 +586,7 @@ export function joinPool(
       // `pool.publish` and leave this replaceable announcement discoverable as a
       // ghost until its TTL expires.
       await publishEventAtLeastOnce(pool, relays, evt).catch(() => undefined);
+      sub.close();
     },
   };
 }
