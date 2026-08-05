@@ -130,7 +130,7 @@ describe('CashFusion settings mode enforcement', () => {
       'All coins are reserved by another fusion round'
     );
     expect(html).toMatch(
-      /disabled="" class="w-full rounded-xl border border-violet[^"]*">Start P2P round/
+      /disabled=""[^>]*>Start P2P round/
     );
     clearOutpointReservations(7);
   });
