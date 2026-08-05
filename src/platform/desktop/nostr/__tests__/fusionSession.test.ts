@@ -242,6 +242,8 @@ describe('P2P fusion round choreography (3 peers, in-memory)', () => {
     // plaintext, which is how this used to pass without running at all.
     const onionSends = hub.sent.filter((m) => m.message.type === 'onion_output');
     expect(onionSends.length).toBeGreaterThan(0);
+    const declares = hub.sent.filter((m) => m.message.type === 'onion_declare');
+    expect(declares.length).toBeGreaterThan(0);
 
     // The coordinator assembles, it does not peel: it must never appear in a
     // mix order.
@@ -263,6 +265,75 @@ describe('P2P fusion round choreography (3 peers, in-memory)', () => {
     expect(decodedOnion.inputs).toHaveLength(3);
     expect(decodedOnion.outputs).toHaveLength(3);
     expect(hub.activeHandlerCount()).toBe(0);
+  });
+
+  it('onion mix-net completes when peers inject unequal output counts (not peer count)', async () => {
+    // Regression: expectedOnionCount === participants.length hung whenever
+    // sum(outputs) !== N (random 2–4 outputs/peer from planP2pOutputValues).
+    const peers = [1, 2, 3].map((n) => {
+      const inKey = keypair(n * 10 + 1);
+      const outA = keypair(n * 10 + 2);
+      const outB = keypair(n * 10 + 3);
+      const round = keypair(n * 10 + 4);
+      const outCount = n; // 1, 2, 3 — sum 6 ≠ 3 peers
+      const perOut = Math.floor(99_500 / outCount);
+      const outputs = Array.from({ length: outCount }, (_, i) => ({
+        script: p2pkhHex(i === 0 ? outA.pubHex : outB.pubHex),
+        value: perOut,
+      }));
+      // Burn remainder into first output so fee stays sane.
+      outputs[0].value += 99_500 - perOut * outCount;
+      const contribution: PeerContribution = {
+        inputs: [
+          {
+            prevTxid: `${n}${'b'.repeat(63)}`,
+            prevIndex: n,
+            value: 100_000,
+            pubkey: inKey.pubHex,
+          },
+        ],
+        outputs,
+      };
+      return {
+        round,
+        keys: new Map([
+          [inKey.pubHex, inKey.priv],
+          [round.pubHex, round.priv],
+        ]),
+        contribution,
+      };
+    });
+    const participants = peers.map((p) => p.round.pubHex);
+    const hub = new Hub();
+    let broadcasts = 0;
+    const results = await Promise.all(
+      peers.map((p) =>
+        runFusionRound(
+          {
+            myPubkey: p.round.pubHex,
+            participants,
+            tier: 100_000,
+            feerate: 1000,
+            myContribution: p.contribution,
+            keysByPubkey: p.keys,
+            broadcast: async (txHex) => {
+              broadcasts += 1;
+              return txidOf(txHex);
+            },
+            timeoutMs: 8_000,
+            jitterMs: [0, 0],
+            onionEnabled: true,
+          },
+          hub.transportFor(p.round.pubHex)
+        )
+      )
+    );
+    expect(new Set(results.map((r) => r.txid)).size).toBe(1);
+    expect(broadcasts).toBe(1);
+    const totalOutputs = peers.reduce((s, p) => s + p.contribution.outputs.length, 0);
+    expect(totalOutputs).toBe(6);
+    const decoded = decodeTransaction(hexToBin(results[0].txHex)) as TransactionCommon;
+    expect(decoded.outputs).toHaveLength(6);
   });
 
   it('coordinator VM-validates every peer signature before broadcast', async () => {

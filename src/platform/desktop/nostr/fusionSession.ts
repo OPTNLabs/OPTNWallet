@@ -111,6 +111,13 @@ export type RoundMessage =
     } & MessageBinding)
   | ({ type: 'outputs'; session: string; outputs: FusionOutputRef[] } & MessageBinding)
   | ({ type: 'onion_output'; session: string; onion: string; mixOrder: string[] } & MessageBinding)
+  /**
+   * How many onion blobs this peer will inject (one per output). Signed under
+   * the round key so peels know the hop total = sum of declares. Without this,
+   * peels waited for `participants.length` while peers sent a random 2–4
+   * onions each → hang / outputSlots=0 (Claude diagnosis, 2026-08-06).
+   */
+  | ({ type: 'onion_declare'; session: string; outputCount: number } & MessageBinding)
   | ({ type: 'components_ready'; session: string } & MessageBinding)
   | ({
       type: 'assembled';
@@ -507,6 +514,11 @@ export function parseRoundMessage(content: string): RoundMessage | null {
           return null;
         }
         break;
+      case 'onion_declare':
+        if (!isSafeIntegerIn(message.outputCount, 1, 4)) {
+          return null;
+        }
+        break;
       case 'assembled':
         if (
           !validArray(message.inputs, validInput) ||
@@ -674,9 +686,29 @@ function runParticipant(
     let unsubscribe: () => void = () => undefined;
     let unsubscribeProtocolError: () => void = () => undefined;
     const seenNonces = new Set<string>();
-    // Onion mix-net state: collect onions from other peers
+    // Onion mix-net: one blob per *output*, not per peer. Each peer announces
+    // how many it will inject (`onion_declare`); hop waits for sum(declares).
     const collectedOnions: string[] = [];
-    const expectedOnionCount = params.participants.length;
+    const declaredOnionCounts = new Map<string, number>();
+    let onionBatchProcessing = false;
+
+    const expectedOnionCount = (): number | null => {
+      if (declaredOnionCounts.size < params.participants.length) return null;
+      let sum = 0;
+      for (const peer of params.participants) {
+        const count = declaredOnionCounts.get(peer);
+        if (
+          count === undefined ||
+          !Number.isSafeInteger(count) ||
+          count < 1 ||
+          count > 4
+        ) {
+          return null;
+        }
+        sum += count;
+      }
+      return sum;
+    };
 
     // Credential phase state — resolved when the coordinator issues parameters
     // and when our blind responses arrive.
@@ -735,45 +767,53 @@ function runParticipant(
       void fail(abortError('cancelled'), true);
     };
 
-    // Handle onion message: collect, peel, shuffle, forward
-    const handleOnionMessage = async (_from: string, message: Extract<RoundMessage, { type: 'onion_output' }>) => {
-      if (settled) return;
-
-      // Store the onion blob
-      collectedOnions.push(message.onion);
-
-      // Wait for all onions before processing
-      if (collectedOnions.length < expectedOnionCount) return;
-
+    // Peel only when every peer has declared and the matching onion count has
+    // arrived — never `participants.length` alone (outputs are 2–4 per peer).
+    const processOnionBatchIfReady = async () => {
+      if (settled || onionBatchProcessing) return;
+      const expected = expectedOnionCount();
+      if (expected === null || collectedOnions.length < expected) return;
+      onionBatchProcessing = true;
+      // Take exactly this hop's batch; leave any stragglers out of the shuffle.
+      const batch = collectedOnions.splice(0, expected);
       try {
-        // Get this peer's private key for peeling
         const myPriv = params.keysByPubkey.get(params.myPubkey);
         if (!myPriv) {
           throw new Error('private key not found for onion peeling');
         }
 
-        // Peel one layer from each onion
         const peeled: Uint8Array[] = [];
-        for (const onionB64 of collectedOnions) {
-          const blob = Uint8Array.from(atob(onionB64), c => c.charCodeAt(0));
-          const inner = await onionPeel(blob, myPriv);
-          peeled.push(inner);
+        for (const onionB64 of batch) {
+          try {
+            const blob = Uint8Array.from(atob(onionB64), (c) => c.charCodeAt(0));
+            peeled.push(await onionPeel(blob, myPriv));
+          } catch {
+            // Drop a single bad blob rather than DoS the whole round (Claude #2).
+            console.warn('[p2p-fusion] dropped undecryptable onion layer');
+          }
+        }
+        if (peeled.length !== batch.length) {
+          throw new Error(
+            `onion peel incomplete (${peeled.length}/${batch.length} layers)`
+          );
         }
 
         // The mix-net shuffle. Must come from the CSPRNG — see secureShuffle.
         secureShuffle(peeled);
 
         const nextIdx = myIdx + 1;
-
         if (nextIdx >= mixOrder.length) {
           // LAST PEELER — reveal plaintext outputs to coordinator only.
-          // Coordinator assembles the tx; participants wait for 'assembled'.
           const revealedOutputs: FusionOutputRef[] = [];
           for (const inner of peeled) {
             const { addr, value } = onionUnpad(inner);
-            revealedOutputs.push({ script: addr, value });
+            if (addr && value > 0) {
+              revealedOutputs.push({ script: addr, value });
+            }
           }
-
+          if (revealedOutputs.length === 0) {
+            throw new Error('onion peel produced no valid outputs');
+          }
           await transport.send(coordinator, {
             ...messageBinding(),
             type: 'outputs',
@@ -781,9 +821,7 @@ function runParticipant(
             outputs: revealedOutputs,
           });
         } else {
-          // NOT last peeler — forward peeled onions to next peeler
           const nextPeeler = mixOrder[nextIdx];
-          collectedOnions.length = 0; // Reset for next round
           for (const inner of peeled) {
             const innerB64 = btoa(String.fromCharCode(...inner));
             await transport.send(nextPeeler, {
@@ -795,11 +833,38 @@ function runParticipant(
             });
           }
         }
-      } catch (error) {
-        // If onion peeling fails (e.g., WASM not loaded in test env),
-        // broadcast an abort so the round fails gracefully
-        throw new Error(`onion peeling failed: ${error}`);
+      } finally {
+        onionBatchProcessing = false;
+        // Always clear after a process attempt so a second batch cannot stack
+        // on a stale last-peeler buffer (Claude: reset was only on forward).
+        if (collectedOnions.length > 0 && expectedOnionCount() !== null) {
+          void processOnionBatchIfReady().catch((error: unknown) =>
+            void fail(asError(error), true)
+          );
+        }
       }
+    };
+
+    const handleOnionDeclare = (
+      from: string,
+      message: Extract<RoundMessage, { type: 'onion_declare' }>
+    ) => {
+      if (!params.participants.includes(from)) return;
+      declaredOnionCounts.set(from, message.outputCount);
+      void processOnionBatchIfReady().catch((error: unknown) =>
+        void fail(asError(error), true)
+      );
+    };
+
+    const handleOnionMessage = (
+      _from: string,
+      message: Extract<RoundMessage, { type: 'onion_output' }>
+    ) => {
+      if (settled) return;
+      collectedOnions.push(message.onion);
+      void processOnionBatchIfReady().catch((error: unknown) =>
+        void fail(asError(error), true)
+      );
     };
 
     unsubscribe = transport.onMessage((from, message) => {
@@ -808,14 +873,16 @@ function runParticipant(
       if (seenNonces.has(message.nonce)) return;
       seenNonces.add(message.nonce);
 
+      // Round-key declare (attributable) — peels need the hop total first.
+      if (message.type === 'onion_declare') {
+        handleOnionDeclare(from, message);
+        return;
+      }
+
       // Onion outputs are gift-wrapped under a throwaway key (fusionTransport),
-      // so `from` is almost never a round participant. Requiring
-      // participants.includes(from) dropped every production onion — peel never
-      // ran, coordinator saw ready 2/2 outputSlots=0, and the round aborted.
+      // so `from` is almost never a round participant.
       if (message.type === 'onion_output') {
-        void handleOnionMessage(from, message).catch((error: unknown) =>
-          void fail(asError(error), true)
-        );
+        handleOnionMessage(from, message);
         return;
       }
 
@@ -984,7 +1051,22 @@ function runParticipant(
             'onion mix-net enabled but secp256k1 is unavailable in this environment'
           );
         }
-        for (const output of params.myContribution.outputs) {
+        if (mixOrder.length === 0) {
+          throw new Error('onion mix-net needs at least one peeler');
+        }
+        const myOutputs = params.myContribution.outputs;
+        // Self is a peeler (non-coordinator); don't wait for our own gift-wrap echo.
+        declaredOnionCounts.set(params.myPubkey, myOutputs.length);
+        // Tell every peeler how many blobs we will inject (round-key signed).
+        const declare: RoundMessage = {
+          ...messageBinding(),
+          type: 'onion_declare',
+          session,
+          outputCount: myOutputs.length,
+        };
+        await Promise.all(mixOrder.map((peeler) => transport.send(peeler, declare)));
+        // One onion per output (80-byte pad cannot batch scripts).
+        for (const output of myOutputs) {
           const payload = `${output.script}|${output.value}`;
           const onion = await onionWrap(payload, mixOrder);
           const onionB64 = btoa(String.fromCharCode(...onion));
@@ -1009,7 +1091,9 @@ function runParticipant(
           outputs: params.myContribution.outputs,
         });
       }
-      // Signal that all components have been submitted.
+      // Signal that inputs (and onion inject / direct outputs) left this peer.
+      // In onion mode the coordinator still waits for the last peeler's reveal
+      // before assemble — ready ≠ pool filled.
       await transport.send(coordinator, {
         ...messageBinding(),
         type: 'components_ready',
@@ -1555,13 +1639,24 @@ function runCoordinator(
       );
 
       if (!useOnionForOutputs) return;
+      if (mixOrder.length === 0) {
+        throw new Error('onion mix-net needs at least one peeler');
+      }
       const jMin = params.jitterMs?.[0] ?? 200;
       const jMax = params.jitterMs?.[1] ?? 2_000;
-      for (const output of params.myContribution.outputs) {
+      const myOutputs = params.myContribution.outputs;
+      const declare: RoundMessage = {
+        ...messageBinding(),
+        type: 'onion_declare',
+        session,
+        outputCount: myOutputs.length,
+      };
+      await Promise.all(mixOrder.map((peeler) => transport.send(peeler, declare)));
+      const firstPeeler = mixOrder[0];
+      for (const output of myOutputs) {
         const payload = `${output.script}|${output.value}`;
         const onion = await onionWrap(payload, mixOrder);
         const onionB64 = btoa(String.fromCharCode(...onion));
-        const firstPeeler = mixOrder[0];
         await transport.send(firstPeeler, {
           ...messageBinding(),
           type: 'onion_output',
