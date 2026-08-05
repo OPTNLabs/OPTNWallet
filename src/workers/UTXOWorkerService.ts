@@ -603,7 +603,7 @@ async function establishSubscriptions(session: WorkerSession) {
       // (Selene). Never refresh the whole set on one notify.
       await ElectrumService.subscribeAddressesBulk(
         toSubscribe,
-        (addr, _status) => {
+        (addr) => {
           refreshAddressSoon(addr, 80, session);
         }
       );

@@ -210,7 +210,7 @@ export const CashFusionSettings: React.FC<{ variant?: 'card' | 'servers' }> = ({
         setP2pPhase(0);
       }
     });
-  }, [walletId]);
+  }, [walletId, fuseState, p2pState]);
 
   // The SOCKS proxy to actually route through, or undefined for a direct
   // connection. Direct is only valid for a localhost server (Electron Cash's

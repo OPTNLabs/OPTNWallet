@@ -203,7 +203,9 @@ export async function pickWalletPackFiles(
       : [];
   if (paths.length === 0) return null;
 
-  let { keystorePath, coldPath } = splitWalletPackPaths(paths);
+  const split = splitWalletPackPaths(paths);
+  const keystorePath = split.keystorePath;
+  let coldPath = split.coldPath;
   let keystore: WalletFileV1 | null = null;
   let coldText: string | null = null;
 

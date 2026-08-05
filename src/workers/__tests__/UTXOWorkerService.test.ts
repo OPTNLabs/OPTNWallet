@@ -32,7 +32,7 @@ const reconnectMock = vi.fn();
 const invalidateUTXOCacheMock = vi.fn();
 const subscribeBlockHeadersMock = vi.fn();
 const subscribeAddressMock = vi.fn();
-const subscribeAddressesBulkMock = vi.fn(async (_addresses: string[]) => {
+const subscribeAddressesBulkMock = vi.fn(async () => {
   /* bulk subscribe resolves by default */
 });
 const unsubscribeAddressMock = vi.fn();
