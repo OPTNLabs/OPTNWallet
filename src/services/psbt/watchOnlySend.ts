@@ -26,6 +26,7 @@ import {
   type PsbtInputSpec,
   type PsbtOutputSpec,
 } from './psbtBch';
+import { p2shLockingBytecodeFor } from './psbtMultisig';
 
 /**
  * A UTXO chosen by coin control, with the public-key derivation needed for the
@@ -293,6 +294,12 @@ export function buildWatchOnlyPsbt(
         derivationPath: parseBip32PathString(cosigner.derivationPath),
       };
     });
+    // Multisig change goes back to the same P2SH policy, not to the wallet's
+    // P2PKH change address: the next spend has to be signed by the same
+    // cosigners, so the signer must see this output as its own.
+    changeOutput.lockingBytecode = p2shLockingBytecodeFor(
+      hexToBin(params.changeRedeemScriptHex)
+    );
     changeOutput.redeemScript = hexToBin(params.changeRedeemScriptHex);
     changeOutput.derivations = changeDerivations;
   }
