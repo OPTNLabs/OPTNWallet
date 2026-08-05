@@ -83,6 +83,8 @@ export interface DesktopMenuActionHandlers {
   send: () => void | Promise<void>;
   history: () => void | Promise<void>;
   exportWallet: () => void | Promise<void>;
+  exportColdArchive: () => void | Promise<void>;
+  importColdArchive: () => void | Promise<void>;
   settings: () => void | Promise<void>;
   toggleTheme: () => void | Promise<void>;
   refreshWallet: () => void | Promise<void>;
@@ -197,6 +199,8 @@ export async function dispatchDesktopMenuAction(
     send: handlers.send,
     history: handlers.history,
     export_wallet: handlers.exportWallet,
+    export_cold_archive: handlers.exportColdArchive,
+    import_cold_archive: handlers.importColdArchive,
     settings: handlers.settings,
     toggle_theme: handlers.toggleTheme,
     refresh_wallet: handlers.refreshWallet,
@@ -359,6 +363,83 @@ async function handleExportWallet(walletId: number) {
   }
 }
 
+async function handleExportColdArchive(walletId: number) {
+  if (!walletId) return;
+  const password = window.prompt(
+    'Wallet password to encrypt the cold archive (labels, history, fusion depth — no seed):'
+  );
+  if (password === null) return;
+  if (!password) {
+    window.dispatchEvent(
+      new CustomEvent('optn:toast', {
+        detail: { message: 'Password required to encrypt the cold archive.' },
+      })
+    );
+    return;
+  }
+  try {
+    const { exportEncryptedColdArchive } = await import(
+      './WalletColdExportService'
+    );
+    const { savedPath } = await exportEncryptedColdArchive(walletId, password);
+    window.dispatchEvent(
+      new CustomEvent('optn:toast', {
+        detail: {
+          message: savedPath
+            ? `Cold archive saved: ${savedPath}`
+            : 'Cold archive save cancelled.',
+        },
+      })
+    );
+  } catch (err) {
+    console.error('[menu] Export cold archive failed:', err);
+    window.dispatchEvent(
+      new CustomEvent('optn:toast', {
+        detail: {
+          message:
+            err instanceof Error ? err.message : 'Could not export cold archive.',
+        },
+      })
+    );
+  }
+}
+
+async function handleImportColdArchive(walletId: number) {
+  if (!walletId) return;
+  const password = window.prompt(
+    'Password for the encrypted cold archive (usually this wallet’s unlock password):'
+  );
+  if (password === null) return;
+  if (!password) {
+    window.dispatchEvent(
+      new CustomEvent('optn:toast', {
+        detail: { message: 'Password required to decrypt the cold archive.' },
+      })
+    );
+    return;
+  }
+  try {
+    const { importEncryptedColdArchiveFromFile } = await import(
+      './WalletColdExportService'
+    );
+    const stats = await importEncryptedColdArchiveFromFile(walletId, password);
+    window.dispatchEvent(
+      new CustomEvent('optn:toast', {
+        detail: {
+          message: `Cold import: ${stats.labels} labels, ${stats.fusionCoins} fusion depths.`,
+        },
+      })
+    );
+  } catch (err) {
+    const text = err instanceof Error ? err.message : 'Import failed.';
+    if (text.includes('cancelled')) return;
+    console.error('[menu] Import cold archive failed:', err);
+    window.dispatchEvent(
+      new CustomEvent('optn:toast', { detail: { message: text } })
+    );
+  }
+}
+
 export function useMenuBar(): void {
   const navigate = useNavigate();
   const dispatch = useDispatch<AppDispatch>();
@@ -420,6 +501,10 @@ export function useMenuBar(): void {
         if (walletId) navigate(transactionsRoute(walletId));
       },
       exportWallet: () => (walletId ? handleExportWallet(walletId) : undefined),
+      exportColdArchive: () =>
+        walletId ? handleExportColdArchive(walletId) : undefined,
+      importColdArchive: () =>
+        walletId ? handleImportColdArchive(walletId) : undefined,
       settings: () => {
         if (walletId) navigate(ROUTE_PATHS.settings);
       },
@@ -606,6 +691,18 @@ export function useMenuBar(): void {
             text: 'Export Wallet…',
             enabled: walletActionEnabled,
             action: menuAction('export_wallet'),
+          }),
+          await MenuItem.new({
+            id: 'export_cold_archive',
+            text: 'Export Cold Archive…',
+            enabled: walletActionEnabled,
+            action: menuAction('export_cold_archive'),
+          }),
+          await MenuItem.new({
+            id: 'import_cold_archive',
+            text: 'Import Cold Archive…',
+            enabled: walletActionEnabled,
+            action: menuAction('import_cold_archive'),
           }),
           await PredefinedMenuItem.new({ item: 'Separator' }),
           await MenuItem.new({

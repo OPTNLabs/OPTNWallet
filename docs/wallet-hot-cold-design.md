@@ -37,8 +37,16 @@ listunspent → format → replaceWalletAddressUTXOs (SQL) → return map → Re
 | Fusion depth / round metadata | Existing (`fusionCoinDepth`) + UTXO “Fused ×N” |
 | Labels on UTXO/tx | **Slice 1 done** — `coin_labels` + `CoinLabelService` |
 | Labels export CSV | **Slice 1** — `exportCoinLabelsCsv` |
-| Full cold archive JSON | **Slice 2** — Settings → Export cold archive |
+| Encrypted cold archive export/import | **Slice 2** — Settings + Wallet menu; password AES-GCM |
 | Tx graph (in→out) | Planned |
+
+### Encrypted cold archive (slice 2)
+
+- On-disk format: `optn-cold-archive-enc-v1` (ciphertext + wallet `kdf_salt`)  
+- Password: same wallet unlock password (PBKDF2 + AES-GCM via `WalletCrypto`)  
+- Import: labels + fusion depth only (HOT balance still from network)  
+- Plaintext `optn-cold-archive-v1` files are rejected for import  
+- Menu: **Wallet → Export Cold Archive…** / **Import Cold Archive…**
 | Archive compaction (old spent txs) | Planned |
 | Optional raw-tx ancestry (power user) | Later — still not balance boss |
 

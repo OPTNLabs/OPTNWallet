@@ -128,6 +128,61 @@ export function exportFusionDepthState(walletId: number): {
   };
 }
 
+/**
+ * Merge imported fusion state into this wallet (COLD import).
+ * Depth: keep the max of local vs imported per outpoint (never lower privacy claim wrongly).
+ * Txids: union.
+ */
+export function importFusionDepthState(
+  walletId: number,
+  state: {
+    coinDepth?: Record<string, { d?: number; at?: number } | number>;
+    fusionTxids?: string[];
+  }
+): { coins: number; txids: number } {
+  const entries = read(walletId);
+  let coins = 0;
+  const incoming = state.coinDepth ?? {};
+  for (const [outpoint, raw] of Object.entries(incoming)) {
+    if (!outpoint.includes(':')) continue;
+    let d = 0;
+    let at = Date.now();
+    if (typeof raw === 'number' && Number.isFinite(raw)) {
+      d = Math.max(0, Math.trunc(raw));
+    } else if (raw && typeof raw === 'object') {
+      d =
+        typeof raw.d === 'number' && Number.isFinite(raw.d)
+          ? Math.max(0, Math.trunc(raw.d))
+          : 0;
+      at =
+        typeof raw.at === 'number' && Number.isFinite(raw.at)
+          ? raw.at
+          : Date.now();
+    } else {
+      continue;
+    }
+    const prev = entries[outpoint]?.d ?? 0;
+    if (d >= prev) {
+      entries[outpoint] = { d, at };
+      coins += 1;
+    }
+  }
+  write(walletId, entries);
+
+  const txids = readFusionTxids(walletId);
+  let addedTx = 0;
+  for (const t of state.fusionTxids ?? []) {
+    const n = t.trim().toLowerCase();
+    if (n.length !== 64) continue;
+    if (!txids.has(n)) {
+      txids.add(n);
+      addedTx += 1;
+    }
+  }
+  writeFusionTxids(walletId, txids);
+  return { coins, txids: addedTx };
+}
+
 function readFusionTxids(walletId: number): Set<string> {
   try {
     const raw = getLocalStorage()?.getItem(`${TXID_PREFIX}${walletId}`);
