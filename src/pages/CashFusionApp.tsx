@@ -25,18 +25,18 @@ const CashFusionApp: React.FC = () => {
           title="CashFusion"
           subtitle="Private CoinJoin — server or P2P"
           compact
-          titleAction={
-            <button
-              type="button"
-              onClick={() => navigate(returnTarget)}
-              className="rounded-lg border border-[var(--wallet-border)] px-2.5 py-1 text-xs wallet-muted hover:wallet-text-strong"
-            >
-              Back
-            </button>
-          }
         />
-        <div className="min-h-0 flex-1 space-y-3 overflow-y-auto overscroll-contain pr-1 pb-4">
+        <div className="min-h-0 flex-1 space-y-3 overflow-y-auto overscroll-contain pr-1">
           <CashFusionSettings />
+        </div>
+        <div className="mt-auto shrink-0 pb-2 pt-2">
+          <button
+            type="button"
+            className="wallet-btn-danger w-full py-3 text-base font-semibold shadow-xl"
+            onClick={() => navigate(returnTarget)}
+          >
+            Back
+          </button>
         </div>
       </div>
     </WalletScreen>

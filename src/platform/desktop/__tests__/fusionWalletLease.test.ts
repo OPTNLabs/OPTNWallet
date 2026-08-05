@@ -109,10 +109,11 @@ describe('cross-window fusion lease', () => {
     expect(await acquireRoundLease(2)).not.toBeNull();
   });
 
-  it('fails closed when no lock manager exists', async () => {
+  it('falls back to storage-only lease when no lock manager exists', async () => {
     vi.stubGlobal('navigator', {});
-    // Without exclusivity we cannot promise a single round, so refuse rather
-    // than risk two windows both paying.
+    // Single-window WebViews without Web Locks still fuse; stale reclaim
+    // remains the exclusivity backstop.
+    expect(await acquireRoundLease(2)).not.toBeNull();
     expect(await acquireRoundLease(2)).toBeNull();
     expect(await tryClaimAutoCooldown(2, COOLDOWN)).toBe(false);
   });

@@ -20,7 +20,11 @@ vi.mock('../../../platform/desktop/FusionRunnerService', async (importOriginal) 
     >();
   return {
     ...actual,
+    // Activity only greys the UI when this window holds a real lease.
+    isFusionRunning: (walletId: number) =>
+      activityState.current?.walletId === walletId,
     getFusionActivity: () => activityState.current,
+    reconcileIdleFusionState: async () => undefined,
     subscribeFusionActivity: (
       _walletId: number,
       listener: (activity: typeof activityState.current) => void
