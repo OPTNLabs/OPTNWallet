@@ -162,8 +162,10 @@ export async function negotiateFusionRound(
     Date.now() + (params.timeoutMs ?? DEFAULT_RENDEZVOUS_TIMEOUT_MS);
 
   for (let attempt = 0; ; attempt += 1) {
-    if (candidates.length < 2) {
-      throw new Error('P2P Fusion needs at least two fresh peers.');
+    if (candidates.length < 3) {
+      throw new Error(
+        'P2P Fusion needs at least three fresh peers (CashFusion-style anonymity floor).'
+      );
     }
     const coordinator = electCoordinator(candidates);
     if (!coordinator) {

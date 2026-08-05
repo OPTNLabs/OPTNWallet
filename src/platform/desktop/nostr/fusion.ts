@@ -60,11 +60,16 @@ const MAX_INPUTS = 100;
 const MAX_TOTAL_COMPONENTS = 100;
 const MAX_OUTPUTS_PER_PEER = 4;
 
-// ─── Gathering model: 6 peers OR timeout with 2+ ───────────────────────
+// ─── Gathering model: 3–6 peers (CashFusion-style anonymity floor) ─────
 /** Maximum participants per round (onion mix-net cap). */
 export const MAX_PARTICIPANTS = 6;
-/** Minimum participants to start a round (must have at least 2). */
-export const MIN_PARTICIPANTS = 2;
+/**
+ * Minimum participants to start a P2P round.
+ * CashFusion server pools start well above 2 (reference min_clients is often 8);
+ * privacy-wise 2-party is barely a CoinJoin. Onion mix needs ≥2 peelers ⇒ ≥3
+ * wallets. Match that floor: never start P2P with only a pair.
+ */
+export const MIN_PARTICIPANTS = 3;
 /** How long to wait for peers to gather before starting with whoever we have. */
 export const GATHER_TIMEOUT_MS = 30_000;
 

@@ -273,26 +273,19 @@ async function collectRolling(
     const lostFromPeak = peakStrict > peers.length && peakStrict >= 3;
     const expectMoreFromPeak = lostFromPeak && !peakGraceExpired;
     const expectMore = expectMoreFromSoft || expectMoreFromPeak;
-    // Policy (≤ server JOIN_WAIT):
+    // Policy (≤ server JOIN_WAIT; floor = MIN_PARTICIPANTS = 3 like CashFusion privacy):
     //   • 4+: lock when stable and not mid-grace lag
-    //   • 3:  stable + hold, unless expectMore
-    //   • 2:  if we never saw 3+ → wait until maxWait (room for a 3rd);
-    //         if we HAD 3+ and they left (grace expired) → lock the pair now
-    //         (user: stuck "peak 4/4" with 2 left while others already fused)
+    //   • 3:  stable + short hold for a possible 4th, unless expectMore
+    //   • 2:  never lock — wait maxWait then fail (onion needs ≥3)
     const trioReady =
       peers.length === 3 &&
       setStable &&
       now >= start + SMALL_SET_HOLD_MS &&
       !expectMore;
-    const pairAfterAbandonedPeak =
-      peers.length === 2 &&
-      setStable &&
-      peakStrict >= 3 &&
-      peakGraceExpired;
     const canLock =
       peers.length >= 4
         ? setStable && !expectMore
-        : trioReady || pairAfterAbandonedPeak;
+        : trioReady;
     // Live: w4 kept shouting ~100s after w1+w6 fused (peak 3 → alone).
     // Once we HAD peers and peak-grace expired with only self left, stop —
     // they are not coming back this gather; full JOIN_WAIT is wasted budget.
@@ -336,21 +329,11 @@ async function collectRolling(
         `Only you confirmed active${keyHint} (up to ${secsLeft}s).${aloneAfterOthers}`
       );
     } else if (peers.length === 2) {
-      if (lostFromPeak && !peakGraceExpired) {
-        onStatus?.(
-          `2 active${keyHint} — peak was ${peakStrict}; waiting ${Math.ceil(peakGraceLeft / 1000)}s ` +
-            `for dropouts, then fuse as a pair if they stay gone…`
-        );
-      } else if (peakStrict >= 3 && peakGraceExpired) {
-        onStatus?.(
-          `2 active${keyHint} — peak ${peakStrict} left; locking pair shortly…`
-        );
-      } else {
-        onStatus?.(
-          `2 active${keyHint} — holding pair for a 3rd wallet (${secsLeft}s left; ` +
-            `true 2-wallet rounds start when this timer ends)…`
-        );
-      }
+      // CashFusion-style floor is 3 — never start a pair; hold for a 3rd.
+      onStatus?.(
+        `2 active${keyHint} — need ≥${MIN_PARTICIPANTS} for P2P (onion privacy); ` +
+          `waiting for another wallet (${secsLeft}s left)…`
+      );
     } else if (peers.length >= MIN_PARTICIPANTS && pastMin) {
       const needStable = Math.max(
         0,
@@ -789,9 +772,9 @@ export async function runP2pFusion(
       joined.stop();
       stopPool = null;
       throw new Error(
-        `No P2P peers found (only ${fresh.length} live wallet(s); need ≥2 wallets ` +
+        `No P2P peers found (only ${fresh.length} live wallet(s); need ≥${MIN_PARTICIPANTS} wallets ` +
           `on ${network} with Tor + P2P on, starting around the same time). ` +
-          `Open a second chipnet wallet and Start P2P on both.`
+          `CashFusion-style privacy needs at least 3 peers (onion mix).`
       );
     }
     status?.(
