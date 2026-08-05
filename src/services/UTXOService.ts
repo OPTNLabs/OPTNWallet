@@ -311,29 +311,19 @@ const UTXOService = {
       // stuck on a phase marker until the first Electrum chunk completed).
       options.onProgress?.(0, uniqueAddresses.length);
 
-      const walletWide = uniqueAddresses.length > 1 || options.force === true;
-
-      // Cheap heal only: drop sticky external: spends. Do NOT rebuildUtxosFromLedger
-      // here — that DELETE+rewrite of the whole UTXO table on every open blocked
-      // the main thread long enough for a black/blank wallet window.
-      if (walletWide) {
-        try {
-          const ledger = await import('../platform/desktop/WalletLedgerService');
-          await ledger.clearSyntheticExternalSpends(walletId);
-        } catch {
-          /* ledger optional */
-        }
-      }
+      // ── HOT path (OPTN 1.7.0 law) ──────────────────────────────────────
+      // ONE source of truth for spendable coins: listunspent → SQL UTXOs →
+      // return map for Redux. Ledger/txi-txo is NOT a balance boss (cold
+      // archive only; see docs/wallet-hot-cold-design.md).
 
       const existingSnapshot = await manager.fetchUTXOsFromDatabase(
         uniqueAddresses.map((address) => ({ address })),
         walletId
       );
 
-      // Option A status-hash gate: skip listunspent when local history status
-      // already matches Electrum. Addresses with NO local status are dirty
-      // immediately (no probe) — Manual Sync clears statuses first, so without
-      // that rule the bar froze at ~20% while we subscribed every address.
+      // Optional status-hash gate: skip listunspent when history status still
+      // matches Electrum (speed only). Returns SQL HOT snapshot — never ledger.
+      // Manual Sync clears statuses + force so every address is re-fetched.
       let addressesToFetch = uniqueAddresses;
       if (!options.force) {
         try {
@@ -343,9 +333,6 @@ const UTXOService = {
             uniqueAddresses
           );
           addressesToFetch = [...partition.dirty];
-          // History status clean but SQL empty + non-empty history status =
-          // corrupted cache (status didn't change when we falsely spent coins).
-          // Force listunspent for those addresses.
           const statusMap = await ledger.getAddressHistoryStatusMap(walletId);
           for (const address of partition.clean) {
             const n =
@@ -362,7 +349,7 @@ const UTXOService = {
             uniqueAddresses.length >= 20 &&
             addressesToFetch.length > 0
           ) {
-            console.info('[UTXOService] status-hash gate', {
+            console.info('[UTXOService] status-hash gate (HOT skip)', {
               total: uniqueAddresses.length,
               dirty: addressesToFetch.length,
               clean: uniqueAddresses.length - addressesToFetch.length,
@@ -374,24 +361,8 @@ const UTXOService = {
         }
       }
 
-      // All clean (Selene: state unchanged for everyone we care about).
-      // Wallet-wide: still project balance from ledger after clearing sticky
-      // external spends (EC: one truth). No mass listunspent.
       if (addressesToFetch.length === 0 && !options.force) {
         options.onProgress?.(uniqueAddresses.length, uniqueAddresses.length);
-        if (walletWide) {
-          try {
-            const {
-              rebuildUtxosFromLedger,
-              listUnspentFromLedger,
-            } = await import('../platform/desktop/WalletLedgerService');
-            await rebuildUtxosFromLedger(walletId);
-            const { byAddress } = await listUnspentFromLedger(walletId);
-            return byAddress;
-          } catch {
-            /* fall through to SQL snapshot */
-          }
-        }
         const fromDb: Record<string, UTXO[]> = {};
         for (const address of uniqueAddresses) {
           fromDb[address] = [
@@ -555,167 +526,25 @@ const UTXOService = {
         }
       }
 
-      // ── Option A hybrid (EC + Selene) ───────────────────────────────────
-      // Electron Cash: balance = get_addr_utxo from txi/txo (ledger unspents).
-      //   Dirty listunspent → applyAddressUtxoSnapshot → rebuild cache
-      //   → Redux ALWAYS from ledger projection (never a parallel listunspent
-      //   boss that can diverge).
-      // Selene: status unchanged → no-op (gate above); single-address notify
-      //   never full-wallet rebuilds SQL, but still returns ledger coins for
-      //   that address only.
-      //
-      // SQL UTXOs are written ONLY after ledger projection (below) so a
-      // refuse-empty formatted map cannot re-poison the cache ahead of txi/txo.
-      const walletWidePass =
-        options.force === true || uniqueAddresses.length > 1;
-      try {
-        const { ensureDesktopLedgerTables } = await import(
-          '../platform/desktop/desktopSchema'
-        );
-        const {
-          applyAddressUtxoSnapshot,
-          rebuildUtxosFromLedger,
-          listUnspentFromLedger,
-        } = await import('../platform/desktop/WalletLedgerService');
-        await ensureDesktopLedgerTables();
-
-        // Apply listunspent into ledger — but NEVER empty[] without force.
-        // 0457a2e9 regression: formatted map refused empty, then we still
-        // applied empty into ledger_txi as external: → fake low balance.
-        // SQL priorCount is not enough: walletWide clearSynthetic heals the
-        // ledger while SQL can still look empty, so empty would re-poison.
-        // Real spends: Manual Sync (force) or EC raw-tx → ledger_txi.
-        for (const address of Object.keys(utxosByAddress)) {
-          const netList = utxosByAddress[address] ?? [];
-          if (netList.length === 0 && options.force !== true) {
-            console.info(
-              '[UTXOService] skip ledger apply: empty listunspent without force',
-              { walletId, address }
-            );
-            continue;
-          }
-
-          // Prefer token-merged rows when same non-empty outpoint set.
-          const merged = formattedByAddress[address];
-          const toApply =
-            merged &&
-            merged.length === netList.length &&
-            netList.length > 0
-              ? merged.map((u) => ({
-                  tx_hash: u.tx_hash,
-                  tx_pos: u.tx_pos,
-                  value: u.value ?? u.amount ?? 0,
-                  height: u.height,
-                  token: u.token,
-                  prefix: u.prefix,
-                  tokenAddress: u.tokenAddress,
-                }))
-              : netList.map((utxo: UTXO) => ({
-                  tx_hash: utxo.tx_hash,
-                  tx_pos: utxo.tx_pos,
-                  value: utxo.value ?? utxo.amount ?? 0,
-                  height: utxo.height,
-                  token: utxo.token,
-                  prefix: utxo.prefix,
-                  tokenAddress: (utxo as UTXO & { tokenAddress?: string })
-                    .tokenAddress,
-                }));
-          await applyAddressUtxoSnapshot(
-            walletId,
-            {
-              address,
-              utxos: toApply,
-            },
-            // Only Manual Sync / force may invent external: spends. Open and
-            // background may only add coins + clear sticky external: when a
-            // coin reappears (wallet 5 re-corrupt: partial listunspent).
-            { allowMarkSyntheticSpends: options.force === true }
-          );
-        }
-
-        const { byAddress: ledgerByAddress } =
-          await listUnspentFromLedger(walletId);
-
-        if (walletWidePass) {
-          await rebuildUtxosFromLedger(walletId);
-          // Pending outbound (0-conf fusion/send) still layered for UI, like EC
-          // showing unconfirmed without inventing permanent ledger rows.
-          for (const pending of await collectPendingOutboundOwnedUtxos(
-            walletId,
-            Object.keys(ledgerByAddress).length
-              ? Object.keys(ledgerByAddress)
-              : uniqueAddresses
-          )) {
-            if (reservedOutpoints.has(outpointKey(pending))) continue;
-            const existing = ledgerByAddress[pending.address] ?? [];
-            if (
-              !existing.some(
-                (utxo) => outpointKey(utxo) === outpointKey(pending)
-              )
-            ) {
-              ledgerByAddress[pending.address] = [...existing, pending];
-            }
-          }
-          const dbService = DatabaseService();
-          if (isWebPlatform()) {
-            await dbService.flushDatabaseToFile(walletId);
-          } else {
-            dbService.scheduleDatabaseSave(walletId);
-          }
-          if (uniqueAddresses.length >= 20) {
-            const totalSats = Object.values(ledgerByAddress)
-              .flat()
-              .reduce((s, u) => s + (u.value ?? u.amount ?? 0), 0);
-            console.info('[UTXOService] ledger balance (EC source of truth)', {
-              walletId,
-              addresses: Object.keys(ledgerByAddress).length,
-              coins: Object.values(ledgerByAddress).flat().length,
-              totalSats,
-            });
-          }
-          return ledgerByAddress;
-        }
-
-        // Single-address (Selene notify): coins from ledger for that address
-        // only — never return the raw listunspent map as a second boss.
-        const singleOut: Record<string, UTXO[]> = {};
-        for (const address of uniqueAddresses) {
-          singleOut[address] = ledgerByAddress[address] ?? [];
-        }
-        for (const pending of await collectPendingOutboundOwnedUtxos(
-          walletId,
-          uniqueAddresses
-        )) {
-          if (reservedOutpoints.has(outpointKey(pending))) continue;
-          const existing = singleOut[pending.address] ?? [];
-          if (
-            !existing.some((utxo) => outpointKey(utxo) === outpointKey(pending))
-          ) {
-            singleOut[pending.address] = [...existing, pending];
-          }
-        }
-        // Per-address SQL cache only (no full-wallet DELETE rebuild).
-        await manager.replaceWalletAddressUTXOs(walletId, singleOut);
-        const dbService = DatabaseService();
-        if (isWebPlatform()) {
-          await dbService.flushDatabaseToFile(walletId);
-        } else {
-          dbService.scheduleDatabaseSave(walletId);
-        }
-        return singleOut;
-      } catch (ledgerError) {
-        logError('UTXOService.fetchAndStoreUTXOsMany.ledger', ledgerError, {
-          walletId,
-        });
-      }
-
-      // Ledger unavailable: fall back to formatted network/SQL map.
+      // HOT write: SQL UTXOs are the durable spendable set; return same map
+      // for Redux. No ledger projection (cold archive must not set balance).
       await manager.replaceWalletAddressUTXOs(walletId, formattedByAddress);
       const dbService = DatabaseService();
       if (isWebPlatform()) {
         await dbService.flushDatabaseToFile(walletId);
       } else {
         dbService.scheduleDatabaseSave(walletId);
+      }
+      if (uniqueAddresses.length >= 20) {
+        const totalSats = Object.values(formattedByAddress)
+          .flat()
+          .reduce((s, u) => s + (u.value ?? u.amount ?? 0), 0);
+        console.info('[UTXOService] HOT balance (SQL UTXOs)', {
+          walletId,
+          addresses: Object.keys(formattedByAddress).length,
+          coins: Object.values(formattedByAddress).flat().length,
+          totalSats,
+        });
       }
       return formattedByAddress;
     } catch (error) {
