@@ -309,24 +309,20 @@ async function handleOpenWalletFile(
           new CustomEvent('optn:toast', {
             detail: {
               message:
-                'Open a wallet first, or also select the .optn keystore file (Ctrl-click both).',
+                'Open a wallet first, or select the .optn keystore (data file auto-loads if it sits next to it).',
             },
           })
         );
         return;
       }
-      const password = window.prompt(
+      const { resolveWalletPassword } = await import(
+        './WalletColdExportService'
+      );
+      const password = await resolveWalletPassword(
+        openWalletId,
         'Password for the encrypted wallet data file (.optn-cold):'
       );
       if (password === null) return;
-      if (!password) {
-        window.dispatchEvent(
-          new CustomEvent('optn:toast', {
-            detail: { message: 'Password required.' },
-          })
-        );
-        return;
-      }
       const stats = await importColdDataIntoOpenWallet(
         openWalletId,
         pack.coldText,
@@ -386,26 +382,10 @@ async function handleOpenWalletFile(
  */
 async function handleExportWallet(walletId: number) {
   if (!walletId) return;
-  const password = window.prompt(
-    'Wallet password — encrypts the data file and verifies export.\n' +
-      'You will get two files: .optn (keys) and .optn-cold (wallet data).'
-  );
-  if (password === null) return;
-  if (!password) {
-    window.dispatchEvent(
-      new CustomEvent('optn:toast', {
-        detail: { message: 'Password required to export the wallet pack.' },
-      })
-    );
-    return;
-  }
   try {
+    // Password resolved from unlock session / empty-password wallets / prompt.
     const { exportWalletPack } = await import('./WalletPackService');
-    const result = await exportWalletPack(
-      walletId,
-      password,
-      await walletsDir()
-    );
+    const result = await exportWalletPack(walletId, await walletsDir());
     const dataMsg = result.coldPath
       ? `Data: ${result.coldPath}`
       : `Data file skipped: ${result.coldSkippedReason ?? 'unknown'}`;

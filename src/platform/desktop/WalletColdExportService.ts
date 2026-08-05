@@ -130,7 +130,10 @@ export async function verifyWalletPassword(
   walletId: number,
   password: string
 ): Promise<boolean> {
-  if (!password || walletId <= 0) return false;
+  // Empty string is a valid password for wallets created without one.
+  if (walletId <= 0 || password === null || password === undefined) {
+    return false;
+  }
   const salt = await readWalletKdfSalt(walletId);
   const encMnemonic = await readEncryptedMnemonic(walletId);
   if (!salt || !encMnemonic?.startsWith(SECRET_ENC_PREFIX)) return false;
@@ -141,6 +144,47 @@ export async function verifyWalletPassword(
   } catch {
     return false;
   }
+}
+
+/**
+ * Password for pack export/import without nagging unlocked wallets.
+ * Uses the in-memory unlock password when this wallet is already open,
+ * then tries empty password, then prompts.
+ * Returns null if the user cancels the prompt.
+ */
+export async function resolveWalletPassword(
+  walletId: number,
+  promptMessage: string
+): Promise<string | null> {
+  if (walletId <= 0) return null;
+
+  try {
+    const { getCachedPasswordSnapshot, hasCachedCredentialsForWallet } =
+      await import('./WalletKeyCache');
+    if (hasCachedCredentialsForWallet(walletId)) {
+      const snap = getCachedPasswordSnapshot();
+      if (
+        snap &&
+        (snap.ownerWalletId === walletId || snap.ownerWalletId == null) &&
+        (await verifyWalletPassword(walletId, snap.password))
+      ) {
+        return snap.password;
+      }
+    }
+  } catch {
+    /* cache optional */
+  }
+
+  if (await verifyWalletPassword(walletId, '')) {
+    return '';
+  }
+
+  const typed = window.prompt(promptMessage);
+  if (typed === null) return null;
+  if (!(await verifyWalletPassword(walletId, typed))) {
+    throw new Error('Wrong wallet password.');
+  }
+  return typed;
 }
 
 async function loadTransactionRows(
