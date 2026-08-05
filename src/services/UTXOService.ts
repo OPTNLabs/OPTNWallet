@@ -329,8 +329,9 @@ const UTXOService = {
             uniqueAddresses
           );
           addressesToFetch = partition.dirty;
-          // Batch summary only — never log per single-address subscription tick.
-          if (uniqueAddresses.length > 1 || partition.clean.length > 0) {
+          // Wallet-wide batches only — never log single-address ticks
+          // (clean:1 / skippedClean:1 spam).
+          if (uniqueAddresses.length > 1) {
             console.info('[UTXOService] status-hash gate', {
               total: uniqueAddresses.length,
               dirty: partition.dirty.length,
@@ -343,11 +344,23 @@ const UTXOService = {
         }
       }
 
+      // All clean: return SQL snapshot only. No listunspent, no ledger re-apply.
+      if (addressesToFetch.length === 0 && !options.force) {
+        options.onProgress?.(uniqueAddresses.length, uniqueAddresses.length);
+        const fromDb: Record<string, UTXO[]> = {};
+        for (const address of uniqueAddresses) {
+          fromDb[address] = [
+            ...(existingSnapshot.utxosMap[address] ?? []),
+            ...(existingSnapshot.cashTokenUtxosMap[address] ?? []),
+          ];
+        }
+        return fromDb;
+      }
+
       const tFetch = performance.now();
       let utxosByAddress: Record<string, UTXO[]> = {};
       if (addressesToFetch.length === 0) {
-        // All clean — jump progress to complete so the bar does not freeze at
-        // the pre-fetch marker (open bootstrap sits at 20% until this returns).
+        // force with empty dirty set should not happen; keep progress complete.
         options.onProgress?.(uniqueAddresses.length, uniqueAddresses.length);
       } else if (options.onProgress) {
         // Map listunspent progress over dirty addresses only, but report against
@@ -363,7 +376,8 @@ const UTXOService = {
       } else {
         utxosByAddress = await ElectrumService.getUTXOsMany(addressesToFetch);
       }
-      if (uniqueAddresses.length > 1 || addressesToFetch.length > 0) {
+      // Log only real network work (or multi-address batches).
+      if (uniqueAddresses.length > 1 && addressesToFetch.length > 0) {
         console.info('[UTXOService] getUTXOsMany took', {
           ms: Math.round(performance.now() - tFetch),
           addresses: addressesToFetch.length,
