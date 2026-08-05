@@ -230,17 +230,32 @@ export const CashFusionSettings: React.FC<{ variant?: 'card' | 'servers' }> = ({
   // execution is allowed (chipnet test path); mainnet stays gated by the safety
   // requirements. A round completes only when enough players meet in a tier.
   const handleClearStuckFusion = async () => {
-    if (walletId <= 0 || anyFusing) return;
+    if (walletId <= 0) return;
+    // Allow clear even if UI thinks something is fusing but stuck grey.
     try {
       await clearStuckFusionLease(walletId);
       setFuseMsg('Cleared stuck fusion lock. You can Fuse again.');
-      setFuseState('done');
+      setFuseState('idle');
       setP2pMsg('Cleared stuck fusion lock. You can Fuse again.');
-      setP2pState('done');
+      setP2pState('idle');
+      setP2pPhase(0);
     } catch (e) {
-      const text = e instanceof Error ? e.message : String(e);
-      setFuseMsg(text);
-      setFuseState('fail');
+      // If in-memory activity is set but ghost, force through lease layer.
+      try {
+        const { forceClearRoundLease } = await import(
+          '../../platform/desktop/fusionWalletLease'
+        );
+        await forceClearRoundLease(walletId);
+        setFuseMsg('Force-cleared fusion lock. You can Fuse again.');
+        setFuseState('idle');
+        setP2pMsg('Force-cleared fusion lock. You can Fuse again.');
+        setP2pState('idle');
+        setP2pPhase(0);
+      } catch {
+        const text = e instanceof Error ? e.message : String(e);
+        setFuseMsg(text);
+        setFuseState('fail');
+      }
     }
   };
 
@@ -564,11 +579,11 @@ export const CashFusionSettings: React.FC<{ variant?: 'card' | 'servers' }> = ({
                   </div>
 
                   {/* Ghost lease recovery: UI grey but "already running" after crash/HMR. */}
-                  {walletId > 0 && !anyFusing && (
+                  {walletId > 0 && (
                     <button
                       type="button"
                       onClick={() => void handleClearStuckFusion()}
-                      className="w-full rounded-lg border border-[var(--wallet-border)] px-3 py-1.5 text-[10px] wallet-muted hover:wallet-text-strong"
+                      className="w-full rounded-lg border border-[var(--wallet-border)] px-3 py-1.5 text-[10px] font-semibold wallet-text-strong hover:opacity-80"
                     >
                       Clear stuck fusion lock
                     </button>

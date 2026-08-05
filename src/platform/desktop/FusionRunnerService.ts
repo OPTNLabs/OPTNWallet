@@ -30,15 +30,6 @@ import {
 } from './fusionWalletLease';
 import { AUTO_FUSION_COOLDOWN_MS, type FusionMode } from './fusionAutoEngine';
 
-/** Recover from a ghost localStorage lease when the UI is idle (not fusing). */
-export async function clearStuckFusionLease(walletId: number): Promise<void> {
-  if (!Number.isInteger(walletId) || walletId <= 0) return;
-  if (isFusionRunning(walletId) || getFusionActivity(walletId)) {
-    throw new Error('A fusion round is still active in this window.');
-  }
-  await forceClearRoundLease(walletId);
-}
-
 /** Structured, so callers never parse a human string to learn what happened. */
 export type FusionRunOutcome =
   | {
@@ -162,6 +153,17 @@ export function isFusionRunning(walletId: number): boolean {
   return heldLeases.has(walletId);
 }
 
+/** Recover from a ghost localStorage lease (UI grey but "already running"). */
+export async function clearStuckFusionLease(walletId: number): Promise<void> {
+  if (!Number.isInteger(walletId) || walletId <= 0) return;
+  heldLeases.delete(walletId);
+  if (fusionActivities.has(walletId)) {
+    fusionActivities.delete(walletId);
+    emitFusionActivity(walletId);
+  }
+  await forceClearRoundLease(walletId);
+}
+
 // Unconfirmed coins are deliberately eligible here, which is a considered
 // divergence from Electron Cash rather than an oversight. EC excludes them
 // unconditionally (`plugin.py:145` — `if c['height'] <= 0: good = False`), but
@@ -234,7 +236,8 @@ export async function startFusionRound(
   // triggers. Null means another window holds a live (heartbeating) lease —
   // or we could not obtain exclusivity. Stale ghost leases from crashed/HMR
   // rounds are reclaimed automatically after LEASE_STALE_MS (~90s without a
-  // heartbeat). Absolute TTL is 4 minutes.
+  // heartbeat). Absolute TTL is 4 minutes. Do NOT force-clear a fresh lease
+  // here — that would steal a live round from another window of the same wallet.
   const lease = await acquireRoundLease(walletId);
   if (lease === null) return { status: 'busy' };
   heldLeases.set(walletId, lease);

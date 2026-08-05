@@ -8,6 +8,7 @@ import Transaction from '../features/transaction/Transaction';
 import TransactionHistory from '../features/transaction-history/TransactionHistory';
 import Receive from '../pages/Receive';
 import Quantumroot from '../pages/Quantumroot';
+import CashFusionApp from '../pages/CashFusionApp';
 import Paryon from '../pages/Paryon';
 import Outbox from '../pages/Outbox';
 import PaperWalletSweep from '../pages/PaperWalletSweep';
@@ -178,6 +179,10 @@ function App({ viewerOnly = false }: AppShellProps) {
                       <Route
                         path={ROUTE_PATHS.quantumroot}
                         element={<Quantumroot />}
+                      />
+                      <Route
+                        path={ROUTE_PATHS.cashfusion}
+                        element={<CashFusionApp />}
                       />
                       <Route path={ROUTE_PATHS.send} element={<SendRoute />} />
                       <Route path={ROUTE_PATHS.outbox} element={<Outbox />} />
