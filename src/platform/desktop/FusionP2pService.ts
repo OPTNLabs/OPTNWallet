@@ -114,19 +114,22 @@ function waitUntil(timestampMs: number, signal?: AbortSignal): Promise<void> {
   });
 }
 
-// Evidence (user, 3 wallets simultaneous start):
-//   wallet A → "Round agreed with N peers at X sats" then stuck at Registering
-//   wallet B → "No P2P peers found (only 1 announcement(s))"
-//   wallet C → timed out
-// Early start at minReady with 2 peers while Tor is still delivering the 3rd
-// announcement produces asymmetric groups: A negotiates, B never sees anyone,
-// A waits forever for credentials from a dead/missing peer set.
-const POOL_WAIT_MIN_MS = 25_000; // was 12s in 1.7.0; Tor+3 wallets need longer
+// Evidence (user): each of 4 wallets shows a DIFFERENT peer count (1 / 4 / 5 / …)
+// then "agreed" on a tiny subset. Causes:
+//   1) Tor delivers stored announcements unevenly
+//   2) Ghost keys from earlier Start clicks (failed/withdrawn rounds) still in
+//      the local peer Map — one window sees 5 keys, another only 2 live wallets
+//   3) Early lock on count===2 while a 3rd wallet is still connecting
+//   4) Stability checked on COUNT only — membership can churn at same size
+const POOL_WAIT_MIN_MS = 30_000;
 const POOL_WAIT_MAX_MS = 90_000;
-/** After minReady, wait until peer count is unchanged this long before locking. */
-const PEER_SET_STABLE_MS = 8_000;
-// Must stay under POOL_PEER_TTL_SECONDS (180, matching v1.7.0).
-const RECENT_ACTIVE_SECONDS = 150;
+/** After minReady, require this long with an unchanged peer *set* before lock. */
+const PEER_SET_STABLE_MS = 12_000;
+/** Only 2 live peers: hold longer so a 3rd/4th wallet can join the pool. */
+const PAIR_HOLD_MS = 45_000;
+// Live window must cover a few re-announce cycles (REANNOUNCE_MS=6s) + Tor lag,
+// but NOT the full 150–180s TTL (that keeps dead round keys as "peers").
+const RECENT_ACTIVE_SECONDS = 24;
 
 // Every Start click mints a fresh throwaway identity, and the announcement is a
 // STORED event the relay keeps replaying until it ages out. Without this, a retry
@@ -143,7 +146,7 @@ async function collectRolling(
   const start = Date.now();
   const minReady = start + POOL_WAIT_MIN_MS;
   const maxWait = start + POOL_WAIT_MAX_MS;
-  let lastCount = 0;
+  let lastFingerprint = '';
   let stableSince = start;
   const fresh = () => {
     const nowSeconds = Math.floor(Date.now() / 1_000);
@@ -151,43 +154,65 @@ async function collectRolling(
       if (peer.pubkey === selfPubkey) return true;
       // An earlier attempt of THIS wallet — from any window, surviving reloads.
       if (isOwnRoundKey(walletId, peer.pubkey)) return false;
-      return peer.at >= nowSeconds - RECENT_ACTIVE_SECONDS;
+      // Prefer recently re-announced keys (live gatherers re-publish every 6s).
+      if (peer.at < nowSeconds - RECENT_ACTIVE_SECONDS) return false;
+      if (peer.expiresAt < nowSeconds) return false;
+      return true;
     });
   };
+  const fingerprint = (peers: PoolAnnouncement[]) =>
+    peers
+      .map((p) => p.pubkey)
+      .sort()
+      .join(',');
   for (;;) {
     if (signal?.aborted) throw new Error('fusion round cancelled');
     const peers = fresh();
     const now = Date.now();
-    if (peers.length !== lastCount) {
-      lastCount = peers.length;
+    const fp = fingerprint(peers);
+    if (fp !== lastFingerprint) {
+      lastFingerprint = fp;
       stableSince = now;
     }
     const pastMin = now >= minReady;
-    const stable =
-      peers.length >= MIN_PARTICIPANTS &&
-      pastMin &&
-      now - stableSince >= PEER_SET_STABLE_MS;
-    if (stable || now >= maxWait) {
+    const setStable = pastMin && now - stableSince >= PEER_SET_STABLE_MS;
+    // Prefer 3+ peer sets once stable. A lone pair must wait longer (or maxWait)
+    // so simultaneous multi-wallet starts do not each freeze a different 2-set.
+    const canLock =
+      peers.length >= 3
+        ? setStable
+        : peers.length >= MIN_PARTICIPANTS &&
+          setStable &&
+          now >= start + PAIR_HOLD_MS;
+    if (canLock || now >= maxWait) {
       onStatus?.(
-        `Gather done: ${peers.length} announcement(s) (stable=${stable}).`
+        `Gather done: ${peers.length} live announcement(s) ` +
+          `(stable=${canLock}, held ${Math.round((now - start) / 1000)}s).`
       );
       return peers;
     }
     if (peers.length >= MIN_PARTICIPANTS && pastMin) {
-      const need = Math.max(
+      const needStable = Math.max(
         0,
         Math.ceil((PEER_SET_STABLE_MS - (now - stableSince)) / 1_000)
       );
+      const pairNote =
+        peers.length === 2
+          ? ` pair-hold ${Math.max(0, Math.ceil((start + PAIR_HOLD_MS - now) / 1000))}s`
+          : '';
       onStatus?.(
-        `${peers.length} peers visible — waiting ${need}s for set to stabilize (Tor lag)…`
+        `${peers.length} live peer(s) — wait ${needStable}s for set to stabilize` +
+          `${pairNote} (Tor lag / ghosts)…`
       );
     } else if (peers.length >= MIN_PARTICIPANTS) {
       const inSecs = Math.max(0, Math.ceil((minReady - now) / 1_000));
-      onStatus?.(`${peers.length} peers ready — min gather ${inSecs}s…`);
+      onStatus?.(
+        `${peers.length} live peer(s) — min gather ${inSecs}s…`
+      );
     } else {
       const secsLeft = Math.max(0, Math.ceil((maxWait - now) / 1_000));
       onStatus?.(
-        `Waiting for peers: ${peers.length} present (up to ${secsLeft}s)…`
+        `Waiting for peers: ${peers.length} live (up to ${secsLeft}s)…`
       );
     }
     await waitUntil(Math.min(maxWait, now + 1_500), signal);
@@ -517,7 +542,9 @@ export async function runP2pFusion(
       );
     }
     status?.(
-      `Local view: ${fresh.length} peer(s), proposing group of ${group.participants.length} at ${group.tier} sats…`
+      `Local view: ${fresh.length} live announcement(s) → proposing ` +
+        `${group.participants.length} at ${group.tier} sats. ` +
+        `Agreeing with peers (if one wallet is late, the others may fuse without it)…`
     );
 
     const transport = createNostrRoundTransport(
@@ -536,10 +563,24 @@ export async function runP2pFusion(
           network,
           tier: group.tier,
           epoch,
+          // Tor multi-wallet: allow lag so a slightly slow window can still join
+          // the same proposal; still fails with a clear late-joiner message.
+          timeoutMs: 40_000,
           signal: opts.signal,
         },
         transport
       );
+    } catch (error) {
+      const raw = error instanceof Error ? error.message : String(error);
+      // Surface a single actionable line on the CashFusion panel.
+      if (/timed out|timeout/i.test(raw)) {
+        throw new Error(
+          `Could not agree on a round (${group.participants.length} in your view). ` +
+            `The other wallets may have already fused without you. ` +
+            `Start P2P again on ALL wallets at the same time.`
+        );
+      }
+      throw error;
     } finally {
       joined.stop();
       stopPool = null;

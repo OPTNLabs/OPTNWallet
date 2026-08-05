@@ -28,7 +28,8 @@ function isKind(value: string): value is CoinLabelKind {
 }
 
 export function outpointKey(txHash: string, txPos: number): string {
-  return `${txHash}:${txPos}`;
+  // Match fusion depth keys: lowercase txid so labels line up with Fused badges.
+  return `${String(txHash).trim().toLowerCase()}:${txPos}`;
 }
 
 /** Set or replace a label. Empty string deletes the row. */

@@ -18,6 +18,7 @@ import QuantumrootTrackingService from '../../services/QuantumrootTrackingServic
 import WalletScreen from '../../components/ui/WalletScreen';
 import type { TransactionHistoryItem } from '../../types/types';
 import { isFusionTransaction } from '../../platform/desktop/fusionCoinDepth';
+import { FusionBadge } from '../../components/FusionBadge';
 
 const EMPTY_TRANSACTIONS: TransactionHistoryItem[] = [];
 
@@ -185,9 +186,7 @@ const TransactionHistory: React.FC = () => {
                         <div className="font-mono text-sm break-all wallet-text-strong">
                           {shortenTxHash(tx.tx_hash)}
                           {fused && (
-                            <span className="ml-2 align-middle text-[10px] font-semibold bg-emerald-500/20 text-emerald-400 px-1.5 py-0.5 rounded">
-                              Fused
-                            </span>
+                            <FusionBadge asTx className="ml-2" />
                           )}
                         </div>
                       </div>
