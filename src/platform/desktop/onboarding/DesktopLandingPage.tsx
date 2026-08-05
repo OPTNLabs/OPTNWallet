@@ -9,8 +9,8 @@ import { useDispatch, useSelector } from 'react-redux';
 import { useLocation, useNavigate } from 'react-router-dom';
 import WalletManager from '../../../apis/WalletManager/WalletManager';
 import DatabaseService from '../../../apis/DatabaseManager/DatabaseService';
-import { Network } from '../../../state/slices/networkSlice';
-import { setNetwork } from '../../../state/slices/networkSlice';
+import { Network, setNetwork } from '../../../state/slices/networkSlice';
+import { selectCurrentNetwork } from '../../../state/selectors/networkSelectors';
 import {
   getAllWebviewWindows,
   getCurrentWebviewWindow,
@@ -98,6 +98,7 @@ const DesktopLandingPage = () => {
   const navigate = useNavigate();
   const location = useLocation();
   const dispatch = useDispatch();
+  const currentNetwork = useSelector(selectCurrentNetwork);
   const hw = useSelector(selectHardwareWallet);
 
   useEffect(() => {
@@ -336,7 +337,35 @@ const DesktopLandingPage = () => {
     setBusy(true);
     setError('');
     try {
-      const result = await importWalletFile(importFile, password, Network.MAINNET);
+      // Network priority: .optn network → .optn-cold network → app current.
+      // Never hardcode mainnet (that created chipnet wallet 5 again as mainnet).
+      let preferredNetwork = currentNetwork;
+      const { networkFromWalletFile } = await import('../walletFile');
+      const fileNet = networkFromWalletFile(importFile);
+      if (fileNet === 'chipnet') preferredNetwork = Network.CHIPNET;
+      else if (fileNet === 'mainnet') preferredNetwork = Network.MAINNET;
+      else if (importColdText) {
+        try {
+          const {
+            parseEncryptedColdArchive,
+            decryptColdArchive,
+          } = await import('../WalletColdExportService');
+          const enc = parseEncryptedColdArchive(importColdText);
+          const archive = await decryptColdArchive(enc, password);
+          if (archive.network === 'chipnet') preferredNetwork = Network.CHIPNET;
+          else if (archive.network === 'mainnet') {
+            preferredNetwork = Network.MAINNET;
+          }
+        } catch {
+          /* cold optional for network peek; import may still succeed later */
+        }
+      }
+
+      const result = await importWalletFile(
+        importFile,
+        password,
+        preferredNetwork
+      );
       if (!result) {
         setError('Incorrect password for this wallet file.');
         return;
@@ -460,7 +489,13 @@ const DesktopLandingPage = () => {
             <div className="text-center space-y-1">
               <div className="text-2xl">📂</div>
               <h3 className="font-bold text-lg wallet-text-strong">Open “{importFile.name}”</h3>
-              <p className="text-sm wallet-muted">Enter this wallet file's password.</p>
+              <p className="text-sm wallet-muted">
+                Enter this wallet file's password
+                {importFile.network
+                  ? ` · ${importFile.network === 'chipnet' ? 'Chipnet' : 'Mainnet'}`
+                  : ''}
+                . If this wallet is already saved, it will be opened — not duplicated.
+              </p>
             </div>
             <input
               type="password"
@@ -505,6 +540,8 @@ const DesktopLandingPage = () => {
                   <div>
                     <p className="font-semibold wallet-text-strong">{w.wallet_name || 'Unnamed wallet'}</p>
                     <p className="text-[10px] wallet-muted">
+                      #{w.id}
+                      {' · '}
                       {w.networkType === Network.CHIPNET ? 'Chipnet' : 'Mainnet'}
                       {w.walletType === 'watch-only' && (
                         <span className="ml-1.5 rounded border border-[var(--wallet-border)] px-1 py-px text-[9px] uppercase tracking-wide">

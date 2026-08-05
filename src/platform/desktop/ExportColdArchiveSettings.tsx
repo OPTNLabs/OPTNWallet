@@ -57,15 +57,18 @@ export const ExportColdArchiveSettings: React.FC = () => {
 
       if (pack.keystore && !pack.coldText) {
         setMsg(
-          'Only keystore (.optn) found — no companion .optn-cold next to it.\n' +
-            'To import keys: File → Open Wallet Pack and enter the wallet password.\n' +
-            'To import data: export again so both files sit side by side, or select the .optn-cold file.'
+          'Found .optn but no .optn-cold next to it.\n' +
+            'Export Wallet writes both files in the same folder — pick that .optn again,\n' +
+            'or choose the .optn-cold file directly.'
         );
         return;
       }
 
       if (!pack.coldText) {
-        setMsg('No data file (.optn-cold) in the selection.');
+        setMsg(
+          'No .optn-cold data file found.\n' +
+            'Select the .optn-cold file (or the .optn sitting next to it).'
+        );
         return;
       }
 

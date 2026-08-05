@@ -931,6 +931,23 @@ fn ensure_optn_path(path: &str) -> Result<(), String> {
     }
 }
 
+// Companion data file for a wallet pack (encrypted labels/history/fusion).
+// Same unrestricted-fs rationale as .optn: users save next to the keystore
+// (Desktop, Downloads, …) which is outside the JS fs plugin appdata scope.
+// Extension is literally "optn-cold" (Path::extension after the last dot).
+fn ensure_optn_cold_path(path: &str) -> Result<(), String> {
+    if std::path::Path::new(path)
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(|e| e.eq_ignore_ascii_case("optn-cold"))
+        == Some(true)
+    {
+        Ok(())
+    } else {
+        Err("only .optn-cold data files are allowed".into())
+    }
+}
+
 // Open an external URL in the user's default browser. A Tauri webview silently
 // blocks `target="_blank"` links, so faucet/explorer/etc. links never open; the
 // frontend intercepts those clicks and routes them here. Restricted to http(s).
@@ -964,6 +981,26 @@ async fn write_wallet_file(path: String, contents: String) -> Result<(), String>
     std::fs::write(&path, contents).map_err(|e| e.to_string())
 }
 
+#[tauri::command]
+async fn read_optn_cold_file(path: String) -> Result<String, String> {
+    ensure_optn_cold_path(&path)?;
+    std::fs::read_to_string(&path).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn write_optn_cold_file(path: String, contents: String) -> Result<(), String> {
+    ensure_optn_cold_path(&path)?;
+    std::fs::write(&path, contents).map_err(|e| e.to_string())
+}
+
+/// True if a companion .optn-cold exists next to a selected .optn (sibling
+/// auto-load). Path-restricted so it cannot probe arbitrary files.
+#[tauri::command]
+async fn optn_cold_file_exists(path: String) -> Result<bool, String> {
+    ensure_optn_cold_path(&path)?;
+    Ok(std::path::Path::new(&path).is_file())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -977,6 +1014,9 @@ pub fn run() {
             open_external,
             read_wallet_file,
             write_wallet_file,
+            read_optn_cold_file,
+            write_optn_cold_file,
+            optn_cold_file_exists,
             fusion_server_status,
             fusion_join_status,
             fusion_execution_status,

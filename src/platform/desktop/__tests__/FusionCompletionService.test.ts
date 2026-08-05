@@ -21,6 +21,11 @@ vi.mock('../../../services/WalletUtxoRefreshService', () => ({
 }));
 
 describe('completeFusionBroadcast', () => {
+  // This file's module graph (OutboundTransactionTracker, WalletBackendSyncService,
+  // libauth-backed fusionDepthRecorder) takes several seconds to transform under
+  // parallel load. The default 5s budget aborts test 1 mid-await, leaving its
+  // detached observeTransaction chain to land in test 2's window ("expected once,
+  // got 2 times"). A longer budget lets the chain settle inside test 1.
   beforeEach(async () => {
     // completeFusionBroadcast dispatches observeTransaction fire-and-forget, so
     // the previous test's call can still be pending here. Clearing the mocks
@@ -169,4 +174,4 @@ describe('completeFusionBroadcast', () => {
     expect(observeTransactionMock).not.toHaveBeenCalled();
     expect(refreshActiveWalletUtxosMock).not.toHaveBeenCalled();
   });
-});
+}, 15_000);

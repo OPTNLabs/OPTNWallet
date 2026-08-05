@@ -24,6 +24,16 @@ vi.mock('../../state/store', () => ({
   },
 }));
 
+// Deterministic scripthash so arbitrary test addresses work without libauth.
+vi.mock('../../services/electrum/helpers', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../services/electrum/helpers')>();
+  return {
+    ...actual,
+    addressToElectrumScripthash: (address: string) =>
+      `scripthash:${address.replace(/[^a-z0-9]/gi, '_')}`,
+  };
+});
+
 describe('ElectrumService', () => {
   const mockedElectrumServer = vi.mocked(ElectrumServer);
   const mockedDatabaseService = vi.mocked(DatabaseService);
@@ -83,20 +93,18 @@ describe('ElectrumService', () => {
     expect(server.request).toHaveBeenCalledTimes(1);
   });
 
-  it('getUTXOsMany falls back to scripthash for addresses rejected by address RPC', async () => {
+  it('getUTXOsMany batches scripthash.listunspent directly (no per-call fallback)', async () => {
     const server = {
-      request: vi
-        .fn()
-        .mockRejectedValueOnce(new Error('Invalid address: bchtest:qtest'))
-        .mockResolvedValueOnce([
+      requestMany: vi.fn(async () => [
+        [
           {
             tx_hash: 'c'.repeat(64),
             tx_pos: 1,
             value: 546,
             height: 33,
           },
-        ]),
-      requestMany: vi.fn(async () => [new Error('Invalid address: bchtest:qtest')]),
+        ],
+      ]),
       subscribe: vi.fn(async () => {}),
       unsubscribe: vi.fn(async () => {}),
       onNotification: vi.fn(() => () => {}),
@@ -117,16 +125,10 @@ describe('ElectrumService', () => {
       }),
     ]);
     expect(server.requestMany).toHaveBeenCalledTimes(1);
-    expect(server.request).toHaveBeenNthCalledWith(
-      1,
-      'blockchain.address.listunspent',
-      address
+    expect(server.requestMany.mock.calls[0][0][0].method).toBe(
+      'blockchain.scripthash.listunspent'
     );
-    expect(server.request).toHaveBeenNthCalledWith(
-      2,
-      'blockchain.scripthash.listunspent',
-      expect.any(String)
-    );
+    expect(server.requestMany.mock.calls[0][0][0].params[0]).toContain('scripthash:');
   });
 
   it('getUTXOsMany omits addresses that fail without a usable response', async () => {
@@ -155,18 +157,16 @@ describe('ElectrumService', () => {
     };
     mockedElectrumServer.mockReturnValue(server as never);
     const addresses = Array.from(
-      { length: 117 },
+      { length: 617 },
       (_, index) => `bitcoincash:qbatch${index}`
     );
 
     const result = await ElectrumService.getUTXOsMany(addresses);
 
-    expect(server.requestMany.mock.calls.map(([calls]) => calls.length)).toEqual([
-      50,
-      50,
-      17,
-    ]);
-    expect(Object.keys(result)).toHaveLength(117);
+    expect(
+      server.requestMany.mock.calls.map(([calls]) => calls.length)
+    ).toEqual([250, 250, 117]);
+    expect(Object.keys(result)).toHaveLength(617);
   });
 
   it('primeUTXOCache seeds cache used by getUTXOs', async () => {
@@ -365,6 +365,9 @@ describe('ElectrumService', () => {
     ]);
 
     expect(server.requestMany).toHaveBeenCalledTimes(1);
+    expect(server.requestMany.mock.calls[0][0][0].method).toBe(
+      'blockchain.scripthash.get_history'
+    );
     expect(result['bitcoincash:q1']).toEqual([{ tx_hash: 'abc', height: 10 }]);
     expect(result['bitcoincash:q2']).toEqual([{ tx_hash: 'def', height: 12 }]);
   });
@@ -379,18 +382,16 @@ describe('ElectrumService', () => {
     };
     mockedElectrumServer.mockReturnValue(server as never);
     const addresses = Array.from(
-      { length: 117 },
+      { length: 617 },
       (_, index) => `bitcoincash:qhistory${index}`
     );
 
     const result = await ElectrumService.getTransactionHistoryMany(addresses);
 
-    expect(server.requestMany.mock.calls.map(([calls]) => calls.length)).toEqual([
-      50,
-      50,
-      17,
-    ]);
-    expect(Object.keys(result)).toHaveLength(117);
+    expect(
+      server.requestMany.mock.calls.map(([calls]) => calls.length)
+    ).toEqual([250, 250, 117]);
+    expect(Object.keys(result)).toHaveLength(617);
   });
 
   it('getTransactionVisibility detects seen and missing transactions', async () => {

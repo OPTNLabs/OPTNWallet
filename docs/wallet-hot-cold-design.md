@@ -37,21 +37,26 @@ listunspent → format → replaceWalletAddressUTXOs (SQL) → return map → Re
 | Fusion depth / round metadata | Existing (`fusionCoinDepth`) + UTXO “Fused ×N” |
 | Labels on UTXO/tx | **Slice 1 done** — `coin_labels` + `CoinLabelService` |
 | Labels export CSV | **Slice 1** — `exportCoinLabelsCsv` |
-| Wallet pack (2 files) | **Done** — Export Wallet writes both; Open Wallet Pack multi-select |
+| Wallet pack (2 files) | **Done** — see pack wiring below |
+| Passwordless / unlocked export | **Done** — `resolveWalletPassword` (cache → empty → prompt) |
+| Sibling `.optn-cold` auto-load | **Done** — Rust `optn_cold_file_exists` (any path, not appdata-only) |
+| Network on re-import | **Done** — `.optn` network field + cold peek; no forced mainnet; keystore dedupe |
 | Tx graph (in→out) | Planned |
 | Contacts (Paytaca-style) | Schema reserved later inside `.optn-cold` |
 
-### Wallet pack (keystore + data)
+### Wallet pack (keystore + data) — wired
 
 | File | Contents | Encryption |
 |------|----------|------------|
-| `<name>.optn` | Keystore / encrypted seed | Wallet password (existing) |
-| `<name>.optn-cold` | Addresses, UTXOs (BCH+FT/NFT), history, labels, fusion; future contacts | Same password + `kdf_salt` |
+| `<name>.optn` | Keystore / encrypted seed + optional `network` | Wallet password (existing) |
+| `<name>.optn-cold` | Addresses, UTXOs snapshot, history, labels, fusion | Same password + `kdf_salt` (AES-GCM) |
 
-- **Export:** Wallet → Export Wallet… → password → Save `.optn` → `.optn-cold` written beside it  
-- **Import:** File → Open Wallet Pack… → **Ctrl-click both files** → password once  
+- **Export:** Wallet → Export Wallet… → (no password if unlocked/empty) → Save `.optn` → `.optn-cold` beside it via Rust I/O  
+- **Save-as name:** stem of the path you type is written into JSON `name` (not stuck on DB name)  
+- **Import:** File → Open Wallet Pack… → pick `.optn` (sibling cold auto-loads)  
 - **Data-only:** open wallet, select only `.optn-cold`  
-- Import data restores labels + fusion (HOT coins still from network listunspent)
+- Import data restores labels + fusion only (**HOT** coins still from network listunspent)  
+- Re-import of the same keystore **opens the existing row** (no `wallet5_2` / `_3` clones)
 | Archive compaction (old spent txs) | Planned |
 | Optional raw-tx ancestry (power user) | Later — still not balance boss |
 

@@ -7,7 +7,6 @@
 
 import { invoke } from '@tauri-apps/api/core';
 import { open as openDialog, save as saveDialog } from '@tauri-apps/plugin-dialog';
-import { writeTextFile, readTextFile } from '@tauri-apps/plugin-fs';
 import { join } from '@tauri-apps/api/path';
 import { buildWalletFileContents } from './DesktopWalletManager';
 import { defaultWalletFileName, parseWalletFile, type WalletFileV1 } from './walletFile';
@@ -23,6 +22,19 @@ import {
 } from './WalletColdExportService';
 import { logError } from '../../utils/errorHandling';
 
+/** Unrestricted Rust I/O for .optn-cold (same reason as write_wallet_file). */
+async function writeOptnColdFile(path: string, contents: string): Promise<void> {
+  await invoke('write_optn_cold_file', { path, contents });
+}
+
+async function readOptnColdFile(path: string): Promise<string> {
+  return invoke<string>('read_optn_cold_file', { path });
+}
+
+async function optnColdFileExists(path: string): Promise<boolean> {
+  return invoke<boolean>('optn_cold_file_exists', { path });
+}
+
 export function isOptnColdPath(path: string): boolean {
   return /\.optn-cold$/i.test(path);
 }
@@ -37,6 +49,33 @@ export function companionColdPath(optnPath: string): string {
     return `${optnPath.slice(0, -'.optn'.length)}.optn-cold`;
   }
   return `${optnPath}.optn-cold`;
+}
+
+/**
+ * Display name from the path the user picked in the Save dialog.
+ * Export used to keep the DB wallet_name inside the JSON even when the file
+ * was renamed to e.g. "wallet7 for testing.optn" — re-import then showed the
+ * old hard-coded name. Prefer the chosen stem when it is non-empty.
+ */
+export function walletNameFromOptnPath(optnPath: string): string | null {
+  const base = optnPath.replace(/\\/g, '/').split('/').pop() ?? '';
+  if (!isOptnKeystorePath(base)) return null;
+  const stem = base.slice(0, -'.optn'.length).trim();
+  return stem || null;
+}
+
+/** Stamp a display name into serialized .optn JSON (no re-encrypt). */
+export function withWalletFileName(contents: string, name: string): string {
+  try {
+    const obj = JSON.parse(contents) as Record<string, unknown>;
+    if (obj && typeof obj === 'object') {
+      obj.name = name;
+      return JSON.stringify(obj, null, 2);
+    }
+  } catch {
+    /* leave contents unchanged */
+  }
+  return contents;
 }
 
 export function splitWalletPackPaths(paths: string[]): {
@@ -104,7 +143,14 @@ export async function exportWalletPack(
     throw new Error('Export cancelled.');
   }
 
-  await invoke('write_wallet_file', { path: dest, contents });
+  // Honor the Save-as name (e.g. "wallet7 for testing.optn") inside the file
+  // so Open/import shows what the user typed, not only the DB wallet_name.
+  const chosenName = walletNameFromOptnPath(dest);
+  const contentsToWrite = chosenName
+    ? withWalletFileName(contents, chosenName)
+    : contents;
+
+  await invoke('write_wallet_file', { path: dest, contents: contentsToWrite });
 
   let coldPath: string | null = null;
   let coldSkippedReason: string | undefined;
@@ -112,7 +158,7 @@ export async function exportWalletPack(
     const archive = await buildColdArchive(walletId);
     const enc = await encryptColdArchive(walletId, password, archive);
     coldPath = companionColdPath(dest);
-    await writeTextFile(coldPath, serializeEncryptedColdArchive(enc));
+    await writeOptnColdFile(coldPath, serializeEncryptedColdArchive(enc));
   } catch (err) {
     logError('WalletPackService.exportColdCompanion', err, { walletId });
     coldSkippedReason =
@@ -136,12 +182,11 @@ export type PickedWalletPack = {
 export async function pickWalletPackFiles(
   defaultDir: string | null
 ): Promise<PickedWalletPack | null> {
-  const { exists } = await import('@tauri-apps/plugin-fs');
   const picked = await openDialog({
     multiple: true,
     directory: false,
     title:
-      'Open wallet pack — select .optn (data file is auto-loaded if beside it; Ctrl-click both if needed)',
+      'Open wallet pack — select .optn (data file auto-loads if it sits next to it)',
     defaultPath: defaultDir ?? undefined,
     filters: [
       {
@@ -163,14 +208,15 @@ export async function pickWalletPackFiles(
   let coldText: string | null = null;
 
   // Sibling auto-detect: export writes Name.optn + Name.optn-cold together.
+  // Uses Rust exists (not JS fs plugin) so Desktop/Downloads paths work.
   if (keystorePath && !coldPath) {
     const sibling = companionColdPath(keystorePath);
     try {
-      if (await exists(sibling)) {
+      if (await optnColdFileExists(sibling)) {
         coldPath = sibling;
       }
-    } catch {
-      /* exists optional */
+    } catch (err) {
+      logError('WalletPackService.siblingColdExists', err, { sibling });
     }
   }
 
@@ -181,7 +227,7 @@ export async function pickWalletPackFiles(
     keystore = parseWalletFile(text);
   }
   if (coldPath) {
-    coldText = await readTextFile(coldPath);
+    coldText = await readOptnColdFile(coldPath);
   }
 
   if (!keystore && !coldText) {
