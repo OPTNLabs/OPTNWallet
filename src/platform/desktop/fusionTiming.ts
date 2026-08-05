@@ -84,11 +84,12 @@ export const P2P_PEER_SET_STABLE_MS = 6_000;
 export const P2P_PEAK_GRACE_MS = SERVER_COMPS_END_MS;
 
 /**
- * Rendezvous (propose/ACK/start).
- * Live agreed in ~3s; 30s is T_END_SIGS — enough for Tor ACK storms, half of
- * old T_START_CLOSE so more of the session stays available for the round body.
+ * Rendezvous (propose/ACK/start) — full proposed set only (no 2-of-4 shrink).
+ * Live: partial ACK started a 2-party fuse and stranded others. Use the full
+ * T_START_CLOSE window so slow Tor ACKs can still join the FULL set; fail
+ * cleanly if anyone is missing rather than fusing a subset.
  */
-export const P2P_RENDEZVOUS_MS = SERVER_SIGS_END_MS;
+export const P2P_RENDEZVOUS_MS = SERVER_ROUND_CLOSE_MS;
 export const P2P_PROPOSAL_TIMEOUT_MS = 12_000;
 
 /**
