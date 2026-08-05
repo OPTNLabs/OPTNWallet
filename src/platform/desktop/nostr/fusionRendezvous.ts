@@ -5,12 +5,17 @@ import { electCoordinator, type FusionPoolNetwork } from './fusion';
 import { messageBinding, type RoundMessage, type RoundTransport } from './fusionSession';
 
 const MAX_PARTICIPANTS = 6;
-// Long enough for Tor relay round-trips (each peer ack can take a second or
-// more), short enough that a round with no live peers fails fast instead of
-// holding the wallet lease.
-const DEFAULT_RENDEZVOUS_TIMEOUT_MS = 15_000;
+// Tor + multi-wallet: 15s was too short when one window is slow — the other
+// three finish a subset round while the late wallet still shows "proposing N"
+// and then hits a bare "timeout". 35s covers lag; clear errors explain the rest.
+const DEFAULT_RENDEZVOUS_TIMEOUT_MS = 35_000;
 const PUBKEY = /^[0-9a-f]{64}$/;
 const SESSION = /^[0-9a-f]{64}$/;
+
+/** User-facing hint for split pools / late joiners (evidence: 3 fused, 1 timed out). */
+export const RENDEZVOUS_LATE_JOINER_HINT =
+  'Other wallets may have already formed a smaller round without you ' +
+  '(you were late or Tor was slow). Start P2P again on ALL wallets within a few seconds.';
 
 export interface FusionRendezvousParams {
   myPubkey: string;
@@ -149,7 +154,12 @@ export async function negotiateFusionRound(
       throw new Error('P2P Fusion coordinator election failed.');
     }
     const remaining = deadline - Date.now();
-    if (remaining <= 0) throw new Error('round start timed out');
+    if (remaining <= 0) {
+      throw new Error(
+        `Round agreement timed out with ${candidates.length} candidate(s). ` +
+          RENDEZVOUS_LATE_JOINER_HINT
+      );
+    }
     const iAmCoordinator = coordinator === params.myPubkey;
     // Participants get the whole remaining budget: the short proposal deadline
     // inside negotiateAsParticipant is what detects a ghost and triggers
@@ -161,9 +171,21 @@ export async function negotiateFusionRound(
         ? await negotiateAsCoordinator(attemptParams, transport, candidates)
         : await negotiateAsParticipant(attemptParams, transport, coordinator);
     } catch (error) {
+      const msg = String(error);
       const silentCoordinator =
-        !iAmCoordinator && /round start timed out/.test(String(error));
-      if (!silentCoordinator || attempt >= MAX_COORDINATOR_FAILOVERS) throw error;
+        !iAmCoordinator && /round start timed out/.test(msg);
+      if (!silentCoordinator || attempt >= MAX_COORDINATOR_FAILOVERS) {
+        // Re-throw with late-joiner context when the bare timeout strings leak.
+        if (
+          /round (start|acknowledgments) timed out/i.test(msg) &&
+          !msg.includes('smaller round')
+        ) {
+          throw new Error(
+            `${msg.replace(/^Error:\s*/, '')}. ${RENDEZVOUS_LATE_JOINER_HINT}`
+          );
+        }
+        throw error;
+      }
       candidates = candidates.filter((pubkey) => pubkey !== coordinator);
     }
   }
@@ -356,11 +378,20 @@ function negotiateAsCoordinator(
     });
 
     params.signal?.addEventListener('abort', onAbort, { once: true });
-    const timer = setTimeout(
-      () => void finishError(new Error('round acknowledgments timed out')),
-      timeoutMs
-    );
+    const timer = setTimeout(() => {
+      const acked = acknowledgments.size;
+      const proposed = participants.length;
+      void finishError(
+        new Error(
+          acked < 2
+            ? `round acknowledgments timed out (only ${acked}/${proposed} answered)`
+            : `round acknowledgments timed out (${acked}/${proposed} ready but start failed)`
+        )
+      );
+    }, timeoutMs);
     // After the settle window, start with whoever ACKed (don't require ALL peers).
+    // If only self ACKed, startOwnRound no-ops until more ACKs or full timeout —
+    // that is the late-joiner case (others already in another round).
     ownStartTimer = setTimeout(() => {
       settlePassed = true;
       startOwnRound();

@@ -18,6 +18,9 @@ import WalletScreen from '../../components/ui/WalletScreen';
 import { selectWalletId } from '../../state/slices/walletSlice';
 import type { RootState } from '../../state/store';
 import type { UTXO } from '../../types/types';
+import { coinDepth } from '../../platform/desktop/fusionCoinDepth';
+import { outpointKey } from '../../platform/desktop/CoinLabelService';
+import { FusionBadge } from '../../components/FusionBadge';
 import KeyService from '../../services/KeyService';
 import UTXOService from '../../services/UTXOService';
 import TransactionService from '../../services/TransactionService';
@@ -593,6 +596,15 @@ export const WatchOnlySend: FC = () => {
                               {satsToBch(input.satoshis)} BCH ·{' '}
                               {input.branchIndex === 1 ? 'change' : 'receive'}#
                               {input.addressIndex}
+                              {walletId > 0 && (
+                                <FusionBadge
+                                  depth={coinDepth(
+                                    walletId,
+                                    outpointKey(input.txid, input.vout)
+                                  )}
+                                  className="ml-1.5"
+                                />
+                              )}
                             </span>
                             {(() => {
                               const card = nftCardsByOutpoint.get(key);

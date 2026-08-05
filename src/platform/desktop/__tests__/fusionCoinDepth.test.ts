@@ -41,6 +41,17 @@ describe('per-coin fuse depth', () => {
     expect(coinsBelowDepth(1, [utxo('aaa')], 3)).toHaveLength(1);
   });
 
+  it('looks up depth case-insensitively on the txid half of the outpoint', () => {
+    const tx = 'Ab'.repeat(32);
+    recordFusionRound(1, ['seed:0'], [`${tx}:1`]);
+    expect(coinDepth(1, `${tx.toLowerCase()}:1`)).toBe(1);
+    expect(coinDepth(1, `${tx.toUpperCase()}:1`)).toBe(1);
+    // maxDepth 1 means "only fuse coins with depth < 1" — depth-1 coin excluded.
+    expect(
+      coinsBelowDepth(1, [utxo(tx.toUpperCase(), 1)], 1)
+    ).toHaveLength(0);
+  });
+
   it('advances created coins one round beyond the deepest coin consumed', () => {
     recordFusionRound(1, ['aaa:0'], ['bbb:0']); // fresh -> depth 1
     expect(coinDepth(1, 'bbb:0')).toBe(1);

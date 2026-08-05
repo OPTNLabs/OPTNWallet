@@ -24,6 +24,20 @@ const DEPTH_PREFIX = 'optn-fusion-coin-depth-';
  *  coins are spent (depth map prunes spent outpoints). */
 const TXID_PREFIX = 'optn-fusion-txids-';
 
+/** Canonical `txid:pos` — txid lowercased so Electrum/display case cannot hide depth. */
+export function normalizeOutpoint(outpoint: string): string {
+  const raw = outpoint.trim();
+  const colon = raw.lastIndexOf(':');
+  if (colon <= 0) return raw.toLowerCase();
+  const tx = raw.slice(0, colon).toLowerCase();
+  const pos = raw.slice(colon + 1);
+  return `${tx}:${pos}`;
+}
+
+export function outpointFromParts(txHash: string, txPos: number): string {
+  return normalizeOutpoint(`${txHash}:${txPos}`);
+}
+
 // Deliberately NO age or size based pruning.
 //
 // An earlier version expired entries after 180 days and capped the map at 5000
@@ -64,7 +78,12 @@ function read(walletId: number): DepthMap {
         typeof at === 'number' &&
         Number.isFinite(at)
       ) {
-        out[key] = { d: Math.trunc(d), at };
+        const norm = normalizeOutpoint(key);
+        const prev = out[norm]?.d ?? 0;
+        // If both casings existed, keep the higher depth claim.
+        if (Math.trunc(d) >= prev) {
+          out[norm] = { d: Math.trunc(d), at };
+        }
       }
     }
     return out;
@@ -101,10 +120,13 @@ export function pruneSpentDepth(
   liveOutpoints: ReadonlySet<string>
 ): void {
   if (liveOutpoints.size === 0) return;
+  const live = new Set(
+    [...liveOutpoints].map((o) => normalizeOutpoint(o))
+  );
   const entries = read(walletId);
   let changed = false;
   for (const outpoint of Object.keys(entries)) {
-    if (!liveOutpoints.has(outpoint)) {
+    if (!live.has(outpoint)) {
       delete entries[outpoint];
       changed = true;
     }
@@ -114,7 +136,7 @@ export function pruneSpentDepth(
 
 /** Rounds this coin has been through. Unknown coins are fresh (0). */
 export function coinDepth(walletId: number, outpoint: string): number {
-  return read(walletId)[outpoint]?.d ?? 0;
+  return read(walletId)[normalizeOutpoint(outpoint)]?.d ?? 0;
 }
 
 /** Snapshot for COLD export (no secrets). */
@@ -145,6 +167,7 @@ export function importFusionDepthState(
   const incoming = state.coinDepth ?? {};
   for (const [outpoint, raw] of Object.entries(incoming)) {
     if (!outpoint.includes(':')) continue;
+    const key = normalizeOutpoint(outpoint);
     let d = 0;
     let at = Date.now();
     if (typeof raw === 'number' && Number.isFinite(raw)) {
@@ -161,9 +184,9 @@ export function importFusionDepthState(
     } else {
       continue;
     }
-    const prev = entries[outpoint]?.d ?? 0;
+    const prev = entries[key]?.d ?? 0;
     if (d >= prev) {
-      entries[outpoint] = { d, at };
+      entries[key] = { d, at };
       coins += 1;
     }
   }
@@ -215,8 +238,8 @@ export function isFusionTransaction(walletId: number, txid: string): boolean {
   if (readFusionTxids(walletId).has(normalized)) return true;
   // Also true if any live depth entry was created by this tx (unspent outputs).
   const prefix = `${normalized}:`;
-  return Object.keys(read(walletId)).some(
-    (outpoint) => outpoint.toLowerCase().startsWith(prefix)
+  return Object.keys(read(walletId)).some((outpoint) =>
+    outpoint.startsWith(prefix)
   );
 }
 
@@ -257,19 +280,21 @@ export function recordFusionRound(
   createdOutpoints: string[]
 ): void {
   const entries = read(walletId);
+  const spent = spentOutpoints.map(normalizeOutpoint);
+  const created = createdOutpoints.map(normalizeOutpoint);
   // An unknown ancestor is depth 0 and correctly drags the minimum down. With no
   // recorded inputs at all there is no ancestry to inherit, so the floor is 0.
   const inheritedDepth =
-    spentOutpoints.length === 0
+    spent.length === 0
       ? 0
-      : spentOutpoints.reduce(
+      : spent.reduce(
           (shallowest, outpoint) =>
             Math.min(shallowest, entries[outpoint]?.d ?? 0),
           Number.POSITIVE_INFINITY
         );
-  spentOutpoints.forEach((outpoint) => delete entries[outpoint]);
+  spent.forEach((outpoint) => delete entries[outpoint]);
   const now = Date.now();
-  createdOutpoints.forEach((outpoint) => {
+  created.forEach((outpoint) => {
     entries[outpoint] = { d: inheritedDepth + 1, at: now };
   });
   write(walletId, entries);
@@ -283,7 +308,8 @@ export function coinsBelowDepth<T extends { tx_hash: string; tx_pos: number }>(
 ): T[] {
   const entries = read(walletId);
   return utxos.filter(
-    (utxo) => (entries[`${utxo.tx_hash}:${utxo.tx_pos}`]?.d ?? 0) < maxDepth
+    (utxo) =>
+      (entries[outpointFromParts(utxo.tx_hash, utxo.tx_pos)]?.d ?? 0) < maxDepth
   );
 }
 

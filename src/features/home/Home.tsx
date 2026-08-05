@@ -30,7 +30,9 @@ import { SATSINBITCOIN } from '../../utils/constants';
 import SettingsRow from '../../components/ui/SettingsRow';
 import EmptyState from '../../components/ui/EmptyState';
 import { shortenTxHash } from '../../utils/shortenHash';
+import { takeRecentTransactions } from '../../utils/transactionHistoryOrder';
 import { isFusionTransaction } from '../../platform/desktop/fusionCoinDepth';
+import { FusionBadge } from '../../components/FusionBadge';
 import { preloadTokenMetadata } from '../../hooks/useSharedTokenMetadata';
 import {
   getBarcodeScannerErrorMessage,
@@ -98,8 +100,9 @@ const Home: React.FC<HomeProps> = ({ viewerOnly = false }) => {
   const totalBch = totalBalance / SATSINBITCOIN;
   const totalUsd =
     typeof bchUsdQuote === 'number' ? totalBch * bchUsdQuote : null;
+  // Sort by height / unconfirmed — not array index (Electrum merge order).
   const recentTransactions = useMemo(
-    () => (transactions ?? []).slice(-2).reverse(),
+    () => takeRecentTransactions(transactions, 8),
     [transactions]
   );
   const tokenCategories = useMemo(
@@ -350,33 +353,49 @@ const Home: React.FC<HomeProps> = ({ viewerOnly = false }) => {
             <div className="space-y-2.5">
               {recentTransactions.length > 0 ? (
                 recentTransactions.map((tx) => {
+                  const walletIdNum = Number(currentWalletId);
                   const fused =
-                    !!currentWalletId &&
-                    isFusionTransaction(currentWalletId, tx.tx_hash);
+                    Number.isFinite(walletIdNum) &&
+                    walletIdNum > 0 &&
+                    isFusionTransaction(walletIdNum, tx.tx_hash);
                   return (
-                  <SettingsRow
-                    key={tx.tx_hash}
-                    title={shortenTxHash(tx.tx_hash)}
-                    description={
-                      tx.height > 0
-                        ? `Block ${tx.height}`
-                        : 'Pending confirmation'
-                    }
-                    right={
-                      <span className="flex items-center gap-1.5">
-                        {fused && (
-                          <span className="text-[10px] font-semibold bg-emerald-500/20 text-emerald-400 px-1.5 py-0.5 rounded">
-                            Fused
+                    <SettingsRow
+                      key={tx.tx_hash}
+                      title={
+                        <span className="flex min-w-0 flex-wrap items-center gap-1.5">
+                          <span className="font-mono truncate">
+                            {shortenTxHash(tx.tx_hash)}
                           </span>
-                        )}
-                        <span className="wallet-muted">
-                          {tx.height > 0 ? 'Confirmed' : 'Pending'}
+                          {fused ? <FusionBadge asTx /> : null}
                         </span>
-                      </span>
-                    }
-                    compact
-                    onClick={() => navigate(`/transactions/${currentWalletId}`)}
-                  />
+                      }
+                      description={
+                        tx.height > 0
+                          ? `Block ${tx.height}`
+                          : 'Pending confirmation'
+                      }
+                      right={
+                        <span
+                          className={
+                            fused
+                              ? 'text-xs font-semibold text-emerald-400 whitespace-nowrap'
+                              : 'wallet-muted text-xs whitespace-nowrap'
+                          }
+                        >
+                          {fused
+                            ? tx.height > 0
+                              ? 'Fused · Confirmed'
+                              : 'Fused · Pending'
+                            : tx.height > 0
+                              ? 'Confirmed'
+                              : 'Pending'}
+                        </span>
+                      }
+                      compact
+                      onClick={() =>
+                        navigate(`/transactions/${currentWalletId}`)
+                      }
+                    />
                   );
                 })
               ) : (

@@ -17,6 +17,7 @@ import {
   setCoinLabel,
 } from '../platform/desktop/CoinLabelService';
 import { selectWalletId } from '../state/slices/walletSlice';
+import { FusionBadge } from './FusionBadge';
 
 interface UTXOCardProps {
   utxos: UTXO[];
@@ -176,9 +177,7 @@ const UTXOCard: React.FC<UTXOCardProps> = ({ utxos, loading }) => {
                   <p>
                     {formatBchFromSats(sats)} <strong>BCH</strong>
                     {depth > 0 && (
-                      <span className="ml-2 text-xs bg-emerald-500/20 text-emerald-400 px-1.5 py-0.5 rounded">
-                        Fused ×{depth}
-                      </span>
+                      <FusionBadge depth={depth} className="ml-2" />
                     )}
                   </p>
                   <p>

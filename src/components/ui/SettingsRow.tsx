@@ -1,8 +1,9 @@
 import React from 'react';
 
 type SettingsRowProps = {
-  title: string;
-  description?: string;
+  /** Plain string or rich node (e.g. hash + Fused badge). */
+  title: React.ReactNode;
+  description?: React.ReactNode;
   onClick?: () => void;
   right?: React.ReactNode;
   disabled?: boolean;
@@ -19,8 +20,10 @@ const SettingsRow: React.FC<SettingsRowProps> = ({
 }) => {
   const body = (
     <div className="flex items-center justify-between gap-3">
-      <div className="min-w-0">
-        <div className={`${compact ? 'text-sm' : 'font-semibold'} wallet-text-strong`}>
+      <div className="min-w-0 flex-1">
+        <div
+          className={`${compact ? 'text-sm' : 'font-semibold'} wallet-text-strong min-w-0`}
+        >
           {title}
         </div>
         {description ? (
@@ -29,7 +32,9 @@ const SettingsRow: React.FC<SettingsRowProps> = ({
           </div>
         ) : null}
       </div>
-      <div className="shrink-0">{right ?? <span className="wallet-muted">›</span>}</div>
+      <div className="shrink-0 flex items-center gap-1.5 max-w-[45%]">
+        {right ?? <span className="wallet-muted">›</span>}
+      </div>
     </div>
   );
 

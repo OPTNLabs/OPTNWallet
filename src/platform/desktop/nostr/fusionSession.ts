@@ -995,16 +995,16 @@ function runParticipant(
           await jitterDelay(jMin, jMax);
         }
       } else {
-        // Direct mode: send outputs to coordinator
-        for (const output of params.myContribution.outputs) {
-          await transport.send(coordinator, {
-            ...messageBinding(),
-            type: 'outputs',
-            session,
-            outputs: [output],
-          });
-          await jitterDelay(jMin, jMax);
-        }
+        // Direct mode: one message with ALL outputs. Sending one message per
+        // output broke the coordinator when it treated each message as "one
+        // participant done" — with 2–4 outputs/peer it assembled after the
+        // first N messages and dropped the rest → fee 100M+ sats ("too high").
+        await transport.send(coordinator, {
+          ...messageBinding(),
+          type: 'outputs',
+          session,
+          outputs: params.myContribution.outputs,
+        });
       }
       // Signal that all components have been submitted.
       await transport.send(coordinator, {
@@ -1076,15 +1076,47 @@ function runCoordinator(
       params.myContribution.inputs.map(inputKey)
     );
     const useOnionForOutputs = params.onionEnabled === true;
-    const outputPool: FusionOutputRef[] = useOnionForOutputs
-      ? [] // outputs arrive via onion reveal chain
-      : [...params.myContribution.outputs]; // direct mode: pre-load
+    // Direct mode (v1.7.0): pre-load coordinator outputs so the pool is never
+    // empty while peers register. Onion mode starts empty and fills on reveal.
+    if (
+      !useOnionForOutputs &&
+      params.myContribution.outputs.length === 0
+    ) {
+      return Promise.reject(
+        new Error('coordinator has no fusion outputs to register')
+      );
+    }
+    // Output registry.
+    //
+    // Direct-mode OUTPUT messages are gift-wrapped under a throwaway key
+    // (fusionTransport.ts) so the coordinator cannot link them to a peer's
+    // round identity. That means `from` on an outputs message is almost never
+    // in `participants` — requiring participants.includes(from) silently
+    // dropped every peer's outputs (user log: peersWithOutputs=1/3, pool=4
+    // where 4 = coordinator-only preload). Anonymous batches are counted
+    // separately; attributed maps still work for in-memory tests / onion.
+    const outputsByPeer = new Map<string, FusionOutputRef[]>();
+    const anonymousOutputBatches: FusionOutputRef[][] = [];
+    if (!useOnionForOutputs) {
+      outputsByPeer.set(params.myPubkey, [...params.myContribution.outputs]);
+    }
+    const outputPool = (): FusionOutputRef[] => [
+      ...[...outputsByPeer.values()].flat(),
+      ...anonymousOutputBatches.flat(),
+    ];
+    /** How many "participant slots" have output material (coord + batches). */
+    const outputSlotsFilled = (): number => {
+      const attributed = [...outputsByPeer.entries()].filter(
+        ([, outs]) => outs.length > 0
+      ).length;
+      // Anonymous batches never double-count the coordinator's attributed set.
+      return attributed + anonymousOutputBatches.length;
+    };
     const signaturesByOutpoint = new Map<string, InputSig>();
     const signedPeers = new Set<string>();
     const seenNonces = new Set<string>();
     const readyPeers = new Set<string>([params.myPubkey]); // coordinator is always ready
     const credentialedPeers = new Set<string>([params.myPubkey]);
-    let outputMessages = useOnionForOutputs ? 0 : 1;
     let assembled: { inputs: FusionInputRef[]; outputs: FusionOutputRef[] } | null =
       null;
     let assembling = false;
@@ -1093,9 +1125,12 @@ function runCoordinator(
     let settled = false;
     let unsubscribe: () => void = () => undefined;
     let unsubscribeProtocolError: () => void = () => undefined;
+    /** Fail if ready peers never deliver outputs (log evidence: ready 3/3 outputs 0). */
+    let missingOutputsTimer: ReturnType<typeof setTimeout> | null = null;
 
     const cleanup = () => {
       if (timer) clearTimeout(timer);
+      if (missingOutputsTimer) clearTimeout(missingOutputsTimer);
       params.signal?.removeEventListener('abort', onCancel);
       unsubscribe();
       unsubscribeProtocolError();
@@ -1230,19 +1265,76 @@ function runCoordinator(
       await Promise.allSettled(notifications);
     };
 
+    const outputsReady = (): boolean => {
+      const pool = outputPool();
+      if (pool.length === 0) return false;
+      if (useOnionForOutputs) {
+        // Onion reveal is one multi-output batch (anonymous or attributed).
+        return pool.length > 0;
+      }
+      // Prefer full attribution (in-memory tests). Production anonymous path:
+      // coordinator preloads self + one batch per other peer.
+      if (
+        params.participants.every(
+          (peer) => (outputsByPeer.get(peer)?.length ?? 0) > 0
+        )
+      ) {
+        return true;
+      }
+      const coordHas = (outputsByPeer.get(params.myPubkey)?.length ?? 0) > 0;
+      return (
+        coordHas && anonymousOutputBatches.length >= others.length
+      );
+    };
+
+    const armMissingOutputsWatch = () => {
+      if (missingOutputsTimer || settled || assembled) return;
+      // User console: ready 3/3 peersWithOutputs=1/3 pool=4 — outputs gift-wrap
+      // used throwaway keys and were dropped. Fail fast with slot counts.
+      missingOutputsTimer = setTimeout(() => {
+        if (settled || assembled) return;
+        if (
+          readyPeers.size === params.participants.length &&
+          !outputsReady()
+        ) {
+          void fail(
+            new Error(
+              `All ${params.participants.length} peers marked ready but outputs ` +
+                `never arrived (outputSlots=${outputSlotsFilled()}/` +
+                `${params.participants.length}, anonBatches=` +
+                `${anonymousOutputBatches.length}, pool=${outputPool().length}). ` +
+                `Tor may have dropped anonymous output wraps, or peel stalled.`
+            ),
+            true
+          );
+        }
+      }, 25_000);
+    };
+
     const tryAssemble = async () => {
+      const pool = outputPool();
       if (!settled && !assembled) {
         console.info(
-          '[p2p-fusion coord] session', session.slice(0, 10),
-          'inputs', inputsByPeer.size, '/', params.participants.length,
-          'outputs', outputPool.length,
-          'ready', readyPeers.size, '/', params.participants.length
+          '[p2p-fusion coord] session',
+          session.slice(0, 10),
+          'inputs',
+          inputsByPeer.size,
+          '/',
+          params.participants.length,
+          'outputs',
+          outputSlotsFilled(),
+          '/',
+          params.participants.length,
+          'anon',
+          anonymousOutputBatches.length,
+          'pool',
+          pool.length,
+          'ready',
+          readyPeers.size,
+          '/',
+          params.participants.length
         );
       }
-      // Wait for all peers to be ready AND outputs to be in the pool
-      // before assembling. In onion mode, outputs arrive via the reveal chain
-      // (async, multi-hop) so the pool may still be empty when components_ready
-      // fires.
       if (
         settled ||
         assembling ||
@@ -1251,8 +1343,8 @@ function runCoordinator(
       ) {
         return;
       }
-      // Wait for at least one output to be present (onion reveal or direct).
-      if (outputPool.length === 0) {
+      if (!outputsReady()) {
+        armMissingOutputsWatch();
         return;
       }
       const inputs = [...inputsByPeer.values()].flat();
@@ -1260,8 +1352,36 @@ function runCoordinator(
       if (inputs.some((input) => !credentialedInputs.has(inputKey(input)))) {
         return;
       }
+      // Global fee sanity before any peer signs (catches incomplete pools).
+      const draft = assembleFusionTx([{ inputs, outputs: pool }]);
+      const totalIn = draft.inputs.reduce((s, i) => s + i.value, 0);
+      const totalOut = draft.outputs.reduce((s, o) => s + o.value, 0);
+      const fee = totalIn - totalOut;
+      const required = Math.ceil(
+        ((10 +
+          draft.inputs.reduce((s, i) => s + 108 + i.pubkey.length / 2, 0) +
+          draft.outputs.reduce((s, o) => s + 9 + o.script.length / 2, 0)) *
+          params.feerate) /
+          1000
+      );
+      if (fee < 0 || fee > required * 3) {
+        void fail(
+          new Error(
+            `refusing to assemble: fee ${fee} outside [0, ${required * 3}] ` +
+              `(in=${totalIn} out=${totalOut} outputSlots=` +
+              `${outputSlotsFilled()}/${params.participants.length}). ` +
+              `Incomplete output pool or mis-planned values.`
+          ),
+          true
+        );
+        return;
+      }
+      if (missingOutputsTimer) {
+        clearTimeout(missingOutputsTimer);
+        missingOutputsTimer = null;
+      }
       assembling = true;
-      assembled = assembleFusionTx([{ inputs, outputs: outputPool }]);
+      assembled = draft;
       params.onPhase?.(5);
       const ownSignatures = assembleVerifySign(
         params,
@@ -1298,6 +1418,9 @@ function runCoordinator(
       }
       if (message.type === 'components_ready' && others.includes(from)) {
         readyPeers.add(from);
+        if (readyPeers.size === params.participants.length) {
+          armMissingOutputsWatch();
+        }
         void tryAssemble().catch((error: unknown) =>
           void fail(asError(error), true)
         );
@@ -1320,14 +1443,51 @@ function runCoordinator(
         return;
       }
       if (message.type === 'outputs') {
-        if (outputMessages >= params.participants.length) {
-          return;
+        if (assembled) return;
+        const incoming = Array.isArray(message.outputs) ? message.outputs : [];
+        const valid = incoming.filter(
+          (o) =>
+            o &&
+            typeof o.script === 'string' &&
+            o.script.length > 0 &&
+            Number.isSafeInteger(o.value) &&
+            o.value > 0
+        );
+        if (valid.length === 0) return;
+        // Production gift-wrap seals outputs under a throwaway key, so `from`
+        // is NOT in participants. Still accept those batches. Attributed path
+        // keeps working for tests / any non-anonymous sender.
+        if (params.participants.includes(from)) {
+          if (useOnionForOutputs) {
+            outputsByPeer.set(from, valid);
+          } else {
+            const existing = outputsByPeer.get(from) ?? [];
+            const seen = new Set(
+              existing.map((o) => `${o.value}:${o.script}`)
+            );
+            for (const o of valid) {
+              const k = `${o.value}:${o.script}`;
+              if (!seen.has(k)) {
+                existing.push(o);
+                seen.add(k);
+              }
+            }
+            outputsByPeer.set(from, existing);
+          }
+        } else {
+          // Cap anonymous batches so one peer cannot flood the pool forever.
+          if (anonymousOutputBatches.length < others.length + 2) {
+            anonymousOutputBatches.push(valid);
+            console.info(
+              '[p2p-fusion coord] anonymous output batch',
+              valid.length,
+              'outputs; batches',
+              anonymousOutputBatches.length,
+              '/',
+              others.length
+            );
+          }
         }
-        // Per-component: accumulate individual outputs from each peer.
-        // Output senders are not tracked — duplicates are harmless since
-        // verifyFusionSafety rejects duplicate outpoints.
-        outputPool.push(...message.outputs);
-        outputMessages += 1;
         void tryAssemble().catch((error: unknown) =>
           void fail(asError(error), true)
         );

@@ -390,15 +390,47 @@ export function joinPool(
     '#t': [poolTag(options.network)],
     since: Math.floor(Date.now() / 1000) - POOL_PEER_TTL_SECONDS,
   };
+  const emitPeers = () => {
+    const now = Math.floor(Date.now() / 1000);
+    // Drop locally expired entries even if no withdraw event arrived (Tor lag /
+    // missed replaceable). Different windows seeing 1 vs 4 vs 5 "peers" was
+    // often ghosts from failed rounds still sitting in this Map.
+    for (const [pubkey, ann] of peers) {
+      if (ann.expiresAt < now) peers.delete(pubkey);
+    }
+    options.onPeer([...peers.values()]);
+  };
+
   const sub = pool.subscribeMany(relays, filter, {
     onevent(evt: Event) {
       const ann = parsePoolAnnouncement(evt, {
         network: options.network,
         epoch: options.epoch,
       });
-      if (!ann) return;
-      peers.set(ann.pubkey, ann);
-      options.onPeer([...peers.values()]);
+      if (ann) {
+        peers.set(ann.pubkey, ann);
+        emitPeers();
+        return;
+      }
+      // Withdraw publishes expiresAt = now-1; parse rejects it. Without this
+      // branch the OLD live announcement stays in the Map until TTL — other
+      // wallets still count that throwaway key as a peer.
+      if (
+        evt.kind === POOL_ANNOUNCE_KIND &&
+        peers.has(evt.pubkey) &&
+        hasTag(evt, 't', poolTag(options.network))
+      ) {
+        try {
+          const content = JSON.parse(evt.content) as { expiresAt?: unknown };
+          const expiresAt = Number(content.expiresAt);
+          if (Number.isSafeInteger(expiresAt) && expiresAt < Math.floor(Date.now() / 1000)) {
+            peers.delete(evt.pubkey);
+            emitPeers();
+          }
+        } catch {
+          /* ignore unparseable */
+        }
+      }
     },
   });
 
