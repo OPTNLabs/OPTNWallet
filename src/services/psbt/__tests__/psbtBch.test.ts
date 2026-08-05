@@ -328,10 +328,12 @@ describe('sighash verification on returned signatures', () => {
   });
 
   it('catches a device that signed 0x41 when 0xc1 was requested', () => {
-    // Exactly what SeedCash does today: it hard-codes 0x41 and never reads
-    // PSBT_IN_SIGHASH_TYPE. Without this check the transaction is assembled,
-    // shown as ready, and rejected at broadcast — by which point the user has
-    // put the device away and has no idea which step failed.
+    // 0x41 is SeedCash's fallback when PSBT_IN_SIGHASH_TYPE is missing — it
+    // does read key 0x03 when we emit it. So this fires when our encoder drops
+    // the field, or on a device that genuinely ignores it. Without the check
+    // the transaction is assembled, shown as ready, and rejected at broadcast —
+    // by which point the user has put the device away and has no idea which
+    // step failed.
     const result = verifySignatureSighashTypes(
       [{ inputIndex: 0, publicKey: PUBKEY, signature: sig(SIGHASH_ALL_FORKID) }],
       SIGHASH_ALL_FORKID_ANYONECANPAY

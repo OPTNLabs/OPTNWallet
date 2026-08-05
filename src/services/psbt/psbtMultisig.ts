@@ -6,9 +6,13 @@
 //     default in wallet-keys.js — `signer.publicKey.localeCompare(...)` on hex).
 //   * Addresses: P2SH20 of that redeem script (the 2-of-3 template uses
 //     `"lockingType": "p2sh20"`).
-//   * Unlock: `OP_0 <sig1> <sig2> ... <redeemScript>` — Paytaca's templates
-//     still emit the OP_0 dummy byte even though BCH consensus stopped
-//     consuming it, and the unlock here matches byte-for-byte.
+//   * Unlock: `<dummy> <sig1> <sig2> ... <redeemScript>`, where the dummy
+//     depends on how the inputs were signed. Schnorr — the default for both
+//     Paytaca (`createTemplate({ signatureAlgorithm = 'schnorr' })`) and
+//     SeedCash (`sign_tx_input(..., use_schnorr = True)`) — requires a
+//     checkbits bit field naming the signing keys. Only ECDSA still uses the
+//     legacy null OP_0 dummy. Emitting OP_0 for Schnorr signatures produces a
+//     transaction that assembles cleanly and is rejected at broadcast.
 //   * Merge: `Psbt.combine(psbts)` — bind every candidate to the same unsigned
 //     transaction (hash mismatch is a hard rejection), require the same input
 //     count and redeem scripts, cryptographically verify every partial
@@ -21,7 +25,6 @@ import {
   generateSigningSerializationBch,
   hash160,
   hash256,
-  secp256k1,
   type CompilationContextBch,
 } from '@bitauth/libauth';
 
@@ -29,6 +32,7 @@ import {
   decodePsbt,
   encodeUnsignedPsbt,
   sighashTypeOf,
+  verifyBchSignature,
   SIGHASH_ALL_FORKID_ANYONECANPAY,
   type ParsedPsbt,
   type ParsedPsbtInput,
@@ -41,6 +45,9 @@ export const OP_CHECKMULTISIG = 0xae;
 export const OP_HASH160 = 0xa9;
 export const OP_EQUAL = 0x87;
 export const PUSHDATA1 = 0x4c;
+export const OP_0 = 0x00;
+export const OP_1NEGATE = 0x4f;
+export const OP_1 = 0x51;
 
 /**
  * BIP-67: lexicographic ordering of compressed public keys, the script
@@ -170,6 +177,59 @@ export function pushData(payload: Uint8Array): Uint8Array {
   return new Uint8Array([...header, ...payload]);
 }
 
+/**
+ * Push `payload` the way BCH's minimal-encoding rule requires.
+ *
+ * A P2SH unlocking script must be push-only *and* minimally encoded, so a
+ * single byte in 1..16 has to use OP_1..OP_16 and 0x81 has to use OP_1NEGATE —
+ * a plain one-byte push of the same value is non-standard and gets rejected.
+ * Only matters for short payloads: signatures and redeem scripts are far past
+ * the range where the special forms apply.
+ */
+export function pushMinimal(payload: Uint8Array): Uint8Array {
+  if (payload.length === 0) return Uint8Array.of(OP_0);
+  if (payload.length === 1) {
+    const value = payload[0];
+    if (value >= 1 && value <= 16) return Uint8Array.of(OP_1 - 1 + value);
+    if (value === 0x81) return Uint8Array.of(OP_1NEGATE);
+  }
+  return pushData(payload);
+}
+
+/**
+ * The Schnorr CHECKMULTISIG "checkbits" element.
+ *
+ * BCH replaced the legacy null dummy with a bit field saying *which* keys in
+ * the redeem script signed, so the VM no longer has to try each signature
+ * against each key. Read off libauth's `decodeBitfield`, which is what will
+ * actually validate this:
+ *
+ *   * length is exactly `floor((n + 7) / 8)` bytes — a fixed-width field, not
+ *     a minimally-encoded script number,
+ *   * decoded little-endian: `bitfield |= bin[i] << (8 * i)`,
+ *   * no bit set at or beyond position n,
+ *   * popcount must equal the number of signatures supplied.
+ *
+ * Positions are 0-indexed into the BIP-67-sorted key list of the redeem
+ * script, which is the order CHECKMULTISIG itself walks.
+ */
+export function schnorrCheckBits(
+  signingKeyPositions: readonly number[],
+  totalKeys: number
+): Uint8Array {
+  if (totalKeys < 1) throw new Error('A multisig needs at least one key.');
+  const bits = new Uint8Array(Math.floor((totalKeys + 7) / 8));
+  for (const position of signingKeyPositions) {
+    if (!Number.isInteger(position) || position < 0 || position >= totalKeys) {
+      throw new Error(
+        `Key position ${position} is outside a ${totalKeys}-key multisig.`
+      );
+    }
+    bits[position >> 3] |= 1 << (position & 7);
+  }
+  return bits;
+}
+
 /** Human-readable BIP32 path for display and cosigner tracking. */
 export function formatBip32Path(path: number[]): string {
   return `m/${path
@@ -263,7 +323,7 @@ function verifySignatureForPsbt(
     signingSerializationType: Uint8Array.from([type]),
   });
   const messageHash = hash256(serialization);
-  return secp256k1.verifySignatureDER(
+  return verifyBchSignature(
     signature.signature.subarray(0, -1),
     signature.publicKey,
     messageHash

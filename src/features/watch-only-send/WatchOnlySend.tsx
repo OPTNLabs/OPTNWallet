@@ -41,6 +41,7 @@ import {
   type WatchOnlyProposal,
 } from '../../services/psbt/watchOnlySend';
 import { inspectImportedPsbt } from '../../services/psbt/watchOnlyImport';
+import { fetchParentTransactions } from '../../services/psbt/parentTransactions';
 import { decodePsbt } from '../../services/psbt/psbtBch';
 import {
   cosignerStatuses,
@@ -354,7 +355,7 @@ export const WatchOnlySend: FC = () => {
     }
   };
 
-  const handleBuild = () => {
+  const handleBuild = async () => {
     setError('');
     setProposalState(null);
     setFrames(null);
@@ -378,8 +379,19 @@ export const WatchOnlySend: FC = () => {
       return;
     }
     try {
+      // The signer needs the whole parent transaction per input, so this is a
+      // network round trip before anything can be shown.
+      setBusy(true);
+      const parents = await fetchParentTransactions(
+        selectedInputs.map((input) => input.txid)
+      );
+      const inputsWithParents = selectedInputs.map((input) => ({
+        ...input,
+        previousTransactionHex: parents.get(input.txid),
+      }));
+
       const result = buildWatchOnlyPsbt({
-        inputs: selectedInputs,
+        inputs: inputsWithParents,
         recipient: recipient.trim(),
         amountSats,
         changeAddress,
@@ -399,7 +411,7 @@ export const WatchOnlySend: FC = () => {
       }
       const proposal: WatchOnlyProposal = {
         rawUnsignedHex: result.rawUnsignedHex,
-        inputs: selectedInputs,
+        inputs: inputsWithParents,
         outputs: result.outputs,
       };
       setProposalState({
@@ -416,6 +428,8 @@ export const WatchOnlySend: FC = () => {
       setQrUri(frameSource.next());
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Could not build the unsigned transaction.');
+    } finally {
+      setBusy(false);
     }
   };
 
@@ -692,7 +706,7 @@ export const WatchOnlySend: FC = () => {
                 )}
                 <button
                   type="button"
-                  onClick={handleBuild}
+                  onClick={() => void handleBuild()}
                   disabled={!fingerprint || !masterFingerprintBytes(fingerprint)}
                   className="wallet-btn-primary w-full py-2 font-semibold disabled:opacity-50"
                 >
