@@ -19,6 +19,7 @@ import {
   parseUrisInput,
   selectFeeCandidates,
   validateMintRequest,
+  type BcmrNftsSchemaInput,
 } from './services';
 import {
   IpfsUploadResult,
@@ -78,6 +79,9 @@ type BcmrFieldKey =
   | 'webUri'
   | 'registry'
   | 'image'
+  | 'nftBytecode'
+  | 'nftTypes'
+  | 'nftFields'
   | 'general';
 
 type FlowState = {
@@ -112,6 +116,10 @@ type BcmrFormFingerprint = {
   tokenDecimals: number;
   iconUri: string;
   webUri: string;
+  nftsDescription: string;
+  nftBytecode: string;
+  nftTypesJson: string;
+  nftFieldsJson: string;
 };
 
 type FlowAction =
@@ -238,6 +246,10 @@ const MintCashTokensPoCApp: React.FC = () => {
   const [bcmrTokenDecimals, setBcmrTokenDecimals] = useState('0');
   const [bcmrIconUri, setBcmrIconUri] = useState('');
   const [bcmrWebUri, setBcmrWebUri] = useState('');
+  const [bcmrNftsDescription, setBcmrNftsDescription] = useState('');
+  const [bcmrNftBytecode, setBcmrNftBytecode] = useState('');
+  const [bcmrNftTypesJson, setBcmrNftTypesJson] = useState('');
+  const [bcmrNftFieldsJson, setBcmrNftFieldsJson] = useState('');
   const [bcmrImageFile, setBcmrImageFile] = useState<File | null>(null);
   const [bcmrImageUpload, setBcmrImageUpload] =
     useState<IpfsUploadResult | null>(null);
@@ -445,6 +457,10 @@ const MintCashTokensPoCApp: React.FC = () => {
           : -1,
       iconUri: bcmrIconUri.trim(),
       webUri: bcmrWebUri.trim(),
+      nftsDescription: bcmrNftsDescription.trim(),
+      nftBytecode: bcmrNftBytecode.trim(),
+      nftTypesJson: bcmrNftTypesJson.trim(),
+      nftFieldsJson: bcmrNftFieldsJson.trim(),
     };
     return JSON.stringify(fingerprint);
   }, [
@@ -456,6 +472,10 @@ const MintCashTokensPoCApp: React.FC = () => {
     bcmrTokenDecimals,
     bcmrIconUri,
     bcmrWebUri,
+    bcmrNftsDescription,
+    bcmrNftBytecode,
+    bcmrNftTypesJson,
+    bcmrNftFieldsJson,
   ]);
 
   const bcmrRegistryIsCurrent =
@@ -748,6 +768,10 @@ const MintCashTokensPoCApp: React.FC = () => {
     setBcmrTokenDecimals('0');
     setBcmrIconUri('');
     setBcmrWebUri('');
+    setBcmrNftsDescription('');
+    setBcmrNftBytecode('');
+    setBcmrNftTypesJson('');
+    setBcmrNftFieldsJson('');
     setBcmrImageFile(null);
     setBcmrImageUpload(null);
     setBcmrRegistryUpload(null);
@@ -1068,6 +1092,33 @@ const MintCashTokensPoCApp: React.FC = () => {
       setBcmrTokenDecimals(String(existing?.token?.decimals ?? 0));
       setBcmrIconUri(existing?.uris?.icon ?? '');
       setBcmrWebUri(existing?.uris?.web ?? '');
+      const existingNfts = (
+        existing?.token as unknown as
+          | {
+              nfts?: {
+                description?: string;
+                fields?: Record<string, unknown>;
+                parse?: {
+                  bytecode?: string;
+                  types?: Record<string, unknown>;
+                };
+              };
+            }
+          | undefined
+      )?.nfts;
+      setBcmrNftsDescription(existingNfts?.description ?? '');
+      setBcmrNftBytecode(existingNfts?.parse?.bytecode ?? '');
+      setBcmrNftTypesJson(
+        existingNfts?.parse?.types &&
+          Object.keys(existingNfts.parse.types).length > 0
+          ? JSON.stringify(existingNfts.parse.types, null, 2)
+          : ''
+      );
+      setBcmrNftFieldsJson(
+        existingNfts?.fields && Object.keys(existingNfts.fields).length > 0
+          ? JSON.stringify(existingNfts.fields, null, 2)
+          : ''
+      );
       setBcmrImageFile(null);
       setBcmrImageUpload(null);
       setBcmrImageUploadStatus(IDLE_BCMR_UPLOAD_STATUS);
@@ -1094,6 +1145,9 @@ const MintCashTokensPoCApp: React.FC = () => {
     if (lower.includes('official site') || lower.includes('web'))
       return 'webUri';
     if (lower.includes('uri')) return 'registry';
+    if (lower.includes('bytecode')) return 'nftBytecode';
+    if (lower.includes('nft type')) return 'nftTypes';
+    if (lower.includes('nft field')) return 'nftFields';
     return 'general';
   }, []);
 
@@ -1165,6 +1219,9 @@ const MintCashTokensPoCApp: React.FC = () => {
     const trimmedIcon = bcmrIconUri.trim();
     const trimmedWeb = bcmrWebUri.trim();
     const parsedDecimals = Number.parseInt(bcmrTokenDecimals, 10);
+    const trimmedNftBytecode = bcmrNftBytecode.trim();
+    const trimmedNftTypes = bcmrNftTypesJson.trim();
+    const trimmedNftFields = bcmrNftFieldsJson.trim();
 
     const nextErrors: Partial<Record<BcmrFieldKey, string>> = {};
 
@@ -1191,6 +1248,47 @@ const MintCashTokensPoCApp: React.FC = () => {
     }
     if (trimmedWeb && !/^https?:\/\//i.test(trimmedWeb)) {
       nextErrors.webUri = 'Official site must start with https:// or http://';
+    }
+    if (
+      trimmedNftBytecode &&
+      (!/^[0-9a-f]+$/i.test(trimmedNftBytecode) ||
+        trimmedNftBytecode.length % 2 !== 0)
+    ) {
+      nextErrors.nftBytecode = 'Parse bytecode must be even-length hex.';
+    }
+    let nftTypes: Record<string, { name: string }> | undefined;
+    if (trimmedNftTypes) {
+      try {
+        const parsed: unknown = JSON.parse(trimmedNftTypes);
+        if (
+          typeof parsed !== 'object' ||
+          parsed === null ||
+          Array.isArray(parsed)
+        ) {
+          throw new Error();
+        }
+        nftTypes = parsed as Record<string, { name: string }>;
+      } catch {
+        nextErrors.nftTypes =
+          'NFT types must be valid JSON: an object of type keys.';
+      }
+    }
+    let nftFields: BcmrNftsSchemaInput['fields'] | undefined;
+    if (trimmedNftFields) {
+      try {
+        const parsed: unknown = JSON.parse(trimmedNftFields);
+        if (
+          typeof parsed !== 'object' ||
+          parsed === null ||
+          Array.isArray(parsed)
+        ) {
+          throw new Error();
+        }
+        nftFields = parsed as BcmrNftsSchemaInput['fields'];
+      } catch {
+        nextErrors.nftFields =
+          'NFT fields must be valid JSON: an object of field identifiers.';
+      }
     }
 
     if (Object.keys(nextErrors).length > 0) {
@@ -1228,6 +1326,16 @@ const MintCashTokensPoCApp: React.FC = () => {
         tokenDecimals: parsedDecimals,
         iconUri: bcmrIconUri,
         webUri: bcmrWebUri,
+        nfts: outputDrafts.some((draft) => draft.config.mintType === 'NFT')
+          ? {
+              description: bcmrNftsDescription.trim() || undefined,
+              parse: {
+                bytecode: trimmedNftBytecode || undefined,
+                types: nftTypes,
+              },
+              fields: nftFields,
+            }
+          : undefined,
       });
       setBcmrRegistryJson(json);
 
@@ -1281,8 +1389,13 @@ const MintCashTokensPoCApp: React.FC = () => {
     bcmrTokenDecimals,
     bcmrIconUri,
     bcmrWebUri,
+    bcmrNftsDescription,
+    bcmrNftBytecode,
+    bcmrNftTypesJson,
+    bcmrNftFieldsJson,
     bcmrAuthbase,
     bcmrSelectedCategories.length,
+    outputDrafts,
     setLoading,
     bcmrTokenDescription,
     bcmrFormFingerprint,
@@ -1836,6 +1949,58 @@ const MintCashTokensPoCApp: React.FC = () => {
               {bcmrFieldErrors.webUri ? (
                 <p className="text-xs wallet-danger-text mt-1">
                   {bcmrFieldErrors.webUri}
+                </p>
+              ) : null}
+            </div>
+
+            <div className="rounded-xl wallet-surface-strong border border-[var(--wallet-border)] p-3 space-y-2">
+              <label className="block text-sm font-semibold">
+                NFT schema
+              </label>
+              <p className="text-xs wallet-muted">
+                {outputDrafts.some((draft) => draft.config.mintType === 'NFT')
+                  ? 'The NFT schema is always recorded for NFT categories, even when empty, and can be extended in later snapshots. Empty bytecode = sequential collection.'
+                  : 'No NFT outputs selected yet — the schema will be recorded for NFT mints.'}
+              </p>
+              <input
+                value={bcmrNftsDescription}
+                onChange={(e) => setBcmrNftsDescription(e.target.value)}
+                className="wallet-input w-full"
+                placeholder="How this identity uses NFTs (optional)"
+              />
+              <input
+                value={bcmrNftBytecode}
+                onChange={(e) => setBcmrNftBytecode(e.target.value)}
+                className="wallet-input w-full font-mono text-xs"
+                placeholder="Parse bytecode hex (empty = sequential)"
+              />
+              {bcmrFieldErrors.nftBytecode ? (
+                <p className="text-xs wallet-danger-text mt-1">
+                  {bcmrFieldErrors.nftBytecode}
+                </p>
+              ) : null}
+              <textarea
+                value={bcmrNftTypesJson}
+                onChange={(e) => setBcmrNftTypesJson(e.target.value)}
+                rows={4}
+                className="wallet-input w-full font-mono text-xs"
+                placeholder='Types JSON, e.g. {"01":{"name":"#1","description":"Token number 1"}}'
+              />
+              {bcmrFieldErrors.nftTypes ? (
+                <p className="text-xs wallet-danger-text mt-1">
+                  {bcmrFieldErrors.nftTypes}
+                </p>
+              ) : null}
+              <textarea
+                value={bcmrNftFieldsJson}
+                onChange={(e) => setBcmrNftFieldsJson(e.target.value)}
+                rows={3}
+                className="wallet-input w-full font-mono text-xs"
+                placeholder='Fields JSON, e.g. {"serial":{"name":"Serial","encoding":{"type":"number"},"offset":"1","byteLength":"2"}}'
+              />
+              {bcmrFieldErrors.nftFields ? (
+                <p className="text-xs wallet-danger-text mt-1">
+                  {bcmrFieldErrors.nftFields}
                 </p>
               ) : null}
             </div>

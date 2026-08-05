@@ -22,7 +22,15 @@ import { logError } from '../utils/errorHandling';
 import type { TokenPresentationFallback } from '../utils/tokenPresentation';
 import { StealthBalanceCard } from '../features/rpa/StealthBalanceCard';
 import { CauldronActivityCard } from '../features/cauldron/CauldronActivityCard';
-import { dedupeTokenUtxos, getStableTokenUtxos } from './assetsTokenInventory';
+import {
+  buildNftCardModels,
+  dedupeTokenUtxos,
+  getStableTokenUtxos,
+  summarizeNftInstances,
+} from './assetsTokenInventory';
+import type { NftCategory } from '@bitauth/libauth';
+import { resolveParyonNftParseInfo } from '../services/paryon/nftRegistry';
+import type { NftParseInfo } from '../services/nftParsing/nftParsing';
 import {
   formatAtomicTokenAmount,
   resolveTokenPresentation,
@@ -232,7 +240,47 @@ const Assets: React.FC<AssetsProps> = ({ viewerOnly = false }) => {
   const selectedTokenMetadata = selectedTokenCategory
     ? tokenMetadata[selectedTokenCategory]
     : null;
-  const totalBch = totalBalance / SATSINBITCOIN;
+  const nftInstances = useMemo(
+    () => summarizeNftInstances(tokenUtxos),
+    [tokenUtxos]
+  );
+  const nftCardMetadata = useMemo(() => {
+    const byCategory: Record<
+      string,
+      { symbol: string; nfts: NftCategory | undefined }
+    > = {};
+    for (const instance of nftInstances) {
+      if (byCategory[instance.category]) continue;
+      const metadata = tokenMetadata[instance.category];
+      const fallback = tokenFallbackByCategory.get(instance.category);
+      byCategory[instance.category] = {
+        symbol: metadata?.symbol || fallback?.symbol || '',
+        nfts: metadata?.snapshot?.token?.nfts,
+      };
+    }
+    return byCategory;
+  }, [nftInstances, tokenMetadata, tokenFallbackByCategory]);
+  const nftCards = useMemo(() => {
+    // Categories without BCMR metadata fall back to the bundled ParyonUSD
+    // type registry (loan and loan-key NFTs have no per-category registry).
+    const familyParseInfoByCategory: Record<string, NftParseInfo> = {};
+    for (const instance of nftInstances) {
+      if (familyParseInfoByCategory[instance.category]) continue;
+      if (nftCardMetadata[instance.category]?.nfts) continue;
+      const familyParseInfo = resolveParyonNftParseInfo(
+        currentNetwork,
+        instance.category
+      );
+      if (familyParseInfo) {
+        familyParseInfoByCategory[instance.category] = familyParseInfo;
+      }
+    }
+    return buildNftCardModels(
+      nftInstances,
+      nftCardMetadata,
+      familyParseInfoByCategory
+    );
+  }, [nftInstances, nftCardMetadata, currentNetwork]);  const totalBch = totalBalance / SATSINBITCOIN;
   const totalUsd =
     typeof bchUsdQuote === 'number' ? totalBch * bchUsdQuote : null;
 
@@ -449,22 +497,28 @@ const Assets: React.FC<AssetsProps> = ({ viewerOnly = false }) => {
                   compact
                 />
                 <div className="h-full min-h-0 space-y-2.5 overflow-y-auto overscroll-contain pb-[calc(var(--safe-bottom)+1rem)] pr-1">
-                  {nftTokens.length > 0 ? (
-                    nftTokens.map(([category, value]) => {
-                      const metadata = tokenMetadata[category];
+                  {nftCards.length > 0 ? (
+                    nftCards.map((card) => {
                       const presentation = resolveTokenPresentation(
-                        category,
-                        metadata,
-                        tokenFallbackByCategory.get(category) ?? null
+                        card.category,
+                        tokenMetadata[card.category],
+                        tokenFallbackByCategory.get(card.category) ?? null
                       );
                       return (
                         <button
-                          key={category}
+                          key={card.outpoint}
                           type="button"
                           className="wallet-card w-full p-2.5 text-left transition hover:brightness-[0.98]"
-                          onClick={() => setSelectedTokenCategory(category)}
+                          onClick={() => setSelectedTokenCategory(card.category)}
                         >
                           <div className="flex items-center gap-2.5">
+                            {card.imageUri ? (
+                              <img
+                                src={card.imageUri}
+                                alt={card.primaryLabel}
+                                className="h-9 w-9 shrink-0 rounded-lg border border-[var(--wallet-border)] object-cover"
+                              />
+                            ) : null}
                             <TokenIdentityBadge
                               presentation={presentation}
                               className="flex-1"
@@ -474,15 +528,44 @@ const Assets: React.FC<AssetsProps> = ({ viewerOnly = false }) => {
                               detail={
                                 <div className="shrink-0 text-right">
                                   <div className="text-sm font-semibold wallet-text-strong">
-                                    {value.amount.toString()}
+                                    {card.primaryLabel}
                                   </div>
                                   <div className="text-xs wallet-muted">
-                                    collectibles
+                                    {card.parsed
+                                      ? card.fields.length === 1
+                                        ? '1 field'
+                                        : `${card.fields.length} fields`
+                                      : 'unparsed'}
                                   </div>
                                 </div>
                               }
                             />
                           </div>
+                          {card.fields.length > 0 ? (
+                            <div className="mt-2 space-y-1 border-t border-[var(--wallet-border)] pt-2">
+                              {card.fields.map((field, index) => (
+                                <div
+                                  key={index}
+                                  className="flex items-baseline justify-between gap-2 text-xs"
+                                >
+                                  <span className="wallet-muted">
+                                    {field.name ??
+                                      field.fieldId ??
+                                      `field ${index}`}
+                                  </span>
+                                  <span className="wallet-text-strong font-mono">
+                                    {field.parsedValue?.formatted ??
+                                      field.value}
+                                  </span>
+                                </div>
+                              ))}
+                            </div>
+                          ) : null}
+                          {!card.parsed && card.parseError ? (
+                            <p className="mt-1 truncate text-[10px] wallet-danger-text">
+                              {card.parseError}
+                            </p>
+                          ) : null}
                         </button>
                       );
                     })

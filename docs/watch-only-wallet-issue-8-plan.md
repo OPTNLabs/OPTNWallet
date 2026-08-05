@@ -39,8 +39,8 @@ transaction builder, verifier, and broadcaster.
 
 ## Implementation status
 
-Checkpoints 1-5 are implemented in this worktree; 6 (multisign) and 7
-(parsable NFTs) are not part of this delivery.
+Checkpoints 1-5 and 7 are implemented in this worktree; 6 (multisign) is the
+only remaining checkpoint and is not part of this delivery.
 
 - **1. Public-only wallet model and xPub import — done.** Watch-only wallet
   type, xPub + optional master fingerprint persistence (`watchOnlyWallet.ts`,
@@ -64,6 +64,13 @@ Checkpoints 1-5 are implemented in this worktree; 6 (multisign) and 7
 - **Route and fingerprint persistence — done.** `/send` dispatches on wallet
   type via `SendRoute` in `AppShell.tsx`; a fingerprint typed at send time is
   persisted back to the wallet (`saveWatchOnlyMasterFingerprint`).
+- **7. Parsable NFTs (Cashonize parity) — done.** Chip-bcmr commitment parser
+  (`nftParsing.ts`: sequential-type lookup, chip-bcmr bytecode VM, field
+  encodings, `nftTickerSymbol`), BCMR v2 registry generator for minted tokens
+  (`bcmrRegistryGenerator.ts`), NFT card grid with per-card parse info in
+  `Assets.tsx`, and a bundled fallback registry for the ParyonUSD loan and
+  loan-key NFT families   (`paryon/nftRegistry.ts`, VM-validated against the `transactions.ts` loan
+  commitment layout), rendered in `Assets.tsx` and in the watch-only send coin control. Unparsable commitments fall back to `0x` hex.
 
 ## Implementation checkpoints
 
