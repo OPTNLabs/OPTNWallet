@@ -9,15 +9,19 @@ substitute for reading the source.
 
 | Doc | Role |
 |-----|------|
+| [p2p-cashfusion-privacy-layers.md](./p2p-cashfusion-privacy-layers.md) | **Start here for naming** — Tor vs NIP-59 vs Pedersen vs blind Schnorr vs **output onion** (PR #12 committed stack) |
 | [THREAT_MODEL.md](./THREAT_MODEL.md) | Adversaries and what each can/cannot do |
 | [cashfusion-implementation-scope.md](./cashfusion-implementation-scope.md) | Server (classic) CashFusion Rust client scope |
 | Source under `src/platform/desktop/nostr/` | Normative behaviour for P2P |
 
 **Design goal (non-negotiable):** P2P is a **different transport**, not a weaker
 protocol. Cryptography that server CashFusion uses (Pedersen commitments, blind
-Schnorr credentials, Tor, onion unlinkability of outputs) must carry over.
+Schnorr credentials, Tor, **output-onion** unlinkability of outputs) must carry over.
 There is **no dedicated fusion server** and **no extra infrastructure** beyond
-public Nostr relays and the Bitcoin Cash network (Chipnet in development).
+public Nostr relays, Tor, and the Bitcoin Cash network (Chipnet in development).
+
+> **Naming:** “Onion” in this doc means the **peer peel chain** (`onionCrypto.ts`),
+> **not** Tor. See [privacy layers](./p2p-cashfusion-privacy-layers.md).
 
 ---
 
@@ -30,8 +34,8 @@ public Nostr relays and the Bitcoin Cash network (Chipnet in development).
 | Rendezvous (proposal / ack / start) | `fusionRendezvous.ts` |
 | Round choreography (credentials → inputs → assemble → sign → final) | `fusionSession.ts` |
 | Canonical tx assembly & signing safety | `fusionRound.ts`, `fusionSign.ts` |
-| Nostr gift-wrap transport | `fusionTransport.ts` |
-| Onion mix-net for outputs | `onionCrypto.ts` |
+| NIP-59 gift-wrap transport | `fusionTransport.ts` |
+| Output onion (peer peel + shuffle) | `onionCrypto.ts` |
 | Blind Schnorr issuer + requester (TS) | `fusionBlindSchnorr.ts` |
 | Pedersen commits (TS) | `fusionPedersen.ts` |
 | Rust issuer (server path parity + unit tests) | `src-tauri/src/fusion/schnorr.rs` → `BlindIssuer` |
@@ -373,8 +377,9 @@ the peer’s declared excess fee.
 
 - They do **not** hide the input→output map from the **coordinator** (same trust
   model as a classic fusion server that sees the final template).
-- Onion mix-net is what prevents *peers and intermediate hops* from linking
-  which participant contributed which **output**.
+- **Output onion** (not Tor) is what prevents *peers and intermediate peel hops*
+  from linking which participant contributed which **output**. Full stack:
+  [p2p-cashfusion-privacy-layers.md](./p2p-cashfusion-privacy-layers.md).
 - Input ownership for spending is still ordinary BCH signatures at sign time;
   credentials authorize inclusion in **this round’s** CoinJoin under the round
   issuer key.
@@ -417,16 +422,17 @@ sets, money bounds. Invalid messages surface as protocol errors.
 | Issuer | Dedicated fusion server | Elected peer coordinator |
 | Pedersen | Full component model + blame | Per-peer commit at credential time |
 | Blind Schnorr | Server signs; client requester in Rust | Coordinator `BlindIssuer`; TS requester |
-| Covert submit | Separate Tor circuits per component | Per-component jitter + onion for outputs |
+| Covert / output privacy | Separate Tor circuits per component | Per-component jitter + **output onion** for outputs |
 | Blame protocol | Full EC-style blame proofs | Not ported; abort + drop bad peer |
 | Assembly trust | Server proposes; client checks | Coordinator proposes; **every** peer checks |
 | Broadcast | Client/server paths | Coordinator + peer liveness broadcast |
 | Network | Chipnet for tests; never mainnet in CI | Same rule |
 
 P2P intentionally **does not** require running or trusting a long-lived fusion
-daemon. It **does** require at least one honest mix hop for output unlinkability
-when onion is on, and treats the coordinator like a classic server for template
-visibility.
+daemon. It **does** require at least one honest **output-onion** peel hop for
+peer-level output unlinkability when `onionEnabled` is on, and treats the
+coordinator like a classic server for template visibility. Output onion needs
+**no extra servers** — only the peers already in the round.
 
 ---
 
@@ -442,7 +448,8 @@ visibility.
 5. **CashToken coins are not fused** (`FusionRunnerService` / token filter).
 6. **Unconfirmed coins** may fuse (BCH 0-conf policy; documented divergence from
    EC’s hard exclude).
-7. **Onion on failure fails the round** — no silent plaintext downgrade.
+7. **Output onion on failure fails the round** — no silent plaintext downgrade
+   (not a Tor setting; see privacy-layers doc).
 8. **Issuer nonce one-shot** — never “retry sign” on the same slot.
 
 ---
@@ -473,8 +480,14 @@ It does **not** by itself replace a chipnet confirmation of the full stack
 | **Coordinator** | Peer that issues credentials and assembles the tx template |
 | **Component** | One input, output, or (server path) blank slot in a fusion round |
 | **Tier** | Target fused coin denomination (sats) peers advertise compatibility with |
-| **Mix order** | Ordered list of peelers for onion outputs; excludes coordinator |
+| **Mix order** | Ordered list of peelers for **output onion**; excludes coordinator |
+| **Output onion** | ECDH+AES-GCM peel/shuffle among peers (`onionCrypto.ts`) — **not Tor** |
+| **Tor transport** | SOCKS path for Nostr sockets — network IP privacy |
+| **NIP-59 gift-wrap** | Relay-facing encryption of round messages |
 | **Session** | Round id string bound into every message for that attempt |
+
+Privacy layer roles (Tor / gift-wrap / Pedersen / blind Schnorr / output onion):
+[p2p-cashfusion-privacy-layers.md](./p2p-cashfusion-privacy-layers.md).
 
 ---
 

@@ -8,9 +8,12 @@ Technical documentation for contributors and third-party integrators.
   - Commands for Android APK/AAB builds and iOS Capacitor preparation.
 - [Wallet Architecture](./wallet-architecture.md)
   - Runtime shape, major modules, and where responsibilities live.
+- [P2P CashFusion Privacy Layers](./p2p-cashfusion-privacy-layers.md)
+  - **PR #12 naming map:** Tor vs NIP-59 vs Pedersen vs blind Schnorr vs
+    **output onion** (what each does, infrastructure, essential?).
 - [P2P CashFusion Protocol](./p2p-cashfusion-protocol.md)
   - Exact mechanism of the peer-to-peer CashFusion path (discovery, election,
-    blind credentials, onion outputs, assembly, signing). Not the root README.
+    blind credentials, output onion, assembly, signing). Not the root README.
 - [P2P CashFusion Threat Model](./THREAT_MODEL.md)
   - Adversary classes for the P2P fusion design.
 - [Integration Guide](./integration-guide.md)
