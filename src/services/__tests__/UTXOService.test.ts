@@ -541,18 +541,36 @@ describe('UTXOService', () => {
     });
   });
 
-  it('rejects a total Electrum failure instead of publishing an empty wallet', async () => {
+  it('soft-fails transport loss — returns last SQL snapshot, does not wipe', async () => {
     getUTXOsManyMock.mockRejectedValue(new Error('Connection lost'));
+    fetchUTXOsFromDatabaseMock.mockResolvedValue({
+      utxosMap: {
+        'bitcoincash:q1': [
+          {
+            wallet_id: 11,
+            address: 'bitcoincash:q1',
+            height: 1,
+            tx_hash: 'aa'.repeat(32),
+            tx_pos: 0,
+            value: 5000,
+            amount: 5000,
+            prefix: 'bitcoincash',
+          },
+        ],
+      },
+      cashTokenUtxosMap: {},
+    });
     const { default: UTXOService } = await import('../UTXOService');
 
-    await expect(
-      UTXOService.fetchAndStoreUTXOsMany(11, ['bitcoincash:q1'])
-    ).rejects.toThrow('Connection lost');
-    await expect(
-      UTXOService.fetchAndStoreUTXOs(11, 'bitcoincash:q1')
-    ).rejects.toThrow('Connection lost');
+    const result = await UTXOService.fetchAndStoreUTXOsMany(11, [
+      'bitcoincash:q1',
+    ]);
 
+    expect(result['bitcoincash:q1']).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ tx_hash: 'aa'.repeat(32), value: 5000 }),
+      ])
+    );
+    // Soft-fail path must not replace the wallet with an empty network result.
     expect(replaceWalletAddressUTXOsMock).not.toHaveBeenCalled();
-    expect(flushDatabaseToFileMock).not.toHaveBeenCalled();
-    expect(scheduleDatabaseSaveMock).not.toHaveBeenCalled();
   });
