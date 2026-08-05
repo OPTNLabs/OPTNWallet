@@ -285,4 +285,52 @@ describe('P2P Fusion coordinator-agreed round start', () => {
       hub.sent.some(({ message }) => message.type === 'abort')
     ).toBe(true);
   });
+
+  it('never starts a 2-of-4 subset — full proposed set or abort', async () => {
+    // Product failure (live 2026-08-06): gather saw 4, ACK bar degraded to pair,
+    // two fused, two left alone. Scalable policy: full set or abort.
+    const all = [peer(1), peer(2), peer(3), peer(4)].sort();
+    const lead = coordinatorOf(all);
+    const acker = all.find((p) => p !== lead) as string;
+    const hub = new Hub();
+
+    const coordPromise = negotiateFusionRound(
+      {
+        myPubkey: lead,
+        candidates: all,
+        network: 'chipnet',
+        tier: 100_000,
+        epoch: 1,
+        timeoutMs: 500,
+        coordinatorSettleMs: 40,
+        sessionFactory: () => 'f'.repeat(64),
+      },
+      hub.transportFor(lead)
+    );
+
+    // Only ONE of the three others participates — old policy would start a pair.
+    const oneAck = negotiateFusionRound(
+      {
+        myPubkey: acker,
+        candidates: all,
+        network: 'chipnet',
+        tier: 100_000,
+        epoch: 1,
+        timeoutMs: 500,
+        proposalTimeoutMs: 400,
+      },
+      hub.transportFor(acker)
+    );
+
+    await expect(coordPromise).rejects.toThrow(/1\/4|2\/4|Refusing a partial|timed out/i);
+    await oneAck.catch(() => undefined);
+
+    const partialStart = hub.sent.some(
+      ({ message }) =>
+        message.type === 'round_start' &&
+        Array.isArray((message as { participants?: string[] }).participants) &&
+        (message as { participants: string[] }).participants.length < 4
+    );
+    expect(partialStart).toBe(false);
+  });
 });

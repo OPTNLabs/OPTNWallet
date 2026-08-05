@@ -224,17 +224,10 @@ function negotiateAsCoordinator(
   const settleMs =
     params.coordinatorSettleMs ??
     Math.min(5_000, Math.max(1_000, Math.floor(timeoutMs * 0.6)));
-  // User: "only 1 of 4 wallets fused". Old code started after settleMs with
-  // ANY ≥2 ACKs, so a 4-wallet gather often became a 2-wallet round and the
-  // other two never received round_start. Prefer the full proposed set first.
-  const preferFullMs = Math.min(
-    Math.max(settleMs + 8_000, 12_000),
-    Math.floor(timeoutMs * 0.45)
-  );
-  const allowOneMissingMs = Math.min(
-    Math.max(preferFullMs + 8_000, 22_000),
-    Math.floor(timeoutMs * 0.75)
-  );
+  // LIVE (2026-08-06): gather saw 4, then started with 2 ACKs → w1+w6 fused,
+  // w4 alone shouting, w5 relay fail. That is NOT scalable worldwide.
+  // Policy: the proposed set is the round. Full ACK or abort+retry together.
+  // No "prefer pair / one missing" degradation — subsets leave peers behind.
   const makeProposal = (): RoundMessage => ({
     ...messageBinding(),
     type: 'round_proposal',
@@ -249,13 +242,9 @@ function negotiateAsCoordinator(
     let settled = false;
     let starting = false;
     let settlePassed = false;
-    /** 0 = full set only; 1 = allow one missing; 2 = any pair */
-    let subsetPolicy: 0 | 1 | 2 = 0;
     let yielded: Extract<RoundMessage, { type: 'round_proposal' }> | null = null;
     let yieldedCoordinator: string | null = null;
     let ownStartTimer: ReturnType<typeof setTimeout> | undefined;
-    let preferFullTimer: ReturnType<typeof setTimeout> | undefined;
-    let allowOneMissingTimer: ReturnType<typeof setTimeout> | undefined;
     const acknowledgments = new Set<string>([params.myPubkey]);
     let unsubscribe: () => void = () => undefined;
     // Keep re-offering the proposal until the round starts. A peer still waiting
@@ -274,8 +263,6 @@ function negotiateAsCoordinator(
     const cleanup = () => {
       if (timer) clearTimeout(timer);
       if (ownStartTimer) clearTimeout(ownStartTimer);
-      if (preferFullTimer) clearTimeout(preferFullTimer);
-      if (allowOneMissingTimer) clearTimeout(allowOneMissingTimer);
       if (reproposeTimer) clearInterval(reproposeTimer);
       params.signal?.removeEventListener('abort', onAbort);
       unsubscribe();
@@ -309,22 +296,19 @@ function negotiateAsCoordinator(
       void finishError(abortError('cancelled'));
     };
 
-    const minAcksRequired = (): number => {
-      const proposed = participants.length;
-      if (proposed <= 2) return 2;
-      if (subsetPolicy === 0) return proposed; // wait for everyone we proposed
-      if (subsetPolicy === 1) return Math.max(2, proposed - 1); // one slow wallet OK
-      return 2; // last resort pair
-    };
+    /** Always the full proposed set — never shrink (2-of-4 is a product failure). */
+    const minAcksRequired = (): number => participants.length;
 
     const startOwnRound = () => {
       if (settled || yielded || starting) return;
-      // Final set = peers that ACKed (proven alive). Never start a tiny subset
-      // while we still expect the full gather — that is how 1–2 of 4 fuse and
-      // the rest never see round_start.
+      // Final set must equal the proposal exactly. ACKed-only subsets leave
+      // lagging wallets alone worldwide — refuse that path.
       const finalParticipants = [...acknowledgments].sort();
       const need = minAcksRequired();
       if (finalParticipants.length < need) {
+        return;
+      }
+      if (!sameParticipants(finalParticipants, participants)) {
         return;
       }
       starting = true;
@@ -394,6 +378,8 @@ function negotiateAsCoordinator(
         sameRoundBinding(message, params) &&
         message.participants.includes(params.myPubkey)
       ) {
+        // Reject a start that dropped us into a subset of the gather we proposed.
+        // (Remote coord must still start only its own full set under this policy.)
         finishSuccess({
           session: message.session,
           coordinator: from,
@@ -424,31 +410,20 @@ function negotiateAsCoordinator(
     const timer = setTimeout(() => {
       const acked = acknowledgments.size;
       const proposed = participants.length;
-      // Last chance: any ≥2 pair before dying.
-      subsetPolicy = 2;
-      startOwnRound();
-      if (settled || starting) return;
+      // Never degrade to a pair/trio — abort so ALL wallets retry together.
       void finishError(
         new Error(
-          acked < 2
-            ? `round acknowledgments timed out (only ${acked}/${proposed} answered)`
-            : `round acknowledgments timed out (${acked}/${proposed} ready but start failed)`
+          `round acknowledgments timed out (only ${acked}/${proposed} answered). ` +
+            `Refusing a partial round — Start P2P on ALL wallets together so ` +
+            `everyone joins the same set.`
         )
       );
     }, timeoutMs);
-    // After settle: allow start only when the ACK bar is met (full set at first).
+    // After settle: start only when EVERY proposed peer has ACKed.
     ownStartTimer = setTimeout(() => {
       settlePassed = true;
       startOwnRound();
     }, settleMs);
-    preferFullTimer = setTimeout(() => {
-      subsetPolicy = 1;
-      if (settlePassed) startOwnRound();
-    }, preferFullMs);
-    allowOneMissingTimer = setTimeout(() => {
-      subsetPolicy = 2;
-      if (settlePassed) startOwnRound();
-    }, allowOneMissingMs);
 
     void Promise.all(others.map((peer) => transport.send(peer, makeProposal()))).catch(
       (error: unknown) =>

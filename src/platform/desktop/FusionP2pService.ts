@@ -838,17 +838,17 @@ export async function runP2pFusion(
       joined.stop();
       stopPool = null;
     }
+    // Belt-and-suspenders: rendezvous must never return a shrunk set (2-of-4
+    // "Continuing…" left late wallets alone worldwide — not scalable).
     if (negotiated.participants.length < group.participants.length) {
-      status?.(
-        `Round agreed with ${negotiated.participants.length}/${group.participants.length} ` +
-          `wallets at ${negotiated.tier} sats (some ACKs never arrived — the missing ` +
-          `wallets will not fuse this time). Continuing…`
-      );
-    } else {
-      status?.(
-        `Round agreed with all ${negotiated.participants.length} wallets at ${negotiated.tier} sats.`
+      throw new Error(
+        `Round shrank to ${negotiated.participants.length}/${group.participants.length} ` +
+          `wallets — refusing partial fuse. Start P2P on ALL wallets together.`
       );
     }
+    status?.(
+      `Round agreed with all ${negotiated.participants.length} wallets at ${negotiated.tier} sats.`
+    );
 
     const myInputs: FusionInputRef[] = runInputs.map((input) => ({
       prevTxid: input.prev_txid,
