@@ -379,12 +379,26 @@ export async function bootstrapAllUTXOs(expectedEpoch?: number) {
     report(5);
     const allUTXOs: Record<string, UTXO[]> = {};
 
+    // Prefer a live Electrum socket early so discovery/UTXO batches do not
+    // spend the first minute walking dead hosts with a frozen 5% bar.
+    try {
+      await ElectrumService.ensureFreshConnection();
+    } catch (e) {
+      logError('UTXOWorker.bootstrapAllUTXOs.ensureFreshConnection', e, {
+        walletId: currentWalletId,
+      });
+    }
+    if (!bootstrapIsCurrent()) return;
+    report(8);
+
     // Wallet-owned and explicitly tracked addresses share one fresh Electrum
     // batch. Bootstrap must not reuse the short UTXO cache: this run replaces the
     // old per-address baseline scans after subscriptions are established.
     const walletAddresses = keyPairs.map((keyPair) => keyPair.address);
     let quantumrootAddresses: string[] = [];
     try {
+      // listTrackedAddresses must stay O(vaults). It previously re-derived a
+      // Quantumroot vault for every HD key index and froze sync at 5%.
       quantumrootAddresses =
         await QuantumrootTrackingService.listTrackedAddresses(currentWalletId);
     } catch (e) {
