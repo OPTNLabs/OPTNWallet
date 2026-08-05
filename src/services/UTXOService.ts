@@ -313,15 +313,13 @@ const UTXOService = {
 
       const walletWide = uniqueAddresses.length > 1 || options.force === true;
 
-      // Heal sticky external: spends BEFORE reading the SQL snapshot / status
-      // gate. History status can stay "clean" while UTXOs were wiped by a bad
-      // rebuild (wallet 5). Clearing synthetic txi + projecting ledger restores
-      // coins without waiting for Manual Sync / Rebuild.
+      // Cheap heal only: drop sticky external: spends. Do NOT rebuildUtxosFromLedger
+      // here — that DELETE+rewrite of the whole UTXO table on every open blocked
+      // the main thread long enough for a black/blank wallet window.
       if (walletWide) {
         try {
           const ledger = await import('../platform/desktop/WalletLedgerService');
           await ledger.clearSyntheticExternalSpends(walletId);
-          await ledger.rebuildUtxosFromLedger(walletId);
         } catch {
           /* ledger optional */
         }
