@@ -128,15 +128,18 @@ function waitUntil(timestampMs: number, signal?: AbortSignal): Promise<void> {
 //   3) Early lock on count===2 while a 3rd wallet is still connecting
 //   4) Stability checked on COUNT only — membership can churn at same size
 const POOL_WAIT_MIN_MS = 35_000;
-const POOL_WAIT_MAX_MS = 100_000;
+/** Hard cap; late Tor (wallet 5 lag) must still have room after small-set hold. */
+const POOL_WAIT_MAX_MS = 120_000;
 /** After minReady, require this long with an unchanged peer *set* before lock. */
 const PEER_SET_STABLE_MS = 15_000;
 /**
  * Hold 2- and 3-wallet sets longer so a 4th can still join.
  * User: three wallets already on "Registering inputs…" while the 4th still
  * shows "1 live wallet" — the early trio stopped re-announcing after agree.
+ * Wallet 5 lag: 55s was still short under Tor; prefer waiting near maxWait
+ * whenever soft once saw more peers than the strict set.
  */
-const SMALL_SET_HOLD_MS = 55_000;
+const SMALL_SET_HOLD_MS = 75_000;
 // Every Start click mints a fresh throwaway identity, and the announcement is a
 // STORED event the relay keeps replaying until it ages out. Without this, a retry
 // discovers its OWN abandoned key as a peer: the same wallet joins its own round
@@ -163,6 +166,9 @@ async function collectRolling(
   let stableSince = start;
   let lastLoggedFp = '';
   let lastAnnounceBoost = 0;
+  /** Peak soft / strict sizes this gather — used to avoid locking 2-of-4 early. */
+  let peakSoft = 0;
+  let peakStrict = 0;
   const ghostKey = (pubkey: string) =>
     isOwnRoundKey(walletId, pubkey) || isRetiredRoundKey(pubkey);
   /** Soft filter while waiting (shows approximate count). */
@@ -204,6 +210,8 @@ async function collectRolling(
     const soft = softLive();
     const peers = lockLive();
     const now = Date.now();
+    peakSoft = Math.max(peakSoft, soft.length);
+    peakStrict = Math.max(peakStrict, peers.length);
     // Stability on the STRICT set so ghost drop does not count as "stable 6".
     const fp = fingerprint(peers);
     if (fp !== lastFingerprint) {
@@ -213,27 +221,44 @@ async function collectRolling(
     if (fp !== lastLoggedFp) {
       lastLoggedFp = fp;
       console.info(
-        `[p2p-fusion] live set strict=${peers.length} soft=${soft.length}:`,
+        `[p2p-fusion] live set strict=${peers.length} soft=${soft.length} peak=${peakStrict}/${peakSoft}:`,
         peers.map((p) => p.pubkey.slice(0, 8)).join(', ') || '(none)'
       );
     }
-    if (peers.length < 2 && announceNow && now - lastAnnounceBoost > 5_000) {
+    // Alone or under-count: re-shout often so a lagging Tor peer (wallet 5) still finds us.
+    if (
+      peers.length < Math.max(4, peakSoft) &&
+      announceNow &&
+      now - lastAnnounceBoost > 4_000
+    ) {
       lastAnnounceBoost = now;
       void announceNow().catch(() => undefined);
     }
     const pastMin = now >= minReady;
     const setStable = pastMin && now - stableSince >= PEER_SET_STABLE_MS;
+    // Do not lock a 2–3 subset early when:
+    //   • soft still shows more keys than lockStrict (Tor re-announce lag), or
+    //   • this gather once had 4+ strict actives (wallet 5 dropped mid-gather).
+    // Ghost soft spikes alone must not force maxWait — use peakStrict for "had 4".
+    // True 2-wallet worlds never peakStrict≥4 and soft==lock after ghosts age out.
+    const expectMore =
+      soft.length > peers.length ||
+      (peakStrict >= 4 && peers.length < 4);
+    const smallSetReady =
+      peers.length >= MIN_PARTICIPANTS &&
+      peers.length < 4 &&
+      setStable &&
+      now >= start + SMALL_SET_HOLD_MS &&
+      !expectMore;
     const canLock =
       peers.length >= 4
         ? setStable
-        : peers.length >= MIN_PARTICIPANTS &&
-          setStable &&
-          now >= start + SMALL_SET_HOLD_MS;
+        : smallSetReady;
     if (canLock || now >= maxWait) {
       onStatus?.(
         `Gather done: ${peers.length} active wallet(s) ` +
-          `(soft saw ${soft.length}; stable=${canLock}, ` +
-          `${Math.round((now - start) / 1000)}s).`
+          `(soft ${soft.length}, peak strict/soft ${peakStrict}/${peakSoft}; ` +
+          `stable=${canLock}, ${Math.round((now - start) / 1000)}s).`
       );
       return peers;
     }
@@ -248,7 +273,7 @@ async function collectRolling(
       const aloneHint =
         now - start > 12_000
           ? ' Others may already be Registering — Cancel + Start ALL together.'
-          : soft.length > 1
+          : soft.length > 1 || peakSoft > 1
             ? ' Dropping ghosts; waiting for re-announces…'
             : ' Waiting for other wallets (Tor)…';
       onStatus?.(
@@ -261,7 +286,9 @@ async function collectRolling(
       );
       const holdNote =
         peers.length < 4
-          ? ` hold ${Math.max(0, Math.ceil((start + SMALL_SET_HOLD_MS - now) / 1000))}s for more`
+          ? expectMore
+            ? ` waiting for lagged peer (peak ${peakStrict}/${peakSoft})`
+            : ` hold ${Math.max(0, Math.ceil((start + SMALL_SET_HOLD_MS - now) / 1000))}s for more`
           : '';
       onStatus?.(
         `${peers.length} active${keyHint} — ${needStable}s stable${holdNote}…`
@@ -557,6 +584,15 @@ export async function runP2pFusion(
     );
     if (opts.signal?.aborted) throw new Error('fusion round cancelled');
     status?.('Tor verified; preparing fresh pool identity.');
+    // Order matters: clear stranded locks from a crashed prior round FIRST, then
+    // claim THIS round's coins. Previously clearOutpointReservations ran after
+    // reserveOutpoints and wiped the live reservation (coins looked free while
+    // fusing; second Start could double-claim).
+    invalidateJoinPoolAnnouncers();
+    // Retire every previous throwaway of THIS wallet so other windows stop
+    // counting double-Start keys (4 wallets → 6–7 "live").
+    retireAllOwnRoundKeys(opts.walletId);
+    clearOutpointReservations(opts.walletId);
     reservedForRound = spendable.map((utxo) =>
       outpointKey(utxo.tx_hash, utxo.tx_pos)
     );
@@ -586,15 +622,6 @@ export async function runP2pFusion(
     // whoever is fresh; no epoch bucket to synchronize on. epoch is an info stamp.
     const epoch = poolEpoch(now);
 
-    // Kill orphan re-announce loops from a prior Start / Vite HMR in THIS window
-    // before minting a new throwaway identity (ghost peer overcount).
-    invalidateJoinPoolAnnouncers();
-    // Retire every previous throwaway of THIS wallet so other windows stop
-    // counting double-Start keys (4 wallets → 6–7 "live").
-    retireAllOwnRoundKeys(opts.walletId);
-    // Second Start after a successful/failed round: any stranded input locks
-    // from a crashed finally would make free coins look "all committed".
-    clearOutpointReservations(opts.walletId);
     round = generateRoundIdentity();
     recordRoundKey(opts.walletId, round.pubkey);
     let peers: PoolAnnouncement[] = [
