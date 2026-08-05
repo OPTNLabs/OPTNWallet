@@ -21,6 +21,7 @@ const dispatchMock = vi.fn();
 const getStateMock = vi.fn();
 const retrieveKeysMock = vi.fn();
 const fetchAndStoreUTXOsManyMock = vi.fn();
+const fetchUTXOsFromDatabaseMock = vi.fn();
 const fetchContractInstancesMock = vi.fn();
 const updateContractUTXOsMock = vi.fn();
 const listTrackedAddressesMock = vi.fn();
@@ -31,6 +32,9 @@ const reconnectMock = vi.fn();
 const invalidateUTXOCacheMock = vi.fn();
 const subscribeBlockHeadersMock = vi.fn();
 const subscribeAddressMock = vi.fn();
+const subscribeAddressesBulkMock = vi.fn(async (_addresses: string[]) => {
+  /* bulk subscribe resolves by default */
+});
 const unsubscribeAddressMock = vi.fn();
 const unsubscribeBlockHeadersMock = vi.fn();
 const fetchAndStoreTransactionHistoriesMock = vi.fn();
@@ -57,6 +61,7 @@ vi.mock('../../services/UTXOService', () => ({
   default: {
     fetchAndStoreUTXOsMany: fetchAndStoreUTXOsManyMock,
     fetchAllWalletUtxos: vi.fn(),
+    fetchUTXOsFromDatabase: fetchUTXOsFromDatabaseMock,
     fetchAndStoreUTXOs: vi.fn(),
   },
 }));
@@ -66,6 +71,7 @@ vi.mock('../../services/ElectrumService', () => ({
     reconnect: reconnectMock,
     subscribeBlockHeaders: subscribeBlockHeadersMock,
     subscribeAddress: subscribeAddressMock,
+    subscribeAddressesBulk: subscribeAddressesBulkMock,
     unsubscribeAddress: unsubscribeAddressMock,
     unsubscribeBlockHeaders: unsubscribeBlockHeadersMock,
     getUTXOsMany: vi.fn(),
@@ -135,6 +141,10 @@ describe('UTXOWorkerService.bootstrapAllUTXOs', () => {
     });
     retrieveKeysMock.mockResolvedValue([{ address: 'bitcoincash:qaddr1' }]);
     fetchContractInstancesMock.mockResolvedValue([]);
+    fetchUTXOsFromDatabaseMock.mockResolvedValue({
+      utxosMap: {},
+      cashTokenUtxosMap: {},
+    });
     updateContractUTXOsMock.mockResolvedValue(undefined);
     listTrackedAddressesMock.mockResolvedValue([]);
     fetchAndStoreTransactionHistoriesMock.mockResolvedValue({});
@@ -246,10 +256,11 @@ describe('UTXOWorkerService.bootstrapAllUTXOs', () => {
       fetchAndStoreUTXOsManyMock.mock.invocationCallOrder[0]
     );
     expect(fetchAndStoreUTXOsManyMock).toHaveBeenCalledTimes(1);
-    expect(fetchAndStoreUTXOsManyMock).toHaveBeenCalledWith(42, [
-      'bitcoincash:qaddr1',
-      'bchtest:qtracked',
-    ]);
+    expect(fetchAndStoreUTXOsManyMock).toHaveBeenCalledWith(
+      42,
+      ['bitcoincash:qaddr1', 'bchtest:qtracked'],
+      expect.objectContaining({ onProgress: expect.any(Function) })
+    );
   });
 
   it('publishes addresses materialized by discovery in the initial snapshot', async () => {
@@ -331,7 +342,10 @@ describe('UTXOWorkerService.bootstrapAllUTXOs', () => {
         ([action]) => action.type === replaceAllUTXOs.type
       )
     ).toBe(false);
-    expect(dispatchMock).not.toHaveBeenCalledWith(setFetchingUTXOs(false));
+    // Discarded bootstrap must not publish the new wallet's snapshot, but it
+    // still owns the Syncing flag (no successor took over), so clear it —
+    // otherwise Home stays on "Syncing…" forever after a mid-flight switch.
+    expect(dispatchMock).toHaveBeenCalledWith(setFetchingUTXOs(false));
     expect(dispatchMock).not.toHaveBeenCalledWith(setInitialized(true));
     expect(scheduleDatabaseSaveMock).not.toHaveBeenCalled();
   });
@@ -406,7 +420,7 @@ describe('UTXOWorkerService.bootstrapAllUTXOs', () => {
     );
 
     await startUTXOWorker();
-    expect(subscribeAddressMock).toHaveBeenCalledTimes(1);
+    expect(subscribeAddressesBulkMock).toHaveBeenCalledTimes(1);
 
     const stopPromise = stopUTXOWorker();
     getStateMock.mockReturnValue({
@@ -415,14 +429,14 @@ describe('UTXOWorkerService.bootstrapAllUTXOs', () => {
     });
     const restartPromise = startUTXOWorker();
     await new Promise((resolve) => setTimeout(resolve, 0));
-    expect(subscribeAddressMock).toHaveBeenCalledTimes(1);
+    expect(subscribeAddressesBulkMock).toHaveBeenCalledTimes(1);
 
     unsubscribeGate.resolve();
     await Promise.all([stopPromise, restartPromise]);
 
-    expect(subscribeAddressMock).toHaveBeenCalledTimes(2);
+    expect(subscribeAddressesBulkMock).toHaveBeenCalledTimes(2);
     expect(unsubscribeAddressMock.mock.invocationCallOrder[0]).toBeLessThan(
-      subscribeAddressMock.mock.invocationCallOrder[1]
+      subscribeAddressesBulkMock.mock.invocationCallOrder[1]
     );
   });
 

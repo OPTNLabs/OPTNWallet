@@ -240,6 +240,12 @@ type UTXOFetchOptions = {
    * spending action must not block on a new BIP44 history scan.
    */
   discover?: boolean;
+  /**
+   * Reported as Electrum batch chunks complete so the UI can show real,
+   * in-flight UTXO progress instead of a coarse coarse phase jump (which made
+   * the ETA extrapolate "2s left" while the fetch was actually mid-flight).
+   */
+  onProgress?: (completedCount: number, totalCount: number) => void;
 };
 
 const UTXOService = {
@@ -265,6 +271,7 @@ const UTXOService = {
   ): Promise<Record<string, UTXO[]>> {
     try {
       const currentNetwork = store.getState().network.currentNetwork;
+      const tDiscovery = performance.now();
       const discoveredAddresses =
         options.discover === false
           ? []
@@ -273,6 +280,10 @@ const UTXOService = {
               currentNetwork,
               hasElectrumBatchUsage
             )) ?? []);
+      console.info('[UTXOService] discovery took', {
+        ms: Math.round(performance.now() - tDiscovery),
+        discovered: discoveredAddresses.length,
+      });
       const manager = await UTXOManager();
       const addressManager = AddressManager();
       const uniqueAddresses = Array.from(
@@ -287,8 +298,15 @@ const UTXOService = {
         uniqueAddresses.map((address) => ({ address })),
         walletId
       );
+      const tFetch = performance.now();
       const utxosByAddress =
-        await ElectrumService.getUTXOsMany(uniqueAddresses);
+      options.onProgress
+        ? await ElectrumService.getUTXOsMany(uniqueAddresses, options.onProgress)
+        : await ElectrumService.getUTXOsMany(uniqueAddresses);
+      console.info('[UTXOService] getUTXOsMany took', {
+        ms: Math.round(performance.now() - tFetch),
+        addresses: uniqueAddresses.length,
+      });
       for (const fetchedUTXOs of Object.values(utxosByAddress)) {
         for (const u of fetchedUTXOs) {
           const uAny = u as UTXO & { token_data?: unknown };

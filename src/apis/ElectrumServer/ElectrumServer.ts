@@ -305,6 +305,20 @@ async function wireNotificationsOnce(client: ECClient) {
   notificationsWired = true;
 }
 
+// A dropped TCP socket does not auto-heal: ElectrumClient keeps this same
+// instance alive after `disconnected`, so `electrumConnect()` would return the
+// stale client and every request/batch would burn the full REQUEST_TIMEOUT_MS
+// before the requestMany failover kicked in — a single disconnect turned one
+// sync into minutes. Mark it stale so the next call reconnects immediately.
+function markSocketStale(client: ECClient) {
+  client.on('disconnected', () => {
+    if (electrum === client) {
+      electrum = null;
+      currentServer = null;
+    }
+  });
+}
+
 async function resubscribeAll() {
   if (!electrum) return;
 
@@ -392,6 +406,8 @@ export default function ElectrumServer() {
             notificationsWired = false;
             await wireNotificationsOnce(electrum);
             await resubscribeAll();
+
+            markSocketStale(electrum);
 
             return electrum!;
           } catch {
@@ -529,6 +545,54 @@ export default function ElectrumServer() {
     }
   }
 
+  /**
+   * Batch-subscribe to a method for many params in a single round-trip.
+   * Records every sub in activeSubs so reconnect resubscribes them all.
+   * Used instead of N sequential `subscribe()` calls when a wallet has many
+   * addresses — e.g. an Electrum Cash wallet with hundreds of derived keys.
+   */
+  async function subscribeMany(
+    method: string,
+    paramsList: ElectrumParams[]
+  ): Promise<number> {
+    if (paramsList.length === 0) return 0;
+
+    // Oversized single batches are rejected in an ID-null error by ElectrumX/
+    // Fulcrum (verified live: a 1086-item batch crashes the client). Split into
+    // moderate chunks and fire them concurrently so a large wallet subscribes
+    // in parallel instead of one doomed giant request.
+    const SUB_BATCH_SIZE = 250;
+    const chunkedParams: ElectrumParams[][] = [];
+    for (let i = 0; i < paramsList.length; i += SUB_BATCH_SIZE) {
+      chunkedParams.push(paramsList.slice(i, i + SUB_BATCH_SIZE));
+    }
+
+    const outcomeBatches = await Promise.all(
+      chunkedParams.map((chunkParams) => {
+        const calls: BatchRequest[] = chunkParams.map((params) => ({
+          method,
+          params,
+        }));
+        return requestMany(calls);
+      })
+    );
+
+    // record whatever actually succeeded
+    let recorded = 0;
+    outcomeBatches.forEach((outcomes, batchIndex) => {
+      const chunkParams = chunkedParams[batchIndex];
+      for (let i = 0; i < chunkParams.length; i++) {
+        const result = outcomes[i];
+        if (result instanceof Error) continue;
+        const key = subKey(method, chunkParams[i]);
+        activeSubs.set(key, { method, params: chunkParams[i] });
+        recorded++;
+      }
+    });
+    if (recorded > 0) markSuccessfulActivity();
+    return recorded;
+  }
+
   async function electrumReconnect(customServer?: string): Promise<ECClient> {
     await electrumDisconnect();
     return electrumConnect(customServer);
@@ -627,6 +691,7 @@ export default function ElectrumServer() {
     request,
     requestMany,
     subscribe,
+    subscribeMany,
     unsubscribe,
     onNotification,
     getCurrentServer,
