@@ -7,7 +7,7 @@
 // Server and P2P rounds share the wallet-level reservation, completion, and
 // automatic-fusion policy while keeping their transports isolated.
 
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { useDispatch, useSelector } from 'react-redux';
 import {
   selectCashFusionEnabled,
@@ -47,6 +47,7 @@ import {
   type FusionActivity,
   type FusionRunOutcome,
 } from '../../platform/desktop/FusionRunnerService';
+import { fusionCoinAvailability } from '../../platform/desktop/fusionRoundState';
 
 import { runP2pFusion } from '../../platform/desktop/FusionP2pService';
 import {
@@ -148,10 +149,38 @@ export const CashFusionSettings: React.FC<{ variant?: 'card' | 'servers' }> = ({
     activeFusion?.mode === 'server' || fuseState === 'fusing';
   const p2pFusing = activeFusion?.mode === 'p2p' || p2pState === 'fusing';
   const anyFusing = serverFusing || p2pFusing;
+  // Advisory only — Start/Fuse grey out when every coin is reserved so the user
+  // never has to click into "All coins are already committed…".
+  const utxosByAddress = useSelector((s: RootState) => s.utxos.utxos);
+  const flatUtxos = useMemo(
+    () => Object.values(utxosByAddress).flat(),
+    [utxosByAddress]
+  );
+  // Re-read localStorage reservations on a short tick (another window may release).
+  const [reservationTick, setReservationTick] = useState(0);
+  useEffect(() => {
+    const id = window.setInterval(() => setReservationTick((n) => n + 1), 1_500);
+    return () => window.clearInterval(id);
+  }, []);
+  const coinAvailability = useMemo(
+    () => fusionCoinAvailability(walletId, flatUtxos),
+    // reservationTick forces recompute when locks change in localStorage
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [walletId, flatUtxos, reservationTick, anyFusing]
+  );
+  const noSpendableCoins = coinAvailability.total === 0;
+  const allCoinsReserved =
+    coinAvailability.total > 0 && coinAvailability.free === 0;
+  const coinsBlocked = noSpendableCoins || allCoinsReserved;
+  const coinsBlockedReason = noSpendableCoins
+    ? 'No spendable (non-token) coins to fuse.'
+    : allCoinsReserved
+      ? 'All coins are reserved by another fusion round — wait for it to finish or cancel it.'
+      : undefined;
   const serverMode = getFusionModeAvailability({
     p2pFusionEnabled,
     walletId,
-    serverBusy: anyFusing,
+    serverBusy: anyFusing || coinsBlocked,
   });
 
   // Start from the saved server only if it belongs to the current network's
@@ -613,7 +642,9 @@ export const CashFusionSettings: React.FC<{ variant?: 'card' | 'servers' }> = ({
                 Duplicating it per card would let the two copies disagree, and the
                 disagreement would only surface when a round used the wrong bound. */}
                   <div className="border-t border-[var(--wallet-border)] pt-3">
-                    <AutoFusionControls disabled={walletId <= 0 || anyFusing} />
+                    <AutoFusionControls
+                      disabled={walletId <= 0 || anyFusing || coinsBlocked}
+                    />
                   </div>
 
                   {/* Server path — Fuse Now via the configured CashFusion server (Servers card). */}
@@ -628,14 +659,15 @@ export const CashFusionSettings: React.FC<{ variant?: 'card' | 'servers' }> = ({
                         Fuse Now using CashFusion server
                       </p>
                       <p className="text-[10px] wallet-muted">
-                        CoinJoin via the server configured in Servers. Needs Tor
-                        + ≥2 players in a tier.
+                        {coinsBlockedReason ??
+                          'CoinJoin via the server configured in Servers. Needs Tor + ≥2 players in a tier.'}
                       </p>
                     </div>
                     <button
                       type="button"
                       onClick={() => void handleFuseNow()}
                       disabled={serverMode.serverDisabled}
+                      title={coinsBlockedReason}
                       className="rounded-lg border border-[var(--wallet-accent)]/50 px-3 py-1.5 text-xs font-semibold text-[var(--wallet-accent)] hover:bg-[var(--wallet-accent)]/5 disabled:opacity-50 whitespace-nowrap"
                     >
                       {serverFusing ? 'Fusing…' : 'Fuse Now'}
@@ -662,11 +694,11 @@ export const CashFusionSettings: React.FC<{ variant?: 'card' | 'servers' }> = ({
                       status={p2pMsg}
                       phase={p2pPhase}
                       busy={p2pFusing}
-                      disabled={walletId <= 0 || anyFusing}
+                      disabled={walletId <= 0 || anyFusing || coinsBlocked}
                       disabledReason={
                         walletId <= 0
                           ? 'Open a wallet to run a P2P round.'
-                          : undefined
+                          : coinsBlockedReason
                       }
                     />
                   )}

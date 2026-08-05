@@ -73,6 +73,53 @@ describe('CashFusion settings mode enforcement', () => {
     expect(serverCard).toContain('Fuse Now using CashFusion server');
   });
 
+  it('greys Start P2P when every coin is reserved by another round', async () => {
+    const { reserveOutpoints, outpointKey, clearOutpointReservations } =
+      await import('../../../platform/desktop/fusionRoundState');
+    const tx = 'ab'.repeat(32);
+    clearOutpointReservations(7);
+    reserveOutpoints(7, [outpointKey(tx, 0)]);
+
+    const store = configureStore({
+      reducer: {
+        experimental: experimentalReducer,
+        wallet_id: (state = { currentWalletId: 7 }) => state,
+        network: (state = { currentNetwork: 'chipnet' }) => state,
+        utxos: (
+          state = {
+            utxos: {
+              'bchtest:q1': [
+                {
+                  address: 'bchtest:q1',
+                  height: 1,
+                  tx_hash: tx,
+                  tx_pos: 0,
+                  value: 50_000,
+                },
+              ],
+            },
+          }
+        ) => state,
+      },
+    });
+    store.dispatch(setCashFusionEnabled(true));
+    store.dispatch(setP2pFusionEnabled(true));
+
+    const html = renderToStaticMarkup(
+      <Provider store={store}>
+        <CashFusionSettings />
+      </Provider>
+    );
+
+    expect(html).toContain('Start P2P round');
+    expect(html).toContain(
+      'All coins are reserved by another fusion round'
+    );
+    // Button itself is disabled.
+    expect(html).toMatch(/disabled=""[^>]*>[\s\S]*Start P2P round/);
+    clearOutpointReservations(7);
+  });
+
   it.each(['server', 'p2p'] as const)(
     'restores a disabled Fusing control when returning to a running %s round',
     (mode) => {
