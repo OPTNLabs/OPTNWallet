@@ -75,6 +75,15 @@ export const SIGHASH_ALL_FORKID = 0x41;
 
 const SIGHASH_FORKID_BIT = 0x40;
 
+export interface PsbtDerivation {
+  /** Compressed public key (33 bytes) that must sign this input. */
+  publicKey: Uint8Array;
+  /** Master key fingerprint (4 bytes) — how a signer claims the input. */
+  masterFingerprint: Uint8Array;
+  /** Full BIP32 path, hardened levels already OR-ed with 0x80000000. */
+  derivationPath: number[];
+}
+
 export interface PsbtInputSpec {
   /** Previous transaction id in DISPLAY order, as shown by explorers. */
   txid: string;
@@ -83,14 +92,22 @@ export interface PsbtInputSpec {
   /** Locking script of the output being spent. */
   lockingBytecode: Uint8Array;
   /** Compressed public key (33 bytes) that must sign this input. */
-  publicKey: Uint8Array;
+  publicKey?: Uint8Array;
   /** Master key fingerprint (4 bytes) — how a signer claims the input. */
-  masterFingerprint: Uint8Array;
+  masterFingerprint?: Uint8Array;
   /** Full BIP32 path, hardened levels already OR-ed with 0x80000000. */
-  derivationPath: number[];
+  derivationPath?: number[];
   sequence?: number;
   /** Redeem script for p2sh inputs; the signer needs it to build the unlock. */
   redeemScript?: Uint8Array;
+  /**
+   * Every cosigner key that participates in this input, with its own
+   * fingerprint and path. When present, one PSBT_IN_BIP32_DERIVATION record is
+   * emitted per entry instead of the single `publicKey` record — the shape
+   * Paytaca writes for a multisig input (BIP-67-sorted redeem script, one
+   * derivation per participant).
+   */
+  derivations?: PsbtDerivation[];
   /**
    * Signatures already collected for this input (e.g. from a returned
    * partially-signed PSBT being merged). Emitted as PSBT_IN_PARTIAL_SIG.
@@ -116,6 +133,8 @@ export interface PsbtOutputSpec {
   publicKey?: Uint8Array;
   masterFingerprint?: Uint8Array;
   derivationPath?: number[];
+  /** One derivation per cosigner key, for multisig change outputs. */
+  derivations?: PsbtDerivation[];
   redeemScript?: Uint8Array;
   /** CashToken carried by this output, encoded as a v145 token prefix. */
   token?: PsbtTokenSpec;
@@ -151,6 +170,13 @@ function varInt(value: number): Uint8Array {
     ]);
   }
   throw new Error('varint too large for a PSBT field');
+}
+
+/** Number of bytes `varInt` emits for a value. */
+function varIntSize(value: number): number {
+  if (value < 0xfd) return 1;
+  if (value <= 0xffff) return 3;
+  return 5;
 }
 
 function concat(parts: Uint8Array[]): Uint8Array {
@@ -328,8 +354,27 @@ export function encodeUnsignedPsbt(
   const globalMap = concat([...globalFields, Uint8Array.from([0x00])]);
 
   const inputMaps = inputs.map((input) => {
-    if (input.publicKey.length !== 33) {
-      throw new Error('Input public keys must be compressed (33 bytes).');
+    const derivations =
+      input.derivations ??
+      (input.publicKey
+        ? [
+            {
+              publicKey: input.publicKey,
+              masterFingerprint: input.masterFingerprint,
+              derivationPath: input.derivationPath,
+            },
+          ]
+        : []);
+    if (derivations.length === 0) {
+      throw new Error('Inputs need at least one public key derivation.');
+    }
+    for (const derivation of derivations) {
+      if (derivation.publicKey.length !== 33) {
+        throw new Error('Input public keys must be compressed (33 bytes).');
+      }
+      if (derivation.masterFingerprint.length !== 4) {
+        throw new Error('Master fingerprint must be 4 bytes.');
+      }
     }
     return concat([
       // Amount + locking script of the output being spent. The amount is not
@@ -346,15 +391,23 @@ export function encodeUnsignedPsbt(
       ...(input.redeemScript
         ? [record(Uint8Array.from([PSBT_IN_REDEEM_SCRIPT]), input.redeemScript)]
         : []),
-      ...(input.partialSignatures ?? []).map((signature) =>
-        record(
+      ...(input.partialSignatures ?? []).map((signature) => {
+        if (signature.publicKey.length !== 33) {
+          throw new Error('Partial signature public keys must be compressed (33 bytes).');
+        }
+        return record(
           concat([Uint8Array.from([PSBT_IN_PARTIAL_SIG]), signature.publicKey]),
           signature.signature
+        );
+      }),
+      ...derivations.map((derivation) =>
+        record(
+          concat([Uint8Array.from([PSBT_IN_BIP32_DERIVATION]), derivation.publicKey]),
+          bip32DerivationValue(
+            derivation.masterFingerprint,
+            derivation.derivationPath
+          )
         )
-      ),
-      record(
-        concat([Uint8Array.from([PSBT_IN_BIP32_DERIVATION]), input.publicKey]),
-        bip32DerivationValue(input.masterFingerprint, input.derivationPath)
       ),
       // v145 fields: the outpoint and sequence, for signers that read them
       // instead of the embedded unsigned transaction.
@@ -373,16 +426,28 @@ export function encodeUnsignedPsbt(
     if (output.redeemScript) {
       fields.push(record(Uint8Array.from([PSBT_OUT_REDEEM_SCRIPT]), output.redeemScript));
     }
-    if (output.publicKey && output.masterFingerprint && output.derivationPath) {
+    const outputDerivations = output.derivations ?? (output.publicKey
+      ? [
+          {
+            publicKey: output.publicKey,
+            masterFingerprint: output.masterFingerprint!,
+            derivationPath: output.derivationPath!,
+          },
+        ]
+      : []);
+    for (const derivation of outputDerivations) {
       // Lets the signing device show "change" instead of treating the wallet's
       // own address as an unknown third party.
       fields.push(
         record(
           concat([
             Uint8Array.from([PSBT_OUT_BIP32_DERIVATION]),
-            output.publicKey,
+            derivation.publicKey,
           ]),
-          bip32DerivationValue(output.masterFingerprint, output.derivationPath)
+          bip32DerivationValue(
+            derivation.masterFingerprint,
+            derivation.derivationPath
+          )
         )
       );
     }
@@ -420,6 +485,8 @@ export interface ParsedPsbtInput {
   sequence: number | null;
   /** Value of the output being spent, where PSBT_IN_WITNESS_UTXO is present. */
   spentSatoshis: bigint | null;
+  /** Locking script of the output being spent (from PSBT_IN_WITNESS_UTXO). */
+  spentLockingBytecode: Uint8Array | null;
   redeemScript: Uint8Array | null;
   requestedSighashType: number | null;
   partialSignatures: PsbtSignature[];
@@ -521,6 +588,7 @@ function parseInputMap(
     outpointIndex: null,
     sequence: null,
     spentSatoshis: null,
+    spentLockingBytecode: null,
     redeemScript: null,
     requestedSighashType: null,
     partialSignatures: [],
@@ -529,7 +597,17 @@ function parseInputMap(
   for (const { key, value } of map) {
     switch (key[0]) {
       case PSBT_IN_WITNESS_UTXO:
-        if (value.length >= 8) parsed.spentSatoshis = readUint64LE(value.subarray(0, 8));
+        if (value.length >= 8) {
+          parsed.spentSatoshis = readUint64LE(value.subarray(0, 8));
+          // The rest is `compactSize(script) || script`; needed when the
+          // signature verification has to fall back to the spent output
+          // instead of a proposal (PSBT-to-PSBT merge).
+          const length = new Reader(value.subarray(8)).varInt();
+          const scriptStart = 8 + varIntSize(length);
+          if (scriptStart + length <= value.length) {
+            parsed.spentLockingBytecode = value.subarray(scriptStart, scriptStart + length);
+          }
+        }
         break;
       case PSBT_IN_PARTIAL_SIG:
         if (key.length === 34) {

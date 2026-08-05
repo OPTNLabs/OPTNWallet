@@ -39,8 +39,7 @@ transaction builder, verifier, and broadcaster.
 
 ## Implementation status
 
-Checkpoints 1-5 and 7 are implemented in this worktree; 6 (multisign) is the
-only remaining checkpoint and is not part of this delivery.
+All checkpoints (1-7) are implemented in this worktree; none remain.
 
 - **1. Public-only wallet model and xPub import — done.** Watch-only wallet
   type, xPub + optional master fingerprint persistence (`watchOnlyWallet.ts`,
@@ -51,8 +50,9 @@ only remaining checkpoint and is not part of this delivery.
   per-UTXO selection in the send workspace.
 - **3. Paytaca PSBTv145 codec — done.** `psbtBch.ts` builds/parses PSBT version
   145 with `0xc1` sighash, UTXO commitments, BIP32 derivation metadata
-  (`0x06`, master fingerprint + path), partial signatures (`0x02`), and
-  CashToken outputs. Round-trip and rejection fixtures in `psbtBch.test.ts`.
+  (`0x06`, master fingerprint + path, one record per cosigner for multisig
+  inputs), partial signatures (`0x02`), and CashToken outputs. Round-trip and
+  rejection fixtures in `psbtBch.test.ts`.
 - **4. `ur:crypto-psbt` exchange — done.** Animated multipart QR export,
   camera/paste import with accumulation, byte-for-byte PSBT payload
   (`urPsbt.ts`).
@@ -71,6 +71,22 @@ only remaining checkpoint and is not part of this delivery.
   `Assets.tsx`, and a bundled fallback registry for the ParyonUSD loan and
   loan-key NFT families   (`paryon/nftRegistry.ts`, VM-validated against the `transactions.ts` loan
   commitment layout), rendered in `Assets.tsx` and in the watch-only send coin control. Unparsable commitments fall back to `0x` hex.
+- **6. Multisign (Paytaca parity) — done.** Policy matched to
+  `paytaca-app/src/lib/multisig`: BIP-67-sorted `OP_m <keys> OP_n
+  OP_CHECKMULTISIG` redeem scripts, P2SH20 addresses, `OP_0 <sig>… <redeemScript>`
+  unlocks (dummy byte kept), one BIP32 derivation per cosigner in the PSBT.
+  `psbtMultisig.ts` adds the redeem-script builder/parser, cosigner status
+  tracking (fingerprints and paths only, no private material), and
+  `mergePsbts` — the Paytaca `Psbt.combine` contract: bind candidates to the
+  exact approved unsigned transaction (hash mismatch is a hard rejection),
+  input-count and redeem-script checks, cryptographic verification of every
+  partial signature, per-candidate tolerant failures. `watchOnlyImport.ts`
+  verifies per-input against the required-signature threshold (partially
+  signed until m-of-n per input is met) and finalizes CHECKMULTISIG unlocks.
+  `WatchOnlySend.tsx` accumulates repeated export/import cycles into one
+  merged PSBT and shows a cosigner status card; broadcast stays gated on
+  every input reaching its threshold. 2-of-3 round-trip fixtures with real
+  secp256k1 signatures in `psbtMultisig.test.ts`.
 
 ## Implementation checkpoints
 
@@ -134,6 +150,10 @@ only remaining checkpoint and is not part of this delivery.
 - Track cosigner fingerprints and partial signatures without private material.
 - Support repeated export/import cycles until threshold completion while
   rejecting any conflicting unsigned transaction.
+- **Done.** Implemented above in the status section; evidence in
+  `psbtMultisig.test.ts` (2-of-3 round trip with real signatures, different
+  signer orders, conflicting-transaction rejection, redeem-script mismatch,
+  wrong-key and wrong-sighash signature rejection).
 
 ### 7. Parsable NFTs (Cashonize parity)
 

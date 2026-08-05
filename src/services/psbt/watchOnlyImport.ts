@@ -29,6 +29,10 @@ import {
   SIGHASH_ALL_FORKID_ANYONECANPAY,
   type PsbtSignature,
 } from './psbtBch';
+import {
+  parseMultisigRedeemScript,
+  pushData,
+} from './psbtMultisig';
 import type { WatchOnlyProposal } from './watchOnlySend';
 
 export type WatchOnlyImportState =
@@ -60,7 +64,11 @@ function verifyPartialSignature(
 
   const input = proposal.inputs[signature.inputIndex];
   if (!input) return false;
-  const lockingBytecode = hexToBin(input.lockingBytecodeHex);
+  // For a P2SH (multisig) input the sighash commits to the redeem script,
+  // not the P2SH locking bytecode — BIP143-style scriptCode rules.
+  const coveredBytecode = input.redeemScriptHex
+    ? hexToBin(input.redeemScriptHex)
+    : hexToBin(input.lockingBytecodeHex);
   const decoded = decodeTransaction(unsignedTxBytes);
   if (typeof decoded === 'string') return false;
   // A no-token output must serialize with an empty token prefix; `token`
@@ -84,7 +92,7 @@ function verifyPartialSignature(
   const serialization = generateSigningSerializationBch(
     context,
     {
-      coveredBytecode: lockingBytecode,
+      coveredBytecode,
       signingSerializationType: Uint8Array.from([type]),
     }
   );
@@ -128,12 +136,12 @@ export function inspectImportedPsbt(
     };
   }
 
-  const validPerInput = parsed.inputs.map((parsedInput) => {
-    const signatures = parsedInput.partialSignatures;
-    if (signatures.length === 0) return false;
-    return signatures.some((signature) =>
+  const validPerInput = parsed.inputs.map((parsedInput, inputIndex) => {
+    const required = proposal.inputs[inputIndex]?.requiredSignatures ?? 1;
+    const verified = parsedInput.partialSignatures.filter((signature) =>
       verifyPartialSignature(signature, proposal, parsed.unsignedTransaction)
     );
+    return verified.length >= required;
   });
 
   const signedInputCount = validPerInput.filter(Boolean).length;
@@ -181,11 +189,50 @@ export function inspectImportedPsbt(
 }
 
 /**
+ * Build the unlocking script for one input from its verified signatures.
+ *
+ * P2PKH: `<sig+sighash> <pubkey>`. Multisig P2SH: `OP_0 <sig1> <sig2> ...
+ * <redeemScript>` with the signatures ordered by each key's position in the
+ * BIP-67-sorted redeem script — CHECKMULTISIG requires that order, and the
+ * OP_0 dummy byte matches Paytaca's template unlocks byte-for-byte.
+ */
+function buildUnlockScript(
+  signatures: PsbtSignature[],
+  publicKey: Uint8Array,
+  redeemScriptHex?: string
+): Uint8Array {
+  if (!redeemScriptHex) {
+    const signature = signatures[0];
+    const script = new Uint8Array(
+      signature.signature.length + publicKey.length + 2
+    );
+    script[0] = signature.signature.length;
+    script.set(signature.signature, 1);
+    script[signature.signature.length + 1] = publicKey.length;
+    script.set(publicKey, signature.signature.length + 2);
+    return script;
+  }
+
+  const parts = [Uint8Array.of(0x00)];
+  for (const signature of signatures) parts.push(pushData(signature.signature));
+  parts.push(pushData(hexToBin(redeemScriptHex)));
+  const total = parts.reduce((sum, part) => sum + part.length, 0);
+  const script = new Uint8Array(total);
+  let offset = 0;
+  for (const part of parts) {
+    script.set(part, offset);
+    offset += part.length;
+  }
+  return script;
+}
+
+/**
  * Merge the verified signatures into a final raw transaction.
  *
  * Only call after `inspectImportedPsbt` returned `complete` — this does not
- * re-verify. The unlocking script is `<sig+sighash> <pubkey>` (P2PKH), which
- * is the only script shape a watch-only BIP44 wallet spends.
+ * re-verify. For multisig inputs the signatures are ordered by each signer's
+ * key position in the BIP-67-sorted redeem script and the unlock is
+ * `OP_0 <sig>... <redeemScript>`.
  */
 export function mergeImportedSignatures(
   imported: Uint8Array,
@@ -196,19 +243,55 @@ export function mergeImportedSignatures(
     throw new Error('Imported PSBT does not match the proposal input count.');
   }
 
-  const unlockPerInput = parsed.inputs.map((parsedInput, index) => {    const signature = parsedInput.partialSignatures.find((candidate) => {
-      const matchesInput = candidate.inputIndex === index;
-      return (
-        matchesInput &&
+  const unlockPerInput = parsed.inputs.map((parsedInput, index) => {
+    const verified = parsedInput.partialSignatures.filter(
+      (candidate) =>
+        candidate.inputIndex === index &&
         verifyPartialSignature(candidate, proposal, parsed.unsignedTransaction)
-      );
-    });
-    if (!signature) {
+    );
+    if (verified.length === 0) {
       throw new Error(`Input ${index} has no verified signature to merge.`);
     }
+
+    const proposalInput = proposal.inputs[index];
+    if (proposalInput.redeemScriptHex) {
+      const required = proposalInput.requiredSignatures ?? verified.length;
+      const policy = parseMultisigRedeemScript(
+        hexToBin(proposalInput.redeemScriptHex)
+      );
+      if (!policy) {
+        throw new Error(`Input ${index} has an invalid multisig redeem script.`);
+      }
+      // CHECKMULTISIG reads signatures in redeem-script key order; take the
+      // first `required` verified signatures in that order.
+      const keyPosition = new Map(
+        policy.keys.map((key, position) => [binToHex(key), position])
+      );
+      const ordered = verified
+        .filter((candidate) => keyPosition.has(binToHex(candidate.publicKey)))
+        .sort(
+          (a, b) =>
+            keyPosition.get(binToHex(a.publicKey))! -
+            keyPosition.get(binToHex(b.publicKey))!
+        )
+        .slice(0, required);
+      if (ordered.length < required) {
+        throw new Error(
+          `Input ${index} needs ${required} verified multisig signatures, ` +
+            `got ${ordered.length}.`
+        );
+      }
+      return {
+        script: buildUnlockScript(
+          ordered,
+          ordered[0].publicKey,
+          proposalInput.redeemScriptHex
+        ),
+      };
+    }
+
     return {
-      publicKey: signature.publicKey,
-      signature: signature.signature,
+      script: buildUnlockScript(verified, verified[0].publicKey),
     };
   });
 
@@ -217,15 +300,7 @@ export function mergeImportedSignatures(
     inputs: proposal.inputs.map((input, index) => ({
       outpointTransactionHash: hexToBin(input.txid),
       outpointIndex: input.vout,
-      unlockingBytecode: (() => {
-        const { signature, publicKey } = unlockPerInput[index];
-        const script = new Uint8Array(signature.length + publicKey.length + 2);
-        script[0] = signature.length;
-        script.set(signature, 1);
-        script[signature.length + 1] = publicKey.length;
-        script.set(publicKey, signature.length + 2);
-        return script;
-      })(),
+      unlockingBytecode: unlockPerInput[index].script,
       sequenceNumber: 0xffffffff,
     })),
     outputs: proposal.outputs.map((output) => ({
