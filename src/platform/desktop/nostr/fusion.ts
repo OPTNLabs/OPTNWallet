@@ -36,7 +36,8 @@ export const MAX_ANNOUNCE_DELAY_MS = 3_000;
 // latest one to new subscribers — frequent re-announcing buys nothing and made
 // relays answer "rate-limited: you are noting too much". Refresh slowly, just
 // often enough to stay inside the peer-active window.
-const REANNOUNCE_MS = 12_000;
+// Faster refresh during multi-wallet gather so asymmetric Tor views converge.
+const REANNOUNCE_MS = 6_000;
 const MAX_FUTURE_SKEW_SECONDS = 5;
 const MAX_ANNOUNCEMENT_BYTES = 2_048;
 const MAX_TIERS = 16;
@@ -74,12 +75,10 @@ export function poolTag(network: FusionPoolNetwork): string {
 }
 
 /** How long an announcement stays fresh/discoverable (rolling TTL, seconds).
- *  Must be longer than the rendezvous timeout (15 s default in
- *  fusionRendezvous.ts — Tor ack RTT) so peers still discover each other while
- *  negotiating, but short enough that stale announcements from finished rounds
- *  do not linger. 180 s left ghosts; 30 s was too tight over Tor (live peers
- *  aged out before REANNOUNCE could refresh). 60 s is the working middle. */
-export const POOL_PEER_TTL_SECONDS = 60;
+ *  v1.7.0 used 180. HEAD briefly used 30 then 60 — too short for multi-wallet
+ *  Tor startup: late subscribers never re-fetched peers that had already
+ *  stopped re-announcing after forming a 2-of-3 group. */
+export const POOL_PEER_TTL_SECONDS = 180;
 
 export interface RoundIdentity {
   secretKey: Uint8Array;

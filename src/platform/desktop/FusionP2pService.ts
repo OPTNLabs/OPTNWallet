@@ -114,21 +114,19 @@ function waitUntil(timestampMs: number, signal?: AbortSignal): Promise<void> {
   });
 }
 
-const POOL_WAIT_MIN_MS = 12_000; // short minimum gather so stragglers can still join
-const POOL_WAIT_MAX_MS = 75_000; // give up gathering after this
-
-// Rolling discovery: keep a running countdown and start the round as soon as enough
-// FRESH peers (by TTL) are present after the minimum gather, or when the max wait
-// elapses. No epoch bucket — peers who announced any time in the freshness window
-// count, so users across the globe don't need to click together.
-// A peer is ACTIVE only if it re-announced within this window. Peers re-announce
-// every ~8s while running a round; an abandoned attempt (a stale throwaway key from
-// an earlier click/retry) stops re-announcing and ages out — so the group is formed
-// from currently-live wallets, not accumulated dead announcements.
-// Must stay under POOL_PEER_TTL_SECONDS and above REANNOUNCE_MS (12s). Tor
-// publish + relay fan-out can lag; 28s was so tight that slow relays aged out
-// live peers mid-gather. 50s pairs with the 60s announcement TTL.
-const RECENT_ACTIVE_SECONDS = 50;
+// Evidence (user, 3 wallets simultaneous start):
+//   wallet A → "Round agreed with N peers at X sats" then stuck at Registering
+//   wallet B → "No P2P peers found (only 1 announcement(s))"
+//   wallet C → timed out
+// Early start at minReady with 2 peers while Tor is still delivering the 3rd
+// announcement produces asymmetric groups: A negotiates, B never sees anyone,
+// A waits forever for credentials from a dead/missing peer set.
+const POOL_WAIT_MIN_MS = 25_000; // was 12s in 1.7.0; Tor+3 wallets need longer
+const POOL_WAIT_MAX_MS = 90_000;
+/** After minReady, wait until peer count is unchanged this long before locking. */
+const PEER_SET_STABLE_MS = 8_000;
+// Must stay under POOL_PEER_TTL_SECONDS (180, matching v1.7.0).
+const RECENT_ACTIVE_SECONDS = 150;
 
 // Every Start click mints a fresh throwaway identity, and the announcement is a
 // STORED event the relay keeps replaying until it ages out. Without this, a retry
@@ -145,6 +143,8 @@ async function collectRolling(
   const start = Date.now();
   const minReady = start + POOL_WAIT_MIN_MS;
   const maxWait = start + POOL_WAIT_MAX_MS;
+  let lastCount = 0;
+  let stableSince = start;
   const fresh = () => {
     const nowSeconds = Math.floor(Date.now() / 1_000);
     return getPeers().filter((peer) => {
@@ -158,15 +158,32 @@ async function collectRolling(
     if (signal?.aborted) throw new Error('fusion round cancelled');
     const peers = fresh();
     const now = Date.now();
-    if (
-      (peers.length >= MIN_PARTICIPANTS && now >= minReady) ||
-      now >= maxWait
-    ) {
+    if (peers.length !== lastCount) {
+      lastCount = peers.length;
+      stableSince = now;
+    }
+    const pastMin = now >= minReady;
+    const stable =
+      peers.length >= MIN_PARTICIPANTS &&
+      pastMin &&
+      now - stableSince >= PEER_SET_STABLE_MS;
+    if (stable || now >= maxWait) {
+      onStatus?.(
+        `Gather done: ${peers.length} announcement(s) (stable=${stable}).`
+      );
       return peers;
     }
-    if (peers.length >= MIN_PARTICIPANTS) {
+    if (peers.length >= MIN_PARTICIPANTS && pastMin) {
+      const need = Math.max(
+        0,
+        Math.ceil((PEER_SET_STABLE_MS - (now - stableSince)) / 1_000)
+      );
+      onStatus?.(
+        `${peers.length} peers visible — waiting ${need}s for set to stabilize (Tor lag)…`
+      );
+    } else if (peers.length >= MIN_PARTICIPANTS) {
       const inSecs = Math.max(0, Math.ceil((minReady - now) / 1_000));
-      onStatus?.(`${peers.length} peers ready — starting in ${inSecs}s…`);
+      onStatus?.(`${peers.length} peers ready — min gather ${inSecs}s…`);
     } else {
       const secsLeft = Math.max(0, Math.ceil((maxWait - now) / 1_000));
       onStatus?.(
@@ -487,16 +504,21 @@ export async function runP2pFusion(
       status,
       opts.signal
     );
-    joined.stop();
-    stopPool = null;
+    // Keep re-announcing through negotiate so late wallets still see us.
+    // (Stopping here was one cause of "only 1 announcement" on other windows.)
     const group = selectFusionGroup(fresh, MIN_PARTICIPANTS, MAX_PARTICIPANTS);
     if (!group || !group.participants.includes(round.pubkey)) {
+      joined.stop();
+      stopPool = null;
       throw new Error(
         `No P2P peers found (only ${fresh.length} announcement(s); need ≥2 wallets ` +
           `on ${network} with Tor + P2P on, starting around the same time). ` +
           `Open a second chipnet wallet and Start P2P on both.`
       );
     }
+    status?.(
+      `Local view: ${fresh.length} peer(s), proposing group of ${group.participants.length} at ${group.tier} sats…`
+    );
 
     const transport = createNostrRoundTransport(
       pool,
@@ -505,17 +527,23 @@ export async function runP2pFusion(
       outputPool,
       opts.signal
     );
-    const negotiated = await negotiateFusionRound(
-      {
-        myPubkey: round.pubkey,
-        candidates: group.participants,
-        network,
-        tier: group.tier,
-        epoch,
-        signal: opts.signal,
-      },
-      transport
-    );
+    let negotiated;
+    try {
+      negotiated = await negotiateFusionRound(
+        {
+          myPubkey: round.pubkey,
+          candidates: group.participants,
+          network,
+          tier: group.tier,
+          epoch,
+          signal: opts.signal,
+        },
+        transport
+      );
+    } finally {
+      joined.stop();
+      stopPool = null;
+    }
     status?.(
       `Round agreed with ${negotiated.participants.length} peers at ${negotiated.tier} sats.`
     );
@@ -559,13 +587,13 @@ export async function runP2pFusion(
         feerate: P2P_FEERATE,
         myContribution: { inputs: myInputs, outputs: myOutputs },
         keysByPubkey,
-        // Route outputs through the peer mix-net. Without this the coordinator
-        // sees, in one message, exactly which outputs belong to which peer —
-        // the message boundary is itself the grouping, so a fresh signing key
-        // does not help. Costs no extra infrastructure: the peers are the mix
-        // and the existing Nostr relays are the transport.
-        onionEnabled: true,
+        // Direct outputs (v1.7.0 behaviour). Onion mix-net waits for every
+        // negotiated peer to peel; when discovery was asymmetric (one wallet
+        // "Round agreed", another "only 1 announcement"), the agreed wallet
+        // stuck at "Registering inputs & outputs" until the 120s timeout.
+        onionEnabled: false,
         signal: opts.signal,
+        onStatus: status,
         broadcast: async (txHex) => {
           try {
             const receipt = await broadcastP2pTransaction(txHex);
