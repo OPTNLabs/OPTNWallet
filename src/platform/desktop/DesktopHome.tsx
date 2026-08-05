@@ -196,12 +196,23 @@ const Home: React.FC = () => {
       // the ledger. Rebuild Wallet in Settings is the nuclear wipe.
       reportSyncProgress(5);
       try {
-        const { clearAddressStatuses } = await import('./WalletLedgerService');
-        await clearAddressStatuses(currentWalletId);
+        const ledger = await import('./WalletLedgerService');
+        // Design: Manual Sync clears status hashes then force rechecks.
+        await ledger.clearAddressStatuses(currentWalletId);
+        // Heal sticky external: spends left by bad empty snapshots (wallet 5).
+        await ledger.clearSyntheticExternalSpends(currentWalletId);
       } catch {
         /* optional on non-desktop */
       }
-      await ElectrumService.ensureFreshConnection();
+      // Best-effort socket; do not block forever on resubscribe.
+      try {
+        await Promise.race([
+          ElectrumService.ensureFreshConnection(),
+          new Promise<void>((resolve) => setTimeout(resolve, 5000)),
+        ]);
+      } catch {
+        /* listunspent reconnects */
+      }
       if (!isActiveWalletSession(walletSession)) return;
       reportSyncProgress(10);
 

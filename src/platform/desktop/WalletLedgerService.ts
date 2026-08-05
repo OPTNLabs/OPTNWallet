@@ -87,11 +87,18 @@ function buildWalletBytecodeMap(addresses: Iterable<string>): Map<string, string
   return map;
 }
 
+/**
+ * Stored when an address has been scanned and has zero history.
+ * Electrum unused scripthash status is `null`; we persist this so the
+ * status-hash gate can mark empty addresses clean (not forever dirty).
+ */
+export const EMPTY_HISTORY_STATUS = '';
+
 /** EC / Selene style: sha256 of "txid:height:" for each history item. */
 export function computeHistoryStatusHash(
   history: Array<{ tx_hash: string; height: number }>
-): string | null {
-  if (!history.length) return null;
+): string {
+  if (!history.length) return EMPTY_HISTORY_STATUS;
   let status = '';
   for (const item of history) {
     const h = Number(item.height) || 0;
@@ -99,6 +106,21 @@ export function computeHistoryStatusHash(
   }
   const digest = sha256.hash(new TextEncoder().encode(status));
   return hexFromHash(digest);
+}
+
+/** Local status matches Electrum scripthash status (null = unused). */
+export function historyStatusesMatch(
+  local: string,
+  remote: string | null
+): boolean {
+  if (local === remote) return true;
+  if (
+    local === EMPTY_HISTORY_STATUS &&
+    (remote === null || remote === '')
+  ) {
+    return true;
+  }
+  return false;
 }
 
 export type AddressUtxoSnapshot = {
@@ -244,7 +266,7 @@ export async function setAddressHistoryStatus(
   walletId: number,
   address: string,
   history: Array<{ tx_hash: string; height: number }>
-): Promise<string | null> {
+): Promise<string> {
   await ensureDesktopLedgerTables();
   const status = computeHistoryStatusHash(history);
   const dbService = DatabaseService();
@@ -253,6 +275,7 @@ export async function setAddressHistoryStatus(
   if (!db) return status;
 
   try {
+    // Persist including EMPTY_HISTORY_STATUS so gap addresses become clean.
     db.run(
       `INSERT INTO address_sync_status (wallet_id, address, history_status, updated_at)
        VALUES (?, ?, ?, ?)
@@ -303,9 +326,11 @@ export async function addressHistoryIsFresh(
   address: string,
   remoteStatus: string | null | undefined
 ): Promise<boolean> {
-  if (remoteStatus == null || remoteStatus === '') return false;
   const local = await getAddressHistoryStatus(walletId, address);
-  return local != null && local === remoteStatus;
+  if (local == null) return false;
+  // remoteStatus undefined = probe missing; null/'' = Electrum unused.
+  if (remoteStatus === undefined) return false;
+  return historyStatusesMatch(local, remoteStatus);
 }
 
 /** Bulk-load local history status hashes for a wallet (one SQL query). */
@@ -319,20 +344,20 @@ export async function getAddressHistoryStatusMap(
   const db = dbService.getDatabase();
   if (!db) return map;
   try {
+    // Include empty-string statuses (scanned-empty addresses).
     const q = db.prepare(
       `SELECT address, history_status FROM address_sync_status
-       WHERE wallet_id = ? AND history_status IS NOT NULL AND history_status != ''`
+       WHERE wallet_id = ? AND history_status IS NOT NULL`
     );
     q.bind([walletId]);
     while (q.step()) {
       const row = q.getAsObject() as {
         address?: string;
-        history_status?: string;
+        history_status?: string | null;
       };
       if (
         typeof row.address === 'string' &&
-        typeof row.history_status === 'string' &&
-        row.history_status
+        typeof row.history_status === 'string'
       ) {
         map.set(row.address, row.history_status);
       }
@@ -406,13 +431,12 @@ export async function partitionAddressesByStatus(
   const clean: string[] = [];
   for (const address of maybeClean) {
     const local = localMap.get(address);
-    const remote = remoteByAddress[address];
-    if (
-      local != null &&
-      remote != null &&
-      remote !== '' &&
-      local === remote
-    ) {
+    // Missing key = probe failure — keep dirty (do not treat as unused).
+    if (local == null || !(address in remoteByAddress)) {
+      dirty.push(address);
+      continue;
+    }
+    if (historyStatusesMatch(local, remoteByAddress[address])) {
       clean.push(address);
     } else {
       dirty.push(address);
@@ -432,6 +456,36 @@ export async function clearAddressStatuses(walletId: number): Promise<void> {
     db.run(`DELETE FROM address_sync_status WHERE wallet_id = ?`, [walletId]);
   } catch (error) {
     logError('WalletLedgerService.clearAddressStatuses', error, { walletId });
+  }
+}
+
+/**
+ * Drop synthetic external spends for a wallet so the next listunspent pass can
+ * repopulate unspents cleanly. Used by Manual Sync to heal ledgers that marked
+ * coins spent after a bad empty snapshot (wallet 5-style fake low balance).
+ * Does NOT delete real spend rows from known wallet transactions.
+ */
+export async function clearSyntheticExternalSpends(
+  walletId: number
+): Promise<number> {
+  await ensureDesktopLedgerTables();
+  const dbService = DatabaseService();
+  await dbService.ensureDatabaseStarted();
+  const db = dbService.getDatabase();
+  if (!db) return 0;
+  try {
+    db.run(
+      `DELETE FROM ledger_txi
+       WHERE wallet_id = ? AND spent_by_tx LIKE 'external:%'`,
+      [walletId]
+    );
+    // sql.js rowsModified is not always available — return 1 if we ran OK.
+    return 1;
+  } catch (error) {
+    logError('WalletLedgerService.clearSyntheticExternalSpends', error, {
+      walletId,
+    });
+    return 0;
   }
 }
 

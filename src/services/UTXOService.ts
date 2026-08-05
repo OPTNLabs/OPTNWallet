@@ -257,9 +257,14 @@ type UTXOFetchOptions = {
 const UTXOService = {
   async fetchAndStoreUTXOs(walletId: number, address: string): Promise<UTXO[]> {
     try {
-      const results = await UTXOService.fetchAndStoreUTXOsMany(walletId, [
-        address,
-      ]);
+      // Subscription / single-address path: never BIP44 rediscovery, never
+      // full-wallet ledger rebuild (that rewrote every UTXO on each notify and
+      // produced fake balances + console floods of total:1 dirty:1).
+      const results = await UTXOService.fetchAndStoreUTXOsMany(
+        walletId,
+        [address],
+        { discover: false }
+      );
       return results[address] ?? [];
     } catch (error) {
       logError('UTXOService.fetchAndStoreUTXOs', error, { walletId, address });
@@ -286,10 +291,12 @@ const UTXOService = {
               currentNetwork,
               hasElectrumBatchUsage
             )) ?? []);
-      console.info('[UTXOService] discovery took', {
-        ms: Math.round(performance.now() - tDiscovery),
-        discovered: discoveredAddresses.length,
-      });
+      if (options.discover !== false) {
+        console.info('[UTXOService] discovery took', {
+          ms: Math.round(performance.now() - tDiscovery),
+          discovered: discoveredAddresses.length,
+        });
+      }
       const manager = await UTXOManager();
       const addressManager = AddressManager();
       const uniqueAddresses = Array.from(
@@ -322,12 +329,15 @@ const UTXOService = {
             uniqueAddresses
           );
           addressesToFetch = partition.dirty;
-          console.info('[UTXOService] status-hash gate', {
-            total: uniqueAddresses.length,
-            dirty: partition.dirty.length,
-            clean: partition.clean.length,
-            probed: partition.probed,
-          });
+          // Batch summary only — never log per single-address subscription tick.
+          if (uniqueAddresses.length > 1 || partition.clean.length > 0) {
+            console.info('[UTXOService] status-hash gate', {
+              total: uniqueAddresses.length,
+              dirty: partition.dirty.length,
+              clean: partition.clean.length,
+              probed: partition.probed,
+            });
+          }
         } catch {
           addressesToFetch = uniqueAddresses;
         }
@@ -353,11 +363,13 @@ const UTXOService = {
       } else {
         utxosByAddress = await ElectrumService.getUTXOsMany(addressesToFetch);
       }
-      console.info('[UTXOService] getUTXOsMany took', {
-        ms: Math.round(performance.now() - tFetch),
-        addresses: addressesToFetch.length,
-        skippedClean: uniqueAddresses.length - addressesToFetch.length,
-      });
+      if (uniqueAddresses.length > 1 || addressesToFetch.length > 0) {
+        console.info('[UTXOService] getUTXOsMany took', {
+          ms: Math.round(performance.now() - tFetch),
+          addresses: addressesToFetch.length,
+          skippedClean: uniqueAddresses.length - addressesToFetch.length,
+        });
+      }
       for (const fetchedUTXOs of Object.values(utxosByAddress)) {
         for (const u of fetchedUTXOs) {
           const uAny = u as UTXO & { token_data?: unknown };
@@ -432,11 +444,11 @@ const UTXOService = {
       await manager.replaceWalletAddressUTXOs(walletId, formattedByAddress);
 
       // Option A (docs/wallet-ledger-sync-design.md):
-      //   listunspent (this pass) → applyAddressUtxoSnapshot → rebuild SQL cache.
-      // Divergence rule: one write path. Redux for THIS pass returns the same
-      // listunspent merge we just applied — do NOT re-read a partial ledger
-      // projection and selectively overwrite non-empty addresses only (that
-      // mixed two bosses and produced fake balances).
+      //   listunspent → applyAddressUtxoSnapshot → (wallet-wide) rebuild SQL.
+      // CRITICAL: single-address subscription must NOT call
+      // rebuildUtxosFromLedger — that DELETEs every UTXO for the wallet and
+      // rewrites from the ledger after only one address was updated, which is
+      // the verified console flood (total:1) + fake balance path on wallet 5.
       try {
         const { ensureDesktopLedgerTables } = await import(
           '../platform/desktop/desktopSchema'
@@ -459,8 +471,11 @@ const UTXOService = {
             })),
           });
         }
-        // Durable SQL UTXO cache only — next open paints this, then network.
-        await rebuildUtxosFromLedger(walletId);
+        const walletWidePass =
+          options.force === true || uniqueAddresses.length > 1;
+        if (walletWidePass) {
+          await rebuildUtxosFromLedger(walletId);
+        }
       } catch (ledgerError) {
         // Ledger is additive; classic UTXO path already wrote replaceWalletAddressUTXOs
         logError('UTXOService.fetchAndStoreUTXOsMany.ledger', ledgerError, {
