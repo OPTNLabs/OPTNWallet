@@ -57,6 +57,16 @@ import { CREDENTIAL_SLOTS_PER_PEER } from './nostr/fusionBlindSchnorr';
 import type { FusionInputRef, FusionOutputRef } from './nostr/fusionRound';
 import { planP2pOutputValues } from './nostr/fusionP2pAllocation';
 import { DEFAULT_RELAYS } from './nostr/chat';
+import {
+  P2P_COMPONENT_JITTER_MS,
+  P2P_GATHER_MAX_MS,
+  P2P_GATHER_MIN_MS,
+  P2P_PEER_SET_STABLE_MS,
+  P2P_PROPOSAL_TIMEOUT_MS,
+  P2P_RENDEZVOUS_MS,
+  P2P_ROUND_TIMEOUT_MS,
+  P2P_SMALL_SET_HOLD_MS,
+} from './fusionTiming';
 
 const P2P_FEERATE = 1_000; // sats per 1000 bytes
 const P2P_TIERS = [10_000, 100_000, 1_000_000, 10_000_000];
@@ -127,19 +137,12 @@ function waitUntil(timestampMs: number, signal?: AbortSignal): Promise<void> {
 //      the local peer Map — one window sees 5 keys, another only 2 live wallets
 //   3) Early lock on count===2 while a 3rd wallet is still connecting
 //   4) Stability checked on COUNT only — membership can churn at same size
-const POOL_WAIT_MIN_MS = 35_000;
-/** Hard cap; late Tor (wallet 5 lag) must still have room after small-set hold. */
-const POOL_WAIT_MAX_MS = 120_000;
-/** After minReady, require this long with an unchanged peer *set* before lock. */
-const PEER_SET_STABLE_MS = 15_000;
-/**
- * Hold 2- and 3-wallet sets longer so a 4th can still join.
- * User: three wallets already on "Registering inputs…" while the 4th still
- * shows "1 live wallet" — the early trio stopped re-announcing after agree.
- * Wallet 5 lag: 55s was still short under Tor; prefer waiting near maxWait
- * whenever soft once saw more peers than the strict set.
- */
-const SMALL_SET_HOLD_MS = 75_000;
+// Gather budgets mirror server JOIN_WAIT (fusionTiming) — never invent a longer
+// pool wait than Electron Cash / protocol.py.
+const POOL_WAIT_MIN_MS = P2P_GATHER_MIN_MS;
+const POOL_WAIT_MAX_MS = P2P_GATHER_MAX_MS;
+const PEER_SET_STABLE_MS = P2P_PEER_SET_STABLE_MS;
+const SMALL_SET_HOLD_MS = P2P_SMALL_SET_HOLD_MS;
 // Every Start click mints a fresh throwaway identity, and the announcement is a
 // STORED event the relay keeps replaying until it ages out. Without this, a retry
 // discovers its OWN abandoned key as a peer: the same wallet joins its own round
@@ -746,9 +749,9 @@ export async function runP2pFusion(
           network,
           tier: group.tier,
           epoch,
-          // Tor multi-wallet gift-wrap: proposal/ack/start need a wide budget.
-          timeoutMs: 60_000,
-          proposalTimeoutMs: 15_000,
+          // Caps from fusionTiming (≤ server T_START_CLOSE / T_END_COMPS).
+          timeoutMs: P2P_RENDEZVOUS_MS,
+          proposalTimeoutMs: P2P_PROPOSAL_TIMEOUT_MS,
           signal: opts.signal,
         },
         transport
@@ -823,6 +826,9 @@ export async function runP2pFusion(
         // Never disable in production — partial unlinkability (throwaway Nostr
         // authors alone) is not a substitute.
         onionEnabled: true,
+        // ≤ server T_START_CLOSE_BLAME; tight jitter so inject fits comps window.
+        timeoutMs: P2P_ROUND_TIMEOUT_MS,
+        jitterMs: P2P_COMPONENT_JITTER_MS,
         signal: opts.signal,
         onStatus: status,
         broadcast: async (txHex) => {

@@ -25,6 +25,13 @@ import {
 } from './fusionSign';
 import { electCoordinator } from './fusion';
 import { ROUND_MSG_VERSION } from './fusionRound';
+import {
+  P2P_CREDENTIAL_WAIT_MS,
+  P2P_MISSING_OUTPUTS_DIRECT_MS,
+  P2P_MISSING_OUTPUTS_ONION_MS,
+  P2P_ONION_DECLARE_RESEND_MS,
+  P2P_ROUND_TIMEOUT_MS,
+} from '../fusionTiming';
 import { onionWrap, onionPeel, onionUnpad, isEccAvailable } from './onionCrypto';
 import {
   BlindIssuer,
@@ -577,17 +584,12 @@ export interface RoundParams {
   onionEnabled?: boolean;
 }
 
-/** Bound silent waits so phase-2 does not look hung for the full round timeout. */
-const CREDENTIAL_WAIT_MS = 45_000;
-/**
- * After every peer says ready, how long to wait for the output pool to fill.
- * Onion mode needs multi-hop Tor gift-wraps (declare → first peel → hop → reveal);
- * 25s was firing while hops were still in flight (user: outputSlots=0/4, peelers=3).
- */
-const MISSING_OUTPUTS_DIRECT_MS = 30_000;
-const MISSING_OUTPUTS_ONION_MS = 120_000;
+/** Bound silent waits — caps from fusionTiming (server protocol.py). */
+const CREDENTIAL_WAIT_MS = P2P_CREDENTIAL_WAIT_MS;
+const MISSING_OUTPUTS_DIRECT_MS = P2P_MISSING_OUTPUTS_DIRECT_MS;
+const MISSING_OUTPUTS_ONION_MS = P2P_MISSING_OUTPUTS_ONION_MS;
 /** Re-send onion_declare so Tor-dropped declares cannot freeze the peel forever. */
-const ONION_DECLARE_RESEND_MS = 3_000;
+const ONION_DECLARE_RESEND_MS = P2P_ONION_DECLARE_RESEND_MS;
 
 function waitWithTimeout<T>(
   promise: Promise<T>,
@@ -624,8 +626,8 @@ export interface RoundResult {
   txHex: string;
 }
 
-/** Credentials + multi-hop onion under Tor can exceed 2 minutes easily. */
-const DEFAULT_TIMEOUT = 240_000;
+/** Active-round ceiling = server T_START_CLOSE_BLAME (fusionTiming). */
+const DEFAULT_TIMEOUT = P2P_ROUND_TIMEOUT_MS;
 
 function sessionId(participants: string[], tier: number): string {
   return `${electCoordinator(participants)}:${tier}`;
