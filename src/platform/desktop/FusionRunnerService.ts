@@ -321,6 +321,9 @@ export async function startFusionRound(
   if (options.signal?.aborted) return { status: 'cancelled' };
   if (!Number.isInteger(walletId) || walletId <= 0) return { status: 'busy' };
 
+  // Same-window double Start / Auto+manual race before acquire completes.
+  if (heldLeases.has(walletId)) return { status: 'busy' };
+
   // Most automatic ticks happen during the durable cooldown. Reject those
   // before Web Locks, UI activity, or Electrum work. This is advisory only:
   // the atomic claim below remains the final spending gate.
@@ -332,7 +335,11 @@ export async function startFusionRound(
   }
 
   // Drop orphan UI/durable state before acquire so grey-idle ghosts never block.
+  // Only clears the lease when it is STALE (no heartbeat) — a live other window
+  // keeps the lock and we return busy below.
   await reconcileIdleFusionState(walletId);
+
+  if (hasLiveRoundLease(walletId)) return { status: 'busy' };
 
   // Exclusivity first. Stale durable leases (no heartbeat) are reclaimed inside
   // acquireRoundLease — no user-facing "clear stuck" control required.
