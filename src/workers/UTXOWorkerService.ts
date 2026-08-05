@@ -202,6 +202,21 @@ async function refreshWalletAddress(address: string, session: WorkerSession) {
   const prev = store.getState().utxos.utxos[address] ?? [];
   const prevSet = new Set(prev.map((u) => `${u.tx_hash}:${u.tx_pos}`));
 
+  // Option A / Selene: scripthash notify often re-fires the same status.
+  // If local history status already matches Electrum, skip history + listunspent
+  // entirely (stops console spam of clean:1 / addresses:0 × hundreds).
+  try {
+    const ledger = await import('../platform/desktop/WalletLedgerService');
+    const remote = await ElectrumService.getAddressState(address);
+    if (
+      await ledger.addressHistoryIsFresh(currentWalletId, address, remote)
+    ) {
+      return;
+    }
+  } catch {
+    /* fall through to full refresh */
+  }
+
   const updatedHistory =
     await transactionManager.fetchAndStoreTransactionHistory(
       currentWalletId,
