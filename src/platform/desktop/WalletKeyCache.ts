@@ -126,7 +126,7 @@ export function getCachedWalletKey(): CryptoKey | null {
  * use hasCachedCredentialsForWallet — the desktop shell was broken when it
  * still treated "null key" as "not unlocked".
  */
-export function getCachedWalletKeyForWallet(_walletId: number): CryptoKey | null {
+export function getCachedWalletKeyForWallet(_walletId: number): CryptoKey | null { // eslint-disable-line @typescript-eslint/no-unused-vars
   console.warn(
     '[WalletKeyCache] getCachedWalletKeyForWallet is deprecated — use hasCachedCredentialsForWallet'
   );
