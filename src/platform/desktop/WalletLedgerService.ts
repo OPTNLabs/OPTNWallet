@@ -288,6 +288,120 @@ export async function addressHistoryIsFresh(
   return local != null && local === remoteStatus;
 }
 
+/** Bulk-load local history status hashes for a wallet (one SQL query). */
+export async function getAddressHistoryStatusMap(
+  walletId: number
+): Promise<Map<string, string>> {
+  await ensureDesktopLedgerTables();
+  const map = new Map<string, string>();
+  const dbService = DatabaseService();
+  await dbService.ensureDatabaseStarted();
+  const db = dbService.getDatabase();
+  if (!db) return map;
+  try {
+    const q = db.prepare(
+      `SELECT address, history_status FROM address_sync_status
+       WHERE wallet_id = ? AND history_status IS NOT NULL AND history_status != ''`
+    );
+    q.bind([walletId]);
+    while (q.step()) {
+      const row = q.getAsObject() as {
+        address?: string;
+        history_status?: string;
+      };
+      if (
+        typeof row.address === 'string' &&
+        typeof row.history_status === 'string' &&
+        row.history_status
+      ) {
+        map.set(row.address, row.history_status);
+      }
+    }
+    q.free();
+  } catch (error) {
+    logError('WalletLedgerService.getAddressHistoryStatusMap', error, {
+      walletId,
+    });
+  }
+  return map;
+}
+
+export type StatusPartition = {
+  /** Must re-fetch history / listunspent from the network. */
+  dirty: string[];
+  /** Local status matched remote — safe to skip network for this address. */
+  clean: string[];
+  /** How many remote status probes were issued (0 when nothing was stored). */
+  probed: number;
+};
+
+/**
+ * Partition addresses into dirty/clean using EC/Selene status hashes.
+ *
+ * Critical performance rule: addresses with **no local status** are dirty
+ * immediately — do NOT call Electrum for them. Manual Sync clears statuses
+ * first; without this rule the bar freezes at ~20% while we subscribe every
+ * address only to learn we already knew they were dirty.
+ */
+export async function partitionAddressesByStatus(
+  walletId: number,
+  addresses: string[]
+): Promise<StatusPartition> {
+  const unique = Array.from(new Set(addresses.filter(Boolean)));
+  if (unique.length === 0) {
+    return { dirty: [], clean: [], probed: 0 };
+  }
+
+  const localMap = await getAddressHistoryStatusMap(walletId);
+  const dirty: string[] = [];
+  const maybeClean: string[] = [];
+
+  for (const address of unique) {
+    if (localMap.has(address)) {
+      maybeClean.push(address);
+    } else {
+      dirty.push(address);
+    }
+  }
+
+  // Nothing stored yet (first open, post-rebuild, post-manual-clear): all dirty,
+  // zero network probes — go straight to listunspent / history.
+  if (maybeClean.length === 0) {
+    return { dirty, clean: [], probed: 0 };
+  }
+
+  let remoteByAddress: Record<string, string | null> = {};
+  try {
+    const Electrum = (await import('../../services/ElectrumService')).default;
+    remoteByAddress = await Electrum.getAddressStateMany(maybeClean);
+  } catch (error) {
+    logError('WalletLedgerService.partitionAddressesByStatus', error, {
+      walletId,
+      count: maybeClean.length,
+    });
+    // Probe failed — treat as dirty so we still refresh rather than skip forever.
+    return { dirty: unique, clean: [], probed: 0 };
+  }
+
+  const clean: string[] = [];
+  for (const address of maybeClean) {
+    const local = localMap.get(address);
+    const remote = remoteByAddress[address];
+    if (
+      local != null &&
+      remote != null &&
+      remote !== '' &&
+      local === remote
+    ) {
+      clean.push(address);
+    } else {
+      dirty.push(address);
+    }
+  }
+
+  return { dirty, clean, probed: maybeClean.length };
+}
+
 export async function clearAddressStatuses(walletId: number): Promise<void> {
   await ensureDesktopLedgerTables();
   const dbService = DatabaseService();

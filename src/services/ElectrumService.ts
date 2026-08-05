@@ -153,19 +153,60 @@ const ElectrumService = {
    * server fingerprint of address history for delta sync.
    */
   async getAddressState(address: string): Promise<string | null> {
+    const many = await ElectrumService.getAddressStateMany([address]);
+    return many[address] ?? null;
+  },
+
+  /**
+   * Batch address-state probes via scripthash.subscribe.
+   * Used by the ledger status-hash gate — must stay fast; callers should only
+   * probe addresses that already have a local status to compare against.
+   */
+  async getAddressStateMany(
+    addresses: string[]
+  ): Promise<Record<string, string | null>> {
+    const unique = Array.from(new Set(addresses.filter(Boolean)));
+    const results: Record<string, string | null> = {};
+    if (unique.length === 0) return results;
+
     const server = ElectrumServer();
-    try {
-      const scripthash = addressToElectrumScripthash(address);
-      const res = await server.request(
-        'blockchain.scripthash.subscribe',
-        scripthash
-      );
-      if (typeof res === 'string') return res;
-      return null;
-    } catch (error) {
-      logError('ElectrumService.getAddressState', error, { address });
-      return null;
+    const pending: string[] = [];
+    const calls: ElectrumBatchCall[] = [];
+
+    for (const address of unique) {
+      try {
+        const scripthash = addressToElectrumScripthash(address);
+        pending.push(address);
+        calls.push({
+          method: 'blockchain.scripthash.subscribe',
+          params: [scripthash],
+        });
+      } catch {
+        results[address] = null;
+      }
     }
+
+    if (calls.length === 0) return results;
+
+    try {
+      const batchResults = await requestManyInChunks(server, calls);
+      batchResults.forEach((response, index) => {
+        const address = pending[index];
+        if (response instanceof Error) {
+          results[address] = null;
+          return;
+        }
+        results[address] = typeof response === 'string' ? response : null;
+      });
+    } catch (error) {
+      logError('ElectrumService.getAddressStateMany', error, {
+        count: unique.length,
+      });
+      for (const address of pending) {
+        if (!(address in results)) results[address] = null;
+      }
+    }
+    return results;
   },
 
   /** Fetch UTXOs for an address */

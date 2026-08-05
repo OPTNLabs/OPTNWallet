@@ -309,38 +309,24 @@ const UTXOService = {
         walletId
       );
 
-      // Option A status-hash gate: if local history status already matches the
-      // Electrum address state, listunspent cannot have changed either — skip
-      // the network fetch and keep the DB/ledger snapshot for that address.
-      // Manual Sync clears address_sync_status first so every address is dirty.
+      // Option A status-hash gate: skip listunspent when local history status
+      // already matches Electrum. Addresses with NO local status are dirty
+      // immediately (no probe) — Manual Sync clears statuses first, so without
+      // that rule the bar froze at ~20% while we subscribed every address.
       let addressesToFetch = uniqueAddresses;
       if (!options.force) {
         try {
           const ledger = await import('../platform/desktop/WalletLedgerService');
-          const dirty: string[] = [];
-          const batchSize = 20;
-          for (let i = 0; i < uniqueAddresses.length; i += batchSize) {
-            const chunk = uniqueAddresses.slice(i, i + batchSize);
-            const states = await Promise.all(
-              chunk.map(async (address) => {
-                const remote = await ElectrumService.getAddressState(address);
-                const fresh = await ledger.addressHistoryIsFresh(
-                  walletId,
-                  address,
-                  remote
-                );
-                return { address, fresh };
-              })
-            );
-            for (const s of states) {
-              if (!s.fresh) dirty.push(s.address);
-            }
-          }
-          addressesToFetch = dirty;
+          const partition = await ledger.partitionAddressesByStatus(
+            walletId,
+            uniqueAddresses
+          );
+          addressesToFetch = partition.dirty;
           console.info('[UTXOService] status-hash gate', {
             total: uniqueAddresses.length,
-            dirty: dirty.length,
-            skipped: uniqueAddresses.length - dirty.length,
+            dirty: partition.dirty.length,
+            clean: partition.clean.length,
+            probed: partition.probed,
           });
         } catch {
           addressesToFetch = uniqueAddresses;
@@ -348,15 +334,25 @@ const UTXOService = {
       }
 
       const tFetch = performance.now();
-      const utxosByAddress =
-        addressesToFetch.length === 0
-          ? ({} as Record<string, UTXO[]>)
-          : options.onProgress
-            ? await ElectrumService.getUTXOsMany(
-                addressesToFetch,
-                options.onProgress
-              )
-            : await ElectrumService.getUTXOsMany(addressesToFetch);
+      let utxosByAddress: Record<string, UTXO[]> = {};
+      if (addressesToFetch.length === 0) {
+        // All clean — jump progress to complete so the bar does not freeze at
+        // the pre-fetch marker (open bootstrap sits at 20% until this returns).
+        options.onProgress?.(uniqueAddresses.length, uniqueAddresses.length);
+      } else if (options.onProgress) {
+        // Map listunspent progress over dirty addresses only, but report against
+        // total wallet size so skipped clean addresses still advance the bar.
+        const dirtyTotal = addressesToFetch.length;
+        const skipped = uniqueAddresses.length - dirtyTotal;
+        utxosByAddress = await ElectrumService.getUTXOsMany(
+          addressesToFetch,
+          (done, _total) => {
+            options.onProgress?.(skipped + done, uniqueAddresses.length);
+          }
+        );
+      } else {
+        utxosByAddress = await ElectrumService.getUTXOsMany(addressesToFetch);
+      }
       console.info('[UTXOService] getUTXOsMany took', {
         ms: Math.round(performance.now() - tFetch),
         addresses: addressesToFetch.length,

@@ -117,5 +117,7 @@ describe('WalletLedgerService public API surface', () => {
     expect(typeof mod.rebuildUtxosFromLedger).toBe('function');
     expect(typeof mod.clearWalletChainData).toBe('function');
     expect(typeof mod.addressHistoryIsFresh).toBe('function');
+    expect(typeof mod.partitionAddressesByStatus).toBe('function');
+    expect(typeof mod.getAddressHistoryStatusMap).toBe('function');
   });
 });
