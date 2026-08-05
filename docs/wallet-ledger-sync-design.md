@@ -65,6 +65,20 @@ status = sha256( "txid:height:" for each history item, ordered as server list )
 Never treat history and UTXOs as two independent bosses.  
 Apply network results into the ledger (and/or address UTXO replace under the same wallet write), then `rebuildUtxosFromLedger`.
 
+### Address snapshot rules (listunspent → ledger)
+
+For each address in a fetch pass:
+
+1. `applyAddressUtxoSnapshot` upserts remote unspents into `ledger_txo`.  
+2. Outpoints that were unspent locally but **missing** from remote get a synthetic  
+   `ledger_txi.spent_by_tx = external:<hash>:<n>` (vanished on chain).  
+3. Outpoints present on remote that still have only an `external:%` spend row must  
+   **clear that synthetic txi** (coin is unspent again). Never clear real spend rows  
+   from known wallet txs.  
+4. `rebuildUtxosFromLedger` rewrites the SQL `UTXOs` cache from unspent `ledger_txo`.  
+5. Redux for that pass is the **listunspent merge just applied**, not a selective  
+   re-read of the projection (selective non-empty overwrite mixed two bosses).
+
 ## Send-time safety
 
 Before broadcast, verify selected outpoints still exist (listunspent / chain).  
