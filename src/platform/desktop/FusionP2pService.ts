@@ -126,12 +126,16 @@ function waitUntil(timestampMs: number, signal?: AbortSignal): Promise<void> {
 //      the local peer Map — one window sees 5 keys, another only 2 live wallets
 //   3) Early lock on count===2 while a 3rd wallet is still connecting
 //   4) Stability checked on COUNT only — membership can churn at same size
-const POOL_WAIT_MIN_MS = 30_000;
-const POOL_WAIT_MAX_MS = 90_000;
+const POOL_WAIT_MIN_MS = 35_000;
+const POOL_WAIT_MAX_MS = 100_000;
 /** After minReady, require this long with an unchanged peer *set* before lock. */
-const PEER_SET_STABLE_MS = 12_000;
-/** Only 2 live peers: hold longer so a 3rd/4th wallet can join the pool. */
-const PAIR_HOLD_MS = 45_000;
+const PEER_SET_STABLE_MS = 15_000;
+/**
+ * Hold 2- and 3-wallet sets longer so a 4th can still join.
+ * User: three wallets already on "Registering inputs…" while the 4th still
+ * shows "1 live wallet" — the early trio stopped re-announcing after agree.
+ */
+const SMALL_SET_HOLD_MS = 55_000;
 // Every Start click mints a fresh throwaway identity, and the announcement is a
 // STORED event the relay keeps replaying until it ages out. Without this, a retry
 // discovers its OWN abandoned key as a peer: the same wallet joins its own round
@@ -146,7 +150,9 @@ async function collectRolling(
   selfPubkey: string,
   getPeers: () => PoolAnnouncement[],
   onStatus?: (message: string) => void,
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  /** Re-publish when alone so late Tor peers still find us. */
+  announceNow?: () => Promise<void>
 ): Promise<PoolAnnouncement[]> {
   const start = Date.now();
   const gatherStartSeconds = Math.floor(start / 1_000);
@@ -155,6 +161,7 @@ async function collectRolling(
   let lastFingerprint = '';
   let stableSince = start;
   let lastLoggedFp = '';
+  let lastAnnounceBoost = 0;
   const fresh = () => {
     const nowSeconds = Math.floor(Date.now() / 1_000);
     return getPeers().filter((peer) =>
@@ -186,16 +193,21 @@ async function collectRolling(
       const shortKeys = peers.map((p) => p.pubkey.slice(0, 8)).join(', ') || '(none)';
       console.info(`[p2p-fusion] live set (${peers.length}): ${shortKeys}`);
     }
+    // Alone for a while: re-shout so peers still in gather can see us (Tor lag).
+    if (peers.length < 2 && announceNow && now - lastAnnounceBoost > 5_000) {
+      lastAnnounceBoost = now;
+      void announceNow().catch(() => undefined);
+    }
     const pastMin = now >= minReady;
     const setStable = pastMin && now - stableSince >= PEER_SET_STABLE_MS;
-    // Prefer 3+ peer sets once stable. A lone pair must wait longer (or maxWait)
-    // so simultaneous multi-wallet starts do not each freeze a different 2-set.
+    // Prefer 4+ once stable. Hold 2- and 3-sets longer so a late 4th is not
+    // left on "1 live" while the others already Register inputs/outputs.
     const canLock =
-      peers.length >= 3
+      peers.length >= 4
         ? setStable
         : peers.length >= MIN_PARTICIPANTS &&
           setStable &&
-          now >= start + PAIR_HOLD_MS;
+          now >= start + SMALL_SET_HOLD_MS;
     if (canLock || now >= maxWait) {
       onStatus?.(
         `Gather done: ${peers.length} live wallet(s) ` +
@@ -203,23 +215,31 @@ async function collectRolling(
       );
       return peers;
     }
-    // Short key list in the status line so overcount is visible without DevTools.
     const keyHint =
       peers.length > 0
         ? ` [${peers.map((p) => p.pubkey.slice(0, 6)).join(' ')}]`
         : '';
-    if (peers.length >= MIN_PARTICIPANTS && pastMin) {
+    if (peers.length < 2) {
+      const secsLeft = Math.max(0, Math.ceil((maxWait - now) / 1_000));
+      const aloneHint =
+        now - start > 12_000
+          ? ' Others may already be past gather (Registering…) — Cancel and Start ALL wallets together.'
+          : ' Waiting for other wallets to announce (Tor)…';
+      onStatus?.(
+        `Only you in the pool${keyHint} (up to ${secsLeft}s).${aloneHint}`
+      );
+    } else if (peers.length >= MIN_PARTICIPANTS && pastMin) {
       const needStable = Math.max(
         0,
         Math.ceil((PEER_SET_STABLE_MS - (now - stableSince)) / 1_000)
       );
-      const pairNote =
-        peers.length === 2
-          ? ` pair-hold ${Math.max(0, Math.ceil((start + PAIR_HOLD_MS - now) / 1000))}s`
+      const holdNote =
+        peers.length < 4
+          ? ` hold-for-more ${Math.max(0, Math.ceil((start + SMALL_SET_HOLD_MS - now) / 1000))}s`
           : '';
       onStatus?.(
-        `${peers.length} live wallet(s)${keyHint} — wait ${needStable}s for set to stabilize` +
-          `${pairNote}…`
+        `${peers.length} live wallet(s)${keyHint} — wait ${needStable}s stable` +
+          `${holdNote}…`
       );
     } else if (peers.length >= MIN_PARTICIPANTS) {
       const inSecs = Math.max(0, Math.ceil((minReady - now) / 1_000));
@@ -232,7 +252,7 @@ async function collectRolling(
         `Waiting for peers: ${peers.length} live wallet(s)${keyHint} (up to ${secsLeft}s)…`
       );
     }
-    await waitUntil(Math.min(maxWait, now + 1_500), signal);
+    await waitUntil(Math.min(maxWait, now + 2_000), signal);
   }
 }
 
@@ -598,7 +618,8 @@ export async function runP2pFusion(
       round.pubkey,
       () => peers,
       status,
-      opts.signal
+      opts.signal,
+      () => joined.announceNow()
     );
     // Keep re-announcing through negotiate so late wallets still see us.
     // (Stopping here was one cause of "only 1 announcement" on other windows.)
