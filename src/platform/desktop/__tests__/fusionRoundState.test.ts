@@ -10,6 +10,7 @@ import {
   releaseOutpoints,
   reserveOutpoints,
   reservedOutpoints,
+  retireAllOwnRoundKeys,
   retireRoundKey,
 } from '../fusionRoundState';
 
@@ -89,6 +90,17 @@ describe('P2P fusion cross-window round state', () => {
     expect(isRetiredRoundKey(dead)).toBe(false);
     retireRoundKey(dead);
     expect(isRetiredRoundKey(dead)).toBe(true);
+  });
+
+  it('retireAllOwnRoundKeys marks every prior attempt of this wallet as retired', () => {
+    const a = 'a'.repeat(64);
+    const b = 'b'.repeat(64);
+    recordRoundKey(9, a);
+    recordRoundKey(9, b);
+    expect(isOwnRoundKey(9, a)).toBe(true);
+    retireAllOwnRoundKeys(9);
+    expect(isRetiredRoundKey(a)).toBe(true);
+    expect(isRetiredRoundKey(b)).toBe(true);
   });
 
   it('survives unreadable storage instead of throwing mid-round', () => {
