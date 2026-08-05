@@ -698,6 +698,7 @@ function runParticipant(
     let unsubscribe: () => void = () => undefined;
     let unsubscribeProtocolError: () => void = () => undefined;
     let declareResendTimer: ReturnType<typeof setInterval> | null = null;
+    let sigResendTimer: ReturnType<typeof setInterval> | null = null;
     const seenNonces = new Set<string>();
     // Onion mix-net: one blob per *output*, not per peer. Each peer announces
     // how many it will inject (`onion_declare`); hop waits for sum(declares).
@@ -755,6 +756,10 @@ function runParticipant(
         clearInterval(declareResendTimer);
         declareResendTimer = null;
       }
+      if (sigResendTimer) {
+        clearInterval(sigResendTimer);
+        sigResendTimer = null;
+      }
       params.signal?.removeEventListener('abort', onCancel);
       unsubscribe();
       unsubscribeProtocolError();
@@ -762,6 +767,8 @@ function runParticipant(
     const fail = async (error: Error, notifyCoordinator: boolean) => {
       if (settled) return;
       settled = true;
+      // Always surface — live run died at phase 5/6 with no UI text (2026-08-06).
+      params.onStatus?.(`Round failed: ${error.message}`);
       cleanup();
       if (notifyCoordinator) {
         await Promise.allSettled([
@@ -778,6 +785,9 @@ function runParticipant(
     const succeed = (result: RoundResult) => {
       if (settled) return;
       settled = true;
+      params.onStatus?.(
+        `Round complete — txid ${result.txid.slice(0, 12)}… (broadcasting)`
+      );
       cleanup();
       resolve(result);
     };
@@ -945,20 +955,33 @@ function runParticipant(
             { inputs: message.inputs, outputs: message.outputs },
           ]);
           params.onPhase?.(5);
+          params.onStatus?.('Assembled tx received — signing our inputs…');
           const signatures = assembleVerifySign(
             params,
             approved.inputs,
             approved.outputs
           );
           params.onPhase?.(6);
-          void transport
-            .send(coordinator, {
+          const sendSigs = () =>
+            transport.send(coordinator, {
               ...messageBinding(),
               type: 'signature',
               session,
               sigs: signatures,
-            })
-            .catch((error: unknown) => void fail(asError(error), true));
+            });
+          params.onStatus?.(
+            'Signed — waiting for coordinator final (re-sending sigs if Tor drops)…'
+          );
+          void sendSigs().catch((error: unknown) =>
+            void fail(asError(error), true)
+          );
+          // Tor gift-wraps drop; coordinator hung on incomplete sig set while UI
+          // only showed phase=6 then auto-restarted with no message (live 2026-08-06).
+          if (sigResendTimer) clearInterval(sigResendTimer);
+          sigResendTimer = setInterval(() => {
+            if (settled) return;
+            void sendSigs().catch(() => undefined);
+          }, 3_000);
         } catch (error) {
           void fail(asError(error), true);
         }
@@ -972,6 +995,7 @@ function runParticipant(
         try {
           verifyFinalFusionTx(approved, message.txHex, message.txid);
           params.onPhase?.(7);
+          params.onStatus?.('Final tx verified — broadcasting…');
           // Broadcast liveness: every participant broadcasts after verification,
           // not just the coordinator. If the coordinator's broadcast failed or
           // its connection dropped, any peer can save the round. The broadcast
@@ -994,7 +1018,14 @@ function runParticipant(
 
     params.signal?.addEventListener('abort', onCancel, { once: true });
     const timer = setTimeout(
-      () => void fail(new Error('fusion round timed out'), true),
+      () =>
+        void fail(
+          new Error(
+            'fusion round timed out (after assemble/sign this usually means ' +
+              'signatures or final gift-wrap never arrived over Tor)'
+          ),
+          true
+        ),
       params.timeoutMs ?? DEFAULT_TIMEOUT
     );
     params.onPhase?.(2);
@@ -1260,6 +1291,8 @@ function runCoordinator(
     let unsubscribe: () => void = () => undefined;
     let unsubscribeProtocolError: () => void = () => undefined;
     let declareResendTimer: ReturnType<typeof setInterval> | null = null;
+    let assembledResendTimer: ReturnType<typeof setInterval> | null = null;
+    let sigWaitStatusTimer: ReturnType<typeof setInterval> | null = null;
     /** Fail if ready peers never deliver outputs (log evidence: ready 3/3 outputs 0). */
     let missingOutputsTimer: ReturnType<typeof setTimeout> | null = null;
 
@@ -1269,6 +1302,14 @@ function runCoordinator(
       if (declareResendTimer) {
         clearInterval(declareResendTimer);
         declareResendTimer = null;
+      }
+      if (assembledResendTimer) {
+        clearInterval(assembledResendTimer);
+        assembledResendTimer = null;
+      }
+      if (sigWaitStatusTimer) {
+        clearInterval(sigWaitStatusTimer);
+        sigWaitStatusTimer = null;
       }
       params.signal?.removeEventListener('abort', onCancel);
       unsubscribe();
@@ -1281,6 +1322,7 @@ function runCoordinator(
     ) => {
       if (settled || (broadcastStarted && !forceDuringBroadcast)) return;
       settled = true;
+      params.onStatus?.(`Round failed: ${error.message}`);
       cleanup();
       if (notifyPeers) {
         const message: RoundMessage = {
@@ -1296,6 +1338,9 @@ function runCoordinator(
     const succeed = (result: RoundResult) => {
       if (settled) return;
       settled = true;
+      params.onStatus?.(
+        `Fused ✓ — txid ${result.txid.slice(0, 16)}… (confirming on wallet)`
+      );
       cleanup();
       resolve(result);
     };
@@ -1363,10 +1408,30 @@ function runCoordinator(
         signedPeers.size !== others.length ||
         signaturesByOutpoint.size !== assembled.inputs.length
       ) {
+        if (
+          assembled &&
+          !finalizing &&
+          !settled &&
+          signedPeers.size < others.length
+        ) {
+          params.onStatus?.(
+            `Waiting for signatures ${signedPeers.size}/${others.length} ` +
+              `(inputs signed ${signaturesByOutpoint.size}/${assembled.inputs.length})…`
+          );
+        }
         return;
       }
       finalizing = true;
+      if (assembledResendTimer) {
+        clearInterval(assembledResendTimer);
+        assembledResendTimer = null;
+      }
+      if (sigWaitStatusTimer) {
+        clearInterval(sigWaitStatusTimer);
+        sigWaitStatusTimer = null;
+      }
       params.onPhase?.(5);
+      params.onStatus?.('All signatures in — finalizing and broadcasting…');
       const tx = assembleFusionTx([assembled]);
       const finalized = finalizeFusionTx(tx, [...signaturesByOutpoint.values()]);
 
@@ -1383,6 +1448,7 @@ function runCoordinator(
         throw abortError('cancelled');
       }
       broadcastStarted = true;
+      params.onPhase?.(7);
       const broadcastId = (await params.broadcast(finalized.txHex)).toLowerCase();
       if (broadcastId !== finalized.txid) {
         throw new Error('broadcast returned a different transaction id');
@@ -1530,6 +1596,7 @@ function runCoordinator(
       assembling = true;
       assembled = draft;
       params.onPhase?.(5);
+      params.onStatus?.('Assembling CoinJoin — signing our inputs…');
       const ownSignatures = assembleVerifySign(
         params,
         assembled.inputs,
@@ -1539,17 +1606,37 @@ function runCoordinator(
       ownSignatures.forEach((signature) =>
         signaturesByOutpoint.set(inputKey(signature), signature)
       );
-      await Promise.all(
-        others.map((peer) =>
-          transport.send(peer, {
-            ...messageBinding(),
-            type: 'assembled',
-            session,
-            inputs: assembled!.inputs,
-            outputs: assembled!.outputs,
-          })
-        )
+      const sendAssembled = () =>
+        Promise.all(
+          others.map((peer) =>
+            transport.send(peer, {
+              ...messageBinding(),
+              type: 'assembled',
+              session,
+              inputs: assembled!.inputs,
+              outputs: assembled!.outputs,
+            })
+          )
+        );
+      params.onStatus?.(
+        `Published assembled tx — waiting for ${others.length} signature set(s)…`
       );
+      await sendAssembled();
+      // Re-offer assembled so Tor-lagged peers still sign (live: all hit phase 6
+      // then round vanished — incomplete sig set + silent timeout).
+      if (assembledResendTimer) clearInterval(assembledResendTimer);
+      assembledResendTimer = setInterval(() => {
+        if (settled || finalizing) return;
+        void sendAssembled().catch(() => undefined);
+      }, 3_000);
+      if (sigWaitStatusTimer) clearInterval(sigWaitStatusTimer);
+      sigWaitStatusTimer = setInterval(() => {
+        if (settled || finalizing || !assembled) return;
+        params.onStatus?.(
+          `Waiting for signatures ${signedPeers.size}/${others.length} ` +
+            `(inputs ${signaturesByOutpoint.size}/${assembled.inputs.length})…`
+        );
+      }, 4_000);
       await tryFinalize();
     };
 
@@ -1673,7 +1760,15 @@ function runCoordinator(
 
     params.signal?.addEventListener('abort', onCancel, { once: true });
     const timer = setTimeout(
-      () => void fail(new Error('fusion round timed out'), true),
+      () =>
+        void fail(
+          new Error(
+            `fusion round timed out (coord: sigs ${signedPeers.size}/${others.length}, ` +
+              `assembled=${Boolean(assembled)}, finalizing=${finalizing}). ` +
+              'Usually missing peer signatures or final over Tor.'
+          ),
+          true
+        ),
       params.timeoutMs ?? DEFAULT_TIMEOUT
     );
     params.onPhase?.(2);
