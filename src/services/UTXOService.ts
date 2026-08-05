@@ -329,9 +329,12 @@ const UTXOService = {
             uniqueAddresses
           );
           addressesToFetch = partition.dirty;
-          // Wallet-wide batches only — never log single-address ticks
-          // (clean:1 / skippedClean:1 spam).
-          if (uniqueAddresses.length > 1) {
+          // Intentionally no per-tick console.info. Single-address clean ticks
+          // used to flood DevTools (total:1 clean:1). Log only large dirty batches.
+          if (
+            uniqueAddresses.length >= 20 &&
+            partition.dirty.length > 0
+          ) {
             console.info('[UTXOService] status-hash gate', {
               total: uniqueAddresses.length,
               dirty: partition.dirty.length,
