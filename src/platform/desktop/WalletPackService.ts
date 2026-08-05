@@ -19,7 +19,7 @@ import {
   decryptColdArchive,
   importColdArchiveIntoWallet,
   defaultColdArchiveFileName,
-  verifyWalletPassword,
+  resolveWalletPassword,
 } from './WalletColdExportService';
 import { logError } from '../../utils/errorHandling';
 
@@ -56,17 +56,27 @@ export type ExportWalletPackResult = {
 };
 
 /**
- * Export both files. One Save dialog for the .optn keystore; data file is
- * written beside it as <same-name>.optn-cold (no second dialog).
+ * Export both files. Password is taken from the unlocked session when possible
+ * (including empty password wallets). One Save dialog for .optn; .optn-cold
+ * is written beside it automatically.
  */
 export async function exportWalletPack(
   walletId: number,
-  password: string,
-  walletsDirPath: string | null
+  walletsDirPath: string | null,
+  passwordOverride?: string
 ): Promise<ExportWalletPackResult> {
   if (walletId <= 0) throw new Error('No active wallet');
-  if (!(await verifyWalletPassword(walletId, password))) {
-    throw new Error('Wrong wallet password.');
+
+  const password =
+    passwordOverride !== undefined
+      ? passwordOverride
+      : await resolveWalletPassword(
+          walletId,
+          'Wallet password to encrypt the data file (.optn-cold).\n' +
+            '(Skipped automatically if this wallet is already unlocked or has no password.)'
+        );
+  if (password === null) {
+    throw new Error('Export cancelled.');
   }
 
   const contents = await buildWalletFileContents(walletId);
@@ -86,7 +96,7 @@ export async function exportWalletPack(
     : suggested;
 
   const dest = await saveDialog({
-    title: 'Export wallet — save keystore (.optn)',
+    title: 'Export wallet — save keystore (.optn); data file is written next to it',
     defaultPath,
     filters: [{ name: 'OPTN Wallet keystore', extensions: ['optn'] }],
   });
@@ -120,16 +130,18 @@ export type PickedWalletPack = {
 };
 
 /**
- * Multi-select open dialog: pick .optn and/or .optn-cold together (Ctrl/Cmd-click).
+ * Multi-select open dialog: pick .optn and/or .optn-cold together (Ctrl-click).
+ * If only .optn is chosen, auto-loads sibling .optn-cold when it exists.
  */
 export async function pickWalletPackFiles(
   defaultDir: string | null
 ): Promise<PickedWalletPack | null> {
+  const { exists } = await import('@tauri-apps/plugin-fs');
   const picked = await openDialog({
     multiple: true,
     directory: false,
     title:
-      'Open wallet pack — select .optn and/or .optn-cold (hold Ctrl to pick both)',
+      'Open wallet pack — select .optn (data file is auto-loaded if beside it; Ctrl-click both if needed)',
     defaultPath: defaultDir ?? undefined,
     filters: [
       {
@@ -146,9 +158,21 @@ export async function pickWalletPackFiles(
       : [];
   if (paths.length === 0) return null;
 
-  const { keystorePath, coldPath } = splitWalletPackPaths(paths);
+  let { keystorePath, coldPath } = splitWalletPackPaths(paths);
   let keystore: WalletFileV1 | null = null;
   let coldText: string | null = null;
+
+  // Sibling auto-detect: export writes Name.optn + Name.optn-cold together.
+  if (keystorePath && !coldPath) {
+    const sibling = companionColdPath(keystorePath);
+    try {
+      if (await exists(sibling)) {
+        coldPath = sibling;
+      }
+    } catch {
+      /* exists optional */
+    }
+  }
 
   if (keystorePath) {
     const text = await invoke<string>('read_wallet_file', {

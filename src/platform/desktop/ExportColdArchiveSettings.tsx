@@ -1,5 +1,4 @@
-// Settings → Wallet & security → Wallet export pack
-// Same as menu Wallet → Export Wallet / File → Open Wallet Pack.
+// Settings → Wallet pack export (same as Wallet → Export Wallet / Open Wallet Pack)
 
 import React, { useState } from 'react';
 import { useSelector } from 'react-redux';
@@ -13,21 +12,12 @@ export const ExportColdArchiveSettings: React.FC = () => {
 
   const handleExport = async () => {
     if (!walletId || busy) return;
-    const password = window.prompt(
-      'Wallet password — exports two files:\n' +
-        '1) .optn  keystore (encrypted seed)\n' +
-        '2) .optn-cold  wallet data (encrypted history, labels, fusion, coins…)'
-    );
-    if (password === null) return;
-    if (!password) {
-      setMsg('Password required.');
-      return;
-    }
     setBusy(true);
     setMsg('Exporting…');
     try {
       const { exportWalletPack } = await import('./WalletPackService');
-      const result = await exportWalletPack(walletId, password, null);
+      // Password from unlock session / empty-password wallet / prompt only if needed.
+      const result = await exportWalletPack(walletId, null);
       setMsg(
         `Saved pack:\n` +
           `Keys: ${result.keystorePath}\n` +
@@ -47,36 +37,47 @@ export const ExportColdArchiveSettings: React.FC = () => {
     }
   };
 
-  const handleImportDataOnly = async () => {
+  const handleImport = async () => {
     if (!walletId || busy) return;
     setBusy(true);
-    setMsg('Choose .optn-cold (or both files)…');
+    setMsg('Choose .optn and/or .optn-cold…');
     try {
-      const { pickWalletPackFiles, importColdDataIntoOpenWallet } = await import(
-        './WalletPackService'
+      const {
+        pickWalletPackFiles,
+        importColdDataIntoOpenWallet,
+      } = await import('./WalletPackService');
+      const { resolveWalletPassword } = await import(
+        './WalletColdExportService'
       );
       const pack = await pickWalletPackFiles(null);
       if (!pack) {
         setMsg('Import cancelled.');
         return;
       }
-      if (!pack.coldText) {
+
+      if (pack.keystore && !pack.coldText) {
         setMsg(
-          'No .optn-cold data file selected. Hold Ctrl and select both .optn and .optn-cold, or only the data file for this open wallet.'
+          'Only keystore (.optn) found — no companion .optn-cold next to it.\n' +
+            'To import keys: File → Open Wallet Pack and enter the wallet password.\n' +
+            'To import data: export again so both files sit side by side, or select the .optn-cold file.'
         );
         return;
       }
-      const password = window.prompt(
-        'Password for the encrypted wallet data file:'
+
+      if (!pack.coldText) {
+        setMsg('No data file (.optn-cold) in the selection.');
+        return;
+      }
+
+      const password = await resolveWalletPassword(
+        walletId,
+        'Password for the encrypted data file (.optn-cold):'
       );
       if (password === null) {
         setMsg('Import cancelled.');
         return;
       }
-      if (!password) {
-        setMsg('Password required.');
-        return;
-      }
+
       const stats = await importColdDataIntoOpenWallet(
         walletId,
         pack.coldText,
@@ -87,8 +88,8 @@ export const ExportColdArchiveSettings: React.FC = () => {
           `· ${stats.labels} labels\n` +
           `· ${stats.fusionCoins} fusion depths\n` +
           `· ${stats.fusionTxids} fusion txids\n` +
-          (pack.keystore
-            ? '(Keystore in selection is ignored here — use File → Open Wallet Pack to import keys.)\n'
+          (pack.keystorePath
+            ? `(Also found keystore — use File → Open Wallet Pack to import keys into a new row.)\n`
             : '') +
           `Live balance still comes from the network.`
       );
@@ -107,26 +108,27 @@ export const ExportColdArchiveSettings: React.FC = () => {
           Wallet pack (two files)
         </p>
         <p className="text-xs wallet-muted">
-          <span className="wallet-text-strong">Export Wallet</span> always writes
-          two files next to each other:
+          Same as <span className="wallet-text-strong">Wallet → Export Wallet</span>:
         </p>
         <ul className="text-xs wallet-muted list-disc pl-4 space-y-1">
           <li>
             <code className="wallet-text-strong">.optn</code> — keystore
-            (encrypted seed; needs password to open)
+            (encrypted seed)
           </li>
           <li>
-            <code className="wallet-text-strong">.optn-cold</code> — wallet data
-            (encrypted with the same password: addresses, UTXOs/NFT-FT tokens,
-            history, labels, fusion depth; room for contacts later)
+            <code className="wallet-text-strong">.optn-cold</code> — data
+            (encrypted; written next to the keystore automatically)
           </li>
         </ul>
         <p className="text-xs wallet-muted">
-          <span className="wallet-text-strong">Import:</span> File →{' '}
-          <span className="wallet-text-strong">Open Wallet Pack…</span> — hold{' '}
-          <span className="wallet-text-strong">Ctrl</span> and select both files,
-          or pick only <code>.optn-cold</code> while this wallet is open to
-          restore data only.
+          Password is asked only if the wallet is locked and has a non-empty
+          password. Unlocked / no-password wallets export without a prompt.
+        </p>
+        <p className="text-xs wallet-muted">
+          <span className="wallet-text-strong">Import:</span> File → Open Wallet
+          Pack — pick the <code>.optn</code> (companion <code>.optn-cold</code>{' '}
+          loads automatically if it sits next to it). Or import data only with
+          the button below.
         </p>
         {msg && (
           <p
@@ -154,10 +156,10 @@ export const ExportColdArchiveSettings: React.FC = () => {
         <button
           type="button"
           disabled={busy || !walletId}
-          onClick={() => void handleImportDataOnly()}
+          onClick={() => void handleImport()}
           className="w-full rounded-xl border border-[var(--wallet-border)] py-2.5 text-sm font-semibold wallet-text-strong hover:opacity-80 disabled:opacity-50"
         >
-          {busy ? 'Working…' : 'Import data file into this wallet…'}
+          {busy ? 'Working…' : 'Import data (.optn-cold) into this wallet…'}
         </button>
       </div>
     </div>
