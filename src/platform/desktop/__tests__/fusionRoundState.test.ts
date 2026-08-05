@@ -2,11 +2,13 @@ import { beforeEach, describe, expect, it } from 'vitest';
 
 import {
   isOwnRoundKey,
+  isRetiredRoundKey,
   outpointKey,
   recordRoundKey,
   releaseOutpoints,
   reserveOutpoints,
   reservedOutpoints,
+  retireRoundKey,
 } from '../fusionRoundState';
 
 // A minimal localStorage so this state can be exercised without a DOM.
@@ -56,6 +58,13 @@ describe('P2P fusion cross-window round state', () => {
     releaseOutpoints(7, [first]);
     expect(reservedOutpoints(7).has(first)).toBe(false);
     expect(reservedOutpoints(7).has(second)).toBe(true);
+  });
+
+  it('retires finished throwaway keys so other windows stop counting ghosts', () => {
+    const dead = 'd'.repeat(64);
+    expect(isRetiredRoundKey(dead)).toBe(false);
+    retireRoundKey(dead);
+    expect(isRetiredRoundKey(dead)).toBe(true);
   });
 
   it('survives unreadable storage instead of throwing mid-round', () => {

@@ -16,7 +16,7 @@ import {
   type Event,
 } from 'nostr-tools';
 
-import { isRetiredRoundKey } from '../fusionRoundState';
+import { isRetiredRoundKey, retireRoundKey } from '../fusionRoundState';
 
 // Public ready announcement. A NIP-01 REPLACEABLE kind (10000-19999): the relay
 // keeps only the latest event per throwaway pubkey and REPLAYS it to any new
@@ -40,6 +40,13 @@ export const MAX_ANNOUNCE_DELAY_MS = 3_000;
 // often enough to stay inside the peer-active window.
 // Faster refresh during multi-wallet gather so asymmetric Tor views converge.
 const REANNOUNCE_MS = 6_000;
+/** Public re-announce period (seconds). Live gatherers republish on this cadence. */
+export const POOL_REANNOUNCE_SECONDS = REANNOUNCE_MS / 1_000;
+/**
+ * Max age of `created_at` for a "live" announcement. Slightly above one
+ * re-announce cycle so Tor lag does not drop honest peers.
+ */
+export const POOL_LIVE_ACTIVE_SECONDS = 10;
 const MAX_FUTURE_SKEW_SECONDS = 5;
 const MAX_ANNOUNCEMENT_BYTES = 2_048;
 const MAX_TIERS = 16;
@@ -100,6 +107,38 @@ export interface PoolAnnouncement {
   numInputs: number;
   at: number;
   expiresAt: number;
+}
+
+/**
+ * Decide whether a pool announcement is a live gatherer for THIS attempt.
+ *
+ * Ghost overcount (user: 4 wallets → "7 live peers") comes from throwaway keys
+ * that abandoned Start left on the relay. Those stop re-announcing; honest
+ * wallets republish every {@link POOL_REANNOUNCE_SECONDS}. After one cycle we
+ * only keep keys whose `at` is at/after this gather started.
+ */
+export function isLivePoolAnnouncement(
+  peer: Pick<PoolAnnouncement, 'pubkey' | 'at' | 'expiresAt'>,
+  opts: {
+    nowSeconds: number;
+    gatherStartSeconds: number;
+    selfPubkey: string;
+    /** Own abandoned keys + globally retired keys. */
+    isGhostKey: (pubkey: string) => boolean;
+  }
+): boolean {
+  if (peer.pubkey === opts.selfPubkey) return true;
+  if (opts.isGhostKey(peer.pubkey)) return false;
+  if (peer.expiresAt < opts.nowSeconds) return false;
+  if (peer.at < opts.nowSeconds - POOL_LIVE_ACTIVE_SECONDS) return false;
+
+  const elapsed = opts.nowSeconds - opts.gatherStartSeconds;
+  // After one re-announce + small lag: require proof of life during THIS gather.
+  if (elapsed >= POOL_REANNOUNCE_SECONDS + 2) {
+    return peer.at >= opts.gatherStartSeconds - 1;
+  }
+  // Early window: only near-now announcements (not 14–24s-old ghosts).
+  return peer.at >= opts.gatherStartSeconds - POOL_REANNOUNCE_SECONDS;
 }
 
 export interface BuildPoolAnnouncementOptions {
@@ -387,17 +426,27 @@ export function joinPool(
   let stopped = false;
   let announceTimer: ReturnType<typeof setTimeout> | null = null;
   let repeatTimer: ReturnType<typeof setInterval> | null = null;
+  // Pull only near-live replaceables. A 180s `since` rehydrated every abandoned
+  // Start key from the last 3 minutes and inflated the gather count.
+  const subscribeSince =
+    Math.floor(Date.now() / 1000) - POOL_LIVE_ACTIVE_SECONDS * 2;
   const filter = {
     kinds: [POOL_ANNOUNCE_KIND],
     '#t': [poolTag(options.network)],
-    since: Math.floor(Date.now() / 1000) - POOL_PEER_TTL_SECONDS,
+    since: subscribeSince,
   };
   const emitPeers = () => {
     const now = Math.floor(Date.now() / 1000);
-    // Drop expired / retired ghosts (failed Start clicks left throwaway keys
-    // on relays → "7 live peers" with only 4 wallets).
+    // Drop expired / retired / stale ghosts so callers that REPLACE their list
+    // from this emit never re-accumulate abandoned Start keys.
     for (const [pubkey, ann] of peers) {
-      if (ann.expiresAt < now || isRetiredRoundKey(pubkey)) peers.delete(pubkey);
+      if (
+        ann.expiresAt < now ||
+        isRetiredRoundKey(pubkey) ||
+        ann.at < now - POOL_LIVE_ACTIVE_SECONDS
+      ) {
+        peers.delete(pubkey);
+      }
     }
     options.onPeer([...peers.values()]);
   };
@@ -458,6 +507,8 @@ export function joinPool(
     Math.floor(Math.random() * MAX_ANNOUNCE_DELAY_MS)
   );
   repeatTimer = setInterval(() => {
+    // Prune stale/retired keys even when no new events arrive (ghosts age out).
+    emitPeers();
     void announce().catch((error: unknown) =>
       options.onError?.(
         error instanceof Error ? error : new Error(String(error))
@@ -478,6 +529,9 @@ export function joinPool(
       stopped = true;
       if (announceTimer) clearTimeout(announceTimer);
       if (repeatTimer) clearInterval(repeatTimer);
+      // Shared ghost list first so every window's next filter pass drops us
+      // even if the expired replaceable is slow over Tor.
+      retireRoundKey(options.round.pubkey);
       const evt = buildPoolAnnouncement(options.round, {
         network: options.network,
         epoch: options.epoch,
