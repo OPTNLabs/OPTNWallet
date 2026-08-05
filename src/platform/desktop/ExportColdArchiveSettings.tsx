@@ -19,13 +19,19 @@ export const ExportColdArchiveSettings: React.FC = () => {
       const { exportAndDownloadColdArchive } = await import(
         './WalletColdExportService'
       );
-      const archive = await exportAndDownloadColdArchive(walletId);
-      setMsg(
-        `Exported: ${archive.utxos.length} coins, ${archive.transactions.length} txs, ` +
-          `${archive.labels.length} labels, ${archive.addresses.length} addresses. ` +
-          `No seed or private keys included.`
-      );
-      setTimeout(() => setMsg(''), 8000);
+      const { archive, savedPath } = await exportAndDownloadColdArchive(walletId);
+      if (savedPath) {
+        setMsg(
+          `Saved to:\n${savedPath}\n\n` +
+            `${archive.utxos.length} coins · ${archive.transactions.length} txs · ` +
+            `${archive.labels.length} labels · ${archive.addresses.length} addresses. ` +
+            `No seed or private keys.`
+        );
+      } else {
+        setMsg(
+          'No file was saved (Save dialog cancelled). Try again and choose Desktop or Documents.'
+        );
+      }
     } catch (err) {
       logError('ExportColdArchiveSettings.export', err, { walletId });
       setMsg(err instanceof Error ? err.message : 'Export failed.');
@@ -60,12 +66,16 @@ export const ExportColdArchiveSettings: React.FC = () => {
         </ul>
         {msg && (
           <p
-            className={`text-xs ${
+            className={`text-xs whitespace-pre-wrap break-all ${
               busy
                 ? 'wallet-muted'
-                : msg.startsWith('Exported')
+                : msg.startsWith('Saved to:')
                   ? 'text-green-400'
-                  : 'text-red-400'
+                  : msg.startsWith('Export cancelled')
+                    ? 'wallet-muted'
+                    : msg.includes('failed') || msg.includes('Error')
+                      ? 'text-red-400'
+                      : 'wallet-muted'
             }`}
           >
             {msg}
@@ -77,7 +87,7 @@ export const ExportColdArchiveSettings: React.FC = () => {
           onClick={() => void handleExport()}
           className="w-full rounded-xl border border-[var(--wallet-border)] py-2.5 text-sm font-semibold wallet-text-strong hover:opacity-80 disabled:opacity-50"
         >
-          {busy ? 'Exporting…' : 'Download cold archive (JSON)'}
+          {busy ? 'Exporting…' : 'Save cold archive (choose folder)'}
         </button>
       </div>
     </div>
