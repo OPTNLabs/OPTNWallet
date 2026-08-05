@@ -583,8 +583,16 @@ export interface RoundParams {
   jitterMs?: [number, number];
   /** Mix order for onion-wrapped outputs (sorted by pubkey). */
   mixOrder?: string[];
-  /** Enable onion mix-net for output privacy. Default: true. */
-  onionEnabled?: boolean;
+}
+
+/**
+ * Onion mix-net is essential privacy for P2P rounds — not a toggle.
+ * Hard rule: ≥2 peelers (i.e. ≥3 participants) always use onion. Exactly 2
+ * participants only have one peeler, which cannot mix (self-addressed Nostr
+ * gift-wraps do not deliver), so those rounds use direct throwaway outputs.
+ */
+export function mustUseOnionMix(mixOrderLength: number): boolean {
+  return mixOrderLength >= 2;
 }
 
 /** Bound silent waits — caps from fusionTiming (server protocol.py). */
@@ -1103,9 +1111,7 @@ function runParticipant(
       // also provides no mix privacy, so direct throwaway outputs are correct.
       //
       // Note mixOrder excludes the coordinator — it assembles, it does not peel.
-      const onionUseful =
-        params.onionEnabled !== false && mixOrder.length >= 2;
-      if (onionUseful) {
+      if (mustUseOnionMix(mixOrder.length)) {
         if (!isEccAvailable()) {
           throw new Error(
             'onion mix-net enabled but secp256k1 is unavailable in this environment'
@@ -1235,10 +1241,8 @@ function runCoordinator(
     const credentialedInputs = new Set<string>(
       params.myContribution.inputs.map(inputKey)
     );
-    // Onion only when there are ≥2 peelers (3+ participants). Same rule as the
-    // participant path — 2-party rounds use direct throwaway outputs.
-    const useOnionForOutputs =
-      params.onionEnabled !== false && mixOrder.length >= 2;
+    // Onion is mandatory whenever the mix has ≥2 peelers (hardcoded, not a flag).
+    const useOnionForOutputs = mustUseOnionMix(mixOrder.length);
     // Direct mode (v1.7.0): pre-load coordinator outputs so the pool is never
     // empty while peers register. Onion mode starts empty and fills on reveal.
     if (

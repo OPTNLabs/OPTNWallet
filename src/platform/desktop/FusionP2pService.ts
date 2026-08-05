@@ -889,10 +889,8 @@ export async function runP2pFusion(
         feerate: P2P_FEERATE,
         myContribution: { inputs: myInputs, outputs: myOutputs },
         keysByPubkey,
-        // Output onion is mandatory for P2P privacy among peers (peel + shuffle).
-        // Never disable in production — partial unlinkability (throwaway Nostr
-        // authors alone) is not a substitute.
-        onionEnabled: true,
+        // Onion is hardcoded essential when ≥3 peers (see mustUseOnionMix) —
+        // not an onionEnabled true/false option.
         // ≤ server T_START_CLOSE_BLAME; tight jitter so inject fits comps window.
         timeoutMs: P2P_ROUND_TIMEOUT_MS,
         jitterMs: P2P_COMPONENT_JITTER_MS,
