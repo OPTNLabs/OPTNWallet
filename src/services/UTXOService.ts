@@ -431,8 +431,12 @@ const UTXOService = {
 
       await manager.replaceWalletAddressUTXOs(walletId, formattedByAddress);
 
-      // Option A hybrid: push listunspent into ledger_txo/txi, then project UTXOs
-      // from the ledger so history and coins share one durable model.
+      // Option A (docs/wallet-ledger-sync-design.md):
+      //   listunspent (this pass) → applyAddressUtxoSnapshot → rebuild SQL cache.
+      // Divergence rule: one write path. Redux for THIS pass returns the same
+      // listunspent merge we just applied — do NOT re-read a partial ledger
+      // projection and selectively overwrite non-empty addresses only (that
+      // mixed two bosses and produced fake balances).
       try {
         const { ensureDesktopLedgerTables } = await import(
           '../platform/desktop/desktopSchema'
@@ -455,20 +459,8 @@ const UTXOService = {
             })),
           });
         }
-        const projected = await rebuildUtxosFromLedger(walletId);
-        if (projected > 0) {
-          const fromDb = await manager.fetchUTXOsFromDatabase(
-            uniqueAddresses.map((address) => ({ address })),
-            walletId
-          );
-          for (const address of uniqueAddresses) {
-            const merged = [
-              ...(fromDb.utxosMap[address] ?? []),
-              ...(fromDb.cashTokenUtxosMap[address] ?? []),
-            ];
-            if (merged.length > 0) formattedByAddress[address] = merged;
-          }
-        }
+        // Durable SQL UTXO cache only — next open paints this, then network.
+        await rebuildUtxosFromLedger(walletId);
       } catch (ledgerError) {
         // Ledger is additive; classic UTXO path already wrote replaceWalletAddressUTXOs
         logError('UTXOService.fetchAndStoreUTXOsMany.ledger', ledgerError, {

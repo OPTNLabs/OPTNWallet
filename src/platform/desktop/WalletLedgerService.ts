@@ -116,9 +116,15 @@ export type AddressUtxoSnapshot = {
 
 /**
  * Apply a listunspent snapshot for one address into the ledger.
+ * Design (Option A): network listunspent is the authority for this address's
+ * unspent set for this pass.
  * - Registers each unspent as ledger_txo
- * - Marks local coins for this address that vanished as spent (synthetic txi)
- *   so rebuildUtxosFromLedger matches the network set for this address.
+ * - Marks local coins for this address that vanished as spent (synthetic
+ *   `external:` txi) so rebuildUtxosFromLedger matches the network set
+ * - CRITICAL: if a prior pass wrote `external:` spends and listunspent now
+ *   shows those outpoints again, CLEAR those synthetic txi rows. Without
+ *   this, coins stay "spent" in the ledger forever → fake low / missing
+ *   balance after a bad empty snapshot or race.
  */
 export async function applyAddressUtxoSnapshot(
   walletId: number,
@@ -187,6 +193,20 @@ export async function applyAddressUtxoSnapshot(
       ]);
     }
     insertTxo.free();
+
+    // Network says these outpoints are unspent again — drop synthetic external
+    // spends only (never delete real spend txi from wallet-known txs).
+    const clearExternalSpend = db.prepare(`
+      DELETE FROM ledger_txi
+      WHERE wallet_id = ?
+        AND prevout_hash = ?
+        AND prevout_n = ?
+        AND spent_by_tx LIKE 'external:%'
+    `);
+    for (const u of utxos) {
+      clearExternalSpend.run([walletId, u.tx_hash, u.tx_pos]);
+    }
+    clearExternalSpend.free();
 
     // External spend (or spent in another wallet copy): mark gone outpoints spent
     const insertTxi = db.prepare(`
