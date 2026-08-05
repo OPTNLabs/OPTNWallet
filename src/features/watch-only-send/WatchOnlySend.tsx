@@ -11,7 +11,7 @@ import { useEffect, useMemo, useRef, useState, type FC } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
 import { useSelector } from 'react-redux';
 
-import { cashAddressToLockingBytecode } from '@bitauth/libauth';
+import { cashAddressToLockingBytecode, hexToBin } from '@bitauth/libauth';
 import { QRCodeSVG } from 'qrcode.react';
 
 import WalletScreen from '../../components/ui/WalletScreen';
@@ -38,6 +38,13 @@ import {
   type WatchOnlyProposal,
 } from '../../services/psbt/watchOnlySend';
 import { inspectImportedPsbt } from '../../services/psbt/watchOnlyImport';
+import { decodePsbt } from '../../services/psbt/psbtBch';
+import {
+  cosignerStatuses,
+  mergePsbts,
+  parseMultisigRedeemScript,
+  type CosignerStatus,
+} from '../../services/psbt/psbtMultisig';
 import {
   encodePsbtToUrFrames,
   UrPsbtScanner,
@@ -114,7 +121,18 @@ export const WatchOnlySend: FC = () => {
 
   const [importText, setImportText] = useState('');
   const [scannerOpen, setScannerOpen] = useState(false);
-  const [verdict, setVerdict] = useState<ReturnType<typeof inspectImportedPsbt> | null>(null);
+  /**
+   * The accumulated PSBT: the base proposal merged with every verified return
+   * from the signer. Multisig flows walk it around the room until each input
+   * has its required signatures.
+   */
+  const [mergedPsbt, setMergedPsbt] = useState<Uint8Array | null>(null);
+  /** Which PSBTs from the last import failed to merge, and why. */
+  const [importErrors, setImportErrors] = useState<string[]>([]);
+  const verdict = useMemo<ReturnType<typeof inspectImportedPsbt> | null>(() => {
+    if (!mergedPsbt || !proposalState) return null;
+    return inspectImportedPsbt(mergedPsbt, proposalState.proposal);
+  }, [mergedPsbt, proposalState]);
   const [broadcastTxid, setBroadcastTxid] = useState('');
 
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -177,6 +195,40 @@ export const WatchOnlySend: FC = () => {
       ).map((card) => [card.outpoint, card])
     );
   }, [inputs, tokenMetadata, currentNetwork]);
+
+  /**
+   * Per-input cosigner signature status, read entirely from the accumulated
+   * PSBT's public material. Empty when the flow is single-signer.
+   */
+  const cosignerStatus = useMemo<CosignerStatus[][]>(() => {
+    if (!mergedPsbt) return [];
+    try {
+      return cosignerStatuses(decodePsbt(mergedPsbt));
+    } catch {
+      return [];
+    }
+  }, [mergedPsbt]);
+
+  /** Multisig inputs of the proposal (index, required-of-total, keys). */
+  const multisigInputs = useMemo(() => {
+    if (!proposalState) return [];
+    const summaries: {
+      index: number;
+      required: number;
+      total: number;
+    }[] = [];
+    for (const [index, input] of proposalState.proposal.inputs.entries()) {
+      if (!input.redeemScriptHex) continue;
+      const policy = parseMultisigRedeemScript(hexToBin(input.redeemScriptHex));
+      if (!policy) continue;
+      summaries.push({
+        index,
+        required: input.requiredSignatures ?? policy.requiredSignatures,
+        total: policy.totalSignatures,
+      });
+    }
+    return summaries;
+  }, [proposalState]);
 
   useEffect(() => {
     let cancelled = false;
@@ -304,7 +356,8 @@ export const WatchOnlySend: FC = () => {
     setError('');
     setProposalState(null);
     setFrames(null);
-    setVerdict(null);
+    setMergedPsbt(null);
+    setImportErrors([]);
     setBroadcastTxid('');
     if (selectedInputs.length === 0) {
       setError('Select at least one coin (coin control).');
@@ -364,9 +417,43 @@ export const WatchOnlySend: FC = () => {
     }
   };
 
-  const handleImportText = () => {
-    setVerdict(null);
+  /**
+   * Merge one returned PSBT into the accumulated one. The merge binds the
+   * return to the approved unsigned transaction, verifies every signature it
+   * carries, and imports only what is valid — so repeated trips (2-of-3
+   * signing across multiple devices, or the same device more than once) keep
+   * building toward the threshold. A return that conflicts with the approved
+   * transaction is refused and reported, never silently replacing it.
+   */
+  const importAndMerge = (psbt: Uint8Array) => {
     setBroadcastTxid('');
+    if (!proposalState) {
+      setError('Build the unsigned transaction first.');
+      return;
+    }
+    try {
+      const base = mergedPsbt ?? proposalState.psbtBytes;
+      const outcome = mergePsbts([base, psbt]);
+      if (outcome.results.some((result) => result.combined)) {
+        setMergedPsbt(outcome.merged);
+        setImportErrors(
+          outcome.results
+            .filter((result) => !result.combined)
+            .map((result) => `PSBT ${result.index}: ${result.error}`)
+        );
+      } else {
+        setImportErrors(
+          outcome.results.map(
+            (result) => `PSBT ${result.index}: ${result.error}`
+          )
+        );
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Could not merge the signed transaction.');
+    }
+  };
+
+  const handleImportText = () => {
     if (!proposalState) {
       setError('Build the unsigned transaction first.');
       return;
@@ -388,7 +475,7 @@ export const WatchOnlySend: FC = () => {
         );
         return;
       }
-      setVerdict(inspectImportedPsbt(psbt, proposalState.proposal));
+      importAndMerge(psbt);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Could not read the signed transaction.');
     }
@@ -403,7 +490,7 @@ export const WatchOnlySend: FC = () => {
       const scanner = new UrPsbtScanner();
       const progress = scanner.receive(text);
       if (progress.complete && progress.psbt) {
-        setVerdict(inspectImportedPsbt(progress.psbt, proposalState.proposal));
+        importAndMerge(progress.psbt);
         setScannerOpen(false);
       } else {
         setImportText((prev) => (prev ? `${prev}\n` : '') + text.trim());
@@ -656,7 +743,51 @@ export const WatchOnlySend: FC = () => {
                 </section>
               )}
 
-              {/* Step 4: verification verdict */}
+              {/* Step 4: cosigner signatures (multisig only) */}
+              {multisigInputs.length > 0 && cosignerStatus.length > 0 && (
+                <section className="wallet-card space-y-2 p-4">
+                  <p className="text-sm font-semibold wallet-text-strong">
+                    Cosigner signatures
+                  </p>
+                  {multisigInputs.map((summary) => {
+                    const statuses = cosignerStatus[summary.index] ?? [];
+                    const signed = statuses.filter((status) => status.signed).length;
+                    return (
+                      <div key={summary.index} className="space-y-1.5">
+                        <p className="text-xs wallet-muted">
+                          Input {summary.index}: {signed} of {summary.required}{' '}
+                          collected · policy {summary.required} of {summary.total}
+                        </p>
+                        <div className="flex flex-wrap gap-1.5">
+                          {statuses.map((status) => (
+                            <span
+                              key={status.publicKeyHex}
+                              className={`rounded px-1.5 py-0.5 text-[10px] font-mono ${
+                                status.signed
+                                  ? 'border border-emerald-500/40 text-emerald-400'
+                                  : 'border border-[var(--wallet-border)] wallet-muted'
+                              }`}
+                            >
+                              {status.signed ? '✓' : '○'}{' '}
+                              {status.fingerprintHex.slice(0, 8).toUpperCase()}{' '}
+                              {status.derivationPath}
+                            </span>
+                          ))}
+                        </div>
+                      </div>
+                    );
+                  })}
+                  {importErrors.length > 0 && (
+                    <ul className="space-y-1 text-[11px] text-red-400">
+                      {importErrors.map((message) => (
+                        <li key={message}>{message}</li>
+                      ))}
+                    </ul>
+                  )}
+                </section>
+              )}
+
+              {/* Step 5: verification verdict */}
               {verdict && (
                 <section
                   className={`wallet-card space-y-2 p-4 ${

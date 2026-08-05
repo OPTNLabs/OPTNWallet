@@ -42,6 +42,23 @@ export interface WatchOnlyInputSpec {
   /** BIP44 branch: 0 = receive, 1 = change. */
   branchIndex: 0 | 1;
   addressIndex: number;
+  /**
+   * Present on multisig (P2SH) inputs: the `OP_m <keys> OP_n OP_CHECKMULTISIG`
+   * redeem script whose hash160 is the locking bytecode above.
+   */
+  redeemScriptHex?: string;
+  /** Signatures required for this input: 1 for P2PKH, m for multisig. */
+  requiredSignatures?: number;
+  /**
+   * Every cosigner key that participates in this input's redeem script, so
+   * the PSBT tells the signer about all of them (one BIP32 derivation each).
+   */
+  cosignerDerivations?: {
+    publicKeyHex: string;
+    masterFingerprintHex: string;
+    /** Full path from the master key, e.g. m/44'/145'/0'/0/0. */
+    derivationPath: string;
+  }[];
 }
 
 export interface WatchOnlyBuildParams {
@@ -55,6 +72,13 @@ export interface WatchOnlyBuildParams {
   accountPath: string;
   /** 4-byte master fingerprint, from the signing device. */
   masterFingerprint: Uint8Array | null;
+  /**
+   * Multisig change output: when the wallet spends P2SH inputs, the change
+   * must go back to the same policy, with one derivation per cosigner key so
+   * every signer recognises it.
+   */
+  changeRedeemScriptHex?: string;
+  changeDerivations?: WatchOnlyInputSpec['cosignerDerivations'];
 }
 
 export interface WatchOnlyBuildOutput {
@@ -128,18 +152,54 @@ function pathToDerivation(accountPath: string, branch: 0 | 1, index: number): nu
   ];
 }
 
+/** `m/44'/145'/0'/0/0` (cosigner paths) -> hardened-OR-ed level array. */
+export function parseBip32PathString(path: string): number[] {
+  const match = /^m\/(.+)$/.exec(path.trim());
+  if (!match) {
+    throw new Error(`Derivation path must start with m/ (got "${path}").`);
+  }
+  return match[1].split('/').map((level) => {
+    const hardened = level.endsWith("'");
+    const raw = hardened ? level.slice(0, -1) : level;
+    const value = Number(raw);
+    if (!Number.isInteger(value) || value < 0 || value > 0x7fffffff) {
+      throw new Error(`Invalid derivation path level "${level}".`);
+    }
+    return hardened ? value | HARDENED_INDEX : value;
+  });
+}
+
 function inputSpecToPsbt(
   input: WatchOnlyInputSpec,
   accountPath: string
 ): PsbtInputSpec {
+  const derivations = input.cosignerDerivations?.map((cosigner) => {
+    const masterFingerprint = hexToBin(cosigner.masterFingerprintHex);
+    if (masterFingerprint.length !== 4) {
+      throw new Error(
+        `Cosigner master fingerprint must be 4 bytes (got "${cosigner.masterFingerprintHex}").`
+      );
+    }
+    return {
+      publicKey: hexToBin(cosigner.publicKeyHex),
+      masterFingerprint,
+      derivationPath: parseBip32PathString(cosigner.derivationPath),
+    };
+  });
   return {
     txid: input.txid,
     vout: input.vout,
     satoshis: input.satoshis,
     lockingBytecode: hexToBin(input.lockingBytecodeHex),
-    publicKey: hexToBin(input.publicKeyHex),
+    publicKey: derivations
+      ? new Uint8Array()
+      : hexToBin(input.publicKeyHex),
     masterFingerprint: new Uint8Array(4),
     derivationPath: pathToDerivation(accountPath, input.branchIndex, input.addressIndex),
+    redeemScript: input.redeemScriptHex
+      ? hexToBin(input.redeemScriptHex)
+      : undefined,
+    derivations,
     sequence: 0xffffffff,
   };
 }
@@ -215,10 +275,30 @@ export function buildWatchOnlyPsbt(
     ...inputSpecToPsbt(input, params.accountPath),
     masterFingerprint: Uint8Array.from(params.masterFingerprint!),
   }));
-  const psbtOutputs: PsbtOutputSpec[] = outputs.map((output) => ({
-    lockingBytecode: output.bytecode,
-    satoshis: output.satoshis,
-  }));
+  const changeOutput: PsbtOutputSpec = {
+    lockingBytecode: changeBytecode,
+    satoshis: changeSats,
+  };
+  if (params.changeRedeemScriptHex && params.changeDerivations) {
+    const changeDerivations = params.changeDerivations.map((cosigner) => {
+      const fingerprint = hexToBin(cosigner.masterFingerprintHex);
+      if (fingerprint.length !== 4) {
+        throw new Error(
+          `Cosigner master fingerprint must be 4 bytes (got "${cosigner.masterFingerprintHex}").`
+        );
+      }
+      return {
+        publicKey: hexToBin(cosigner.publicKeyHex),
+        masterFingerprint: fingerprint,
+        derivationPath: parseBip32PathString(cosigner.derivationPath),
+      };
+    });
+    changeOutput.redeemScript = hexToBin(params.changeRedeemScriptHex);
+    changeOutput.derivations = changeDerivations;
+  }
+  const psbtOutputs: PsbtOutputSpec[] = outputs.map((output) =>
+    output.isChange ? changeOutput : { lockingBytecode: output.bytecode, satoshis: output.satoshis }
+  );
   const psbtBytes = encodeUnsignedPsbt(
     psbtInputs,
     psbtOutputs,
