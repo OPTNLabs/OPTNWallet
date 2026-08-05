@@ -482,8 +482,12 @@ const UTXOService = {
       const formattedByAddress: Record<string, UTXO[]> = {};
 
       for (const address of uniqueAddresses) {
-        const fetchedUTXOs = utxosByAddress[address];
-        if (!fetchedUTXOs) {
+        // Missing key = RPC failure (not empty). Empty array = server said 0 coins.
+        const hasNetworkResult = Object.prototype.hasOwnProperty.call(
+          utxosByAddress,
+          address
+        );
+        if (!hasNetworkResult) {
           formattedByAddress[address] = [
             ...(existingSnapshot.utxosMap[address] ?? []),
             ...(existingSnapshot.cashTokenUtxosMap[address] ?? []),
@@ -493,10 +497,30 @@ const UTXOService = {
           continue;
         }
 
+        const fetchedUTXOs = utxosByAddress[address] ?? [];
         const previousUtxos = [
           ...(existingSnapshot.utxosMap[address] ?? []),
           ...(existingSnapshot.cashTokenUtxosMap[address] ?? []),
         ];
+
+        // Refuse empty listunspent over non-empty prior without force.
+        // Background refresh / block tip must not wipe coins on a flaky empty
+        // response (Manual Sync uses force:true and may legitimately clear).
+        if (
+          fetchedUTXOs.length === 0 &&
+          previousUtxos.length > 0 &&
+          options.force !== true
+        ) {
+          console.info(
+            '[UTXOService] ignore empty listunspent over non-empty prior',
+            { walletId, address, prior: previousUtxos.length }
+          );
+          formattedByAddress[address] = previousUtxos.filter(
+            (utxo) => !reservedOutpoints.has(outpointKey(utxo))
+          );
+          continue;
+        }
+
         const mergedUTXOs = mergeKnownTokenData(
           fetchedUTXOs,
           previousUtxos
@@ -553,12 +577,18 @@ const UTXOService = {
         } = await import('../platform/desktop/WalletLedgerService');
         await ensureDesktopLedgerTables();
 
-        // Apply listunspent only for addresses we got a network result for.
-        // Failed RPC keeps prior snapshot and must not write empty→external.
-        const applyAddrs =
-          Object.keys(utxosByAddress).length > 0
-            ? Object.keys(utxosByAddress)
-            : uniqueAddresses;
+        // Apply only addresses with a successful network result that we did
+        // not refuse (empty-over-nonempty without force stays off this set).
+        const applyAddrs = Object.keys(utxosByAddress).filter((address) => {
+          const net = utxosByAddress[address] ?? [];
+          const prior =
+            (existingSnapshot.utxosMap[address]?.length ?? 0) +
+            (existingSnapshot.cashTokenUtxosMap[address]?.length ?? 0);
+          if (net.length === 0 && prior > 0 && options.force !== true) {
+            return false;
+          }
+          return true;
+        });
         for (const address of applyAddrs) {
           const list = formattedByAddress[address] ?? [];
           await applyAddressUtxoSnapshot(walletId, {

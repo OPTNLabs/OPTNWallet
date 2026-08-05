@@ -268,6 +268,10 @@ const ElectrumService = {
     // many ElectrumX/Fulcrum nodes (verified live: it returns {} or "Invalid
     // address"), which forced a serial fallback per address. Converting to
     // scripthash upfront is valid on every server and batches cleanly.
+    //
+    // Wallet-wide batches must not serially await per-address inflight singles
+    // (subscription storm). Only join inflight for small batches.
+    const joinInflight = uniqueAddresses.length <= 4;
     for (const address of uniqueAddresses) {
       const cached = cacheByAddr.get(address);
       if (cached && now - cached.ts < UTXO_TTL_MS) {
@@ -275,10 +279,16 @@ const ElectrumService = {
         continue;
       }
 
-      const inflight = inflightByAddr.get(address);
-      if (inflight) {
-        results[address] = await inflight;
-        continue;
+      if (joinInflight) {
+        const inflight = inflightByAddr.get(address);
+        if (inflight) {
+          try {
+            results[address] = await inflight;
+          } catch {
+            // Failed listunspent — leave key absent (keep prior coins).
+          }
+          continue;
+        }
       }
 
       let scriptHash: string | null = null;
@@ -324,6 +334,8 @@ const ElectrumService = {
           const address = pending[index];
           if (response instanceof Error) {
             logError('ElectrumService.getUTXOsMany', response, { address });
+            // Do NOT write results[address] = [] — empty means "server said
+            // zero coins". Missing key means "RPC failed; keep prior coins".
             return;
           }
 
@@ -349,11 +361,20 @@ const ElectrumService = {
       return results;
     })();
 
+    // CRITICAL: never resolve missing keys to []. That poisoned later joiners
+    // into applying empty listunspent → synthetic external: spends → balance
+    // looked correct after Manual Sync then collapsed minutes later on the
+    // next block / subscription refresh (wallet 5).
     for (const address of pending) {
-      inflightByAddr.set(
-        address,
-        batchPromise.then((resolved) => resolved[address] ?? [])
-      );
+      const p = batchPromise.then((resolved) => {
+        if (Object.prototype.hasOwnProperty.call(resolved, address)) {
+          return resolved[address] as UTXO[];
+        }
+        throw new Error('listunspent failed for address (no result)');
+      });
+      // Prevent unhandled rejection when no concurrent joiner awaits.
+      void p.catch(() => undefined);
+      inflightByAddr.set(address, p);
     }
 
     await batchPromise;
