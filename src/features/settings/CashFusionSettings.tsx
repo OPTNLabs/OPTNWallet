@@ -38,8 +38,10 @@ import { P2pFusionTransportPreview } from '../nostr/P2pFusionTransportPreview';
 import { AutoFusionControls } from './AutoFusionControls';
 import {
   getFusionActivity,
+  getFusionLastResult,
   isFusionRunning,
   reconcileIdleFusionState,
+  reportFusionProgress,
   startFusionRound,
   subscribeFusionActivity,
   type FusionActivity,
@@ -193,7 +195,37 @@ export const CashFusionSettings: React.FC<{ variant?: 'card' | 'servers' }> = ({
   }, [refreshTor]);
 
   useEffect(
-    () => subscribeFusionActivity(walletId, setFusionActivity),
+    () =>
+      subscribeFusionActivity(walletId, (activity) => {
+        setFusionActivity(activity);
+        // Live auto (and any) round: drive the same stepper + status as manual.
+        if (activity && isFusionRunning(walletId)) {
+          if (activity.mode === 'p2p') {
+            setP2pState('fusing');
+            if (typeof activity.phase === 'number') setP2pPhase(activity.phase);
+            if (activity.status) setP2pMsg(activity.status);
+          } else if (activity.mode === 'server') {
+            setFuseState('fusing');
+            if (activity.status) setFuseMsg(activity.status);
+          }
+          return;
+        }
+        // Round ended — surface last auto/manual result on the panel.
+        const last = getFusionLastResult(walletId);
+        if (!last || last.walletId !== walletId) return;
+        if (last.mode === 'p2p') {
+          setP2pState(last.ok ? 'done' : 'fail');
+          setP2pMsg(
+            last.trigger === 'auto' ? `Auto: ${last.message}` : last.message
+          );
+          if (!last.ok) setP2pPhase(0);
+        } else {
+          setFuseState(last.ok ? 'done' : 'fail');
+          setFuseMsg(
+            last.trigger === 'auto' ? `Auto: ${last.message}` : last.message
+          );
+        }
+      }),
     [walletId]
   );
 
@@ -209,8 +241,17 @@ export const CashFusionSettings: React.FC<{ variant?: 'card' | 'servers' }> = ({
         setP2pState('idle');
         setP2pPhase(0);
       }
+      const last = getFusionLastResult(walletId);
+      if (last && !isFusionRunning(walletId)) {
+        if (last.mode === 'p2p' && p2pState === 'idle' && !p2pMsg) {
+          setP2pMsg(
+            last.trigger === 'auto' ? `Auto: ${last.message}` : last.message
+          );
+          setP2pState(last.ok ? 'done' : 'fail');
+        }
+      }
     });
-  }, [walletId, fuseState, p2pState]);
+  }, [walletId, fuseState, p2pState, p2pMsg]);
 
   // The SOCKS proxy to actually route through, or undefined for a direct
   // connection. Direct is only valid for a localhost server (Electron Cash's
@@ -317,7 +358,7 @@ export const CashFusionSettings: React.FC<{ variant?: 'card' | 'servers' }> = ({
         runners: {
           runServer: () =>
             Promise.reject(new Error('Server runner invoked in P2P mode')),
-          runP2p: async (coins, signal) => {
+          runP2p: async (coins, signal, progress) => {
             const tor = await currentTorConfig('nostr-relay');
             return runP2pFusion({
               walletId,
@@ -325,8 +366,16 @@ export const CashFusionSettings: React.FC<{ variant?: 'card' | 'servers' }> = ({
               utxos: coins,
               relays: nostrRelays,
               tor: tor ?? null,
-              onStatus: (m) => setP2pMsg(m),
-              onPhase: (p) => setP2pPhase(p),
+              onStatus: (m) => {
+                setP2pMsg(m);
+                reportFusionProgress(walletId, { status: m });
+                progress?.onStatus?.(m);
+              },
+              onPhase: (p) => {
+                setP2pPhase(p);
+                reportFusionProgress(walletId, { phase: p });
+                progress?.onPhase?.(p);
+              },
               signal,
             });
           },
