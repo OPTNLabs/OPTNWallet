@@ -30,6 +30,7 @@ import {
   getCachedPasswordSnapshot,
   clearCachedPassword,
   isCached,
+  markWatchOnlySession,
 } from './WalletKeyCache';
 import {
   unlock as unlockGatePassphrase,
@@ -37,6 +38,7 @@ import {
 } from './OptnKeyManager';
 import { markSpendAuthFromUnlock } from './DeviceIntegrityService';
 import { SECRET_ENC_PREFIX } from './SecretCryptoService';
+import { WATCH_ONLY_WALLET_TYPE } from './onboarding/watchOnlyWallet';
 import { getBchAccountPath } from '../../services/HdWalletService';
 import {
   autoSaveWalletFile,
@@ -602,6 +604,35 @@ export async function openWalletWithPassword(
   } catch (err) {
     console.warn(
       '[DesktopWalletManager] cross-network purge on open failed:',
+      err
+    );
+  }
+  return info;
+}
+
+/**
+ * Open a watch-only wallet. There is no password and no KDF salt — nothing to
+ * derive, nothing to verify. The wallet stays open by marking its session in
+ * WalletKeyCache, which is what DesktopAppShell's credential invariant checks
+ * for every open wallet. Refuses anything that is not a watch-only row, so a
+ * password-protected wallet can never be opened through this door.
+ */
+export async function openWatchOnlyWallet(
+  walletId: number
+): Promise<WalletMetadata | null> {
+  const manager = WalletManager();
+  const info = await manager.getWalletMetadata(walletId);
+  if (!info || info.walletType !== WATCH_ONLY_WALLET_TYPE) return null;
+
+  markWatchOnlySession(walletId);
+
+  const net =
+    info.networkType === Network.MAINNET ? Network.MAINNET : Network.CHIPNET;
+  try {
+    await purgeCrossNetworkData(walletId, net);
+  } catch (err) {
+    console.warn(
+      '[DesktopWalletManager] cross-network purge on watch-only open failed:',
       err
     );
   }

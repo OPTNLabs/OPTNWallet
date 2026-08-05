@@ -23,10 +23,11 @@ import {
   setWalletType,
   setWalletDerivationPath,
 } from '../../../state/slices/walletSlice';
-import { WalletType } from '../../../types/wallet';
+import { WalletType, type ExtendedWalletType } from '../../../types/wallet';
 import { homeRoute } from '../../../navigation/routes';
 import {
   openWalletWithPassword,
+  openWatchOnlyWallet,
   importWalletFile,
   isBiometricAvailable,
   hasWalletBiometric,
@@ -44,7 +45,7 @@ interface WalletRow {
   id: number;
   wallet_name: string;
   networkType: Network;
-  walletType: WalletType;
+  walletType: ExtendedWalletType;
 }
 
 /**
@@ -113,11 +114,47 @@ const DesktopLandingPage = () => {
     })();
   }, []);
 
-  const handleOpenClick = useCallback((id: number) => {
-    setOpeningId(id);
-    setPassword('');
-    setError('');
-  }, []);
+  const handleOpenClick = useCallback(
+    async (id: number) => {
+      const row = wallets?.find((candidate) => candidate.id === id);
+      if (row?.walletType !== 'watch-only') {
+        setOpeningId(id);
+        setPassword('');
+        setError('');
+        return;
+      }
+      // A watch-only wallet has no password: open it directly, still through
+      // the single-window registry so a duplicate open raises the window that
+      // already holds it instead of loading a second copy.
+      setBusy(true);
+      setError('');
+      try {
+        const attempt = await runExclusiveWalletOpen(
+          id,
+          getCurrentWebviewWindow().label,
+          () => openWatchOnlyWallet(id),
+          isWalletWindowOpen
+        );
+        if (attempt.status === 'held') {
+          await focusWalletWindow(attempt.windowLabel);
+          setError('That wallet is already open in another window.');
+          return;
+        }
+        if (attempt.status === 'rejected' || !attempt.value) {
+          setError('Could not open this wallet.');
+          return;
+        }
+        finishOpen(id, attempt.value);
+      } catch (err) {
+        console.error('[DesktopLandingPage] Open watch-only wallet failed:', err);
+        setError('Could not open this wallet. Please try again.');
+      } finally {
+        setBusy(false);
+      }
+    },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [wallets]
+  );
 
   // Availability resolves asynchronously after mount. Recheck the selected
   // wallet when either value changes so a prompt opened one tick earlier does
@@ -179,7 +216,7 @@ const DesktopLandingPage = () => {
 
   const finishOpen = (id: number, info: {
     networkType?: Network | null;
-    walletType?: WalletType | null;
+    walletType?: ExtendedWalletType | null;
     derivation_path?: string;
     derivation_path_source?: 'default' | 'custom';
   }) => {
@@ -196,6 +233,40 @@ const DesktopLandingPage = () => {
     }
     dispatch(setNetwork(info.networkType ?? Network.MAINNET));
     navigate(homeRoute(id));
+  };
+
+  // Called by the watch-only create screen once the wallet row + addresses are
+  // persisted. Opens it through the normal exclusive-open path so the freshly
+  // created wallet lands in a window with a valid session marker.
+  const handleWatchOnlyCreated = async (walletId: number) => {
+    setBusy(true);
+    setError('');
+    try {
+      const attempt = await runExclusiveWalletOpen(
+        walletId,
+        getCurrentWebviewWindow().label,
+        () => openWatchOnlyWallet(walletId),
+        isWalletWindowOpen
+      );
+      const rows = await WalletManager().getAllWallets();
+      setWallets(rows as WalletRow[]);
+      if (attempt.status === 'held') {
+        await focusWalletWindow(attempt.windowLabel);
+        setView('list');
+        return;
+      }
+      if (attempt.status === 'rejected' || !attempt.value) {
+        setView('list');
+        return;
+      }
+      finishOpen(walletId, attempt.value);
+    } catch (err) {
+      console.error('[DesktopLandingPage] Open created watch-only wallet failed:', err);
+      setError('Wallet created, but could not open it.');
+      setView('list');
+    } finally {
+      setBusy(false);
+    }
   };
 
   const handleBiometricUnlock = async (id: number) => {
@@ -342,7 +413,12 @@ const DesktopLandingPage = () => {
   }
 
   if (view === 'watch-only') {
-    return <WatchOnlyWalletPreview onBack={() => setView('list')} />;
+    return (
+      <WatchOnlyWalletPreview
+        onBack={() => setView('list')}
+        onCreated={(walletId) => void handleWatchOnlyCreated(walletId)}
+      />
+    );
   }
 
   return (
@@ -399,6 +475,11 @@ const DesktopLandingPage = () => {
                     <p className="font-semibold wallet-text-strong">{w.wallet_name || 'Unnamed wallet'}</p>
                     <p className="text-[10px] wallet-muted">
                       {w.networkType === Network.CHIPNET ? 'Chipnet' : 'Mainnet'}
+                      {w.walletType === 'watch-only' && (
+                        <span className="ml-1.5 rounded border border-[var(--wallet-border)] px-1 py-px text-[9px] uppercase tracking-wide">
+                          Watch-only
+                        </span>
+                      )}
                     </p>
                   </div>
                   <div className="flex items-center gap-2">
@@ -440,7 +521,7 @@ const DesktopLandingPage = () => {
                   </div>
                 )}
 
-                {openingId === w.id && (
+                {openingId === w.id && w.walletType !== 'watch-only' && (
                   <div className="mt-3 space-y-2 border-t border-[var(--wallet-border)] pt-3">
                     <input
                       type="password"

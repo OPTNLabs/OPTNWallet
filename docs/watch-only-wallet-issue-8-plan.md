@@ -37,6 +37,34 @@ transaction builder, verifier, and broadcaster.
 11. OPTN presents a final confirmation and broadcasts the completed transaction.
     SeedCash never broadcasts.
 
+## Implementation status
+
+Checkpoints 1-5 are implemented in this worktree; 6 (multisign) and 7
+(parsable NFTs) are not part of this delivery.
+
+- **1. Public-only wallet model and xPub import — done.** Watch-only wallet
+  type, xPub + optional master fingerprint persistence (`watchOnlyWallet.ts`,
+  `master_fingerprint` column), account path editing, network/origin validation,
+  no credentials stored (nothing encrypted at rest).
+- **2. Discovery, receive, coin control — done.** 20-address gap per branch at
+  creation, receive/change derived from the account xPub, coin control with
+  per-UTXO selection in the send workspace.
+- **3. Paytaca PSBTv145 codec — done.** `psbtBch.ts` builds/parses PSBT version
+  145 with `0xc1` sighash, UTXO commitments, BIP32 derivation metadata
+  (`0x06`, master fingerprint + path), partial signatures (`0x02`), and
+  CashToken outputs. Round-trip and rejection fixtures in `psbtBch.test.ts`.
+- **4. `ur:crypto-psbt` exchange — done.** Animated multipart QR export,
+  camera/paste import with accumulation, byte-for-byte PSBT payload
+  (`urPsbt.ts`).
+- **5. Workspace, validation, broadcast — done.** `WatchOnlySend.tsx`: same
+  screen holds export QR, import, decoded proposal details, and broadcast.
+  Imported transaction is cryptographically verified against the approved
+  proposal (inputs, outputs, sighash, signature validity) before broadcast;
+  only the exact approved transaction can be broadcast.
+- **Route and fingerprint persistence — done.** `/send` dispatches on wallet
+  type via `SendRoute` in `AppShell.tsx`; a fingerprint typed at send time is
+  persisted back to the wallet (`saveWatchOnlyMasterFingerprint`).
+
 ## Implementation checkpoints
 
 ### 1. Public-only wallet model and xPub import
@@ -99,6 +127,17 @@ transaction builder, verifier, and broadcaster.
 - Track cosigner fingerprints and partial signatures without private material.
 - Support repeated export/import cycles until threshold completion while
   rejecting any conflicting unsigned transaction.
+
+### 7. Parsable NFTs (Cashonize parity)
+
+- Decode NFT commitment bytes and render human-readable attributes instead of
+  showing only hex, matching Cashonize's "Parsable NFTs" feature
+  (cashonize-wallet `src/parsing/nftParsing.ts`, commit 0a73ca1; PoC at
+  Panmoni/parsecommitment).
+- Support parsable BCMR: commitment pointing at BCMR v2 data (including the
+  ParyonUSD loan-key extension) fetched through the existing BcmrService.
+- Show per-instance NFT cards (image/attributes) in the Assets NFT tab and the
+  watch-only send workspace; fall back to hex commitment when unparsable.
 
 ## Release evidence
 

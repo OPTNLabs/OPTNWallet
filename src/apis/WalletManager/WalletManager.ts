@@ -8,6 +8,7 @@ import {
   WalletLookup,
   WalletRecord,
   WalletType,
+  type ExtendedWalletType,
   type WalletMetadata,
 } from '../../types/wallet';
 import { DerivationPathSource } from '../../types/wallet';
@@ -16,6 +17,18 @@ import { getBchAccountPath, normalizeBchAccountPath } from '../../services/HdWal
 // Helper function to safely cast SQL values to number
 function toNumber(value: unknown): number {
   return typeof value === 'number' ? value : parseInt(String(value), 10);
+}
+
+/**
+ * Map a stored walletType TEXT value to the app's type union. Unknown values
+ * fall back to STANDARD exactly as before; desktop-only types (watch-only) are
+ * passed through rather than erased, because a watch-only row has no mnemonic
+ * and must not be treated as a signing standard wallet.
+ */
+function normalizeWalletType(raw: unknown): ExtendedWalletType {
+  if (raw === WalletType.QUANTUMROOT) return WalletType.QUANTUMROOT;
+  if (raw === 'watch-only') return 'watch-only';
+  return WalletType.STANDARD;
 }
 
 export default function WalletManager() {
@@ -63,7 +76,7 @@ export default function WalletManager() {
         const walletType =
           row.walletType === WalletType.QUANTUMROOT
             ? WalletType.QUANTUMROOT
-            : WalletType.STANDARD;
+            : normalizeWalletType(row.walletType);
         rows.push({
           id: toNumber(row.id),
           wallet_name: typeof row.wallet_name === 'string' ? row.wallet_name : '',
@@ -117,7 +130,7 @@ export default function WalletManager() {
       const walletType =
         row.walletType === WalletType.QUANTUMROOT
           ? WalletType.QUANTUMROOT
-          : WalletType.STANDARD;
+          : normalizeWalletType(row.walletType);
       const fallbackNetwork = networkType ?? Network.MAINNET;
       let derivationPath = getBchAccountPath(fallbackNetwork);
       if (typeof row.derivation_path === 'string') {
@@ -475,7 +488,7 @@ export default function WalletManager() {
         const walletType =
           rawWalletInfo.walletType === WalletType.QUANTUMROOT
             ? WalletType.QUANTUMROOT
-              : WalletType.STANDARD;
+            : normalizeWalletType(rawWalletInfo.walletType);
         const fallbackNetwork = networkType ?? Network.MAINNET;
         let derivationPath = getBchAccountPath(fallbackNetwork);
         if (typeof rawWalletInfo.derivation_path === 'string') {

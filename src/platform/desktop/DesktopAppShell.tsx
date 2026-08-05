@@ -18,7 +18,7 @@ import { useTransportConfig } from './useTransportConfig';
 import { useWindowTitle } from './useWindowTitle';
 import { migrateWalletFileNames } from './walletFile';
 import { selectWalletId, resetWallet } from '../../state/slices/walletSlice';
-import { hasCachedCredentialsForWallet } from './WalletKeyCache';
+import { hasCachedCredentialsForWallet, hasWatchOnlySession } from './WalletKeyCache';
 import { persistor } from '../../state/store';
 import { invoke } from '@tauri-apps/api/core';
 
@@ -84,8 +84,12 @@ const DesktopAppShell: React.FC = () => {
   // — not a cached CryptoKey. The old getCachedWalletKeyForWallet() always
   // returned null, which made this shell treat every successful unlock as
   // "stale session" and wipe the wallet (blank screen / bounce to picker).
+  // A watch-only wallet has no credentials by design; its open session is the
+  // explicit watch-only marker in WalletKeyCache.
   const hasValidWalletSession =
-    walletId <= 0 || hasCachedCredentialsForWallet(walletId);
+    walletId <= 0 ||
+    hasCachedCredentialsForWallet(walletId) ||
+    hasWatchOnlySession(walletId);
 
   // redux-persist rehydrates asynchronously; wait for it before reading the
   // persisted walletId (below). The immediate re-check after subscribing closes
@@ -116,7 +120,11 @@ const DesktopAppShell: React.FC = () => {
   // time walletId > 0 the credentials are present.
   useEffect(() => {
     if (!rehydrated) return;
-    if (walletId > 0 && !hasCachedCredentialsForWallet(walletId)) {
+    if (
+      walletId > 0 &&
+      !hasCachedCredentialsForWallet(walletId) &&
+      !hasWatchOnlySession(walletId)
+    ) {
       dispatch(resetWallet());
     }
     setInvariantChecked(true);

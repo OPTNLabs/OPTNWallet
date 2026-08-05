@@ -9,6 +9,7 @@
 //   * signature from PSBT_IN_PARTIAL_SIG (0x02), key `0x02 || pubkey`
 
 import { describe, expect, it } from 'vitest';
+import { encodeTransaction, hexToBin } from '@bitauth/libauth';
 import {
   PSBT_MAGIC,
   SIGHASH_ALL_FORKID,
@@ -136,7 +137,162 @@ describe('BCH PSBT encoding', () => {
   });
 });
 
+describe('Paytaca v145 fields', () => {
+  it('writes the global version 145', () => {
+    const psbt = encodeUnsignedPsbt([input()], [output()]);
+    // Global record: keylen 0x01, key 0xfb, valuelen 0x01, compact uint 145.
+    const field = Uint8Array.from([0x01, 0xfb, 0x01, 0x91]);
+    expect(indexOfBytes(psbt, field)).toBeGreaterThan(-1);
+  });
+
+  it('writes explicit section counts that match the maps', () => {
+    const psbt = encodeUnsignedPsbt(
+      [input(), input({ vout: 2 })],
+      [output()]
+    );
+    // Global records: key 0x04 = 2 inputs, key 0x05 = 1 output.
+    expect(indexOfBytes(psbt, Uint8Array.from([0x01, 0x04, 0x01, 0x02]))).toBeGreaterThan(-1);
+    expect(indexOfBytes(psbt, Uint8Array.from([0x01, 0x05, 0x01, 0x01]))).toBeGreaterThan(-1);
+  });
+
+  it('identifies each input by outpoint and sequence', () => {
+    const psbt = encodeUnsignedPsbt([input({ vout: 1 })], [output()]);
+    // Previous txid (0x0e): the 32 display-order bytes of 'a'*64 (hex digit a
+    // is 0x0a per nibble, so each byte is 0xaa).
+    const txid = Uint8Array.from([0x01, 0x0e, 0x20, ...new Array(32).fill(0xaa)]);
+    expect(indexOfBytes(psbt, txid)).toBeGreaterThan(-1);
+    // Output index (0x0f): uint32 LE of vout 1.
+    expect(indexOfBytes(psbt, Uint8Array.from([0x01, 0x0f, 0x04, 0x01, 0x00, 0x00, 0x00]))).toBeGreaterThan(-1);
+    // Sequence (0x10): the default 0xffffffff.
+    expect(indexOfBytes(psbt, Uint8Array.from([0x01, 0x10, 0x04, 0xff, 0xff, 0xff, 0xff]))).toBeGreaterThan(-1);
+  });
+
+  it('carries amount and script per output', () => {
+    const psbt = encodeUnsignedPsbt([input()], [output({ satoshis: 90_000n })]);
+    // PSBT_OUT_AMOUNT: key 0x03, 8-byte LE 90000 = 0x00015f90.
+    expect(indexOfBytes(psbt, Uint8Array.from([0x01, 0x03, 0x08, 0x90, 0x5f, 0x01, 0, 0, 0, 0, 0]))).toBeGreaterThan(-1);
+    // PSBT_OUT_SCRIPT: key 0x04, then the 25-byte P2PKH.
+    expect(indexOfBytes(psbt, Uint8Array.from([0x01, 0x04, 0x19, ...P2PKH]))).toBeGreaterThan(-1);
+  });
+
+  it('round-trips the v145 structure through decode', () => {
+    const psbt = encodeUnsignedPsbt(
+      [input({ vout: 1 }), input({ vout: 2, sequence: 42 })],
+      [output({ satoshis: 90_000n })]
+    );
+    const parsed = decodePsbt(psbt);
+    expect(parsed.version).toBe(145);
+    expect(parsed.inputCount).toBe(2);
+    expect(parsed.outputCount).toBe(1);
+    expect(parsed.inputs[0].previousTxid).toEqual(new Uint8Array(32).fill(0xaa));
+    expect(parsed.inputs[0].outpointIndex).toBe(1);
+    expect(parsed.inputs[0].sequence).toBe(0xffffffff);
+    expect(parsed.inputs[1].outpointIndex).toBe(2);
+    expect(parsed.inputs[1].sequence).toBe(42);
+    expect(parsed.inputs[0].spentSatoshis).toBe(100_000n);
+    expect(parsed.outputs[0].satoshis).toBe(90_000n);
+    expect(parsed.outputs[0].lockingBytecode).toEqual(P2PKH);
+    expect(parsed.inputs[0].partialSignatures).toHaveLength(0);
+  });
+
+  it('carries a global xpub for signers to recognise wallet keys', () => {
+    const xpubPayload = new Uint8Array(78).fill(0xab);
+    const psbt = encodeUnsignedPsbt(
+      [input()],
+      [output()],
+      SIGHASH_ALL_FORKID_ANYONECANPAY,
+      {
+        globalXpubs: [
+          {
+            xpubPayload,
+            masterFingerprint: FINGERPRINT,
+            derivationPath: [0x8000002c, 0x80000091, 0x80000000],
+          },
+        ],
+      }
+    );
+    // Global record: keylen 0x4f (79), key 0x01 + 78 payload bytes.
+    const key = Uint8Array.from([0x4f, 0x01, ...xpubPayload]);
+    expect(indexOfBytes(psbt, key)).toBeGreaterThan(-1);
+    const parsed = decodePsbt(psbt);
+    expect(parsed.globalXpubs).toHaveLength(1);
+    expect(parsed.globalXpubs[0].xpubPayload).toEqual(xpubPayload);
+    expect(parsed.globalXpubs[0].masterFingerprint).toEqual(FINGERPRINT);
+    expect(parsed.globalXpubs[0].derivationPath[0]).toBe(0x8000002c);
+  });
+
+  it('encodes fungible token prefixes on outputs', () => {
+    const category = new Uint8Array(32).fill(0x77);
+    const psbt = encodeUnsignedPsbt(
+      [input()],
+      [output({ token: { category, amount: 500n } })]
+    );
+    // key 0x36, value 41 bytes: category || 0x00 || amount(8 LE 500 = 0x1f4).
+    expect(
+      indexOfBytes(
+        psbt,
+        Uint8Array.from([0x01, 0x36, 0x29, ...category, 0x00, 0xf4, 0x01, 0, 0, 0, 0, 0, 0, 0])
+      )
+    ).toBeGreaterThan(-1);
+    const parsed = decodePsbt(psbt);
+    expect(parsed.outputs[0].token).toEqual({ category, amount: 500n });
+  });
+
+  it('encodes NFT token prefixes with capability and commitment', () => {
+    const category = new Uint8Array(32).fill(0x88);
+    const commitment = Uint8Array.from([1, 2, 3]);
+    const psbt = encodeUnsignedPsbt(
+      [input()],
+      [output({ token: { category, capability: 1, commitment } })]
+    );
+    // capability byte 0x81 (0x80 | mutable), commitment len 0x03; value is
+    // 37 bytes (32 category + 1 + 1 + 3).
+    expect(
+      indexOfBytes(
+        psbt,
+        Uint8Array.from([0x01, 0x36, 0x25, ...category, 0x81, 0x03, 1, 2, 3])
+      )
+    ).toBeGreaterThan(-1);
+    const parsed = decodePsbt(psbt);
+    expect(parsed.outputs[0].token).toEqual({ category, capability: 1, commitment });
+  });
+});
+
 describe('BCH PSBT decoding', () => {
+  it('still decodes a v0 PSBT without section counts', () => {
+    // A minimal v0-style PSBT built by hand: global unsigned tx, one input map
+    // with a sighash request, one empty output map. No 0x04/0x05 counts.
+    const tx = encodeTransaction({
+      version: 2,
+      inputs: [
+        {
+          outpointTransactionHash: hexToBin('b'.repeat(64)),
+          outpointIndex: 0,
+          unlockingBytecode: Uint8Array.of(),
+          sequenceNumber: 0xffffffff,
+        },
+      ],
+      outputs: [{ lockingBytecode: P2PKH, valueSatoshis: 10n }],
+      locktime: 0,
+    });
+    const v0Psbt = Uint8Array.from([
+      ...PSBT_MAGIC,
+      0x01, 0x00, tx.length, ...tx,
+      0x00,
+      0x01, 0x03, 0x04, 0xc1, 0x00, 0x00, 0x00,
+      0x00,
+      0x00,
+    ]);
+    const parsed = decodePsbt(v0Psbt);
+    expect(parsed.version).toBeNull();
+    expect(parsed.inputCount).toBeNull();
+    // The empty trailing map is indistinguishable from an input map in v0
+    // (the legacy heuristic treats it as one), but the sighash map is read.
+    expect(parsed.inputs).toHaveLength(2);
+    expect(parsed.inputs[0].requestedSighashType).toBe(0xc1);
+    expect(parsed.outputs).toHaveLength(0);
+    expect(parsed.requestedSighashTypes).toEqual([0xc1, null]);
+  });
   it('round-trips the requested sighash type', () => {
     const psbt = encodeUnsignedPsbt([input(), input({ vout: 2 })], [output()]);
     const parsed = decodePsbt(psbt);

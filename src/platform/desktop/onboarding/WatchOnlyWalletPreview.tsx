@@ -5,21 +5,28 @@ import {
   deriveWatchOnlyAccountPreview,
   type WatchOnlyAccountPreview,
 } from './watchOnlyAccountPreview';
+import { createWatchOnlyWallet } from './watchOnlyWallet';
 import { CapacitorBarcodeScanner } from '../barcode-scanner';
 import { CameraQrScanner } from '../CameraQrScanner';
 
 type WatchOnlyWalletPreviewProps = {
   onBack: () => void;
+  /** Called with the new wallet id once the wallet + derived addresses are persisted. */
+  onCreated: (walletId: number) => void;
 };
 
 export const WatchOnlyWalletPreview: FC<WatchOnlyWalletPreviewProps> = ({
   onBack,
+  onCreated,
 }) => {
   const [network, setNetwork] = useState(Network.MAINNET);
   const [accountXpub, setAccountXpub] = useState('');
+  const [masterFingerprint, setMasterFingerprint] = useState('');
+  const [walletName, setWalletName] = useState('');
   const [preview, setPreview] = useState<WatchOnlyAccountPreview | null>(null);
   const [scanning, setScanning] = useState(false);
   const [error, setError] = useState('');
+  const [busy, setBusy] = useState(false);
 
   const handlePreview = () => {
     try {
@@ -33,15 +40,37 @@ export const WatchOnlyWalletPreview: FC<WatchOnlyWalletPreviewProps> = ({
     }
   };
 
+  const handleCreate = async () => {
+    setBusy(true);
+    setError('');
+    try {
+      const walletId = await createWatchOnlyWallet({
+        name: walletName,
+        accountXpub,
+        network,
+        masterFingerprint: masterFingerprint || undefined,
+      });
+      onCreated(walletId);
+    } catch (err) {
+      setError(
+        err instanceof Error
+          ? err.message
+          : 'Could not save this watch-only wallet.'
+      );
+    } finally {
+      setBusy(false);
+    }
+  };
+
   return (
     <section className="min-h-[100dvh] wallet-surface flex flex-col items-center px-4 py-10">
       <div className="w-full max-w-md space-y-4">
         <div className="space-y-1 text-center">
           <h1 className="text-xl font-bold wallet-text-strong">
-            Watch-Only Wallet Preview
+            Create Watch-Only Wallet
           </h1>
           <p className="text-sm wallet-muted">
-            Inspect public BCH addresses without importing any private keys.
+            Watch public BCH addresses without importing any private keys.
           </p>
         </div>
 
@@ -65,6 +94,15 @@ export const WatchOnlyWalletPreview: FC<WatchOnlyWalletPreviewProps> = ({
         </div>
 
         <div className="wallet-card space-y-3 p-4">
+          <label className="block space-y-1 text-sm wallet-text-strong">
+            Wallet name
+            <input
+              value={walletName}
+              onChange={(event) => setWalletName(event.target.value)}
+              placeholder="e.g. Cold storage watch"
+              className="wallet-input w-full rounded-md px-3 py-2"
+            />
+          </label>
           <label className="block space-y-1 text-sm wallet-text-strong">
             Network
             <select
@@ -144,10 +182,34 @@ export const WatchOnlyWalletPreview: FC<WatchOnlyWalletPreviewProps> = ({
             . A standalone BIP32 xPub cannot prove its parent purpose or coin
             path.
           </p>
+          <label className="block space-y-1 text-sm wallet-text-strong">
+            Master fingerprint{' '}
+            <span className="text-[11px] font-normal wallet-muted">
+              (optional, but needed to send)
+            </span>
+            <input
+              value={masterFingerprint}
+              onChange={(event) => {
+                setMasterFingerprint(event.target.value);
+                setError('');
+              }}
+              placeholder="8 hex chars, e.g. 4c9a1f7b"
+              maxLength={8}
+              autoComplete="off"
+              spellCheck={false}
+              className="wallet-input w-full rounded-md px-3 py-2 font-mono text-sm uppercase"
+            />
+          </label>
+          <p className="text-[11px] leading-relaxed wallet-muted">
+            The signer prints this under the account xPub. The send flow embeds
+            it in the unsigned transaction so the device can claim the inputs;
+            without it the signer refuses. It can also be set later, when you
+            first send.
+          </p>
           <button
             type="button"
             onClick={handlePreview}
-            className="wallet-btn-primary w-full py-2 font-semibold"
+            className="wallet-btn-secondary w-full py-2 font-semibold"
           >
             Preview public addresses
           </button>
@@ -181,10 +243,21 @@ export const WatchOnlyWalletPreview: FC<WatchOnlyWalletPreviewProps> = ({
           </div>
         )}
 
-        <div className="rounded-xl border border-amber-400/30 bg-amber-400/5 p-3 text-xs leading-relaxed text-amber-300">
-          Public preview only: this screen does not save a watch-only wallet or
-          create, sign, import, or broadcast PSBT transactions yet.
-        </div>
+        <button
+          type="button"
+          onClick={() => void handleCreate()}
+          disabled={busy || !walletName.trim() || !accountXpub.trim() || !preview}
+          className="wallet-btn-primary w-full py-2 font-semibold disabled:opacity-50"
+        >
+          {busy ? 'Saving wallet…' : 'Save watch-only wallet'}
+        </button>
+        <p className="text-[11px] leading-relaxed wallet-muted">
+          Preview the public addresses above first — the wallet is saved only
+          after you confirm they match what your device shows. The xPub is
+          stored so addresses can be rebuilt after a restart; nothing secret is
+          saved, signatures always come from the device (e.g. SeedCash).
+        </p>
+
         <button
           type="button"
           onClick={onBack}
