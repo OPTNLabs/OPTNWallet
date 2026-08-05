@@ -34,7 +34,8 @@ type DecodedTransaction = Exclude<ReturnType<typeof decodeTransaction>, string>;
 type DecodedOutput = DecodedTransaction['outputs'][number];
 
 function outpointKey(utxo: Pick<UTXO, 'tx_hash' | 'tx_pos'>): string {
-  return `${utxo.tx_hash}:${utxo.tx_pos}`;
+  // Lowercase txid so reserved-outbound filters match Electrum casing.
+  return `${String(utxo.tx_hash).trim().toLowerCase()}:${utxo.tx_pos}`;
 }
 
 async function collectReservedOutboundOutpointKeys(
@@ -349,12 +350,16 @@ const UTXOService = {
             uniqueAddresses.length,
             uniqueAddresses.length
           );
+          // Still strip outbound-spent coins so a soft-fail after broadcast
+          // cannot re-surface pre-fusion inputs as spendable balance.
+          const reservedOutpoints =
+            await collectReservedOutboundOutpointKeys(walletId);
           const fromDb: Record<string, UTXO[]> = {};
           for (const address of uniqueAddresses) {
             fromDb[address] = [
               ...(existingSnapshot.utxosMap[address] ?? []),
               ...(existingSnapshot.cashTokenUtxosMap[address] ?? []),
-            ];
+            ].filter((utxo) => !reservedOutpoints.has(outpointKey(utxo)));
           }
           return fromDb;
         }

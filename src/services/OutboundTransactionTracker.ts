@@ -175,7 +175,7 @@ async function migrateFallbackRecords(): Promise<
 
 function toTrackedOutpoints(inputs?: UTXO[]): TrackedOutpoint[] {
   return (inputs ?? []).map((utxo) => ({
-    tx_hash: utxo.tx_hash,
+    tx_hash: String(utxo.tx_hash).trim().toLowerCase(),
     tx_pos: utxo.tx_pos,
   }));
 }
