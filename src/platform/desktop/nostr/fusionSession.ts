@@ -26,11 +26,14 @@ import {
 import { electCoordinator } from './fusion';
 import { ROUND_MSG_VERSION } from './fusionRound';
 import {
+  P2P_ASSEMBLED_RESEND_MS,
   P2P_CREDENTIAL_WAIT_MS,
   P2P_MISSING_OUTPUTS_DIRECT_MS,
   P2P_MISSING_OUTPUTS_ONION_MS,
   P2P_ONION_DECLARE_RESEND_MS,
   P2P_ROUND_TIMEOUT_MS,
+  P2P_SIG_RESEND_MS,
+  P2P_SIG_STATUS_MS,
 } from '../fusionTiming';
 import { onionWrap, onionPeel, onionUnpad, isEccAvailable } from './onionCrypto';
 import {
@@ -981,7 +984,7 @@ function runParticipant(
           sigResendTimer = setInterval(() => {
             if (settled) return;
             void sendSigs().catch(() => undefined);
-          }, 3_000);
+          }, P2P_SIG_RESEND_MS);
         } catch (error) {
           void fail(asError(error), true);
         }
@@ -1628,7 +1631,7 @@ function runCoordinator(
       assembledResendTimer = setInterval(() => {
         if (settled || finalizing) return;
         void sendAssembled().catch(() => undefined);
-      }, 3_000);
+      }, P2P_ASSEMBLED_RESEND_MS);
       if (sigWaitStatusTimer) clearInterval(sigWaitStatusTimer);
       sigWaitStatusTimer = setInterval(() => {
         if (settled || finalizing || !assembled) return;
@@ -1636,7 +1639,7 @@ function runCoordinator(
           `Waiting for signatures ${signedPeers.size}/${others.length} ` +
             `(inputs ${signaturesByOutpoint.size}/${assembled.inputs.length})…`
         );
-      }, 4_000);
+      }, P2P_SIG_STATUS_MS);
       await tryFinalize();
     };
 
