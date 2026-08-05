@@ -44,6 +44,16 @@ export interface WatchOnlyInputSpec {
   branchIndex: 0 | 1;
   addressIndex: number;
   /**
+   * Raw parent transaction, hex — the one this input spends.
+   *
+   * Written into the PSBT as PSBT_IN_NON_WITNESS_UTXO, which is what Paytaca
+   * emits and the only spent-output field SeedCash reads without corrupting
+   * the script it signs over. Optional on the type so fixtures and
+   * PSBT-to-PSBT paths still compile, but a proposal headed for a real signer
+   * must carry it; `buildWatchOnlyPsbt` refuses without it.
+   */
+  previousTransactionHex?: string;
+  /**
    * Present on multisig (P2SH) inputs: the `OP_m <keys> OP_n OP_CHECKMULTISIG`
    * redeem script whose hash160 is the locking bytecode above.
    */
@@ -200,6 +210,9 @@ function inputSpecToPsbt(
     redeemScript: input.redeemScriptHex
       ? hexToBin(input.redeemScriptHex)
       : undefined,
+    previousTransaction: input.previousTransactionHex
+      ? hexToBin(input.previousTransactionHex)
+      : undefined,
     derivations,
     sequence: 0xffffffff,
   };
@@ -225,6 +238,20 @@ export function buildWatchOnlyPsbt(
     throw new Error(
       'Master fingerprint is missing. SeedCash shows it with the account xPub; ' +
         'enter the 8 hex characters so the signer can claim the inputs.'
+    );
+  }
+  // Without the parent transaction the PSBT falls back to the compact
+  // WITNESS_UTXO field, which SeedCash mis-slices — it would sign a hash over
+  // a script one byte longer than the one we verify, and every signature would
+  // come back "invalid" with nothing on screen explaining why. Refuse instead.
+  const missingParent = params.inputs.findIndex(
+    (input) => !input.previousTransactionHex
+  );
+  if (missingParent !== -1) {
+    throw new Error(
+      `The parent transaction for coin ${missingParent + 1} was not loaded. ` +
+        'The signer needs it to confirm the amount being spent; try building ' +
+        'again once the wallet is connected.'
     );
   }
 

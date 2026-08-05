@@ -1,0 +1,95 @@
+"""Sign a PSBT with the real SeedCash signer, for round-trip evidence.
+
+This is the offline half of the Issue #8 air-gapped flow, driven directly
+instead of through the device UI. OPTN builds the PSBT, this signs it with
+SeedCash's own `sign_psbt_with_xpriv`, and OPTN then verifies and finalizes
+what comes back. If the two sides disagree about signature algorithm, sighash
+type or derivation metadata, this is where it shows up.
+
+Usage:
+    python sign_psbt.py keys
+    python sign_psbt.py sign <unsigned-psbt-hex-file> <signed-psbt-hex-file>
+
+The mnemonic is the published BIP39 all-`abandon` test vector. It holds no
+funds we care about and nothing here is ever broadcast.
+"""
+
+import json
+import sys
+
+import hardware_shim
+
+hardware_shim.install()
+
+from seedcash.models.bip39 import Bip39  # noqa: E402
+from seedcash.models.psbt_parser import (  # noqa: E402
+    PSBTParser,
+    parse_psbt,
+    sign_psbt_with_xpriv,
+)
+from seedcash.models.wallet import Wallet  # noqa: E402
+
+TEST_MNEMONIC = " ".join(["abandon"] * 11 + ["about"])
+ACCOUNT_PATH = "m/44'/145'/0'"
+
+
+def build_wallet() -> Wallet:
+    master_key, master_code = Bip39.bip39_protocol(TEST_MNEMONIC, "")
+    return Wallet(master_key, master_code)
+
+
+def emit_keys() -> None:
+    wallet = build_wallet()
+    print(
+        json.dumps(
+            {
+                "xpub": wallet._xpub,
+                "fingerprint": wallet._fingerprint,
+                "accountPath": ACCOUNT_PATH,
+            }
+        )
+    )
+
+
+def sign(unsigned_path: str, signed_path: str) -> None:
+    wallet = build_wallet()
+    with open(unsigned_path, "r", encoding="utf-8") as handle:
+        psbt_bytes = bytearray.fromhex(handle.read().strip())
+
+    # Parse first, exactly as the device does before showing the review screen.
+    # `_wallet_pubkeys_in_map` is the function that decides whether SeedCash
+    # claims an input as its own — if it returns nothing, the device shows the
+    # transaction as somebody else's and refuses to sign, which is the failure
+    # this check is here to surface loudly.
+    parser = PSBTParser(psbt_bytes, wallet_fingerprint=wallet._fingerprint)
+    fingerprint_bytes = bytes.fromhex(wallet._fingerprint)
+    claimed = [
+        index
+        for index, input_map in enumerate(parse_psbt(psbt_bytes)["inputs"])
+        if PSBTParser._wallet_pubkeys_in_map(input_map, fingerprint_bytes)
+    ]
+    if not claimed:
+        raise SystemExit(
+            "SeedCash did not recognise any input as its own. The PSBT is "
+            "missing or misencoding PSBT_IN_BIP32_DERIVATION (0x06) for "
+            f"fingerprint {wallet._fingerprint}."
+        )
+
+    signed = sign_psbt_with_xpriv(psbt_bytes, wallet._xpriv, account_path=ACCOUNT_PATH)
+    # sign_psbt_with_xpriv signs one input; the device loops every input.
+    for index in range(1, parser.num_inputs):
+        signed = sign_psbt_with_xpriv(
+            signed, wallet._xpriv, input_index=index, account_path=ACCOUNT_PATH
+        )
+
+    with open(signed_path, "w", encoding="utf-8") as handle:
+        handle.write(bytes(signed).hex())
+
+
+if __name__ == "__main__":
+    if len(sys.argv) >= 2 and sys.argv[1] == "keys":
+        emit_keys()
+    elif len(sys.argv) == 4 and sys.argv[1] == "sign":
+        sign(sys.argv[2], sys.argv[3])
+    else:
+        raise SystemExit(__doc__)

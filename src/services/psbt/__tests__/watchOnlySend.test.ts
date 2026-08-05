@@ -18,6 +18,7 @@ import {
 } from '@bitauth/libauth';
 import { decodePsbt, encodeUnsignedPsbt } from '../psbtBch';
 import { buildWatchOnlyPsbt, type WatchOnlyProposal } from '../watchOnlySend';
+import { makeParentTransaction } from './parentFixture';
 import {
   inspectImportedPsbt,
   mergeImportedSignatures,
@@ -74,22 +75,32 @@ const changeAddress = addressFor(publicKey, 'bchtest');
 
 function makeInput(
   overrides: Partial<{
-    txid: string;
     vout: number;
     satoshis: bigint;
     branchIndex: 0 | 1;
     addressIndex: number;
+    /** Varies the parent transaction, and so the txid, between fixtures. */
+    seed: number;
   }> = {}
 ) {
+  const vout = overrides.vout ?? 0;
+  const satoshis = overrides.satoshis ?? 50_000n;
+  const lockingBytecode = p2pkhScript(publicKey);
+  const parent = makeParentTransaction({
+    lockingBytecode,
+    satoshis,
+    vout,
+    seed: overrides.seed ?? 0x11,
+  });
   return {
-    txid: '00000000000000000000000000000000000000000000000000000000000000ab',
-    vout: 0,
-    satoshis: 50_000n,
-    lockingBytecodeHex: binToHex(p2pkhScript(publicKey)),
+    txid: parent.txid,
+    vout,
+    satoshis,
+    lockingBytecodeHex: binToHex(lockingBytecode),
     publicKeyHex: binToHex(publicKey),
-    branchIndex: 1,
-    addressIndex: 0,
-    ...overrides,
+    branchIndex: (overrides.branchIndex ?? 1) as 0 | 1,
+    addressIndex: overrides.addressIndex ?? 0,
+    previousTransactionHex: parent.hex,
   };
 }
 
@@ -112,12 +123,20 @@ function buildProposal(
   };
 }
 
-/** Sign like SeedCash: DER signature + trailing sighash byte, 0xc1. */
+/**
+ * Sign like SeedCash: Schnorr signature + trailing sighash byte, 0xc1.
+ *
+ * SeedCash's `sign_tx_input` takes `use_schnorr: bool = True` and returns
+ * `sign_schnorr_bch(...) + bytes([hash_type])`, so Schnorr is what actually
+ * comes back off the device. DER is reachable — Paytaca templates can be built
+ * with `signatureAlgorithm: 'ecdsa'` — so it stays available here as an option.
+ */
 function signInput(
   proposal: WatchOnlyProposal,
   inputIndex: number,
   sighashType = 0xc1,
-  key = privateKey
+  key = privateKey,
+  algorithm: 'schnorr' | 'der' = 'schnorr'
 ): Uint8Array {
   const input = proposal.inputs[inputIndex];
   const noTokens = {
@@ -139,10 +158,11 @@ function signInput(
     signingSerializationType: Uint8Array.from([sighashType]),
   });
   const messageHash = hash256(serialization);
-  return concat([
-    secp256k1.signMessageHashDER(key, messageHash),
-    Uint8Array.from([sighashType]),
-  ]);
+  const body =
+    algorithm === 'schnorr'
+      ? secp256k1.signMessageHashSchnorr(key, messageHash)
+      : secp256k1.signMessageHashDER(key, messageHash);
+  return concat([body as Uint8Array, Uint8Array.from([sighashType])]);
 }
 
 function wrapSignedPsbt(
@@ -308,16 +328,26 @@ describe('watch-only import verification', () => {
   });
 
   it('flags a partially-signed multi-input PSBT', () => {
-    const secondInput = makeInput({
-      txid: '1111111111111111111111111111111111111111111111111111111111111111',
-      vout: 1,
-    });
+    const secondInput = makeInput({ seed: 0x22, vout: 1 });
     const proposal = buildProposal([makeInput(), secondInput], 60_000n);
     const signed = wrapSignedPsbt(proposal, [signInput(proposal, 0), null]);
     const result = inspectImportedPsbt(signed, proposal);
     expect(result.state).toBe('partially-signed');
     expect(result.signedInputCount).toBe(1);
     expect(result.totalInputCount).toBe(2);
+  });
+
+  it('accepts a DER signature as well as a Schnorr one', () => {
+    // Every other test here signs Schnorr, because that is what SeedCash
+    // actually returns. DER must keep working too: Paytaca templates can be
+    // built with `signatureAlgorithm: 'ecdsa'`, and BCH tells the two apart by
+    // length alone — 64 bytes is Schnorr, anything else is parsed as DER.
+    const proposal = buildProposal([makeInput()], 30_000n);
+    const der = signInput(proposal, 0, 0xc1, privateKey, 'der');
+    expect(der.length - 1).not.toBe(64);
+
+    const signed = wrapSignedPsbt(proposal, [der]);
+    expect(inspectImportedPsbt(signed, proposal).state).toBe('complete');
   });
 
   it('rejects a signature with the wrong sighash type', () => {

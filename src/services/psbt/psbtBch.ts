@@ -30,7 +30,14 @@
 // settled on using it — the name is a Bitcoin inheritance, not a claim about
 // segwit.
 
-import { encodeTransaction, hexToBin } from '@bitauth/libauth';
+import {
+  binToHex,
+  decodeTransaction,
+  encodeTransaction,
+  hash256,
+  hexToBin,
+  secp256k1,
+} from '@bitauth/libauth';
 
 export const PSBT_MAGIC = Uint8Array.from([0x70, 0x73, 0x62, 0x74, 0xff]);
 
@@ -45,6 +52,7 @@ const PSBT_GLOBAL_OUTPUT_COUNT = 0x05;
 const PSBT_GLOBAL_VERSION = 0xfb;
 
 /** Per-input map keys. */
+const PSBT_IN_NON_WITNESS_UTXO = 0x00;
 const PSBT_IN_WITNESS_UTXO = 0x01;
 const PSBT_IN_PARTIAL_SIG = 0x02;
 const PSBT_IN_SIGHASH_TYPE = 0x03;
@@ -91,6 +99,15 @@ export interface PsbtInputSpec {
   satoshis: bigint;
   /** Locking script of the output being spent. */
   lockingBytecode: Uint8Array;
+  /**
+   * The full parent transaction, raw. When present it is emitted as
+   * PSBT_IN_NON_WITNESS_UTXO instead of PSBT_IN_WITNESS_UTXO — the encoding
+   * Paytaca writes and the only one SeedCash reads without corrupting the
+   * script it signs over. Required for anything that has to reach a real
+   * signer; the compact form is kept only for fixtures and PSBT-to-PSBT work
+   * where no device is involved.
+   */
+  previousTransaction?: Uint8Array;
   /** Compressed public key (33 bytes) that must sign this input. */
   publicKey?: Uint8Array;
   /** Master key fingerprint (4 bytes) — how a signer claims the input. */
@@ -377,16 +394,33 @@ export function encodeUnsignedPsbt(
       }
     }
     return concat([
-      // Amount + locking script of the output being spent. The amount is not
-      // optional on BCH: FORKID signatures commit to it.
-      record(
-        Uint8Array.from([PSBT_IN_WITNESS_UTXO]),
-        concat([
-          uint64LE(input.satoshis),
-          varInt(input.lockingBytecode.length),
-          input.lockingBytecode,
-        ])
-      ),
+      // The output being spent. The amount is not optional on BCH: FORKID
+      // signatures commit to it.
+      //
+      // NON_WITNESS_UTXO (the whole parent transaction) is emitted whenever the
+      // caller can supply it, because that is the field Paytaca writes and the
+      // only one SeedCash reads correctly. SeedCash's WITNESS_UTXO handler does
+      // `utxo_script = v[8:]`, which keeps the compact-size prefix that BIP174
+      // puts in front of the script, and then re-prefixes it when building the
+      // preimage — so it signs a hash over a script one byte longer than the
+      // one we verify against, and every signature mismatches.
+      //
+      // Never emit both: SeedCash's parse loop lets whichever key appears last
+      // win, so a PSBT carrying the pair would be correct or broken depending
+      // on map ordering.
+      input.previousTransaction
+        ? record(
+            Uint8Array.from([PSBT_IN_NON_WITNESS_UTXO]),
+            input.previousTransaction
+          )
+        : record(
+            Uint8Array.from([PSBT_IN_WITNESS_UTXO]),
+            concat([
+              uint64LE(input.satoshis),
+              varInt(input.lockingBytecode.length),
+              input.lockingBytecode,
+            ])
+          ),
       record(Uint8Array.from([PSBT_IN_SIGHASH_TYPE]), uint32LE(sighashType)),
       ...(input.redeemScript
         ? [record(Uint8Array.from([PSBT_IN_REDEEM_SCRIPT]), input.redeemScript)]
@@ -483,10 +517,12 @@ export interface ParsedPsbtInput {
   previousTxid: Uint8Array | null;
   outpointIndex: number | null;
   sequence: number | null;
-  /** Value of the output being spent, where PSBT_IN_WITNESS_UTXO is present. */
+  /** Value of the output being spent, from whichever UTXO field was present. */
   spentSatoshis: bigint | null;
-  /** Locking script of the output being spent (from PSBT_IN_WITNESS_UTXO). */
+  /** Locking script of the output being spent. */
   spentLockingBytecode: Uint8Array | null;
+  /** Raw parent transaction, when the input carried NON_WITNESS_UTXO. */
+  nonWitnessUtxo: Uint8Array | null;
   redeemScript: Uint8Array | null;
   requestedSighashType: number | null;
   partialSignatures: PsbtSignature[];
@@ -589,6 +625,7 @@ function parseInputMap(
     sequence: null,
     spentSatoshis: null,
     spentLockingBytecode: null,
+    nonWitnessUtxo: null,
     redeemScript: null,
     requestedSighashType: null,
     partialSignatures: [],
@@ -640,9 +677,12 @@ function parseInputMap(
       case PSBT_IN_SEQUENCE:
         if (value.length === 4) parsed.sequence = readUint32LE(value);
         break;
+      case PSBT_IN_NON_WITNESS_UTXO:
+        // Held raw: the output being spent cannot be picked out until the
+        // outpoint index is known, and 0x0f may appear later in the map.
+        parsed.nonWitnessUtxo = value;
+        break;
       default:
-        // PSBT_IN_NON_WITNESS_UTXO (0x00) and anything else is not needed here:
-        // the amount already comes from WITNESS_UTXO.
         break;
     }
   }
@@ -747,6 +787,7 @@ export function decodePsbt(bytes: Uint8Array): ParsedPsbt {
       const sawInputField =
         parsedInput.requestedSighashType !== null ||
         parsedInput.spentSatoshis !== null ||
+        parsedInput.nonWitnessUtxo !== null ||
         parsedInput.partialSignatures.length > 0 ||
         parsedInput.redeemScript !== null ||
         parsedInput.previousTxid !== null ||
@@ -759,6 +800,8 @@ export function decodePsbt(bytes: Uint8Array): ParsedPsbt {
       }
     }
   }
+
+  resolveNonWitnessUtxos(inputs, unsigned.value);
 
   const signatures = inputs.flatMap((input, inputIndex) =>
     input.partialSignatures.map((signature) => ({ ...signature, inputIndex }))
@@ -778,9 +821,90 @@ export function decodePsbt(bytes: Uint8Array): ParsedPsbt {
   };
 }
 
+/**
+ * Fill in the spent output for every input that carried NON_WITNESS_UTXO.
+ *
+ * The parent transaction is only useful once it is tied to the outpoint, and
+ * the tie has to be checked rather than assumed: a FORKID signature commits to
+ * the input amount, so a parent transaction that is not actually the one being
+ * spent would silently produce signatures that fail at broadcast. The outpoint
+ * in the unsigned transaction is the authority here, not the PSBT's own 0x0e /
+ * 0x0f fields, which a malformed PSBT could disagree with.
+ */
+function resolveNonWitnessUtxos(
+  inputs: ParsedPsbtInput[],
+  unsignedTransaction: Uint8Array
+): void {
+  if (!inputs.some((input) => input.nonWitnessUtxo)) return;
+  const decoded = decodeTransaction(unsignedTransaction);
+  if (typeof decoded === 'string') return;
+
+  inputs.forEach((input, index) => {
+    if (!input.nonWitnessUtxo || input.spentSatoshis !== null) return;
+    const outpoint = decoded.inputs[index];
+    if (!outpoint) return;
+
+    const parent = decodeTransaction(input.nonWitnessUtxo);
+    if (typeof parent === 'string') {
+      throw new Error(
+        `Input ${index} carries a PSBT_IN_NON_WITNESS_UTXO that is not a ` +
+          'decodable transaction.'
+      );
+    }
+    // hash256 gives the txid in internal order; libauth reverses inside
+    // encode/decodeTransaction, so `outpointTransactionHash` is already in
+    // display order. Compare in display order, which is also what the error
+    // message has to show for it to be checkable against an explorer.
+    const parentTxid = binToHex(hash256(input.nonWitnessUtxo).slice().reverse());
+    const spentTxid = binToHex(outpoint.outpointTransactionHash);
+    if (parentTxid !== spentTxid) {
+      throw new Error(
+        `Input ${index} carries the wrong parent transaction: it hashes to ` +
+          `${parentTxid}, but the input spends ${spentTxid}.`
+      );
+    }
+    const spent = parent.outputs[outpoint.outpointIndex];
+    if (!spent) {
+      throw new Error(
+        `Input ${index} spends output ${outpoint.outpointIndex} of a parent ` +
+          `transaction that only has ${parent.outputs.length}.`
+      );
+    }
+    input.spentSatoshis = spent.valueSatoshis;
+    input.spentLockingBytecode = spent.lockingBytecode;
+  });
+}
+
 /** The sighash byte a signature actually committed to. */
 export function sighashTypeOf(signature: Uint8Array): number | null {
   return signature.length === 0 ? null : signature[signature.length - 1];
+}
+
+/** A BCH Schnorr signature is exactly 64 bytes, before the sighash byte. */
+export const SCHNORR_SIGNATURE_LENGTH = 64;
+
+/**
+ * Verify a signature body (sighash byte already stripped) the way BCH does.
+ *
+ * BCH discriminates on length alone: 64 bytes is Schnorr, anything else is
+ * parsed as DER. That is not a heuristic — it is the consensus rule, and it is
+ * why Schnorr signatures are fixed-length in the first place.
+ *
+ * Both signers we interoperate with produce Schnorr by default, so this is the
+ * common path rather than the exotic one:
+ *   * SeedCash `sign_tx_input(..., use_schnorr: bool = True)` →
+ *     `sign_schnorr_bch(...) + bytes([hash_type])` (`psbt_parser.py`).
+ *   * Paytaca `createTemplate({ signatureAlgorithm = 'schnorr' })`
+ *     (`src/lib/multisig/template.js`).
+ */
+export function verifyBchSignature(
+  signatureBody: Uint8Array,
+  publicKey: Uint8Array,
+  messageHash: Uint8Array
+): boolean {
+  return signatureBody.length === SCHNORR_SIGNATURE_LENGTH
+    ? secp256k1.verifySignatureSchnorr(signatureBody, publicKey, messageHash)
+    : secp256k1.verifySignatureDER(signatureBody, publicKey, messageHash);
 }
 
 /**
@@ -789,8 +913,12 @@ export function sighashTypeOf(signature: Uint8Array): number | null {
  * A device that ignores PSBT_IN_SIGHASH_TYPE and signs with its own default
  * produces a signature that is perfectly well-formed and simply does not
  * validate — the transaction is rejected at broadcast, long after the user has
- * finished with the device and has no idea which step was wrong. SeedCash does
- * exactly this today: it hard-codes 0x41 and never reads the field.
+ * finished with the device and has no idea which step was wrong.
+ *
+ * SeedCash does read the field (`psbt_parser.py` parses key 0x03 and passes it
+ * to `sign_tx_input`), but it falls back to SIGHASH_ALL|FORKID (0x41) whenever
+ * the field is absent — so an encoder that forgets to emit it gets 0x41 back
+ * and fails at broadcast. That is what this guard catches.
  */
 export function verifySignatureSighashTypes(
   signatures: PsbtSignature[],

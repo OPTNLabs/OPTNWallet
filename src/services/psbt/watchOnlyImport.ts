@@ -19,19 +19,23 @@ import {
   generateSigningSerializationBch,
   hash256,
   hexToBin,
-  secp256k1,
   type CompilationContextBch,
 } from '@bitauth/libauth';
 
 import {
   decodePsbt,
   sighashTypeOf,
+  verifyBchSignature,
+  SCHNORR_SIGNATURE_LENGTH,
   SIGHASH_ALL_FORKID_ANYONECANPAY,
   type PsbtSignature,
 } from './psbtBch';
 import {
   parseMultisigRedeemScript,
   pushData,
+  pushMinimal,
+  schnorrCheckBits,
+  OP_0,
 } from './psbtMultisig';
 import type { WatchOnlyProposal } from './watchOnlySend';
 
@@ -97,7 +101,7 @@ function verifyPartialSignature(
     }
   );
   const messageHash = hash256(serialization);
-  return secp256k1.verifySignatureDER(
+  return verifyBchSignature(
     signature.signature.subarray(0, -1),
     signature.publicKey,
     messageHash
@@ -191,17 +195,28 @@ export function inspectImportedPsbt(
 /**
  * Build the unlocking script for one input from its verified signatures.
  *
- * P2PKH: `<sig+sighash> <pubkey>`. Multisig P2SH: `OP_0 <sig1> <sig2> ...
- * <redeemScript>` with the signatures ordered by each key's position in the
- * BIP-67-sorted redeem script — CHECKMULTISIG requires that order, and the
- * OP_0 dummy byte matches Paytaca's template unlocks byte-for-byte.
+ * P2PKH: `<sig+sighash> <pubkey>`. Multisig P2SH:
+ * `<dummy> <sig1> <sig2> ... <redeemScript>` with the signatures ordered by
+ * each key's position in the BIP-67-sorted redeem script, because that is the
+ * order CHECKMULTISIG walks them in.
+ *
+ * The dummy follows the signature algorithm, not a fixed convention: Schnorr
+ * signatures need a checkbits bit field naming the signing keys, ECDSA keeps
+ * the legacy null OP_0. BCH tells the two apart by signature length, so that
+ * is what decides here too. Mixing algorithms inside one CHECKMULTISIG is not
+ * expressible — the dummy is per-input, not per-signature — so it is refused
+ * rather than silently resolved one way.
  */
 function buildUnlockScript(
   signatures: PsbtSignature[],
   publicKey: Uint8Array,
-  redeemScriptHex?: string
+  multisig?: {
+    redeemScriptHex: string;
+    keyPositions: number[];
+    totalKeys: number;
+  }
 ): Uint8Array {
-  if (!redeemScriptHex) {
+  if (!multisig) {
     const signature = signatures[0];
     const script = new Uint8Array(
       signature.signature.length + publicKey.length + 2
@@ -213,9 +228,28 @@ function buildUnlockScript(
     return script;
   }
 
-  const parts = [Uint8Array.of(0x00)];
+  const schnorrCount = signatures.filter(
+    (candidate) =>
+      candidate.signature.length - 1 === SCHNORR_SIGNATURE_LENGTH
+  ).length;
+  if (schnorrCount !== 0 && schnorrCount !== signatures.length) {
+    throw new Error(
+      'This input mixes Schnorr and ECDSA signatures. CHECKMULTISIG carries ' +
+        'one dummy for the whole input, so every cosigner must sign with the ' +
+        'same algorithm.'
+    );
+  }
+
+  const dummy =
+    schnorrCount === signatures.length
+      ? pushMinimal(
+          schnorrCheckBits(multisig.keyPositions, multisig.totalKeys)
+        )
+      : Uint8Array.of(OP_0);
+
+  const parts = [dummy];
   for (const signature of signatures) parts.push(pushData(signature.signature));
-  parts.push(pushData(hexToBin(redeemScriptHex)));
+  parts.push(pushData(hexToBin(multisig.redeemScriptHex)));
   const total = parts.reduce((sum, part) => sum + part.length, 0);
   const script = new Uint8Array(total);
   let offset = 0;
@@ -282,11 +316,13 @@ export function mergeImportedSignatures(
         );
       }
       return {
-        script: buildUnlockScript(
-          ordered,
-          ordered[0].publicKey,
-          proposalInput.redeemScriptHex
-        ),
+        script: buildUnlockScript(ordered, ordered[0].publicKey, {
+          redeemScriptHex: proposalInput.redeemScriptHex,
+          keyPositions: ordered.map(
+            (candidate) => keyPosition.get(binToHex(candidate.publicKey))!
+          ),
+          totalKeys: policy.keys.length,
+        }),
       };
     }
 

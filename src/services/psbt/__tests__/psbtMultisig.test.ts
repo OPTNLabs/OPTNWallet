@@ -25,6 +25,7 @@ import {
 } from '@bitauth/libauth';
 import { decodePsbt, encodeUnsignedPsbt } from '../psbtBch';
 import { buildWatchOnlyPsbt } from '../watchOnlySend';
+import { makeParentTransaction } from './parentFixture';
 import {
   inspectImportedPsbt,
   mergeImportedSignatures,
@@ -88,8 +89,14 @@ function concat(parts: Uint8Array[]): Uint8Array {
   return out;
 }
 
+const MULTISIG_PARENT = makeParentTransaction({
+  lockingBytecode: p2shLocking,
+  satoshis: 1_000_000n,
+});
+
 const MULTISIG_INPUT_SPEC = {
-  txid: '00000000000000000000000000000000000000000000000000000000000000ab',
+  txid: MULTISIG_PARENT.txid,
+  previousTransactionHex: MULTISIG_PARENT.hex,
   vout: 0,
   satoshis: 1_000_000n,
   lockingBytecodeHex: binToHex(p2shLocking),
