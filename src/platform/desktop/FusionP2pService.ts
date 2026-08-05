@@ -325,26 +325,35 @@ async function onlyUnspent(
 export async function refreshAndVerifyP2pInputs(
   walletId: number,
   fallbackUtxos: UTXO[],
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  options?: { preferProvided?: boolean }
 ): Promise<UTXO[]> {
   if (signal?.aborted) throw new Error('fusion round cancelled');
-  const refreshed = await reconcileActiveWalletUtxosForSpend(walletId, signal);
-  if (signal?.aborted) throw new Error('fusion round cancelled');
-  const candidates = refreshed
-    ? Object.values(refreshed)
-        .flat()
-        .filter((utxo) => !utxo.token)
-    : fallbackUtxos;
   const claimed = reservedOutpoints(walletId);
-  const free = candidates.filter(
-    (utxo) => !claimed.has(outpointKey(utxo.tx_hash, utxo.tx_pos))
-  );
-  if (free.length === 0) {
-    throw new Error(
-      candidates.length === 0
-        ? 'No spendable (non-token) UTXOs to fuse.'
-        : 'All coins are already committed to another fusion round.'
+  const nonToken = (list: UTXO[]) =>
+    list.filter(
+      (utxo) => !utxo.token && !claimed.has(outpointKey(utxo.tx_hash, utxo.tx_pos))
     );
+
+  // Prefer the runner's already-reconciled coins (skip a second exclusive
+  // listunspent that blocked multi-wallet P2P on "Refreshing coins…").
+  let free = options?.preferProvided ? nonToken(fallbackUtxos) : [];
+  if (free.length === 0) {
+    const refreshed = await reconcileActiveWalletUtxosForSpend(walletId, signal);
+    if (signal?.aborted) throw new Error('fusion round cancelled');
+    const candidates = refreshed
+      ? Object.values(refreshed)
+          .flat()
+          .filter((utxo) => !utxo.token)
+      : fallbackUtxos;
+    free = nonToken(candidates);
+    if (free.length === 0) {
+      throw new Error(
+        candidates.length === 0
+          ? 'No spendable (non-token) UTXOs to fuse.'
+          : 'All coins are already committed to another fusion round.'
+      );
+    }
   }
 
   const spendable = await onlyUnspent(free, signal);
@@ -466,13 +475,14 @@ export async function runP2pFusion(
       host: opts.tor.host,
       port: opts.tor.port,
     });
-    status?.('Refreshing and verifying live wallet coins.');
-    // Drop coins another round of this wallet is already spending. Without this,
-    // two rounds (two windows, or a retry overlapping its predecessor) pick the
-    // same UTXOs; the first to broadcast spends them and the second is rejected
-    // with "Missing inputs" only after every peer has signed.
+    // Runner already did exclusive listunspent. Prefer a light reserved-filter +
+    // unspent check on those coins so 4 wallets do not stampede Electrum again
+    // and sit on "Refreshing coins…" until the gather window expires alone.
+    status?.('Verifying coins for this round…');
     const spendable = selectFusionInputs(
-      await refreshAndVerifyP2pInputs(opts.walletId, opts.utxos, opts.signal)
+      await refreshAndVerifyP2pInputs(opts.walletId, opts.utxos, opts.signal, {
+        preferProvided: true,
+      })
     );
     if (opts.signal?.aborted) throw new Error('fusion round cancelled');
     status?.('Tor verified; preparing fresh pool identity.');
@@ -518,6 +528,7 @@ export async function runP2pFusion(
         tiers,
         numInputs: runInputs.length,
         at: now,
+        seenAt: now,
         expiresAt: now + POOL_PEER_TTL_SECONDS,
       },
     ];
@@ -532,12 +543,14 @@ export async function runP2pFusion(
         // REPLACE, do not union. The old merge kept every key ever seen for the
         // whole gather even after joinPool dropped retired/stale ghosts — that
         // alone produced "7 live" with 4 wallets after a few Start retries.
+        const nowSec = Math.floor(Date.now() / 1_000);
         const byKey = new Map(received.map((peer) => [peer.pubkey, peer]));
         const self = peers.find((peer) => peer.pubkey === round!.pubkey);
         if (self && !byKey.has(round!.pubkey)) {
           byKey.set(round!.pubkey, {
             ...self,
-            at: Math.floor(Date.now() / 1_000),
+            at: nowSec,
+            seenAt: nowSec,
           });
         }
         peers = [...byKey.values()];
