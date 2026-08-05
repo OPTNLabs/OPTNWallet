@@ -5,10 +5,16 @@ import { electCoordinator, type FusionPoolNetwork } from './fusion';
 import { messageBinding, type RoundMessage, type RoundTransport } from './fusionSession';
 
 const MAX_PARTICIPANTS = 6;
-// Tor + multi-wallet: 15s was too short when one window is slow — the other
-// three finish a subset round while the late wallet still shows "proposing N"
-// and then hits a bare "timeout". 35s covers lag; clear errors explain the rest.
-const DEFAULT_RENDEZVOUS_TIMEOUT_MS = 35_000;
+// Tor + multi-wallet: gather can take 30–90s; agreement still needs gift-wrap
+// delivery of proposal/ack/start. 60s budget; short proposal wait was the killer.
+const DEFAULT_RENDEZVOUS_TIMEOUT_MS = 60_000;
+/**
+ * How long a participant waits for the elected coordinator's FIRST proposal
+ * before treating them as a ghost. 3.5s was fine on LAN hub tests but over Tor
+ * gift-wrap the first proposal often arrives later → everyone fails over,
+ * drops different keys, and "Could not agree on a round (4 in your view)".
+ */
+const DEFAULT_PROPOSAL_TIMEOUT_MS = 15_000;
 const PUBKEY = /^[0-9a-f]{64}$/;
 const SESSION = /^[0-9a-f]{64}$/;
 
@@ -100,7 +106,9 @@ function validProposal(
     message.session.match(SESSION) !== null &&
     message.network === params.network &&
     message.tier === params.tier &&
-    message.epoch === params.epoch &&
+    // Epoch is informational on the rolling pool. Gather spans 30–90s and the
+    // 30s epoch bucket often flips mid-gather; requiring equality rejected every
+    // honest proposal when wallets started a few seconds apart.
     participants.length >= 2 &&
     participants.length === message.participants.length &&
     sameParticipants(participants, message.participants) &&
@@ -113,6 +121,14 @@ function validProposal(
     // was actually coordinating.
     electCoordinator(participants) === from
   );
+}
+
+/** Network + tier must match; epoch is ignored (rolling pool). */
+function sameRoundBinding(
+  message: { network: string; tier: number; epoch: number },
+  params: Pick<FusionRendezvousParams, 'network' | 'tier'>
+): boolean {
+  return message.network === params.network && message.tier === params.tier;
 }
 
 function abortError(reason: string): Error {
@@ -187,6 +203,9 @@ export async function negotiateFusionRound(
         throw error;
       }
       candidates = candidates.filter((pubkey) => pubkey !== coordinator);
+      // Brief pause so peers that timed out the same ghost in the same tick can
+      // all re-subscribe before the new coordinator's first proposal is sent.
+      await new Promise((resolve) => setTimeout(resolve, 150));
     }
   }
 }
@@ -228,12 +247,14 @@ function negotiateAsCoordinator(
     // out a silent coordinator ignores proposals that do not outrank it, so it
     // would miss a one-shot offer sent before it failed over — and over Tor a
     // single dropped message would strand the round the same way.
+    // Re-offer often: peers failing over a ghost may subscribe mid-interval and
+    // would miss a 1.5s-spaced first proposal under a short proposalTimeout.
     const reproposeTimer = setInterval(() => {
       if (settled || starting || yielded) return;
       void Promise.all(
         others.map((peer) => transport.send(peer, makeProposal()))
       ).catch(() => undefined);
-    }, 1_500);
+    }, 800);
 
     const cleanup = () => {
       if (timer) clearTimeout(timer);
@@ -344,9 +365,7 @@ function negotiateAsCoordinator(
         yielded &&
         yieldedCoordinator === from &&
         message.session === yielded.session &&
-        message.network === params.network &&
-        message.tier === params.tier &&
-        message.epoch === params.epoch &&
+        sameRoundBinding(message, params) &&
         message.participants.includes(params.myPubkey)
       ) {
         finishSuccess({
@@ -363,9 +382,7 @@ function negotiateAsCoordinator(
         yielded ||
         message.type !== 'round_ack' ||
         message.session !== session ||
-        message.network !== params.network ||
-        message.tier !== params.tier ||
-        message.epoch !== params.epoch ||
+        !sameRoundBinding(message, params) ||
         !others.includes(from)
       ) {
         return;
@@ -485,9 +502,7 @@ function negotiateAsParticipant(
         accepted &&
         from === acceptedCoordinator &&
         message.session === accepted.session &&
-        message.network === params.network &&
-        message.tier === params.tier &&
-        message.epoch === params.epoch &&
+        sameRoundBinding(message, params) &&
         message.participants.includes(params.myPubkey)
       ) {
         succeed({
@@ -505,15 +520,15 @@ function negotiateAsParticipant(
     const timeoutMs = params.timeoutMs ?? DEFAULT_RENDEZVOUS_TIMEOUT_MS;
     const timer = setTimeout(() => fail(new Error('round start timed out')), timeoutMs);
     // Ghost check: if the elected coordinator has not proposed at all by now it
-    // is an abandoned round's stored announcement. Give up on it quickly so the
-    // caller can re-elect, instead of burning the whole budget on a dead key.
+    // is an abandoned round's stored announcement. Give up so the caller can
+    // re-elect. Must stay long enough for Tor gift-wrap (see DEFAULT_PROPOSAL_TIMEOUT_MS).
     // Once a proposal HAS arrived we stay for the full timeout, because the
     // coordinator still has to finish its settle window before round_start.
     const proposalTimer = setTimeout(
       () => {
         if (!accepted) fail(new Error('round start timed out'));
       },
-      Math.min(params.proposalTimeoutMs ?? 3_500, timeoutMs)
+      Math.min(params.proposalTimeoutMs ?? DEFAULT_PROPOSAL_TIMEOUT_MS, timeoutMs)
     );
   });
 }

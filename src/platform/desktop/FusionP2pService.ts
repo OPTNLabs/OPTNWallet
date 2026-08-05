@@ -605,9 +605,9 @@ export async function runP2pFusion(
           network,
           tier: group.tier,
           epoch,
-          // Tor multi-wallet: allow lag so a slightly slow window can still join
-          // the same proposal; still fails with a clear late-joiner message.
-          timeoutMs: 40_000,
+          // Tor multi-wallet gift-wrap: proposal/ack/start need a wide budget.
+          timeoutMs: 60_000,
+          proposalTimeoutMs: 15_000,
           signal: opts.signal,
         },
         transport

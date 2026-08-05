@@ -808,8 +808,11 @@ function runParticipant(
       if (seenNonces.has(message.nonce)) return;
       seenNonces.add(message.nonce);
 
-      // Handle onion messages from peers in the mix-net (includes coordinator's own onions)
-      if (message.type === 'onion_output' && params.participants.includes(from)) {
+      // Onion outputs are gift-wrapped under a throwaway key (fusionTransport),
+      // so `from` is almost never a round participant. Requiring
+      // participants.includes(from) dropped every production onion — peel never
+      // ran, coordinator saw ready 2/2 outputSlots=0, and the round aborted.
+      if (message.type === 'onion_output') {
         void handleOnionMessage(from, message).catch((error: unknown) =>
           void fail(asError(error), true)
         );
