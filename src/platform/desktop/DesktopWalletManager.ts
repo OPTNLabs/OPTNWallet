@@ -227,6 +227,7 @@ export async function createWalletWithPassword(
       encryptedMnemonic,
       encryptedPassphrase,
       kdfSalt: bytesToBase64(salt),
+      network: network === Network.CHIPNET ? 'chipnet' : 'mainnet',
       derivationPath: resolvedDerivationPath,
       derivationPathSource: resolvedDerivationPathSource,
     });
@@ -676,13 +677,16 @@ export async function buildWalletFileContents(
   if (!saltBytes) return null;
 
   const query = db.prepare(
-    'SELECT wallet_name, mnemonic, passphrase, walletType, derivation_path, derivation_path_source FROM wallets WHERE id = ?'
+    'SELECT wallet_name, mnemonic, passphrase, walletType, networkType, derivation_path, derivation_path_source FROM wallets WHERE id = ?'
   );
   query.bind([walletId]);
   let row: Record<string, unknown> | null = null;
   if (query.step()) row = query.getAsObject() as Record<string, unknown>;
   query.free();
   if (!row) return null;
+
+  const networkType =
+    row.networkType === Network.CHIPNET ? Network.CHIPNET : Network.MAINNET;
 
   const { serializeWalletFile } = await import('./walletFile');
   return serializeWalletFile({
@@ -697,6 +701,7 @@ export async function buildWalletFileContents(
     encryptedPassphrase:
       typeof row.passphrase === 'string' ? row.passphrase : '',
     kdfSalt: bytesToBase64(saltBytes),
+    network: networkType === Network.CHIPNET ? 'chipnet' : 'mainnet',
     derivationPath:
       typeof row.derivation_path === 'string' ? row.derivation_path : undefined,
     derivationPathSource:
@@ -728,15 +733,56 @@ export interface ImportWalletFileResult {
   walletType: WalletType;
   derivationPath?: string;
   derivationPathSource?: DerivationPathSource;
+  /** True when the keystore already existed — opened instead of duplicating. */
+  reusedExisting: boolean;
+}
+
+/**
+ * Find a DB wallet that is already this exact keystore (same ciphertext + salt).
+ * Re-importing an export of wallet 5 must not create a second row on another
+ * network — same seed, same password material = same wallet.
+ */
+export async function findWalletByKeystore(
+  encryptedMnemonic: string,
+  kdfSaltB64: string
+): Promise<{ walletId: number; network: Network } | null> {
+  if (!encryptedMnemonic || !kdfSaltB64) return null;
+  const dbService = DatabaseService();
+  await dbService.ensureDatabaseStarted();
+  const db = dbService.getDatabase();
+  if (!db) return null;
+
+  const q = db.prepare(
+    'SELECT id, networkType FROM wallets WHERE mnemonic = ? AND kdf_salt = ? LIMIT 1'
+  );
+  q.bind([encryptedMnemonic, kdfSaltB64]);
+  let hit: { walletId: number; network: Network } | null = null;
+  if (q.step()) {
+    const row = q.getAsObject() as Record<string, unknown>;
+    const id = typeof row.id === 'number' ? row.id : Number(row.id);
+    if (Number.isSafeInteger(id) && id > 0) {
+      hit = {
+        walletId: id,
+        network:
+          row.networkType === Network.CHIPNET
+            ? Network.CHIPNET
+            : Network.MAINNET,
+      };
+    }
+  }
+  q.free();
+  return hit;
 }
 
 /**
  * Import a wallet from a parsed .optn file: decrypt its mnemonic with the given
- * password + the file's own salt (this also VERIFIES the password), then create
- * a fresh DB row via the normal per-wallet-password path (new salt, re-encrypted,
- * auto-mirrored to a file). Returns null if the password is wrong or the file is
- * malformed. Network isn't stored in the file (runtime setting) — caller passes
- * the network to import under.
+ * password + the file's own salt (this also VERIFIES the password), then either
+ * open the matching existing DB row or create a fresh one.
+ *
+ * Network priority for *new* rows:
+ *   1) `file.network` (written on export)
+ *   2) `network` argument (caller: current app network)
+ * Never force mainnet when the file or app is on chipnet.
  */
 export async function importWalletFile(
   file: WalletFileV1,
@@ -768,11 +814,38 @@ export async function importWalletFile(
       ? WalletType.QUANTUMROOT
       : WalletType.STANDARD;
 
+  // Same .optn already in the DB → open it, do not invent a second row.
+  const existing = await findWalletByKeystore(
+    file.encryptedMnemonic,
+    file.kdfSalt
+  );
+  if (existing) {
+    const opened = await openWalletWithPassword(existing.walletId, password);
+    if (!opened) return null;
+    return {
+      walletId: existing.walletId,
+      network: existing.network,
+      walletType,
+      derivationPath: file.derivationPath,
+      derivationPathSource: file.derivationPathSource,
+      reusedExisting: true,
+    };
+  }
+
+  const { networkFromWalletFile } = await import('./walletFile');
+  const fileNetwork = networkFromWalletFile(file);
+  const resolvedNetwork =
+    fileNetwork === 'chipnet'
+      ? Network.CHIPNET
+      : fileNetwork === 'mainnet'
+        ? Network.MAINNET
+        : network;
+
   const walletId = await createWalletWithPassword({
     name: file.name,
     mnemonic,
     passphrase,
-    network,
+    network: resolvedNetwork,
     walletType,
     password,
     derivationPath: file.derivationPath,
@@ -781,10 +854,11 @@ export async function importWalletFile(
   if (walletId == null) return null;
   return {
     walletId,
-    network,
+    network: resolvedNetwork,
     walletType,
     derivationPath: file.derivationPath,
     derivationPathSource: file.derivationPathSource,
+    reusedExisting: false,
   };
 }
 
@@ -887,17 +961,8 @@ export async function changeWalletPassword(
 
   setCachedPassword(newPassword, newSalt, walletId);
 
-  // Refresh the wallet file so its copy matches the new password.
-  await autoSaveWalletFile({
-    sourceId: walletId,
-    name: row.name,
-    walletType: row.walletType,
-    encryptedMnemonic: encMnemonic,
-    encryptedPassphrase: encPassphrase,
-    kdfSalt: bytesToBase64(newSalt),
-    derivationPath: row.derivationPath,
-    derivationPathSource: row.derivationPathSource,
-  });
+  // Full mirror (includes network) so the .optn stays in sync after re-key.
+  await refreshWalletFileMirror(walletId);
 
   // A biometric enrollment stored the OLD password — refresh it if present.
   try {

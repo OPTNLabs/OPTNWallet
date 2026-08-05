@@ -605,7 +605,7 @@ export function useMenuBar(): void {
           // wallet, or pick an existing one — isolated from this window.
           await MenuItem.new({
             id: 'new_wallet',
-            text: 'Import New Wallet',
+            text: 'Open New Wallet',
             accelerator: 'CmdOrCtrl+N',
             action: menuAction('new_wallet'),
           }),

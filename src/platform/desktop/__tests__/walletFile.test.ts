@@ -10,6 +10,7 @@ describe('walletFile serialize/parse round-trip', () => {
       encryptedMnemonic: 'enc:v1:abc123',
       encryptedPassphrase: 'enc:v1:def456',
       kdfSalt: 'c29tZS1zYWx0LWJhc2U2NA==',
+      network: 'chipnet' as const,
     };
     const text = serializeWalletFile(original);
     const parsed = parseWalletFile(text);
@@ -22,6 +23,7 @@ describe('walletFile serialize/parse round-trip', () => {
     expect(parsed.encryptedMnemonic).toBe(original.encryptedMnemonic);
     expect(parsed.encryptedPassphrase).toBe(original.encryptedPassphrase);
     expect(parsed.kdfSalt).toBe(original.kdfSalt);
+    expect(parsed.network).toBe('chipnet');
   });
 
   it('defaults an empty encryptedPassphrase and missing sourceId/walletType on import', () => {
@@ -37,6 +39,7 @@ describe('walletFile serialize/parse round-trip', () => {
     expect(parsed.encryptedPassphrase).toBe('');
     expect(parsed.sourceId).toBe(0);
     expect(parsed.walletType).toBe('standard');
+    expect(parsed.network).toBeUndefined();
   });
 
   it('rejects a file with the wrong format/version marker', () => {

@@ -4,6 +4,8 @@ import {
   isOptnColdPath,
   isOptnKeystorePath,
   splitWalletPackPaths,
+  walletNameFromOptnPath,
+  withWalletFileName,
 } from '../WalletPackService';
 
 describe('WalletPackService paths', () => {
@@ -28,5 +30,31 @@ describe('WalletPackService paths', () => {
     ]);
     expect(keystorePath).toBe('a.optn');
     expect(coldPath).toBe('a.optn-cold');
+  });
+
+  it('takes the Save-as stem as the wallet display name', () => {
+    expect(walletNameFromOptnPath('C:\\backups\\wallet7 for testing.optn')).toBe(
+      'wallet7 for testing'
+    );
+    expect(walletNameFromOptnPath('x.optn-cold')).toBeNull();
+  });
+
+  it('rewrites only the name field inside .optn JSON', () => {
+    const raw = JSON.stringify(
+      {
+        format: 'optn-wallet',
+        version: 1,
+        sourceId: 5,
+        name: 'wallet7',
+        encryptedMnemonic: 'enc:v1:x',
+        kdfSalt: 's',
+      },
+      null,
+      2
+    );
+    const next = JSON.parse(withWalletFileName(raw, 'wallet7 for testing'));
+    expect(next.name).toBe('wallet7 for testing');
+    expect(next.sourceId).toBe(5);
+    expect(next.encryptedMnemonic).toBe('enc:v1:x');
   });
 });

@@ -34,6 +34,8 @@ import {
 export const WALLETS_DIR = 'wallets';
 export const WALLET_FILE_EXT = 'optn';
 
+export type WalletFileNetwork = 'mainnet' | 'chipnet';
+
 export interface WalletFileV1 {
   format: 'optn-wallet';
   version: 1;
@@ -47,9 +49,24 @@ export interface WalletFileV1 {
   encryptedPassphrase: string;
   /** base64 PBKDF2 salt used to derive this wallet's key. */
   kdfSalt: string;
+  /**
+   * Network the wallet was on when exported. Older files omit this — import
+   * then uses the app's current network instead of forcing mainnet.
+   */
+  network?: WalletFileNetwork;
   /** Effective BIP44 account path. Optional for files created before path persistence. */
   derivationPath?: string;
   derivationPathSource?: 'default' | 'custom';
+}
+
+/** Parse optional network field from a wallet file (null if missing/unknown). */
+export function networkFromWalletFile(
+  file: Pick<WalletFileV1, 'network'>
+): WalletFileNetwork | null {
+  if (file.network === 'mainnet' || file.network === 'chipnet') {
+    return file.network;
+  }
+  return null;
 }
 
 export function serializeWalletFile(w: Omit<WalletFileV1, 'format' | 'version'>): string {
@@ -69,6 +86,11 @@ export function parseWalletFile(text: string): WalletFileV1 {
   ) {
     throw new Error('OPTN wallet file is missing required fields.');
   }
+  const network: WalletFileNetwork | undefined =
+    parsed.network === 'mainnet' || parsed.network === 'chipnet'
+      ? parsed.network
+      : undefined;
+
   return {
     format: 'optn-wallet',
     version: 1,
@@ -79,6 +101,7 @@ export function parseWalletFile(text: string): WalletFileV1 {
     encryptedPassphrase:
       typeof parsed.encryptedPassphrase === 'string' ? parsed.encryptedPassphrase : '',
     kdfSalt: parsed.kdfSalt,
+    network,
     derivationPath:
       typeof parsed.derivationPath === 'string' ? parsed.derivationPath : undefined,
     derivationPathSource:
@@ -124,15 +147,15 @@ export async function autoSaveWalletFile(
     if (!(await exists(WALLETS_DIR, { baseDir: BaseDirectory.AppData }))) {
       await mkdir(WALLETS_DIR, { baseDir: BaseDirectory.AppData, recursive: true });
     }
-    // Take <name>.optn if it is free or already ours; otherwise step to
-    // <name>_2, _3 ... so a second wallet sharing a name cannot overwrite the
-    // first one's backup. The suffix is only ever reached by a real collision,
-    // so the common case stays exactly the wallet's name.
+    // Take <name>.optn if free or already ours. On a real collision with a
+    // *different* wallet id, use <name>_id<N>.optn (never opaque _2/_3 — those
+    // looked like mysterious clones of "wallet5" after re-imports).
     let rel = `${WALLETS_DIR}/${defaultWalletFileName(w.name)}`;
-    for (let n = 2; n <= 50; n += 1) {
-      if (!(await exists(rel, { baseDir: BaseDirectory.AppData }))) break;
-      if ((await ownerOf(rel)) === w.sourceId) break;
-      rel = `${WALLETS_DIR}/${defaultWalletFileName(`${w.name}_${n}`)}`;
+    if (await exists(rel, { baseDir: BaseDirectory.AppData })) {
+      const owner = await ownerOf(rel);
+      if (owner !== w.sourceId) {
+        rel = `${WALLETS_DIR}/${defaultWalletFileName(`${w.name}_id${w.sourceId}`)}`;
+      }
     }
 
     await writeTextFile(rel, serializeWalletFile(w), { baseDir: BaseDirectory.AppData });

@@ -147,9 +147,13 @@ export async function verifyWalletPassword(
 }
 
 /**
- * Password for pack export/import without nagging unlocked wallets.
- * Uses the in-memory unlock password when this wallet is already open,
- * then tries empty password, then prompts.
+ * Password for pack export/import without nagging unlocked / passwordless wallets.
+ *
+ * Order:
+ *  1) In-memory unlock session password (including empty string) — no prompt
+ *  2) Empty password if it decrypts this wallet — no prompt
+ *  3) window.prompt only when a real password is required
+ *
  * Returns null if the user cancels the prompt.
  */
 export async function resolveWalletPassword(
@@ -163,11 +167,13 @@ export async function resolveWalletPassword(
       await import('./WalletKeyCache');
     if (hasCachedCredentialsForWallet(walletId)) {
       const snap = getCachedPasswordSnapshot();
+      // Trust the unlock session: password was verified when the wallet opened
+      // (including empty-password wallets). Re-verify only if we have a snap.
       if (
         snap &&
-        (snap.ownerWalletId === walletId || snap.ownerWalletId == null) &&
-        (await verifyWalletPassword(walletId, snap.password))
+        (snap.ownerWalletId === walletId || snap.ownerWalletId == null)
       ) {
+        // Empty string is a valid cached password for no-password wallets.
         return snap.password;
       }
     }
@@ -175,12 +181,14 @@ export async function resolveWalletPassword(
     /* cache optional */
   }
 
+  // Wallet may be exportable while locked if it has no password.
   if (await verifyWalletPassword(walletId, '')) {
     return '';
   }
 
   const typed = window.prompt(promptMessage);
   if (typed === null) return null;
+  // Empty OK-click: treat as empty password attempt (passwordless wallets).
   if (!(await verifyWalletPassword(walletId, typed))) {
     throw new Error('Wrong wallet password.');
   }
@@ -436,32 +444,37 @@ export async function saveEncryptedColdArchiveWithDialog(
   suggestedName: string
 ): Promise<string | null> {
   const { save: saveDialog } = await import('@tauri-apps/plugin-dialog');
-  const { writeTextFile } = await import('@tauri-apps/plugin-fs');
+  const { invoke } = await import('@tauri-apps/api/core');
   const dest = await saveDialog({
     title: 'Save encrypted cold archive',
     defaultPath: suggestedName,
     filters: [
-      { name: 'OPTN cold archive', extensions: ['optn-cold', 'json'] },
+      { name: 'OPTN cold archive', extensions: ['optn-cold'] },
     ],
   });
   if (typeof dest !== 'string' || !dest) return null;
-  await writeTextFile(dest, serializeEncryptedColdArchive(file));
-  return dest;
+  // Normalize extension: dialog may omit it; Rust path guard requires .optn-cold.
+  const path = /\.optn-cold$/i.test(dest) ? dest : `${dest}.optn-cold`;
+  await invoke('write_optn_cold_file', {
+    path,
+    contents: serializeEncryptedColdArchive(file),
+  });
+  return path;
 }
 
 export async function pickAndReadColdArchiveFile(): Promise<string | null> {
   const { open: openDialog } = await import('@tauri-apps/plugin-dialog');
-  const { readTextFile } = await import('@tauri-apps/plugin-fs');
+  const { invoke } = await import('@tauri-apps/api/core');
   const picked = await openDialog({
     multiple: false,
     directory: false,
     title: 'Open encrypted cold archive',
     filters: [
-      { name: 'OPTN cold archive', extensions: ['optn-cold', 'json'] },
+      { name: 'OPTN cold archive', extensions: ['optn-cold'] },
     ],
   });
   if (typeof picked !== 'string') return null;
-  return readTextFile(picked);
+  return invoke<string>('read_optn_cold_file', { path: picked });
 }
 
 export type ColdExportResult = {
