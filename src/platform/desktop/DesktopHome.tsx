@@ -182,12 +182,31 @@ const Home: React.FC = () => {
     if (!walletSession) return;
 
     dispatch(setFetchingUTXOs(true));
+    reportSyncProgress(2);
 
     try {
+      // Same network path as open-bootstrap for balances: scripthash batches,
+      // no second BIP44 rediscovery (open already expanded the key set).
+      // History still runs so Recent Activity updates — that was the missing
+      // piece on open-only balance refresh, but it must not re-do discovery.
+      await ElectrumService.ensureFreshConnection();
+      if (!isActiveWalletSession(walletSession)) return;
+      reportSyncProgress(8);
+
       await runWalletUtxoRefresh(currentWalletId, async () => {
-        await ElectrumService.ensureFreshConnection();
         if (!isActiveWalletSession(walletSession)) return;
-        const walletUtxos = await fetchActiveWalletUtxos(walletSession);
+        const walletUtxos = await fetchActiveWalletUtxos(
+          walletSession,
+          undefined,
+          {
+            discover: false,
+            onProgress: (done, total) => {
+              if (total <= 0) return;
+              // 8–55% = UTXO batches
+              reportSyncProgress(8 + Math.round(47 * (done / total)));
+            },
+          }
+        );
         if (!walletUtxos) return;
         dispatch(replaceAllUTXOs({ utxosByAddress: walletUtxos }));
         dbService.scheduleDatabaseSave(currentWalletId);
@@ -203,15 +222,22 @@ const Home: React.FC = () => {
         if (refreshedCategories.length > 0) {
           void preloadTokenMetadata(refreshedCategories);
         }
-        await refreshUTXOWorkerSubscriptions();
+        // Subscriptions already established on open; a full re-subscribe was
+        // another multi-second tax on every manual Sync click.
+        void refreshUTXOWorkerSubscriptions();
       });
+      reportSyncProgress(55);
+
       // Sync means the whole wallet, not just its coins. Refreshing UTXOs alone
       // moved the balance while Recent Activity stayed as it was.
       await refreshWalletTransactionHistory({
         walletId: currentWalletId,
         dispatch,
         sessionGeneration,
-        onProgress: reportSyncProgress,
+        onProgress: (pct) => {
+          // 55–100% = history pass
+          reportSyncProgress(55 + Math.round(0.45 * pct));
+        },
       });
     } catch (error) {
       logError('Home.handleRefresh', error, { walletId: currentWalletId });
@@ -226,6 +252,7 @@ const Home: React.FC = () => {
     dbService,
     dispatch,
     fetchingUTXOsRedux,
+    reportSyncProgress,
     sessionGeneration,
   ]);
 

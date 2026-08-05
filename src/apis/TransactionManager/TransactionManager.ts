@@ -136,11 +136,13 @@ export default function TransactionManager() {
   async function fetchAndStoreTransactionHistories(
     walletId: number,
     addresses: string[],
-    sessionGeneration?: number
+    sessionGeneration?: number,
+    onProgress?: (completedCount: number, totalCount: number) => void
   ): Promise<Record<string, TransactionHistoryItem[] | undefined>> {
     const uniqueAddresses = Array.from(new Set(addresses.filter(Boolean)));
     const histories = await ElectrumService.getTransactionHistoryMany(
-      uniqueAddresses
+      uniqueAddresses,
+      onProgress
     );
     const stored: Record<string, TransactionHistoryItem[] | undefined> = {};
 

@@ -71,14 +71,31 @@ describe('fetchActiveWalletUtxos', () => {
 
     expect(retrieveKeysMock).toHaveBeenCalledWith(6);
     expect(listTrackedAddressesMock).toHaveBeenCalledWith(6);
-    expect(fetchAndStoreUTXOsManyMock).toHaveBeenCalledWith(6, [
-      'bchtest:qwallet6',
-      'bchtest:pwallet6qr',
-    ]);
+    expect(fetchAndStoreUTXOsManyMock).toHaveBeenCalledWith(
+      6,
+      ['bchtest:qwallet6', 'bchtest:pwallet6qr'],
+      { discover: true, onProgress: undefined }
+    );
     expect(result).toEqual({
       'bchtest:qwallet6': [],
       'bchtest:pwallet6qr': [],
     });
+  });
+
+  it('can skip rediscovery for manual Home Sync', async () => {
+    const { captureActiveWalletSession, fetchActiveWalletUtxos } = await import(
+      '../WalletUtxoRefreshService'
+    );
+
+    await fetchActiveWalletUtxos(captureActiveWalletSession(6)!, undefined, {
+      discover: false,
+    });
+
+    expect(fetchAndStoreUTXOsManyMock).toHaveBeenCalledWith(
+      6,
+      ['bchtest:qwallet6', 'bchtest:pwallet6qr'],
+      { discover: false, onProgress: undefined }
+    );
   });
 
   it('invalidates every address before fetching a fresh wallet snapshot', async () => {

@@ -169,25 +169,37 @@ export async function refreshWalletTransactionHistory(
       return;
     }
 
+    // Network is the long phase — report while batches complete, not only after
+    // the entire multi-address history RPC returns (that made the bar freeze
+    // then jump, and made manual Sync feel like the "old slow path").
+    onProgress?.(5);
     const transactionManager = TransactionManager();
+    const mapHistoryProgress = (done: number, total: number) => {
+      if (total <= 0) return;
+      // Reserve 5–90% for Electrum history batches; DB/redux publish is 90–100.
+      onProgress?.(5 + Math.round(85 * (done / total)));
+    };
     const historyByAddress =
       sessionGeneration === undefined
         ? await transactionManager.fetchAndStoreTransactionHistories(
             walletId,
-            pending
+            pending,
+            undefined,
+            mapHistoryProgress
           )
         : await transactionManager.fetchAndStoreTransactionHistories(
             walletId,
             pending,
-            sessionGeneration
+            sessionGeneration,
+            mapHistoryProgress
           );
 
     const processed: string[] = [];
-    pending.forEach((address, index) => {
+    for (const address of pending) {
       if (Array.isArray(historyByAddress[address])) processed.push(address);
-      onProgress?.(Math.round(((index + 1) / pending.length) * 100));
-    });
+    }
     scannedAddresses = processed;
+    onProgress?.(90);
 
     const liveDb = dbService.getDatabase() as SqlLikeDb | null;
     if (!liveDb) {

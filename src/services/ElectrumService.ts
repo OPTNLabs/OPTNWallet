@@ -369,7 +369,8 @@ const ElectrumService = {
   },
 
   async getTransactionHistoryMany(
-    addresses: string[]
+    addresses: string[],
+    onProgress?: (completedCount: number, totalCount: number) => void
   ): Promise<Record<string, TransactionHistoryItem[] | null>> {
     const server = ElectrumServer();
     const uniqueAddresses = Array.from(new Set(addresses.filter(Boolean)));
@@ -406,11 +407,25 @@ const ElectrumService = {
       });
     }
 
-    if (pendingCalls.length === 0) return results;
+    const cachedCount = uniqueAddresses.length - pending.length;
+    if (cachedCount > 0) {
+      onProgress?.(cachedCount, uniqueAddresses.length);
+    }
+
+    if (pendingCalls.length === 0) {
+      onProgress?.(uniqueAddresses.length, uniqueAddresses.length);
+      return results;
+    }
 
     const batchPromise = (async () => {
       try {
-        const batchResults = await requestManyInChunks(server, pendingCalls);
+        const batchResults = await requestManyInChunks(
+          server,
+          pendingCalls,
+          (done) => {
+            onProgress?.(cachedCount + done, uniqueAddresses.length);
+          }
+        );
         await Promise.all(batchResults.map(async (response, index) => {
           const address = pending[index];
           if (response instanceof Error) {
