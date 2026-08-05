@@ -18,8 +18,11 @@ import Layout from '../components/Layout';
 import RootHandler from '../pages/RootHandler';
 import AppsView from '../features/apps/AppsView';
 import { AppDispatch, RootState } from '../state/store';
-import { selectHasWallet, selectWalletId } from '../state/slices/walletSlice';
-import CampaignDetail from '../pages/apps/fundme/CampaignDetail';
+import {
+  selectHasWallet,
+  selectWalletId,
+  selectWalletType,
+} from '../state/slices/walletSlice';import CampaignDetail from '../pages/apps/fundme/CampaignDetail';
 import { usePrices } from '../hooks/usePrices';
 import { SignTransactionModal } from '../components/walletconnect/SignTransactionModal';
 import { SignMessageModal } from '../components/walletconnect/SignMessageModal';
@@ -56,7 +59,17 @@ import {
 import { NostrChatRoute } from '../features/nostr/NostrChatRoute';
 
 const SimpleSend = lazy(() => import('../features/simple-send/SimpleSend'));
+const WatchOnlySend = lazy(() => import('../features/watch-only-send/WatchOnlySend'));
 const NostrChat = lazy(() => import('../features/nostr/NostrChat'));
+
+/**
+ * /send routes to the air-gapped watch-only workspace when the open wallet is
+ * watch-only (no signing keys here), and to the normal send flow otherwise.
+ */
+function SendRoute() {
+  const walletType = useSelector(selectWalletType);
+  return walletType === 'watch-only' ? <WatchOnlySend /> : <SimpleSend />;
+}
 
 type AppShellProps = {
   viewerOnly?: boolean;
@@ -166,7 +179,7 @@ function App({ viewerOnly = false }: AppShellProps) {
                         path={ROUTE_PATHS.quantumroot}
                         element={<Quantumroot />}
                       />
-                      <Route path={ROUTE_PATHS.send} element={<SimpleSend />} />
+                      <Route path={ROUTE_PATHS.send} element={<SendRoute />} />
                       <Route path={ROUTE_PATHS.outbox} element={<Outbox />} />
                       <Route
                         path="/mint-cashtokens-poc"

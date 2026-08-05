@@ -25,9 +25,43 @@ let _cached: CachedPasswordSnapshot | null = null;
 // lock/unlock cycle or a switch to another wallet invalidates it for free.
 let _unlockEpoch = 0;
 
+/**
+ * Watch-only session marker.
+ *
+ * A watch-only wallet has no password and no KDF salt — there is nothing to
+ * cache. The shell still needs to know "this wallet is intentionally open",
+ * otherwise its credential invariant (DesktopAppShell) would eject the wallet
+ * the moment it is opened. Marked by openWatchOnlyWallet, cleared by
+ * clearCachedPassword (lock) and on wallet switch.
+ */
+let _watchOnlyWalletId: number | null = null;
+
 /** Identifies the current unlock session. Changes on every unlock and lock. */
 export function getUnlockEpoch(): number {
   return _unlockEpoch;
+}
+
+/**
+ * Mark a watch-only wallet as the intentionally-open session.
+ *
+ * The wallet itself carries no credentials; this marker is the only thing the
+ * shell can check to keep it open. Wiped by clearCachedPassword (lock) so an
+ * inactivity lock closes a watch-only wallet like any other.
+ */
+export function markWatchOnlySession(walletId: number): void {
+  _watchOnlyWalletId = walletId;
+  _unlockEpoch += 1;
+}
+
+export function clearWatchOnlySession(): void {
+  _watchOnlyWalletId = null;
+  _unlockEpoch += 1;
+}
+
+/** Is a watch-only session currently open (optionally for this wallet)? */
+export function hasWatchOnlySession(walletId?: number): boolean {
+  if (_watchOnlyWalletId === null) return false;
+  return walletId === undefined || _watchOnlyWalletId === walletId;
 }
 
 /**
@@ -64,7 +98,9 @@ export function getCachedOwnerWalletId(): number | null {
  * Sync session check used by the desktop shell: is this wallet allowed to stay
  * open given what is currently in RAM?
  *
- * - No cache → not open.
+ * - No cache and no watch-only marker → not open.
+ * - Watch-only marker matches this wallet → open (it has no credentials by
+ *   design; the marker IS its session).
  * - `ownerWalletId === null` → shared/legacy gate credentials (valid for the
  *   wallet that just unlocked them; shell treats any positive walletId as ok
  *   once open, because openWalletWithPassword only runs after verify).
@@ -75,6 +111,7 @@ export function getCachedOwnerWalletId(): number | null {
  * this (or `isCached`) instead of the deprecated `getCachedWalletKey*` stubs.
  */
 export function hasCachedCredentialsForWallet(walletId: number): boolean {
+  if (_watchOnlyWalletId === walletId) return true;
   if (!_cached) return false;
   if (_cached.ownerWalletId == null) return true;
   return _cached.ownerWalletId === walletId;
@@ -86,6 +123,7 @@ export function getCachedPasswordSnapshot(): CachedPasswordSnapshot | null {
 
 export function clearCachedPassword(): void {
   _cached = null;
+  _watchOnlyWalletId = null;
   _unlockEpoch += 1;
   console.log('[WalletKeyCache] Password + salt wiped from memory');
   // Void Never-mode spend window (epoch mismatch also covers this; explicit

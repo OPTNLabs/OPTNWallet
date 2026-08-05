@@ -12,6 +12,7 @@ import {
 import { DesktopWalletPickerActions } from '../DesktopWalletPickerActions';
 import { WatchOnlyWalletPreview } from '../WatchOnlyWalletPreview';
 import { deriveWatchOnlyAccountPreview } from '../watchOnlyAccountPreview';
+import { masterFingerprintBytes } from '../watchOnlyWallet';
 
 const TEST_MNEMONIC = bip39.entropyToMnemonic('0'.repeat(32));
 
@@ -80,17 +81,53 @@ describe('desktop watch-only preview', () => {
     ).toThrow(/network/i);
   });
 
-  it('labels the screen as a preview and does not claim save, sign, or broadcast support', () => {
+  it('offers create controls and no longer claims preview-only status', () => {
     const html = renderToStaticMarkup(
-      <WatchOnlyWalletPreview onBack={() => undefined} />
+      <WatchOnlyWalletPreview
+        onBack={() => undefined}
+        onCreated={() => undefined}
+      />
     );
 
-    expect(html).toContain('Watch-Only Wallet Preview');
+    expect(html).toContain('Create Watch-Only Wallet');
+    expect(html).toContain('Wallet name');
     expect(html).toContain('Standard');
     expect(html).toContain('Multisign');
     expect(html).toContain('Coming next');
-    expect(html).toContain('does not save a watch-only wallet');
-    expect(html).toContain('sign');
-    expect(html).toContain('broadcast');
+    expect(html).toContain('Save watch-only wallet');
+    expect(html).not.toContain('does not save a watch-only wallet');
+    expect(html).not.toContain('Public preview only');
+  });
+
+  it('renders an optional master fingerprint capture field', () => {
+    const html = renderToStaticMarkup(
+      <WatchOnlyWalletPreview
+        onBack={() => undefined}
+        onCreated={() => undefined}
+      />
+    );
+
+    expect(html).toContain('Master fingerprint');
+    expect(html).toContain('8 hex chars');
+    expect(html).toContain('optional, but needed to send');
+  });
+
+  it('decodes a valid master fingerprint to its 4 bytes', () => {
+    expect(masterFingerprintBytes('4c9a1f7b')).toEqual(
+      Uint8Array.from([0x4c, 0x9a, 0x1f, 0x7b])
+    );
+    expect(masterFingerprintBytes('DEADBEEF')).toEqual(
+      Uint8Array.from([0xde, 0xad, 0xbe, 0xef])
+    );
+  });
+
+  it('rejects fingerprints that are not exactly 8 hex chars', () => {
+    expect(masterFingerprintBytes('')).toBeNull();
+    expect(masterFingerprintBytes('4c9a1f7')).toBeNull();
+    expect(masterFingerprintBytes('4c9a1f7bc')).toBeNull();
+    expect(masterFingerprintBytes('zzzzzzzz')).toBeNull();
+    expect(masterFingerprintBytes('4c 9a 1f 7b')).toBeNull();
+    expect(masterFingerprintBytes(undefined)).toBeNull();
+    expect(masterFingerprintBytes(null)).toBeNull();
   });
 });

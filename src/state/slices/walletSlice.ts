@@ -2,13 +2,13 @@ import { createSlice, PayloadAction } from '@reduxjs/toolkit';
 import { Network } from './networkSlice';
 import type { RootState } from '../store';
 import { WalletType } from '../../types/wallet';
-import type { DerivationPathSource } from '../../types/wallet';
+import type { DerivationPathSource, ExtendedWalletType } from '../../types/wallet';
 
 export interface WalletState {
   currentWalletId: number;
   sessionGeneration: number;
   networkType: Network;
-  walletType: WalletType;
+  walletType: ExtendedWalletType;
   derivationPath: string;
   derivationPathSource: DerivationPathSource;
 }
@@ -42,7 +42,7 @@ const walletSlice = createSlice({
     setWalletNetwork: (state, action: PayloadAction<Network>) => {
       state.networkType = action.payload;
     },
-    setWalletType: (state, action: PayloadAction<WalletType>) => {
+    setWalletType: (state, action: PayloadAction<ExtendedWalletType>) => {
       state.walletType = action.payload;
     },
     setWalletDerivationPath: (

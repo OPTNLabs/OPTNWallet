@@ -1,0 +1,255 @@
+// Watch-only send builder: selected coin-controlled UTXOs -> unsigned PSBT.
+//
+// The online watch-only wallet builds the unsigned transaction and carries it
+// to an air-gapped signer as a PSBT (v145, BIP32 derivation metadata per
+// input, SIGHASH_ALL|FORKID|ANYONECANPAY = 0xc1). No private key ever enters
+// this code path: the signer is a different device (SeedCash).
+//
+// Fee policy is the same relay-margin policy the signed path uses
+// (relayFeeForBytes in TransactionManager/feePolicy.ts), so the user sees one
+// consistent number no matter which wallet type they are in. The change output
+// is only added when the leftover survives the dust threshold, exactly like the
+// planner does for signed sends.
+
+import {
+  binToHex,
+  cashAddressToLockingBytecode,
+  encodeTransaction,
+  hexToBin,
+} from '@bitauth/libauth';
+
+import { DUST } from '../../utils/constants';
+import { relayFeeForBytes } from '../../apis/TransactionManager/feePolicy';
+import {
+  encodeUnsignedPsbt,
+  SIGHASH_ALL_FORKID_ANYONECANPAY,
+  type PsbtInputSpec,
+  type PsbtOutputSpec,
+} from './psbtBch';
+
+/**
+ * A UTXO chosen by coin control, with the public-key derivation needed for the
+ * signer to claim it. Everything here is public material.
+ */
+export interface WatchOnlyInputSpec {
+  txid: string;
+  vout: number;
+  satoshis: bigint;
+  /** Locking bytecode of the output being spent, hex. */
+  lockingBytecodeHex: string;
+  /** Compressed public key (33 bytes) that must sign this input, hex. */
+  publicKeyHex: string;
+  /** BIP44 branch: 0 = receive, 1 = change. */
+  branchIndex: 0 | 1;
+  addressIndex: number;
+}
+
+export interface WatchOnlyBuildParams {
+  inputs: WatchOnlyInputSpec[];
+  /** Destination cashaddr. */
+  recipient: string;
+  amountSats: bigint;
+  /** Change cashaddr (the wallet's own address). */
+  changeAddress: string;
+  /** Account path of the wallet, e.g. m/44'/145'/0'. */
+  accountPath: string;
+  /** 4-byte master fingerprint, from the signing device. */
+  masterFingerprint: Uint8Array | null;
+}
+
+export interface WatchOnlyBuildOutput {
+  lockingBytecodeHex: string;
+  satoshis: bigint;
+  isChange: boolean;
+}
+
+export interface WatchOnlyBuildResult {
+  /** The binary PSBT to hand to the signer. */
+  psbtBytes: Uint8Array;
+  /** The unsigned transaction inside the PSBT, hex. */
+  rawUnsignedHex: string;
+  outputs: WatchOnlyBuildOutput[];
+  feeSats: bigint;
+  changeSats: bigint;
+  inputSumSats: bigint;
+  /** Master fingerprint used, or null when the wallet has none yet. */
+  masterFingerprint: Uint8Array | null;
+}
+
+/** What the signer is asked to authorise — everything the import binds to. */
+export interface WatchOnlyProposal {
+  rawUnsignedHex: string;
+  inputs: WatchOnlyInputSpec[];
+  outputs: WatchOnlyBuildOutput[];
+}
+
+const HARDENED_INDEX = 0x80000000;
+
+/** Sighash type the signer is asked for — the watch-only contract. */
+export const WATCH_ONLY_SIGHASH_TYPE = SIGHASH_ALL_FORKID_ANYONECANPAY;
+
+/** The unlocking script shape is fixed here: P2PKH with an ECDSA signature. */
+export const P2PKH_UNLOCK_BYTES = 108;
+
+export function p2pkhInputBytes(): number {
+  return 32 + 4 + 1 + P2PKH_UNLOCK_BYTES + 4;
+}
+
+export function p2pkhOutputBytes(): number {
+  return 8 + 1 + 25;
+}
+
+export function estimateUnsignedSize(
+  inputCount: number,
+  outputCount: number
+): number {
+  return 4 + 1 + 1 + 4 + inputCount * p2pkhInputBytes() + outputCount * p2pkhOutputBytes();
+}
+
+function addressToLockingBytecode(address: string): Uint8Array {
+  const result = cashAddressToLockingBytecode(address);
+  if (typeof result === 'string') {
+    throw new Error(`Invalid destination address: ${result}`);
+  }
+  return Uint8Array.from(result.bytecode);
+}
+
+function pathToDerivation(accountPath: string, branch: 0 | 1, index: number): number[] {
+  const match = /^m\/44'\/(\d+)'\/(\d+)'$/.exec(accountPath.trim());
+  if (!match) {
+    throw new Error("Derivation path must match m/44'/coinType'/accountIndex'.");
+  }
+  return [
+    HARDENED_INDEX | 44,
+    HARDENED_INDEX | Number(match[1]),
+    HARDENED_INDEX | Number(match[2]),
+    branch,
+    index,
+  ];
+}
+
+function inputSpecToPsbt(
+  input: WatchOnlyInputSpec,
+  accountPath: string
+): PsbtInputSpec {
+  return {
+    txid: input.txid,
+    vout: input.vout,
+    satoshis: input.satoshis,
+    lockingBytecode: hexToBin(input.lockingBytecodeHex),
+    publicKey: hexToBin(input.publicKeyHex),
+    masterFingerprint: new Uint8Array(4),
+    derivationPath: pathToDerivation(accountPath, input.branchIndex, input.addressIndex),
+    sequence: 0xffffffff,
+  };
+}
+
+/**
+ * Build the unsigned transaction + PSBT for the selected coins.
+ *
+ * Throws with a message aimed at the person doing the send when the inputs do
+ * not cover the amount and fee, the fingerprint is missing (the signer would
+ * refuse the inputs), or an address cannot be encoded.
+ */
+export function buildWatchOnlyPsbt(
+  params: WatchOnlyBuildParams
+): WatchOnlyBuildResult {
+  if (params.inputs.length === 0) {
+    throw new Error('Select at least one input (coin control).');
+  }
+  if (params.amountSats <= 0n) {
+    throw new Error('Amount must be greater than 0.');
+  }
+  if (!params.masterFingerprint || params.masterFingerprint.length !== 4) {
+    throw new Error(
+      'Master fingerprint is missing. SeedCash shows it with the account xPub; ' +
+        'enter the 8 hex characters so the signer can claim the inputs.'
+    );
+  }
+
+  const recipientBytecode = addressToLockingBytecode(params.recipient);
+  const changeBytecode = addressToLockingBytecode(params.changeAddress);
+  const inputSum = params.inputs.reduce(
+    (sum, input) => sum + input.satoshis,
+    0n
+  );
+
+  // Fee depends on whether a change output survives; iterate to a fixed point
+  // (never more than twice in practice).
+  let outputs: { bytecode: Uint8Array; satoshis: bigint; isChange: boolean }[] = [
+    { bytecode: recipientBytecode, satoshis: params.amountSats, isChange: false },
+  ];
+  let changeSats = 0n;
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    const fee = relayFeeForBytes(
+      estimateUnsignedSize(params.inputs.length, outputs.length)
+    );
+    const leftover = inputSum - params.amountSats - fee;
+    if (leftover < 0n) {
+      throw new Error(
+        `Selected inputs cover ${inputSum.toString()} sats; ` +
+          `${(params.amountSats + fee).toString()} sats are needed ` +
+          `(amount + fee). Add more inputs or lower the amount.`
+      );
+    }
+    const nextChange = leftover >= DUST ? leftover : 0n;
+    const withChange = [
+      { bytecode: recipientBytecode, satoshis: params.amountSats, isChange: false },
+    ];
+    if (nextChange > 0n) {
+      withChange.push({
+        bytecode: changeBytecode,
+        satoshis: nextChange,
+        isChange: true,
+      });
+    }
+    if (withChange.length === outputs.length && nextChange === changeSats) {
+      break;
+    }
+    outputs = withChange;
+    changeSats = nextChange;
+  }
+
+  const feeSats = inputSum - params.amountSats - changeSats;
+  const psbtInputs: PsbtInputSpec[] = params.inputs.map((input) => ({
+    ...inputSpecToPsbt(input, params.accountPath),
+    masterFingerprint: Uint8Array.from(params.masterFingerprint!),
+  }));
+  const psbtOutputs: PsbtOutputSpec[] = outputs.map((output) => ({
+    lockingBytecode: output.bytecode,
+    satoshis: output.satoshis,
+  }));
+  const psbtBytes = encodeUnsignedPsbt(
+    psbtInputs,
+    psbtOutputs,
+    WATCH_ONLY_SIGHASH_TYPE
+  );
+  const rawUnsigned = encodeTransaction({
+    version: 2,
+    inputs: params.inputs.map((input) => ({
+      outpointTransactionHash: hexToBin(input.txid),
+      outpointIndex: input.vout,
+      unlockingBytecode: Uint8Array.of(),
+      sequenceNumber: 0xffffffff,
+    })),
+    outputs: outputs.map((output) => ({
+      lockingBytecode: output.bytecode,
+      valueSatoshis: output.satoshis,
+    })),
+    locktime: 0,
+  });
+
+  return {
+    psbtBytes,
+    rawUnsignedHex: binToHex(rawUnsigned),
+    outputs: outputs.map((output) => ({
+      lockingBytecodeHex: binToHex(output.bytecode),
+      satoshis: output.satoshis,
+      isChange: output.isChange,
+    })),
+    feeSats,
+    changeSats,
+    inputSumSats: inputSum,
+    masterFingerprint: params.masterFingerprint,
+  };
+}
