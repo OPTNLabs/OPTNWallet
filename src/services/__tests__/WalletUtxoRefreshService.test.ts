@@ -74,7 +74,7 @@ describe('fetchActiveWalletUtxos', () => {
     expect(fetchAndStoreUTXOsManyMock).toHaveBeenCalledWith(
       6,
       ['bchtest:qwallet6', 'bchtest:pwallet6qr'],
-      { discover: true, onProgress: undefined }
+      { discover: true, force: false, onProgress: undefined }
     );
     expect(result).toEqual({
       'bchtest:qwallet6': [],
@@ -94,7 +94,7 @@ describe('fetchActiveWalletUtxos', () => {
     expect(fetchAndStoreUTXOsManyMock).toHaveBeenCalledWith(
       6,
       ['bchtest:qwallet6', 'bchtest:pwallet6qr'],
-      { discover: false, onProgress: undefined }
+      { discover: false, force: false, onProgress: undefined }
     );
   });
 
