@@ -14,6 +14,7 @@ import { describe, expect, it } from 'vitest';
 
 import {
   binToHex,
+  createVirtualMachineBCH,
   decodeTransaction,
   encodeCashAddress,
   generateSigningSerializationBch,
@@ -38,6 +39,8 @@ import {
   p2shLockingBytecodeFor,
   parseMultisigRedeemScript,
   pushData,
+  pushMinimal,
+  schnorrCheckBits,
   sortPublicKeysBip67,
   type CosignerStatus,
 } from '../psbtMultisig';
@@ -135,14 +138,23 @@ function buildMultisigProposal(
   });
 }
 
-/** Sign one input like SeedCash/Paytaca would for a multisig P2SH input. */
+/**
+ * Sign one input like SeedCash/Paytaca would for a multisig P2SH input.
+ *
+ * Schnorr by default, because that is what both produce: SeedCash's
+ * `sign_tx_input` defaults `use_schnorr=True`, and Paytaca's `createTemplate`
+ * defaults `signatureAlgorithm: 'schnorr'`. The algorithm decides the
+ * CHECKMULTISIG dummy element, so signing DER here would have quietly tested
+ * a path neither signer takes.
+ */
 function signInput(
   unsignedTxHex: string,
   sourceOutputs: { lockingBytecode: Uint8Array; valueSatoshis: bigint }[],
   inputIndex: number,
   keyIndex: number,
   coveredBytecode: Uint8Array,
-  sighashType = 0xc1
+  sighashType = 0xc1,
+  algorithm: 'schnorr' | 'der' = 'schnorr'
 ): Uint8Array {
   const noTokens = {
     category: new Uint8Array(),
@@ -163,10 +175,11 @@ function signInput(
     signingSerializationType: Uint8Array.from([sighashType]),
   });
   const messageHash = hash256(serialization);
-  return concat([
-    secp256k1.signMessageHashDER(privateKeys[keyIndex], messageHash),
-    Uint8Array.from([sighashType]),
-  ]);
+  const body =
+    algorithm === 'schnorr'
+      ? secp256k1.signMessageHashSchnorr(privateKeys[keyIndex], messageHash)
+      : secp256k1.signMessageHashDER(privateKeys[keyIndex], messageHash);
+  return concat([body as Uint8Array, Uint8Array.from([sighashType])]);
 }
 
 function wrapWithSignatures(
@@ -535,7 +548,92 @@ describe('watch-only multisig send flow', () => {
     expect(result.signedInputCount).toBe(1);
   });
 
-  it('merges into a broadcastable OP_0 ... OP_CHECKMULTISIG unlock', () => {
+  it('produces a 2-of-3 unlock that the BCH VM actually accepts', () => {
+    // The assertion that matters. A wrong dummy element, a wrong signature
+    // order or a wrong checkbits width all survive every structural check and
+    // fail only here — which on chain means a transaction that is rejected at
+    // broadcast after the hardware has been put away.
+    const proposal = buildMultisigProposal(100_000n);
+    const sigA = signInput(proposal.rawUnsignedHex, SOURCE_OUTPUTS, 0, 0, redeemScript);
+    const sigB = signInput(proposal.rawUnsignedHex, SOURCE_OUTPUTS, 0, 2, redeemScript);
+    const merged = mergePsbts([
+      wrapWithSignatures(proposal, [{ keyIndex: 0, signature: sigA }]),
+      wrapWithSignatures(proposal, [{ keyIndex: 2, signature: sigB }]),
+    ]).merged;
+
+    const rawTxHex = mergeImportedSignatures(merged, {
+      rawUnsignedHex: proposal.rawUnsignedHex,
+      inputs: [MULTISIG_INPUT_SPEC],
+      outputs: proposal.outputs,
+    });
+    const transaction = decodeTransaction(hexToBin(rawTxHex));
+    if (typeof transaction === 'string') throw new Error(transaction);
+
+    const vm = createVirtualMachineBCH();
+    expect(
+      vm.verify({
+        sourceOutputs: [
+          { lockingBytecode: p2shLocking, valueSatoshis: MULTISIG_INPUT.satoshis },
+        ],
+        transaction,
+      })
+    ).toBe(true);
+  });
+
+  it('falls back to the legacy OP_0 dummy for ECDSA signatures', () => {
+    // Paytaca templates can be built with `signatureAlgorithm: 'ecdsa'`, and
+    // that mode still takes the null dummy. The VM is the arbiter for both.
+    const proposal = buildMultisigProposal(100_000n);
+    const sign = (keyIndex: number) =>
+      signInput(proposal.rawUnsignedHex, SOURCE_OUTPUTS, 0, keyIndex, redeemScript, 0xc1, 'der');
+    const sigA = sign(0);
+    const sigB = sign(2);
+    const merged = mergePsbts([
+      wrapWithSignatures(proposal, [{ keyIndex: 0, signature: sigA }]),
+      wrapWithSignatures(proposal, [{ keyIndex: 2, signature: sigB }]),
+    ]).merged;
+
+    const rawTxHex = mergeImportedSignatures(merged, {
+      rawUnsignedHex: proposal.rawUnsignedHex,
+      inputs: [MULTISIG_INPUT_SPEC],
+      outputs: proposal.outputs,
+    });
+    const transaction = decodeTransaction(hexToBin(rawTxHex));
+    if (typeof transaction === 'string') throw new Error(transaction);
+    expect(transaction.inputs[0].unlockingBytecode[0]).toBe(0x00);
+
+    const vm = createVirtualMachineBCH();
+    expect(
+      vm.verify({
+        sourceOutputs: [
+          { lockingBytecode: p2shLocking, valueSatoshis: MULTISIG_INPUT.satoshis },
+        ],
+        transaction,
+      })
+    ).toBe(true);
+  });
+
+  it('refuses to mix Schnorr and ECDSA signatures on one input', () => {
+    // CHECKMULTISIG carries one dummy for the whole input, so a mixed set has
+    // no correct encoding. Better to say so than to guess and fail at broadcast.
+    const proposal = buildMultisigProposal(100_000n);
+    const schnorr = signInput(proposal.rawUnsignedHex, SOURCE_OUTPUTS, 0, 0, redeemScript);
+    const der = signInput(proposal.rawUnsignedHex, SOURCE_OUTPUTS, 0, 2, redeemScript, 0xc1, 'der');
+    const merged = mergePsbts([
+      wrapWithSignatures(proposal, [{ keyIndex: 0, signature: schnorr }]),
+      wrapWithSignatures(proposal, [{ keyIndex: 2, signature: der }]),
+    ]).merged;
+
+    expect(() =>
+      mergeImportedSignatures(merged, {
+        rawUnsignedHex: proposal.rawUnsignedHex,
+        inputs: [MULTISIG_INPUT_SPEC],
+        outputs: proposal.outputs,
+      })
+    ).toThrow(/same algorithm/i);
+  });
+
+  it('merges into a broadcastable checkbits ... OP_CHECKMULTISIG unlock', () => {
     const proposal = buildMultisigProposal(100_000n);
     const sourceOutputs = SOURCE_OUTPUTS;
     const sigA = signInput(proposal.rawUnsignedHex, sourceOutputs, 0, 0, redeemScript);
@@ -553,8 +651,10 @@ describe('watch-only multisig send flow', () => {
     if (typeof tx === 'string') throw new Error(tx);
     const unlocking = tx.inputs[0].unlockingBytecode;
 
-    // OP_0 <sigA> <sigB> <redeemScript>, signatures in BIP-67 key order
-    // regardless of the order they were merged in.
+    // <checkbits> <sigA> <sigB> <redeemScript>, signatures in BIP-67 key order
+    // regardless of the order they were merged in. The dummy is a Schnorr
+    // checkbits bit field naming the two keys that signed, not the legacy OP_0
+    // null — Paytaca's templates default to schnorr, and so does SeedCash.
     const sortedHex = sortPublicKeysBip67(publicKeys).map(binToHex);
     const positionOf = (publicKey: Uint8Array) =>
       sortedHex.indexOf(binToHex(publicKey));
@@ -563,13 +663,15 @@ describe('watch-only multisig send flow', () => {
     sigsByPosition.set(positionOf(publicKeys[2]), sigB);
     const positions = [...sigsByPosition.keys()].sort((a, b) => a - b);
     const expected = concat([
-      Uint8Array.of(0x00),
+      pushMinimal(schnorrCheckBits(positions, publicKeys.length)),
       pushData(sigsByPosition.get(positions[0])!),
       pushData(sigsByPosition.get(positions[1])!),
       pushData(redeemScript),
     ]);
     expect(binToHex(unlocking)).toBe(binToHex(expected));
-    expect(unlocking[0]).toBe(0x00); // OP_0 dummy byte, Paytaca parity
+    // Two of three keys signed, so exactly two bits are set.
+    expect(schnorrCheckBits(positions, 3)).toHaveLength(1);
+    expect(unlocking[0]).not.toBe(0x00);
   });
 
   it('rejects a 2-of-3 PSBT that only carries one valid signature', () => {
