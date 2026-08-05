@@ -15,8 +15,6 @@ import { resyncAfterWalletClosed } from './walletSessionRelease';
 import {
   getAllWebviewWindows,
 } from '@tauri-apps/api/webviewWindow';
-import { open as openDialog, save as saveDialog } from '@tauri-apps/plugin-dialog';
-import { invoke } from '@tauri-apps/api/core';
 import { appDataDir, join } from '@tauri-apps/api/path';
 import { AppDispatch, RootState, store } from '../../state/store';
 import { selectWalletId, resetWallet } from '../../state/slices/walletSlice';
@@ -27,8 +25,6 @@ import { useTheme } from '../../app/theme/useTheme';
 import { ROUTE_PATHS, transactionsRoute } from '../../navigation/routes';
 import { OptnKeyManager } from './OptnKeyManager';
 import WalletManager from '../../apis/WalletManager/WalletManager';
-import { buildWalletFileContents } from './DesktopWalletManager';
-import { parseWalletFile, defaultWalletFileName } from './walletFile';
 import { openWalletPickerWindow } from './walletWindow';
 import {
   refreshWalletOpenClaim,
@@ -83,8 +79,6 @@ export interface DesktopMenuActionHandlers {
   send: () => void | Promise<void>;
   history: () => void | Promise<void>;
   exportWallet: () => void | Promise<void>;
-  exportColdArchive: () => void | Promise<void>;
-  importColdArchive: () => void | Promise<void>;
   settings: () => void | Promise<void>;
   toggleTheme: () => void | Promise<void>;
   refreshWallet: () => void | Promise<void>;
@@ -199,8 +193,6 @@ export async function dispatchDesktopMenuAction(
     send: handlers.send,
     history: handlers.history,
     export_wallet: handlers.exportWallet,
-    export_cold_archive: handlers.exportColdArchive,
-    import_cold_archive: handlers.importColdArchive,
     settings: handlers.settings,
     toggle_theme: handlers.toggleTheme,
     refresh_wallet: handlers.refreshWallet,
@@ -300,140 +292,134 @@ async function openPicker(navigate: (p: string) => void) {
 
 async function handleOpenWalletFile(
   navigate: (p: string) => void,
-  leaveCurrentWallet: () => void | Promise<void> = () => undefined
+  leaveCurrentWallet: () => void | Promise<void> = () => undefined,
+  openWalletId = 0
 ) {
-  const picked = await openDialog({
-    multiple: false,
-    directory: false,
-    title: 'Open Wallet File',
-    defaultPath: await walletsDir(),
-    filters: [{ name: 'OPTN Wallet', extensions: ['optn'] }],
-  });
-  if (typeof picked !== 'string') return; // cancelled
   try {
-    const text = await invoke<string>('read_wallet_file', { path: picked });
-    const file = parseWalletFile(text);
+    const { pickWalletPackFiles, importColdDataIntoOpenWallet } = await import(
+      './WalletPackService'
+    );
+    const pack = await pickWalletPackFiles(await walletsDir());
+    if (!pack) return;
+
+    // Data-only: apply into the currently open wallet.
+    if (!pack.keystore && pack.coldText) {
+      if (openWalletId <= 0) {
+        window.dispatchEvent(
+          new CustomEvent('optn:toast', {
+            detail: {
+              message:
+                'Open a wallet first, or also select the .optn keystore file (Ctrl-click both).',
+            },
+          })
+        );
+        return;
+      }
+      const password = window.prompt(
+        'Password for the encrypted wallet data file (.optn-cold):'
+      );
+      if (password === null) return;
+      if (!password) {
+        window.dispatchEvent(
+          new CustomEvent('optn:toast', {
+            detail: { message: 'Password required.' },
+          })
+        );
+        return;
+      }
+      const stats = await importColdDataIntoOpenWallet(
+        openWalletId,
+        pack.coldText,
+        password
+      );
+      window.dispatchEvent(
+        new CustomEvent('optn:toast', {
+          detail: {
+            message: `Imported data: ${stats.labels} labels, ${stats.fusionCoins} fusion depths.`,
+          },
+        })
+      );
+      return;
+    }
+
+    if (!pack.keystore) {
+      window.dispatchEvent(
+        new CustomEvent('optn:toast', {
+          detail: { message: 'No .optn keystore file in the selection.' },
+        })
+      );
+      return;
+    }
+
     await leaveCurrentWallet();
     navigate(ROUTE_PATHS.landing);
     setTimeout(() => {
-      window.dispatchEvent(new CustomEvent(IMPORT_FILE_EVENT, { detail: { file } }));
+      window.dispatchEvent(
+        new CustomEvent(IMPORT_FILE_EVENT, {
+          detail: {
+            file: pack.keystore,
+            coldArchiveText: pack.coldText,
+          },
+        })
+      );
     }, 50);
   } catch (err) {
     console.error('[menu] Open Wallet File failed:', err);
     window.dispatchEvent(
-      new CustomEvent('optn:toast', { detail: { message: 'That is not a valid OPTN wallet file.' } })
-    );
-  }
-}
-
-async function handleExportWallet(walletId: number) {
-  if (!walletId) return;
-  const contents = await buildWalletFileContents(walletId);
-  if (!contents) {
-    window.dispatchEvent(
-      new CustomEvent('optn:toast', { detail: { message: 'This wallet cannot be exported.' } })
-    );
-    return;
-  }
-  const name = (() => {
-    try {
-      return (JSON.parse(contents) as { name?: string }).name ?? 'wallet';
-    } catch {
-      return 'wallet';
-    }
-  })();
-  const dir = await walletsDir();
-  const suggested = defaultWalletFileName(name);
-  const dest = await saveDialog({
-    title: 'Export Wallet',
-    defaultPath: dir ? await join(dir, suggested) : suggested,
-    filters: [{ name: 'OPTN Wallet', extensions: ['optn'] }],
-  });
-  if (typeof dest !== 'string') return; // cancelled
-  try {
-    await invoke('write_wallet_file', { path: dest, contents });
-    window.dispatchEvent(
-      new CustomEvent('optn:toast', { detail: { message: 'Wallet exported.' } })
-    );
-  } catch (err) {
-    console.error('[menu] Export Wallet failed:', err);
-    window.dispatchEvent(
-      new CustomEvent('optn:toast', { detail: { message: 'Could not export the wallet.' } })
-    );
-  }
-}
-
-async function handleExportColdArchive(walletId: number) {
-  if (!walletId) return;
-  const password = window.prompt(
-    'Wallet password to encrypt the cold archive (labels, history, fusion depth — no seed):'
-  );
-  if (password === null) return;
-  if (!password) {
-    window.dispatchEvent(
-      new CustomEvent('optn:toast', {
-        detail: { message: 'Password required to encrypt the cold archive.' },
-      })
-    );
-    return;
-  }
-  try {
-    const { exportEncryptedColdArchive } = await import(
-      './WalletColdExportService'
-    );
-    const { savedPath } = await exportEncryptedColdArchive(walletId, password);
-    window.dispatchEvent(
-      new CustomEvent('optn:toast', {
-        detail: {
-          message: savedPath
-            ? `Cold archive saved: ${savedPath}`
-            : 'Cold archive save cancelled.',
-        },
-      })
-    );
-  } catch (err) {
-    console.error('[menu] Export cold archive failed:', err);
-    window.dispatchEvent(
       new CustomEvent('optn:toast', {
         detail: {
           message:
-            err instanceof Error ? err.message : 'Could not export cold archive.',
+            err instanceof Error
+              ? err.message
+              : 'That is not a valid OPTN wallet pack.',
         },
       })
     );
   }
 }
 
-async function handleImportColdArchive(walletId: number) {
+/**
+ * Export Wallet = two files:
+ *   1) .optn keystore (encrypted seed)
+ *   2) .optn-cold data (encrypted history/labels/fusion/UTXO snapshot)
+ * written side-by-side after one Save dialog for the keystore.
+ */
+async function handleExportWallet(walletId: number) {
   if (!walletId) return;
   const password = window.prompt(
-    'Password for the encrypted cold archive (usually this wallet’s unlock password):'
+    'Wallet password — encrypts the data file and verifies export.\n' +
+      'You will get two files: .optn (keys) and .optn-cold (wallet data).'
   );
   if (password === null) return;
   if (!password) {
     window.dispatchEvent(
       new CustomEvent('optn:toast', {
-        detail: { message: 'Password required to decrypt the cold archive.' },
+        detail: { message: 'Password required to export the wallet pack.' },
       })
     );
     return;
   }
   try {
-    const { importEncryptedColdArchiveFromFile } = await import(
-      './WalletColdExportService'
+    const { exportWalletPack } = await import('./WalletPackService');
+    const result = await exportWalletPack(
+      walletId,
+      password,
+      await walletsDir()
     );
-    const stats = await importEncryptedColdArchiveFromFile(walletId, password);
+    const dataMsg = result.coldPath
+      ? `Data: ${result.coldPath}`
+      : `Data file skipped: ${result.coldSkippedReason ?? 'unknown'}`;
     window.dispatchEvent(
       new CustomEvent('optn:toast', {
         detail: {
-          message: `Cold import: ${stats.labels} labels, ${stats.fusionCoins} fusion depths.`,
+          message: `Exported wallet pack.\nKeys: ${result.keystorePath}\n${dataMsg}`,
         },
       })
     );
   } catch (err) {
-    const text = err instanceof Error ? err.message : 'Import failed.';
+    const text = err instanceof Error ? err.message : 'Could not export wallet.';
     if (text.includes('cancelled')) return;
-    console.error('[menu] Import cold archive failed:', err);
+    console.error('[menu] Export Wallet failed:', err);
     window.dispatchEvent(
       new CustomEvent('optn:toast', { detail: { message: text } })
     );
@@ -461,14 +447,18 @@ export function useMenuBar(): void {
     const handlers: DesktopMenuActionHandlers = {
       openPicker: () => openPicker(navigate),
       openWalletFile: () =>
-        handleOpenWalletFile(navigate, async () => {
-          if (walletId > 0) {
-            await releaseWalletOpen(walletId, currentWindow.label);
-          }
-          OptnKeyManager.lock();
-          flushSync(() => dispatch(resetWallet()));
-          resyncAfterWalletClosed('MenuBar.openWalletFile');
-        }),
+        handleOpenWalletFile(
+          navigate,
+          async () => {
+            if (walletId > 0) {
+              await releaseWalletOpen(walletId, currentWindow.label);
+            }
+            OptnKeyManager.lock();
+            flushSync(() => dispatch(resetWallet()));
+            resyncAfterWalletClosed('MenuBar.openWalletFile');
+          },
+          walletId
+        ),
       openSavedWallet: (savedWalletId) =>
         openSavedWalletFromMenu(
           savedWalletId,
@@ -501,10 +491,6 @@ export function useMenuBar(): void {
         if (walletId) navigate(transactionsRoute(walletId));
       },
       exportWallet: () => (walletId ? handleExportWallet(walletId) : undefined),
-      exportColdArchive: () =>
-        walletId ? handleExportColdArchive(walletId) : undefined,
-      importColdArchive: () =>
-        walletId ? handleImportColdArchive(walletId) : undefined,
       settings: () => {
         if (walletId) navigate(ROUTE_PATHS.settings);
       },
@@ -620,7 +606,7 @@ export function useMenuBar(): void {
         // Browse the disk for a .optn wallet file (Windows Explorer / native picker).
         await MenuItem.new({
           id: 'open_wallet_file',
-          text: 'Open Wallet File…',
+          text: 'Open Wallet Pack…',
           action: menuAction('open_wallet_file'),
         }),
         await PredefinedMenuItem.new({ item: 'Separator' }),
@@ -691,18 +677,6 @@ export function useMenuBar(): void {
             text: 'Export Wallet…',
             enabled: walletActionEnabled,
             action: menuAction('export_wallet'),
-          }),
-          await MenuItem.new({
-            id: 'export_cold_archive',
-            text: 'Export Cold Archive…',
-            enabled: walletActionEnabled,
-            action: menuAction('export_cold_archive'),
-          }),
-          await MenuItem.new({
-            id: 'import_cold_archive',
-            text: 'Import Cold Archive…',
-            enabled: walletActionEnabled,
-            action: menuAction('import_cold_archive'),
           }),
           await PredefinedMenuItem.new({ item: 'Separator' }),
           await MenuItem.new({
