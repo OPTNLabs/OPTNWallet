@@ -142,8 +142,8 @@ describe('P2P fusion coordination', () => {
     const live = 'bb'.repeat(32);
     const ghost = 'cc'.repeat(32);
     const gatherStart = 1_800_000_000;
-    // 8s into gather: past re-announce + lag window
-    const now = gatherStart + POOL_REANNOUNCE_SECONDS + 2;
+    // Past re-announce cycle: require announce during THIS gather.
+    const now = gatherStart + POOL_REANNOUNCE_SECONDS + 1;
     const base = {
       nowSeconds: now,
       gatherStartSeconds: gatherStart,
@@ -169,6 +169,13 @@ describe('P2P fusion coordination', () => {
       isLivePoolAnnouncement(
         { pubkey: ghost, at: gatherStart - 5, expiresAt: now + 160 },
         base
+      )
+    ).toBe(false);
+    // Early window rejects keys older than 3s before gather start.
+    expect(
+      isLivePoolAnnouncement(
+        { pubkey: ghost, at: gatherStart - 5, expiresAt: gatherStart + 60 },
+        { ...base, nowSeconds: gatherStart + 2 }
       )
     ).toBe(false);
     // Explicit ghost list (own / retired).

@@ -36,6 +36,7 @@ import { createFreshFusionOutputScripts, gatherInputs } from './FusionService';
 import { isFusionExecutionAllowed } from './FusionExecutionSafety';
 import {
   generateRoundIdentity,
+  invalidateJoinPoolAnnouncers,
   isLivePoolAnnouncement,
   joinPool,
   poolEpoch,
@@ -181,10 +182,8 @@ async function collectRolling(
     }
     if (fp !== lastLoggedFp) {
       lastLoggedFp = fp;
-      console.info(
-        `[p2p-fusion] live set (${peers.length}):`,
-        peers.map((p) => p.pubkey.slice(0, 8)).join(', ') || '(none)'
-      );
+      const shortKeys = peers.map((p) => p.pubkey.slice(0, 8)).join(', ') || '(none)';
+      console.info(`[p2p-fusion] live set (${peers.length}): ${shortKeys}`);
     }
     const pastMin = now >= minReady;
     const setStable = pastMin && now - stableSince >= PEER_SET_STABLE_MS;
@@ -203,6 +202,11 @@ async function collectRolling(
       );
       return peers;
     }
+    // Short key list in the status line so overcount is visible without DevTools.
+    const keyHint =
+      peers.length > 0
+        ? ` [${peers.map((p) => p.pubkey.slice(0, 6)).join(' ')}]`
+        : '';
     if (peers.length >= MIN_PARTICIPANTS && pastMin) {
       const needStable = Math.max(
         0,
@@ -213,18 +217,18 @@ async function collectRolling(
           ? ` pair-hold ${Math.max(0, Math.ceil((start + PAIR_HOLD_MS - now) / 1000))}s`
           : '';
       onStatus?.(
-        `${peers.length} live wallet(s) — wait ${needStable}s for set to stabilize` +
+        `${peers.length} live wallet(s)${keyHint} — wait ${needStable}s for set to stabilize` +
           `${pairNote}…`
       );
     } else if (peers.length >= MIN_PARTICIPANTS) {
       const inSecs = Math.max(0, Math.ceil((minReady - now) / 1_000));
       onStatus?.(
-        `${peers.length} live wallet(s) — min gather ${inSecs}s…`
+        `${peers.length} live wallet(s)${keyHint} — min gather ${inSecs}s…`
       );
     } else {
       const secsLeft = Math.max(0, Math.ceil((maxWait - now) / 1_000));
       onStatus?.(
-        `Waiting for peers: ${peers.length} live wallet(s) (up to ${secsLeft}s)…`
+        `Waiting for peers: ${peers.length} live wallet(s)${keyHint} (up to ${secsLeft}s)…`
       );
     }
     await waitUntil(Math.min(maxWait, now + 1_500), signal);
@@ -501,6 +505,9 @@ export async function runP2pFusion(
     // whoever is fresh; no epoch bucket to synchronize on. epoch is an info stamp.
     const epoch = poolEpoch(now);
 
+    // Kill orphan re-announce loops from a prior Start / Vite HMR in THIS window
+    // before minting a new throwaway identity (ghost peer overcount).
+    invalidateJoinPoolAnnouncers();
     round = generateRoundIdentity();
     recordRoundKey(opts.walletId, round.pubkey);
     let peers: PoolAnnouncement[] = [
