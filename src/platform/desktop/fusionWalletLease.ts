@@ -20,6 +20,7 @@
 // missed round; double-fusing costs a real fee twice.
 
 import { getLocalStorage } from '../../utils/browserStorage';
+import { P2P_LEASE_TTL_MS } from './fusionTiming';
 
 const LEASE_PREFIX = 'optn-fusion-lease-';
 const COOLDOWN_PREFIX = 'optn-fusion-auto-attempt-';
@@ -27,10 +28,10 @@ const LOCK_PREFIX = 'optn-fusion-lock-';
 
 /**
  * Absolute backstop if heartbeats stop being written (process kill + no reclaim).
- * Gather (~75s) + round timeout (~120s) + Tor slack — four minutes is enough
- * for a live round and short enough that a ghost lock is not permanent.
+ * Sized to server session ceiling (join + warmup + close) + small margin —
+ * see fusionTiming.P2P_LEASE_TTL_MS. Not a license for longer rounds.
  */
-export const LEASE_TTL_MS = 4 * 60_000;
+export const LEASE_TTL_MS = P2P_LEASE_TTL_MS;
 
 /**
  * A live round refreshes `at` every LEASE_HEARTBEAT_MS. If `at` is older than
