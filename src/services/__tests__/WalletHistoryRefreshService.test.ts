@@ -25,6 +25,19 @@ vi.mock('../OutboundTransactionReconciler', () => ({
 vi.mock('../QuantumrootTrackingService', () => ({
   default: { listTrackedAddresses: vi.fn(async () => []) },
 }));
+vi.mock('../../platform/desktop/WalletLedgerService', () => ({
+  partitionAddressesByStatus: vi.fn(async (_walletId: number, addresses: string[]) => ({
+    dirty: addresses,
+    clean: [],
+    probed: 0,
+  })),
+  loadWalletAddressSet: vi.fn(async () => new Set<string>()),
+  fetchAndApplyMissingTransactions: vi.fn(async () => ({
+    fetched: 0,
+    applied: 0,
+  })),
+  rebuildUtxosFromLedger: vi.fn(async () => 0),
+}));
 
 import { refreshWalletTransactionHistory } from '../WalletHistoryRefreshService';
 
@@ -66,7 +79,12 @@ describe('wallet history refresh service', () => {
       walletId: 101,
       dispatch,
     });
-    expect(fetchAndStore).toHaveBeenCalledWith(101, ['addr1', 'addr2']);
+    expect(fetchAndStore).toHaveBeenCalledWith(
+      101,
+      ['addr1', 'addr2'],
+      undefined,
+      expect.any(Function)
+    );
     expect(result.refreshed).toBe(true);
   });
 
@@ -77,7 +95,12 @@ describe('wallet history refresh service', () => {
     });
 
     expect(result.refreshed).toBe(true);
-    expect(fetchAndStore).toHaveBeenCalledWith(108, ['addr1', 'addr2']);
+    expect(fetchAndStore).toHaveBeenCalledWith(
+      108,
+      ['addr1', 'addr2'],
+      undefined,
+      expect.any(Function)
+    );
     expect(reconnect).not.toHaveBeenCalled();
   });
 
@@ -87,7 +110,12 @@ describe('wallet history refresh service', () => {
       dispatch,
       skipAddresses: new Set(['addr1']),
     });
-    expect(fetchAndStore).toHaveBeenCalledWith(102, ['addr2']);
+    expect(fetchAndStore).toHaveBeenCalledWith(
+      102,
+      ['addr2'],
+      undefined,
+      expect.any(Function)
+    );
   });
 
   it('still refreshes when every address was previously scanned', async () => {
@@ -95,7 +123,12 @@ describe('wallet history refresh service', () => {
     // so a NEW payment on an already-scanned address refreshed nothing. A full
     // pass must not be filtered away.
     await refreshWalletTransactionHistory({ walletId: 103, dispatch });
-    expect(fetchAndStore).toHaveBeenCalledWith(103, ['addr1', 'addr2']);
+    expect(fetchAndStore).toHaveBeenCalledWith(
+      103,
+      ['addr1', 'addr2'],
+      undefined,
+      expect.any(Function)
+    );
   });
 
   it('publishes the stored transactions to redux', async () => {

@@ -69,6 +69,7 @@ export async function rebuildActiveWallet(
       walletId,
       dispatch: store.dispatch,
       sessionGeneration,
+      force: true,
       onProgress: (pct) => {
         store.dispatch(setSyncingProgress(70 + Math.round(0.28 * pct)));
         onProgress?.('Rebuilding transaction history…', 70 + Math.round(0.28 * pct));

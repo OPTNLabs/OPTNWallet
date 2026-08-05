@@ -249,6 +249,9 @@ const Home: React.FC = () => {
         walletId: currentWalletId,
         dispatch,
         sessionGeneration,
+        // Do not join a background history pass (no onProgress → bar stuck at
+        // 55%). Force re-fetches every address after statuses were cleared.
+        force: true,
         onProgress: (pct) => {
           // 55–100% = history pass
           reportSyncProgress(55 + Math.round(0.45 * pct));
