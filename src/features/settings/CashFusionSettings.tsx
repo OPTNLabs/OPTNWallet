@@ -7,7 +7,7 @@
 // Server and P2P rounds share the wallet-level reservation, completion, and
 // automatic-fusion policy while keeping their transports isolated.
 
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { useDispatch, useSelector } from 'react-redux';
 import {
   selectCashFusionEnabled,
@@ -47,6 +47,7 @@ import {
   type FusionActivity,
   type FusionRunOutcome,
 } from '../../platform/desktop/FusionRunnerService';
+import { hasLiveRoundLease } from '../../platform/desktop/fusionWalletLease';
 import { fusionCoinAvailability } from '../../platform/desktop/fusionRoundState';
 
 import { runP2pFusion } from '../../platform/desktop/FusionP2pService';
@@ -141,49 +142,83 @@ export const CashFusionSettings: React.FC<{ variant?: 'card' | 'servers' }> = ({
   const [fusionActivity, setFusionActivity] = useState<FusionActivity | null>(
     () => getFusionActivity(walletId)
   );
+  // Blocks double-click before React re-renders (same-window double Start).
+  const startInFlightRef = useRef(false);
+  // Re-read localStorage lease + coin locks (other window may hold the round).
+  const [leaseTick, setLeaseTick] = useState(0);
+  useEffect(() => {
+    const id = window.setInterval(() => setLeaseTick((n) => n + 1), 1_000);
+    return () => window.clearInterval(id);
+  }, []);
   // Only trust activity when this window actually holds the in-memory lease.
   // Orphan activity used to greyscale the whole panel while nothing was fusing.
   const runningHere = isFusionRunning(walletId);
+  // Durable lease: another window of the SAME wallet, or a ghost until stale.
+  // User: "round already active… why isn't Start gray?" — UI only checked runningHere.
+  const leaseElsewhere = hasLiveRoundLease(walletId) && !runningHere;
   const activeFusion =
     runningHere && fusionActivity?.walletId === walletId
       ? fusionActivity
       : null;
   const serverFusing =
     activeFusion?.mode === 'server' || fuseState === 'fusing';
-  const p2pFusing = activeFusion?.mode === 'p2p' || p2pState === 'fusing';
-  const anyFusing = serverFusing || p2pFusing;
-  // Advisory only — Start/Fuse grey out when every coin is reserved so the user
-  // never has to click into "All coins are already committed…".
+  const p2pFusing =
+    activeFusion?.mode === 'p2p' ||
+    p2pState === 'fusing' ||
+    leaseElsewhere;
+  const anyFusing = serverFusing || p2pFusing || startInFlightRef.current;
+  // Heal ghost leases when THIS window is idle (other window dead, no heartbeat).
+  useEffect(() => {
+    if (walletId <= 0 || runningHere) return;
+    if (!hasLiveRoundLease(walletId)) return;
+    void reconcileIdleFusionState(walletId).then(() => {
+      setLeaseTick((n) => n + 1);
+      setFusionActivity(getFusionActivity(walletId));
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- leaseTick polls storage
+  }, [walletId, runningHere, leaseTick]);
   const utxosByAddress = useSelector((s: RootState) => s.utxos.utxos);
   const flatUtxos = useMemo(
     () => Object.values(utxosByAddress).flat(),
     [utxosByAddress]
   );
-  // Re-read localStorage reservations on a short tick (another window may release).
-  const [reservationTick, setReservationTick] = useState(0);
-  useEffect(() => {
-    const id = window.setInterval(() => setReservationTick((n) => n + 1), 1_500);
-    return () => window.clearInterval(id);
-  }, []);
   const coinAvailability = useMemo(
     () => fusionCoinAvailability(walletId, flatUtxos),
-    // reservationTick forces recompute when locks change in localStorage
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [walletId, flatUtxos, reservationTick, anyFusing]
+    [walletId, flatUtxos, leaseTick, anyFusing]
   );
   const noSpendableCoins = coinAvailability.total === 0;
   const allCoinsReserved =
     coinAvailability.total > 0 && coinAvailability.free === 0;
   const coinsBlocked = noSpendableCoins || allCoinsReserved;
-  const coinsBlockedReason = noSpendableCoins
-    ? 'No spendable (non-token) coins to fuse.'
-    : allCoinsReserved
-      ? 'All coins are reserved by another fusion round — wait for it to finish or cancel it.'
-      : undefined;
+  const startBlockedReason = (() => {
+    if (walletId <= 0) return 'Open a wallet to run a P2P round.';
+    if (leaseElsewhere) {
+      return (
+        'A fusion round is already active for this wallet (another window or ' +
+        'a finishing Auto run). Wait for it to finish, or close that window. ' +
+        'If nothing is fusing, wait ~45s for a stuck lock to clear.'
+      );
+    }
+    if (p2pState === 'fusing' || serverFusing) {
+      return 'A fusion round is in progress — Start stays disabled until it ends.';
+    }
+    if (noSpendableCoins) return 'No spendable (non-token) coins to fuse.';
+    if (allCoinsReserved) {
+      return 'All coins are reserved by another fusion round — wait for it to finish.';
+    }
+    return undefined;
+  })();
+  const startDisabled =
+    walletId <= 0 ||
+    p2pFusing ||
+    serverFusing ||
+    coinsBlocked ||
+    leaseElsewhere;
   const serverMode = getFusionModeAvailability({
     p2pFusionEnabled,
     walletId,
-    serverBusy: anyFusing || coinsBlocked,
+    serverBusy: startDisabled,
   });
 
   // Start from the saved server only if it belongs to the current network's
@@ -377,6 +412,23 @@ export const CashFusionSettings: React.FC<{ variant?: 'card' | 'servers' }> = ({
   // P2P fusion: no server — meet peers on Nostr over Tor and run the round P2P.
   // Tor is mandatory (resolve the SOCKS proxy; runP2pFusion fails closed without).
   const handleP2pFuse = async () => {
+    // Sync gate: button can still be enabled for one frame; double-click must not
+    // mint two throwaway identities (user: 7 live keys / same wallet two rounds).
+    if (startInFlightRef.current || isFusionRunning(walletId)) {
+      setP2pMsg(
+        'A fusion round is already in progress in this window.'
+      );
+      return;
+    }
+    if (hasLiveRoundLease(walletId) && !isFusionRunning(walletId)) {
+      setP2pMsg(
+        'A fusion round is already active for this wallet (another window or Auto). ' +
+          'Wait for it to finish, or close that window. Stuck locks clear in ~45s.'
+      );
+      setP2pState('fail');
+      return;
+    }
+    startInFlightRef.current = true;
     setP2pState('fusing');
     setP2pMsg(null);
     setP2pPhase(0);
@@ -418,6 +470,9 @@ export const CashFusionSettings: React.FC<{ variant?: 'card' | 'servers' }> = ({
     } catch (e) {
       setP2pState('fail');
       setP2pMsg(e instanceof Error ? e.message : String(e));
+    } finally {
+      startInFlightRef.current = false;
+      setLeaseTick((n) => n + 1);
     }
   };
 
@@ -662,7 +717,7 @@ export const CashFusionSettings: React.FC<{ variant?: 'card' | 'servers' }> = ({
                         Fuse Now using CashFusion server
                       </p>
                       <p className="text-[10px] wallet-muted">
-                        {coinsBlockedReason ??
+                        {startBlockedReason ??
                           'CoinJoin via the server configured in Servers. Needs Tor + ≥2 players in a tier.'}
                       </p>
                     </div>
@@ -670,7 +725,7 @@ export const CashFusionSettings: React.FC<{ variant?: 'card' | 'servers' }> = ({
                       type="button"
                       onClick={() => void handleFuseNow()}
                       disabled={serverMode.serverDisabled}
-                      title={coinsBlockedReason}
+                      title={startBlockedReason}
                       className="rounded-lg border border-[var(--wallet-accent)]/50 px-3 py-1.5 text-xs font-semibold text-[var(--wallet-accent)] hover:bg-[var(--wallet-accent)]/5 disabled:opacity-50 whitespace-nowrap"
                     >
                       {serverFusing ? 'Fusing…' : 'Fuse Now'}
@@ -696,13 +751,9 @@ export const CashFusionSettings: React.FC<{ variant?: 'card' | 'servers' }> = ({
                       onStart={() => void handleP2pFuse()}
                       status={p2pMsg}
                       phase={p2pPhase}
-                      busy={p2pFusing}
-                      disabled={walletId <= 0 || anyFusing || coinsBlocked}
-                      disabledReason={
-                        walletId <= 0
-                          ? 'Open a wallet to run a P2P round.'
-                          : coinsBlockedReason
-                      }
+                      busy={p2pFusing || leaseElsewhere}
+                      disabled={startDisabled}
+                      disabledReason={startBlockedReason}
                     />
                   )}
                 </div>

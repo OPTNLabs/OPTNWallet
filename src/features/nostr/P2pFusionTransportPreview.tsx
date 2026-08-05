@@ -95,16 +95,23 @@ export const P2pFusionTransportPreview: React.FC<P2pFusionPanelProps> = ({
       type="button"
       onClick={onStart}
       disabled={disabled || busy}
-      className="w-full rounded-xl border border-violet-400/40 px-3 py-2 text-xs font-semibold text-violet-400 hover:bg-violet-400/5 disabled:cursor-not-allowed disabled:opacity-50"
+      aria-busy={busy}
+      className="w-full rounded-xl border border-violet-400/40 px-3 py-2 text-xs font-semibold text-violet-400 hover:bg-violet-400/5 disabled:cursor-not-allowed disabled:opacity-40 disabled:grayscale"
     >
       {busy ? 'Fusing…' : 'Start P2P round'}
     </button>
 
-    {disabled && disabledReason ? (
-      <p className="text-center text-[9px] wallet-muted">{disabledReason}</p>
+    {disabled || busy ? (
+      <p className="text-center text-[9px] wallet-muted">
+        {disabledReason ??
+          (busy
+            ? 'Round in progress — button stays disabled until it finishes.'
+            : 'Requires Tor + at least 2 peers in the same tier.')}
+      </p>
     ) : (
       <p className="text-center text-[9px] wallet-muted">
-        Requires Tor + at least 2 peers in the same tier.
+        Requires Tor + at least 2 peers worldwide in the same tier. Start all
+        wallets within a few seconds of each other.
       </p>
     )}
 
