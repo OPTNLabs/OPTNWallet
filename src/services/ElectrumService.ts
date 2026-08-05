@@ -866,7 +866,7 @@ const ElectrumService = {
   /** Bulk-subscribe addresses in one batched round-trip */
   async subscribeAddressesBulk(
     addresses: string[],
-    callback: (status: string) => void
+    callback?: (address: string, status: string) => void
   ) {
     try {
       await registerAddressSubscriptionsBulk(addresses, callback);

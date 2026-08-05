@@ -237,6 +237,11 @@ async function refreshWalletAddress(address: string, session: WorkerSession) {
   invalidateUTXOCache(address);
   const utxos = await UTXOService.fetchAndStoreUTXOs(currentWalletId, address);
   if (!isCurrentWorkerContext(session)) return;
+  // Never publish empty over non-empty from a background address tick
+  // (flips balance right→wrong after Manual Sync / open force pass).
+  if (utxos.length === 0 && prev.length > 0) {
+    return;
+  }
   store.dispatch(updateUTXOsForAddress({ address, utxos }));
 
   for (const u of utxos) {
@@ -438,10 +443,11 @@ export async function bootstrapAllUTXOs(expectedEpoch?: number) {
     );
     for (const address of trackedAddresses) invalidateUTXOCache(address);
 
-    // Instant balance: publish the last-known DB snapshot BEFORE any network
-    // round-trip, exactly like Electron Cash shows the wallet file first and
-    // syncs in the background. Without this the Home balance waits for the
-    // (single, batched) Electrum call, which reads as "stuck syncing" on open.
+    // Disk paint is best-effort for snappy open, but a known-corrupt SQL
+    // snapshot (sticky external: / failed listunspent empties) must not be the
+    // first thing the user sees if we are about to force-listunspent anyway.
+    // Still paint when we have coins; skip painting an empty/near-empty cache
+    // so the UI does not flash the "wrong" zero/low value before network.
     try {
       const cached = await UTXOService.fetchUTXOsFromDatabase(
         trackedAddresses.map((address) => ({ address }))
@@ -457,7 +463,13 @@ export async function bootstrapAllUTXOs(expectedEpoch?: number) {
           ...utxos,
         ];
       }
-      if (Object.keys(cachedByAddress).length > 0) {
+      const cachedSats = Object.values(cachedByAddress)
+        .flat()
+        .reduce((s, u) => s + (u.value ?? u.amount ?? 0), 0);
+      if (
+        Object.keys(cachedByAddress).length > 0 &&
+        cachedSats > 0
+      ) {
         store.dispatch(replaceAllUTXOs({ utxosByAddress: cachedByAddress }));
       }
     } catch (error) {
@@ -622,14 +634,14 @@ async function establishSubscriptions(session: WorkerSession) {
     );
 
     if (toSubscribe.length > 0) {
-      // Bulk-subscribe all fresh addresses in a single batched round-trip
-      // instead of one RPC per address (sequential awaits were a top sync cost
-      // for wallets with many derived keys).
-      await ElectrumService.subscribeAddressesBulk(toSubscribe, () => {
-        for (const addr of toSubscribe) {
+      // Bulk-subscribe; on later status *change* refresh only that address
+      // (Selene). Never refresh the whole set on one notify.
+      await ElectrumService.subscribeAddressesBulk(
+        toSubscribe,
+        (addr, _status) => {
           refreshAddressSoon(addr, 80, session);
         }
-      });
+      );
       if (!isCurrentWorkerContext(session)) return;
       for (const addr of toSubscribe) {
         subscribedAddresses.set(addr, {
@@ -639,9 +651,7 @@ async function establishSubscriptions(session: WorkerSession) {
       }
     }
 
-    if (toSubscribe.length > 0) {
-      refreshWalletSoon(120, session);
-    }
+    // No trailing refreshWalletSoon: bootstrap already force-listunspent.
   } catch (e) {
     logError('UTXOWorker.establishSubscriptions.walletInit', e);
   }

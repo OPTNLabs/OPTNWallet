@@ -190,6 +190,23 @@ export async function reconcileActiveWalletUtxos(
   if (signal?.aborted || !snapshot || !isActiveWalletSession(session))
     return null;
 
+  // Refuse catastrophic non-force overwrite: background block-tip refresh must
+  // not replace a good Manual Sync / open balance with a half-failed snapshot.
+  const prev = store.getState().utxos?.utxos ?? {};
+  const prevTotal = Object.values(prev)
+    .flat()
+    .reduce((s, u) => s + (u.value ?? u.amount ?? 0), 0);
+  const nextTotal = Object.values(snapshot)
+    .flat()
+    .reduce((s, u) => s + (u.value ?? u.amount ?? 0), 0);
+  if (prevTotal > 0 && nextTotal < prevTotal * 0.5) {
+    console.info(
+      '[WalletUtxoRefresh] refuse non-force balance drop',
+      { walletId, prevTotal, nextTotal }
+    );
+    return null;
+  }
+
   store.dispatch(replaceAllUTXOs({ utxosByAddress: snapshot }));
   emitWalletUtxoRefresh(walletId, snapshot);
   return snapshot;
