@@ -8,6 +8,9 @@ Technical documentation for contributors and third-party integrators.
   - Commands for Android APK/AAB builds and iOS Capacitor preparation.
 - [Wallet Architecture](./wallet-architecture.md)
   - Runtime shape, major modules, and where responsibilities live.
+- [Wallet Ledger & Sync Design](./wallet-ledger-sync-design.md)
+  - Option A hybrid: txi/txo ledger, status hashes, UTXO cache projection,
+    Manual Sync vs Rebuild Wallet.
 - [P2P CashFusion Privacy Layers](./p2p-cashfusion-privacy-layers.md)
   - **PR #12 naming map:** Tor vs NIP-59 vs Pedersen vs blind Schnorr vs
     **output onion** (what each does, infrastructure, essential?).

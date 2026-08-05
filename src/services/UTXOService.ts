@@ -384,6 +384,51 @@ const UTXOService = {
 
       await manager.replaceWalletAddressUTXOs(walletId, formattedByAddress);
 
+      // Option A hybrid: push listunspent into ledger_txo/txi, then project UTXOs
+      // from the ledger so history and coins share one durable model.
+      try {
+        const { ensureDesktopLedgerTables } = await import(
+          '../platform/desktop/desktopSchema'
+        );
+        const { applyAddressUtxoSnapshot, rebuildUtxosFromLedger } =
+          await import('../platform/desktop/WalletLedgerService');
+        await ensureDesktopLedgerTables();
+        for (const address of uniqueAddresses) {
+          const list = formattedByAddress[address] ?? [];
+          await applyAddressUtxoSnapshot(walletId, {
+            address,
+            utxos: list.map((u) => ({
+              tx_hash: u.tx_hash,
+              tx_pos: u.tx_pos,
+              value: u.value ?? u.amount ?? 0,
+              height: u.height,
+              token: u.token,
+              prefix: u.prefix,
+              tokenAddress: u.tokenAddress,
+            })),
+          });
+        }
+        const projected = await rebuildUtxosFromLedger(walletId);
+        if (projected > 0) {
+          const fromDb = await manager.fetchUTXOsFromDatabase(
+            uniqueAddresses.map((address) => ({ address })),
+            walletId
+          );
+          for (const address of uniqueAddresses) {
+            const merged = [
+              ...(fromDb.utxosMap[address] ?? []),
+              ...(fromDb.cashTokenUtxosMap[address] ?? []),
+            ];
+            if (merged.length > 0) formattedByAddress[address] = merged;
+          }
+        }
+      } catch (ledgerError) {
+        // Ledger is additive; classic UTXO path already wrote replaceWalletAddressUTXOs
+        logError('UTXOService.fetchAndStoreUTXOsMany.ledger', ledgerError, {
+          walletId,
+        });
+      }
+
       const dbService = DatabaseService();
       if (isWebPlatform()) {
         await dbService.flushDatabaseToFile(walletId);

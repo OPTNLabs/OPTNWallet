@@ -112,6 +112,13 @@ export default function TransactionManager() {
       });
     }
 
+    // Persist history status hash (and tx_hash stubs) into the Option A ledger.
+    void import('../../platform/desktop/WalletLedgerService')
+      .then((ledger) => ledger.recordHistoryItems(walletId, address, history))
+      .catch(() => {
+        /* desktop ledger optional for non-desktop builds */
+      });
+
     return history;
   }
 
