@@ -1,7 +1,7 @@
 import OutboundTransactionTracker from '../../services/OutboundTransactionTracker';
 import type { OutboundPrivacyRoute } from '../../services/OutboundTransactionTracker';
 import WalletBackendSyncService from '../../services/WalletBackendSyncService';
-import { refreshActiveWalletUtxos } from '../../services/WalletUtxoRefreshService';
+import { reconcileActiveWalletUtxosForSpend } from '../../services/WalletUtxoRefreshService';
 import type { UTXO } from '../../types/types';
 import { logError } from '../../utils/errorHandling';
 import { recordFusionRound, recordFusionTxid } from './fusionCoinDepth';
@@ -128,15 +128,25 @@ export async function completeFusionBroadcast(
     });
   }
 
+  // Exclusive force listunspent — do NOT use soft reconcileActiveWalletUtxos.
+  // Soft join often returns null while Electrum is busy (common right after a
+  // multi-wallet fusion), leaving Redux/SQL on pre-spend coins + pending
+  // outbound outputs → inflated "fake" balance until Manual Sync.
   let refreshed = false;
   if (!torOnly) {
-    try {
-      refreshed = await refreshActiveWalletUtxos(completed.walletId);
-    } catch (error) {
-      logError('FusionCompletionService.refreshActiveWalletUtxos', error, {
-        walletId: completed.walletId,
-        txid: completed.txid,
-      });
+    for (let attempt = 0; attempt < 2 && !refreshed; attempt += 1) {
+      try {
+        const snapshot = await reconcileActiveWalletUtxosForSpend(
+          completed.walletId
+        );
+        refreshed = snapshot !== null;
+      } catch (error) {
+        logError('FusionCompletionService.refreshAfterBroadcast', error, {
+          walletId: completed.walletId,
+          txid: completed.txid,
+          attempt,
+        });
+      }
     }
   }
 

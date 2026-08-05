@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const recordBroadcastMock = vi.fn();
 const observeTransactionMock = vi.fn();
-const refreshActiveWalletUtxosMock = vi.fn();
+const reconcileActiveWalletUtxosForSpendMock = vi.fn();
 
 vi.mock('../../../services/OutboundTransactionTracker', () => ({
   default: {
@@ -17,7 +17,7 @@ vi.mock('../../../services/WalletBackendSyncService', () => ({
 }));
 
 vi.mock('../../../services/WalletUtxoRefreshService', () => ({
-  refreshActiveWalletUtxos: refreshActiveWalletUtxosMock,
+  reconcileActiveWalletUtxosForSpend: reconcileActiveWalletUtxosForSpendMock,
 }));
 
 describe('completeFusionBroadcast', () => {
@@ -37,7 +37,8 @@ describe('completeFusionBroadcast', () => {
     vi.clearAllMocks();
     recordBroadcastMock.mockResolvedValue({ state: 'broadcasted' });
     observeTransactionMock.mockResolvedValue(undefined);
-    refreshActiveWalletUtxosMock.mockResolvedValue(true);
+    // Exclusive spend refresh returns a snapshot (or null), not a boolean.
+    reconcileActiveWalletUtxosForSpendMock.mockResolvedValue({});
   });
 
   it('persists, observes, and immediately refreshes a completed Fusion transaction', async () => {
@@ -79,7 +80,7 @@ describe('completeFusionBroadcast', () => {
       'b'.repeat(64),
       '00'
     );
-    expect(refreshActiveWalletUtxosMock).toHaveBeenCalledWith(5);
+    expect(reconcileActiveWalletUtxosForSpendMock).toHaveBeenCalledWith(5);
   });
 
   it('refreshes immediately even when backend observation does not resolve', async () => {
@@ -100,7 +101,7 @@ describe('completeFusionBroadcast', () => {
     ).resolves.toEqual({ tracked: true, refreshed: true, depthRecorded: 0 });
 
     expect(observeTransactionMock).toHaveBeenCalledOnce();
-    expect(refreshActiveWalletUtxosMock).toHaveBeenCalledWith(5);
+    expect(reconcileActiveWalletUtxosForSpendMock).toHaveBeenCalledWith(5);
   });
 
   it('reports tracker persistence failure without hiding the successful refresh', async () => {
@@ -172,6 +173,6 @@ describe('completeFusionBroadcast', () => {
       privacyRoute: 'tor-only',
     });
     expect(observeTransactionMock).not.toHaveBeenCalled();
-    expect(refreshActiveWalletUtxosMock).not.toHaveBeenCalled();
+    expect(reconcileActiveWalletUtxosForSpendMock).not.toHaveBeenCalled();
   });
 }, 15_000);
