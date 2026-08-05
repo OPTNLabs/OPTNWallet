@@ -173,11 +173,11 @@ export function getSettingsGroupRows(
       WALLET_ROWS.find((row) => row.key === 'nostr')!,
       ...CONNECTION_ROWS,
       WALLET_ROWS.find((row) => row.key === 'experimental')!,
-      ...CONTRACT_ROWS,
       ...WALLET_ROWS.filter((row) =>
         ['console', 'addons'].includes(String(row.key))
       ),
     ],
+    // Contract details live inside the About panel (not a separate row).
     about: ABOUT_ROWS,
   };
 
@@ -193,15 +193,8 @@ export function getSettingsGroupRows(
   });
 }
 
-export const CONTRACT_ROWS: SettingsRowConfig[] = [
-  {
-    key: 'contract-info',
-    title: 'Contract Info',
-    description: 'View contract details',
-    action: 'panel',
-    target: 'contract',
-  },
-];
+/** @deprecated Contract info is embedded in About — kept for deep-link compat. */
+export const CONTRACT_ROWS: SettingsRowConfig[] = [];
 
 export const CONNECTION_ROWS: SettingsRowConfig[] = [
   {
@@ -224,7 +217,7 @@ export const ABOUT_ROWS: SettingsRowConfig[] = [
   {
     key: 'about',
     title: 'About OPTN',
-    description: 'Version info',
+    description: 'App overview · Bitcoin Cash Contracts info',
     action: 'panel',
     target: 'about',
   },

@@ -10,7 +10,6 @@ import { resetContract } from '../../state/slices/contractSlice';
 import { Network, resetNetwork } from '../../state/slices/networkSlice';
 import { clearTransaction } from '../../state/slices/transactionBuilderSlice';
 import { selectCurrentNetwork } from '../../state/selectors/networkSelectors';
-import ContractDetails from '../../components/ContractDetails';
 import { NetworkSettings } from './NetworkSettings';
 import { DerivationPathSettings } from './DerivationPathSettings';
 import { ServerSettings } from './ServerSettings';
@@ -144,7 +143,8 @@ const Settings: React.FC = () => {
       case 'contact':
         return <ContactUs />;
       case 'contract':
-        return <ContractDetails />;
+        // Legacy deep link — content now lives under About.
+        return <AboutView />;
       case 'walletconnect':
         return <WalletConnectPanel />;
       case 'wizardconnect':
@@ -187,7 +187,7 @@ const Settings: React.FC = () => {
       case 'contact':
         return 'Contact Us';
       case 'contract':
-        return 'Contract Info';
+        return 'About';
       case 'app-lock':
         return 'App Lock';
       case 'rebuild-wallet':
