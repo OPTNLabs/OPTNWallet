@@ -189,14 +189,19 @@ const Home: React.FC = () => {
     reportSyncProgress(5);
 
     try {
-      // Fast Manual Sync path:
-      // - discover:false (keys already expanded on open)
-      // - force:true (skip status-hash gate; full listunspent + history)
-      // - NO clearAddressStatuses (was wiping statuses then re-scanning everything
-      //   with zero cache benefit — felt like a rebuild)
-      // - NO ensureFreshConnection wait (resubscribe-all froze the bar at 5%
-      //   for 30–60s; listunspent connects itself)
-      // Do NOT join runWalletUtxoRefresh (background reconcile has no onProgress).
+      // Manual Sync per docs/wallet-ledger-sync-design.md:
+      //   clear statuses + force listunspent/history, NO ledger wipe.
+      // Performance (verified hangs, not guesses):
+      //   - no ensureFreshConnection/resubscribe wait (froze bar at 5%)
+      //   - discover:false (keys already expanded on open)
+      //   - do NOT join runWalletUtxoRefresh (no onProgress)
+      reportSyncProgress(8);
+      try {
+        const { clearAddressStatuses } = await import('./WalletLedgerService');
+        await clearAddressStatuses(currentWalletId);
+      } catch {
+        /* optional on non-desktop */
+      }
       if (!isActiveWalletSession(walletSession)) return;
       reportSyncProgress(12);
 
@@ -216,10 +221,18 @@ const Home: React.FC = () => {
           },
         }
       );
-      // Publish network UTXOs immediately — do not wait on history. Ledger
-      // projection must not replace listunspent truth (that caused fake balances).
+      // Publish this pass's listunspent merge. Preserve addresses we did not
+      // refresh (e.g. contract UTXOs) so replaceAll does not fake-drop balance.
       if (walletUtxos) {
-        dispatch(replaceAllUTXOs({ utxosByAddress: walletUtxos }));
+        const mergedByAddress: Record<string, typeof walletUtxos[string]> = {
+          ...walletUtxos,
+        };
+        for (const [address, list] of Object.entries(reduxUTXOs)) {
+          if (!(address in mergedByAddress) && list.length > 0) {
+            mergedByAddress[address] = list;
+          }
+        }
+        dispatch(replaceAllUTXOs({ utxosByAddress: mergedByAddress }));
         dbService.scheduleDatabaseSave(currentWalletId);
         dispatch(setInitialized(true));
         const refreshedCategories = Array.from(
@@ -259,6 +272,7 @@ const Home: React.FC = () => {
     currentWalletId,
     dbService,
     dispatch,
+    reduxUTXOs,
     reportSyncProgress,
     sessionGeneration,
   ]);
