@@ -73,6 +73,11 @@ function scriptForAddress(address: string): string {
 /**
  * Persist fresh receive indexes before their scripts leave the wallet. Failed
  * rounds intentionally do not recycle these addresses after peer disclosure.
+ *
+ * Auto-fuse can mint outputs while the UI (or another window) is also creating
+ * receive addresses. We allocate the next free index after each successful mint
+ * so a concurrent insert never surfaces as
+ * `UNIQUE constraint failed: keys.token_address`.
  */
 export async function createFreshFusionOutputScripts(
   walletId: number,
@@ -86,23 +91,60 @@ export async function createFreshFusionOutputScripts(
     throw new Error('invalid Fusion output count');
   }
 
-  const existing = (await KeyService.retrieveKeys(walletId)).filter(
-    (key) => Number(key.accountIndex) === 0 && Number(key.changeIndex) === 0
-  );
-  const startIndex = existing.reduce(
-    (maximum, key) => Math.max(maximum, Number(key.addressIndex) + 1),
-    0
-  );
+  const expectedPrefix =
+    network === Network.MAINNET ? 'bitcoincash:' : 'bchtest:';
+  const occupiedIndexes = () =>
+    KeyService.retrieveKeys(walletId).then(
+      (keys) =>
+        new Set(
+          keys
+            .filter(
+              (key) =>
+                Number(key.accountIndex) === 0 && Number(key.changeIndex) === 0
+            )
+            .map((key) => Number(key.addressIndex))
+            .filter((index) => Number.isSafeInteger(index) && index >= 0)
+        )
+    );
 
-  for (let offset = 0; offset < count; offset += 1) {
-    await KeyService.createKeys(walletId, 0, 0, startIndex + offset);
+  const allocated: number[] = [];
+  let cursor = 0;
+  {
+    const occupied = await occupiedIndexes();
+    for (const index of occupied) {
+      cursor = Math.max(cursor, index + 1);
+    }
+  }
+
+  for (let remaining = count; remaining > 0; ) {
+    const occupied = await occupiedIndexes();
+    while (occupied.has(cursor) || allocated.includes(cursor)) {
+      cursor += 1;
+    }
+    const addressIndex = cursor;
+    try {
+      await KeyService.createKeys(walletId, 0, 0, addressIndex);
+      allocated.push(addressIndex);
+      cursor = addressIndex + 1;
+      remaining -= 1;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      // Index taken by a concurrent writer — skip ahead and retry.
+      if (
+        /UNIQUE constraint failed|already exists/i.test(message) &&
+        cursor < addressIndex + 50
+      ) {
+        cursor = addressIndex + 1;
+        continue;
+      }
+      throw error instanceof Error
+        ? error
+        : new Error(`Fusion output key mint failed: ${message}`);
+    }
   }
 
   const persisted = await KeyService.retrieveKeys(walletId);
-  const expectedPrefix =
-    network === Network.MAINNET ? 'bitcoincash:' : 'bchtest:';
-  return Array.from({ length: count }, (_, offset) => {
-    const addressIndex = startIndex + offset;
+  return allocated.map((addressIndex) => {
     const key = persisted.find(
       (candidate) =>
         Number(candidate.accountIndex) === 0 &&
