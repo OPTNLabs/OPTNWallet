@@ -133,5 +133,49 @@ export function releaseOutpoints(walletId: number, outpoints: string[]): void {
   write(storageKey, entries, INPUT_LOCK_TTL_MS);
 }
 
+/**
+ * Drop every outpoint lock for this wallet. Safe only when no live fusion lease
+ * exists (idle reconcile / HMR ghost cleanup). Without this, a crashed round
+ * greys out coins for up to {@link INPUT_LOCK_TTL_MS} while Start stayed clickable.
+ */
+export function clearOutpointReservations(walletId: number): void {
+  if (!Number.isInteger(walletId) || walletId <= 0) return;
+  try {
+    getLocalStorage()?.removeItem(`${INPUT_LOCKS_PREFIX}${walletId}`);
+  } catch {
+    /* storage unavailable */
+  }
+}
+
 export const outpointKey = (txid: string, index: number): string =>
   `${txid}:${index}`;
+
+export interface FusionCoinAvailability {
+  /** Non-token UTXOs in the wallet view. */
+  total: number;
+  /** Not reserved by a fusion round. */
+  free: number;
+  /** Held by a (possibly ghost) fusion reservation. */
+  reserved: number;
+}
+
+/**
+ * How many non-token coins are free to fuse right now.
+ * Used by CashFusion UI to grey Start/Fuse instead of failing after click.
+ */
+export function fusionCoinAvailability(
+  walletId: number,
+  utxos: ReadonlyArray<{ tx_hash: string; tx_pos: number; token?: unknown }>
+): FusionCoinAvailability {
+  const nonToken = utxos.filter((utxo) => !utxo.token);
+  const claimed = reservedOutpoints(walletId);
+  let free = 0;
+  for (const utxo of nonToken) {
+    if (!claimed.has(outpointKey(utxo.tx_hash, utxo.tx_pos))) free += 1;
+  }
+  return {
+    total: nonToken.length,
+    free,
+    reserved: nonToken.length - free,
+  };
+}

@@ -31,6 +31,7 @@ import {
   touchRoundLease,
   tryClaimAutoCooldown,
 } from './fusionWalletLease';
+import { clearOutpointReservations } from './fusionRoundState';
 import {
   AUTO_FUSION_COOLDOWN_MS,
   AUTO_FUSION_RETRY_MS,
@@ -234,6 +235,9 @@ export async function reconcileIdleFusionState(walletId: number): Promise<void> 
   // Reclaim durable lock only if stale (another window may still be live).
   if (!hasLiveRoundLease(walletId)) {
     await forceClearRoundLease(walletId).catch(() => undefined);
+    // Ghost input locks from a dead round (HMR / kill) left Start clickable but
+    // every coin "committed" — clear them whenever no live lease remains.
+    clearOutpointReservations(walletId);
   }
 }
 
