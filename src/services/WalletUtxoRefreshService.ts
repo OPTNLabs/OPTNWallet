@@ -92,6 +92,7 @@ export async function fetchActiveWalletUtxos(
   const { walletId } = session;
   const discover = options.discover !== false;
 
+  options.onProgress?.(0, 1);
   const keyPairs = await KeyService.retrieveKeys(walletId);
   if (signal?.aborted || !isActiveWalletSession(session)) return null;
 
@@ -111,6 +112,9 @@ export async function fetchActiveWalletUtxos(
   // completed broadcast. Reusing the short Electrum UTXO cache here could
   // publish the exact stale snapshot that triggered the refresh.
   for (const address of addresses) invalidateUTXOCache(address);
+  if (addresses.length > 0) {
+    options.onProgress?.(0, addresses.length);
+  }
   const fetched = await UTXOService.fetchAndStoreUTXOsMany(walletId, addresses, {
     discover,
     onProgress: options.onProgress,
