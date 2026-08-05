@@ -21,11 +21,23 @@ import type { UTXO } from '../../types/types';
 import { coinsBelowDepth } from './fusionCoinDepth';
 import {
   acquireRoundLease,
+  forceClearRoundLease,
   isAutoCooldownReady,
+  LEASE_HEARTBEAT_MS,
   releaseRoundLease,
+  touchRoundLease,
   tryClaimAutoCooldown,
 } from './fusionWalletLease';
 import { AUTO_FUSION_COOLDOWN_MS, type FusionMode } from './fusionAutoEngine';
+
+/** Recover from a ghost localStorage lease when the UI is idle (not fusing). */
+export async function clearStuckFusionLease(walletId: number): Promise<void> {
+  if (!Number.isInteger(walletId) || walletId <= 0) return;
+  if (isFusionRunning(walletId) || getFusionActivity(walletId)) {
+    throw new Error('A fusion round is still active in this window.');
+  }
+  await forceClearRoundLease(walletId);
+}
 
 /** Structured, so callers never parse a human string to learn what happened. */
 export type FusionRunOutcome =
@@ -219,8 +231,10 @@ export async function startFusionRound(
   }
 
   // Exclusivity first, across every window, covering both transports and both
-  // triggers. Null means another window holds it — or that we could not obtain a
-  // guarantee at all, in which case refusing is the only safe answer.
+  // triggers. Null means another window holds a live (heartbeating) lease —
+  // or we could not obtain exclusivity. Stale ghost leases from crashed/HMR
+  // rounds are reclaimed automatically after LEASE_STALE_MS (~90s without a
+  // heartbeat). Absolute TTL is 4 minutes.
   const lease = await acquireRoundLease(walletId);
   if (lease === null) return { status: 'busy' };
   heldLeases.set(walletId, lease);
@@ -234,6 +248,11 @@ export async function startFusionRound(
     },
   });
   emitFusionActivity(walletId);
+
+  // Keep the durable lease fresh so other windows see a live holder, not a ghost.
+  const heartbeat = setInterval(() => {
+    void touchRoundLease(walletId, lease).catch(() => undefined);
+  }, LEASE_HEARTBEAT_MS);
 
   try {
     if (options.signal?.aborted) return { status: 'cancelled' };
@@ -291,6 +310,7 @@ export async function startFusionRound(
       };
     }
   } finally {
+    clearInterval(heartbeat);
     heldLeases.delete(walletId);
     if (fusionActivities.get(walletId)?.lease === lease) {
       fusionActivities.delete(walletId);

@@ -76,11 +76,27 @@ describe('cross-window fusion lease', () => {
     expect(await acquireRoundLease(3)).not.toBeNull();
   });
 
-  it('reclaims a lease abandoned by a crashed round', async () => {
-    const stale = Date.now() - 11 * 60_000; // beyond the 10 minute TTL
+  it('reclaims a lease abandoned by a crashed round (absolute TTL)', async () => {
+    const stale = Date.now() - 5 * 60_000; // beyond 4 minute absolute TTL
     await acquireRoundLease(2, stale);
     // A window that died without releasing must not lock the wallet forever.
     expect(await acquireRoundLease(2)).not.toBeNull();
+  });
+
+  it('reclaims a lease with no heartbeat after LEASE_STALE_MS', async () => {
+    const { LEASE_STALE_MS, touchRoundLease } = await import('../fusionWalletLease');
+    const t0 = Date.now();
+    const owner = await acquireRoundLease(2, t0);
+    expect(owner).not.toBeNull();
+    // Fresh lease still blocks.
+    expect(await acquireRoundLease(2, t0 + 30_000)).toBeNull();
+    // Heartbeat keeps it live past the stale window.
+    expect(await touchRoundLease(2, owner as string, t0 + 30_000)).toBe(true);
+    expect(await acquireRoundLease(2, t0 + 30_000 + 30_000)).toBeNull();
+    // No heartbeat → reclaim after stale.
+    expect(
+      await acquireRoundLease(2, t0 + 30_000 + LEASE_STALE_MS + 1)
+    ).not.toBeNull();
   });
 
   it('ignores a release from a window that no longer owns the lease', async () => {
