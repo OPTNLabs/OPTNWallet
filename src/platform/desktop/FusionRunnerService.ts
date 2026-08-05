@@ -397,14 +397,20 @@ export async function startFusionRound(
     // Persist a readable last result so CashFusion still shows auto failures
     // after the live lease is released.
     if (outcome.status === 'fused') {
+      const fusedMsg = outcome.warning
+        ? `Fused ✓ — ${outcome.txid}. ${outcome.warning}`
+        : `Fused ✓ — ${outcome.txid}`;
       setFusionLastResult(walletId, {
         mode,
         trigger,
         ok: true,
-        message: outcome.warning
-          ? `Fused ✓ — ${outcome.txid}. ${outcome.warning}`
-          : `Fused ✓ — ${outcome.txid}`,
+        message: fusedMsg,
       });
+      void import('./logger')
+        .then(({ log }) =>
+          log.info('p2p-live', `w${walletId} OUTCOME fused: ${fusedMsg}`)
+        )
+        .catch(() => undefined);
     } else if (outcome.status === 'failed') {
       setFusionLastResult(walletId, {
         mode,
@@ -412,6 +418,14 @@ export async function startFusionRound(
         ok: false,
         message: outcome.message,
       });
+      void import('./logger')
+        .then(({ log }) =>
+          log.info(
+            'p2p-live',
+            `w${walletId} OUTCOME failed: ${outcome.message}`
+          )
+        )
+        .catch(() => undefined);
     } else if (outcome.status === 'no-eligible-coins') {
       // Not a hard failure for auto: often every coin already hit fuse depth.
       setFusionLastResult(walletId, {

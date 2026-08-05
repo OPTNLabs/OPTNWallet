@@ -469,11 +469,24 @@ export const CashFusionSettings: React.FC<{ variant?: 'card' | 'servers' }> = ({
           },
         },
       });
+      const summary = describeFusionOutcome(outcome);
       setP2pState(outcome.status === 'fused' ? 'done' : 'fail');
-      setP2pMsg(describeFusionOutcome(outcome));
+      setP2pMsg(summary);
+      void import('../../platform/desktop/logger')
+        .then(({ log }) =>
+          log.info(
+            'p2p-live',
+            `w${walletId} OUTCOME ${outcome.status}: ${summary}`
+          )
+        )
+        .catch(() => undefined);
     } catch (e) {
+      const err = e instanceof Error ? e.message : String(e);
       setP2pState('fail');
-      setP2pMsg(e instanceof Error ? e.message : String(e));
+      setP2pMsg(err);
+      void import('../../platform/desktop/logger')
+        .then(({ log }) => log.error('p2p-live', `w${walletId} OUTCOME error: ${err}`))
+        .catch(() => undefined);
     } finally {
       startInFlightRef.current = false;
       setLeaseTick((n) => n + 1);
