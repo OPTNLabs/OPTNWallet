@@ -14,6 +14,7 @@ import TransactionService, {
 import { selectCurrentNetwork } from '../state/selectors/networkSelectors';
 import { SATSINBITCOIN } from '../utils/constants';
 import UTXOService from '../services/UTXOService';
+import { outpointKey } from '../platform/desktop/CoinLabelService';
 import {
   selectNftInput,
   selectTokenFtInputs,
@@ -75,6 +76,34 @@ export default function useSimpleSend() {
   // DB-backed UTXOs across whole wallet
   const [dbUtxos, setDbUtxos] = useState<UTXO[]>([]);
   const [tokenUtxos, setTokenUtxos] = useState<UTXO[]>([]);
+  /** Global coin control on Simple Send: restrict spend pool to checked coins. */
+  const [coinControlEnabled, setCoinControlEnabled] = useState(false);
+  const [selectedCoinKeys, setSelectedCoinKeys] = useState<Set<string>>(
+    () => new Set()
+  );
+
+  const applyCoinControl = useCallback(
+    (pool: UTXO[]): UTXO[] | { error: string } => {
+      if (!coinControlEnabled) return pool;
+      if (selectedCoinKeys.size === 0) {
+        return {
+          error:
+            'Coin control is on but no coins are selected. Check at least one coin, or turn Manual off.',
+        };
+      }
+      const filtered = pool.filter((u) =>
+        selectedCoinKeys.has(outpointKey(u.tx_hash, u.tx_pos))
+      );
+      if (filtered.length === 0) {
+        return {
+          error:
+            'None of the selected coins are available. Refresh the wallet or update coin control.',
+        };
+      }
+      return filtered;
+    },
+    [coinControlEnabled, selectedCoinKeys]
+  );
   useEffect(() => {
     if (!hydrated) return;
     let cancelled = false;
@@ -361,27 +390,9 @@ export default function useSimpleSend() {
     setSelectedCategory('');
     setAmountToken('');
     setSelectedNftCommitment('');
+    setCoinControlEnabled(false);
+    setSelectedCoinKeys(new Set());
   }, [setAmountToken]);
-
-  const planner = useMemo(
-    () =>
-      createSimpleSendPlanner({
-        recipient: normalizedRecipient,
-        selectedCategory,
-        amountToken,
-        tokenChangeAddress,
-        selectedChangeAddress,
-        dbUtxos,
-      }),
-    [
-      normalizedRecipient,
-      selectedCategory,
-      amountToken,
-      tokenChangeAddress,
-      selectedChangeAddress,
-      dbUtxos,
-    ]
-  );
 
   const doReview = useCallback(async () => {
     try {
@@ -415,13 +426,19 @@ export default function useSimpleSend() {
         }
 
         const freshDbUtxos = await refreshBchUtxos();
+        const controlled = applyCoinControl(freshDbUtxos);
+        if ('error' in controlled) {
+          setError(controlled.error);
+          setMode('error');
+          return;
+        }
         const freshPlanner = createSimpleSendPlanner({
           recipient: normalizedRecipient,
           selectedCategory,
           amountToken,
           tokenChangeAddress,
           selectedChangeAddress,
-          dbUtxos: freshDbUtxos,
+          dbUtxos: controlled,
         });
         const attempt = await freshPlanner.addBchOnlyUntilBuild(targetSats, 50);
         if (!attempt.ok) {
@@ -442,7 +459,14 @@ export default function useSimpleSend() {
       }
 
       // From here: token sends also need BCH for fees
-      if (!dbUtxos.length) {
+      const feePoolRaw = dbUtxos.length > 0 ? dbUtxos : await refreshBchUtxos();
+      const feePool = applyCoinControl(feePoolRaw);
+      if ('error' in feePool) {
+        setError(feePool.error);
+        setMode('error');
+        return;
+      }
+      if (!feePool.length) {
         setError('No non-token BCH UTXOs available to cover fees.');
         setMode('error');
         return;
@@ -494,13 +518,21 @@ export default function useSimpleSend() {
 
         const changeTok = totalFromInputs - tokAmt;
 
-        const outputs = [planner.makeTokenOutputForRecipientFT()];
+        const feePlanner = createSimpleSendPlanner({
+          recipient: normalizedRecipient,
+          selectedCategory,
+          amountToken,
+          tokenChangeAddress,
+          selectedChangeAddress,
+          dbUtxos: feePool,
+        });
+        const outputs = [feePlanner.makeTokenOutputForRecipientFT()];
         if (changeTok > 0n) {
-          outputs.push(planner.makeTokenChangeOutputFT(changeTok));
+          outputs.push(feePlanner.makeTokenChangeOutputFT(changeTok));
         }
 
         // Fixed token inputs; add BCH until fee+buffer are covered (BCH change only).
-        const built = await planner.addBchInputsUntilBuild(
+        const built = await feePlanner.addBchInputsUntilBuild(
           tokenInputs,
           outputs,
           100
@@ -547,10 +579,20 @@ export default function useSimpleSend() {
           return;
         }
 
-        const outputs = [planner.makeTokenOutputForRecipientNFT(nftInput)];
+        const feePlanner = createSimpleSendPlanner({
+          recipient: normalizedRecipient,
+          selectedCategory,
+          amountToken,
+          tokenChangeAddress,
+          selectedChangeAddress,
+          dbUtxos: feePool,
+        });
+        const outputs = [
+          feePlanner.makeTokenOutputForRecipientNFT(nftInput),
+        ];
 
         // Fixed NFT input; add BCH until fee+buffer are covered (BCH change only).
-        const built = await planner.addBchInputsUntilBuild(
+        const built = await feePlanner.addBchInputsUntilBuild(
           [nftInput],
           outputs,
           100
@@ -594,9 +636,9 @@ export default function useSimpleSend() {
     tokenUtxos,
     selectedChangeAddress,
     parsedRecipient.amountRaw,
-    planner,
     refreshBchUtxos,
     tokenChangeAddress,
+    applyCoinControl,
   ]);
 
   // "Max": fills the BCH amount field with the full spendable balance minus
@@ -631,13 +673,19 @@ export default function useSimpleSend() {
       // immediately before transaction construction.
       const freshDbUtxos =
         dbUtxos.length > 0 ? dbUtxos : await refreshBchUtxos();
+      const controlled = applyCoinControl(freshDbUtxos);
+      if ('error' in controlled) {
+        setError(controlled.error);
+        setMode('error');
+        return;
+      }
       const freshPlanner = createSimpleSendPlanner({
         recipient: normalizedRecipient,
         selectedCategory,
         amountToken,
         tokenChangeAddress,
         selectedChangeAddress,
-        dbUtxos: freshDbUtxos,
+        dbUtxos: controlled,
       });
       const result = await freshPlanner.sweepAllBchUntilBuild(50);
       if (!result.ok) {
@@ -675,6 +723,7 @@ export default function useSimpleSend() {
     dbUtxos,
     refreshBchUtxos,
     setAmountBch,
+    applyCoinControl,
   ]);
 
   const doSend = useCallback(async () => {
@@ -804,6 +853,13 @@ export default function useSimpleSend() {
     txid,
     broadcastState,
     maxBusy,
+
+    // coin control (global Simple Send)
+    dbUtxos,
+    coinControlEnabled,
+    setCoinControlEnabled,
+    selectedCoinKeys,
+    setSelectedCoinKeys,
 
     // actions
     reset,

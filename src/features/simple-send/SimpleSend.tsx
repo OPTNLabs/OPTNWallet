@@ -17,6 +17,7 @@ import PageHeader from '../../components/ui/PageHeader';
 import useOutboundTransactions from '../../hooks/useOutboundTransactions';
 import { selectWalletId } from '../../state/slices/walletSlice';
 import WalletScreen from '../../components/ui/WalletScreen';
+import { CoinControlSection } from '../../components/CoinControlSection';
 import { getReturnPath } from '../../utils/navigation';
 
 type SimpleSendLocationState = {
@@ -90,6 +91,12 @@ export default function SimpleSend() {
     doMax,
 
     fiatSummary,
+
+    dbUtxos,
+    coinControlEnabled,
+    setCoinControlEnabled,
+    selectedCoinKeys,
+    setSelectedCoinKeys,
 
     selectedForTx, // debug
   } = useSimpleSend();
@@ -533,6 +540,16 @@ export default function SimpleSend() {
                   )}
                 </div>
               )}
+
+              <CoinControlSection
+                walletId={walletId}
+                utxos={dbUtxos}
+                enabled={coinControlEnabled}
+                onEnabledChange={setCoinControlEnabled}
+                selectedKeys={selectedCoinKeys}
+                onSelectedKeysChange={setSelectedCoinKeys}
+                disabled={isSending || maxBusy}
+              />
 
               <ChangeAddressSection
                 selectedChangeAddress={selectedChangeAddress}
