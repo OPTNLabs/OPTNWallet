@@ -445,50 +445,43 @@ const UTXOService = {
 
       await manager.replaceWalletAddressUTXOs(walletId, formattedByAddress);
 
-      // Option A hybrid: push listunspent into ledger_txo/txi, then project UTXOs
-      // from the ledger so history and coins share one durable model.
-      try {
-        const { ensureDesktopLedgerTables } = await import(
-          '../platform/desktop/desktopSchema'
-        );
-        const { applyAddressUtxoSnapshot, rebuildUtxosFromLedger } =
-          await import('../platform/desktop/WalletLedgerService');
-        await ensureDesktopLedgerTables();
-        for (const address of uniqueAddresses) {
-          const list = formattedByAddress[address] ?? [];
-          await applyAddressUtxoSnapshot(walletId, {
-            address,
-            utxos: list.map((u) => ({
-              tx_hash: u.tx_hash,
-              tx_pos: u.tx_pos,
-              value: u.value ?? u.amount ?? 0,
-              height: u.height,
-              token: u.token,
-              prefix: u.prefix,
-              tokenAddress: u.tokenAddress,
-            })),
+      // Option A hybrid: push listunspent into the ledger off the hot path.
+      // CRITICAL: never replace network listunspent results with a ledger
+      // projection before return — incomplete projection (serial apply mid-way,
+      // empty gap addresses) produced FAKE balances during Manual Sync while
+      // the bar was still stuck after the Electrum batch finished.
+      const networkFetched = Object.keys(utxosByAddress);
+      const snapshotPayload = networkFetched.map((address) => ({
+        address,
+        utxos: (formattedByAddress[address] ?? []).map((u) => ({
+          tx_hash: u.tx_hash,
+          tx_pos: u.tx_pos,
+          value: u.value ?? u.amount ?? 0,
+          height: u.height,
+          token: u.token,
+          prefix: u.prefix,
+          tokenAddress: u.tokenAddress,
+        })),
+      }));
+      void (async () => {
+        try {
+          const { ensureDesktopLedgerTables } = await import(
+            '../platform/desktop/desktopSchema'
+          );
+          const { applyAddressUtxoSnapshot, rebuildUtxosFromLedger } =
+            await import('../platform/desktop/WalletLedgerService');
+          await ensureDesktopLedgerTables();
+          for (const snap of snapshotPayload) {
+            await applyAddressUtxoSnapshot(walletId, snap);
+          }
+          // Cache-only rebuild; UI already holds listunspent truth above.
+          await rebuildUtxosFromLedger(walletId);
+        } catch (ledgerError) {
+          logError('UTXOService.fetchAndStoreUTXOsMany.ledger', ledgerError, {
+            walletId,
           });
         }
-        const projected = await rebuildUtxosFromLedger(walletId);
-        if (projected > 0) {
-          const fromDb = await manager.fetchUTXOsFromDatabase(
-            uniqueAddresses.map((address) => ({ address })),
-            walletId
-          );
-          for (const address of uniqueAddresses) {
-            const merged = [
-              ...(fromDb.utxosMap[address] ?? []),
-              ...(fromDb.cashTokenUtxosMap[address] ?? []),
-            ];
-            if (merged.length > 0) formattedByAddress[address] = merged;
-          }
-        }
-      } catch (ledgerError) {
-        // Ledger is additive; classic UTXO path already wrote replaceWalletAddressUTXOs
-        logError('UTXOService.fetchAndStoreUTXOsMany.ledger', ledgerError, {
-          walletId,
-        });
-      }
+      })();
 
       const dbService = DatabaseService();
       if (isWebPlatform()) {

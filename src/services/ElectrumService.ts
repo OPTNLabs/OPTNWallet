@@ -270,6 +270,10 @@ const ElectrumService = {
     // many ElectrumX/Fulcrum nodes (verified live: it returns {} or "Invalid
     // address"), which forced a serial fallback per address. Converting to
     // scripthash upfront is valid on every server and batches cleanly.
+    //
+    // Wallet-wide batches must NOT serially await per-address inflight singles
+    // from the subscription worker — that turned Manual Sync into N serial RPCs.
+    const joinInflight = uniqueAddresses.length <= 4;
     for (const address of uniqueAddresses) {
       const cached = cacheByAddr.get(address);
       if (cached && now - cached.ts < UTXO_TTL_MS) {
@@ -277,10 +281,12 @@ const ElectrumService = {
         continue;
       }
 
-      const inflight = inflightByAddr.get(address);
-      if (inflight) {
-        results[address] = await inflight;
-        continue;
+      if (joinInflight) {
+        const inflight = inflightByAddr.get(address);
+        if (inflight) {
+          results[address] = await inflight;
+          continue;
+        }
       }
 
       let scriptHash: string | null = null;
