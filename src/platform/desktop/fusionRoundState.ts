@@ -23,11 +23,18 @@ import { getLocalStorage } from '../../utils/browserStorage';
 
 const ROUND_KEYS_PREFIX = 'optn-fusion-round-keys-';
 const INPUT_LOCKS_PREFIX = 'optn-fusion-input-locks-';
+/** Global (all wallets/windows): keys that withdrew or finished a gather. */
+const RETIRED_KEYS_KEY = 'optn-fusion-retired-round-keys';
 
 /** Long enough to cover a stored announcement's discoverable lifetime. */
 const ROUND_KEY_TTL_MS = 10 * 60_000;
 /** A round that dies without cleanup must not strand coins beyond this. */
 const INPUT_LOCK_TTL_MS = 5 * 60_000;
+/**
+ * How long other windows treat a finished/withdrawn throwaway key as a ghost.
+ * Must cover relay replay of replaceable announcements after withdraw.
+ */
+const RETIRED_KEY_TTL_MS = 5 * 60_000;
 
 /** value -> epoch ms it was recorded. */
 type Stamped = Record<string, number>;
@@ -81,6 +88,23 @@ export function recordRoundKey(walletId: number, pubkey: string): void {
 /** True when this pool announcement is one of THIS wallet's own attempts. */
 export function isOwnRoundKey(walletId: number, pubkey: string): boolean {
   return live(`${ROUND_KEYS_PREFIX}${walletId}`, ROUND_KEY_TTL_MS).has(pubkey);
+}
+
+/**
+ * Mark a throwaway round key as dead for EVERY window.
+ * Call on withdraw / after gather ends so other wallets stop counting it as a
+ * "live peer" (user: 4 wallets, "7 live peers" from abandoned Start clicks).
+ */
+export function retireRoundKey(pubkey: string): void {
+  if (!pubkey || pubkey.length < 32) return;
+  const entries = read(RETIRED_KEYS_KEY);
+  entries[pubkey] = Date.now();
+  write(RETIRED_KEYS_KEY, entries, RETIRED_KEY_TTL_MS);
+}
+
+/** True when any wallet has retired this announcement key. */
+export function isRetiredRoundKey(pubkey: string): boolean {
+  return live(RETIRED_KEYS_KEY, RETIRED_KEY_TTL_MS).has(pubkey);
 }
 
 /** Outpoints currently claimed by an in-flight round of this wallet. */

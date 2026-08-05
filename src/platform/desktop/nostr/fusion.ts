@@ -16,6 +16,8 @@ import {
   type Event,
 } from 'nostr-tools';
 
+import { isRetiredRoundKey } from '../fusionRoundState';
+
 // Public ready announcement. A NIP-01 REPLACEABLE kind (10000-19999): the relay
 // keeps only the latest event per throwaway pubkey and REPLAYS it to any new
 // subscriber via the `since` filter. Ephemeral kinds (20000-29999, e.g. the
@@ -392,17 +394,17 @@ export function joinPool(
   };
   const emitPeers = () => {
     const now = Math.floor(Date.now() / 1000);
-    // Drop locally expired entries even if no withdraw event arrived (Tor lag /
-    // missed replaceable). Different windows seeing 1 vs 4 vs 5 "peers" was
-    // often ghosts from failed rounds still sitting in this Map.
+    // Drop expired / retired ghosts (failed Start clicks left throwaway keys
+    // on relays → "7 live peers" with only 4 wallets).
     for (const [pubkey, ann] of peers) {
-      if (ann.expiresAt < now) peers.delete(pubkey);
+      if (ann.expiresAt < now || isRetiredRoundKey(pubkey)) peers.delete(pubkey);
     }
     options.onPeer([...peers.values()]);
   };
 
   const sub = pool.subscribeMany(relays, filter, {
     onevent(evt: Event) {
+      if (isRetiredRoundKey(evt.pubkey)) return;
       const ann = parsePoolAnnouncement(evt, {
         network: options.network,
         epoch: options.epoch,

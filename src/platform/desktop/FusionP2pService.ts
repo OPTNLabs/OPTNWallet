@@ -17,11 +17,13 @@ import ElectrumService, {
 } from '../../services/ElectrumService';
 import {
   isOwnRoundKey,
+  isRetiredRoundKey,
   outpointKey,
   recordRoundKey,
   releaseOutpoints,
   reserveOutpoints,
   reservedOutpoints,
+  retireRoundKey,
 } from './fusionRoundState';
 import { Network } from '../../state/slices/networkSlice';
 import type { UTXO } from '../../types/types';
@@ -127,9 +129,9 @@ const POOL_WAIT_MAX_MS = 90_000;
 const PEER_SET_STABLE_MS = 12_000;
 /** Only 2 live peers: hold longer so a 3rd/4th wallet can join the pool. */
 const PAIR_HOLD_MS = 45_000;
-// Live window must cover a few re-announce cycles (REANNOUNCE_MS=6s) + Tor lag,
-// but NOT the full 150–180s TTL (that keeps dead round keys as "peers").
-const RECENT_ACTIVE_SECONDS = 24;
+// Live window: just over 2 re-announce cycles (REANNOUNCE_MS=6s) + Tor lag.
+// Wider windows re-count abandoned Start keys as "7 live peers" with 4 wallets.
+const RECENT_ACTIVE_SECONDS = 14;
 
 // Every Start click mints a fresh throwaway identity, and the announcement is a
 // STORED event the relay keeps replaying until it ages out. Without this, a retry
@@ -154,6 +156,8 @@ async function collectRolling(
       if (peer.pubkey === selfPubkey) return true;
       // An earlier attempt of THIS wallet — from any window, surviving reloads.
       if (isOwnRoundKey(walletId, peer.pubkey)) return false;
+      // Any wallet that finished/withdrew — shared ghost list (cross-window).
+      if (isRetiredRoundKey(peer.pubkey)) return false;
       // Prefer recently re-announced keys (live gatherers re-publish every 6s).
       if (peer.at < nowSeconds - RECENT_ACTIVE_SECONDS) return false;
       if (peer.expiresAt < nowSeconds) return false;
@@ -201,18 +205,18 @@ async function collectRolling(
           ? ` pair-hold ${Math.max(0, Math.ceil((start + PAIR_HOLD_MS - now) / 1000))}s`
           : '';
       onStatus?.(
-        `${peers.length} live peer(s) — wait ${needStable}s for set to stabilize` +
-          `${pairNote} (Tor lag / ghosts)…`
+        `${peers.length} live announcement(s) — wait ${needStable}s for set to stabilize` +
+          `${pairNote}…`
       );
     } else if (peers.length >= MIN_PARTICIPANTS) {
       const inSecs = Math.max(0, Math.ceil((minReady - now) / 1_000));
       onStatus?.(
-        `${peers.length} live peer(s) — min gather ${inSecs}s…`
+        `${peers.length} live announcement(s) — min gather ${inSecs}s…`
       );
     } else {
       const secsLeft = Math.max(0, Math.ceil((maxWait - now) / 1_000));
       onStatus?.(
-        `Waiting for peers: ${peers.length} live (up to ${secsLeft}s)…`
+        `Waiting for peers: ${peers.length} live announcement(s) (up to ${secsLeft}s)…`
       );
     }
     await waitUntil(Math.min(maxWait, now + 1_500), signal);
@@ -533,6 +537,7 @@ export async function runP2pFusion(
     // (Stopping here was one cause of "only 1 announcement" on other windows.)
     const group = selectFusionGroup(fresh, MIN_PARTICIPANTS, MAX_PARTICIPANTS);
     if (!group || !group.participants.includes(round.pubkey)) {
+      retireRoundKey(round.pubkey);
       joined.stop();
       stopPool = null;
       throw new Error(
@@ -689,8 +694,9 @@ export async function runP2pFusion(
     // them (the live re-check keeps them out next time); a failed one must not
     // strand them. The stored TTL is only a backstop for a hard crash.
     releaseOutpoints(opts.walletId, reservedForRound);
-    // Retire this round key from the pool before tearing the sockets down, so the
-    // next attempt (ours or a peer's) does not see it as a live candidate.
+    // Retire this throwaway key for ALL windows (ghost peer filter), then
+    // publish expired announcement so relays stop replaying us as live.
+    if (round?.pubkey) retireRoundKey(round.pubkey);
     await withdrawFromPool?.().catch(() => undefined);
     stopPool?.();
     pool.close(relays);
