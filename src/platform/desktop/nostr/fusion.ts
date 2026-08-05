@@ -39,14 +39,18 @@ export const MAX_ANNOUNCE_DELAY_MS = 3_000;
 // relays answer "rate-limited: you are noting too much". Refresh slowly, just
 // often enough to stay inside the peer-active window.
 // Faster refresh during multi-wallet gather so asymmetric Tor views converge.
-const REANNOUNCE_MS = 6_000;
+// 4s: under Tor, missing one or two cycles is common; stay inside the live window.
+const REANNOUNCE_MS = 4_000;
 /** Public re-announce period (seconds). Live gatherers republish on this cadence. */
 export const POOL_REANNOUNCE_SECONDS = REANNOUNCE_MS / 1_000;
 /**
- * Max age of `created_at` for a "live" announcement. Slightly above one
- * re-announce cycle so Tor lag does not drop honest peers.
+ * How long a peer stays "live" after we last heard them (or after their event
+ * created_at). Must cover several missed re-announce cycles over Tor — 10s was
+ * so tight that multi-wallet gather collapsed to "1 live wallet" (self only).
  */
-export const POOL_LIVE_ACTIVE_SECONDS = 10;
+export const POOL_LIVE_ACTIVE_SECONDS = 24;
+/** How far back the pool subscription pulls replaceable announces. */
+export const POOL_SUBSCRIBE_LOOKBACK_SECONDS = 60;
 const MAX_FUTURE_SKEW_SECONDS = 5;
 const MAX_ANNOUNCEMENT_BYTES = 2_048;
 const MAX_TIERS = 16;
@@ -105,20 +109,30 @@ export interface PoolAnnouncement {
   epoch: number;
   tiers: number[];
   numInputs: number;
+  /** Event `created_at` (author clock). */
   at: number;
   expiresAt: number;
+  /**
+   * Local wall time (seconds) we last received this pubkey from a relay.
+   * Tor often drops re-announce events; without this, a single delivered
+   * announce ages out of the live set and gather falls to "1 live wallet".
+   */
+  seenAt?: number;
 }
 
 /**
  * Decide whether a pool announcement is a live gatherer for THIS attempt.
  *
- * Ghost overcount (user: 4 wallets → "7 live peers") comes from throwaway keys
- * that abandoned Start left on the relay. Those stop re-announcing; honest
- * wallets republish every {@link POOL_REANNOUNCE_SECONDS}. After one cycle we
- * only keep keys whose `at` is at/after this gather started.
+ * Ghost overcount (4 wallets → "7 peers") vs undercount ("1 live wallet") both
+ * come from throwaway keys + Tor lag. Rules:
+ *   1) Drop own/retired ghosts.
+ *   2) Keep anyone we heard recently (`seenAt` or `at` within live window).
+ *   3) After a few re-announce cycles, also require fresh `created_at` so a
+ *      one-shot relay replay of an abandoned Start key ages out — live peers
+ *      keep refreshing `created_at` every {@link POOL_REANNOUNCE_SECONDS}.
  */
 export function isLivePoolAnnouncement(
-  peer: Pick<PoolAnnouncement, 'pubkey' | 'at' | 'expiresAt'>,
+  peer: Pick<PoolAnnouncement, 'pubkey' | 'at' | 'expiresAt' | 'seenAt'>,
   opts: {
     nowSeconds: number;
     gatherStartSeconds: number;
@@ -130,17 +144,18 @@ export function isLivePoolAnnouncement(
   if (peer.pubkey === opts.selfPubkey) return true;
   if (opts.isGhostKey(peer.pubkey)) return false;
   if (peer.expiresAt < opts.nowSeconds) return false;
-  if (peer.at < opts.nowSeconds - POOL_LIVE_ACTIVE_SECONDS) return false;
+
+  const lastHeard = peer.seenAt ?? peer.at;
+  if (lastHeard < opts.nowSeconds - POOL_LIVE_ACTIVE_SECONDS) return false;
 
   const elapsed = opts.nowSeconds - opts.gatherStartSeconds;
-  // After one re-announce cycle: only keys that published during THIS gather.
-  // Orphan HMR/cancel loops keep re-publishing old keys — those still pass
-  // "recent" checks; this bound drops anything that never touched this attempt.
-  if (elapsed >= POOL_REANNOUNCE_SECONDS + 1) {
-    return peer.at >= opts.gatherStartSeconds - 1;
+  // After ~2–3 re-announce periods, demand a fresh event timestamp so abandoned
+  // Start keys (one stored replaceable, no re-publish) drop. Live peers refresh
+  // created_at every few seconds even when Tor delivers sporadically.
+  if (elapsed >= POOL_REANNOUNCE_SECONDS * 3) {
+    return peer.at >= opts.nowSeconds - POOL_LIVE_ACTIVE_SECONDS;
   }
-  // Early window (~6s): only very fresh announces (not abandoned Start keys).
-  return peer.at >= opts.gatherStartSeconds - 3;
+  return true;
 }
 
 export interface BuildPoolAnnouncementOptions {
@@ -461,10 +476,10 @@ export function joinPool(
       repeatTimer = null;
     }
   };
-  // Pull only near-live replaceables. A 180s `since` rehydrated every abandoned
-  // Start key from the last 3 minutes and inflated the gather count.
+  // Look back far enough for Tor-lagged multi-wallet starts; collectRolling
+  // still drops ghosts via live filter + retired keys.
   const subscribeSince =
-    Math.floor(Date.now() / 1000) - POOL_LIVE_ACTIVE_SECONDS * 2;
+    Math.floor(Date.now() / 1000) - POOL_SUBSCRIBE_LOOKBACK_SECONDS;
   const filter = {
     kinds: [POOL_ANNOUNCE_KIND],
     '#t': [poolTag(options.network)],
@@ -473,13 +488,14 @@ export function joinPool(
   const emitPeers = () => {
     if (!stillMine()) return;
     const now = Math.floor(Date.now() / 1000);
-    // Drop expired / retired / stale ghosts so callers that REPLACE their list
+    // Drop expired / retired / unheard ghosts so callers that REPLACE their list
     // from this emit never re-accumulate abandoned Start keys.
     for (const [pubkey, ann] of peers) {
+      const lastHeard = ann.seenAt ?? ann.at;
       if (
         ann.expiresAt < now ||
         isRetiredRoundKey(pubkey) ||
-        ann.at < now - POOL_LIVE_ACTIVE_SECONDS
+        lastHeard < now - POOL_LIVE_ACTIVE_SECONDS
       ) {
         peers.delete(pubkey);
       }
@@ -496,7 +512,15 @@ export function joinPool(
         epoch: options.epoch,
       });
       if (ann) {
-        peers.set(ann.pubkey, ann);
+        const nowSec = Math.floor(Date.now() / 1000);
+        const prev = peers.get(ann.pubkey);
+        // Keep the newest created_at; always refresh local hear-time so Tor
+        // lag on later re-announces does not age the peer out of the live set.
+        peers.set(ann.pubkey, {
+          ...ann,
+          at: prev ? Math.max(prev.at, ann.at) : ann.at,
+          seenAt: nowSec,
+        });
         emitPeers();
         return;
       }

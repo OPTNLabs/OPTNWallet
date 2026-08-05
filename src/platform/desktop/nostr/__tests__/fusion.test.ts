@@ -137,13 +137,13 @@ describe('P2P fusion coordination', () => {
     });
   });
 
-  it('drops abandoned Start ghosts after one re-announce cycle (4 wallets ≠ 7 peers)', () => {
+  it('keeps Tor-lagged live peers and drops abandoned Start ghosts', () => {
     const self = 'aa'.repeat(32);
     const live = 'bb'.repeat(32);
     const ghost = 'cc'.repeat(32);
     const gatherStart = 1_800_000_000;
-    // Past re-announce cycle: require announce during THIS gather.
-    const now = gatherStart + POOL_REANNOUNCE_SECONDS + 1;
+    // After 3 re-announce periods: demand fresh created_at.
+    const now = gatherStart + POOL_REANNOUNCE_SECONDS * 3;
     const base = {
       nowSeconds: now,
       gatherStartSeconds: gatherStart,
@@ -157,31 +157,58 @@ describe('P2P fusion coordination', () => {
         base
       )
     ).toBe(true);
-    // Live peer re-announced during this gather.
+    // Live peer: re-announce refreshed created_at recently.
     expect(
       isLivePoolAnnouncement(
-        { pubkey: live, at: gatherStart + 1, expiresAt: now + 60 },
+        {
+          pubkey: live,
+          at: now - 5,
+          seenAt: now - 2,
+          expiresAt: now + 60,
+        },
         base
       )
     ).toBe(true);
-    // Abandoned Start key: last announce was before gather, never re-published.
+    // Tor delivered one re-announce a few seconds ago; created_at still fresh.
     expect(
       isLivePoolAnnouncement(
-        { pubkey: ghost, at: gatherStart - 5, expiresAt: now + 160 },
+        {
+          pubkey: live,
+          at: now - 8,
+          seenAt: now - 8,
+          expiresAt: now + 60,
+        },
+        base
+      )
+    ).toBe(true);
+    // Abandoned Start: old created_at, only heard at subscribe flood.
+    expect(
+      isLivePoolAnnouncement(
+        {
+          pubkey: ghost,
+          at: gatherStart - 40,
+          seenAt: gatherStart,
+          expiresAt: now + 160,
+        },
         base
       )
     ).toBe(false);
-    // Early window rejects keys older than 3s before gather start.
+    // Early gather: recently heard peer counts even if created_at is a bit old.
     expect(
       isLivePoolAnnouncement(
-        { pubkey: ghost, at: gatherStart - 5, expiresAt: gatherStart + 60 },
-        { ...base, nowSeconds: gatherStart + 2 }
+        {
+          pubkey: live,
+          at: gatherStart - 10,
+          seenAt: gatherStart + 1,
+          expiresAt: gatherStart + 60,
+        },
+        { ...base, nowSeconds: gatherStart + 5 }
       )
-    ).toBe(false);
+    ).toBe(true);
     // Explicit ghost list (own / retired).
     expect(
       isLivePoolAnnouncement(
-        { pubkey: live, at: gatherStart + 1, expiresAt: now + 60 },
+        { pubkey: live, at: now - 1, seenAt: now, expiresAt: now + 60 },
         { ...base, isGhostKey: (pk) => pk === live }
       )
     ).toBe(false);
