@@ -141,6 +141,12 @@ export function isLivePoolAnnouncement(
     selfPubkey: string;
     /** Own abandoned keys + globally retired keys. */
     isGhostKey: (pubkey: string) => boolean;
+    /**
+     * When true (gather lock / propose), only peers that re-published during
+     * THIS gather count. Stored ghosts stop re-announcing; live wallets refresh
+     * every {@link POOL_REANNOUNCE_SECONDS}. Fixes 2-of-4 fuse from proposing 6.
+     */
+    lockStrict?: boolean;
   }
 ): boolean {
   if (peer.pubkey === opts.selfPubkey) return true;
@@ -151,11 +157,14 @@ export function isLivePoolAnnouncement(
   if (lastHeard < opts.nowSeconds - POOL_LIVE_ACTIVE_SECONDS) return false;
 
   const elapsed = opts.nowSeconds - opts.gatherStartSeconds;
-  // After ~2–3 re-announce periods, demand a fresh event timestamp so abandoned
-  // Start keys (one stored replaceable, no re-publish) drop. Live peers refresh
-  // created_at every few seconds even when Tor delivers sporadically.
-  if (elapsed >= POOL_REANNOUNCE_SECONDS * 3) {
-    return peer.at >= opts.nowSeconds - POOL_LIVE_ACTIVE_SECONDS;
+  // Strict lock: must have a created_at from this gather (live re-announce).
+  if (opts.lockStrict) {
+    return peer.at >= opts.gatherStartSeconds - 3;
+  }
+  // After ~2 re-announce periods, demand re-publish during this gather so
+  // abandoned Starts (static created_at) drop while Tor lag still allows live.
+  if (elapsed >= POOL_REANNOUNCE_SECONDS * 2) {
+    return peer.at >= opts.gatherStartSeconds - 3;
   }
   return true;
 }

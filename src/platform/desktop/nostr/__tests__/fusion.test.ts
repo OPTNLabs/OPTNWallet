@@ -221,6 +221,34 @@ describe('P2P fusion coordination', () => {
     });
   });
 
+  it('lockStrict drops keys that never re-announced during this gather', () => {
+    const self = 'aa'.repeat(32);
+    const live = 'bb'.repeat(32);
+    const ghost = 'cc'.repeat(32);
+    const gatherStart = 1_800_000_000;
+    const now = gatherStart + 40;
+    const base = {
+      nowSeconds: now,
+      gatherStartSeconds: gatherStart,
+      selfPubkey: self,
+      isGhostKey: () => false,
+      lockStrict: true as const,
+    };
+    expect(
+      isLivePoolAnnouncement(
+        { pubkey: live, at: gatherStart + 5, seenAt: now - 2, expiresAt: now + 60 },
+        base
+      )
+    ).toBe(true);
+    // Ghost: last signed event was before this gather started.
+    expect(
+      isLivePoolAnnouncement(
+        { pubkey: ghost, at: gatherStart - 20, seenAt: now - 2, expiresAt: now + 160 },
+        base
+      )
+    ).toBe(false);
+  });
+
   it('keeps Tor-lagged live peers and drops abandoned Start ghosts', () => {
     const self = 'aa'.repeat(32);
     const live = 'bb'.repeat(32);

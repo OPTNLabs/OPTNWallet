@@ -102,6 +102,16 @@ export function retireRoundKey(pubkey: string): void {
   write(RETIRED_KEYS_KEY, entries, RETIRED_KEY_TTL_MS);
 }
 
+/**
+ * Before minting a new round key, retire every previous attempt of this wallet.
+ * Other windows share localStorage and stop counting those throwaways as peers —
+ * same wallet double-Start was a main source of "5–7 live with 4 wallets".
+ */
+export function retireAllOwnRoundKeys(walletId: number): void {
+  const keys = live(`${ROUND_KEYS_PREFIX}${walletId}`, ROUND_KEY_TTL_MS);
+  keys.forEach((pubkey) => retireRoundKey(pubkey));
+}
+
 /** True when any wallet has retired this announcement key. */
 export function isRetiredRoundKey(pubkey: string): boolean {
   return live(RETIRED_KEYS_KEY, RETIRED_KEY_TTL_MS).has(pubkey);
