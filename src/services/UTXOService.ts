@@ -579,31 +579,28 @@ const UTXOService = {
         } = await import('../platform/desktop/WalletLedgerService');
         await ensureDesktopLedgerTables();
 
-        // Apply every address with a successful listunspent key (including
-        // empty []). Missing key = RPC fail — never treat as zero coins.
-        // Status-hash gate already limited this set to dirty addresses (or
-        // force). Empty on a dirty address is a real spend (Selene scanUtxos
-        // discard+register; EC would see the spend via history/txi).
-        const applyAddrs = Object.keys(utxosByAddress);
-        for (const address of applyAddrs) {
-          // Use network result, not the "refuse empty" formatted fallback —
-          // applying prior coins as if they were remote would never mark spends.
-          const list = (utxosByAddress[address] ?? []).map((utxo: UTXO) => ({
-            tx_hash: utxo.tx_hash,
-            tx_pos: utxo.tx_pos,
-            value: utxo.value ?? utxo.amount ?? 0,
-            height: utxo.height,
-            token: utxo.token,
-            prefix: utxo.prefix,
-            tokenAddress: (utxo as UTXO & { tokenAddress?: string })
-              .tokenAddress,
-          }));
-          // Prefer token-merged rows when we have them (same outpoints).
+        // Apply listunspent into ledger — but NEVER empty[] without force.
+        // 0457a2e9 regression: formatted map refused empty, then we still
+        // applied empty into ledger_txi as external: → fake low balance.
+        // SQL priorCount is not enough: walletWide clearSynthetic heals the
+        // ledger while SQL can still look empty, so empty would re-poison.
+        // Real spends: Manual Sync (force) or EC raw-tx → ledger_txi.
+        for (const address of Object.keys(utxosByAddress)) {
+          const netList = utxosByAddress[address] ?? [];
+          if (netList.length === 0 && options.force !== true) {
+            console.info(
+              '[UTXOService] skip ledger apply: empty listunspent without force',
+              { walletId, address }
+            );
+            continue;
+          }
+
+          // Prefer token-merged rows when same non-empty outpoint set.
           const merged = formattedByAddress[address];
           const toApply =
             merged &&
-            merged.length === list.length &&
-            list.length > 0
+            merged.length === netList.length &&
+            netList.length > 0
               ? merged.map((u) => ({
                   tx_hash: u.tx_hash,
                   tx_pos: u.tx_pos,
@@ -613,7 +610,16 @@ const UTXOService = {
                   prefix: u.prefix,
                   tokenAddress: u.tokenAddress,
                 }))
-              : list;
+              : netList.map((utxo: UTXO) => ({
+                  tx_hash: utxo.tx_hash,
+                  tx_pos: utxo.tx_pos,
+                  value: utxo.value ?? utxo.amount ?? 0,
+                  height: utxo.height,
+                  token: utxo.token,
+                  prefix: utxo.prefix,
+                  tokenAddress: (utxo as UTXO & { tokenAddress?: string })
+                    .tokenAddress,
+                }));
           await applyAddressUtxoSnapshot(walletId, {
             address,
             utxos: toApply,
