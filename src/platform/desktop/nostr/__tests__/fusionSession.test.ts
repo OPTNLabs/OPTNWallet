@@ -267,6 +267,64 @@ describe('P2P fusion round choreography (3 peers, in-memory)', () => {
     expect(hub.activeHandlerCount()).toBe(0);
   });
 
+  it('2-peer rounds complete with onionEnabled (falls back to direct — no self-peel)', async () => {
+    // Production bug: 2 peers ⇒ 1 peeler gift-wrapping onions to themselves over
+    // Nostr ⇒ never delivered ⇒ outputSlots=0/2. Direct path is correct here.
+    const peers = [1, 2].map((n) => {
+      const inKey = keypair(n * 10 + 1);
+      const outKey = keypair(n * 10 + 2);
+      const round = keypair(n * 10 + 3);
+      return {
+        round,
+        keys: new Map([
+          [inKey.pubHex, inKey.priv],
+          [round.pubHex, round.priv],
+        ]),
+        contribution: {
+          inputs: [
+            {
+              prevTxid: `${n}${'d'.repeat(63)}`,
+              prevIndex: n,
+              value: 100_000,
+              pubkey: inKey.pubHex,
+            },
+          ],
+          outputs: [{ script: p2pkhHex(outKey.pubHex), value: 99_700 }],
+        } as PeerContribution,
+      };
+    });
+    const participants = peers.map((p) => p.round.pubHex);
+    const hub = new Hub();
+    let broadcasts = 0;
+    const results = await Promise.all(
+      peers.map((p) =>
+        runFusionRound(
+          {
+            myPubkey: p.round.pubHex,
+            participants,
+            tier: 100_000,
+            feerate: 1000,
+            myContribution: p.contribution,
+            keysByPubkey: p.keys,
+            broadcast: async (txHex) => {
+              broadcasts += 1;
+              return txidOf(txHex);
+            },
+            timeoutMs: 5_000,
+            jitterMs: [0, 0],
+            onionEnabled: true,
+          },
+          hub.transportFor(p.round.pubHex)
+        )
+      )
+    );
+    expect(new Set(results.map((r) => r.txid)).size).toBe(1);
+    expect(broadcasts).toBe(1);
+    // No onion path for 2-party (would be self-addressed).
+    const onions = hub.sent.filter((m) => m.message.type === 'onion_output');
+    expect(onions).toHaveLength(0);
+  });
+
   it('onion mix-net completes when peers inject unequal output counts (not peer count)', async () => {
     // Regression: expectedOnionCount === participants.length hung whenever
     // sum(outputs) !== N (random 2–4 outputs/peer from planP2pOutputValues).

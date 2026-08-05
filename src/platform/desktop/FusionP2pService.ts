@@ -357,10 +357,35 @@ export async function refreshAndVerifyP2pInputs(
     }
   }
 
-  const spendable = await onlyUnspent(free, signal);
+  let spendable: UTXO[];
+  try {
+    spendable = await onlyUnspent(free, signal);
+  } catch (error) {
+    // Exclusive reconcile already listed these. A second Electrum pass that
+    // times out should not kill auto after a successful fuse (0-conf lag / blip).
+    if (options?.preferProvided && free.length > 0) {
+      console.warn(
+        '[p2p-fusion] onlyUnspent failed; using exclusive-reconciled coins:',
+        error instanceof Error ? error.message : error
+      );
+      return free;
+    }
+    throw error;
+  }
   if (spendable.length === 0) {
+    // After a paid fuse, new outputs are often 0-conf and listunspent can lag
+    // the exclusive snapshot by seconds. PreferProvided coins came from that
+    // snapshot — empty recheck usually means lag, not "no coins".
+    if (options?.preferProvided && free.length > 0) {
+      console.warn(
+        `[p2p-fusion] onlyUnspent empty for ${free.length} exclusive coin(s); ` +
+          'using them (likely 0-conf / Electrum lag after prior fuse).'
+      );
+      return free;
+    }
     throw new Error(
-      'No live unspent coins to fuse after refreshing the wallet.'
+      'No live unspent coins to fuse after refreshing the wallet. ' +
+        'If you just fused, wait a few seconds for Electrum to see the new coins, then try again.'
     );
   }
   return spendable;
@@ -632,9 +657,17 @@ export async function runP2pFusion(
       joined.stop();
       stopPool = null;
     }
-    status?.(
-      `Round agreed with ${negotiated.participants.length} peers at ${negotiated.tier} sats.`
-    );
+    if (negotiated.participants.length < group.participants.length) {
+      status?.(
+        `Round agreed with ${negotiated.participants.length}/${group.participants.length} ` +
+          `wallets at ${negotiated.tier} sats (some ACKs never arrived — the missing ` +
+          `wallets will not fuse this time). Continuing…`
+      );
+    } else {
+      status?.(
+        `Round agreed with all ${negotiated.participants.length} wallets at ${negotiated.tier} sats.`
+      );
+    }
 
     const myInputs: FusionInputRef[] = runInputs.map((input) => ({
       prevTxid: input.prev_txid,
