@@ -454,6 +454,10 @@ export const CashFusionSettings: React.FC<{ variant?: 'card' | 'servers' }> = ({
                 setP2pMsg(m);
                 reportFusionProgress(walletId, { status: m });
                 progress?.onStatus?.(m);
+                // Always log (even before lease entry) so live tail sees Start.
+                void import('../../platform/desktop/logger')
+                  .then(({ log }) => log.info('p2p-live', `w${walletId} ${m}`))
+                  .catch(() => undefined);
               },
               onPhase: (p) => {
                 setP2pPhase(p);
