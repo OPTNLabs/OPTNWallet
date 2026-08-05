@@ -469,13 +469,16 @@ export async function bootstrapAllUTXOs(expectedEpoch?: number) {
     report(20);
 
     const fetchStart = performance.now();
+    // Open bootstrap must listunspent like Manual Sync (force), not trust a
+    // status gate that can skip addresses whose SQL was corrupted while
+    // history status stayed "clean". Paint-from-disk already happened above;
+    // this pass is the network authority for the open.
     const fetchedWalletUTXOs = await UTXOService.fetchAndStoreUTXOsMany(
       currentWalletId,
       trackedAddresses,
-      // Drive the 20→70 window with real per-batch completion so the bar moves
-      // continuously during the network fetch instead of freezing at 20% while
-      // the ETA extrapolates a wildly optimistic "seconds left".
       {
+        discover: false,
+        force: true,
         onProgress: (done, total) => {
           if (total <= 0) return;
           const pct = 20 + Math.round(50 * (done / total));
