@@ -5,7 +5,7 @@
 // shared `unitFor` instead of a hardcoded "BCH", so test coins aren't mislabelled
 // as mainnet value. When upstream Home.tsx changes, re-copy this file and reapply
 // the three marked spots (import, `const unit`, the two `${unit}` strings).
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useDispatch, useSelector } from 'react-redux';
 import { FaArrowDown, FaArrowUp, FaBitcoin, FaQrcode } from 'react-icons/fa';
@@ -24,6 +24,7 @@ import SectionHeader from '../../components/ui/SectionHeader';
 import WalletScreen from '../../components/ui/WalletScreen';
 import PriceFeed from '../../components/PriceFeed';
 import DatabaseService from '../../apis/DatabaseManager/DatabaseService';
+import ElectrumService from '../../services/ElectrumService';
 import {
   captureActiveWalletSession,
   fetchActiveWalletUtxos,
@@ -106,17 +107,12 @@ const Home: React.FC = () => {
   const [displayMode, setDisplayMode] = useState<'BCH' | 'USD'>('BCH');
   const [scanBusy, setScanBusy] = useState(false);
   const [syncElapsedSec, setSyncElapsedSec] = useState(0);
-  // Manual Sync owns its own busy flag so background open-bootstrap cannot
-  // disable the button forever at 5% (worker holds fetchingUTXOs).
-  const [manualSyncBusy, setManualSyncBusy] = useState(false);
-  const manualSyncInFlight = useRef(false);
 
   // Wall-clock only. Multi-phase sync (markers → Electrum batch → history)
   // freezes the % bar for long stretches; any "%/s → seconds left" estimate
   // will lie (e.g. 49% · 61s · ~1s left). Show percent + elapsed and stop there.
-  const showSyncProgress = manualSyncBusy || fetchingUTXOsRedux;
   useEffect(() => {
-    if (!showSyncProgress) {
+    if (!fetchingUTXOsRedux) {
       setSyncElapsedSec(0);
       return;
     }
@@ -125,7 +121,7 @@ const Home: React.FC = () => {
       setSyncElapsedSec(Math.floor((Date.now() - startTs) / 1000));
     }, 500);
     return () => clearInterval(interval);
-  }, [showSyncProgress]);
+  }, [fetchingUTXOsRedux]);
   const totalBch = totalBalance / SATSINBITCOIN;
   const totalUsd =
     typeof bchUsdQuote === 'number' ? totalBch * bchUsdQuote : null;
@@ -179,60 +175,58 @@ const Home: React.FC = () => {
   }, [currentWalletId, dispatch, sessionGeneration]);
 
   const handleRefresh = useCallback(async () => {
-    if (!currentWalletId || manualSyncInFlight.current) return;
+    if (fetchingUTXOsRedux || !currentWalletId) return;
     const walletSession = captureActiveWalletSession(currentWalletId);
     if (!walletSession) return;
 
-    manualSyncInFlight.current = true;
-    setManualSyncBusy(true);
     dispatch(setFetchingUTXOs(true));
-    reportSyncProgress(5);
+    reportSyncProgress(2);
 
     try {
-      // Manual Sync per docs/wallet-ledger-sync-design.md:
-      //   clear statuses + force listunspent/history, NO ledger wipe.
-      // Performance (verified hangs, not guesses):
-      //   - no ensureFreshConnection/resubscribe wait (froze bar at 5%)
-      //   - discover:false (keys already expanded on open)
-      //   - do NOT join runWalletUtxoRefresh (no onProgress)
-      reportSyncProgress(8);
+      // Same network path as open-bootstrap for balances: scripthash batches,
+      // no second BIP44 rediscovery (open already expanded the key set).
+      //
+      // Do NOT use runWalletUtxoRefresh here. That coordinator joins any
+      // in-flight background reconcile (subscriptions / block tip), which has
+      // no onProgress and often still runs discovery — so the UI froze at 8%
+      // for a minute while we waited on someone else's task. Manual Sync is
+      // user-initiated: run our own fast path only.
+      //
+      // Manual Sync = force recheck (clear status hashes) but does NOT wipe
+      // the ledger. Rebuild Wallet in Settings is the nuclear wipe.
+      reportSyncProgress(5);
       try {
         const { clearAddressStatuses } = await import('./WalletLedgerService');
         await clearAddressStatuses(currentWalletId);
       } catch {
         /* optional on non-desktop */
       }
+      await ElectrumService.ensureFreshConnection();
       if (!isActiveWalletSession(walletSession)) return;
-      reportSyncProgress(12);
+      reportSyncProgress(10);
 
+      if (!isActiveWalletSession(walletSession)) return;
       const walletUtxos = await fetchActiveWalletUtxos(
         walletSession,
         undefined,
         {
           discover: false,
+          // Statuses were cleared above; force still short-circuits any race
+          // where a concurrent path rewrote a status before listunspent.
           force: true,
           onProgress: (done, total) => {
             if (total <= 0) {
-              reportSyncProgress(15);
+              reportSyncProgress(12);
               return;
             }
-            // 12–60% = UTXO batches
-            reportSyncProgress(12 + Math.round(48 * (done / total)));
+            // 12–55% = UTXO batches (include 0/N so the bar moves before the
+            // first Electrum chunk returns).
+            reportSyncProgress(12 + Math.round(43 * (done / total)));
           },
         }
       );
-      // Publish this pass's listunspent merge. Preserve addresses we did not
-      // refresh (e.g. contract UTXOs) so replaceAll does not fake-drop balance.
       if (walletUtxos) {
-        const mergedByAddress: Record<string, typeof walletUtxos[string]> = {
-          ...walletUtxos,
-        };
-        for (const [address, list] of Object.entries(reduxUTXOs)) {
-          if (!(address in mergedByAddress) && list.length > 0) {
-            mergedByAddress[address] = list;
-          }
-        }
-        dispatch(replaceAllUTXOs({ utxosByAddress: mergedByAddress }));
+        dispatch(replaceAllUTXOs({ utxosByAddress: walletUtxos }));
         dbService.scheduleDatabaseSave(currentWalletId);
         dispatch(setInitialized(true));
         const refreshedCategories = Array.from(
@@ -247,24 +241,27 @@ const Home: React.FC = () => {
           void preloadTokenMetadata(refreshedCategories);
         }
       }
-      reportSyncProgress(60);
+      reportSyncProgress(55);
 
+      // Sync means the whole wallet, not just its coins. Refreshing UTXOs alone
+      // moved the balance while Recent Activity stayed as it was.
       await refreshWalletTransactionHistory({
         walletId: currentWalletId,
         dispatch,
         sessionGeneration,
+        // Do not join a background history pass (no onProgress → bar stuck at
+        // 55%). Force re-fetches every address after statuses were cleared.
         force: true,
         onProgress: (pct) => {
-          // 60–100% = history pass
-          reportSyncProgress(60 + Math.round(0.4 * pct));
+          // 55–100% = history pass
+          reportSyncProgress(55 + Math.round(0.45 * pct));
         },
       });
-      reportSyncProgress(100);
     } catch (error) {
       logError('Home.handleRefresh', error, { walletId: currentWalletId });
     } finally {
-      manualSyncInFlight.current = false;
-      setManualSyncBusy(false);
+      // Always clear Syncing for this click — even if the wallet session was
+      // cancelled mid-flight (HMR / lock). Leaving the flag true freezes the button.
       dispatch(setFetchingUTXOs(false));
       dispatch(setSyncingProgress(null));
     }
@@ -272,7 +269,7 @@ const Home: React.FC = () => {
     currentWalletId,
     dbService,
     dispatch,
-    reduxUTXOs,
+    fetchingUTXOsRedux,
     reportSyncProgress,
     sessionGeneration,
   ]);
@@ -353,11 +350,11 @@ const Home: React.FC = () => {
                     type="button"
                     onClick={handleRefresh}
                     className="wallet-btn-secondary px-3 py-1.5 text-sm"
-                    disabled={manualSyncBusy}
+                    disabled={fetchingUTXOsRedux}
                   >
-                    {manualSyncBusy ? 'Syncing…' : 'Sync'}
+                    {fetchingUTXOsRedux ? 'Syncing…' : 'Sync'}
                   </button>
-                  {(showSyncProgress && syncingProgress !== null) && (
+                  {(fetchingUTXOsRedux && syncingProgress !== null) && (
                     <div className="flex items-center gap-1.5 text-xs wallet-muted">
                       <div className="h-1 w-16 overflow-hidden rounded-full bg-[color-mix(in_oklab,var(--wallet-accent-soft)_45%,transparent)]">
                         <div

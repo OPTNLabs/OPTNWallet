@@ -323,36 +323,22 @@ function markSocketStale(client: ECClient) {
   });
 }
 
-/**
- * Replay active subscriptions after reconnect.
- *
- * IMPORTANT: must not block connect forever. Serial await of every
- * scripthash.subscribe (often 100+ addresses) froze Manual Sync / open
- * bootstrap at 5% for tens of seconds. Cap wall time and run the rest
- * in the background.
- */
-async function resubscribeAll(maxWaitMs = 2500) {
+async function resubscribeAll() {
   if (!electrum) return;
-  const client = electrum;
-  const jobs = Array.from(activeSubs.values()).map(async ({ method, params }) => {
-    if (electrum !== client) return;
+
+  for (const { method, params } of activeSubs.values()) {
     try {
       if (!params || params.length === 0) {
-        await client.subscribe(method);
+        await electrum.subscribe(method);
       } else if (params.length === 1) {
-        await client.subscribe(method, params[0]);
+        await electrum.subscribe(method, params[0]);
       } else {
-        await client.request(method, ...params);
+        await electrum.request(method, ...params);
       }
     } catch {
       // best-effort; keep going
     }
-  });
-  if (jobs.length === 0) return;
-  await Promise.race([
-    Promise.all(jobs),
-    new Promise<void>((resolve) => setTimeout(resolve, maxWaitMs)),
-  ]);
+  }
 }
 
 // ---------- API ----------
@@ -421,12 +407,10 @@ export default function ElectrumServer() {
             resetBackoff();
             markSuccessfulActivity();
 
-            // Ensure notifications are wired. Replay subs in the background —
-            // awaiting resubscribeAll froze Manual Sync / open at 5% for 30–60s
-            // while every scripthash re-subscribed.
+            // Ensure notifications are wired and replay subs
             notificationsWired = false;
             await wireNotificationsOnce(electrum);
-            void resubscribeAll().catch(() => undefined);
+            await resubscribeAll();
 
             markSocketStale(electrum);
 

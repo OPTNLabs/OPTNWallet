@@ -257,14 +257,9 @@ type UTXOFetchOptions = {
 const UTXOService = {
   async fetchAndStoreUTXOs(walletId: number, address: string): Promise<UTXO[]> {
     try {
-      // Single-address path is subscription / notification driven — never re-run
-      // BIP44 discovery here (that flooded the console with hundreds of
-      // "discovery took … discovered:0" lines per tick).
-      const results = await UTXOService.fetchAndStoreUTXOsMany(
-        walletId,
-        [address],
-        { discover: false }
-      );
+      const results = await UTXOService.fetchAndStoreUTXOsMany(walletId, [
+        address,
+      ]);
       return results[address] ?? [];
     } catch (error) {
       logError('UTXOService.fetchAndStoreUTXOs', error, { walletId, address });
@@ -291,13 +286,10 @@ const UTXOService = {
               currentNetwork,
               hasElectrumBatchUsage
             )) ?? []);
-      // Log discovery only when we actually ran it (not the per-address hot path).
-      if (options.discover !== false) {
-        console.info('[UTXOService] discovery took', {
-          ms: Math.round(performance.now() - tDiscovery),
-          discovered: discoveredAddresses.length,
-        });
-      }
+      console.info('[UTXOService] discovery took', {
+        ms: Math.round(performance.now() - tDiscovery),
+        discovered: discoveredAddresses.length,
+      });
       const manager = await UTXOManager();
       const addressManager = AddressManager();
       const uniqueAddresses = Array.from(
@@ -330,16 +322,12 @@ const UTXOService = {
             uniqueAddresses
           );
           addressesToFetch = partition.dirty;
-          // Batch summary only — per-address refresh used to spam hundreds of
-          // identical "total:1 dirty:1 probed:0" lines into the console.
-          if (uniqueAddresses.length > 1 || partition.clean.length > 0) {
-            console.info('[UTXOService] status-hash gate', {
-              total: uniqueAddresses.length,
-              dirty: partition.dirty.length,
-              clean: partition.clean.length,
-              probed: partition.probed,
-            });
-          }
+          console.info('[UTXOService] status-hash gate', {
+            total: uniqueAddresses.length,
+            dirty: partition.dirty.length,
+            clean: partition.clean.length,
+            probed: partition.probed,
+          });
         } catch {
           addressesToFetch = uniqueAddresses;
         }
@@ -365,13 +353,11 @@ const UTXOService = {
       } else {
         utxosByAddress = await ElectrumService.getUTXOsMany(addressesToFetch);
       }
-      if (uniqueAddresses.length > 1 || addressesToFetch.length > 0) {
-        console.info('[UTXOService] getUTXOsMany took', {
-          ms: Math.round(performance.now() - tFetch),
-          addresses: addressesToFetch.length,
-          skippedClean: uniqueAddresses.length - addressesToFetch.length,
-        });
-      }
+      console.info('[UTXOService] getUTXOsMany took', {
+        ms: Math.round(performance.now() - tFetch),
+        addresses: addressesToFetch.length,
+        skippedClean: uniqueAddresses.length - addressesToFetch.length,
+      });
       for (const fetchedUTXOs of Object.values(utxosByAddress)) {
         for (const u of fetchedUTXOs) {
           const uAny = u as UTXO & { token_data?: unknown };
@@ -445,18 +431,8 @@ const UTXOService = {
 
       await manager.replaceWalletAddressUTXOs(walletId, formattedByAddress);
 
-      // Option A (design): listunspent → applyAddressUtxoSnapshot → rebuild SQL
-      // UTXO cache from ledger. Divergence rule: one write path, then ledger
-      // materializes the durable cache.
-      //
-      // Return value is always the listunspent merge we just built
-      // (`formattedByAddress`) — NOT a re-read of the ledger projection.
-      // Replacing the return with a partial projection was a verified source of
-      // fake balances (coins missing mid-apply, token rows dropped).
-      //
-      // Apply is AWAITED (not fire-and-forget): background rebuild raced with
-      // open-bootstrap's "publish DB snapshot first" path and flashed the wrong
-      // total on Home.
+      // Option A hybrid: push listunspent into ledger_txo/txi, then project UTXOs
+      // from the ledger so history and coins share one durable model.
       try {
         const { ensureDesktopLedgerTables } = await import(
           '../platform/desktop/desktopSchema'
@@ -464,7 +440,6 @@ const UTXOService = {
         const { applyAddressUtxoSnapshot, rebuildUtxosFromLedger } =
           await import('../platform/desktop/WalletLedgerService');
         await ensureDesktopLedgerTables();
-        // Every address in this pass (fetched OR kept from DB on partial miss).
         for (const address of uniqueAddresses) {
           const list = formattedByAddress[address] ?? [];
           await applyAddressUtxoSnapshot(walletId, {
@@ -480,7 +455,20 @@ const UTXOService = {
             })),
           });
         }
-        await rebuildUtxosFromLedger(walletId);
+        const projected = await rebuildUtxosFromLedger(walletId);
+        if (projected > 0) {
+          const fromDb = await manager.fetchUTXOsFromDatabase(
+            uniqueAddresses.map((address) => ({ address })),
+            walletId
+          );
+          for (const address of uniqueAddresses) {
+            const merged = [
+              ...(fromDb.utxosMap[address] ?? []),
+              ...(fromDb.cashTokenUtxosMap[address] ?? []),
+            ];
+            if (merged.length > 0) formattedByAddress[address] = merged;
+          }
+        }
       } catch (ledgerError) {
         // Ledger is additive; classic UTXO path already wrote replaceWalletAddressUTXOs
         logError('UTXOService.fetchAndStoreUTXOsMany.ledger', ledgerError, {

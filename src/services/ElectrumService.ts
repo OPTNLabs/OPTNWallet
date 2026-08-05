@@ -192,19 +192,19 @@ const ElectrumService = {
       const batchResults = await requestManyInChunks(server, calls);
       batchResults.forEach((response, index) => {
         const address = pending[index];
-        // Leave the key absent on hard failure so the ledger gate does not
-        // confuse "unused (null status)" with "probe failed".
         if (response instanceof Error) {
+          results[address] = null;
           return;
         }
-        // Electrum: unused scripthash → null; used → 64-char hex status string.
         results[address] = typeof response === 'string' ? response : null;
       });
     } catch (error) {
       logError('ElectrumService.getAddressStateMany', error, {
         count: unique.length,
       });
-      // Whole batch failed — leave keys absent (gate treats as dirty).
+      for (const address of pending) {
+        if (!(address in results)) results[address] = null;
+      }
     }
     return results;
   },
@@ -270,10 +270,6 @@ const ElectrumService = {
     // many ElectrumX/Fulcrum nodes (verified live: it returns {} or "Invalid
     // address"), which forced a serial fallback per address. Converting to
     // scripthash upfront is valid on every server and batches cleanly.
-    //
-    // Wallet-wide batches must NOT serially await per-address inflight singles
-    // from the subscription worker — that turned Manual Sync into N serial RPCs.
-    const joinInflight = uniqueAddresses.length <= 4;
     for (const address of uniqueAddresses) {
       const cached = cacheByAddr.get(address);
       if (cached && now - cached.ts < UTXO_TTL_MS) {
@@ -281,12 +277,10 @@ const ElectrumService = {
         continue;
       }
 
-      if (joinInflight) {
-        const inflight = inflightByAddr.get(address);
-        if (inflight) {
-          results[address] = await inflight;
-          continue;
-        }
+      const inflight = inflightByAddr.get(address);
+      if (inflight) {
+        results[address] = await inflight;
+        continue;
       }
 
       let scriptHash: string | null = null;

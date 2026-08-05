@@ -69,12 +69,12 @@ function requiredFeeForBytes(bytes: number): bigint {
 export default function TransactionManager() {
   const dbService = DatabaseService();
 
-  async function storeTransactionHistory(
+  function storeTransactionHistory(
     walletId: number,
     address: string,
     history: TransactionHistoryItem[],
     sessionGeneration?: number
-  ): Promise<TransactionHistoryItem[]> {
+  ): TransactionHistoryItem[] {
     if (!isCurrentWalletSession(walletId, sessionGeneration)) return [];
     const db = dbService.getDatabase();
     if (!db) {
@@ -112,15 +112,12 @@ export default function TransactionManager() {
       });
     }
 
-    // Await ledger status write so the next status-hash gate (UTXO path) sees
-    // this address as scanned — including empty history. Fire-and-forget left
-    // every gap address permanently dirty (console flood + useless listunspent).
-    try {
-      const ledger = await import('../../platform/desktop/WalletLedgerService');
-      await ledger.recordHistoryItems(walletId, address, history);
-    } catch {
-      /* desktop ledger optional for non-desktop builds */
-    }
+    // Persist history status hash (and tx_hash stubs) into the Option A ledger.
+    void import('../../platform/desktop/WalletLedgerService')
+      .then((ledger) => ledger.recordHistoryItems(walletId, address, history))
+      .catch(() => {
+        /* desktop ledger optional for non-desktop builds */
+      });
 
     return history;
   }
@@ -179,7 +176,7 @@ export default function TransactionManager() {
 
       try {
         if (!isCurrentWalletSession(walletId, sessionGeneration)) return stored;
-        stored[address] = await storeTransactionHistory(
+        stored[address] = storeTransactionHistory(
           walletId,
           address,
           history,
