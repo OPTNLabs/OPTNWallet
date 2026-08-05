@@ -166,8 +166,9 @@ describe('FusionRunnerService — one path for manual and automatic rounds', () 
     recordFusionRound(3, ['deeper:0'], ['maxed:0']); // depth 3
     reconcile.mockResolvedValue({ addr: [coin('maxed')] });
 
-    expect(await startFusionRound(base())).toEqual({
+    await expect(startFusionRound(base())).resolves.toMatchObject({
       status: 'no-eligible-coins',
+      detail: expect.stringMatching(/depth ≥ 3|rounds-per-coin/i),
     });
   });
 
