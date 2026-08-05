@@ -21,7 +21,7 @@ are confused about “onion vs Tor vs blind Schnorr.”
 | Pedersen + blind Schnorr credentials | **Yes** | `fusionPedersen.ts`, `fusionBlindSchnorr.ts` |
 | Credential slots per peer | **16** inputs max per peer per round | `CREDENTIAL_SLOTS_PER_PEER`; `selectFusionInputs` in `FusionP2pService` |
 | Rendezvous timeout | **~35–40 s** (Tor multi-wallet) | `fusionRendezvous.ts` / `FusionP2pService` |
-| Output onion (`onionEnabled`) | **`true` always** (production; no disable) | `FusionP2pService` → `runFusionRound`; session defaults ON unless tests pass `false` |
+| Output onion | **Always on** (mandatory; no toggle) | `runFusionRound` — ≥`MIN_PARTICIPANTS` (3) so ≥2 peelers |
 | Extra mixnet / onion *servers* | **None** | — |
 
 **Regression note (why live P2P can fail after credentials landed):** when the
@@ -130,7 +130,7 @@ Issuer nonce slots are **one-shot**. Retrying sign on the same slot is forbidden
 | **What** | Each **output** is layered with ECDH + AES-GCM for every peeler in `mixOrder`. Each hop **peels one layer**, **CSPRNG Fisher–Yates shuffles** the batch, and **forwards**. Last peeler reveals plaintext outputs **only to the coordinator**. |
 | **Why** | Intermediate peers must not learn which participant contributed which output. **One honest hop** is enough for that unlinkability property. |
 | **Infrastructure** | **None.** Only the wallets already in the round. No mixnet servers, no Tor onion service requirement for this layer. |
-| **Essential?** | **Yes — mandatory.** Production always enables output onion (`onionEnabled: true` in `FusionP2pService`; session treats omitted flag as ON). Failure is **loud** — no silent plaintext downgrade. |
+| **Essential?** | **Yes — mandatory.** There is no plaintext/direct output path and no `onionEnabled` flag. Failure is **loud** — round aborts. |
 | **Code** | `onionCrypto.ts`, peel/forward in `fusionSession.ts`, `FusionP2pService` |
 | **Does not do** | Is **not Tor**. Does not hide that a CoinJoin happened on-chain. Does not stop the **last peeler** (or the **coordinator**) from seeing the full plaintext **output list** — only the *contributor→output* link is what the shuffles protect. |
 
@@ -149,10 +149,9 @@ Flow:
 4. Last hop: peel → shuffle → send revealed outputs to coordinator.
 5. Coordinator assembles inputs + output pool → `assembled` → every peer verifies and signs own inputs.
 
-### Optional debug-only path
-
-`onionEnabled !== true` sends plaintext `outputs` to the coordinator. That is a
-**weaker** path for tests/debug. **Production P2P keeps onion on.**
+There is **no direct/plaintext output path** and **no 2-party fuse**. Rounds
+require ≥3 participants (onion needs ≥2 peelers). Revealed `outputs` messages
+exist only as the last peeler → coordinator handoff after the mix.
 
 ### Complexity / failure modes (honest assessment)
 
@@ -214,6 +213,6 @@ are the committed parity story for PR #12’s P2P design.
 
 ## Doc maintenance rule
 
-When you change **defaults** (`onionEnabled`, Tor fail-closed, gift-wrap kinds)
+When you change **defaults** (Tor fail-closed, gift-wrap kinds, `MIN_PARTICIPANTS`)
 or **who peels vs who assembles**, update **this file first**, then
 `p2p-cashfusion-protocol.md` and `THREAT_MODEL.md` so the three stay aligned.

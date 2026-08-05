@@ -202,23 +202,23 @@ describe('P2P fusion coordination', () => {
       { pubkey: '03', tiers: [10_000], numInputs: 1 },
     ];
 
-    expect(selectFusionGroup(peers, 2, 10)).toEqual({
+    // MIN_PARTICIPANTS = 3 — never form a pair.
+    expect(selectFusionGroup(peers, 3, 10)).toEqual({
       tier: 10_000,
       participants: ['01', '02', '03'],
     });
   });
 
   it('never forms a group whose worst-case inputs and outputs exceed 100 components', () => {
+    // 40 inputs + 4 max outputs = 44/peer → 2 peers = 88, 3 peers = 132 > 100.
+    // With min=3 (onion floor) no legal group exists; do not fall back to a pair.
     const peers = [
       { pubkey: '01', tiers: [100_000], numInputs: 40 },
       { pubkey: '02', tiers: [100_000], numInputs: 40 },
       { pubkey: '03', tiers: [100_000], numInputs: 40 },
     ];
 
-    expect(selectFusionGroup(peers, 2, 10)).toEqual({
-      tier: 100_000,
-      participants: ['01', '02'],
-    });
+    expect(selectFusionGroup(peers, 3, 10)).toBeNull();
   });
 
   it('lockStrict drops keys that never re-announced during this gather', () => {

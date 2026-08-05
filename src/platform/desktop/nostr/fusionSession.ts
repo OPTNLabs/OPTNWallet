@@ -23,7 +23,7 @@ import {
   verifyFinalFusionTx,
   type InputSig,
 } from './fusionSign';
-import { electCoordinator } from './fusion';
+import { electCoordinator, MIN_PARTICIPANTS } from './fusion';
 import { ROUND_MSG_VERSION } from './fusionRound';
 import {
   P2P_ASSEMBLED_RESEND_MS,
@@ -649,11 +649,14 @@ export function runFusionRound(
   transport: RoundTransport
 ): Promise<RoundResult> {
   const participants = [...new Set(params.participants)];
-  // CashFusion-style floor: ≥3 peers, onion always (no 2-party / direct path).
-  if (participants.length < 3 || !participants.includes(params.myPubkey)) {
+  // CashFusion-style floor: ≥ MIN_PARTICIPANTS, onion always (no 2-party path).
+  if (
+    participants.length < MIN_PARTICIPANTS ||
+    !participants.includes(params.myPubkey)
+  ) {
     return Promise.reject(
       new Error(
-        'invalid Fusion participant set (need ≥3 peers for onion P2P fusion)'
+        `invalid Fusion participant set (need ≥${MIN_PARTICIPANTS} peers for onion P2P fusion)`
       )
     );
   }
@@ -1226,7 +1229,7 @@ function runCoordinator(
       );
     }
     // Output registry: pool fills when the last peeler reveals (anonymous
-    // gift-wraps — `from` is not a round identity). No direct-mode preload.
+    // gift-wraps — `from` is not a round identity).
     const outputsByPeer = new Map<string, FusionOutputRef[]>();
     const anonymousOutputBatches: FusionOutputRef[][] = [];
     const outputPool = (): FusionOutputRef[] => [
