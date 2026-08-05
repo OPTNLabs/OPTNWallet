@@ -19,8 +19,17 @@ are confused about “onion vs Tor vs blind Schnorr.”
 | Tor required | **Yes** — fail closed if Tor is down | `FusionP2pService`, `fusionAutoEngine` |
 | NIP-59 gift-wrap for round traffic | **Yes** | `fusionTransport.ts` |
 | Pedersen + blind Schnorr credentials | **Yes** | `fusionPedersen.ts`, `fusionBlindSchnorr.ts` |
+| Credential slots per peer | **16** inputs max per peer per round | `CREDENTIAL_SLOTS_PER_PEER`; `selectFusionInputs` in `FusionP2pService` |
+| Rendezvous timeout | **15 s** (Tor-friendly; was 6 s) | `fusionRendezvous.ts` |
 | Output onion (`onionEnabled`) | **`true`** (production default) | `FusionP2pService` → session params |
 | Extra mixnet / onion *servers* | **None** | — |
+
+**Regression note (why live P2P can fail after credentials landed):** when the
+coordinator became a real blind-Schnorr issuer (`5b00b65d`), each peer got a
+fixed slot budget. Submitting **more than 16 UTXOs** aborts the round with
+`too many inputs for credential slots`. That is **not** an upstream mobile bug;
+it is a desktop P2P wiring bug if the service passes the whole wallet UTXO set.
+Cap inputs with `selectFusionInputs` (largest first).
 
 There is **no dedicated fusion server** and **no extra privacy infrastructure**
 beyond: the peers in the round, public Nostr relays, Tor (user or integrated),
