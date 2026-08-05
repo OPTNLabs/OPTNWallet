@@ -118,21 +118,27 @@ function leaseIsLive(held: LeaseRecord | null, nowMs: number): boolean {
  * and automatic starts. Returns an owner token, or null when another window (or
  * this one) already holds a live lease.
  */
+function takeLeaseIfFree(walletId: number, nowMs: number): string | null {
+  const key = `${LEASE_PREFIX}${walletId}`;
+  const held = readJson<LeaseRecord>(key);
+  // Live holder still heartbeating → refuse. Dead/stale → reclaim.
+  if (leaseIsLive(held, nowMs)) return null;
+  const owner = newOwnerToken();
+  writeJson(key, { owner, at: nowMs } satisfies LeaseRecord);
+  return owner;
+}
+
 export async function acquireRoundLease(
   walletId: number,
   nowMs = Date.now()
 ): Promise<string | null> {
-  const key = `${LEASE_PREFIX}${walletId}`;
-  const result = await withWalletLock(walletId, () => {
-    const held = readJson<LeaseRecord>(key);
-    // Live holder still heartbeating → refuse. Dead/stale → reclaim.
-    if (leaseIsLive(held, nowMs)) return null;
-    const owner = newOwnerToken();
-    writeJson(key, { owner, at: nowMs } satisfies LeaseRecord);
-    return owner;
-  });
-  // No lock manager => exclusivity cannot be guaranteed => refuse.
-  return result.ran ? result.value : null;
+  const result = await withWalletLock(walletId, () =>
+    takeLeaseIfFree(walletId, nowMs)
+  );
+  if (result.ran) return result.value;
+  // No Web Locks (some WebViews): still allow single-window via storage +
+  // stale reclaim. Prefer fusing over permanent "busy".
+  return takeLeaseIfFree(walletId, nowMs);
 }
 
 /**
@@ -161,7 +167,7 @@ export async function releaseRoundLease(
   owner: string
 ): Promise<void> {
   const key = `${LEASE_PREFIX}${walletId}`;
-  await withWalletLock(walletId, () => {
+  const drop = () => {
     const held = readJson<LeaseRecord>(key);
     if (held && held.owner === owner) {
       try {
@@ -170,7 +176,9 @@ export async function releaseRoundLease(
         /* storage unavailable */
       }
     }
-  });
+  };
+  const result = await withWalletLock(walletId, drop);
+  if (!result.ran) drop();
 }
 
 /**

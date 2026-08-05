@@ -37,8 +37,9 @@ import {
 import { P2pFusionTransportPreview } from '../nostr/P2pFusionTransportPreview';
 import { AutoFusionControls } from './AutoFusionControls';
 import {
-  clearStuckFusionLease,
   getFusionActivity,
+  isFusionRunning,
+  reconcileIdleFusionState,
   startFusionRound,
   subscribeFusionActivity,
   type FusionActivity,
@@ -69,9 +70,8 @@ function describeFusionOutcome(outcome: FusionRunOutcome): string {
         : `Fused ✓ — txid ${outcome.txid}`;
     case 'busy':
       return (
-        'Fusion lock held. If the button is grey and nothing is running, tap ' +
-        '“Clear stuck fusion lock” then Start again. (Live rounds in another ' +
-        'window of this same wallet also block.)'
+        'A fusion round is already active for this wallet in another window. ' +
+        'Finish or close that window, then try again.'
       );
     case 'waiting-for-wallet':
       // Not an error: the wallet is mid-refresh. Falling back to the cached coin
@@ -135,13 +135,17 @@ export const CashFusionSettings: React.FC<{ variant?: 'card' | 'servers' }> = ({
   const [fusionActivity, setFusionActivity] = useState<FusionActivity | null>(
     () => getFusionActivity(walletId)
   );
+  // Only trust activity when this window actually holds the in-memory lease.
+  // Orphan activity used to greyscale the whole panel while nothing was fusing.
+  const runningHere = isFusionRunning(walletId);
   const activeFusion =
-    fusionActivity?.walletId === walletId ? fusionActivity : null;
+    runningHere && fusionActivity?.walletId === walletId
+      ? fusionActivity
+      : null;
   const serverFusing =
     activeFusion?.mode === 'server' || fuseState === 'fusing';
-  const p2pFusing =
-    activeFusion?.mode === 'p2p' || p2pState === 'fusing';
-  const anyFusing = Boolean(activeFusion) || serverFusing || p2pFusing;
+  const p2pFusing = activeFusion?.mode === 'p2p' || p2pState === 'fusing';
+  const anyFusing = serverFusing || p2pFusing;
   const serverMode = getFusionModeAvailability({
     p2pFusionEnabled,
     walletId,
@@ -193,6 +197,21 @@ export const CashFusionSettings: React.FC<{ variant?: 'card' | 'servers' }> = ({
     [walletId]
   );
 
+  // On open: heal ghosts so the panel is never stuck grey from a dead lease.
+  useEffect(() => {
+    if (walletId <= 0) return;
+    void reconcileIdleFusionState(walletId).then(() => {
+      setFusionActivity(getFusionActivity(walletId));
+      if (fuseState === 'fusing' && !isFusionRunning(walletId)) {
+        setFuseState('idle');
+      }
+      if (p2pState === 'fusing' && !isFusionRunning(walletId)) {
+        setP2pState('idle');
+        setP2pPhase(0);
+      }
+    });
+  }, [walletId]);
+
   // The SOCKS proxy to actually route through, or undefined for a direct
   // connection. Direct is only valid for a localhost server (Electron Cash's
   // one exemption) — for a remote server with no Tor, the Rust side refuses.
@@ -229,36 +248,6 @@ export const CashFusionSettings: React.FC<{ variant?: 'card' | 'servers' }> = ({
   // Run a real fusion round with the wallet's coins. Only reachable when
   // execution is allowed (chipnet test path); mainnet stays gated by the safety
   // requirements. A round completes only when enough players meet in a tier.
-  const handleClearStuckFusion = async () => {
-    if (walletId <= 0) return;
-    // Allow clear even if UI thinks something is fusing but stuck grey.
-    try {
-      await clearStuckFusionLease(walletId);
-      setFuseMsg('Cleared stuck fusion lock. You can Fuse again.');
-      setFuseState('idle');
-      setP2pMsg('Cleared stuck fusion lock. You can Fuse again.');
-      setP2pState('idle');
-      setP2pPhase(0);
-    } catch (e) {
-      // If in-memory activity is set but ghost, force through lease layer.
-      try {
-        const { forceClearRoundLease } = await import(
-          '../../platform/desktop/fusionWalletLease'
-        );
-        await forceClearRoundLease(walletId);
-        setFuseMsg('Force-cleared fusion lock. You can Fuse again.');
-        setFuseState('idle');
-        setP2pMsg('Force-cleared fusion lock. You can Fuse again.');
-        setP2pState('idle');
-        setP2pPhase(0);
-      } catch {
-        const text = e instanceof Error ? e.message : String(e);
-        setFuseMsg(text);
-        setFuseState('fail');
-      }
-    }
-  };
-
   const handleFuseNow = async () => {
     setFuseMsg(null);
     try {
@@ -577,17 +566,6 @@ export const CashFusionSettings: React.FC<{ variant?: 'card' | 'servers' }> = ({
                   <div className="border-t border-[var(--wallet-border)] pt-3">
                     <AutoFusionControls disabled={walletId <= 0 || anyFusing} />
                   </div>
-
-                  {/* Ghost lease recovery: UI grey but "already running" after crash/HMR. */}
-                  {walletId > 0 && (
-                    <button
-                      type="button"
-                      onClick={() => void handleClearStuckFusion()}
-                      className="w-full rounded-lg border border-[var(--wallet-border)] px-3 py-1.5 text-[10px] font-semibold wallet-text-strong hover:opacity-80"
-                    >
-                      Clear stuck fusion lock
-                    </button>
-                  )}
 
                   {/* Server path — Fuse Now via the configured CashFusion server (Servers card). */}
                   <div

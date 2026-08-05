@@ -22,6 +22,7 @@ import { coinsBelowDepth } from './fusionCoinDepth';
 import {
   acquireRoundLease,
   forceClearRoundLease,
+  hasLiveRoundLease,
   isAutoCooldownReady,
   LEASE_HEARTBEAT_MS,
   releaseRoundLease,
@@ -127,6 +128,14 @@ function emitFusionActivity(walletId: number): void {
 }
 
 export function getFusionActivity(walletId: number): FusionActivity | null {
+  // Activity without a live in-memory lease is a ghost (HMR / failed finally).
+  // Never let that greyscale the CashFusion UI as "fusing".
+  if (!heldLeases.has(walletId)) {
+    if (fusionActivities.has(walletId)) {
+      fusionActivities.delete(walletId);
+    }
+    return null;
+  }
   return fusionActivities.get(walletId)?.activity ?? null;
 }
 
@@ -159,15 +168,44 @@ export function isFusionRunning(walletId: number): boolean {
   return heldLeases.has(walletId);
 }
 
-/** Recover from a ghost localStorage lease (UI grey but "already running"). */
-export async function clearStuckFusionLease(walletId: number): Promise<void> {
+/**
+ * Drop durable ghost leases and orphan activity for this wallet when THIS
+ * window is not running a round. Called automatically on CashFusion mount and
+ * before acquire — users should never need a "clear stuck" button.
+ */
+export async function reconcileIdleFusionState(walletId: number): Promise<void> {
   if (!Number.isInteger(walletId) || walletId <= 0) return;
-  heldLeases.delete(walletId);
+  if (heldLeases.has(walletId)) return; // real round in this window
   if (fusionActivities.has(walletId)) {
     fusionActivities.delete(walletId);
     emitFusionActivity(walletId);
   }
-  await forceClearRoundLease(walletId);
+  // Reclaim durable lock only if stale (another window may still be live).
+  if (!hasLiveRoundLease(walletId)) {
+    await forceClearRoundLease(walletId).catch(() => undefined);
+  }
+}
+
+// Release our lease if the WebView dies mid-round (reload / close).
+if (typeof window !== 'undefined') {
+  const releaseOnUnload = () => {
+    for (const [walletId, owner] of heldLeases) {
+      // Sync best-effort: async release may not finish on unload.
+      try {
+        const key = `optn-fusion-lease-${walletId}`;
+        const raw = window.localStorage?.getItem(key);
+        if (!raw) continue;
+        const held = JSON.parse(raw) as { owner?: string };
+        if (held?.owner === owner) window.localStorage?.removeItem(key);
+      } catch {
+        /* ignore */
+      }
+    }
+    heldLeases.clear();
+    fusionActivities.clear();
+  };
+  window.addEventListener('pagehide', releaseOnUnload);
+  window.addEventListener('beforeunload', releaseOnUnload);
 }
 
 // Unconfirmed coins are deliberately eligible here, which is a considered
@@ -238,19 +276,11 @@ export async function startFusionRound(
     return { status: 'cooldown' };
   }
 
-  // Manual start while this window is idle: drop a ghost durable lease left by
-  // HMR/crash so grey "already running" cannot block Fuse. A live round in
-  // another window of the same wallet still heartbeats and will re-acquire.
-  if (
-    trigger === 'manual' &&
-    !isFusionRunning(walletId) &&
-    !getFusionActivity(walletId)
-  ) {
-    await forceClearRoundLease(walletId).catch(() => undefined);
-  }
+  // Drop orphan UI/durable state before acquire so grey-idle ghosts never block.
+  await reconcileIdleFusionState(walletId);
 
-  // Exclusivity first, across every window. Stale ghost leases (no heartbeat)
-  // are reclaimed automatically after LEASE_STALE_MS.
+  // Exclusivity first. Stale durable leases (no heartbeat) are reclaimed inside
+  // acquireRoundLease — no user-facing "clear stuck" control required.
   const lease = await acquireRoundLease(walletId);
   if (lease === null) return { status: 'busy' };
   heldLeases.set(walletId, lease);
