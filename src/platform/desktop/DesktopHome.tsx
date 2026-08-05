@@ -110,74 +110,138 @@ const Home: React.FC = () => {
   const [scanBusy, setScanBusy] = useState(false);
   const [syncEtaSec, setSyncEtaSec] = useState<number | null>(null);
   const [syncElapsedSec, setSyncElapsedSec] = useState(0);
+  // null = unknown / frozen; number = seconds; 0 = done
+  const [syncEtaHonest, setSyncEtaHonest] = useState<boolean>(true);
 
   // Wall-clock ticker while a sync is in flight. The long UTXO/header network
   // batch is one atomic round-trip that cannot sub-divide its progress, so the
   // % bar alone would sit frozen for seconds during it. A live elapsed counter
   // is the honest indicator that the scan is actually progressing.
+  const syncStartTsRef = useRef<number | null>(null);
   useEffect(() => {
     if (!fetchingUTXOsRedux) {
       setSyncElapsedSec(0);
+      syncStartTsRef.current = null;
       return;
     }
     const startTs = Date.now();
+    syncStartTsRef.current = startTs;
     const interval = setInterval(() => {
       setSyncElapsedSec(Math.floor((Date.now() - startTs) / 1000));
     }, 500);
     return () => clearInterval(interval);
   }, [fetchingUTXOsRedux]);
-  // Rate-based ETA, not "elapsed/percent from t0": progress restarts at a lower
-  // value when one phase (worker bootstrap) hands off to the next (history pass),
-  // so a single monotonic clock overstates remaining time. We instead track rate
-  // of progress (percent per second) with an EMA, and forget the rate whenever
-  // progress jumps backward (a new phase began).
+
+  // ETA must not lie. Phase markers jump 5→8→10→20% in milliseconds, which made
+  // a rate-based ETA claim "~2s left" while discovery/Electrum sat at 20% for a
+  // minute. Rules:
+  //  1) Ignore flash phase jumps (big % in tiny dt) for the rate sample.
+  //  2) Floor remaining time with overall pace: elapsed * (100-p)/p.
+  //  3) If % has not moved for several seconds, drop the optimistic "~Ns left"
+  //     and show "working…" instead of a fake countdown.
   const rateRef = useRef<number | null>(null);
   const lastProgressRef = useRef<number | null>(null);
-  const lastRateTsRef = useRef<number | null>(null);
+  const lastProgressChangeTsRef = useRef<number | null>(null);
 
   useEffect(() => {
     if (!fetchingUTXOsRedux || syncingProgress === null) {
       if (!fetchingUTXOsRedux) {
         rateRef.current = null;
         lastProgressRef.current = null;
-        lastRateTsRef.current = null;
+        lastProgressChangeTsRef.current = null;
         setSyncEtaSec(null);
+        setSyncEtaHonest(true);
       }
       return;
     }
+
     const now = Date.now();
     const lastP = lastProgressRef.current;
-    const lastTs = lastRateTsRef.current;
+    const lastChangeTs = lastProgressChangeTsRef.current;
+    const elapsedSec = Math.max(
+      0,
+      syncStartTsRef.current
+        ? (now - syncStartTsRef.current) / 1000
+        : syncElapsedSec
+    );
 
     if (syncingProgress >= 100) {
       setSyncEtaSec(0);
-    } else if (
-      lastP !== null &&
-      lastTs !== null &&
-      syncingProgress > lastP &&
-      now > lastTs
-    ) {
-      const dtSec = (now - lastTs) / 1000;
-      const instRate = (syncingProgress - lastP) / dtSec;
-      // Damped moving average of %/s; refuse absurd instantaneous jumps.
-      const clamped = Math.min(200, Math.max(0.1, instRate));
-      const ema =
-        rateRef.current === null
-          ? clamped
-          : rateRef.current * 0.7 + clamped * 0.3;
-      rateRef.current = ema;
-      setSyncEtaSec(
-        Math.max(0, Math.ceil((100 - syncingProgress) / ema))
-      );
-    } else if (lastP !== null && syncingProgress < lastP) {
-      // New phase: forget the old rate so the estimate re-learns from scratch.
-      rateRef.current = null;
-      setSyncEtaSec(null);
+      setSyncEtaHonest(true);
+      lastProgressRef.current = syncingProgress;
+      lastProgressChangeTsRef.current = now;
+      return;
     }
 
-    lastProgressRef.current = syncingProgress;
-    lastRateTsRef.current = now;
-  }, [fetchingUTXOsRedux, syncingProgress]);
+    if (lastP !== null && syncingProgress < lastP) {
+      // History pass (or other phase) restarted the bar — forget rate.
+      rateRef.current = null;
+      lastProgressRef.current = syncingProgress;
+      lastProgressChangeTsRef.current = now;
+      setSyncEtaSec(null);
+      setSyncEtaHonest(true);
+      return;
+    }
+
+    const progressed =
+      lastP === null || syncingProgress > lastP + 0.01;
+
+    if (progressed) {
+      if (
+        lastP !== null &&
+        lastChangeTs !== null &&
+        syncingProgress > lastP
+      ) {
+        const dtSec = (now - lastChangeTs) / 1000;
+        const delta = syncingProgress - lastP;
+        // Phase markers (5→20 in <0.75s) are not real work rate.
+        const isFlashJump = dtSec < 0.75 || delta / Math.max(dtSec, 0.001) > 25;
+        if (!isFlashJump && dtSec >= 0.5) {
+          const instRate = delta / dtSec; // %/s
+          const clamped = Math.min(15, Math.max(0.05, instRate));
+          rateRef.current =
+            rateRef.current === null
+              ? clamped
+              : rateRef.current * 0.6 + clamped * 0.4;
+        }
+      }
+      lastProgressRef.current = syncingProgress;
+      lastProgressChangeTsRef.current = now;
+    }
+
+    const stuckForSec =
+      lastProgressChangeTsRef.current !== null
+        ? (now - lastProgressChangeTsRef.current) / 1000
+        : 0;
+
+    // Overall pace floor: if 20% took 76s, remaining is not 2s.
+    let overallEta: number | null = null;
+    if (elapsedSec >= 3 && syncingProgress >= 1 && syncingProgress < 100) {
+      overallEta = Math.ceil(
+        (elapsedSec * (100 - syncingProgress)) / syncingProgress
+      );
+    }
+
+    let rateEta: number | null = null;
+    if (rateRef.current !== null && rateRef.current > 0) {
+      rateEta = Math.ceil((100 - syncingProgress) / rateRef.current);
+    }
+
+    // Frozen bar → do not advertise a short countdown.
+    if (stuckForSec >= 4) {
+      setSyncEtaHonest(false);
+      setSyncEtaSec(overallEta);
+      return;
+    }
+
+    setSyncEtaHonest(true);
+    if (overallEta !== null && rateEta !== null) {
+      // Conservative: never promise faster than overall pace.
+      setSyncEtaSec(Math.max(overallEta, rateEta));
+    } else {
+      setSyncEtaSec(overallEta ?? rateEta);
+    }
+  }, [fetchingUTXOsRedux, syncingProgress, syncElapsedSec]);
   const totalBch = totalBalance / SATSINBITCOIN;
   const totalUsd =
     typeof bchUsdQuote === 'number' ? totalBch * bchUsdQuote : null;
@@ -372,12 +436,16 @@ const Home: React.FC = () => {
                         />
                       </div>
                       <span className="whitespace-nowrap">
-                        {syncingProgress}%{syncElapsedSec > 0 ? ` · ${syncElapsedSec}s` : ''}
-                        {syncEtaSec !== null && syncEtaSec > 0
-                          ? ` · ~${Math.max(1, syncEtaSec)}s left`
-                          : syncEtaSec === 0
-                            ? ' · done'
-                            : '…'}
+                        {syncingProgress}%
+                        {syncElapsedSec > 0 ? ` · ${syncElapsedSec}s` : ''}
+                        {syncEtaSec === 0
+                          ? ' · done'
+                          : !syncEtaHonest
+                            ? // % frozen (Electrum/discovery) — do not invent a short countdown
+                              ' · working…'
+                            : syncEtaSec !== null && syncEtaSec > 0
+                              ? ` · ~${Math.max(1, syncEtaSec)}s left`
+                              : '…'}
                       </span>
                     </div>
                   )}
