@@ -172,6 +172,22 @@ export function reportFusionProgress(
   };
   fusionActivities.set(walletId, entry);
   emitFusionActivity(walletId);
+  // Disk + stdout via tauri-plugin-log so agents can tail
+  // %LOCALAPPDATA%\com.optilabs.wallet\logs\optn-wallet.log live.
+  if (update.status) {
+    void import('./logger')
+      .then(({ log }) =>
+        log.info('p2p-live', `w${walletId} ${update.status}`)
+      )
+      .catch(() => undefined);
+  }
+  if (update.phase !== undefined) {
+    void import('./logger')
+      .then(({ log }) =>
+        log.info('p2p-live', `w${walletId} phase=${update.phase}`)
+      )
+      .catch(() => undefined);
+  }
 }
 
 export function getFusionLastResult(walletId: number): FusionLastResult | null {

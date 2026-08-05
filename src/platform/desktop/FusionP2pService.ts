@@ -68,6 +68,7 @@ import {
   P2P_ROUND_TIMEOUT_MS,
   P2P_SMALL_SET_HOLD_MS,
 } from './fusionTiming';
+import { log } from './logger';
 
 const P2P_FEERATE = 1_000; // sats per 1000 bytes
 const P2P_TIERS = [10_000, 100_000, 1_000_000, 10_000_000];
@@ -236,9 +237,16 @@ async function collectRolling(
     }
     if (fp !== lastLoggedFp) {
       lastLoggedFp = fp;
+      const keys =
+        peers.map((p) => p.pubkey.slice(0, 8)).join(', ') || '(none)';
       console.info(
         `[p2p-fusion] live set strict=${peers.length} soft=${soft.length} peak=${peakStrict}/${peakSoft}:`,
-        peers.map((p) => p.pubkey.slice(0, 8)).join(', ') || '(none)'
+        keys
+      );
+      // Live multi-wallet debug: same line lands in optn-wallet.log for tailing.
+      void log.info(
+        'p2p-live',
+        `w${walletId} strict=${peers.length} soft=${soft.length} peak=${peakStrict}/${peakSoft} keys=${keys}`
       );
     }
     // Alone or under-count: re-shout often so a lagging Tor peer still finds us.
