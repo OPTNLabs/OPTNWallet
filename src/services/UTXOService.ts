@@ -620,10 +620,17 @@ const UTXOService = {
                   tokenAddress: (utxo as UTXO & { tokenAddress?: string })
                     .tokenAddress,
                 }));
-          await applyAddressUtxoSnapshot(walletId, {
-            address,
-            utxos: toApply,
-          });
+          await applyAddressUtxoSnapshot(
+            walletId,
+            {
+              address,
+              utxos: toApply,
+            },
+            // Only Manual Sync / force may invent external: spends. Open and
+            // background may only add coins + clear sticky external: when a
+            // coin reappears (wallet 5 re-corrupt: partial listunspent).
+            { allowMarkSyntheticSpends: options.force === true }
+          );
         }
 
         const { byAddress: ledgerByAddress } =

@@ -24,10 +24,10 @@
 7. **Evidence before “fixed”:** for a wallet, Electrum listunspent sum ≈ Redux  
    `totalBalance` ≈ ledger unspent sum ≈ SQL `UTXOs` sum.  
 8. **Missing listunspent key ≠ empty `[]`.** RPC fail omits the address.  
-9. **Never apply empty listunspent → ledger without `force`.** Empty-without-force  
-   was poisoning `external:` txi → fake low balance (even when SQL prior looked  
-   empty after a half-healed pass). Real spends: Manual Sync force, or  
-   EC raw-tx → `ledger_txi`.
+9. **Never apply empty listunspent → ledger without `force`.**  
+10. **Never mark synthetic `external:` spends without `force`.** Partial non-empty  
+    listunspent was still wiping coins. Real spends: Manual Sync force, or  
+    EC raw-tx → `ledger_txi`.
 
 ## Goal
 
@@ -96,11 +96,13 @@ Apply network results into the ledger (and/or address UTXO replace under the sam
 For each **dirty** address in a wallet-wide fetch pass:
 
 1. `applyAddressUtxoSnapshot` upserts remote unspents into `ledger_txo`.  
-2. Outpoints that were unspent locally but **missing** from remote get a synthetic  
-   `ledger_txi.spent_by_tx = external:<hash>:<n>` (vanished on chain).  
-3. Outpoints present on remote that still have only an `external:%` spend row must  
+2. Outpoints present on remote that still have only an `external:%` spend row must  
    **clear that synthetic txi** (coin is unspent again). Never clear real spend rows  
    from known wallet txs.  
+3. **Synthetic `external:` spends only when `force` (Manual Sync).**  
+   Open/background/subscription must **not** mark missing outpoints spent —  
+   partial listunspent re-poisoned wallet 5 after a good Manual Sync.  
+   Real spends: Manual Sync force, or EC raw-tx → `ledger_txi`.  
 4. `rebuildUtxosFromLedger` rewrites SQL `UTXOs` from unspent `ledger_txo`.  
 5. **Wallet-wide Redux payload** = `listUnspentFromLedger` (full wallet), same as EC  
    deriving coins from txi/txo — not a partial listunspent map for only dirty addrs.  
