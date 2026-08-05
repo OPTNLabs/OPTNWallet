@@ -26,14 +26,25 @@ const COOLDOWN_PREFIX = 'optn-fusion-auto-attempt-';
 const LOCK_PREFIX = 'optn-fusion-lock-';
 
 /**
- * A round that dies without releasing must not lock the wallet forever, but this
- * must outlive a legitimately slow round: gather alone can take 75s, and the
- * whole round can exceed two minutes on Tor.
+ * Absolute backstop if heartbeats stop being written (process kill + no reclaim).
+ * Gather (~75s) + round timeout (~120s) + Tor slack — four minutes is enough
+ * for a live round and short enough that a ghost lock is not permanent.
  */
-const LEASE_TTL_MS = 10 * 60_000;
+export const LEASE_TTL_MS = 4 * 60_000;
+
+/**
+ * A live round refreshes `at` every LEASE_HEARTBEAT_MS. If `at` is older than
+ * this, the holder is considered dead (HMR, crash, closed window) and the next
+ * acquire reclaims the lock. This is what fixes "already running" with a grey
+ * idle UI after a stuck attempt.
+ */
+export const LEASE_STALE_MS = 90_000;
+/** How often the holding window must refresh the durable lease. */
+export const LEASE_HEARTBEAT_MS = 20_000;
 
 interface LeaseRecord {
   owner: string;
+  /** Last heartbeat (or grant time). */
   at: number;
 }
 
@@ -90,6 +101,19 @@ function newOwnerToken(): string {
 }
 
 /**
+ * True when another window (or a dead process) still holds a non-stale lease.
+ * Stale = no heartbeat within LEASE_STALE_MS, or past absolute LEASE_TTL_MS.
+ */
+function leaseIsLive(held: LeaseRecord | null, nowMs: number): boolean {
+  if (!held) return false;
+  const age = nowMs - held.at;
+  if (age < 0) return true; // clock skew: treat as held, fail closed
+  if (age >= LEASE_TTL_MS) return false;
+  if (age >= LEASE_STALE_MS) return false;
+  return true;
+}
+
+/**
  * Take the round lease for this wallet, covering BOTH transports and both manual
  * and automatic starts. Returns an owner token, or null when another window (or
  * this one) already holds a live lease.
@@ -101,15 +125,33 @@ export async function acquireRoundLease(
   const key = `${LEASE_PREFIX}${walletId}`;
   const result = await withWalletLock(walletId, () => {
     const held = readJson<LeaseRecord>(key);
-    // An expired lease belongs to a round that died; reclaiming it is the only
-    // way a crashed window does not lock the wallet out permanently.
-    if (held && nowMs - held.at < LEASE_TTL_MS) return null;
+    // Live holder still heartbeating → refuse. Dead/stale → reclaim.
+    if (leaseIsLive(held, nowMs)) return null;
     const owner = newOwnerToken();
     writeJson(key, { owner, at: nowMs } satisfies LeaseRecord);
     return owner;
   });
   // No lock manager => exclusivity cannot be guaranteed => refuse.
   return result.ran ? result.value : null;
+}
+
+/**
+ * Refresh the durable lease while a round is still running.
+ * Call from the holding window on an interval (LEASE_HEARTBEAT_MS).
+ */
+export async function touchRoundLease(
+  walletId: number,
+  owner: string,
+  nowMs = Date.now()
+): Promise<boolean> {
+  const key = `${LEASE_PREFIX}${walletId}`;
+  const result = await withWalletLock(walletId, () => {
+    const held = readJson<LeaseRecord>(key);
+    if (!held || held.owner !== owner) return false;
+    writeJson(key, { owner, at: nowMs } satisfies LeaseRecord);
+    return true;
+  });
+  return result.ran ? result.value : false;
 }
 
 /** Release only if we still hold it: a lease we already lost to TTL now belongs
@@ -158,13 +200,12 @@ export async function forceClearRoundLease(walletId: number): Promise<void> {
   }
 }
 
-/** Read-only: whether a non-expired durable lease is recorded for this wallet. */
+/** Read-only: whether a non-stale durable lease is recorded for this wallet. */
 export function hasLiveRoundLease(
   walletId: number,
   nowMs = Date.now()
 ): boolean {
-  const held = readJson<LeaseRecord>(`${LEASE_PREFIX}${walletId}`);
-  return !!(held && nowMs - held.at < LEASE_TTL_MS);
+  return leaseIsLive(readJson<LeaseRecord>(`${LEASE_PREFIX}${walletId}`), nowMs);
 }
 
 /**

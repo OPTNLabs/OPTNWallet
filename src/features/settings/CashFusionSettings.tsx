@@ -37,6 +37,7 @@ import {
 import { P2pFusionTransportPreview } from '../nostr/P2pFusionTransportPreview';
 import { AutoFusionControls } from './AutoFusionControls';
 import {
+  clearStuckFusionLease,
   getFusionActivity,
   startFusionRound,
   subscribeFusionActivity,
@@ -67,7 +68,11 @@ function describeFusionOutcome(outcome: FusionRunOutcome): string {
         ? `Fused ✓ — txid ${outcome.txid}. ${outcome.warning}`
         : `Fused ✓ — txid ${outcome.txid}`;
     case 'busy':
-      return 'A fusion round is already running for this wallet.';
+      return (
+        'A fusion lock is held for this wallet (another window, or a stuck ' +
+        'attempt after crash/reload). If nothing is fusing, wait ~90s or use ' +
+        '“Clear stuck fusion” below.'
+      );
     case 'waiting-for-wallet':
       // Not an error: the wallet is mid-refresh. Falling back to the cached coin
       // list here is exactly how a round ends up spending coins that are gone.
@@ -224,6 +229,21 @@ export const CashFusionSettings: React.FC<{ variant?: 'card' | 'servers' }> = ({
   // Run a real fusion round with the wallet's coins. Only reachable when
   // execution is allowed (chipnet test path); mainnet stays gated by the safety
   // requirements. A round completes only when enough players meet in a tier.
+  const handleClearStuckFusion = async () => {
+    if (walletId <= 0 || anyFusing) return;
+    try {
+      await clearStuckFusionLease(walletId);
+      setFuseMsg('Cleared stuck fusion lock. You can Fuse again.');
+      setFuseState('done');
+      setP2pMsg('Cleared stuck fusion lock. You can Fuse again.');
+      setP2pState('done');
+    } catch (e) {
+      const text = e instanceof Error ? e.message : String(e);
+      setFuseMsg(text);
+      setFuseState('fail');
+    }
+  };
+
   const handleFuseNow = async () => {
     setFuseMsg(null);
     try {
@@ -542,6 +562,17 @@ export const CashFusionSettings: React.FC<{ variant?: 'card' | 'servers' }> = ({
                   <div className="border-t border-[var(--wallet-border)] pt-3">
                     <AutoFusionControls disabled={walletId <= 0 || anyFusing} />
                   </div>
+
+                  {/* Ghost lease recovery: UI grey but "already running" after crash/HMR. */}
+                  {walletId > 0 && !anyFusing && (
+                    <button
+                      type="button"
+                      onClick={() => void handleClearStuckFusion()}
+                      className="w-full rounded-lg border border-[var(--wallet-border)] px-3 py-1.5 text-[10px] wallet-muted hover:wallet-text-strong"
+                    >
+                      Clear stuck fusion lock
+                    </button>
+                  )}
 
                   {/* Server path — Fuse Now via the configured CashFusion server (Servers card). */}
                   <div
