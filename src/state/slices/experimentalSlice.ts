@@ -70,10 +70,15 @@ interface ExperimentalState {
   // (getFusionModeAvailability), so a single flag cannot start two at once.
   autoFuseEnabled: boolean;
   // Electron Cash's `cashfusion_fuse_depth`: how many times a coin may be fused
-  // before the engine leaves it alone. EC treats 0 as "keep fusing forever";
-  // we default to 3 so auto-fusion terminates on its own rather than spending
-  // fees indefinitely without the user asking.
+  // before the engine leaves it alone. Same meaning as the UI label
+  // "Rounds per coin". EC treats 0 as "keep fusing forever"; we default to 3.
   fuseDepth: number;
+  /**
+   * When true, ordinary sends may only spend coins with fuse depth ≥ 1
+   * (already through at least one CashFusion). Fresh receives stay unspendable
+   * for normal send until fused — Electron Cash–style privacy spend policy.
+   */
+  spendOnlyFusedCoins: boolean;
   // Which transport a round uses. Mutually exclusive with Server Fusion.
   p2pFusionEnabled: boolean;
   fusionServer: string;
@@ -95,6 +100,7 @@ const initialState: ExperimentalState = {
   nostrRelays: DEFAULT_NOSTR_RELAYS,
   autoFuseEnabled: true,
   fuseDepth: DEFAULT_FUSE_DEPTH,
+  spendOnlyFusedCoins: false,
   p2pFusionEnabled: true,
   fusionServer: DEFAULT_FUSION_SERVER,
   fusionServers: [DEFAULT_FUSION_SERVER],
@@ -125,6 +131,7 @@ export function normalizeExperimentalPersistedState(
   return {
     autoFuseEnabled: true,
     p2pFusionEnabled: true,
+    spendOnlyFusedCoins: false,
     ...persisted,
     // Spread first, then clamp: a wallet persisted before this field existed
     // gets the default, and a persisted out-of-range value is pulled back into
@@ -132,6 +139,7 @@ export function normalizeExperimentalPersistedState(
     fuseDepth: clampFuseDepth(
       persisted.fuseDepth ?? DEFAULT_FUSE_DEPTH
     ),
+    spendOnlyFusedCoins: persisted.spendOnlyFusedCoins === true,
     nostrChatEnabled: defaultOnAlreadyApplied
       ? persisted.nostrChatEnabled !== false
       : true,
@@ -181,6 +189,9 @@ const experimentalSlice = createSlice({
       // this same value, and the engine reads it in a loop — an unclamped 0
       // would mean "never stop fusing".
       state.fuseDepth = clampFuseDepth(action.payload);
+    },
+    setSpendOnlyFusedCoins(state, action: PayloadAction<boolean>) {
+      state.spendOnlyFusedCoins = action.payload;
     },
     setFusionServer(state, action: PayloadAction<string>) {
       state.fusionServer = normalizeServer(action.payload);
@@ -249,6 +260,7 @@ export const {
   setAutoFuseEnabled,
   setP2pFusionEnabled,
   setFuseDepth,
+  setSpendOnlyFusedCoins,
   setFusionServer,
   addFusionServer,
   removeFusionServer,
@@ -288,6 +300,9 @@ export const selectP2pFusionEnabled = (state: RootState) =>
 /** Shared by both Fusion cards, so the two controls can never disagree. */
 export const selectFuseDepth = (state: RootState) =>
   clampFuseDepth(state.experimental.fuseDepth ?? DEFAULT_FUSE_DEPTH);
+/** Prefer fused coins for ordinary spends (depth ≥ 1). Default off. */
+export const selectSpendOnlyFusedCoins = (state: RootState) =>
+  state.experimental.spendOnlyFusedCoins === true;
 export const selectFusionServer = (state: RootState) =>
   migrateDeadServer(state.experimental.fusionServer);
 // Older persisted state won't have the list — fall back to the single selected

@@ -628,11 +628,10 @@ export async function runP2pFusion(
         feerate: P2P_FEERATE,
         myContribution: { inputs: myInputs, outputs: myOutputs },
         keysByPubkey,
-        // Direct outputs (v1.7.0 behaviour). Onion mix-net waits for every
-        // negotiated peer to peel; when discovery was asymmetric (one wallet
-        // "Round agreed", another "only 1 announcement"), the agreed wallet
-        // stuck at "Registering inputs & outputs" until the 120s timeout.
-        onionEnabled: false,
+        // Output onion is mandatory for P2P privacy among peers (peel + shuffle).
+        // Never disable in production — partial unlinkability (throwaway Nostr
+        // authors alone) is not a substitute.
+        onionEnabled: true,
         signal: opts.signal,
         onStatus: status,
         broadcast: async (txHex) => {

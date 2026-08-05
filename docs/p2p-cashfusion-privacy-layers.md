@@ -20,8 +20,8 @@ are confused about “onion vs Tor vs blind Schnorr.”
 | NIP-59 gift-wrap for round traffic | **Yes** | `fusionTransport.ts` |
 | Pedersen + blind Schnorr credentials | **Yes** | `fusionPedersen.ts`, `fusionBlindSchnorr.ts` |
 | Credential slots per peer | **16** inputs max per peer per round | `CREDENTIAL_SLOTS_PER_PEER`; `selectFusionInputs` in `FusionP2pService` |
-| Rendezvous timeout | **15 s** (Tor-friendly; was 6 s) | `fusionRendezvous.ts` |
-| Output onion (`onionEnabled`) | **`true`** (production default) | `FusionP2pService` → session params |
+| Rendezvous timeout | **~35–40 s** (Tor multi-wallet) | `fusionRendezvous.ts` / `FusionP2pService` |
+| Output onion (`onionEnabled`) | **`true` always** (production; no disable) | `FusionP2pService` → `runFusionRound`; session defaults ON unless tests pass `false` |
 | Extra mixnet / onion *servers* | **None** | — |
 
 **Regression note (why live P2P can fail after credentials landed):** when the
@@ -130,8 +130,8 @@ Issuer nonce slots are **one-shot**. Retrying sign on the same slot is forbidden
 | **What** | Each **output** is layered with ECDH + AES-GCM for every peeler in `mixOrder`. Each hop **peels one layer**, **CSPRNG Fisher–Yates shuffles** the batch, and **forwards**. Last peeler reveals plaintext outputs **only to the coordinator**. |
 | **Why** | Intermediate peers must not learn which participant contributed which output. **One honest hop** is enough for that unlinkability property. |
 | **Infrastructure** | **None.** Only the wallets already in the round. No mixnet servers, no Tor onion service requirement for this layer. |
-| **Essential?** | **Yes for production P2P output unlinkability** among peers. Default: `onionEnabled: true`. Failure is **loud** — no silent plaintext downgrade. |
-| **Code** | `onionCrypto.ts`, peel/forward in `fusionSession.ts`, wired `onionEnabled: true` in `FusionP2pService` |
+| **Essential?** | **Yes — mandatory.** Production always enables output onion (`onionEnabled: true` in `FusionP2pService`; session treats omitted flag as ON). Failure is **loud** — no silent plaintext downgrade. |
+| **Code** | `onionCrypto.ts`, peel/forward in `fusionSession.ts`, `FusionP2pService` |
 | **Does not do** | Is **not Tor**. Does not hide that a CoinJoin happened on-chain. Does not stop the **last peeler** (or the **coordinator**) from seeing the full plaintext **output list** — only the *contributor→output* link is what the shuffles protect. |
 
 ### mixOrder and who peels

@@ -26,12 +26,41 @@ export const P2pFusionTransportPreview: React.FC<P2pFusionPanelProps> = ({
 }) => (
   <div className="space-y-2.5 rounded-xl border border-violet-400/20 bg-violet-400/5 p-3">
     <p className="text-xs font-semibold text-violet-400">P2P Fusion over Nostr</p>
+    <div className="mt-2 rounded-lg border border-violet-400/20 bg-violet-400/5 px-2.5 py-2 text-[10px] wallet-muted leading-relaxed space-y-1">
+      <p className="font-semibold text-violet-300/90">Privacy stack (always on)</p>
+      <ul className="list-disc pl-3.5 space-y-0.5">
+        <li>
+          <span className="wallet-text-strong">Tor</span> — hide your IP from
+          relays
+        </li>
+        <li>
+          <span className="wallet-text-strong">NIP-59 gift-wrap</span> — encrypt
+          round messages on Nostr
+        </li>
+        <li>
+          <span className="wallet-text-strong">Throwaway round key</span> —
+          fresh secp256k1 identity per attempt (not your chat key)
+        </li>
+        <li>
+          <span className="wallet-text-strong">Pedersen + blind Schnorr</span> —
+          CashFusion credential math
+        </li>
+        <li>
+          <span className="wallet-text-strong">Output onion</span> — peers peel
+          + shuffle outputs (not the same as Tor)
+        </li>
+      </ul>
+      <p className="pt-0.5">
+        Compatible wallets that speak the same Nostr pool tags and round
+        messages can fuse together — liquidity grows as more wallets adopt
+        this P2P protocol (not only OPTN).
+      </p>
+    </div>
     <p className="text-[10px] leading-relaxed wallet-muted">
-      No server: peers meet on Nostr relays over Tor, deterministically elect a
-      coordinator, and run the CoinJoin peer-to-peer. Outputs are unlinkable
-      (throwaway keys + Tor); you sign only your own inputs, and only after
-      verifying your own outputs are present — a hostile coordinator can never make
-      you sign away funds.
+      No server: peers meet on Nostr over Tor, elect a coordinator, and run the
+      CoinJoin peer-to-peer. Outputs use throwaway keys + mandatory peel-onion
+      among peers. You sign only your own inputs after verifying your outputs —
+      a hostile coordinator cannot make you sign away funds.
     </p>
 
     {/* Live 1–5 stepper */}

@@ -337,6 +337,9 @@ describe('Nostr round transport', () => {
           participants,
           tier: 100_000,
           feerate: 1000,
+          // Integration test of gift-wrap transport; peel onion is covered in
+          // fusionSession onion test with full peer keys.
+          onionEnabled: false,
           myContribution: p.contribution,
           keysByPubkey: p.keys,
           broadcast,

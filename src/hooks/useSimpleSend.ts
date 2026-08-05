@@ -15,6 +15,8 @@ import { selectCurrentNetwork } from '../state/selectors/networkSelectors';
 import { SATSINBITCOIN } from '../utils/constants';
 import UTXOService from '../services/UTXOService';
 import { outpointKey } from '../platform/desktop/CoinLabelService';
+import { applySpendOnlyFusedPolicy } from '../platform/desktop/fusionSpendPolicy';
+import { selectSpendOnlyFusedCoins } from '../state/slices/experimentalSlice';
 import {
   selectNftInput,
   selectTokenFtInputs,
@@ -42,6 +44,7 @@ export default function useSimpleSend() {
   const prices = useSelector((s: RootState) => s.priceFeed);
   const walletId = useSelector(selectWalletId);
   const currentNetwork = useSelector((s: RootState) => selectCurrentNetwork(s));
+  const spendOnlyFusedCoins = useSelector(selectSpendOnlyFusedCoins);
   const preferInternalChangeForBch = false;
 
   // Wallet addresses + default change (also gives tokenAddress mapping)
@@ -84,25 +87,27 @@ export default function useSimpleSend() {
 
   const applyCoinControl = useCallback(
     (pool: UTXO[]): UTXO[] | { error: string } => {
-      if (!coinControlEnabled) return pool;
-      if (selectedCoinKeys.size === 0) {
-        return {
-          error:
-            'Coin control is on but no coins are selected. Check at least one coin, or turn Manual off.',
-        };
+      let next = pool;
+      if (coinControlEnabled) {
+        if (selectedCoinKeys.size === 0) {
+          return {
+            error:
+              'Coin control is on but no coins are selected. Check at least one coin, or turn Manual off.',
+          };
+        }
+        next = pool.filter((u) =>
+          selectedCoinKeys.has(outpointKey(u.tx_hash, u.tx_pos))
+        );
+        if (next.length === 0) {
+          return {
+            error:
+              'None of the selected coins are available. Refresh the wallet or update coin control.',
+          };
+        }
       }
-      const filtered = pool.filter((u) =>
-        selectedCoinKeys.has(outpointKey(u.tx_hash, u.tx_pos))
-      );
-      if (filtered.length === 0) {
-        return {
-          error:
-            'None of the selected coins are available. Refresh the wallet or update coin control.',
-        };
-      }
-      return filtered;
+      return applySpendOnlyFusedPolicy(walletId, next, spendOnlyFusedCoins);
     },
-    [coinControlEnabled, selectedCoinKeys]
+    [coinControlEnabled, selectedCoinKeys, walletId, spendOnlyFusedCoins]
   );
   useEffect(() => {
     if (!hydrated) return;
