@@ -12,6 +12,7 @@ import {
   selectFusionGroup,
   FUSION_POOL_PROTOCOL,
   POOL_ANNOUNCE_KIND,
+  POOL_EPOCH_SECONDS,
   POOL_REANNOUNCE_SECONDS,
 } from '../fusion';
 import { verifyEvent } from 'nostr-tools';
@@ -114,6 +115,84 @@ describe('P2P fusion coordination', () => {
     expect(
       parsePoolAnnouncement({ ...evt, content: `${evt.content} ` }, scope)
     ).toBeNull();
+  });
+
+  it('drops a relay-replayed ghost that still looks fresh by TTL alone', () => {
+    // The ghost supply: POOL_ANNOUNCE_KIND is replaceable, but every Start
+    // signs under a fresh pubkey, so replacement never fires and the relay
+    // serves an abandoned announcement to every later subscriber via `since`.
+    // This one is 90s old — well inside POOL_PEER_TTL_SECONDS (180) and with a
+    // content `expiresAt` still in the future, so every non-epoch check passes.
+    // It is caught only because the announcer SIGNED an epoch it cannot advance.
+    const round = generateRoundIdentity();
+    const now = 1_800_000_005;
+    const ghostAt = now - 90;
+    const ghost = buildPoolAnnouncement(round, {
+      network: 'chipnet',
+      tiers: [10_000],
+      numInputs: 1,
+      nowSeconds: ghostAt,
+    });
+
+    // Still inside the TTL and not yet expired — the old checks would admit it.
+    expect(ghost.created_at).toBeGreaterThan(now - 180);
+    expect(JSON.parse(ghost.content).expiresAt).toBeGreaterThan(now);
+
+    expect(
+      parsePoolAnnouncement(ghost, {
+        network: 'chipnet',
+        epoch: poolEpoch(now),
+        nowSeconds: now,
+      })
+    ).toBeNull();
+  });
+
+  it('keeps an honest peer whose re-announce arrived a bucket late', () => {
+    // Tor delays delivery, not `created_at`: a live peer republishes every few
+    // seconds, so its newest event is always current or one bucket behind. One
+    // bucket of grace is what separates this from the ghost above — without it
+    // the epoch check would just be another undercount knob.
+    const round = generateRoundIdentity();
+    const now = 1_800_000_045;
+    const lateButLive = buildPoolAnnouncement(round, {
+      network: 'chipnet',
+      tiers: [10_000],
+      numInputs: 1,
+      nowSeconds: now - POOL_EPOCH_SECONDS,
+    });
+
+    expect(
+      parsePoolAnnouncement(lateButLive, {
+        network: 'chipnet',
+        epoch: poolEpoch(now),
+        nowSeconds: now,
+      })
+    ).toMatchObject({ pubkey: round.pubkey });
+  });
+
+  it('stamps the epoch from the clock, not from a value captured at join', () => {
+    // joinPool holds one options.epoch for the whole session, and a session
+    // outlives many buckets. Forwarding it would republish a stale bucket and
+    // the peer would filter itself out of its own pool after ~60s.
+    const round = generateRoundIdentity();
+    const joinedAt = 1_800_000_005;
+    const muchLater = joinedAt + 600;
+    const evt = buildPoolAnnouncement(round, {
+      network: 'chipnet',
+      tiers: [10_000],
+      numInputs: 1,
+      nowSeconds: muchLater,
+    });
+
+    expect(JSON.parse(evt.content).epoch).toBe(poolEpoch(muchLater));
+    expect(JSON.parse(evt.content).epoch).not.toBe(poolEpoch(joinedAt));
+    expect(
+      parsePoolAnnouncement(evt, {
+        network: 'chipnet',
+        epoch: poolEpoch(joinedAt), // caller's stale scope must not matter
+        nowSeconds: muchLater,
+      })
+    ).toMatchObject({ pubkey: round.pubkey, epoch: poolEpoch(muchLater) });
   });
 
   it('selects the largest compatible fresh peer group, then the highest tier', () => {

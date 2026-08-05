@@ -160,7 +160,12 @@ export function isLivePoolAnnouncement(
 
 export interface BuildPoolAnnouncementOptions {
   network: FusionPoolNetwork;
-  epoch: number;
+  /**
+   * Epoch to stamp. Omit in production — it is derived from the announcement's
+   * own clock so a long-lived session never publishes a stale bucket. Pass one
+   * only to pin a value deliberately (tests).
+   */
+  epoch?: number;
   tiers: number[];
   numInputs: number;
   nowSeconds?: number;
@@ -207,10 +212,16 @@ export function buildPoolAnnouncement(
   // abandoned Start keys stay on the relay forever (Claude: replaceable is per
   // pubkey, and each Start mints a new key → no replacement, only accumulation).
   const expiresAt = options.withdraw ? now - 1 : now + POOL_PEER_TTL_SECONDS;
+  // Stamped from `now`, NOT from a value captured when the pool was joined.
+  // `joinPool` holds one `options.epoch` for the whole session and a session
+  // outlives many 30s buckets, so a frozen stamp would make every honest
+  // re-announce look a bucket stale the moment a verifier started checking it.
+  // Callers may still pin one explicitly (tests, and the withdraw path).
+  const epoch = options.epoch ?? poolEpoch(now);
   const content = JSON.stringify({
     protocol: FUSION_POOL_PROTOCOL,
     network: options.network,
-    epoch: options.epoch, // informational only (rolling pool no longer filters on it)
+    epoch,
     tiers,
     numInputs: options.numInputs,
     expiresAt,
@@ -280,6 +291,16 @@ export function parsePoolAnnouncement(
       : [];
     const expiresAt = Number(content.expiresAt);
     const numInputs = Number(content.numInputs);
+    const declaredEpoch = Number(content.epoch);
+    // The announcer SIGNED this bucket, so a relay replaying an abandoned Start
+    // cannot advance it — unlike `created_at` freshness, which cannot tell a
+    // stored ghost from an honest peer whose re-announce Tor delivered late.
+    // Both look like "an old timestamp", which is why tightening that window
+    // caused undercount and loosening it caused ghosts; it is not a decidable
+    // test. This one is: a live peer republishes every few seconds and always
+    // carries the current bucket, so one bucket of grace absorbs any delivery
+    // lag while bounding a ghost's life to at most 2 * POOL_EPOCH_SECONDS.
+    const currentEpoch = poolEpoch(now);
     if (
       content.protocol !== FUSION_POOL_PROTOCOL ||
       content.network !== scope.network ||
@@ -289,14 +310,19 @@ export function parsePoolAnnouncement(
       numInputs < 1 ||
       numInputs > MAX_INPUTS ||
       !Number.isSafeInteger(expiresAt) ||
-      expiresAt < now
+      expiresAt < now ||
+      !Number.isSafeInteger(declaredEpoch) ||
+      declaredEpoch > currentEpoch ||
+      declaredEpoch < currentEpoch - 1
     ) {
       return null;
     }
     return {
       pubkey: evt.pubkey,
       network: scope.network,
-      epoch: scope.epoch,
+      // The announcer's own bucket, not the verifier's. Reporting the local
+      // scope here hid exactly the staleness this check now enforces.
+      epoch: declaredEpoch,
       tiers,
       numInputs,
       at: evt.created_at,
@@ -556,9 +582,12 @@ export function joinPool(
       teardownTimers();
       return;
     }
+    // No `epoch` — it is stamped from the clock at build time. `options.epoch`
+    // is captured once when the pool is joined, and a session outlives many
+    // 30s buckets, so forwarding it would republish a bucket that is stale by
+    // the time a verifier reads it.
     const evt = buildPoolAnnouncement(options.round, {
       network: options.network,
-      epoch: options.epoch,
       tiers: options.tiers,
       numInputs: options.numInputs,
     });
@@ -605,7 +634,6 @@ export function joinPool(
       retireRoundKey(options.round.pubkey);
       const evt = buildPoolAnnouncement(options.round, {
         network: options.network,
-        epoch: options.epoch,
         tiers: options.tiers,
         numInputs: options.numInputs,
         withdraw: true,
