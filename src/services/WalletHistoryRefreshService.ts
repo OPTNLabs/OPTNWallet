@@ -173,26 +173,63 @@ export async function refreshWalletTransactionHistory(
     // the entire multi-address history RPC returns (that made the bar freeze
     // then jump, and made manual Sync feel like the "old slow path").
     onProgress?.(5);
+
+    // Status-hash delta (EC/Selene): skip addresses whose local history status
+    // already matches the Electrum address state. Manual Sync clears statuses
+    // first so every address is re-fetched.
+    let toFetch = pending;
+    try {
+      const Electrum = (await import('./ElectrumService')).default;
+      const ledger = await import('../platform/desktop/WalletLedgerService');
+      const dirty: string[] = [];
+      const batchSize = 20;
+      for (let i = 0; i < pending.length; i += batchSize) {
+        const chunk = pending.slice(i, i + batchSize);
+        const states = await Promise.all(
+          chunk.map(async (address) => {
+            const remote = await Electrum.getAddressState(address);
+            const fresh = await ledger.addressHistoryIsFresh(
+              walletId,
+              address,
+              remote
+            );
+            return { address, fresh };
+          })
+        );
+        for (const s of states) {
+          if (!s.fresh) dirty.push(s.address);
+        }
+      }
+      toFetch = dirty;
+      onProgress?.(
+        5 + Math.round(20 * (1 - toFetch.length / Math.max(pending.length, 1)))
+      );
+    } catch {
+      toFetch = pending;
+    }
+
     const transactionManager = TransactionManager();
     const mapHistoryProgress = (done: number, total: number) => {
       if (total <= 0) return;
-      // Reserve 5–90% for Electrum history batches; DB/redux publish is 90–100.
-      onProgress?.(5 + Math.round(85 * (done / total)));
+      // Reserve 25–90% for Electrum history batches; DB/redux publish is 90–100.
+      onProgress?.(25 + Math.round(65 * (done / total)));
     };
     const historyByAddress =
-      sessionGeneration === undefined
-        ? await transactionManager.fetchAndStoreTransactionHistories(
-            walletId,
-            pending,
-            undefined,
-            mapHistoryProgress
-          )
-        : await transactionManager.fetchAndStoreTransactionHistories(
-            walletId,
-            pending,
-            sessionGeneration,
-            mapHistoryProgress
-          );
+      toFetch.length === 0
+        ? ({} as Record<string, TransactionHistoryItem[] | undefined>)
+        : sessionGeneration === undefined
+          ? await transactionManager.fetchAndStoreTransactionHistories(
+              walletId,
+              toFetch,
+              undefined,
+              mapHistoryProgress
+            )
+          : await transactionManager.fetchAndStoreTransactionHistories(
+              walletId,
+              toFetch,
+              sessionGeneration,
+              mapHistoryProgress
+            );
 
     const processed: string[] = [];
     for (const address of pending) {

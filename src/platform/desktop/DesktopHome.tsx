@@ -191,7 +191,16 @@ const Home: React.FC = () => {
       // no onProgress and often still runs discovery — so the UI froze at 8%
       // for a minute while we waited on someone else's task. Manual Sync is
       // user-initiated: run our own fast path only.
+      //
+      // Manual Sync = force recheck (clear status hashes) but does NOT wipe
+      // the ledger. Rebuild Wallet in Settings is the nuclear wipe.
       reportSyncProgress(5);
+      try {
+        const { clearAddressStatuses } = await import('./WalletLedgerService');
+        await clearAddressStatuses(currentWalletId);
+      } catch {
+        /* optional on non-desktop */
+      }
       await ElectrumService.ensureFreshConnection();
       if (!isActiveWalletSession(walletSession)) return;
       reportSyncProgress(10);

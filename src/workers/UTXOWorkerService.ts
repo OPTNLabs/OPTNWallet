@@ -379,6 +379,15 @@ export async function bootstrapAllUTXOs(expectedEpoch?: number) {
     report(5);
     const allUTXOs: Record<string, UTXO[]> = {};
 
+    try {
+      const { ensureDesktopLedgerTables } = await import(
+        '../platform/desktop/desktopSchema'
+      );
+      await ensureDesktopLedgerTables();
+    } catch {
+      /* optional on non-desktop */
+    }
+
     // Prefer a live Electrum socket early so discovery/UTXO batches do not
     // spend the first minute walking dead hosts with a frozen 5% bar.
     try {

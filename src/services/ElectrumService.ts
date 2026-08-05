@@ -148,6 +148,26 @@ const ElectrumService = {
     await ElectrumServer().ensureFreshConnection();
   },
 
+  /**
+   * Electrum address state (status hash). Same meaning as EC/Selene:
+   * server fingerprint of address history for delta sync.
+   */
+  async getAddressState(address: string): Promise<string | null> {
+    const server = ElectrumServer();
+    try {
+      const scripthash = addressToElectrumScripthash(address);
+      const res = await server.request(
+        'blockchain.scripthash.subscribe',
+        scripthash
+      );
+      if (typeof res === 'string') return res;
+      return null;
+    } catch (error) {
+      logError('ElectrumService.getAddressState', error, { address });
+      return null;
+    }
+  },
+
   /** Fetch UTXOs for an address */
   async getUTXOs(address: string): Promise<UTXO[]> {
     const server = ElectrumServer();
