@@ -75,6 +75,34 @@ describe('P2P Fusion input refresh', () => {
     ).resolves.toEqual([fresh]);
     expect(getUTXOsManyMock).toHaveBeenCalledWith([fresh.address]);
   }, 15_000);
+
+  it('keeps exclusive-reconciled coins when a second listunspent is empty (0-conf lag)', async () => {
+    const coin: UTXO = {
+      address: 'bchtest:qfresh',
+      height: 0,
+      tx_hash: 'c'.repeat(64),
+      tx_pos: 0,
+      value: 40_000,
+    };
+    getUTXOsManyMock.mockResolvedValue({
+      [coin.address]: [], // Electrum not listing 0-conf yet
+    });
+
+    const fusionModule = (await import('../FusionP2pService')) as unknown as {
+      refreshAndVerifyP2pInputs?: (
+        walletId: number,
+        fallback: UTXO[],
+        signal?: AbortSignal,
+        options?: { preferProvided?: boolean }
+      ) => Promise<UTXO[]>;
+    };
+
+    await expect(
+      fusionModule.refreshAndVerifyP2pInputs!(8, [coin], undefined, {
+        preferProvided: true,
+      })
+    ).resolves.toEqual([coin]);
+  }, 15_000);
 });
 
 describe('P2P Fusion broadcast reconciliation', () => {

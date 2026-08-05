@@ -224,6 +224,17 @@ function negotiateAsCoordinator(
   const settleMs =
     params.coordinatorSettleMs ??
     Math.min(5_000, Math.max(1_000, Math.floor(timeoutMs * 0.6)));
+  // User: "only 1 of 4 wallets fused". Old code started after settleMs with
+  // ANY ≥2 ACKs, so a 4-wallet gather often became a 2-wallet round and the
+  // other two never received round_start. Prefer the full proposed set first.
+  const preferFullMs = Math.min(
+    Math.max(settleMs + 8_000, 12_000),
+    Math.floor(timeoutMs * 0.45)
+  );
+  const allowOneMissingMs = Math.min(
+    Math.max(preferFullMs + 8_000, 22_000),
+    Math.floor(timeoutMs * 0.75)
+  );
   const makeProposal = (): RoundMessage => ({
     ...messageBinding(),
     type: 'round_proposal',
@@ -238,9 +249,13 @@ function negotiateAsCoordinator(
     let settled = false;
     let starting = false;
     let settlePassed = false;
+    /** 0 = full set only; 1 = allow one missing; 2 = any pair */
+    let subsetPolicy: 0 | 1 | 2 = 0;
     let yielded: Extract<RoundMessage, { type: 'round_proposal' }> | null = null;
     let yieldedCoordinator: string | null = null;
     let ownStartTimer: ReturnType<typeof setTimeout> | undefined;
+    let preferFullTimer: ReturnType<typeof setTimeout> | undefined;
+    let allowOneMissingTimer: ReturnType<typeof setTimeout> | undefined;
     const acknowledgments = new Set<string>([params.myPubkey]);
     let unsubscribe: () => void = () => undefined;
     // Keep re-offering the proposal until the round starts. A peer still waiting
@@ -259,6 +274,8 @@ function negotiateAsCoordinator(
     const cleanup = () => {
       if (timer) clearTimeout(timer);
       if (ownStartTimer) clearTimeout(ownStartTimer);
+      if (preferFullTimer) clearTimeout(preferFullTimer);
+      if (allowOneMissingTimer) clearTimeout(allowOneMissingTimer);
       if (reproposeTimer) clearInterval(reproposeTimer);
       params.signal?.removeEventListener('abort', onAbort);
       unsubscribe();
@@ -292,14 +309,23 @@ function negotiateAsCoordinator(
       void finishError(abortError('cancelled'));
     };
 
+    const minAcksRequired = (): number => {
+      const proposed = participants.length;
+      if (proposed <= 2) return 2;
+      if (subsetPolicy === 0) return proposed; // wait for everyone we proposed
+      if (subsetPolicy === 1) return Math.max(2, proposed - 1); // one slow wallet OK
+      return 2; // last resort pair
+    };
+
     const startOwnRound = () => {
       if (settled || yielded || starting) return;
-      // Final participant set = self + peers that actually ACKed (proven alive).
-      // Stale/dead round keys (from earlier clicks/retries) never ACK and are
-      // dropped here, so the round never waits on peers that aren't coming.
+      // Final set = peers that ACKed (proven alive). Never start a tiny subset
+      // while we still expect the full gather — that is how 1–2 of 4 fuse and
+      // the rest never see round_start.
       const finalParticipants = [...acknowledgments].sort();
-      if (finalParticipants.length < 2) {
-        return; // not enough ACKs yet — keep waiting (or yield to a lower coordinator)
+      const need = minAcksRequired();
+      if (finalParticipants.length < need) {
+        return;
       }
       starting = true;
       const finalOthers = finalParticipants.filter((peer) => peer !== params.myPubkey);
@@ -398,6 +424,10 @@ function negotiateAsCoordinator(
     const timer = setTimeout(() => {
       const acked = acknowledgments.size;
       const proposed = participants.length;
+      // Last chance: any ≥2 pair before dying.
+      subsetPolicy = 2;
+      startOwnRound();
+      if (settled || starting) return;
       void finishError(
         new Error(
           acked < 2
@@ -406,13 +436,19 @@ function negotiateAsCoordinator(
         )
       );
     }, timeoutMs);
-    // After the settle window, start with whoever ACKed (don't require ALL peers).
-    // If only self ACKed, startOwnRound no-ops until more ACKs or full timeout —
-    // that is the late-joiner case (others already in another round).
+    // After settle: allow start only when the ACK bar is met (full set at first).
     ownStartTimer = setTimeout(() => {
       settlePassed = true;
       startOwnRound();
     }, settleMs);
+    preferFullTimer = setTimeout(() => {
+      subsetPolicy = 1;
+      if (settlePassed) startOwnRound();
+    }, preferFullMs);
+    allowOneMissingTimer = setTimeout(() => {
+      subsetPolicy = 2;
+      if (settlePassed) startOwnRound();
+    }, allowOneMissingMs);
 
     void Promise.all(others.map((peer) => transport.send(peer, makeProposal()))).catch(
       (error: unknown) =>

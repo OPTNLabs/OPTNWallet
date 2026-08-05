@@ -1035,55 +1035,58 @@ function runParticipant(
       }
       // Phase 3: outputs.
       //
-      // When the onion layer is on it is a privacy guarantee, not a nicety, so
-      // a failure here fails the round rather than quietly reverting to
-      // plaintext. The old code caught everything and fell back silently: an
-      // observer would see the privacy layer vanish mid-round while the user
-      // was told nothing. Loud is the only safe direction here.
+      // Onion needs ≥2 peelers (3+ wallets). With only 2 peers, mixOrder has
+      // length 1: the lone peeler would gift-wrap onions to *themselves* over
+      // Nostr — relays often never echo self-addressed kind-1059, so the hop
+      // waits forever → "outputs never arrived (outputSlots=0/2…)". One peeler
+      // also provides no mix privacy, so direct throwaway outputs are correct.
       //
-      // Note this uses the outer `mixOrder`, which excludes the coordinator —
-      // it assembles, it does not peel. A local shadow used to rebuild the list
-      // from `participants` unfiltered, so the wrapper added a layer addressed
-      // to the coordinator that nobody in the peel chain could remove.
-      if (params.onionEnabled !== false) {
+      // Note mixOrder excludes the coordinator — it assembles, it does not peel.
+      const onionUseful =
+        params.onionEnabled !== false && mixOrder.length >= 2;
+      if (onionUseful) {
         if (!isEccAvailable()) {
           throw new Error(
             'onion mix-net enabled but secp256k1 is unavailable in this environment'
           );
         }
-        if (mixOrder.length === 0) {
-          throw new Error('onion mix-net needs at least one peeler');
-        }
         const myOutputs = params.myContribution.outputs;
-        // Self is a peeler (non-coordinator); don't wait for our own gift-wrap echo.
+        // Self is a peeler; don't wait for our own gift-wrap echo.
         declaredOnionCounts.set(params.myPubkey, myOutputs.length);
-        // Tell every peeler how many blobs we will inject (round-key signed).
         const declare: RoundMessage = {
           ...messageBinding(),
           type: 'onion_declare',
           session,
           outputCount: myOutputs.length,
         };
-        await Promise.all(mixOrder.map((peeler) => transport.send(peeler, declare)));
+        await Promise.all(
+          mixOrder
+            .filter((peeler) => peeler !== params.myPubkey)
+            .map((peeler) => transport.send(peeler, declare))
+        );
+        const firstPeeler = mixOrder[0];
         // One onion per output (80-byte pad cannot batch scripts).
         for (const output of myOutputs) {
           const payload = `${output.script}|${output.value}`;
           const onion = await onionWrap(payload, mixOrder);
           const onionB64 = btoa(String.fromCharCode(...onion));
-          await transport.send(mixOrder[0], {
+          const onionMsg = {
             ...messageBinding(),
-            type: 'onion_output',
+            type: 'onion_output' as const,
             session,
             onion: onionB64,
             mixOrder,
-          });
+          };
+          if (firstPeeler === params.myPubkey) {
+            // Never rely on Nostr delivering a gift-wrap to ourselves.
+            handleOnionMessage(params.myPubkey, onionMsg);
+          } else {
+            await transport.send(firstPeeler, onionMsg);
+          }
           await jitterDelay(jMin, jMax);
         }
       } else {
-        // Direct mode: one message with ALL outputs. Sending one message per
-        // output broke the coordinator when it treated each message as "one
-        // participant done" — with 2–4 outputs/peer it assembled after the
-        // first N messages and dropped the rest → fee 100M+ sats ("too high").
+        // Direct (or 2-party): one message with ALL outputs under throwaway key.
         await transport.send(coordinator, {
           ...messageBinding(),
           type: 'outputs',
@@ -1162,9 +1165,10 @@ function runCoordinator(
     const credentialedInputs = new Set<string>(
       params.myContribution.inputs.map(inputKey)
     );
-    // Default ON: omitting the flag must not silently fall back to plaintext
-    // outputs. Only an explicit `onionEnabled: false` (tests) turns it off.
-    const useOnionForOutputs = params.onionEnabled !== false;
+    // Onion only when there are ≥2 peelers (3+ participants). Same rule as the
+    // participant path — 2-party rounds use direct throwaway outputs.
+    const useOnionForOutputs =
+      params.onionEnabled !== false && mixOrder.length >= 2;
     // Direct mode (v1.7.0): pre-load coordinator outputs so the pool is never
     // empty while peers register. Onion mode starts empty and fills on reveal.
     if (
@@ -1386,13 +1390,17 @@ function runCoordinator(
           readyPeers.size === params.participants.length &&
           !outputsReady()
         ) {
+          const peelers = mixOrder.length;
           void fail(
             new Error(
               `All ${params.participants.length} peers marked ready but outputs ` +
                 `never arrived (outputSlots=${outputSlotsFilled()}/` +
                 `${params.participants.length}, anonBatches=` +
-                `${anonymousOutputBatches.length}, pool=${outputPool().length}). ` +
-                `Tor may have dropped anonymous output wraps, or peel stalled.`
+                `${anonymousOutputBatches.length}, pool=${outputPool().length}, ` +
+                `onion=${useOnionForOutputs ? 'on' : 'off'}, peelers=${peelers}). ` +
+                (useOnionForOutputs
+                  ? 'Onion peel stalled (missing declare or hop blob).'
+                  : 'Direct output gift-wraps never reached the coordinator (Tor/relay).')
             ),
             true
           );
@@ -1639,9 +1647,6 @@ function runCoordinator(
       );
 
       if (!useOnionForOutputs) return;
-      if (mixOrder.length === 0) {
-        throw new Error('onion mix-net needs at least one peeler');
-      }
       const jMin = params.jitterMs?.[0] ?? 200;
       const jMax = params.jitterMs?.[1] ?? 2_000;
       const myOutputs = params.myContribution.outputs;
@@ -1651,6 +1656,7 @@ function runCoordinator(
         session,
         outputCount: myOutputs.length,
       };
+      // Coordinator is never a peeler — always remote.
       await Promise.all(mixOrder.map((peeler) => transport.send(peeler, declare)));
       const firstPeeler = mixOrder[0];
       for (const output of myOutputs) {
