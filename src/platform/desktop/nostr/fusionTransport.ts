@@ -68,31 +68,37 @@ export function createNostrRoundTransport(
     },
 
     onMessage: (handler) => {
-      const sub = pool.subscribeMany(
-        relays,
-        { kinds: [GIFT_WRAP_KIND], '#p': [round.pubkey] },
-        {
-          onevent(evt: Event) {
-            try {
-              const rumor = unwrapEvent(evt, round.secretKey);
-              const msg = parseRoundMessage(rumor.content);
-              if (!msg) {
-                const error = new Error(
-                  'Invalid or oversized Fusion round message.'
-                );
-                protocolErrorHandlers.forEach((notify) =>
-                  notify(rumor.pubkey, error)
-                );
-                return;
-              }
-              handler(rumor.pubkey, msg);
-            } catch {
-              /* not addressed to us, or undecryptable — ignore */
-            }
-          },
+      // onion_output / outputs publish via outputPool (fresh Tor isolation).
+      // Subscribe both pools so a circuit that only lands on the output sockets
+      // still delivers hop blobs to peelers (missed hops → outputSlots=0).
+      const filter = { kinds: [GIFT_WRAP_KIND], '#p': [round.pubkey] };
+      const onEvent = (evt: Event) => {
+        try {
+          const rumor = unwrapEvent(evt, round.secretKey);
+          const msg = parseRoundMessage(rumor.content);
+          if (!msg) {
+            const error = new Error(
+              'Invalid or oversized Fusion round message.'
+            );
+            protocolErrorHandlers.forEach((notify) =>
+              notify(rumor.pubkey, error)
+            );
+            return;
+          }
+          handler(rumor.pubkey, msg);
+        } catch {
+          /* not addressed to us, or undecryptable — ignore */
         }
-      );
-      return () => sub.close();
+      };
+      const sub = pool.subscribeMany(relays, filter, { onevent: onEvent });
+      const outputSub =
+        outputPool === pool
+          ? null
+          : outputPool.subscribeMany(relays, filter, { onevent: onEvent });
+      return () => {
+        sub.close();
+        outputSub?.close();
+      };
     },
 
     onProtocolError: (handler) => {

@@ -577,8 +577,17 @@ export interface RoundParams {
   onionEnabled?: boolean;
 }
 
-/** Bound silent waits so phase-2 does not look hung for the full 120s. */
+/** Bound silent waits so phase-2 does not look hung for the full round timeout. */
 const CREDENTIAL_WAIT_MS = 45_000;
+/**
+ * After every peer says ready, how long to wait for the output pool to fill.
+ * Onion mode needs multi-hop Tor gift-wraps (declare → first peel → hop → reveal);
+ * 25s was firing while hops were still in flight (user: outputSlots=0/4, peelers=3).
+ */
+const MISSING_OUTPUTS_DIRECT_MS = 30_000;
+const MISSING_OUTPUTS_ONION_MS = 120_000;
+/** Re-send onion_declare so Tor-dropped declares cannot freeze the peel forever. */
+const ONION_DECLARE_RESEND_MS = 3_000;
 
 function waitWithTimeout<T>(
   promise: Promise<T>,
@@ -615,7 +624,8 @@ export interface RoundResult {
   txHex: string;
 }
 
-const DEFAULT_TIMEOUT = 120_000;
+/** Credentials + multi-hop onion under Tor can exceed 2 minutes easily. */
+const DEFAULT_TIMEOUT = 240_000;
 
 function sessionId(participants: string[], tier: number): string {
   return `${electCoordinator(participants)}:${tier}`;
@@ -685,12 +695,14 @@ function runParticipant(
       null;
     let unsubscribe: () => void = () => undefined;
     let unsubscribeProtocolError: () => void = () => undefined;
+    let declareResendTimer: ReturnType<typeof setInterval> | null = null;
     const seenNonces = new Set<string>();
     // Onion mix-net: one blob per *output*, not per peer. Each peer announces
     // how many it will inject (`onion_declare`); hop waits for sum(declares).
     const collectedOnions: string[] = [];
     const declaredOnionCounts = new Map<string, number>();
     let onionBatchProcessing = false;
+    let onionBatchDone = false;
 
     const expectedOnionCount = (): number | null => {
       if (declaredOnionCounts.size < params.participants.length) return null;
@@ -737,6 +749,10 @@ function runParticipant(
 
     const cleanup = () => {
       if (timer) clearTimeout(timer);
+      if (declareResendTimer) {
+        clearInterval(declareResendTimer);
+        declareResendTimer = null;
+      }
       params.signal?.removeEventListener('abort', onCancel);
       unsubscribe();
       unsubscribeProtocolError();
@@ -770,7 +786,7 @@ function runParticipant(
     // Peel only when every peer has declared and the matching onion count has
     // arrived — never `participants.length` alone (outputs are 2–4 per peer).
     const processOnionBatchIfReady = async () => {
-      if (settled || onionBatchProcessing) return;
+      if (settled || onionBatchProcessing || onionBatchDone) return;
       const expected = expectedOnionCount();
       if (expected === null || collectedOnions.length < expected) return;
       onionBatchProcessing = true;
@@ -833,11 +849,20 @@ function runParticipant(
             });
           }
         }
+        onionBatchDone = true;
+        if (declareResendTimer) {
+          clearInterval(declareResendTimer);
+          declareResendTimer = null;
+        }
       } finally {
         onionBatchProcessing = false;
         // Always clear after a process attempt so a second batch cannot stack
         // on a stale last-peeler buffer (Claude: reset was only on forward).
-        if (collectedOnions.length > 0 && expectedOnionCount() !== null) {
+        if (
+          !onionBatchDone &&
+          collectedOnions.length > 0 &&
+          expectedOnionCount() !== null
+        ) {
           void processOnionBatchIfReady().catch((error: unknown) =>
             void fail(asError(error), true)
           );
@@ -1053,17 +1078,26 @@ function runParticipant(
         const myOutputs = params.myContribution.outputs;
         // Self is a peeler; don't wait for our own gift-wrap echo.
         declaredOnionCounts.set(params.myPubkey, myOutputs.length);
-        const declare: RoundMessage = {
-          ...messageBinding(),
-          type: 'onion_declare',
-          session,
-          outputCount: myOutputs.length,
+        const sendDeclare = async () => {
+          // Fresh binding each time so nonce dedup does not drop re-sends.
+          const declare: RoundMessage = {
+            ...messageBinding(),
+            type: 'onion_declare',
+            session,
+            outputCount: myOutputs.length,
+          };
+          await Promise.all(
+            mixOrder
+              .filter((peeler) => peeler !== params.myPubkey)
+              .map((peeler) => transport.send(peeler, declare))
+          );
         };
-        await Promise.all(
-          mixOrder
-            .filter((peeler) => peeler !== params.myPubkey)
-            .map((peeler) => transport.send(peeler, declare))
-        );
+        await sendDeclare();
+        // Tor often drops one gift-wrap; peel waits on sum(declares) forever.
+        declareResendTimer = setInterval(() => {
+          if (settled || onionBatchDone) return;
+          void sendDeclare().catch(() => undefined);
+        }, ONION_DECLARE_RESEND_MS);
         const firstPeeler = mixOrder[0];
         // One onion per output (80-byte pad cannot batch scripts).
         for (const output of myOutputs) {
@@ -1208,7 +1242,12 @@ function runCoordinator(
     const signaturesByOutpoint = new Map<string, InputSig>();
     const signedPeers = new Set<string>();
     const seenNonces = new Set<string>();
-    const readyPeers = new Set<string>([params.myPubkey]); // coordinator is always ready
+    // Onion mode: do NOT mark the coordinator ready until its own onions are
+    // injected. Self-ready at t=0 + peer ready after inject started a 25s
+    // missing-outputs clock while the coordinator was still publishing blobs.
+    const readyPeers = new Set<string>(
+      useOnionForOutputs ? [] : [params.myPubkey]
+    );
     const credentialedPeers = new Set<string>([params.myPubkey]);
     let assembled: { inputs: FusionInputRef[]; outputs: FusionOutputRef[] } | null =
       null;
@@ -1218,12 +1257,17 @@ function runCoordinator(
     let settled = false;
     let unsubscribe: () => void = () => undefined;
     let unsubscribeProtocolError: () => void = () => undefined;
+    let declareResendTimer: ReturnType<typeof setInterval> | null = null;
     /** Fail if ready peers never deliver outputs (log evidence: ready 3/3 outputs 0). */
     let missingOutputsTimer: ReturnType<typeof setTimeout> | null = null;
 
     const cleanup = () => {
       if (timer) clearTimeout(timer);
       if (missingOutputsTimer) clearTimeout(missingOutputsTimer);
+      if (declareResendTimer) {
+        clearInterval(declareResendTimer);
+        declareResendTimer = null;
+      }
       params.signal?.removeEventListener('abort', onCancel);
       unsubscribe();
       unsubscribeProtocolError();
@@ -1383,7 +1427,11 @@ function runCoordinator(
     const armMissingOutputsWatch = () => {
       if (missingOutputsTimer || settled || assembled) return;
       // User console: ready 3/3 peersWithOutputs=1/3 pool=4 — outputs gift-wrap
-      // used throwaway keys and were dropped. Fail fast with slot counts.
+      // used throwaway keys and were dropped. Fail with slot counts — but give
+      // onion multi-hop Tor enough time (25s was too short for 3 peelers).
+      const waitMs = useOnionForOutputs
+        ? MISSING_OUTPUTS_ONION_MS
+        : MISSING_OUTPUTS_DIRECT_MS;
       missingOutputsTimer = setTimeout(() => {
         if (settled || assembled) return;
         if (
@@ -1405,7 +1453,7 @@ function runCoordinator(
             true
           );
         }
-      }, 25_000);
+      }, waitMs);
     };
 
     const tryAssemble = async () => {
@@ -1646,18 +1694,31 @@ function runCoordinator(
         `Coordinator: waiting for ${others.length} peer(s) to register inputs…`
       );
 
-      if (!useOnionForOutputs) return;
+      if (!useOnionForOutputs) {
+        readyPeers.add(params.myPubkey);
+        void tryAssemble().catch((error: unknown) =>
+          void fail(asError(error), true)
+        );
+        return;
+      }
       const jMin = params.jitterMs?.[0] ?? 200;
       const jMax = params.jitterMs?.[1] ?? 2_000;
       const myOutputs = params.myContribution.outputs;
-      const declare: RoundMessage = {
-        ...messageBinding(),
-        type: 'onion_declare',
-        session,
-        outputCount: myOutputs.length,
+      const sendDeclare = async () => {
+        const declare: RoundMessage = {
+          ...messageBinding(),
+          type: 'onion_declare',
+          session,
+          outputCount: myOutputs.length,
+        };
+        // Coordinator is never a peeler — always remote.
+        await Promise.all(mixOrder.map((peeler) => transport.send(peeler, declare)));
       };
-      // Coordinator is never a peeler — always remote.
-      await Promise.all(mixOrder.map((peeler) => transport.send(peeler, declare)));
+      await sendDeclare();
+      declareResendTimer = setInterval(() => {
+        if (settled || assembled) return;
+        void sendDeclare().catch(() => undefined);
+      }, ONION_DECLARE_RESEND_MS);
       const firstPeeler = mixOrder[0];
       for (const output of myOutputs) {
         const payload = `${output.script}|${output.value}`;
@@ -1672,6 +1733,14 @@ function runCoordinator(
         });
         await jitterDelay(jMin, jMax);
       }
+      // Now count as ready so "all ready" cannot start before our blobs exist.
+      readyPeers.add(params.myPubkey);
+      if (readyPeers.size === params.participants.length) {
+        armMissingOutputsWatch();
+      }
+      void tryAssemble().catch((error: unknown) =>
+        void fail(asError(error), true)
+      );
     })().catch((error: unknown) => void fail(asError(error), true));
   });
 }
