@@ -35,14 +35,13 @@ export type AutoFusionDecision =
   | { run: true; mode: FusionMode };
 
 /**
- * Gap between automatic attempts, enforced durably by
- * `tryClaimAutoCooldown`.
- *
- * Long on purpose. Gathering peers alone can take 75s and every attempt costs a
- * fee whether or not it completes, so a tight loop would drain a wallet that
- * simply cannot find peers.
+ * After a successful paid fuse — long gap so we do not fee-spam.
+ * Failed attempts (no peers, Tor blip) use AUTO_FUSION_RETRY_MS instead so
+ * autofuse is not silenced for five minutes after every empty gather.
  */
 export const AUTO_FUSION_COOLDOWN_MS = 5 * 60_000;
+/** Backoff after a failed auto attempt that did not complete a paid round. */
+export const AUTO_FUSION_RETRY_MS = 90_000;
 
 export function decideAutoFusion(input: AutoFusionInputs): AutoFusionDecision {
   if (!input.cashFusionEnabled) return { run: false, reason: 'CashFusion is off' };

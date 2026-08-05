@@ -25,10 +25,16 @@ import {
   isAutoCooldownReady,
   LEASE_HEARTBEAT_MS,
   releaseRoundLease,
+  stampAutoFailure,
+  stampAutoSuccess,
   touchRoundLease,
   tryClaimAutoCooldown,
 } from './fusionWalletLease';
-import { AUTO_FUSION_COOLDOWN_MS, type FusionMode } from './fusionAutoEngine';
+import {
+  AUTO_FUSION_COOLDOWN_MS,
+  AUTO_FUSION_RETRY_MS,
+  type FusionMode,
+} from './fusionAutoEngine';
 
 /** Structured, so callers never parse a human string to learn what happened. */
 export type FusionRunOutcome =
@@ -232,12 +238,19 @@ export async function startFusionRound(
     return { status: 'cooldown' };
   }
 
-  // Exclusivity first, across every window, covering both transports and both
-  // triggers. Null means another window holds a live (heartbeating) lease —
-  // or we could not obtain exclusivity. Stale ghost leases from crashed/HMR
-  // rounds are reclaimed automatically after LEASE_STALE_MS (~90s without a
-  // heartbeat). Absolute TTL is 4 minutes. Do NOT force-clear a fresh lease
-  // here — that would steal a live round from another window of the same wallet.
+  // Manual start while this window is idle: drop a ghost durable lease left by
+  // HMR/crash so grey "already running" cannot block Fuse. A live round in
+  // another window of the same wallet still heartbeats and will re-acquire.
+  if (
+    trigger === 'manual' &&
+    !isFusionRunning(walletId) &&
+    !getFusionActivity(walletId)
+  ) {
+    await forceClearRoundLease(walletId).catch(() => undefined);
+  }
+
+  // Exclusivity first, across every window. Stale ghost leases (no heartbeat)
+  // are reclaimed automatically after LEASE_STALE_MS.
   const lease = await acquireRoundLease(walletId);
   if (lease === null) return { status: 'busy' };
   heldLeases.set(walletId, lease);
@@ -271,10 +284,7 @@ export async function startFusionRound(
     if (coins === null) return { status: 'waiting-for-wallet' };
     if (coins.length === 0) return { status: 'no-eligible-coins' };
 
-    // Claim only when live eligible coins exist. The wallet-wide round lease is
-    // already held across reconciliation, so no second window can pass this
-    // point concurrently. Empty/refreshing wallets must not burn five minutes
-    // of cooldown before a newly received coin becomes spendable.
+    // Claim only when live eligible coins exist.
     if (trigger === 'auto') {
       const claimed = await tryClaimAutoCooldown(
         walletId,
@@ -288,11 +298,12 @@ export async function startFusionRound(
         mode === 'p2p'
           ? await options.runners.runP2p(coins, options.signal)
           : await options.runners.runServer(coins, options.signal);
-      // A runner only resolves after its irreversible broadcast/finalization
-      // path is complete. An AbortSignal can race with that resolution, but it
-      // cannot undo a transaction that may already be on the network. Trust the
-      // structured runner result here so the wallet always records a successful
-      // Fusion instead of misreporting it as cancelled.
+      // Paid success → long spacing. Failures use a short retry (below).
+      if (trigger === 'auto') {
+        await stampAutoSuccess(walletId, AUTO_FUSION_COOLDOWN_MS).catch(
+          () => undefined
+        );
+      }
       return {
         status: 'fused',
         mode,
@@ -300,11 +311,19 @@ export async function startFusionRound(
         ...(result.warning ? { warning: result.warning } : {}),
       };
     } catch (error) {
-      // The signal alone is insufficient here: it can race with a relay or
-      // observation error after signatures have escaped. Only an explicit
-      // transport cancellation is safely reported as cancelled.
       if (options.signal?.aborted && isCancellationError(error)) {
+        if (trigger === 'auto') {
+          await stampAutoFailure(walletId, AUTO_FUSION_RETRY_MS).catch(
+            () => undefined
+          );
+        }
         return { status: 'cancelled' };
+      }
+      if (trigger === 'auto') {
+        // No peers / Tor / etc. — do NOT silence autofuse for 5 minutes.
+        await stampAutoFailure(walletId, AUTO_FUSION_RETRY_MS).catch(
+          () => undefined
+        );
       }
       return {
         status: 'failed',
