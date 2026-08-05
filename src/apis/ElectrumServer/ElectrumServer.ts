@@ -421,10 +421,12 @@ export default function ElectrumServer() {
             resetBackoff();
             markSuccessfulActivity();
 
-            // Ensure notifications are wired and replay subs
+            // Ensure notifications are wired. Replay subs in the background —
+            // awaiting resubscribeAll froze Manual Sync / open at 5% for 30–60s
+            // while every scripthash re-subscribed.
             notificationsWired = false;
             await wireNotificationsOnce(electrum);
-            await resubscribeAll();
+            void resubscribeAll().catch(() => undefined);
 
             markSocketStale(electrum);
 
