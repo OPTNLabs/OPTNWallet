@@ -65,6 +65,14 @@ status = sha256( "txid:height:" for each history item, ordered as server list )
 Never treat history and UTXOs as two independent bosses.  
 Apply network results into the ledger (and/or address UTXO replace under the same wallet write), then `rebuildUtxosFromLedger`.
 
+### UI balance for a fetch pass (verified 2026-08-05)
+
+1. Build the pass snapshot from listunspent (plus kept DB rows on partial miss).  
+2. `replaceWalletAddressUTXOs` + `applyAddressUtxoSnapshot` for **every address in that pass** (awaited — not fire-and-forget).  
+3. `rebuildUtxosFromLedger` updates the durable SQL UTXO cache only.  
+4. **Redux for this pass returns the listunspent merge**, not a re-read of the ledger projection. Replacing Redux with a partial projection produced fake balances.  
+5. Open-bootstrap may paint SQL first (Electron Cash style), then overwrite from the network pass.
+
 ## Send-time safety
 
 Before broadcast, verify selected outpoints still exist (listunspent / chain).  
