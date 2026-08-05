@@ -24,9 +24,10 @@ listunspent → format → replaceWalletAddressUTXOs (SQL) → return map → Re
 - Missing Electrum key ≠ empty (keep prior SQL).  
 - Empty listunspent without `force` keeps prior (no wipe on flaky empty).  
 - Soft-fail on connection lost → keep SQL.  
-- Optional status-hash gate: skip network when history status unchanged → return SQL.  
-- Manual Sync: clear address statuses + `force: true`.  
-- Open bootstrap: paint SQL, then `force: true` listunspent once (heal).
+- **No status-hash skip on wallet-wide UTXO fetch** (that re-served poisoned SQL).  
+- Invalidate Electrum short TTL cache before each wallet-wide fetch.  
+- Manual Sync / open: `force` listunspent all known addresses.  
+- Trust authoritative empty listunspent; missing RPC key still keeps prior.
 
 ## COLD path (product roadmap — not balance)
 
