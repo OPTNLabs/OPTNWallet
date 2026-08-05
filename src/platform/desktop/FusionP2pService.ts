@@ -25,7 +25,7 @@ import {
 } from './fusionRoundState';
 import { Network } from '../../state/slices/networkSlice';
 import type { UTXO } from '../../types/types';
-import { reconcileActiveWalletUtxos } from '../../services/WalletUtxoRefreshService';
+import { reconcileActiveWalletUtxosForSpend } from '../../services/WalletUtxoRefreshService';
 import {
   completeFusionBroadcast,
   fusionCompletionWarning,
@@ -125,11 +125,10 @@ const POOL_WAIT_MAX_MS = 75_000; // give up gathering after this
 // every ~8s while running a round; an abandoned attempt (a stale throwaway key from
 // an earlier click/retry) stops re-announcing and ages out — so the group is formed
 // from currently-live wallets, not accumulated dead announcements.
-// Tight enough that an abandoned round's STORED announcement stops counting as a
-// live peer quickly (a ghost peer can otherwise win coordinator election and
-// stall everyone), but comfortably above REANNOUNCE_MS (12s) so a live peer that
-// misses one refresh is not dropped.
-const RECENT_ACTIVE_SECONDS = 28;
+// Must stay under POOL_PEER_TTL_SECONDS and above REANNOUNCE_MS (12s). Tor
+// publish + relay fan-out can lag; 28s was so tight that slow relays aged out
+// live peers mid-gather. 50s pairs with the 60s announcement TTL.
+const RECENT_ACTIVE_SECONDS = 50;
 
 // Every Start click mints a fresh throwaway identity, and the announcement is a
 // STORED event the relay keeps replaying until it ages out. Without this, a retry
@@ -242,18 +241,20 @@ async function onlyUnspent(
       'Could not confirm your coins are unspent (Electrum unreachable) — not risking the round.'
     );
   }
-  // A resolved result is NOT proof every address was checked. getUTXOsMany logs a
-  // failed per-address request and continues, leaving that address OUT of the map
-  // rather than throwing, so a dropped connection yields a partial (or empty)
-  // result that still looks like success. An address holding nothing is present
-  // with an empty array, so a MISSING key means "never verified" — treating it as
-  // "no coins here" would silently drop live coins on a network blip, and in a
-  // partial failure would fuse a smaller set while reporting everything verified.
+  // HOT-path getUTXOsMany omits failed addresses (missing key ≠ empty). Retry
+  // those once per-address before aborting the whole round — a single blip
+  // was killing every P2P attempt on multi-address wallets.
   const unverified = addresses.filter((address) => !(address in live));
-  if (unverified.length > 0) {
-    throw new Error(
-      `Could not confirm ${unverified.length} of ${addresses.length} address(es) are unspent (Electrum error) — not risking the round.`
-    );
+  for (const address of unverified) {
+    if (signal?.aborted) throw new Error('fusion round cancelled');
+    try {
+      invalidateUTXOCache(address);
+      live[address] = await ElectrumService.getUTXOs(address);
+    } catch {
+      throw new Error(
+        `Could not confirm address is unspent (Electrum error) — not risking the round.`
+      );
+    }
   }
   const unspent = new Set(
     Object.values(live)
@@ -269,7 +270,7 @@ export async function refreshAndVerifyP2pInputs(
   signal?: AbortSignal
 ): Promise<UTXO[]> {
   if (signal?.aborted) throw new Error('fusion round cancelled');
-  const refreshed = await reconcileActiveWalletUtxos(walletId, signal);
+  const refreshed = await reconcileActiveWalletUtxosForSpend(walletId, signal);
   if (signal?.aborted) throw new Error('fusion round cancelled');
   const candidates = refreshed
     ? Object.values(refreshed)

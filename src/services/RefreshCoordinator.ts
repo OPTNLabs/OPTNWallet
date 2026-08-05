@@ -88,3 +88,23 @@ export function runWalletUtxoRefresh<T>(
 ): Promise<T> {
   return runWalletTask('utxo-refresh', walletId, task, 500);
 }
+
+/**
+ * User/spend-critical UTXO refresh (fusion, explicit menu refresh).
+ *
+ * Background `utxo-refresh` is shared: joining it then discarding the snapshot
+ * (because "we did not start it") made every Fuse click during a subscription
+ * reconcile return null → "Syncing wallet coins — try again". Wait for any
+ * background pass, then run our own exclusive task so fusion always gets a
+ * real listunspent of its own.
+ */
+export async function runWalletUtxoRefreshExclusive<T>(
+  walletId: number | null | undefined,
+  task: WalletTask<T>
+): Promise<T> {
+  const bgKey = taskKey('utxo-refresh', walletId);
+  const inflight = inFlightByKey.get(bgKey);
+  if (inflight) await inflight.catch(() => undefined);
+  // Separate scope + zero cooldown: never join, never soft-return undefined.
+  return runWalletTask('utxo-refresh-user', walletId, task, 0);
+}

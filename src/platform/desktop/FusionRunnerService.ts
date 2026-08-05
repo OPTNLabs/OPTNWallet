@@ -13,7 +13,7 @@
 // produced signed CoinJoins referencing coins that were already gone.
 
 import {
-  reconcileActiveWalletUtxos,
+  reconcileActiveWalletUtxosForSpend,
   type WalletUtxoSnapshot,
 } from '../../services/WalletUtxoRefreshService';
 import { Network } from '../../state/slices/networkSlice';
@@ -178,8 +178,11 @@ async function freshCoins(
   freshSnapshot?: WalletUtxoSnapshot,
   signal?: AbortSignal
 ): Promise<UTXO[] | null> {
+  // Exclusive listunspent for fusion — shared reconcile soft-fails (null)
+  // whenever a background refresh is in flight, which made Fuse feel broken.
   const snapshot =
-    freshSnapshot ?? (await reconcileActiveWalletUtxos(walletId, signal));
+    freshSnapshot ??
+    (await reconcileActiveWalletUtxosForSpend(walletId, signal));
   if (!snapshot) return null;
 
   const coins = Object.values(snapshot)

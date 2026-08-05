@@ -77,9 +77,9 @@ export function poolTag(network: FusionPoolNetwork): string {
  *  Must be longer than the rendezvous timeout (15 s default in
  *  fusionRendezvous.ts — Tor ack RTT) so peers still discover each other while
  *  negotiating, but short enough that stale announcements from finished rounds
- *  do not linger. 180 s was 9× the round window and caused "needs at least two
- *  fresh peers" failures. */
-export const POOL_PEER_TTL_SECONDS = 30;
+ *  do not linger. 180 s left ghosts; 30 s was too tight over Tor (live peers
+ *  aged out before REANNOUNCE could refresh). 60 s is the working middle. */
+export const POOL_PEER_TTL_SECONDS = 60;
 
 export interface RoundIdentity {
   secretKey: Uint8Array;

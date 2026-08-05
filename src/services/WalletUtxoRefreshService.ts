@@ -4,7 +4,10 @@ import type { UTXO } from '../types/types';
 import { invalidateUTXOCache, primeUTXOCache } from './ElectrumService';
 import KeyService from './KeyService';
 import QuantumrootTrackingService from './QuantumrootTrackingService';
-import { runWalletUtxoRefresh } from './RefreshCoordinator';
+import {
+  runWalletUtxoRefresh,
+  runWalletUtxoRefreshExclusive,
+} from './RefreshCoordinator';
 import UTXOService from './UTXOService';
 
 export type WalletUtxoSnapshot = Readonly<
@@ -192,6 +195,39 @@ export async function reconcileActiveWalletUtxos(
 
   // Publish HOT snapshot from listunspent/SQL. Do not refuse "drops" — that
   // kept fake-high Redux balances after a correct lower network result.
+  store.dispatch(replaceAllUTXOs({ utxosByAddress: snapshot }));
+  emitWalletUtxoRefresh(walletId, snapshot);
+  return snapshot;
+}
+
+/**
+ * Fusion / spend-critical reconcile: always runs its own listunspent.
+ *
+ * The shared `reconcileActiveWalletUtxos` joins background refreshes and then
+ * discards the joined snapshot (soft null). That is correct for subscription
+ * wake-ups that need a *trailing* refresh, but it made P2P/server fusion
+ * permanently report "Syncing wallet coins" whenever Electrum was busy —
+ * which on a live wallet is almost always.
+ */
+export async function reconcileActiveWalletUtxosForSpend(
+  walletId: number,
+  signal?: AbortSignal
+): Promise<Record<string, UTXO[]> | null> {
+  if (signal?.aborted) return null;
+  const session = captureActiveWalletSession(walletId);
+  if (!session) return null;
+
+  const snapshot = await runWalletUtxoRefreshExclusive(walletId, async () =>
+    fetchActiveWalletUtxos(session, signal, {
+      // Fusion only needs spendable known coins — skip BIP44 rediscovery cost.
+      discover: false,
+      force: true,
+    })
+  );
+  if (signal?.aborted || !snapshot || !isActiveWalletSession(session)) {
+    return null;
+  }
+
   store.dispatch(replaceAllUTXOs({ utxosByAddress: snapshot }));
   emitWalletUtxoRefresh(walletId, snapshot);
   return snapshot;
