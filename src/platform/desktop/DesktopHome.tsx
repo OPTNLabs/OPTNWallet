@@ -201,7 +201,17 @@ const Home: React.FC = () => {
       } catch {
         /* optional on non-desktop */
       }
-      await ElectrumService.ensureFreshConnection();
+      reportSyncProgress(8);
+      // Fresh socket is best-effort: do not freeze the bar at 5–8% while
+      // reconnect + resubscribe walks every address. UTXO fetch reconnects itself.
+      try {
+        await Promise.race([
+          ElectrumService.ensureFreshConnection(),
+          new Promise<void>((resolve) => setTimeout(resolve, 6000)),
+        ]);
+      } catch {
+        /* continue — fetch path will connect */
+      }
       if (!isActiveWalletSession(walletSession)) return;
       reportSyncProgress(10);
 

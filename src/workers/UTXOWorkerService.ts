@@ -390,8 +390,12 @@ export async function bootstrapAllUTXOs(expectedEpoch?: number) {
 
     // Prefer a live Electrum socket early so discovery/UTXO batches do not
     // spend the first minute walking dead hosts with a frozen 5% bar.
+    // Cap wait: resubscribe-all used to block here for 30–60s with no progress.
     try {
-      await ElectrumService.ensureFreshConnection();
+      await Promise.race([
+        ElectrumService.ensureFreshConnection(),
+        new Promise<void>((resolve) => setTimeout(resolve, 6000)),
+      ]);
     } catch (e) {
       logError('UTXOWorker.bootstrapAllUTXOs.ensureFreshConnection', e, {
         walletId: currentWalletId,

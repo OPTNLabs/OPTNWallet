@@ -323,22 +323,36 @@ function markSocketStale(client: ECClient) {
   });
 }
 
-async function resubscribeAll() {
+/**
+ * Replay active subscriptions after reconnect.
+ *
+ * IMPORTANT: must not block connect forever. Serial await of every
+ * scripthash.subscribe (often 100+ addresses) froze Manual Sync / open
+ * bootstrap at 5% for tens of seconds. Cap wall time and run the rest
+ * in the background.
+ */
+async function resubscribeAll(maxWaitMs = 2500) {
   if (!electrum) return;
-
-  for (const { method, params } of activeSubs.values()) {
+  const client = electrum;
+  const jobs = Array.from(activeSubs.values()).map(async ({ method, params }) => {
+    if (electrum !== client) return;
     try {
       if (!params || params.length === 0) {
-        await electrum.subscribe(method);
+        await client.subscribe(method);
       } else if (params.length === 1) {
-        await electrum.subscribe(method, params[0]);
+        await client.subscribe(method, params[0]);
       } else {
-        await electrum.request(method, ...params);
+        await client.request(method, ...params);
       }
     } catch {
       // best-effort; keep going
     }
-  }
+  });
+  if (jobs.length === 0) return;
+  await Promise.race([
+    Promise.all(jobs),
+    new Promise<void>((resolve) => setTimeout(resolve, maxWaitMs)),
+  ]);
 }
 
 // ---------- API ----------

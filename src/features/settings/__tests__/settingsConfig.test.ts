@@ -71,4 +71,15 @@ describe('settingsConfig', () => {
     expect(mobileWallet).not.toContain('rebuild-wallet');
     expect(mobileWallet).not.toContain('app-lock');
   });
+
+  it('puts Bitcoin Cash Contracts info under About, not Features', () => {
+    const features = getSettingsGroupRows('features', true, Network.MAINNET).map(
+      (row) => row.key
+    );
+    const about = getSettingsGroupRows('about', true, Network.MAINNET);
+    const aboutRow = about.find((row) => row.key === 'about');
+
+    expect(features).not.toContain('contract-info');
+    expect(aboutRow?.description).toMatch(/Bitcoin Cash Contracts info/i);
+  });
 });
