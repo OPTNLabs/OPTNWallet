@@ -23,6 +23,14 @@ import { Network } from '../../state/slices/networkSlice';
 // sync look stuck for ~1 minute before the first UTXO batch ran.
 const CONNECT_TIMEOUT_MS = 4000;
 const REQUEST_TIMEOUT_MS = 12000;
+/**
+ * requestMany(N) used a flat 12s budget for the whole batch. A 250-call
+ * listunspent batch on chipnet regularly hit:
+ *   `requestMany(250) timed out after 12000ms`
+ * Scale with N, cap so a dead server still fails over.
+ */
+const REQUEST_MANY_PER_CALL_MS = 80;
+const REQUEST_MANY_TIMEOUT_CAP_MS = 90_000;
 /** Cap how many hosts we try in one connect round before failing over later. */
 const MAX_CONNECT_HOSTS_PER_ROUND = 3;
 const BACKOFF_BASE_MS = 3000;
@@ -110,6 +118,15 @@ function withTimeout<T>(
     );
   });
   return Promise.race([p, timeout]).finally(() => clearTimeout(t));
+}
+
+/** Timeout budget for a multi-call Electrum batch (proven too short at flat 12s×250). */
+export function requestManyTimeoutMs(callCount: number): number {
+  const n = Math.max(1, callCount);
+  return Math.min(
+    REQUEST_MANY_TIMEOUT_CAP_MS,
+    REQUEST_TIMEOUT_MS + (n - 1) * REQUEST_MANY_PER_CALL_MS
+  );
 }
 
 function bumpBackoff() {
@@ -525,12 +542,13 @@ export default function ElectrumServer() {
   ): Promise<Array<RequestResponse | Error>> {
     if (calls.length === 0) return [];
 
+    const budgetMs = requestManyTimeoutMs(calls.length);
     await electrumConnect();
     await ensureFreshConnection();
     try {
       const results = await withTimeout(
         sendBatch(electrum!, calls),
-        REQUEST_TIMEOUT_MS,
+        budgetMs,
         `requestMany(${calls.length})`
       );
       throwIfBatchTransportFailed(results);
@@ -550,7 +568,7 @@ export default function ElectrumServer() {
       }
       const results = await withTimeout(
         sendBatch(electrum!, calls),
-        REQUEST_TIMEOUT_MS,
+        budgetMs,
         `requestMany(${calls.length})`
       );
       throwIfBatchTransportFailed(results);
@@ -572,9 +590,9 @@ export default function ElectrumServer() {
 
     // Oversized single batches are rejected in an ID-null error by ElectrumX/
     // Fulcrum (verified live: a 1086-item batch crashes the client). Split into
-    // moderate chunks and fire them concurrently so a large wallet subscribes
-    // in parallel instead of one doomed giant request.
-    const SUB_BATCH_SIZE = 250;
+    // moderate chunks. Keep size aligned with ElectrumService UTXO batches so
+    // the scaled requestMany timeout stays sufficient.
+    const SUB_BATCH_SIZE = 50;
     const chunkedParams: ElectrumParams[][] = [];
     for (let i = 0; i < paramsList.length; i += SUB_BATCH_SIZE) {
       chunkedParams.push(paramsList.slice(i, i + SUB_BATCH_SIZE));

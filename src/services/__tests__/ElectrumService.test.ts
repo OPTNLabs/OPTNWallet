@@ -165,7 +165,10 @@ describe('ElectrumService', () => {
 
     expect(
       server.requestMany.mock.calls.map(([calls]) => calls.length)
-    ).toEqual([250, 250, 117]);
+    // Batch size 50 (was 250): 617 = 12×50 + 17. Live error was requestMany(250)@12s.
+    ).toEqual([
+      50, 50, 50, 50, 50, 50, 50, 50, 50, 50, 50, 50, 17,
+    ]);
     expect(Object.keys(result)).toHaveLength(617);
   });
 
@@ -390,7 +393,10 @@ describe('ElectrumService', () => {
 
     expect(
       server.requestMany.mock.calls.map(([calls]) => calls.length)
-    ).toEqual([250, 250, 117]);
+    // Batch size 50 (was 250): 617 = 12×50 + 17. Live error was requestMany(250)@12s.
+    ).toEqual([
+      50, 50, 50, 50, 50, 50, 50, 50, 50, 50, 50, 50, 17,
+    ]);
     expect(Object.keys(result)).toHaveLength(617);
   });
 

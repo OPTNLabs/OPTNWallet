@@ -66,7 +66,11 @@ const detailsCacheByTxid = new Map<
   { ts: number; data: TransactionDetails | null }
 >();
 const DETAILS_TTL_MS = 60000;
-const ELECTRUM_BATCH_SIZE = 250;
+// 250 × 12s hard timeout produced live failures:
+//   `requestMany(250) timed out after 12000ms`
+// Smaller chunks + ElectrumServer.requestManyTimeoutMs(N) keep large wallets
+// (hundreds of addresses) from blowing the batch budget.
+const ELECTRUM_BATCH_SIZE = 50;
 
 type ElectrumBatchCall = {
   method: string;
@@ -124,18 +128,17 @@ async function requestManyInChunks(
   for (let start = 0; start < calls.length; start += ELECTRUM_BATCH_SIZE) {
     chunks.push(calls.slice(start, start + ELECTRUM_BATCH_SIZE));
   }
-  // Parallel chunks; accumulate completed under the single-threaded event loop
-  // so the UI progress bar advances 0→total instead of re-reporting each chunk's size.
+  // Sequential chunks: firing every 250-call batch in parallel overloaded the
+  // Electrum socket and made timeouts more likely under the old 12s budget.
   let completed = 0;
-  const settled = await Promise.all(
-    chunks.map(async (chunk) => {
-      const results = await server.requestMany(chunk);
-      completed += chunk.length;
-      onProgress?.(completed, calls.length);
-      return results;
-    })
-  );
-  return settled.flat();
+  const out: Array<RequestResponse | Error> = [];
+  for (const chunk of chunks) {
+    const results = await server.requestMany(chunk);
+    out.push(...results);
+    completed += chunk.length;
+    onProgress?.(completed, calls.length);
+  }
+  return out;
 }
 
 const ElectrumService = {

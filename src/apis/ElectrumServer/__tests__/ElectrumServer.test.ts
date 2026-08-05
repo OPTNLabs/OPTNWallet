@@ -158,6 +158,16 @@ describe('ElectrumServer', () => {
     expect(results).toEqual(['batched-1', 'batched-2']);
   });
 
+  it('scales requestMany timeout with batch size (evidence: requestMany(250) @ 12s)', async () => {
+    // Live error: `requestMany(250) timed out after 12000ms` with a flat budget.
+    // Formula must exceed 12s for N=250 while single calls stay ~12s.
+    const { requestManyTimeoutMs } = await import('../ElectrumServer');
+    expect(requestManyTimeoutMs(1)).toBe(12_000);
+    expect(requestManyTimeoutMs(250)).toBeGreaterThan(12_000);
+    expect(requestManyTimeoutMs(250)).toBe(12_000 + 249 * 80);
+    expect(requestManyTimeoutMs(10_000)).toBe(90_000); // cap
+  });
+
   it('requestMany rotates servers when every batch entry reports a lost connection', async () => {
     const first = makeMockClient();
     const second = makeMockClient();
