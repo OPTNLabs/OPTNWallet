@@ -3,7 +3,7 @@ import {
   cashAddressToLockingBytecode,
   decodeTransaction,
 } from '@bitauth/libauth';
-import ElectrumService from './ElectrumService';
+import ElectrumService, { invalidateUTXOCache } from './ElectrumService';
 import DatabaseService from '../apis/DatabaseManager/DatabaseService';
 import UTXOManager from '../apis/UTXOManager/UTXOManager';
 import AddressManager from '../apis/AddressManager/AddressManager';
@@ -312,123 +312,59 @@ const UTXOService = {
       options.onProgress?.(0, uniqueAddresses.length);
 
       // ── HOT path (OPTN 1.7.0 law) ──────────────────────────────────────
-      // ONE source of truth for spendable coins: listunspent → SQL UTXOs →
-      // return map for Redux. Ledger/txi-txo is NOT a balance boss (cold
-      // archive only; see docs/wallet-hot-cold-design.md).
+      // Always listunspent every address in this call (like Labs 1.7.0).
+      // Status-hash "skip clean" was leaving poisoned SQL as balance forever.
+      // Single-address subscription still skips via addressHistoryIsFresh in worker.
 
       const existingSnapshot = await manager.fetchUTXOsFromDatabase(
         uniqueAddresses.map((address) => ({ address })),
         walletId
       );
 
-      // Optional status-hash gate: skip listunspent when history status still
-      // matches Electrum (speed only). Returns SQL HOT snapshot — never ledger.
-      // Manual Sync clears statuses + force so every address is re-fetched.
-      let addressesToFetch = uniqueAddresses;
-      if (!options.force) {
-        try {
-          const ledger = await import('../platform/desktop/WalletLedgerService');
-          const partition = await ledger.partitionAddressesByStatus(
-            walletId,
-            uniqueAddresses
-          );
-          addressesToFetch = [...partition.dirty];
-          const statusMap = await ledger.getAddressHistoryStatusMap(walletId);
-          for (const address of partition.clean) {
-            const n =
-              (existingSnapshot.utxosMap[address]?.length ?? 0) +
-              (existingSnapshot.cashTokenUtxosMap[address]?.length ?? 0);
-            if (n > 0) continue;
-            const st = statusMap.get(address);
-            if (st != null && st !== ledger.EMPTY_HISTORY_STATUS) {
-              addressesToFetch.push(address);
-            }
-          }
-          addressesToFetch = Array.from(new Set(addressesToFetch));
-          if (
-            uniqueAddresses.length >= 20 &&
-            addressesToFetch.length > 0
-          ) {
-            console.info('[UTXOService] status-hash gate (HOT skip)', {
-              total: uniqueAddresses.length,
-              dirty: addressesToFetch.length,
-              clean: uniqueAddresses.length - addressesToFetch.length,
-              probed: partition.probed,
-            });
-          }
-        } catch {
-          addressesToFetch = uniqueAddresses;
-        }
-      }
-
-      if (addressesToFetch.length === 0 && !options.force) {
-        options.onProgress?.(uniqueAddresses.length, uniqueAddresses.length);
-        const fromDb: Record<string, UTXO[]> = {};
-        for (const address of uniqueAddresses) {
-          fromDb[address] = [
-            ...(existingSnapshot.utxosMap[address] ?? []),
-            ...(existingSnapshot.cashTokenUtxosMap[address] ?? []),
-          ];
-        }
-        return fromDb;
+      // Never serve stale Electrum TTL cache for wallet-wide / force passes.
+      for (const address of uniqueAddresses) {
+        invalidateUTXOCache(address);
       }
 
       const tFetch = performance.now();
       let utxosByAddress: Record<string, UTXO[]> = {};
-      if (addressesToFetch.length === 0) {
-        // force with empty dirty set should not happen; keep progress complete.
-        options.onProgress?.(uniqueAddresses.length, uniqueAddresses.length);
-      } else {
-        try {
-          if (options.onProgress) {
-            // Map listunspent progress over dirty addresses only, but report against
-            // total wallet size so skipped clean addresses still advance the bar.
-            const dirtyTotal = addressesToFetch.length;
-            const skipped = uniqueAddresses.length - dirtyTotal;
-            utxosByAddress = await ElectrumService.getUTXOsMany(
-              addressesToFetch,
-              (done, _total) => {
-                options.onProgress?.(skipped + done, uniqueAddresses.length);
-              }
-            );
-          } else {
-            utxosByAddress = await ElectrumService.getUTXOsMany(addressesToFetch);
+      try {
+        utxosByAddress = await ElectrumService.getUTXOsMany(
+          uniqueAddresses,
+          options.onProgress
+            ? (done, total) => options.onProgress?.(done, total)
+            : undefined
+        );
+      } catch (fetchError) {
+        // Soft-fail on transport/backoff: keep last SQL so reconnect does not wipe.
+        const msg =
+          fetchError instanceof Error ? fetchError.message : String(fetchError);
+        if (
+          /backoff|connection lost|not connected|timeout|ECONN/i.test(msg)
+        ) {
+          logError('UTXOService.fetchAndStoreUTXOsMany.softFail', fetchError, {
+            walletId,
+            addressCount: uniqueAddresses.length,
+          });
+          options.onProgress?.(
+            uniqueAddresses.length,
+            uniqueAddresses.length
+          );
+          const fromDb: Record<string, UTXO[]> = {};
+          for (const address of uniqueAddresses) {
+            fromDb[address] = [
+              ...(existingSnapshot.utxosMap[address] ?? []),
+              ...(existingSnapshot.cashTokenUtxosMap[address] ?? []),
+            ];
           }
-        } catch (fetchError) {
-          // Soft-fail on transport/backoff: keep last SQL snapshot so balance
-          // does not wipe when Electrum is reconnecting (user saw
-          // "reconnect backoff" right after a healthy open).
-          const msg =
-            fetchError instanceof Error ? fetchError.message : String(fetchError);
-          if (
-            /backoff|connection lost|not connected|timeout|ECONN/i.test(msg)
-          ) {
-            logError('UTXOService.fetchAndStoreUTXOsMany.softFail', fetchError, {
-              walletId,
-              addressCount: addressesToFetch.length,
-            });
-            options.onProgress?.(
-              uniqueAddresses.length,
-              uniqueAddresses.length
-            );
-            const fromDb: Record<string, UTXO[]> = {};
-            for (const address of uniqueAddresses) {
-              fromDb[address] = [
-                ...(existingSnapshot.utxosMap[address] ?? []),
-                ...(existingSnapshot.cashTokenUtxosMap[address] ?? []),
-              ];
-            }
-            return fromDb;
-          }
-          throw fetchError;
+          return fromDb;
         }
+        throw fetchError;
       }
-      // Log only real network work (or multi-address batches).
-      if (uniqueAddresses.length > 1 && addressesToFetch.length > 0) {
+      if (uniqueAddresses.length > 1) {
         console.info('[UTXOService] getUTXOsMany took', {
           ms: Math.round(performance.now() - tFetch),
-          addresses: addressesToFetch.length,
-          skippedClean: uniqueAddresses.length - addressesToFetch.length,
+          addresses: uniqueAddresses.length,
         });
       }
       for (const fetchedUTXOs of Object.values(utxosByAddress)) {
@@ -468,29 +404,13 @@ const UTXOService = {
           continue;
         }
 
+        // Network returned a key (including empty []). Trust listunspent like
+        // 1.7.0 — do not keep prior coins over an authoritative empty set.
         const fetchedUTXOs = utxosByAddress[address] ?? [];
         const previousUtxos = [
           ...(existingSnapshot.utxosMap[address] ?? []),
           ...(existingSnapshot.cashTokenUtxosMap[address] ?? []),
         ];
-
-        // Refuse empty listunspent over non-empty prior without force.
-        // Background refresh / block tip must not wipe coins on a flaky empty
-        // response (Manual Sync uses force:true and may legitimately clear).
-        if (
-          fetchedUTXOs.length === 0 &&
-          previousUtxos.length > 0 &&
-          options.force !== true
-        ) {
-          console.info(
-            '[UTXOService] ignore empty listunspent over non-empty prior',
-            { walletId, address, prior: previousUtxos.length }
-          );
-          formattedByAddress[address] = previousUtxos.filter(
-            (utxo) => !reservedOutpoints.has(outpointKey(utxo))
-          );
-          continue;
-        }
 
         const mergedUTXOs = mergeKnownTokenData(
           fetchedUTXOs,
