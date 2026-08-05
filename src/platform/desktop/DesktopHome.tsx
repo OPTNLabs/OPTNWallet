@@ -211,6 +211,9 @@ const Home: React.FC = () => {
         undefined,
         {
           discover: false,
+          // Statuses were cleared above; force still short-circuits any race
+          // where a concurrent path rewrote a status before listunspent.
+          force: true,
           onProgress: (done, total) => {
             if (total <= 0) {
               reportSyncProgress(12);

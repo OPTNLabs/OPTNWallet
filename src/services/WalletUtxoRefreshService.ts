@@ -76,6 +76,11 @@ export type FetchActiveWalletUtxosOptions = {
    * re-running discovery + history was the "slow old path".
    */
   discover?: boolean;
+  /**
+   * Bypass the ledger status-hash gate and listunspent every address.
+   * Manual Sync uses this after clearing address statuses.
+   */
+  force?: boolean;
   onProgress?: (completedCount: number, totalCount: number) => void;
 };
 
@@ -117,6 +122,7 @@ export async function fetchActiveWalletUtxos(
   }
   const fetched = await UTXOService.fetchAndStoreUTXOsMany(walletId, addresses, {
     discover,
+    force: options.force === true,
     onProgress: options.onProgress,
   });
   if (signal?.aborted || !isActiveWalletSession(session)) return null;

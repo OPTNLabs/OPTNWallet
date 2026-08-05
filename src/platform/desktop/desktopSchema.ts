@@ -93,6 +93,16 @@ export async function ensureDesktopLedgerTables(): Promise<void> {
       `CREATE INDEX IF NOT EXISTS idx_ledger_txi_spent ON ledger_txi(wallet_id, spent_by_tx);`
     );
 
+    // Wallet-level scan window (first known positive height + tip).
+    db.run(`
+      CREATE TABLE IF NOT EXISTS wallet_ledger_meta (
+        wallet_id INT PRIMARY KEY,
+        genesis_height INT,
+        tip_height INT,
+        updated_at TEXT NOT NULL
+      );
+    `);
+
     ledgerEnsured = true;
   } catch (error) {
     logError('desktopSchema.ensureDesktopLedgerTables', error);

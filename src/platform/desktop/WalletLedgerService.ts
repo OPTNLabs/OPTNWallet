@@ -4,11 +4,19 @@
 // UTXOs SQL table is a cache rebuilt from unspent ledger_txo.
 // See docs/wallet-ledger-sync-design.md.
 
-import { sha256 } from '@bitauth/libauth';
+import {
+  cashAddressToLockingBytecode,
+  decodeTransaction,
+  lockingBytecodeToCashAddress,
+  sha256,
+} from '@bitauth/libauth';
 import DatabaseService from '../../apis/DatabaseManager/DatabaseService';
 import UTXOManager from '../../apis/UTXOManager/UTXOManager';
 import type { TransactionHistoryItem, UTXO } from '../../types/types';
+import { Network } from '../../state/slices/networkSlice';
+import { store } from '../../state/store';
 import { logError } from '../../utils/errorHandling';
+import { binToHex, hexToBin } from '../../utils/hex';
 import { ensureDesktopLedgerTables } from './desktopSchema';
 
 function hexFromHash(bytes: Uint8Array): string {
@@ -19,6 +27,64 @@ function hexFromHash(bytes: Uint8Array): string {
 
 function nowIso(): string {
   return new Date().toISOString();
+}
+
+function currentAddressPrefix(): 'bitcoincash' | 'bchtest' {
+  try {
+    return store.getState().network.currentNetwork === Network.CHIPNET
+      ? 'bchtest'
+      : 'bitcoincash';
+  } catch {
+    return 'bitcoincash';
+  }
+}
+
+/** libauth stores outpoint txids internal-byte-order; Electrum uses RPC order. */
+function outpointTxidHex(hash: Uint8Array): string {
+  return binToHex(Uint8Array.from(hash).reverse());
+}
+
+function addressFromLockingBytecode(bytecode: Uint8Array): string | null {
+  try {
+    const result = lockingBytecodeToCashAddress({
+      bytecode,
+      prefix: currentAddressPrefix(),
+    });
+    return typeof result === 'string' ? result : result.address;
+  } catch {
+    return null;
+  }
+}
+
+function tokenJsonFromDecodedOutput(output: {
+  token?: {
+    amount: bigint;
+    category: Uint8Array;
+    nft?: { capability: string; commitment: Uint8Array };
+  };
+}): string | null {
+  if (!output.token) return null;
+  const token: Record<string, unknown> = {
+    amount: output.token.amount.toString(),
+    category: binToHex(output.token.category),
+  };
+  if (output.token.nft) {
+    token.nft = {
+      capability: output.token.nft.capability,
+      commitment: binToHex(output.token.nft.commitment),
+    };
+  }
+  return JSON.stringify(token);
+}
+
+function buildWalletBytecodeMap(addresses: Iterable<string>): Map<string, string> {
+  const map = new Map<string, string>();
+  for (const address of addresses) {
+    const decoded = cashAddressToLockingBytecode(address);
+    if (typeof decoded === 'string') continue;
+    map.set(binToHex(decoded.bytecode), address);
+  }
+  return map;
 }
 
 /** EC / Selene style: sha256 of "txid:height:" for each history item. */
@@ -324,6 +390,7 @@ export async function clearWalletChainData(walletId: number): Promise<void> {
     'ledger_transactions',
     'ledger_txo',
     'ledger_txi',
+    'wallet_ledger_meta',
     'UTXOs',
     'transactions',
     'transaction_details',
@@ -358,7 +425,7 @@ export async function clearWalletChainData(walletId: number): Promise<void> {
   }
 }
 
-/** Store raw tx hex when known (for future full txi application). */
+/** Store raw tx hex when known. */
 export async function storeLedgerTransaction(
   walletId: number,
   txHash: string,
@@ -388,6 +455,381 @@ export async function storeLedgerTransaction(
   }
 }
 
+export async function getLedgerTransactionRawHex(
+  walletId: number,
+  txHash: string
+): Promise<string | null> {
+  await ensureDesktopLedgerTables();
+  const dbService = DatabaseService();
+  await dbService.ensureDatabaseStarted();
+  const db = dbService.getDatabase();
+  if (!db) return null;
+  try {
+    const q = db.prepare(
+      `SELECT raw_hex FROM ledger_transactions
+       WHERE wallet_id = ? AND tx_hash = ?`
+    );
+    q.bind([walletId, txHash]);
+    let raw: string | null = null;
+    if (q.step()) {
+      const row = q.getAsObject() as { raw_hex?: string | null };
+      raw =
+        typeof row.raw_hex === 'string' && row.raw_hex.length > 0
+          ? row.raw_hex
+          : null;
+    }
+    q.free();
+    return raw;
+  } catch {
+    return null;
+  }
+}
+
+/** Txids that still lack raw hex (candidates for full txi/txo apply). */
+export async function listTxidsMissingRawHex(
+  walletId: number,
+  limit = 200
+): Promise<Array<{ tx_hash: string; height: number }>> {
+  await ensureDesktopLedgerTables();
+  const dbService = DatabaseService();
+  await dbService.ensureDatabaseStarted();
+  const db = dbService.getDatabase();
+  if (!db) return [];
+  const out: Array<{ tx_hash: string; height: number }> = [];
+  try {
+    const q = db.prepare(
+      `SELECT tx_hash, height FROM ledger_transactions
+       WHERE wallet_id = ?
+         AND (raw_hex IS NULL OR raw_hex = '')
+       ORDER BY ABS(height) DESC
+       LIMIT ?`
+    );
+    q.bind([walletId, limit]);
+    while (q.step()) {
+      const row = q.getAsObject() as { tx_hash?: string; height?: number };
+      if (typeof row.tx_hash === 'string' && row.tx_hash) {
+        out.push({
+          tx_hash: row.tx_hash,
+          height: Number(row.height) || 0,
+        });
+      }
+    }
+    q.free();
+  } catch (error) {
+    logError('WalletLedgerService.listTxidsMissingRawHex', error, { walletId });
+  }
+  return out;
+}
+
+export type ApplyTransactionResult = {
+  applied: boolean;
+  inputsRecorded: number;
+  outputsRecorded: number;
+  error?: string;
+};
+
+/**
+ * Decode full raw hex into ledger_txi (wallet spends) + ledger_txo (wallet receives).
+ * Owns only outputs matching walletAddresses (bytecode map) and inputs that
+ * spend an existing ledger_txo (or any prevout when markAllInputs is set).
+ */
+export async function applyRawTransaction(
+  walletId: number,
+  txHash: string,
+  height: number,
+  rawHex: string,
+  walletAddresses: ReadonlySet<string> | string[]
+): Promise<ApplyTransactionResult> {
+  await ensureDesktopLedgerTables();
+  if (!rawHex || !txHash) {
+    return { applied: false, inputsRecorded: 0, outputsRecorded: 0, error: 'missing' };
+  }
+
+  const decoded = decodeTransaction(hexToBin(rawHex));
+  if (typeof decoded === 'string') {
+    return {
+      applied: false,
+      inputsRecorded: 0,
+      outputsRecorded: 0,
+      error: decoded,
+    };
+  }
+
+  const addressSet =
+    walletAddresses instanceof Set
+      ? walletAddresses
+      : new Set(walletAddresses);
+  const bytecodeMap = buildWalletBytecodeMap(addressSet);
+
+  const dbService = DatabaseService();
+  await dbService.ensureDatabaseStarted();
+  const db = dbService.getDatabase();
+  if (!db) {
+    return { applied: false, inputsRecorded: 0, outputsRecorded: 0, error: 'no-db' };
+  }
+
+  let inputsRecorded = 0;
+  let outputsRecorded = 0;
+
+  try {
+    db.exec('BEGIN');
+
+    db.run(
+      `INSERT INTO ledger_transactions (wallet_id, tx_hash, height, raw_hex, updated_at)
+       VALUES (?, ?, ?, ?, ?)
+       ON CONFLICT(wallet_id, tx_hash) DO UPDATE SET
+         height = excluded.height,
+         raw_hex = COALESCE(excluded.raw_hex, ledger_transactions.raw_hex),
+         updated_at = excluded.updated_at`,
+      [walletId, txHash, height, rawHex, nowIso()]
+    );
+
+    // Known unspent ledger coins (for spend detection)
+    const knownTxo = new Map<string, { address: string; value: number }>();
+    const knownQ = db.prepare(
+      `SELECT tx_hash, tx_pos, address, value FROM ledger_txo WHERE wallet_id = ?`
+    );
+    knownQ.bind([walletId]);
+    while (knownQ.step()) {
+      const row = knownQ.getAsObject() as Record<string, unknown>;
+      knownTxo.set(`${row.tx_hash}:${row.tx_pos}`, {
+        address: String(row.address),
+        value: Number(row.value) || 0,
+      });
+    }
+    knownQ.free();
+
+    const insertTxi = db.prepare(`
+      INSERT INTO ledger_txi
+        (wallet_id, spent_by_tx, prevout_hash, prevout_n, address, value)
+      VALUES (?, ?, ?, ?, ?, ?)
+      ON CONFLICT(wallet_id, prevout_hash, prevout_n) DO UPDATE SET
+        spent_by_tx = CASE
+          WHEN ledger_txi.spent_by_tx LIKE 'external:%' THEN excluded.spent_by_tx
+          ELSE excluded.spent_by_tx
+        END,
+        address = COALESCE(excluded.address, ledger_txi.address),
+        value = COALESCE(excluded.value, ledger_txi.value)
+    `);
+
+    for (const input of decoded.inputs) {
+      const prevHash = outpointTxidHex(
+        input.outpointTransactionHash instanceof Uint8Array
+          ? input.outpointTransactionHash
+          : new Uint8Array(input.outpointTransactionHash as ArrayLike<number>)
+      );
+      const prevN = Number(input.outpointIndex) || 0;
+      const known = knownTxo.get(`${prevHash}:${prevN}`);
+      if (!known) continue;
+      insertTxi.run([
+        walletId,
+        txHash,
+        prevHash,
+        prevN,
+        known.address,
+        known.value,
+      ]);
+      inputsRecorded += 1;
+    }
+    insertTxi.free();
+
+    const insertTxo = db.prepare(`
+      INSERT INTO ledger_txo (wallet_id, tx_hash, tx_pos, address, value, height, token, prefix)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(wallet_id, tx_hash, tx_pos) DO UPDATE SET
+        address = excluded.address,
+        value = excluded.value,
+        height = excluded.height,
+        token = excluded.token,
+        prefix = excluded.prefix
+    `);
+
+    const prefix = currentAddressPrefix();
+    decoded.outputs.forEach((output, index) => {
+      const lockingHex = binToHex(output.lockingBytecode);
+      let address = bytecodeMap.get(lockingHex);
+      if (!address) {
+        // Fallback: decode and check set (token-aware addresses may differ form)
+        const decodedAddr = addressFromLockingBytecode(output.lockingBytecode);
+        if (decodedAddr && addressSet.has(decodedAddr)) {
+          address = decodedAddr;
+        }
+      }
+      if (!address) return;
+
+      insertTxo.run([
+        walletId,
+        txHash,
+        index,
+        address,
+        Number(output.valueSatoshis ?? 0n),
+        height,
+        tokenJsonFromDecodedOutput(output),
+        prefix,
+      ]);
+      outputsRecorded += 1;
+    });
+    insertTxo.free();
+
+    db.exec('COMMIT');
+  } catch (error) {
+    try {
+      db.exec('ROLLBACK');
+    } catch {
+      /* ignore */
+    }
+    logError('WalletLedgerService.applyRawTransaction', error, {
+      walletId,
+      txHash,
+    });
+    return {
+      applied: false,
+      inputsRecorded: 0,
+      outputsRecorded: 0,
+      error: error instanceof Error ? error.message : 'apply failed',
+    };
+  }
+
+  if (height > 0) {
+    void noteWalletHeights(walletId, [height]);
+  }
+
+  return { applied: true, inputsRecorded, outputsRecorded };
+}
+
+/**
+ * Fetch missing raw hex from Electrum and apply into the ledger.
+ * Bounded batch so open/sync stays snappy.
+ */
+export async function fetchAndApplyMissingTransactions(
+  walletId: number,
+  walletAddresses: ReadonlySet<string> | string[],
+  options?: { limit?: number }
+): Promise<{ fetched: number; applied: number }> {
+  const missing = await listTxidsMissingRawHex(walletId, options?.limit ?? 100);
+  if (missing.length === 0) return { fetched: 0, applied: 0 };
+
+  let Electrum: {
+    getRawTransactionMany: (
+      hashes: string[]
+    ) => Promise<Record<string, string>>;
+  };
+  try {
+    Electrum = (await import('../../services/ElectrumService')).default;
+  } catch {
+    return { fetched: 0, applied: 0 };
+  }
+
+  const heightByTx = new Map(missing.map((m) => [m.tx_hash, m.height]));
+  const rawByTx = await Electrum.getRawTransactionMany(
+    missing.map((m) => m.tx_hash)
+  );
+  let applied = 0;
+  for (const [txHash, rawHex] of Object.entries(rawByTx)) {
+    const result = await applyRawTransaction(
+      walletId,
+      txHash,
+      heightByTx.get(txHash) ?? 0,
+      rawHex,
+      walletAddresses
+    );
+    if (result.applied) applied += 1;
+  }
+  return { fetched: Object.keys(rawByTx).length, applied };
+}
+
+// ── Genesis height / scan window ───────────────────────────────────────────
+
+export async function getWalletGenesisHeight(
+  walletId: number
+): Promise<number | null> {
+  await ensureDesktopLedgerTables();
+  const dbService = DatabaseService();
+  await dbService.ensureDatabaseStarted();
+  const db = dbService.getDatabase();
+  if (!db) return null;
+  try {
+    const q = db.prepare(
+      `SELECT genesis_height FROM wallet_ledger_meta WHERE wallet_id = ?`
+    );
+    q.bind([walletId]);
+    let height: number | null = null;
+    if (q.step()) {
+      const row = q.getAsObject() as { genesis_height?: number | null };
+      if (row.genesis_height != null && Number(row.genesis_height) > 0) {
+        height = Number(row.genesis_height);
+      }
+    }
+    q.free();
+    return height;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Lowest positive confirmation height seen for this wallet.
+ * Used as the SPV/deep-scan window start (scan from genesis, not block 0).
+ */
+export async function noteWalletHeights(
+  walletId: number,
+  heights: number[]
+): Promise<number | null> {
+  const positives = heights
+    .map((h) => Number(h) || 0)
+    .filter((h) => h > 0);
+  if (positives.length === 0) return getWalletGenesisHeight(walletId);
+
+  const minSeen = Math.min(...positives);
+  const maxSeen = Math.max(...positives);
+
+  await ensureDesktopLedgerTables();
+  const dbService = DatabaseService();
+  await dbService.ensureDatabaseStarted();
+  const db = dbService.getDatabase();
+  if (!db) return null;
+
+  try {
+    const existing = await getWalletGenesisHeight(walletId);
+    let tip: number | null = null;
+    const tipQ = db.prepare(
+      `SELECT tip_height FROM wallet_ledger_meta WHERE wallet_id = ?`
+    );
+    tipQ.bind([walletId]);
+    if (tipQ.step()) {
+      const row = tipQ.getAsObject() as { tip_height?: number | null };
+      tip =
+        row.tip_height != null && Number(row.tip_height) > 0
+          ? Number(row.tip_height)
+          : null;
+    }
+    tipQ.free();
+
+    const genesis =
+      existing != null && existing > 0 ? Math.min(existing, minSeen) : minSeen;
+    const nextTip = tip != null ? Math.max(tip, maxSeen) : maxSeen;
+
+    db.run(
+      `INSERT INTO wallet_ledger_meta (wallet_id, genesis_height, tip_height, updated_at)
+       VALUES (?, ?, ?, ?)
+       ON CONFLICT(wallet_id) DO UPDATE SET
+         genesis_height = excluded.genesis_height,
+         tip_height = excluded.tip_height,
+         updated_at = excluded.updated_at`,
+      [walletId, genesis, nextTip, nowIso()]
+    );
+    return genesis;
+  } catch (error) {
+    logError('WalletLedgerService.noteWalletHeights', error, { walletId });
+    return null;
+  }
+}
+
+/** Scan window start height (0 if unknown — full history). */
+export async function getScanFromHeight(walletId: number): Promise<number> {
+  return (await getWalletGenesisHeight(walletId)) ?? 0;
+}
+
 export async function recordHistoryItems(
   walletId: number,
   address: string,
@@ -397,4 +839,134 @@ export async function recordHistoryItems(
     await storeLedgerTransaction(walletId, item.tx_hash, item.height ?? 0, null);
   }
   await setAddressHistoryStatus(walletId, address, history);
+  await noteWalletHeights(
+    walletId,
+    history.map((h) => h.height ?? 0)
+  );
+}
+
+// ── Send-time live outpoint verification ───────────────────────────────────
+
+export type OutpointRef = {
+  tx_hash: string;
+  tx_pos: number;
+  address?: string;
+};
+
+export type VerifyOutpointsResult =
+  | { ok: true }
+  | { ok: false; missing: string[]; message: string };
+
+/**
+ * Live check that selected outpoints still appear in Electrum listunspent.
+ * Durable ledger cache ≠ trust forever — call before broadcast.
+ */
+export async function verifyOutpointsStillUnspent(
+  outpoints: OutpointRef[]
+): Promise<VerifyOutpointsResult> {
+  if (!outpoints.length) return { ok: true };
+
+  let Electrum: {
+    getUTXOsMany: (addresses: string[]) => Promise<Record<string, UTXO[]>>;
+  };
+  try {
+    Electrum = (await import('../../services/ElectrumService')).default;
+  } catch {
+    // Non-desktop / offline build — skip live gate rather than block send.
+    return { ok: true };
+  }
+
+  const addresses = Array.from(
+    new Set(outpoints.map((o) => o.address).filter((a): a is string => !!a))
+  );
+  if (addresses.length === 0) {
+    // No addresses to probe — cannot prove spent/unspent; let the node decide.
+    return { ok: true };
+  }
+
+  let many: Record<string, UTXO[]>;
+  try {
+    many = await Electrum.getUTXOsMany(addresses);
+  } catch (error) {
+    logError('WalletLedgerService.verifyOutpointsStillUnspent', error, {
+      addressCount: addresses.length,
+    });
+    // Network failure: do not hard-fail send; broadcast will fail if spent.
+    return { ok: true };
+  }
+
+  // Only treat an address as authoritative when getUTXOsMany returned a key.
+  // Failed Electrum calls omit the address (or return nothing) — soft-pass those.
+  const liveKeysByAddress = new Map<string, Set<string>>();
+  for (const [address, list] of Object.entries(many)) {
+    const keys = new Set<string>();
+    for (const u of list ?? []) {
+      keys.add(`${u.tx_hash}:${u.tx_pos}`);
+    }
+    liveKeysByAddress.set(address, keys);
+  }
+
+  const missing: string[] = [];
+  for (const o of outpoints) {
+    if (!o.address) continue;
+    const live = liveKeysByAddress.get(o.address);
+    if (!live) continue; // no authoritative response for this address
+    const key = `${o.tx_hash}:${o.tx_pos}`;
+    if (!live.has(key)) missing.push(key);
+  }
+
+  if (missing.length === 0) return { ok: true };
+
+  return {
+    ok: false,
+    missing,
+    message:
+      missing.length === 1
+        ? `Selected coin is no longer unspent (${missing[0]}). Refresh UTXOs and try again.`
+        : `${missing.length} selected coins are no longer unspent. Refresh UTXOs and try again.`,
+  };
+}
+
+/**
+ * Load wallet receive addresses from SQL (keys/addresses tables).
+ * Used when applying raw txs so we only record outputs we own.
+ */
+export async function loadWalletAddressSet(
+  walletId: number
+): Promise<Set<string>> {
+  const dbService = DatabaseService();
+  await dbService.ensureDatabaseStarted();
+  const db = dbService.getDatabase();
+  const set = new Set<string>();
+  if (!db) return set;
+
+  try {
+    const q = db.prepare(
+      `SELECT address FROM addresses WHERE wallet_id = ?`
+    );
+    q.bind([walletId]);
+    while (q.step()) {
+      const row = q.getAsObject() as { address?: string };
+      if (typeof row.address === 'string' && row.address) set.add(row.address);
+    }
+    q.free();
+  } catch {
+    /* addresses table shape may vary */
+  }
+
+  try {
+    const q = db.prepare(
+      `SELECT address FROM keys WHERE wallet_id = ? AND address IS NOT NULL`
+    );
+    q.bind([walletId]);
+    while (q.step()) {
+      const row = q.getAsObject() as { address?: string };
+      if (typeof row.address === 'string' && row.address) set.add(row.address);
+    }
+    q.free();
+  } catch {
+    /* keys table may not have address column on all builds */
+  }
+
+  return set;
 }

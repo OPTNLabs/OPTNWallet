@@ -272,6 +272,25 @@ export async function refreshWalletTransactionHistory(
       refreshed = true;
     }
 
+    // Option A: materialize full txi/txo from raw hex for txs we only have
+    // as history stubs. Bounded so open stays snappy; remaining catch up later.
+    try {
+      const ledger = await import('../platform/desktop/WalletLedgerService');
+      const addresses = await ledger.loadWalletAddressSet(walletId);
+      // Include quantumroot / subscription addresses from this pass
+      for (const a of pending) addresses.add(a);
+      const { applied } = await ledger.fetchAndApplyMissingTransactions(
+        walletId,
+        addresses,
+        { limit: 80 }
+      );
+      if (applied > 0) {
+        await ledger.rebuildUtxosFromLedger(walletId);
+      }
+    } catch {
+      /* ledger optional */
+    }
+
     await runOutboundReconcile(walletId, () =>
       reconcileOutboundTransactions(walletId)
     );

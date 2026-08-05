@@ -241,6 +241,12 @@ type UTXOFetchOptions = {
    */
   discover?: boolean;
   /**
+   * When true, skip the status-hash gate and listunspent every address.
+   * Manual Sync clears statuses first so this is usually unnecessary; still
+   * available for callers that want an explicit force.
+   */
+  force?: boolean;
+  /**
    * Reported as Electrum batch chunks complete so the UI can show real,
    * in-flight UTXO progress instead of a coarse coarse phase jump (which made
    * the ETA extrapolate "2s left" while the fetch was actually mid-flight).
@@ -302,14 +308,59 @@ const UTXOService = {
         uniqueAddresses.map((address) => ({ address })),
         walletId
       );
+
+      // Option A status-hash gate: if local history status already matches the
+      // Electrum address state, listunspent cannot have changed either — skip
+      // the network fetch and keep the DB/ledger snapshot for that address.
+      // Manual Sync clears address_sync_status first so every address is dirty.
+      let addressesToFetch = uniqueAddresses;
+      if (!options.force) {
+        try {
+          const ledger = await import('../platform/desktop/WalletLedgerService');
+          const dirty: string[] = [];
+          const batchSize = 20;
+          for (let i = 0; i < uniqueAddresses.length; i += batchSize) {
+            const chunk = uniqueAddresses.slice(i, i + batchSize);
+            const states = await Promise.all(
+              chunk.map(async (address) => {
+                const remote = await ElectrumService.getAddressState(address);
+                const fresh = await ledger.addressHistoryIsFresh(
+                  walletId,
+                  address,
+                  remote
+                );
+                return { address, fresh };
+              })
+            );
+            for (const s of states) {
+              if (!s.fresh) dirty.push(s.address);
+            }
+          }
+          addressesToFetch = dirty;
+          console.info('[UTXOService] status-hash gate', {
+            total: uniqueAddresses.length,
+            dirty: dirty.length,
+            skipped: uniqueAddresses.length - dirty.length,
+          });
+        } catch {
+          addressesToFetch = uniqueAddresses;
+        }
+      }
+
       const tFetch = performance.now();
       const utxosByAddress =
-      options.onProgress
-        ? await ElectrumService.getUTXOsMany(uniqueAddresses, options.onProgress)
-        : await ElectrumService.getUTXOsMany(uniqueAddresses);
+        addressesToFetch.length === 0
+          ? ({} as Record<string, UTXO[]>)
+          : options.onProgress
+            ? await ElectrumService.getUTXOsMany(
+                addressesToFetch,
+                options.onProgress
+              )
+            : await ElectrumService.getUTXOsMany(addressesToFetch);
       console.info('[UTXOService] getUTXOsMany took', {
         ms: Math.round(performance.now() - tFetch),
-        addresses: uniqueAddresses.length,
+        addresses: addressesToFetch.length,
+        skippedClean: uniqueAddresses.length - addressesToFetch.length,
       });
       for (const fetchedUTXOs of Object.values(utxosByAddress)) {
         for (const u of fetchedUTXOs) {
