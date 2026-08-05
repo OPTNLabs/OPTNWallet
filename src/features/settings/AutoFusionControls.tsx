@@ -85,8 +85,9 @@ export function AutoFusionControls({
             Rounds per coin (fuse depth)
           </span>
           <span className="block text-[10px] wallet-muted">
-            Auto-fuse stops picking a coin after this many fusions. Manual
-            “Fuse Now” can still re-fuse past this limit.
+            Auto stops once each coin has been fused this many times (default 3).
+            Seeing “all coins already at depth” means Auto is done — not broken.
+            Manual Start can still re-fuse; raise this number to mix further.
           </span>
         </span>
         <input

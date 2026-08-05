@@ -81,7 +81,10 @@ function describeFusionOutcome(outcome: FusionRunOutcome): string {
       // list here is exactly how a round ends up spending coins that are gone.
       return 'Syncing wallet coins — try again in a moment.';
     case 'no-eligible-coins':
-      return 'No coins are eligible to fuse right now.';
+      return (
+        outcome.detail ??
+        'No coins below rounds-per-coin depth (or no BCH coins). Raise depth or use Manual Start.'
+      );
     case 'cooldown':
       return 'Waiting for the auto-fusion cooldown.';
     case 'cancelled':

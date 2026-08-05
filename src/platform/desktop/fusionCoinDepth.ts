@@ -313,6 +313,33 @@ export function coinsBelowDepth<T extends { tx_hash: string; tx_pos: number }>(
   );
 }
 
+/** Snapshot for Auto UI: empty eligible is often "goal met", not an error. */
+export function fuseDepthEligibility(
+  walletId: number,
+  utxos: ReadonlyArray<{ tx_hash: string; tx_pos: number }>,
+  maxDepth: number
+): {
+  total: number;
+  eligible: number;
+  atOrAboveDepth: number;
+  maxDepth: number;
+} {
+  const entries = read(walletId);
+  let eligible = 0;
+  let atOrAboveDepth = 0;
+  for (const utxo of utxos) {
+    const d = entries[outpointFromParts(utxo.tx_hash, utxo.tx_pos)]?.d ?? 0;
+    if (d < maxDepth) eligible += 1;
+    else atOrAboveDepth += 1;
+  }
+  return {
+    total: utxos.length,
+    eligible,
+    atOrAboveDepth,
+    maxDepth,
+  };
+}
+
 /** Test/support hook: forget every recorded depth for a wallet. */
 export function clearFusionDepth(walletId: number): void {
   try {
