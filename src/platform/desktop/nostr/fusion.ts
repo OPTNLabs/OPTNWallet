@@ -33,7 +33,9 @@ export const FUSION_POOL_PROTOCOL = 1;
 /** Globally aligned windows remove the old per-client 60-second snapshot race. */
 export const POOL_EPOCH_SECONDS = 30;
 export const POOL_EPOCH_GRACE_SECONDS = 8;
-export const MAX_ANNOUNCE_DELAY_MS = 3_000;
+// Keep first announce quick so 4 wallets that click Start together discover
+// each other before any of them lock a smaller set and leave gather.
+export const MAX_ANNOUNCE_DELAY_MS = 800;
 // The announcement is a stored replaceable event, so the relay keeps serving the
 // latest one to new subscribers — frequent re-announcing buys nothing and made
 // relays answer "rate-limited: you are noting too much". Refresh slowly, just
