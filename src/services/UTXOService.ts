@@ -241,9 +241,8 @@ type UTXOFetchOptions = {
    */
   discover?: boolean;
   /**
-   * When true, skip the status-hash gate and listunspent every address.
-   * Manual Sync clears statuses first so this is usually unnecessary; still
-   * available for callers that want an explicit force.
+   * Full-pass flag (open / Manual Sync). HOT already listunspents every address
+   * in the call; kept for API compatibility with Manual Sync / open callers.
    */
   force?: boolean;
   /**
