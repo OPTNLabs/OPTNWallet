@@ -51,8 +51,12 @@ export const POOL_REANNOUNCE_SECONDS = REANNOUNCE_MS / 1_000;
  * so tight that multi-wallet gather collapsed to "1 live wallet" (self only).
  */
 export const POOL_LIVE_ACTIVE_SECONDS = 24;
-/** How far back the pool subscription pulls replaceable announces. */
-export const POOL_SUBSCRIBE_LOOKBACK_SECONDS = 60;
+/**
+ * How far back the pool subscription pulls replaceable announces.
+ * 60s was short when Tor connect + announce retries took 30–90s — late
+ * subscribers never saw early wallets. 180s matches POOL_PEER_TTL.
+ */
+export const POOL_SUBSCRIBE_LOOKBACK_SECONDS = 180;
 const MAX_FUTURE_SKEW_SECONDS = 5;
 const MAX_ANNOUNCEMENT_BYTES = 2_048;
 const MAX_TIERS = 16;

@@ -85,12 +85,19 @@ export const P2P_PEAK_GRACE_MS = SERVER_COMPS_END_MS;
 
 /**
  * Rendezvous (propose/ACK/start) — full proposed set only (no 2-of-4 shrink).
- * Live: partial ACK started a 2-party fuse and stranded others. Use the full
- * T_START_CLOSE window so slow Tor ACKs can still join the FULL set; fail
+ * Live: partial ACK started a 2-party fuse and stranded others. Use a full
+ * minute so slow Tor gift-wrap ACKs can still join the FULL set; fail
  * cleanly if anyone is missing rather than fusing a subset.
+ * (Was T_START_CLOSE 45s — multi-window Tor often needed ~50–60s.)
  */
-export const P2P_RENDEZVOUS_MS = SERVER_ROUND_CLOSE_MS;
-export const P2P_PROPOSAL_TIMEOUT_MS = 12_000;
+export const P2P_RENDEZVOUS_MS = 60_000;
+/**
+ * Wait for elected coordinator's first proposal before ghost failover.
+ * 12s was still tight under Tor + publish retry; 20s reduces split pools.
+ */
+export const P2P_PROPOSAL_TIMEOUT_MS = 20_000;
+/** Re-send proposal / ACK while waiting (Tor drops one gift-wrap often). */
+export const P2P_RENDEZVOUS_RESEND_MS = 1_200;
 
 /**
  * Active round body after agreement (credentials → onion → sign → broadcast).
