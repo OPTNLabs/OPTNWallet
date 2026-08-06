@@ -35,6 +35,8 @@ import { resolveFusionTransport } from './FusionTorResolver';
 import {
   AUTO_FUSION_COOLDOWN_MS,
   decideAutoFusion,
+  msUntilAutoRendezvousOpen,
+  nextAutoEngineTickMs,
 } from './fusionAutoEngine';
 import { isAutoCooldownReady } from './fusionWalletLease';
 import {
@@ -57,20 +59,27 @@ import {
  * idle or empty wallet does not perform a full Electrum reconciliation every
  * minute in every open window.
  */
-// Electron Cash spaces automatic fusions by a RANDOM interval, not a fixed one
-// (plugin.py: AUTOFUSE_RECENT_TOR_LIMIT_LOWER = 60, ..._UPPER = 120). A fixed
-// period is a timing fingerprint: a passive observer watching relay or Tor
-// traffic sees rounds begin on a predictable cadence and can group them, which
-// is the correlation fusing exists to break. Matching their bounds.
-const ENGINE_TICK_MIN_MS = 60_000;
-const ENGINE_TICK_MAX_MS = 120_000;
-
-/** A fresh interval for each tick, so the cadence never settles into a pattern. */
+/** Shared rendezvous + jitter (see fusionAutoEngine.nextAutoEngineTickMs). */
 function nextEngineTickMs(): number {
-  return (
-    ENGINE_TICK_MIN_MS +
-    Math.floor(Math.random() * (ENGINE_TICK_MAX_MS - ENGINE_TICK_MIN_MS + 1))
-  );
+  return nextAutoEngineTickMs();
+}
+
+function sleepMs(ms: number, signal?: AbortSignal): Promise<void> {
+  return new Promise((resolve, reject) => {
+    if (signal?.aborted) {
+      reject(new Error('fusion round cancelled'));
+      return;
+    }
+    const timer = setTimeout(() => {
+      signal?.removeEventListener('abort', onAbort);
+      resolve();
+    }, ms);
+    const onAbort = () => {
+      clearTimeout(timer);
+      reject(new Error('fusion round cancelled'));
+    };
+    signal?.addEventListener('abort', onAbort, { once: true });
+  });
 }
 
 export function useAutoFusion(): void {
@@ -196,6 +205,23 @@ export function useAutoFusion(): void {
 
       // The wallet may have been switched or locked while Tor was queried.
       if (session !== sessionRef.current) return;
+
+      // Multi-window P2P: wait for the shared rendezvous open so peers shout
+      // in the same 30s window (staggered 60–120s ticks alone caused asymmetric
+      // alone-timeouts vs ghost proposes).
+      if (decision.mode === 'p2p') {
+        const waitMs = msUntilAutoRendezvousOpen();
+        if (waitMs > 0) {
+          try {
+            await sleepMs(waitMs, controller.signal);
+          } catch {
+            return;
+          }
+          if (session !== sessionRef.current || controller.signal.aborted) {
+            return;
+          }
+        }
+      }
 
       const outcome = await startFusionRound({
         walletId,
