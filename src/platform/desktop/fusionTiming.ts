@@ -156,10 +156,11 @@ export const P2P_COMPONENT_JITTER_MS: [number, number] = [30, 250];
 export const P2P_ONION_DECLARE_RESEND_MS = 1_500;
 /**
  * Bounded re-send of onion_output injects (initial + this many extras).
- * Unlimited 2s interval flooded Tor (user: rounds ballooned ~90s).
+ * Unlimited 2s interval flooded Tor (~90s rounds). Payloads are deduped at the
+ * peeler so re-sends are safe (same onion b64 is not double-counted).
  */
-export const P2P_ONION_OUTPUT_RESEND_MAX = 3;
-export const P2P_ONION_OUTPUT_RESEND_MS = 2_500;
+export const P2P_ONION_OUTPUT_RESEND_MAX = 5;
+export const P2P_ONION_OUTPUT_RESEND_MS = 2_000;
 /** Max declare re-sends after the first (then stop). */
 export const P2P_ONION_DECLARE_RESEND_MAX = 8;
 
