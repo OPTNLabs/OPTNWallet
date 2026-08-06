@@ -20,8 +20,15 @@ const DESKTOP_WALLET_COLUMNS: Record<string, string> = {
   account_xpub: 'TEXT',
   // 8 hex chars from the signing device (SeedCash shows it with the account
   // xPub). Written into PSBT BIP32 derivation metadata so the signer can
-  // claim the inputs; without it the signer refuses.
+  // recognise the inputs as its own on its review screen. Not required to
+  // sign — SeedCash signs from the derivation path — so it may be null.
   master_fingerprint: 'TEXT',
+  // Multisig watch-only policy as JSON: { name, m, signers[{name, xpub,
+  // masterFingerprintHex?}] }. A multisig wallet has no single account xPub —
+  // every address is a BIP-67 sort of all cosigners' keys derived at that
+  // path — so the whole cosigner set has to survive a restart or the wallet
+  // cannot rebuild one address.
+  multisig_policy: 'TEXT',
 };
 
 let ensured = false;

@@ -10,8 +10,19 @@
 // restart cannot regenerate the address set and the wallet looks empty even
 // though its coins are on chain.
 
+import {
+  binToHex,
+  hash160,
+  lockingBytecodeToCashAddress,
+} from '@bitauth/libauth';
+
 import DatabaseService from '../../../apis/DatabaseManager/DatabaseService';
 import { Network } from '../../../state/slices/networkSlice';
+import {
+  deriveMultisigAddress,
+  validateMultisigPolicy,
+  type MultisigPolicy,
+} from '../../../services/psbt/multisigWallet';
 
 import {
   deriveBchAddressFromHdPublicKey,
@@ -165,6 +176,135 @@ export async function createWatchOnlyWallet(
 
   await dbService.saveDatabaseToFile(walletId);
   return walletId;
+}
+
+/**
+ * Create and persist a watch-only MULTISIG wallet from a cosigner set.
+ *
+ * Unlike the single-signer case there is no one account xPub: every address is
+ * a BIP-67 sort of all cosigners' keys derived at that exact path, so the whole
+ * policy is stored and addresses are rebuilt from it. The redeem script is not
+ * stored per address — it is a pure function of the policy and the path, so
+ * deriving it on demand cannot drift from the address it locks.
+ */
+export async function createWatchOnlyMultisigWallet(args: {
+  name: string;
+  policy: MultisigPolicy;
+  network: Network;
+  gapLimit?: number;
+}): Promise<number> {
+  const name = args.name.trim();
+  if (!name) throw new Error('Give the wallet a name.');
+  validateMultisigPolicy(args.policy);
+
+  const gapLimit = args.gapLimit ?? WATCH_ONLY_GAP_LIMIT;
+  const prefix = args.network === Network.MAINNET ? 'bitcoincash' : 'bchtest';
+
+  await ensureDesktopWalletColumns();
+  const dbService = DatabaseService();
+  await dbService.ensureDatabaseStarted();
+  const db = dbService.getDatabase();
+  if (!db) throw new Error('Wallet database is unavailable.');
+
+  const insertWallet = db.prepare(
+    `INSERT INTO wallets
+       (wallet_name, mnemonic, passphrase, networkType, walletType, balance,
+        derivation_path, derivation_path_source, account_xpub,
+        master_fingerprint, multisig_policy)
+     VALUES (?, NULL, NULL, ?, ?, 0, ?, 'default', NULL, NULL, ?)`
+  );
+  try {
+    insertWallet.run([
+      name,
+      args.network,
+      WATCH_ONLY_WALLET_TYPE,
+      getBchAccountPath(args.network),
+      JSON.stringify({ ...args.policy, name }),
+    ]);
+  } finally {
+    insertWallet.free();
+  }
+
+  const idQuery = db.prepare('SELECT last_insert_rowid() AS id');
+  let walletId = 0;
+  try {
+    if (idQuery.step()) {
+      walletId = Number(
+        (idQuery.getAsObject() as Record<string, unknown>).id
+      );
+    }
+  } finally {
+    idQuery.free();
+  }
+  if (!walletId) throw new Error('Could not create the multisig wallet.');
+
+  const insertKey = db.prepare(
+    `INSERT INTO keys
+       (wallet_id, public_key, private_key, address, token_address, pubkey_hash,
+        account_index, change_index, address_index)
+     VALUES (?, ?, NULL, ?, ?, ?, 0, ?, ?)`
+  );
+  try {
+    for (const branch of BRANCHES) {
+      for (let index = 0; index < gapLimit; index += 1) {
+        const derived = deriveMultisigAddress(args.policy, branch, index);
+        const encoded = lockingBytecodeToCashAddress({
+          bytecode: derived.lockingBytecode,
+          prefix,
+        });
+        if (typeof encoded === 'string' || !('address' in encoded)) {
+          throw new Error(
+            `Could not encode the ${branch === 0 ? 'receive' : 'change'} ` +
+              `address at index ${index}.`
+          );
+        }
+        insertKey.run([
+          walletId,
+          // No single public key owns a multisig address. The redeem script is
+          // what a spend needs, and it is re-derived from the policy, so this
+          // column carries the script hash purely for display/debugging.
+          binToHex(hash160(derived.redeemScript)),
+          encoded.address,
+          encoded.address,
+          binToHex(hash160(derived.redeemScript)),
+          branch,
+          index,
+        ]);
+      }
+    }
+  } finally {
+    insertKey.free();
+  }
+
+  await dbService.saveDatabaseToFile(walletId);
+  return walletId;
+}
+
+/** The stored multisig policy, or null for a wallet that has none. */
+export async function watchOnlyMultisigPolicy(
+  walletId: number
+): Promise<MultisigPolicy | null> {
+  const dbService = DatabaseService();
+  await dbService.ensureDatabaseStarted();
+  const db = dbService.getDatabase();
+  if (!db) return null;
+
+  const query = db.prepare(
+    'SELECT multisig_policy FROM wallets WHERE id = ? AND walletType = ?'
+  );
+  try {
+    query.bind([walletId, WATCH_ONLY_WALLET_TYPE]);
+    if (!query.step()) return null;
+    const raw = (query.getAsObject() as Record<string, unknown>).multisig_policy;
+    if (typeof raw !== 'string' || !raw) return null;
+    const policy = JSON.parse(raw) as MultisigPolicy;
+    validateMultisigPolicy(policy);
+    return policy;
+  } catch {
+    return null;
+  } finally {
+    query.free();
+  }
 }
 
 /** The stored xPub, or null for a wallet that is not watch-only. */
