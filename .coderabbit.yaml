@@ -1,0 +1,29 @@
+# CodeRabbit — https://docs.coderabbit.ai/reference/configuration
+# Why PR #12 was skipped: auto reviews only target the repo default branch
+# unless base_branches lists other targets (this project merges to `dev`).
+
+language: "en-US"
+
+reviews:
+  profile: chill
+  request_changes_workflow: false
+  review_status: true
+  high_level_summary: true
+  auto_review:
+    enabled: true
+    drafts: true
+    # Review PRs targeting dev (and release/*) as well as the default branch.
+    base_branches:
+      - "dev"
+      - "main"
+      - "master"
+      - "release/.*"
+  path_filters:
+    - "!dist/**"
+    - "!node_modules/**"
+    - "!**/node_modules/**"
+    - "!android/**/build/**"
+    - "!src-tauri/target/**"
+    - "!**/*.lock"
+    - "!**/package-lock.json"
+    - "!src/platform/web/secp256k1WasmBase64.generated.ts"
