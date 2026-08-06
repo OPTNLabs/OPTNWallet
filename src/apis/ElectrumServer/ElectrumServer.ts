@@ -17,6 +17,12 @@ import {
 import { store } from '../../state/store';
 import { selectCurrentNetwork } from '../../state/selectors/networkSelectors';
 import { Network } from '../../state/slices/networkSlice';
+import {
+  getAllServerHealth,
+  rankServersForConnect,
+  recordServerFailure,
+  recordServerSuccess,
+} from '../../services/electrum/fulcrumReliability';
 
 // ---------- Config ----------
 // Keep connect attempts short: walking a long server list at 8s each made cold
@@ -103,6 +109,13 @@ function isServerBlocked(server: string): boolean {
 function markServerFailed(server?: string | null): void {
   if (!server) return;
   blockedServers.set(server, Date.now() + SERVER_FAILURE_COOLDOWN_MS);
+  recordServerFailure(server);
+}
+
+function markServerOk(server?: string | null, latencyMs = 0): void {
+  if (!server) return;
+  recordServerSuccess(server, latencyMs);
+  setLastHealthyServer(server);
 }
 
 function withTimeout<T>(
@@ -195,12 +208,10 @@ function orderServersForConnection(
   servers: string[],
   startIdx: number
 ): string[] {
+  // Prefer last-known rotation start, then rank by multi-Fulcrum health scores
+  // (latency EMA + success/fail). Blocked hosts sink to the end.
   const rotated = rotateFromIndex(servers, startIdx);
-  const available = rotated.filter((server) => !isServerBlocked(server));
-  if (available.length === 0) {
-    return rotated;
-  }
-  return [...available, ...rotated.filter((server) => isServerBlocked(server))];
+  return rankServersForConnect(rotated, { isBlocked: isServerBlocked });
 }
 
 function buildBatchMessage(
@@ -412,6 +423,7 @@ export default function ElectrumServer() {
           );
 
           try {
+            const t0 = Date.now();
             await withTimeout(
               client.connect(),
               CONNECT_TIMEOUT_MS,
@@ -420,7 +432,7 @@ export default function ElectrumServer() {
             electrum = client;
             currentServer = host;
             serverIndex = servers.indexOf(host);
-            setLastHealthyServer(host);
+            markServerOk(host, Date.now() - t0);
             resetBackoff();
             markSuccessfulActivity();
 
@@ -505,18 +517,24 @@ export default function ElectrumServer() {
   ): Promise<RequestResponse> {
     await electrumConnect();
     try {
+      const t0 = Date.now();
       const res = await withTimeout(
         electrum.request(method, ...params),
         REQUEST_TIMEOUT_MS,
         `request(${method})`
       );
       if (res instanceof Error) throw res;
+      markServerOk(currentServer, Date.now() - t0);
       markSuccessfulActivity();
       return res;
     } catch (err) {
       markServerFailed(currentServer ?? getLastHealthyServer());
       const { servers } = getNetworkAndServers();
-      const nextServer = getNextServer(servers, serverIndex);
+      // Health-ranked next hop (not only index+1).
+      const ranked = rankServersForConnect(servers, {
+        isBlocked: isServerBlocked,
+      }).filter((s) => s !== currentServer);
+      const nextServer = ranked[0] ?? getNextServer(servers, serverIndex);
       await electrumDisconnect();
       try {
         await electrumConnect(nextServer);
@@ -526,12 +544,14 @@ export default function ElectrumServer() {
       if (!electrum) {
         throw err;
       }
+      const t1 = Date.now();
       const res = await withTimeout(
         electrum.request(method, ...params),
         REQUEST_TIMEOUT_MS,
         `request(${method})`
       );
       if (res instanceof Error) throw res;
+      markServerOk(currentServer, Date.now() - t1);
       markSuccessfulActivity();
       return res;
     }
@@ -546,17 +566,23 @@ export default function ElectrumServer() {
     await electrumConnect();
     await ensureFreshConnection();
     try {
+      const t0 = Date.now();
       const results = await withTimeout(
         sendBatch(electrum!, calls),
         budgetMs,
         `requestMany(${calls.length})`
       );
       throwIfBatchTransportFailed(results);
+      markServerOk(currentServer, Date.now() - t0);
+      markSuccessfulActivity();
       return results;
     } catch (err) {
       markServerFailed(currentServer ?? getLastHealthyServer());
       const { servers } = getNetworkAndServers();
-      const nextServer = getNextServer(servers, serverIndex);
+      const ranked = rankServersForConnect(servers, {
+        isBlocked: isServerBlocked,
+      }).filter((s) => s !== currentServer);
+      const nextServer = ranked[0] ?? getNextServer(servers, serverIndex);
       await electrumDisconnect();
       try {
         await electrumConnect(nextServer);
@@ -566,12 +592,15 @@ export default function ElectrumServer() {
       if (!electrum) {
         throw err;
       }
+      const t1 = Date.now();
       const results = await withTimeout(
         sendBatch(electrum!, calls),
         budgetMs,
         `requestMany(${calls.length})`
       );
       throwIfBatchTransportFailed(results);
+      markServerOk(currentServer, Date.now() - t1);
+      markSuccessfulActivity();
       return results;
     }
   }
@@ -657,7 +686,10 @@ export default function ElectrumServer() {
     } catch (err) {
       markServerFailed(currentServer ?? getLastHealthyServer());
       const { servers } = getNetworkAndServers();
-      const nextServer = getNextServer(servers, serverIndex);
+      const ranked = rankServersForConnect(servers, {
+        isBlocked: isServerBlocked,
+      }).filter((s) => s !== currentServer);
+      const nextServer = ranked[0] ?? getNextServer(servers, serverIndex);
       await electrumDisconnect();
       try {
         await electrumConnect(nextServer);
@@ -669,6 +701,7 @@ export default function ElectrumServer() {
       }
       await doSubscribe();
       activeSubs.set(key, { method, params });
+      markServerOk(currentServer);
       markSuccessfulActivity();
     }
   }
@@ -714,6 +747,19 @@ export default function ElectrumServer() {
     return getNetworkAndServers().servers;
   }
 
+  /** Multi-Fulcrum health scores (for settings/debug). */
+  function getReliabilitySnapshot(): {
+    current: string | null;
+    servers: string[];
+    health: ReturnType<typeof getAllServerHealth>;
+  } {
+    return {
+      current: currentServer,
+      servers: getNetworkAndServers().servers,
+      health: getAllServerHealth(),
+    };
+  }
+
   return {
     electrumConnect,
     electrumReconnect,
@@ -727,5 +773,6 @@ export default function ElectrumServer() {
     onNotification,
     getCurrentServer,
     getServerList,
+    getReliabilitySnapshot,
   };
 }
