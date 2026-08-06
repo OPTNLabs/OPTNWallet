@@ -81,7 +81,9 @@ jobs:
           sudo apt-get install -y \
             libwebkit2gtk-4.1-dev libappindicator3-dev \
             librsvg2-dev patchelf libssl-dev libgtk-3-dev libfuse2 \
-            libevent-2.1-7
+            libevent-2.1-7 \
+            libudev-dev libusb-1.0-0-dev pkg-config
+          # hidapi (Ledger/Trezor native USB) needs libudev; rusb needs libusb.
           if [ "${{ matrix.tor-target }}" = 'linux-aarch64' ]; then
             sudo apt-get install -y tor
           fi
