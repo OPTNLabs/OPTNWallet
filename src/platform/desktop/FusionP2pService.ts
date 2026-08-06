@@ -251,16 +251,14 @@ async function collectRolling(
     }
     if (fp !== lastLoggedFp) {
       lastLoggedFp = fp;
-      const keys =
-        peers.map((p) => p.pubkey.slice(0, 8)).join(', ') || '(none)';
+      // Counts only — never session pubkeys (throwaway keys, but still
+      // correlatable across local windows / shared logs).
       console.info(
-        `[p2p-fusion] live set strict=${peers.length} soft=${soft.length} peak=${peakStrict}/${peakSoft}:`,
-        keys
+        `[p2p-fusion] live set strict=${peers.length} soft=${soft.length} peak=${peakStrict}/${peakSoft}`
       );
-      // Live multi-wallet debug: same line lands in optn-wallet.log for tailing.
       void log.info(
         'p2p-live',
-        `w${walletId} strict=${peers.length} soft=${soft.length} peak=${peakStrict}/${peakSoft} keys=${keys}`
+        `w${walletId} strict=${peers.length} soft=${soft.length} peak=${peakStrict}/${peakSoft}`
       );
     }
     // Alone or under-count: re-shout often so a lagging Tor peer still finds us.
@@ -342,12 +340,8 @@ async function collectRolling(
       );
       return peers;
     }
-    const keyHint =
-      n > 0
-        ? ` [${peers.map((p) => p.pubkey.slice(0, 6)).join(' ')}]`
-        : soft.length > 1
-          ? ` [soft ${soft.length}…]`
-          : '';
+    // Status is count-only (no session-pubkey hex). Protocol still uses full
+    // keys internally; UI/logs do not need them for gather progress.
     const secsLeft = Math.max(0, Math.ceil((maxWait - now) / 1_000));
     if (n < 2) {
       const aloneAfterOthers =
@@ -359,11 +353,11 @@ async function collectRolling(
               ? ' Dropping ghosts; waiting for re-announces…'
               : ' Waiting for other wallets (Tor)…';
       onStatus?.(
-        `Only you confirmed active${keyHint} (up to ${secsLeft}s).${aloneAfterOthers}`
+        `Only you confirmed active (up to ${secsLeft}s).${aloneAfterOthers}`
       );
     } else if (n < MIN_PARTICIPANTS) {
       onStatus?.(
-        `${n} active${keyHint} — need ≥${MIN_PARTICIPANTS} for P2P (onion privacy); ` +
+        `${n} active — need ≥${MIN_PARTICIPANTS} for P2P (onion privacy); ` +
           `waiting for more wallets (${secsLeft}s left)…`
       );
     } else if (atCap) {
@@ -376,7 +370,7 @@ async function collectRolling(
         Math.ceil((P2P_GATHER_FAST_WARMUP_MS - elapsed) / 1_000)
       );
       onStatus?.(
-        `${n}/${MAX_PARTICIPANTS} full set${keyHint} — fast lock` +
+        `${n}/${MAX_PARTICIPANTS} full set — fast lock` +
           (needWarm > 0 ? ` warm ${needWarm}s` : '') +
           (needStable > 0 ? ` stable ${needStable}s` : '') +
           (expectMore ? ' (aligning views…)' : '') +
@@ -399,16 +393,16 @@ async function collectRolling(
             ? ` hold ${holdLeft}s for more (max ${MAX_PARTICIPANTS})`
             : '';
       onStatus?.(
-        `${n} active${keyHint} — ${needStable}s stable${holdNote}…`
+        `${n} active — ${needStable}s stable${holdNote}…`
       );
     } else if (enough) {
       const inSecs = Math.max(0, Math.ceil((minReady - now) / 1_000));
       onStatus?.(
-        `${n} active wallet(s)${keyHint} — min gather ${inSecs}s…`
+        `${n} active wallet(s) — min gather ${inSecs}s…`
       );
     } else {
       onStatus?.(
-        `Waiting: ${n} active${keyHint} (up to ${secsLeft}s)…`
+        `Waiting: ${n} active (up to ${secsLeft}s)…`
       );
     }
     await waitUntil(Math.min(maxWait, now + 2_000), signal);
@@ -959,8 +953,8 @@ export async function runP2pFusion(
         onBlame: (report) => {
           recordBlamedSessionKey(report.accused);
           status(
-            `Recorded protocol fault for peer ${report.accused.slice(0, 8)}… ` +
-              `(${report.code}) — excluded this key only, not a person ban.`
+            `Recorded protocol fault (${report.code}) — ` +
+              `excluded that session key only, not a person ban.`
           );
         },
         broadcast: async (txHex) => {
