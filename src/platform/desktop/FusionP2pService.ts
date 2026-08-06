@@ -58,7 +58,6 @@ import { runFusionRound, type RoundResult } from './nostr/fusionSession';
 import { CREDENTIAL_SLOTS_PER_PEER } from './nostr/fusionBlindSchnorr';
 import type { FusionInputRef, FusionOutputRef } from './nostr/fusionRound';
 import { planP2pOutputValues } from './nostr/fusionP2pAllocation';
-import { DEFAULT_RELAYS } from './nostr/chat';
 import {
   P2P_COMPONENT_JITTER_MS,
   P2P_GATHER_ALONE_MS,
@@ -82,17 +81,24 @@ const P2P_TIERS = [10_000, 100_000, 1_000_000, 10_000_000];
 // the rendezvous truncated the candidate list to 6, so four peers could be
 // admitted here and then silently dropped downstream.
 /**
- * Pool discovery relays — small SHARED prefix of the bootstrap list.
- * Live 2026-08-06: 30× first-OK over Tor partitioned 4 wallets (each alone
- * for full 120s JOIN_WAIT). All windows must publish/subscribe the same few
- * relays so kind-12230 events actually meet.
+ * Proven multi-wallet core (live fused many 3–4 ways 02:08–03:54 today).
+ * Always use this set for P2P — do NOT fan out to the full 30-chat bootstrap
+ * list. Expanding to 30 + first-OK over Tor later left every wallet alone.
+ * Same order on every window so announce/subscribe topology matches.
  */
-const MAX_ANNOUNCE_RELAYS = 8;
-/**
- * Round gift-wraps use the same ordered prefix (≤ announce). Keep ≤12 so
- * onion hops do not fan out across dead Tor circuits.
- */
-const MAX_ROUND_RELAYS = 8;
+const FUSION_CORE_RELAYS: readonly string[] = [
+  'wss://relay.damus.io',
+  'wss://nos.lol',
+  'wss://relay.primal.net',
+  'wss://relay.snort.social',
+  'wss://offchain.pub',
+  'wss://nostr.oxtr.dev',
+  'wss://nostr.bitcoiner.social',
+  'wss://nostr-pub.wellorder.net',
+];
+const MAX_ANNOUNCE_RELAYS = FUSION_CORE_RELAYS.length;
+/** Round hops: same core (gift-wraps must share announce topology). */
+const MAX_ROUND_RELAYS = FUSION_CORE_RELAYS.length;
 let wsInstalled = false;
 
 export const P2P_PHASE_LABELS = [
@@ -119,12 +125,14 @@ function toPoolNetwork(network: Network): FusionPoolNetwork {
   return network === Network.MAINNET ? 'mainnet' : 'chipnet';
 }
 
-function validatedRelays(configured?: string[], max = MAX_ANNOUNCE_RELAYS): string[] {
-  const relays = Array.from(
-    new Set(configured?.length ? configured : DEFAULT_RELAYS)
-  )
-    .filter((relay) => relay.startsWith('wss://'))
-    .slice(0, max);
+/**
+ * Fusion always runs on {@link FUSION_CORE_RELAYS}. User/chat extras are ignored
+ * for pool discovery so multi-window tests cannot partition on different lists.
+ */
+function validatedRelays(_configured?: string[], max = MAX_ANNOUNCE_RELAYS): string[] {
+  const relays = FUSION_CORE_RELAYS.filter((relay) =>
+    relay.startsWith('wss://')
+  ).slice(0, max);
   if (relays.length === 0)
     throw new Error('No secure Nostr relays configured.');
   return relays;
