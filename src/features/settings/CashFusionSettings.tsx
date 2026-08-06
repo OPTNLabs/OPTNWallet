@@ -453,6 +453,7 @@ export const CashFusionSettings: React.FC<{ variant?: 'card' | 'servers' }> = ({
               utxos: coins,
               relays: nostrRelays,
               tor: tor ?? null,
+              trigger: 'manual',
               onStatus: (m) => {
                 setP2pMsg(m);
                 reportFusionProgress(walletId, { status: m });

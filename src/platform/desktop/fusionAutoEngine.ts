@@ -40,8 +40,17 @@ export type AutoFusionDecision =
  * autofuse is not silenced for five minutes after every empty gather.
  */
 export const AUTO_FUSION_COOLDOWN_MS = 5 * 60_000;
-/** Backoff after a failed auto attempt that did not complete a paid round. */
-export const AUTO_FUSION_RETRY_MS = 90_000;
+/**
+ * Backoff after a failed auto attempt that did not complete a paid round.
+ * Keep shorter than the engine tick (60–120s) so staggered multi-window auto
+ * re-enters the pool and can meet instead of missing by one long backoff.
+ */
+export const AUTO_FUSION_RETRY_MS = 45_000;
+/**
+ * Empty-pool / no-agree retries — re-enter quickly so late peers still meet.
+ * (Paid success still uses {@link AUTO_FUSION_COOLDOWN_MS}.)
+ */
+export const AUTO_FUSION_EMPTY_POOL_RETRY_MS = 25_000;
 
 export function decideAutoFusion(input: AutoFusionInputs): AutoFusionDecision {
   if (!input.cashFusionEnabled) return { run: false, reason: 'CashFusion is off' };
