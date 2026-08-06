@@ -53,10 +53,17 @@ export const SERVER_SESSION_CEILING_MS =
 // ─── P2P budgets (≤ server), phase-allocated from live data ───────────
 
 /**
- * Pool discover max — same as server JOIN_WAIT.
- * Live: 4 wallets converged in &lt;10s; we still allow full JOIN_WAIT for Tor lag.
+ * Pool discover max when we already saw other peers (partial set / soft lag).
+ * Same as server JOIN_WAIT. Alone-never-found uses {@link P2P_GATHER_ALONE_MS}.
  */
 export const P2P_GATHER_MAX_MS = SERVER_JOIN_WAIT_MS;
+
+/**
+ * If we never hear ANY other wallet, do not burn full JOIN_WAIT (user: "still
+ * 120s where is the speed?"). Fail fast with a clear message; re-Start is free.
+ * Live multi-wallet discovery is normally &lt;15s when relays overlap.
+ */
+export const P2P_GATHER_ALONE_MS = 35_000;
 
 /**
  * Min gather before locking a *partial* set (MIN ≤ n < MAX).

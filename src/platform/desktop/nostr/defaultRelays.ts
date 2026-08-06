@@ -7,8 +7,9 @@
  * `ws://`. There is no plain TCP Nostr relay API like Electrum; server CashFusion
  * TCP is a different protocol. We only allow `wss://` in fusion/chat.
  *
- * Multi-relay redundancy: publish/subscribe to this whole set; first OK wins.
- * FusionP2pService MAX_RELAYS must be ≥ this list length (currently 30).
+ * Bootstrap list for settings / merge. Fusion pool discovery uses only the
+ * first ~8 (shared prefix) so multi-wallet Tor does not partition; gift-wrap
+ * rounds use the same prefix. Chat may still probe the full list.
  *
  * Curated free generals only. Source candidates include community lists
  * (e.g. sesseor/nostr-relays-list); dead/paid/private IPs/NSFW junk excluded.

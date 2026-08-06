@@ -61,6 +61,7 @@ import { planP2pOutputValues } from './nostr/fusionP2pAllocation';
 import { DEFAULT_RELAYS } from './nostr/chat';
 import {
   P2P_COMPONENT_JITTER_MS,
+  P2P_GATHER_ALONE_MS,
   P2P_GATHER_FAST_WARMUP_MS,
   P2P_GATHER_MAX_MS,
   P2P_GATHER_MIN_MS,
@@ -80,14 +81,18 @@ const P2P_TIERS = [10_000, 100_000, 1_000_000, 10_000_000];
 // this service cannot disagree. They did: this file capped a round at 10 while
 // the rendezvous truncated the candidate list to 6, so four peers could be
 // admitted here and then silently dropped downstream.
-// Pool announce can use the full bootstrap list (discovery redundancy).
-const MAX_ANNOUNCE_RELAYS = 30;
 /**
- * Round gift-wraps (credentials, onion hops, sigs) use a smaller *prefix* of the
- * same ordered list so every wallet agrees on the set. Publishing every hop to
- * all 30 over Tor made successful rounds feel ~90s; 12 is enough redundancy.
+ * Pool discovery relays — small SHARED prefix of the bootstrap list.
+ * Live 2026-08-06: 30× first-OK over Tor partitioned 4 wallets (each alone
+ * for full 120s JOIN_WAIT). All windows must publish/subscribe the same few
+ * relays so kind-12230 events actually meet.
  */
-const MAX_ROUND_RELAYS = 12;
+const MAX_ANNOUNCE_RELAYS = 8;
+/**
+ * Round gift-wraps use the same ordered prefix (≤ announce). Keep ≤12 so
+ * onion hops do not fan out across dead Tor circuits.
+ */
+const MAX_ROUND_RELAYS = 8;
 let wsInstalled = false;
 
 export const P2P_PHASE_LABELS = [
@@ -332,6 +337,15 @@ async function collectRolling(
           `Start ALL wallets together for the next round.`
       );
     }
+    // Never found anyone: fail fast (not 120s). Discovery is broken or others
+    // never started — burning JOIN_WAIT just shows "up to 120s" with no peers.
+    const neverSawOthers = peakSoft <= 1 && peakStrict <= 1;
+    if (neverSawOthers && elapsed >= P2P_GATHER_ALONE_MS) {
+      throw new Error(
+        `No other wallets found in ${Math.round(P2P_GATHER_ALONE_MS / 1000)}s. ` +
+          `Start ALL wallets together (same network), check Tor + Nostr relays green, then retry.`
+      );
+    }
     if (canLock || now >= maxWait) {
       onStatus?.(
         `Gather done: ${n} active wallet(s) ` +
@@ -342,19 +356,20 @@ async function collectRolling(
     }
     // Status is count-only (no session-pubkey hex). Protocol still uses full
     // keys internally; UI/logs do not need them for gather progress.
-    const secsLeft = Math.max(0, Math.ceil((maxWait - now) / 1_000));
+    const aloneDeadline = neverSawOthers
+      ? start + P2P_GATHER_ALONE_MS
+      : maxWait;
+    const secsLeft = Math.max(0, Math.ceil((aloneDeadline - now) / 1_000));
     if (n < 2) {
       const aloneAfterOthers =
         peakStrict >= 2 && peakGraceLeft > 0
           ? ` Peers left (peak ${peakStrict}); giving up in ${Math.ceil(peakGraceLeft / 1000)}s if no one returns…`
-          : elapsed > 12_000
-            ? ' Still shouting — if others already fused, Cancel + Start ALL together.'
+          : neverSawOthers
+            ? ` Shouting on shared relays… (${secsLeft}s then retry if alone)`
             : soft.length > 1 || peakSoft > 1
               ? ' Dropping ghosts; waiting for re-announces…'
               : ' Waiting for other wallets (Tor)…';
-      onStatus?.(
-        `Only you confirmed active (up to ${secsLeft}s).${aloneAfterOthers}`
-      );
+      onStatus?.(`Only you so far.${aloneAfterOthers}`);
     } else if (n < MIN_PARTICIPANTS) {
       onStatus?.(
         `${n} active — need ≥${MIN_PARTICIPANTS} for P2P (onion privacy); ` +

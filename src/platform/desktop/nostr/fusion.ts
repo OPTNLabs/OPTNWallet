@@ -418,12 +418,19 @@ export function selectFusionGroup(
  * Per-relay ACK wait. Was 30s + Promise.allSettled (waited for EVERY relay,
  * including silent ones) → one hung relay delayed success even after another
  * already said OK, and under Tor multi-window load often timed everyone out.
- * 15s is enough for slow Tor; first OK wins (see publishRaceFirstOk).
+ * 12s is enough for slow Tor; min-ACK race (see publishRaceMinOk).
  */
-const PUBLISH_RELAY_TIMEOUT_MS = 15_000;
+const PUBLISH_RELAY_TIMEOUT_MS = 12_000;
 /** Whole-event retries when every relay fails/times out (live: intermittent ACK). */
 const PUBLISH_MAX_ROUNDS = 3;
 const PUBLISH_RETRY_BASE_MS = 400;
+/**
+ * Pool discovery must land on *shared* relays. first-OK alone (minAcks=1) let
+ * four local wallets each ACK a different flaky relay and never see each other
+ * → full 120s "Only you" gather. Require 2 ACKs for announces when ≥2 relays.
+ * Round gift-wraps stay at 1 (speed; hops use the shared prefix list).
+ */
+const PUBLISH_POOL_MIN_ACKS = 2;
 
 function sleepMs(ms: number, signal?: AbortSignal): Promise<void> {
   return new Promise((resolve, reject) => {
@@ -444,18 +451,21 @@ function sleepMs(ms: number, signal?: AbortSignal): Promise<void> {
 }
 
 /**
- * Publish once: resolve as soon as ANY relay ACKs (do not wait for stragglers).
- * Reject only when every relay fails or times out.
+ * Publish once: resolve when `minAcks` relays ACK (do not wait for stragglers).
+ * Reject when remaining relays cannot still reach minAcks.
  */
-function publishRaceFirstOk(
+function publishRaceMinOk(
   pool: SimplePool,
   relays: string[],
   event: Event,
+  minAcks: number,
   signal?: AbortSignal
 ): Promise<void> {
+  const need = Math.max(1, Math.min(minAcks, relays.length));
   return new Promise((resolve, reject) => {
     let settled = false;
     let remaining = relays.length;
+    let oks = 0;
     const errors: unknown[] = [];
     const finishOk = () => {
       if (settled) return;
@@ -466,7 +476,9 @@ function publishRaceFirstOk(
     const finishErr = (error: unknown) => {
       errors.push(error);
       remaining -= 1;
-      if (remaining > 0 || settled) return;
+      if (settled) return;
+      // Still possible to hit need if remaining successes can fill the gap.
+      if (oks + remaining >= need) return;
       settled = true;
       signal?.removeEventListener('abort', onAbort);
       const first = errors[0];
@@ -498,10 +510,12 @@ function publishRaceFirstOk(
       }, PUBLISH_RELAY_TIMEOUT_MS);
       attempt.then(
         () => {
-          if (done) return;
+          if (done || settled) return;
           done = true;
           clearTimeout(timer);
-          finishOk();
+          oks += 1;
+          remaining -= 1;
+          if (oks >= need) finishOk();
         },
         (error: unknown) => {
           if (done || settled) return;
@@ -518,7 +532,9 @@ export async function publishEventAtLeastOnce(
   pool: SimplePool,
   relays: string[],
   event: Event,
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  /** How many distinct relay ACKs before success (default 1 = first-OK). */
+  minAcks = 1
 ): Promise<void> {
   if (relays.length === 0) throw new Error('No Nostr relays configured.');
   if (signal?.aborted) throw new Error('fusion round cancelled');
@@ -527,7 +543,7 @@ export async function publishEventAtLeastOnce(
   for (let round = 0; round < PUBLISH_MAX_ROUNDS; round++) {
     if (signal?.aborted) throw new Error('fusion round cancelled');
     try {
-      await publishRaceFirstOk(pool, relays, event, signal);
+      await publishRaceMinOk(pool, relays, event, minAcks, signal);
       return;
     } catch (error) {
       lastError = error;
@@ -691,7 +707,14 @@ export function joinPool(
       tiers: options.tiers,
       numInputs: options.numInputs,
     });
-    await publishEventAtLeastOnce(pool, relays, evt, options.signal);
+    // ≥2 relay ACKs so multi-wallet gather shares topology (not first-OK alone).
+    await publishEventAtLeastOnce(
+      pool,
+      relays,
+      evt,
+      options.signal,
+      PUBLISH_POOL_MIN_ACKS
+    );
   };
 
   announceTimer = setTimeout(
