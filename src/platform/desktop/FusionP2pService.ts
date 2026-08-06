@@ -918,6 +918,11 @@ export async function runP2pFusion(
       outputPool,
       opts.signal
     );
+    // Brief wire-up so onMessage (Nostr + same-origin BC) is subscribed before
+    // the elected coordinator's first proposal (live: silent-coordinator failover
+    // when all three locked gather within 1s but listeners were not ready).
+    await new Promise((r) => setTimeout(r, 400));
+    if (opts.signal?.aborted) throw new Error('fusion round cancelled');
     let negotiated;
     try {
       negotiated = await negotiateFusionRound(
