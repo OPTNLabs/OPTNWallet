@@ -3,21 +3,25 @@
  * These are not user-removable in settings (same idea as Fulcrum seed servers).
  * Only relays the user adds themselves get a Remove button.
  *
- * Multi-relay redundancy: fusion publishes/subscribes to this whole set;
- * first OK wins (publishEventAtLeastOnce). FusionP2pService caps at MAX_RELAYS
- * (30) so this list must stay ≤ that.
+ * Protocol: Nostr (NIP-01) is **WebSocket only** — `wss://` (TLS) or rarely
+ * `ws://`. There is no plain TCP Nostr relay API like Electrum; server CashFusion
+ * TCP is a different protocol. We only allow `wss://` in fusion/chat.
  *
- * Free general-purpose only. Skip paid (nostr.wine, nostr.land, …) and
- * relay.nostr.band (historical WSS hang). Re-probe via NIP-11 when expanding.
+ * Multi-relay redundancy: publish/subscribe to this whole set; first OK wins.
+ * FusionP2pService MAX_RELAYS must be ≥ this list length (currently 30).
+ *
+ * Curated free generals only. Source candidates include community lists
+ * (e.g. sesseor/nostr-relays-list); dead/paid/private IPs/NSFW junk excluded.
+ * Alive filter: NIP-11 HTTPS probe 2026-08-06 (not a full WSS publish test).
+ * Skip: nostr.wine / nostr.land fleets, relay.nostr.band (WSS hang history).
  */
 export const DEFAULT_RELAYS: string[] = [
-  // Core bootstrap (widely used free generals)
+  // Core free generals
   'wss://relay.damus.io',
   'wss://nos.lol',
   'wss://relay.primal.net',
   'wss://relay.snort.social',
   'wss://offchain.pub',
-  // Long-running free community / developer relays
   'wss://nostr.oxtr.dev',
   'wss://nostr.bitcoiner.social',
   'wss://nostr-pub.wellorder.net',
@@ -25,14 +29,13 @@ export const DEFAULT_RELAYS: string[] = [
   'wss://relay.nostr.info',
   'wss://nostr.mom',
   'wss://purplerelay.com',
-  // Free diversity (prior probe)
+  // Alive free diversity (NIP-11 OK this probe)
   'wss://relay.orangepill.dev',
   'wss://nostr.einundzwanzig.space',
   'wss://nostr.rocks',
   'wss://relay.shawnyeager.com',
   'wss://nostr.vulpem.com',
   'wss://nostr.l00p.org',
-  // Expanded free set (NIP-11 OK 2026-08-06 second probe) — toward cap 30
   'wss://relay.nostr.wirednet.jp',
   'wss://relay.nostrview.com',
   'wss://relay.nostromo.social',
@@ -42,9 +45,10 @@ export const DEFAULT_RELAYS: string[] = [
   'wss://nostr.frostr.xyz',
   'wss://relay.fountain.fm',
   'wss://nostr.data.haus',
-  'wss://nostrue.com',
   'wss://relay.noswhere.com',
-  'wss://relay.0xchat.com',
+  // Replacements for dead prior entries (alive this probe)
+  'wss://yabu.me',
+  'wss://pyramid.fiatjaf.com',
 ];
 
 const DEFAULT_SET = new Set(
