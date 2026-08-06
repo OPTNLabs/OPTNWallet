@@ -51,24 +51,38 @@ export const DEFAULT_RELAYS: string[] = [
   'wss://pyramid.fiatjaf.com',
 ];
 
-const DEFAULT_SET = new Set(
-  DEFAULT_RELAYS.map((r) => r.trim().toLowerCase())
-);
+/** Normalize for comparison (case, trailing slash). */
+export function normalizeRelayUrl(url: string): string {
+  return url.trim().toLowerCase().replace(/\/+$/, '');
+}
 
 /** True when this URL is a built-in bootstrap relay (not user-added). */
 export function isDefaultNostrRelay(url: string): boolean {
-  return DEFAULT_SET.has(url.trim().toLowerCase());
+  const key = normalizeRelayUrl(url);
+  // Read DEFAULT_RELAYS live so HMR / list edits never leave a stale Set.
+  return DEFAULT_RELAYS.some((r) => normalizeRelayUrl(r) === key);
 }
 
-/** Merge bootstrap set with user list; bootstrap first, then user extras. */
+/**
+ * Merge bootstrap set with user list; bootstrap first (canonical URLs), then
+ * user extras that are not defaults. Former bootstrap entries that left the
+ * built-in list stay as removable extras until the user deletes them.
+ */
 export function mergeWithDefaultRelays(relays: string[] | undefined | null): string[] {
   const user = (relays ?? [])
     .map((r) => r.trim())
     .filter((r) => r.length > 0);
   const seen = new Set<string>();
   const out: string[] = [];
-  for (const r of [...DEFAULT_RELAYS, ...user]) {
-    const key = r.toLowerCase();
+  // Always emit canonical DEFAULT_RELAYS strings first (stable, non-removable).
+  for (const r of DEFAULT_RELAYS) {
+    const key = normalizeRelayUrl(r);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(r);
+  }
+  for (const r of user) {
+    const key = normalizeRelayUrl(r);
     if (seen.has(key)) continue;
     seen.add(key);
     out.push(r);
