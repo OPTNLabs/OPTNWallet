@@ -603,6 +603,12 @@ export function invalidateJoinPoolAnnouncers(): number {
   return next;
 }
 
+/**
+ * Same-origin windows share pool announces without waiting on Tor.
+ * Remote peers still meet only via Nostr (channel never leaves this origin).
+ */
+const POOL_BC_NAME = 'optn-p2p-pool-v1';
+
 /** Subscribe to exactly one fresh network epoch and periodically re-announce. */
 export function joinPool(
   pool: SimplePool,
@@ -657,6 +663,19 @@ export function joinPool(
     options.onPeer([...peers.values()]);
   };
 
+  const admitAnnouncement = (ann: PoolAnnouncement) => {
+    if (!stillMine()) return;
+    if (isRetiredRoundKey(ann.pubkey)) return;
+    const nowSec = Math.floor(Date.now() / 1000);
+    const prev = peers.get(ann.pubkey);
+    peers.set(ann.pubkey, {
+      ...ann,
+      at: prev ? Math.max(prev.at, ann.at) : ann.at,
+      seenAt: nowSec,
+    });
+    emitPeers();
+  };
+
   const sub = pool.subscribeMany(relays, filter, {
     onevent(evt: Event) {
       if (!stillMine()) return;
@@ -666,16 +685,7 @@ export function joinPool(
         epoch: options.epoch,
       });
       if (ann) {
-        const nowSec = Math.floor(Date.now() / 1000);
-        const prev = peers.get(ann.pubkey);
-        // Keep the newest created_at; always refresh local hear-time so Tor
-        // lag on later re-announces does not age the peer out of the live set.
-        peers.set(ann.pubkey, {
-          ...ann,
-          at: prev ? Math.max(prev.at, ann.at) : ann.at,
-          seenAt: nowSec,
-        });
-        emitPeers();
+        admitAnnouncement(ann);
         return;
       }
       // Withdraw publishes expiresAt = now-1; parse rejects it. Without this
@@ -700,6 +710,43 @@ export function joinPool(
     },
   });
 
+  // Same-origin peer bridge (multi-wallet on one machine). Remote users meet
+  // on Nostr only — BroadcastChannel does not leave this app origin.
+  let poolBc: BroadcastChannel | null = null;
+  try {
+    if (typeof BroadcastChannel !== 'undefined') {
+      poolBc = new BroadcastChannel(POOL_BC_NAME);
+      poolBc.onmessage = (ev: MessageEvent) => {
+        if (!stillMine()) return;
+        const data = ev.data as {
+          network?: string;
+          ann?: PoolAnnouncement;
+          withdraw?: string;
+        } | null;
+        if (!data || data.network !== options.network) return;
+        if (typeof data.withdraw === 'string' && data.withdraw.length >= 32) {
+          peers.delete(data.withdraw);
+          emitPeers();
+          return;
+        }
+        const ann = data.ann;
+        if (
+          !ann ||
+          typeof ann.pubkey !== 'string' ||
+          ann.pubkey === options.round.pubkey ||
+          !Array.isArray(ann.tiers) ||
+          typeof ann.at !== 'number' ||
+          typeof ann.expiresAt !== 'number'
+        ) {
+          return;
+        }
+        admitAnnouncement(ann);
+      };
+    }
+  } catch {
+    poolBc = null;
+  }
+
   const announce = async () => {
     if (!stillMine()) {
       teardownTimers();
@@ -722,8 +769,25 @@ export function joinPool(
       options.signal,
       PUBLISH_POOL_MIN_ACKS
     );
+    // Admit locally + same-origin bridge: do not wait for Tor to echo us, and
+    // let other app windows discover us even when relays lag.
+    const ann = parsePoolAnnouncement(evt, {
+      network: options.network,
+      epoch: options.epoch,
+    });
+    if (ann) {
+      admitAnnouncement(ann);
+      try {
+        poolBc?.postMessage({ network: options.network, ann });
+      } catch {
+        /* ignore */
+      }
+    }
   };
 
+  // Head-start Tor WSS before first shout (0–800ms was often too early).
+  const firstAnnounceDelay =
+    1_200 + Math.floor(Math.random() * MAX_ANNOUNCE_DELAY_MS);
   announceTimer = setTimeout(
     () => {
       void announce().catch((error: unknown) =>
@@ -732,7 +796,7 @@ export function joinPool(
         )
       );
     },
-    Math.floor(Math.random() * MAX_ANNOUNCE_DELAY_MS)
+    firstAnnounceDelay
   );
   repeatTimer = setInterval(() => {
     if (!stillMine()) {
@@ -752,6 +816,12 @@ export function joinPool(
     stop: () => {
       stopped = true;
       teardownTimers();
+      try {
+        poolBc?.close();
+      } catch {
+        /* ignore */
+      }
+      poolBc = null;
       sub.close();
     },
     announceNow: announce,
@@ -759,6 +829,16 @@ export function joinPool(
     withdraw: async () => {
       stopped = true;
       teardownTimers();
+      try {
+        poolBc?.postMessage({
+          network: options.network,
+          withdraw: options.round.pubkey,
+        });
+        poolBc?.close();
+      } catch {
+        /* ignore */
+      }
+      poolBc = null;
       // Shared ghost list first so every window's next filter pass drops us
       // even if the expired replaceable is slow over Tor.
       retireRoundKey(options.round.pubkey);

@@ -288,10 +288,12 @@ async function collectRolling(
     }
     // Alone or under-count: re-shout often so a lagging Tor peer still finds us.
     // Use MIN/MAX policy constants — not a bare "3".
+    // Alone: re-shout every 1.5s so Tor/BC lag does not strand a 120s wait.
+    const boostMs = peers.length < MIN_PARTICIPANTS ? 1_500 : 3_000;
     if (
       peers.length < Math.max(MIN_PARTICIPANTS, peakSoft, peakStrict) &&
       announceNow &&
-      now - lastAnnounceBoost > 3_000
+      now - lastAnnounceBoost > boostMs
     ) {
       lastAnnounceBoost = now;
       void announceNow().catch(() => undefined);
