@@ -109,7 +109,9 @@ describe('desktop watch-only preview', () => {
 
     expect(html).toContain('Master fingerprint');
     expect(html).toContain('8 hex chars');
-    expect(html).toContain('optional, but needed to send');
+    // Optional for signing; helps the device claim inputs on its review screen.
+    expect(html).toContain('(optional)');
+    expect(html).toContain('signature does not depend on it');
   });
 
   it('decodes a valid master fingerprint to its 4 bytes', () => {
