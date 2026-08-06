@@ -19,7 +19,12 @@
 // it registered under its round key. In production these also ride a fresh Tor
 // circuit (torWebSocket).
 
-import { SimplePool, generateSecretKey, type Event } from 'nostr-tools';
+import {
+  SimplePool,
+  generateSecretKey,
+  getPublicKey,
+  type Event,
+} from 'nostr-tools';
 import { wrapEvent, unwrapEvent } from 'nostr-tools/nip17';
 import { publishEventAtLeastOnce } from './fusion';
 import { parseRoundMessage, type RoundTransport } from './fusionSession';
@@ -49,6 +54,27 @@ export function createNostrRoundTransport(
   signal?: AbortSignal
 ): RoundTransport {
   const protocolErrorHandlers = new Set<(from: string, error: Error) => void>();
+  /** Dedup BC+Nostr dual path (same msg.nonce once). */
+  const seenMsgNonces = new Set<string>();
+  const deliver = (
+    from: string,
+    msg: Parameters<Parameters<RoundTransport['onMessage']>[0]>[1],
+    handler: Parameters<RoundTransport['onMessage']>[0]
+  ) => {
+    const nonce =
+      msg && typeof msg === 'object' && 'nonce' in msg
+        ? String((msg as { nonce?: string }).nonce ?? '')
+        : '';
+    if (nonce) {
+      if (seenMsgNonces.has(nonce)) return;
+      seenMsgNonces.add(nonce);
+      if (seenMsgNonces.size > 2_000) {
+        // Bound memory for long rounds.
+        seenMsgNonces.clear();
+      }
+    }
+    handler(from, msg);
+  };
   return {
     send: async (toPubkey, msg) => {
       // Outputs (plain or onion) are sealed by a throwaway key so the recipient
@@ -62,12 +88,13 @@ export function createNostrRoundTransport(
       try {
         if (typeof BroadcastChannel !== 'undefined') {
           const bc = new BroadcastChannel(ROUND_BC_NAME);
+          // Match gift-wrap identity: anonymous outputs use a throwaway from.
+          const fromBc = isAnonymousOutput
+            ? getPublicKey(signer)
+            : round.pubkey;
           bc.postMessage({
             to: toPubkey,
-            from: round.pubkey,
-            // For anonymous outputs the gift-wrap "from" is throwaway; BC uses
-            // a fixed tag so peelers still accept the payload (session-bound).
-            fromAnon: isAnonymousOutput,
+            from: fromBc,
             msg,
           });
           bc.close();
@@ -111,7 +138,7 @@ export function createNostrRoundTransport(
             );
             return;
           }
-          handler(rumor.pubkey, msg);
+          deliver(rumor.pubkey, msg, handler);
         } catch {
           /* not addressed to us, or undecryptable — ignore */
         }
@@ -140,7 +167,7 @@ export function createNostrRoundTransport(
                 : JSON.stringify(data.msg ?? null);
             const parsed = parseRoundMessage(content);
             if (!parsed) return;
-            handler(data.from, parsed);
+            deliver(data.from, parsed, handler);
           };
         }
       } catch {
