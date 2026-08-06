@@ -93,7 +93,7 @@ export function isBlameCode(value: unknown): value is BlameCode {
 
 /** Short human reason for abort UI / abort message (≤240 later). */
 export function formatBlameAbortReason(report: BlameReport): string {
-  const short = report.accused.slice(0, 8);
+  // No accused hex in UI/logs — blame still binds the full key internally.
   const labels: Record<BlameCode, string> = {
     pedersen_unbalanced: 'Pedersen balance failed',
     credential_slot_oob: 'credential slot out of range',
@@ -102,7 +102,7 @@ export function formatBlameAbortReason(report: BlameReport): string {
     invalid_signature_set: 'invalid signature set',
   };
   return (
-    `Protocol fault by peer ${short}… (${labels[report.code]}). ` +
+    `Protocol fault (${labels[report.code]}). ` +
     'Round aborted safely. Not a network timeout — others may retry together.'
   );
 }
