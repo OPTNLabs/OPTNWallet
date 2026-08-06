@@ -75,4 +75,10 @@ export async function integratedTorStatus(): Promise<ManagedTorStatus> {
 
 export const INTEGRATED_TOR_SUPPORTED = true;
 
+/**
+ * App-managed Tor SOCKS port (must match INTEGRATED_TOR_SOCKS_PORT in lib.rs).
+ * Not 9050/9150 so it does not clash with system Tor Browser / daemon.
+ */
+export const INTEGRATED_TOR_SOCKS_PORT = 9251;
+
 export type { FusionServerStatus, TorConfig };
