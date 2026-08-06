@@ -87,7 +87,11 @@ const P2P_TIERS = [10_000, 100_000, 1_000_000, 10_000_000];
  * list. Expanding to 30 + first-OK over Tor later left every wallet alone.
  * Same order on every window so announce/subscribe topology matches.
  */
-/** Fewer relays = less Tor fan-out under multi-window auto (8×4 was heavy). */
+/**
+ * Shared bootstrap relays for global P2P discovery (same ordered list for every
+ * client). Kept modest so Tor under many concurrent users stays usable; not
+ * tuned for "one PC opens four wallets" specifically.
+ */
 const FUSION_CORE_RELAYS: readonly string[] = [
   'wss://relay.damus.io',
   'wss://nos.lol',
@@ -360,20 +364,19 @@ async function collectRolling(
     if (neverSawOthers && elapsed >= aloneBudgetMs) {
       throw new Error(
         trigger === 'auto'
-          ? `Auto: no other wallets found in ${Math.round(aloneBudgetMs / 1000)}s — will retry shortly. ` +
-              `Keep Auto on in other windows (same network); Tor + Nostr relays must be green.`
+          ? `Auto: no peers in the global pool for ${Math.round(aloneBudgetMs / 1000)}s — will retry at the next rendezvous. ` +
+              `Need ≥${MIN_PARTICIPANTS} online with Auto+P2P+Tor; check Nostr relays.`
           : `No other wallets found in ${Math.round(aloneBudgetMs / 1000)}s. ` +
-              `Start ALL wallets together (same network), check Tor + Nostr relays green, then retry.`
+              `Need ≥${MIN_PARTICIPANTS} peers on the same network (Tor + Nostr green). Retry when others are online.`
       );
     }
     if (canLock || now >= maxWait) {
-      // Auto must not lock a sub-MIN set at maxWait — that becomes
-      // "needs ≥3 fresh peers" after a peer alone-aborts mid-gather.
+      // Never lock a sub-MIN set — anonymity floor and onion mix need ≥3.
       if (n < MIN_PARTICIPANTS) {
         throw new Error(
           trigger === 'auto'
-            ? `Auto: only ${n} wallet(s) after gather window — need ≥${MIN_PARTICIPANTS}. Will retry shortly.`
-            : `P2P Fusion needs at least ${MIN_PARTICIPANTS} fresh peers (CashFusion-style anonymity floor).`
+            ? `Auto: only ${n} peer(s) this slot (need ≥${MIN_PARTICIPANTS}). Will retry at the next global rendezvous.`
+            : `P2P Fusion needs at least ${MIN_PARTICIPANTS} peers (CashFusion-style anonymity floor).`
         );
       }
       onStatus?.(
@@ -393,16 +396,16 @@ async function collectRolling(
           ? ` Peers left (peak ${peakStrict}); giving up in ${Math.ceil(peakGraceLeft / 1000)}s if no one returns…`
           : neverSawOthers
             ? trigger === 'auto'
-              ? ` Auto waiting for peers… (${secsLeft}s, then retry)`
+              ? ` Auto: waiting for global peers… (${secsLeft}s, then next rendezvous)`
               : ` Shouting on shared relays… (${secsLeft}s then retry if alone)`
             : soft.length > 1 || peakSoft > 1
               ? ' Dropping ghosts; waiting for re-announces…'
-              : ' Waiting for other wallets (Tor)…';
+              : ' Waiting for other peers (Tor)…';
       onStatus?.(`Only you so far.${aloneAfterOthers}`);
     } else if (n < MIN_PARTICIPANTS) {
       onStatus?.(
         `${n} active — need ≥${MIN_PARTICIPANTS} for P2P (onion privacy); ` +
-          `waiting for more wallets (${secsLeft}s left)…`
+          `waiting for more peers (${secsLeft}s left)…`
       );
     } else if (atCap) {
       const needStable = Math.max(
