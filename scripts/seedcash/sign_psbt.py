@@ -132,6 +132,55 @@ def sign_as(index: int, unsigned_path: str, signed_path: str) -> None:
     print(json.dumps({"fingerprint": wallet._fingerprint}))
 
 
+def decode_ur(frames_path: str, out_path: str) -> None:
+    """Reconstruct a PSBT from OPTN's UR frames using SeedCash's own decoder.
+
+    The animated QR is the only channel between the two apps, so "our encoder
+    and our decoder agree" proves nothing about whether the device can read
+    what we display. This runs the frames through SeedCash's `URDecoder` — the
+    same one `decode_qr.py` feeds from the camera.
+    """
+    from seedcash.helpers.ur2.ur_decoder import URDecoder
+
+    decoder = URDecoder()
+    with open(frames_path, "r", encoding="utf-8") as handle:
+        frames = [line.strip() for line in handle if line.strip()]
+
+    for frame in frames:
+        decoder.receive_part(frame)
+        if decoder.is_complete():
+            break
+
+    if not decoder.is_complete():
+        raise SystemExit(
+            f"SeedCash's decoder never completed after {len(frames)} frames."
+        )
+
+    message = decoder.result_message()
+    raw = bytes(message.cbor)
+
+    # `ur:crypto-psbt` wraps the PSBT in a CBOR byte string (BCR-2020-006), so
+    # `.cbor` is the wrapper, not the payload. SeedCash's `get_data_psbt()`
+    # returns `.cbor` straight to its parser and therefore chokes on its own
+    # decode — see the note in seedcashUrRoundtrip.test.ts. Unwrap it here so
+    # the test can assert what the bytes on the wire actually are.
+    from seedcash.helpers.ur2.cbor_lite import CBORDecoder
+
+    payload, _ = CBORDecoder(raw).decodeBytes()
+
+    with open(out_path, "w", encoding="utf-8") as handle:
+        handle.write(bytes(payload).hex())
+    print(
+        json.dumps(
+            {
+                "frames": len(frames),
+                "type": message.type,
+                "cborPrefix": raw[: len(raw) - len(payload)].hex(),
+            }
+        )
+    )
+
+
 if __name__ == "__main__":
     if len(sys.argv) >= 2 and sys.argv[1] == "keys":
         emit_keys()
@@ -139,6 +188,8 @@ if __name__ == "__main__":
         emit_cosigner_keys(int(sys.argv[2]))
     elif len(sys.argv) == 5 and sys.argv[1] == "sign-as":
         sign_as(int(sys.argv[2]), sys.argv[3], sys.argv[4])
+    elif len(sys.argv) == 4 and sys.argv[1] == "decode-ur":
+        decode_ur(sys.argv[2], sys.argv[3])
     elif len(sys.argv) == 4 and sys.argv[1] == "sign":
         sign(sys.argv[2], sys.argv[3])
     else:
