@@ -1019,7 +1019,7 @@ export async function runP2pFusion(
         onStatus: status,
         onBlame: (report) => {
           recordBlamedSessionKey(report.accused);
-          status(
+          status?.(
             `Recorded protocol fault (${report.code}) — ` +
               `excluded that session key only, not a person ban.`
           );

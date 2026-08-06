@@ -147,6 +147,11 @@ export async function trezorSignPayment(args: {
   >;
   outputs: LedgerOutput[];
   changePath?: string;
+  /**
+   * Index of the change output in `outputs`. Required when `changePath` is set
+   * — never infer "last output is change" (planner may interleave recipients).
+   */
+  changeOutputIndex?: number;
   deviceKind: 'trezor' | 'onekey';
   network?: 'mainnet' | 'chipnet';
 }): Promise<string> {
@@ -186,13 +191,17 @@ export async function trezorSignPayment(args: {
       };
     });
 
-    // EC tx_outputs: change uses address_n, external uses address string
+    // EC tx_outputs: change uses address_n, external uses address string.
+    // Only the explicit change index may use address_n.
+    const changeIdx =
+      args.changePath != null &&
+      args.changeOutputIndex != null &&
+      args.changeOutputIndex >= 0 &&
+      args.changeOutputIndex < args.outputs.length
+        ? args.changeOutputIndex
+        : undefined;
     const thisOutputs = args.outputs.map((o, idx) => {
-      const isChange =
-        Boolean(args.changePath) &&
-        idx === args.outputs.length - 1 &&
-        args.outputs.length > 1;
-      if (isChange && args.changePath) {
+      if (changeIdx === idx && args.changePath) {
         return {
           address_n: pathToAddressN(args.changePath),
           amount: o.amountSatoshis.toString(),
