@@ -80,9 +80,14 @@ const P2P_TIERS = [10_000, 100_000, 1_000_000, 10_000_000];
 // this service cannot disagree. They did: this file capped a round at 10 while
 // the rendezvous truncated the candidate list to 6, so four peers could be
 // admitted here and then silently dropped downstream.
-// Cap for bootstrap + a few user-added relays. Keep ≥ DEFAULT_RELAYS.length
-// so the built-in multi-relay list is never truncated (old 8 was a bug).
-const MAX_RELAYS = 30;
+// Pool announce can use the full bootstrap list (discovery redundancy).
+const MAX_ANNOUNCE_RELAYS = 30;
+/**
+ * Round gift-wraps (credentials, onion hops, sigs) use a smaller *prefix* of the
+ * same ordered list so every wallet agrees on the set. Publishing every hop to
+ * all 30 over Tor made successful rounds feel ~90s; 12 is enough redundancy.
+ */
+const MAX_ROUND_RELAYS = 12;
 let wsInstalled = false;
 
 export const P2P_PHASE_LABELS = [
@@ -109,12 +114,12 @@ function toPoolNetwork(network: Network): FusionPoolNetwork {
   return network === Network.MAINNET ? 'mainnet' : 'chipnet';
 }
 
-function validatedRelays(configured?: string[]): string[] {
+function validatedRelays(configured?: string[], max = MAX_ANNOUNCE_RELAYS): string[] {
   const relays = Array.from(
     new Set(configured?.length ? configured : DEFAULT_RELAYS)
   )
     .filter((relay) => relay.startsWith('wss://'))
-    .slice(0, MAX_RELAYS);
+    .slice(0, max);
   if (relays.length === 0)
     throw new Error('No secure Nostr relays configured.');
   return relays;
@@ -655,7 +660,11 @@ export async function runP2pFusion(
   if (opts.signal?.aborted) throw new Error('fusion round cancelled');
   if (!torOk) throw new Error('Tor is not reachable — P2P fusion stopped.');
 
-  const relays = validatedRelays(opts.relays);
+  // Full list for pool discovery; smaller deterministic prefix for round hops
+  // (same order on every wallet so peers share publish paths without 30× Tor fan-out).
+  const announceRelays = validatedRelays(opts.relays, MAX_ANNOUNCE_RELAYS);
+  const roundRelays = announceRelays.slice(0, MAX_ROUND_RELAYS);
+  const relays = announceRelays;
   if (!wsInstalled) {
     setNostrWebSocketImpl(TorWebSocket);
     wsInstalled = true;
@@ -854,7 +863,7 @@ export async function runP2pFusion(
 
     const transport = createNostrRoundTransport(
       pool,
-      relays,
+      roundRelays,
       round,
       outputPool,
       opts.signal

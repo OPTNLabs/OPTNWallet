@@ -29,7 +29,9 @@ import {
   P2P_ASSEMBLED_RESEND_MS,
   P2P_CREDENTIAL_WAIT_MS,
   P2P_MISSING_OUTPUTS_ONION_MS,
+  P2P_ONION_DECLARE_RESEND_MAX,
   P2P_ONION_DECLARE_RESEND_MS,
+  P2P_ONION_OUTPUT_RESEND_MAX,
   P2P_ONION_OUTPUT_RESEND_MS,
   P2P_ROUND_TIMEOUT_MS,
   P2P_SIG_RESEND_MS,
@@ -633,8 +635,10 @@ const CREDENTIAL_WAIT_MS = P2P_CREDENTIAL_WAIT_MS;
 const MISSING_OUTPUTS_ONION_MS = P2P_MISSING_OUTPUTS_ONION_MS;
 /** Re-send onion_declare so Tor-dropped declares cannot freeze the peel forever. */
 const ONION_DECLARE_RESEND_MS = P2P_ONION_DECLARE_RESEND_MS;
-/** Re-send hop injects (onion_output) — one-shot was the live pool=0 killer. */
+const ONION_DECLARE_RESEND_MAX = P2P_ONION_DECLARE_RESEND_MAX;
+/** Bounded hop inject re-sends (not open-ended — that crushed Tor latency). */
 const ONION_OUTPUT_RESEND_MS = P2P_ONION_OUTPUT_RESEND_MS;
+const ONION_OUTPUT_RESEND_MAX = P2P_ONION_OUTPUT_RESEND_MAX;
 
 function waitWithTimeout<T>(
   promise: Promise<T>,
@@ -1241,9 +1245,17 @@ function runParticipant(
         );
       };
       await sendDeclare();
-      // Tor often drops one gift-wrap; peel waits on sum(declares) forever.
+      // Bounded declare re-sends (open-ended interval made rounds feel ~90s).
+      let declareResendsLeft = ONION_DECLARE_RESEND_MAX;
       declareResendTimer = setInterval(() => {
-        if (settled || onionBatchDone) return;
+        if (settled || onionBatchDone || declareResendsLeft <= 0) {
+          if (declareResendTimer) {
+            clearInterval(declareResendTimer);
+            declareResendTimer = null;
+          }
+          return;
+        }
+        declareResendsLeft -= 1;
         void sendDeclare().catch(() => undefined);
       }, ONION_DECLARE_RESEND_MS);
       const firstPeeler = mixOrder[0];
@@ -1254,7 +1266,8 @@ function runParticipant(
         const onion = await onionWrap(payload, mixOrder);
         injectPayloads.push(btoa(String.fromCharCode(...onion)));
       }
-      const sendInjectsRemote = async () => {
+      // Resend path: no per-blob jitter (keeps recovery fast).
+      const sendInjectsRemote = async (withJitter: boolean) => {
         for (const onionB64 of injectPayloads) {
           await transport
             .send(firstPeeler, {
@@ -1265,7 +1278,7 @@ function runParticipant(
               mixOrder,
             })
             .catch(() => undefined);
-          await jitterDelay(jMin, jMax);
+          if (withJitter) await jitterDelay(jMin, jMax);
         }
       };
       // If we are first peeler, feed locally once only (no self gift-wrap).
@@ -1281,15 +1294,28 @@ function runParticipant(
           });
         }
       } else {
-        await sendInjectsRemote();
-        // Re-send hop blobs — declare-only re-send was not enough (live pool=0).
+        await sendInjectsRemote(true);
+        // Bounded hop re-sends only (not forever — that flooded Tor).
+        let outputResendsLeft = ONION_OUTPUT_RESEND_MAX;
         onionOutputResendTimer = setInterval(() => {
-          if (settled || onionBatchDone || signed) return;
-          void sendInjectsRemote().catch(() => undefined);
+          if (
+            settled ||
+            onionBatchDone ||
+            signed ||
+            outputResendsLeft <= 0
+          ) {
+            if (onionOutputResendTimer) {
+              clearInterval(onionOutputResendTimer);
+              onionOutputResendTimer = null;
+            }
+            return;
+          }
+          outputResendsLeft -= 1;
+          void sendInjectsRemote(false).catch(() => undefined);
         }, ONION_OUTPUT_RESEND_MS);
       }
       if (myIdx >= 0) {
-        onionStatusTimer = setInterval(reportOnionWait, 3_000);
+        onionStatusTimer = setInterval(reportOnionWait, 4_000);
         reportOnionWait();
       }
       // Ready after inject; coordinator still waits for last peeler's reveal.
@@ -1985,8 +2011,16 @@ function runCoordinator(
         );
       };
       await sendDeclare();
+      let declareResendsLeft = ONION_DECLARE_RESEND_MAX;
       declareResendTimer = setInterval(() => {
-        if (settled || assembled) return;
+        if (settled || assembled || declareResendsLeft <= 0) {
+          if (declareResendTimer) {
+            clearInterval(declareResendTimer);
+            declareResendTimer = null;
+          }
+          return;
+        }
+        declareResendsLeft -= 1;
         void sendDeclare().catch(() => undefined);
       }, ONION_DECLARE_RESEND_MS);
       const firstPeeler = mixOrder[0];
@@ -1996,7 +2030,7 @@ function runCoordinator(
         const onion = await onionWrap(payload, mixOrder);
         injectPayloads.push(btoa(String.fromCharCode(...onion)));
       }
-      const sendInjects = async () => {
+      const sendInjects = async (withJitter: boolean) => {
         for (const onionB64 of injectPayloads) {
           await transport
             .send(firstPeeler, {
@@ -2007,14 +2041,22 @@ function runCoordinator(
               mixOrder,
             })
             .catch(() => undefined);
-          await jitterDelay(jMin, jMax);
+          if (withJitter) await jitterDelay(jMin, jMax);
         }
       };
-      await sendInjects();
-      // Re-send hop injects until assembled (Tor often drops one-shot gift-wraps).
+      await sendInjects(true);
+      // Bounded hop re-sends only — open-ended every 2s crushed Tor (~90s rounds).
+      let outputResendsLeft = ONION_OUTPUT_RESEND_MAX;
       onionOutputResendTimer = setInterval(() => {
-        if (settled || assembled) return;
-        void sendInjects().catch(() => undefined);
+        if (settled || assembled || outputResendsLeft <= 0) {
+          if (onionOutputResendTimer) {
+            clearInterval(onionOutputResendTimer);
+            onionOutputResendTimer = null;
+          }
+          return;
+        }
+        outputResendsLeft -= 1;
+        void sendInjects(false).catch(() => undefined);
       }, ONION_OUTPUT_RESEND_MS);
       // Ready only after our onions exist so the missing-outputs watch is fair.
       readyPeers.add(params.myPubkey);
