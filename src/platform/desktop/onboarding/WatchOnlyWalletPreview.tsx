@@ -51,6 +51,7 @@ const MultisigCosignerForm: FC<{
   cosigners: CosignerDraft[];
   setCosigners: (next: CosignerDraft[]) => void;
   patchCosigner: (index: number, patch: Partial<CosignerDraft>) => void;
+  applyPreset: (m: number, n: number) => void;
   scanningCosigner: number | null;
   setScanningCosigner: (index: number | null) => void;
   onPreview: () => void;
@@ -64,6 +65,7 @@ const MultisigCosignerForm: FC<{
   cosigners,
   setCosigners,
   patchCosigner,
+  applyPreset,
   scanningCosigner,
   setScanningCosigner,
   onPreview,
@@ -89,6 +91,28 @@ const MultisigCosignerForm: FC<{
         />
         <span className="cursor-pointer underline">.pmwif</span>
       </label>
+    </div>
+
+    <div className="flex gap-2" aria-label="Common policies">
+      {(
+        [
+          [2, 3],
+          [3, 5],
+        ] as const
+      ).map(([m, n]) => (
+        <button
+          key={`${m}-${n}`}
+          type="button"
+          onClick={() => applyPreset(m, n)}
+          className={`wallet-card flex-1 p-2 text-center text-xs font-semibold wallet-text-strong ${
+            required === m && cosigners.length === n
+              ? 'border-[var(--wallet-accent)]'
+              : ''
+          }`}
+        >
+          {m}-of-{n}
+        </button>
+      ))}
     </div>
 
     <label className="block space-y-1 text-sm wallet-text-strong">
@@ -245,7 +269,6 @@ export const WatchOnlyWalletPreview: FC<WatchOnlyWalletPreviewProps> = ({
 }) => {
   const [network, setNetwork] = useState(Network.MAINNET);
   const [accountXpub, setAccountXpub] = useState('');
-  const [masterFingerprint, setMasterFingerprint] = useState('');
   const [walletName, setWalletName] = useState('');
   const [preview, setPreview] = useState<WatchOnlyAccountPreview | null>(null);
   const [scanning, setScanning] = useState(false);
@@ -272,6 +295,24 @@ export const WatchOnlyWalletPreview: FC<WatchOnlyWalletPreviewProps> = ({
         : undefined,
     })),
   });
+
+  /**
+   * Jump to a common policy. Existing cosigner entries are kept — switching
+   * 2-of-3 to 3-of-5 should add two blank rows, not discard xPubs already
+   * pasted in.
+   */
+  const applyPreset = (m: number, n: number) => {
+    setCosigners((previous) => {
+      const next = previous.slice(0, n);
+      while (next.length < n) {
+        next.push({ name: '', xpub: '', fingerprint: '' });
+      }
+      return next;
+    });
+    setRequired(m);
+    setMsPreview(null);
+    setError('');
+  };
 
   const patchCosigner = (index: number, patch: Partial<CosignerDraft>) => {
     setCosigners((previous) =>
@@ -391,11 +432,15 @@ export const WatchOnlyWalletPreview: FC<WatchOnlyWalletPreviewProps> = ({
     setBusy(true);
     setError('');
     try {
+      // No fingerprint here on purpose. Creating a watch-only wallet is a
+      // scan-the-xPub step; the fingerprint is not derivable from that QR, is
+      // not needed to sign, and the send screen already asks for it once and
+      // remembers it. Asking twice put an unexplained hex box in onboarding
+      // for something most people will skip.
       const walletId = await createWatchOnlyWallet({
         name: walletName,
         accountXpub,
         network,
-        masterFingerprint: masterFingerprint || undefined,
       });
       onCreated(walletId);
     } catch (err) {
@@ -495,6 +540,7 @@ export const WatchOnlyWalletPreview: FC<WatchOnlyWalletPreviewProps> = ({
               setMsPreview(null);
             }}
             patchCosigner={patchCosigner}
+            applyPreset={applyPreset}
             scanningCosigner={scanningCosigner}
             setScanningCosigner={setScanningCosigner}
             onPreview={handleMultisigPreview}
@@ -573,32 +619,6 @@ export const WatchOnlyWalletPreview: FC<WatchOnlyWalletPreviewProps> = ({
             </span>
             . A standalone BIP32 xPub cannot prove its parent purpose or coin
             path.
-          </p>
-          <label className="block space-y-1 text-sm wallet-text-strong">
-            Master fingerprint{' '}
-            <span className="text-[11px] font-normal wallet-muted">
-              (optional)
-            </span>
-            <input
-              value={masterFingerprint}
-              onChange={(event) => {
-                setMasterFingerprint(event.target.value);
-                setError('');
-              }}
-              placeholder="8 hex chars, e.g. 4c9a1f7b"
-              maxLength={8}
-              autoComplete="off"
-              spellCheck={false}
-              className="wallet-input w-full rounded-md px-3 py-2 font-mono text-sm uppercase"
-            />
-          </label>
-          <p className="text-[11px] leading-relaxed wallet-muted">
-            SeedCash shows this on the same screen as Export Xpub. It cannot be
-            derived from the xPub — the account key has a different fingerprint
-            from the master key, so this is the one thing the QR does not carry.
-            The signature does not depend on it; it is what lets the device
-            recognise the coins as its own when it shows you the transaction.
-            Enter it now or at your first send.
           </p>
           <button
             type="button"
