@@ -443,6 +443,9 @@ export const CashFusionSettings: React.FC<{ variant?: 'card' | 'servers' }> = ({
           runServer: () =>
             Promise.reject(new Error('Server runner invoked in P2P mode')),
           runP2p: async (coins, signal, progress) => {
+            // Visible hang point: Tor resolve used to run with no status after
+            // "Using N coin(s)" while multi-window Start waited on SOCKS/bootstrap.
+            progress?.onStatus?.('Checking Tor…');
             const tor = await currentTorConfig('nostr-relay');
             return runP2pFusion({
               walletId,

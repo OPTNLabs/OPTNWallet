@@ -523,7 +523,7 @@ export async function refreshAndVerifyP2pInputs(
   walletId: number,
   fallbackUtxos: UTXO[],
   signal?: AbortSignal,
-  options?: { preferProvided?: boolean }
+  options?: { preferProvided?: boolean; skipLiveRecheck?: boolean }
 ): Promise<UTXO[]> {
   if (signal?.aborted) throw new Error('fusion round cancelled');
   const claimed = reservedOutpoints(walletId);
@@ -551,6 +551,12 @@ export async function refreshAndVerifyP2pInputs(
           : 'All coins are already committed to another fusion round.'
       );
     }
+  }
+
+  // Multi-wallet Start: exclusive reconcile already verified these. A second
+  // onlyUnspent (15s timeout × N windows) stamps Electrum and hangs gather.
+  if (options?.skipLiveRecheck && free.length > 0) {
+    return free;
   }
 
   let spendable: UTXO[];
@@ -670,6 +676,8 @@ export async function runP2pFusion(
   }
   if (opts.signal?.aborted) throw new Error('fusion round cancelled');
 
+  const status = opts.onStatus;
+  status?.('Checking Tor…');
   const torOk = await invoke<boolean>('fusion_tor_check', {
     host: opts.tor.host,
     port: opts.tor.port,
@@ -677,8 +685,7 @@ export async function runP2pFusion(
   if (opts.signal?.aborted) throw new Error('fusion round cancelled');
   if (!torOk) throw new Error('Tor is not reachable — P2P fusion stopped.');
 
-  // Full list for pool discovery; smaller deterministic prefix for round hops
-  // (same order on every wallet so peers share publish paths without 30× Tor fan-out).
+  // Shared proven core only (see FUSION_CORE_RELAYS) — not full chat bootstrap.
   const announceRelays = validatedRelays(opts.relays, MAX_ANNOUNCE_RELAYS);
   const roundRelays = announceRelays.slice(0, MAX_ROUND_RELAYS);
   const relays = announceRelays;
@@ -694,20 +701,20 @@ export async function runP2pFusion(
   let round: RoundIdentity | null = null;
   let reservedForRound: string[] = [];
   let withdrawFromPool: (() => Promise<void>) | null = null;
-  const status = opts.onStatus;
 
   try {
     releaseTorRouting = armTorRouting({
       host: opts.tor.host,
       port: opts.tor.port,
     });
-    // Runner already did exclusive listunspent. Prefer a light reserved-filter +
-    // unspent check on those coins so 4 wallets do not stampede Electrum again
-    // and sit on "Refreshing coins…" until the gather window expires alone.
-    status?.('Verifying coins for this round…');
+    // Runner already did exclusive listunspent. Use those coins — a second
+    // Electrum onlyUnspent stampede on 4 windows is what made Start die with
+    // "All Electrum servers failed" / hang after "Using N coin(s)".
+    status?.('Preparing coins for this round…');
     const spendable = selectFusionInputs(
       await refreshAndVerifyP2pInputs(opts.walletId, opts.utxos, opts.signal, {
         preferProvided: true,
+        skipLiveRecheck: true,
       })
     );
     if (opts.signal?.aborted) throw new Error('fusion round cancelled');
