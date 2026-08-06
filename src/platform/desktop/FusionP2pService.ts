@@ -277,9 +277,15 @@ async function collectRolling(
       now - lastSoftCaughtUpMs < P2P_PEAK_GRACE_MS;
     const lostFromPeak = peakStrict > peers.length && peakStrict >= 3;
     const expectMoreFromPeak = lostFromPeak && !peakGraceExpired;
-    const expectMore = expectMoreFromSoft || expectMoreFromPeak;
+    // Soft and strict disagree (soft inflated or lagging): wait until they match
+    // or soft-grace expires so one wallet does not propose 4 while another has 3.
+    const viewsAligned =
+      soft.length === peers.length ||
+      now - lastSoftCaughtUpMs >= P2P_PEAK_GRACE_MS;
+    const expectMore =
+      expectMoreFromSoft || expectMoreFromPeak || !viewsAligned;
     // Policy (≤ server JOIN_WAIT; floor = MIN_PARTICIPANTS = 3 like CashFusion privacy):
-    //   • 4+: lock when stable and not mid-grace lag
+    //   • 4+: lock when stable, views aligned, and not mid-grace lag
     //   • 3:  stable + short hold for a possible 4th, unless expectMore
     //   • 2:  never lock — wait maxWait then fail (onion needs ≥3)
     const trioReady =
@@ -729,10 +735,30 @@ export async function runP2pFusion(
     });
     stopPool = joined.stop;
     withdrawFromPool = joined.withdraw;
-    await joined.announceNow();
+    // Soft first announce: one relay blip must not abort before gather.
+    // collectRolling keeps re-shouting; we only surface a warning if all retries fail.
+    let announceOk = false;
+    for (let i = 0; i < 3 && !announceOk; i++) {
+      try {
+        await joined.announceNow();
+        announceOk = true;
+      } catch (error) {
+        if (opts.signal?.aborted) throw error;
+        if (i === 2) {
+          status?.(
+            `First pool announce flaky (${error instanceof Error ? error.message : String(error)}). ` +
+              `Still collecting peers — will re-shout…`
+          );
+        } else {
+          await new Promise((r) => setTimeout(r, 500 * (i + 1)));
+        }
+      }
+    }
     opts.onPhase?.(1);
     status?.(
-      'Pool announcement published; collecting peers (loading signing keys in background)…'
+      announceOk
+        ? 'Pool announcement published; collecting peers (loading signing keys in background)…'
+        : 'Pool announce delayed (relays slow); collecting peers and re-shouting…'
     );
 
     // Abort gather if peer collect cancels (and vice versa) so a slow key load

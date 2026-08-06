@@ -2,6 +2,11 @@ import { generateSecretKey } from 'nostr-tools';
 
 import { binToHex } from '../../../utils/hex';
 import {
+  P2P_PROPOSAL_TIMEOUT_MS,
+  P2P_RENDEZVOUS_MS,
+  P2P_RENDEZVOUS_RESEND_MS,
+} from '../fusionTiming';
+import {
   electCoordinator,
   MIN_PARTICIPANTS,
   type FusionPoolNetwork,
@@ -9,16 +14,8 @@ import {
 import { messageBinding, type RoundMessage, type RoundTransport } from './fusionSession';
 
 const MAX_PARTICIPANTS = 6;
-// Tor + multi-wallet: gather can take 30–90s; agreement still needs gift-wrap
-// delivery of proposal/ack/start. 60s budget; short proposal wait was the killer.
-const DEFAULT_RENDEZVOUS_TIMEOUT_MS = 60_000;
-/**
- * How long a participant waits for the elected coordinator's FIRST proposal
- * before treating them as a ghost. 3.5s was fine on LAN hub tests but over Tor
- * gift-wrap the first proposal often arrives later → everyone fails over,
- * drops different keys, and "Could not agree on a round (4 in your view)".
- */
-const DEFAULT_PROPOSAL_TIMEOUT_MS = 15_000;
+const DEFAULT_RENDEZVOUS_TIMEOUT_MS = P2P_RENDEZVOUS_MS;
+const DEFAULT_PROPOSAL_TIMEOUT_MS = P2P_PROPOSAL_TIMEOUT_MS;
 const PUBKEY = /^[0-9a-f]{64}$/;
 const SESSION = /^[0-9a-f]{64}$/;
 
@@ -260,12 +257,14 @@ function negotiateAsCoordinator(
     // single dropped message would strand the round the same way.
     // Re-offer often: peers failing over a ghost may subscribe mid-interval and
     // would miss a 1.5s-spaced first proposal under a short proposalTimeout.
+    const publishProposal = () =>
+      Promise.allSettled(
+        others.map((peer) => transport.send(peer, makeProposal()))
+      );
     const reproposeTimer = setInterval(() => {
       if (settled || starting || yielded) return;
-      void Promise.all(
-        others.map((peer) => transport.send(peer, makeProposal()))
-      ).catch(() => undefined);
-    }, 800);
+      void publishProposal();
+    }, P2P_RENDEZVOUS_RESEND_MS);
 
     const cleanup = () => {
       if (timer) clearTimeout(timer);
@@ -432,12 +431,17 @@ function negotiateAsCoordinator(
       startOwnRound();
     }, settleMs);
 
-    void Promise.all(others.map((peer) => transport.send(peer, makeProposal()))).catch(
-      (error: unknown) =>
-        void finishError(
-          error instanceof Error ? error : new Error(String(error))
-        )
-    );
+    // Soft first publish: one relay blip must not kill the whole round.
+    // Re-offer timer keeps trying; only fail if ALL attempts in this burst fail
+    // AND we still have zero ACKs after a short grace (finishError from timer).
+    void (async () => {
+      for (let attempt = 0; attempt < 3 && !settled && !yielded; attempt++) {
+        const results = await publishProposal();
+        if (results.some((r) => r.status === 'fulfilled')) return;
+        await new Promise((r) => setTimeout(r, 400 * (attempt + 1)));
+      }
+      // Keep waiting for peer-driven path / reproposeTimer; do not abort here.
+    })();
   });
 }
 
@@ -452,10 +456,12 @@ function negotiateAsParticipant(
       null;
     let acceptedCoordinator: string | null = null;
     let unsubscribe: () => void = () => undefined;
+    let ackResendTimer: ReturnType<typeof setInterval> | undefined;
 
     const cleanup = () => {
       if (timer) clearTimeout(timer);
       if (proposalTimer) clearTimeout(proposalTimer);
+      if (ackResendTimer) clearInterval(ackResendTimer);
       params.signal?.removeEventListener('abort', onAbort);
       unsubscribe();
     };
@@ -472,6 +478,19 @@ function negotiateAsParticipant(
       resolve(value);
     };
     const onAbort = () => fail(abortError('cancelled'));
+
+    const sendAck = (to: string, sessionId: string) => {
+      const ack: RoundMessage = {
+        ...messageBinding(),
+        type: 'round_ack',
+        session: sessionId,
+        network: params.network,
+        tier: params.tier,
+        epoch: params.epoch,
+      };
+      // Never kill the round on one failed ACK publish — re-send handles Tor.
+      return transport.send(to, ack).catch(() => undefined);
+    };
 
     unsubscribe = transport.onMessage((from, message) => {
       if (settled) return;
@@ -502,17 +521,13 @@ function negotiateAsParticipant(
         }
         accepted = message;
         acceptedCoordinator = from;
-        const ack: RoundMessage = {
-          ...messageBinding(),
-          type: 'round_ack',
-          session: message.session,
-          network: params.network,
-          tier: params.tier,
-          epoch: params.epoch,
-        };
-        void transport.send(from, ack).catch((error: unknown) =>
-          fail(error instanceof Error ? error : new Error(String(error)))
-        );
+        void sendAck(from, message.session);
+        // Re-ACK until round_start — coord may miss the first gift-wrap.
+        if (ackResendTimer) clearInterval(ackResendTimer);
+        ackResendTimer = setInterval(() => {
+          if (settled || !accepted || !acceptedCoordinator) return;
+          void sendAck(acceptedCoordinator, accepted.session);
+        }, P2P_RENDEZVOUS_RESEND_MS);
         return;
       }
       if (
