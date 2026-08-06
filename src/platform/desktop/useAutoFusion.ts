@@ -212,6 +212,7 @@ export function useAutoFusion(): void {
                 'No verified Tor route is available for P2P Fusion.'
               );
             }
+            progress?.onStatus?.('Checking Tor…');
             return runP2pFusion({
               walletId,
               network,
