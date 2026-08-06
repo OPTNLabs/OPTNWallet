@@ -219,6 +219,7 @@ export function useAutoFusion(): void {
               utxos: coins,
               relays: nostrRelays,
               tor: p2pTor,
+              trigger: 'auto',
               signal,
               onStatus: (m) => {
                 reportFusionProgress(walletId, { status: m });

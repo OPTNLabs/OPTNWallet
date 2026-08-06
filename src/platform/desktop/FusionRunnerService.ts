@@ -34,6 +34,7 @@ import {
 import { clearOutpointReservations } from './fusionRoundState';
 import {
   AUTO_FUSION_COOLDOWN_MS,
+  AUTO_FUSION_EMPTY_POOL_RETRY_MS,
   AUTO_FUSION_RETRY_MS,
   type FusionMode,
 } from './fusionAutoEngine';
@@ -568,9 +569,16 @@ export async function startFusionRound(
       }
       if (trigger === 'auto') {
         // No peers / Tor / etc. — do NOT silence autofuse for 5 minutes.
-        await stampAutoFailure(walletId, AUTO_FUSION_RETRY_MS).catch(
-          () => undefined
-        );
+        // Empty pool / agree miss: re-enter faster so staggered windows meet.
+        const msg = error instanceof Error ? error.message : String(error);
+        const emptyPool =
+          /no other wallets found|only \d+ wallet|need ≥?\s*3|at least three|could not agree/i.test(
+            msg
+          );
+        await stampAutoFailure(
+          walletId,
+          emptyPool ? AUTO_FUSION_EMPTY_POOL_RETRY_MS : AUTO_FUSION_RETRY_MS
+        ).catch(() => undefined);
       }
       return finish({
         status: 'failed',

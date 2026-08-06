@@ -60,6 +60,7 @@ import type { FusionInputRef, FusionOutputRef } from './nostr/fusionRound';
 import { planP2pOutputValues } from './nostr/fusionP2pAllocation';
 import {
   P2P_COMPONENT_JITTER_MS,
+  P2P_GATHER_ALONE_AUTO_MS,
   P2P_GATHER_ALONE_MS,
   P2P_GATHER_FAST_WARMUP_MS,
   P2P_GATHER_MAX_MS,
@@ -116,6 +117,11 @@ export interface P2pFusionOptions {
   utxos: UTXO[];
   relays?: string[];
   tor: { host: string; port: number } | null;
+  /**
+   * Auto engines tick 60–120s apart per window — alone budget must be full
+   * JOIN_WAIT so staggered auto can meet. Manual keeps the short alone abort.
+   */
+  trigger?: 'auto' | 'manual';
   onStatus?: (message: string) => void;
   onPhase?: (phase: number) => void;
   signal?: AbortSignal;
@@ -185,12 +191,16 @@ async function collectRolling(
   onStatus?: (message: string) => void,
   signal?: AbortSignal,
   /** Re-publish when alone so late Tor peers still find us. */
-  announceNow?: () => Promise<void>
+  announceNow?: () => Promise<void>,
+  /** Auto waits full alone budget; manual fails faster. */
+  trigger: 'auto' | 'manual' = 'manual'
 ): Promise<PoolAnnouncement[]> {
   const start = Date.now();
   const gatherStartSeconds = Math.floor(start / 1_000);
   const minReady = start + POOL_WAIT_MIN_MS;
   const maxWait = start + POOL_WAIT_MAX_MS;
+  const aloneBudgetMs =
+    trigger === 'auto' ? P2P_GATHER_ALONE_AUTO_MS : P2P_GATHER_ALONE_MS;
   let lastFingerprint = '';
   let stableSince = start;
   let lastLoggedFp = '';
@@ -345,16 +355,28 @@ async function collectRolling(
           `Start ALL wallets together for the next round.`
       );
     }
-    // Never found anyone: fail fast (not 120s). Discovery is broken or others
-    // never started — burning JOIN_WAIT just shows "up to 120s" with no peers.
+    // Never found anyone: manual fails fast; auto holds full JOIN_WAIT so
+    // staggered auto engines (60–120s ticks) can still meet in one gather.
     const neverSawOthers = peakSoft <= 1 && peakStrict <= 1;
-    if (neverSawOthers && elapsed >= P2P_GATHER_ALONE_MS) {
+    if (neverSawOthers && elapsed >= aloneBudgetMs) {
       throw new Error(
-        `No other wallets found in ${Math.round(P2P_GATHER_ALONE_MS / 1000)}s. ` +
-          `Start ALL wallets together (same network), check Tor + Nostr relays green, then retry.`
+        trigger === 'auto'
+          ? `Auto: no other wallets found in ${Math.round(aloneBudgetMs / 1000)}s — will retry shortly. ` +
+              `Keep Auto on in other windows (same network); Tor + Nostr relays must be green.`
+          : `No other wallets found in ${Math.round(aloneBudgetMs / 1000)}s. ` +
+              `Start ALL wallets together (same network), check Tor + Nostr relays green, then retry.`
       );
     }
     if (canLock || now >= maxWait) {
+      // Auto must not lock a sub-MIN set at maxWait — that becomes
+      // "needs ≥3 fresh peers" after a peer alone-aborts mid-gather.
+      if (n < MIN_PARTICIPANTS) {
+        throw new Error(
+          trigger === 'auto'
+            ? `Auto: only ${n} wallet(s) after gather window — need ≥${MIN_PARTICIPANTS}. Will retry shortly.`
+            : `P2P Fusion needs at least ${MIN_PARTICIPANTS} fresh peers (CashFusion-style anonymity floor).`
+        );
+      }
       onStatus?.(
         `Gather done: ${n} active wallet(s) ` +
           `(soft ${soft.length}, peak strict/soft ${peakStrict}/${peakSoft}; ` +
@@ -364,16 +386,16 @@ async function collectRolling(
     }
     // Status is count-only (no session-pubkey hex). Protocol still uses full
     // keys internally; UI/logs do not need them for gather progress.
-    const aloneDeadline = neverSawOthers
-      ? start + P2P_GATHER_ALONE_MS
-      : maxWait;
+    const aloneDeadline = neverSawOthers ? start + aloneBudgetMs : maxWait;
     const secsLeft = Math.max(0, Math.ceil((aloneDeadline - now) / 1_000));
     if (n < 2) {
       const aloneAfterOthers =
         peakStrict >= 2 && peakGraceLeft > 0
           ? ` Peers left (peak ${peakStrict}); giving up in ${Math.ceil(peakGraceLeft / 1000)}s if no one returns…`
           : neverSawOthers
-            ? ` Shouting on shared relays… (${secsLeft}s then retry if alone)`
+            ? trigger === 'auto'
+              ? ` Auto waiting for peers… (${secsLeft}s, then retry)`
+              : ` Shouting on shared relays… (${secsLeft}s then retry if alone)`
             : soft.length > 1 || peakSoft > 1
               ? ' Dropping ghosts; waiting for re-announces…'
               : ' Waiting for other wallets (Tor)…';
@@ -853,7 +875,8 @@ export async function runP2pFusion(
         () => peers,
         status,
         prepAbort.signal,
-        () => joined.announceNow()
+        () => joined.announceNow(),
+        opts.trigger ?? 'manual'
       ).catch((error) => {
         prepAbort.abort();
         throw error;

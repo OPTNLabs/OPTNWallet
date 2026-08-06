@@ -59,11 +59,18 @@ export const SERVER_SESSION_CEILING_MS =
 export const P2P_GATHER_MAX_MS = SERVER_JOIN_WAIT_MS;
 
 /**
- * If we never hear ANY other wallet, do not burn full JOIN_WAIT (user: "still
- * 120s where is the speed?"). Fail fast with a clear message; re-Start is free.
+ * Manual Start alone budget. User is watching; fail fast so they can retry.
  * Live multi-wallet discovery is normally &lt;15s when relays overlap.
  */
 export const P2P_GATHER_ALONE_MS = 35_000;
+
+/**
+ * Auto-fuse alone budget = full JOIN_WAIT. Auto engines tick every 60–120s
+ * independently per window — staggered start is the NORMAL case. Aborting at
+ * 35s left the first auto wallet shouting alone while peers joined later
+ * (w5 alone-fail while w1/w6 proposed a dead 3-set).
+ */
+export const P2P_GATHER_ALONE_AUTO_MS = P2P_GATHER_MAX_MS;
 
 /**
  * Min gather before locking a *partial* set (MIN ≤ n < MAX).
