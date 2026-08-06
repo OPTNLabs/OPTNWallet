@@ -126,11 +126,11 @@ export const P2P_ROUND_TIMEOUT_MS = SERVER_ROUND_BLAME_MS;
 export const P2P_CREDENTIAL_WAIT_MS = SERVER_COMPS_END_MS;
 
 /**
- * After all peers mark ready, how long coord waits for output pool.
- * Live onion path filled in ~10s; 25s leaves Tor headroom under 80s body.
+ * After all peers mark ready, how long coord waits for last-peeler reveal.
+ * Live: multi-relay Tor + multi-hop peel often needs >25s when a hop gift-wrap
+ * is dropped once; inject re-sends need room to land.
  */
-/** After all peers ready, wait for onion reveal batch. */
-export const P2P_MISSING_OUTPUTS_ONION_MS = 25_000;
+export const P2P_MISSING_OUTPUTS_ONION_MS = 40_000;
 
 /**
  * Per-component inject jitter. Covert submit window is 5s — keep N×M blobs
@@ -140,6 +140,12 @@ export const P2P_COMPONENT_JITTER_MS: [number, number] = [30, 250];
 
 /** Re-send onion_declare (under comps window). */
 export const P2P_ONION_DECLARE_RESEND_MS = 1_500;
+/**
+ * Re-send onion_output injects to first peeler. Live failure (2026-08-06):
+ * all peers components_ready but pool=0 — only declare was re-sent, hop blobs
+ * were one-shot and Tor dropped them → peel never started.
+ */
+export const P2P_ONION_OUTPUT_RESEND_MS = 2_000;
 
 /**
  * Re-send assembled / signatures while waiting for the other side.
