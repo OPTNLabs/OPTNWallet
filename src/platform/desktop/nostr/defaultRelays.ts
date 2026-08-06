@@ -3,14 +3,21 @@
  * These are not user-removable in settings (same idea as Fulcrum seed servers).
  * Only relays the user adds themselves get a Remove button.
  *
- * Keep in sync with selection notes in chat.ts / experimentalSlice.
+ * Multi-relay redundancy: fusion publishes/subscribes to this whole set;
+ * first OK wins (publishEventAtLeastOnce). Safe to append more free
+ * general-purpose relays later — keep paid/auth and known-hang hosts out.
+ *
+ * Selection: free write relays that answered NIP-11 (probe 2026-08-06) plus
+ * common bootstrap hosts. Skip paid fleets and relay.nostr.band (WSS hang).
  */
 export const DEFAULT_RELAYS: string[] = [
+  // Core bootstrap (widely used free generals)
   'wss://relay.damus.io',
   'wss://nos.lol',
   'wss://relay.primal.net',
   'wss://relay.snort.social',
   'wss://offchain.pub',
+  // Long-running free community / developer relays
   'wss://nostr.oxtr.dev',
   'wss://nostr.bitcoiner.social',
   'wss://nostr-pub.wellorder.net',
@@ -18,6 +25,13 @@ export const DEFAULT_RELAYS: string[] = [
   'wss://relay.nostr.info',
   'wss://nostr.mom',
   'wss://purplerelay.com',
+  // Extra free diversity (NIP-11 OK on probe — more publish paths)
+  'wss://relay.orangepill.dev',
+  'wss://nostr.einundzwanzig.space',
+  'wss://nostr.rocks',
+  'wss://relay.shawnyeager.com',
+  'wss://nostr.vulpem.com',
+  'wss://nostr.l00p.org',
 ];
 
 const DEFAULT_SET = new Set(
