@@ -121,8 +121,7 @@ export interface P2pFusionOptions {
   relays?: string[];
   tor: { host: string; port: number } | null;
   /**
-   * Auto engines tick 60–120s apart per window — alone budget must be full
-   * JOIN_WAIT so staggered auto can meet. Manual keeps the short alone abort.
+   * `auto` = global peer pool (full alone budget). `manual` = short alone abort.
    */
   trigger?: 'auto' | 'manual';
   onStatus?: (message: string) => void;
@@ -359,7 +358,7 @@ async function collectRolling(
       );
     }
     // Never found anyone: manual fails fast; auto holds full JOIN_WAIT so
-    // staggered auto engines (60–120s ticks) can still meet in one gather.
+    // global peers arriving over Tor can still meet in one gather slot.
     const neverSawOthers = peakSoft <= 1 && peakStrict <= 1;
     if (neverSawOthers && elapsed >= aloneBudgetMs) {
       throw new Error(
