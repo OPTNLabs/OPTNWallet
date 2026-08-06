@@ -4,11 +4,11 @@
  * Only relays the user adds themselves get a Remove button.
  *
  * Multi-relay redundancy: fusion publishes/subscribes to this whole set;
- * first OK wins (publishEventAtLeastOnce). Safe to append more free
- * general-purpose relays later — keep paid/auth and known-hang hosts out.
+ * first OK wins (publishEventAtLeastOnce). FusionP2pService caps at MAX_RELAYS
+ * (30) so this list must stay ≤ that.
  *
- * Selection: free write relays that answered NIP-11 (probe 2026-08-06) plus
- * common bootstrap hosts. Skip paid fleets and relay.nostr.band (WSS hang).
+ * Free general-purpose only. Skip paid (nostr.wine, nostr.land, …) and
+ * relay.nostr.band (historical WSS hang). Re-probe via NIP-11 when expanding.
  */
 export const DEFAULT_RELAYS: string[] = [
   // Core bootstrap (widely used free generals)
@@ -25,13 +25,26 @@ export const DEFAULT_RELAYS: string[] = [
   'wss://relay.nostr.info',
   'wss://nostr.mom',
   'wss://purplerelay.com',
-  // Extra free diversity (NIP-11 OK on probe — more publish paths)
+  // Free diversity (prior probe)
   'wss://relay.orangepill.dev',
   'wss://nostr.einundzwanzig.space',
   'wss://nostr.rocks',
   'wss://relay.shawnyeager.com',
   'wss://nostr.vulpem.com',
   'wss://nostr.l00p.org',
+  // Expanded free set (NIP-11 OK 2026-08-06 second probe) — toward cap 30
+  'wss://relay.nostr.wirednet.jp',
+  'wss://relay.nostrview.com',
+  'wss://relay.nostromo.social',
+  'wss://relay.nostraddress.com',
+  'wss://nostr.chaima.info',
+  'wss://nostr.thank.eu',
+  'wss://nostr.frostr.xyz',
+  'wss://relay.fountain.fm',
+  'wss://nostr.data.haus',
+  'wss://nostrue.com',
+  'wss://relay.noswhere.com',
+  'wss://relay.0xchat.com',
 ];
 
 const DEFAULT_SET = new Set(
