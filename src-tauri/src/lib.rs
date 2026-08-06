@@ -1070,7 +1070,9 @@ pub fn run() {
                             file_name: Some("optn-wallet".into()),
                         },
                     ))
-                    .max_file_size(5_000_000) // 5 MB per file
+                    // 5MB filled in <1h of multi-wallet p2p-live spam and left
+                    // agents blind mid-run. Larger file + deduped JS logging.
+                    .max_file_size(20_000_000) // 20 MB per file
                     .rotation_strategy(tauri_plugin_log::RotationStrategy::KeepAll)
                     .timezone_strategy(tauri_plugin_log::TimezoneStrategy::UseLocal)
                     .build(),

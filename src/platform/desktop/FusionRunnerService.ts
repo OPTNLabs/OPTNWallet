@@ -158,6 +158,18 @@ export function getFusionActivity(walletId: number): FusionActivity | null {
   return fusionActivities.get(walletId)?.activity ?? null;
 }
 
+/** Last disk-logged line per wallet — status every 2s filled the 5MB log cap. */
+const lastLoggedStatus = new Map<number, string>();
+const lastLoggedPhase = new Map<number, number>();
+
+/** Collapse countdown noise so "up to 94s" / "up to 92s" is one log family. */
+function statusLogKey(status: string): string {
+  return status
+    .replace(/\b\d+s\b/g, 'Ns')
+    .replace(/\b\d+\/\d+\b/g, 'N/M')
+    .replace(/\bpeak \d+\b/gi, 'peak N');
+}
+
 /** Push phase/status into the live activity (auto-fuse and manual share this). */
 export function reportFusionProgress(
   walletId: number,
@@ -174,19 +186,28 @@ export function reportFusionProgress(
   emitFusionActivity(walletId);
   // Disk + stdout via tauri-plugin-log so agents can tail
   // %LOCALAPPDATA%\com.optilabs.wallet\logs\optn-wallet.log live.
+  // Dedup: countdown-only changes used to triple-write every 2s × 4 wallets
+  // and hit the 5MB rotation cap mid-run (watcher went blind at 04:01).
   if (update.status) {
-    void import('./logger')
-      .then(({ log }) =>
-        log.info('p2p-live', `w${walletId} ${update.status}`)
-      )
-      .catch(() => undefined);
+    const key = statusLogKey(update.status);
+    if (lastLoggedStatus.get(walletId) !== key) {
+      lastLoggedStatus.set(walletId, key);
+      void import('./logger')
+        .then(({ log }) =>
+          log.info('p2p-live', `w${walletId} ${update.status}`)
+        )
+        .catch(() => undefined);
+    }
   }
   if (update.phase !== undefined) {
-    void import('./logger')
-      .then(({ log }) =>
-        log.info('p2p-live', `w${walletId} phase=${update.phase}`)
-      )
-      .catch(() => undefined);
+    if (lastLoggedPhase.get(walletId) !== update.phase) {
+      lastLoggedPhase.set(walletId, update.phase);
+      void import('./logger')
+        .then(({ log }) =>
+          log.info('p2p-live', `w${walletId} phase=${update.phase}`)
+        )
+        .catch(() => undefined);
+    }
   }
 }
 
