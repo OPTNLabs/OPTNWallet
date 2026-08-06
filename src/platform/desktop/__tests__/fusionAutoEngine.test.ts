@@ -1,5 +1,13 @@
 import { describe, expect, it } from 'vitest';
-import { decideAutoFusion, type AutoFusionInputs } from '../fusionAutoEngine';
+import {
+  AUTO_RENDEZVOUS_OPEN_MS,
+  AUTO_RENDEZVOUS_PERIOD_MS,
+  decideAutoFusion,
+  isAutoRendezvousOpen,
+  msUntilAutoRendezvousOpen,
+  nextAutoEngineTickMs,
+  type AutoFusionInputs,
+} from '../fusionAutoEngine';
 
 /** A wallet that SHOULD fuse; each test negates exactly one thing. */
 const ready: AutoFusionInputs = {
@@ -60,5 +68,27 @@ describe('auto-fusion policy decision', () => {
     expect(inputKeys).not.toContain('busy');
     expect(inputKeys).not.toContain('lastAttemptMs');
     expect(inputKeys).not.toContain('eligibleCoinCount');
+  });
+});
+
+describe('auto rendezvous slots', () => {
+  it('is open at the start of each period', () => {
+    const t0 = 1_700_000_000_000; // aligned
+    const slot0 = t0 - (t0 % AUTO_RENDEZVOUS_PERIOD_MS);
+    expect(isAutoRendezvousOpen(slot0)).toBe(true);
+    expect(msUntilAutoRendezvousOpen(slot0)).toBe(0);
+    expect(isAutoRendezvousOpen(slot0 + AUTO_RENDEZVOUS_OPEN_MS - 1)).toBe(
+      true
+    );
+    expect(isAutoRendezvousOpen(slot0 + AUTO_RENDEZVOUS_OPEN_MS)).toBe(false);
+    expect(msUntilAutoRendezvousOpen(slot0 + AUTO_RENDEZVOUS_OPEN_MS)).toBe(
+      AUTO_RENDEZVOUS_PERIOD_MS - AUTO_RENDEZVOUS_OPEN_MS
+    );
+  });
+
+  it('next tick is finite and positive', () => {
+    const n = nextAutoEngineTickMs(Date.now());
+    expect(n).toBeGreaterThan(0);
+    expect(n).toBeLessThan(AUTO_RENDEZVOUS_PERIOD_MS + 20_000);
   });
 });

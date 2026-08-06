@@ -87,6 +87,7 @@ const P2P_TIERS = [10_000, 100_000, 1_000_000, 10_000_000];
  * list. Expanding to 30 + first-OK over Tor later left every wallet alone.
  * Same order on every window so announce/subscribe topology matches.
  */
+/** Fewer relays = less Tor fan-out under multi-window auto (8×4 was heavy). */
 const FUSION_CORE_RELAYS: readonly string[] = [
   'wss://relay.damus.io',
   'wss://nos.lol',
@@ -94,8 +95,6 @@ const FUSION_CORE_RELAYS: readonly string[] = [
   'wss://relay.snort.social',
   'wss://offchain.pub',
   'wss://nostr.oxtr.dev',
-  'wss://nostr.bitcoiner.social',
-  'wss://nostr-pub.wellorder.net',
 ];
 const MAX_ANNOUNCE_RELAYS = FUSION_CORE_RELAYS.length;
 /** Round hops: same core (gift-wraps must share announce topology). */

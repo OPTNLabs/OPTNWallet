@@ -166,9 +166,16 @@ export function isLivePoolAnnouncement(
   if (lastHeard < opts.nowSeconds - POOL_LIVE_ACTIVE_SECONDS) return false;
 
   const elapsed = opts.nowSeconds - opts.gatherStartSeconds;
-  // Strict lock: must have a created_at from this gather (live re-announce).
+  // Strict lock: created_at AND hear-time must be from THIS gather. Relay
+  // replay of a stored announce can refresh seenAt on subscribe while at is
+  // old — or a dead re-announce loop can keep at fresh while we never hear
+  // them again. Both must pass so auto does not propose ghosts (live: w1
+  // proposed 3 while w5/w6 stayed alone).
   if (opts.lockStrict) {
-    return peer.at >= opts.gatherStartSeconds - 3;
+    return (
+      peer.at >= opts.gatherStartSeconds - 3 &&
+      lastHeard >= opts.gatherStartSeconds - 3
+    );
   }
   // After ~1 re-announce cycle, demand re-publish during this gather so
   // abandoned Starts (static created_at) drop faster (ghost soft inflation).
