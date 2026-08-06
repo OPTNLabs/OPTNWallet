@@ -68,7 +68,6 @@ const MultisigCosignerForm: FC<{
   error: string;
 }> = ({
   required,
-  setRequired,
   cosigners,
   setCosigners,
   patchCosigner,
@@ -80,9 +79,8 @@ const MultisigCosignerForm: FC<{
   onExport,
   preview,
   error,
-}) => {
-  const [custom, setCustom] = useState(false);
-  return (
+}) => (
+  // setRequired / custom UI reserved for free-form m-of-n; presets cover the path today.
   <div className="wallet-card space-y-3 p-4">
     <div className="flex items-center justify-between gap-2">
       <p className="text-sm font-semibold wallet-text-strong">Cosigners</p>
@@ -105,13 +103,8 @@ const MultisigCosignerForm: FC<{
     <label className="block space-y-1 text-sm wallet-text-strong">
       Policy
       <select
-        value={custom ? 'custom' : `${required}-${cosigners.length}`}
+        value={`${required}-${cosigners.length}`}
         onChange={(event) => {
-          if (event.target.value === 'custom') {
-            setCustom(true);
-            return;
-          }
-          setCustom(false);
           const [m, n] = event.target.value.split('-').map(Number);
           applyPreset(m, n);
         }}
@@ -122,6 +115,9 @@ const MultisigCosignerForm: FC<{
             {m} of {n}
           </option>
         ))}
+        {/* An imported .pmwif can carry a policy nobody would pick from the
+            list — 3-of-4, say. Show it rather than silently snapping the
+            wallet to a preset it is not. */}
         {!MULTISIG_PRESETS.some(
           ([m, n]) => m === required && n === cosigners.length
         ) && (
@@ -129,29 +125,8 @@ const MultisigCosignerForm: FC<{
             {required} of {cosigners.length}
           </option>
         )}
-        <option value="custom">Custom…</option>
       </select>
     </label>
-
-    {custom && (
-      <label className="block space-y-1 text-sm wallet-text-strong">
-        Signatures required
-        <select
-          value={required}
-          onChange={(event) => setRequired(Number(event.target.value))}
-          className="wallet-input w-full rounded-md px-3 py-2"
-        >
-          {Array.from(
-            { length: cosigners.length },
-            (_, index) => index + 1
-          ).map((value) => (
-            <option key={value} value={value}>
-              {value} of {cosigners.length}
-            </option>
-          ))}
-        </select>
-      </label>
-    )}
 
     {cosigners.map((cosigner, index) => (
       <div key={index} className="space-y-2 rounded-md border border-[var(--wallet-border)] p-3">
@@ -282,8 +257,7 @@ const MultisigCosignerForm: FC<{
       </div>
     )}
   </div>
-  );
-};
+);
 
 export const WatchOnlyWalletPreview: FC<WatchOnlyWalletPreviewProps> = ({
   onBack,
