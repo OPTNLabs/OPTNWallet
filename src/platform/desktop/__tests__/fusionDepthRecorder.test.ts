@@ -12,7 +12,7 @@ import { clearFusionDepth, coinDepth } from '../fusionCoinDepth';
 // Keep the completion layer's other collaborators inert: this suite is about
 // depth accounting, not tracking/observation/refresh (which Codex owns).
 const recordBroadcast = vi.fn();
-const refreshActiveWalletUtxos = vi.fn();
+const reconcileActiveWalletUtxosForSpend = vi.fn();
 vi.mock('../../../services/OutboundTransactionTracker', () => ({
   default: { recordBroadcast: (...a: unknown[]) => recordBroadcast(...a) },
 }));
@@ -20,7 +20,8 @@ vi.mock('../../../services/WalletBackendSyncService', () => ({
   default: { observeTransaction: vi.fn().mockResolvedValue(undefined) },
 }));
 vi.mock('../../../services/WalletUtxoRefreshService', () => ({
-  refreshActiveWalletUtxos: (...a: unknown[]) => refreshActiveWalletUtxos(...a),
+  reconcileActiveWalletUtxosForSpend: (...a: unknown[]) =>
+    reconcileActiveWalletUtxosForSpend(...a),
 }));
 
 import { completeFusionBroadcast } from '../FusionCompletionService';
@@ -110,7 +111,9 @@ describe('fusion depth: one shared completion path for both transports', () => {
     (globalThis as { localStorage?: unknown }).localStorage = new MemoryStorage();
     clearFusionDepth(9);
     recordBroadcast.mockReset().mockResolvedValue(undefined);
-    refreshActiveWalletUtxos.mockReset().mockResolvedValue(true);
+    reconcileActiveWalletUtxosForSpend
+      .mockReset()
+      .mockResolvedValue({ addr: [] });
   });
 
   it.each([
@@ -129,9 +132,10 @@ describe('fusion depth: one shared completion path for both transports', () => {
 
     expect(result.depthRecorded).toBe(1);
     expect(coinDepth(9, `${TXID}:1`)).toBe(1);
-    // The peer's output must never be tracked: it is not our coin, and it would
-    // consume room under the depth map's entry cap.
-    expect(coinDepth(9, `${TXID}:0`)).toBe(0);
+    // Per-txid depth: the CoinJoin txid is marked depth 1 so index remap cannot
+    // reset the chain. We only query our own UTXOs; peer index 0 is not written
+    // as its own outpoint entry, but shares the txid depth if asked.
+    expect(coinDepth(9, `${TXID}:0`)).toBe(1);
     // The consumed input is dropped, so the map tracks live coins.
     expect(coinDepth(9, 'prev:0')).toBe(0);
   });

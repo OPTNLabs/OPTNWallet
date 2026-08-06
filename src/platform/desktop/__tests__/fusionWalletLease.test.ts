@@ -47,7 +47,9 @@ function installLocks() {
   });
 }
 
-const COOLDOWN = 5 * 60_000;
+/** Matches production success spacing — never multi-minute. */
+const COOLDOWN = 40_000;
+const FAIL_BACKOFF = 25_000;
 
 describe('cross-window fusion lease', () => {
   beforeEach(() => {
@@ -164,13 +166,62 @@ describe('atomic auto-fusion cooldown claim', () => {
     expect(await tryClaimAutoCooldown(8, COOLDOWN, t0)).toBe(true);
   });
 
-  it('short failure backoff does not enforce the full 5-minute gap', async () => {
+  it('failure backoff is 25s, not multi-minute', async () => {
     const { stampAutoFailure, isAutoCooldownReady } = await import(
       '../fusionWalletLease'
     );
     const t0 = 1_000_000;
-    await stampAutoFailure(7, 90_000, t0);
-    expect(isAutoCooldownReady(7, COOLDOWN, t0 + 90_000)).toBe(true);
-    expect(isAutoCooldownReady(7, COOLDOWN, t0 + 89_000)).toBe(false);
+    await stampAutoFailure(7, FAIL_BACKOFF, t0);
+    expect(isAutoCooldownReady(7, COOLDOWN, t0 + FAIL_BACKOFF)).toBe(true);
+    expect(isAutoCooldownReady(7, COOLDOWN, t0 + FAIL_BACKOFF - 1)).toBe(false);
+  });
+
+  it('wallet activity wakes depth-met idle when coins are below depth again', async () => {
+    const {
+      stampAutoDepthMetIdle,
+      stampAutoSuccess,
+      isAutoDepthMetIdle,
+      isAutoCooldownReady,
+      wakeAutoFromWalletActivity,
+    } = await import('../fusionWalletLease');
+    const t0 = 2_000_000;
+    await stampAutoDepthMetIdle(7, 30 * 60_000, t0);
+    expect(isAutoDepthMetIdle(7, t0 + 1_000)).toBe(true);
+
+    // Still all-depth / no eligible → stay idle.
+    expect(await wakeAutoFromWalletActivity(7, false, t0 + 1_000)).toBe(false);
+    expect(isAutoDepthMetIdle(7, t0 + 1_000)).toBe(true);
+
+    // Receive/send/tx left below-depth coins → clear long idle.
+    expect(await wakeAutoFromWalletActivity(7, true, t0 + 1_000)).toBe(true);
+    expect(isAutoDepthMetIdle(7, t0 + 1_000)).toBe(false);
+    expect(isAutoCooldownReady(7, COOLDOWN, t0 + 1_000)).toBe(true);
+  });
+
+  it('wallet activity does not break short success cooldown', async () => {
+    const {
+      stampAutoSuccess,
+      isAutoDepthMetIdle,
+      isAutoCooldownReady,
+      wakeAutoFromWalletActivity,
+    } = await import('../fusionWalletLease');
+    const t0 = 3_000_000;
+    await stampAutoSuccess(7, COOLDOWN, t0);
+    expect(isAutoDepthMetIdle(7, t0 + 1_000)).toBe(false);
+    expect(await wakeAutoFromWalletActivity(7, true, t0 + 1_000)).toBe(false);
+    expect(isAutoCooldownReady(7, COOLDOWN, t0 + 1_000)).toBe(false);
+  });
+
+  it('wakes legacy long fail-stamped idle (old depth-met used stampAutoFailure)', async () => {
+    const {
+      stampAutoFailure,
+      isAutoCooldownReady,
+      wakeAutoFromWalletActivity,
+    } = await import('../fusionWalletLease');
+    const t0 = 4_000_000;
+    // 30m "depth met" used to stamp as fail without reason: depth-met
+    await stampAutoFailure(7, 30 * 60_000, t0);
+    expect(await wakeAutoFromWalletActivity(7, true, t0 + 1_000)).toBe(true);
+    expect(isAutoCooldownReady(7, COOLDOWN, t0 + 1_000)).toBe(true);
   });
 });

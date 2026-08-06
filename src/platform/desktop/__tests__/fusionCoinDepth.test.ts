@@ -91,6 +91,21 @@ describe('per-coin fuse depth', () => {
     expect(coinsBelowDepth(1, [utxo('d')], 4)).toHaveLength(1);
   });
 
+  it('inherits depth via parent txid when outpoint keys do not match exactly', () => {
+    // First fuse records electrum-style outpoint.
+    recordFusionRound(1, ['seed:0'], ['aabbccdd'.repeat(8) + ':0']);
+    expect(coinDepth(1, `${'aabbccdd'.repeat(8)}:0`)).toBe(1);
+    // Next fuse spends the same coin under a different pos key that only
+    // shares the txid — live Electrum lag / index remap used to reset to 0.
+    // Per-txid depth keeps the chain climbing.
+    recordFusionRound(
+      1,
+      [`${'aabbccdd'.repeat(8)}:99`],
+      [`${'11223344'.repeat(8)}:0`]
+    );
+    expect(coinDepth(1, `${'11223344'.repeat(8)}:0`)).toBe(2);
+  });
+
   it('drops spent inputs so the map tracks live coins, not history', () => {
     recordFusionRound(1, ['spent:0'], ['made:0']);
     // The input was consumed by the round and can never reappear.

@@ -40,14 +40,14 @@ export function AutoFusionControls({
         <ul className="list-disc pl-4 space-y-0.5">
           <li>
             <span className="wallet-text-strong">Fuse automatically</span> —
-            start rounds in the background (on UTXO refresh + random timer).
-            Needs Tor for P2P and peers online.
+            start rounds in the background (on UTXO refresh + timer). Needs Tor
+            for P2P and peers online.
           </li>
           <li>
-            <span className="wallet-text-strong">Rounds per coin</span> — same
-            as fuse depth: how many CashFusion rounds auto-fuse will put each
-            coin through before leaving it alone (default 3). Not a different
-            setting.
+            <span className="wallet-text-strong">Rounds per coin</span> — how
+            many times Auto fuses each coin before it stops (default 3). Auto
+            always uses this number. Change it to restart: raise to fuse more,
+            lower to stop sooner.
           </li>
           <li>
             <span className="wallet-text-strong">Only spend fused coins</span>{' '}
@@ -64,8 +64,8 @@ export function AutoFusionControls({
           </span>
           <span className="block text-[10px] wallet-muted">
             Starts rounds on its own using the selected transport (P2P or
-            server). Each successful round pays a network fee; then waits ~5
-            minutes before auto tries again.
+            server). Each successful round pays a network fee; then waits ~40s
+            before Auto tries again (~25s after a failed attempt).
           </span>
         </span>
         <input
@@ -85,9 +85,11 @@ export function AutoFusionControls({
             Rounds per coin (fuse depth)
           </span>
           <span className="block text-[10px] wallet-muted">
-            Auto stops once each coin has been fused this many times (default 3).
-            Seeing “all coins already at depth” means Auto is done — not broken.
-            Manual Start can still re-fuse; raise this number to mix further.
+            Auto keeps fusing each coin until it reaches this count (default 3).
+            “All coins already at depth” means Auto is done for this number —
+            not broken. Change the number and Auto restarts against the new
+            target. New send/receive coins start at 0 and fuse again. Manual
+            Start ignores this limit.
           </span>
         </span>
         <input

@@ -16,7 +16,11 @@ import {
 } from '../FusionRunnerService';
 import { Network } from '../../../state/slices/networkSlice';
 import { clearFusionDepth, recordFusionRound } from '../fusionCoinDepth';
-import { lastAutoAttemptAt } from '../fusionWalletLease';
+import {
+  isAutoCooldownReady,
+  isAutoDepthMetIdle,
+  lastAutoAttemptAt,
+} from '../fusionWalletLease';
 
 class MemoryStorage {
   private map = new Map<string, string>();
@@ -152,15 +156,19 @@ describe('FusionRunnerService — one path for manual and automatic rounds', () 
     expect(runP2p).not.toHaveBeenCalled();
   });
 
-  it('does not burn the auto cooldown when there are no eligible coins', async () => {
+  it('stamps depth-met idle (not success cooldown) when only token coins remain', async () => {
     reconcile.mockResolvedValue({ addr: [coin('tok', true)] });
 
     await startFusionRound(base());
 
-    expect(lastAutoAttemptAt(3)).toBeNull();
+    // Depth/empty idle is stamped so the engine stops thrashing, but it is not
+    // a paid-success cooldown — wallet activity can clear it when BCH appears.
+    expect(lastAutoAttemptAt(3)).not.toBeNull();
+    expect(isAutoDepthMetIdle(3)).toBe(true);
+    expect(isAutoCooldownReady(3, 40_000)).toBe(false);
   });
 
-  it('applies fuse depth to AUTOMATIC rounds', async () => {
+  it('applies fuse depth to AUTOMATIC rounds and idles until wallet activity', async () => {
     recordFusionRound(3, ['x:0'], ['deep:0']);
     recordFusionRound(3, ['deep:0'], ['deeper:0']);
     recordFusionRound(3, ['deeper:0'], ['maxed:0']); // depth 3
@@ -168,8 +176,13 @@ describe('FusionRunnerService — one path for manual and automatic rounds', () 
 
     await expect(startFusionRound(base())).resolves.toMatchObject({
       status: 'no-eligible-coins',
-      detail: expect.stringMatching(/depth ≥ 3|rounds-per-coin/i),
+      detail: expect.stringMatching(
+        /depth ≥ 3|rounds-per-coin|wallet activity/i
+      ),
     });
+    expect(isAutoDepthMetIdle(3)).toBe(true);
+    // No lease thrash / no transport work.
+    expect(runP2p).not.toHaveBeenCalled();
   });
 
   it('lets a MANUAL round re-fuse a coin already at the depth limit', async () => {

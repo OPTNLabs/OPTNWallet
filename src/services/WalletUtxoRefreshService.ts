@@ -22,9 +22,10 @@ const refreshListeners = new Set<WalletUtxoRefreshListener>();
 /**
  * Notify app-wide consumers after a fresh wallet snapshot is committed.
  *
- * Auto-fusion uses this as its send/receive wake-up signal. The durable
- * cooldown and wallet lease remain authoritative, so a burst of Electrum
- * notifications cannot start duplicate paid rounds.
+ * Auto-fusion uses this as its wallet-activity wake-up signal (receive, send,
+ * change, any UTXO-changing tx). The durable cooldown and wallet lease remain
+ * authoritative, so a burst of Electrum notifications cannot start duplicate
+ * paid rounds. Depth-met idle is cleared only when coins are again below depth.
  */
 export function subscribeWalletUtxoRefresh(
   listener: WalletUtxoRefreshListener

@@ -23,6 +23,12 @@ const DEPTH_PREFIX = 'optn-fusion-coin-depth-';
 /** Wallet-local set of CoinJoin txids — for Home / history "Fused" labels after
  *  coins are spent (depth map prunes spent outpoints). */
 const TXID_PREFIX = 'optn-fusion-txids-';
+/**
+ * Per-CoinJoin-txid depth. Outpoint keys sometimes miss (index / casing /
+ * Electrum lag), which used to reset every round to depth 1 forever. Looking up
+ * by parent txid keeps Auto able to stop at rounds-per-coin.
+ */
+const TX_DEPTH_PREFIX = 'optn-fusion-tx-depth-';
 
 /** Canonical `txid:pos` — txid lowercased so Electrum/display case cannot hide depth. */
 export function normalizeOutpoint(outpoint: string): string {
@@ -60,11 +66,61 @@ interface DepthEntry {
 type DepthMap = Record<string, DepthEntry>;
 
 const storageKeyFor = (walletId: number) => `${DEPTH_PREFIX}${walletId}`;
+const txDepthKeyFor = (walletId: number) => `${TX_DEPTH_PREFIX}${walletId}`;
+const DEPTH_BC_NAME = 'optn-fusion-depth-sync';
 
-function read(walletId: number): DepthMap {
+function txidOfOutpoint(outpoint: string): string {
+  const key = normalizeOutpoint(outpoint);
+  const colon = key.lastIndexOf(':');
+  return colon > 0 ? key.slice(0, colon) : key;
+}
+
+type TxDepthMap = Record<string, number>;
+
+/**
+ * Process-memory cache. Live log showed `depth: recorded N` then next Auto
+ * `coin depths 0–0` — localStorage alone was not reliable across ticks in
+ * multi-window Tauri. Memory keeps the chain for this session; localStorage +
+ * BroadcastChannel still try to share across reloads / windows.
+ */
+const memEntries = new Map<number, DepthMap>();
+const memTxDepth = new Map<number, TxDepthMap>();
+
+let depthBc: BroadcastChannel | null = null;
+function getDepthBc(): BroadcastChannel | null {
+  if (depthBc) return depthBc;
   try {
-    const raw = getLocalStorage()?.getItem(storageKeyFor(walletId));
-    if (!raw) return {};
+    if (typeof BroadcastChannel === 'undefined') return null;
+    depthBc = new BroadcastChannel(DEPTH_BC_NAME);
+    depthBc.onmessage = (ev: MessageEvent) => {
+      const data = ev.data as {
+        walletId?: number;
+        entries?: DepthMap;
+        txDepth?: TxDepthMap;
+      };
+      if (
+        !data ||
+        !Number.isInteger(data.walletId) ||
+        (data.walletId as number) <= 0
+      ) {
+        return;
+      }
+      if (data.entries && typeof data.entries === 'object') {
+        memEntries.set(data.walletId as number, data.entries);
+      }
+      if (data.txDepth && typeof data.txDepth === 'object') {
+        memTxDepth.set(data.walletId as number, data.txDepth);
+      }
+    };
+    return depthBc;
+  } catch {
+    return null;
+  }
+}
+
+function parseDepthMap(raw: string | null): DepthMap {
+  if (!raw) return {};
+  try {
     const parsed: unknown = JSON.parse(raw);
     if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return {};
     const out: DepthMap = {};
@@ -80,7 +136,6 @@ function read(walletId: number): DepthMap {
       ) {
         const norm = normalizeOutpoint(key);
         const prev = out[norm]?.d ?? 0;
-        // If both casings existed, keep the higher depth claim.
         if (Math.trunc(d) >= prev) {
           out[norm] = { d: Math.trunc(d), at };
         }
@@ -88,19 +143,106 @@ function read(walletId: number): DepthMap {
     }
     return out;
   } catch {
-    // Unreadable storage must not stop fusion — it degrades to "everything is
-    // depth 0", i.e. coins get fused again. Wasteful, never unsafe.
     return {};
   }
 }
 
+function parseTxDepth(raw: string | null): TxDepthMap {
+  if (!raw) return {};
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return {};
+    const out: TxDepthMap = {};
+    for (const [k, v] of Object.entries(parsed as Record<string, unknown>)) {
+      if (typeof v === 'number' && Number.isFinite(v) && v >= 0) {
+        out[k.toLowerCase()] = Math.trunc(v);
+      }
+    }
+    return out;
+  } catch {
+    return {};
+  }
+}
+
+function readTxDepth(walletId: number): TxDepthMap {
+  const cached = memTxDepth.get(walletId);
+  if (cached) return cached;
+  try {
+    const fromLs = parseTxDepth(
+      getLocalStorage()?.getItem(txDepthKeyFor(walletId)) ?? null
+    );
+    memTxDepth.set(walletId, fromLs);
+    return fromLs;
+  } catch {
+    const empty: TxDepthMap = {};
+    memTxDepth.set(walletId, empty);
+    return empty;
+  }
+}
+
+function writeTxDepth(walletId: number, map: TxDepthMap): void {
+  memTxDepth.set(walletId, map);
+  try {
+    getLocalStorage()?.setItem(txDepthKeyFor(walletId), JSON.stringify(map));
+  } catch {
+    /* memory still holds it this session */
+  }
+  try {
+    getDepthBc()?.postMessage({
+      walletId,
+      entries: memEntries.get(walletId) ?? {},
+      txDepth: map,
+    });
+  } catch {
+    /* ignore */
+  }
+}
+
+/** Depth for an outpoint, falling back to per-txid depth of its parent CoinJoin. */
+function depthOf(
+  entries: DepthMap,
+  txDepth: TxDepthMap,
+  outpoint: string
+): number {
+  const key = normalizeOutpoint(outpoint);
+  if (entries[key]) return entries[key].d;
+  const txid = txidOfOutpoint(key);
+  if (typeof txDepth[txid] === 'number') return txDepth[txid];
+  return 0;
+}
+
+function read(walletId: number): DepthMap {
+  const cached = memEntries.get(walletId);
+  if (cached) return cached;
+  try {
+    const fromLs = parseDepthMap(
+      getLocalStorage()?.getItem(storageKeyFor(walletId)) ?? null
+    );
+    memEntries.set(walletId, fromLs);
+    return fromLs;
+  } catch {
+    const empty: DepthMap = {};
+    memEntries.set(walletId, empty);
+    return empty;
+  }
+}
+
 function write(walletId: number, entries: DepthMap): void {
-  // Written verbatim. Dropping an entry here would silently reset a live coin's
-  // depth to 0 and buy it another paid round.
+  // Keep a live copy even when localStorage is flaky (multi-window Tauri).
+  memEntries.set(walletId, entries);
   try {
     getLocalStorage()?.setItem(storageKeyFor(walletId), JSON.stringify(entries));
   } catch {
-    /* storage unavailable — depth simply is not remembered */
+    /* memory still holds it this session */
+  }
+  try {
+    getDepthBc()?.postMessage({
+      walletId,
+      entries,
+      txDepth: memTxDepth.get(walletId) ?? {},
+    });
+  } catch {
+    /* ignore */
   }
 }
 
@@ -136,7 +278,7 @@ export function pruneSpentDepth(
 
 /** Rounds this coin has been through. Unknown coins are fresh (0). */
 export function coinDepth(walletId: number, outpoint: string): number {
-  return read(walletId)[normalizeOutpoint(outpoint)]?.d ?? 0;
+  return depthOf(read(walletId), readTxDepth(walletId), outpoint);
 }
 
 /** Snapshot for COLD export (no secrets). */
@@ -280,24 +422,32 @@ export function recordFusionRound(
   createdOutpoints: string[]
 ): void {
   const entries = read(walletId);
+  const txDepth = readTxDepth(walletId);
   const spent = spentOutpoints.map(normalizeOutpoint);
   const created = createdOutpoints.map(normalizeOutpoint);
-  // An unknown ancestor is depth 0 and correctly drags the minimum down. With no
-  // recorded inputs at all there is no ancestry to inherit, so the floor is 0.
+  // Unknown ancestor is depth 0 (drags min down). Prefer outpoint entry, then
+  // per-txid depth so a key mismatch cannot reset the chain to 0 forever.
   const inheritedDepth =
     spent.length === 0
       ? 0
       : spent.reduce(
           (shallowest, outpoint) =>
-            Math.min(shallowest, entries[outpoint]?.d ?? 0),
+            Math.min(shallowest, depthOf(entries, txDepth, outpoint)),
           Number.POSITIVE_INFINITY
         );
+  const nextDepth =
+    inheritedDepth === Number.POSITIVE_INFINITY ? 1 : inheritedDepth + 1;
   spent.forEach((outpoint) => delete entries[outpoint]);
   const now = Date.now();
   created.forEach((outpoint) => {
-    entries[outpoint] = { d: inheritedDepth + 1, at: now };
+    entries[outpoint] = { d: nextDepth, at: now };
+    const txid = txidOfOutpoint(outpoint);
+    if (txid.length === 64) {
+      txDepth[txid] = Math.max(txDepth[txid] ?? 0, nextDepth);
+    }
   });
   write(walletId, entries);
+  writeTxDepth(walletId, txDepth);
 }
 
 /** Coins the engine may still fuse, i.e. those below the configured depth. */
@@ -307,9 +457,14 @@ export function coinsBelowDepth<T extends { tx_hash: string; tx_pos: number }>(
   maxDepth: number
 ): T[] {
   const entries = read(walletId);
+  const txDepth = readTxDepth(walletId);
   return utxos.filter(
     (utxo) =>
-      (entries[outpointFromParts(utxo.tx_hash, utxo.tx_pos)]?.d ?? 0) < maxDepth
+      depthOf(
+        entries,
+        txDepth,
+        outpointFromParts(utxo.tx_hash, utxo.tx_pos)
+      ) < maxDepth
   );
 }
 
@@ -323,28 +478,50 @@ export function fuseDepthEligibility(
   eligible: number;
   atOrAboveDepth: number;
   maxDepth: number;
+  /** Min/max depth among wallet coins (for logs / UI). */
+  minDepth: number;
+  maxCoinDepth: number;
 } {
   const entries = read(walletId);
+  const txDepth = readTxDepth(walletId);
   let eligible = 0;
   let atOrAboveDepth = 0;
+  let minDepth = Number.POSITIVE_INFINITY;
+  let maxCoinDepth = 0;
   for (const utxo of utxos) {
-    const d = entries[outpointFromParts(utxo.tx_hash, utxo.tx_pos)]?.d ?? 0;
+    const d = depthOf(
+      entries,
+      txDepth,
+      outpointFromParts(utxo.tx_hash, utxo.tx_pos)
+    );
+    minDepth = Math.min(minDepth, d);
+    maxCoinDepth = Math.max(maxCoinDepth, d);
     if (d < maxDepth) eligible += 1;
     else atOrAboveDepth += 1;
+  }
+  if (utxos.length === 0) {
+    minDepth = 0;
+  } else if (minDepth === Number.POSITIVE_INFINITY) {
+    minDepth = 0;
   }
   return {
     total: utxos.length,
     eligible,
     atOrAboveDepth,
     maxDepth,
+    minDepth,
+    maxCoinDepth,
   };
 }
 
 /** Test/support hook: forget every recorded depth for a wallet. */
 export function clearFusionDepth(walletId: number): void {
+  memEntries.delete(walletId);
+  memTxDepth.delete(walletId);
   try {
     getLocalStorage()?.removeItem(storageKeyFor(walletId));
     getLocalStorage()?.removeItem(`${TXID_PREFIX}${walletId}`);
+    getLocalStorage()?.removeItem(txDepthKeyFor(walletId));
   } catch {
     /* nothing to clear */
   }
