@@ -127,6 +127,10 @@ const installNativeMocks = (fusionOutcome?: unknown) => {
     if (command === 'fusion_run') {
       return Promise.resolve(fusionOutcome);
     }
+    // Prefer Electrum is_known (fast path after server broadcast).
+    if (command === 'fusion_transaction_is_known' && txid) {
+      return Promise.resolve(true);
+    }
     if (command === 'fusion_relay_broadcast_and_observe' && txid) {
       return Promise.resolve({
         txid,
@@ -407,10 +411,14 @@ describe('buildServerRunner — shared runner for manual and auto', () => {
     return { runner, txid };
   };
 
-  it('accepts a round the network already has, even when no peer echoed it', async () => {
+  it('accepts a round the network already has without dual-peer Tor observe', async () => {
     const { runner, txid } = await runObservationCase(false, true);
     await expect(runner(makeCoins())).resolves.toEqual({ txid });
     expect(mockCompleteFusionBroadcast).toHaveBeenCalled();
+    // known=true → backup dual-peer path must not run
+    const commands = mockInvoke.mock.calls.map((c) => c[0]);
+    expect(commands).toContain('fusion_transaction_is_known');
+    expect(commands).not.toContain('fusion_relay_broadcast_and_observe');
   });
 
   it('still fails when no peer echoed it and no server has it', async () => {
@@ -433,7 +441,7 @@ describe('buildServerRunner — shared runner for manual and auto', () => {
     );
   });
 
-  it('persists an assembled transaction before Tor relay and requires independent observation', async () => {
+  it('persists the tx before confirmation and uses Electrum is_known first', async () => {
     const runner = makeConfig({
       tor: { host: '127.0.0.1', port: 9050 },
     });
@@ -448,7 +456,7 @@ describe('buildServerRunner — shared runner for manual and auto', () => {
       order.push('track');
       return { txid };
     });
-    mockInvoke.mockImplementation((command: string, args: unknown) => {
+    mockInvoke.mockImplementation((command: string) => {
       order.push(command);
       if (command === 'fusion_execution_status') {
         return Promise.resolve({ ready: true, message: null });
@@ -468,22 +476,11 @@ describe('buildServerRunner — shared runner for manual and auto', () => {
           message: 'assembled',
         });
       }
+      if (command === 'fusion_transaction_is_known') {
+        return Promise.resolve(true);
+      }
       if (command === 'fusion_relay_broadcast_and_observe') {
-        expect(args).toEqual({
-          txHex,
-          network: Network.CHIPNET,
-          relayHost: 'chipnet.bitjson.com',
-          relayPort: 48333,
-          observerHost: 'seed.cbch.loping.net',
-          observerPort: 48333,
-          torHost: '127.0.0.1',
-          torPort: 9050,
-        });
-        return Promise.resolve({
-          txid,
-          relaySubmitted: true,
-          observerSeen: true,
-        });
+        return Promise.reject(new Error('should not dual-peer observe when known'));
       }
       return Promise.reject(new Error(`unexpected command ${command}`));
     });
@@ -497,8 +494,9 @@ describe('buildServerRunner — shared runner for manual and auto', () => {
       txid,
     });
     expect(order.indexOf('track')).toBeLessThan(
-      order.indexOf('fusion_relay_broadcast_and_observe')
+      order.indexOf('fusion_transaction_is_known')
     );
+    expect(order).not.toContain('fusion_relay_broadcast_and_observe');
     expect(mockCompleteFusionBroadcast).toHaveBeenCalledWith(
       expect.objectContaining({
         txid,
@@ -506,6 +504,42 @@ describe('buildServerRunner — shared runner for manual and auto', () => {
         privacyRoute: 'tor-only',
       })
     );
+  });
+
+  it('falls back to Tor relay when Electrum does not have the tx yet', async () => {
+    const { runner, txid } = await runObservationCase(true, false);
+    // First is_known false; observe succeeds → complete without second is_known.
+    // Override: is_known always false, observe true.
+    mockInvoke.mockImplementation((command: string) => {
+      if (command === 'fusion_execution_status') {
+        return Promise.resolve({ ready: true, message: null });
+      }
+      if (command === 'fusion_prepare_round' || command === 'fusion_cancel_round') {
+        return Promise.resolve();
+      }
+      if (command === 'fusion_run') {
+        return Promise.resolve({
+          ok: true,
+          broadcast_verified: false,
+          txid,
+          tx_hex: '01000000',
+          message: 'assembled',
+        });
+      }
+      if (command === 'fusion_transaction_is_known') {
+        return Promise.resolve(false);
+      }
+      if (command === 'fusion_relay_broadcast_and_observe') {
+        return Promise.resolve({
+          txid,
+          relaySubmitted: true,
+          observerSeen: true,
+        });
+      }
+      return Promise.reject(new Error(`unexpected command ${command}`));
+    });
+    await expect(runner(makeCoins())).resolves.toEqual({ txid });
+    expect(mockCompleteFusionBroadcast).toHaveBeenCalled();
   });
 
   it('reserves every server-round input before deriving keys and releases the temporary lock after durable tracking', async () => {
@@ -698,6 +732,9 @@ describe('buildServerRunner — shared runner for manual and auto', () => {
           tx_hex: '01000000',
           message: 'ok',
         });
+      }
+      if (command === 'fusion_transaction_is_known') {
+        return Promise.resolve(true);
       }
       if (command === 'fusion_relay_broadcast_and_observe') {
         return Promise.resolve({

@@ -279,19 +279,29 @@ export async function tryClaimAutoCooldown(
   return result.ran ? result.value : false;
 }
 
+/** Persist a cooldown stamp; prefer Web Lock, always write as best-effort. */
+async function stampCooldown(
+  walletId: number,
+  record: CooldownRecord
+): Promise<void> {
+  const key = `${COOLDOWN_PREFIX}${walletId}`;
+  const write = () => writeJson(key, record);
+  const result = await withWalletLock(walletId, write);
+  // Without a lock (or if request never runs) still write: silent no-op made
+  // depth-met / fail stamps vanish and Auto thrashed every engine tick.
+  if (!result.ran) write();
+}
+
 /** After a successful paid fuse — full spacing. */
 export async function stampAutoSuccess(
   walletId: number,
   cooldownMs: number,
   nowMs = Date.now()
 ): Promise<void> {
-  const key = `${COOLDOWN_PREFIX}${walletId}`;
-  await withWalletLock(walletId, () => {
-    writeJson(key, {
-      nextAllowedAt: nowMs + cooldownMs,
-      attempt: nowMs,
-      reason: 'success',
-    });
+  await stampCooldown(walletId, {
+    nextAllowedAt: nowMs + cooldownMs,
+    attempt: nowMs,
+    reason: 'success',
   });
 }
 
@@ -301,13 +311,10 @@ export async function stampAutoFailure(
   backoffMs: number,
   nowMs = Date.now()
 ): Promise<void> {
-  const key = `${COOLDOWN_PREFIX}${walletId}`;
-  await withWalletLock(walletId, () => {
-    writeJson(key, {
-      nextAllowedAt: nowMs + backoffMs,
-      attempt: nowMs,
-      reason: 'fail',
-    });
+  await stampCooldown(walletId, {
+    nextAllowedAt: nowMs + backoffMs,
+    attempt: nowMs,
+    reason: 'fail',
   });
 }
 
@@ -320,13 +327,10 @@ export async function stampAutoDepthMetIdle(
   idleMs: number,
   nowMs = Date.now()
 ): Promise<void> {
-  const key = `${COOLDOWN_PREFIX}${walletId}`;
-  await withWalletLock(walletId, () => {
-    writeJson(key, {
-      nextAllowedAt: nowMs + idleMs,
-      attempt: nowMs,
-      reason: 'depth-met',
-    });
+  await stampCooldown(walletId, {
+    nextAllowedAt: nowMs + idleMs,
+    attempt: nowMs,
+    reason: 'depth-met',
   });
 }
 
@@ -374,10 +378,11 @@ export async function wakeAutoFromWalletActivity(
     await clearAutoCooldown(walletId);
     return true;
   }
-  // Legacy long idle (old depth stamps / multi-minute leftovers). Anything
-  // longer than success spacing is wake-able on wallet activity.
+  // Legacy multi-minute leftovers only — never clear a short success/fail
+  // cooldown (remaining is usually ≈ AUTO_FUSION_COOLDOWN_MS).
   const next = readNextAllowedAt(walletId);
-  if (next !== null && next - nowMs > AUTO_FUSION_COOLDOWN_MS) {
+  const remaining = next !== null ? next - nowMs : 0;
+  if (remaining > 2 * 60_000) {
     await clearAutoCooldown(walletId);
     return true;
   }

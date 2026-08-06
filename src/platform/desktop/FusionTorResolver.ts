@@ -52,7 +52,8 @@ function errorMessage(error: unknown, fallback: string): string {
  * when integrated tor.exe is already listening (live: "Could not start"
  * while 9251 was open and healthy).
  */
-async function useLiveSocksIfAny(
+/** Probe ports for a live Tor SOCKS (not a React hook — name must not start with use). */
+async function firstLiveSocksPort(
   host: string,
   ports: number[],
   probes: FusionTorProbes
@@ -155,7 +156,7 @@ export async function resolveFusionTransport(
     // adopted process, multi-window Start). Probe before waiting 180s on start.
     // Only probe the integrated default port in auto mode — manual pin must
     // stay on settings.manualPort (tests + user override).
-    const live = await useLiveSocksIfAny(
+    const live = await firstLiveSocksPort(
       settings.host,
       settings.auto
         ? [managed.socks_port, INTEGRATED_TOR_SOCKS_PORT]
@@ -186,7 +187,7 @@ export async function resolveFusionTransport(
         }
       } catch (error) {
         // Start timed out — still use live SOCKS if the process is answering.
-        const after = await useLiveSocksIfAny(
+        const after = await firstLiveSocksPort(
           settings.host,
           [managed.socks_port, INTEGRATED_TOR_SOCKS_PORT],
           probes
@@ -209,7 +210,7 @@ export async function resolveFusionTransport(
 
   if (settings.auto) {
     // Integrated port first (9251) — detectPort only scans 9050/9150.
-    const liveIntegrated = await useLiveSocksIfAny(
+    const liveIntegrated = await firstLiveSocksPort(
       settings.host,
       [managedSocks, INTEGRATED_TOR_SOCKS_PORT],
       probes
@@ -230,7 +231,7 @@ export async function resolveFusionTransport(
           return { type: 'tor', tor: { host: settings.host, port: socksPort } };
         }
       } catch (error) {
-        const after = await useLiveSocksIfAny(
+        const after = await firstLiveSocksPort(
           settings.host,
           [INTEGRATED_TOR_SOCKS_PORT],
           probes

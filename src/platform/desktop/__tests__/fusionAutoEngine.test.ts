@@ -2,10 +2,17 @@ import { describe, expect, it } from 'vitest';
 import {
   AUTO_RENDEZVOUS_OPEN_MS,
   AUTO_RENDEZVOUS_PERIOD_MS,
+  AUTO_SERVER_JOIN_OPEN_MS,
+  AUTO_SERVER_JOIN_PERIOD_MS,
   decideAutoFusion,
   isAutoRendezvousOpen,
+  isAutoTransientFailure,
+  isServerJoinOpen,
   msUntilAutoRendezvousOpen,
+  msUntilServerJoinOpen,
+  nextAutoEngineTickForMode,
   nextAutoEngineTickMs,
+  nextServerAutoEngineTickMs,
   type AutoFusionInputs,
 } from '../fusionAutoEngine';
 
@@ -90,5 +97,57 @@ describe('auto rendezvous slots', () => {
     const n = nextAutoEngineTickMs(Date.now());
     expect(n).toBeGreaterThan(0);
     expect(n).toBeLessThan(AUTO_RENDEZVOUS_PERIOD_MS + 20_000);
+  });
+});
+
+describe('server Auto join window (P2P-style multi-wallet meet)', () => {
+  it('has an open join slot like P2P rendezvous', () => {
+    const t0 = 1_700_000_000_000;
+    const slot0 = t0 - (t0 % AUTO_SERVER_JOIN_PERIOD_MS);
+    expect(isServerJoinOpen(slot0)).toBe(true);
+    expect(msUntilServerJoinOpen(slot0)).toBe(0);
+    expect(isServerJoinOpen(slot0 + AUTO_SERVER_JOIN_OPEN_MS)).toBe(false);
+    expect(msUntilServerJoinOpen(slot0 + AUTO_SERVER_JOIN_OPEN_MS)).toBe(
+      AUTO_SERVER_JOIN_PERIOD_MS - AUTO_SERVER_JOIN_OPEN_MS
+    );
+  });
+
+  it('next server tick is finite and within a join period', () => {
+    for (let i = 0; i < 20; i++) {
+      const n = nextServerAutoEngineTickMs(Date.now() + i * 1000);
+      expect(n).toBeGreaterThan(0);
+      expect(n).toBeLessThan(AUTO_SERVER_JOIN_PERIOD_MS + 10_000);
+    }
+  });
+
+  it('mode helper routes server vs p2p', () => {
+    const server = nextAutoEngineTickForMode('server');
+    expect(server).toBeGreaterThan(0);
+    expect(server).toBeLessThan(AUTO_SERVER_JOIN_PERIOD_MS + 10_000);
+    const p2p = nextAutoEngineTickForMode('p2p');
+    expect(p2p).toBeGreaterThan(0);
+    expect(p2p).toBeLessThan(AUTO_RENDEZVOUS_PERIOD_MS + 20_000);
+  });
+
+  it('classifies connect-refused and empty pool as transient (short retry)', () => {
+    expect(
+      isAutoTransientFailure(
+        'could not connect to 127.0.0.1:8787: ... actively refused it. (os error 10061)'
+      )
+    ).toBe(true);
+    expect(
+      isAutoTransientFailure(
+        'no other players joined in time (best tier 15000000 sats had 1/2 players); registered 5 tier(s)'
+      )
+    ).toBe(true);
+    expect(
+      isAutoTransientFailure(
+        'receive failed: An established connection was aborted ... (os error 10053)'
+      )
+    ).toBe(true);
+    expect(isAutoTransientFailure('too few remaining live players')).toBe(true);
+    expect(isAutoTransientFailure('Selected inputs cannot afford any fusion tier.')).toBe(
+      false
+    );
   });
 });

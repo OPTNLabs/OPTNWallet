@@ -19,6 +19,7 @@ import { selectWalletId } from '../../state/slices/walletSlice';
 import type { RootState } from '../../state/store';
 import type { UTXO } from '../../types/types';
 import { coinDepth } from '../../platform/desktop/fusionCoinDepth';
+import { useFusionDepthRevision } from '../../platform/desktop/useFusionDepthRevision';
 import { outpointKey } from '../../platform/desktop/CoinLabelService';
 import { FusionBadge } from '../../components/FusionBadge';
 import KeyService from '../../services/KeyService';
@@ -105,6 +106,7 @@ export const WatchOnlySend: FC = () => {
   const navigate = useNavigate();
   const location = useLocation();
   const walletId = useSelector(selectWalletId);
+  const fusionDepthRev = useFusionDepthRevision(walletId || 0);
 
   const [recipient, setRecipient] = useState('');
   const [amountSats, setAmountSats] = useState<bigint | null>(null);
@@ -399,7 +401,15 @@ export const WatchOnlySend: FC = () => {
         masterFingerprint: fingerprint ? masterFingerprintBytes(fingerprint) : null,
       });
       const normalizedFingerprint = fingerprint.trim().toLowerCase();
-      if (currentWalletId && normalizedFingerprint !== savedFingerprint) {
+      // Only ever write a real value. Now that the field is optional, a blank
+      // one means "not supplied this time", not "forget the one I gave you" —
+      // persisting the empty string would wipe a fingerprint the user already
+      // read off the device and make the next send silently unrecognised.
+      if (
+        currentWalletId &&
+        normalizedFingerprint &&
+        normalizedFingerprint !== savedFingerprint
+      ) {
         // The fingerprint lives on the signer, so it is commonly typed in for
         // the first time here. Persist it so the next send does not ask again.
         void saveWatchOnlyMasterFingerprint(currentWalletId, normalizedFingerprint)
@@ -611,10 +621,13 @@ export const WatchOnlySend: FC = () => {
                               {input.addressIndex}
                               {walletId > 0 && (
                                 <FusionBadge
-                                  depth={coinDepth(
-                                    walletId,
-                                    outpointKey(input.txid, input.vout)
-                                  )}
+                                  depth={(() => {
+                                    void fusionDepthRev;
+                                    return coinDepth(
+                                      walletId,
+                                      outpointKey(input.txid, input.vout)
+                                    );
+                                  })()}
                                   className="ml-1.5"
                                 />
                               )}
@@ -685,7 +698,10 @@ export const WatchOnlySend: FC = () => {
                   )}
                 </div>
                 <label className="block space-y-1 text-sm wallet-text-strong">
-                  Master fingerprint (from the signer)
+                  Master fingerprint{' '}
+                  <span className="text-[11px] font-normal wallet-muted">
+                    (optional)
+                  </span>
                   <input
                     value={fingerprint}
                     onChange={(event) => {
@@ -704,18 +720,27 @@ export const WatchOnlySend: FC = () => {
                     Must be exactly 8 hex characters.
                   </p>
                 )}
+                {!fingerprint && (
+                  <p className="text-[11px] leading-relaxed text-amber-400">
+                    Without it SeedCash will still sign, but its review screen
+                    will not show these coins as yours — you would be approving
+                    a transaction the device cannot confirm belongs to you.
+                  </p>
+                )}
                 <button
                   type="button"
                   onClick={() => void handleBuild()}
-                  disabled={!fingerprint || !masterFingerprintBytes(fingerprint)}
+                  disabled={!!fingerprint && !masterFingerprintBytes(fingerprint)}
                   className="wallet-btn-primary w-full py-2 font-semibold disabled:opacity-50"
                 >
                   Build unsigned transaction
                 </button>
                 <p className="text-[11px] leading-relaxed wallet-muted">
-                  The fingerprint is printed on the signer under the account
-                  xPub. It tells the signer which account may sign; without it
-                  the device refuses the inputs.
+                  SeedCash shows this on the same screen as Export Xpub. It
+                  cannot be derived from the xPub — the account key has a
+                  different fingerprint from the master key. It is not used to
+                  produce the signature, only to let the device recognise the
+                  coins as its own, so it is worth entering once.
                 </p>
               </section>
 

@@ -4,39 +4,56 @@ import {
   takeRecentTransactions,
 } from '../transactionHistoryOrder';
 
-const tx = (hash: string, height: number) => ({
+const tx = (
+  hash: string,
+  height: number,
+  timestamp?: string
+): { tx_hash: string; height: number; timestamp?: string } => ({
   tx_hash: hash,
   height,
+  ...(timestamp ? { timestamp } : {}),
 });
 
-describe('transactionHistoryOrder', () => {
-  it('puts unconfirmed before confirmed, then high block first', () => {
+describe('transactionHistoryOrder — newest first', () => {
+  it('unconfirmed first, then confirmed high block → older blocks', () => {
     const list = [
       tx('old', 100),
-      tx('fused', 500),
+      tx('fused_conf', 500),
       tx('mid', 200),
-      tx('mempool', 0),
-      tx('pending', -1),
+      tx('mempool', 0, '2026-08-06T10:00:00.000Z'),
+      tx('pending', -1, '2026-08-06T11:00:00.000Z'),
     ];
     const sorted = sortTransactionsByRecency(list, 'desc');
     expect(sorted.map((t) => t.tx_hash)).toEqual([
-      'pending', // reverse of unconfirmed encounter: pending then mempool → reverse
+      'pending', // newest unconfirmed
       'mempool',
-      'fused',
+      'fused_conf',
       'mid',
       'old',
     ]);
   });
 
+  it('puts a recent fusion above older unconfirmed by timestamp', () => {
+    const list = [
+      tx('old_pending', 0, '2026-01-01T00:00:00.000Z'),
+      tx('older_conf', 100),
+      tx('fused_new', 0, '2026-08-06T12:00:00.000Z'),
+    ];
+    const sorted = sortTransactionsByRecency(list, 'desc');
+    expect(sorted.map((t) => t.tx_hash)).toEqual([
+      'fused_new',
+      'old_pending',
+      'older_conf',
+    ]);
+  });
+
   it('does not treat array index as time (slice(-N).reverse bug)', () => {
-    // New fused CoinJoin appears early in the store array; older txs later.
     const list = [
       tx('fused_new', 900),
       tx('old_a', 100),
       tx('old_b', 101),
       tx('old_c', 102),
     ];
-    // Broken home logic would reverse the tail and put old_c first.
     const broken = [...list].slice(-3).reverse();
     expect(broken[0].tx_hash).toBe('old_c');
 

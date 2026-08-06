@@ -25,6 +25,7 @@ import {
   runWalletHistoryRefreshExclusive,
 } from './RefreshCoordinator';
 import QuantumrootTrackingService from './QuantumrootTrackingService';
+import { mergeRecordedFusionTxsIntoHistory } from '../platform/desktop/fusionCoinDepth';
 
 type SqlLikeDb = {
   prepare: (sql: string) => {
@@ -145,7 +146,12 @@ export async function refreshWalletTransactionHistory(
       dispatch(
         setTransactions({
           wallet_id: walletId,
-          transactions: previousStoredTransactions,
+          // Re-attach known fusion CoinJoins (P2P + server) so a stale DB
+          // snapshot never looks like fused history was deleted.
+          transactions: mergeRecordedFusionTxsIntoHistory(
+            walletId,
+            previousStoredTransactions
+          ),
           sessionGeneration,
         })
       );
@@ -238,7 +244,10 @@ export async function refreshWalletTransactionHistory(
     if (!liveDb) {
       console.error('Database not started after history fetch.');
     } else {
-      const storedTransactions = loadStoredTransactions(liveDb, walletId);
+      const storedTransactions = mergeRecordedFusionTxsIntoHistory(
+        walletId,
+        loadStoredTransactions(liveDb, walletId)
+      );
       const refreshPlan = planTransactionDetailRefresh({
         previous: previousStoredTransactions,
         next: storedTransactions,

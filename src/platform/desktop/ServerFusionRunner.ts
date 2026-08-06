@@ -5,8 +5,11 @@
 // uses random_outputs_for_tier semantics with exponential distribution.
 //
 // The runner never claims a result is "fused" until the Rust engine returns an
-// exact txid + tx_hex, the attempt is persisted, a Tor-routed BCH peer accepts
-// the relay, and a distinct Tor-routed peer returns the exact transaction.
+// exact txid + tx_hex, the attempt is persisted, and the network is shown to
+// hold the transaction. CashFusion servers broadcast the CoinJoin themselves,
+// so we confirm with Electrum first (fast, same truth as "is it on the net?").
+// Dual-peer Tor relay+observe is only a backup when Electrum does not yet have
+// it — that path can take ~25s and is the wrong default after a server round.
 
 import { invoke } from '@tauri-apps/api/core';
 
@@ -34,13 +37,14 @@ import {
 } from './fusionRoundState';
 import { isLocalFusionDestination } from './FusionTorResolver';
 
-// ── EC protocol constants (fusion.py) ─────────────────────────────────────
-const MAX_COMPONENT_FEERATE = 5000;
+// ── EC protocol constants (protocol.py / util.py / server.py) ─────────────
+// Strict Electron Cash client limits — keep in lockstep with EC sources.
+const MAX_COMPONENT_FEERATE = 5000; // server.py / util validation
 const MAX_EXCESS_FEE = 10_000;
 const MAX_COMPONENTS = 40;
 const MAX_FEE = 45_000;
 const MIN_TX_COMPONENTS = 11;
-const MIN_OUTPUT = 10_000;
+const MIN_OUTPUT = 10_000; // protocol.py MIN_OUTPUT
 // Electron Cash's reference server advertises 6 decades x 12 E12 values = 72
 // tiers. Keep a bounded margin above that rather than rejecting the reference
 // implementation itself.
@@ -485,9 +489,14 @@ function createRoundId(): string {
   return `srv-${Date.now()}-${random[0].toString(36)}${random[1].toString(36)}`;
 }
 
+export type ServerRunnerProgress = {
+  onStatus?: (message: string) => void;
+  onPhase?: (phase: number) => void;
+};
+
 /**
  * Build a `runServer` function matching the FusionRunnerService runner
- * signature: `(coins, signal?) => Promise<{txid, warning?}>`.
+ * signature: `(coins, signal?, progress?) => Promise<{txid, warning?}>`.
  *
  * Both manual and auto callers use the same builder. The runner:
  *  - validates the snapshot against EC limits
@@ -499,13 +508,26 @@ function createRoundId(): string {
  */
 export function buildServerRunner(
   config: ServerRunnerConfig
-): (coins: UTXO[], signal?: AbortSignal) => Promise<{ txid: string; warning?: string }> {
+): (
+  coins: UTXO[],
+  signal?: AbortSignal,
+  progress?: ServerRunnerProgress
+) => Promise<{ txid: string; warning?: string }> {
   // Validate up front — no keys are derived if the hello is bad
   if (config.expectedHello) validateServerHello(config.expectedHello);
 
-  return async (coins, signal) => {
+  return async (coins, signal, progress) => {
     if (signal?.aborted) throw new Error('fusion round cancelled');
 
+    const status = (message: string, phase?: number) => {
+      progress?.onStatus?.(message);
+      if (phase !== undefined) progress?.onPhase?.(phase);
+    };
+
+    status(
+      `Contacting fusion server ${config.host}:${config.port}…`,
+      1
+    );
     await requireNativeExecutionReady();
     if (signal?.aborted) throw new Error('fusion round cancelled');
 
@@ -519,6 +541,10 @@ export function buildServerRunner(
       ));
     validateServerHello(expectedHello);
     config.onServerHello?.(expectedHello);
+    status(
+      `Server ready — ${expectedHello.tiers.length} tier(s), preparing inputs…`,
+      2
+    );
     if (signal?.aborted) throw new Error('fusion round cancelled');
 
     const roundId = createRoundId();
@@ -609,33 +635,50 @@ export function buildServerRunner(
         config.inputLookupEndpoint
       );
       const [lookupEndpoint, ...lookupFallbacks] = lookupChain;
-      const outcome = await invoke<FusionOutcome>('fusion_run', {
-        roundId,
-        // Stable per wallet, deliberately NOT per round: the server uses it to
-        // refuse putting the same wallet in one fusion twice. Hashed native-side
-        // with a per-process salt, so it is not a pseudonym that outlives the
-        // process.
-        walletTag: String(config.walletId),
-        host: config.host,
-        port: config.port,
-        useSsl: config.useSsl,
-        tierPlans,
-        inputs,
-        outputScripts: allScripts,
-        lookupHost: lookupEndpoint.host,
-        lookupPort: lookupEndpoint.port,
-        lookupUseSsl: lookupEndpoint.useSsl,
-        lookupFallbacks,
-        torHost: config.tor?.host ?? null,
-        torPort: config.tor?.port ?? null,
-        expectedHello,
-      });
+      // Alone ~2 min then Auto retries; longer only if server shows peers / start.
+      status(
+        `In server pool (${tierPlans.length} tier(s), ${inputs.length} input(s)) — waiting for players…`,
+        3
+      );
+      const poolStartedAt = Date.now();
+      const poolHeartbeat = setInterval(() => {
+        if (signal?.aborted) return;
+        const waited = Math.floor((Date.now() - poolStartedAt) / 1000);
+        status(
+          `In server pool — waiting for players… (${waited}s; alone ~2 min then retry, longer if pool fills)`
+        );
+      }, 8_000);
+      let outcome: FusionOutcome;
+      try {
+        outcome = await invoke<FusionOutcome>('fusion_run', {
+          roundId,
+          // Stable per wallet, deliberately NOT per round: the server uses it to
+          // refuse putting the same wallet in one fusion twice. Hashed native-side
+          // with a per-process salt, so it is not a pseudonym that outlives the
+          // process.
+          walletTag: String(config.walletId),
+          host: config.host,
+          port: config.port,
+          useSsl: config.useSsl,
+          tierPlans,
+          inputs,
+          outputScripts: allScripts,
+          lookupHost: lookupEndpoint.host,
+          lookupPort: lookupEndpoint.port,
+          lookupUseSsl: lookupEndpoint.useSsl,
+          lookupFallbacks,
+          torHost: config.tor?.host ?? null,
+          torPort: config.tor?.port ?? null,
+          expectedHello,
+        });
+      } finally {
+        clearInterval(poolHeartbeat);
+      }
       runSettled = true;
+      status('Round finished on server — confirming broadcast…', 5);
 
       // The round engine assembles and validates the fully signed transaction.
-      // Network acceptance is verified separately through two independent BCH
-      // peers so neither the Fusion server nor an ordinary wallet backend is
-      // trusted as the completion signal.
+      // Network acceptance is verified independently of the Fusion server.
       if (!outcome.ok) {
         retainTemporaryReservation = false;
         throw new Error(
@@ -666,48 +709,65 @@ export function buildServerRunner(
         );
       }
 
-      const relayEndpoints =
-        config.relayEndpoints ?? defaultRelayEndpoints(config.network);
-      const observation = await invoke<FusionRelayObservation>(
-        'fusion_relay_broadcast_and_observe',
-        {
-          txHex: outcome.tx_hex,
-          network: config.network,
-          ...relayEndpoints,
-          torHost: config.tor?.host ?? null,
-          torPort: config.tor?.port ?? null,
-        }
-      );
-      const observedByPeer =
-        observation.relaySubmitted &&
-        observation.observerSeen &&
-        observation.txid.toLowerCase() === outcome.txid.toLowerCase();
+      // Fast path (normal case): the Fusion server already broadcast the
+      // CoinJoin. Electrum `transaction_is_known` answers in ~1s over Tor —
+      // same question as dual-peer observe, without a 10s+15s P2P wait that
+      // usually cannot hear an echo (nodes already have the tx).
+      const knownLookup = {
+        txid: outcome.txid,
+        lookupHost: lookupEndpoint.host,
+        lookupPort: lookupEndpoint.port,
+        lookupUseSsl: lookupEndpoint.useSsl,
+        lookupFallbacks,
+        torHost: config.tor?.host ?? null,
+        torPort: config.tor?.port ?? null,
+      };
+      let networkHoldsTx = await invoke<boolean>(
+        'fusion_transaction_is_known',
+        knownLookup
+      ).catch(() => false);
 
-      // Relay-and-observe only proves anything when WE announce first. Here the
-      // Fusion server broadcasts before we do, so nodes already hold the
-      // transaction and will not re-announce it — the echo never arrives and a
-      // round that succeeded is reported as failed. Asking whether the network
-      // has the transaction answers the real question, whoever announced it.
-      //
-      // Still attempted first: if the server's broadcast failed, our relay is
-      // the backup that gets the transaction out at all.
-      if (!observedByPeer) {
-        const known = await invoke<boolean>('fusion_transaction_is_known', {
-          txid: outcome.txid,
-          lookupHost: lookupEndpoint.host,
-          lookupPort: lookupEndpoint.port,
-          lookupUseSsl: lookupEndpoint.useSsl,
-          lookupFallbacks,
-          torHost: config.tor?.host ?? null,
-          torPort: config.tor?.port ?? null,
-        }).catch(() => false);
-        if (!known) {
-          throw new Error(
-            'The Fusion transaction was not independently observed after relay.'
+      if (!networkHoldsTx) {
+        // Slow backup only: server may have failed to announce. Push via
+        // Tor dual-peer relay; treat observer miss / command error as soft —
+        // re-ask Electrum afterward (Rust used to Err on no echo, which
+        // skipped this fallback entirely).
+        status('Announcing transaction (backup)…', 5);
+        const relayEndpoints =
+          config.relayEndpoints ?? defaultRelayEndpoints(config.network);
+        try {
+          const observation = await invoke<FusionRelayObservation>(
+            'fusion_relay_broadcast_and_observe',
+            {
+              txHex: outcome.tx_hex,
+              network: config.network,
+              ...relayEndpoints,
+              torHost: config.tor?.host ?? null,
+              torPort: config.tor?.port ?? null,
+            }
           );
+          networkHoldsTx =
+            observation.relaySubmitted &&
+            observation.observerSeen &&
+            observation.txid.toLowerCase() === outcome.txid.toLowerCase();
+        } catch {
+          networkHoldsTx = false;
+        }
+        if (!networkHoldsTx) {
+          networkHoldsTx = await invoke<boolean>(
+            'fusion_transaction_is_known',
+            knownLookup
+          ).catch(() => false);
         }
       }
 
+      if (!networkHoldsTx) {
+        throw new Error(
+          'The Fusion transaction was not independently observed after relay.'
+        );
+      }
+
+      // Same completion path as P2P (depth, history SQL, labels, outbox clear).
       const completion = await completeFusionBroadcast({
         walletId: config.walletId,
         txid: outcome.txid,

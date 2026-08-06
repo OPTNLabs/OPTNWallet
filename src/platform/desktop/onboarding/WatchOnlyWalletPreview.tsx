@@ -185,7 +185,7 @@ export const WatchOnlyWalletPreview: FC<WatchOnlyWalletPreviewProps> = ({
           <label className="block space-y-1 text-sm wallet-text-strong">
             Master fingerprint{' '}
             <span className="text-[11px] font-normal wallet-muted">
-              (optional, but needed to send)
+              (optional)
             </span>
             <input
               value={masterFingerprint}
@@ -201,10 +201,12 @@ export const WatchOnlyWalletPreview: FC<WatchOnlyWalletPreviewProps> = ({
             />
           </label>
           <p className="text-[11px] leading-relaxed wallet-muted">
-            The signer prints this under the account xPub. The send flow embeds
-            it in the unsigned transaction so the device can claim the inputs;
-            without it the signer refuses. It can also be set later, when you
-            first send.
+            SeedCash shows this on the same screen as Export Xpub. It cannot be
+            derived from the xPub — the account key has a different fingerprint
+            from the master key, so this is the one thing the QR does not carry.
+            The signature does not depend on it; it is what lets the device
+            recognise the coins as its own when it shows you the transaction.
+            Enter it now or at your first send.
           </p>
           <button
             type="button"

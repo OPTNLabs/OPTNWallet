@@ -416,7 +416,7 @@ class TransactionService {
             address: u.address,
           }))
         );
-        if (!check.ok) {
+        if (check.ok === false) {
           return { txid: null, errorMessage: check.message };
         }
       } catch {

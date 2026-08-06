@@ -7,6 +7,7 @@ import type { UTXO } from '../types/types';
 import { SATSINBITCOIN } from '../utils/constants';
 import { shortenTxHash } from '../utils/shortenHash';
 import { coinDepth } from '../platform/desktop/fusionCoinDepth';
+import { useFusionDepthRevision } from '../platform/desktop/useFusionDepthRevision';
 import { outpointKey } from '../platform/desktop/CoinLabelService';
 import { FusionBadge } from './FusionBadge';
 
@@ -49,6 +50,8 @@ export function CoinControlSection({
   disabled = false,
   title = 'Coin control',
 }: CoinControlSectionProps): React.ReactElement {
+  // Re-render when server/P2P fusion stamps depth so "Fused" badges appear live.
+  const fusionDepthRev = useFusionDepthRevision(walletId);
   const bchUtxos = useMemo(
     () => utxos.filter((u) => !u.token && !u.token_data),
     [utxos]
@@ -142,8 +145,9 @@ export function CoinControlSection({
               {bchUtxos.map((u) => {
                 const key = utxoOutpointKey(u);
                 const checked = selectedKeys.has(key);
-                const depth =
-                  walletId > 0 ? coinDepth(walletId, key) : 0;
+                // fusionDepthRev: re-read after localStorage depth write
+                void fusionDepthRev;
+                const depth = walletId > 0 ? coinDepth(walletId, key) : 0;
                 const sats = utxoSats(u);
                 const pending =
                   typeof u.height === 'number' ? u.height <= 0 : false;

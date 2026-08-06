@@ -926,12 +926,14 @@ pub async fn relay_broadcast_and_observe(
     handshake(&mut relay, magic).await?;
 
     let relay_submitted = relay_tx_on_stream(&mut relay, magic, &tx_bytes, expected_txid).await?;
-    let observer_seen = observe_tx_on_stream(&mut observer, magic, expected_txid).await?;
-    if !observer_seen {
-        return Err(format!(
-            "independent observer did not return transaction {display_txid}"
-        ));
-    }
+    // Do not hard-fail when the observer misses: CashFusion servers (and any
+    // prior announcer) may already have flooded the network, so peers often
+    // never re-echo our inv. Callers re-check with Electrum `is_known` — a
+    // hard Err here made that fallback unreachable and burned ~25s of Tor
+    // wait before the UI could finish a successful round.
+    let observer_seen = observe_tx_on_stream(&mut observer, magic, expected_txid)
+        .await
+        .unwrap_or(false);
 
     Ok(FusionRelayObservation {
         txid: display_txid,

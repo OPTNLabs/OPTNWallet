@@ -174,12 +174,17 @@ describe('FusionRunnerService — one path for manual and automatic rounds', () 
     recordFusionRound(3, ['deeper:0'], ['maxed:0']); // depth 3
     reconcile.mockResolvedValue({ addr: [coin('maxed')] });
 
-    await expect(startFusionRound(base())).resolves.toMatchObject({
+    const result = await startFusionRound(base());
+    expect(result).toMatchObject({
       status: 'no-eligible-coins',
       detail: expect.stringMatching(
-        /depth ≥ 3|rounds-per-coin|wallet activity/i
+        /rounds-per-coin depth|Current coin depth|number in the box/i
       ),
     });
+    // Do not hard-code "≥ 3" in copy — target is always the box value.
+    expect(String((result as { detail?: string }).detail ?? '')).not.toMatch(
+      /≥\s*3/
+    );
     expect(isAutoDepthMetIdle(3)).toBe(true);
     // No lease thrash / no transport work.
     expect(runP2p).not.toHaveBeenCalled();

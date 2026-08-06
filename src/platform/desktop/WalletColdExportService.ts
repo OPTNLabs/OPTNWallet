@@ -85,7 +85,6 @@ function networkName(): string {
   try {
     const n = store.getState().network.currentNetwork;
     if (n === Network.CHIPNET) return 'chipnet';
-    if (n === Network.TESTNET) return 'testnet';
     return 'mainnet';
   } catch {
     return 'unknown';
@@ -353,12 +352,13 @@ export function parseEncryptedColdArchive(
     throw new Error('File is not valid JSON.');
   }
   const o = parsed as Partial<ColdArchiveEncryptedFile>;
-  if (o.format === COLD_EXPORT_FORMAT) {
+  const format = String((o as { format?: unknown }).format ?? '');
+  if (format === 'optn-cold-archive-v1') {
     throw new Error(
       'This is an old unencrypted cold archive. Re-export with a password from a current build.'
     );
   }
-  if (o.format !== COLD_EXPORT_ENC_FORMAT || o.version !== 1) {
+  if (format !== COLD_EXPORT_ENC_FORMAT || o.version !== 1) {
     throw new Error('Not a valid OPTN encrypted cold archive.');
   }
   if (

@@ -179,7 +179,6 @@ describe('atomic auto-fusion cooldown claim', () => {
   it('wallet activity wakes depth-met idle when coins are below depth again', async () => {
     const {
       stampAutoDepthMetIdle,
-      stampAutoSuccess,
       isAutoDepthMetIdle,
       isAutoCooldownReady,
       wakeAutoFromWalletActivity,

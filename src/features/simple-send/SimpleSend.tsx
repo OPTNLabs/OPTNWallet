@@ -84,6 +84,7 @@ export default function SimpleSend() {
     txid,
     broadcastState,
     maxBusy,
+    reviewBusy,
 
     reset,
     doReview,
@@ -110,6 +111,7 @@ export default function SimpleSend() {
   const isSending = mode === 'sending';
   const [reviewModalOpen, setReviewModalOpen] = useState(false);
   const [pendingReviewFlow, setPendingReviewFlow] = useState(false);
+  const isReviewBusy = reviewBusy || pendingReviewFlow;
 
   const categorySummaries = categories as CategorySummary[];
   const tokenMeta = useTokenMetadata(categorySummaries);
@@ -175,6 +177,7 @@ export default function SimpleSend() {
   }, [mode]);
 
   const handleReviewClick = async () => {
+    if (reviewBusy || isSending) return;
     navigator.vibrate?.(50); // Haptic feedback
     setPendingReviewFlow(true);
     await doReview();
@@ -590,22 +593,30 @@ export default function SimpleSend() {
             <button
               type="button"
               onClick={() => void handleReviewClick()}
-              disabled={isSending || !canReview || hasUnresolved}
+              disabled={
+                isSending || isReviewBusy || !canReview || hasUnresolved
+              }
               className="wallet-btn-primary flex-1"
               title={
                 hasUnresolved
                   ? 'Wait for your previous outgoing transaction to sync first'
-                  : !canReview
-                    ? 'Fill the required fields first'
-                    : 'Review'
+                  : isReviewBusy
+                    ? 'Building the transaction…'
+                    : !canReview
+                      ? 'Fill the required fields first'
+                      : 'Review'
               }
             >
-              {hasUnresolved ? 'Waiting for sync' : 'Review'}
+              {hasUnresolved
+                ? 'Waiting for sync'
+                : isReviewBusy
+                  ? 'Preparing…'
+                  : 'Review'}
             </button>
             <button
               type="button"
               onClick={reset}
-              disabled={isSending || maxBusy}
+              disabled={isSending || maxBusy || isReviewBusy}
               className="wallet-btn-secondary px-4"
               title="Clear form"
             >

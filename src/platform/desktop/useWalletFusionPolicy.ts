@@ -14,10 +14,12 @@ import {
   selectCashFusionEnabled,
   selectFuseDepth,
   selectP2pFusionEnabled,
+  selectSpendOnlyFusedCoins,
   setAutoFuseEnabled,
   setCashFusionEnabled,
   setFuseDepth,
   setP2pFusionEnabled,
+  setSpendOnlyFusedCoins,
 } from '../../state/slices/experimentalSlice';
 import type { RootState } from '../../state/store';
 import {
@@ -34,6 +36,7 @@ export function useWalletFusionPolicy(): void {
   const autoFuseEnabled = useSelector(selectAutoFuseEnabled);
   const p2pFusionEnabled = useSelector(selectP2pFusionEnabled);
   const fuseDepth = useSelector(selectFuseDepth);
+  const spendOnlyFusedCoins = useSelector(selectSpendOnlyFusedCoins);
 
   /**
    * The wallet whose policy redux currently reflects.
@@ -58,6 +61,7 @@ export function useWalletFusionPolicy(): void {
     dispatch(setAutoFuseEnabled(policy.autoFuseEnabled));
     dispatch(setP2pFusionEnabled(policy.p2pFusionEnabled));
     dispatch(setFuseDepth(policy.fuseDepth));
+    dispatch(setSpendOnlyFusedCoins(policy.spendOnlyFusedCoins));
     loadedFor.current = walletId;
   }, [walletId, dispatch]);
 
@@ -69,6 +73,7 @@ export function useWalletFusionPolicy(): void {
       autoFuseEnabled,
       p2pFusionEnabled,
       fuseDepth,
+      spendOnlyFusedCoins,
     });
   }, [
     walletId,
@@ -76,5 +81,6 @@ export function useWalletFusionPolicy(): void {
     autoFuseEnabled,
     p2pFusionEnabled,
     fuseDepth,
+    spendOnlyFusedCoins,
   ]);
 }

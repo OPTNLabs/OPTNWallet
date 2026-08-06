@@ -118,9 +118,18 @@ describe('per-coin fuse depth', () => {
     expect(isFusionTransaction(1, txid)).toBe(false);
     recordFusionTxid(1, txid);
     expect(isFusionTransaction(1, txid)).toBe(true);
-    // Depth outpoints still mark the creating tx while unspent.
-    recordFusionRound(1, ['in:0'], [`${txid}:0`]);
-    expect(isFusionTransaction(1, txid)).toBe(true);
+    // Coin outputs of that CoinJoin should show at least depth 1 for badges.
+    expect(coinDepth(1, `${txid}:0`)).toBeGreaterThanOrEqual(1);
+  });
+
+  it('server-style chain: fusion-txid stamp then recordFusionRound climbs depth', () => {
+    // First round only stamps txid (Electrum lag); second round inherits ≥1.
+    const a = 'aa'.repeat(32);
+    const b = 'bb'.repeat(32);
+    recordFusionTxid(1, a);
+    expect(coinDepth(1, `${a}:0`)).toBeGreaterThanOrEqual(1);
+    recordFusionRound(1, [`${a}:0`], [`${b}:0`]);
+    expect(coinDepth(1, `${b}:0`)).toBeGreaterThanOrEqual(2);
   });
 
   it('keeps wallets isolated from each other', () => {

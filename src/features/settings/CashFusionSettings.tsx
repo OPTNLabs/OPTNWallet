@@ -100,7 +100,7 @@ function describeFusionOutcome(outcome: FusionRunOutcome): string {
     case 'no-eligible-coins':
       return (
         outcome.detail ??
-        'No coins below rounds-per-coin depth (or no BCH coins). Raise depth or use Manual Start.'
+        'No coins below rounds-per-coin (the number in the box), or no BCH coins. Raise the box or use Manual Start.'
       );
     case 'cooldown':
       return 'Waiting for the auto-fusion cooldown.';
@@ -191,18 +191,18 @@ export const CashFusionSettings: React.FC<{ variant?: 'card' | 'servers' }> = ({
       setLeaseTick((n) => n + 1);
       setFusionActivity(getFusionActivity(walletId));
     });
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- leaseTick polls storage
   }, [walletId, runningHere, leaseTick]);
   const utxosByAddress = useSelector((s: RootState) => s.utxos.utxos);
   const flatUtxos = useMemo(
     () => Object.values(utxosByAddress).flat(),
     [utxosByAddress]
   );
-  const coinAvailability = useMemo(
-    () => fusionCoinAvailability(walletId, flatUtxos),
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [walletId, flatUtxos, leaseTick, anyFusing]
-  );
+  // leaseTick / anyFusing intentionally re-run availability after reservation UI.
+  const coinAvailability = useMemo(() => {
+    void leaseTick;
+    void anyFusing;
+    return fusionCoinAvailability(walletId, flatUtxos);
+  }, [walletId, flatUtxos, leaseTick, anyFusing]);
   const noSpendableCoins = coinAvailability.total === 0;
   const allCoinsReserved =
     coinAvailability.total > 0 && coinAvailability.free === 0;
@@ -385,7 +385,7 @@ export const CashFusionSettings: React.FC<{ variant?: 'card' | 'servers' }> = ({
         runners: {
           runP2p: () =>
             Promise.reject(new Error('P2P runner invoked in server mode')),
-          runServer: async (coins, signal) => {
+          runServer: async (coins, signal, progress) => {
             const target = parseFusionServerTarget(serverInput ?? '');
             const { host } = target;
             const inputLookupEndpoint =
@@ -406,7 +406,17 @@ export const CashFusionSettings: React.FC<{ variant?: 'card' | 'servers' }> = ({
                   ...hello,
                   donationAddress: hello.donationAddress ?? null,
                 }),
-            })(coins, signal);
+            })(coins, signal, {
+              onStatus: (m) => {
+                setFuseMsg(m);
+                reportFusionProgress(walletId, { status: m });
+                progress?.onStatus?.(m);
+              },
+              onPhase: (p) => {
+                reportFusionProgress(walletId, { phase: p });
+                progress?.onPhase?.(p);
+              },
+            });
           },
         },
       });

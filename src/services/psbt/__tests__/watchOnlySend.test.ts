@@ -259,7 +259,11 @@ describe('buildWatchOnlyPsbt', () => {
     ).toThrow(/needed|cover/);
   });
 
-  it('throws when the master fingerprint is missing', () => {
+  it('builds without a master fingerprint instead of refusing', () => {
+    // This used to throw. It should not: the fingerprint is not derivable from
+    // an account xPub, and SeedCash does not use it to sign — only to decide
+    // whether its review screen claims the inputs. Refusing here blocked a
+    // send that works. See the flagged case in the import-verification block.
     expect(() =>
       buildWatchOnlyPsbt({
         inputs: [makeInput()],
@@ -269,7 +273,7 @@ describe('buildWatchOnlyPsbt', () => {
         accountPath: ACCOUNT_PATH,
         masterFingerprint: null,
       })
-    ).toThrow(/fingerprint/i);
+    ).not.toThrow();
   });
 
   it('writes per-input BIP32 derivation with the wallet fingerprint', () => {
@@ -335,6 +339,63 @@ describe('watch-only import verification', () => {
     expect(result.state).toBe('partially-signed');
     expect(result.signedInputCount).toBe(1);
     expect(result.totalInputCount).toBe(2);
+  });
+
+  it('builds a signable PSBT with no master fingerprint, and flags it', () => {
+    // Measured against the real SeedCash signer, not inferred: it reads only
+    // the path out of the 0x06 record and discards the fingerprint, so a PSBT
+    // stamped with a wrong (or zero) fingerprint still produced a signature
+    // that verifies and that libauth's BCH VM executes. Blocking the send on a
+    // missing fingerprint was therefore refusing a transaction that works.
+    //
+    // What it costs is the device's review screen: SeedCash claims an input
+    // via `v[:4] == wallet_fingerprint`, so the user is approving something the
+    // device cannot confirm is theirs. Hence a flag rather than silence.
+    const input = makeInput();
+    const built = buildWatchOnlyPsbt({
+      inputs: [input],
+      recipient: recipientAddress,
+      amountSats: 30_000n,
+      changeAddress,
+      accountPath: ACCOUNT_PATH,
+      masterFingerprint: null,
+    });
+
+    expect(built.signerRecognisesInputs).toBe(false);
+    expect(built.masterFingerprint).toBeNull();
+
+    // The derivation record must still be present, or SeedCash refuses to sign
+    // with "xpriv signing requires a PSBT derivation path".
+    const parsed = decodePsbt(built.psbtBytes);
+    expect(parsed.inputs[0].derivations).toHaveLength(1);
+    expect(parsed.inputs[0].derivations[0].derivationPath).toEqual([
+      HARDENED + 44,
+      HARDENED + 145,
+      HARDENED + 0,
+      input.branchIndex,
+      input.addressIndex,
+    ]);
+
+    // And it round-trips: a signature over this PSBT still verifies.
+    const proposal: WatchOnlyProposal = {
+      rawUnsignedHex: built.rawUnsignedHex,
+      inputs: [input],
+      outputs: built.outputs,
+    };
+    const signed = wrapSignedPsbt(proposal, [signInput(proposal, 0)]);
+    expect(inspectImportedPsbt(signed, proposal).state).toBe('complete');
+  });
+
+  it('reports the signer will recognise inputs when a fingerprint is set', () => {
+    const built = buildWatchOnlyPsbt({
+      inputs: [makeInput()],
+      recipient: recipientAddress,
+      amountSats: 30_000n,
+      changeAddress,
+      accountPath: ACCOUNT_PATH,
+      masterFingerprint: FINGERPRINT,
+    });
+    expect(built.signerRecognisesInputs).toBe(true);
   });
 
   it('accepts a DER signature as well as a Schnorr one', () => {

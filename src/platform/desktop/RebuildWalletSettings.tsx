@@ -26,11 +26,11 @@ export const RebuildWalletSettings: React.FC = () => {
       const result = await rebuildActiveWallet((msg, pct) => {
         setRebuildMsg(pct != null ? `${msg} (${pct}%)` : msg);
       });
-      if (result.ok) {
+      if ('error' in result) {
+        setRebuildMsg(result.error);
+      } else {
         setRebuildMsg('Rebuild complete.');
         setTimeout(() => setRebuildMsg(''), 5000);
-      } else {
-        setRebuildMsg(result.error);
       }
     } catch (err) {
       console.error('[RebuildWalletSettings] Rebuild failed:', err);

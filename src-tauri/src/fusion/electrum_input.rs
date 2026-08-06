@@ -284,11 +284,11 @@ fn parse_response(response: &[u8], input: &pb::InputComponent) -> Result<InputLo
         ));
     };
 
-    if item.height <= 0 {
-        return Ok(InputLookup::Mismatch(
-            "claimed outpoint is not confirmed".into(),
-        ));
-    }
+    // Unconfirmed (height ≤ 0) is accepted. Classic EC validation.py requires
+    // height > 0; we allow 0-conf (selection + peer blame) so Auto can chain
+    // rounds without waiting for a block. EC-maintainer direction endorses
+    // this for BCH. (Field is read so the policy stays explicit.)
+    let _height_may_be_unconfirmed = item.height;
     if item.value != input.amount {
         return Ok(InputLookup::Mismatch(format!(
             "claimed value {} does not match Electrum value {}",
@@ -404,15 +404,11 @@ mod tests {
     }
 
     #[test]
-    fn valid_absence_unconfirmed_and_wrong_value_are_mismatches() {
+    fn valid_absence_and_wrong_value_are_mismatches() {
         let cases = [
             (
                 br#"{"id":1,"result":[]}"#.as_slice(),
                 "not unspent",
-            ),
-            (
-                br#"{"id":1,"result":[{"tx_hash":"1f1e1d1c1b1a191817161514131211100f0e0d0c0b0a09080706050403020100","tx_pos":7,"height":0,"value":12345}]}"#.as_slice(),
-                "not confirmed",
             ),
             (
                 br#"{"id":1,"result":[{"tx_hash":"1f1e1d1c1b1a191817161514131211100f0e0d0c0b0a09080706050403020100","tx_pos":7,"height":800000,"value":12344}]}"#.as_slice(),
@@ -429,6 +425,16 @@ mod tests {
                 InputLookup::Match => panic!("expected mismatch"),
             }
         }
+    }
+
+    #[test]
+    fn unconfirmed_outpoint_with_matching_value_is_accepted() {
+        // OPTN accepts height=0 (0-conf). EC still rejects; we do not.
+        let response = br#"{"jsonrpc":"2.0","id":1,"result":[{"tx_hash":"1f1e1d1c1b1a191817161514131211100f0e0d0c0b0a09080706050403020100","tx_pos":7,"height":0,"value":12345}]}"#;
+        assert_eq!(
+            parse_response(response, &input()).unwrap(),
+            InputLookup::Match
+        );
     }
 
     #[test]

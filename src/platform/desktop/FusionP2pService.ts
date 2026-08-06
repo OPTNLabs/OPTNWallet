@@ -1051,6 +1051,10 @@ export async function runP2pFusion(
       spentInputs: spendable,
       source: 'p2p-fusion',
       sourceLabel: 'P2P Fusion',
+      // Same as server fusion: round already ran over Tor; do not re-announce the
+      // CoinJoin via ordinary Electrum observe. Depth / history / UTXO refresh
+      // still run in completeFusionBroadcast for labels and Auto stop.
+      privacyRoute: 'tor-only',
       // The scripts we allocated for ourselves this round. The completion layer
       // resolves them to txid:index — a round shuffles its outputs so position
       // carries no information, and guessing an index here would eventually
