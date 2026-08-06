@@ -23,6 +23,9 @@ type ReviewCardProps = {
   selectedForTx: SimpleSendInput[];
   rawHexLen: number;
   isSending: boolean;
+  /** Optional live status (hardware: "Confirm on Ledger…"). */
+  sendStatus?: string;
+  isHardwareWallet?: boolean;
   onClose: () => void;
   onConfirmSend: () => void;
 };
@@ -41,6 +44,8 @@ export function ReviewCard({
   selectedForTx,
   rawHexLen,
   isSending,
+  sendStatus = '',
+  isHardwareWallet = false,
   onClose,
   onConfirmSend,
 }: ReviewCardProps) {
@@ -437,13 +442,22 @@ export function ReviewCard({
         <div className="px-4 pb-4 pt-3 wallet-surface border-t border-[var(--wallet-border)]">
           <div className="text-[14px] wallet-muted mb-2.5 px-1">
             {isSending
-              ? 'Sending...'
+              ? sendStatus ||
+                (isHardwareWallet
+                  ? 'Confirm on your Ledger device…'
+                  : 'Sending…')
               : slideCompleted
                 ? 'Confirmed'
                 : nearingSend
                   ? 'Release to send'
                   : 'Slide to confirm'}
           </div>
+          {isSending && isHardwareWallet && (
+            <div className="text-[12px] mb-2.5 px-1" style={{ color: 'var(--wallet-warning-text, #d97706)' }}>
+              Look at the Ledger screen and approve the amount/address with both
+              buttons. Finalization waits on the device (not the computer).
+            </div>
+          )}
 
           <div
             ref={trackRef}
@@ -498,7 +512,9 @@ export function ReviewCard({
                 }}
               >
                 {isSending
-                  ? 'Sending...'
+                  ? isHardwareWallet
+                    ? 'Check Ledger…'
+                    : 'Sending…'
                   : slideCompleted
                     ? 'Confirmed'
                     : nearingSend

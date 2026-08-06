@@ -4,13 +4,13 @@ import { Link } from 'react-router-dom';
 type DesktopWalletPickerActionsProps = {
   hasWallets: boolean;
   onHardware: () => void;
+  /** Opens create watch-only (xPub + password; Airgap/Keystone section inside). */
   onWatchOnly: () => void;
-  onKeystone: () => void;
 };
 
 export const DesktopWalletPickerActions: FC<
   DesktopWalletPickerActionsProps
-> = ({ hasWallets, onHardware, onWatchOnly, onKeystone }) => (
+> = ({ hasWallets, onHardware, onWatchOnly }) => (
   <div className="space-y-2">
     <p className="text-sm wallet-muted">
       {hasWallets ? 'Add another wallet' : 'Get started'}
@@ -40,17 +40,6 @@ export const DesktopWalletPickerActions: FC<
       className="wallet-btn-secondary w-full text-center py-3 font-bold"
     >
       Create Watch-Only Wallet
-    </button>
-    {/* The same watch-only wallet, reached by the shorter route: a Keystone
-        account QR carries the fingerprint and derivation path, so there is
-        nothing to type. Named after the device because that is what someone
-        holding one will look for. */}
-    <button
-      type="button"
-      onClick={onKeystone}
-      className="wallet-btn-secondary w-full text-center py-3 font-bold"
-    >
-      Set up Keystone
     </button>
   </div>
 );

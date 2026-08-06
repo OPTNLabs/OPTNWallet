@@ -20,8 +20,8 @@ const PASSPHRASE = '';
 // (3), sibling to receive(0)/change(1), matching the Electron Cash reference.
 const EXPECTED_MAINNET_SCAN_PATH = "m/44'/145'/0'/3/0";
 const EXPECTED_MAINNET_SPEND_PATH = "m/44'/145'/0'/3/1";
-const EXPECTED_CHIPNET_SCAN_PATH = "m/44'/1'/0'/3/0";
-const EXPECTED_CHIPNET_SPEND_PATH = "m/44'/1'/0'/3/1";
+const EXPECTED_CHIPNET_SCAN_PATH = "m/44'/145'/0'/3/0";
+const EXPECTED_CHIPNET_SPEND_PATH = "m/44'/145'/0'/3/1";
 
 describe('RpaService', () => {
   it('exposes network-specific RPA paths for UI and protocol consumers', () => {
@@ -93,13 +93,14 @@ describe('RpaService', () => {
     );
   });
 
-  it('uses different key paths on mainnet and chipnet', async () => {
+  it('uses the same coin-type 145 key paths on mainnet and chipnet', async () => {
     const mainnet = await deriveRpaKeys(TEST_MNEMONIC, PASSPHRASE, Network.MAINNET);
     const chipnet = await deriveRpaKeys(TEST_MNEMONIC, PASSPHRASE, Network.CHIPNET);
-    expect(Buffer.from(mainnet.scanPubkey).toString('hex')).not.toBe(
+    // Same BIP32 path → same pubkeys; only CashAddr prefix differs by network.
+    expect(Buffer.from(mainnet.scanPubkey).toString('hex')).toBe(
       Buffer.from(chipnet.scanPubkey).toString('hex')
     );
-    expect(Buffer.from(mainnet.spendPubkey).toString('hex')).not.toBe(
+    expect(Buffer.from(mainnet.spendPubkey).toString('hex')).toBe(
       Buffer.from(chipnet.spendPubkey).toString('hex')
     );
   });

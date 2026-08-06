@@ -66,12 +66,16 @@ export const BCH_STANDARD_BRANCH_INDEX = {
 
 export type BchStandardBranchName = keyof typeof BCH_STANDARD_BRANCH_INDEX;
 
-export function getBchCoinType(network: Network): number {
-  // BIP44 assigns coin type 145 to BCH mainnet and coin type 1 to testnets.
-  return {
-    [Network.MAINNET]: COIN_TYPE.bitcoincash,
-    [Network.CHIPNET]: COIN_TYPE.testnet,
-  }[network];
+/**
+ * SLIP-44 coin type for BCH account paths.
+ *
+ * Always 145 (Bitcoin Cash) on both mainnet and chipnet. Cashonize, Electron
+ * Cash defaults, and most BCH tooling keep 145 on test nets so the same seed
+ * produces matching addresses. Coin type 1 remains valid as a custom path for
+ * restoring wallets that were created with pure BIP44-testnet derivation.
+ */
+export function getBchCoinType(_network?: Network): number {
+  return COIN_TYPE.bitcoincash; // 145
 }
 
 export const MAX_BIP44_INDEX = 0x7fffffff;
@@ -135,6 +139,44 @@ export function buildBchAccountPath(parts: BchAccountPathParts): string {
 
 export function getHdKeyNetwork(network: Network): 'mainnet' | 'testnet' {
   return network === Network.MAINNET ? 'mainnet' : 'testnet';
+}
+
+/**
+ * Re-serialize a BIP32 public key with the version bytes for `network`.
+ *
+ * The HD node (depth, child index, chain code, pubkey) is unchanged — only the
+ * base58 version prefix (xpub vs tpub) is aligned. Trezor often returns a tpub
+ * when GetPublicKey used "Bcash Testnet" (or a chipnet export was later opened
+ * as mainnet). Address derivation needs matching version bytes for libauth;
+ * the on-chain keys are identical either way.
+ *
+ * Electron Cash stores the key material and uses network for address encoding;
+ * this mirrors that separation.
+ */
+export function alignHdPublicKeyNetwork(
+  network: Network,
+  hdPublicKey: string
+): string {
+  const raw = hdPublicKey.trim();
+  if (!raw) {
+    throw new Error('Enter a valid BIP32 public key.');
+  }
+  const decoded = decodeHdPublicKey(raw);
+  if (typeof decoded === 'string') {
+    throw new Error('Enter a valid BIP32 public key.');
+  }
+  const target = getHdKeyNetwork(network);
+  if (decoded.network === target) {
+    return raw;
+  }
+  const encoded = encodeHdPublicKey({
+    network: target,
+    node: decoded.node,
+  });
+  if (typeof encoded === 'string') {
+    throw new Error('Could not re-encode the public key for this network.');
+  }
+  return encoded.hdPublicKey;
 }
 
 export function getBchAccountPath(

@@ -124,4 +124,22 @@ describe('release workflow', () => {
       'src-tauri/target/${{ matrix.target }}/debug/bundle/**',
     );
   });
+
+  it('ships Linux x64 and ARM64 AppImages (and Windows / dual macOS)', () => {
+    expect(workflow).toContain('target: x86_64-pc-windows-msvc');
+    expect(workflow).toContain('target: x86_64-unknown-linux-gnu');
+    expect(workflow).toContain('target: aarch64-unknown-linux-gnu');
+    expect(workflow).toContain('tor-target: linux-x86_64');
+    expect(workflow).toContain('tor-target: linux-aarch64');
+    expect(workflow).toContain('platform: ubuntu-24.04-arm');
+    expect(workflow).toContain('artifact-name: desktop-linux-arm');
+    expect(workflow).toContain(
+      "require_asset artifacts/desktop-linux '*.AppImage'",
+    );
+    expect(workflow).toContain(
+      "require_asset artifacts/desktop-linux-arm '*.AppImage'",
+    );
+    expect(desktopPreviewWorkflow).toContain('ubuntu-24.04-arm');
+    expect(desktopPreviewWorkflow).toContain('linux-aarch64');
+  });
 });

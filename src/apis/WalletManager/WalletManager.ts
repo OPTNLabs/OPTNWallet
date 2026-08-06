@@ -28,6 +28,8 @@ function toNumber(value: unknown): number {
 function normalizeWalletType(raw: unknown): ExtendedWalletType {
   if (raw === WalletType.QUANTUMROOT) return WalletType.QUANTUMROOT;
   if (raw === 'watch-only') return 'watch-only';
+  // Desktop USB hardware keystore (Ledger etc.) — public keys on disk, signs on device.
+  if (raw === 'hardware') return 'hardware';
   return WalletType.STANDARD;
 }
 

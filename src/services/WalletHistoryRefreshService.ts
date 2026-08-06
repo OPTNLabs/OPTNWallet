@@ -157,6 +157,9 @@ export async function refreshWalletTransactionHistory(
       );
     }
 
+    // Prefer the addresses table (software wallets register there via createKeys).
+    // Hardware / older watch-only rows may only have `keys` populated — fall back
+    // so history and Recent Activity are not permanently empty.
     const addressesQuery = db.prepare(`
       SELECT address FROM addresses WHERE wallet_id = ?;
     `);
@@ -167,6 +170,20 @@ export async function refreshWalletTransactionHistory(
       if (typeof row.address === 'string') addresses.push(row.address);
     }
     addressesQuery.free();
+
+    if (addresses.length === 0) {
+      const keysQuery = db.prepare(`
+        SELECT address FROM keys WHERE wallet_id = ? AND address IS NOT NULL;
+      `);
+      keysQuery.bind([walletId]);
+      while (keysQuery.step()) {
+        const row = keysQuery.getAsObject();
+        if (typeof row.address === 'string' && row.address) {
+          addresses.push(row.address);
+        }
+      }
+      keysQuery.free();
+    }
 
     const quantumrootAddresses =
       await QuantumrootTrackingService.listTrackedAddresses(walletId);

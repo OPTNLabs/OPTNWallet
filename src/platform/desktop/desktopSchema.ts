@@ -14,20 +14,19 @@ import { logError } from '../../utils/errorHandling';
 
 /** Columns this build adds to `wallets`, with the type SQLite should give them. */
 const DESKTOP_WALLET_COLUMNS: Record<string, string> = {
-  // Watch-only wallets have no mnemonic. Addresses derive from this account
-  // xPub, so losing it means the wallet cannot rebuild its own addresses and
-  // reads as empty after a restart.
+  // Shared by hardware + watch-only: account-level xPub for address rebuild.
+  // EC Hardware_KeyStore / watch-only both keep an xpub; private keys never
+  // live here for either type.
   account_xpub: 'TEXT',
-  // 8 hex chars from the signing device (SeedCash shows it with the account
-  // xPub). Written into PSBT BIP32 derivation metadata so the signer can
-  // recognise the inputs as its own on its review screen. Not required to
-  // sign — SeedCash signs from the derivation path — so it may be null.
+  // Watch-only only (air-gap / SeedCash): 8 hex BIP32 fingerprint for PSBT
+  // BIP32 derivation metadata. NOT used for USB hardware wallets.
   master_fingerprint: 'TEXT',
+  // Hardware only — Electron Cash keystore dump field `hw_type`
+  // (ledger | trezor | onekey). See electroncash.keystore.Hardware_KeyStore.dump.
+  // The device signs; this only picks which plugin/path to open on Send.
+  hw_type: 'TEXT',
   // Multisig watch-only policy as JSON: { name, m, signers[{name, xpub,
-  // masterFingerprintHex?}] }. A multisig wallet has no single account xPub —
-  // every address is a BIP-67 sort of all cosigners' keys derived at that
-  // path — so the whole cosigner set has to survive a restart or the wallet
-  // cannot rebuild one address.
+  // masterFingerprintHex?}] }.
   multisig_policy: 'TEXT',
 };
 
@@ -104,6 +103,8 @@ export async function ensureDesktopLedgerTables(): Promise<void> {
  * itself, but must not stop the app from opening.
  */
 export async function ensureDesktopWalletColumns(): Promise<void> {
+  // Fast path only after a prior successful pass confirmed every column.
+  // New columns (e.g. hw_type) force a re-scan when `ensured` is false.
   if (ensured) return;
   try {
     const dbService = DatabaseService();
@@ -125,10 +126,19 @@ export async function ensureDesktopWalletColumns(): Promise<void> {
     for (const [column, type] of Object.entries(DESKTOP_WALLET_COLUMNS)) {
       if (!existing.has(column)) {
         db.run(`ALTER TABLE wallets ADD COLUMN ${column} ${type};`);
+        existing.add(column);
       }
     }
-    ensured = true;
+    ensured = Object.keys(DESKTOP_WALLET_COLUMNS).every((c) => existing.has(c));
   } catch (error) {
+    ensured = false;
     logError('desktopSchema.ensureDesktopWalletColumns', error);
+    // Rethrow: callers (create/sign) must not pretend the column exists.
+    throw error;
   }
+}
+
+/** Reset ensure cache (tests / after schema list changes in same process). */
+export function resetDesktopWalletColumnsCache(): void {
+  ensured = false;
 }

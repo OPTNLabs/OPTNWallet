@@ -3,8 +3,12 @@
 // Usage:
 //   node scripts/fetch-tor.mjs [target]
 //
-// target is one of windows-x86_64, macos-x86_64, macos-aarch64, or
-// linux-x86_64. If omitted, the host target is inferred.
+// target is one of windows-x86_64, macos-x86_64, macos-aarch64,
+// linux-x86_64, or linux-aarch64. If omitted, the host target is inferred.
+//
+// linux-aarch64: Tor Project does not publish a desktop Expert Bundle for
+// Linux ARM. We stage geoip data from the pinned linux-x86_64 expert archive
+// (data files only) and the host's /usr/bin/tor (installed via apt on CI).
 
 import { createHash } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
@@ -86,7 +90,97 @@ function inferTarget() {
     return arch === 'arm64' ? 'macos-aarch64' : 'macos-x86_64';
   }
   if (platform === 'linux' && arch === 'x64') return 'linux-x86_64';
+  if (platform === 'linux' && arch === 'arm64') return 'linux-aarch64';
   throw new Error(`unsupported host platform ${platform}/${arch}`);
+}
+
+/**
+ * Stage Tor for Linux aarch64 when no desktop Expert Bundle exists.
+ * Requires a host tor binary (e.g. apt install tor on ubuntu-24.04-arm CI).
+ * GeoIP tables come from the pinned linux-x86_64 expert archive (arch-neutral).
+ */
+async function stageLinuxAarch64FromHost() {
+  const hostTor = process.env.TOR_HOST_BINARY || '/usr/bin/tor';
+  if (!existsSync(hostTor)) {
+    throw new Error(
+      `linux-aarch64 needs a host tor binary at ${hostTor} ` +
+        '(apt install tor on the runner, or set TOR_HOST_BINARY). ' +
+        'Tor Project does not publish a desktop Expert Bundle for Linux ARM.',
+    );
+  }
+
+  // Geoip data from the pinned x86_64 expert bundle (same TOR_VERSION).
+  const geoipSource = getTorArtifact('linux-x86_64');
+  const temporaryDirectory = mkdtempSync(join(tmpdir(), 'optn-tor-arm-'));
+  const tarball = join(temporaryDirectory, geoipSource.archive);
+  console.log(
+    `[fetch-tor] linux-aarch64: downloading geoip source ${geoipSource.archive}`,
+  );
+  const bytes = await download(geoipSource.url, tarball);
+  const actualSha256 = sha256(bytes).toLowerCase();
+  if (actualSha256 !== geoipSource.sha256) {
+    throw new Error(
+      `SHA256 mismatch for ${geoipSource.archive}: expected ${geoipSource.sha256}, got ${actualSha256}`,
+    );
+  }
+  execFileSync('tar', ['-xzf', geoipSource.archive], {
+    stdio: 'inherit',
+    cwd: temporaryDirectory,
+  });
+
+  rmSync(outDir, { recursive: true, force: true });
+  mkdirSync(outDir, { recursive: true });
+  copyFileSync(hostTor, join(outDir, 'tor'));
+  try {
+    execFileSync('chmod', ['+x', join(outDir, 'tor')]);
+  } catch {
+    /* non-posix */
+  }
+
+  // Shared libraries tor needs at runtime (AppImage linuxdeploy walks these).
+  try {
+    const lddOut = execFileSync('ldd', [hostTor], { encoding: 'utf8' });
+    for (const line of lddOut.split('\n')) {
+      const match = line.match(/=>\s+(\/[^ ]+)/);
+      if (!match) continue;
+      const libPath = match[1];
+      if (!existsSync(libPath)) continue;
+      // Skip linker and common system libs that AppImage already provides.
+      const base = libPath.split('/').pop() ?? '';
+      if (
+        base.startsWith('libc.so') ||
+        base.startsWith('libm.so') ||
+        base.startsWith('libpthread') ||
+        base.startsWith('libdl.so') ||
+        base.startsWith('ld-linux')
+      ) {
+        continue;
+      }
+      copyFileSync(libPath, join(outDir, base));
+    }
+  } catch (err) {
+    console.warn(
+      '[fetch-tor] ldd copy skipped:',
+      err instanceof Error ? err.message : err,
+    );
+  }
+
+  copyFileSync(
+    join(temporaryDirectory, 'data', 'geoip'),
+    join(outDir, 'geoip'),
+  );
+  copyFileSync(
+    join(temporaryDirectory, 'data', 'geoip6'),
+    join(outDir, 'geoip6'),
+  );
+  writeFileSync(
+    join(outDir, 'VERSION'),
+    `${geoipSource.version} linux-aarch64 (host-tor+pinned-geoip)\n`,
+  );
+  rmSync(temporaryDirectory, { recursive: true, force: true });
+  console.log(
+    `[fetch-tor] staged linux-aarch64 Tor from host ${hostTor} + pinned geoip`,
+  );
 }
 
 async function download(url, destination) {
@@ -105,6 +199,25 @@ function sha256(bytes) {
 
 async function main() {
   const target = process.argv[2] || inferTarget();
+
+  // Linux ARM has no official desktop Expert Bundle — special staging path.
+  if (target === 'linux-aarch64') {
+    const markerPath = join(outDir, 'VERSION');
+    if (
+      existsSync(join(outDir, 'tor')) &&
+      existsSync(join(outDir, 'geoip')) &&
+      existsSync(markerPath) &&
+      readFileSync(markerPath, 'utf8').includes('linux-aarch64')
+    ) {
+      console.log(
+        `[fetch-tor] Tor already staged (${readFileSync(markerPath, 'utf8').trim()})`,
+      );
+      return;
+    }
+    await stageLinuxAarch64FromHost();
+    return;
+  }
+
   const artifact = getTorArtifact(target);
   const isWindows = target.startsWith('windows');
   const torBinary = isWindows ? 'tor.exe' : 'tor';

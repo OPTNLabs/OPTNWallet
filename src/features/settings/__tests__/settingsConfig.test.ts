@@ -74,6 +74,8 @@ describe('settingsConfig', () => {
         'rebuild-wallet',
       ])
     );
+    // Hardware is wallet-list / create flow (Electron Cash), not in-wallet Settings.
+    expect(desktopWallet).not.toContain('hardware-wallet');
     expect(mobileWallet).not.toContain('rebuild-wallet');
     expect(mobileWallet).not.toContain('export-archive');
     expect(mobileWallet).not.toContain('app-lock');

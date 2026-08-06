@@ -14,10 +14,10 @@ describe('hardwareWalletSigning buildBip44Path', () => {
     expect(buildBip44Path(Network.MAINNET, 'defi', 5)).toBe("m/44'/145'/0'/7/5");
   });
 
-  it('uses testnet coin type 1 on chipnet', () => {
+  it('uses coin type 145 on chipnet as well as mainnet', () => {
     const mainnetPath = buildBip44Path(Network.MAINNET, 'receive', 0);
     const chipnetPath = buildBip44Path(Network.CHIPNET, 'receive', 0);
-    expect(chipnetPath).toBe("m/44'/1'/0'/0/0");
-    expect(chipnetPath).not.toBe(mainnetPath);
+    expect(chipnetPath).toBe("m/44'/145'/0'/0/0");
+    expect(chipnetPath).toBe(mainnetPath);
   });
 });
