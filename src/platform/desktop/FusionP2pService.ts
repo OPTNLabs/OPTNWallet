@@ -363,7 +363,7 @@ async function collectRolling(
     if (neverSawOthers && elapsed >= aloneBudgetMs) {
       throw new Error(
         trigger === 'auto'
-          ? `Auto: no peers in the global pool for ${Math.round(aloneBudgetMs / 1000)}s — will retry at the next rendezvous. ` +
+          ? `Auto: no peers for ${Math.round(aloneBudgetMs / 1000)}s — will retry shortly. ` +
               `Need ≥${MIN_PARTICIPANTS} online with Auto+P2P+Tor; check Nostr relays.`
           : `No other wallets found in ${Math.round(aloneBudgetMs / 1000)}s. ` +
               `Need ≥${MIN_PARTICIPANTS} peers on the same network (Tor + Nostr green). Retry when others are online.`
@@ -374,7 +374,7 @@ async function collectRolling(
       if (n < MIN_PARTICIPANTS) {
         throw new Error(
           trigger === 'auto'
-            ? `Auto: only ${n} peer(s) this slot (need ≥${MIN_PARTICIPANTS}). Will retry at the next global rendezvous.`
+            ? `Auto: only ${n} peer(s) (need ≥${MIN_PARTICIPANTS}). Will retry shortly.`
             : `P2P Fusion needs at least ${MIN_PARTICIPANTS} peers (CashFusion-style anonymity floor).`
         );
       }
@@ -395,7 +395,7 @@ async function collectRolling(
           ? ` Peers left (peak ${peakStrict}); giving up in ${Math.ceil(peakGraceLeft / 1000)}s if no one returns…`
           : neverSawOthers
             ? trigger === 'auto'
-              ? ` Auto: waiting for global peers… (${secsLeft}s, then next rendezvous)`
+              ? ` Auto: waiting for peers… (${secsLeft}s, then retry)`
               : ` Shouting on shared relays… (${secsLeft}s then retry if alone)`
             : soft.length > 1 || peakSoft > 1
               ? ' Dropping ghosts; waiting for re-announces…'
