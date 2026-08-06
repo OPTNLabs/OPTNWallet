@@ -16,35 +16,9 @@ import { get as idbGet, set as idbSet } from 'idb-keyval';
 import WalletManager from '../../../apis/WalletManager/WalletManager';
 import { deriveNostrIdentity, type NostrIdentity } from './identity';
 
-/**
- * Default public write/read relays for chat + P2P fusion.
- *
- * Selection (probed 2026-08-06 via NIP-11 where possible):
- * - Free general-purpose only — paid/auth relays reject anonymous fusion writes.
- * - Skip relay.nostr.band (WSS hang historically stalls publish).
- * - Skip paid fleets (nostr.wine, nostr.land, nostrplebs, nostr21, etc.).
- * - Cap the set: fusion publishes to *every* URL over Tor; 10–12 is diversity
- *   without multiplying gift-wrap latency forever. Users can add more in settings.
- *
- * Live status changes — re-check https://nostr.watch/ and d-central.tech directory.
- */
-export const DEFAULT_RELAYS = [
-  // Bootstrap / widely used free generals
-  'wss://relay.damus.io',
-  'wss://nos.lol',
-  'wss://relay.primal.net',
-  'wss://relay.snort.social',
-  'wss://offchain.pub',
-  // Long-running community / developer free relays
-  'wss://nostr.oxtr.dev',
-  'wss://nostr.bitcoiner.social',
-  'wss://nostr-pub.wellorder.net',
-  'wss://relay.nostr.net',
-  'wss://relay.nostr.info',
-  // Extra free diversity (NIP-11 answered on probe)
-  'wss://nostr.mom',
-  'wss://purplerelay.com',
-];
+// Built-in bootstrap list — single source: defaultRelays.ts (also used by Redux).
+export { DEFAULT_RELAYS, isDefaultNostrRelay } from './defaultRelays';
+import { DEFAULT_RELAYS } from './defaultRelays';
 
 const GIFT_WRAP = 1059;
 const METADATA = 0;

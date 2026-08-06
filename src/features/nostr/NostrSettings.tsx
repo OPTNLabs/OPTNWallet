@@ -12,6 +12,7 @@ import {
   setNostrChatEnabled,
   addNostrRelay,
   removeNostrRelay,
+  isDefaultNostrRelay,
 } from '../../state/slices/experimentalSlice';
 import {
   myIdentity,
@@ -172,13 +173,18 @@ export const NostrSettings: React.FC = () => {
                     <p className="min-w-0 flex-1 truncate font-mono text-[10px] wallet-text-strong">
                       {url}
                     </p>
-                    <button
-                      onClick={() => dispatch(removeNostrRelay(url))}
-                      className="shrink-0 px-1 text-[10px] text-red-400/70 hover:text-red-400"
-                      aria-label={`Remove ${url}`}
-                    >
-                      Remove
-                    </button>
+                    {/* Bootstrap relays match Fulcrum seed servers: no Remove.
+                        Only user-added relays can be deleted. */}
+                    {!isDefaultNostrRelay(url) && (
+                      <button
+                        type="button"
+                        onClick={() => dispatch(removeNostrRelay(url))}
+                        className="shrink-0 px-1 text-[10px] text-red-400/70 hover:text-red-400"
+                        aria-label={`Remove ${url}`}
+                      >
+                        Remove
+                      </button>
+                    )}
                   </div>
                 );
               })}

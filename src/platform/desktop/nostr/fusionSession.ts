@@ -1382,7 +1382,7 @@ function runCoordinator(
         session,
         participants: params.participants,
       });
-      if (!check.ok) {
+      if (check.ok === false) {
         void fail(
           new Error(`internal blame failed verification: ${check.reason}`),
           true

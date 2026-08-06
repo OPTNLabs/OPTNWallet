@@ -1,6 +1,11 @@
 import { createSlice, PayloadAction } from '@reduxjs/toolkit';
 import { createSelector } from 'reselect';
 import type { RootState } from '../store';
+import {
+  DEFAULT_RELAYS,
+  isDefaultNostrRelay,
+  mergeWithDefaultRelays,
+} from '../../platform/desktop/nostr/defaultRelays';
 
 // Electron Cash ships exactly one default fusion server (conf.py
 // _get_default_server_list) — fusion.servo.cash:8789 — and it is the only one
@@ -36,13 +41,8 @@ const KNOWN_DEFAULT_FUSION_SERVERS = new Set(
   Object.values(DEFAULT_FUSION_SERVERS)
 );
 
-// Starter Nostr relays for chat + the P2P-fusion transport. Plain WSS, opened
-// directly by the WebView. Users can add their own.
-const DEFAULT_NOSTR_RELAYS = [
-  'wss://relay.damus.io',
-  'wss://nos.lol',
-  'wss://relay.primal.net',
-];
+// Built-in bootstrap relays (not user-removable). Shared with chat/fusion.
+const DEFAULT_NOSTR_RELAYS = [...DEFAULT_RELAYS];
 
 /** Rounds a coin is fused before the engine stops picking it up. */
 export const DEFAULT_FUSE_DEPTH = 3;
@@ -131,7 +131,6 @@ export function normalizeExperimentalPersistedState(
   return {
     autoFuseEnabled: true,
     p2pFusionEnabled: true,
-    spendOnlyFusedCoins: false,
     ...persisted,
     // Spread first, then clamp: a wallet persisted before this field existed
     // gets the default, and a persisted out-of-range value is pulled back into
@@ -139,11 +138,18 @@ export function normalizeExperimentalPersistedState(
     fuseDepth: clampFuseDepth(
       persisted.fuseDepth ?? DEFAULT_FUSE_DEPTH
     ),
+    // Default false unless user explicitly opted in (must follow ...persisted).
     spendOnlyFusedCoins: persisted.spendOnlyFusedCoins === true,
     nostrChatEnabled: defaultOnAlreadyApplied
       ? persisted.nostrChatEnabled !== false
       : true,
     nostrChatDefaultOnApplied: true,
+    // Ensure expanded bootstrap relays appear for older persisted 3-relay lists.
+    nostrRelays: mergeWithDefaultRelays(
+      Array.isArray(persisted.nostrRelays)
+        ? (persisted.nostrRelays as string[])
+        : undefined
+    ),
   };
 }
 
@@ -174,9 +180,14 @@ const experimentalSlice = createSlice({
     removeNostrRelay(state, action: PayloadAction<string>) {
       if (!Array.isArray(state.nostrRelays))
         state.nostrRelays = [...DEFAULT_NOSTR_RELAYS];
-      state.nostrRelays = state.nostrRelays.filter(
-        (r) => r !== action.payload.trim()
-      );
+      const target = action.payload.trim();
+      // Same rule as Fulcrum seed servers: bootstrap list is not removable.
+      if (isDefaultNostrRelay(target)) return;
+      state.nostrRelays = state.nostrRelays.filter((r) => r !== target);
+      // Never empty the pool — always keep at least the built-in set.
+      if (state.nostrRelays.length === 0) {
+        state.nostrRelays = [...DEFAULT_NOSTR_RELAYS];
+      }
     },
     setAutoFuseEnabled(state, action: PayloadAction<boolean>) {
       state.autoFuseEnabled = action.payload;
@@ -230,8 +241,10 @@ const experimentalSlice = createSlice({
     },
     setNostrRelays(state, action: PayloadAction<string[]>) {
       // An empty pool leaves P2P fusion unable to find peers, which presents as
-      // "no peers" rather than as a broken setting.
-      if (action.payload.length > 0) state.nostrRelays = action.payload;
+      // "no peers" rather than as a broken setting. Always retain bootstrap.
+      if (action.payload.length > 0) {
+        state.nostrRelays = mergeWithDefaultRelays(action.payload);
+      }
     },
     setTorEnabled(state, action: PayloadAction<boolean>) {
       state.torEnabled = action.payload;
@@ -288,9 +301,11 @@ export const selectNostrChatEnabled = (state: RootState) =>
   state.experimental.nostrChatEnabled !== false;
 export const selectNostrRelays = createSelector(
   [(state: RootState) => state.experimental.nostrRelays],
-  (relays): string[] =>
-    relays && relays.length > 0 ? relays : [...DEFAULT_NOSTR_RELAYS]
+  (relays): string[] => mergeWithDefaultRelays(relays)
 );
+
+/** True for built-in bootstrap relays (UI: no Remove button). */
+export { isDefaultNostrRelay };
 // Missing fields mean the wallet was persisted before these controls existed.
 // Preserve opt-out semantics for Auto Fuse and normalized booleans for the mode.
 export const selectAutoFuseEnabled = (state: RootState) =>
