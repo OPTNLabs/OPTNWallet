@@ -20,6 +20,13 @@ import {
 } from '../../../services/psbt/multisigWallet';
 import { lockingBytecodeToCashAddress } from '@bitauth/libauth';
 
+/** The policies people actually use, in the order they are usually wanted. */
+const MULTISIG_PRESETS = [
+  [2, 2],
+  [2, 3],
+  [3, 5],
+] as const;
+
 type CosignerDraft = { name: string; xpub: string; fingerprint: string };
 type MultisigPreview = {
   receive: string;
@@ -73,7 +80,9 @@ const MultisigCosignerForm: FC<{
   onExport,
   preview,
   error,
-}) => (
+}) => {
+  const [custom, setCustom] = useState(false);
+  return (
   <div className="wallet-card space-y-3 p-4">
     <div className="flex items-center justify-between gap-2">
       <p className="text-sm font-semibold wallet-text-strong">Cosigners</p>
@@ -93,44 +102,56 @@ const MultisigCosignerForm: FC<{
       </label>
     </div>
 
-    <div className="flex gap-2" aria-label="Common policies">
-      {(
-        [
-          [2, 3],
-          [3, 5],
-        ] as const
-      ).map(([m, n]) => (
-        <button
-          key={`${m}-${n}`}
-          type="button"
-          onClick={() => applyPreset(m, n)}
-          className={`wallet-card flex-1 p-2 text-center text-xs font-semibold wallet-text-strong ${
-            required === m && cosigners.length === n
-              ? 'border-[var(--wallet-accent)]'
-              : ''
-          }`}
-        >
-          {m}-of-{n}
-        </button>
-      ))}
-    </div>
-
     <label className="block space-y-1 text-sm wallet-text-strong">
-      Signatures required
+      Policy
       <select
-        value={required}
-        onChange={(event) => setRequired(Number(event.target.value))}
+        value={custom ? 'custom' : `${required}-${cosigners.length}`}
+        onChange={(event) => {
+          if (event.target.value === 'custom') {
+            setCustom(true);
+            return;
+          }
+          setCustom(false);
+          const [m, n] = event.target.value.split('-').map(Number);
+          applyPreset(m, n);
+        }}
         className="wallet-input w-full rounded-md px-3 py-2"
       >
-        {Array.from({ length: cosigners.length }, (_, index) => index + 1).map(
-          (value) => (
+        {MULTISIG_PRESETS.map(([m, n]) => (
+          <option key={`${m}-${n}`} value={`${m}-${n}`}>
+            {m} of {n}
+          </option>
+        ))}
+        {!MULTISIG_PRESETS.some(
+          ([m, n]) => m === required && n === cosigners.length
+        ) && (
+          <option value={`${required}-${cosigners.length}`}>
+            {required} of {cosigners.length}
+          </option>
+        )}
+        <option value="custom">Custom…</option>
+      </select>
+    </label>
+
+    {custom && (
+      <label className="block space-y-1 text-sm wallet-text-strong">
+        Signatures required
+        <select
+          value={required}
+          onChange={(event) => setRequired(Number(event.target.value))}
+          className="wallet-input w-full rounded-md px-3 py-2"
+        >
+          {Array.from(
+            { length: cosigners.length },
+            (_, index) => index + 1
+          ).map((value) => (
             <option key={value} value={value}>
               {value} of {cosigners.length}
             </option>
-          )
-        )}
-      </select>
-    </label>
+          ))}
+        </select>
+      </label>
+    )}
 
     {cosigners.map((cosigner, index) => (
       <div key={index} className="space-y-2 rounded-md border border-[var(--wallet-border)] p-3">
@@ -261,7 +282,8 @@ const MultisigCosignerForm: FC<{
       </div>
     )}
   </div>
-);
+  );
+};
 
 export const WatchOnlyWalletPreview: FC<WatchOnlyWalletPreviewProps> = ({
   onBack,
