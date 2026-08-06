@@ -113,7 +113,12 @@ describe('desktop watch-only preview', () => {
     expect(html).not.toContain('aria-disabled');
   });
 
-  it('renders an optional master fingerprint capture field', () => {
+  it('does not ask for a master fingerprint when creating a wallet', () => {
+    // Creating a watch-only wallet is a scan-the-xPub step. The fingerprint is
+    // not in that QR, is not derivable from it, and is not needed to sign — it
+    // only affects whether the device's review screen claims the coins. The
+    // send screen asks once and remembers, so asking here too was an
+    // unexplained hex box in onboarding for something most people skip.
     const html = renderToStaticMarkup(
       <WatchOnlyWalletPreview
         onBack={() => undefined}
@@ -121,11 +126,8 @@ describe('desktop watch-only preview', () => {
       />
     );
 
-    expect(html).toContain('Master fingerprint');
-    expect(html).toContain('8 hex chars');
-    // Optional for signing; helps the device claim inputs on its review screen.
-    expect(html).toContain('(optional)');
-    expect(html).toContain('signature does not depend on it');
+    expect(html).not.toContain('Master fingerprint');
+    expect(html).not.toContain('8 hex chars');
   });
 
   it('decodes a valid master fingerprint to its 4 bytes', () => {

@@ -33,9 +33,13 @@ TEST_MNEMONIC = " ".join(["abandon"] * 11 + ["about"])
 ACCOUNT_PATH = "m/44'/145'/0'"
 
 
-def build_wallet() -> Wallet:
-    master_key, master_code = Bip39.bip39_protocol(TEST_MNEMONIC, "")
+def wallet_from(mnemonic: str) -> Wallet:
+    master_key, master_code = Bip39.bip39_protocol(mnemonic, "")
     return Wallet(master_key, master_code)
+
+
+def build_wallet() -> Wallet:
+    return wallet_from(TEST_MNEMONIC)
 
 
 def emit_keys() -> None:
@@ -86,9 +90,55 @@ def sign(unsigned_path: str, signed_path: str) -> None:
         handle.write(bytes(signed).hex())
 
 
+def cosigner_mnemonic(index: int) -> str:
+    """A distinct, deterministic throwaway seed per cosigner.
+
+    Deterministic so a failing multisig round trip can be re-run and debugged
+    with the same keys, rather than a fresh set each time.
+    """
+    words = ["abandon"] * 11
+    tail = ["about", "abstract", "absurd", "abuse", "access"]
+    return " ".join(words + [tail[index % len(tail)]])
+
+
+def emit_cosigner_keys(count: int) -> None:
+    out = []
+    for index in range(count):
+        wallet = wallet_from(cosigner_mnemonic(index))
+        out.append({"xpub": wallet._xpub, "fingerprint": wallet._fingerprint})
+    print(json.dumps(out))
+
+
+def sign_as(index: int, unsigned_path: str, signed_path: str) -> None:
+    """Sign every input as one cosigner of a multisig wallet.
+
+    SeedCash reads the redeem script from PSBT_IN_REDEEM_SCRIPT (0x04) and uses
+    it as the scriptCode, which is what makes P2SH multisig work at all here.
+    It takes the derivation path from the 0x06 records — every cosigner shares
+    the same path, so it derives its own key at that path from its own xpriv.
+    """
+    wallet = wallet_from(cosigner_mnemonic(index))
+    with open(unsigned_path, "r", encoding="utf-8") as handle:
+        psbt = bytearray.fromhex(handle.read().strip())
+
+    signed = psbt
+    for input_index in range(parse_psbt(psbt)["input_count"]):
+        signed = sign_psbt_with_xpriv(
+            signed, wallet._xpriv, input_index=input_index, account_path=ACCOUNT_PATH
+        )
+
+    with open(signed_path, "w", encoding="utf-8") as handle:
+        handle.write(bytes(signed).hex())
+    print(json.dumps({"fingerprint": wallet._fingerprint}))
+
+
 if __name__ == "__main__":
     if len(sys.argv) >= 2 and sys.argv[1] == "keys":
         emit_keys()
+    elif len(sys.argv) == 3 and sys.argv[1] == "cosigner-keys":
+        emit_cosigner_keys(int(sys.argv[2]))
+    elif len(sys.argv) == 5 and sys.argv[1] == "sign-as":
+        sign_as(int(sys.argv[2]), sys.argv[3], sys.argv[4])
     elif len(sys.argv) == 4 and sys.argv[1] == "sign":
         sign(sys.argv[2], sys.argv[3])
     else:
