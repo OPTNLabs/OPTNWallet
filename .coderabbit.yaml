@@ -1,6 +1,9 @@
 # CodeRabbit — https://docs.coderabbit.ai/reference/configuration
-# Why PR #12 was skipped: auto reviews only target the repo default branch
-# unless base_branches lists other targets (this project merges to `dev`).
+#
+# Plan hard cap: 300 files per review (Pro+). This PR is ~500+ files vs dev.
+# File count is after path_filters — so we WHITELIST ship-critical paths and
+# drop noise. Everything else still lands in the PR; only the bot scope shrinks.
+# Docs: https://docs.coderabbit.ai/management/plans
 
 language: "en-US"
 
@@ -18,12 +21,48 @@ reviews:
       - "main"
       - "master"
       - "release/.*"
+
+  # Whitelist = only these paths are reviewed (under the 300-file cap).
+  # Prefer include globs + noise excludes. Order: includes first, then !.
   path_filters:
-    - "!dist/**"
-    - "!node_modules/**"
-    - "!**/node_modules/**"
-    - "!android/**/build/**"
-    - "!src-tauri/target/**"
-    - "!**/*.lock"
+    # --- product / security surface for PR #12 ship ---
+    - "src/services/**"
+    - "src/platform/desktop/**"
+    - "src-tauri/**"
+    - "scripts/**"
+    - ".github/workflows/**"
+    - "src/hooks/**"
+    - "src/features/simple-send/**"
+    - "src/features/watch-only-send/**"
+    - "src/apis/WalletManager/**"
+    - "src/apis/DatabaseManager/**"
+    - "src/types/**"
+    - ".coderabbit.yaml"
+    # --- never review these ---
+    - "!**/*lock*"
+    - "!**/Cargo.lock"
     - "!**/package-lock.json"
-    - "!src/platform/web/secp256k1WasmBase64.generated.ts"
+    - "!**/yarn.lock"
+    - "!src-tauri/target/**"
+    - "!**/node_modules/**"
+    - "!dist/**"
+    - "!**/*generated*"
+    - "!**/secp256k1WasmBase64.generated.ts"
+    - "!**/*.png"
+    - "!**/*.svg"
+    - "!**/*.wasm"
+    - "!**/*.snap"
+    - "!**/fixtures/**"
+    - "!**/__fixtures__/**"
+    - "!public/**"
+    - "!docs/**"
+    - "!e2e/**"
+    - "!tools/**"
+    - "!test-support/**"
+    - "!reference/**"
+    - "!extension/**"
+    - "!android/**"
+    - "!ios/**"
+    - "!patches/**"
+    - "!schemas/**"
+    - "!templates/**"
