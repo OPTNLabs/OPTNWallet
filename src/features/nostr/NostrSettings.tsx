@@ -12,12 +12,13 @@ import {
   setNostrChatEnabled,
   addNostrRelay,
   removeNostrRelay,
-  isDefaultNostrRelay,
 } from '../../state/slices/experimentalSlice';
 import {
   myIdentity,
   checkRelayStatus,
 } from '../../platform/desktop/nostr/chat';
+// Import from source of truth (not re-export) so Remove never desyncs from list.
+import { isDefaultNostrRelay } from '../../platform/desktop/nostr/defaultRelays';
 
 export const NostrSettings: React.FC = () => {
   const dispatch = useDispatch();

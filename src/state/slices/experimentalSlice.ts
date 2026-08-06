@@ -183,7 +183,10 @@ const experimentalSlice = createSlice({
       const target = action.payload.trim();
       // Same rule as Fulcrum seed servers: bootstrap list is not removable.
       if (isDefaultNostrRelay(target)) return;
-      state.nostrRelays = state.nostrRelays.filter((r) => r !== target);
+      const key = target.toLowerCase().replace(/\/+$/, '');
+      state.nostrRelays = state.nostrRelays.filter(
+        (r) => r.trim().toLowerCase().replace(/\/+$/, '') !== key
+      );
       // Never empty the pool — always keep at least the built-in set.
       if (state.nostrRelays.length === 0) {
         state.nostrRelays = [...DEFAULT_NOSTR_RELAYS];
