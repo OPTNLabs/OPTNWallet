@@ -35,21 +35,16 @@ export type AutoFusionDecision =
   | { run: true; mode: FusionMode };
 
 /**
- * After a successful paid fuse.
- * Electron Cash autofuse uses ~60–120s random (plugin.py
- * AUTOFUSE_RECENT_TOR_LIMIT_LOWER/UPPER). We use the low end so Auto stays
- * snappy; still enough for Electrum to see new coins. Failures use the shorter
- * {@link AUTO_FUSION_RETRY_MS} / {@link AUTO_FUSION_EMPTY_POOL_RETRY_MS}.
+ * After a successful paid fuse. Short so Auto keeps cycling; still enough for
+ * Electrum to refresh new coins before the next gather.
  */
-export const AUTO_FUSION_COOLDOWN_MS = 60_000;
+export const AUTO_FUSION_COOLDOWN_MS = 45_000;
 /**
  * Backoff after a failed auto attempt that did not complete a paid round.
- * Global pool: peers arrive over Tor on their own clocks — re-enter soon so we
- * keep meeting the next shared rendezvous (not silent for 5 minutes).
  */
-export const AUTO_FUSION_RETRY_MS = 45_000;
+export const AUTO_FUSION_RETRY_MS = 25_000;
 /**
- * Empty-pool / no-agree retries — re-enter the global Nostr pool quickly.
+ * Empty-pool / no-agree retries (same floor as general failure).
  * (Paid success still uses {@link AUTO_FUSION_COOLDOWN_MS}.)
  */
 export const AUTO_FUSION_EMPTY_POOL_RETRY_MS = 25_000;

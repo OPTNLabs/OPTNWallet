@@ -257,8 +257,8 @@ export async function tryClaimAutoCooldown(
   const result = await withWalletLock(walletId, () => {
     const next = readNextAllowedAt(walletId);
     if (next !== null && nowMs < next) return false;
-    // Soft hold until outcome stamps the real wait (aligned with EC-scale cooldown).
-    writeJson(key, { nextAllowedAt: nowMs + 60_000, attempt: nowMs });
+    // Soft hold until outcome stamps the real wait (≤ post-success cooldown).
+    writeJson(key, { nextAllowedAt: nowMs + 45_000, attempt: nowMs });
     return true;
   });
   return result.ran ? result.value : false;
