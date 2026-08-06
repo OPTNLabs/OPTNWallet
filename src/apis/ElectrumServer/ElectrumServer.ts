@@ -209,9 +209,19 @@ function orderServersForConnection(
   startIdx: number
 ): string[] {
   // Prefer last-known rotation start, then rank by multi-Fulcrum health scores
-  // (latency EMA + success/fail). Blocked hosts sink to the end.
+  // (latency EMA + success/fail). Blocked hosts sink to the end. Sticky
+  // last-healthy keeps open scans from hopping after a few listunspent batches.
   const rotated = rotateFromIndex(servers, startIdx);
-  return rankServersForConnect(rotated, { isBlocked: isServerBlocked });
+  return rankServersForConnect(rotated, {
+    isBlocked: isServerBlocked,
+    preferred: getLastHealthyServer() ?? currentServer,
+  });
+}
+
+/** Per-call latency sample for health scoring (batch wall-clock / N). */
+function perCallLatencyMs(wallMs: number, callCount: number): number {
+  const n = Math.max(1, callCount);
+  return Math.max(0, wallMs) / n;
 }
 
 function buildBatchMessage(
@@ -351,21 +361,49 @@ function markSocketStale(client: ECClient) {
   });
 }
 
+/**
+ * Replay active subscriptions after reconnect. Sequential await per address
+ * made open/reconnect crawl once fusion (or HD discovery) grew the set —
+ * hundreds of addresses × RTT. Parallelize in modest chunks.
+ */
 async function resubscribeAll() {
   if (!electrum) return;
 
-  for (const { method, params } of activeSubs.values()) {
+  const simple: SubEntry[] = [];
+  const parameterized: SubEntry[] = [];
+  for (const entry of activeSubs.values()) {
+    if (!entry.params || entry.params.length === 0) simple.push(entry);
+    else parameterized.push(entry);
+  }
+
+  for (const { method } of simple) {
     try {
-      if (!params || params.length === 0) {
-        await electrum.subscribe(method);
-      } else if (params.length === 1) {
-        await electrum.subscribe(method, params[0]);
-      } else {
-        await electrum.request(method, ...params);
-      }
+      await electrum.subscribe(method);
     } catch {
-      // best-effort; keep going
+      /* best-effort */
     }
+  }
+
+  const RESUB_CONCURRENCY = 25;
+  for (let i = 0; i < parameterized.length; i += RESUB_CONCURRENCY) {
+    if (!electrum) return;
+    const chunk = parameterized.slice(i, i + RESUB_CONCURRENCY);
+    const client = electrum;
+    await Promise.all(
+      chunk.map(async ({ method, params }) => {
+        try {
+          if (!params || params.length === 0) {
+            await client.subscribe(method);
+          } else if (params.length === 1) {
+            await client.subscribe(method, params[0]);
+          } else {
+            await client.request(method, ...params);
+          }
+        } catch {
+          /* best-effort; keep going */
+        }
+      })
+    );
   }
 }
 
@@ -530,9 +568,10 @@ export default function ElectrumServer() {
     } catch (err) {
       markServerFailed(currentServer ?? getLastHealthyServer());
       const { servers } = getNetworkAndServers();
-      // Health-ranked next hop (not only index+1).
+      // Health-ranked next hop (not only index+1). Prefer last healthy when set.
       const ranked = rankServersForConnect(servers, {
         isBlocked: isServerBlocked,
+        preferred: getLastHealthyServer(),
       }).filter((s) => s !== currentServer);
       const nextServer = ranked[0] ?? getNextServer(servers, serverIndex);
       await electrumDisconnect();
@@ -573,7 +612,12 @@ export default function ElectrumServer() {
         `requestMany(${calls.length})`
       );
       throwIfBatchTransportFailed(results);
-      markServerOk(currentServer, Date.now() - t0);
+      // Score per-call average — full batch wall-clock made busy healthy hosts
+      // look slower than idle untried peers after every open listunspent.
+      markServerOk(
+        currentServer,
+        perCallLatencyMs(Date.now() - t0, calls.length)
+      );
       markSuccessfulActivity();
       return results;
     } catch (err) {
@@ -581,6 +625,7 @@ export default function ElectrumServer() {
       const { servers } = getNetworkAndServers();
       const ranked = rankServersForConnect(servers, {
         isBlocked: isServerBlocked,
+        preferred: getLastHealthyServer(),
       }).filter((s) => s !== currentServer);
       const nextServer = ranked[0] ?? getNextServer(servers, serverIndex);
       await electrumDisconnect();
@@ -599,7 +644,10 @@ export default function ElectrumServer() {
         `requestMany(${calls.length})`
       );
       throwIfBatchTransportFailed(results);
-      markServerOk(currentServer, Date.now() - t1);
+      markServerOk(
+        currentServer,
+        perCallLatencyMs(Date.now() - t1, calls.length)
+      );
       markSuccessfulActivity();
       return results;
     }
@@ -688,6 +736,7 @@ export default function ElectrumServer() {
       const { servers } = getNetworkAndServers();
       const ranked = rankServersForConnect(servers, {
         isBlocked: isServerBlocked,
+        preferred: getLastHealthyServer(),
       }).filter((s) => s !== currentServer);
       const nextServer = ranked[0] ?? getNextServer(servers, serverIndex);
       await electrumDisconnect();

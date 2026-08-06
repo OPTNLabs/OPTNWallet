@@ -24,7 +24,19 @@ export type ServerHealth = {
 const LATENCY_EMA_ALPHA = 0.35;
 const FAIL_PENALTY = 40;
 const SUCCESS_BONUS = 8;
-const FRESH_OK_BONUS_MS = 60_000;
+/** Recent success stickiness window (prefer the host we just used). */
+const FRESH_OK_BONUS_MS = 5 * 60_000;
+const FRESH_OK_BONUS = 40;
+/** Cap latency samples so a multi-call batch wall-clock cannot poison ranking. */
+const LATENCY_SAMPLE_CAP_MS = 2_000;
+/**
+ * Latency tax only trims the success bonus — a successful RPC must never
+ * lower score. Without this, open-time listunspent batches (often 1–3s for
+ * 50 addresses) recorded as "latency" and made the working Fulcrum look
+ * worse than never-tried hosts → slower failover / reconnect thrash.
+ */
+const LATENCY_TAX_START_MS = 80;
+const LATENCY_TAX_PER_MS = 1 / 40; // +1 tax per 40ms above start, max SUCCESS_BONUS-1
 const SCORE_FLOOR = -200;
 const SCORE_CEIL = 200;
 
@@ -74,15 +86,22 @@ export function recordServerSuccess(
   if (!server) return;
   const key = hostKey(server);
   const prev = healthByHost.get(key) ?? emptyHealth();
-  const sample = Math.max(0, latencyMs);
+  // Callers should pass per-call average for batches; still cap samples so a
+  // single slow open cannot erase a good host.
+  const sample = Math.min(LATENCY_SAMPLE_CAP_MS, Math.max(0, latencyMs));
   const latencyEmaMs =
     prev.successes === 0
       ? sample
       : prev.latencyEmaMs * (1 - LATENCY_EMA_ALPHA) + sample * LATENCY_EMA_ALPHA;
-  // Prefer low latency: subtract a small fraction of EMA from score.
-  const latencyTax = Math.min(30, Math.floor(latencyEmaMs / 50));
+  const over = Math.max(0, latencyEmaMs - LATENCY_TAX_START_MS);
+  const latencyTax = Math.min(
+    SUCCESS_BONUS - 1,
+    Math.floor(over * LATENCY_TAX_PER_MS)
+  );
+  // Success always nets positive (at least +1).
+  const delta = Math.max(1, SUCCESS_BONUS - latencyTax);
   const next: ServerHealth = {
-    score: clampScore(prev.score + SUCCESS_BONUS - latencyTax),
+    score: clampScore(prev.score + delta),
     latencyEmaMs,
     successes: prev.successes + 1,
     failures: prev.failures,
@@ -110,17 +129,26 @@ export function recordServerFailure(
 function effectiveScore(
   server: string,
   nowMs: number,
-  isBlocked: (s: string) => boolean
+  isBlocked: (s: string) => boolean,
+  preferred?: string | null
 ): number {
   if (isBlocked(server)) return SCORE_FLOOR - 1000;
   const h = healthByHost.get(hostKey(server)) ?? emptyHealth();
   let score = h.score;
-  // Slight boost if we succeeded recently (session stickiness for healthy host).
+  // Stick to a host that worked recently (open scan should not hop hosts).
   if (h.lastOkAt > 0 && nowMs - h.lastOkAt < FRESH_OK_BONUS_MS) {
-    score += 15;
+    score += FRESH_OK_BONUS;
+  }
+  // Explicit last-healthy / sticky preference (storage or current socket).
+  if (preferred && hostKey(preferred) === hostKey(server)) {
+    score += 80;
   }
   // Prefer never-tried over known-bad when scores equal.
   if (h.successes === 0 && h.failures === 0) score += 5;
+  // Mild preference for lower EMA among proven hosts.
+  if (h.successes > 0 && h.latencyEmaMs > 0) {
+    score -= Math.min(10, Math.floor(h.latencyEmaMs / 100));
+  }
   return score;
 }
 
@@ -133,16 +161,19 @@ export function rankServersForConnect(
   options: {
     isBlocked?: (server: string) => boolean;
     nowMs?: number;
+    /** Sticky host (last healthy / current) — strongly preferred if not blocked. */
+    preferred?: string | null;
   } = {}
 ): string[] {
   if (servers.length <= 1) return [...servers];
   const isBlocked = options.isBlocked ?? (() => false);
   const nowMs = options.nowMs ?? Date.now();
+  const preferred = options.preferred ?? null;
   return servers
     .map((server, index) => ({
       server,
       index,
-      score: effectiveScore(server, nowMs, isBlocked),
+      score: effectiveScore(server, nowMs, isBlocked, preferred),
     }))
     .sort((a, b) => b.score - a.score || a.index - b.index)
     .map((row) => row.server);

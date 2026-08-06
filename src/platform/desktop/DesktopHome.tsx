@@ -95,6 +95,9 @@ const Home: React.FC = () => {
   const syncingProgress = useSelector(
     (state: RootState) => state.utxos.syncingProgress
   );
+  const syncingStartedAtMs = useSelector(
+    (state: RootState) => state.utxos.syncingStartedAtMs
+  );
   const totalBalance = useSelector(
     (state: RootState) => state.utxos.totalBalance
   );
@@ -115,17 +118,24 @@ const Home: React.FC = () => {
   // Wall-clock only. Multi-phase sync (markers → Electrum batch → history)
   // freezes the % bar for long stretches; any "%/s → seconds left" estimate
   // will lie (e.g. 49% · 61s · ~1s left). Show percent + elapsed and stop there.
+  //
+  // Start time lives in Redux (syncingStartedAtMs), not local Date.now() on
+  // effect mount — leaving Home mid-sync unmounted the counter and remount
+  // restarted it at 0s while the same scan was still running.
   useEffect(() => {
-    if (!fetchingUTXOsRedux) {
+    if (!fetchingUTXOsRedux || syncingStartedAtMs == null) {
       setSyncElapsedSec(0);
       return;
     }
-    const startTs = Date.now();
-    const interval = setInterval(() => {
-      setSyncElapsedSec(Math.floor((Date.now() - startTs) / 1000));
-    }, 500);
+    const tick = () => {
+      setSyncElapsedSec(
+        Math.max(0, Math.floor((Date.now() - syncingStartedAtMs) / 1000))
+      );
+    };
+    tick();
+    const interval = setInterval(tick, 500);
     return () => clearInterval(interval);
-  }, [fetchingUTXOsRedux]);
+  }, [fetchingUTXOsRedux, syncingStartedAtMs]);
   const totalBch = totalBalance / SATSINBITCOIN;
   const totalUsd =
     typeof bchUsdQuote === 'number' ? totalBch * bchUsdQuote : null;

@@ -181,7 +181,7 @@ describe('UTXOWorkerService.bootstrapAllUTXOs', () => {
     await stopUTXOWorker();
   });
 
-  it('preloads BCMR metadata before completing the bootstrap and persists the db snapshot', async () => {
+  it('preloads BCMR metadata without blocking bootstrap completion and persists the db snapshot', async () => {
     const gate = deferred<void>();
     preloadTokenMetadataMock.mockReturnValue(gate.promise);
 
@@ -224,21 +224,12 @@ describe('UTXOWorkerService.bootstrapAllUTXOs', () => {
     });
 
     const { bootstrapAllUTXOs } = await import('../UTXOWorkerService');
-    const bootstrapPromise = bootstrapAllUTXOs();
+    // Token metadata must not gate Syncing off — bootstrap finishes while
+    // the icon fetch is still pending.
+    await bootstrapAllUTXOs();
 
-    for (
-      let i = 0;
-      i < 20 && preloadTokenMetadataMock.mock.calls.length === 0;
-      i += 1
-    ) {
-      await new Promise((resolve) => setTimeout(resolve, 0));
-    }
     expect(preloadTokenMetadataMock).toHaveBeenCalledTimes(1);
     expect(preloadTokenMetadataMock).toHaveBeenCalledWith(['cat1', 'cat2']);
-
-    gate.resolve();
-    await bootstrapPromise;
-
     expect(fetchContractInstancesMock).toHaveBeenCalledWith(42);
 
     expect(dispatchMock).toHaveBeenCalledWith(
@@ -251,6 +242,81 @@ describe('UTXOWorkerService.bootstrapAllUTXOs', () => {
     expect(scheduleDatabaseSaveMock).toHaveBeenCalledTimes(1);
     expect(dispatchMock).toHaveBeenCalledWith(setFetchingUTXOs(false));
     expect(dispatchMock).toHaveBeenCalledWith(setInitialized(true));
+
+    gate.resolve();
+  });
+
+  it('paints durable SQL balance before the network listunspent pass', async () => {
+    fetchUTXOsFromDatabaseMock.mockResolvedValue({
+      utxosMap: {
+        'bitcoincash:qaddr1': [
+          {
+            address: 'bitcoincash:qaddr1',
+            tx_hash: 'oldtx',
+            tx_pos: 0,
+            value: 42_000,
+            height: 10,
+          },
+        ],
+      },
+      cashTokenUtxosMap: {},
+    });
+    const fetchGate = deferred<Record<string, unknown>>();
+    fetchAndStoreUTXOsManyMock.mockReturnValueOnce(fetchGate.promise);
+
+    const { bootstrapAllUTXOs } = await import('../UTXOWorkerService');
+    const bootstrapPromise = bootstrapAllUTXOs();
+
+    for (
+      let i = 0;
+      i < 30 &&
+      !dispatchMock.mock.calls.some(
+        (c) =>
+          c[0]?.type === 'utxos/replaceAllUTXOs' &&
+          c[0]?.payload?.utxosByAddress?.['bitcoincash:qaddr1']?.[0]?.value ===
+            42_000
+      );
+      i += 1
+    ) {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    }
+
+    expect(dispatchMock).toHaveBeenCalledWith(
+      replaceAllUTXOs({
+        utxosByAddress: {
+          'bitcoincash:qaddr1': [
+            expect.objectContaining({ value: 42_000, tx_hash: 'oldtx' }),
+          ],
+        },
+      })
+    );
+    expect(dispatchMock).toHaveBeenCalledWith(setInitialized(true));
+    // Network pass still pending — provisional paint must not wait on it.
+    expect(fetchAndStoreUTXOsManyMock).toHaveBeenCalled();
+
+    fetchGate.resolve({
+      'bitcoincash:qaddr1': [
+        {
+          address: 'bitcoincash:qaddr1',
+          tx_hash: 'newtx',
+          tx_pos: 0,
+          value: 50_000,
+          height: 11,
+        },
+      ],
+    });
+    await bootstrapPromise;
+
+    // Authoritative network result overwrites provisional SQL.
+    expect(dispatchMock).toHaveBeenCalledWith(
+      replaceAllUTXOs({
+        utxosByAddress: {
+          'bitcoincash:qaddr1': [
+            expect.objectContaining({ value: 50_000, tx_hash: 'newtx' }),
+          ],
+        },
+      })
+    );
   });
 
   it('invalidates wallet and tracked-address caches before bootstrap batches', async () => {
