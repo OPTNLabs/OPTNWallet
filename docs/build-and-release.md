@@ -62,9 +62,16 @@ Legacy root scripts (`build.sh`, `releaseBuild.sh`) are deprecated and should no
   - Produces platform-native desktop bundles through Tauri.
   - Output: `src-tauri/target/release/bundle/`
 
-Tagged GitHub releases publish Windows x64 (`.exe` and `.msi`), native macOS
-Apple Silicon and Intel (`.dmg`), Linux x64 (`.deb` and `.rpm`), and Chrome and
-Firefox extension bundles (`.zip`).
+Tagged GitHub releases publish:
+
+- Windows x64 (`.exe` and `.msi`)
+- macOS Apple Silicon and Intel (`.dmg`)
+- **Linux portable `.AppImage` for every distro** — both **x64** and **ARM64**
+  (aarch64). AppImage is the supported cross-distro desktop Linux install path
+  (Ubuntu, Debian, Fedora, Arch, etc.); users download one file and run it.
+- Linux x64 also gets convenience `.deb` / `.rpm` packages
+- Chrome and Firefox extension bundles (`.zip`)
+- Android signed `.apk` / `.aab` when production keystore secrets are configured
 
 macOS release jobs always produce native Apple Silicon and Intel DMGs. An Apple
 account is optional:
