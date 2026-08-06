@@ -80,9 +80,9 @@ const P2P_TIERS = [10_000, 100_000, 1_000_000, 10_000_000];
 // this service cannot disagree. They did: this file capped a round at 10 while
 // the rendezvous truncated the candidate list to 6, so four peers could be
 // admitted here and then silently dropped downstream.
-// Allow full DEFAULT_RELAYS bootstrap (+ a few user adds); old 8 silently
-// truncated multi-relay redundancy.
-const MAX_RELAYS = 24;
+// Cap for bootstrap + a few user-added relays. Keep ≥ DEFAULT_RELAYS.length
+// so the built-in multi-relay list is never truncated (old 8 was a bug).
+const MAX_RELAYS = 30;
 let wsInstalled = false;
 
 export const P2P_PHASE_LABELS = [
