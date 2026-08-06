@@ -93,10 +93,24 @@ describe('desktop watch-only preview', () => {
     expect(html).toContain('Wallet name');
     expect(html).toContain('Standard');
     expect(html).toContain('Multisign');
-    expect(html).toContain('Coming next');
     expect(html).toContain('Save watch-only wallet');
     expect(html).not.toContain('does not save a watch-only wallet');
     expect(html).not.toContain('Public preview only');
+  });
+
+  it('offers Multisign as a real choice, not a placeholder', () => {
+    // The plan for Issue #8 says an entry is added when its flow works, not as
+    // a non-working placeholder. Multisign shipped disabled and labelled
+    // "Coming next" while the whole codec sat behind it unreachable.
+    const html = renderToStaticMarkup(
+      <WatchOnlyWalletPreview
+        onBack={() => undefined}
+        onCreated={() => undefined}
+      />
+    );
+
+    expect(html).not.toContain('Coming next');
+    expect(html).not.toContain('aria-disabled');
   });
 
   it('renders an optional master fingerprint capture field', () => {
