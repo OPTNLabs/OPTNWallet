@@ -62,6 +62,13 @@ A peer participating in the same round but acting dishonestly.
 - Each participant submits with 200–2000 ms jitter
 - Inputs sorted by `(txid, index)` before assembly
 - Duplicate input detection prevents a wallet meeting itself in a pool
+- **Privacy-preserving blame** (`fusionBlame.ts`): on *received* messages that
+  fail a hard crypto/structural check (bad credential, unbalanced Pedersen,
+  duplicate outpoint, bad sig set), peers broadcast a verifiable `blame` bound
+  to the **ephemeral session pubkey** only, then abort. Peers re-verify evidence
+  before acting (anti-frame). **Timeouts, relay ACK failures, late join, and
+  missing messages are never blame** — honest poor-network peers must not be
+  scapegoated. Not a permanent identity ban (throwaway keys).
 
 ### A2b: Intermediate output-onion peeler
 

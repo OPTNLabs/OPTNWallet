@@ -617,7 +617,8 @@ describe('P2P fusion round choreography (3 peers, in-memory)', () => {
     expect(
       settled.some(
         (r) =>
-          r.status === 'rejected' && /duplicate input/i.test(String(r.reason))
+          r.status === 'rejected' &&
+          /duplicate (input|outpoint)|Protocol fault/i.test(String(r.reason))
       )
     ).toBe(true);
   });

@@ -409,8 +409,105 @@ export function selectFusionGroup(
   return best;
 }
 
-/** A relay that accepts the socket but never answers OK must not stall a round. */
-const PUBLISH_TIMEOUT_MS = 30_000;
+/**
+ * Per-relay ACK wait. Was 30s + Promise.allSettled (waited for EVERY relay,
+ * including silent ones) → one hung relay delayed success even after another
+ * already said OK, and under Tor multi-window load often timed everyone out.
+ * 15s is enough for slow Tor; first OK wins (see publishRaceFirstOk).
+ */
+const PUBLISH_RELAY_TIMEOUT_MS = 15_000;
+/** Whole-event retries when every relay fails/times out (live: intermittent ACK). */
+const PUBLISH_MAX_ROUNDS = 3;
+const PUBLISH_RETRY_BASE_MS = 400;
+
+function sleepMs(ms: number, signal?: AbortSignal): Promise<void> {
+  return new Promise((resolve, reject) => {
+    if (signal?.aborted) {
+      reject(new Error('fusion round cancelled'));
+      return;
+    }
+    const timer = setTimeout(() => {
+      signal?.removeEventListener('abort', onAbort);
+      resolve();
+    }, ms);
+    const onAbort = () => {
+      clearTimeout(timer);
+      reject(new Error('fusion round cancelled'));
+    };
+    signal?.addEventListener('abort', onAbort, { once: true });
+  });
+}
+
+/**
+ * Publish once: resolve as soon as ANY relay ACKs (do not wait for stragglers).
+ * Reject only when every relay fails or times out.
+ */
+function publishRaceFirstOk(
+  pool: SimplePool,
+  relays: string[],
+  event: Event,
+  signal?: AbortSignal
+): Promise<void> {
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    let remaining = relays.length;
+    const errors: unknown[] = [];
+    const finishOk = () => {
+      if (settled) return;
+      settled = true;
+      signal?.removeEventListener('abort', onAbort);
+      resolve();
+    };
+    const finishErr = (error: unknown) => {
+      errors.push(error);
+      remaining -= 1;
+      if (remaining > 0 || settled) return;
+      settled = true;
+      signal?.removeEventListener('abort', onAbort);
+      const first = errors[0];
+      reject(
+        first instanceof Error
+          ? first
+          : new Error(String(first ?? 'relay publish failed'))
+      );
+    };
+    const onAbort = () => {
+      if (settled) return;
+      settled = true;
+      reject(new Error('fusion round cancelled'));
+    };
+    signal?.addEventListener('abort', onAbort, { once: true });
+    if (signal?.aborted) {
+      onAbort();
+      return;
+    }
+
+    const attempts = pool.publish(relays, event);
+    for (let i = 0; i < attempts.length; i++) {
+      const attempt = attempts[i];
+      let done = false;
+      const timer = setTimeout(() => {
+        if (done || settled) return;
+        done = true;
+        finishErr(new Error('relay did not acknowledge in time'));
+      }, PUBLISH_RELAY_TIMEOUT_MS);
+      attempt.then(
+        () => {
+          if (done) return;
+          done = true;
+          clearTimeout(timer);
+          finishOk();
+        },
+        (error: unknown) => {
+          if (done || settled) return;
+          done = true;
+          clearTimeout(timer);
+          finishErr(error);
+        }
+      );
+    }
+  });
+}
 
 export async function publishEventAtLeastOnce(
   pool: SimplePool,
@@ -420,49 +517,31 @@ export async function publishEventAtLeastOnce(
 ): Promise<void> {
   if (relays.length === 0) throw new Error('No Nostr relays configured.');
   if (signal?.aborted) throw new Error('fusion round cancelled');
-  // Bound every relay attempt. `pool.publish` resolves per relay only when that
-  // relay answers OK, so a relay that opens the socket and then goes quiet leaves
-  // its promise pending forever — and Promise.allSettled waits for ALL of them,
-  // so one silent relay hangs the whole announce with no error and no way out.
-  // A timed-out attempt counts as a failure, not a success: if EVERY relay times
-  // out the announcement never landed and the round must fail loudly.
-  const attempts = pool.publish(relays, event).map(
-    (attempt) =>
-      new Promise<void>((resolve, reject) => {
-        let finished = false;
-        const finish = (error?: unknown) => {
-          if (finished) return;
-          finished = true;
-          clearTimeout(timer);
-          signal?.removeEventListener('abort', onAbort);
-          if (error === undefined) resolve();
-          else reject(error);
-        };
-        const onAbort = () => finish(new Error('fusion round cancelled'));
-        const timer = setTimeout(
-          () => finish(new Error('relay did not acknowledge in time')),
-          PUBLISH_TIMEOUT_MS
-        );
-        signal?.addEventListener('abort', onAbort, { once: true });
-        attempt.then(
-          () => finish(),
-          (error) => finish(error)
-        );
-        if (signal?.aborted) onAbort();
-      })
-  );
-  const settled = await Promise.allSettled(attempts);
-  if (signal?.aborted) throw new Error('fusion round cancelled');
-  if (!settled.some((result) => result.status === 'fulfilled')) {
-    const reason = settled.find((result) => result.status === 'rejected');
-    throw new Error(
-      `No Nostr relay accepted the Fusion message${
-        reason && reason.status === 'rejected'
-          ? `: ${String(reason.reason)}`
-          : '.'
-      }`
-    );
+
+  let lastError: unknown;
+  for (let round = 0; round < PUBLISH_MAX_ROUNDS; round++) {
+    if (signal?.aborted) throw new Error('fusion round cancelled');
+    try {
+      await publishRaceFirstOk(pool, relays, event, signal);
+      return;
+    } catch (error) {
+      lastError = error;
+      if (
+        error instanceof Error &&
+        error.message === 'fusion round cancelled'
+      ) {
+        throw error;
+      }
+      if (round + 1 < PUBLISH_MAX_ROUNDS) {
+        await sleepMs(PUBLISH_RETRY_BASE_MS * (round + 1), signal);
+      }
+    }
   }
+  throw new Error(
+    `No Nostr relay accepted the Fusion message: ${
+      lastError instanceof Error ? lastError.message : String(lastError)
+    }`
+  );
 }
 
 export interface JoinPoolOptions {
