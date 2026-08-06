@@ -105,4 +105,13 @@ describe('P2P Pedersen balance check', () => {
       pedersenBalanceHolds([c.commitmentHex], 50_001, c.nonceHex)
     ).toBe(false);
   });
+
+  it('commits amount 0 and accepts excessFee 0 (identity ·H)', () => {
+    // Blank components and exact fee coverage must not throw / false-blame.
+    const blank = pedersenCommit(0);
+    expect(blank.commitmentHex.length).toBeGreaterThan(0);
+    expect(
+      pedersenBalanceHolds([blank.commitmentHex], 0, blank.nonceHex)
+    ).toBe(true);
+  });
 });

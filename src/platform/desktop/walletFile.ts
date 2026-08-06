@@ -150,11 +150,17 @@ export async function autoSaveWalletFile(
     // Take <name>.optn if free or already ours. On a real collision with a
     // *different* wallet id, use <name>_id<N>.optn (never opaque _2/_3 — those
     // looked like mysterious clones of "wallet5" after re-imports).
+    // sourceId <= 0 means unknown ownership (parse default) — never treat 0 as
+    // a real wallet id for overwrite/delete decisions.
+    const hasOwnerId =
+      Number.isSafeInteger(w.sourceId) && (w.sourceId as number) > 0;
     let rel = `${WALLETS_DIR}/${defaultWalletFileName(w.name)}`;
     if (await exists(rel, { baseDir: BaseDirectory.AppData })) {
       const owner = await ownerOf(rel);
-      if (owner !== w.sourceId) {
-        rel = `${WALLETS_DIR}/${defaultWalletFileName(`${w.name}_id${w.sourceId}`)}`;
+      if (!hasOwnerId || owner !== w.sourceId) {
+        rel = `${WALLETS_DIR}/${defaultWalletFileName(
+          hasOwnerId ? `${w.name}_id${w.sourceId}` : `${w.name}_${Date.now()}`
+        )}`;
       }
     }
 
@@ -163,13 +169,16 @@ export async function autoSaveWalletFile(
     // A rename leaves the old file behind under the old name, so this wallet
     // would have two backups and the stale one would silently rot. Drop any
     // other file that claims the same wallet, keeping one file per wallet.
-    for (const other of await listWalletFiles()) {
-      if (other === rel) continue;
-      if ((await ownerOf(other)) === w.sourceId) {
-        try {
-          await remove(other, { baseDir: BaseDirectory.AppData });
-        } catch {
-          /* leaving a stale copy is safer than failing the save */
+    // Never delete on sourceId 0 — that would wipe unrelated legacy backups.
+    if (hasOwnerId) {
+      for (const other of await listWalletFiles()) {
+        if (other === rel) continue;
+        if ((await ownerOf(other)) === w.sourceId) {
+          try {
+            await remove(other, { baseDir: BaseDirectory.AppData });
+          } catch {
+            /* leaving a stale copy is safer than failing the save */
+          }
         }
       }
     }

@@ -248,6 +248,8 @@ export async function signHardwarePayment(args: {
   }
 
   let changePath: string | undefined;
+  /** Index of change in `ledgerOutputs`, or undefined if none / not found. */
+  let changeOutputIndex: number | undefined;
   if (args.changeAddress) {
     try {
       changePath = stripM(
@@ -257,8 +259,18 @@ export async function signHardwarePayment(args: {
           args.changeAddress
         )
       );
+      const idx = args.outputs.findIndex(
+        (o) => o.address === args.changeAddress
+      );
+      if (idx >= 0) {
+        changeOutputIndex = idx;
+      } else {
+        // Address not in the planned outputs — do not mark any output as change.
+        changePath = undefined;
+      }
     } catch {
       changePath = undefined;
+      changeOutputIndex = undefined;
     }
   }
 
@@ -309,6 +321,7 @@ export async function signHardwarePayment(args: {
       inputs: ledgerInputs,
       outputs: ledgerOutputs,
       changePath,
+      changeOutputIndex,
       deviceKind: meta.deviceKind,
       // EC get_coin_name(): Bcash vs Bcash Testnet
       network: meta.network,

@@ -155,9 +155,17 @@ export class TrezorNativeSession {
       await bridgeCall(this.wire.session, encoded.toString('hex'));
       return;
     }
-    for (let i = 0; i < encoded.length; i += HID_CHUNK) {
+    // trezorlib HID/WebUSB write_chunk: every 64-byte report is
+    //   0x3f || up to 63 bytes of protocol payload (padded with zeros).
+    // Sending raw 64-byte slices of the encoded message drops the segment
+    // marker and misframes multi-packet SignTx.
+    let offset = 0;
+    while (offset < encoded.length) {
       const chunk = Buffer.alloc(HID_CHUNK);
-      encoded.copy(chunk, 0, i, Math.min(i + HID_CHUNK, encoded.length));
+      chunk[0] = 0x3f;
+      const n = Math.min(HID_CHUNK - 1, encoded.length - offset);
+      encoded.copy(chunk, 1, offset, offset + n);
+      offset += n;
       const hex = chunk.toString('hex');
       if (this.wire.kind === 'webusb') {
         await trezorWebUsbWrite(this.wire.sessionId, hex);
@@ -181,21 +189,26 @@ export class TrezorNativeSession {
         ? trezorWebUsbRead(usbWire.sessionId, timeoutMs)
         : hwRead(usbWire.sessionId, timeoutMs);
 
-    const rawHex = await readUsbChunk();
-    const first = stripReportId(Buffer.from(rawHex, 'hex'));
-    // HID may use 0x3f report prefix; WebUSB is raw 64-byte protocol packets.
-    const view =
-      usbWire.kind === 'hid' && first[0] === 0x3f ? first.subarray(1) : first;
-    const payloadLen = view.readUInt32BE(5);
-    const total = HEADER_SIZE + payloadLen;
-    let assembled = Buffer.from(view);
-    while (assembled.length < total) {
-      const next = stripReportId(Buffer.from(await readUsbChunk(), 'hex'));
-      if (next[0] === 0x3f && next[1] !== 0x23) {
-        assembled = Buffer.concat([assembled, next.subarray(1)]);
-      } else {
-        assembled = Buffer.concat([assembled, next]);
+    /** Strip USB report id (0x00) and HID/WebUSB 0x3f segment marker. */
+    const unwrapReport = (raw: Buffer): Buffer => {
+      let buf = stripReportId(raw);
+      if (buf.length > 0 && buf[0] === 0x3f) {
+        buf = buf.subarray(1);
       }
+      return buf;
+    };
+
+    const first = unwrapReport(Buffer.from(await readUsbChunk(), 'hex'));
+    // Protocol v1 header after unwrap: ## | type(2) | length(4) | payload
+    if (first.length < HEADER_SIZE) {
+      throw new Error('Trezor USB: short first packet');
+    }
+    const payloadLen = first.readUInt32BE(5);
+    const total = HEADER_SIZE + payloadLen;
+    let assembled = Buffer.from(first);
+    while (assembled.length < total) {
+      const next = unwrapReport(Buffer.from(await readUsbChunk(), 'hex'));
+      assembled = Buffer.concat([assembled, next]);
     }
     return assembled.subarray(0, total);
   }

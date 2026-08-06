@@ -51,21 +51,37 @@ function scalarFromI64(v: number): Uint8Array {
   return bigIntTo32(-BigInt(-v));
 }
 
+/** True when amount is the zero scalar (point-at-infinity for amount·H). */
+function isZeroAmount(v: number): boolean {
+  return v === 0;
+}
+
 /**
  * Commit to a signed amount (input: +value-fee, output: -value-fee, blank: 0).
  * Returns uncompressed 65-byte point hex and the 32-byte nonce hex.
+ *
+ * amount == 0 → amount·H is the identity, so C = nonce·G only (ecc.pointMultiply
+ * rejects a zero scalar).
  */
 export function pedersenCommit(amount: number): {
   commitmentHex: string;
   nonceHex: string;
 } {
   const nonce = randomScalar();
-  const amountPoint = ecc.pointMultiply(H, scalarFromI64(amount));
-  if (!amountPoint) throw new Error('pedersen: amount·H failed');
   const noncePoint = ecc.pointFromScalar(nonce, true);
   if (!noncePoint) throw new Error('pedersen: nonce·G failed');
-  const sum = ecc.pointAdd(amountPoint, noncePoint);
-  if (!sum) throw new Error('pedersen: commitment at infinity');
+
+  let sum: Uint8Array;
+  if (isZeroAmount(amount)) {
+    sum = noncePoint;
+  } else {
+    const amountPoint = ecc.pointMultiply(H, scalarFromI64(amount));
+    if (!amountPoint) throw new Error('pedersen: amount·H failed');
+    const added = ecc.pointAdd(amountPoint, noncePoint);
+    if (!added) throw new Error('pedersen: commitment at infinity');
+    sum = added;
+  }
+
   const uncompressed = ecc.pointCompress(sum, false);
   if (!uncompressed) throw new Error('pedersen: uncompress failed');
   return {
@@ -95,14 +111,24 @@ export function pedersenBalanceHolds(
     }
     if (!sum) return false;
 
-    const feePoint = ecc.pointMultiply(H, scalarFromI64(excessFee));
-    if (!feePoint) return false;
+    // excessFee == 0 → fee·H is identity; expected = total_nonce·G only.
+    // Treating 0 as failure falsely blames honest peers whose inputs cover
+    // outputs+fees exactly.
     const nonce = hexToBin(totalNonceHex);
     if (nonce.length !== 32) return false;
     const noncePoint = ecc.pointFromScalar(nonce, true);
     if (!noncePoint) return false;
-    const expected = ecc.pointAdd(feePoint, noncePoint);
-    if (!expected) return false;
+
+    let expected: Uint8Array;
+    if (isZeroAmount(excessFee)) {
+      expected = noncePoint;
+    } else {
+      const feePoint = ecc.pointMultiply(H, scalarFromI64(excessFee));
+      if (!feePoint) return false;
+      const added = ecc.pointAdd(feePoint, noncePoint);
+      if (!added) return false;
+      expected = added;
+    }
 
     // Compare as compressed.
     const sumC = sum.length === 33 ? sum : ecc.pointCompress(sum, true);

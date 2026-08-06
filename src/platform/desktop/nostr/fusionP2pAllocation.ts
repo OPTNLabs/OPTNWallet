@@ -148,7 +148,9 @@ export function planP2pOutputValues(
 
   // Fee fuzz: add small random noise to prevent a chain analyst from inferring
   // the exact tier structure from the fee. Capped at 0.5% of the fee or 500
-  // sats, whichever is smaller.
+  // sats, whichever is smaller — and never more than leftover headroom after
+  // funding minimum * outputCount (otherwise distributable goes negative and
+  // values can drop below dust).
   const tier = options.tier ?? Math.max(...options.inputs.map((i) => i.value));
   const grid = quantizationGrid(tier);
   const maxFuzz = Math.min(
@@ -156,11 +158,16 @@ export function planP2pOutputValues(
     MAX_FEE_FUSS_SATS,
     grid
   );
-  const feeFuzz = Math.floor(checkedRandom(randomUnit) * Math.max(1, maxFuzz));
+  const headroom = sumIn - feeShare - minimum * outputCount;
+  const fuzzBudget = Math.max(0, Math.min(maxFuzz, headroom));
+  const feeFuzz =
+    fuzzBudget > 0
+      ? Math.floor(checkedRandom(randomUnit) * fuzzBudget)
+      : 0;
   const fuzzedFee = feeShare + feeFuzz;
 
   const outputTotal = sumIn - fuzzedFee;
-  const distributable = outputTotal - minimum * outputCount;
+  const distributable = Math.max(0, outputTotal - minimum * outputCount);
   const weights = Array.from(
     { length: outputCount },
     () => checkedRandom(randomUnit) + 0.1
