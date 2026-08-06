@@ -27,6 +27,14 @@ import { parseRoundMessage, type RoundTransport } from './fusionSession';
 /** NIP-59 gift-wrap. Same kind as chat; disambiguated by the #p recipient. */
 export const GIFT_WRAP_KIND = 1059;
 
+/**
+ * Same-origin bridge for round messages (multi-wallet on one machine).
+ * Remote peers still use Nostr gift-wrap only — BC never leaves this origin.
+ * Live auto often failed at ACK because Tor gift-wraps dropped while all
+ * windows already shared pool discovery via BC.
+ */
+const ROUND_BC_NAME = 'optn-p2p-round-v1';
+
 export interface RoundKeys {
   secretKey: Uint8Array;
   pubkey: string; // hex
@@ -49,6 +57,24 @@ export function createNostrRoundTransport(
       const isAnonymousOutput =
         msg.type === 'outputs' || msg.type === 'onion_output';
       const signer = isAnonymousOutput ? generateSecretKey() : round.secretKey;
+      // Same-origin dual path first (fast local multi-wallet). Always also
+      // publish Nostr so remote peers still work.
+      try {
+        if (typeof BroadcastChannel !== 'undefined') {
+          const bc = new BroadcastChannel(ROUND_BC_NAME);
+          bc.postMessage({
+            to: toPubkey,
+            from: round.pubkey,
+            // For anonymous outputs the gift-wrap "from" is throwaway; BC uses
+            // a fixed tag so peelers still accept the payload (session-bound).
+            fromAnon: isAnonymousOutput,
+            msg,
+          });
+          bc.close();
+        }
+      } catch {
+        /* ignore BC failures */
+      }
       try {
         const wrapped = wrapEvent(
           signer,
@@ -95,9 +121,40 @@ export function createNostrRoundTransport(
         outputPool === pool
           ? null
           : outputPool.subscribeMany(relays, filter, { onevent: onEvent });
+
+      let bc: BroadcastChannel | null = null;
+      try {
+        if (typeof BroadcastChannel !== 'undefined') {
+          bc = new BroadcastChannel(ROUND_BC_NAME);
+          bc.onmessage = (ev: MessageEvent) => {
+            const data = ev.data as {
+              to?: string;
+              from?: string;
+              msg?: unknown;
+            } | null;
+            if (!data || data.to !== round.pubkey) return;
+            if (typeof data.from !== 'string' || data.from.length < 32) return;
+            const content =
+              typeof data.msg === 'string'
+                ? data.msg
+                : JSON.stringify(data.msg ?? null);
+            const parsed = parseRoundMessage(content);
+            if (!parsed) return;
+            handler(data.from, parsed);
+          };
+        }
+      } catch {
+        bc = null;
+      }
+
       return () => {
         sub.close();
         outputSub?.close();
+        try {
+          bc?.close();
+        } catch {
+          /* ignore */
+        }
       };
     },
 

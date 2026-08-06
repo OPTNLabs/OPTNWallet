@@ -939,9 +939,8 @@ export async function runP2pFusion(
       // Surface a single actionable line on the CashFusion panel.
       if (/timed out|timeout/i.test(raw)) {
         throw new Error(
-          `Could not agree on a round (${group.participants.length} in your view). ` +
-            `The other wallets may have already fused without you. ` +
-            `Start P2P again on ALL wallets at the same time.`
+          `Could not agree on a round (${group.participants.length} peers). ` +
+            `Peers may have timed out or left — Auto will retry; check Tor + relays.`
         );
       }
       throw error;
