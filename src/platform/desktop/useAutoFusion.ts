@@ -104,10 +104,11 @@ export function useAutoFusion(): void {
   /** Bumped whenever the wallet session changes, to strand stale completions. */
   const sessionRef = useRef(0);
   const activeControllerRef = useRef<AbortController | null>(null);
-  // What these settings ARE, not which objects they happen to be. `nostrRelays`
-  // and `fusionServers` are arrays rebuilt on most renders, so keying the abort
-  // below on identity cancelled live rounds whenever anything re-rendered —
-  // while the settings themselves had not changed at all.
+  // Abort ONLY when the user actually left the auto session (wallet, network,
+  // fusion/tor master switches). Do NOT include `nostrRelays` / `fusionServers`:
+  // auto health refresh and HMR re-serialize those arrays and used to cancel
+  // live gathers mid-pool (observed: strict=1 then "fusion round cancelled"
+  // ~6s later while peers were still shouting — lethal for global auto).
   const sessionKey = JSON.stringify([
     walletId,
     network,
@@ -118,9 +119,8 @@ export function useAutoFusion(): void {
     torAuto,
     torHost,
     torPortManual,
-    nostrRelays,
-    savedFusionServer,
-    fusionServers,
+    // Selected server id only (not the full list identity).
+    savedFusionServer ?? '',
   ]);
   useEffect(() => {
     sessionRef.current += 1;
