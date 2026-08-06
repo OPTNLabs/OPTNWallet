@@ -94,6 +94,44 @@ const satsToBch = (sats: bigint): string => {
 const shortTxid = (txid: string): string =>
   txid.length > 18 ? `${txid.slice(0, 8)}…${txid.slice(-8)}` : txid;
 
+const SEND_STEPS = ['Prepare', 'Sign', 'Broadcast'] as const;
+
+/**
+ * Where the user is in the air-gapped round trip.
+ *
+ * Sending here is a sequence — build, carry to the device, carry back, send —
+ * and showing all of it at once made a wall of controls out of what is really
+ * three short stages. The current stage is derived from the transaction's own
+ * state rather than tracked separately, so the indicator cannot disagree with
+ * what the screen is actually doing.
+ */
+const StepBar: FC<{ current: 1 | 2 | 3 }> = ({ current }) => (
+  <ol className="flex items-center gap-1.5" aria-label="Progress">
+    {SEND_STEPS.map((label, index) => {
+      const position = index + 1;
+      const done = position < current;
+      const active = position === current;
+      return (
+        <li key={label} className="flex flex-1 items-center gap-1.5">
+          <span
+            aria-current={active ? 'step' : undefined}
+            className={`flex-1 rounded-md px-2 py-1 text-center text-[11px] font-semibold ${
+              active
+                ? 'bg-[var(--wallet-accent)] text-black'
+                : done
+                  ? 'border border-emerald-500/40 text-emerald-400'
+                  : 'border border-[var(--wallet-border)] wallet-muted'
+            }`}
+          >
+            {done ? '✓ ' : ''}
+            {label}
+          </span>
+        </li>
+      );
+    })}
+  </ol>
+);
+
 const toHex = (bytes: Uint8Array): string =>
   Array.from(bytes)
     .map((byte) => byte.toString(16).padStart(2, '0'))
@@ -645,6 +683,24 @@ export const WatchOnlySend: FC = () => {
 
   const frameNumber = (frameIndexRef.current % frameCountRef.current) + 1;
 
+  const step: 1 | 2 | 3 = broadcastTxid ? 3 : proposalState ? 2 : 1;
+
+  /**
+   * Return to editing. Any signature already collected was made over the exact
+   * transaction being discarded, so it cannot carry over — the button says so
+   * rather than silently dropping it.
+   */
+  const handleEditProposal = () => {
+    setProposalState(null);
+    setFrames(null);
+    setQrUri('');
+    setMergedPsbt(null);
+    setImportErrors([]);
+    setImportText('');
+    setBroadcastTxid('');
+    setError('');
+  };
+
   return (
     <WalletScreen maxWidthClassName="max-w-md" scrollable={false}>
       <div className="flex h-full min-h-0 flex-col gap-4">
@@ -659,13 +715,50 @@ export const WatchOnlySend: FC = () => {
           <h1 className="text-lg font-bold wallet-text-strong">Watch-only Send</h1>
         </div>
 
+        <StepBar current={step} />
+
         <div className="flex-1 min-h-0 overflow-y-auto overscroll-contain pr-1 space-y-4">
           {busy ? (
             <p className="text-sm wallet-muted">Loading coins…</p>
           ) : (
             <>
+              {/* Once built, the form and coin list step aside for a summary of
+                  what is being signed — the user's attention belongs on the QR
+                  and the device, not on controls that no longer apply. */}
+              {step > 1 && proposalState && (
+                <section className="wallet-card space-y-2 p-4">
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="min-w-0 space-y-1">
+                      <p className="text-sm font-semibold wallet-text-strong">
+                        Sending {amountText || '0'} BCH
+                      </p>
+                      <p className="break-all text-[11px] wallet-muted">
+                        to {recipient}
+                      </p>
+                      <p className="text-[11px] wallet-muted">
+                        {selectedInputs.length} coin
+                        {selectedInputs.length === 1 ? '' : 's'} · fee{' '}
+                        {satsToBch(proposalState.feeSats)} BCH · change{' '}
+                        {satsToBch(proposalState.changeSats)} BCH
+                      </p>
+                    </div>
+                    {!broadcastTxid && (
+                      <button
+                        type="button"
+                        onClick={handleEditProposal}
+                        className="wallet-btn-secondary shrink-0 px-3 py-1.5 text-xs"
+                      >
+                        {mergedPsbt ? 'Edit — discards signatures' : 'Edit'}
+                      </button>
+                    )}
+                  </div>
+                </section>
+              )}
+
               {/* Step 1: coin control */}
-              <section className="wallet-card space-y-2 p-4">
+              <section
+                className={`wallet-card space-y-2 p-4 ${step === 1 ? '' : 'hidden'}`}
+              >
                 <div className="flex items-center justify-between">
                   <p className="text-sm font-semibold wallet-text-strong">
                     Coins to spend
@@ -750,7 +843,9 @@ export const WatchOnlySend: FC = () => {
               </section>
 
               {/* Step 2: destination + amount */}
-              <section className="wallet-card space-y-3 p-4">
+              <section
+                className={`wallet-card space-y-3 p-4 ${step === 1 ? '' : 'hidden'}`}
+              >
                 <label className="block space-y-1 text-sm wallet-text-strong">
                   Destination (cashaddr)
                   <input
@@ -781,34 +876,47 @@ export const WatchOnlySend: FC = () => {
                     <span>Fee {satsToBch(proposalState.feeSats)} BCH</span>
                   )}
                 </div>
-                <label className="block space-y-1 text-sm wallet-text-strong">
-                  Master fingerprint{' '}
-                  <span className="text-[11px] font-normal wallet-muted">
-                    (optional)
-                  </span>
-                  <input
-                    value={fingerprint}
-                    onChange={(event) => {
-                      setFingerprint(event.target.value);
-                      setError('');
-                    }}
-                    placeholder="8 hex chars, e.g. 4c9a1f7b"
-                    maxLength={8}
-                    autoComplete="off"
-                    spellCheck={false}
-                    className="wallet-input w-full rounded-md px-3 py-2 font-mono text-sm uppercase"
-                  />
-                </label>
-                {fingerprint && !masterFingerprintBytes(fingerprint) && (
-                  <p className="text-[11px] text-red-400">
-                    Must be exactly 8 hex characters.
+                {/* Set once per wallet and remembered, so it stays out of the
+                    way of every later send. */}
+                <details className="text-xs">
+                  <summary className="cursor-pointer wallet-muted">
+                    Signer options
+                    {!fingerprint && ' — no master fingerprint set'}
+                  </summary>
+                  <label className="mt-2 block space-y-1 text-sm wallet-text-strong">
+                    Master fingerprint{' '}
+                    <span className="text-[11px] font-normal wallet-muted">
+                      (optional)
+                    </span>
+                    <input
+                      value={fingerprint}
+                      onChange={(event) => {
+                        setFingerprint(event.target.value);
+                        setError('');
+                      }}
+                      placeholder="8 hex chars, e.g. 4c9a1f7b"
+                      maxLength={8}
+                      autoComplete="off"
+                      spellCheck={false}
+                      className="wallet-input w-full rounded-md px-3 py-2 font-mono text-sm uppercase"
+                    />
+                  </label>
+                  {fingerprint && !masterFingerprintBytes(fingerprint) && (
+                    <p className="mt-1 text-[11px] text-red-400">
+                      Must be exactly 8 hex characters.
+                    </p>
+                  )}
+                  <p className="mt-2 text-[11px] leading-relaxed wallet-muted">
+                    SeedCash shows this on the same screen as Export Xpub. It
+                    cannot be derived from the xPub, and it is not used to
+                    produce the signature — it is what lets the device show
+                    these coins as its own while you review the transaction.
                   </p>
-                )}
+                </details>
                 {!fingerprint && (
                   <p className="text-[11px] leading-relaxed text-amber-400">
-                    Without it SeedCash will still sign, but its review screen
-                    will not show these coins as yours — you would be approving
-                    a transaction the device cannot confirm belongs to you.
+                    No master fingerprint set — SeedCash will still sign, but it
+                    will not show these coins as yours while you review.
                   </p>
                 )}
                 <button
@@ -819,13 +927,6 @@ export const WatchOnlySend: FC = () => {
                 >
                   Build unsigned transaction
                 </button>
-                <p className="text-[11px] leading-relaxed wallet-muted">
-                  SeedCash shows this on the same screen as Export Xpub. It
-                  cannot be derived from the xPub — the account key has a
-                  different fingerprint from the master key. It is not used to
-                  produce the signature, only to let the device recognise the
-                  coins as its own, so it is worth entering once.
-                </p>
               </section>
 
               {/* Step 3: animated QR export */}
