@@ -61,9 +61,11 @@ import { planP2pOutputValues } from './nostr/fusionP2pAllocation';
 import { DEFAULT_RELAYS } from './nostr/chat';
 import {
   P2P_COMPONENT_JITTER_MS,
+  P2P_GATHER_FAST_WARMUP_MS,
   P2P_GATHER_MAX_MS,
   P2P_GATHER_MIN_MS,
   P2P_PEAK_GRACE_MS,
+  P2P_PEER_SET_STABLE_FAST_MS,
   P2P_PEER_SET_STABLE_MS,
   P2P_PROPOSAL_TIMEOUT_MS,
   P2P_RENDEZVOUS_MS,
@@ -78,7 +80,9 @@ const P2P_TIERS = [10_000, 100_000, 1_000_000, 10_000_000];
 // this service cannot disagree. They did: this file capped a round at 10 while
 // the rendezvous truncated the candidate list to 6, so four peers could be
 // admitted here and then silently dropped downstream.
-const MAX_RELAYS = 8;
+// Allow full DEFAULT_RELAYS bootstrap (+ a few user adds); old 8 silently
+// truncated multi-relay redundancy.
+const MAX_RELAYS = 24;
 let wsInstalled = false;
 
 export const P2P_PHASE_LABELS = [
@@ -255,56 +259,69 @@ async function collectRolling(
       );
     }
     // Alone or under-count: re-shout often so a lagging Tor peer still finds us.
+    // Use MIN/MAX policy constants — not a bare "3".
     if (
-      peers.length < Math.max(3, peakSoft, peakStrict) &&
+      peers.length < Math.max(MIN_PARTICIPANTS, peakSoft, peakStrict) &&
       announceNow &&
       now - lastAnnounceBoost > 3_000
     ) {
       lastAnnounceBoost = now;
       void announceNow().catch(() => undefined);
     }
-    const pastMin = now >= minReady;
-    const setStable = pastMin && now - stableSince >= PEER_SET_STABLE_MS;
+    const n = peers.length;
+    const atCap = n >= MAX_PARTICIPANTS;
+    const enough = n >= MIN_PARTICIPANTS;
+    const elapsed = now - start;
+    const stableFor = now - stableSince;
     const peakGraceLeft = Math.max(
       0,
       P2P_PEAK_GRACE_MS - (now - lastAtPeakMs)
     );
     const peakGraceExpired = peakGraceLeft === 0;
-    // Soft lag / peak drop only block EARLY lock for a short grace. Forever
-    // "peak 4/4 now 2" was a hang: others already Registered without us.
+    // Soft lag / peak drop only block EARLY lock for a short grace.
     const expectMoreFromSoft =
       soft.length > peers.length &&
       now - lastSoftCaughtUpMs < P2P_PEAK_GRACE_MS;
-    const lostFromPeak = peakStrict > peers.length && peakStrict >= 3;
+    const lostFromPeak =
+      peakStrict > peers.length && peakStrict >= MIN_PARTICIPANTS;
     const expectMoreFromPeak = lostFromPeak && !peakGraceExpired;
-    // Soft and strict disagree (soft inflated or lagging): wait until they match
-    // or soft-grace expires so one wallet does not propose 4 while another has 3.
+    // Soft and strict disagree: wait until match or soft-grace expires
+    // so one wallet does not propose N while another sees N-1.
     const viewsAligned =
       soft.length === peers.length ||
       now - lastSoftCaughtUpMs >= P2P_PEAK_GRACE_MS;
     const expectMore =
       expectMoreFromSoft || expectMoreFromPeak || !viewsAligned;
-    // Policy (≤ server JOIN_WAIT; floor = MIN_PARTICIPANTS = 3 like CashFusion privacy):
-    //   • 4+: lock when stable, views aligned, and not mid-grace lag
-    //   • 3:  stable + short hold for a possible 4th, unless expectMore
-    //   • 2:  never lock — wait maxWait then fail (onion needs ≥3)
-    const trioReady =
-      peers.length === 3 &&
-      setStable &&
-      now >= start + SMALL_SET_HOLD_MS &&
-      !expectMore;
-    const canLock =
-      peers.length >= 4
-        ? setStable && !expectMore
-        : trioReady;
-    // Live: w4 kept shouting ~100s after w1+w6 fused (peak 3 → alone).
-    // Once we HAD peers and peak-grace expired with only self left, stop —
-    // they are not coming back this gather; full JOIN_WAIT is wasted budget.
+    // ── Lock policy (MIN/MAX driven — raise MAX_PARTICIPANTS later without
+    // rewriting "4" / "3" branches):
+    //   • n >= MAX: fast lock (short warm-up + short stable), no "wait for more"
+    //   • MIN <= n < MAX: normal min gather + stable + short hold for more
+    //     toward MAX (unless expectMore / peak already equal n)
+    //   • n < MIN: never lock early — wait maxWait or alone-after-peak abort
+    const pastFastWarmup = elapsed >= P2P_GATHER_FAST_WARMUP_MS;
+    const pastMin = elapsed >= POOL_WAIT_MIN_MS;
+    const stableNormal = stableFor >= PEER_SET_STABLE_MS;
+    const stableFast = stableFor >= P2P_PEER_SET_STABLE_FAST_MS;
+    const pastSmallHold = elapsed >= SMALL_SET_HOLD_MS;
+    // At cap: we are done growing the set — lock ASAP (still need alignment).
+    const fullSetReady =
+      atCap && pastFastWarmup && stableFast && !expectMore;
+    // Partial legal set: allow more toward MAX for a short window, then lock.
+    const partialSetReady =
+      enough &&
+      !atCap &&
+      pastMin &&
+      stableNormal &&
+      !expectMore &&
+      (n >= peakStrict || pastSmallHold || peakGraceExpired);
+    const canLock = fullSetReady || partialSetReady;
+    // Live: kept shouting after others fused (peak → alone). Once peak-grace
+    // expired with only self left, stop — full JOIN_WAIT is wasted budget.
     if (
-      peers.length < MIN_PARTICIPANTS &&
+      n < MIN_PARTICIPANTS &&
       peakStrict >= 2 &&
       peakGraceExpired &&
-      now - start >= P2P_PEAK_GRACE_MS
+      elapsed >= P2P_PEAK_GRACE_MS
     ) {
       throw new Error(
         `No peers left (peak was ${peakStrict}, now only you). ` +
@@ -314,24 +331,24 @@ async function collectRolling(
     }
     if (canLock || now >= maxWait) {
       onStatus?.(
-        `Gather done: ${peers.length} active wallet(s) ` +
+        `Gather done: ${n} active wallet(s) ` +
           `(soft ${soft.length}, peak strict/soft ${peakStrict}/${peakSoft}; ` +
-          `stable=${canLock}, ${Math.round((now - start) / 1000)}s).`
+          `cap=${MAX_PARTICIPANTS}, stable=${canLock}, ${Math.round(elapsed / 1000)}s).`
       );
       return peers;
     }
     const keyHint =
-      peers.length > 0
+      n > 0
         ? ` [${peers.map((p) => p.pubkey.slice(0, 6)).join(' ')}]`
         : soft.length > 1
           ? ` [soft ${soft.length}…]`
           : '';
     const secsLeft = Math.max(0, Math.ceil((maxWait - now) / 1_000));
-    if (peers.length < 2) {
+    if (n < 2) {
       const aloneAfterOthers =
         peakStrict >= 2 && peakGraceLeft > 0
           ? ` Peers left (peak ${peakStrict}); giving up in ${Math.ceil(peakGraceLeft / 1000)}s if no one returns…`
-          : now - start > 12_000
+          : elapsed > 12_000
             ? ' Still shouting — if others already fused, Cancel + Start ALL together.'
             : soft.length > 1 || peakSoft > 1
               ? ' Dropping ghosts; waiting for re-announces…'
@@ -339,33 +356,54 @@ async function collectRolling(
       onStatus?.(
         `Only you confirmed active${keyHint} (up to ${secsLeft}s).${aloneAfterOthers}`
       );
-    } else if (peers.length === 2) {
-      // CashFusion-style floor is 3 — never start a pair; hold for a 3rd.
+    } else if (n < MIN_PARTICIPANTS) {
       onStatus?.(
-        `2 active${keyHint} — need ≥${MIN_PARTICIPANTS} for P2P (onion privacy); ` +
-          `waiting for another wallet (${secsLeft}s left)…`
+        `${n} active${keyHint} — need ≥${MIN_PARTICIPANTS} for P2P (onion privacy); ` +
+          `waiting for more wallets (${secsLeft}s left)…`
       );
-    } else if (peers.length >= MIN_PARTICIPANTS && pastMin) {
+    } else if (atCap) {
       const needStable = Math.max(
         0,
-        Math.ceil((PEER_SET_STABLE_MS - (now - stableSince)) / 1_000)
+        Math.ceil((P2P_PEER_SET_STABLE_FAST_MS - stableFor) / 1_000)
+      );
+      const needWarm = Math.max(
+        0,
+        Math.ceil((P2P_GATHER_FAST_WARMUP_MS - elapsed) / 1_000)
+      );
+      onStatus?.(
+        `${n}/${MAX_PARTICIPANTS} full set${keyHint} — fast lock` +
+          (needWarm > 0 ? ` warm ${needWarm}s` : '') +
+          (needStable > 0 ? ` stable ${needStable}s` : '') +
+          (expectMore ? ' (aligning views…)' : '') +
+          '…'
+      );
+    } else if (enough && pastMin) {
+      const needStable = Math.max(
+        0,
+        Math.ceil((PEER_SET_STABLE_MS - stableFor) / 1_000)
+      );
+      const holdLeft = Math.max(
+        0,
+        Math.ceil((SMALL_SET_HOLD_MS - elapsed) / 1_000)
       );
       const holdNote = expectMore
         ? ` waiting up to ${Math.ceil(peakGraceLeft / 1000)}s for peak ${peakStrict}`
-        : peers.length === 3
-          ? ` hold ${Math.max(0, Math.ceil((start + SMALL_SET_HOLD_MS - now) / 1000))}s for a 4th`
-          : '';
+        : n < MAX_PARTICIPANTS && holdLeft > 0 && n < peakStrict
+          ? ` hold ${holdLeft}s toward ${MAX_PARTICIPANTS}`
+          : n < MAX_PARTICIPANTS && holdLeft > 0
+            ? ` hold ${holdLeft}s for more (max ${MAX_PARTICIPANTS})`
+            : '';
       onStatus?.(
-        `${peers.length} active${keyHint} — ${needStable}s stable${holdNote}…`
+        `${n} active${keyHint} — ${needStable}s stable${holdNote}…`
       );
-    } else if (peers.length >= MIN_PARTICIPANTS) {
+    } else if (enough) {
       const inSecs = Math.max(0, Math.ceil((minReady - now) / 1_000));
       onStatus?.(
-        `${peers.length} active wallet(s)${keyHint} — min gather ${inSecs}s…`
+        `${n} active wallet(s)${keyHint} — min gather ${inSecs}s…`
       );
     } else {
       onStatus?.(
-        `Waiting: ${peers.length} active${keyHint} (up to ${secsLeft}s)…`
+        `Waiting: ${n} active${keyHint} (up to ${secsLeft}s)…`
       );
     }
     await waitUntil(Math.min(maxWait, now + 2_000), signal);

@@ -170,9 +170,10 @@ export function isLivePoolAnnouncement(
   if (opts.lockStrict) {
     return peer.at >= opts.gatherStartSeconds - 3;
   }
-  // After ~2 re-announce periods, demand re-publish during this gather so
-  // abandoned Starts (static created_at) drop while Tor lag still allows live.
-  if (elapsed >= POOL_REANNOUNCE_SECONDS * 2) {
+  // After ~1 re-announce cycle, demand re-publish during this gather so
+  // abandoned Starts (static created_at) drop faster (ghost soft inflation).
+  // Tor lag still allows live peers who refresh every POOL_REANNOUNCE_SECONDS.
+  if (elapsed >= POOL_REANNOUNCE_SECONDS) {
     return peer.at >= opts.gatherStartSeconds - 3;
   }
   return true;

@@ -305,7 +305,20 @@ describe('P2P fusion coordination', () => {
         base
       )
     ).toBe(false);
-    // Early gather: recently heard peer counts even if created_at is a bit old.
+    // Very early gather (< one re-announce cycle): recently heard peer counts
+    // even if created_at is a bit old. After one cycle we demand fresh `at`.
+    expect(
+      isLivePoolAnnouncement(
+        {
+          pubkey: live,
+          at: gatherStart - 10,
+          seenAt: gatherStart + 1,
+          expiresAt: gatherStart + 60,
+        },
+        { ...base, nowSeconds: gatherStart + 2 }
+      )
+    ).toBe(true);
+    // After one re-announce period, stale created_at is a ghost.
     expect(
       isLivePoolAnnouncement(
         {
@@ -316,7 +329,7 @@ describe('P2P fusion coordination', () => {
         },
         { ...base, nowSeconds: gatherStart + 5 }
       )
-    ).toBe(true);
+    ).toBe(false);
     // Explicit ghost list (own / retired).
     expect(
       isLivePoolAnnouncement(

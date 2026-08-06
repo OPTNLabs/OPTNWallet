@@ -59,23 +59,32 @@ export const SERVER_SESSION_CEILING_MS =
 export const P2P_GATHER_MAX_MS = SERVER_JOIN_WAIT_MS;
 
 /**
- * Min gather before locking a full stable set.
- * Was 30s — live already had strict=4 by ~t+4s; 15s matches T_END_COMPS and
- * still absorbs Tor skew without burning half the session on countdown.
+ * Min gather before locking a *partial* set (MIN ≤ n < MAX).
+ * Full MAX set uses {@link P2P_GATHER_FAST_WARMUP_MS} instead — do not burn
+ * this whole window when already at cap.
  */
-export const P2P_GATHER_MIN_MS = SERVER_COMPS_END_MS;
+export const P2P_GATHER_MIN_MS = 10_000;
 
 /**
- * Extra hold for a stable 3-set so a 4th can join (under JOIN_WAIT).
- * Pairs only lock at maxWait or after peak-grace abandonment.
+ * Brief warm-up before locking a *full* MAX set (Tor skew + one re-announce).
+ * Live often saw full sets by ~4–8s; 5s is enough without hardcoded "4".
  */
-export const P2P_SMALL_SET_HOLD_MS = 45_000;
+export const P2P_GATHER_FAST_WARMUP_MS = 5_000;
 
 /**
- * Unchanged membership before lock.
- * Was 12s; 6s is enough once min-gather passed (live set was stable for 20s+).
+ * Extra hold when we have MIN..MAX-1 so more peers can join (under JOIN_WAIT).
+ * Scales with policy: "wait for more toward MAX", not "wait for a 4th".
  */
-export const P2P_PEER_SET_STABLE_MS = 6_000;
+export const P2P_SMALL_SET_HOLD_MS = 20_000;
+
+/**
+ * Unchanged membership before lock (normal path).
+ * Full MAX set may use {@link P2P_PEER_SET_STABLE_FAST_MS}.
+ */
+export const P2P_PEER_SET_STABLE_MS = 4_000;
+
+/** Stability required when already at MAX_PARTICIPANTS (fast lock). */
+export const P2P_PEER_SET_STABLE_FAST_MS = 2_500;
 
 /**
  * After live set drops below peak, wait this long then accept reduced set.
