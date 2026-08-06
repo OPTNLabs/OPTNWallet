@@ -56,6 +56,18 @@ export function normalizeRelayUrl(url: string): string {
   return url.trim().toLowerCase().replace(/\/+$/, '');
 }
 
+/**
+ * Former bootstrap / known-dead hosts. Dropped from the built-in list and
+ * stripped from persisted user extras so they stop showing as removable reds.
+ */
+export const RETIRED_RELAYS: readonly string[] = [
+  'wss://nostrue.com',
+  'wss://relay.0xchat.com',
+];
+
+const RETIRED_SET = () =>
+  new Set(RETIRED_RELAYS.map((r) => normalizeRelayUrl(r)));
+
 /** True when this URL is a built-in bootstrap relay (not user-added). */
 export function isDefaultNostrRelay(url: string): boolean {
   const key = normalizeRelayUrl(url);
@@ -65,19 +77,21 @@ export function isDefaultNostrRelay(url: string): boolean {
 
 /**
  * Merge bootstrap set with user list; bootstrap first (canonical URLs), then
- * user extras that are not defaults. Former bootstrap entries that left the
- * built-in list stay as removable extras until the user deletes them.
+ * user extras that are not defaults. Retired dead hosts are stripped so they
+ * do not linger as removable reds after we drop them from DEFAULT_RELAYS.
  */
 export function mergeWithDefaultRelays(relays: string[] | undefined | null): string[] {
+  const retired = RETIRED_SET();
   const user = (relays ?? [])
     .map((r) => r.trim())
-    .filter((r) => r.length > 0);
+    .filter((r) => r.length > 0)
+    .filter((r) => !retired.has(normalizeRelayUrl(r)));
   const seen = new Set<string>();
   const out: string[] = [];
   // Always emit canonical DEFAULT_RELAYS strings first (stable, non-removable).
   for (const r of DEFAULT_RELAYS) {
     const key = normalizeRelayUrl(r);
-    if (seen.has(key)) continue;
+    if (seen.has(key) || retired.has(key)) continue;
     seen.add(key);
     out.push(r);
   }
