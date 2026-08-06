@@ -76,7 +76,15 @@ import {
 import { log } from './logger';
 
 const P2P_FEERATE = 1_000; // sats per 1000 bytes
-const P2P_TIERS = [10_000, 100_000, 1_000_000, 10_000_000];
+// Sat tiers (privacy size bands). Cap is MAX_TIERS=16 in nostr/fusion.ts.
+// 1 BCH = 100_000_000 so large wallets can meet without dumping full balance.
+const P2P_TIERS = [
+  10_000, // 0.0001 BCH
+  100_000, // 0.001 BCH
+  1_000_000, // 0.01 BCH
+  10_000_000, // 0.1 BCH
+  100_000_000, // 1 BCH
+];
 // Participant bounds live in nostr/fusion.ts so the pool, the rendezvous and
 // this service cannot disagree. They did: this file capped a round at 10 while
 // the rendezvous truncated the candidate list to 6, so four peers could be
