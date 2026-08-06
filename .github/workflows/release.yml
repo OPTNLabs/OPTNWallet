@@ -336,7 +336,8 @@ jobs:
             target: x86_64-unknown-linux-gnu
             tor-target: linux-x86_64
             artifact-name: desktop-linux
-          # Native ARM runner — AppImage + deb/rpm for aarch64 (Raspberry Pi, ARM servers).
+          # Native ARM runner. AppImage is the portable ship for every Linux distro
+          # (Ubuntu, Fedora, Arch, …) on aarch64 — same role as x64 AppImage.
           - platform: ubuntu-24.04-arm
             target: aarch64-unknown-linux-gnu
             tor-target: linux-aarch64
@@ -560,10 +561,12 @@ jobs:
           require_asset artifacts/desktop-windows '*.msi' 'Windows MSI installer'
           require_asset artifacts/desktop-macos-arm '*.dmg' 'macOS Apple Silicon DMG'
           require_asset artifacts/desktop-macos-intel '*.dmg' 'macOS Intel DMG'
+          # AppImage = distro-portable Linux ship (works across Ubuntu/Debian/Fedora/Arch/…).
+          # deb/rpm are convenience packages for those package managers only.
+          require_asset artifacts/desktop-linux '*.AppImage' 'Linux x64 AppImage (portable, all distros)'
+          require_asset artifacts/desktop-linux-arm '*.AppImage' 'Linux ARM64 AppImage (portable, all distros)'
           require_asset artifacts/desktop-linux '*.deb' 'Linux x64 DEB package'
           require_asset artifacts/desktop-linux '*.rpm' 'Linux x64 RPM package'
-          require_asset artifacts/desktop-linux '*.AppImage' 'Linux x64 AppImage'
-          require_asset artifacts/desktop-linux-arm '*.AppImage' 'Linux ARM64 AppImage'
           require_asset artifacts/browser-extensions '*.zip' 'browser extension archive'
           test -f "artifacts/browser-extensions/OPTNWallet-${RELEASE_TAG}-chrome.zip"
           test -f "artifacts/browser-extensions/OPTNWallet-${RELEASE_TAG}-firefox.zip"
@@ -638,8 +641,8 @@ jobs:
             - Windows x64: `.exe` and `.msi` installers
             - macOS Apple Silicon (M1 and later): `.dmg`
             - macOS Intel: `.dmg`
-            - Linux x64: native `.deb` and `.rpm` packages, plus a portable `.AppImage`
-            - Linux ARM64 (aarch64): portable `.AppImage` (and native packages when produced)
+            - **Linux (all distros): portable `.AppImage`** — x64 and ARM64. One file runs on Ubuntu, Debian, Fedora, Arch, and most other desktop Linux without a distro-specific package.
+            - Linux x64 also ships native `.deb` and `.rpm` for users who prefer package managers
             - Chrome/Chromium and Firefox extension bundles: `.zip`
             ${{ needs.android.outputs.signed == 'true' && '- Android: signed `.apk` for direct installation and `.aab` for Play distribution' || '- Android: not included yet; configure the permanent production keystore and rerun the release workflow' }}
 
