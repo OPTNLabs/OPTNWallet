@@ -1,5 +1,4 @@
 // src/workers/UTXOWorkerService.ts
-import { Capacitor } from '@capacitor/core';
 import KeyService from '../services/KeyService';
 import UTXOService from '../services/UTXOService';
 import ElectrumService from '../services/ElectrumService';
@@ -406,22 +405,16 @@ export async function bootstrapAllUTXOs(expectedEpoch?: number) {
       /* optional on non-desktop */
     }
 
-    // Prefer a live Electrum socket early so discovery/UTXO batches do not
-    // spend the first minute walking dead hosts with a frozen 5% bar.
-    try {
-      await ElectrumService.ensureFreshConnection();
-    } catch (e) {
-      logError('UTXOWorker.bootstrapAllUTXOs.ensureFreshConnection', e, {
-        walletId: currentWalletId,
-      });
-    }
-    if (!bootstrapIsCurrent()) return;
-    report(8);
-
-    // Wallet-owned and explicitly tracked addresses share one fresh Electrum
-    // batch. Bootstrap must not reuse the short UTXO cache: this run replaces the
-    // old per-address baseline scans after subscriptions are established.
+    // Connect + load tracked addresses in parallel — do not serialize a
+    // socket wait with Quantumroot SQL that never needed the network.
     const walletAddresses = keyPairs.map((keyPair) => keyPair.address);
+    const connectPromise = ElectrumService.ensureFreshConnection().catch(
+      (e) => {
+        logError('UTXOWorker.bootstrapAllUTXOs.ensureFreshConnection', e, {
+          walletId: currentWalletId,
+        });
+      }
+    );
     let quantumrootAddresses: string[] = [];
     try {
       // listTrackedAddresses must stay O(vaults). It previously re-derived a
@@ -439,17 +432,56 @@ export async function bootstrapAllUTXOs(expectedEpoch?: number) {
     const trackedAddresses = Array.from(
       new Set([...walletAddresses, ...quantumrootAddresses].filter(Boolean))
     );
+
+    // ── Provisional paint (safe) ────────────────────────────────────────
+    // Show last durable SQL balance immediately while Syncing… stays on.
+    // Earlier we refused this because a silent stale→correct flash looked
+    // like a bug; with the Sync bar + force listunspent below, the network
+    // still wins and users get a usable Home in <100ms on reopen.
+    try {
+      const sqlSnap = await UTXOService.fetchUTXOsFromDatabase(
+        trackedAddresses.map((address) => ({ address }))
+      );
+      if (!bootstrapIsCurrent()) return;
+      const provisional: Record<string, UTXO[]> = {};
+      let provisionalCoins = 0;
+      for (const address of trackedAddresses) {
+        const merged = [
+          ...(sqlSnap.utxosMap[address] ?? []),
+          ...(sqlSnap.cashTokenUtxosMap[address] ?? []),
+        ];
+        if (merged.length > 0) {
+          provisional[address] = merged;
+          provisionalCoins += merged.length;
+        }
+      }
+      if (provisionalCoins > 0) {
+        store.dispatch(replaceAllUTXOs({ utxosByAddress: provisional }));
+        store.dispatch(setInitialized(true));
+        console.info('[UTXOWorker] provisional SQL paint', {
+          addresses: Object.keys(provisional).length,
+          coins: provisionalCoins,
+        });
+      }
+    } catch (e) {
+      logError('UTXOWorker.bootstrapAllUTXOs.provisionalSql', e, {
+        walletId: currentWalletId,
+      });
+    }
+    if (!bootstrapIsCurrent()) return;
+    report(15);
+
+    // Socket should be warm before the HOT listunspent pass.
+    await connectPromise;
+    if (!bootstrapIsCurrent()) return;
+    report(20);
+
     for (const address of trackedAddresses) invalidateUTXOCache(address);
 
     // ── Open (HOT / OPTN 1.7.0) ─────────────────────────────────────────
-    // Do NOT paint SQL into Redux before listunspent. That caused a brief
-    // "fake balance" flash (stale disk → correct network) on wallets like 7.
-    // Progress bar covers the wait; balance appears from one authoritative pass.
-    report(20);
-
+    // force:true — full listunspent of known addresses. Network result
+    // replaces the provisional SQL paint above (authoritative).
     const fetchStart = performance.now();
-    // force:true on open: full listunspent of known addresses (HOT).
-    // Per-address subscription ticks still use addressHistoryIsFresh (worker).
     const fetchedWalletUTXOs = await UTXOService.fetchAndStoreUTXOsMany(
       currentWalletId,
       trackedAddresses,
@@ -477,7 +509,7 @@ export async function bootstrapAllUTXOs(expectedEpoch?: number) {
       allUTXOs[address] = utxos;
     }
 
-    // Contract instances
+    // Contract instances (optional; do not block balance paint)
     try {
       // The contract cache is global, but this worker owns exactly one wallet.
       // Scanning every wallet's contracts in every window caused cross-wallet
@@ -510,18 +542,15 @@ export async function bootstrapAllUTXOs(expectedEpoch?: number) {
 
     store.dispatch(replaceAllUTXOs({ utxosByAddress: allUTXOs }));
 
+    // Token icons never block balance/sync completion (web or native).
     const tokenCategories = collectTokenCategories(allUTXOs);
     if (tokenCategories.length > 0) {
-      if (Capacitor.getPlatform() === 'web') {
-        void preloadTokenMetadata(tokenCategories).catch((error) => {
-          logError('UTXOWorker.bootstrapAllUTXOs.preloadTokenMetadata', error, {
-            walletId: currentWalletId,
-            categoryCount: tokenCategories.length,
-          });
+      void preloadTokenMetadata(tokenCategories).catch((error) => {
+        logError('UTXOWorker.bootstrapAllUTXOs.preloadTokenMetadata', error, {
+          walletId: currentWalletId,
+          categoryCount: tokenCategories.length,
         });
-      } else {
-        await preloadTokenMetadata(tokenCategories);
-      }
+      });
     }
     if (!bootstrapIsCurrent()) return;
 

@@ -52,4 +52,40 @@ describe('fulcrumReliability', () => {
     const ranked = rankServersForConnect(['x', 'y', 'z']);
     expect(ranked).toEqual(['x', 'y', 'z']);
   });
+
+  it('never lowers score on a successful (even slow) sample', () => {
+    // Open listunspent batches used to record multi-second wall-clock as
+    // latency and make the working host score *down* below never-tried peers.
+    recordServerSuccess('busy.example', 2_500);
+    recordServerSuccess('busy.example', 3_000);
+    const h = getServerHealth('busy.example');
+    expect(h.score).toBeGreaterThan(0);
+    expect(h.successes).toBe(2);
+
+    const ranked = rankServersForConnect([
+      'never.example',
+      'busy.example',
+      'bad.example',
+    ]);
+    recordServerFailure('bad.example');
+    const rankedAfterFail = rankServersForConnect([
+      'never.example',
+      'busy.example',
+      'bad.example',
+    ]);
+    expect(ranked[0]).toBe('busy.example');
+    expect(rankedAfterFail[0]).toBe('busy.example');
+    expect(rankedAfterFail.indexOf('bad.example')).toBe(
+      rankedAfterFail.length - 1
+    );
+  });
+
+  it('strongly prefers an explicit sticky/preferred host', () => {
+    recordServerSuccess('a.example', 30);
+    recordServerSuccess('b.example', 30);
+    const ranked = rankServersForConnect(['a.example', 'b.example', 'c.example'], {
+      preferred: 'c.example',
+    });
+    expect(ranked[0]).toBe('c.example');
+  });
 });

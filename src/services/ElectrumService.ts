@@ -71,6 +71,12 @@ const DETAILS_TTL_MS = 60000;
 // Smaller chunks + ElectrumServer.requestManyTimeoutMs(N) keep large wallets
 // (hundreds of addresses) from blowing the batch budget.
 const ELECTRUM_BATCH_SIZE = 50;
+/**
+ * How many listunspent chunks to fly at once on the same socket.
+ * Fully serial was safe but slow on large wallets; unbounded parallel
+ * overloaded Fulcrum (timeouts). Two in flight is the sweet spot we measured.
+ */
+const ELECTRUM_CHUNK_CONCURRENCY = 2;
 
 type ElectrumBatchCall = {
   method: string;
@@ -128,16 +134,30 @@ async function requestManyInChunks(
   for (let start = 0; start < calls.length; start += ELECTRUM_BATCH_SIZE) {
     chunks.push(calls.slice(start, start + ELECTRUM_BATCH_SIZE));
   }
-  // Sequential chunks: firing every 250-call batch in parallel overloaded the
-  // Electrum socket and made timeouts more likely under the old 12s budget.
+  // Bounded parallel: keep slot order so results map back to addresses.
+  // Concurrency 1 was correct but slow; unbounded parallel timed out.
+  const out: Array<RequestResponse | Error> = new Array(calls.length);
+  let nextChunk = 0;
   let completed = 0;
-  const out: Array<RequestResponse | Error> = [];
-  for (const chunk of chunks) {
-    const results = await server.requestMany(chunk);
-    out.push(...results);
-    completed += chunk.length;
-    onProgress?.(completed, calls.length);
-  }
+
+  const runWorker = async () => {
+    while (true) {
+      const chunkIndex = nextChunk;
+      nextChunk += 1;
+      if (chunkIndex >= chunks.length) return;
+      const chunk = chunks[chunkIndex];
+      const base = chunkIndex * ELECTRUM_BATCH_SIZE;
+      const results = await server.requestMany(chunk);
+      for (let i = 0; i < results.length; i++) {
+        out[base + i] = results[i];
+      }
+      completed += chunk.length;
+      onProgress?.(completed, calls.length);
+    }
+  };
+
+  const workers = Math.min(ELECTRUM_CHUNK_CONCURRENCY, chunks.length);
+  await Promise.all(Array.from({ length: workers }, () => runWorker()));
   return out;
 }
 

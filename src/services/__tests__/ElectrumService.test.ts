@@ -163,13 +163,44 @@ describe('ElectrumService', () => {
 
     const result = await ElectrumService.getUTXOsMany(addresses);
 
-    expect(
-      server.requestMany.mock.calls.map(([calls]) => calls.length)
     // Batch size 50 (was 250): 617 = 12×50 + 17. Live error was requestMany(250)@12s.
-    ).toEqual([
+    // Chunks may complete out of order under concurrency=2 — compare multiset.
+    const sizes = server.requestMany.mock.calls
+      .map(([calls]) => (calls as unknown[]).length)
+      .sort((a, b) => b - a);
+    expect(sizes).toEqual([
       50, 50, 50, 50, 50, 50, 50, 50, 50, 50, 50, 50, 17,
     ]);
+    expect(server.requestMany).toHaveBeenCalledTimes(13);
     expect(Object.keys(result)).toHaveLength(617);
+  });
+
+  it('runs at most two listunspent chunks concurrently', async () => {
+    let inFlight = 0;
+    let maxInFlight = 0;
+    const server = {
+      requestMany: vi.fn(async (calls: unknown[]) => {
+        inFlight += 1;
+        maxInFlight = Math.max(maxInFlight, inFlight);
+        await new Promise((r) => setTimeout(r, 15));
+        inFlight -= 1;
+        return (calls as unknown[]).map(() => []);
+      }),
+      subscribe: vi.fn(async () => {}),
+      unsubscribe: vi.fn(async () => {}),
+      onNotification: vi.fn(() => () => {}),
+    };
+    mockedElectrumServer.mockReturnValue(server as never);
+    const addresses = Array.from(
+      { length: 120 },
+      (_, index) => `bitcoincash:qpar${index}`
+    );
+
+    await ElectrumService.getUTXOsMany(addresses);
+
+    expect(maxInFlight).toBeLessThanOrEqual(2);
+    expect(maxInFlight).toBeGreaterThanOrEqual(2);
+    expect(server.requestMany).toHaveBeenCalledTimes(3); // 50+50+20
   });
 
   it('primeUTXOCache seeds cache used by getUTXOs', async () => {
