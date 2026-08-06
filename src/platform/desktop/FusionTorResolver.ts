@@ -2,6 +2,7 @@ import type { TorConfig } from '../../services/fusion/FusionStatusService';
 import {
   checkTorPort,
   detectTorPort,
+  INTEGRATED_TOR_SOCKS_PORT,
   integratedTorStatus,
   startIntegratedTor,
   type ManagedTorStatus,
@@ -34,6 +35,38 @@ const defaultProbes: FusionTorProbes = {
   detectPort: detectTorPort,
   checkPort: checkTorPort,
 };
+
+/** Tauri invoke rejections are often plain objects, not Error instances. */
+function errorMessage(error: unknown, fallback: string): string {
+  if (error instanceof Error && error.message) return error.message;
+  if (typeof error === 'string' && error.trim()) return error;
+  if (error && typeof error === 'object' && 'message' in error) {
+    const msg = (error as { message: unknown }).message;
+    if (typeof msg === 'string' && msg.trim()) return msg;
+  }
+  return fallback;
+}
+
+/**
+ * Prefer a SOCKS port that already answers as Tor — do not call tor_start
+ * when integrated tor.exe is already listening (live: "Could not start"
+ * while 9251 was open and healthy).
+ */
+async function useLiveSocksIfAny(
+  host: string,
+  ports: number[],
+  probes: FusionTorProbes
+): Promise<TorConfig | null> {
+  const seen = new Set<number>();
+  for (const port of ports) {
+    if (!Number.isInteger(port) || port <= 0 || port > 65_535) continue;
+    if (seen.has(port)) continue;
+    seen.add(port);
+    const ok = await probes.checkPort(host, port).catch(() => false);
+    if (ok) return { host, port };
+  }
+  return null;
+}
 
 /**
  * One-time startup check: ensure Tor is available for fusion. Checks in order:
@@ -102,8 +135,10 @@ export async function resolveFusionTransport(
     };
   }
 
+  let managedSocks = 0;
   try {
     const managed = await probes.integratedStatus();
+    managedSocks = managed.socks_port ?? 0;
     if (
       managed.running &&
       managed.bootstrap_percent >= 100 &&
@@ -116,6 +151,19 @@ export async function resolveFusionTransport(
         tor: { host: settings.host, port: managed.socks_port },
       };
     }
+    // Flags say "not ready" but SOCKS may already be live (stale bootstrap %,
+    // adopted process, multi-window Start). Probe before waiting 180s on start.
+    // Only probe the integrated default port in auto mode — manual pin must
+    // stay on settings.manualPort (tests + user override).
+    const live = await useLiveSocksIfAny(
+      settings.host,
+      settings.auto
+        ? [managed.socks_port, INTEGRATED_TOR_SOCKS_PORT]
+        : [managed.socks_port],
+      probes
+    );
+    if (live) return { type: 'tor', tor: live };
+
     // Integrated Tor is mid-bootstrap: wait rather than falling through to
     // "unavailable" (that made P2P look permanently broken while Tor was
     // still coming up).
@@ -137,12 +185,19 @@ export async function resolveFusionTransport(
           };
         }
       } catch (error) {
+        // Start timed out — still use live SOCKS if the process is answering.
+        const after = await useLiveSocksIfAny(
+          settings.host,
+          [managed.socks_port, INTEGRATED_TOR_SOCKS_PORT],
+          probes
+        );
+        if (after) return { type: 'tor', tor: after };
         return {
           type: 'unavailable',
-          reason:
-            error instanceof Error
-              ? error.message
-              : 'Tor is still bootstrapping — try again in a moment.',
+          reason: errorMessage(
+            error,
+            'Tor is still bootstrapping — try again in a moment.'
+          ),
         };
       }
     }
@@ -153,6 +208,14 @@ export async function resolveFusionTransport(
   }
 
   if (settings.auto) {
+    // Integrated port first (9251) — detectPort only scans 9050/9150.
+    const liveIntegrated = await useLiveSocksIfAny(
+      settings.host,
+      [managedSocks, INTEGRATED_TOR_SOCKS_PORT],
+      probes
+    );
+    if (liveIntegrated) return { type: 'tor', tor: liveIntegrated };
+
     const detected = await probes.detectPort(settings.host).catch(() => null);
     if (detected) {
       return { type: 'tor', tor: { host: settings.host, port: detected } };
@@ -167,12 +230,15 @@ export async function resolveFusionTransport(
           return { type: 'tor', tor: { host: settings.host, port: socksPort } };
         }
       } catch (error) {
+        const after = await useLiveSocksIfAny(
+          settings.host,
+          [INTEGRATED_TOR_SOCKS_PORT],
+          probes
+        );
+        if (after) return { type: 'tor', tor: after };
         return {
           type: 'unavailable',
-          reason:
-            error instanceof Error
-              ? error.message
-              : 'Could not start integrated Tor.',
+          reason: errorMessage(error, 'Could not start integrated Tor.'),
         };
       }
     }

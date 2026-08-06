@@ -158,9 +158,22 @@ pub async fn start(
     // progress (and the warmed consensus in the data dir) so the next attempt
     // restarts from 0% — a loop that never completes. Leave it running; the
     // UI polls tor_status and will see it reach 100%.
+    //
+    // Also: if the SOCKS port answers TCP while bootstrap % is still low
+    // (missed log lines, adopted child, race after HMR), accept it. Live
+    // multi-wallet failure mode was "Could not start integrated Tor" while
+    // tor.exe was already listening on 9251 and answering as Tor.
     let deadline = tokio::time::Instant::now() + bootstrap_timeout;
+    let addr = std::net::SocketAddr::from(([127, 0, 0, 1], socks_port));
     loop {
         if RUNNING.load(Ordering::SeqCst) {
+            return Ok(socks_port);
+        }
+        if std::net::TcpStream::connect_timeout(&addr, Duration::from_millis(200)).is_ok() {
+            SOCKS_PORT.store(socks_port, Ordering::SeqCst);
+            RUNNING.store(true, Ordering::SeqCst);
+            SPAWNED.store(true, Ordering::SeqCst);
+            BOOTSTRAP.store(100, Ordering::SeqCst);
             return Ok(socks_port);
         }
         if !SPAWNED.load(Ordering::SeqCst) {
@@ -191,10 +204,26 @@ pub async fn stop() -> Result<(), String> {
 }
 
 pub fn status() -> TorStatus {
+    let mut running = RUNNING.load(Ordering::SeqCst);
+    let mut bootstrap = BOOTSTRAP.load(Ordering::SeqCst);
+    let mut socks = SOCKS_PORT.load(Ordering::SeqCst);
+    // Stale flags after long runs / log-parse miss: if the known SOCKS port
+    // (or the integrated default 9251 when flags are zero) is open, report ready.
+    let probe_port = if socks > 0 { socks } else { 9251 };
+    let addr = std::net::SocketAddr::from(([127, 0, 0, 1], probe_port));
+    if std::net::TcpStream::connect_timeout(&addr, Duration::from_millis(150)).is_ok() {
+        running = true;
+        bootstrap = 100;
+        socks = probe_port;
+        RUNNING.store(true, Ordering::SeqCst);
+        BOOTSTRAP.store(100, Ordering::SeqCst);
+        SOCKS_PORT.store(probe_port, Ordering::SeqCst);
+        SPAWNED.store(true, Ordering::SeqCst);
+    }
     TorStatus {
-        running: RUNNING.load(Ordering::SeqCst),
-        bootstrap_percent: BOOTSTRAP.load(Ordering::SeqCst),
-        socks_port: SOCKS_PORT.load(Ordering::SeqCst),
+        running,
+        bootstrap_percent: bootstrap,
+        socks_port: socks,
     }
 }
 
