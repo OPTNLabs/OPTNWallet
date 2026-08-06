@@ -43,6 +43,11 @@ import {
 } from '../../services/psbt/watchOnlySend';
 import { inspectImportedPsbt } from '../../services/psbt/watchOnlyImport';
 import { fetchParentTransactions } from '../../services/psbt/parentTransactions';
+import {
+  deriveMultisigAddress,
+  type MultisigPolicy,
+} from '../../services/psbt/multisigWallet';
+import { watchOnlyMultisigPolicy } from '../../platform/desktop/onboarding/watchOnlyWallet';
 import { decodePsbt } from '../../services/psbt/psbtBch';
 import {
   cosignerStatuses,
@@ -112,11 +117,15 @@ export const WatchOnlySend: FC = () => {
   const [amountSats, setAmountSats] = useState<bigint | null>(null);
   const [amountText, setAmountText] = useState('');
   const [changeAddress, setChangeAddress] = useState('');
+  const [changeAddressIndex, setChangeAddressIndex] = useState(0);
   const [inputs, setInputs] = useState<SpendableInput[]>([]);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [fingerprint, setFingerprint] = useState('');
   const [savedFingerprint, setSavedFingerprint] = useState('');
   const [accountPath, setAccountPath] = useState("m/44'/145'/0'");
+  const [multisigPolicy, setMultisigPolicy] = useState<MultisigPolicy | null>(
+    null
+  );
   const [busy, setBusy] = useState(true);
   const [error, setError] = useState('');
 
@@ -266,19 +275,65 @@ export const WatchOnlySend: FC = () => {
           }
         }
 
+        // A multisig wallet's coins are not owned by any single key, so its
+        // inputs need the redeem script, the threshold and every cosigner's
+        // derivation — without them the PSBT describes a P2PKH spend of a P2SH
+        // coin and no device can sign it. The script is re-derived from the
+        // stored policy rather than read back from the keys table, so it can
+        // never disagree with the address it unlocks.
+        const policy = await watchOnlyMultisigPolicy(currentWalletId);
+        if (cancelled) return;
+        setMultisigPolicy(policy);
+
         const spendable: SpendableInput[] = [];
         for (const utxo of utxoResult.allUtxos) {
           const key = keyByAddress.get(utxo.address);
-          if (!key || !key.publicKey || key.publicKey.length === 0) continue;
+          if (!key) continue;
           const script = cashAddressToLockingBytecode(utxo.address);
           if (typeof script === 'string') continue;
+          const branchIndex = key.changeIndex === 1 ? 1 : 0;
+
+          if (policy) {
+            const derived = deriveMultisigAddress(
+              policy,
+              branchIndex,
+              key.addressIndex
+            );
+            spendable.push({
+              txid: utxo.tx_hash,
+              vout: utxo.tx_pos,
+              satoshis: BigInt(utxo.amount ?? 0),
+              lockingBytecodeHex: toHex(Uint8Array.from(script.bytecode)),
+              // No single key owns this coin; the first sorted cosigner key is
+              // only a placeholder for display. Spending uses the derivations.
+              publicKeyHex: toHex(derived.sortedPublicKeys[0]),
+              branchIndex,
+              addressIndex: key.addressIndex,
+              redeemScriptHex: toHex(derived.redeemScript),
+              requiredSignatures: policy.m,
+              cosignerDerivations: policy.signers.map((signer, index) => ({
+                publicKeyHex: toHex(derived.sortedPublicKeys[index]),
+                // Zeros where a cosigner has not supplied one: the signature
+                // comes from the path, and a wrong-looking fingerprint only
+                // costs that device its "these coins are mine" review line.
+                masterFingerprintHex: signer.masterFingerprintHex ?? '00000000',
+                derivationPath: `${
+                  signer.accountPath ?? "m/44'/145'/0'"
+                }/${branchIndex}/${key.addressIndex}`,
+              })),
+              utxo,
+            });
+            continue;
+          }
+
+          if (!key.publicKey || key.publicKey.length === 0) continue;
           spendable.push({
             txid: utxo.tx_hash,
             vout: utxo.tx_pos,
             satoshis: BigInt(utxo.amount ?? 0),
             lockingBytecodeHex: toHex(Uint8Array.from(script.bytecode)),
             publicKeyHex: toHex(key.publicKey),
-            branchIndex: key.changeIndex === 1 ? 1 : 0,
+            branchIndex,
             addressIndex: key.addressIndex,
             utxo,
           });
@@ -290,7 +345,12 @@ export const WatchOnlySend: FC = () => {
         const keysForChange = Array.from(keyByAddress.values()).filter(
           (key) => key.changeIndex === 1
         );
-        if (keysForChange[0]) setChangeAddress(keysForChange[0].address);
+        if (keysForChange[0]) {
+          setChangeAddress(keysForChange[0].address);
+          // Kept because multisig change has to be rebuilt from the policy at
+          // this exact index, and the address string alone cannot say which.
+          setChangeAddressIndex(keysForChange[0].addressIndex);
+        }
       } catch (err) {
         if (!cancelled) {
           setError(err instanceof Error ? err.message : 'Could not load the wallet coins.');
@@ -392,6 +452,15 @@ export const WatchOnlySend: FC = () => {
         previousTransactionHex: parents.get(input.txid),
       }));
 
+      // Multisig change must go back to the same P2SH policy. Sending it to a
+      // plain address derived from one cosigner's key would put the change
+      // beyond the threshold — spendable by that cosigner alone, and invisible
+      // to the others' wallets.
+      const changeBranch = 1 as const;
+      const changeMultisig = multisigPolicy
+        ? deriveMultisigAddress(multisigPolicy, changeBranch, changeAddressIndex)
+        : null;
+
       const result = buildWatchOnlyPsbt({
         inputs: inputsWithParents,
         recipient: recipient.trim(),
@@ -399,6 +468,21 @@ export const WatchOnlySend: FC = () => {
         changeAddress,
         accountPath,
         masterFingerprint: fingerprint ? masterFingerprintBytes(fingerprint) : null,
+        ...(changeMultisig && multisigPolicy
+          ? {
+              changeRedeemScriptHex: toHex(changeMultisig.redeemScript),
+              changeDerivations: multisigPolicy.signers.map(
+                (signer, index) => ({
+                  publicKeyHex: toHex(changeMultisig.sortedPublicKeys[index]),
+                  masterFingerprintHex:
+                    signer.masterFingerprintHex ?? '00000000',
+                  derivationPath: `${
+                    signer.accountPath ?? "m/44'/145'/0'"
+                  }/${changeBranch}/${changeAddressIndex}`,
+                })
+              ),
+            }
+          : {}),
       });
       const normalizedFingerprint = fingerprint.trim().toLowerCase();
       // Only ever write a real value. Now that the field is optional, a blank
