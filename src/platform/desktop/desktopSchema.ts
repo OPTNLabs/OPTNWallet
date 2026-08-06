@@ -67,6 +67,21 @@ export async function ensureDesktopLedgerTables(): Promise<void> {
       `CREATE INDEX IF NOT EXISTS idx_coin_labels_wallet ON coin_labels(wallet_id);`
     );
 
+    // CashFusion CoinJoin txids for Home / history "Fused" labels.
+    // Must survive reload, multi-window, and localStorage flakiness — depth can
+    // live in memory/LS, but the Fused badge must not.
+    db.run(`
+      CREATE TABLE IF NOT EXISTS fusion_txids (
+        wallet_id INT NOT NULL,
+        txid TEXT NOT NULL,
+        recorded_at TEXT NOT NULL,
+        PRIMARY KEY (wallet_id, txid)
+      );
+    `);
+    db.run(
+      `CREATE INDEX IF NOT EXISTS idx_fusion_txids_wallet ON fusion_txids(wallet_id);`
+    );
+
     ledgerEnsured = true;
   } catch (error) {
     logError('desktopSchema.ensureDesktopLedgerTables', error);

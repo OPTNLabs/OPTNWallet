@@ -14,7 +14,10 @@ import { clearFusionDepth, coinDepth } from '../fusionCoinDepth';
 const recordBroadcast = vi.fn();
 const reconcileActiveWalletUtxosForSpend = vi.fn();
 vi.mock('../../../services/OutboundTransactionTracker', () => ({
-  default: { recordBroadcast: (...a: unknown[]) => recordBroadcast(...a) },
+  default: {
+    recordBroadcast: (...a: unknown[]) => recordBroadcast(...a),
+    markState: vi.fn().mockResolvedValue({ state: 'seen' }),
+  },
 }));
 vi.mock('../../../services/WalletBackendSyncService', () => ({
   default: { observeTransaction: vi.fn().mockResolvedValue(undefined) },
@@ -140,7 +143,7 @@ describe('fusion depth: one shared completion path for both transports', () => {
     expect(coinDepth(9, 'prev:0')).toBe(0);
   });
 
-  it('does not advance depth when the caller supplies no scripts', async () => {
+  it('without owned scripts still stamps CoinJoin for Fused labels (no outpoint map)', async () => {
     const result = await completeFusionBroadcast({
       walletId: 9,
       txid: TXID,
@@ -148,9 +151,12 @@ describe('fusion depth: one shared completion path for both transports', () => {
       spentInputs: [utxo('prev', 0)],
       source: 'p2p-fusion',
       sourceLabel: 'P2P Fusion',
+      privacyRoute: 'tor-only',
     });
+    // No per-output scripts → no precise outpoint count, but the CoinJoin
+    // txid is recorded so badges / Auto see ≥1 via parent-txid depth.
     expect(result.depthRecorded).toBe(0);
-    expect(coinDepth(9, `${TXID}:1`)).toBe(0);
+    expect(coinDepth(9, `${TXID}:1`)).toBeGreaterThanOrEqual(1);
   });
 
   it('still tracks and refreshes when depth accounting finds nothing', async () => {

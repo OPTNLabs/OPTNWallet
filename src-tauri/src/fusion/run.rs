@@ -42,6 +42,7 @@ use super::{
 };
 
 // Timing relative to covert_T0 (StartRound receipt), from protocol.py.
+// Keep these byte-for-byte aligned with electroncash_plugins/fusion/protocol.py.
 const T_START_COMPS: Duration = Duration::from_secs(5);
 const T_START_SIGS: Duration = Duration::from_secs(20);
 const T_END_COMPS: Duration = Duration::from_secs(15);
@@ -54,8 +55,20 @@ const COVERT_CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
 const COVERT_SUBMIT_WINDOW: Duration = Duration::from_secs(5);
 const COVERT_SUBMIT_TIMEOUT: Duration = Duration::from_secs(3);
 const COVERT_CONNECT_SPARES: usize = 6;
-/// How long to wait in the pool for a tier to reach its start threshold.
-const JOIN_WAIT: Duration = Duration::from_secs(120);
+/// JoinPools alone / no progress — fail and let Auto re-queue (0-conf chaining
+/// wants this as fast as P2P gather, not a multi-minute sit).
+///
+/// Not in protocol.py. EC Auto only applies AUTOFUSE_INACTIVE_TIMEOUT=600 when
+/// *no* tier has a scheduled start (`besttime is None` in fusion.py). We use a
+/// short alone budget, then extend when the server reports peers or
+/// `time_remaining` (mainnet start_time_min can be ~400s after the pool fills).
+const JOIN_ALONE_WAIT: Duration = Duration::from_secs(120);
+/// Ceiling while the pool is active (peers present, full, or start scheduled).
+const JOIN_ACTIVE_CEILING: Duration = Duration::from_secs(600);
+/// Absolute max wait when server advertises time_remaining (covers start_time_max).
+const JOIN_STARTING_CEILING: Duration = Duration::from_secs(1_260);
+/// protocol.py MAX_CLOCK_DISCREPANCY = 5.0
+const MAX_CLOCK_DISCREPANCY_SECS: u64 = 5;
 const BLAME_PROOFS_WAIT: Duration = Duration::from_secs(6);
 const BLAME_RESTART_WAIT: Duration = Duration::from_secs(16);
 const RESTARTED_ROUND_WAIT: Duration = Duration::from_secs(15);
@@ -269,8 +282,10 @@ fn validate_server_time(server_time: u64) -> Result<(), String> {
         .duration_since(UNIX_EPOCH)
         .map_err(|_| "local system clock is before the Unix epoch")?
         .as_secs();
-    if local.abs_diff(server_time) > 5 {
-        Err("CashFusion server clock differs by more than 5 seconds".into())
+    if local.abs_diff(server_time) > MAX_CLOCK_DISCREPANCY_SECS {
+        Err(format!(
+            "CashFusion server clock differs by more than {MAX_CLOCK_DISCREPANCY_SECS} seconds"
+        ))
     } else {
         Ok(())
     }
@@ -717,14 +732,15 @@ pub async fn run_fusion(params: FusionRunParams<'_>) -> Result<FusionOutcome, St
     );
 
     // --- Wait for one of the registered tiers to start (FusionBegin) ---
+    // EC: short sit when idle (we use 120s alone); extend when the server shows
+    // peers or time_remaining (mainnet may schedule start ~400s after full).
+    // 0-conf Auto re-queues after alone timeout — no 10‑minute dead wait.
     let (begin, fusion_begin_at) = {
-        let deadline = Instant::now() + JOIN_WAIT;
+        let join_started = Instant::now();
+        let mut deadline = join_started + JOIN_ALONE_WAIT;
         let mut queue_updates = 0usize;
         // Best pool state seen while waiting, so a timeout can say WHY nobody
-        // joined instead of only that nobody did. Waiting alone in a tier and
-        // waiting in a tier that is filling look identical from the outside,
-        // and telling them apart is the difference between "add coins on the
-        // other wallet" and "keep waiting".
+        // joined instead of only that nobody did.
         let mut best_tier: Option<(u64, u32, u32)> = None;
         loop {
             let remaining = deadline.saturating_duration_since(Instant::now());
@@ -759,17 +775,44 @@ pub async fn run_fusion(params: FusionRunParams<'_>) -> Result<FusionOutcome, St
                 Ok(msg) => match msg? {
                     pb::server_message::Msg::Tierstatusupdate(update) => {
                         queue_updates += 1;
-                        // Track the fullest tier by players, then by how close
-                        // it is to starting.
+                        let mut max_players = 0u32;
+                        let mut any_starting_soon = false;
+                        let mut min_time_remaining: Option<u32> = None;
                         for (tier, status) in &update.statuses {
                             let players = status.players.unwrap_or(0);
                             let min_players = status.min_players.unwrap_or(0);
+                            max_players = max_players.max(players);
                             let better = match best_tier {
                                 None => true,
                                 Some((_, best_players, _)) => players > best_players,
                             };
                             if better {
                                 best_tier = Some((*tier, players, min_players));
+                            }
+                            if players >= min_players && min_players > 0 {
+                                any_starting_soon = true;
+                            }
+                            if let Some(tr) = status.time_remaining {
+                                any_starting_soon = true;
+                                min_time_remaining = Some(match min_time_remaining {
+                                    Some(prev) => prev.min(tr),
+                                    None => tr,
+                                });
+                            }
+                        }
+                        // Extend wait only when the pool is real / scheduled —
+                        // not for a solitary client (that is alone → fast retry).
+                        if let Some(tr) = min_time_remaining {
+                            let extend = Duration::from_secs(u64::from(tr).saturating_add(45));
+                            let candidate = Instant::now() + extend;
+                            let cap = join_started + JOIN_STARTING_CEILING;
+                            if candidate > deadline {
+                                deadline = candidate.min(cap);
+                            }
+                        } else if max_players >= 2 || any_starting_soon {
+                            let active_end = join_started + JOIN_ACTIVE_CEILING;
+                            if active_end > deadline {
+                                deadline = active_end;
                             }
                         }
                         if queue_updates == 1 || queue_updates % 5 == 0 {
@@ -778,18 +821,13 @@ pub async fn run_fusion(params: FusionRunParams<'_>) -> Result<FusionOutcome, St
                                 .values()
                                 .filter(|status| status.players.unwrap_or(0) > 1)
                                 .count();
-                            let max_players = update
-                                .statuses
-                                .values()
-                                .map(|status| status.players.unwrap_or(0))
-                                .max()
-                                .unwrap_or(0);
                             log::info!(
-                                "[FusionTrace] native queue update={} statuses={} occupied={} max_players={}",
+                                "[FusionTrace] native queue update={} statuses={} occupied={} max_players={} deadline_left={:.0}s",
                                 queue_updates,
                                 update.statuses.len(),
                                 occupied,
-                                max_players
+                                max_players,
+                                deadline.saturating_duration_since(Instant::now()).as_secs_f64()
                             );
                         }
                         continue;

@@ -30,6 +30,26 @@ const TXID_PREFIX = 'optn-fusion-txids-';
  */
 const TX_DEPTH_PREFIX = 'optn-fusion-tx-depth-';
 
+/**
+ * Same-window UI refresh. localStorage writes do not re-render React; after a
+ * server (or P2P) fuse the Home / history / coin-control "Fused" badges stayed
+ * blank until a full navigation. Dispatch so badges update live.
+ */
+export const FUSION_DEPTH_CHANGED_EVENT = 'optn-fusion-depth-changed';
+
+function notifyFusionDepthChanged(walletId: number): void {
+  try {
+    if (typeof window === 'undefined') return;
+    window.dispatchEvent(
+      new CustomEvent(FUSION_DEPTH_CHANGED_EVENT, {
+        detail: { walletId },
+      })
+    );
+  } catch {
+    /* ignore */
+  }
+}
+
 /** Canonical `txid:pos` — txid lowercased so Electrum/display case cannot hide depth. */
 export function normalizeOutpoint(outpoint: string): string {
   const raw = outpoint.trim();
@@ -105,11 +125,32 @@ function getDepthBc(): BroadcastChannel | null {
       ) {
         return;
       }
+      const wid = data.walletId as number;
+      // Merge by max depth — never replace a full map with {} from another window.
       if (data.entries && typeof data.entries === 'object') {
-        memEntries.set(data.walletId as number, data.entries);
+        const incoming = data.entries;
+        const prev = memEntries.get(wid) ?? {};
+        if (Object.keys(incoming).length === 0 && Object.keys(prev).length > 0) {
+          /* ignore empty wipe */
+        } else {
+          const merged: DepthMap = { ...prev };
+          for (const [k, v] of Object.entries(incoming)) {
+            if (!v || typeof v.d !== 'number') continue;
+            if (!merged[k] || v.d >= merged[k].d) merged[k] = v;
+          }
+          memEntries.set(wid, merged);
+        }
       }
       if (data.txDepth && typeof data.txDepth === 'object') {
-        memTxDepth.set(data.walletId as number, data.txDepth);
+        const prev = memTxDepth.get(wid) ?? {};
+        const merged: TxDepthMap = { ...prev };
+        for (const [k, v] of Object.entries(data.txDepth)) {
+          if (typeof v === 'number' && Number.isFinite(v)) {
+            const key = k.toLowerCase();
+            merged[key] = Math.max(merged[key] ?? 0, Math.trunc(v));
+          }
+        }
+        memTxDepth.set(wid, merged);
       }
     };
     return depthBc;
@@ -196,18 +237,28 @@ function writeTxDepth(walletId: number, map: TxDepthMap): void {
   } catch {
     /* ignore */
   }
+  notifyFusionDepthChanged(walletId);
 }
 
-/** Depth for an outpoint, falling back to per-txid depth of its parent CoinJoin. */
+/**
+ * Depth for an outpoint:
+ *   1) exact outpoint entry
+ *   2) per-parent-txid depth (survives Electrum index drift)
+ *   3) parent is a recorded fusion CoinJoin → at least 1
+ */
 function depthOf(
   entries: DepthMap,
   txDepth: TxDepthMap,
-  outpoint: string
+  outpoint: string,
+  fusionTxids?: ReadonlySet<string>
 ): number {
   const key = normalizeOutpoint(outpoint);
   if (entries[key]) return entries[key].d;
   const txid = txidOfOutpoint(key);
-  if (typeof txDepth[txid] === 'number') return txDepth[txid];
+  if (typeof txDepth[txid] === 'number' && txDepth[txid] >= 1) {
+    return txDepth[txid];
+  }
+  if (fusionTxids?.has(txid)) return 1;
   return 0;
 }
 
@@ -236,6 +287,7 @@ function write(walletId: number, entries: DepthMap): void {
     /* memory still holds it this session */
   }
   try {
+    // Receivers merge by max depth and ignore empty wipes.
     getDepthBc()?.postMessage({
       walletId,
       entries,
@@ -244,6 +296,7 @@ function write(walletId: number, entries: DepthMap): void {
   } catch {
     /* ignore */
   }
+  notifyFusionDepthChanged(walletId);
 }
 
 /**
@@ -276,9 +329,49 @@ export function pruneSpentDepth(
   if (changed) write(walletId, entries);
 }
 
-/** Rounds this coin has been through. Unknown coins are fresh (0). */
+/**
+ * Rounds this coin has been through. Unknown coins are fresh (0).
+ * Same rules for UI badges and Auto eligibility (server + P2P).
+ */
 export function coinDepth(walletId: number, outpoint: string): number {
-  return depthOf(read(walletId), readTxDepth(walletId), outpoint);
+  return depthOf(
+    read(walletId),
+    readTxDepth(walletId),
+    outpoint,
+    readFusionTxids(walletId)
+  );
+}
+
+/** All recorded CashFusion CoinJoin txids for this wallet (P2P + server). */
+export function listRecordedFusionTxids(walletId: number): string[] {
+  return [...readFusionTxids(walletId)];
+}
+
+/**
+ * Ensure history lists still show known fusion CoinJoins after Electrum refresh.
+ * Shared by P2P and server — both stamp txids via completeFusionBroadcast.
+ * Missing rows are re-attached at height 0 so they are not wiped by Sync.
+ */
+export function mergeRecordedFusionTxsIntoHistory<
+  T extends { tx_hash: string; height: number; timestamp?: string },
+>(walletId: number, transactions: readonly T[]): T[] {
+  const known = readFusionTxids(walletId);
+  if (known.size === 0) return [...transactions];
+  const have = new Set(
+    transactions.map((tx) => String(tx.tx_hash).trim().toLowerCase())
+  );
+  const missing = [...known]
+    .filter((txid) => !have.has(txid))
+    .map(
+      (tx_hash) =>
+        ({
+          tx_hash,
+          height: 0,
+          timestamp: new Date().toISOString(),
+        }) as T
+    );
+  if (missing.length === 0) return [...transactions];
+  return [...missing, ...transactions];
 }
 
 /** Snapshot for COLD export (no secrets). */
@@ -348,50 +441,265 @@ export function importFusionDepthState(
   return { coins, txids: addedTx };
 }
 
-function readFusionTxids(walletId: number): Set<string> {
+/**
+ * Fusion *labels* (Home / history "Fused") are durable SQL first.
+ * localStorage + memory are a sync cache so isFusionTransaction stays sync.
+ * Coin *depth* (×N) can still be memory/LS — that is Auto's stopping score.
+ */
+const memFusionTxids = new Map<number, Set<string>>();
+const sqlHydratedWallets = new Set<number>();
+
+function readFusionTxidsFromLocalStorage(walletId: number): Set<string> {
   try {
     const raw = getLocalStorage()?.getItem(`${TXID_PREFIX}${walletId}`);
     if (!raw) return new Set();
     const parsed: unknown = JSON.parse(raw);
     if (!Array.isArray(parsed)) return new Set();
     return new Set(
-      parsed.filter((t): t is string => typeof t === 'string' && t.length === 64)
+      parsed
+        .filter((t): t is string => typeof t === 'string' && t.length === 64)
+        .map((t) => t.toLowerCase())
     );
   } catch {
     return new Set();
   }
 }
 
+function readFusionTxidsFromSqlSync(walletId: number): Set<string> {
+  try {
+    // Dynamic require avoided — DatabaseService is ES module. Sync path only
+    // works when the DB is already open; hydrateFusionLabels loads async.
+    const g = globalThis as unknown as {
+      __optnFusionTxidSql?: Map<number, Set<string>>;
+    };
+    return new Set(g.__optnFusionTxidSql?.get(walletId) ?? []);
+  } catch {
+    return new Set();
+  }
+}
+
+function cacheSqlFusionTxids(walletId: number, txids: Set<string>): void {
+  const g = globalThis as unknown as {
+    __optnFusionTxidSql?: Map<number, Set<string>>;
+  };
+  if (!g.__optnFusionTxidSql) g.__optnFusionTxidSql = new Map();
+  g.__optnFusionTxidSql.set(walletId, new Set(txids));
+}
+
+function readFusionTxids(walletId: number): Set<string> {
+  const cached = memFusionTxids.get(walletId);
+  if (cached) return cached;
+
+  // Union: SQL hydrate cache + localStorage (legacy) so labels never regress.
+  const fromSql = readFusionTxidsFromSqlSync(walletId);
+  const fromLs = readFusionTxidsFromLocalStorage(walletId);
+  const merged = new Set<string>([...fromSql, ...fromLs]);
+  memFusionTxids.set(walletId, merged);
+  return merged;
+}
+
 function writeFusionTxids(walletId: number, txids: Set<string>): void {
+  const normalized = new Set(
+    [...txids]
+      .map((t) => t.trim().toLowerCase())
+      .filter((t) => t.length === 64)
+  );
+  memFusionTxids.set(walletId, normalized);
+  cacheSqlFusionTxids(walletId, normalized);
+
+  // Fast cache (multi-window) — best effort only.
   try {
     getLocalStorage()?.setItem(
       `${TXID_PREFIX}${walletId}`,
-      JSON.stringify([...txids])
+      JSON.stringify([...normalized])
     );
   } catch {
     /* ignore */
   }
+
+  // Durable: wallet SQL. Labels must survive reload / LS wipe.
+  void persistFusionTxidsToSql(walletId, normalized).catch(() => undefined);
+
+  notifyFusionDepthChanged(walletId);
+}
+
+async function persistFusionTxidsToSql(
+  walletId: number,
+  txids: Set<string>
+): Promise<void> {
+  if (!Number.isSafeInteger(walletId) || walletId <= 0) return;
+  const { ensureDesktopLedgerTables } = await import('./desktopSchema');
+  await ensureDesktopLedgerTables();
+  const DatabaseService = (await import('../../apis/DatabaseManager/DatabaseService'))
+    .default;
+  const dbService = DatabaseService();
+  await dbService.ensureDatabaseStarted();
+  const db = dbService.getDatabase();
+  if (!db) return;
+
+  const now = new Date().toISOString();
+  for (const txid of txids) {
+    db.run(
+      `INSERT INTO fusion_txids (wallet_id, txid, recorded_at)
+       VALUES (?, ?, ?)
+       ON CONFLICT(wallet_id, txid) DO NOTHING`,
+      [walletId, txid, now]
+    );
+  }
+  try {
+    dbService.scheduleDatabaseSave(walletId);
+  } catch {
+    /* optional */
+  }
+}
+
+/**
+ * Load durable Fused labels from wallet SQL into the sync cache.
+ * Call on wallet open / Auto start / before showing history.
+ */
+export async function hydrateFusionLabels(walletId: number): Promise<number> {
+  if (!Number.isSafeInteger(walletId) || walletId <= 0) return 0;
+  try {
+    const { ensureDesktopLedgerTables } = await import('./desktopSchema');
+    await ensureDesktopLedgerTables();
+    const DatabaseService = (
+      await import('../../apis/DatabaseManager/DatabaseService')
+    ).default;
+    const dbService = DatabaseService();
+    await dbService.ensureDatabaseStarted();
+    const db = dbService.getDatabase();
+    if (!db) return 0;
+
+    const fromSql = new Set<string>();
+    const q = db.prepare(
+      `SELECT txid FROM fusion_txids WHERE wallet_id = ?`
+    );
+    q.bind([walletId]);
+    while (q.step()) {
+      const row = q.getAsObject() as { txid?: string };
+      if (typeof row.txid === 'string' && row.txid.length === 64) {
+        fromSql.add(row.txid.toLowerCase());
+      }
+    }
+    q.free();
+
+    const fromLs = readFusionTxidsFromLocalStorage(walletId);
+    const merged = new Set<string>([...fromSql, ...fromLs]);
+    // If LS had extras SQL was missing (legacy), write them through.
+    if (fromLs.size > fromSql.size || [...fromLs].some((t) => !fromSql.has(t))) {
+      await persistFusionTxidsToSql(walletId, merged);
+    }
+
+    memFusionTxids.set(walletId, merged);
+    cacheSqlFusionTxids(walletId, merged);
+    sqlHydratedWallets.add(walletId);
+
+    // Keep LS cache in sync for multi-window.
+    try {
+      getLocalStorage()?.setItem(
+        `${TXID_PREFIX}${walletId}`,
+        JSON.stringify([...merged])
+      );
+    } catch {
+      /* ignore */
+    }
+
+    if (merged.size > 0) notifyFusionDepthChanged(walletId);
+    return merged.size;
+  } catch {
+    return 0;
+  }
+}
+
+/**
+ * One-shot restore from AppData `fusion-txid-recovery.json` (built from fuse
+ * logs) plus any legacy localStorage keys. Safe to call repeatedly.
+ */
+export async function restoreFusionLabelsFromRecoveryFile(): Promise<{
+  wallets: number;
+  txids: number;
+}> {
+  let wallets = 0;
+  let txids = 0;
+  try {
+    const { readTextFile, exists, BaseDirectory } = await import(
+      '@tauri-apps/plugin-fs'
+    );
+    const rel = 'fusion-txid-recovery.json';
+    if (!(await exists(rel, { baseDir: BaseDirectory.AppData }))) {
+      return { wallets: 0, txids: 0 };
+    }
+    const raw = await readTextFile(rel, { baseDir: BaseDirectory.AppData });
+    const parsed = JSON.parse(raw) as Record<string, unknown>;
+    for (const [walletKey, list] of Object.entries(parsed)) {
+      const walletId = Number(walletKey);
+      if (!Number.isSafeInteger(walletId) || walletId <= 0) continue;
+      if (!Array.isArray(list)) continue;
+      const set = readFusionTxids(walletId);
+      let added = 0;
+      for (const item of list) {
+        if (typeof item !== 'string') continue;
+        const t = item.trim().toLowerCase();
+        if (t.length !== 64) continue;
+        if (!set.has(t)) {
+          set.add(t);
+          added += 1;
+        }
+      }
+      if (added > 0 || set.size > 0) {
+        writeFusionTxids(walletId, set);
+        // Floor tx-depth so coin badges show Fused (≥1) for those parents.
+        const td = readTxDepth(walletId);
+        let tdChanged = false;
+        for (const t of set) {
+          if ((td[t] ?? 0) < 1) {
+            td[t] = 1;
+            tdChanged = true;
+          }
+        }
+        if (tdChanged) writeTxDepth(walletId, td);
+        wallets += 1;
+        txids += added > 0 ? added : 0;
+        await hydrateFusionLabels(walletId);
+      }
+    }
+  } catch {
+    /* recovery file optional */
+  }
+  return { wallets, txids };
 }
 
 /** True if this wallet recorded `txid` as a completed CashFusion CoinJoin. */
 export function isFusionTransaction(walletId: number, txid: string): boolean {
   const normalized = txid.trim().toLowerCase();
-  if (!normalized) return false;
+  if (!normalized || normalized.length !== 64) return false;
   if (readFusionTxids(walletId).has(normalized)) return true;
   // Also true if any live depth entry was created by this tx (unspent outputs).
   const prefix = `${normalized}:`;
-  return Object.keys(read(walletId)).some((outpoint) =>
-    outpoint.startsWith(prefix)
-  );
+  if (Object.keys(read(walletId)).some((outpoint) => outpoint.startsWith(prefix))) {
+    return true;
+  }
+  // Per-txid depth map (server path often re-binds by Electrum outpoints only).
+  const td = readTxDepth(walletId)[normalized];
+  return typeof td === 'number' && td >= 1;
 }
 
-/** Remember a CoinJoin txid for history/home badges (wallet-local only). */
+/**
+ * Remember a CoinJoin txid for history/home "Fused" badges.
+ * Durable in wallet SQL; LS/memory are only a sync cache.
+ */
 export function recordFusionTxid(walletId: number, txid: string): void {
   const normalized = txid.trim().toLowerCase();
   if (normalized.length !== 64) return;
   const set = readFusionTxids(walletId);
   set.add(normalized);
   writeFusionTxids(walletId, set);
+  // Floor parent depth so Auto + badges see ≥1 even before outpoints re-bind.
+  const td = readTxDepth(walletId);
+  if ((td[normalized] ?? 0) < 1) {
+    td[normalized] = 1;
+    writeTxDepth(walletId, td);
+  }
 }
 
 /**
@@ -423,16 +731,21 @@ export function recordFusionRound(
 ): void {
   const entries = read(walletId);
   const txDepth = readTxDepth(walletId);
+  const fusionTxids = readFusionTxids(walletId);
   const spent = spentOutpoints.map(normalizeOutpoint);
   const created = createdOutpoints.map(normalizeOutpoint);
-  // Unknown ancestor is depth 0 (drags min down). Prefer outpoint entry, then
-  // per-txid depth so a key mismatch cannot reset the chain to 0 forever.
+  // Unknown ancestor is depth 0 (drags min down). Use full depthOf including
+  // fusion-txid stamps — server path used to ignore those and always inherit 0
+  // → every round looked like depth 1 and Auto never stopped at fuseDepth.
   const inheritedDepth =
     spent.length === 0
       ? 0
       : spent.reduce(
           (shallowest, outpoint) =>
-            Math.min(shallowest, depthOf(entries, txDepth, outpoint)),
+            Math.min(
+              shallowest,
+              depthOf(entries, txDepth, outpoint, fusionTxids)
+            ),
           Number.POSITIVE_INFINITY
         );
   const nextDepth =
@@ -444,10 +757,12 @@ export function recordFusionRound(
     const txid = txidOfOutpoint(outpoint);
     if (txid.length === 64) {
       txDepth[txid] = Math.max(txDepth[txid] ?? 0, nextDepth);
+      fusionTxids.add(txid);
     }
   });
   write(walletId, entries);
   writeTxDepth(walletId, txDepth);
+  writeFusionTxids(walletId, fusionTxids);
 }
 
 /** Coins the engine may still fuse, i.e. those below the configured depth. */
@@ -456,15 +771,53 @@ export function coinsBelowDepth<T extends { tx_hash: string; tx_pos: number }>(
   utxos: T[],
   maxDepth: number
 ): T[] {
-  const entries = read(walletId);
-  const txDepth = readTxDepth(walletId);
+  // Use full coinDepth (outpoint + parent txid + fusion-txid set) so server
+  // Auto stops at rounds-per-coin the same way P2P does — not a weaker depthOf.
   return utxos.filter(
     (utxo) =>
-      depthOf(
-        entries,
-        txDepth,
-        outpointFromParts(utxo.tx_hash, utxo.tx_pos)
-      ) < maxDepth
+      coinDepth(walletId, outpointFromParts(utxo.tx_hash, utxo.tx_pos)) <
+      maxDepth
+  );
+}
+
+/**
+ * Clear Auto status when every coin already meets the box (rounds-per-coin).
+ * Target is always `fuseDepth` from settings — never a hard-coded 3.
+ * Shows live coin depth range so the user sees current depths (e.g. 2–4).
+ * Same wording for P2P and server (shared startFusionRound).
+ */
+export function formatAutoDepthMetMessage(elig: {
+  total: number;
+  minDepth: number;
+  maxCoinDepth: number;
+  maxDepth: number;
+}): string {
+  if (elig.total === 0) {
+    return 'Auto: no BCH coins to fuse (wallet empty of non-token UTXOs).';
+  }
+  const range =
+    elig.minDepth === elig.maxCoinDepth
+      ? `${elig.minDepth}`
+      : `${elig.minDepth}–${elig.maxCoinDepth}`;
+  return (
+    `Auto: all ${elig.total} coin(s) already at rounds-per-coin depth ` +
+    `(target = number in the box). Current coin depth ${range}. ` +
+    `Idle until send/receive/tx or you raise rounds-per-coin to fuse further.`
+  );
+}
+
+/** One-line progress / log while Auto still has coins below the box. */
+export function formatAutoDepthGateLog(
+  eligibleCount: number,
+  target: number,
+  minDepth: number,
+  maxCoinDepth: number
+): string {
+  const range =
+    minDepth === maxCoinDepth ? `${minDepth}` : `${minDepth}–${maxCoinDepth}`;
+  return (
+    `${eligibleCount} eligible below rounds-per-coin ` +
+    `(target = box ${target}; current depth ${range})`
   );
 }
 
@@ -482,16 +835,13 @@ export function fuseDepthEligibility(
   minDepth: number;
   maxCoinDepth: number;
 } {
-  const entries = read(walletId);
-  const txDepth = readTxDepth(walletId);
   let eligible = 0;
   let atOrAboveDepth = 0;
   let minDepth = Number.POSITIVE_INFINITY;
   let maxCoinDepth = 0;
   for (const utxo of utxos) {
-    const d = depthOf(
-      entries,
-      txDepth,
+    const d = coinDepth(
+      walletId,
       outpointFromParts(utxo.tx_hash, utxo.tx_pos)
     );
     minDepth = Math.min(minDepth, d);
@@ -518,6 +868,9 @@ export function fuseDepthEligibility(
 export function clearFusionDepth(walletId: number): void {
   memEntries.delete(walletId);
   memTxDepth.delete(walletId);
+  memFusionTxids.delete(walletId);
+  sqlHydratedWallets.delete(walletId);
+  cacheSqlFusionTxids(walletId, new Set());
   try {
     getLocalStorage()?.removeItem(storageKeyFor(walletId));
     getLocalStorage()?.removeItem(`${TXID_PREFIX}${walletId}`);
@@ -525,4 +878,25 @@ export function clearFusionDepth(walletId: number): void {
   } catch {
     /* nothing to clear */
   }
+  void (async () => {
+    try {
+      const { ensureDesktopLedgerTables } = await import('./desktopSchema');
+      await ensureDesktopLedgerTables();
+      const DatabaseService = (
+        await import('../../apis/DatabaseManager/DatabaseService')
+      ).default;
+      const dbService = DatabaseService();
+      await dbService.ensureDatabaseStarted();
+      const db = dbService.getDatabase();
+      if (!db) return;
+      db.run(`DELETE FROM fusion_txids WHERE wallet_id = ?`, [walletId]);
+      try {
+        dbService.scheduleDatabaseSave(walletId);
+      } catch {
+        /* optional */
+      }
+    } catch {
+      /* tests may lack SQL */
+    }
+  })();
 }

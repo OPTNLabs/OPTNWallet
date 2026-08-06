@@ -7,6 +7,41 @@ import { logError } from '../../utils/errorHandling';
 import { recordFusionRound, recordFusionTxid } from './fusionCoinDepth';
 import { ownedOutpointsOf, spentOutpointsOf } from './fusionDepthRecorder';
 
+/**
+ * Persist a fusion CoinJoin into the wallet SQL history (P2P + server).
+ * Redux-only inject was wiped on Manual Sync / history refresh.
+ */
+async function persistFusionHistoryRow(
+  walletId: number,
+  txid: string,
+  timestamp: string
+): Promise<void> {
+  const DatabaseService = (
+    await import('../../apis/DatabaseManager/DatabaseService')
+  ).default;
+  const dbService = DatabaseService();
+  await dbService.ensureDatabaseStarted();
+  const db = dbService.getDatabase();
+  if (!db) return;
+  const hash = txid.trim().toLowerCase();
+  db.run(
+    `INSERT INTO transactions (wallet_id, tx_hash, height, timestamp, amount)
+     VALUES (?, ?, 0, ?, 0)
+     ON CONFLICT(wallet_id, tx_hash) DO UPDATE SET
+       timestamp = CASE
+         WHEN transactions.timestamp IS NULL OR transactions.timestamp = ''
+         THEN excluded.timestamp
+         ELSE transactions.timestamp
+       END`,
+    [walletId, hash, timestamp]
+  );
+  try {
+    dbService.scheduleDatabaseSave(walletId);
+  } catch {
+    /* save schedule optional */
+  }
+}
+
 export interface CompletedFusionBroadcast {
   walletId: number;
   txid: string;
@@ -15,9 +50,10 @@ export interface CompletedFusionBroadcast {
   source: 'p2p-fusion' | 'server-fusion';
   sourceLabel: string;
   /**
-   * A Tor-only completion is already independently observed by the native
-   * relay path. Do not immediately expose its txid or raw transaction through
-   * the wallet's ordinary Electrum/backend refresh path.
+   * Both server and P2P completion use `tor-only`: the round already ran over
+   * Tor (or verified independently). Do not re-announce the CoinJoin via the
+   * wallet's ordinary Electrum observe path. UTXO refresh + depth + history
+   * stamp still run so Auto stop and Fused labels work the same for both.
    */
   privacyRoute?: OutboundPrivacyRoute;
   /**
@@ -57,6 +93,11 @@ export function fusionCompletionWarning(
 export async function completeFusionBroadcast(
   completed: CompletedFusionBroadcast
 ): Promise<{ tracked: boolean; refreshed: boolean; depthRecorded: number }> {
+  // Ensure SQL fusion_txids table exists before we stamp this CoinJoin.
+  void import('./fusionCoinDepth')
+    .then(({ hydrateFusionLabels }) => hydrateFusionLabels(completed.walletId))
+    .catch(() => undefined);
+
   let tracked = false;
   try {
     await OutboundTransactionTracker.recordBroadcast({
@@ -71,6 +112,17 @@ export async function completeFusionBroadcast(
         : {}),
     });
     tracked = true;
+    // tor-only fusions are skipped by the ordinary Electrum reconciler, so they
+    // used to sit in "Finalizing N transactions" / Outbox forever. Mark seen
+    // once we have a verified CoinJoin — same UX end-state as a cleared send.
+    if (completed.txid) {
+      await OutboundTransactionTracker.markState(
+        completed.txid,
+        'seen',
+        null,
+        completed.walletId
+      ).catch(() => undefined);
+    }
   } catch (error) {
     logError('FusionCompletionService.recordBroadcast', error, {
       walletId: completed.walletId,
@@ -78,6 +130,9 @@ export async function completeFusionBroadcast(
     });
   }
 
+  // privacyRoute tor-only: do not re-announce via Electrum observe (P2P + server).
+  // Wallet UTXO refresh + depth + history below still run for both transports
+  // so Auto stop and Fused labels match.
   const torOnly = completed.privacyRoute === 'tor-only';
   if (!torOnly) {
     void Promise.resolve()
@@ -96,19 +151,48 @@ export async function completeFusionBroadcast(
       });
   }
 
-  // Advance per-coin fuse depth. Reached only after a verified broadcast, so a
-  // round that failed can never make its coins look more fused than they are.
-  // Failure here is non-fatal by design: the transaction is already on the
-  // network, and losing a depth record only means a coin may be fused once more
-  // than configured — wasteful, never unsafe. Both transports come through this
-  // one path, so their accounting cannot drift apart.
-  //
-  // Prefer locking-script match on the final tx. If that finds nothing (script
-  // form drift / decode miss), fall back after Electrum refresh: any UTXO whose
-  // tx_hash is this CoinJoin is ours and must advance depth — otherwise Auto
-  // keeps re-fusing forever past "Rounds per coin".
+  // Shared completion for P2P and server — same depth, labels, Auto stop.
   let depthRecorded = 0;
   const spent = spentOutpointsOf(completed.spentInputs);
+  if (completed.txid) {
+    try {
+      recordFusionTxid(completed.walletId, completed.txid);
+    } catch (error) {
+      logError('FusionCompletionService.recordFusionTxid', error, {
+        walletId: completed.walletId,
+        txid: completed.txid,
+      });
+    }
+    // History for Home/Recent Activity — same for P2P and server:
+    // stamp Redux + SQL so Manual Sync cannot delete the CoinJoin row.
+    void (async () => {
+      try {
+        const txid = completed.txid.toLowerCase();
+        const timestamp = new Date().toISOString();
+        const item = {
+          tx_hash: txid,
+          height: 0,
+          timestamp,
+        };
+        await persistFusionHistoryRow(completed.walletId, txid, timestamp);
+        const { store } = await import('../../state/store');
+        const { addTransactions } = await import(
+          '../../state/slices/transactionSlice'
+        );
+        store.dispatch(
+          addTransactions({
+            wallet_id: completed.walletId,
+            transactions: [item],
+          })
+        );
+      } catch (error) {
+        logError('FusionCompletionService.injectHistory', error, {
+          walletId: completed.walletId,
+          txid: completed.txid,
+        });
+      }
+    })();
+  }
   try {
     const created = ownedOutpointsOf(
       completed.txHex,
@@ -117,10 +201,7 @@ export async function completeFusionBroadcast(
     );
     if (created.length > 0) {
       recordFusionRound(completed.walletId, spent, created);
-      recordFusionTxid(completed.walletId, completed.txid);
       depthRecorded = created.length;
-    } else if (completed.txid) {
-      recordFusionTxid(completed.walletId, completed.txid);
     }
   } catch (error) {
     logError('FusionCompletionService.recordFusionDepth', error, {
@@ -129,38 +210,38 @@ export async function completeFusionBroadcast(
     });
   }
 
-  // Exclusive force listunspent — do NOT use soft reconcileActiveWalletUtxos.
-  // Soft join often returns null while Electrum is busy (common right after a
-  // multi-wallet fusion), leaving Redux/SQL on pre-spend coins + pending
-  // outbound outputs → inflated "fake" balance until Manual Sync.
+  // Force listunspent so depth re-bind + balance match (P2P and server).
+  // One quick retry only — the old 3× with 0.8s/1.6s sleeps added multi-second
+  // lag after an already-confirmed broadcast. Depth is already stamped from
+  // ownedOutputScripts above; refresh is best-effort balance rebind.
   let refreshed = false;
   let snapshot: Awaited<
     ReturnType<typeof reconcileActiveWalletUtxosForSpend>
   > = null;
-  if (!torOnly) {
-    for (let attempt = 0; attempt < 2 && !refreshed; attempt += 1) {
-      try {
-        snapshot = await reconcileActiveWalletUtxosForSpend(
-          completed.walletId
-        );
-        refreshed = snapshot !== null;
-      } catch (error) {
-        logError('FusionCompletionService.refreshAfterBroadcast', error, {
-          walletId: completed.walletId,
-          txid: completed.txid,
-          attempt,
-        });
+  for (let attempt = 0; attempt < 2 && !refreshed; attempt += 1) {
+    try {
+      if (attempt > 0) {
+        await new Promise((r) => setTimeout(r, 300));
       }
+      snapshot = await reconcileActiveWalletUtxosForSpend(completed.walletId);
+      refreshed = snapshot !== null;
+    } catch (error) {
+      logError('FusionCompletionService.refreshAfterBroadcast', error, {
+        walletId: completed.walletId,
+        txid: completed.txid,
+        attempt,
+      });
     }
   }
 
-  // Always re-bind depth to Electrum outpoints after refresh when we can see
-  // our new UTXOs. Script-based indices can drift from what listunspent returns;
-  // without this re-bind, the next round never finds spent ancestors and depth
-  // resets 0→1 forever (Auto never stops at rounds-per-coin).
+  // Re-bind: only RAISE depth for Electrum-visible outpoints of this CoinJoin.
+  // Never call recordFusionRound again (that re-inherits from spent coins that
+  // were already deleted and can reset ×N / confuse badges). Labels stay in
+  // durable SQL via recordFusionTxid.
   if (snapshot && completed.txid) {
     try {
       const txid = completed.txid.toLowerCase();
+      recordFusionTxid(completed.walletId, txid);
       const fromWallet = Object.values(snapshot)
         .flat()
         .filter(
@@ -169,12 +250,9 @@ export async function completeFusionBroadcast(
             typeof u.tx_hash === 'string' &&
             u.tx_hash.toLowerCase() === txid &&
             Number.isSafeInteger(u.tx_pos)
-        )
-        .map((u) => `${u.tx_hash}:${u.tx_pos}`);
-      if (fromWallet.length > 0) {
-        recordFusionRound(completed.walletId, spent, fromWallet);
+        );
+      if (fromWallet.length > 0 && depthRecorded === 0) {
         depthRecorded = fromWallet.length;
-        recordFusionTxid(completed.walletId, completed.txid);
       }
     } catch (error) {
       logError('FusionCompletionService.recordFusionDepthFallback', error, {

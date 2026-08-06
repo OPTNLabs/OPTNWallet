@@ -35,15 +35,21 @@ export type AutoFusionDecision =
   | { run: true; mode: FusionMode };
 
 /**
- * After a successful paid fuse. Short so Auto keeps cycling; still enough for
- * Electrum to refresh new coins before the next gather. Never multi-minute.
+ * After a successful paid fuse. Short so Auto keeps cycling like Electron Cash
+ * (plugin re-queues as soon as a fusion thread exits).
+ *
+ * This is NOT a block-confirmation wait. Unconfirmed fusion outputs are eligible
+ * immediately (ACCEPT_UNCONFIRMED_FUSION_INPUTS / EC-maintainer-endorsed 0-conf).
+ * The delay only covers Electrum listunspent catching the new outpoints before
+ * the next JoinPools. Never multi-minute, never “wait for 1 conf”.
  */
-export const AUTO_FUSION_COOLDOWN_MS = 40_000;
+export const AUTO_FUSION_COOLDOWN_MS = 15_000;
 /**
  * Backoff after a failed / cancelled / empty-pool auto attempt (no fee spent).
- * Same for every non-success outcome — never multi-minute.
+ * EC effectively re-starts on the next plugin timer tick; keep this short so
+ * four local wallets re-enter the pool together after a drop.
  */
-export const AUTO_FUSION_RETRY_MS = 25_000;
+export const AUTO_FUSION_RETRY_MS = 8_000;
 /**
  * Empty-pool / no-agree retries — same as {@link AUTO_FUSION_RETRY_MS}.
  */
@@ -89,6 +95,60 @@ export function nextAutoEngineTickMs(now = Date.now()): number {
     return Math.min(remainOpen, 5_000) + Math.floor(Math.random() * 4_000);
   }
   return wait + jitter;
+}
+
+/**
+ * Shared UTC join window for **server** Auto — same idea as P2P rendezvous.
+ * Independent wallets only *enter* JoinPools in the open part of each slot so
+ * 4 local (or mainnet) clients overlap on the fusion server instead of
+ * staggering into 2–3 player partial rounds.
+ */
+export const AUTO_SERVER_JOIN_PERIOD_MS = 75_000;
+/** Open portion of each server-join slot (most of the period for quick overlap). */
+export const AUTO_SERVER_JOIN_OPEN_MS = 45_000;
+
+export function msUntilServerJoinOpen(now = Date.now()): number {
+  const into = now % AUTO_SERVER_JOIN_PERIOD_MS;
+  if (into < AUTO_SERVER_JOIN_OPEN_MS) return 0;
+  return AUTO_SERVER_JOIN_PERIOD_MS - into;
+}
+
+export function isServerJoinOpen(now = Date.now()): boolean {
+  return now % AUTO_SERVER_JOIN_PERIOD_MS < AUTO_SERVER_JOIN_OPEN_MS;
+}
+
+/**
+ * Recovery poll for server Auto: prefer next join-open + small jitter
+ * (same pattern as nextAutoEngineTickMs for P2P).
+ */
+export function nextServerAutoEngineTickMs(now = Date.now()): number {
+  const wait = msUntilServerJoinOpen(now);
+  if (wait === 0) {
+    const into = now % AUTO_SERVER_JOIN_PERIOD_MS;
+    const remainOpen = Math.max(0, AUTO_SERVER_JOIN_OPEN_MS - into);
+    return Math.min(remainOpen, 4_000) + Math.floor(Math.random() * 2_000);
+  }
+  return wait + Math.floor(Math.random() * 3_000);
+}
+
+/** Mode-aware Auto recovery poll interval. */
+export function nextAutoEngineTickForMode(
+  mode: FusionMode,
+  now = Date.now()
+): number {
+  return mode === 'server'
+    ? nextServerAutoEngineTickMs(now)
+    : nextAutoEngineTickMs(now);
+}
+
+/**
+ * True when a failed Auto attempt should use the short empty-pool / connect
+ * retry (not a multi-minute sleep). Shared by P2P and server paths.
+ */
+export function isAutoTransientFailure(message: string): boolean {
+  return /no other (wallets|players)|no peers|only \d+ wallet|need ≥?\s*3|at least three|could not agree|could not connect|connection refused|actively refused|connection was aborted|os error 10061|os error 10053|timed? ?out waiting|never reported pool|no fusion server|not ready for|route is unavailable|tor is (disabled|not ready)|fusion server address|too few remaining|receive failed/i.test(
+    message
+  );
 }
 
 export function decideAutoFusion(input: AutoFusionInputs): AutoFusionDecision {

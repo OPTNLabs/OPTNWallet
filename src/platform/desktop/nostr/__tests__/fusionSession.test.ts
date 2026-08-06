@@ -10,7 +10,7 @@ import {
   type TransactionCommon,
 } from '@bitauth/libauth';
 import { hash160 } from '@cashscript/utils';
-import { runFusionRound, messageBinding, type RoundMessage, type RoundTransport, type RoundParams } from '../fusionSession';
+import { runFusionRound, type RoundMessage, type RoundTransport, type RoundParams } from '../fusionSession';
 import { assembleFusionTx, type PeerContribution } from '../fusionRound';
 import { electCoordinator } from '../fusion';
 import { toLibauthTx } from '../fusionSign';

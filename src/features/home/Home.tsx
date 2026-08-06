@@ -32,6 +32,7 @@ import EmptyState from '../../components/ui/EmptyState';
 import { shortenTxHash } from '../../utils/shortenHash';
 import { takeRecentTransactions } from '../../utils/transactionHistoryOrder';
 import { isFusionTransaction } from '../../platform/desktop/fusionCoinDepth';
+import { useFusionDepthRevision } from '../../platform/desktop/useFusionDepthRevision';
 import { FusionBadge } from '../../components/FusionBadge';
 import { preloadTokenMetadata } from '../../hooks/useSharedTokenMetadata';
 import {
@@ -79,6 +80,7 @@ const Home: React.FC<HomeProps> = ({ viewerOnly = false }) => {
   const currentWalletId = useSelector(
     (state: RootState) => state.wallet_id.currentWalletId
   );
+  const fusionDepthRev = useFusionDepthRevision(Number(currentWalletId) || 0);
   const reduxUTXOs = useSelector((state: RootState) => state.utxos.utxos);
   const fetchingUTXOsRedux = useSelector(
     (state: RootState) => state.utxos.fetchingUTXOs
@@ -353,6 +355,7 @@ const Home: React.FC<HomeProps> = ({ viewerOnly = false }) => {
             <div className="space-y-2.5">
               {recentTransactions.length > 0 ? (
                 recentTransactions.map((tx) => {
+                  void fusionDepthRev;
                   const walletIdNum = Number(currentWalletId);
                   const fused =
                     Number.isFinite(walletIdNum) &&

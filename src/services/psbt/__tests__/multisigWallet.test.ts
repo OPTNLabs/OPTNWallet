@@ -6,12 +6,10 @@
 import { describe, expect, it } from 'vitest';
 import {
   binToHex,
-  decodeHdPrivateKey,
   deriveHdPath,
   deriveHdPublicNode,
   encodeHdPublicKey,
   deriveHdPrivateNodeFromSeed,
-  hexToBin,
 } from '@bitauth/libauth';
 
 import {

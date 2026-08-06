@@ -39,6 +39,7 @@ import EmptyState from '../../components/ui/EmptyState';
 import { shortenTxHash } from '../../utils/shortenHash';
 import { takeRecentTransactions } from '../../utils/transactionHistoryOrder';
 import { isFusionTransaction } from './fusionCoinDepth';
+import { useFusionDepthRevision } from './useFusionDepthRevision';
 import { FusionBadge } from '../../components/FusionBadge';
 import { preloadTokenMetadata } from '../../hooks/useSharedTokenMetadata';
 import {
@@ -83,6 +84,7 @@ const Home: React.FC = () => {
   const currentWalletId = useSelector(
     (state: RootState) => state.wallet_id.currentWalletId
   );
+  const fusionDepthRev = useFusionDepthRevision(Number(currentWalletId) || 0);
   const sessionGeneration = useSelector(
     (state: RootState) => state.wallet_id.sessionGeneration ?? 0
   );
@@ -486,6 +488,7 @@ const Home: React.FC = () => {
             <div className="space-y-2.5">
               {recentTransactions.length > 0 ? (
                 recentTransactions.map((tx) => {
+                  void fusionDepthRev;
                   const walletIdNum = Number(currentWalletId);
                   const fused =
                     Number.isFinite(walletIdNum) &&

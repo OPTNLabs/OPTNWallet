@@ -34,18 +34,24 @@ import { logError } from '../../utils/errorHandling';
 import { resolveFusionTransport } from './FusionTorResolver';
 import {
   AUTO_FUSION_COOLDOWN_MS,
+  AUTO_FUSION_RETRY_MS,
   decideAutoFusion,
   msUntilAutoRendezvousOpen,
-  nextAutoEngineTickMs,
+  msUntilServerJoinOpen,
+  nextAutoEngineTickForMode,
 } from './fusionAutoEngine';
+// Continuity: after each round ends, re-arm like EC's plugin loop.
 import { coinsBelowDepth } from './fusionCoinDepth';
 import {
   clearAutoCooldown,
   isAutoCooldownReady,
+  isAutoDepthMetIdle,
+  stampAutoFailure,
   wakeAutoFromWalletActivity,
 } from './fusionWalletLease';
 import {
   reportFusionProgress,
+  setFusionLastResult,
   startFusionRound,
 } from './FusionRunnerService';
 import { runP2pFusion } from './FusionP2pService';
@@ -55,19 +61,6 @@ import {
   parseFusionServerTarget,
   serverFusionPrivacyDestination,
 } from './ServerFusionRunner';
-
-/**
- * How often the engine re-asks whether it may run.
- *
- * This is only a recovery poll; committed UTXO refreshes wake the engine
- * immediately. Keep the blind fallback aligned with the durable cooldown so an
- * idle or empty wallet does not perform a full Electrum reconciliation every
- * minute in every open window.
- */
-/** Shared rendezvous + jitter (see fusionAutoEngine.nextAutoEngineTickMs). */
-function nextEngineTickMs(): number {
-  return nextAutoEngineTickMs();
-}
 
 function sleepMs(ms: number, signal?: AbortSignal): Promise<void> {
   return new Promise((resolve, reject) => {
@@ -109,6 +102,11 @@ export function useAutoFusion(): void {
   /** Bumped whenever the wallet session changes, to strand stale completions. */
   const sessionRef = useRef(0);
   const activeControllerRef = useRef<AbortController | null>(null);
+  /** Always call the latest tick from deferred re-queue (EC unattended loop). */
+  const tickRef = useRef<(fresh?: WalletUtxoSnapshot) => Promise<void>>(
+    async () => undefined
+  );
+  const followUpTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   // Abort ONLY when the user actually left the auto session (wallet, network,
   // fusion/tor master switches). Do NOT include `nostrRelays` / `fusionServers`:
   // auto health refresh and HMR re-serialize those arrays and used to cancel
@@ -131,6 +129,10 @@ export function useAutoFusion(): void {
     sessionRef.current += 1;
     activeControllerRef.current?.abort();
     activeControllerRef.current = null;
+    if (followUpTimerRef.current) {
+      clearTimeout(followUpTimerRef.current);
+      followUpTimerRef.current = null;
+    }
   }, [sessionKey]);
 
   const tick = useCallback(async (freshSnapshot?: WalletUtxoSnapshot) => {
@@ -139,8 +141,31 @@ export function useAutoFusion(): void {
     // not probe or start Tor until another automatic attempt is actually due.
     // startFusionRound repeats this advisory check and atomically claims later.
     if (!isAutoCooldownReady(walletId, AUTO_FUSION_COOLDOWN_MS)) return;
+    // Depth already satisfied — stay silent until UTXO activity / depth change.
+    if (isAutoDepthMetIdle(walletId)) return;
     const controller = new AbortController();
     activeControllerRef.current = controller;
+    /** When set, schedule another Auto attempt after this tick (unattended). */
+    let requeueMs: number | null = null;
+
+    /** Record a setup/route failure so Auto keeps retrying and the UI explains why. */
+    const noteServerSetupFailure = async (message: string) => {
+      await stampAutoFailure(walletId, AUTO_FUSION_RETRY_MS).catch(() => undefined);
+      setFusionLastResult(walletId, {
+        mode: 'server',
+        trigger: 'auto',
+        ok: false,
+        message,
+      });
+      void import('./logger')
+        .then(({ log }) =>
+          log.info('p2p-live', `w${walletId} OUTCOME failed: ${message}`)
+        )
+        .catch(() => undefined);
+      logError('AutoFusion.serverSetup', new Error(message), { walletId });
+      requeueMs = AUTO_FUSION_RETRY_MS + 400;
+    };
+
     try {
       const session = sessionRef.current;
 
@@ -170,7 +195,12 @@ export function useAutoFusion(): void {
           savedFusionServer && fusionServers.includes(savedFusionServer)
             ? savedFusionServer
             : fusionServers[0];
-        if (!selectedServer) return;
+        if (!selectedServer) {
+          await noteServerSetupFailure(
+            'Auto-fuse (server): no fusion server selected — retrying…'
+          );
+          return;
+        }
         try {
           const target = parseFusionServerTarget(selectedServer);
           const inputLookupEndpoint = defaultInputLookupEndpoint(network);
@@ -185,7 +215,12 @@ export function useAutoFusion(): void {
             manualPort: torPortManual,
             autoStartIntegrated: true,
           });
-          if (route.type === 'unavailable') return;
+          if (route.type === 'unavailable') {
+            await noteServerSetupFailure(
+              `Auto-fuse (server): ${route.reason} — retrying…`
+            );
+            return;
+          }
           torReady = true;
           serverRunner = buildServerRunner({
             walletId,
@@ -194,8 +229,14 @@ export function useAutoFusion(): void {
             tor: route.type === 'tor' ? route.tor : null,
             inputLookupEndpoint,
           });
-        } catch {
+        } catch (error) {
           torReady = false;
+          const msg =
+            error instanceof Error ? error.message : String(error);
+          await noteServerSetupFailure(
+            `Auto-fuse (server): ${msg} — retrying…`
+          );
+          return;
         }
       }
 
@@ -214,8 +255,13 @@ export function useAutoFusion(): void {
       // UTXO activity (send/receive/tx) must not wait on the rendezvous slot —
       // that delayed wallet6 (id 4) after depth-met idle was cleared. Poll-only
       // ticks still align to the open window so independent clients cluster.
-      if (decision.mode === 'p2p' && !freshSnapshot) {
-        const waitMs = msUntilAutoRendezvousOpen();
+      // Server Auto uses the same idea: shared JoinPools entry window so 4
+      // wallets meet (P2P-style), not staggered 2–3 player partial rounds.
+      if (!freshSnapshot) {
+        const waitMs =
+          decision.mode === 'p2p'
+            ? msUntilAutoRendezvousOpen()
+            : msUntilServerJoinOpen();
         if (waitMs > 0) {
           try {
             await sleepMs(waitMs, controller.signal);
@@ -268,8 +314,10 @@ export function useAutoFusion(): void {
                 'No verified server Fusion route is available.'
               );
             }
-            progress?.onStatus?.('Auto-fuse (server): contacting fusion server…');
-            return serverRunner(coins, signal);
+            progress?.onStatus?.(
+              'Auto-fuse (server): contacting fusion server…'
+            );
+            return serverRunner(coins, signal, progress);
           },
         },
       });
@@ -283,16 +331,46 @@ export function useAutoFusion(): void {
           walletId,
           mode: outcome.mode,
         });
-      } else if (outcome.status === 'fused' && outcome.warning) {
-        logError('AutoFusion.completionWarning', new Error(outcome.warning), {
-          walletId,
-          mode: outcome.mode,
-          txid: outcome.txid,
-        });
+        // EC plugin re-starts autofusion on the next timer; re-queue promptly.
+        requeueMs = AUTO_FUSION_RETRY_MS + 400;
+      } else if (outcome.status === 'fused') {
+        if (outcome.warning) {
+          logError('AutoFusion.completionWarning', new Error(outcome.warning), {
+            walletId,
+            mode: outcome.mode,
+            txid: outcome.txid,
+          });
+        }
+        // Climb rounds-per-coin unattended: success → short rest → JoinPools again.
+        requeueMs = AUTO_FUSION_COOLDOWN_MS + 500;
+      } else if (outcome.status === 'cancelled') {
+        requeueMs = AUTO_FUSION_RETRY_MS + 400;
+      } else if (outcome.status === 'waiting-for-wallet') {
+        requeueMs = 4_000;
+      } else if (outcome.status === 'cooldown' || outcome.status === 'busy') {
+        requeueMs = AUTO_FUSION_RETRY_MS;
       }
+      // no-eligible-coins / depth-met: do not requeue — long idle stamp handles it.
     } finally {
       if (activeControllerRef.current === controller) {
         activeControllerRef.current = null;
+      }
+      // Unattended loop: chain the next attempt without waiting only on the
+      // recovery poll. Matches Electron Cash keeping _fusions_auto filled.
+      if (
+        requeueMs !== null &&
+        cashFusionEnabled &&
+        autoFuseEnabled &&
+        walletId > 0
+      ) {
+        if (followUpTimerRef.current) clearTimeout(followUpTimerRef.current);
+        const delay = requeueMs;
+        followUpTimerRef.current = setTimeout(() => {
+          followUpTimerRef.current = null;
+          void tickRef.current().catch((error) => {
+            logError('AutoFusion.requeue', error, { walletId });
+          });
+        }, delay);
       }
     }
   }, [
@@ -310,6 +388,7 @@ export function useAutoFusion(): void {
     walletId,
     network,
   ]);
+  tickRef.current = tick;
 
   /**
    * Rounds-per-coin from the settings box is the live Auto target.
@@ -373,12 +452,15 @@ export function useAutoFusion(): void {
         })();
       }
     );
-    // setTimeout, re-armed each time, rather than setInterval: a fixed interval
-    // cannot be re-randomised between ticks.
+    // Mode-aware recovery poll: server Auto uses a short steady beat so
+    // connect-refused / empty-pool keep re-entering the JOIN queue; P2P keeps
+    // the shared rendezvous window so peers meet.
+    const mode = p2pFusionEnabled ? 'p2p' : 'server';
+    const arm = () => nextAutoEngineTickForMode(mode);
     let timer = setTimeout(function tick() {
       void run();
-      timer = setTimeout(tick, nextEngineTickMs());
-    }, nextEngineTickMs());
+      timer = setTimeout(tick, arm());
+    }, arm());
     // Stop SCHEDULING, but deliberately leave any in-flight round alone.
     //
     // This effect re-runs whenever `tick` changes identity, and `tick` depends
@@ -392,10 +474,23 @@ export function useAutoFusion(): void {
     // A round that genuinely must stop — the wallet closed, the network changed,
     // fusion was switched off — is aborted by the session effect above, which
     // keys on exactly those things.
+    // First tick immediately (EC does not wait a full period to start Auto).
+    void run();
     return () => {
       disposed = true;
       unsubscribeRefresh();
       clearTimeout(timer);
+      if (followUpTimerRef.current) {
+        clearTimeout(followUpTimerRef.current);
+        followUpTimerRef.current = null;
+      }
     };
-  }, [cashFusionEnabled, autoFuseEnabled, walletId, tick]);
+  }, [
+    cashFusionEnabled,
+    autoFuseEnabled,
+    walletId,
+    p2pFusionEnabled,
+    fuseDepth,
+    tick,
+  ]);
 }

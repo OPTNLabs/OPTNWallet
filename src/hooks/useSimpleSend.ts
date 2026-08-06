@@ -1,6 +1,6 @@
 // src/hooks/useSimpleSend.ts
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useSelector } from 'react-redux';
 
 import { RootState } from '../state/store';
@@ -58,6 +58,9 @@ export default function useSimpleSend() {
   const [assetType, setAssetType] = useState<AssetType>('bch');
   const [hydrated, setHydrated] = useState(false);
   const [maxBusy, setMaxBusy] = useState(false);
+  /** True while Review is building a tx (keeps the button responsive / labeled). */
+  const [reviewBusy, setReviewBusy] = useState(false);
+  const reviewInFlightRef = useRef(false);
 
   useEffect(() => {
     const raf = window.requestAnimationFrame(() => setHydrated(true));
@@ -127,11 +130,13 @@ export default function useSimpleSend() {
   }, [walletId, addresses.length, hydrated]);
 
   // The worker normally keeps the SQL.js snapshot current, but each Tauri
-  // process has its own in-memory database. Refresh the BCH addresses at the
-  // point of sending so Review/Max cannot select from a stale process-local
-  // snapshot when another wallet instance has just received or broadcast a
-  // transaction. The service also reconstructs pending owned outputs from the
-  // shared outbound tracker, so unconfirmed change remains spendable.
+  // process has its own in-memory database. A full listunspent over every
+  // address is authoritative for multi-window freshness, but it is also the
+  // slow path (many addresses / Tor / Electrum). Review must not block the UI
+  // on that sweep — use the local snapshot when present (same as Max / token
+  // fee pool) and only force a network refresh when we have nothing to spend.
+  // The service also reconstructs pending owned outputs from the shared
+  // outbound tracker, so unconfirmed change remains spendable after a refresh.
   const refreshBchUtxos = useCallback(async (): Promise<UTXO[]> => {
     if (!walletId) return [];
 
@@ -151,6 +156,20 @@ export default function useSimpleSend() {
     setDbUtxos(refreshed);
     return refreshed;
   }, [walletId, addresses]);
+
+  /**
+   * Spendable BCH pool for Review/Max-style builds.
+   * Prefer the already-loaded snapshot so the button feels instant; kick a
+   * background network refresh so the next action sees fresher coins without
+   * freezing this click. Only await the network path when the pool is empty.
+   */
+  const loadSpendableBchUtxos = useCallback(async (): Promise<UTXO[]> => {
+    if (dbUtxos.length > 0) {
+      void refreshBchUtxos().catch(() => undefined);
+      return dbUtxos;
+    }
+    return await refreshBchUtxos();
+  }, [dbUtxos, refreshBchUtxos]);
 
   // BCH change address (P2PKH cashaddr as selected)
   const [selectedChangeAddress, setSelectedChangeAddressState] =
@@ -397,12 +416,20 @@ export default function useSimpleSend() {
     setSelectedNftCommitment('');
     setCoinControlEnabled(false);
     setSelectedCoinKeys(new Set());
+    setReviewBusy(false);
+    reviewInFlightRef.current = false;
   }, [setAmountToken]);
 
   const doReview = useCallback(async () => {
+    if (reviewInFlightRef.current) return;
+    reviewInFlightRef.current = true;
+    setReviewBusy(true);
+    setError('');
+    // Yield so React can paint "Preparing…" before build work.
+    await new Promise<void>((resolve) => {
+      window.requestAnimationFrame(() => resolve());
+    });
     try {
-      setError('');
-
       const rpaBlockReason = getRpaSendBlockReason(recipient, currentNetwork);
       if (rpaBlockReason) {
         setError(rpaBlockReason);
@@ -430,7 +457,9 @@ export default function useSimpleSend() {
           return;
         }
 
-        const freshDbUtxos = await refreshBchUtxos();
+        // Local snapshot first (Max-style). Full Electrum refresh no longer
+        // blocks this click — it runs in the background via loadSpendableBchUtxos.
+        const freshDbUtxos = await loadSpendableBchUtxos();
         const controlled = applyCoinControl(freshDbUtxos);
         if ('error' in controlled) {
           setError(controlled.error);
@@ -464,7 +493,7 @@ export default function useSimpleSend() {
       }
 
       // From here: token sends also need BCH for fees
-      const feePoolRaw = dbUtxos.length > 0 ? dbUtxos : await refreshBchUtxos();
+      const feePoolRaw = await loadSpendableBchUtxos();
       const feePool = applyCoinControl(feePoolRaw);
       if ('error' in feePool) {
         setError(feePool.error);
@@ -626,6 +655,9 @@ export default function useSimpleSend() {
     } catch (error: unknown) {
       setError(toErrorMessage(error, 'Failed to prepare transaction.'));
       setMode('error');
+    } finally {
+      reviewInFlightRef.current = false;
+      setReviewBusy(false);
     }
   }, [
     normalizedRecipient,
@@ -637,11 +669,10 @@ export default function useSimpleSend() {
     amountToken,
     selectedTokenDecimals,
     selectedNftCommitment,
-    dbUtxos,
     tokenUtxos,
     selectedChangeAddress,
     parsedRecipient.amountRaw,
-    refreshBchUtxos,
+    loadSpendableBchUtxos,
     tokenChangeAddress,
     applyCoinControl,
   ]);
@@ -858,6 +889,7 @@ export default function useSimpleSend() {
     txid,
     broadcastState,
     maxBusy,
+    reviewBusy,
 
     // coin control (global Simple Send)
     dbUtxos,

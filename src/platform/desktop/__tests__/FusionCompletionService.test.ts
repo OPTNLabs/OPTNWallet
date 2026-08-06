@@ -4,9 +4,11 @@ const recordBroadcastMock = vi.fn();
 const observeTransactionMock = vi.fn();
 const reconcileActiveWalletUtxosForSpendMock = vi.fn();
 
+const markStateMock = vi.fn();
 vi.mock('../../../services/OutboundTransactionTracker', () => ({
   default: {
     recordBroadcast: recordBroadcastMock,
+    markState: markStateMock,
   },
 }));
 
@@ -36,6 +38,7 @@ describe('completeFusionBroadcast', () => {
     await new Promise((resolve) => setTimeout(resolve, 0));
     vi.clearAllMocks();
     recordBroadcastMock.mockResolvedValue({ state: 'broadcasted' });
+    markStateMock.mockResolvedValue({ state: 'seen' });
     observeTransactionMock.mockResolvedValue(undefined);
     // Exclusive spend refresh returns a snapshot (or null), not a boolean.
     reconcileActiveWalletUtxosForSpendMock.mockResolvedValue({});
@@ -142,7 +145,7 @@ describe('completeFusionBroadcast', () => {
     );
   });
 
-  it('keeps Tor-only server Fusion completion out of ordinary observation and refresh paths', async () => {
+  it('keeps Tor-only observation private but still refreshes UTXOs for depth rebind', async () => {
     const { completeFusionBroadcast } = await import(
       '../FusionCompletionService'
     );
@@ -159,7 +162,9 @@ describe('completeFusionBroadcast', () => {
       })
     ).resolves.toEqual({
       tracked: true,
-      refreshed: false,
+      // UTXO refresh is required so Auto fuse-depth can climb (tor-only used to
+      // skip this and leave depths at 0 forever).
+      refreshed: true,
       depthRecorded: 0,
     });
 
@@ -172,7 +177,8 @@ describe('completeFusionBroadcast', () => {
       sourceLabel: 'CashFusion server',
       privacyRoute: 'tor-only',
     });
+    // Still do NOT push the fusion tx through ordinary Electrum observation.
     expect(observeTransactionMock).not.toHaveBeenCalled();
-    expect(reconcileActiveWalletUtxosForSpendMock).not.toHaveBeenCalled();
+    expect(reconcileActiveWalletUtxosForSpendMock).toHaveBeenCalled();
   });
 }, 15_000);

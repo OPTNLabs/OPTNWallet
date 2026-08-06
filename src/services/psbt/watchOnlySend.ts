@@ -109,6 +109,15 @@ export interface WatchOnlyBuildResult {
   inputSumSats: bigint;
   /** Master fingerprint used, or null when the wallet has none yet. */
   masterFingerprint: Uint8Array | null;
+  /**
+   * Whether the signing device will show these inputs as its own.
+   *
+   * False means the PSBT still signs and broadcasts correctly — the signature
+   * is made from the derivation path, not the fingerprint — but SeedCash's
+   * review screen will not claim the inputs, so the user is approving a
+   * transaction the device cannot confirm belongs to them. Warn, do not block.
+   */
+  signerRecognisesInputs: boolean;
 }
 
 /** What the signer is asked to authorise — everything the import binds to. */
@@ -234,12 +243,35 @@ export function buildWatchOnlyPsbt(
   if (params.amountSats <= 0n) {
     throw new Error('Amount must be greater than 0.');
   }
-  if (!params.masterFingerprint || params.masterFingerprint.length !== 4) {
-    throw new Error(
-      'Master fingerprint is missing. SeedCash shows it with the account xPub; ' +
-        'enter the 8 hex characters so the signer can claim the inputs.'
-    );
-  }
+  // The master fingerprint is NOT required to produce a signable, valid
+  // transaction, and it is not derivable from the account xPub — measured, not
+  // assumed. For the BIP39 vector the three candidates all differ:
+  //
+  //   SeedCash's own value      73c5da0a  = hash160(master pubkey)[:4], at m
+  //   the xPub's parent fp      2b72f5b7  = m/44'/145'
+  //   the account key's own fp  cba3794d
+  //
+  // and a watch-only wallet never sees the master key. What matters is that
+  // SeedCash's `sign_psbt_with_xpriv` reads only the *path* out of the 0x06
+  // record (`_, derivation_path = parse_bip32_derivation_value(v)`) and
+  // discards the fingerprint entirely. Signing a PSBT stamped with a
+  // deliberately wrong fingerprint was verified to produce a signature that
+  // this codec accepts and that libauth's BCH VM executes.
+  //
+  // What the fingerprint does buy is the device's REVIEW screen: SeedCash
+  // claims an input as its own via `v[:4] == wallet_fingerprint`, so without a
+  // match it displays a transaction it does not recognise and the user is
+  // blind-signing. So it is optional, not free — the caller is told which case
+  // it is via `signerRecognisesInputs` and warns accordingly.
+  //
+  // Zeros rather than omission: dropping the 0x06 record entirely would leave
+  // SeedCash with no derivation path at all and it would refuse to sign
+  // ("xpriv signing requires a PSBT derivation path").
+  const fingerprintKnown =
+    !!params.masterFingerprint && params.masterFingerprint.length === 4;
+  const masterFingerprint = fingerprintKnown
+    ? Uint8Array.from(params.masterFingerprint!)
+    : new Uint8Array(4);
   // Without the parent transaction the PSBT falls back to the compact
   // WITNESS_UTXO field, which SeedCash mis-slices — it would sign a hash over
   // a script one byte longer than the one we verify, and every signature would
@@ -301,7 +333,7 @@ export function buildWatchOnlyPsbt(
   const feeSats = inputSum - params.amountSats - changeSats;
   const psbtInputs: PsbtInputSpec[] = params.inputs.map((input) => ({
     ...inputSpecToPsbt(input, params.accountPath),
-    masterFingerprint: Uint8Array.from(params.masterFingerprint!),
+    masterFingerprint,
   }));
   const changeOutput: PsbtOutputSpec = {
     lockingBytecode: changeBytecode,
@@ -364,6 +396,7 @@ export function buildWatchOnlyPsbt(
     feeSats,
     changeSats,
     inputSumSats: inputSum,
-    masterFingerprint: params.masterFingerprint,
+    masterFingerprint: fingerprintKnown ? masterFingerprint : null,
+    signerRecognisesInputs: fingerprintKnown,
   };
 }

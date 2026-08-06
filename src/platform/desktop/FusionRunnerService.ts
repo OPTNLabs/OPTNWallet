@@ -18,12 +18,18 @@ import {
 } from '../../services/WalletUtxoRefreshService';
 import { Network } from '../../state/slices/networkSlice';
 import type { UTXO } from '../../types/types';
-import { coinsBelowDepth, fuseDepthEligibility } from './fusionCoinDepth';
+import {
+  coinsBelowDepth,
+  formatAutoDepthGateLog,
+  formatAutoDepthMetMessage,
+  fuseDepthEligibility,
+} from './fusionCoinDepth';
 import {
   acquireRoundLease,
   forceClearRoundLease,
   hasLiveRoundLease,
   isAutoCooldownReady,
+  isAutoDepthMetIdle,
   LEASE_HEARTBEAT_MS,
   releaseRoundLease,
   stampAutoDepthMetIdle,
@@ -38,8 +44,13 @@ import {
   AUTO_FUSION_DEPTH_MET_IDLE_MS,
   AUTO_FUSION_EMPTY_POOL_RETRY_MS,
   AUTO_FUSION_RETRY_MS,
+  isAutoTransientFailure,
   type FusionMode,
 } from './fusionAutoEngine';
+import {
+  ACCEPT_UNCONFIRMED_FUSION_INPUTS,
+  EC_DEFAULT_MAX_COINS,
+} from './fusionTiming';
 
 /** Structured, so callers never parse a human string to learn what happened. */
 export type FusionRunOutcome =
@@ -303,18 +314,22 @@ if (typeof window !== 'undefined') {
   window.addEventListener('beforeunload', releaseOnUnload);
 }
 
-// Unconfirmed coins are deliberately eligible here, which is a considered
-// divergence from Electron Cash rather than an oversight. EC excludes them
-// unconditionally (`plugin.py:145` — `if c['height'] <= 0: good = False`), but
-// that rule predates BCH's reliable 0-conf and its relaxed limits on chained
-// unconfirmed spends. Calin's position is that fusing unconfirmed is the better
-// design and that EC should move the same way, so OPTN does it now.
-//
-// The trade accepted by that choice: a fusion spending an unconfirmed parent
-// does not outlive it, so if the parent is ever evicted or replaced the signed
-// CoinJoin becomes unspendable and the round is wasted for every peer in it.
-// On BCH that is a rare case, and waiting for confirmation costs liquidity in
-// every round — which is its own privacy cost, since smaller pools mix worse.
+// Unconfirmed coins are eligible (ACCEPT_UNCONFIRMED_FUSION_INPUTS). EC-maintainer
+// direction endorses fusing 0-conf on BCH — we do not wait for a block before the
+// next Auto round. Classic EC still excludes unconfirmed in select_coins /
+// validation.py; we do not copy that. Trade-off: spending an unconfirmed parent
+// dies if that parent is replaced — rare on BCH; waiting costs liquidity/privacy.
+
+/**
+ * EC plugin.py DEFAULT_MAX_COINS = 20. Prefer the largest UTXOs so tiers stay
+ * affordable (EC samples randomly; we keep the best batch deterministically).
+ */
+function limitFusionCoins(coins: UTXO[]): UTXO[] {
+  if (coins.length <= EC_DEFAULT_MAX_COINS) return coins;
+  return [...coins]
+    .sort((a, b) => Number(b.value ?? 0) - Number(a.value ?? 0))
+    .slice(0, EC_DEFAULT_MAX_COINS);
+}
 
 /**
  * Live, spendable, non-token coins for this wallet.
@@ -344,14 +359,25 @@ async function freshCoins(
       // Both token fields: `token` is our normalised shape, `token_data` is what
       // comes straight off Electrum. A coin carrying either must never be fused
       // — that would burn the CashToken.
-      (coin): coin is UTXO => Boolean(coin) && !coin.token && !coin.token_data
+      // Unconfirmed (height ≤ 0) kept when ACCEPT_UNCONFIRMED_FUSION_INPUTS.
+      (coin): coin is UTXO => {
+        if (!coin || coin.token || coin.token_data) return false;
+        if (
+          !ACCEPT_UNCONFIRMED_FUSION_INPUTS &&
+          typeof coin.height === 'number' &&
+          coin.height <= 0
+        ) {
+          return false;
+        }
+        return true;
+      }
     );
 
   // Depth bounds automatic spending only. A user who clicks Fuse Now is making an
   // explicit choice and may re-fuse a coin that has already reached the limit.
-  return trigger === 'auto'
-    ? coinsBelowDepth(walletId, coins, fuseDepth)
-    : coins;
+  const eligible =
+    trigger === 'auto' ? coinsBelowDepth(walletId, coins, fuseDepth) : coins;
+  return limitFusionCoins(eligible);
 }
 
 export async function startFusionRound(
@@ -360,6 +386,11 @@ export async function startFusionRound(
   const { walletId, mode, trigger } = options;
   if (options.signal?.aborted) return { status: 'cancelled' };
   if (!Number.isInteger(walletId) || walletId <= 0) return { status: 'busy' };
+
+  // Durable Fused labels (SQL) into sync cache before depth gate / history.
+  void import('./fusionCoinDepth')
+    .then(({ hydrateFusionLabels }) => hydrateFusionLabels(walletId))
+    .catch(() => undefined);
 
   // Same-window double Start / Auto+manual race before acquire completes.
   if (heldLeases.has(walletId)) return { status: 'busy' };
@@ -371,6 +402,12 @@ export async function startFusionRound(
     trigger === 'auto' &&
     !isAutoCooldownReady(walletId, AUTO_FUSION_COOLDOWN_MS)
   ) {
+    return { status: 'cooldown' };
+  }
+
+  // Depth-met long idle: do not re-reconcile / re-log every engine tick.
+  // Wake only via wallet UTXO activity (or fuseDepth change) that clears the stamp.
+  if (trigger === 'auto' && isAutoDepthMetIdle(walletId)) {
     return { status: 'cooldown' };
   }
 
@@ -394,22 +431,22 @@ export async function startFusionRound(
             m.reconcileActiveWalletUtxosForSpend(walletId, options.signal)
           )
           .catch(() => null));
-      const allNonToken = snapshot
-        ? Object.values(snapshot)
-            .flat()
-            .filter((c) => c && !c.token && !c.token_data)
-        : [];
+      const allNonToken = (snapshot
+        ? (Object.values(snapshot).flat() as UTXO[])
+        : []
+      ).filter(
+        (c) =>
+          !!c &&
+          !c.token &&
+          !(c as UTXO & { token_data?: unknown }).token_data
+      );
       const elig = fuseDepthEligibility(
         walletId,
         allNonToken,
         options.fuseDepth
       );
-      const detail =
-        elig.total === 0
-          ? 'Auto: no BCH coins to fuse (wallet empty of non-token UTXOs).'
-          : `Auto: all ${elig.total} coin(s) already at rounds-per-coin depth ` +
-            `≥ ${elig.maxDepth} (the number in the box; coins ${elig.minDepth}–${elig.maxCoinDepth}). ` +
-            `Idle until send/receive/tx or you raise that number to fuse further.`;
+      // Target is options.fuseDepth (the box) for both P2P and server Auto.
+      const detail = formatAutoDepthMetMessage(elig);
       // Long depth-met idle (not fail backoff). Cleared by UTXO activity that
       // re-introduces below-depth coins (wakeAutoFromWalletActivity).
       await stampAutoDepthMetIdle(walletId, AUTO_FUSION_DEPTH_MET_IDLE_MS).catch(
@@ -507,11 +544,11 @@ export async function startFusionRound(
         )
         .catch(() => undefined);
     } else if (outcome.status === 'no-eligible-coins') {
-      // Not a hard failure for auto: often every coin already hit fuse depth.
+      // Not a hard failure for auto: every coin already meets the box target.
       const depthMsg =
         trigger === 'auto'
           ? (outcome.detail ??
-            'Auto: nothing to fuse — all BCH coins already meet rounds-per-coin depth (or no BCH coins). Manual Start can still re-fuse.')
+            'Auto: nothing to fuse — all BCH coins already at rounds-per-coin depth (or no BCH coins). Manual Start can still re-fuse.')
           : 'No eligible coins to fuse.';
       setFusionLastResult(walletId, {
         mode,
@@ -561,22 +598,21 @@ export async function startFusionRound(
               m.reconcileActiveWalletUtxosForSpend(walletId, options.signal)
             )
             .catch(() => null));
-        const allNonToken = snapshot
-          ? Object.values(snapshot)
-              .flat()
-              .filter((c) => c && !c.token && !c.token_data)
-          : [];
+        const allNonToken = (snapshot
+          ? (Object.values(snapshot).flat() as UTXO[])
+          : []
+        ).filter(
+          (c) =>
+            !!c &&
+            !c.token &&
+            !(c as UTXO & { token_data?: unknown }).token_data
+        );
         const elig = fuseDepthEligibility(
           walletId,
           allNonToken,
           options.fuseDepth
         );
-        const detail =
-          elig.total === 0
-            ? 'Auto: no BCH coins to fuse (wallet empty of non-token UTXOs).'
-            : `Auto: all ${elig.total} coin(s) already at rounds-per-coin depth ` +
-              `≥ ${elig.maxDepth} (the number in the box). Idle until send/receive/tx ` +
-              `or you raise that number to fuse further.`;
+        const detail = formatAutoDepthMetMessage(elig);
         // Long depth-met idle so Auto does not thrash every engine tick.
         await stampAutoDepthMetIdle(
           walletId,
@@ -605,8 +641,13 @@ export async function startFusionRound(
           .then(({ log }) =>
             log.info(
               'p2p-live',
-              `w${walletId} depth gate: ${coinsQuiet.length} eligible of target ` +
-                `${options.fuseDepth} (coin depths ${eligStart.minDepth}–${eligStart.maxCoinDepth})`
+              `w${walletId} depth gate: ` +
+                formatAutoDepthGateLog(
+                  coinsQuiet.length,
+                  options.fuseDepth,
+                  eligStart.minDepth,
+                  eligStart.maxCoinDepth
+                )
             )
           )
           .catch(() => undefined);
@@ -630,11 +671,10 @@ export async function startFusionRound(
                 options.signal,
                 progressHooks
               );
-        if (trigger === 'auto') {
-          await stampAutoSuccess(walletId, AUTO_FUSION_COOLDOWN_MS).catch(
-            () => undefined
-          );
-        }
+        // Inside trigger==='auto' block — always stamp Auto cooldown.
+        await stampAutoSuccess(walletId, AUTO_FUSION_COOLDOWN_MS).catch(
+          () => undefined
+        );
         return finish({
           status: 'fused',
           mode,
@@ -649,13 +689,12 @@ export async function startFusionRound(
           return finish({ status: 'cancelled' });
         }
         const msg = error instanceof Error ? error.message : String(error);
-        const emptyPool =
-          /no other wallets found|no peers|only \d+ wallet|need ≥?\s*3|at least three|could not agree/i.test(
-            msg
-          );
+        // Server connect refused / empty pool / P2P alone — short retry so Auto
+        // keeps looping until a round completes or depth is met.
+        const transient = isAutoTransientFailure(msg);
         await stampAutoFailure(
           walletId,
-          emptyPool ? AUTO_FUSION_EMPTY_POOL_RETRY_MS : AUTO_FUSION_RETRY_MS
+          transient ? AUTO_FUSION_EMPTY_POOL_RETRY_MS : AUTO_FUSION_RETRY_MS
         ).catch(() => undefined);
         return finish({
           status: 'failed',
@@ -665,13 +704,14 @@ export async function startFusionRound(
       }
     }
 
+    // Manual Start path only (Auto returns above).
     pushProgress({
       phase: 1,
       status: 'Refreshing coins…',
     });
     const coins = await freshCoins(
       walletId,
-      trigger,
+      'manual',
       options.fuseDepth,
       options.freshSnapshot,
       options.signal
@@ -688,10 +728,7 @@ export async function startFusionRound(
     try {
       pushProgress({
         phase: 1,
-        status:
-          trigger === 'auto'
-            ? `Auto-fuse (${mode}): ${coins.length} coin(s) — finding peers…`
-            : `Using ${coins.length} coin(s)…`,
+        status: `Using ${coins.length} coin(s)…`,
       });
       // Expose progress hooks to runners that wire into runP2pFusion/server.
       const progressHooks = {
@@ -706,12 +743,6 @@ export async function startFusionRound(
               options.signal,
               progressHooks
             );
-      // Paid success → long spacing. Failures use a short retry (below).
-      if (trigger === 'auto') {
-        await stampAutoSuccess(walletId, AUTO_FUSION_COOLDOWN_MS).catch(
-          () => undefined
-        );
-      }
       return finish({
         status: 'fused',
         mode,
@@ -720,25 +751,7 @@ export async function startFusionRound(
       });
     } catch (error) {
       if (options.signal?.aborted && isCancellationError(error)) {
-        if (trigger === 'auto') {
-          await stampAutoFailure(walletId, AUTO_FUSION_RETRY_MS).catch(
-            () => undefined
-          );
-        }
         return finish({ status: 'cancelled' });
-      }
-      if (trigger === 'auto') {
-        // No peers / Tor / etc. — short 25s fail backoff only (never multi-minute).
-        // Empty pool / agree miss: same retry so staggered windows meet.
-        const msg = error instanceof Error ? error.message : String(error);
-        const emptyPool =
-          /no other wallets found|only \d+ wallet|need ≥?\s*3|at least three|could not agree/i.test(
-            msg
-          );
-        await stampAutoFailure(
-          walletId,
-          emptyPool ? AUTO_FUSION_EMPTY_POOL_RETRY_MS : AUTO_FUSION_RETRY_MS
-        ).catch(() => undefined);
       }
       return finish({
         status: 'failed',

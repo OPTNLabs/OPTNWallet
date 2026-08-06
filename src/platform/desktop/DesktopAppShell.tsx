@@ -78,6 +78,36 @@ const DesktopAppShell: React.FC = () => {
   }, []);
   const dispatch = useDispatch();
   const walletId = useSelector(selectWalletId);
+
+  // Fused labels are durable SQL (not memory). Hydrate on wallet open + merge
+  // recovery from AppData fusion-txid-recovery.json (built from fuse logs).
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      try {
+        const {
+          hydrateFusionLabels,
+          restoreFusionLabelsFromRecoveryFile,
+        } = await import('./fusionCoinDepth');
+        const r = await restoreFusionLabelsFromRecoveryFile();
+        if (!cancelled && r.wallets > 0) {
+          console.info(
+            `[fusion] restored Fused labels for ${r.wallets} wallet(s) (+${r.txids} new txids)`
+          );
+        }
+        if (cancelled) return;
+        if (Number.isInteger(walletId) && walletId > 0) {
+          await hydrateFusionLabels(walletId);
+        }
+      } catch {
+        /* labels best-effort */
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [walletId]);
+
   const [rehydrated, setRehydrated] = useState(() => persistor.getState().bootstrapped);
   const [invariantChecked, setInvariantChecked] = useState(false);
   // After the ciphertext-model migration, credentials are password+salt in RAM

@@ -18,6 +18,7 @@ import QuantumrootTrackingService from '../../services/QuantumrootTrackingServic
 import WalletScreen from '../../components/ui/WalletScreen';
 import type { TransactionHistoryItem } from '../../types/types';
 import { isFusionTransaction } from '../../platform/desktop/fusionCoinDepth';
+import { useFusionDepthRevision } from '../../platform/desktop/useFusionDepthRevision';
 import { FusionBadge } from '../../components/FusionBadge';
 
 const EMPTY_TRANSACTIONS: TransactionHistoryItem[] = [];
@@ -31,6 +32,10 @@ const selectTransactions = createSelector(
 const TransactionHistory: React.FC = () => {
   const dispatch = useDispatch<AppDispatch>();
   const { wallet_id } = useParams<{ wallet_id: string }>();
+  const walletIdNum = Number(wallet_id);
+  const fusionDepthRev = useFusionDepthRevision(
+    Number.isFinite(walletIdNum) && walletIdNum > 0 ? walletIdNum : 0
+  );
   const transactions = useSelector((state: RootState) =>
     selectTransactions(state, wallet_id || '')
   );
@@ -166,7 +171,7 @@ const TransactionHistory: React.FC = () => {
           ) : (
             <ul className="h-full space-y-3 overflow-y-auto overscroll-contain pr-1">
               {paginatedTransactions.map((tx, id) => {
-                const walletIdNum = Number(wallet_id);
+                void fusionDepthRev;
                 const fused =
                   Number.isFinite(walletIdNum) &&
                   walletIdNum > 0 &&
