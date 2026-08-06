@@ -1,8 +1,7 @@
 # CodeRabbit — https://docs.coderabbit.ai/reference/configuration
 #
-# Plan hard cap: 300 files per review (Pro+). This PR is ~500+ files vs dev.
-# File count is after path_filters — so we WHITELIST ship-critical paths and
-# drop noise. Everything else still lands in the PR; only the bot scope shrinks.
+# Plan hard cap: 300 files/review (Pro+). This PR is ~500+ files vs `dev`.
+# Count is AFTER path_filters. Whitelist ship-critical paths (~250 files).
 # Docs: https://docs.coderabbit.ai/management/plans
 
 language: "en-US"
@@ -15,21 +14,37 @@ reviews:
   auto_review:
     enabled: true
     drafts: true
-    # Review PRs targeting dev (and release/*) as well as the default branch.
     base_branches:
       - "dev"
       - "main"
       - "master"
       - "release/.*"
 
-  # Whitelist = only these paths are reviewed (under the 300-file cap).
-  # Prefer include globs + noise excludes. Order: includes first, then !.
+  # Includes first (review only these), then ! excludes for noise inside them.
   path_filters:
-    # --- product / security surface for PR #12 ship ---
-    - "src/services/**"
+    # Hardware / PSBT / NFT parse / wallet core
+    - "src/services/hardware/**"
+    - "src/services/psbt/**"
+    - "src/services/nftParsing/**"
+    - "src/services/cashtokens/**"
+    - "src/services/HdWalletService.ts"
+    - "src/services/BcmrService.ts"
+    - "src/services/OutboundTransactionTracker.ts"
+    - "src/services/OutboundTransactionReconciler.ts"
+    - "src/services/WalletHistoryRefreshService.ts"
+    - "src/services/WalletReconfigurationService.ts"
+    - "src/services/WalletDiscoveryService.ts"
+    - "src/services/WalletUtxoRefreshService.ts"
+    - "src/services/WalletSpecialActivityService.ts"
     - "src/platform/desktop/**"
-    - "src-tauri/**"
-    - "scripts/**"
+    - "src-tauri/src/**"
+    - "src-tauri/tauri.conf.json"
+    - "src-tauri/Cargo.toml"
+    - "src-tauri/build.rs"
+    - "src-tauri/capabilities/**"
+    - "scripts/fetch-tor.mjs"
+    - "scripts/__tests__/fetchTor.test.mjs"
+    - "scripts/__tests__/releaseWorkflow.test.mjs"
     - ".github/workflows/**"
     - "src/hooks/**"
     - "src/features/simple-send/**"
@@ -38,14 +53,13 @@ reviews:
     - "src/apis/DatabaseManager/**"
     - "src/types/**"
     - ".coderabbit.yaml"
-    # --- never review these ---
+    # Noise inside includes
     - "!**/*lock*"
     - "!**/Cargo.lock"
     - "!**/package-lock.json"
     - "!**/yarn.lock"
     - "!src-tauri/target/**"
     - "!**/node_modules/**"
-    - "!dist/**"
     - "!**/*generated*"
     - "!**/secp256k1WasmBase64.generated.ts"
     - "!**/*.png"
@@ -54,15 +68,5 @@ reviews:
     - "!**/*.snap"
     - "!**/fixtures/**"
     - "!**/__fixtures__/**"
-    - "!public/**"
-    - "!docs/**"
-    - "!e2e/**"
-    - "!tools/**"
-    - "!test-support/**"
-    - "!reference/**"
-    - "!extension/**"
-    - "!android/**"
-    - "!ios/**"
-    - "!patches/**"
-    - "!schemas/**"
-    - "!templates/**"
+    # Bulk generic service tests (keep hardware/psbt tests via their folders)
+    - "!src/services/__tests__/**"
