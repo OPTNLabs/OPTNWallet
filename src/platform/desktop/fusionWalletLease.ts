@@ -20,6 +20,7 @@
 // missed round; double-fusing costs a real fee twice.
 
 import { getLocalStorage } from '../../utils/browserStorage';
+import { AUTO_FUSION_COOLDOWN_MS } from './fusionAutoEngine';
 import { P2P_LEASE_TTL_MS } from './fusionTiming';
 
 const LEASE_PREFIX = 'optn-fusion-lease-';
@@ -222,23 +223,33 @@ export function hasLiveRoundLease(
  * Legacy records only had `{ attempt }` (last start time) — treat those as
  * nextAllowedAt = attempt + 90s so we do not keep a 5‑minute death-sentence
  * from failed P2P "no peers" stamps.
+ *
+ * `reason: 'depth-met'` means Auto is sleeping because rounds-per-coin is
+ * already satisfied. Wallet activity (receive, send, any UTXO-changing tx)
+ * that leaves coins below depth may clear that idle without waiting out the
+ * long timer — short success/fail cooldowns never use this reason.
  */
 type CooldownRecord = {
   nextAllowedAt?: number;
   /** @deprecated legacy last-start stamp */
   attempt?: number;
+  reason?: 'depth-met' | 'success' | 'fail' | 'claim';
 };
 
+function readCooldownRecord(walletId: number): CooldownRecord | null {
+  return readJson<CooldownRecord>(`${COOLDOWN_PREFIX}${walletId}`);
+}
+
 function readNextAllowedAt(walletId: number): number | null {
-  const record = readJson<CooldownRecord>(`${COOLDOWN_PREFIX}${walletId}`);
+  const record = readCooldownRecord(walletId);
   if (!record) return null;
   if (typeof record.nextAllowedAt === 'number' && Number.isFinite(record.nextAllowedAt)) {
     return record.nextAllowedAt;
   }
-  // Legacy: failed rounds stamped `attempt=now` then enforced 5 min. Cap the
-  // residual wait at 90s so autofuse recovers after upgrades.
+  // Legacy records only stamped `attempt` (old code used ~5 min). Cap residual
+  // at success cooldown so upgrades never re-introduce multi-minute silence.
   if (typeof record.attempt === 'number' && Number.isFinite(record.attempt)) {
-    return record.attempt + 90_000;
+    return record.attempt + AUTO_FUSION_COOLDOWN_MS;
   }
   return null;
 }
@@ -257,8 +268,12 @@ export async function tryClaimAutoCooldown(
   const result = await withWalletLock(walletId, () => {
     const next = readNextAllowedAt(walletId);
     if (next !== null && nowMs < next) return false;
-    // Soft hold until outcome stamps the real wait (≤ post-success cooldown).
-    writeJson(key, { nextAllowedAt: nowMs + 45_000, attempt: nowMs });
+    // Soft hold until outcome stamps success or fail.
+    writeJson(key, {
+      nextAllowedAt: nowMs + AUTO_FUSION_COOLDOWN_MS,
+      attempt: nowMs,
+      reason: 'claim',
+    });
     return true;
   });
   return result.ran ? result.value : false;
@@ -272,7 +287,11 @@ export async function stampAutoSuccess(
 ): Promise<void> {
   const key = `${COOLDOWN_PREFIX}${walletId}`;
   await withWalletLock(walletId, () => {
-    writeJson(key, { nextAllowedAt: nowMs + cooldownMs, attempt: nowMs });
+    writeJson(key, {
+      nextAllowedAt: nowMs + cooldownMs,
+      attempt: nowMs,
+      reason: 'success',
+    });
   });
 }
 
@@ -284,8 +303,85 @@ export async function stampAutoFailure(
 ): Promise<void> {
   const key = `${COOLDOWN_PREFIX}${walletId}`;
   await withWalletLock(walletId, () => {
-    writeJson(key, { nextAllowedAt: nowMs + backoffMs, attempt: nowMs });
+    writeJson(key, {
+      nextAllowedAt: nowMs + backoffMs,
+      attempt: nowMs,
+      reason: 'fail',
+    });
   });
+}
+
+/**
+ * Rounds-per-coin already met (or no BCH coins). Long silent idle — only a
+ * wallet UTXO change with below-depth coins should wake Auto early.
+ */
+export async function stampAutoDepthMetIdle(
+  walletId: number,
+  idleMs: number,
+  nowMs = Date.now()
+): Promise<void> {
+  const key = `${COOLDOWN_PREFIX}${walletId}`;
+  await withWalletLock(walletId, () => {
+    writeJson(key, {
+      nextAllowedAt: nowMs + idleMs,
+      attempt: nowMs,
+      reason: 'depth-met',
+    });
+  });
+}
+
+/** True while Auto is in the long depth-met sleep (not short success/fail). */
+export function isAutoDepthMetIdle(
+  walletId: number,
+  nowMs = Date.now()
+): boolean {
+  const record = readCooldownRecord(walletId);
+  if (!record || record.reason !== 'depth-met') return false;
+  const next = readNextAllowedAt(walletId);
+  return next !== null && nowMs < next;
+}
+
+/** Allow Auto to run immediately (e.g. after depth-met idle + wallet activity). */
+export async function clearAutoCooldown(walletId: number): Promise<void> {
+  const key = `${COOLDOWN_PREFIX}${walletId}`;
+  await withWalletLock(walletId, () => {
+    writeJson(key, { nextAllowedAt: 0, attempt: Date.now() });
+  });
+}
+
+/**
+ * Wallet activity wake: receive, send, change, any committed UTXO snapshot.
+ * If any coin is still below rounds-per-coin, clear long idles so Auto runs.
+ *
+ * Clears:
+ *   - explicit depth-met idle (`reason: 'depth-met'`)
+ *   - any remaining wait longer than a normal success cooldown (covers legacy
+ *     depth stamps that used `reason: 'fail'` with a 30m backoff — those never
+ *     woke after send/receive)
+ *
+ * Does NOT clear short success/fail spacing so post-fuse thrash is avoided when
+ * the same UTXO refresh fires after a paid round.
+ *
+ * Returns true if cooldown was cleared (caller should tick Auto).
+ */
+export async function wakeAutoFromWalletActivity(
+  walletId: number,
+  hasCoinsBelowDepth: boolean,
+  nowMs = Date.now()
+): Promise<boolean> {
+  if (!hasCoinsBelowDepth) return false;
+  if (isAutoDepthMetIdle(walletId, nowMs)) {
+    await clearAutoCooldown(walletId);
+    return true;
+  }
+  // Legacy long idle (old depth stamps / multi-minute leftovers). Anything
+  // longer than success spacing is wake-able on wallet activity.
+  const next = readNextAllowedAt(walletId);
+  if (next !== null && next - nowMs > AUTO_FUSION_COOLDOWN_MS) {
+    await clearAutoCooldown(walletId);
+    return true;
+  }
+  return false;
 }
 
 /** Read-only view, for status text. Never gates spending on its own. */

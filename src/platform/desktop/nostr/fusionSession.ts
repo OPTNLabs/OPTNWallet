@@ -27,6 +27,8 @@ import { electCoordinator, MIN_PARTICIPANTS } from './fusion';
 import { ROUND_MSG_VERSION } from './fusionRound';
 import {
   P2P_ASSEMBLED_RESEND_MS,
+  P2P_CREDENTIAL_PARAMS_RESEND_MAX,
+  P2P_CREDENTIAL_PARAMS_RESEND_MS,
   P2P_CREDENTIAL_WAIT_MS,
   P2P_MISSING_OUTPUTS_ONION_MS,
   P2P_ONION_DECLARE_RESEND_MAX,
@@ -632,6 +634,8 @@ export interface RoundParams {
 
 /** Bound silent waits — caps from fusionTiming (server protocol.py). */
 const CREDENTIAL_WAIT_MS = P2P_CREDENTIAL_WAIT_MS;
+const CREDENTIAL_PARAMS_RESEND_MS = P2P_CREDENTIAL_PARAMS_RESEND_MS;
+const CREDENTIAL_PARAMS_RESEND_MAX = P2P_CREDENTIAL_PARAMS_RESEND_MAX;
 const MISSING_OUTPUTS_ONION_MS = P2P_MISSING_OUTPUTS_ONION_MS;
 /** Re-send onion_declare so Tor-dropped declares cannot freeze the peel forever. */
 const ONION_DECLARE_RESEND_MS = P2P_ONION_DECLARE_RESEND_MS;
@@ -643,7 +647,8 @@ const ONION_OUTPUT_RESEND_MAX = P2P_ONION_OUTPUT_RESEND_MAX;
 function waitWithTimeout<T>(
   promise: Promise<T>,
   ms: number,
-  label: string
+  label: string,
+  hint?: string
 ): Promise<T> {
   return new Promise<T>((resolve, reject) => {
     const timer = setTimeout(
@@ -651,8 +656,9 @@ function waitWithTimeout<T>(
         reject(
           new Error(
             `${label} (after ${Math.round(ms / 1000)}s). ` +
-              'Usually means other wallets never joined this round — ' +
-              'they saw a different peer set over Tor.'
+              (hint ??
+                'Usually means other wallets never joined this round — ' +
+                  'they saw a different peer set over Tor.')
           )
         ),
       ms
@@ -1171,7 +1177,9 @@ function runParticipant(
       const { roundPubkey, blindNoncePoints } = await waitWithTimeout(
         credParamsPromise,
         CREDENTIAL_WAIT_MS,
-        'Timed out waiting for coordinator credentials'
+        'Timed out waiting for coordinator credentials',
+        'Coordinator credential_params may have been dropped on Tor — ' +
+          'keep Auto on; coordinator now re-sends params until all peers request.'
       );
       const pedersen = buildPlayerPedersen(params.myContribution, params.feerate);
       const { requests, pending } = buildInputCredentialRequests(
@@ -1195,7 +1203,9 @@ function runParticipant(
       const responses = await waitWithTimeout(
         responseWait,
         CREDENTIAL_WAIT_MS,
-        'Timed out waiting for credential response'
+        'Timed out waiting for credential response',
+        'Coordinator may not have received our credential_request over Tor — ' +
+          'Auto will retry shortly.'
       );
       const byIndex = new Map(responses.map((r) => [r.index, r.s]));
       const credentialSigs: string[] = [];
@@ -1433,6 +1443,7 @@ function runCoordinator(
     let unsubscribe: () => void = () => undefined;
     let unsubscribeProtocolError: () => void = () => undefined;
     let declareResendTimer: ReturnType<typeof setInterval> | null = null;
+    let credParamsResendTimer: ReturnType<typeof setInterval> | null = null;
     let onionOutputResendTimer: ReturnType<typeof setInterval> | null = null;
     let assembledResendTimer: ReturnType<typeof setInterval> | null = null;
     let sigWaitStatusTimer: ReturnType<typeof setInterval> | null = null;
@@ -1445,6 +1456,10 @@ function runCoordinator(
       if (declareResendTimer) {
         clearInterval(declareResendTimer);
         declareResendTimer = null;
+      }
+      if (credParamsResendTimer) {
+        clearInterval(credParamsResendTimer);
+        credParamsResendTimer = null;
       }
       if (onionOutputResendTimer) {
         clearInterval(onionOutputResendTimer);
@@ -2003,6 +2018,8 @@ function runCoordinator(
 
     // Publish issuer params first so peers can request credentials. Then
     // (onion mode) send our own outputs through the mix-net.
+    // Tor gift-wrap often drops the first params to one peer (live: 15s
+    // "waiting for coordinator credentials" while another peer already onioned).
     void (async () => {
       const paramsMsg: RoundMessage = {
         ...messageBinding(),
@@ -2011,7 +2028,35 @@ function runCoordinator(
         roundPubkey: issuer.pubkeyHex,
         blindNoncePoints: issuer.rPointsHex,
       };
-      await Promise.all(others.map((peer) => transport.send(peer, paramsMsg)));
+      const peersStillNeedParams = () =>
+        others.filter((peer) => !credentialedPeers.has(peer));
+      const sendCredParams = async (targets: string[]) => {
+        if (targets.length === 0) return;
+        await Promise.allSettled(
+          targets.map((peer) => transport.send(peer, paramsMsg))
+        );
+      };
+      await sendCredParams(others);
+      let credParamsResendsLeft = CREDENTIAL_PARAMS_RESEND_MAX;
+      credParamsResendTimer = setInterval(() => {
+        if (settled || credParamsResendsLeft <= 0) {
+          if (credParamsResendTimer) {
+            clearInterval(credParamsResendTimer);
+            credParamsResendTimer = null;
+          }
+          return;
+        }
+        const pending = peersStillNeedParams();
+        if (pending.length === 0) {
+          if (credParamsResendTimer) {
+            clearInterval(credParamsResendTimer);
+            credParamsResendTimer = null;
+          }
+          return;
+        }
+        credParamsResendsLeft -= 1;
+        void sendCredParams(pending).catch(() => undefined);
+      }, CREDENTIAL_PARAMS_RESEND_MS);
       params.onStatus?.(
         `Coordinator: waiting for ${others.length} peer(s) to register inputs…`
       );

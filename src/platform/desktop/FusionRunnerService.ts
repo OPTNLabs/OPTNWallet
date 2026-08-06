@@ -26,6 +26,7 @@ import {
   isAutoCooldownReady,
   LEASE_HEARTBEAT_MS,
   releaseRoundLease,
+  stampAutoDepthMetIdle,
   stampAutoFailure,
   stampAutoSuccess,
   touchRoundLease,
@@ -34,6 +35,7 @@ import {
 import { clearOutpointReservations } from './fusionRoundState';
 import {
   AUTO_FUSION_COOLDOWN_MS,
+  AUTO_FUSION_DEPTH_MET_IDLE_MS,
   AUTO_FUSION_EMPTY_POOL_RETRY_MS,
   AUTO_FUSION_RETRY_MS,
   type FusionMode,
@@ -372,6 +374,62 @@ export async function startFusionRound(
     return { status: 'cooldown' };
   }
 
+  // Auto depth gate BEFORE lease/UI: if rounds-per-coin is already met, idle
+  // with no activity event (user: wallet keeps "trying" with no work to do).
+  if (trigger === 'auto') {
+    const preCoins = await freshCoins(
+      walletId,
+      'auto',
+      options.fuseDepth,
+      options.freshSnapshot,
+      options.signal
+    );
+    if (options.signal?.aborted) return { status: 'cancelled' };
+    if (preCoins === null) return { status: 'waiting-for-wallet' };
+    if (preCoins.length === 0) {
+      const snapshot =
+        options.freshSnapshot ??
+        (await import('../../services/WalletUtxoRefreshService')
+          .then((m) =>
+            m.reconcileActiveWalletUtxosForSpend(walletId, options.signal)
+          )
+          .catch(() => null));
+      const allNonToken = snapshot
+        ? Object.values(snapshot)
+            .flat()
+            .filter((c) => c && !c.token && !c.token_data)
+        : [];
+      const elig = fuseDepthEligibility(
+        walletId,
+        allNonToken,
+        options.fuseDepth
+      );
+      const detail =
+        elig.total === 0
+          ? 'Auto: no BCH coins to fuse (wallet empty of non-token UTXOs).'
+          : `Auto: all ${elig.total} coin(s) already at rounds-per-coin depth ` +
+            `≥ ${elig.maxDepth} (the number in the box; coins ${elig.minDepth}–${elig.maxCoinDepth}). ` +
+            `Idle until send/receive/tx or you raise that number to fuse further.`;
+      // Long depth-met idle (not fail backoff). Cleared by UTXO activity that
+      // re-introduces below-depth coins (wakeAutoFromWalletActivity).
+      await stampAutoDepthMetIdle(walletId, AUTO_FUSION_DEPTH_MET_IDLE_MS).catch(
+        () => undefined
+      );
+      setFusionLastResult(walletId, {
+        mode,
+        trigger,
+        ok: true,
+        message: detail,
+      });
+      void import('./logger')
+        .then(({ log }) =>
+          log.info('p2p-live', `w${walletId} OUTCOME idle: ${detail}`)
+        )
+        .catch(() => undefined);
+      return { status: 'no-eligible-coins', detail };
+    }
+  }
+
   // Drop orphan UI/durable state before acquire so grey-idle ghosts never block.
   // Only clears the lease when it is STALE (no heartbeat) — a live other window
   // keeps the lock and we return busy below.
@@ -450,16 +508,25 @@ export async function startFusionRound(
         .catch(() => undefined);
     } else if (outcome.status === 'no-eligible-coins') {
       // Not a hard failure for auto: often every coin already hit fuse depth.
+      const depthMsg =
+        trigger === 'auto'
+          ? (outcome.detail ??
+            'Auto: nothing to fuse — all BCH coins already meet rounds-per-coin depth (or no BCH coins). Manual Start can still re-fuse.')
+          : 'No eligible coins to fuse.';
       setFusionLastResult(walletId, {
         mode,
         trigger,
         ok: true,
-        message:
-          trigger === 'auto'
-            ? (outcome.detail ??
-              'Auto: nothing to fuse — all BCH coins already meet rounds-per-coin depth (or no BCH coins). Manual Start can still re-fuse.')
-            : 'No eligible coins to fuse.',
+        message: depthMsg,
       });
+      // One quiet log line — do not spam p2p-live every tick.
+      if (trigger === 'auto') {
+        void import('./logger')
+          .then(({ log }) =>
+            log.info('p2p-live', `w${walletId} OUTCOME idle: ${depthMsg}`)
+          )
+          .catch(() => undefined);
+      }
     } else if (outcome.status === 'busy') {
       setFusionLastResult(walletId, {
         mode,
@@ -474,12 +541,133 @@ export async function startFusionRound(
   try {
     if (options.signal?.aborted) return finish({ status: 'cancelled' });
 
+    // Auto: resolve coins first WITHOUT activity spam. If depth is already met,
+    // return quietly — no "refreshing coins" lease thrash every engine tick.
+    if (trigger === 'auto') {
+      const coinsQuiet = await freshCoins(
+        walletId,
+        trigger,
+        options.fuseDepth,
+        options.freshSnapshot,
+        options.signal
+      );
+      if (options.signal?.aborted) return finish({ status: 'cancelled' });
+      if (coinsQuiet === null) return finish({ status: 'waiting-for-wallet' });
+      if (coinsQuiet.length === 0) {
+        const snapshot =
+          options.freshSnapshot ??
+          (await import('../../services/WalletUtxoRefreshService')
+            .then((m) =>
+              m.reconcileActiveWalletUtxosForSpend(walletId, options.signal)
+            )
+            .catch(() => null));
+        const allNonToken = snapshot
+          ? Object.values(snapshot)
+              .flat()
+              .filter((c) => c && !c.token && !c.token_data)
+          : [];
+        const elig = fuseDepthEligibility(
+          walletId,
+          allNonToken,
+          options.fuseDepth
+        );
+        const detail =
+          elig.total === 0
+            ? 'Auto: no BCH coins to fuse (wallet empty of non-token UTXOs).'
+            : `Auto: all ${elig.total} coin(s) already at rounds-per-coin depth ` +
+              `≥ ${elig.maxDepth} (the number in the box). Idle until send/receive/tx ` +
+              `or you raise that number to fuse further.`;
+        // Long depth-met idle so Auto does not thrash every engine tick.
+        await stampAutoDepthMetIdle(
+          walletId,
+          AUTO_FUSION_DEPTH_MET_IDLE_MS
+        ).catch(() => undefined);
+        return finish({ status: 'no-eligible-coins', detail });
+      }
+      // Eligible coins exist — now show activity and claim the cooldown.
+      pushProgress({
+        phase: 1,
+        status: 'Auto-fuse: refreshing coins…',
+      });
+      const claimed = await tryClaimAutoCooldown(
+        walletId,
+        AUTO_FUSION_COOLDOWN_MS
+      );
+      if (!claimed) return finish({ status: 'cooldown' });
+
+      try {
+        const eligStart = fuseDepthEligibility(
+          walletId,
+          coinsQuiet,
+          options.fuseDepth
+        );
+        void import('./logger')
+          .then(({ log }) =>
+            log.info(
+              'p2p-live',
+              `w${walletId} depth gate: ${coinsQuiet.length} eligible of target ` +
+                `${options.fuseDepth} (coin depths ${eligStart.minDepth}–${eligStart.maxCoinDepth})`
+            )
+          )
+          .catch(() => undefined);
+        pushProgress({
+          phase: 1,
+          status: `Auto-fuse (${mode}): ${coinsQuiet.length} coin(s) — finding peers…`,
+        });
+        const progressHooks = {
+          onStatus: (message: string) => pushProgress({ status: message }),
+          onPhase: (phase: number) => pushProgress({ phase }),
+        };
+        const result =
+          mode === 'p2p'
+            ? await options.runners.runP2p(
+                coinsQuiet,
+                options.signal,
+                progressHooks
+              )
+            : await options.runners.runServer(
+                coinsQuiet,
+                options.signal,
+                progressHooks
+              );
+        if (trigger === 'auto') {
+          await stampAutoSuccess(walletId, AUTO_FUSION_COOLDOWN_MS).catch(
+            () => undefined
+          );
+        }
+        return finish({
+          status: 'fused',
+          mode,
+          txid: result.txid,
+          ...(result.warning ? { warning: result.warning } : {}),
+        });
+      } catch (error) {
+        if (options.signal?.aborted && isCancellationError(error)) {
+          await stampAutoFailure(walletId, AUTO_FUSION_RETRY_MS).catch(
+            () => undefined
+          );
+          return finish({ status: 'cancelled' });
+        }
+        const msg = error instanceof Error ? error.message : String(error);
+        const emptyPool =
+          /no other wallets found|no peers|only \d+ wallet|need ≥?\s*3|at least three|could not agree/i.test(
+            msg
+          );
+        await stampAutoFailure(
+          walletId,
+          emptyPool ? AUTO_FUSION_EMPTY_POOL_RETRY_MS : AUTO_FUSION_RETRY_MS
+        ).catch(() => undefined);
+        return finish({
+          status: 'failed',
+          mode,
+          message: msg,
+        });
+      }
+    }
+
     pushProgress({
       phase: 1,
-      status:
-        trigger === 'auto'
-          ? 'Auto-fuse: refreshing coins…'
-          : 'Refreshing coins…',
+      status: 'Refreshing coins…',
     });
     const coins = await freshCoins(
       walletId,
@@ -491,38 +679,10 @@ export async function startFusionRound(
     if (options.signal?.aborted) return finish({ status: 'cancelled' });
     if (coins === null) return finish({ status: 'waiting-for-wallet' });
     if (coins.length === 0) {
-      // Build a precise Auto message from the full non-token set (before depth filter).
-      const snapshot =
-        options.freshSnapshot ??
-        (await import('../../services/WalletUtxoRefreshService')
-          .then((m) => m.reconcileActiveWalletUtxosForSpend(walletId, options.signal))
-          .catch(() => null));
-      const allNonToken = snapshot
-        ? Object.values(snapshot)
-            .flat()
-            .filter((c) => c && !c.token && !c.token_data)
-        : [];
-      const elig = fuseDepthEligibility(
-        walletId,
-        allNonToken,
-        options.fuseDepth
-      );
-      const detail =
-        elig.total === 0
-          ? 'Auto: no BCH coins to fuse (wallet empty of non-token UTXOs).'
-          : `Auto: all ${elig.total} coin(s) already at depth ≥ ${elig.maxDepth} ` +
-            `(rounds-per-coin). Privacy target met — Auto will idle until you receive ` +
-            `new coins or raise Rounds per coin. Manual Start can still re-fuse.`;
-      return finish({ status: 'no-eligible-coins', detail });
-    }
-
-    // Claim only when live eligible coins exist.
-    if (trigger === 'auto') {
-      const claimed = await tryClaimAutoCooldown(
-        walletId,
-        AUTO_FUSION_COOLDOWN_MS
-      );
-      if (!claimed) return finish({ status: 'cooldown' });
+      return finish({
+        status: 'no-eligible-coins',
+        detail: 'No eligible coins to fuse.',
+      });
     }
 
     try {
@@ -568,8 +728,8 @@ export async function startFusionRound(
         return finish({ status: 'cancelled' });
       }
       if (trigger === 'auto') {
-        // No peers / Tor / etc. — do NOT silence autofuse for 5 minutes.
-        // Empty pool / agree miss: re-enter faster so staggered windows meet.
+        // No peers / Tor / etc. — short 25s fail backoff only (never multi-minute).
+        // Empty pool / agree miss: same retry so staggered windows meet.
         const msg = error instanceof Error ? error.message : String(error);
         const emptyPool =
           /no other wallets found|only \d+ wallet|need ≥?\s*3|at least three|could not agree/i.test(

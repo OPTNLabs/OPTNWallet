@@ -88,9 +88,8 @@ const P2P_TIERS = [10_000, 100_000, 1_000_000, 10_000_000];
  * Same order on every window so announce/subscribe topology matches.
  */
 /**
- * Shared bootstrap relays for global P2P discovery (same ordered list for every
- * client). Kept modest so Tor under many concurrent users stays usable; not
- * tuned for "one PC opens four wallets" specifically.
+ * Shared bootstrap relays for P2P discovery (same ordered list for every
+ * client). Kept modest so Tor under many concurrent users stays usable.
  */
 const FUSION_CORE_RELAYS: readonly string[] = [
   'wss://relay.damus.io',
@@ -121,7 +120,7 @@ export interface P2pFusionOptions {
   relays?: string[];
   tor: { host: string; port: number } | null;
   /**
-   * `auto` = global peer pool (full alone budget). `manual` = short alone abort.
+   * `auto` = full alone budget (wait for peers). `manual` = short alone abort.
    */
   trigger?: 'auto' | 'manual';
   onStatus?: (message: string) => void;
@@ -356,11 +355,11 @@ async function collectRolling(
       throw new Error(
         `No peers left (peak was ${peakStrict}, now only you). ` +
           `Others already fused or left the pool — Cancel is automatic; ` +
-          `Start ALL wallets together for the next round.`
+          `Auto will retry shortly.`
       );
     }
     // Never found anyone: manual fails fast; auto holds full JOIN_WAIT so
-    // global peers arriving over Tor can still meet in one gather slot.
+    // peers arriving over Tor can still meet in one gather slot.
     const neverSawOthers = peakSoft <= 1 && peakStrict <= 1;
     if (neverSawOthers && elapsed >= aloneBudgetMs) {
       throw new Error(
@@ -954,11 +953,11 @@ export async function runP2pFusion(
       stopPool = null;
     }
     // Belt-and-suspenders: rendezvous must never return a shrunk set (2-of-4
-    // "Continuing…" left late wallets alone worldwide — not scalable).
+    // "Continuing…" left late peers alone — not acceptable).
     if (negotiated.participants.length < group.participants.length) {
       throw new Error(
         `Round shrank to ${negotiated.participants.length}/${group.participants.length} ` +
-          `wallets — refusing partial fuse. Start P2P on ALL wallets together.`
+          `wallets — refusing partial fuse. Auto will retry; full set must stay.`
       );
     }
     status?.(

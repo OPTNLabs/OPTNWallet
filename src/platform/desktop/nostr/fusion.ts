@@ -148,7 +148,7 @@ export function isLivePoolAnnouncement(
     nowSeconds: number;
     gatherStartSeconds: number;
     selfPubkey: string;
-    /** Own abandoned keys + globally retired keys. */
+    /** Own abandoned keys + retired keys. */
     isGhostKey: (pubkey: string) => boolean;
     /**
      * When true (gather lock / propose), only peers that re-published during

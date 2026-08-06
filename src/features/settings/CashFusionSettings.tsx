@@ -65,6 +65,22 @@ import {
 import type { RootState } from '../../state/store';
 
 // Ports per Electron Cash's own conf.py default (fusion.servo.cash:8789, SSL).
+
+/**
+ * Last-result text for the panel. Runner messages for Auto already start with
+ * "Auto: …" — do not prefix again (was showing "Auto: Auto: …").
+ */
+function formatFusionResultMessage(last: {
+  trigger: 'auto' | 'manual';
+  message: string;
+}): string {
+  const msg = (last.message ?? '').trim();
+  if (!msg) return last.trigger === 'auto' ? 'Auto finished.' : '';
+  if (last.trigger !== 'auto') return msg;
+  if (/^auto\b/i.test(msg)) return msg;
+  return `Auto: ${msg}`;
+}
+
 /** Typed outcome -> user text, so no caller parses strings to learn what happened. */
 function describeFusionOutcome(outcome: FusionRunOutcome): string {
   switch (outcome.status) {
@@ -282,15 +298,11 @@ export const CashFusionSettings: React.FC<{ variant?: 'card' | 'servers' }> = ({
         if (!last || last.walletId !== walletId) return;
         if (last.mode === 'p2p') {
           setP2pState(last.ok ? 'done' : 'fail');
-          setP2pMsg(
-            last.trigger === 'auto' ? `Auto: ${last.message}` : last.message
-          );
+          setP2pMsg(formatFusionResultMessage(last));
           if (!last.ok) setP2pPhase(0);
         } else {
           setFuseState(last.ok ? 'done' : 'fail');
-          setFuseMsg(
-            last.trigger === 'auto' ? `Auto: ${last.message}` : last.message
-          );
+          setFuseMsg(formatFusionResultMessage(last));
         }
       }),
     [walletId]
@@ -311,9 +323,7 @@ export const CashFusionSettings: React.FC<{ variant?: 'card' | 'servers' }> = ({
       const last = getFusionLastResult(walletId);
       if (last && !isFusionRunning(walletId)) {
         if (last.mode === 'p2p' && p2pState === 'idle' && !p2pMsg) {
-          setP2pMsg(
-            last.trigger === 'auto' ? `Auto: ${last.message}` : last.message
-          );
+          setP2pMsg(formatFusionResultMessage(last));
           setP2pState(last.ok ? 'done' : 'fail');
         }
       }

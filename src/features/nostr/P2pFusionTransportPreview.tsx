@@ -106,12 +106,13 @@ export const P2pFusionTransportPreview: React.FC<P2pFusionPanelProps> = ({
         {disabledReason ??
           (busy
             ? 'Round in progress — button stays disabled until it finishes.'
-            : 'Requires Tor + at least 2 peers in the same tier.')}
+            : 'Requires Tor and ≥3 peers in the same amount tier.')}
       </p>
     ) : (
       <p className="text-center text-[9px] wallet-muted">
-        Requires Tor + at least 2 peers worldwide in the same tier. Start all
-        wallets within a few seconds of each other.
+        Requires Tor and ≥3 peers in the same amount tier. Leave Auto on — it
+        retries after send, receive, or any UTXO change that leaves coins below
+        rounds-per-coin. Manual Start joins peers already in the pool.
       </p>
     )}
 

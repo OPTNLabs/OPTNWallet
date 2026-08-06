@@ -85,6 +85,11 @@ own inputs. The coordinator orders messages and broadcasts the completed
 transaction; it never receives a private key and cannot make another wallet
 sign away funds.
 
+**Full protocol reference (wire format, phases, Auto, depth, timings):**
+[docs/p2p-cashfusion-protocol.md](./docs/p2p-cashfusion-protocol.md).  
+**Privacy layer naming (Tor vs gift-wrap vs onion vs blind Schnorr):**
+[docs/p2p-cashfusion-privacy-layers.md](./docs/p2p-cashfusion-privacy-layers.md).
+
 Server-based CashFusion and P2P CashFusion share the wallet's outer controls
 (manual/automatic start, live-coin refresh, fuse depth, cooldown, and
 cross-window exclusion), but they are different network protocols. The server

@@ -102,7 +102,13 @@ export async function completeFusionBroadcast(
   // network, and losing a depth record only means a coin may be fused once more
   // than configured — wasteful, never unsafe. Both transports come through this
   // one path, so their accounting cannot drift apart.
+  //
+  // Prefer locking-script match on the final tx. If that finds nothing (script
+  // form drift / decode miss), fall back after Electrum refresh: any UTXO whose
+  // tx_hash is this CoinJoin is ours and must advance depth — otherwise Auto
+  // keeps re-fusing forever past "Rounds per coin".
   let depthRecorded = 0;
+  const spent = spentOutpointsOf(completed.spentInputs);
   try {
     const created = ownedOutpointsOf(
       completed.txHex,
@@ -110,15 +116,10 @@ export async function completeFusionBroadcast(
       completed.ownedOutputScripts ?? []
     );
     if (created.length > 0) {
-      recordFusionRound(
-        completed.walletId,
-        spentOutpointsOf(completed.spentInputs),
-        created
-      );
+      recordFusionRound(completed.walletId, spent, created);
       recordFusionTxid(completed.walletId, completed.txid);
       depthRecorded = created.length;
     } else if (completed.txid) {
-      // Still mark the CoinJoin itself for history even if we could not map outputs.
       recordFusionTxid(completed.walletId, completed.txid);
     }
   } catch (error) {
@@ -133,10 +134,13 @@ export async function completeFusionBroadcast(
   // multi-wallet fusion), leaving Redux/SQL on pre-spend coins + pending
   // outbound outputs → inflated "fake" balance until Manual Sync.
   let refreshed = false;
+  let snapshot: Awaited<
+    ReturnType<typeof reconcileActiveWalletUtxosForSpend>
+  > = null;
   if (!torOnly) {
     for (let attempt = 0; attempt < 2 && !refreshed; attempt += 1) {
       try {
-        const snapshot = await reconcileActiveWalletUtxosForSpend(
+        snapshot = await reconcileActiveWalletUtxosForSpend(
           completed.walletId
         );
         refreshed = snapshot !== null;
@@ -148,6 +152,69 @@ export async function completeFusionBroadcast(
         });
       }
     }
+  }
+
+  // Always re-bind depth to Electrum outpoints after refresh when we can see
+  // our new UTXOs. Script-based indices can drift from what listunspent returns;
+  // without this re-bind, the next round never finds spent ancestors and depth
+  // resets 0→1 forever (Auto never stops at rounds-per-coin).
+  if (snapshot && completed.txid) {
+    try {
+      const txid = completed.txid.toLowerCase();
+      const fromWallet = Object.values(snapshot)
+        .flat()
+        .filter(
+          (u) =>
+            u &&
+            typeof u.tx_hash === 'string' &&
+            u.tx_hash.toLowerCase() === txid &&
+            Number.isSafeInteger(u.tx_pos)
+        )
+        .map((u) => `${u.tx_hash}:${u.tx_pos}`);
+      if (fromWallet.length > 0) {
+        recordFusionRound(completed.walletId, spent, fromWallet);
+        depthRecorded = fromWallet.length;
+        recordFusionTxid(completed.walletId, completed.txid);
+      }
+    } catch (error) {
+      logError('FusionCompletionService.recordFusionDepthFallback', error, {
+        walletId: completed.walletId,
+        txid: completed.txid,
+      });
+    }
+  }
+
+  try {
+    const { fuseDepthEligibility } = await import('./fusionCoinDepth');
+    const sample = snapshot
+      ? Object.values(snapshot)
+          .flat()
+          .filter((c) => c && !c.token && !c.token_data)
+      : [];
+    const elig = fuseDepthEligibility(
+      completed.walletId,
+      sample,
+      99 // log range only
+    );
+    const msg =
+      `w${completed.walletId} depth: recorded ${depthRecorded} output(s) for fuse ` +
+      `${completed.txid.slice(0, 12)}… ` +
+      `wallet now depths ${elig.minDepth}–${elig.maxCoinDepth} ` +
+      `(${elig.total} coin(s))`;
+    // Prefer p2p-live file log; fall back to console in tests / no-window.
+    void import('./logger')
+      .then(({ log }) => {
+        try {
+          void Promise.resolve(log.info('p2p-live', msg)).catch(() => undefined);
+        } catch {
+          console.info(`[p2p-live] ${msg}`);
+        }
+      })
+      .catch(() => {
+        console.info(`[p2p-live] ${msg}`);
+      });
+  } catch {
+    /* depth verify log is best-effort */
   }
 
   return { tracked, refreshed, depthRecorded };

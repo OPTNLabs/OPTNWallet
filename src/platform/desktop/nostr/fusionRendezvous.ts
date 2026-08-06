@@ -21,8 +21,9 @@ const SESSION = /^[0-9a-f]{64}$/;
 
 /** User-facing hint for split pools / late joiners (evidence: 3 fused, 1 timed out). */
 export const RENDEZVOUS_LATE_JOINER_HINT =
-  'Other wallets may have already formed a smaller round without you ' +
-  '(you were late or Tor was slow). Start P2P again on ALL wallets within a few seconds.';
+  'Other wallets may have already formed a round without you ' +
+  '(you were late or Tor was slow). Auto will retry shortly; ' +
+  'Manual Start can try again when peers are online.';
 
 export interface FusionRendezvousParams {
   myPubkey: string;
@@ -229,7 +230,7 @@ function negotiateAsCoordinator(
     params.coordinatorSettleMs ??
     Math.min(5_000, Math.max(1_000, Math.floor(timeoutMs * 0.6)));
   // LIVE (2026-08-06): gather saw 4, then started with 2 ACKs → w1+w6 fused,
-  // w4 alone shouting, w5 relay fail. That is NOT scalable worldwide.
+  // w4 alone shouting, w5 relay fail — not a valid pool.
   // Policy: the proposed set is the round. Full ACK or abort+retry together.
   // No "prefer pair / one missing" degradation — subsets leave peers behind.
   const makeProposal = (): RoundMessage => ({
@@ -308,7 +309,7 @@ function negotiateAsCoordinator(
     const startOwnRound = () => {
       if (settled || yielded || starting) return;
       // Final set must equal the proposal exactly. ACKed-only subsets leave
-      // lagging wallets alone worldwide — refuse that path.
+      // lagging peers alone — refuse that path.
       const finalParticipants = [...acknowledgments].sort();
       const need = minAcksRequired();
       if (finalParticipants.length < need) {
@@ -416,12 +417,12 @@ function negotiateAsCoordinator(
     const timer = setTimeout(() => {
       const acked = acknowledgments.size;
       const proposed = participants.length;
-      // Never degrade to a pair/trio — abort so ALL wallets retry together.
+      // Never degrade to a partial set — abort so everyone retries cleanly.
       void finishError(
         new Error(
           `round acknowledgments timed out (only ${acked}/${proposed} answered). ` +
-            `Refusing a partial round — Start P2P on ALL wallets together so ` +
-            `everyone joins the same set.`
+            `Refusing a partial round — full set must ACK. Auto will retry; ` +
+            `keep Tor + Auto on.`
         )
       );
     }, timeoutMs);

@@ -66,7 +66,7 @@ export const P2P_GATHER_ALONE_MS = 35_000;
 
 /**
  * Auto-fuse alone budget = full JOIN_WAIT (server pool wait).
- * Production: global strangers join over Tor; local multi-window is just stress.
+ * Production: peers join over Tor; local multi-window is the same code path.
  * Aborting at 35s dropped the first auto client while others were still arriving.
  */
 export const P2P_GATHER_ALONE_AUTO_MS = P2P_GATHER_MAX_MS;
@@ -126,17 +126,26 @@ export const P2P_RENDEZVOUS_RESEND_MS = 1_200;
  * Hard cap = server blame close. Internal sub-windows below must sum sensibly
  * inside this (not each maxed independently).
  *
- *   credentials  ≤ 15s   (P2P_CREDENTIAL_WAIT_MS)
- *   onion/outputs ≤ 25s  (P2P_MISSING_OUTPUTS_ONION_MS) — live finished ~10s
+ *   credentials  ≤ 35s   (P2P_CREDENTIAL_WAIT_MS) — Tor gift-wrap; 15s too tight
+ *   onion/outputs ≤ 28s  (P2P_MISSING_OUTPUTS_ONION_MS)
  *   sig collect   ≤ 25s  (re-sends every P2P_SIG_RESEND_MS)
  *   finalize+bc   ≤ 15s
  *   ─────────────────
- *   sum            80s   = T_START_CLOSE_BLAME
+ *   sum still fits under P2P_ROUND_TIMEOUT_MS with phase overlap
  */
 export const P2P_ROUND_TIMEOUT_MS = SERVER_ROUND_BLAME_MS;
 
-/** Wait for coordinator credential_params (live: immediate). */
-export const P2P_CREDENTIAL_WAIT_MS = SERVER_COMPS_END_MS;
+/**
+ * Wait for coordinator credential_params / response over Tor gift-wrap.
+ * Live 2026-08-06: one of two peers often got params while the other hit 15s
+ * ("Timed out waiting for coordinator credentials") and aborted the full set.
+ * Server T_END_COMPS=15s is LAN-class; Tor needs headroom + coordinator resends.
+ */
+export const P2P_CREDENTIAL_WAIT_MS = 35_000;
+/** Re-send credential_params to peers that have not yet requested credentials. */
+export const P2P_CREDENTIAL_PARAMS_RESEND_MS = 1_500;
+/** Max re-sends (initial send is separate). ~18s of recovery inside the 35s wait. */
+export const P2P_CREDENTIAL_PARAMS_RESEND_MAX = 12;
 
 /**
  * After all peers mark ready, how long coord waits for last-peeler reveal.

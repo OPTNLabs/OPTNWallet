@@ -38,7 +38,12 @@ import {
   msUntilAutoRendezvousOpen,
   nextAutoEngineTickMs,
 } from './fusionAutoEngine';
-import { isAutoCooldownReady } from './fusionWalletLease';
+import { coinsBelowDepth } from './fusionCoinDepth';
+import {
+  clearAutoCooldown,
+  isAutoCooldownReady,
+  wakeAutoFromWalletActivity,
+} from './fusionWalletLease';
 import {
   reportFusionProgress,
   startFusionRound,
@@ -108,7 +113,7 @@ export function useAutoFusion(): void {
   // fusion/tor master switches). Do NOT include `nostrRelays` / `fusionServers`:
   // auto health refresh and HMR re-serialize those arrays and used to cancel
   // live gathers mid-pool (observed: strict=1 then "fusion round cancelled"
-  // ~6s later while peers were still shouting — lethal for global auto).
+  // ~6s later while peers were still shouting).
   const sessionKey = JSON.stringify([
     walletId,
     network,
@@ -206,10 +211,10 @@ export function useAutoFusion(): void {
       // The wallet may have been switched or locked while Tor was queried.
       if (session !== sessionRef.current) return;
 
-      // Global P2P pool: wait for the shared UTC rendezvous open so strangers
-      // worldwide enter gather in the same window (local multi-window stress is
-      // the same code path). Without this, independent clocks never cluster.
-      if (decision.mode === 'p2p') {
+      // UTXO activity (send/receive/tx) must not wait on the rendezvous slot —
+      // that delayed wallet6 (id 4) after depth-met idle was cleared. Poll-only
+      // ticks still align to the open window so independent clients cluster.
+      if (decision.mode === 'p2p' && !freshSnapshot) {
         const waitMs = msUntilAutoRendezvousOpen();
         if (waitMs > 0) {
           try {
@@ -306,6 +311,35 @@ export function useAutoFusion(): void {
     network,
   ]);
 
+  /**
+   * Rounds-per-coin from the settings box is the live Auto target.
+   * Changing the number re-evaluates eligibility: raise → fuse further;
+   * lower → stop sooner. Clears depth-met idle and starts Auto immediately.
+   */
+  const lastFuseDepthRef = useRef<number | null>(null);
+  useEffect(() => {
+    if (!cashFusionEnabled || !autoFuseEnabled || walletId <= 0) {
+      lastFuseDepthRef.current = fuseDepth;
+      return;
+    }
+    if (lastFuseDepthRef.current === null) {
+      lastFuseDepthRef.current = fuseDepth;
+      return;
+    }
+    if (lastFuseDepthRef.current === fuseDepth) return;
+    lastFuseDepthRef.current = fuseDepth;
+    void clearAutoCooldown(walletId)
+      .then(() =>
+        tick().catch((error) => {
+          logError('AutoFusion.fuseDepthChanged', error, {
+            walletId,
+            fuseDepth,
+          });
+        })
+      )
+      .catch(() => undefined);
+  }, [fuseDepth, walletId, cashFusionEnabled, autoFuseEnabled, tick]);
+
   useEffect(() => {
     if (!cashFusionEnabled || !autoFuseEnabled || walletId <= 0) return;
     let disposed = false;
@@ -317,12 +351,26 @@ export function useAutoFusion(): void {
       });
     };
 
-    // No blind mount-time run. The first event-driven attempt waits until the
-    // wallet has committed a fresh UTXO snapshot; the interval is only a
-    // backstop for missed send/receive notifications.
+    // Event-driven wake: any committed UTXO change (receive, send, change,
+    // any tx — not only "new funds"). That is the beauty trigger beyond depth:
+    // if depth-met idle is active and coins are again below rounds-per-coin,
+    // clear the long idle and start Auto. Short success/fail cooldowns stay.
+    // The interval is only a backstop for missed notifications while climbing depth.
     const unsubscribeRefresh = subscribeWalletUtxoRefresh(
       (refreshedWalletId, snapshot) => {
-        if (refreshedWalletId === walletId) run(snapshot);
+        if (refreshedWalletId !== walletId || disposed) return;
+        void (async () => {
+          try {
+            const nonToken = Object.values(snapshot)
+              .flat()
+              .filter((c) => c && !c.token && !c.token_data);
+            const below = coinsBelowDepth(walletId, nonToken, fuseDepth);
+            await wakeAutoFromWalletActivity(walletId, below.length > 0);
+          } catch {
+            /* wake is best-effort; still try the tick below */
+          }
+          if (!disposed) run(snapshot);
+        })();
       }
     );
     // setTimeout, re-armed each time, rather than setInterval: a fixed interval

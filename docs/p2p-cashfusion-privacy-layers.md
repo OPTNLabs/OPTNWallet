@@ -20,8 +20,13 @@ are confused about “onion vs Tor vs blind Schnorr.”
 | NIP-59 gift-wrap for round traffic | **Yes** | `fusionTransport.ts` |
 | Pedersen + blind Schnorr credentials | **Yes** | `fusionPedersen.ts`, `fusionBlindSchnorr.ts` |
 | Credential slots per peer | **16** inputs max per peer per round | `CREDENTIAL_SLOTS_PER_PEER`; `selectFusionInputs` in `FusionP2pService` |
-| Rendezvous timeout | **~35–40 s** (Tor multi-wallet) | `fusionRendezvous.ts` / `FusionP2pService` |
-| Output onion | **Always on** (mandatory; no toggle) | `runFusionRound` — ≥`MIN_PARTICIPANTS` (3) so ≥2 peelers |
+| Min / max participants | **3 / 6** | `MIN_PARTICIPANTS` / `MAX_PARTICIPANTS` in `fusion.ts` |
+| Full-set ACK | **Yes** — refuse partial rounds | `fusionRendezvous.ts` |
+| Credential wait / params resend | **35s** / **1.5s × 12** | `P2P_CREDENTIAL_*` in `fusionTiming.ts` |
+| Rendezvous timeout | **60s** + **20s** proposal | `P2P_RENDEZVOUS_MS`, `P2P_PROPOSAL_TIMEOUT_MS` |
+| Output onion | **Always on** (mandatory; no toggle) | `runFusionRound` — ≥3 peers so ≥2 peelers |
+| Auto success / fail cooldown | **40s / 25s** | `fusionAutoEngine.ts` |
+| Rounds-per-coin (fuse depth) | Default **3**; Auto stop condition | `fusionCoinDepth.ts`, UI **Rounds per coin** |
 | P2P blame | **Prove-or-don't-blame** (ephemeral session key only) | `fusionBlame.ts` — never for Tor/relay timeout or late join |
 | Extra mixnet / onion *servers* | **None** | — |
 
