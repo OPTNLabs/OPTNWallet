@@ -22,6 +22,7 @@ are confused about “onion vs Tor vs blind Schnorr.”
 | Credential slots per peer | **16** inputs max per peer per round | `CREDENTIAL_SLOTS_PER_PEER`; `selectFusionInputs` in `FusionP2pService` |
 | Rendezvous timeout | **~35–40 s** (Tor multi-wallet) | `fusionRendezvous.ts` / `FusionP2pService` |
 | Output onion | **Always on** (mandatory; no toggle) | `runFusionRound` — ≥`MIN_PARTICIPANTS` (3) so ≥2 peelers |
+| P2P blame | **Prove-or-don't-blame** (ephemeral session key only) | `fusionBlame.ts` — never for Tor/relay timeout or late join |
 | Extra mixnet / onion *servers* | **None** | — |
 
 **Regression note (why live P2P can fail after credentials landed):** when the

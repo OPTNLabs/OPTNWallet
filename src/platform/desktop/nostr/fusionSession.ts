@@ -46,6 +46,16 @@ import {
   verifyBchSchnorrHex,
 } from './fusionBlindSchnorr';
 import {
+  createBlameReport,
+  formatBlameAbortReason,
+  isBlameCode,
+  parseBlameEvidence,
+  verifyBlameReport,
+  type BlameCode,
+  type BlameEvidence,
+  type BlameReport,
+} from './fusionBlame';
+import {
   pedersenBalanceHolds,
   pedersenCommit,
   sumNoncesHex,
@@ -135,7 +145,15 @@ export type RoundMessage =
       outputs: FusionOutputRef[];
     } & MessageBinding)
   | ({ type: 'signature'; session: string; sigs: InputSig[] } & MessageBinding)
-  | ({ type: 'final'; session: string; txid: string; txHex: string } & MessageBinding);
+  | ({ type: 'final'; session: string; txid: string; txHex: string } & MessageBinding)
+  /** Provable protocol fault (ephemeral session key only). Never used for timeouts. */
+  | ({
+      type: 'blame';
+      session: string;
+      accused: string;
+      code: BlameCode;
+      evidence: BlameEvidence;
+    } & MessageBinding);
 
 export interface RoundTransport {
   send(toPubkey: string, msg: RoundMessage): Promise<void>;
@@ -452,6 +470,26 @@ export function parseRoundMessage(content: string): RoundMessage | null {
           return null;
         }
         break;
+      case 'blame': {
+        if (
+          typeof message.accused !== 'string' ||
+          // 64 = Nostr x-only; 66 = compressed (in-memory tests)
+          !(
+            HEX_64.test(message.accused) ||
+            /^(02|03)[0-9a-f]{64}$/i.test(message.accused)
+          ) ||
+          !isBlameCode(message.code)
+        ) {
+          return null;
+        }
+        const evidence = parseBlameEvidence(
+          message.code as BlameCode,
+          message.evidence
+        );
+        if (!evidence) return null;
+        message.evidence = evidence;
+        break;
+      }
       case 'components_ready':
         // No additional fields beyond session + binding.
         break;
@@ -582,6 +620,11 @@ export interface RoundParams {
   jitterMs?: [number, number];
   /** Mix order for onion-wrapped outputs (sorted by pubkey). */
   mixOrder?: string[];
+  /**
+   * Fired when a blame report is verified (local or remote). Service layer may
+   * exclude the ephemeral session key for this attempt only — not a person ban.
+   */
+  onBlame?: (report: BlameReport) => void;
 }
 
 /** Bound silent waits — caps from fusionTiming (server protocol.py). */
@@ -932,6 +975,27 @@ function runParticipant(
 
       // Handle revealed outputs from last peeler — sent directly to coordinator.
       if (message.type === 'outputs' && from !== coordinator) {
+        return;
+      }
+
+      // Verified blame from any round participant (usually coordinator).
+      if (
+        message.type === 'blame' &&
+        params.participants.includes(from)
+      ) {
+        const report: BlameReport = {
+          session: message.session,
+          accused: message.accused,
+          code: message.code,
+          evidence: message.evidence,
+        };
+        const check = verifyBlameReport(report, {
+          session,
+          participants: params.participants,
+        });
+        if (!check.ok) return;
+        params.onBlame?.(report);
+        void fail(new Error(formatBlameAbortReason(report)), false);
         return;
       }
 
@@ -1303,6 +1367,53 @@ function runCoordinator(
       }
       reject(error);
     };
+    /**
+     * Provable fault path: broadcast blame (verifiable evidence), then abort.
+     * Never use for timeouts / missing messages / late join.
+     */
+    const blameAndFail = async (
+      accused: string,
+      code: BlameCode,
+      evidence: BlameEvidence
+    ) => {
+      if (settled) return;
+      const report = createBlameReport(session, accused, code, evidence);
+      const check = verifyBlameReport(report, {
+        session,
+        participants: params.participants,
+      });
+      if (!check.ok) {
+        void fail(
+          new Error(`internal blame failed verification: ${check.reason}`),
+          true
+        );
+        return;
+      }
+      params.onBlame?.(report);
+      const reason = formatBlameAbortReason(report);
+      params.onStatus?.(reason);
+      const blameMsg: RoundMessage = {
+        ...messageBinding(),
+        type: 'blame',
+        session,
+        accused,
+        code,
+        evidence,
+      };
+      // Mark settled before fan-out so re-entry is ignored.
+      settled = true;
+      cleanup();
+      await Promise.allSettled(others.map((peer) => transport.send(peer, blameMsg)));
+      // Also plain abort for older peers / clarity.
+      const abortMsg: RoundMessage = {
+        ...messageBinding(),
+        type: 'abort',
+        session,
+        reason: reason.slice(0, 240),
+      };
+      await Promise.allSettled(others.map((peer) => transport.send(peer, abortMsg)));
+      reject(new Error(reason));
+    };
     const succeed = (result: RoundResult) => {
       if (settled) return;
       settled = true;
@@ -1331,15 +1442,29 @@ function runCoordinator(
           message.pedersenTotalNonce
         )
       ) {
-        throw new Error(`pedersen balance check failed for ${from}`);
+        await blameAndFail(from, 'pedersen_unbalanced', {
+          kind: 'pedersen_unbalanced',
+          amountCommitments: message.amountCommitments,
+          pedersenTotalNonce: message.pedersenTotalNonce,
+          excessFee: message.excessFee,
+        });
+        return;
       }
       // Slots must lie in this peer's reserved range.
       const base = peerCredentialSlotBase(params.participants, from);
-      const responses: Array<{ index: number; s: string }> = [];
+      const slots = message.requests.map((r) => r.index);
       for (const req of message.requests) {
         if (req.index < base || req.index >= base + CREDENTIAL_SLOTS_PER_PEER) {
-          throw new Error(`credential slot ${req.index} outside peer range`);
+          await blameAndFail(from, 'credential_slot_oob', {
+            kind: 'credential_slot_oob',
+            slots,
+            participants: [...params.participants],
+          });
+          return;
         }
+      }
+      const responses: Array<{ index: number; s: string }> = [];
+      for (const req of message.requests) {
         responses.push({ index: req.index, s: issuer.signHex(req.index, req.e) });
       }
       credentialedPeers.add(from);
@@ -1352,16 +1477,45 @@ function runCoordinator(
     };
 
     /** Accept inputs only when every credential verifies under the round pubkey. */
-    const acceptInputs = (from: string, inputs: FusionInputRef[], sigs: string[]) => {
+    const acceptInputs = async (
+      from: string,
+      inputs: FusionInputRef[],
+      sigs: string[]
+    ) => {
       if (inputs.length !== sigs.length) {
         throw new Error('input/credential count mismatch');
       }
       for (let i = 0; i < inputs.length; i++) {
         const msgHex = inputCredentialMessageHashHex(inputs[i]);
         if (!verifyBchSchnorrHex(issuer.pubkeyHex, sigs[i], msgHex)) {
-          throw new Error(`invalid input credential from ${from}`);
+          await blameAndFail(from, 'invalid_input_credential', {
+            kind: 'invalid_input_credential',
+            roundPubkey: issuer.pubkeyHex,
+            inputs: [...inputs],
+            credentialSigs: [...sigs],
+          });
+          return;
         }
-        credentialedInputs.add(inputKey(inputs[i]));
+      }
+      for (const inp of inputs) {
+        const key = inputKey(inp);
+        const claimants: string[] = [];
+        for (const [peer, peerInputs] of inputsByPeer) {
+          if (peerInputs.some((p) => inputKey(p) === key)) claimants.push(peer);
+        }
+        if (claimants.length > 0) {
+          if (!claimants.includes(from)) claimants.push(from);
+          if (claimants.length >= 2) {
+            await blameAndFail(from, 'duplicate_outpoint', {
+              kind: 'duplicate_outpoint',
+              prevTxid: inp.prevTxid,
+              prevIndex: inp.prevIndex,
+              claimants,
+            });
+            return;
+          }
+        }
+        credentialedInputs.add(key);
       }
       const existing = inputsByPeer.get(from);
       if (existing) existing.push(...inputs);
@@ -1607,16 +1761,29 @@ function runCoordinator(
         void fail(abortError(message.reason), true);
         return;
       }
+      if (message.type === 'blame' && params.participants.includes(from)) {
+        const report: BlameReport = {
+          session: message.session,
+          accused: message.accused,
+          code: message.code,
+          evidence: message.evidence,
+        };
+        const check = verifyBlameReport(report, {
+          session,
+          participants: params.participants,
+        });
+        if (!check.ok) return; // ignore unverifiable frame attempts
+        params.onBlame?.(report);
+        void fail(new Error(formatBlameAbortReason(report)), false);
+        return;
+      }
       if (message.type === 'inputs' && others.includes(from)) {
-        try {
-          acceptInputs(from, message.inputs, message.credentialSigs);
-        } catch (error) {
-          void fail(asError(error), true);
-          return;
-        }
-        void tryAssemble().catch((error: unknown) =>
-          void fail(asError(error), true)
-        );
+        void acceptInputs(from, message.inputs, message.credentialSigs)
+          .then(() => {
+            if (settled) return;
+            return tryAssemble();
+          })
+          .catch((error: unknown) => void fail(asError(error), true));
         return;
       }
       if (message.type === 'outputs') {
@@ -1664,7 +1831,11 @@ function runCoordinator(
           receivedKeys.size !== expectedKeys.size ||
           [...receivedKeys].some((key) => !expectedKeys.has(key))
         ) {
-          void fail(new Error(`invalid signature set from ${from}`), true);
+          void blameAndFail(from, 'invalid_signature_set', {
+            kind: 'invalid_signature_set',
+            expectedOutpoints: [...expectedKeys],
+            receivedOutpoints: message.sigs.map(inputKey),
+          });
           return;
         }
         signedPeers.add(from);

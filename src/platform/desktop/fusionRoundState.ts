@@ -25,6 +25,11 @@ const ROUND_KEYS_PREFIX = 'optn-fusion-round-keys-';
 const INPUT_LOCKS_PREFIX = 'optn-fusion-input-locks-';
 /** Global (all wallets/windows): keys that withdrew or finished a gather. */
 const RETIRED_KEYS_KEY = 'optn-fusion-retired-round-keys';
+/**
+ * Ephemeral session keys that were *verified* blame targets this attempt.
+ * Not a person ban — throwaway keys only, short TTL. Never for timeouts.
+ */
+const BLAMED_SESSION_KEYS_KEY = 'optn-fusion-blamed-session-keys';
 
 /** Long enough to cover a stored announcement's discoverable lifetime. */
 const ROUND_KEY_TTL_MS = 10 * 60_000;
@@ -35,6 +40,8 @@ const INPUT_LOCK_TTL_MS = 5 * 60_000;
  * Must cover relay replay of replaceable announcements after withdraw.
  */
 const RETIRED_KEY_TTL_MS = 5 * 60_000;
+/** How long a blamed throwaway key is excluded from local gather/propose. */
+const BLAMED_SESSION_KEY_TTL_MS = 10 * 60_000;
 
 /** value -> epoch ms it was recorded. */
 type Stamped = Record<string, number>;
@@ -115,6 +122,22 @@ export function retireAllOwnRoundKeys(walletId: number): void {
 /** True when any wallet has retired this announcement key. */
 export function isRetiredRoundKey(pubkey: string): boolean {
   return live(RETIRED_KEYS_KEY, RETIRED_KEY_TTL_MS).has(pubkey);
+}
+
+/**
+ * Record a verified blame target (ephemeral session pubkey only).
+ * Local-only; does not publish identity or IP.
+ */
+export function recordBlamedSessionKey(pubkey: string): void {
+  if (!pubkey || pubkey.length < 32) return;
+  const entries = read(BLAMED_SESSION_KEYS_KEY);
+  entries[pubkey] = Date.now();
+  write(BLAMED_SESSION_KEYS_KEY, entries, BLAMED_SESSION_KEY_TTL_MS);
+}
+
+/** True when this throwaway key was blamed recently (exclude from propose). */
+export function isBlamedSessionKey(pubkey: string): boolean {
+  return live(BLAMED_SESSION_KEYS_KEY, BLAMED_SESSION_KEY_TTL_MS).has(pubkey);
 }
 
 /** Outpoints currently claimed by an in-flight round of this wallet. */

@@ -421,7 +421,7 @@ sets, money bounds. Invalid messages surface as protocol errors.
 | Pedersen | Full component model + blame | Per-peer commit at credential time |
 | Blind Schnorr | Server signs; client requester in Rust | Coordinator `BlindIssuer`; TS requester |
 | Covert / output privacy | Separate Tor circuits per component | Per-component jitter + **output onion** for outputs |
-| Blame protocol | Full EC-style blame proofs | Not ported; abort + drop bad peer |
+| Blame protocol | Full EC-style component blame | **P2P-native** prove-or-don't-blame (`fusionBlame.ts`): verifiable faults only; **never** for timeouts/late join |
 | Assembly trust | Server proposes; client checks | Coordinator proposes; **every** peer checks |
 | Broadcast | Client/server paths | Coordinator + peer liveness broadcast |
 | Network | Chipnet for tests; never mainnet in CI | Same rule |

@@ -17,9 +17,11 @@ import ElectrumService, {
 } from '../../services/ElectrumService';
 import {
   clearOutpointReservations,
+  isBlamedSessionKey,
   isOwnRoundKey,
   isRetiredRoundKey,
   outpointKey,
+  recordBlamedSessionKey,
   recordRoundKey,
   releaseOutpoints,
   reserveOutpoints,
@@ -179,7 +181,10 @@ async function collectRolling(
   /** Last time soft ≤ strict (soft lag grace). */
   let lastSoftCaughtUpMs = start;
   const ghostKey = (pubkey: string) =>
-    isOwnRoundKey(walletId, pubkey) || isRetiredRoundKey(pubkey);
+    isOwnRoundKey(walletId, pubkey) ||
+    isRetiredRoundKey(pubkey) ||
+    // Verified protocol-fault keys only — never timeout/lag (see fusionBlame).
+    isBlamedSessionKey(pubkey);
   /** Soft filter while waiting (shows approximate count). */
   const softLive = () => {
     const nowSeconds = Math.floor(Date.now() / 1_000);
@@ -878,6 +883,13 @@ export async function runP2pFusion(
         jitterMs: P2P_COMPONENT_JITTER_MS,
         signal: opts.signal,
         onStatus: status,
+        onBlame: (report) => {
+          recordBlamedSessionKey(report.accused);
+          status(
+            `Recorded protocol fault for peer ${report.accused.slice(0, 8)}… ` +
+              `(${report.code}) — excluded this key only, not a person ban.`
+          );
+        },
         broadcast: async (txHex) => {
           try {
             const receipt = await broadcastP2pTransaction(txHex);
