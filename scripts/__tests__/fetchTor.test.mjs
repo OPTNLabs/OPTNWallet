@@ -31,8 +31,13 @@ describe('pinned Tor Expert Bundle', () => {
     }
   });
 
-  it('fails closed for a target without a reviewed checksum', () => {
+  it('fails closed for a target without a reviewed Expert Bundle checksum', () => {
+    // linux-aarch64 has no official desktop Expert Bundle; fetch-tor stages it
+    // from host tor + pinned linux-x86_64 geoip instead of getTorArtifact().
     expect(() => getTorArtifact('linux-aarch64')).toThrow(
+      'unsupported or unpinned Tor target',
+    );
+    expect(() => getTorArtifact('windows-arm64')).toThrow(
       'unsupported or unpinned Tor target',
     );
   });

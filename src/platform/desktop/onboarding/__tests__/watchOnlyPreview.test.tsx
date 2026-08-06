@@ -30,9 +30,9 @@ describe('desktop watch-only preview', () => {
 
     expect(html).toContain('Add another wallet');
     expect(html).toContain('Create Watch-Only Wallet');
-    expect(html.indexOf('Connect Hardware Wallet')).toBeLessThan(
-      html.indexOf('Create Watch-Only Wallet')
-    );
+    expect(html).toContain('Use a hardware device');
+    // Airgap/Keystone live inside create-watch-only, not on the landing list.
+    expect(html).not.toContain('Set up Keystone');
   });
 
   it('derives the first receive and change addresses from a BCH account xPub', async () => {
@@ -68,7 +68,8 @@ describe('desktop watch-only preview', () => {
     expect(preview).not.toHaveProperty('privateKey');
   });
 
-  it('rejects an xPub whose encoded network does not match the selected network', async () => {
+  it('aligns xpub/tpub version bytes when the wallet network differs', async () => {
+    // Version bytes only — same HD node. Trezor/chipnet exports often need this.
     const mainnetXpub = await deriveHdPublicKeyAtPath(
       TEST_MNEMONIC,
       '',
@@ -76,12 +77,12 @@ describe('desktop watch-only preview', () => {
       getBchAccountPath(Network.MAINNET, 0)
     );
 
-    expect(() =>
-      deriveWatchOnlyAccountPreview(Network.CHIPNET, mainnetXpub)
-    ).toThrow(/network/i);
+    const preview = deriveWatchOnlyAccountPreview(Network.CHIPNET, mainnetXpub);
+    expect(preview.receive.address.startsWith('bchtest:')).toBe(true);
+    expect(preview.accountPath).toBe("m/44'/145'/0'");
   });
 
-  it('offers create controls and no longer claims preview-only status', () => {
+  it('saves and opens without an xPub preview step; single-sig and multisig for PSBT', () => {
     const html = renderToStaticMarkup(
       <WatchOnlyWalletPreview
         onBack={() => undefined}
@@ -91,17 +92,14 @@ describe('desktop watch-only preview', () => {
 
     expect(html).toContain('Create Watch-Only Wallet');
     expect(html).toContain('Wallet name');
-    expect(html).toContain('Standard');
-    expect(html).toContain('Multisign');
-    expect(html).toContain('Save watch-only wallet');
-    expect(html).not.toContain('does not save a watch-only wallet');
+    expect(html).toContain('Single-sig');
+    expect(html).toContain('Multisig');
+    expect(html).toContain('Save and open wallet');
+    expect(html).not.toContain('Preview public addresses');
     expect(html).not.toContain('Public preview only');
   });
 
-  it('offers Multisign as a real choice, not a placeholder', () => {
-    // The plan for Issue #8 says an entry is added when its flow works, not as
-    // a non-working placeholder. Multisign shipped disabled and labelled
-    // "Coming next" while the whole codec sat behind it unreachable.
+  it('puts Keystone in an Airgap section at the bottom of create watch-only', () => {
     const html = renderToStaticMarkup(
       <WatchOnlyWalletPreview
         onBack={() => undefined}
@@ -109,16 +107,15 @@ describe('desktop watch-only preview', () => {
       />
     );
 
-    expect(html).not.toContain('Coming next');
-    expect(html).not.toContain('aria-disabled');
+    expect(html).toContain('Airgap');
+    expect(html).toContain('Keystone');
+    expect(html).toContain('not USB, not PSBT');
+    expect(html.indexOf('Save and open wallet')).toBeLessThan(
+      html.indexOf('Airgap')
+    );
   });
 
-  it('does not ask for a master fingerprint when creating a wallet', () => {
-    // Creating a watch-only wallet is a scan-the-xPub step. The fingerprint is
-    // not in that QR, is not derivable from it, and is not needed to sign — it
-    // only affects whether the device's review screen claims the coins. The
-    // send screen asks once and remembers, so asking here too was an
-    // unexplained hex box in onboarding for something most people skip.
+  it('does not ask for a master fingerprint on the main xPub form', () => {
     const html = renderToStaticMarkup(
       <WatchOnlyWalletPreview
         onBack={() => undefined}

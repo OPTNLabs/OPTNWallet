@@ -1,23 +1,27 @@
 /**
- * Ledger hardware wallet service using the official Ledger SDK.
+ * Ledger hardware wallet service.
  *
- * Transports:
- *   USB  — @ledgerhq/hw-transport-webhid (Web HID, official for browsers/Tauri)
- *   BLE  — @ledgerhq/hw-transport-web-ble (Web Bluetooth, for Ledger Nano X)
+ * Transports (TypeScript SDK on top):
+ *   Desktop (Tauri) — native USB HID via Rust hidapi + LedgerTransportNative
+ *                     (Electron Cash / Ledger Live model; WebView has no WebHID)
+ *   Browser USB     — @ledgerhq/hw-transport-webhid
+ *   Browser BLE     — @ledgerhq/hw-transport-web-ble (Nano X)
  *
- * Both transports require the Bitcoin Cash app open on the Ledger device.
- *
- * Signing: @ledgerhq/hw-app-btc
- *   - Handles P2PKH signing for BCH (Bitcoin Cash) using currency: 'bch'
- *   - sigHashType: 0x41 = SIGHASH_ALL | SIGHASH_FORKID (BCH replay protection)
- *   - Requires fetching full previous raw transactions (Ledger validates fees)
+ * App protocol: @ledgerhq/hw-app-btc with currency: 'bch'
+ *   sigHashType 0x41 = SIGHASH_ALL | SIGHASH_FORKID
  */
 
 import TransportWebHID from '@ledgerhq/hw-transport-webhid';
 import TransportWebBLE from '@ledgerhq/hw-transport-web-ble';
 import Btc from '@ledgerhq/hw-app-btc';
 import type Transport from '@ledgerhq/hw-transport';
-import { cashAddressToLockingBytecode } from '@bitauth/libauth';
+import {
+  binToHex,
+  cashAddressToLockingBytecode,
+  encodeTransactionOutputs,
+} from '@bitauth/libauth';
+import { isDesktopPlatform } from '../../utils/platform';
+import LedgerTransportNative from './LedgerTransportNative';
 
 export type LedgerTransportType = 'usb' | 'ble';
 
@@ -38,8 +42,12 @@ export interface LedgerInput {
   path: string;
   /** Full raw previous transaction hex (required by Ledger for fee validation) */
   prevTxHex: string;
+  /** Outpoint txid (UI byte order / Electrum), needed for Trezor prev_tx map */
+  prevHash?: string;
   prevIndex: number;
   sequence?: number;
+  /** Satoshi value of the UTXO (Trezor TxInputType.amount; EC passes txin value) */
+  amountSatoshis?: bigint;
 }
 
 export interface LedgerOutput {
@@ -50,9 +58,11 @@ export interface LedgerOutput {
 let transport: Transport | null = null;
 let currentTransportType: LedgerTransportType = 'usb';
 
+/** Official hw-app-btc flag for Bitcoin Cash (enables BIP143 / FORKID path). */
+const BCH_ADDITIONALS = ['abc'] as const;
+
 export function setLedgerTransportType(type: LedgerTransportType): void {
   if (type !== currentTransportType) {
-    // Force reconnect when transport type changes
     transport = null;
     currentTransportType = type;
   }
@@ -62,24 +72,59 @@ export function getLedgerTransportType(): LedgerTransportType {
   return currentTransportType;
 }
 
-async function getTransport(): Promise<Transport> {
+/**
+ * Open (or reuse) a Ledger transport. Prefer one long-lived session per sign
+ * (Windows HID invalidates handles if we open → close → reopen quickly).
+ */
+export async function getTransport(): Promise<Transport> {
   if (transport) {
     return transport;
   }
-  if (currentTransportType === 'ble') {
+
+  // Desktop app: always native USB for "usb" (WebHID is missing in WebView2).
+  if (currentTransportType === 'usb' && isDesktopPlatform()) {
+    transport = await LedgerTransportNative.open();
+  } else if (currentTransportType === 'ble') {
+    if (isDesktopPlatform()) {
+      throw new Error(
+        'Ledger Bluetooth is not available in the desktop app yet. Use USB.'
+      );
+    }
     transport = await TransportWebBLE.create();
   } else {
     transport = await TransportWebHID.create();
   }
+
   transport.on('disconnect', () => {
     transport = null;
   });
   return transport;
 }
 
+/** Drop cached transport so the next call re-opens HID (after 0x48F / unplug). */
+export async function invalidateLedgerTransport(): Promise<void> {
+  if (transport) {
+    try {
+      await transport.close();
+    } catch {
+      /* ignore */
+    }
+    transport = null;
+  }
+}
+
 function createBchApp(t: Transport): Btc {
-  // currency: 'bch' tells hw-app-btc to use Bitcoin Cash parameters
+  // currency 'bch' → BtcOld (legacy Bitcoin Cash app APDUs), not app-bitcoin-new
   return new Btc({ transport: t as never, currency: 'bch' });
+}
+
+function isHidGoneError(err: unknown): boolean {
+  const msg = err instanceof Error ? err.message : String(err);
+  return (
+    /0x0000048F|not connected|invalid or closed hardware session|HID write failed|device path not found/i.test(
+      msg
+    )
+  );
 }
 
 /**
@@ -125,89 +170,118 @@ export async function ledgerGetAddress(
  * Ledger requires the full raw previous transaction for each input —
  * this prevents a class of "fee inflation" attacks where a malicious app
  * could lie about UTXO values and drain more than the user approved.
+ *
+ * @param existingTransport optional open transport (keep one HID session for
+ *   assert-app + sign; Windows 0x48F if we close/reopen between them).
  */
+export type LedgerSignHooks = {
+  onDeviceSignatureRequested?: () => void;
+  onDeviceSignatureGranted?: () => void;
+};
+
 export async function ledgerSignTransaction(
   inputs: LedgerInput[],
   outputs: LedgerOutput[],
-  changePath?: string
+  changePath?: string,
+  existingTransport?: Transport,
+  hooks?: LedgerSignHooks
 ): Promise<LedgerSignResult> {
-  const t = await getTransport();
-  const bch = createBchApp(t);
+  const run = async (t: Transport): Promise<string> => {
+    const bch = createBchApp(t);
 
-  // Ledger requires splitting each previous transaction
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const splitInputs: any[] = inputs.map((inp) => {
-    const splitTx = bch.splitTransaction(inp.prevTxHex, false);
-    return [splitTx, inp.prevIndex, undefined, inp.sequence ?? 0xffffffff];
-  });
+    // split with BCH additionals so prev_tx parse matches createPaymentTransaction
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const splitInputs: any[] = inputs.map((inp) => {
+      const splitTx = bch.splitTransaction(
+        inp.prevTxHex,
+        false,
+        false,
+        [...BCH_ADDITIONALS]
+      );
+      return [splitTx, inp.prevIndex, undefined, inp.sequence ?? 0xffffffff];
+    });
 
-  const associatedKeysets = inputs.map((inp) => inp.path);
-  const outputScriptHex = buildOutputScript(outputs);
+    const associatedKeysets = inputs.map((inp) =>
+      inp.path.replace(/^m\//i, '')
+    );
+    const outputScriptHex = buildOutputScript(outputs);
+    const change =
+      changePath != null && changePath.length > 0
+        ? changePath.replace(/^m\//i, '')
+        : undefined;
 
-  // hw-app-btc uses createPaymentTransaction (v10+) or createPaymentTransactionNew (v9)
-  // We try the newer API name first and fall back gracefully.
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const btcAny = bch as any;
-  const signerMethod: string =
-    typeof btcAny.createPaymentTransactionNew === 'function'
-      ? 'createPaymentTransactionNew'
-      : 'createPaymentTransaction';
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const btcAny = bch as any;
+    const signerMethod: string =
+      typeof btcAny.createPaymentTransactionNew === 'function'
+        ? 'createPaymentTransactionNew'
+        : 'createPaymentTransaction';
 
-  const signedHex: string = await btcAny[signerMethod]({
-    inputs: splitInputs,
-    associatedKeysets,
-    outputScriptHex,
-    changePath,
-    // SIGHASH_ALL | SIGHASH_FORKID (0x41) — mandatory for BCH replay protection
-    sigHashType: 0x41,
-    segwit: false,
-    additionals: ['bch'],
-  });
+    // hw-app-btc docs: "abc" for bch; sigHashType 0x41 = ALL|FORKID (EC ledger.py)
+    // During "finalization" the device shows outputs — user MUST press buttons.
+    return btcAny[signerMethod]({
+      inputs: splitInputs,
+      associatedKeysets,
+      outputScriptHex,
+      changePath: change,
+      sigHashType: 0x41,
+      segwit: false,
+      additionals: [...BCH_ADDITIONALS],
+      // Prefer software BIP143 trusted inputs for BCH when possible — avoids
+      // device getTrustedInput "missing result in processScriptBlocks" on some
+      // prev txs; Live still uses device trusted inputs when this is true.
+      useTrustedInputForSegwit: false,
+      onDeviceSignatureRequested: () => {
+        hooks?.onDeviceSignatureRequested?.();
+      },
+      onDeviceSignatureGranted: () => {
+        hooks?.onDeviceSignatureGranted?.();
+      },
+    });
+  };
 
-  return { serializedTx: signedHex };
+  let t = existingTransport ?? (await getTransport());
+  try {
+    const signedHex = await run(t);
+    return { serializedTx: signedHex };
+  } catch (err) {
+    if (!isHidGoneError(err)) throw err;
+    // Stale HID handle (common after app switch / double-open on Windows).
+    await invalidateLedgerTransport();
+    t = await getTransport();
+    try {
+      const signedHex = await run(t);
+      return { serializedTx: signedHex };
+    } catch (err2) {
+      const msg = err2 instanceof Error ? err2.message : String(err2);
+      throw new Error(
+        `${msg}\n\nLedger USB dropped (device not connected). ` +
+          `Unlock the Nano, open the Bitcoin Cash app, unplug/replug if needed, then try Send again. ` +
+          `Close Ledger Live if it is using the device.`
+      );
+    }
+  }
 }
 
 /**
- * Build Ledger's output script hex format.
- * Each output: 8-byte LE amount + varint length + scriptPubKey bytes.
- *
- * Decodes each address via @bitauth/libauth's cashAddressToLockingBytecode
- * (already a project dependency, already used for the reverse direction in
- * hardwareWalletSigning.ts) instead of a hand-rolled bech32 decode — the
- * previous version stripped the last 8 groups and assumed they were a valid
- * checksum without ever actually verifying it against the computed polymod.
+ * Ledger hw-app-btc docs: outputScriptHex is the hex serialization of outputs
+ * **including leading compact-size voutCount** (EC: var_int(len(outputs)) + …).
+ * Built with libauth encodeTransactionOutputs — same wire format as BCH txs.
  */
 function buildOutputScript(outputs: LedgerOutput[]): string {
-  let result = '';
-  for (const out of outputs) {
-    const amtBuf = new ArrayBuffer(8);
-    const view = new DataView(amtBuf);
-    const lo = Number(out.amountSatoshis & 0xffffffffn);
-    const hi = Number((out.amountSatoshis >> 32n) & 0xffffffffn);
-    view.setUint32(0, lo, true);
-    view.setUint32(4, hi, true);
-    result += bufToHex(new Uint8Array(amtBuf));
-
+  const libauthOutputs = outputs.map((out) => {
     const decoded = cashAddressToLockingBytecode(out.address);
     if (typeof decoded === 'string') {
       throw new Error(`Ledger: invalid recipient address: ${decoded}`);
     }
-    const script = bufToHex(decoded.bytecode);
-    result += (script.length / 2).toString(16).padStart(2, '0');
-    result += script;
-  }
-  return result;
-}
-
-function bufToHex(buf: Uint8Array): string {
-  return Array.from(buf)
-    .map((b) => b.toString(16).padStart(2, '0'))
-    .join('');
+    return {
+      lockingBytecode: decoded.bytecode,
+      valueSatoshis: out.amountSatoshis,
+    };
+  });
+  return binToHex(encodeTransactionOutputs(libauthOutputs));
 }
 
 export async function ledgerDisconnect(): Promise<void> {
-  if (transport) {
-    await transport.close();
-    transport = null;
-  }
+  await invalidateLedgerTransport();
 }

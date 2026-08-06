@@ -388,7 +388,10 @@ const OutboundTransactionTracker = {
 
   canClear(record: OutboundTransactionRecord): boolean {
     if (isDeterministicBroadcastError(record.lastError)) return true;
-    if (record.state === 'submitted') return true;
+    // submitted = we lost the broadcast race; broadcasted = already on wire.
+    // User must be able to unblock Simple Send without waiting 20 minutes when
+    // history sync has not written the tx row yet (common on hardware wallets).
+    if (record.state === 'submitted' || record.state === 'broadcasted') return true;
     return this.canRelease(record);
   },
 

@@ -1,34 +1,29 @@
 // What can this runtime ACTUALLY talk to a hardware wallet with?
 //
-// Every hardware wallet integration here is built on a browser device API:
-// Ledger on WebHID (`navigator.hid`), Trezor and OneKey on a cross-origin
-// iframe to their hosted connect page, Keystone on the camera. Those are the
-// right choices in a browser tab. The desktop build is not a browser tab — it
-// is a WebView2 window, and WebView2 does not implement the WebHID/WebUSB/Web
-// Bluetooth device APIs at all.
-//
-// This is the same wall CashFusion hit: `FusionStatusService` says a WebView
-// "can only open HTTP/WebSocket connections, so the frontend cannot speak this
-// protocol at any level", and the answer there was to do the real work in Rust
-// and expose a command. Hardware wallets need the same answer — which is also
-// how every desktop wallet that works does it (Electron Cash talks to devices
-// through hidapi/trezorlib natively, not through a browser API).
-//
-// Until that native path exists, the least this can do is say so out loud. A
-// missing capability currently surfaces as a device that simply never connects,
-// which is indistinguishable from a broken cable or a wrong PIN.
+// Browser tab: WebHID / WebBLE / Connect iframe / camera.
+// Desktop Tauri WebView: no WebHID/WebUSB/WebBLE — USB is done in Rust hidapi
+// (same model as Electron Cash / Ledger Live / Trezor Suite), then TypeScript
+// SDKs speak the app protocol (@ledgerhq/hw-app-btc, @trezor/protobuf).
 
-export type HardwareTransport = 'webhid' | 'webusb' | 'webble' | 'camera' | 'iframe';
+import { isDesktopPlatform } from '../../utils/platform';
+
+export type HardwareTransport =
+  | 'webhid'
+  | 'webusb'
+  | 'webble'
+  | 'camera'
+  | 'iframe'
+  | 'native-usb';
 
 export interface TransportSupport {
   webhid: boolean;
   webusb: boolean;
   webble: boolean;
   camera: boolean;
-  /** Cross-origin connect pages (Trezor Connect, OneKey) need a real browsing
-   *  context. Present in a WebView, but the popup/permission flow they rely on
-   *  is not reliably available, so this is "maybe", not "yes". */
+  /** Cross-origin connect pages (browser Trezor Connect / OneKey web SDK). */
   iframe: boolean;
+  /** Tauri hidapi path — Ledger / Trezor One / OneKey HID. */
+  nativeUsb: boolean;
 }
 
 export function detectTransportSupport(
@@ -48,22 +43,20 @@ export function detectTransportSupport(
     webble: !!n && typeof n.bluetooth === 'object' && n.bluetooth !== null,
     camera: !!n?.mediaDevices && typeof n.mediaDevices.getUserMedia === 'function',
     iframe: typeof window !== 'undefined',
+    nativeUsb: isDesktopPlatform(),
   };
 }
 
 /** Transports each device can actually be driven over, in preference order. */
 const DEVICE_TRANSPORTS: Record<string, HardwareTransport[]> = {
-  ledger: ['webhid', 'webble'],
-  trezor: ['iframe'],
-  onekey: ['iframe'],
+  ledger: ['native-usb', 'webhid', 'webble'],
+  trezor: ['native-usb', 'iframe'],
+  onekey: ['native-usb', 'iframe'],
   keystone: ['camera'],
 };
 
 /**
  * Why this device cannot be reached here, or null when it can.
- *
- * Phrased for the person holding the device: it names the missing capability
- * and does not imply the device or the cable is at fault.
  */
 export function unsupportedReason(
   deviceType: string,
@@ -71,22 +64,25 @@ export function unsupportedReason(
 ): string | null {
   const transports = DEVICE_TRANSPORTS[deviceType];
   if (!transports || transports.length === 0) return null;
-  if (transports.some((t) => support[t])) return null;
 
-  if (transports.includes('webhid')) {
+  const ok = transports.some((t) => {
+    if (t === 'native-usb') return support.nativeUsb;
+    return support[t as keyof TransportSupport];
+  });
+  if (ok) return null;
+
+  if (transports.includes('webhid') || transports.includes('native-usb')) {
     return (
-      'This desktop build cannot reach USB devices: its WebView does not ' +
-      'provide WebHID. Native USB support has to be added in the Rust layer ' +
-      'before Ledger can connect here. It is not your cable or your device.'
+      'This build cannot reach USB hardware wallets. Use the desktop app ' +
+      '(native USB) or a browser with WebHID. It is not your cable or device.'
     );
   }
   if (transports.includes('camera')) {
     return 'No camera is available, so QR-based signing cannot be used here.';
   }
-  return 'This desktop build cannot reach this device yet.';
+  return 'This build cannot reach this device yet.';
 }
 
-/** One-line summary for logs and bug reports. */
 export function describeTransportSupport(
   support: TransportSupport = detectTransportSupport()
 ): string {

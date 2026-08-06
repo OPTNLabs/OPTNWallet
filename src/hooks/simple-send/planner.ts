@@ -13,6 +13,11 @@ type PlannerParams = {
   tokenChangeAddress: string;
   selectedChangeAddress: string;
   dbUtxos: UTXO[];
+  /**
+   * Hardware wallets (EC model): cannot software-sign. Plan fees by size
+   * estimate; rawTx is left empty and filled by device sign at send time.
+   */
+  hardwareWallet?: boolean;
 };
 
 export function createSimpleSendPlanner({
@@ -22,6 +27,7 @@ export function createSimpleSendPlanner({
   tokenChangeAddress,
   selectedChangeAddress,
   dbUtxos,
+  hardwareWallet = false,
 }: PlannerParams) {
   function sortFeeUtxosPreferred(pool: UTXO[]) {
     return [...pool].sort((a, b) => {
@@ -57,6 +63,50 @@ export function createSimpleSendPlanner({
     inputs: UTXO[],
     outputs: TransactionOutput[]
   ): Promise<BuildResult> {
+    // Electron Cash hardware path: plan outputs/fees without software keys;
+    // device produces the signed serialization (ledger/trezor sign_transaction).
+    if (hardwareWallet) {
+      try {
+        // sumInputsSats returns number; keep arithmetic in bigint (EC fee plan).
+        const inputSum = BigInt(sumInputsSats(inputs));
+        // EC-style size estimate: ~10 + 148*nIn + 34*nOut (non-segwit P2PKH).
+        const nOut = outputs.length + 1; // allow room for auto-change
+        const bytes = 10 + inputs.length * 148 + nOut * 34;
+        const feeSats = BigInt(Math.ceil(bytes * 1.1));
+        const outTotal = sumOutputSats(outputs);
+        let finalOutputs = [...outputs];
+        const remainder = inputSum - outTotal - feeSats;
+        if (remainder >= BigInt(DUST) && selectedChangeAddress) {
+          finalOutputs = [
+            ...outputs,
+            {
+              recipientAddress: selectedChangeAddress,
+              amount: Number(remainder),
+            },
+          ];
+        }
+        const finalOutTotal = sumOutputSats(finalOutputs);
+        const fee = inputSum - finalOutTotal;
+        if (fee < 0n) {
+          return {
+            ok: false,
+            err: 'Insufficient funds for fee (hardware plan).',
+          };
+        }
+        return {
+          ok: true,
+          feeSats: Number(fee),
+          totalSats: Number(outTotal + fee),
+          rawTx: '', // filled by hardwareSignTransaction at Send
+          finalOutputs,
+          changeSats: Number(inputSum - outTotal - fee),
+          inputSum: Number(inputSum),
+        };
+      } catch (error: unknown) {
+        return { ok: false, err: toErrorMessage(error, 'hardware plan failed') };
+      }
+    }
+
     try {
       const r = await TransactionService.buildTransaction(
         outputs,

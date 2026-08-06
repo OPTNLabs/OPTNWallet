@@ -6,6 +6,7 @@ import {
 
 import { Network } from '../../../state/slices/networkSlice';
 import {
+  alignHdPublicKeyNetwork,
   deriveBchAddressFromHdPublicKey,
   getBchAccountPath,
   getHdKeyNetwork,
@@ -46,7 +47,10 @@ function deriveBranchXpub(
   network: Network,
   branchIndex: 0 | 1
 ): string {
-  const decoded = decodeHdPublicKey(accountXpub);
+  // Align xpub/tpub version bytes to the wallet network (Trezor chipnet export
+  // reopened on mainnet stores tpub while networkType is mainnet).
+  const aligned = alignHdPublicKeyNetwork(network, accountXpub);
+  const decoded = decodeHdPublicKey(aligned);
   if (typeof decoded === 'string') {
     throw new Error('Enter a valid BIP32 public key.');
   }
@@ -74,11 +78,13 @@ export function deriveWatchOnlyAccountPreview(
   network: Network,
   rawAccountXpub: string
 ): WatchOnlyAccountPreview {
-  const accountXpub = rawAccountXpub.trim();
-  if (accountXpub.length === 0 || accountXpub.length > MAX_XPUB_LENGTH) {
+  const trimmed = rawAccountXpub.trim();
+  if (trimmed.length === 0 || trimmed.length > MAX_XPUB_LENGTH) {
     throw new Error('Enter a valid BCH account xPub.');
   }
 
+  // Same version-byte alignment as branch derivation — key material only.
+  const accountXpub = alignHdPublicKeyNetwork(network, trimmed);
   const decoded = decodeHdPublicKey(accountXpub);
   if (typeof decoded === 'string') {
     throw new Error('Enter a valid BIP32 public key.');

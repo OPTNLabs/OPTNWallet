@@ -3,6 +3,7 @@ mod menu;
 
 pub mod electrum_tcp;
 pub mod fusion;
+pub mod hw;
 pub mod nostr_tor;
 pub mod spv;
 
@@ -1039,7 +1040,24 @@ pub fn run() {
             electrum_tcp::electrum_tcp_close,
             nostr_tor::nostr_tor_open,
             nostr_tor::nostr_tor_send,
-            nostr_tor::nostr_tor_close
+            nostr_tor::nostr_tor_close,
+            hw::session::hw_enumerate,
+            hw::session::hw_open,
+            hw::session::hw_close,
+            hw::session::hw_write,
+            hw::session::hw_read,
+            hw::ledger::hw_ledger_open,
+            hw::ledger::hw_ledger_exchange,
+            hw::trezor_bridge::trezor_bridge_ping,
+            hw::trezor_bridge::trezor_bridge_enumerate,
+            hw::trezor_bridge::trezor_bridge_acquire,
+            hw::trezor_bridge::trezor_bridge_release,
+            hw::trezor_bridge::trezor_bridge_call,
+            hw::trezor_webusb::trezor_webusb_enumerate,
+            hw::trezor_webusb::trezor_webusb_open,
+            hw::trezor_webusb::trezor_webusb_close,
+            hw::trezor_webusb::trezor_webusb_write,
+            hw::trezor_webusb::trezor_webusb_read,
         ])
         .setup(|app| {
             let log_level = if cfg!(debug_assertions) {

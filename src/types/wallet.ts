@@ -11,7 +11,7 @@ export enum WalletType {
  * is the original author's). Downstream code that needs to branch on them
  * compares against the string values from the desktop feature that owns them.
  */
-export type ExtendedWalletType = WalletType | 'watch-only';
+export type ExtendedWalletType = WalletType | 'watch-only' | 'hardware';
 
 export type DerivationPathSource = 'default' | 'custom';
 

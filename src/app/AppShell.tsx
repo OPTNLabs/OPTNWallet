@@ -69,6 +69,8 @@ const NostrChat = lazy(() => import('../features/nostr/NostrChat'));
  */
 function SendRoute() {
   const walletType = useSelector(selectWalletType);
+  // Watch-only = air-gap PSBT. Hardware = live USB device (SimpleSend until
+  // Ledger sign is fully wired into the send path — not the QR workspace).
   return walletType === 'watch-only' ? <WatchOnlySend /> : <SimpleSend />;
 }
 

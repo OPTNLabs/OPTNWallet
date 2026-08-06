@@ -42,25 +42,87 @@ async function listSeenTxids(
   const db = dbService.getDatabase();
   if (!db) return new Set();
 
+  // Normalize for case / accidental 0x — Electrum vs our store can differ.
+  const wanted = new Set(
+    txids.map((t) => t.replace(/^0x/i, '').toLowerCase())
+  );
   const quoted = txids.map(() => '?').join(', ');
   const statement = db.prepare(`
     SELECT tx_hash
     FROM transactions
     WHERE wallet_id = ?
-      AND tx_hash IN (${quoted});
+      AND lower(replace(tx_hash, '0x', '')) IN (${quoted});
   `);
-  statement.bind([walletId, ...txids]);
+  // Bind lowercased bare hashes so IN matches lower(replace(...)).
+  statement.bind([
+    walletId,
+    ...txids.map((t) => t.replace(/^0x/i, '').toLowerCase()),
+  ]);
 
   const seen = new Set<string>();
   while (statement.step()) {
     const row = statement.getAsObject();
     if (typeof row.tx_hash === 'string' && row.tx_hash.length > 0) {
-      seen.add(row.tx_hash);
+      const norm = row.tx_hash.replace(/^0x/i, '').toLowerCase();
+      // Return original-cased ids from input list when possible
+      for (const t of txids) {
+        if (t.replace(/^0x/i, '').toLowerCase() === norm) {
+          seen.add(t);
+          seen.add(row.tx_hash);
+        }
+      }
+      if (wanted.has(norm)) seen.add(norm);
     }
   }
   statement.free();
 
   return seen;
+}
+
+/**
+ * If every spent outpoint for a record is gone from the UTXOs table, the spend
+ * already applied (or the coins were replaced). Treat as seen so Simple Send
+ * unlocks after a real wallet sync even when `transactions` rows lag (hardware).
+ */
+async function listRecordsWithSpentCoinsGone(
+  walletId: number,
+  records: OutboundTransactionRecord[]
+): Promise<Set<string>> {
+  const withOutpoints = records.filter((r) => r.spentOutpoints.length > 0);
+  if (withOutpoints.length === 0) return new Set();
+
+  const dbService = DatabaseService();
+  await dbService.ensureDatabaseStarted();
+  const db = dbService.getDatabase();
+  if (!db) return new Set();
+
+  const remaining = new Set<string>();
+  const q = db.prepare(`
+    SELECT 1 AS ok FROM UTXOs
+    WHERE wallet_id = ?
+      AND lower(tx_hash) = lower(?)
+      AND tx_pos = ?
+    LIMIT 1
+  `);
+  try {
+    for (const record of withOutpoints) {
+      let anyStillPresent = false;
+      for (const op of record.spentOutpoints) {
+        q.bind([walletId, op.tx_hash, op.tx_pos]);
+        if (q.step()) {
+          anyStillPresent = true;
+        }
+        q.reset();
+        if (anyStillPresent) break;
+      }
+      if (!anyStillPresent) {
+        remaining.add(record.txid);
+      }
+    }
+  } finally {
+    q.free();
+  }
+  return remaining;
 }
 
 export async function reconcileOutboundTransactions(
@@ -100,7 +162,27 @@ export async function reconcileOutboundTransactions(
   );
   await Promise.all(
     retryableActive
-      .filter((record) => locallySeen.has(record.txid))
+      .filter(
+        (record) =>
+          locallySeen.has(record.txid) ||
+          locallySeen.has(record.txid.toLowerCase())
+      )
+      .map((record) =>
+        OutboundTransactionTracker.markState(
+          record.txid,
+          'seen',
+          null,
+          record.walletId
+        )
+      )
+  );
+
+  // Hardware / laggy history: spent UTXOs already dropped from the table.
+  const afterLocal = await OutboundTransactionTracker.listActive(walletId);
+  const spentGone = await listRecordsWithSpentCoinsGone(walletId, afterLocal);
+  await Promise.all(
+    afterLocal
+      .filter((record) => spentGone.has(record.txid))
       .map((record) =>
         OutboundTransactionTracker.markState(
           record.txid,

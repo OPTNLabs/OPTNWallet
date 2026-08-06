@@ -48,12 +48,12 @@ export default function useOutboundTransactions(
         await load();
         return true;
       }
-      if (record.state === 'submitted') {
-        await OutboundTransactionTracker.remove(txid, walletId);
-        await load();
-        return true;
-      }
-      if (!OutboundTransactionTracker.canRelease(record)) {
+      // canClear covers submitted/broadcasted (and deterministic errors).
+      // canRelease is the slower 20‑minute safety valve for still-broadcasting.
+      if (
+        !OutboundTransactionTracker.canClear(record) &&
+        !OutboundTransactionTracker.canRelease(record)
+      ) {
         await load();
         return false;
       }

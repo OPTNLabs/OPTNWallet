@@ -28,6 +28,7 @@ import { homeRoute } from '../../../navigation/routes';
 import {
   openWalletWithPassword,
   openWatchOnlyWallet,
+  openHardwareWallet,
   importWalletFile,
   isBiometricAvailable,
   hasWalletBiometric,
@@ -35,12 +36,10 @@ import {
   getBiometricLabel,
 } from '../DesktopWalletManager';
 import type { WalletFileV1 } from '../walletFile';
-import { selectHardwareWallet } from '../../../state/slices/hardwareWalletSlice';
-import { HardwareWalletSettings } from '../../../features/settings/HardwareWalletSettings';
 import { resolveBiometricEnrollment } from '../biometricEnrollment';
 import { DesktopWalletPickerActions } from './DesktopWalletPickerActions';
 import { WatchOnlyWalletPreview } from './WatchOnlyWalletPreview';
-import { KeystoneWalletSetup } from './KeystoneWalletSetup';
+import { HardwareWalletWizard } from './HardwareWalletWizard';
 
 interface WalletRow {
   id: number;
@@ -85,9 +84,7 @@ const DesktopLandingPage = () => {
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
-  const [view, setView] = useState<
-    'list' | 'hardware' | 'watch-only' | 'keystone'
-  >('list');
+  const [view, setView] = useState<'list' | 'hardware' | 'watch-only'>('list');
   const [importFile, setImportFile] = useState<WalletFileV1 | null>(null);
   /** Optional encrypted .optn-cold companion from multi-select open. */
   const [importColdText, setImportColdText] = useState<string | null>(null);
@@ -102,7 +99,6 @@ const DesktopLandingPage = () => {
   const location = useLocation();
   const dispatch = useDispatch();
   const currentNetwork = useSelector(selectCurrentNetwork);
-  const hw = useSelector(selectHardwareWallet);
 
   useEffect(() => {
     void (async () => {
@@ -123,40 +119,12 @@ const DesktopLandingPage = () => {
   const handleOpenClick = useCallback(
     async (id: number) => {
       const row = wallets?.find((candidate) => candidate.id === id);
-      if (row?.walletType !== 'watch-only') {
-        setOpeningId(id);
-        setPassword('');
-        setError('');
-        return;
-      }
-      // A watch-only wallet has no password: open it directly, still through
-      // the single-window registry so a duplicate open raises the window that
-      // already holds it instead of loading a second copy.
-      setBusy(true);
+      // Watch-only and hardware are always password-gated (saved under a
+      // password at create). One list action: Open → enter password.
+      // Seed wallets also use the same password dialog.
+      setOpeningId(id);
+      setPassword('');
       setError('');
-      try {
-        const attempt = await runExclusiveWalletOpen(
-          id,
-          getCurrentWebviewWindow().label,
-          () => openWatchOnlyWallet(id),
-          isWalletWindowOpen
-        );
-        if (attempt.status === 'held') {
-          await focusWalletWindow(attempt.windowLabel);
-          setError('That wallet is already open in another window.');
-          return;
-        }
-        if (attempt.status === 'rejected' || !attempt.value) {
-          setError('Could not open this wallet.');
-          return;
-        }
-        finishOpen(id, attempt.value);
-      } catch (err) {
-        console.error('[DesktopLandingPage] Open watch-only wallet failed:', err);
-        setError('Could not open this wallet. Please try again.');
-      } finally {
-        setBusy(false);
-      }
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [wallets]
@@ -425,13 +393,22 @@ const DesktopLandingPage = () => {
     setBusy(true);
     setError('');
     try {
+      const row = wallets?.find((w) => w.id === openingId);
       // Electron Cash's single-window rule: a wallet already open elsewhere is
       // raised, not loaded a second time. Checked BEFORE the password is used,
       // so a duplicate open never derives a key or touches wallet state.
       const attempt = await runExclusiveWalletOpen(
         openingId,
         getCurrentWebviewWindow().label,
-        () => openWalletWithPassword(openingId, password),
+        () => {
+          if (row?.walletType === 'watch-only') {
+            return openWatchOnlyWallet(openingId, password);
+          }
+          if (row?.walletType === 'hardware') {
+            return openHardwareWallet(openingId, password);
+          }
+          return openWalletWithPassword(openingId, password);
+        },
         isWalletWindowOpen
       );
       if (attempt.status === 'held') {
@@ -452,26 +429,63 @@ const DesktopLandingPage = () => {
     }
   };
 
+  const handleHardwareOpened = async (result: {
+    walletId: number;
+    created: boolean;
+    name: string;
+    network: Network;
+    accountPath: string;
+  }) => {
+    setBusy(true);
+    setError('');
+    try {
+      // Just-created wallets already have credentials cached from protect*.
+      // Existing wallets need the list password dialog — if open fails free, ask.
+      const attempt = await runExclusiveWalletOpen(
+        result.walletId,
+        getCurrentWebviewWindow().label,
+        () => openHardwareWallet(result.walletId),
+        isWalletWindowOpen
+      );
+      if (attempt.status === 'held') {
+        await focusWalletWindow(attempt.windowLabel);
+        setError('That wallet is already open in another window.');
+        setView('list');
+        return;
+      }
+      if (attempt.status === 'rejected' || !attempt.value) {
+        // Existing passworded wallet: send user to type password on the list.
+        setOpeningId(result.walletId);
+        setPassword('');
+        setError('Enter the password for this hardware wallet.');
+        setView('list');
+        return;
+      }
+      // Refresh list so a newly created HW wallet shows next time.
+      const rows = await WalletManager().getAllWallets();
+      setWallets(rows as WalletRow[]);
+      window.dispatchEvent(new CustomEvent('optn:wallets-changed'));
+      finishOpen(result.walletId, attempt.value);
+    } catch (err) {
+      console.error('[DesktopLandingPage] hardware open failed:', err);
+      setError(
+        err instanceof Error ? err.message : 'Could not open hardware wallet.'
+      );
+      setView('list');
+    } finally {
+      setBusy(false);
+    }
+  };
+
   if (view === 'hardware') {
     return (
-      <section className="min-h-[100dvh] wallet-surface flex flex-col items-center px-4 py-10">
-        <div className="w-full max-w-md space-y-4">
-          <h1 className="text-xl font-bold wallet-text-strong text-center">Connect Hardware Wallet</h1>
-          <HardwareWalletSettings />
-          {hw.connected && (
-            <div className="wallet-card p-3 space-y-2">
-              <p className="text-sm wallet-text-strong">
-                {hw.deviceLabel ?? 'Device'} connected. It will be used automatically to sign
-                sends from software wallets while connected. Standalone hardware-only wallets
-                with their own receive addresses aren't supported yet.
-              </p>
-            </div>
-          )}
-          <button onClick={() => setView('list')} className="wallet-btn-secondary w-full py-2 text-sm">
-            Back to wallets
-          </button>
-        </div>
-      </section>
+      <HardwareWalletWizard
+        onBack={() => {
+          setError('');
+          setView('list');
+        }}
+        onOpened={(result) => void handleHardwareOpened(result)}
+      />
     );
   }
 
@@ -541,18 +555,6 @@ const DesktopLandingPage = () => {
               <div key={w.id} className="wallet-card p-3">
                 <div className="flex items-center justify-between">
                   <div>
-  if (view === 'keystone') {
-    // Produces the same watch-only wallet, so it opens through the same path —
-    // the difference is only that the account QR supplies the fingerprint and
-    // derivation path instead of asking for them.
-    return (
-      <KeystoneWalletSetup
-        onBack={() => setView('list')}
-        onCreated={(walletId) => void handleWatchOnlyCreated(walletId)}
-      />
-    );
-  }
-
                     <p className="font-semibold wallet-text-strong">{w.wallet_name || 'Unnamed wallet'}</p>
                     <p className="text-[10px] wallet-muted">
                       #{w.id}
@@ -561,6 +563,11 @@ const DesktopLandingPage = () => {
                       {w.walletType === 'watch-only' && (
                         <span className="ml-1.5 rounded border border-[var(--wallet-border)] px-1 py-px text-[9px] uppercase tracking-wide">
                           Watch-only
+                        </span>
+                      )}
+                      {w.walletType === 'hardware' && (
+                        <span className="ml-1.5 rounded border border-[var(--wallet-border)] px-1 py-px text-[9px] uppercase tracking-wide">
+                          Hardware
                         </span>
                       )}
                     </p>
@@ -604,7 +611,7 @@ const DesktopLandingPage = () => {
                   </div>
                 )}
 
-                {openingId === w.id && w.walletType !== 'watch-only' && (
+                {openingId === w.id && (
                   <div className="mt-3 space-y-2 border-t border-[var(--wallet-border)] pt-3">
                     <input
                       type="password"
@@ -623,7 +630,7 @@ const DesktopLandingPage = () => {
                     >
                       {busy ? 'Unlocking…' : 'Unlock'}
                     </button>
-                    {bioEnrolledId === w.id && (
+                    {bioEnrolledId === w.id && w.walletType !== 'watch-only' && w.walletType !== 'hardware' && (
                       <button
                         onClick={() => void handleBiometricUnlock(w.id)}
                         disabled={busy}
@@ -650,4 +657,3 @@ const DesktopLandingPage = () => {
 };
 
 export default DesktopLandingPage;
-          onKeystone={() => setView('keystone')}

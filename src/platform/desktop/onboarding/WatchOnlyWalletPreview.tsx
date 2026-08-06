@@ -1,16 +1,22 @@
+/**
+ * Create Watch-Only Wallet (PSBT path).
+ *
+ * One form card: name, network, single-sig xPub or Multisig cosigners, password.
+ * Save and open — no address preview step.
+ * Bottom: separate Airgap section (Keystone only for now).
+ */
+
 import { useState, type FC } from 'react';
+import { lockingBytecodeToCashAddress } from '@bitauth/libauth';
 
 import { Network } from '../../../state/slices/networkSlice';
-import {
-  deriveWatchOnlyAccountPreview,
-  type WatchOnlyAccountPreview,
-} from './watchOnlyAccountPreview';
 import {
   createWatchOnlyMultisigWallet,
   createWatchOnlyWallet,
 } from './watchOnlyWallet';
+import { protectWatchOnlyWithPassword } from '../DesktopWalletManager';
+import { getBchAccountPath } from '../../../services/HdWalletService';
 import {
-  cosignersMissingFingerprint,
   deriveMultisigAddress,
   MAX_COSIGNERS,
   parsePmwif,
@@ -18,9 +24,14 @@ import {
   serializePmwif,
   type MultisigPolicy,
 } from '../../../services/psbt/multisigWallet';
-import { lockingBytecodeToCashAddress } from '@bitauth/libauth';
+import {
+  isBchAccountPath,
+  parseKeystoneAccount,
+  type KeystoneAccount,
+} from '../../../services/psbt/keystoneAccount';
+import { CapacitorBarcodeScanner } from '../barcode-scanner';
+import { CameraQrScanner } from '../CameraQrScanner';
 
-/** The policies people actually use, in the order they are usually wanted. */
 const MULTISIG_PRESETS = [
   [2, 2],
   [2, 3],
@@ -28,416 +39,106 @@ const MULTISIG_PRESETS = [
 ] as const;
 
 type CosignerDraft = { name: string; xpub: string; fingerprint: string };
-type MultisigPreview = {
-  receive: string;
-  change: string;
-  missingFingerprints: number;
-};
-import { CapacitorBarcodeScanner } from '../barcode-scanner';
-import { CameraQrScanner } from '../CameraQrScanner';
+type PsbtMode = 'standard' | 'multisig';
 
 type WatchOnlyWalletPreviewProps = {
   onBack: () => void;
-  /** Called with the new wallet id once the wallet + derived addresses are persisted. */
   onCreated: (walletId: number) => void;
 };
-
-/**
- * Cosigner set editor for a Multisign watch-only wallet.
- *
- * The order cosigners are entered in does not matter: every address BIP-67
- * sorts the derived keys, which is what lets each participant assemble the
- * same wallet independently. The threshold does matter, and so does the exact
- * set — one different xPub is a different wallet with different addresses,
- * which is why the address preview is a required confirmation step before the
- * wallet is saved.
- */
-const MultisigCosignerForm: FC<{
-  required: number;
-  setRequired: (value: number) => void;
-  cosigners: CosignerDraft[];
-  setCosigners: (next: CosignerDraft[]) => void;
-  patchCosigner: (index: number, patch: Partial<CosignerDraft>) => void;
-  applyPreset: (m: number, n: number) => void;
-  scanningCosigner: number | null;
-  setScanningCosigner: (index: number | null) => void;
-  onPreview: () => void;
-  onImport: (file: File) => void;
-  onExport: () => void;
-  preview: MultisigPreview | null;
-  error: string;
-}> = ({
-  required,
-  cosigners,
-  setCosigners,
-  patchCosigner,
-  applyPreset,
-  scanningCosigner,
-  setScanningCosigner,
-  onPreview,
-  onImport,
-  onExport,
-  preview,
-  error,
-}) => (
-  // setRequired / custom UI reserved for free-form m-of-n; presets cover the path today.
-  <div className="wallet-card space-y-3 p-4">
-    <div className="flex items-center justify-between gap-2">
-      <p className="text-sm font-semibold wallet-text-strong">Cosigners</p>
-      <label className="text-[11px] wallet-muted">
-        <span className="mr-1">Load a wallet file</span>
-        <input
-          type="file"
-          accept=".pmwif,application/json"
-          className="hidden"
-          onChange={(event) => {
-            const file = event.target.files?.[0];
-            if (file) onImport(file);
-            event.target.value = '';
-          }}
-        />
-        <span className="cursor-pointer underline">.pmwif</span>
-      </label>
-    </div>
-
-    <label className="block space-y-1 text-sm wallet-text-strong">
-      Policy
-      <select
-        value={`${required}-${cosigners.length}`}
-        onChange={(event) => {
-          const [m, n] = event.target.value.split('-').map(Number);
-          applyPreset(m, n);
-        }}
-        className="wallet-input w-full rounded-md px-3 py-2"
-      >
-        {MULTISIG_PRESETS.map(([m, n]) => (
-          <option key={`${m}-${n}`} value={`${m}-${n}`}>
-            {m} of {n}
-          </option>
-        ))}
-        {/* An imported .pmwif can carry a policy nobody would pick from the
-            list — 3-of-4, say. Show it rather than silently snapping the
-            wallet to a preset it is not. */}
-        {!MULTISIG_PRESETS.some(
-          ([m, n]) => m === required && n === cosigners.length
-        ) && (
-          <option value={`${required}-${cosigners.length}`}>
-            {required} of {cosigners.length}
-          </option>
-        )}
-      </select>
-    </label>
-
-    {cosigners.map((cosigner, index) => (
-      <div key={index} className="space-y-2 rounded-md border border-[var(--wallet-border)] p-3">
-        <div className="flex items-center justify-between gap-2">
-          <p className="text-[11px] font-semibold wallet-text-strong">
-            Cosigner {index + 1}
-          </p>
-          {cosigners.length > 2 && (
-            <button
-              type="button"
-              onClick={() =>
-                setCosigners(cosigners.filter((_, at) => at !== index))
-              }
-              className="text-[11px] text-red-400"
-            >
-              Remove
-            </button>
-          )}
-        </div>
-        <input
-          value={cosigner.name}
-          onChange={(event) => patchCosigner(index, { name: event.target.value })}
-          placeholder={`Name (e.g. Alice's SeedCash)`}
-          className="wallet-input w-full rounded-md px-3 py-2 text-sm"
-        />
-        <textarea
-          value={cosigner.xpub}
-          onChange={(event) => patchCosigner(index, { xpub: event.target.value })}
-          rows={2}
-          spellCheck={false}
-          autoComplete="off"
-          placeholder="Account xPub"
-          className="wallet-input w-full resize-none rounded-md px-3 py-2 font-mono text-[11px]"
-        />
-        <div className="flex gap-2">
-          <input
-            value={cosigner.fingerprint}
-            onChange={(event) =>
-              patchCosigner(index, { fingerprint: event.target.value })
-            }
-            placeholder="Fingerprint (optional)"
-            maxLength={8}
-            spellCheck={false}
-            autoComplete="off"
-            className="wallet-input flex-1 rounded-md px-3 py-2 font-mono text-[11px] uppercase"
-          />
-          <button
-            type="button"
-            onClick={() => setScanningCosigner(index)}
-            className="rounded-md border border-[var(--wallet-border)] px-3 text-[11px] font-semibold wallet-text-strong"
-          >
-            Scan
-          </button>
-        </div>
-        {scanningCosigner === index && (
-          <CameraQrScanner
-            onResult={(text) => {
-              patchCosigner(index, { xpub: text.trim() });
-              setScanningCosigner(null);
-            }}
-            onClose={() => setScanningCosigner(null)}
-          />
-        )}
-      </div>
-    ))}
-
-    <div className="flex gap-2">
-      <button
-        type="button"
-        disabled={cosigners.length >= MAX_COSIGNERS}
-        onClick={() =>
-          setCosigners([...cosigners, { name: '', xpub: '', fingerprint: '' }])
-        }
-        className="wallet-btn-secondary flex-1 py-2 text-sm disabled:opacity-50"
-      >
-        Add cosigner
-      </button>
-      <button
-        type="button"
-        onClick={onExport}
-        className="wallet-btn-secondary flex-1 py-2 text-sm"
-      >
-        Export .pmwif
-      </button>
-    </div>
-
-    <button
-      type="button"
-      onClick={onPreview}
-      className="wallet-btn-secondary w-full py-2 font-semibold"
-    >
-      Preview multisig addresses
-    </button>
-
-    {error && (
-      <p role="alert" className="text-xs text-red-400">
-        {error}
-      </p>
-    )}
-
-    {preview && (
-      <div className="space-y-2 rounded-md border border-[var(--wallet-accent)] p-3">
-        <p className="text-[11px] wallet-muted">
-          Receive #0 · <span className="font-mono">0/0</span>
-        </p>
-        <p className="break-all font-mono text-xs wallet-text-strong">
-          {preview.receive}
-        </p>
-        <p className="text-[11px] wallet-muted">
-          Change #0 · <span className="font-mono">1/0</span>
-        </p>
-        <p className="break-all font-mono text-xs wallet-text-strong">
-          {preview.change}
-        </p>
-        <p className="text-[11px] leading-relaxed wallet-muted">
-          Every cosigner must see this same receive address. If one of them
-          sees a different one, someone has a different xPub and it is not the
-          same wallet.
-        </p>
-        {preview.missingFingerprints > 0 && (
-          <p className="text-[11px] leading-relaxed text-amber-400">
-            {preview.missingFingerprints} cosigner
-            {preview.missingFingerprints === 1 ? '' : 's'} without a
-            fingerprint. Watching and spending still work — their device just
-            will not show the coins as its own when reviewing.
-          </p>
-        )}
-      </div>
-    )}
-  </div>
-);
 
 export const WatchOnlyWalletPreview: FC<WatchOnlyWalletPreviewProps> = ({
   onBack,
   onCreated,
 }) => {
+  // main = PSBT watch-only card; keystone = airgap Keystone form
+  const [panel, setPanel] = useState<'main' | 'keystone'>('main');
+  const [mode, setMode] = useState<PsbtMode>('standard');
+
   const [network, setNetwork] = useState(Network.MAINNET);
-  const [accountXpub, setAccountXpub] = useState('');
   const [walletName, setWalletName] = useState('');
-  const [preview, setPreview] = useState<WatchOnlyAccountPreview | null>(null);
+  const [accountXpub, setAccountXpub] = useState('');
   const [scanning, setScanning] = useState(false);
+  const [password, setPassword] = useState('');
+  const [passwordConfirm, setPasswordConfirm] = useState('');
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
 
-  const [mode, setMode] = useState<'standard' | 'multisig'>('standard');
+  // Multisig
   const [required, setRequired] = useState(2);
   const [cosigners, setCosigners] = useState<CosignerDraft[]>([
     { name: '', xpub: '', fingerprint: '' },
     { name: '', xpub: '', fingerprint: '' },
   ]);
-  const [msPreview, setMsPreview] = useState<MultisigPreview | null>(null);
   const [scanningCosigner, setScanningCosigner] = useState<number | null>(null);
+
+  // Keystone airgap
+  const [keystoneFrames, setKeystoneFrames] = useState<string[]>([]);
+  const [keystoneAccount, setKeystoneAccount] =
+    useState<KeystoneAccount | null>(null);
+  const [keystoneScanning, setKeystoneScanning] = useState(false);
+
+  const requirePassword = (): boolean => {
+    if (password.length < 4) {
+      setError('Choose a password of at least 4 characters.');
+      return false;
+    }
+    if (password !== passwordConfirm) {
+      setError('Passwords do not match.');
+      return false;
+    }
+    return true;
+  };
 
   const draftPolicy = (): MultisigPolicy => ({
     name: walletName.trim() || 'Multisig',
     m: required,
-    signers: cosigners.map((cosigner, index) => ({
-      name: cosigner.name.trim() || `Cosigner ${index + 1}`,
-      xpub: cosigner.xpub.trim(),
-      masterFingerprintHex: cosigner.fingerprint.trim()
-        ? cosigner.fingerprint.trim().toLowerCase()
+    signers: cosigners.map((c, i) => ({
+      name: c.name.trim() || `Cosigner ${i + 1}`,
+      xpub: c.xpub.trim(),
+      masterFingerprintHex: c.fingerprint.trim()
+        ? c.fingerprint.trim().toLowerCase()
         : undefined,
     })),
   });
 
-  /**
-   * Jump to a common policy. Existing cosigner entries are kept — switching
-   * 2-of-3 to 3-of-5 should add two blank rows, not discard xPubs already
-   * pasted in.
-   */
   const applyPreset = (m: number, n: number) => {
-    setCosigners((previous) => {
-      const next = previous.slice(0, n);
-      while (next.length < n) {
-        next.push({ name: '', xpub: '', fingerprint: '' });
-      }
+    setCosigners((prev) => {
+      const next = prev.slice(0, n);
+      while (next.length < n) next.push({ name: '', xpub: '', fingerprint: '' });
       return next;
     });
     setRequired(m);
-    setMsPreview(null);
     setError('');
   };
 
   const patchCosigner = (index: number, patch: Partial<CosignerDraft>) => {
-    setCosigners((previous) =>
-      previous.map((cosigner, at) =>
-        at === index ? { ...cosigner, ...patch } : cosigner
-      )
+    setCosigners((prev) =>
+      prev.map((c, at) => (at === index ? { ...c, ...patch } : c))
     );
-    setMsPreview(null);
     setError('');
   };
 
-  const handleMultisigPreview = () => {
-    try {
-      const policy = draftPolicy();
-      const prefix =
-        network === Network.MAINNET ? 'bitcoincash' : ('bchtest' as const);
-      const encode = (branch: 0 | 1) => {
-        const derived = deriveMultisigAddress(policy, branch, 0);
-        const encoded = lockingBytecodeToCashAddress({
-          bytecode: derived.lockingBytecode,
-          prefix,
-        });
-        if (typeof encoded === 'string' || !('address' in encoded)) {
-          throw new Error('Could not encode the multisig address.');
-        }
-        return encoded.address;
-      };
-      setMsPreview({
-        receive: encode(0),
-        change: encode(1),
-        missingFingerprints: cosignersMissingFingerprint(policy).length,
-      });
-      setError('');
-    } catch (err) {
-      setMsPreview(null);
-      setError(
-        err instanceof Error ? err.message : 'Could not preview this policy.'
-      );
+  const handleCreateStandard = async () => {
+    if (!walletName.trim()) {
+      setError('Give the wallet a name.');
+      return;
     }
-  };
+    if (!accountXpub.trim()) {
+      setError('Paste or scan the account xPub.');
+      return;
+    }
+    if (!requirePassword()) return;
 
-  const handleMultisigCreate = async () => {
     setBusy(true);
     setError('');
     try {
-      const walletId = await createWatchOnlyMultisigWallet({
-        name: walletName,
-        policy: draftPolicy(),
-        network,
-      });
-      onCreated(walletId);
-    } catch (err) {
-      setError(
-        err instanceof Error ? err.message : 'Could not save this wallet.'
-      );
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  /** Load a cosigner set exported by Paytaca (or by OPTN). */
-  const handleImportPmwif = async (file: File) => {
-    setError('');
-    try {
-      const policy = parsePmwif(await file.text());
-      setWalletName((current) => current || policy.name);
-      setRequired(policy.m);
-      setCosigners(
-        policy.signers.map((signer) => ({
-          name: signer.name,
-          xpub: signer.xpub,
-          fingerprint: signer.masterFingerprintHex ?? '',
-        }))
-      );
-      setMsPreview(null);
-    } catch (err) {
-      setError(
-        err instanceof Error ? err.message : 'Could not read that wallet file.'
-      );
-    }
-  };
-
-  /** Write the cosigner set in Paytaca's format so they can load it too. */
-  const handleExportPmwif = () => {
-    setError('');
-    try {
-      const policy = draftPolicy();
-      const blob = new Blob([serializePmwif(policy)], {
-        type: 'application/json',
-      });
-      const url = URL.createObjectURL(blob);
-      const anchor = document.createElement('a');
-      anchor.href = url;
-      anchor.download = pmwifFilename(policy);
-      anchor.click();
-      URL.revokeObjectURL(url);
-    } catch (err) {
-      setError(
-        err instanceof Error ? err.message : 'Could not export this policy.'
-      );
-    }
-  };
-
-  const handlePreview = () => {
-    try {
-      setPreview(deriveWatchOnlyAccountPreview(network, accountXpub));
-      setError('');
-    } catch (err) {
-      setPreview(null);
-      setError(
-        err instanceof Error ? err.message : 'Could not preview this xPub.'
-      );
-    }
-  };
-
-  const handleCreate = async () => {
-    setBusy(true);
-    setError('');
-    try {
-      // No fingerprint here on purpose. Creating a watch-only wallet is a
-      // scan-the-xPub step; the fingerprint is not derivable from that QR, is
-      // not needed to sign, and the send screen already asks for it once and
-      // remembers it. Asking twice put an unexplained hex box in onboarding
-      // for something most people will skip.
       const walletId = await createWatchOnlyWallet({
         name: walletName,
         accountXpub,
         network,
+        accountPath: getBchAccountPath(network),
       });
+      await protectWatchOnlyWithPassword(walletId, password);
       onCreated(walletId);
     } catch (err) {
       setError(
@@ -450,6 +151,291 @@ export const WatchOnlyWalletPreview: FC<WatchOnlyWalletPreviewProps> = ({
     }
   };
 
+  const handleCreateMultisig = async () => {
+    if (!walletName.trim()) {
+      setError('Give the wallet a name.');
+      return;
+    }
+    if (!requirePassword()) return;
+
+    setBusy(true);
+    setError('');
+    try {
+      const policy = draftPolicy();
+      const prefix =
+        network === Network.MAINNET ? 'bitcoincash' : ('bchtest' as const);
+      const derived = deriveMultisigAddress(policy, 0, 0);
+      const encoded = lockingBytecodeToCashAddress({
+        bytecode: derived.lockingBytecode,
+        prefix,
+      });
+      if (typeof encoded === 'string' || !('address' in encoded)) {
+        throw new Error(
+          'Could not build a multisig address from these cosigners.'
+        );
+      }
+      const walletId = await createWatchOnlyMultisigWallet({
+        name: walletName,
+        policy,
+        network,
+      });
+      await protectWatchOnlyWithPassword(walletId, password);
+      onCreated(walletId);
+    } catch (err) {
+      setError(
+        err instanceof Error ? err.message : 'Could not save this wallet.'
+      );
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const handleKeystoneFrame = (text: string) => {
+    const next = [...keystoneFrames, text.trim()];
+    setKeystoneFrames(next);
+    try {
+      const parsed = parseKeystoneAccount(next);
+      setKeystoneAccount(parsed);
+      setKeystoneScanning(false);
+      setError('');
+      if (!walletName.trim()) setWalletName('Keystone');
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      if (/part of the animated/i.test(message)) return;
+      setKeystoneFrames([]);
+      setKeystoneAccount(null);
+      setError(message);
+      setKeystoneScanning(false);
+    }
+  };
+
+  const handleCreateKeystone = async () => {
+    if (!walletName.trim()) {
+      setError('Give the wallet a name.');
+      return;
+    }
+    if (!keystoneAccount) {
+      setError('Scan the Keystone account QR first.');
+      return;
+    }
+    if (!isBchAccountPath(keystoneAccount.accountPath)) {
+      setError(
+        `That account is at ${keystoneAccount.accountPath}, which is not a Bitcoin Cash path. Pick the BCH account on the device.`
+      );
+      return;
+    }
+    if (!requirePassword()) return;
+
+    setBusy(true);
+    setError('');
+    try {
+      const walletId = await createWatchOnlyWallet({
+        name: walletName,
+        accountXpub: keystoneAccount.xpub,
+        network,
+        accountPath: keystoneAccount.accountPath,
+        masterFingerprint: keystoneAccount.masterFingerprintHex,
+      });
+      await protectWatchOnlyWithPassword(walletId, password);
+      onCreated(walletId);
+    } catch (err) {
+      setError(
+        err instanceof Error ? err.message : 'Could not save this wallet.'
+      );
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  // —— Keystone airgap (from Airgap section) ——
+  if (panel === 'keystone') {
+    const canSave =
+      Boolean(walletName.trim()) &&
+      keystoneAccount != null &&
+      password.length >= 4 &&
+      password === passwordConfirm &&
+      !busy;
+
+    return (
+      <section className="min-h-[100dvh] wallet-surface flex flex-col items-center px-4 py-10">
+        <div className="w-full max-w-md space-y-4">
+          <div className="space-y-1 text-center">
+            <p className="text-[11px] uppercase tracking-wide wallet-muted">
+              Airgap · inside watch-only
+            </p>
+            <h1 className="text-xl font-bold wallet-text-strong">Keystone</h1>
+            <p className="text-sm wallet-muted">
+              Scan account QR (path + fingerprint). Send &amp; receive airgap —
+              not USB, not PSBT.
+            </p>
+          </div>
+
+          <div className="wallet-card space-y-4 p-4">
+            <label className="block space-y-1 text-sm wallet-text-strong">
+              Wallet name
+              <input
+                value={walletName}
+                onChange={(e) => {
+                  setWalletName(e.target.value);
+                  setError('');
+                }}
+                placeholder="e.g. Keystone cold"
+                className="wallet-input w-full rounded-md px-3 py-2"
+              />
+            </label>
+            <label className="block space-y-1 text-sm wallet-text-strong">
+              Network
+              <select
+                value={network}
+                onChange={(e) => {
+                  setNetwork(e.target.value as Network);
+                  setKeystoneAccount(null);
+                  setKeystoneFrames([]);
+                  setError('');
+                }}
+                className="wallet-input w-full rounded-md px-3 py-2"
+              >
+                <option value={Network.MAINNET}>Mainnet</option>
+                <option value={Network.CHIPNET}>Chipnet</option>
+              </select>
+            </label>
+
+            {!keystoneAccount ? (
+              <button
+                type="button"
+                onClick={() => {
+                  setKeystoneFrames([]);
+                  setError('');
+                  setKeystoneScanning(true);
+                }}
+                className="wallet-btn-primary w-full py-2 font-semibold"
+              >
+                Scan Keystone account QR
+              </button>
+            ) : (
+              <div className="space-y-2 text-[11px]">
+                <p className="text-sm font-semibold wallet-text-strong">
+                  Account from device
+                </p>
+                <div className="flex justify-between gap-2">
+                  <span className="wallet-muted">Path</span>
+                  <span className="font-mono wallet-text-strong">
+                    {keystoneAccount.accountPath}
+                  </span>
+                </div>
+                <div className="flex justify-between gap-2">
+                  <span className="wallet-muted">Fingerprint</span>
+                  <span className="font-mono wallet-text-strong">
+                    {keystoneAccount.masterFingerprintHex.toUpperCase()}
+                  </span>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setKeystoneAccount(null);
+                    setKeystoneFrames([]);
+                  }}
+                  className="text-[11px] underline wallet-muted"
+                >
+                  Scan again
+                </button>
+              </div>
+            )}
+            {keystoneScanning && (
+              <>
+                <CameraQrScanner
+                  onResult={handleKeystoneFrame}
+                  onClose={() => setKeystoneScanning(false)}
+                />
+                <p className="text-center text-[11px] wallet-muted">
+                  Hold steady — the export may animate across several frames.
+                </p>
+              </>
+            )}
+
+            <div className="border-t border-[var(--wallet-border)] pt-3 space-y-3">
+              <p className="text-sm font-semibold wallet-text-strong">Password</p>
+              <p className="text-[11px] leading-relaxed wallet-muted">
+                Required every time you Open this wallet from the list. Private
+                keys are never stored here.
+              </p>
+              <label className="block space-y-1 text-sm wallet-text-strong">
+                Password
+                <input
+                  type="password"
+                  autoComplete="new-password"
+                  value={password}
+                  onChange={(e) => {
+                    setPassword(e.target.value);
+                    setError('');
+                  }}
+                  placeholder="At least 4 characters"
+                  className="wallet-input w-full rounded-md px-3 py-2"
+                />
+              </label>
+              <label className="block space-y-1 text-sm wallet-text-strong">
+                Confirm password
+                <input
+                  type="password"
+                  autoComplete="new-password"
+                  value={passwordConfirm}
+                  onChange={(e) => {
+                    setPasswordConfirm(e.target.value);
+                    setError('');
+                  }}
+                  placeholder="Repeat password"
+                  className="wallet-input w-full rounded-md px-3 py-2"
+                />
+              </label>
+            </div>
+          </div>
+
+          {error && (
+            <p role="alert" className="text-xs text-red-400">
+              {error}
+            </p>
+          )}
+
+          <button
+            type="button"
+            onClick={() => void handleCreateKeystone()}
+            disabled={!canSave}
+            className="wallet-btn-primary w-full py-2 font-semibold disabled:opacity-50"
+          >
+            {busy ? 'Saving…' : 'Save and open wallet'}
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              setPanel('main');
+              setError('');
+              setKeystoneAccount(null);
+              setKeystoneFrames([]);
+            }}
+            className="wallet-btn-secondary w-full py-2 text-sm"
+          >
+            Back to watch-only
+          </button>
+        </div>
+      </section>
+    );
+  }
+
+  // —— Main PSBT watch-only (single-sig / multisig) ——
+  const canSaveStandard =
+    Boolean(walletName.trim()) &&
+    Boolean(accountXpub.trim()) &&
+    password.length >= 4 &&
+    password === passwordConfirm &&
+    !busy;
+
+  const canSaveMultisig =
+    Boolean(walletName.trim()) &&
+    cosigners.every((c) => c.xpub.trim()) &&
+    password.length >= 4 &&
+    password === passwordConfirm &&
+    !busy;
+
   return (
     <section className="min-h-[100dvh] wallet-surface flex flex-col items-center px-4 py-10">
       <div className="w-full max-w-md space-y-4">
@@ -458,13 +444,15 @@ export const WatchOnlyWalletPreview: FC<WatchOnlyWalletPreviewProps> = ({
             Create Watch-Only Wallet
           </h1>
           <p className="text-sm wallet-muted">
-            Watch public BCH addresses without importing any private keys.
+            PSBT airgap (SeedCash-style). Public keys only — save under a
+            password and open.
           </p>
         </div>
 
+        {/* Single-sig vs Multisig for PSBT */}
         <div
           className="grid grid-cols-2 gap-2"
-          aria-label="Watch-only wallet type"
+          aria-label="Watch-only PSBT type"
         >
           <button
             type="button"
@@ -476,8 +464,10 @@ export const WatchOnlyWalletPreview: FC<WatchOnlyWalletPreviewProps> = ({
               mode === 'standard' ? 'border-[var(--wallet-accent)]' : ''
             }`}
           >
-            <p className="text-sm font-semibold wallet-text-strong">Standard</p>
-            <p className="mt-1 text-[11px] wallet-muted">Account xPub</p>
+            <p className="text-sm font-semibold wallet-text-strong">
+              Single-sig
+            </p>
+            <p className="mt-1 text-[11px] wallet-muted">One account xPub</p>
           </button>
           <button
             type="button"
@@ -489,30 +479,32 @@ export const WatchOnlyWalletPreview: FC<WatchOnlyWalletPreviewProps> = ({
               mode === 'multisig' ? 'border-[var(--wallet-accent)]' : ''
             }`}
           >
-            <p className="text-sm font-semibold wallet-text-strong">
-              Multisign
-            </p>
-            <p className="mt-1 text-[11px] wallet-muted">Multiple cosigners</p>
+            <p className="text-sm font-semibold wallet-text-strong">Multisig</p>
+            <p className="mt-1 text-[11px] wallet-muted">m-of-n cosigners</p>
           </button>
         </div>
 
-        <div className="wallet-card space-y-3 p-4">
+        {/* One big card: name, network, keys, password */}
+        <div className="wallet-card space-y-4 p-4">
           <label className="block space-y-1 text-sm wallet-text-strong">
             Wallet name
             <input
               value={walletName}
-              onChange={(event) => setWalletName(event.target.value)}
-              placeholder="e.g. Cold storage watch"
+              onChange={(e) => {
+                setWalletName(e.target.value);
+                setError('');
+              }}
+              placeholder="e.g. Cold storage"
               className="wallet-input w-full rounded-md px-3 py-2"
             />
           </label>
+
           <label className="block space-y-1 text-sm wallet-text-strong">
             Network
             <select
               value={network}
-              onChange={(event) => {
-                setNetwork(event.target.value as Network);
-                setPreview(null);
+              onChange={(e) => {
+                setNetwork(e.target.value as Network);
                 setError('');
               }}
               className="wallet-input w-full rounded-md px-3 py-2"
@@ -521,164 +513,332 @@ export const WatchOnlyWalletPreview: FC<WatchOnlyWalletPreviewProps> = ({
               <option value={Network.CHIPNET}>Chipnet</option>
             </select>
           </label>
-        </div>
 
-        {mode === 'multisig' && (
-          <MultisigCosignerForm
-            required={required}
-            setRequired={(value) => {
-              setRequired(value);
-              setMsPreview(null);
-            }}
-            cosigners={cosigners}
-            setCosigners={(next) => {
-              setCosigners(next);
-              setMsPreview(null);
-            }}
-            patchCosigner={patchCosigner}
-            applyPreset={applyPreset}
-            scanningCosigner={scanningCosigner}
-            setScanningCosigner={setScanningCosigner}
-            onPreview={handleMultisigPreview}
-            onImport={(file) => void handleImportPmwif(file)}
-            onExport={handleExportPmwif}
-            preview={msPreview}
-            error={error}
-          />
-        )}
-
-        <div
-          className={`wallet-card space-y-3 p-4 ${
-            mode === 'standard' ? '' : 'hidden'
-          }`}
-        >
-          <label className="block space-y-1 text-sm wallet-text-strong">
-            BCH account xPub
-            <textarea
-              value={accountXpub}
-              onChange={(event) => {
-                setAccountXpub(event.target.value);
-                setPreview(null);
-                setError('');
-              }}
-              rows={3}
-              autoComplete="off"
-              spellCheck={false}
-              placeholder="Paste the xPub exported by SeedCash"
-              className="wallet-input w-full resize-none rounded-md px-3 py-2 font-mono text-xs"
-            />
-          </label>
-          <div className="flex gap-2">
-            <button
-              type="button"
-              onClick={() => setScanning(true)}
-              className="flex-1 rounded-md border border-[var(--wallet-border)] py-2 text-sm font-semibold wallet-text-strong"
-            >
-              Scan (camera)
-            </button>
-            <button
-              type="button"
-              onClick={async () => {
-                try {
-                  const { ScanResult } = await CapacitorBarcodeScanner.scanBarcode();
-                  if (ScanResult) {
-                    setAccountXpub(ScanResult.trim());
-                    setPreview(null);
+          {mode === 'standard' && (
+            <>
+              <label className="block space-y-1 text-sm wallet-text-strong">
+                Account xPub
+                <textarea
+                  value={accountXpub}
+                  onChange={(e) => {
+                    setAccountXpub(e.target.value);
                     setError('');
-                  }
-                } catch (err) {
-                  if (err instanceof Error && err.message !== 'No file selected') {
-                    setError(err.message);
-                  }
-                }
-              }}
-              className="flex-1 rounded-md border border-[var(--wallet-border)] py-2 text-sm font-semibold wallet-text-strong"
-            >
-              Upload QR
-            </button>
-          </div>
-          {scanning && (
-            <CameraQrScanner
-              onResult={(text) => {
-                setAccountXpub(text);
-                setPreview(null);
-                setError('');
-                setScanning(false);
-              }}
-              onClose={() => setScanning(false)}
-            />
+                  }}
+                  rows={3}
+                  autoComplete="off"
+                  spellCheck={false}
+                  placeholder="Paste or scan the account xPub"
+                  className="wallet-input w-full resize-none rounded-md px-3 py-2 font-mono text-xs"
+                />
+              </label>
+              <div className="flex gap-2">
+                <button
+                  type="button"
+                  onClick={() => setScanning(true)}
+                  className="flex-1 rounded-md border border-[var(--wallet-border)] py-2 text-sm font-semibold wallet-text-strong"
+                >
+                  Scan
+                </button>
+                <button
+                  type="button"
+                  onClick={async () => {
+                    try {
+                      const { ScanResult } =
+                        await CapacitorBarcodeScanner.scanBarcode();
+                      if (ScanResult) {
+                        setAccountXpub(ScanResult.trim());
+                        setError('');
+                      }
+                    } catch (err) {
+                      if (
+                        err instanceof Error &&
+                        err.message !== 'No file selected'
+                      ) {
+                        setError(err.message);
+                      }
+                    }
+                  }}
+                  className="flex-1 rounded-md border border-[var(--wallet-border)] py-2 text-sm font-semibold wallet-text-strong"
+                >
+                  Upload QR
+                </button>
+              </div>
+              {scanning && (
+                <CameraQrScanner
+                  onResult={(text) => {
+                    setAccountXpub(text.trim());
+                    setScanning(false);
+                    setError('');
+                  }}
+                  onClose={() => setScanning(false)}
+                />
+              )}
+            </>
           )}
-          <p className="text-[11px] leading-relaxed wallet-muted">
-            Confirm that SeedCash exported this account at{' '}
-            <span className="font-mono">
-              m/44&apos;/145&apos;/account&apos;
-            </span>
-            . A standalone BIP32 xPub cannot prove its parent purpose or coin
-            path.
-          </p>
-          <button
-            type="button"
-            onClick={handlePreview}
-            className="wallet-btn-secondary w-full py-2 font-semibold"
-          >
-            Preview public addresses
-          </button>
-          {error && (
-            <p role="alert" className="text-xs text-red-400">
-              {error}
+
+          {mode === 'multisig' && (
+            <div className="space-y-3">
+              <div className="flex items-center justify-between gap-2">
+                <p className="text-sm font-semibold wallet-text-strong">
+                  Cosigners
+                </p>
+                <label className="text-[11px] wallet-muted">
+                  <span className="mr-1">Load</span>
+                  <input
+                    type="file"
+                    accept=".pmwif,application/json"
+                    className="hidden"
+                    onChange={async (event) => {
+                      const file = event.target.files?.[0];
+                      event.target.value = '';
+                      if (!file) return;
+                      try {
+                        const policy = parsePmwif(await file.text());
+                        setWalletName((n) => n || policy.name);
+                        setRequired(policy.m);
+                        setCosigners(
+                          policy.signers.map((s) => ({
+                            name: s.name,
+                            xpub: s.xpub,
+                            fingerprint: s.masterFingerprintHex ?? '',
+                          }))
+                        );
+                        setError('');
+                      } catch (err) {
+                        setError(
+                          err instanceof Error
+                            ? err.message
+                            : 'Could not read that file.'
+                        );
+                      }
+                    }}
+                  />
+                  <span className="cursor-pointer underline">.pmwif</span>
+                </label>
+              </div>
+              <label className="block space-y-1 text-sm wallet-text-strong">
+                Policy
+                <select
+                  value={`${required}-${cosigners.length}`}
+                  onChange={(e) => {
+                    const [m, n] = e.target.value.split('-').map(Number);
+                    applyPreset(m, n);
+                  }}
+                  className="wallet-input w-full rounded-md px-3 py-2"
+                >
+                  {MULTISIG_PRESETS.map(([m, n]) => (
+                    <option key={`${m}-${n}`} value={`${m}-${n}`}>
+                      {m} of {n}
+                    </option>
+                  ))}
+                  {!MULTISIG_PRESETS.some(
+                    ([m, n]) => m === required && n === cosigners.length
+                  ) && (
+                    <option value={`${required}-${cosigners.length}`}>
+                      {required} of {cosigners.length}
+                    </option>
+                  )}
+                </select>
+              </label>
+              {cosigners.map((c, index) => (
+                <div
+                  key={index}
+                  className="space-y-2 rounded-md border border-[var(--wallet-border)] p-3"
+                >
+                  <div className="flex items-center justify-between">
+                    <p className="text-[11px] font-semibold wallet-text-strong">
+                      Cosigner {index + 1}
+                    </p>
+                    {cosigners.length > 2 && (
+                      <button
+                        type="button"
+                        onClick={() =>
+                          setCosigners(cosigners.filter((_, at) => at !== index))
+                        }
+                        className="text-[11px] text-red-400"
+                      >
+                        Remove
+                      </button>
+                    )}
+                  </div>
+                  <input
+                    value={c.name}
+                    onChange={(e) =>
+                      patchCosigner(index, { name: e.target.value })
+                    }
+                    placeholder="Name"
+                    className="wallet-input w-full rounded-md px-3 py-2 text-sm"
+                  />
+                  <textarea
+                    value={c.xpub}
+                    onChange={(e) =>
+                      patchCosigner(index, { xpub: e.target.value })
+                    }
+                    rows={2}
+                    spellCheck={false}
+                    autoComplete="off"
+                    placeholder="Account xPub"
+                    className="wallet-input w-full resize-none rounded-md px-3 py-2 font-mono text-[11px]"
+                  />
+                  <div className="flex gap-2">
+                    <input
+                      value={c.fingerprint}
+                      onChange={(e) =>
+                        patchCosigner(index, { fingerprint: e.target.value })
+                      }
+                      placeholder="Fingerprint (optional)"
+                      maxLength={8}
+                      className="wallet-input flex-1 rounded-md px-3 py-2 font-mono text-[11px] uppercase"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => setScanningCosigner(index)}
+                      className="rounded-md border border-[var(--wallet-border)] px-3 text-[11px] font-semibold"
+                    >
+                      Scan
+                    </button>
+                  </div>
+                  {scanningCosigner === index && (
+                    <CameraQrScanner
+                      onResult={(text) => {
+                        patchCosigner(index, { xpub: text.trim() });
+                        setScanningCosigner(null);
+                      }}
+                      onClose={() => setScanningCosigner(null)}
+                    />
+                  )}
+                </div>
+              ))}
+              <div className="flex gap-2">
+                <button
+                  type="button"
+                  disabled={cosigners.length >= MAX_COSIGNERS}
+                  onClick={() =>
+                    setCosigners([
+                      ...cosigners,
+                      { name: '', xpub: '', fingerprint: '' },
+                    ])
+                  }
+                  className="wallet-btn-secondary flex-1 py-2 text-sm disabled:opacity-50"
+                >
+                  Add cosigner
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    try {
+                      const policy = draftPolicy();
+                      const blob = new Blob([serializePmwif(policy)], {
+                        type: 'application/json',
+                      });
+                      const url = URL.createObjectURL(blob);
+                      const a = document.createElement('a');
+                      a.href = url;
+                      a.download = pmwifFilename(policy);
+                      a.click();
+                      URL.revokeObjectURL(url);
+                    } catch (err) {
+                      setError(
+                        err instanceof Error
+                          ? err.message
+                          : 'Could not export policy.'
+                      );
+                    }
+                  }}
+                  className="wallet-btn-secondary flex-1 py-2 text-sm"
+                >
+                  Export .pmwif
+                </button>
+              </div>
+            </div>
+          )}
+
+          {/* Password block — same card */}
+          <div className="border-t border-[var(--wallet-border)] pt-3 space-y-3">
+            <p className="text-sm font-semibold wallet-text-strong">Password</p>
+            <p className="text-[11px] leading-relaxed wallet-muted">
+              Required every time you Open this wallet from the list. Private
+              keys are never stored here.
             </p>
-          )}
+            <label className="block space-y-1 text-sm wallet-text-strong">
+              Password
+              <input
+                type="password"
+                autoComplete="new-password"
+                value={password}
+                onChange={(e) => {
+                  setPassword(e.target.value);
+                  setError('');
+                }}
+                placeholder="At least 4 characters"
+                className="wallet-input w-full rounded-md px-3 py-2"
+              />
+            </label>
+            <label className="block space-y-1 text-sm wallet-text-strong">
+              Confirm password
+              <input
+                type="password"
+                autoComplete="new-password"
+                value={passwordConfirm}
+                onChange={(e) => {
+                  setPasswordConfirm(e.target.value);
+                  setError('');
+                }}
+                placeholder="Repeat password"
+                className="wallet-input w-full rounded-md px-3 py-2"
+              />
+            </label>
+          </div>
         </div>
 
-        {mode === 'standard' && preview && (
-          <div className="wallet-card space-y-3 p-4">
-            <p className="text-sm font-semibold wallet-text-strong">
-              Public address preview
-            </p>
-            {(
-              [
-                ['Receive #0', preview.receive],
-                ['Change #0', preview.change],
-              ] as const
-            ).map(([label, item]) => (
-              <div key={label} className="space-y-1">
-                <p className="text-[11px] wallet-muted">
-                  {label} · <span className="font-mono">{item.path}</span>
-                </p>
-                <p className="break-all font-mono text-xs wallet-text-strong">
-                  {item.address}
-                </p>
-              </div>
-            ))}
-          </div>
+        {error && (
+          <p role="alert" className="text-xs text-red-400">
+            {error}
+          </p>
         )}
 
         <button
           type="button"
           onClick={() =>
-            void (mode === 'multisig' ? handleMultisigCreate() : handleCreate())
+            void (mode === 'multisig'
+              ? handleCreateMultisig()
+              : handleCreateStandard())
           }
-          disabled={
-            busy ||
-            !walletName.trim() ||
-            (mode === 'multisig'
-              ? !msPreview
-              : !accountXpub.trim() || !preview)
-          }
+          disabled={mode === 'multisig' ? !canSaveMultisig : !canSaveStandard}
           className="wallet-btn-primary w-full py-2 font-semibold disabled:opacity-50"
         >
           {busy
-            ? 'Saving wallet…'
+            ? 'Saving…'
             : mode === 'multisig'
-              ? `Save ${required}-of-${cosigners.length} watch-only wallet`
-              : 'Save watch-only wallet'}
+              ? `Save ${required}-of-${cosigners.length} and open`
+              : 'Save and open wallet'}
         </button>
-        <p className="text-[11px] leading-relaxed wallet-muted">
-          Preview the public addresses above first — the wallet is saved only
-          after you confirm they match what your device shows. The xPub is
-          stored so addresses can be rebuilt after a restart; nothing secret is
-          saved, signatures always come from the device (e.g. SeedCash).
-        </p>
+
+        {/* Airgap — separate section at bottom, Keystone only */}
+        <div className="pt-4 space-y-2 border-t border-[var(--wallet-border)]">
+          <div className="space-y-0.5 px-0.5">
+            <p className="text-sm font-semibold wallet-text-strong">Airgap</p>
+            <p className="text-[11px] leading-relaxed wallet-muted">
+              Not PSBT. Device stays offline; send &amp; receive over QR airgap.
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={() => {
+              setPanel('keystone');
+              setError('');
+              setPassword('');
+              setPasswordConfirm('');
+            }}
+            className="wallet-card w-full p-3 text-left transition hover:border-[var(--wallet-accent)]"
+          >
+            <p className="text-sm font-semibold wallet-text-strong">Keystone</p>
+            <p className="mt-1 text-[11px] leading-relaxed wallet-muted">
+              Scan account QR (path + fingerprint). Send &amp; receive airgap —
+              not USB, not PSBT.
+            </p>
+          </button>
+        </div>
 
         <button
           type="button"
@@ -691,3 +851,5 @@ export const WatchOnlyWalletPreview: FC<WatchOnlyWalletPreviewProps> = ({
     </section>
   );
 };
+
+export default WatchOnlyWalletPreview;

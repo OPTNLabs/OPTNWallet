@@ -336,6 +336,11 @@ jobs:
             target: x86_64-unknown-linux-gnu
             tor-target: linux-x86_64
             artifact-name: desktop-linux
+          # Native ARM runner — AppImage + deb/rpm for aarch64 (Raspberry Pi, ARM servers).
+          - platform: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-gnu
+            tor-target: linux-aarch64
+            artifact-name: desktop-linux-arm
     runs-on: ${{ matrix.platform }}
     environment: production
     permissions:
@@ -356,12 +361,17 @@ jobs:
           cache: npm
 
       - name: Install Linux system dependencies
-        if: matrix.platform == 'ubuntu-22.04'
+        if: startsWith(matrix.platform, 'ubuntu')
         run: |
           sudo apt-get update
           sudo apt-get install -y \
             libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev \
             patchelf libssl-dev libgtk-3-dev libfuse2 libevent-2.1-7
+          # linux-aarch64: no official Tor desktop Expert Bundle — use distro tor
+          # binary + pinned geoip from linux-x86_64 expert (see fetch-tor.mjs).
+          if [ "${{ matrix.tor-target }}" = 'linux-aarch64' ]; then
+            sudo apt-get install -y tor
+          fi
 
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
@@ -550,9 +560,10 @@ jobs:
           require_asset artifacts/desktop-windows '*.msi' 'Windows MSI installer'
           require_asset artifacts/desktop-macos-arm '*.dmg' 'macOS Apple Silicon DMG'
           require_asset artifacts/desktop-macos-intel '*.dmg' 'macOS Intel DMG'
-          require_asset artifacts/desktop-linux '*.deb' 'Linux DEB package'
-          require_asset artifacts/desktop-linux '*.rpm' 'Linux RPM package'
-          require_asset artifacts/desktop-linux '*.AppImage' 'Linux AppImage'
+          require_asset artifacts/desktop-linux '*.deb' 'Linux x64 DEB package'
+          require_asset artifacts/desktop-linux '*.rpm' 'Linux x64 RPM package'
+          require_asset artifacts/desktop-linux '*.AppImage' 'Linux x64 AppImage'
+          require_asset artifacts/desktop-linux-arm '*.AppImage' 'Linux ARM64 AppImage'
           require_asset artifacts/browser-extensions '*.zip' 'browser extension archive'
           test -f "artifacts/browser-extensions/OPTNWallet-${RELEASE_TAG}-chrome.zip"
           test -f "artifacts/browser-extensions/OPTNWallet-${RELEASE_TAG}-firefox.zip"
@@ -625,9 +636,10 @@ jobs:
 
             ### Downloads
             - Windows x64: `.exe` and `.msi` installers
-            - macOS Apple Silicon: `.dmg`
+            - macOS Apple Silicon (M1 and later): `.dmg`
             - macOS Intel: `.dmg`
             - Linux x64: native `.deb` and `.rpm` packages, plus a portable `.AppImage`
+            - Linux ARM64 (aarch64): portable `.AppImage` (and native packages when produced)
             - Chrome/Chromium and Firefox extension bundles: `.zip`
             ${{ needs.android.outputs.signed == 'true' && '- Android: signed `.apk` for direct installation and `.aab` for Play distribution' || '- Android: not included yet; configure the permanent production keystore and rerun the release workflow' }}
 

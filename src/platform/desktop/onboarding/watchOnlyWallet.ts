@@ -43,9 +43,10 @@ import { ensureDesktopWalletColumns } from '../desktopSchema';
  */
 export const WATCH_ONLY_WALLET_TYPE = 'watch-only';
 
-/** Can this wallet produce a signature on its own? */
+/** Can this wallet produce a signature on its own (software keys in the app)? */
 export function canSignLocally(walletType: string | null | undefined): boolean {
-  return walletType !== WATCH_ONLY_WALLET_TYPE;
+  // Watch-only = air-gap. Hardware = signs on USB device, not in-app keys.
+  return walletType !== WATCH_ONLY_WALLET_TYPE && walletType !== 'hardware';
 }
 
 /**
@@ -136,11 +137,19 @@ export async function createWatchOnlyWallet(
   }
   if (!walletId) throw new Error('Could not create the watch-only wallet.');
 
+  // Dual-write keys + addresses (history scans `addresses`; UTXO uses `keys`).
+  const prefix =
+    args.network === Network.MAINNET ? 'bitcoincash' : 'bchtest';
   const insertKey = db.prepare(
     `INSERT INTO keys
        (wallet_id, public_key, private_key, address, token_address, pubkey_hash,
         account_index, change_index, address_index)
      VALUES (?, ?, NULL, ?, ?, ?, 0, ?, ?)`
+  );
+  const insertAddr = db.prepare(
+    `INSERT INTO addresses
+       (wallet_id, address, balance, hd_index, change_index, prefix, token_address)
+     VALUES (?, ?, 0, ?, ?, ?, ?)`
   );
   try {
     for (const branch of BRANCHES) {
@@ -168,10 +177,19 @@ export async function createWatchOnlyWallet(
           branch,
           index,
         ]);
+        insertAddr.run([
+          walletId,
+          derived.address,
+          index,
+          branch,
+          prefix,
+          derived.tokenAddress,
+        ]);
       }
     }
   } finally {
     insertKey.free();
+    insertAddr.free();
   }
 
   await dbService.saveDatabaseToFile(walletId);
@@ -326,6 +344,36 @@ export async function watchOnlyAccountXpub(
     return typeof row.account_xpub === 'string' && row.account_xpub
       ? row.account_xpub
       : null;
+  } finally {
+    query.free();
+  }
+}
+
+/**
+ * Reopen the same hardware/watch-only wallet if this xPub was already imported
+ * (Electron Cash: one wallet file per keystore, not a new wallet every connect).
+ */
+export async function findWatchOnlyWalletByXpub(
+  accountXpub: string
+): Promise<number | null> {
+  const xpub = accountXpub.trim();
+  if (!xpub) return null;
+  const dbService = DatabaseService();
+  await dbService.ensureDatabaseStarted();
+  const db = dbService.getDatabase();
+  if (!db) return null;
+
+  const query = db.prepare(
+    `SELECT id FROM wallets
+     WHERE walletType = ? AND account_xpub = ?
+     ORDER BY id ASC LIMIT 1`
+  );
+  try {
+    query.bind([WATCH_ONLY_WALLET_TYPE, xpub]);
+    if (!query.step()) return null;
+    const row = query.getAsObject() as Record<string, unknown>;
+    const id = Number(row.id);
+    return Number.isFinite(id) && id > 0 ? id : null;
   } finally {
     query.free();
   }

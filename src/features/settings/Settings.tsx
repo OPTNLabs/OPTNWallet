@@ -28,6 +28,7 @@ import WizardConnectPanel from '../../components/wizardconnect/WizardConnectPane
 import { AppLockSettings } from '../../platform/desktop/AppLockSettings';
 import { RebuildWalletSettings } from '../../platform/desktop/RebuildWalletSettings';
 import { ExportColdArchiveSettings } from '../../platform/desktop/ExportColdArchiveSettings';
+
 import { disconnectAllWizardConnections } from '../../state/slices/wizardconnectSlice';
 import getElectrumAdapter from '../../services/ElectrumAdapter';
 import { waitForWalletHistoryRefresh } from '../../services/RefreshCoordinator';

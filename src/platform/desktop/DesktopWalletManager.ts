@@ -32,6 +32,7 @@ import {
   isCached,
   markWatchOnlySession,
 } from './WalletKeyCache';
+// getCachedPasswordSnapshot used when re-opening a just-protected public-key wallet
 import {
   unlock as unlockGatePassphrase,
   verify as verifyGatePassphrase,
@@ -39,6 +40,7 @@ import {
 import { markSpendAuthFromUnlock } from './DeviceIntegrityService';
 import { SECRET_ENC_PREFIX } from './SecretCryptoService';
 import { WATCH_ONLY_WALLET_TYPE } from './onboarding/watchOnlyWallet';
+import { HARDWARE_WALLET_TYPE } from './onboarding/hardwareWallet';
 import { getBchAccountPath } from '../../services/HdWalletService';
 import {
   autoSaveWalletFile,
@@ -598,42 +600,224 @@ export async function openWalletWithPassword(
   }
   // Clean out any stale cross-network rows now that we know the wallet's
   // network, so upstream's unscoped reads only ever see the active chain.
-  const net =
-    info.networkType === Network.MAINNET ? Network.MAINNET : Network.CHIPNET;
-  try {
-    await purgeCrossNetworkData(walletId, net);
-  } catch (err) {
+  // CRITICAL: do NOT default unknown networkType to chipnet — that deletes all
+  // bitcoincash: keys (mainnet hardware wallets) and leaves permanent 0 balance.
+  const net = resolveWalletNetworkStrict(info.networkType);
+  if (net) {
+    try {
+      await purgeCrossNetworkData(walletId, net);
+    } catch (err) {
+      console.warn(
+        '[DesktopWalletManager] cross-network purge on open failed:',
+        err
+      );
+    }
+  } else {
     console.warn(
-      '[DesktopWalletManager] cross-network purge on open failed:',
-      err
+      `[DesktopWalletManager] wallet ${walletId} has unknown networkType=${String(info.networkType)}; skipping purge`
+    );
+  }
+  return info;
+}
+
+/** Only MAINNET/CHIPNET; never invent chipnet as a fallback. */
+function resolveWalletNetworkStrict(
+  networkType: unknown
+): Network | null {
+  if (networkType === Network.MAINNET || networkType === 'mainnet') {
+    return Network.MAINNET;
+  }
+  if (networkType === Network.CHIPNET || networkType === 'chipnet') {
+    return Network.CHIPNET;
+  }
+  return null;
+}
+
+/** True when this watch-only (or any) wallet requires a password to open. */
+export async function walletRequiresPassword(
+  walletId: number
+): Promise<boolean> {
+  const salt = await readKdfSalt(walletId);
+  return salt != null;
+}
+
+/**
+ * Password-gate a public-key wallet (watch-only or hardware).
+ * Does not encrypt private keys (there are none); only open access.
+ */
+async function protectPublicKeyWalletWithPassword(
+  walletId: number,
+  password: string,
+  walletType: typeof WATCH_ONLY_WALLET_TYPE | typeof HARDWARE_WALLET_TYPE,
+  gatePrefix: string
+): Promise<void> {
+  if (!password || password.length < 4) {
+    throw new Error('Choose a password of at least 4 characters.');
+  }
+  const manager = WalletManager();
+  const info = await manager.getWalletMetadata(walletId);
+  if (!info || info.walletType !== walletType) {
+    throw new Error(`Wallet is not type ${walletType}.`);
+  }
+
+  const salt = randomSalt(32);
+  const key = await deriveKey(password, salt);
+  const gate = `${SECRET_ENC_PREFIX}${await aesEncrypt(
+    key,
+    `${gatePrefix}:${walletId}`
+  )}`;
+
+  const dbService = DatabaseService();
+  await dbService.ensureDatabaseStarted();
+  const db = dbService.getDatabase();
+  if (!db) throw new Error('Database unavailable');
+
+  const query = db.prepare(
+    'UPDATE wallets SET mnemonic = ?, kdf_salt = ? WHERE id = ? AND walletType = ?'
+  );
+  try {
+    query.run([gate, bytesToBase64(salt), walletId, walletType]);
+  } finally {
+    query.free();
+  }
+  await dbService.flushDatabaseToFile(walletId);
+  setCachedPassword(password, salt, walletId);
+  markWatchOnlySession(walletId);
+}
+
+export async function protectWatchOnlyWithPassword(
+  walletId: number,
+  password: string
+): Promise<void> {
+  return protectPublicKeyWalletWithPassword(
+    walletId,
+    password,
+    WATCH_ONLY_WALLET_TYPE,
+    'watch-only-gate'
+  );
+}
+
+/** Password-protect a hardware (Ledger) wallet after create. */
+export async function protectHardwareWalletWithPassword(
+  walletId: number,
+  password: string
+): Promise<void> {
+  return protectPublicKeyWalletWithPassword(
+    walletId,
+    password,
+    HARDWARE_WALLET_TYPE,
+    'hardware-gate'
+  );
+}
+
+async function openPublicKeyWallet(
+  walletId: number,
+  expectedType: typeof WATCH_ONLY_WALLET_TYPE | typeof HARDWARE_WALLET_TYPE,
+  password?: string
+): Promise<WalletMetadata | null> {
+  const manager = WalletManager();
+  const info = await manager.getWalletMetadata(walletId);
+  if (!info || info.walletType !== expectedType) return null;
+
+  const salt = await readKdfSalt(walletId);
+  if (salt) {
+    if (!password) {
+      // Just protected in this flow — credentials already cached for this id.
+      const owner = getCachedPasswordSnapshot()?.ownerWalletId;
+      if (owner !== walletId) return null;
+    } else {
+      const mnemonicCiphertext = await readMnemonicCiphertext(walletId);
+      if (!mnemonicCiphertext?.startsWith(SECRET_ENC_PREFIX)) {
+        console.warn(
+          `[DesktopWalletManager] ${expectedType} ${walletId} has kdf_salt but no gate blob.`
+        );
+        return null;
+      }
+      try {
+        const key = await deriveKey(password, salt);
+        await aesDecrypt(
+          key,
+          mnemonicCiphertext.slice(SECRET_ENC_PREFIX.length)
+        );
+      } catch {
+        return null;
+      }
+      setCachedPassword(password, salt, walletId);
+    }
+  }
+
+  markWatchOnlySession(walletId);
+
+  const net = resolveWalletNetworkStrict(info.networkType);
+  if (net) {
+    try {
+      await purgeCrossNetworkData(walletId, net);
+    } catch (err) {
+      console.warn(
+        `[DesktopWalletManager] cross-network purge on ${expectedType} open failed:`,
+        err
+      );
+    }
+  } else {
+    console.warn(
+      `[DesktopWalletManager] ${expectedType} ${walletId} unknown networkType=${String(info.networkType)}; skipping purge`
     );
   }
   return info;
 }
 
 /**
- * Open a watch-only wallet. There is no password and no KDF salt — nothing to
- * derive, nothing to verify. The wallet stays open by marking its session in
- * WalletKeyCache, which is what DesktopAppShell's credential invariant checks
- * for every open wallet. Refuses anything that is not a watch-only row, so a
- * password-protected wallet can never be opened through this door.
+ * Open a watch-only (air-gap) wallet. Password required if protected at create.
  */
 export async function openWatchOnlyWallet(
-  walletId: number
+  walletId: number,
+  password?: string
 ): Promise<WalletMetadata | null> {
-  const manager = WalletManager();
-  const info = await manager.getWalletMetadata(walletId);
-  if (!info || info.walletType !== WATCH_ONLY_WALLET_TYPE) return null;
+  return openPublicKeyWallet(walletId, WATCH_ONLY_WALLET_TYPE, password);
+}
 
-  markWatchOnlySession(walletId);
-
-  const net =
-    info.networkType === Network.MAINNET ? Network.MAINNET : Network.CHIPNET;
+/**
+ * Open a hardware (USB Ledger etc.) wallet. Password required if protected.
+ * Signing still needs the physical device later — this only unlocks the app session.
+ */
+export async function openHardwareWallet(
+  walletId: number,
+  password?: string
+): Promise<WalletMetadata | null> {
+  const info = await openPublicKeyWallet(
+    walletId,
+    HARDWARE_WALLET_TYPE,
+    password
+  );
+  if (!info) return null;
+  // Repair: empty keys → permanent 0 balance. Rebuild from account_xpub,
+  // dual-write addresses, ensure hw_type. Then force UTXO bootstrap.
   try {
-    await purgeCrossNetworkData(walletId, net);
+    const {
+      ensureHardwareWalletAddresses,
+      ensureHardwareWalletKeys,
+      readHardwareKeystore,
+    } = await import('./onboarding/hardwareWallet');
+    await readHardwareKeystore(walletId);
+    const keys = await ensureHardwareWalletKeys(walletId);
+    await ensureHardwareWalletAddresses(walletId);
+    console.info(
+      `[DesktopWalletManager] hardware wallet ${walletId}: keys=${keys.keyCount}` +
+        (keys.rebuilt ? ' (rebuilt from xpub)' : '') +
+        (keys.firstReceive ? ` firstReceive=${keys.firstReceive}` : '')
+    );
+    // Kick Electrum listunspent so Home is not stuck at 0 after repair.
+    try {
+      const { bootstrapAllUTXOs } = await import(
+        '../../workers/UTXOWorkerService'
+      );
+      void bootstrapAllUTXOs();
+    } catch {
+      /* worker may start via lifecycle */
+    }
   } catch (err) {
     console.warn(
-      '[DesktopWalletManager] cross-network purge on watch-only open failed:',
+      '[DesktopWalletManager] hardware open repair failed:',
       err
     );
   }

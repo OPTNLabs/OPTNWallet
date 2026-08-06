@@ -4,8 +4,12 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useSelector } from 'react-redux';
 
 import { RootState } from '../state/store';
-import { selectWalletId } from '../state/slices/walletSlice';
+import {
+  selectWalletId,
+  selectWalletType,
+} from '../state/slices/walletSlice';
 import useFetchWalletAddresses from './useFetchWalletAddresses';
+import { signHardwarePayment } from '../services/hardware/hardwareSignTransaction';
 
 import { UTXO } from '../types/types';
 import TransactionService, {
@@ -43,6 +47,8 @@ export default function useSimpleSend() {
   // Redux
   const prices = useSelector((s: RootState) => s.priceFeed);
   const walletId = useSelector(selectWalletId);
+  const walletType = useSelector(selectWalletType);
+  const isHardwareWallet = walletType === 'hardware';
   const currentNetwork = useSelector((s: RootState) => selectCurrentNetwork(s));
   const spendOnlyFusedCoins = useSelector(selectSpendOnlyFusedCoins);
   const preferInternalChangeForBch = false;
@@ -60,6 +66,8 @@ export default function useSimpleSend() {
   const [maxBusy, setMaxBusy] = useState(false);
   /** True while Review is building a tx (keeps the button responsive / labeled). */
   const [reviewBusy, setReviewBusy] = useState(false);
+  /** Live status while hardware signs (Ledger shows screens — user must press buttons). */
+  const [sendStatus, setSendStatus] = useState('');
   const reviewInFlightRef = useRef(false);
 
   useEffect(() => {
@@ -473,6 +481,7 @@ export default function useSimpleSend() {
           tokenChangeAddress,
           selectedChangeAddress,
           dbUtxos: controlled,
+          hardwareWallet: isHardwareWallet,
         });
         const attempt = await freshPlanner.addBchOnlyUntilBuild(targetSats, 50);
         if (!attempt.ok) {
@@ -763,13 +772,45 @@ export default function useSimpleSend() {
   ]);
 
   const doSend = useCallback(async () => {
-    if (!review?.rawTx) return;
+    if (!review) return;
+    // Software path needs a signed rawTx from review. Hardware path signs on device now.
+    if (!isHardwareWallet && !review.rawTx) return;
     try {
       setMode('sending');
+      setSendStatus(
+        isHardwareWallet
+          ? 'Preparing hardware sign… Look at your Ledger.'
+          : 'Broadcasting…'
+      );
+      let rawHex = review.rawTx;
+
+      if (isHardwareWallet) {
+        // Electron Cash: sign_transaction after planning — device produces hex.
+        if (!walletId || walletId <= 0) {
+          throw new Error('No wallet open for hardware sign.');
+        }
+        if (!review.finalOutputs?.length) {
+          throw new Error('No planned outputs for hardware sign.');
+        }
+        rawHex = await signHardwarePayment({
+          walletId,
+          inputs: selectedForTx,
+          outputs: review.finalOutputs,
+          changeAddress: selectedChangeAddress || undefined,
+          onProgress: (_stage, detail) => {
+            setSendStatus(
+              detail ||
+                'Confirm the transaction on your Ledger (both buttons)…'
+            );
+          },
+        });
+        setSendStatus('Broadcasting signed transaction…');
+      }
+
       const { txid: sentId, errorMessage, broadcastState: sentState } =
-        await TransactionService.sendTransaction(review.rawTx, selectedForTx, {
+        await TransactionService.sendTransaction(rawHex, selectedForTx, {
           source: 'simple-send',
-          sourceLabel: 'Simple Send',
+          sourceLabel: isHardwareWallet ? 'Hardware Send' : 'Simple Send',
           recipientSummary: normalizedRecipient,
           amountSummary:
             assetType === 'bch'
@@ -782,9 +823,11 @@ export default function useSimpleSend() {
       if (!sentId) throw new Error('Broadcast failed with no txid returned.');
       setTxid(sentId);
       setBroadcastState(sentState ?? 'broadcasted');
+      setSendStatus('');
       setMode('sent');
     } catch (error: unknown) {
       setError(toErrorMessage(error, 'Failed to send transaction.'));
+      setSendStatus('');
       setMode('error');
     }
   }, [
@@ -795,6 +838,9 @@ export default function useSimpleSend() {
     review,
     normalizedRecipient,
     selectedForTx,
+    isHardwareWallet,
+    walletId,
+    selectedChangeAddress,
   ]);
 
   // derive token metadata (categories with totals & NFT commitments)
@@ -890,6 +936,8 @@ export default function useSimpleSend() {
     broadcastState,
     maxBusy,
     reviewBusy,
+    sendStatus,
+    isHardwareWallet,
 
     // coin control (global Simple Send)
     dbUtxos,

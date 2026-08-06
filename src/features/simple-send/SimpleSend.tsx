@@ -85,6 +85,8 @@ export default function SimpleSend() {
     broadcastState,
     maxBusy,
     reviewBusy,
+    sendStatus,
+    isHardwareWallet,
 
     reset,
     doReview,
@@ -106,7 +108,14 @@ export default function SimpleSend() {
     const id = window.requestAnimationFrame(() => setDeferOutboundWork(true));
     return () => window.cancelAnimationFrame(id);
   }, []);
-  const { hasUnresolved } = useOutboundTransactions(walletId, deferOutboundWork);
+  const {
+    hasUnresolved,
+    outboundTransactions,
+    reconciling: outboundReconciling,
+    refresh: refreshOutbound,
+    release: releaseOutbound,
+    canClear: canClearOutbound,
+  } = useOutboundTransactions(walletId, deferOutboundWork);
 
   const isSending = mode === 'sending';
   const [reviewModalOpen, setReviewModalOpen] = useState(false);
@@ -588,6 +597,53 @@ export default function SimpleSend() {
           </div>
         )}
 
+        {hasUnresolved && (
+          <div className="wallet-card mt-3 shrink-0 p-3 border border-[var(--wallet-warning-border,rgba(217,119,6,0.4))]">
+            <div className="text-sm font-semibold wallet-text-strong">
+              Pending outgoing transaction
+            </div>
+            <div className="text-xs wallet-muted mt-1">
+              This is not full-wallet SPV sync. A previous send is still in the
+              Outbox ({outboundTransactions.length}), so new Review is paused
+              until that tx is seen on-chain or cleared.
+            </div>
+            <div className="flex flex-wrap gap-2 mt-2">
+              <button
+                type="button"
+                className="wallet-btn-secondary px-3 py-1.5 text-sm"
+                disabled={outboundReconciling}
+                onClick={() => void refreshOutbound()}
+              >
+                {outboundReconciling ? 'Checking…' : 'Check pending'}
+              </button>
+              {outboundTransactions.some((r) => canClearOutbound(r.txid)) && (
+                <button
+                  type="button"
+                  className="wallet-btn-secondary px-3 py-1.5 text-sm"
+                  onClick={() => {
+                    void (async () => {
+                      for (const r of outboundTransactions) {
+                        if (canClearOutbound(r.txid)) {
+                          await releaseOutbound(r.txid);
+                        }
+                      }
+                    })();
+                  }}
+                >
+                  Clear pending
+                </button>
+              )}
+              <button
+                type="button"
+                className="wallet-btn-secondary px-3 py-1.5 text-sm"
+                onClick={() => navigate('/outbox')}
+              >
+                Open Outbox
+              </button>
+            </div>
+          </div>
+        )}
+
         <div className="wallet-card mt-3 shrink-0 p-3 pb-[calc(var(--safe-bottom)+1rem)]">
           <div className="flex items-center gap-3">
             <button
@@ -599,7 +655,7 @@ export default function SimpleSend() {
               className="wallet-btn-primary flex-1"
               title={
                 hasUnresolved
-                  ? 'Wait for your previous outgoing transaction to sync first'
+                  ? 'Clear or confirm the previous outgoing transaction in Outbox first'
                   : isReviewBusy
                     ? 'Building the transaction…'
                     : !canReview
@@ -608,7 +664,7 @@ export default function SimpleSend() {
               }
             >
               {hasUnresolved
-                ? 'Waiting for sync'
+                ? 'Pending send…'
                 : isReviewBusy
                   ? 'Preparing…'
                   : 'Review'}
@@ -648,6 +704,8 @@ export default function SimpleSend() {
             selectedForTx={selectedForTx}
             rawHexLen={rawHexLen}
             isSending={isSending}
+            sendStatus={sendStatus}
+            isHardwareWallet={isHardwareWallet}
             onClose={() => setReviewModalOpen(false)}
             onConfirmSend={handleConfirmSend}
           />
