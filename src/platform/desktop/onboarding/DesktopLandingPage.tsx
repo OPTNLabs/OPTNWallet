@@ -40,6 +40,7 @@ import { HardwareWalletSettings } from '../../../features/settings/HardwareWalle
 import { resolveBiometricEnrollment } from '../biometricEnrollment';
 import { DesktopWalletPickerActions } from './DesktopWalletPickerActions';
 import { WatchOnlyWalletPreview } from './WatchOnlyWalletPreview';
+import { KeystoneWalletSetup } from './KeystoneWalletSetup';
 
 interface WalletRow {
   id: number;
@@ -84,7 +85,9 @@ const DesktopLandingPage = () => {
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
-  const [view, setView] = useState<'list' | 'hardware' | 'watch-only'>('list');
+  const [view, setView] = useState<
+    'list' | 'hardware' | 'watch-only' | 'keystone'
+  >('list');
   const [importFile, setImportFile] = useState<WalletFileV1 | null>(null);
   /** Optional encrypted .optn-cold companion from multi-select open. */
   const [importColdText, setImportColdText] = useState<string | null>(null);
@@ -538,6 +541,18 @@ const DesktopLandingPage = () => {
               <div key={w.id} className="wallet-card p-3">
                 <div className="flex items-center justify-between">
                   <div>
+  if (view === 'keystone') {
+    // Produces the same watch-only wallet, so it opens through the same path —
+    // the difference is only that the account QR supplies the fingerprint and
+    // derivation path instead of asking for them.
+    return (
+      <KeystoneWalletSetup
+        onBack={() => setView('list')}
+        onCreated={(walletId) => void handleWatchOnlyCreated(walletId)}
+      />
+    );
+  }
+
                     <p className="font-semibold wallet-text-strong">{w.wallet_name || 'Unnamed wallet'}</p>
                     <p className="text-[10px] wallet-muted">
                       #{w.id}
@@ -635,3 +650,4 @@ const DesktopLandingPage = () => {
 };
 
 export default DesktopLandingPage;
+          onKeystone={() => setView('keystone')}
