@@ -35,11 +35,13 @@ export type AutoFusionDecision =
   | { run: true; mode: FusionMode };
 
 /**
- * After a successful paid fuse — long gap so we do not fee-spam.
- * Failed attempts (no peers, Tor blip) use AUTO_FUSION_RETRY_MS instead so
- * autofuse is not silenced for five minutes after every empty gather.
+ * After a successful paid fuse.
+ * Electron Cash autofuse uses ~60–120s random (plugin.py
+ * AUTOFUSE_RECENT_TOR_LIMIT_LOWER/UPPER). We use the low end so Auto stays
+ * snappy; still enough for Electrum to see new coins. Failures use the shorter
+ * {@link AUTO_FUSION_RETRY_MS} / {@link AUTO_FUSION_EMPTY_POOL_RETRY_MS}.
  */
-export const AUTO_FUSION_COOLDOWN_MS = 5 * 60_000;
+export const AUTO_FUSION_COOLDOWN_MS = 60_000;
 /**
  * Backoff after a failed auto attempt that did not complete a paid round.
  * Global pool: peers arrive over Tor on their own clocks — re-enter soon so we
