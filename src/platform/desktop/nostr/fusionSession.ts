@@ -762,6 +762,13 @@ function runParticipant(
     // Onion mix-net: one blob per *output*, not per peer. Each peer announces
     // how many it will inject (`onion_declare`); hop waits for sum(declares).
     const collectedOnions: string[] = [];
+    /**
+     * Payload dedup (not message nonce). Hop re-sends use a fresh binding nonce
+     * so Tor drops recover, but without this the same onion b64 was pushed
+     * twice → peel assembled duplicate outs → fee negative / outputSlots mess
+     * (live auto 2026-08-06: fee -92242745, out>in, outputSlots=1/3).
+     */
+    const seenOnionPayloads = new Set<string>();
     const declaredOnionCounts = new Map<string, number>();
     let onionBatchProcessing = false;
     let onionBatchDone = false;
@@ -994,7 +1001,10 @@ function runParticipant(
       _from: string,
       message: Extract<RoundMessage, { type: 'onion_output' }>
     ) => {
-      if (settled) return;
+      if (settled || onionBatchDone) return;
+      // Identical payload = hop re-send; keep first only.
+      if (seenOnionPayloads.has(message.onion)) return;
+      seenOnionPayloads.add(message.onion);
       collectedOnions.push(message.onion);
       reportOnionWait();
       void processOnionBatchIfReady().catch((error: unknown) =>
@@ -1698,8 +1708,23 @@ function runCoordinator(
     };
 
     const outputsReady = (): boolean => {
-      // Onion reveal: one multi-output batch is enough to assemble.
-      return outputPool().length > 0;
+      // Onion reveal: one multi-output batch is enough — but only if fee is
+      // sane. Partial/duplicate peels used to pass `pool.length > 0` and then
+      // hard-fail assemble (negative fee). Wait for a balanced pool instead.
+      const pool = outputPool();
+      if (pool.length === 0) return false;
+      if (inputsByPeer.size !== params.participants.length) return false;
+      const inputs = [...inputsByPeer.values()].flat();
+      if (inputs.length === 0) return false;
+      const totalIn = inputs.reduce((s, i) => s + i.value, 0);
+      const totalOut = pool.reduce((s, o) => s + o.value, 0);
+      const fee = totalIn - totalOut;
+      if (fee < 0) return false;
+      const roughMax =
+        Math.ceil(
+          ((10 + inputs.length * 150 + pool.length * 40) * params.feerate) / 1000
+        ) * 3;
+      return fee <= Math.max(roughMax, 50_000);
     };
 
     const armMissingOutputsWatch = () => {
