@@ -22,7 +22,6 @@ import {
   decodeTransaction,
   encodeCashAddress,
   encodeTransaction,
-  hash160,
   hash256,
   hexToBin,
   lockingBytecodeToCashAddress,
