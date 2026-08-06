@@ -42,25 +42,27 @@ export type AutoFusionDecision =
 export const AUTO_FUSION_COOLDOWN_MS = 5 * 60_000;
 /**
  * Backoff after a failed auto attempt that did not complete a paid round.
- * Keep shorter than the engine tick (60–120s) so staggered multi-window auto
- * re-enters the pool and can meet instead of missing by one long backoff.
+ * Global pool: peers arrive over Tor on their own clocks — re-enter soon so we
+ * keep meeting the next shared rendezvous (not silent for 5 minutes).
  */
 export const AUTO_FUSION_RETRY_MS = 45_000;
 /**
- * Empty-pool / no-agree retries — re-enter quickly so late peers still meet.
+ * Empty-pool / no-agree retries — re-enter the global Nostr pool quickly.
  * (Paid success still uses {@link AUTO_FUSION_COOLDOWN_MS}.)
  */
 export const AUTO_FUSION_EMPTY_POOL_RETRY_MS = 25_000;
 
 /**
- * Shared UTC rendezvous slots for multi-window auto.
- * Independent 60–120s ticks made wallet A shout alone while B/C slept — then
- * A proposed ghosts and B/C timed out alone (live 04:38–04:40).
- * All auto engines only *enter* gather in the open window of each slot.
+ * Shared UTC rendezvous for **global** P2P auto-fusion (not "open 4 wallets").
+ * Production model: strangers worldwide with Auto on; local multi-window is only
+ * a stress harness for the same code path.
+ *
+ * Like server CashFusion JOIN epochs: everyone only *enters* gather in the open
+ * part of each UTC slot so independent clients cluster without coordinating.
  */
 export const AUTO_RENDEZVOUS_PERIOD_MS = 90_000;
-/** First portion of each slot: new auto gathers may start. */
-export const AUTO_RENDEZVOUS_OPEN_MS = 30_000;
+/** First portion of each slot: new auto gathers may start (global peers overlap). */
+export const AUTO_RENDEZVOUS_OPEN_MS = 35_000;
 
 /** Ms until the next open rendezvous (0 if already open). */
 export function msUntilAutoRendezvousOpen(now = Date.now()): number {

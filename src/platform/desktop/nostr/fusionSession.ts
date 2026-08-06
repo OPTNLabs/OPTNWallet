@@ -1744,7 +1744,7 @@ function runCoordinator(
                 `${anonymousOutputBatches.length}, pool=${outputPool().length}, ` +
                 `onion=on, peelers=${peelers}). ` +
                 'Onion peel stalled (missing declare or hop blob over Tor). ' +
-                'Not a missing-relay issue — hop gift-wraps failed to complete. Retry all wallets together.'
+                'Hop gift-wraps failed to complete — auto will retry; manual: Start again when peers are online.'
             ),
             true
           );

@@ -206,9 +206,9 @@ export function useAutoFusion(): void {
       // The wallet may have been switched or locked while Tor was queried.
       if (session !== sessionRef.current) return;
 
-      // Multi-window P2P: wait for the shared rendezvous open so peers shout
-      // in the same 30s window (staggered 60–120s ticks alone caused asymmetric
-      // alone-timeouts vs ghost proposes).
+      // Global P2P pool: wait for the shared UTC rendezvous open so strangers
+      // worldwide enter gather in the same window (local multi-window stress is
+      // the same code path). Without this, independent clocks never cluster.
       if (decision.mode === 'p2p') {
         const waitMs = msUntilAutoRendezvousOpen();
         if (waitMs > 0) {

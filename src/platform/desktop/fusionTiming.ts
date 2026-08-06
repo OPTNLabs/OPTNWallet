@@ -65,10 +65,9 @@ export const P2P_GATHER_MAX_MS = SERVER_JOIN_WAIT_MS;
 export const P2P_GATHER_ALONE_MS = 35_000;
 
 /**
- * Auto-fuse alone budget = full JOIN_WAIT. Auto engines tick every 60–120s
- * independently per window — staggered start is the NORMAL case. Aborting at
- * 35s left the first auto wallet shouting alone while peers joined later
- * (w5 alone-fail while w1/w6 proposed a dead 3-set).
+ * Auto-fuse alone budget = full JOIN_WAIT (server pool wait).
+ * Production: global strangers join over Tor; local multi-window is just stress.
+ * Aborting at 35s dropped the first auto client while others were still arriving.
  */
 export const P2P_GATHER_ALONE_AUTO_MS = P2P_GATHER_MAX_MS;
 
