@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import {
   simulateSybil,
@@ -8,6 +8,10 @@ import {
   simulateEclipse,
   runFullSimulation,
 } from '../fusionAdversarySimulator';
+
+afterEach(() => {
+  vi.restoreAllMocks();
+});
 
 describe('simulateSybil', () => {
   it('small attacker has low win probability', () => {
@@ -49,6 +53,13 @@ describe('simulateTiming', () => {
 
 describe('simulateChainAnalysis', () => {
   it('overlapping tiers are not distinguishable', () => {
+    // Deterministic samples spanning each tier's full band so ranges overlap
+    // (Math.random() alone was flaky under CI: sparse samples can de-overlap).
+    let step = 0;
+    vi.spyOn(Math, 'random').mockImplementation(() => {
+      step += 1;
+      return step % 2 === 0 ? 0.05 : 0.95;
+    });
     const result = simulateChainAnalysis({
       tiers: [100_000, 120_000, 150_000],
       outputsPerTier: 10,
