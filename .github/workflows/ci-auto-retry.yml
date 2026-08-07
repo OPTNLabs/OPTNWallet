@@ -1,0 +1,58 @@
+# Auto-retry failed CI/preview workflows once or twice after completion.
+# Covers GitHub Actions CDN flakes ("Failed to resolve action download info /
+# Service Unavailable") without masking permanent failures forever.
+#
+# Docs: https://docs.github.com/en/actions/how-tos/manage-workflow-runs/re-run-workflows-and-jobs
+# Pattern: workflow_run + gh run rerun --failed (community standard; no native job.retries).
+#
+# IMPORTANT (GitHub limitation): workflow_run listeners only fire for workflow
+# files present on the repository *default branch* (currently `main`).
+# CodeRabbit / ops: this workflow is intentionally landed on `main` so retries
+# actually run. Feature PRs (e.g. #12) may also carry a copy for history, but
+# only the default-branch file is active for triggers.
+
+name: CI auto-retry
+
+on:
+  workflow_run:
+    workflows:
+      - CI
+      - Desktop Preview
+      - Android Preview (Debug APK)
+      - Extension Preview
+    types:
+      - completed
+
+permissions:
+  actions: write
+  contents: read
+
+jobs:
+  retry-failed:
+    # Only failed runs; cap attempts (run_attempt is 1-based).
+    if: >
+      github.event.workflow_run.conclusion == 'failure' &&
+      github.event.workflow_run.run_attempt < 3
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Re-run failed jobs
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RUN_ID: ${{ github.event.workflow_run.id }}
+          ATTEMPT: ${{ github.event.workflow_run.run_attempt }}
+          WF: ${{ github.event.workflow_run.name }}
+        run: |
+          set -euo pipefail
+          echo "Workflow='$WF' run_id=$RUN_ID attempt=$ATTEMPT → re-run --failed"
+          # Retry a few times if Actions API is still flaky.
+          for i in 1 2 3 4 5; do
+            if gh run rerun "$RUN_ID" --failed --repo "${{ github.repository }}"; then
+              echo "Re-run requested (API ok on try $i)."
+              exit 0
+            fi
+            echo "gh run rerun failed (try $i); sleeping..."
+            sleep $((i * 15))
+          done
+          echo "::warning::Could not re-run $RUN_ID after API retries; will need manual re-run."
+          exit 0
