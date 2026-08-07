@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { serializeWalletFile, parseWalletFile, defaultWalletFileName } from '../walletFile';
+import {
+  serializeWalletFile,
+  parseWalletFile,
+  defaultWalletFileName,
+  collisionWalletFileName,
+} from '../walletFile';
 
 describe('walletFile serialize/parse round-trip', () => {
   it('round-trips all fields exactly', () => {
@@ -67,5 +72,33 @@ describe('walletFile serialize/parse round-trip', () => {
     const fileName = defaultWalletFileName('wallet_8');
     expect(fileName).toBe('wallet_8.optn');
     expect(fileName).not.toMatch(/^wallet-\d+-/);
+  });
+
+  it('keeps _id<N> when the wallet name is already 40 safe characters', () => {
+    // CodeRabbit: concatenating "_id7" then slicing the whole stem to 40 drops
+    // the suffix and collapses two wallets onto the same filename.
+    const longName = 'A'.repeat(40);
+    expect(longName.length).toBe(40);
+
+    const naive = defaultWalletFileName(`${longName}_id7`);
+    const fixedA = collisionWalletFileName(longName, '_id7');
+    const fixedB = collisionWalletFileName(longName, '_id9');
+
+    expect(naive).toBe(`${'A'.repeat(40)}.optn`); // suffix lost (old bug)
+    expect(fixedA).toMatch(/_id7\.optn$/);
+    expect(fixedB).toMatch(/_id9\.optn$/);
+    expect(fixedA).not.toBe(fixedB);
+    expect(fixedA).not.toBe(defaultWalletFileName(longName));
+    // Stem (before .optn) stays within the 40-char budget.
+    expect(fixedA.replace(/\.optn$/, '').length).toBeLessThanOrEqual(40);
+  });
+
+  it('keeps distinct collision paths for two positive sourceIds on a long name', () => {
+    const longName = 'B'.repeat(40);
+    const a = collisionWalletFileName(longName, '_id12');
+    const b = collisionWalletFileName(longName, '_id34');
+    expect(a).toContain('_id12');
+    expect(b).toContain('_id34');
+    expect(a).not.toBe(b);
   });
 });
