@@ -14,6 +14,7 @@ import {
   disableWalletBiometric,
   getBiometricLabel,
 } from './DesktopWalletManager';
+import { validateNewWalletPassword } from './passwordPolicy';
 
 // A CashFusion round takes minutes and dies with the key when the wallet
 // locks, so sub-15-minute choices are unusable while fusing and were removed.
@@ -122,8 +123,9 @@ export const AppLockSettings: React.FC = () => {
       setError('No wallet is open.');
       return;
     }
-    if (newPass !== confirmPass) {
-      setError('New passwords do not match.');
+    const passErr = validateNewWalletPassword(newPass, confirmPass);
+    if (passErr) {
+      setError(passErr);
       return;
     }
 
@@ -177,7 +179,7 @@ export const AppLockSettings: React.FC = () => {
             type="password"
             value={newPass}
             onChange={(e) => { setNewPass(e.target.value); setError(''); }}
-            placeholder="New password"
+            placeholder="New password (min 8 characters)"
             className="w-full rounded-xl border border-[var(--wallet-border)] bg-[var(--wallet-surface)] px-3 py-2 text-sm wallet-text-strong placeholder:wallet-muted outline-none focus:ring-1 focus:ring-[var(--wallet-accent)]"
           />
           <input

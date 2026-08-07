@@ -25,6 +25,7 @@ import OnboardingScreen from '../../../features/onboarding/components/Onboarding
 import DerivationPathField from '../../../features/onboarding/components/DerivationPathField';
 import { createWalletWithPassword } from '../DesktopWalletManager';
 import { defaultDesktopAccountPath } from '../desktopDerivationDefaults';
+import { validateNewWalletPassword } from '../passwordPolicy';
 
 type Step = 'words' | 'path' | 'name';
 
@@ -141,8 +142,9 @@ const DesktopImportWalletPage = () => {
       setNameError('Give this wallet a name.');
       return;
     }
-    if (password !== passwordConfirm) {
-      setNameError('Passwords do not match.');
+    const passErr = validateNewWalletPassword(password, passwordConfirm);
+    if (passErr) {
+      setNameError(passErr);
       return;
     }
     setNameError('');
@@ -273,8 +275,8 @@ const DesktopImportWalletPage = () => {
     <OnboardingScreen>
       <OnboardingCard title="Name This Wallet">
         <p className="text-sm wallet-muted text-center mb-3">
-          Give this wallet a name and a password. Each wallet on this device has its own
-          independent password.
+          Give this wallet a name and a password (at least 8 characters). Each wallet on this
+          device has its own independent password. The password protects the seed at rest.
         </p>
         <div className="space-y-3 mb-2">
           <input
@@ -289,7 +291,8 @@ const DesktopImportWalletPage = () => {
             type="password"
             value={password}
             onChange={(e) => { setPassword(e.target.value); setNameError(''); }}
-            placeholder="Password (or leave blank)"
+            placeholder="Password (min 8 characters)"
+            autoComplete="new-password"
             className="wallet-input w-full px-3 py-2 rounded-md wallet-text-strong"
           />
           <input
@@ -297,6 +300,7 @@ const DesktopImportWalletPage = () => {
             value={passwordConfirm}
             onChange={(e) => { setPasswordConfirm(e.target.value); setNameError(''); }}
             placeholder="Confirm password"
+            autoComplete="new-password"
             className="wallet-input w-full px-3 py-2 rounded-md wallet-text-strong"
           />
         </div>
