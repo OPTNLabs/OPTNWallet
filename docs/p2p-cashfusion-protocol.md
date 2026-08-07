@@ -1,9 +1,11 @@
 # P2P CashFusion Protocol — Comprehensive Reference
 
-This document describes **how OPTN Wallet’s peer-to-peer CashFusion works in
-this repository**, as implemented today. It is the authoritative contributor
+**Status:** **Shipped** for PR #12 desktop. This document describes **how OPTN
+Wallet’s peer-to-peer CashFusion works in this repository**, as implemented
+and maintained. It is the authoritative contributor and audit-oriented
 reference for the P2P path: wire format, phases, wallet outer loop, Auto
-behaviour, and safety gates. It is **not** a marketing overview.
+behaviour, and safety gates. It is **not** a marketing overview or a future
+roadmap.
 
 **Companion docs**
 
@@ -11,15 +13,15 @@ behaviour, and safety gates. It is **not** a marketing overview.
 |-----|------|
 | [p2p-cashfusion-privacy-layers.md](./p2p-cashfusion-privacy-layers.md) | Naming map: Tor vs NIP-59 vs Pedersen vs blind Schnorr vs **output onion** |
 | [THREAT_MODEL.md](./THREAT_MODEL.md) | Adversaries and what each can/cannot do |
-| [cashfusion-implementation-scope.md](./cashfusion-implementation-scope.md) | Server (classic) CashFusion Rust client scope |
+| [cashfusion-implementation-scope.md](./cashfusion-implementation-scope.md) | Ship status — **both** P2P and classic server paths **done** |
 | Source under `src/platform/desktop/nostr/` + `FusionP2pService.ts` | Normative behaviour |
 
-**Design goal (non-negotiable):** P2P is a **different transport**, not a weaker
-protocol. Cryptography that server CashFusion uses (Pedersen commitments, blind
-Schnorr credentials, Tor, **output-onion** unlinkability of outputs) must carry
-over. There is **no dedicated fusion server** and **no extra infrastructure**
-beyond public Nostr relays, Tor, and the Bitcoin Cash network (Chipnet in
-development).
+**Design goal (non-negotiable, and met in code):** P2P is a **different
+transport**, not a weaker protocol. Cryptography that server CashFusion uses
+(Pedersen commitments, blind Schnorr credentials, Tor, **output-onion**
+unlinkability of outputs) carries over. There is **no dedicated fusion server**
+and **no extra infrastructure** beyond public Nostr relays, Tor, and the
+Bitcoin Cash network (Chipnet for development dogfood).
 
 > **Naming:** “Onion” in this doc means the **peer peel chain**
 > (`onionCrypto.ts`), **not** Tor. See
@@ -597,6 +599,6 @@ When you change the wire format, crypto, gather policy, or Auto depth/cooldown:
 
 ---
 
-*Last updated for PR #12: protocol v2 (blind credentials + Pedersen + mandatory
-output onion), MIN=3 / MAX=6, full-set ACK, Auto 40s/25s cooldowns, fuse-depth
-stop, Tor fail-closed.*
+*Last updated for PR #12 **ship**: protocol v2 (blind credentials + Pedersen +
+mandatory output onion), MIN=3 / MAX=6, full-set ACK, Auto 40s/25s cooldowns,
+fuse-depth stop, Tor fail-closed — **implemented**, not planned.*
