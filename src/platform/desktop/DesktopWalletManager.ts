@@ -55,6 +55,11 @@ import {
   hasData as bioHasData,
   removeData as bioRemoveData,
 } from '@choochmeque/tauri-plugin-biometry-api';
+import {
+  isWalletPasswordLongEnough,
+  validateNewWalletPassword,
+  walletPasswordTooShortMessage,
+} from './passwordPolicy';
 
 const BIO_DOMAIN = 'com.optilabs.wallet';
 const bioName = (walletId: number) => `optn-wallet-bio-${walletId}`;
@@ -143,6 +148,10 @@ export async function createWalletWithPassword(
     derivationPath,
     derivationPathSource,
   } = args;
+  // Enforce min length at the API so every caller (create/import/file open) is covered.
+  if (!isWalletPasswordLongEnough(password)) {
+    throw new Error(walletPasswordTooShortMessage());
+  }
   const walletType = args.walletType ?? WalletType.STANDARD;
   const resolvedDerivationPath = derivationPath ?? getBchAccountPath(network);
   const resolvedDerivationPathSource = derivationPathSource ?? 'default';
@@ -213,9 +222,10 @@ export async function createWalletWithPassword(
   await recordBirthHeight(walletId);
 
   // Auto-mirror the wallet to a file in the default wallets folder (EC-style).
-  // Encrypt under this wallet's own key so the file is safe at rest and can be
-  // re-opened with the same password. Non-fatal: the DB row is the source of
-  // truth, so a failed file write must not fail creation.
+  // Encrypt under this wallet's own password-derived key (min 8 chars). The
+  // .optn file is only as strong as that password — salt is stored beside
+  // ciphertext so a blank/weak password would not be "safe at rest".
+  // Non-fatal: the DB row is the source of truth.
   try {
     const fileKey = await deriveKey(password, salt);
     const encryptedMnemonic = `${SECRET_ENC_PREFIX}${await aesEncrypt(fileKey, mnemonic)}`;
@@ -651,8 +661,8 @@ async function protectPublicKeyWalletWithPassword(
   walletType: typeof WATCH_ONLY_WALLET_TYPE | typeof HARDWARE_WALLET_TYPE,
   gatePrefix: string
 ): Promise<void> {
-  if (!password || password.length < 4) {
-    throw new Error('Choose a password of at least 4 characters.');
+  if (!isWalletPasswordLongEnough(password)) {
+    throw new Error(walletPasswordTooShortMessage());
   }
   const manager = WalletManager();
   const info = await manager.getWalletMetadata(walletId);
@@ -1137,6 +1147,10 @@ export async function changeWalletPassword(
   if (!salt) return false;
   const row = await readWalletRow(walletId);
   if (!row || !row.mnemonic.startsWith(SECRET_ENC_PREFIX)) return false;
+
+  // New password must meet the same policy as create/import.
+  const newPassErr = validateNewWalletPassword(newPassword);
+  if (newPassErr) return false;
 
   // Verify old password by decrypting this wallet's own data.
   let oldKey: CryptoKey;

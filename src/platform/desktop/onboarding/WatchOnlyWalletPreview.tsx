@@ -78,8 +78,8 @@ export const WatchOnlyWalletPreview: FC<WatchOnlyWalletPreviewProps> = ({
   const [keystoneScanning, setKeystoneScanning] = useState(false);
 
   const requirePassword = (): boolean => {
-    if (password.length < 4) {
-      setError('Choose a password of at least 4 characters.');
+    if (password.length < 8) {
+      setError('Choose a password of at least 8 characters.');
       return false;
     }
     if (password !== passwordConfirm) {
@@ -252,7 +252,7 @@ export const WatchOnlyWalletPreview: FC<WatchOnlyWalletPreviewProps> = ({
     const canSave =
       Boolean(walletName.trim()) &&
       keystoneAccount != null &&
-      password.length >= 4 &&
+      password.length >= 8 &&
       password === passwordConfirm &&
       !busy;
 
@@ -425,14 +425,14 @@ export const WatchOnlyWalletPreview: FC<WatchOnlyWalletPreviewProps> = ({
   const canSaveStandard =
     Boolean(walletName.trim()) &&
     Boolean(accountXpub.trim()) &&
-    password.length >= 4 &&
+    password.length >= 8 &&
     password === passwordConfirm &&
     !busy;
 
   const canSaveMultisig =
     Boolean(walletName.trim()) &&
     cosigners.every((c) => c.xpub.trim()) &&
-    password.length >= 4 &&
+    password.length >= 8 &&
     password === passwordConfirm &&
     !busy;
 

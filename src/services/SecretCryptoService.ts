@@ -7,6 +7,15 @@ import {
 import { isAndroidNativePlatform } from '../utils/platform';
 
 export const SECRET_ENC_PREFIX = 'enc:v1:';
+/**
+ * localStorage key for the WebCrypto fallback AES material.
+ *
+ * SECURITY (Mythos HIGH): this stores raw key bytes next to IndexedDB ciphertext
+ * on web / iOS / Android-when-SecureKeyStore-unavailable. That is *not* real
+ * at-rest secrecy against XSS or local profile theft. Desktop + extension builds
+ * replace this entire module with a password-derived key (see vite.*.config.ts).
+ * Android encrypt now fails closed instead of writing new secrets under this key.
+ */
 const FALLBACK_KEY_STORAGE = 'optn_wallet_fallback_key_v1';
 
 let fallbackCryptoKey: CryptoKey | null = null;
@@ -124,9 +133,21 @@ async function encryptRaw(plaintext: string): Promise<string> {
       const { ciphertext } = await SecureKeyStore.encrypt({ plaintext });
       return ciphertext;
     } catch (error) {
-      console.warn('SecureKeyStore.encrypt failed, falling back to WebCrypto', error);
+      // FAIL CLOSED: never write *new* secrets under the localStorage AES key.
+      // That key lives next to the SQLite/IndexedDB ciphertext (Mythos HIGH) —
+      // silent fallback permanently downgrades hardware-backed encryption.
+      console.error(
+        'SecureKeyStore.encrypt failed; refusing insecure localStorage fallback',
+        error
+      );
+      throw error instanceof Error
+        ? error
+        : new Error('SecureKeyStore.encrypt failed (no localStorage fallback)');
     }
   }
+  // Web / iOS without SecureKeyStore: localStorage-backed AES key (known weak
+  // at-rest model — key material adjacent to ciphertext). Desktop and extension
+  // builds swap this module for a password-derived implementation.
   return await encryptWithFallback(plaintext);
 }
 
@@ -136,7 +157,12 @@ async function decryptRaw(ciphertext: string): Promise<string> {
       const { plaintext } = await SecureKeyStore.decrypt({ ciphertext });
       return plaintext;
     } catch (error) {
-      console.warn('SecureKeyStore.decrypt failed, falling back to WebCrypto', error);
+      // Decrypt may still try the legacy localStorage key for rows encrypted
+      // before fail-closed encrypt shipped — do not use this path for new data.
+      console.warn(
+        'SecureKeyStore.decrypt failed, trying legacy WebCrypto fallback',
+        error
+      );
     }
   }
   return await decryptWithFallback(ciphertext);

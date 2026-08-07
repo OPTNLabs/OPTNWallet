@@ -212,8 +212,8 @@ export function HardwareWalletWizard({ onBack, onOpened }: Props) {
 
   const createAndOpen = async () => {
     if (!selected) return;
-    if (password.length < 4) {
-      setError('Choose a password (min 4 characters) to open this wallet later.');
+    if (password.length < 8) {
+      setError('Choose a password (min 8 characters) to open this wallet later.');
       return;
     }
     if (password !== passwordConfirm) {
@@ -452,7 +452,7 @@ export function HardwareWalletWizard({ onBack, onOpened }: Props) {
               className="wallet-input w-full px-3 py-2 text-sm"
               value={password}
               onChange={(e) => setPassword(e.target.value)}
-              placeholder="Min 4 characters"
+              placeholder="Min 8 characters"
             />
             <input
               type="password"
