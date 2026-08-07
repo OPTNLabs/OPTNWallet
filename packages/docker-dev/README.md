@@ -51,20 +51,26 @@ npm --prefix packages/docker-dev run up:release
 | Compose hardening | `no-new-privileges` |
 | **CashFusion Tor** | **Mandatory** on `fusion-lab` (fail-closed; same as desktop P2P) |
 
-## fusion-lab (Tor required)
+## fusion-lab / VPS (Tor **mandatory**)
 
-P2P CashFusion **must not** run clearnet. The `fusion-lab` profile always starts
-**Tor** and a lab container with `OPTN_TOR_REQUIRED=1` and
-`OPTN_TOR_SOCKS=tor:9050`. Do not run fusion without this profile.
+P2P CashFusion **must not** run clearnet (same as desktop fail-closed).
+
+The `fusion-lab` profile always starts:
+
+1. **`tor`** — SOCKS  
+2. **`fusion-lab`** — supervisor that **exits if Tor is down**
 
 ```bash
 npm --prefix packages/docker-dev run up:fusion-lab
-# Tor SOCKS: host 127.0.0.1:9050  |  compose network: tor:9050
-# Default network: chipnet (set OPTN_NETWORK=mainnet only if you accept VPS hot-wallet risk)
-# Data volume: optn-fusion-data → /optn-data
+# Tor: 127.0.0.1:9050 (host) / tor:9050 (compose)
+# Default OPTN_NETWORK=chipnet
+# Volume: optn-fusion-data → /optn-data
+docker compose -f packages/docker-dev/docker-compose.yml --profile fusion-lab logs -f fusion-lab
 ```
 
-Plain `npm run up` is **dev/tests only** — no fusion traffic, Tor not required.
+Full VPS notes: **[VPS.md](./VPS.md)**  
+
+Plain `npm run up` is **dev/tests only** — no fusion, Tor not required.
 
 ## Layout
 

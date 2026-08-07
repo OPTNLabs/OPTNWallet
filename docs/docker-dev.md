@@ -17,11 +17,16 @@ in Docker.
 Workflow: [`.github/workflows/docker-dev.yml`](../.github/workflows/docker-dev.yml)
 
 ```bash
-# Local build
+# Local build (dev shell — no fusion)
 docker compose -f packages/docker-dev/docker-compose.yml up -d --build
+
+# VPS / fusion-lab — Tor mandatory
+docker compose -f packages/docker-dev/docker-compose.yml --profile fusion-lab up -d --build
 
 # After a release tag is published to GHCR
 export OPTN_DOCKER_TAG=v1.2.3
 docker compose -f packages/docker-dev/docker-compose.release.yml pull
 docker compose -f packages/docker-dev/docker-compose.release.yml up -d
 ```
+
+VPS fusion lab details: [`packages/docker-dev/VPS.md`](../packages/docker-dev/VPS.md)
