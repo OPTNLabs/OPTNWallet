@@ -1,0 +1,110 @@
+# OPTN docker-dev lab image
+#
+# Direction of truth: images are built FROM git/tags (we update Docker).
+# Native installers remain the product ship path (release.yml).
+#
+# - pull_request / push: smoke-build when packages/docker-dev changes
+# - tag v*.*.* + workflow_dispatch: push to GHCR (packages: write)
+
+name: Docker dev image
+
+on:
+  pull_request:
+    paths:
+      - 'packages/docker-dev/**'
+      - '.github/workflows/docker-dev.yml'
+  push:
+    branches:
+      - dev
+      - main
+    paths:
+      - 'packages/docker-dev/**'
+      - '.github/workflows/docker-dev.yml'
+    tags:
+      - 'v*.*.*'
+  workflow_dispatch:
+    inputs:
+      push:
+        description: 'Push image to GHCR (true/false)'
+        required: true
+        default: 'false'
+
+env:
+  IMAGE_NAME: optn-docker-dev
+
+concurrency:
+  group: docker-dev-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build docker-dev
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Decide whether to push
+        id: meta
+        shell: bash
+        run: |
+          set -euo pipefail
+          PUSH=false
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            if [[ "${{ inputs.push }}" == "true" ]]; then
+              PUSH=true
+            fi
+          elif [[ "${{ github.ref_type }}" == "tag" ]]; then
+            PUSH=true
+          fi
+          echo "push=${PUSH}" >> "$GITHUB_OUTPUT"
+
+          # Image ref: ghcr.io/<owner>/optn-docker-dev
+          OWNER_LC="$(echo '${{ github.repository_owner }}' | tr '[:upper:]' '[:lower:]')"
+          echo "owner_lc=${OWNER_LC}" >> "$GITHUB_OUTPUT"
+
+          if [[ "${{ github.ref_type }}" == "tag" ]]; then
+            RAW="${{ github.ref_name }}"
+            # strip leading v for a second tag if present
+            STRIPPED="${RAW#v}"
+            echo "version_tag=${RAW}" >> "$GITHUB_OUTPUT"
+            echo "version_stripped=${STRIPPED}" >> "$GITHUB_OUTPUT"
+          else
+            echo "version_tag=sha-${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
+            echo "version_stripped=sha-${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Log in to GHCR
+        if: steps.meta.outputs.push == 'true'
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Docker metadata
+        id: docker_meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/${{ steps.meta.outputs.owner_lc }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=raw,value=${{ steps.meta.outputs.version_tag }}
+            type=raw,value=${{ steps.meta.outputs.version_stripped }}
+            type=raw,value=latest,enable=${{ github.ref_type == 'tag' }}
+
+      - name: Build (and push on tag / dispatch)
+        uses: docker/build-push-action@v6
+        with:
+          context: packages/docker-dev
+          file: packages/docker-dev/Dockerfile
+          push: ${{ steps.meta.outputs.push == 'true' }}
+          tags: ${{ steps.docker_meta.outputs.tags }}
+          labels: ${{ steps.docker_meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
