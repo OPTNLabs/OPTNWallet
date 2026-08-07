@@ -186,38 +186,76 @@ export async function autoSaveWalletFile(
     //
     // Collision suffixes are applied via collisionWalletFileName so a 40-char
     // name cannot truncate `_id<N>` / timestamp back to the original stem.
+    //
+    // Concurrent saves (two wallets created in parallel that share a name) can
+    // both pass a free-path check then overwrite each other. Prefer
+    // createNew:true when claiming a free path, re-check ownership after write,
+    // and retry on a unique suffix if the race lost.
     const hasOwnerId =
       Number.isSafeInteger(w.sourceId) && (w.sourceId as number) > 0;
-    let rel = `${WALLETS_DIR}/${defaultWalletFileName(w.name)}`;
-    if (!(await pathUsableBy(rel, w.sourceId, hasOwnerId))) {
-      const candidates: string[] = [];
-      if (hasOwnerId) {
-        candidates.push(collisionWalletFileName(w.name, `_id${w.sourceId}`));
-      }
-      candidates.push(collisionWalletFileName(w.name, `_${Date.now()}`));
-      if (hasOwnerId) {
-        candidates.push(
-          collisionWalletFileName(w.name, `_id${w.sourceId}_${Date.now()}`)
-        );
-      }
-      let chosen: string | null = null;
-      for (const fileName of candidates) {
-        const candidate = `${WALLETS_DIR}/${fileName}`;
-        if (await pathUsableBy(candidate, w.sourceId, hasOwnerId)) {
-          chosen = candidate;
-          break;
+    const body = serializeWalletFile(w);
+
+    const pickPath = async (attempt: number): Promise<string> => {
+      if (attempt === 0) {
+        const preferred = `${WALLETS_DIR}/${defaultWalletFileName(w.name)}`;
+        if (await pathUsableBy(preferred, w.sourceId, hasOwnerId)) {
+          return preferred;
+        }
+        if (hasOwnerId) {
+          const idPath = `${WALLETS_DIR}/${collisionWalletFileName(
+            w.name,
+            `_id${w.sourceId}`
+          )}`;
+          if (await pathUsableBy(idPath, w.sourceId, hasOwnerId)) {
+            return idPath;
+          }
         }
       }
-      // Last resort: still suffix-preserving, unique enough for one process.
-      rel =
-        chosen ??
-        `${WALLETS_DIR}/${collisionWalletFileName(
-          w.name,
-          `_${Date.now()}_${Math.floor(Math.random() * 1e6)}`
-        )}`;
+      const suffix = hasOwnerId
+        ? `_id${w.sourceId}_${Date.now()}_${attempt}`
+        : `_${Date.now()}_${attempt}_${Math.floor(Math.random() * 1e6)}`;
+      return `${WALLETS_DIR}/${collisionWalletFileName(w.name, suffix)}`;
+    };
+
+    let rel: string | null = null;
+    for (let attempt = 0; attempt < 6; attempt++) {
+      const candidate = await pickPath(attempt);
+      const existsAlready = await exists(candidate, {
+        baseDir: BaseDirectory.AppData,
+      });
+      const overwriteOwn =
+        hasOwnerId &&
+        existsAlready &&
+        (await ownerOf(candidate)) === w.sourceId;
+
+      try {
+        // Exclusive create when the path is free — closes the TOCTOU race.
+        // Overwrite only when we already own the file (our own backup refresh).
+        await writeTextFile(candidate, body, {
+          baseDir: BaseDirectory.AppData,
+          createNew: !overwriteOwn,
+        });
+      } catch {
+        // createNew lost the race (path appeared between check and write).
+        continue;
+      }
+
+      if (hasOwnerId) {
+        const owner = await ownerOf(candidate);
+        if (owner !== w.sourceId) {
+          // Another writer clobbered us after create; claim a unique path.
+          continue;
+        }
+      }
+
+      rel = candidate;
+      break;
     }
 
-    await writeTextFile(rel, serializeWalletFile(w), { baseDir: BaseDirectory.AppData });
+    if (!rel) {
+      console.warn('[walletFile] auto-save could not claim a stable path');
+      return null;
+    }
 
     // A rename leaves the old file behind under the old name, so this wallet
     // would have two backups and the stale one would silently rot. Drop any
