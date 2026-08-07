@@ -1,14 +1,18 @@
 # Local build of the lab image + repo mount.
 # For prebuilt GHCR image (after a release tag), see docker-compose.release.yml
 #
+# Dev shell only (no fusion):
 #   docker compose -f packages/docker-dev/docker-compose.yml up -d --build
+#
+# Fusion / VPS-style lab — Tor is MANDATORY (P2P CashFusion fail-closed):
 #   docker compose -f packages/docker-dev/docker-compose.yml --profile fusion-lab up -d --build
 #
-# NOT a consumer wallet. Chipnet/mocks for fusion. See PRODUCTION.md
+# NOT a consumer wallet. Chipnet first for fusion. See PRODUCTION.md + README.
 
 name: optn-docker-dev
 
 services:
+  # Contributor shell — tests/tooling only. No CashFusion traffic here.
   dev:
     build:
       context: .
@@ -23,25 +27,61 @@ services:
     environment:
       CI: "true"
       OPTN_DOCKER_DEV: "1"
-      OPTN_TOR_SOCKS: "tor:9050"
     stdin_open: true
     tty: true
     init: true
-    read_only: false
     security_opt:
       - no-new-privileges:true
     command: ["sleep", "infinity"]
 
-  # Optional Chipnet/lab Tor SOCKS only — not a mainnet wallet appliance.
+  # --- fusion-lab profile: Tor is required, not optional ---
+  # Matches desktop P2P policy: no clearnet Nostr fusion. Fail closed without Tor.
   tor:
     profiles: ["fusion-lab"]
     image: dperson/torproxy:latest
     restart: unless-stopped
     ports:
+      # Host bind localhost only — VPS: use firewall; do not expose 9050 publicly
       - "${OPTN_TOR_HOST_PORT:-127.0.0.1:9050}:9050"
     security_opt:
       - no-new-privileges:true
-    read_only: true
-    tmpfs:
-      - /tmp
-      - /var/lib/tor:uid=100,gid=100
+
+  # Fusion lab workspace: always attached to Tor SOCKS. No Tor → do not run this profile.
+  # Headless Auto fusion runner is future work; this service is the env contract for VPS users.
+  fusion-lab:
+    profiles: ["fusion-lab"]
+    image: optn-docker-dev:local
+    build:
+      context: .
+      dockerfile: Dockerfile
+    working_dir: /optn
+    user: "1000:1000"
+    depends_on:
+      - tor
+    volumes:
+      - ../..:/optn
+      # Persistent ops data (keys/state) — never bake secrets into the image
+      - optn-fusion-data:/optn-data
+    environment:
+      CI: "true"
+      OPTN_DOCKER_DEV: "1"
+      # P2P CashFusion: Tor mandatory (same as desktop fail-closed)
+      OPTN_TOR_REQUIRED: "1"
+      OPTN_TOR_SOCKS: "tor:9050"
+      # Chipnet first; operators must explicitly set mainnet if they accept the risk
+      OPTN_NETWORK: "${OPTN_NETWORK:-chipnet}"
+      OPTN_DATA_DIR: "/optn-data"
+    restart: unless-stopped
+    init: true
+    security_opt:
+      - no-new-privileges:true
+    # Placeholder until headless fusion entrypoint lands — keeps Tor-bound env up for tooling
+    command:
+      [
+        "bash",
+        "-lc",
+        "echo \"[fusion-lab] Tor SOCKS=$$OPTN_TOR_SOCKS network=$$OPTN_NETWORK (Tor mandatory). Headless fusion entrypoint TBD.\"; sleep infinity",
+      ]
+
+volumes:
+  optn-fusion-data:
