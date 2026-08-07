@@ -11,6 +11,9 @@ export OPTN_TOR_REQUIRED="${OPTN_TOR_REQUIRED:-1}"
 export OPTN_TOR_SOCKS="${OPTN_TOR_SOCKS:-tor:9050}"
 export OPTN_NETWORK="${OPTN_NETWORK:-chipnet}"
 export OPTN_DATA_DIR="${OPTN_DATA_DIR:-/optn-data}"
+export OPTN_FUSION_MODE="${OPTN_FUSION_MODE:-p2p}"
+# Optional — only set when a headless wallet runner exists on the host/volume.
+# export OPTN_HEADLESS_CMD=...
 
 if [[ "${OPTN_TOR_REQUIRED}" == "0" ]]; then
   echo "[fusion-lab] refused: OPTN_TOR_REQUIRED=0 (Tor is mandatory for fusion)" >&2

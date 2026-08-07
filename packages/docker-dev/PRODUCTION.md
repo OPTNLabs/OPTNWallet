@@ -33,9 +33,11 @@ Desktop P2P fusion is **Tor fail-closed**. Any Docker/VPS fusion path must match
 | Default network | **chipnet**; mainnet only if operator sets `OPTN_NETWORK=mainnet` |
 | Secrets | Volume `optn-fusion-data` only — never bake keys into the image |
 
-**Supervisor** (`scripts/fusion-lab-supervisor.mjs`) enforces Tor fail-closed and
-holds the VPS process. **Auto fusion rounds** (wallet unlock + `FusionRunnerService`)
-are the next wiring step — see [VPS.md](./VPS.md).
+**Supervisor** (`scripts/fusion-lab-supervisor.mjs`) enforces Tor fail-closed,
+validates `OPTN_FUSION_MODE` / `OPTN_NETWORK`, writes a health file, and optionally
+execs `OPTN_HEADLESS_CMD`. **Auto fusion rounds** (wallet unlock +
+`FusionRunnerService` + Tauri Tor WebSocket) are a **separate product milestone**,
+not part of this lab image — see [VPS.md](./VPS.md).
 
 ## What we will not claim
 

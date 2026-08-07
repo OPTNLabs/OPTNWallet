@@ -71,11 +71,26 @@ services:
       OPTN_DATA_DIR: "/optn-data"
       OPTN_TOR_PROBE_MS: "${OPTN_TOR_PROBE_MS:-5000}"
       OPTN_TOR_RECHECK_MS: "${OPTN_TOR_RECHECK_MS:-30000}"
+      # Optional full wallet Auto runner (not in this image). Empty = Tor hold loop.
+      OPTN_HEADLESS_CMD: "${OPTN_HEADLESS_CMD:-}"
+      OPTN_FUSION_HEALTH_FILE: "${OPTN_FUSION_HEALTH_FILE:-/optn-data/fusion-lab.health.json}"
     restart: unless-stopped
     init: true
     security_opt:
       - no-new-privileges:true
     entrypoint: ["bash", "/optn/packages/docker-dev/scripts/fusion-lab-entrypoint.sh"]
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "const fs=require('fs');const p=process.env.OPTN_FUSION_HEALTH_FILE||'/optn-data/fusion-lab.health.json';try{const j=JSON.parse(fs.readFileSync(p,'utf8'));process.exit(j.status==='tor_down'?1:0)}catch{process.exit(1)}",
+        ]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 45s
 
 volumes:
   optn-fusion-data:
