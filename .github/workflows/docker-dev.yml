@@ -1,10 +1,5 @@
-# OPTN docker-dev lab image
-#
-# Direction of truth: images are built FROM git/tags (we update Docker).
-# Native installers remain the product ship path (release.yml).
-#
-# - pull_request / push (paths): smoke-build + node -v sanity
-# - tag v*.*.* + workflow_dispatch push=true: push to GHCR
+# Production-grade publish path for the *lab* image (not the consumer wallet).
+# Images are built FROM git tags — we update Docker; installers stay primary ship.
 
 name: Docker dev image
 
@@ -28,6 +23,10 @@ on:
         description: 'Push image to GHCR (true/false)'
         required: true
         default: 'false'
+      platforms:
+        description: 'Platforms (push only; PR smoke is linux/amd64)'
+        required: false
+        default: 'linux/amd64,linux/arm64'
 
 env:
   IMAGE_NAME: optn-docker-dev
@@ -43,9 +42,15 @@ jobs:
     permissions:
       contents: read
       packages: write
+      id-token: write
+      attestations: write
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      - name: Set up QEMU
+        if: github.ref_type == 'tag' || (github.event_name == 'workflow_dispatch' && inputs.push == 'true')
+        uses: docker/setup-qemu-action@v3
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -56,14 +61,18 @@ jobs:
         run: |
           set -euo pipefail
           PUSH=false
+          PLATFORMS="linux/amd64"
           if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
             if [[ "${{ inputs.push }}" == "true" ]]; then
               PUSH=true
+              PLATFORMS="${{ inputs.platforms }}"
             fi
           elif [[ "${{ github.ref_type }}" == "tag" ]]; then
             PUSH=true
+            PLATFORMS="linux/amd64,linux/arm64"
           fi
           echo "push=${PUSH}" >> "$GITHUB_OUTPUT"
+          echo "platforms=${PLATFORMS}" >> "$GITHUB_OUTPUT"
 
           OWNER_LC="$(echo '${{ github.repository_owner }}' | tr '[:upper:]' '[:lower:]')"
           echo "owner_lc=${OWNER_LC}" >> "$GITHUB_OUTPUT"
@@ -96,6 +105,11 @@ jobs:
             type=raw,value=${{ steps.meta.outputs.version_tag }}
             type=raw,value=${{ steps.meta.outputs.version_stripped }}
             type=raw,value=latest,enable=${{ github.ref_type == 'tag' }}
+          labels: |
+            org.opencontainers.image.title=optn-docker-dev
+            org.opencontainers.image.description=OPTN Wallet contributor/lab image
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.sha }}
 
       - name: Build (and push on tag / dispatch)
         id: build
@@ -103,18 +117,34 @@ jobs:
         with:
           context: packages/docker-dev
           file: packages/docker-dev/Dockerfile
+          platforms: ${{ steps.meta.outputs.platforms }}
           push: ${{ steps.meta.outputs.push == 'true' }}
           load: ${{ steps.meta.outputs.push != 'true' }}
           tags: ${{ steps.docker_meta.outputs.tags }}
           labels: ${{ steps.docker_meta.outputs.labels }}
+          provenance: ${{ steps.meta.outputs.push == 'true' }}
+          sbom: ${{ steps.meta.outputs.push == 'true' }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
-      - name: Smoke — node version inside image
+      - name: Smoke — node/npm as non-root
         if: steps.meta.outputs.push != 'true'
         run: |
           set -euo pipefail
-          # First tag from metadata (newline-separated)
           TAG="$(echo '${{ steps.docker_meta.outputs.tags }}' | head -n1)"
-          docker run --rm "$TAG" node -v
-          docker run --rm "$TAG" npm -v
+          docker run --rm --user 1000:1000 "$TAG" node -v
+          docker run --rm --user 1000:1000 "$TAG" npm -v
+          # tini entrypoint present
+          docker run --rm --user 1000:1000 --entrypoint /usr/bin/tini "$TAG" -- -h | head -n1 || true
+          id_out="$(docker run --rm --user 1000:1000 "$TAG" id)"
+          echo "$id_out"
+          echo "$id_out" | grep -E 'uid=1000|optn' 
+
+      - name: Attest build provenance (push only)
+        if: steps.meta.outputs.push == 'true' && steps.build.outputs.digest != ''
+        continue-on-error: true
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-name: ghcr.io/${{ steps.meta.outputs.owner_lc }}/${{ env.IMAGE_NAME }}
+          subject-digest: ${{ steps.build.outputs.digest }}
+          push-to-registry: true

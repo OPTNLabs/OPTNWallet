@@ -1,0 +1,42 @@
+# Is this “production-ready Docker”?
+
+## Clear answer
+
+| Product | Production-ready? |
+|---------|-------------------|
+| **Lab/contributor image** (`optn-docker-dev`) | **Yes** — for its purpose: reproducible tests/tooling, release-tagged GHCR publish |
+| **Consumer wallet (mainnet GUI, keys, HW wallets)** | **No** — not this package; use AppImage / DMG / MSI / APK |
+
+This package is **production-grade packaging of a developer/lab environment**,
+not “OPTN Wallet as a Docker product for end users.”
+
+## What “production-ready” means here
+
+- [x] Base image **pinned by digest**
+- [x] Non-root default user (`optn` / uid 1000)
+- [x] `tini` as init, `no-new-privileges` in compose
+- [x] CI smoke on every PR that touches this package
+- [x] Multi-arch (**amd64 + arm64**) on tag push to GHCR
+- [x] Provenance/SBOM flags on push; optional attestation step
+- [x] Documented release model: **Docker updates from our tags**
+- [x] `docker-compose.release.yml` to pull the published image
+- [x] Explicit non-goals (no GUI ship, no mainnet wallet in Docker)
+
+## What we will not claim
+
+- Safe storage of mainnet seeds inside a container by default  
+- Hardware wallet USB as supported in Docker  
+- Replacing native release artifacts  
+- Formal third-party security audit of the image  
+
+## Operator checklist (after first GHCR publish)
+
+1. Tag a release `vX.Y.Z` (or `workflow_dispatch` with push=true).  
+2. Confirm package: `ghcr.io/<owner>/optn-docker-dev:vX.Y.Z`.  
+3. Set package visibility (public/internal) in GitHub → Packages if needed.  
+4. Contributors: `OPTN_DOCKER_TAG=vX.Y.Z docker compose -f packages/docker-dev/docker-compose.release.yml pull`
+
+## Related
+
+- [SCOPE.md](./SCOPE.md)  
+- [docs/docker-release-model.md](../../docs/docker-release-model.md)  

@@ -1,0 +1,32 @@
+# Pull the production-published *lab* image from GHCR (same git tag as a release).
+# Docker updates FROM our tags — see docs/docker-release-model.md
+#
+# Usage (repo root, after v1.2.3 is published):
+#   export OPTN_DOCKER_TAG=v1.2.3   # or latest
+#   docker compose -f packages/docker-dev/docker-compose.release.yml pull
+#   docker compose -f packages/docker-dev/docker-compose.release.yml up -d
+#   docker compose -f packages/docker-dev/docker-compose.release.yml exec dev bash
+#
+# Override registry for forks:
+#   export OPTN_DOCKER_IMAGE=ghcr.io/myorg/optn-docker-dev
+
+name: optn-docker-dev-release
+
+services:
+  dev:
+    image: ${OPTN_DOCKER_IMAGE:-ghcr.io/optnlabs/optn-docker-dev}:${OPTN_DOCKER_TAG:-latest}
+    working_dir: /optn
+    user: "1000:1000"
+    volumes:
+      - ../..:/optn
+    ports:
+      - "${OPTN_VITE_PORT:-5173}:5173"
+    environment:
+      CI: "true"
+      OPTN_DOCKER_DEV: "1"
+    stdin_open: true
+    tty: true
+    init: true
+    security_opt:
+      - no-new-privileges:true
+    command: ["sleep", "infinity"]
