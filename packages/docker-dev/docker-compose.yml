@@ -2,6 +2,7 @@
 #   docker compose -f packages/docker-dev/docker-compose.yml up -d --build
 #
 # NOT for production mainnet wallets.
+# Full draft scope: SCOPE.md  |  Release model: docs/docker-release-model.md
 
 name: optn-docker-dev
 
@@ -25,3 +26,18 @@ services:
     tty: true
     # Keep container up for exec / iterative work
     command: ["sleep", "infinity"]
+
+  # Phase D (optional): enable with
+  #   docker compose -f packages/docker-dev/docker-compose.yml --profile fusion-lab up -d
+  # Stub only — replace with a pinned Tor image when Phase D is implemented.
+  # Chipnet / lab use only; never treat as a mainnet wallet appliance.
+  tor:
+    profiles: ["fusion-lab"]
+    image: alpine:3.20
+    command:
+      [
+        "sh",
+        "-c",
+        "echo 'fusion-lab Tor sidecar not configured yet (Phase D)'; sleep infinity",
+      ]
+    # When implemented: use a pinned Tor image + documented SOCKS port.

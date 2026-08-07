@@ -1,9 +1,14 @@
 # `@optn/docker-dev` — contributor Docker lab
 
+**PR status:** draft scope lives in [SCOPE.md](./SCOPE.md) (phases A–E).  
+**Release model:** Docker **updates from our git tags** — see
+[docs/docker-release-model.md](../../docs/docker-release-model.md).
+
 **Purpose:** lower the barrier for **developers and auditors** who want a
 repeatable Linux environment for OPTN Wallet work (install deps, run core
 tests, optional web/vite). Aimed at onboarding — same spirit as architecture
-docs and green CI.
+docs and green CI. On each **release tag**, CI can push this image to GHCR so
+devs pull an env that matches that version.
 
 **Not for:** production mainnet wallets, hardware USB passthrough as a first
 class product, or replacing AppImage / DMG / MSI / APK downloads.
@@ -13,7 +18,7 @@ class product, or replacing AppImage / DMG / MSI / APK downloads.
 | New contributors | **Yes** |
 | Code reviewers / auditors | **Yes** (reproducible shell) |
 | End users | **No** — use release installers |
-| Always-on mainnet fusion appliance | **No** (out of scope for v1) |
+| Always-on mainnet fusion appliance | **Not v1** — optional Phase D only, Chipnet |
 
 ## Prerequisites
 
@@ -85,15 +90,23 @@ packages/docker-dev/
   README.md            # this file
 ```
 
+## Pull a released lab image (when Phase B is live)
+
+After a `v*.*.*` tag publish (or `workflow_dispatch` with push):
+
+```bash
+# Example — owner/name may vary by fork
+docker pull ghcr.io/optnlabs/optn-docker-dev:latest
+docker run --rm -it -v "$PWD":/optn -w /optn ghcr.io/optnlabs/optn-docker-dev:latest bash
+```
+
+Until GHCR packages exist, use **local compose build** (Quick start above).
+
 ## Relation to CashFusion
 
-P2P and server fusion are **implemented in the app** (see
-`docs/cashfusion-implementation-scope.md` on the fusion ship branch). This
-Docker package does **not** replace that; it only makes it easier for
-contributors to run **tests and tooling** in a clean Linux environment.
-
-Optional later profiles (not in v1): local Electron Cash fusion server,
-pinned Tor sidecar for headless experiments — only if maintainers want them.
+P2P and server fusion are product features of the wallet, not of this image.
+This package only helps contributors run **tests and tooling**. Optional
+Phase D (`fusion-lab` profile) is Chipnet/ops only — see [SCOPE.md](./SCOPE.md).
 
 ## Troubleshooting
 
