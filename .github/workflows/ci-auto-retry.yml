@@ -6,10 +6,10 @@
 # Pattern: workflow_run + gh run rerun --failed (community standard; no native job.retries).
 #
 # IMPORTANT (GitHub limitation): workflow_run listeners only fire for workflow
-# files present on the repository *default branch* (currently `main`). This
-# file ships on feature/dev branches with the PR, but auto-retry is inactive
-# until the workflow is merged into `main`. Do not delete it from this PR —
-# landing it is how the listener becomes available.
+# files present on the repository *default branch* (currently `main`).
+# CodeRabbit major: "Deploy this workflow to main" — addressed by landing the
+# active copy via PR #14 (base main). This feature-branch copy stays so the
+# file is not lost when merging to dev; only the main copy is triggered.
 
 name: CI auto-retry
 
