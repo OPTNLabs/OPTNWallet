@@ -9,9 +9,9 @@ Read [PRODUCTION.md](./PRODUCTION.md) and [SCOPE.md](./SCOPE.md).
 
 | Audience | Use? |
 |----------|------|
-| Contributors / auditors | **Yes** |
+| Contributors / auditors | **Yes** (`dev` service) |
 | End users (mainnet keys) | **No** — installers only |
-| Chipnet fusion ops lab | Optional `--profile fusion-lab` |
+| VPS / always-on fusion lab | `--profile fusion-lab` — **Tor is mandatory** |
 
 ## Quick start (local build)
 
@@ -48,14 +48,23 @@ npm --prefix packages/docker-dev run up:release
 | Multi-arch | `linux/amd64` + `linux/arm64` on tag push |
 | Supply chain | SBOM + provenance on push; optional attestation |
 | CI | PR smoke (`node`/`npm` as 1000:1000) |
-| Compose hardening | `no-new-privileges`, optional Tor profile |
+| Compose hardening | `no-new-privileges` |
+| **CashFusion Tor** | **Mandatory** on `fusion-lab` (fail-closed; same as desktop P2P) |
 
-## fusion-lab (optional)
+## fusion-lab (Tor required)
+
+P2P CashFusion **must not** run clearnet. The `fusion-lab` profile always starts
+**Tor** and a lab container with `OPTN_TOR_REQUIRED=1` and
+`OPTN_TOR_SOCKS=tor:9050`. Do not run fusion without this profile.
 
 ```bash
 npm --prefix packages/docker-dev run up:fusion-lab
-# SOCKS 127.0.0.1:9050 — Chipnet/ops only; no mainnet seeds in volumes
+# Tor SOCKS: host 127.0.0.1:9050  |  compose network: tor:9050
+# Default network: chipnet (set OPTN_NETWORK=mainnet only if you accept VPS hot-wallet risk)
+# Data volume: optn-fusion-data → /optn-data
 ```
+
+Plain `npm run up` is **dev/tests only** — no fusion traffic, Tor not required.
 
 ## Layout
 

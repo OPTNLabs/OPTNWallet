@@ -22,12 +22,27 @@ not “OPTN Wallet as a Docker product for end users.”
 - [x] `docker-compose.release.yml` to pull the published image
 - [x] Explicit non-goals (no GUI ship, no mainnet wallet in Docker)
 
+## CashFusion + Tor (non-negotiable)
+
+Desktop P2P fusion is **Tor fail-closed**. Any Docker/VPS fusion path must match:
+
+| Rule | Meaning |
+|------|---------|
+| Tor **mandatory** for fusion | No clearnet Nostr fusion |
+| `fusion-lab` profile | Always brings up `tor` + lab with `OPTN_TOR_SOCKS=tor:9050` |
+| Default network | **chipnet**; mainnet only if operator sets `OPTN_NETWORK=mainnet` |
+| Secrets | Volume `optn-fusion-data` only — never bake keys into the image |
+
+Headless Auto fusion entrypoint is still TBD; the **env contract** (Tor required)
+is already fixed in compose.
+
 ## What we will not claim
 
 - Safe storage of mainnet seeds inside a container by default  
 - Hardware wallet USB as supported in Docker  
 - Replacing native release artifacts  
 - Formal third-party security audit of the image  
+- “Production VPS fusion node” until headless runner ships (infra is ready)
 
 ## Operator checklist (after first GHCR publish)
 
