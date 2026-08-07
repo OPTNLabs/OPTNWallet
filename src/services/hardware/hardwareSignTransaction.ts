@@ -260,7 +260,7 @@ export async function signHardwarePayment(args: {
         )
       );
       const idx = args.outputs.findIndex(
-        (o) => o.address === args.changeAddress
+        (o) => o.recipientAddress === args.changeAddress
       );
       if (idx >= 0) {
         changeOutputIndex = idx;
