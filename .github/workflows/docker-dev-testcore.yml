@@ -33,6 +33,9 @@ jobs:
       - name: npm ci + test:core inside container
         run: |
           set -euo pipefail
+          # Host checkout is root-owned; chown for image user `node` (uid 1000)
+          # before npm writes node_modules (same as real compose bind-mount care).
+          sudo chown -R 1000:1000 "$PWD"
           docker run --rm \
             --user 1000:1000 \
             -v "$PWD":/optn \
