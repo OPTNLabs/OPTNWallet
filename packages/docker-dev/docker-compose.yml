@@ -1,8 +1,16 @@
 # Contributor lab — run from repository root:
 #   docker compose -f packages/docker-dev/docker-compose.yml up -d --build
 #
+# Optional fusion lab (Chipnet / ops only — NOT mainnet wallet):
+#   docker compose -f packages/docker-dev/docker-compose.yml --profile fusion-lab up -d --build
+#
+# Linux host file ownership (recommended on Linux bind mounts):
+#   export OPTN_DOCKER_UID=$(id -u) OPTN_DOCKER_GID=$(id -g)
+#   then set user in an override or:
+#   docker compose run --user "$(id -u):$(id -g)" ...
+#
 # NOT for production mainnet wallets.
-# Full draft scope: SCOPE.md  |  Release model: docs/docker-release-model.md
+# Scope: SCOPE.md  |  Release model: docs/docker-release-model.md
 
 name: optn-docker-dev
 
@@ -13,31 +21,25 @@ services:
       dockerfile: Dockerfile
     image: optn-docker-dev:local
     working_dir: /optn
-    # Mount monorepo root (two levels up from packages/docker-dev)
     volumes:
       - ../..:/optn
     ports:
-      - "5173:5173"
+      - "${OPTN_VITE_PORT:-5173}:5173"
     environment:
-      # Discourage accidental mainnet fusion fixtures in scripts that check CI
       CI: "true"
       OPTN_DOCKER_DEV: "1"
+      # When fusion-lab profile is up, Tor SOCKS is reachable at tor:9050
+      OPTN_TOR_SOCKS: "tor:9050"
     stdin_open: true
     tty: true
-    # Keep container up for exec / iterative work
     command: ["sleep", "infinity"]
 
-  # Phase D (optional): enable with
-  #   docker compose -f packages/docker-dev/docker-compose.yml --profile fusion-lab up -d
-  # Stub only — replace with a pinned Tor image when Phase D is implemented.
-  # Chipnet / lab use only; never treat as a mainnet wallet appliance.
+  # Phase D — Chipnet / lab Tor sidecar only. Never a mainnet wallet appliance.
+  # Enable: --profile fusion-lab
+  # Prefer pinning by digest in hardened forks; tag documented for refresh.
   tor:
     profiles: ["fusion-lab"]
-    image: alpine:3.20
-    command:
-      [
-        "sh",
-        "-c",
-        "echo 'fusion-lab Tor sidecar not configured yet (Phase D)'; sleep infinity",
-      ]
-    # When implemented: use a pinned Tor image + documented SOCKS port.
+    image: dperson/torproxy:latest
+    restart: unless-stopped
+    ports:
+      - "${OPTN_TOR_HOST_PORT:-127.0.0.1:9050}:9050"

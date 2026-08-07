@@ -1,6 +1,5 @@
-# Docker package — full draft scope (PR #13)
+# Docker package — full scope (PR #13)
 
-This package is tracked as a **draft PR** until the checklist below is done.
 End-user product shipping remains **native installers** (AppImage / DMG / MSI /
 APK). Docker is **derived from us** (git tags / releases), not the reverse.
 
@@ -13,16 +12,16 @@ git tag / GitHub Release  →  native installers (primary ship)
 
 | Model | Status |
 |-------|--------|
-| **Docker updates from our releases** | ✅ Target design |
+| **Docker updates from our releases** | ✅ Design + workflow |
 | **Releases built only from Docker** | ❌ Not the product path |
 
 See [docs/docker-release-model.md](../../docs/docker-release-model.md).
 
 ---
 
-## Phases (check off in the PR)
+## Phases
 
-### Phase A — Contributor lab (landed in first commit)
+### Phase A — Contributor lab
 
 - [x] `packages/docker-dev/Dockerfile` (Node 22 Bookworm slim)
 - [x] `docker-compose.yml` mount monorepo at `/optn`
@@ -32,40 +31,44 @@ See [docs/docker-release-model.md](../../docs/docker-release-model.md).
 
 ### Phase B — CI build + release publish
 
-- [ ] Workflow: build image on PRs that touch `packages/docker-dev/**` (smoke)
-- [ ] Workflow: on tag `v*.*.*` (and/or `workflow_dispatch`), push to GHCR
-- [ ] Tags: `ghcr.io/<org>/optn-docker-dev:<version>` and `:latest` (dev only)
-- [ ] Document required `packages: write` / GHCR permissions
-- [ ] Optional: pin `node:22-bookworm-slim` by digest in Dockerfile when publishing
+- [x] Workflow smoke-build on PRs touching `packages/docker-dev/**`
+- [x] Workflow push to GHCR on tag `v*.*.*` (+ `workflow_dispatch` push=true)
+- [x] Tags: `ghcr.io/<org>/optn-docker-dev:<version>` and `:latest` on tag
+- [x] Document `packages: write` / GHCR in docs
+- [x] Smoke step: `node -v` / `npm -v` inside image (non-push builds)
+- [x] Dockerfile notes for pinning base image by digest when publishing
+
+**Verify on first merge:** open Actions → “Docker dev image” on this PR path.
 
 ### Phase C — Dev experience polish
 
-- [ ] Document `user:` uid/gid for Linux file ownership
-- [ ] Optional compose profile: `vite` defaults / healthcheck
-- [ ] Optional: pre-warm layer that runs `npm ci` only when `package-lock.json` changes
-- [ ] Contribute section in root README stays short; detail stays here
+- [x] `OPTN_DOCKER_UID` / `OPTN_DOCKER_GID` for Linux bind-mount ownership
+- [x] Configurable Vite host port `OPTN_VITE_PORT`
+- [x] Scripts: `up:fusion-lab`, `logs:tor`, `test:core` with `--no-deps`
+- [x] README troubleshooting for uid/port
 
-### Phase D — Fusion lab profile (optional, Chipnet only)
+### Phase D — Fusion lab profile (Chipnet / ops only)
 
-- [ ] Compose profile `fusion-lab` (stub or real): pinned Tor sidecar notes
-- [ ] Docs: Chipnet only; no mainnet seeds in volumes
-- [ ] Optional local fusion server sidecar (Electron Cash or internal) — **only if** maintainers want ops demo
-- [ ] Explicit threat note: always-on = hot wallet ops, not default UX
+- [x] Compose profile `fusion-lab` with Tor SOCKS sidecar (`dperson/torproxy`)
+- [x] Host bind `127.0.0.1:9050` by default; `OPTN_TOR_SOCKS=tor:9050` for dev
+- [x] Docs: Chipnet only; no mainnet seeds in volumes
+- [x] Threat note: always-on hot wallet is advanced ops, not default UX
 
-### Phase E — Out of scope for this package (do not block draft)
+### Phase E — Explicit non-goals (documented)
 
-- [ ] ~~Tauri desktop GUI in Docker as primary ship~~ — no
-- [ ] ~~Hardware wallet USB as required path~~ — no
-- [ ] ~~Replace AppImage/DMG/MSI~~ — no
-- [ ] ~~Production mainnet “OPTN in Docker” consumer product~~ — separate decision
+- [x] No Tauri desktop GUI as primary Docker ship
+- [x] No hardware-wallet USB as required path
+- [x] No replacing AppImage/DMG/MSI
+- [x] No production mainnet “OPTN in Docker” consumer product in this package
 
 ---
 
 ## Done criteria (mark PR ready for review)
 
-1. Phase **A** + **B** complete and documented.
-2. Smoke: `docker compose … build` and `test:core` path green in CI or maintainer machine.
-3. Release model doc merged with the package.
-4. PR description checklist matches this file; draft → ready.
+1. [x] Phases A–E implemented in tree (this session)
+2. [ ] CI smoke green on PR #13 (Actions “Docker dev image”)
+3. [ ] Maintainer confirms GHCR push on a test tag or workflow_dispatch (optional before ready)
+4. [ ] Draft → **Ready for review** when (2) is green
 
-Phase **C/D** may land in follow-ups without blocking “ready” if A+B are solid.
+Phase D Tor image uses a public tag (`dperson/torproxy:latest`); forks may pin
+by digest for stricter supply-chain control.

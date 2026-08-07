@@ -1,14 +1,13 @@
 # `@optn/docker-dev` — contributor Docker lab
 
-**PR status:** draft scope lives in [SCOPE.md](./SCOPE.md) (phases A–E).  
+**PR status:** full scope checklist in [SCOPE.md](./SCOPE.md) (phases A–E).  
 **Release model:** Docker **updates from our git tags** — see
 [docs/docker-release-model.md](../../docs/docker-release-model.md).
 
 **Purpose:** lower the barrier for **developers and auditors** who want a
 repeatable Linux environment for OPTN Wallet work (install deps, run core
-tests, optional web/vite). Aimed at onboarding — same spirit as architecture
-docs and green CI. On each **release tag**, CI can push this image to GHCR so
-devs pull an env that matches that version.
+tests, optional web/vite). On each **release tag**, CI pushes this image to
+GHCR so devs can pull an env that matches that version.
 
 **Not for:** production mainnet wallets, hardware USB passthrough as a first
 class product, or replacing AppImage / DMG / MSI / APK downloads.
@@ -18,7 +17,7 @@ class product, or replacing AppImage / DMG / MSI / APK downloads.
 | New contributors | **Yes** |
 | Code reviewers / auditors | **Yes** (reproducible shell) |
 | End users | **No** — use release installers |
-| Always-on mainnet fusion appliance | **Not v1** — optional Phase D only, Chipnet |
+| Always-on fusion ops | **Phase D only**, Chipnet / advanced — not default UX |
 
 ## Prerequisites
 
@@ -30,21 +29,16 @@ class product, or replacing AppImage / DMG / MSI / APK downloads.
 From the **repository root**:
 
 ```bash
-# Build image + start a long-lived dev container (repo mounted at /optn)
 docker compose -f packages/docker-dev/docker-compose.yml up -d --build
-
-# Shell into the lab
 docker compose -f packages/docker-dev/docker-compose.yml exec dev bash
 
 # Inside the container (first time):
 npm ci
 npm run test:core          # unit tests (no mainnet)
-# optional:
-# npm run build:web
-# npm run dev              # Vite on 0.0.0.0:5173 — map port below
+# npm run dev              # Vite — host port 5173 (or OPTN_VITE_PORT)
 ```
 
-Or use the package scripts (from repo root):
+Package scripts (from repo root):
 
 ```bash
 npm --prefix packages/docker-dev run up
@@ -52,69 +46,98 @@ npm --prefix packages/docker-dev run shell
 npm --prefix packages/docker-dev run test:core
 ```
 
+### Linux file ownership
+
+Bind mounts write as root inside the container by default. Prefer:
+
+```bash
+docker compose -f packages/docker-dev/docker-compose.yml exec \
+  --user "$(id -u):$(id -g)" dev bash
+```
+
+Or run one-off:
+
+```bash
+docker compose -f packages/docker-dev/docker-compose.yml run --rm \
+  --user "$(id -u):$(id -g)" --workdir /optn dev bash -lc "npm ci"
+```
+
+### Optional: fusion-lab (Tor SOCKS, Chipnet only)
+
+```bash
+npm --prefix packages/docker-dev run up:fusion-lab
+# Tor SOCKS on host: 127.0.0.1:9050 (override with OPTN_TOR_HOST_PORT)
+# Inside compose network: tor:9050 (env OPTN_TOR_SOCKS)
+```
+
+**Threat note:** always-on Tor + a hot wallet is **ops**, not the normal
+install path. No mainnet seeds in volumes. Chipnet for experiments.
+
 ## What is in the image
 
 | Piece | Notes |
 |-------|--------|
-| Node.js **22** (Bookworm) | Matches modern CI Node for frontend tests |
-| `git`, `python3`, `make`, `g++` | `npm ci` native modules / tooling |
+| Node.js **22** (Bookworm) | Frontend / vitest tooling |
+| `git`, `python3`, `make`, `g++` | `npm ci` native modules |
 | `ca-certificates` | HTTPS for npm |
-| Working dir `/optn` | Compose bind-mounts the monorepo here |
+| Working dir `/optn` | Compose bind-mounts the monorepo |
 
-**Not** included in v1 (deliberately): full Tauri/WebKit GUI, Android SDK,
-hardware-wallet USB, production Tor sidecar. Those stay on host or later
-compose profiles.
+**Not** in the image (by design): Tauri/WebKit GUI, Android SDK, USB HW.
+Tor is a **compose profile** sidecar, not baked into the Node image.
 
 ## Ports
 
 | Host | Container | Use |
 |------|-----------|-----|
-| `5173` | `5173` | Vite dev server if you run `npm run dev` |
+| `5173` (or `OPTN_VITE_PORT`) | `5173` | Vite dev |
+| `127.0.0.1:9050` (fusion-lab) | `9050` | Tor SOCKS |
 
 ## Safety rules
 
 1. **Chipnet / mocks only** for fusion and wallet tests inside the lab.
-2. Do **not** put mainnet seeds or production keystores in the container volume.
-3. Image tags and base digests should stay **pinned** when we publish to a
-   registry (see `Dockerfile` comments).
-4. This package is **additive** — shipping installers remain the user path.
+2. Do **not** put mainnet seeds or production keystores in the volume.
+3. Pin base image digests when publishing long-lived GHCR tags (`Dockerfile`).
+4. Shipping installers remain the **user** path; this package is additive.
+
+## Pull a released lab image (after GHCR publish)
+
+```bash
+docker pull ghcr.io/optnlabs/optn-docker-dev:latest
+docker run --rm -it -v "$PWD":/optn -w /optn ghcr.io/optnlabs/optn-docker-dev:latest bash
+```
+
+Until the first tag push, use **local compose build**.
+
+## CI
+
+Workflow: `.github/workflows/docker-dev.yml`
+
+| Event | Action |
+|-------|--------|
+| PR / push touching this package | Build image + smoke `node -v` |
+| Tag `v*.*.*` | Build + **push** to GHCR |
+| `workflow_dispatch` with push=true | Manual GHCR push |
 
 ## Layout
 
 ```
 packages/docker-dev/
-  Dockerfile           # pinned base image
-  docker-compose.yml   # dev service + volume mount
-  .dockerignore        # keep build context small when used
-  package.json         # npm run up / shell / test:core
-  README.md            # this file
+  Dockerfile
+  docker-compose.yml    # dev + optional fusion-lab Tor
+  package.json
+  SCOPE.md
+  README.md
+  .dockerignore
 ```
-
-## Pull a released lab image (when Phase B is live)
-
-After a `v*.*.*` tag publish (or `workflow_dispatch` with push):
-
-```bash
-# Example — owner/name may vary by fork
-docker pull ghcr.io/optnlabs/optn-docker-dev:latest
-docker run --rm -it -v "$PWD":/optn -w /optn ghcr.io/optnlabs/optn-docker-dev:latest bash
-```
-
-Until GHCR packages exist, use **local compose build** (Quick start above).
-
-## Relation to CashFusion
-
-P2P and server fusion are product features of the wallet, not of this image.
-This package only helps contributors run **tests and tooling**. Optional
-Phase D (`fusion-lab` profile) is Chipnet/ops only — see [SCOPE.md](./SCOPE.md).
 
 ## Troubleshooting
 
 | Symptom | Fix |
 |---------|-----|
-| `npm ci` fails on optional native deps | Ensure container has `g++`/`python3` (already in image); retry |
-| Port 5173 in use | Change host mapping in `docker-compose.yml` |
-| File permission oddities on Linux | Run as your uid: `user: "${UID}:${GID}"` (add if needed) |
+| `npm ci` native build fails | Image already has `g++`/`python3`; retry with clean `node_modules` |
+| Port 5173 in use | `OPTN_VITE_PORT=5174 docker compose ... up` |
+| Root-owned files on Linux host | `exec --user "$(id -u):$(id -g)"` |
+| Tor not starting | Ensure profile: `--profile fusion-lab` or `npm run up:fusion-lab` |
 
 ## License
 
