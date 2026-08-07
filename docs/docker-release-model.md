@@ -54,8 +54,15 @@ registry blip should not fail shipping installers (and vice versa, ideally).
 
 1. Dev image is for **tests and tooling**, not “put your life savings seed here.”
 2. Pin base image digests when publishing long-lived tags.
-3. Chipnet / mocks for fusion experiments; document any always-on profile as
-   advanced ops.
+3. Chipnet / mocks for fusion experiments; `fusion-lab` Tor profile is
+   **advanced ops**, not default end-user UX.
+
+## GHCR permissions
+
+The workflow needs `packages: write` (already set) and a token that can push
+to `ghcr.io/<owner>/optn-docker-dev`. Default `GITHUB_TOKEN` on the repo is
+enough for packages under that owner; first push may require package visibility
+settings in GitHub → Packages.
 
 ## Related
 

@@ -5,9 +5,11 @@
   "description": "OPTN Wallet contributor Docker lab (tests/tooling — not production wallet)",
   "scripts": {
     "up": "docker compose -f docker-compose.yml up -d --build",
-    "down": "docker compose -f docker-compose.yml down",
+    "up:fusion-lab": "docker compose -f docker-compose.yml --profile fusion-lab up -d --build",
+    "down": "docker compose -f docker-compose.yml --profile fusion-lab down",
     "shell": "docker compose -f docker-compose.yml exec dev bash",
-    "test:core": "docker compose -f docker-compose.yml run --rm --workdir /optn dev bash -lc \"npm ci && npm run test:core\"",
-    "logs": "docker compose -f docker-compose.yml logs -f dev"
+    "test:core": "docker compose -f docker-compose.yml run --rm --no-deps --workdir /optn dev bash -lc \"npm ci && npm run test:core\"",
+    "logs": "docker compose -f docker-compose.yml logs -f dev",
+    "logs:tor": "docker compose -f docker-compose.yml --profile fusion-lab logs -f tor"
   }
 }
