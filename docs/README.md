@@ -6,6 +6,9 @@ Technical documentation for contributors and third-party integrators.
 
 - [Build and Release Scripts](./build-and-release.md)
   - Commands for Android APK/AAB builds and iOS Capacitor preparation.
+- [Docker contributor lab](./docker-dev.md)
+  - Optional Docker env for contributors (`packages/docker-dev/`) — not the
+    end-user install path.
 - [Wallet Architecture](./wallet-architecture.md)
   - Runtime shape, major modules, and where responsibilities live.
 - [Integration Guide](./integration-guide.md)
