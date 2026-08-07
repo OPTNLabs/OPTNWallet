@@ -1,5 +1,12 @@
 # Dependency policy
 
+## Automated checks
+
+`npm run deps:check` validates package-manager and lockfile consistency.
+`npm run licenses:check` blocks disallowed or undocumented direct dependencies
+and reports transitive findings for review. The security workflow also runs
+dependency auditing and publishes a CycloneDX SBOM for each run.
+
 This repository uses npm as its canonical package manager. `package-lock.json`
 is the lockfile used by CI and release builds; contributors must use `npm ci`
 for clean installs and commit lockfile changes together with `package.json`
