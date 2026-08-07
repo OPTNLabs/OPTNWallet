@@ -109,13 +109,44 @@ export function parseWalletFile(text: string): WalletFileV1 {
   };
 }
 
+/** Max length of the filename stem (before `.optn`). */
+const NAME_STEM_MAX = 40;
+
 /** Sanitize a wallet name into a filename-safe fragment. */
 function safeName(name: string): string {
-  return (name || 'wallet').replace(/[^a-zA-Z0-9-_]+/g, '_').slice(0, 40);
+  return (name || 'wallet').replace(/[^a-zA-Z0-9-_]+/g, '_').slice(0, NAME_STEM_MAX);
 }
 
 export function defaultWalletFileName(name: string): string {
   return `${safeName(name)}.${WALLET_FILE_EXT}`;
+}
+
+/**
+ * Collision-safe filename that never truncates `suffix`.
+ *
+ * `defaultWalletFileName("long…_id7")` can chop off `_id7` because the whole
+ * stem is sliced to 40 chars. Here the base name is shortened first so the
+ * suffix (e.g. `_id7` or a timestamp) always survives.
+ */
+export function collisionWalletFileName(name: string, suffix: string): string {
+  const safeSuffix = (suffix || '').replace(/[^a-zA-Z0-9-_]+/g, '_');
+  if (!safeSuffix) {
+    return defaultWalletFileName(name);
+  }
+  const baseRaw = (name || 'wallet').replace(/[^a-zA-Z0-9-_]+/g, '_');
+  const maxBase = Math.max(1, NAME_STEM_MAX - safeSuffix.length);
+  return `${baseRaw.slice(0, maxBase)}${safeSuffix}.${WALLET_FILE_EXT}`;
+}
+
+/** True if `rel` is free or already owned by `sourceId` (when `sourceId > 0`). */
+async function pathUsableBy(rel: string, sourceId: number, hasOwnerId: boolean): Promise<boolean> {
+  if (!(await exists(rel, { baseDir: BaseDirectory.AppData }))) {
+    return true;
+  }
+  if (!hasOwnerId) {
+    return false;
+  }
+  return (await ownerOf(rel)) === sourceId;
 }
 
 /**
@@ -152,16 +183,38 @@ export async function autoSaveWalletFile(
     // looked like mysterious clones of "wallet5" after re-imports).
     // sourceId <= 0 means unknown ownership (parse default) — never treat 0 as
     // a real wallet id for overwrite/delete decisions.
+    //
+    // Collision suffixes are applied via collisionWalletFileName so a 40-char
+    // name cannot truncate `_id<N>` / timestamp back to the original stem.
     const hasOwnerId =
       Number.isSafeInteger(w.sourceId) && (w.sourceId as number) > 0;
     let rel = `${WALLETS_DIR}/${defaultWalletFileName(w.name)}`;
-    if (await exists(rel, { baseDir: BaseDirectory.AppData })) {
-      const owner = await ownerOf(rel);
-      if (!hasOwnerId || owner !== w.sourceId) {
-        rel = `${WALLETS_DIR}/${defaultWalletFileName(
-          hasOwnerId ? `${w.name}_id${w.sourceId}` : `${w.name}_${Date.now()}`
-        )}`;
+    if (!(await pathUsableBy(rel, w.sourceId, hasOwnerId))) {
+      const candidates: string[] = [];
+      if (hasOwnerId) {
+        candidates.push(collisionWalletFileName(w.name, `_id${w.sourceId}`));
       }
+      candidates.push(collisionWalletFileName(w.name, `_${Date.now()}`));
+      if (hasOwnerId) {
+        candidates.push(
+          collisionWalletFileName(w.name, `_id${w.sourceId}_${Date.now()}`)
+        );
+      }
+      let chosen: string | null = null;
+      for (const fileName of candidates) {
+        const candidate = `${WALLETS_DIR}/${fileName}`;
+        if (await pathUsableBy(candidate, w.sourceId, hasOwnerId)) {
+          chosen = candidate;
+          break;
+        }
+      }
+      // Last resort: still suffix-preserving, unique enough for one process.
+      rel =
+        chosen ??
+        `${WALLETS_DIR}/${collisionWalletFileName(
+          w.name,
+          `_${Date.now()}_${Math.floor(Math.random() * 1e6)}`
+        )}`;
     }
 
     await writeTextFile(rel, serializeWalletFile(w), { baseDir: BaseDirectory.AppData });
