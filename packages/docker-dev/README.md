@@ -43,7 +43,7 @@ npm --prefix packages/docker-dev run up:release
 | Property | How |
 |----------|-----|
 | Reproducible base | `node:22-bookworm-slim@sha256:d649c27…` |
-| Non-root | user `optn` uid/gid **1000** |
+| Non-root | official image user `node` uid/gid **1000** |
 | Init | `tini` entrypoint |
 | Multi-arch | `linux/amd64` + `linux/arm64` on tag push |
 | Supply chain | SBOM + provenance on push; optional attestation |

@@ -21,6 +21,7 @@ ENV DEBIAN_FRONTEND=noninteractive \
     NPM_CONFIG_UPDATE_NOTIFIER=false
 
 # Build tooling for native npm modules; ca-certificates for HTTPS.
+# Official node image already has user `node` (uid/gid 1000). Do not re-create 1000.
 RUN apt-get update \
   && apt-get install -y --no-install-recommends \
     ca-certificates \
@@ -31,16 +32,13 @@ RUN apt-get update \
     curl \
     tini \
   && rm -rf /var/lib/apt/lists/* \
-  && groupadd --gid 1000 optn \
-  && useradd --uid 1000 --gid optn --shell /bin/bash --create-home optn \
   && mkdir -p /optn \
-  && chown -R optn:optn /optn /home/optn
+  && chown -R node:node /optn
 
 WORKDIR /optn
 
 # Drop root for default interactive / CI smoke runs.
-# Compose bind-mounts may still need: docker compose exec --user 1000:1000
-USER optn
+USER node
 
 # tini as PID 1 for clean signals when used as long-running lab
 ENTRYPOINT ["/usr/bin/tini", "--"]
