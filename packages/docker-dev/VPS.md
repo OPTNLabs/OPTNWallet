@@ -7,6 +7,7 @@ For operators who want **24/7 CashFusion-style presence without the desktop app*
 | Rule | Value |
 |------|--------|
 | **Tor** | **Mandatory** — fail closed if SOCKS is down |
+| **Default fusion mode** | **`p2p`** (same as desktop). Set `OPTN_FUSION_MODE=server` for classic server path |
 | Default network | **chipnet** |
 | Mainnet | Only if you set `OPTN_NETWORK=mainnet` (hot wallet on VPS = high risk) |
 | Secrets | Volume only (`optn-fusion-data`), never in the image |
@@ -48,6 +49,7 @@ Desktop Auto fusion remains the working path for real rounds.
 
 | Variable | Default | Meaning |
 |----------|---------|---------|
+| `OPTN_FUSION_MODE` | **`p2p`** | `p2p` \| `server` (desktop default is p2p) |
 | `OPTN_TOR_REQUIRED` | `1` | Must stay `1` for fusion-lab |
 | `OPTN_TOR_SOCKS` | `tor:9050` | Tor SOCKS host:port |
 | `OPTN_NETWORK` | `chipnet` | `chipnet` \| `mainnet` |

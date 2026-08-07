@@ -65,6 +65,8 @@ services:
       # P2P CashFusion: Tor mandatory (desktop fail-closed policy)
       OPTN_TOR_REQUIRED: "1"
       OPTN_TOR_SOCKS: "tor:9050"
+      # Match desktop: P2P is the default; set OPTN_FUSION_MODE=server for classic server path
+      OPTN_FUSION_MODE: "${OPTN_FUSION_MODE:-p2p}"
       OPTN_NETWORK: "${OPTN_NETWORK:-chipnet}"
       OPTN_DATA_DIR: "/optn-data"
       OPTN_TOR_PROBE_MS: "${OPTN_TOR_PROBE_MS:-5000}"

@@ -17,6 +17,8 @@ import process from 'node:process';
 
 const TOR_REQUIRED = (process.env.OPTN_TOR_REQUIRED ?? '1') !== '0';
 const SOCKS = process.env.OPTN_TOR_SOCKS ?? 'tor:9050';
+/** Desktop default: P2P. Set OPTN_FUSION_MODE=server for classic fusion server client. */
+const FUSION_MODE = (process.env.OPTN_FUSION_MODE ?? 'p2p').toLowerCase();
 const NETWORK = (process.env.OPTN_NETWORK ?? 'chipnet').toLowerCase();
 const DATA_DIR = process.env.OPTN_DATA_DIR ?? '/optn-data';
 const PROBE_MS = Number(process.env.OPTN_TOR_PROBE_MS ?? 5000);
@@ -29,6 +31,7 @@ function log(level, msg, extra) {
     component: 'fusion-lab',
     msg,
     network: NETWORK,
+    fusionMode: FUSION_MODE,
     torSocks: SOCKS,
     dataDir: DATA_DIR,
     ...extra,
@@ -64,8 +67,10 @@ function probeTcp(host, port, timeoutMs) {
 }
 
 async function requireTor() {
+  // P2P: always fail-closed without Tor. Server path also uses Tor in production
+  // ops; fusion-lab never allows OPTN_TOR_REQUIRED=0.
   if (!TOR_REQUIRED) {
-    log('error', 'OPTN_TOR_REQUIRED=0 is not allowed for fusion-lab (P2P fail-closed)');
+    log('error', 'OPTN_TOR_REQUIRED=0 is not allowed for fusion-lab (Tor mandatory)');
     process.exit(2);
   }
   const { host, port } = parseSocks(SOCKS);
@@ -74,10 +79,19 @@ async function requireTor() {
     log('error', 'Tor SOCKS unreachable — fail closed (no clearnet fusion)', {
       host,
       port,
+      fusionMode: FUSION_MODE,
     });
     process.exit(3);
   }
   log('info', 'Tor SOCKS ready', { host, port });
+}
+
+function validateMode() {
+  if (FUSION_MODE !== 'p2p' && FUSION_MODE !== 'server') {
+    log('error', `Invalid OPTN_FUSION_MODE=${FUSION_MODE} (use p2p|server; default p2p)`);
+    process.exit(2);
+  }
+  log('info', `fusionMode=${FUSION_MODE}${FUSION_MODE === 'p2p' ? ' (default)' : ''}`);
 }
 
 function validateNetwork() {
@@ -103,7 +117,8 @@ function startHeadlessPlaceholder() {
 }
 
 async function main() {
-  log('info', 'fusion-lab supervisor starting (Tor mandatory for CashFusion)');
+  log('info', 'fusion-lab supervisor starting (Tor mandatory; default mode=p2p)');
+  validateMode();
   validateNetwork();
   await requireTor();
   startHeadlessPlaceholder();
