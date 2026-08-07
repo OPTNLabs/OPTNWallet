@@ -76,13 +76,13 @@ Plain `npm run up` is **dev/tests only** — no fusion, Tor not required.
 
 ```
 packages/docker-dev/
-  Dockerfile                 # digest-pinned, non-root
-  docker-compose.yml         # local build + optional Tor
-  docker-compose.release.yml # pull GHCR image
-  PRODUCTION.md
-  SCOPE.md
-  package.json
-  README.md
+  Dockerfile                      # digest-pinned, non-root
+  docker-compose.yml              # local build + fusion-lab profile
+  docker-compose.release.yml      # GHCR image + fusion-lab profile
+  scripts/fusion-lab-entrypoint.sh
+  scripts/fusion-lab-supervisor.mjs
+  VPS.md PRODUCTION.md SCOPE.md
+  package.json README.md
 ```
 
 ## Troubleshooting
@@ -92,7 +92,9 @@ packages/docker-dev/
 | Permission denied on bind mount | `exec --user 1000:1000` or match host uid |
 | Port 5173 busy | `OPTN_VITE_PORT=5174` |
 | GHCR pull denied | Package visibility / `docker login ghcr.io` |
+| fusion-lab exits immediately | Tor not ready / SOCKS wrong — check `logs:tor` |
 | Want consumer wallet | Use AppImage/DMG/MSI/APK — not this image |
+| Want live Auto CoinJoin on VPS | Needs headless wallet binary via `OPTN_HEADLESS_CMD` (see VPS.md) |
 
 ## License
 
