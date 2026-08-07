@@ -116,19 +116,14 @@ const DesktopLandingPage = () => {
     })();
   }, []);
 
-  const handleOpenClick = useCallback(
-    async (id: number) => {
-      const row = wallets?.find((candidate) => candidate.id === id);
-      // Watch-only and hardware are always password-gated (saved under a
-      // password at create). One list action: Open → enter password.
-      // Seed wallets also use the same password dialog.
-      setOpeningId(id);
-      setPassword('');
-      setError('');
-    },
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [wallets]
-  );
+  const handleOpenClick = useCallback(async (id: number) => {
+    // Watch-only and hardware are always password-gated (saved under a
+    // password at create). One list action: Open → enter password.
+    // Seed wallets also use the same password dialog.
+    setOpeningId(id);
+    setPassword('');
+    setError('');
+  }, []);
 
   // Availability resolves asynchronously after mount. Recheck the selected
   // wallet when either value changes so a prompt opened one tick earlier does

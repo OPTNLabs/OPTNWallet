@@ -1,6 +1,6 @@
 // Desktop uses native USB (hidapi). Browser uses WebHID / iframe Connect.
 
-import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest';
+import { describe, expect, it, vi, afterEach } from 'vitest';
 import {
   describeTransportSupport,
   detectTransportSupport,

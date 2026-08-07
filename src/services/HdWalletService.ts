@@ -75,6 +75,7 @@ export type BchStandardBranchName = keyof typeof BCH_STANDARD_BRANCH_INDEX;
  * restoring wallets that were created with pure BIP44-testnet derivation.
  */
 export function getBchCoinType(_network?: Network): number {
+  void _network; // accepted for API symmetry; BCH always uses coin type 145
   return COIN_TYPE.bitcoincash; // 145
 }
 

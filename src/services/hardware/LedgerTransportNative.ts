@@ -32,6 +32,7 @@ export default class LedgerTransportNative extends Transport {
   }
 
   static async open(_descriptor?: unknown): Promise<LedgerTransportNative> {
+    void _descriptor; // WebUSB-shaped API; native open needs no device descriptor
     const t = new LedgerTransportNative();
     t.sessionId = await hwLedgerOpen();
     return t;
