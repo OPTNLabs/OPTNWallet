@@ -1,15 +1,22 @@
-# P2P CashFusion — Privacy Layers (PR #12 committed design)
+# P2P CashFusion — Privacy Layers (PR #12 — **shipped**)
 
 This is the **canonical naming and role map** for every privacy piece in the
-P2P CashFusion path. Read this before the protocol or threat-model docs if you
-are confused about “onion vs Tor vs blind Schnorr.”
+P2P CashFusion path. The design below is **implemented**, not a future plan.
+Read this before the protocol or threat-model docs if you are confused about
+“onion vs Tor vs blind Schnorr.”
+
+**Status:** Finished for desktop P2P fusion (gather → credentials → output onion
+→ assemble → sign → broadcast; Auto + fuse depth; Tor fail-closed). See
+[cashfusion-implementation-scope.md](./cashfusion-implementation-scope.md) for
+the server path map (also shipped).
 
 **Authoritative companions**
 
 | Doc | Role |
 |-----|------|
-| [p2p-cashfusion-protocol.md](./p2p-cashfusion-protocol.md) | Wire format, phases, messages, code map |
+| [p2p-cashfusion-protocol.md](./p2p-cashfusion-protocol.md) | Wire format, phases, messages, code map (as implemented) |
 | [THREAT_MODEL.md](./THREAT_MODEL.md) | Adversary classes and mitigations |
+| [cashfusion-implementation-scope.md](./cashfusion-implementation-scope.md) | Overall ship status — both P2P and server paths |
 | Source under `src/platform/desktop/nostr/` | Normative behaviour |
 
 **Committed production defaults (P2P path)**
@@ -198,7 +205,7 @@ That is **implementation/protocol risk**, not operational infrastructure.
 | Long-lived fusion daemon | Required | **Not** required |
 
 P2P is a **different transport**, not a weaker crypto story. Layers 3–5 + Tor
-are the committed parity story for PR #12’s P2P design.
+are the **shipped** parity story for PR #12’s P2P design (not aspirational).
 
 ---
 

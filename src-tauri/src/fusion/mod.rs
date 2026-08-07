@@ -1,17 +1,13 @@
-// CashFusion client — Phase 1: connect + handshake + read server parameters.
+// CashFusion classic (server) client — full path shipped for PR #12.
 //
 // Why this lives in Rust rather than the frontend: CashFusion's wire protocol
 // is raw TCP with TLS and protobuf framing. A WebView can only open
-// HTTP/WebSocket connections, so it cannot speak this protocol at all. The
-// previous "CashFusion" UI could only probe whether *something* was listening
-// on the port (a wss:// handshake), never talk to it.
+// HTTP/WebSocket connections, so it cannot speak this protocol at all.
 //
-// Scope of Phase 1 (deliberately narrow — see docs/cashfusion-implementation-scope.md):
-//   connect -> TLS -> ClientHello -> ServerHello -> disconnect.
-// That reads the server's real fusion parameters (tiers, fee rates, component
-// limits). It does NOT join a pool or participate in a fusion round; the
-// round logic involves blind signatures and covert connections and is
-// intentionally left to later phases rather than rushed.
+// Scope (see docs/cashfusion-implementation-scope.md): handshake + pool/round
+// participation — Pedersen, blind Schnorr, covert circuits, Tor, blame, plan
+// validation (`pedersen`, `schnorr`, `covert`, `run`, `session`, `tor`, …).
+// P2P CashFusion (Nostr) is a separate TS path under platform/desktop/nostr/.
 //
 // Every wire-level constant here is taken from the reference implementation
 // (Electron Cash, electroncash_plugins/fusion/), not inferred:
