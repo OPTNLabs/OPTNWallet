@@ -138,7 +138,7 @@ jobs:
           docker run --rm --user 1000:1000 --entrypoint /usr/bin/tini "$TAG" -- -h | head -n1 || true
           id_out="$(docker run --rm --user 1000:1000 "$TAG" id)"
           echo "$id_out"
-          echo "$id_out" | grep -E 'uid=1000|optn' 
+          echo "$id_out" | grep -E 'uid=1000' 
 
       - name: Attest build provenance (push only)
         if: steps.meta.outputs.push == 'true' && steps.build.outputs.digest != ''
