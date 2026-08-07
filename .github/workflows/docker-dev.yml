@@ -3,8 +3,8 @@
 # Direction of truth: images are built FROM git/tags (we update Docker).
 # Native installers remain the product ship path (release.yml).
 #
-# - pull_request / push: smoke-build when packages/docker-dev changes
-# - tag v*.*.* + workflow_dispatch: push to GHCR (packages: write)
+# - pull_request / push (paths): smoke-build + node -v sanity
+# - tag v*.*.* + workflow_dispatch push=true: push to GHCR
 
 name: Docker dev image
 
@@ -65,19 +65,18 @@ jobs:
           fi
           echo "push=${PUSH}" >> "$GITHUB_OUTPUT"
 
-          # Image ref: ghcr.io/<owner>/optn-docker-dev
           OWNER_LC="$(echo '${{ github.repository_owner }}' | tr '[:upper:]' '[:lower:]')"
           echo "owner_lc=${OWNER_LC}" >> "$GITHUB_OUTPUT"
 
           if [[ "${{ github.ref_type }}" == "tag" ]]; then
             RAW="${{ github.ref_name }}"
-            # strip leading v for a second tag if present
             STRIPPED="${RAW#v}"
             echo "version_tag=${RAW}" >> "$GITHUB_OUTPUT"
             echo "version_stripped=${STRIPPED}" >> "$GITHUB_OUTPUT"
           else
-            echo "version_tag=sha-${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
-            echo "version_stripped=sha-${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
+            SHORT="sha-${GITHUB_SHA::7}"
+            echo "version_tag=${SHORT}" >> "$GITHUB_OUTPUT"
+            echo "version_stripped=${SHORT}" >> "$GITHUB_OUTPUT"
           fi
 
       - name: Log in to GHCR
@@ -99,12 +98,23 @@ jobs:
             type=raw,value=latest,enable=${{ github.ref_type == 'tag' }}
 
       - name: Build (and push on tag / dispatch)
+        id: build
         uses: docker/build-push-action@v6
         with:
           context: packages/docker-dev
           file: packages/docker-dev/Dockerfile
           push: ${{ steps.meta.outputs.push == 'true' }}
+          load: ${{ steps.meta.outputs.push != 'true' }}
           tags: ${{ steps.docker_meta.outputs.tags }}
           labels: ${{ steps.docker_meta.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+      - name: Smoke — node version inside image
+        if: steps.meta.outputs.push != 'true'
+        run: |
+          set -euo pipefail
+          # First tag from metadata (newline-separated)
+          TAG="$(echo '${{ steps.docker_meta.outputs.tags }}' | head -n1)"
+          docker run --rm "$TAG" node -v
+          docker run --rm "$TAG" npm -v
