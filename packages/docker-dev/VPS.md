@@ -2,25 +2,23 @@
 
 For operators who want **24/7 CashFusion-style presence without the desktop app**.
 
-## Rules (same as desktop P2P)
+## Rules (same as desktop)
 
 | Rule | Value |
 |------|--------|
+| **Default fusion mode** | **`p2p`** — set `OPTN_FUSION_MODE=server` for classic server client |
 | **Tor** | **Mandatory** — fail closed if SOCKS is down |
-| **Default fusion mode** | **`p2p`** (same as desktop). Set `OPTN_FUSION_MODE=server` for classic server path |
 | Default network | **chipnet** |
-| Mainnet | Only if you set `OPTN_NETWORK=mainnet` (hot wallet on VPS = high risk) |
-| Secrets | Volume only (`optn-fusion-data`), never in the image |
-| GUI | Not required for this profile |
+| Mainnet | `OPTN_NETWORK=mainnet` only if you accept VPS hot-wallet risk |
+| Secrets | Volume `optn-fusion-data` only |
+| GUI | Not required |
 
 ## Start
 
 ```bash
-# repo root (or after mounting the monorepo)
-export OPTN_NETWORK=chipnet   # or mainnet if you accept the risk
+export OPTN_NETWORK=chipnet
+export OPTN_FUSION_MODE=p2p   # default; omit for same effect
 docker compose -f packages/docker-dev/docker-compose.yml --profile fusion-lab up -d --build
-
-# logs (JSON lines from supervisor)
 docker compose -f packages/docker-dev/docker-compose.yml --profile fusion-lab logs -f fusion-lab
 ```
 
@@ -28,37 +26,62 @@ Or: `npm --prefix packages/docker-dev run up:fusion-lab`
 
 ## What runs today
 
-1. **`tor`** — SOCKS on `tor:9050` (host: `127.0.0.1:9050` by default)  
-2. **`fusion-lab`** — entrypoint → `fusion-lab-supervisor.mjs`  
-   - Probes Tor; **exits non-zero** if Tor is missing (compose restart can recover)  
-   - Re-checks Tor every 30s  
-   - Holds the env for a future **headless Auto** loop  
+| Service | Role |
+|---------|------|
+| `tor` | SOCKS (compose: `tor:9050`, host: `127.0.0.1:9050`) |
+| `fusion-lab` | Supervisor: Tor probe, mode/network validation, health file, restart |
 
-## What is not wired yet
+Health file (in volume): `/optn-data/fusion-lab.health.json`
 
-| Piece | Status |
-|--------|--------|
-| Wallet unlock without UI | TBD |
-| `FusionRunnerService` Auto loop in process | TBD |
-| Server-mode fusion from this container | TBD |
+## Choosing P2P vs server
 
-Until then, this profile is the **correct ops contract** (Tor-bound, chipnet default, volume data).  
-Desktop Auto fusion remains the working path for real rounds.
+```bash
+# Default — P2P (recommended)
+OPTN_FUSION_MODE=p2p
+
+# Classic fusion server path (when headless runner supports it)
+OPTN_FUSION_MODE=server
+```
+
+## Full Auto rounds (next app milestone)
+
+Live CoinJoin Auto needs the **desktop wallet stack** (signing, Electrum, and for
+P2P the **Tauri Tor↔WebSocket bridge**). That is **not** inside the slim Node lab image.
+
+| Step | Status |
+|------|--------|
+| Tor-bound VPS process | ✅ supervisor |
+| Mode / network env | ✅ |
+| Headless unlock + `FusionRunnerService` loop | ⬜ ship as `OPTN_HEADLESS_CMD` or future CLI |
+
+When you have a headless binary/script:
+
+```bash
+export OPTN_HEADLESS_CMD='/path/to/headless-fusion-runner'
+docker compose -f packages/docker-dev/docker-compose.yml --profile fusion-lab up -d
+```
+
+The supervisor only starts that command **after** Tor is up, and injects
+`OPTN_FUSION_MODE`, `OPTN_NETWORK`, `OPTN_TOR_SOCKS`, `OPTN_DATA_DIR`.
+
+Until then, desktop Auto fusion remains the working way to fuse; this profile is
+the correct **ops envelope** for VPS (Tor, chipnet default, p2p default).
 
 ## Env reference
 
 | Variable | Default | Meaning |
 |----------|---------|---------|
-| `OPTN_FUSION_MODE` | **`p2p`** | `p2p` \| `server` (desktop default is p2p) |
-| `OPTN_TOR_REQUIRED` | `1` | Must stay `1` for fusion-lab |
-| `OPTN_TOR_SOCKS` | `tor:9050` | Tor SOCKS host:port |
+| `OPTN_FUSION_MODE` | **`p2p`** | `p2p` \| `server` |
+| `OPTN_TOR_REQUIRED` | `1` | Must stay `1` |
+| `OPTN_TOR_SOCKS` | `tor:9050` | SOCKS |
 | `OPTN_NETWORK` | `chipnet` | `chipnet` \| `mainnet` |
-| `OPTN_DATA_DIR` | `/optn-data` | Persistent volume path |
-| `OPTN_TOR_PROBE_MS` | `5000` | TCP probe timeout |
-| `OPTN_TOR_RECHECK_MS` | `30000` | Health recheck interval |
+| `OPTN_DATA_DIR` | `/optn-data` | Volume |
+| `OPTN_HEADLESS_CMD` | _(empty)_ | Optional full runner after Tor ready |
+| `OPTN_TOR_PROBE_MS` | `5000` | Probe timeout |
+| `OPTN_TOR_RECHECK_MS` | `30000` | Health recheck |
 
 ## Not for
 
-- Replacing AppImage/DMG/MSI for normal users  
+- Replacing installers for normal users  
 - Hardware wallets  
-- Clearnet fusion (will not run without Tor)
+- Clearnet fusion  
