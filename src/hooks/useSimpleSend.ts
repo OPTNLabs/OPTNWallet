@@ -684,6 +684,7 @@ export default function useSimpleSend() {
     loadSpendableBchUtxos,
     tokenChangeAddress,
     applyCoinControl,
+    isHardwareWallet,
   ]);
 
   // "Max": fills the BCH amount field with the full spendable balance minus

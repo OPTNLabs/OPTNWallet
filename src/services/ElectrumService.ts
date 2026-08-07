@@ -141,10 +141,12 @@ async function requestManyInChunks(
   let completed = 0;
 
   const runWorker = async () => {
-    while (true) {
-      const chunkIndex = nextChunk;
-      nextChunk += 1;
-      if (chunkIndex >= chunks.length) return;
+    // Claim the next chunk index (single-threaded JS; safe across concurrent awaits).
+    for (
+      let chunkIndex = nextChunk++;
+      chunkIndex < chunks.length;
+      chunkIndex = nextChunk++
+    ) {
       const chunk = chunks[chunkIndex];
       const base = chunkIndex * ELECTRUM_BATCH_SIZE;
       const results = await server.requestMany(chunk);
