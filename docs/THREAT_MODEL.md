@@ -1,13 +1,16 @@
 # P2P CashFusion Threat Model
 
-This document covers the threat model for OPTN Wallet's P2P CashFusion
-implementation, including protocol-level threats, Tor transport, and key
-management. It is written for auditors, contributors, and future maintainers.
+This document covers the threat model for OPTN Wallet's **shipped** P2P
+CashFusion implementation (PR #12), including protocol-level threats, Tor
+transport, and key management. It is written for auditors, contributors, and
+future maintainers.
 
 **Privacy component map (names and roles):** see
 [p2p-cashfusion-privacy-layers.md](./p2p-cashfusion-privacy-layers.md) for the
-PR #12 committed stack: **Tor**, **NIP-59 gift-wrap**, **Pedersen**,
+PR #12 **implemented** stack: **Tor**, **NIP-59 gift-wrap**, **Pedersen**,
 **blind Schnorr credentials**, and **output onion** (peer peel chain — *not* Tor).
+
+**Ship status map:** [cashfusion-implementation-scope.md](./cashfusion-implementation-scope.md).
 
 ## Adversary Classes
 
