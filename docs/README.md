@@ -9,6 +9,8 @@ Technical documentation for contributors and third-party integrators.
 - [Docker contributor lab](./docker-dev.md)
   - Optional Docker env for contributors (`packages/docker-dev/`) — not the
     end-user install path.
+- [Docker vs releases](./docker-release-model.md)
+  - Images update **from** git tags; installers stay the primary ship.
 - [Wallet Architecture](./wallet-architecture.md)
   - Runtime shape, major modules, and where responsibilities live.
 - [Integration Guide](./integration-guide.md)
