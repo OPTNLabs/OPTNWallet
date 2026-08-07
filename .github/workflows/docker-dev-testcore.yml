@@ -1,0 +1,44 @@
+# One-shot / optional: pull lab image and run npm test:core (simulates compose + test)
+name: Docker dev test:core
+
+on:
+  workflow_dispatch:
+    inputs:
+      image:
+        description: 'Full image ref to pull'
+        required: true
+        default: 'ghcr.io/cyberashven/optn-docker-dev:sha-554e257'
+
+permissions:
+  contents: read
+  packages: read
+
+jobs:
+  testcore:
+    name: test:core in lab image
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Pull image
+        run: docker pull ${{ inputs.image }}
+
+      - name: npm ci + test:core inside container
+        run: |
+          set -euo pipefail
+          docker run --rm \
+            --user 1000:1000 \
+            -v "$PWD":/optn \
+            -w /optn \
+            -e CI=true \
+            -e HOME=/tmp \
+            -e npm_config_cache=/tmp/npm-cache \
+            ${{ inputs.image }} \
+            bash -lc 'npm ci && npm run test:core'
