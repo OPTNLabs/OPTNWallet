@@ -77,30 +77,8 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      - name: Setup Node
-        uses: actions/setup-node@v7
-        with:
-          node-version: 20
-          cache: npm
-
-      - name: Install deps
-        run: |
-          for attempt in 1 2 3; do
-            if npm ci; then
-              exit 0
-            fi
-            if [ "$attempt" -lt 3 ]; then
-              echo "npm ci attempt $attempt failed; retrying"
-              sleep $((attempt * 10))
-            fi
-          done
-          exit 1
-
-      - name: Maintained verification
-        run: npm run verify
-
-      - name: Security regression tests
-        run: npm run security:test
+      - name: Canonical quality gate
+        uses: ./.github/actions/quality-gate
 
       - name: Upload web dist
         if: github.event_name == 'push' && always()

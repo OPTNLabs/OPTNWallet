@@ -1,0 +1,85 @@
+name: Security analysis
+
+on:
+  pull_request:
+  push:
+    branches: [main, staging, dev]
+  schedule:
+    - cron: '37 3 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  codeql:
+    name: CodeQL (${{ matrix.language }})
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write
+    strategy:
+      fail-fast: false
+      matrix:
+        language: [javascript-typescript, rust]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@v4
+        with:
+          languages: ${{ matrix.language }}
+          build-mode: none
+
+      - name: Analyze
+        uses: github/codeql-action/analyze@v4
+        with:
+          category: /language:${{ matrix.language }}
+
+  semgrep:
+    name: Semgrep CE
+    runs-on: ubuntu-latest
+    container:
+      image: semgrep/semgrep
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+      - name: Scan source
+        run: semgrep scan --config auto --error
+
+  supply-chain:
+    name: Supply-chain policy and SBOM
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup Node
+        uses: actions/setup-node@v7
+        with:
+          node-version: '20'
+          cache: npm
+
+      - name: Install production dependency graph
+        run: npm ci --ignore-scripts
+
+      - name: Dependency policy
+        run: npm run deps:check
+
+      - name: License policy
+        run: npm run licenses:check
+
+      - name: High-severity dependency audit
+        run: npm audit --audit-level=high
+
+      - name: Generate CycloneDX SBOM
+        uses: anchore/sbom-action@v0
+        with:
+          format: cyclonedx-json
+          output-file: optn-wallet-sbom.cdx.json
+          artifact-name: optn-wallet-sbom
+          upload-artifact: true
+          upload-artifact-retention: 30
+          upload-release-assets: false

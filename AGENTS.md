@@ -31,8 +31,9 @@ and transaction correctness above convenience.
 - Do not modify prohibited files, generated artifacts, build output, CI
   workflows, or dependency manifests unless the task explicitly names the path
   and explains why.
-- Never commit, push, tag, merge, publish, or release changes during an
-  automated task. Do not create pull requests.
+- Local commits are permitted when the user explicitly requests them for the
+  current task, after reviewing the exact staged scope. Do not push, tag,
+  merge, publish, release, or create pull requests during an automated task.
 
 The following paths are prohibited unless the task explicitly scopes them and
 a human is handling the work manually:

@@ -55,17 +55,8 @@ jobs:
             exit 1
           }
 
-      - name: Setup Node
-        uses: actions/setup-node@v7
-        with:
-          node-version: '20'
-          cache: npm
-
-      - name: Install dependencies
-        run: npm ci
-
-      - name: Quality gate
-        run: npm run deps:check && npm run verify && npm run security:test
+      - name: Canonical quality gate
+        uses: ./.github/actions/quality-gate
 
   android:
     name: Build Android release

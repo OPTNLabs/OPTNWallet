@@ -2,6 +2,7 @@
 
 import React from 'react';
 import { I18nContext } from '../i18n/I18nContext';
+import { recordDiagnostic } from '../services/diagnostics/DiagnosticsService';
 
 interface ErrorBoundaryProps {
   children: React.ReactNode;
@@ -29,8 +30,10 @@ class ErrorBoundary extends React.Component<
   }
 
   componentDidCatch(error: Error, errorInfo: React.ErrorInfo) {
-    // You can also log the error to an error reporting service
-    console.error('Error Boundary Caught an Error:', error, errorInfo);
+    recordDiagnostic('react.error_boundary', {
+      message: error.message,
+      componentStack: errorInfo.componentStack ?? '',
+    });
   }
 
   render() {
