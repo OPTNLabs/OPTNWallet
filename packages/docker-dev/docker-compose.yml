@@ -1,0 +1,96 @@
+# Local build of the lab image + repo mount.
+# For prebuilt GHCR image (after a release tag), see docker-compose.release.yml
+#
+# Dev shell only (no fusion — Tor not required):
+#   docker compose -f packages/docker-dev/docker-compose.yml up -d --build
+#
+# Fusion / VPS lab — Tor is MANDATORY (P2P CashFusion fail-closed):
+#   docker compose -f packages/docker-dev/docker-compose.yml --profile fusion-lab up -d --build
+#
+# NOT a consumer wallet. Chipnet first. See PRODUCTION.md + VPS.md
+
+name: optn-docker-dev
+
+services:
+  # Contributor shell — tests/tooling only. No CashFusion traffic.
+  dev:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: optn-docker-dev:local
+    working_dir: /optn
+    user: "1000:1000"
+    volumes:
+      - ../..:/optn
+    ports:
+      - "${OPTN_VITE_PORT:-5173}:5173"
+    environment:
+      CI: "true"
+      OPTN_DOCKER_DEV: "1"
+    stdin_open: true
+    tty: true
+    init: true
+    security_opt:
+      - no-new-privileges:true
+    # Avoid double-tini (image ENTRYPOINT + compose init) on `compose run`
+    entrypoint: ["bash", "-lc"]
+    command: ["sleep infinity"]
+
+  # --- fusion-lab: Tor is required, not optional ---
+  tor:
+    profiles: ["fusion-lab"]
+    image: dperson/torproxy:latest
+    restart: unless-stopped
+    ports:
+      - "${OPTN_TOR_HOST_PORT:-127.0.0.1:9050}:9050"
+    security_opt:
+      - no-new-privileges:true
+
+  fusion-lab:
+    profiles: ["fusion-lab"]
+    image: optn-docker-dev:local
+    build:
+      context: .
+      dockerfile: Dockerfile
+    working_dir: /optn
+    user: "1000:1000"
+    depends_on:
+      - tor
+    volumes:
+      - ../..:/optn
+      - optn-fusion-data:/optn-data
+    environment:
+      OPTN_DOCKER_DEV: "1"
+      OPTN_ROOT: "/optn"
+      # P2P CashFusion: Tor mandatory (desktop fail-closed policy)
+      OPTN_TOR_REQUIRED: "1"
+      OPTN_TOR_SOCKS: "tor:9050"
+      # Match desktop: P2P is the default; set OPTN_FUSION_MODE=server for classic server path
+      OPTN_FUSION_MODE: "${OPTN_FUSION_MODE:-p2p}"
+      OPTN_NETWORK: "${OPTN_NETWORK:-chipnet}"
+      OPTN_DATA_DIR: "/optn-data"
+      OPTN_TOR_PROBE_MS: "${OPTN_TOR_PROBE_MS:-5000}"
+      OPTN_TOR_RECHECK_MS: "${OPTN_TOR_RECHECK_MS:-30000}"
+      # Optional full wallet Auto runner (not in this image). Empty = Tor hold loop.
+      OPTN_HEADLESS_CMD: "${OPTN_HEADLESS_CMD:-}"
+      OPTN_FUSION_HEALTH_FILE: "${OPTN_FUSION_HEALTH_FILE:-/optn-data/fusion-lab.health.json}"
+    restart: unless-stopped
+    init: true
+    security_opt:
+      - no-new-privileges:true
+    entrypoint: ["bash", "/optn/packages/docker-dev/scripts/fusion-lab-entrypoint.sh"]
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "const fs=require('fs');const p=process.env.OPTN_FUSION_HEALTH_FILE||'/optn-data/fusion-lab.health.json';try{const j=JSON.parse(fs.readFileSync(p,'utf8'));process.exit(j.status==='tor_down'?1:0)}catch{process.exit(1)}",
+        ]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 45s
+
+volumes:
+  optn-fusion-data:
