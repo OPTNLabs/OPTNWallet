@@ -49,6 +49,19 @@ Set at least:
 npm run dev
 ```
 
+### Optional: Docker contributor lab
+
+For a clean Linux shell (tests / tooling — **not** the production wallet image):
+
+```bash
+docker compose -f packages/docker-dev/docker-compose.yml up -d --build
+docker compose -f packages/docker-dev/docker-compose.yml exec dev bash
+# inside: npm ci && npm run test:core
+```
+
+Details: [`packages/docker-dev/README.md`](./packages/docker-dev/README.md) and
+[`docs/docker-dev.md`](./docs/docker-dev.md).
+
 ## Quality Checks
 
 - `npm run typecheck`

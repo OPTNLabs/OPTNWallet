@@ -1,0 +1,27 @@
+# Contributor lab — run from repository root:
+#   docker compose -f packages/docker-dev/docker-compose.yml up -d --build
+#
+# NOT for production mainnet wallets.
+
+name: optn-docker-dev
+
+services:
+  dev:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: optn-docker-dev:local
+    working_dir: /optn
+    # Mount monorepo root (two levels up from packages/docker-dev)
+    volumes:
+      - ../..:/optn
+    ports:
+      - "5173:5173"
+    environment:
+      # Discourage accidental mainnet fusion fixtures in scripts that check CI
+      CI: "true"
+      OPTN_DOCKER_DEV: "1"
+    stdin_open: true
+    tty: true
+    # Keep container up for exec / iterative work
+    command: ["sleep", "infinity"]
