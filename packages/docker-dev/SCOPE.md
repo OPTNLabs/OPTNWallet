@@ -15,7 +15,10 @@ git tag / GitHub Release  →  native installers (primary ship)
 ### A — Contributor lab ✅
 ### B — CI + GHCR publish ✅ (multi-arch on tags, smoke on PRs)
 ### C — Dev polish ✅
-### D — fusion-lab Tor profile ✅ (Chipnet/ops only)
+### D — fusion-lab (Tor **mandatory** for fusion) ✅
+- Tor service always started with profile `fusion-lab`
+- `OPTN_TOR_REQUIRED=1`, `OPTN_TOR_SOCKS=tor:9050`, chipnet default
+- Data volume for ops state; headless entrypoint TBD
 ### E — Non-goals documented ✅
 ### F — Production-grade lab hardening ✅ (this session)
 - [x] Pin Node base by digest  
