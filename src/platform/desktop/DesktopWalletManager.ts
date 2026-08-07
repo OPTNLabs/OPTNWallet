@@ -1091,10 +1091,42 @@ async function readWalletRow(
 }
 
 /**
+ * Re-encrypt one `keys.private_key` cell under a new AES key.
+ *
+ * KeyManager stores `enc:v1:` + AES-GCM(base64(rawPrivKey)) via SecretCryptoService
+ * using the *current* cached password+salt. Password change must re-wrap those
+ * rows with the new key or signing permanently fails (orphaned ciphertext).
+ *
+ * Returns `null` when the cell is empty / not `enc:v1` (legacy plaintext is left
+ * alone — it does not depend on the password). Throws if `enc:v1` decrypt fails.
+ */
+export async function reencryptKeyPrivateKeyCell(
+  raw: unknown,
+  oldKey: CryptoKey,
+  newKey: CryptoKey
+): Promise<string | null> {
+  let text: string | null = null;
+  if (typeof raw === 'string') {
+    text = raw;
+  } else if (raw instanceof ArrayBuffer) {
+    text = new TextDecoder().decode(new Uint8Array(raw));
+  } else if (ArrayBuffer.isView(raw)) {
+    text = new TextDecoder().decode(
+      new Uint8Array(raw.buffer, raw.byteOffset, raw.byteLength)
+    );
+  }
+  if (!text || !text.startsWith(SECRET_ENC_PREFIX)) return null;
+  // Same plaintext shape SecretCryptoService.encryptBytes wrote (base64 of raw key).
+  const plain = await aesDecrypt(oldKey, text.slice(SECRET_ENC_PREFIX.length));
+  return `${SECRET_ENC_PREFIX}${await aesEncrypt(newKey, plain)}`;
+}
+
+/**
  * Change ONE wallet's password: verify the old password decrypts this wallet,
- * re-encrypt its mnemonic/passphrase under a new key (fresh salt), update the
- * DB row + kdf_salt, swap the cached key, and refresh its wallet file. Returns
- * false if the old password is wrong or the wallet has no per-wallet salt.
+ * re-encrypt its mnemonic/passphrase **and** all `keys.private_key` rows under a
+ * new key (fresh salt), update the DB + kdf_salt, swap the cached key, and
+ * refresh its wallet file. Returns false if the old password is wrong, the
+ * wallet has no per-wallet salt, or any encrypted spend key cannot be re-wrapped.
  */
 export async function changeWalletPassword(
   walletId: number,
@@ -1107,10 +1139,11 @@ export async function changeWalletPassword(
   if (!row || !row.mnemonic.startsWith(SECRET_ENC_PREFIX)) return false;
 
   // Verify old password by decrypting this wallet's own data.
+  let oldKey: CryptoKey;
   let mnemonic: string;
   let passphrase = '';
   try {
-    const oldKey = await deriveKey(oldPassword, salt);
+    oldKey = await deriveKey(oldPassword, salt);
     mnemonic = await aesDecrypt(
       oldKey,
       row.mnemonic.slice(SECRET_ENC_PREFIX.length)
@@ -1136,11 +1169,49 @@ export async function changeWalletPassword(
   const dbService = DatabaseService();
   const db = dbService.getDatabase();
   if (!db) return false;
+
+  // Collect key re-wraps BEFORE writing wallets row so a failure does not leave
+  // the seed under the new password while spend keys stay under the old one.
+  const keyUpdates: Array<{ id: number; privateKey: string }> = [];
+  try {
+    const keyQ = db.prepare(
+      'SELECT id, private_key FROM keys WHERE wallet_id = ?'
+    );
+    keyQ.bind([walletId]);
+    while (keyQ.step()) {
+      const krow = keyQ.getAsObject() as Record<string, unknown>;
+      const id = Number(krow.id);
+      if (!Number.isFinite(id)) continue;
+      const next = await reencryptKeyPrivateKeyCell(
+        krow.private_key,
+        oldKey,
+        newKey
+      );
+      if (next !== null) keyUpdates.push({ id, privateKey: next });
+    }
+    keyQ.free();
+  } catch (err) {
+    console.error(
+      '[DesktopWalletManager] changeWalletPassword: keys.private_key re-encrypt failed',
+      err
+    );
+    return false;
+  }
+
   const upd = db.prepare(
     'UPDATE wallets SET mnemonic = ?, passphrase = ?, kdf_salt = ? WHERE id = ?'
   );
   upd.run([encMnemonic, encPassphrase, bytesToBase64(newSalt), walletId]);
   upd.free();
+
+  if (keyUpdates.length > 0) {
+    const keyUpd = db.prepare('UPDATE keys SET private_key = ? WHERE id = ?');
+    for (const item of keyUpdates) {
+      keyUpd.run([item.privateKey, item.id]);
+    }
+    keyUpd.free();
+  }
+
   await dbService.flushDatabaseToFile(walletId);
 
   setCachedPassword(newPassword, newSalt, walletId);
