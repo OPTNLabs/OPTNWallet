@@ -51,7 +51,22 @@ export function createNostrRoundTransport(
   relays: string[],
   round: RoundKeys,
   outputPool: SimplePool = pool,
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  /**
+   * Makes a short-lived pool for ONE anonymous component publish.
+   *
+   * A fresh throwaway signing key stops the coordinator tying an output to a
+   * peer's round identity, but it does nothing about the transport: when every
+   * output of a round leaves over the same `outputPool` socket, the relay can
+   * group them by connection and the fresh keys buy nothing against that
+   * observer. One pool per component means one WebSocket — and, in production
+   * where the Tor implementation is installed globally, one fresh circuit with
+   * its own SOCKS isolation token.
+   *
+   * Omitted (tests, same-origin runs) it falls back to the shared outputPool,
+   * which is the previous behaviour.
+   */
+  createComponentPool?: () => SimplePool
 ): RoundTransport {
   const protocolErrorHandlers = new Set<(from: string, error: Error) => void>();
   /** Dedup BC+Nostr dual path (same msg.nonce once). */
@@ -102,13 +117,19 @@ export function createNostrRoundTransport(
       } catch {
         /* ignore BC failures */
       }
+      // One socket per anonymous component. Built before the publish so the
+      // `finally` can always close it, even if wrapping throws.
+      const oneShotPool = isAnonymousOutput
+        ? (createComponentPool?.() ?? null)
+        : null;
       try {
         const wrapped = wrapEvent(
           signer,
           { publicKey: toPubkey },
           JSON.stringify(msg)
         );
-        const publishingPool = isAnonymousOutput ? outputPool : pool;
+        const publishingPool =
+          oneShotPool ?? (isAnonymousOutput ? outputPool : pool);
         await publishEventAtLeastOnce(
           publishingPool,
           relays,
@@ -117,6 +138,9 @@ export function createNostrRoundTransport(
         );
       } finally {
         if (isAnonymousOutput) signer.fill(0);
+        // Drop the socket (and with it the Tor circuit) so no later component
+        // can be observed reusing it.
+        oneShotPool?.close(relays);
       }
     },
 

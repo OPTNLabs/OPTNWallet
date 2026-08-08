@@ -211,13 +211,36 @@ That is **implementation/protocol risk**, not operational infrastructure.
 | Concern                               | Server path (`src-tauri/src/fusion`)     | P2P path (`nostr/*`)                  |
 | ------------------------------------- | ---------------------------------------- | ------------------------------------- |
 | Discovery                             | Fusion server TCP pool                   | Nostr replaceable announcements       |
-| Transport privacy                     | TLS + **Tor** (covert circuits)          | **NIP-59** + **Tor**                  |
+| Transport privacy                     | TLS + **Tor** (covert circuits)          | **NIP-59** + **Tor**, one-shot socket per anonymous component |
 | Amount/credential crypto              | **Pedersen** + **blind Schnorr**         | Same roles (TS issuer = elected peer) |
 | Output unlinkability vs other players | Covert submit discipline + server design | **Output onion** peel chain           |
 | Long-lived fusion daemon              | Required                                 | **Not** required                      |
 
 P2P is a **different transport**, not a weaker crypto story. Layers 3–5 + Tor
 are the **shipped** parity story for PR #12’s P2P design (not aspirational).
+
+### Per-component transport isolation
+
+Sealing each anonymous output under a fresh throwaway key stops the *coordinator*
+linking it to the peer's round identity. It does nothing about the *relay*: if
+every output of a round leaves over one shared socket, the relay groups them by
+connection and the fresh keys buy nothing against that observer.
+
+So each anonymous component now publishes on its own short-lived pool, closed
+immediately after (`createComponentPool` in `nostr/fusionTransport.ts`). The Tor
+WebSocket implementation is installed globally, so one pool means one connection
+and one circuit with its own SOCKS isolation token — the same property Electron
+Cash gets from a separate covert connection per component.
+
+**Scope, stated honestly:** this covers *outputs* (`outputs`, `onion_output`).
+Input registration and the later signature messages still travel under the
+peer's round identity, so a coordinator still learns which inputs belong to the
+same participant. That is not an oversight — every blame code in
+`nostr/fusionBlame.ts` binds to an `accused` participant pubkey, and
+`verifyBlameReport` rejects a report whose accused is not in the participant set.
+Anonymising the input and signature channels removes the input those codes are
+built on, so it requires the Electron Cash covert-component blame model rather
+than a bookkeeping change. Tracked as a known residual, not a shipped property.
 
 ---
 
