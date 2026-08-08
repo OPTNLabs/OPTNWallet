@@ -42,7 +42,10 @@ pub fn parse_tx(data: &[u8]) -> Result<Tx, String> {
         let script_len = read_varint(data, &mut pos)? as usize;
         take(data, &mut pos, script_len)?; // scriptSig — not needed here
         let _sequence = read_u32(data, &mut pos)?;
-        inputs.push(TxInput { prev_txid, prev_vout });
+        inputs.push(TxInput {
+            prev_txid,
+            prev_vout,
+        });
     }
 
     let out_count = read_varint(data, &mut pos)? as usize;
@@ -56,7 +59,11 @@ pub fn parse_tx(data: &[u8]) -> Result<Tx, String> {
 
     let _locktime = read_u32(data, &mut pos)?;
     let txid = double_sha256(&data[..pos]);
-    Ok(Tx { txid, inputs, outputs })
+    Ok(Tx {
+        txid,
+        inputs,
+        outputs,
+    })
 }
 
 /// If `script` is a standard P2PKH (OP_DUP OP_HASH160 <20> OP_EQUALVERIFY
@@ -97,8 +104,15 @@ pub fn match_tx(tx: &Tx, watched: &HashSet<[u8; 20]>) -> TxMatch {
                 .map(|h| (i as u32, o.value, h))
         })
         .collect();
-    let spent_outpoints = tx.inputs.iter().map(|i| (i.prev_txid, i.prev_vout)).collect();
-    TxMatch { owned_outputs, spent_outpoints }
+    let spent_outpoints = tx
+        .inputs
+        .iter()
+        .map(|i| (i.prev_txid, i.prev_vout))
+        .collect();
+    TxMatch {
+        owned_outputs,
+        spent_outpoints,
+    }
 }
 
 #[cfg(test)]
@@ -106,7 +120,10 @@ mod tests {
     use super::*;
 
     fn hex(s: &str) -> Vec<u8> {
-        (0..s.len()).step_by(2).map(|i| u8::from_str_radix(&s[i..i + 2], 16).unwrap()).collect()
+        (0..s.len())
+            .step_by(2)
+            .map(|i| u8::from_str_radix(&s[i..i + 2], 16).unwrap())
+            .collect()
     }
 
     // Real transaction (Bitcoin block 170, the first non-coinbase spend). Its
@@ -122,7 +139,10 @@ f9744464f82e160bfa9b8b64f9d4c03f999b8643f656b412a3ac00000000";
     fn parses_real_tx_and_txid() {
         let tx = parse_tx(&hex(TX_170)).unwrap();
         let txid: String = tx.txid.iter().rev().map(|b| format!("{b:02x}")).collect();
-        assert_eq!(txid, "f4184fc596403b9d638783cf57adfe4c75c605f6356fbc91338530e9831e9e16");
+        assert_eq!(
+            txid,
+            "f4184fc596403b9d638783cf57adfe4c75c605f6356fbc91338530e9831e9e16"
+        );
         assert_eq!(tx.inputs.len(), 1);
         assert_eq!(tx.outputs.len(), 2);
         assert_eq!(tx.outputs[0].value, 1_000_000_000);

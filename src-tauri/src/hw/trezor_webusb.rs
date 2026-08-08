@@ -68,11 +68,7 @@ fn is_vendor_class(dev: &rusb::Device<Context>) -> bool {
 
 fn device_path(dev: &rusb::Device<Context>) -> String {
     // Match trezorlib style: webusb:bus:port0:port1…
-    format!(
-        "webusb:{:03}:{}",
-        dev.bus_number(),
-        dev.address()
-    )
+    format!("webusb:{:03}:{}", dev.bus_number(), dev.address())
 }
 
 /// Enumerate Trezor Core devices over libusb (EC WebUsbTransport.enumerate).
@@ -80,7 +76,11 @@ fn device_path(dev: &rusb::Device<Context>) -> String {
 pub fn trezor_webusb_enumerate() -> Result<Vec<WebUsbDeviceInfo>, String> {
     let ctx = Context::new().map_err(|e| format!("libusb init failed: {e}"))?;
     let mut out = Vec::new();
-    for dev in ctx.devices().map_err(|e| format!("libusb list: {e}"))?.iter() {
+    for dev in ctx
+        .devices()
+        .map_err(|e| format!("libusb list: {e}"))?
+        .iter()
+    {
         let desc = match dev.device_descriptor() {
             Ok(d) => d,
             Err(_) => continue,
@@ -125,7 +125,11 @@ pub fn trezor_webusb_open(path: Option<String>) -> Result<u64, String> {
         .filter(|p| !p.is_empty());
 
     let mut chosen: Option<(rusb::Device<Context>, String)> = None;
-    for dev in ctx.devices().map_err(|e| format!("libusb list: {e}"))?.iter() {
+    for dev in ctx
+        .devices()
+        .map_err(|e| format!("libusb list: {e}"))?
+        .iter()
+    {
         let desc = match dev.device_descriptor() {
             Ok(d) => d,
             Err(_) => continue,

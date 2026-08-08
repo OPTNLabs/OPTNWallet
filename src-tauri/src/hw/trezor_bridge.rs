@@ -105,18 +105,12 @@ pub async fn trezor_bridge_enumerate() -> Result<Vec<BridgeDeviceInfo>, String> 
             .get("vendor")
             .and_then(|v| v.as_u64())
             .unwrap_or(0x1209) as u16;
-        let product = item
-            .get("product")
-            .and_then(|v| v.as_u64())
-            .unwrap_or(0) as u16;
+        let product = item.get("product").and_then(|v| v.as_u64()).unwrap_or(0) as u16;
         let session = item
             .get("session")
             .and_then(|s| s.as_str())
             .map(|s| s.to_string());
-        let debug = item
-            .get("debug")
-            .and_then(|d| d.as_bool())
-            .unwrap_or(false);
+        let debug = item.get("debug").and_then(|d| d.as_bool()).unwrap_or(false);
         out.push(BridgeDeviceInfo {
             path,
             vendor,
@@ -132,10 +126,7 @@ pub async fn trezor_bridge_enumerate() -> Result<Vec<BridgeDeviceInfo>, String> 
 #[tauri::command]
 pub async fn trezor_bridge_acquire(path: String) -> Result<String, String> {
     let c = client()?;
-    let url = format!(
-        "{BRIDGE_BASE}/acquire/{}/null",
-        urlencoding_path(&path)
-    );
+    let url = format!("{BRIDGE_BASE}/acquire/{}/null", urlencoding_path(&path));
     let res = c
         .post(&url)
         .header("Origin", BRIDGE_ORIGIN)

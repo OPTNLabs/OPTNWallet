@@ -620,9 +620,12 @@ describe('buildServerRunner — shared runner for manual and auto', () => {
     expect(mockGatherInputs).not.toHaveBeenCalled();
   });
 
-  it('passes expectedHello to fusion_run for live validation', async () => {
+  it('passes expectedHello and the exact Auto inactivity policy to fusion_run', async () => {
     const hello = makeHello({ tiers: [10_000] });
-    const runner = makeConfig({ expectedHello: hello });
+    const runner = makeConfig({
+      expectedHello: hello,
+      joinInactiveTimeoutMs: 600_000,
+    });
     mockGatherInputs.mockResolvedValue(makeInputs());
     mockCreateFreshScripts.mockResolvedValue(Array(20).fill('76a914' + '00'.repeat(20) + '88ac'));
     installNativeMocks({
@@ -643,6 +646,7 @@ describe('buildServerRunner — shared runner for manual and auto', () => {
         lookupHost: 'electrum-chipnet.optnlabs.com',
         lookupPort: 50002,
         lookupUseSsl: true,
+        joinInactiveTimeoutMs: 600_000,
       })
     );
   });

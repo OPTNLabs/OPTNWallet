@@ -13,7 +13,7 @@
 // identical so ciphertext round-trips correctly and matches the upstream on-disk
 // format.
 
-import { deriveCachedKey } from './WalletKeyCache';
+import { deriveCachedKey, getCachedOwnerWalletId } from './WalletKeyCache';
 
 export const SECRET_ENC_PREFIX = 'enc:v1:';
 
@@ -33,7 +33,17 @@ function base64ToBytes(base64: string): Uint8Array {
   return bytes;
 }
 
-async function requireCachedKey(): Promise<CryptoKey> {
+async function requireCachedKey(ownerWalletId?: number): Promise<CryptoKey> {
+  const cachedOwnerWalletId = getCachedOwnerWalletId();
+  if (
+    ownerWalletId !== undefined &&
+    cachedOwnerWalletId !== null &&
+    cachedOwnerWalletId !== ownerWalletId
+  ) {
+    throw new Error(
+      '[SecretCryptoService] Cached credentials belong to another wallet.'
+    );
+  }
   const key = await deriveCachedKey();
   if (!key) {
     throw new Error(
@@ -68,11 +78,32 @@ async function encryptRaw(plaintext: string): Promise<string> {
 async function decryptRaw(ciphertext: string): Promise<string> {
   const key = await requireCachedKey();
   try {
-    const merged = base64ToBytes(ciphertext);
-    const iv = merged.slice(0, 12);
-    const data = merged.slice(12);
-    const plain = await globalThis.crypto.subtle.decrypt({ name: 'AES-GCM', iv }, key, data);
-    return textDecoder.decode(plain);
+    return await decryptRawWithKey(key, ciphertext);
+  } finally {
+    zeroizeKey(key);
+  }
+}
+
+async function decryptRawWithKey(key: CryptoKey, ciphertext: string): Promise<string> {
+  const merged = base64ToBytes(ciphertext);
+  const iv = merged.slice(0, 12);
+  const data = merged.slice(12);
+  const plain = await globalThis.crypto.subtle.decrypt({ name: 'AES-GCM', iv }, key, data);
+  return textDecoder.decode(plain);
+}
+
+/** Decrypt related wallet fields with one scoped PBKDF2 derivation. */
+async function decryptTextBatch(
+  values: readonly string[],
+  ownerWalletId?: number
+): Promise<string[]> {
+  if (!values.some(isEncryptedPayload)) return [...values];
+  const key = await requireCachedKey(ownerWalletId);
+  try {
+    return await Promise.all(values.map((value) => {
+      if (!value || !isEncryptedPayload(value)) return Promise.resolve(value || '');
+      return decryptRawWithKey(key, value.slice(SECRET_ENC_PREFIX.length));
+    }));
   } finally {
     zeroizeKey(key);
   }
@@ -121,6 +152,7 @@ const SecretCryptoService = {
   decryptText,
   encryptBytes,
   decryptBytes,
+  decryptTextBatch,
 };
 
 export default SecretCryptoService;

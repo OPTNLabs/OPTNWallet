@@ -39,13 +39,19 @@ const PROBE_TIMEOUT: Duration = Duration::from_millis(1500);
 pub async fn is_tor_port(host: &str, port: u16) -> bool {
     let probe = async {
         let mut stream = TcpStream::connect((host, port)).await.ok()?;
-        stream.write_all(b"GET\n").await.ok()?;
-        let mut buf = [0u8; 1024];
-        let n = stream.read(&mut buf).await.ok()?;
-        Some(String::from_utf8_lossy(&buf[..n]).contains("Tor is not an HTTP Proxy"))
+        // Capability check only: external proxies remain explicitly user-trusted.
+        // A Tor HTTP-refusal string is not authentication because any local
+        // listener can replay it. Exercise the SOCKS5 protocol instead.
+        stream.write_all(&[0x05, 0x01, 0x00]).await.ok()?;
+        let mut response = [0u8; 2];
+        stream.read_exact(&mut response).await.ok()?;
+        Some(response == [0x05, 0x00])
     };
 
-    matches!(tokio::time::timeout(PROBE_TIMEOUT, probe).await, Ok(Some(true)))
+    matches!(
+        tokio::time::timeout(PROBE_TIMEOUT, probe).await,
+        Ok(Some(true))
+    )
 }
 
 /// Find a running Tor proxy, mirroring plugin.py's `scan_torport`: try each
@@ -103,6 +109,20 @@ mod tests {
             }
         });
 
+        assert!(!is_tor_port("127.0.0.1", port).await);
+    }
+
+    #[tokio::test]
+    async fn a_listener_spoofing_the_tor_http_marker_is_not_trusted() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        tokio::spawn(async move {
+            if let Ok((mut stream, _)) = listener.accept().await {
+                let mut request = [0u8; 16];
+                let _ = stream.read(&mut request).await;
+                let _ = stream.write_all(b"Tor is not an HTTP Proxy").await;
+            }
+        });
         assert!(!is_tor_port("127.0.0.1", port).await);
     }
 

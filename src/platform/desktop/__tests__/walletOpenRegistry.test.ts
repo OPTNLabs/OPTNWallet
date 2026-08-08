@@ -192,4 +192,35 @@ describe('a claim held by a window that no longer exists', () => {
       })
     ).toBe('window-a');
   });
+
+  it('does not let two contenders both replace the same dead claim', async () => {
+    await claimWalletOpen(6, 'window-gone');
+
+    let probes = 0;
+    let releaseProbes!: () => void;
+    const bothProbed = new Promise<void>((resolve) => {
+      releaseProbes = resolve;
+    });
+    const isWindowOpen = async (label: string) => {
+      expect(label).toBe('window-gone');
+      probes += 1;
+      if (probes === 2) releaseProbes();
+      await bothProbed;
+      return false;
+    };
+
+    const [fromB, fromC] = await Promise.all([
+      claimWalletOpen(6, 'window-b', Date.now(), isWindowOpen),
+      claimWalletOpen(6, 'window-c', Date.now(), isWindowOpen),
+    ]);
+
+    const winners = [
+      fromB === null ? 'window-b' : null,
+      fromC === null ? 'window-c' : null,
+    ].filter((label): label is string => label !== null);
+    expect(winners).toHaveLength(1);
+    const winner = winners[0];
+    expect([fromB, fromC].filter((held) => held === winner)).toHaveLength(1);
+    expect(windowHoldingWallet(6)).toBe(winner);
+  });
 });

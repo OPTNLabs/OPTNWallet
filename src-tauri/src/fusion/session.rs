@@ -79,7 +79,11 @@ pub fn calc_round_hash(
 
 /// Serialize a `CovertComponent` message (component + its unblinded blind
 /// signature, tagged with the round key) for submission over a covert connection.
-pub fn build_covert_component(round_pubkey: &[u8], signature: &[u8; 64], component: &[u8]) -> Vec<u8> {
+pub fn build_covert_component(
+    round_pubkey: &[u8],
+    signature: &[u8; 64],
+    component: &[u8],
+) -> Vec<u8> {
     let msg = pb::CovertMessage {
         msg: Some(pb::covert_message::Msg::Component(pb::CovertComponent {
             round_pubkey: Some(round_pubkey.to_vec()),
@@ -148,7 +152,10 @@ mod tests {
         let base = calc_round_hash(&last, &pk, t, &commits, &comps);
         // Changing any input changes the hash.
         assert_ne!(base, calc_round_hash(&[8u8; 32], &pk, t, &commits, &comps));
-        assert_ne!(base, calc_round_hash(&last, &[0x03u8; 33], t, &commits, &comps));
+        assert_ne!(
+            base,
+            calc_round_hash(&last, &[0x03u8; 33], t, &commits, &comps)
+        );
         assert_ne!(base, calc_round_hash(&last, &pk, t + 1, &commits, &comps));
         // Reordering components changes it (order is committed).
         let comps_rev = vec![vec![8u8, 7], vec![9u8]];

@@ -43,7 +43,9 @@ impl CovertConnection {
         use_ssl: bool,
         transport: Transport<'_>,
     ) -> Result<Self, String> {
-        Ok(Self { stream: connect_stream(host, port, use_ssl, transport).await? })
+        Ok(Self {
+            stream: connect_stream(host, port, use_ssl, transport).await?,
+        })
     }
 
     /// Keepalive so the connection, opened early, survives until submit time.
@@ -83,10 +85,7 @@ impl OwnedTransport {
     fn borrowed(&self) -> Transport<'_> {
         match self {
             Self::Direct => Transport::Direct,
-            Self::Tor { host, port } => Transport::Tor {
-                host,
-                port: *port,
-            },
+            Self::Tor { host, port } => Transport::Tor { host, port: *port },
         }
     }
 }
@@ -130,12 +129,7 @@ impl CovertSchedule {
             let action_delay = random_duration(action_window);
             handles.push(tokio::spawn(async move {
                 wait_until_or_cancel(connect_at, &cancel).await?;
-                let open = CovertConnection::open(
-                    &host,
-                    port,
-                    use_ssl,
-                    transport.borrowed(),
-                );
+                let open = CovertConnection::open(&host, port, use_ssl, transport.borrowed());
                 let connection = tokio::select! {
                     biased;
                     _ = cancel.cancelled() => return Err("fusion round cancelled".into()),
@@ -535,22 +529,29 @@ where
         .map_err(|e| format!("could not decode covert response: {e}"))?;
     match resp.msg {
         Some(pb::covert_response::Msg::Ok(_)) => Ok(()),
-        Some(pb::covert_response::Msg::Error(e)) => {
-            Err(format!("covert submission rejected: {}", e.message.unwrap_or_default()))
-        }
+        Some(pb::covert_response::Msg::Error(e)) => Err(format!(
+            "covert submission rejected: {}",
+            e.message.unwrap_or_default()
+        )),
         None => Err("empty covert response".into()),
     }
 }
 
 /// Serialize a `CovertTransactionSignature` (an input's signature) as a
 /// CovertMessage for the signing phase (1.5).
-pub fn build_covert_signature(round_pubkey: &[u8], which_input: u32, txsignature: &[u8]) -> Vec<u8> {
+pub fn build_covert_signature(
+    round_pubkey: &[u8],
+    which_input: u32,
+    txsignature: &[u8],
+) -> Vec<u8> {
     let msg = pb::CovertMessage {
-        msg: Some(pb::covert_message::Msg::Signature(pb::CovertTransactionSignature {
-            round_pubkey: Some(round_pubkey.to_vec()),
-            which_input,
-            txsignature: txsignature.to_vec(),
-        })),
+        msg: Some(pb::covert_message::Msg::Signature(
+            pb::CovertTransactionSignature {
+                round_pubkey: Some(round_pubkey.to_vec()),
+                which_input,
+                txsignature: txsignature.to_vec(),
+            },
+        )),
     };
     msg.encode_to_vec()
 }
@@ -560,21 +561,33 @@ mod tests {
     use super::*;
 
     fn ok_response() -> Vec<u8> {
-        pb::CovertResponse { msg: Some(pb::covert_response::Msg::Ok(pb::Ok {})) }.encode_to_vec()
+        pb::CovertResponse {
+            msg: Some(pb::covert_response::Msg::Ok(pb::Ok {})),
+        }
+        .encode_to_vec()
     }
     fn err_response(m: &str) -> Vec<u8> {
         pb::CovertResponse {
-            msg: Some(pb::covert_response::Msg::Error(pb::Error { message: Some(m.into()) })),
+            msg: Some(pb::covert_response::Msg::Error(pb::Error {
+                message: Some(m.into()),
+            })),
         }
         .encode_to_vec()
     }
 
     #[test]
     fn submit_sends_covert_message_and_accepts_ok() {
-        let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
         rt.block_on(async {
             let (mut client, mut server) = tokio::io::duplex(4096);
-            let covert = super::super::session::build_covert_component(&[0x02u8; 33], &[0x11u8; 64], &[1, 2, 3]);
+            let covert = super::super::session::build_covert_component(
+                &[0x02u8; 33],
+                &[0x11u8; 64],
+                &[1, 2, 3],
+            );
             let covert_clone = covert.clone();
 
             let server_task = tokio::spawn(async move {
@@ -593,12 +606,17 @@ mod tests {
 
     #[test]
     fn submit_surfaces_a_server_error() {
-        let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
         rt.block_on(async {
             let (mut client, mut server) = tokio::io::duplex(4096);
             let server_task = tokio::spawn(async move {
                 let _ = recv_frame(&mut server).await.unwrap();
-                send_frame(&mut server, &err_response("bad component")).await.unwrap();
+                send_frame(&mut server, &err_response("bad component"))
+                    .await
+                    .unwrap();
             });
             let err = submit_on(&mut client, b"anything").await.unwrap_err();
             server_task.await.unwrap();
@@ -608,7 +626,10 @@ mod tests {
 
     #[test]
     fn ping_is_a_covert_ping_message() {
-        let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
         rt.block_on(async {
             let (mut client, mut server) = tokio::io::duplex(1024);
             let server_task = tokio::spawn(async move {

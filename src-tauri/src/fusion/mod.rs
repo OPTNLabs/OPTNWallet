@@ -26,11 +26,12 @@ use tokio_rustls::rustls::pki_types::ServerName;
 use tokio_rustls::rustls::{ClientConfig, RootCertStore};
 use tokio_rustls::TlsConnector;
 
-pub mod components;
 pub mod blame;
+pub mod components;
 pub mod covert;
-pub mod encrypt;
 pub mod electrum_input;
+pub mod encrypt;
+pub mod p2p_sign;
 pub mod pedersen;
 pub mod round;
 pub mod round_cancel;
@@ -381,12 +382,9 @@ mod tests {
                 send_frame(&mut server, b"after-warmup").await.unwrap();
             });
 
-            let frame = recv_frame_with_timeout(
-                &mut client,
-                Duration::from_millis(100),
-            )
-            .await
-            .unwrap();
+            let frame = recv_frame_with_timeout(&mut client, Duration::from_millis(100))
+                .await
+                .unwrap();
             assert_eq!(frame, b"after-warmup");
         });
     }

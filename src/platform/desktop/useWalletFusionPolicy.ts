@@ -6,7 +6,7 @@
 // when it opens, and written back when the user changes them — redux stays the
 // working copy, the wallet owns the truth.
 
-import { useEffect, useRef } from 'react';
+import { useEffect, useState } from 'react';
 import { useDispatch, useSelector } from 'react-redux';
 
 import {
@@ -27,7 +27,7 @@ import {
   writeWalletFusionPolicy,
 } from './walletFusionPolicy';
 
-export function useWalletFusionPolicy(): void {
+export function useWalletFusionPolicy(): boolean {
   const dispatch = useDispatch();
   const walletId = useSelector(
     (state: RootState) => state.wallet_id.currentWalletId
@@ -47,14 +47,14 @@ export function useWalletFusionPolicy(): void {
    * one. The writer therefore only runs once redux is known to be showing this
    * wallet.
    */
-  const loadedFor = useRef<number | null>(null);
+  const [loadedForWallet, setLoadedForWallet] = useState<number | null>(null);
 
   useEffect(() => {
     if (walletId <= 0) {
-      loadedFor.current = null;
+      setLoadedForWallet(null);
       return;
     }
-    if (loadedFor.current === walletId) return;
+    if (loadedForWallet === walletId) return;
 
     const policy = readWalletFusionPolicy(walletId);
     dispatch(setCashFusionEnabled(policy.cashFusionEnabled));
@@ -62,12 +62,12 @@ export function useWalletFusionPolicy(): void {
     dispatch(setP2pFusionEnabled(policy.p2pFusionEnabled));
     dispatch(setFuseDepth(policy.fuseDepth));
     dispatch(setSpendOnlyFusedCoins(policy.spendOnlyFusedCoins));
-    loadedFor.current = walletId;
-  }, [walletId, dispatch]);
+    setLoadedForWallet(walletId);
+  }, [walletId, dispatch, loadedForWallet]);
 
   useEffect(() => {
     // Only persist edits made while redux is showing THIS wallet.
-    if (walletId <= 0 || loadedFor.current !== walletId) return;
+    if (walletId <= 0 || loadedForWallet !== walletId) return;
     writeWalletFusionPolicy(walletId, {
       cashFusionEnabled,
       autoFuseEnabled,
@@ -77,10 +77,13 @@ export function useWalletFusionPolicy(): void {
     });
   }, [
     walletId,
+    loadedForWallet,
     cashFusionEnabled,
     autoFuseEnabled,
     p2pFusionEnabled,
     fuseDepth,
     spendOnlyFusedCoins,
   ]);
+
+  return walletId > 0 && loadedForWallet === walletId;
 }

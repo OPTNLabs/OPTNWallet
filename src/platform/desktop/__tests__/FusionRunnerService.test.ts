@@ -8,8 +8,10 @@ vi.mock('../../../services/WalletUtxoRefreshService', () => ({
 }));
 
 import {
+  cancelFusionRound,
   getFusionActivity,
   isFusionRunning,
+  reconcileIdleFusionState,
   startFusionRound,
   subscribeFusionActivity,
   type FusionActivity,
@@ -21,6 +23,10 @@ import {
   isAutoDepthMetIdle,
   lastAutoAttemptAt,
 } from '../fusionWalletLease';
+import {
+  reserveOutpoints,
+  reservedOutpoints,
+} from '../fusionRoundState';
 
 class MemoryStorage {
   private map = new Map<string, string>();
@@ -44,6 +50,7 @@ const coin = (txid: string, token = false) =>
     tx_pos: 0,
     value: 100_000,
     address: 'bchtest:q',
+    height: 100,
     token: token ? {} : undefined,
   }) as never;
 
@@ -102,7 +109,8 @@ describe('FusionRunnerService — one path for manual and automatic rounds', () 
     reconcile.mockResolvedValue({ addr: [coin('aa')] });
     const result = await startFusionRound(base());
 
-    expect(reconcile).toHaveBeenCalledWith(3, undefined);
+    expect(reconcile).toHaveBeenCalledWith(3, expect.any(AbortSignal));
+    expect(reconcile).toHaveBeenCalledOnce();
     expect(result).toEqual({
       status: 'fused',
       mode: 'p2p',
@@ -121,7 +129,7 @@ describe('FusionRunnerService — one path for manual and automatic rounds', () 
     expect(reconcile).not.toHaveBeenCalled();
     expect(runP2p).toHaveBeenCalledWith(
       snapshot.addr,
-      undefined,
+      expect.any(AbortSignal),
       expect.objectContaining({
         onStatus: expect.any(Function),
         onPhase: expect.any(Function),
@@ -153,6 +161,7 @@ describe('FusionRunnerService — one path for manual and automatic rounds', () 
     await expect(startFusionRound(base())).resolves.toMatchObject({
       status: 'no-eligible-coins',
     });
+    expect(reconcile).toHaveBeenCalledOnce();
     expect(runP2p).not.toHaveBeenCalled();
   });
 
@@ -165,6 +174,7 @@ describe('FusionRunnerService — one path for manual and automatic rounds', () 
     // a paid-success cooldown — wallet activity can clear it when BCH appears.
     expect(lastAutoAttemptAt(3)).not.toBeNull();
     expect(isAutoDepthMetIdle(3)).toBe(true);
+    expect(reconcile).toHaveBeenCalledOnce();
     expect(isAutoCooldownReady(3, 40_000)).toBe(false);
   });
 
@@ -188,6 +198,7 @@ describe('FusionRunnerService — one path for manual and automatic rounds', () 
     expect(isAutoDepthMetIdle(3)).toBe(true);
     // No lease thrash / no transport work.
     expect(runP2p).not.toHaveBeenCalled();
+    expect(reconcile).toHaveBeenCalledOnce();
   });
 
   it('lets a MANUAL round re-fuse a coin already at the depth limit', async () => {
@@ -213,6 +224,7 @@ describe('FusionRunnerService — one path for manual and automatic rounds', () 
     // Stamped anyway: otherwise a persistently failing wallet retries in a loop,
     // paying a fee each time.
     expect(lastAutoAttemptAt(3)).not.toBeNull();
+    expect(reconcile).toHaveBeenCalledOnce();
   });
 
   it('does not rescan the wallet while an automatic cooldown is active', async () => {
@@ -232,6 +244,108 @@ describe('FusionRunnerService — one path for manual and automatic rounds', () 
     reconcile.mockResolvedValue({ addr: [coin('aa')] });
     await startFusionRound({ ...base(), trigger: 'manual' });
     expect(lastAutoAttemptAt(3)).toBeNull();
+  });
+
+  it('keeps reservations when a fresh lease wins after stale observation', async () => {
+    const storage = globalThis.localStorage as unknown as MemoryStorage;
+    const now = 1_000_000;
+    const outpoint = `${'ab'.repeat(32)}:0`;
+    reserveOutpoints(3, [outpoint]);
+    storage.setItem(
+      'optn-fusion-lease-3',
+      JSON.stringify({ owner: 'stale', at: now - 60_000 })
+    );
+    vi.stubGlobal('navigator', {
+      locks: {
+        request: async <T>(_name: string, fn: () => Promise<T>): Promise<T> => {
+          storage.setItem(
+            'optn-fusion-lease-3',
+            JSON.stringify({ owner: 'fresh-window', at: now })
+          );
+          return fn();
+        },
+      },
+    });
+    const nowSpy = vi.spyOn(Date, 'now').mockReturnValue(now);
+
+    await reconcileIdleFusionState(3);
+
+    expect(reservedOutpoints(3)).toContain(outpoint);
+    expect(JSON.parse(storage.getItem('optn-fusion-lease-3') ?? '{}')).toEqual({
+      owner: 'fresh-window',
+      at: now,
+    });
+    nowSpy.mockRestore();
+  });
+
+  it('cleans stale reservations before releasing the wallet lock, so the next lease reservations survive', async () => {
+    const storage = globalThis.localStorage as unknown as MemoryStorage;
+    const now = 2_000_000;
+    const staleOutpoint = `${'aa'.repeat(32)}:0`;
+    const freshOutpoint = `${'bb'.repeat(32)}:1`;
+    reserveOutpoints(3, [staleOutpoint]);
+    storage.setItem(
+      'optn-fusion-lease-3',
+      JSON.stringify({ owner: 'stale', at: now - 60_000 })
+    );
+    vi.stubGlobal('navigator', {
+      locks: {
+        request: async <T>(_name: string, fn: () => Promise<T>): Promise<T> => {
+          const result = await fn();
+          // Model the next queued lock holder: it acquires immediately after
+          // A's critical section, before A's await continuation resumes.
+          storage.setItem(
+            'optn-fusion-lease-3',
+            JSON.stringify({ owner: 'next-window', at: now })
+          );
+          reserveOutpoints(3, [freshOutpoint]);
+          return result;
+        },
+      },
+    });
+    const nowSpy = vi.spyOn(Date, 'now').mockReturnValue(now);
+
+    await reconcileIdleFusionState(3);
+
+    expect(reservedOutpoints(3)).not.toContain(staleOutpoint);
+    expect(reservedOutpoints(3)).toContain(freshOutpoint);
+    nowSpy.mockRestore();
+  });
+
+  it('fails closed before wallet or transport work when Auto lacks Web Locks', async () => {
+    vi.stubGlobal('navigator', {});
+    reconcile.mockResolvedValue({ addr: [coin('aa')] });
+
+    await expect(startFusionRound(base())).resolves.toEqual({
+      status: 'cooldown',
+    });
+    expect(reconcile).not.toHaveBeenCalled();
+    expect(runP2p).not.toHaveBeenCalled();
+  });
+
+  it('fails closed before wallet or transport work when a manual start lacks Web Locks', async () => {
+    vi.stubGlobal('navigator', {});
+    reconcile.mockResolvedValue({ addr: [coin('aa')] });
+
+    await expect(
+      startFusionRound({ ...base(), trigger: 'manual' })
+    ).resolves.toEqual({ status: 'busy' });
+    expect(reconcile).not.toHaveBeenCalled();
+    expect(runP2p).not.toHaveBeenCalled();
+  });
+
+  it('applies confirmed whole-address eligibility to server Fusion only', async () => {
+    reconcile.mockResolvedValue({
+      addr: [coin('aa'), { ...coin('bb'), height: 0 }],
+    });
+
+    await expect(
+      startFusionRound({ ...base(), mode: 'server', trigger: 'manual' })
+    ).resolves.toEqual({
+      status: 'no-eligible-coins',
+      detail: 'No eligible coins to fuse.',
+    });
+    expect(runServer).not.toHaveBeenCalled();
   });
 
   it('refuses a second concurrent round for the same wallet', async () => {
@@ -359,7 +473,8 @@ describe('FusionRunnerService — one path for manual and automatic rounds', () 
     refresh.resolve({ addr: [coin('aa')] });
 
     await expect(result).resolves.toEqual({ status: 'cancelled' });
-    expect(reconcile).toHaveBeenCalledWith(3, controller.signal);
+    expect(reconcile).toHaveBeenCalledWith(3, expect.any(AbortSignal));
+    expect((reconcile.mock.calls[0][1] as AbortSignal).aborted).toBe(true);
     expect(runP2p).not.toHaveBeenCalled();
   });
 
@@ -375,12 +490,74 @@ describe('FusionRunnerService — one path for manual and automatic rounds', () 
 
     expect(runP2p).toHaveBeenCalledWith(
       expect.any(Array),
-      controller.signal,
+      expect.any(AbortSignal),
       expect.objectContaining({
         onStatus: expect.any(Function),
         onPhase: expect.any(Function),
       })
     );
+  });
+
+  it.each(['p2p', 'server'] as const)(
+    'lets the wallet session cancel a manual %s round without a screen-owned signal',
+    async (mode) => {
+      reconcile.mockResolvedValue({ addr: [coin('aa')] });
+      const selected = mode === 'p2p' ? runP2p : runServer;
+      selected.mockImplementation(
+        (_coins: unknown, signal?: AbortSignal) =>
+          new Promise((_resolve, reject) => {
+            signal?.addEventListener(
+              'abort',
+              () => reject(new Error('fusion round cancelled')),
+              { once: true }
+            );
+          })
+      );
+
+      const round = startFusionRound({
+        ...base(),
+        mode,
+        trigger: 'manual',
+      });
+      for (let i = 0; i < 100 && !isFusionRunning(3); i += 1) {
+        await Promise.resolve();
+      }
+
+      expect(cancelFusionRound(3, 'wallet session changed')).toBe(true);
+      await expect(round).resolves.toEqual({ status: 'cancelled' });
+      expect(isFusionRunning(3)).toBe(false);
+    }
+  );
+
+  it('aborts a live round as soon as its durable lease ownership is lost', async () => {
+    vi.useFakeTimers();
+    try {
+      reconcile.mockResolvedValue({ addr: [coin('aa')] });
+      runP2p.mockImplementation(
+        (_coins: unknown, signal?: AbortSignal) =>
+          new Promise((_resolve, reject) => {
+            signal?.addEventListener(
+              'abort',
+              () => reject(new Error('fusion round cancelled')),
+              { once: true }
+            );
+          })
+      );
+
+      const round = startFusionRound({ ...base(), trigger: 'manual' });
+      for (let i = 0; i < 100 && !runP2p.mock.calls.length; i += 1) {
+        await Promise.resolve();
+      }
+      globalThis.localStorage.setItem(
+        'optn-fusion-lease-3',
+        JSON.stringify({ owner: 'other-window', at: Date.now() })
+      );
+      await vi.advanceTimersByTimeAsync(12_000);
+
+      await expect(round).resolves.toEqual({ status: 'cancelled' });
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('reports a completed irreversible round even when abort races with runner resolution', async () => {

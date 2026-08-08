@@ -45,7 +45,11 @@ fn hmac16(key: &[u8; 32], ciphertext: &[u8]) -> [u8; 16] {
 /// Encrypt `message` to `recipient_pubkey` (33/65-byte serialized point).
 /// `pad_to_length` (if given) must be a multiple of 16 and >= len(message)+4;
 /// otherwise the smallest block-aligned length is used.
-pub fn encrypt(message: &[u8], recipient_pubkey: &[u8], pad_to_length: Option<usize>) -> Result<Vec<u8>, String> {
+pub fn encrypt(
+    message: &[u8],
+    recipient_pubkey: &[u8],
+    pad_to_length: Option<usize>,
+) -> Result<Vec<u8>, String> {
     let pubpoint = parse_point(recipient_pubkey)?;
     let nonce_sec = random_nonce();
     let nonce_pub = compressed(&(ProjectivePoint::GENERATOR * nonce_sec));
@@ -126,7 +130,8 @@ pub fn decrypt_with_symmkey(data: &[u8], key: &[u8; 32]) -> Result<Vec<u8>, Stri
     if plaintext.len() < 4 {
         return Err("plaintext too short".into());
     }
-    let msglen = u32::from_be_bytes([plaintext[0], plaintext[1], plaintext[2], plaintext[3]]) as usize;
+    let msglen =
+        u32::from_be_bytes([plaintext[0], plaintext[1], plaintext[2], plaintext[3]]) as usize;
     if 4 + msglen > plaintext.len() {
         return Err("declared message length exceeds plaintext".into());
     }
@@ -135,8 +140,8 @@ pub fn decrypt_with_symmkey(data: &[u8], key: &[u8; 32]) -> Result<Vec<u8>, Stri
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use super::super::schnorr::pubkey_compressed;
+    use super::*;
 
     #[test]
     fn encrypt_decrypt_round_trip() {
@@ -175,7 +180,10 @@ mod tests {
         let b = encrypt(b"a somewhat longer message here", &pubkey, Some(80)).unwrap();
         assert_eq!(a.len(), b.len());
         assert_eq!(decrypt(&a, priv_k).unwrap(), b"short");
-        assert_eq!(decrypt(&b, priv_k).unwrap(), b"a somewhat longer message here");
+        assert_eq!(
+            decrypt(&b, priv_k).unwrap(),
+            b"a somewhat longer message here"
+        );
     }
 
     #[test]

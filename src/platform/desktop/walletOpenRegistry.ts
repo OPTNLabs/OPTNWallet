@@ -102,9 +102,11 @@ export async function claimWalletOpen(
   // Asked BEFORE taking the lock: the probe is async and the critical section
   // must stay synchronous so two windows cannot interleave inside it.
   let holderIsGone = false;
+  let probedHolder: OpenClaim | null = null;
   if (isWindowOpen) {
     const existing = readClaims()[String(walletId)];
     if (existing && existing.windowLabel !== windowLabel) {
+      probedHolder = existing;
       try {
         holderIsGone = !(await isWindowOpen(existing.windowLabel));
       } catch {
@@ -117,11 +119,16 @@ export async function claimWalletOpen(
   const claim = (): string | null => {
     const claims = readClaims();
     const held = claims[String(walletId)];
+    const canReplaceProbedHolder =
+      holderIsGone &&
+      probedHolder !== null &&
+      held?.windowLabel === probedHolder.windowLabel &&
+      held.at === probedHolder.at;
     if (
       held &&
       held.windowLabel !== windowLabel &&
       isLive(held, nowMs) &&
-      !holderIsGone
+      !canReplaceProbedHolder
     ) {
       return held.windowLabel;
     }

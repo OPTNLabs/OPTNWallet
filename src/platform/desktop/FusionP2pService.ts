@@ -8,13 +8,14 @@
 import { SimplePool } from 'nostr-tools';
 import { useWebSocketImplementation as setNostrWebSocketImpl } from 'nostr-tools/pool';
 import { invoke } from '@tauri-apps/api/core';
-import { hash256 } from '@bitauth/libauth';
+import { encodeTransaction, hash256, sha256 } from '@bitauth/libauth';
 
 import { binToHex, hexToBin } from '../../utils/hex';
 import { TorWebSocket, armTorRouting } from './nostr/torWebSocket';
 import ElectrumService, {
   invalidateUTXOCache,
 } from '../../services/ElectrumService';
+import OutboundTransactionTracker from '../../services/OutboundTransactionTracker';
 import {
   clearOutpointReservations,
   isBlamedSessionKey,
@@ -39,6 +40,11 @@ import {
 import { createFreshFusionOutputScripts, gatherInputs } from './FusionService';
 import { isFusionExecutionAllowed } from './FusionExecutionSafety';
 import {
+  defaultRelayEndpoints,
+  inputLookupEndpoints,
+  type FusionRelayObservation,
+} from './ServerFusionRunner';
+import {
   generateRoundIdentity,
   invalidateJoinPoolAnnouncers,
   isLivePoolAnnouncement,
@@ -55,8 +61,15 @@ import {
 import { createNostrRoundTransport } from './nostr/fusionTransport';
 import { negotiateFusionRound } from './nostr/fusionRendezvous';
 import { runFusionRound, type RoundResult } from './nostr/fusionSession';
-import { CREDENTIAL_SLOTS_PER_PEER } from './nostr/fusionBlindSchnorr';
-import type { FusionInputRef, FusionOutputRef } from './nostr/fusionRound';
+import { MAX_INPUT_CREDENTIALS_PER_PEER } from './nostr/fusionBlindSchnorr';
+import {
+  minimumFee,
+  type AssembledFusionTx,
+  type FusionInputRef,
+  type FusionOutputRef,
+  type PeerContribution,
+} from './nostr/fusionRound';
+import { toLibauthTx, type InputSig } from './nostr/fusionSign';
 import { planP2pOutputValues } from './nostr/fusionP2pAllocation';
 import {
   P2P_COMPONENT_JITTER_MS,
@@ -144,7 +157,10 @@ function toPoolNetwork(network: Network): FusionPoolNetwork {
  * Fusion always runs on {@link FUSION_CORE_RELAYS}. User/chat extras are ignored
  * for pool discovery so multi-window tests cannot partition on different lists.
  */
-function validatedRelays(_configured?: string[], max = MAX_ANNOUNCE_RELAYS): string[] {
+function validatedRelays(
+  _configured?: string[],
+  max = MAX_ANNOUNCE_RELAYS
+): string[] {
   const relays = FUSION_CORE_RELAYS.filter((relay) =>
     relay.startsWith('wss://')
   ).slice(0, max);
@@ -310,10 +326,7 @@ async function collectRolling(
     const enough = n >= MIN_PARTICIPANTS;
     const elapsed = now - start;
     const stableFor = now - stableSince;
-    const peakGraceLeft = Math.max(
-      0,
-      P2P_PEAK_GRACE_MS - (now - lastAtPeakMs)
-    );
+    const peakGraceLeft = Math.max(0, P2P_PEAK_GRACE_MS - (now - lastAtPeakMs));
     const peakGraceExpired = peakGraceLeft === 0;
     // Soft lag / peak drop only block EARLY lock for a short grace.
     const expectMoreFromSoft =
@@ -341,8 +354,7 @@ async function collectRolling(
     const stableFast = stableFor >= P2P_PEER_SET_STABLE_FAST_MS;
     const pastSmallHold = elapsed >= SMALL_SET_HOLD_MS;
     // At cap: we are done growing the set — lock ASAP (still need alignment).
-    const fullSetReady =
-      atCap && pastFastWarmup && stableFast && !expectMore;
+    const fullSetReady = atCap && pastFastWarmup && stableFast && !expectMore;
     // Partial legal set: allow more toward MAX for a short window, then lock.
     const partialSetReady =
       enough &&
@@ -373,9 +385,9 @@ async function collectRolling(
       throw new Error(
         trigger === 'auto'
           ? `Auto: no peers for ${Math.round(aloneBudgetMs / 1000)}s — will retry shortly. ` +
-              `Need ≥${MIN_PARTICIPANTS} online with Auto+P2P+Tor; check Nostr relays.`
+            `Need ≥${MIN_PARTICIPANTS} online with Auto+P2P+Tor; check Nostr relays.`
           : `No other wallets found in ${Math.round(aloneBudgetMs / 1000)}s. ` +
-              `Need ≥${MIN_PARTICIPANTS} peers on the same network (Tor + Nostr green). Retry when others are online.`
+            `Need ≥${MIN_PARTICIPANTS} peers on the same network (Tor + Nostr green). Retry when others are online.`
       );
     }
     if (canLock || now >= maxWait) {
@@ -447,18 +459,12 @@ async function collectRolling(
           : n < MAX_PARTICIPANTS && holdLeft > 0
             ? ` hold ${holdLeft}s for more (max ${MAX_PARTICIPANTS})`
             : '';
-      onStatus?.(
-        `${n} active — ${needStable}s stable${holdNote}…`
-      );
+      onStatus?.(`${n} active — ${needStable}s stable${holdNote}…`);
     } else if (enough) {
       const inSecs = Math.max(0, Math.ceil((minReady - now) / 1_000));
-      onStatus?.(
-        `${n} active wallet(s) — min gather ${inSecs}s…`
-      );
+      onStatus?.(`${n} active wallet(s) — min gather ${inSecs}s…`);
     } else {
-      onStatus?.(
-        `Waiting: ${n} active (up to ${secsLeft}s)…`
-      );
+      onStatus?.(`Waiting: ${n} active (up to ${secsLeft}s)…`);
     }
     await waitUntil(Math.min(maxWait, now + 2_000), signal);
   }
@@ -483,10 +489,10 @@ const UTXO_RECHECK_TIMEOUT_MS = 15_000;
  * slots". Prefer the largest coins so the round still reaches a meaningful tier;
  * the remainder stays eligible for later rounds.
  */
-function selectFusionInputs(utxos: UTXO[]): UTXO[] {
+export function selectFusionInputs(utxos: UTXO[]): UTXO[] {
   return [...utxos]
     .sort((a, b) => (b.value ?? 0) - (a.value ?? 0))
-    .slice(0, CREDENTIAL_SLOTS_PER_PEER);
+    .slice(0, MAX_INPUT_CREDENTIALS_PER_PEER);
 }
 
 async function onlyUnspent(
@@ -561,14 +567,18 @@ export async function refreshAndVerifyP2pInputs(
   const claimed = reservedOutpoints(walletId);
   const nonToken = (list: UTXO[]) =>
     list.filter(
-      (utxo) => !utxo.token && !claimed.has(outpointKey(utxo.tx_hash, utxo.tx_pos))
+      (utxo) =>
+        !utxo.token && !claimed.has(outpointKey(utxo.tx_hash, utxo.tx_pos))
     );
 
   // Prefer the runner's already-reconciled coins (skip a second exclusive
   // listunspent that blocked multi-wallet P2P on "Refreshing coins…").
   let free = options?.preferProvided ? nonToken(fallbackUtxos) : [];
   if (free.length === 0) {
-    const refreshed = await reconcileActiveWalletUtxosForSpend(walletId, signal);
+    const refreshed = await reconcileActiveWalletUtxosForSpend(
+      walletId,
+      signal
+    );
     if (signal?.aborted) throw new Error('fusion round cancelled');
     const candidates = refreshed
       ? Object.values(refreshed)
@@ -623,6 +633,188 @@ export async function refreshAndVerifyP2pInputs(
     );
   }
   return spendable;
+}
+
+interface NativeP2pSignResponse {
+  protocol: string;
+  templateHash: string;
+  fee: number;
+  signatures: Array<{ outpoint: string; signature: string }>;
+}
+
+export interface NativeP2pSignOptions {
+  tx: AssembledFusionTx;
+  myContribution: PeerContribution;
+  keysByPubkey: Map<string, Uint8Array>;
+  network: 'mainnet' | 'chipnet';
+  session: string;
+  participants: string[];
+  tier: number;
+  feerate: number;
+}
+
+function concatBytes(parts: readonly Uint8Array[]): Uint8Array {
+  const size = parts.reduce((total, part) => total + part.length, 0);
+  const merged = new Uint8Array(size);
+  let offset = 0;
+  for (const part of parts) {
+    merged.set(part, offset);
+    offset += part.length;
+  }
+  return merged;
+}
+
+function p2pSigningHashes(options: NativeP2pSignOptions): {
+  transcriptHash: string;
+  templateHash: string;
+} {
+  const session = options.session.toLowerCase();
+  if (!/^[0-9a-f]{64}$/.test(session)) {
+    throw new Error('P2P Fusion signing session must be 32-byte hex.');
+  }
+  const transcript = JSON.stringify({
+    protocol: 'p2p-v3',
+    network: options.network,
+    session,
+    tier: options.tier,
+    feerate: options.feerate,
+    participants: [...options.participants]
+      .map((participant) => participant.toLowerCase())
+      .sort(),
+    inputs: options.tx.inputs.map((input) => ({
+      prevTxid: input.prevTxid.toLowerCase(),
+      prevIndex: input.prevIndex,
+      value: input.value,
+      pubkey: input.pubkey.toLowerCase(),
+    })),
+    outputs: options.tx.outputs.map((output) => ({
+      script: output.script.toLowerCase(),
+      value: output.value,
+    })),
+  });
+  const transcriptBytes = sha256.hash(new TextEncoder().encode(transcript));
+  const unsignedTemplate = encodeTransaction(toLibauthTx(options.tx).transaction);
+  const unsignedTemplateHash = hash256(unsignedTemplate);
+  const templateBytes = concatBytes([
+    new TextEncoder().encode('OPTN-P2P-FUSION-V3\0'),
+    new TextEncoder().encode(options.network),
+    Uint8Array.of(0),
+    hexToBin(session),
+    transcriptBytes,
+    unsignedTemplateHash,
+  ]);
+  return {
+    transcriptHash: binToHex(transcriptBytes),
+    templateHash: binToHex(sha256.hash(templateBytes)),
+  };
+}
+
+/**
+ * Cross the native P2P-v3 signing boundary only after the renderer has applied
+ * its independent safety check. Rust rebuilds the complete template, repeats
+ * exact owned input/output and fee checks, and returns signatures only for the
+ * wallet-owned outpoints.
+ */
+export async function nativeSignP2pInputs(
+  options: NativeP2pSignOptions
+): Promise<InputSig[]> {
+  const hashes = p2pSigningHashes(options);
+  const txByOutpoint = new Map(
+    options.tx.inputs.map((input) => [
+      `${input.prevTxid.toLowerCase()}:${input.prevIndex}`,
+      input,
+    ])
+  );
+  const keyBuffers: Uint8Array[] = [];
+  const ownedInputs = options.myContribution.inputs.map((input) => {
+    const outpoint = `${input.prevTxid.toLowerCase()}:${input.prevIndex}`;
+    const actual = txByOutpoint.get(outpoint);
+    if (
+      !actual ||
+      actual.value !== input.value ||
+      actual.pubkey.toLowerCase() !== input.pubkey.toLowerCase()
+    ) {
+      throw new Error('P2P Fusion template changed a wallet-owned input.');
+    }
+    const privateKey = options.keysByPubkey.get(input.pubkey);
+    if (!privateKey || privateKey.length !== 32) {
+      throw new Error('P2P Fusion native signer is missing an owned key.');
+    }
+    keyBuffers.push(privateKey);
+    return {
+      prevTxid: input.prevTxid.toLowerCase(),
+      prevIndex: input.prevIndex,
+      pubkey: input.pubkey.toLowerCase(),
+      value: input.value,
+      privateKey: binToHex(privateKey),
+    };
+  });
+  const requiredFee = minimumFee(options.tx, options.feerate);
+  const request = {
+    protocol: 'p2p-v3',
+    network: options.network,
+    session: options.session.toLowerCase(),
+    transcriptHash: hashes.transcriptHash,
+    templateHash: hashes.templateHash,
+    inputs: options.tx.inputs.map((input) => ({
+      prevTxid: input.prevTxid.toLowerCase(),
+      prevIndex: input.prevIndex,
+      pubkey: input.pubkey.toLowerCase(),
+      value: input.value,
+    })),
+    outputs: options.tx.outputs.map((output) => ({
+      script: output.script.toLowerCase(),
+      value: output.value,
+    })),
+    ownedInputs,
+    ownedOutputs: options.myContribution.outputs.map((output) => ({
+      script: output.script.toLowerCase(),
+      value: output.value,
+    })),
+    feerate: options.feerate,
+    maxFee: requiredFee * 3,
+  };
+
+  let response: NativeP2pSignResponse;
+  try {
+    response = await invoke<NativeP2pSignResponse>('fusion_p2p_sign', {
+      request,
+    });
+  } finally {
+    for (const owned of request.ownedInputs) owned.privateKey = '';
+    for (const key of keyBuffers) key.fill(0);
+  }
+  if (
+    response.protocol !== 'p2p-v3' ||
+    response.templateHash.toLowerCase() !== hashes.templateHash ||
+    !Number.isSafeInteger(response.fee) ||
+    !Array.isArray(response.signatures)
+  ) {
+    throw new Error('Native P2P Fusion signer returned an invalid response.');
+  }
+  const nativeByOutpoint = new Map<string, string>();
+  for (const signature of response.signatures) {
+    const outpoint = signature.outpoint.toLowerCase();
+    if (
+      nativeByOutpoint.has(outpoint) ||
+      !/^[0-9a-f]{128}$/i.test(signature.signature)
+    ) {
+      throw new Error('Native P2P Fusion signer returned invalid signatures.');
+    }
+    nativeByOutpoint.set(outpoint, signature.signature.toLowerCase());
+  }
+  return options.myContribution.inputs.map((input) => {
+    const outpoint = `${input.prevTxid.toLowerCase()}:${input.prevIndex}`;
+    const signature = nativeByOutpoint.get(outpoint);
+    if (!signature || nativeByOutpoint.size !== ownedInputs.length) {
+      throw new Error('Native P2P Fusion signer omitted an owned input.');
+    }
+    return {
+      prevTxid: input.prevTxid,
+      prevIndex: input.prevIndex,
+      unlockingBytecode: `41${signature}4121${input.pubkey.toLowerCase()}`,
+    };
+  });
 }
 
 const DEFINITIVE_BROADCAST_REJECTIONS = [
@@ -695,6 +887,64 @@ export async function broadcastP2pTransaction(
   };
 }
 
+/**
+ * Production P2P broadcast route. Both the BCH relay and every independent
+ * visibility lookup are performed by native code through the already-verified
+ * Tor proxy; no renderer Electrum socket is used as a privacy fallback.
+ */
+export async function broadcastP2pTransactionTorOnly(
+  txHex: string,
+  network: Network,
+  tor: { host: string; port: number }
+): Promise<P2pBroadcastReceipt> {
+  const expectedTxid = binToHex(hash256(hexToBin(txHex)).reverse());
+  const relay = defaultRelayEndpoints(network);
+  let relaySubmitted = false;
+  let observerSeen = false;
+  try {
+    const observation = await invoke<FusionRelayObservation>(
+      'fusion_relay_broadcast_and_observe',
+      {
+        txHex,
+        network,
+        ...relay,
+        torHost: tor.host,
+        torPort: tor.port,
+      }
+    );
+    if (observation.txid.toLowerCase() !== expectedTxid) {
+      throw new Error('Tor relay returned a different transaction id.');
+    }
+    relaySubmitted = observation.relaySubmitted;
+    observerSeen = observation.observerSeen;
+  } catch {
+    // The relay may have accepted the bytes before its response was lost.
+    // Resolve that ambiguity only through the Tor-routed native lookup below.
+  }
+  if (relaySubmitted && observerSeen) {
+    return { txid: expectedTxid, verified: true };
+  }
+
+  const [lookup, ...fallbacks] = inputLookupEndpoints(network);
+  const seen = await invoke<boolean>('fusion_transaction_is_known', {
+    txid: expectedTxid,
+    lookupHost: lookup.host,
+    lookupPort: lookup.port,
+    lookupUseSsl: lookup.useSsl,
+    lookupFallbacks: fallbacks,
+    torHost: tor.host,
+    torPort: tor.port,
+  }).catch(() => false);
+  if (seen) return { txid: expectedTxid, verified: true };
+
+  return {
+    txid: expectedTxid,
+    verified: false,
+    warning:
+      'Broadcast was sent over Tor, but independent network visibility is still pending. The signed transaction remains reserved while wallet sync verifies it.',
+  };
+}
+
 /** Run one P2P round on the active BCH network. */
 export async function runP2pFusion(
   opts: P2pFusionOptions
@@ -732,6 +982,17 @@ export async function runP2pFusion(
   let stopPool: (() => void) | null = null;
   let round: RoundIdentity | null = null;
   let reservedForRound: string[] = [];
+  // Declared beside the reservation they gate, because the `finally` that
+  // releases it lives outside the try block that performs the broadcast.
+  //
+  // Three states, not two. A round that never reached the relay must free its
+  // coins (otherwise a failed round strands them until the TTL). A round proven
+  // independently visible must free them (they are spent). A round that reached
+  // the relay with an unresolved outcome must NOT — those bytes may be live, and
+  // reselecting the inputs would build a conflicting spend against our own
+  // possibly-confirming CoinJoin.
+  let broadcastAttempted = false;
+  let broadcastVerified = false;
   let withdrawFromPool: (() => Promise<void>) | null = null;
 
   try {
@@ -1007,10 +1268,22 @@ export async function runP2pFusion(
         myPubkey: round.pubkey,
         participants: negotiated.participants,
         session: negotiated.session,
+        network: toPoolNetwork(opts.network),
         tier: negotiated.tier,
         feerate: P2P_FEERATE,
         myContribution: { inputs: myInputs, outputs: myOutputs },
         keysByPubkey,
+        sign: (tx) =>
+          nativeSignP2pInputs({
+            tx,
+            myContribution: { inputs: myInputs, outputs: myOutputs },
+            keysByPubkey,
+            network: toPoolNetwork(opts.network),
+            session: negotiated.session,
+            participants: negotiated.participants,
+            tier: negotiated.tier,
+            feerate: P2P_FEERATE,
+          }),
         // Onion is always on (rounds are ≥3 peers; no 2-party / direct path).
         // ≤ server T_START_CLOSE_BLAME; tight jitter so inject fits comps window.
         timeoutMs: P2P_ROUND_TIMEOUT_MS,
@@ -1026,17 +1299,40 @@ export async function runP2pFusion(
         },
         broadcast: async (txHex) => {
           try {
-            const receipt = await broadcastP2pTransaction(txHex);
+            const expectedTxid = binToHex(hash256(hexToBin(txHex)).reverse());
+            const tracked = await OutboundTransactionTracker.trackAttempt({
+              walletId: opts.walletId,
+              rawTx: txHex,
+              spentInputs: spendable,
+              source: 'p2p-fusion',
+              sourceLabel: 'P2P Fusion',
+              privacyRoute: 'tor-only',
+            });
+            if (!tracked || tracked.txid.toLowerCase() !== expectedTxid) {
+              throw new Error(
+                'The signed P2P Fusion transaction could not be reserved before relay.'
+              );
+            }
+            broadcastAttempted = true;
+            const receipt = await broadcastP2pTransactionTorOnly(
+              txHex,
+              opts.network,
+              opts.tor!
+            );
             broadcastWarning = receipt.warning;
+            // An unverified receipt means the bytes may or may not be live. The
+            // receipt promises the inputs stay reserved; honour that here so the
+            // `finally` below cannot hand these coins to the next round while a
+            // possibly-live transaction still spends them.
+            broadcastVerified = receipt.verified;
             return receipt.txid;
           } catch (error) {
             // A rejected CoinJoin does not identify which input became stale.
             // Re-check our own inputs so the user gets a useful, bounded verdict
             // without writing the raw transaction or wallet outpoints to logs.
-            const survivors = await onlyUnspent(
-              spendable,
-              opts.signal
-            ).catch(() => null);
+            const survivors = await onlyUnspent(spendable, opts.signal).catch(
+              () => null
+            );
             const verdict =
               survivors === null
                 ? 'could not re-check (Electrum unreachable)'
@@ -1072,17 +1368,34 @@ export async function runP2pFusion(
     const warning = [broadcastWarning, fusionCompletionWarning(completion)]
       .filter((message): message is string => Boolean(message))
       .join(' ');
+    // Only claim a completed fusion when the CoinJoin was independently seen.
+    // "Fused ✓" on an unresolved broadcast tells the user the round is done and
+    // their coins are spent, when in fact nothing on the network confirms that.
     status?.(
-      warning
-        ? `Fused ✓ — txid ${result.txid}. ${warning}`
-        : `Fused ✓ — txid ${result.txid}`
+      !broadcastVerified
+        ? `Fusion pending — txid ${result.txid}. ${warning || 'Awaiting network visibility; inputs stay reserved until sync confirms.'}`
+        : warning
+          ? `Fused ✓ — txid ${result.txid}. ${warning}`
+          : `Fused ✓ — txid ${result.txid}`
     );
     return warning.length > 0 ? { ...result, warning } : result;
   } finally {
-    // Free the coins whatever happened. A successful round has already spent
-    // them (the live re-check keeps them out next time); a failed one must not
-    // strand them. The stored TTL is only a backstop for a hard crash.
-    releaseOutpoints(opts.walletId, reservedForRound);
+    // Free the coins only when their fate is known. A round that never reached
+    // the relay must not strand them; a round proven visible has already spent
+    // them and the live re-check keeps them out next time. An AMBIGUOUS
+    // broadcast is neither: the receipt told the user "remains reserved while
+    // wallet sync verifies it", and releasing here would break that promise and
+    // let the next round build a conflicting spend against a CoinJoin that may
+    // already be confirming. Leave the lock for the stored TTL to expire, or for
+    // wallet sync to resolve the transaction first.
+    if (!broadcastAttempted || broadcastVerified) {
+      releaseOutpoints(opts.walletId, reservedForRound);
+    } else {
+      console.warn(
+        '[p2p-fusion] broadcast unresolved — keeping %d input reservation(s) until sync confirms',
+        reservedForRound.length
+      );
+    }
     // Retire this throwaway key for ALL windows (ghost peer filter), then
     // publish expired announcement so relays stop replaying us as live.
     if (round?.pubkey) retireRoundKey(round.pubkey);

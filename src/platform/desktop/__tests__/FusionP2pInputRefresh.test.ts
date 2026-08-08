@@ -1,11 +1,13 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { UTXO } from '../../../types/types';
+import { Network } from '../../../state/slices/networkSlice';
 
 const getUTXOsManyMock = vi.fn();
 const broadcastTransactionMock = vi.fn();
 const getTransactionVisibilityMock = vi.fn();
 const reconcileActiveWalletUtxosMock = vi.fn();
 const reservedOutpointsMock = vi.fn();
+const invokeMock = vi.fn();
 
 vi.mock('../../../services/ElectrumService', () => ({
   default: {
@@ -31,7 +33,7 @@ vi.mock('../fusionRoundState', () => ({
 }));
 
 vi.mock('@tauri-apps/api/core', () => ({
-  invoke: vi.fn(),
+  invoke: invokeMock,
 }));
 
 describe('P2P Fusion input refresh', () => {
@@ -103,6 +105,24 @@ describe('P2P Fusion input refresh', () => {
       })
     ).resolves.toEqual([coin]);
   }, 15_000);
+
+  it('reserves credential capacity for the maximum four output components', async () => {
+    const coins: UTXO[] = Array.from({ length: 30 }, (_, index) => ({
+      address: `bchtest:q${index}`,
+      height: 1,
+      tx_hash: index.toString(16).padStart(64, '0'),
+      tx_pos: 0,
+      value: 10_000 + index,
+    }));
+    const fusionModule = (await import('../FusionP2pService')) as unknown as {
+      selectFusionInputs?: (utxos: UTXO[]) => UTXO[];
+    };
+
+    expect(typeof fusionModule.selectFusionInputs).toBe('function');
+    const selected = fusionModule.selectFusionInputs!(coins);
+    expect(selected).toHaveLength(20);
+    expect(selected[0].value).toBe(10_029);
+  });
 });
 
 describe('P2P Fusion broadcast reconciliation', () => {
@@ -178,5 +198,123 @@ describe('P2P Fusion broadcast reconciliation', () => {
         visibility: async () => ({ seen: false, confirmed: false }),
       })
     ).rejects.toThrow(/broadcast rejected/i);
+  });
+
+  it('uses only native Tor relay and Tor-routed observation in production', async () => {
+    const broadcast = await broadcaster();
+    const expected = (
+      await broadcast(txHex, {
+        broadcast: async () => {
+          const { binToHex, hexToBin } = await import('../../../utils/hex');
+          const { hash256 } = await import('@bitauth/libauth');
+          return binToHex(hash256(hexToBin(txHex)).reverse());
+        },
+        visibility: async () => ({ seen: false, confirmed: false }),
+      })
+    ).txid;
+    invokeMock
+      .mockResolvedValueOnce({
+        txid: expected,
+        relaySubmitted: true,
+        observerSeen: false,
+      })
+      .mockResolvedValueOnce(true);
+
+    const { broadcastP2pTransactionTorOnly } = await import(
+      '../FusionP2pService'
+    );
+    await expect(
+      broadcastP2pTransactionTorOnly(txHex, Network.CHIPNET, {
+        host: '127.0.0.1',
+        port: 9251,
+      })
+    ).resolves.toEqual({ txid: expected, verified: true });
+
+    expect(invokeMock.mock.calls.map(([command]) => command)).toEqual([
+      'fusion_relay_broadcast_and_observe',
+      'fusion_transaction_is_known',
+    ]);
+    expect(broadcastTransactionMock).not.toHaveBeenCalled();
+    expect(getTransactionVisibilityMock).not.toHaveBeenCalled();
+    expect(invokeMock.mock.calls[0][1]).toMatchObject({
+      txHex,
+      network: Network.CHIPNET,
+      torHost: '127.0.0.1',
+      torPort: 9251,
+    });
+    expect(invokeMock.mock.calls[1][1]).toMatchObject({
+      txid: expected,
+      torHost: '127.0.0.1',
+      torPort: 9251,
+    });
+  });
+});
+
+describe('P2P Fusion native signing boundary', () => {
+  it('binds the exact v3 template and converts only native-owned signatures', async () => {
+    const pubkey = `02${'11'.repeat(32)}`;
+    const input = {
+      prevTxid: '22'.repeat(32),
+      prevIndex: 3,
+      value: 100_000,
+      pubkey,
+    };
+    const output = { script: `76a914${'33'.repeat(20)}88ac`, value: 99_500 };
+    invokeMock.mockImplementationOnce(async (command, args) => {
+      expect(command).toBe('fusion_p2p_sign');
+      const request = (args as { request: Record<string, unknown> }).request as {
+        protocol: string;
+        network: string;
+        session: string;
+        transcriptHash: string;
+        templateHash: string;
+        ownedInputs: Array<Record<string, unknown>>;
+        ownedOutputs: Array<Record<string, unknown>>;
+        feerate: number;
+      };
+      expect(request).toMatchObject({
+        protocol: 'p2p-v3',
+        network: 'chipnet',
+        session: '44'.repeat(32),
+        feerate: 1_000,
+      });
+      expect(request.transcriptHash).toMatch(/^[0-9a-f]{64}$/);
+      expect(request.templateHash).toMatch(/^[0-9a-f]{64}$/);
+      expect(request.ownedInputs).toEqual([
+        { ...input, privateKey: '55'.repeat(32) },
+      ]);
+      expect(request.ownedOutputs).toEqual([output]);
+      return {
+        protocol: 'p2p-v3',
+        templateHash: request.templateHash,
+        fee: 500,
+        signatures: [
+          {
+            outpoint: `${input.prevTxid}:${input.prevIndex}`,
+            signature: '66'.repeat(64),
+          },
+        ],
+      };
+    });
+
+    const { nativeSignP2pInputs } = await import('../FusionP2pService');
+    const signatures = await nativeSignP2pInputs({
+      tx: { inputs: [input], outputs: [output] },
+      myContribution: { inputs: [input], outputs: [output] },
+      keysByPubkey: new Map([[pubkey, Uint8Array.from({ length: 32 }, () => 0x55)]]),
+      network: 'chipnet',
+      session: '44'.repeat(32),
+      participants: ['77'.repeat(32), '88'.repeat(32), '99'.repeat(32)],
+      tier: 100_000,
+      feerate: 1_000,
+    });
+
+    expect(signatures).toEqual([
+      {
+        prevTxid: input.prevTxid,
+        prevIndex: input.prevIndex,
+        unlockingBytecode: `41${'66'.repeat(64)}4121${pubkey}`,
+      },
+    ]);
   });
 });

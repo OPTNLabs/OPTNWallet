@@ -13,6 +13,16 @@ import { clearFusionDepth, coinDepth } from '../fusionCoinDepth';
 // depth accounting, not tracking/observation/refresh (which Codex owns).
 const recordBroadcast = vi.fn();
 const reconcileActiveWalletUtxosForSpend = vi.fn();
+const { completionDb, completionDispatch } = vi.hoisted(() => ({
+  completionDb: {
+    run: vi.fn(),
+    prepare: vi.fn(() => ({
+      step: () => false,
+      free: vi.fn(),
+    })),
+  },
+  completionDispatch: vi.fn(),
+}));
 vi.mock('../../../services/OutboundTransactionTracker', () => ({
   default: {
     recordBroadcast: (...a: unknown[]) => recordBroadcast(...a),
@@ -25,6 +35,23 @@ vi.mock('../../../services/WalletBackendSyncService', () => ({
 vi.mock('../../../services/WalletUtxoRefreshService', () => ({
   reconcileActiveWalletUtxosForSpend: (...a: unknown[]) =>
     reconcileActiveWalletUtxosForSpend(...a),
+}));
+vi.mock('../../../apis/DatabaseManager/DatabaseService', () => ({
+  default: () => ({
+    ensureDatabaseStarted: vi.fn().mockResolvedValue(undefined),
+    getDatabase: () => completionDb,
+    saveDatabaseToFile: vi.fn().mockResolvedValue(undefined),
+    scheduleDatabaseSave: vi.fn(),
+  }),
+}));
+vi.mock('../../../state/store', () => ({
+  store: { dispatch: completionDispatch },
+}));
+vi.mock('../../../state/slices/transactionSlice', () => ({
+  addTransactions: (payload: unknown) => ({
+    type: 'transactions/addTransactions',
+    payload,
+  }),
 }));
 
 import { completeFusionBroadcast } from '../FusionCompletionService';
@@ -78,16 +105,16 @@ function coinJoinHex(addresses: string[]): string {
   );
 }
 
-const utxo = (txid: string, pos = 0) => ({ tx_hash: txid, tx_pos: pos }) as never;
+const utxo = (txid: string, pos = 0) =>
+  ({ tx_hash: txid, tx_pos: pos }) as never;
 
 describe('fusion depth: ownership matching', () => {
   it('matches by locking script, not output position', () => {
     // Peer, ours, peer, ours — a shuffled round. Index-based logic would fail.
     const hex = coinJoinHex([PEER, OURS_A, PEER, OURS_B]);
-    expect(ownedOutpointsOf(hex, TXID, [scriptHex(OURS_A), scriptHex(OURS_B)])).toEqual([
-      `${TXID}:1`,
-      `${TXID}:3`,
-    ]);
+    expect(
+      ownedOutpointsOf(hex, TXID, [scriptHex(OURS_A), scriptHex(OURS_B)])
+    ).toEqual([`${TXID}:1`, `${TXID}:3`]);
   });
 
   it('claims nothing when no output pays us', () => {
@@ -101,17 +128,23 @@ describe('fusion depth: ownership matching', () => {
   });
 
   it('survives an undecodable transaction without throwing', () => {
-    expect(ownedOutpointsOf('not-hex-at-all', TXID, [scriptHex(OURS_A)])).toEqual([]);
+    expect(
+      ownedOutpointsOf('not-hex-at-all', TXID, [scriptHex(OURS_A)])
+    ).toEqual([]);
   });
 
   it('maps spent inputs to outpoints', () => {
-    expect(spentOutpointsOf([utxo('aa', 1), utxo('bb', 0)])).toEqual(['aa:1', 'bb:0']);
+    expect(spentOutpointsOf([utxo('aa', 1), utxo('bb', 0)])).toEqual([
+      'aa:1',
+      'bb:0',
+    ]);
   });
 });
 
 describe('fusion depth: one shared completion path for both transports', () => {
   beforeEach(() => {
-    (globalThis as { localStorage?: unknown }).localStorage = new MemoryStorage();
+    (globalThis as { localStorage?: unknown }).localStorage =
+      new MemoryStorage();
     clearFusionDepth(9);
     recordBroadcast.mockReset().mockResolvedValue(undefined);
     reconcileActiveWalletUtxosForSpend

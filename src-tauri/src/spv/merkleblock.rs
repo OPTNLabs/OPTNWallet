@@ -144,7 +144,11 @@ pub fn parse_merkleblock(payload: &[u8]) -> Result<MerkleBlock, String> {
     let root_ok = root == header[36..68];
     let valid = !pm.bad && all_hashes_used && flag_bits_ok && root_ok;
 
-    Ok(MerkleBlock { header, valid, matched_txids: pm.matched })
+    Ok(MerkleBlock {
+        header,
+        valid,
+        matched_txids: pm.matched,
+    })
 }
 
 #[cfg(test)]
@@ -191,7 +195,10 @@ mod tests {
     fn verifies_root_and_reports_match() {
         let (payload, a) = four_tx_proof_of_a();
         let mb = parse_merkleblock(&payload).unwrap();
-        assert!(mb.valid, "valid proof should verify against the header root");
+        assert!(
+            mb.valid,
+            "valid proof should verify against the header root"
+        );
         assert_eq!(mb.matched_txids, vec![a]);
     }
 

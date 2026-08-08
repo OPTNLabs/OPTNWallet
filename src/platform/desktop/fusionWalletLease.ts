@@ -137,10 +137,9 @@ export async function acquireRoundLease(
   const result = await withWalletLock(walletId, () =>
     takeLeaseIfFree(walletId, nowMs)
   );
-  if (result.ran) return result.value;
-  // No Web Locks (some WebViews): still allow single-window via storage +
-  // stale reclaim. Prefer fusing over permanent "busy".
-  return takeLeaseIfFree(walletId, nowMs);
+  // Every round can spend a fee. Manual starts need the same cross-window
+  // atomicity as Auto, so never create a storage-only lease.
+  return result.ran ? result.value : null;
 }
 
 /**
@@ -159,7 +158,13 @@ export async function touchRoundLease(
     writeJson(key, { owner, at: nowMs } satisfies LeaseRecord);
     return true;
   });
-  return result.ran ? result.value : false;
+  if (result.ran) return result.value;
+  // Manual single-window fallback: refresh only the token we still own. Auto
+  // never reaches this path because acquiring an Auto lease requires Web Locks.
+  const held = readJson<LeaseRecord>(key);
+  if (!held || held.owner !== owner) return false;
+  writeJson(key, { owner, at: nowMs } satisfies LeaseRecord);
+  return true;
 }
 
 /** Release only if we still hold it: a lease we already lost to TTL now belongs
@@ -191,23 +196,30 @@ export async function releaseRoundLease(
  * "already running" while nothing is actually fusing. Do not call this while a
  * real round is live in another window of the same wallet.
  */
-export async function forceClearRoundLease(walletId: number): Promise<void> {
+export async function reclaimStaleRoundState(
+  walletId: number,
+  cleanup: () => void
+): Promise<boolean> {
   const key = `${LEASE_PREFIX}${walletId}`;
   const result = await withWalletLock(walletId, () => {
+    // Re-read inside the wallet lock: another window may have replaced the
+    // stale lease while this recovery attempt waited for exclusivity.
+    if (leaseIsLive(readJson<LeaseRecord>(key), Date.now())) return false;
     try {
       getLocalStorage()?.removeItem(key);
     } catch {
       /* storage unavailable */
     }
+    cleanup();
+    return true;
   });
-  if (!result.ran) {
-    // No Web Lock API: still try a best-effort remove (single-window recovery).
-    try {
-      getLocalStorage()?.removeItem(key);
-    } catch {
-      /* ignore */
-    }
-  }
+  // Owner-independent deletion has no safe storage-only fallback across
+  // windows. Without Web Locks, fail closed and leave the record untouched.
+  return result.ran ? result.value : false;
+}
+
+export async function forceClearRoundLease(walletId: number): Promise<boolean> {
+  return reclaimStaleRoundState(walletId, () => undefined);
 }
 
 /** Read-only: whether a non-stale durable lease is recorded for this wallet. */

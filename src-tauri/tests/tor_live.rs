@@ -20,7 +20,10 @@ async fn detects_tor_and_completes_fusion_handshake_over_tor() {
         "fusion.servo.cash",
         8789,
         true,
-        Transport::Tor { host: "127.0.0.1", port },
+        Transport::Tor {
+            host: "127.0.0.1",
+            port,
+        },
         None,
     )
     .await

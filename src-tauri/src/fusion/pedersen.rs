@@ -31,8 +31,7 @@ static H: Lazy<ProjectivePoint> = Lazy::new(|| {
     let mut compressed = [0u8; 33];
     compressed[0] = 0x02; // even-y prefix
     compressed[1..].copy_from_slice(SEED);
-    let ep = EncodedPoint::from_bytes(compressed)
-        .expect("H compressed encoding is well-formed");
+    let ep = EncodedPoint::from_bytes(compressed).expect("H compressed encoding is well-formed");
     let ap = Option::<AffinePoint>::from(AffinePoint::from_encoded_point(&ep))
         .expect("H lies on secp256k1");
     ProjectivePoint::from(ap)
@@ -81,7 +80,10 @@ pub struct Commitment {
 pub fn commit(amount: i64) -> Commitment {
     let nonce = random_nonce();
     let point = *H * scalar_from_i64(amount) + ProjectivePoint::GENERATOR * nonce;
-    Commitment { nonce, p_uncompressed: encode_uncompressed(&point) }
+    Commitment {
+        nonce,
+        p_uncompressed: encode_uncompressed(&point),
+    }
 }
 
 /// 32 cryptographically-random bytes — for salts and the round's random number.

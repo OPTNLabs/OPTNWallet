@@ -33,8 +33,8 @@ const DesktopAppShell: React.FC = () => {
   // Transport config describes how the PROCESS reaches the network, so it is
   // shared by every window rather than per wallet or per window.
   useTransportConfig();
-  useWalletFusionPolicy();
-  useAutoFusion();
+  const fusionPolicyReady = useWalletFusionPolicy();
+  useAutoFusion(fusionPolicyReady);
   // Which wallet this window holds, in the title bar — with several windows
   // open it is the only way to tell them apart without focusing each one.
   useWindowTitle();

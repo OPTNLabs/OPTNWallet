@@ -292,6 +292,7 @@ const ElectrumService = {
     const results: Record<string, UTXO[]> = {};
     const pending: string[] = [];
     const pendingCalls: Array<{ method: string; params: RequestResponse[] }> = [];
+    const joinedInflight: Array<{ address: string; promise: Promise<UTXO[]> }> = [];
     const now = Date.now();
 
     // Prefer scripthash.* directly: `blockchain.address.*` is not implemented by
@@ -299,9 +300,6 @@ const ElectrumService = {
     // address"), which forced a serial fallback per address. Converting to
     // scripthash upfront is valid on every server and batches cleanly.
     //
-    // Wallet-wide batches must not serially await per-address inflight singles
-    // (subscription storm). Only join inflight for small batches.
-    const joinInflight = uniqueAddresses.length <= 4;
     for (const address of uniqueAddresses) {
       const cached = cacheByAddr.get(address);
       if (cached && now - cached.ts < UTXO_TTL_MS) {
@@ -309,16 +307,10 @@ const ElectrumService = {
         continue;
       }
 
-      if (joinInflight) {
-        const inflight = inflightByAddr.get(address);
-        if (inflight) {
-          try {
-            results[address] = await inflight;
-          } catch {
-            // Failed listunspent — leave key absent (keep prior coins).
-          }
-          continue;
-        }
+      const inflight = inflightByAddr.get(address);
+      if (inflight) {
+        joinedInflight.push({ address, promise: inflight });
+        continue;
       }
 
       let scriptHash: string | null = null;
@@ -338,11 +330,20 @@ const ElectrumService = {
       });
     }
 
-    const cachedCount = uniqueAddresses.length - pending.length;
+    const cachedCount = uniqueAddresses.length - pending.length - joinedInflight.length;
     if (cachedCount > 0) {
       onProgress?.(cachedCount, uniqueAddresses.length);
     }
     if (pendingCalls.length === 0) {
+      await Promise.all(
+        joinedInflight.map(async ({ address, promise }) => {
+          try {
+            results[address] = await promise;
+          } catch {
+            // Failed listunspent — leave key absent (keep prior coins).
+          }
+        })
+      );
       onProgress?.(uniqueAddresses.length, uniqueAddresses.length);
       return results;
     }
@@ -405,7 +406,17 @@ const ElectrumService = {
       inflightByAddr.set(address, p);
     }
 
-    await batchPromise;
+    await Promise.all([
+      batchPromise,
+      ...joinedInflight.map(async ({ address, promise }) => {
+        try {
+          results[address] = await promise;
+        } catch {
+          // Failed listunspent — leave key absent (keep prior coins).
+        }
+      }),
+    ]);
+    onProgress?.(uniqueAddresses.length, uniqueAddresses.length);
     return results;
   },
 

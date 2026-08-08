@@ -79,6 +79,7 @@ struct TxOutput {
 /// The CoinJoin transaction rebuilt from the shared component list, plus which
 /// component index each input came from (so a player can find its own inputs).
 pub struct FusionTx {
+    version: u32,
     inputs: Vec<TxInput>,
     outputs: Vec<TxOutput>,
     /// input position i -> component index in all_components.
@@ -88,7 +89,10 @@ pub struct FusionTx {
 impl FusionTx {
     /// Build the transaction from the ordered, serialized component list and the
     /// verified session hash (goes in the OP_RETURN marker).
-    pub fn from_components(all_components: &[Vec<u8>], session_hash: &[u8; 32]) -> Result<Self, String> {
+    pub fn from_components(
+        all_components: &[Vec<u8>],
+        session_hash: &[u8; 32],
+    ) -> Result<Self, String> {
         let mut inputs = Vec::new();
         let mut outputs = Vec::new();
         let mut input_component_idx = Vec::new();
@@ -98,7 +102,10 @@ impl FusionTx {
         op_return.extend_from_slice(&FUSE_ID);
         op_return.push(0x20);
         op_return.extend_from_slice(session_hash);
-        outputs.push(TxOutput { value: 0, script: op_return });
+        outputs.push(TxOutput {
+            value: 0,
+            script: op_return,
+        });
 
         for (i, ser) in all_components.iter().enumerate() {
             let comp = pb::Component::decode(ser.as_slice())
@@ -119,13 +126,55 @@ impl FusionTx {
                     input_component_idx.push(i);
                 }
                 Some(pb::component::Component::Output(out)) => {
-                    outputs.push(TxOutput { value: out.amount, script: out.scriptpubkey });
+                    outputs.push(TxOutput {
+                        value: out.amount,
+                        script: out.scriptpubkey,
+                    });
                 }
                 Some(pb::component::Component::Blank(_)) => {}
                 None => return Err(format!("component {i}: empty")),
             }
         }
-        Ok(Self { inputs, outputs, input_component_idx })
+        Ok(Self {
+            version: 1,
+            inputs,
+            outputs,
+            input_component_idx,
+        })
+    }
+
+    /// Build the explicit P2P-v3 transaction profile: version 2 and no
+    /// Electron Cash FUZ marker. Display-order txids are converted to wire order.
+    pub fn from_p2p(inputs: &[P2pInput], outputs: &[P2pOutput]) -> Result<Self, String> {
+        if inputs.is_empty() || outputs.is_empty() {
+            return Err("P2P Fusion requires at least one input and output".into());
+        }
+        let inputs = inputs
+            .iter()
+            .map(|input| {
+                let mut txid = input.prev_txid;
+                txid.reverse();
+                Ok(TxInput {
+                    prev_txid_wire: txid,
+                    prev_index: input.prev_index,
+                    pubkey: input.pubkey.clone(),
+                    value: input.value,
+                })
+            })
+            .collect::<Result<Vec<_>, String>>()?;
+        let outputs = outputs
+            .iter()
+            .map(|output| TxOutput {
+                value: output.value,
+                script: output.script.clone(),
+            })
+            .collect();
+        Ok(Self {
+            version: 2,
+            input_component_idx: Vec::new(),
+            inputs,
+            outputs,
+        })
     }
 
     fn hash_prevouts(&self) -> [u8; 32] {
@@ -160,7 +209,7 @@ impl FusionTx {
         let script_code = p2pkh_script(&hash160(&inp.pubkey));
 
         let mut pre = Vec::with_capacity(256);
-        pre.extend_from_slice(&1u32.to_le_bytes()); // version = 1
+        pre.extend_from_slice(&self.version.to_le_bytes());
         pre.extend_from_slice(&self.hash_prevouts());
         pre.extend_from_slice(&self.hash_sequence());
         // outpoint
@@ -196,7 +245,7 @@ impl FusionTx {
             return Err("signature count != input count".into());
         }
         let mut tx = Vec::new();
-        tx.extend_from_slice(&1u32.to_le_bytes()); // version
+        tx.extend_from_slice(&self.version.to_le_bytes());
         varint(self.inputs.len() as u64, &mut tx);
         for (inp, sig) in self.inputs.iter().zip(input_sigs) {
             if sig.len() != 64 {
@@ -237,6 +286,40 @@ impl FusionTx {
     pub fn input_component_index(&self, i: usize) -> Option<usize> {
         self.input_component_idx.get(i).copied()
     }
+
+    pub fn unsigned_template_hash(&self) -> [u8; 32] {
+        let mut tx = Vec::new();
+        tx.extend_from_slice(&self.version.to_le_bytes());
+        varint(self.inputs.len() as u64, &mut tx);
+        for input in &self.inputs {
+            tx.extend_from_slice(&input.prev_txid_wire);
+            tx.extend_from_slice(&input.prev_index.to_le_bytes());
+            tx.push(0);
+            tx.extend_from_slice(&0xffff_ffffu32.to_le_bytes());
+        }
+        varint(self.outputs.len() as u64, &mut tx);
+        for output in &self.outputs {
+            tx.extend_from_slice(&output.value.to_le_bytes());
+            varint(output.script.len() as u64, &mut tx);
+            tx.extend_from_slice(&output.script);
+        }
+        tx.extend_from_slice(&0u32.to_le_bytes());
+        dsha256(&tx)
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct P2pInput {
+    pub prev_txid: [u8; 32],
+    pub prev_index: u32,
+    pub pubkey: Vec<u8>,
+    pub value: u64,
+}
+
+#[derive(Debug, Clone)]
+pub struct P2pOutput {
+    pub script: Vec<u8>,
+    pub value: u64,
 }
 
 #[cfg(test)]
@@ -296,7 +379,7 @@ mod tests {
     fn inputs_map_back_to_their_component_indices() {
         let session = [1u8; 32];
         let comps = vec![
-            output_component(p2pkh_out(9), 5_000),               // idx 0 -> output
+            output_component(p2pkh_out(9), 5_000), // idx 0 -> output
             input_component([0xaa; 32], 0, vec![0x02; 33], 9_000), // idx 1 -> input
             input_component([0xbb; 32], 1, vec![0x03; 33], 8_000), // idx 2 -> input
         ];
@@ -335,7 +418,10 @@ mod tests {
                 input_component([0xcd; 32], 0, pubkey.clone(), 50_000),
                 output_component(p2pkh_out(4), 40_000),
             ];
-            FusionTx::from_components(&c, &sess).unwrap().sighash(0).unwrap()
+            FusionTx::from_components(&c, &sess)
+                .unwrap()
+                .sighash(0)
+                .unwrap()
         };
         assert_ne!(make([1u8; 32]), make([2u8; 32]));
     }
@@ -349,8 +435,7 @@ mod tests {
 
         // Stub round signer for the blind requests (unused for tx, but build_round_commit needs it).
         let x = pedersen::random_nonce();
-        let round_pub =
-            schnorr::compressed(&(ProjectivePoint::GENERATOR * x)).to_vec();
+        let round_pub = schnorr::compressed(&(ProjectivePoint::GENERATOR * x)).to_vec();
         let nonce_pts: Vec<Vec<u8>> = (0..4)
             .map(|_| {
                 let k = pedersen::random_nonce();
@@ -360,9 +445,20 @@ mod tests {
             .collect();
 
         let rc = build_round_commit(
-            &[FusionInput { prev_txid: "cd".repeat(32), prev_index: 0, pubkey: pubkey.clone(), value: 100_000 }],
-            &[FusionOutput { scriptpubkey: p2pkh_out(4), value: 90_000 }],
-            4, 1000, &round_pub, &nonce_pts,
+            &[FusionInput {
+                prev_txid: "cd".repeat(32),
+                prev_index: 0,
+                pubkey: pubkey.clone(),
+                value: 100_000,
+            }],
+            &[FusionOutput {
+                scriptpubkey: p2pkh_out(4),
+                value: 90_000,
+            }],
+            4,
+            1000,
+            &round_pub,
+            &nonce_pts,
         )
         .unwrap();
 
@@ -372,5 +468,45 @@ mod tests {
         let sighash = tx.sighash(0).unwrap();
         let sig = schnorr::sign(priv_k, &sighash);
         assert!(schnorr::verify(&pubkey, &sig, &sighash));
+    }
+
+    #[test]
+    fn server_profile_remains_version_one_with_the_fuz_marker() {
+        let tx = FusionTx::from_components(
+            &[input_component([0x11; 32], 0, vec![0x02; 33], 10_000)],
+            &[0x44; 32],
+        )
+        .unwrap();
+        let raw = tx.serialize(&[vec![0x55; 64]]).unwrap();
+        assert_eq!(&raw[..4], &1u32.to_le_bytes());
+        assert_eq!(&tx.outputs[0].script[2..6], b"FUZ\0");
+    }
+
+    #[test]
+    fn p2p_v3_profile_is_version_two_without_a_marker_and_uses_wire_txid_order() {
+        let mut display_txid = [0u8; 32];
+        for (index, byte) in display_txid.iter_mut().enumerate() {
+            *byte = index as u8;
+        }
+        let tx = FusionTx::from_p2p(
+            &[P2pInput {
+                prev_txid: display_txid,
+                prev_index: 3,
+                pubkey: vec![0x02; 33],
+                value: 10_000,
+            }],
+            &[P2pOutput {
+                script: vec![0x51],
+                value: 9_000,
+            }],
+        )
+        .unwrap();
+        let raw = tx.serialize(&[vec![0x55; 64]]).unwrap();
+        assert_eq!(&raw[..4], &2u32.to_le_bytes());
+        assert_eq!(tx.outputs.len(), 1);
+        assert_eq!(
+            &raw[5..37],
+            display_txid.iter().rev().copied().collect::<Vec<_>>()
+        );
     }
 }

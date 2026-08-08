@@ -9,12 +9,12 @@ roadmap.
 
 **Companion docs**
 
-| Doc | Role |
-|-----|------|
-| [p2p-cashfusion-privacy-layers.md](./p2p-cashfusion-privacy-layers.md) | Naming map: Tor vs NIP-59 vs Pedersen vs blind Schnorr vs **output onion** |
-| [THREAT_MODEL.md](./THREAT_MODEL.md) | Adversaries and what each can/cannot do |
-| [cashfusion-implementation-scope.md](./cashfusion-implementation-scope.md) | Ship status — **both** P2P and classic server paths **done** |
-| Source under `src/platform/desktop/nostr/` + `FusionP2pService.ts` | Normative behaviour |
+| Doc                                                                        | Role                                                                       |
+| -------------------------------------------------------------------------- | -------------------------------------------------------------------------- |
+| [p2p-cashfusion-privacy-layers.md](./p2p-cashfusion-privacy-layers.md)     | Naming map: Tor vs NIP-59 vs Pedersen vs blind Schnorr vs **output onion** |
+| [THREAT_MODEL.md](./THREAT_MODEL.md)                                       | Adversaries and what each can/cannot do                                    |
+| [cashfusion-implementation-scope.md](./cashfusion-implementation-scope.md) | Ship status — **both** P2P and classic server paths **done**               |
+| Source under `src/platform/desktop/nostr/` + `FusionP2pService.ts`         | Normative behaviour                                                        |
 
 **Design goal (non-negotiable, and met in code):** P2P is a **different
 transport**, not a weaker protocol. Cryptography that server CashFusion uses
@@ -31,27 +31,28 @@ Bitcoin Cash network (Chipnet for development dogfood).
 
 ## 1. Code map (where truth lives)
 
-| Concern | Primary files |
-|---------|----------------|
-| Pool discovery, live filter, group selection | `src/platform/desktop/nostr/fusion.ts` |
-| Coordinator election | `fusion.ts` → `electCoordinator` |
-| Rendezvous (proposal / full-set ACK / start) | `fusionRendezvous.ts` |
-| Round choreography (credentials → onion → assemble → sign → final) | `fusionSession.ts` |
-| Canonical tx assembly & pre-sign safety | `fusionRound.ts`, `fusionSign.ts` |
-| NIP-59 gift-wrap transport | `fusionTransport.ts` |
-| Output onion (peer peel + shuffle) | `onionCrypto.ts` |
-| Blind Schnorr issuer + requester (TS) | `fusionBlindSchnorr.ts` |
-| Pedersen commits (TS) | `fusionPedersen.ts` |
-| Phase budgets / server parity timing | `fusionTiming.ts` |
-| Auto policy (cooldown, rendezvous tick) | `fusionAutoEngine.ts` |
-| Per-coin fuse depth (rounds-per-coin) | `fusionCoinDepth.ts`, `FusionCompletionService.ts` |
-| Cross-window lease + Auto cooldown stamp | `fusionWalletLease.ts` |
-| Outer runner (manual + Auto; same path) | `FusionRunnerService.ts` |
-| Wallet / Tor / gather / completion | `FusionP2pService.ts` |
-| Auto clock + UTXO wake | `useAutoFusion.ts` |
-| UI (P2P panel, Auto controls) | `P2pFusionTransportPreview.tsx`, `AutoFusionControls.tsx`, `CashFusionSettings.tsx` |
+| Concern                                                            | Primary files                                                                       |
+| ------------------------------------------------------------------ | ----------------------------------------------------------------------------------- |
+| Pool discovery, live filter, group selection                       | `src/platform/desktop/nostr/fusion.ts`                                              |
+| Coordinator election                                               | `fusion.ts` → `electCoordinator`                                                    |
+| Rendezvous (proposal / full-set ACK / start)                       | `fusionRendezvous.ts`                                                               |
+| Round choreography (credentials → onion → assemble → sign → final) | `fusionSession.ts`                                                                  |
+| Canonical tx assembly & pre-sign safety                            | `fusionRound.ts`, `fusionSign.ts`                                                   |
+| NIP-59 gift-wrap transport                                         | `fusionTransport.ts`                                                                |
+| Output onion (peer peel + shuffle)                                 | `onionCrypto.ts`                                                                    |
+| Blind Schnorr issuer + requester (TS)                              | `fusionBlindSchnorr.ts`                                                             |
+| Pedersen commits (TS)                                              | `fusionPedersen.ts`                                                                 |
+| Phase budgets / server parity timing                               | `fusionTiming.ts`                                                                   |
+| Auto policy (cooldown, rendezvous tick)                            | `fusionAutoEngine.ts`                                                               |
+| Per-coin fuse depth (rounds-per-coin)                              | `fusionCoinDepth.ts`, `FusionCompletionService.ts`                                  |
+| Cross-window lease + Auto cooldown stamp                           | `fusionWalletLease.ts`                                                              |
+| Outer runner (manual + Auto; same path)                            | `FusionRunnerService.ts`                                                            |
+| Wallet / Tor / gather / completion                                 | `FusionP2pService.ts`                                                               |
+| Auto clock + UTXO wake                                             | `useAutoFusion.ts`                                                                  |
+| UI (P2P panel, Auto controls)                                      | `P2pFusionTransportPreview.tsx`, `AutoFusionControls.tsx`, `CashFusionSettings.tsx` |
 
-Protocol message version: **`ROUND_MSG_VERSION = 2`** (`fusionRound.ts`).
+Protocol message version: **`ROUND_MSG_VERSION = 3`** (`fusionRound.ts`).
+Version 3 is incompatible with v2 and rejects downgrade attempts.
 Messages with any other `version` are rejected.
 
 ---
@@ -119,14 +120,14 @@ start, live UTXO refresh, fuse depth, cooldown, cross-window lease) via
 
 ### 3.2 Pool announcement (public, replaceable)
 
-| Constant | Value | Meaning |
-|----------|-------|---------|
-| `POOL_ANNOUNCE_KIND` | **12230** | NIP-01 **replaceable** kind (10000–19999) |
-| `FUSION_POOL_PROTOCOL` | **1** | Content protocol number |
-| `POOL_PEER_TTL_SECONDS` | **180** | Announcement expiry window |
-| `POOL_REANNOUNCE_SECONDS` | ~refresh interval | Live peers re-sign `created_at` |
-| `POOL_LIVE_ACTIVE_SECONDS` | **24** | Soft “last heard” window |
-| Tag `t` | `optn-fusion-v1-{network}` | Network-scoped pool |
+| Constant                   | Value                      | Meaning                                   |
+| -------------------------- | -------------------------- | ----------------------------------------- |
+| `POOL_ANNOUNCE_KIND`       | **12230**                  | NIP-01 **replaceable** kind (10000–19999) |
+| `FUSION_POOL_PROTOCOL`     | **1**                      | Content protocol number                   |
+| `POOL_PEER_TTL_SECONDS`    | **180**                    | Announcement expiry window                |
+| `POOL_REANNOUNCE_SECONDS`  | ~refresh interval          | Live peers re-sign `created_at`           |
+| `POOL_LIVE_ACTIVE_SECONDS` | **24**                     | Soft “last heard” window                  |
+| Tag `t`                    | `optn-fusion-v1-{network}` | Network-scoped pool                       |
 
 **Why replaceable 12230:** Ephemeral kinds are not stored/replayed. Late Tor
 joiners would never see earlier announces. Replaceable + `since` + re-announce
@@ -142,20 +143,20 @@ locally. Production discovery remains Nostr over Tor.
 
 Gather maintains two views (`FusionP2pService.collectRolling`):
 
-| View | Rule | Use |
-|------|------|-----|
-| **Soft** | Live filter without lock-strict `created_at` | Approximate count / “expect more” |
-| **Strict** | Must re-publish during **this** gather (`lockStrict`) | Lock / propose set |
+| View       | Rule                                                  | Use                               |
+| ---------- | ----------------------------------------------------- | --------------------------------- |
+| **Soft**   | Live filter without lock-strict `created_at`          | Approximate count / “expect more” |
+| **Strict** | Must re-publish during **this** gather (`lockStrict`) | Lock / propose set                |
 
 Ghosts (own retired keys, blamed session keys, stale announces) are dropped.
 Status logs look like: `strict=3 soft=4 peak=3/4` (counts only — no pubkeys).
 
 ### 3.4 Round messages (private, gift-wrap)
 
-| Constant | Value |
-|----------|-------|
-| Wire kind | **1059** (NIP-59 gift-wrap — same outer kind as DMs) |
-| Addressing | `#p` = recipient’s **ephemeral round** pubkey |
+| Constant   | Value                                                |
+| ---------- | ---------------------------------------------------- |
+| Wire kind  | **1059** (NIP-59 gift-wrap — same outer kind as DMs) |
+| Addressing | `#p` = recipient’s **ephemeral round** pubkey        |
 
 Layers: outer 1059 (random author + scrambled time) → seal → rumor JSON
 (`RoundMessage`). On the wire, fusion traffic looks like ordinary private DMs;
@@ -171,11 +172,11 @@ peer to resist replay within a session.
 
 ### 4.1 Group size
 
-| Constant | Value | Meaning |
-|----------|-------|---------|
-| `MIN_PARTICIPANTS` | **3** | Anonymity floor + onion needs ≥2 peelers |
-| `MAX_PARTICIPANTS` | **6** | Cap per round |
-| `CREDENTIAL_SLOTS_PER_PEER` | **16** | Max inputs per peer per round |
+| Constant                    | Value  | Meaning                                  |
+| --------------------------- | ------ | ---------------------------------------- |
+| `MIN_PARTICIPANTS`          | **3**  | Anonymity floor + onion needs ≥2 peelers |
+| `MAX_PARTICIPANTS`          | **6**  | Cap per round                            |
+| `CREDENTIAL_SLOTS_PER_PEER` | **16** | Max inputs per peer per round            |
 
 There is **no rule that excludes a fourth wallet**. Gather may **lock at 3**
 once the set is stable so rounds do not wait forever for a late peer. If four
@@ -185,16 +186,16 @@ multi-window stress often produces 3-ways because Auto cooldowns stagger entry
 
 ### 4.2 Gather budgets (`fusionTiming.ts`)
 
-| Constant | Value | Role |
-|----------|-------|------|
-| `P2P_GATHER_MAX_MS` | **120s** (`JOIN_WAIT`) | Max discover when peers seen |
-| `P2P_GATHER_ALONE_MS` | **35s** | Manual alone abort |
-| `P2P_GATHER_ALONE_AUTO_MS` | **120s** | Auto alone wait for peers |
-| `P2P_GATHER_MIN_MS` | **10s** | Min gather before locking a partial set (3…5) |
-| `P2P_GATHER_FAST_WARMUP_MS` | **5s** | Warm-up when already at MAX |
-| `P2P_SMALL_SET_HOLD_MS` | **20s** | Extra hold after MIN to allow more peers |
-| `P2P_PEER_SET_STABLE_MS` | **4s** | Membership must be stable before lock |
-| `P2P_PEAK_GRACE_MS` | **15s** | Grace after peak drops before accepting shrink |
+| Constant                    | Value                  | Role                                           |
+| --------------------------- | ---------------------- | ---------------------------------------------- |
+| `P2P_GATHER_MAX_MS`         | **120s** (`JOIN_WAIT`) | Max discover when peers seen                   |
+| `P2P_GATHER_ALONE_MS`       | **35s**                | Manual alone abort                             |
+| `P2P_GATHER_ALONE_AUTO_MS`  | **120s**               | Auto alone wait for peers                      |
+| `P2P_GATHER_MIN_MS`         | **10s**                | Min gather before locking a partial set (3…5)  |
+| `P2P_GATHER_FAST_WARMUP_MS` | **5s**                 | Warm-up when already at MAX                    |
+| `P2P_SMALL_SET_HOLD_MS`     | **20s**                | Extra hold after MIN to allow more peers       |
+| `P2P_PEER_SET_STABLE_MS`    | **4s**                 | Membership must be stable before lock          |
+| `P2P_PEAK_GRACE_MS`         | **15s**                | Grace after peak drops before accepting shrink |
 
 **Lock policy (summary):**
 
@@ -225,42 +226,42 @@ pick a key offline that always wins without knowing who else will join.
 
 ### 4.5 Rendezvous messages (full-set ACK)
 
-| Type | Who | Purpose |
-|------|-----|---------|
+| Type             | Who                  | Purpose                                                        |
+| ---------------- | -------------------- | -------------------------------------------------------------- |
 | `round_proposal` | Would-be coordinator | Offers `session`, `network`, `tier`, `epoch`, `participants[]` |
-| `round_ack` | Every proposed peer | Accepts that proposal |
-| `round_start` | Coordinator | Locks the set; everyone proceeds to `runFusionRound` |
-| `abort` | Anyone | Ends the attempt with a reason |
+| `round_ack`      | Every proposed peer  | Accepts that proposal                                          |
+| `round_start`    | Coordinator          | Locks the set; everyone proceeds to `runFusionRound`           |
+| `abort`          | Anyone               | Ends the attempt with a reason                                 |
 
 **Full-set ACK:** the round **must not start** until every proposed participant
 ACKs (or the proposal times out). Partial ACK must **not** fuse a 2-of-4 subset
 and leave others stranded. Timeouts:
 
-| Constant | Value |
-|----------|-------|
-| `P2P_RENDEZVOUS_MS` | **60s** |
-| `P2P_PROPOSAL_TIMEOUT_MS` | **20s** |
+| Constant                   | Value                      |
+| -------------------------- | -------------------------- |
+| `P2P_RENDEZVOUS_MS`        | **60s**                    |
+| `P2P_PROPOSAL_TIMEOUT_MS`  | **20s**                    |
 | `P2P_RENDEZVOUS_RESEND_MS` | **1.2s** re-offer / re-ACK |
 
 ---
 
-## 5. Round phases (protocol v2) — exact order
+## 5. Round phases (protocol v3) — exact order
 
 Source of truth: `runFusionRound` → `runCoordinator` / `runParticipant` in
 `fusionSession.ts`.
 
 ### Phase budgets (active round body)
 
-| Constant | Value | Role |
-|----------|-------|------|
-| `P2P_ROUND_TIMEOUT_MS` | **80s** | Overall active-round ceiling (server blame close) |
-| `P2P_CREDENTIAL_WAIT_MS` | **35s** | Wait for `credential_params` / response over Tor |
-| `P2P_CREDENTIAL_PARAMS_RESEND_MS` | **1.5s** | Coordinator re-sends params to lagging peers |
-| `P2P_CREDENTIAL_PARAMS_RESEND_MAX` | **12** | Cap resends |
-| `P2P_MISSING_OUTPUTS_ONION_MS` | **28s** | Onion / missing outputs |
-| `P2P_COMPONENT_JITTER_MS` | **30–250 ms** | Per-component send jitter |
-| Onion declare / output resends | bounded | Tor drop recovery without open-ended spam |
-| `P2P_SIG_RESEND_MS` | **1.5s** | Signature re-send |
+| Constant                           | Value         | Role                                              |
+| ---------------------------------- | ------------- | ------------------------------------------------- |
+| `P2P_ROUND_TIMEOUT_MS`             | **80s**       | Overall active-round ceiling (server blame close) |
+| `P2P_CREDENTIAL_WAIT_MS`           | **35s**       | Wait for `credential_params` / response over Tor  |
+| `P2P_CREDENTIAL_PARAMS_RESEND_MS`  | **1.5s**      | Coordinator re-sends params to lagging peers      |
+| `P2P_CREDENTIAL_PARAMS_RESEND_MAX` | **12**        | Cap resends                                       |
+| `P2P_MISSING_OUTPUTS_ONION_MS`     | **28s**       | Onion / missing outputs                           |
+| `P2P_COMPONENT_JITTER_MS`          | **30–250 ms** | Per-component send jitter                         |
+| Onion declare / output resends     | bounded       | Tor drop recovery without open-ended spam         |
+| `P2P_SIG_RESEND_MS`                | **1.5s**      | Signature re-send                                 |
 
 ### Phase A — Credential parameters (coordinator = issuer)
 
@@ -329,8 +330,19 @@ there are always ≥2 peelers.
 Supporting messages: `onion_declare` (output counts), `onion_output` (blobs),
 `components_ready`.
 
-Onion crypto: `onionCrypto.ts` (00-Wallet-compatible pad size 80). Failure is
-**loud** — no silent fallback to plaintext.
+Before wrapping, each output is encoded with a fresh 32-byte serial and a
+64-byte blind Schnorr credential. The credential message commits to the
+network, session, tier, component role (`output`), canonical script/value, and
+serial. Every layer carries the same fixed 384-byte plaintext block, so the
+credential does not introduce output-size fingerprints. The final peeler stays
+anonymous: it reveals authorizable outputs, not its round identity.
+
+The coordinator issues exactly the declared input/output credential quota only
+after the peer's Pedersen balance proof succeeds. Before assembly it verifies
+every output credential, requires the exact aggregate output count, and
+atomically records the serial nullifiers. Replays remain rejected across an
+active-round retry or reload; nullifiers clear only when that round succeeds or
+conclusively aborts. Failure is **loud** — no silent fallback to plaintext.
 
 ### Phase E — Assemble, verify, sign
 
@@ -354,32 +366,36 @@ outbound tx, refreshes UTXOs, and **records fuse depth** for Auto stopping.
 
 ---
 
-## 6. Message catalogue (v2)
+## 6. Message catalogue (v3; incompatible with v2)
 
 All messages include binding fields: `version`, `nonce`, `timestamp`, and
 usually `session`.
 
-| `type` | Direction | Required fields (beyond binding) |
-|--------|-----------|----------------------------------|
-| `round_proposal` | → peers | `network`, `tier`, `epoch`, `participants` |
-| `round_ack` | → coordinator | `network`, `tier`, `epoch` |
-| `round_start` | → peers | `network`, `tier`, `epoch`, `participants` |
-| `credential_params` | coordinator → peers | `roundPubkey`, `blindNoncePoints[]` |
-| `credential_request` | peer → coordinator | `requests[]`, `amountCommitments[]`, `pedersenTotalNonce`, `excessFee` |
-| `credential_response` | coordinator → peer | `responses[]` |
-| `inputs` | peer → coordinator | `inputs[]`, `credentialSigs[]` (parallel, required) |
-| `outputs` | peer → coordinator | `outputs[]` (legacy / non-onion paths; production uses onion) |
-| `onion_declare` | peer → peelers | `outputCount` |
-| `onion_output` | peer → next peeler | `onion` (base64), `mixOrder[]` |
-| `components_ready` | peer → coordinator | (session only) |
-| `assembled` | coordinator → peers | `inputs[]`, `outputs[]` |
-| `signature` | peer → coordinator | `sigs[]` (`prevTxid`, `prevIndex`, `unlockingBytecode`) |
-| `final` | coordinator → peers | `txid`, `txHex` |
-| `abort` | any | `reason` (≤240 chars) |
-| `blame` | any (verifiable) | `accused`, `code`, `evidence` — **prove-or-don't-blame** |
+| `type`                | Direction                            | Required fields (beyond binding)                                                                    |
+| --------------------- | ------------------------------------ | --------------------------------------------------------------------------------------------------- |
+| `round_proposal`      | → peers                              | `network`, `tier`, `epoch`, `participants`                                                          |
+| `round_ack`           | → coordinator                        | `network`, `tier`, `epoch`                                                                          |
+| `round_start`         | → peers                              | `network`, `tier`, `epoch`, `participants`                                                          |
+| `credential_params`   | coordinator → peers                  | `roundPubkey`, `blindNoncePoints[]`                                                                 |
+| `credential_request`  | peer → coordinator                   | `inputCount`, `outputCount`, `requests[]`, `amountCommitments[]`, `pedersenTotalNonce`, `excessFee` |
+| `credential_response` | coordinator → peer                   | `responses[]`                                                                                       |
+| `inputs`              | peer → coordinator                   | `inputs[]`, `credentialSigs[]` (parallel, required)                                                 |
+| `outputs`             | anonymous final peeler → coordinator | `outputs[]`, each with canonical output, serial, and blind credential                               |
+| `onion_declare`       | peer → peelers                       | `outputCount`                                                                                       |
+| `onion_output`        | peer → next peeler                   | `onion` (base64), `mixOrder[]`                                                                      |
+| `components_ready`    | peer → coordinator                   | (session only)                                                                                      |
+| `assembled`           | coordinator → peers                  | `inputs[]`, `outputs[]`                                                                             |
+| `signature`           | peer → coordinator                   | `sigs[]` (`prevTxid`, `prevIndex`, `unlockingBytecode`)                                             |
+| `final`               | coordinator → peers                  | `txid`, `txHex`                                                                                     |
+| `abort`               | any                                  | `reason` (≤240 chars)                                                                               |
+| `blame`               | any (verifiable)                     | `accused`, `code`, `evidence` — **prove-or-don't-blame**                                            |
 
 Parsing is strict (`parseRoundMessage`): size caps, hex shapes, participant
 sets, money bounds. Invalid messages surface as protocol errors.
+
+Version 3 is fail-closed: a v2 message is rejected rather than downgraded. This
+wire-version change does not alter the deliberate chain transaction profile:
+P2P transactions remain version 2 and do not add the classic `FUZ` OP_RETURN.
 
 ---
 
@@ -424,11 +440,11 @@ Wire form: **65-byte uncompressed** point. Balance check uses the additive
 homomorphism so the issuer/coordinator never needs individual amounts to verify
 the peer’s declared excess fee.
 
-### 7.4 What credentials do *not* do
+### 7.4 What credentials do _not_ do
 
 - They do **not** hide the input→output map from the **coordinator** (same trust
   model as a classic fusion server that sees the final template).
-- **Output onion** (not Tor) is what prevents *peers and intermediate peel hops*
+- **Output onion** (not Tor) is what prevents _peers and intermediate peel hops_
   from linking which participant contributed which **output**.
 - Input ownership for spending is still ordinary BCH signatures at sign time;
   credentials authorize inclusion in **this round’s** CoinJoin under the round
@@ -454,14 +470,14 @@ Electron Cash’s hard exclude).
 
 ### 8.2 Fuse depth (rounds-per-coin)
 
-| Concept | Behaviour |
-|---------|-----------|
-| Setting | UI **Rounds per coin** (`fuseDepth`, default **3**, clamped 1–10) |
-| Meaning | Auto stops once **each coin** has been through that many completed fuses |
-| Inheritance | New outputs get `min(input depths) + 1` (Electron Cash–style MIN ancestry) |
-| Storage | Per-outpoint map + **per-CoinJoin txid** depth (resists key remap); memory + localStorage + BroadcastChannel |
-| Change number | Clears Auto depth-met idle and **restarts** evaluation toward the new target |
-| New funds | Send/receive/change → depth 0 coins → Auto may run again |
+| Concept       | Behaviour                                                                                                    |
+| ------------- | ------------------------------------------------------------------------------------------------------------ |
+| Setting       | UI **Rounds per coin** (`fuseDepth`, default **3**, clamped 1–10)                                            |
+| Meaning       | Auto stops once **each coin** has been through that many completed fuses                                     |
+| Inheritance   | New outputs get `min(input depths) + 1` (Electron Cash–style MIN ancestry)                                   |
+| Storage       | Per-outpoint map + **per-CoinJoin txid** depth (resists key remap); memory + localStorage + BroadcastChannel |
+| Change number | Clears Auto depth-met idle and **restarts** evaluation toward the new target                                 |
+| New funds     | Send/receive/change → depth 0 coins → Auto may run again                                                     |
 
 After a verified broadcast, `completeFusionBroadcast` records depth (script
 match and/or Electrum outpoints for this CoinJoin). Logs include:
@@ -474,11 +490,11 @@ OUTCOME idle: … already at rounds-per-coin depth ≥ T …
 
 ### 8.3 Auto cooldowns (`fusionAutoEngine` / `fusionWalletLease`)
 
-| Outcome | Wait |
-|---------|------|
-| Successful paid fuse | **40s** |
-| Fail / cancel / empty pool / no peers | **25s** |
-| All coins at depth (or no BCH coins) | Long **depth-met idle** (wake on UTXO activity with below-depth coins, or raise rounds-per-coin) |
+| Outcome                               | Wait                                                                                             |
+| ------------------------------------- | ------------------------------------------------------------------------------------------------ |
+| Successful paid fuse                  | **40s**                                                                                          |
+| Fail / cancel / empty pool / no peers | **25s**                                                                                          |
+| All coins at depth (or no BCH coins)  | Long **depth-met idle** (wake on UTXO activity with below-depth coins, or raise rounds-per-coin) |
 
 Never multi-minute fee cooldowns for ordinary fail/success.
 
@@ -507,19 +523,19 @@ late join.
 
 ## 9. Comparison: server CashFusion vs P2P
 
-| Property | Server path (`src-tauri/src/fusion`) | P2P path (`nostr/*`) |
-|----------|-------------------------------------|----------------------|
-| Discovery | TCP fusion server / pool tags | Nostr replaceable announcements |
-| Transport | Protobuf frames over TCP(+TLS)+Tor | NIP-59 gift-wrap over Nostr (+Tor) |
-| Issuer | Dedicated fusion server | Elected peer coordinator |
-| Pedersen | Full component model + blame | Per-peer commit at credential time |
-| Blind Schnorr | Server signs; client requester in Rust | Coordinator `BlindIssuer`; TS requester |
-| Covert / output privacy | Separate Tor circuits per component | Jitter + **output onion** |
-| Blame | Full EC-style component blame | P2P prove-or-don't-blame |
-| Assembly trust | Server proposes; client checks | Coordinator proposes; **every** peer checks |
-| Broadcast | Client/server paths | Coordinator + peer liveness broadcast |
-| Outer wallet loop | Same `FusionRunnerService` | Same |
-| Network | Chipnet for tests; never mainnet in CI | Same rule |
+| Property                | Server path (`src-tauri/src/fusion`)   | P2P path (`nostr/*`)                        |
+| ----------------------- | -------------------------------------- | ------------------------------------------- |
+| Discovery               | TCP fusion server / pool tags          | Nostr replaceable announcements             |
+| Transport               | Protobuf frames over TCP(+TLS)+Tor     | NIP-59 gift-wrap over Nostr (+Tor)          |
+| Issuer                  | Dedicated fusion server                | Elected peer coordinator                    |
+| Pedersen                | Full component model + blame           | Per-peer commit at credential time          |
+| Blind Schnorr           | Server signs; client requester in Rust | Coordinator `BlindIssuer`; TS requester     |
+| Covert / output privacy | Separate Tor circuits per component    | Jitter + **output onion**                   |
+| Blame                   | Full EC-style component blame          | P2P prove-or-don't-blame                    |
+| Assembly trust          | Server proposes; client checks         | Coordinator proposes; **every** peer checks |
+| Broadcast               | Client/server paths                    | Coordinator + peer liveness broadcast       |
+| Outer wallet loop       | Same `FusionRunnerService`             | Same                                        |
+| Network                 | Chipnet for tests; never mainnet in CI | Same rule                                   |
 
 ---
 
@@ -545,18 +561,18 @@ late join.
 
 ## 11. Testing the mechanism
 
-| Suite | What it proves |
-|-------|----------------|
+| Suite                                        | What it proves                                          |
+| -------------------------------------------- | ------------------------------------------------------- |
 | `nostr/__tests__/fusionBlindSchnorr.test.ts` | Blind round-trip, nonce reuse refusal, Pedersen balance |
-| `nostr/__tests__/fusionSession.test.ts` | Multi-peer in-memory CoinJoin + onion + credentials |
-| `nostr/__tests__/fusionRendezvous.test.ts` | Election / proposal / full-set behaviour |
-| `nostr/__tests__/fusionSign.test.ts` | Wire byte-order / signing invariants |
-| `nostr/__tests__/fusion.test.ts` | Pool live filter, soft vs strict ghosts |
-| `__tests__/fusionCoinDepth.test.ts` | Depth inheritance, stop at target, txid fallback |
-| `__tests__/FusionRunnerService.test.ts` | Auto vs manual depth, cooldown, no-eligible idle |
-| `__tests__/fusionWalletLease.test.ts` | Lease + Auto cooldown claim / wake |
-| `cargo test` `fusion::schnorr` | Rust `BlindIssuer` + requester parity |
-| Chipnet live multi-window | On-chain CoinJoin (manual; not assumed green in CI) |
+| `nostr/__tests__/fusionSession.test.ts`      | Multi-peer in-memory CoinJoin + onion + credentials     |
+| `nostr/__tests__/fusionRendezvous.test.ts`   | Election / proposal / full-set behaviour                |
+| `nostr/__tests__/fusionSign.test.ts`         | Wire byte-order / signing invariants                    |
+| `nostr/__tests__/fusion.test.ts`             | Pool live filter, soft vs strict ghosts                 |
+| `__tests__/fusionCoinDepth.test.ts`          | Depth inheritance, stop at target, txid fallback        |
+| `__tests__/FusionRunnerService.test.ts`      | Auto vs manual depth, cooldown, no-eligible idle        |
+| `__tests__/fusionWalletLease.test.ts`        | Lease + Auto cooldown claim / wake                      |
+| `cargo test` `fusion::schnorr`               | Rust `BlindIssuer` + requester parity                   |
+| Chipnet live multi-window                    | On-chain CoinJoin (manual; not assumed green in CI)     |
 
 In-memory multi-peer success proves the **state machine and crypto wiring**.
 It does **not** replace a chipnet confirmation of relays + Tor + Electrum.
@@ -565,21 +581,21 @@ It does **not** replace a chipnet confirmation of relays + Tor + Electrum.
 
 ## 12. Glossary
 
-| Term | Meaning here |
-|------|----------------|
-| **Credential** | Unblinded BCH Schnorr signature under the **round** issuer key over an input’s domain-separated hash |
-| **Issuer** | Holder of `x` and one-shot `k_i`; the elected coordinator |
-| **Coordinator** | Peer that issues credentials and assembles the tx template |
-| **Component** | One input or output in a fusion round |
-| **Tier** | Target fused coin denomination (sats) peers advertise |
-| **Mix order** | Ordered list of peelers for **output onion**; excludes coordinator |
-| **Output onion** | ECDH+AES-GCM peel/shuffle among peers — **not Tor** |
-| **Tor transport** | SOCKS path for Nostr sockets — network IP privacy |
-| **NIP-59 gift-wrap** | Relay-facing encryption of round messages |
-| **Session** | Round id string bound into every message for that attempt |
-| **Rounds-per-coin / fuse depth** | Auto stop condition: how many completed fuses per coin |
-| **Strict / soft peers** | Lock set vs approximate live set during gather |
-| **Full-set ACK** | Every proposed peer must acknowledge before round start |
+| Term                             | Meaning here                                                                                         |
+| -------------------------------- | ---------------------------------------------------------------------------------------------------- |
+| **Credential**                   | Unblinded BCH Schnorr signature under the **round** issuer key over an input’s domain-separated hash |
+| **Issuer**                       | Holder of `x` and one-shot `k_i`; the elected coordinator                                            |
+| **Coordinator**                  | Peer that issues credentials and assembles the tx template                                           |
+| **Component**                    | One input or output in a fusion round                                                                |
+| **Tier**                         | Target fused coin denomination (sats) peers advertise                                                |
+| **Mix order**                    | Ordered list of peelers for **output onion**; excludes coordinator                                   |
+| **Output onion**                 | ECDH+AES-GCM peel/shuffle among peers — **not Tor**                                                  |
+| **Tor transport**                | SOCKS path for Nostr sockets — network IP privacy                                                    |
+| **NIP-59 gift-wrap**             | Relay-facing encryption of round messages                                                            |
+| **Session**                      | Round id string bound into every message for that attempt                                            |
+| **Rounds-per-coin / fuse depth** | Auto stop condition: how many completed fuses per coin                                               |
+| **Strict / soft peers**          | Lock set vs approximate live set during gather                                                       |
+| **Full-set ACK**                 | Every proposed peer must acknowledge before round start                                              |
 
 Privacy layer roles (Tor / gift-wrap / Pedersen / blind Schnorr / output onion):
 [p2p-cashfusion-privacy-layers.md](./p2p-cashfusion-privacy-layers.md).
@@ -599,6 +615,6 @@ When you change the wire format, crypto, gather policy, or Auto depth/cooldown:
 
 ---
 
-*Last updated for PR #12 **ship**: protocol v2 (blind credentials + Pedersen +
+_Last updated for PR #12 **ship**: protocol v3 (blind input/output credentials + Pedersen +
 mandatory output onion), MIN=3 / MAX=6, full-set ACK, Auto 40s/25s cooldowns,
-fuse-depth stop, Tor fail-closed — **implemented**, not planned.*
+fuse-depth stop, Tor fail-closed — **implemented**, not planned._

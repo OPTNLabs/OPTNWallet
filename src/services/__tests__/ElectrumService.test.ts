@@ -203,6 +203,36 @@ describe('ElectrumService', () => {
     expect(server.requestMany).toHaveBeenCalledTimes(3); // 50+50+20
   });
 
+  it('deduplicates overlapping wallet-wide scans by address', async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const server = {
+      requestMany: vi.fn(async (calls: unknown[]) => {
+        await gate;
+        return calls.map(() => []);
+      }),
+      subscribe: vi.fn(async () => {}),
+      unsubscribe: vi.fn(async () => {}),
+      onNotification: vi.fn(() => () => {}),
+    };
+    mockedElectrumServer.mockReturnValue(server as never);
+    const addresses = Array.from(
+      { length: 60 },
+      (_, index) => `bitcoincash:qoverlap${index}`
+    );
+
+    const first = ElectrumService.getUTXOsMany(addresses);
+    await Promise.resolve();
+    const second = ElectrumService.getUTXOsMany(addresses);
+    await Promise.resolve();
+    release();
+    await Promise.all([first, second]);
+
+    expect(server.requestMany).toHaveBeenCalledTimes(2); // one 50 + one 10
+  });
+
   it('primeUTXOCache seeds cache used by getUTXOs', async () => {
     const server = {
       request: vi.fn(async () => []),

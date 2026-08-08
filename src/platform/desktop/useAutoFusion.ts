@@ -31,15 +31,17 @@ import {
   type WalletUtxoSnapshot,
 } from '../../services/WalletUtxoRefreshService';
 import { logError } from '../../utils/errorHandling';
+import { fetchFusionServerStatus } from '../../services/fusion/FusionStatusService';
 import { resolveFusionTransport } from './FusionTorResolver';
 import {
   AUTO_FUSION_COOLDOWN_MS,
   AUTO_FUSION_RETRY_MS,
   decideAutoFusion,
   msUntilAutoRendezvousOpen,
-  msUntilServerJoinOpen,
+  msUntilServerAutoStart,
   nextAutoEngineTickForMode,
 } from './fusionAutoEngine';
+import { SERVER_AUTOFUSE_INACTIVE_MS } from './fusionTiming';
 // Continuity: after each round ends, re-arm like EC's plugin loop.
 import { coinsBelowDepth } from './fusionCoinDepth';
 import {
@@ -50,6 +52,7 @@ import {
   wakeAutoFromWalletActivity,
 } from './fusionWalletLease';
 import {
+  cancelFusionRound,
   reportFusionProgress,
   setFusionLastResult,
   startFusionRound,
@@ -60,7 +63,9 @@ import {
   defaultInputLookupEndpoint,
   parseFusionServerTarget,
   serverFusionPrivacyDestination,
+  validateServerHello,
 } from './ServerFusionRunner';
+import { selectPreparedFusionServer } from './serverFusionFailover';
 
 function sleepMs(ms: number, signal?: AbortSignal): Promise<void> {
   return new Promise((resolve, reject) => {
@@ -80,7 +85,7 @@ function sleepMs(ms: number, signal?: AbortSignal): Promise<void> {
   });
 }
 
-export function useAutoFusion(): void {
+export function useAutoFusion(policyReady = true): void {
   const cashFusionEnabled = useSelector(selectCashFusionEnabled);
   const autoFuseEnabled = useSelector(selectAutoFuseEnabled);
   const p2pFusionEnabled = useSelector(selectP2pFusionEnabled);
@@ -101,14 +106,18 @@ export function useAutoFusion(): void {
 
   /** Bumped whenever the wallet session changes, to strand stale completions. */
   const sessionRef = useRef(0);
+  const previousWalletIdRef = useRef(walletId);
+  const sessionInitializedRef = useRef(false);
   const activeControllerRef = useRef<AbortController | null>(null);
   /** Always call the latest tick from deferred re-queue (EC unattended loop). */
   const tickRef = useRef<(fresh?: WalletUtxoSnapshot) => Promise<void>>(
     async () => undefined
   );
   const followUpTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  // Abort ONLY when the user actually left the auto session (wallet, network,
-  // fusion/tor master switches). Do NOT include `nostrRelays` / `fusionServers`:
+  // Abort ONLY when the wallet/network or selected Fusion transport changes.
+  // Auto, Tor, relay and server preference edits apply to the next round; they
+  // must not cancel a manual or already-started automatic financial action.
+  // Do NOT include `nostrRelays` / `fusionServers`:
   // auto health refresh and HMR re-serialize those arrays and used to cancel
   // live gathers mid-pool (observed: strict=1 then "fusion round cancelled"
   // ~6s later while peers were still shouting).
@@ -116,16 +125,17 @@ export function useAutoFusion(): void {
     walletId,
     network,
     cashFusionEnabled,
-    autoFuseEnabled,
     p2pFusionEnabled,
-    torEnabled,
-    torAuto,
-    torHost,
-    torPortManual,
-    // Selected server id only (not the full list identity).
-    savedFusionServer ?? '',
   ]);
   useEffect(() => {
+    const previousWalletId = previousWalletIdRef.current;
+    if (sessionInitializedRef.current && previousWalletId > 0) {
+      // Manual and automatic rounds are service-owned, so changing routes does
+      // nothing. A real wallet-session boundary must still stop both transports.
+      cancelFusionRound(previousWalletId, 'wallet fusion session changed');
+    }
+    sessionInitializedRef.current = true;
+    previousWalletIdRef.current = walletId;
     sessionRef.current += 1;
     activeControllerRef.current?.abort();
     activeControllerRef.current = null;
@@ -136,6 +146,7 @@ export function useAutoFusion(): void {
   }, [sessionKey]);
 
   const tick = useCallback(async (freshSnapshot?: WalletUtxoSnapshot) => {
+    if (!policyReady) return;
     if (activeControllerRef.current) return;
     // The recovery poll must be almost free during the durable cooldown: do
     // not probe or start Tor until another automatic attempt is actually due.
@@ -202,33 +213,47 @@ export function useAutoFusion(): void {
           return;
         }
         try {
-          const target = parseFusionServerTarget(selectedServer);
           const inputLookupEndpoint = defaultInputLookupEndpoint(network);
-          const privacyDestination = serverFusionPrivacyDestination(
-            target.host,
-            inputLookupEndpoint.host
-          );
-          const route = await resolveFusionTransport(privacyDestination, {
-            enabled: torEnabled,
-            auto: torAuto,
-            host: torHost,
-            manualPort: torPortManual,
-            autoStartIntegrated: true,
+          const selected = await selectPreparedFusionServer({
+            selected: selectedServer,
+            configured: fusionServers,
+            prepare: async (server) => {
+              const target = parseFusionServerTarget(server);
+              const privacyDestination = serverFusionPrivacyDestination(
+                target.host,
+                inputLookupEndpoint.host
+              );
+              const route = await resolveFusionTransport(privacyDestination, {
+                enabled: torEnabled,
+                auto: torAuto,
+                host: torHost,
+                manualPort: torPortManual,
+                autoStartIntegrated: true,
+              });
+              if (route.type === 'unavailable') {
+                throw new Error(route.reason);
+              }
+              const tor = route.type === 'tor' ? route.tor : null;
+              const hello = await fetchFusionServerStatus(
+                target.host,
+                target.port,
+                target.useSsl,
+                tor ?? undefined
+              );
+              validateServerHello(hello);
+              return buildServerRunner({
+                walletId,
+                network,
+                ...target,
+                tor,
+                inputLookupEndpoint,
+                expectedHello: hello,
+                joinInactiveTimeoutMs: SERVER_AUTOFUSE_INACTIVE_MS,
+              });
+            },
           });
-          if (route.type === 'unavailable') {
-            await noteServerSetupFailure(
-              `Auto-fuse (server): ${route.reason} — retrying…`
-            );
-            return;
-          }
           torReady = true;
-          serverRunner = buildServerRunner({
-            walletId,
-            network,
-            ...target,
-            tor: route.type === 'tor' ? route.tor : null,
-            inputLookupEndpoint,
-          });
+          serverRunner = selected.prepared;
         } catch (error) {
           torReady = false;
           const msg =
@@ -261,7 +286,7 @@ export function useAutoFusion(): void {
         const waitMs =
           decision.mode === 'p2p'
             ? msUntilAutoRendezvousOpen()
-            : msUntilServerJoinOpen();
+            : msUntilServerAutoStart();
         if (waitMs > 0) {
           try {
             await sleepMs(waitMs, controller.signal);
@@ -387,6 +412,7 @@ export function useAutoFusion(): void {
     fusionServers,
     walletId,
     network,
+    policyReady,
   ]);
   tickRef.current = tick;
 
@@ -397,7 +423,7 @@ export function useAutoFusion(): void {
    */
   const lastFuseDepthRef = useRef<number | null>(null);
   useEffect(() => {
-    if (!cashFusionEnabled || !autoFuseEnabled || walletId <= 0) {
+    if (!policyReady || !cashFusionEnabled || !autoFuseEnabled || walletId <= 0) {
       lastFuseDepthRef.current = fuseDepth;
       return;
     }
@@ -417,10 +443,10 @@ export function useAutoFusion(): void {
         })
       )
       .catch(() => undefined);
-  }, [fuseDepth, walletId, cashFusionEnabled, autoFuseEnabled, tick]);
+  }, [fuseDepth, walletId, cashFusionEnabled, autoFuseEnabled, policyReady, tick]);
 
   useEffect(() => {
-    if (!cashFusionEnabled || !autoFuseEnabled || walletId <= 0) return;
+    if (!policyReady || !cashFusionEnabled || !autoFuseEnabled || walletId <= 0) return;
     let disposed = false;
 
     const run = (freshSnapshot?: WalletUtxoSnapshot) => {
@@ -491,6 +517,7 @@ export function useAutoFusion(): void {
     walletId,
     p2pFusionEnabled,
     fuseDepth,
+    policyReady,
     tick,
   ]);
 }

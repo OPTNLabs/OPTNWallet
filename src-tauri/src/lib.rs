@@ -24,11 +24,7 @@ async fn verified_fusion_proxy<'a>(
         (Some(_), None) | (None, Some(_)) => {
             return Err("CashFusion Tor proxy configuration is incomplete".into())
         }
-        _ => {
-            return Err(
-                "CashFusion needs a verified Tor proxy for every remote endpoint".into(),
-            )
-        }
+        _ => return Err("CashFusion needs a verified Tor proxy for every remote endpoint".into()),
     };
 
     if !fusion::tor::is_tor_port(host, port).await {
@@ -64,21 +60,14 @@ struct FusionStatusCacheEntry {
     result: Result<fusion::FusionServerStatus, String>,
 }
 
-type FusionStatusCacheSlot =
-    std::sync::Arc<tokio::sync::Mutex<Option<FusionStatusCacheEntry>>>;
+type FusionStatusCacheSlot = std::sync::Arc<tokio::sync::Mutex<Option<FusionStatusCacheEntry>>>;
 
 static FUSION_STATUS_CACHE: once_cell::sync::Lazy<
-    std::sync::Mutex<
-        std::collections::HashMap<FusionStatusCacheKey, FusionStatusCacheSlot>,
-    >,
-> = once_cell::sync::Lazy::new(|| {
-    std::sync::Mutex::new(std::collections::HashMap::new())
-});
+    std::sync::Mutex<std::collections::HashMap<FusionStatusCacheKey, FusionStatusCacheSlot>>,
+> = once_cell::sync::Lazy::new(|| std::sync::Mutex::new(std::collections::HashMap::new()));
 
-const FUSION_STATUS_SUCCESS_TTL: std::time::Duration =
-    std::time::Duration::from_secs(30);
-const FUSION_STATUS_FAILURE_TTL: std::time::Duration =
-    std::time::Duration::from_secs(15);
+const FUSION_STATUS_SUCCESS_TTL: std::time::Duration = std::time::Duration::from_secs(30);
+const FUSION_STATUS_FAILURE_TTL: std::time::Duration = std::time::Duration::from_secs(15);
 
 fn fusion_status_cache_slot(key: &FusionStatusCacheKey) -> FusionStatusCacheSlot {
     let mut slots = FUSION_STATUS_CACHE
@@ -194,13 +183,7 @@ async fn fusion_server_status(
     // wallet windows from opening four identical Tor handshakes at once. The
     // short failure TTL still lets a manual retry observe a repaired server.
     shared_fusion_server_status(key, || {
-        fetch_fusion_server_status(
-            &host,
-            port,
-            use_ssl,
-            tor_host.as_deref(),
-            tor_port,
-        )
+        fetch_fusion_server_status(&host, port, use_ssl, tor_host.as_deref(), tor_port)
     })
     .await
 }
@@ -284,6 +267,16 @@ fn fusion_prepare_round(round_id: String) -> Result<(), String> {
     fusion::round_cancel::prepare_round(&round_id)
 }
 
+/// Sign only wallet-owned inputs of an already agreed P2P-v3 template.
+/// The bounded native boundary revalidates the complete template before keys
+/// reach the transaction signer; classic server CashFusion remains separate.
+#[tauri::command]
+fn fusion_p2p_sign(
+    request: fusion::p2p_sign::P2pSignRequest,
+) -> Result<fusion::p2p_sign::P2pSignResponse, String> {
+    fusion::p2p_sign::sign_p2p(request)
+}
+
 /// Run a full CashFusion round (Phase 1.7): contribute `inputs` (each with the
 /// key to sign it) and fresh `outputs`, join `tier`, and fuse. Returns the
 /// assembled transaction on success. Same Tor requirement as the other fusion
@@ -313,6 +306,7 @@ async fn fusion_run(
     tor_host: Option<String>,
     tor_port: Option<u16>,
     expected_hello: fusion::server_plan::ExpectedHello,
+    join_inactive_timeout_ms: Option<u64>,
 ) -> Result<fusion::run::FusionOutcome, String> {
     log::info!(
         "[FusionTrace] round start id={} host={} port={} plans={} inputs={}",
@@ -340,9 +334,15 @@ async fn fusion_run(
     .await?;
     let transport = fusion_transport_for_host(&host, verified_proxy)?;
     let lookup_transport = fusion_transport_for_host(&lookup_host, verified_proxy)?;
-    let remote_transport = verified_proxy
-        .map(|(host, port)| fusion::Transport::Tor { host, port });
+    let remote_transport = verified_proxy.map(|(host, port)| fusion::Transport::Tor { host, port });
 
+    let join_inactive_timeout = match join_inactive_timeout_ms {
+        None => None,
+        Some(600_000) => Some(fusion::run::EC_AUTOFUSE_INACTIVE_TIMEOUT),
+        Some(_) => {
+            return Err("automatic server Fusion inactivity timeout must be 600000 ms".into())
+        }
+    };
     let registration = fusion::round_cancel::acquire_round(&round_id)?;
     let cancel = registration.flag();
 
@@ -393,6 +393,7 @@ async fn fusion_run(
         .collect(),
         lookup_transport,
         timing: fusion::run::FusionTiming::default(),
+        join_inactive_timeout,
         cancel,
         expected_hello,
         wallet_tag_seed: wallet_tag.into_bytes(),
@@ -1022,6 +1023,7 @@ pub fn run() {
             fusion_join_status,
             fusion_execution_status,
             fusion_prepare_round,
+            fusion_p2p_sign,
             fusion_run,
             fusion_cancel_round,
             fusion_relay_broadcast_and_observe,
@@ -1269,12 +1271,10 @@ mod tests {
         assert!(validate_fusion_relay_request("00", "unknown").is_err());
         assert!(validate_fusion_relay_request("", "mainnet").is_err());
         assert!(validate_fusion_relay_request("0", "mainnet").is_err());
-        assert!(
-            validate_fusion_relay_request(
-                &"00".repeat(MAX_FUSION_RELAY_TX_BYTES + 1),
-                "mainnet"
-            )
-            .is_err()
-        );
+        assert!(validate_fusion_relay_request(
+            &"00".repeat(MAX_FUSION_RELAY_TX_BYTES + 1),
+            "mainnet"
+        )
+        .is_err());
     }
 }

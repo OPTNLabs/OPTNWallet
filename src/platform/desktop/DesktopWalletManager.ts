@@ -413,14 +413,13 @@ export async function switchWalletNetwork(
   // cleared them. Clearing the cache makes the next read re-derive under the
   // now-updated networkType.
   QuantumrootVaultCacheService.clear(walletId);
-  dbService.scheduleDatabaseSave();
-  await dbService.flushDatabaseToFile(walletId);
-
   // Regenerate the address batch. KeyService reads the wallet's (now-updated)
   // networkType, so these derive under `target`'s prefix.
   const { default: KeyService } = await import('../../services/KeyService');
   await KeyService.bootstrapInitialAddressBatch(walletId, 0, indices);
-  dbService.scheduleDatabaseSave();
+  // Persist the network change, cleanup, and regenerated addresses together in
+  // one wallet-scoped pass. A pre-bootstrap flush plus queued generic save made
+  // a network switch write the database twice.
   await dbService.flushDatabaseToFile(walletId);
   await log.info(
     'NetworkSwitch',
@@ -528,7 +527,8 @@ export async function purgeCrossNetworkData(
   );
   // Persist the marker even when the repair found nothing. Otherwise the zero-
   // row case—the common case in the logs—would still repeat on every unlock.
-  dbService.scheduleDatabaseSave();
+  // Flush exactly once and keep it wallet-scoped; a queued generic save here
+  // would make the first unlock perform both a wallet merge and a full merge.
   await dbService.flushDatabaseToFile(walletId);
   await log.info(
     'NetworkPurge',
