@@ -13,7 +13,16 @@
 
 import ElectrumServer from '../../apis/ElectrumServer/ElectrumServer';
 
+export const MAX_PARENT_TRANSACTION_CACHE_ENTRIES = 128;
 const cache = new Map<string, string>();
+
+function cacheParentTransaction(txid: string, hex: string): void {
+  if (!cache.has(txid) && cache.size >= MAX_PARENT_TRANSACTION_CACHE_ENTRIES) {
+    const oldest = cache.keys().next().value;
+    if (typeof oldest === 'string') cache.delete(oldest);
+  }
+  cache.set(txid, hex);
+}
 
 /** Clear the cache — only useful for tests and network switches. */
 export function clearParentTransactionCache(): void {
@@ -45,7 +54,7 @@ export async function fetchParentTransactions(
       const txid = missing[index];
       if (response instanceof Error) return;
       if (typeof response !== 'string' || response.length === 0) return;
-      cache.set(txid, response);
+      cacheParentTransaction(txid, response);
     });
   }
 

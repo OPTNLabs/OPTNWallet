@@ -276,6 +276,20 @@ describe('buildWatchOnlyPsbt', () => {
     ).not.toThrow();
   });
 
+  it('rejects incomplete multisig change metadata instead of falling back to P2PKH change', () => {
+    expect(() =>
+      buildWatchOnlyPsbt({
+        inputs: [makeInput()],
+        recipient: recipientAddress,
+        amountSats: 30_000n,
+        changeAddress,
+        accountPath: ACCOUNT_PATH,
+        masterFingerprint: FINGERPRINT,
+        changeRedeemScriptHex: '51',
+      })
+    ).toThrow(/both the redeem script and cosigner derivations/i);
+  });
+
   it('writes per-input BIP32 derivation with the wallet fingerprint', () => {
     const result = buildWatchOnlyPsbt({
       inputs: [makeInput({ branchIndex: 1, addressIndex: 3 })],

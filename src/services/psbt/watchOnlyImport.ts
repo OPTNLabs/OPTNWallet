@@ -142,8 +142,10 @@ export function inspectImportedPsbt(
 
   const validPerInput = parsed.inputs.map((parsedInput, inputIndex) => {
     const required = proposal.inputs[inputIndex]?.requiredSignatures ?? 1;
-    const verified = parsedInput.partialSignatures.filter((signature) =>
-      verifyPartialSignature(signature, proposal, parsed.unsignedTransaction)
+    const verified = parsedInput.partialSignatures.filter(
+      (signature) =>
+        signature.inputIndex === inputIndex &&
+        verifyPartialSignature(signature, proposal, parsed.unsignedTransaction)
     );
     return verified.length >= required;
   });

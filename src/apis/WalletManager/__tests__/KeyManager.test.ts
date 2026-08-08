@@ -17,10 +17,12 @@ vi.mock('../../DatabaseManager/DatabaseService', () => ({
   default: vi.fn(),
 }));
 
+const { registerAddress } = vi.hoisted(() => ({
+  registerAddress: vi.fn(async () => {}),
+}));
+
 vi.mock('../../AddressManager/AddressManager', () => ({
-  default: vi.fn(() => ({
-    registerAddress: vi.fn(async () => {}),
-  })),
+  default: vi.fn(() => ({ registerAddress })),
 }));
 
 vi.mock('../../../services/SecretCryptoService', () => ({
@@ -209,6 +211,79 @@ describe('KeyManager', () => {
     await expect(km.fetchAddressPrivateKey('bitcoincash:qmissing')).rejects.toThrow(
       'No private key found'
     );
+  });
+
+  it('repairs the companion address row when a derived key already exists', async () => {
+    const walletLookup = {
+      get: vi.fn(() => ['enc:mnemonic', 'enc:passphrase', Network.MAINNET]),
+      free: vi.fn(),
+    };
+    const addressCount = {
+      bind: vi.fn(),
+      step: vi.fn(() => true),
+      getAsObject: vi.fn(() => ({ count: 1 })),
+      free: vi.fn(),
+    };
+    const tokenCount = {
+      bind: vi.fn(),
+      step: vi.fn(() => true),
+      getAsObject: vi.fn(() => ({ count: 1 })),
+      free: vi.fn(),
+    };
+    const existingKey = {
+      bind: vi.fn(),
+      step: vi.fn(() => true),
+      getAsObject: vi.fn(() => ({
+        wallet_id: 7,
+        address: 'bitcoincash:qexisting',
+        token_address: 'simpleledger:qexisting',
+      })),
+      free: vi.fn(),
+    };
+    const db = {
+      prepare: vi.fn((sql: string) => {
+        if (sql.includes('FROM wallets WHERE id = ?')) return walletLookup;
+        if (sql.includes('COUNT(*) as count FROM keys WHERE address')) {
+          return addressCount;
+        }
+        if (sql.includes('COUNT(*) as count FROM keys WHERE token_address')) {
+          return tokenCount;
+        }
+        if (sql.includes('SELECT wallet_id, address, token_address')) {
+          return existingKey;
+        }
+        throw new Error(`Unexpected SQL: ${sql}`);
+      }),
+    };
+    const flushDatabaseToFile = vi.fn(async () => {});
+    mockedDatabaseService.mockReturnValue({
+      ensureDatabaseStarted: vi.fn(async () => {}),
+      getDatabase: vi.fn(() => db),
+      flushDatabaseToFile,
+    } as never);
+    mockedSecretCryptoService.decryptText
+      .mockResolvedValueOnce('wallet mnemonic')
+      .mockResolvedValueOnce('wallet passphrase');
+    vi.mocked(deriveBchChild).mockResolvedValue({
+      privateKey: Uint8Array.from([1, 2, 3]),
+      publicKey: Uint8Array.from([4, 5, 6]),
+      publicKeyHash: Uint8Array.from([7, 8, 9]),
+      address: 'bitcoincash:qexisting',
+      tokenAddress: 'simpleledger:qexisting',
+    });
+
+    await KeyManager().createKeys(7, 0, 1, 5, Network.MAINNET);
+
+    expect(registerAddress).toHaveBeenCalledWith({
+      wallet_id: 7,
+      address: 'bitcoincash:qexisting',
+      token_address: 'simpleledger:qexisting',
+      balance: 0,
+      hd_index: 5,
+      change_index: 1,
+      prefix: 'bitcoincash',
+    });
+    expect(flushDatabaseToFile).toHaveBeenCalledWith(7);
   });
 
   it('getXpubs derives standard wallet xpubs from stored seed material', async () => {

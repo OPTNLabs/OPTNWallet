@@ -371,17 +371,22 @@ export function encodeUnsignedPsbt(
   const globalMap = concat([...globalFields, Uint8Array.from([0x00])]);
 
   const inputMaps = inputs.map((input) => {
-    const derivations =
-      input.derivations ??
-      (input.publicKey
-        ? [
-            {
-              publicKey: input.publicKey,
-              masterFingerprint: input.masterFingerprint,
-              derivationPath: input.derivationPath,
-            },
-          ]
-        : []);
+    let derivations = input.derivations;
+    if (!derivations && input.publicKey) {
+      if (!input.masterFingerprint || !input.derivationPath) {
+        throw new Error(
+          'Single-key input derivation requires public key, master fingerprint, and derivation path.'
+        );
+      }
+      derivations = [
+        {
+          publicKey: input.publicKey,
+          masterFingerprint: input.masterFingerprint,
+          derivationPath: input.derivationPath,
+        },
+      ];
+    }
+    derivations ??= [];
     if (derivations.length === 0) {
       throw new Error('Inputs need at least one public key derivation.');
     }

@@ -18,14 +18,13 @@ import { Network } from '../state/slices/networkSlice';
 /**
  * Candidate account paths, most likely first.
  *
- * 145 is BCH's registered coin type and what current tooling uses everywhere,
- * including on chipnet. 1 is BIP44's "test network" type, which older builds of
- * this wallet — and some other software — used for chipnet. 0 appears when a
- * seed was created in a Bitcoin wallet and later used for BCH.
+ * Chipnet defaults to 1, while 145 remains common in BCH tooling and older
+ * wallet builds. 0 appears when a seed was created in a Bitcoin wallet and
+ * later used for BCH.
  */
 export function candidateAccountPaths(network: Network): string[] {
   const accounts = [0, 1];
-  const coinTypes = network === Network.MAINNET ? [145, 0] : [145, 1, 0];
+  const coinTypes = network === Network.MAINNET ? [145, 0] : [1, 145, 0];
   const paths: string[] = [];
   for (const coinType of coinTypes) {
     for (const account of accounts) {

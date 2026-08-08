@@ -79,7 +79,7 @@ describe('desktop watch-only preview', () => {
 
     const preview = deriveWatchOnlyAccountPreview(Network.CHIPNET, mainnetXpub);
     expect(preview.receive.address.startsWith('bchtest:')).toBe(true);
-    expect(preview.accountPath).toBe("m/44'/145'/0'");
+    expect(preview.accountPath).toBe("m/44'/1'/0'");
   });
 
   it('saves and opens without an xPub preview step; single-sig and multisig for PSBT', () => {

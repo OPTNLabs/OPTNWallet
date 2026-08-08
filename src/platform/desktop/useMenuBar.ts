@@ -291,7 +291,7 @@ async function openPicker(navigate: (p: string) => void) {
 }
 
 async function handleOpenWalletFile(
-  navigate: (p: string) => void,
+  navigate: NavigateFunction,
   leaveCurrentWallet: () => void | Promise<void> = () => undefined,
   openWalletId = 0
 ) {
@@ -348,17 +348,12 @@ async function handleOpenWalletFile(
     }
 
     await leaveCurrentWallet();
-    navigate(ROUTE_PATHS.landing);
-    setTimeout(() => {
-      window.dispatchEvent(
-        new CustomEvent(IMPORT_FILE_EVENT, {
-          detail: {
-            file: pack.keystore,
-            coldArchiveText: pack.coldText,
-          },
-        })
-      );
-    }, 50);
+    navigate(ROUTE_PATHS.landing, {
+      state: {
+        importWalletFile: pack.keystore,
+        importColdText: pack.coldText ?? null,
+      },
+    });
   } catch (err) {
     console.error('[menu] Open Wallet File failed:', err);
     window.dispatchEvent(

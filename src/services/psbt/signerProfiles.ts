@@ -33,7 +33,7 @@ export type AccountImportFormat =
   | 'ur-account';
 
 export interface SignerProfile {
-  id: 'seedcash' | 'keystone' | 'generic-psbt';
+  id: 'seedcash' | 'keystone';
   /** Shown on the picker card. */
   name: string;
   /** One line, in the user's language, about what this option is for. */
