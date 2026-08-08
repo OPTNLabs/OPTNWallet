@@ -14,10 +14,17 @@ Legacy root scripts (`build.sh`, `releaseBuild.sh`) are deprecated and should no
 - For installing debug APK to a device:
   - `adb` installed and device/emulator connected
 - For desktop builds:
+
   - Rust stable and the Tauri system dependencies for the target platform
   - Windows: Visual Studio Build Tools with the Desktop development with C++ workload
   - macOS: Xcode Command Line Tools
   - Linux: WebKitGTK, GTK, AppIndicator, librsvg, OpenSSL, patchelf, and FUSE/AppImage dependencies
+  - Linux also needs native USB development metadata because hardware-wallet
+    support is compiled into the desktop process. On Debian/Ubuntu:
+
+    ```bash
+    sudo apt-get install libudev-dev libusb-1.0-0-dev pkg-config
+    ```
 
 ## Core Build Scripts
 
@@ -100,10 +107,12 @@ but Apple has not notarized it. A quarantined internet download can therefore be
 blocked by Gatekeeper until the user explicitly approves it. Do not describe
 this as file corruption, and do not describe an ad-hoc artifact as notarized.
 
-The Tor version and each supported desktop archive's SHA-256 are pinned in
-`scripts/fetch-tor.mjs`. Downloads use the Tor Project archive, so updating Tor
-requires a reviewed source change and release builds never select a new
-upstream version automatically.
+The Tor version, each supported desktop archive's SHA-256, and the Linux ARM
+Tor source SHA-256 are pinned in `scripts/fetch-tor.mjs`. Downloads use Tor
+Project releases, so updating Tor requires a reviewed source change and
+release builds never select a new upstream version automatically.
+Linux preview and release jobs also extract the final AppImage and execute its
+bundled Tor binary with an architecture check.
 
 ## Browser Extension Build Scripts
 

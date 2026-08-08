@@ -255,7 +255,8 @@ export function parsePmwif(text: string): MultisigPolicy {
     for (const entry of optn.cosigners) {
       if (!entry || typeof entry !== 'object') continue;
       const cosigner = entry as Record<string, unknown>;
-      const xpub = typeof cosigner.xpub === 'string' ? cosigner.xpub : '';
+      const xpub =
+        typeof cosigner.xpub === 'string' ? cosigner.xpub.trim() : '';
       if (!xpub) continue;
       if (
         typeof cosigner.masterFingerprint === 'string' &&

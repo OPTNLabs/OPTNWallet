@@ -228,8 +228,14 @@ const OutboundTransactionTracker = {
           legacyStorageKey(txid)
         );
         if (legacy?.walletId === walletId) {
-          await saveRecord(legacy);
-          await trackerStore.removeItem(legacyStorageKey(txid));
+          // Migration is best-effort; never discard the record we already
+          // recovered just because the replacement write is unavailable.
+          try {
+            await saveRecord(legacy);
+            await trackerStore.removeItem(legacyStorageKey(txid));
+          } catch {
+            // Keep the legacy row in place and return it to the caller.
+          }
           return legacy;
         }
       } catch {

@@ -502,6 +502,23 @@ export default function KeyManager() {
     }
 
     try {
+      const ensureAddressRecord = async (): Promise<void> => {
+        const prefix =
+          networkType === Network.MAINNET ? PREFIX.mainnet : PREFIX.chipnet;
+        const address: Address = {
+          wallet_id,
+          address: keys.address,
+          token_address: keys.tokenAddress,
+          balance: 0,
+          hd_index: addressNumber,
+          change_index: changeNumber,
+          prefix,
+        };
+
+        await ManageAddress.registerAddress(address);
+        await dbService.flushDatabaseToFile(wallet_id);
+      };
+
       const existingKeyQuery = db.prepare(`
         SELECT COUNT(*) as count FROM keys WHERE address = ?;
       `);
@@ -532,6 +549,7 @@ export default function KeyManager() {
           existing.address === keys.address &&
           existing.tokenAddress === keys.tokenAddress
         ) {
+          await ensureAddressRecord();
           return;
         }
 
@@ -541,6 +559,7 @@ export default function KeyManager() {
           existing.walletId === wallet_id &&
           existing.address === keys.address
         ) {
+          await ensureAddressRecord();
           return;
         }
 
@@ -583,6 +602,7 @@ export default function KeyManager() {
             existing.walletId === wallet_id &&
             existing.address === keys.address
           ) {
+            await ensureAddressRecord();
             return;
           }
           throw new Error(
@@ -594,19 +614,7 @@ export default function KeyManager() {
         insertQuery.free();
       }
 
-      const prefix =
-        networkType === Network.MAINNET ? PREFIX.mainnet : PREFIX.chipnet;
-      const newAddress: Address = {
-        wallet_id,
-        address: keys.address,
-        balance: 0,
-        hd_index: addressNumber,
-        change_index: changeNumber,
-        prefix,
-      };
-
-      await ManageAddress.registerAddress(newAddress);
-      await dbService.flushDatabaseToFile(wallet_id);
+      await ensureAddressRecord();
     } finally {
       zeroize(keys.privateKey);
     }

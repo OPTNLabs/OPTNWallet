@@ -4,6 +4,7 @@ import {
   parseWalletFile,
   defaultWalletFileName,
   collisionWalletFileName,
+  supportsWalletFileV1Type,
 } from '../walletFile';
 
 describe('walletFile serialize/parse round-trip', () => {
@@ -58,12 +59,23 @@ describe('walletFile serialize/parse round-trip', () => {
 
   it('rejects a file missing required fields', () => {
     expect(() =>
-      parseWalletFile(JSON.stringify({ format: 'optn-wallet', version: 1, name: 'X' }))
+      parseWalletFile(
+        JSON.stringify({ format: 'optn-wallet', version: 1, name: 'X' })
+      )
     ).toThrow(/missing required fields/);
   });
 
+  it('limits v1 wallet packs to seed-backed wallet types', () => {
+    expect(supportsWalletFileV1Type('standard')).toBe(true);
+    expect(supportsWalletFileV1Type('quantumroot')).toBe(true);
+    expect(supportsWalletFileV1Type('hardware')).toBe(false);
+    expect(supportsWalletFileV1Type('watch-only')).toBe(false);
+  });
+
   it('sanitizes the wallet name into a safe filename', () => {
-    expect(defaultWalletFileName('My/Wallet: Test!')).toBe('My_Wallet_Test_.optn');
+    expect(defaultWalletFileName('My/Wallet: Test!')).toBe(
+      'My_Wallet_Test_.optn'
+    );
   });
 
   it('names the file after the wallet, with no internal id in it', () => {

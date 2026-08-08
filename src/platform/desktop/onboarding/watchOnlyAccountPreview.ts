@@ -15,6 +15,10 @@ import {
 const HARDENED_INDEX = 0x80000000;
 const MAX_XPUB_LENGTH = 256;
 
+function accountPathHint(network: Network): string {
+  return getBchAccountPath(network, 0).replace(/0'$/, "account'");
+}
+
 type PublicAddressPreview = {
   path: string;
   address: string;
@@ -59,7 +63,7 @@ function deriveBranchXpub(
   }
   if (decoded.node.depth !== 3 || decoded.node.childIndex < HARDENED_INDEX) {
     throw new Error(
-      "Use a hardened account xPub exported at m/44'/145'/account'."
+      `Use a hardened account xPub exported at ${accountPathHint(network)}.`
     );
   }
 
@@ -94,7 +98,7 @@ export function deriveWatchOnlyAccountPreview(
   }
   if (decoded.node.depth !== 3 || decoded.node.childIndex < HARDENED_INDEX) {
     throw new Error(
-      "Use a hardened account xPub exported at m/44'/145'/account'."
+      `Use a hardened account xPub exported at ${accountPathHint(network)}.`
     );
   }
 

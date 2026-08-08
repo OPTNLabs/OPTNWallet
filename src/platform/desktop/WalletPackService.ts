@@ -6,10 +6,17 @@
 // (or either alone). Data file never contains the seed.
 
 import { invoke } from '@tauri-apps/api/core';
-import { open as openDialog, save as saveDialog } from '@tauri-apps/plugin-dialog';
+import {
+  open as openDialog,
+  save as saveDialog,
+} from '@tauri-apps/plugin-dialog';
 import { join } from '@tauri-apps/api/path';
 import { buildWalletFileContents } from './DesktopWalletManager';
-import { defaultWalletFileName, parseWalletFile, type WalletFileV1 } from './walletFile';
+import {
+  defaultWalletFileName,
+  parseWalletFile,
+  type WalletFileV1,
+} from './walletFile';
 import {
   buildColdArchive,
   encryptColdArchive,
@@ -23,7 +30,10 @@ import {
 import { logError } from '../../utils/errorHandling';
 
 /** Unrestricted Rust I/O for .optn-cold (same reason as write_wallet_file). */
-async function writeOptnColdFile(path: string, contents: string): Promise<void> {
+async function writeOptnColdFile(
+  path: string,
+  contents: string
+): Promise<void> {
   await invoke('write_optn_cold_file', { path, contents });
 }
 
@@ -120,7 +130,9 @@ export async function exportWalletPack(
 
   const contents = await buildWalletFileContents(walletId);
   if (!contents) {
-    throw new Error('This wallet cannot export a keystore file.');
+    throw new Error(
+      'This wallet cannot export a v1 keystore file. Wallet packs currently support only seed-backed standard and Quantumroot wallets.'
+    );
   }
   const name = (() => {
     try {
@@ -135,7 +147,8 @@ export async function exportWalletPack(
     : suggested;
 
   const dest = await saveDialog({
-    title: 'Export wallet — save keystore (.optn); data file is written next to it',
+    title:
+      'Export wallet — save keystore (.optn); data file is written next to it',
     defaultPath,
     filters: [{ name: 'OPTN Wallet keystore', extensions: ['optn'] }],
   });

@@ -48,6 +48,24 @@ interface WalletRow {
   walletType: ExtendedWalletType;
 }
 
+type LandingNavigationState = {
+  openWalletId?: unknown;
+  importWalletFile?: unknown;
+  importColdText?: unknown;
+};
+
+function isWalletFile(value: unknown): value is WalletFileV1 {
+  if (!value || typeof value !== 'object') return false;
+  const record = value as Record<string, unknown>;
+  return (
+    record.format === 'optn-wallet' &&
+    record.version === 1 &&
+    typeof record.name === 'string' &&
+    typeof record.encryptedMnemonic === 'string' &&
+    typeof record.kdfSalt === 'string'
+  );
+}
+
 /**
  * Raise the window that already holds a wallet, EC's `bring_to_top()`.
  *
@@ -148,7 +166,7 @@ const DesktopLandingPage = () => {
   // Unlike the old setTimeout + CustomEvent handoff, this survives the picker
   // mount boundary and cannot fire before its listener exists.
   useEffect(() => {
-    const requestedId = (location.state as { openWalletId?: unknown } | null)
+    const requestedId = (location.state as LandingNavigationState | null)
       ?.openWalletId;
     if (
       typeof requestedId !== 'number' ||
@@ -161,6 +179,22 @@ const DesktopLandingPage = () => {
     handledOpenRequest.current = location.key;
     handleOpenClick(requestedId);
   }, [handleOpenClick, location.key, location.state]);
+
+  // File -> Open Wallet Pack routes the parsed pack through navigation state.
+  // Unlike a delayed CustomEvent, this survives the landing-page mount boundary
+  // even when the first render takes longer than expected.
+  useEffect(() => {
+    const state = location.state as LandingNavigationState | null;
+    if (!isWalletFile(state?.importWalletFile)) return;
+    if (handledOpenRequest.current === location.key) return;
+    handledOpenRequest.current = location.key;
+    setImportFile(state.importWalletFile);
+    setImportColdText(
+      typeof state.importColdText === 'string' ? state.importColdText : null
+    );
+    setPassword('');
+    setError('');
+  }, [location.key, location.state]);
 
   // Delete ONE wallet (e.g. a duplicate) without replacing changes written by
   // another open wallet window. Its .optn file remains a recoverable backup.
