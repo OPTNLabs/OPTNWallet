@@ -5,7 +5,7 @@
 import { execFileSync } from 'node:child_process';
 import { existsSync, mkdtempSync, readdirSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 
 function findTor(root) {
   if (!existsSync(root)) return null;
@@ -31,9 +31,12 @@ function main() {
     );
   }
 
+  // Extraction runs with a temporary working directory. Resolve the artifact
+  // first so a workflow-provided relative path still points at the built file.
+  const appImagePath = resolve(appImage);
   const expectedArchitecture =
     target === 'linux-aarch64' ? /aarch64/ : /x86-64/;
-  const appImageDescription = execFileSync('file', [appImage], {
+  const appImageDescription = execFileSync('file', [appImagePath], {
     encoding: 'utf8',
   });
   if (!/AppImage|ELF/.test(appImageDescription)) {
@@ -44,7 +47,7 @@ function main() {
 
   const extractionDirectory = mkdtempSync(join(tmpdir(), 'optn-tor-artifact-'));
   try {
-    execFileSync(appImage, ['--appimage-extract'], {
+    execFileSync(appImagePath, ['--appimage-extract'], {
       cwd: extractionDirectory,
       env: { ...process.env, APPIMAGE_EXTRACT_AND_RUN: '1' },
       stdio: 'pipe',
