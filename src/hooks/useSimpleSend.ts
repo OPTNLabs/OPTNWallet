@@ -1,11 +1,15 @@
 // src/hooks/useSimpleSend.ts
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useSelector } from 'react-redux';
 
 import { RootState } from '../state/store';
-import { selectWalletId } from '../state/slices/walletSlice';
+import {
+  selectWalletId,
+  selectWalletType,
+} from '../state/slices/walletSlice';
 import useFetchWalletAddresses from './useFetchWalletAddresses';
+import { signHardwarePayment } from '../services/hardware/hardwareSignTransaction';
 
 import { UTXO } from '../types/types';
 import TransactionService, {
@@ -14,6 +18,9 @@ import TransactionService, {
 import { selectCurrentNetwork } from '../state/selectors/networkSelectors';
 import { SATSINBITCOIN } from '../utils/constants';
 import UTXOService from '../services/UTXOService';
+import { outpointKey } from '../platform/desktop/CoinLabelService';
+import { applySpendOnlyFusedPolicy } from '../platform/desktop/fusionSpendPolicy';
+import { selectSpendOnlyFusedCoins } from '../state/slices/experimentalSlice';
 import {
   selectNftInput,
   selectTokenFtInputs,
@@ -40,7 +47,10 @@ export default function useSimpleSend() {
   // Redux
   const prices = useSelector((s: RootState) => s.priceFeed);
   const walletId = useSelector(selectWalletId);
+  const walletType = useSelector(selectWalletType);
+  const isHardwareWallet = walletType === 'hardware';
   const currentNetwork = useSelector((s: RootState) => selectCurrentNetwork(s));
+  const spendOnlyFusedCoins = useSelector(selectSpendOnlyFusedCoins);
   const preferInternalChangeForBch = false;
 
   // Wallet addresses + default change (also gives tokenAddress mapping)
@@ -54,6 +64,11 @@ export default function useSimpleSend() {
   const [assetType, setAssetType] = useState<AssetType>('bch');
   const [hydrated, setHydrated] = useState(false);
   const [maxBusy, setMaxBusy] = useState(false);
+  /** True while Review is building a tx (keeps the button responsive / labeled). */
+  const [reviewBusy, setReviewBusy] = useState(false);
+  /** Live status while hardware signs (Ledger shows screens — user must press buttons). */
+  const [sendStatus, setSendStatus] = useState('');
+  const reviewInFlightRef = useRef(false);
 
   useEffect(() => {
     const raf = window.requestAnimationFrame(() => setHydrated(true));
@@ -75,6 +90,36 @@ export default function useSimpleSend() {
   // DB-backed UTXOs across whole wallet
   const [dbUtxos, setDbUtxos] = useState<UTXO[]>([]);
   const [tokenUtxos, setTokenUtxos] = useState<UTXO[]>([]);
+  /** Global coin control on Simple Send: restrict spend pool to checked coins. */
+  const [coinControlEnabled, setCoinControlEnabled] = useState(false);
+  const [selectedCoinKeys, setSelectedCoinKeys] = useState<Set<string>>(
+    () => new Set()
+  );
+
+  const applyCoinControl = useCallback(
+    (pool: UTXO[]): UTXO[] | { error: string } => {
+      let next = pool;
+      if (coinControlEnabled) {
+        if (selectedCoinKeys.size === 0) {
+          return {
+            error:
+              'Coin control is on but no coins are selected. Check at least one coin, or turn Manual off.',
+          };
+        }
+        next = pool.filter((u) =>
+          selectedCoinKeys.has(outpointKey(u.tx_hash, u.tx_pos))
+        );
+        if (next.length === 0) {
+          return {
+            error:
+              'None of the selected coins are available. Refresh the wallet or update coin control.',
+          };
+        }
+      }
+      return applySpendOnlyFusedPolicy(walletId, next, spendOnlyFusedCoins);
+    },
+    [coinControlEnabled, selectedCoinKeys, walletId, spendOnlyFusedCoins]
+  );
   useEffect(() => {
     if (!hydrated) return;
     let cancelled = false;
@@ -93,11 +138,13 @@ export default function useSimpleSend() {
   }, [walletId, addresses.length, hydrated]);
 
   // The worker normally keeps the SQL.js snapshot current, but each Tauri
-  // process has its own in-memory database. Refresh the BCH addresses at the
-  // point of sending so Review/Max cannot select from a stale process-local
-  // snapshot when another wallet instance has just received or broadcast a
-  // transaction. The service also reconstructs pending owned outputs from the
-  // shared outbound tracker, so unconfirmed change remains spendable.
+  // process has its own in-memory database. A full listunspent over every
+  // address is authoritative for multi-window freshness, but it is also the
+  // slow path (many addresses / Tor / Electrum). Review must not block the UI
+  // on that sweep — use the local snapshot when present (same as Max / token
+  // fee pool) and only force a network refresh when we have nothing to spend.
+  // The service also reconstructs pending owned outputs from the shared
+  // outbound tracker, so unconfirmed change remains spendable after a refresh.
   const refreshBchUtxos = useCallback(async (): Promise<UTXO[]> => {
     if (!walletId) return [];
 
@@ -117,6 +164,20 @@ export default function useSimpleSend() {
     setDbUtxos(refreshed);
     return refreshed;
   }, [walletId, addresses]);
+
+  /**
+   * Spendable BCH pool for Review/Max-style builds.
+   * Prefer the already-loaded snapshot so the button feels instant; kick a
+   * background network refresh so the next action sees fresher coins without
+   * freezing this click. Only await the network path when the pool is empty.
+   */
+  const loadSpendableBchUtxos = useCallback(async (): Promise<UTXO[]> => {
+    if (dbUtxos.length > 0) {
+      void refreshBchUtxos().catch(() => undefined);
+      return dbUtxos;
+    }
+    return await refreshBchUtxos();
+  }, [dbUtxos, refreshBchUtxos]);
 
   // BCH change address (P2PKH cashaddr as selected)
   const [selectedChangeAddress, setSelectedChangeAddressState] =
@@ -361,32 +422,22 @@ export default function useSimpleSend() {
     setSelectedCategory('');
     setAmountToken('');
     setSelectedNftCommitment('');
+    setCoinControlEnabled(false);
+    setSelectedCoinKeys(new Set());
+    setReviewBusy(false);
+    reviewInFlightRef.current = false;
   }, [setAmountToken]);
 
-  const planner = useMemo(
-    () =>
-      createSimpleSendPlanner({
-        recipient: normalizedRecipient,
-        selectedCategory,
-        amountToken,
-        tokenChangeAddress,
-        selectedChangeAddress,
-        dbUtxos,
-      }),
-    [
-      normalizedRecipient,
-      selectedCategory,
-      amountToken,
-      tokenChangeAddress,
-      selectedChangeAddress,
-      dbUtxos,
-    ]
-  );
-
   const doReview = useCallback(async () => {
+    if (reviewInFlightRef.current) return;
+    reviewInFlightRef.current = true;
+    setReviewBusy(true);
+    setError('');
+    // Yield so React can paint "Preparing…" before build work.
+    await new Promise<void>((resolve) => {
+      window.requestAnimationFrame(() => resolve());
+    });
     try {
-      setError('');
-
       const rpaBlockReason = getRpaSendBlockReason(recipient, currentNetwork);
       if (rpaBlockReason) {
         setError(rpaBlockReason);
@@ -414,14 +465,23 @@ export default function useSimpleSend() {
           return;
         }
 
-        const freshDbUtxos = await refreshBchUtxos();
+        // Local snapshot first (Max-style). Full Electrum refresh no longer
+        // blocks this click — it runs in the background via loadSpendableBchUtxos.
+        const freshDbUtxos = await loadSpendableBchUtxos();
+        const controlled = applyCoinControl(freshDbUtxos);
+        if ('error' in controlled) {
+          setError(controlled.error);
+          setMode('error');
+          return;
+        }
         const freshPlanner = createSimpleSendPlanner({
           recipient: normalizedRecipient,
           selectedCategory,
           amountToken,
           tokenChangeAddress,
           selectedChangeAddress,
-          dbUtxos: freshDbUtxos,
+          dbUtxos: controlled,
+          hardwareWallet: isHardwareWallet,
         });
         const attempt = await freshPlanner.addBchOnlyUntilBuild(targetSats, 50);
         if (!attempt.ok) {
@@ -442,7 +502,14 @@ export default function useSimpleSend() {
       }
 
       // From here: token sends also need BCH for fees
-      if (!dbUtxos.length) {
+      const feePoolRaw = await loadSpendableBchUtxos();
+      const feePool = applyCoinControl(feePoolRaw);
+      if ('error' in feePool) {
+        setError(feePool.error);
+        setMode('error');
+        return;
+      }
+      if (!feePool.length) {
         setError('No non-token BCH UTXOs available to cover fees.');
         setMode('error');
         return;
@@ -494,13 +561,21 @@ export default function useSimpleSend() {
 
         const changeTok = totalFromInputs - tokAmt;
 
-        const outputs = [planner.makeTokenOutputForRecipientFT()];
+        const feePlanner = createSimpleSendPlanner({
+          recipient: normalizedRecipient,
+          selectedCategory,
+          amountToken,
+          tokenChangeAddress,
+          selectedChangeAddress,
+          dbUtxos: feePool,
+        });
+        const outputs = [feePlanner.makeTokenOutputForRecipientFT()];
         if (changeTok > 0n) {
-          outputs.push(planner.makeTokenChangeOutputFT(changeTok));
+          outputs.push(feePlanner.makeTokenChangeOutputFT(changeTok));
         }
 
         // Fixed token inputs; add BCH until fee+buffer are covered (BCH change only).
-        const built = await planner.addBchInputsUntilBuild(
+        const built = await feePlanner.addBchInputsUntilBuild(
           tokenInputs,
           outputs,
           100
@@ -547,10 +622,20 @@ export default function useSimpleSend() {
           return;
         }
 
-        const outputs = [planner.makeTokenOutputForRecipientNFT(nftInput)];
+        const feePlanner = createSimpleSendPlanner({
+          recipient: normalizedRecipient,
+          selectedCategory,
+          amountToken,
+          tokenChangeAddress,
+          selectedChangeAddress,
+          dbUtxos: feePool,
+        });
+        const outputs = [
+          feePlanner.makeTokenOutputForRecipientNFT(nftInput),
+        ];
 
         // Fixed NFT input; add BCH until fee+buffer are covered (BCH change only).
-        const built = await planner.addBchInputsUntilBuild(
+        const built = await feePlanner.addBchInputsUntilBuild(
           [nftInput],
           outputs,
           100
@@ -579,6 +664,9 @@ export default function useSimpleSend() {
     } catch (error: unknown) {
       setError(toErrorMessage(error, 'Failed to prepare transaction.'));
       setMode('error');
+    } finally {
+      reviewInFlightRef.current = false;
+      setReviewBusy(false);
     }
   }, [
     normalizedRecipient,
@@ -590,13 +678,13 @@ export default function useSimpleSend() {
     amountToken,
     selectedTokenDecimals,
     selectedNftCommitment,
-    dbUtxos,
     tokenUtxos,
     selectedChangeAddress,
     parsedRecipient.amountRaw,
-    planner,
-    refreshBchUtxos,
+    loadSpendableBchUtxos,
     tokenChangeAddress,
+    applyCoinControl,
+    isHardwareWallet,
   ]);
 
   // "Max": fills the BCH amount field with the full spendable balance minus
@@ -631,13 +719,19 @@ export default function useSimpleSend() {
       // immediately before transaction construction.
       const freshDbUtxos =
         dbUtxos.length > 0 ? dbUtxos : await refreshBchUtxos();
+      const controlled = applyCoinControl(freshDbUtxos);
+      if ('error' in controlled) {
+        setError(controlled.error);
+        setMode('error');
+        return;
+      }
       const freshPlanner = createSimpleSendPlanner({
         recipient: normalizedRecipient,
         selectedCategory,
         amountToken,
         tokenChangeAddress,
         selectedChangeAddress,
-        dbUtxos: freshDbUtxos,
+        dbUtxos: controlled,
       });
       const result = await freshPlanner.sweepAllBchUntilBuild(50);
       if (!result.ok) {
@@ -675,16 +769,49 @@ export default function useSimpleSend() {
     dbUtxos,
     refreshBchUtxos,
     setAmountBch,
+    applyCoinControl,
   ]);
 
   const doSend = useCallback(async () => {
-    if (!review?.rawTx) return;
+    if (!review) return;
+    // Software path needs a signed rawTx from review. Hardware path signs on device now.
+    if (!isHardwareWallet && !review.rawTx) return;
     try {
       setMode('sending');
+      setSendStatus(
+        isHardwareWallet
+          ? 'Preparing hardware sign… Look at your Ledger.'
+          : 'Broadcasting…'
+      );
+      let rawHex = review.rawTx;
+
+      if (isHardwareWallet) {
+        // Electron Cash: sign_transaction after planning — device produces hex.
+        if (!walletId || walletId <= 0) {
+          throw new Error('No wallet open for hardware sign.');
+        }
+        if (!review.finalOutputs?.length) {
+          throw new Error('No planned outputs for hardware sign.');
+        }
+        rawHex = await signHardwarePayment({
+          walletId,
+          inputs: selectedForTx,
+          outputs: review.finalOutputs,
+          changeAddress: selectedChangeAddress || undefined,
+          onProgress: (_stage, detail) => {
+            setSendStatus(
+              detail ||
+                'Confirm the transaction on your Ledger (both buttons)…'
+            );
+          },
+        });
+        setSendStatus('Broadcasting signed transaction…');
+      }
+
       const { txid: sentId, errorMessage, broadcastState: sentState } =
-        await TransactionService.sendTransaction(review.rawTx, selectedForTx, {
+        await TransactionService.sendTransaction(rawHex, selectedForTx, {
           source: 'simple-send',
-          sourceLabel: 'Simple Send',
+          sourceLabel: isHardwareWallet ? 'Hardware Send' : 'Simple Send',
           recipientSummary: normalizedRecipient,
           amountSummary:
             assetType === 'bch'
@@ -697,9 +824,11 @@ export default function useSimpleSend() {
       if (!sentId) throw new Error('Broadcast failed with no txid returned.');
       setTxid(sentId);
       setBroadcastState(sentState ?? 'broadcasted');
+      setSendStatus('');
       setMode('sent');
     } catch (error: unknown) {
       setError(toErrorMessage(error, 'Failed to send transaction.'));
+      setSendStatus('');
       setMode('error');
     }
   }, [
@@ -710,6 +839,9 @@ export default function useSimpleSend() {
     review,
     normalizedRecipient,
     selectedForTx,
+    isHardwareWallet,
+    walletId,
+    selectedChangeAddress,
   ]);
 
   // derive token metadata (categories with totals & NFT commitments)
@@ -804,6 +936,16 @@ export default function useSimpleSend() {
     txid,
     broadcastState,
     maxBusy,
+    reviewBusy,
+    sendStatus,
+    isHardwareWallet,
+
+    // coin control (global Simple Send)
+    dbUtxos,
+    coinControlEnabled,
+    setCoinControlEnabled,
+    selectedCoinKeys,
+    setSelectedCoinKeys,
 
     // actions
     reset,

@@ -14,6 +14,25 @@ import type { QuantumrootVaultRecord, SignedMessageResponseI } from '../types/ty
 import { Network } from '../state/slices/networkSlice';
 import type { deriveQuantumrootVault } from './QuantumrootService';
 
+/**
+ * Why a caller wants a private key. Platform integrity services decide what
+ * each one costs the user:
+ *
+ * - `spend`      producing a signature that moves funds or binds the user to
+ *                something. May re-prompt for the wallet password.
+ * - `reveal`     handing the key itself to the user (WIF export). Always
+ *                re-prompts — the key leaves the app's control.
+ * - `background` unattended use the user already consented to, such as
+ *                auto-fusion. Must never prompt, or rounds die mid-flight.
+ */
+export type KeyPurpose = 'spend' | 'reveal' | 'background';
+
+const KEY_PURPOSE_SCOPES: Record<KeyPurpose, string> = {
+  spend: 'fetchAddressPrivateKey_spend',
+  reveal: 'private_key_reveal',
+  background: 'fetchAddressPrivateKey',
+};
+
 const KeyService = {
   async generateMnemonic() {
     const keyGen = KeyGeneration();
@@ -143,9 +162,17 @@ const KeyService = {
     );
   },
 
-  // Consolidate the private key fetching and type handling here
-  async fetchAddressPrivateKey(address: string): Promise<Uint8Array | null> {
-    await DeviceIntegrityService.assertDeviceIntegrity('fetchAddressPrivateKey');
+  // Consolidate the private key fetching and type handling here.
+  //
+  // `purpose` is required on purpose. It used to default to non-spending, so a
+  // caller that simply forgot the argument got no re-auth and no warning — the
+  // dangerous case was the silent one. Making it explicit means the compiler,
+  // not a reviewer, catches the next spend path somebody adds.
+  async fetchAddressPrivateKey(
+    address: string,
+    purpose: KeyPurpose
+  ): Promise<Uint8Array | null> {
+    await DeviceIntegrityService.assertDeviceIntegrity(KEY_PURPOSE_SCOPES[purpose]);
     const keyManager = KeyManager();
     const privateKeyData = await keyManager.fetchAddressPrivateKey(address);
 
@@ -169,7 +196,7 @@ const KeyService = {
     message: string
   ): Promise<SignedMessageResponseI> {
     await DeviceIntegrityService.assertDeviceIntegrity('signMessageForAddress');
-    const privateKey = await this.fetchAddressPrivateKey(address);
+    const privateKey = await this.fetchAddressPrivateKey(address, 'spend');
     if (!privateKey) {
       throw new Error(`Missing private key for address: ${address}`);
     }

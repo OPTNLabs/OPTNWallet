@@ -47,7 +47,9 @@ function installLocks() {
   });
 }
 
-const COOLDOWN = 5 * 60_000;
+/** Matches production success spacing — never multi-minute. */
+const COOLDOWN = 40_000;
+const FAIL_BACKOFF = 25_000;
 
 describe('cross-window fusion lease', () => {
   beforeEach(() => {
@@ -76,11 +78,27 @@ describe('cross-window fusion lease', () => {
     expect(await acquireRoundLease(3)).not.toBeNull();
   });
 
-  it('reclaims a lease abandoned by a crashed round', async () => {
-    const stale = Date.now() - 11 * 60_000; // beyond the 10 minute TTL
+  it('reclaims a lease abandoned by a crashed round (absolute TTL)', async () => {
+    const stale = Date.now() - 5 * 60_000; // beyond 4 minute absolute TTL
     await acquireRoundLease(2, stale);
     // A window that died without releasing must not lock the wallet forever.
     expect(await acquireRoundLease(2)).not.toBeNull();
+  });
+
+  it('reclaims a lease with no heartbeat after LEASE_STALE_MS', async () => {
+    const { LEASE_STALE_MS, touchRoundLease } = await import('../fusionWalletLease');
+    const t0 = Date.now();
+    const owner = await acquireRoundLease(2, t0);
+    expect(owner).not.toBeNull();
+    // Fresh lease still blocks.
+    expect(await acquireRoundLease(2, t0 + 30_000)).toBeNull();
+    // Heartbeat keeps it live past the stale window.
+    expect(await touchRoundLease(2, owner as string, t0 + 30_000)).toBe(true);
+    expect(await acquireRoundLease(2, t0 + 30_000 + 30_000)).toBeNull();
+    // No heartbeat → reclaim after stale.
+    expect(
+      await acquireRoundLease(2, t0 + 30_000 + LEASE_STALE_MS + 1)
+    ).not.toBeNull();
   });
 
   it('ignores a release from a window that no longer owns the lease', async () => {
@@ -93,10 +111,11 @@ describe('cross-window fusion lease', () => {
     expect(await acquireRoundLease(2)).not.toBeNull();
   });
 
-  it('fails closed when no lock manager exists', async () => {
+  it('falls back to storage-only lease when no lock manager exists', async () => {
     vi.stubGlobal('navigator', {});
-    // Without exclusivity we cannot promise a single round, so refuse rather
-    // than risk two windows both paying.
+    // Single-window WebViews without Web Locks still fuse; stale reclaim
+    // remains the exclusivity backstop.
+    expect(await acquireRoundLease(2)).not.toBeNull();
     expect(await acquireRoundLease(2)).toBeNull();
     expect(await tryClaimAutoCooldown(2, COOLDOWN)).toBe(false);
   });
@@ -117,9 +136,11 @@ describe('atomic auto-fusion cooldown claim', () => {
     expect([a, b].filter(Boolean)).toHaveLength(1);
   });
 
-  it('refuses again until the cooldown has fully elapsed', async () => {
+  it('refuses again until nextAllowedAt elapses', async () => {
+    const { stampAutoSuccess } = await import('../fusionWalletLease');
     const t0 = 1_000_000;
     expect(await tryClaimAutoCooldown(7, COOLDOWN, t0)).toBe(true);
+    await stampAutoSuccess(7, COOLDOWN, t0);
     expect(await tryClaimAutoCooldown(7, COOLDOWN, t0 + COOLDOWN - 1)).toBe(false);
     expect(await tryClaimAutoCooldown(7, COOLDOWN, t0 + COOLDOWN)).toBe(true);
   });
@@ -133,7 +154,7 @@ describe('atomic auto-fusion cooldown claim', () => {
   it('claims durably, so a reload cannot reset the fee ceiling', async () => {
     const t0 = 1_000_000;
     await tryClaimAutoCooldown(7, COOLDOWN, t0);
-    // Same storage, brand new "window": the stamp must still be visible.
+    // Same storage, brand new "window": the soft hold must still be visible.
     installLocks();
     expect(await tryClaimAutoCooldown(7, COOLDOWN, t0 + 1_000)).toBe(false);
     expect(lastAutoAttemptAt(7)).toBe(t0);
@@ -143,5 +164,63 @@ describe('atomic auto-fusion cooldown claim', () => {
     const t0 = 1_000_000;
     expect(await tryClaimAutoCooldown(7, COOLDOWN, t0)).toBe(true);
     expect(await tryClaimAutoCooldown(8, COOLDOWN, t0)).toBe(true);
+  });
+
+  it('failure backoff is 25s, not multi-minute', async () => {
+    const { stampAutoFailure, isAutoCooldownReady } = await import(
+      '../fusionWalletLease'
+    );
+    const t0 = 1_000_000;
+    await stampAutoFailure(7, FAIL_BACKOFF, t0);
+    expect(isAutoCooldownReady(7, COOLDOWN, t0 + FAIL_BACKOFF)).toBe(true);
+    expect(isAutoCooldownReady(7, COOLDOWN, t0 + FAIL_BACKOFF - 1)).toBe(false);
+  });
+
+  it('wallet activity wakes depth-met idle when coins are below depth again', async () => {
+    const {
+      stampAutoDepthMetIdle,
+      isAutoDepthMetIdle,
+      isAutoCooldownReady,
+      wakeAutoFromWalletActivity,
+    } = await import('../fusionWalletLease');
+    const t0 = 2_000_000;
+    await stampAutoDepthMetIdle(7, 30 * 60_000, t0);
+    expect(isAutoDepthMetIdle(7, t0 + 1_000)).toBe(true);
+
+    // Still all-depth / no eligible → stay idle.
+    expect(await wakeAutoFromWalletActivity(7, false, t0 + 1_000)).toBe(false);
+    expect(isAutoDepthMetIdle(7, t0 + 1_000)).toBe(true);
+
+    // Receive/send/tx left below-depth coins → clear long idle.
+    expect(await wakeAutoFromWalletActivity(7, true, t0 + 1_000)).toBe(true);
+    expect(isAutoDepthMetIdle(7, t0 + 1_000)).toBe(false);
+    expect(isAutoCooldownReady(7, COOLDOWN, t0 + 1_000)).toBe(true);
+  });
+
+  it('wallet activity does not break short success cooldown', async () => {
+    const {
+      stampAutoSuccess,
+      isAutoDepthMetIdle,
+      isAutoCooldownReady,
+      wakeAutoFromWalletActivity,
+    } = await import('../fusionWalletLease');
+    const t0 = 3_000_000;
+    await stampAutoSuccess(7, COOLDOWN, t0);
+    expect(isAutoDepthMetIdle(7, t0 + 1_000)).toBe(false);
+    expect(await wakeAutoFromWalletActivity(7, true, t0 + 1_000)).toBe(false);
+    expect(isAutoCooldownReady(7, COOLDOWN, t0 + 1_000)).toBe(false);
+  });
+
+  it('wakes legacy long fail-stamped idle (old depth-met used stampAutoFailure)', async () => {
+    const {
+      stampAutoFailure,
+      isAutoCooldownReady,
+      wakeAutoFromWalletActivity,
+    } = await import('../fusionWalletLease');
+    const t0 = 4_000_000;
+    // 30m "depth met" used to stamp as fail without reason: depth-met
+    await stampAutoFailure(7, 30 * 60_000, t0);
+    expect(await wakeAutoFromWalletActivity(7, true, t0 + 1_000)).toBe(true);
+    expect(isAutoCooldownReady(7, COOLDOWN, t0 + 1_000)).toBe(true);
   });
 });

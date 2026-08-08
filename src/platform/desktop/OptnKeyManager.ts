@@ -1,12 +1,14 @@
-// EcKeyManager — Electron Cash-style passphrase-derived encryption key.
+// OptnKeyManager — Electron Cash-style passphrase-derived encryption key.
 //
-// Security model:
-//   PBKDF2(passphrase, salt, 600_000, SHA-256) → AES-256-GCM key → WalletKeyCache
-//   The derived key is NEVER stored — only held in RAM for the current session.
-//   A 32-byte random salt and an AES-encrypted verify token are stored in the OS keychain.
-//   On unlock: derive key from passphrase + stored salt, attempt decrypt of verify token.
-//   Empty passphrase is accepted (zero friction) — the PBKDF2 still runs, providing
-//   some protection even without a user-chosen secret.
+// Ciphertext model:
+//   PBKDF2(passphrase, salt, 600_000, SHA-256) → AES-256-GCM key
+//   The derived key NEVER persists in RAM. We cache the passphrase + salt
+//   and re-derive ephemerally on each encrypt/decrypt / sign operation.
+//   A 32-byte random salt and an AES-encrypted verify token are stored in
+//   the OS keychain. On unlock: derive key from passphrase + stored salt,
+//   attempt decrypt of verify token, cache passphrase + salt if correct.
+//   Empty passphrase is accepted (zero friction) — the PBKDF2 still runs,
+//   providing some protection even without a user-chosen secret.
 
 import { setPassword, getPassword, deletePassword } from 'tauri-plugin-keyring-api';
 import {
@@ -16,7 +18,7 @@ import {
   hasData,
   removeData,
 } from '@choochmeque/tauri-plugin-biometry-api';
-import { setCachedWalletKey, getCachedWalletKey, clearCachedWalletKey } from './WalletKeyCache';
+import { setCachedPassword, clearCachedPassword, isCached } from './WalletKeyCache';
 import { deriveKey, aesEncrypt, aesDecrypt, bytesToBase64, base64ToBytes, randomSalt } from './WalletCrypto';
 
 const SERVICE = 'com.optilabs.wallet';
@@ -38,14 +40,14 @@ export async function hasSetup(): Promise<boolean> {
   }
 }
 
-/** True if the derived key is currently loaded in RAM. */
+/** True if the wallet credentials are currently cached in RAM. */
 export function isUnlocked(): boolean {
-  return getCachedWalletKey() !== null;
+  return isCached();
 }
 
 /**
  * First-time setup: derive key from passphrase, store salt + verify token in keychain,
- * cache key in WalletKeyCache so the wallet can be used immediately.
+ * cache passphrase + salt in WalletKeyCache so the wallet can be used immediately.
  */
 export async function setup(passphrase: string): Promise<void> {
   const salt = randomSalt(32);
@@ -53,12 +55,12 @@ export async function setup(passphrase: string): Promise<void> {
   const verifyToken = await aesEncrypt(key, VERIFY_PLAINTEXT);
   await setPassword(SERVICE, SALT_ACCOUNT, bytesToBase64(salt));
   await setPassword(SERVICE, VERIFY_ACCOUNT, verifyToken);
-  setCachedWalletKey(key);
-  console.log('[EcKeyManager] Passphrase setup complete — key cached in RAM');
+  setCachedPassword(passphrase, salt);
+  console.log('[OptnKeyManager] Passphrase setup complete — password + salt cached in RAM');
 }
 
 /**
- * Unlock: derive key, verify against stored token, cache if correct.
+ * Unlock: derive key, verify against stored token, cache passphrase + salt if correct.
  * Returns true on success, false on wrong passphrase.
  */
 export async function unlock(passphrase: string): Promise<boolean> {
@@ -72,8 +74,8 @@ export async function unlock(passphrase: string): Promise<boolean> {
     const decrypted = await aesDecrypt(key, verifyToken);
     if (decrypted !== VERIFY_PLAINTEXT) return false;
 
-    setCachedWalletKey(key);
-    console.log('[EcKeyManager] Unlocked — key cached in RAM');
+    setCachedPassword(passphrase, salt);
+    console.log('[OptnKeyManager] Unlocked — password + salt cached in RAM');
     return true;
   } catch {
     return false;
@@ -101,8 +103,9 @@ export async function verify(passphrase: string): Promise<boolean> {
 
 /**
  * Change passphrase: verify old, derive new key, overwrite keychain entries, update cache.
- * Caller is responsible for re-encrypting DB data before calling this — the cached key
- * switches to the new one here, so collect plaintext first, then call this, then re-encrypt.
+ * Caller is responsible for re-encrypting DB data before calling this — the cached
+ * password switches to the new one here, so collect plaintext first, then call this,
+ * then re-encrypt.
  */
 export async function changePassword(newPassphrase: string): Promise<void> {
   const newSalt = randomSalt(32);
@@ -110,14 +113,14 @@ export async function changePassword(newPassphrase: string): Promise<void> {
   const verifyToken = await aesEncrypt(newKey, VERIFY_PLAINTEXT);
   await setPassword(SERVICE, SALT_ACCOUNT, bytesToBase64(newSalt));
   await setPassword(SERVICE, VERIFY_ACCOUNT, verifyToken);
-  setCachedWalletKey(newKey);
-  console.log('[EcKeyManager] Password changed — new key cached in RAM');
+  setCachedPassword(newPassphrase, newSalt);
+  console.log('[OptnKeyManager] Password changed — new password + salt cached in RAM');
 }
 
-/** Clear the in-memory key. The app will show the lock screen. */
+/** Clear the in-memory credentials. The app will show the lock screen. */
 export function lock(): void {
-  clearCachedWalletKey();
-  console.log('[EcKeyManager] Locked — key wiped from RAM');
+  clearCachedPassword();
+  console.log('[OptnKeyManager] Locked — password + salt wiped from RAM');
 }
 
 /**
@@ -129,7 +132,7 @@ export async function reset(): Promise<void> {
   try { await deletePassword(SERVICE, SALT_ACCOUNT); } catch { /* already gone */ }
   try { await deletePassword(SERVICE, VERIFY_ACCOUNT); } catch { /* already gone */ }
   try { await removeData({ domain: BIO_DOMAIN, name: BIO_NAME }); } catch { /* already gone */ }
-  console.log('[EcKeyManager] Reset — keychain entries removed');
+  console.log('[OptnKeyManager] Reset — keychain entries removed');
 }
 
 // ── Biometric unlock (Windows Hello / Touch ID) ─────────────────────────────
@@ -160,7 +163,7 @@ export async function hasBiometricEnrolled(): Promise<boolean> {
 /** Store the passphrase behind the OS biometric prompt (Windows Hello / Touch ID). */
 export async function enableBiometric(passphrase: string): Promise<void> {
   await setData({ domain: BIO_DOMAIN, name: BIO_NAME, data: passphrase });
-  console.log('[EcKeyManager] Biometric unlock enabled');
+  console.log('[OptnKeyManager] Biometric unlock enabled');
 }
 
 /**
@@ -177,7 +180,7 @@ export async function unlockWithBiometric(): Promise<boolean> {
     if (!result.data) return false;
     return await unlock(result.data);
   } catch (err) {
-    console.warn('[EcKeyManager] Biometric unlock failed or cancelled:', err);
+    console.warn('[OptnKeyManager] Biometric unlock failed or cancelled:', err);
     return false;
   }
 }
@@ -189,7 +192,7 @@ export async function disableBiometric(): Promise<void> {
   } catch {
     // already gone
   }
-  console.log('[EcKeyManager] Biometric unlock disabled');
+  console.log('[OptnKeyManager] Biometric unlock disabled');
 }
 
 /**
@@ -207,7 +210,7 @@ export function getBiometricLabel(): string {
   return 'Biometric unlock';
 }
 
-export const EcKeyManager = {
+export const OptnKeyManager = {
   hasSetup,
   isUnlocked,
   setup,
@@ -223,4 +226,4 @@ export const EcKeyManager = {
   disableBiometric,
   getBiometricLabel,
 };
-export default EcKeyManager;
+export default OptnKeyManager;

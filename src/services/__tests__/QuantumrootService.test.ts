@@ -3,6 +3,7 @@ import * as bip39 from 'bip39';
 import { binToHex, flattenBinArray, hash256, hexToBin } from '@bitauth/libauth';
 
 import { Network } from '../../state/slices/networkSlice';
+import { getBchAccountPath } from '../HdWalletService';
 import {
   createQuantumrootMessageRandomizer,
   deriveQuantumrootKeyIdentifier,
@@ -147,10 +148,28 @@ describe('QuantumrootService', () => {
     );
   });
 
-  it('matches the component path helper directly', () => {
-    expect(getQuantumrootComponentPath(Network.CHIPNET, 2, 'key', 13)).toBe(
-      "m/44'/1'/2'/1'/13"
-    );
+  it('follows the wallet account path on every network', () => {
+    // Quantumroot must never derive its own coin type. Asserting against
+    // getBchAccountPath (rather than a literal) is the point: the vault has to
+    // track whatever path the wallet is on, so changing the network default
+    // must not be able to make these diverge.
+    for (const network of [Network.MAINNET, Network.CHIPNET]) {
+      expect(getQuantumrootComponentPath(network, 2, 'key', 13)).toBe(
+        `${getBchAccountPath(network, 2)}/1'/13`
+      );
+    }
+  });
+
+  it('honors a custom account path instead of the network default', () => {
+    expect(
+      getQuantumrootComponentPath(
+        Network.CHIPNET,
+        2,
+        'key',
+        13,
+        "m/44'/145'/7'"
+      )
+    ).toBe("m/44'/145'/7'/1'/13");
   });
 
   it('compiles minimum Quantumroot vault locking bytecode and addresses', async () => {

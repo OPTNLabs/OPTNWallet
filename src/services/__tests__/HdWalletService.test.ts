@@ -3,6 +3,7 @@ import * as bip39 from 'bip39';
 
 import { Network } from '../../state/slices/networkSlice';
 import {
+  alignHdPublicKeyNetwork,
   buildBchAccountPath,
   deriveBchChild,
   deriveBchAddressFromHdPublicKey,
@@ -19,10 +20,11 @@ import {
 const TEST_MNEMONIC = bip39.entropyToMnemonic('0'.repeat(32));
 
 describe('HdWalletService', () => {
-  it('uses BCH mainnet coin type 145 and testnet coin type 1', () => {
+  it('uses BCH coin type 145 on mainnet and 1 on chipnet', () => {
     expect(getBchCoinType(Network.MAINNET)).toBe(145);
     expect(getBchCoinType(Network.CHIPNET)).toBe(1);
     expect(getBchAccountPath(Network.CHIPNET, 2)).toBe("m/44'/1'/2'");
+    expect(getBchAccountPath(Network.MAINNET, 0)).toBe("m/44'/145'/0'");
   });
 
   it('accepts only canonical BIP44 account paths', () => {
@@ -30,6 +32,20 @@ describe('HdWalletService', () => {
     expect(() => normalizeBchAccountPath("m/44'/1'/0'/0/0")).toThrow();
     expect(() => normalizeBchAccountPath("m/49'/1'/0'")).toThrow();
     expect(() => normalizeBchAccountPath("m/44'/2147483648'/0'")).toThrow();
+  });
+
+  it('aligns tpub↔xpub version bytes without changing HD node (account index)', async () => {
+    // Account-level tpub (depth 3, account 0') as stored from a Trezor chipnet export.
+    const tpub =
+      'tpubDCCfzARsLdojT3NJp65f2u4TLtHwcARXMyX9fdV3iUgQYhtH6bC9imAocqJSBBLdJNLVQagY9ZFWHeUJyyeiStiRDTDX3MbG1LYfG1aAeYz';
+    const asMain = alignHdPublicKeyNetwork(Network.MAINNET, tpub);
+    expect(asMain.startsWith('xpub')).toBe(true);
+    expect(asMain).not.toBe(tpub);
+    // Round-trip back to testnet serialization.
+    const asTest = alignHdPublicKeyNetwork(Network.CHIPNET, asMain);
+    expect(asTest).toBe(tpub);
+    // Same network is a no-op (trimmed).
+    expect(alignHdPublicKeyNetwork(Network.MAINNET, asMain)).toBe(asMain);
   });
 
   it('round-trips editable BIP44 numeric components without exposing hardened markers', () => {

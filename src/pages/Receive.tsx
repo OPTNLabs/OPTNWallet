@@ -52,7 +52,11 @@ async function fetchAddressWif(
   if (!ALLOW_PRIVATE_KEY_VIEW) return null;
   let privateKey: Uint8Array | null = null;
   try {
-    privateKey = await KeyService.fetchAddressPrivateKey(address);
+    // 'reveal': this hands the raw key to the user as WIF. Electron Cash gates
+    // the equivalent (show_private_key / export_privkeys_dialog) behind
+    // @protected, so it re-prompts for the wallet password. The tap-count
+    // unlock below is discoverability, not authentication.
+    privateKey = await KeyService.fetchAddressPrivateKey(address, 'reveal');
     if (!privateKey) return null;
     return encodePrivateKeyWif(
       privateKey,
@@ -174,7 +178,9 @@ const Receive: React.FC = () => {
           setChangeKeyPairs(changeKeys);
           const firstKey = mainKeys[0] ?? changeKeys[0] ?? null;
           if (firstKey) {
-            const wif = await fetchAddressWif(firstKey.address, currentNetwork);
+            // Do NOT load WIF here — that is a 'reveal' and re-prompts the wallet
+            // password. Receive only needs addresses/pubkeys; private key is
+            // fetched when the user deliberately unlocks the privkey view.
             setSelectedWalletKey(firstKey);
             setSelectedAddressPair({
               address: firstKey.address,
@@ -183,7 +189,9 @@ const Receive: React.FC = () => {
             setSelectedAddress(firstKey.address);
             setSelectedPubKey(hexString(firstKey.publicKey));
             setSelectedPKH(hexString(firstKey.pubkeyHash));
-            setSelectedPrivKey(wif);
+            setSelectedPrivKey(null);
+            setIsPrivKeyUnlocked(false);
+            setPubKeyTapCount(0);
           }
         } else {
           console.error('No keys found for the current wallet');
@@ -217,7 +225,6 @@ const Receive: React.FC = () => {
       setChangeKeyPairs(changeKeys);
       if (mainKeys.length > 0) {
         const primary = mainKeys[0];
-        const wif = await fetchAddressWif(primary.address, currentNetwork);
         setSelectedAddressPair({
           address: primary.address,
           tokenAddress: primary.tokenAddress,
@@ -225,7 +232,9 @@ const Receive: React.FC = () => {
         setSelectedAddress(primary.address);
         setSelectedPubKey(hexString(primary.publicKey));
         setSelectedPKH(hexString(primary.pubkeyHash));
-        setSelectedPrivKey(wif);
+        setSelectedPrivKey(null);
+        setIsPrivKeyUnlocked(false);
+        setPubKeyTapCount(0);
       }
       console.log('[Receive] initialization completed', {
         mainKeys: mainKeys.length,
@@ -249,7 +258,6 @@ const Receive: React.FC = () => {
 
     const pubkey = hexString(selectedKey.publicKey);
     const pkh = hexString(selectedKey.pubkeyHash);
-    const wif = await fetchAddressWif(address, currentNetwork);
 
     setPubKeyTapCount(0);
     setIsPrivKeyUnlocked(false);
@@ -259,7 +267,7 @@ const Receive: React.FC = () => {
     setSelectedAddress(address);
     setSelectedPubKey(pubkey);
     setSelectedPKH(pkh);
-    setSelectedPrivKey(wif);
+    setSelectedPrivKey(null); // WIF only after explicit privkey unlock
     setIsTokenAddress(false);
     setQrCodeType('address');
     setShowBip21Popup(false);
@@ -420,6 +428,20 @@ const Receive: React.FC = () => {
 
     setQrCodeType('pubKey');
   };
+
+  // Load WIF only when the user has unlocked the private-key view (password
+  // re-prompt is intentional for reveal). Never on plain Receive / address pick.
+  useEffect(() => {
+    if (!isPrivKeyUnlocked || !selectedAddress || !ALLOW_PRIVATE_KEY_VIEW) return;
+    let cancelled = false;
+    void (async () => {
+      const wif = await fetchAddressWif(selectedAddress, currentNetwork);
+      if (!cancelled) setSelectedPrivKey(wif);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [isPrivKeyUnlocked, selectedAddress, currentNetwork]);
 
   const handleCopy = async (text: string) => {
     try {
@@ -805,7 +827,15 @@ const Receive: React.FC = () => {
                 ? 'wallet-segment-active'
                 : 'wallet-segment-inactive'
             }`}
-            onClick={() => setQrCodeType('privkey')}
+            onClick={() => {
+              // First open of PrivKey still requires the tap unlock (or we
+              // re-prompt via reveal when WIF is loaded after unlock).
+              if (!isPrivKeyUnlocked) {
+                handlePubKeyTabClick();
+                return;
+              }
+              setQrCodeType('privkey');
+            }}
           >
             PrivKey
           </button>

@@ -1,5 +1,10 @@
-import { describe, expect, it } from 'vitest';
-import { SimplePool, generateSecretKey, getPublicKey, type Event } from 'nostr-tools';
+import { describe, expect, it, vi } from 'vitest';
+import {
+  SimplePool,
+  generateSecretKey,
+  getPublicKey,
+  type Event,
+} from 'nostr-tools';
 import {
   secp256k1,
   createVirtualMachineBCH2023,
@@ -14,6 +19,7 @@ import { hash160 } from '@cashscript/utils';
 import { createNostrRoundTransport, GIFT_WRAP_KIND } from '../fusionTransport';
 import {
   parseRoundMessage,
+  messageBinding,
   runFusionRound,
   type RoundParams,
 } from '../fusionSession';
@@ -24,12 +30,16 @@ import { toLibauthTx } from '../fusionSign';
  *  {kinds, #p} filter matches — including subscriptions opened later. */
 class FakePool {
   private events: Event[] = [];
-  private subs: Array<{ filter: Record<string, unknown>; onevent: (e: Event) => void }> = [];
+  private subs: Array<{
+    filter: Record<string, unknown>;
+    onevent: (e: Event) => void;
+  }> = [];
   private matches(filter: Record<string, unknown>, e: Event): boolean {
     const kinds = filter.kinds as number[] | undefined;
     if (kinds && !kinds.includes(e.kind)) return false;
     const pTags = filter['#p'] as string[] | undefined;
-    if (pTags && !e.tags.some((t) => t[0] === 'p' && pTags.includes(t[1]))) return false;
+    if (pTags && !e.tags.some((t) => t[0] === 'p' && pTags.includes(t[1])))
+      return false;
     return true;
   }
   get publishedCount(): number {
@@ -37,14 +47,24 @@ class FakePool {
   }
   publish(_relays: string[], event: Event): Promise<string>[] {
     this.events.push(event);
-    for (const s of this.subs) if (this.matches(s.filter, event)) queueMicrotask(() => s.onevent(event));
+    for (const s of this.subs)
+      if (this.matches(s.filter, event)) queueMicrotask(() => s.onevent(event));
     return [Promise.resolve('ok')];
   }
-  subscribeMany(_relays: string[], filter: Record<string, unknown>, cbs: { onevent: (e: Event) => void }) {
+  subscribeMany(
+    _relays: string[],
+    filter: Record<string, unknown>,
+    cbs: { onevent: (e: Event) => void }
+  ) {
     const sub = { filter, onevent: cbs.onevent };
     this.subs.push(sub);
-    for (const e of this.events) if (this.matches(filter, e)) queueMicrotask(() => cbs.onevent(e));
-    return { close: () => { this.subs = this.subs.filter((s) => s !== sub); } };
+    for (const e of this.events)
+      if (this.matches(filter, e)) queueMicrotask(() => cbs.onevent(e));
+    return {
+      close: () => {
+        this.subs = this.subs.filter((s) => s !== sub);
+      },
+    };
   }
 }
 const asPool = (p: FakePool) => p as unknown as SimplePool;
@@ -57,7 +77,8 @@ function kp(seed: number) {
   if (typeof pub === 'string') throw new Error(pub);
   return { priv, pubHex: binToHex(pub) };
 }
-const p2pkhHex = (h: string) => binToHex(encodeLockingBytecodeP2pkh(hash160(hexToBin(h))));
+const p2pkhHex = (h: string) =>
+  binToHex(encodeLockingBytecodeP2pkh(hash160(hexToBin(h))));
 function roundId() {
   const sk = generateSecretKey();
   return { secretKey: sk, pubkey: getPublicKey(sk) };
@@ -90,9 +111,9 @@ describe('Nostr round transport', () => {
     ).toBeNull();
     expect(
       parseRoundMessage(
-        JSON.stringify({ type: 'abort', session: 'round', reason: 'cancelled' })
+        JSON.stringify({ ...messageBinding(), type: 'abort', session: 'round', reason: 'cancelled' })
       )
-    ).toEqual({ type: 'abort', session: 'round', reason: 'cancelled' });
+    ).toEqual(expect.objectContaining({ type: 'abort', session: 'round', reason: 'cancelled' }));
   });
 
   it('fails send when every configured relay rejects the event', async () => {
@@ -110,11 +131,77 @@ describe('Nostr round transport', () => {
 
     await expect(
       transport.send(recipient.pubkey, {
+        ...messageBinding(),
         type: 'abort',
         session: 'round',
         reason: 'test',
       })
     ).rejects.toThrow(/No Nostr relay accepted/i);
+  });
+
+  it('does not hang forever when one relay accepts and another never acknowledges', async () => {
+    vi.useFakeTimers();
+    try {
+      const partlySilent = {
+        publish: () => [
+          Promise.resolve('accepted'),
+          new Promise<string>(() => undefined),
+        ],
+        subscribeMany: () => ({ close: () => undefined }),
+      } as unknown as SimplePool;
+      const sender = roundId();
+      const recipient = roundId();
+      const transport = createNostrRoundTransport(
+        partlySilent,
+        ['wss://accepted', 'wss://silent'],
+        sender
+      );
+
+      let settled = false;
+      void transport
+        .send(recipient.pubkey, {
+          ...messageBinding(),
+          type: 'abort',
+          session: 'round',
+          reason: 'test',
+        })
+        .then(() => {
+          settled = true;
+        });
+
+      await vi.advanceTimersByTimeAsync(30_000);
+      await Promise.resolve();
+      expect(settled).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('cancels a silent relay publish immediately when the wallet session ends', async () => {
+    const silent = {
+      publish: () => [new Promise<string>(() => undefined)],
+      subscribeMany: () => ({ close: () => undefined }),
+    } as unknown as SimplePool;
+    const sender = roundId();
+    const recipient = roundId();
+    const controller = new AbortController();
+    const transport = createNostrRoundTransport(
+      silent,
+      ['wss://silent'],
+      sender,
+      silent,
+      controller.signal
+    );
+
+    const sending = transport.send(recipient.pubkey, {
+      ...messageBinding(),
+      type: 'abort',
+      session: 'round',
+      reason: 'test',
+    });
+    controller.abort();
+
+    await expect(sending).rejects.toThrow(/fusion round cancelled/i);
   });
 
   it('publishes anonymous outputs through the isolated output pool', async () => {
@@ -130,11 +217,21 @@ describe('Nostr round transport', () => {
     );
 
     await transport.send(recipient.pubkey, {
+      ...messageBinding(),
       type: 'inputs',
       session: 'round',
-      inputs: [],
+      inputs: [
+        {
+          prevTxid: 'ab'.repeat(32),
+          prevIndex: 0,
+          value: 10_000,
+          pubkey: `02${'11'.repeat(32)}`,
+        },
+      ],
+      credentialSigs: ['aa'.repeat(64)],
     });
     await transport.send(recipient.pubkey, {
+      ...messageBinding(),
       type: 'outputs',
       session: 'round',
       outputs: [{ script: '00', value: 546 }],
@@ -155,6 +252,7 @@ describe('Nostr round transport', () => {
     const got: Array<{ from: string; type: string }> = [];
     tb.onMessage((from, msg) => got.push({ from, type: msg.type }));
     await ta.send(b.pubkey, {
+      ...messageBinding(),
       type: 'inputs',
       session: 's',
       inputs: [
@@ -165,6 +263,7 @@ describe('Nostr round transport', () => {
           pubkey: `02${'11'.repeat(32)}`,
         },
       ],
+      credentialSigs: ['bb'.repeat(64)],
     });
     await new Promise((r) => setTimeout(r, 10));
 
@@ -184,27 +283,48 @@ describe('Nostr round transport', () => {
     const tb = createNostrRoundTransport(asPool(pool), ['wss://fake'], b);
 
     let fromPubkey = '';
-    tb.onMessage((from, msg) => { if (msg.type === 'outputs') fromPubkey = from; });
-    await ta.send(b.pubkey, { type: 'outputs', session: 's', outputs: [{ script: '00', value: 546 }] });
+    tb.onMessage((from, msg) => {
+      if (msg.type === 'outputs') fromPubkey = from;
+    });
+    await ta.send(b.pubkey, {
+      ...messageBinding(),
+      type: 'outputs',
+      session: 's',
+      outputs: [{ script: '00', value: 546 }],
+    });
     await new Promise((r) => setTimeout(r, 10));
 
     expect(fromPubkey).not.toBe('');
     expect(fromPubkey).not.toBe(a.pubkey); // NOT the round key → can't be linked to its inputs
   });
 
-  it('drives a full 2-peer round to a VM-valid CoinJoin over the transport', async () => {
+  it('drives a full 3-peer onion round to a VM-valid CoinJoin over the transport', async () => {
     const pool = new FakePool();
     const relays = ['wss://fake'];
 
-    const peers = [1, 2].map((n) => {
+    const peers = [1, 2, 3].map((n) => {
       const inKey = kp(n * 10 + 1);
       const outKey = kp(n * 10 + 2);
       const round = roundId();
       const contribution: PeerContribution = {
-        inputs: [{ prevTxid: `${n}${'c'.repeat(63)}`, prevIndex: n, value: 100_000, pubkey: inKey.pubHex }],
-        outputs: [{ script: p2pkhHex(outKey.pubHex), value: 99_700 }],
+        inputs: [
+          {
+            prevTxid: `${n}${'c'.repeat(63)}`,
+            prevIndex: n,
+            value: 100_000,
+            pubkey: inKey.pubHex,
+          },
+        ],
+        outputs: [{ script: p2pkhHex(outKey.pubHex), value: 99_600 }],
       };
-      return { round, keys: new Map([[inKey.pubHex, inKey.priv]]), contribution };
+      return {
+        round,
+        keys: new Map([
+          [inKey.pubHex, inKey.priv],
+          [round.pubkey, round.secretKey], // round identity peels onion layers
+        ]),
+        contribution,
+      };
     });
     const participants = peers.map((p) => p.round.pubkey);
     let broadcasts = 0;
@@ -223,19 +343,32 @@ describe('Nostr round transport', () => {
           myContribution: p.contribution,
           keysByPubkey: p.keys,
           broadcast,
-          timeoutMs: 5000,
+          timeoutMs: 8_000,
+          jitterMs: [0, 0],
         };
-        return runFusionRound(params, createNostrRoundTransport(asPool(pool), relays, p.round));
+        return runFusionRound(
+          params,
+          createNostrRoundTransport(asPool(pool), relays, p.round)
+        );
       })
     );
 
     expect(new Set(results.map((r) => r.txid)).size).toBe(1);
     expect(broadcasts).toBe(1);
 
-    const decoded = decodeTransaction(hexToBin(results[0].txHex)) as TransactionCommon;
-    const { sourceOutputs } = toLibauthTx(assembleFusionTx(peers.map((p) => p.contribution)));
-    expect(createVirtualMachineBCH2023().verify({ transaction: decoded, sourceOutputs })).toBe(true);
-    expect(decoded.inputs).toHaveLength(2);
-    expect(decoded.outputs).toHaveLength(2);
+    const decoded = decodeTransaction(
+      hexToBin(results[0].txHex)
+    ) as TransactionCommon;
+    const { sourceOutputs } = toLibauthTx(
+      assembleFusionTx(peers.map((p) => p.contribution))
+    );
+    expect(
+      createVirtualMachineBCH2023().verify({
+        transaction: decoded,
+        sourceOutputs,
+      })
+    ).toBe(true);
+    expect(decoded.inputs).toHaveLength(3);
+    expect(decoded.outputs).toHaveLength(3);
   });
 });

@@ -3,12 +3,8 @@ import { Capacitor } from '@capacitor/core';
 import { LocalNotifications } from '@capacitor/local-notifications';
 import { StatusBar, Style } from '@capacitor/status-bar';
 import { useLocation } from 'react-router-dom';
-import DatabaseService from '../apis/DatabaseManager/DatabaseService';
 import WalletManager from '../apis/WalletManager/WalletManager';
-import {
-  startUTXOWorker,
-  stopUTXOWorker,
-} from '../workers/UTXOWorkerService';
+import { startUTXOWorker, stopUTXOWorker } from '../workers/UTXOWorkerService';
 import { initWalletConnect } from '../state/slices/walletconnectSlice';
 import {
   initWizardConnect,
@@ -22,7 +18,7 @@ import {
   clearNotifications,
   type AppNotification,
 } from '../state/slices/notificationsSlice';
-import { AppDispatch } from '../state/store';
+import { AppDispatch, store } from '../state/store';
 import {
   clearServerNotifications,
   enqueueServerNotification,
@@ -36,6 +32,7 @@ import {
   setWalletDerivationPath,
 } from '../state/slices/walletSlice';
 import { WalletType } from '../types/wallet';
+import type { WalletMetadata } from '../types/wallet';
 import ScreenSecurity from '../platform/plugins/ScreenSecurity';
 import ElectrumServer from '../apis/ElectrumServer/ElectrumServer';
 import WalletBackendSyncService from '../services/WalletBackendSyncService';
@@ -48,10 +45,14 @@ import { refreshWalletTransactionHistory } from '../services/WalletHistoryRefres
 let utxoWorkerStarted = false;
 let bcmrWarmupStarted = false;
 
-export function useWalletConnectInitialization(dispatch: AppDispatch) {
+export function useWalletConnectInitialization(
+  dispatch: AppDispatch,
+  enabled = true
+) {
   useEffect(() => {
+    if (!enabled) return;
     dispatch(initWalletConnect());
-  }, [dispatch]);
+  }, [dispatch, enabled]);
 }
 
 export function useWizardConnectInitialization(
@@ -167,6 +168,71 @@ export function useWizardConnectSessionWatch(
   }, [dispatch, walletId]);
 }
 
+interface WalletNetworkBootstrapDependencies {
+  loadWalletMetadata: (walletId: number) => Promise<WalletMetadata | null>;
+  ensureFreshConnection: () => Promise<unknown>;
+  refreshHistory: typeof refreshWalletTransactionHistory;
+  getSessionGeneration?: () => number;
+}
+
+/**
+ * Establish the wallet's local network state, then release the UI immediately.
+ * Electrum connection and history refresh remain app-wide and coalesced
+ * background work: neither a slow server nor a large history may block unlock.
+ */
+export async function bootstrapWalletNetwork(
+  walletId: number,
+  dispatch: AppDispatch,
+  isCancelled: () => boolean = () => false,
+  dependencies: WalletNetworkBootstrapDependencies = {
+    loadWalletMetadata: (id) => WalletManager().getWalletMetadata(id),
+    ensureFreshConnection: () => ElectrumServer().ensureFreshConnection(),
+    refreshHistory: refreshWalletTransactionHistory,
+    getSessionGeneration: () =>
+      store.getState().wallet_id.sessionGeneration ?? 0,
+  }
+): Promise<void> {
+  const walletInfo = await dependencies.loadWalletMetadata(walletId);
+  const resolvedNetwork =
+    walletInfo?.networkType === Network.MAINNET
+      ? Network.MAINNET
+      : walletInfo?.networkType === Network.CHIPNET
+        ? Network.CHIPNET
+        : null;
+  if (isCancelled() || !resolvedNetwork) return;
+
+  dispatch(setWalletNetwork(resolvedNetwork));
+  dispatch(setWalletType(walletInfo?.walletType ?? WalletType.STANDARD));
+  if (walletInfo?.derivation_path) {
+    dispatch(
+      setWalletDerivationPath({
+        path: walletInfo.derivation_path,
+        source:
+          walletInfo.derivation_path_source === 'custom'
+            ? 'custom'
+            : 'default',
+      })
+    );
+  }
+  dispatch(setNetwork(resolvedNetwork));
+  const sessionGeneration =
+    dependencies.getSessionGeneration?.() ??
+    store.getState().wallet_id.sessionGeneration ??
+    0;
+
+  void dependencies
+    .ensureFreshConnection()
+    .then(() => {
+      if (isCancelled()) return;
+      return dependencies.refreshHistory({
+        walletId,
+        dispatch,
+        sessionGeneration,
+      });
+    })
+    .catch((error) => console.warn('Wallet network sync failed:', error));
+}
+
 export function useWalletNetworkBootstrap(
   walletId: number | null,
   dispatch: AppDispatch
@@ -183,47 +249,7 @@ export function useWalletNetworkBootstrap(
       }
 
       try {
-        const dbService = DatabaseService();
-        const walletManager = WalletManager();
-        await dbService.ensureDatabaseStarted();
-        const walletInfo = await walletManager.getWalletInfo(walletId);
-        const resolvedNetwork =
-          walletInfo?.networkType === Network.MAINNET
-            ? Network.MAINNET
-            : walletInfo?.networkType === Network.CHIPNET
-              ? Network.CHIPNET
-              : null;
-
-        if (!cancelled && resolvedNetwork) {
-          dispatch(setWalletNetwork(resolvedNetwork));
-          dispatch(setWalletType(walletInfo?.walletType ?? WalletType.STANDARD));
-          if (walletInfo?.derivation_path) {
-            dispatch(
-              setWalletDerivationPath({
-                path: walletInfo.derivation_path,
-                source:
-                  walletInfo.derivation_path_source === 'custom'
-                    ? 'custom'
-                    : 'default',
-              })
-            );
-          }
-          dispatch(setNetwork(resolvedNetwork));
-
-          // A logout closes the shared Electrum client. Re-establish it before
-          // starting the worker so wallet-open does not begin against a stale
-          // socket or wait for a later page-specific refresh to discover it.
-          await ElectrumServer().ensureFreshConnection();
-
-          // Load persisted history and perform the first network history scan
-          // during wallet bootstrap. Home/desktop screens still refresh on
-          // mount, but opening a wallet no longer depends on those screens to
-          // populate the transaction list.
-          await refreshWalletTransactionHistory({
-            walletId,
-            dispatch,
-          });
-        }
+        await bootstrapWalletNetwork(walletId, dispatch, () => cancelled);
       } catch (error) {
         console.warn('Wallet network bootstrap failed:', error);
       } finally {
@@ -277,7 +303,10 @@ export function useScreenSecurity() {
   const location = useLocation();
 
   useEffect(() => {
-    if (!Capacitor.isNativePlatform() || Capacitor.getPlatform() !== 'android') {
+    if (
+      !Capacitor.isNativePlatform() ||
+      Capacitor.getPlatform() !== 'android'
+    ) {
       return;
     }
 
@@ -289,9 +318,11 @@ export function useScreenSecurity() {
     ]);
     const shouldEnableSecure = !onboardingRoutes.has(location.pathname);
 
-    void ScreenSecurity.setSecure({ enabled: shouldEnableSecure }).catch((error) => {
-      console.warn('Failed to update screen security state', error);
-    });
+    void ScreenSecurity.setSecure({ enabled: shouldEnableSecure }).catch(
+      (error) => {
+        console.warn('Failed to update screen security state', error);
+      }
+    );
   }, [location.pathname]);
 }
 
@@ -427,7 +458,8 @@ export function useOptionalPlayUpdateCheck() {
         }
 
         if (!update.available) return;
-        if (update.availableVersionCode <= lastPromptedVersionRef.current) return;
+        if (update.availableVersionCode <= lastPromptedVersionRef.current)
+          return;
 
         const shouldUpdate = await confirm(
           'A newer version of OPTN Wallet is available in Google Play. You can keep using this version or update now.'
@@ -608,7 +640,8 @@ export function useServerNotificationPolling(
       if (cancelled || inFlight.current) return;
       inFlight.current = true;
       try {
-        const notifications = await WalletBackendSyncService.listNotifications(walletId);
+        const notifications =
+          await WalletBackendSyncService.listNotifications(walletId);
         for (const notification of notifications) {
           dispatch(
             enqueueServerNotification({

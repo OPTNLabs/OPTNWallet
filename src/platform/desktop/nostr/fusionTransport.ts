@@ -19,15 +19,26 @@
 // it registered under its round key. In production these also ride a fresh Tor
 // circuit (torWebSocket).
 
-import { SimplePool, generateSecretKey, type Event } from 'nostr-tools';
-import { wrapEvent, unwrapEvent } from 'nostr-tools/nip17';
 import {
-  parseRoundMessage,
-  type RoundTransport,
-} from './fusionSession';
+  SimplePool,
+  generateSecretKey,
+  getPublicKey,
+  type Event,
+} from 'nostr-tools';
+import { wrapEvent, unwrapEvent } from 'nostr-tools/nip17';
+import { publishEventAtLeastOnce } from './fusion';
+import { parseRoundMessage, type RoundTransport } from './fusionSession';
 
 /** NIP-59 gift-wrap. Same kind as chat; disambiguated by the #p recipient. */
 export const GIFT_WRAP_KIND = 1059;
+
+/**
+ * Same-origin bridge for round messages (multi-wallet on one machine).
+ * Remote peers still use Nostr gift-wrap only — BC never leaves this origin.
+ * Live auto often failed at ACK because Tor gift-wraps dropped while all
+ * windows already shared pool discovery via BC.
+ */
+const ROUND_BC_NAME = 'optn-p2p-round-v1';
 
 export interface RoundKeys {
   secretKey: Uint8Array;
@@ -39,14 +50,58 @@ export function createNostrRoundTransport(
   pool: SimplePool,
   relays: string[],
   round: RoundKeys,
-  outputPool: SimplePool = pool
+  outputPool: SimplePool = pool,
+  signal?: AbortSignal
 ): RoundTransport {
   const protocolErrorHandlers = new Set<(from: string, error: Error) => void>();
+  /** Dedup BC+Nostr dual path (same msg.nonce once). */
+  const seenMsgNonces = new Set<string>();
+  const deliver = (
+    from: string,
+    msg: Parameters<Parameters<RoundTransport['onMessage']>[0]>[1],
+    handler: Parameters<RoundTransport['onMessage']>[0]
+  ) => {
+    const nonce =
+      msg && typeof msg === 'object' && 'nonce' in msg
+        ? String((msg as { nonce?: string }).nonce ?? '')
+        : '';
+    if (nonce) {
+      if (seenMsgNonces.has(nonce)) return;
+      seenMsgNonces.add(nonce);
+      if (seenMsgNonces.size > 2_000) {
+        // Bound memory for long rounds.
+        seenMsgNonces.clear();
+      }
+    }
+    handler(from, msg);
+  };
   return {
     send: async (toPubkey, msg) => {
-      // Outputs are sealed by a throwaway key (unlinkable); all else by the round key.
-      const isAnonymousOutput = msg.type === 'outputs';
+      // Outputs (plain or onion) are sealed by a throwaway key so the recipient
+      // cannot tie them to our round identity. onion_output was previously
+      // signed with the round key, undoing the unlinkability onion bought.
+      const isAnonymousOutput =
+        msg.type === 'outputs' || msg.type === 'onion_output';
       const signer = isAnonymousOutput ? generateSecretKey() : round.secretKey;
+      // Same-origin dual path first (fast local multi-wallet). Always also
+      // publish Nostr so remote peers still work.
+      try {
+        if (typeof BroadcastChannel !== 'undefined') {
+          const bc = new BroadcastChannel(ROUND_BC_NAME);
+          // Match gift-wrap identity: anonymous outputs use a throwaway from.
+          const fromBc = isAnonymousOutput
+            ? getPublicKey(signer)
+            : round.pubkey;
+          bc.postMessage({
+            to: toPubkey,
+            from: fromBc,
+            msg,
+          });
+          bc.close();
+        }
+      } catch {
+        /* ignore BC failures */
+      }
       try {
         const wrapped = wrapEvent(
           signer,
@@ -54,37 +109,80 @@ export function createNostrRoundTransport(
           JSON.stringify(msg)
         );
         const publishingPool = isAnonymousOutput ? outputPool : pool;
-        const settled = await Promise.allSettled(
-          publishingPool.publish(relays, wrapped as Event)
+        await publishEventAtLeastOnce(
+          publishingPool,
+          relays,
+          wrapped as Event,
+          signal
         );
-        if (!settled.some((result) => result.status === 'fulfilled')) {
-          throw new Error('No Nostr relay accepted the Fusion message.');
-        }
       } finally {
         if (isAnonymousOutput) signer.fill(0);
       }
     },
 
     onMessage: (handler) => {
-      const sub = pool.subscribeMany(relays, { kinds: [GIFT_WRAP_KIND], '#p': [round.pubkey] }, {
-        onevent(evt: Event) {
-          try {
-            const rumor = unwrapEvent(evt, round.secretKey);
-            const msg = parseRoundMessage(rumor.content);
-            if (!msg) {
-              const error = new Error('Invalid or oversized Fusion round message.');
-              protocolErrorHandlers.forEach((notify) =>
-                notify(rumor.pubkey, error)
-              );
-              return;
-            }
-            handler(rumor.pubkey, msg);
-          } catch {
-            /* not addressed to us, or undecryptable — ignore */
+      // onion_output / outputs publish via outputPool (fresh Tor isolation).
+      // Subscribe both pools so a circuit that only lands on the output sockets
+      // still delivers hop blobs to peelers (missed hops → outputSlots=0).
+      const filter = { kinds: [GIFT_WRAP_KIND], '#p': [round.pubkey] };
+      const onEvent = (evt: Event) => {
+        try {
+          const rumor = unwrapEvent(evt, round.secretKey);
+          const msg = parseRoundMessage(rumor.content);
+          if (!msg) {
+            const error = new Error(
+              'Invalid or oversized Fusion round message.'
+            );
+            protocolErrorHandlers.forEach((notify) =>
+              notify(rumor.pubkey, error)
+            );
+            return;
           }
-        },
-      });
-      return () => sub.close();
+          deliver(rumor.pubkey, msg, handler);
+        } catch {
+          /* not addressed to us, or undecryptable — ignore */
+        }
+      };
+      const sub = pool.subscribeMany(relays, filter, { onevent: onEvent });
+      const outputSub =
+        outputPool === pool
+          ? null
+          : outputPool.subscribeMany(relays, filter, { onevent: onEvent });
+
+      let bc: BroadcastChannel | null = null;
+      try {
+        if (typeof BroadcastChannel !== 'undefined') {
+          bc = new BroadcastChannel(ROUND_BC_NAME);
+          bc.onmessage = (ev: MessageEvent) => {
+            const data = ev.data as {
+              to?: string;
+              from?: string;
+              msg?: unknown;
+            } | null;
+            if (!data || data.to !== round.pubkey) return;
+            if (typeof data.from !== 'string' || data.from.length < 32) return;
+            const content =
+              typeof data.msg === 'string'
+                ? data.msg
+                : JSON.stringify(data.msg ?? null);
+            const parsed = parseRoundMessage(content);
+            if (!parsed) return;
+            deliver(data.from, parsed, handler);
+          };
+        }
+      } catch {
+        bc = null;
+      }
+
+      return () => {
+        sub.close();
+        outputSub?.close();
+        try {
+          bc?.close();
+        } catch {
+          /* ignore */
+        }
+      };
     },
 
     onProtocolError: (handler) => {

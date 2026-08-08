@@ -18,8 +18,9 @@
 // isn't overpaying fees. Signing, Nostr transport, and broadcast are injected /
 // added on top — none of them can weaken this check.
 
-/** Kinds/labels for the gift-wrapped round messages (transport in fusion.ts). */
-export const ROUND_MSG_VERSION = 1;
+/** Kinds/labels for the gift-wrapped round messages (transport in fusion.ts).
+ *  v2: blind-Schnorr credential phase (coordinator = issuer) + pedersen commit. */
+export const ROUND_MSG_VERSION = 2;
 
 /** An input a peer contributes: the outpoint, its value, and the pubkey. */
 export interface FusionInputRef {

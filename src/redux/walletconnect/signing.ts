@@ -99,7 +99,7 @@ export async function signWalletConnectTransactionRequest(
     );
 
   const defaultSignerAddress = requestedSignerAddress ?? keys[0].address;
-  const defaultPrivateKey = await KeyService.fetchAddressPrivateKey(defaultSignerAddress);
+  const defaultPrivateKey = await KeyService.fetchAddressPrivateKey(defaultSignerAddress, 'spend');
   if (!defaultPrivateKey) throw new Error('Private key not found');
   const usedKeys = new Set<Uint8Array>([defaultPrivateKey]);
 
@@ -128,7 +128,7 @@ export async function signWalletConnectTransactionRequest(
 
       const signerKey =
         sourceAddress && keyAddressSet.has(sourceAddress)
-          ? await KeyService.fetchAddressPrivateKey(sourceAddress)
+          ? await KeyService.fetchAddressPrivateKey(sourceAddress, 'spend')
           : defaultPrivateKey;
       if (!signerKey) {
         throw new Error('Missing private key for signing input');

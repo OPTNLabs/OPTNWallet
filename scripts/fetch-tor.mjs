@@ -1,85 +1,100 @@
-// Fetches the Tor Expert Bundle for a target platform and stages the pieces the
-// app needs (tor binary + geoip data) into src-tauri/resources/tor/, which the
-// Tauri build ships as a resource. The Rust side (resolve_tor_paths) then finds
-// tor at <resources>/tor/tor(.exe) so the integrated Tor works with no external
-// Tor install.
+// Fetch and stage the Tor Expert Bundle used by the Tauri desktop app.
 //
 // Usage:
 //   node scripts/fetch-tor.mjs [target]
-// target is one of: windows-x86_64, macos-x86_64, macos-aarch64, linux-x86_64.
-// If omitted, it's inferred from the host. The download is SHA256-verified
-// against Tor's signed sums file before extraction.
+//
+// target is one of windows-x86_64, macos-x86_64, macos-aarch64,
+// linux-x86_64, or linux-aarch64. If omitted, the host target is inferred.
+//
+// linux-aarch64: Tor Project does not publish a desktop Expert Bundle for
+// Linux ARM. We build a pinned Tor source release on the native ARM runner,
+// then stage GeoIP data from the pinned linux-x86_64 Expert Bundle.
 
 import { createHash } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
-import { mkdirSync, rmSync, writeFileSync, readFileSync, copyFileSync, existsSync, mkdtempSync, realpathSync } from 'node:fs';
+import {
+  copyFileSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  realpathSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-// dist.torproject.org publishes exactly ONE stable version directory at a time —
-// a point release deletes its predecessor. Pinning 15.0.17 therefore did not go
-// stale, it went 404, and took the desktop build down on all three runners the
-// day 15.0.19 shipped.
-//
-// The pin is kept because it makes a build reproducible while upstream still has
-// it, but it cannot be the only path or CI breaks again on Tor's next release.
-// So: use the pin when it is there, otherwise the newest stable upstream.
-//
-// This does not weaken verification. The checksum is fetched from the same host
-// as the tarball either way, so the pin never provided independent integrity —
-// only reproducibility, which the fallback preserves whenever it can.
-const TOR_VERSION = '15.0.19';
-const DIST = 'https://dist.torproject.org/torbrowser';
+export const TOR_VERSION = '15.0.19';
+const DIST = 'https://archive.torproject.org/tor-package-archive/torbrowser';
+const TOR_SOURCE_DIST = 'https://dist.torproject.org';
+
+// The official linux-x86_64 Expert Bundle above contains this Tor daemon
+// release. Linux ARM has no equivalent Expert Bundle, so its binary is built
+// from the same reviewed upstream daemon source instead of inheriting whatever
+// version apt happens to install on the CI runner.
+export const LINUX_AARCH64_TOR_SOURCE = Object.freeze({
+  version: '0.4.9.11',
+  sha256: '2e6c1720118c812acf0079fd47cf91b6bfaba5d766c321c4d3d2a28d6a11a8ed',
+});
+
+// Reviewed against Tor Browser's signed 15.0.19 checksum manifest. Keeping
+// these values in the repository prevents a download host from substituting
+// both an archive and its checksum, and makes every release reproducible.
+export const TOR_ARCHIVE_SHA256 = Object.freeze({
+  'windows-x86_64':
+    '6ac067402c7b4a3dc37887ed3754b3914b67fdc220c966190683e9ccf91abf0f',
+  'macos-x86_64':
+    '95243f76bcf05d6179d017c3f3e4ece7b53cc58dff1ba617b03a2fe2c8298b5b',
+  'macos-aarch64':
+    'c99cf6f69740a443c7fffaf598ceb0952b3914041507c8afe11bed84a3333eb1',
+  'linux-x86_64':
+    '5a8f19f5f119b5fa2a8fd799a3a532e3236ad36164241800d6302e32f0e1c2a9',
+});
 
 const bundleName = (target, version) =>
   `tor-expert-bundle-${target}-${version}.tar.gz`;
 
+export function getTorArtifact(target) {
+  const expectedSha256 = TOR_ARCHIVE_SHA256[target];
+  if (!expectedSha256) {
+    throw new Error(`unsupported or unpinned Tor target: ${target}`);
+  }
+
+  const archive = bundleName(target, TOR_VERSION);
+  return {
+    version: TOR_VERSION,
+    archive,
+    sha256: expectedSha256,
+    url: `${DIST}/${TOR_VERSION}/${archive}`,
+  };
+}
+
+export function getLinuxAarch64TorSourceArtifact() {
+  const archive = `tor-${LINUX_AARCH64_TOR_SOURCE.version}.tar.gz`;
+  return {
+    ...LINUX_AARCH64_TOR_SOURCE,
+    archive,
+    url: `${TOR_SOURCE_DIST}/${archive}`,
+  };
+}
+
 /**
- * Newest stable version in a dist.torproject.org directory listing.
+ * Names of the plain files in an extracted bundle directory.
  *
- * Split out from the fetch so it can be tested against a real captured listing:
- * this function decides which Tor binary ships to users, and the two ways it can
- * be wrong — picking an alpha, or ordering 15.0.9 above 15.0.19 — both produce a
- * plausible-looking version string rather than an error.
+ * Subdirectories are skipped: the bundle carries a pluggable_transports/
+ * directory of censorship-circumvention proxies that nothing here launches, so
+ * staging it would only add weight to every installer. Copying it is also not
+ * merely wasteful — copyFileSync throws on a directory (EISDIR on Linux,
+ * ENOTSUP on macOS), which took out all four desktop builds when this staged
+ * the directory listing unfiltered.
  */
-export function pickLatestStable(html) {
-  // Requiring the whole segment to be numeric drops alphas (`16.0a9/`) without
-  // needing to know how Tor spells a pre-release this year.
-  const versions = [...html.matchAll(/href="(\d+(?:\.\d+)+)\/"/g)].map((m) => m[1]);
-  if (versions.length === 0) throw new Error('no stable versions in listing');
-  // Numeric compare per component: "15.0.9" must not sort above "15.0.19".
-  versions.sort((a, b) => {
-    const pa = a.split('.').map(Number);
-    const pb = b.split('.').map(Number);
-    for (let i = 0; i < Math.max(pa.length, pb.length); i += 1) {
-      const diff = (pa[i] ?? 0) - (pb[i] ?? 0);
-      if (diff !== 0) return diff;
-    }
-    return 0;
-  });
-  return versions[versions.length - 1];
-}
-
-async function latestStableVersion() {
-  const res = await fetch(`${DIST}/`);
-  if (!res.ok) throw new Error(`could not list ${DIST} (${res.status})`);
-  return pickLatestStable(await res.text());
-}
-
-/** The pinned version if upstream still has it, else the newest stable. */
-async function resolveVersion(target) {
-  // HEAD, so discovering a deleted pin costs one round trip instead of a
-  // download.
-  const pinned = await fetch(`${DIST}/${TOR_VERSION}/${bundleName(target, TOR_VERSION)}`, {
-    method: 'HEAD',
-  });
-  if (pinned.ok) return TOR_VERSION;
-  const latest = await latestStableVersion();
-  console.warn(
-    `[fetch-tor] pinned ${TOR_VERSION} is gone upstream (${pinned.status}); using ${latest}`
-  );
-  return latest;
+export function bundleFileNames(directory) {
+  return readdirSync(directory, { withFileTypes: true })
+    .filter((entry) => entry.isFile())
+    .map((entry) => entry.name);
 }
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -88,96 +103,320 @@ const outDir = join(repoRoot, 'src-tauri', 'resources', 'tor');
 
 function inferTarget() {
   const { platform, arch } = process;
-  if (platform === 'win32') return 'windows-x86_64';
-  if (platform === 'darwin') return arch === 'arm64' ? 'macos-aarch64' : 'macos-x86_64';
-  if (platform === 'linux') return 'linux-x86_64';
+  if (platform === 'win32' && arch === 'x64') return 'windows-x86_64';
+  if (platform === 'darwin') {
+    return arch === 'arm64' ? 'macos-aarch64' : 'macos-x86_64';
+  }
+  if (platform === 'linux' && arch === 'x64') return 'linux-x86_64';
+  if (platform === 'linux' && arch === 'arm64') return 'linux-aarch64';
   throw new Error(`unsupported host platform ${platform}/${arch}`);
 }
 
-async function download(url, dest) {
-  const res = await fetch(url);
-  if (!res.ok) throw new Error(`download failed ${res.status}: ${url}`);
-  const buf = Buffer.from(await res.arrayBuffer());
-  writeFileSync(dest, buf);
-  return buf;
+/**
+ * Copy the runtime libraries a dynamically linked Linux Tor binary needs.
+ * A missing dependency is a packaging failure, never a warning: shipping an
+ * unrunnable Tor binary would otherwise make Fusion silently unavailable.
+ */
+function copyLinuxSharedLibraries(binary) {
+  let lddOut;
+  try {
+    lddOut = execFileSync('ldd', [binary], { encoding: 'utf8' });
+  } catch (error) {
+    throw new Error(
+      `could not inspect Tor shared libraries: ${
+        error instanceof Error ? error.message : String(error)
+      }`
+    );
+  }
+  if (/=>\s+not found/.test(lddOut)) {
+    throw new Error(`Tor has unresolved shared libraries:\n${lddOut}`);
+  }
+
+  for (const line of lddOut.split('\n')) {
+    const match = line.match(/=>\s+(\/[^ ]+)/);
+    if (!match) continue;
+    const libPath = match[1];
+    if (!existsSync(libPath)) {
+      throw new Error(`Tor dependency disappeared during staging: ${libPath}`);
+    }
+    // Skip linker and common system libs that AppImage already provides.
+    const base = libPath.split('/').pop() ?? '';
+    if (
+      base.startsWith('libc.so') ||
+      base.startsWith('libm.so') ||
+      base.startsWith('libpthread') ||
+      base.startsWith('libdl.so') ||
+      base.startsWith('ld-linux')
+    ) {
+      continue;
+    }
+    copyFileSync(libPath, join(outDir, base));
+  }
 }
 
-function sha256(buf) {
-  return createHash('sha256').update(buf).digest('hex');
+/**
+ * Source-built Linux ARM Tor is staged with its non-glibc shared libraries.
+ * Point the executable at that colocated directory so it remains runnable in
+ * the packaged application instead of depending on the CI image's library
+ * paths.
+ */
+function setLinuxRpath(binary) {
+  try {
+    execFileSync('patchelf', ['--set-rpath', '$ORIGIN', binary], {
+      stdio: 'pipe',
+    });
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    throw new Error(
+      `Unable to set the staged Tor runtime library path: ${detail}`
+    );
+  }
+}
+
+/** Run the staged binary on matching-host builds to prove it can load. */
+function verifyStagedTorExecutable(target, binary) {
+  if (inferTarget() !== target) return;
+  let output;
+  try {
+    output = execFileSync(binary, ['--version'], { encoding: 'utf8' });
+  } catch (error) {
+    throw new Error(
+      `staged Tor failed its --version smoke check: ${
+        error instanceof Error ? error.message : String(error)
+      }`
+    );
+  }
+  if (!/Tor version\s+\d+\.\d+\.\d+/.test(output)) {
+    throw new Error('staged Tor did not report a valid version.');
+  }
+  console.log(`[fetch-tor] smoke check: ${output.split('\n')[0]}`);
+}
+
+/**
+ * Stage Tor for Linux aarch64 when no desktop Expert Bundle exists.
+ * The daemon comes from a pinned, checksum-verified Tor Project source
+ * archive and is built natively on the ARM runner. GeoIP tables come from the
+ * pinned x86_64 Expert Bundle (they are architecture-neutral data files).
+ */
+async function stageLinuxAarch64FromSource() {
+  if (process.platform !== 'linux' || process.arch !== 'arm64') {
+    throw new Error(
+      'linux-aarch64 Tor staging must run on a native Linux ARM64 host.'
+    );
+  }
+
+  const source = getLinuxAarch64TorSourceArtifact();
+  const geoipSource = getTorArtifact('linux-x86_64');
+  const temporaryDirectory = mkdtempSync(join(tmpdir(), 'optn-tor-arm-'));
+  try {
+    const sourceTarball = join(temporaryDirectory, source.archive);
+    console.log(`[fetch-tor] linux-aarch64: downloading ${source.archive}`);
+    const sourceBytes = await download(source.url, sourceTarball);
+    const sourceSha256 = sha256(sourceBytes).toLowerCase();
+    if (sourceSha256 !== source.sha256) {
+      throw new Error(
+        `SHA256 mismatch for ${source.archive}: expected ${source.sha256}, got ${sourceSha256}`
+      );
+    }
+    execFileSync('tar', ['-xzf', source.archive], {
+      stdio: 'inherit',
+      cwd: temporaryDirectory,
+    });
+
+    const sourceDirectory = join(temporaryDirectory, `tor-${source.version}`);
+    const buildDirectory = join(temporaryDirectory, 'build');
+    mkdirSync(buildDirectory, { recursive: true });
+    execFileSync(
+      join(sourceDirectory, 'configure'),
+      [
+        '--disable-asciidoc',
+        '--disable-lzma',
+        '--disable-systemd',
+        '--disable-zstd',
+      ],
+      { stdio: 'inherit', cwd: buildDirectory }
+    );
+    execFileSync('make', ['-j2'], { stdio: 'inherit', cwd: buildDirectory });
+    const builtTor = join(buildDirectory, 'src', 'app', 'tor');
+    if (!existsSync(builtTor)) {
+      throw new Error(`Tor source build produced no executable at ${builtTor}`);
+    }
+
+    const geoipTarball = join(temporaryDirectory, geoipSource.archive);
+    console.log(
+      `[fetch-tor] linux-aarch64: downloading GeoIP source ${geoipSource.archive}`
+    );
+    const geoipBytes = await download(geoipSource.url, geoipTarball);
+    const geoipSha256 = sha256(geoipBytes).toLowerCase();
+    if (geoipSha256 !== geoipSource.sha256) {
+      throw new Error(
+        `SHA256 mismatch for ${geoipSource.archive}: expected ${geoipSource.sha256}, got ${geoipSha256}`
+      );
+    }
+    execFileSync('tar', ['-xzf', geoipSource.archive], {
+      stdio: 'inherit',
+      cwd: temporaryDirectory,
+    });
+
+    rmSync(outDir, { recursive: true, force: true });
+    mkdirSync(outDir, { recursive: true });
+    const stagedTor = join(outDir, 'tor');
+    copyFileSync(builtTor, stagedTor);
+    copyLinuxSharedLibraries(builtTor);
+    setLinuxRpath(stagedTor);
+    copyFileSync(
+      join(temporaryDirectory, 'data', 'geoip'),
+      join(outDir, 'geoip')
+    );
+    copyFileSync(
+      join(temporaryDirectory, 'data', 'geoip6'),
+      join(outDir, 'geoip6')
+    );
+    writeFileSync(
+      join(outDir, 'VERSION'),
+      `${TOR_VERSION} linux-aarch64 tor-${source.version}\n`
+    );
+    verifyStagedTorExecutable('linux-aarch64', stagedTor);
+  } finally {
+    rmSync(temporaryDirectory, { recursive: true, force: true });
+  }
+
+  console.log(
+    `[fetch-tor] staged linux-aarch64 Tor from pinned source ${source.version}`
+  );
+}
+
+async function download(url, destination) {
+  const response = await fetch(url);
+  if (!response.ok) {
+    throw new Error(`download failed ${response.status}: ${url}`);
+  }
+  const bytes = Buffer.from(await response.arrayBuffer());
+  writeFileSync(destination, bytes);
+  return bytes;
+}
+
+function sha256(bytes) {
+  return createHash('sha256').update(bytes).digest('hex');
 }
 
 async function main() {
   const target = process.argv[2] || inferTarget();
+
+  // Linux ARM has no official desktop Expert Bundle — special staging path.
+  if (target === 'linux-aarch64') {
+    const markerPath = join(outDir, 'VERSION');
+    const source = getLinuxAarch64TorSourceArtifact();
+    if (
+      existsSync(join(outDir, 'tor')) &&
+      existsSync(join(outDir, 'geoip')) &&
+      existsSync(join(outDir, 'geoip6')) &&
+      existsSync(markerPath) &&
+      readFileSync(markerPath, 'utf8').trim() ===
+        `${TOR_VERSION} linux-aarch64 tor-${source.version}`
+    ) {
+      verifyStagedTorExecutable(target, join(outDir, 'tor'));
+      console.log(
+        `[fetch-tor] Tor already staged (${readFileSync(markerPath, 'utf8').trim()})`
+      );
+      return;
+    }
+    await stageLinuxAarch64FromSource();
+    return;
+  }
+
+  const artifact = getTorArtifact(target);
   const isWindows = target.startsWith('windows');
-  const torBin = isWindows ? 'tor.exe' : 'tor';
+  const torBinary = isWindows ? 'tor.exe' : 'tor';
   const markerPath = join(outDir, 'VERSION');
-  const stagedFiles = [torBin, 'geoip', 'geoip6', 'VERSION'].map((name) => join(outDir, name));
+  const stagedFiles = [torBinary, 'geoip', 'geoip6', 'VERSION'].map((name) =>
+    join(outDir, name)
+  );
+
   if (stagedFiles.every(existsSync)) {
     const marker = readFileSync(markerPath, 'utf8').trim().split(/\s+/);
+    const stagedVersion = marker[0];
     const stagedTarget = marker.slice(1).join(' ');
-    if (stagedTarget === target) {
-      console.log(`[fetch-tor] Tor already staged (${readFileSync(markerPath, 'utf8').trim()})`);
+    if (stagedVersion === artifact.version && stagedTarget === target) {
+      verifyStagedTorExecutable(target, join(outDir, torBinary));
+      console.log(
+        `[fetch-tor] Tor already staged (${readFileSync(markerPath, 'utf8').trim()})`
+      );
       return;
     }
   }
-  // Stage in the OS temp dir (not the repo) so an antivirus handle on the
-  // extracted tor binary can't lock a repo-local directory.
-  const tmpDir = mkdtempSync(join(tmpdir(), 'optn-tor-'));
-  const version = await resolveVersion(target);
-  const base = `${DIST}/${version}`;
-  const archive = bundleName(target, version);
 
-  console.log(`[fetch-tor] downloading ${archive}`);
-  const tarball = join(tmpDir, archive);
-  const buf = await download(`${base}/${archive}`, tarball);
-  void tarball;
+  // Work in the OS temp directory so antivirus handles cannot lock a
+  // repository-local extraction directory.
+  const temporaryDirectory = mkdtempSync(join(tmpdir(), 'optn-tor-'));
+  const tarball = join(temporaryDirectory, artifact.archive);
 
-  // Verify against Tor's signed SHA256 sums (the file itself is GPG-signed by
-  // the Tor Project; here we at least pin the archive's hash to it).
-  console.log('[fetch-tor] verifying SHA256');
-  const sumsRes = await fetch(`${base}/sha256sums-signed-build.txt`);
-  if (!sumsRes.ok) throw new Error(`could not fetch sha256sums (${sumsRes.status})`);
-  const sums = await sumsRes.text();
-  const line = sums.split('\n').find((l) => l.includes(archive));
-  if (!line) throw new Error(`no checksum entry for ${archive}`);
-  const expected = line.trim().split(/\s+/)[0].toLowerCase();
-  const actual = sha256(buf).toLowerCase();
-  if (expected !== actual) {
-    throw new Error(`SHA256 mismatch for ${archive}: expected ${expected}, got ${actual}`);
+  console.log(`[fetch-tor] downloading ${artifact.archive}`);
+  const bytes = await download(artifact.url, tarball);
+
+  console.log('[fetch-tor] verifying pinned SHA256');
+  const actualSha256 = sha256(bytes).toLowerCase();
+  if (actualSha256 !== artifact.sha256) {
+    throw new Error(
+      `SHA256 mismatch for ${artifact.archive}: expected ${artifact.sha256}, got ${actualSha256}`
+    );
   }
-  console.log('[fetch-tor] checksum OK');
+  console.log('[fetch-tor] pinned checksum OK');
 
-  // Extract with the system tar (present on Windows 10+, macOS, Linux, and all
-  // CI runners). Run from inside tmpDir with a bare filename so GNU tar on
-  // Windows doesn't misread a "C:\..." path as a remote host.
+  // System tar is available on supported desktop hosts and GitHub runners.
+  // Use a bare filename from the temp directory so Windows tar does not
+  // interpret a drive-prefixed path as a remote host.
   console.log('[fetch-tor] extracting');
-  execFileSync('tar', ['-xzf', archive], { stdio: 'inherit', cwd: tmpDir });
+  execFileSync('tar', ['-xzf', artifact.archive], {
+    stdio: 'inherit',
+    cwd: temporaryDirectory,
+  });
 
   rmSync(outDir, { recursive: true, force: true });
   mkdirSync(outDir, { recursive: true });
 
-  const srcBin = join(tmpDir, 'tor', torBin);
-  if (!existsSync(srcBin)) throw new Error(`extracted bundle has no ${srcBin}`);
-  copyFileSync(srcBin, join(outDir, torBin));
-  copyFileSync(join(tmpDir, 'data', 'geoip'), join(outDir, 'geoip'));
-  copyFileSync(join(tmpDir, 'data', 'geoip6'), join(outDir, 'geoip6'));
+  const sourceDirectory = join(temporaryDirectory, 'tor');
+  const sourceBinary = join(sourceDirectory, torBinary);
+  if (!existsSync(sourceBinary)) {
+    throw new Error(`extracted bundle has no ${sourceBinary}`);
+  }
+  // Stage the whole directory, not just the executable. The Expert Bundle
+  // ships the libraries tor links against beside it, and copying the binary
+  // alone left them behind: on Linux that produced a tor needing
+  // libevent-2.1.so.7 from the host, which failed the AppImage build outright
+  // (linuxdeploy resolves every ELF in the AppDir) and would have left deb and
+  // rpm users depending on whatever tor their distribution happened to have.
+  const staged = bundleFileNames(sourceDirectory);
+  for (const name of staged) {
+    copyFileSync(join(sourceDirectory, name), join(outDir, name));
+  }
+  console.log(`[fetch-tor] staged from bundle: ${staged.join(', ')}`);
+  copyFileSync(
+    join(temporaryDirectory, 'data', 'geoip'),
+    join(outDir, 'geoip')
+  );
+  copyFileSync(
+    join(temporaryDirectory, 'data', 'geoip6'),
+    join(outDir, 'geoip6')
+  );
+  writeFileSync(markerPath, `${artifact.version} ${target}\n`);
 
-  // A small marker so it's obvious which version is staged.
-  writeFileSync(join(outDir, 'VERSION'), `${version} ${target}\n`);
-
-  rmSync(tmpDir, { recursive: true, force: true });
-  console.log(`[fetch-tor] staged Tor ${version} (${target}) into ${outDir}`);
-  // Sanity: confirm the marker + binary exist.
-  if (!existsSync(join(outDir, torBin))) throw new Error('staging failed: binary missing');
-  console.log(readFileSync(join(outDir, 'VERSION'), 'utf8').trim());
+  rmSync(temporaryDirectory, { recursive: true, force: true });
+  console.log(
+    `[fetch-tor] staged Tor ${artifact.version} (${target}) into ${outDir}`
+  );
+  if (!existsSync(join(outDir, torBinary))) {
+    throw new Error('staging failed: binary missing');
+  }
+  verifyStagedTorExecutable(target, join(outDir, torBinary));
+  console.log(readFileSync(markerPath, 'utf8').trim());
 }
 
-// Only download when run as a command. Without this, importing the module to
-// test pickLatestStable would kick off a real fetch-and-extract.
+// Importing this module for tests must never trigger a network download.
 const invokedDirectly = (() => {
   try {
     return (
-      !!process.argv[1] &&
+      Boolean(process.argv[1]) &&
       realpathSync(process.argv[1]) === fileURLToPath(import.meta.url)
     );
   } catch {
@@ -186,8 +425,8 @@ const invokedDirectly = (() => {
 })();
 
 if (invokedDirectly) {
-  main().catch((err) => {
-    console.error('[fetch-tor] ERROR:', err.message);
+  main().catch((error) => {
+    console.error('[fetch-tor] ERROR:', error.message);
     process.exit(1);
   });
 }

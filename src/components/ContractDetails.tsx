@@ -1,10 +1,15 @@
 // src/components/ContractDetails.tsx
+// Shown under Settings → About as "Bitcoin Cash Contracts info".
 
-const ContractDetails = () => {
-  return (
-    <div className="flex flex-col items-center justify-center p-4">
-      {/* Content Card */}
-      <div className="w-full max-w-2xl overflow-y-auto max-h-[65vh]">
+type ContractDetailsProps = {
+  /** When true, omit outer padding/scroll (parent About panel owns layout). */
+  embedded?: boolean;
+};
+
+const ContractDetails = ({ embedded = false }: ContractDetailsProps) => {
+  const body = (
+    <>
+        <h2 className="text-3xl font-bold mb-4">Bitcoin Cash Contracts info</h2>
         <p className="mb-4">
           Covenant contracts in the OPTN Crypto Wallet App are smart contracts
           that enforce specific rules for spending your digital assets,
@@ -246,7 +251,16 @@ const ContractDetails = () => {
           you meet the specific spending requirements outlined above. Detailed
           instructions and examples are available in the app’s documentation.
         </p>
-      </div>
+    </>
+  );
+
+  if (embedded) {
+    return <div className="w-full">{body}</div>;
+  }
+
+  return (
+    <div className="flex flex-col items-center justify-center p-4">
+      <div className="w-full max-w-2xl overflow-y-auto max-h-[65vh]">{body}</div>
     </div>
   );
 };

@@ -1,8 +1,13 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { useSelector } from 'react-redux';
 import Draggable from 'react-draggable';
 import { AssetType, ReviewState, SimpleSendInput, TokenMetaMap } from './types';
 import { formatFtAmount } from './utils';
 import { resolveTokenPresentation } from '../../utils/tokenPresentation';
+import { coinDepth } from '../../platform/desktop/fusionCoinDepth';
+import { outpointKey } from '../../platform/desktop/CoinLabelService';
+import { FusionBadge } from '../../components/FusionBadge';
+import { selectWalletId } from '../../state/slices/walletSlice';
 
 type ReviewCardProps = {
   open: boolean;
@@ -18,6 +23,9 @@ type ReviewCardProps = {
   selectedForTx: SimpleSendInput[];
   rawHexLen: number;
   isSending: boolean;
+  /** Optional live status (hardware: "Confirm on Ledger…"). */
+  sendStatus?: string;
+  isHardwareWallet?: boolean;
   onClose: () => void;
   onConfirmSend: () => void;
 };
@@ -36,9 +44,12 @@ export function ReviewCard({
   selectedForTx,
   rawHexLen,
   isSending,
+  sendStatus = '',
+  isHardwareWallet = false,
   onClose,
   onConfirmSend,
 }: ReviewCardProps) {
+  const walletId = useSelector(selectWalletId);
   const HANDLE_SIZE = 56;
   const trackRef = useRef<HTMLDivElement>(null);
   const [dragX, setDragX] = useState(0);
@@ -88,21 +99,25 @@ export function ReviewCard({
 
   const technicalInputs = useMemo(
     () =>
-      selectedForTx.map((u) => ({
-        key: `${u.tx_hash}:${u.tx_pos}`,
-        address: (() => {
-          const raw = u.address ?? '';
-          const withoutPrefix = raw.includes(':')
-            ? raw.slice(raw.indexOf(':') + 1)
-            : raw;
-          return withoutPrefix.length > 12
-            ? `${withoutPrefix.slice(0, 8)}…${withoutPrefix.slice(-6)}`
-            : withoutPrefix;
-        })(),
-        sats: Number(u.amount ?? u.value ?? 0),
-        pending: typeof u.height === 'number' ? u.height <= 0 : false,
-      })),
-    [selectedForTx]
+      selectedForTx.map((u) => {
+        const key = outpointKey(u.tx_hash, u.tx_pos);
+        return {
+          key,
+          address: (() => {
+            const raw = u.address ?? '';
+            const withoutPrefix = raw.includes(':')
+              ? raw.slice(raw.indexOf(':') + 1)
+              : raw;
+            return withoutPrefix.length > 12
+              ? `${withoutPrefix.slice(0, 8)}…${withoutPrefix.slice(-6)}`
+              : withoutPrefix;
+          })(),
+          sats: Number(u.amount ?? u.value ?? 0),
+          pending: typeof u.height === 'number' ? u.height <= 0 : false,
+          depth: walletId > 0 ? coinDepth(walletId, key) : 0,
+        };
+      }),
+    [selectedForTx, walletId]
   );
 
   const technicalOutputs = useMemo(
@@ -375,6 +390,12 @@ export function ReviewCard({
                         <div className="min-w-0">
                           <div className="font-mono wallet-text-strong truncate">
                             {input.address}
+                            {input.depth > 0 && (
+                              <FusionBadge
+                                depth={input.depth}
+                                className="ml-1.5"
+                              />
+                            )}
                           </div>
                           {input.pending && (
                             <div className="wallet-muted">Pending</div>
@@ -421,13 +442,22 @@ export function ReviewCard({
         <div className="px-4 pb-4 pt-3 wallet-surface border-t border-[var(--wallet-border)]">
           <div className="text-[14px] wallet-muted mb-2.5 px-1">
             {isSending
-              ? 'Sending...'
+              ? sendStatus ||
+                (isHardwareWallet
+                  ? 'Confirm on your Ledger device…'
+                  : 'Sending…')
               : slideCompleted
                 ? 'Confirmed'
                 : nearingSend
                   ? 'Release to send'
                   : 'Slide to confirm'}
           </div>
+          {isSending && isHardwareWallet && (
+            <div className="text-[12px] mb-2.5 px-1" style={{ color: 'var(--wallet-warning-text, #d97706)' }}>
+              Look at the Ledger screen and approve the amount/address with both
+              buttons. Finalization waits on the device (not the computer).
+            </div>
+          )}
 
           <div
             ref={trackRef}
@@ -482,7 +512,9 @@ export function ReviewCard({
                 }}
               >
                 {isSending
-                  ? 'Sending...'
+                  ? isHardwareWallet
+                    ? 'Check Ledger…'
+                    : 'Sending…'
                   : slideCompleted
                     ? 'Confirmed'
                     : nearingSend

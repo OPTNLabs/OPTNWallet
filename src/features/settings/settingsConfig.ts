@@ -17,7 +17,10 @@ export type SettingsPanelKey =
   | 'experimental'
   | 'cashfusion'
   | 'nostr'
-  | 'addons';
+  | 'addons'
+  | 'app-lock'
+  | 'rebuild-wallet'
+  | 'export-archive';
 
 export type SettingsGroupKey =
   | 'wallet'
@@ -77,6 +80,20 @@ export const WALLET_ROWS: SettingsRowConfig[] = [
     target: 'app-lock',
   },
   {
+    key: 'export-archive',
+    title: 'Wallet pack export',
+    description: 'Export/import .optn + .optn-cold (keys + encrypted data)',
+    action: 'panel',
+    target: 'export-archive',
+  },
+  {
+    key: 'rebuild-wallet',
+    title: 'Rebuild Wallet',
+    description: 'Wipe chain data and resync from network (keeps seed)',
+    action: 'panel',
+    target: 'rebuild-wallet',
+  },
+  {
     key: 'nostr',
     title: 'Nostr & Chat',
     description: 'Private messages · Identity · Relay pool',
@@ -123,7 +140,7 @@ export const SETTINGS_GROUPS: Array<{
   {
     key: 'wallet',
     title: 'Wallet & security',
-    description: 'Recovery, derivation path, app lock, and wallet controls',
+    description: 'Recovery, derivation path, app lock, rebuild, and wallet controls',
   },
   {
     key: 'features',
@@ -155,39 +172,47 @@ export function getSettingsGroupRows(
 ): SettingsRowConfig[] {
   const rowsByGroup: Record<SettingsGroupKey, SettingsRowConfig[]> = {
     wallet: WALLET_ROWS.filter((row) =>
-      ['recovery', 'derivation', 'app-lock'].includes(String(row.key))
+      [
+        'recovery',
+        'derivation',
+        'app-lock',
+        'export-archive',
+        'rebuild-wallet',
+      ].includes(String(row.key))
     ),
     features: [
       WALLET_ROWS.find((row) => row.key === 'server')!,
       WALLET_ROWS.find((row) => row.key === 'nostr')!,
       ...CONNECTION_ROWS,
       WALLET_ROWS.find((row) => row.key === 'experimental')!,
-      ...CONTRACT_ROWS,
       ...WALLET_ROWS.filter((row) =>
         ['console', 'addons'].includes(String(row.key))
       ),
     ],
+    // Contract details live inside the About panel (not a separate row).
     about: ABOUT_ROWS,
   };
 
   return rowsByGroup[group].filter((row) => {
     if (row.key === 'faucet' && currentNetwork !== Network.CHIPNET) return false;
-    if (!isDesktop && ['app-lock', 'console', 'addons'].includes(String(row.key))) {
+    if (
+      !isDesktop &&
+      [
+        'app-lock',
+        'rebuild-wallet',
+        'export-archive',
+        'console',
+        'addons',
+      ].includes(String(row.key))
+    ) {
       return false;
     }
     return true;
   });
 }
 
-export const CONTRACT_ROWS: SettingsRowConfig[] = [
-  {
-    key: 'contract-info',
-    title: 'Contract Info',
-    description: 'View contract details',
-    action: 'panel',
-    target: 'contract',
-  },
-];
+/** @deprecated Contract info is embedded in About — kept for deep-link compat. */
+export const CONTRACT_ROWS: SettingsRowConfig[] = [];
 
 export const CONNECTION_ROWS: SettingsRowConfig[] = [
   {
@@ -210,7 +235,7 @@ export const ABOUT_ROWS: SettingsRowConfig[] = [
   {
     key: 'about',
     title: 'About OPTN',
-    description: 'Version info',
+    description: 'App overview · Bitcoin Cash Contracts info',
     action: 'panel',
     target: 'about',
   },

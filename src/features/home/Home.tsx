@@ -30,6 +30,10 @@ import { SATSINBITCOIN } from '../../utils/constants';
 import SettingsRow from '../../components/ui/SettingsRow';
 import EmptyState from '../../components/ui/EmptyState';
 import { shortenTxHash } from '../../utils/shortenHash';
+import { takeRecentTransactions } from '../../utils/transactionHistoryOrder';
+import { isFusionTransaction } from '../../platform/desktop/fusionCoinDepth';
+import { useFusionDepthRevision } from '../../platform/desktop/useFusionDepthRevision';
+import { FusionBadge } from '../../components/FusionBadge';
 import { preloadTokenMetadata } from '../../hooks/useSharedTokenMetadata';
 import {
   getBarcodeScannerErrorMessage,
@@ -64,7 +68,11 @@ function QuickActionButton({ title, icon, onClick }: QuickActionButtonProps) {
   );
 }
 
-const Home: React.FC = () => {
+type HomeProps = {
+  viewerOnly?: boolean;
+};
+
+const Home: React.FC<HomeProps> = ({ viewerOnly = false }) => {
   const navigate = useNavigate();
   const dispatch = useDispatch<AppDispatch>();
   const dbService = useMemo(() => DatabaseService(), []);
@@ -72,6 +80,7 @@ const Home: React.FC = () => {
   const currentWalletId = useSelector(
     (state: RootState) => state.wallet_id.currentWalletId
   );
+  const fusionDepthRev = useFusionDepthRevision(Number(currentWalletId) || 0);
   const reduxUTXOs = useSelector((state: RootState) => state.utxos.utxos);
   const fetchingUTXOsRedux = useSelector(
     (state: RootState) => state.utxos.fetchingUTXOs
@@ -93,8 +102,9 @@ const Home: React.FC = () => {
   const totalBch = totalBalance / SATSINBITCOIN;
   const totalUsd =
     typeof bchUsdQuote === 'number' ? totalBch * bchUsdQuote : null;
+  // Sort by height / unconfirmed — not array index (Electrum merge order).
   const recentTransactions = useMemo(
-    () => (transactions ?? []).slice(-2).reverse(),
+    () => takeRecentTransactions(transactions, 8),
     [transactions]
   );
   const tokenCategories = useMemo(
@@ -124,7 +134,7 @@ const Home: React.FC = () => {
 
     try {
       await runWalletUtxoRefresh(currentWalletId, async () => {
-        await ElectrumService.reconnect();
+        await ElectrumService.ensureFreshConnection();
         if (!isActiveWalletSession(walletSession)) return;
         const walletUtxos = await fetchActiveWalletUtxos(walletSession);
         if (!walletUtxos) return;
@@ -147,9 +157,8 @@ const Home: React.FC = () => {
     } catch (error) {
       logError('Home.handleRefresh', error, { walletId: currentWalletId });
     } finally {
-      if (isActiveWalletSession(walletSession)) {
-        dispatch(setFetchingUTXOs(false));
-      }
+      // Always clear Syncing for this click — even if the session ended mid-flight.
+      dispatch(setFetchingUTXOs(false));
     }
   }, [currentWalletId, dbService, dispatch, fetchingUTXOsRedux]);
 
@@ -209,7 +218,15 @@ const Home: React.FC = () => {
       <div className="flex h-full min-h-0 flex-col gap-4">
         <PageHeader
           title="Home"
-          subtitle={currentNetwork === Network.CHIPNET ? 'Chipnet' : undefined}
+          subtitle={
+            viewerOnly
+              ? currentNetwork === Network.CHIPNET
+                ? 'Chipnet - Browser viewer'
+                : 'Browser viewer'
+              : currentNetwork === Network.CHIPNET
+                ? 'Chipnet'
+                : undefined
+          }
           compact
         />
 
@@ -278,21 +295,23 @@ const Home: React.FC = () => {
               compact
               className="items-center"
               action={
-                <button
-                  type="button"
-                  onClick={() => void handleScanQr()}
-                  disabled={scanBusy}
-                  className="wallet-card inline-flex h-10 items-center gap-2 rounded-xl border border-[var(--wallet-border)] bg-[color-mix(in_oklab,var(--wallet-accent-soft)_42%,transparent)] px-3 text-[var(--wallet-accent-strong)] transition hover:brightness-[1.03] disabled:cursor-not-allowed disabled:opacity-70 self-center"
-                  aria-label="Scan QR"
-                  title="Scan QR"
-                >
-                  <span className="text-sm font-semibold wallet-text-strong">
-                    Scan QR
-                  </span>
-                  <FaQrcode
-                    className={`text-base ${scanBusy ? 'animate-pulse' : ''}`}
-                  />
-                </button>
+                viewerOnly ? undefined : (
+                  <button
+                    type="button"
+                    onClick={() => void handleScanQr()}
+                    disabled={scanBusy}
+                    className="wallet-card inline-flex h-10 items-center gap-2 rounded-xl border border-[var(--wallet-border)] bg-[color-mix(in_oklab,var(--wallet-accent-soft)_42%,transparent)] px-3 text-[var(--wallet-accent-strong)] transition hover:brightness-[1.03] disabled:cursor-not-allowed disabled:opacity-70 self-center"
+                    aria-label="Scan QR"
+                    title="Scan QR"
+                  >
+                    <span className="text-sm font-semibold wallet-text-strong">
+                      Scan QR
+                    </span>
+                    <FaQrcode
+                      className={`text-base ${scanBusy ? 'animate-pulse' : ''}`}
+                    />
+                  </button>
+                )
               }
             />
             <div className="flex items-stretch gap-2.5">
@@ -305,15 +324,17 @@ const Home: React.FC = () => {
                   })
                 }
               />
-              <QuickActionButton
-                title="Send"
-                icon={<FaArrowUp />}
-                onClick={() =>
-                  navigate('/send', {
-                    state: { returnTo: `/home/${currentWalletId ?? ''}` },
-                  })
-                }
-              />
+              {!viewerOnly && (
+                <QuickActionButton
+                  title="Send"
+                  icon={<FaArrowUp />}
+                  onClick={() =>
+                    navigate('/send', {
+                      state: { returnTo: `/home/${currentWalletId ?? ''}` },
+                    })
+                  }
+                />
+              )}
             </div>
           </SectionCard>
 
@@ -333,24 +354,53 @@ const Home: React.FC = () => {
             />
             <div className="space-y-2.5">
               {recentTransactions.length > 0 ? (
-                recentTransactions.map((tx) => (
-                  <SettingsRow
-                    key={tx.tx_hash}
-                    title={shortenTxHash(tx.tx_hash)}
-                    description={
-                      tx.height > 0
-                        ? `Block ${tx.height}`
-                        : 'Pending confirmation'
-                    }
-                    right={
-                      <span className="wallet-muted">
-                        {tx.height > 0 ? 'Confirmed' : 'Pending'}
-                      </span>
-                    }
-                    compact
-                    onClick={() => navigate(`/transactions/${currentWalletId}`)}
-                  />
-                ))
+                recentTransactions.map((tx) => {
+                  void fusionDepthRev;
+                  const walletIdNum = Number(currentWalletId);
+                  const fused =
+                    Number.isFinite(walletIdNum) &&
+                    walletIdNum > 0 &&
+                    isFusionTransaction(walletIdNum, tx.tx_hash);
+                  return (
+                    <SettingsRow
+                      key={tx.tx_hash}
+                      title={
+                        <span className="flex min-w-0 flex-wrap items-center gap-1.5">
+                          <span className="font-mono truncate">
+                            {shortenTxHash(tx.tx_hash)}
+                          </span>
+                          {fused ? <FusionBadge asTx /> : null}
+                        </span>
+                      }
+                      description={
+                        tx.height > 0
+                          ? `Block ${tx.height}`
+                          : 'Pending confirmation'
+                      }
+                      right={
+                        <span
+                          className={
+                            fused
+                              ? 'text-xs font-semibold text-emerald-400 whitespace-nowrap'
+                              : 'wallet-muted text-xs whitespace-nowrap'
+                          }
+                        >
+                          {fused
+                            ? tx.height > 0
+                              ? 'Fused · Confirmed'
+                              : 'Fused · Pending'
+                            : tx.height > 0
+                              ? 'Confirmed'
+                              : 'Pending'}
+                        </span>
+                      }
+                      compact
+                      onClick={() =>
+                        navigate(`/transactions/${currentWalletId}`)
+                      }
+                    />
+                  );
+                })
               ) : (
                 <EmptyState message="No recent activity yet." />
               )}

@@ -14,6 +14,7 @@ import { Toast } from '@capacitor/toast';
 import { AppDispatch, RootState } from '../../state/store';
 import {
   setFetchingUTXOs,
+  setSyncingProgress,
   replaceAllUTXOs,
   setInitialized,
 } from '../../state/slices/utxoSlice';
@@ -24,13 +25,11 @@ import WalletScreen from '../../components/ui/WalletScreen';
 import PriceFeed from '../../components/PriceFeed';
 import DatabaseService from '../../apis/DatabaseManager/DatabaseService';
 import ElectrumService from '../../services/ElectrumService';
-import { runWalletUtxoRefresh } from '../../services/RefreshCoordinator';
 import {
   captureActiveWalletSession,
   fetchActiveWalletUtxos,
   isActiveWalletSession,
 } from '../../services/WalletUtxoRefreshService';
-import { refreshUTXOWorkerSubscriptions } from '../../workers/UTXOWorkerService';
 import { logError } from '../../utils/errorHandling';
 import { refreshWalletTransactionHistory } from '../../services/WalletHistoryRefreshService';
 import { Network } from '../../state/slices/networkSlice';
@@ -38,6 +37,10 @@ import { SATSINBITCOIN } from '../../utils/constants';
 import SettingsRow from '../../components/ui/SettingsRow';
 import EmptyState from '../../components/ui/EmptyState';
 import { shortenTxHash } from '../../utils/shortenHash';
+import { takeRecentTransactions } from '../../utils/transactionHistoryOrder';
+import { isFusionTransaction } from './fusionCoinDepth';
+import { useFusionDepthRevision } from './useFusionDepthRevision';
+import { FusionBadge } from '../../components/FusionBadge';
 import { preloadTokenMetadata } from '../../hooks/useSharedTokenMetadata';
 import {
   getBarcodeScannerErrorMessage,
@@ -81,12 +84,19 @@ const Home: React.FC = () => {
   const currentWalletId = useSelector(
     (state: RootState) => state.wallet_id.currentWalletId
   );
+  const fusionDepthRev = useFusionDepthRevision(Number(currentWalletId) || 0);
   const sessionGeneration = useSelector(
     (state: RootState) => state.wallet_id.sessionGeneration ?? 0
   );
   const reduxUTXOs = useSelector((state: RootState) => state.utxos.utxos);
   const fetchingUTXOsRedux = useSelector(
     (state: RootState) => state.utxos.fetchingUTXOs
+  );
+  const syncingProgress = useSelector(
+    (state: RootState) => state.utxos.syncingProgress
+  );
+  const syncingStartedAtMs = useSelector(
+    (state: RootState) => state.utxos.syncingStartedAtMs
   );
   const totalBalance = useSelector(
     (state: RootState) => state.utxos.totalBalance
@@ -103,11 +113,37 @@ const Home: React.FC = () => {
   );
   const [displayMode, setDisplayMode] = useState<'BCH' | 'USD'>('BCH');
   const [scanBusy, setScanBusy] = useState(false);
+  const [syncElapsedSec, setSyncElapsedSec] = useState(0);
+
+  // Wall-clock only. Multi-phase sync (markers → Electrum batch → history)
+  // freezes the % bar for long stretches; any "%/s → seconds left" estimate
+  // will lie (e.g. 49% · 61s · ~1s left). Show percent + elapsed and stop there.
+  //
+  // Start time lives in Redux (syncingStartedAtMs), not local Date.now() on
+  // effect mount — leaving Home mid-sync unmounted the counter and remount
+  // restarted it at 0s while the same scan was still running.
+  useEffect(() => {
+    if (!fetchingUTXOsRedux || syncingStartedAtMs == null) {
+      setSyncElapsedSec(0);
+      return;
+    }
+    const tick = () => {
+      setSyncElapsedSec(
+        Math.max(0, Math.floor((Date.now() - syncingStartedAtMs) / 1000))
+      );
+    };
+    tick();
+    const interval = setInterval(tick, 500);
+    return () => clearInterval(interval);
+  }, [fetchingUTXOsRedux, syncingStartedAtMs]);
   const totalBch = totalBalance / SATSINBITCOIN;
   const totalUsd =
     typeof bchUsdQuote === 'number' ? totalBch * bchUsdQuote : null;
+  // Sort by block height / unconfirmed — NOT array index. Redux history is
+  // merge order from Electrum, so slice(-N).reverse() put old txs on top and
+  // new fused CoinJoins lower. Same rule as full History (newest first).
   const recentTransactions = useMemo(
-    () => (transactions ?? []).slice(-2).reverse(),
+    () => takeRecentTransactions(transactions, 8),
     [transactions]
   );
   const tokenCategories = useMemo(
@@ -121,6 +157,14 @@ const Home: React.FC = () => {
         )
       ),
     [reduxUTXOs]
+  );
+
+  // Feed per-address history progress into the shared store field so the Home
+  // progress bar (rendered under the Sync button) moves for the whole sync —
+  // both the worker bootstrap phases and this history pass.
+  const reportSyncProgress = useCallback(
+    (percent: number) => dispatch(setSyncingProgress(percent)),
+    [dispatch]
   );
 
   useEffect(() => {
@@ -153,13 +197,61 @@ const Home: React.FC = () => {
     if (!walletSession) return;
 
     dispatch(setFetchingUTXOs(true));
+    reportSyncProgress(2);
 
     try {
-      await runWalletUtxoRefresh(currentWalletId, async () => {
-        await ElectrumService.reconnect();
-        if (!isActiveWalletSession(walletSession)) return;
-        const walletUtxos = await fetchActiveWalletUtxos(walletSession);
-        if (!walletUtxos) return;
+      // Same network path as open-bootstrap for balances: scripthash batches,
+      // no second BIP44 rediscovery (open already expanded the key set).
+      //
+      // Do NOT use runWalletUtxoRefresh here. That coordinator joins any
+      // in-flight background reconcile (subscriptions / block tip), which has
+      // no onProgress and often still runs discovery — so the UI froze at 8%
+      // for a minute while we waited on someone else's task. Manual Sync is
+      // user-initiated: run our own fast path only.
+      //
+      // Manual Sync = force recheck (clear status hashes) but does NOT wipe
+      // the ledger. Rebuild Wallet in Settings is the nuclear wipe.
+      reportSyncProgress(5);
+      try {
+        const ledger = await import('./WalletLedgerService');
+        // Manual Sync: clear status hashes then force listunspent all (HOT).
+        await ledger.clearAddressStatuses(currentWalletId);
+      } catch {
+        /* optional — status table may not exist */
+      }
+      // Best-effort socket; do not block forever on resubscribe.
+      try {
+        await Promise.race([
+          ElectrumService.ensureFreshConnection(),
+          new Promise<void>((resolve) => setTimeout(resolve, 5000)),
+        ]);
+      } catch {
+        /* listunspent reconnects */
+      }
+      if (!isActiveWalletSession(walletSession)) return;
+      reportSyncProgress(10);
+
+      if (!isActiveWalletSession(walletSession)) return;
+      const walletUtxos = await fetchActiveWalletUtxos(
+        walletSession,
+        undefined,
+        {
+          discover: false,
+          // Statuses were cleared above; force still short-circuits any race
+          // where a concurrent path rewrote a status before listunspent.
+          force: true,
+          onProgress: (done, total) => {
+            if (total <= 0) {
+              reportSyncProgress(12);
+              return;
+            }
+            // 12–55% = UTXO batches (include 0/N so the bar moves before the
+            // first Electrum chunk returns).
+            reportSyncProgress(12 + Math.round(43 * (done / total)));
+          },
+        }
+      );
+      if (walletUtxos) {
         dispatch(replaceAllUTXOs({ utxosByAddress: walletUtxos }));
         dbService.scheduleDatabaseSave(currentWalletId);
         dispatch(setInitialized(true));
@@ -174,27 +266,37 @@ const Home: React.FC = () => {
         if (refreshedCategories.length > 0) {
           void preloadTokenMetadata(refreshedCategories);
         }
-        await refreshUTXOWorkerSubscriptions();
-      });
+      }
+      reportSyncProgress(55);
+
       // Sync means the whole wallet, not just its coins. Refreshing UTXOs alone
       // moved the balance while Recent Activity stayed as it was.
       await refreshWalletTransactionHistory({
         walletId: currentWalletId,
         dispatch,
         sessionGeneration,
+        // Do not join a background history pass (no onProgress → bar stuck at
+        // 55%). Force re-fetches every address after statuses were cleared.
+        force: true,
+        onProgress: (pct) => {
+          // 55–100% = history pass
+          reportSyncProgress(55 + Math.round(0.45 * pct));
+        },
       });
     } catch (error) {
       logError('Home.handleRefresh', error, { walletId: currentWalletId });
     } finally {
-      if (isActiveWalletSession(walletSession)) {
-        dispatch(setFetchingUTXOs(false));
-      }
+      // Always clear Syncing for this click — even if the wallet session was
+      // cancelled mid-flight (HMR / lock). Leaving the flag true freezes the button.
+      dispatch(setFetchingUTXOs(false));
+      dispatch(setSyncingProgress(null));
     }
   }, [
     currentWalletId,
     dbService,
     dispatch,
     fetchingUTXOsRedux,
+    reportSyncProgress,
     sessionGeneration,
   ]);
 
@@ -269,14 +371,31 @@ const Home: React.FC = () => {
               subtitle="Wallet overview"
               compact
               action={
-                <button
-                  type="button"
-                  onClick={handleRefresh}
-                  className="wallet-btn-secondary px-3 py-1.5 text-sm"
-                  disabled={fetchingUTXOsRedux}
-                >
-                  {fetchingUTXOsRedux ? 'Syncing…' : 'Sync'}
-                </button>
+                <div className="flex flex-col items-end gap-1">
+                  <button
+                    type="button"
+                    onClick={handleRefresh}
+                    className="wallet-btn-secondary px-3 py-1.5 text-sm"
+                    disabled={fetchingUTXOsRedux}
+                  >
+                    {fetchingUTXOsRedux ? 'Syncing…' : 'Sync'}
+                  </button>
+                  {(fetchingUTXOsRedux && syncingProgress !== null) && (
+                    <div className="flex items-center gap-1.5 text-xs wallet-muted">
+                      <div className="h-1 w-16 overflow-hidden rounded-full bg-[color-mix(in_oklab,var(--wallet-accent-soft)_45%,transparent)]">
+                        <div
+                          className="h-full rounded-full bg-[var(--wallet-accent-strong)] transition-[width] duration-300"
+                          style={{ width: `${syncingProgress}%` }}
+                        />
+                      </div>
+                      <span className="whitespace-nowrap">
+                        {syncingProgress}%
+                        {syncElapsedSec > 0 ? ` · ${syncElapsedSec}s` : ''}
+                        {syncingProgress >= 100 ? ' · done' : ' · working…'}
+                      </span>
+                    </div>
+                  )}
+                </div>
               }
             />
             <div className="flex items-center justify-between gap-3">
@@ -378,24 +497,53 @@ const Home: React.FC = () => {
             />
             <div className="space-y-2.5">
               {recentTransactions.length > 0 ? (
-                recentTransactions.map((tx) => (
-                  <SettingsRow
-                    key={tx.tx_hash}
-                    title={shortenTxHash(tx.tx_hash)}
-                    description={
-                      tx.height > 0
-                        ? `Block ${tx.height}`
-                        : 'Pending confirmation'
-                    }
-                    right={
-                      <span className="wallet-muted">
-                        {tx.height > 0 ? 'Confirmed' : 'Pending'}
-                      </span>
-                    }
-                    compact
-                    onClick={() => navigate(`/transactions/${currentWalletId}`)}
-                  />
-                ))
+                recentTransactions.map((tx) => {
+                  void fusionDepthRev;
+                  const walletIdNum = Number(currentWalletId);
+                  const fused =
+                    Number.isFinite(walletIdNum) &&
+                    walletIdNum > 0 &&
+                    isFusionTransaction(walletIdNum, tx.tx_hash);
+                  return (
+                    <SettingsRow
+                      key={tx.tx_hash}
+                      title={
+                        <span className="flex min-w-0 flex-wrap items-center gap-1.5">
+                          <span className="font-mono truncate">
+                            {shortenTxHash(tx.tx_hash)}
+                          </span>
+                          {fused ? <FusionBadge asTx /> : null}
+                        </span>
+                      }
+                      description={
+                        tx.height > 0
+                          ? `Block ${tx.height}`
+                          : 'Pending confirmation'
+                      }
+                      right={
+                        <span
+                          className={
+                            fused
+                              ? 'text-xs font-semibold text-emerald-400 whitespace-nowrap'
+                              : 'wallet-muted text-xs whitespace-nowrap'
+                          }
+                        >
+                          {fused
+                            ? tx.height > 0
+                              ? 'Fused · Confirmed'
+                              : 'Fused · Pending'
+                            : tx.height > 0
+                              ? 'Confirmed'
+                              : 'Pending'}
+                        </span>
+                      }
+                      compact
+                      onClick={() =>
+                        navigate(`/transactions/${currentWalletId}`)
+                      }
+                    />
+                  );
+                })
               ) : (
                 <EmptyState message="No recent activity yet." />
               )}

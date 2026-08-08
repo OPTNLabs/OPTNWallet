@@ -273,13 +273,23 @@ export default function ContractManager(): ContractManagerApi {
     }
   }
 
-  async function fetchContractInstances() {
+  async function fetchContractInstances(walletId?: number) {
     try {
       await dbService.ensureDatabaseStarted();
       const db = dbService.getDatabase();
 
-      const query = 'SELECT * FROM instantiated_contracts';
+      const query =
+        Number.isSafeInteger(walletId) && Number(walletId) > 0
+          ? `SELECT instance.*
+               FROM instantiated_contracts AS instance
+               JOIN cashscript_addresses AS owned
+                 ON owned.address = instance.address
+              WHERE owned.wallet_id = ?`
+          : 'SELECT * FROM instantiated_contracts';
       const statement = db.prepare(query);
+      if (Number.isSafeInteger(walletId) && Number(walletId) > 0) {
+        statement.bind([walletId]);
+      }
 
       const instances: ContractInstanceRow[] = [];
       while (statement.step()) {
@@ -721,7 +731,7 @@ export default function ContractManager(): ContractManagerApi {
             const addr = v.slice('sigaddr:'.length).trim();
             if (!addr) throw new Error(`Invalid sigaddr for '${input.name}'.`);
 
-            const pk = await KeyService.fetchAddressPrivateKey(addr);
+            const pk = await KeyService.fetchAddressPrivateKey(addr, 'spend');
             if (!pk || pk.length === 0) {
               throw new Error(`Private key not found for sigaddr '${addr}'.`);
             }

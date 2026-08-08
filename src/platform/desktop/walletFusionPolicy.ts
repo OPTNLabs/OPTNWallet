@@ -22,14 +22,16 @@ export interface WalletFusionPolicy {
   autoFuseEnabled: boolean;
   p2pFusionEnabled: boolean;
   fuseDepth: number;
+  spendOnlyFusedCoins: boolean;
 }
 
 /** Matches the redux defaults, so a wallet with no stored policy behaves as before. */
 export const DEFAULT_WALLET_FUSION_POLICY: WalletFusionPolicy = {
   cashFusionEnabled: false,
   autoFuseEnabled: true,
-  p2pFusionEnabled: false,
+  p2pFusionEnabled: true,
   fuseDepth: DEFAULT_FUSE_DEPTH,
+  spendOnlyFusedCoins: false,
 };
 
 type PolicyMap = Record<string, Partial<WalletFusionPolicy>>;
@@ -83,6 +85,10 @@ export function readWalletFusionPolicy(walletId: number): WalletFusionPolicy {
     fuseDepth: clampFuseDepth(
       stored.fuseDepth ?? DEFAULT_WALLET_FUSION_POLICY.fuseDepth
     ),
+    spendOnlyFusedCoins:
+      typeof stored.spendOnlyFusedCoins === 'boolean'
+        ? stored.spendOnlyFusedCoins
+        : DEFAULT_WALLET_FUSION_POLICY.spendOnlyFusedCoins,
   };
 }
 

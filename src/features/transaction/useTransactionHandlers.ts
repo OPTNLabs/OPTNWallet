@@ -316,7 +316,7 @@ export function useTransactionHandlers({
               ? raw.slice('sigaddr:'.length)
               : raw;
 
-            const pk = await KeyService.fetchAddressPrivateKey(address);
+            const pk = await KeyService.fetchAddressPrivateKey(address, 'spend');
             if (!pk) throw new Error(`Missing private key for address: ${address}`);
             return new SignatureTemplate(pk, HashType.SIGHASH_ALL);
           }

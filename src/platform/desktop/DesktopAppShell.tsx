@@ -15,8 +15,10 @@ import { useMenuBar } from './useMenuBar';
 import { useAutoFusion } from './useAutoFusion';
 import { useWalletFusionPolicy } from './useWalletFusionPolicy';
 import { useTransportConfig } from './useTransportConfig';
+import { useWindowTitle } from './useWindowTitle';
+import { migrateWalletFileNames } from './walletFile';
 import { selectWalletId, resetWallet } from '../../state/slices/walletSlice';
-import { getCachedWalletKeyForWallet } from './WalletKeyCache';
+import { hasCachedCredentialsForWallet, hasWatchOnlySession } from './WalletKeyCache';
 import { persistor } from '../../state/store';
 import { invoke } from '@tauri-apps/api/core';
 
@@ -33,12 +35,91 @@ const DesktopAppShell: React.FC = () => {
   useTransportConfig();
   useWalletFusionPolicy();
   useAutoFusion();
+  // Which wallet this window holds, in the title bar — with several windows
+  // open it is the only way to tell them apart without focusing each one.
+  useWindowTitle();
+
+  // One-time tidy of backups still named `wallet-<id>-<name>.optn`. Renaming on
+  // write alone would never reach a wallet nobody reconfigures.
+  useEffect(() => {
+    // Once per install, never again, and never on the path the user is waiting
+    // on. Renaming is O(n^2) in file reads — each rewrite re-lists the folder
+    // and reads every other file to check ownership — so with a folder of
+    // wallets it is hundreds of IPC round-trips. Running that at shell mount
+    // made unlocking feel slow, which is a regression, not the cost of the KDF.
+    const DONE_KEY = 'optn-wallet-file-names-migrated';
+    try {
+      if (window.localStorage.getItem(DONE_KEY) === '1') return;
+    } catch {
+      // Storage unavailable: skip rather than risk running this every launch.
+      return;
+    }
+
+    // Deferred off the critical path: the wallet list and unlock do not depend
+    // on backup filenames, so this can happen after the window is interactive.
+    const idle =
+      (window as unknown as { requestIdleCallback?: (cb: () => void) => number })
+        .requestIdleCallback ?? ((cb: () => void) => window.setTimeout(cb, 3000));
+
+    idle(() => {
+      void migrateWalletFileNames()
+        .then((renamed) => {
+          try {
+            window.localStorage.setItem(DONE_KEY, '1');
+          } catch {
+            /* best effort */
+          }
+          if (renamed > 0) {
+            console.info(`[walletFile] renamed ${renamed} legacy wallet backup(s)`);
+          }
+        })
+        .catch(() => undefined);
+    });
+  }, []);
   const dispatch = useDispatch();
   const walletId = useSelector(selectWalletId);
+
+  // Fused labels are durable SQL (not memory). Hydrate on wallet open + merge
+  // recovery from AppData fusion-txid-recovery.json (built from fuse logs).
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      try {
+        const {
+          hydrateFusionLabels,
+          restoreFusionLabelsFromRecoveryFile,
+        } = await import('./fusionCoinDepth');
+        const r = await restoreFusionLabelsFromRecoveryFile();
+        if (!cancelled && r.wallets > 0) {
+          console.info(
+            `[fusion] restored Fused labels for ${r.wallets} wallet(s) (+${r.txids} new txids)`
+          );
+        }
+        if (cancelled) return;
+        if (Number.isInteger(walletId) && walletId > 0) {
+          await hydrateFusionLabels(walletId);
+        }
+      } catch {
+        /* labels best-effort */
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [walletId]);
+
   const [rehydrated, setRehydrated] = useState(() => persistor.getState().bootstrapped);
   const [invariantChecked, setInvariantChecked] = useState(false);
+  // After the ciphertext-model migration, credentials are password+salt in RAM
+  // — not a cached CryptoKey. The old getCachedWalletKeyForWallet() always
+  // returned null, which made this shell treat every successful unlock as
+  // "stale session" and wipe the wallet (blank screen / bounce to picker).
+  // A watch-only wallet has no credentials by design; its open session is the
+  // explicit watch-only marker in WalletKeyCache.
   const hasValidWalletSession =
-    walletId <= 0 || getCachedWalletKeyForWallet(walletId) !== null;
+    walletId <= 0 ||
+    hasCachedCredentialsForWallet(walletId) ||
+    hasWatchOnlySession(walletId);
 
   // redux-persist rehydrates asynchronously; wait for it before reading the
   // persisted walletId (below). The immediate re-check after subscribing closes
@@ -60,17 +141,20 @@ const DesktopAppShell: React.FC = () => {
     };
   }, [rehydrated]);
 
-  // Core invariant: a wallet is "open" ONLY while its key is in RAM. The key
-  // cache is per-window and empty on every boot, so a walletId > 0 with no
-  // cached key is stale — it comes from persisted state rehydrating (normal
-  // restart) or from another window opening a wallet (windows share the same
-  // IndexedDB origin). Only runs once rehydration has actually finished, so
-  // walletId here is the real final persisted value, not a transient default.
-  // Safe against real opens: openWalletWithPassword caches the key BEFORE
-  // dispatching setWalletId, so by the time walletId > 0 the key is present.
+  // Core invariant: a wallet is "open" ONLY while its credentials are in RAM.
+  // The password/salt cache is per-window and empty on every boot, so a
+  // walletId > 0 with no credentials is stale — from persisted rehydration
+  // (normal restart) or another window opening a wallet (shared IndexedDB).
+  // Only runs once rehydration has finished. Safe against real opens:
+  // openWalletWithPassword caches password+salt BEFORE setWalletId, so by the
+  // time walletId > 0 the credentials are present.
   useEffect(() => {
     if (!rehydrated) return;
-    if (walletId > 0 && !getCachedWalletKeyForWallet(walletId)) {
+    if (
+      walletId > 0 &&
+      !hasCachedCredentialsForWallet(walletId) &&
+      !hasWatchOnlySession(walletId)
+    ) {
       dispatch(resetWallet());
     }
     setInvariantChecked(true);

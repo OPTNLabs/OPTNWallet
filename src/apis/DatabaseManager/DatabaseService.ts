@@ -8,9 +8,19 @@ import {
 import { get as idbGet, set as idbSet } from 'idb-keyval';
 import { logError } from '../../utils/errorHandling';
 import SecretCryptoService, {
+  SECRET_ENC_PREFIX,
   isEncryptedPayload,
 } from '../../services/SecretCryptoService';
-import { getBchAccountPath } from '../../services/HdWalletService';
+/**
+ * The BIP44 account paths this app used before derivation paths became
+ * configurable. Frozen here on purpose — see the migration below.
+ *
+ * Deliberately NOT named "legacy": the chipnet value here is also the current
+ * network default. These constants record history, and history does not move
+ * when the default does — in either direction.
+ */
+const PRE_CONFIGURABLE_CHIPNET_ACCOUNT_PATH = "m/44'/1'/0'";
+const PRE_CONFIGURABLE_MAINNET_ACCOUNT_PATH = "m/44'/145'/0'";
 import { Network } from '../../state/slices/networkSlice';
 import {
   deleteWalletScope,
@@ -203,8 +213,14 @@ const migrations: Array<(db: Database) => Promise<void>> = [
        WHERE derivation_path IS NULL OR derivation_path = ''`,
       [
         Network.CHIPNET,
-        getBchAccountPath(Network.CHIPNET),
-        getBchAccountPath(Network.MAINNET),
+        // Literals, NOT getBchAccountPath(). This migration exists to record
+        // the path a wallet was ALREADY using, so it has to keep saying what
+        // the old code said. Asking the current default would rewrite history
+        // every time that default moves — and the chipnet default has now
+        // moved twice (1 -> 145 -> 1) — silently re-deriving every address of
+        // any wallet that had not been migrated yet.
+        PRE_CONFIGURABLE_CHIPNET_ACCOUNT_PATH,
+        PRE_CONFIGURABLE_MAINNET_ACCOUNT_PATH,
         'default',
       ]
     );
@@ -225,6 +241,28 @@ const migrations: Array<(db: Database) => Promise<void>> = [
       );
     `);
   },
+  async (db) => {
+    // The desktop wallet used to scan six derived-data tables on every unlock
+    // to repair rows left behind by an old network-switch bug. Record that the
+    // one-time repair has run for this wallet/network so normal unlocks do not
+    // repeat a migration forever. Mobile ignores these nullable columns.
+    const columns = new Set<string>();
+    const statement = db.prepare('PRAGMA table_info(wallets);');
+    while (statement.step()) {
+      const row = statement.getAsObject() as Record<string, unknown>;
+      if (typeof row.name === 'string') columns.add(row.name);
+    }
+    statement.free();
+
+    if (!columns.has('network_cleanup_version')) {
+      db.run(
+        'ALTER TABLE wallets ADD COLUMN network_cleanup_version INT DEFAULT 0;'
+      );
+    }
+    if (!columns.has('network_cleanup_network')) {
+      db.run('ALTER TABLE wallets ADD COLUMN network_cleanup_network TEXT;');
+    }
+  },
   // Add future migrations here as needed
 ];
 
@@ -233,13 +271,17 @@ function databaseVersion(database: Database): number {
   return Number(result?.[0]?.values?.[0]?.[0] ?? 0);
 }
 
-async function applyPendingMigrations(database: Database): Promise<void> {
+async function applyPendingMigrations(database: Database): Promise<boolean> {
   const currentVersion = databaseVersion(database);
+  let changed = false;
   for (let version = currentVersion + 1; version <= migrations.length; version++) {
     await migrations[version - 1](database);
     database.run(`PRAGMA user_version = ${version};`);
+    changed = true;
   }
+  return changed;
 }
+
 
 function walletIds(database: Database): number[] {
   const ids: number[] = [];
@@ -299,8 +341,12 @@ async function migrateSecretColumnsAtRest(
 
   // wallets.mnemonic / wallets.passphrase
   const walletRows = database.prepare(
-    'SELECT id, mnemonic, passphrase FROM wallets;'
+    `SELECT id, mnemonic, passphrase FROM wallets
+      WHERE (typeof(mnemonic) = 'text' AND mnemonic <> '' AND mnemonic NOT LIKE ?)
+         OR (typeof(passphrase) = 'text' AND passphrase <> '' AND passphrase NOT LIKE ?);`
   );
+  const encryptedPattern = `${SECRET_ENC_PREFIX}%`;
+  walletRows.bind([encryptedPattern, encryptedPattern]);
   const walletUpdates: Array<{
     id: number;
     mnemonic: string;
@@ -340,7 +386,15 @@ async function migrateSecretColumnsAtRest(
   }
 
   // keys.private_key
-  const keyRows = database.prepare('SELECT id, private_key FROM keys;');
+  const keyRows = database.prepare(
+    `SELECT id, private_key FROM keys
+      WHERE private_key IS NOT NULL
+        AND (
+          typeof(private_key) <> 'text'
+          OR (private_key <> '' AND private_key NOT LIKE ?)
+        );`
+  );
+  keyRows.bind([encryptedPattern]);
   const keyUpdates: Array<{ id: number; privateKey: string }> = [];
 
   while (keyRows.step()) {
@@ -512,6 +566,50 @@ async function performQueuedSave(): Promise<void> {
   return queuedSaveRun;
 }
 
+/**
+ * Re-read the shared database from disk and rebase this window's save
+ * baselines on it. Safe only while no wallet is open.
+ *
+ * A window keeps ONE sql.js `Database` for its entire life — `startDatabase`
+ * loads it once and nothing ever reloads it. Locking or closing a wallet wipes
+ * the keys and the redux state but leaves those rows, and the baselines taken
+ * from them, in place. The moment another window writes that wallet, this
+ * window's copy is stale in a way it cannot detect.
+ *
+ * Reopening the wallet then fails the concurrent-edit check in
+ * `realSaveDatabase` *permanently*, because neither side of that comparison is
+ * ever refreshed: on-disk differs from both our baseline and our local rows, so
+ * every save is refused with "changed in another window" — including the UTXO
+ * write. The wallet reports a successful sync and shows no balance, and only
+ * restarting the app clears it.
+ *
+ * Adopting the on-disk copy wholesale is correct here precisely because no
+ * wallet is open: there is nothing unsaved to lose, and disk is by definition
+ * at least as new as what we held.
+ */
+const resyncDatabaseFromDisk = async (): Promise<void> => {
+  const SQLModule = sqlModule;
+  if (!SQLModule) return;
+
+  const saved = await idbGet('OPTNDatabase');
+  const savedBytes =
+    saved instanceof Uint8Array
+      ? saved
+      : saved instanceof ArrayBuffer
+        ? new Uint8Array(saved)
+        : null;
+  if (!savedBytes) return;
+
+  // Under the save lock: swapping `db` out from under an in-flight save would
+  // export a half-replaced database.
+  await withExclusiveSaveLock(async () => {
+    db?.close();
+    db = new SQLModule.Database(savedBytes);
+    globalBaseline = snapshotGlobalTables(db);
+    replaceWalletBaselines(db);
+  });
+};
+
 const startDatabase = async (): Promise<Database | null> => {
   const SQLModule = await initSqlJs({
     locateFile: () => `/sql-wasm.wasm`,
@@ -531,12 +629,17 @@ const startDatabase = async (): Promise<Database | null> => {
     db.run('PRAGMA user_version = 0;'); // New databases start at version 0
   }
 
-  await applyPendingMigrations(db);
-  await migrateSecretColumnsAtRest();
+  const schemaChanged = await applyPendingMigrations(db);
+  const secretsChanged = await migrateSecretColumnsAtRest();
   globalBaseline = snapshotGlobalTables(db);
   replaceWalletBaselines(db);
-  // Save immediately after migrations to persist schema and encrypted secrets.
-  await realSaveDatabase();
+  // Starting another wallet window must be read-only when the persisted
+  // database is already current. Re-exporting and rewriting the whole shared
+  // snapshot here serialized every window behind the save lock and visibly
+  // blocked wallet listing/unlock.
+  if (!savedBytes || schemaChanged || secretsChanged) {
+    await realSaveDatabase();
+  }
 
   return db;
 };
@@ -790,6 +893,7 @@ export default function DatabaseService() {
   return {
     startDatabase,
     ensureDatabaseStarted,
+    resyncDatabaseFromDisk,
     saveDatabaseToFile,
     scheduleDatabaseSave,
     flushDatabaseToFile,
