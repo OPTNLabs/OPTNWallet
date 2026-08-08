@@ -563,10 +563,19 @@ export async function readHardwareKeystore(walletId: number): Promise<{
     if (row.walletType !== HARDWARE_WALLET_TYPE) {
       throw new Error('Not a hardware wallet (walletType must be hardware).');
     }
+    // Fall back to the network default, never a hardcoded mainnet literal. The
+    // wallet, Quantumroot and the hardware signer must all resolve the same
+    // account path; a literal here would ask a chipnet device to sign under
+    // coin type 145 while the wallet derives under the network default, and the
+    // device would return a key the wallet does not own. The DatabaseService
+    // migration backfills derivation_path, so this should only fire for a row
+    // written outside that path.
+    const rowNetwork =
+      row.networkType === Network.CHIPNET ? Network.CHIPNET : Network.MAINNET;
     const accountPath =
       typeof row.derivation_path === 'string' && row.derivation_path
         ? row.derivation_path
-        : "m/44'/145'/0'";
+        : getBchAccountPath(rowNetwork);
     let hwType = parseHardwareHwType(row.hw_type);
     // Migrate: previous hack stored ledger|trezor|onekey in master_fingerprint
     if (

@@ -39,9 +39,14 @@ describe('SecretCryptoService Android storage boundary', () => {
       '../SecretCryptoService'
     );
 
+    // Two properties matter here, and neither is the identity of the thrown
+    // object: it must reject (never fall through to the localStorage key), and
+    // the message must name the only recovery the user has. Asserting
+    // `toBe(nativeFailure)` would pin the raw Keystore text, which tells a
+    // locked-out user nothing.
     await expect(
       SecretCryptoService.decryptText('enc:v1:legacy-ciphertext')
-    ).rejects.toBe(nativeFailure);
+    ).rejects.toThrow(/restore the wallet from your recovery phrase/i);
     expect(decryptMock).toHaveBeenCalledWith({
       ciphertext: 'legacy-ciphertext',
     });

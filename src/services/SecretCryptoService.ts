@@ -161,10 +161,19 @@ async function decryptRaw(ciphertext: string): Promise<string> {
       // beside the wallet database. A failed decrypt is either a wrong/corrupt
       // payload or an explicit key-migration case that must be handled by a
       // versioned migration flow.
+      //
+      // Surface one actionable message instead of re-throwing the raw plugin
+      // error. Two real cases land here — a row written under the localStorage
+      // key by a build from before fail-closed encrypt shipped, and a Keystore
+      // key the OS invalidated (lock-screen or biometric change, restore to a
+      // new device). Neither is recoverable in-app, and the only thing the user
+      // can act on is their recovery phrase. An opaque Keystore error does not
+      // tell them that. The original is logged above for diagnosis.
       console.error('SecureKeyStore.decrypt failed; refusing fallback', error);
-      throw error instanceof Error
-        ? error
-        : new Error('SecureKeyStore.decrypt failed (no localStorage fallback)');
+      throw new Error(
+        "This wallet's secure storage key is no longer available on this " +
+          'device. Restore the wallet from your recovery phrase to continue.'
+      );
     }
   }
   return await decryptWithFallback(ciphertext);

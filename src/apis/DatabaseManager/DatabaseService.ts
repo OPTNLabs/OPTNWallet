@@ -14,9 +14,13 @@ import SecretCryptoService, {
 /**
  * The BIP44 account paths this app used before derivation paths became
  * configurable. Frozen here on purpose — see the migration below.
+ *
+ * Deliberately NOT named "legacy": the chipnet value here is also the current
+ * network default. These constants record history, and history does not move
+ * when the default does — in either direction.
  */
-const LEGACY_CHIPNET_ACCOUNT_PATH = "m/44'/1'/0'";
-const LEGACY_MAINNET_ACCOUNT_PATH = "m/44'/145'/0'";
+const PRE_CONFIGURABLE_CHIPNET_ACCOUNT_PATH = "m/44'/1'/0'";
+const PRE_CONFIGURABLE_MAINNET_ACCOUNT_PATH = "m/44'/145'/0'";
 import { Network } from '../../state/slices/networkSlice';
 import {
   deleteWalletScope,
@@ -212,11 +216,11 @@ const migrations: Array<(db: Database) => Promise<void>> = [
         // Literals, NOT getBchAccountPath(). This migration exists to record
         // the path a wallet was ALREADY using, so it has to keep saying what
         // the old code said. Asking the current default would rewrite history
-        // the moment that default changes — and it since has, for chipnet —
-        // silently re-deriving every address of any wallet that had not been
-        // migrated yet.
-        LEGACY_CHIPNET_ACCOUNT_PATH,
-        LEGACY_MAINNET_ACCOUNT_PATH,
+        // every time that default moves — and the chipnet default has now
+        // moved twice (1 -> 145 -> 1) — silently re-deriving every address of
+        // any wallet that had not been migrated yet.
+        PRE_CONFIGURABLE_CHIPNET_ACCOUNT_PATH,
+        PRE_CONFIGURABLE_MAINNET_ACCOUNT_PATH,
         'default',
       ]
     );
