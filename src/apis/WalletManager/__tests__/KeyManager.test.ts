@@ -47,7 +47,11 @@ vi.mock('../../../services/QuantumrootService', () => ({
     (
       walletId: number,
       accountIndex: number,
-      vault: { addressIndex: number; receiveAddress: string; quantumLockAddress: string },
+      vault: {
+        addressIndex: number;
+        receiveAddress: string;
+        quantumLockAddress: string;
+      },
       onlineQuantumSigner = 0,
       vaultTokenCategory = '00'.repeat(32)
     ) => ({
@@ -96,7 +100,9 @@ describe('KeyManager', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
-    mockedSecretCryptoService.decryptText.mockImplementation(async (value: string) => value);
+    mockedSecretCryptoService.decryptText.mockImplementation(
+      async (value: string) => value
+    );
     mockedVaultCache.list.mockReturnValue([]);
   });
 
@@ -208,9 +214,9 @@ describe('KeyManager', () => {
     } as never);
 
     const km = KeyManager();
-    await expect(km.fetchAddressPrivateKey('bitcoincash:qmissing')).rejects.toThrow(
-      'No private key found'
-    );
+    await expect(
+      km.fetchAddressPrivateKey('bitcoincash:qmissing')
+    ).rejects.toThrow('No private key found');
   });
 
   it('repairs the companion address row when a derived key already exists', async () => {
@@ -331,6 +337,49 @@ describe('KeyManager', () => {
     );
   });
 
+  it('derives discovery xpubs from the candidate path instead of the stored path', async () => {
+    const walletLookup = {
+      get: vi.fn(() => [
+        'enc:mnemonic',
+        'enc:passphrase',
+        Network.MAINNET,
+        "m/44'/145'/0'",
+      ]),
+      free: vi.fn(),
+    };
+
+    mockedDatabaseService.mockReturnValue({
+      ensureDatabaseStarted: vi.fn(async () => {}),
+      getDatabase: vi.fn(() => ({ prepare: vi.fn(() => walletLookup) })),
+      flushDatabaseToFile: vi.fn(async () => {}),
+    } as never);
+    mockedSecretCryptoService.decryptText
+      .mockResolvedValueOnce('wallet mnemonic')
+      .mockResolvedValueOnce('wallet passphrase');
+    vi.mocked(deriveBchStandardXpubs).mockResolvedValue({
+      receive: 'candidate-receive',
+      change: 'candidate-change',
+      defi: 'candidate-defi',
+      rpa: 'candidate-rpa',
+    });
+
+    await expect(
+      KeyManager().getXpubsForAccountPath(7, "m/44'/0'/1'")
+    ).resolves.toEqual({
+      receive: 'candidate-receive',
+      change: 'candidate-change',
+      defi: 'candidate-defi',
+      rpa: 'candidate-rpa',
+    });
+    expect(deriveBchStandardXpubs).toHaveBeenCalledWith(
+      Network.MAINNET,
+      'wallet mnemonic',
+      'wallet passphrase',
+      0,
+      "m/44'/0'/1'"
+    );
+  });
+
   it('deriveAddressFromXpub derives a public wallet address for a branch and index', async () => {
     const walletLookup = {
       get: vi.fn(() => ['enc:mnemonic', 'enc:passphrase', Network.CHIPNET]),
@@ -422,7 +471,9 @@ describe('KeyManager', () => {
     });
 
     const km = KeyManager();
-    await expect(km.deriveQuantumrootVaultForWallet(7, 7, 0)).resolves.toMatchObject({
+    await expect(
+      km.deriveQuantumrootVaultForWallet(7, 7, 0)
+    ).resolves.toMatchObject({
       receiveAddress: 'bitcoincash:preceive',
       quantumLockAddress: 'bitcoincash:pquantum',
       addressIndex: 7,

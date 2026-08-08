@@ -1,6 +1,10 @@
-import React, { useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { useSelector } from 'react-redux';
 import Bip44AccountPathFields from '../../components/Bip44AccountPathFields';
+import DerivationDiscoveryResult from '../../components/DerivationDiscoveryResult';
+import KeyManager from '../../apis/WalletManager/KeyManager';
+import { useDerivationDiscovery } from '../../hooks/useDerivationDiscovery';
+import type { AccountXpubResolver } from '../../services/DerivationPathProbe';
 import { selectCurrentNetwork } from '../../state/selectors/networkSelectors';
 import {
   selectWalletDerivationPath,
@@ -29,10 +33,45 @@ export const DerivationPathSettings: React.FC = () => {
   const [pathValid, setPathValid] = useState(true);
   const [message, setMessage] = useState<string | null>(null);
   const confirm = useWalletConfirm();
+  const activePath = storedPath || getBchAccountPath(network);
+  const networkDefaultPath = getDefaultPathForNetwork(network);
+
+  const keyManager = useMemo(() => KeyManager(), []);
+  const {
+    state: discoveryState,
+    scan,
+    cancel: cancelScan,
+    reset: resetScan,
+  } = useDerivationDiscovery();
+
+  // The seed is read and dropped inside KeyManager; a scan runs on public keys
+  // only, so no mnemonic reaches this component.
+  const resolveXpubs = useCallback<AccountXpubResolver>(
+    async (accountPath) => {
+      const xpubs = await keyManager.getXpubsForAccountPath(
+        walletId,
+        accountPath
+      );
+      return { receive: xpubs.receive, change: xpubs.change };
+    },
+    [keyManager, walletId]
+  );
+
+  const startScan = useCallback(() => {
+    setMessage(null);
+    void scan(network, resolveXpubs);
+  }, [network, resolveXpubs, scan]);
 
   useEffect(() => {
     setPathInput(storedPath || getBchAccountPath(network));
   }, [network, storedPath]);
+
+  useEffect(() => {
+    // A result belongs to exactly one unlocked wallet and one network. Never
+    // leave an old wallet's path suggestion visible after either changes.
+    resetScan();
+    setMessage(null);
+  }, [network, resetScan, walletId]);
 
   const applyPath = async (path: string, nextSource: 'default' | 'custom') => {
     if (saving || walletId <= 0) return;
@@ -67,6 +106,9 @@ export const DerivationPathSettings: React.FC = () => {
         operation: 'derivation-change',
       });
       setPathInput(normalizedPath);
+      // The scan answered a question about the old path; keep it on screen and
+      // it now describes a wallet that no longer exists.
+      resetScan();
       setMessage('Derivation path changed and wallet resync completed.');
     } catch (error) {
       console.error('[DerivationPathSettings] reconfiguration failed:', error);
@@ -81,9 +123,22 @@ export const DerivationPathSettings: React.FC = () => {
   };
 
   const resetToNetworkDefault = () => {
-    const defaultPath = getDefaultPathForNetwork(network);
-    setPathInput(defaultPath);
-    void applyPath(defaultPath, 'default');
+    setPathInput(networkDefaultPath);
+    void applyPath(networkDefaultPath, 'default');
+  };
+
+  const adoptDiscoveredPath = (path: string) => {
+    setPathInput(path);
+
+    // In an ambiguous result the user can select the already-active path. That
+    // is a choice to keep it, not permission to purge and rebuild the wallet.
+    if (path === activePath) {
+      resetScan();
+      setMessage('This derivation path is already active.');
+      return;
+    }
+
+    void applyPath(path, path === networkDefaultPath ? 'default' : 'custom');
   };
 
   return (
@@ -126,6 +181,35 @@ export const DerivationPathSettings: React.FC = () => {
         >
           Use network default
         </button>
+      </div>
+      <div className="flex flex-col gap-2 border-t wallet-border pt-4">
+        <span className="text-sm font-semibold wallet-text-strong">
+          Not seeing your coins?
+        </span>
+        <p className="text-xs wallet-muted leading-relaxed">
+          A wallet restored from another app may hold its coins on a different
+          account path. This checks the standard paths for transaction history.
+          It only reads — nothing is moved or changed until you choose.
+        </p>
+        <button
+          type="button"
+          onClick={startScan}
+          disabled={
+            saving || walletId <= 0 || discoveryState.status === 'scanning'
+          }
+          className="wallet-btn-secondary self-start"
+        >
+          Find where my coins are
+        </button>
+        <DerivationDiscoveryResult
+          state={discoveryState}
+          currentPath={activePath}
+          defaultPath={networkDefaultPath}
+          onAdopt={adoptDiscoveredPath}
+          onCancel={cancelScan}
+          onRetry={startScan}
+          context="settings"
+        />
       </div>
     </div>
   );

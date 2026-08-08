@@ -87,6 +87,7 @@ export default function KeyManager() {
 
   return {
     getXpubs,
+    getXpubsForAccountPath,
     deriveAddressFromXpub,
     retrieveKeys,
     createKeys,
@@ -154,6 +155,32 @@ export default function KeyManager() {
       passphrase,
       accountNumber,
       derivationPath
+    );
+  }
+
+  /**
+   * Xpubs for an arbitrary candidate account path, for derivation-path
+   * discovery on an existing wallet.
+   *
+   * Deliberately separate from getXpubs, which is pinned to the wallet's stored
+   * path: discovery has to look at paths the wallet is NOT on. The seed is read,
+   * used, and dropped inside this function so callers never handle it — a
+   * scan runs entirely on public keys.
+   */
+  async function getXpubsForAccountPath(
+    wallet_id: number,
+    accountPath: string,
+    accountNumber = 0
+  ): Promise<Record<BchStandardBranchName, string>> {
+    const normalized = normalizeBchAccountPath(accountPath);
+    const { mnemonic, passphrase, networkType } =
+      await getWalletSeedMaterial(wallet_id);
+    return deriveBchStandardXpubs(
+      networkType,
+      mnemonic,
+      passphrase,
+      accountNumber,
+      normalized
     );
   }
 
