@@ -15,14 +15,27 @@ interface HardwareWalletState {
   ledgerTransport: LedgerTransport;
 }
 
-const DEFAULT_DERIVATION_PATH = "m/44'/145'/0'";
+/**
+ * Placeholder meaning "the user has not chosen a hardware account path yet".
+ *
+ * This is a sentinel, NOT a default to derive from. HardwareWalletSettings
+ * compares the stored path against this exact value and, on a match, ignores it
+ * in favour of the wallet's own path (or the network default). So the literal
+ * has to stay a fixed, network-blind string: making it network-aware would stop
+ * the comparison matching, and a stale mainnet path would leak into the field
+ * on chipnet with nothing to flag it.
+ *
+ * Exported so that comparison imports it rather than recomputing an equal
+ * string — the two must never be able to drift apart.
+ */
+export const UNSET_DERIVATION_PATH = "m/44'/145'/0'";
 
 const initialState: HardwareWalletState = {
   type: 'none',
   connected: false,
   xpub: null,
   deviceLabel: null,
-  derivationPath: DEFAULT_DERIVATION_PATH,
+  derivationPath: UNSET_DERIVATION_PATH,
   ledgerTransport: 'usb',
 };
 
