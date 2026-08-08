@@ -7,11 +7,11 @@ import {
   setDerivationPath,
   setLedgerTransport,
   disconnectHardwareWallet,
+  UNSET_DERIVATION_PATH,
   type HardwareWalletType,
   type LedgerTransport,
 } from '../../state/slices/hardwareWalletSlice';
 import { selectCurrentNetwork } from '../../state/selectors/networkSelectors';
-import { Network } from '../../state/slices/networkSlice';
 import { selectWalletDerivationPath } from '../../state/slices/walletSlice';
 import { getBchAccountPath } from '../../services/HdWalletService';
 import { trezorGetPublicKey } from '../../services/hardware/TrezorService';
@@ -98,10 +98,13 @@ export const HardwareWalletSettings: React.FC = () => {
 
   const [status, setStatus] = useState<ConnectStatus>(hw.connected ? 'connected' : 'idle');
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
+  // A stored path still equal to the sentinel means the user never chose one,
+  // so fall back to the wallet's path rather than showing a mainnet literal on
+  // chipnet. Imported from the slice, never recomputed — an equal-looking
+  // expression here would silently stop matching if either side moved.
   const [pathInput, setPathInput] = useState(() => {
     const persistedPath = hw.derivationPath;
-    const legacyMainnetDefault = getBchAccountPath(Network.MAINNET);
-    return persistedPath && persistedPath !== legacyMainnetDefault
+    return persistedPath && persistedPath !== UNSET_DERIVATION_PATH
       ? persistedPath
       : defaultPath;
   });
@@ -111,8 +114,9 @@ export const HardwareWalletSettings: React.FC = () => {
   const desktopNative = isDesktopPlatform() && canUseNativeHw();
 
   useEffect(() => {
-    const legacyMainnetDefault = getBchAccountPath(Network.MAINNET);
-    setPathInput((path) => (path === legacyMainnetDefault ? defaultPath : path));
+    setPathInput((path) =>
+      path === UNSET_DERIVATION_PATH ? defaultPath : path
+    );
   }, [defaultPath]);
 
   const selected = DEVICES.find((d) => d.type === hw.type) ?? DEVICES[0];
