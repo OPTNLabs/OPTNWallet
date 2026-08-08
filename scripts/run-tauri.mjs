@@ -2,7 +2,7 @@
 // Those paths can make the native WebKit/GTK process resolve Snap's
 // libpthread/libgdk stack instead of Ubuntu's matching system libraries.
 
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { createRequire } from 'node:module';
 
 const env = { ...process.env };
@@ -20,7 +20,27 @@ const inheritedSnapKeys = [
 ];
 
 for (const key of Object.keys(env)) {
-  if (key.startsWith('SNAP') || inheritedSnapKeys.includes(key)) delete env[key];
+  if (key.startsWith('SNAP') || inheritedSnapKeys.includes(key))
+    delete env[key];
+}
+
+// hidapi and rusb are deliberate native dependencies for Ledger/Trezor support.
+// Fail before Cargo starts compiling so Linux contributors get an actionable
+// host prerequisite rather than a long build ending in pkg-config noise.
+const tauriCommand = process.argv[2];
+if (
+  process.platform === 'linux' &&
+  (tauriCommand === 'dev' || tauriCommand === 'build') &&
+  spawnSync('pkg-config', ['--exists', 'libudev', 'libusb-1.0'], {
+    env,
+    stdio: 'ignore',
+  }).status !== 0
+) {
+  console.error(
+    '[run-tauri] Linux desktop builds need libudev and libusb development metadata.\n' +
+      'Debian/Ubuntu: sudo apt-get install libudev-dev libusb-1.0-0-dev pkg-config'
+  );
+  process.exit(1);
 }
 
 // Run the CLI's JS entry with this same node rather than the .bin shim.

@@ -157,12 +157,14 @@ async function decryptRaw(ciphertext: string): Promise<string> {
       const { plaintext } = await SecureKeyStore.decrypt({ ciphertext });
       return plaintext;
     } catch (error) {
-      // Decrypt may still try the legacy localStorage key for rows encrypted
-      // before fail-closed encrypt shipped — do not use this path for new data.
-      console.warn(
-        'SecureKeyStore.decrypt failed, trying legacy WebCrypto fallback',
-        error
-      );
+      // Android ciphertext must never silently downgrade to a raw key stored
+      // beside the wallet database. A failed decrypt is either a wrong/corrupt
+      // payload or an explicit key-migration case that must be handled by a
+      // versioned migration flow.
+      console.error('SecureKeyStore.decrypt failed; refusing fallback', error);
+      throw error instanceof Error
+        ? error
+        : new Error('SecureKeyStore.decrypt failed (no localStorage fallback)');
     }
   }
   return await decryptWithFallback(ciphertext);

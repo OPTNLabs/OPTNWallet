@@ -1,5 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { deriveKey, aesEncrypt, bytesToBase64, randomSalt } from '../WalletCrypto';
+import {
+  deriveKey,
+  aesEncrypt,
+  bytesToBase64,
+  randomSalt,
+} from '../WalletCrypto';
 
 const retrieveKeysMock = vi.fn();
 const fetchUTXOsFromDatabaseMock = vi.fn();
@@ -8,6 +13,7 @@ const setCoinLabelMock = vi.fn();
 const exportFusionDepthStateMock = vi.fn();
 const importFusionDepthStateMock = vi.fn();
 const getDatabaseMock = vi.fn();
+let reduxNetwork = 'mainnet';
 
 vi.mock('../../../services/KeyService', () => ({
   default: { retrieveKeys: retrieveKeysMock },
@@ -38,13 +44,14 @@ vi.mock('../fusionCoinDepth', () => ({
 
 vi.mock('../../../state/store', () => ({
   store: {
-    getState: () => ({ network: { currentNetwork: 'mainnet' } }),
+    getState: () => ({ network: { currentNetwork: reduxNetwork } }),
   },
 }));
 
 describe('WalletColdExportService', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    reduxNetwork = 'mainnet';
     retrieveKeysMock.mockResolvedValue([
       { address: 'bitcoincash:q1', tokenAddress: null },
     ]);
@@ -84,6 +91,9 @@ describe('WalletColdExportService', () => {
             }
             if (sql.includes('mnemonic')) {
               return { mnemonic: 'enc:v1:notused' };
+            }
+            if (sql.includes('networkType')) {
+              return { networkType: 'mainnet' };
             }
             return {
               tx_hash: 'cc'.repeat(32),
@@ -143,6 +153,42 @@ describe('WalletColdExportService', () => {
     );
   });
 
+  it('uses the wallet database network instead of Redux display state', async () => {
+    reduxNetwork = 'chipnet';
+    const { buildColdArchive } = await import('../WalletColdExportService');
+    const archive = await buildColdArchive(5);
+    expect(archive.network).toBe('mainnet');
+  });
+
+  it('rejects an encrypted archive whose outer and inner wallet identities differ', async () => {
+    const salt = randomSalt(16);
+    const key = await deriveKey('correct-horse', salt);
+    const plain = JSON.stringify({
+      format: 'optn-cold-archive-v1',
+      exportedAt: '2026-01-01T00:00:00.000Z',
+      walletId: 5,
+      network: 'mainnet',
+      containsSecrets: false,
+      disclaimer: 'x',
+      addresses: [{ address: 'bitcoincash:q1' }],
+      utxos: [],
+      transactions: [],
+      labels: [],
+      fusion: { coinDepth: {}, fusionTxids: [] },
+    });
+    const parsed = {
+      format: 'optn-cold-archive-enc-v1' as const,
+      version: 1 as const,
+      sourceWalletId: 6,
+      kdfSalt: bytesToBase64(salt),
+      ciphertext: await aesEncrypt(key, plain),
+    };
+    const { decryptColdArchive } = await import('../WalletColdExportService');
+    await expect(decryptColdArchive(parsed, 'correct-horse')).rejects.toThrow(
+      /identity does not match/
+    );
+  });
+
   it('rejects plaintext cold archives on parse', async () => {
     const { parseEncryptedColdArchive } = await import(
       '../WalletColdExportService'
@@ -181,5 +227,99 @@ describe('WalletColdExportService', () => {
     expect(setCoinLabelMock).toHaveBeenCalled();
     expect(importFusionDepthStateMock).toHaveBeenCalled();
     expect(stats.labels).toBe(1);
+  });
+
+  it('rejects a cold archive from another network before importing metadata', async () => {
+    const { importColdArchiveIntoWallet, COLD_EXPORT_FORMAT } = await import(
+      '../WalletColdExportService'
+    );
+    await expect(
+      importColdArchiveIntoWallet(5, {
+        format: COLD_EXPORT_FORMAT,
+        exportedAt: 't',
+        walletId: 5,
+        network: 'chipnet',
+        containsSecrets: false,
+        disclaimer: '',
+        addresses: [{ address: 'bitcoincash:q1' }],
+        utxos: [],
+        transactions: [],
+        labels: [],
+        fusion: { coinDepth: {}, fusionTxids: [] },
+      })
+    ).rejects.toThrow(/network does not match/);
+    expect(setCoinLabelMock).not.toHaveBeenCalled();
+    expect(importFusionDepthStateMock).not.toHaveBeenCalled();
+  });
+
+  it('requires a non-empty address overlap before importing metadata', async () => {
+    const { importColdArchiveIntoWallet, COLD_EXPORT_FORMAT } = await import(
+      '../WalletColdExportService'
+    );
+    await expect(
+      importColdArchiveIntoWallet(5, {
+        format: COLD_EXPORT_FORMAT,
+        exportedAt: 't',
+        walletId: 5,
+        network: 'mainnet',
+        containsSecrets: false,
+        disclaimer: '',
+        addresses: [{ address: 'bitcoincash:qother' }],
+        utxos: [],
+        transactions: [],
+        labels: [],
+        fusion: { coinDepth: {}, fusionTxids: [] },
+      })
+    ).rejects.toThrow(/addresses do not match/);
+    expect(setCoinLabelMock).not.toHaveBeenCalled();
+    expect(importFusionDepthStateMock).not.toHaveBeenCalled();
+  });
+
+  it('rejects an archive with no addresses instead of bypassing identity checks', async () => {
+    const { importColdArchiveIntoWallet, COLD_EXPORT_FORMAT } = await import(
+      '../WalletColdExportService'
+    );
+    await expect(
+      importColdArchiveIntoWallet(5, {
+        format: COLD_EXPORT_FORMAT,
+        exportedAt: 't',
+        walletId: 5,
+        network: 'mainnet',
+        containsSecrets: false,
+        disclaimer: '',
+        addresses: [],
+        utxos: [],
+        transactions: [],
+        labels: [],
+        fusion: { coinDepth: {}, fusionTxids: [] },
+      })
+    ).rejects.toThrow(/no valid wallet addresses/);
+    expect(setCoinLabelMock).not.toHaveBeenCalled();
+    expect(importFusionDepthStateMock).not.toHaveBeenCalled();
+  });
+
+  it('rejects malformed fusion depth before writing labels', async () => {
+    const { importColdArchiveIntoWallet, COLD_EXPORT_FORMAT } = await import(
+      '../WalletColdExportService'
+    );
+    await expect(
+      importColdArchiveIntoWallet(5, {
+        format: COLD_EXPORT_FORMAT,
+        exportedAt: 't',
+        walletId: 5,
+        network: 'mainnet',
+        containsSecrets: false,
+        disclaimer: '',
+        addresses: [{ address: 'bitcoincash:q1' }],
+        utxos: [],
+        transactions: [],
+        labels: [
+          { kind: 'txid', refKey: 'aa', label: 'label', updatedAt: 't' },
+        ],
+        fusion: { coinDepth: { 'aa:0': { d: -1, at: 1 } }, fusionTxids: [] },
+      })
+    ).rejects.toThrow(/invalid metadata/);
+    expect(setCoinLabelMock).not.toHaveBeenCalled();
+    expect(importFusionDepthStateMock).not.toHaveBeenCalled();
   });
 });

@@ -20,10 +20,10 @@ import {
 const TEST_MNEMONIC = bip39.entropyToMnemonic('0'.repeat(32));
 
 describe('HdWalletService', () => {
-  it('uses BCH coin type 145 on mainnet and chipnet', () => {
+  it('uses BCH coin type 145 on mainnet and 1 on chipnet', () => {
     expect(getBchCoinType(Network.MAINNET)).toBe(145);
-    expect(getBchCoinType(Network.CHIPNET)).toBe(145);
-    expect(getBchAccountPath(Network.CHIPNET, 2)).toBe("m/44'/145'/2'");
+    expect(getBchCoinType(Network.CHIPNET)).toBe(1);
+    expect(getBchAccountPath(Network.CHIPNET, 2)).toBe("m/44'/1'/2'");
     expect(getBchAccountPath(Network.MAINNET, 0)).toBe("m/44'/145'/0'");
   });
 

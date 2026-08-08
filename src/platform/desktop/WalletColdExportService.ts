@@ -11,7 +11,6 @@ import DatabaseService from '../../apis/DatabaseManager/DatabaseService';
 import UTXOManager from '../../apis/UTXOManager/UTXOManager';
 import KeyService from '../../services/KeyService';
 import { Network } from '../../state/slices/networkSlice';
-import { store } from '../../state/store';
 import { logError } from '../../utils/errorHandling';
 import {
   listCoinLabels,
@@ -81,14 +80,128 @@ export type ColdArchiveEncryptedFile = {
   ciphertext: string;
 };
 
-function networkName(): string {
-  try {
-    const n = store.getState().network.currentNetwork;
-    if (n === Network.CHIPNET) return 'chipnet';
-    return 'mainnet';
-  } catch {
-    return 'unknown';
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === 'object' && !Array.isArray(value);
+}
+
+function isArchiveNetwork(value: unknown): value is Network {
+  return value === Network.MAINNET || value === Network.CHIPNET;
+}
+
+function isSafePositiveInteger(value: unknown): value is number {
+  return Number.isSafeInteger(value) && (value as number) > 0;
+}
+
+function isSafeNonNegativeInteger(value: unknown): value is number {
+  return Number.isSafeInteger(value) && (value as number) >= 0;
+}
+
+function isValidFusionDepth(value: unknown): boolean {
+  if (typeof value === 'number') {
+    return Number.isFinite(value) && value >= 0;
   }
+  return (
+    isRecord(value) &&
+    isSafeNonNegativeInteger(value.d) &&
+    Number.isFinite(value.at) &&
+    (value.at as number) >= 0
+  );
+}
+
+/** Reject malformed decrypted data before any label or fusion state is merged. */
+function validateColdArchive(
+  value: unknown
+): asserts value is ColdArchiveExport {
+  if (!isRecord(value) || value.format !== COLD_EXPORT_FORMAT) {
+    throw new Error('Decrypted payload is not a cold archive.');
+  }
+  if (
+    !isSafePositiveInteger(value.walletId) ||
+    typeof value.exportedAt !== 'string' ||
+    value.exportedAt.length === 0 ||
+    typeof value.disclaimer !== 'string' ||
+    !isArchiveNetwork(value.network) ||
+    value.containsSecrets !== false ||
+    !Array.isArray(value.addresses) ||
+    !Array.isArray(value.utxos) ||
+    !Array.isArray(value.transactions) ||
+    !Array.isArray(value.labels) ||
+    !isRecord(value.fusion) ||
+    !isRecord(value.fusion.coinDepth) ||
+    !Array.isArray(value.fusion.fusionTxids)
+  ) {
+    throw new Error('Decrypted cold archive has an invalid structure.');
+  }
+  if (
+    value.addresses.length === 0 ||
+    !value.addresses.every(
+      (address) =>
+        isRecord(address) &&
+        typeof address.address === 'string' &&
+        address.address.trim().length > 0
+    )
+  ) {
+    throw new Error('Decrypted cold archive has no valid wallet addresses.');
+  }
+  if (
+    !value.utxos.every(
+      (utxo) =>
+        isRecord(utxo) &&
+        typeof utxo.address === 'string' &&
+        utxo.address.trim().length > 0 &&
+        typeof utxo.tx_hash === 'string' &&
+        utxo.tx_hash.trim().length > 0 &&
+        isSafeNonNegativeInteger(utxo.tx_pos) &&
+        Number.isSafeInteger(utxo.value) &&
+        (utxo.value as number) >= 0 &&
+        Number.isInteger(utxo.height)
+    ) ||
+    !value.transactions.every(
+      (transaction) =>
+        isRecord(transaction) &&
+        typeof transaction.tx_hash === 'string' &&
+        transaction.tx_hash.trim().length > 0 &&
+        Number.isInteger(transaction.height) &&
+        (transaction.amount === null ||
+          transaction.amount === undefined ||
+          Number.isFinite(transaction.amount))
+    ) ||
+    !value.labels.every(
+      (label) =>
+        isRecord(label) &&
+        typeof label.kind === 'string' &&
+        typeof label.refKey === 'string' &&
+        typeof label.label === 'string' &&
+        typeof label.updatedAt === 'string'
+    ) ||
+    !value.fusion.fusionTxids.every(
+      (txid) => typeof txid === 'string' && txid.trim().length > 0
+    ) ||
+    !Object.entries(value.fusion.coinDepth).every(
+      ([outpoint, depth]) => outpoint.includes(':') && isValidFusionDepth(depth)
+    )
+  ) {
+    throw new Error('Decrypted cold archive has invalid metadata.');
+  }
+}
+
+async function readWalletNetwork(walletId: number): Promise<Network> {
+  const dbService = DatabaseService();
+  await dbService.ensureDatabaseStarted();
+  const db = dbService.getDatabase();
+  if (!db) throw new Error('Wallet database is unavailable.');
+
+  const query = db.prepare('SELECT networkType FROM wallets WHERE id = ?');
+  query.bind([walletId]);
+  let networkType: unknown = null;
+  if (query.step()) {
+    networkType = (query.getAsObject() as Record<string, unknown>).networkType;
+  }
+  query.free();
+  if (!isArchiveNetwork(networkType)) {
+    throw new Error('Active wallet has an unknown network.');
+  }
+  return networkType;
 }
 
 async function readWalletKdfSalt(walletId: number): Promise<Uint8Array | null> {
@@ -224,7 +337,9 @@ async function loadTransactionRows(
     }
     q.free();
   } catch (error) {
-    logError('WalletColdExportService.loadTransactionRows', error, { walletId });
+    logError('WalletColdExportService.loadTransactionRows', error, {
+      walletId,
+    });
   }
   return out;
 }
@@ -287,7 +402,7 @@ export async function buildColdArchive(
     format: COLD_EXPORT_FORMAT,
     exportedAt: new Date().toISOString(),
     walletId,
-    network: networkName(),
+    network: await readWalletNetwork(walletId),
     containsSecrets: false,
     disclaimer:
       'OPTN cold archive (inner payload): chain memory, labels, fusion depth. ' +
@@ -362,7 +477,7 @@ export function parseEncryptedColdArchive(
     throw new Error('Not a valid OPTN encrypted cold archive.');
   }
   if (
-    typeof o.sourceWalletId !== 'number' ||
+    !isSafePositiveInteger(o.sourceWalletId) ||
     typeof o.kdfSalt !== 'string' ||
     typeof o.ciphertext !== 'string'
   ) {
@@ -389,9 +504,17 @@ export async function decryptColdArchive(
   } catch {
     throw new Error('Wrong password or corrupted archive.');
   }
-  const archive = JSON.parse(plain) as ColdArchiveExport;
-  if (archive.format !== COLD_EXPORT_FORMAT) {
-    throw new Error('Decrypted payload is not a cold archive.');
+  let archive: unknown;
+  try {
+    archive = JSON.parse(plain);
+  } catch {
+    throw new Error('Wrong password or corrupted archive.');
+  }
+  validateColdArchive(archive);
+  if (archive.walletId !== file.sourceWalletId) {
+    throw new Error(
+      'Encrypted cold archive identity does not match its payload.'
+    );
   }
   return archive;
 }
@@ -402,24 +525,36 @@ export async function decryptColdArchive(
  */
 export async function importColdArchiveIntoWallet(
   walletId: number,
-  archive: ColdArchiveExport,
-  options?: { requireAddressOverlap?: boolean }
+  archive: ColdArchiveExport
 ): Promise<{ labels: number; fusionCoins: number; fusionTxids: number }> {
   if (walletId <= 0) throw new Error('No active wallet');
+  validateColdArchive(archive);
 
-  if (options?.requireAddressOverlap !== false) {
-    const keys = (await KeyService.retrieveKeys(walletId)) ?? [];
-    const mine = new Set(keys.map((k) => k.address).filter(Boolean));
-    const overlap = (archive.addresses ?? []).some((a) => mine.has(a.address));
-    if (mine.size > 0 && (archive.addresses?.length ?? 0) > 0 && !overlap) {
-      throw new Error(
-        'Archive addresses do not match this wallet. Open the correct wallet first.'
-      );
-    }
+  const walletNetwork = await readWalletNetwork(walletId);
+  if (archive.network !== walletNetwork) {
+    throw new Error(
+      'Archive network does not match this wallet. Open a wallet on the correct network first.'
+    );
+  }
+
+  const keys = (await KeyService.retrieveKeys(walletId)) ?? [];
+  const mine = new Set(keys.map((k) => k.address).filter(Boolean));
+  if (mine.size === 0) {
+    throw new Error(
+      'Active wallet has no addresses to verify against this cold archive.'
+    );
+  }
+  const overlap = archive.addresses.some((address) =>
+    mine.has(address.address)
+  );
+  if (!overlap) {
+    throw new Error(
+      'Archive addresses do not match this wallet. Open the correct wallet first.'
+    );
   }
 
   let labels = 0;
-  for (const row of archive.labels ?? []) {
+  for (const row of archive.labels) {
     const kind = row.kind as CoinLabelKind;
     if (kind !== 'outpoint' && kind !== 'txid' && kind !== 'address') continue;
     if (!row.refKey || !row.label) continue;
@@ -427,10 +562,7 @@ export async function importColdArchiveIntoWallet(
     labels += 1;
   }
 
-  const fusion = importFusionDepthState(walletId, archive.fusion ?? {
-    coinDepth: {},
-    fusionTxids: [],
-  });
+  const fusion = importFusionDepthState(walletId, archive.fusion);
 
   return {
     labels,
@@ -448,9 +580,7 @@ export async function saveEncryptedColdArchiveWithDialog(
   const dest = await saveDialog({
     title: 'Save encrypted cold archive',
     defaultPath: suggestedName,
-    filters: [
-      { name: 'OPTN cold archive', extensions: ['optn-cold'] },
-    ],
+    filters: [{ name: 'OPTN cold archive', extensions: ['optn-cold'] }],
   });
   if (typeof dest !== 'string' || !dest) return null;
   // Normalize extension: dialog may omit it; Rust path guard requires .optn-cold.
@@ -469,9 +599,7 @@ export async function pickAndReadColdArchiveFile(): Promise<string | null> {
     multiple: false,
     directory: false,
     title: 'Open encrypted cold archive',
-    filters: [
-      { name: 'OPTN cold archive', extensions: ['optn-cold'] },
-    ],
+    filters: [{ name: 'OPTN cold archive', extensions: ['optn-cold'] }],
   });
   if (typeof picked !== 'string') return null;
   return invoke<string>('read_optn_cold_file', { path: picked });

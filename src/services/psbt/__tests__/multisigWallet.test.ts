@@ -211,6 +211,16 @@ describe('Paytaca .pmwif interop', () => {
     expect(byName.get('Carol')).toBeUndefined();
   });
 
+  it('matches OPTN fingerprint metadata after xpub whitespace is normalized', () => {
+    const written = JSON.parse(serializePmwif(POLICY)) as {
+      optn: { cosigners: Array<{ xpub: string }> };
+    };
+    written.optn.cosigners[0].xpub = ` ${XPUB_A} `;
+
+    const policy = parsePmwif(JSON.stringify(written));
+    expect(policy.signers[0].masterFingerprintHex).toBe('aabbccdd');
+  });
+
   it('rejects malformed files with a usable message', () => {
     expect(() => parsePmwif('not json')).toThrow(/not valid JSON/);
     expect(() => parsePmwif('{"m":2}')).toThrow(/no cosigners/);

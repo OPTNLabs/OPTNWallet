@@ -358,10 +358,20 @@ async function refreshWallet(session: WorkerSession): Promise<void> {
   await run;
 }
 
-export async function bootstrapAllUTXOs(expectedEpoch?: number) {
+export type ExpectedWalletSession = {
+  walletId: number;
+  sessionGeneration: number;
+};
+
+export async function bootstrapAllUTXOs(
+  expectedEpoch?: number,
+  expectedSession?: ExpectedWalletSession
+) {
   const state = store.getState();
-  const currentWalletId = state.wallet_id.currentWalletId;
-  const sessionGeneration = state.wallet_id.sessionGeneration ?? 0;
+  const currentWalletId =
+    expectedSession?.walletId ?? state.wallet_id.currentWalletId;
+  const sessionGeneration =
+    expectedSession?.sessionGeneration ?? state.wallet_id.sessionGeneration ?? 0;
   const bootstrapIsCurrent = () =>
     isCurrentWalletSession(currentWalletId, sessionGeneration) &&
     (expectedEpoch === undefined ||

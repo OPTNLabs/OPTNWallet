@@ -10,24 +10,35 @@ export default function AddressManager() {
       const db = dbService.getDatabase();
       if (db != null) {
         const registerAddressQuery = db.prepare(`
-          INSERT INTO addresses (wallet_id, address, balance, hd_index, change_index, prefix) VALUES (?, ?, ?, ?, ?, ?);
+          INSERT INTO addresses
+            (wallet_id, address, token_address, balance, hd_index, change_index, prefix)
+          VALUES (?, ?, ?, ?, ?, ?, ?)
+          ON CONFLICT(address) DO UPDATE SET
+            token_address = COALESCE(excluded.token_address, addresses.token_address),
+            hd_index = excluded.hd_index,
+            change_index = excluded.change_index,
+            prefix = excluded.prefix
+          WHERE addresses.wallet_id = excluded.wallet_id;
         `);
-
-        registerAddressQuery.run([
-          address.wallet_id,
-          address.address,
-          address.balance,
-          address.hd_index,
-          address.change_index,
-          address.prefix,
-        ]);
-
-        registerAddressQuery.free();
+        try {
+          registerAddressQuery.run([
+            address.wallet_id,
+            address.address,
+            address.token_address ?? null,
+            address.balance,
+            address.hd_index,
+            address.change_index,
+            address.prefix,
+          ]);
+        } finally {
+          registerAddressQuery.free();
+        }
       } else {
-        console.error('Database instance is null.');
+        throw new Error('Database instance is null.');
       }
     } catch (error) {
       console.error('Failed to register address:', error);
+      throw error;
     }
   }
 

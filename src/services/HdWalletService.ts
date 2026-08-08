@@ -69,14 +69,14 @@ export type BchStandardBranchName = keyof typeof BCH_STANDARD_BRANCH_INDEX;
 /**
  * SLIP-44 coin type for BCH account paths.
  *
- * Always 145 (Bitcoin Cash) on both mainnet and chipnet. Cashonize, Electron
- * Cash defaults, and most BCH tooling keep 145 on test nets so the same seed
- * produces matching addresses. Coin type 1 remains valid as a custom path for
- * restoring wallets that were created with pure BIP44-testnet derivation.
+ * Mainnet uses BCH's registered coin type 145. Chipnet defaults to BIP44's
+ * test-network coin type 1; 145 remains a valid custom path for restoring
+ * wallets created by BCH tooling that uses the mainnet coin type on testnet.
  */
-export function getBchCoinType(_network?: Network): number {
-  void _network; // accepted for API symmetry; BCH always uses coin type 145
-  return COIN_TYPE.bitcoincash; // 145
+export function getBchCoinType(network: Network = Network.MAINNET): number {
+  return network === Network.CHIPNET
+    ? COIN_TYPE.testnet
+    : COIN_TYPE.bitcoincash;
 }
 
 export const MAX_BIP44_INDEX = 0x7fffffff;

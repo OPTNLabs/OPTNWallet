@@ -13,12 +13,12 @@ import {
 const empty = { usedAddresses: 0, satoshis: 0n };
 
 describe('derivation path discovery', () => {
-  it('tries 145 before the BIP44 testnet type on chipnet', () => {
+  it('tries the chipnet default and legacy BCH types during discovery', () => {
     const paths = candidateAccountPaths(Network.CHIPNET);
-    expect(paths[0]).toBe("m/44'/145'/0'");
-    // 1 must still be tried: older builds of this wallet used it on chipnet,
-    // so a wallet funded then would otherwise be invisible now.
+    expect(paths[0]).toBe("m/44'/1'/0'");
+    expect(paths).toContain("m/44'/145'/0'");
     expect(paths).toContain("m/44'/1'/0'");
+    expect(paths).toContain("m/44'/0'/0'");
   });
 
   it('does not offer the testnet coin type on mainnet', () => {
