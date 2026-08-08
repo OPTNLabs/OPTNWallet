@@ -1,8 +1,8 @@
-module.exports = {
+import type { Config } from 'tailwindcss';
+
+export default {
   darkMode: 'class',
-  content: [
-    './src/**/*.{js,ts,jsx,tsx}', // Adjust this glob pattern according to your project's file structure
-  ],
+  content: ['./src/**/*.{ts,tsx}'],
   theme: {
     extend: {
       spacing: {
@@ -22,4 +22,4 @@ module.exports = {
     },
   },
   plugins: [],
-};
+} satisfies Config;

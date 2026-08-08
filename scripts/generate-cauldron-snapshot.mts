@@ -35,7 +35,9 @@ async function fetchJson(url) {
 
 async function selectMarket(baseUrl, tokens) {
   for (const token of tokens) {
-    const tokenId = String(token.token_id ?? '').trim().toLowerCase();
+    const tokenId = String(token.token_id ?? '')
+      .trim()
+      .toLowerCase();
     if (!tokenId) continue;
 
     const payload = await fetchJson(

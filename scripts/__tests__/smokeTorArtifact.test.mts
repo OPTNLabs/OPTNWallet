@@ -7,7 +7,7 @@ const script = readFileSync(
   resolve(
     dirname(fileURLToPath(import.meta.url)),
     '..',
-    'smoke-tor-artifact.mjs'
+    'smoke-tor-artifact.mts'
   ),
   'utf8'
 );

@@ -11,7 +11,7 @@ on:
       - 'public/**'
       - 'src-tauri/**'
       - 'reference/**'
-      - 'scripts/fetch-tor.mjs'
+      - 'scripts/fetch-tor.mts'
       - 'vite.desktop.config.ts'
       - 'package.json'
       - '.github/workflows/desktop-preview.yml'
@@ -22,7 +22,7 @@ on:
       - 'public/**'
       - 'src-tauri/**'
       - 'reference/**'
-      - 'scripts/fetch-tor.mjs'
+      - 'scripts/fetch-tor.mts'
       - 'vite.desktop.config.ts'
       - 'package.json'
       - '.github/workflows/desktop-preview.yml'
@@ -105,7 +105,7 @@ jobs:
         run: npm ci
 
       - name: Fetch bundled Tor (integrated CashFusion privacy)
-        run: node scripts/fetch-tor.mjs ${{ matrix.tor-target }}
+        run: npx --no-install tsx scripts/fetch-tor.mts ${{ matrix.tor-target }}
 
       - name: Build Tauri (debug)
         # No --bundles: tauri.conf.json already says targets "all", and a preview
@@ -127,7 +127,7 @@ jobs:
         run: |
           APPIMAGE_PATH="$(find "src-tauri/target/${{ matrix.target }}/debug/bundle" -type f -name '*.AppImage' -print -quit)"
           test -n "$APPIMAGE_PATH"
-          node scripts/smoke-tor-artifact.mjs "$APPIMAGE_PATH" "${{ matrix.tor-target }}"
+          npx --no-install tsx scripts/smoke-tor-artifact.mts "$APPIMAGE_PATH" "${{ matrix.tor-target }}"
 
       - name: Upload preview artifact
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7

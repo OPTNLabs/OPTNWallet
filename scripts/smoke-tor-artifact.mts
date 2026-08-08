@@ -27,7 +27,7 @@ function main() {
   const [appImage, target] = process.argv.slice(2);
   if (!appImage || !['linux-x86_64', 'linux-aarch64'].includes(target)) {
     throw new Error(
-      'Usage: node scripts/smoke-tor-artifact.mjs <AppImage> <linux-x86_64|linux-aarch64>'
+      'Usage: tsx scripts/smoke-tor-artifact.mts <AppImage> <linux-x86_64|linux-aarch64>'
     );
   }
 

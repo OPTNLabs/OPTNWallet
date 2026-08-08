@@ -6,25 +6,19 @@ import { describe, expect, it } from 'vitest';
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..');
 const workflow = readFileSync(
   resolve(repoRoot, '.github', 'workflows', 'release.yml'),
-  'utf8',
+  'utf8'
 );
 const desktopPreviewWorkflow = readFileSync(
   resolve(repoRoot, '.github', 'workflows', 'desktop-preview.yml'),
-  'utf8',
+  'utf8'
 );
 const extensionBuildConfig = readFileSync(
   resolve(repoRoot, 'vite.extension.config.ts'),
-  'utf8',
+  'utf8'
 );
 const extensionShell = readFileSync(
-  resolve(
-    repoRoot,
-    'src',
-    'platform',
-    'extension',
-    'ExtensionAppShell.tsx',
-  ),
-  'utf8',
+  resolve(repoRoot, 'src', 'platform', 'extension', 'ExtensionAppShell.tsx'),
+  'utf8'
 );
 
 describe('release workflow', () => {
@@ -34,13 +28,13 @@ describe('release workflow', () => {
       ['desktop preview', desktopPreviewWorkflow],
     ]) {
       const actionRefs = [...contents.matchAll(/uses:\s*([^\s#]+)/g)].map(
-        (match) => match[1],
+        (match) => match[1]
       );
       expect(actionRefs.length, `${name} action references`).toBeGreaterThan(0);
 
       for (const actionRef of actionRefs) {
         expect(actionRef, `${name}: ${actionRef}`).toMatch(
-          /^[^@\s]+@[0-9a-f]{40}$/,
+          /^[^@\s]+@[0-9a-f]{40}$/
         );
       }
     }
@@ -64,12 +58,14 @@ describe('release workflow', () => {
     expect(workflow).toMatch(/-name '\*\.zip'/);
     expect(workflow).toMatch(/release-files\/\*\.zip/);
     expect(workflow).toContain('Verify expected release files');
-    expect(workflow).toContain("require_asset artifacts/browser-extensions '*.zip'");
-    expect(extensionBuildConfig).toContain(
-      "src/services/TransactionService.ts",
+    expect(workflow).toContain(
+      "require_asset artifacts/browser-extensions '*.zip'"
     );
     expect(extensionBuildConfig).toContain(
-      "src/platform/extension/TransactionService.ts",
+      'src/services/TransactionService.ts'
+    );
+    expect(extensionBuildConfig).toContain(
+      'src/platform/extension/TransactionService.ts'
     );
     expect(extensionShell).toContain('<AppShell viewerOnly />');
   });
@@ -90,7 +86,7 @@ describe('release workflow', () => {
     expect(workflow).toContain('adhoc-not-notarized');
     expect(workflow).toContain('Build signed and notarized macOS bundles');
     expect(workflow).toContain(
-      'Build ad-hoc-signed macOS bundles without an Apple account',
+      'Build ad-hoc-signed macOS bundles without an Apple account'
     );
     expect(workflow).toContain('security set-key-partition-list');
     expect(workflow).toContain('APPLE_PASSWORD:');
@@ -103,8 +99,12 @@ describe('release workflow', () => {
     expect(workflow).toContain('spctl --assess --type open');
     expect(workflow).toContain('xcrun stapler validate');
     expect(workflow).toContain('desktop-macos-intel');
-    expect(workflow).toContain("require_asset artifacts/desktop-macos-arm '*.dmg'");
-    expect(workflow).toContain("require_asset artifacts/desktop-macos-intel '*.dmg'");
+    expect(workflow).toContain(
+      "require_asset artifacts/desktop-macos-arm '*.dmg'"
+    );
+    expect(workflow).toContain(
+      "require_asset artifacts/desktop-macos-intel '*.dmg'"
+    );
   });
 
   it('builds both native macOS targets with matching Tor bundles before release', () => {
@@ -115,13 +115,13 @@ describe('release workflow', () => {
     expect(desktopPreviewWorkflow).toContain('target: x86_64-apple-darwin');
     expect(desktopPreviewWorkflow).toContain('tor-target: macos-x86_64');
     expect(desktopPreviewWorkflow).toContain(
-      'node scripts/fetch-tor.mjs ${{ matrix.tor-target }}',
+      'npx --no-install tsx scripts/fetch-tor.mts ${{ matrix.tor-target }}'
     );
     expect(desktopPreviewWorkflow).toContain(
-      'npx tauri build --debug --target ${{ matrix.target }}',
+      'npx tauri build --debug --target ${{ matrix.target }}'
     );
     expect(desktopPreviewWorkflow).toContain(
-      'src-tauri/target/${{ matrix.target }}/debug/bundle/**',
+      'src-tauri/target/${{ matrix.target }}/debug/bundle/**'
     );
   });
 
@@ -135,12 +135,14 @@ describe('release workflow', () => {
     expect(workflow).toContain('artifact-name: desktop-linux-arm');
     // AppImage is gated first — portable across distros, not just Ubuntu CI hosts.
     expect(workflow).toContain(
-      "require_asset artifacts/desktop-linux '*.AppImage'",
+      "require_asset artifacts/desktop-linux '*.AppImage'"
     );
     expect(workflow).toContain(
-      "require_asset artifacts/desktop-linux-arm '*.AppImage'",
+      "require_asset artifacts/desktop-linux-arm '*.AppImage'"
     );
-    expect(workflow).toMatch(/portable \.AppImage|all distros|AppImage \(portable/i);
+    expect(workflow).toMatch(
+      /portable \.AppImage|all distros|AppImage \(portable/i
+    );
     expect(desktopPreviewWorkflow).toContain('ubuntu-24.04-arm');
     expect(desktopPreviewWorkflow).toContain('linux-aarch64');
   });

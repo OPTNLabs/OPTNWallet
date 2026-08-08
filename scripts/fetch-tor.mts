@@ -1,7 +1,7 @@
 // Fetch and stage the Tor Expert Bundle used by the Tauri desktop app.
 //
 // Usage:
-//   node scripts/fetch-tor.mjs [target]
+//   tsx scripts/fetch-tor.mts [target]
 //
 // target is one of windows-x86_64, macos-x86_64, macos-aarch64,
 // linux-x86_64, or linux-aarch64. If omitted, the host target is inferred.

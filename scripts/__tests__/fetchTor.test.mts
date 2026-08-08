@@ -9,7 +9,7 @@ import {
   bundleFileNames,
   getLinuxAarch64TorSourceArtifact,
   getTorArtifact,
-} from '../fetch-tor.mjs';
+} from '../fetch-tor.mts';
 
 describe('pinned Tor Expert Bundle', () => {
   it('resolves every desktop target to the immutable Tor archive', () => {
