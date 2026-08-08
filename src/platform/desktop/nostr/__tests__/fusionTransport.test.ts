@@ -42,8 +42,12 @@ class FakePool {
       return false;
     return true;
   }
+  closed = false;
   get publishedCount(): number {
     return this.events.length;
+  }
+  close(_relays: string[]): void {
+    this.closed = true;
   }
   publish(_relays: string[], event: Event): Promise<string>[] {
     this.events.push(event);
@@ -270,6 +274,59 @@ describe('Nostr round transport', () => {
 
     expect(controlPool.publishedCount).toBe(1);
     expect(outputPool.publishedCount).toBe(1);
+  });
+
+  // A fresh throwaway signing key per output is defeated at the transport layer
+  // if every output still leaves over one socket: the relay groups them by
+  // connection and learns the set anyway. Each anonymous component must get its
+  // own pool, and that pool must be closed so nothing later reuses the circuit.
+  it('gives every anonymous component its own one-shot pool and closes it', async () => {
+    const controlPool = new FakePool();
+    const sharedOutputPool = new FakePool();
+    const oneShot: FakePool[] = [];
+    const sender = roundId();
+    const recipient = roundId();
+    const transport = createNostrRoundTransport(
+      asPool(controlPool),
+      ['wss://fake'],
+      sender,
+      asPool(sharedOutputPool),
+      undefined,
+      () => {
+        const p = new FakePool();
+        oneShot.push(p);
+        return asPool(p);
+      }
+    );
+
+    const output = (script: string) => ({
+      ...messageBinding(),
+      type: 'outputs' as const,
+      session: 'round',
+      outputs: [
+        {
+          script,
+          value: 546,
+          credentialSerial: '11'.repeat(32),
+          credentialSig: '22'.repeat(64),
+        },
+      ],
+    });
+    await transport.send(recipient.pubkey, output('00'));
+    await transport.send(recipient.pubkey, output('51'));
+    // Control-plane traffic keeps the round identity and the shared pool.
+    await transport.send(recipient.pubkey, {
+      ...messageBinding(),
+      type: 'components_ready',
+      session: 'round',
+    });
+
+    expect(oneShot).toHaveLength(2);
+    expect(oneShot.map((p) => p.publishedCount)).toEqual([1, 1]);
+    expect(oneShot.every((p) => p.closed)).toBe(true);
+    // Nothing anonymous fell back to the shared socket.
+    expect(sharedOutputPool.publishedCount).toBe(0);
+    expect(controlPool.publishedCount).toBe(1);
   });
 
   it('gift-wraps a message (kind 1059) to the peer and round-trips', async () => {

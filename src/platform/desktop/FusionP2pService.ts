@@ -1184,7 +1184,12 @@ export async function runP2pFusion(
       roundRelays,
       round,
       outputPool,
-      opts.signal
+      opts.signal,
+      // Production only. The Tor WebSocket implementation is installed globally
+      // (setNostrWebSocketImpl), so each new pool opens a new connection and
+      // therefore a new Tor circuit — the relay cannot group this round's
+      // outputs by socket the way it could when they shared outputPool.
+      () => new SimplePool()
     );
     // Brief wire-up so onMessage (Nostr + same-origin BC) is subscribed before
     // the elected coordinator's first proposal (live: silent-coordinator failover
