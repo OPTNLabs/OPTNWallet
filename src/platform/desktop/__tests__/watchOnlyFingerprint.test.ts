@@ -29,6 +29,7 @@ describe('watch-only master fingerprint persistence', () => {
     mockedDatabaseService.mockReturnValue({
       ensureDatabaseStarted: vi.fn(async () => {}),
       getDatabase: vi.fn(() => ({})),
+      flushDatabaseToFile: vi.fn(async () => {}),
     } as never);
   });
 
@@ -56,6 +57,7 @@ describe('watch-only master fingerprint persistence', () => {
     );
     expect(run).toHaveBeenCalledWith(['4c9a1f7b', 9, 'watch-only']);
     expect(statement.free).toHaveBeenCalled();
+    expect(mockedDatabaseService().flushDatabaseToFile).toHaveBeenCalledWith(9);
   });
 
   it('rejects saving a malformed fingerprint without touching the database', async () => {

@@ -29,6 +29,7 @@ import {
 } from '../state/slices/walletReconfigurationSlice';
 import type { DerivationPathSource } from '../types/wallet';
 import { getBchAccountPath, normalizeBchAccountPath } from './HdWalletService';
+import { clearParentTransactionCache } from './psbt/parentTransactions';
 
 export type WalletReconfigurationRequest = {
   walletId: number;
@@ -205,6 +206,7 @@ export async function reconfigureActiveWallet(
         resetCooldown: true,
       });
       invalidateUTXOCache();
+      clearParentTransactionCache();
       try {
         await ElectrumServer().electrumDisconnect();
       } catch {

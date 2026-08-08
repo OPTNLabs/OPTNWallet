@@ -41,6 +41,7 @@ import {
   type WatchOnlyInputSpec,
   type WatchOnlyProposal,
 } from '../../services/psbt/watchOnlySend';
+import { getBchAccountPath } from '../../services/HdWalletService';
 import { inspectImportedPsbt } from '../../services/psbt/watchOnlyImport';
 import { fetchParentTransactions } from '../../services/psbt/parentTransactions';
 import {
@@ -149,6 +150,9 @@ export const WatchOnlySend: FC = () => {
   const navigate = useNavigate();
   const location = useLocation();
   const walletId = useSelector(selectWalletId);
+  const currentNetwork = useSelector(
+    (state: RootState) => state.network.currentNetwork
+  );
   const fusionDepthRev = useFusionDepthRevision(walletId || 0);
 
   const [recipient, setRecipient] = useState('');
@@ -160,7 +164,9 @@ export const WatchOnlySend: FC = () => {
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [fingerprint, setFingerprint] = useState('');
   const [savedFingerprint, setSavedFingerprint] = useState('');
-  const [accountPath, setAccountPath] = useState("m/44'/145'/0'");
+  const [accountPath, setAccountPath] = useState(() =>
+    getBchAccountPath(currentNetwork)
+  );
   const [multisigPolicy, setMultisigPolicy] = useState<MultisigPolicy | null>(
     null
   );
@@ -202,10 +208,6 @@ export const WatchOnlySend: FC = () => {
     const fromReturnTo = locationState?.returnTo?.split('/').pop();
     return fromReturnTo ? Number(fromReturnTo) : null;
   }, [walletId, locationState]);
-
-  const currentNetwork = useSelector(
-    (state: RootState) => state.network.currentNetwork
-  );
 
   const nftCategories = useMemo(() => {
     const categories = new Set<string>();
@@ -294,7 +296,9 @@ export const WatchOnlySend: FC = () => {
           return;
         }
         const metadata = await WalletManager().getWalletMetadata(currentWalletId);
-        if (metadata?.derivation_path) setAccountPath(metadata.derivation_path);
+        setAccountPath(
+          metadata?.derivation_path ?? getBchAccountPath(currentNetwork)
+        );
 
         const stored = await watchOnlyMasterFingerprint(currentWalletId);
         if (stored) {
@@ -356,7 +360,7 @@ export const WatchOnlySend: FC = () => {
                 // costs that device its "these coins are mine" review line.
                 masterFingerprintHex: signer.masterFingerprintHex ?? '00000000',
                 derivationPath: `${
-                  signer.accountPath ?? "m/44'/145'/0'"
+                  signer.accountPath ?? getBchAccountPath(currentNetwork)
                 }/${branchIndex}/${key.addressIndex}`,
               })),
               utxo,
@@ -401,7 +405,7 @@ export const WatchOnlySend: FC = () => {
     return () => {
       cancelled = true;
     };
-  }, [currentWalletId]);
+  }, [currentWalletId, currentNetwork]);
 
   useEffect(() => {
     return () => {
@@ -449,7 +453,7 @@ export const WatchOnlySend: FC = () => {
     setAmountText(text);
     const parsed = Number(text);
     if (Number.isFinite(parsed) && parsed > 0) {
-      setAmountSats(BigInt(Math.floor(parsed * 1e8)));
+      setAmountSats(BigInt(Math.round(parsed * 1e8)));
     } else {
       setAmountSats(null);
     }
@@ -515,7 +519,7 @@ export const WatchOnlySend: FC = () => {
                   masterFingerprintHex:
                     signer.masterFingerprintHex ?? '00000000',
                   derivationPath: `${
-                    signer.accountPath ?? "m/44'/145'/0'"
+                    signer.accountPath ?? getBchAccountPath(currentNetwork)
                   }/${changeBranch}/${changeAddressIndex}`,
                 })
               ),

@@ -8,7 +8,10 @@ import DatabaseService from '../../apis/DatabaseManager/DatabaseService';
 import ElectrumService from '../../services/ElectrumService';
 import { refreshWalletTransactionHistory } from '../../services/WalletHistoryRefreshService';
 import { logError } from '../../utils/errorHandling';
-import { bootstrapAllUTXOs } from '../../workers/UTXOWorkerService';
+import {
+  bootstrapAllUTXOs,
+  type ExpectedWalletSession,
+} from '../../workers/UTXOWorkerService';
 import { clearWalletChainData } from './WalletLedgerService';
 import { ensureDesktopLedgerTables } from './desktopSchema';
 
@@ -27,7 +30,26 @@ export async function rebuildActiveWallet(
     return { ok: false, error: 'No wallet open.' };
   }
 
-  onProgress?.('Checking network…', 2);
+  const expectedSession: ExpectedWalletSession = {
+    walletId,
+    sessionGeneration,
+  };
+  const isCurrentSession = () => {
+    const active = store.getState().wallet_id;
+    return (
+      active.currentWalletId === expectedSession.walletId &&
+      (active.sessionGeneration ?? 0) === expectedSession.sessionGeneration
+    );
+  };
+  const staleResult = () => ({
+    ok: false as const,
+    error: 'Wallet changed while the rebuild was in progress.',
+  });
+  const report = (message: string, percent?: number) => {
+    if (isCurrentSession()) onProgress?.(message, percent);
+  };
+
+  report('Checking network…', 2);
   try {
     await ElectrumService.ensureFreshConnection();
   } catch (error) {
@@ -37,15 +59,19 @@ export async function rebuildActiveWallet(
       error: 'No Electrum connection. Rebuild needs a live network.',
     };
   }
+  if (!isCurrentSession()) return staleResult();
 
-  onProgress?.('Clearing chain data…', 10);
+  report('Clearing chain data…', 10);
   try {
     await ensureDesktopLedgerTables();
+    if (!isCurrentSession()) return staleResult();
     await clearWalletChainData(walletId);
   } catch (error) {
+    if (!isCurrentSession()) return staleResult();
     logError('WalletRebuildService.clear', error, { walletId });
     return { ok: false, error: 'Failed to clear wallet chain data.' };
   }
+  if (!isCurrentSession()) return staleResult();
 
   // Clear UI immediately so the user does not see stale balances mid-rebuild.
   store.dispatch(replaceAllUTXOs({ utxosByAddress: {} }));
@@ -60,10 +86,12 @@ export async function rebuildActiveWallet(
   store.dispatch(setSyncingProgress(15));
 
   try {
-    onProgress?.('Rebuilding UTXOs from network…', 30);
-    await bootstrapAllUTXOs();
+    report('Rebuilding UTXOs from network…', 30);
+    if (!isCurrentSession()) return staleResult();
+    await bootstrapAllUTXOs(undefined, expectedSession);
+    if (!isCurrentSession()) return staleResult();
 
-    onProgress?.('Rebuilding transaction history…', 70);
+    report('Rebuilding transaction history…', 70);
     store.dispatch(setSyncingProgress(70));
     await refreshWalletTransactionHistory({
       walletId,
@@ -71,22 +99,30 @@ export async function rebuildActiveWallet(
       sessionGeneration,
       force: true,
       onProgress: (pct) => {
+        if (!isCurrentSession()) return;
         store.dispatch(setSyncingProgress(70 + Math.round(0.28 * pct)));
-        onProgress?.('Rebuilding transaction history…', 70 + Math.round(0.28 * pct));
+        report(
+          'Rebuilding transaction history…',
+          70 + Math.round(0.28 * pct)
+        );
       },
     });
 
+    if (!isCurrentSession()) return staleResult();
     DatabaseService().scheduleDatabaseSave(walletId);
-    onProgress?.('Rebuild complete.', 100);
+    report('Rebuild complete.', 100);
     return { ok: true };
   } catch (error) {
+    if (!isCurrentSession()) return staleResult();
     logError('WalletRebuildService.resync', error, { walletId });
     return {
       ok: false,
       error: error instanceof Error ? error.message : 'Rebuild failed during network resync.',
     };
   } finally {
-    store.dispatch(setFetchingUTXOs(false));
-    store.dispatch(setSyncingProgress(null));
+    if (isCurrentSession()) {
+      store.dispatch(setFetchingUTXOs(false));
+      store.dispatch(setSyncingProgress(null));
+    }
   }
 }

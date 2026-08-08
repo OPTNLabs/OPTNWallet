@@ -459,4 +459,5 @@ export async function saveWatchOnlyMasterFingerprint(
   } finally {
     update.free();
   }
+  await dbService.flushDatabaseToFile(walletId);
 }

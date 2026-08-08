@@ -45,6 +45,7 @@ import { getBchAccountPath } from '../../services/HdWalletService';
 import {
   autoSaveWalletFile,
   parseWalletFile,
+  supportsWalletFileV1Type,
   type WalletFileV1,
 } from './walletFile';
 import { log } from './logger';
@@ -168,7 +169,11 @@ export async function createWalletWithPassword(
   const previousSnapshot = getCachedPasswordSnapshot();
   const restorePrevious = () => {
     if (previousSnapshot) {
-      setCachedPassword(previousSnapshot.password, previousSnapshot.salt, previousSnapshot.ownerWalletId);
+      setCachedPassword(
+        previousSnapshot.password,
+        previousSnapshot.salt,
+        previousSnapshot.ownerWalletId
+      );
     } else clearCachedPassword();
   };
   setCachedPassword(password, salt);
@@ -539,7 +544,11 @@ export async function openWalletWithPassword(
   const previousSnapshot = getCachedPasswordSnapshot();
   const restorePrevious = () => {
     if (previousSnapshot) {
-      setCachedPassword(previousSnapshot.password, previousSnapshot.salt, previousSnapshot.ownerWalletId);
+      setCachedPassword(
+        previousSnapshot.password,
+        previousSnapshot.salt,
+        previousSnapshot.ownerWalletId
+      );
     } else {
       clearCachedPassword();
     }
@@ -631,9 +640,7 @@ export async function openWalletWithPassword(
 }
 
 /** Only MAINNET/CHIPNET; never invent chipnet as a fallback. */
-function resolveWalletNetworkStrict(
-  networkType: unknown
-): Network | null {
+function resolveWalletNetworkStrict(networkType: unknown): Network | null {
   if (networkType === Network.MAINNET || networkType === 'mainnet') {
     return Network.MAINNET;
   }
@@ -826,10 +833,7 @@ export async function openHardwareWallet(
       /* worker may start via lifecycle */
     }
   } catch (err) {
-    console.warn(
-      '[DesktopWalletManager] hardware open repair failed:',
-      err
-    );
+    console.warn('[DesktopWalletManager] hardware open repair failed:', err);
   }
   return info;
 }
@@ -879,8 +883,20 @@ export async function buildWalletFileContents(
   query.free();
   if (!row) return null;
 
+  const walletFileType =
+    typeof row.walletType === 'string' ? row.walletType : null;
+  // Hardware and watch-only wallets store public-key metadata outside the
+  // mnemonic columns. v1 cannot restore that metadata, so never emit a file
+  // that import would misinterpret as a standard seed wallet.
+  if (!walletFileType || !supportsWalletFileV1Type(walletFileType)) return null;
+
   const networkType =
-    row.networkType === Network.CHIPNET ? Network.CHIPNET : Network.MAINNET;
+    row.networkType === Network.CHIPNET
+      ? Network.CHIPNET
+      : row.networkType === Network.MAINNET
+        ? Network.MAINNET
+        : null;
+  if (!networkType) return null;
 
   const { serializeWalletFile } = await import('./walletFile');
   return serializeWalletFile({
@@ -889,8 +905,7 @@ export async function buildWalletFileContents(
       typeof row.wallet_name === 'string'
         ? row.wallet_name
         : `Wallet ${walletId}`,
-    walletType:
-      typeof row.walletType === 'string' ? row.walletType : 'standard',
+    walletType: walletFileType,
     encryptedMnemonic: typeof row.mnemonic === 'string' ? row.mnemonic : '',
     encryptedPassphrase:
       typeof row.passphrase === 'string' ? row.passphrase : '',
@@ -915,6 +930,7 @@ export async function refreshWalletFileMirror(walletId: number): Promise<void> {
     encryptedMnemonic: parsed.encryptedMnemonic,
     encryptedPassphrase: parsed.encryptedPassphrase,
     kdfSalt: parsed.kdfSalt,
+    network: parsed.network,
     derivationPath: parsed.derivationPath,
     derivationPathSource: parsed.derivationPathSource,
   };
@@ -954,13 +970,14 @@ export async function findWalletByKeystore(
   if (q.step()) {
     const row = q.getAsObject() as Record<string, unknown>;
     const id = typeof row.id === 'number' ? row.id : Number(row.id);
+    const rowNetwork = row.networkType;
     if (Number.isSafeInteger(id) && id > 0) {
+      if (rowNetwork !== Network.MAINNET && rowNetwork !== Network.CHIPNET) {
+        return null;
+      }
       hit = {
         walletId: id,
-        network:
-          row.networkType === Network.CHIPNET
-            ? Network.CHIPNET
-            : Network.MAINNET,
+        network: rowNetwork,
       };
     }
   }
@@ -983,6 +1000,11 @@ export async function importWalletFile(
   password: string,
   network: Network
 ): Promise<ImportWalletFileResult | null> {
+  if (!supportsWalletFileV1Type(file.walletType)) {
+    throw new Error(
+      'This .optn version supports only seed-backed standard and Quantumroot wallets. Hardware and watch-only wallet packs need their public-key metadata export format.'
+    );
+  }
   if (!file.encryptedMnemonic.startsWith(SECRET_ENC_PREFIX)) return null;
   let mnemonic: string;
   let passphrase = '';
@@ -1003,10 +1025,7 @@ export async function importWalletFile(
     return null; // wrong password or corrupt file
   }
 
-  const walletType =
-    file.walletType === WalletType.QUANTUMROOT
-      ? WalletType.QUANTUMROOT
-      : WalletType.STANDARD;
+  const walletType = file.walletType as WalletType;
 
   // Same .optn already in the DB → open it, do not invent a second row.
   const existing = await findWalletByKeystore(
@@ -1028,6 +1047,11 @@ export async function importWalletFile(
 
   const { networkFromWalletFile } = await import('./walletFile');
   const fileNetwork = networkFromWalletFile(file);
+  if (network !== Network.MAINNET && network !== Network.CHIPNET) {
+    throw new Error(
+      'Cannot import wallet file with an unknown target network.'
+    );
+  }
   const resolvedNetwork =
     fileNetwork === 'chipnet'
       ? Network.CHIPNET
@@ -1062,9 +1086,7 @@ export async function walletHasOwnPassword(walletId: number): Promise<boolean> {
   return salt !== null;
 }
 
-async function readWalletRow(
-  walletId: number
-): Promise<{
+async function readWalletRow(walletId: number): Promise<{
   name: string;
   walletType: string;
   mnemonic: string;
@@ -1212,18 +1234,46 @@ export async function changeWalletPassword(
     return false;
   }
 
-  const upd = db.prepare(
-    'UPDATE wallets SET mnemonic = ?, passphrase = ?, kdf_salt = ? WHERE id = ?'
-  );
-  upd.run([encMnemonic, encPassphrase, bytesToBase64(newSalt), walletId]);
-  upd.free();
+  let transactionOpen = false;
+  try {
+    db.exec('BEGIN TRANSACTION');
+    transactionOpen = true;
 
-  if (keyUpdates.length > 0) {
-    const keyUpd = db.prepare('UPDATE keys SET private_key = ? WHERE id = ?');
-    for (const item of keyUpdates) {
-      keyUpd.run([item.privateKey, item.id]);
+    const upd = db.prepare(
+      'UPDATE wallets SET mnemonic = ?, passphrase = ?, kdf_salt = ? WHERE id = ?'
+    );
+    try {
+      upd.run([encMnemonic, encPassphrase, bytesToBase64(newSalt), walletId]);
+    } finally {
+      upd.free();
     }
-    keyUpd.free();
+
+    if (keyUpdates.length > 0) {
+      const keyUpd = db.prepare('UPDATE keys SET private_key = ? WHERE id = ?');
+      try {
+        for (const item of keyUpdates) {
+          keyUpd.run([item.privateKey, item.id]);
+        }
+      } finally {
+        keyUpd.free();
+      }
+    }
+
+    db.exec('COMMIT');
+    transactionOpen = false;
+  } catch (err) {
+    if (transactionOpen) {
+      try {
+        db.exec('ROLLBACK');
+      } catch {
+        // Preserve the original write failure.
+      }
+    }
+    console.error(
+      '[DesktopWalletManager] changeWalletPassword database update failed',
+      err
+    );
+    return false;
   }
 
   await dbService.flushDatabaseToFile(walletId);

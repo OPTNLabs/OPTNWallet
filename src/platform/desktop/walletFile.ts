@@ -30,11 +30,19 @@ import {
   exists,
   BaseDirectory,
 } from '@tauri-apps/plugin-fs';
+import { WalletType } from '../../types/wallet';
 
 export const WALLETS_DIR = 'wallets';
 export const WALLET_FILE_EXT = 'optn';
 
 export type WalletFileNetwork = 'mainnet' | 'chipnet';
+
+/** Wallet-file v1 only serializes encrypted mnemonic wallet material. */
+export function supportsWalletFileV1Type(walletType: string): boolean {
+  return (
+    walletType === WalletType.STANDARD || walletType === WalletType.QUANTUMROOT
+  );
+}
 
 export interface WalletFileV1 {
   format: 'optn-wallet';
@@ -69,7 +77,9 @@ export function networkFromWalletFile(
   return null;
 }
 
-export function serializeWalletFile(w: Omit<WalletFileV1, 'format' | 'version'>): string {
+export function serializeWalletFile(
+  w: Omit<WalletFileV1, 'format' | 'version'>
+): string {
   const file: WalletFileV1 = { format: 'optn-wallet', version: 1, ...w };
   return JSON.stringify(file, null, 2);
 }
@@ -96,14 +106,19 @@ export function parseWalletFile(text: string): WalletFileV1 {
     version: 1,
     sourceId: typeof parsed.sourceId === 'number' ? parsed.sourceId : 0,
     name: parsed.name,
-    walletType: typeof parsed.walletType === 'string' ? parsed.walletType : 'standard',
+    walletType:
+      typeof parsed.walletType === 'string' ? parsed.walletType : 'standard',
     encryptedMnemonic: parsed.encryptedMnemonic,
     encryptedPassphrase:
-      typeof parsed.encryptedPassphrase === 'string' ? parsed.encryptedPassphrase : '',
+      typeof parsed.encryptedPassphrase === 'string'
+        ? parsed.encryptedPassphrase
+        : '',
     kdfSalt: parsed.kdfSalt,
     network,
     derivationPath:
-      typeof parsed.derivationPath === 'string' ? parsed.derivationPath : undefined,
+      typeof parsed.derivationPath === 'string'
+        ? parsed.derivationPath
+        : undefined,
     derivationPathSource:
       parsed.derivationPathSource === 'custom' ? 'custom' : 'default',
   };
@@ -114,7 +129,9 @@ const NAME_STEM_MAX = 40;
 
 /** Sanitize a wallet name into a filename-safe fragment. */
 function safeName(name: string): string {
-  return (name || 'wallet').replace(/[^a-zA-Z0-9-_]+/g, '_').slice(0, NAME_STEM_MAX);
+  return (name || 'wallet')
+    .replace(/[^a-zA-Z0-9-_]+/g, '_')
+    .slice(0, NAME_STEM_MAX);
 }
 
 export function defaultWalletFileName(name: string): string {
@@ -139,7 +156,11 @@ export function collisionWalletFileName(name: string, suffix: string): string {
 }
 
 /** True if `rel` is free or already owned by `sourceId` (when `sourceId > 0`). */
-async function pathUsableBy(rel: string, sourceId: number, hasOwnerId: boolean): Promise<boolean> {
+async function pathUsableBy(
+  rel: string,
+  sourceId: number,
+  hasOwnerId: boolean
+): Promise<boolean> {
   if (!(await exists(rel, { baseDir: BaseDirectory.AppData }))) {
     return true;
   }
@@ -159,7 +180,9 @@ async function pathUsableBy(rel: string, sourceId: number, hasOwnerId: boolean):
  */
 async function ownerOf(relPath: string): Promise<number | null> {
   try {
-    const text = await readTextFile(relPath, { baseDir: BaseDirectory.AppData });
+    const text = await readTextFile(relPath, {
+      baseDir: BaseDirectory.AppData,
+    });
     return parseWalletFile(text).sourceId;
   } catch {
     return null;
@@ -176,7 +199,10 @@ export async function autoSaveWalletFile(
 ): Promise<string | null> {
   try {
     if (!(await exists(WALLETS_DIR, { baseDir: BaseDirectory.AppData }))) {
-      await mkdir(WALLETS_DIR, { baseDir: BaseDirectory.AppData, recursive: true });
+      await mkdir(WALLETS_DIR, {
+        baseDir: BaseDirectory.AppData,
+        recursive: true,
+      });
     }
     // Take <name>.optn if free or already ours. On a real collision with a
     // *different* wallet id, use <name>_id<N>.optn (never opaque _2/_3 — those
@@ -325,8 +351,11 @@ export async function migrateWalletFileNames(): Promise<number> {
 /** List wallet files currently in the default wallets folder. */
 export async function listWalletFiles(): Promise<string[]> {
   try {
-    if (!(await exists(WALLETS_DIR, { baseDir: BaseDirectory.AppData }))) return [];
-    const entries = await readDir(WALLETS_DIR, { baseDir: BaseDirectory.AppData });
+    if (!(await exists(WALLETS_DIR, { baseDir: BaseDirectory.AppData })))
+      return [];
+    const entries = await readDir(WALLETS_DIR, {
+      baseDir: BaseDirectory.AppData,
+    });
     return entries
       .filter((e) => e.isFile && e.name.endsWith(`.${WALLET_FILE_EXT}`))
       .map((e) => `${WALLETS_DIR}/${e.name}`);
@@ -336,7 +365,9 @@ export async function listWalletFiles(): Promise<string[]> {
 }
 
 /** Read + parse a wallet file at an absolute path (from the OS open dialog). */
-export async function readWalletFileAt(absolutePath: string): Promise<WalletFileV1> {
+export async function readWalletFileAt(
+  absolutePath: string
+): Promise<WalletFileV1> {
   const text = await readTextFile(absolutePath);
   return parseWalletFile(text);
 }

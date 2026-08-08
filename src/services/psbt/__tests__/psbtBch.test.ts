@@ -114,6 +114,15 @@ describe('BCH PSBT encoding', () => {
     ).toThrow(/compressed/);
   });
 
+  it('rejects a partial single-key derivation instead of encoding misleading ownership data', () => {
+    expect(() =>
+      encodeUnsignedPsbt(
+        [input({ masterFingerprint: undefined })],
+        [output()]
+      )
+    ).toThrow(/requires public key, master fingerprint, and derivation path/i);
+  });
+
   it('needs at least one input and one output', () => {
     expect(() => encodeUnsignedPsbt([], [output()])).toThrow(/input/);
     expect(() => encodeUnsignedPsbt([input()], [])).toThrow(/output/);

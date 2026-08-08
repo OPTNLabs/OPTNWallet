@@ -10,6 +10,8 @@ import { useState, type FC } from 'react';
 import { lockingBytecodeToCashAddress } from '@bitauth/libauth';
 
 import { Network } from '../../../state/slices/networkSlice';
+import DatabaseService from '../../../apis/DatabaseManager/DatabaseService';
+import WalletManager from '../../../apis/WalletManager/WalletManager';
 import {
   createWatchOnlyMultisigWallet,
   createWatchOnlyWallet,
@@ -37,6 +39,19 @@ const MULTISIG_PRESETS = [
   [2, 3],
   [3, 5],
 ] as const;
+
+async function rollbackCreatedWallet(walletId: number | null): Promise<void> {
+  if (walletId == null) return;
+  try {
+    await WalletManager().deleteWallet(walletId);
+    await DatabaseService().deleteWalletFromFile(walletId);
+  } catch (rollbackError) {
+    console.error(
+      '[WatchOnlyWalletPreview] Failed to roll back wallet creation:',
+      rollbackError
+    );
+  }
+}
 
 type CosignerDraft = { name: string; xpub: string; fingerprint: string };
 type PsbtMode = 'standard' | 'multisig';
@@ -131,8 +146,9 @@ export const WatchOnlyWalletPreview: FC<WatchOnlyWalletPreviewProps> = ({
 
     setBusy(true);
     setError('');
+    let walletId: number | null = null;
     try {
-      const walletId = await createWatchOnlyWallet({
+      walletId = await createWatchOnlyWallet({
         name: walletName,
         accountXpub,
         network,
@@ -141,6 +157,7 @@ export const WatchOnlyWalletPreview: FC<WatchOnlyWalletPreviewProps> = ({
       await protectWatchOnlyWithPassword(walletId, password);
       onCreated(walletId);
     } catch (err) {
+      await rollbackCreatedWallet(walletId);
       setError(
         err instanceof Error
           ? err.message
@@ -160,6 +177,7 @@ export const WatchOnlyWalletPreview: FC<WatchOnlyWalletPreviewProps> = ({
 
     setBusy(true);
     setError('');
+    let walletId: number | null = null;
     try {
       const policy = draftPolicy();
       const prefix =
@@ -174,7 +192,7 @@ export const WatchOnlyWalletPreview: FC<WatchOnlyWalletPreviewProps> = ({
           'Could not build a multisig address from these cosigners.'
         );
       }
-      const walletId = await createWatchOnlyMultisigWallet({
+      walletId = await createWatchOnlyMultisigWallet({
         name: walletName,
         policy,
         network,
@@ -182,6 +200,7 @@ export const WatchOnlyWalletPreview: FC<WatchOnlyWalletPreviewProps> = ({
       await protectWatchOnlyWithPassword(walletId, password);
       onCreated(walletId);
     } catch (err) {
+      await rollbackCreatedWallet(walletId);
       setError(
         err instanceof Error ? err.message : 'Could not save this wallet.'
       );
@@ -228,8 +247,9 @@ export const WatchOnlyWalletPreview: FC<WatchOnlyWalletPreviewProps> = ({
 
     setBusy(true);
     setError('');
+    let walletId: number | null = null;
     try {
-      const walletId = await createWatchOnlyWallet({
+      walletId = await createWatchOnlyWallet({
         name: walletName,
         accountXpub: keystoneAccount.xpub,
         network,
@@ -239,6 +259,7 @@ export const WatchOnlyWalletPreview: FC<WatchOnlyWalletPreviewProps> = ({
       await protectWatchOnlyWithPassword(walletId, password);
       onCreated(walletId);
     } catch (err) {
+      await rollbackCreatedWallet(walletId);
       setError(
         err instanceof Error ? err.message : 'Could not save this wallet.'
       );

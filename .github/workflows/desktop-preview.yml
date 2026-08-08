@@ -67,6 +67,8 @@ jobs:
     runs-on: ${{ matrix.platform }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
 
       - name: Setup Node
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
@@ -85,7 +87,8 @@ jobs:
             libudev-dev libusb-1.0-0-dev pkg-config
           # hidapi (Ledger/Trezor native USB) needs libudev; rusb needs libusb.
           if [ "${{ matrix.tor-target }}" = 'linux-aarch64' ]; then
-            sudo apt-get install -y tor
+            # Tor ARM is built from the checksum-pinned source release.
+            sudo apt-get install -y build-essential libevent-dev zlib1g-dev
           fi
 
       - name: Install Rust stable
@@ -117,6 +120,14 @@ jobs:
           APPIMAGE_EXTRACT_AND_RUN: '1'
           NO_STRIP: 'true'
         run: npx tauri build --debug --target ${{ matrix.target }} --verbose
+
+      - name: Smoke-test packaged Linux Tor
+        if: startsWith(matrix.platform, 'ubuntu')
+        shell: bash
+        run: |
+          APPIMAGE_PATH="$(find "src-tauri/target/${{ matrix.target }}/debug/bundle" -type f -name '*.AppImage' -print -quit)"
+          test -n "$APPIMAGE_PATH"
+          node scripts/smoke-tor-artifact.mjs "$APPIMAGE_PATH" "${{ matrix.tor-target }}"
 
       - name: Upload preview artifact
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7

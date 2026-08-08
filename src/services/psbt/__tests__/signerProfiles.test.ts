@@ -60,7 +60,7 @@ describe('signer profiles', () => {
 
   it('throws on an unknown id rather than returning a silent default', () => {
     expect(() =>
-      signerProfile('nope' as Parameters<typeof signerProfile>[0])
+      signerProfile('generic-psbt' as Parameters<typeof signerProfile>[0])
     ).toThrow(/Unknown signer profile/);
   });
 });

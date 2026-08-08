@@ -32,6 +32,7 @@ describe('AddressManager', () => {
     await mgr.registerAddress({
       wallet_id: 3,
       address: 'bitcoincash:qaddr',
+      token_address: 'simpleledger:qaddr',
       balance: 0,
       hd_index: 5,
       change_index: 0,
@@ -41,6 +42,7 @@ describe('AddressManager', () => {
     expect(stmt.run).toHaveBeenCalledWith([
       3,
       'bitcoincash:qaddr',
+      'simpleledger:qaddr',
       0,
       5,
       0,

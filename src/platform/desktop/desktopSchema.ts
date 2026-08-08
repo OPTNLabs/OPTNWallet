@@ -98,9 +98,9 @@ export async function ensureDesktopLedgerTables(): Promise<void> {
  * Make sure the desktop-only wallet columns exist.
  *
  * Safe to call repeatedly and from several windows: it checks before altering,
- * and a column that already exists is left alone. Failure is logged rather than
- * thrown — a missing column breaks the feature that needs it, which will say so
- * itself, but must not stop the app from opening.
+ * and a column that already exists is left alone. Concurrent windows may both
+ * observe a missing column; a duplicate-column response means another window
+ * completed that same migration and is therefore treated as success.
  */
 export async function ensureDesktopWalletColumns(): Promise<void> {
   // Fast path only after a prior successful pass confirmed every column.
@@ -125,7 +125,13 @@ export async function ensureDesktopWalletColumns(): Promise<void> {
 
     for (const [column, type] of Object.entries(DESKTOP_WALLET_COLUMNS)) {
       if (!existing.has(column)) {
-        db.run(`ALTER TABLE wallets ADD COLUMN ${column} ${type};`);
+        try {
+          db.run(`ALTER TABLE wallets ADD COLUMN ${column} ${type};`);
+        } catch (error) {
+          if (!/duplicate column name/i.test(String(error))) {
+            throw error;
+          }
+        }
         existing.add(column);
       }
     }

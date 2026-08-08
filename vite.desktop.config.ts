@@ -18,6 +18,13 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 // dual endsWith checks. srcPath() is the one true way to build alias keys here.
 const srcPath = (rel: string) => normalizePath(resolvePath(__dirname, rel));
 
+// Vite may append a query to an importer/resolved module id (for example while
+// transforming an HMR request). Module swaps are source-file decisions, so a
+// query must never make the desktop wrapper look different from its own target.
+// Without stripping it, DesktopAppShell's import of the real AppShell is
+// rewritten back to DesktopAppShell and React recurses until the WebView stalls.
+const modulePath = (id: string) => normalizePath(id.replace(/[?#].*$/, ''));
+
 // Inject desktop.css and the HTTP bridge into the build without touching main.tsx.
 // The HTTP bridge is imported first so window.fetch is patched before any module
 // (e.g. the price feed) issues a request.
@@ -121,12 +128,12 @@ function desktopModuleSwapPlugin(): Plugin {
       if (!importer) return null;
       const resolved = await this.resolve(source, importer, { ...options, skipSelf: true });
       if (!resolved) return null;
-      const target = MODULE_SWAPS.get(normalizePath(resolved.id));
+      const target = MODULE_SWAPS.get(modulePath(resolved.id));
       if (!target) return null;
       // When the replacement module itself imports the original (e.g.
       // DesktopAppShell imports the real AppShell), let it through untouched —
       // otherwise the swap would point the module at itself.
-      if (normalizePath(importer) === target) return null;
+      if (modulePath(importer) === target) return null;
       return target;
     },
   };

@@ -339,6 +339,11 @@ export function buildWatchOnlyPsbt(
     lockingBytecode: changeBytecode,
     satoshis: changeSats,
   };
+  if (!!params.changeRedeemScriptHex !== !!params.changeDerivations) {
+    throw new Error(
+      'Multisig change needs both the redeem script and cosigner derivations.'
+    );
+  }
   if (params.changeRedeemScriptHex && params.changeDerivations) {
     const changeDerivations = params.changeDerivations.map((cosigner) => {
       const fingerprint = hexToBin(cosigner.masterFingerprintHex);
