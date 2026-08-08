@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import {
   secp256k1,
   createVirtualMachineBCH2023,
@@ -10,10 +10,15 @@ import {
   type TransactionCommon,
 } from '@bitauth/libauth';
 import { hash160 } from '@cashscript/utils';
-import { runFusionRound, type RoundMessage, type RoundTransport, type RoundParams } from '../fusionSession';
+import {
+  runFusionRound,
+  type RoundMessage,
+  type RoundTransport,
+  type RoundParams,
+} from '../fusionSession';
 import { assembleFusionTx, type PeerContribution } from '../fusionRound';
 import { electCoordinator } from '../fusion';
-import { toLibauthTx } from '../fusionSign';
+import { signMyInputs, toLibauthTx } from '../fusionSign';
 
 /** Ask the real election who coordinates. Never restate the rule here: it is
  *  bound to the candidate set (fusion.ts), so a test that assumes "lowest
@@ -34,7 +39,8 @@ function keypair(seed: number): { priv: Uint8Array; pubHex: string } {
   if (typeof pub === 'string') throw new Error(pub);
   return { priv, pubHex: binToHex(pub) };
 }
-const p2pkhHex = (pubHex: string) => binToHex(encodeLockingBytecodeP2pkh(hash160(hexToBin(pubHex))));
+const p2pkhHex = (pubHex: string) =>
+  binToHex(encodeLockingBytecodeP2pkh(hash160(hexToBin(pubHex))));
 
 /** In-memory bus modelling a Nostr relay's store-and-forward: a message sent to a
  *  peer that hasn't subscribed yet is buffered and flushed when it does — so the
@@ -43,7 +49,8 @@ type Handler = (from: string, msg: RoundMessage) => void;
 class Hub {
   private handlers = new Map<string, Handler[]>();
   private mailbox = new Map<string, Array<[string, RoundMessage]>>();
-  readonly sent: Array<{ from: string; to: string; message: RoundMessage }> = [];
+  readonly sent: Array<{ from: string; to: string; message: RoundMessage }> =
+    [];
 
   constructor(
     private readonly transform?: (
@@ -65,12 +72,16 @@ class Hub {
       send: async (to, msg) => {
         const message = this.transform?.(me, to, msg) ?? msg;
         this.sent.push({ from: me, to, message });
+        const deliveredFrom =
+          message.type === 'outputs' || message.type === 'onion_output'
+            ? '9'.repeat(64)
+            : me;
         const hs = this.handlers.get(to);
         if (hs && hs.length) {
-          for (const h of hs) queueMicrotask(() => h(me, message));
+          for (const h of hs) queueMicrotask(() => h(deliveredFrom, message));
         } else {
           const box = this.mailbox.get(to) ?? [];
-          box.push([me, message]);
+          box.push([deliveredFrom, message]);
           this.mailbox.set(to, box);
         }
       },
@@ -78,8 +89,13 @@ class Hub {
         this.handlers.set(me, [...(this.handlers.get(me) ?? []), handler]);
         const buffered = this.mailbox.get(me) ?? [];
         this.mailbox.set(me, []);
-        for (const [from, msg] of buffered) queueMicrotask(() => handler(from, msg));
-        return () => this.handlers.set(me, (this.handlers.get(me) ?? []).filter((h) => h !== handler));
+        for (const [from, msg] of buffered)
+          queueMicrotask(() => handler(from, msg));
+        return () =>
+          this.handlers.set(
+            me,
+            (this.handlers.get(me) ?? []).filter((h) => h !== handler)
+          );
       },
     };
   }
@@ -139,15 +155,35 @@ describe('P2P fusion round choreography (3 peers, in-memory)', () => {
       const outKey = keypair(n * 10 + 2);
       const round = keypair(n * 10 + 3); // pool/announce ephemeral identity
       const contribution: PeerContribution = {
-        inputs: [{ prevTxid: `${n}${'a'.repeat(63)}`, prevIndex: n, value: 100_000, pubkey: inKey.pubHex }],
+        inputs: [
+          {
+            prevTxid: `${n}${'a'.repeat(63)}`,
+            prevIndex: n,
+            value: 100_000,
+            pubkey: inKey.pubHex,
+          },
+        ],
         outputs: [{ script: p2pkhHex(outKey.pubHex), value: 99_600 }],
       };
-      return { round, keys: new Map([[inKey.pubHex, inKey.priv], [round.pubHex, round.priv]]), contribution };
+      return {
+        round,
+        keys: new Map([
+          [inKey.pubHex, inKey.priv],
+          [round.pubHex, round.priv],
+        ]),
+        contribution,
+      };
     });
 
     const participants = peers.map((p) => p.round.pubHex);
     const hub = new Hub();
     let broadcasts = 0;
+    const signingBoundary = vi.fn(
+      async (
+        tx: ReturnType<typeof assembleFusionTx>,
+        keys: Map<string, Uint8Array>
+      ) => signMyInputs(tx, keys)
+    );
     const broadcast = async (txHex: string): Promise<string> => {
       broadcasts += 1;
       const decoded = decodeTransaction(hexToBin(txHex));
@@ -164,6 +200,7 @@ describe('P2P fusion round choreography (3 peers, in-memory)', () => {
           feerate: 1000,
           myContribution: p.contribution,
           keysByPubkey: p.keys,
+          sign: (tx) => signingBoundary(tx, p.keys),
           broadcast,
           timeoutMs: 5000,
           jitterMs: [0, 0],
@@ -178,6 +215,7 @@ describe('P2P fusion round choreography (3 peers, in-memory)', () => {
     const txHexes = new Set(results.map((r) => r.txHex));
     expect(txHexes.size).toBe(1);
     expect(broadcasts).toBe(1);
+    expect(signingBoundary).toHaveBeenCalledTimes(peers.length);
 
     // The merged, multi-party-signed tx passes libauth's consensus VM.
     const finalHex = results[0].txHex;
@@ -202,10 +240,24 @@ describe('P2P fusion round choreography (3 peers, in-memory)', () => {
       const outKey = keypair(n * 10 + 2);
       const round = keypair(n * 10 + 3);
       const contribution: PeerContribution = {
-        inputs: [{ prevTxid: `${n}${'a'.repeat(63)}`, prevIndex: n, value: 100_000, pubkey: inKey.pubHex }],
+        inputs: [
+          {
+            prevTxid: `${n}${'a'.repeat(63)}`,
+            prevIndex: n,
+            value: 100_000,
+            pubkey: inKey.pubHex,
+          },
+        ],
         outputs: [{ script: p2pkhHex(outKey.pubHex), value: 99_600 }],
       };
-      return { round, keys: new Map([[inKey.pubHex, inKey.priv], [round.pubHex, round.priv]]), contribution };
+      return {
+        round,
+        keys: new Map([
+          [inKey.pubHex, inKey.priv],
+          [round.pubHex, round.priv],
+        ]),
+        contribution,
+      };
     });
 
     const participants = peers.map((p) => p.round.pubHex);
@@ -238,7 +290,9 @@ describe('P2P fusion round choreography (3 peers, in-memory)', () => {
 
     // The mix-net actually carried the outputs — not a silent fall back to
     // plaintext, which is how this used to pass without running at all.
-    const onionSends = hub.sent.filter((m) => m.message.type === 'onion_output');
+    const onionSends = hub.sent.filter(
+      (m) => m.message.type === 'onion_output'
+    );
     expect(onionSends.length).toBeGreaterThan(0);
     const declares = hub.sent.filter((m) => m.message.type === 'onion_declare');
     expect(declares.length).toBeGreaterThan(0);
@@ -254,12 +308,16 @@ describe('P2P fusion round choreography (3 peers, in-memory)', () => {
     expect(new Set(results.map((r) => r.txid)).size).toBe(1);
     expect(broadcasts).toBe(1);
 
-    const decodedOnion = decodeTransaction(hexToBin(results[0].txHex)) as TransactionCommon;
+    const decodedOnion = decodeTransaction(
+      hexToBin(results[0].txHex)
+    ) as TransactionCommon;
     const { sourceOutputs: onionSources } = toLibauthTx(
       assembleFusionTx(peers.map((p) => p.contribution))
     );
     const onionVm = createVirtualMachineBCH2023();
-    expect(onionVm.verify({ transaction: decodedOnion, sourceOutputs: onionSources })).toBe(true);
+    expect(
+      onionVm.verify({ transaction: decodedOnion, sourceOutputs: onionSources })
+    ).toBe(true);
     expect(decodedOnion.inputs).toHaveLength(3);
     expect(decodedOnion.outputs).toHaveLength(3);
     expect(hub.activeHandlerCount()).toBe(0);
@@ -292,13 +350,14 @@ describe('P2P fusion round choreography (3 peers, in-memory)', () => {
     // sum(outputs) !== N (random 2–4 outputs/peer from planP2pOutputValues).
     const peers = [1, 2, 3].map((n) => {
       const inKey = keypair(n * 10 + 1);
-      const outA = keypair(n * 10 + 2);
-      const outB = keypair(n * 10 + 3);
+      const outputKeys = Array.from({ length: n }, (_, i) =>
+        keypair(n * 100 + i + 2)
+      );
       const round = keypair(n * 10 + 4);
       const outCount = n; // 1, 2, 3 — sum 6 ≠ 3 peers
       const perOut = Math.floor(99_500 / outCount);
       const outputs = Array.from({ length: outCount }, (_, i) => ({
-        script: p2pkhHex(i === 0 ? outA.pubHex : outB.pubHex),
+        script: p2pkhHex(outputKeys[i].pubHex),
         value: perOut,
       }));
       // Burn remainder into first output so fee stays sane.
@@ -349,10 +408,77 @@ describe('P2P fusion round choreography (3 peers, in-memory)', () => {
     );
     expect(new Set(results.map((r) => r.txid)).size).toBe(1);
     expect(broadcasts).toBe(1);
-    const totalOutputs = peers.reduce((s, p) => s + p.contribution.outputs.length, 0);
+    const totalOutputs = peers.reduce(
+      (s, p) => s + p.contribution.outputs.length,
+      0
+    );
     expect(totalOutputs).toBe(6);
-    const decoded = decodeTransaction(hexToBin(results[0].txHex)) as TransactionCommon;
+    const decoded = decodeTransaction(
+      hexToBin(results[0].txHex)
+    ) as TransactionCommon;
     expect(decoded.outputs).toHaveLength(6);
+  });
+
+  it('rejects a malicious final peeler that alters an authorized output', async () => {
+    const peers = makePeers();
+    const participants = peers.map((peer) => peer.round.pubHex);
+    const coordinator = coordinatorOf(participants);
+    let altered = false;
+    const hub = new Hub((from, to, message) => {
+      if (!altered && to === coordinator && message.type === 'outputs') {
+        altered = true;
+        return {
+          ...message,
+          outputs: message.outputs.map((output, index) =>
+            index === 0
+              ? {
+                  ...output,
+                  credentialSig: `${output.credentialSig.slice(0, -2)}${
+                    output.credentialSig.endsWith('00') ? '01' : '00'
+                  }`,
+                }
+              : output
+          ),
+        };
+      }
+      return message;
+    });
+    let broadcasts = 0;
+
+    const settled = await Promise.allSettled(
+      peers.map((peer) =>
+        runFusionRound(
+          {
+            myPubkey: peer.round.pubHex,
+            participants,
+            network: 'chipnet',
+            tier: 100_000,
+            feerate: 1_000,
+            myContribution: peer.contribution,
+            keysByPubkey: peer.keys,
+            broadcast: async (txHex) => {
+              broadcasts += 1;
+              return txidOf(txHex);
+            },
+            timeoutMs: 1_500,
+            jitterMs: [0, 0],
+          },
+          hub.transportFor(peer.round.pubHex)
+        )
+      )
+    );
+
+    expect(altered).toBe(true);
+    expect(broadcasts).toBe(0);
+    expect(settled.every((result) => result.status === 'rejected')).toBe(true);
+    expect(
+      settled.some(
+        (result) =>
+          result.status === 'rejected' &&
+          /output credential|protocol fault/i.test(String(result.reason))
+      )
+    ).toBe(true);
+    expect(hub.activeHandlerCount()).toBe(0);
   });
 
   it('coordinator VM-validates every peer signature before broadcast', async () => {
@@ -434,9 +560,7 @@ describe('P2P fusion round choreography (3 peers, in-memory)', () => {
               return txidOf(txHex);
             },
             signal:
-              peer.round.pubHex === coordinator
-                ? controller.signal
-                : undefined,
+              peer.round.pubHex === coordinator ? controller.signal : undefined,
             onPhase:
               peer.round.pubHex === coordinator
                 ? (phase) => {
@@ -499,9 +623,9 @@ describe('P2P fusion round choreography (3 peers, in-memory)', () => {
     const results = await Promise.all(promises);
     expect(new Set(results.map((result) => result.txid)).size).toBe(1);
     expect(hub.activeHandlerCount()).toBe(0);
-    expect(
-      hub.sent.some((entry) => entry.message.type === 'abort')
-    ).toBe(false);
+    expect(hub.sent.some((entry) => entry.message.type === 'abort')).toBe(
+      false
+    );
   });
 
   it('rejects truthfully when an in-flight broadcast fails after cancellation', async () => {
@@ -531,9 +655,7 @@ describe('P2P fusion round choreography (3 peers, in-memory)', () => {
               return pending.promise;
             },
             signal:
-              peer.round.pubHex === coordinator
-                ? controller.signal
-                : undefined,
+              peer.round.pubHex === coordinator ? controller.signal : undefined,
             timeoutMs: 1_000,
             jitterMs: [0, 0],
           },

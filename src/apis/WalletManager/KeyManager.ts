@@ -113,8 +113,10 @@ export default function KeyManager() {
       [];
     query.free();
 
-    const mnemonic = await SecretCryptoService.decryptText(toString(row[0]));
-    const passphrase = await SecretCryptoService.decryptText(toString(row[1]));
+    const [mnemonic, passphrase] = await SecretCryptoService.decryptTextBatch(
+      [toString(row[0]), toString(row[1])],
+      wallet_id
+    );
     const networkType =
       row[2] === Network.MAINNET
         ? Network.MAINNET

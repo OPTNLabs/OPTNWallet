@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   acquireRoundLease,
+  forceClearRoundLease,
   releaseRoundLease,
   tryClaimAutoCooldown,
   lastAutoAttemptAt,
@@ -111,13 +112,51 @@ describe('cross-window fusion lease', () => {
     expect(await acquireRoundLease(2)).not.toBeNull();
   });
 
-  it('falls back to storage-only lease when no lock manager exists', async () => {
+  it('fails closed for every new fee-spending lease without Web Locks', async () => {
     vi.stubGlobal('navigator', {});
-    // Single-window WebViews without Web Locks still fuse; stale reclaim
-    // remains the exclusivity backstop.
-    expect(await acquireRoundLease(2)).not.toBeNull();
     expect(await acquireRoundLease(2)).toBeNull();
+    expect(globalThis.localStorage.getItem('optn-fusion-lease-2')).toBeNull();
     expect(await tryClaimAutoCooldown(2, COOLDOWN)).toBe(false);
+  });
+
+  it('re-reads under the wallet lock and preserves a fresh lease acquired after a stale observation', async () => {
+    const storage = globalThis.localStorage as unknown as MemoryStorage;
+    const now = 1_000_000;
+    storage.setItem(
+      'optn-fusion-lease-2',
+      JSON.stringify({ owner: 'stale', at: now - 60_000 })
+    );
+    vi.stubGlobal('navigator', {
+      locks: {
+        request: async <T>(_name: string, fn: () => Promise<T>): Promise<T> => {
+          storage.setItem(
+            'optn-fusion-lease-2',
+            JSON.stringify({ owner: 'fresh-window', at: now })
+          );
+          return fn();
+        },
+      },
+    });
+    const nowSpy = vi.spyOn(Date, 'now').mockReturnValue(now);
+
+    expect(await forceClearRoundLease(2)).toBe(false);
+    expect(JSON.parse(storage.getItem('optn-fusion-lease-2') ?? '{}')).toEqual({
+      owner: 'fresh-window',
+      at: now,
+    });
+    nowSpy.mockRestore();
+  });
+
+  it('fails closed without Web Locks and never removes a stale lease', async () => {
+    const storage = globalThis.localStorage as unknown as MemoryStorage;
+    storage.setItem(
+      'optn-fusion-lease-2',
+      JSON.stringify({ owner: 'stale', at: 1 })
+    );
+    vi.stubGlobal('navigator', {});
+
+    expect(await forceClearRoundLease(2)).toBe(false);
+    expect(storage.getItem('optn-fusion-lease-2')).not.toBeNull();
   });
 });
 

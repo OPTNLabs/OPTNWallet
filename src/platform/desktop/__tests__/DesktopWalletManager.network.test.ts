@@ -78,6 +78,9 @@ describe('DesktopWalletManager network cleanup', () => {
       0,
       20
     );
+    expect(dbService.scheduleDatabaseSave).not.toHaveBeenCalled();
+    expect(dbService.flushDatabaseToFile).toHaveBeenCalledOnce();
+    expect(dbService.flushDatabaseToFile).toHaveBeenCalledWith(6);
     expect(mockedVaultCache.clear.mock.invocationCallOrder[0]).toBeLessThan(
       mockedKeyService.bootstrapInitialAddressBatch.mock.invocationCallOrder[0]
     );
@@ -116,7 +119,9 @@ describe('DesktopWalletManager network cleanup', () => {
        WHERE id = ?`,
       [1, Network.CHIPNET, 7]
     );
-    expect(dbService.scheduleDatabaseSave).toHaveBeenCalledOnce();
+    // The immediate wallet-scoped flush is the persistence operation. Queuing
+    // a generic save first makes performQueuedSave write twice on first unlock.
+    expect(dbService.scheduleDatabaseSave).not.toHaveBeenCalled();
     expect(dbService.flushDatabaseToFile).toHaveBeenCalledWith(7);
     expect(mockedLog.info).toHaveBeenCalledWith(
       'NetworkPurge',

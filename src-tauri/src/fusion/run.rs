@@ -19,6 +19,7 @@ use std::collections::{HashMap, HashSet};
 use std::future::Future;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
+use futures_util::future::join_all;
 use k256::elliptic_curve::PrimeField;
 use k256::Scalar;
 use prost::Message;
@@ -37,8 +38,8 @@ use super::server_plan::{
 use super::session::{build_covert_component, calc_initial_hash, calc_round_hash};
 use super::tx::FusionTx;
 use super::{
-    connect_stream, is_local_server, pb, recv_frame, recv_frame_unbounded, send_frame,
-    Transport, VERSION,
+    connect_stream, is_local_server, pb, recv_frame, recv_frame_unbounded, send_frame, Transport,
+    VERSION,
 };
 
 // Timing relative to covert_T0 (StartRound receipt), from protocol.py.
@@ -55,18 +56,12 @@ const COVERT_CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
 const COVERT_SUBMIT_WINDOW: Duration = Duration::from_secs(5);
 const COVERT_SUBMIT_TIMEOUT: Duration = Duration::from_secs(3);
 const COVERT_CONNECT_SPARES: usize = 6;
-/// JoinPools alone / no progress — fail and let Auto re-queue (0-conf chaining
-/// wants this as fast as P2P gather, not a multi-minute sit).
-///
-/// Not in protocol.py. EC Auto only applies AUTOFUSE_INACTIVE_TIMEOUT=600 when
-/// *no* tier has a scheduled start (`besttime is None` in fusion.py). We use a
-/// short alone budget, then extend when the server reports peers or
-/// `time_remaining` (mainnet start_time_min can be ~400s after the pool fills).
-const JOIN_ALONE_WAIT: Duration = Duration::from_secs(120);
-/// Ceiling while the pool is active (peers present, full, or start scheduled).
-const JOIN_ACTIVE_CEILING: Duration = Duration::from_secs(600);
-/// Absolute max wait when server advertises time_remaining (covers start_time_max).
-const JOIN_STARTING_CEILING: Duration = Duration::from_secs(1_260);
+/// plugin.py AUTOFUSE_INACTIVE_TIMEOUT. This is policy, not a protocol phase:
+/// it is checked only while TierStatusUpdate has no `time_remaining` besttime.
+pub const EC_AUTOFUSE_INACTIVE_TIMEOUT: Duration = Duration::from_secs(600);
+/// fusion.py expects a status update every five seconds and gives the server
+/// ten seconds before treating the main connection as failed.
+const JOIN_STATUS_TIMEOUT: Duration = Duration::from_secs(10);
 /// protocol.py MAX_CLOCK_DISCREPANCY = 5.0
 const MAX_CLOCK_DISCREPANCY_SECS: u64 = 5;
 const BLAME_PROOFS_WAIT: Duration = Duration::from_secs(6);
@@ -108,8 +103,9 @@ pub struct FusionRunParams<'a> {
     /// A local main server may still announce a remote covert endpoint, so the
     /// main connection's localhost exemption cannot be reused for that route.
     pub remote_transport: Option<Transport<'a>>,
-    /// Wallet-configured Electrum endpoint used only to validate peer inputs
-    /// during blame. It is never supplied by the Fusion server.
+    /// Wallet-configured Electrum endpoint chain used to revalidate our inputs
+    /// at both EC safety boundaries and to validate peer inputs during blame.
+    /// It is never supplied by the Fusion server.
     pub lookup_endpoints: Vec<ElectrumEndpoint>,
     /// Independent privacy policy for the lookup endpoint. Remote lookups must
     /// use Tor even when the Fusion server itself is local.
@@ -118,6 +114,9 @@ pub struct FusionRunParams<'a> {
     /// Defaults (via `FusionTiming::default`) match protocol.py (+5s / +20s);
     /// the integration test shrinks them so it doesn't wait 20 real seconds.
     pub timing: FusionTiming,
+    /// Electron Cash Auto passes 600 seconds; manual rounds pass None. The
+    /// deadline applies only while the server has no advertised best time.
+    pub join_inactive_timeout: Option<Duration>,
     pub cancel: CancelFlag,
     /// Required snapshot from the renderer's read-only status probe.
     pub expected_hello: ExpectedHello,
@@ -161,6 +160,27 @@ impl Default for FusionTiming {
             sigs_deadline: T_END_SIGS,
             conclusion_at: T_EXPECTING_CONCLUSION,
         }
+    }
+}
+
+/// Fixed EC Auto inactivity deadline. `besttime` suppresses the check for that
+/// status update, but never moves or resets the deadline.
+#[derive(Clone, Copy)]
+struct JoinInactivity {
+    deadline: Option<Instant>,
+}
+
+impl JoinInactivity {
+    fn new(started: Instant, timeout: Option<Duration>) -> Self {
+        Self {
+            // An unrepresentable duration must fail closed, never silently
+            // turn an Auto deadline into an unlimited manual wait.
+            deadline: timeout.map(|duration| started.checked_add(duration).unwrap_or(started)),
+        }
+    }
+
+    fn expired(self, now: Instant, has_besttime: bool) -> bool {
+        !has_besttime && self.deadline.is_some_and(|deadline| now > deadline)
     }
 }
 
@@ -501,6 +521,45 @@ async fn verify_input_anywhere(
     Err(last_error)
 }
 
+/// Revalidate every wallet-owned input against the wallet-configured Electrum
+/// chain. Inputs run concurrently so a wallet with many coins pays at most one
+/// endpoint timeout per fallback tier, not one timeout per coin. Each input
+/// still tries endpoints in configured order, and ambiguity is fatal without
+/// assigning blame.
+async fn revalidate_own_inputs(
+    inputs: &[FusionInputKey],
+    endpoints: &[ElectrumEndpoint],
+    transport: Transport<'_>,
+    boundary: &str,
+) -> Result<(), String> {
+    let checks = inputs.iter().map(|input| {
+        let txid = display_txid_to_wire(&input.prev_txid);
+        let component = txid.map(|prev_txid| pb::InputComponent {
+            prev_txid: prev_txid.to_vec(),
+            prev_index: input.prev_index,
+            pubkey: input.pubkey.clone(),
+            amount: input.value,
+        });
+        async move {
+            let component =
+                component.map_err(|_| "wallet input has an invalid transaction id".to_string())?;
+            match verify_input_anywhere(endpoints, transport, &component).await {
+                Ok(InputLookup::Match) => Ok(()),
+                Ok(InputLookup::Mismatch(reason)) => Err(format!(
+                    "wallet input is stale or spent before {boundary}: {reason}"
+                )),
+                Err(error) => Err(format!(
+                    "could not safely revalidate wallet inputs before {boundary}: {error}"
+                )),
+            }
+        }
+    });
+    for result in join_all(checks).await {
+        result?;
+    }
+    Ok(())
+}
+
 async fn run_blame_phase<S>(
     main: &mut S,
     cancel: &CancelFlag,
@@ -558,8 +617,7 @@ where
     .map_err(|error| format!("could not validate relayed blame proofs: {error}"))?;
 
     for required in &review.inputs_requiring_blockchain_lookup {
-        match verify_input_anywhere(lookup_endpoints, lookup_transport, &required.input).await
-        {
+        match verify_input_anywhere(lookup_endpoints, lookup_transport, &required.input).await {
             Ok(InputLookup::Match) => {}
             Ok(InputLookup::Mismatch(reason)) => {
                 review.blames.blames.push(
@@ -642,6 +700,7 @@ pub async fn run_fusion(params: FusionRunParams<'_>) -> Result<FusionOutcome, St
         lookup_endpoints,
         lookup_transport,
         timing,
+        join_inactive_timeout,
         cancel,
         expected_hello,
         wallet_tag_seed,
@@ -654,11 +713,8 @@ pub async fn run_fusion(params: FusionRunParams<'_>) -> Result<FusionOutcome, St
 
     // --- Main connection: hello -> join ---
     log::info!("[FusionTrace] native connecting main channel");
-    let mut main = cancellable(
-        &cancel,
-        connect_stream(host, port, use_ssl, main_transport),
-    )
-    .await?;
+    let mut main =
+        cancellable(&cancel, connect_stream(host, port, use_ssl, main_transport)).await?;
     log::info!("[FusionTrace] native main channel connected");
 
     let hello = pb::ClientMessage {
@@ -732,51 +788,32 @@ pub async fn run_fusion(params: FusionRunParams<'_>) -> Result<FusionOutcome, St
     );
 
     // --- Wait for one of the registered tiers to start (FusionBegin) ---
-    // EC: short sit when idle (we use 120s alone); extend when the server shows
-    // peers or time_remaining (mainnet may schedule start ~400s after full).
-    // 0-conf Auto re-queues after alone timeout — no 10‑minute dead wait.
+    // EC enters JoinPools immediately. Auto has one fixed 600-second inactivity
+    // deadline, checked only on updates with no advertised besttime; manual has
+    // no such deadline. A scheduled pool is allowed to follow the server's own
+    // timing rather than a client-created UTC gate or active-pool ceiling.
     let (begin, fusion_begin_at) = {
         let join_started = Instant::now();
-        let mut deadline = join_started + JOIN_ALONE_WAIT;
+        let inactivity = JoinInactivity::new(join_started, join_inactive_timeout);
         let mut queue_updates = 0usize;
-        // Best pool state seen while waiting, so a timeout can say WHY nobody
-        // joined instead of only that nobody did.
+        // Best pool state seen while waiting, so an inactivity result explains
+        // why no tier started.
         let mut best_tier: Option<(u64, u32, u32)> = None;
         loop {
-            let remaining = deadline.saturating_duration_since(Instant::now());
-            if remaining.is_zero() {
-                let detail = match best_tier {
-                    Some((tier, players, min_players)) => format!(
-                        "best tier {tier} sats had {players}/{min_players} players"
-                    ),
-                    None => "the server never reported pool status".to_string(),
-                };
-                return Ok(FusionOutcome {
-                    ok: false,
-                    broadcast_verified: false,
-                    txid: None,
-                    tx_hex: None,
-                    message: format!(
-                        "no other players joined in time ({detail}); registered {} tier(s)",
-                        indexed_plans.len()
-                    ),
-                });
-            }
             let message = tokio::select! {
                 biased;
                 _ = cancel.cancelled() => return Err("fusion round cancelled".into()),
                 result = tokio::time::timeout(
-                    remaining,
+                    JOIN_STATUS_TIMEOUT,
                     recv_server_unbounded(&mut main),
                 ) => result,
             };
             match message {
-                Err(_) => continue,
+                Err(_) => return Err("timed out waiting for Fusion server pool status".into()),
                 Ok(msg) => match msg? {
                     pb::server_message::Msg::Tierstatusupdate(update) => {
                         queue_updates += 1;
                         let mut max_players = 0u32;
-                        let mut any_starting_soon = false;
                         let mut min_time_remaining: Option<u32> = None;
                         for (tier, status) in &update.statuses {
                             let players = status.players.unwrap_or(0);
@@ -789,31 +826,30 @@ pub async fn run_fusion(params: FusionRunParams<'_>) -> Result<FusionOutcome, St
                             if better {
                                 best_tier = Some((*tier, players, min_players));
                             }
-                            if players >= min_players && min_players > 0 {
-                                any_starting_soon = true;
-                            }
                             if let Some(tr) = status.time_remaining {
-                                any_starting_soon = true;
                                 min_time_remaining = Some(match min_time_remaining {
                                     Some(prev) => prev.min(tr),
                                     None => tr,
                                 });
                             }
                         }
-                        // Extend wait only when the pool is real / scheduled —
-                        // not for a solitary client (that is alone → fast retry).
-                        if let Some(tr) = min_time_remaining {
-                            let extend = Duration::from_secs(u64::from(tr).saturating_add(45));
-                            let candidate = Instant::now() + extend;
-                            let cap = join_started + JOIN_STARTING_CEILING;
-                            if candidate > deadline {
-                                deadline = candidate.min(cap);
-                            }
-                        } else if max_players >= 2 || any_starting_soon {
-                            let active_end = join_started + JOIN_ACTIVE_CEILING;
-                            if active_end > deadline {
-                                deadline = active_end;
-                            }
+                        if inactivity.expired(Instant::now(), min_time_remaining.is_some()) {
+                            let detail = match best_tier {
+                                Some((tier, players, min_players)) => format!(
+                                    "best tier {tier} sats had {players}/{min_players} players"
+                                ),
+                                None => "the server never reported pool status".to_string(),
+                            };
+                            return Ok(FusionOutcome {
+                                ok: false,
+                                broadcast_verified: false,
+                                txid: None,
+                                tx_hex: None,
+                                message: format!(
+                                    "stopping due to inactivity ({detail}); registered {} tier(s)",
+                                    indexed_plans.len()
+                                ),
+                            });
                         }
                         if queue_updates == 1 || queue_updates % 5 == 0 {
                             let occupied = update
@@ -822,12 +858,12 @@ pub async fn run_fusion(params: FusionRunParams<'_>) -> Result<FusionOutcome, St
                                 .filter(|status| status.players.unwrap_or(0) > 1)
                                 .count();
                             log::info!(
-                                "[FusionTrace] native queue update={} statuses={} occupied={} max_players={} deadline_left={:.0}s",
+                                "[FusionTrace] native queue update={} statuses={} occupied={} max_players={} besttime={:?}",
                                 queue_updates,
                                 update.statuses.len(),
                                 occupied,
                                 max_players,
-                                deadline.saturating_duration_since(Instant::now()).as_secs_f64()
+                                min_time_remaining
                             );
                         }
                         continue;
@@ -894,9 +930,9 @@ pub async fn run_fusion(params: FusionRunParams<'_>) -> Result<FusionOutcome, St
     let mut rounds_run = 0usize;
 
     loop {
-    rounds_run += 1;
-    if rounds_run > MAX_ROUNDS_PER_SESSION {
-        return Ok(FusionOutcome {
+        rounds_run += 1;
+        if rounds_run > MAX_ROUNDS_PER_SESSION {
+            return Ok(FusionOutcome {
             ok: false,
             broadcast_verified: false,
             txid: None,
@@ -905,188 +941,191 @@ pub async fn run_fusion(params: FusionRunParams<'_>) -> Result<FusionOutcome, St
                 "fusion server restarted the round {MAX_ROUNDS_PER_SESSION} times without completing"
             ),
         });
-    }
-    // --- StartRound (repeated on the same main/covert connections after blame) ---
-    let start_deadline = if first_round {
-        fusion_begin_at + timing.warmup_expected + timing.warmup_slop + Duration::from_secs(1)
-    } else {
-        Instant::now() + RESTARTED_ROUND_WAIT
-    };
-    let start = match tokio::select! {
-        biased;
-        _ = cancel.cancelled() => return Err("fusion round cancelled".into()),
-        result = tokio::time::timeout(
-            start_deadline.saturating_duration_since(Instant::now()),
-            recv_server_unbounded(&mut main),
-        ) => result,
-    } {
-        Ok(m) => match m? {
-            pb::server_message::Msg::Startround(s) => s,
-            pb::server_message::Msg::Error(e) => {
-                return Err(format!(
-                    "server error at start: {}",
-                    e.message.unwrap_or_default()
-                ))
-            }
-            _ => return Err("expected StartRound".into()),
-        },
-        Err(_) => return Err("timed out waiting for StartRound".into()),
-    };
-    log::info!("[FusionTrace] native StartRound received");
-    let covert_t0 = Instant::now();
-    validate_server_time(start.server_time)?;
-    if first_round {
-        validate_warmup(fusion_begin_at, covert_t0, timing)?;
-        first_round = false;
-    }
-    let round_pubkey = start.round_pubkey.clone();
-    let round_time = start.server_time;
-
-    // Final cancellation point before committing keys and amounts.
-    cancel.check()?;
-
-    // --- Build + send PlayerCommit ---
-    let fusion_inputs: Vec<FusionInput> = inputs
-        .iter()
-        .map(|i| FusionInput {
-            prev_txid: i.prev_txid.clone(),
-            prev_index: i.prev_index,
-            pubkey: i.pubkey.clone(),
-            value: i.value,
-        })
-        .collect();
-    let fusion_outputs: Vec<FusionOutput> = output_scripts
-        .iter()
-        .zip(&output_values)
-        .map(|(s, v)| FusionOutput {
-            scriptpubkey: s.clone(),
-            value: *v,
-        })
-        .collect();
-
-    let rechecked_plans = validate_and_index_plans(
-        &live_hello,
-        &input_pubkeys,
-        &input_values,
-        &all_output_scripts,
-        &tier_plans,
-    )?;
-    if rechecked_plans.get(&begin.tier) != Some(&selected_plan) {
-        return Err("selected tier plan changed before PlayerCommit".into());
-    }
-
-    let rc = build_round_commit(
-        &fusion_inputs,
-        &fusion_outputs,
-        num_components,
-        feerate,
-        &round_pubkey,
-        &start.blind_nonce_points,
-    )?;
-    if rc.excess_fee != selected_plan.excess_fee {
-        return Err("selected tier excess fee changed before PlayerCommit".into());
-    }
-
-    let commit = pb::ClientMessage {
-        msg: Some(pb::client_message::Msg::Playercommit(
-            rc.player_commit.clone(),
-        )),
-    };
-    cancellable(&cancel, send_frame(&mut main, &commit.encode_to_vec())).await?;
-
-    // --- BlindSigResponses -> finalize each into a component signature ---
-    let components_start = covert_t0 + timing.comps_at;
-    let scalars = match recv_server_before(
-        &mut main,
-        &cancel,
-        components_start,
-        "BlindSigResponses",
-    )
-    .await?
-    {
-        pb::server_message::Msg::Blindsigresponses(r) => r.scalars,
-        pb::server_message::Msg::Error(e) => {
-            return Err(format!(
-                "server error at blind sigs: {}",
-                e.message.unwrap_or_default()
-            ))
         }
-        _ => return Err("expected BlindSigResponses".into()),
-    };
-    if scalars.len() != rc.requests.len() {
-        return Err("blind sig response count mismatch".into());
-    }
-    let mut blind_sigs: Vec<[u8; 64]> = Vec::with_capacity(scalars.len());
-    for (req, s) in rc.requests.iter().zip(&scalars) {
-        let sb: [u8; 32] = s
-            .as_slice()
-            .try_into()
-            .map_err(|_| "blind sig scalar not 32 bytes")?;
-        blind_sigs.push(req.finalize(&sb, true)?);
-    }
-
-    // Last low-impact cancellation point before component disclosure.
-    cancel.check()?;
-    if covert_pool.is_none() {
-        let schedule = pending_covert_schedule
-            .take()
-            .ok_or_else(|| "covert connection schedule was already consumed".to_string())?;
-        covert_pool = Some(schedule.finish(components_start, &cancel).await?);
-    }
-    let pool = covert_pool
-        .as_mut()
-        .ok_or_else(|| "covert connection pool is unavailable".to_string())?;
-    pool.set_close_start(covert_t0 + T_START_CLOSE);
-    if pool.slot_count() != rc.components_sorted.len() {
-        return Err("covert slot count does not match the committed components".into());
-    }
-
-    // --- Covert component submission ---
-    let component_messages = rc
-        .components_sorted
-        .iter()
-        .zip(&blind_sigs)
-        .map(|(component, signature)| {
-            Some(build_covert_component(&round_pubkey, signature, component))
-        })
-        .collect::<Vec<_>>();
-
-    // From the first covert component onward, leaving early would reveal which
-    // connections belong to this wallet and can also strand the other players.
-    // Match Electron Cash's point-of-no-return behavior: finish this attempt
-    // (including blame/restart) even if the UI asks to cancel. The original
-    // cancellation flag is observed again before the next round commits.
-    let round_irreversible = CancelFlag::new();
-
-    // Download the shared material while the randomized covert submissions run.
-    let submit_components = pool.submit_phase(
-        components_start,
-        covert_t0 + timing.comps_deadline,
-        timing.submit_timeout,
-        component_messages,
-        &round_irreversible,
-    );
-    let receive_shared = async {
-        let shared_deadline = covert_t0 + timing.sigs_at;
-        let all_commitments = match recv_server_before(
-            &mut main,
-            &round_irreversible,
-            shared_deadline,
-            "AllCommitments",
-        )
-        .await?
-        {
-            pb::server_message::Msg::Allcommitments(message) => message.initial_commitments,
-            pb::server_message::Msg::Error(error) => {
-                return Err(format!(
-                    "server error at all-commitments: {}",
-                    error.message.unwrap_or_default()
-                ))
-            }
-            _ => return Err("expected AllCommitments".into()),
+        // --- StartRound (repeated on the same main/covert connections after blame) ---
+        let start_deadline = if first_round {
+            fusion_begin_at + timing.warmup_expected + timing.warmup_slop + Duration::from_secs(1)
+        } else {
+            Instant::now() + RESTARTED_ROUND_WAIT
         };
-        let shared =
-            match recv_server_before(
+        let start = match tokio::select! {
+            biased;
+            _ = cancel.cancelled() => return Err("fusion round cancelled".into()),
+            result = tokio::time::timeout(
+                start_deadline.saturating_duration_since(Instant::now()),
+                recv_server_unbounded(&mut main),
+            ) => result,
+        } {
+            Ok(m) => match m? {
+                pb::server_message::Msg::Startround(s) => s,
+                pb::server_message::Msg::Error(e) => {
+                    return Err(format!(
+                        "server error at start: {}",
+                        e.message.unwrap_or_default()
+                    ))
+                }
+                _ => return Err("expected StartRound".into()),
+            },
+            Err(_) => return Err("timed out waiting for StartRound".into()),
+        };
+        log::info!("[FusionTrace] native StartRound received");
+        let covert_t0 = Instant::now();
+        validate_server_time(start.server_time)?;
+        if first_round {
+            validate_warmup(fusion_begin_at, covert_t0, timing)?;
+            first_round = false;
+        }
+        let round_pubkey = start.round_pubkey.clone();
+        let round_time = start.server_time;
+
+        // Final cancellation point before committing keys and amounts.
+        cancel.check()?;
+
+        // --- Build + send PlayerCommit ---
+        let fusion_inputs: Vec<FusionInput> = inputs
+            .iter()
+            .map(|i| FusionInput {
+                prev_txid: i.prev_txid.clone(),
+                prev_index: i.prev_index,
+                pubkey: i.pubkey.clone(),
+                value: i.value,
+            })
+            .collect();
+        let fusion_outputs: Vec<FusionOutput> = output_scripts
+            .iter()
+            .zip(&output_values)
+            .map(|(s, v)| FusionOutput {
+                scriptpubkey: s.clone(),
+                value: *v,
+            })
+            .collect();
+
+        let rechecked_plans = validate_and_index_plans(
+            &live_hello,
+            &input_pubkeys,
+            &input_values,
+            &all_output_scripts,
+            &tier_plans,
+        )?;
+        if rechecked_plans.get(&begin.tier) != Some(&selected_plan) {
+            return Err("selected tier plan changed before PlayerCommit".into());
+        }
+
+        // Electron Cash's final `check_coins()` before PlayerCommit. Nothing
+        // amount/key-bearing has been disclosed if this fails.
+        cancellable(
+            &cancel,
+            revalidate_own_inputs(&inputs, &lookup_endpoints, lookup_transport, "PlayerCommit"),
+        )
+        .await?;
+
+        let rc = build_round_commit(
+            &fusion_inputs,
+            &fusion_outputs,
+            num_components,
+            feerate,
+            &round_pubkey,
+            &start.blind_nonce_points,
+        )?;
+        if rc.excess_fee != selected_plan.excess_fee {
+            return Err("selected tier excess fee changed before PlayerCommit".into());
+        }
+
+        let commit = pb::ClientMessage {
+            msg: Some(pb::client_message::Msg::Playercommit(
+                rc.player_commit.clone(),
+            )),
+        };
+        cancellable(&cancel, send_frame(&mut main, &commit.encode_to_vec())).await?;
+
+        // --- BlindSigResponses -> finalize each into a component signature ---
+        let components_start = covert_t0 + timing.comps_at;
+        let scalars =
+            match recv_server_before(&mut main, &cancel, components_start, "BlindSigResponses")
+                .await?
+            {
+                pb::server_message::Msg::Blindsigresponses(r) => r.scalars,
+                pb::server_message::Msg::Error(e) => {
+                    return Err(format!(
+                        "server error at blind sigs: {}",
+                        e.message.unwrap_or_default()
+                    ))
+                }
+                _ => return Err("expected BlindSigResponses".into()),
+            };
+        if scalars.len() != rc.requests.len() {
+            return Err("blind sig response count mismatch".into());
+        }
+        let mut blind_sigs: Vec<[u8; 64]> = Vec::with_capacity(scalars.len());
+        for (req, s) in rc.requests.iter().zip(&scalars) {
+            let sb: [u8; 32] = s
+                .as_slice()
+                .try_into()
+                .map_err(|_| "blind sig scalar not 32 bytes")?;
+            blind_sigs.push(req.finalize(&sb, true)?);
+        }
+
+        // Last low-impact cancellation point before component disclosure.
+        cancel.check()?;
+        if covert_pool.is_none() {
+            let schedule = pending_covert_schedule
+                .take()
+                .ok_or_else(|| "covert connection schedule was already consumed".to_string())?;
+            covert_pool = Some(schedule.finish(components_start, &cancel).await?);
+        }
+        let pool = covert_pool
+            .as_mut()
+            .ok_or_else(|| "covert connection pool is unavailable".to_string())?;
+        pool.set_close_start(covert_t0 + T_START_CLOSE);
+        if pool.slot_count() != rc.components_sorted.len() {
+            return Err("covert slot count does not match the committed components".into());
+        }
+
+        // --- Covert component submission ---
+        let component_messages = rc
+            .components_sorted
+            .iter()
+            .zip(&blind_sigs)
+            .map(|(component, signature)| {
+                Some(build_covert_component(&round_pubkey, signature, component))
+            })
+            .collect::<Vec<_>>();
+
+        // From the first covert component onward, leaving early would reveal which
+        // connections belong to this wallet and can also strand the other players.
+        // Match Electron Cash's point-of-no-return behavior: finish this attempt
+        // (including blame/restart) even if the UI asks to cancel. The original
+        // cancellation flag is observed again before the next round commits.
+        let round_irreversible = CancelFlag::new();
+
+        // Download the shared material while the randomized covert submissions run.
+        let submit_components = pool.submit_phase(
+            components_start,
+            covert_t0 + timing.comps_deadline,
+            timing.submit_timeout,
+            component_messages,
+            &round_irreversible,
+        );
+        let receive_shared = async {
+            let shared_deadline = covert_t0 + timing.sigs_at;
+            let all_commitments = match recv_server_before(
+                &mut main,
+                &round_irreversible,
+                shared_deadline,
+                "AllCommitments",
+            )
+            .await?
+            {
+                pb::server_message::Msg::Allcommitments(message) => message.initial_commitments,
+                pb::server_message::Msg::Error(error) => {
+                    return Err(format!(
+                        "server error at all-commitments: {}",
+                        error.message.unwrap_or_default()
+                    ))
+                }
+                _ => return Err("expected AllCommitments".into()),
+            };
+            let shared = match recv_server_before(
                 &mut main,
                 &round_irreversible,
                 shared_deadline,
@@ -1103,205 +1142,224 @@ pub async fn run_fusion(params: FusionRunParams<'_>) -> Result<FusionOutcome, St
                 }
                 _ => return Err("expected ShareCovertComponents".into()),
             };
-        Ok::<_, String>((
-            all_commitments,
-            shared.components,
-            shared.session_hash,
-            shared.skip_signatures.unwrap_or(false),
-        ))
-    };
-    let ((), (all_commitments, all_components, declared_hash, skip_signatures)) =
-        tokio::try_join!(submit_components, receive_shared)?;
-
-    let own_commitment_mapping = map_owned_items(
-        &rc.player_commit.initial_commitments,
-        &all_commitments,
-        "commitments",
-    )?;
-    let my_commitment_indices = global_indices_in_local_order(
-        &own_commitment_mapping,
-        rc.player_commit.initial_commitments.len(),
-        "commitments",
-    )?;
-    let own_component_slots =
-        map_owned_items(&rc.components_sorted, &all_components, "components")?;
-    let my_component_indices = global_indices_in_local_order(
-        &own_component_slots,
-        rc.components_sorted.len(),
-        "components",
-    )?;
-
-    // --- Verify the session hash (anti-spy) ---
-    let session_hash = calc_round_hash(
-        &last_hash,
-        &round_pubkey,
-        round_time,
-        &all_commitments,
-        &all_components,
-    );
-    if let Some(declared) = declared_hash {
-        if declared.as_slice() != session_hash.as_slice() {
-            return Err("session hash mismatch — server told players different things".into());
-        }
-    } else if !skip_signatures {
-        return Err("server omitted the CashFusion session hash".into());
-    }
-    // CashFusion chains every accepted round transcript, including failed
-    // rounds, into the transcript used after RestartRound.
-    last_hash = session_hash;
-
-    if skip_signatures {
-        pool.set_close_start(covert_t0 + T_START_CLOSE_BLAME);
-        run_blame_phase(
-            &mut main,
-            &round_irreversible,
-            &rc,
-            &all_commitments,
-            &all_components,
-            &my_commitment_indices,
-            &my_component_indices,
-            &[],
-            feerate,
-            &lookup_endpoints,
-            lookup_transport,
-        )
-        .await?;
-        continue;
-    }
-
-    let signing_plans = validate_and_index_plans(
-        &live_hello,
-        &input_pubkeys,
-        &input_values,
-        &all_output_scripts,
-        &tier_plans,
-    )?;
-    if signing_plans.get(&begin.tier) != Some(&selected_plan) {
-        return Err("selected tier plan changed before signing".into());
-    }
-
-    // --- Verify the shared transaction, then sign ONLY our exact inputs ---
-    verify_shared_transaction(&all_components, &inputs, &output_scripts, &output_values)?;
-    let ftx = FusionTx::from_components(&all_components, &session_hash)?;
-    let mut signature_messages = vec![None; pool.slot_count()];
-    let mut signed_inputs = 0usize;
-    for input_index in 0..ftx.num_inputs() {
-        let component_index = ftx
-            .input_component_index(input_index)
-            .ok_or("missing component index")?;
-        let component = pb::Component::decode(all_components[component_index].as_slice())
-            .map_err(|error| format!("component decode: {error}"))?;
-        let shared_input = match component.component {
-            Some(pb::component::Component::Input(input)) => input,
-            _ => continue,
-        };
-        let mut own_input = None;
-        for input in &inputs {
-            if input_matches_component(input, &shared_input)? {
-                own_input = Some(input);
-                break;
-            }
-        }
-        let Some(input_key) = own_input else {
-            continue;
-        };
-
-        let sighash = ftx.sighash(input_index)?;
-        let secret = scalar_from_privkey(&input_key.privkey)?;
-        let signature = schnorr::sign(secret, &sighash);
-        let slot = *own_component_slots
-            .get(&component_index)
-            .ok_or("wallet input is missing its covert component slot")?;
-        if signature_messages[slot].is_some() {
-            return Err("multiple transaction signatures mapped to one covert slot".into());
-        }
-        signature_messages[slot] = Some(build_covert_signature(
-            &round_pubkey,
-            input_index as u32,
-            &signature,
-        ));
-        signed_inputs += 1;
-    }
-    if signed_inputs != inputs.len() {
-        return Err("not every wallet input received a transaction signature".into());
-    }
-
-    let signatures_start = covert_t0 + timing.sigs_at;
-    if Instant::now() > signatures_start {
-        return Err("shared transaction verification missed the signature window".into());
-    }
-    // Component disclosure was already the privacy point of no return. Resolve
-    // the signature and result phases under the same non-cancellable attempt.
-    let submit_signatures = pool.submit_phase(
-        signatures_start,
-        covert_t0 + timing.sigs_deadline,
-        timing.submit_timeout,
-        signature_messages,
-        &round_irreversible,
-    );
-    let receive_result = recv_server_before(
-        &mut main,
-        &round_irreversible,
-        covert_t0 + timing.conclusion_at,
-        "FusionResult",
-    );
-    let ((), result_message) = tokio::try_join!(submit_signatures, receive_result)?;
-
-    // --- FusionResult ---
-    let result = match result_message {
-        pb::server_message::Msg::Fusionresult(r) => r,
-        pb::server_message::Msg::Restartround(_) => {
-            return Err("server sent RestartRound before the blame exchange".into())
-        }
-        pb::server_message::Msg::Error(e) => {
-            return Err(format!(
-                "server error at result: {}",
-                e.message.unwrap_or_default()
+            Ok::<_, String>((
+                all_commitments,
+                shared.components,
+                shared.session_hash,
+                shared.skip_signatures.unwrap_or(false),
             ))
-        }
-        _ => return Err("expected FusionResult".into()),
-    };
+        };
+        let ((), (all_commitments, all_components, declared_hash, skip_signatures)) =
+            tokio::try_join!(submit_components, receive_shared)?;
 
-    if !result.ok {
-        if result
-            .bad_components
-            .iter()
-            .any(|bad| my_component_indices.contains(&(*bad as usize)))
-        {
-            return Err("server identified one of this wallet's valid components as bad".into());
-        }
-        pool.set_close_start(covert_t0 + T_START_CLOSE_BLAME);
-        run_blame_phase(
-            &mut main,
-            &round_irreversible,
-            &rc,
+        let own_commitment_mapping = map_owned_items(
+            &rc.player_commit.initial_commitments,
+            &all_commitments,
+            "commitments",
+        )?;
+        let my_commitment_indices = global_indices_in_local_order(
+            &own_commitment_mapping,
+            rc.player_commit.initial_commitments.len(),
+            "commitments",
+        )?;
+        let own_component_slots =
+            map_owned_items(&rc.components_sorted, &all_components, "components")?;
+        let my_component_indices = global_indices_in_local_order(
+            &own_component_slots,
+            rc.components_sorted.len(),
+            "components",
+        )?;
+
+        // --- Verify the session hash (anti-spy) ---
+        let session_hash = calc_round_hash(
+            &last_hash,
+            &round_pubkey,
+            round_time,
             &all_commitments,
             &all_components,
-            &my_commitment_indices,
-            &my_component_indices,
-            &result.bad_components,
-            feerate,
-            &lookup_endpoints,
-            lookup_transport,
+        );
+        if let Some(declared) = declared_hash {
+            if declared.as_slice() != session_hash.as_slice() {
+                return Err("session hash mismatch — server told players different things".into());
+            }
+        } else if !skip_signatures {
+            return Err("server omitted the CashFusion session hash".into());
+        }
+        // CashFusion chains every accepted round transcript, including failed
+        // rounds, into the transcript used after RestartRound.
+        last_hash = session_hash;
+
+        if skip_signatures {
+            pool.set_close_start(covert_t0 + T_START_CLOSE_BLAME);
+            run_blame_phase(
+                &mut main,
+                &round_irreversible,
+                &rc,
+                &all_commitments,
+                &all_components,
+                &my_commitment_indices,
+                &my_component_indices,
+                &[],
+                feerate,
+                &lookup_endpoints,
+                lookup_transport,
+            )
+            .await?;
+            continue;
+        }
+
+        let signing_plans = validate_and_index_plans(
+            &live_hello,
+            &input_pubkeys,
+            &input_values,
+            &all_output_scripts,
+            &tier_plans,
+        )?;
+        if signing_plans.get(&begin.tier) != Some(&selected_plan) {
+            return Err("selected tier plan changed before signing".into());
+        }
+
+        // Electron Cash's second `check_coins()` after covert components are
+        // fixed but before any transaction signature is produced. If lookups
+        // cannot complete inside the EC signature window, fail closed.
+        cancellable(
+            &round_irreversible,
+            revalidate_own_inputs(
+                &inputs,
+                &lookup_endpoints,
+                lookup_transport,
+                "transaction signing",
+            ),
         )
         .await?;
-        continue;
-    }
+        if Instant::now() > covert_t0 + timing.sigs_at {
+            return Err("wallet input revalidation missed the signature window".into());
+        }
 
-    // Assemble the fully-signed tx from all players' signatures.
-    let sigs: Vec<Vec<u8>> = result.txsignatures;
-    verify_transaction_signatures(&ftx, &sigs)?;
-    let tx_hex = hexify(&ftx.serialize(&sigs)?);
-    let txid = ftx.txid(&sigs)?;
+        // --- Verify the shared transaction, then sign ONLY our exact inputs ---
+        verify_shared_transaction(&all_components, &inputs, &output_scripts, &output_values)?;
+        let ftx = FusionTx::from_components(&all_components, &session_hash)?;
+        let mut signature_messages = vec![None; pool.slot_count()];
+        let mut signed_inputs = 0usize;
+        for input_index in 0..ftx.num_inputs() {
+            let component_index = ftx
+                .input_component_index(input_index)
+                .ok_or("missing component index")?;
+            let component = pb::Component::decode(all_components[component_index].as_slice())
+                .map_err(|error| format!("component decode: {error}"))?;
+            let shared_input = match component.component {
+                Some(pb::component::Component::Input(input)) => input,
+                _ => continue,
+            };
+            let mut own_input = None;
+            for input in &inputs {
+                if input_matches_component(input, &shared_input)? {
+                    own_input = Some(input);
+                    break;
+                }
+            }
+            let Some(input_key) = own_input else {
+                continue;
+            };
 
-    return Ok(FusionOutcome {
-        ok: true,
-        broadcast_verified: false,
-        txid: Some(txid),
-        tx_hex: Some(tx_hex),
-        message: "fully signed transaction assembled; broadcast is not independently verified"
-            .into(),
-    });
+            let sighash = ftx.sighash(input_index)?;
+            let secret = scalar_from_privkey(&input_key.privkey)?;
+            let signature = schnorr::sign(secret, &sighash);
+            let slot = *own_component_slots
+                .get(&component_index)
+                .ok_or("wallet input is missing its covert component slot")?;
+            if signature_messages[slot].is_some() {
+                return Err("multiple transaction signatures mapped to one covert slot".into());
+            }
+            signature_messages[slot] = Some(build_covert_signature(
+                &round_pubkey,
+                input_index as u32,
+                &signature,
+            ));
+            signed_inputs += 1;
+        }
+        if signed_inputs != inputs.len() {
+            return Err("not every wallet input received a transaction signature".into());
+        }
+
+        let signatures_start = covert_t0 + timing.sigs_at;
+        if Instant::now() > signatures_start {
+            return Err("shared transaction verification missed the signature window".into());
+        }
+        // Component disclosure was already the privacy point of no return. Resolve
+        // the signature and result phases under the same non-cancellable attempt.
+        let submit_signatures = pool.submit_phase(
+            signatures_start,
+            covert_t0 + timing.sigs_deadline,
+            timing.submit_timeout,
+            signature_messages,
+            &round_irreversible,
+        );
+        let receive_result = recv_server_before(
+            &mut main,
+            &round_irreversible,
+            covert_t0 + timing.conclusion_at,
+            "FusionResult",
+        );
+        let ((), result_message) = tokio::try_join!(submit_signatures, receive_result)?;
+
+        // --- FusionResult ---
+        let result = match result_message {
+            pb::server_message::Msg::Fusionresult(r) => r,
+            pb::server_message::Msg::Restartround(_) => {
+                return Err("server sent RestartRound before the blame exchange".into())
+            }
+            pb::server_message::Msg::Error(e) => {
+                return Err(format!(
+                    "server error at result: {}",
+                    e.message.unwrap_or_default()
+                ))
+            }
+            _ => return Err("expected FusionResult".into()),
+        };
+
+        if !result.ok {
+            if result
+                .bad_components
+                .iter()
+                .any(|bad| my_component_indices.contains(&(*bad as usize)))
+            {
+                return Err(
+                    "server identified one of this wallet's valid components as bad".into(),
+                );
+            }
+            pool.set_close_start(covert_t0 + T_START_CLOSE_BLAME);
+            run_blame_phase(
+                &mut main,
+                &round_irreversible,
+                &rc,
+                &all_commitments,
+                &all_components,
+                &my_commitment_indices,
+                &my_component_indices,
+                &result.bad_components,
+                feerate,
+                &lookup_endpoints,
+                lookup_transport,
+            )
+            .await?;
+            continue;
+        }
+
+        // Assemble the fully-signed tx from all players' signatures.
+        let sigs: Vec<Vec<u8>> = result.txsignatures;
+        verify_transaction_signatures(&ftx, &sigs)?;
+        let tx_hex = hexify(&ftx.serialize(&sigs)?);
+        let txid = ftx.txid(&sigs)?;
+
+        return Ok(FusionOutcome {
+            ok: true,
+            broadcast_verified: false,
+            txid: Some(txid),
+            tx_hex: Some(tx_hex),
+            message: "fully signed transaction assembled; broadcast is not independently verified"
+                .into(),
+        });
     }
 }
 
@@ -1314,12 +1372,49 @@ mod tests {
     use k256::ProjectivePoint;
     use prost::Message;
     use std::collections::HashSet;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio::net::TcpListener;
     use tokio::sync::mpsc;
 
     enum Covert {
         Component(usize, Vec<u8>),
         Signature(u32, Vec<u8>),
+    }
+
+    #[test]
+    fn default_server_timing_matches_electron_cash_protocol() {
+        let timing = FusionTiming::default();
+        assert_eq!(EC_AUTOFUSE_INACTIVE_TIMEOUT, Duration::from_secs(600));
+        assert_eq!(JOIN_STATUS_TIMEOUT, Duration::from_secs(10));
+        assert_eq!(timing.warmup_expected, Duration::from_secs(30));
+        assert_eq!(timing.warmup_slop, Duration::from_secs(3));
+        assert_eq!(timing.comps_at, Duration::from_secs(5));
+        assert_eq!(timing.comps_deadline, Duration::from_secs(15));
+        assert_eq!(timing.sigs_at, Duration::from_secs(20));
+        assert_eq!(timing.sigs_deadline, Duration::from_secs(30));
+        assert_eq!(timing.conclusion_at, Duration::from_secs(35));
+        assert_eq!(T_START_CLOSE, Duration::from_secs(45));
+        assert_eq!(T_START_CLOSE_BLAME, Duration::from_secs(80));
+    }
+
+    #[test]
+    fn auto_join_inactivity_matches_electron_cash_besttime_rule() {
+        let started = Instant::now();
+        let deadline = JoinInactivity::new(started, Some(Duration::from_secs(600)));
+
+        assert!(!deadline.expired(started + Duration::from_secs(600), false));
+        assert!(deadline.expired(started + Duration::from_secs(601), false));
+        assert!(!deadline.expired(started + Duration::from_secs(601), true));
+        // A later update without besttime uses the original fixed deadline;
+        // seeing a schedule does not reset the inactivity clock in EC.
+        assert!(deadline.expired(started + Duration::from_secs(602), false));
+    }
+
+    #[test]
+    fn manual_join_has_no_auto_inactivity_deadline() {
+        let started = Instant::now();
+        let deadline = JoinInactivity::new(started, None);
+        assert!(!deadline.expired(started + Duration::from_secs(86_400), false));
     }
 
     #[test]
@@ -1386,6 +1481,201 @@ mod tests {
             value,
             privkey: [1u8; 32],
         }
+    }
+
+    async fn electrum_endpoint_once(
+        response: &'static str,
+    ) -> (ElectrumEndpoint, tokio::task::JoinHandle<()>) {
+        electrum_endpoint_n(response, 1).await
+    }
+
+    async fn electrum_endpoint_n(
+        response: &'static str,
+        count: usize,
+    ) -> (ElectrumEndpoint, tokio::task::JoinHandle<()>) {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let task = tokio::spawn(async move {
+            for _ in 0..count {
+                let (mut stream, _) = listener.accept().await.unwrap();
+                let mut request = [0u8; 1024];
+                let _ = stream.read(&mut request).await.unwrap();
+                stream.write_all(response.as_bytes()).await.unwrap();
+                stream.write_all(b"\n").await.unwrap();
+            }
+        });
+        (
+            ElectrumEndpoint {
+                host: "127.0.0.1".into(),
+                port: addr.port(),
+                use_ssl: false,
+            },
+            task,
+        )
+    }
+
+    async fn electrum_endpoint_sequence(
+        responses: Vec<&'static str>,
+    ) -> (ElectrumEndpoint, tokio::task::JoinHandle<()>) {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let task = tokio::spawn(async move {
+            for response in responses {
+                let (mut stream, _) = listener.accept().await.unwrap();
+                let mut request = [0u8; 1024];
+                let _ = stream.read(&mut request).await.unwrap();
+                stream.write_all(response.as_bytes()).await.unwrap();
+                stream.write_all(b"\n").await.unwrap();
+            }
+        });
+        (
+            ElectrumEndpoint {
+                host: "127.0.0.1".into(),
+                port: addr.port(),
+                use_ssl: false,
+            },
+            task,
+        )
+    }
+
+    async fn closed_electrum_endpoint() -> ElectrumEndpoint {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        drop(listener);
+        ElectrumEndpoint {
+            host: "127.0.0.1".into(),
+            port,
+            use_ssl: false,
+        }
+    }
+
+    fn live_test_input() -> FusionInputKey {
+        let secret = Scalar::ONE;
+        FusionInputKey {
+            prev_txid: "aa".repeat(32),
+            prev_index: 3,
+            pubkey: schnorr::pubkey_compressed(secret).to_vec(),
+            value: 200_000,
+            privkey: secret.to_bytes().into(),
+        }
+    }
+
+    #[tokio::test]
+    async fn own_input_mismatch_fails_closed_before_named_boundary() {
+        let (endpoint, server) = electrum_endpoint_once(r#"{"id":1,"result":[]}"#).await;
+        let error = revalidate_own_inputs(
+            &[live_test_input()],
+            &[endpoint],
+            Transport::Direct,
+            "PlayerCommit",
+        )
+        .await
+        .unwrap_err();
+        server.await.unwrap();
+        assert!(
+            error.contains("stale or spent before PlayerCommit"),
+            "{error}"
+        );
+    }
+
+    #[tokio::test]
+    async fn own_input_revalidation_falls_back_after_primary_infrastructure_failure() {
+        let primary = closed_electrum_endpoint().await;
+        let (fallback, server) = electrum_endpoint_once(
+            r#"{"id":1,"result":[{"tx_hash":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","tx_pos":3,"height":1,"value":200000}]}"#,
+        ).await;
+        revalidate_own_inputs(
+            &[live_test_input()],
+            &[primary, fallback],
+            Transport::Direct,
+            "PlayerCommit",
+        )
+        .await
+        .unwrap();
+        server.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn own_input_spent_between_commit_and_signing_fails_second_boundary() {
+        let live = r#"{"id":1,"result":[{"tx_hash":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","tx_pos":3,"height":1,"value":200000}]}"#;
+        let spent = r#"{"id":1,"result":[]}"#;
+        let (endpoint, server) = electrum_endpoint_sequence(vec![live, spent]).await;
+        let input = live_test_input();
+        revalidate_own_inputs(
+            &[input],
+            &[endpoint.clone()],
+            Transport::Direct,
+            "PlayerCommit",
+        )
+        .await
+        .unwrap();
+        let error = revalidate_own_inputs(
+            &[live_test_input()],
+            &[endpoint],
+            Transport::Direct,
+            "transaction signing",
+        )
+        .await
+        .unwrap_err();
+        server.await.unwrap();
+        assert!(
+            error.contains("stale or spent before transaction signing"),
+            "{error}"
+        );
+    }
+
+    #[tokio::test]
+    async fn own_input_revalidation_aborts_when_all_endpoints_are_ambiguous() {
+        let endpoints = vec![
+            closed_electrum_endpoint().await,
+            closed_electrum_endpoint().await,
+        ];
+        let error = revalidate_own_inputs(
+            &[live_test_input()],
+            &endpoints,
+            Transport::Direct,
+            "transaction signing",
+        )
+        .await
+        .unwrap_err();
+        assert!(error.contains("could not safely revalidate"), "{error}");
+        assert!(
+            !error.contains("stale or spent"),
+            "infrastructure failure must not blame: {error}"
+        );
+    }
+
+    #[tokio::test]
+    async fn own_input_revalidation_is_cancellable_before_commit() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let endpoint = ElectrumEndpoint {
+            host: "127.0.0.1".into(),
+            port: listener.local_addr().unwrap().port(),
+            use_ssl: false,
+        };
+        let server = tokio::spawn(async move {
+            let (_stream, _) = listener.accept().await.unwrap();
+            tokio::time::sleep(Duration::from_secs(30)).await;
+        });
+        let cancel = CancelFlag::new();
+        let cancel_now = cancel.clone();
+        tokio::spawn(async move {
+            tokio::task::yield_now().await;
+            cancel_now.cancel();
+        });
+        let error = cancellable(
+            &cancel,
+            revalidate_own_inputs(
+                &[live_test_input()],
+                &[endpoint],
+                Transport::Direct,
+                "PlayerCommit",
+            ),
+        )
+        .await
+        .unwrap_err();
+        server.abort();
+        assert_eq!(error, "fusion round cancelled");
     }
 
     fn input_component(prev_txid: u8, prev_index: u32, pubkey: Vec<u8>, value: u64) -> Vec<u8> {
@@ -1534,10 +1824,7 @@ mod tests {
                         };
                         let observed = match message.msg {
                             Some(pb::covert_message::Msg::Component(component)) => {
-                                Some(Covert::Component(
-                                    this_connection_id,
-                                    component.component,
-                                ))
+                                Some(Covert::Component(this_connection_id, component.component))
                             }
                             Some(pb::covert_message::Msg::Signature(signature)) => Some(
                                 Covert::Signature(signature.which_input, signature.txsignature),
@@ -1817,6 +2104,10 @@ mod tests {
             ];
 
             let cancel = CancelFlag::new();
+            let (lookup_endpoint, lookup_server) = electrum_endpoint_n(
+                r#"{"id":1,"result":[{"tx_hash":"cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd","tx_pos":0,"height":1,"value":200000}]}"#,
+                2,
+            ).await;
             let server = tokio::spawn(mock_server(
                 main_l,
                 covert_l,
@@ -1849,11 +2140,7 @@ mod tests {
                 output_scripts,
                 main_transport: Transport::Direct,
                 remote_transport: None,
-                lookup_endpoints: vec![ElectrumEndpoint {
-                    host: "127.0.0.1".into(),
-                    port: 1,
-                    use_ssl: false,
-                }],
+                lookup_endpoints: vec![lookup_endpoint],
                 lookup_transport: Transport::Direct,
                 timing: FusionTiming {
                     warmup_expected: Duration::ZERO,
@@ -1869,6 +2156,7 @@ mod tests {
                     sigs_deadline: Duration::from_millis(1_400),
                     conclusion_at: Duration::from_secs(2),
                 },
+                join_inactive_timeout: None,
                 cancel,
                 expected_hello: ExpectedHello {
                     tiers: vec![tier],
@@ -1883,6 +2171,7 @@ mod tests {
                 .await
                 .expect("run_fusion should not error");
             server.await.unwrap().expect("mock server ok");
+            lookup_server.await.unwrap();
 
             assert!(outcome.ok, "fusion should succeed: {}", outcome.message);
             assert!(
@@ -1935,6 +2224,10 @@ mod tests {
                     script
                 })
                 .collect::<Vec<_>>();
+            let (lookup_endpoint, lookup_server) = electrum_endpoint_n(
+                r#"{"id":1,"result":[{"tx_hash":"cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd","tx_pos":0,"height":1,"value":200000}]}"#,
+                3,
+            ).await;
 
             let outcome = run_fusion(FusionRunParams {
                 wallet_tag_seed: b"test-wallet".to_vec(),
@@ -1960,11 +2253,7 @@ mod tests {
                 output_scripts,
                 main_transport: Transport::Direct,
                 remote_transport: None,
-                lookup_endpoints: vec![ElectrumEndpoint {
-                    host: "127.0.0.1".into(),
-                    port: 1,
-                    use_ssl: false,
-                }],
+                lookup_endpoints: vec![lookup_endpoint],
                 lookup_transport: Transport::Direct,
                 timing: FusionTiming {
                     warmup_expected: Duration::ZERO,
@@ -1980,6 +2269,7 @@ mod tests {
                     sigs_deadline: Duration::from_millis(1_400),
                     conclusion_at: Duration::from_secs(2),
                 },
+                join_inactive_timeout: None,
                 cancel: CancelFlag::new(),
                 expected_hello: ExpectedHello {
                     tiers: vec![tier],
@@ -1992,6 +2282,7 @@ mod tests {
             .await
             .expect("blame restart should remain on the live Fusion session");
             server.await.unwrap().expect("mock server transcript");
+            lookup_server.await.unwrap();
 
             assert!(
                 outcome.ok,

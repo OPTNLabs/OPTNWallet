@@ -122,28 +122,6 @@ export function useHomeSubscriptions({
         if (subscribedAddresses.has(addr)) continue;
         subscribedAddresses.add(addr);
 
-        const already =
-          Array.isArray(utxosRef.current?.[addr]) &&
-          utxosRef.current[addr].length > 0;
-        if (!already) {
-          try {
-            const baseline = await ElectrumService.getUTXOs(addr);
-            if (baseline.length > 0) {
-              dispatch(
-                updateUTXOsForAddress({ address: addr, utxos: baseline })
-              );
-              const m = new Map(Object.entries(utxosRef.current));
-              m.set(addr, baseline);
-              utxosRef.current = Object.fromEntries(m.entries()) as Record<
-                string,
-                UTXO[]
-              >;
-            }
-          } catch (error) {
-            logError('Home.baselineUTXOs', error, { address: addr });
-          }
-        }
-
         try {
           await ElectrumService.subscribeAddress(addr, async () => {
             try {

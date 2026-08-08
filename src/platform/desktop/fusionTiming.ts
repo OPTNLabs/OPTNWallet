@@ -17,10 +17,10 @@
 //   T_START_CLOSE  = 45s   normal round close
 //   T_START_CLOSE_BLAME = 80s  blame-path close
 //   WARMUP_TIME    = 30s ± WARMUP_SLOP 3s  (FusionBegin → StartRound)
-//   Pool wait (client):
-//     • Alone / empty: ~120s then fail + Auto re-queue (P2P-speed; 0-conf chains)
-//     • Peers present or time_remaining: extend up to ~600s / start schedule
-//     (EC only applies plugin AUTOFUSE_INACTIVE=600 when no start is scheduled)
+//   Auto pool wait (client):
+//     • enter JoinPools immediately; the server coordinates participant timing
+//     • stop after 600s only while no tier advertises time_remaining
+//     • while a best time exists, keep waiting for that server schedule
 //
 // UNCONFIRMED INPUTS (OPTN + EC-maintainer-endorsed direction):
 //   • Accept height ≤ 0 UTXOs as fusion inputs (selection + peer blame lookup).
@@ -80,19 +80,12 @@ export const SERVER_MIN_OUTPUT_SATS = 10_000;
 // ─── plugin.py — client pool / coin policy ───────────────────────────────
 
 /**
- * Alone / no pool progress in JoinPools — then fail so Auto re-queues quickly.
- * Matches P2P gather scale; we do **not** sit 10 minutes alone (that was wrong).
- * Native engine extends when the server reports peers or `time_remaining`
- * (mainnet can schedule start ~400s after the pool is full).
+ * plugin.py AUTOFUSE_INACTIVE_TIMEOUT. The deadline is checked only when a
+ * TierStatusUpdate has no advertised `time_remaining` (`besttime is None`).
+ * A scheduled tier is therefore not cut off merely because 600 seconds have
+ * elapsed since registration.
  */
-export const SERVER_JOIN_ALONE_MS = 120_000;
-/**
- * Ceiling while pool is active (other players or start scheduled).
- * EC plugin AUTOFUSE_INACTIVE_TIMEOUT = 600 only applies when idle/no besttime.
- */
-export const SERVER_JOIN_ACTIVE_CEILING_MS = 600_000;
-/** @deprecated Prefer SERVER_JOIN_ALONE_MS — default client alone budget. */
-export const SERVER_JOIN_WAIT_MS = SERVER_JOIN_ALONE_MS;
+export const SERVER_AUTOFUSE_INACTIVE_MS = 600_000;
 
 /**
  * plugin.py DEFAULT_MAX_COINS = 20 — max inputs one wallet puts in a batch.
@@ -120,13 +113,6 @@ export const ACCEPT_UNCONFIRMED_FUSION_INPUTS = true;
  * not a confirmation depth requirement.
  */
 export const AUTO_WAIT_FOR_BLOCK_BEFORE_NEXT_ROUND = false;
-
-/**
- * Hard ceiling for one full server-style session (active join + warmup + close).
- * Lease backstop uses the *active* join ceiling (peers / start scheduled).
- */
-export const SERVER_SESSION_CEILING_MS =
-  SERVER_JOIN_ACTIVE_CEILING_MS + SERVER_WARMUP_MS + SERVER_ROUND_CLOSE_MS;
 
 // ─── P2P budgets (independent of Auto 600s pool wait) ────────────────────
 
@@ -214,7 +200,5 @@ export const P2P_ASSEMBLED_RESEND_MS = 1_500;
 export const P2P_SIG_RESEND_MS = 1_500;
 export const P2P_SIG_STATUS_MS = 3_000;
 
-/**
- * Durable lease backstop: full server session ceiling + small margin.
- */
-export const P2P_LEASE_TTL_MS = SERVER_SESSION_CEILING_MS + 30_000;
+/** Existing durable P2P lease backstop (unchanged by server scheduling). */
+export const P2P_LEASE_TTL_MS = 708_000;

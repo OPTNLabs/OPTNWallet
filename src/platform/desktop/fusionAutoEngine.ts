@@ -97,38 +97,26 @@ export function nextAutoEngineTickMs(now = Date.now()): number {
   return wait + jitter;
 }
 
-/**
- * Shared UTC join window for **server** Auto — same idea as P2P rendezvous.
- * Independent wallets only *enter* JoinPools in the open part of each slot so
- * 4 local (or mainnet) clients overlap on the fusion server instead of
- * staggering into 2–3 player partial rounds.
- */
-export const AUTO_SERVER_JOIN_PERIOD_MS = 75_000;
-/** Open portion of each server-join slot (most of the period for quick overlap). */
-export const AUTO_SERVER_JOIN_OPEN_MS = 45_000;
-
-export function msUntilServerJoinOpen(now = Date.now()): number {
-  const into = now % AUTO_SERVER_JOIN_PERIOD_MS;
-  if (into < AUTO_SERVER_JOIN_OPEN_MS) return 0;
-  return AUTO_SERVER_JOIN_PERIOD_MS - into;
-}
-
-export function isServerJoinOpen(now = Date.now()): boolean {
-  return now % AUTO_SERVER_JOIN_PERIOD_MS < AUTO_SERVER_JOIN_OPEN_MS;
-}
+/** Electron Cash checks Auto workers on an approximately five-second loop. */
+export const SERVER_AUTO_POLL_MS = 5_000;
 
 /**
- * Recovery poll for server Auto: prefer next join-open + small jitter
- * (same pattern as nextAutoEngineTickMs for P2P).
+ * Server Auto has no client-created UTC rendezvous gate. Electron Cash enters
+ * JoinPools as soon as an Auto worker is available and lets the Fusion server
+ * coordinate the participants.
  */
+export function msUntilServerAutoStart(now = Date.now()): number {
+  void now;
+  return 0;
+}
+
+/** @deprecated Use msUntilServerAutoStart. */
+export const msUntilServerJoinOpen = msUntilServerAutoStart;
+
+/** Recovery/backstop cadence matching Electron Cash's ~5 second plugin loop. */
 export function nextServerAutoEngineTickMs(now = Date.now()): number {
-  const wait = msUntilServerJoinOpen(now);
-  if (wait === 0) {
-    const into = now % AUTO_SERVER_JOIN_PERIOD_MS;
-    const remainOpen = Math.max(0, AUTO_SERVER_JOIN_OPEN_MS - into);
-    return Math.min(remainOpen, 4_000) + Math.floor(Math.random() * 2_000);
-  }
-  return wait + Math.floor(Math.random() * 3_000);
+  void now;
+  return SERVER_AUTO_POLL_MS;
 }
 
 /** Mode-aware Auto recovery poll interval. */
@@ -152,8 +140,10 @@ export function isAutoTransientFailure(message: string): boolean {
 }
 
 export function decideAutoFusion(input: AutoFusionInputs): AutoFusionDecision {
-  if (!input.cashFusionEnabled) return { run: false, reason: 'CashFusion is off' };
-  if (!input.autoFuseEnabled) return { run: false, reason: 'Auto-fusion is off' };
+  if (!input.cashFusionEnabled)
+    return { run: false, reason: 'CashFusion is off' };
+  if (!input.autoFuseEnabled)
+    return { run: false, reason: 'Auto-fusion is off' };
   if (!Number.isInteger(input.walletId) || input.walletId <= 0) {
     return { run: false, reason: 'No wallet open' };
   }

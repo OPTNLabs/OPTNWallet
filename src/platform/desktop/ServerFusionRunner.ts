@@ -71,13 +71,13 @@ interface FusionExecutionStatus {
   message?: string | null;
 }
 
-interface FusionRelayObservation {
+export interface FusionRelayObservation {
   txid: string;
   relaySubmitted: boolean;
   observerSeen: boolean;
 }
 
-interface FusionRelayEndpoints {
+export interface FusionRelayEndpoints {
   relayHost: string;
   relayPort: number;
   observerHost: string;
@@ -199,7 +199,7 @@ export function inputLookupEndpoints(
   });
 }
 
-function defaultRelayEndpoints(network: Network): FusionRelayEndpoints {
+export function defaultRelayEndpoints(network: Network): FusionRelayEndpoints {
   if (network === Network.CHIPNET) {
     return {
       relayHost: 'chipnet.bitjson.com',
@@ -459,6 +459,8 @@ export interface ServerRunnerConfig {
   onServerHello?: (hello: ServerHelloSnapshot) => void;
   inputLookupEndpoint?: FusionElectrumEndpoint;
   relayEndpoints?: FusionRelayEndpoints;
+  /** Electron Cash Auto-only idle deadline. Manual rounds omit this. */
+  joinInactiveTimeoutMs?: number;
   /**
    * Register for these tiers only, instead of every tier the coins can fund.
    *
@@ -670,6 +672,7 @@ export function buildServerRunner(
           torHost: config.tor?.host ?? null,
           torPort: config.tor?.port ?? null,
           expectedHello,
+          joinInactiveTimeoutMs: config.joinInactiveTimeoutMs ?? null,
         });
       } finally {
         clearInterval(poolHeartbeat);

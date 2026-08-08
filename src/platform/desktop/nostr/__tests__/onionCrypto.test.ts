@@ -6,7 +6,11 @@ import {
   onionLayer,
   onionPeel,
   onionUnpad,
+  onionUnpadRaw,
   onionWrap,
+  encodeAuthorizedOutput,
+  decodeAuthorizedOutput,
+  ONION_PAD_SIZE,
 } from '../onionCrypto';
 
 // Deterministic throwaway scalars. These are test vectors, never wallet keys.
@@ -79,11 +83,11 @@ describe('onionCrypto', () => {
 
   it('emits eph_pub(33) || iv(12) || ciphertext+tag per layer', async () => {
     const priv = testPriv(21);
-    const data = new Uint8Array(80);
+    const data = new Uint8Array(ONION_PAD_SIZE);
     const layer = await onionLayer(data, xOnlyHex(priv));
 
-    // 33 + 12 + 80 plaintext + 16 GCM tag
-    expect(layer.length).toBe(33 + 12 + 80 + 16);
+    // 33 + 12 + fixed plaintext + 16 GCM tag
+    expect(layer.length).toBe(33 + 12 + ONION_PAD_SIZE + 16);
     expect(layer[0] === 0x02 || layer[0] === 0x03).toBe(true);
   });
 
@@ -93,15 +97,42 @@ describe('onionCrypto', () => {
   });
 
   it('rejects a payload too large to pad, with a clear message', async () => {
-    const oversized = 'a'.repeat(200);
-    await expect(onionWrap(`${oversized}|1`, [xOnlyHex(testPriv(41))])).rejects.toThrow(
-      /too large|exceeds/i
-    );
+    const oversized = 'a'.repeat(ONION_PAD_SIZE);
+    await expect(
+      onionWrap(`${oversized}|1`, [xOnlyHex(testPriv(41))])
+    ).rejects.toThrow(/too large|exceeds/i);
   });
 
   it('pads every layer to a fixed size so blobs are indistinguishable', async () => {
     const short = await onionWrap('a|1', [xOnlyHex(testPriv(51))]);
-    const long = await onionWrap(`${'b'.repeat(60)}|123456`, [xOnlyHex(testPriv(51))]);
+    const long = await onionWrap(`${'b'.repeat(60)}|123456`, [
+      xOnlyHex(testPriv(51)),
+    ]);
     expect(short.length).toBe(long.length);
+  });
+
+  it('round-trips a credential-authorized output inside uniform onion padding', async () => {
+    const output = {
+      script: '76a914' + '11'.repeat(20) + '88ac',
+      value: 99_600,
+      credentialSerial: '22'.repeat(32),
+      credentialSig: '33'.repeat(64),
+    };
+    const encoded = encodeAuthorizedOutput(output);
+    expect(new TextEncoder().encode(encoded).length).toBeLessThan(
+      ONION_PAD_SIZE
+    );
+    expect(decodeAuthorizedOutput(encoded)).toEqual(output);
+
+    const wrapped = await onionWrap(encoded, [xOnlyHex(testPriv(61))]);
+    const peeled = await onionPeel(wrapped, testPriv(61));
+    expect(decodeAuthorizedOutput(onionUnpadRaw(peeled))).toEqual(output);
+  });
+
+  it('rejects malformed authorized-output encodings', () => {
+    expect(() => decodeAuthorizedOutput('aa|1|' + 'bb'.repeat(32))).toThrow();
+    expect(() =>
+      decodeAuthorizedOutput(`aa|545|${'bb'.repeat(32)}|${'cc'.repeat(64)}`)
+    ).toThrow(/value|dust/i);
   });
 });

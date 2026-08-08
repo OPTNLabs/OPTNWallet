@@ -2,14 +2,12 @@ import { describe, expect, it } from 'vitest';
 import {
   AUTO_RENDEZVOUS_OPEN_MS,
   AUTO_RENDEZVOUS_PERIOD_MS,
-  AUTO_SERVER_JOIN_OPEN_MS,
-  AUTO_SERVER_JOIN_PERIOD_MS,
+  SERVER_AUTO_POLL_MS,
   decideAutoFusion,
   isAutoRendezvousOpen,
   isAutoTransientFailure,
-  isServerJoinOpen,
   msUntilAutoRendezvousOpen,
-  msUntilServerJoinOpen,
+  msUntilServerAutoStart,
   nextAutoEngineTickForMode,
   nextAutoEngineTickMs,
   nextServerAutoEngineTickMs,
@@ -100,30 +98,24 @@ describe('auto rendezvous slots', () => {
   });
 });
 
-describe('server Auto join window (P2P-style multi-wallet meet)', () => {
-  it('has an open join slot like P2P rendezvous', () => {
-    const t0 = 1_700_000_000_000;
-    const slot0 = t0 - (t0 % AUTO_SERVER_JOIN_PERIOD_MS);
-    expect(isServerJoinOpen(slot0)).toBe(true);
-    expect(msUntilServerJoinOpen(slot0)).toBe(0);
-    expect(isServerJoinOpen(slot0 + AUTO_SERVER_JOIN_OPEN_MS)).toBe(false);
-    expect(msUntilServerJoinOpen(slot0 + AUTO_SERVER_JOIN_OPEN_MS)).toBe(
-      AUTO_SERVER_JOIN_PERIOD_MS - AUTO_SERVER_JOIN_OPEN_MS
-    );
+describe('server Auto scheduling (Electron Cash compatible)', () => {
+  it('enters JoinPools immediately instead of waiting for a client UTC slot', () => {
+    for (const now of [0, 1, 74_999, 75_000, 1_700_000_000_000]) {
+      expect(msUntilServerAutoStart(now)).toBe(0);
+    }
   });
 
-  it('next server tick is finite and within a join period', () => {
+  it('uses Electron Cash plugin cadence for the recovery poll', () => {
+    expect(SERVER_AUTO_POLL_MS).toBe(5_000);
     for (let i = 0; i < 20; i++) {
       const n = nextServerAutoEngineTickMs(Date.now() + i * 1000);
-      expect(n).toBeGreaterThan(0);
-      expect(n).toBeLessThan(AUTO_SERVER_JOIN_PERIOD_MS + 10_000);
+      expect(n).toBe(SERVER_AUTO_POLL_MS);
     }
   });
 
   it('mode helper routes server vs p2p', () => {
     const server = nextAutoEngineTickForMode('server');
-    expect(server).toBeGreaterThan(0);
-    expect(server).toBeLessThan(AUTO_SERVER_JOIN_PERIOD_MS + 10_000);
+    expect(server).toBe(SERVER_AUTO_POLL_MS);
     const p2p = nextAutoEngineTickForMode('p2p');
     expect(p2p).toBeGreaterThan(0);
     expect(p2p).toBeLessThan(AUTO_RENDEZVOUS_PERIOD_MS + 20_000);
@@ -146,8 +138,8 @@ describe('server Auto join window (P2P-style multi-wallet meet)', () => {
       )
     ).toBe(true);
     expect(isAutoTransientFailure('too few remaining live players')).toBe(true);
-    expect(isAutoTransientFailure('Selected inputs cannot afford any fusion tier.')).toBe(
-      false
-    );
+    expect(
+      isAutoTransientFailure('Selected inputs cannot afford any fusion tier.')
+    ).toBe(false);
   });
 });

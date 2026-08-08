@@ -17,8 +17,9 @@ vi.mock('../../DatabaseManager/DatabaseService', () => ({
   default: vi.fn(),
 }));
 
-const { registerAddress } = vi.hoisted(() => ({
+const { registerAddress, decryptText } = vi.hoisted(() => ({
   registerAddress: vi.fn(async () => {}),
+  decryptText: vi.fn(),
 }));
 
 vi.mock('../../AddressManager/AddressManager', () => ({
@@ -27,7 +28,10 @@ vi.mock('../../AddressManager/AddressManager', () => ({
 
 vi.mock('../../../services/SecretCryptoService', () => ({
   default: {
-    decryptText: vi.fn(),
+    decryptText,
+    decryptTextBatch: vi.fn(async (values: string[]) =>
+      Promise.all(values.map((value) => decryptText(value)))
+    ),
     decryptBytes: vi.fn(),
     encryptBytes: vi.fn(),
   },

@@ -85,6 +85,19 @@ function roundId() {
 }
 
 describe('Nostr round transport', () => {
+  it('rejects protocol-v2 messages without downgrade fallback', () => {
+    expect(
+      parseRoundMessage(
+        JSON.stringify({
+          ...messageBinding(),
+          version: 2,
+          type: 'abort',
+          session: 'round',
+          reason: 'old peer',
+        })
+      )
+    ).toBeNull();
+  });
   it('rejects malformed or oversized round-message components before dispatch', () => {
     expect(
       parseRoundMessage(
@@ -111,9 +124,20 @@ describe('Nostr round transport', () => {
     ).toBeNull();
     expect(
       parseRoundMessage(
-        JSON.stringify({ ...messageBinding(), type: 'abort', session: 'round', reason: 'cancelled' })
+        JSON.stringify({
+          ...messageBinding(),
+          type: 'abort',
+          session: 'round',
+          reason: 'cancelled',
+        })
       )
-    ).toEqual(expect.objectContaining({ type: 'abort', session: 'round', reason: 'cancelled' }));
+    ).toEqual(
+      expect.objectContaining({
+        type: 'abort',
+        session: 'round',
+        reason: 'cancelled',
+      })
+    );
   });
 
   it('fails send when every configured relay rejects the event', async () => {
@@ -234,7 +258,14 @@ describe('Nostr round transport', () => {
       ...messageBinding(),
       type: 'outputs',
       session: 'round',
-      outputs: [{ script: '00', value: 546 }],
+      outputs: [
+        {
+          script: '00',
+          value: 546,
+          credentialSerial: '11'.repeat(32),
+          credentialSig: '22'.repeat(64),
+        },
+      ],
     });
 
     expect(controlPool.publishedCount).toBe(1);
@@ -290,7 +321,14 @@ describe('Nostr round transport', () => {
       ...messageBinding(),
       type: 'outputs',
       session: 's',
-      outputs: [{ script: '00', value: 546 }],
+      outputs: [
+        {
+          script: '00',
+          value: 546,
+          credentialSerial: '11'.repeat(32),
+          credentialSig: '22'.repeat(64),
+        },
+      ],
     });
     await new Promise((r) => setTimeout(r, 10));
 

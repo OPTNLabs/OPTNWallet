@@ -114,10 +114,13 @@ described below.
   rumor use [NIP-44](https://github.com/nostr-protocol/nips/blob/master/44.md).
   On a relay, round traffic therefore has the same outer event kind as an
   ordinary private message rather than a custom “fusion message” fingerprint.
-- Input registration uses the temporary round identity. Output registration
-  uses another one-use signing key, a separate relay connection pool, and fresh
-  Tor isolation streams, preventing the coordinator from linking a wallet's
-  input registration to its fresh outputs by Nostr author or socket.
+- Input registration and the later signature channel use the temporary round
+  identity and are therefore attributable within that round. Outputs take a
+  different path: each canonical output carries a blindly issued, one-use
+  credential bound to the network, session, tier, value, script, and random
+  serial; the shuffled onion is revealed through a throwaway NIP-59 author and
+  a separate Tor relay pool. The coordinator verifies exact quotas and consumes
+  serial nullifiers without learning which participant redeemed each output.
 - Chat and fusion do not share identities: chat gift-wraps target the user's
   persistent Nostr identity, while fusion gift-wraps target per-round public
   keys. Recipient tags keep the subscriptions separate even though both use
@@ -138,16 +141,17 @@ Tor connection.
    (a silent/stale coordinator is removed and election repeats)
 
 3. Register and verify
-   inputs + unlinkable fresh outputs -> deterministic BIP69 assembly
+   attributable inputs + authorized anonymous outputs -> deterministic assembly
    every peer checks its exact inputs/outputs, total value, and fee bounds
 
 4. Sign
-   each wallet signs only its own inputs with BCH Schnorr
+   each wallet crosses the native Rust boundary and signs only its own inputs
+   using Electron Cash's modified-RFC6979 BCH Schnorr
    SIGHASH_ALL | FORKID (0x41) commits to the shared transaction outputs
 
 5. Finalize and broadcast
    coordinator requires one signature for every registered input -> finalizes
-   -> broadcasts -> checks returned txid
+   -> broadcasts through native Tor-only relay/observation -> checks exact txid
    participants match the final serialized transaction before accepting it
 ```
 
@@ -161,8 +165,10 @@ Before each round the wallet reconciles live, non-token UTXOs, excludes coins
 reserved by another round, and persists fresh output keys before sharing their
 locking scripts. Automatic and manual starts use the same wallet-scoped runner.
 Automatic starts additionally enforce the configured fuse depth and a durable
-fee cooldown. Wallet, network, Tor, relay, or mode changes abort the active
-round and release its reservations when the session unwinds. Cancellation
+fee cooldown. Wallet, network, master-Fusion, or transport-mode changes abort
+the active round and release its reservations when the session unwinds. Auto,
+Tor, relay, and server-preference edits apply to the next round without
+cancelling an in-flight financial action. Cancellation
 cannot reverse a transaction once a network broadcast has already begun.
 
 The implementation is split across:
@@ -175,8 +181,12 @@ The implementation is split across:
   relay transport and anonymous output registration
 - `src/platform/desktop/nostr/fusionRound.ts` — deterministic assembly and the
   pre-signing value/fee safety gate
-- `src/platform/desktop/nostr/fusionSign.ts` — BCH sighashes, signatures, final
-  transaction construction, and serialized-outpoint invariants
+- `src-tauri/src/fusion/p2p_sign.rs` — bounded native P2P template validation
+  and Electron Cash-compatible BCH signing
+- `src/platform/desktop/nostr/fusionBlindSchnorr.ts` — one-use blind input and
+  output credentials with v3 domain separation
+- `src/platform/desktop/nostr/fusionCredentialNullifiers.ts` — active-round
+  output credential replay protection
 - `src/platform/desktop/nostr/fusionSession.ts` — registration, verification,
   signing, finalization, and broadcast choreography
 - `src/platform/desktop/FusionP2pService.ts` — wallet/Tor integration, fresh

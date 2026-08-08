@@ -19,6 +19,7 @@ import {
 import { Network } from '../../state/slices/networkSlice';
 import type { UTXO } from '../../types/types';
 import {
+  coinDepth,
   coinsBelowDepth,
   formatAutoDepthGateLog,
   formatAutoDepthMetMessage,
@@ -26,11 +27,11 @@ import {
 } from './fusionCoinDepth';
 import {
   acquireRoundLease,
-  forceClearRoundLease,
   hasLiveRoundLease,
   isAutoCooldownReady,
   isAutoDepthMetIdle,
   LEASE_HEARTBEAT_MS,
+  reclaimStaleRoundState,
   releaseRoundLease,
   stampAutoDepthMetIdle,
   stampAutoFailure,
@@ -47,10 +48,12 @@ import {
   isAutoTransientFailure,
   type FusionMode,
 } from './fusionAutoEngine';
+import { ACCEPT_UNCONFIRMED_FUSION_INPUTS, EC_DEFAULT_MAX_COINS } from './fusionTiming';
 import {
-  ACCEPT_UNCONFIRMED_FUSION_INPUTS,
-  EC_DEFAULT_MAX_COINS,
-} from './fusionTiming';
+  classifyServerFusionCoins,
+  isServerFusionDepthSatisfied,
+  selectServerFusionBuckets,
+} from './serverFusionCoinPolicy';
 
 /** Structured, so callers never parse a human string to learn what happened. */
 export type FusionRunOutcome =
@@ -107,6 +110,28 @@ export interface StartFusionRoundOptions {
  * that path had no protection at all.
  */
 const heldLeases = new Map<number, string>();
+
+/**
+ * Service-owned cancellation, separate from any screen component.
+ *
+ * A settings route may unmount while a manual round is gathering peers; that
+ * must not cancel the financial action. Wallet/session lifecycle code can still
+ * stop it explicitly on lock, wallet switch, network switch, or mode shutdown.
+ */
+const activeRoundControllers = new Map<
+  number,
+  { lease: string; controller: AbortController }
+>();
+
+export function cancelFusionRound(
+  walletId: number,
+  reason = 'wallet session changed'
+): boolean {
+  const active = activeRoundControllers.get(walletId);
+  if (!active || active.controller.signal.aborted) return false;
+  active.controller.abort(new Error(reason));
+  return true;
+}
 
 /**
  * UI-visible lifecycle for a round owned by this wallet WebView.
@@ -285,16 +310,21 @@ export async function reconcileIdleFusionState(walletId: number): Promise<void> 
   }
   // Reclaim durable lock only if stale (another window may still be live).
   if (!hasLiveRoundLease(walletId)) {
-    await forceClearRoundLease(walletId).catch(() => undefined);
+    await reclaimStaleRoundState(walletId, () =>
+      clearOutpointReservations(walletId)
+    ).catch(() => false);
     // Ghost input locks from a dead round (HMR / kill) left Start clickable but
     // every coin "committed" — clear them whenever no live lease remains.
-    clearOutpointReservations(walletId);
   }
 }
 
 // Release our lease if the WebView dies mid-round (reload / close).
 if (typeof window !== 'undefined') {
   const releaseOnUnload = () => {
+    for (const { controller } of activeRoundControllers.values()) {
+      controller.abort(new Error('wallet window closed'));
+    }
+    activeRoundControllers.clear();
     for (const [walletId, owner] of heldLeases) {
       // Sync best-effort: async release may not finish on unload.
       try {
@@ -331,6 +361,24 @@ function limitFusionCoins(coins: UTXO[]): UTXO[] {
     .slice(0, EC_DEFAULT_MAX_COINS);
 }
 
+function secureRandomUnit(): number {
+  const cryptoApi = globalThis.crypto;
+  if (!cryptoApi?.getRandomValues) {
+    throw new Error('secure randomness is unavailable for server Fusion coin selection');
+  }
+  const sample = new Uint32Array(1);
+  cryptoApi.getRandomValues(sample);
+  return sample[0] / 0x1_0000_0000;
+}
+
+interface FreshCoinSelection {
+  /** Coins used only for depth/status reporting; never a second chain scan. */
+  depthCoins: UTXO[];
+  /** Exact coins offered to the selected transport. */
+  selectedCoins: UTXO[];
+  serverDepthSatisfied: boolean;
+}
+
 /**
  * Live, spendable, non-token coins for this wallet.
  *
@@ -339,13 +387,14 @@ function limitFusionCoins(coins: UTXO[]): UTXO[] {
  * would read as "nothing to fuse" and, worse, tempt a caller into falling back to
  * the Redux list. The distinction is preserved all the way out to the caller.
  */
-async function freshCoins(
+async function freshCoinSelection(
   walletId: number,
+  mode: FusionMode,
   trigger: 'auto' | 'manual',
   fuseDepth: number,
   freshSnapshot?: WalletUtxoSnapshot,
   signal?: AbortSignal
-): Promise<UTXO[] | null> {
+): Promise<FreshCoinSelection | null> {
   // Exclusive listunspent for fusion — shared reconcile soft-fails (null)
   // whenever a background refresh is in flight, which made Fuse feel broken.
   const snapshot =
@@ -353,7 +402,43 @@ async function freshCoins(
     (await reconcileActiveWalletUtxosForSpend(walletId, signal));
   if (!snapshot) return null;
 
-  const coins = Object.values(snapshot)
+  const allCoins = Object.values(snapshot).flat().filter(Boolean) as UTXO[];
+
+  if (mode === 'server') {
+    const classified = classifyServerFusionCoins(allCoins);
+    const depthCoins = classified.eligibleBuckets.flatMap(
+      (bucket) => bucket.coins
+    );
+    const depth = isServerFusionDepthSatisfied(classified.eligibleBuckets, {
+      fuseDepth,
+      depthOf: (outpoint) => coinDepth(walletId, outpoint),
+    });
+    if (trigger === 'auto' && depth.satisfied) {
+      return {
+        depthCoins,
+        selectedCoins: [],
+        serverDepthSatisfied: true,
+      };
+    }
+
+    // Electron Cash's default "normal" mode selects each unrelated address
+    // bucket with probability 0.5, keeps the bucket indivisible, and falls back
+    // to one bucket when the random sample is empty.
+    const selectedBuckets = selectServerFusionBuckets(
+      classified.eligibleBuckets,
+      {
+        fraction: 0.5,
+        random: secureRandomUnit,
+      }
+    );
+    return {
+      depthCoins,
+      selectedCoins: selectedBuckets.flatMap((bucket) => bucket.coins),
+      serverDepthSatisfied: false,
+    };
+  }
+
+  const coins = allCoins
     .flat()
     .filter(
       // Both token fields: `token` is our normalised shape, `token_data` is what
@@ -377,7 +462,11 @@ async function freshCoins(
   // explicit choice and may re-fuse a coin that has already reached the limit.
   const eligible =
     trigger === 'auto' ? coinsBelowDepth(walletId, coins, fuseDepth) : coins;
-  return limitFusionCoins(eligible);
+  return {
+    depthCoins: coins,
+    selectedCoins: limitFusionCoins(eligible),
+    serverDepthSatisfied: false,
+  };
 }
 
 export async function startFusionRound(
@@ -411,62 +500,6 @@ export async function startFusionRound(
     return { status: 'cooldown' };
   }
 
-  // Auto depth gate BEFORE lease/UI: if rounds-per-coin is already met, idle
-  // with no activity event (user: wallet keeps "trying" with no work to do).
-  if (trigger === 'auto') {
-    const preCoins = await freshCoins(
-      walletId,
-      'auto',
-      options.fuseDepth,
-      options.freshSnapshot,
-      options.signal
-    );
-    if (options.signal?.aborted) return { status: 'cancelled' };
-    if (preCoins === null) return { status: 'waiting-for-wallet' };
-    if (preCoins.length === 0) {
-      const snapshot =
-        options.freshSnapshot ??
-        (await import('../../services/WalletUtxoRefreshService')
-          .then((m) =>
-            m.reconcileActiveWalletUtxosForSpend(walletId, options.signal)
-          )
-          .catch(() => null));
-      const allNonToken = (snapshot
-        ? (Object.values(snapshot).flat() as UTXO[])
-        : []
-      ).filter(
-        (c) =>
-          !!c &&
-          !c.token &&
-          !(c as UTXO & { token_data?: unknown }).token_data
-      );
-      const elig = fuseDepthEligibility(
-        walletId,
-        allNonToken,
-        options.fuseDepth
-      );
-      // Target is options.fuseDepth (the box) for both P2P and server Auto.
-      const detail = formatAutoDepthMetMessage(elig);
-      // Long depth-met idle (not fail backoff). Cleared by UTXO activity that
-      // re-introduces below-depth coins (wakeAutoFromWalletActivity).
-      await stampAutoDepthMetIdle(walletId, AUTO_FUSION_DEPTH_MET_IDLE_MS).catch(
-        () => undefined
-      );
-      setFusionLastResult(walletId, {
-        mode,
-        trigger,
-        ok: true,
-        message: detail,
-      });
-      void import('./logger')
-        .then(({ log }) =>
-          log.info('p2p-live', `w${walletId} OUTCOME idle: ${detail}`)
-        )
-        .catch(() => undefined);
-      return { status: 'no-eligible-coins', detail };
-    }
-  }
-
   // Drop orphan UI/durable state before acquire so grey-idle ghosts never block.
   // Only clears the lease when it is STALE (no heartbeat) — a live other window
   // keeps the lock and we return busy below.
@@ -476,9 +509,27 @@ export async function startFusionRound(
 
   // Exclusivity first. Stale durable leases (no heartbeat) are reclaimed inside
   // acquireRoundLease — no user-facing "clear stuck" control required.
-  const lease = await acquireRoundLease(walletId);
-  if (lease === null) return { status: 'busy' };
+  const lease = await acquireRoundLease(walletId, Date.now());
+  if (lease === null) {
+    // Automatic Fusion must not spend fees without an atomic cross-window lock.
+    return trigger === 'auto' ? { status: 'cooldown' } : { status: 'busy' };
+  }
   heldLeases.set(walletId, lease);
+  const callerSignal = options.signal;
+  const roundController = new AbortController();
+  const forwardCallerAbort = () =>
+    roundController.abort(
+      callerSignal?.reason ?? new Error('fusion round cancelled')
+    );
+  callerSignal?.addEventListener('abort', forwardCallerAbort, { once: true });
+  if (callerSignal?.aborted) forwardCallerAbort();
+  activeRoundControllers.set(walletId, {
+    lease,
+    controller: roundController,
+  });
+  // From this point cancellation is owned by the wallet session, not by the
+  // currently mounted route. The caller signal is forwarded into this one.
+  options = { ...options, signal: roundController.signal };
   fusionActivities.set(walletId, {
     lease,
     activity: {
@@ -507,7 +558,17 @@ export async function startFusionRound(
 
   // Keep the durable lease fresh so other windows see a live holder, not a ghost.
   const heartbeat = setInterval(() => {
-    void touchRoundLease(walletId, lease).catch(() => undefined);
+    void touchRoundLease(walletId, lease)
+      .then((stillOwned) => {
+        if (!stillOwned && !roundController.signal.aborted) {
+          roundController.abort(new Error('fusion round cancelled'));
+        }
+      })
+      .catch(() => {
+        if (!roundController.signal.aborted) {
+          roundController.abort(new Error('fusion round cancelled'));
+        }
+      });
   }, LEASE_HEARTBEAT_MS);
 
   const finish = (outcome: FusionRunOutcome): FusionRunOutcome => {
@@ -581,38 +642,29 @@ export async function startFusionRound(
     // Auto: resolve coins first WITHOUT activity spam. If depth is already met,
     // return quietly — no "refreshing coins" lease thrash every engine tick.
     if (trigger === 'auto') {
-      const coinsQuiet = await freshCoins(
+      const selection = await freshCoinSelection(
         walletId,
+        mode,
         trigger,
         options.fuseDepth,
         options.freshSnapshot,
         options.signal
       );
       if (options.signal?.aborted) return finish({ status: 'cancelled' });
-      if (coinsQuiet === null) return finish({ status: 'waiting-for-wallet' });
+      if (selection === null) return finish({ status: 'waiting-for-wallet' });
+      const coinsQuiet = selection.selectedCoins;
       if (coinsQuiet.length === 0) {
-        const snapshot =
-          options.freshSnapshot ??
-          (await import('../../services/WalletUtxoRefreshService')
-            .then((m) =>
-              m.reconcileActiveWalletUtxosForSpend(walletId, options.signal)
-            )
-            .catch(() => null));
-        const allNonToken = (snapshot
-          ? (Object.values(snapshot).flat() as UTXO[])
-          : []
-        ).filter(
-          (c) =>
-            !!c &&
-            !c.token &&
-            !(c as UTXO & { token_data?: unknown }).token_data
-        );
         const elig = fuseDepthEligibility(
           walletId,
-          allNonToken,
+          selection.depthCoins,
           options.fuseDepth
         );
-        const detail = formatAutoDepthMetMessage(elig);
+        const detail =
+          mode === 'server' &&
+          selection.depthCoins.length === 0 &&
+          !selection.serverDepthSatisfied
+            ? 'Auto: no confirmed, unfrozen, non-token BCH address buckets are eligible for server CashFusion.'
+            : formatAutoDepthMetMessage(elig);
         // Long depth-met idle so Auto does not thrash every engine tick.
         await stampAutoDepthMetIdle(
           walletId,
@@ -709,15 +761,17 @@ export async function startFusionRound(
       phase: 1,
       status: 'Refreshing coins…',
     });
-    const coins = await freshCoins(
+    const selection = await freshCoinSelection(
       walletId,
+      mode,
       'manual',
       options.fuseDepth,
       options.freshSnapshot,
       options.signal
     );
     if (options.signal?.aborted) return finish({ status: 'cancelled' });
-    if (coins === null) return finish({ status: 'waiting-for-wallet' });
+    if (selection === null) return finish({ status: 'waiting-for-wallet' });
+    const coins = selection.selectedCoins;
     if (coins.length === 0) {
       return finish({
         status: 'no-eligible-coins',
@@ -760,6 +814,11 @@ export async function startFusionRound(
       });
     }
   } finally {
+    callerSignal?.removeEventListener('abort', forwardCallerAbort);
+    const activeController = activeRoundControllers.get(walletId);
+    if (activeController?.lease === lease) {
+      activeRoundControllers.delete(walletId);
+    }
     clearInterval(heartbeat);
     heldLeases.delete(walletId);
     if (fusionActivities.get(walletId)?.lease === lease) {

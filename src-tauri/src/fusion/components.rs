@@ -305,6 +305,34 @@ mod tests {
     }
 
     #[test]
+    fn canonical_input_component_matches_electron_cash_protobuf_wire_vector() {
+        // fusion.proto is vendored from Electron Cash. Lock the exact proto2
+        // field order, integer encoding, and wire-order txid so a future model
+        // or serializer change cannot silently fork component credentials.
+        let component = pb::Component {
+            salt_commitment: vec![0x11; 32],
+            component: Some(pb::component::Component::Input(pb::InputComponent {
+                prev_txid: vec![0xaa; 32],
+                prev_index: 3,
+                pubkey: vec![0x02; 33],
+                amount: 200_000,
+            })),
+        };
+        assert_eq!(
+            hex::encode(component.encode_to_vec()),
+            concat!(
+                "0a20",
+                "1111111111111111111111111111111111111111111111111111111111111111",
+                "124b0a20",
+                "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "10031a21",
+                "020202020202020202020202020202020202020202020202020202020202020202",
+                "20c09a0c"
+            )
+        );
+    }
+
+    #[test]
     fn commitments_sum_to_excess_fee_the_servers_balance_check() {
         let feerate = 1000u64;
         let inputs = vec![FusionInput {

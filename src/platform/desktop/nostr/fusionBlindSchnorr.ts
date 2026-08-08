@@ -149,7 +149,11 @@ export function verifyBchSchnorrHex(
   msgHashHex: string
 ): boolean {
   try {
-    return verifyBchSchnorr(hexToBin(pubkeyHex), hexToBin(sigHex), hexToBin(msgHashHex));
+    return verifyBchSchnorr(
+      hexToBin(pubkeyHex),
+      hexToBin(sigHex),
+      hexToBin(msgHashHex)
+    );
   } catch {
     return false;
   }
@@ -212,7 +216,14 @@ export class BlindSignatureRequest {
     const cEHash = signFlip ? scalarNegate(eHash) : eHash;
     const e = scalarAdd(cEHash, b);
 
-    return new BlindSignatureRequest(pubkey, messageHash, a, rxNew, signFlip, e);
+    return new BlindSignatureRequest(
+      pubkey,
+      messageHash,
+      a,
+      rxNew,
+      signFlip,
+      e
+    );
   }
 
   /** 32-byte hex blinded challenge sent to the issuer. */
@@ -312,8 +323,43 @@ export function inputCredentialMessageHashHex(input: {
   return binToHex(inputCredentialMessageHash(input));
 }
 
-/** How many blind-nonce slots each peer may consume in one round. */
-export const CREDENTIAL_SLOTS_PER_PEER = 16;
+export interface FusionCredentialContext {
+  session: string;
+  network: 'mainnet' | 'chipnet';
+  tier: number;
+}
+
+/**
+ * Domain-separated credential message for an anonymously redeemed output.
+ * The random serial is disclosed only after the onion shuffle and acts as the
+ * coordinator's one-use nullifier. Lower-casing hex fields makes the wire
+ * encoding canonical without changing the represented script.
+ */
+export function outputCredentialMessageHash(
+  context: FusionCredentialContext,
+  output: { script: string; value: number },
+  serial: string
+): Uint8Array {
+  const payload =
+    `optn-p2p-component-v3|${context.network}|${context.session.toLowerCase()}|` +
+    `${context.tier}|output|${output.script.toLowerCase()}|${output.value}|${serial.toLowerCase()}`;
+  return new Uint8Array(sha256.hash(new TextEncoder().encode(payload)));
+}
+
+export function outputCredentialMessageHashHex(
+  context: FusionCredentialContext,
+  output: { script: string; value: number },
+  serial: string
+): string {
+  return binToHex(outputCredentialMessageHash(context, output, serial));
+}
+
+/** One-shot blind-Schnorr nonce capacity reserved for each round participant. */
+export const CREDENTIAL_SLOTS_PER_PEER = 24;
+/** Output planning may use four slots, so input selection must leave them free. */
+export const MAX_OUTPUT_CREDENTIALS_PER_PEER = 4;
+export const MAX_INPUT_CREDENTIALS_PER_PEER =
+  CREDENTIAL_SLOTS_PER_PEER - MAX_OUTPUT_CREDENTIALS_PER_PEER;
 
 /** Stable base index for a peer's nonce slots (sorted participant order). */
 export function peerCredentialSlotBase(

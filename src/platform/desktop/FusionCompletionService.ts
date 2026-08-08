@@ -22,7 +22,9 @@ async function persistFusionHistoryRow(
   const dbService = DatabaseService();
   await dbService.ensureDatabaseStarted();
   const db = dbService.getDatabase();
-  if (!db) return;
+  if (!db) {
+    throw new Error('Wallet database is unavailable.');
+  }
   const hash = txid.trim().toLowerCase();
   db.run(
     `INSERT INTO transactions (wallet_id, tx_hash, height, timestamp, amount)
@@ -35,11 +37,11 @@ async function persistFusionHistoryRow(
        END`,
     [walletId, hash, timestamp]
   );
-  try {
-    dbService.scheduleDatabaseSave(walletId);
-  } catch {
-    /* save schedule optional */
-  }
+  // A queued save is not enough here: the Fusion caller releases its round
+  // reservation after this function resolves. Keep completion pending until
+  // the history row is durable so reload cannot erase an already-broadcast
+  // CoinJoin from wallet history.
+  await dbService.saveDatabaseToFile(walletId);
 }
 
 export interface CompletedFusionBroadcast {
@@ -72,27 +74,52 @@ export interface CompletedFusionBroadcast {
 export interface FusionCompletionState {
   tracked: boolean;
   refreshed: boolean;
+  /**
+   * SQL history is durable and the matching Redux row has been injected.
+   * Optional so older warning-only snapshots remain source-compatible;
+   * completeFusionBroadcast always returns it.
+   */
+  historyRecorded?: boolean;
 }
 
 /** Truthful post-broadcast status shared by both Fusion transports. */
 export function fusionCompletionWarning(
   completion: FusionCompletionState
 ): string | undefined {
+  const historyWarning =
+    completion.historyRecorded === false
+      ? completion.tracked
+        ? 'The Fusion transaction is safely tracked, but its wallet history entry could not be saved. Sync the wallet before starting another Fusion round.'
+        : 'The Fusion transaction was broadcast, but its wallet history entry could not be saved. Sync the wallet before starting another Fusion round.'
+      : undefined;
+
+  let recoveryWarning: string | undefined;
   if (!completion.tracked && !completion.refreshed) {
-    return 'Wallet tracking and the immediate balance refresh both failed. Sync the wallet before starting another send.';
+    recoveryWarning =
+      'Wallet tracking and the immediate balance refresh both failed. Sync the wallet before starting another send.';
+  } else if (!completion.tracked) {
+    recoveryWarning =
+      'The balance refreshed, but the outbound tracking record could not be saved.';
+  } else if (!completion.refreshed) {
+    recoveryWarning =
+      'The transaction is safely tracked; the balance will update on the next wallet sync.';
   }
-  if (!completion.tracked) {
-    return 'The balance refreshed, but the outbound tracking record could not be saved.';
-  }
-  if (!completion.refreshed) {
-    return 'The transaction is safely tracked; the balance will update on the next wallet sync.';
-  }
-  return undefined;
+
+  return (
+    [historyWarning, recoveryWarning]
+      .filter((warning): warning is string => Boolean(warning))
+      .join(' ') || undefined
+  );
 }
 
 export async function completeFusionBroadcast(
   completed: CompletedFusionBroadcast
-): Promise<{ tracked: boolean; refreshed: boolean; depthRecorded: number }> {
+): Promise<{
+  tracked: boolean;
+  refreshed: boolean;
+  depthRecorded: number;
+  historyRecorded: boolean;
+}> {
   // Ensure SQL fusion_txids table exists before we stamp this CoinJoin.
   void import('./fusionCoinDepth')
     .then(({ hydrateFusionLabels }) => hydrateFusionLabels(completed.walletId))
@@ -153,6 +180,7 @@ export async function completeFusionBroadcast(
 
   // Shared completion for P2P and server — same depth, labels, Auto stop.
   let depthRecorded = 0;
+  let historyRecorded = false;
   const spent = spentOutpointsOf(completed.spentInputs);
   if (completed.txid) {
     try {
@@ -165,33 +193,34 @@ export async function completeFusionBroadcast(
     }
     // History for Home/Recent Activity — same for P2P and server:
     // stamp Redux + SQL so Manual Sync cannot delete the CoinJoin row.
-    void (async () => {
-      try {
-        const txid = completed.txid.toLowerCase();
-        const timestamp = new Date().toISOString();
-        const item = {
-          tx_hash: txid,
-          height: 0,
-          timestamp,
-        };
-        await persistFusionHistoryRow(completed.walletId, txid, timestamp);
-        const { store } = await import('../../state/store');
-        const { addTransactions } = await import(
-          '../../state/slices/transactionSlice'
-        );
+    try {
+      const txid = completed.txid.toLowerCase();
+      const timestamp = new Date().toISOString();
+      const item = {
+        tx_hash: txid,
+        height: 0,
+        timestamp,
+      };
+      await persistFusionHistoryRow(completed.walletId, txid, timestamp);
+      const { store } = await import('../../state/store');
+      const { addTransactions } = await import(
+        '../../state/slices/transactionSlice'
+      );
+      await Promise.resolve(
         store.dispatch(
           addTransactions({
             wallet_id: completed.walletId,
             transactions: [item],
           })
-        );
-      } catch (error) {
-        logError('FusionCompletionService.injectHistory', error, {
-          walletId: completed.walletId,
-          txid: completed.txid,
-        });
-      }
-    })();
+        )
+      );
+      historyRecorded = true;
+    } catch (error) {
+      logError('FusionCompletionService.injectHistory', error, {
+        walletId: completed.walletId,
+        txid: completed.txid,
+      });
+    }
   }
   try {
     const created = ownedOutpointsOf(
@@ -215,9 +244,8 @@ export async function completeFusionBroadcast(
   // lag after an already-confirmed broadcast. Depth is already stamped from
   // ownedOutputScripts above; refresh is best-effort balance rebind.
   let refreshed = false;
-  let snapshot: Awaited<
-    ReturnType<typeof reconcileActiveWalletUtxosForSpend>
-  > = null;
+  let snapshot: Awaited<ReturnType<typeof reconcileActiveWalletUtxosForSpend>> =
+    null;
   for (let attempt = 0; attempt < 2 && !refreshed; attempt += 1) {
     try {
       if (attempt > 0) {
@@ -283,7 +311,9 @@ export async function completeFusionBroadcast(
     void import('./logger')
       .then(({ log }) => {
         try {
-          void Promise.resolve(log.info('p2p-live', msg)).catch(() => undefined);
+          void Promise.resolve(log.info('p2p-live', msg)).catch(
+            () => undefined
+          );
         } catch {
           console.info(`[p2p-live] ${msg}`);
         }
@@ -295,5 +325,5 @@ export async function completeFusionBroadcast(
     /* depth verify log is best-effort */
   }
 
-  return { tracked, refreshed, depthRecorded };
+  return { tracked, refreshed, depthRecorded, historyRecorded };
 }

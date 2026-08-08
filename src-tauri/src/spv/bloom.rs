@@ -74,7 +74,11 @@ impl BloomFilter {
         let size = ((size_bits / 8.0) as usize).clamp(1, MAX_FILTER_SIZE);
         let n_hash = ((size * 8) as f64 / n * LN2) as u32;
         let n_hash_funcs = n_hash.clamp(1, MAX_HASH_FUNCS);
-        BloomFilter { data: vec![0u8; size], n_hash_funcs, tweak }
+        BloomFilter {
+            data: vec![0u8; size],
+            n_hash_funcs,
+            tweak,
+        }
     }
 
     fn bit_index(&self, i: u32, item: &[u8]) -> u32 {
@@ -113,7 +117,10 @@ mod tests {
     use super::*;
 
     fn hex(s: &str) -> Vec<u8> {
-        (0..s.len()).step_by(2).map(|i| u8::from_str_radix(&s[i..i + 2], 16).unwrap()).collect()
+        (0..s.len())
+            .step_by(2)
+            .map(|i| u8::from_str_radix(&s[i..i + 2], 16).unwrap())
+            .collect()
     }
 
     /// The canonical BIP37 / Bitcoin Core test vector: 3 elements, fpRate 0.01,

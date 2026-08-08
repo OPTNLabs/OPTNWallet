@@ -15,13 +15,58 @@
 // Ported from 00-Wallet's onion-crypto.js — see
 // `D:\OPTN wallet work\00-wallet\landing\onion-crypto.ts`, the reference
 // checkout — using tiny-secp256k1 for ECDH and Web Crypto for AES-GCM to match
-// the rest of this codebase. Wire format is byte-identical to theirs.
+// the rest of this codebase. Protocol v3 enlarges only the fixed plaintext
+// block so every output can carry its unlinkable authorization credential.
 
 import * as ecc from 'tiny-secp256k1';
 import { sha256 } from '@bitauth/libauth';
 
-/** Size of the padding block (matches 00-Wallet's JOINER_PAD_SIZE). */
-const ONION_PAD_SIZE = 80;
+/**
+ * Uniform protocol-v3 plaintext size. A standard P2PKH script (50 hex chars),
+ * value (<=8 decimal chars in normal tiers), serial (64 hex), credential
+ * (128 hex), separators, and sentinel need ~254 bytes. 384 leaves bounded
+ * headroom while keeping every output blob indistinguishable by length.
+ */
+export const ONION_PAD_SIZE = 384;
+
+export interface AuthorizedOnionOutput {
+  script: string;
+  value: number;
+  credentialSerial: string;
+  credentialSig: string;
+}
+
+const HEX_64 = /^[0-9a-f]{64}$/i;
+const HEX_128 = /^[0-9a-f]{128}$/i;
+
+export function encodeAuthorizedOutput(output: AuthorizedOnionOutput): string {
+  if (!/^[0-9a-f]+$/i.test(output.script) || output.script.length % 2 !== 0) {
+    throw new Error('authorized output script must be canonical hex');
+  }
+  if (!Number.isSafeInteger(output.value) || output.value < 546) {
+    throw new Error('authorized output value is below dust or invalid');
+  }
+  if (!HEX_64.test(output.credentialSerial)) {
+    throw new Error('authorized output serial must be 32-byte hex');
+  }
+  if (!HEX_128.test(output.credentialSig)) {
+    throw new Error('authorized output credential must be 64-byte hex');
+  }
+  return `${output.script.toLowerCase()}|${output.value}|${output.credentialSerial.toLowerCase()}|${output.credentialSig.toLowerCase()}`;
+}
+
+export function decodeAuthorizedOutput(payload: string): AuthorizedOnionOutput {
+  const parts = payload.split('|');
+  if (parts.length !== 4) throw new Error('malformed authorized output');
+  const [script, valueText, credentialSerial, credentialSig] = parts;
+  const value = Number(valueText);
+  const output = { script, value, credentialSerial, credentialSig };
+  encodeAuthorizedOutput(output);
+  if (String(value) !== valueText) {
+    throw new Error('authorized output value is not canonical');
+  }
+  return output;
+}
 
 /**
  * Probe whether tiny-secp256k1 WASM is loaded and functional.
@@ -43,7 +88,10 @@ export function isEccAvailable(): boolean {
  * Compute ECDH shared secret: SHA256(pointMultiply(pubKey, privKey).x).
  * Returns 32 bytes (the raw shared secret, not compressed point).
  */
-function computeSharedSecret(privKey: Uint8Array, pubKey: Uint8Array): Uint8Array {
+function computeSharedSecret(
+  privKey: Uint8Array,
+  pubKey: Uint8Array
+): Uint8Array {
   const point = ecc.pointMultiply(pubKey, privKey);
   if (!point) throw new Error('ECDH point multiplication failed');
   // Take x-coordinate (bytes 1-32 of compressed point) and SHA-256 it
@@ -58,7 +106,7 @@ function computeSharedSecret(privKey: Uint8Array, pubKey: Uint8Array): Uint8Arra
  */
 export async function onionLayer(
   data: Uint8Array,
-  peelerPubHex: string,
+  peelerPubHex: string
 ): Promise<Uint8Array> {
   // Generate fresh ephemeral key for this layer
   const ephPriv = crypto.getRandomValues(new Uint8Array(32));
@@ -76,7 +124,7 @@ export async function onionLayer(
     shared,
     { name: 'AES-GCM' },
     false,
-    ['encrypt'],
+    ['encrypt']
   );
 
   // Encrypt with AES-GCM
@@ -85,8 +133,8 @@ export async function onionLayer(
     await crypto.subtle.encrypt(
       { name: 'AES-GCM', iv, tagLength: 128 },
       aesKey,
-      data,
-    ),
+      data
+    )
   );
 
   // Return: ephemeral pubkey (33 bytes) || IV (12 bytes) || ciphertext
@@ -104,7 +152,7 @@ export async function onionLayer(
  */
 export async function onionPeel(
   blob: Uint8Array,
-  myPriv: Uint8Array,
+  myPriv: Uint8Array
 ): Promise<Uint8Array> {
   // Parse blob
   const ephPub = blob.slice(0, 33);
@@ -120,7 +168,7 @@ export async function onionPeel(
     shared,
     { name: 'AES-GCM' },
     false,
-    ['decrypt'],
+    ['decrypt']
   );
 
   // Decrypt
@@ -128,8 +176,8 @@ export async function onionPeel(
     await crypto.subtle.decrypt(
       { name: 'AES-GCM', iv, tagLength: 128 },
       aesKey,
-      ct,
-    ),
+      ct
+    )
   );
 
   return pt;
@@ -175,7 +223,7 @@ function hexToBytes(hex: string): Uint8Array {
  */
 export async function onionWrap(
   payload: string,
-  peelerPubHexes: string[],
+  peelerPubHexes: string[]
 ): Promise<Uint8Array> {
   // Pad payload to ONION_PAD_SIZE bytes (matches 00-Wallet)
   const raw = new TextEncoder().encode(payload);
@@ -205,9 +253,13 @@ export async function onionWrap(
  * Unpad a decrypted onion payload.
  * Returns: { addr, value } or { addr, value: 0 } if parsing fails
  */
-export function onionUnpad(data: Uint8Array): { addr: string; value: number } {
+export function onionUnpadRaw(data: Uint8Array): string {
   const idx = data.indexOf(1);
-  const str = new TextDecoder().decode(data.slice(0, idx > 0 ? idx : data.length));
+  return new TextDecoder().decode(data.slice(0, idx > 0 ? idx : data.length));
+}
+
+export function onionUnpad(data: Uint8Array): { addr: string; value: number } {
+  const str = onionUnpadRaw(data);
   const sep = str.lastIndexOf('|');
   if (sep > 0) {
     return {

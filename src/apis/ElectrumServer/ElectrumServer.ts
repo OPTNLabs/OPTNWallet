@@ -311,23 +311,25 @@ async function sendBatch(
   return await Promise.all(resolvers);
 }
 
+function isBatchTransportFailure(result: RequestResponse | Error): boolean {
+  if (!(result instanceof Error)) return false;
+  const message = result.message.toLowerCase();
+  return (
+    message.includes('connection lost') ||
+    message.includes('not connected') ||
+    message.includes('socket') ||
+    message.includes('closed') ||
+    message.includes('timed out') ||
+    message.includes('network error') ||
+    message.includes('econn')
+  );
+}
+
 function throwIfBatchTransportFailed(
   results: Array<RequestResponse | Error>
 ): void {
   if (results.length === 0) return;
-  const allTransportFailures = results.every((result) => {
-    if (!(result instanceof Error)) return false;
-    const message = result.message.toLowerCase();
-    return (
-      message.includes('connection lost') ||
-      message.includes('not connected') ||
-      message.includes('socket') ||
-      message.includes('closed') ||
-      message.includes('timed out') ||
-      message.includes('network error') ||
-      message.includes('econn')
-    );
-  });
+  const allTransportFailures = results.every(isBatchTransportFailure);
   if (allTransportFailures) {
     throw results[0];
   }
@@ -612,6 +614,37 @@ export default function ElectrumServer() {
         `requestMany(${calls.length})`
       );
       throwIfBatchTransportFailed(results);
+      const failedIndices = results.flatMap((result, index) =>
+        isBatchTransportFailure(result) ? [index] : []
+      );
+      if (failedIndices.length > 0) {
+        const failedServer = currentServer;
+        markServerFailed(failedServer ?? getLastHealthyServer());
+        const { servers } = getNetworkAndServers();
+        const ranked = rankServersForConnect(servers, {
+          isBlocked: isServerBlocked,
+          preferred: getLastHealthyServer(),
+        }).filter((server) => server !== failedServer);
+        const nextServer = ranked[0] ?? getNextServer(servers, serverIndex);
+        try {
+          await electrumDisconnect();
+          await electrumConnect(nextServer);
+          const retryCalls = failedIndices.map((index) => calls[index]);
+          const retryResults = await withTimeout(
+            sendBatch(electrum!, retryCalls),
+            requestManyTimeoutMs(retryCalls.length),
+            `requestMany(${retryCalls.length}) retry`
+          );
+          throwIfBatchTransportFailed(retryResults);
+          retryResults.forEach((result, retryIndex) => {
+            results[failedIndices[retryIndex]] = result;
+          });
+        } catch {
+          // Preserve successful members. Failed slots remain Error values so
+          // callers keep prior wallet state rather than treating them as empty.
+          return results;
+        }
+      }
       // Score per-call average — full batch wall-clock made busy healthy hosts
       // look slower than idle untried peers after every open listunspent.
       markServerOk(

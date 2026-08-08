@@ -14,9 +14,7 @@ import {
   SERVER_COVERT_CONNECT_WINDOW_MS,
   SERVER_COVERT_SUBMIT_MS,
   SERVER_COVERT_SUBMIT_TIMEOUT_MS,
-  SERVER_JOIN_ACTIVE_CEILING_MS,
-  SERVER_JOIN_ALONE_MS,
-  SERVER_JOIN_WAIT_MS,
+  SERVER_AUTOFUSE_INACTIVE_MS,
   SERVER_MAX_CLOCK_DISCREPANCY_MS,
   SERVER_MIN_OUTPUT_SATS,
   SERVER_ROUND_BLAME_MS,
@@ -60,11 +58,8 @@ describe('Electron Cash protocol.py timing (strict)', () => {
 });
 
 describe('Electron Cash plugin.py client policy', () => {
-  it('alone JoinPools budget is P2P-fast (~120s), not a flat 10 min', () => {
-    expect(SERVER_JOIN_ALONE_MS).toBe(120_000);
-    expect(SERVER_JOIN_WAIT_MS).toBe(SERVER_JOIN_ALONE_MS);
-    // Active pool / scheduled start may extend up to EC inactive ceiling.
-    expect(SERVER_JOIN_ACTIVE_CEILING_MS).toBe(600_000);
+  it('matches AUTOFUSE_INACTIVE_TIMEOUT = 600 seconds', () => {
+    expect(SERVER_AUTOFUSE_INACTIVE_MS).toBe(600_000);
   });
 
   it('caps batch size at DEFAULT_MAX_COINS = 20', () => {
@@ -76,9 +71,8 @@ describe('Electron Cash plugin.py client policy', () => {
     expect(EC_MAX_FUSE_DEPTH).toBe(10);
   });
 
-  it('keeps P2P gather on the same alone scale as server alone wait', () => {
+  it('keeps the independent P2P gather budget unchanged', () => {
     expect(P2P_GATHER_MAX_MS).toBe(120_000);
-    expect(P2P_GATHER_MAX_MS).toBe(SERVER_JOIN_ALONE_MS);
   });
 });
 

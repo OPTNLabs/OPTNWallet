@@ -196,6 +196,19 @@ async function decryptText(ciphertextOrPlaintext: string): Promise<string> {
   return await decryptRaw(ciphertextOrPlaintext.slice(SECRET_ENC_PREFIX.length));
 }
 
+/**
+ * Decrypt a related set of wallet fields through the platform implementation.
+ * Desktop replaces this module with a scoped implementation that derives its
+ * password key once for the whole batch; other platforms keep their existing
+ * secure-storage/fallback key behavior.
+ */
+async function decryptTextBatch(
+  values: readonly string[],
+  _ownerWalletId?: number
+): Promise<string[]> {
+  return await Promise.all(values.map((value) => decryptText(value)));
+}
+
 async function encryptBytes(data: Uint8Array): Promise<string> {
   const asBase64 = bytesToBase64(data);
   return await encryptText(asBase64);
@@ -216,6 +229,7 @@ async function decryptBytes(
 const SecretCryptoService = {
   encryptText,
   decryptText,
+  decryptTextBatch,
   encryptBytes,
   decryptBytes,
 };

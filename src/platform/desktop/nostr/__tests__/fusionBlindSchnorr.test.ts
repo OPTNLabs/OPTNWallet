@@ -4,6 +4,7 @@ import {
   BlindIssuer,
   BlindSignatureRequest,
   inputCredentialMessageHash,
+  outputCredentialMessageHash,
   peerCredentialSlotBase,
   totalCredentialSlots,
   verifyBchSchnorrHex,
@@ -61,9 +62,9 @@ describe('P2P blind Schnorr credential issuer', () => {
     const sig = req.finalizeHex(issuer.signHex(0, req.requestHex()), true);
     // Wrong message must not verify.
     const other = inputCredentialMessageHash({ ...input, value: 99_999 });
-    expect(
-      verifyBchSchnorrHex(issuer.pubkeyHex, sig, binToHex(other))
-    ).toBe(false);
+    expect(verifyBchSchnorrHex(issuer.pubkeyHex, sig, binToHex(other))).toBe(
+      false
+    );
   });
 
   it('allocates non-overlapping peer slot ranges', () => {
@@ -78,11 +79,85 @@ describe('P2P blind Schnorr credential issuer', () => {
     );
     expect(totalCredentialSlots(3)).toBe(3 * CREDENTIAL_SLOTS_PER_PEER);
   });
+
+  it('binds an anonymous output credential to round, network, role, output, and serial', () => {
+    const issuer = BlindIssuer.create(1);
+    const context = {
+      session: 'ab'.repeat(32),
+      network: 'chipnet' as const,
+      tier: 100_000,
+    };
+    const output = {
+      script: '76a914' + '11'.repeat(20) + '88ac',
+      value: 99_600,
+    };
+    const serial = 'cd'.repeat(32);
+    const message = outputCredentialMessageHash(context, output, serial);
+    const request = BlindSignatureRequest.create(
+      issuer.pubkeyHex,
+      issuer.rPointsHex[0],
+      message
+    );
+    const signature = request.finalizeHex(
+      issuer.signHex(0, request.requestHex()),
+      true
+    );
+
+    expect(
+      verifyBchSchnorrHex(issuer.pubkeyHex, signature, binToHex(message))
+    ).toBe(true);
+    expect(
+      verifyBchSchnorrHex(
+        issuer.pubkeyHex,
+        signature,
+        binToHex(
+          outputCredentialMessageHash(
+            { ...context, session: 'ef'.repeat(32) },
+            output,
+            serial
+          )
+        )
+      )
+    ).toBe(false);
+    expect(
+      verifyBchSchnorrHex(
+        issuer.pubkeyHex,
+        signature,
+        binToHex(
+          outputCredentialMessageHash(
+            { ...context, network: 'mainnet' },
+            output,
+            serial
+          )
+        )
+      )
+    ).toBe(false);
+    expect(
+      verifyBchSchnorrHex(
+        issuer.pubkeyHex,
+        signature,
+        binToHex(
+          outputCredentialMessageHash(
+            context,
+            { ...output, value: output.value - 1 },
+            serial
+          )
+        )
+      )
+    ).toBe(false);
+    expect(
+      verifyBchSchnorrHex(
+        issuer.pubkeyHex,
+        signature,
+        binToHex(outputCredentialMessageHash(context, output, 'ee'.repeat(32)))
+      )
+    ).toBe(false);
+  });
 });
 
 describe('P2P Pedersen balance check', () => {
   it('holds for a balanced input/output pair (homomorphic sum)', () => {
-    // One input +value-fee, one output -value-fee → excess = fees only? 
+    // One input +value-fee, one output -value-fee → excess = fees only?
     // input 100000 fee 141 @ 1000 sat/kB → fee 141, amount 99859
     // output 99000 fee 34 → amount -99034
     // excess = 99859 - 99034 = 825
@@ -101,17 +176,17 @@ describe('P2P Pedersen balance check', () => {
 
   it('rejects a tampered excess fee', () => {
     const c = pedersenCommit(50_000);
-    expect(
-      pedersenBalanceHolds([c.commitmentHex], 50_001, c.nonceHex)
-    ).toBe(false);
+    expect(pedersenBalanceHolds([c.commitmentHex], 50_001, c.nonceHex)).toBe(
+      false
+    );
   });
 
   it('commits amount 0 and accepts excessFee 0 (identity ·H)', () => {
     // Blank components and exact fee coverage must not throw / false-blame.
     const blank = pedersenCommit(0);
     expect(blank.commitmentHex.length).toBeGreaterThan(0);
-    expect(
-      pedersenBalanceHolds([blank.commitmentHex], 0, blank.nonceHex)
-    ).toBe(true);
+    expect(pedersenBalanceHolds([blank.commitmentHex], 0, blank.nonceHex)).toBe(
+      true
+    );
   });
 });

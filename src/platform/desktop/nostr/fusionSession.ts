@@ -39,13 +39,25 @@ import {
   P2P_SIG_RESEND_MS,
   P2P_SIG_STATUS_MS,
 } from '../fusionTiming';
-import { onionWrap, onionPeel, onionUnpad, isEccAvailable } from './onionCrypto';
+import {
+  onionWrap,
+  onionPeel,
+  onionUnpadRaw,
+  encodeAuthorizedOutput,
+  decodeAuthorizedOutput,
+  isEccAvailable,
+  type AuthorizedOnionOutput,
+} from './onionCrypto';
 import {
   BlindIssuer,
   BlindSignatureRequest,
   CREDENTIAL_SLOTS_PER_PEER,
+  MAX_INPUT_CREDENTIALS_PER_PEER,
+  MAX_OUTPUT_CREDENTIALS_PER_PEER,
   inputCredentialMessageHash,
   inputCredentialMessageHashHex,
+  outputCredentialMessageHash,
+  outputCredentialMessageHashHex,
   peerCredentialSlotBase,
   totalCredentialSlots,
   verifyBchSchnorrHex,
@@ -60,6 +72,10 @@ import {
   type BlameEvidence,
   type BlameReport,
 } from './fusionBlame';
+import {
+  clearRoundNullifiers,
+  consumeOutputNullifiers,
+} from './fusionCredentialNullifiers';
 import {
   pedersenBalanceHolds,
   pedersenCommit,
@@ -119,6 +135,8 @@ export type RoundMessage =
       pedersenTotalNonce: string;
       /** Player excess fee the commitments must sum to. */
       excessFee: number;
+      inputCount: number;
+      outputCount: number;
     } & MessageBinding)
   | ({
       type: 'credential_response';
@@ -133,15 +151,28 @@ export type RoundMessage =
       /** Unblinded 64-byte BCH Schnorr credentials (hex), parallel to inputs. */
       credentialSigs: string[];
     } & MessageBinding)
-  | ({ type: 'outputs'; session: string; outputs: FusionOutputRef[] } & MessageBinding)
-  | ({ type: 'onion_output'; session: string; onion: string; mixOrder: string[] } & MessageBinding)
+  | ({
+      type: 'outputs';
+      session: string;
+      outputs: AuthorizedOnionOutput[];
+    } & MessageBinding)
+  | ({
+      type: 'onion_output';
+      session: string;
+      onion: string;
+      mixOrder: string[];
+    } & MessageBinding)
   /**
    * How many onion blobs this peer will inject (one per output). Signed under
    * the round key so peels know the hop total = sum of declares. Without this,
    * peels waited for `participants.length` while peers sent a random 2–4
    * onions each → hang / outputSlots=0 (Claude diagnosis, 2026-08-06).
    */
-  | ({ type: 'onion_declare'; session: string; outputCount: number } & MessageBinding)
+  | ({
+      type: 'onion_declare';
+      session: string;
+      outputCount: number;
+    } & MessageBinding)
   | ({ type: 'components_ready'; session: string } & MessageBinding)
   | ({
       type: 'assembled';
@@ -150,7 +181,12 @@ export type RoundMessage =
       outputs: FusionOutputRef[];
     } & MessageBinding)
   | ({ type: 'signature'; session: string; sigs: InputSig[] } & MessageBinding)
-  | ({ type: 'final'; session: string; txid: string; txHex: string } & MessageBinding)
+  | ({
+      type: 'final';
+      session: string;
+      txid: string;
+      txHex: string;
+    } & MessageBinding)
   /** Provable protocol fault (ephemeral session key only). Never used for timeouts. */
   | ({
       type: 'blame';
@@ -163,7 +199,9 @@ export type RoundMessage =
 export interface RoundTransport {
   send(toPubkey: string, msg: RoundMessage): Promise<void>;
   onMessage(handler: (from: string, msg: RoundMessage) => void): () => void;
-  onProtocolError?: (handler: (from: string, error: Error) => void) => () => void;
+  onProtocolError?: (
+    handler: (from: string, error: Error) => void
+  ) => () => void;
 }
 
 /** Secure random in [0, 1) for jitter calculations. */
@@ -232,7 +270,11 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
-function isSafeIntegerIn(value: unknown, minimum: number, maximum: number): value is number {
+function isSafeIntegerIn(
+  value: unknown,
+  minimum: number,
+  maximum: number
+): value is number {
   return (
     typeof value === 'number' &&
     Number.isSafeInteger(value) &&
@@ -264,8 +306,10 @@ export function messageBinding(): MessageBinding {
 function validBinding(value: unknown): value is MessageBinding {
   if (!isRecord(value)) return false;
   if (value.version !== ROUND_MSG_VERSION) return false;
-  if (typeof value.nonce !== 'string' || !HEX_32.test(value.nonce)) return false;
-  if (!isSafeIntegerIn(value.timestamp, 0, Number.MAX_SAFE_INTEGER)) return false;
+  if (typeof value.nonce !== 'string' || !HEX_32.test(value.nonce))
+    return false;
+  if (!isSafeIntegerIn(value.timestamp, 0, Number.MAX_SAFE_INTEGER))
+    return false;
   const age = Math.floor(Date.now() / 1000) - (value.timestamp as number);
   if (age < -30 || age > MAX_MESSAGE_AGE_SECONDS) return false; // 30s clock skew tolerance
   return true;
@@ -354,7 +398,9 @@ function buildPlayerPedersen(
     nonces.push(c.nonceHex);
   }
   if (excess < 0) {
-    throw new Error('pedersen excess fee is negative — outputs+fees exceed inputs');
+    throw new Error(
+      'pedersen excess fee is negative — outputs+fees exceed inputs'
+    );
   }
   return {
     amountCommitments: commitments,
@@ -363,27 +409,32 @@ function buildPlayerPedersen(
   };
 }
 
-/** Create blind requests for every input, using the peer's reserved nonce slots. */
-function buildInputCredentialRequests(
+/** Create blind requests for every input and anonymous output component. */
+function buildComponentCredentialRequests(
   contribution: PeerContribution,
   participants: string[],
   myPubkey: string,
   roundPubkey: string,
-  blindNoncePoints: string[]
+  blindNoncePoints: string[],
+  context: { session: string; network: 'mainnet' | 'chipnet'; tier: number }
 ): {
   requests: Array<{ index: number; e: string }>;
   pending: BlindSignatureRequest[];
   indices: number[];
+  outputSerials: string[];
 } {
   const base = peerCredentialSlotBase(participants, myPubkey);
-  if (contribution.inputs.length > CREDENTIAL_SLOTS_PER_PEER) {
+  const componentCount =
+    contribution.inputs.length + contribution.outputs.length;
+  if (componentCount > CREDENTIAL_SLOTS_PER_PEER) {
     throw new Error(
-      `too many inputs for credential slots (${contribution.inputs.length} > ${CREDENTIAL_SLOTS_PER_PEER})`
+      `too many components for credential slots (${componentCount} > ${CREDENTIAL_SLOTS_PER_PEER})`
     );
   }
   const requests: Array<{ index: number; e: string }> = [];
   const pending: BlindSignatureRequest[] = [];
   const indices: number[] = [];
+  const outputSerials: string[] = [];
   contribution.inputs.forEach((input, i) => {
     const index = base + i;
     const r = blindNoncePoints[index];
@@ -397,7 +448,26 @@ function buildInputCredentialRequests(
     pending.push(req);
     indices.push(index);
   });
-  return { requests, pending, indices };
+  contribution.outputs.forEach((output, i) => {
+    const index = base + contribution.inputs.length + i;
+    const r = blindNoncePoints[index];
+    if (!r) throw new Error(`missing blind nonce point at slot ${index}`);
+    const serialBytes = new Uint8Array(32);
+    crypto.getRandomValues(serialBytes);
+    const serial = Array.from(serialBytes, (b) =>
+      b.toString(16).padStart(2, '0')
+    ).join('');
+    const req = BlindSignatureRequest.create(
+      roundPubkey,
+      r,
+      outputCredentialMessageHash(context, output, serial)
+    );
+    requests.push({ index, e: req.requestHex() });
+    pending.push(req);
+    indices.push(index);
+    outputSerials.push(serial);
+  });
+  return { requests, pending, indices, outputSerials };
 }
 
 function validOutput(value: unknown): boolean {
@@ -410,6 +480,52 @@ function validOutput(value: unknown): boolean {
     /^[0-9a-f]+$/i.test(value.script) &&
     isSafeIntegerIn(value.value, 546, MAX_MONEY)
   );
+}
+
+function validAuthorizedOutput(value: unknown): boolean {
+  return (
+    validOutput(value) &&
+    isRecord(value) &&
+    typeof value.credentialSerial === 'string' &&
+    HEX_64_STRICT.test(value.credentialSerial) &&
+    typeof value.credentialSig === 'string' &&
+    HEX_128.test(value.credentialSig)
+  );
+}
+
+export function verifyAuthorizedOutputBatch(
+  outputs: AuthorizedOnionOutput[],
+  expectedCount: number,
+  issuerPubkey: string,
+  context: { session: string; network: 'mainnet' | 'chipnet'; tier: number }
+): { ok: true; serials: string[] } | { ok: false; reason: string } {
+  if (outputs.length !== expectedCount || expectedCount < 1) {
+    return { ok: false, reason: 'output credential quota mismatch' };
+  }
+  const serials = new Set<string>();
+  const outputIds = new Set<string>();
+  for (const output of outputs) {
+    if (!validAuthorizedOutput(output)) {
+      return { ok: false, reason: 'malformed authorized output' };
+    }
+    const serial = output.credentialSerial.toLowerCase();
+    const outputId = `${output.value}:${output.script.toLowerCase()}`;
+    if (serials.has(serial) || outputIds.has(outputId)) {
+      return { ok: false, reason: 'duplicate output credential or output' };
+    }
+    if (
+      !verifyBchSchnorrHex(
+        issuerPubkey,
+        output.credentialSig,
+        outputCredentialMessageHashHex(context, output, serial)
+      )
+    ) {
+      return { ok: false, reason: 'invalid output credential' };
+    }
+    serials.add(serial);
+    outputIds.add(outputId);
+  }
+  return { ok: true, serials: [...serials] };
 }
 
 function validSignature(value: unknown): boolean {
@@ -440,7 +556,8 @@ function validArray(
 
 /** Parse and bound every decrypted relay message before session code sees it. */
 export function parseRoundMessage(content: string): RoundMessage | null {
-  if (content.length === 0 || content.length > MAX_ROUND_MESSAGE_CHARS) return null;
+  if (content.length === 0 || content.length > MAX_ROUND_MESSAGE_CHARS)
+    return null;
   try {
     const message: unknown = JSON.parse(content);
     if (!isRecord(message) || !validSession(message.session)) return null;
@@ -526,7 +643,23 @@ export function parseRoundMessage(content: string): RoundMessage | null {
           ) ||
           typeof message.pedersenTotalNonce !== 'string' ||
           !HEX_64_STRICT.test(message.pedersenTotalNonce) ||
-          !isSafeIntegerIn(message.excessFee, 0, MAX_MONEY)
+          !isSafeIntegerIn(message.excessFee, 0, MAX_MONEY) ||
+          !isSafeIntegerIn(
+            message.inputCount,
+            1,
+            MAX_INPUT_CREDENTIALS_PER_PEER
+          ) ||
+          !isSafeIntegerIn(
+            message.outputCount,
+            1,
+            MAX_OUTPUT_CREDENTIALS_PER_PEER
+          ) ||
+          message.requests.length !==
+            message.inputCount + message.outputCount ||
+          message.amountCommitments.length !== message.requests.length ||
+          message.requests.length > CREDENTIAL_SLOTS_PER_PEER ||
+          new Set(message.requests.map((request) => request.index)).size !==
+            message.requests.length
         ) {
           return null;
         }
@@ -555,7 +688,7 @@ export function parseRoundMessage(content: string): RoundMessage | null {
         }
         break;
       case 'outputs':
-        if (!validArray(message.outputs, validOutput)) return null;
+        if (!validArray(message.outputs, validAuthorizedOutput)) return null;
         break;
       case 'onion_output':
         if (
@@ -567,7 +700,13 @@ export function parseRoundMessage(content: string): RoundMessage | null {
         }
         break;
       case 'onion_declare':
-        if (!isSafeIntegerIn(message.outputCount, 1, 4)) {
+        if (
+          !isSafeIntegerIn(
+            message.outputCount,
+            1,
+            MAX_OUTPUT_CREDENTIALS_PER_PEER
+          )
+        ) {
           return null;
         }
         break;
@@ -611,9 +750,13 @@ export interface RoundParams {
   /** Random coordinator-issued id agreed during round_start. */
   session?: string;
   tier: number;
+  /** Credential-domain network; production callers always provide it. */
+  network?: 'mainnet' | 'chipnet';
   feerate: number;
   myContribution: PeerContribution;
   keysByPubkey: Map<string, Uint8Array>;
+  /** Production supplies the native P2P-v3 signing boundary. */
+  sign?: (tx: ReturnType<typeof assembleFusionTx>) => Promise<InputSig[]>;
   broadcast: (txHex: string) => Promise<string>;
   timeoutMs?: number;
   signal?: AbortSignal;
@@ -696,7 +839,9 @@ function abortError(reason: string): Error {
   return new Error(`fusion round aborted: ${reason}`);
 }
 
-function inputKey(input: Pick<FusionInputRef, 'prevTxid' | 'prevIndex'>): string {
+function inputKey(
+  input: Pick<FusionInputRef, 'prevTxid' | 'prevIndex'>
+): string {
   return `${input.prevTxid}:${input.prevIndex}`;
 }
 
@@ -726,15 +871,19 @@ export function runFusionRound(
     : runParticipant(normalized, transport, coordinator);
 }
 
-function assembleVerifySign(
+async function assembleVerifySign(
   params: RoundParams,
   inputs: FusionInputRef[],
   outputs: FusionOutputRef[]
-): InputSig[] {
+): Promise<InputSig[]> {
   const tx = assembleFusionTx([{ inputs, outputs }]);
   const safety = verifyFusionSafety(tx, params.myContribution, params.feerate);
   if (!safety.ok) throw new Error(`refusing to sign: ${safety.reason}`);
-  const signatures = signMyInputs(tx, params.keysByPubkey);
+  if (params.signal?.aborted) throw abortError('cancelled before signing');
+  const signatures = params.sign
+    ? await params.sign(tx)
+    : signMyInputs(tx, params.keysByPubkey);
+  if (params.signal?.aborted) throw abortError('cancelled after signing');
   if (signatures.length !== params.myContribution.inputs.length) {
     throw new Error('refusing to sign: a private key is missing for my input');
   }
@@ -749,15 +898,18 @@ function runParticipant(
   const session = params.session ?? sessionId(params.participants, params.tier);
   // Mix-net peers: all participants EXCEPT the coordinator. The coordinator
   // is the assembler and receives final revealed outputs — it does not peel.
-  const mixOrder = params.mixOrder ??
+  const mixOrder =
+    params.mixOrder ??
     [...params.participants].filter((p) => p !== coordinator).sort();
   const myIdx = mixOrder.indexOf(params.myPubkey);
 
   return new Promise((resolve, reject) => {
     let settled = false;
     let signed = false;
-    let approved: { inputs: FusionInputRef[]; outputs: FusionOutputRef[] } | null =
-      null;
+    let approved: {
+      inputs: FusionInputRef[];
+      outputs: FusionOutputRef[];
+    } | null = null;
     let unsubscribe: () => void = () => undefined;
     let unsubscribeProtocolError: () => void = () => undefined;
     let declareResendTimer: ReturnType<typeof setInterval> | null = null;
@@ -821,8 +973,9 @@ function runParticipant(
     let resolveCredResponse:
       | ((v: Array<{ index: number; s: string }>) => void)
       | null = null;
-    let credResponsePromise: Promise<Array<{ index: number; s: string }>> | null =
-      null;
+    let credResponsePromise: Promise<
+      Array<{ index: number; s: string }>
+    > | null = null;
     const waitCredResponse = () => {
       if (!credResponsePromise) {
         credResponsePromise = new Promise((res) => {
@@ -909,7 +1062,9 @@ function runParticipant(
         const peeled: Uint8Array[] = [];
         for (const onionB64 of batch) {
           try {
-            const blob = Uint8Array.from(atob(onionB64), (c) => c.charCodeAt(0));
+            const blob = Uint8Array.from(atob(onionB64), (c) =>
+              c.charCodeAt(0)
+            );
             peeled.push(await onionPeel(blob, myPriv));
           } catch {
             // Drop a single bad blob rather than DoS the whole round (Claude #2).
@@ -928,12 +1083,9 @@ function runParticipant(
         const nextIdx = myIdx + 1;
         if (nextIdx >= mixOrder.length) {
           // LAST PEELER — reveal plaintext outputs to coordinator only.
-          const revealedOutputs: FusionOutputRef[] = [];
+          const revealedOutputs: AuthorizedOnionOutput[] = [];
           for (const inner of peeled) {
-            const { addr, value } = onionUnpad(inner);
-            if (addr && value > 0) {
-              revealedOutputs.push({ script: addr, value });
-            }
+            revealedOutputs.push(decodeAuthorizedOutput(onionUnpadRaw(inner)));
           }
           if (revealedOutputs.length === 0) {
             throw new Error('onion peel produced no valid outputs');
@@ -984,8 +1136,8 @@ function runParticipant(
           collectedOnions.length > 0 &&
           expectedOnionCount() !== null
         ) {
-          void processOnionBatchIfReady().catch((error: unknown) =>
-            void fail(asError(error), true)
+          void processOnionBatchIfReady().catch(
+            (error: unknown) => void fail(asError(error), true)
           );
         }
       }
@@ -998,8 +1150,8 @@ function runParticipant(
       if (!params.participants.includes(from)) return;
       declaredOnionCounts.set(from, message.outputCount);
       reportOnionWait();
-      void processOnionBatchIfReady().catch((error: unknown) =>
-        void fail(asError(error), true)
+      void processOnionBatchIfReady().catch(
+        (error: unknown) => void fail(asError(error), true)
       );
     };
 
@@ -1013,12 +1165,12 @@ function runParticipant(
       seenOnionPayloads.add(message.onion);
       collectedOnions.push(message.onion);
       reportOnionWait();
-      void processOnionBatchIfReady().catch((error: unknown) =>
-        void fail(asError(error), true)
+      void processOnionBatchIfReady().catch(
+        (error: unknown) => void fail(asError(error), true)
       );
     };
 
-    unsubscribe = transport.onMessage((from, message) => {
+    unsubscribe = transport.onMessage(async (from, message) => {
       if (settled) return;
       if (message.session !== session) return;
       if (seenNonces.has(message.nonce)) return;
@@ -1043,10 +1195,7 @@ function runParticipant(
       }
 
       // Verified blame from any round participant (usually coordinator).
-      if (
-        message.type === 'blame' &&
-        params.participants.includes(from)
-      ) {
+      if (message.type === 'blame' && params.participants.includes(from)) {
         const report: BlameReport = {
           session: message.session,
           accused: message.accused,
@@ -1091,7 +1240,7 @@ function runParticipant(
           ]);
           params.onPhase?.(5);
           params.onStatus?.('Assembled tx received — signing our inputs…');
-          const signatures = assembleVerifySign(
+          const signatures = await assembleVerifySign(
             params,
             approved.inputs,
             approved.outputs
@@ -1107,8 +1256,8 @@ function runParticipant(
           params.onStatus?.(
             'Signed — waiting for coordinator final (re-sending sigs if Tor drops)…'
           );
-          void sendSigs().catch((error: unknown) =>
-            void fail(asError(error), true)
+          void sendSigs().catch(
+            (error: unknown) => void fail(asError(error), true)
           );
           // Tor gift-wraps drop; coordinator hung on incomplete sig set while UI
           // only showed phase=6 then auto-restarted with no message (live 2026-08-06).
@@ -1124,7 +1273,10 @@ function runParticipant(
       }
       if (message.type === 'final') {
         if (!signed || !approved) {
-          void fail(new Error('received final transaction before verification'), true);
+          void fail(
+            new Error('received final transaction before verification'),
+            true
+          );
           return;
         }
         try {
@@ -1181,14 +1333,24 @@ function runParticipant(
         'Coordinator credential_params may have been dropped on Tor — ' +
           'keep Auto on; coordinator now re-sends params until all peers request.'
       );
-      const pedersen = buildPlayerPedersen(params.myContribution, params.feerate);
-      const { requests, pending } = buildInputCredentialRequests(
+      const pedersen = buildPlayerPedersen(
         params.myContribution,
-        params.participants,
-        params.myPubkey,
-        roundPubkey,
-        blindNoncePoints
+        params.feerate
       );
+      const credentialContext = {
+        session,
+        network: params.network ?? 'chipnet',
+        tier: params.tier,
+      };
+      const { requests, pending, outputSerials } =
+        buildComponentCredentialRequests(
+          params.myContribution,
+          params.participants,
+          params.myPubkey,
+          roundPubkey,
+          blindNoncePoints,
+          credentialContext
+        );
       const responseWait = waitCredResponse();
       params.onStatus?.('Requesting blind credentials from coordinator…');
       await transport.send(coordinator, {
@@ -1199,6 +1361,8 @@ function runParticipant(
         amountCommitments: pedersen.amountCommitments,
         pedersenTotalNonce: pedersen.pedersenTotalNonce,
         excessFee: pedersen.excessFee,
+        inputCount: params.myContribution.inputs.length,
+        outputCount: params.myContribution.outputs.length,
       });
       const responses = await waitWithTimeout(
         responseWait,
@@ -1212,9 +1376,13 @@ function runParticipant(
       for (let i = 0; i < pending.length; i++) {
         const index = requests[i].index;
         const s = byIndex.get(index);
-        if (!s) throw new Error(`missing credential response for slot ${index}`);
+        if (!s)
+          throw new Error(`missing credential response for slot ${index}`);
         credentialSigs.push(pending[i].finalizeHex(s, true));
       }
+      const outputCredentialSigs = credentialSigs.slice(
+        params.myContribution.inputs.length
+      );
 
       // Phase 2: send inputs (with credentials) to coordinator
       params.onStatus?.(
@@ -1242,7 +1410,12 @@ function runParticipant(
           'onion mix-net requires secp256k1 (unavailable in this environment)'
         );
       }
-      const myOutputs = params.myContribution.outputs;
+      const myOutputs: AuthorizedOnionOutput[] =
+        params.myContribution.outputs.map((output, index) => ({
+          ...output,
+          credentialSerial: outputSerials[index],
+          credentialSig: outputCredentialSigs[index],
+        }));
       // Self is a peeler; don't wait for our own gift-wrap echo.
       declaredOnionCounts.set(params.myPubkey, myOutputs.length);
       params.onPhase?.(3);
@@ -1282,7 +1455,7 @@ function runParticipant(
       // Cache inject payloads so we can re-send after Tor drops (new nonces).
       const injectPayloads: string[] = [];
       for (const output of myOutputs) {
-        const payload = `${output.script}|${output.value}`;
+        const payload = encodeAuthorizedOutput(output);
         const onion = await onionWrap(payload, mixOrder);
         injectPayloads.push(btoa(String.fromCharCode(...onion)));
       }
@@ -1318,12 +1491,7 @@ function runParticipant(
         // Bounded hop re-sends only (not forever — that flooded Tor).
         let outputResendsLeft = ONION_OUTPUT_RESEND_MAX;
         onionOutputResendTimer = setInterval(() => {
-          if (
-            settled ||
-            onionBatchDone ||
-            signed ||
-            outputResendsLeft <= 0
-          ) {
+          if (settled || onionBatchDone || signed || outputResendsLeft <= 0) {
             if (onionOutputResendTimer) {
               clearInterval(onionOutputResendTimer);
               onionOutputResendTimer = null;
@@ -1355,30 +1523,42 @@ function runCoordinator(
   const session = params.session ?? sessionId(params.participants, params.tier);
   const others = params.participants.filter((peer) => peer !== params.myPubkey);
   // Mix-net peers: all participants EXCEPT the coordinator.
-  const mixOrder = params.mixOrder ??
+  const mixOrder =
+    params.mixOrder ??
     [...params.participants].filter((p) => p !== params.myPubkey).sort();
 
   // Coordinator is the blind-Schnorr issuer for this round (server role, peer-hosted).
   let issuer: BlindIssuer;
+  let selfAuthorizedOutputs: AuthorizedOnionOutput[] = [];
   let selfIssueOk = true;
   let selfIssueError: Error | null = null;
   try {
-    issuer = BlindIssuer.create(totalCredentialSlots(params.participants.length));
-    // Self-issue credentials for the coordinator's own inputs so every CoinJoin
-    // input is covered by a one-shot nonce from this round's issuer.
-    const selfBuilt = buildInputCredentialRequests(
+    issuer = BlindIssuer.create(
+      totalCredentialSlots(params.participants.length)
+    );
+    const selfBuilt = buildComponentCredentialRequests(
       params.myContribution,
       params.participants,
       params.myPubkey,
       issuer.pubkeyHex,
-      issuer.rPointsHex
+      issuer.rPointsHex,
+      { session, network: params.network ?? 'chipnet', tier: params.tier }
     );
+    const selfSigs: string[] = [];
     for (let i = 0; i < selfBuilt.pending.length; i++) {
       const index = selfBuilt.requests[i].index;
       const s = issuer.signHex(index, selfBuilt.requests[i].e);
-      selfBuilt.pending[i].finalizeHex(s, true);
+      selfSigs.push(selfBuilt.pending[i].finalizeHex(s, true));
     }
-    const selfPedersen = buildPlayerPedersen(params.myContribution, params.feerate);
+    selfAuthorizedOutputs = params.myContribution.outputs.map((output, i) => ({
+      ...output,
+      credentialSerial: selfBuilt.outputSerials[i],
+      credentialSig: selfSigs[params.myContribution.inputs.length + i],
+    }));
+    const selfPedersen = buildPlayerPedersen(
+      params.myContribution,
+      params.feerate
+    );
     if (
       !pedersenBalanceHolds(
         selfPedersen.amountCommitments,
@@ -1415,7 +1595,7 @@ function runCoordinator(
     // Output registry: pool fills when the last peeler reveals (anonymous
     // gift-wraps — `from` is not a round identity).
     const outputsByPeer = new Map<string, FusionOutputRef[]>();
-    const anonymousOutputBatches: FusionOutputRef[][] = [];
+    const anonymousOutputBatches: AuthorizedOnionOutput[][] = [];
     const outputPool = (): FusionOutputRef[] => [
       ...[...outputsByPeer.values()].flat(),
       ...anonymousOutputBatches.flat(),
@@ -1434,8 +1614,16 @@ function runCoordinator(
     // Do NOT mark the coordinator ready until its own onions are injected.
     const readyPeers = new Set<string>();
     const credentialedPeers = new Set<string>([params.myPubkey]);
-    let assembled: { inputs: FusionInputRef[]; outputs: FusionOutputRef[] } | null =
-      null;
+    const outputQuotaByPeer = new Map<string, number>([
+      [params.myPubkey, params.myContribution.outputs.length],
+    ]);
+    const inputQuotaByPeer = new Map<string, number>([
+      [params.myPubkey, params.myContribution.inputs.length],
+    ]);
+    let assembled: {
+      inputs: FusionInputRef[];
+      outputs: FusionOutputRef[];
+    } | null = null;
     let assembling = false;
     let finalizing = false;
     let broadcastStarted = false;
@@ -1486,6 +1674,7 @@ function runCoordinator(
       settled = true;
       params.onStatus?.(`Round failed: ${error.message}`);
       cleanup();
+      clearRoundNullifiers(session);
       if (notifyPeers) {
         const message: RoundMessage = {
           ...messageBinding(),
@@ -1493,7 +1682,9 @@ function runCoordinator(
           session,
           reason: error.message.slice(0, 240),
         };
-        await Promise.allSettled(others.map((peer) => transport.send(peer, message)));
+        await Promise.allSettled(
+          others.map((peer) => transport.send(peer, message))
+        );
       }
       reject(error);
     };
@@ -1533,7 +1724,9 @@ function runCoordinator(
       // Mark settled before fan-out so re-entry is ignored.
       settled = true;
       cleanup();
-      await Promise.allSettled(others.map((peer) => transport.send(peer, blameMsg)));
+      await Promise.allSettled(
+        others.map((peer) => transport.send(peer, blameMsg))
+      );
       // Also plain abort for older peers / clarity.
       const abortMsg: RoundMessage = {
         ...messageBinding(),
@@ -1541,7 +1734,9 @@ function runCoordinator(
         session,
         reason: reason.slice(0, 240),
       };
-      await Promise.allSettled(others.map((peer) => transport.send(peer, abortMsg)));
+      await Promise.allSettled(
+        others.map((peer) => transport.send(peer, abortMsg))
+      );
       reject(new Error(reason));
     };
     const succeed = (result: RoundResult) => {
@@ -1551,6 +1746,7 @@ function runCoordinator(
         `Fused ✓ — txid ${result.txid.slice(0, 16)}… (confirming on wallet)`
       );
       cleanup();
+      clearRoundNullifiers(session);
       resolve(result);
     };
     const onCancel = () => {
@@ -1564,6 +1760,12 @@ function runCoordinator(
     ) => {
       if (credentialedPeers.has(from)) {
         throw new Error(`duplicate credential request from ${from}`);
+      }
+      if (
+        message.requests.length !== message.inputCount + message.outputCount ||
+        message.amountCommitments.length !== message.requests.length
+      ) {
+        throw new Error('credential component counts do not match commitments');
       }
       if (
         !pedersenBalanceHolds(
@@ -1595,9 +1797,14 @@ function runCoordinator(
       }
       const responses: Array<{ index: number; s: string }> = [];
       for (const req of message.requests) {
-        responses.push({ index: req.index, s: issuer.signHex(req.index, req.e) });
+        responses.push({
+          index: req.index,
+          s: issuer.signHex(req.index, req.e),
+        });
       }
       credentialedPeers.add(from);
+      inputQuotaByPeer.set(from, message.inputCount);
+      outputQuotaByPeer.set(from, message.outputCount);
       await transport.send(from, {
         ...messageBinding(),
         type: 'credential_response',
@@ -1614,6 +1821,11 @@ function runCoordinator(
     ) => {
       if (inputs.length !== sigs.length) {
         throw new Error('input/credential count mismatch');
+      }
+      const quota = inputQuotaByPeer.get(from);
+      const existingCount = inputsByPeer.get(from)?.length ?? 0;
+      if (quota === undefined || existingCount + inputs.length > quota) {
+        throw new Error('input credential quota exceeded');
       }
       for (let i = 0; i < inputs.length; i++) {
         const msgHex = inputCredentialMessageHashHex(inputs[i]);
@@ -1685,7 +1897,9 @@ function runCoordinator(
       params.onPhase?.(5);
       params.onStatus?.('All signatures in — finalizing and broadcasting…');
       const tx = assembleFusionTx([assembled]);
-      const finalized = finalizeFusionTx(tx, [...signaturesByOutpoint.values()]);
+      const finalized = finalizeFusionTx(tx, [
+        ...signaturesByOutpoint.values(),
+      ]);
 
       // The coordinator is also a participant: execute every collected
       // signature against the exact approved template before any network can
@@ -1701,7 +1915,9 @@ function runCoordinator(
       }
       broadcastStarted = true;
       params.onPhase?.(7);
-      const broadcastId = (await params.broadcast(finalized.txHex)).toLowerCase();
+      const broadcastId = (
+        await params.broadcast(finalized.txHex)
+      ).toLowerCase();
       if (broadcastId !== finalized.txid) {
         throw new Error('broadcast returned a different transaction id');
       }
@@ -1737,7 +1953,8 @@ function runCoordinator(
       if (fee < 0) return false;
       const roughMax =
         Math.ceil(
-          ((10 + inputs.length * 150 + pool.length * 40) * params.feerate) / 1000
+          ((10 + inputs.length * 150 + pool.length * 40) * params.feerate) /
+            1000
         ) * 3;
       return fee <= Math.max(roughMax, 50_000);
     };
@@ -1746,10 +1963,7 @@ function runCoordinator(
       if (missingOutputsTimer || settled || assembled) return;
       missingOutputsTimer = setTimeout(() => {
         if (settled || assembled) return;
-        if (
-          readyPeers.size === params.participants.length &&
-          !outputsReady()
-        ) {
+        if (readyPeers.size === params.participants.length && !outputsReady()) {
           const peelers = mixOrder.length;
           void fail(
             new Error(
@@ -1803,6 +2017,15 @@ function runCoordinator(
         armMissingOutputsWatch();
         return;
       }
+      if (
+        inputQuotaByPeer.size !== params.participants.length ||
+        params.participants.some(
+          (peer) =>
+            (inputsByPeer.get(peer)?.length ?? 0) !== inputQuotaByPeer.get(peer)
+        )
+      ) {
+        return;
+      }
       const inputs = [...inputsByPeer.values()].flat();
       // Refuse to assemble until every input carries a verified blind credential.
       if (inputs.some((input) => !credentialedInputs.has(inputKey(input)))) {
@@ -1840,7 +2063,7 @@ function runCoordinator(
       assembled = draft;
       params.onPhase?.(5);
       params.onStatus?.('Assembling CoinJoin — signing our inputs…');
-      const ownSignatures = assembleVerifySign(
+      const ownSignatures = await assembleVerifySign(
         params,
         assembled.inputs,
         assembled.outputs
@@ -1888,8 +2111,8 @@ function runCoordinator(
       if (seenNonces.has(message.nonce)) return;
       seenNonces.add(message.nonce);
       if (message.type === 'credential_request' && others.includes(from)) {
-        void handleCredentialRequest(from, message).catch((error: unknown) =>
-          void fail(asError(error), true)
+        void handleCredentialRequest(from, message).catch(
+          (error: unknown) => void fail(asError(error), true)
         );
         return;
       }
@@ -1898,8 +2121,8 @@ function runCoordinator(
         if (readyPeers.size === params.participants.length) {
           armMissingOutputsWatch();
         }
-        void tryAssemble().catch((error: unknown) =>
-          void fail(asError(error), true)
+        void tryAssemble().catch(
+          (error: unknown) => void fail(asError(error), true)
         );
         return;
       }
@@ -1935,31 +2158,54 @@ function runCoordinator(
       if (message.type === 'outputs') {
         if (assembled) return;
         const incoming = Array.isArray(message.outputs) ? message.outputs : [];
-        const valid = incoming.filter(
-          (o) =>
-            o &&
-            typeof o.script === 'string' &&
-            o.script.length > 0 &&
-            Number.isSafeInteger(o.value) &&
-            o.value > 0
+        const expected = [...outputQuotaByPeer.values()].reduce(
+          (sum, count) => sum + count,
+          0
         );
-        if (valid.length === 0) return;
+        if (
+          params.participants.includes(from) ||
+          outputQuotaByPeer.size !== params.participants.length ||
+          anonymousOutputBatches.length !== 0 ||
+          incoming.length !== expected
+        ) {
+          void fail(
+            new Error('unauthorized output batch count or sender'),
+            true
+          );
+          return;
+        }
+        const authorization = verifyAuthorizedOutputBatch(
+          incoming,
+          expected,
+          issuer.pubkeyHex,
+          {
+            session,
+            network: params.network ?? 'chipnet',
+            tier: params.tier,
+          }
+        );
+        if (authorization.ok === false) {
+          void fail(new Error(authorization.reason), true);
+          return;
+        }
+        if (!consumeOutputNullifiers(session, authorization.serials)) {
+          void fail(new Error('replayed output credential nullifier'), true);
+          return;
+        }
         // Last peeler reveals under a throwaway key (`from` ∉ participants).
-        if (params.participants.includes(from)) {
-          outputsByPeer.set(from, valid);
-        } else if (anonymousOutputBatches.length < others.length + 2) {
-          anonymousOutputBatches.push(valid);
+        {
+          anonymousOutputBatches.push(incoming);
           console.info(
             '[p2p-fusion coord] onion reveal batch',
-            valid.length,
+            incoming.length,
             'outputs; batches',
             anonymousOutputBatches.length,
             '/',
             others.length
           );
         }
-        void tryAssemble().catch((error: unknown) =>
-          void fail(asError(error), true)
+        void tryAssemble().catch(
+          (error: unknown) => void fail(asError(error), true)
         );
         return;
       }
@@ -1988,8 +2234,8 @@ function runCoordinator(
         message.sigs.forEach((signature) =>
           signaturesByOutpoint.set(inputKey(signature), signature)
         );
-        void tryFinalize().catch((error: unknown) =>
-          void fail(asError(error), true, true)
+        void tryFinalize().catch(
+          (error: unknown) => void fail(asError(error), true, true)
         );
       }
     });
@@ -2064,7 +2310,7 @@ function runCoordinator(
       // Always inject coordinator outputs through the onion mix-net.
       const jMin = params.jitterMs?.[0] ?? 200;
       const jMax = params.jitterMs?.[1] ?? 2_000;
-      const myOutputs = params.myContribution.outputs;
+      const myOutputs = selfAuthorizedOutputs;
       params.onStatus?.(
         `Coordinator: onion-injecting ${myOutputs.length} output(s) to first peeler…`
       );
@@ -2096,7 +2342,7 @@ function runCoordinator(
       const firstPeeler = mixOrder[0];
       const injectPayloads: string[] = [];
       for (const output of myOutputs) {
-        const payload = `${output.script}|${output.value}`;
+        const payload = encodeAuthorizedOutput(output);
         const onion = await onionWrap(payload, mixOrder);
         injectPayloads.push(btoa(String.fromCharCode(...onion)));
       }
@@ -2133,8 +2379,8 @@ function runCoordinator(
       if (readyPeers.size === params.participants.length) {
         armMissingOutputsWatch();
       }
-      void tryAssemble().catch((error: unknown) =>
-        void fail(asError(error), true)
+      void tryAssemble().catch(
+        (error: unknown) => void fail(asError(error), true)
       );
     })().catch((error: unknown) => void fail(asError(error), true));
   });
