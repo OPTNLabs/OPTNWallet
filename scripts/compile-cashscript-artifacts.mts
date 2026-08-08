@@ -4,9 +4,18 @@ import { fileURLToPath } from 'node:url';
 
 import { compileFile } from 'cashc';
 
-const rootDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+const rootDir = path.resolve(
+  path.dirname(fileURLToPath(import.meta.url)),
+  '..'
+);
 const sourceDir = path.join(rootDir, 'cashscript');
-const outputDir = path.join(rootDir, 'src', 'apis', 'ContractManager', 'artifacts');
+const outputDir = path.join(
+  rootDir,
+  'src',
+  'apis',
+  'ContractManager',
+  'artifacts'
+);
 const manifestPath = path.join(sourceDir, 'contracts.manifest.json');
 
 function sanitizeArtifact(artifact) {

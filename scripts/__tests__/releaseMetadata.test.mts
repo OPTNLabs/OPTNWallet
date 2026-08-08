@@ -13,14 +13,17 @@ const readText = (relativePath) =>
 
 const packageVersionFromCargoLock = (cargoLock) => {
   const match = cargoLock.match(
-    /\[\[package\]\]\s+name = "optn-wallet-desktop"\s+version = "([^"]+)"/m,
+    /\[\[package\]\]\s+name = "optn-wallet-desktop"\s+version = "([^"]+)"/m
   );
-  if (!match) throw new Error('optn-wallet-desktop package is missing from Cargo.lock');
+  if (!match)
+    throw new Error('optn-wallet-desktop package is missing from Cargo.lock');
   return match[1];
 };
 
 const packageVersionFromCargoToml = (cargoToml) => {
-  const packageSection = cargoToml.match(/\[package\]([\s\S]*?)(?:\r?\n\[|$)/)?.[1];
+  const packageSection = cargoToml.match(
+    /\[package\]([\s\S]*?)(?:\r?\n\[|$)/
+  )?.[1];
   const match = packageSection?.match(/^\s*version\s*=\s*"([^"]+)"/m);
   if (!match) throw new Error('package.version is missing from Cargo.toml');
   return match[1];

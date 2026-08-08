@@ -1,4 +1,4 @@
-// testPriceServerFetch.mjs
+// testPriceServerFetch.mts
 import https from 'https';
 import { URL } from 'url';
 
@@ -24,13 +24,13 @@ const req = https.request(endpoint, options, (res) => {
 
   let body = '';
   res.setEncoding('utf8');
-  res.on('data', chunk => body += chunk);
+  res.on('data', (chunk) => (body += chunk));
   res.on('end', () => {
     console.log('→ BODY:', body);
   });
 });
 
-req.on('error', err => {
+req.on('error', (err) => {
   console.error('Request error:', err);
 });
 

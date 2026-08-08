@@ -375,7 +375,7 @@ jobs:
             libudev-dev libusb-1.0-0-dev pkg-config
           # hidapi (Ledger/Trezor native USB) needs libudev; rusb needs libusb.
           # linux-aarch64: build a checksum-pinned Tor source release instead
-          # of trusting a distro Tor binary (see fetch-tor.mjs).
+          # of trusting a distro Tor binary (see fetch-tor.mts).
           if [ "${{ matrix.tor-target }}" = 'linux-aarch64' ]; then
             sudo apt-get install -y build-essential libevent-dev zlib1g-dev
           fi
@@ -394,7 +394,7 @@ jobs:
         run: npm ci
 
       - name: Fetch bundled Tor
-        run: node scripts/fetch-tor.mjs ${{ matrix.tor-target }}
+        run: npx --no-install tsx scripts/fetch-tor.mts ${{ matrix.tor-target }}
 
       - name: Detect optional macOS signing credentials
         if: startsWith(matrix.platform, 'macos')
@@ -528,7 +528,7 @@ jobs:
         run: |
           APPIMAGE_PATH="$(find "src-tauri/target/${{ matrix.target }}/release/bundle" -type f -name '*.AppImage' -print -quit)"
           test -n "$APPIMAGE_PATH"
-          node scripts/smoke-tor-artifact.mjs "$APPIMAGE_PATH" "${{ matrix.tor-target }}"
+          npx --no-install tsx scripts/smoke-tor-artifact.mts "$APPIMAGE_PATH" "${{ matrix.tor-target }}"
 
       - name: Upload desktop release files
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
