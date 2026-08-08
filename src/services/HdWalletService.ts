@@ -69,14 +69,19 @@ export type BchStandardBranchName = keyof typeof BCH_STANDARD_BRANCH_INDEX;
 /**
  * SLIP-44 coin type for BCH account paths.
  *
- * Mainnet uses BCH's registered coin type 145. Chipnet defaults to BIP44's
- * test-network coin type 1; 145 remains a valid custom path for restoring
- * wallets created by BCH tooling that uses the mainnet coin type on testnet.
+ * Mainnet uses BCH's registered coin type 145. Every test network defaults to
+ * BIP44's coin type 1 ("Testnet (all coins)"); 145 remains a valid custom path
+ * for restoring wallets created by BCH tooling that uses the mainnet coin type
+ * on a test net.
+ *
+ * Mainnet is the special case, not chipnet. `candidateAccountPaths` in
+ * DerivationPathDiscovery keys off mainnet the same way, so a network added
+ * later cannot inherit 145 here while being probed as a test net there.
  */
 export function getBchCoinType(network: Network = Network.MAINNET): number {
-  return network === Network.CHIPNET
-    ? COIN_TYPE.testnet
-    : COIN_TYPE.bitcoincash;
+  return network === Network.MAINNET
+    ? COIN_TYPE.bitcoincash
+    : COIN_TYPE.testnet;
 }
 
 export const MAX_BIP44_INDEX = 0x7fffffff;
