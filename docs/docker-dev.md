@@ -19,9 +19,21 @@ Workflows:
 - PR validation: [`.github/workflows/docker-dev-pr.yml`](../.github/workflows/docker-dev-pr.yml)
 - Trusted publish: [`.github/workflows/docker-dev.yml`](../.github/workflows/docker-dev.yml)
 
-PR validation is read-only and builds a local `linux/amd64` image. GHCR
+PR validation is read-only, builds a local `linux/amd64` image, runs non-root
+smoke checks, and runs `npm ci && npm run test:core` inside that image. GHCR
 publishing and provenance attestation are restricted to trusted tag or manual
 publish runs.
+
+For the fastest contributor setup, use a published version explicitly:
+
+```bash
+export OPTN_DOCKER_TAG=sha-abcdef1  # or a release tag such as v1.7.0
+npm --prefix packages/docker-dev run pull:release
+npm --prefix packages/docker-dev run up:release
+```
+
+The compose fallback to `latest` remains available for existing users, but
+explicit tags are preferred for reproducibility.
 
 ```bash
 # Local build (dev shell — no fusion)
