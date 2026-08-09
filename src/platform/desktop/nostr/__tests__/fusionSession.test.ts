@@ -17,6 +17,7 @@ import {
   type RoundParams,
 } from '../fusionSession';
 import { assembleFusionTx, type PeerContribution } from '../fusionRound';
+import type { BlameReport } from '../fusionBlame';
 import { electCoordinator } from '../fusion';
 import { signMyInputs, toLibauthTx } from '../fusionSign';
 
@@ -61,12 +62,18 @@ class Hub {
   readonly sent: Array<{ from: string; to: string; message: RoundMessage }> =
     [];
 
+  /**
+   * `transform` may rewrite a message, or return `null`/`undefined` to DROP it
+   * — which is how a test models a peer that goes silent (withholds its
+   * signatures) rather than one that lies. A relay cannot be asked to deliver
+   * something a peer never sent, so silence has to be expressible here.
+   */
   constructor(
     private readonly transform?: (
       from: string,
       to: string,
       message: RoundMessage
-    ) => RoundMessage
+    ) => RoundMessage | null | undefined
   ) {}
 
   activeHandlerCount(): number {
@@ -79,7 +86,11 @@ class Hub {
   transportFor(me: string): RoundTransport {
     return {
       send: async (to, msg) => {
-        const message = this.transform?.(me, to, msg) ?? msg;
+        const next = this.transform?.(me, to, msg);
+        // A missing transform yields `undefined` too, so only treat nullish as
+        // "drop" when a transform is actually installed.
+        if (this.transform && next == null) return;
+        const message = next ?? msg;
         this.sent.push({ from: me, to, message });
         // Model production: fusionTransport seals every COMPONENT under a
         // fresh generateSecretKey(), so `from` is a one-time pubkey the
@@ -810,5 +821,108 @@ describe('P2P fusion round choreography (3 peers, in-memory)', () => {
         transport
       )
     ).rejects.toThrow('Invalid Fusion round message');
+  });
+
+  // ── Option 3 blame emit (C2) ───────────────────────────────────────────────
+  // Components travel under throwaway keys, so a failed round has no accused
+  // until peers disclose what they contributed. These lock the coordinator's
+  // post-abort cross-check. Diagnosis only: the accused is an ephemeral round
+  // key, so a report identifies a fault — it never excludes anyone.
+
+  it('names the peer that withheld its signatures, once disclosures land', async () => {
+    const peers = makePeers();
+    const participants = peers.map((peer) => peer.round.pubHex);
+    const coordinator = coordinatorOf(participants);
+    // A non-coordinator peer registers its anonymous inputs and then goes
+    // silent at the signature phase — the griefer that was unattributable once
+    // components stopped carrying a sender.
+    const silent = participants.find((peer) => peer !== coordinator);
+    if (!silent) throw new Error('no non-coordinator peer to silence');
+    const hub = new Hub((from, _to, message) =>
+      from === silent && message.type === 'signature' ? null : message
+    );
+    const blames: BlameReport[] = [];
+
+    const settled = await Promise.allSettled(
+      peers.map((peer) =>
+        runFusionRound(
+          {
+            myPubkey: peer.round.pubHex,
+            participants,
+            network: 'chipnet',
+            tier: 100_000,
+            feerate: 1_000,
+            myContribution: peer.contribution,
+            keysByPubkey: peer.keys,
+            broadcast: async (txHex) => txidOf(txHex),
+            // The coordinator must give up FIRST. With one shared deadline all
+            // three tear down in the same tick, so peers unsubscribe before the
+            // abort reaches them and disclose nothing — the blame phase then
+            // waits out its whole ceiling for messages that can never arrive.
+            timeoutMs: peer.round.pubHex === coordinator ? 800 : 4_000,
+            jitterMs: [0, 0],
+            onBlame: (report) => {
+              if (peer.round.pubHex === coordinator) blames.push(report);
+            },
+          },
+          hub.transportFor(peer.round.pubHex)
+        )
+      )
+    );
+
+    expect(settled.every((result) => result.status === 'rejected')).toBe(true);
+    // The whole point: an anonymous-plane fault now has an accused again.
+    expect(blames).toHaveLength(1);
+    expect(blames[0].code).toBe('invalid_signature_set');
+    expect(blames[0].accused).toBe(silent);
+    // And it actually reached the other peers, not just the local callback.
+    expect(
+      hub.sent.some(
+        (entry) => entry.from === coordinator && entry.message.type === 'blame'
+      )
+    ).toBe(true);
+    expect(hub.activeHandlerCount()).toBe(0);
+  });
+
+  it('blames nobody and still fails fast when the round dies in the control plane', async () => {
+    const peers = makePeers();
+    const participants = peers.map((peer) => peer.round.pubHex);
+    // No anonymous component ever reaches the coordinator, so no disclosure
+    // could attribute anything. The blame window must be skipped outright.
+    const hub = new Hub((_from, _to, message) =>
+      message.type === 'inputs' ? null : message
+    );
+    const blames: BlameReport[] = [];
+    const startedAt = Date.now();
+
+    const settled = await Promise.allSettled(
+      peers.map((peer) =>
+        runFusionRound(
+          {
+            myPubkey: peer.round.pubHex,
+            participants,
+            network: 'chipnet',
+            tier: 100_000,
+            feerate: 1_000,
+            myContribution: peer.contribution,
+            keysByPubkey: peer.keys,
+            broadcast: async (txHex) => txidOf(txHex),
+            timeoutMs: 1_000,
+            jitterMs: [0, 0],
+            onBlame: (report) => blames.push(report),
+          },
+          hub.transportFor(peer.round.pubHex)
+        )
+      )
+    );
+    const elapsed = Date.now() - startedAt;
+
+    expect(settled.every((result) => result.status === 'rejected')).toBe(true);
+    // A timeout is not a provable fault. Never blame for one.
+    expect(blames).toHaveLength(0);
+    // Generous, but far below timeout + the 1200ms ceiling: if the gate ever
+    // stops skipping the window, this abort pays for it and trips here.
+    expect(elapsed).toBeLessThan(2_000);
+    expect(hub.activeHandlerCount()).toBe(0);
   });
 });
