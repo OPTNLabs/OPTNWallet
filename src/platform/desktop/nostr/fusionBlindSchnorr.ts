@@ -275,6 +275,84 @@ export class BlindSignatureRequest {
   }
 }
 
+/** Length-checked, non-short-circuiting byte compare. */
+function bytesEqual(a: Uint8Array, b: Uint8Array): boolean {
+  if (a.length !== b.length) return false;
+  let diff = 0;
+  for (let i = 0; i < a.length; i++) diff |= a[i] ^ b[i];
+  return diff === 0;
+}
+
+/**
+ * Verify a post-abort credential opening — the consumer `openingHex()` never
+ * had.
+ *
+ * Without this the blame phase merely *believes* a peer's disclosure, so a
+ * griefer can forge one (claim a component it never requested) or dodge its own
+ * by lying about which slot it used. Slots are handed out per peer, so proving
+ * "the blinded challenge the coordinator signed at slot i is exactly what this
+ * message and this opening produce" binds one disputed component to one peer.
+ *
+ * Recomputes the requester's own derivation, in the same order and with the
+ * same jacobi convention as {@link BlindSignatureRequest.create}:
+ *
+ *   R' = R_i + a·G + b·P
+ *   e' = (jacobi(R'.y) = +1 ? 1 : −1)·H(R'.x ‖ P ‖ m) + b
+ *
+ * and accepts only when `e'` equals the blinded challenge the coordinator
+ * actually retained for that slot. Every branch is a rejection, never a throw:
+ * this runs on attacker-supplied bytes during an abort.
+ *
+ * @returns true only for an opening that genuinely produced `requestHex`.
+ */
+export function verifyCredentialOpening(args: {
+  /** Issuer (elected coordinator round) pubkey `P`, compressed hex. */
+  roundPubkeyHex: string;
+  /** The coordinator's one-shot nonce point `R_i` for the disputed slot. */
+  rPointHex: string;
+  /** The message hash the peer claims it blinded at that slot. */
+  messageHash: Uint8Array;
+  /** 64-byte hex opening `a ‖ b` revealed after the round aborted. */
+  openingHex: string;
+  /** 32-byte hex blinded challenge the coordinator received at that slot. */
+  requestHex: string;
+}): boolean {
+  try {
+    const { messageHash } = args;
+    if (messageHash.length !== 32) return false;
+    const opening = hexToBin(args.openingHex);
+    if (opening.length !== 64) return false;
+    const expected = hexToBin(args.requestHex);
+    if (expected.length !== 32) return false;
+    const pubkey = hexToBin(args.roundPubkeyHex);
+    const rPoint = hexToBin(args.rPointHex);
+    if (!ecc.isPoint(pubkey) || !ecc.isPoint(rPoint)) return false;
+
+    const a = opening.slice(0, 32);
+    const b = opening.slice(32);
+    // Out-of-range or zero scalars would be silently reduced by bigIntTo32 and
+    // could map distinct openings onto one challenge. Reject them outright.
+    if (!ecc.isPrivate(a) || !ecc.isPrivate(b)) return false;
+
+    const aG = ecc.pointFromScalar(a, true);
+    if (!aG) return false;
+    const bP = ecc.pointMultiply(pubkey, b);
+    if (!bP) return false;
+    const rPlusAG = ecc.pointAdd(rPoint, aG);
+    if (!rPlusAG) return false;
+    const rNew = ecc.pointAdd(rPlusAG, bP);
+    if (!rNew) return false;
+
+    const rxNew = pointX(rNew);
+    const signFlip = !yIsQuadraticResidue(pointY(rNew));
+    const eHash = challenge(rxNew, pubkey, messageHash);
+    const cEHash = signFlip ? scalarNegate(eHash) : eHash;
+    return bytesEqual(scalarAdd(cEHash, b), expected);
+  } catch {
+    return false;
+  }
+}
+
 /**
  * Production issuer: round key + one-shot nonce pool.
  * Slot reuse is a hard error (would leak the round private key).

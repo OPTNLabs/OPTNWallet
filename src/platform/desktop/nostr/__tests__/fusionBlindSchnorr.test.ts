@@ -8,6 +8,7 @@ import {
   peerCredentialSlotBase,
   totalCredentialSlots,
   verifyBchSchnorrHex,
+  verifyCredentialOpening,
   CREDENTIAL_SLOTS_PER_PEER,
 } from '../fusionBlindSchnorr';
 import {
@@ -188,5 +189,88 @@ describe('P2P Pedersen balance check', () => {
     expect(pedersenBalanceHolds([blank.commitmentHex], 0, blank.nonceHex)).toBe(
       true
     );
+  });
+});
+
+describe('credential opening verifier (post-abort blame proof)', () => {
+  const msgFor = (label: string) =>
+    new Uint8Array(sha256.hash(new TextEncoder().encode(label)));
+
+  /** One issued slot plus everything a verifier is given about it. */
+  function slot(label = 'component-a', slotIndex = 0) {
+    const issuer = BlindIssuer.create(4);
+    const messageHash = msgFor(label);
+    const request = BlindSignatureRequest.create(
+      issuer.pubkeyHex,
+      issuer.rPointsHex[slotIndex],
+      messageHash
+    );
+    return {
+      issuer,
+      messageHash,
+      request,
+      args: {
+        roundPubkeyHex: issuer.pubkeyHex,
+        rPointHex: issuer.rPointsHex[slotIndex],
+        messageHash,
+        openingHex: request.openingHex(),
+        requestHex: request.requestHex(),
+      },
+    };
+  }
+
+  it('accepts the opening the requester actually derived', () => {
+    for (let i = 0; i < 5; i++) {
+      expect(verifyCredentialOpening(slot(`component-${i}`).args)).toBe(true);
+    }
+  });
+
+  it('rejects a forged opening — a griefer cannot invent one', () => {
+    const { args } = slot();
+    const forged = { ...args, openingHex: 'ab'.repeat(64) };
+    expect(verifyCredentialOpening(forged)).toBe(false);
+  });
+
+  it('rejects an opening replayed onto a different message', () => {
+    const { args } = slot('component-mine');
+    // The attack this closes: claim a component you never requested by reusing
+    // your own valid opening against someone else's outpoint.
+    const stolen = { ...args, messageHash: msgFor('component-someone-else') };
+    expect(verifyCredentialOpening(stolen)).toBe(false);
+  });
+
+  it('rejects an opening replayed onto a different slot', () => {
+    const honest = slot('component-a', 0);
+    // Same round, same message, but pointing at a nonce the coordinator handed
+    // to a different slot — this is how a peer would dodge its own fault.
+    const wrongSlot = {
+      ...honest.args,
+      rPointHex: honest.issuer.rPointsHex[1],
+    };
+    expect(verifyCredentialOpening(wrongSlot)).toBe(false);
+  });
+
+  it('rejects a mismatched blinded challenge', () => {
+    const { args } = slot();
+    const other = slot('component-other');
+    expect(
+      verifyCredentialOpening({ ...args, requestHex: other.args.requestHex })
+    ).toBe(false);
+  });
+
+  it('returns false rather than throwing on malformed attacker bytes', () => {
+    const { args } = slot();
+    const cases = [
+      { ...args, openingHex: 'ff'.repeat(10) },
+      { ...args, openingHex: '00'.repeat(64) }, // zero scalars
+      { ...args, requestHex: 'ff'.repeat(8) },
+      { ...args, rPointHex: 'not-a-point' },
+      { ...args, roundPubkeyHex: '02'.repeat(33) },
+      { ...args, messageHash: new Uint8Array(16) },
+    ];
+    for (const bad of cases) {
+      expect(() => verifyCredentialOpening(bad)).not.toThrow();
+      expect(verifyCredentialOpening(bad)).toBe(false);
+    }
   });
 });
