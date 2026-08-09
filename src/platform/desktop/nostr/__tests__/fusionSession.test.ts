@@ -886,6 +886,59 @@ describe('P2P fusion round choreography (3 peers, in-memory)', () => {
     expect(hub.activeHandlerCount()).toBe(0);
   });
 
+  it('blames a peer that forges a disclosure opening (invalid_input_credential)', async () => {
+    const peers = makePeers();
+    const participants = peers.map((peer) => peer.round.pubHex);
+    const coordinator = coordinatorOf(participants);
+    const liar = participants.find((peer) => peer !== coordinator);
+    if (!liar) throw new Error('no non-coordinator peer');
+    const hub = new Hub((from, _to, message) => {
+      // Withhold signatures so the round aborts into the blame phase.
+      if (from === liar && message.type === 'signature') return null;
+      // Forge the opening after credentials were issued — C4 must accuse, not drop.
+      if (from === liar && message.type === 'component_disclosure') {
+        return {
+          ...message,
+          openings: (message.openings ?? []).map((entry) => ({
+            ...entry,
+            openingHex: 'ab'.repeat(64),
+          })),
+        };
+      }
+      return message;
+    });
+    const blames: BlameReport[] = [];
+
+    const settled = await Promise.allSettled(
+      peers.map((peer) =>
+        runFusionRound(
+          {
+            myPubkey: peer.round.pubHex,
+            participants,
+            network: 'chipnet',
+            tier: 100_000,
+            feerate: 1_000,
+            myContribution: peer.contribution,
+            keysByPubkey: peer.keys,
+            broadcast: async (txHex) => txidOf(txHex),
+            timeoutMs: 800,
+            jitterMs: [0, 0],
+            onBlame: (report) => {
+              if (peer.round.pubHex === coordinator) blames.push(report);
+            },
+          },
+          hub.transportFor(peer.round.pubHex)
+        )
+      )
+    );
+
+    expect(settled.every((result) => result.status === 'rejected')).toBe(true);
+    expect(blames).toHaveLength(1);
+    expect(blames[0].code).toBe('invalid_input_credential');
+    expect(blames[0].accused).toBe(liar);
+    expect(hub.activeHandlerCount()).toBe(0);
+  });
+
   it('blames nobody and still fails fast when the round dies in the control plane', async () => {
     const peers = makePeers();
     const participants = peers.map((peer) => peer.round.pubHex);
