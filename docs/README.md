@@ -4,6 +4,8 @@ Technical documentation for contributors and third-party integrators.
 
 ## Start Here
 
+- [Contributing Guide](../CONTRIBUTING.md)
+  - Setup, quality checks, Docker paths, and pull-request expectations.
 - [Build and Release Scripts](./build-and-release.md)
   - Commands for Android APK/AAB builds and iOS Capacitor preparation.
 - [Docker contributor lab](./docker-dev.md)

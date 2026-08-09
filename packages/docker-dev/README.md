@@ -7,6 +7,9 @@ Read [PRODUCTION.md](./PRODUCTION.md) and [SCOPE.md](./SCOPE.md).
 **Release model:** [docs/docker-release-model.md](../../docs/docker-release-model.md)  
 → Docker **updates from our git tags**.
 
+Contributor setup is documented in the repository-level
+[CONTRIBUTING.md](../../CONTRIBUTING.md).
+
 | Audience | Use? |
 |----------|------|
 | Contributors / auditors | **Yes** (`dev` service) |
@@ -32,7 +35,7 @@ npm --prefix packages/docker-dev run test:core
 ## After a release (pull published image)
 
 ```bash
-export OPTN_DOCKER_TAG=v1.2.3   # or latest
+export OPTN_DOCKER_TAG=v1.2.3   # explicit tags are recommended; latest remains supported
 # forks: export OPTN_DOCKER_IMAGE=ghcr.io/<you>/optn-docker-dev
 npm --prefix packages/docker-dev run pull:release
 npm --prefix packages/docker-dev run up:release
@@ -46,7 +49,7 @@ npm --prefix packages/docker-dev run up:release
 | Non-root | official image user `node` uid/gid **1000** |
 | Init | `tini` entrypoint |
 | Multi-arch | `linux/amd64` + `linux/arm64` on tag push |
-| Supply chain | SBOM + provenance on push; optional attestation |
+| Supply chain | SBOM + required provenance attestation on publish |
 | CI | PR smoke (`node`/`npm` as 1000:1000) |
 | Compose hardening | `no-new-privileges` |
 | **CashFusion Tor** | **Mandatory** on `fusion-lab` (fail-closed; same as desktop P2P) |

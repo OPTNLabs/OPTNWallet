@@ -38,13 +38,15 @@ Suggested registry: **GHCR** (`ghcr.io/<owner>/optn-docker-dev`).
 Suggested tags:
 
 - `v1.7.0` / `1.7.0` — matches release
-- `latest` — latest **released** dev image (not every commit on `dev` unless we choose nightlies later)
+- `latest` — latest **released** dev image; supported as a compatibility fallback,
+  but contributor documentation prefers explicit version tags
 
 ## Workflow split
 
 | Workflow | Role |
 |----------|------|
 | `Publish Release` (existing) | Native / store artifacts — **primary ship** |
+| `Docker dev PR` | Read-only PR image build and non-root smoke test |
 | `Docker dev image` (this package) | Build/push **lab** image from same tag |
 
 They may share a tag trigger. They must not block each other forever: a Docker
