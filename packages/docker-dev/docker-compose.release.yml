@@ -37,7 +37,8 @@ services:
   #   docker compose -f packages/docker-dev/docker-compose.release.yml --profile fusion-lab up -d
   tor:
     profiles: ["fusion-lab"]
-    image: dperson/torproxy:latest
+    # Multi-arch manifest digest; update deliberately when changing Tor.
+    image: docker.io/dperson/torproxy@sha256:d8b5f1cf24f1b7a0aa334929a264b2606a107223dd0d51eb1cda8aae6fbeec53
     restart: unless-stopped
     ports:
       - "${OPTN_TOR_HOST_PORT:-127.0.0.1:9050}:9050"

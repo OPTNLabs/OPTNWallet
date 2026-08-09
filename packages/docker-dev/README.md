@@ -46,7 +46,7 @@ npm --prefix packages/docker-dev run up:release
 | Non-root | official image user `node` uid/gid **1000** |
 | Init | `tini` entrypoint |
 | Multi-arch | `linux/amd64` + `linux/arm64` on tag push |
-| Supply chain | SBOM + provenance on push; optional attestation |
+| Supply chain | SBOM + required provenance attestation on publish |
 | CI | PR smoke (`node`/`npm` as 1000:1000) |
 | Compose hardening | `no-new-privileges` |
 | **CashFusion Tor** | **Mandatory** on `fusion-lab` (fail-closed; same as desktop P2P) |

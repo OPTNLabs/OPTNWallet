@@ -1,13 +1,11 @@
 # Production-grade publish path for the *lab* image (not the consumer wallet).
-# Images are built FROM git tags — we update Docker; installers stay primary ship.
+# This workflow only runs on trusted pushes, tags, and manual dispatches. Pull
+# requests use docker-dev-pr.yml, which has read-only permissions and never
+# publishes to GHCR or requests an OIDC token.
 
 name: Docker dev image
 
 on:
-  pull_request:
-    paths:
-      - 'packages/docker-dev/**'
-      - '.github/workflows/docker-dev.yml'
   push:
     branches:
       - dev
@@ -135,14 +133,13 @@ jobs:
           docker run --rm --user 1000:1000 "$TAG" node -v
           docker run --rm --user 1000:1000 "$TAG" npm -v
           # tini entrypoint present
-          docker run --rm --user 1000:1000 --entrypoint /usr/bin/tini "$TAG" -- -h | head -n1 || true
+          docker run --rm --user 1000:1000 --entrypoint /usr/bin/tini "$TAG" --version
           id_out="$(docker run --rm --user 1000:1000 "$TAG" id)"
           echo "$id_out"
           echo "$id_out" | grep -E 'uid=1000' 
 
       - name: Attest build provenance (push only)
         if: steps.meta.outputs.push == 'true' && steps.build.outputs.digest != ''
-        continue-on-error: true
         uses: actions/attest-build-provenance@v2
         with:
           subject-name: ghcr.io/${{ steps.meta.outputs.owner_lc }}/${{ env.IMAGE_NAME }}
