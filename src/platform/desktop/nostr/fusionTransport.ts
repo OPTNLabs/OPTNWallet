@@ -33,6 +33,13 @@ import { parseRoundMessage, type RoundTransport } from './fusionSession';
 export const GIFT_WRAP_KIND = 1059;
 
 /**
+ * Grace period before a one-shot component socket is closed, so relays beyond
+ * the first ACK still receive the event. Long enough for slow Tor circuits,
+ * short enough that the socket is not reusable for a later component.
+ */
+export const ONE_SHOT_POOL_LINGER_MS = 8_000;
+
+/**
  * Same-origin bridge for round messages (multi-wallet on one machine).
  * Remote peers still use Nostr gift-wrap only — BC never leaves this origin.
  * Live auto often failed at ACK because Tor gift-wraps dropped while all
@@ -140,7 +147,24 @@ export function createNostrRoundTransport(
         if (isAnonymousOutput) signer.fill(0);
         // Drop the socket (and with it the Tor circuit) so no later component
         // can be observed reusing it.
-        oneShotPool?.close(relays);
+        //
+        // Deferred, NOT immediate. publishEventAtLeastOnce resolves on the
+        // FIRST relay ACK (minAcks = 1), while the remaining relays are still
+        // being written. Closing synchronously would cut those off, and a peer
+        // subscribed only to one of them would never receive the blob — the
+        // round then aborts with anonBatches=0. The old shared pool stayed open
+        // so propagation finished in the background; this preserves that while
+        // still retiring the socket.
+        if (oneShotPool) {
+          const pending = oneShotPool;
+          setTimeout(() => {
+            try {
+              pending.close(relays);
+            } catch {
+              /* already closed */
+            }
+          }, ONE_SHOT_POOL_LINGER_MS);
+        }
       }
     },
 

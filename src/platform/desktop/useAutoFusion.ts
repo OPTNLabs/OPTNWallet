@@ -143,6 +143,11 @@ export function useAutoFusion(policyReady = true): void {
       clearTimeout(followUpTimerRef.current);
       followUpTimerRef.current = null;
     }
+    // sessionKey (line ~124) already serializes walletId, so this effect DOES
+    // re-run on a wallet change; the rule cannot see through JSON.stringify.
+    // Listing walletId separately would add nothing and invites re-adding the
+    // relay/server arrays this key deliberately excludes.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sessionKey]);
 
   const tick = useCallback(async (freshSnapshot?: WalletUtxoSnapshot) => {

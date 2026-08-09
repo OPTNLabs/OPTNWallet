@@ -206,6 +206,9 @@ async function decryptTextBatch(
   values: readonly string[],
   _ownerWalletId?: number
 ): Promise<string[]> {
+  // Accepted for signature parity with the desktop replacement, which scopes a
+  // derived password key per wallet. This implementation has no such key.
+  void _ownerWalletId;
   return await Promise.all(values.map((value) => decryptText(value)));
 }
 
