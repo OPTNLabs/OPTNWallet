@@ -63,6 +63,7 @@ import {
   verifyBchSchnorrHex,
   verifyCredentialOpening,
 } from './fusionBlindSchnorr';
+import { freshSaltCommitment } from './fusionComponentV4';
 import {
   createBlameReport,
   findFaultInDisclosures,
@@ -155,6 +156,11 @@ export type RoundMessage =
       inputs: FusionInputRef[];
       /** Unblinded 64-byte BCH Schnorr credentials (hex), parallel to inputs. */
       credentialSigs: string[];
+      /**
+       * v4: salt_commitment per input so the coordinator recomputes
+       * sha256(EC Component) for credential verification.
+       */
+      saltCommitments: string[];
     } & MessageBinding)
   | ({
       type: 'outputs';
@@ -455,6 +461,8 @@ function buildComponentCredentialRequests(
   pending: BlindSignatureRequest[];
   indices: number[];
   outputSerials: string[];
+  inputSaltCommitments: string[];
+  outputSaltCommitments: string[];
 } {
   const base = peerCredentialSlotBase(participants, myPubkey);
   const componentCount =
@@ -468,14 +476,18 @@ function buildComponentCredentialRequests(
   const pending: BlindSignatureRequest[] = [];
   const indices: number[] = [];
   const outputSerials: string[] = [];
+  const inputSaltCommitments: string[] = [];
+  const outputSaltCommitments: string[] = [];
   contribution.inputs.forEach((input, i) => {
     const index = base + i;
     const r = blindNoncePoints[index];
     if (!r) throw new Error(`missing blind nonce point at slot ${index}`);
+    const { saltCommitmentHex } = freshSaltCommitment();
+    inputSaltCommitments.push(saltCommitmentHex);
     const req = BlindSignatureRequest.create(
       roundPubkey,
       r,
-      inputCredentialMessageHash(input)
+      inputCredentialMessageHash(input, saltCommitmentHex)
     );
     requests.push({ index, e: req.requestHex() });
     pending.push(req);
@@ -490,17 +502,26 @@ function buildComponentCredentialRequests(
     const serial = Array.from(serialBytes, (b) =>
       b.toString(16).padStart(2, '0')
     ).join('');
+    const { saltCommitmentHex } = freshSaltCommitment();
+    outputSaltCommitments.push(saltCommitmentHex);
     const req = BlindSignatureRequest.create(
       roundPubkey,
       r,
-      outputCredentialMessageHash(context, output, serial)
+      outputCredentialMessageHash(context, output, serial, saltCommitmentHex)
     );
     requests.push({ index, e: req.requestHex() });
     pending.push(req);
     indices.push(index);
     outputSerials.push(serial);
   });
-  return { requests, pending, indices, outputSerials };
+  return {
+    requests,
+    pending,
+    indices,
+    outputSerials,
+    inputSaltCommitments,
+    outputSaltCommitments,
+  };
 }
 
 function validOutput(value: unknown): boolean {
@@ -522,7 +543,9 @@ function validAuthorizedOutput(value: unknown): boolean {
     typeof value.credentialSerial === 'string' &&
     HEX_64_STRICT.test(value.credentialSerial) &&
     typeof value.credentialSig === 'string' &&
-    HEX_128.test(value.credentialSig)
+    HEX_128.test(value.credentialSig) &&
+    typeof value.saltCommitment === 'string' &&
+    HEX_64_STRICT.test(value.saltCommitment)
   );
 }
 
@@ -537,26 +560,34 @@ export function verifyAuthorizedOutputBatch(
   }
   const serials = new Set<string>();
   const outputIds = new Set<string>();
+  const componentHashes = new Set<string>();
   for (const output of outputs) {
     if (!validAuthorizedOutput(output)) {
       return { ok: false, reason: 'malformed authorized output' };
     }
     const serial = output.credentialSerial.toLowerCase();
     const outputId = `${output.value}:${output.script.toLowerCase()}`;
-    if (serials.has(serial) || outputIds.has(outputId)) {
+    const msgHex = outputCredentialMessageHashHex(
+      context,
+      output,
+      serial,
+      output.saltCommitment
+    );
+    if (
+      serials.has(serial) ||
+      outputIds.has(outputId) ||
+      componentHashes.has(msgHex)
+    ) {
       return { ok: false, reason: 'duplicate output credential or output' };
     }
     if (
-      !verifyBchSchnorrHex(
-        issuerPubkey,
-        output.credentialSig,
-        outputCredentialMessageHashHex(context, output, serial)
-      )
+      !verifyBchSchnorrHex(issuerPubkey, output.credentialSig, msgHex)
     ) {
       return { ok: false, reason: 'invalid output credential' };
     }
     serials.add(serial);
     outputIds.add(outputId);
+    componentHashes.add(msgHex);
   }
   return { ok: true, serials: [...serials] };
 }
@@ -761,6 +792,12 @@ export function parseRoundMessage(content: string): RoundMessage | null {
             (message.inputs as unknown[]).length ||
           !message.credentialSigs.every(
             (s) => typeof s === 'string' && HEX_128.test(s)
+          ) ||
+          !Array.isArray(message.saltCommitments) ||
+          message.saltCommitments.length !==
+            (message.inputs as unknown[]).length ||
+          !message.saltCommitments.every(
+            (s) => typeof s === 'string' && HEX_64_STRICT.test(s)
           )
         ) {
           return null;
@@ -1478,15 +1515,20 @@ function runParticipant(
         network: params.network ?? 'chipnet',
         tier: params.tier,
       };
-      const { requests, pending, outputSerials } =
-        buildComponentCredentialRequests(
-          params.myContribution,
-          params.participants,
-          params.myPubkey,
-          roundPubkey,
-          blindNoncePoints,
-          credentialContext
-        );
+      const {
+        requests,
+        pending,
+        outputSerials,
+        inputSaltCommitments,
+        outputSaltCommitments,
+      } = buildComponentCredentialRequests(
+        params.myContribution,
+        params.participants,
+        params.myPubkey,
+        roundPubkey,
+        blindNoncePoints,
+        credentialContext
+      );
       // Kept for the blame phase only. Never sent unless the round aborts.
       myOutputSerials = outputSerials;
       myInputOpenings = params.myContribution.inputs.map((input, i) => ({
@@ -1495,6 +1537,8 @@ function runParticipant(
         // Capture before finalizeHex — same a||b the verifier recomputes.
         openingHex: pending[i].openingHex(),
       }));
+      const myInputSalts = inputSaltCommitments;
+      const myOutputSalts = outputSaltCommitments;
       const responseWait = waitCredResponse();
       params.onStatus?.('Requesting blind credentials from coordinator…');
       await transport.send(coordinator, {
@@ -1539,6 +1583,7 @@ function runParticipant(
           session,
           inputs: [params.myContribution.inputs[i]],
           credentialSigs: [credentialSigs[i]],
+          saltCommitments: [myInputSalts[i]],
         });
         await jitterDelay(jMin, jMax);
       }
@@ -1559,6 +1604,7 @@ function runParticipant(
           ...output,
           credentialSerial: outputSerials[index],
           credentialSig: outputCredentialSigs[index],
+          saltCommitment: myOutputSalts[index],
         }));
       // Self is a peeler; don't wait for our own gift-wrap echo.
       declaredOnionCounts.set(params.myPubkey, myOutputs.length);
@@ -1698,6 +1744,7 @@ function runCoordinator(
       ...output,
       credentialSerial: selfBuilt.outputSerials[i],
       credentialSig: selfSigs[params.myContribution.inputs.length + i],
+      saltCommitment: selfBuilt.outputSaltCommitments[i],
     }));
     const selfPedersen = buildPlayerPedersen(
       params.myContribution,
@@ -1750,6 +1797,8 @@ function runCoordinator(
      * `verifyCredentialOpening` has nothing honest to compare against.
      */
     const signedChallengeBySlot = new Map<number, string>();
+    /** Outpoint → salt_commitment used when the input credential was verified. */
+    const saltCommitmentByOutpoint = new Map<string, string>();
     const inputPool = (): FusionInputRef[] => [
       ...[...inputsByPeer.values()].flat(),
       ...anonymousInputs,
@@ -1912,15 +1961,17 @@ function runCoordinator(
           const slotOk =
             opening.slotIndex >= base &&
             opening.slotIndex < base + CREDENTIAL_SLOTS_PER_PEER;
+          const saltCommitment = saltCommitmentByOutpoint.get(opening.outpoint);
           const ok =
             !!input &&
             !!requestHex &&
             !!rPointHex &&
+            !!saltCommitment &&
             slotOk &&
             verifyCredentialOpening({
               roundPubkeyHex: issuer.pubkeyHex,
               rPointHex,
-              messageHash: inputCredentialMessageHash(input),
+              messageHash: inputCredentialMessageHash(input, saltCommitment),
               openingHex: opening.openingHex,
               requestHex,
             });
@@ -1929,7 +1980,7 @@ function runCoordinator(
             continue;
           }
           // Peer claimed this outpoint with a non-proof — accuse, don't only drop.
-          if (input && requestHex && rPointHex) {
+          if (input && requestHex && rPointHex && saltCommitment) {
             failedInputs.push(input);
             failedOpenings.push({
               outpoint: opening.outpoint,
@@ -1937,6 +1988,7 @@ function runCoordinator(
               openingHex: opening.openingHex,
               requestHex,
               rPointHex,
+              saltCommitmentHex: saltCommitment,
             });
           } else if (input) {
             // Slot OOB or missing coordinator state: still an invalid claim.
@@ -1946,7 +1998,10 @@ function runCoordinator(
               slotIndex: opening.slotIndex,
               openingHex: opening.openingHex,
               requestHex: requestHex ?? '00'.repeat(32),
-              rPointHex: rPointHex ?? issuer.rPointsHex[0] ?? '02' + '00'.repeat(32),
+              rPointHex:
+                rPointHex ?? issuer.rPointsHex[0] ?? '02' + '00'.repeat(32),
+              saltCommitmentHex:
+                saltCommitment ?? saltCommitmentByOutpoint.values().next().value ?? '00'.repeat(32),
             });
           }
         }
@@ -2183,9 +2238,13 @@ function runCoordinator(
      * `others.includes(from)` on top of it is what used to re-group a peer's
      * inputs.
      */
-    const acceptInputs = async (inputs: FusionInputRef[], sigs: string[]) => {
-      if (inputs.length !== sigs.length) {
-        throw new Error('input/credential count mismatch');
+    const acceptInputs = async (
+      inputs: FusionInputRef[],
+      sigs: string[],
+      saltCommitments: string[]
+    ) => {
+      if (inputs.length !== sigs.length || inputs.length !== saltCommitments.length) {
+        throw new Error('input/credential/salt count mismatch');
       }
       // Global quota. Per-peer quotas still bound how many credentials each
       // peer was issued; the sum is how many valid inputs may ever arrive.
@@ -2193,7 +2252,10 @@ function runCoordinator(
         throw new Error('input credential quota exceeded');
       }
       for (let i = 0; i < inputs.length; i++) {
-        const msgHex = inputCredentialMessageHashHex(inputs[i]);
+        const msgHex = inputCredentialMessageHashHex(
+          inputs[i],
+          saltCommitments[i]
+        );
         if (!verifyBchSchnorrHex(issuer.pubkeyHex, sigs[i], msgHex)) {
           // No accused: an anonymous component has no participant to blame, and
           // verifyBlameReport rejects an accused outside the participant set.
@@ -2201,7 +2263,8 @@ function runCoordinator(
           throw new Error('invalid input credential');
         }
       }
-      for (const inp of inputs) {
+      for (let i = 0; i < inputs.length; i++) {
+        const inp = inputs[i];
         const key = inputKey(inp);
         // credentialedInputs already holds every accepted outpoint, so a
         // replay is caught without scanning a per-peer map.
@@ -2209,6 +2272,7 @@ function runCoordinator(
           throw new Error('duplicate outpoint in round');
         }
         credentialedInputs.add(key);
+        saltCommitmentByOutpoint.set(key, saltCommitments[i].toLowerCase());
       }
       anonymousInputs.push(...inputs);
     };
@@ -2528,7 +2592,11 @@ function runCoordinator(
       // design, so `from` is a random one-time pubkey. The blind credential
       // checked inside acceptInputs is the admission proof.
       if (message.type === 'inputs') {
-        void acceptInputs(message.inputs, message.credentialSigs)
+        void acceptInputs(
+          message.inputs,
+          message.credentialSigs,
+          message.saltCommitments
+        )
           .then(() => {
             if (settled) return;
             return tryAssemble();

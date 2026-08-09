@@ -54,7 +54,8 @@ describe('P2P blind Schnorr credential issuer', () => {
       value: 100_000,
       pubkey: `02${'33'.repeat(32)}`,
     };
-    const msg = inputCredentialMessageHash(input);
+    const salt = '11'.repeat(32);
+    const msg = inputCredentialMessageHash(input, salt);
     const req = BlindSignatureRequest.create(
       issuer.pubkeyHex,
       issuer.rPointsHex[0],
@@ -62,7 +63,7 @@ describe('P2P blind Schnorr credential issuer', () => {
     );
     const sig = req.finalizeHex(issuer.signHex(0, req.requestHex()), true);
     // Wrong message must not verify.
-    const other = inputCredentialMessageHash({ ...input, value: 99_999 });
+    const other = inputCredentialMessageHash({ ...input, value: 99_999 }, salt);
     expect(verifyBchSchnorrHex(issuer.pubkeyHex, sig, binToHex(other))).toBe(
       false
     );
@@ -81,7 +82,7 @@ describe('P2P blind Schnorr credential issuer', () => {
     expect(totalCredentialSlots(3)).toBe(3 * CREDENTIAL_SLOTS_PER_PEER);
   });
 
-  it('binds an anonymous output credential to round, network, role, output, and serial', () => {
+  it('binds an anonymous output credential to the EC component (script/value/salt)', () => {
     const issuer = BlindIssuer.create(1);
     const context = {
       session: 'ab'.repeat(32),
@@ -93,7 +94,13 @@ describe('P2P blind Schnorr credential issuer', () => {
       value: 99_600,
     };
     const serial = 'cd'.repeat(32);
-    const message = outputCredentialMessageHash(context, output, serial);
+    const salt = '22'.repeat(32);
+    const message = outputCredentialMessageHash(
+      context,
+      output,
+      serial,
+      salt
+    );
     const request = BlindSignatureRequest.create(
       issuer.pubkeyHex,
       issuer.rPointsHex[0],
@@ -107,6 +114,7 @@ describe('P2P blind Schnorr credential issuer', () => {
     expect(
       verifyBchSchnorrHex(issuer.pubkeyHex, signature, binToHex(message))
     ).toBe(true);
+    // Session/network are not in the EC component hash (transport binds them).
     expect(
       verifyBchSchnorrHex(
         issuer.pubkeyHex,
@@ -115,24 +123,12 @@ describe('P2P blind Schnorr credential issuer', () => {
           outputCredentialMessageHash(
             { ...context, session: 'ef'.repeat(32) },
             output,
-            serial
+            serial,
+            salt
           )
         )
       )
-    ).toBe(false);
-    expect(
-      verifyBchSchnorrHex(
-        issuer.pubkeyHex,
-        signature,
-        binToHex(
-          outputCredentialMessageHash(
-            { ...context, network: 'mainnet' },
-            output,
-            serial
-          )
-        )
-      )
-    ).toBe(false);
+    ).toBe(true);
     expect(
       verifyBchSchnorrHex(
         issuer.pubkeyHex,
@@ -141,7 +137,8 @@ describe('P2P blind Schnorr credential issuer', () => {
           outputCredentialMessageHash(
             context,
             { ...output, value: output.value - 1 },
-            serial
+            serial,
+            salt
           )
         )
       )
@@ -150,7 +147,9 @@ describe('P2P blind Schnorr credential issuer', () => {
       verifyBchSchnorrHex(
         issuer.pubkeyHex,
         signature,
-        binToHex(outputCredentialMessageHash(context, output, 'ee'.repeat(32)))
+        binToHex(
+          outputCredentialMessageHash(context, output, serial, '33'.repeat(32))
+        )
       )
     ).toBe(false);
   });

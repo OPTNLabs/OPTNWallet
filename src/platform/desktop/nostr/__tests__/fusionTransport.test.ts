@@ -272,6 +272,7 @@ describe('Nostr round transport', () => {
           value: 546,
           credentialSerial: '11'.repeat(32),
           credentialSig: '22'.repeat(64),
+          saltCommitment: '33'.repeat(32),
         },
       ],
     });
@@ -325,6 +326,7 @@ describe('Nostr round transport', () => {
           value: 546,
           credentialSerial: '11'.repeat(32),
           credentialSig: '22'.repeat(64),
+          saltCommitment: '33'.repeat(32),
         },
       ],
     });
@@ -398,6 +400,7 @@ describe('Nostr round transport', () => {
           value: 546,
           credentialSerial: '11'.repeat(32),
           credentialSig: '22'.repeat(64),
+          saltCommitment: '33'.repeat(32),
         },
       ],
     });

@@ -52,15 +52,16 @@ Bitcoin Cash network (Chipnet for development dogfood).
 | Auto clock + UTXO wake                                             | `useAutoFusion.ts`                                                                  |
 | UI (P2P panel, Auto controls)                                      | `P2pFusionTransportPreview.tsx`, `AutoFusionControls.tsx`, `CashFusionSettings.tsx` |
 
-Protocol message version: **`ROUND_MSG_VERSION = 3`** (`fusionRound.ts`).
-Version 3 is incompatible with v2 and rejects downgrade attempts.
-Messages with any other `version` are rejected.
+Protocol message version: **`ROUND_MSG_VERSION = 4`** (`fusionRound.ts`).
+Version 4 is incompatible with v3/v2 and rejects other versions.
 
-> **Upcoming (approved design, not yet on wire):** protocol **v4** replaces
-> string-domain credentials with Electron Cash–style
-> `sha256(full Component)` blind-signing. See
-> [p2p-ec-component-plane-v4.md](./p2p-ec-component-plane-v4.md). Beta — hard
-> cutover, no dual-stack migration.
+**v4 credential binding (Electron Cash F2):** blind-sign
+`sha256(serialized EC Component)` with a per-component `salt_commitment`
+(see `fusionComponentV4.ts`, `docs/p2p-ec-component-plane-v4.md`). Inputs
+carry `saltCommitments[]` next to credentials; outputs carry
+`saltCommitment` inside the onion payload. Serial remains a separate
+nullifier. Unlinkability stays on throwaway Nostr + Tor, not on stripping
+commitments.
 
 ---
 

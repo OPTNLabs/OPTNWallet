@@ -11,6 +11,10 @@
 
 import * as ecc from 'tiny-secp256k1';
 import { sha256, binToHex, hexToBin } from '@bitauth/libauth';
+import {
+  inputComponentBlindMessage,
+  outputComponentBlindMessage,
+} from './fusionComponentV4';
 
 /** secp256k1 group order n. */
 const N = BigInt(
@@ -408,24 +412,38 @@ export class BlindIssuer {
   }
 }
 
-/** Domain-separated 32-byte hash of a fusion input for credential binding. */
-export function inputCredentialMessageHash(input: {
-  prevTxid: string;
-  prevIndex: number;
-  value: number;
-  pubkey: string;
-}): Uint8Array {
-  const payload = `optn-p2p-input-v1|${input.prevTxid.toLowerCase()}|${input.prevIndex}|${input.value}|${input.pubkey.toLowerCase()}`;
-  return new Uint8Array(sha256.hash(new TextEncoder().encode(payload)));
+/**
+ * v4: blind message = sha256(EC Input Component) with salt_commitment.
+ * Matches server/Electron Cash `sha256(serialized Component)`.
+ */
+export function inputCredentialMessageHash(
+  input: {
+    prevTxid: string;
+    prevIndex: number;
+    value: number;
+    pubkey: string;
+  },
+  saltCommitmentHex: string
+): Uint8Array {
+  return inputComponentBlindMessage({
+    prevTxidDisplayHex: input.prevTxid,
+    prevIndex: input.prevIndex,
+    pubkeyHex: input.pubkey,
+    amount: input.value,
+    saltCommitmentHex,
+  });
 }
 
-export function inputCredentialMessageHashHex(input: {
-  prevTxid: string;
-  prevIndex: number;
-  value: number;
-  pubkey: string;
-}): string {
-  return binToHex(inputCredentialMessageHash(input));
+export function inputCredentialMessageHashHex(
+  input: {
+    prevTxid: string;
+    prevIndex: number;
+    value: number;
+    pubkey: string;
+  },
+  saltCommitmentHex: string
+): string {
+  return binToHex(inputCredentialMessageHash(input, saltCommitmentHex));
 }
 
 export interface FusionCredentialContext {
@@ -435,28 +453,32 @@ export interface FusionCredentialContext {
 }
 
 /**
- * Domain-separated credential message for an anonymously redeemed output.
- * The random serial is disclosed only after the onion shuffle and acts as the
- * coordinator's one-use nullifier. Lower-casing hex fields makes the wire
- * encoding canonical without changing the represented script.
+ * v4: blind message = sha256(EC Output Component) with salt_commitment.
+ * Serial remains a separate one-use nullifier (not mixed into the EC hash).
+ * `context` kept for call-site compatibility; not part of the EC component.
  */
 export function outputCredentialMessageHash(
-  context: FusionCredentialContext,
+  _context: FusionCredentialContext,
   output: { script: string; value: number },
-  serial: string
+  _serial: string,
+  saltCommitmentHex: string
 ): Uint8Array {
-  const payload =
-    `optn-p2p-component-v3|${context.network}|${context.session.toLowerCase()}|` +
-    `${context.tier}|output|${output.script.toLowerCase()}|${output.value}|${serial.toLowerCase()}`;
-  return new Uint8Array(sha256.hash(new TextEncoder().encode(payload)));
+  return outputComponentBlindMessage({
+    scriptHex: output.script,
+    amount: output.value,
+    saltCommitmentHex,
+  });
 }
 
 export function outputCredentialMessageHashHex(
   context: FusionCredentialContext,
   output: { script: string; value: number },
-  serial: string
+  serial: string,
+  saltCommitmentHex: string
 ): string {
-  return binToHex(outputCredentialMessageHash(context, output, serial));
+  return binToHex(
+    outputCredentialMessageHash(context, output, serial, saltCommitmentHex)
+  );
 }
 
 /** One-shot blind-Schnorr nonce capacity reserved for each round participant. */
