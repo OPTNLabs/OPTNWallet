@@ -61,6 +61,7 @@ import {
   peerCredentialSlotBase,
   totalCredentialSlots,
   verifyBchSchnorrHex,
+  verifyCredentialOpening,
 } from './fusionBlindSchnorr';
 import {
   createBlameReport,
@@ -73,6 +74,7 @@ import {
   type BlameEvidence,
   type BlameReport,
   type ComponentDisclosure,
+  type ComponentDisclosureOpening,
 } from './fusionBlame';
 import {
   clearRoundNullifiers,
@@ -218,6 +220,12 @@ export type RoundMessage =
       outpoints: string[];
       /** Credential serials this peer used for its anonymous outputs. */
       serials: string[];
+      /**
+       * Openings `a||b` per outpoint so the coordinator can prove the claim
+       * (C3). Optional on the type for tests; live peers must send them or
+       * their outpoints are ignored for blame.
+       */
+      openings?: ComponentDisclosureOpening[];
     } & MessageBinding);
 
 export interface RoundTransport {
@@ -642,6 +650,7 @@ export function parseRoundMessage(content: string): RoundMessage | null {
         // has the most reason to send something oversized.
         const outpoints = message.outpoints;
         const serials = message.serials;
+        const openings = message.openings;
         if (
           !Array.isArray(outpoints) ||
           !Array.isArray(serials) ||
@@ -657,6 +666,27 @@ export function parseRoundMessage(content: string): RoundMessage | null {
           )
         ) {
           return null;
+        }
+        // Openings are optional for parser liveness (empty = no proven outpoints)
+        // but when present each entry is strictly bounded.
+        if (openings !== undefined) {
+          if (
+            !Array.isArray(openings) ||
+            openings.length > MAX_COMPONENTS ||
+            !openings.every(
+              (entry) =>
+                isRecord(entry) &&
+                typeof entry.outpoint === 'string' &&
+                /^[0-9a-f]{64}:\d+$/i.test(entry.outpoint) &&
+                Number.isSafeInteger(entry.slotIndex) &&
+                (entry.slotIndex as number) >= 0 &&
+                (entry.slotIndex as number) < 4096 &&
+                typeof entry.openingHex === 'string' &&
+                HEX_128.test(entry.openingHex)
+            )
+          ) {
+            return null;
+          }
         }
         break;
       }
@@ -998,6 +1028,8 @@ function runParticipant(
      * successful round, so happy-path unlinkability is unaffected.
      */
     let myOutputSerials: string[] = [];
+    /** Input openings for abort disclosure only — never sent on success. */
+    let myInputOpenings: ComponentDisclosureOpening[] = [];
 
     const expectedOnionCount = (): number | null => {
       if (declaredOnionCounts.size < params.participants.length) return null;
@@ -1296,6 +1328,7 @@ function runParticipant(
             session,
             outpoints: params.myContribution.inputs.map(inputKey),
             serials: myOutputSerials,
+            openings: myInputOpenings,
           })
           .catch(() => undefined)
           .finally(() => void fail(abortError(message.reason), false));
@@ -1436,6 +1469,12 @@ function runParticipant(
         );
       // Kept for the blame phase only. Never sent unless the round aborts.
       myOutputSerials = outputSerials;
+      myInputOpenings = params.myContribution.inputs.map((input, i) => ({
+        outpoint: inputKey(input),
+        slotIndex: requests[i].index,
+        // Capture before finalizeHex — same a||b the verifier recomputes.
+        openingHex: pending[i].openingHex(),
+      }));
       const responseWait = waitCredResponse();
       params.onStatus?.('Requesting blind credentials from coordinator…');
       await transport.send(coordinator, {
@@ -1685,6 +1724,12 @@ function runCoordinator(
      * per peer wins; a second is ignored rather than allowed to overwrite.
      */
     const disclosuresByPeer = new Map<string, ComponentDisclosure>();
+    /**
+     * Blinded challenges `e` the coordinator actually signed, keyed by slot.
+     * Required to verify post-abort openings (C3): without the retained `e`,
+     * `verifyCredentialOpening` has nothing honest to compare against.
+     */
+    const signedChallengeBySlot = new Map<number, string>();
     const inputPool = (): FusionInputRef[] => [
       ...[...inputsByPeer.values()].flat(),
       ...anonymousInputs,
@@ -1805,6 +1850,54 @@ function runCoordinator(
      * `d9accdbd` cost us. Diagnosis only — the accused is an ephemeral key, so
      * this identifies a fault, it does not exclude anyone.
      */
+    /**
+     * Drop outpoints whose openings do not prove a slot this peer was issued.
+     * Without this step the blame phase merely *believes* disclosures (C3 hole).
+     */
+    const verifiedDisclosures = (): Map<string, ComponentDisclosure> => {
+      const verified = new Map<string, ComponentDisclosure>();
+      const poolByKey = new Map(
+        anonymousInputs.map((input) => [inputKey(input), input] as const)
+      );
+      for (const peer of params.participants) {
+        if (peer === params.myPubkey) continue;
+        const raw = disclosuresByPeer.get(peer);
+        if (!raw) continue;
+        const base = peerCredentialSlotBase(params.participants, peer);
+        const proven: string[] = [];
+        for (const opening of raw.openings ?? []) {
+          if (!raw.outpoints.includes(opening.outpoint)) continue;
+          if (
+            opening.slotIndex < base ||
+            opening.slotIndex >= base + CREDENTIAL_SLOTS_PER_PEER
+          ) {
+            continue;
+          }
+          const input = poolByKey.get(opening.outpoint);
+          const requestHex = signedChallengeBySlot.get(opening.slotIndex);
+          const rPointHex = issuer.rPointsHex[opening.slotIndex];
+          if (!input || !requestHex || !rPointHex) continue;
+          if (
+            !verifyCredentialOpening({
+              roundPubkeyHex: issuer.pubkeyHex,
+              rPointHex,
+              messageHash: inputCredentialMessageHash(input),
+              openingHex: opening.openingHex,
+              requestHex,
+            })
+          ) {
+            continue;
+          }
+          if (!proven.includes(opening.outpoint)) proven.push(opening.outpoint);
+        }
+        verified.set(peer, {
+          outpoints: proven,
+          serials: [...raw.serials],
+          openings: raw.openings,
+        });
+      }
+      return verified;
+    };
     const runBlamePhase = async () => {
       // Nothing anonymous ever arrived, so there is nothing a disclosure could
       // attribute — `findFaultInDisclosures` would return null and we would
@@ -1815,7 +1908,7 @@ function runCoordinator(
       await awaitDisclosures();
       const finding = findFaultInDisclosures({
         participants: [...params.participants],
-        disclosures: disclosuresByPeer,
+        disclosures: verifiedDisclosures(),
         signedOutpoints: new Set(signaturesByOutpoint.keys()),
       });
       // Mutually consistent disclosures mean the round died of something that
@@ -1984,6 +2077,8 @@ function runCoordinator(
       }
       const responses: Array<{ index: number; s: string }> = [];
       for (const req of message.requests) {
+        // Retain `e` for opening verification on abort (C3).
+        signedChallengeBySlot.set(req.index, req.e);
         responses.push({
           index: req.index,
           s: issuer.signHex(req.index, req.e),
@@ -2302,6 +2397,13 @@ function runCoordinator(
           disclosuresByPeer.set(from, {
             outpoints: [...message.outpoints],
             serials: [...message.serials],
+            openings: message.openings
+              ? message.openings.map((entry) => ({
+                  outpoint: entry.outpoint,
+                  slotIndex: entry.slotIndex,
+                  openingHex: entry.openingHex,
+                }))
+              : [],
           });
         }
         return;

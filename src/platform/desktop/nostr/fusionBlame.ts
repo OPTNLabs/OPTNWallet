@@ -67,10 +67,26 @@ export type BlameEvidence =
       receivedOutpoints: string[];
     };
 
+/** Per-outpoint credential opening for post-abort proof (not assertion). */
+export interface ComponentDisclosureOpening {
+  /** `${prevTxid}:${prevIndex}` — same key as `outpoints`. */
+  outpoint: string;
+  /** Blind-issuer slot the peer used for this component. */
+  slotIndex: number;
+  /** 64-byte hex `a || b` from {@link BlindSignatureRequest.openingHex}. */
+  openingHex: string;
+}
+
 /** What one peer disclosed about its own components after a round aborted. */
 export interface ComponentDisclosure {
   outpoints: string[];
   serials: string[];
+  /**
+   * Openings that prove each outpoint was credentialed at a slot issued to
+   * this peer. Absent/empty means the disclosure is an unproven claim and the
+   * coordinator must drop those outpoints before `findFaultInDisclosures`.
+   */
+  openings?: ComponentDisclosureOpening[];
 }
 
 export interface DisclosureFinding {
