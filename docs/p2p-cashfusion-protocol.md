@@ -1,11 +1,12 @@
 # P2P CashFusion Protocol — Comprehensive Reference
 
-**Status:** **Shipped** for PR #12 desktop. This document describes **how OPTN
-Wallet’s peer-to-peer CashFusion works in this repository**, as implemented
-and maintained. It is the authoritative contributor and audit-oriented
+**Status:** **Implemented and under production hardening** for PR #12 desktop
+(not a marketing “production shipped” claim until Chipnet soak + remaining
+v4/EC gates in `docs/p2p-ec-component-plane-v4.md` / `CLAUDE-A-TO-Z.md`).
+This document describes **how OPTN Wallet’s peer-to-peer CashFusion works in
+this repository**. It is the authoritative contributor and audit-oriented
 reference for the P2P path: wire format, phases, wallet outer loop, Auto
-behaviour, and safety gates. It is **not** a marketing overview or a future
-roadmap.
+behaviour, and safety gates.
 
 **Companion docs**
 

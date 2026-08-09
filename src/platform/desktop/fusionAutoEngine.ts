@@ -43,13 +43,13 @@ export type AutoFusionDecision =
  * The delay only covers Electrum listunspent catching the new outpoints before
  * the next JoinPools. Never multi-minute, never “wait for 1 conf”.
  */
-export const AUTO_FUSION_COOLDOWN_MS = 15_000;
+/** After a paid success — ~20s so Electrum sees new outpoints (user preference). */
+export const AUTO_FUSION_COOLDOWN_MS = 20_000;
 /**
  * Backoff after a failed / cancelled / empty-pool auto attempt (no fee spent).
- * EC effectively re-starts on the next plugin timer tick; keep this short so
- * four local wallets re-enter the pool together after a drop.
+ * ~10s so local multi-wallet Auto re-enters together after a drop.
  */
-export const AUTO_FUSION_RETRY_MS = 8_000;
+export const AUTO_FUSION_RETRY_MS = 10_000;
 /**
  * Empty-pool / no-agree retries — same as {@link AUTO_FUSION_RETRY_MS}.
  */

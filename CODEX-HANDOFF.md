@@ -285,7 +285,16 @@ broadcasts no transaction, so there is no on-chain linkage from a disclosure.
 | `invalid_input_credential` | restored E2E (forged opening) |
 | `duplicate_outpoint` | rule + verifyBlameReport; live gate is registration throw |
 
-**NEXT:** E1 onion stall, E2 auto timing, V4-C… (see `CLAUDE-A-TO-Z.md`). Optional C5.
+**NEXT (after E1/E2 docs commit):** Chipnet soak (manual); V4-C cutover when ready
+(Phase B encode already landed — wire issuance still open). Optional C5.
+
+### E1 / E2 landed (same day as C4)
+
+- **E2:** `AUTO_FUSION_COOLDOWN_MS=20s`, `AUTO_FUSION_RETRY_MS=10s`.
+- **E1:** Onion stall diagnostics no longer compare reveal batches to
+  `participants.length` (false `outputSlots=1/4`); Tor resend budget + missing-
+  outputs wait lengthened. Residual: live Tor drop still needs soak evidence.
+- **Docs:** walked back “production shipped” language in protocol/scope files.
 
 ## E0 done (`8ed355e9`). Next: C4 — and it is not test-only
 

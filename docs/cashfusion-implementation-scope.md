@@ -1,9 +1,10 @@
-# CashFusion — implementation status (shipped)
+# CashFusion — implementation status
 
-> **Status:** **Finished for PR #12 ship scope.** Both paths below are
-> implemented, tested, and documented. This file used to track a phased plan
-> (Phase 1 hello-only); that plan is complete. Do not treat older “NOT STARTED”
-> language as current.
+> **Status:** **Feature-complete for PR #12 engineering scope; production
+> clearance still requires Chipnet soak + remaining gates** (blame soak under
+> Tor, optional EC component-plane v4 cutover — see
+> `docs/p2p-ec-component-plane-v4.md`, `CLAUDE-A-TO-Z.md`). Both paths below are
+> implemented and unit-tested. Do not treat older “NOT STARTED” language as current.
 >
 > **P2P architecture (read first):**  
 > [p2p-cashfusion-privacy-layers.md](./p2p-cashfusion-privacy-layers.md)  
@@ -16,8 +17,8 @@
 
 | Path | Role | Status |
 |------|------|--------|
-| **P2P CashFusion** | Peer pool over Nostr + Tor; no fusion daemon required | **Done** — full round: gather → credentials → output onion → assemble → sign → broadcast; Auto + fuse depth |
-| **Server CashFusion** | Classic Electron Cash–compatible TCP/TLS client in Rust | **Done** — connect, Tor, Pedersen/blind Schnorr, covert, rounds, blame, plan validation |
+| **P2P CashFusion** | Peer pool over Nostr + Tor; no fusion daemon required | **Implemented** — full round + Auto; production soak / v4 EC binding still open |
+| **Server CashFusion** | Classic Electron Cash–compatible TCP/TLS client in Rust | **Implemented** — EC-aligned client; live Chipnet EC server interop not proven here |
 
 **Platform:** Desktop (Tauri). Mobile/web cannot speak classic TCP fusion; they
 surface a clear platform limit rather than a fake WSS probe.
