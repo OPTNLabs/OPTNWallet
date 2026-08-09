@@ -187,14 +187,15 @@ export const P2P_CREDENTIAL_WAIT_MS = 35_000;
 export const P2P_CREDENTIAL_PARAMS_RESEND_MS = 1_500;
 export const P2P_CREDENTIAL_PARAMS_RESEND_MAX = 12;
 
-export const P2P_MISSING_OUTPUTS_ONION_MS = 28_000;
+/** Slightly longer than declare+output resend budget so Tor can recover (E1). */
+export const P2P_MISSING_OUTPUTS_ONION_MS = 36_000;
 
 export const P2P_COMPONENT_JITTER_MS: [number, number] = [30, 250];
 
 export const P2P_ONION_DECLARE_RESEND_MS = 1_500;
-export const P2P_ONION_OUTPUT_RESEND_MAX = 5;
+export const P2P_ONION_OUTPUT_RESEND_MAX = 8;
 export const P2P_ONION_OUTPUT_RESEND_MS = 2_000;
-export const P2P_ONION_DECLARE_RESEND_MAX = 8;
+export const P2P_ONION_DECLARE_RESEND_MAX = 12;
 
 export const P2P_ASSEMBLED_RESEND_MS = 1_500;
 export const P2P_SIG_RESEND_MS = 1_500;

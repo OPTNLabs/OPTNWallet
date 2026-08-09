@@ -1775,14 +1775,21 @@ function runCoordinator(
       ...[...outputsByPeer.values()].flat(),
       ...anonymousOutputBatches.flat(),
     ];
-    /** How many "participant slots" have output material (coord + batches). */
+    /**
+     * How many output *delivery slots* are filled. Onion reveal is one final
+     * anonymous batch for the whole round (not one batch per participant) —
+     * comparing filled to `participants.length` falsely reported stalls as
+     * `outputSlots=1/4` after a successful peel (E1).
+     */
     const outputSlotsFilled = (): number => {
       const attributed = [...outputsByPeer.entries()].filter(
         ([, outs]) => outs.length > 0
       ).length;
-      // Anonymous batches never double-count the coordinator's attributed set.
       return attributed + anonymousOutputBatches.length;
     };
+    /** Expected slots once the mix-net is on: one reveal batch (plus any attributed). */
+    const expectedOutputSlots = (): number =>
+      mixOrder.length >= 2 ? Math.max(1, outputSlotsFilled() || 1) : params.participants.length;
     const signaturesByOutpoint = new Map<string, InputSig>();
     const signedPeers = new Set<string>();
     const seenNonces = new Set<string>();
@@ -2315,7 +2322,7 @@ function runCoordinator(
             new Error(
               `All ${params.participants.length} peers marked ready but outputs ` +
                 `never arrived (outputSlots=${outputSlotsFilled()}/` +
-                `${params.participants.length}, anonBatches=` +
+                `${expectedOutputSlots()}, anonBatches=` +
                 `${anonymousOutputBatches.length}, pool=${outputPool().length}, ` +
                 `onion=on, peelers=${peelers}). ` +
                 'Onion peel stalled (missing declare or hop blob over Tor). ' +
@@ -2340,7 +2347,7 @@ function runCoordinator(
           'outputs',
           outputSlotsFilled(),
           '/',
-          params.participants.length,
+          expectedOutputSlots(),
           'anon',
           anonymousOutputBatches.length,
           'pool',
