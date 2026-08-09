@@ -314,7 +314,23 @@ submitted which components.
 - Coordinator failover: up to 8 silent coordinators before round failure
 - Timeout: 120 seconds prevents indefinite hangs
 - Duplicate input detection prevents a wallet meeting itself
-- Blame protocol identifies misbehaving participants
+
+**Blame is NOT a DoS mitigation.** It is fail-fast, provable diagnosis on
+abort: peers learn *that* a round broke and *which rule* broke it, with
+evidence, instead of hanging to the 120-second timeout. It does not stop a
+griefer. The accused is an ephemeral round key that is destroyed when the
+round ends, so the same attacker returns as a fresh, unrecognisable key on the
+next attempt. `recordBlamedSessionKey` keeps a blamed key out of the local
+gather for 10 minutes (`fusionRoundState.ts`), but that key is already dead
+and the record is never shared with other peers — it is not a ban and must not
+be counted as one.
+
+Electron Cash is no better here: its server kills the offending client
+mid-round and restarts, and caps *simultaneous* fuses per IP
+(`ip_max_simul_fuse = 3`); it implements no ban list. We do not even have that
+cap, because a peer coordinator over Nostr + Tor never sees an IP. Durable
+exclusion would need Sybil resistance (cost, stake, or reputation), which is
+out of scope for this protocol.
 
 ## Key Management
 
