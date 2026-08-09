@@ -17,7 +17,7 @@ not “OPTN Wallet as a Docker product for end users.”
 - [x] `tini` as init, `no-new-privileges` in compose
 - [x] CI smoke on every PR that touches this package
 - [x] Multi-arch (**amd64 + arm64**) on tag push to GHCR
-- [x] Provenance/SBOM flags on push; optional attestation step
+- [x] Provenance/SBOM flags and required attestation on publish
 - [x] Documented release model: **Docker updates from our tags**
 - [x] `docker-compose.release.yml` to pull the published image
 - [x] Explicit non-goals (no GUI ship, no mainnet wallet in Docker)

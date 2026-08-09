@@ -13,7 +13,7 @@ git tag / GitHub Release  →  native installers (primary ship)
 ## Phases
 
 ### A — Contributor lab ✅
-### B — CI + GHCR publish ✅ (multi-arch on tags, smoke on PRs)
+### B — CI + GHCR publish ✅ (multi-arch on tags, smoke + test:core on Docker PRs)
 ### C — Dev polish ✅
 ### D — fusion-lab (Tor **mandatory** for fusion) ✅
 - Tor service always started with profile `fusion-lab`
