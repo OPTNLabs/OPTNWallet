@@ -194,6 +194,28 @@ export type RoundMessage =
       accused: string;
       code: BlameCode;
       evidence: BlameEvidence;
+    } & MessageBinding)
+  | ({
+      /**
+       * Post-abort component disclosure (Electron Cash blame phase).
+       *
+       * Components travel anonymously, so a failed round has nobody to accuse —
+       * `verifyBlameReport` rejects an accused outside the participant set. This
+       * message is the answer, and it is deliberately CONTROL PLANE: it is sent
+       * under the round identity, never added to the anonymous set in
+       * `fusionTransport.ts`. A peer therefore proves which components were its
+       * own, and a peer that stays silent is identified BY ABSENCE — which is
+       * what makes an anonymous griefer attributable again.
+       *
+       * Sent ONLY when a round aborts. A successful round discloses nothing, so
+       * the unlinkability of the happy path is untouched.
+       */
+      type: 'component_disclosure';
+      session: string;
+      /** Outpoints this peer registered, as `${prevTxid}:${prevIndex}`. */
+      outpoints: string[];
+      /** Credential serials this peer used for its anonymous outputs. */
+      serials: string[];
     } & MessageBinding);
 
 export interface RoundTransport {
@@ -612,6 +634,30 @@ export function parseRoundMessage(content: string): RoundMessage | null {
         message.evidence = evidence;
         break;
       }
+      case 'component_disclosure': {
+        // Bounded like every other component-bearing message: a disclosure is
+        // parsed from an aborted round, which is exactly when a hostile peer
+        // has the most reason to send something oversized.
+        const outpoints = message.outpoints;
+        const serials = message.serials;
+        if (
+          !Array.isArray(outpoints) ||
+          !Array.isArray(serials) ||
+          outpoints.length > MAX_COMPONENTS ||
+          serials.length > MAX_COMPONENTS ||
+          outpoints.length + serials.length === 0 ||
+          !outpoints.every(
+            (outpoint) =>
+              typeof outpoint === 'string' && /^[0-9a-f]{64}:\d+$/i.test(outpoint)
+          ) ||
+          !serials.every(
+            (serial) => typeof serial === 'string' && HEX_64_STRICT.test(serial)
+          )
+        ) {
+          return null;
+        }
+        break;
+      }
       case 'components_ready':
         // No additional fields beyond session + binding.
         break;
@@ -930,6 +976,12 @@ function runParticipant(
     const declaredOnionCounts = new Map<string, number>();
     let onionBatchProcessing = false;
     let onionBatchDone = false;
+    /**
+     * Credential serials this peer used for its own anonymous outputs. Held so
+     * an aborted round can be explained: disclosed ONLY on abort, never on a
+     * successful round, so happy-path unlinkability is unaffected.
+     */
+    let myOutputSerials: string[] = [];
 
     const expectedOnionCount = (): number | null => {
       if (declaredOnionCounts.size < params.participants.length) return null;
@@ -1215,7 +1267,22 @@ function runParticipant(
       // Only coordinator messages below
       if (from !== coordinator) return;
       if (message.type === 'abort') {
-        void fail(abortError(message.reason), false);
+        // Electron Cash blame phase. Components travelled anonymously, so the
+        // coordinator cannot name anyone for a failed round. Disclosing our own
+        // components under the ROUND IDENTITY lets it cross-check who did what
+        // — and makes silence itself evidence, since a griefer that never
+        // discloses is identified by absence. Best-effort: the round is already
+        // failing, so a send error must not mask the real abort reason.
+        void transport
+          .send(coordinator, {
+            ...messageBinding(),
+            type: 'component_disclosure',
+            session,
+            outpoints: params.myContribution.inputs.map(inputKey),
+            serials: myOutputSerials,
+          })
+          .catch(() => undefined)
+          .finally(() => void fail(abortError(message.reason), false));
         return;
       }
       if (message.type === 'credential_params') {
@@ -1351,6 +1418,8 @@ function runParticipant(
           blindNoncePoints,
           credentialContext
         );
+      // Kept for the blame phase only. Never sent unless the round aborts.
+      myOutputSerials = outputSerials;
       const responseWait = waitCredResponse();
       params.onStatus?.('Requesting blind credentials from coordinator…');
       await transport.send(coordinator, {

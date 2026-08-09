@@ -67,6 +67,95 @@ export type BlameEvidence =
       receivedOutpoints: string[];
     };
 
+/** What one peer disclosed about its own components after a round aborted. */
+export interface ComponentDisclosure {
+  outpoints: string[];
+  serials: string[];
+}
+
+export interface DisclosureFinding {
+  accused: string;
+  code: BlameCode;
+  evidence: BlameEvidence;
+}
+
+/**
+ * Turn post-abort component disclosures back into an attributable fault.
+ *
+ * Components travel anonymously, so a failed round has nobody to accuse —
+ * `verifyBlameReport` rejects an accused outside the participant set. The
+ * disclosure message is control-plane (sent under the round identity), so
+ * cross-referencing what each peer admits to restores attribution WITHOUT
+ * weakening the happy path, which discloses nothing at all.
+ *
+ * Pure on purpose: no transport, no timers, no session state. Every input is
+ * already held by the coordinator when a round aborts.
+ *
+ * Returns the first provable fault, or null when the disclosures are mutually
+ * consistent (the failure was not a provable component fault — a timeout, say).
+ */
+export function findFaultInDisclosures(args: {
+  /** Round participants, in the same set `verifyBlameReport` will check. */
+  participants: string[];
+  disclosures: ReadonlyMap<string, ComponentDisclosure>;
+  /** Outpoints the coordinator holds a valid signature for. */
+  signedOutpoints: ReadonlySet<string>;
+}): DisclosureFinding | null {
+  const { participants, disclosures, signedOutpoints } = args;
+
+  // 1. Two peers claiming the same outpoint. Deterministic ordering so every
+  //    peer derives the identical report from the identical disclosures.
+  const claimantsByOutpoint = new Map<string, string[]>();
+  for (const peer of [...participants].sort()) {
+    for (const outpoint of disclosures.get(peer)?.outpoints ?? []) {
+      const claimants = claimantsByOutpoint.get(outpoint) ?? [];
+      if (!claimants.includes(peer)) claimants.push(peer);
+      claimantsByOutpoint.set(outpoint, claimants);
+    }
+  }
+  for (const [outpoint, claimants] of [...claimantsByOutpoint].sort(([a], [b]) =>
+    a < b ? -1 : a > b ? 1 : 0
+  )) {
+    if (claimants.length < 2) continue;
+    const separator = outpoint.lastIndexOf(':');
+    const prevTxid = outpoint.slice(0, separator);
+    const prevIndex = Number(outpoint.slice(separator + 1));
+    if (!Number.isSafeInteger(prevIndex)) continue;
+    return {
+      // The later claimant is the one that duplicated an already-claimed
+      // outpoint; sorted order makes that choice reproducible for every peer.
+      accused: claimants[claimants.length - 1],
+      code: 'duplicate_outpoint',
+      evidence: { kind: 'duplicate_outpoint', prevTxid, prevIndex, claimants },
+    };
+  }
+
+  // 2. A peer that admits to outpoints it never signed. This is the code that
+  //    catches the anonymous griefer: registering inputs and then withholding
+  //    signatures used to be unattributable once components went anonymous.
+  for (const peer of [...participants].sort()) {
+    const disclosure = disclosures.get(peer);
+    if (!disclosure) continue;
+    const unsigned = disclosure.outpoints.filter(
+      (outpoint) => !signedOutpoints.has(outpoint)
+    );
+    if (unsigned.length === 0) continue;
+    return {
+      accused: peer,
+      code: 'invalid_signature_set',
+      evidence: {
+        kind: 'invalid_signature_set',
+        expectedOutpoints: [...disclosure.outpoints],
+        receivedOutpoints: disclosure.outpoints.filter((outpoint) =>
+          signedOutpoints.has(outpoint)
+        ),
+      },
+    };
+  }
+
+  return null;
+}
+
 export interface BlameReport {
   session: string;
   accused: string;

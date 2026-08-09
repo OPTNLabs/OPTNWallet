@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   createBlameReport,
+  findFaultInDisclosures,
   formatBlameAbortReason,
   isBlameCode,
   verifyBlameReport,
@@ -152,5 +153,77 @@ describe('fusionBlame (prove-or-don\'t-blame)', () => {
     expect(text).toMatch(/Protocol fault/);
     expect(text).toMatch(/Not a network timeout/);
     expect(text).not.toMatch(/relay did not acknowledge/i);
+  });
+});
+
+describe('findFaultInDisclosures (post-abort blame phase)', () => {
+  const participants = ['aa'.repeat(32), 'bb'.repeat(32), 'cc'.repeat(32)];
+  const [alice, bob] = participants;
+  const outpointA = `${'11'.repeat(32)}:0`;
+  const outpointB = `${'22'.repeat(32)}:1`;
+
+  it('finds nothing when disclosures are consistent and all inputs signed', () => {
+    const finding = findFaultInDisclosures({
+      participants,
+      disclosures: new Map([
+        [alice, { outpoints: [outpointA], serials: [] }],
+        [bob, { outpoints: [outpointB], serials: [] }],
+      ]),
+      signedOutpoints: new Set([outpointA, outpointB]),
+    });
+    // A timeout is not a provable component fault — do not manufacture blame.
+    expect(finding).toBeNull();
+  });
+
+  it('attributes a duplicate outpoint that anonymous components hid', () => {
+    const finding = findFaultInDisclosures({
+      participants,
+      disclosures: new Map([
+        [alice, { outpoints: [outpointA], serials: [] }],
+        [bob, { outpoints: [outpointA], serials: [] }],
+      ]),
+      signedOutpoints: new Set([outpointA]),
+    });
+    expect(finding?.code).toBe('duplicate_outpoint');
+    expect(participants).toContain(finding?.accused);
+    expect(
+      (finding?.evidence as { claimants: string[] }).claimants.sort()
+    ).toEqual([alice, bob].sort());
+  });
+
+  it('names the peer that registered inputs and then withheld signatures', () => {
+    const finding = findFaultInDisclosures({
+      participants,
+      disclosures: new Map([
+        [alice, { outpoints: [outpointA], serials: [] }],
+        [bob, { outpoints: [outpointB], serials: [] }],
+      ]),
+      signedOutpoints: new Set([outpointA]),
+    });
+    expect(finding?.code).toBe('invalid_signature_set');
+    expect(finding?.accused).toBe(bob);
+  });
+
+  // The whole point: the report must survive the verifier that rejected the
+  // old anonymous-sender blame attempts.
+  it('produces a report that verifyBlameReport accepts', () => {
+    const finding = findFaultInDisclosures({
+      participants,
+      disclosures: new Map([
+        [alice, { outpoints: [outpointA], serials: [] }],
+        [bob, { outpoints: [outpointA], serials: [] }],
+      ]),
+      signedOutpoints: new Set([outpointA]),
+    });
+    expect(finding).not.toBeNull();
+    const report = createBlameReport(
+      'session-1',
+      finding!.accused,
+      finding!.code,
+      finding!.evidence
+    );
+    expect(
+      verifyBlameReport(report, { session: 'session-1', participants }).ok
+    ).toBe(true);
   });
 });
