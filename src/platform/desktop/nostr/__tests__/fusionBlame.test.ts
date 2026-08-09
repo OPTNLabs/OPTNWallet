@@ -9,8 +9,10 @@ import {
 } from '../fusionBlame';
 import {
   BlindIssuer,
-  peerCredentialSlotBase,
+  BlindSignatureRequest,
   CREDENTIAL_SLOTS_PER_PEER,
+  inputCredentialMessageHash,
+  peerCredentialSlotBase,
 } from '../fusionBlindSchnorr';
 import { pedersenCommit } from '../fusionPedersen';
 
@@ -110,6 +112,67 @@ describe('fusionBlame (prove-or-don\'t-blame)', () => {
     });
   });
 
+  it('verifies invalid_input_credential when a post-abort opening fails (C4)', () => {
+    const issuer = BlindIssuer.create(48);
+    const input = {
+      prevTxid: '33'.repeat(32),
+      prevIndex: 2,
+      value: 50_000,
+      pubkey: '03' + 'cd'.repeat(32),
+    };
+    const report = createBlameReport('s', A, 'invalid_input_credential', {
+      kind: 'invalid_input_credential',
+      roundPubkey: issuer.pubkeyHex,
+      inputs: [input],
+      credentialSigs: [],
+      failedOpenings: [
+        {
+          outpoint: `${input.prevTxid}:${input.prevIndex}`,
+          slotIndex: 0,
+          openingHex: 'ab'.repeat(64),
+          requestHex: '11'.repeat(32),
+          rPointHex: issuer.rPointsHex[0],
+        },
+      ],
+    });
+    expect(verifyBlameReport(report, { session: 's', participants })).toEqual({
+      ok: true,
+    });
+  });
+
+  it('rejects invalid_input_credential opening evidence if the opening actually verifies', () => {
+    const issuer = BlindIssuer.create(48);
+    const input = {
+      prevTxid: '44'.repeat(32),
+      prevIndex: 0,
+      value: 10_000,
+      pubkey: '02' + '11'.repeat(32),
+    };
+    const req = BlindSignatureRequest.create(
+      issuer.pubkeyHex,
+      issuer.rPointsHex[0],
+      inputCredentialMessageHash(input)
+    );
+    const report = createBlameReport('s', A, 'invalid_input_credential', {
+      kind: 'invalid_input_credential',
+      roundPubkey: issuer.pubkeyHex,
+      inputs: [input],
+      credentialSigs: [],
+      failedOpenings: [
+        {
+          outpoint: `${input.prevTxid}:${input.prevIndex}`,
+          slotIndex: 0,
+          openingHex: req.openingHex(),
+          requestHex: req.requestHex(),
+          rPointHex: issuer.rPointsHex[0],
+        },
+      ],
+    });
+    expect(
+      verifyBlameReport(report, { session: 's', participants }).ok
+    ).toBe(false);
+  });
+
   it('verifies duplicate_outpoint with two claimants', () => {
     const report = createBlameReport('s', A, 'duplicate_outpoint', {
       kind: 'duplicate_outpoint',
@@ -189,6 +252,25 @@ describe('findFaultInDisclosures (post-abort blame phase)', () => {
     expect(
       (finding?.evidence as { claimants: string[] }).claimants.sort()
     ).toEqual([alice, bob].sort());
+  });
+
+  /**
+   * Registration fail-closed: `acceptInputs` throws `duplicate outpoint in round`
+   * before a second peer can enter the anonymous pool with the same outpoint.
+   * So live E2E rarely reaches two verified disclosures of the same outpoint —
+   * this pure rule + verifyBlameReport is the lock for that code. The second
+   * claimant is still attributable if both ever disclose (e.g. race / future path).
+   */
+  it('duplicate_outpoint report is re-verifiable (registration is primary live gate)', () => {
+    const report = createBlameReport('s', bob, 'duplicate_outpoint', {
+      kind: 'duplicate_outpoint',
+      prevTxid: '11'.repeat(32),
+      prevIndex: 0,
+      claimants: [alice, bob],
+    });
+    expect(verifyBlameReport(report, { session: 's', participants })).toEqual({
+      ok: true,
+    });
   });
 
   it('names the peer that registered inputs and then withheld signatures', () => {

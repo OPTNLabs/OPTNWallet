@@ -12,9 +12,11 @@
 
 import {
   CREDENTIAL_SLOTS_PER_PEER,
+  inputCredentialMessageHash,
   inputCredentialMessageHashHex,
   peerCredentialSlotBase,
   verifyBchSchnorrHex,
+  verifyCredentialOpening,
 } from './fusionBlindSchnorr';
 import { pedersenBalanceHolds } from './fusionPedersen';
 import type { FusionInputRef } from './fusionRound';
@@ -52,7 +54,22 @@ export type BlameEvidence =
       kind: 'invalid_input_credential';
       roundPubkey: string;
       inputs: FusionInputRef[];
+      /**
+       * Unblinded credential sigs that fail under the round key (registration
+       * path). May be empty when {@link failedOpenings} carries the proof.
+       */
       credentialSigs: string[];
+      /**
+       * Post-abort path (C4): openings that claim an outpoint but fail
+       * {@link verifyCredentialOpening}. Peers re-check each opening fails.
+       */
+      failedOpenings?: Array<{
+        outpoint: string;
+        slotIndex: number;
+        openingHex: string;
+        requestHex: string;
+        rPointHex: string;
+      }>;
     }
   | {
       kind: 'duplicate_outpoint';
@@ -320,14 +337,54 @@ export function verifyBlameReport(
         !Array.isArray(e.inputs) ||
         !Array.isArray(e.credentialSigs) ||
         e.inputs.length < 1 ||
-        e.inputs.length !== e.credentialSigs.length ||
         e.inputs.length > 16 ||
-        !e.inputs.every(validInputRef) ||
+        !e.inputs.every(validInputRef)
+      ) {
+        return { ok: false, reason: 'malformed credential evidence' };
+      }
+      const failedOpenings = e.failedOpenings;
+      if (Array.isArray(failedOpenings) && failedOpenings.length > 0) {
+        if (failedOpenings.length > 16) {
+          return { ok: false, reason: 'malformed credential evidence' };
+        }
+        // Post-abort: every listed opening must FAIL verification (peer lied).
+        for (const fo of failedOpenings) {
+          if (
+            typeof fo.outpoint !== 'string' ||
+            !Number.isSafeInteger(fo.slotIndex) ||
+            typeof fo.openingHex !== 'string' ||
+            typeof fo.requestHex !== 'string' ||
+            typeof fo.rPointHex !== 'string'
+          ) {
+            return { ok: false, reason: 'malformed credential evidence' };
+          }
+          const input = e.inputs.find(
+            (inp) => `${inp.prevTxid}:${inp.prevIndex}` === fo.outpoint
+          );
+          if (!input) {
+            return { ok: false, reason: 'opening outpoint not in inputs' };
+          }
+          if (
+            verifyCredentialOpening({
+              roundPubkeyHex: e.roundPubkey,
+              rPointHex: fo.rPointHex,
+              messageHash: inputCredentialMessageHash(input),
+              openingHex: fo.openingHex,
+              requestHex: fo.requestHex,
+            })
+          ) {
+            return { ok: false, reason: 'opening actually verifies' };
+          }
+        }
+        return { ok: true };
+      }
+      // Registration path: at least one credential sig must fail under round key.
+      if (
+        e.inputs.length !== e.credentialSigs.length ||
         !e.credentialSigs.every((s) => typeof s === 'string' && HEX_128.test(s))
       ) {
         return { ok: false, reason: 'malformed credential evidence' };
       }
-      // At least one credential must fail verification under the round key.
       let anyInvalid = false;
       for (let i = 0; i < e.inputs.length; i++) {
         const msgHex = inputCredentialMessageHashHex(e.inputs[i]);
@@ -441,11 +498,21 @@ export function parseBlameEvidence(code: BlameCode, raw: unknown): BlameEvidence
       ) {
         return null;
       }
+      const failedOpenings = Array.isArray(o.failedOpenings)
+        ? (o.failedOpenings as Array<{
+            outpoint: string;
+            slotIndex: number;
+            openingHex: string;
+            requestHex: string;
+            rPointHex: string;
+          }>)
+        : undefined;
       return {
         kind: 'invalid_input_credential',
         roundPubkey: o.roundPubkey,
         inputs: o.inputs as FusionInputRef[],
         credentialSigs: o.credentialSigs as string[],
+        ...(failedOpenings ? { failedOpenings } : {}),
       };
     }
     case 'duplicate_outpoint': {

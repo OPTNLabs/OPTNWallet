@@ -75,6 +75,7 @@ import {
   type BlameReport,
   type ComponentDisclosure,
   type ComponentDisclosureOpening,
+  type DisclosureFinding,
 } from './fusionBlame';
 import {
   clearRoundNullifiers,
@@ -1870,44 +1871,90 @@ function runCoordinator(
      * this identifies a fault, it does not exclude anyone.
      */
     /**
-     * Drop outpoints whose openings do not prove a slot this peer was issued.
-     * Without this step the blame phase merely *believes* disclosures (C3 hole).
+     * Prove openings before cross-check. Drop unproven outpoints; if a peer
+     * *claims* an outpoint with a bad opening, that is
+     * `invalid_input_credential` (C4) — not silent ignore.
      */
-    const verifiedDisclosures = (): Map<string, ComponentDisclosure> => {
+    const verifiedDisclosures = (): {
+      verified: Map<string, ComponentDisclosure>;
+      credentialFault: DisclosureFinding | null;
+    } => {
       const verified = new Map<string, ComponentDisclosure>();
       const poolByKey = new Map(
         anonymousInputs.map((input) => [inputKey(input), input] as const)
       );
-      for (const peer of params.participants) {
+      let credentialFault: DisclosureFinding | null = null;
+      for (const peer of [...params.participants].sort()) {
         if (peer === params.myPubkey) continue;
         const raw = disclosuresByPeer.get(peer);
         if (!raw) continue;
         const base = peerCredentialSlotBase(params.participants, peer);
         const proven: string[] = [];
+        const failedOpenings: NonNullable<
+          Extract<
+            BlameEvidence,
+            { kind: 'invalid_input_credential' }
+          >['failedOpenings']
+        > = [];
+        const failedInputs: FusionInputRef[] = [];
         for (const opening of raw.openings ?? []) {
           if (!raw.outpoints.includes(opening.outpoint)) continue;
-          if (
-            opening.slotIndex < base ||
-            opening.slotIndex >= base + CREDENTIAL_SLOTS_PER_PEER
-          ) {
-            continue;
-          }
           const input = poolByKey.get(opening.outpoint);
           const requestHex = signedChallengeBySlot.get(opening.slotIndex);
           const rPointHex = issuer.rPointsHex[opening.slotIndex];
-          if (!input || !requestHex || !rPointHex) continue;
-          if (
-            !verifyCredentialOpening({
+          const slotOk =
+            opening.slotIndex >= base &&
+            opening.slotIndex < base + CREDENTIAL_SLOTS_PER_PEER;
+          const ok =
+            !!input &&
+            !!requestHex &&
+            !!rPointHex &&
+            slotOk &&
+            verifyCredentialOpening({
               roundPubkeyHex: issuer.pubkeyHex,
               rPointHex,
               messageHash: inputCredentialMessageHash(input),
               openingHex: opening.openingHex,
               requestHex,
-            })
-          ) {
+            });
+          if (ok) {
+            if (!proven.includes(opening.outpoint)) proven.push(opening.outpoint);
             continue;
           }
-          if (!proven.includes(opening.outpoint)) proven.push(opening.outpoint);
+          // Peer claimed this outpoint with a non-proof — accuse, don't only drop.
+          if (input && requestHex && rPointHex) {
+            failedInputs.push(input);
+            failedOpenings.push({
+              outpoint: opening.outpoint,
+              slotIndex: opening.slotIndex,
+              openingHex: opening.openingHex,
+              requestHex,
+              rPointHex,
+            });
+          } else if (input) {
+            // Slot OOB or missing coordinator state: still an invalid claim.
+            failedInputs.push(input);
+            failedOpenings.push({
+              outpoint: opening.outpoint,
+              slotIndex: opening.slotIndex,
+              openingHex: opening.openingHex,
+              requestHex: requestHex ?? '00'.repeat(32),
+              rPointHex: rPointHex ?? issuer.rPointsHex[0] ?? '02' + '00'.repeat(32),
+            });
+          }
+        }
+        if (failedOpenings.length > 0 && !credentialFault) {
+          credentialFault = {
+            accused: peer,
+            code: 'invalid_input_credential',
+            evidence: {
+              kind: 'invalid_input_credential',
+              roundPubkey: issuer.pubkeyHex,
+              inputs: failedInputs,
+              credentialSigs: [],
+              failedOpenings,
+            },
+          };
         }
         verified.set(peer, {
           outpoints: proven,
@@ -1915,7 +1962,7 @@ function runCoordinator(
           openings: raw.openings,
         });
       }
-      return verified;
+      return { verified, credentialFault };
     };
     const runBlamePhase = async () => {
       // Nothing anonymous ever arrived, so there is nothing a disclosure could
@@ -1925,11 +1972,15 @@ function runCoordinator(
       if (anonymousInputs.length === 0 && signaturesByOutpoint.size === 0)
         return;
       await awaitDisclosures();
-      const finding = findFaultInDisclosures({
-        participants: [...params.participants],
-        disclosures: verifiedDisclosures(),
-        signedOutpoints: new Set(signaturesByOutpoint.keys()),
-      });
+      const { verified, credentialFault } = verifiedDisclosures();
+      // Bad openings first (C4): a forged proof is itself the fault.
+      const finding =
+        credentialFault ??
+        findFaultInDisclosures({
+          participants: [...params.participants],
+          disclosures: verified,
+          signedOutpoints: new Set(signaturesByOutpoint.keys()),
+        });
       // Mutually consistent disclosures mean the round died of something that
       // is nobody's provable fault — a timeout, a dropped relay. Never blame.
       if (!finding) return;
