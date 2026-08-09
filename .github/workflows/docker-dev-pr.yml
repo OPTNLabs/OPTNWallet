@@ -10,6 +10,7 @@ on:
       - 'packages/docker-dev/**'
       - '.github/workflows/docker-dev.yml'
       - '.github/workflows/docker-dev-pr.yml'
+      - '.github/workflows/docker-dev-testcore.yml'
 
 permissions:
   contents: read
@@ -46,3 +47,17 @@ jobs:
           id_out="$(docker run --rm --user 1000:1000 optn-docker-dev:pr id)"
           echo "$id_out"
           echo "$id_out" | grep -E 'uid=1000'
+
+      - name: npm ci + test:core inside image
+        run: |
+          set -euo pipefail
+          sudo chown -R 1000:1000 "$GITHUB_WORKSPACE"
+          docker run --rm \
+            --user 1000:1000 \
+            -v "$GITHUB_WORKSPACE":/optn \
+            -w /optn \
+            -e CI=true \
+            -e HOME=/tmp \
+            -e npm_config_cache=/tmp/npm-cache \
+            optn-docker-dev:pr \
+            bash -lc 'npm ci && npm run test:core'

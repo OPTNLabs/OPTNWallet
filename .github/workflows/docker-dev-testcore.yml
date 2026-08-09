@@ -7,7 +7,7 @@ on:
       image:
         description: 'Full image ref to pull'
         required: true
-        default: 'ghcr.io/cyberashven/optn-docker-dev:sha-554e257'
+        default: 'ghcr.io/optnlabs/optn-docker-dev:latest'
 
 permissions:
   contents: read
@@ -28,11 +28,25 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Pull image
-        run: docker pull ${{ inputs.image }}
-
-      - name: npm ci + test:core inside container
+        env:
+          IMAGE: ${{ inputs.image }}
         run: |
           set -euo pipefail
+          if [[ ! "$IMAGE" =~ ^[A-Za-z0-9./_:@-]+$ ]]; then
+            echo 'Invalid image reference.' >&2
+            exit 2
+          fi
+          docker pull "$IMAGE"
+
+      - name: npm ci + test:core inside container
+        env:
+          IMAGE: ${{ inputs.image }}
+        run: |
+          set -euo pipefail
+          if [[ ! "$IMAGE" =~ ^[A-Za-z0-9./_:@-]+$ ]]; then
+            echo 'Invalid image reference.' >&2
+            exit 2
+          fi
           # Host checkout is root-owned; chown for image user `node` (uid 1000)
           # before npm writes node_modules (same as real compose bind-mount care).
           sudo chown -R 1000:1000 "$PWD"
@@ -43,5 +57,5 @@ jobs:
             -e CI=true \
             -e HOME=/tmp \
             -e npm_config_cache=/tmp/npm-cache \
-            ${{ inputs.image }} \
+            "$IMAGE" \
             bash -lc 'npm ci && npm run test:core'

@@ -2,7 +2,7 @@
 # Docker updates FROM our tags — see docs/docker-release-model.md
 #
 # Usage (repo root, after v1.2.3 is published):
-#   export OPTN_DOCKER_TAG=v1.2.3   # or latest
+#   export OPTN_DOCKER_TAG=v1.2.3   # explicit tags are recommended; latest remains supported
 #   docker compose -f packages/docker-dev/docker-compose.release.yml pull
 #   docker compose -f packages/docker-dev/docker-compose.release.yml up -d
 #   docker compose -f packages/docker-dev/docker-compose.release.yml exec dev bash
