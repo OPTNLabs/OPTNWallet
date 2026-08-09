@@ -71,6 +71,7 @@ import {
   type BlameCode,
   type BlameEvidence,
   type BlameReport,
+  type ComponentDisclosure,
 } from './fusionBlame';
 import {
   clearRoundNullifiers,
@@ -1663,6 +1664,12 @@ function runCoordinator(
      * peer sent it, so these are never keyed by pubkey.
      */
     const anonymousInputs: FusionInputRef[] = [];
+    /**
+     * Post-abort component disclosures, keyed by the peer's ROUND identity —
+     * disclosure is control plane, so `from` is attributable. First disclosure
+     * per peer wins; a second is ignored rather than allowed to overwrite.
+     */
+    const disclosuresByPeer = new Map<string, ComponentDisclosure>();
     const inputPool = (): FusionInputRef[] => [
       ...[...inputsByPeer.values()].flat(),
       ...anonymousInputs,
@@ -2190,7 +2197,24 @@ function runCoordinator(
     };
 
     unsubscribe = transport.onMessage((from, message) => {
-      if (settled || message.session !== session) return;
+      if (message.session !== session) return;
+      // Handled BEFORE the settled guard on purpose: a disclosure only ever
+      // arrives after the round aborted, which is exactly when `settled` is
+      // already true. Dropping it here would leave the blame phase with
+      // nothing to cross-reference.
+      if (
+        message.type === 'component_disclosure' &&
+        params.participants.includes(from)
+      ) {
+        if (!disclosuresByPeer.has(from)) {
+          disclosuresByPeer.set(from, {
+            outpoints: [...message.outpoints],
+            serials: [...message.serials],
+          });
+        }
+        return;
+      }
+      if (settled) return;
       if (seenNonces.has(message.nonce)) return;
       seenNonces.add(message.nonce);
       if (message.type === 'credential_request' && others.includes(from)) {

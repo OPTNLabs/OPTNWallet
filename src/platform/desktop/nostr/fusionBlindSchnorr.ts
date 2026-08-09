@@ -231,6 +231,33 @@ export class BlindSignatureRequest {
     return binToHex(this.e);
   }
 
+  /**
+   * 64-byte hex opening `a || b` proving THIS request produced its blinded
+   * challenge for its message.
+   *
+   * Used only by the post-abort blame phase. Components travel anonymously, so
+   * a peer must be able to prove "the credential for this outpoint came from a
+   * slot the coordinator issued to ME" — otherwise blame is an assertion a
+   * griefer can forge (claim someone else's outpoint) or dodge (omit its own).
+   *
+   * `b` is not stored: it is recovered from the retained blinded challenge,
+   * since `e = c·H(rxNew, P, m) + b`. Nothing extra is kept in memory for this.
+   *
+   * SAFE to reveal after the round has aborted: `a` and `b` blind a signature
+   * that will never be used, and the round key is never exposed by them. Do NOT
+   * reveal an opening for a round that succeeded — that would deanonymise a
+   * component in a transaction that actually exists.
+   */
+  openingHex(): string {
+    const eHash = challenge(this.rxNew, this.pubkey, this.messageHash);
+    const cEHash = this.signFlip ? scalarNegate(eHash) : eHash;
+    const b = scalarAdd(this.e, scalarNegate(cEHash));
+    const opening = new Uint8Array(64);
+    opening.set(this.a, 0);
+    opening.set(b, 32);
+    return binToHex(opening);
+  }
+
   /** Unblind the issuer's 32-byte hex response into a 64-byte hex signature. */
   finalizeHex(sResponseHex: string, check = true): string {
     const s = scalarReduce(hexToBin(sResponseHex));
