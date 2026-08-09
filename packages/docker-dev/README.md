@@ -7,6 +7,9 @@ Read [PRODUCTION.md](./PRODUCTION.md) and [SCOPE.md](./SCOPE.md).
 **Release model:** [docs/docker-release-model.md](../../docs/docker-release-model.md)  
 → Docker **updates from our git tags**.
 
+Contributor setup is documented in the repository-level
+[CONTRIBUTING.md](../../CONTRIBUTING.md).
+
 | Audience | Use? |
 |----------|------|
 | Contributors / auditors | **Yes** (`dev` service) |
@@ -32,7 +35,7 @@ npm --prefix packages/docker-dev run test:core
 ## After a release (pull published image)
 
 ```bash
-export OPTN_DOCKER_TAG=v1.2.3   # or latest
+export OPTN_DOCKER_TAG=v1.2.3   # explicit tags are recommended; latest remains supported
 # forks: export OPTN_DOCKER_IMAGE=ghcr.io/<you>/optn-docker-dev
 npm --prefix packages/docker-dev run pull:release
 npm --prefix packages/docker-dev run up:release
