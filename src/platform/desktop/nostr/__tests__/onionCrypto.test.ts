@@ -117,6 +117,7 @@ describe('onionCrypto', () => {
       value: 99_600,
       credentialSerial: '22'.repeat(32),
       credentialSig: '33'.repeat(64),
+      saltCommitment: '44'.repeat(32),
     };
     const encoded = encodeAuthorizedOutput(output);
     expect(new TextEncoder().encode(encoded).length).toBeLessThan(
@@ -132,7 +133,9 @@ describe('onionCrypto', () => {
   it('rejects malformed authorized-output encodings', () => {
     expect(() => decodeAuthorizedOutput('aa|1|' + 'bb'.repeat(32))).toThrow();
     expect(() =>
-      decodeAuthorizedOutput(`aa|545|${'bb'.repeat(32)}|${'cc'.repeat(64)}`)
+      decodeAuthorizedOutput(
+        `aa|545|${'bb'.repeat(32)}|${'cc'.repeat(64)}|${'dd'.repeat(32)}`
+      )
     ).toThrow(/value|dust/i);
   });
 });

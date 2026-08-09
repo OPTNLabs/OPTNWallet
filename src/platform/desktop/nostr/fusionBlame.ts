@@ -69,6 +69,8 @@ export type BlameEvidence =
         openingHex: string;
         requestHex: string;
         rPointHex: string;
+        /** v4 salt_commitment for sha256(EC Component) recompute. */
+        saltCommitmentHex: string;
       }>;
     }
   | {
@@ -354,7 +356,8 @@ export function verifyBlameReport(
             !Number.isSafeInteger(fo.slotIndex) ||
             typeof fo.openingHex !== 'string' ||
             typeof fo.requestHex !== 'string' ||
-            typeof fo.rPointHex !== 'string'
+            typeof fo.rPointHex !== 'string' ||
+            typeof fo.saltCommitmentHex !== 'string'
           ) {
             return { ok: false, reason: 'malformed credential evidence' };
           }
@@ -368,7 +371,10 @@ export function verifyBlameReport(
             verifyCredentialOpening({
               roundPubkeyHex: e.roundPubkey,
               rPointHex: fo.rPointHex,
-              messageHash: inputCredentialMessageHash(input),
+              messageHash: inputCredentialMessageHash(
+                input,
+                fo.saltCommitmentHex
+              ),
               openingHex: fo.openingHex,
               requestHex: fo.requestHex,
             })
@@ -386,8 +392,10 @@ export function verifyBlameReport(
         return { ok: false, reason: 'malformed credential evidence' };
       }
       let anyInvalid = false;
+      // Dummy salt is fine: we only need the hash domain for sig verify fail.
+      const dummySalt = '00'.repeat(32);
       for (let i = 0; i < e.inputs.length; i++) {
-        const msgHex = inputCredentialMessageHashHex(e.inputs[i]);
+        const msgHex = inputCredentialMessageHashHex(e.inputs[i], dummySalt);
         if (!verifyBchSchnorrHex(e.roundPubkey, e.credentialSigs[i], msgHex)) {
           anyInvalid = true;
           break;
@@ -505,6 +513,7 @@ export function parseBlameEvidence(code: BlameCode, raw: unknown): BlameEvidence
             openingHex: string;
             requestHex: string;
             rPointHex: string;
+            saltCommitmentHex: string;
           }>)
         : undefined;
       return {

@@ -132,6 +132,7 @@ describe('fusionBlame (prove-or-don\'t-blame)', () => {
           openingHex: 'ab'.repeat(64),
           requestHex: '11'.repeat(32),
           rPointHex: issuer.rPointsHex[0],
+          saltCommitmentHex: '77'.repeat(32),
         },
       ],
     });
@@ -148,10 +149,11 @@ describe('fusionBlame (prove-or-don\'t-blame)', () => {
       value: 10_000,
       pubkey: '02' + '11'.repeat(32),
     };
+    const salt = '88'.repeat(32);
     const req = BlindSignatureRequest.create(
       issuer.pubkeyHex,
       issuer.rPointsHex[0],
-      inputCredentialMessageHash(input)
+      inputCredentialMessageHash(input, salt)
     );
     const report = createBlameReport('s', A, 'invalid_input_credential', {
       kind: 'invalid_input_credential',
@@ -165,6 +167,7 @@ describe('fusionBlame (prove-or-don\'t-blame)', () => {
           openingHex: req.openingHex(),
           requestHex: req.requestHex(),
           rPointHex: issuer.rPointsHex[0],
+          saltCommitmentHex: salt,
         },
       ],
     });

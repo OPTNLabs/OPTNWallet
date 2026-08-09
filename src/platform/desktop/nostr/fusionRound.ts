@@ -19,8 +19,8 @@
 // added on top — none of them can weaken this check.
 
 /** Kinds/labels for the gift-wrapped round messages (transport in fusion.ts).
- *  v3: every anonymous output carries a round-bound blind credential. */
-export const ROUND_MSG_VERSION = 3;
+ *  v4: blind credentials cover sha256(EC Component) — Electron Cash binding. */
+export const ROUND_MSG_VERSION = 4;
 
 /** An input a peer contributes: the outpoint, its value, and the pubkey. */
 export interface FusionInputRef {

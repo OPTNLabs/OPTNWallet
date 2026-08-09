@@ -1,27 +1,22 @@
 /**
- * P2P CashFusion v4 — EC component plane (Phase B helpers).
+ * P2P CashFusion v4 — Electron Cash component plane.
  *
- * Live rounds still use ROUND_MSG_VERSION = 3. This module locks the v4 rule:
- *   blind credential message = sha256(serialized Electron Cash Component)
- * and shares golden vectors with native `fusion/p2p_component.rs`.
+ * Blind credentials cover `sha256(serialized Component)` exactly as the
+ * classic server path (`src-tauri/src/fusion/components.rs` /
+ * `p2p_component.rs`). Unlinkability remains transport-only (throwaway + Tor).
  *
  * Spec: docs/p2p-ec-component-plane-v4.md
  */
 import { binToHex, hexToBin, sha256 } from '@bitauth/libauth';
 
-/** Renderer/native protocol tag for encode responses (not the round msg version). */
 export const P2P_COMPONENT_PROTOCOL = 'p2p-v4-ec-component' as const;
 
-/**
- * Target round message version once Phases C–F land.
- * Do NOT assign this to ROUND_MSG_VERSION until anonymous redeem works.
- */
+/** Live wire version once this module is used for all credential messages. */
 export const ROUND_MSG_VERSION_V4 = 4 as const;
 
 /**
  * Electron Cash protobuf wire vector for one Input Component
  * (salt_commitment=0x11*32, prev_txid wire=0xaa*32, index=3, pubkey=0x02*33, amount=200000).
- * Locked in native `components.rs` + `p2p_component.rs` tests.
  */
 export const EC_INPUT_COMPONENT_GOLDEN_HEX =
   '0a20' +
@@ -32,10 +27,129 @@ export const EC_INPUT_COMPONENT_GOLDEN_HEX =
   '020202020202020202020202020202020202020202020202020202020202020202' +
   '20c09a0c';
 
+function writeVarint(n: number): number[] {
+  if (!Number.isSafeInteger(n) || n < 0) {
+    throw new Error('varint out of range');
+  }
+  const out: number[] = [];
+  let v = n >>> 0;
+  while (v >= 0x80) {
+    out.push((v & 0x7f) | 0x80);
+    v >>>= 7;
+  }
+  out.push(v);
+  return out;
+}
+
+function writeVarintBig(n: bigint): number[] {
+  if (n < 0n) throw new Error('varint negative');
+  const out: number[] = [];
+  let v = n;
+  while (v >= 0x80n) {
+    out.push(Number(v & 0x7fn) | 0x80);
+    v >>= 7n;
+  }
+  out.push(Number(v));
+  return out;
+}
+
+function tag(field: number, wireType: number): number[] {
+  return writeVarint((field << 3) | wireType);
+}
+
+function lenDelim(field: number, bytes: Uint8Array): number[] {
+  return [...tag(field, 2), ...writeVarint(bytes.length), ...bytes];
+}
+
+function displayTxidToWire(prevTxidDisplayHex: string): Uint8Array {
+  const display = hexToBin(prevTxidDisplayHex.toLowerCase());
+  if (display.length !== 32) {
+    throw new Error('prevTxid must be 32 bytes');
+  }
+  return display.slice().reverse();
+}
+
+/** sha256(salt) as 32-byte salt_commitment (EC). */
+export function saltCommitmentFromSalt(salt: Uint8Array): Uint8Array {
+  if (salt.length !== 32) throw new Error('salt must be 32 bytes');
+  return new Uint8Array(sha256.hash(salt));
+}
+
+export function randomSalt32(): Uint8Array {
+  const salt = new Uint8Array(32);
+  globalThis.crypto.getRandomValues(salt);
+  return salt;
+}
+
 /**
- * Blind-credential message for v4: SHA-256 over the raw component bytes.
- * Not a UTF-8 domain string (v3). Not RFC6979.
+ * Encode a finalized Input Component (protobuf2, fusion.proto field layout).
+ * `prevTxidDisplayHex` is explorer/big-endian; stored wire-order little-endian.
  */
+export function encodeInputComponent(args: {
+  prevTxidDisplayHex: string;
+  prevIndex: number;
+  pubkeyHex: string;
+  amount: number;
+  saltCommitmentHex: string;
+}): Uint8Array {
+  const saltCommitment = hexToBin(args.saltCommitmentHex.toLowerCase());
+  if (saltCommitment.length !== 32) {
+    throw new Error('saltCommitment must be 32 bytes');
+  }
+  const pubkey = hexToBin(args.pubkeyHex.toLowerCase());
+  if (pubkey.length < 1 || pubkey.length > 65) {
+    throw new Error('pubkey length out of range');
+  }
+  if (!Number.isSafeInteger(args.prevIndex) || args.prevIndex < 0) {
+    throw new Error('prevIndex invalid');
+  }
+  if (!Number.isSafeInteger(args.amount) || args.amount < 0) {
+    throw new Error('amount invalid');
+  }
+  const prevWire = displayTxidToWire(args.prevTxidDisplayHex);
+  const inputBody = new Uint8Array([
+    ...lenDelim(1, prevWire),
+    ...tag(2, 0),
+    ...writeVarint(args.prevIndex),
+    ...lenDelim(3, pubkey),
+    ...tag(4, 0),
+    ...writeVarintBig(BigInt(args.amount)),
+  ]);
+  return new Uint8Array([
+    ...lenDelim(1, saltCommitment),
+    ...lenDelim(2, inputBody),
+  ]);
+}
+
+/** Encode a finalized Output Component. */
+export function encodeOutputComponent(args: {
+  scriptHex: string;
+  amount: number;
+  saltCommitmentHex: string;
+}): Uint8Array {
+  const saltCommitment = hexToBin(args.saltCommitmentHex.toLowerCase());
+  if (saltCommitment.length !== 32) {
+    throw new Error('saltCommitment must be 32 bytes');
+  }
+  const script = hexToBin(args.scriptHex.toLowerCase());
+  if (script.length < 1 || script.length > 10_000) {
+    throw new Error('script length out of range');
+  }
+  if (!Number.isSafeInteger(args.amount) || args.amount < 0) {
+    throw new Error('amount invalid');
+  }
+  const outputBody = new Uint8Array([
+    ...lenDelim(1, script),
+    ...tag(2, 0),
+    ...writeVarintBig(BigInt(args.amount)),
+  ]);
+  return new Uint8Array([
+    ...lenDelim(1, saltCommitment),
+    ...lenDelim(3, outputBody), // field 3 = output oneof
+  ]);
+}
+
+/** Blind-credential message: SHA-256 over raw component bytes (EC rule). */
 export function componentBlindMessageHash(
   componentBytes: Uint8Array
 ): Uint8Array {
@@ -50,4 +164,34 @@ export function componentBlindMessageHash(
 
 export function componentBlindMessageHashHex(componentHex: string): string {
   return binToHex(componentBlindMessageHash(hexToBin(componentHex)));
+}
+
+export function inputComponentBlindMessage(args: {
+  prevTxidDisplayHex: string;
+  prevIndex: number;
+  pubkeyHex: string;
+  amount: number;
+  saltCommitmentHex: string;
+}): Uint8Array {
+  return componentBlindMessageHash(encodeInputComponent(args));
+}
+
+export function outputComponentBlindMessage(args: {
+  scriptHex: string;
+  amount: number;
+  saltCommitmentHex: string;
+}): Uint8Array {
+  return componentBlindMessageHash(encodeOutputComponent(args));
+}
+
+/** Fresh salt + commitment pair for one component. */
+export function freshSaltCommitment(): {
+  saltHex: string;
+  saltCommitmentHex: string;
+} {
+  const salt = randomSalt32();
+  return {
+    saltHex: binToHex(salt),
+    saltCommitmentHex: binToHex(saltCommitmentFromSalt(salt)),
+  };
 }

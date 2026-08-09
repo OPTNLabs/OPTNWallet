@@ -34,6 +34,8 @@ export interface AuthorizedOnionOutput {
   value: number;
   credentialSerial: string;
   credentialSig: string;
+  /** v4: sha256(salt) binding the EC Output Component credential. */
+  saltCommitment: string;
 }
 
 const HEX_64 = /^[0-9a-f]{64}$/i;
@@ -52,15 +54,25 @@ export function encodeAuthorizedOutput(output: AuthorizedOnionOutput): string {
   if (!HEX_128.test(output.credentialSig)) {
     throw new Error('authorized output credential must be 64-byte hex');
   }
-  return `${output.script.toLowerCase()}|${output.value}|${output.credentialSerial.toLowerCase()}|${output.credentialSig.toLowerCase()}`;
+  if (!HEX_64.test(output.saltCommitment)) {
+    throw new Error('authorized output saltCommitment must be 32-byte hex');
+  }
+  return `${output.script.toLowerCase()}|${output.value}|${output.credentialSerial.toLowerCase()}|${output.credentialSig.toLowerCase()}|${output.saltCommitment.toLowerCase()}`;
 }
 
 export function decodeAuthorizedOutput(payload: string): AuthorizedOnionOutput {
   const parts = payload.split('|');
-  if (parts.length !== 4) throw new Error('malformed authorized output');
-  const [script, valueText, credentialSerial, credentialSig] = parts;
+  if (parts.length !== 5) throw new Error('malformed authorized output');
+  const [script, valueText, credentialSerial, credentialSig, saltCommitment] =
+    parts;
   const value = Number(valueText);
-  const output = { script, value, credentialSerial, credentialSig };
+  const output = {
+    script,
+    value,
+    credentialSerial,
+    credentialSig,
+    saltCommitment,
+  };
   encodeAuthorizedOutput(output);
   if (String(value) !== valueText) {
     throw new Error('authorized output value is not canonical');

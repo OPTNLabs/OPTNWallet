@@ -203,7 +203,7 @@ Keep for now if still useful as non-auth metadata: session id, tier, feerate on 
 ### Phase A — Spec lock (this document)
 
 - [x] Design written  
-- [x] Reviewed in session; no code that breaks v3 mid-flight without version bump
+- [x] Reviewed in session
 
 ### Phase B — Shared encode / hash API
 
@@ -211,7 +211,14 @@ Keep for now if still useful as non-auth metadata: session id, tier, feerate on 
 - [x] Tauri command: `fusion_p2p_encode_component`
 - [x] TS helpers + golden vector: `nostr/fusionComponentV4.ts` (+ tests)
 - [x] Golden tests match `components.rs` Electron Cash protobuf wire vector
-- [x] Live `ROUND_MSG_VERSION` remains **3** until Phases C–F
+
+### Phase C–F — Cutover (landed)
+
+- [x] Issuance uses EC component blind messages (`buildComponentCredentialRequests`)
+- [x] Inputs redeem with `saltCommitments` + credential verify
+- [x] Outputs redeem with `saltCommitment` in onion payload
+- [x] `ROUND_MSG_VERSION = 4`; reject other versions
+- [x] Nostr suite green (128 tests)
 
 ### Phase C — Issuance (control plane)
 
