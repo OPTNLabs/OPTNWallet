@@ -277,6 +277,15 @@ fn fusion_p2p_sign(
     fusion::p2p_sign::sign_p2p(request)
 }
 
+/// Encode an Electron Cash `Component` and return `sha256(component)` for P2P v4
+/// blind credentials. Does not change the live round wire version by itself.
+#[tauri::command]
+fn fusion_p2p_encode_component(
+    request: fusion::p2p_component::P2pComponentEncodeRequest,
+) -> Result<fusion::p2p_component::P2pComponentEncodeResponse, String> {
+    fusion::p2p_component::encode_component_for_p2p(request)
+}
+
 /// Run a full CashFusion round (Phase 1.7): contribute `inputs` (each with the
 /// key to sign it) and fresh `outputs`, join `tier`, and fuse. Returns the
 /// assembled transaction on success. Same Tor requirement as the other fusion
@@ -1024,6 +1033,7 @@ pub fn run() {
             fusion_execution_status,
             fusion_prepare_round,
             fusion_p2p_sign,
+            fusion_p2p_encode_component,
             fusion_run,
             fusion_cancel_round,
             fusion_relay_broadcast_and_observe,
