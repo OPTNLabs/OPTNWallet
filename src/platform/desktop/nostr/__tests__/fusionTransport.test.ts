@@ -16,7 +16,11 @@ import {
   type TransactionCommon,
 } from '@bitauth/libauth';
 import { hash160 } from '@cashscript/utils';
-import { createNostrRoundTransport, GIFT_WRAP_KIND } from '../fusionTransport';
+import {
+  createNostrRoundTransport,
+  GIFT_WRAP_KIND,
+  ONE_SHOT_POOL_LINGER_MS,
+} from '../fusionTransport';
 import {
   parseRoundMessage,
   messageBinding,
@@ -46,7 +50,7 @@ class FakePool {
   get publishedCount(): number {
     return this.events.length;
   }
-  close(_relays: string[]): void {
+  close(): void {
     this.closed = true;
   }
   publish(_relays: string[], event: Event): Promise<string>[] {
@@ -299,6 +303,10 @@ describe('Nostr round transport', () => {
       }
     );
 
+    // Fake timers must be installed BEFORE the sends: the deferred close is
+    // scheduled during send(), and a timer scheduled on the real clock cannot
+    // be advanced afterwards.
+    vi.useFakeTimers({ shouldAdvanceTime: true });
     const output = (script: string) => ({
       ...messageBinding(),
       type: 'outputs' as const,
@@ -323,7 +331,11 @@ describe('Nostr round transport', () => {
 
     expect(oneShot).toHaveLength(2);
     expect(oneShot.map((p) => p.publishedCount)).toEqual([1, 1]);
+    // Close is deferred so relays past the first ACK still receive the event.
+    expect(oneShot.some((p) => p.closed)).toBe(false);
+    vi.advanceTimersByTime(ONE_SHOT_POOL_LINGER_MS + 1);
     expect(oneShot.every((p) => p.closed)).toBe(true);
+    vi.useRealTimers();
     // Nothing anonymous fell back to the shared socket.
     expect(sharedOutputPool.publishedCount).toBe(0);
     expect(controlPool.publishedCount).toBe(1);
