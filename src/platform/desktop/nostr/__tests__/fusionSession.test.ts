@@ -855,11 +855,13 @@ describe('P2P fusion round choreography (3 peers, in-memory)', () => {
             myContribution: peer.contribution,
             keysByPubkey: peer.keys,
             broadcast: async (txHex) => txidOf(txHex),
-            // The coordinator must give up FIRST. With one shared deadline all
-            // three tear down in the same tick, so peers unsubscribe before the
-            // abort reaches them and disclose nothing — the blame phase then
-            // waits out its whole ceiling for messages that can never arrive.
-            timeoutMs: peer.round.pubHex === coordinator ? 800 : 4_000,
+            // E0: ONE deadline for every role, exactly as production passes it.
+            // The session itself gives peers the margin — without that they all
+            // tear down in the same tick, unsubscribe before the coordinator's
+            // abort reaches them, and disclose nothing, so the blame phase burns
+            // its whole ceiling and names no one. Skewing this per role in the
+            // test would hide precisely the bug E0 fixes.
+            timeoutMs: 800,
             jitterMs: [0, 0],
             onBlame: (report) => {
               if (peer.round.pubHex === coordinator) blames.push(report);
