@@ -102,8 +102,17 @@ export function createNostrRoundTransport(
       // Outputs (plain or onion) are sealed by a throwaway key so the recipient
       // cannot tie them to our round identity. onion_output was previously
       // signed with the round key, undoing the unlinkability onion bought.
+      // Every transaction COMPONENT is anonymous; only the control plane
+      // (round_ack, credential_request/response, onion_declare,
+      // components_ready, assembled, final, abort) keeps the round identity.
+      // Signatures are included deliberately: anonymising input registration
+      // and then letting one peer send signatures for X, Y and Z under its
+      // round key would re-group exactly what was just separated.
       const isAnonymousOutput =
-        msg.type === 'outputs' || msg.type === 'onion_output';
+        msg.type === 'outputs' ||
+        msg.type === 'onion_output' ||
+        msg.type === 'inputs' ||
+        msg.type === 'signature';
       const signer = isAnonymousOutput ? generateSecretKey() : round.secretKey;
       // Same-origin dual path first (fast local multi-wallet). Always also
       // publish Nostr so remote peers still work.

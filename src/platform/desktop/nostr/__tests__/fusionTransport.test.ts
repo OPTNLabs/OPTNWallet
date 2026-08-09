@@ -276,8 +276,16 @@ describe('Nostr round transport', () => {
       ],
     });
 
+    // Inputs are anonymous COMPONENTS too, so both the input and the output
+    // leave over the isolated pool. Only control-plane traffic keeps the
+    // round-identity pool — that split is the whole point.
+    await transport.send(recipient.pubkey, {
+      ...messageBinding(),
+      type: 'components_ready',
+      session: 'round',
+    });
+    expect(outputPool.publishedCount).toBe(2);
     expect(controlPool.publishedCount).toBe(1);
-    expect(outputPool.publishedCount).toBe(1);
   });
 
   // A fresh throwaway signing key per output is defeated at the transport layer
@@ -351,25 +359,19 @@ describe('Nostr round transport', () => {
 
     const got: Array<{ from: string; type: string }> = [];
     tb.onMessage((from, msg) => got.push({ from, type: msg.type }));
+    // A CONTROL message: the round identity is correct here and must survive
+    // the round-trip. Components (inputs / outputs / signature) deliberately do
+    // NOT — see the throwaway-key test below.
     await ta.send(b.pubkey, {
       ...messageBinding(),
-      type: 'inputs',
+      type: 'components_ready',
       session: 's',
-      inputs: [
-        {
-          prevTxid: 'ab'.repeat(32),
-          prevIndex: 0,
-          value: 10_000,
-          pubkey: `02${'11'.repeat(32)}`,
-        },
-      ],
-      credentialSigs: ['bb'.repeat(64)],
     });
     await new Promise((r) => setTimeout(r, 10));
 
     expect(got).toHaveLength(1);
-    expect(got[0].from).toBe(a.pubkey); // inputs are attributable to the round identity
-    expect(got[0].type).toBe('inputs');
+    expect(got[0].from).toBe(a.pubkey);
+    expect(got[0].type).toBe('components_ready');
     // Standard NIP-59 gift-wrap — indistinguishable on the wire from a chat DM,
     // not a custom fusion kind that would fingerprint the round.
     expect(GIFT_WRAP_KIND).toBe(1059);

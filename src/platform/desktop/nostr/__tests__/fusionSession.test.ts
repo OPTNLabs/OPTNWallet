@@ -46,6 +46,15 @@ const p2pkhHex = (pubHex: string) =>
  *  peer that hasn't subscribed yet is buffered and flushed when it does — so the
  *  protocol works regardless of who connects first (as with real relays). */
 type Handler = (from: string, msg: RoundMessage) => void;
+/**
+ * A distinct one-time 64-hex sender per anonymous component, standing in for
+ * production's `generateSecretKey()` seal. Distinct per call on purpose: a
+ * single shared fake would still let the coordinator group components.
+ */
+let anonymousSenderCounter = 0;
+const anonymousSender = (): string =>
+  (++anonymousSenderCounter).toString(16).padStart(64, 'a');
+
 class Hub {
   private handlers = new Map<string, Handler[]>();
   private mailbox = new Map<string, Array<[string, RoundMessage]>>();
@@ -72,9 +81,20 @@ class Hub {
       send: async (to, msg) => {
         const message = this.transform?.(me, to, msg) ?? msg;
         this.sent.push({ from: me, to, message });
+        // Model production: fusionTransport seals every COMPONENT under a
+        // fresh generateSecretKey(), so `from` is a one-time pubkey the
+        // coordinator cannot attribute — and a DIFFERENT one per component, so
+        // it cannot group them either. Control-plane messages keep the real
+        // round identity. A Hub that delivered `me` for components would let an
+        // `others.includes(from)` check pass in tests and fail in production,
+        // which is exactly how the original participants.includes(from) bug
+        // shipped green.
         const deliveredFrom =
-          message.type === 'outputs' || message.type === 'onion_output'
-            ? '9'.repeat(64)
+          message.type === 'outputs' ||
+          message.type === 'onion_output' ||
+          message.type === 'inputs' ||
+          message.type === 'signature'
+            ? anonymousSender()
             : me;
         const hs = this.handlers.get(to);
         if (hs && hs.length) {

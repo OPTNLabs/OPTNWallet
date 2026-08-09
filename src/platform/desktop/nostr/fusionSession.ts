@@ -1587,6 +1587,25 @@ function runCoordinator(
     const credentialedInputs = new Set<string>(
       params.myContribution.inputs.map(inputKey)
     );
+    /**
+     * Inputs that arrived under a throwaway key, exactly like
+     * `anonymousOutputBatches` below. A valid blind credential proves the
+     * sender was admitted to this round; it deliberately does NOT say which
+     * peer sent it, so these are never keyed by pubkey.
+     */
+    const anonymousInputs: FusionInputRef[] = [];
+    const inputPool = (): FusionInputRef[] => [
+      ...[...inputsByPeer.values()].flat(),
+      ...anonymousInputs,
+    ];
+    /**
+     * Total inputs this round must collect. Credential REQUESTS stay
+     * attributed (`inputQuotaByPeer`, seeded with the coordinator's own count),
+     * so the coordinator knows how many each peer may submit without learning
+     * which anonymous input is whose.
+     */
+    const expectedInputCount = (): number =>
+      [...inputQuotaByPeer.values()].reduce((sum, n) => sum + n, 0);
     if (mixOrder.length < 2) {
       return Promise.reject(
         new Error('onion mix-net requires ≥2 peelers (need ≥3 participants)')
@@ -1814,54 +1833,44 @@ function runCoordinator(
     };
 
     /** Accept inputs only when every credential verifies under the round pubkey. */
-    const acceptInputs = async (
-      from: string,
-      inputs: FusionInputRef[],
-      sigs: string[]
-    ) => {
+    /**
+     * Accept a credentialed input WITHOUT knowing who sent it.
+     *
+     * Admission is proved by the blind credential, not by sender identity:
+     * only a peer the coordinator issued a credential to can produce a
+     * signature that verifies under the round pubkey for this exact outpoint.
+     * That is the whole point of the blind-Schnorr design, and checking
+     * `others.includes(from)` on top of it is what used to re-group a peer's
+     * inputs.
+     */
+    const acceptInputs = async (inputs: FusionInputRef[], sigs: string[]) => {
       if (inputs.length !== sigs.length) {
         throw new Error('input/credential count mismatch');
       }
-      const quota = inputQuotaByPeer.get(from);
-      const existingCount = inputsByPeer.get(from)?.length ?? 0;
-      if (quota === undefined || existingCount + inputs.length > quota) {
+      // Global quota. Per-peer quotas still bound how many credentials each
+      // peer was issued; the sum is how many valid inputs may ever arrive.
+      if (inputPool().length + inputs.length > expectedInputCount()) {
         throw new Error('input credential quota exceeded');
       }
       for (let i = 0; i < inputs.length; i++) {
         const msgHex = inputCredentialMessageHashHex(inputs[i]);
         if (!verifyBchSchnorrHex(issuer.pubkeyHex, sigs[i], msgHex)) {
-          await blameAndFail(from, 'invalid_input_credential', {
-            kind: 'invalid_input_credential',
-            roundPubkey: issuer.pubkeyHex,
-            inputs: [...inputs],
-            credentialSigs: [...sigs],
-          });
-          return;
+          // No accused: an anonymous component has no participant to blame, and
+          // verifyBlameReport rejects an accused outside the participant set.
+          // Electron Cash has the same property for covert components.
+          throw new Error('invalid input credential');
         }
       }
       for (const inp of inputs) {
         const key = inputKey(inp);
-        const claimants: string[] = [];
-        for (const [peer, peerInputs] of inputsByPeer) {
-          if (peerInputs.some((p) => inputKey(p) === key)) claimants.push(peer);
-        }
-        if (claimants.length > 0) {
-          if (!claimants.includes(from)) claimants.push(from);
-          if (claimants.length >= 2) {
-            await blameAndFail(from, 'duplicate_outpoint', {
-              kind: 'duplicate_outpoint',
-              prevTxid: inp.prevTxid,
-              prevIndex: inp.prevIndex,
-              claimants,
-            });
-            return;
-          }
+        // credentialedInputs already holds every accepted outpoint, so a
+        // replay is caught without scanning a per-peer map.
+        if (credentialedInputs.has(key)) {
+          throw new Error('duplicate outpoint in round');
         }
         credentialedInputs.add(key);
       }
-      const existing = inputsByPeer.get(from);
-      if (existing) existing.push(...inputs);
-      else inputsByPeer.set(from, [...inputs]);
+      anonymousInputs.push(...inputs);
     };
 
     const tryFinalize = async () => {
@@ -1869,7 +1878,8 @@ function runCoordinator(
         settled ||
         finalizing ||
         !assembled ||
-        signedPeers.size !== others.length ||
+        // Signature COUNT is the gate, not peer count: anonymous signatures
+        // carry no identity, and every assembled input needs exactly one.
         signaturesByOutpoint.size !== assembled.inputs.length
       ) {
         if (
@@ -1944,8 +1954,11 @@ function runCoordinator(
       // hard-fail assemble (negative fee). Wait for a balanced pool instead.
       const pool = outputPool();
       if (pool.length === 0) return false;
-      if (inputsByPeer.size !== params.participants.length) return false;
-      const inputs = [...inputsByPeer.values()].flat();
+      // Count inputs, not peers: an anonymous input carries no identity, so
+      // "every participant submitted" is expressed as "every issued credential
+      // came back".
+      if (inputPool().length !== expectedInputCount()) return false;
+      const inputs = inputPool();
       if (inputs.length === 0) return false;
       const totalIn = inputs.reduce((s, i) => s + i.value, 0);
       const totalOut = pool.reduce((s, o) => s + o.value, 0);
@@ -1988,9 +2001,9 @@ function runCoordinator(
           '[p2p-fusion coord] session',
           session.slice(0, 10),
           'inputs',
-          inputsByPeer.size,
+          inputPool().length,
           '/',
-          params.participants.length,
+          expectedInputCount(),
           'outputs',
           outputSlotsFilled(),
           '/',
@@ -2017,16 +2030,17 @@ function runCoordinator(
         armMissingOutputsWatch();
         return;
       }
+      // Every peer must have been issued credentials, and every issued
+      // credential must have come back. Deliberately a COUNT, not a per-peer
+      // tally: an anonymous input carries no pubkey, so `inputsByPeer.get(peer)`
+      // is empty for every peer but the coordinator and could never match.
       if (
         inputQuotaByPeer.size !== params.participants.length ||
-        params.participants.some(
-          (peer) =>
-            (inputsByPeer.get(peer)?.length ?? 0) !== inputQuotaByPeer.get(peer)
-        )
+        inputPool().length !== expectedInputCount()
       ) {
         return;
       }
-      const inputs = [...inputsByPeer.values()].flat();
+      const inputs = inputPool();
       // Refuse to assemble until every input carries a verified blind credential.
       if (inputs.some((input) => !credentialedInputs.has(inputKey(input)))) {
         return;
@@ -2146,8 +2160,11 @@ function runCoordinator(
         void fail(new Error(formatBlameAbortReason(report)), false);
         return;
       }
-      if (message.type === 'inputs' && others.includes(from)) {
-        void acceptInputs(from, message.inputs, message.credentialSigs)
+      // No `others.includes(from)`: inputs arrive under a throwaway key by
+      // design, so `from` is a random one-time pubkey. The blind credential
+      // checked inside acceptInputs is the admission proof.
+      if (message.type === 'inputs') {
+        void acceptInputs(message.inputs, message.credentialSigs)
           .then(() => {
             if (settled) return;
             return tryAssemble();
@@ -2209,28 +2226,21 @@ function runCoordinator(
         );
         return;
       }
-      if (
-        message.type === 'signature' &&
-        assembled &&
-        others.includes(from) &&
-        !signedPeers.has(from)
-      ) {
-        const expected = inputsByPeer.get(from) ?? [];
-        const expectedKeys = new Set(expected.map(inputKey));
+      // Signatures are anonymous too. Anonymising registration and then
+      // accepting a signature SET under a round identity would re-group the
+      // very inputs just separated, so each signature is validated against an
+      // assembled input rather than against "this peer's expected set".
+      if (message.type === 'signature' && assembled) {
+        const assembledKeys = new Set(assembled.inputs.map(inputKey));
         const receivedKeys = new Set(message.sigs.map(inputKey));
         if (
           receivedKeys.size !== message.sigs.length ||
-          receivedKeys.size !== expectedKeys.size ||
-          [...receivedKeys].some((key) => !expectedKeys.has(key))
+          [...receivedKeys].some((key) => !assembledKeys.has(key))
         ) {
-          void blameAndFail(from, 'invalid_signature_set', {
-            kind: 'invalid_signature_set',
-            expectedOutpoints: [...expectedKeys],
-            receivedOutpoints: message.sigs.map(inputKey),
-          });
+          // Unattributable by construction — drop the frame rather than blame
+          // a throwaway key that is not in the participant set.
           return;
         }
-        signedPeers.add(from);
         message.sigs.forEach((signature) =>
           signaturesByOutpoint.set(inputKey(signature), signature)
         );
