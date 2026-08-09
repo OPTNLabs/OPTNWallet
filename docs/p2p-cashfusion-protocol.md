@@ -344,6 +344,25 @@ atomically records the serial nullifiers. Replays remain rejected across an
 active-round retry or reload; nullifiers clear only when that round succeeds or
 conclusively aborts. Failure is **loud** — no silent fallback to plaintext.
 
+**Transport isolation per anonymous component.** Sealing each output under a
+fresh throwaway key defeats the *coordinator*, not the *relay*: if every output
+of a round leaves over one shared socket, the relay groups them by connection
+and the fresh keys buy nothing against that observer. Each anonymous component
+(`outputs`, `onion_output`) therefore publishes on its own short-lived pool,
+closed immediately after (`createComponentPool`, `nostr/fusionTransport.ts`).
+The Tor WebSocket implementation is installed globally, so one pool means one
+connection and one circuit with its own SOCKS isolation token — the same
+property Electron Cash obtains from a separate covert connection per component.
+Subscriptions keep the persistent pools; only publishing is one-shot.
+
+Scope, stated plainly: this covers **outputs**. Input registration and the later
+signature messages still travel under the peer's round identity, so a
+coordinator learns which inputs share a participant. That is deliberate, not an
+oversight — every code in `nostr/fusionBlame.ts` binds to an `accused`
+participant pubkey and `verifyBlameReport` rejects an accused outside the
+participant set, so anonymising those channels removes the input blame is built
+on and requires the EC covert-component blame model. Tracked as a residual.
+
 ### Phase E — Assemble, verify, sign
 
 1. Coordinator flattens all inputs + output pool → `assembleFusionTx`
@@ -530,7 +549,7 @@ late join.
 | Issuer                  | Dedicated fusion server                | Elected peer coordinator                    |
 | Pedersen                | Full component model + blame           | Per-peer commit at credential time          |
 | Blind Schnorr           | Server signs; client requester in Rust | Coordinator `BlindIssuer`; TS requester     |
-| Covert / output privacy | Separate Tor circuits per component    | Jitter + **output onion**                   |
+| Covert / output privacy | Separate Tor circuits per component    | **One-shot socket per anonymous component** + jitter + **output onion** |
 | Blame                   | Full EC-style component blame          | P2P prove-or-don't-blame                    |
 | Assembly trust          | Server proposes; client checks         | Coordinator proposes; **every** peer checks |
 | Broadcast               | Client/server paths                    | Coordinator + peer liveness broadcast       |
