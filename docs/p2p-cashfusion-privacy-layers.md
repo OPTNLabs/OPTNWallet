@@ -5,8 +5,10 @@ P2P CashFusion path. The design below is **implemented**, not a future plan.
 Read this before the protocol or threat-model docs if you are confused about
 “onion vs Tor vs blind Schnorr.”
 
-**Status:** Finished for desktop P2P fusion (gather → credentials → output onion
-→ assemble → sign → broadcast; Auto + fuse depth; Tor fail-closed). See
+**Status:** Implemented for desktop P2P fusion (gather → **v4 EC credentials** →
+anonymous inputs/sigs + per-component Tor → output onion → assemble → sign →
+broadcast; Auto + fuse depth; Tor fail-closed). Production clearance still needs
+Chipnet soak. See
 [cashfusion-implementation-scope.md](./cashfusion-implementation-scope.md) for
 the server path map (also shipped).
 
@@ -162,11 +164,13 @@ Flow:
 4. Last hop: peel → shuffle → send revealed outputs to coordinator.
 5. Coordinator assembles inputs + output pool → `assembled` → every peer verifies and signs own inputs.
 
-The coordinator verifies each anonymous credential against the v3 domain
-(`network`, `session`, `tier`, `output` role, canonical script/value, serial),
-requires the exact issued output quota, and consumes persisted one-use serial
-nullifiers before assembly. A new NIP-59 wrapper therefore cannot make an old
-output valid again, and the final peeler does not need to identify itself.
+The coordinator verifies each anonymous output credential against the **v4 EC
+component binding**: `sha256(serialized Output Component)` with
+`salt_commitment` (plus a separate serial nullifier). It requires the exact
+issued output quota and consumes persisted one-use serial nullifiers before
+assembly. A new NIP-59 wrapper therefore cannot make an old credential valid
+again, and the final peeler does **not** need to identify itself — provenance
+is the blind credential, not the peel identity.
 
 Input registration remains attributable to the coordinator in v3. The later
 input-signature exchange is attributable too, so hiding only the registration
