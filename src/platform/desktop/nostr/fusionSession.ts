@@ -918,6 +918,23 @@ const DEFAULT_TIMEOUT = P2P_ROUND_TIMEOUT_MS;
  */
 const BLAME_WINDOW_MS = 1_200;
 const BLAME_POLL_MS = 20;
+/**
+ * E0 — how much longer than the coordinator a PEER waits before giving up.
+ *
+ * Every caller passes one `timeoutMs` for the whole round, so without this
+ * every role hit its deadline in the same tick: peers tore down and
+ * unsubscribed before the coordinator's abort could reach them, disclosed
+ * nothing, and the blame phase then burned its entire ceiling waiting for
+ * messages that could never arrive. The machinery was correct and the round
+ * still ended with no accused.
+ *
+ * The coordinator must lose first. Derived from the blame window, not a
+ * hand-picked number, so the two cannot drift apart: the margin has to cover
+ * the abort reaching a peer plus that peer's disclosure coming back. The cost
+ * is that a genuinely silent coordinator keeps peers waiting this much longer,
+ * which is bounded and worth an attributable abort.
+ */
+const PEER_TIMEOUT_MARGIN_MS = BLAME_WINDOW_MS + 1_800;
 
 function sessionId(participants: string[], tier: number): string {
   return `${electCoordinator(participants)}:${tier}`;
@@ -1429,7 +1446,9 @@ function runParticipant(
           ),
           true
         ),
-      params.timeoutMs ?? DEFAULT_TIMEOUT
+      // E0: outlast the coordinator so its abort still finds us subscribed and
+      // we can disclose. Same caller timeout, later deadline for this role.
+      (params.timeoutMs ?? DEFAULT_TIMEOUT) + PEER_TIMEOUT_MARGIN_MS
     );
     params.onPhase?.(2);
     void (async () => {
