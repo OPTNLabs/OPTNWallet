@@ -3,7 +3,6 @@
 // Loads the browser UMD build via <script> tag so the WASM runtime runs
 // exactly as compiled, then proxies the same initSqlJs API.
 
-import sqlWasmBrowserUrl from 'sql.js/dist/sql-wasm.js?url';
 
 // Minimal type stubs so DatabaseService.ts's `Database` annotation works.
 // (TSC is not run during `tauri dev`; esbuild strips these at build time.)
@@ -40,7 +39,12 @@ function loadSqlJsScript(): Promise<void> {
   }
   loadPromise = new Promise<void>((resolve, reject) => {
     const script = document.createElement('script');
-    script.src = sqlWasmBrowserUrl;
+    // Served verbatim from public/ on purpose. This is a CLASSIC script: its
+    // top-level `var initSqlJs` only becomes a global when the file is delivered
+    // untouched. Importing it as `sql.js/dist/sql-wasm.js?url` instead routes a
+    // node_modules file through Vite, which does not guarantee that, and the
+    // load then fails with "loaded without initSqlJs".
+    script.src = '/sql-wasm-browser.js';
     script.onload = () => {
       if (window.initSqlJs) resolve();
       else reject(new Error('sql.js browser runtime loaded without initSqlJs'));
