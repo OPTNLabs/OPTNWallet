@@ -7,6 +7,7 @@ This `README` is the high-level entrypoint. Technical implementation and integra
 ## Documentation Map
 
 - [Developer Docs Index](./docs/README.md)
+- [Contributing Guide](./CONTRIBUTING.md)
 - [Build and Release Scripts](./docs/build-and-release.md)
 - [Wallet Architecture](./docs/wallet-architecture.md)
 - [Integration Guide](./docs/integration-guide.md)
@@ -48,6 +49,20 @@ Set at least:
 ```bash
 npm run dev
 ```
+
+### Optional: Docker contributor lab
+
+For a clean Linux shell (tests / tooling — **not** the production wallet image):
+
+```bash
+docker compose -f packages/docker-dev/docker-compose.yml up -d --build
+docker compose -f packages/docker-dev/docker-compose.yml exec dev bash
+# inside: npm ci && npm run test:core
+```
+
+Contributor process: [`CONTRIBUTING.md`](./CONTRIBUTING.md). Details:
+[`packages/docker-dev/README.md`](./packages/docker-dev/README.md) and
+[`docs/docker-dev.md`](./docs/docker-dev.md).
 
 ## Quality Checks
 

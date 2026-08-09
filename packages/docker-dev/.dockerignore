@@ -1,0 +1,7 @@
+# Build context is packages/docker-dev only (compose build.context: .)
+# Keep this folder lean if we ever COPY . into the image.
+*
+!Dockerfile
+!docker-compose.yml
+!package.json
+!README.md
