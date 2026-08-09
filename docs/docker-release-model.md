@@ -45,6 +45,7 @@ Suggested tags:
 | Workflow | Role |
 |----------|------|
 | `Publish Release` (existing) | Native / store artifacts — **primary ship** |
+| `Docker dev PR` | Read-only PR image build and non-root smoke test |
 | `Docker dev image` (this package) | Build/push **lab** image from same tag |
 
 They may share a tag trigger. They must not block each other forever: a Docker

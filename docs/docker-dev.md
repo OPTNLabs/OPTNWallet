@@ -14,7 +14,14 @@ in Docker.
 
 → **[packages/docker-dev/README.md](../packages/docker-dev/README.md)**
 
-Workflow: [`.github/workflows/docker-dev.yml`](../.github/workflows/docker-dev.yml)
+Workflows:
+
+- PR validation: [`.github/workflows/docker-dev-pr.yml`](../.github/workflows/docker-dev-pr.yml)
+- Trusted publish: [`.github/workflows/docker-dev.yml`](../.github/workflows/docker-dev.yml)
+
+PR validation is read-only and builds a local `linux/amd64` image. GHCR
+publishing and provenance attestation are restricted to trusted tag or manual
+publish runs.
 
 ```bash
 # Local build (dev shell — no fusion)

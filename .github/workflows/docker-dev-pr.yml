@@ -1,0 +1,48 @@
+# Read-only contributor validation for the lab image.
+# Publishing and provenance attestation live in docker-dev.yml and are limited
+# to trusted tag/manual release paths.
+
+name: Docker dev PR
+
+on:
+  pull_request:
+    paths:
+      - 'packages/docker-dev/**'
+      - '.github/workflows/docker-dev.yml'
+      - '.github/workflows/docker-dev-pr.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build docker-dev (PR)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build locally
+        uses: docker/build-push-action@v6
+        with:
+          context: packages/docker-dev
+          file: packages/docker-dev/Dockerfile
+          platforms: linux/amd64
+          push: false
+          load: true
+          tags: optn-docker-dev:pr
+
+      - name: Smoke — node/npm as non-root
+        run: |
+          set -euo pipefail
+          docker run --rm --user 1000:1000 optn-docker-dev:pr node -v
+          docker run --rm --user 1000:1000 optn-docker-dev:pr npm -v
+          docker run --rm --user 1000:1000 --entrypoint /usr/bin/tini optn-docker-dev:pr --version
+          id_out="$(docker run --rm --user 1000:1000 optn-docker-dev:pr id)"
+          echo "$id_out"
+          echo "$id_out" | grep -E 'uid=1000'
