@@ -64,6 +64,7 @@ import {
 } from './fusionBlindSchnorr';
 import {
   createBlameReport,
+  findFaultInDisclosures,
   formatBlameAbortReason,
   isBlameCode,
   parseBlameEvidence,
@@ -873,6 +874,20 @@ export interface RoundResult {
 
 /** Active-round ceiling = server T_START_CLOSE_BLAME (fusionTiming). */
 const DEFAULT_TIMEOUT = P2P_ROUND_TIMEOUT_MS;
+/**
+ * How long the coordinator keeps listening for `component_disclosure` after it
+ * has already told every peer the round is dead.
+ *
+ * Deliberately bounded and awaited BEFORE `cleanup()`/`reject()`, never after.
+ * An earlier attempt kept the transport subscription alive past the settled
+ * promise instead; that leaked a live handler, which is what
+ * `hub.activeHandlerCount()).toBe(0)` in the session tests exists to catch
+ * (it failed as `expected 1 to be +0`). The window closes early as soon as
+ * every peer has disclosed, so the honest path pays milliseconds, not this
+ * ceiling.
+ */
+const BLAME_WINDOW_MS = 1_200;
+const BLAME_POLL_MS = 20;
 
 function sessionId(participants: string[], tier: number): string {
   return `${electCoordinator(participants)}:${tier}`;
@@ -1760,6 +1775,79 @@ function runCoordinator(
       unsubscribe();
       unsubscribeProtocolError();
     };
+    /**
+     * Wait for peers to answer our abort with their component disclosures.
+     * Resolves as soon as everyone has answered, at the ceiling, or the moment
+     * the caller cancels — whichever comes first. The transport subscription is
+     * still live here on purpose; `cleanup()` runs after we return.
+     */
+    const awaitDisclosures = () =>
+      new Promise<void>((resolveWait) => {
+        if (disclosuresByPeer.size >= others.length) return resolveWait();
+        const deadline = Date.now() + BLAME_WINDOW_MS;
+        const finish = () => {
+          clearInterval(poll);
+          params.signal?.removeEventListener('abort', finish);
+          resolveWait();
+        };
+        const poll = setInterval(() => {
+          if (disclosuresByPeer.size >= others.length || Date.now() >= deadline)
+            finish();
+        }, BLAME_POLL_MS);
+        params.signal?.addEventListener('abort', finish, { once: true });
+      });
+    /**
+     * Electron Cash blame phase for the anonymous component plane.
+     *
+     * Components arrived under throwaway keys, so a failed round has no accused
+     * until the peers say what they contributed. Cross-referencing those
+     * disclosures under the round identity restores attribution for the codes
+     * `d9accdbd` cost us. Diagnosis only — the accused is an ephemeral key, so
+     * this identifies a fault, it does not exclude anyone.
+     */
+    const runBlamePhase = async () => {
+      // Nothing anonymous ever arrived, so there is nothing a disclosure could
+      // attribute — `findFaultInDisclosures` would return null and we would
+      // have spent the whole window to learn it. A round that dies in the
+      // control plane still fails immediately.
+      if (anonymousInputs.length === 0 && signaturesByOutpoint.size === 0)
+        return;
+      await awaitDisclosures();
+      const finding = findFaultInDisclosures({
+        participants: [...params.participants],
+        disclosures: disclosuresByPeer,
+        signedOutpoints: new Set(signaturesByOutpoint.keys()),
+      });
+      // Mutually consistent disclosures mean the round died of something that
+      // is nobody's provable fault — a timeout, a dropped relay. Never blame.
+      if (!finding) return;
+      const report = createBlameReport(
+        session,
+        finding.accused,
+        finding.code,
+        finding.evidence
+      );
+      const check = verifyBlameReport(report, {
+        session,
+        participants: params.participants,
+      });
+      // Our own report must survive the same verification every peer applies,
+      // or it is worse than sending nothing.
+      if (check.ok === false) return;
+      params.onBlame?.(report);
+      params.onStatus?.(formatBlameAbortReason(report));
+      const blameMsg: RoundMessage = {
+        ...messageBinding(),
+        type: 'blame',
+        session,
+        accused: finding.accused,
+        code: finding.code,
+        evidence: finding.evidence,
+      };
+      await Promise.allSettled(
+        others.map((peer) => transport.send(peer, blameMsg))
+      );
+    };
     const fail = async (
       error: Error,
       notifyPeers: boolean,
@@ -1768,7 +1856,6 @@ function runCoordinator(
       if (settled || (broadcastStarted && !forceDuringBroadcast)) return;
       settled = true;
       params.onStatus?.(`Round failed: ${error.message}`);
-      cleanup();
       clearRoundNullifiers(session);
       if (notifyPeers) {
         const message: RoundMessage = {
@@ -1780,7 +1867,12 @@ function runCoordinator(
         await Promise.allSettled(
           others.map((peer) => transport.send(peer, message))
         );
+        // Only after peers have been told, and only while we can still hear
+        // them. A blame phase must never outlive the promise we are about to
+        // settle — see BLAME_WINDOW_MS.
+        await runBlamePhase().catch(() => undefined);
       }
+      cleanup();
       reject(error);
     };
     /**
