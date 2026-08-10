@@ -14,17 +14,24 @@ import {
   serializeTransactionSigningResponse,
   type PartiallySignedTransaction,
 } from '../services/partiallySignedTransaction';
+import { useI18n } from '../i18n/useI18n';
 
 type DemoMode = 'requester' | 'signer';
 
 const formatBytes = (value: Uint8Array) => `${value.length} bytes`;
 
 const QrSigningDemo: React.FC = () => {
+  const { t } = useI18n();
   const navigate = useNavigate();
   const [mode, setMode] = useState<DemoMode>('requester');
-  const [localRequest, setLocalRequest] = useState<PartiallySignedTransaction | null>(null);
-  const [request, setRequest] = useState<PartiallySignedTransaction | null>(null);
-  const [responsePayload, setResponsePayload] = useState<Uint8Array | null>(null);
+  const [localRequest, setLocalRequest] =
+    useState<PartiallySignedTransaction | null>(null);
+  const [request, setRequest] = useState<PartiallySignedTransaction | null>(
+    null
+  );
+  const [responsePayload, setResponsePayload] = useState<Uint8Array | null>(
+    null
+  );
   const [scanResponse, setScanResponse] = useState(false);
   const [responseMessage, setResponseMessage] = useState<string | null>(null);
 
@@ -40,22 +47,31 @@ const QrSigningDemo: React.FC = () => {
       })
       .catch((error) => {
         if (!cancelled) {
-          setResponseMessage(error instanceof Error ? error.message : 'Unable to prepare mocknet fixture');
+          setResponseMessage(
+            error instanceof Error
+              ? error.message
+              : t('qrSigning.prepareFailed')
+          );
         }
       });
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [t]);
 
-  const handleRequestComplete = useCallback((payload: Uint8Array) => {
-    try {
-      setRequest(deserializePartiallySignedTransaction(payload));
-      setResponseMessage(null);
-    } catch (error) {
-      setResponseMessage(error instanceof Error ? error.message : 'Invalid signing request');
-    }
-  }, []);
+  const handleRequestComplete = useCallback(
+    (payload: Uint8Array) => {
+      try {
+        setRequest(deserializePartiallySignedTransaction(payload));
+        setResponseMessage(null);
+      } catch (error) {
+        setResponseMessage(
+          error instanceof Error ? error.message : t('qrSigning.invalidRequest')
+        );
+      }
+    },
+    [t]
+  );
 
   const handleResponseComplete = useCallback(
     (payload: Uint8Array) => {
@@ -64,21 +80,26 @@ const QrSigningDemo: React.FC = () => {
         if (
           !localRequest ||
           response.requestId !== localRequest.metadata.requestId ||
-          response.transactionFingerprint !== localRequest.metadata.transactionFingerprint
+          response.transactionFingerprint !==
+            localRequest.metadata.transactionFingerprint
         ) {
-          throw new Error('Signing response does not match this request');
+          throw new Error(t('qrSigning.mismatch'));
         }
         setResponseMessage(
           response.approved
-            ? `Approved by ${response.signerLabel}`
-            : `Rejected by ${response.signerLabel}`
+            ? t('qrSigning.approvedBy', { name: response.signerLabel })
+            : t('qrSigning.rejectedBy', { name: response.signerLabel })
         );
         setScanResponse(false);
       } catch (error) {
-        setResponseMessage(error instanceof Error ? error.message : 'Invalid signing response');
+        setResponseMessage(
+          error instanceof Error
+            ? error.message
+            : t('qrSigning.invalidResponse')
+        );
       }
     },
-    [localRequest]
+    [localRequest, t]
   );
 
   const approveRequest = () => {
@@ -98,8 +119,8 @@ const QrSigningDemo: React.FC = () => {
     <WalletScreen maxWidthClassName="max-w-md">
       <div className="space-y-4">
         <PageHeader
-          title="QR signing demo"
-          subtitle="Exchange a partially signed transaction between two OPTN wallet screens."
+          title={t('qrSigning.title')}
+          subtitle={t('qrSigning.subtitle')}
           compact
         />
 
@@ -122,7 +143,9 @@ const QrSigningDemo: React.FC = () => {
                     : 'border border-[var(--wallet-border)] wallet-text-strong'
                 }`}
               >
-                {nextMode === 'requester' ? 'Request signature' : 'Sign request'}
+                {nextMode === 'requester'
+                  ? t('qrSigning.requestSignature')
+                  : t('qrSigning.signRequest')}
               </button>
             ))}
           </div>
@@ -130,44 +153,102 @@ const QrSigningDemo: React.FC = () => {
 
         {mode === 'requester' ? (
           <>
-            <SectionCard title="1. Show request">
+            <SectionCard title={t('qrSigning.showRequest')}>
               <p className="mb-3 text-sm wallet-text-muted">
-                On the other wallet, choose “Sign request” and scan this stream.
+                {t('qrSigning.showRequestHelp')}
               </p>
               {requestPayload ? (
                 <div className="mx-auto w-full max-w-[320px] rounded-xl bg-white p-3">
-                  <QrStreamDisplay payload={requestPayload} blockLength={360} framesPerSecond={18} />
+                  <QrStreamDisplay
+                    payload={requestPayload}
+                    blockLength={360}
+                    framesPerSecond={18}
+                  />
                 </div>
-              ) : <p className="text-sm wallet-text-muted">Preparing mocknet fixture…</p>}
+              ) : (
+                <p className="text-sm wallet-text-muted">
+                  {t('qrSigning.preparing')}
+                </p>
+              )}
               <dl className="mt-3 space-y-1 text-sm">
-                <div className="flex justify-between gap-3"><dt className="wallet-text-muted">Network</dt><dd>mocknet</dd></div>
-                <div className="flex justify-between gap-3"><dt className="wallet-text-muted">Purpose</dt><dd>{localRequest?.metadata.purpose ?? 'Preparing…'}</dd></div>
-                <div className="flex justify-between gap-3"><dt className="wallet-text-muted">Payload</dt><dd>{requestPayload ? formatBytes(requestPayload) : 'Preparing…'}</dd></div>
-                <div className="flex justify-between gap-3"><dt className="wallet-text-muted">Fingerprint</dt><dd className="font-mono text-xs">{localRequest?.metadata.transactionFingerprint ?? 'Preparing…'}</dd></div>
+                <div className="flex justify-between gap-3">
+                  <dt className="wallet-text-muted">
+                    {t('qrSigning.network')}
+                  </dt>
+                  <dd>mocknet</dd>
+                </div>
+                <div className="flex justify-between gap-3">
+                  <dt className="wallet-text-muted">
+                    {t('qrSigning.purpose')}
+                  </dt>
+                  <dd>
+                    {localRequest?.metadata.purpose ?? t('qrSigning.preparing')}
+                  </dd>
+                </div>
+                <div className="flex justify-between gap-3">
+                  <dt className="wallet-text-muted">
+                    {t('qrSigning.payload')}
+                  </dt>
+                  <dd>
+                    {requestPayload
+                      ? formatBytes(requestPayload)
+                      : t('qrSigning.preparing')}
+                  </dd>
+                </div>
+                <div className="flex justify-between gap-3">
+                  <dt className="wallet-text-muted">
+                    {t('qrSigning.fingerprint')}
+                  </dt>
+                  <dd className="font-mono text-xs">
+                    {localRequest?.metadata.transactionFingerprint ??
+                      t('qrSigning.preparing')}
+                  </dd>
+                </div>
               </dl>
             </SectionCard>
-            <SectionCard title="2. Collect response">
+            <SectionCard title={t('qrSigning.collectResponse')}>
               {scanResponse ? (
                 <QrStreamScanner onComplete={handleResponseComplete} />
               ) : (
-                <button type="button" onClick={() => setScanResponse(true)} className="w-full rounded-lg bg-[var(--wallet-accent)] px-3 py-2 text-sm font-semibold text-black">
-                  Scan approval response
+                <button
+                  type="button"
+                  onClick={() => setScanResponse(true)}
+                  className="w-full rounded-lg bg-[var(--wallet-accent)] px-3 py-2 text-sm font-semibold text-black"
+                >
+                  {t('qrSigning.scanApproval')}
                 </button>
               )}
-              {responseMessage ? <p className="mt-3 text-sm wallet-text-strong">{responseMessage}</p> : null}
+              {responseMessage ? (
+                <p className="mt-3 text-sm wallet-text-strong">
+                  {responseMessage}
+                </p>
+              ) : null}
             </SectionCard>
           </>
         ) : (
           <>
-            <SectionCard title="1. Scan request">
+            <SectionCard title={t('qrSigning.scanRequest')}>
               {request ? (
                 <div className="space-y-2 text-sm">
-                  <p className="font-semibold">Request received</p>
-                  <p>Purpose: {request.metadata.purpose}</p>
-                  <p>Network: {request.network}</p>
-                  <p className="font-mono text-xs">Fingerprint: {request.metadata.transactionFingerprint}</p>
-                  <button type="button" onClick={() => setRequest(null)} className="rounded-lg border border-[var(--wallet-border)] px-3 py-2 text-sm">
-                    Scan another request
+                  <p className="font-semibold">
+                    {t('qrSigning.requestReceived')}
+                  </p>
+                  <p>
+                    {t('qrSigning.purpose')}: {request.metadata.purpose}
+                  </p>
+                  <p>
+                    {t('qrSigning.network')}: {request.network}
+                  </p>
+                  <p className="font-mono text-xs">
+                    {t('qrSigning.fingerprint')}:{' '}
+                    {request.metadata.transactionFingerprint}
+                  </p>
+                  <button
+                    type="button"
+                    onClick={() => setRequest(null)}
+                    className="rounded-lg border border-[var(--wallet-border)] px-3 py-2 text-sm"
+                  >
+                    {t('qrSigning.scanAnother')}
                   </button>
                 </div>
               ) : (
@@ -175,26 +256,40 @@ const QrSigningDemo: React.FC = () => {
               )}
             </SectionCard>
             {request ? (
-              <SectionCard title="2. Approve and return">
+              <SectionCard title={t('qrSigning.approveReturn')}>
                 <p className="mb-3 text-sm wallet-text-muted">
-                  This demo returns a placeholder signature and never broadcasts.
+                  {t('qrSigning.placeholderWarning')}
                 </p>
-                <button type="button" onClick={approveRequest} className="w-full rounded-lg bg-[var(--wallet-accent)] px-3 py-2 text-sm font-semibold text-black">
-                  Approve demo request
+                <button
+                  type="button"
+                  onClick={approveRequest}
+                  className="w-full rounded-lg bg-[var(--wallet-accent)] px-3 py-2 text-sm font-semibold text-black"
+                >
+                  {t('qrSigning.approveDemo')}
                 </button>
                 {responsePayload ? (
                   <div className="mt-4 mx-auto w-full max-w-[320px] rounded-xl bg-white p-3">
-                    <QrStreamDisplay payload={responsePayload} blockLength={360} framesPerSecond={18} />
+                    <QrStreamDisplay
+                      payload={responsePayload}
+                      blockLength={360}
+                      framesPerSecond={18}
+                    />
                   </div>
                 ) : null}
               </SectionCard>
             ) : null}
-            {responseMessage ? <p className="text-sm wallet-text-strong">{responseMessage}</p> : null}
+            {responseMessage ? (
+              <p className="text-sm wallet-text-strong">{responseMessage}</p>
+            ) : null}
           </>
         )}
 
-        <button type="button" onClick={() => navigate(-1)} className="w-full rounded-lg border border-[var(--wallet-border)] px-3 py-2 text-sm font-semibold wallet-text-strong">
-          Close
+        <button
+          type="button"
+          onClick={() => navigate(-1)}
+          className="w-full rounded-lg border border-[var(--wallet-border)] px-3 py-2 text-sm font-semibold wallet-text-strong"
+        >
+          {t('qrSigning.close')}
         </button>
       </div>
     </WalletScreen>

@@ -29,6 +29,7 @@ tsconfig.tsbuildinfo
 *.njsproj
 *.sln
 *.sw?
+*.code-workspace
 .env
 .env.*
 !.env.example

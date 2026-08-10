@@ -156,7 +156,7 @@ export default function TxSummary(props: Props) {
 
       <div className="wallet-card overflow-hidden">
         <div className="px-4 py-3 border-b">
-          <div className="text-sm wallet-muted">Inputs</div>
+          <div className="text-sm wallet-muted">{t('txSummary.inputs')}</div>
           <div className="text-base sm:text-lg font-semibold wallet-text-strong">
             {inputs.length} • {fmt(inTotal, locale)} {t('txSummary.sats')}
           </div>
@@ -189,7 +189,7 @@ export default function TxSummary(props: Props) {
 
       <div className="wallet-card overflow-hidden">
         <div className="px-4 py-3 border-b">
-          <div className="text-sm wallet-muted">Outputs</div>
+          <div className="text-sm wallet-muted">{t('txSummary.outputs')}</div>
           <div className="text-base sm:text-lg font-semibold wallet-text-strong">
             {outputs.length} • {fmt(outTotal, locale)} {t('txSummary.sats')}
           </div>

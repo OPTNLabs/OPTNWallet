@@ -285,7 +285,9 @@ export const HardwareWalletSettings: React.FC = () => {
                       className="text-sm font-medium"
                       style={{ color: 'var(--wallet-text-primary)' }}
                     >
-                      {device.label}
+                      {device.type === 'none'
+                        ? t('hardware.softwareLabel')
+                        : device.label}
                     </p>
                     {device.disabled && (
                       <span

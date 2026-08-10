@@ -10,13 +10,14 @@ import LanguagePicker from '../../components/LanguagePicker';
 
 const ThemeModeSwitch = () => {
   const { mode, toggleMode } = useTheme();
+  const { t } = useI18n();
 
   return (
     <button
       type="button"
       onClick={toggleMode}
       className="flex items-center gap-2 rounded-full wallet-surface-strong border border-[var(--wallet-border)] px-2 py-1.5 text-sm font-semibold wallet-text-strong whitespace-nowrap"
-      aria-label="Toggle theme"
+      aria-label={t('onboarding.toggleTheme')}
     >
       <MdSunny className="text-[12px] wallet-muted" />
       <span
@@ -66,14 +67,14 @@ const LandingPage = () => {
         <div className="flex justify-center w-full lg:w-1/2">
           <img
             src={ONBOARDING_WELCOME_IMAGE}
-            alt="Smart BCH Wallet"
+            alt={t('onboarding.welcomeAlt')}
             className="max-w-full h-auto w-3/4 lg:w-full object-contain transition-transform duration-300 hover:scale-105"
           />
         </div>
 
         <div className="wallet-card p-6 sm:p-8 flex flex-col w-full lg:w-1/2 items-center lg:items-start text-center lg:text-left">
           <h1 className="text-lg font-bold lg:text-xl wallet-text-strong mx-auto max-w-md text-center">
-            Powered with Bitcoin Covenants for Bitcoin Cash
+            {t('onboarding.poweredBy')}
           </h1>
 
           <div className="flex flex-col sm:flex-row gap-4 mt-20">
@@ -96,26 +97,23 @@ const LandingPage = () => {
       {showHelp && (
         <Popup
           closePopups={() => setShowHelp(false)}
-          closeButtonText="Close help"
+          closeButtonText={t('onboarding.closeHelp')}
         >
           <WalkthroughPanel
             title={t('onboarding.helpTitle')}
             description={t('onboarding.helpDescription')}
             steps={[
               {
-                title: 'Create Wallet',
-                description:
-                  'Use this if you want a new wallet with a fresh seed phrase on this device.',
+                title: t('onboarding.helpCreateTitle'),
+                description: t('onboarding.helpCreateDescription'),
               },
               {
-                title: 'Import Wallet',
-                description:
-                  'Use this if you already have a 12-word recovery phrase and want access to an existing wallet.',
+                title: t('onboarding.helpImportTitle'),
+                description: t('onboarding.helpImportDescription'),
               },
               {
-                title: 'Choose a network',
-                description:
-                  'Select Mainnet for real funds or CHIPNET for test funds before you proceed.',
+                title: t('onboarding.helpNetworkTitle'),
+                description: t('onboarding.helpNetworkDescription'),
               },
             ]}
             numbered={false}

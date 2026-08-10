@@ -70,6 +70,7 @@ import {
 } from './utils/sourceHelpers';
 import { useSmoothResetTransition } from '../shared/useSmoothResetTransition';
 import { selectWalletId } from '../../../state/slices/walletSlice';
+import { useAddonI18n } from '../../../i18n/useAddonI18n';
 
 type BcmrFieldKey =
   | 'tokenCategory'
@@ -183,6 +184,7 @@ function describeMintSourceKind(
 }
 
 const MintCashTokensPoCApp: React.FC = () => {
+  const { t: addonT } = useAddonI18n();
   const navigate = useNavigate();
   const location = useLocation();
   const backTarget = getReturnPath(location, '/apps');
@@ -201,7 +203,9 @@ const MintCashTokensPoCApp: React.FC = () => {
   const [selectedKeys, setSelectedKeys] = useState<Set<string>>(new Set());
   const [outputDrafts, setOutputDrafts] = useState<MintOutputDraft[]>([]);
   const [showOutputPopup, setShowOutputPopup] = useState(false);
-  const [editingOutputDraftId, setEditingOutputDraftId] = useState<string | null>(null);
+  const [editingOutputDraftId, setEditingOutputDraftId] = useState<
+    string | null
+  >(null);
   const [outputFormMintType, setOutputFormMintType] = useState<'FT' | 'NFT'>(
     'FT'
   );
@@ -542,7 +546,11 @@ const MintCashTokensPoCApp: React.FC = () => {
   const openAddOutputDraftForm = useCallback(() => {
     const initialSource = selectedUtxos[0] ?? null;
     setEditingOutputDraftId(null);
-    setOutputFormRecipient(selectedRecipientCashAddrs.values().next().value || addresses[0]?.address || '');
+    setOutputFormRecipient(
+      selectedRecipientCashAddrs.values().next().value ||
+        addresses[0]?.address ||
+        ''
+    );
     setOutputFormSourceKey(initialSource ? utxoKey(initialSource) : '');
     setOutputFormMintType(
       initialSource && canMintFungibleFromSource(initialSource) ? 'FT' : 'NFT'
@@ -609,6 +617,8 @@ const MintCashTokensPoCApp: React.FC = () => {
     outputFormNftCommitment,
     outputFormRecipient,
     outputFormSourceKey,
+    selectedUtxos,
+    setErrorMessage,
   ]);
 
   const removeOutputDraft = useCallback((id: string) => {
@@ -828,7 +838,9 @@ const MintCashTokensPoCApp: React.FC = () => {
                 : 'Category source created. Refreshing wallet data...'
             );
             showToast(
-              submitted ? 'Category source submitted' : 'Category source created'
+              submitted
+                ? 'Category source submitted'
+                : 'Category source created'
             );
 
             let refreshFailed = false;
@@ -943,7 +955,14 @@ const MintCashTokensPoCApp: React.FC = () => {
           activeOutputDrafts.length === 1 ? '' : 's'
         })`,
         subtitle: 'Fee policy: 1 sat/byte. Review before broadcast.',
-        warning: <>This will broadcast immediately after confirmation.</>,
+        warning: (
+          <>
+            {addonT(
+              'module.broadcastWarning',
+              'This will broadcast immediately after confirmation.'
+            )}
+          </>
+        ),
         body: (
           <TxSummary
             inputs={asTxSummaryInputs(inputsForBuild)}
@@ -1029,6 +1048,7 @@ const MintCashTokensPoCApp: React.FC = () => {
     setTxid,
     closeConfirm,
     showToast,
+    addonT,
     refreshWalletSnapshot,
     setConfirmLoading,
     resetMintComposer,
@@ -1051,9 +1071,7 @@ const MintCashTokensPoCApp: React.FC = () => {
 
   const openBcmrEditor = useCallback(
     (prefillFromExisting: boolean) => {
-      const existing = prefillFromExisting
-        ? selectedSourceBcmrMetadata
-        : null;
+      const existing = prefillFromExisting ? selectedSourceBcmrMetadata : null;
 
       setBcmrEnabled(true);
       setBcmrRegistryJson('');
@@ -1393,10 +1411,12 @@ const MintCashTokensPoCApp: React.FC = () => {
                   <div className="mt-4 wallet-card rounded-[20px] p-4 space-y-3">
                     <div className="flex items-center justify-between">
                       <h3 className="text-base font-semibold">
-                        Token Metadata
+                        {addonT('common.tokenMetadata', 'Token metadata')}
                       </h3>
                       {selectedSourceHasExistingBcmr ? (
-                        <Badge tone="green">BCMR already present</Badge>
+                        <Badge tone="green">
+                          {addonT('module.bcmrPresent', 'BCMR already present')}
+                        </Badge>
                       ) : null}
                     </div>
                     <p className="text-sm wallet-muted">
@@ -1413,10 +1433,10 @@ const MintCashTokensPoCApp: React.FC = () => {
                         className="wallet-btn-primary px-3 py-2 text-sm"
                       >
                         {selectedSourceHasExistingBcmr
-                          ? 'Replace metadata'
+                          ? addonT('common.replaceMetadata', 'Replace metadata')
                           : bcmrRegistryUpload
-                            ? 'Edit metadata'
-                            : 'Add metadata'}
+                            ? addonT('common.editMetadata', 'Edit metadata')
+                            : addonT('common.addMetadata', 'Add metadata')}
                       </button>
                     </div>
                   </div>
@@ -1570,11 +1590,13 @@ const MintCashTokensPoCApp: React.FC = () => {
                   <option value="" disabled>
                     Select a recipient
                   </option>
-                  {addresses.map((addr) => addr.address).map((addr) => (
-                    <option key={addr} value={addr}>
-                      {addr}
-                    </option>
-                  ))}
+                  {addresses
+                    .map((addr) => addr.address)
+                    .map((addr) => (
+                      <option key={addr} value={addr}>
+                        {addr}
+                      </option>
+                    ))}
                 </select>
               </div>
 
@@ -1656,7 +1678,9 @@ const MintCashTokensPoCApp: React.FC = () => {
 
             {outputFormMintType === 'FT' ? (
               <div className="space-y-2">
-                <label className="block text-sm font-semibold">FT amount</label>
+                <label className="block text-sm font-semibold">
+                  {addonT('common.ftAmount', 'FT amount')}
+                </label>
                 <input
                   type="number"
                   min="1"
@@ -1693,7 +1717,7 @@ const MintCashTokensPoCApp: React.FC = () => {
                     value={outputFormNftCommitment}
                     onChange={(e) => setOutputFormNftCommitment(e.target.value)}
                     className="wallet-input w-full"
-                    placeholder="optional hex"
+                    placeholder={addonT('module.optionalHex', 'optional hex')}
                   />
                 </div>
               </div>
@@ -1705,7 +1729,9 @@ const MintCashTokensPoCApp: React.FC = () => {
               disabled={!outputFormRecipient || !outputFormSourceKey}
               className="wallet-btn-primary w-full px-4 py-3 font-semibold disabled:opacity-50"
             >
-              {editingOutputDraftId ? 'Update output' : 'Save output'}
+              {editingOutputDraftId
+                ? addonT('common.updateOutput', 'Update output')
+                : addonT('common.saveOutput', 'Save output')}
             </button>
             {editingOutputDraftId ? (
               <button
@@ -1713,7 +1739,7 @@ const MintCashTokensPoCApp: React.FC = () => {
                 onClick={deleteOutputDraftForm}
                 className="wallet-btn-danger w-full px-4 py-3 font-semibold"
               >
-                Delete output
+                {addonT('common.deleteOutput', 'Delete output')}
               </button>
             ) : null}
           </div>
@@ -1728,7 +1754,7 @@ const MintCashTokensPoCApp: React.FC = () => {
           <div className="p-4 space-y-4">
             <div>
               <h3 className="text-xl font-bold text-center">
-                Token metadata
+                {addonT('common.tokenMetadata', 'Token metadata')}
               </h3>
               <p className="mt-1 text-sm wallet-muted text-center">
                 Configure BCMR metadata and finish IPFS verification before
@@ -1743,12 +1769,17 @@ const MintCashTokensPoCApp: React.FC = () => {
             ) : null}
 
             <div className="grid grid-cols-1 gap-2">
-              <label className="block text-sm font-semibold">Token category</label>
+              <label className="block text-sm font-semibold">
+                {addonT('module.tokenCategory', 'Token category')}
+              </label>
               <input
                 value={bcmrTokenCategory}
                 readOnly
                 className="wallet-input w-full font-mono text-xs opacity-80"
-                placeholder="Select one mint source to derive category"
+                placeholder={addonT(
+                  'module.selectMintSource',
+                  'Select one mint source to derive category'
+                )}
               />
               {bcmrFieldErrors.tokenCategory ? (
                 <p className="text-xs wallet-danger-text">
@@ -1759,7 +1790,9 @@ const MintCashTokensPoCApp: React.FC = () => {
 
             <div className="grid grid-cols-2 gap-2">
               <div>
-                <label className="block text-sm font-semibold">Name</label>
+                <label className="block text-sm font-semibold">
+                  {addonT('module.name', 'Name')}
+                </label>
                 <input
                   value={bcmrTokenName}
                   onChange={(e) => setBcmrTokenName(e.target.value)}
@@ -1772,7 +1805,9 @@ const MintCashTokensPoCApp: React.FC = () => {
                 ) : null}
               </div>
               <div>
-                <label className="block text-sm font-semibold">Symbol</label>
+                <label className="block text-sm font-semibold">
+                  {addonT('module.symbol', 'Symbol')}
+                </label>
                 <input
                   value={bcmrTokenSymbol}
                   onChange={(e) => setBcmrTokenSymbol(e.target.value)}
@@ -1787,7 +1822,9 @@ const MintCashTokensPoCApp: React.FC = () => {
             </div>
 
             <div>
-              <label className="block text-sm font-semibold">Description</label>
+              <label className="block text-sm font-semibold">
+                {addonT('module.description', 'Description')}
+              </label>
               <input
                 value={bcmrTokenDescription}
                 onChange={(e) => setBcmrTokenDescription(e.target.value)}
@@ -1797,7 +1834,9 @@ const MintCashTokensPoCApp: React.FC = () => {
 
             <div className="grid grid-cols-2 gap-2">
               <div>
-                <label className="block text-sm font-semibold">Decimals</label>
+                <label className="block text-sm font-semibold">
+                  {addonT('module.decimals', 'Decimals')}
+                </label>
                 <input
                   type="number"
                   min="0"
@@ -1812,7 +1851,9 @@ const MintCashTokensPoCApp: React.FC = () => {
                 ) : null}
               </div>
               <div>
-                <label className="block text-sm font-semibold">Icon URI</label>
+                <label className="block text-sm font-semibold">
+                  {addonT('module.iconUri', 'Icon URI')}
+                </label>
                 <input
                   value={bcmrIconUri}
                   onChange={(e) => setBcmrIconUri(e.target.value)}
@@ -1828,7 +1869,9 @@ const MintCashTokensPoCApp: React.FC = () => {
             </div>
 
             <div>
-              <label className="block text-sm font-semibold">Official site</label>
+              <label className="block text-sm font-semibold">
+                {addonT('module.officialSite', 'Official site')}
+              </label>
               <input
                 value={bcmrWebUri}
                 onChange={(e) => setBcmrWebUri(e.target.value)}

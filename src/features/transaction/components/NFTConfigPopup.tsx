@@ -37,19 +37,22 @@ const NFTConfigPopup: React.FC<NFTConfigPopupProps> = ({
             }
             className="wallet-input p-2 w-full"
           >
-            <option value="none">none</option>
-            <option value="mutable">mutable</option>
-            <option value="minting">minting</option>
+            <option value="none">{t('nftConfig.none')}</option>
+            <option value="mutable">{t('nftConfig.mutable')}</option>
+            <option value="minting">{t('nftConfig.minting')}</option>
           </select>
           <div className="mt-2 text-xs wallet-muted space-y-1">
             <p>
-              <strong>none</strong>: {t('nftConfig.noneDescription')}
+              <strong>{t('nftConfig.none')}</strong>:{' '}
+              {t('nftConfig.noneDescription')}
             </p>
             <p>
-              <strong>mutable</strong>: {t('nftConfig.mutableDescription')}
+              <strong>{t('nftConfig.mutable')}</strong>:{' '}
+              {t('nftConfig.mutableDescription')}
             </p>
             <p>
-              <strong>minting</strong>: {t('nftConfig.mintingDescription')}
+              <strong>{t('nftConfig.minting')}</strong>:{' '}
+              {t('nftConfig.mintingDescription')}
             </p>
           </div>
         </div>

@@ -180,7 +180,7 @@ const ContractView = () => {
         setAvailableContracts(contracts);
       } catch (err) {
         logError('ContractView.loadAvailableContracts', err);
-        setError(toErrorMessage(err, 'Failed to load available contracts.'));
+        setError(toErrorMessage(err, t('contractView.loadContractsFailed')));
       }
     };
 
@@ -190,13 +190,13 @@ const ContractView = () => {
         setContractInstances(instances);
       } catch (err) {
         logError('ContractView.loadContractInstances', err);
-        setError(toErrorMessage(err, 'Failed to load contract instances.'));
+        setError(toErrorMessage(err, t('contractView.loadInstancesFailed')));
       }
     };
 
     loadAvailableContracts();
     loadContractInstances();
-  }, [contractManager]);
+  }, [contractManager, t]);
 
   useEffect(() => {
     const loadContractDetails = async () => {
@@ -217,12 +217,12 @@ const ContractView = () => {
           logError('ContractView.loadContractDetails', err, {
             selectedContractFile,
           });
-          setError(toErrorMessage(err, 'Failed to load contract details.'));
+          setError(toErrorMessage(err, t('contractView.loadDetailsFailed')));
         }
       }
     };
     loadContractDetails();
-  }, [selectedContractFile, contractManager]);
+  }, [selectedContractFile, contractManager, t]);
 
   const handleInputChange = (event: React.ChangeEvent<HTMLInputElement>) => {
     const { name, value } = event.target;
@@ -277,7 +277,9 @@ const ContractView = () => {
     }
     try {
       const privKey = await KeyService.fetchAddressPrivateKey(address);
-      if (!privKey) throw new Error('Private key unavailable for this address.');
+      if (!privKey) {
+        throw new Error(t('contractView.privateKeyUnavailable'));
+      }
       const signer = new DataSigner(privKey);
       const message = signer.createMessage(data);
       const signature = signer.signMessage(message);
@@ -353,7 +355,9 @@ const ContractView = () => {
         selectedContractFile,
       });
       setErrorMessage(
-        `Failed to create contract: ${toErrorMessage(err, 'Unknown error')}`
+        t('contractView.createFailed', {
+          message: toErrorMessage(err, t('contractView.unknownError')),
+        })
       );
       setShowErrorPopup(true);
     } finally {
@@ -371,7 +375,7 @@ const ContractView = () => {
       await Toast.show({ text: t('contractView.deleted') });
     } catch (err) {
       logError('ContractView.deleteContract', err, { contractId });
-      setError(toErrorMessage(err, 'Failed to delete contract.'));
+      setError(toErrorMessage(err, t('contractView.deleteFailedFallback')));
       await Toast.show({ text: t('contractView.deleteFailed') });
     }
   };
@@ -398,7 +402,7 @@ const ContractView = () => {
       await Toast.show({ text: t('contractView.updated') });
     } catch (err) {
       logError('ContractView.updateContract', err, { address });
-      setError(toErrorMessage(err, 'Failed to update contract.'));
+      setError(toErrorMessage(err, t('contractView.updateFailedFallback')));
       await Toast.show({ text: t('contractView.updateFailed') });
     }
   };
@@ -412,7 +416,9 @@ const ContractView = () => {
     return (
       <WalletScreen maxWidthClassName="max-w-xl">
         <PageHeader title={t('contractView.title')} compact />
-        <EmptyState message={`Error: ${error}`} />
+        <EmptyState
+          message={t('contractView.errorPrefix', { message: error })}
+        />
       </WalletScreen>
     );
   }

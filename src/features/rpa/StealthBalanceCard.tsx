@@ -14,6 +14,7 @@ import {
 } from '../../services/WalletSpecialActivityService';
 import { SATSINBITCOIN } from '../../utils/constants';
 import { useI18n } from '../../i18n/useI18n';
+import { formatDate, formatNumber } from '../../i18n/format';
 
 type StealthBalanceCardProps = {
   walletId: number;
@@ -22,7 +23,7 @@ type StealthBalanceCardProps = {
 export const StealthBalanceCard: React.FC<StealthBalanceCardProps> = ({
   walletId,
 }) => {
-  const { t } = useI18n();
+  const { locale, t } = useI18n();
   const rpaEnabled = useSelector(selectRpaEnabled);
   const storedActivity = useSelector(
     (state: RootState) =>
@@ -41,7 +42,12 @@ export const StealthBalanceCard: React.FC<StealthBalanceCardProps> = ({
       setStealthSats(activity.unspentSats);
       setMatchCount(activity.detectedPaymentCount);
       setLastSynced(
-        updatedAt ? new Date(updatedAt).toLocaleTimeString() : null
+        updatedAt
+          ? formatDate(new Date(updatedAt), locale, {
+              hour: 'numeric',
+              minute: '2-digit',
+            })
+          : null
       );
       setServerNote(
         activity.serverSupported
@@ -49,7 +55,7 @@ export const StealthBalanceCard: React.FC<StealthBalanceCardProps> = ({
           : activity.error ?? t('rpa.serverUnsupported')
       );
     },
-    [t]
+    [locale, t]
   );
 
   useEffect(() => {
@@ -112,14 +118,11 @@ export const StealthBalanceCard: React.FC<StealthBalanceCardProps> = ({
             </span>
           </div>
           <div className="text-xl font-bold wallet-text-strong mt-0.5">
-            {stealthBch.toFixed(8)} BCH
+            {formatNumber(stealthBch, locale, { maximumFractionDigits: 8 })} BCH
           </div>
           {matchCount !== null && (
             <div className="text-xs wallet-muted mt-0.5">
-              {t('rpa.confirmedPayments', {
-                count: matchCount,
-                suffix: matchCount !== 1 ? 's' : '',
-              })}
+              {t('rpa.confirmedPayments', { count: matchCount })}
             </div>
           )}
         </div>

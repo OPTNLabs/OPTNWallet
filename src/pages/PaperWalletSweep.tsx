@@ -29,6 +29,8 @@ import { selectCurrentNetwork } from '../state/selectors/networkSelectors';
 import ElectrumService from '../services/ElectrumService';
 import { getReturnPath } from '../utils/navigation';
 import { useI18n } from '../i18n/useI18n';
+import { AddonModuleI18nProvider } from '../i18n/AddonModuleI18nProvider';
+import { useAddonI18n } from '../i18n/useAddonI18n';
 
 const BASE58_WIF_PATTERN =
   /^[123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz]+$/;
@@ -83,8 +85,9 @@ type SweepState = {
   builtHex: string;
 };
 
-export default function PaperWalletSweep() {
+function PaperWalletSweepScreen() {
   const { t } = useI18n();
+  const { t: addonT } = useAddonI18n();
   const navigate = useNavigate();
   const location = useLocation();
   const backTarget = getReturnPath(location, '/apps');
@@ -150,7 +153,7 @@ export default function PaperWalletSweep() {
         cameraDirection: 1,
       });
       if (!result?.ScanResult) {
-        await Toast.show({ text: t('paper.noQrCode') });
+        await Toast.show({ text: addonT('module.noQr', t('paper.noQrCode')) });
         return;
       }
 
@@ -301,16 +304,21 @@ export default function PaperWalletSweep() {
   return (
     <WalletScreen maxWidthClassName="max-w-md" scrollable={false}>
       <div className="flex h-full min-h-0 flex-col">
-        <PageHeader title={t('paper.title')} compact />
-        <p className="mt-2 text-sm wallet-muted">{t('paper.description')}</p>
+        <PageHeader title={addonT('module.title', t('paper.title'))} compact />
+        <p className="mt-2 text-sm wallet-muted">
+          {addonT('module.description', t('paper.description'))}
+        </p>
 
         <div className="mt-4 min-h-0 flex-1 overflow-y-auto overscroll-contain pr-1 space-y-4">
           <SectionCard className="p-4">
             <div className="flex items-center justify-between gap-3">
               <div className="flex-1">
-                <div className="text-sm wallet-muted">{t('paper.label')}</div>
+                <div className="text-sm wallet-muted">
+                  {addonT('module.title', t('paper.label'))}
+                </div>
                 <div className="mt-1 break-all text-sm wallet-text-strong">
-                  {scannedAddress || t('paper.notScanned')}
+                  {scannedAddress ||
+                    addonT('module.notScanned', t('paper.notScanned'))}
                 </div>
               </div>
               <button
@@ -318,7 +326,7 @@ export default function PaperWalletSweep() {
                 onClick={handleScan}
                 disabled={loading}
               >
-                <FaCamera /> {t('paper.scan')}
+                <FaCamera /> {addonT('module.scan', t('paper.scan'))}
               </button>
             </div>
 
@@ -328,7 +336,7 @@ export default function PaperWalletSweep() {
                 onClick={handleSweep}
                 disabled={loading || paperWalletUtxos.length === 0}
               >
-                {t('paper.sweep')} <FaChevronRight />
+                {addonT('module.sweep', t('paper.sweep'))} <FaChevronRight />
               </button>
               {broadcastTxid && (
                 <div className="text-xs wallet-muted break-all">
@@ -342,7 +350,7 @@ export default function PaperWalletSweep() {
 
           <SectionCard className="p-4">
             <div className="font-semibold mb-2 wallet-text-strong">
-              {t('paper.utxosTitle')}
+              {addonT('module.utxosTitle', t('paper.utxosTitle'))}
             </div>
             <div className="text-sm wallet-muted">
               {paperWalletUtxos.length}{' '}
@@ -365,11 +373,11 @@ export default function PaperWalletSweep() {
 
           <SectionCard className="p-4">
             <div className="font-semibold mb-2 wallet-text-strong">
-              {t('paper.tokenGroups')}
+              {addonT('module.tokenGroups', t('paper.tokenGroups'))}
             </div>
             {tokenGroups.length === 0 ? (
               <div className="text-sm wallet-muted">
-                {t('paper.noCashTokens')}
+                {addonT('module.noCashTokens', t('paper.noCashTokens'))}
               </div>
             ) : (
               <ul className="mt-2 space-y-2 text-sm">
@@ -390,15 +398,15 @@ export default function PaperWalletSweep() {
             onClick={() => navigate(backTarget)}
             className="wallet-btn-danger w-full py-3 font-semibold"
           >
-            {t('paper.back')}
+            {addonT('common.back', t('paper.back'))}
           </button>
         </div>
       </div>
 
       <ContainedSwipeConfirmModal
         open={confirmOpen && !!pendingSweep}
-        title={t('paper.confirmTitle')}
-        subtitle={t('paper.confirmDescription')}
+        title={addonT('module.confirmSweep', t('paper.confirmTitle'))}
+        subtitle={addonT('module.sweepSubtitle', t('paper.confirmDescription'))}
         loading={confirmLoading}
         onCancel={() => {
           if (confirmLoading) return;
@@ -413,23 +421,29 @@ export default function PaperWalletSweep() {
         {pendingSweep ? (
           <div className="space-y-2 text-sm wallet-text-strong">
             <div className="flex items-center justify-between gap-3">
-              <span>{t('paper.paperInputs')}</span>
+              <span>
+                {addonT('module.paperWalletInputs', t('paper.paperInputs'))}
+              </span>
               <Badge tone="blue">
                 {pendingSweep.plan.paperWalletUtxos.length}
               </Badge>
             </div>
             <div className="flex items-center justify-between gap-3">
-              <span>{t('paper.walletFeeInputs')}</span>
+              <span>
+                {addonT('module.walletFeeInputs', t('paper.walletFeeInputs'))}
+              </span>
               <Badge tone="amber">{pendingSweep.plan.feeInputs.length}</Badge>
             </div>
             <div className="flex items-center justify-between gap-3">
-              <span>{t('paper.tokenOutputs')}</span>
+              <span>
+                {addonT('module.tokenOutputs', t('paper.tokenOutputs'))}
+              </span>
               <Badge tone="green">
                 {pendingSweep.plan.outputs.filter((o) => !!o.token).length}
               </Badge>
             </div>
             <div className="flex items-center justify-between gap-3">
-              <span>{t('paper.bchOutputs')}</span>
+              <span>{addonT('module.bchOutputs', t('paper.bchOutputs'))}</span>
               <Badge>
                 {pendingSweep.plan.outputs.filter((o) => !o.token).length}
               </Badge>
@@ -441,5 +455,13 @@ export default function PaperWalletSweep() {
         ) : null}
       </ContainedSwipeConfirmModal>
     </WalletScreen>
+  );
+}
+
+export default function PaperWalletSweep() {
+  return (
+    <AddonModuleI18nProvider moduleId="paper-wallet">
+      <PaperWalletSweepScreen />
+    </AddonModuleI18nProvider>
   );
 }

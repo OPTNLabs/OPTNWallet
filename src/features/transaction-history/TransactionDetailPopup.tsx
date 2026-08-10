@@ -7,6 +7,8 @@ import type {
 } from '../../types/types';
 import ElectrumService from '../../services/ElectrumService';
 import { useI18n } from '../../i18n/useI18n';
+import { formatDate, formatNumber } from '../../i18n/format';
+import type { SupportedLocale } from '../../i18n/types';
 
 type Props = {
   txid: string;
@@ -18,19 +20,29 @@ type Props = {
 
 const SATS_PER_BCH = 100_000_000;
 
-function formatSats(amountSats?: number, unknown = 'Unknown'): string {
+function formatSats(
+  amountSats: number | undefined,
+  locale: SupportedLocale,
+  unknown = 'Unknown'
+): string {
   if (amountSats == null || !Number.isFinite(amountSats)) return unknown;
-  return `${(amountSats / SATS_PER_BCH).toFixed(8).replace(/\.?0+$/, '')} BCH`;
+  return `${formatNumber(amountSats / SATS_PER_BCH, locale, {
+    maximumFractionDigits: 8,
+  })} BCH`;
 }
 
 function formatTimestamp(
+  locale: SupportedLocale,
   timestamp?: string,
   unavailable = 'Unavailable'
 ): string {
   if (!timestamp) return unavailable;
   const date = new Date(timestamp);
   if (Number.isNaN(date.getTime())) return unavailable;
-  return date.toLocaleString();
+  return formatDate(date, locale, {
+    dateStyle: 'medium',
+    timeStyle: 'short',
+  });
 }
 
 function markWalletParticipants(
@@ -50,7 +62,7 @@ function Section({
   title: string;
   rows: TransactionDetailParticipant[];
 }) {
-  const { t } = useI18n();
+  const { locale, t } = useI18n();
 
   return (
     <section className="wallet-card p-4">
@@ -75,7 +87,7 @@ function Section({
                   </div>
                   {typeof row.outputIndex === 'number' ? (
                     <div className="text-xs wallet-muted mt-1">
-                      Output #{row.outputIndex}
+                      {t('history.output')} #{row.outputIndex}
                     </div>
                   ) : null}
                 </div>
@@ -86,7 +98,7 @@ function Section({
                 ) : null}
               </div>
               <div className="text-sm mt-2 wallet-text-strong">
-                {formatSats(row.amountSats, t('history.unknown'))}
+                {formatSats(row.amountSats, locale, t('history.unknown'))}
               </div>
             </div>
           ))
@@ -103,7 +115,7 @@ export default function TransactionDetailPopup({
   walletAddresses,
   onClose,
 }: Props) {
-  const { t } = useI18n();
+  const { locale, t } = useI18n();
   const [details, setDetails] = useState<TransactionDetails | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -190,7 +202,7 @@ export default function TransactionDetailPopup({
             <div>
               <div className="text-xs wallet-muted">{t('history.fee')}</div>
               <div className="wallet-text-strong">
-                {formatSats(details?.feeSats, t('history.unknown'))}
+                {formatSats(details?.feeSats, locale, t('history.unknown'))}
               </div>
             </div>
             <div className="col-span-2">
@@ -198,7 +210,11 @@ export default function TransactionDetailPopup({
                 {t('history.timestamp')}
               </div>
               <div className="wallet-text-strong">
-                {formatTimestamp(details?.timestamp, t('history.unavailable'))}
+                {formatTimestamp(
+                  locale,
+                  details?.timestamp,
+                  t('history.unavailable')
+                )}
               </div>
             </div>
             <div className="col-span-2">

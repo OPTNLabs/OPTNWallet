@@ -21,6 +21,7 @@ import {
   stripChaingraphHexBytes,
 } from '../../../apis/ChaingraphManager/ChaingraphManager';
 import { useSmoothResetTransition } from '../shared/useSmoothResetTransition';
+import { useAddonI18n } from '../../../i18n/useAddonI18n';
 
 type AuthGuardArtifactInput = {
   type: string;
@@ -36,8 +37,16 @@ type AuthGuardContractShape = {
   tokenAddress?: string;
   lockingBytecode?: string | Uint8Array | number[] | { bytecode?: Uint8Array };
   lockingScript?: string | Uint8Array | number[] | { bytecode?: Uint8Array };
-  getLockingBytecode?: () => string | Uint8Array | number[] | { bytecode?: Uint8Array };
-  getLockingScript?: () => string | Uint8Array | number[] | { bytecode?: Uint8Array };
+  getLockingBytecode?: () =>
+    | string
+    | Uint8Array
+    | number[]
+    | { bytecode?: Uint8Array };
+  getLockingScript?: () =>
+    | string
+    | Uint8Array
+    | number[]
+    | { bytecode?: Uint8Array };
 };
 
 type AuthGuardToken = {
@@ -167,7 +176,11 @@ async function toCashTokenAddressBestEffort(
 
 function tokenAmountIsZero(t: Token | null | undefined): boolean {
   if (!t) return false;
-  return toBigIntSafe('amount' in t ? (t as { amount?: unknown }).amount ?? 0 : 0) === 0n;
+  return (
+    toBigIntSafe(
+      'amount' in t ? (t as { amount?: unknown }).amount ?? 0 : 0
+    ) === 0n
+  );
 }
 
 function currentNetwork(): Network {
@@ -215,6 +228,7 @@ export default function AuthGuardApp({
   sdk,
   loadWalletAddresses,
 }: Props) {
+  const { t: addonT } = useAddonI18n();
   const { contentClassName, runSmoothReset } = useSmoothResetTransition();
   const [walletUtxos, setWalletUtxos] = useState<UTXO[]>([]);
   const [selected, setSelected] = useState<UTXO | null>(null);
@@ -291,40 +305,46 @@ export default function AuthGuardApp({
   // Wallet UTXO refresh
   // ---------------------------------------------------------------------------
 
-  const refreshWalletUtxos = useCallback(async (forceRefresh = false) => {
-    setBusy(true);
-    setBuildErr('');
-    try {
-      if (forceRefresh) {
-        const walletAddresses = await sdk.wallet.listAddresses();
-        await Promise.allSettled(
-          walletAddresses.map((entry) => sdk.utxos.refreshAndStore(entry.address))
-        );
+  const refreshWalletUtxos = useCallback(
+    async (forceRefresh = false) => {
+      setBusy(true);
+      setBuildErr('');
+      try {
+        if (forceRefresh) {
+          const walletAddresses = await sdk.wallet.listAddresses();
+          await Promise.allSettled(
+            walletAddresses.map((entry) =>
+              sdk.utxos.refreshAndStore(entry.address)
+            )
+          );
+        }
+
+        const res = await sdk.utxos.listForWallet();
+        const merged = mergeWalletUtxos(res);
+        setWalletUtxos(merged);
+
+        const pickFee =
+          merged.find(
+            (u) =>
+              (u.value ?? 0) > 3000 && !u.token && !u.abi && !u.contractName
+          ) ??
+          merged.find((u) => (u.value ?? 0) > 3000 && !u.token) ??
+          null;
+        setFeeUtxo(pickFee);
+
+        const pick =
+          merged.find((u) => (u.value ?? 0) > 1200 && !u.token) ??
+          merged[0] ??
+          null;
+        setSelected(pick ?? null);
+      } catch (e: unknown) {
+        setBuildErr(e instanceof Error ? e.message : String(e));
+      } finally {
+        setBusy(false);
       }
-
-      const res = await sdk.utxos.listForWallet();
-      const merged = mergeWalletUtxos(res);
-      setWalletUtxos(merged);
-
-      const pickFee =
-        merged.find(
-          (u) => (u.value ?? 0) > 3000 && !u.token && !u.abi && !u.contractName
-        ) ??
-        merged.find((u) => (u.value ?? 0) > 3000 && !u.token) ??
-        null;
-      setFeeUtxo(pickFee);
-
-      const pick =
-        merged.find((u) => (u.value ?? 0) > 1200 && !u.token) ??
-        merged[0] ??
-        null;
-      setSelected(pick ?? null);
-    } catch (e: unknown) {
-      setBuildErr(e instanceof Error ? e.message : String(e));
-    } finally {
-      setBusy(false);
-    }
-  }, [sdk]);
+    },
+    [sdk]
+  );
 
   const resetAuthGuardComposer = useCallback(() => {
     setSelected(null);
@@ -433,79 +453,106 @@ export default function AuthGuardApp({
 
     const parsedArg = parseInputValue(`0x${tokenIdHex}`, ctorInputs[0].type);
 
-    const c = new Contract(authGuardArtifact as unknown as Artifact, [parsedArg], {
-      provider,
-      addressType: 'p2sh32',
-    });
+    const c = new Contract(
+      authGuardArtifact as unknown as Artifact,
+      [parsedArg],
+      {
+        provider,
+        addressType: 'p2sh32',
+      }
+    );
 
     return c.address;
   }, []);
 
-  const deriveAuthGuardTokenAddress = useCallback((tokenIdHex: string): string => {
-    const net = currentNetwork();
-    const provider = new ElectrumNetworkProvider(net);
+  const deriveAuthGuardTokenAddress = useCallback(
+    (tokenIdHex: string): string => {
+      const net = currentNetwork();
+      const provider = new ElectrumNetworkProvider(net);
 
-    const ctorInputs = authGuardArtifact?.constructorInputs ?? [];
-    if (!Array.isArray(ctorInputs) || ctorInputs.length !== 1) {
-      throw new Error('AuthGuard artifact constructorInputs unexpected shape.');
-    }
+      const ctorInputs = authGuardArtifact?.constructorInputs ?? [];
+      if (!Array.isArray(ctorInputs) || ctorInputs.length !== 1) {
+        throw new Error(
+          'AuthGuard artifact constructorInputs unexpected shape.'
+        );
+      }
 
-    const parsedArg = parseInputValue(`0x${tokenIdHex}`, ctorInputs[0].type);
+      const parsedArg = parseInputValue(`0x${tokenIdHex}`, ctorInputs[0].type);
 
-    const c = new Contract(authGuardArtifact as unknown as Artifact, [parsedArg], {
-      provider,
-      addressType: 'p2sh32',
-    }) as unknown as AuthGuardContractShape;
+      const c = new Contract(
+        authGuardArtifact as unknown as Artifact,
+        [parsedArg],
+        {
+          provider,
+          addressType: 'p2sh32',
+        }
+      ) as unknown as AuthGuardContractShape;
 
-    const tokenAddr = String(c?.tokenAddress ?? '').trim();
-    return tokenAddr || c.address;
-  }, []);
+      const tokenAddr = String(c?.tokenAddress ?? '').trim();
+      return tokenAddr || c.address;
+    },
+    []
+  );
 
-  const deriveAuthGuardLockingBytecodeHex = useCallback((tokenIdHex: string): string => {
-    const net = currentNetwork();
-    const provider = new ElectrumNetworkProvider(net);
+  const deriveAuthGuardLockingBytecodeHex = useCallback(
+    (tokenIdHex: string): string => {
+      const net = currentNetwork();
+      const provider = new ElectrumNetworkProvider(net);
 
-    const ctorInputs = authGuardArtifact?.constructorInputs ?? [];
-    if (!Array.isArray(ctorInputs) || ctorInputs.length !== 1) {
-      throw new Error('AuthGuard artifact constructorInputs unexpected shape.');
-    }
+      const ctorInputs = authGuardArtifact?.constructorInputs ?? [];
+      if (!Array.isArray(ctorInputs) || ctorInputs.length !== 1) {
+        throw new Error(
+          'AuthGuard artifact constructorInputs unexpected shape.'
+        );
+      }
 
-    const parsedArg = parseInputValue(`0x${tokenIdHex}`, ctorInputs[0].type);
-    const c = new Contract(authGuardArtifact as unknown as Artifact, [parsedArg], {
-      provider,
-      addressType: 'p2sh32',
-    }) as unknown as AuthGuardContractShape;
+      const parsedArg = parseInputValue(`0x${tokenIdHex}`, ctorInputs[0].type);
+      const c = new Contract(
+        authGuardArtifact as unknown as Artifact,
+        [parsedArg],
+        {
+          provider,
+          addressType: 'p2sh32',
+        }
+      ) as unknown as AuthGuardContractShape;
 
-    const candidates: Array<
-      string | Uint8Array | number[] | { bytecode?: Uint8Array }
-    > = [
-      c.lockingBytecode,
-      c.lockingScript,
-      typeof c.getLockingBytecode === 'function'
-        ? c.getLockingBytecode()
-        : null,
-      typeof c.getLockingScript === 'function' ? c.getLockingScript() : null,
-    ].filter(Boolean);
+      const candidates: Array<
+        string | Uint8Array | number[] | { bytecode?: Uint8Array }
+      > = [
+        c.lockingBytecode,
+        c.lockingScript,
+        typeof c.getLockingBytecode === 'function'
+          ? c.getLockingBytecode()
+          : null,
+        typeof c.getLockingScript === 'function' ? c.getLockingScript() : null,
+      ].filter(Boolean);
 
-    const first = candidates[0];
-    if (!first) throw new Error('Could not derive AuthGuard locking bytecode.');
+      const first = candidates[0];
+      if (!first)
+        throw new Error('Could not derive AuthGuard locking bytecode.');
 
-    if (typeof first === 'string')
-      return first.trim().toLowerCase().replace(/^0x/i, '');
-    if (first instanceof Uint8Array) return bytesToHex(first);
-    if (Array.isArray(first) && first.length && typeof first[0] === 'number') {
-      return bytesToHex(Uint8Array.from(first));
-    }
-    if (
-      typeof first === 'object' &&
-      first !== null &&
-      'bytecode' in first &&
-      first.bytecode instanceof Uint8Array
-    )
-      return bytesToHex(first.bytecode);
+      if (typeof first === 'string')
+        return first.trim().toLowerCase().replace(/^0x/i, '');
+      if (first instanceof Uint8Array) return bytesToHex(first);
+      if (
+        Array.isArray(first) &&
+        first.length &&
+        typeof first[0] === 'number'
+      ) {
+        return bytesToHex(Uint8Array.from(first));
+      }
+      if (
+        typeof first === 'object' &&
+        first !== null &&
+        'bytecode' in first &&
+        first.bytecode instanceof Uint8Array
+      )
+        return bytesToHex(first.bytecode);
 
-    throw new Error('Could not normalize AuthGuard locking bytecode.');
-  }, []);
+      throw new Error('Could not normalize AuthGuard locking bytecode.');
+    },
+    []
+  );
 
   const derivedAuthGuardAddress = useMemo(() => {
     try {
@@ -633,9 +680,7 @@ export default function AuthGuardApp({
           const tx1ResultLabel =
             sent1.broadcastState === 'submitted' ? 'submitted' : 'broadcasted';
 
-          setStep0AStatus(
-            `tx1 ${tx1ResultLabel}: ${txid1}. Refreshing UTXOs…`
-          );
+          setStep0AStatus(`tx1 ${tx1ResultLabel}: ${txid1}. Refreshing UTXOs…`);
 
           await refreshWalletUtxos(true);
           const res1 = await sdk.utxos.listForWallet();
@@ -857,11 +902,11 @@ export default function AuthGuardApp({
           outputs.push({
             recipientAddress: ownerTokenAddr,
             amount: Math.max(Number(TOKEN_OUTPUT_SATS), Number(DUST)),
-              token: {
-                category: tokenIdHex,
-                amount: 0n,
-                nft: { capability: 'none', commitment: '' },
-              },
+            token: {
+              category: tokenIdHex,
+              amount: 0n,
+              nft: { capability: 'none', commitment: '' },
+            },
           });
         }
 
@@ -884,11 +929,11 @@ export default function AuthGuardApp({
           outputs.push({
             recipientAddress: ownerTokenAddr,
             amount: Math.max(Number(TOKEN_OUTPUT_SATS), Number(DUST)),
-              token: {
-                category: tokenIdHex,
-                amount: 0n,
-                nft: { capability: 'none', commitment: '' },
-              },
+            token: {
+              category: tokenIdHex,
+              amount: 0n,
+              nft: { capability: 'none', commitment: '' },
+            },
           });
         }
 
@@ -1182,7 +1227,9 @@ export default function AuthGuardApp({
       }
 
       const headAmt = toBigIntSafe(
-        'amount' in headToken ? (headToken as { amount?: unknown }).amount ?? 0 : 0
+        'amount' in headToken
+          ? (headToken as { amount?: unknown }).amount ?? 0
+          : 0
       );
       if (headAmt < sendAmt) {
         throw new Error(
@@ -1274,8 +1321,9 @@ export default function AuthGuardApp({
 
     const walletMatches = walletUtxos.filter((u) => {
       const isTagged =
-        String((u as { contractName?: string }).contractName ?? '').toLowerCase() ===
-          'authguard' ||
+        String(
+          (u as { contractName?: string }).contractName ?? ''
+        ).toLowerCase() === 'authguard' ||
         (Array.isArray((u as { abi?: unknown[] }).abi) &&
           ((u as { abi?: unknown[] }).abi ?? []).some(
             (f) =>
@@ -1345,11 +1393,15 @@ export default function AuthGuardApp({
           <div className="text-xs text-orange-700">
             Token UTXO (category: {String(u.token.category)}) amt:{' '}
             {String(
-              'amount' in u.token ? (u.token as { amount?: unknown }).amount ?? '' : ''
+              'amount' in u.token
+                ? (u.token as { amount?: unknown }).amount ?? ''
+                : ''
             )}
           </div>
         ) : (
-          <div className="text-xs text-gray-500">Regular BCH UTXO</div>
+          <div className="text-xs text-gray-500">
+            {addonT('module.regularBchUtxo', 'Regular BCH UTXO')}
+          </div>
         )}
 
         {Boolean((u as { contractName?: string }).contractName) && (
@@ -1381,9 +1433,14 @@ export default function AuthGuardApp({
   return (
     <div className={`border rounded-lg p-4 shadow-sm ${contentClassName}`}>
       <div className="text-sm text-gray-600 mb-2">
-        <span className="font-semibold">Addon:</span> {manifest.id}{' '}
-        <span className="mx-2">•</span>
-        <span className="font-semibold">Version:</span> {manifest.version}
+        <span className="font-semibold">
+          {addonT('module.addon', 'Add-on')}:
+        </span>{' '}
+        {manifest.id} <span className="mx-2">•</span>
+        <span className="font-semibold">
+          {addonT('module.version', 'Version')}:
+        </span>{' '}
+        {manifest.version}
       </div>
 
       <div className="flex gap-2 mb-4">
@@ -1408,12 +1465,16 @@ export default function AuthGuardApp({
 
       {/* AuthGuard v1 Wizard */}
       <div className="border rounded p-3 mb-4">
-        <div className="font-semibold mb-2">AuthGuard v1</div>
+        <div className="font-semibold mb-2">
+          {addonT('module.authguardV1', 'AuthGuard v1')}
+        </div>
 
         {/* --- WARNING --- */}
         {firstSpendWarning && (
           <div className="mb-3 p-2 rounded border bg-yellow-50 text-xs text-yellow-800">
-            <div className="font-semibold mb-1">Minting nuance</div>
+            <div className="font-semibold mb-1">
+              {addonT('module.mintingNuance', 'Minting nuance')}
+            </div>
             <div>{firstSpendWarning}</div>
           </div>
         )}
@@ -1462,7 +1523,10 @@ export default function AuthGuardApp({
 
             {step0AStatus && (
               <div className="text-xs text-gray-700">
-                <span className="font-semibold">Status:</span> {step0AStatus}
+                <span className="font-semibold">
+                  {addonT('module.status', 'Status')}:
+                </span>{' '}
+                {step0AStatus}
               </div>
             )}
           </div>
@@ -1474,14 +1538,17 @@ export default function AuthGuardApp({
             Step 0B — Mint Token (FT or NFT)
           </div>
           <div className="text-xs text-gray-600 mb-3">
-            Mint from a wallet <span className="font-mono">vout=0</span> UTXO
-            (category anchor). You can mint to{' '}
+            {addonT('module.mintFromWallet', 'Mint from a wallet')}{' '}
+            <span className="font-mono">vout=0</span> UTXO (category anchor).
+            You can mint to{' '}
             <span className="font-semibold">AuthGuard tokenaddr</span> (default)
             or any tokenaddr.
             <br />
             Optional: mint AuthKey in the{' '}
-            <span className="font-semibold">same transaction</span> (recommended
-            for guarded categories).
+            <span className="font-semibold">
+              {addonT('module.sameTransaction', 'same transaction')}
+            </span>{' '}
+            (recommended for guarded categories).
           </div>
 
           <div className="grid gap-3">
@@ -1522,9 +1589,9 @@ export default function AuthGuardApp({
                     className="mt-1 w-full border rounded p-2 text-sm"
                     value={mintNftCapability}
                     onChange={(e) =>
-                    setMintNftCapability(
-                      e.target.value as 'none' | 'mutable' | 'minting'
-                    )
+                      setMintNftCapability(
+                        e.target.value as 'none' | 'mutable' | 'minting'
+                      )
                     }
                   >
                     <option value="none">none</option>
@@ -1612,20 +1679,28 @@ export default function AuthGuardApp({
 
             {step0BStatus && (
               <div className="text-xs text-gray-700">
-                <span className="font-semibold">Status:</span> {step0BStatus}
+                <span className="font-semibold">
+                  {addonT('module.status', 'Status')}:
+                </span>{' '}
+                {step0BStatus}
               </div>
             )}
 
             {tokenId && (
               <div className="text-xs space-y-1">
                 <div>
-                  <span className="font-semibold">tokenId/category:</span>{' '}
+                  <span className="font-semibold">
+                    {addonT('module.tokenIdCategory', 'token ID/category')}:
+                  </span>{' '}
                   <span className="font-mono">{tokenId}</span>
                 </div>
 
                 {derivedAuthGuardAddress && (
                   <div>
-                    <span className="font-semibold">AuthGuard cashaddr:</span>{' '}
+                    <span className="font-semibold">
+                      {addonT('module.authguardCashaddr', 'AuthGuard cashaddr')}
+                      :
+                    </span>{' '}
                     <span className="font-mono break-all">
                       {authGuardCashAddress || derivedAuthGuardAddress}
                     </span>
@@ -1634,7 +1709,13 @@ export default function AuthGuardApp({
 
                 {authGuardTokenAddress && (
                   <div>
-                    <span className="font-semibold">AuthGuard tokenaddr:</span>{' '}
+                    <span className="font-semibold">
+                      {addonT(
+                        'module.authguardTokenaddr',
+                        'AuthGuard tokenaddr'
+                      )}
+                      :
+                    </span>{' '}
                     <span className="font-mono break-all">
                       {authGuardTokenAddress}
                     </span>
@@ -1745,7 +1826,9 @@ export default function AuthGuardApp({
                       () => setAuthHeadUtxo(u),
                       u.token
                         ? `token.category=${String(u.token.category)} amt=${String(
-                            'amount' in u.token ? (u.token as { amount?: unknown }).amount ?? '' : ''
+                            'amount' in u.token
+                              ? (u.token as { amount?: unknown }).amount ?? ''
+                              : ''
                           )}`
                         : 'no token'
                     )
@@ -1881,14 +1964,16 @@ export default function AuthGuardApp({
 
       {buildErr && (
         <div className="text-red-600 text-sm mb-3">
-          <div className="font-semibold">Error</div>
+          <div className="font-semibold">{addonT('common.error', 'Error')}</div>
           <div>{buildErr}</div>
         </div>
       )}
 
       {buildHex && (
         <div className="mt-2">
-          <div className="font-semibold mb-1">Built Transaction</div>
+          <div className="font-semibold mb-1">
+            {addonT('module.builtTransaction', 'Built transaction')}
+          </div>
           <div className="text-sm text-gray-600 mb-2">bytes: {buildBytes}</div>
           <textarea
             className="w-full h-40 p-2 border rounded font-mono text-xs"

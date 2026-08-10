@@ -481,7 +481,7 @@ export function ReviewCard({
                     : pendingText,
                 }}
               >
-                SEND
+                {t('send.send')}
               </span>
             </div>
             <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
@@ -494,12 +494,12 @@ export function ReviewCard({
                 }}
               >
                 {isSending
-                  ? 'Sending...'
+                  ? t('send.sending')
                   : slideCompleted
-                    ? 'Confirmed'
+                    ? t('send.confirmed')
                     : nearingSend
-                      ? 'Release to send'
-                      : 'Slide to confirm'}
+                      ? t('send.releaseToSend')
+                      : t('send.slideToConfirm')}
               </span>
             </div>
             <Draggable

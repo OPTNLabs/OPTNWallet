@@ -3,6 +3,7 @@ import * as bip39 from 'bip39';
 import {
   detectBip39Language,
   generateBip39Mnemonic,
+  getBip39LanguageForLocale,
   isValidBip39Mnemonic,
   normalizeBip39Mnemonic,
 } from '../Bip39Service';
@@ -31,14 +32,31 @@ describe('Bip39Service', () => {
     }
   );
 
-  it.each([
-    ['spanish', 'spanish'],
-    ['chinese_simplified', 'chinese_simplified'],
-  ] as const)('generates and validates a %s mnemonic', (language, expected) => {
-    const mnemonic = generateBip39Mnemonic(language);
-    expect(isValidBip39Mnemonic(mnemonic, language)).toBe(true);
-    expect(detectBip39Language(mnemonic)).toBe(expected);
+  it('generates and validates an English mnemonic', () => {
+    const mnemonic = generateBip39Mnemonic('english');
+    expect(isValidBip39Mnemonic(mnemonic, 'english')).toBe(true);
+    expect(detectBip39Language(mnemonic)).toBe('english');
   });
+
+  it.each([
+    ['en', 'english'],
+    ['es', 'english'],
+    ['pt-BR', 'english'],
+    ['zh-CN', 'english'],
+    ['zh-TW', 'english'],
+    ['fr', 'english'],
+    ['ko', 'english'],
+    ['ja', 'english'],
+    ['vi', 'english'],
+    ['ar', 'english'],
+    ['ru', 'english'],
+    ['ha-NG', 'english'],
+  ] as const)(
+    'maps %s UI locale to its available BIP39 wordlist',
+    (locale, expected) => {
+      expect(getBip39LanguageForLocale(locale)).toBe(expected);
+    }
+  );
 
   it('normalizes whitespace, case, and Unicode compatibility form', () => {
     expect(normalizeBip39Mnemonic('  ABANDON\n abandon   ABOUT  ')).toBe(

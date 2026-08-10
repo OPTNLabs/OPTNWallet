@@ -25,6 +25,10 @@ import { Capacitor } from '@capacitor/core';
 import { isDesktopPlatform } from '../../utils/platform';
 import { selectNostrChatEnabled } from '../../state/slices/experimentalSlice';
 import { useI18n } from '../../i18n/useI18n';
+import {
+  getLocalizedAddonAppDescription,
+  getLocalizedAddonAppName,
+} from '../../services/addons/AddonLocale';
 
 type AppCard = {
   id: string;
@@ -44,7 +48,7 @@ const FILTERS: Filter[] = ['All', 'Wallet', 'Token', 'Utils', 'Advanced'];
 
 const AppsView = () => {
   const navigate = useNavigate();
-  const { t } = useI18n();
+  const { t, locale } = useI18n();
   const devMode = import.meta.env.DEV;
   const isNativeRuntime = Capacitor.isNativePlatform();
   const isDesktopRuntime = isDesktopPlatform();
@@ -68,6 +72,7 @@ const AppsView = () => {
           for (const a of (m.apps ?? []) as AddonAppDefinition[]) {
             const appId = `${m.id}:${a.id}`;
             const appName = a.name;
+            const localizedAppName = getLocalizedAddonAppName(m, a, locale);
             const comingSoon = isComingSoonApp(appId, appName);
             const normalizedName = appName.toLowerCase();
             const resolvedIcon =
@@ -76,9 +81,9 @@ const AppsView = () => {
                 : a.iconUri || m.iconUri || DEFAULT_ICON;
             out.push({
               id: appId,
-              name: appName,
+              name: localizedAppName,
               icon: resolvedIcon as string,
-              description: a.description || '',
+              description: getLocalizedAddonAppDescription(m, a, locale),
               category: getAppCategory({ id: appId, name: appName }),
               comingSoon,
               disabled: comingSoon && !devMode,
@@ -140,7 +145,7 @@ const AppsView = () => {
     return () => {
       mounted = false;
     };
-  }, [chatEnabled, devMode, isDesktopRuntime, t]);
+  }, [chatEnabled, devMode, isDesktopRuntime, locale, t]);
 
   const filteredCards = useMemo(
     () =>
